@@ -704,9 +704,20 @@ def _check_l_doc(layer: int, data: dict,
         # rtl-constants-gen / timing-waveform-gen agents that prefer
         # a list-of-dicts over flat scalars; each entry counts as one
         # typed timing constant.
+        # ORGANIC #641 — credit a populated typed waveform / clock-domain
+        # list-of-dicts. The reused-IP CPU / datapath classes document
+        # their timing as WaveDrom `waveforms[]` and a typed
+        # `clock_domains[]` / `clocks[]` list (freq_hz / period_ns /
+        # domain_kind) rather than the protocol-chip scalar/dict timing
+        # forms. Each is a LIST, so the dict/scalar loop below skips it and
+        # it is absent from the legacy gather set — the genuine timing
+        # content was invisible and the doc scored only its doc_class +
+        # ic_name strings. Count each populated entry as one typed timing
+        # constant (chip-AGNOSTIC: keyed on the field NAME, not any chip).
         for list_key in ("constants", "timing_constants",
                          "rtl_constants", "tx_timing", "rx_timing",
-                         "vectors", "crc_vectors"):
+                         "vectors", "crc_vectors",
+                         "waveforms", "clock_domains", "clocks"):
             seq = data.get(list_key)
             if isinstance(seq, list):
                 n += _list_len_of_dicts(seq)
@@ -811,6 +822,26 @@ def _check_l_doc(layer: int, data: dict,
         cases = (data.get("test_cases") or data.get("cases")
                  or data.get("vectors"))
         n_cases = _list_len_of_dicts(cases)
+        # ORGANIC #641 — honest bring-up-sequence credit for reused-IP /
+        # no-command-protocol classes. A reused-IP CPU core (RISC-V SoC,
+        # firmware-defined behavior) carries NO chip-level command/test
+        # vectors in its input spec — it honestly declares
+        # `no_test_cases_in_input: true` and documents its power-on
+        # bring-up as a typed `bring_up_sequence[]` instead. DOUBLE-KEYED
+        # per the #428/#419 doctrine (class flag AND the doc's OWN honest
+        # declaration, fail-closed): the bring-up entries count toward the
+        # floor ONLY when (1) the IC class is a no-command-protocol class
+        # (bare_fpga / unknown stay fail-closed via _NO_PROTOCOL_FAIL_CLOSED)
+        # AND (2) the doc carries an EXPLICIT no_test_cases_in_input == true.
+        # A doc with no_test_cases_in_input absent/false, or an empty
+        # bring_up_sequence, or a command/protocol/unknown class, keeps the
+        # plain floor — an empty doc can never ride this into a pass.
+        if (n_cases < (2 if _class_no_cmd_protocol(ic_class) else 5)
+                and _class_no_cmd_protocol(ic_class)
+                and _explicit_true(data.get("no_test_cases_in_input"))):
+            bus = (data.get("bring_up_sequence")
+                   or data.get("bringup_sequence"))
+            n_cases += _list_len_of_dicts(bus)
         # #428 — class-appropriate floor: a no-protocol datapath primitive
         # has no command sequences to enumerate, so its structured test-case
         # floor falls back to ≥2 (a real floor, not a skip).
@@ -893,6 +924,28 @@ def _check_l_doc(layer: int, data: dict,
                or data.get("behavioral_sequences"))
         ok = (_list_len_of_dicts(cal) > 0
               or (isinstance(cal, dict) and cal))
+        # ORGANIC #641 — honest no-behavioral / no-calibration escape for
+        # reused-IP / no-command-protocol classes (mirrors the existing
+        # L11 reused-IP-CPU N/A escape). A reused-IP CPU core honestly
+        # carries NO behavioral/calibration content: it emits
+        # `no_behavioral_sequences_in_input: true` (the runner's honest
+        # "no behavioral sequences in the input doc" signal) with
+        # `no_calibration: false`, so neither legacy escape fires. Treat
+        # the explicit no-behavioral declaration + a genuinely EMPTY
+        # calibration set as equivalent to no_calibration:true. DOUBLE-KEYED
+        # per the #428/#419 doctrine (class flag AND the doc's OWN honest
+        # declaration, fail-closed): fires ONLY when (1) the IC class is a
+        # no-command-protocol class (bare_fpga / unknown stay fail-closed)
+        # AND (2) the doc carries an EXPLICIT no_behavioral_sequences_in_input
+        # == true AND (3) there is genuinely no calibration content. A doc
+        # with calibration content present, or no explicit flag, or a
+        # command/protocol/unknown class, keeps the ≥1 floor — no
+        # fabrication, no empty-doc leak.
+        if (not ok
+                and _class_no_cmd_protocol(ic_class)
+                and _explicit_true(
+                    data.get("no_behavioral_sequences_in_input"))):
+            return True, ""
         if not ok:
             return False, (
                 "L12 calibration must carry ≥1 typed calibration field "
