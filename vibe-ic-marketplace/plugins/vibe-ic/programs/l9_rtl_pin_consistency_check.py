@@ -383,6 +383,17 @@ def _strip_param_block(src: str) -> str:
         # Emit everything up to and including the header we just matched.
         out.append(src[pos:hm.end()])
         pos = hm.end()
+        # ORGANIC #637 — consume any `import pkg::*;` clauses that sit between
+        # `module <name>` and the `#(...)` parameter block (the standard SV
+        # ordering `module X import a_pkg::*; import b_pkg::*; #(params)
+        # (ports);`). Without this the anchored `#(` test below misses the
+        # param block — an import clause intervenes — so the block survives the
+        # strip and the downstream port-list regex never matches → zero ports.
+        # Emit the import clauses verbatim (preserved) and advance past them.
+        im = re.match(r"(?:import\s+[\w:\*\s,]+;\s*)+", src[pos:])
+        if im:
+            out.append(src[pos:pos + im.end()])
+            pos += im.end()
         # A parameter block must begin with `#` then `(` (whitespace ok).
         pm = re.match(r"#\s*\(", src[pos:])
         if not pm:
