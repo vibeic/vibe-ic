@@ -154,8 +154,14 @@ _IMPLICIT_PIN_PATTERNS = tuple(
         # reset family: optional i_/o_ prefix, a rst/reset/por segment
         # (optionally qualified, e.g. por_rst / soft_reset), optional
         # active-low _n / n suffix, optional _i/_o direction suffix.
+        # ORGANIC #659 round-2 — the direction suffix's leading underscore
+        # is OPTIONAL so a GLUED active-low+direction spelling matches
+        # (`rst_ni` = `_n` + `i`, `rst_no` = `_n` + `o`) — the near-universal
+        # OpenTitan / comportable reset name that otherwise survived the
+        # strip as an RTL-only false-FAIL. Still stem-gated on rst/reset/por,
+        # so a non-reset port never matches (no leak).
         r"^(?:[io]_)?(?:[a-z][a-z0-9]*_)*"
-        r"(?:rst|reset|por)(?:_?n)?(?:_[io])?\d*$",
+        r"(?:rst|reset|por)(?:_?n)?(?:_?[io])?\d*$",
     ]
 )
 
@@ -261,8 +267,47 @@ def load_source_manifest(project: Path) -> Optional[dict]:
     return data
 
 
+# ORGANIC #659 round-2 — structural tie-off detection. The manifest tie_offs
+# dict is NOT guaranteed exhaustive: a catalog-glue wrapper may wire an L9
+# interface to a constant / another port / an unused net INTERNALLY (e.g.
+# `.clk_edn_i(clk_i)`, `.edn_o(edn_req_unused)`) without listing it in the
+# manifest. Such an interface is a legitimate internal-drive, not a dropped
+# pin — but it has no chip_top PAD, so it reads as an L9-only mismatch. The
+# proof that it is intentional is STRUCTURAL: the chip_top instantiation BINDS
+# the interface (or its IP-split direction children `<root>_i`/`<root>_o`/
+# `<root>_*`) to something. chip-AGNOSTIC: matches the SystemVerilog named-
+# port-connection grammar `.<ident>(...)`, no chip/vendor literal.
+_RE_PORT_BINDING = re.compile(r"\.\s*([A-Za-z_]\w*)\s*\(")
+
+
+def _chip_top_bound_ports(rtl_top: Path) -> set:
+    """ORGANIC #659 round-2 — the set of port names the chip_top file BINDS in
+    a module instantiation (`.<name>(<net>)`). A residual L9-only root that
+    appears here (directly, or via a `<root>_`-prefixed IP-split child) is
+    driven/tied internally by the glue — an intentional internal-drive, not a
+    dropped pad. Returns an empty set on any read error (→ no relaxation)."""
+    try:
+        text = rtl_top.read_text(errors="ignore")
+    except Exception:
+        return set()
+    return set(_RE_PORT_BINDING.findall(text))
+
+
+def _is_structurally_bound(root: str, bound_ports: set) -> bool:
+    """True iff `root` (or an IP-split child `root_*`) is bound in the chip_top
+    instantiation — structural proof the interface is internally driven."""
+    if not bound_ports:
+        return False
+    if root in bound_ports:
+        return True
+    pre = root + "_"
+    return any(b.startswith(pre) for b in bound_ports)
+
+
 def reconcile_reused_ip(only_l9: list, only_rtl: list,
-                        manifest: dict) -> tuple[list, list, list, list]:
+                        manifest: dict,
+                        bound_ports: Optional[set] = None
+                        ) -> tuple[list, list, list, list]:
     """ORGANIC #659 — structurally reconcile a reused-IP wrapper's L9-only
     and RTL-only pin diffs against SOURCE_MANIFEST + name-prefix shape.
 
@@ -319,6 +364,23 @@ def reconcile_reused_ip(only_l9: list, only_rtl: list,
             prefix_matched.append((root, []))
         else:
             residual_l9.append(root)
+
+    # (3) ORGANIC #659 round-2 — STRUCTURAL tie-off: a residual L9 root that
+    #     is NEITHER manifest-tied NOR prefix-covered, but whose interface the
+    #     chip_top instantiation actually BINDS internally (`.root(net)` or an
+    #     IP-split child `.root_i(net)`/`.root_o(net)`), is a legitimate
+    #     internal-drive — drop it to the advisory tie-off list, not a FAIL.
+    #     This closes the manifest-not-exhaustive gap (clk_edn_i/edn_o/edn)
+    #     WITHOUT requiring every internally-driven interface to be enumerated.
+    #     No-leak: a root bound NOWHERE in chip_top stays a residual FAIL.
+    if bound_ports:
+        still_residual: list = []
+        for root in residual_l9:
+            if _is_structurally_bound(root, bound_ports):
+                tied_off.append(root)
+            else:
+                still_residual.append(root)
+        residual_l9 = still_residual
 
     return sorted(residual_l9), sorted(rtl_pool), sorted(tied_off), \
         prefix_matched
@@ -783,9 +845,14 @@ def main(argv: list[str]) -> int:
     reused_prefix_matched: list = []
     manifest = load_source_manifest(project)
     if manifest is not None:
+        # ORGANIC #659 round-2 — also pass the chip_top instantiation's bound
+        # port set so a glue-driven interface absent from the manifest tie_offs
+        # dict (clk_edn_i / edn_o / IP-split edn) is recognised structurally.
+        reused_bound_ports = _chip_top_bound_ports(rtl_top)
         (only_l9_all, only_rtl_all,
          reused_tied_off, reused_prefix_matched) = reconcile_reused_ip(
-            only_l9_all, only_rtl_all, manifest)
+            only_l9_all, only_rtl_all, manifest,
+            bound_ports=reused_bound_ports)
 
     # v0.3.4 — ORGANIC #491 R4. Split L9-only pins into doc-declared
     # OPTIONAL vs required. A doc says "(optional) pin" → the RTL top
