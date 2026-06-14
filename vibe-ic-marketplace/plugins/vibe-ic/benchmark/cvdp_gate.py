@@ -62,6 +62,20 @@ try:
 except Exception:  # pragma: no cover - defensive (program missing)
     _ifacev2 = None
 
+# ORGANIC #705 — DETERMINISTIC latency-conformance gate. Imported lazily so the
+# gate still runs if the program is absent (the stage simply no-ops). This is a
+# PRE-EMIT hook that only fires for an id whose latency spec (event / output /
+# expected-expr) is SUPPLIED via --latency-specs — the canonical event→output
+# latency literal is NOT derivable from a CVDP record's prose, so the gate
+# cannot infer it. When a spec IS supplied for an id, the gate MEASURES the
+# emitted RTL's real latency (its OWN canonical TB, the way a scorer counts) and
+# BLOCKS a mismatch BEFORE that record is written out — the self-TB an author
+# improvises around the wrong RTL would not catch the off-by-one (#705).
+try:
+    import latency_conformance_check as _latconf  # type: ignore
+except Exception:  # pragma: no cover - defensive (program missing)
+    _latconf = None
+
 # ANY-info-string fence tokenizer (adversarial-review HIGH): an opener whose
 # tag is not verilog-ish (```text / ```python / untagged prose) must STILL
 # anchor a fence, or pairing skews — the closing ``` of a text block pairs
@@ -876,6 +890,85 @@ def _load_prompts(path):
     return out
 
 
+def _load_latency_specs(path):
+    """ORGANIC #705 — return {id: spec} from a latency-spec JSONL.
+
+    Each line: {"id": "<id>", "top": "<module>", "event": "<port>",
+                "output": "<port>", "expect": "<expr>",
+                "param": {"WIDTH": 8}}   (param optional)
+    `top` is optional (defaults to the emitted RTL's first module). The
+    canonical event→output latency literal is NOT derivable from a CVDP
+    record's prose, so this file is how a curator hands the gate the literal
+    to enforce — the gate cannot invent it."""
+    out = {}
+    p = Path(path)
+    if not p.is_file():
+        return out
+    for ln in p.read_text(errors="replace").splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            d = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        rid = d.get("id")
+        if rid is not None and d.get("event") and d.get("output") \
+                and d.get("expect"):
+            out[str(rid)] = d
+    return out
+
+
+def latency_gate_record(rid, completion, spec, workdir):
+    """ORGANIC #705 — PRE-EMIT latency-conformance check for one record.
+
+    Extracts the emitted RTL, writes it to a temp .sv, and runs the
+    DETERMINISTIC latency gate (its OWN canonical measurement TB) against the
+    supplied spec. Returns (ok, note):
+      * ok=True,  note=str  — conformance ok / SKIP (no iverilog) / spec n/a.
+      * ok=False, note=str  — a measured!=spec MISMATCH or a TIMEOUT (BLOCK).
+    A setup/parse error (rc 2) is NON-blocking advisory (the gate cannot
+    prove the latency → it must not false-block a correct emit; §4.05
+    asymmetry). The canonical event/output/expect literal is the curator's
+    judgment input; the MEASUREMENT + comparison is this deterministic gate."""
+    if _latconf is None:  # pragma: no cover - program absent
+        return True, "latency gate unavailable (program missing) — skipped"
+    code, _kind = extract_code(completion or "")
+    if not (code or "").strip():
+        return True, "no RTL to measure — skipped"
+    rtl_path = workdir / "lat_dut.sv"
+    rtl_path.write_text(code)
+    overrides = {}
+    for k, v in (spec.get("param") or {}).items():
+        try:
+            overrides[str(k)] = int(v)
+        except (TypeError, ValueError):
+            continue
+    try:
+        rc, report = _latconf.run_latency_conformance(
+            rtl_path=rtl_path, top=spec.get("top"),
+            event=spec["event"], output=spec["output"],
+            expect=spec["expect"], params_override=overrides,
+            reset_override=spec.get("reset"),
+            reset_active_low_flag=spec.get("reset_active_low"),
+            input_const=int(spec.get("input_const", -1)),
+            max_cycles_override=spec.get("max_cycles"))
+    except Exception as e:  # pragma: no cover - defensive
+        return True, f"latency gate raised (advisory): {e}"
+    verdict = report.get("verdict")
+    if verdict in ("MISMATCH", "TIMEOUT"):
+        return False, f"latency {verdict}: {report.get('reason')}"
+    if verdict in ("ERROR", "PRECONDITION_HIGH"):
+        # the gate could not trustworthily MEASURE (bad port / unresolved
+        # expect / output already HIGH before the event): ADVISORY, never a
+        # false-BLOCK of a possibly-correct emit (§4.05 asymmetry — a wrong
+        # event/output/expect in the curator's spec must not discard a good
+        # answer; the scorer remains the arbiter).
+        return True, f"latency check inconclusive (advisory): {report.get('reason')}"
+    # PASS or SKIP (no iverilog) — emit.
+    return True, f"latency {verdict}: {report.get('reason')}"
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="CVDP copilot SOLE-EMIT gate (#528): drafts JSONL in, "
@@ -902,6 +995,15 @@ def main(argv=None) -> int:
     ap.add_argument("--prompts-advisory", action="store_true",
                     help="with --prompts, WARN instead of BLOCK on a "
                          "filename/module-name mismatch (strict-advisory)")
+    ap.add_argument("--latency-specs", default=None,
+                    help="ORGANIC #705 — optional latency-spec JSONL ({id, "
+                         "event, output, expect[, top, param, reset]}); for "
+                         "each id present, the gate MEASURES the emitted RTL's "
+                         "real event→output latency (its OWN canonical TB) and "
+                         "BLOCKS a measured!=spec MISMATCH / TIMEOUT before the "
+                         "record is emitted. The canonical latency literal is "
+                         "NOT derivable from a CVDP record's prose, so the gate "
+                         "only enforces ids the curator supplies here.")
     args = ap.parse_args(argv)
     if not args.batch and not args.batch_dir:
         print("ERROR: one of --batch / --batch-dir is required",
@@ -990,6 +1092,10 @@ def main(argv=None) -> int:
             rec["completion"] = c.replace("\r\n", "\n").replace("\r", "\n")
     # ORGANIC #559 — optional prompt-aware filename↔module-name conformance.
     prompts = _load_prompts(args.prompts) if args.prompts else {}
+    # ORGANIC #705 — optional per-id latency specs the gate ENFORCES (measured
+    # vs spec literal) as a pre-emit BLOCK.
+    latency_specs = (_load_latency_specs(args.latency_specs)
+                     if args.latency_specs else {})
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     passed: List[Dict] = []
@@ -1079,6 +1185,27 @@ def main(argv=None) -> int:
                         for _f in _findings:
                             entry.setdefault("notes", []).append(
                                 "WARN iface-conformance (#695): " + _f.message)
+                # ORGANIC #705 — DETERMINISTIC latency-conformance PRE-EMIT
+                # gate. UNLIKE the advisory #642/#695 stages above, this one
+                # CAN hard-BLOCK: a measured!=spec latency MISMATCH (or a
+                # TIMEOUT) is a definite off-by-one the scorer's hidden TB
+                # would also fail, so emitting it wastes a scoring slot. It
+                # ONLY fires for an id whose canonical event/output/expect
+                # literal was supplied via --latency-specs (the gate cannot
+                # infer the latency literal from a CVDP record's prose); a
+                # setup/parse error stays advisory inside latency_gate_record
+                # (never a false-BLOCK — §4.05 asymmetry).
+                _lspec = latency_specs.get(str(rec.get("id")))
+                if _lspec is not None:
+                    _lwd = wd / f"lat_{rec.get('id')}"
+                    _lwd.mkdir(parents=True, exist_ok=True)
+                    _lok, _lnote = latency_gate_record(
+                        str(rec.get("id")), out_rec.get("completion", ""),
+                        _lspec, _lwd)
+                    entry["latency"] = _lnote
+                    if not _lok:
+                        ok = False
+                        entry["verdict"] = "BLOCKED"
             report.append(entry)
             if ok:
                 passed.append(out_rec)
@@ -1088,8 +1215,12 @@ def main(argv=None) -> int:
                 # gate_record returns on the FIRST failing stage, so the
                 # last stage field written carries the real reason (a
                 # synth-stage block used to print "compile clean" here).
-                why = (entry.get("filename_conformance")
-                       or entry.get("synth") or entry.get("compile"))
+                # #705 — a latency BLOCK names the latency reason.
+                why = (entry.get("latency") if entry.get("verdict") == "BLOCKED"
+                       and "latency" in entry and entry.get("latency", "")
+                       .startswith("latency ") else None)
+                why = why or (entry.get("filename_conformance")
+                              or entry.get("synth") or entry.get("compile"))
                 print(f"BLOCKED {entry['id']}: {why}", file=sys.stderr)
     out_path.write_text(
         "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in passed))
