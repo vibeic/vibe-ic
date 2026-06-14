@@ -256,6 +256,59 @@ state the substitution explicitly.
 > `auto_run.py` does `os.chdir(design); make vcs`; forgetting this caused 3 false fails in our
 > 2026-05-28 RTLLM run.
 
+## § 3.9 — SPEC-FIRST COVERAGE ATTRIBUTION before any FLOOR label (ORGANIC #697, BINDING)
+
+A hidden scoring testbench is generated from the **same specification the author sees**, so
+everything the scorer checks is — by construction — a SUBSET of the spec UNLESS the benchmark
+couples to something the spec never states. **"Spec" is the ENTIRE input chain** — a requirement
+is "in spec" if it exists at ANY station: input prompt (USER) → structured input / fact graph (PM
+AGENT) → Design Documents / L1-L23 (IC EXPERT AGENT) → spec-to-rtl authoring (RTL). Therefore a
+verification FAILURE is almost always **one of our own gaps**, not an unfixable floor:
+
+  - **(1) SPEC-EXTRACTION GAP** — the requirement EXISTS somewhere in the chain but was not carried
+    end-to-end. The fix routes to the **LAST station that still held it**: prompt had it but the
+    fact graph dropped it → **pm-agent** elicitation; fact graph had it but the L-docs dropped it →
+    **ic-expert-agent** L-doc completion; L-docs/prompt had it but spec-to-rtl didn't read it out →
+    **spec-to-rtl** extraction.
+  - **(2) TESTBENCH-COVERAGE GAP** — we DID extract it, but our own self-TB never exercised it, so
+    the bug passed our gate and only the hidden TB caught it. Fix: enhance our TB coverage.
+
+EVIDENCE (CVDP cvdp-open behavior-level audit, oracle used for RCA only): **80/136 = 59 % of
+failing TB checks were IN-SPEC** (our extraction/coverage gap); only 56/136 were genuinely
+not-in-spec. A majority of the residual was initially mis-shelved as "FLOOR".
+
+> **PROGRAM-FIRST gate — `programs/spec_coverage_check.py` fires automatically:**
+> ```bash
+> python3 programs/spec_coverage_check.py \
+>     [--prompt PROMPT] [--fact-graph FG] [--ldocs L1-L23_DIR] \
+>     [--rtl RTL] [--tb TB] [--failure "<failing behavior>"] [--strict] [--json OUT]
+> ```
+> (`--spec` is the back-compat alias for `--prompt`.) It extracts a DETERMINISTIC checklist of
+> testable requirements from EVERY provided chain station (ports/widths/directions, reset
+> value+polarity+sync/async, stated timing/latency, every table row, every worked example,
+> **every ENUMERATED SET + its outside-the-set/default boundary**, signed-ness, byte order/packing,
+> overflow/saturation/rounding, handshake timing), MERGES identical requirements across stations
+> (recording the most-downstream holding station), attributes each to whether the authored TB
+> exercises it (TESTBENCH-COVERAGE GAP = WARN default, BLOCK in `--strict` sole-emit), and on a
+> failure attributes it to **coverage-gap / extraction-gap (with `route_to:` pm-agent /
+> ic-expert-agent / spec-to-rtl) / spec-absent**.
+
+**BINDING RULE: a fail may be labelled FLOOR (Category A–E below) ONLY AFTER `spec_coverage_check
+--failure "<behavior>"` returns `spec-absent` with the searched stations cited as evidence** (the
+behavior is NOWHERE in the chain — white-box internal name / cross-problem convention / unstated
+value). If it returns `extraction-gap`, route the fix to the named station; if `coverage-gap`,
+enhance our TB — either way it is OUR gap, NOT a floor. The most-missed pattern is an **ENUMERATED
+SET whose outside-the-set/default behavior is stated but untested**: the checklist extractor always
+emits that boundary item.
+
+**Judgment boundary (honest, not faked in the program):** the program does the pure-STRUCTURAL
+extraction (tables / worked examples / port list / enumerated sets / reset+latency keyword facts),
+the cross-station merge, and the per-station routing — all deterministic. The residual READING
+judgment — *does THIS prose sentence state a testable requirement* — is the LLM step you perform
+here. The program never invents a requirement out of free prose (every checklist item is anchored
+to a structural feature), so a white-box internal name the chain never states is NOT charged as
+our gap.
+
 ## § 4 — Triage rubric: agent-fixable vs FLOOR
 
 Every benchmark run produces residual fails. Categorize each into ONE of these buckets BEFORE
@@ -263,6 +316,11 @@ spending compute on close-loop. **This A-H classification is the irreducible LLM
 skill** — separating a genuine spec ambiguity (E, FLOOR) from a missed-clue (F), a genre
 convention (G), or a real RTL bug (H) requires reading the spec prose against the RTL+TB and
 making a meaning judgment; no regex does that.
+
+> **Gate first (§ 3.9):** before assigning Category A–E (FLOOR), run `spec_coverage_check
+> --failure`. A `coverage-gap` is Category F (our TB missed an in-spec requirement); an
+> `extraction-gap` means enhance extraction (our flow missed an in-spec requirement); only a
+> cited `spec-absent` may proceed to A–E FLOOR.
 
 > One mechanical sub-case is extracted: **Category D (tool-substitution gap) detection is
 > enforced by `programs/tb_vcs_only_construct_detect.py`** — it scans the failing TB for the

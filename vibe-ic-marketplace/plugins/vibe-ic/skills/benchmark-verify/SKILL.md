@@ -42,6 +42,26 @@ confirm it PASSES against the generated RTL.
   and re-verify until 100%. Do not waive a requirement; if a doc requirement is genuinely
   untestable, that is a spec defect to record, not a pass.
 
+> **Spec-first coverage attribution (ORGANIC #697, BINDING — program-first):** before claiming
+> Pillar-1 PASS, run `programs/spec_coverage_check.py` to make our self-verification as complete as
+> the hidden scorer. Both derive from the SAME spec — where "spec" is the WHOLE input chain
+> (prompt → fact graph → L1-L23):
+> ```bash
+> python3 programs/spec_coverage_check.py --prompt input/prompt.md \
+>     [--fact-graph input/fact_graph.json] --ldocs generated_docs/ \
+>     --rtl <rtl> --tb <self_tb> --strict --json reports/gates/spec_coverage.json
+> ```
+> Every spec-derived checklist item (ports, reset, latency, table rows, worked examples, **every
+> ENUMERATED SET + its outside-the-set/default boundary**, signed-ness, byte order, overflow,
+> handshake) must be COVERED by the self-TB. A `--strict` BLOCK means our TB is weaker than the
+> hidden one — close the gap (write the missing assertion) before PASS. On any FAIL, run with
+> `--failure "<behavior>"`: a `coverage-gap` ⇒ enhance our TB; an `extraction-gap` ⇒ the program
+> names the `route_to:` station (pm-agent / ic-expert-agent / spec-to-rtl) that dropped the
+> requirement; only a `spec-absent` (nowhere in the chain, with the searched stations cited) is a
+> genuine floor and never a Pillar-1 fail. (The structural extraction + per-station routing is
+> deterministic; deciding whether a prose sentence is a distinct *testable* requirement is the LLM
+> step above.)
+
 ### Pillar 2 — 56-step Output Comparison vs open-source reference  ▸ gate: **every applicable step PASS**
 For each of the 56 canonical flow steps (`flow/phase1_phase2_phase3.yaml`, which now includes
 the Design-for-ECO spare-cell insertion step), compare OUR step output against the open-source
