@@ -509,11 +509,15 @@ def yosys_smoke(code: str, workdir: Path,
 def gate_record(rec: Dict, workdir: Path) -> Tuple[bool, Dict, Dict]:
     """Gate one {id, completion} record → (ok, out_record, report_entry).
 
-    Hygiene runs PER CODE FENCE and the write-back substitutes each fence
-    with ITS OWN fixed body (adversarial-review HIGH: a single concatenated
-    blob substituted into every fence duplicated all modules into each
-    fence and turned a clean 2-fence completion into a guaranteed
-    duplicate-declaration scorer FAIL)."""
+    Hygiene runs PER CODE FENCE (each fence body is fixed separately — a
+    single concatenated blob re-fixed per fence would duplicate every module
+    into each fence and turn a clean 2-fence completion into a guaranteed
+    duplicate-declaration scorer FAIL). For the FENCED kind the emitted
+    completion is the de-fenced concatenation of those fixed bodies — the
+    EXACT bytes the gate compiled — never the original text with the fence
+    markers retained (ORGANIC #626: a retained ```verilog marker is a line-1
+    backtick macro directive that ELAB_ERRORs the verbatim-written .sv at
+    official scoring)."""
     rid = rec.get("id", "")
     completion = rec.get("completion", "") or ""
     # ORGANIC #535 round-2 — an EMPTY / whitespace-only / trivially-short
@@ -622,15 +626,20 @@ def gate_record(rec: Dict, workdir: Path) -> Tuple[bool, Dict, Dict]:
         return False, rec, entry
     entry["verdict"] = "PASS"
     out_rec = dict(rec)
-    if fixed_bodies != [m.group(2) for m in fences]:
-        # splice each fence's OWN fixed body back, end-to-start so spans
-        # stay valid.
-        new_completion = completion
-        for m, fb in sorted(zip(fences, fixed_bodies),
-                            key=lambda x: -x[0].start(2)):
-            new_completion = (new_completion[:m.start(2)] + fb
-                              + new_completion[m.end(2):])
-        out_rec["completion"] = new_completion
+    # ORGANIC #626 — EMIT the de-fenced extracted payload (`combined`: the EXACT
+    # bytes the gate just compiled), NOT the original completion with the code-
+    # fence MARKERS (```verilog / ```) retained. The official scorer writes the
+    # emitted completion VERBATIM to rtl/<id>.sv; a retained ```verilog opener
+    # makes line 1 a backtick macro directive → ":1: macro verilog undefined" +
+    # ":1: syntax error" → the problem ELAB_ERRORs at scoring even though the
+    # de-fenced code the gate proved compiles clean (~2.6% of completions
+    # silently broken). The invariant: the bytes the gate COMPILED == the bytes
+    # the scorer compiles from the emitted completion. `combined` already
+    # concatenates ALL hygiene-fixed fence bodies (multi-fence safe) and drops
+    # any inter-fence prose that would itself break a verbatim-written .sv.
+    # Unconditional (not gated on a hygiene diff): an unchanged fenced draft was
+    # the dominant ELAB_ERROR shape — it kept the fence verbatim.
+    out_rec["completion"] = combined
     return True, out_rec, entry
 
 
