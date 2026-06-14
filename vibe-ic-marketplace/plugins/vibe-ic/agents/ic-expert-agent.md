@@ -1455,3 +1455,21 @@ _Captured by benchmark-enhancement-capture 2026-06-07._
 `programs/spec_coverage_check.py` enforces spec-first coverage attribution across the WHOLE input chain (prompt → fact graph → L1-L23). When a downstream verification fails on a requirement that was present in the **fact graph the PM Agent handed you** but **never made it into the L-docs you complete**, the program attributes it to `extraction-gap` with `route_to: ic-expert-agent` — i.e. **your L-doc completion dropped it.**
 
 Implication for your layer review: your "fill in values the user could not provide" job includes carrying EVERY captured requirement end-to-end into the L1-L23, not silently dropping one. The most-missed class (per the #697 CVDP evidence) is an ENUMERATED set's **outside-the-set / default / error-path** behavior — when L3/L5 lists the valid opcodes/modes/control-characters, the L-docs must ALSO state the non-listed/default path explicitly so spec-to-rtl implements it and the self-TB tests it. Also carry through: reset polarity/mode, stated output latency, every table-row mapping, signed-ness, byte/bit order, overflow/saturation behavior. An extraction-gap routed to you is a concrete L-doc-completion miss, not a benchmark floor.
+
+### Skill: Spec timing & encoding conventions a blind RTL author must extract (ORGANIC #699)
+
+**Pattern**: Spec→RTL failures cluster into recurring timing/encoding mis-reads that ARE stated in the prompt but easily overlooked. Whether the prose demands a registered vs combinational output, a one-cycle pulse offset, an exact pipeline latency, a synchronizer stage, or a specific bit/byte packing requires reading natural-language timing/protocol descriptions against design intent — no regex extracts the intended timing/encoding from free prose (this is the LLM-judgment companion to the deterministic `programs/spec_coverage_check.py` of #697, which forces the self-TB to COVER each dimension).
+
+**When to apply**: every blind spec-to-rtl authoring + every L-doc completion that carries a timing/encoding requirement forward.
+
+**The disciplines a blind author MUST extract and implement (and the self-TB MUST cover):**
+- **registered-vs-comb**: "asserted during state X" / "the output is registered" means the value appears the cycle the FSM is in X (registered), NOT a combinational decode — read which it is and match it exactly; do not default to combinational.
+- **exact output latency**: "valid N cycles after start" — count the pipeline stages precisely; an off-by-one in latency is a functional fail even when the datapath is correct.
+- **off-by-one**: "pulse one cycle after the change", first/last-element edge handling, counter wrap (N-1 vs N), inclusive vs exclusive bounds.
+- **handshake timing**: AXI-Stream / APB / valid-ready exact phase relationships; when the spec says "synchronize" across a clock domain, add the synchronizer register stage(s) — a missing synchronizer is both a CDC bug and a latency mismatch.
+- **bit/byte order & packing**: follow the prompt's EXACT concatenation order; watch MSB-first vs LSB-first; do NOT assume byte-alignment when codes are sub-byte-width.
+- **enumerated-set boundary** (the single most recurrent miss): when the spec lists "valid values are {…}" with a default/error for any other value, implement AND test the outside-the-set/default path — do NOT over-generalize a non-listed value to a listed case. Pair with the #697 `enum_boundary` checklist item so the self-TB stimulates a non-member value.
+
+**Why this is GENERAL**: universal RTL spec-reading disciplines, no design-specific lookup. The programmable residue — forcing the self-TB to COVER each of these dimensions — is the program-first `spec_coverage_check` (#697); this section captures the irreducible interpretation judgment (deciding WHICH timing/encoding the prose intends).
+
+_Captured by benchmark-enhancement-capture 2026-06-15._
