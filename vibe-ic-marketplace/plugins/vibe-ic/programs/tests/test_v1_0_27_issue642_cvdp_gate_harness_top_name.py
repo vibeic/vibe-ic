@@ -1,35 +1,27 @@
-"""Regression for ORGANIC #642 — cvdp_gate compiles without the official
-harness top-module flag (`-s cvdp_copilot_<problem>`), so a completion whose
-top module is named differently passes the gate but ELAB-fails at scoring with
-"cannot find top".
+"""Regression for ORGANIC #642 — module-name conformance vs the CVDP harness
+TOPLEVEL.
 
-現象 (round-1 v1.0.0/v1.0.23 CVDP nonagentic no_commercial, 302): the official
-cocotb harness elaborates each completion with
-`iverilog -o sim.vvp -s cvdp_copilot_<problem> ... rtl/cvdp_copilot_<problem>.sv`,
-i.e. it FORCES the top module to be `cvdp_copilot_<problem>`. cvdp_gate's own
-compile gate did NOT replicate that top selection (the #559 module-name check
-was gated behind an OPTIONAL --prompts arg the documented --batch-dir flow does
-not pass). So a completion declaring its top under the short/functional prose
-name (e.g. `module bus_arbiter`) compiled clean at the gate (verdict PASS) but
-the harness's `-s cvdp_copilot_bus_arbiter` could not find that top → exit 1 →
-ELAB_ERROR at scoring. All 9 ELAB_ERROR problems declared a top WITHOUT the
-`cvdp_copilot_` prefix; the gate marked every one PASS. Same gate-compile !=
-scorer-compile class as the fence-emit gap #626.
+ROUND-1 (v1.0.27) made the id-derived top name `cvdp_copilot_<stem>` a HARD
+harness-top requirement BY DEFAULT (without --prompts). ROUND-2 (field-agent
+reopen, v1.0.39) PROVED that premise false for 97% of CVDP problems: the
+harness's cocotb TOPLEVEL is the prompt's stated functional `Module Name:`,
+NOT the id stem (field-measured 293/302). v1.0.27's hard-block therefore
+false-blocked correct completions and directly contradicted the official
+scorer (counter-example `cvdp_copilot_16qam_mapper_0001`, top
+`qam16_mapper_interpolated`, which the scorer PASSes but the gate BLOCKed).
 
-Fix: derive the harness-required top name `cvdp_copilot_<stem>` from the draft
-id (strip a trailing `_NNNN` variant suffix) and enforce the #559 module-name
-conformance BY DEFAULT (no --prompts needed) — a completion whose top is not
-named `cvdp_copilot_<stem>` is BLOCKED at the gate instead of shipped to ELAB.
+CORRECTED behaviour (this file pins the v1.0.39 semantics):
+  • PROMPT-derived name (filename `rtl/<name>.sv` OR a `Module Name:`
+    declaration) is AUTHORITATIVE → a mismatch hard-BLOCKs. This catches both
+    the 293/302 `Module Name:` problems and the genuine 9/302
+    `rtl/cvdp_copilot_<id>.sv` problems (their stem is prompt-stated).
+  • id-DERIVED `cvdp_copilot_<stem>` (used only when NO prompt-derived name is
+    available, e.g. the documented --batch-dir flow without --prompts) is
+    ADVISORY-only → a mismatch is a WARN note, never a hard BLOCK; the gate
+    cannot prove the harness top without prompt evidence.
 
-NEGATIVE no-leak: (a) a completion ALREADY declaring the correct
-`cvdp_copilot_<stem>` top passes unchanged; (b) a multi-module completion that
-declares the correct top (even as a sub-module) passes; (c) a doc_only
-completion stays doc_only; (d) a NON-CVDP id (no `cvdp_copilot_` prefix)
-imposes no id-derived requirement (gate behaves as before); (e) --prompts-
-advisory WARNs instead of blocking.
-
-chip-AGNOSTIC: pure id-string structure (the CVDP harness's universal naming
-scheme); no chip / vendor / SKU literal.
+chip-AGNOSTIC: pure id-string / prompt-prose structure (the CVDP harness's
+universal naming scheme); no chip / vendor / SKU literal.
 """
 import json
 import sys
@@ -61,39 +53,87 @@ def _run(tmp_path, recs, extra=None):
     return recs_out, passed
 
 
-# ── (1) the fix: a wrong-named top is BLOCKED (no --prompts) ──────────────────
+def _prompts(tmp_path, mapping):
+    p = tmp_path / "prompts.jsonl"
+    p.write_text("".join(json.dumps({"id": k, "prompt": v}) + "\n"
+                         for k, v in mapping.items()))
+    return ["--prompts", str(p)]
 
-def test_wrong_top_name_blocked_by_default(tmp_path):
+
+# ── (1) the round-2 fix: id-derived mismatch is ADVISORY, not a hard block ────
+
+def test_id_derived_mismatch_is_advisory_not_blocked(tmp_path):
+    """Without --prompts (the documented --batch-dir flow), a completion whose
+    top is the functional name — NOT `cvdp_copilot_<stem>` — must PASS with a
+    WARN note. v1.0.27 false-BLOCKed this; the harness top is the prompt's
+    Module Name for 293/302, so the id stem cannot hard-block."""
+    recs, passed = _run(tmp_path, [{
+        "id": "cvdp_copilot_16qam_mapper_0001",
+        "completion": _V + "module qam16_mapper_interpolated(input a, "
+                           "output b);\n  assign b = a;\nendmodule\n```\n"}])
+    assert recs[0]["verdict"] == "PASS"
+    assert "cvdp_copilot_16qam_mapper_0001" in passed
+    assert any("filename-module-mismatch" in n
+               for n in recs[0].get("notes", []))
+    assert "filename_conformance" not in recs[0]
+
+
+# ── (2) NEGATIVE no-leak: prompt-derived names still hard-block ───────────────
+
+def test_prompt_module_name_mismatch_blocked_NOLEAK(tmp_path):
+    """A `Module Name:` declaration is authoritative — a completion that
+    declares a different top hard-BLOCKs (it ELAB_ERRORs at scoring)."""
+    recs, passed = _run(tmp_path, [{
+        "id": "cvdp_copilot_foo_0001",
+        "completion": _V + "module totally_wrong(input a, output b);\n"
+                           "  assign b = a;\nendmodule\n```\n"}],
+        extra=_prompts(tmp_path, {
+            "cvdp_copilot_foo_0001": "### Module Name:\n`expected_top`\n"}))
+    assert recs[0]["verdict"] == "BLOCKED"
+    assert "cvdp_copilot_foo_0001" not in passed
+    assert "expected_top" in recs[0].get("filename_conformance", "")
+
+
+def test_genuine_cvdp_copilot_top_blocked_when_prompt_pins_filename_NOLEAK(
+        tmp_path):
+    """The genuine 9/302 case: the prompt pins
+    `rtl/cvdp_copilot_bus_arbiter.sv` so the harness TOPLEVEL really is
+    `cvdp_copilot_bus_arbiter`. An author who used the short `bus_arbiter`
+    name must still be BLOCKed — the stem is now PROMPT-derived (from the
+    filename), so it hard-blocks (not via the advisory id fallback)."""
     recs, passed = _run(tmp_path, [{
         "id": "cvdp_copilot_bus_arbiter_0001",
         "completion": _V + "module bus_arbiter(input a, output b);\n"
-                           "  assign b = a;\nendmodule\n```\n"}])
+                           "  assign b = a;\nendmodule\n```\n"}],
+        extra=_prompts(tmp_path, {
+            "cvdp_copilot_bus_arbiter_0001":
+            "Save your top to rtl/cvdp_copilot_bus_arbiter.sv"}))
     assert recs[0]["verdict"] == "BLOCKED"
-    assert "cvdp_copilot_bus_arbiter_0001" not in passed
-    assert "cvdp_copilot_bus_arbiter" in recs[0].get("filename_conformance", "")
+    assert "cvdp_copilot_bus_arbiter" in recs[0].get(
+        "filename_conformance", "")
 
 
-# ── (2) NEGATIVE no-leak ─────────────────────────────────────────────────────
+def test_prompt_module_name_match_passes_NOLEAK(tmp_path):
+    recs, passed = _run(tmp_path, [{
+        "id": "cvdp_copilot_16qam_mapper_0001",
+        "completion": _V + "module qam16_mapper_interpolated(input a, "
+                           "output b);\n  assign b = a;\nendmodule\n```\n"}],
+        extra=_prompts(tmp_path, {
+            "cvdp_copilot_16qam_mapper_0001":
+            "### Module Name:\n`qam16_mapper_interpolated`\n"}))
+    assert recs[0]["verdict"] == "PASS"
+    assert "cvdp_copilot_16qam_mapper_0001" in passed
 
-def test_correct_top_name_passes_NOLEAK(tmp_path):
+
+def test_correct_id_stem_top_passes_NOLEAK(tmp_path):
+    """A completion ALREADY declaring `cvdp_copilot_<stem>` passes (no
+    mismatch at all)."""
     recs, passed = _run(tmp_path, [{
         "id": "cvdp_copilot_bus_arbiter_0001",
         "completion": _V + "module cvdp_copilot_bus_arbiter(input a, output b);"
                            "\n  assign b = a;\nendmodule\n```\n"}])
     assert recs[0]["verdict"] == "PASS"
     assert "cvdp_copilot_bus_arbiter_0001" in passed
-
-
-def test_multi_module_with_correct_top_passes_NOLEAK(tmp_path):
-    """The harness `-s` can select a declared module even if it is not the
-    syntactic last module — so a completion that DECLARES the required top
-    (alongside helpers) passes."""
-    recs, passed = _run(tmp_path, [{
-        "id": "cvdp_copilot_foo_0002",
-        "completion": _V + "module helper(input x, output y); assign y=x; "
-                           "endmodule\nmodule cvdp_copilot_foo(input a, "
-                           "output b); helper h(a,b); endmodule\n```\n"}])
-    assert recs[0]["verdict"] == "PASS"
 
 
 def test_doc_only_stays_doc_only_NOLEAK(tmp_path):
@@ -115,18 +155,7 @@ def test_non_cvdp_id_imposes_no_requirement_NOLEAK(tmp_path):
     assert "my_design_42" in passed
 
 
-def test_advisory_mode_warns_not_blocks_NOLEAK(tmp_path):
-    recs, passed = _run(tmp_path, [{
-        "id": "cvdp_copilot_bus_arbiter_0001",
-        "completion": _V + "module bus_arbiter(input a, output b);\n"
-                           "  assign b = a;\nendmodule\n```\n"}],
-        extra=["--prompts-advisory"])
-    assert recs[0]["verdict"] == "PASS"
-    assert any("filename-module-mismatch" in n
-               for n in recs[0].get("notes", []))
-
-
-# ── (3) helper unit: id → required harness top ───────────────────────────────
+# ── (3) helper unit: id → id-derived advisory top ─────────────────────────────
 
 @pytest.mark.parametrize("rid,expected", [
     ("cvdp_copilot_bus_arbiter_0001", "cvdp_copilot_bus_arbiter"),
