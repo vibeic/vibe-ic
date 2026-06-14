@@ -7009,6 +7009,50 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 "waive with rationale.")
         pvt_path.write_text(json.dumps(pvt, indent=2) + "\n")
         written.append(str(pvt_path))
+        # --- ORGANIC #694: durable single-corner stance attestation -------
+        # When <2 Liberty corners are available (the common case on a
+        # single-corner open PDK such as sky130A, which ships nominal/tt by
+        # default), the runner emits NEITHER a multi-corner matrix NOR the
+        # explicit single-corner disclosure that pvt_matrix_check (#442)
+        # accepts — so a legitimate single-corner run is scored as a hard
+        # FAIL (corner_count=0). Symmetric with #692's durable attestation:
+        # write reports/phase3/single_corner_stance.json disclosing the
+        # available corner(s) + rationale, which pvt_matrix_check reads to
+        # DEFER (VACUOUS/PASS-with-review) instead of FAIL. §4.05 NO-LEAK:
+        # the stance is emitted ONLY when <2 corners are genuinely present
+        # and multi_corner is NOT claimed; a matrix that CLAIMS multi-corner
+        # with <2 corners still FAILs the gate's contradictory-claim path.
+        try:
+            if len(corners) < 2 and not pvt.get("multi_corner"):
+                stance = {
+                    "program": "phase3_one_shot_runner",
+                    "stance": "SINGLE_CORNER_DISCLOSED",
+                    "corner_count": len(corners),
+                    "corners": [c.get("name") for c in corners],
+                    "primary_corner": pvt.get("primary_corner", "TT"),
+                    "multi_corner_claimed": False,
+                    "rationale": (
+                        "Fewer than 2 Liberty corners are available in the "
+                        "active PDK, so multi-corner sign-off cannot be "
+                        "substantiated. This run is an explicitly-disclosed "
+                        "single-corner stance (NOT a multi-corner claim). "
+                        "Production tapeout sign-off requires per-corner STA "
+                        "across ss/tt/ff — stage the missing corner Liberty "
+                        "libs and re-run, or carry this stance as a reviewed "
+                        "waiver. Disclosed per #442 / #694."),
+                    "review_required": True,
+                }
+                rpt_phase3.mkdir(parents=True, exist_ok=True)
+                stance_path = rpt_phase3 / "single_corner_stance.json"
+                stance_path.write_text(
+                    json.dumps(stance, indent=2) + "\n")
+                written.append(str(stance_path))
+                notes.append(
+                    "#694: emitted single_corner_stance.json "
+                    f"(corner_count={len(corners)}) — pvt_matrix_check "
+                    "defers instead of false-FAIL")
+        except Exception as exc:  # best-effort, never block the step
+            notes.append(f"#694 single-corner stance emit failed: {exc}")
 
     # --- Step 8: pre-emit SDC syntax check report ----------------------
     # The gate runs sdc_syntax_check and writes to reports/phase2/sdc_check.json
@@ -7724,6 +7768,24 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 "#\n")
             drc_signoff.write_text(header + src_drc.read_text(errors="ignore"))
             written.append(str(drc_signoff))
+            # --- ORGANIC #693: provenance stamp at emit time ---------------
+            # The #620 PV-provenance append at line ~7472 runs BEFORE this
+            # report is written (drc_signoff.rpt did not yet exist on disk,
+            # so its fp.is_file() check skipped it). Re-run the idempotent
+            # declarer NOW that the report exists, so the sign-off DRC report
+            # gets a matching provenance.jsonl entry (tool + output + real
+            # sha) at emit time. Without this, Step-31 provenance_check
+            # false-FAILs a DRC-clean + LVS-matching layout purely on a
+            # missing provenance stamp. §4.05: the declarer only stamps
+            # outputs that actually EXIST on disk (each with its REAL sha256),
+            # so a report that was never produced (or a stale/absent one) is
+            # NOT fabricated and Step-31 provenance still FAILs correctly.
+            _drc_prov_declared = _v1_6_620_append_pv_signoff_provenance(
+                project, top)
+            if _drc_prov_declared:
+                notes.append(
+                    "#693: declared sign-off DRC report in provenance.jsonl "
+                    f"at emit time: {_drc_prov_declared}")
 
     # --- Step 37: GDS canonical alias (REAL FILE, NOT SYMLINK — rule #1)
     if primary_gds.is_file():
