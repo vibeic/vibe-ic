@@ -10160,14 +10160,23 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
                     "result": "INCOMPLETE", "tool": tool,
                     "evidence": evidence,
                     "note": "report not emitted (re-run phase3 sign-off)"}
+        # ORGANIC #698 — map #696's "BENIGN-ERC" benign-float verdict to a
+        # non-blocking REVIEW (see the note below); a genuine functional-float
+        # verdict (ERC_DIRTY / any non-benign token) is NOT "BENIGN-ERC" and
+        # still maps to FAIL. (§4.05 no-leak; chip-AGNOSTIC token mapping.)
         result = "PASS" if verdict == "PASS" else (
-            "REVIEW" if verdict == "REVIEW" else
+            "REVIEW" if verdict in ("REVIEW", "BENIGN-ERC") else
             "INCOMPLETE" if verdict == "MEASURED" else "FAIL")
         out = {"category": name, "status": "AUTOMATED", "result": result,
                "tool": tool, "evidence": evidence, "source_verdict": verdict}
         if verdict == "MEASURED":
             out["note"] = ("measurement-only artifact (no budget "
                            "comparison applied) — review required (#444)")
+        elif verdict == "BENIGN-ERC":
+            out["note"] = ("benign float verdict from the #696 ERC screen "
+                           "(VPWR/VGND/zero_/spare structural floats) — "
+                           "non-blocking review item, not a conclusive PERC "
+                           "defect (#698)")
         return out
 
     categories: List[Dict[str, Any]] = []
