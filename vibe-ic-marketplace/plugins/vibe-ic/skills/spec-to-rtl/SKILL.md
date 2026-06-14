@@ -270,6 +270,69 @@ RTL or the prompt reliably separates the two, so this stays an LLM authoring
 judgment.
 
 
+## Independent differential self-verification (N-version) — break the single-self-TB circularity (#700)
+
+If you author BOTH the RTL **and** its self-testbench from ONE reading of the
+spec, the self-verification is **circular**: a misread baked into that one
+reading lands in BOTH surfaces, so the TB happily confirms the wrong behaviour.
+Empirically this passed a real oversight (an hmac write-data **live-read vs
+latched-read**: 3471 diffs once an independent check was added → fixed to 0).
+
+**Break the circularity with a SECOND, INDEPENDENT derivation** and
+cross-check it against the RTL every cycle with `diff_verify_harness.py`:
+
+1. **Derive a reference model INDEPENDENTLY** — fresh reasoning, **without
+   reusing your RTL derivation**. Author a Python module exposing `ref(seq)`
+   (input-sequence → expected-output-sequence). It must be a behavioural
+   transfer function, not a copy of the RTL's structure.
+
+2. **EXPLICITLY enumerate every ambiguous quantity and PIN each via the spec's
+   worked examples** before writing `ref`:
+   - **latency** (count the pipeline stages → the leading-prefix length, e.g.
+     `[0,0]+seq[:-2]` for an exactly-2-cycle delay);
+   - **registered-vs-comb** output;
+   - **off-by-one** (pulse offset / first-vs-last / wrap / inclusive-exclusive);
+   - **bit/byte packing** and **encoding** (MSB/LSB-first, sub-byte width).
+   Pin each to a concrete spec worked example so the reference is grounded, not
+   guessed.
+
+3. **Run the differential harness** — it generates and runs a cycle-accurate
+   differential testbench (directed + random + boundary vectors), driving the
+   RTL and comparing every cycle to your independent `ref`:
+
+   ```bash
+   python3 plugins/vibe-ic/programs/diff_verify_harness.py \
+       --rtl <your_rtl.sv> --ref <your_ref.py> --top <module> \
+       --vectors directed+random+boundary
+   ```
+
+   `AGREE` (rc 0) = the two independent derivations match every cycle.
+   A first-mismatch line (rc 1, `cycle`/`signal`) = a **designer-vs-reference
+   DIFF**: one derivation noticed a clause the other missed.
+
+4. **Adjudicate every mismatch by RE-READING the spec** — decide which
+   derivation is correct, fix the wrong one, re-run. **Emit only after RTL and
+   the independent reference AGREE.**
+
+**Honest SCOPE (this is a COMPLEMENT, not a silver bullet):** it catches
+**OVERSIGHT misreads** (one derivation noticed a clause the other missed). It
+does **NOT** catch **genuine ambiguity** where the spec wording biases ALL
+independent blind readings the **same** way (an exact-latency phrase both you
+and the reference read identically-but-wrong), nor benchmark spec↔TB
+contradictions — those are **FLOOR** (on the hardest CVDP ambiguity residual it
+recovered 0/8 per #697). Its value is on FRESH runs preventing oversight bugs
+**before** the scorer. It is the differential complement to the deterministic
+**#697 `spec_coverage_check`** (force the self-TB to COVER each dimension) and
+the **#699** timing/encoding reading disciplines — not a replacement for either.
+
+**why_not_bucket_a:** authoring the independent reference and adjudicating a
+designer-vs-reference mismatch require reading and interpreting the spec; no
+regex derives the reference. The DETERMINISTIC half — generating and running
+the differential harness over directed/random/boundary vectors and reporting
+per-cycle mismatches — IS the program (`diff_verify_harness`); this step records
+the judgment residual (deriving the reference + adjudicating).
+
+
 ## Compliance gate (mandatory)
 
 After producing your output, save it to a file and run:

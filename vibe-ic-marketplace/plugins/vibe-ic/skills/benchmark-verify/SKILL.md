@@ -62,6 +62,25 @@ confirm it PASSES against the generated RTL.
 > deterministic; deciding whether a prose sentence is a distinct *testable* requirement is the LLM
 > step above.)
 
+> **Independent differential self-verification (ORGANIC #700, BINDING — N-version):** #697 makes
+> the self-TB as *complete* as the hidden scorer, but a single agent that derives BOTH the RTL and
+> the self-TB from ONE reading still self-verifies **circularly** — a misread bakes into both
+> surfaces. Break the circularity by deriving a **reference model INDEPENDENTLY** (fresh reasoning,
+> not reusing the RTL derivation; explicitly enumerate + example-pin every ambiguous quantity —
+> latency / registered-vs-comb / off-by-one / packing / encoding) and cross-checking it against the
+> RTL every cycle:
+> ```bash
+> python3 programs/diff_verify_harness.py --rtl <rtl> --ref <independent_ref.py> \
+>     --top <module> --vectors directed+random+boundary
+> ```
+> `AGREE` ⇒ the two independent derivations match every cycle; a first-mismatch line ⇒ a
+> designer-vs-reference DIFF — adjudicate by re-reading the spec, fix the wrong derivation, re-run.
+> Emit only after they AGREE. **Honest scope:** it catches OVERSIGHT misreads (one derivation
+> noticed a clause the other missed; empirically caught an hmac live-vs-latched read, 3471 diffs →
+> 0), NOT genuine ambiguity that biases all blind readings the same way nor benchmark spec↔TB
+> contradictions (FLOOR per #697; 0/8 on the hardest CVDP ambiguity residual). It is a COMPLEMENT to
+> #697 + #699, run BEFORE the scorer on fresh runs.
+
 ### Pillar 2 — 56-step Output Comparison vs open-source reference  ▸ gate: **every applicable step PASS**
 For each of the 56 canonical flow steps (`flow/phase1_phase2_phase3.yaml`, which now includes
 the Design-for-ECO spare-cell insertion step), compare OUR step output against the open-source

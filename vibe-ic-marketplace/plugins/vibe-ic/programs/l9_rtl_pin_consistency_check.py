@@ -668,75 +668,115 @@ def _strip_param_block(src: str) -> str:
     return "".join(out)
 
 
+# ─── #704 — preprocessor-aware compile define-set resolution ───────
+# The RTL-top port parser must be told the SAME compile define-set the
+# in-runner sv2v / iverilog DUT conversion uses, so that ports inside a
+# NOT-TAKEN `ifdef arm (optional formal / RVFI / ECC / debug interfaces)
+# are EXCLUDED before extraction. Without it, the parser harvests
+# conditionally-compiled ports the DUT never exposes AND leaks the
+# last-seen direction token across a stripped conditional boundary into
+# the next real port. Mirrors phase2_one_shot_runner._v671_tb_compile_defines
+# exactly (base SIMULATION, flipped to SYNTHESIS only when the simulation
+# arm leaves an include-closure hole the synthesis arm resolves). A
+# formal/debug/coverage define (e.g. RISCV_FORMAL) is in NEITHER set, so
+# its `ifdef arm is dropped under whichever arm wins — matching the real
+# DUT surface. chip-AGNOSTIC: pure SIMULATION/SYNTHESIS grammar; no
+# chip/vendor/macro literal.
+def _resolve_compile_defines(project: Path) -> set:
+    """#704 — return the compile-time -D macro set the runner's DUT
+    conversion compiles under (e.g. {"SIMULATION"} or {"SYNTHESIS"}), so
+    the RTL-top port parser blanks not-taken `ifdef arms the SAME way the
+    runner's full-stack TB does. Defaults to {"SIMULATION"} on any read /
+    import error so the gate stays preprocessor-aware even when the
+    closure resolver is unavailable. chip-AGNOSTIC."""
+    rtl_dir = _pl.rtl_dir(project)
+    if not rtl_dir.is_dir():
+        return {"SIMULATION"}
+    files_text: dict[str, str] = {}
+    for ext in (".v", ".sv", ".svh", ".vh"):
+        for f in sorted(rtl_dir.rglob(f"*{ext}")):
+            try:
+                files_text[str(f)] = f.read_text(errors="replace")
+            except OSError:
+                continue
+    try:
+        import synth_frontend as _sf
+        define, _reason = _sf.decide_sv2v_tb_define(files_text)
+    except Exception:  # pragma: no cover — defensive
+        define = "SIMULATION"
+    return {define}
+
+
 def parse_rtl_top_ports(rtl_path: Path,
-                        top_name: Optional[str] = None) -> list[dict]:
+                        top_name: Optional[str] = None,
+                        defines: Optional[set] = None) -> list[dict]:
     """Parse `module <name>(...);` and emit [{name, direction}].
 
     Supports the SystemVerilog `module foo import pkg::*;
     (input wire clk, output id_tx_en, inout id_bus, ...)` shape.
 
     ORGANIC-20260614 — when `top_name` is supplied (the L9-declared top
-    that `find_rtl_top` already resolved the FILE by), the port-list regex
-    is ANCHORED to that specific module header
-    (`module <re.escape(top_name)>\\b ... ( ... );`) so a multi-module
-    bundle file whose top is NOT declared first is parsed at the CORRECT
-    module — not the first `module` in the file. When `top_name` is None,
-    or the named module is absent from the file, the parser falls back to
-    the historical first-module match (preserving behaviour for
-    single-module files and name-mismatch edge cases). Chip-AGNOSTIC: the
-    anchor is the resolved-top string itself, never a chip/vendor literal.
+    that `find_rtl_top` already resolved the FILE by), the port list is
+    extracted from that specific module header so a multi-module bundle
+    file whose top is NOT declared first is parsed at the CORRECT module.
+    When `top_name` is None / absent, the parser falls back to the first
+    module declared in the file (preserving behaviour for single-module
+    files and name-mismatch edge cases). Chip-AGNOSTIC: the anchor is the
+    resolved-top string itself, never a chip/vendor literal.
+
+    #704 — migrated OFF the former local comment/param-strip-only regex
+    ONTO the SHARED preprocessor-aware parser
+    `reset_clock_variant_alias.parse_module_ports(text, module, defines)`
+    (the #671 parser already consumed by l9_submodule_conformance_check /
+    leaf_typo_alias_emit / phase2_one_shot_runner). The shared parser
+    handles comment + balanced-paren `#(...)` parameter stripping + SV
+    `import pkg::*;` clauses AND — when `defines` is supplied — BLANKS the
+    bodies of NOT-TAKEN `ifdef/`ifndef/`elsif/`else arms BEFORE the port
+    list is read. This (1) excludes conditionally-compiled optional
+    interfaces (formal/RVFI/ECC/debug) the DUT never exposes, and (2)
+    prevents the last-seen direction token from carrying across a stripped
+    conditional boundary into the next real port.
+
+    §4.05 NO-LEAK: `defines=None` preserves take-EVERY-arm behaviour — a
+    NON-ifdef top is unaffected and every existing passing case still
+    passes; a port genuinely declared in the COMPILED arm is still
+    returned; the direction of a real compiled port is read correctly (no
+    carry-forward). chip-AGNOSTIC: pure `ifdef grammar + abstract compile
+    define-set; no chip/vendor literal.
     """
-    text = _strip_comments(rtl_path.read_text(errors="ignore"))
-    # Strip the optional `#( ... )` parameter block with a balanced-paren
-    # scanner BEFORE the port-list regex runs, so function-call defaults
-    # like `$clog2(memsize)` (and nested calls) can't truncate the match
-    # at an inner `)` and yield zero ports (#474).
-    text = _strip_param_block(text)
-    m = None
-    if isinstance(top_name, str) and top_name.strip():
-        # Anchor on the resolved top module header. `\b` after the escaped
-        # name prevents `mytop` from matching `mytop_wrapper`. The optional
-        # SV import clause(s) between the header and the port-list paren are
-        # tolerated exactly as in the generic pattern below.
-        m = re.search(
-            r"module\s+" + re.escape(top_name.strip()) + r"\b\s*"
-            r"(?:import\s+[\w:\*\s,]+;\s*)*"  # SV imports
-            r"\(([^;]+?)\)\s*;",
-            text,
-            flags=re.DOTALL,
-        )
-    if m is None:
-        # Fallback: first `module <name>(...)` in the file (historical
-        # behaviour, correct for single-module files and when the named
-        # top is absent / mis-spelled).
-        m = re.search(
-            r"module\s+\w+\s*"
-            r"(?:import\s+[\w:\*\s,]+;\s*)*"  # SV imports
-            r"\(([^;]+?)\)\s*;",
-            text,
-            flags=re.DOTALL,
-        )
-    if not m:
+    try:
+        import reset_clock_variant_alias as _rcv
+    except Exception:  # pragma: no cover — defensive import guard
         return []
-    body = m.group(1)
+    text = rtl_path.read_text(errors="ignore")
+    module = top_name.strip() if isinstance(top_name, str) and top_name.strip() \
+        else None
+    ports: list[tuple] = []
+    if module is not None:
+        # Anchor on the resolved top module header (the shared parser greps
+        # for `\bmodule <module>\b`, so `mytop` never matches `mytop_wrapper`).
+        ports = _rcv.parse_module_ports(text, module, defines)
+    if not ports:
+        # Fallback: first module declared in the file (historical behaviour,
+        # correct for single-module files and when the named top is absent /
+        # mis-spelled). Resolve the first module NAME the same way the shared
+        # parser would, then parse it (with the same define-set).
+        stripped = _rcv._strip_comments(text)
+        fm = re.search(r"\bmodule\s+(\w+)", stripped)
+        if fm:
+            ports = _rcv.parse_module_ports(text, fm.group(1), defines)
     out: list[dict] = []
-    cur_dir: Optional[str] = None
-    for line in body.split(","):
-        toks = line.split()
-        if not toks:
+    # NB: reset_clock_variant_alias.parse_module_ports yields
+    # (direction, width, name) tuples — the WIDTH `[msb:lsb]` cell is the
+    # MIDDLE element, the port NAME is LAST (matching the #671 parser's
+    # own `for _d, _w, n in ports` unpack contract).
+    for direction, _width, name in ports:
+        if not name:
             continue
-        # Detect direction token; carry forward when omitted (Verilog
-        # `input a, b, c` shape).
-        if toks[0].lower() in _DIR_NORMALIZE:
-            cur_dir = _DIR_NORMALIZE[toks[0].lower()]
-            toks = toks[1:]
-        # Drop type / width tokens; the LAST token is the port name.
-        if not toks:
-            continue
-        name = toks[-1].strip("[]()")
-        # Skip pure type-only tokens (rare).
-        if not re.match(r"^[A-Za-z_]\w*$", name):
-            continue
+        # The shared parser only yields ANSI ports carrying a direction
+        # keyword; normalise it through the same in/out/io table so the
+        # downstream direction-mismatch check compares apples to apples.
+        cur_dir = _normalise_dir(direction) if direction else None
         out.append({"name": name, "direction": cur_dir})
     return out
 
@@ -805,7 +845,16 @@ def main(argv: list[str]) -> int:
     # named module turns out to be absent. Chip-AGNOSTIC: the anchor is the
     # resolved-top string, never a chip/vendor literal.
     top_name = l9_top_module_name(l9) or rtl_top.stem
-    rtl_ports = parse_rtl_top_ports(rtl_top, top_name)
+    # #704 — resolve the SAME compile define-set the in-runner DUT
+    # conversion uses (base SIMULATION, synth/TB flip) so the shared
+    # preprocessor-aware parser blanks NOT-TAKEN `ifdef arms before
+    # extracting ports — excluding conditionally-compiled optional
+    # interfaces (formal/RVFI/ECC/debug) AND preventing a stripped
+    # conditional boundary from carrying the last-seen direction token
+    # into the next real port. A non-`ifdef top is unaffected (every arm
+    # is present regardless of the define-set). chip-AGNOSTIC.
+    rtl_defines = _resolve_compile_defines(project)
+    rtl_ports = parse_rtl_top_ports(rtl_top, top_name, rtl_defines)
     if not rtl_ports:
         print(
             f"FAIL — RTL top {rtl_top.name} parsed zero ports — "
