@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 679
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 679)
+- **Total programs (excluding helpers / shims):** 680
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 680)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 670 |
+| `any` | 671 |
 
 ## Alphabetical listing
 
@@ -614,6 +614,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `spare_cell_preservation_check` | any | — | Design-for-ECO PRESERVATION gate. |
 | `spdif_protocol_synth` | any | v0.1.84 | S/PDIF-class protocol synth helper. |
 | `spec_conformance_check` | any | — | Spec↔RTL contract-conformance gate. |
+| `spec_coverage_check` | any | — | ORGANIC #697 [P1, chip-AGNOSTIC] |
 | `spec_response_delay_check` | any | — | Response path must honour spec-declared |
 | `spec_review_lint` | any | v0.2.14 | deterministic structural presence lint for a NL spec. |
 | `spec_rtl_port_fidelity_check` | any | — | spec↔RTL port-fidelity + garbled-port lint. |
@@ -751,7 +752,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (670 programs)
+### `any` (671 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1334,6 +1335,7 @@ _(no programs in this group)_
 - `spare_cell_preservation_check` — Design-for-ECO PRESERVATION gate.
 - `spdif_protocol_synth` — S/PDIF-class protocol synth helper.  _[v0.1.84]_
 - `spec_conformance_check` — Spec↔RTL contract-conformance gate.
+- `spec_coverage_check` — ORGANIC #697 [P1, chip-AGNOSTIC]
 - `spec_response_delay_check` — Response path must honour spec-declared
 - `spec_review_lint` — deterministic structural presence lint for a NL spec.  _[v0.2.14]_
 - `spec_rtl_port_fidelity_check` — spec↔RTL port-fidelity + garbled-port lint.

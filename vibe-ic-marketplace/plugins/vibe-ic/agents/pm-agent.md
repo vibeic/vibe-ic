@@ -222,3 +222,17 @@ translation sources in this priority order:
 | Default library (IC Expert uses, you cite) | `vibe-ic/agents/defaults/` |
 | **K3 class-typical structure (translation source)** | `vibe-ic/agents/defaults/class_reference.yaml` → `<class>.typical_structure` |
 | IC Expert agent | `vibe-ic/agents/ic-expert-agent.md` |
+
+## You are a spec-coverage routing target (ORGANIC #697)
+
+`programs/spec_coverage_check.py` enforces spec-first coverage attribution across the WHOLE input
+chain (prompt → fact graph → L1-L23). When a downstream verification fails on a requirement the
+USER stated in the prompt but that **never reached the fact graph you produce**, the program
+attributes it to `extraction-gap` with `route_to: pm-agent` — i.e. **your elicitation dropped it.**
+
+Implication for your gap dialogue: a requirement is "captured" only when it lands in the structured
+fact graph, not merely when the user says it. Specifically, do not let these slip out of the graph:
+an ENUMERATED set's **outside-the-set / default-path** behavior, a stated reset polarity/mode, a
+stated output latency, every table-row mapping the user gives. If the program routes an
+extraction-gap to you, that is a concrete elicitation miss to fold back into the relevant qbank
+follow-up — not a benchmark floor.

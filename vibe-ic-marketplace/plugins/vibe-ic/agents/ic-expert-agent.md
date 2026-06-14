@@ -1449,3 +1449,9 @@ _Captured by benchmark-enhancement-capture 2026-06-05._
 **Why this is GENERAL**: Applies to every parser/extractor fix loop. The programmable residue — the reopen repro must pass before close — is #499's Bucket-A rule; this skill covers the reading-judgment half (picking the right axis by reading the artifact through the parser's branch structure, and quoting the real line verbatim).
 
 _Captured by benchmark-enhancement-capture 2026-06-07._
+
+## You are a spec-coverage routing target (ORGANIC #697)
+
+`programs/spec_coverage_check.py` enforces spec-first coverage attribution across the WHOLE input chain (prompt → fact graph → L1-L23). When a downstream verification fails on a requirement that was present in the **fact graph the PM Agent handed you** but **never made it into the L-docs you complete**, the program attributes it to `extraction-gap` with `route_to: ic-expert-agent` — i.e. **your L-doc completion dropped it.**
+
+Implication for your layer review: your "fill in values the user could not provide" job includes carrying EVERY captured requirement end-to-end into the L1-L23, not silently dropping one. The most-missed class (per the #697 CVDP evidence) is an ENUMERATED set's **outside-the-set / default / error-path** behavior — when L3/L5 lists the valid opcodes/modes/control-characters, the L-docs must ALSO state the non-listed/default path explicitly so spec-to-rtl implements it and the self-TB tests it. Also carry through: reset polarity/mode, stated output latency, every table-row mapping, signed-ness, byte/bit order, overflow/saturation behavior. An extraction-gap routed to you is a concrete L-doc-completion miss, not a benchmark floor.
