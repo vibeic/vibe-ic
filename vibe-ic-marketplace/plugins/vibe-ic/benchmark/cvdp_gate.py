@@ -52,6 +52,16 @@ from typing import Dict, List, Optional, Tuple
 HARNESS_DIR = Path(__file__).resolve().parent
 PROGRAMS_DIR = HARNESS_DIR.parent / "programs"
 
+# ORGANIC #695 — prompt→interface conformance (module-name case + missing-port
+# + port-direction, all prompt-derivable). Imported lazily so the gate still
+# runs if the program is absent (the stage simply no-ops with a note). ADVISORY
+# only — heuristic prompt extraction must never hard-block an emit.
+try:
+    sys.path.insert(0, str(PROGRAMS_DIR))
+    import iface_conformance_v2 as _ifacev2  # type: ignore
+except Exception:  # pragma: no cover - defensive (program missing)
+    _ifacev2 = None
+
 # ANY-info-string fence tokenizer (adversarial-review HIGH): an opener whose
 # tag is not verilog-ish (```text / ```python / untagged prose) must STILL
 # anchor a fence, or pairing skews — the closing ``` of a text block pairs
@@ -1049,6 +1059,26 @@ def main(argv=None) -> int:
                                f"TOPLEVEL — #642 round-2)")
                         entry.setdefault("notes", []).append(
                             "WARN module-name-conformance: " + msg)
+                # ORGANIC #695 — prompt→interface conformance ADVISORY stage:
+                # module-name CASE + missing-port + port-direction, all derived
+                # from the PROMPT + the emitted RTL only (BLIND — never reads
+                # the oracle / hidden TB). WARN-only here; it NEVER hard-blocks
+                # (heuristic prompt extraction would otherwise false-block a
+                # correct emit on an internal-signal mention — §4.05 asymmetry).
+                # The standalone program's --strict mode is the blocking front
+                # door; inside the SOLE-EMIT gate it stays advisory.
+                if _ifacev2 is not None:
+                    _ptext = prompts.get(str(rec.get("id")), "")
+                    _comp = out_rec.get("completion", "") or ""
+                    if _ptext and _comp.strip():
+                        try:
+                            _findings = _ifacev2.check_conformance(
+                                str(rec.get("id")), _ptext, _comp)
+                        except Exception:
+                            _findings = []
+                        for _f in _findings:
+                            entry.setdefault("notes", []).append(
+                                "WARN iface-conformance (#695): " + _f.message)
             report.append(entry)
             if ok:
                 passed.append(out_rec)
