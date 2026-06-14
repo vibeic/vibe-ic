@@ -33,18 +33,35 @@ repo data, NOT inside the plugin. Always confirm the live list with
 
 Run one: `/vibe-ic-all benchmark-data/ic/<ic>` then `/benchmark-verify benchmark-data/ic/<ic>`.
 
-### Where each IC's result goes (you check these in — `benchmark-data/` only)
+### Where each IC's result goes — you COMMIT **and PUSH** it (`benchmark-data/` only)
 
-Per IC, written into **`benchmark-data/ic/<ic>/`**:
+You push code to the benchmark's subfolder carrying **the COMPLETE output of every
+vibe-ic step**, not just the summary reports. The benchmark subfolder
+**`benchmark-data/ic/<ic>/`** must contain a fully reproducible record of the run
+— another engineer (or a fresh field-agent audit) clones it and sees exactly what
+the plugin produced at every phase. The deliverable is the pushed tree, so after a
+run you `git add benchmark-data/ic/<ic>/…` (explicit paths, never `-A`),
+`git commit`, and **`git push origin main`** (the check-in boundary below still
+binds: only paths under `benchmark-data/` may be staged).
+
+Per IC, committed AND pushed into **`benchmark-data/ic/<ic>/`** — the full
+step output:
 - `RESULT.md` — headline result summary
 - `BENCHMARK_VERIFICATION_REPORT.md` — six-pillar gate (from `/benchmark-verify`)
 - `SOURCE_MANIFEST.md` — GENERATED vs REUSED-IP attribution (mandatory)
 - `CROSS_CHECK_MATRIX.md` + `cross_check/` — Pillar-2 cross-check vs the open-source reference
-- `reports/` — all JSON/MD metrics (`orchestrator/vibe_ic_one_shot.json`, coverage, phase1/2/3)
-- flow outputs `phase1/ phase2/ phase3/` + `sim/ verify/ provenance.jsonl waivers.json`
+- `reports/` — ALL JSON/MD metrics (`orchestrator/vibe_ic_one_shot.json`, coverage, phase1/2/3 gates, audit)
+- **Phase-1 output** — `phase1/generated_docs/L1…L23*.json` (the full L-doc set) + `phase1/` logs
+- **Phase-2 output** — `phase2/stage1/rtl/*.{v,sv}` (RTL, chip_top wrapper), `stage2/synth/` (netlist, yosys.log), lint, `sim/` + `sim_full_stack/` (results.xml / pass.flag / results.json)
+- **Phase-3 output** — `phase3/` PnR (DEF/`*.def`), DRC/LVS/STA reports, `*.gds` streamout, antenna/IR-drop
+- run provenance — `sim/ verify/ provenance.jsonl waivers.json` + every step transcript/log the run emitted
+
+> The push is the benchmark agent's product: a future plugin version is judged by
+> re-running clean-room and diffing against this pushed step output. A run whose
+> outputs are not pushed has not been benchmarked.
 
 A cross-6 roll-up scoreboard, if produced, goes at `benchmark-data/ic/RESULT.md`
-(not present yet). NEVER write results outside `benchmark-data/`.
+(not present yet). NEVER write — or push — results outside `benchmark-data/`.
 
 ## Core Principle
 
