@@ -712,6 +712,18 @@ def detect_ic_class(project: Path) -> Tuple[str, str]:
         return ("unknown",
                 f"ic_class_profile.detect_ic_class raised: {e}")
     ic_class = str(profile.get("ic_class") or "unknown")
+    # ORGANIC #635 — close the phase1-before-phase2 ORDERING hole: now that the
+    # AUTHORITATIVE class has been re-persisted to reports/ic_class.json
+    # (refresh=True above), re-stamp any L14-L23 skeleton whose ic_class was
+    # frozen at phase1 emission time (when reports/ic_class.json was absent →
+    # a fail-closed fallback). Best-effort + idempotent; only rewrites a doc
+    # whose stamped class genuinely DIFFERS. chip-AGNOSTIC.
+    if ic_class and ic_class != "unknown":
+        try:
+            from phase1_post_process import restamp_l_doc_skeletons as _restamp
+            _restamp(project)
+        except Exception:  # pragma: no cover — never fail detect on re-stamp
+            pass
     # Build a compact, human-readable evidence string from the
     # boolean-fact fields the canonical classifier already records,
     # so the runner step's "PASS detect_ic_class …" log line still

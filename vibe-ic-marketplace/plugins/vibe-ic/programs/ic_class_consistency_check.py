@@ -45,6 +45,7 @@ Exit codes: 0 = PASS / SKIP, 1 = FAIL, 2 = input error.
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 import _path_layout as _pl
@@ -81,6 +82,55 @@ def _vendor_docs_in_input(project: Path) -> list[Path]:
         if f.name.lower() in _VENDOR_DOC_NAME_BLACKLIST:
             continue
         out.append(f)
+    return out
+
+
+_L_DOC_SUBDIRS = ("phase1/generated_docs", "generated_docs", "l_docs")
+
+
+def _stamped_l_doc_classes(project: Path) -> list[tuple[str, str]]:
+    """Return [(relative_path, stamped_ic_class), ...] for every L*.json
+    generated doc that carries a non-empty top-level ``ic_class`` string.
+
+    ORGANIC-20260614 (#635): the L14-L23 skeletons emitted by
+    ``phase1_post_process.emit_l_doc_skeleton`` stamp an ``ic_class`` field.
+    Because the skeletons are stamped during phase1 — BEFORE phase2 persists
+    the authoritative ``reports/ic_class.json`` — the stamped value can be a
+    fail-closed fallback that diverges from the true class and is never
+    re-stamped. This gate is the canonical owner of the per-L-doc ic_class
+    stamp, so it must read it.
+
+    Docs that legitimately omit ``ic_class`` (or carry a non-string/empty
+    value) are skipped — only a CONCRETE divergent stamp is a violation.
+    chip-AGNOSTIC: a structural field comparison, never a chip/SKU literal.
+    """
+    out: list[tuple[str, str]] = []
+    seen: set[Path] = set()
+    for sub in _L_DOC_SUBDIRS:
+        d = project / sub
+        if not d.is_dir():
+            continue
+        for f in sorted(d.glob("L*.json")):
+            rp = f.resolve()
+            if rp in seen:
+                continue
+            seen.add(rp)
+            try:
+                doc = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                # Unreadable / malformed doc — not this gate's concern.
+                continue
+            if not isinstance(doc, dict):
+                continue
+            stamped = doc.get("ic_class")
+            if not isinstance(stamped, str) or not stamped.strip():
+                # Legitimately omits ic_class → SKIP this doc.
+                continue
+            try:
+                rel = str(f.relative_to(project))
+            except ValueError:
+                rel = f.name
+            out.append((rel, stamped.strip()))
     return out
 
 
@@ -162,6 +212,26 @@ def inspect(project_dir: Path) -> tuple[int, list[str]]:
                 f"file(s){more}: {', '.join(rels)}. Path A means "
                 f"no vendor docs."
             )
+
+    # 5. Per-L-doc ic_class stamp consistency (ORGANIC-20260614 #635).
+    #    The L14-L23 skeletons stamp an ic_class field at phase1 emission
+    #    time, BEFORE phase2 persists the authoritative reports/ic_class.json.
+    #    If the stamped value diverges from the inferred/persisted class it is
+    #    a frozen phase1-before-phase2 artifact that must FAIL here — the
+    #    canonical consistency gate owns this stamp. Only flag when we have a
+    #    concrete inferred class to compare against (an `unknown` inference is
+    #    fail-closed / not-yet-resolved, so it cannot prove drift; docs that
+    #    omit ic_class are already skipped by _stamped_l_doc_classes).
+    if isinstance(inferred_class, str) and inferred_class not in (
+            "", "unknown"):
+        for rel, stamped in _stamped_l_doc_classes(project):
+            if stamped != inferred_class:
+                issues.append(
+                    f"{rel} stamped ic_class={stamped!r} but "
+                    f"detect_ic_class()/reports/ic_class.json resolves "
+                    f"{inferred_class!r} — frozen phase1-before-phase2 "
+                    f"L-doc stamp diverged from the authoritative class."
+                )
 
     if issues:
         out: list[str] = [
