@@ -1565,3 +1565,15 @@ _Captured by benchmark-enhancement-capture 2026-06-15._
 **Why this is GENERAL**: the column-per-index / Gray-row reading is the mechanical K-map-to-mux mapping; getting the Gray order right is the only subtlety.
 
 _Captured by benchmark-enhancement-capture 2026-06-15 (#716 dual-track convergence, #718). Spec-faithful genre defaults — §4-E: apply only "unless the spec states otherwise"; never an oracle answer._
+
+### Skill: reference-anchored RCA + minimal-edit + real-check iteration (ORGANIC #725)
+
+**Pattern**: Blind self-verification — where the author writes both the RTL and its own testbench from a SINGLE reading — plateaus near zero on residual bugs, because a misread is baked into BOTH the design and its check. The reliable recovery recipe instead: (1) anchor verification to an INDEPENDENT reference of the intended behaviour (the spec's worked example, a genre-standard reference, or the original golden); (2) run the ACTUAL acceptance check — the real scorer/harness with the exact toolchain and any required environment image — not a self-authored stand-in; (3) read the REAL failing assertion; (4) make the SMALLEST edit to the closest-working RTL (a minimal-edit, never a full rewrite — a rewrite introduces fresh bugs); (5) iterate against the real check until it passes.
+
+**When to apply**: every residual-bug recovery after the first blind attempt fails — especially when a self-authored testbench and the design agree with each other but the real harness disagrees.
+
+**What to do**: stop re-reading your own testbench; pull an independent reference, run the real check, and converge by the smallest change. Empirically this moved a residual set from ~0–1 recovered per round (blind self-verify) to 41 of 54 recovered.
+
+**Why this is GENERAL**: a debugging discipline, not a design-specific lookup — anchor to an independent reference, drive the real acceptance check, edit minimally. Pairs with the #716 dual-track convergence doctrine. The deterministic halves are already program-gates (run-the-real-check / emit-only-after-pass / minimal-edit) — #688 / #695 / #705; this section records the irreducible reading-judgment recipe (diagnosing the exact discrepancy and choosing the minimal correct edit).
+
+_Captured by benchmark-enhancement-capture 2026-06-15 (#725; reference-anchored RCA + minimal-edit + real-check iteration)._
