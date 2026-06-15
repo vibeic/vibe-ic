@@ -1488,7 +1488,7 @@ _Captured by benchmark-enhancement-capture 2026-06-15._
 
 **Pattern**: A non-power-of-two clock divider's structure is genre-determined. For an INTEGER divider, toggle the output every `N/2` source cycles. For a HALF-INTEGER ratio (e.g. 3.5×), the conventional design generates the intermediate clock by pulse-SETTING the output at specific counter values (not free toggling) and COMBINES a counter clocked on the rising edge with one on the falling edge (dual-edge) to realise the half cycle. ODD integer dividers use an asynchronous active-low reset so the duty-cycle phases align.
 
-**When to apply**: any "divide clock by N" / "generate a clk_out that is the input divided by N(.5)" prompt, unless the prose dictates a different structure.
+**When to apply**: any "divide clock by N" / "generate an output clock that is the input divided by N(.5)" prompt, unless the prose dictates a different structure.
 
 **Why this is GENERAL**: these are the textbook frequency-divider topologies; the ratio (integer vs half vs odd) selects the topology deterministically from the spec, not from any hidden test.
 
@@ -1556,9 +1556,9 @@ _Captured by benchmark-enhancement-capture 2026-06-15._
 
 **Why this is GENERAL**: copy-through-first-1-then-invert is the defining algorithm of serial two's complement; it is the spec, not an oracle fit.
 
-### Skill: K-map → mux decomposition — mux_in[i] is the K-map COLUMN for index i, read down Gray-ordered rows
+### Skill: K-map → mux decomposition — each mux data input is the K-map COLUMN for that index, read down Gray-ordered rows
 
-**Pattern**: When decomposing a function into a mux selected by some variables, each `mux_in[i]` equals the K-map COLUMN selected by that index value, read DOWN the Gray-ordered rows of the remaining variables. Index the columns by the select variables' value, and remember the rows are Gray-coded (not sequential binary — companion to the existing Karnaugh-Gray skill).
+**Pattern**: When decomposing a function into a mux selected by some variables, each mux data input equals the K-map COLUMN selected by that index value, read DOWN the Gray-ordered rows of the remaining variables. Index the columns by the select variables' value, and remember the rows are Gray-coded (not sequential binary — companion to the existing Karnaugh-Gray skill).
 
 **When to apply**: "implement f using a mux / Shannon-decompose" prompts driven by a K-map or truth table.
 
