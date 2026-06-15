@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 687
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 687)
+- **Total programs (excluding helpers / shims):** 688
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 688)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 678 |
+| `any` | 679 |
 
 ## Alphabetical listing
 
@@ -610,6 +610,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `single_testpath_guard` | any | v0.2.24 | pytest.ini must declare ONE test tree. |
 | `sizing_adjust_policy` | any | — | the fixed failure-mode → parameter-delta |
 | `sizing_history_emit` | any | — | fixed-schema validator/emitter for the |
+| `skill_doc_section_present_check` | any | — | ORGANIC #724 / #725 |
 | `slave_tx_no_device_break_check` | any | Wave 25 | Wave 25/34 silent-bug gate. |
 | `smbus_pmbus_protocol_synth` | any | v0.1.91 | System Management Bus (SMBus 3.x) + Power Management Bus (PMBus 1.3) |
 | `soundwire_protocol_synth` | any | v0.1.84 | MIPI SoundWire-class protocol synth helper. |
@@ -759,7 +760,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (678 programs)
+### `any` (679 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1338,6 +1339,7 @@ _(no programs in this group)_
 - `single_testpath_guard` — pytest.ini must declare ONE test tree.  _[v0.2.24]_
 - `sizing_adjust_policy` — the fixed failure-mode → parameter-delta
 - `sizing_history_emit` — fixed-schema validator/emitter for the
+- `skill_doc_section_present_check` — ORGANIC #724 / #725
 - `slave_tx_no_device_break_check` — Wave 25/34 silent-bug gate.  _[Wave 25]_
 - `smbus_pmbus_protocol_synth` — System Management Bus (SMBus 3.x) + Power Management Bus (PMBus 1.3)  _[v0.1.91]_
 - `soundwire_protocol_synth` — MIPI SoundWire-class protocol synth helper.  _[v0.1.84]_
