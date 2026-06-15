@@ -353,6 +353,94 @@ def _is_structurally_bound(root: str, bound_ports: set) -> bool:
     return any(b.startswith(pre) for b in bound_ports)
 
 
+# ── ORGANIC #711 round-2 — AUTO-DERIVE the renamed-interface pairing ────────
+# Round-1 added a `renamed_interfaces` reconcile path but NOTHING populated it,
+# so on a real catalog-glue SoC the gate still FAILed (or needed a per-run hand-
+# authored manifest block — equivalent to the per-run waiver it was meant to
+# remove). Round-2 AUTO-DERIVES the pairing in the gate (which has BOTH the L9
+# and the RTL surface) from two authoritative, design-supplied signals:
+#   (1) `declaration.json` declares a RECOGNISED interface protocol via a
+#       `<iface>_interface_protocol` key (e.g. sram_interface_protocol), and
+#   (2) the L3 input doc marks that interface's sub-ports TYPICAL / ILLUSTRATIVE
+#       (the `<name>` (or `<alt>`) / "(typical)" / "illustrative" notation).
+# Under BOTH, the residual L9-only and RTL-only ports that belong to that
+# interface (share the `<iface>` token) are reconciled as one renamed group.
+# §4.05: fires ONLY for an interface that is BOTH protocol-declared AND
+# L3-illustrative; a genuinely missing/extra functional port outside such an
+# interface (or any port when no protocol/illustrative signal exists) STILL
+# FAILs. chip-AGNOSTIC: keyed on the `_interface_protocol` declaration grammar +
+# the doc's own illustrative tag + a shared interface-name token — no chip /
+# vendor / SKU literal.
+_RE_IFACE_PROTOCOL_KEY = re.compile(r"^([a-z][a-z0-9]*)_interface_protocol$")
+_RE_ILLUSTRATIVE_TAG = re.compile(r"\(\s*(?:or\b|typical\b)|illustrative",
+                                  re.IGNORECASE)
+
+
+def _declared_interface_protocols(project: Path) -> set:
+    """ORGANIC #711 r2 — interface TOKENS declared via a
+    `<iface>_interface_protocol` key with a truthy value in
+    plugin_output/declaration.json (e.g. {'sram'}). Empty on absence."""
+    decl = project / "plugin_output" / "declaration.json"
+    if not decl.is_file():
+        return set()
+    try:
+        data = json.loads(decl.read_text())
+    except Exception:
+        return set()
+    if not isinstance(data, dict):
+        return set()
+    out: set = set()
+    for k, v in data.items():
+        m = _RE_IFACE_PROTOCOL_KEY.match(str(k))
+        if m and v:
+            out.add(m.group(1))
+    return out
+
+
+def _l3_iface_illustrative(project: Path, iface: str) -> bool:
+    """ORGANIC #711 r2 — True iff an L3 input/generated doc marks the `<iface>`
+    interface sub-ports as TYPICAL/ILLUSTRATIVE (the `<name>` (or `<alt>`) /
+    '(typical)' / 'illustrative' notation on a line naming an `<iface>` port).
+    This is the design's OWN authoritative 'these names are illustrative'
+    signal — without it the interface must match exactly (no auto-reconcile)."""
+    roots = [project / "input" / "docs", _pl.generated_docs_dir(project)]
+    tok = re.compile(rf"(?:^|_){re.escape(iface)}(?:_|\b)", re.IGNORECASE)
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for p in sorted(root.glob("L3*")) + sorted(root.glob("*interface*")):
+            try:
+                txt = p.read_text(errors="ignore")
+            except OSError:
+                continue
+            for line in txt.splitlines():
+                if tok.search(line) and _RE_ILLUSTRATIVE_TAG.search(line):
+                    return True
+    return False
+
+
+def _auto_derive_renamed_interfaces(project: Path, only_l9: list,
+                                    only_rtl: list) -> list:
+    """ORGANIC #711 r2 — derive `renamed_interfaces` groups WITHOUT a hand-
+    authored manifest block. For each interface that is BOTH protocol-declared
+    (declaration.json) AND L3-illustrative, pair the residual L9-only and
+    RTL-only ports that carry the `<iface>` token into one {l9, rtl} group.
+    Returns [] when no interface satisfies both gates (→ no relaxation)."""
+    ifaces = _declared_interface_protocols(project)
+    if not ifaces:
+        return []
+    out: list = []
+    for iface in sorted(ifaces):
+        if not _l3_iface_illustrative(project, iface):
+            continue
+        tok = re.compile(rf"(?:^|_){re.escape(iface)}(?:_|\b)", re.IGNORECASE)
+        l9_grp = sorted(p for p in only_l9 if tok.search(p))
+        rtl_grp = sorted(p for p in only_rtl if tok.search(p))
+        if l9_grp and rtl_grp:
+            out.append({"l9": l9_grp, "rtl": rtl_grp})
+    return out
+
+
 def reconcile_reused_ip(only_l9: list, only_rtl: list,
                         manifest: dict,
                         bound_ports: Optional[set] = None
@@ -978,6 +1066,19 @@ def main(argv: list[str]) -> int:
     reused_prefix_matched: list = []
     manifest = load_source_manifest(project)
     if manifest is not None:
+        # ORGANIC #711 round-2 — AUTO-DERIVE the renamed-interface pairing from
+        # the design's own protocol declaration + L3 illustrative tag, so a real
+        # catalog-glue SoC reconciles a spec-permitted interface RENAME with NO
+        # hand-authored manifest block (round-1 only honoured a manually-written
+        # `renamed_interfaces`, which nothing populated). Merge the auto-derived
+        # groups into the manifest before reconcile; §4.05 gating lives inside
+        # _auto_derive_renamed_interfaces (protocol + illustrative + iface-token).
+        _auto_renames = _auto_derive_renamed_interfaces(
+            project, only_l9_all, only_rtl_all)
+        if _auto_renames:
+            manifest = dict(manifest)
+            manifest["renamed_interfaces"] = (
+                list(manifest.get("renamed_interfaces") or []) + _auto_renames)
         # ORGANIC #659 round-2 — also pass the chip_top instantiation's bound
         # port set so a glue-driven interface absent from the manifest tie_offs
         # dict (clk_edn_i / edn_o / IP-split edn) is recognised structurally.
