@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 693
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 693)
+- **Total programs (excluding helpers / shims):** 694
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 694)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 684 |
+| `any` | 685 |
 
 ## Alphabetical listing
 
@@ -87,6 +87,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `arch_dse_pareto` | any | — | arch_dse_pareto.py -- Deterministic micro-architecture design-space exploration. |
 | `argparse_help_format_check` | any | — | pin the bare-% argparse help-string class. |
 | `arinc429_protocol_synth` | any | v0.1.83 | ARINC 429 (Mark 33 DITS) protocol synth helper. |
+| `arith_oracle_tb_gen` | any | — | deterministic CLOSED-FORM oracle TB generator for |
 | `arith_ss_corner_risk_check` | any | — | slow-corner arithmetic-architecture advisor. |
 | `assertion_covers_l3_constraints_check` | any | Wave 39 | Wave 39 / D3 |
 | `assertion_property_check` | any | — | Deterministic compliance check for assertion-gen. |
@@ -765,7 +766,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (684 programs)
+### `any` (685 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -828,6 +829,7 @@ _(no programs in this group)_
 - `arch_dse_pareto` — arch_dse_pareto.py -- Deterministic micro-architecture design-space exploration.
 - `argparse_help_format_check` — pin the bare-% argparse help-string class.
 - `arinc429_protocol_synth` — ARINC 429 (Mark 33 DITS) protocol synth helper.  _[v0.1.83]_
+- `arith_oracle_tb_gen` — deterministic CLOSED-FORM oracle TB generator for
 - `arith_ss_corner_risk_check` — slow-corner arithmetic-architecture advisor.
 - `assertion_covers_l3_constraints_check` — Wave 39 / D3  _[Wave 39]_
 - `assertion_property_check` — Deterministic compliance check for assertion-gen.

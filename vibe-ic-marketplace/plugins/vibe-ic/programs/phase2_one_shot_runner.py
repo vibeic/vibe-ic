@@ -3808,7 +3808,9 @@ def _run_oracle_tb(project: Path, top_name: str, tb_path: Path,
 def _reference_tb_generic_full_stack(project: Path, top_name: str,
                                      track_reason: str,
                                      t0: float,
-                                     container: str = "iic-eda") -> StepResult:
+                                     container: str = "iic-eda",
+                                     ic_class: Optional[str] = None
+                                     ) -> StepResult:
     """v1.6.523 — functional gate for generic_full_stack classes.
 
     The AID reference TB cannot bind this class's data/memory-bus top.
@@ -3836,6 +3838,24 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
     # with >=1 golden compare may this step report functional PASS.
     oracle_tbs = sorted(sim_dir.glob("tb_*_oracle.v")) \
         if sim_dir.is_dir() else []
+    if not oracle_tbs:
+        # ORGANIC #745 — for the CLOSED-FORM arithmetic-primitive family
+        # (digital_arithmetic_primitive: p = x OP y mod 2^N), the golden is a
+        # one-line Python computation. arith_oracle_tb_gen COMPUTES it and
+        # emits a self-checking parallel oracle TB (folding FACET-2 #643:
+        # operands declared at the resolved numeric width). It FAIL-CLOSES
+        # (§4.05): a no-oracle class, an unrecognised operator, or a
+        # serial/streaming datapath (Plugin-chosen latency, not closed-form-
+        # derivable) → DEFER, so the #654 connectivity cap still fires only for
+        # genuinely-no-oracle classes. oracle_tb_gen (concrete-L10 replay)
+        # remains the second source.
+        try:
+            import arith_oracle_tb_gen as _aotg
+            _arep, _arc = _aotg.generate(project, ic_class)
+            if _arc == 0:
+                oracle_tbs = sorted(sim_dir.glob("tb_*_oracle.v"))
+        except Exception:
+            pass
     if not oracle_tbs:
         try:
             import oracle_tb_gen as _otg
@@ -4680,7 +4700,7 @@ def step_reference_tb(project: Path, top_name: str = "chip_top",
     if not uses_aid_tb:
         return _reference_tb_generic_full_stack(project, top_name,
                                                 track_reason, t0,
-                                                container)
+                                                container, ic_class)
 
     if not PROTOCOL_TB.is_file():
         return StepResult("reference_tb", "FAIL",

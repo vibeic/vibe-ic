@@ -105,11 +105,14 @@ def _normalize_addr(addr: str) -> str:
 # then reads each data row by those column indices. Chip-AGNOSTIC: pure GFM
 # table grammar, no chip/register-name vocabulary.
 # ---------------------------------------------------------------------------
-_GFM_NAME_HDR = {"name", "register", "field", "regname", "reg"}
-_GFM_OFFSET_HDR = {"offset", "address", "addr"}
+_GFM_NAME_HDR = {"name", "register", "field", "regname", "reg",
+                 "register name", "csr name", "field name"}
+_GFM_OFFSET_HDR = {"offset", "address", "addr", "csr address",
+                   "base address", "register address", "reg address"}
 _GFM_LEN_HDR = {"length", "size", "width", "bytes"}
-_GFM_DESC_HDR = {"description", "desc", "notes", "function"}
-_GFM_ACCESS_HDR = {"access", "type", "rw", "mode", "permission", "perm"}
+_GFM_DESC_HDR = {"description", "desc", "notes", "function", "event selector"}
+_GFM_ACCESS_HDR = {"access", "type", "rw", "mode", "permission", "perm",
+                   "reset value"}
 _GFM_SEP_CELL_RE = re.compile(r"^:?-{2,}:?$")
 _GFM_OFFSET_RE = re.compile(r"(0x[0-9A-Fa-f]+|\b\d+\b)")
 # Register NAME inside a cell: a markdown link [`X`](#a) / [X](#a), or a bare
@@ -210,6 +213,130 @@ def _extract_gfm_pipe_table(text: str, source_path: str) -> List[Dict]:
     return rows
 
 
+# ---------------------------------------------------------------------------
+# #747 — reStructuredText GRID-table register/CSR maps.
+#
+# rst grid tables draw their cell borders with plus/dash/equals runs and put
+# the cell contents on `| col | col |` rows, e.g.::
+#
+#     +-------------+-------------+----------------------+
+#     | CSR Address | Name        | Description          |
+#     +=============+=============+======================+
+#     | 0xB04       | minstret    | Instructions retired |
+#     +-------------+-------------+----------------------+
+#
+# The #616 GFM path RESETS the column map on EVERY non-pipe line, so the
+# `+---+` / `+===+` border lines (which separate every rst row) abort the
+# table before any data row is read — and multi-word headers like
+# `CSR Address` were not in the keyword sets. This parser treats the
+# plus-dash / plus-equals border lines as IN-TABLE separators (skip, do NOT
+# end the table), keyword-matches the (now multi-word-aware) header, then
+# reads each `|`-cell data row by column index — emitting addr_hex/name in
+# the same shape as the GFM path. Chip-AGNOSTIC: pure rst grid-table grammar,
+# no chip/register-name vocabulary. Enumerated CSR ranges in the name/desc
+# cells are expanded exactly as the GFM path would (none here — the address
+# cell is a single 0x token; range expansion stays a downstream concern, as
+# in the GFM path).
+# ---------------------------------------------------------------------------
+# A grid border line is ONLY plus/dash/equals/space and contains at least one
+# '+' (so it cannot be confused with a data/header `|`-row or a markdown
+# `:--:` GFM separator, which has no '+').
+_RST_GRID_BORDER_RE = re.compile(r"^\s*\+[+=\-\s]*\+\s*$")
+
+
+def _rst_is_grid_border(line: str) -> bool:
+    s = line.strip()
+    return bool(s) and "+" in s and _RST_GRID_BORDER_RE.match(line) is not None
+
+
+def _extract_rst_grid_table(text: str, source_path: str) -> List[Dict]:
+    """Parse reStructuredText GRID-table register maps (`+---+` / `+===+`
+    borders with `| cell |` rows). Returns [] when no grid table with a
+    name+offset header is present, so callers keep all other behaviour for
+    non-grid docs. Disjoint from the GFM path: the GFM path bails the moment
+    it sees a border line (non-pipe → cols=None), so it never emits these
+    rows; here we treat borders as in-table separators."""
+    rows: List[Dict] = []
+    cols = None          # role -> column index, set from the detected header
+    in_grid = False      # True once we've seen a top border for this table
+    for lineno, line in enumerate(text.split("\n"), start=1):
+        if _rst_is_grid_border(line):
+            in_grid = True       # border = in-table separator, NOT end-of-table
+            continue
+        s = line.strip()
+        if not s.startswith("|"):
+            # A genuine non-border, non-pipe line ends the current grid table.
+            cols = None
+            in_grid = False
+            continue
+        if not in_grid:
+            # A `|`-row with no preceding grid border is a GFM pipe row, not
+            # an rst grid cell — leave it to the GFM path (no double-count).
+            continue
+        cells = _gfm_cells(line)
+        nonempty = [c for c in cells if c]
+        # A GFM-style separator row (`|:?--:?|:?--:?|`, no `+`) means this is a
+        # GFM pipe table — NOT an rst grid — that merely abuts a stray border
+        # line. Cede it to the GFM path (reset in_grid) so a border directly
+        # above a GFM table does not double-count its rows (adversarial-review
+        # MEDIUM). An rst grid uses `+---+`/`+===+` separators, never `|---|`.
+        if nonempty and all(_GFM_SEP_CELL_RE.match(c) for c in nonempty):
+            cols = None
+            in_grid = False
+            continue
+        low = [c.lower() for c in cells]
+        if cols is None:
+            # header row iff it names both a register-name and an offset col
+            if any(c in _GFM_NAME_HDR for c in low) and \
+               any(c in _GFM_OFFSET_HDR for c in low):
+                cols = {}
+                for i, c in enumerate(low):
+                    if c in _GFM_NAME_HDR:
+                        cols.setdefault("name", i)
+                    elif c in _GFM_OFFSET_HDR:
+                        cols.setdefault("offset", i)
+                    elif c in _GFM_LEN_HDR:
+                        cols.setdefault("length", i)
+                    elif c in _GFM_DESC_HDR:
+                        cols.setdefault("desc", i)
+                    elif c in _GFM_ACCESS_HDR:
+                        cols.setdefault("access", i)
+            continue  # header consumed (or a pre-header pipe line ignored)
+        ni, oi = cols.get("name"), cols.get("offset")
+        if ni is None or oi is None or ni >= len(cells) or oi >= len(cells):
+            continue
+        name = _gfm_clean_name(cells[ni])
+        if not name or _is_header_row(name):
+            continue
+        mo = _GFM_OFFSET_RE.search(cells[oi])
+        if not mo:
+            continue
+        off = mo.group(1).lower()
+        addr_hex = off if off.startswith("0x") else hex(int(off))
+        desc = ""
+        if "desc" in cols and cols["desc"] < len(cells):
+            desc = cells[cols["desc"]]
+        if "length" in cols and cols["length"] < len(cells) and cells[cols["length"]]:
+            length = cells[cols["length"]]
+            desc = (f"{desc} (length={length})").strip() if desc else f"length={length}"
+        access_norm = ""
+        if "access" in cols and cols["access"] < len(cells):
+            access_norm = cells[cols["access"]].strip().lower().replace("/", "_")
+        rows.append({
+            "addr_hex": addr_hex,
+            "access": access_norm,
+            "name": name,
+            "description": desc.strip(),
+            "evidence": {
+                "source": source_path,
+                "line": lineno,
+                "matched_token": line.strip()[:120],
+                "extraction_strategy": "rst_grid_table_match",
+            },
+        })
+    return rows
+
+
 def extract_regmap_table(text: str, source_path: str) -> List[Dict]:
     """Return list of register dicts. Empty list if no rows match.
 
@@ -288,4 +415,9 @@ def extract_regmap_table(text: str, source_path: str) -> List[Dict]:
     # 0x-anchored regexes above cannot match. Disjoint from the regex rows
     # (those never match a `|`-leading line), so a plain extend is safe.
     rows.extend(_extract_gfm_pipe_table(text, source_path))
+    # #747 — reStructuredText GRID tables (`+---+`/`+===+` borders). Disjoint
+    # from the GFM path: the GFM path RESETS its column map on every border
+    # line (a non-pipe line), so it emits ZERO rows for a grid table — only
+    # this branch reads the cells across the in-table border separators.
+    rows.extend(_extract_rst_grid_table(text, source_path))
     return rows
