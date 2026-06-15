@@ -81,6 +81,20 @@ be misread as a real PASS (rc 0) or as a real latency BLOCK (rc 1). WITHOUT the
 flag the default behaviour is UNCHANGED: a TIMEOUT stays ``LATENCY-TIMEOUT`` rc
 1 (a design that DOES have a handshake but mis-latches must still hard-block).
 
+PER-OUTPUT (SECOND-OUTPUT) LATENCY INFERENCE (ORGANIC #740 G3)
+-------------------------------------------------------------
+A design may carry a SECOND output that has no event->output handshake to
+MEASURE (the canonical TB measures ONE event->output relationship), yet whose
+intended latency is IMPLIED by the partial-code intermediate pipeline registers
+feeding it. ``--second-output PORT`` INFERS that output's per-output latency
+from the declared intermediate registers (the registered-chain depth from the
+output back to its first combinational/input source) — a PURE structural parse,
+no simulation. It is ADVISORY ONLY (never changes the exit code): it reports the
+inferred latency, and when ``--expect-second`` is also given it notes whether the
+inference matches the spec literal. When the chain is AMBIGUOUS (branch depths
+disagree, combinational/register feedback, or the output is not registered) it
+emits an ADVISORY "not inferred" note rather than guessing.
+
 chip-AGNOSTIC: pure measurement + comparison; no design/chip/vendor/SKU literal.
 
 Usage:
@@ -305,6 +319,113 @@ def _reset_is_active_low(name: str) -> bool:
 def _looks_like_reset(name: str) -> bool:
     lo = name.lower()
     return any(h in lo for h in _RST_NAME_HINT)
+
+
+# ─── per-output latency inference from intermediate registers (#740 G3) ───────
+# A SECOND output port often has NO event->output handshake to MEASURE (the
+# canonical TB measures ONE event->output relationship), yet its intended
+# latency is IMPLIED by the partial-code intermediate pipeline registers that
+# feed it: `out2 <= stage1; stage1 <= stageN; ... <= <comb of inputs>`. The
+# inferred latency is the DEPTH of that registered chain from the output back to
+# the first purely-combinational / input source. This is a PURE structural
+# function (no iverilog) so it is unit-testable on the parse alone; it is
+# ADVISORY (returns a reason string) whenever the chain is AMBIGUOUS (branching
+# depths, combinational feedback, or the output is not registered at all).
+def _module_body(rtl_text: str, top: str) -> str:
+    """The text between `module <top> ... ;` head and its matching endmodule
+    (best-effort; the same head-of-module bounding the rest of the file uses)."""
+    m = re.search(r"\bmodule\s+" + re.escape(top) + r"\b", rtl_text)
+    if not m:
+        return rtl_text
+    nxt = re.search(r"\bendmodule\b", rtl_text[m.end():])
+    return rtl_text[m.end(): m.end() + (nxt.start() if nxt else len(rtl_text))]
+
+
+def _nba_sources(body: str) -> Dict[str, List[str]]:
+    """Map each non-blocking-assigned signal to the list of RHS identifier
+    SOURCES of its assignment(s). `out <= a;` → {'out': ['a']}. Multiple
+    assignments to the same LHS union their source lists (so a reset-clear
+    `out <= 0;` contributes no source and a datapath `out <= s1;` contributes
+    `s1`). Constants / numeric literals contribute nothing."""
+    srcs: Dict[str, List[str]] = {}
+    for m in re.finditer(
+            r"(?<![<>!=])\b([A-Za-z_]\w*)\s*(?:\[[^\]]+\])?\s*<=\s*([^;]+);",
+            body):
+        lhs = m.group(1)
+        rhs = m.group(2)
+        ids = [t for t in _IDENT_RE.findall(rhs)
+               if not re.match(r"^\d", t)]
+        srcs.setdefault(lhs, [])
+        srcs[lhs].extend(ids)
+    return srcs
+
+
+def infer_output_latency_from_registers(
+        rtl_text: str, top: str, output: str,
+        max_depth: int = 64) -> Tuple[Optional[int], str]:
+    """Infer the intended event->output latency of `output` from the declared
+    intermediate pipeline registers feeding it. Returns (latency, reason).
+
+    latency is an int when a single unambiguous registered chain depth is found
+    (the number of register hops from `output` back to the first non-registered
+    /input/combinational source); None when ambiguous (with a reason that says
+    why — branch-depth disagreement, combinational/feedback, or not registered).
+    PURE structural — no simulation. ADVISORY by construction.
+    """
+    body = _module_body(rtl_text, top)
+    nba = _nba_sources(body)
+    registered = set(nba.keys())
+    if output not in registered:
+        return None, (f"output '{output}' is not a registered (non-blocking) "
+                      f"signal in module '{top}' — per-output latency cannot be "
+                      f"inferred from a register chain (advisory)")
+
+    # BFS the longest/shortest registered chain depth from `output` back to the
+    # first non-registered source. Track every distinct terminal depth; if more
+    # than one distinct depth is reachable the pipeline is ambiguous.
+    terminal_depths: Set[int] = set()
+
+    def _walk(sig: str, depth: int, seen: Set[str]) -> None:
+        if depth > max_depth:
+            terminal_depths.add(-1)        # runaway / feedback → ambiguous
+            return
+        sources = nba.get(sig)
+        if not sources:
+            # `sig` is not registered → it is a combinational / input source.
+            # The number of register hops taken to get here IS the latency.
+            terminal_depths.add(depth)
+            return
+        if sig in seen:
+            terminal_depths.add(-1)        # combinational/register feedback loop
+            return
+        seen = seen | {sig}
+        # Only registered sources extend the chain by one hop; a
+        # non-registered source terminates at this hop's depth+1 (the source is
+        # combinational/input one register before this stage).
+        reg_sources = [s for s in sources if s in registered and s != sig]
+        comb_sources = [s for s in sources if s not in registered]
+        if comb_sources:
+            terminal_depths.add(depth + 1)
+        for s in reg_sources:
+            _walk(s, depth + 1, seen)
+
+    _walk(output, 0, set())
+    clean = {d for d in terminal_depths if d >= 0}
+    if -1 in terminal_depths:
+        return None, (f"output '{output}' has a combinational/register feedback "
+                      f"or runaway chain — per-output latency is ambiguous "
+                      f"(advisory; not inferred)")
+    if not clean:
+        return None, (f"output '{output}' register chain reached no "
+                      f"combinational/input source — ambiguous (advisory)")
+    if len(clean) > 1:
+        return None, (f"output '{output}' is fed by register chains of "
+                      f"DIFFERENT depths {sorted(clean)} — per-output latency "
+                      f"is ambiguous (advisory; not inferred)")
+    depth = next(iter(clean))
+    return depth, (f"output '{output}' is registered through a {depth}-stage "
+                   f"pipeline (inferred per-output latency {depth} from declared "
+                   f"intermediate registers; advisory)")
 
 
 def _width_of(width_str: str) -> int:
@@ -843,6 +964,18 @@ def main(argv=None) -> int:
                          "report a DISTINCT NOT-APPLICABLE (rc 3) instead of a "
                          "TIMEOUT — the event->output latency convention does "
                          "not apply (#729). Default OFF: a TIMEOUT stays rc 1.")
+    ap.add_argument("--second-output", default=None,
+                    help="(#740 G3) a SECOND output port whose latency has no "
+                         "event->output handshake to MEASURE; its intended "
+                         "per-output latency is INFERRED from the declared "
+                         "intermediate pipeline registers feeding it. ADVISORY "
+                         "only — reported, never blocks. Optionally compared "
+                         "against --expect-second.")
+    ap.add_argument("--expect-second", default=None,
+                    help="(#740 G3) optional spec latency literal for "
+                         "--second-output (arithmetic over module params); when "
+                         "given AND the inference is unambiguous, an ADVISORY "
+                         "note states whether the inferred latency matches.")
     ap.add_argument("--json", default=None, help="optional JSON report path")
     args = ap.parse_args(argv)
 
@@ -863,6 +996,29 @@ def main(argv=None) -> int:
         reset_override=args.reset, reset_active_low_flag=args.reset_active_low,
         input_const=args.input_const, max_cycles_override=args.max_cycles,
         mode=args.mode, allow_no_handshake=args.allow_no_handshake)
+
+    # ORGANIC #740 (G3) — SECOND-output per-output latency inference (ADVISORY).
+    # Never changes rc: it only annotates the report + prints an advisory note.
+    if args.second_output:
+        _rtl_text = rtl_path.read_text(errors="replace")
+        _top2 = report.get("top") or args.top
+        if _top2 is None:
+            _names = re.findall(r"\bmodule\s+([A-Za-z_]\w*)", _rtl_text)
+            _top2 = _names[0] if _names else None
+        _inf, _reason = (infer_output_latency_from_registers(
+            _rtl_text, _top2, args.second_output) if _top2 else
+            (None, "no module to scope the second output"))
+        _sec = {"output": args.second_output, "inferred_latency": _inf,
+                "reason": _reason, "advisory": True}
+        if args.expect_second is not None and _inf is not None:
+            try:
+                _exp2 = safe_eval_arith(args.expect_second,
+                                        report.get("resolved_params", {}) or {})
+                _sec["expected_latency"] = _exp2
+                _sec["matches_spec"] = (_inf == _exp2)
+            except ExpectError as e:
+                _sec["expect_second_error"] = str(e)
+        report["second_output"] = _sec
 
     if args.json:
         Path(args.json).write_text(json.dumps(report, indent=2))
@@ -889,6 +1045,19 @@ def main(argv=None) -> int:
     elif verdict == "PASS":
         print(f"latency-conformance ok: measured={report['measured_latency']} "
               f"== spec {expr}")
+    # ORGANIC #740 (G3) — ADVISORY second-output inference note (never blocks).
+    _sec = report.get("second_output")
+    if _sec is not None:
+        if _sec.get("inferred_latency") is not None:
+            _line = (f"SECOND-OUTPUT-LATENCY (advisory): {_sec['reason']}")
+            if "matches_spec" in _sec:
+                _verb = "MATCHES" if _sec["matches_spec"] else "DIFFERS from"
+                _line += (f"; inferred {_sec['inferred_latency']} {_verb} spec "
+                          f"--expect-second={_sec['expected_latency']}")
+            print(_line)
+        else:
+            print(f"SECOND-OUTPUT-LATENCY (advisory, not inferred): "
+                  f"{_sec['reason']}")
     return rc
 
 
