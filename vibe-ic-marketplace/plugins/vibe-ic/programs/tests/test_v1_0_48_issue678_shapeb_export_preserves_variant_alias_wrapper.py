@@ -40,9 +40,18 @@ if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
 import shape_b_sample_export as sbx  # noqa: E402
+import reset_clock_variant_alias as _rcv  # noqa: E402
 
 
 _HAVE_IVERILOG = shutil.which("iverilog") is not None
+
+
+def _port_names(txt: str, module: str) -> set:
+    """Set of `module`'s port names — used to assert a PURE reorder (#707):
+    the exported sample reorders ports to the genre convention, so it is no
+    longer byte-identical to the source, but the port SET (and every module)
+    must be preserved — nothing added / dropped / renamed."""
+    return {n for _d, _w, n in _rcv.parse_module_ports(txt, module)}
 
 
 # ── the real repro shape: reset_n inner + rst_n wrapper (one file) ──────────
@@ -161,8 +170,12 @@ def test_positive_rcvar_wrapper_exported_complete(tmp_path: Path):
     assert f"module {leaf}\n" in txt or f"module {leaf} (" in txt
     # The canonical TB-facing port survives (rst_n) AND the inner spelling.
     assert "rst_n" in txt and "reset_n" in txt
-    # byte-identical to the runner's complete file (verbatim copy).
-    assert txt == _rcvar_complete_file(leaf)
+    # #707 — the wrapper's ports are reordered to the genre convention (no longer
+    # byte-identical), but it is a PURE reorder: the COMPLETE file is preserved
+    # (both modules present, checked above) and the wrapper's port SET is intact.
+    src = _rcvar_complete_file(leaf)
+    assert _port_names(txt, leaf) == _port_names(src, leaf)
+    assert f"module {leaf}__rcvar_inner" in txt  # inner core not mutated/dropped
 
 
 def test_positive_guard_passes_on_complete_file(tmp_path: Path):
@@ -188,7 +201,11 @@ def test_negative_single_module_no_wrapper_still_exports(tmp_path: Path):
     assert res["tb_facing_top"] == leaf
     out = samples / f"{leaf}.v"
     assert out.is_file()
-    assert out.read_text() == _single_module_file(leaf)
+    # #707 — ports reordered to the genre convention (no longer byte-identical),
+    # but a PURE reorder: same module, same port SET (nothing added/dropped).
+    txt = out.read_text()
+    assert f"module {leaf}" in txt
+    assert _port_names(txt, leaf) == _port_names(_single_module_file(leaf), leaf)
 
 
 def test_negative_export_missing_wrapper_is_rejected(tmp_path: Path):
