@@ -41,9 +41,18 @@ Honesty: this scorer ONLY touches the hidden testbench/ref/golden at scoring tim
 The generation step must be blind (per the skill's absolute-blindness rule).
 """
 from __future__ import annotations
-import argparse, json, subprocess, tempfile, os, re, shutil
+import argparse, json, subprocess, tempfile, os, re, shutil, sys
 from pathlib import Path
 from typing import Optional
+
+# ORGANIC #707 round-3 — the SCORE-SIDE pure-permutation rescue reuses the
+# TB-inference helpers authored for the #707-r2 EXPORT path. They live in
+# programs/shape_b_sample_export.py; put the plugin's programs/ dir on sys.path
+# so the scorer (in benchmark/) can import them. Lazy + guarded — a missing
+# programs/ dir never breaks scoring (the rescue simply becomes a no-op).
+_PROGRAMS_DIR = Path(__file__).resolve().parent.parent / "programs"
+if _PROGRAMS_DIR.is_dir() and str(_PROGRAMS_DIR) not in sys.path:
+    sys.path.insert(0, str(_PROGRAMS_DIR))
 
 
 def _registry_path() -> Path:
@@ -557,6 +566,229 @@ def _unsatisfiable_tb_compile_audit_shape_b(design: str, dataset: Path,
     return (True, "tb_requires_spec_absent_port")
 
 
+# ── ORGANIC #707 round-3 — SCORE-SIDE pure-permutation port rescue ───────────
+# WHY THIS IS HERE AND NOT IN THE EXPORTER (the #707 r2 reopen)
+# ------------------------------------------------------------
+# #707's positional-TB port reorder originally lived in the EXPORT step
+# (`programs/shape_b_sample_export.py`). r2 made the exporter INFER the bind
+# order from the hidden `testbench.v` — but that inference is on the WRONG side
+# of the blindness boundary: at blind AUTHORING time the TB is FORBIDDEN, and the
+# canonical `benchmark/benchmark_dispatch.py` step-3b export invocation passes NO
+# `--testbench`/`--dataset`, so the inference path NEVER fires in the real flow →
+# the exporter ships the candidate VERBATIM. The Shape-B (RTLLM-style) corpus
+# binds positionally PER-DESIGN (an `alu` TB is inputs-first, an `LFSR` TB is
+# outputs-first), so NO authoring-side policy can satisfy both. The ONLY
+# disambiguator is the hidden corpus — which the SCORER may legitimately touch
+# (it already touches the TB/golden via `_power_up_fixed`, `_aliased_golden_srcs`,
+# `_golden_ref_compiles_with_tb_shape_b`, `_unsatisfiable_tb_compile_audit_*`).
+#
+# So the reorder moves SCORE-SIDE: on a Shape-B `reason=='compile_error'`, attempt
+# a PURE PERMUTATION of the candidate's port-declaration list, recompile, and adopt
+# the result ONLY if it now PASSES.
+#
+# ── round-3 HARDENING (adversarial Lens-1 leak fix) ──────────────────────────
+# THE LEAK an earlier round-3 draft had: the target order was inferred FROM THE TB
+# by direction+width with name-affinity as the ONLY tie-break. For a non-commutative
+# op with two SAME-WIDTH SAME-DIRECTION operands (e.g. `gt = a > b`), a TB whose
+# driver-net names (`a_tb`/`b_tb`) carry affinity that CONTRADICTS the positional
+# ground truth let a wrong-operand candidate (`gt = b > a`) be bound so the TB
+# pass-marker fired → a wrong submission rescued to PASS. The affinity guess never
+# validated against how the GOLDEN is positionally wired and trusted the pass-marker.
+#
+# THE FIX — derive the target order from the GOLDEN's DECLARATION order, matched by
+# port NAME (no TB-net-affinity, no width-guessing for ordering):
+#   The golden `verified_<X>.v` compiles AND passes the TB POSITIONALLY, so the
+#   golden's port-DECLARATION order IS the correct positional bind order (ground
+#   truth). A spec-faithful candidate shares the spec's port NAMES with the golden.
+#   Therefore re-emit the candidate with its port segments reordered to the GOLDEN's
+#   port-NAME order — a pure permutation BY NAME. The wrong-operand `gt = b > a`
+#   candidate, whatever its declared order, permutes to the golden name-order
+#   (a,b,gt) and its WRONG LOGIC still RUNTIME-FAILs → NOT rescued. No width/affinity
+#   guessing remains, so a same-width operand swap can never be silently bound.
+#
+# A pure permutation can NEVER rescue a logically-incorrect submission (§4.05):
+#   * candidate port-NAME set ≠ golden port-NAME set → REFUSE (not a permutation).
+#   * wrong-logic-but-correct-order → byte-identical no-op (or permute RUNTIME-fails)
+#     → stays the original FAIL.
+#   * golden+TB does NOT elaborate (dataset defect) → permutation NOT attempted.
+#   * a named-binding TB (`.clk(clk_tb)`, no positional list) → no rescue.
+#
+# chip-AGNOSTIC: structural Verilog grammar + registry layout only — it reuses the
+# exporter's port parser + `_apply_order`, the scorer's own golden-aliasing infra,
+# and `_tb_positional_args` ONLY to confirm the TB binds positionally at all.
+
+def _shape_b_export_helpers():
+    """Lazy import of the #707-r2 port helpers from the exporter program.
+    Returns the module, or None when programs/shape_b_sample_export.py is
+    unavailable (the rescue then becomes a no-op — never a hard error)."""
+    try:
+        import shape_b_sample_export as _S  # noqa: WPS433 (intentional lazy)
+        return _S
+    except Exception:
+        return None
+
+
+def _golden_declaration_order_shape_b(design: str, dataset: Path, layout: dict,
+                                      top: str, S) -> Optional[list]:
+    """Return the GOLDEN's port-DECLARATION order (list of port NAMES) for the
+    canonical DUT name `top`, or None when it cannot be resolved unambiguously.
+
+    The golden is the hidden `verified_<X>.v` (registry `ref_glob`); its top
+    module is ALIASED to the canonical DUT name `top` the TB binds (reusing the
+    scorer's shared `_aliased_golden_srcs`), then parsed with the exporter's own
+    `_parse_portlist_segments`. Because the golden compiles AND passes the TB
+    POSITIONALLY (the caller's elaborate-gate already proved this), this
+    declaration order IS the correct positional bind order — the ground truth.
+    chip-AGNOSTIC: registry layout + structural Verilog grammar only."""
+    ref_glob = layout.get("ref_glob")
+    if not ref_glob:
+        return None
+    refs = sorted((dataset / design).glob(ref_glob))
+    if not refs:
+        return None
+    with tempfile.TemporaryDirectory() as td:
+        aliased_srcs, _golden_ports = _aliased_golden_srcs(
+            design, dataset, layout, refs, td)
+        if not aliased_srcs:
+            return None
+        try:
+            golden_text = Path(aliased_srcs[0]).read_text(errors="replace")
+        except OSError:
+            return None
+        parsed = S._parse_portlist_segments(golden_text, top)
+    if parsed is None:
+        return None  # golden's port list is not a clean ANSI block → can't trust.
+    return [n for _seg, _d, n in parsed[1]]
+
+
+def _score_side_port_permutation_rescue_shape_b(
+        design: str, sample: Path, dataset: Path, layout: dict,
+        args: dict) -> Optional[dict]:
+    """ORGANIC #707 round-3 (hardened) — on a Shape-B candidate that COMPILE-ERRORs
+    against its hidden TB, try a PURE PERMUTATION of its port-declaration list to
+    the GOLDEN's port-DECLARATION order matched by NAME, recompile+run, and return a
+    PASS verdict iff the permuted candidate now passes. Returns None on ANY failure
+    to rescue (caller then keeps the original compile_error FAIL).
+
+    Algorithm (round-3 HARDENED — golden-decl-order + name-match):
+      1. GATE (dataset-defect): the golden(aliased)+TB must ELABORATE. If it does
+         NOT (or is undetermined), the TB is a #690 dataset defect, not a candidate
+         port-ORDER problem → do not attempt the permutation (return None).
+      2. CONFIRM POSITIONAL BIND: the TB must instantiate the DUT POSITIONALLY
+         (`_tb_positional_args` returns a list). A NAMED bind (`.clk(clk_tb)`) is
+         order-independent → no rescue. This is the ONLY use of the TB text here.
+      3. TARGET ORDER FROM THE GOLDEN: parse the GOLDEN's port-declaration order
+         (the ground-truth positional order — the golden passes the TB positionally),
+         by port NAME. Require the candidate's port-NAME set == the golden's
+         port-NAME set (case-sensitive, exact); a mismatch → REFUSE (not a pure-
+         permutation case — a candidate that doesn't use the spec's port names).
+      4. PURE PERMUTATION BY NAME: re-emit the candidate with its port-declaration
+         segments reordered to the golden's port-NAME order (`_apply_order` — never
+         adds/drops/renames a port, never alters logic/width). An already-matching
+         order is byte-identical, a no-op the caller discards.
+      5. RECOMPILE + ADOPT: compile the permuted candidate + TB (cwd=design for
+         `$readmemh`), run it, and return PASS iff pass_regex matches and no
+         fail_regex. Any compile/runtime failure → None (stays the original FAIL).
+
+    §4.05: no width/affinity guessing remains for choosing the order, so a same-
+    width operand swap (`gt=b>a` vs `gt=a>b`) permutes to the golden NAME order and
+    its WRONG LOGIC still runtime-FAILs → never rescued (the Lens-1 leak is closed).
+
+    chip-AGNOSTIC: structural grammar + registry layout; no design/vendor literal.
+    Honesty: touches the hidden golden/TB at SCORING time only (like the rest of
+    this scorer), never during blind authoring."""
+    if not shutil.which("iverilog"):
+        return None
+    S = _shape_b_export_helpers()
+    if S is None:
+        return None
+    tb_name = layout.get("tb_filename")
+    if not tb_name:
+        return None
+    design_dir = dataset / design
+    tb = design_dir / tb_name
+    if not (sample.is_file() and tb.is_file()):
+        return None
+
+    # 1. GATE — the golden(aliased)+TB must ELABORATE. A non-elaborating golden+TB
+    #    is an irreducible dataset defect (#690), NOT a candidate port-ORDER bug,
+    #    so the permutation must NOT be attempted (it could only mask the defect).
+    golden_ok, _golden_ports = _golden_ref_compiles_with_tb_shape_b(
+        design, dataset, layout)
+    if golden_ok is not True:
+        return None  # False (defect) or None (undetermined) → don't permute.
+
+    # The canonical DUT module name the candidate + golden are authored under (the
+    # same name the TB instantiates).
+    top = _canonical_dut_name_shape_b(design, dataset, layout)
+    if not top:
+        return None
+    cand_text = sample.read_text(errors="replace")
+    parsed = S._parse_portlist_segments(cand_text, top)
+    if parsed is None:
+        return None  # no ANSI port list / a reorder hazard → can't permute.
+    block, segs = parsed
+
+    # 2. CONFIRM POSITIONAL BIND — the TB must instantiate the DUT positionally.
+    #    A NAMED bind (`.clk(clk_tb)`) is order-independent → no rescue needed. This
+    #    is the ONLY use of the TB text for the rescue (NOT for choosing the order).
+    tb_text = tb.read_text(errors="replace")
+    if S._tb_positional_args(tb_text, top) is None:
+        return None  # named bind / no/ambiguous instantiation → no positional fix.
+
+    # 3. TARGET ORDER FROM THE GOLDEN — the golden's port-DECLARATION order is the
+    #    ground-truth positional bind order (the golden passes the TB positionally).
+    #    Matched by NAME — NO TB-net-affinity / width guessing (closes the Lens-1
+    #    leak where a same-width operand swap could be misbound by net-name affinity).
+    golden_order = _golden_declaration_order_shape_b(
+        design, dataset, layout, top, S)
+    if golden_order is None:
+        return None  # golden port order unresolved → cannot define a target.
+    cand_names = [n for _seg, _d, n in segs]
+    if sorted(cand_names) != sorted(golden_order):
+        return None  # candidate port-NAME set ≠ golden's → REFUSE (not a permute).
+
+    # 4. PURE PERMUTATION BY NAME — re-emit with the candidate's segments in the
+    #    golden's port-NAME order. An already-matching order is byte-identical
+    #    (no-op): a wrong-LOGIC candidate whose names/order already match gets NO
+    #    change here, so it cannot be rescued.
+    permuted = S._apply_order(cand_text, block, segs, golden_order)
+    if permuted == cand_text:
+        return None  # no-op reorder → nothing to re-evaluate; keep original FAIL.
+
+    # 5. RECOMPILE + ADOPT — compile + run the permuted candidate against the TB.
+    pass_re = re.compile(args["pass_regex"])
+    fail_re = re.compile(args["fail_regex"]) if args.get("fail_regex") else None
+    use_cwd = args.get("cwd_design_dir", True)
+    with tempfile.TemporaryDirectory() as td:
+        permuted_v = os.path.join(td, f"{top}.permuted.v")
+        with open(permuted_v, "w") as fh:
+            fh.write(permuted)
+        # Apply the same canonical power-up determinism fix the main path does, so
+        # a sequential candidate that is only X-at-t0 is not spuriously failed.
+        permuted_fixed = _power_up_fixed(Path(permuted_v), td)
+        binp = os.path.join(td, "permuted_bin")
+        try:
+            c = subprocess.run(
+                ["iverilog", "-g2012", "-o", binp, permuted_fixed, str(tb)],
+                capture_output=True, text=True, timeout=120)
+        except (subprocess.TimeoutExpired, OSError):
+            return None
+        if c.returncode != 0 or not os.path.exists(binp):
+            return None  # the permutation did NOT rescue the compile → keep FAIL.
+        try:
+            r = subprocess.run(
+                ["vvp", binp], capture_output=True, text=True, timeout=120,
+                cwd=str(design_dir) if use_cwd else None)
+        except subprocess.TimeoutExpired:
+            return None  # permuted candidate hangs → not a rescue → keep FAIL.
+    out = r.stdout + r.stderr
+    if pass_re.search(out) and not (fail_re and fail_re.search(out)):
+        return {"design": design, "verdict": "PASS",
+                "reason": "recovered_via_scoreside_port_permutation"}
+    return None  # permuted compiles but RUNTIME-fails → wrong logic → keep FAIL.
+
+
 def _score_shape_b(design: str, samples: Path, dataset: Path,
                    layout: dict, args: dict) -> dict:
     """Shape-B scorer wrapper (#679 + #690): run the core scorer, then audit the
@@ -625,6 +857,17 @@ def _score_shape_b_impl(design: str, samples: Path, dataset: Path,
                 v["design"] = design
                 return v
         if c.returncode != 0:
+            # ORGANIC #707 round-3 — a compile_error against the hidden TB MAY be
+            # a pure positional-port-ORDER mismatch (a functionally-correct
+            # candidate whose declaration order differs from the per-design TB
+            # bind). Try a SCORE-SIDE pure permutation (golden+TB-elaborates gate +
+            # unique direction/width map) and adopt it ONLY if it now PASSES. A
+            # missing/extra/wrong-width port or wrong logic can NEVER be rescued
+            # this way (§4.05). If the permutation does not rescue → stay FAIL.
+            rescued = _score_side_port_permutation_rescue_shape_b(
+                design, sample, dataset, layout, args)
+            if rescued is not None:
+                return rescued
             return {"design": design, "verdict": "FAIL", "reason": "compile_error",
                     "log": c.stderr[-400:]}
         try:
