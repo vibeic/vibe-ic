@@ -91,6 +91,20 @@ preserves blindness while preventing already-captured recoveries from
 recurring. It is run-dir material, NOT a dataset file — the cross-problem
 prohibition above does not apply to it.
 
+**MANDATORY PRE-AUTHORING CONSUMPTION (ORGANIC #733 - staged != consumed).**
+Staging the digest is not enough; you MUST CONSUME it per design. BEFORE you
+author EACH design, you MUST: (1) OPEN the staged `<RUNDIR>/lessons.md`; (2)
+KEYWORD-MATCH the design genre against the digest genre-convention sections -
+`barrel shifter`, `frequency divider / odd / dual-edge`, `async FIFO`,
+`serial<->parallel`, `edge/pulse detect`, `FSM Moore`, `gshare`, `serial twos
+complement`, `K-map -> mux`, `IEEE-754 float multiply`; (3) APPLY the matched
+section to your RTL. section 4-E NO-LEAK: apply a convention ONLY "unless the
+spec states otherwise" - never override an explicit spec; a spec-ambiguous case
+stays spec-faithful (no oracle answer). The #716 recovered-floor gain is only
+realized when the author reads+applies the matched convention, not merely has
+it staged.
+
+
 ## Per-problem procedure (every `<Prob>` in BATCHFILE)
 
 1. Read ONLY `<DATASET>/<Prob>_prompt.txt`. Extract: module name (typically
