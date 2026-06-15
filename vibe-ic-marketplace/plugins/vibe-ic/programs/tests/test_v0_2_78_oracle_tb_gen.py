@@ -149,9 +149,17 @@ def test_skeleton_completion_is_waived_not_pass():
 
 def test_runner_tries_oracle_before_skeleton():
     i = _P2_SRC.index("oracle_tbs = sorted(sim_dir.glob")
-    window = _P2_SRC[i - 1200:i + 1200]
+    # Window widened (#745): the arithmetic closed-form oracle generator
+    # (arith_oracle_tb_gen) is now tried first, so the deterministic-replay
+    # oracle_tb_gen import + the _run_oracle_tb call legitimately sit further
+    # down the same routing region. Both must still precede the skeleton path.
+    window = _P2_SRC[i - 1200:i + 2600]
     assert "_run_oracle_tb" in window
     assert "import oracle_tb_gen" in window
+    # the closed-form arithmetic oracle is tried BEFORE the replay oracle
+    assert "import arith_oracle_tb_gen" in window
+    assert (window.index("import arith_oracle_tb_gen")
+            < window.index("import oracle_tb_gen"))
 
 
 def test_oracle_pass_requires_all_goldens():

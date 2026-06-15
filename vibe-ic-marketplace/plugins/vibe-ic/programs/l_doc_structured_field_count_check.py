@@ -667,9 +667,210 @@ def _class_minimal_honest_absence(ic_class: str) -> bool:
     return False
 
 
+# ─── ORGANIC #748 — L6 reused-IP staged-RTL FSM harvest (n_states==1 dead zone) ─
+# The L6 floor is `l6_min = 2 if sparse_control_timing else 5`. For a REUSED-IP
+# processor_cpu (sparse_control_timing=True → l6_min=2) the real multi-state
+# control FSMs live in STAGED vendor RTL (controller / LSU typedef-enum state
+# machines), and the doc prose honestly names ≤1 state. That leaves a DEAD ZONE:
+# the #462 `_has_honest_no_fsm` escape requires n_states==0, the ≥2 floor catches
+# n_states>=2, and the legitimate n_states==1 reused-IP case has NO escape — yet
+# the `l_doc_structured_*` forbidden-waiver prefix blocks any waiver. The FSM
+# provably EXISTS in staged RTL; phase-1 prose just under-counts it.
+#
+# Fix (chip-AGNOSTIC, DOUBLE-KEYED per the #428/#419/#641/#708 doctrine):
+# credit the FSM state count HARVESTED from the staged vendor RTL's
+# `typedef enum {...} ..._e;` (for `*_fsm_cs` / `*_fsm_ns` / `*_state`-typed
+# signals), but ONLY when (a) the IC class has rtl_gen=null in the registry
+# (a from-spec / reused-IP class, NEVER a chip-name literal) AND (b) reused RTL
+# is provably present — a staged `input/vendor_rtl/` directory with ≥1 .v/.sv,
+# OR the doc carries an honest `fsm_in_staged_rtl: true` flag — AND (c) the
+# harvested enum actually exists. §4.05 FAIL-CLOSED: bare_fpga / unknown_protocol
+# _class stay strict (rejected before the registry lookup); a from-scratch
+# class (deterministic rtl_gen) keeps the ≥2 floor; a reused-IP class with NO
+# staged RTL and NO honest flag keeps the floor; n_states==0 with no harvest and
+# no honest no-FSM flag still FAILs. No fabrication — the credited states are the
+# ones the staged RTL literally enumerates.
+
+# A signal whose type carries the FSM-state enum: a current/next state register.
+# Signal-name tokens for a state register. STRONG tokens (the FSM-specific
+# current/next-state convention) are accepted on their own; WEAK tokens (a bare
+# `_state`/`_cs`/`_ns`, which a non-FSM data signal can also carry — e.g. an
+# opcode `req_state`) additionally require a `case (<signal>)` transition before
+# the enum is credited as an FSM (adversarial-review #748 hardening).
+_FSM_SIGNAL_TOKENS_STRONG = ("_fsm_cs", "_fsm_ns", "_fsm_state", "_fsm")
+_FSM_SIGNAL_TOKENS_WEAK = ("_state", "_state_q", "_state_d", "_cs", "_ns")
+_FSM_SIGNAL_TOKENS = _FSM_SIGNAL_TOKENS_STRONG + _FSM_SIGNAL_TOKENS_WEAK
+
+import re as _re  # noqa: E402  (module-level, used only by the harvest helper)
+
+# `typedef enum [...] { A, B, C } name_e;` — capture the brace body and the
+# typedef name. DOTALL so a multi-line enum body is captured.
+_TYPEDEF_ENUM_RE = _re.compile(
+    r"typedef\s+enum\b[^\{]*\{(?P<body>[^}]*)\}\s*(?P<tname>[A-Za-z_]\w*)\s*;",
+    _re.DOTALL,
+)
+
+
+def _class_rtl_gen_null(ic_class: str) -> bool:
+    """True iff the registry marks this class with rtl_gen=null (a from-spec /
+    reused-IP class — processor_cpu / digital_arithmetic_primitive /
+    crypto_accelerator / … — resolved by name OR synonym, NEVER a chip-name
+    literal). bare_fpga / unknown_protocol_class are rejected up front
+    (fail-closed): an unclassified design earns NO relaxation. Any read/parse
+    error → False (fail-closed)."""
+    if ic_class in _NO_PROTOCOL_FAIL_CLOSED:
+        return False
+    try:
+        reg = json.loads(
+            (Path(__file__).resolve().parent / "ic_class_registry.json")
+            .read_text())
+        for e in reg.get("classes", []):
+            if e.get("name") == "unknown_protocol_class":
+                continue  # never an eligibility target (fail-closed)
+            if (e.get("name") == ic_class
+                    or ic_class in (e.get("synonyms") or [])):
+                return e.get("rtl_gen") is None
+    except (OSError, ValueError):
+        pass
+    return False
+
+
+def _staged_vendor_rtl_text(project) -> str | None:
+    """Return the concatenated text of every staged vendor/reused RTL file
+    (`input/vendor_rtl/**.v|.sv`), or None when no such directory / file exists.
+    Mirrors flow_compliance_check._detected_class_rtl_gen_null_and_vendor_rtl's
+    KEY-(a.2) vendor-RTL probe. Read errors on an individual file are skipped
+    (best-effort harvest); a wholly absent dir → None (fail-closed signal)."""
+    if project is None:
+        return None
+    try:
+        vendor_dir = Path(project) / "input" / "vendor_rtl"
+    except Exception:
+        return None
+    if not vendor_dir.is_dir():
+        return None
+    chunks: list[str] = []
+    for pat in ("*.v", "*.sv"):
+        for f in sorted(vendor_dir.rglob(pat)):
+            try:
+                chunks.append(f.read_text(errors="replace"))
+            except OSError:
+                continue
+    return "\n".join(chunks) if chunks else None
+
+
+def _strip_v_comments(src: str) -> str:
+    """Remove `//` line and `/* */` block comments (newlines preserved) so a
+    commented-out FSM enum is not harvested. chip-AGNOSTIC."""
+    src = _re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"),
+                  src, flags=_re.S)
+    src = _re.sub(r"//[^\n]*", "", src)
+    return src
+
+
+def _harvest_staged_fsm_state_count(rtl_text: str) -> int:
+    """Count the FSM states an enum carries when that enum's typedef name is the
+    declared type of an FSM-state signal (`*_fsm_cs` / `*_fsm_ns` / `*_state` /
+    `*_cs` / `*_ns`). Returns the MAX state count across all such enums (the
+    widest single FSM), 0 when no FSM-typed enum is found.
+
+    Strategy (chip-AGNOSTIC grammar, no chip-name literal):
+      1. parse every `typedef enum {...} <tname>;` → {tname: n_states};
+      2. keep only those <tname> declared on a signal whose identifier matches
+         an FSM-state token (so a generic non-FSM enum — e.g. a request-kind
+         enum — never inflates the count);
+      3. return the max state count among the kept enums.
+
+    n_states for an enum body = number of comma-separated, non-empty members
+    (each member may carry `= <value>`; we count the member identifiers).
+
+    Hardening (adversarial-review #748): (a) `//` and `/* */` comments are
+    stripped first, so a commented-out / dead FSM is NOT counted; (b) a WEAK
+    state-signal name (`_state`/`_cs`/`_ns`) must additionally have a
+    `case (<signal>)` transition to confirm it is a real FSM (a generic enum on a
+    coincidentally-`_state`-named signal does not count); (c) only enums with
+    >=2 states are credited (a degenerate 1-member enum is not a control FSM)."""
+    if not isinstance(rtl_text, str) or not rtl_text:
+        return 0
+    rtl_text = _strip_v_comments(rtl_text)
+    enums: dict[str, int] = {}
+    for mobj in _TYPEDEF_ENUM_RE.finditer(rtl_text):
+        body = mobj.group("body")
+        tname = mobj.group("tname")
+        members = [seg.strip() for seg in body.split(",")]
+        n = sum(1 for seg in members if seg and seg.split("=", 1)[0].strip())
+        if n > 0:
+            enums[tname] = max(enums.get(tname, 0), n)
+    if not enums:
+        return 0
+    best = 0
+    for tname, n_states in enums.items():
+        if n_states < 2:
+            continue   # a 1-member enum is not a multi-state control FSM
+        # Is `tname` declared on at least one FSM-state-named signal?
+        # Grammar: `<tname> [#(...)] <ident1>[, <ident2> ...];`
+        decl_re = _re.compile(
+            r"\b" + _re.escape(tname) + r"\b\s+(?P<ids>[^;{}=]+);")
+        fsm_typed = False
+        for dm in decl_re.finditer(rtl_text):
+            ids = dm.group("ids")
+            for ident in _re.split(r"[,\s]+", ids):
+                ident = ident.strip()
+                low = ident.lower()
+                if not ident:
+                    continue
+                if any(low.endswith(tok) for tok in _FSM_SIGNAL_TOKENS_STRONG):
+                    fsm_typed = True       # strong state-register name
+                    break
+                if any(low.endswith(tok) for tok in _FSM_SIGNAL_TOKENS_WEAK):
+                    # a weak name needs a `case (<signal>)` transition to confirm
+                    # it really drives an FSM (not a coincidentally-named enum).
+                    if _re.search(r"\bcase\s*\(\s*" + _re.escape(ident)
+                                  + r"\s*\)", rtl_text, _re.I):
+                        fsm_typed = True
+                        break
+            if fsm_typed:
+                break
+        if fsm_typed:
+            best = max(best, n_states)
+    return best
+
+
+def _l6_staged_fsm_credit(data: dict, project, ic_class: str) -> int:
+    """ORGANIC #748 — DOUBLE-KEYED L6 staged-RTL FSM credit. Returns the FSM
+    state count harvested from staged vendor RTL (to be credited toward the L6
+    floor), or 0 when the escape does not apply.
+
+    Keys (ALL required, fail-closed):
+      (a) ic_class has rtl_gen=null in the registry (reused-IP / from-spec
+          class; bare_fpga / unknown rejected by _class_rtl_gen_null);
+      (b) reused RTL is provably present — a staged input/vendor_rtl/ dir with
+          ≥1 .v/.sv file, OR the doc carries an honest `fsm_in_staged_rtl: true`
+          flag (the runner's explicit "the FSM lives in staged RTL" signal);
+      (c) the staged RTL actually enumerates an FSM-state typedef enum.
+
+    When all hold, return the harvested state count (≥1). Otherwise 0 — the
+    plain L6 floor stays in force (no leak: a class without rtl_gen=null, a
+    project with no staged RTL and no honest flag, or staged RTL with no
+    FSM-typed enum, earns nothing)."""
+    if not _class_rtl_gen_null(ic_class):
+        return 0
+    rtl_text = _staged_vendor_rtl_text(project)
+    honest_flag = _explicit_true(data.get("fsm_in_staged_rtl"))
+    if rtl_text is None and not honest_flag:
+        return 0
+    if rtl_text is None:
+        # honest flag set but no readable staged dir — nothing to harvest;
+        # the floor relaxation below (≥1 with a prose state) still applies via
+        # the caller, but there is no harvested count to credit here.
+        return 0
+    return _harvest_staged_fsm_state_count(rtl_text)
+
+
 def _check_l_doc(layer: int, data: dict,
                  escapes: dict[str, bool] | None = None,
-                 ic_class: str = "unknown") -> tuple[bool, str]:
+                 ic_class: str = "unknown",
+                 project=None) -> tuple[bool, str]:
     """Return (passed, reason). reason is empty when passed.
 
     Wave 36 (v0.119.68): when `ic_class` indicates the layer is not
@@ -949,6 +1150,36 @@ def _check_l_doc(layer: int, data: dict,
                         total_states += _list_len_of_dicts(f.get("states"))
                 if total_states > n_states:
                     n_states = total_states
+        # ORGANIC #748 — reused-IP staged-RTL FSM credit (n_states==1 dead
+        # zone). For a reused-IP sparse_control_timing class (l6_min=2) whose
+        # multi-state control FSM lives in STAGED vendor RTL, the doc prose
+        # honestly names ≤1 state, leaving an unsatisfiable floor with no
+        # escape (the #462 no-FSM escape needs n_states==0, the ≥2 floor needs
+        # ≥2, and the `l_doc_structured_*` prefix forbids any waiver). When the
+        # DOUBLE-KEY holds — (1) the doc HONESTLY extracts ≥1 prose FSM state
+        # (its own structured signal that an FSM exists; an empty L6 with
+        # n_states==0 does NOT take this path, it must FAIL or use the #462
+        # no-FSM escape), AND (2) the class is registry rtl_gen=null, AND
+        # (3) staged vendor RTL with an FSM-typed `typedef enum {...} ..._e;`
+        # is present (or the doc carries an honest `fsm_in_staged_rtl: true`
+        # flag) — credit the harvested state count. The FSM provably exists in
+        # the staged RTL; phase-1 prose just under-counts it.
+        if 1 <= n_states < l6_min and _class_rtl_gen_null(ic_class):
+            harvested = _l6_staged_fsm_credit(data, project, ic_class)
+            if harvested > n_states:
+                n_states = harvested
+            # Option (ii) — relax the floor to ≥1 when staged RTL CONFIRMS an
+            # FSM exists but the harvester could not parse a typedef-enum out
+            # of it (a one-hot localparam / non-enum FSM). "Confirms" means the
+            # harvester credited ≥1 state OR the doc carries the explicit honest
+            # `fsm_in_staged_rtl: true` flag — NOT the mere presence of a vendor
+            # file (a generic non-FSM enum or an unrelated .sv must NOT relax
+            # the floor). Combined with the n_states>=1 gate above this keeps an
+            # empty L6 strict.
+            if (n_states < l6_min
+                    and (harvested >= 1
+                         or _explicit_true(data.get("fsm_in_staged_rtl")))):
+                l6_min = 1
         if n_states < l6_min:
             return False, (
                 f"L6 control_logic must carry ≥{l6_min} typed FSM states in "
@@ -1415,7 +1646,8 @@ def main(argv=None) -> int:
         # fields (sidecar) toward this layer's count floor, fail-closed.
         _merge_sidecar_for_layer(layer, data, sidecar)
         ok, reason = _check_l_doc(layer, data,
-                                  escapes=escapes, ic_class=ic_class)
+                                  escapes=escapes, ic_class=ic_class,
+                                  project=project)
         if ok:
             passed.append(lp.name)
         else:

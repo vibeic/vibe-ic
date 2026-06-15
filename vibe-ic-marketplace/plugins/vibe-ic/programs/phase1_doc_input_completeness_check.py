@@ -617,12 +617,137 @@ def _load_generated_haystacks(project: Path):
     return out
 
 
-def _attribute_token(tok: str, layer_blobs):
+# ── #746 — C-macro register-field alias credit (Bucket B) ───────────────────
+# An SDK header / programmer's-guide doc quotes autogen register-access
+# C-macros of the canonical shape
+#
+#       <PREFIX>_<REGISTER>_<FIELD>[_<SUFFIX>]
+#
+# e.g. `PREFIX_CTRL_SHADOWED_OPERATION_OFFSET`, `..._MASK`, `..._SHIFT`.
+# Phase 1 captures the REGISTER name AND the FIELD name **structurally** in
+# L4_REGMAP (`registers[].name` + `registers[].fields[].field_name`, landed by
+# #736), but never as the concatenated macro string — so the flat substring
+# search in `_attribute_token` reports the whole macro as MISSING and spuriously
+# FAILs the 100% per-doc floor. This alias-credit pass re-checks each still
+# missing token: it is CREDITED iff the token contains `_<register_name>_` for
+# some L4 register AND the remaining tail equals an L4 `field_name` of THAT
+# register, optionally followed by exactly one member of the CLOSED suffix set
+# below. BOTH the register and the field must match (and the field must belong
+# to that specific register) — see §4.05 no-leak.
+#
+# CLOSED suffix set — the standard autogen register-access macro suffixes.
+# A closed allow-list (not an open `[A-Z0-9_]*` tail) is load-bearing for the
+# no-leak guarantee: an arbitrary `<reg>_<field>_<anything>` must not be
+# credited.
+_REGMACRO_SUFFIXES = frozenset({
+    "OFFSET", "MASK", "SHIFT", "WIDTH", "LSB", "MSB",
+    "FIELD", "VALUE", "REG", "BIT",
+})
+
+
+def _load_l4_register_field_map(project: Path):
+    """Build `{REGISTER_NAME_UPPER: frozenset(FIELD_NAME_UPPER)}` from every
+    `generated_docs/L*.json` that carries a `registers[]` array (canonically
+    L4_REGMAP, but scan all L docs so the credit is robust to layout). The map
+    keys on the STRUCTURAL register/field names only — never a chip SKU literal
+    — so the alias credit stays chip-AGNOSTIC.
+
+    A register contributes only its OWN fields; the per-register field set is
+    what enforces the §4.05 no-leak rule that a `<reg>_<wrongfield>` whose field
+    does not belong to that register is NOT credited.
+    """
+    gen_dir = _pl.generated_docs_dir(project)
+    out: dict = {}
+    if not gen_dir.is_dir():
+        return out
+    for p in sorted(gen_dir.glob("L*.json")):
+        try:
+            data = json.loads(p.read_text(errors="replace"))
+        except Exception:
+            continue
+        regs = data.get("registers") if isinstance(data, dict) else None
+        if not isinstance(regs, list):
+            continue
+        for reg in regs:
+            if not isinstance(reg, dict):
+                continue
+            rname = reg.get("name")
+            if not isinstance(rname, str) or not rname.strip():
+                continue
+            key = rname.strip().upper()
+            fset = out.setdefault(key, set())
+            for fld in (reg.get("fields") or []):
+                if not isinstance(fld, dict):
+                    continue
+                fname = fld.get("field_name") or fld.get("name")
+                if isinstance(fname, str) and fname.strip():
+                    fset.add(fname.strip().upper())
+    # Freeze the per-register field sets.
+    return {r: frozenset(f) for r, f in out.items() if f}
+
+
+def _regmacro_alias_credit(tok: str, regfield_map) -> bool:
+    """Return True iff `tok` is a `<PREFIX>_<REGISTER>_<FIELD>[_<SUFFIX>]`
+    register-access macro whose REGISTER is an L4 register name AND whose tail
+    (after that register name) is a `field_name` of THAT register, optionally
+    followed by exactly one CLOSED-set suffix.
+
+    §4.05 NO-LEAK (load-bearing):
+      * token whose register is ABSENT from L4 → not credited;
+      * token whose field is ABSENT from THAT register's field set → not
+        credited (a `<reg>_<wrongfield>` where wrongfield belongs to a
+        DIFFERENT register, or to no register, stays MISSING);
+      * a tail suffix outside the CLOSED set → not credited.
+    All comparisons are on the normalised UPPER form.
+    """
+    if not tok or not regfield_map:
+        return False
+    up = tok.replace(" ", "").upper()
+    if "_" not in up:
+        return False
+    parts = up.split("_")
+    # Probe every register-name match position. A register name may itself be
+    # multi-token (e.g. CTRL_SHADOWED), so test each register against the token
+    # by locating `_<register>_` as a token-aligned slice rather than a bare
+    # substring (prevents an accidental in-word match).
+    for rname, fset in regfield_map.items():
+        rparts = rname.split("_")
+        rlen = len(rparts)
+        # The register must be surrounded by token-prefix and token-tail —
+        # i.e. there is at least one PREFIX token before it and at least one
+        # FIELD token after it.
+        for i in range(1, len(parts) - rlen):
+            if parts[i:i + rlen] != rparts:
+                continue
+            tail = parts[i + rlen:]
+            if not tail:
+                continue  # no field tokens after the register name
+            # Try the longest field match first so a multi-token field name
+            # (e.g. MANUAL_OPERATION) wins over its leading token.
+            for flen in range(len(tail), 0, -1):
+                cand_field = "_".join(tail[:flen])
+                if cand_field not in fset:
+                    continue
+                rest = tail[flen:]
+                if not rest:
+                    return True  # bare `<prefix>_<reg>_<field>`
+                if len(rest) == 1 and rest[0] in _REGMACRO_SUFFIXES:
+                    return True  # `<prefix>_<reg>_<field>_<SUFFIX>`
+                # tail has extra tokens beyond field (+ at most one suffix)
+                # that are not in the closed suffix set → not this field.
+        # try next register
+    return False
+
+
+def _attribute_token(tok: str, layer_blobs, regfield_map=None):
     """Return a tuple `(layers_hit, source)` where:
       layers_hit = list of L doc names that contain the token
       source     = "ai" if any hit was inside an AI-patched
-                   sub-tree, else "program" if any hit was in
-                   deterministic content, else "missing".
+                   sub-tree, "program" if any hit was in
+                   deterministic content, "program_alias" if the
+                   token was credited by the #746 register-macro
+                   alias pass (register+field both in L4_REGMAP),
+                   else "missing".
     Token is matched under raw / single-space / no-space normalisation.
     """
     if not tok:
@@ -648,6 +773,10 @@ def _attribute_token(tok: str, layer_blobs):
             # Treat as program-captured by default.
             found_in_prog = True
     if not layers_hit:
+        # #746 — substring search missed; try the register-macro alias
+        # credit (register+field both captured structurally in L4_REGMAP).
+        if regfield_map and _regmacro_alias_credit(tok, regfield_map):
+            return ["L4_REGMAP"], "program_alias"
         return [], "missing"
     if found_in_ai and not found_in_prog:
         return layers_hit, "ai"
@@ -658,10 +787,10 @@ def _attribute_token(tok: str, layer_blobs):
     return layers_hit, "program"
 
 
-def _is_captured(tok: str, layer_blobs):
+def _is_captured(tok: str, layer_blobs, regfield_map=None):
     """Backwards-compat wrapper — returns just the list of layers
     a token appears in (legacy callers don't care about source)."""
-    return _attribute_token(tok, layer_blobs)[0]
+    return _attribute_token(tok, layer_blobs, regfield_map)[0]
 
 
 def _list_input_docs(project: Path):
@@ -756,6 +885,12 @@ def main(argv=None) -> int:
               "(run phase1 first).")
         return 0
 
+    # #746 — register-field structural alias map for C-macro credit.
+    # Built once; passed into every token attribution so an SDK-header
+    # `<PREFIX>_<REG>_<FIELD>[_SUFFIX]` macro whose register AND field both
+    # land in L4_REGMAP is credited instead of spuriously counted MISSING.
+    regfield_map = _load_l4_register_field_map(project)
+
     pairs = _list_input_docs(project)
     if not pairs:
         print("SKIP — no input docs found "
@@ -775,6 +910,7 @@ def main(argv=None) -> int:
     all_garble: set = set()
     program_tokens_global: set = set()
     ai_tokens_global: set = set()
+    alias_tokens_global: set = set()
     reference_docs_seen: list = []
     per_doc = []
     fail_docs = []
@@ -810,9 +946,11 @@ def main(argv=None) -> int:
             continue
         prog_cnt = 0
         ai_cnt = 0
+        alias_cnt = 0
         missing = []
         for tok in design_toks:
-            _layers, source = _attribute_token(tok, layer_blobs)
+            _layers, source = _attribute_token(tok, layer_blobs,
+                                               regfield_map)
             if source == "program":
                 prog_cnt += 1
                 if not is_ref:
@@ -821,9 +959,16 @@ def main(argv=None) -> int:
                 ai_cnt += 1
                 if not is_ref:
                     ai_tokens_global.add(tok)
+            elif source == "program_alias":
+                # #746 — register-macro alias credit. Counts toward
+                # capture (register+field both structurally in L4_REGMAP);
+                # tracked separately for report transparency.
+                alias_cnt += 1
+                if not is_ref:
+                    alias_tokens_global.add(tok)
             else:
                 missing.append(tok)
-        captured = prog_cnt + ai_cnt
+        captured = prog_cnt + ai_cnt + alias_cnt
         pct = captured / n if n else 1.0
         missing_sample = sorted(missing,
                                 key=lambda x: (-len(x), x))[:30]
@@ -841,6 +986,7 @@ def main(argv=None) -> int:
             "garble_or_artefact": n_garble,
             "program_captured": prog_cnt,
             "ai_captured": ai_cnt,
+            "alias_captured": alias_cnt,
             "missing": len(missing),
             "captured": captured,
             "captured_pct": round(pct, 4),
@@ -862,11 +1008,17 @@ def main(argv=None) -> int:
     captured_anywhere = 0
     captured_by_layer = {layer: set() for layer in layer_blobs}
     for tok in all_tokens:
-        hits = _is_captured(tok, layer_blobs)
+        hits = _is_captured(tok, layer_blobs, regfield_map)
         if hits:
             captured_anywhere += 1
             for layer in hits:
-                captured_by_layer[layer].add(tok)
+                # `program_alias` hits attribute to "L4_REGMAP"; if no
+                # layer of that stem is in the blob set, fold them into a
+                # synthetic alias roll-up row rather than KeyError.
+                if layer in captured_by_layer:
+                    captured_by_layer[layer].add(tok)
+                else:
+                    captured_by_layer.setdefault(layer, set()).add(tok)
     for layer in sorted(layer_blobs.keys()):
         per_layer.append({
             "layer": layer,
@@ -909,6 +1061,7 @@ def main(argv=None) -> int:
         "warn_docs": warn_docs,
         "reference_docs": reference_docs_seen,
         "ai_captured_tokens_count": len(ai_tokens_global),
+        "alias_captured_tokens_count": len(alias_tokens_global),
         "per_layer": per_layer,
         "per_doc": per_doc,
     }
