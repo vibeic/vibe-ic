@@ -729,6 +729,16 @@ def main(argv=None) -> int:
         print(f"ppa-area-threshold ok: {report['reason']}")
     else:
         print(f"NOT-APPLICABLE: {report.get('reason', verdict)}")
+    # ORGANIC #744 (R3-3 author-UX hint) — measurement-provenance disclaimer.
+    # The area verdict is computed from the IN-CONTAINER synthesis (pinned yosys
+    # version). A LOCAL yosys of a different version can give an OPPOSITE-SIGN
+    # area delta for the SAME RTL pair, so a local re-measure is not a valid
+    # cross-check of this verdict.
+    if verdict in ("BLOCK", "PASS"):
+        print("  hint (#744): this area verdict is valid ONLY from the "
+              "in-container measurement (pinned yosys); a local yosys of a "
+              "different version can report an opposite-sign delta for the same "
+              "RTL pair — do not contradict this verdict with a local re-measure.")
     return rc
 
 

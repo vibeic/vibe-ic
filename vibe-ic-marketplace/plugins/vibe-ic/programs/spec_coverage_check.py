@@ -231,8 +231,68 @@ def _detect_reset_mode_polarity(text: str):
     return mode, polarity
 
 
+# ORGANIC #743 — negation-aware feature presence. A spec whose ONLY mention of
+# a reset/clock is the NEGATED phrasing ("no clock or reset inputs", "no reset",
+# "without a reset", "operates entirely combinationally, with no clock") must
+# NOT derive a phantom reset/clock requirement (which hard-blocks a correct
+# combinational design under --strict). A real "reset clears X" mention still
+# derives the requirement. chip-AGNOSTIC: pure negation grammar, no chip literal.
+_NEG_TOKENS_RE = re.compile(
+    r"\b(no|without|not|n't|nor|neither|none|never|free\s+of|lacks?|lacking|"
+    r"absent|sans|devoid\s+of|has\s+no|have\s+no|requires?\s+no|needs?\s+no|"
+    r"n/?a|not\s+applicable)\b")
+
+
+def _split_sentences(low: str) -> List[str]:
+    return [s for s in re.split(r"(?<=[.\n;:])", low) if s.strip()]
+
+
+# Negation is scoped to the CLAUSE containing the keyword. A clause boundary is
+# a sentence terminator (. \n ;), a COMMA, or a contrast conjunction (but /
+# however / …) — each separates independent assertions, so a negation in one
+# clause does NOT govern a keyword in another. This avoids the two failure modes
+# an earlier char-window version had: (a) a negation comma-joined to a real
+# reset clause ("no enable input, the reset clears X") wrongly dropping the
+# reset; (b) the issue's own "without waiting, the module asserts reset" being
+# suppressed. A negation ANYWHERE in the keyword's own clause (before OR after
+# the keyword) negates it ("a reset is not required", "reset: none").
+_CLAUSE_SPLIT_RE = re.compile(
+    r"[.\n;,]"
+    r"|\b(?:but|however|yet|though|although|whereas|while|nevertheless|"
+    r"nonetheless|except\s+that)\b")
+
+
+def _clauses(low: str) -> List[str]:
+    return [c for c in _CLAUSE_SPLIT_RE.split(low) if c and c.strip()]
+
+
+def _mention_present_unnegated(text: str, keyword_re: str) -> bool:
+    """True iff the keyword appears in at least one CLAUSE where it is NOT
+    governed by a negation token. If EVERY clause mentioning the keyword negates
+    it (e.g. 'with no clock or reset inputs', 'a reset is not required'), the
+    feature is genuinely absent and no requirement is derived. A real reset
+    clause comma-joined to an unrelated negated clause still derives."""
+    low = text.lower()
+    kw = re.compile(keyword_re, re.I)
+    saw_mention = False
+    for clause in _clauses(low):
+        if kw.search(clause):
+            saw_mention = True
+            if not _NEG_TOKENS_RE.search(clause):
+                return True   # an affirmative clause — feature is present
+    # mentions existed but ALL clauses negated → absent; no mention → absent.
+    return False
+
+
 def _has_reset(text: str) -> bool:
-    return bool(re.search(r"\breset\b|\brst\b|\bpor\b", text, re.I))
+    # #743: only an UN-negated reset mention derives the reset requirement.
+    return _mention_present_unnegated(text, r"\breset\b|\brst\b|\bpor\b")
+
+
+def _has_clock(text: str) -> bool:
+    # #743: companion negation-guard for the clock keyword path (same blind spot:
+    # 'no clock or reset inputs' must not derive a phantom clock requirement).
+    return _mention_present_unnegated(text, r"\bclock\b|\bclk\b")
 
 
 def _detect_latency(text: str) -> Optional[str]:
