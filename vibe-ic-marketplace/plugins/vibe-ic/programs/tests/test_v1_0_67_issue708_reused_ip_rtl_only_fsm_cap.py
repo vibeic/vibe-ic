@@ -677,6 +677,67 @@ def test_r3_trusted_extractor_anchor_used(tmp_path):
     assert F._docs_name_no_further_fsm_states(proj, l6) is False
 
 
+# ── ROUND-2 (field-agent reopen): RTL files staged under input/docs/ must NOT
+#    inject RTL-only state names into the doc-enumeration scan (cap was a
+#    FUNCTIONAL NO-OP — over-blocked on the very reused-IP artifact it exists
+#    for: a vendor `_pkg.sv` under input/docs/ guaranteed a non-empty remainder).
+_VENDOR_PKG_SV = (
+    "package core_pkg;\n"
+    "  typedef enum logic [3:0] {\n"
+    "    BOOT_SET, FIRST_FETCH, WAIT_SLEEP, IRQ_TAKEN, DBG_TAKEN_ID\n"
+    "  } ctrl_fsm_e;\n"
+    "endpackage\n")
+
+
+def test_round2_sv_package_under_docs_does_not_block_cap(tmp_path):
+    """A reused-IP whose vendor RTL package (`*_pkg.sv`) is STAGED under
+    input/docs/ — naming RTL-only states BOOT_SET/FIRST_FETCH/... — must NOT
+    inject those into the doc-enumeration scan: RTL is not a 'doc'. The cap
+    must still FIRE (those states are RTL-only, the defer case)."""
+    proj = _make_reused_ip_project(tmp_path)
+    (proj / "input" / "docs" / "core_pkg.sv").write_text(_VENDOR_PKG_SV)
+    assert F._reused_ip_rtl_only_fsm_cap_eligible(proj) is True
+
+
+def test_round2_v_and_svh_under_docs_excluded(tmp_path):
+    """.v / .svh staged under input/docs/ are likewise excluded from the scan."""
+    proj = _make_reused_ip_project(tmp_path)
+    (proj / "input" / "docs" / "alu.v").write_text(
+        "module alu; localparam ST_RUN=1, ST_HALT=2; endmodule\n")
+    (proj / "input" / "docs" / "defs.svh").write_text(
+        "`define MODE_TURBO 1\n`define MODE_ECO 2\n")
+    assert F._reused_ip_rtl_only_fsm_cap_eligible(proj) is True
+
+
+def test_round2_register_dense_human_prose_does_not_over_block(tmp_path):
+    """Real CPU datasheet prose (register/acronym-dense: ACCESS/RESET/DECODE/
+    FLUSH/SLEEP/MSTATUS/…) with only IDLE a genuine state must NOT over-collect
+    into a non-empty remainder → the cap must FIRE (the v1.0.67/68 over-block)."""
+    reg_dense = (
+        "The core ACCESS the RESET vector ABOVE the ABSOLUTE base. On DECODE it "
+        "may FLUSH or SLEEP. Control starts in IDLE; the full controller FSM "
+        "state sequencing is delegated to the vendor RTL core. Registers "
+        "MSTATUS, MTVEC, MEPC, MCAUSE provide ACCESS; the ALU performs ADD SUB "
+        "AND OR XOR. See the RTL package for state details.")
+    proj = _make_reused_ip_project(tmp_path, doc_fsm_text=reg_dense)
+    assert F._reused_ip_rtl_only_fsm_cap_eligible(proj) is True
+
+
+def test_round2_NOLEAK_human_doc_names_2nd_state_still_FAILS(tmp_path):
+    """§4.05 LOAD-BEARING: a 2nd state genuinely enumerated in a HUMAN doc
+    (`.md`/`.rst`/.txt) — not RTL — must keep key (c) False (still FAIL,
+    surfacing the real walker miss). The RTL exclusion must NOT weaken this."""
+    proj = _make_reused_ip_project(
+        tmp_path,
+        doc_fsm_text="The control FSM states: IDLE and BUSY.")
+    assert F._reused_ip_rtl_only_fsm_cap_eligible(proj) is False
+    # and the same 2nd state inside a STAGED .md is also caught (human doc):
+    proj2 = _make_reused_ip_project(tmp_path / "p2")
+    (proj2 / "input" / "docs" / "extra.md").write_text(
+        "The machine transitions: IDLE -> RUNNING -> DONE.")
+    assert F._reused_ip_rtl_only_fsm_cap_eligible(proj2) is False
+
+
 # ── chip-agnostic source guard (cap must name no chip/vendor/SKU literal) ─────
 def test_chip_agnostic_guard():
     r = subprocess.run(

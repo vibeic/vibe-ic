@@ -2814,16 +2814,27 @@ def _docs_name_no_further_fsm_states(project: Path, l6_data: dict) -> bool:
             if not f.is_file():
                 continue
             if f.suffix.lower() not in (
-                    ".txt", ".md", ".json", ".rst", ".csv", ".v", ".sv",
+                    ".txt", ".md", ".json", ".rst", ".csv",
                     ".log", ".yaml", ".yml", ""):
                 continue
-            # §4.05 fail-closed: scan input docs BROADLY (incl. .json/.v/.sv).
-            # Extra noise tokens from a raw JSON / RTL input doc only ADD
-            # candidates → cap fires LESS → SAFE. Scanning fewer file types
-            # would risk MISSING a state a doc enumerates → LEAK. (The L6
-            # generated doc is the ONLY file read prose-only, because its
-            # structured `fsm_states`/transition labels are extraction
-            # internals, not doc-enumerated states — see _l6_prose_text.)
+            # ORGANIC #708 round-2 (field-agent reopen) — RTL files
+            # (.v/.sv/.svh) are EXCLUDED from the doc-enumeration scan. RTL is
+            # NOT a "doc". A reused-IP design routinely STAGES a vendor RTL
+            # package under input/docs/ (e.g. input/docs/<core>_pkg.sv with
+            # `typedef enum {BOOT_SET, FIRST_FETCH, WAIT_SLEEP, ...}`). Those are
+            # the EXACT RTL-only state names whose RTL-only-ness is THIS cap's
+            # whole justification — scanning the RTL therefore GUARANTEES a
+            # non-empty remainder, so key (c) is always False and the cap is a
+            # FUNCTIONAL NO-OP on the very artifact it exists for (the v1.0.67/68
+            # over-block the field agent reopened: 1151–1732 remainder tokens,
+            # never 0). The earlier "scan broadly incl .v/.sv → fires LESS → SAFE"
+            # reasoning was wrong: it makes the cap unable to EVER fire.
+            # §4.05 NO-LEAK is preserved by the cap's other keys: a 2nd state
+            # present ONLY in RTL and NOT in any human doc is PRECISELY the
+            # RTL-only-FSM case to defer; human docs are .txt/.md/.rst/.json,
+            # never .v/.sv/.svh. (The L6 generated doc is read prose-only via
+            # _l6_prose_text; its structured fsm_states/transition labels are
+            # extraction internals, not doc-enumerated states.)
             try:
                 blobs.append(f.read_text(errors="replace"))
                 read_any = True
