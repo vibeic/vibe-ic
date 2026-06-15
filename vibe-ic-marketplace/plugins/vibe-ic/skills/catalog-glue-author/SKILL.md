@@ -116,6 +116,61 @@ When AI authors the chip-top wrapper, it MUST:
 
 5. AI MUST run `iverilog -g2012 -t null <project>/phase2/stage1/rtl/*.v` as final sanity check before declaring success.
 
+## SOURCE_MANIFEST.json — the keystone reused-IP artifact (mandatory)
+
+`phase2/stage1/rtl/SOURCE_MANIFEST.json` is the **keystone** that turns on
+every reused-IP pin-gate relaxation. `l9_rtl_pin_consistency_check.load_source_manifest()`
+reads THIS file (NOT `declaration.json`); it returns a usable dict **only** when
+the file exists **and** declares `reused_ip: true`. When it returns `None`, the
+gate falls back to a strict exact-name pin comparison — so a catalog-glue chip-top
+(which intentionally flattens struct buses, ties off unused interfaces, renames
+or exposes wrapper outputs) hard-FAILs with `L9 <-> RTL top pin/direction mismatch`.
+The relaxations #659 (struct-bus flatten / tie-off), #711 (renamed interface),
+and #712 (wrapper-exposed output) are **dead code without this file**.
+
+### Who writes it on each path
+
+- **catalog-pull path** (`ip_catalog_pull.py` ran, ≥1 IP pulled): the pull script
+  AUTO-EMITS the manifest at pull time (`generated_by:"ip_catalog_pull"`). No
+  action needed.
+- **pre-staged vendor RTL path** (`input/vendor_rtl/` populated, the pull never
+  runs): as of #732 `phase2_one_shot_runner.step_rtl_gen` AUTO-EMITS a minimal
+  keystone manifest `{reused_ip:true, ip_list:[…], rtl_strategy:"catalog_lookup_plus_ai_glue",
+  generated_by:"phase2_runner_prestaged"}` the moment it WAIVES to this skill
+  (it reports the path in `extras.source_manifest_emitted`). You do **not** need
+  to author the keystone from scratch — it already exists when this skill fires.
+
+### Recognized fields
+
+```json
+{
+  "reused_ip": true,                              // KEYSTONE — gate ignores file unless true
+  "ip_list": ["aes", "tlul", "prim", "..."],      // structural provenance
+  "rtl_strategy": "catalog_lookup_plus_ai_glue",
+  "generated_by": "phase2_runner_prestaged",      // or "ip_catalog_pull" / your name on hand-author
+  "tie_offs": ["clk_edn_i", "edn_i", "edn_o"],    // L9 ifaces wired to const/internal (no chip_top pad)
+  "flattened_buses": [                            // #659 — struct bus split into wire-level children
+    {"l9": "tl", "rtl": ["tl_a_*", "tl_d_*"]}
+  ],
+  "flattened_outputs": [                          // #712 — wrapper-exposed split outputs
+    {"l9": "alert", "rtl": ["alert_n_o", "alert_p_o"]}
+  ],
+  "renamed_interfaces": [                         // #711 — L9 illustrative name ≠ RTL name
+    {"l9": ["o_sram_addr"], "rtl": ["o_sram_waddr", "o_sram_raddr"]}
+  ]
+}
+```
+
+### MERGE-preserving rule (HARD)
+
+The auto-emit is **merge-preserving**: it only (re)asserts `reused_ip` / `ip_list`
+/ `rtl_strategy` and `setdefault`s `generated_by`. Any `tie_offs` / `flattened_buses`
+/ `flattened_outputs` / `renamed_interfaces` block you hand-author **survives
+untouched**. So when the chip-top wires an interface that the structural detection
+cannot prove is intentional (e.g. an undeclared rename), **append** the
+appropriate relaxation block to the existing manifest — never overwrite the file
+wholesale, and never drop `reused_ip: true`.
+
 ## Synthesis-safe parameters (`synth_safe_params`)
 
 When the catalog manifest for a pulled IP declares a `synth_safe_params`

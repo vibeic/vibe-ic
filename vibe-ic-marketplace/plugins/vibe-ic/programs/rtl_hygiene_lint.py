@@ -411,6 +411,99 @@ _RESET_NAME_RE = re.compile(
     re.I)
 
 
+def _block_body_after(src: str, body_start: int) -> str:
+    """Return the body text of an always block that starts at `body_start`,
+    bounded at the next top-level `always` / `endmodule`. Mirrors the bounding
+    used by rule_reset_boundary_residual_enable so both rules agree on scope."""
+    tail = src[body_start:]
+    nxt = re.search(r'\balways\b|\bendmodule\b', tail)
+    return tail[:nxt.start()] if nxt else tail
+
+
+def _reset_covered_signals(src: str) -> Set[str]:
+    """ORGANIC #727 — structurally collect every signal that has an assignment
+    DOMINATED by the reset condition of its enclosing reset-bearing `always`
+    process, INCLUDING a single mixed process where the reset branch and the
+    datapath share one block.
+
+    A reset-bearing process is `always @(... posedge/negedge <rst> ...)` whose
+    sensitivity list names a reset-like signal (so `negedge presetn`,
+    `negedge rst_n`, async OR sync resets all qualify — the reset-name detector
+    here is signal-structural, not a whole-module port-name early-return).
+
+    Inside such a process, the reset branch is the `if (<cond>)` whose condition
+    references that block's reset signal (e.g. `if (!presetn)`); every `<=`/`=`
+    LHS in that branch (a single statement OR a `begin ... end` group) is
+    credited as reset-covered. This is purely structural and chip-AGNOSTIC.
+    """
+    covered: Set[str] = set()
+    # Match an always block and capture its sensitivity list so we can identify
+    # the per-block reset signal(s) — only edges count (a level-sensitive list
+    # is not a clocked reset process).
+    for bm in re.finditer(r'\balways(?:_ff)?\s*@\s*\(([^)]*)\)', src):
+        sens = bm.group(1)
+        # Edge-triggered signals of THIS block, in list order.
+        edge_sigs = re.findall(r'\b(?:pos|neg)edge\s+([A-Za-z_]\w*)', sens)
+        # Reset signal(s) of THIS block, by TWO structural signals (chip-
+        # AGNOSTIC — does not depend on the reset port being spelled in a known
+        # way like rst/reset; catches `presetn`, `aresetn`, custom names):
+        #   (1) NAME — an edge signal whose name matches the reset-name detector.
+        #   (2) STRUCTURE — in an async-reset idiom `always @(posedge clk or
+        #       <edge> rst)`, the reset is the edge signal that the block's
+        #       leading `if` condition tests. We seed this from the head `if`
+        #       below; here we keep all edge signals as candidates so the head
+        #       `if` can pick the one it tests.
+        edge_rst = {t for t in edge_sigs if _RESET_NAME_RE.search(t)}
+        body = _block_body_after(src, bm.end())
+        # The async-reset branch of a multi-edge block is the FIRST `if` whose
+        # condition tests one of the block's edge signals — structurally this IS
+        # the reset, regardless of its name (clk is never tested in an `if`).
+        first_if = re.search(r'\bif\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)', body)
+        if first_if and len(edge_sigs) >= 2:
+            head_cond = first_if.group(1)
+            for t in edge_sigs:
+                if re.search(r'\b' + re.escape(t) + r'\b', head_cond):
+                    edge_rst.add(t)
+        # Walk every `if ( <cond> )` whose condition references a reset signal
+        # (either a reset edge signal of this block — name- OR structure-derived
+        # — or any reset-name token, which also covers the synchronous `if(rst)`
+        # form in a clk-only block).
+        for im in re.finditer(r'\bif\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)', body):
+            cond = im.group(1)
+            cond_refs_block_rst = any(re.search(r'\b' + re.escape(r) + r'\b', cond)
+                                      for r in edge_rst)
+            if not (cond_refs_block_rst or _RESET_NAME_RE.search(cond)):
+                continue
+            # The reset branch: the statement (single or begin..end) that the
+            # `if` dominates. Capture up to the matching `end` for a begin-group,
+            # else the single `<lhs> <= / = ...;` statement.
+            after = body[im.end():]
+            mblk = re.match(r'\s*begin\b', after)
+            if mblk:
+                # Balance begin/end to find the branch end.
+                depth = 0
+                idx = 0
+                # Re-scan token by token for begin/end keywords.
+                for km in re.finditer(r'\b(begin|end)\b', after):
+                    if km.group(1) == 'begin':
+                        depth += 1
+                    else:
+                        depth -= 1
+                        if depth == 0:
+                            idx = km.end()
+                            break
+                branch = after[:idx] if idx else after
+            else:
+                semi = after.find(';')
+                branch = after[:semi + 1] if semi != -1 else after
+            for am in re.finditer(r'(?<![<>!=])\b([A-Za-z_]\w*)(?:\[[^\]]+\])?\s*(?:<=|=)(?!=)',
+                                  branch):
+                lhs = am.group(1)
+                if lhs not in VERILOG_KEYWORDS:
+                    covered.add(lhs)
+    return covered
+
+
 def rule_uninit_registered_output(src: str, path: str) -> List[Finding]:
     """
     Detect a REGISTERED output port (assigned via `<=` in a clocked block) in a
@@ -440,10 +533,16 @@ def rule_uninit_registered_output(src: str, path: str) -> List[Finding]:
     if not out_ports:
         return findings
 
-    # Only consider reset-less modules (no reset-ish input port anywhere).
-    input_decls = ' '.join(re.findall(r'\binput\b[^;)\n]*', src))
-    if _RESET_NAME_RE.search(input_decls):
-        return findings
+    # ORGANIC #727 — per-OUTPUT reset coverage (replaces the old whole-module
+    # "if any reset port exists, suppress every finding" early-return). The old
+    # guard had two defects: (1) it MISSED resets whose port name the detector
+    # did not match (e.g. `presetn`), false-flagging a reset-covered output; and
+    # (2) when a reset port WAS recognized, it suppressed findings for ALL
+    # outputs, hiding a genuinely-unreset output in a reset-having module. We now
+    # CREDIT an output only when it is structurally assigned under the reset
+    # condition of its enclosing reset-bearing process (single mixed reset+
+    # datapath block included), and STILL flag any output never so assigned.
+    reset_covered = _reset_covered_signals(src)
 
     # Registered = appears on LHS of a non-blocking assignment.
     registered = {mm.group(1)
@@ -452,6 +551,10 @@ def rule_uninit_registered_output(src: str, path: str) -> List[Finding]:
 
     for name, lineno in out_ports.items():
         if name not in registered:
+            continue
+        # Reset-covered: assigned under the reset condition of its clocked
+        # process → has a deterministic power-up value, do NOT flag.
+        if name in reset_covered:
             continue
         # Declaration-time initializer: a decl line for `name` containing `=`.
         decl_init = re.search(
@@ -1264,6 +1367,13 @@ def autofix_uninit_registered_output(path: Path) -> Tuple[int, List[str]]:
     for f in rule_uninit_registered_output(src_scope_nogen, str(path)):
         if f.rule == 'uninit-registered-output' and f.symbol not in seen:
             names.append(f.symbol); seen.add(f.symbol)
+    # ORGANIC #727 — signals structurally assigned under a reset condition
+    # (single mixed reset+datapath block included). Never give a reset-covered
+    # signal a redundant `initial 0`: it already has a deterministic power-up
+    # value, and a module whose only reset port is spelled outside the
+    # reset-name detector (e.g. APB `presetn`) would otherwise be treated as
+    # reset-less by cases (b)/(c) and false-fixed.
+    reset_covered_fix = _reset_covered_signals(src_scope_nogen)
     # (b) INTERNAL registered regs that drive a module output via a continuous
     #     assign (e.g. `reg q; ... q<=...; assign out=q;`). Same power-up-X bug,
     #     just one hop removed. Reset-less modules only.
@@ -1291,7 +1401,8 @@ def autofix_uninit_registered_output(path: Path) -> Tuple[int, List[str]]:
             for rhs_id in re.findall(r'\b([A-Za-z_]\w*)\b', om.group(2)):
                 if rhs_id in registered and rhs_id not in seen \
                         and rhs_id not in VERILOG_KEYWORDS \
-                        and rhs_id not in top_wires:
+                        and rhs_id not in top_wires \
+                        and rhs_id not in reset_covered_fix:
                     # #530 — memory-array guard (case (c) already has it):
                     # an unpacked array RHS (reg [W-1:0] mem [0:D-1]) must
                     # never receive the scalar `initial mem = 0;` autofix —
@@ -1347,7 +1458,8 @@ def autofix_uninit_registered_output(path: Path) -> Tuple[int, List[str]]:
                       re.finditer(r'(?<![<>!=])\b(\w+)(?:\[[^\]]+\])?\s*<=', src_no_gen)}
         has_initial = bool(re.search(r'\binitial\b', src_no_gen))
         for nm in all_regs:
-            if nm in seen or nm not in registered or nm in top_wires:
+            if nm in seen or nm not in registered or nm in top_wires \
+                    or nm in reset_covered_fix:
                 continue
             decl_init = re.search(
                 r'\breg\b[^;\n]*\b' + re.escape(nm) + r'\s*=', src_no_gen)

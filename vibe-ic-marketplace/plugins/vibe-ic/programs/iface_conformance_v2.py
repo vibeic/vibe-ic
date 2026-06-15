@@ -31,9 +31,19 @@ ADVISORY by default (prompt extraction is heuristic — a prompt mentions
 internal signals that are legitimately NOT ports, so a false positive must
 NOT hard-block an otherwise-correct emit). `--strict` exits 1 on any finding.
 
+SCOPING (ORGANIC #726): the gate scopes prompt-named identifiers to their
+OWNING module so it does not false-fire. A prompt token is SATISFIED if it is a
+declared port of ANY module in the completion (top OR sub-module) or of a
+harness-supplied context module; a token equal to a declared MODULE name (a
+markdown `### Module: Foo` heading, a backtick wrapping a sub-module name) is
+EXCLUDED from the signal/direction comparison; and MODULE-NAME-CASE is
+SUPPRESSED when the prompt's RTL skeleton declares the module name verbatim
+(the harness instantiates that exact name).
+
 CLI:
     python3 iface_conformance_v2.py --id <problem_id> \
-        --prompt <prompt.txt> --rtl <design.sv> [--strict] [--json OUT]
+        --prompt <prompt.txt> --rtl <design.sv> \
+        [--context <ctx.sv> ...] [--strict] [--json OUT]
 
   --id      the canonical problem id; the harness TOPLEVEL stem is derived
             from it (`cvdp_copilot_findfasterclock_0001` → `findfasterclock`).
@@ -41,6 +51,9 @@ CLI:
   --prompt  the prompt / spec text the author was given (the ONLY interface
             source other than the id).
   --rtl     the authored RTL the author is about to emit.
+  --context a harness-supplied context RTL file (`input.context` rtl/*.sv); the
+            ports and module names it declares count as SATISFIED, not
+            author-missing (the #715 family). Repeatable.
   --strict  exit 1 on any finding (default: advisory, always exit 0).
 
 Exit codes:
@@ -141,14 +154,8 @@ class RtlIface:
         return {k.lower(): k for k in self.ports}
 
 
-def parse_rtl(text: str) -> RtlIface:
-    """Parse the FIRST module declaration: name (case-preserved) + ports with
-    directions. Handles ANSI (directions in the header) and non-ANSI
-    (directions in the body) port styles."""
-    src = _strip_comments(text)
-    m = _MODULE_HDR_RE.search(src)
-    if not m:
-        return RtlIface()
+def _parse_module_match(src: str, m: "re.Match") -> RtlIface:
+    """Build an RtlIface from a single _MODULE_HDR_RE match `m` over `src`."""
     iface = RtlIface(module_name=m.group(1))
     ports_blob = m.group("ports") or ""
     # ANSI directions in the header
@@ -163,7 +170,8 @@ def parse_rtl(text: str) -> RtlIface:
                       "bit", "signed", "unsigned"):
                 continue
             header_names.append(nm)
-    # non-ANSI body declarations (scan the WHOLE module body after the header)
+    # non-ANSI body declarations — scan ONLY this module's body (header → its
+    # matching endmodule), so a sub-module's body decls aren't attributed here.
     body = src[m.end():]
     em = re.search(r"\bendmodule\b", body)
     if em:
@@ -179,6 +187,26 @@ def parse_rtl(text: str) -> RtlIface:
     for nm in header_names:
         iface.ports.setdefault(nm, "unknown")
     return iface
+
+
+def parse_rtl(text: str) -> RtlIface:
+    """Parse the FIRST module declaration: name (case-preserved) + ports with
+    directions. Handles ANSI (directions in the header) and non-ANSI
+    (directions in the body) port styles. This is the TOP the harness binds."""
+    src = _strip_comments(text)
+    m = _MODULE_HDR_RE.search(src)
+    if not m:
+        return RtlIface()
+    return _parse_module_match(src, m)
+
+
+def parse_all_rtl(text: str) -> List[RtlIface]:
+    """Parse EVERY module declaration in `text`. The first is the TOP; the rest
+    are sub-modules. Used so a port declared on ANY module (top OR sub-module)
+    counts as SATISFIED — the prompt's given-code may name a sub-module's ports
+    that are legitimately declared on that sub-module, not the top (#726)."""
+    src = _strip_comments(text)
+    return [_parse_module_match(src, m) for m in _MODULE_HDR_RE.finditer(src)]
 
 
 # ── prompt interface extraction ─────────────────────────────────────────────
@@ -282,21 +310,57 @@ class Finding:
     message: str
 
 
-def check_conformance(rid: Optional[str], prompt: str,
-                      rtl_text: str) -> List[Finding]:
+def check_conformance(rid: Optional[str], prompt: str, rtl_text: str,
+                      context_rtl: Optional[List[str]] = None) -> List[Finding]:
     findings: List[Finding] = []
-    rtl = parse_rtl(rtl_text)
+    # The TOP is the first module the author emitted; the harness binds to it.
+    modules = parse_all_rtl(rtl_text)
+    rtl = modules[0] if modules else RtlIface()
     pif = extract_prompt_iface(prompt)
     rtl_lower = rtl.port_names_lower
+
+    # (#726a/#726d) A port name is SATISFIED if it is declared on ANY module in
+    # the completion (top OR sub-module) OR on any CONTEXT module the harness
+    # provides via input.context rtl/*.sv — not only the top. The prompt's
+    # given-code may name a sub-module's ports, and context-RTL ports are
+    # harness-supplied, not author-missing (the #715 family). Union over all.
+    context_modules: List[RtlIface] = []
+    for ctx in (context_rtl or []):
+        context_modules.extend(parse_all_rtl(ctx))
+    all_port_names_lower: Set[str] = set()
+    for mod in modules + context_modules:
+        all_port_names_lower.update(mod.port_names_lower.keys())
+
+    # (#726b/#726c) The set of declared MODULE names — across the completion AND
+    # the prompt's given-code AND context RTL. A prompt token equal to a module
+    # name (a markdown heading like `### Module: Foo`, or a backtick wrapping a
+    # sub-module name) is NOT an interface signal and must be EXCLUDED from the
+    # missing-port / direction comparison entirely.
+    module_names_lower: Set[str] = set()
+    for mod in modules + context_modules:
+        if mod.module_name:
+            module_names_lower.add(mod.module_name.lower())
+    if pif.given_module:
+        module_names_lower.add(pif.given_module.lower())
 
     # (1) MODULE-NAME-CASE: harness top from id must match the RTL module name
     # CASE-EXACTLY. Only flag when the names match case-INSENSITIVELY but
     # differ in case (a genuinely different name is the author's design freedom
     # / the prompt's `Module Name:` may legitimately rename — that is NOT this
     # gate's concern, and flagging it would false-fire constantly).
+    #
+    # (#726c) SUPPRESS when the prompt's RTL block LITERALLY declares the module
+    # name verbatim (case-exact): a code-completion skeleton instantiates that
+    # exact name, so the harness uses it as-is — the lowercase id stem is then
+    # NOT the elaboration top, and flagging a "case mismatch" pushes a WRONG
+    # rename that breaks the harness.
     top = harness_top_from_id(rid)
+    prompt_declares_verbatim = (
+        pif.given_module is not None and rtl.module_name is not None
+        and pif.given_module == rtl.module_name)
     if top and rtl.module_name and rtl.module_name != top \
-            and rtl.module_name.lower() == top.lower():
+            and rtl.module_name.lower() == top.lower() \
+            and not prompt_declares_verbatim:
         findings.append(Finding(
             "MODULE-NAME-CASE",
             f"MODULE-NAME-CASE: harness top is '{top}' (derived from the "
@@ -304,12 +368,14 @@ def check_conformance(rid: Optional[str], prompt: str,
             f"hidden harness elaborates `-s {top}` CASE-EXACTLY, so this "
             f"ELAB_ERRORs at scoring"))
 
-    # (2) MISSING-PORT: a prompt-named port absent from the RTL port list
+    # (2) MISSING-PORT: a prompt-named port absent from EVERY module's port list
     # (case-insensitive — the harness binds by name; case is checked only for
     # the module-top above). Internal-signal false positives are why this is
     # ADVISORY by default.
     for name in sorted(pif.ports):
-        if name.lower() not in rtl_lower:
+        if name.lower() in module_names_lower:
+            continue  # (#726b) a module name, not an interface signal
+        if name.lower() not in all_port_names_lower:
             srcs = ",".join(sorted(pif.sources.get(name, set())))
             findings.append(Finding(
                 "MISSING-PORT",
@@ -318,14 +384,17 @@ def check_conformance(rid: Optional[str], prompt: str,
                 f"— the harness binds to this net by name (advisory: confirm "
                 f"it is a port, not an internal signal)"))
 
-    # (3) PORT-DIRECTION: a port the RTL declares with a direction that
-    # disagrees with the prompt's signal table.
+    # (3) PORT-DIRECTION: a TOP port the RTL declares with a direction that
+    # disagrees with the prompt's signal table. The harness binds the top, so
+    # direction is checked against the top only.
     for name, want in sorted(pif.ports.items()):
         if not want or want == "unknown":
             continue
+        if name.lower() in module_names_lower:
+            continue  # (#726b) a module name, not an interface signal
         rtl_orig = rtl_lower.get(name.lower())
         if rtl_orig is None:
-            continue  # already reported as MISSING-PORT
+            continue  # not a top port (satisfied elsewhere or reported missing)
         have = rtl.ports.get(rtl_orig, "unknown")
         if have in ("unknown", ""):
             continue
@@ -338,11 +407,14 @@ def check_conformance(rid: Optional[str], prompt: str,
     return findings
 
 
-def run(rid: Optional[str], prompt_path: Path,
-        rtl_path: Path) -> Tuple[List[Finding], Dict]:
+def run(rid: Optional[str], prompt_path: Path, rtl_path: Path,
+        context_paths: Optional[List[Path]] = None
+        ) -> Tuple[List[Finding], Dict]:
     prompt = prompt_path.read_text(errors="replace")
     rtl_text = rtl_path.read_text(errors="replace")
-    findings = check_conformance(rid, prompt, rtl_text)
+    context_paths = context_paths or []
+    context_rtl = [p.read_text(errors="replace") for p in context_paths]
+    findings = check_conformance(rid, prompt, rtl_text, context_rtl)
     rtl = parse_rtl(rtl_text)
     report = {
         "program": "iface_conformance_v2",
@@ -353,8 +425,10 @@ def run(rid: Optional[str], prompt_path: Path,
         "rtl_ports": rtl.ports,
         "findings": [{"kind": f.kind, "message": f.message} for f in findings],
         "conformant": not findings,
-        # provenance: prove the gate only read the two handed-in files (blind)
-        "files_read": [str(prompt_path), str(rtl_path)],
+        # provenance: prove the gate only read the handed-in files (blind) —
+        # the prompt, the authored RTL, and any harness-supplied context RTL.
+        "files_read": [str(prompt_path), str(rtl_path)]
+        + [str(p) for p in context_paths],
     }
     return findings, report
 
@@ -370,6 +444,10 @@ def main(argv=None) -> int:
     ap.add_argument("--prompt", required=True,
                     help="prompt / spec text the author was given")
     ap.add_argument("--rtl", required=True, help="the authored RTL")
+    ap.add_argument("--context", action="append", default=None,
+                    help="a harness-supplied context RTL file "
+                         "(input.context rtl/*.sv); ports/modules it declares "
+                         "count as SATISFIED, not author-missing. Repeatable.")
     ap.add_argument("--strict", action="store_true",
                     help="exit 1 on any finding (default: advisory, exit 0)")
     ap.add_argument("--json", default=None, help="optional JSON report path")
@@ -381,11 +459,18 @@ def main(argv=None) -> int:
         if not p.is_file():
             print(f"ERROR: {label} file not found: {p}", file=sys.stderr)
             return 2
+    ctx_paths: List[Path] = []
+    for c in (args.context or []):
+        cp = Path(c)
+        if not cp.is_file():
+            print(f"ERROR: --context file not found: {cp}", file=sys.stderr)
+            return 2
+        ctx_paths.append(cp)
     if not rp.read_text(errors="replace").strip():
         print(f"ERROR: --rtl file is empty: {rp}", file=sys.stderr)
         return 2
 
-    findings, report = run(args.id, pp, rp)
+    findings, report = run(args.id, pp, rp, ctx_paths)
     if args.json:
         Path(args.json).write_text(
             json.dumps(report, indent=2, ensure_ascii=False) + "\n")

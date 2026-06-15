@@ -1789,8 +1789,25 @@ def _is_port_source_allowed(fname: str) -> bool:
 # All three are routed through `_add_pin` → `_parse_port_width` (extended
 # for the `N-bit` idiom) so msb/lsb/bits/width_symbolic populate the row.
 # Pure structural grammar; no chip/vendor/SKU literal.
+#
+# v1.0.78 — for #731 ORGANIC. A leading APPROXIMATION MARKER on the width
+# cell (`~10-bit`, `≈10-bit`, `approx 10-bit`, `about 8`, `~=32-bit`) made
+# the whole width-cell match fail (so the row dropped from the structured
+# 4COL/DIR2 walker into the width-less GFM fallback). `_V1_6_731_APPROX_PFX`
+# is an OPTIONAL non-capturing leading marker prepended to the N-bit /
+# numeric / bracket alternatives; `_parse_port_width` strips the same marker
+# before resolving the integer. Chip-AGNOSTIC: pure approximation grammar.
+_V1_6_731_APPROX_PFX = r"(?:[~≈]\s*=?\s*|\bapprox(?:imately)?\.?\s+|\babout\s+)?"
+# Anchored, REQUIRED form (drop the trailing `?`) used by `_parse_port_width`
+# to strip a leading marker before resolving the integer. `.match` returns
+# None when no marker is present, so a clean `8`/`8-bit` cell is untouched.
+_RE_V1_6_731_APPROX_PFX_LEAD = re.compile(
+    r"^(?:[~≈]\s*=?\s*|\bapprox(?:imately)?\.?\s+|\babout\s+)"
+)
 _V1_6_423_WIDTH_CELL_PERMISSIVE = (
     r"(?P<width>"
+    + _V1_6_731_APPROX_PFX +
+    r"(?:"
     r"\[[^\]\n]{1,40}\][^|\n]{0,60}|"                    # leading bracket [M:L]/[WIDTH-1:0] (+ trailing prose) (#664e)
     r"[^|\n]{0,40}\[[^\]:\n]{0,40}:[^\]\n]{0,40}\][^|\n]{0,40}|"  # cell CONTAINS a [...:...] bracket (#664f)
     r"<?[A-Za-z0-9_]+>?\s*-\s*bit\b[^|\n]{0,40}|"        # <N>-bit / N-bit / <IDENT>-bit (+ trailing) (#664d)
@@ -1801,6 +1818,30 @@ _V1_6_423_WIDTH_CELL_PERMISSIVE = (
     r"-|"                                                # dash placeholder
     r""                                                  # empty
     r")"
+    r")"
+)
+
+# v1.0.78 — for #731 ORGANIC. The signal-name cell of the 4COL / DIR2 grids
+# may carry trailing PARENTHETICAL ALIAS PROSE after the backticked primary
+# name (`` `o_sram_data` (or `o_sram_wdata`) ``). The old capture demanded a
+# closing backtick (or the column `|`) immediately after the name, so any row
+# with ` (or `alt`)` prose failed the signal cell and the WHOLE row dropped
+# from the width-bearing 4COL/DIR2 path into the width-less GFM fallback.
+# This shared signal-cell prefix anchors `(?P<signal>...)` on the FIRST
+# backticked identifier, then tolerates (but does NOT capture) an optional
+# trailing `(or `alt`)` / `(或 `alt`)` group — the SAME grammar as
+# `_RE_V610_ALIAS_GROUP` — up to the next column delimiter. The alias is
+# therefore ATTACHED (i.e. consumed as prose, not promoted as a second
+# top-level port), and the row stays on the width-bearing 4COL/DIR2 path so
+# the primary port keeps its stated bus width. Chip-AGNOSTIC: pure alias
+# grammar + GFM cell delimiter; no chip / vendor / SKU literal.
+_V1_6_731_ALIAS_PROSE = (
+    r"(?:\s*[(（]\s*(?:or|或)\s+[`][A-Za-z][A-Za-z0-9_\[\]:.\/]*[`]\s*[)）])?"
+)
+_V1_6_731_SIGNAL_CELL = (
+    r"^[ \t]*\|\s*[`]{0,2}"
+    r"(?P<signal>[a-zA-Z_][\w]{0,40}(?:\[[^\]\n]{1,40}\])?)"
+    r"[`]{0,2}" + _V1_6_731_ALIAS_PROSE + r"\s*\|"
 )
 
 _RE_L1_L9_RST_IFACE_4COL = re.compile(
@@ -1821,8 +1862,10 @@ _RE_L1_L9_RST_IFACE_4COL = re.compile(
     # `_V1_6_423_WIDTH_CELL_PERMISSIVE` so parametric tokens
     # (`*`, `N`, `DATA_WIDTH-1`, `(variable)`, `-`) match instead
     # of dropping the entire row.
-    r"^[ \t]*\|\s*[`]{0,2}(?P<signal>[a-zA-Z_][\w]{0,40}(?:\[[^\]\n]{1,40}\])?)[`]{0,2}\s*\|"
-    r"\s*[`]{0,2}" + _V1_6_423_WIDTH_CELL_PERMISSIVE + r"[`]{0,2}\s*\|"
+    # v1.0.78 — for #731 ORGANIC. Signal cell shared with the alias-prose
+    # tolerance (`_V1_6_731_SIGNAL_CELL`).
+    _V1_6_731_SIGNAL_CELL
+    + r"\s*[`]{0,2}" + _V1_6_423_WIDTH_CELL_PERMISSIVE + r"[`]{0,2}\s*\|"
     r"\s*(?P<dir>input|output|inout|in|out|io)\s*\|"
     # v1.6.251 — same rationale as the 2-col fix below. Allow
     # inline RST backticked markup in the description cell so rows
@@ -1848,8 +1891,10 @@ _DIR_ABBR_TO_FULL = {
 # the filing's project surfaced with 1/5 ports. Same permissive width
 # cell, same dir alternation; only the column order differs.
 _RE_L1_L9_RST_IFACE_4COL_DIR2 = re.compile(
-    r"^[ \t]*\|\s*[`]{0,2}(?P<signal>[a-zA-Z_][\w]{0,40}(?:\[[^\]\n]{1,40}\])?)[`]{0,2}\s*\|"
-    r"\s*(?P<dir>input|output|inout|in|out|io)\s*\|"
+    # v1.0.78 — for #731 ORGANIC. Same alias-prose-tolerant signal cell as
+    # the 4COL walker (`_V1_6_731_SIGNAL_CELL`).
+    _V1_6_731_SIGNAL_CELL
+    + r"\s*(?P<dir>input|output|inout|in|out|io)\s*\|"
     r"\s*[`]{0,2}" + _V1_6_423_WIDTH_CELL_PERMISSIVE + r"[`]{0,2}\s*\|"
     r"\s*(?P<desc>[^|\n]{0,200}?)\s*\|",
     re.MULTILINE,
@@ -1944,8 +1989,12 @@ _RE_PORT_WIDTH_SYMBOLIC = re.compile(
 # v1.0.44 — for #664 ORGANIC. The `<N>-bit` natural-language width idiom:
 # a leading integer + `-bit` suffix (`8-bit`, `1-bit`, `32-bit`),
 # optionally markdown-emphasis-wrapped (`<8-bit>`). Chip-AGNOSTIC.
+# v1.0.78 — for #731 ORGANIC. Tolerate an OPTIONAL leading approximation
+# marker (`~10-bit`, `≈10-bit`, `approx 10-bit`, `about 8-bit`, `~=32-bit`)
+# via the shared `_V1_6_731_APPROX_PFX`. The marker is non-capturing, so the
+# resolved integer `n` is the bare bit count regardless of the marker.
 _RE_PORT_WIDTH_NBIT = re.compile(
-    r"^<?\s*(?P<n>\d{1,4})\s*-\s*bit\b"
+    r"^<?\s*" + _V1_6_731_APPROX_PFX + r"\s*(?P<n>\d{1,4})\s*-\s*bit\b"
 )
 # Strip a bracket suffix off a signal name and return (bare_name, bracket).
 _RE_NAME_BRACKET_SUFFIX = re.compile(
@@ -1972,6 +2021,16 @@ def _parse_port_width(
     s = str(cell_or_name).strip().strip("`").strip()
     if not s:
         return (None, None, None, None)
+    # v1.0.78 — for #731 ORGANIC. Strip a leading approximation marker
+    # (`~10`, `≈8`, `approx 32`, `about 16`, `~=10-bit`) before resolving the
+    # integer, so an approximated width cell carries its stated bus width
+    # instead of falling through to width=None. `_RE_PORT_WIDTH_NBIT` already
+    # tolerates the same marker internally; stripping here additionally lets a
+    # bare numeric (`~10`) and the GFM/multitable fallback path resolve.
+    # Chip-AGNOSTIC: pure approximation grammar; no chip literal.
+    m_apx = _RE_V1_6_731_APPROX_PFX_LEAD.match(s)
+    if m_apx and m_apx.end() < len(s):
+        s = s[m_apx.end():].strip()
     if s.isdigit():
         n = int(s)
         return (n, n - 1, 0, None)
@@ -5524,6 +5583,15 @@ def _v1_6_420_parse_width_cell(raw: str) -> tuple:
     width_raw_str)``. Numeric → (int, raw). Parametric / placeholder
     → (None, raw). Empty → (None, ""). Never drops a row.
 
+    v1.0.78 — for #731 ORGANIC. A row that falls through to the GFM
+    multitable walker (`gfm_multitable_header_role_v0_3_2`) used to lose its
+    `8-bit` / `1-bit` / `~10-bit` / `[31:0]` width here, because only a PURE
+    numeric cell resolved to an int. Route a non-numeric cell through the
+    shared `_parse_port_width` so the `N-bit` idiom (incl. an optional
+    approximation marker) and a bracketed `[M:L]` cell resolve to their
+    concrete integer width; a symbolic / placeholder cell still yields
+    (None, raw) so the row survives unchanged.
+
     Chip-AGNOSTIC: pure structural shape; no chip identifier."""
     raw = (raw or "").strip()
     if not raw:
@@ -5531,6 +5599,13 @@ def _v1_6_420_parse_width_cell(raw: str) -> tuple:
     m_num = _V1_6_420_RE_WIDTH_NUMERIC.match(raw)
     if m_num:
         return (int(m_num.group(1)), raw)
+    # v1.0.78 — for #731: recognise the `N-bit` / `~N-bit` / bracketed-width
+    # idioms via the canonical parser so the multitable fallback carries the
+    # concrete width. Only a resolved INTEGER is promoted; symbolic widths
+    # (e.g. `[WIDTH-1:0]`) stay (None, raw) to preserve prior behaviour.
+    w_int, _msb, _lsb, _wsym = _parse_port_width(raw)
+    if w_int is not None:
+        return (w_int, raw)
     return (None, raw)
 
 
