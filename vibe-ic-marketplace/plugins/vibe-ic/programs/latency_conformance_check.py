@@ -1042,6 +1042,16 @@ def main(argv=None) -> int:
     elif verdict == "MISMATCH":
         print(f"LATENCY-MISMATCH: measured={report['measured_latency']} but "
               f"spec {expr}={report['expected_latency']}")
+        # ORGANIC #744 (R3-2 author-UX hint) — counting-origin disambiguation.
+        # `measured` counts posedges AFTER the event-latch edge (that edge is
+        # t=0). A spec phrasing the SAME timing INCLUSIVELY (counting the latch
+        # edge itself) reads one higher, so an author who transcribed the
+        # inclusive literal into --expect sees an off-by-one that LOOKS like an
+        # RTL bug but is a counting-origin convention difference.
+        print("  hint (#744): `measured` counts posedges AFTER the event-latch "
+              "edge (that edge is t=0); a spec that counts INCLUSIVELY expects "
+              "measured+1 — re-check whether --expect uses the inclusive origin "
+              "before treating this as an RTL off-by-one.")
     elif verdict == "PASS":
         print(f"latency-conformance ok: measured={report['measured_latency']} "
               f"== spec {expr}")
