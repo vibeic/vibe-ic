@@ -33,10 +33,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 # The official Dockerfile.sim spec — (tool, expected, comparison level).
@@ -130,43 +132,141 @@ def check_versions(probe_output: str) -> Tuple[List[Dict], List[str]]:
     return results, deviations
 
 
+# ── ORGANIC #714: OSS_PNR_IMAGE (synth) requirement preflight ───────────────
+# CVDP area-opt (cid007) problems carry a synth Dockerfile whose BASE image is
+# the `__OSS_PNR_IMAGE__` template variable (distinct from `__OSS_SIM_IMAGE__`).
+# If the scoring driver sets only OSS_SIM_IMAGE, OSS_PNR_IMAGE defaults to the
+# UNPULLABLE proprietary commercial image, the synth container never builds,
+# yosys never runs, and the synth subtest FALSE-FAILS on correct RTL. This
+# preflight detects the requirement and FAILS CLOSED (REFUSE) when the env is
+# unset — it never hardcodes a "magic image to force a pass" (no-cheating).
+# chip-AGNOSTIC: keys on the official CVDP template token, same family as the
+# existing __OSS_SIM_IMAGE__ handling; no design / vendor literal.
+_OSS_PNR_TEMPLATE = "__OSS_PNR_IMAGE__"
+_HARNESS_SCAN_SUFFIXES = (
+    ".synth", ".sim", ".mk", ".sh", ".yaml", ".yml", ".json", ".env", ".cfg")
+
+
+def harness_requires_pnr_image(problem_dir: Path) -> Tuple[bool, List[Path]]:
+    """True iff any harness file under `problem_dir` references the
+    `__OSS_PNR_IMAGE__` template (an area-opt / synth problem). Returns
+    (required, [files…]). Scans only cheap harness-shaped files."""
+    hits: List[Path] = []
+    if not problem_dir.is_dir():
+        return False, hits
+    for f in sorted(problem_dir.rglob("*")):
+        if not f.is_file():
+            continue
+        if not (f.name.startswith("Dockerfile")
+                or f.suffix in _HARNESS_SCAN_SUFFIXES):
+            continue
+        try:
+            if _OSS_PNR_TEMPLATE in f.read_text(errors="ignore"):
+                hits.append(f)
+        except OSError:
+            continue
+    return (len(hits) > 0), hits
+
+
+def _image_pullable(image: str, runner=None) -> Optional[bool]:
+    """Best-effort: True if the image is present locally or its manifest is
+    reachable; False if a CLEAR not-found; None if undeterminable (no docker /
+    network error) — None must NOT trigger a false-refuse."""
+    if shutil.which("docker") is None:
+        return None
+    if runner is None:
+        def runner(cmd):
+            return subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=60)
+    try:
+        if runner(["docker", "image", "inspect", image]).returncode == 0:
+            return True
+        r = runner(["docker", "manifest", "inspect", image])
+        return True if r.returncode == 0 else False
+    except Exception:
+        return None
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
-        description="CVDP scoring-image tool-spec preflight (#536).")
-    ap.add_argument("--image", required=True,
-                    help="the OSS_SIM_IMAGE docker tag to verify")
+        description="CVDP scoring-image preflight (#536 sim-image tool-spec "
+                    "+ #714 OSS_PNR_IMAGE synth requirement).")
+    ap.add_argument("--image", default=None,
+                    help="the OSS_SIM_IMAGE docker tag to verify (#536)")
+    ap.add_argument("--problem-dir", default=None,
+                    help="a CVDP problem dir to scan for an OSS_PNR_IMAGE "
+                         "(area-opt synth) requirement (#714)")
     ap.add_argument("--json", default=None, help="write JSON verdict here")
     args = ap.parse_args(argv)
 
-    if shutil.which("docker") is None:
-        print("ERROR: docker not available — cannot verify the sim image; "
-              "refusing to bless scoring (#536)", file=sys.stderr)
+    if not args.image and not args.problem_dir:
+        print("ERROR: pass --image and/or --problem-dir", file=sys.stderr)
         return 2
-    rc, out = probe_image(args.image)
-    if rc != 0 and not out.strip():
-        print(f"ERROR: image {args.image!r} not runnable (rc={rc})",
-              file=sys.stderr)
-        return 2
-    results, deviations = check_versions(out)
-    verdict = {
-        "image": args.image,
-        "official_spec": {k: v[0] for k, v in OFFICIAL_SPEC.items()},
-        "tools": results,
-        "deviations": deviations,
-        "verdict": "PASS" if not deviations else "REFUSE",
-    }
+
+    verdict: Dict = {}
+    refuse = False
+    deviations: List[str] = []
+
+    # ── #536: sim-image tool-spec check (only when --image given) ──
+    if args.image:
+        if shutil.which("docker") is None:
+            print("ERROR: docker not available — cannot verify the sim image; "
+                  "refusing to bless scoring (#536)", file=sys.stderr)
+            return 2
+        rc, out = probe_image(args.image)
+        if rc != 0 and not out.strip():
+            print(f"ERROR: image {args.image!r} not runnable (rc={rc})",
+                  file=sys.stderr)
+            return 2
+        results, sim_dev = check_versions(out)
+        verdict.update({
+            "image": args.image,
+            "official_spec": {k: v[0] for k, v in OFFICIAL_SPEC.items()},
+            "tools": results,
+        })
+        deviations.extend(sim_dev)
+
+    # ── #714: OSS_PNR_IMAGE (synth) requirement scan (when --problem-dir) ──
+    if args.problem_dir:
+        required, hit_files = harness_requires_pnr_image(Path(args.problem_dir))
+        verdict["oss_pnr_image_required"] = required
+        if required:
+            verdict["oss_pnr_image_template_files"] = [
+                str(f) for f in hit_files]
+            pnr = (os.environ.get("OSS_PNR_IMAGE") or "").strip()
+            verdict["oss_pnr_image_set"] = bool(pnr)
+            if not pnr:
+                deviations.append(
+                    "area-opt synth harness references __OSS_PNR_IMAGE__ but "
+                    "OSS_PNR_IMAGE is UNSET — the synth container would default "
+                    "to the unpullable proprietary image and the synth gate "
+                    "would FALSE-FAIL (#714). Set OSS_PNR_IMAGE to the verified "
+                    "OSS PnR image before scoring.")
+            else:
+                pull = _image_pullable(pnr)
+                verdict["oss_pnr_image_pullable"] = (
+                    "unverified-no-docker" if pull is None else pull)
+                if pull is False:
+                    deviations.append(
+                        f"OSS_PNR_IMAGE={pnr!r} is set but NOT pullable / "
+                        f"present — synth container build would fail (#714).")
+
+    if deviations:
+        refuse = True
+    verdict["deviations"] = deviations
+    verdict["verdict"] = "REFUSE" if refuse else "PASS"
+
     text = json.dumps(verdict, indent=2, ensure_ascii=False)
     if args.json:
-        from pathlib import Path
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(text + "\n")
     print(text)
-    if deviations:
+    if refuse:
         for d in deviations:
             print(f"DEVIATION: {d}", file=sys.stderr)
-        print("REFUSING to score: the sim image deviates from the official "
-              "Dockerfile.sim spec — results would not be comparable "
-              "(#536).", file=sys.stderr)
+        print("REFUSING to score: scoring-environment preflight failed "
+              "(#536 sim-image spec and/or #714 OSS_PNR_IMAGE) — results "
+              "would not be comparable.", file=sys.stderr)
         return 1
     return 0
 
