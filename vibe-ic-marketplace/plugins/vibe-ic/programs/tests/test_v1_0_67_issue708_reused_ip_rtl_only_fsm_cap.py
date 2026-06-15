@@ -65,7 +65,8 @@ def _make_reused_ip_project(root: Path,
                             vendor_rtl: bool = True,
                             source_manifest_reused: bool = False,
                             doc_fsm_text: str | None = None,
-                            sidecar_fsm_patch: bool = False) -> Path:
+                            sidecar_fsm_patch: bool = False,
+                            sidecar_present: bool = True) -> Path:
     """Build a reused-IP fixture: L6 with 1 typed FSM state (IDLE), a persisted
     ic_class, a 100% completeness report, vendor RTL, input docs whose FSM
     context names ONLY IDLE, and minimal digital RTL so the P0 umbrella runs."""
@@ -134,14 +135,20 @@ def _make_reused_ip_project(root: Path,
         "  always @(posedge clk_i) done_o <= 1'b1;\n"
         "endmodule\n")
 
-    # Optional #706 sidecar carrying a qualifying L6 FSM patch.
-    if sidecar_fsm_patch:
+    # #706 ai_deep_review sidecar. KEY (e) requires the FILE to be PRESENT
+    # (positive evidence the AI deep-review ran). By default we write an EMPTY
+    # sidecar (AI ran, found no further doc-traceable FSM state) so the cap can
+    # fire. `sidecar_fsm_patch=True` adds a qualifying L6 patch (key (d) False);
+    # `sidecar_present=False` omits the file entirely (key (e) False).
+    if sidecar_present or sidecar_fsm_patch:
         (root / "phase1").mkdir(parents=True, exist_ok=True)
+        patches = {"L6": [
+            {"name": "WAIT_RESP", "transitions": ["resp"],
+             "actions": ["latch"],
+             "extraction_strategy": "ai_deep_review_patch"}]} \
+            if sidecar_fsm_patch else {}
         (root / "phase1" / "ai_deep_review_patches.json").write_text(
-            json.dumps({"patches": {"L6": [
-                {"name": "WAIT_RESP", "transitions": ["resp"],
-                 "actions": ["latch"],
-                 "extraction_strategy": "ai_deep_review_patch"}]}}))
+            json.dumps({"patches": patches}))
     return root
 
 
@@ -522,6 +529,152 @@ def test_key_a_resolvable_rtl_gen_null_class_still_fires(tmp_path):
     proj = _make_reused_ip_project(tmp_path / "p", ic_class="crypto_accelerator")
     assert F._detected_class_rtl_gen_null_and_vendor_rtl(proj) is True
     assert F._reused_ip_rtl_only_fsm_cap_eligible(proj) is True
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# ORGANIC #708 ROUND-3 — second adversarial review: the regex arms race is
+# unwinnable (a scan aggressive enough to catch lowercase prose state names also
+# OVER-BLOCKS on bus/IP/register/acronym names — wrongly FAILing a CORRECT
+# reused-IP design, and a hardware-acronym stopword set erases real acronym-named
+# states like DMA). Round-3 re-architects:
+#  - key (c) anchors on the plugin's OWN trusted FSM-state extractor
+#    (phase1_doc_one_shot_runner._classify_modes_vs_states_from_text) + a small
+#    set of HIGH-PRECISION explicit-enumeration positions → over-block-FREE and
+#    walker-consistent; it catches every reviewer-listed explicit form AND a real
+#    acronym-named state (DMA), and does NOT grab bus/IP/register/acronym names;
+#  - the residual PURE-LOWERCASE-PROSE NL judgment is routed to the strong AI
+#    channel via NEW key (e): the #706 ai_deep_review sidecar FILE must be
+#    PRESENT (AI-adjudication exit per the classifier doctrine) — without it the
+#    cap fail-closes.
+# ════════════════════════════════════════════════════════════════════════════
+
+# ── round-3 (1): key-(c) catches a real ACRONYM-named state (no erasure) ─────
+def test_key_c_acronym_named_state_not_erased(tmp_path):
+    """A genuine FSM state literally named DMA (a DMA-controller state) must NOT
+    be erased by any hardware-acronym filter — it is a doc-enumerated 2nd state
+    → key (c) False → still FAIL. (Round-3 removed the acronym stopword set that
+    caused this erasure.)"""
+    proj = _make_reused_ip_project(
+        tmp_path / "p",
+        doc_fsm_text="The controller has two states: IDLE and DMA.")
+    nff, l6 = F._l6_doc_records_fsm_present(proj)
+    assert "DMA" in (F._doc_fsm_state_literals(
+        "two states: IDLE and DMA") - {"IDLE"})
+    assert F._docs_name_no_further_fsm_states(proj, l6) is False
+    assert F._reused_ip_rtl_only_fsm_cap_eligible(proj) is False
+
+
+# ── round-3 (2): NO OVER-BLOCK on real reused-IP datasheet prose ────────────
+_OVER_BLOCK_DOCS = {
+    "axi_amba_cortex":
+        "The IBEX core implements a RISC-V CPU with an AXI4-Lite bus and AMBA "
+        "interconnect. Only the IDLE state is documented; the rest of the FSM "
+        "is in the vendor RTL.",
+    "wishbone_regs":
+        "The Wishbone interconnect drives a PicoRV32 core. The CTRL_REG and "
+        "STATUS_REG configure it. At power-up the controller is in IDLE; see "
+        "the vendor RTL for the full state machine.",
+    "ddr_phys":
+        "Interfaces to DDR4, LPDDR5 and GDDR6 PHYs. The reused memory "
+        "controller sits in IDLE on reset; the remaining FSM states are inside "
+        "the vendor RTL.",
+    "flash_parts":
+        "Supports S25FL128, W25Q64 and AT24LC256 serial flash. The SPI master "
+        "FSM idles in IDLE; consult the vendor RTL for the other states.",
+    "crypto_ip":
+        "Built from AES, SHA256 and HMAC engines. The control FSM powers up "
+        "IDLE; its other states are documented only in the vendor RTL.",
+}
+
+
+@pytest.mark.parametrize("form", sorted(_OVER_BLOCK_DOCS))
+def test_no_overblock_on_reused_ip_datasheet(tmp_path, form):
+    """A legitimate reused-IP datasheet that names ONLY IDLE (rest in vendor
+    RTL) but is full of bus/IP/register/acronym/part-number names must NOT be
+    wrongly FAILed: key (c) True and the cap FIRES (an over-block wrongly fails
+    a correct design)."""
+    proj = _make_reused_ip_project(
+        tmp_path / "p", doc_fsm_text=_OVER_BLOCK_DOCS[form])
+    nff, l6 = F._l6_doc_records_fsm_present(proj)
+    assert F._docs_name_no_further_fsm_states(proj, l6) is True, (
+        f"{form}: over-blocked by token(s) "
+        f"{sorted(F._doc_fsm_state_literals(_OVER_BLOCK_DOCS[form]) - {'IDLE'})}")
+    assert F._reused_ip_rtl_only_fsm_cap_eligible(proj) is True
+
+
+# ── round-3 (3): key (e) — AI-adjudication exit (sidecar must be present) ────
+def test_key_e_sidecar_absent_fails_closed(tmp_path):
+    """key (e): if the #706 ai_deep_review sidecar FILE is ABSENT (no AI
+    deep-review ran), the cap fail-closes → still FAIL. The residual lowercase-
+    prose NL judgment must rest on the strong AI channel having run, not on the
+    conservative regex alone."""
+    proj = _make_reused_ip_project(tmp_path / "p", sidecar_present=False)
+    assert F._ai_deep_review_sidecar_present(proj) is False
+    assert F._reused_ip_rtl_only_fsm_cap_eligible(proj) is False
+
+
+def test_key_e_sidecar_present_empty_allows_fire(tmp_path):
+    """key (e): a PRESENT (parseable) sidecar — even with no patches (AI ran,
+    found no further FSM state) — satisfies key (e); combined with the other
+    keys the cap may fire."""
+    proj = _make_reused_ip_project(tmp_path / "p", sidecar_present=True)
+    assert F._ai_deep_review_sidecar_present(proj) is True
+    assert F._reused_ip_rtl_only_fsm_cap_eligible(proj) is True
+
+
+def test_key_e_malformed_sidecar_fails_closed(tmp_path):
+    """key (e): an unparseable sidecar → treated as absent → fail-closed."""
+    proj = _make_reused_ip_project(tmp_path / "p", sidecar_present=True)
+    (proj / "phase1" / "ai_deep_review_patches.json").write_text("{not json")
+    assert F._ai_deep_review_sidecar_present(proj) is False
+    assert F._reused_ip_rtl_only_fsm_cap_eligible(proj) is False
+
+
+# ── round-3 (4): the reviewer-listed explicit-enumeration forms STILL FAIL ───
+_R3_EXPLICIT_LEAK_FORMS = {
+    "states_colon_lowercase": "The FSM has two states: idle and active.",
+    "states_are_mixedcase": "States are IDLE and WaitResp.",
+    "from_X_to_Y": "It transitions from IDLE to Busy.",
+    "advances_to_DONE": "Once running, the machine advances to DONE.",
+    "transition_arrow": "FSM diagram: IDLE -> RUN -> IDLE.",
+    "states_are_list": "The control logic states are fetch, decode and execute.",
+    "enters_BUSY": "On grant the machine enters BUSY.",
+    "bullet_row": ("State table:\n  - row one is idle\n"
+                   "  - row two is ACTIVE"),
+    "double_dash_arrow": "FSM diagram:\nIDLE --> ACTIVE --> DONE.",
+    "states_colon_WAIT_RESP": "FSM states: IDLE, WAIT_RESP.",
+}
+
+
+@pytest.mark.parametrize("form", sorted(_R3_EXPLICIT_LEAK_FORMS))
+def test_r3_explicit_enumeration_still_FAILs(tmp_path, form):
+    """Every reviewer-listed EXPLICIT enumeration form keeps the field-count FSM
+    floor FAILing (key (c) False) — the over-block-safe scan still catches all
+    the explicit / UPPERCASE / position-anchored enumerations."""
+    proj = _make_reused_ip_project(
+        tmp_path / "p", doc_fsm_text=_R3_EXPLICIT_LEAK_FORMS[form])
+    nff, l6 = F._l6_doc_records_fsm_present(proj)
+    assert F._docs_name_no_further_fsm_states(proj, l6) is False, form
+    assert F._reused_ip_rtl_only_fsm_cap_eligible(proj) is False
+    passed, fails, skips, waivers = F._run_structural_rtl_gates(
+        proj, allow_thin_input=False, skip_analog=True)
+    assert _field_count_in(fails)
+    assert not _field_count_in(waivers, is_waiver=True)
+
+
+def test_r3_trusted_extractor_anchor_used(tmp_path):
+    """key (c) anchors on the plugin's OWN trusted FSM-state extractor — a state
+    named in an explicit `fsm states:` narrative position (the trusted
+    extractor's anchor) is caught even without any high-precision-position
+    keyword."""
+    proj = _make_reused_ip_project(
+        tmp_path / "p",
+        doc_fsm_text="fsm states: IDLE, GRANTED, RELEASED.")
+    nff, l6 = F._l6_doc_records_fsm_present(proj)
+    rem = F._doc_fsm_state_literals("fsm states: IDLE, GRANTED, RELEASED.") \
+        - {"IDLE"}
+    assert {"GRANTED", "RELEASED"} <= rem
+    assert F._docs_name_no_further_fsm_states(proj, l6) is False
 
 
 # ── chip-agnostic source guard (cap must name no chip/vendor/SKU literal) ─────
