@@ -276,6 +276,40 @@ def _run(cmd: List[str], cwd: Optional[Path] = None,
 
 
 # -------------------------------------------------------------------------
+# #737 — robust yosys `stat`-block cell-count parser. The yosys `stat`
+# summary line format is version-dependent: classic builds print
+# `Number of cells:  NNNNN` (label + value), while several builds emit
+# only a bare `NNNNN cells` count line in the top-module summary. Keying
+# a parser on just one of those two forms silently reports cells=?  on the
+# other (reporting-integrity gap: a real netlist looks empty). This helper
+# matches BOTH forms anywhere in the combined stdout/stderr text and
+# returns the LAST top-module count it finds (yosys prints the design
+# summary last). Returns None when no stat count line is present at all,
+# which the caller distinguishes from a genuine 0. chip-AGNOSTIC: pure
+# yosys-output-format parsing, no chip/PDK literal.
+_STAT_LABELLED_RE = re.compile(r"Number of cells:\s*([0-9][0-9,]*)")
+_STAT_BARE_RE = re.compile(r"^\s*([0-9][0-9,]*)\s+cells\s*$", re.M)
+
+
+def _parse_yosys_stat_cells(text: str) -> Optional[int]:
+    """Parse the cell count from a yosys `stat`-block text. Prefers the
+    labelled `Number of cells: N` form; falls back to a bare `N cells`
+    summary line. Returns the last match (the design-level summary yosys
+    prints last) as an int, or None if no stat count line is present."""
+    if not text:
+        return None
+    counts = [m.group(1) for m in _STAT_LABELLED_RE.finditer(text)]
+    if not counts:
+        counts = _STAT_BARE_RE.findall(text)
+    if not counts:
+        return None
+    try:
+        return int(counts[-1].replace(",", ""))
+    except (ValueError, IndexError):
+        return None
+
+
+# -------------------------------------------------------------------------
 # v0.2.33 (ORGANIC-20260526-sv-synth-frontend) — Docker container helpers
 # for the SystemVerilog-frontend fallback. The advanced SV frontends
 # (`yosys -m slang` / `read_slang`, `sv2v`, `verilator`) live ONLY in the
@@ -5862,11 +5896,13 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
             synth_top, log, fe_reason, default_rc=rc,
             default_log=out + err)
     if rc == 0 and out_v.is_file():
-        cells = "?"
-        for line in out.splitlines():
-            if "Number of cells" in line:
-                cells = line.strip().split()[-1]
-                break
+        # #737 — the prior parser keyed only on `Number of cells` and read
+        # `out` only; the bare `NNNNN cells` stat form (some yosys builds)
+        # and any count that landed on stderr both slipped through as `?`,
+        # masking a real netlist as un-counted. Parse BOTH stat forms over
+        # the full stdout+stderr text via the shared helper.
+        _cells_int = _parse_yosys_stat_cells(out + "\n" + err)
+        cells = "?" if _cells_int is None else str(_cells_int)
         # v1.6.189 (#76 P2) — alias canonical `netlist.v` next to
         # `netlist_yosys.v` so the audit-side `provenance_check`
         # invocation that looks up the canonical name finds the

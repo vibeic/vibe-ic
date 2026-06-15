@@ -24994,6 +24994,273 @@ def _parse_csr_bitfield_grid(window: str) -> List[Dict[str, Any]]:
     return fields
 
 
+# v1.0.80 — for #736 P2 ORGANIC. L4 Name-column bit-field table walker +
+# wavejson `{"reg":[…]}` field harvester.
+#
+# The pre-v1.0.80 grid parsers (`_parse_csr_bitfield_grid` /
+# `_parse_csr_2col_grid` / `_v1_6_412_parse_bit_definition_grid`) only
+# recognise the `| Bit | R/W | … | Description |` shape, recovering the field
+# NAME from a leading `**NAME:**` in the Description column. The canonical
+# OpenTitan-style per-register field table instead puts the name in a
+# DEDICATED `Name` column with NO leading-name Description cell:
+#
+#     |  Bits  |  Type  |  Reset  | Name        | Description         |
+#     |:------:|:------:|:-------:|:------------|:--------------------|
+#     |  31:0  |   wo   |   0x0   | key_share0  | Initial Key Share 0 |
+#
+# That header fails `_RE_CSR_BITFIELD_HEADER` (no `Description` directly after
+# the access column) so ZERO `register.fields[]` are emitted — register-level
+# capture works but every bit-field detail (name / bit / access / reset) is
+# lost. The same doc family also renders the field layout as a fenced
+# ```wavejson {"reg":[{"name":…,"bits":N},{"bits":M}]} block whose width-
+# accumulated entries are never JSON-parsed into fields (the existing wavedrom
+# handling targets L8 timing `{signal:[…]}`, not L4 `{reg:[…]}`).
+#
+# chip-AGNOSTIC: pure column-header token sets + markdown-link strip + tolerant
+# json.loads on a width-accumulated reg array; NO chip / vendor / SKU literal.
+_V1_0_80_NAMECOL_BIT = re.compile(r"(?i)^(?:bit|bits|bit\s*#|bit#)$")
+_V1_0_80_NAMECOL_TYPE = re.compile(
+    r"(?i)^(?:type|r/?w|access|mode|attr|attribute)$")
+_V1_0_80_NAMECOL_RESET = re.compile(r"(?i)^(?:reset|default|reset\s*value)$")
+_V1_0_80_NAMECOL_NAME = re.compile(
+    r"(?i)^(?:name|field|field\s*name)$")
+# v1.0.80 #736 remediation — a port-DIRECTION header column. A PINOUT / SIGNAL
+# table (`| Bit | Dir | Name | Description |`) is an INTERFACE description, NOT a
+# register bit-field table, so the Name-column walker must NOT harvest it as a
+# register. `Mode` is intentionally absent here: it is a legitimate register
+# access-type header (`R/W mode`) and is matched by `_V1_0_80_NAMECOL_TYPE`. A
+# direction column is the disambiguating signal. chip-AGNOSTIC: pure header
+# token; NO chip / vendor / SKU literal.
+_V1_0_80_NAMECOL_DIR = re.compile(
+    r"(?i)^(?:dir|direction|i/?o|in/?out|inout|input/output)$")
+# A markdown-link-wrapped name cell: `[key_share0](#anchor)` or `[name][]`.
+_V1_0_80_MD_LINK = re.compile(r"^\[([^\]]+)\](?:\([^)]*\)|\[[^\]]*\])?$")
+
+
+def _v1_0_80_strip_name_cell(cell: str) -> str:
+    """v1.0.80 #736 — strip markdown-link / backtick / bold wrappers from a
+    Name-column cell, returning the bare identifier. chip-AGNOSTIC."""
+    s = (cell or "").strip()
+    s = s.strip("`").strip()
+    s = s.strip("*").strip()
+    m = _V1_0_80_MD_LINK.match(s)
+    if m:
+        s = m.group(1).strip().strip("`").strip()
+    return s
+
+
+def _v1_0_80_parse_namecol_bitfield_table(window: str) -> List[Dict[str, Any]]:
+    """v1.0.80 #736 — parse a `| Bits | Type | Reset | Name | … |` markdown
+    field table (name in a dedicated column, no leading-name Description cell)
+    into `register.fields[]` dicts. Returns one
+    `{field_name,bits,msb,lsb,access,reset,extraction_strategy}` per named row;
+    nameless / reserved rows (empty Name cell) are skipped. Empty when no such
+    table exists — never fabricates. chip-AGNOSTIC."""
+    out: List[Dict[str, Any]] = []
+    lines = window.split("\n")
+    n = len(lines)
+    i = 0
+    while i < n:
+        line = lines[i]
+        if "|" in line and i + 1 < n:
+            hdr = [c.strip() for c in line.strip().strip("|").split("|")]
+            sep = lines[i + 1].strip()
+            is_sep = bool(sep) and set(sep) <= set("|-: ") and "-" in sep
+            # Locate the Bit / Name columns (Type / Reset optional).
+            col_bit = col_type = col_reset = col_name = None
+            has_dir_col = False
+            for ci, h in enumerate(hdr):
+                if _V1_0_80_NAMECOL_DIR.match(h):
+                    has_dir_col = True
+                if col_bit is None and _V1_0_80_NAMECOL_BIT.match(h):
+                    col_bit = ci
+                elif col_type is None and _V1_0_80_NAMECOL_TYPE.match(h):
+                    col_type = ci
+                elif col_reset is None and _V1_0_80_NAMECOL_RESET.match(h):
+                    col_reset = ci
+                elif col_name is None and _V1_0_80_NAMECOL_NAME.match(h):
+                    col_name = ci
+            # v1.0.80 #736 remediation — a port-DIRECTION column marks an
+            # INTERFACE / pinout table, not a register bit-field table. Skip it
+            # so a `| Bit | Dir | Name | Description |` signal table is never
+            # mis-harvested as a register (fail-SAFE: skip, never fabricate).
+            if (is_sep and not has_dir_col
+                    and col_bit is not None and col_name is not None
+                    and len(hdr) >= 3):
+                j = i + 2
+                while j < n and "|" in lines[j]:
+                    body = lines[j].strip()
+                    j += 1
+                    if set(body) <= set("|-: "):
+                        continue
+                    cells = [c.strip()
+                             for c in body.strip("|").split("|")]
+                    if len(cells) <= max(col_bit, col_name):
+                        continue
+                    bits = cells[col_bit].strip().strip("`").strip()
+                    name = _v1_0_80_strip_name_cell(cells[col_name])
+                    if not name:
+                        # reserved / nameless gap — skip (mirrors wavejson).
+                        continue
+                    if not re.match(r"^\d+(?::\d+)?$", bits):
+                        continue
+                    msb_lsb = bits.split(":") if ":" in bits else [bits, bits]
+                    try:
+                        msb = int(msb_lsb[0])
+                        lsb = int(msb_lsb[-1])
+                    except ValueError:
+                        msb = lsb = None  # type: ignore
+                    entry: Dict[str, Any] = {
+                        "bits": bits,
+                        "field_name": name,
+                        "access": (cells[col_type].strip().upper()
+                                   if col_type is not None
+                                   and col_type < len(cells) else ""),
+                        "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+                    }
+                    if (col_reset is not None and col_reset < len(cells)
+                            and cells[col_reset].strip()):
+                        entry["reset"] = cells[col_reset].strip()
+                    if msb is not None:
+                        entry["msb"] = msb
+                        entry["lsb"] = lsb
+                    out.append(entry)
+                i = j
+                continue
+        i += 1
+    return out
+
+
+# A fenced ```wavejson / ```wavedrom block (markdown), captured non-greedily.
+_V1_0_80_WAVEJSON_FENCE = re.compile(
+    r"(?is)```(?:wavejson|wavedrom)\s*\n(.*?)\n```")
+
+
+def _v1_0_80_parse_wavejson_reg_block(window: str) -> List[Dict[str, Any]]:
+    """v1.0.80 #736 — parse a fenced ```wavejson/wavedrom block carrying a
+    `{"reg":[{"name":…,"bits":N},{"bits":M}…]}` array into
+    `register.fields[]` dicts. Accumulates each entry's `bits` WIDTH from lsb=0
+    upward to derive msb/lsb; nameless `{"bits":N}` reserved gaps advance the
+    bit cursor but emit no field. Tolerant `json.loads` — a malformed block
+    yields []. Returns one `{field_name,bits,msb,lsb,access}` per named entry.
+    Empty when no reg block exists — never fabricates. chip-AGNOSTIC."""
+    out: List[Dict[str, Any]] = []
+    for fm in _V1_0_80_WAVEJSON_FENCE.finditer(window):
+        body = fm.group(1).strip()
+        if '"reg"' not in body:
+            continue
+        try:
+            obj = json.loads(body)
+        except (ValueError, TypeError):
+            continue
+        reg = obj.get("reg") if isinstance(obj, dict) else None
+        if not isinstance(reg, list):
+            continue
+        lsb = 0
+        for ent in reg:
+            if not isinstance(ent, dict):
+                continue
+            try:
+                width = int(ent.get("bits"))
+            except (TypeError, ValueError):
+                continue
+            if width <= 0:
+                continue
+            msb = lsb + width - 1
+            name = ent.get("name")
+            if isinstance(name, str) and name.strip():
+                access = ""
+                attr = ent.get("attr")
+                if isinstance(attr, list) and attr:
+                    access = str(attr[0]).upper()
+                elif isinstance(attr, str) and attr.strip():
+                    access = attr.strip().upper()
+                bits = f"{msb}:{lsb}" if width > 1 else str(lsb)
+                out.append({
+                    "bits": bits,
+                    "field_name": name.strip(),
+                    "access": access,
+                    "msb": msb,
+                    "lsb": lsb,
+                    "extraction_strategy": "l4_wavejson_reg_v1_0_80",
+                })
+            # nameless reserved gap: advance the cursor, emit nothing.
+            lsb = msb + 1
+    return out
+
+
+# An UPPER_SNAKE register heading: `## ALERT_TEST` / `### CTRL_SHADOWED`. The
+# nearest such heading above a field table / wavejson block is the register
+# the fields belong to. chip-AGNOSTIC: markdown ATX heading + UPPER_SNAKE id.
+_V1_0_80_REG_HEADING = re.compile(
+    r"(?m)^\s{0,3}#{1,6}\s+`?([A-Z][A-Z0-9_]{1,40})`?\s*$")
+
+
+def _v1_0_80_harvest_namecol_register_fields(
+        extracted: Dict[str, str]) -> List[Dict[str, Any]]:
+    """v1.0.80 #736 — harvest per-register field detail from the Name-column
+    table + wavejson reg-block doc family. Returns one
+    `{name,address,reset_value,fields[],evidence,extraction_strategy}` register
+    record per `## REG_NAME` heading that carries a Name-column field table or a
+    wavejson reg block. Fields are deduped on (field_name | bit-range). Empty
+    when neither form exists — never fabricates. chip-AGNOSTIC."""
+    out: List[Dict[str, Any]] = []
+    for fname, text in (extracted or {}).items():
+        if not isinstance(text, str) or not text:
+            continue
+        headings = list(_V1_0_80_REG_HEADING.finditer(text))
+        if not headings:
+            continue
+        for hi, hm in enumerate(headings):
+            reg_name = hm.group(1)
+            body_start = hm.end()
+            body_end = (headings[hi + 1].start()
+                        if hi + 1 < len(headings) else len(text))
+            window = text[body_start:body_end]
+            tbl_fields = _v1_0_80_parse_namecol_bitfield_table(window)
+            wj_fields = _v1_0_80_parse_wavejson_reg_block(window)
+            if not tbl_fields and not wj_fields:
+                continue
+            fields: List[Dict[str, Any]] = []
+            seen: Set[Tuple[Optional[str], Optional[str]]] = set()
+            # Table form wins on a name/bit clash (it carries reset + access).
+            for f in tbl_fields + wj_fields:
+                key = (f.get("field_name"), f.get("bits"))
+                if key in seen:
+                    continue
+                seen.add(key)
+                fields.append(f)
+            if not fields:
+                continue
+            addr = None
+            am = re.search(r"(?i)\boffset\b\s*[:=]?\s*`?(0x[0-9A-Fa-f]+)`?",
+                           window)
+            if am:
+                addr = am.group(1)
+            reset = None
+            rm = re.search(
+                r"(?i)reset\s*default\s*[:=]?\s*`?(0x[0-9A-Fa-f_]+)`?", window)
+            if rm:
+                reset = rm.group(1)
+            # v1.0.80 #736 remediation — register evidence the consumer needs
+            # before it may CREATE a NEW register record or flip
+            # `no_registers_in_input`: an explicit address/offset OR a fenced
+            # wavejson `{"reg":[…]}` block (canonical register layout). A bare
+            # Name-column field table with NO address is not, on its own, proof
+            # of a register — the consumer attaches its fields only to an
+            # already-detected register and never fabricates a fresh one.
+            out.append({
+                "name": reg_name,
+                "address": addr,
+                "reset_value": reset,
+                "fields": fields,
+                "has_reg_evidence": bool(addr) or bool(wj_fields),
+                "evidence": f"input/docs/{fname}",
+                "extraction_strategy": "l4_namecol_register_v1_0_80",
+            })
+    return out
+
+
 # v1.6.326 — for #225 ORGANIC P2. Array-style register collapse.
 # Pre-v1.6.326 each `BASE[N]` row went through `_add_register` as a
 # distinct logical entry, but the upstream regex set was
@@ -29005,6 +29272,72 @@ def gen_l4_regmap(project: Path,
     # / trim_registers / mask_sources). Values are derived from extracted
     # OTP layout where possible, else flagged as empty list (gate counts
     # any non-None populated entry).
+    # v1.0.80 — for #736 P2 ORGANIC. Name-column field table + wavejson
+    # reg-block harvest. The grid parsers above only recognise the
+    # `| Bit | R/W | … | Description |` form; the canonical OpenTitan-style
+    # per-register field table puts the field NAME in a dedicated `Name`
+    # column with NO Description-lead name (`| Bits | Type | Reset | Name |`)
+    # AND/OR renders the layout as a fenced ```wavejson {"reg":[…]} block. Both
+    # were silently dropped — register-level capture worked but ALL bit-field
+    # detail (name / bit / access / reset) was lost. Attach the harvested
+    # fields to the matching register record (dedup on (field_name, bits)); if
+    # no record carries that register name yet, append a fresh record so the
+    # bit-field detail is never stranded. chip-AGNOSTIC.
+    _v1_0_80_namecol = _v1_0_80_harvest_namecol_register_fields(extracted)
+    for _nc in _v1_0_80_namecol:
+        _existing = None
+        for _r in registers:
+            if _r.get("name") == _nc["name"]:
+                _existing = _r
+                break
+        # v1.0.80 #736 remediation — only CREATE a fresh register record when
+        # the harvest carried register evidence (an address/offset or a fenced
+        # wavejson reg block). A bare Name-column field table with no address
+        # that matches no already-detected register is NOT, on its own, proof of
+        # a register (e.g. a `## INTERFACE` pinout/signal table) — skip it so it
+        # never fabricates a spurious register nor flips `no_registers_in_input`.
+        # The direction-column skip in `_v1_0_80_parse_namecol_bitfield_table`
+        # already drops the clearest pinout shape; this is the belt-and-braces
+        # evidence gate for shapes with no Dir column. (fail-SAFE: skip.)
+        if _existing is None and not _nc.get("has_reg_evidence"):
+            continue
+        if _existing is None:
+            registers.append({
+                "address": _nc.get("address") or "",
+                "address_int": (int(_nc["address"], 16)
+                                if isinstance(_nc.get("address"), str)
+                                and _nc["address"].startswith("0x")
+                                else None),
+                "name": _nc["name"],
+                "access": (_nc["fields"][0].get("access") or "")
+                if _nc["fields"] else "",
+                "default": "",
+                "description": "",
+                "reset_value": _nc.get("reset_value") or "unspecified",
+                "fields": list(_nc["fields"]),
+                "extraction_strategy": _nc["extraction_strategy"],
+                "evidence": _nc["evidence"],
+            })
+        else:
+            _existing.setdefault("fields", [])
+            _seen_fk = {(f.get("field_name"), f.get("bits"))
+                        for f in _existing["fields"]}
+            for _f in _nc["fields"]:
+                _fk = (_f.get("field_name"), _f.get("bits"))
+                if _fk in _seen_fk:
+                    continue
+                _seen_fk.add(_fk)
+                _existing["fields"].append(_f)
+            if (not _existing.get("reset_value")
+                    or _existing.get("reset_value") == "unspecified"):
+                if _nc.get("reset_value"):
+                    _existing["reset_value"] = _nc["reset_value"]
+        evidence.setdefault(_nc["evidence"], []).append({
+            "literal": (f"{_nc['name']} field table "
+                        f"({len(_nc['fields'])} fields)"),
+            "label": "L4 Name-column / wavejson bit-field (#736)",
+        })
+
     # v1.6.8 — uncapped fields[] (was [:64]); the row-scan in (b) above can
     # legitimately discover 100+ bytes for a typical 256-byte OTP layout.
     # v1.6.78 — closes #11 FLAG-EVIDENCE CONSISTENCY for L4.registers.
@@ -33068,6 +33401,42 @@ _V1_0_44_DV_HDR_STATUS_COL = re.compile(
 # like `DONE` / `N` never qualifies as an item).
 _V1_0_44_DV_ITEM_TOKEN = re.compile(
     r"\[?([A-Z][A-Z0-9]*(?:_[A-Z0-9]+){1,})\]?")
+# v1.0.80 — for #670 round-12 REOPEN. A markdown reference-link LABEL
+# DEFINITION line: `[UPPER_SNAKE]: <url-or-anchor>`. The canonical OpenTitan
+# checklist (Design D1/D2/D2S/D3 + Verification V1/V2/V2S/V3) lists every
+# milestone token BOTH as a pipe-table `[TOKEN][]` body cell AND as a
+# reference-link label definition `[TOKEN]: …` block below each stage table.
+# The round-1 harvester walked the per-table rows but stopped at a premature
+# 24-row cap (D1+D2 already exceed it) so the Verification-stage tokens
+# (FPV_MAIN_ASSERTIONS_PROVEN / SIM_NIGHTLY_REGRESSION_SETUP /
+# DV_DOC_TESTPLAN_REVIEWED / V2_CHECKLIST_SCOPED …) were never reached.
+# This LABEL-DEFINITION harvest captures every stage's tokens regardless of
+# stage section header / table position, so the V-stage tokens always land.
+# chip-AGNOSTIC: pure `[UPPER_SNAKE]: ` markdown reference-link shape; NO
+# chip / vendor / SKU literal, NO specific checklist-item literal.
+_V1_0_44_DV_LABEL_DEF = re.compile(
+    r"^\s*\[([A-Z][A-Z0-9]*(?:_[A-Z0-9]+){1,})\]\s*:\s*(\S.*)$")
+# A `*checklist*` doc-family filename (generic doc term, not a chip SKU). The
+# reference-link harvest is gated on the filename so an UPPER_SNAKE label
+# definition in an unrelated doc (e.g. a bibliography) is never mis-harvested.
+_V1_0_44_DV_CHECKLIST_FNAME = re.compile(r"(?i)checklist")
+# v1.0.80 #670 remediation — an EXTERNAL reference-link target. A checklist
+# milestone token's label definition points at a SAME-DOCUMENT / relative
+# fragment (e.g. `../README.md#fpv_main_assertions_proven`). A bibliography /
+# "See Also" reference-link points at an external resource (repo / CI / issue
+# tracker). The label pass credits a token ONLY when its target is NOT external
+# (and/or the token is corroborated as a pipe-table item ref), so a `*checklist*`
+# doc that ALSO carries a `## See Also` bibliography never fabricates the
+# external links as verification items. chip-AGNOSTIC: pure URI-scheme / host
+# shape, NO chip / vendor / SKU literal.
+_V1_0_44_DV_EXTERNAL_TARGET = re.compile(
+    r"(?i)^\s*(?:https?:|ftp:|ssh:|git[+:@]|mailto:|//|www\.|"
+    r"[a-z0-9.-]+\.(?:com|org|io|net|dev|gov|edu)\b)")
+# A pipe-table ITEM-COLUMN reference to a milestone token: `[UPPER_SNAKE][]`.
+# A token that appears in this corroborating form somewhere in the SAME doc is a
+# genuine checklist item even if its label target shape is ambiguous.
+_V1_0_44_DV_ITEM_REF = re.compile(
+    r"\[([A-Z][A-Z0-9]*(?:_[A-Z0-9]+){1,})\]\[\s*\]")
 
 
 def _v1_0_44_harvest_dv_checklist_table(
@@ -33080,12 +33449,15 @@ def _v1_0_44_harvest_dv_checklist_table(
     out: List[Dict[str, Any]] = []
     seen: Set[str] = set()
     for fname, text in (extracted or {}).items():
-        if not isinstance(text, str) or "|" not in text:
+        if not isinstance(text, str) or not text:
             continue
         lines = text.split("\n")
         n = len(lines)
         i = 0
-        while i < n:
+        # The per-table walk needs a pipe table; a `*checklist*` doc that
+        # carries ONLY reference-link label definitions (no pipe table) still
+        # reaches the label-harvest pass below. v1.0.80 #670 round-12.
+        while ("|" in text) and i < n:
             line = lines[i]
             if "|" in line and i + 1 < n:
                 hdr = [c.strip() for c in line.strip().strip("|").split("|")]
@@ -33135,11 +33507,63 @@ def _v1_0_44_harvest_dv_checklist_table(
                             "extraction_strategy":
                                 "dv_checklist_table_v1_0_44",
                         })
-                        if len(out) >= 24:
+                        # v1.0.80 #670 round-12: the cap was 24, which D1+D2
+                        # already exceed — so the V-stage rows were never
+                        # reached. Raise it well above the largest real
+                        # checklist (OpenTitan AES ~103 tokens) so EVERY stage
+                        # (D1/D2/D2S/D3 + V1/V2/V2S/V3) is harvested. Downstream
+                        # L7/L10 consumers apply their own 24/32 display caps,
+                        # so a high internal cap never inflates an L-doc.
+                        if len(out) >= 256:
                             return out
                     i = j
                     continue
             i += 1
+        # v1.0.80 — for #670 round-12 REOPEN. Reference-link LABEL-DEFINITION
+        # harvest. The per-table walk above is row-position dependent; this pass
+        # also captures every `[TOKEN]: <anchor>` reference-link label defined
+        # in a `*checklist*` doc, so the Verification-stage milestone tokens
+        # land even if a future stage table shape changes. Gated on the
+        # `*checklist*` doc-family filename so a bare reference-link label in an
+        # unrelated doc is never mis-harvested. chip-AGNOSTIC.
+        if _V1_0_44_DV_CHECKLIST_FNAME.search(fname):
+            # v1.0.80 #670 remediation — corroboration set: every milestone token
+            # that appears as a pipe-table item reference `[TOKEN][]` in THIS doc
+            # is a genuine checklist item. A `[TOKEN]: <target>` label is credited
+            # only when (a) the token is in this set, OR (b) its target is a
+            # same-doc / relative fragment (NOT an external repo/CI/issue URL).
+            # This stops a `## See Also` bibliography (`[REPO]: https://…`) inside
+            # a `*checklist*` doc from being fabricated as verification items,
+            # while the V-stage table tokens (relative `../README.md#anchor`
+            # targets that ALSO appear as `[TOKEN][]` rows) still land.
+            item_refs = {m.group(1) for m in _V1_0_44_DV_ITEM_REF.finditer(text)}
+            for ln in lines:
+                ml = _V1_0_44_DV_LABEL_DEF.match(ln)
+                if not ml:
+                    continue
+                item_tok = ml.group(1)
+                target = (ml.group(2) or "").strip()
+                corroborated = item_tok in item_refs
+                external = bool(_V1_0_44_DV_EXTERNAL_TARGET.match(target))
+                if not corroborated and external:
+                    # A bibliography / See-Also external link, not a checklist
+                    # item — do NOT harvest (fail-SAFE: skip, never fabricate).
+                    continue
+                slug = item_tok.lower()[:48]
+                if slug in seen:
+                    continue
+                seen.add(slug)
+                out.append({
+                    "name": slug,
+                    "method": item_tok,
+                    "description": f"DV checklist item {item_tok}",
+                    "status": None,
+                    "evidence": (f"input/docs/{fname} "
+                                 "(DV verification checklist label)"),
+                    "extraction_strategy": "dv_checklist_label_v1_0_80",
+                })
+                if len(out) >= 256:
+                    return out
     return out
 
 

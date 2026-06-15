@@ -85,8 +85,16 @@ overwritten on every `phase1_one_shot_runner.py` re-run, so any
 inline patches are lost. Instead append to the durable sidecar:
 
 ```
-<project>/ai_deep_review_patches.json
+<project>/phase1/ai_deep_review_patches.json
 ```
+
+**Path matters**: the sidecar MUST live under `phase1/`. This is the
+canonical location the `_path_layout` resolver returns and the location
+every consuming gate (`phase1_doc_input_completeness_check`,
+`l_doc_structured_field_count_check`) reads. A sidecar written to the
+project ROOT (`<project>/ai_deep_review_patches.json`) is the wrong path;
+the gates emit a backward-compat WARNING and still read it, but you should
+write it under `phase1/` directly.
 
 Sidecar schema:
 

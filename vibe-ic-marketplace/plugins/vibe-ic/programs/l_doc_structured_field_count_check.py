@@ -176,11 +176,28 @@ def _load_field_count_sidecar(project: "Path") -> dict:
     per-layer typed-shape filter is applied at merge time. Any read/parse error
     → {} (the sidecar is purely additive; its absence never changes a verdict)."""
     try:
-        side = _pl.phase1_ai_deep_review_patches_file(project)
+        canonical = _pl.phase1_ai_deep_review_patches_file(project)
     except Exception:
         return {}
-    if not side.is_file():
-        return {}
+    side = canonical if canonical.is_file() else None
+    if side is None:
+        # Defense-in-depth: a fresh agent following an older doc may have
+        # written the sidecar to the PROJECT ROOT instead of phase1/. When
+        # the canonical file is absent but a same-named ROOT copy exists,
+        # emit a one-line WARNING and read it for backward-compat instead of
+        # silently dropping the MANDATORY AI-recovery channel.
+        root_legacy = project / "ai_deep_review_patches.json"
+        if root_legacy.is_file():
+            print(
+                "WARNING — ai_deep_review_patches.json found at project "
+                f"ROOT ({root_legacy}); canonical location is {canonical}. "
+                "Reading the ROOT copy for backward-compat — please move it "
+                "under phase1/.",
+                file=sys.stderr,
+            )
+            side = root_legacy
+        else:
+            return {}
     try:
         data = json.loads(side.read_text(errors="replace"))
     except Exception:

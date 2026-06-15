@@ -711,9 +711,39 @@ def _snapshot_marker(audit_text: str, overall: str) -> str:
 
 # ─── artefact gathering ──────────────────────────────────────────────────
 
+# #737 — instance-line matcher for a generic/liberty-mapped gate-level
+# netlist. The legacy matcher anchored on an UPPERCASE-leading token
+# (`^\s*([A-Z][A-Z0-9_]+)\s+...`), which matches ZERO of:
+#   * Yosys generic gates — `\$_NAND_`, `\$_DFF_P_`, … (lead with `\$`)
+#   * lowercase liberty cells — `sky130_fd_sc_hd__nand2_1`, … (lead lowercase)
+# so a fully-populated post-synth netlist of either kind reported 0 cells.
+# This widened matcher accepts a cell-master token that may start with an
+# OPTIONAL escaped-`\$` (generic gates) and any letter case, followed by an
+# instance name (optionally escaped) and the opening `(` of the port map.
+# chip-AGNOSTIC: structural Verilog instance shape, no chip/cell-lib literal.
+_NETLIST_INST_RE = re.compile(
+    r"^\s*("
+    r"\\\$_[A-Za-z0-9_]+_"            # generic gate: \$_NAND_, \$_DFF_P_, …
+    r"|\\?\$?[A-Za-z][A-Za-z0-9_$]*"   # liberty/legacy: sky130_…, NAND2X1, …
+    r")\s+\\?[\w\.\[\]$]+\s*"          # instance name
+    r"(?:/\*[^*]*\*/\s*)?"             # optional inline /* _N_ */ comment
+    r"\(", re.M)
+
+# Verilog structural keywords that lead a line in the same shape as an
+# instance (e.g. `module foo (`, `wire \x ;`) but are NOT cells. Excluded so
+# the widened matcher never inflates the count with declarations.
+_NETLIST_NONCELL = frozenset({
+    "module", "endmodule", "input", "output", "inout", "wire", "reg",
+    "assign", "parameter", "localparam", "function", "endfunction",
+    "generate", "endgenerate", "always", "initial", "begin", "end",
+    "if", "else", "case", "endcase", "for", "while", "specify",
+})
+
+
 def _gather_cell_count(project: Path) -> Dict[str, Any]:
     out: Dict[str, Any] = {"total_synth": None, "top": [], "def_components": None,
-                           "netlist_path": None, "def_path": None}
+                           "netlist_path": None, "def_path": None,
+                           "synth_count_source": None, "empty_netlist": None}
     sd = _pl.synth_dir(project)
     netlist = None
     if sd.is_dir():
@@ -726,14 +756,100 @@ def _gather_cell_count(project: Path) -> Dict[str, Any]:
             cands = list(sd.glob("*synth*.v"))
             if cands:
                 netlist = cands[0]
+    # #737 — PREFER the authoritative yosys `stat` count (stat.json, then
+    # the yosys log's `Number of cells:` / `NNNNN cells` line). A netlist
+    # name scan is fragile across mapping styles (generic vs liberty vs
+    # case), so when the synth step recorded a real stat we trust it. The
+    # netlist scan stays as the fallback AND as the per-type `top` table.
+    stat_total = None
+    stat_top: List[Tuple[str, int]] = []
+    if sd.is_dir():
+        stat_json = sd / "stat.json"
+        if stat_json.is_file():
+            try:
+                sj = json.loads(stat_json.read_text(errors="replace"))
+                mods = sj.get("modules", {}) if isinstance(sj, dict) else {}
+                # PREFER yosys's top-level `design` aggregate when present.
+                # `stat -json -top <top>` emits a sibling `design` block whose
+                # num_cells is the WHOLE-design (flattened-equivalent) leaf
+                # total. The per-module largest-module heuristic UNDER-counts a
+                # HIERARCHICAL (non-flattened) netlist — e.g. leaf{1}/mid{2}/
+                # top{2} reports 2 while the real design total is 3 — and
+                # disagrees with the sibling yosys.log `Number of cells:` line
+                # and the phase2 parser, which both give the design total.
+                # Fall back to the largest module only when no design
+                # aggregate is recorded (e.g. a plain `stat -json` with no
+                # -top, which omits the design block).
+                design = sj.get("design") if isinstance(sj, dict) else None
+                best = None
+                if isinstance(design, dict):
+                    d_nc = design.get("num_cells")
+                    d_by = design.get("num_cells_by_type")
+                    if isinstance(d_nc, int):
+                        best = ("design", d_nc,
+                                d_by if isinstance(d_by, dict) else {})
+                    elif isinstance(d_by, dict):
+                        # No explicit total but a by-type table — sum it.
+                        total = sum(v for v in d_by.values()
+                                    if isinstance(v, int))
+                        best = ("design", total, d_by)
+                if best is None:
+                    # No design aggregate: pick the module with the most cells.
+                    for _name, m in mods.items():
+                        if not isinstance(m, dict):
+                            continue
+                        nc = m.get("num_cells")
+                        if isinstance(nc, int) and (best is None or nc > best[1]):
+                            by_type = m.get("num_cells_by_type") or {}
+                            best = (_name, nc, by_type)
+                if best is not None:
+                    stat_total = best[1]
+                    if isinstance(best[2], dict):
+                        stat_top = sorted(
+                            ((str(k), int(v)) for k, v in best[2].items()
+                             if isinstance(v, int)),
+                            key=lambda kv: kv[1], reverse=True)[:15]
+                    out["synth_count_source"] = "stat.json"
+            except (ValueError, TypeError):
+                stat_total = None
+        if stat_total is None:
+            log = sd / "yosys.log"
+            if log.is_file():
+                lt = log.read_text(errors="replace")
+                m = re.findall(r"Number of cells:\s*([0-9][0-9,]*)", lt)
+                if not m:
+                    m = re.findall(r"^\s*([0-9][0-9,]*)\s+cells\s*$", lt, re.M)
+                if m:
+                    try:
+                        stat_total = int(m[-1].replace(",", ""))
+                        out["synth_count_source"] = "yosys.log"
+                    except ValueError:
+                        stat_total = None
     if netlist is not None:
         out["netlist_path"] = str(netlist.relative_to(project))
         text = netlist.read_text(errors="replace")
         cells = collections.Counter(
-            re.findall(r"^\s*([A-Z][A-Z0-9_]+)\s+\\?[\w\.\[\]]+\s*\(", text, re.M)
+            tok for tok in _NETLIST_INST_RE.findall(text)
+            if tok.lower().lstrip("\\") not in _NETLIST_NONCELL
         )
-        out["total_synth"] = sum(cells.values())
-        out["top"] = cells.most_common(15)
+        scan_total = sum(cells.values())
+        # Authoritative stat count wins; the scan supplies the `top` table
+        # (and is the fallback when no stat was recorded). When stat is
+        # absent fall back to the widened scan; flag a genuinely-empty
+        # netlist DISTINCTLY so a parser-miss (0 because no name matched) is
+        # never silently confused with a real empty netlist.
+        if stat_total is not None:
+            out["total_synth"] = stat_total
+        else:
+            out["total_synth"] = scan_total
+            out["synth_count_source"] = "netlist_scan"
+        out["top"] = stat_top if stat_top else cells.most_common(15)
+        out["empty_netlist"] = (out["total_synth"] == 0)
+    elif stat_total is not None:
+        # stat recorded but the netlist file itself was not located.
+        out["total_synth"] = stat_total
+        out["top"] = stat_top
+        out["empty_netlist"] = (stat_total == 0)
     pd = _pl.pnr_dir(project)
     if pd.is_dir():
         for fn in ("routed.def", "post_hold.def", "post_cts.def",
@@ -1362,9 +1478,20 @@ def _render(project: Path, run_audit: bool = True,
     md.append("| Stage | Count | Source |")
     md.append("|---|---:|---|")
     if cells["netlist_path"]:
-        md.append(f"| Yosys post-synth | "
-                  f"{cells['total_synth'] if cells['total_synth'] is not None else '—'}"
-                  f" | `{cells['netlist_path']}` |")
+        # #737 — distinguish a genuinely-empty netlist (real 0, flagged) from
+        # an un-counted one (`—`). A bare `0` could be a parser-miss; the
+        # explicit ⚠ EMPTY tag makes a real empty netlist unmistakable so it
+        # is never silently treated as "fine, just zero cells".
+        if cells["total_synth"] is None:
+            _cnt = "—"
+        elif cells.get("empty_netlist"):
+            _cnt = "0 ⚠ EMPTY"
+        else:
+            _cnt = str(cells["total_synth"])
+        _src = cells["netlist_path"]
+        if cells.get("synth_count_source"):
+            _src = f"{_src} (count: {cells['synth_count_source']})"
+        md.append(f"| Yosys post-synth | {_cnt} | `{_src}` |")
     else:
         md.append("| Yosys post-synth | — | _(no netlist found)_ |")
     if cells["def_components"] is not None:
@@ -1464,6 +1591,11 @@ def _render(project: Path, run_audit: bool = True,
     md.append("")
     if cells.get("total_synth"):
         md.append(f"- Standard-cell count post-synth: **{cells['total_synth']}** "
+                  f"(from `{cells['netlist_path']}`)")
+    elif cells.get("empty_netlist"):
+        # #737 — a real empty netlist must not vanish from the resource log
+        # just because its count is the falsy 0; flag it loudly.
+        md.append("- Standard-cell count post-synth: **0 ⚠ EMPTY NETLIST** "
                   f"(from `{cells['netlist_path']}`)")
     if cells.get("def_components"):
         md.append(f"- DEF COMPONENTS post-PnR: **{cells['def_components']}**")

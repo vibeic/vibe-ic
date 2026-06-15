@@ -472,9 +472,35 @@ def _split_ai_vs_program(node):
     return "\n".join(ai_parts), "\n".join(prog_parts)
 
 
+def _resolve_sidecar_path(project: Path) -> Path | None:
+    """Return the effective sidecar path, preferring the canonical
+    `<project>/phase1/ai_deep_review_patches.json` (what the resolver +
+    every gate read). If that file is absent but a same-named file exists
+    at the PROJECT ROOT (`<project>/ai_deep_review_patches.json` — the path
+    a fresh agent following an older doc may have written), emit a one-line
+    WARNING to stderr and fall back to the ROOT file for backward-compat,
+    so a misplaced sidecar is surfaced and still honoured instead of being
+    silently dropped. Returns None when neither file exists.
+    """
+    canonical = _pl.phase1_ai_deep_review_patches_file(project)
+    if canonical.is_file():
+        return canonical
+    root_legacy = project / "ai_deep_review_patches.json"
+    if root_legacy.is_file():
+        print(
+            "WARNING — ai_deep_review_patches.json found at project ROOT "
+            f"({root_legacy}); canonical location is "
+            f"{canonical}. Reading the ROOT copy for backward-compat — "
+            "please move it under phase1/.",
+            file=sys.stderr,
+        )
+        return root_legacy
+    return None
+
+
 def _load_ai_patches_sidecar(project: Path):
     """Return a dict {layer_name: serialised_patches_text} from
-    `<project>/ai_deep_review_patches.json`.
+    `<project>/phase1/ai_deep_review_patches.json`.
 
     The sidecar is the durable home of AI deep-review patches —
     storing them inside `generated_docs/L*.json` is unsafe because
@@ -495,8 +521,8 @@ def _load_ai_patches_sidecar(project: Path):
     gate treats sidecar entries as if they were inside the named
     L doc.
     """
-    side = _pl.phase1_ai_deep_review_patches_file(project)
-    if not side.is_file():
+    side = _resolve_sidecar_path(project)
+    if side is None:
         return {}
     try:
         data = json.loads(side.read_text(errors="replace"))
