@@ -2958,37 +2958,59 @@ def _ai_deep_review_sidecar_present(project: Path) -> bool:
 def _reused_ip_rtl_only_fsm_cap_eligible(project: Path) -> bool:
     """ORGANIC #708 — fail-closed deferral cap for the L6 ≥2-fsm_states floor
     FAIL of `l_doc_structured_field_count_check` on a REUSED-IP design whose
-    control FSM lives ONLY in vendor RTL. ALL FIVE keys must hold; any single
-    false key keeps the FAIL (no leak). Orthogonal to _is_thin_input_eligible:
-    fires at 100% completeness, the regime thin-input does NOT cover.
+    control FSM lives ONLY in vendor RTL. ALL keys must hold; any single false
+    key keeps the FAIL (no leak). Orthogonal to _is_thin_input_eligible: fires
+    at 100% completeness, the regime thin-input does NOT cover.
 
     (a) class rtl_gen=null + vendor/reused RTL present,
     (b) completeness == 100% AND input not tiny (negation of thin-input cover),
-    (c) L6 records no_fsm_in_input==false AND the deterministic doc-scan names
-        no further FSM-state literal beyond the extracted set (over-block-safe
-        explicit-enumeration scan — a doc-enumerated missed state keeps the
-        FAIL),
-    (d) the #706 ai_deep_review sidecar yielded ZERO qualifying FSM patch,
+    (c1) L6 records no_fsm_in_input==false (the IP honestly HAS an FSM),
     (e) the #706 ai_deep_review sidecar FILE is PRESENT — positive evidence the
-        strong AI channel examined the docs for FSM content (AI-adjudication
-        exit; bounds key (c)'s lowercase-prose residual). Without it the cap
-        fail-closes."""
+        strong AI channel examined the docs for FSM content,
+    (d) and it yielded ZERO qualifying FSM patch (the AI found no doc-traceable
+        2nd state to recover — else lift via #706, cap not needed).
+
+    ORGANIC #708 round-3 (field-agent reopen, DIRECTION (b)) — the deterministic
+    `_docs_name_no_further_fsm_states` prose-scan veto is REMOVED from the
+    conjunction. It provably can NEVER return True on real CPU documentation:
+    distinguishing an FSM-state-name literal from an ordinary capitalized doc
+    token (ACCESS / DECODE / FLUSH / ACTION / ...) is an irreducible NL judgment
+    a regex cannot make, so the candidate scan over-collects an always-non-empty
+    remainder (the field agent measured 1087–1732 tokens across three rounds,
+    never 0) → the cap was a FUNCTIONAL NO-OP on the very reused-IP artifact it
+    exists for (3 consecutive no-ops). Per the classifier three-tier doctrine,
+    the irreducible "did the docs name a state the walker missed?" judgment is
+    ROUTED to the AI-adjudication channel that already exists — the MANDATORY
+    #706 ai_deep_review — instead of a deterministic regex that can't decide it.
+
+    §4.05 NO-LEAK (preserved WITHOUT the prose-scan veto): a genuinely
+    doc-enumerated 2nd state is recovered by ONE of two independent extractors,
+    BOTH gating the cap off — never deferred:
+      * the deterministic L6 FSM prose-walker extracts it → count ≥ floor → the
+        field-count gate PASSES and this cap is never consulted; AND/OR
+      * the mandatory AI deep-review (key (e) ran) reads the SAME prose with NL
+        judgment and emits a qualifying FSM patch → key (d) flips → the count is
+        lifted to ≥ floor via #706 (PASS on merit, cap not engaged).
+    The cap engages ONLY when the walker extracted < floor AND the AI deep-review
+    ALSO found nothing doc-traceable — i.e. the state genuinely lives only in
+    vendor RTL. A from-scratch design is excluded by (a); a thin (<100%) design
+    routes to thin-input by (b). Resting on the strongest available evidence (the
+    AI deep-review) is the honest fail-closed position; a provably-undecidable
+    regex veto is not."""
     # (a) — class + vendor RTL.
     if not _detected_class_rtl_gen_null_and_vendor_rtl(project):
         return False
     # (b) — 100% completeness, not tiny (else thin-input owns it).
     if not _completeness_is_full_and_not_tiny(project):
         return False
-    # (c) — L6 honestly has an FSM, and the deterministic scan names no further
-    #       state literal beyond the extracted set.
-    no_fsm_is_false, l6_data = _l6_doc_records_fsm_present(project)
+    # (c1) — L6 honestly records an FSM is present (no_fsm_in_input==false).
+    no_fsm_is_false, _l6_data = _l6_doc_records_fsm_present(project)
     if not no_fsm_is_false:
         return False
-    if not _docs_name_no_further_fsm_states(project, l6_data):
-        return False
-    # (e) — AI deep-review must have RUN (sidecar file present) so the residual
-    #       NL judgment ("did the docs name a state the walker missed?") rests
-    #       on the strong AI channel, not on the conservative regex alone.
+    # (e) — AI deep-review must have RUN (sidecar file present): the residual
+    #       NL judgment ("did the docs name a state the walker missed?") rests on
+    #       the strong AI channel (#708 round-3 direction (b)), NOT on a
+    #       deterministic prose scan that provably over-collects on real docs.
     if not _ai_deep_review_sidecar_present(project):
         return False
     # (d) — and it yielded no qualifying FSM patch (else lift via #706).
