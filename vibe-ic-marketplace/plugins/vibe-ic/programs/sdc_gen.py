@@ -245,11 +245,63 @@ def _detect_board_wrapper(rtl_files: List[Path], board: str
     return None
 
 
+def _skip_param_block(after: str) -> str:
+    """ORGANIC #730 — given the text immediately AFTER `module ` (i.e. starting
+    at the module name), return the text positioned at the port-list opening
+    `(`, having skipped an optional leading `#(...)` parameter block.
+
+    A parameterized ANSI header is `module <name> #(<params>) (<ports>)`. The
+    naive `.split("(", 1)` lands on the parameter `(` and captures PARAMETER
+    names as ports while dropping every real port. We therefore scan from the
+    module name: the FIRST `(` that is reached without first seeing a `#` is the
+    port list; if a `#` is seen first, the `(` that follows it opens the
+    parameter block, which we consume with a BALANCED-paren scan, then continue
+    to the port-list `(`. Non-parameterized headers (no `#`) are returned
+    unchanged — the first `(` is already the port list. Chip-AGNOSTIC: pure
+    Verilog/SV token structure, no chip names."""
+    i = 0
+    n = len(after)
+    while i < n:
+        c = after[i]
+        if c == "#":
+            # Skip whitespace/newlines between '#' and its '('.
+            j = i + 1
+            while j < n and after[j] in " \t\r\n":
+                j += 1
+            if j < n and after[j] == "(":
+                # Balanced-paren consume the entire #(...) parameter block.
+                depth = 0
+                k = j
+                while k < n:
+                    if after[k] == "(":
+                        depth += 1
+                    elif after[k] == ")":
+                        depth -= 1
+                        if depth == 0:
+                            k += 1
+                            break
+                    k += 1
+                i = k  # positioned just after the closing ')' of #(...)
+                continue
+            # A bare '#' not opening a paren block — advance past it.
+            i += 1
+            continue
+        if c == "(":
+            # First '(' reached without a pending param block: the port list.
+            return after[i:]
+        i += 1
+    return ""
+
+
 def _parse_module_ports(txt: str) -> List[Tuple[str, str, int]]:
     """Returns list of (name, dir, width) from a module's port list."""
     if "module " not in txt:
         return []
     after = txt.split("module ", 1)[1]
+    # ORGANIC #730 — skip an optional leading `#(parameter...)` block so the
+    # port-list '(' is taken, NOT the parameter '(' (which would capture
+    # parameter names as ports and drop every real port).
+    after = _skip_param_block(after)
     if "(" not in after:
         return []
     body_after_paren = after.split("(", 1)[1]
