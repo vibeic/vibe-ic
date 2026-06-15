@@ -802,6 +802,34 @@ def export(rtl_dir: Path, leaf: str, samples_dir: Path,
             tb_note += " | NO-REGRESSION GUARD: reorder regressed the TB bind " \
                        "(verbatim compiles, reordered does not) → shipped verbatim"
 
+    # ── (B) ORGANIC #742 FACET B — named-parameter-override passthrough gate ──
+    # A hidden TB may bind `<top> #(.STG_WIDTH(16)) u(...)` while the prose names
+    # NO such parameter, so the emitted DUT has no `parameter STG_WIDTH` and the
+    # scorer's compile aborts with `parameter `STG_WIDTH' not found`. Deterministic
+    # PRE-EMIT GATE: parse every named-param override the locatable sibling TB
+    # applies to `top` and, for each one the emitted DUT does NOT declare, ADD a
+    # PASSTHROUGH `parameter X=<default>` to the DUT header. PURE ADD — the param is
+    # UNREAD by the RTL, so the functional check is never relaxed (§4.05). Advisory
+    # / normalize only: when no TB is locatable (the real blind flow), this is a
+    # no-op and the score-side auto-retry handles the contract at scoring time.
+    param_injected: List[str] = []
+    if tb_text:
+        overrides = _pcc.tb_named_param_overrides(tb_text, top)
+        for pname, pval in overrides.items():
+            if _pcc.module_declares_param(reordered, top, pname):
+                continue
+            default = _pcc._default_for(pname, pval)
+            new_text = _pcc.inject_passthrough_param(
+                reordered, top, pname, default)
+            if new_text is not None:
+                reordered = new_text
+                param_injected.append(f"{pname}={default}")
+        if param_injected:
+            tb_note += (" | #742 FACET B: injected passthrough parameter(s) "
+                        + ", ".join(param_injected)
+                        + " (TB binds a named override the prose omits — PURE ADD,"
+                          " functional check unchanged)")
+
     dst.write_text(reordered)
     if reordered != original:
         # Defensive standalone fallback: never let the reorder turn a shippable
@@ -832,6 +860,7 @@ def export(rtl_dir: Path, leaf: str, samples_dir: Path,
             "tb_note": tb_note,
             "reorder_applied": (reordered != original),
             "reorder_reverted": reorder_reverted,
+            "param_injected": param_injected,
             "guard_notes": [p for p in problems if p.startswith("NOTE:")]}
 
 
