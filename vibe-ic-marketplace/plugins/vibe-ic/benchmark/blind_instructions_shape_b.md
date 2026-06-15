@@ -11,6 +11,24 @@ PARAMS your caller provides:
 - `RUNDIR`    absolute path to the run dir (with `samples/`, `problems.list`, `batches/`)
 - `BATCHFILE` list of design dirs (relative to DATASET) — your batch
 
+## CAPTURED-LESSON DIGEST — MUST READ + APPLY (ORGANIC #718/#733)
+
+If `<RUNDIR>/lessons.md` exists (rendered by `benchmark_dispatch.py --setup` from chip-AGNOSTIC `### Skill:` sections), it is run-dir material (blindness preserved). Staging is not enough — you MUST CONSUME it.
+
+**MANDATORY PRE-AUTHORING CONSUMPTION (ORGANIC #733 - staged != consumed).**
+Staging the digest is not enough; you MUST CONSUME it per design. BEFORE you
+author EACH design, you MUST: (1) OPEN the staged `<RUNDIR>/lessons.md`; (2)
+KEYWORD-MATCH the design genre against the digest genre-convention sections -
+`barrel shifter`, `frequency divider / odd / dual-edge`, `async FIFO`,
+`serial<->parallel`, `edge/pulse detect`, `FSM Moore`, `gshare`, `serial twos
+complement`, `K-map -> mux`, `IEEE-754 float multiply`; (3) APPLY the matched
+section to your RTL. section 4-E NO-LEAK: apply a convention ONLY "unless the
+spec states otherwise" - never override an explicit spec; a spec-ambiguous case
+stays spec-faithful (no oracle answer). The #716 recovered-floor gain is only
+realized when the author reads+applies the matched convention, not merely has
+it staged.
+
+
 ## ORCHESTRATION RULES (for the caller spawning the agents — ORGANIC-20260605)
 
 Shape B uses the SAME batch fan-out architecture as Shape C, so the same

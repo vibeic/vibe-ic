@@ -71,7 +71,11 @@ def _render_lesson_digest(run_p: Path,
         "chip-AGNOSTIC patterns captured from prior close-loop recoveries —\n"
         "no design identifiers, no oracle data — so reading them preserves\n"
         "blindness while preventing already-captured recoveries from\n"
-        "recurring. Apply any section whose shape matches your problem.\n\n")
+        "recurring.\n\n"
+        "MANDATORY (ORGANIC #733 - staged != consumed): BEFORE authoring EACH\n"
+        "design you MUST (1) open this digest, (2) keyword-match the design\n"
+        "genre, and (3) APPLY any matched genre-convention section. section\n"
+        "4-E: apply ONLY unless the spec states otherwise.\n\n")
     (run_p / "lessons.md").write_text(head + "\n\n".join(lessons) + "\n")
     return len(lessons)
 
