@@ -8280,29 +8280,67 @@ def _trim_h1_to_ip_phrase(t: str) -> str:
 # single-token validator below otherwise accepts any `tok.isupper() and
 # len>=2`, so a macro in RTL/SIMULATION scope (USE_POWER_PINS, SYNTHESIS, GL)
 # could hijack `ic_name` and corrupt L9.top_module. chip-AGNOSTIC: a fixed
-# macro deny-set + the unambiguous `USE_*` (ifdef-guard) / `MPRJ_*` (Caravel
-# IO) macro prefixes; real all-caps chip acronyms (AES / JTAG / SHA / MD5) are
-# neither in the set nor USE_/MPRJ_-prefixed.
+# generic macro deny-set + the unambiguous `USE_*` ifdef-guard prefix + a
+# STRUCTURAL screen (ORGANIC #719 — a token used as an `ifdef/`define guard in
+# the design is a macro regardless of prefix; this replaced the old SoC-family-
+# specific prefix special-case). Real all-caps chip acronyms (AES / JTAG / SHA /
+# MD5) are in none of these and stay valid ic_name candidates.
 _HDL_PDK_MACRO_STOPLIST = frozenset({
     "USE_POWER_PINS", "SYNTHESIS", "FORMAL", "GL", "SIM", "SIMULATION",
     "FUNCTIONAL", "ANALOG", "COCOTB", "VERILATOR", "YOSYS", "ICARUS",
     "NETLIST", "GATE_LEVEL", "BEHAVIORAL", "TIMING", "SDF_ANNOTATE",
-    "UNIT_DELAY", "NO_TIMING", "ASSERT_ON", "MPRJ_IO_PADS", "USE_PG_PINS",
+    "UNIT_DELAY", "NO_TIMING", "ASSERT_ON", "USE_PG_PINS",
 })
-_RE_HDL_GUARD_MACRO = re.compile(r"^(?:USE|MPRJ)_[A-Z0-9_]+$")
+# ORGANIC #719 — the generic `USE_*` ifdef-guard convention only. The
+# Caravel-family `MPRJ_*` literal (and `MPRJ_IO_PADS` in the stoplist above) was
+# REMOVED: a design-family prefix in program logic over-fits the guard to one
+# SoC family. A differently-named IO-guard macro is now screened STRUCTURALLY
+# (see `guard_macros` below) regardless of prefix.
+_RE_HDL_GUARD_MACRO = re.compile(r"^USE_[A-Z0-9_]+$")
+# A token DEFINED/GUARDED by a conditional-compile directive anywhere in the
+# design's RTL / docs is a macro, never a chip name — captured by name from the
+# `` `ifdef / `ifndef / `elsif / `define `` grammar (chip-AGNOSTIC, no family
+# literal).
+_GUARD_DIRECTIVE_RE = re.compile(
+    r"`(?:ifdef|ifndef|elsif|define)\s+([A-Za-z_]\w*)")
 
 
-def _is_hdl_pdk_macro_token(tok: str) -> bool:
-    """ORGANIC #646 — True iff `tok` is an HDL / PDK conditional-compile macro
-    (USE_POWER_PINS / SYNTHESIS / GL / MPRJ_IO_PADS / …) and therefore never a
-    chip name. chip-AGNOSTIC (deny-set + `USE_*` / `MPRJ_*` macro prefixes)."""
+def _harvest_guard_macros(texts) -> set:
+    """ORGANIC #719 — the set of macro NAMES that appear as conditional-compile
+    guards (`` `ifdef/`ifndef/`elsif/`define X ``) across `texts` (RTL and/or doc
+    blobs). Such a token is structurally a guard macro, NOT an ic_name —
+    regardless of its prefix, so this generalises the old `MPRJ_`-family
+    special-case. chip-AGNOSTIC: pure preprocessor grammar."""
+    out: set = set()
+    if isinstance(texts, str):
+        texts = [texts]
+    for t in (texts or []):
+        if not t:
+            continue
+        for m in _GUARD_DIRECTIVE_RE.finditer(t):
+            out.add(m.group(1))
+    return out
+
+
+def _is_hdl_pdk_macro_token(tok: str, guard_macros=None) -> bool:
+    """ORGANIC #646 + #719 — True iff `tok` is an HDL / PDK conditional-compile
+    macro (USE_POWER_PINS / SYNTHESIS / GL / …) and therefore never a chip name.
+    chip-AGNOSTIC: a generic deny-set + the generic `USE_*` ifdef-guard prefix +
+    a STRUCTURAL screen — a token that appears as a `` `ifdef/`define `` guard in
+    the design (passed in `guard_macros`, harvested via `_harvest_guard_macros`)
+    is a macro whatever its name. Real all-caps chip acronyms (AES / JTAG / SHA /
+    MD5) are in none of these and stay valid ic_name candidates."""
     up = (tok or "").upper()
     if up in _HDL_PDK_MACRO_STOPLIST:
         return True
-    return bool(_RE_HDL_GUARD_MACRO.match(up))
+    if _RE_HDL_GUARD_MACRO.match(up):
+        return True
+    if guard_macros and tok in guard_macros:
+        return True
+    return False
 
 
-def _is_strict_single_token_ic_name(tok: str) -> bool:
+def _is_strict_single_token_ic_name(tok: str, guard_macros=None) -> bool:
     """v1.6.60 — strict validator for a SINGLE-token candidate. The
     issue-#5 v1.6.59 follow-up flagged that "Analyzer" was still
     returned by impl-of's single-token capture; loose
@@ -8332,7 +8370,7 @@ def _is_strict_single_token_ic_name(tok: str) -> bool:
     # ORGANIC #646 — reject HDL/PDK conditional-compile macros BEFORE the
     # all-caps acceptance (else USE_POWER_PINS / SYNTHESIS / GL pass
     # `isupper() and len>=2` and hijack ic_name).
-    if _is_hdl_pdk_macro_token(tok):
+    if _is_hdl_pdk_macro_token(tok, guard_macros):
         return False
     if tok.isupper() and len(tok) >= 2:
         return True
@@ -9014,12 +9052,16 @@ def _ic_name_from_docs_impl(extracted: Dict[str, str],
         r"Design\s+name)\s*[:：]?\s*\*\*\s*[:：]?\s*`?"
         r"([A-Za-z_][A-Za-z0-9_.\-]+)`?",
         re.IGNORECASE)
+    # ORGANIC #719 — harvest the design's own conditional-compile guard names
+    # from the full doc corpus so a structurally-screened guard macro (any
+    # prefix, e.g. a Caravel MPRJ_* pad-ring guard) is never picked as ic_name.
+    _guard_macros = _harvest_guard_macros((extracted or {}).values())
     for text in (extracted or {}).values():
         if not text:
             continue
         dm = _decl_re.search(text)
         if (dm and len(dm.group(1)) >= 3
-                and not _is_hdl_pdk_macro_token(dm.group(1))):
+                and not _is_hdl_pdk_macro_token(dm.group(1), _guard_macros)):
             return dm.group(1)
 
     # ------ Tier 0 (v1.6.244, for #105): folder-name + in-doc
