@@ -215,6 +215,55 @@ _MANIFEST_FLATTEN_KEYS = (
     "flattened_interfaces",
     "flattened",
 )
+# ORGANIC #712 — a reused-IP wrapper may authoritatively expose struct-flattened
+# IP OUTPUTS that L9 lacks ENTIRELY (no L9 root to prefix-expand from, e.g.
+# alert_fatal_o / alert_recov_o assigned from an alert_tx struct). The manifest
+# declares the exact RTL output names under any of these keys.
+_MANIFEST_EXPOSED_OUTPUT_KEYS = (
+    "wrapper_exposed_outputs",
+    "flattened_outputs",
+    "exposed_outputs",
+)
+# ORGANIC #711 — a catalog-pulled top may declare spec-permitted RENAMED
+# interface sub-ports whose L9 'typical/illustrative' names differ from the RTL
+# split names (a rename is NOT a prefix, so prefix-expansion cannot reconcile).
+# The manifest pairs them under one of these keys, each entry a dict with
+# `l9`/`rtl` (or `from`/`to`, `typical`/`actual`) NAME LISTS.
+_MANIFEST_RENAME_KEYS = (
+    "renamed_interfaces",
+    "renamed_buses",
+    "interface_renames",
+)
+
+
+def _manifest_renamed_groups(manifest: dict) -> list:
+    """ORGANIC #711 — list of (l9_name_set, rtl_name_set) declared in the
+    manifest's renamed-interface key(s). Each entry pairs an L9 illustrative
+    interface group with its renamed RTL group. Chip-AGNOSTIC: structure-only,
+    no chip/vendor literal."""
+    out: list = []
+    if not isinstance(manifest, dict):
+        return out
+    for key in _MANIFEST_RENAME_KEYS:
+        v = manifest.get(key)
+        if not isinstance(v, list):
+            continue
+        for entry in v:
+            if not isinstance(entry, dict):
+                continue
+            l9v = (entry.get("l9") or entry.get("from")
+                   or entry.get("typical") or entry.get("illustrative"))
+            rtlv = (entry.get("rtl") or entry.get("to")
+                    or entry.get("actual") or entry.get("renamed"))
+            l9_set = {s.strip() for s in l9v
+                      if isinstance(s, str) and s.strip()} \
+                if isinstance(l9v, list) else set()
+            rtl_set = {s.strip() for s in rtlv
+                       if isinstance(s, str) and s.strip()} \
+                if isinstance(rtlv, list) else set()
+            if l9_set or rtl_set:
+                out.append((l9_set, rtl_set))
+    return out
 
 
 def _manifest_name_set(manifest: dict, keys: tuple[str, ...]) -> set:
@@ -381,6 +430,41 @@ def reconcile_reused_ip(only_l9: list, only_rtl: list,
             else:
                 still_residual.append(root)
         residual_l9 = still_residual
+
+    # (4) ORGANIC #712 — manifest-declared wrapper-exposed OUTPUTS. A reused-IP
+    #     wrapper authoritatively exposes struct-flattened IP outputs that L9
+    #     lacks ENTIRELY (no L9 root, so step (2) prefix-expansion never claims
+    #     them). Drop EXACTLY the declared RTL names from the residual RTL-only
+    #     pool (advisory). No-leak: only the names the manifest lists fire; an
+    #     undeclared extra RTL port still surfaces as a residual FAIL.
+    exposed = _manifest_name_set(manifest, _MANIFEST_EXPOSED_OUTPUT_KEYS)
+    if exposed:
+        claimed_out = [p for p in rtl_pool if p in exposed]
+        for p in claimed_out:
+            rtl_pool.remove(p)
+        if claimed_out:
+            prefix_matched.append(
+                ("(wrapper-exposed-output)", sorted(claimed_out)))
+
+    # (5) ORGANIC #711 — manifest-declared RENAMED interface groups. The L9
+    #     'typical/illustrative' sub-port names differ from the RTL split names
+    #     (a rename is not a prefix). The manifest authoritatively pairs them, so
+    #     drop the declared L9 names from residual_l9 (advisory tie_off) and the
+    #     declared RTL names from residual_rtl (advisory). No-leak: ONLY the
+    #     explicitly-paired names reconcile; an undeclared rename still FAILs.
+    for l9_set, rtl_set in _manifest_renamed_groups(manifest):
+        kept_l9: list = []
+        for nm in residual_l9:
+            if nm in l9_set:
+                tied_off.append(nm)
+            else:
+                kept_l9.append(nm)
+        residual_l9 = kept_l9
+        claimed_r = [p for p in rtl_pool if p in rtl_set]
+        for p in claimed_r:
+            rtl_pool.remove(p)
+        if claimed_r:
+            prefix_matched.append(("(renamed-interface)", sorted(claimed_r)))
 
     return sorted(residual_l9), sorted(rtl_pool), sorted(tied_off), \
         prefix_matched

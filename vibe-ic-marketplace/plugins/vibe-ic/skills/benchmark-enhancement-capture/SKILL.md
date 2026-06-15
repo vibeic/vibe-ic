@@ -144,6 +144,46 @@ mcp-eda / per-skill compliance suites that legitimately live outside
 which is the real invariant and fires zero false-positives). A guard that
 flags the very state you just shipped is not a guard, it's a bug.
 
+## Program-first + AI-backup: the DUAL-TRACK CONVERGENCE doctrine (ORGANIC #716)
+
+> **User directive (binding):** "AI-backup" does **NOT** mean "use AI only when the program
+> fails." It means a **dual-track convergence** — the program and an independent AI solve the
+> SAME problem, the two results are compared, and every disagreement is investigated and
+> converged. A green lone-track result is never accepted on its own.
+
+"Program-first" makes a fix fire deterministically every time — but a program can still be
+*wrong*: a too-narrow regex, a missed template variable (#714's `__OSS_PNR_IMAGE__`), a stale
+baseline, a synth gate that silently never ran. A green program verdict can therefore **mask a
+real defect**. The cross-check is what catches that. The three steps, for EVERY deterministic
+gate:
+
+1. **PROGRAM (primary, program-first).** The gate produces a verdict AND emits the **raw evidence
+   it judged on** — the measured value, the log excerpt, the exit code, the cell/wire count — so
+   an independent track can re-judge the same inputs. A verdict with no attached evidence cannot
+   be cross-checked and is incomplete.
+2. **AI-BACKUP (independent solve, no peeking).** An independent AI **solves/evaluates the same
+   problem from scratch WITHOUT reading the program's answer**, then a **deterministic comparator
+   diffs the two verdicts**. This is *not* an on-failure fallback — it runs even when the program
+   says PASS.
+3. **CONVERGE (the load-bearing step).** Agreement → accept. **Disagreement → converge:** surface
+   BOTH verdicts with their evidence, root-cause *which track is correct and why*, fix the LOSER
+   (tighten the program OR correct the AI reading), and re-run until they agree. **Never accept a
+   lone-track "pass."**
+
+**Why this is binding (evidence):** in the CVDP 100% campaign, FIVE separate "the program/agent
+said done" results that an independent check disagreed with were EACH a real defect — false
+B-floor labels, an agent self-reporting PASS while the independent re-score said FAIL, and a synth
+gate that silently never ran (#714). Convergence — not either track alone — is what reached
+302/302. A lone green track had a measurable false-positive rate.
+
+**How to apply when you author a NEW gate** (this pairs with the Bucket-A ladder above): every new
+deterministic gate ships with (a) evidence emission and (b) a named AI cross-check + converge step
+— not just the program. This applies to every gate captured this session — #714 OSS_PNR preflight,
+#715 multi-file completeness, and the latency / interface / coverage gates (#695/#697/#705): each
+carries its independent cross-check whose disagreements are converged, never an "AI only on
+failure" afterthought. The cross-check is itself subject to the honesty rules below (no peeking at
+the oracle; the blindness boundary still holds).
+
 ## The three buckets — every recovery goes into ONE
 
 For each `(design, before-RTL, after-RTL, AI-reasoning)` recovery record:

@@ -2739,6 +2739,131 @@ def _verilator_sim_escape(
     return vrc, vout, verr, "iverilog_g2012"
 
 
+# ORGANIC #713 — reused-IP nested-`include` closure. A vendor IP `include`s a
+# sibling .sv (e.g. prim_assert.sv) that lives ONLY in a NESTED rtl/**/ subdir.
+# The pre-#713 synth/TB closure globbed HEADER patterns (*.svh/*.vh/*.h/*_pkg.*)
+# only, so an `include`d .sv was never staged, and a single `-I` at the rtl ROOT
+# did not cover the nested dir → slang/sv2v "Could not find file prim_assert.sv".
+# chip-AGNOSTIC: pure file-extension + `include`-grammar + .mk VERILOG_INCLUDE_DIRS
+# parse; no chip / vendor / SKU literal.
+_V713_INCLUDE_RE = re.compile(r'`include\s+"([^"]+)"')
+_V713_MK_INCDIR_RE = re.compile(r'VERILOG_INCLUDE_DIRS\s*[:+]?=\s*(.+)')
+_V713_INC_EXTS = (".sv", ".svh", ".vh", ".h")
+
+
+def _v713_included_basenames(files) -> set:
+    """Every basename `` `include ``d across `files` (e.g. {'prim_assert.sv'})."""
+    out: set = set()
+    for f in files:
+        try:
+            txt = Path(f).read_text(errors="replace")
+        except OSError:
+            continue
+        for m in _V713_INCLUDE_RE.finditer(txt):
+            out.add(os.path.basename(m.group(1)))
+    return out
+
+
+def _v713_rtl_root_of(rtl_files) -> Optional[Path]:
+    """The PROJECT `rtl/` root shared by the source files (so we can rglob the
+    WHOLE reused-IP closure, not just the source files' own parent dirs). A
+    vendor IP nests its OWN `rtl/` subdirs, so the NEAREST `rtl` ancestor is the
+    IP's, not the project root — prefer the canonical `phase2/stage1/rtl`, else
+    the SHALLOWEST `rtl` ancestor."""
+    rtl_ancestors: List[Path] = []
+    for f in rtl_files:
+        for anc in Path(f).resolve().parents:
+            if anc.name == "rtl":
+                rtl_ancestors.append(anc)
+    if rtl_ancestors:
+        for a in rtl_ancestors:
+            if str(a).endswith(os.path.join("phase2", "stage1", "rtl")):
+                return a
+        return min(rtl_ancestors, key=lambda p: len(p.parts))
+    try:
+        return Path(os.path.commonpath(
+            [str(Path(f).resolve()) for f in rtl_files]))
+    except Exception:
+        return None
+
+
+def _v713_includable_sv_closure(rtl_root: Optional[Path],
+                                source_strs) -> List[Path]:
+    """Nested rtl/**/*.sv files that are `` `include ``-CANDIDATES (their basename
+    is `` `include ``d somewhere under rtl/) but are NOT themselves read-as-source
+    — these must be STAGED (copied flat) so a basename `` `include "x.sv" ``
+    resolves. Pre-#713 only header patterns were staged, so an `` `include ``d .sv
+    was silently dropped. chip-AGNOSTIC: extension + `include`-grammar only."""
+    if rtl_root is None or not rtl_root.is_dir():
+        return []
+    src_set = {str(Path(s).resolve()) for s in source_strs}
+    all_sv = [p for p in rtl_root.rglob("*.sv") if p.is_file()]
+    included = _v713_included_basenames(
+        all_sv + [p for p in rtl_root.rglob("*.svh") if p.is_file()])
+    out: List[Path] = []
+    seen: set = set()
+    for p in all_sv:
+        rp = str(p.resolve())
+        if rp in src_set or rp in seen:
+            continue
+        if p.name in included:
+            seen.add(rp)
+            out.append(p)
+    return sorted(out)
+
+
+def _v713_include_dirs(rtl_root: Optional[Path]) -> List[Path]:
+    """Every distinct dir under rtl/ (incl. rtl_root) holding an include-able
+    file (.sv/.svh/.vh/.h). On a MOUNTED tree (no flat staging) each must be a
+    separate `-I` so a nested `` `include `` resolves."""
+    if rtl_root is None or not rtl_root.is_dir():
+        return []
+    dirs: set = set()
+    for ext in _V713_INC_EXTS:
+        for f in rtl_root.rglob(f"*{ext}"):
+            if f.is_file():
+                dirs.add(f.parent.resolve())
+    return sorted(dirs)
+
+
+def _v713_mk_include_dirs(project: Path) -> List[Path]:
+    """Dirs declared in `VERILOG_INCLUDE_DIRS` across input/reference_flow/**/*.mk
+    (the IP's own ORFS include layout the runner otherwise never parses). Best-
+    effort: resolves each token relative to the .mk dir AND the project rtl dir,
+    skips unresolved make-variable refs, returns only existing dirs."""
+    base = project / "input" / "reference_flow"
+    out: List[Path] = []
+    seen: set = set()
+    if not base.is_dir():
+        return out
+    try:
+        rd = _pl.rtl_dir(project)
+    except Exception:
+        rd = None
+    for mk in sorted(base.rglob("*.mk")):
+        try:
+            txt = mk.read_text(errors="replace")
+        except OSError:
+            continue
+        for m in _V713_MK_INCDIR_RE.finditer(txt):
+            for tok in re.split(r"[\s:]+", m.group(1).strip()):
+                tok = tok.strip()
+                if not tok or "$" in tok:
+                    continue  # skip unresolvable make-variable references
+                cands: List[Path] = []
+                if os.path.isabs(tok):
+                    cands.append(Path(tok))
+                else:
+                    cands.append((mk.parent / tok).resolve())
+                    if rd is not None:
+                        cands.append((rd / tok).resolve())
+                for c in cands:
+                    if c.is_dir() and str(c) not in seen:
+                        seen.add(str(c))
+                        out.append(c)
+    return out
+
+
 def _iverilog_compile_with_sv_fallback(
         base_cmd: List[str], rtl_files: List[Path], tb_path: Path,
         run_dir: Path, container: str, top_name: str,
@@ -2818,6 +2943,15 @@ def _iverilog_compile_with_sv_fallback(
                         {str(x) for x in rtl_files} and rp not in _seen_extra):
                     _seen_extra.add(rp)
                     closure_extra.append(hp)
+    # ORGANIC #713 — also stage NESTED `include`d .sv (e.g. prim_assert.sv that
+    # lives only in rtl/**/) so a basename `include` resolves in the flat stage
+    # dir; the header-only globs above never staged an `include`d .sv.
+    for hp in _v713_includable_sv_closure(
+            _v713_rtl_root_of(rtl_files), [str(x) for x in rtl_files]):
+        rp = str(hp.resolve())
+        if rp not in _seen_extra:
+            _seen_extra.add(rp)
+            closure_extra.append(hp)
     for hp in closure_extra:
         _run(["docker", "cp", str(hp), f"{container}:{stage}/{hp.name}"],
              timeout=60)
@@ -5019,6 +5153,12 @@ def _phase2_sv_synth_fallback(project: Path, container: str,
             for p in sorted(rtl_dir.rglob(pat)):
                 if str(p) not in rtl_file_strs:
                     closure_extra.append(p)
+        # ORGANIC #713 — also stage NESTED `include`d .sv (e.g. prim_assert.sv
+        # that lives only in rtl/**/) so a basename `include` resolves in the
+        # flat staging workdir; the header/package globs above never staged an
+        # `include`d .sv, so slang/sv2v died with "Could not find file".
+        closure_extra.extend(
+            _v713_includable_sv_closure(rtl_dir, rtl_file_strs))
     # de-dup the extra closure by resolved path
     _seen_extra: set = set()
     closure_extra = [p for p in closure_extra
@@ -5058,6 +5198,25 @@ def _phase2_sv_synth_fallback(project: Path, container: str,
     # copied) or, on a mounted tree, the rtl dir itself.
     inc_dir = (workdir if needs_staging
                else _to_container_path(str(rtl_dir), container))
+    # ORGANIC #713 — on a MOUNTED tree the rtl ROOT alone does not cover a
+    # nested `include`d .sv; pass a SEPARATE -I for every rtl/**/ subdir that
+    # holds an include-able file, plus any VERILOG_INCLUDE_DIRS declared in the
+    # IP's ORFS .mk. (In the staging case the closure is copied FLAT into
+    # workdir, so a single -I <workdir> already resolves basename includes.)
+    if needs_staging:
+        inc_flag = f"-I {inc_dir}"
+    else:
+        _inc_parts: List[str] = []
+        _seen_inc: set = set()
+        for _d in (_v713_include_dirs(rtl_dir)
+                   + _v713_mk_include_dirs(project)):
+            _cp = _to_container_path(str(_d), container)
+            if _cp not in _seen_inc:
+                _seen_inc.add(_cp)
+                _inc_parts.append(f"-I {_cp}")
+        if inc_dir not in {p[3:] for p in _inc_parts}:
+            _inc_parts.insert(0, f"-I {inc_dir}")
+        inc_flag = " ".join(_inc_parts) if _inc_parts else f"-I {inc_dir}"
 
     netlist_name = out_v.name
     netlist_c = f"{workdir}/{netlist_name}"
@@ -5082,7 +5241,7 @@ def _phase2_sv_synth_fallback(project: Path, container: str,
             f"cd {workdir} && {yosys_path} && "
             f"yosys -p 'plugin -i slang; "
             f"read_slang {reads_join} --top {synth_top} "
-            f"-DSYNTHESIS -I {inc_dir}; "
+            f"-DSYNTHESIS {inc_flag}; "
             f"hierarchy -top {synth_top}; proc; flatten; {synth_tail}'")
         rc, out, err = _docker_exec(container, slang_cmd, timeout=600)
         _append_log(log, f"SLANG FALLBACK FRONTEND ({fe_reason})", out, err)
@@ -5099,7 +5258,7 @@ def _phase2_sv_synth_fallback(project: Path, container: str,
         sv2v_out = f"{workdir}/{synth_top}_sv2v.v"
         sv2v_cmd = (
             f"cd {workdir} && export PATH={TOOLS_IN_CONTAINER}/bin:$PATH && "
-            f"sv2v -DSYNTHESIS -I {inc_dir} {reads_join} "
+            f"sv2v -DSYNTHESIS {inc_flag} {reads_join} "
             f"> {sv2v_out} 2>sv2v.err")
         rc_conv, out_conv, err_conv = _docker_exec(
             container, sv2v_cmd, timeout=600)

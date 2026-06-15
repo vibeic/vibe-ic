@@ -831,6 +831,65 @@ def completion_module_names(completion):
     return set(_MODULE_NAMES_RE.findall(_detection_text(code)))
 
 
+# ORGANIC #715 — SV/Verilog keywords + gate primitives that match the
+# `<type> <name> (` instantiation shape but are NOT module instantiations.
+_NON_INSTANCE_KEYWORDS = frozenset({
+    "module", "macromodule", "function", "task", "if", "else", "for", "while",
+    "case", "casez", "casex", "always", "always_ff", "always_comb",
+    "always_latch", "initial", "final", "assign", "wire", "reg", "logic",
+    "bit", "byte", "int", "integer", "longint", "shortint", "genvar",
+    "generate", "endgenerate", "begin", "end", "posedge", "negedge", "input",
+    "output", "inout", "parameter", "localparam", "typedef", "struct",
+    "union", "enum", "import", "package", "endpackage", "interface", "modport",
+    "property", "sequence", "assert", "assume", "cover", "return", "break",
+    "continue", "repeat", "forever", "fork", "join", "disable", "wait", "do",
+    "real", "time", "string", "event", "signed", "unsigned", "and", "or",
+    "not", "nand", "nor", "xor", "xnor", "buf", "bufif0", "bufif1", "notif0",
+    "notif1", "pmos", "nmos", "cmos", "tran", "tranif0", "tranif1", "pullup",
+    "pulldown", "supply0", "supply1", "defparam", "specify", "endspecify",
+})
+_INSTANCE_RE = re.compile(
+    r"^\s*([A-Za-z_]\w*)\s+(?:#\s*\([^;]*?\)\s*)?[A-Za-z_]\w*\s*\(",
+    re.MULTILINE)
+
+
+def instantiated_module_names(code: str) -> set:
+    """ORGANIC #715 — module-TYPE names INSTANTIATED in `code` (the
+    `<type> [#(params)] <inst> (` shape), comment/string-stripped, minus SV
+    keywords / gate primitives. chip-AGNOSTIC: pure instantiation grammar."""
+    det = _detection_text(code or "")
+    out: set = set()
+    for m in _INSTANCE_RE.finditer(det):
+        nm = m.group(1)
+        if nm and nm not in _NON_INSTANCE_KEYWORDS:
+            out.add(nm)
+    return out
+
+
+def multifile_incompleteness(completion, prompt_text):
+    """ORGANIC #715 — detect a completion that INSTANTIATES a submodule whose
+    definition file was DROPPED. Returns (block, warn):
+      - block: instantiated modules that the PROMPT requires the author to
+        deliver (required_module_names_from_prompt) but that NO emitted file
+        defines → a definite dropped-required-file; the hidden harness compiles
+        every `rtl/*.sv` it implies and ELAB-fails 'Unknown module type'. Safe
+        to BLOCK (the scorer would fail it anyway; re-emitting the file PASSes).
+      - warn: instantiated-but-undefined modules NOT in the required set — these
+        MAY be harness-supplied context modules (legitimately instantiated), so
+        they are advisory only (§4.05: never false-BLOCK a context-module use).
+    chip-AGNOSTIC: pure instantiation + prompt-required + defined-module parse."""
+    code, kind = extract_code(completion or "")
+    if kind == "doc_only" or not code:
+        return [], []
+    defined = completion_module_names(completion)
+    instantiated = instantiated_module_names(code)
+    undefined = instantiated - defined
+    required = required_module_names_from_prompt(prompt_text or "")
+    block = sorted(undefined & required)
+    warn = sorted(undefined - required)
+    return block, warn
+
+
 # ORGANIC #642 — a CVDP draft id follows the harness's universal naming
 # scheme `cvdp_copilot_<problem>` plus an optional trailing `_NNNN` variant
 # suffix. The id stem `cvdp_copilot_<problem>` is the harness TOPLEVEL for the
@@ -1165,6 +1224,35 @@ def main(argv=None) -> int:
                                f"TOPLEVEL — #642 round-2)")
                         entry.setdefault("notes", []).append(
                             "WARN module-name-conformance: " + msg)
+                # ORGANIC #715 — multi-file completeness. A completion that
+                # INSTANTIATES a submodule whose file was dropped passes the
+                # single-file emit gate (the missing module is tolerated as
+                # 'context') but ELAB-fails at scoring (Unknown module type).
+                # Hard-BLOCK ONLY when the dropped module is one the PROMPT
+                # requires the author to deliver (definite incomplete; the
+                # scorer would fail it anyway and re-emitting the file PASSes);
+                # an instantiated-but-undefined module NOT in the required set
+                # MAY be a harness-supplied context module → advisory WARN only
+                # (§4.05: never false-BLOCK a legitimate context-module use).
+                _mf_block, _mf_warn = multifile_incompleteness(
+                    out_rec.get("completion", ""),
+                    prompts.get(str(rec.get("id")), "") if prompts else "")
+                if _mf_block:
+                    ok = False
+                    entry["verdict"] = "BLOCKED"
+                    entry.setdefault("notes", []).append(
+                        f"multi-file INCOMPLETE (#715): instantiates "
+                        f"prompt-required module(s) {_mf_block} but no emitted "
+                        f"file defines them — the hidden harness ELAB-fails "
+                        f"'Unknown module type'. Emit every required submodule "
+                        f"as a JSON code-dict file.")
+                if _mf_warn:
+                    entry.setdefault("notes", []).append(
+                        f"WARN multi-file (#715): instantiates undefined "
+                        f"module(s) {_mf_warn} not in the prompt-required set "
+                        f"— if these are NOT harness-supplied context modules, "
+                        f"the scorer will ELAB-fail (advisory; cannot prove "
+                        f"context vs author-submodule without the prompt).")
                 # ORGANIC #695 — prompt→interface conformance ADVISORY stage:
                 # module-name CASE + missing-port + port-direction, all derived
                 # from the PROMPT + the emitted RTL only (BLIND — never reads
