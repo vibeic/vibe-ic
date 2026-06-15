@@ -555,3 +555,35 @@ element of your output: section headers, handoff lines, summary blocks.
 **Your task is not complete until the audit returns PASS.** Missing
 elements are the single largest source of skill-execution non-determinism
 across different agents.
+
+## § 4.1 — FLOOR-proof: never declare a benchmark-defect FLOOR without the "original-RTL-also-fails" proof (ORGANIC #724)
+
+> **Binding (P1):** across one campaign, FIVE residuals were initially labelled
+> "benchmark defect / spec-vs-TB contradiction" and ALL FIVE were later
+> overturned and PASSED — each was our OWN off-by-one / interface / reset-boundary
+> / area-encoding bug, not a benchmark defect. A FLOOR claim is almost always a
+> misread, and the asymmetry is severe: **a false FLOOR ships an unfixed real bug**,
+> while the disproving proof is cheap.
+
+A residual may be labelled **FLOOR** (Category A/B/E in § 4) ONLY after this
+three-step **FLOOR-proof**, in order:
+
+1. **Run the EXACT official scorer** on the candidate RTL (the real harness, the
+   real toolchain, any required env image) and read the **real failing
+   assertion** — not a paraphrase, not your own TB.
+2. **Run the ORIGINAL, UNMODIFIED reference/golden RTL through the SAME scorer.**
+   If the original ALSO fails → it is a genuine benchmark/oracle defect (FLOOR).
+   **If the original PASSES → the defect is OURS** (authoring/extraction bug);
+   it is NOT a floor — go fix it.
+3. **Only confirm FLOOR** when you can quote BOTH (a) the exact harness assertion
+   that fails AND (b) the exact prompt line mandating two **mutually-exclusive**
+   values for identical stimulus, AND you have shown (step 2) the original RTL
+   also fails.
+
+This is the spec-faithful companion to the **#716 dual-track convergence**
+doctrine (program verdict + independent AI solve + converge): the "original-RTL-
+also-fails" run is the independent reference track that overturns a single-track
+FLOOR misread. *why_not_bucket_a*: deciding whether two assertions are truly
+mutually exclusive for identical stimulus is an open-ended meaning judgment no
+regex makes; the deterministic half (a FLOOR claim MUST carry the original-RTL-
+also-fails scorer evidence) is the gate condition recorded here.
