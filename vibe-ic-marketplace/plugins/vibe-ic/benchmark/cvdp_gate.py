@@ -866,18 +866,57 @@ def instantiated_module_names(code: str) -> set:
     return out
 
 
-def multifile_incompleteness(completion, prompt_text):
-    """ORGANIC #715 — detect a completion that INSTANTIATES a submodule whose
-    definition file was DROPPED. Returns (block, warn):
-      - block: instantiated modules that the PROMPT requires the author to
-        deliver (required_module_names_from_prompt) but that NO emitted file
+def context_module_names(context_files) -> set:
+    """ORGANIC #715 round-2 — the module-name STEMS the prompt's `input.context`
+    ALREADY PROVIDES (a CVDP record's `input.context` is a dict whose keys are
+    `rtl/<name>.sv` / `verif/<name>.sv` paths the harness compiles ALONGSIDE the
+    author's completion). A module instantiated by the author but supplied here
+    is a CONTEXT module — the author must NOT (and need not) re-emit it, so it is
+    NEVER an INCOMPLETE-file block. chip-AGNOSTIC: pure filename-stem parse.
+    Accepts the dict (keys used) or an iterable of path strings."""
+    out: set = set()
+    if isinstance(context_files, dict):
+        names = context_files.keys()
+    elif context_files:
+        names = context_files
+    else:
+        names = []
+    _RTL_EXTS = (".sv", ".svh", ".v", ".vh")
+    for k in names:
+        if not isinstance(k, str):
+            continue
+        base = Path(k).name
+        # only RTL files name a module; a docs/spec.md context entry is not a
+        # module and must NOT be added (it would never collide with an
+        # instantiated module name, but keep the set clean + intent-correct).
+        matched = next((e for e in _RTL_EXTS if base.endswith(e)), None)
+        if not matched:
+            continue
+        stem = base[: -len(matched)]
+        if stem:
+            out.add(stem)
+    return out
+
+
+def multifile_incompleteness(completion, prompt_text, context_modules=None):
+    """ORGANIC #715 (round-2 #715-overfire fix) — detect a completion that
+    INSTANTIATES a submodule whose definition file was DROPPED. Returns
+    (block, warn):
+      - block: instantiated modules the PROMPT requires the author to deliver
+        (required_module_names_from_prompt) AND that are NOT already provided by
+        the prompt's `input.context` (context_modules) AND that NO emitted file
         defines → a definite dropped-required-file; the hidden harness compiles
-        every `rtl/*.sv` it implies and ELAB-fails 'Unknown module type'. Safe
-        to BLOCK (the scorer would fail it anyway; re-emitting the file PASSes).
+        every `rtl/*.sv` it implies and ELAB-fails 'Unknown module type'. Safe to
+        BLOCK (the scorer would fail it anyway; re-emitting the file PASSes).
       - warn: instantiated-but-undefined modules NOT in the required set — these
-        MAY be harness-supplied context modules (legitimately instantiated), so
+        MAY be harness/context-supplied modules (legitimately instantiated), so
         they are advisory only (§4.05: never false-BLOCK a context-module use).
-    chip-AGNOSTIC: pure instantiation + prompt-required + defined-module parse."""
+    ROUND-2 §4.05 no-leak: a module the prompt's `input.context` ALREADY PROVIDES
+    (e.g. a `gf_multiplier` context module the author correctly instantiates from
+    a top `gf_mac`) must be EXCLUDED from `block` — it is the harness's file, not
+    a dropped author file. Only an author-responsible module that is required,
+    undefined, AND not context-provided blocks. chip-AGNOSTIC: instantiation +
+    prompt-required + context-provided + defined-module parse."""
     code, kind = extract_code(completion or "")
     if kind == "doc_only" or not code:
         return [], []
@@ -885,8 +924,11 @@ def multifile_incompleteness(completion, prompt_text):
     instantiated = instantiated_module_names(code)
     undefined = instantiated - defined
     required = required_module_names_from_prompt(prompt_text or "")
-    block = sorted(undefined & required)
-    warn = sorted(undefined - required)
+    context = set(context_modules or ())
+    # a context-provided module is the harness's responsibility, never a dropped
+    # author file → exclude from BOTH the block set and the required set.
+    block = sorted((undefined & required) - context)
+    warn = sorted(undefined - required - context)
     return block, warn
 
 
@@ -946,6 +988,40 @@ def _load_prompts(path):
                or d.get("text") or "")
         if rid is not None:
             out[str(rid)] = txt
+    return out
+
+
+def _load_context_modules(path):
+    """ORGANIC #715 round-2 — {id: set(context-module-stems)} from a prompts /
+    dataset JSONL whose records carry `input.context` (a CVDP record's
+    harness-provided files). Tolerates `input.context` as a dict (path keys) or
+    a list of path strings; also a top-level `context`. Empty when absent (no
+    relaxation → the round-1 behaviour, so a dataset without context info still
+    blocks a genuine dropped file). chip-AGNOSTIC: pure filename-stem parse."""
+    out = {}
+    p = Path(path)
+    if not p.is_file():
+        return out
+    for ln in p.read_text(errors="replace").splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            d = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        rid = d.get("id")
+        if rid is None:
+            continue
+        ctx = None
+        inp = d.get("input")
+        if isinstance(inp, dict):
+            ctx = inp.get("context")
+        if ctx is None:
+            ctx = d.get("context")
+        stems = context_module_names(ctx) if ctx else set()
+        if stems:
+            out[str(rid)] = stems
     return out
 
 
@@ -1151,6 +1227,10 @@ def main(argv=None) -> int:
             rec["completion"] = c.replace("\r\n", "\n").replace("\r", "\n")
     # ORGANIC #559 — optional prompt-aware filename↔module-name conformance.
     prompts = _load_prompts(args.prompts) if args.prompts else {}
+    # ORGANIC #715 round-2 — per-id context-module stems from the prompts /
+    # dataset `input.context` so multi-file completeness never false-BLOCKs a
+    # harness-provided context module the author correctly instantiates.
+    context_modules = _load_context_modules(args.prompts) if args.prompts else {}
     # ORGANIC #705 — optional per-id latency specs the gate ENFORCES (measured
     # vs spec literal) as a pre-emit BLOCK.
     latency_specs = (_load_latency_specs(args.latency_specs)
@@ -1236,7 +1316,8 @@ def main(argv=None) -> int:
                 # (§4.05: never false-BLOCK a legitimate context-module use).
                 _mf_block, _mf_warn = multifile_incompleteness(
                     out_rec.get("completion", ""),
-                    prompts.get(str(rec.get("id")), "") if prompts else "")
+                    prompts.get(str(rec.get("id")), "") if prompts else "",
+                    context_modules=context_modules.get(str(rec.get("id"))))
                 if _mf_block:
                     ok = False
                     entry["verdict"] = "BLOCKED"
