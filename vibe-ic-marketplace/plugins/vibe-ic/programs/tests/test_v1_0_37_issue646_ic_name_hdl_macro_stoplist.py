@@ -39,22 +39,46 @@ import phase1_doc_one_shot_runner as R  # noqa: E402
 
 @pytest.mark.parametrize("tok,is_macro", [
     ("USE_POWER_PINS", True), ("SYNTHESIS", True), ("GL", True),
-    ("MPRJ_IO_PADS", True), ("USE_PG_PINS", True), ("MPRJ_IO", True),
+    ("USE_PG_PINS", True),
     ("FORMAL", True), ("SIMULATION", True),
     ("AES", False), ("JTAG", False), ("SHA", False), ("MD5", False),
     ("SPI", False), ("USB", False), ("RISCV", False),
+    # ORGANIC #719 — the Caravel-family `MPRJ_*` LITERAL was removed from
+    # program logic; without structural context an `MPRJ_*` token is now a
+    # normal token (screened structurally instead — see the test below).
+    ("MPRJ_IO_PADS", False), ("MPRJ_IO", False),
 ])
 def test_is_hdl_pdk_macro_token(tok, is_macro):
     assert R._is_hdl_pdk_macro_token(tok) is is_macro
 
 
+# ── ORGANIC #719 — STRUCTURAL guard-macro screen (chip-family-agnostic) ──────
+@pytest.mark.parametrize("tok", ["MPRJ_IO_PADS", "FOO_BAR_GUARD", "CFG_DBG"])
+def test_structural_guard_macro_screened_any_prefix(tok):
+    """A token used as an `ifdef/`ifndef/`define guard in the design is a macro
+    REGARDLESS of prefix — this generalises the old Caravel `MPRJ_` literal."""
+    guards = R._harvest_guard_macros([f"`ifdef {tok}\n  wire x;\n`endif\n"])
+    assert tok in guards
+    assert R._is_hdl_pdk_macro_token(tok, guards) is True
+    # §4.05: a real acronym NOT used as a guard stays a valid ic_name token
+    assert R._is_hdl_pdk_macro_token("AES", guards) is False
+
+
 @pytest.mark.parametrize("tok,ok", [
     ("USE_POWER_PINS", False), ("SYNTHESIS", False), ("GL", False),
-    ("MPRJ_IO_PADS", False),
     ("AES", True), ("JTAG", True), ("SHA", True), ("MD5", True),
     ("ChaCha20", True), ("LiteDRAM", True)])
 def test_strict_single_token_rejects_macros_keeps_acronyms(tok, ok):
     assert R._is_strict_single_token_ic_name(tok) is ok
+
+
+def test_strict_single_token_structural_guard_rejected_NOLEAK():
+    """ORGANIC #719 — a guard macro (ANY prefix, incl. non-MPRJ) is rejected as
+    an ic_name when its guard context is supplied; a real acronym is kept."""
+    guards = {"MPRJ_IO_PADS", "FOO_GUARD"}
+    assert R._is_strict_single_token_ic_name("MPRJ_IO_PADS", guards) is False
+    assert R._is_strict_single_token_ic_name("FOO_GUARD", guards) is False
+    assert R._is_strict_single_token_ic_name("AES", guards) is True
 
 
 # ── (2) the acceptance: explicit declaration beats an in-scope macro ──────────
