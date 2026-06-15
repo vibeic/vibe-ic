@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 683
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 683)
+- **Total programs (excluding helpers / shims):** 684
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 684)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 674 |
+| `any` | 675 |
 
 ## Alphabetical listing
 
@@ -648,6 +648,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `tapeout_signoff_check` | any | — | wrapper for signoff_audit --mode tapeout. |
 | `tb_timing_extremes_check` | any | — | LL-6. |
 | `tb_vcs_only_construct_detect` | any | — | detect VCS/Xcelium-only |
+| `tb_vcs_only_construct_remediate` | any | — | ORGANIC #717 |
 | `testbench_exists_check` | any | — | Deterministic testbench existence and coverage checker. |
 | `testbench_gen` | any | — | emit unit + integration testbench from L10 test_cases. |
 | `tester_oracle_health_check` | any | v0.45 | Prove the tester works before iterating RTL. |
@@ -755,7 +756,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (674 programs)
+### `any` (675 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1372,6 +1373,7 @@ _(no programs in this group)_
 - `tapeout_signoff_check` — wrapper for signoff_audit --mode tapeout.
 - `tb_timing_extremes_check` — LL-6.
 - `tb_vcs_only_construct_detect` — detect VCS/Xcelium-only
+- `tb_vcs_only_construct_remediate` — ORGANIC #717
 - `testbench_exists_check` — Deterministic testbench existence and coverage checker.
 - `testbench_gen` — emit unit + integration testbench from L10 test_cases.
 - `tester_oracle_health_check` — Prove the tester works before iterating RTL.  _[v0.45]_
