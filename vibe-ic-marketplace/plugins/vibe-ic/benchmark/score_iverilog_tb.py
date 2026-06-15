@@ -300,6 +300,43 @@ def _verilator_compile_run(design: str, sample_c: str, tb: Path, design_dir: Pat
                 pass
 
 
+def _aliased_golden_srcs(design: str, dataset: Path, layout: dict,
+                         refs: "List[Path]", tmpdir: str):
+    """ORGANIC #709 — shared golden-module-name canonicalization for BOTH the
+    #690 COMPILE audit and the #679 RUNTIME audit (so they can never drift again).
+
+    The Shape-B `verified_*.v` convention names the golden module `verified_<X>`
+    while the hidden TB instantiates the canonical DUT name `<X>` (the spec's
+    `Module name:`). A VERBATIM compile of such a golden + TB ALWAYS fails
+    elaboration (`Unknown module type: <X>`), so the audit must first ALIAS the
+    golden's top-module name to the canonical DUT name the TB binds.
+
+    Returns (srcs, golden_ports):
+      srcs        — [aliased_first_ref] + [str(p) for p in refs[1:]] (the FIRST
+                    ref's top module renamed to the canonical DUT name, written
+                    into `tmpdir`; remaining refs verbatim for multi-file goldens).
+      golden_ports— the golden header's declared port set.
+    Returns (None, set()) when the canonical name or the golden's module name
+    cannot be resolved (→ no determination; the caller returns its undetermined
+    sentinel). chip-AGNOSTIC: registry layout + the spec's own Module-name line."""
+    dut_name = _canonical_dut_name_shape_b(design, dataset, layout)
+    if not dut_name:
+        return (None, set())
+    golden_text = refs[0].read_text(errors="ignore")
+    mm = re.search(r"\bmodule\s+(\w+)", golden_text)
+    if not mm:
+        return (None, set())
+    golden_mod = mm.group(1)
+    golden_ports = _module_declared_ports(golden_text)
+    aliased = (golden_text if golden_mod == dut_name
+               else re.sub(rf"\b{re.escape(golden_mod)}\b", dut_name, golden_text))
+    alias_f = os.path.join(tmpdir, "golden_alias.v")
+    with open(alias_f, "w") as fh:
+        fh.write(aliased)
+    srcs = [alias_f] + [str(p) for p in refs[1:]]
+    return (srcs, golden_ports)
+
+
 def _golden_ref_fails_own_tb_runtime(design: str, dataset: Path,
                                      layout: dict, args: dict):
     """Shape-B RUNTIME golden-fails-own-TB audit (#679). Mirror of the Shape-C
@@ -348,7 +385,19 @@ def _golden_ref_fails_own_tb_runtime(design: str, dataset: Path,
     use_cwd = args.get("cwd_design_dir", True)
     with tempfile.TemporaryDirectory() as td:
         binp = os.path.join(td, "golden_bin")
-        srcs = [str(p) for p in refs] + [str(tb)]
+        # ORGANIC #709 — alias the golden's top-module name to the canonical DUT
+        # name the TB instantiates (the #690 compile audit already did this; the
+        # #679 runtime audit did NOT, so for the `verified_*.v` convention the
+        # verbatim compile ALWAYS failed `Unknown module type` and this helper
+        # returned None — silently charging an irreducible dataset defect to the
+        # model). Shared with #690 via `_aliased_golden_srcs` so they can't drift.
+        aliased_srcs, _golden_ports = _aliased_golden_srcs(
+            design, dataset, layout, refs, td)
+        if aliased_srcs is None:
+            # Could not resolve the canonical DUT name / golden module name → no
+            # determination (don't flip a model FAIL on an unattributable case).
+            return None
+        srcs = aliased_srcs + [str(tb)]
         try:
             c = subprocess.run(["iverilog", "-g2012", "-o", binp] + srcs,
                                capture_output=True, text=True, timeout=120)
@@ -449,27 +498,15 @@ def _golden_ref_compiles_with_tb_shape_b(design: str, dataset: Path, layout: dic
     refs = sorted(design_dir.glob(ref_glob))
     if not refs:
         return (None, set())
-    dut_name = _canonical_dut_name_shape_b(design, dataset, layout)
-    if not dut_name:
-        return (None, set())
-    # Alias the golden's module name → canonical DUT name so the TB binds to it.
-    golden_text = refs[0].read_text(errors="ignore")
-    mm = re.search(r"\bmodule\s+(\w+)", golden_text)
-    if not mm:
-        return (None, set())
-    golden_mod = mm.group(1)
-    golden_ports = _module_declared_ports(golden_text)
-    aliased = (golden_text if golden_mod == dut_name
-               else re.sub(rf"\b{re.escape(golden_mod)}\b", dut_name, golden_text))
     with tempfile.TemporaryDirectory() as td:
         binp = os.path.join(td, "golden_alias_bin")
-        alias_f = os.path.join(td, "golden_alias.v")
-        # Include any OTHER refs verbatim (multi-file goldens) so helper modules
-        # the aliased top instantiates are present; only the FIRST is aliased.
-        extra = [str(p) for p in refs[1:]]
-        with open(alias_f, "w") as fh:
-            fh.write(aliased)
-        srcs = [alias_f] + extra + [str(tb)]
+        # ORGANIC #709 — shared golden-name canonicalization (the FIRST ref's top
+        # module renamed to the canonical DUT name; remaining refs verbatim).
+        aliased_srcs, golden_ports = _aliased_golden_srcs(
+            design, dataset, layout, refs, td)
+        if aliased_srcs is None:
+            return (None, golden_ports)
+        srcs = aliased_srcs + [str(tb)]
         try:
             c = subprocess.run(["iverilog", "-g2012", "-o", binp] + srcs,
                                capture_output=True, text=True, timeout=120)
