@@ -1025,6 +1025,51 @@ def _load_context_modules(path):
     return out
 
 
+def _load_context_available(path):
+    """ORGANIC #734 — the SET of ids whose record actually CARRIES an
+    `input.context` key (a dict or list, even if empty), i.e. ids for which the
+    gate KNOWS the harness-provided context files and can therefore safely tell
+    a dropped author file apart from a legitimately-instantiated context module.
+
+    This is distinct from `_load_context_modules` (which returns only ids with a
+    NON-EMPTY RTL context): an id may carry `input.context = {}` (no context
+    files) — context is then KNOWN-EMPTY, so a dropped required submodule is
+    genuinely the author's and a hard-BLOCK is safe. The documented local_export
+    prompts JSONL ({id, prompt, system, user}) carries NO `input.context` key at
+    all, so NO id is context-available and the #715 protection must degrade to a
+    WARN instead of silently false-blocking (§4.05). chip-AGNOSTIC: pure
+    key-presence structural parse, no chip/vendor/SKU literal."""
+    out = set()
+    p = Path(path)
+    if not p.is_file():
+        return out
+    for ln in p.read_text(errors="replace").splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            d = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        rid = d.get("id")
+        if rid is None:
+            continue
+        inp = d.get("input")
+        ctx = inp.get("context") if isinstance(inp, dict) else None
+        if ctx is None:
+            ctx = d.get("context")
+        # ORGANIC #734 — a PRESENT context value (dict/list, even EMPTY =
+        # known-empty) makes the id context-available; an ABSENT key OR an
+        # explicit `null` value means context is UNKNOWN → NOT available. This
+        # mirrors `_load_context_modules`' own `if ctx else …` extraction EXACTLY
+        # (same two-step inp.context / top-level context lookup, same None
+        # rejection) so the two loaders can never disagree — in particular a
+        # `context: null` record is NOT mis-read as known-empty and false-blocked.
+        if ctx is not None:
+            out.add(str(rid))
+    return out
+
+
 def _load_latency_specs(path):
     """ORGANIC #705 — return {id: spec} from a latency-spec JSONL.
 
@@ -1130,6 +1175,19 @@ def main(argv=None) -> int:
     ap.add_argument("--prompts-advisory", action="store_true",
                     help="with --prompts, WARN instead of BLOCK on a "
                          "filename/module-name mismatch (strict-advisory)")
+    ap.add_argument("--dataset", default=None,
+                    help="ORGANIC #734 — optional source JSONL carrying each "
+                         "record's `input.context` (the original CVDP dataset). "
+                         "The documented local_export prompts JSONL omits "
+                         "input.context, so the #715 context-module protection "
+                         "is silently inactive there and correct completions "
+                         "that instantiate a harness-supplied context module "
+                         "are false-BLOCKED. Point --dataset at a JSONL with "
+                         "input.context to RE-ENABLE that protection (it is "
+                         "unioned with any context found in --prompts). When "
+                         "context is unavailable for an id from BOTH sources, "
+                         "the multi-file hard-BLOCK is downgraded to an advisory "
+                         "WARN rather than silently false-blocking (§4.05).")
     ap.add_argument("--latency-specs", default=None,
                     help="ORGANIC #705 — optional latency-spec JSONL ({id, "
                          "event, output, expect[, top, param, reset]}); for "
@@ -1227,10 +1285,34 @@ def main(argv=None) -> int:
             rec["completion"] = c.replace("\r\n", "\n").replace("\r", "\n")
     # ORGANIC #559 — optional prompt-aware filename↔module-name conformance.
     prompts = _load_prompts(args.prompts) if args.prompts else {}
-    # ORGANIC #715 round-2 — per-id context-module stems from the prompts /
-    # dataset `input.context` so multi-file completeness never false-BLOCKs a
-    # harness-provided context module the author correctly instantiates.
-    context_modules = _load_context_modules(args.prompts) if args.prompts else {}
+    # ORGANIC #715 round-2 + #734 — per-id context-module stems from the prompts
+    # AND/OR the --dataset `input.context` so multi-file completeness never
+    # false-BLOCKs a harness-provided context module the author correctly
+    # instantiates. The documented local_export prompts JSONL omits
+    # input.context, so --dataset is how the operator re-supplies it; the two
+    # sources are UNIONED (dataset is the authoritative superset). We ALSO track
+    # which ids actually carry an input.context key (context_available) — for an
+    # id with NO context source the gate cannot tell a dropped author file from a
+    # context module, so the multi-file hard-BLOCK degrades to an advisory WARN
+    # (§4.05: never silently false-block) rather than firing blind.
+    context_modules = {}
+    context_available = set()
+    for _ctx_src in (args.prompts, args.dataset):
+        if not _ctx_src:
+            continue
+        for _rid, _stems in _load_context_modules(_ctx_src).items():
+            context_modules.setdefault(_rid, set()).update(_stems)
+        context_available |= _load_context_available(_ctx_src)
+    # ORGANIC #734 — if the operator passed --dataset specifically to re-enable
+    # the #715 protection but it yields NO input.context for any id (a wrong file
+    # / typo'd path / non-CVDP JSONL), the protection silently stays inactive.
+    # Surface that misconfiguration LOUDLY on stderr so it is not mistaken for
+    # "protection active" — the failure direction is always relax, never block.
+    if args.dataset and not _load_context_available(args.dataset):
+        print("WARN (#734): --dataset carried NO input.context for any id "
+              "(wrong file / path / non-CVDP JSONL?) — the #715 context "
+              "protection stays INACTIVE and multi-file hard-blocks degrade to "
+              "advisory WARNs.", file=sys.stderr)
     # ORGANIC #705 — optional per-id latency specs the gate ENFORCES (measured
     # vs spec literal) as a pre-emit BLOCK.
     latency_specs = (_load_latency_specs(args.latency_specs)
@@ -1314,10 +1396,33 @@ def main(argv=None) -> int:
                 # an instantiated-but-undefined module NOT in the required set
                 # MAY be a harness-supplied context module → advisory WARN only
                 # (§4.05: never false-BLOCK a legitimate context-module use).
+                _rid_s = str(rec.get("id"))
                 _mf_block, _mf_warn = multifile_incompleteness(
                     out_rec.get("completion", ""),
-                    prompts.get(str(rec.get("id")), "") if prompts else "",
-                    context_modules=context_modules.get(str(rec.get("id"))))
+                    prompts.get(_rid_s, "") if prompts else "",
+                    context_modules=context_modules.get(_rid_s))
+                if _mf_block and _rid_s not in context_available:
+                    # ORGANIC #734 — context is UNAVAILABLE for this id (no
+                    # input.context fed via --prompts or --dataset, e.g. the
+                    # documented local_export prompts JSONL). The gate cannot
+                    # tell a dropped author file apart from a legitimately-
+                    # instantiated harness context module, so the #715 hard-BLOCK
+                    # would silently false-block a correct context-module
+                    # completion (proven: gf_multiplier / elevator_control /
+                    # scrambler). §4.05: a false-BLOCK discards a PASSING answer
+                    # irreversibly, whereas a genuine dropped file is emitted-and-
+                    # WARNed and the scorer ELAB-fails it anyway (same final
+                    # outcome). So DOWNGRADE to an advisory WARN naming how to
+                    # re-enable the hard block, rather than firing blind.
+                    entry.setdefault("notes", []).append(
+                        f"WARN multi-file (#715/#734): instantiates undefined "
+                        f"module(s) {_mf_block} the prompt names, but input.context "
+                        f"is UNAVAILABLE for this id — #715 context protection is "
+                        f"INACTIVE, so the gate cannot prove these are dropped "
+                        f"author files vs harness-supplied context modules and "
+                        f"does NOT hard-block (§4.05). Pass --dataset with this "
+                        f"record's input.context to re-enable the hard block.")
+                    _mf_block = []
                 if _mf_block:
                     ok = False
                     entry["verdict"] = "BLOCKED"
