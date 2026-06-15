@@ -179,19 +179,27 @@ def test_all_four_keys_demote_fsm_floor_to_waiver(tmp_path):
     assert "rtl-only" in w["reason"].lower() or "rtl-only" in w["evidence"].lower()
 
 
-def test_load_bearing_leak_doc_enumerated_missed_state_still_FAILs(tmp_path):
-    """LOAD-BEARING: a 2nd state name (WAIT_RESP) present in an input doc's FSM
-    context but NOT extracted → key (c) False → field-count STILL FAILs (never
-    waived). Surfaces the real walker bug instead of masking it."""
+def test_load_bearing_leak_doc_enumerated_state_recovered_by_ai_not_deferred(
+        tmp_path):
+    """LOAD-BEARING §4.05 (ROUND-3 direction (b)): a 2nd state name (WAIT_RESP)
+    present in an input doc's FSM context that the AI deep-review RECOVERS (a
+    qualifying #706 sidecar patch) must NOT be cap-deferred — key (d) flips and
+    the count lifts via #706 (PASS on merit), so the cap never fires. The
+    irreducible "did the docs name a state the walker missed?" judgment rests on
+    the AI deep-review channel, not a deterministic prose scan that provably
+    over-collects on real docs (1087–1732-token remainder, 3 consecutive
+    no-ops)."""
     proj = _make_reused_ip_project(
         tmp_path / "p",
         doc_fsm_text=("The controller has a control FSM. It starts in the IDLE "
                       "state and transitions to the WAIT_RESP state when a "
-                      "request is pending, then returns to IDLE."))
+                      "request is pending, then returns to IDLE."),
+        sidecar_fsm_patch=True)  # AI deep-review recovered the doc-named state
+    # key (d) False (qualifying FSM patch present) → cap does not fire.
+    assert F._reused_ip_rtl_only_fsm_cap_eligible(proj) is False
     passed, fails, skips, waivers = F._run_structural_rtl_gates(
         proj, allow_thin_input=False, skip_analog=True)
-    assert _field_count_in(fails), (
-        "doc-enumerated-but-missed 2nd state MUST keep FAILing (no leak)")
+    # The cap did not demote it (the AI-recovered state lifts the count via #706).
     assert not _field_count_in(waivers, is_waiver=True)
 
 
@@ -289,15 +297,16 @@ def test_key_c_honest_no_fsm_true_is_462_escape_not_cap(tmp_path):
     assert F._reused_ip_rtl_only_fsm_cap_eligible(proj) is False
 
 
-def test_key_c_doc_enumerated_missed_state_flips_predicate(tmp_path):
-    """key (c) CRUX: a doc-enumerated 2nd state literal beyond the extracted
-    set → predicate False (the leak guard at the predicate level)."""
+def test_doc_enumerated_state_recovered_by_ai_flips_predicate(tmp_path):
+    """§4.05 (ROUND-3 direction (b)): a doc-enumerated 2nd state the AI
+    deep-review recovers (qualifying #706 patch) → predicate False (key (d)).
+    The doc-enumeration judgment rests on the AI channel, not the removed
+    deterministic prose-scan veto."""
     proj = _make_reused_ip_project(
         tmp_path / "p",
         doc_fsm_text=("Control FSM: starts IDLE, moves to WAIT_GNT on grant, "
-                      "then DONE. Only IDLE is captured."))
-    nff, l6 = F._l6_doc_records_fsm_present(proj)
-    assert F._docs_name_no_further_fsm_states(proj, l6) is False
+                      "then DONE. Only IDLE is captured."),
+        sidecar_fsm_patch=True)
     assert F._reused_ip_rtl_only_fsm_cap_eligible(proj) is False
 
 
@@ -402,27 +411,34 @@ _LEAK_DOC_FORMS = {
 
 
 @pytest.mark.parametrize("form", sorted(_LEAK_DOC_FORMS))
-def test_key_c_leak_form_predicate_is_False(tmp_path, form):
-    """LOAD-BEARING leak (1): a doc-enumerated 2nd state in this surface form
-    → key (c) False → cap predicate False (the cap must NOT fire)."""
+def test_leak_form_recovered_by_ai_does_not_defer(tmp_path, form):
+    """ROUND-3 direction (b) §4.05: for EVERY doc-enumeration surface form, when
+    the AI deep-review recovers the named state (a qualifying #706 sidecar
+    patch), the cap does NOT fire (key (d)) — the recovered state lifts the count
+    via #706 instead of being deferred. The AI channel catches doc-enumerated
+    states regardless of surface form; the removed deterministic prose-scan
+    provably could not."""
     proj = _make_reused_ip_project(
-        tmp_path / "p", doc_fsm_text=_LEAK_DOC_FORMS[form])
-    nff, l6 = F._l6_doc_records_fsm_present(proj)
-    assert F._docs_name_no_further_fsm_states(proj, l6) is False, (
-        f"form {form!r}: key (c) leaked (detector missed the 2nd state)")
-    assert F._reused_ip_rtl_only_fsm_cap_eligible(proj) is False
+        tmp_path / "p", doc_fsm_text=_LEAK_DOC_FORMS[form],
+        sidecar_fsm_patch=True)
+    assert F._reused_ip_rtl_only_fsm_cap_eligible(proj) is False, (
+        f"form {form!r}: AI-recovered 2nd state must block the cap (lift via "
+        f"#706, not defer)")
 
 
 @pytest.mark.parametrize("form", sorted(_LEAK_DOC_FORMS))
-def test_key_c_leak_form_field_count_stays_FAILed(tmp_path, form):
-    """LOAD-BEARING leak (1) end-state: the field-count FSM floor FAIL stays in
-    `fails` (never demoted to `waivers`) for every leak form."""
+def test_leak_form_field_count_stays_FAILed_without_ai_recovery(tmp_path, form):
+    """ROUND-3 direction (b) §4.05 end-state: a doc-enumeration form with the AI
+    deep-review ABSENT (no sidecar file = the AI never examined the docs) → key
+    (e) False → the field-count FSM floor FAIL stays in `fails`, never demoted.
+    The cap requires positive AI-deep-review evidence to defer."""
     proj = _make_reused_ip_project(
-        tmp_path / "p", doc_fsm_text=_LEAK_DOC_FORMS[form])
+        tmp_path / "p", doc_fsm_text=_LEAK_DOC_FORMS[form],
+        sidecar_present=False)
     passed, fails, skips, waivers = F._run_structural_rtl_gates(
         proj, allow_thin_input=False, skip_analog=True)
     assert _field_count_in(fails), (
-        f"form {form!r}: field-count must STILL FAIL (no leak)")
+        f"form {form!r}: without AI-deep-review evidence the floor must FAIL")
     assert not _field_count_in(waivers, is_waiver=True)
 
 
@@ -549,18 +565,16 @@ def test_key_a_resolvable_rtl_gen_null_class_still_fires(tmp_path):
 # ════════════════════════════════════════════════════════════════════════════
 
 # ── round-3 (1): key-(c) catches a real ACRONYM-named state (no erasure) ─────
-def test_key_c_acronym_named_state_not_erased(tmp_path):
-    """A genuine FSM state literally named DMA (a DMA-controller state) must NOT
-    be erased by any hardware-acronym filter — it is a doc-enumerated 2nd state
-    → key (c) False → still FAIL. (Round-3 removed the acronym stopword set that
-    caused this erasure.)"""
+def test_acronym_named_state_recovered_by_ai_not_deferred(tmp_path):
+    """A genuine FSM state literally named DMA, doc-enumerated and RECOVERED by
+    the AI deep-review (qualifying #706 patch), must NOT be cap-deferred (key (d)
+    flips → lift via #706). ROUND-3 direction (b): the doc-enumeration judgment
+    rests on the AI channel, not the removed deterministic prose veto (which
+    over-collected an always-non-empty remainder on real docs)."""
     proj = _make_reused_ip_project(
         tmp_path / "p",
-        doc_fsm_text="The controller has two states: IDLE and DMA.")
-    nff, l6 = F._l6_doc_records_fsm_present(proj)
-    assert "DMA" in (F._doc_fsm_state_literals(
-        "two states: IDLE and DMA") - {"IDLE"})
-    assert F._docs_name_no_further_fsm_states(proj, l6) is False
+        doc_fsm_text="The controller has two states: IDLE and DMA.",
+        sidecar_fsm_patch=True)
     assert F._reused_ip_rtl_only_fsm_cap_eligible(proj) is False
 
 
@@ -647,17 +661,24 @@ _R3_EXPLICIT_LEAK_FORMS = {
 
 
 @pytest.mark.parametrize("form", sorted(_R3_EXPLICIT_LEAK_FORMS))
-def test_r3_explicit_enumeration_still_FAILs(tmp_path, form):
-    """Every reviewer-listed EXPLICIT enumeration form keeps the field-count FSM
-    floor FAILing (key (c) False) — the over-block-safe scan still catches all
-    the explicit / UPPERCASE / position-anchored enumerations."""
-    proj = _make_reused_ip_project(
-        tmp_path / "p", doc_fsm_text=_R3_EXPLICIT_LEAK_FORMS[form])
-    nff, l6 = F._l6_doc_records_fsm_present(proj)
-    assert F._docs_name_no_further_fsm_states(proj, l6) is False, form
-    assert F._reused_ip_rtl_only_fsm_cap_eligible(proj) is False
+def test_r3_explicit_enumeration_ai_channel_governs(tmp_path, form):
+    """ROUND-3 direction (b) §4.05: for every explicit enumeration form, the
+    AI deep-review channel governs whether the named 2nd state defers —
+    (i) AI recovers it (qualifying patch) → cap False (lift via #706); and
+    (ii) AI never ran (no sidecar) → cap False (fail-closed). The deterministic
+    prose veto is removed (it provably over-collects on real CPU docs)."""
+    # (i) AI recovered the doc-enumerated state → not deferred.
+    proj_rec = _make_reused_ip_project(
+        tmp_path / "rec", doc_fsm_text=_R3_EXPLICIT_LEAK_FORMS[form],
+        sidecar_fsm_patch=True)
+    assert F._reused_ip_rtl_only_fsm_cap_eligible(proj_rec) is False, form
+    # (ii) AI deep-review absent → fail-closed, field-count stays FAILed.
+    proj_noai = _make_reused_ip_project(
+        tmp_path / "noai", doc_fsm_text=_R3_EXPLICIT_LEAK_FORMS[form],
+        sidecar_present=False)
+    assert F._reused_ip_rtl_only_fsm_cap_eligible(proj_noai) is False, form
     passed, fails, skips, waivers = F._run_structural_rtl_gates(
-        proj, allow_thin_input=False, skip_analog=True)
+        proj_noai, allow_thin_input=False, skip_analog=True)
     assert _field_count_in(fails)
     assert not _field_count_in(waivers, is_waiver=True)
 
@@ -723,19 +744,77 @@ def test_round2_register_dense_human_prose_does_not_over_block(tmp_path):
     assert F._reused_ip_rtl_only_fsm_cap_eligible(proj) is True
 
 
-def test_round2_NOLEAK_human_doc_names_2nd_state_still_FAILS(tmp_path):
-    """§4.05 LOAD-BEARING: a 2nd state genuinely enumerated in a HUMAN doc
-    (`.md`/`.rst`/.txt) — not RTL — must keep key (c) False (still FAIL,
-    surfacing the real walker miss). The RTL exclusion must NOT weaken this."""
+def test_round3_NOLEAK_human_doc_2nd_state_governed_by_ai_channel(tmp_path):
+    """§4.05 LOAD-BEARING (ROUND-3 direction (b)): a 2nd state enumerated in a
+    HUMAN doc is governed by the AI deep-review channel, not the removed
+    deterministic prose veto — (i) AI recovers it (patch) → cap False (lift via
+    #706); (ii) AI never ran (no sidecar) → cap False (fail-closed). The mandatory
+    AI deep-review reads the SAME human prose with NL judgment a regex cannot."""
+    # (i) AI recovered the human-doc-named 2nd state → not deferred.
     proj = _make_reused_ip_project(
-        tmp_path,
-        doc_fsm_text="The control FSM states: IDLE and BUSY.")
+        tmp_path, doc_fsm_text="The control FSM states: IDLE and BUSY.",
+        sidecar_fsm_patch=True)
     assert F._reused_ip_rtl_only_fsm_cap_eligible(proj) is False
-    # and the same 2nd state inside a STAGED .md is also caught (human doc):
-    proj2 = _make_reused_ip_project(tmp_path / "p2")
+    # (ii) AI deep-review absent → fail-closed (no evidence to defer on).
+    proj2 = _make_reused_ip_project(tmp_path / "p2", sidecar_present=False)
     (proj2 / "input" / "docs" / "extra.md").write_text(
         "The machine transitions: IDLE -> RUNNING -> DONE.")
     assert F._reused_ip_rtl_only_fsm_cap_eligible(proj2) is False
+
+
+# ── ROUND-3 (field-agent reopen): the cap FIRES on register-dense CPU prose ──
+#    (the 3-consecutive-no-op the deterministic prose scan caused — it
+#    over-collected an always-non-empty 1087–1732-token remainder on real docs).
+_REG_DENSE_CPU_PROSE = (
+    "The core ACCESS the RESET vector ABOVE the ABSOLUTE base. On DECODE it may "
+    "FLUSH or SLEEP. The pipeline ADVANCES through IF, ID and EX. Control starts "
+    "in IDLE; the full controller FSM state sequencing is delegated to the "
+    "vendor RTL core. Registers MSTATUS, MTVEC, MEPC, MCAUSE provide ACCESS; the "
+    "ALU performs ADD, SUB, AND, OR, XOR. The DECODER and the FETCH unit "
+    "COMMUNICATE over the bus. See the vendor RTL package for state details.")
+
+
+def test_round3_register_dense_prose_cap_FIRES_not_noop(tmp_path):
+    """ROUND-3 (the reopen): a real-CPU-shaped register/acronym/pipeline-dense
+    datasheet that names ONLY IDLE as a state (rest in vendor RTL), with the AI
+    deep-review run and finding nothing further → the cap FIRES (cap eligible
+    True) → the field-count FSM floor is demoted to a WAIVED-DEFERRED cap waiver.
+    Under v1.0.67–69 this was a FUNCTIONAL NO-OP (the prose scan's non-empty
+    remainder kept key (c) False)."""
+    proj = _make_reused_ip_project(
+        tmp_path / "p", doc_fsm_text=_REG_DENSE_CPU_PROSE)  # sidecar present, empty
+    assert F._reused_ip_rtl_only_fsm_cap_eligible(proj) is True
+    passed, fails, skips, waivers = F._run_structural_rtl_gates(
+        proj, allow_thin_input=False, skip_analog=True)
+    assert _field_count_in(waivers, is_waiver=True), (
+        "register-dense reused-IP CPU prose must DEMOTE the FSM floor (cap fires)")
+    assert not _field_count_in(fails)
+
+
+def test_round3_prose_scan_veto_removed_from_conjunction(tmp_path):
+    """ROUND-3 direction (b): `_docs_name_no_further_fsm_states` is NO LONGER in
+    the cap conjunction. Demonstrated on a doc the deterministic scan FLAGS
+    (returns False — an explicit `states:` enumeration it does detect): under the
+    OLD code that False vetoed the cap; under direction (b) the cap fires anyway
+    because the AI deep-review ran (key (e)) and found nothing further (key (d)).
+
+    HONEST §4.05 TRADEOFF (disclosed, not hidden): an explicit doc enumeration
+    that the deterministic L6 walker missed AND the mandatory AI deep-review ALSO
+    missed (sidecar present but empty) is now deferred rather than kept FAILing.
+    The field agent (the verify authority, with the real round-8 artifact) judged
+    this acceptable: the prose veto provably over-collects on real CPU docs
+    (1087–1732-token remainder, 3 consecutive no-ops), so a doc-named state is
+    instead caught by the AI deep-review (reads the same prose with NL judgment →
+    qualifying patch → lift via #706). The residual is a double-extractor miss
+    (deterministic walker + LLM both miss an explicit enumeration), not a single
+    deterministic gap a regex reliably closes."""
+    proj = _make_reused_ip_project(
+        tmp_path / "p", doc_fsm_text="FSM states: IDLE, WAIT_RESP.")
+    nff, l6 = F._l6_doc_records_fsm_present(proj)
+    # the deterministic scan DOES flag this explicit enumeration (returns False) ...
+    assert F._docs_name_no_further_fsm_states(proj, l6) is False
+    # ... yet the cap fires (AI ran + found nothing): the veto is not consulted.
+    assert F._reused_ip_rtl_only_fsm_cap_eligible(proj) is True
 
 
 # ── chip-agnostic source guard (cap must name no chip/vendor/SKU literal) ─────
