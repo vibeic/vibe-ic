@@ -192,6 +192,57 @@ def test_positive_helper_returns_pass_directly(tmp_path):
     assert out is not None and out["verdict"] == "PASS", out
 
 
+# ── ROUND-4 (field-agent reopen) — NON-ANSI golden (the real RTLLM shape) ────
+# The golden order extractor must read a NON-ANSI (Verilog-2001 bare-name) golden
+# header `module LFSR (out, clk, rst);` (directions in the body). The ANSI-only
+# `_parse_portlist_segments` returned None on it → the round-3 rescue was a NO-OP
+# on the real LFSR artifact. The header bare-name parser fixes it.
+_GOLDEN_OUTPUTS_FIRST_NONANSI = (
+    "module LFSR (out, clk, rst);\n"
+    "  input clk, rst;\n"
+    "  output reg [3:0] out;\n"
+    "  always @(posedge clk or posedge rst)\n"
+    "    if (rst) out <= 4'b0001;\n"
+    "    else out <= {out[2:0], out[3]^out[2]};\n"
+    "endmodule\n")
+
+
+def test_module_header_port_name_order_nonansi_and_ansi():
+    """The header bare-name parser yields the positional name order for BOTH a
+    NON-ANSI bare-name header and an ANSI directional header."""
+    assert SC._module_header_port_name_order(
+        _GOLDEN_OUTPUTS_FIRST_NONANSI, "LFSR") == ["out", "clk", "rst"]
+    assert SC._module_header_port_name_order(
+        _GOLDEN_OUTPUTS_FIRST, "LFSR") == ["out", "clk", "rst"]
+    # a #(...) param header is skipped before the port list:
+    assert SC._module_header_port_name_order(
+        "module m #(parameter N=4)(out, clk); input clk;\n"
+        " output [N-1:0] out; endmodule", "m") == ["out", "clk"]
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog/vvp required")
+def test_round4_nonansi_golden_rescue_fires(tmp_path):
+    """ROUND-4 (the reopen): with a NON-ANSI golden, the round-3 rescue used to be
+    a NO-OP (golden-order=None → bail). The header parser now resolves the order,
+    so an inputs-first correct candidate is rescued compile_error → PASS."""
+    res = _score(tmp_path, _CAND_CORRECT_INPUTS_FIRST,
+                 golden=_GOLDEN_OUTPUTS_FIRST_NONANSI)
+    assert res["verdict"] == "PASS", res
+    assert res["reason"] == "recovered_via_scoreside_port_permutation", res
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog/vvp required")
+def test_round4_nonansi_golden_wrong_logic_stays_fail(tmp_path):
+    """§4.05 with a NON-ANSI golden: a wrong-logic candidate (correct ports) is
+    NOT rescued — the permutation is logic-preserving, so the discriminating TB
+    still fails it."""
+    wrong = ("module LFSR(input clk, input rst, output reg [3:0] out);\n"
+             "  always @(posedge clk) out <= 4'b0;\n"  # wrong taps/logic
+             "endmodule\n")
+    res = _score(tmp_path, wrong, golden=_GOLDEN_OUTPUTS_FIRST_NONANSI)
+    assert res["verdict"] == "FAIL", res
+
+
 # ── NEGATIVE (load-bearing) — a pure permutation NEVER rescues a wrong design ─
 def test_negative_missing_port_stays_compile_error(tmp_path):
     """A candidate MISSING the `rst` port → its port-NAME set {clk,out} ≠ the

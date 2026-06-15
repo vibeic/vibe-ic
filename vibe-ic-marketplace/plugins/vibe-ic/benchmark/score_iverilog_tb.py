@@ -628,6 +628,87 @@ def _shape_b_export_helpers():
         return None
 
 
+def _module_header_port_name_order(verilog_text: str, top: str) -> Optional[list]:
+    """ORGANIC #707 round-4 — return module `top`'s positional port-NAME order
+    from its module HEADER, well-defined for BOTH ANSI and NON-ANSI (Verilog-2001
+    bare-name) headers:
+      * non-ANSI: `module LFSR (out, clk, rst);` → ['out','clk','rst']
+      * ANSI:     `module add (input [3:0] a, output [4:0] s);` → ['a','s']
+    Splits the header paren body on TOP-LEVEL commas (so a `[msb:lsb]` width or a
+    `#(...)`-style default never splits a port) and takes each entry's TRAILING
+    identifier — which is the port NAME in both styles. Returns None when the
+    module/header cannot be located or any entry has no identifier (don't guess).
+    chip-AGNOSTIC: pure Verilog header grammar, no chip/vendor literal."""
+    import re as _re
+    txt = _strip_comments_v(verilog_text)
+    m = _re.search(r"\bmodule\s+" + _re.escape(top) + r"\b", txt)
+    if not m:
+        return None
+    i, n = m.end(), len(txt)
+    # Skip an optional `#( ... )` parameter block, then require the port `(`.
+    while i < n and txt[i].isspace():
+        i += 1
+    if i < n and txt[i] == "#":
+        i += 1
+        while i < n and txt[i].isspace():
+            i += 1
+        if i >= n or txt[i] != "(":
+            return None
+        depth = 0
+        while i < n:
+            if txt[i] == "(":
+                depth += 1
+            elif txt[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    i += 1
+                    break
+            i += 1
+        while i < n and txt[i].isspace():
+            i += 1
+    if i >= n or txt[i] != "(":
+        return None
+    depth = 0
+    j = i
+    while j < n:
+        if txt[j] == "(":
+            depth += 1
+        elif txt[j] == ")":
+            depth -= 1
+            if depth == 0:
+                break
+        j += 1
+    if j >= n:
+        return None
+    body = txt[i + 1:j]
+    # Split on TOP-LEVEL commas (ignore commas inside [], (), {}).
+    parts, buf, d = [], [], 0
+    for ch in body:
+        if ch in "([{":
+            d += 1; buf.append(ch)
+        elif ch in ")]}":
+            d = max(0, d - 1); buf.append(ch)
+        elif ch == "," and d == 0:
+            parts.append("".join(buf)); buf = []
+        else:
+            buf.append(ch)
+    parts.append("".join(buf))
+    names = []
+    for p in parts:
+        ids = _re.findall(r"[A-Za-z_]\w*", p)
+        if not ids:
+            return None  # an empty / malformed entry → don't guess.
+        names.append(ids[-1])  # trailing identifier = the port name (both styles)
+    return names or None
+
+
+def _strip_comments_v(text: str) -> str:
+    import re as _re
+    text = _re.sub(r"/\*.*?\*/", "", text, flags=_re.DOTALL)
+    text = _re.sub(r"//[^\n]*", "", text)
+    return text
+
+
 def _golden_declaration_order_shape_b(design: str, dataset: Path, layout: dict,
                                       top: str, S) -> Optional[list]:
     """Return the GOLDEN's port-DECLARATION order (list of port NAMES) for the
@@ -635,11 +716,20 @@ def _golden_declaration_order_shape_b(design: str, dataset: Path, layout: dict,
 
     The golden is the hidden `verified_<X>.v` (registry `ref_glob`); its top
     module is ALIASED to the canonical DUT name `top` the TB binds (reusing the
-    scorer's shared `_aliased_golden_srcs`), then parsed with the exporter's own
-    `_parse_portlist_segments`. Because the golden compiles AND passes the TB
-    POSITIONALLY (the caller's elaborate-gate already proved this), this
-    declaration order IS the correct positional bind order — the ground truth.
-    chip-AGNOSTIC: registry layout + structural Verilog grammar only."""
+    scorer's shared `_aliased_golden_srcs`). Because the golden compiles AND
+    passes the TB POSITIONALLY (the caller's elaborate-gate already proved this),
+    its module-HEADER port-NAME order IS the correct positional bind order — the
+    ground truth.
+
+    ORGANIC #707 round-4 — the order is read from the module HEADER's bare-name
+    list (`_module_header_port_name_order`), which is well-defined for BOTH ANSI
+    AND NON-ANSI (Verilog-2001) goldens. The earlier ANSI-only
+    `_parse_portlist_segments` returned None on a non-ANSI golden
+    (`module LFSR (out, clk, rst);` + body-declared directions), making the whole
+    rescue a NO-OP on real RTLLM goldens (most of which are non-ANSI). The ANSI
+    `_parse_portlist_segments` is still used for the CANDIDATE (which is permuted),
+    where directional segments are needed; the GOLDEN only supplies the NAME
+    order. chip-AGNOSTIC: registry layout + structural Verilog grammar only."""
     ref_glob = layout.get("ref_glob")
     if not ref_glob:
         return None
@@ -655,10 +745,7 @@ def _golden_declaration_order_shape_b(design: str, dataset: Path, layout: dict,
             golden_text = Path(aliased_srcs[0]).read_text(errors="replace")
         except OSError:
             return None
-        parsed = S._parse_portlist_segments(golden_text, top)
-    if parsed is None:
-        return None  # golden's port list is not a clean ANSI block → can't trust.
-    return [n for _seg, _d, n in parsed[1]]
+    return _module_header_port_name_order(golden_text, top)
 
 
 def _score_side_port_permutation_rescue_shape_b(
