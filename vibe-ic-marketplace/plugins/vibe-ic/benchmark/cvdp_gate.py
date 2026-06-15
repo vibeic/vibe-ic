@@ -1025,6 +1025,49 @@ def _load_context_modules(path):
     return out
 
 
+def _load_context_rtl(path):
+    """ORGANIC #740 (G5) — {id: [rtl_text, ...]} of the FULL RTL CONTENT the
+    record's `input.context` provides (a CVDP `input.context` is a dict whose
+    keys are `rtl/<name>.sv` paths and whose values are the file CONTENTS the
+    harness compiles alongside the author's completion).
+
+    The embedded iface-conformance ADVISORY stage feeds these as `context_rtl`
+    to `iface_conformance_v2.check_conformance`, so a prompt-named port that the
+    author legitimately omits because it lives on a harness-supplied / context /
+    instantiated sub-module is SATISFIED — exactly the owning-module scoping the
+    STANDALONE gate already gets via `--context`. Only `.sv/.svh/.v/.vh` values
+    are returned (a docs/spec.md context entry declares no module). Empty when
+    absent. chip-AGNOSTIC: pure path-suffix structural parse, no SKU literal."""
+    out = {}
+    p = Path(path)
+    if not p.is_file():
+        return out
+    _RTL_EXTS = (".sv", ".svh", ".v", ".vh")
+    for ln in p.read_text(errors="replace").splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            d = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        rid = d.get("id")
+        if rid is None:
+            continue
+        inp = d.get("input")
+        ctx = inp.get("context") if isinstance(inp, dict) else None
+        if ctx is None:
+            ctx = d.get("context")
+        if not isinstance(ctx, dict):
+            continue
+        texts = [v for k, v in ctx.items()
+                 if isinstance(k, str) and isinstance(v, str)
+                 and Path(k).name.endswith(_RTL_EXTS)]
+        if texts:
+            out[str(rid)] = texts
+    return out
+
+
 def _load_context_available(path):
     """ORGANIC #734 — the SET of ids whose record actually CARRIES an
     `input.context` key (a dict or list, even if empty), i.e. ids for which the
@@ -1297,11 +1340,18 @@ def main(argv=None) -> int:
     # (§4.05: never silently false-block) rather than firing blind.
     context_modules = {}
     context_available = set()
+    # ORGANIC #740 (G5) — full context RTL CONTENT per id (not just module-name
+    # stems), so the embedded iface-conformance ADVISORY stage scopes a
+    # prompt-named port to its OWNING context/instantiated sub-module exactly the
+    # way the STANDALONE gate does with `--context`.
+    context_rtl = {}
     for _ctx_src in (args.prompts, args.dataset):
         if not _ctx_src:
             continue
         for _rid, _stems in _load_context_modules(_ctx_src).items():
             context_modules.setdefault(_rid, set()).update(_stems)
+        for _rid, _texts in _load_context_rtl(_ctx_src).items():
+            context_rtl.setdefault(_rid, []).extend(_texts)
         context_available |= _load_context_available(_ctx_src)
     # ORGANIC #734 — if the operator passed --dataset specifically to re-enable
     # the #715 protection but it yields NO input.context for any id (a wrong file
@@ -1451,9 +1501,26 @@ def main(argv=None) -> int:
                     _ptext = prompts.get(str(rec.get("id")), "")
                     _comp = out_rec.get("completion", "") or ""
                     if _ptext and _comp.strip():
+                        # ORGANIC #740 (G5) — feed the EXTRACTED RTL (all author
+                        # modules parse cleanly even from a JSON code-dict emit,
+                        # not the raw completion blob) AND the record's full
+                        # context RTL, so a prompt-named port whose OWNING module
+                        # is a harness-supplied / instantiated sub-module is
+                        # SATISFIED — the same owning-module scoping the
+                        # standalone gate gets via `--context`. Fall back to the
+                        # raw completion if extraction yields no compilable code
+                        # (doc-only emits), so behaviour is never WORSE than
+                        # before. Advisory-only — never a hard-block.
+                        try:
+                            _xcode, _ = extract_code(_comp)
+                        except Exception:
+                            _xcode = None
+                        _rtl_for_iface = _xcode or _comp
+                        _ctx_rtl = context_rtl.get(str(rec.get("id"))) or None
                         try:
                             _findings = _ifacev2.check_conformance(
-                                str(rec.get("id")), _ptext, _comp)
+                                str(rec.get("id")), _ptext, _rtl_for_iface,
+                                _ctx_rtl)
                         except Exception:
                             _findings = []
                         for _f in _findings:

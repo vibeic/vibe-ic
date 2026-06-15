@@ -231,6 +231,100 @@ _DIR_NEAR_AFTER_RE = re.compile(
 _WAVEDROM_NAME_RE = re.compile(r'["\']name["\']\s*:\s*["\']([A-Za-z_]\w*)["\']')
 
 
+# ── register-map / CSR name exclusion (ORGANIC #738 secondary) ───────────────
+# A name that appears ONLY in a register-map 'Register Name' / 'Field Name'
+# column (a table that ALSO has an Offset/Address column) and is prose-tagged as
+# an internal CSR — accessed via the bus, NOT a top-level port — must NOT be
+# charged as a MISSING-PORT. The harness binds to top-level PORTS, never to an
+# internal CSR accessed through an offset, so flagging these is pure advisory
+# noise on exactly the register-map prompts. Structural rule (chip-AGNOSTIC):
+# the table header names a register/field column AND an offset/address column,
+# and the prompt prose marks them internal ("internal", "CSR", "register map",
+# "accessed via/through the bus", "not ... ports").
+_REGMAP_NAME_HDR = re.compile(
+    r'^\s*(register\s*name|field\s*name|reg\s*name|register|field)\s*$', re.I)
+_REGMAP_OFFSET_HDR = re.compile(
+    r'^\s*(offset|address|addr|reg\s*offset)\s*$', re.I)
+_REGMAP_INTERNAL_PROSE = re.compile(
+    r'\b(?:internal\s+(?:csr|register)|'
+    r'csr(?:s)?\b|'
+    r'register\s*map|'
+    r'accessed\s+(?:via|through)\s+the\s+bus|'
+    r'not\s+(?:a\s+)?top[\s-]*level\s+ports?|'
+    r'not\s+(?:top[\s-]*level\s+)?ports?\s+of\s+the\s+module)\b',
+    re.I)
+
+
+def _split_md_row_local(line: str) -> List[str]:
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+    return [c.strip() for c in s.split("|")]
+
+
+def _is_md_delim_local(cells: List[str]) -> bool:
+    return bool(cells) and all(
+        re.fullmatch(r":?-{2,}:?", (c or "").replace(" ", "")) for c in cells
+        if c != "")
+
+
+def regmap_csr_names(prompt: str) -> Set[str]:
+    """Lower-cased names that occur ONLY in a register-map 'Register/Field Name'
+    column of a table that ALSO carries an Offset/Address column, AND whose
+    prompt prose tags the map as internal CSRs. These are bus-accessed CSRs, not
+    top-level ports, so they are excluded from MISSING-PORT. Conservative: an
+    empty set unless BOTH the table shape AND the internal-prose tag are present
+    (a genuine port table never matches — it has a Direction column, not an
+    Offset column, and no internal-CSR prose)."""
+    if not _REGMAP_INTERNAL_PROSE.search(prompt):
+        return set()
+    names: Set[str] = set()
+    lines = prompt.splitlines()
+    n = len(lines)
+    i = 0
+    while i < n - 1:
+        line = lines[i]
+        if line.count("|") < 2:
+            i += 1
+            continue
+        header = _split_md_row_local(line)
+        delim = _split_md_row_local(lines[i + 1]) if i + 1 < n else []
+        if not _is_md_delim_local(delim) or len(delim) != len(header):
+            i += 1
+            continue
+        name_col = next(
+            (k for k, h in enumerate(header) if _REGMAP_NAME_HDR.match(h)), None)
+        off_col = next(
+            (k for k, h in enumerate(header) if _REGMAP_OFFSET_HDR.match(h)), None)
+        # A register-map table needs BOTH a register/field name column AND an
+        # offset/address column (this is what distinguishes it from a port
+        # interface table, which has a Direction column instead).
+        if name_col is None or off_col is None:
+            i += 1
+            continue
+        j = i + 2
+        while j < n:
+            row = lines[j]
+            if row.count("|") < 1:
+                break
+            cells = _split_md_row_local(row)
+            if _is_md_delim_local(cells):
+                j += 1
+                continue
+            if all(c == "" for c in cells):
+                break
+            if len(cells) > name_col:
+                cell = cells[name_col].strip().strip("`*_ ")
+                m = re.fullmatch(r"[A-Za-z_]\w*", cell)
+                if m:
+                    names.add(cell.lower())
+            j += 1
+        i = j if j > i else i + 1
+    return names
+
+
 def _table_ports(prompt: str) -> Dict[str, str]:
     """Markdown table rows: first backtick cell = name, a later cell carrying
     a direction word = direction. Returns name→direction (lower, '' if no
@@ -343,6 +437,12 @@ def check_conformance(rid: Optional[str], prompt: str, rtl_text: str,
     if pif.given_module:
         module_names_lower.add(pif.given_module.lower())
 
+    # (#738 secondary) Names that occur ONLY in a register-map 'Register/Field
+    # Name' column (with an Offset/Address column) and are prose-tagged as
+    # internal CSRs are bus-accessed registers, NOT top-level ports — the
+    # harness never binds to them, so they must not be charged as MISSING-PORT.
+    regmap_csrs = regmap_csr_names(prompt)
+
     # (1) MODULE-NAME-CASE: harness top from id must match the RTL module name
     # CASE-EXACTLY. Only flag when the names match case-INSENSITIVELY but
     # differ in case (a genuinely different name is the author's design freedom
@@ -375,6 +475,13 @@ def check_conformance(rid: Optional[str], prompt: str, rtl_text: str,
     for name in sorted(pif.ports):
         if name.lower() in module_names_lower:
             continue  # (#726b) a module name, not an interface signal
+        # (#738 secondary) an internal CSR named only in a register-map column —
+        # bus-accessed, not a top-level port — is NOT author-missing. But never
+        # suppress a name that the RTL DOES declare as a port (no masking of a
+        # genuine signal): only skip when it is also absent from every module.
+        if (name.lower() in regmap_csrs
+                and name.lower() not in all_port_names_lower):
+            continue
         if name.lower() not in all_port_names_lower:
             srcs = ",".join(sorted(pif.sources.get(name, set())))
             findings.append(Finding(

@@ -77,6 +77,14 @@ v0.1.24/v0.1.25 fail-case loops 2026-05-27/28):
      (unconditional else) does NOT fire; an INTERNAL-enable counter does NOT
      fire; a design that already carries an armed/settle qualifier does NOT
      fire. chip-AGNOSTIC: pure SV structure.
+  13. Multidriven register (v1.0.80, ORGANIC #740 G4)
+     A reg written from >1 always block in a racing clocking domain — the
+     `verilator -Wall` MULTIDRIVEN class made plugin-native. FIRE (WARN) on
+     DIFFERENT clock/edge domains, or on a SAME-clock pair where one block
+     reset-clears the reg and another writes it UNCONDITIONALLY (both fire on a
+     reset edge → last-write-wins race). Does NOT fire on a single always block,
+     on a reset-COMPLEMENTARY same-clock split (`if(rst)`/`if(!rst)`), or on
+     disjoint bit-slice writers. Advisory WARN; chip-AGNOSTIC structural parse.
 
 Usage:
     python3 rtl_hygiene_lint.py <files.v|.sv ...>
@@ -1281,6 +1289,231 @@ def rule_reset_boundary_residual_enable(src: str, path: str) -> List[Finding]:
     return findings
 
 
+# ---------------------------------------------------------------------------
+# Rule 13: Multidriven register — same reg written from >1 always block in
+# genuinely different / racing clocking domains (ORGANIC #740, G4)
+#
+# A register written from MORE THAN ONE always block is the classic
+# `verilator -Wall MULTIDRIVEN` warning: the two procedural drivers can both
+# execute and the last-scheduled write wins non-deterministically. Today this
+# is caught ONLY by an external `verilator -Wall`; this rule makes it a
+# plugin-native, structural, advisory WARN that needs no external tool.
+#
+# FIRE (WARN) when the SAME reg LHS is assigned (`<=`/`=`) in >=2 distinct
+# `always` blocks AND those writers can RACE:
+#   * DIFFERENT clock/edge domains — block A is `@(posedge clk_a)` and block B
+#     is `@(posedge clk_b)` (or `posedge`/`negedge` of the same clock): the
+#     writes are unsynchronised → always a real multidriven hazard (this is
+#     exactly what Verilator flags); OR
+#   * SAME clock but the per-block writes to the reg are NOT mutually-exclusively
+#     guarded — e.g. one block clears the reg under `if(<rst>)` while the other
+#     writes it UNCONDITIONALLY (the acceptance shape: `if(rst) mem0<=0;` in one
+#     block and `mem0<=mem0+1;` in another). Both fire on a reset edge → race.
+#
+# DO NOT FIRE (chip-AGNOSTIC, fail-SAFE — never false-WARN a legal shape):
+#   * the reg is written in only ONE always block (incl. the in-block
+#     `if(rst) x<=0; else x<=d;` reset+datapath idiom — one block, never racing);
+#   * SAME clock AND the writer blocks are reset-COMPLEMENTARY-guarded — one
+#     writes the reg only inside `if(<rst>)` and the other only inside
+#     `if(!<rst>)` / `else` (they never both fire on one edge → legal split);
+#   * the writers target DISJOINT bit-slices of the reg (`q[1:0]<=..` in one
+#     block, `q[3:2]<=..` in another) — distinct drivers of distinct bits. This
+#     exemption is PAIRWISE over ANY writer count: a reg legally split across
+#     3+ always blocks (each driving its own slice) is silent too.
+# Advisory WARN only; structural SV parse; no chip/vendor/SKU literal.
+# ---------------------------------------------------------------------------
+def _iter_always_blocks(src: str):
+    """Yield (sens_list_text, body_text) for every `always`/`always_ff` block.
+    The body is bounded at the next top-level `always`/`endmodule` (the same
+    head-of-block bounding the other rules use)."""
+    for bm in re.finditer(r'\balways(?:_ff|_comb|_latch)?\s*@\s*\(([^)]*)\)', src):
+        sens = bm.group(1)
+        body = _block_body_after(src, bm.end())
+        yield sens, body, bm.start()
+
+
+def _reg_write_guard_in_block(body: str, reg: str):
+    """Classify how `reg` is written inside one always-block `body`.
+
+    Returns a tuple (writes, slices, reset_pos, reset_neg, unconditional):
+      * writes        — True if `reg` is a `<=`/`=` LHS anywhere in the block.
+      * slices        — set of bit-slice strings written (`'[1:0]'`); the empty
+                        string '' means a WHOLE-reg (un-sliced) write.
+      * reset_pos     — True if EVERY write of `reg` is dominated by an
+                        `if (<reset>)` (asserted-reset) condition.
+      * reset_neg     — True if EVERY write of `reg` is dominated by an
+                        `if (!<reset>)` / `else`-of-reset (deasserted) condition.
+      * unconditional — True if at least one write of `reg` is NOT under any
+                        reset-referencing `if`.
+    Conservative & structural: a write is "reset-dominated" only when the
+    nearest enclosing `if` condition (on the same source line region) references
+    a reset-name signal. Deliberately simple — it just needs to separate the
+    racing acceptance shape from the complementary legal split.
+    """
+    writes = False
+    slices: Set[str] = set()
+    reset_branch_only = True
+    notreset_branch_only = True
+    any_unconditional = False
+    for am in re.finditer(
+            r'(?<![<>!=])\b' + re.escape(reg) + r'\s*(\[[^\]]+\])?\s*(?:<=|=)(?!=)',
+            body):
+        writes = True
+        slices.add((am.group(1) or '').replace(' ', ''))
+        # The text from the block start up to this write tells us the nearest
+        # governing condition. Find the LAST `if (...)` / `else` before it.
+        prefix = body[:am.start()]
+        ifs = list(re.finditer(r'\b(if)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)|\b(else)\b',
+                               prefix))
+        gov = ifs[-1] if ifs else None
+        if gov is None:
+            any_unconditional = True
+            reset_branch_only = False
+            notreset_branch_only = False
+            continue
+        if gov.group(1) == 'if':
+            cond = gov.group(2) or ''
+            if _RESET_NAME_RE.search(cond):
+                # determine polarity: a `!`/`~` / `==0` → deassert (complement)
+                if '!' in cond or '~' in cond or re.search(r'==\s*0', cond):
+                    notreset_branch_only = notreset_branch_only and True
+                    reset_branch_only = False
+                else:
+                    reset_branch_only = reset_branch_only and True
+                    notreset_branch_only = False
+            else:
+                any_unconditional = True
+                reset_branch_only = False
+                notreset_branch_only = False
+        else:  # else-branch — the complement of the preceding reset `if`
+            notreset_branch_only = notreset_branch_only and True
+            reset_branch_only = False
+    return (writes, slices,
+            reset_branch_only and writes,
+            notreset_branch_only and writes,
+            any_unconditional)
+
+
+def _slices_disjoint(slices_a: Set[str], slices_b: Set[str]) -> bool:
+    """True if every write in A targets a bit-slice and every write in B
+    targets a bit-slice and the two slice SETS share no slice and neither writes
+    the WHOLE reg (the '' marker). Conservative: any whole-reg write ('') in
+    either set means they are NOT disjoint."""
+    if '' in slices_a or '' in slices_b:
+        return False
+    if not slices_a or not slices_b:
+        return False
+    return slices_a.isdisjoint(slices_b)
+
+
+def _all_slices_pairwise_disjoint(slice_sets: List[Set[str]]) -> bool:
+    """True when N (>=2) writer blocks each drive a DISTINCT bit-slice of a reg
+    and NO two writers touch overlapping bits — i.e. every PAIR of writer
+    slice-sets is `_slices_disjoint`. This generalises the disjoint-slice
+    exemption from exactly-two writers to any writer count (2, 3, …): a register
+    legally split across 3+ always blocks, each driving its own slice, is NOT a
+    multidriven hazard (matches `verilator -Wall` reporting 0 MULTIDRIVEN).
+
+    Conservative / fail-SAFE: reuses `_slices_disjoint`, so a whole-reg ('')
+    write in ANY block, an empty slice-set, or ANY shared slice string between
+    two blocks makes the group NOT-disjoint (so the genuine multidriven WARN can
+    still fire). Requires >=2 sets; fewer is not a multidriven situation."""
+    if len(slice_sets) < 2:
+        return False
+    for i in range(len(slice_sets)):
+        for j in range(i + 1, len(slice_sets)):
+            if not _slices_disjoint(slice_sets[i], slice_sets[j]):
+                return False
+    return True
+
+
+def _edge_domain(sens: str) -> frozenset:
+    """The (edge, signal) clocking domain of an always sensitivity list, e.g.
+    {('posedge','clk')}. A level-sensitive / `*` list yields the empty set."""
+    return frozenset(
+        (m.group(1), m.group(2))
+        for m in re.finditer(r'\b(pos|neg)edge\s+([A-Za-z_]\w*)', sens))
+
+
+def rule_multidriven_register(src: str, path: str) -> List[Finding]:
+    """Rule 13 (ORGANIC #740 G4) — WARN when a reg is driven from >1 always
+    block in a racing/different clocking domain."""
+    findings: List[Finding] = []
+    blocks = [(sens, body, pos) for sens, body, pos in _iter_always_blocks(src)]
+    if len(blocks) < 2:
+        return findings
+    # collect every reg-like LHS per block (NBA or blocking) with its slice info
+    # so we can see which regs are written by >1 block.
+    reg_block_idx: Dict[str, List[int]] = {}
+    for idx, (sens, body, pos) in enumerate(blocks):
+        for am in re.finditer(
+                r'(?<![<>!=])\b([A-Za-z_]\w*)\s*(?:\[[^\]]+\])?\s*(?:<=|=)(?!=)',
+                body):
+            nm = am.group(1)
+            if nm in VERILOG_KEYWORDS:
+                continue
+            reg_block_idx.setdefault(nm, [])
+            if idx not in reg_block_idx[nm]:
+                reg_block_idx[nm].append(idx)
+    for reg, idxs in sorted(reg_block_idx.items()):
+        if len(idxs) < 2:
+            continue
+        # gather per-block clocking domain + guard classification for THIS reg
+        domains = [_edge_domain(blocks[i][0]) for i in idxs]
+        guards = [_reg_write_guard_in_block(blocks[i][1], reg) for i in idxs]
+        # (1) disjoint bit-slice writers → distinct drivers, not a race. This
+        # holds for ANY writer count (2, 3, …): if every PAIR of writer blocks
+        # drives non-overlapping bit-slices of `reg`, each block owns its own
+        # bits and there is no multidriven hazard (verilator -Wall reports 0
+        # MULTIDRIVEN). A single whole-reg / overlapping write breaks disjointness
+        # and falls through to the genuine-race checks below.
+        slice_sets = [g[1] for g in guards]   # g = (writes, slices, ...)
+        if _all_slices_pairwise_disjoint(slice_sets):
+            continue
+        # (2) different clocking domains among the writers → ALWAYS a race
+        # (this is exactly verilator's MULTIDRIVEN: "different clocking").
+        distinct_domains = {d for d in domains if d}
+        different_clocking = len(distinct_domains) > 1
+        if different_clocking:
+            lineno = src[:blocks[idxs[0]][2]].count('\n') + 1
+            doms = sorted(
+                "/".join(f"{e} {s}" for e, s in sorted(d)) or "comb"
+                for d in distinct_domains)
+            findings.append(Finding(
+                path, lineno, 'WARN', 'multidriven-register', reg,
+                f"register `{reg}` is driven from {len(idxs)} always blocks "
+                f"with DIFFERENT clocking domains ({', '.join(doms)}) — the "
+                f"writes are unsynchronised and the last-scheduled one wins "
+                f"non-deterministically (`verilator -Wall` MULTIDRIVEN). Drive "
+                f"`{reg}` from a SINGLE always block."))
+            continue
+        # (3) SAME clocking domain — fire ONLY when the writers can RACE on a
+        # shared edge: i.e. they are NOT reset-complementary-guarded. The legal
+        # split (`if(rst) x<=0;` in one block, `if(!rst) x<=..;` in another)
+        # never both-fires on one edge → no WARN. The acceptance shape (one
+        # reset-clear block + one UNCONDITIONAL datapath block) races → WARN.
+        any_unconditional = any(g[4] for g in guards)
+        has_reset_clear = any(g[2] for g in guards)
+        all_reset_complementary = (
+            all(g[2] or g[3] for g in guards)        # every block reset-guarded
+            and any(g[2] for g in guards)            # at least one assert-side
+            and any(g[3] for g in guards))           # at least one deassert-side
+        if all_reset_complementary and not any_unconditional:
+            continue                                 # legal reset/datapath split
+        if any_unconditional and has_reset_clear:
+            lineno = src[:blocks[idxs[0]][2]].count('\n') + 1
+            findings.append(Finding(
+                path, lineno, 'WARN', 'multidriven-register', reg,
+                f"register `{reg}` is driven from {len(idxs)} always blocks "
+                f"(multidriven): one block reset-clears it while another writes "
+                f"it UNCONDITIONALLY under the same clock, so both fire on a "
+                f"reset edge and the last-scheduled write wins "
+                f"non-deterministically (`verilator -Wall` MULTIDRIVEN). Merge "
+                f"the writes into ONE always block (gate the datapath update "
+                f"with the same reset/else the clear uses)."))
+    return findings
+
+
 def lint_file(path: Path) -> List[Finding]:
     raw = path.read_text(errors='replace')
     src = strip_comments(raw)
@@ -1294,6 +1527,7 @@ def lint_file(path: Path) -> List[Finding]:
     results += rule_reserved_word_identifier(src, str(path))
     results += rule_unguarded_sim_only_assert(raw, str(path))
     results += rule_reset_boundary_residual_enable(src, str(path))
+    results += rule_multidriven_register(src, str(path))
     # rule_wire_input_read_in_clocked_block: NOT enabled.
     #
     # v0.1.39 honesty correction (audit Finding 2): the v0.1.38 disable

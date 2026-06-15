@@ -24,11 +24,37 @@ WHAT IT DOES
   1. Parse the threshold + which metric(s) it binds (cells / wires / both) from
      the prompt text (``--prompt`` file or ``--threshold-pct`` + ``--metric``).
   2. Run yosys ``stat`` on the ORIGINAL and the OPTIMIZED RTL with the SAME
-     technology-independent synth recipe (``synth -top -flatten; techmap; opt;
-     dffunmap; abc -g cmos2; stat``) inside the iic-eda container (the same
-     recipe shape the phase-2 synth + scorer use).
-  3. Compute  reduction% = 100 * (orig - opt) / orig  for cells and for wires.
-  4. BLOCK (rc 1) iff a BOUND metric's reduction is below the stated threshold.
+     synth recipe inside the iic-eda container. The recipe emits the `stat`
+     TWICE: once on the technology-INDEPENDENT GENERIC netlist (after
+     ``synth -flatten; opt`` but BEFORE ``techmap``/``abc -g cmos2`` — the
+     coarse-grain ``$add``/``$mul``/``$dff`` cells), and once on the
+     technology-MAPPED netlist (after ``abc -g cmos2`` — the cmos2 gate count),
+     so BOTH a tech-independent and a tech-mapped delta are available.
+  3. Compute  reduction% = 100 * (orig - opt) / orig  for cells and for wires,
+     on BOTH the GENERIC and the MAPPED counts.
+  4. BLOCK (rc 1) iff a BOUND metric's MAPPED reduction is below the stated
+     threshold — UNLESS the same metric's GENERIC reduction is ALSO below the
+     threshold, which proves the design is already NEAR-MINIMAL (no equivalent
+     rewrite, incl. the golden, can clear the bar on the tech-independent count
+     either): that is downgraded to NOT-APPLICABLE / advisory, never a BLOCK.
+
+UNREACHABLE-TARGET ESCAPE (§4.05 — false-BLOCK is irreversible)
+--------------------------------------------------------------
+On a near-minimal design the stated reduction target (e.g. 20% cells+wires) can
+be UNACHIEVABLE by ANY functionally-equivalent rewrite — including the golden —
+because synthesis already shares the source redundancy and the cmos2-mapped
+floor is reached. The MAPPED measurement is right, but an all-or-nothing BLOCK
+on an unreachable target would block EVERY equivalent answer including the
+golden. The escape: when a bound metric's MAPPED reduction is sub-threshold but
+NON-NEGATIVE AND its GENERIC (pre-abc / pre-techmap, technology-independent)
+reduction is ALSO sub-threshold, the target is proven unreachable for this
+design → NOT-APPLICABLE / advisory, not a BLOCK. CRUCIAL no-leak: a
+lazily-optimized design whose GENERIC reduction is AT/ABOVE the threshold (so it
+COULD still reach the target) is STILL BLOCKED — only a proven-near-minimal one
+is downgraded. SECOND no-leak (#739 remediation): a design whose MAPPED
+reduction for a bound metric is NEGATIVE (optimized is LARGER than original —
+the submission made the count WORSE) is never near-minimal, so the escape does
+NOT fire for it and it is STILL BLOCKED regardless of the generic count.
 
 The %-computation + threshold-compare is factored into PURE functions
 (``compute_reduction_pct`` / ``parse_threshold_from_prompt`` / ``decide``) so it
@@ -44,8 +70,13 @@ block:
   * the threshold cannot be parsed from the prompt    → NOT-APPLICABLE rc 0.
   * the ORIGINAL has 0 cells (degenerate, can't form  → NOT-APPLICABLE rc 0.
     a percentage)
-A real, fully-measured reduction at or above the threshold is a PASS (rc 0); a
-real, fully-measured reduction below the threshold is the ONLY BLOCK (rc 1).
+  * a sub-threshold MAPPED reduction whose GENERIC reduction → NOT-APPLICABLE
+    is ALSO sub-threshold (proven-near-minimal / unreachable    rc 0 (advisory).
+    target — no equivalent rewrite incl. golden can clear it)
+A real, fully-measured MAPPED reduction at or above the threshold is a PASS
+(rc 0); a sub-threshold MAPPED reduction whose GENERIC reduction shows REAL
+headroom (>= threshold, i.e. the design COULD have reached the target) is the
+ONLY BLOCK (rc 1).
 
 chip-AGNOSTIC: pure synth-stat measurement + arithmetic; no design / chip /
 vendor / SKU / PDK literal.
@@ -163,6 +194,53 @@ _WIRES_OLD_RE = re.compile(r"Number of wires:\s*(\d[\d,]*)")
 _CELLS_NEW_RE = re.compile(r"^\s*(\d[\d,]*)\s+cells\s*$", re.MULTILINE)
 _WIRES_NEW_RE = re.compile(r"^\s*(\d[\d,]*)\s+wires\s*$", re.MULTILINE)
 
+# Unique markers the recipe `log`s — ON ITS OWN LINE — between the GENERIC
+# (pre-techmap/pre-abc, technology-independent) `stat` and the MAPPED (post-abc
+# -g cmos2) `stat`, so the two stat blocks can be split off ONE transcript.
+# Plain ASCII so it survives container stdout untouched. NOTE: yosys also ECHOES
+# the whole command line (`-- Running command \`...; log MARK; stat; ...\``), so
+# BOTH markers ALSO appear mid-line inside that one echoed command line — the
+# split therefore matches each marker only when it is ALONE on a line (the real
+# `log` output), never the mid-line command-echo copy.
+_GENERIC_MARK = "PPA_AREA_GENERIC_STAT"
+_MAPPED_MARK = "PPA_AREA_MAPPED_STAT"
+_GENERIC_MARK_RE = re.compile(r"^[ \t]*" + re.escape(_GENERIC_MARK) + r"[ \t]*$",
+                              re.MULTILINE)
+_MAPPED_MARK_RE = re.compile(r"^[ \t]*" + re.escape(_MAPPED_MARK) + r"[ \t]*$",
+                             re.MULTILINE)
+
+
+def split_generic_mapped_stat(blob: str) -> Tuple[str, str]:
+    """Split a transcript that contains a GENERIC stat block then a MAPPED stat
+    block (separated by the recipe's `log` markers) into (generic, mapped) text.
+
+    PURE — no I/O. The recipe is::
+
+        ... opt; log PPA_AREA_GENERIC_STAT; stat; ...
+        ... abc -g cmos2; log PPA_AREA_MAPPED_STAT; stat
+
+    so the GENERIC stat lives between _GENERIC_MARK and _MAPPED_MARK, and the
+    MAPPED stat lives after _MAPPED_MARK. Each marker is matched ONLY when it is
+    ALONE on a line — yosys also echoes the full command line, in which both
+    markers appear MID-line, and that command-echo copy must NOT be mistaken for
+    the real `log` output. If a standalone marker is missing (older recipe / odd
+    output) the WHOLE blob is returned for the missing section so the existing
+    single-stat parse still finds the (mapped) numbers — degrade, never crash."""
+    text = blob or ""
+    gm = _GENERIC_MARK_RE.search(text)
+    mm = _MAPPED_MARK_RE.search(text)
+    if gm is not None and mm is not None and mm.start() > gm.end():
+        generic = text[gm.end():mm.start()]
+        mapped = text[mm.end():]
+        return generic, mapped
+    if mm is not None:
+        # only the mapped marker present → everything after it is the mapped
+        # stat; no generic section available.
+        return "", text[mm.end():]
+    # no standalone markers — treat the whole blob as the mapped stat
+    # (back-compat with a marker-less transcript).
+    return "", text
+
 
 def parse_stat(stat_text: str) -> Dict[str, Optional[int]]:
     """Extract {'cells': int|None, 'wires': int|None} from yosys `stat` text.
@@ -203,16 +281,52 @@ def compute_reduction_pct(orig: Optional[int], opt: Optional[int]
     return round(100.0 * (orig - opt) / orig, 4)
 
 
+def _generic_headroom(metric_red: Optional[float], generic_red: Optional[float],
+                      threshold_pct: float) -> bool:
+    """True iff the GENERIC (tech-independent) reduction for a metric shows REAL
+    headroom — i.e. it is measurable AND at/above the threshold, so a
+    functionally-equivalent rewrite COULD still clear the bar on the
+    tech-independent count. That is a LAZY optimization the gate must still
+    BLOCK. False when the generic reduction is unavailable (no data → cannot
+    prove headroom, default to BLOCK) or itself sub-threshold (proven
+    near-minimal → eligible for the unreachable-target escape).
+
+    PURE — no I/O. `metric_red` is unused here (kept for call-site symmetry);
+    the headroom question is decided wholly on the GENERIC reduction."""
+    if generic_red is None:
+        return True   # no generic evidence → cannot prove unreachable → BLOCK
+    return generic_red >= threshold_pct
+
+
 def decide(cells_red: Optional[float], wires_red: Optional[float],
-           threshold_pct: float, metric: str
+           threshold_pct: float, metric: str,
+           cells_red_generic: Optional[float] = None,
+           wires_red_generic: Optional[float] = None,
            ) -> Tuple[str, str]:
-    """Pure verdict from the two reductions + the bound metric + the threshold.
+    """Pure verdict from the MAPPED reductions + bound metric + threshold, with
+    an UNREACHABLE-TARGET escape driven by the GENERIC (tech-independent)
+    reductions.
 
     Returns (verdict, reason). verdict ∈ {PASS, BLOCK, NOT_APPLICABLE}:
-      * a BOUND metric's reduction is None (unmeasurable)        → NOT_APPLICABLE
-      * a BOUND metric's reduction is < threshold                → BLOCK
-      * every bound metric's reduction is >= threshold           → PASS
+      * a BOUND metric's MAPPED reduction is None (unmeasurable)  → NOT_APPLICABLE
+      * a BOUND metric's MAPPED reduction is NEGATIVE (the design
+        GREW — optimized has MORE cells/wires than original); a
+        grown design is never near-minimal/unreachable           → BLOCK
+      * a BOUND metric's MAPPED reduction is sub-threshold but
+        NON-NEGATIVE AND its GENERIC reduction is ALSO
+        sub-threshold (proven near-minimal, unreachable target —
+        no equivalent rewrite incl. golden can clear the
+        tech-independent bar)                                     → NOT_APPLICABLE
+      * a BOUND metric's MAPPED reduction is < threshold while its
+        GENERIC reduction shows headroom (>= threshold, or no
+        generic evidence) → the design COULD have reached it      → BLOCK
+      * every bound metric's MAPPED reduction is >= threshold     → PASS
     `cells`/`wires` bind one; `both` binds both.
+
+    `cells_red_generic` / `wires_red_generic` are the GENERIC-cell-count
+    reductions (pre-abc / pre-techmap). When BOTH are None (legacy call with no
+    generic data) the escape never fires and the behaviour is the prior
+    all-or-nothing MAPPED gate — fail-SAFE, no surprise downgrade.
     """
     bind_cells = metric in (_METRIC_CELLS, _METRIC_BOTH)
     bind_wires = metric in (_METRIC_WIRES, _METRIC_BOTH)
@@ -227,14 +341,70 @@ def decide(cells_red: Optional[float], wires_red: Optional[float],
                 "wires reduction is unmeasurable (no wire count from yosys "
                 "stat on one side); cannot assert the wires threshold")
 
-    failures: List[str] = []
+    # classify each bound, sub-threshold metric as either a REAL BLOCK (generic
+    # headroom exists → the design could have reduced more, OR the design GREW —
+    # a negative reduction is never a near-minimal/unreachable design) or an
+    # UNREACHABLE target (generic also sub-threshold AND the mapped count did NOT
+    # grow → proven near-minimal → escape).
+    #
+    # GROWN-DESIGN NO-LEAK (#739 remediation): a metric whose MAPPED reduction is
+    # NEGATIVE means the optimized count is LARGER than the original — the
+    # submission made that metric WORSE. That is never a "near-minimal,
+    # target-unreachable" design, so the unreachable-target escape must NOT fire
+    # for it even when the generic reduction is small/sub-threshold; keep it a
+    # BLOCK. The escape fires ONLY for a genuinely-near-minimal metric: mapped
+    # sub-threshold but NON-NEGATIVE, and generic also sub-threshold.
+    failures: List[str] = []         # real, blockable under-reductions
+    unreachable: List[str] = []      # proven-near-minimal sub-threshold metrics
     if bind_cells and cells_red < threshold_pct:
-        failures.append(f"cells reduction {cells_red:.2f}% < {threshold_pct:g}%")
+        if cells_red < 0:
+            failures.append(
+                f"cells reduction {cells_red:.2f}% < {threshold_pct:g}% "
+                f"(design GREW — optimized has MORE cells than original; "
+                f"never a near-minimal/unreachable target)")
+        elif _generic_headroom(cells_red, cells_red_generic, threshold_pct):
+            failures.append(
+                f"cells reduction {cells_red:.2f}% < {threshold_pct:g}%"
+                + (f" (generic {cells_red_generic:.2f}% has headroom)"
+                   if cells_red_generic is not None else ""))
+        else:
+            unreachable.append(
+                f"cells mapped {cells_red:.2f}% / generic "
+                f"{cells_red_generic:.2f}% both < {threshold_pct:g}%")
     if bind_wires and wires_red < threshold_pct:
-        failures.append(f"wires reduction {wires_red:.2f}% < {threshold_pct:g}%")
+        if wires_red < 0:
+            failures.append(
+                f"wires reduction {wires_red:.2f}% < {threshold_pct:g}% "
+                f"(design GREW — optimized has MORE wires than original; "
+                f"never a near-minimal/unreachable target)")
+        elif _generic_headroom(wires_red, wires_red_generic, threshold_pct):
+            failures.append(
+                f"wires reduction {wires_red:.2f}% < {threshold_pct:g}%"
+                + (f" (generic {wires_red_generic:.2f}% has headroom)"
+                   if wires_red_generic is not None else ""))
+        else:
+            unreachable.append(
+                f"wires mapped {wires_red:.2f}% / generic "
+                f"{wires_red_generic:.2f}% both < {threshold_pct:g}%")
+    # PRE-EXISTING / OUT-OF-SCOPE (separate LOW): metric='both' with one
+    # unmeasurable partner (mapped reduction None) short-circuits to
+    # NOT_APPLICABLE above, masking the other (measured) metric's verdict. That
+    # masking pre-dates this fix and is not addressed here — noted only.
+
+    # a metric with REAL generic headroom that still missed the bar BLOCKs —
+    # this dominates (no-leak: a lazily-optimized design is never downgraded).
     if failures:
         return ("BLOCK",
                 "under-threshold area reduction: " + "; ".join(failures))
+
+    # no real-headroom failure, but some bound metric was sub-threshold AND
+    # proven near-minimal on the generic count → unreachable target, advisory.
+    if unreachable:
+        return ("NOT_APPLICABLE",
+                "unreachable-target escape: the stated reduction is unachievable "
+                "by ANY functionally-equivalent rewrite for this near-minimal "
+                "design — " + "; ".join(unreachable)
+                + " (advisory, NOT a block)")
 
     parts: List[str] = []
     if bind_cells:
@@ -250,12 +420,19 @@ def decide(cells_red: Optional[float], wires_red: Optional[float],
 # Path inside the iic-osic-tools / iic-eda container where the EDA tools live.
 _TOOLS_IN_CONTAINER = "/foss/tools"
 
-# The SAME technology-independent lowering recipe the phase-2 synth path uses
-# (synth -flatten; techmap; opt; dffunmap; abc -g cmos2) so the cell/wire counts
-# are directly comparable between the original and the optimized RTL.
+# The SAME lowering recipe the phase-2 synth path uses (synth -flatten; techmap;
+# opt; dffunmap; abc -g cmos2) so the cell/wire counts are directly comparable
+# between the original and the optimized RTL. The recipe emits the `stat` TWICE
+# around an `echo` marker: once on the GENERIC (technology-INDEPENDENT, coarse
+# $add/$mul/$dff) netlist right after `synth -flatten; opt` — BEFORE techmap/abc
+# — and once on the technology-MAPPED netlist after `abc -g cmos2`, so a
+# tech-independent and a tech-mapped reduction are both available off one run
+# (the GENERIC one anchors the unreachable-target escape).
 _SYNTH_TAIL = ("hierarchy -check -top {top}; proc; flatten; "
-               "synth -top {top} -flatten; techmap; opt; dffunmap; "
-               "abc -g cmos2; stat")
+               "synth -top {top} -flatten; opt; "
+               "log " + _GENERIC_MARK + "; stat; "
+               "techmap; opt; dffunmap; abc -g cmos2; "
+               "log " + _MAPPED_MARK + "; stat")
 
 
 def _run(cmd: List[str], timeout: int = 60) -> Tuple[int, str, str]:
@@ -383,9 +560,13 @@ def run_ppa_area_threshold(
         "top": top,
         "container": container,
         "methodology": ("yosys stat on ORIGINAL + OPTIMIZED with the SAME synth "
-                        "recipe; reduction%% = 100*(orig-opt)/orig for cells and "
-                        "wires; BLOCK iff a prompt-bound metric is below the "
-                        "prompt-stated threshold"),
+                        "recipe, taken TWICE (GENERIC pre-techmap/abc + MAPPED "
+                        "post-abc -g cmos2); reduction%% = 100*(orig-opt)/orig "
+                        "for cells and wires; BLOCK iff a prompt-bound metric's "
+                        "MAPPED reduction is below threshold AND its GENERIC "
+                        "reduction shows headroom; a sub-threshold MAPPED whose "
+                        "GENERIC is ALSO sub-threshold is an unreachable target "
+                        "→ NOT-APPLICABLE/advisory, not a block"),
     }
 
     # ── resolve the threshold + bound metric ──────────────────────────────────
@@ -445,17 +626,35 @@ def run_ppa_area_threshold(
                             f"NOT-APPLICABLE (cannot measure → no false block)")
         return 0, report
 
-    orig_stat = parse_stat(orig_blob)
-    opt_stat = parse_stat(opt_blob)
+    # split each transcript into its GENERIC (tech-independent, pre-techmap/abc)
+    # stat and its MAPPED (post-abc -g cmos2) stat. The mapped stat is the
+    # measured target; the generic stat anchors the unreachable-target escape.
+    orig_generic_txt, orig_mapped_txt = split_generic_mapped_stat(orig_blob)
+    opt_generic_txt, opt_mapped_txt = split_generic_mapped_stat(opt_blob)
+
+    orig_stat = parse_stat(orig_mapped_txt)
+    opt_stat = parse_stat(opt_mapped_txt)
+    orig_stat_generic = parse_stat(orig_generic_txt)
+    opt_stat_generic = parse_stat(opt_generic_txt)
     report["original_stat"] = orig_stat
     report["optimized_stat"] = opt_stat
+    report["original_stat_generic"] = orig_stat_generic
+    report["optimized_stat_generic"] = opt_stat_generic
 
     cells_red = compute_reduction_pct(orig_stat["cells"], opt_stat["cells"])
     wires_red = compute_reduction_pct(orig_stat["wires"], opt_stat["wires"])
+    cells_red_generic = compute_reduction_pct(
+        orig_stat_generic["cells"], opt_stat_generic["cells"])
+    wires_red_generic = compute_reduction_pct(
+        orig_stat_generic["wires"], opt_stat_generic["wires"])
     report["cells_reduction_pct"] = cells_red
     report["wires_reduction_pct"] = wires_red
+    report["cells_reduction_pct_generic"] = cells_red_generic
+    report["wires_reduction_pct_generic"] = wires_red_generic
 
-    verdict, reason = decide(cells_red, wires_red, threshold, metric)
+    verdict, reason = decide(cells_red, wires_red, threshold, metric,
+                             cells_red_generic=cells_red_generic,
+                             wires_red_generic=wires_red_generic)
     report["verdict"] = verdict
     report["reason"] = reason
     if verdict == "BLOCK":
@@ -522,8 +721,10 @@ def main(argv=None) -> int:
         print(f"NOT-APPLICABLE: {report['reason']}")
     elif verdict == "BLOCK":
         print(f"PPA-AREA-BLOCK: {report['reason']} "
-              f"(cells={report.get('cells_reduction_pct')}%, "
-              f"wires={report.get('wires_reduction_pct')}%)")
+              f"(mapped cells={report.get('cells_reduction_pct')}%, "
+              f"wires={report.get('wires_reduction_pct')}%; "
+              f"generic cells={report.get('cells_reduction_pct_generic')}%, "
+              f"wires={report.get('wires_reduction_pct_generic')}%)")
     elif verdict == "PASS":
         print(f"ppa-area-threshold ok: {report['reason']}")
     else:

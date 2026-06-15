@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 691
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 691)
+- **Total programs (excluding helpers / shims):** 692
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 692)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 682 |
+| `any` | 683 |
 
 ## Alphabetical listing
 
@@ -137,6 +137,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `chip_gds_canonical_real_file_check` | any | — | top-level chip GDS files at |
 | `chip_top_gate_wrapper_gen` | any | — | v1.6.232 (merged v229+v231). |
 | `chip_top_open_drain_polarity_check` | any | — | v1.6.225. |
+| `clause_smoke_tb` | any | — | ORGANIC #740 (G2) [chip-AGNOSTIC] |
 | `clock_cascade_synthesis_check` | any | — | refuse a top-level RTL that ties |
 | `clock_divider_period_check` | any | v0.116 | BACKLOG-v11 P0.2. |
 | `clock_plan_check` | any | — | Step 16 (Clock planning) substance gate. |
@@ -763,7 +764,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (682 programs)
+### `any` (683 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -875,6 +876,7 @@ _(no programs in this group)_
 - `chip_gds_canonical_real_file_check` — top-level chip GDS files at
 - `chip_top_gate_wrapper_gen` — v1.6.232 (merged v229+v231).
 - `chip_top_open_drain_polarity_check` — v1.6.225.
+- `clause_smoke_tb` — ORGANIC #740 (G2) [chip-AGNOSTIC]
 - `clock_cascade_synthesis_check` — refuse a top-level RTL that ties
 - `clock_divider_period_check` — BACKLOG-v11 P0.2.  _[v0.116]_
 - `clock_plan_check` — Step 16 (Clock planning) substance gate.
