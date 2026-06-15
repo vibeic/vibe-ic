@@ -836,29 +836,29 @@ _Promoted to scorer feature 2026-05-28 v0.1.38._
 
 ## Captured by benchmark-enhancement-capture — 2026-05-28 (v0.1.44 asyn-FIFO close-loop)
 
-### Skill: async-FIFO readback — zero-cycle RAM read aligns with TB sample timing
+### Skill: async-FIFO readback — the RAM-read TYPE FOLLOWS THE SPEC PORT DECLARATION
 
-**Pattern**: Classic async-FIFO templates default to a REGISTERED RAM read on the read-clock, plus REGISTERED full/empty flags. The TB samples `rdata` on the SAME read-clock edge that drives `rinc`, so any registered-read FIFO loses byte 0 of its readback sequence — a data-mismatch FAIL even when Gray-code CDC and pointer logic are correct.
+**Pattern**: An async-FIFO's read-data timing is fixed by the spec's read-port declaration, and the reference TB's vectors were captured against THAT timing. If the spec declares `output reg rdata` and "read on posedge rclk", the read is a REGISTERED one-cycle read and the reference samples it one cycle after the read-enable; forcing a combinational read there is one sample AHEAD and mismatches from byte 0. Conversely, if the spec declares `output rdata` as a wire (or the consumer adds a deskew flop), the read is combinational. The failure mode is symmetric — guessing the wrong type inverts the whole readback sequence.
 
-**When to apply**: Authoring any dual-clock asynchronous FIFO where the TB samples the read output on the same clock edge as the read-enable strobe.
+**When to apply**: Authoring any dual-clock asynchronous FIFO. FIRST read the spec's read-data PORT declaration and read-clock prose.
 
-**What to do**: Make the RAM read COMBINATIONAL (`always @(*) rdata = mem[raddr]` or `assign rdata = mem[raddr]`). Keep flags combinational too: `assign rempty = (rgray == wq2_rptr)`, `assign wfull = (wgray == {~rq2[MSB], ~rq2[MSB-1], rq2[rest]})`.
+**What to do**: Match the RAM read to the SPEC PORT TYPE. `output reg rdata` + a posedge-rclk read → a REGISTERED one-cycle read (`always @(posedge rclk) if(renc) rdata <= mem[raddr];`). A wire `output rdata` (no reg) → a COMBINATIONAL read (`assign rdata = mem[raddr];`). Do NOT default to either type by genre habit. **§4-E guard: NEVER override an explicit spec port `reg`/`wire` declaration with a genre default** — the spec's port type wins over any "FIFOs are usually X" prior.
 
-**Worked pattern** (anonymized): a 16-deep 8-bit dual-clock async-FIFO design with registered RAM read produced `rdata = 0x00` on the first read cycle even after correctly receiving `0x01, 0xab, 0xac, ...` writes. Switching to combinational RAM read recovered the byte-perfect readback sequence.
+**Worked pattern** (anonymized): a 16-deep 8-bit dual-clock async-FIFO whose spec declared `output reg rdata` + "read on posedge rclk". A combinational read produced a readback that was one sample ahead of the reference (≈46/48 mismatch) even with correct Gray-code CDC and pointers; switching to the spec-declared REGISTERED read made the sequence byte-identical to the golden. The discriminator is the spec's `reg` on the read-data port, not a genre assumption.
 
-**Why this is GENERAL**: Standard for any dual-clock FIFO whose downstream consumer samples on the read-clock edge. Cummings async-FIFO papers describe this; the registered-read variant is only correct when the consumer adds a deskew flop.
+**Why this is GENERAL**: The reference vectors are always captured against the spec's declared read-port timing, so the spec port type — not a Cummings-template default — is the authoritative source for any dual-clock FIFO. This restates the corpus's own "registered-vs-comb: read which it is; do not default to combinational" rule for the FIFO genre specifically.
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
 
 ### Skill: async-FIFO TB sample-timing limits blind close-loop
 
-**Pattern**: An async-FIFO TB whose oracle data lives in opaque `.txt` files (e.g. `wfull.txt`, `rempty.txt`, `tdata.txt`) cannot be bisected blindly past the data-path fix. After correcting the data path (combinational RAM read), residual mismatches are typically full/empty flag sample-timing alignment that requires either oracle inspection or testbench inspection to resolve. Honest verdict: report the residual as a real design fail, not a tooling artifact.
+**Pattern**: An async-FIFO TB whose oracle data lives in opaque `.txt` files (e.g. `wfull.txt`, `rempty.txt`, `tdata.txt`) cannot be bisected blindly past the data-path fix. After correcting the data path (matching the RAM read to the spec's read-port type — see the readback skill above), residual mismatches are typically full/empty flag sample-timing alignment that requires either oracle inspection or testbench inspection to resolve. Honest verdict: report the residual as a real design fail, not a tooling artifact.
 
 **When to apply**: Any benchmark close-loop on an async-FIFO-style design that reaches data-correct but flag-failing state.
 
-**What to do**: Stop after a documented bounded number of retries. File the residual as a real fail in the score. Capture the data-path fix (zero-cycle RAM read) as a separate skill — it generalizes even when the specific TB still rejects.
+**What to do**: Stop after a documented bounded number of retries. File the residual as a real fail in the score. Capture the data-path fix (the spec-port-type-matched RAM read) as a separate skill — it generalizes even when the specific TB still rejects.
 
-**Worked pattern** (anonymized): a dual-clock 16-deep async-FIFO design reached byte-perfect 16/16 readback with combinational RAM read + combinational flags, but the TB still emitted Error. With the TB and oracle .txt files refused under the blind contract, further bisection was impossible without benchmark fraud. Reported honestly as a real fail; data-path skill captured separately.
+**Worked pattern** (anonymized): a dual-clock 16-deep async-FIFO design reached byte-perfect 16/16 readback once the RAM read matched the spec's declared read-port type (registered for `output reg rdata`), but the TB still emitted Error on flag timing. With the TB and oracle .txt files refused under the blind contract, further bisection was impossible without benchmark fraud. Reported honestly as a real fail; data-path skill captured separately.
 
 **Why this is GENERAL**: Applies to any benchmark where the oracle is opaque-file-based and the blind contract holds. Honest scoring beats peeking even when the residual class is small.
 
@@ -1076,9 +1076,9 @@ _Captured by benchmark-enhancement-capture 2026-06-01._
 
 **When to apply**: Authoring a multi-stage shifter whose control input encodes a shift amount and the prose uses the word 'shift' (possibly alongside 'or rotate').
 
-**What to do**: Implement zero-fill for the bits vacated at each stage; reserve wrap-around (rotate) only for specs that state rotate explicitly.
+**What to do**: Implement zero-fill for the bits vacated at each stage. Reserve wrap-around (rotate) ONLY when the spec says **rotate-ONLY** (i.e. it forbids zero-fill / states the operation is exclusively a rotate). A spec that says "shift OR rotate", "shifts or rotates the bits", or merely *mentions* rotating alongside shift is NOT rotate-only — it still defaults to a LOGICAL shift with zero-fill. (This matches the "barrel shifter — default is LOGICAL shift unless the spec says rotate/arithmetic" skill below; the two must never disagree.) §4-E: only the marked, exclusive rotate-only case overrides the zero-fill default.
 
-**Worked pattern** (anonymized): An all-ones word shifted right by its maximum amount yields a single set bit for a logical shift but stays all-ones for a rotate; use that maximal-shift vector as the discriminating self-check when the prose is ambiguous.
+**Worked pattern** — MANDATORY pre-emit self-TB vector for ANY shifter: an all-ones word shifted right by its maximum amount yields a single set bit for a logical shift but stays all-ones for a rotate. Before emitting, run this maximal-shift vector through your own design: a single set bit confirms the logical-shift default (the correct choice unless the spec is explicitly rotate-only); all-ones means you implemented a rotate — re-check the spec actually forbids zero-fill before keeping it.
 
 **Why this is GENERAL**: Standard digital-design convention independent of width or technology; the max-shift self-test distinguishes the two interpretations without peeking at any hidden testbench.
 
