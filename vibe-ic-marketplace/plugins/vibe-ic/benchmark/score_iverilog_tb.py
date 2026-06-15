@@ -876,6 +876,177 @@ def _score_side_port_permutation_rescue_shape_b(
     return None  # permuted compiles but RUNTIME-fails → wrong logic → keep FAIL.
 
 
+# ── ORGANIC #742 FACET A — PROACTIVE positional-port normalization ───────────
+# WHY THIS IS PROACTIVE (the #742 reopen of the #707 family)
+# ---------------------------------------------------------
+# #707's score-side permutation rescue (above) is REACTIVE — it fires ONLY after
+# the verbatim candidate has already produced a `compile_error` against the hidden
+# TB. The motivating #742 designs are functionally correct (golden-self-
+# consistent) yet declare ports in the spec's Input-then-Output prose order while
+# the hidden TB binds the DUT POSITIONALLY outputs-first
+# (`DUT u(out_tb, clk_tb, rst_tb)`) — so the blind first pass ALWAYS compile-errors
+# (`rst_tb Unable to assign to unresolved wires`) before the reactive rescue can
+# run. The blind first-pass emit/score ignored the hidden-TB binding contract.
+#
+# THE FIX: BEFORE the first iverilog compile, when the hidden TB instantiates the
+# DUT POSITIONALLY (a bare positional port list — no `.name(...)` named
+# connections), normalize the emitted module's port ORDER to the positional
+# contract the TB expects (the GOLDEN's declaration order, matched by NAME — the
+# ground-truth positional bind order). A PURE PERMUTATION of the SAME named ports
+# (never invent / drop / rename a port, never change a width/direction/logic). The
+# reactive rescue (#707) is kept as the backstop for the cases the proactive
+# normalize cannot reach (e.g. a no-ANSI-portlist candidate).
+#
+# §4.05: identical to #707 — the order is the golden's, matched by name; a same-
+# width operand swap (`gt=b>a`) permutes to the golden NAME order and its WRONG
+# LOGIC still RUNTIME-FAILs. The normalize NEVER decides PASS/FAIL — it only
+# re-orders before the SAME compile+vvp gate runs. chip-AGNOSTIC: structural
+# grammar + registry layout; the TB is touched at SCORING time only (like the
+# rest of this scorer), never during blind authoring.
+def _proactive_positional_port_normalize_shape_b(
+        cand_text: str, design: str, dataset: Path, layout: dict) -> str:
+    """Return `cand_text` with the candidate's port-DECLARATION list reordered to
+    the GOLDEN's positional bind order (matched by NAME) WHEN the hidden TB binds
+    the DUT POSITIONALLY. Returns `cand_text` UNCHANGED on ANY of:
+      * iverilog / the exporter helpers unavailable,
+      * no positional TB (named bind / no instantiation / ambiguous),
+      * the golden(aliased)+TB does NOT elaborate (a #690 dataset defect — not a
+        port-order problem; the reactive #690 audit must own it),
+      * the candidate's port-NAME set != the golden's (not a pure permutation),
+      * the candidate has no parseable ANSI port list, or the order already matches.
+    A PURE PERMUTATION — never adds/drops/renames a port, never alters logic.
+    chip-AGNOSTIC: structural grammar + registry layout only."""
+    if not shutil.which("iverilog"):
+        return cand_text
+    S = _shape_b_export_helpers()
+    if S is None:
+        return cand_text
+    tb_name = layout.get("tb_filename")
+    if not tb_name:
+        return cand_text
+    tb = dataset / design / tb_name
+    if not tb.is_file():
+        return cand_text
+    top = _canonical_dut_name_shape_b(design, dataset, layout)
+    if not top:
+        return cand_text
+    parsed = S._parse_portlist_segments(cand_text, top)
+    if parsed is None:
+        return cand_text  # no ANSI port list / reorder hazard → leave verbatim.
+    block, segs = parsed
+    # The TB must bind POSITIONALLY for an order contract to exist at all.
+    try:
+        tb_text = tb.read_text(errors="replace")
+    except OSError:
+        return cand_text
+    if S._tb_positional_args(tb_text, top) is None:
+        return cand_text  # named bind / ambiguous → order is irrelevant.
+    # GATE: the golden(aliased)+TB must elaborate (otherwise it is a #690 dataset
+    # defect, NOT a port-order problem — leave it to the reactive audit path).
+    golden_ok, _golden_ports = _golden_ref_compiles_with_tb_shape_b(
+        design, dataset, layout)
+    if golden_ok is not True:
+        return cand_text
+    golden_order = _golden_declaration_order_shape_b(
+        design, dataset, layout, top, S)
+    if golden_order is None:
+        return cand_text
+    cand_names = [n for _seg, _d, n in segs]
+    if sorted(cand_names) != sorted(golden_order):
+        return cand_text  # name-set mismatch → not a pure permutation → REFUSE.
+    permuted = S._apply_order(cand_text, block, segs, golden_order)
+    return permuted  # byte-identical when already in order (a safe no-op).
+
+
+# ── ORGANIC #742 FACET B — named-parameter-override passthrough auto-retry ────
+# A hidden TB binds `dut #(.STG_WIDTH(16)) u(...)` but the prose names NO such
+# parameter → the blind first-pass emit has no `parameter STG_WIDTH`, and iverilog
+# aborts elaboration with EXACTLY `parameter `STG_WIDTH' not found in `<inst>'`.
+# This is an UNDISCLOSED binding contract on a functionally-correct, latency-
+# AGNOSTIC design. When the compile fails with ONLY that error (and no other),
+# auto-retry ONCE injecting a PASSTHROUGH `parameter <X>=<default>` (unread by the
+# RTL, so the vvp pass/fail comparison is unchanged — §4.05). A mixed error set,
+# or a candidate that already declares the param, is NOT normalized.
+def _param_passthrough_retry_shape_b(
+        sample_c: str, tb: Path, design: str, dataset: Path, layout: dict,
+        args: dict, compile_log: str, td: str) -> Optional[dict]:
+    """On a candidate whose iverilog compile failed with ONLY
+    `parameter `X' not found` error(s), inject a passthrough `parameter X=<default>`
+    into the emitted DUT header and retry the compile+run ONCE. Returns a verdict
+    dict (PASS/FAIL) iff the injection produced a clean elaboration, else None
+    (caller keeps the original compile_error). §4.05: a PURE ADD of a missing
+    declaration — the functional vvp comparison is untouched, so a wrong-logic DUT
+    still FAILs and an already-declared param is a no-op (None → keep FAIL).
+    chip-AGNOSTIC: the iverilog error grammar + the TB's `#(.X(...))` grammar."""
+    try:
+        import port_convention_corpus as _PCC
+    except Exception:
+        return None
+    if not _PCC.error_is_only_param_not_found(compile_log):
+        return None  # a mixed / non-param error stays the candidate's own FAIL.
+    missing = _PCC.iverilog_param_not_found(compile_log)
+    if not missing:
+        return None
+    top = _canonical_dut_name_shape_b(design, dataset, layout)
+    if not top:
+        return None
+    try:
+        cand_text = Path(sample_c).read_text(errors="replace")
+    except OSError:
+        return None
+    # Deterministic pre-emit gate: prefer the TB's OWN named-override value as the
+    # injected default (a numeric literal); fall back to a benign 1 (unread).
+    overrides = {}
+    try:
+        overrides = _PCC.tb_named_param_overrides(
+            (dataset / design / layout["tb_filename"]).read_text(errors="replace"),
+            top)
+    except Exception:
+        overrides = {}
+    injected = cand_text
+    added = False
+    for p in missing:
+        if _PCC.module_declares_param(injected, top, p):
+            continue  # already declared (e.g. by a prior iteration) → skip.
+        default = _PCC._default_for(p, overrides.get(p, ""))
+        new_text = _PCC.inject_passthrough_param(injected, top, p, default)
+        if new_text is None:
+            return None  # could not inject (malformed header) → keep FAIL.
+        injected, added = new_text, True
+    if not added:
+        return None
+    pass_re = re.compile(args["pass_regex"])
+    fail_re = re.compile(args["fail_regex"]) if args.get("fail_regex") else None
+    use_cwd = args.get("cwd_design_dir", True)
+    inj_v = os.path.join(td, f"{top}.param_injected.v")
+    with open(inj_v, "w") as fh:
+        fh.write(injected)
+    inj_fixed = _power_up_fixed(Path(inj_v), td)
+    binp = os.path.join(td, "param_injected_bin")
+    try:
+        c = subprocess.run(["iverilog", "-g2012", "-o", binp, inj_fixed, str(tb)],
+                           capture_output=True, text=True, timeout=120)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if c.returncode != 0 or not os.path.exists(binp):
+        return None  # the injection did NOT clear the elaboration → keep FAIL.
+    try:
+        r = subprocess.run(["vvp", binp], capture_output=True, text=True,
+                           timeout=120,
+                           cwd=str(dataset / design) if use_cwd else None)
+    except subprocess.TimeoutExpired:
+        return {"design": design, "verdict": "FAIL", "reason": "sim_timeout"}
+    out = r.stdout + r.stderr
+    if pass_re.search(out) and not (fail_re and fail_re.search(out)):
+        return {"design": design, "verdict": "PASS",
+                "reason": "recovered_via_param_passthrough_injection"}
+    # The injection cleared the elaboration but the design RUNTIME-FAILs the
+    # functional check → an honest functional FAIL (NOT masked by injection).
+    m = re.search(r"(\d+)\s*/\s*\d+\s*failures", out)
+    return {"design": design, "verdict": "FAIL",
+            "reason": f"functional_mismatch ({m.group(0) if m else 'test failed'})"}
+
+
 def _score_shape_b(design: str, samples: Path, dataset: Path,
                    layout: dict, args: dict) -> dict:
     """Shape-B scorer wrapper (#679 + #690): run the core scorer, then audit the
@@ -923,6 +1094,24 @@ def _score_shape_b_impl(design: str, samples: Path, dataset: Path,
     with tempfile.TemporaryDirectory() as td:
         binp = os.path.join(td, "bin")
         sample_c = _power_up_fixed(sample, td)  # canonical power-up gate
+        # ORGANIC #742 FACET A — PROACTIVE positional-port normalization. BEFORE
+        # the first compile, when the hidden TB binds the DUT POSITIONALLY, reorder
+        # the emitted module's ports to the golden's positional bind order (a PURE
+        # permutation by NAME). The blind first-pass emit declares ports in the
+        # spec's prose order, which the per-design positional TB may not match — so
+        # without this the first compile ALWAYS errors before the reactive #707
+        # rescue can run. A no-op when the order already matches / there is no
+        # positional contract / the name set differs (§4.05). Read+rewrite a temp
+        # copy only — the original sample file is never mutated.
+        try:
+            _pre = Path(sample_c).read_text(errors="replace")
+            _norm = _proactive_positional_port_normalize_shape_b(
+                _pre, design, dataset, layout)
+            if _norm != _pre:
+                sample_c = os.path.join(td, f"normalized_{Path(sample_c).name}")
+                Path(sample_c).write_text(_norm)
+        except OSError:
+            pass
         pass_re = re.compile(args["pass_regex"])
         fail_re = re.compile(args["fail_regex"]) if args.get("fail_regex") else None
         c = subprocess.run(["iverilog", "-g2012", "-o", binp, sample_c, str(tb)],
@@ -944,6 +1133,18 @@ def _score_shape_b_impl(design: str, samples: Path, dataset: Path,
                 v["design"] = design
                 return v
         if c.returncode != 0:
+            compile_log = c.stdout + c.stderr
+            # ORGANIC #742 FACET B — a compile_error that is ONLY
+            # `parameter `X' not found in `<inst>'` is an UNDISCLOSED named-param-
+            # override binding contract (the TB binds `#(.X(..))` but the prose
+            # names no parameter). Inject a passthrough `parameter X=<default>`
+            # (UNREAD by the RTL) and retry ONCE. §4.05: a PURE ADD — the vvp
+            # comparison is unchanged, so a wrong-logic DUT still FAILs and an
+            # already-declared param is a no-op. A MIXED error set is not retried.
+            pinj = _param_passthrough_retry_shape_b(
+                sample_c, tb, design, dataset, layout, args, compile_log, td)
+            if pinj is not None:
+                return pinj
             # ORGANIC #707 round-3 — a compile_error against the hidden TB MAY be
             # a pure positional-port-ORDER mismatch (a functionally-correct
             # candidate whose declaration order differs from the per-design TB

@@ -171,15 +171,29 @@ def _score(tmp_path, candidate, **kw):
     return SC._score_shape_b(design, samples, dataset, _LAYOUT, _ARGS)
 
 
-# ── POSITIVE — the rescue flips compile_error → PASS ─────────────────────────
+# A correct candidate with a positional-TB port-order mismatch is now resolved by
+# the ORGANIC #742 FACET A PROACTIVE normalization (the port reorder fires BEFORE
+# the first compile), so the verdict is a clean PASS with NO `recovered_via_*`
+# reason. The reactive score-side rescue here (#707-r3) remains the BACKSTOP for
+# cases the proactive normalize cannot reach, and the §4.05 NEGATIVE no-leak tests
+# below still exercise it. So the POSITIVE assertions accept EITHER the proactive
+# clean pass (reason absent) OR the reactive rescue reason.
+_RESCUE_REASON = "recovered_via_scoreside_port_permutation"
+
+
+def _passed_via_reorder(res) -> bool:
+    return res.get("verdict") == "PASS" and res.get("reason") in (
+        None, _RESCUE_REASON)
+
+
+# ── POSITIVE — the reorder flips compile_error → PASS (proactive or reactive) ─
 def test_positive_inputs_first_correct_candidate_rescued_to_pass(tmp_path):
     """An inputs-first functionally-correct LFSR + outputs-first positional TB +
     an outputs-first passing golden: the verbatim positional bind COMPILE-ERRORs,
-    the score-side pure permutation re-maps to outputs-first, recompiles, and the
-    verdict FLIPS to PASS via the documented reason."""
+    a pure permutation to outputs-first makes it PASS — proactively (#742, BEFORE
+    the first compile, no reason) or reactively (#707-r3 rescue)."""
     res = _score(tmp_path, _CAND_CORRECT_INPUTS_FIRST)
-    assert res["verdict"] == "PASS", res
-    assert res["reason"] == "recovered_via_scoreside_port_permutation", res
+    assert _passed_via_reorder(res), res
 
 
 def test_positive_helper_returns_pass_directly(tmp_path):
@@ -227,8 +241,7 @@ def test_round4_nonansi_golden_rescue_fires(tmp_path):
     so an inputs-first correct candidate is rescued compile_error → PASS."""
     res = _score(tmp_path, _CAND_CORRECT_INPUTS_FIRST,
                  golden=_GOLDEN_OUTPUTS_FIRST_NONANSI)
-    assert res["verdict"] == "PASS", res
-    assert res["reason"] == "recovered_via_scoreside_port_permutation", res
+    assert _passed_via_reorder(res), res
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog/vvp required")
@@ -411,8 +424,7 @@ def test_lens1_spec_faithful_output_first_is_rescued_to_pass(tmp_path):
             "  assign gt = a > b;\n"  # CORRECT
             "endmodule\n")
     res = _score_cmp(tmp_path, cand)
-    assert res["verdict"] == "PASS", res
-    assert res["reason"] == "recovered_via_scoreside_port_permutation", res
+    assert _passed_via_reorder(res), res
 
 
 def test_lens1_wrong_operand_already_golden_order_is_noop(tmp_path):
