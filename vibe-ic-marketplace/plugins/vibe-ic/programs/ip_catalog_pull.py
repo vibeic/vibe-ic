@@ -476,6 +476,38 @@ def pull_all_catalog_matches(project: Path,
     existing.update(aggregated)
     decl_path.write_text(json.dumps(existing, indent=2))
 
+    # ORGANIC #711 — ALSO emit phase2/stage1/rtl/SOURCE_MANIFEST.json{reused_ip}
+    # at pull time. l9_rtl_pin_consistency_check + flow_compliance read THIS
+    # file (NOT declaration.json) to enable their reused-IP relaxations; pre-#711
+    # NO program wrote it, so on every catalog-glue SoC the relaxations were dead
+    # code and the pin gate hard-FAILed or forced a per-run waiver. The reused_ip
+    # flag + ip_list are the keystone the relaxations key on. Emitted ONLY when
+    # ≥1 IP was actually pulled (honest signal of catalog integration). MERGE-
+    # preserving: never clobber a hand-authored manifest's tie_offs /
+    # flattened_buses / wrapper_exposed_outputs / renamed_interfaces declarations.
+    # chip-AGNOSTIC: structure only, no chip/vendor literal.
+    ip_list = sorted({a.get("ip_name") for a in audits
+                      if a.get("status") in ("PASS", "PARTIAL")
+                      and a.get("ip_name")})
+    if ip_list:
+        manifest_path = (project / "phase2" / "stage1" / "rtl"
+                         / "SOURCE_MANIFEST.json")
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        if manifest_path.is_file():
+            try:
+                mf = json.loads(manifest_path.read_text())
+                if not isinstance(mf, dict):
+                    mf = {}
+            except Exception:
+                mf = {}
+        else:
+            mf = {}
+        mf["reused_ip"] = True
+        mf["ip_list"] = ip_list
+        mf["rtl_strategy"] = "catalog_lookup_plus_ai_glue"
+        mf.setdefault("generated_by", "ip_catalog_pull")
+        manifest_path.write_text(json.dumps(mf, indent=2))
+
     return aggregated
 
 

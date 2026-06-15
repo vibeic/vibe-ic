@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 682
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 682)
+- **Total programs (excluding helpers / shims):** 683
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 683)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 673 |
+| `any` | 674 |
 
 ## Alphabetical listing
 
@@ -150,6 +150,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `cmd_response_otp_provenance_check` | any | — | for opcodes whose response |
 | `connect_vs_send_test_parity_check` | any | Wave 27 | Wave 27 (v0.119.59) gate. |
 | `constants_validation` | any | — | Deterministic compliance check for rtl-constants-gen. |
+| `convergence_doctrine_present_check` | any | — | ORGANIC #716 |
 | `coresight_protocol_synth` | any | — | ARM CoreSight on-chip debug & trace architecture synth helper (protocol #64). |
 | `corner_coverage_audit` | any | — | Audit PVT corner coverage in IC design flows. |
 | `corner_schedule_policy` | any | — | deterministic corner-schedule policy for |
@@ -754,7 +755,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (673 programs)
+### `any` (674 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -878,6 +879,7 @@ _(no programs in this group)_
 - `cmd_response_otp_provenance_check` — for opcodes whose response
 - `connect_vs_send_test_parity_check` — Wave 27 (v0.119.59) gate.  _[Wave 27]_
 - `constants_validation` — Deterministic compliance check for rtl-constants-gen.
+- `convergence_doctrine_present_check` — ORGANIC #716
 - `coresight_protocol_synth` — ARM CoreSight on-chip debug & trace architecture synth helper (protocol #64).
 - `corner_coverage_audit` — Audit PVT corner coverage in IC design flows.
 - `corner_schedule_policy` — deterministic corner-schedule policy for
