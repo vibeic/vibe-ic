@@ -1514,6 +1514,172 @@ def rule_multidriven_register(src: str, path: str) -> List[Finding]:
     return findings
 
 
+# ---------------------------------------------------------------------------
+# Rule 14 (ORGANIC #744 R3-1) — divide / modulo by a COMPILE-TIME-ZERO divisor
+# ---------------------------------------------------------------------------
+# A `localparam [W-1:0] DW = W'(2**W)` truncates to 0 (e.g. 8'(256) == 0), so
+# `x % DW` / `x / DW` is modulo/divide-by-ZERO → x at runtime (a functionally
+# dead pointer). This passes iverilog -g2012, verilator -Wall, AND every other
+# rtl_hygiene rule — only the hidden behavioral scorer catches it. Flag a `%`/`/`
+# whose divisor is a constant proven to evaluate to 0 (a width-truncated
+# power-of-2-fill literal, or a bare `0` constant). chip-AGNOSTIC: pure constant
+# evaluation, no chip/design literal.
+_LOCALPARAM_DECL_RE = re.compile(
+    r"\b(?:localparam|parameter)\b\s*"
+    r"(?:integer\s+|signed\s+|unsigned\s+|logic\s+|bit\s+|reg\s+)*"
+    r"(?:\[[^\]]*\]\s*)?"                            # optional packed range [W-1:0] / [7:0]
+    r"(?:integer\s+|signed\s+|unsigned\s+)*"
+    r"([A-Za-z_]\w*)\s*=\s*([^;]+);")
+
+
+def _eval_const_int(expr: str, params: Dict[str, int]) -> Optional[int]:
+    """Best-effort evaluation of a constant integer expression using only
+    already-known localparam/parameter values + ** / + - * // and a SystemVerilog
+    width-cast `W'(value)` (which truncates to the low W bits). Returns None when
+    not a pure constant (e.g. references a signal / unknown name)."""
+    e = expr.strip()
+    # SV width cast: <width>'(<inner>)  → inner truncated to `width` low bits.
+    m = re.fullmatch(r"\s*([A-Za-z_]\w*|\d+)\s*'\s*\(\s*(.+?)\s*\)\s*", e)
+    if m:
+        w = _eval_const_int(m.group(1), params)
+        inner = _eval_const_int(m.group(2), params)
+        if w is None or inner is None or w <= 0 or w > 4096:
+            return None
+        return inner & ((1 << w) - 1)        # truncate to W low bits
+    # sized literal W'dN / W'hN etc. — value modulo 2**W.
+    m = re.fullmatch(r"\s*(\d+)\s*'\s*[sS]?[dDhHbBoO]\s*([0-9A-Fa-f_]+)\s*", e)
+    if m:
+        width = int(m.group(1))
+        digits = m.group(2).replace("_", "")
+        try:
+            val = int(digits, {"d": 10, "h": 16, "b": 2, "o": 8}[
+                e[e.index("'") + 1].lower().replace("s", "d")])
+        except (ValueError, KeyError):
+            return None
+        return val & ((1 << width) - 1) if 0 < width <= 4096 else None
+    # plain decimal
+    if re.fullmatch(r"\d+", e):
+        return int(e)
+    # known param name
+    if re.fullmatch(r"[A-Za-z_]\w*", e) and e in params:
+        return params[e]
+    # simple binary arithmetic on two constant sub-exprs (no parens beyond cast).
+    for op in ("**", "//", "*", "+", "-"):
+        # split on the LAST top-level operator (avoid touching '**' as two '*').
+        idx = e.rfind(op)
+        if idx <= 0 or idx + len(op) >= len(e):
+            continue
+        if op == "*" and (e[idx - 1] == "*" or e[idx + 1] == "*"):
+            continue   # part of '**'
+        left = _eval_const_int(e[:idx], params)
+        right = _eval_const_int(e[idx + len(op):], params)
+        if left is None or right is None:
+            continue
+        try:
+            if op == "**":
+                return left ** right if right < 256 else None
+            if op == "//":
+                return left // right if right != 0 else None
+            if op == "*":
+                return left * right
+            if op == "+":
+                return left + right
+            if op == "-":
+                return left - right
+        except (ValueError, ZeroDivisionError):
+            return None
+    return None
+
+
+def _blank_string_literals(src: str) -> str:
+    """Replace the CONTENTS of double-quoted string literals with spaces (keep
+    the quotes + length + newlines) so a `$display("...%0d...")` format
+    specifier is never mistaken for a `% 0` modulo operator. chip-AGNOSTIC."""
+    out = []
+    i = 0
+    n = len(src)
+    while i < n:
+        c = src[i]
+        if c == '"':
+            out.append('"')
+            i += 1
+            while i < n and src[i] != '"':
+                out.append('\n' if src[i] == '\n' else ' ')
+                if src[i] == '\\' and i + 1 < n:   # skip escaped char
+                    out.append(' ')
+                    i += 1
+                i += 1
+            if i < n:
+                out.append('"')
+                i += 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def rule_divmod_by_zero_const(src: str, path: str) -> List[Finding]:
+    """Rule 14 (ORGANIC #744) — WARN on a `%` or `/` whose divisor is a
+    compile-time constant that evaluates to 0 (e.g. a width-truncated
+    `localparam [7:0] DW = 8'(256)` == 0). chip-AGNOSTIC."""
+    findings: List[Finding] = []
+    # 0. blank string-literal contents so $display("...%0d...") format specs are
+    #    never read as a `% 0` divisor (printf-format blast-radius).
+    src = _blank_string_literals(src)
+    # 1. build the constant-localparam environment.
+    consts: Dict[str, int] = {}
+    zero_consts: Dict[str, int] = {}   # name -> line of a const proven == 0
+    line_of: Dict[str, int] = {}
+    for m in _LOCALPARAM_DECL_RE.finditer(src):
+        name, rhs = m.group(1), m.group(2)
+        if name in VERILOG_KEYWORDS:
+            continue
+        val = _eval_const_int(rhs, consts)
+        ln = src.count("\n", 0, m.start()) + 1
+        if val is not None:
+            consts[name] = val
+            line_of[name] = ln
+            if val == 0:
+                zero_consts[name] = ln
+    if not zero_consts:
+        # still check a bare literal-0 divisor below; otherwise nothing to do.
+        pass
+    # 2. scan `%`/`/` divisors. The divisor is the operand to the RIGHT of the op
+    #    up to the next operator/paren/semicolon.
+    for dm in re.finditer(r"(%|/)(?!/|\*)\s*([A-Za-z_]\w*|\d+\s*'\s*\w*\s*\([^)]*\)|\d+)", src):
+        op = dm.group(1)
+        divisor = dm.group(2).strip()
+        # A real binary %/÷ has a LEFT OPERAND on the same line. A line-leading
+        # `%`-coverage annotation (Verilator/covered emit `%000000  input ...`)
+        # has no operand before it → skip (else `%000000` reads as `% 0`).
+        line_start = src.rfind("\n", 0, dm.start()) + 1
+        left = src[line_start:dm.start()].rstrip()
+        if not left or left[-1] not in (
+                "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_)]"):
+            continue
+        ln = src.count("\n", 0, dm.start()) + 1
+        zero = False
+        detail = ""
+        if re.fullmatch(r"[A-Za-z_]\w*", divisor) and divisor in zero_consts:
+            zero = True
+            detail = (f"`{divisor}` is a compile-time constant that evaluates to "
+                      f"0 (declared at line {zero_consts[divisor]}; a width-"
+                      f"truncated literal such as W'(2**W) truncates to 0)")
+        else:
+            v = _eval_const_int(divisor, consts)
+            if v == 0:
+                zero = True
+                detail = f"the divisor `{divisor}` evaluates to a constant 0"
+        if zero:
+            opname = "modulo" if op == "%" else "divide"
+            findings.append(Finding(
+                path, ln, 'WARN', 'divmod-by-zero-const', divisor,
+                f"{opname}-by-zero: {detail}, so `x {op} {divisor}` is "
+                f"{opname}-by-zero → x at runtime (functionally dead). Use a "
+                f"non-truncated width for the divisor, or guard the divisor != 0."))
+    return findings
+
+
 def lint_file(path: Path) -> List[Finding]:
     raw = path.read_text(errors='replace')
     src = strip_comments(raw)
@@ -1528,6 +1694,7 @@ def lint_file(path: Path) -> List[Finding]:
     results += rule_unguarded_sim_only_assert(raw, str(path))
     results += rule_reset_boundary_residual_enable(src, str(path))
     results += rule_multidriven_register(src, str(path))
+    results += rule_divmod_by_zero_const(src, str(path))
     # rule_wire_input_read_in_clocked_block: NOT enabled.
     #
     # v0.1.39 honesty correction (audit Finding 2): the v0.1.38 disable
