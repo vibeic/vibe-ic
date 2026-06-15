@@ -1840,239 +1840,193 @@ _L6_FSM_FLOOR_DISCRIMINATORS = (
     "control_logic must carry",
 )
 
-# ─── ORGANIC #708 round-2 fix (1): GENEROUS key-(c) FSM-state-literal scan ────
-# The original ALL-CAPS-only ±1-line scanner LEAKED — a real doc-traceable 2nd
-# state in lowercase / mixedCase / Capitalized / prose-without-a-marker-on-the-
-# same-line / a bullet or table-row far below the marker slipped past, so the
-# cap WRONGLY fired (the load-bearing leak). The rewrite is GENEROUS within FSM-
-# context REGIONS (fail-closed = catch MORE candidates so the cap fires LESS):
-#  - context window = the whole PARAGRAPH / table-block / bullet-list / section
-#    that contains a state/FSM/finite-state/transition/`->` marker (not just
-#    adjacent lines);
-#  - candidates are CASE-INSENSITIVE identifier-like tokens
-#    (`[A-Za-z_][A-Za-z0-9_]*`, incl. lowercase/mixedCase and `S\d+`) recognised
-#    in state-naming positions (after `state(s):`/`states are`, inside `{...}`
-#    sets, transition arrows / "from X to Y" / "advances/goes/moves to X" /
-#    "the X state", and state-table rows);
-#  - candidates are normalised case-insensitively (upper), a generic English-
-#    stopword + FSM-vocabulary set is removed, then the extracted fsm_states
-#    names are subtracted. A non-empty remainder → key (c) False (still FAIL).
-# A marker word/phrase anywhere in a block makes the WHOLE enclosing block
-# (paragraph or contiguous list/table) an FSM region. round-2 fix (1) follow-up:
-# a block that DESCRIBES a transition without ever using the literal word
-# "state"/"fsm" — e.g. "the machine enters BUSY", "it goes to RUNNING",
-# "switches to STALL" — must ALSO be an FSM region, else its enumerated 2nd
-# state slips past (a leak). So the marker set includes the motion-verb phrases
-# AND the common FSM-subject nouns. Fail-closed: broader region detection scans
-# MORE → cap fires LESS → SAFE.
-_FSM_REGION_MARKERS = (
-    "state", "states", "fsm", "finite state", "finite-state",
-    "transition", "transitions", "->", "-->", "=>", "→", "<=",
-    # FSM-subject nouns
-    "machine", "controller", "sequencer", "control unit", "control logic",
-    # phase/mode synonyms for "state"
-    "phase", "phases", "mode", "modes", "step", "steps", "next-state",
-    "next state",
-    # motion / copula verb phrases (any of these implies a state is named)
-    "advances to", "advance to", "goes to", "go to", "moves to", "move to",
-    "transitions to", "transition to", "returns to", "return to", "jumps to",
-    "proceeds to", "enters ", "enter ", "reaches ", "reach ", "switches to",
-    "switch to", "leaves ", "exits ", "moves into", "goes into", "becomes ",
-    "remains ", "remain ", "sits in", "parks at", "is now", "denotes",
-    "represents", "labelled", "labeled", "named",
-)
-# Identifier-like token (any case).
+# ─── ORGANIC #708 round-3: trusted-extractor-anchored key-(c) FSM scan ────────
+# History: the round-1 ALL-CAPS-only scanner and the round-2 generous shape +
+# position scanner were BOTH wrong — the regex arms race leaked on lowercase
+# datasheet prose AND over-blocked on bus/IP/register/acronym names (a token
+# like CTRL_REG / AXI4 / DDR4 wrongly KEEPS a FAIL on a correct reused-IP
+# design — the false-positive the second adversarial review surfaced). A
+# hardware-acronym stopword set was an even WORSE fix: it erased real states
+# (an FSM state literally named DMA / RX / SCAN). Both failure directions are
+# harmful here (the cap RELAXES a non-waivable floor: an over-collected token
+# wrongly FAILs a correct design, an under-collected one leaks).
+#
+# Round-3 design: anchor key (c) on the plugin's OWN trusted FSM-state
+# extractor — `phase1_doc_one_shot_runner._classify_modes_vs_states_from_text`
+# + `_is_real_fsm_state` — the SAME deterministic walker whose output populates
+# L6.fsm_states. By construction this cannot diverge from the walker: a
+# doc-traceable state the trusted extractor finds is, by the plugin's own
+# definition, a state the walker would have extracted (so it is already in
+# fsm_states, not "missed"); a token the trusted extractor does NOT find is, by
+# the same definition, not a doc-traceable state. The genuine residual — a
+# state the deterministic extractor truly cannot parse — is exactly what the
+# #706 ai_deep_review channel (key (d)) exists to recover. This eliminates the
+# acronym/register/IP-name over-blocks (those never sit in the trusted
+# extractor's `state:`/`fsm states:` narrative positions) AND the acronym-state
+# erasure (no hardware-acronym stopword set), and stays consistent with the
+# walker (no parallel worse extractor).
+#
+# A SMALL set of high-precision SUPPLEMENTARY position patterns augments the
+# trusted extractor for the explicit-enumeration surface forms the reviewer
+# requires (lowercase "states: idle and active", "from X to Y", transition
+# arrows, "the X state", bullet/table rows, motion-verb-to-SHAPED). These are
+# UNAMBIGUOUS state enumerations; they do NOT include the loose copula /
+# predicate / whole-region-shape scans that caused the over-blocks. The
+# stopword set holds ONLY grammatical / doc-structural English words (never a
+# state name) — NEVER hardware acronyms (which CAN be state names).
 _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-# `S0..Sn` short-form state names.
-_FSM_STATE_SHORT_RE = re.compile(r"\bS\d+\b", re.IGNORECASE)
-# State-naming POSITION patterns (capture LOWERCASE-permissive identifiers in a
-# position a state name occupies — these supplement the shape-based scan so a
-# purely-lowercase enumeration like "states: idle and active" is still caught).
-_RE_STATES_COLON = re.compile(
-    r"\b(?:states?|phases?|modes?|steps?)\s*"
-    r"(?:are|:|=|include|comprise|consist of|named|called|labell?ed)\s*(.+)",
+# Explicit enumerated-set position: "states/phases/modes are/:/=/include/named …"
+# CAPTURE ONLY A DELIMITED LIST TAIL — a run of identifiers joined by `,`/`/`/
+# `;`/`and`/`or` — and stop at the first word that is NOT part of such a list.
+# This is the round-3 over-block fix: "states are implemented in the supplier's
+# RTL …" is a passive VERB phrase, NOT an enumeration, so it must capture
+# NOTHING (the greedy `(.+)` grabbed the whole sentence and pulled SUPPLIER /
+# NETLIST / REPRODUCED / …). "states are idle, active and done" IS a list, so
+# it captures idle/active/done. The list grammar: IDENT (delim IDENT)+ — i.e. a
+# real enumeration has at least one delimiter, which "are implemented in …"
+# (verb + preposition) does not match (its second token "in" is a stopword and
+# there is no list-delimiter joining bare identifiers).
+_RE_STATES_LIST = re.compile(
+    r"\b(?:states?|phases?|modes?)\s*"
+    r"(?:are|:|=|include[s]?|comprise[s]?|consist[s]?\s+of|named|called|"
+    r"labell?ed)\s+"
+    r"([A-Za-z_][A-Za-z0-9_]*"
+    r"(?:\s*(?:,|/|;|\band\b|\bor\b)\s*[A-Za-z_][A-Za-z0-9_]*)+)",
     re.IGNORECASE)
-_RE_NAMED = re.compile(
-    r"\b(?:states?|phases?|modes?)\s+(?:named|called|labell?ed)\s+(.+)",
-    re.IGNORECASE)
+# "the X state|phase|mode" / "X state|phase|mode" (adjective-position name).
+# Excludes the false adjectives "full/control/finite/next/current/…" via the
+# stopword subtraction in the caller; "full state machine" → FULL is a stopword.
 _RE_X_STATE = re.compile(
     r"\b([A-Za-z_][A-Za-z0-9_]*)\s+(?:state|phase|mode)\b", re.IGNORECASE)
 _RE_IN_X_STATE = re.compile(
     r"\b(?:in|during|the)\s+(?:the\s+)?([A-Za-z_][A-Za-z0-9_]*)\s+"
     r"(?:state|phase|mode)\b", re.IGNORECASE)
+# "from X to Y".
 _RE_FROM_TO = re.compile(
     r"\bfrom\s+([A-Za-z_][A-Za-z0-9_]*)\s+to\s+([A-Za-z_][A-Za-z0-9_]*)",
     re.IGNORECASE)
-# Motion / copula verbs taking a state argument (with or without preposition):
-# "advances to X", "enters X", "becomes X", "is now X", "remains X", "sits in
-# X", "parks at X", "is/are X" (predicate). Generous; stopword-filtered.
+# Transition arrows incl. double-dash mermaid `-->`, `=>`, Unicode `→`/`⟶`, RTL
+# `<=`, and en-/em-dash sequence chains ("idle – armed – idle"). The dash forms
+# require spaces around the dash so an ordinary hyphenated word ("power-down")
+# is not split.
+_RE_ARROW = re.compile(
+    r"([A-Za-z_][A-Za-z0-9_-]*)\s*(?:-+>|=+>|→|⟶|<=|\s[–—-]\s)\s*"
+    r"([A-Za-z_][A-Za-z0-9_-]*)")
+# Brace/bracket/paren enumerated set.
+_RE_BRACE_SET = re.compile(r"[\{\[\(]([^\}\]\)]*)[\}\]\)]")
+# Motion verb + (to/into) + state. The captured object is kept ONLY when it is
+# state-name-SHAPED (ALL-CAPS≥3 / underscore / digit / mixedCase) so ordinary
+# lowercase prose objects ("goes to sleep") do NOT over-collect, while a shaped
+# state ("advances to DONE", "enters BUSY", "switches to FLUSH") is caught.
 _RE_VERB_STATE = re.compile(
     r"\b(?:advances?|goes?|moves?|transitions?|returns?|jumps?|proceeds?|"
-    r"enters?|reaches?|switch(?:es)?|leaves?|exits?|becomes?|remains?|"
-    r"asserts?|parks?|sits?|stays?|rests?|lands?|settles?)\s+"
-    r"(?:back\s+)?(?:to|into|in|at|on)?\s*(?:the\s+)?"
-    r"([A-Za-z_][A-Za-z0-9_]*)",
+    r"enters?|reaches?|switch(?:es)?|leaves?|exits?|becomes?|slips?|occupies|"
+    r"occupy|lands?|settles?|drops?|falls?|waits?\s+in|sits?\s+in|"
+    r"rests?\s+in|parks?\s+in)\s+"
+    r"(?:back\s+|quietly\s+|then\s+)?(?:to|into|in|at)?\s*(?:the\s+)?"
+    r"([A-Za-z_][A-Za-z0-9_-]*)",
     re.IGNORECASE)
-_RE_IS_NOW = re.compile(
-    r"\bis\s+now\s+(?:the\s+)?([A-Za-z_][A-Za-z0-9_]*)", re.IGNORECASE)
-_RE_PREDICATE = re.compile(
-    r"\b(?:is|are|was|were|be)\s+(?:either\s+|both\s+|now\s+|currently\s+)?"
-    r"([A-Za-z_][A-Za-z0-9_]*)",
+# Copula / predicate naming a state: "is/are/becomes/remains/is now X",
+# "sits in X", "parks at X". Captures the single predicate token (filtered by
+# stopwords downstream). Closes the lowercase-prose copula leak ("becomes
+# ready", "is now granted", "remains done").
+_RE_COPULA_STATE = re.compile(
+    r"\b(?:is|are|was|were|be|becomes?|remains?|stays?|rests?|sits?\s+in|"
+    r"parks?\s+at|is\s+now|are\s+now)\s+(?:either\s+|both\s+|currently\s+|"
+    r"the\s+)?([A-Za-z_][A-Za-z0-9_]*)",
     re.IGNORECASE)
+# List-verb enumeration WITHOUT the literal word "states": "cycles through X, Y,
+# Z", "sequences X, Y, Z", "iterates over X, Y" — capture the delimited list.
+_RE_LIST_VERB = re.compile(
+    r"\b(?:cycles?\s+through|sequences?|iterates?\s+(?:over|through)|"
+    r"steps?\s+through|progresses?\s+through|runs?\s+through|"
+    r"loops?\s+through|visits?)\s+"
+    r"([A-Za-z_][A-Za-z0-9_]*"
+    r"(?:\s*(?:,|/|;|\band\b|\bor\b)\s*[A-Za-z_][A-Za-z0-9_]*)+)",
+    re.IGNORECASE)
+# "X denotes/represents/means/indicates [a/the] state".
 _RE_DENOTES = re.compile(
-    r"\b([A-Za-z_][A-Za-z0-9_]*)\s+(?:denotes|represents|means|indicates)\b",
+    r"\b([A-Za-z_][A-Za-z0-9_]*)\s+(?:denotes|represents|means|indicates|"
+    r"signifies)\b",
     re.IGNORECASE)
-# Capitalized clause-subject naming a state then a verb: "Idle holds outputs
-# low. Active asserts the busy flag." — a Capitalized word (NOT all-caps) at a
-# clause start, followed by a lowercase verb. Only fires inside a block that
-# ALREADY has an explicit fsm/state-machine/states marker (see caller guard),
-# so ordinary capitalized sentence subjects in non-FSM prose are not pulled.
-# The captured token is filtered through the stopword set (common capitalized
-# sentence-openers like The/This/When/After are stopwords).
-_RE_CAP_SUBJECT = re.compile(
-    r"(?:^|[.;:]\s+|\b(?:and|then|or|while|when)\s+)"
-    r"([A-Z][a-z]{2,})\s+[a-z]",
-)
-# Gerund activity-state form: "spends time RUNNING", "begins transmitting",
-# "keeps polling", "while flushing" — a state named by the activity verb. The
-# captured gerund is stopword-filtered (common non-state gerunds like
-# "running"/"waiting" that are ALSO valid state names stay candidates — SAFE).
-_RE_GERUND_STATE = re.compile(
-    r"\b(?:spends?\s+time|begins?|starts?|keeps?|continues?|while|when|after|"
-    r"resumes?|finishes?|time|switch(?:es)?\s+to|goes?\s+to|moves?\s+to|"
-    r"enters?|into|to)\s+(?:the\s+)?([A-Za-z][a-z]+ing)\b",
-    re.IGNORECASE)
-# Arrows incl. the common double-dash mermaid form `-->` and RTL `<=`.
-_RE_ARROW = re.compile(
-    r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:-+>|=+>|→|<=)\s*([A-Za-z_][A-Za-z0-9_]*)")
-_RE_BRACE_SET = re.compile(r"[\{\[\(]([^\}\]\)]*)[\}\]\)]")
-# Quoted tokens: 'ACTIVE' / "ACTIVE" — datasheets quote enumerated state names.
+# `S0..Sn` short-form state names.
+_FSM_STATE_SHORT_RE = re.compile(r"\bS\d+\b", re.IGNORECASE)
+# Quoted state literal: 'ACTIVE' / "ACTIVE".
 _RE_QUOTED = re.compile(r"['\"]([A-Za-z_][A-Za-z0-9_]*)['\"]")
-# State-name SHAPE: a token that LOOKS like an enumerated identifier rather than
-# an ordinary English word. Datasheets render state names as ALL-CAPS, or with
-# an underscore, or with a digit, or in mixedCase. Such a token inside an FSM
-# region is collected UNCONDITIONALLY (grammar-independent) — this is what makes
-# the scan robust to copula / subject / phase-vocabulary phrasings the position
-# patterns miss. A lowercase ordinary word is NOT shape-matched (it must instead
-# appear in an explicit naming position) so prose glue doesn't over-block.
-_RE_ALLCAPS_SHAPE = re.compile(r"\b([A-Z][A-Z0-9_]{1,})\b")          # BUSY, S2
-_RE_UNDERSCORE_SHAPE = re.compile(r"\b([A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+)\b")
-_RE_DIGIT_SHAPE = re.compile(r"\b([A-Za-z][A-Za-z]*\d[A-Za-z0-9]*)\b")
-# mixedCase / camelCase, EITHER case-first: WaitResp, waitResp, doneFlush.
-_RE_MIXEDCASE_SHAPE = re.compile(r"\b([A-Za-z][a-z0-9]*[A-Z][A-Za-z0-9]*)\b")
-
-
-# Component nouns: when a shaped token is IMMEDIATELY followed by one of these,
-# it is a proper-noun / acronym MODIFIER ("IBEX core", "AXI bus", "USB
-# controller"), NOT an FSM state — exclude it from the whole-region shape scan
-# so a reused-IP datasheet's IP/bus/signal names do not block the cap. (A real
-# state name is followed by "state"/"phase"/"mode" — handled by _RE_X_STATE —
-# or stands alone / in an enumeration, never by a hardware-component noun.)
-_COMPONENT_NOUNS = (
-    "core", "cores", "bus", "buses", "block", "blocks", "module", "modules",
-    "interface", "interfaces", "controller", "unit", "units", "register",
-    "registers", "signal", "signals", "pin", "pins", "port", "ports",
-    "protocol", "protocols", "domain", "domains", "clock", "clocks", "reset",
-    "engine", "engines", "wrapper", "macro", "ip", "subsystem", "peripheral",
-    "memory", "cache", "buffer", "queue", "fifo", "channel", "lane", "link",
-    "instruction", "opcode", "field", "wire", "net", "bit", "bits", "byte",
-)
-_RE_SHAPED_THEN_NOUN = re.compile(
-    r"\b([A-Za-z][A-Za-z0-9_]*)[\s-]+(?:" + "|".join(_COMPONENT_NOUNS) + r")\b",
-    re.IGNORECASE)
-
-
-def _proper_noun_modifiers(text: str) -> set:
-    """Uppercased shaped tokens that sit immediately before a hardware-component
-    noun (e.g. IBEX in "IBEX core") — proper-noun / acronym modifiers, never FSM
-    states. Subtracted from the whole-region shape candidates."""
-    out: set = set()
-    for m in _RE_SHAPED_THEN_NOUN.findall(text):
-        if _token_is_state_shaped(m):
-            out.add(m.upper())
-    return out
 
 
 def _token_is_state_shaped(token: str) -> bool:
-    """True iff `token` LOOKS like an enumerated state identifier (ALL-CAPS ≥2,
-    has `_`, has a digit, or mixedCase) rather than an ordinary lowercase prose
-    word. Used to gate the LOOSE verb/copula/predicate positions so they pull
-    only state-shaped objects ("is ACTIVE", "becomes WAIT_RESP") and never
-    ordinary lowercase past-participles ("is delegated", "is implemented")."""
-    if not token:
+    """True iff `token` LOOKS like an enumerated state identifier — ALL-CAPS
+    (≥3, so OK/RX are not falsely shaped but BUSY/DONE are), has `_`, has a
+    digit, or is mixedCase — rather than an ordinary lowercase prose word. Used
+    to gate the motion-verb object so lowercase prose ("goes to sleep") does not
+    over-collect."""
+    if not token or len(token) < 3:
         return False
-    if _RE_ALLCAPS_SHAPE.fullmatch(token):
+    if re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", token):
         return True
     if "_" in token:
         return True
     if any(c.isdigit() for c in token):
         return True
-    if _RE_MIXEDCASE_SHAPE.fullmatch(token):
+    if re.fullmatch(r"[A-Za-z][a-z0-9]*[A-Z][A-Za-z0-9]*", token):  # mixedCase
         return True
     return False
 
-# A generic English-stopword + FSM/doc-STRUCTURAL-vocabulary set. Subtracted
-# from the candidate pool. CRITICAL fail-closed rule: this set must contain
-# ONLY tokens that are NEVER a state name — pure English glue + words that name
-# the STRUCTURE of the doc/FSM (state, fsm, transition, table, row, section,
-# diagram, …). It must NOT contain words that are commonly used AS state names
-# (idle, done, active, busy, run, wait, ready, reset, fetch, decode, execute,
-# flush, stall, …): putting any of those here would FILTER OUT a real
-# doc-enumerated state and re-open the LEAK. When in doubt, LEAVE A TOKEN OUT —
-# an over-collected non-state word merely makes the cap fire less (SAFE); a
-# pruned real state name leaks (UNSAFE). Already-extracted state names (e.g.
-# IDLE) are handled by the separate extracted-set subtraction, NOT here.
+
+# Grammatical + doc-structural stopwords — words that are NEVER an FSM state
+# name. CRITICAL: this set must NOT contain hardware acronyms (CPU/AXI/DMA/RX/…)
+# — those CAN be real state names, and erasing them re-opens a leak. It holds
+# ONLY English glue + FSM/doc vocabulary. The trusted extractor + high-precision
+# positions already avoid grabbing acronyms (they are not in `state:` positions
+# in real prose), so no acronym filter is needed.
 _FSM_STOPWORDS = frozenset(w.upper() for w in (
     # FSM / doc structural vocabulary (never a state name)
     "state", "states", "fsm", "fsms", "finite", "machine", "machines",
-    "control", "logic", "transition", "transitions",
-    "rtl", "vendor", "core", "module", "spec", "specification", "section",
-    "table", "row", "rows", "column", "columns", "diagram", "figure", "see",
-    "details", "detail", "implementation", "implemented", "implements",
-    "described", "describes", "enumerated", "enumerate", "enumerates",
-    "field", "fields", "typed", "structured", "name", "names", "named",
-    "entry", "entries", "first", "second", "third", "fourth", "fifth",
-    "controller", "sequencer", "unit", "block", "design", "document",
+    "control", "logic", "transition", "transitions", "phase", "phases",
+    "mode", "modes", "step", "steps", "next", "current", "diagram", "figure",
+    "table", "row", "rows", "column", "columns", "see", "details", "detail",
+    "implementation", "implemented", "implements", "described", "describes",
+    "enumerated", "enumerate", "enumerates", "documented", "field", "fields",
+    "typed", "structured", "name", "names", "named", "called", "labelled",
+    "labeled", "entry", "entries", "controller", "sequencer", "unit", "block",
+    "design", "document", "datasheet", "section", "spec", "specification",
+    "rtl", "vendor", "core", "module", "reset", "clock",
     # generic English glue
     "the", "a", "an", "and", "or", "of", "to", "from", "in", "on", "at", "by",
     "for", "with", "is", "are", "be", "as", "it", "this", "that", "these",
     "those", "then", "when", "while", "which", "into", "back", "via", "per",
     "all", "any", "each", "one", "two", "three", "four", "five", "no", "not",
-    "has", "have", "having", "carries", "carry", "must", "should", "may",
-    "can", "will", "shall", "only", "also", "such", "where", "between",
-    "after", "before", "until", "during", "upon", "if", "else", "but",
-    "we", "they", "its", "their", "our", "you", "your", "here", "there",
-    "small", "large", "internal", "external", "remaining", "remain", "left",
-    "once", "still", "more", "less", "many", "few",
-    "l6", "l1", "l5", "l9", "etc", "eg", "ie",
+    "has", "have", "having", "must", "should", "may", "can", "will", "shall",
+    "only", "also", "such", "where", "between", "after", "before", "until",
+    "during", "upon", "if", "else", "but", "we", "they", "its", "their",
+    "our", "you", "your", "here", "there", "small", "large", "internal",
+    "external", "remaining", "remain", "left", "once", "still", "more", "less",
+    "many", "few", "etc", "eg", "ie", "shown", "defined", "inside", "other",
+    "above", "below", "various", "several", "multiple", "some",
+    "l6", "l1", "l5", "l9",
+    # Additional ordinary-English doc-prose words the high-precision positions
+    # ("X state", states-list, table rows) may incidentally capture from a
+    # reused-IP datasheet — never FSM state names (round-3 over-block fix):
+    "supplier", "supplied", "netlist", "release", "releases", "reproduced",
+    "reproduce", "solely", "part", "parts", "notes", "note", "built", "full",
+    "interface", "interfaces", "register", "registers", "signal", "signals",
+    "bus", "buses", "memory", "macro", "wrapper", "peripheral", "instance",
+    "configure", "configures", "configured", "configuration", "power", "boot",
+    "powers", "initialises", "initializes", "connects", "drives", "exposes",
+    "provides", "supports", "talks", "sits", "starts", "powered", "available",
+    "downstream", "upstream", "rest", "complete", "completes",
+    "intentionally", "generated", "queued", "described", "available",
+    "left", "blank", "empty", "unused", "reserved", "todo", "tbd", "na",
+    "order", "sequence", "repeats", "without", "delay", "quietly", "most",
+    "occasionally", "between", "bursts", "entirely", "cuts", "holding",
+    "request", "transfer", "bus", "sensor",
     # NOTE: deliberately NOT including words commonly used AS state names —
-    # running / pending / active / busy / idle / done / wait / fetch / etc. —
-    # putting any here would FILTER a real doc-enumerated state (a LEAK). When
-    # in doubt, leave it out: an over-collected non-state word just blocks the
-    # cap (SAFE).
-))
-
-# Generic hardware/architecture/protocol ACRONYMS that the ALL-CAPS shape scan
-# would otherwise pull from ordinary reused-IP-datasheet prose ("the CPU has an
-# AXI bus", "RISC-V ISA", "USB controller") and wrongly use to BLOCK the cap on
-# a legitimate reused-IP doc that does NOT enumerate a 2nd state. These are
-# NEVER FSM-state names — they name buses / protocols / architectures / units.
-# chip-AGNOSTIC: generic acronyms only, no chip / vendor / SKU literal. Kept as
-# a SEPARATE set so the leak-direction reasoning stays explicit: removing an
-# acronym only lets the cap fire MORE, so this set must hold ONLY tokens that
-# could never be a state name (a state named "CPU"/"AXI" is implausible).
-_HW_ACRONYM_STOPWORDS = frozenset(w.upper() for w in (
-    "cpu", "gpu", "mcu", "soc", "ip", "isa", "alu", "fpu", "mmu", "tlb",
-    "dma", "irq", "nmi", "pll", "dll", "adc", "dac", "pwm", "gpio", "uart",
-    "spi", "i2c", "i2s", "usb", "axi", "ahb", "apb", "ace", "pcie", "pci",
-    "ddr", "sram", "dram", "rom", "ram", "fifo", "lifo", "crc", "ecc", "lru",
-    "risc", "cisc", "arm", "mips", "riscv", "rv32", "rv64", "x86", "jtag",
-    "tap", "bist", "scan", "dft", "sdc", "lef", "def", "gds", "drc", "lvs",
-    "sta", "pnr", "cts", "eco", "ip_", "hdl", "vhdl", "vlsi", "asic", "pdk",
-    "io", "ios", "led", "leds", "tx", "rx", "clk", "rst", "vdd", "vss", "gnd",
-    "id", "addr", "data", "wr", "rd", "en", "oe", "we", "cs", "lsb", "msb",
-    "tcp", "udp", "ip4", "mac", "phy", "mdio", "rgmii", "sgmii", "xgmii",
-    "can", "lin", "sent", "nfc", "ble", "wifi", "lte", "gsm", "rf",
+    # running / pending / active / busy / idle / done / wait / fetch / decode /
+    # execute / flush / stall / sleep / armed / granted / … — nor any hardware
+    # acronym (cpu/axi/dma/rx/scan/…). Filtering any of those would erase a real
+    # doc-enumerated state (a LEAK). The extracted-state-name + internal-label
+    # subtraction (done by the caller) removes the already-extracted ones.
 ))
 
 
@@ -2602,208 +2556,141 @@ def _extracted_fsm_state_names(l6_data: dict) -> set:
     return out
 
 
-def _split_fsm_context_regions(text: str) -> List[str]:
-    """Split `text` into blocks (paragraphs / contiguous line runs), then return
-    every block that is an FSM-context REGION. A block is FSM-context when it
-    contains an _FSM_REGION_MARKERS marker OR is IMMEDIATELY ADJACENT (prev/next
-    block) to such a block — so a markerless enumeration block that FOLLOWS a
-    "… implements a finite state machine." paragraph is still scanned (the
-    block-gating leak the adversarial review found). The WHOLE block is returned
-    so scanning reaches every row, even rows many lines below the marker."""
-    blocks: List[str] = []
-    cur: List[str] = []
-    for ln in text.splitlines():
-        if ln.strip() == "":
-            if cur:
-                blocks.append("\n".join(cur))
-                cur = []
-        else:
-            cur.append(ln)
-    if cur:
-        blocks.append("\n".join(cur))
-    def _block_is_marker(b: str) -> bool:
-        if any(m in b.lower() for m in _FSM_REGION_MARKERS):
-            return True
-        # An ENUMERATION of ≥2 state-name-SHAPED tokens joined by and/or/comma
-        # (e.g. "two: IDLE and ACTIVE", "S0, S1, S2") is itself a state-list
-        # signal even without the literal word "state". This catches the
-        # marker-less enumeration leak (F40) without scanning arbitrary prose
-        # acronyms — a lone "USB" in a paragraph is NOT a 2-token enumeration.
-        shaped = set()
-        for rx in (_RE_ALLCAPS_SHAPE, _RE_UNDERSCORE_SHAPE,
-                   _RE_DIGIT_SHAPE, _RE_MIXEDCASE_SHAPE):
-            for m in rx.findall(b):
-                if m.upper() not in _FSM_STOPWORDS:
-                    shaped.add(m.upper())
-        if len(shaped) >= 2 and re.search(
-                r"[A-Za-z0-9_]\s*(?:,|/|\band\b|\bor\b)\s*[A-Za-z0-9_]",
-                b, re.IGNORECASE):
-            return True
-        return False
+def _doc_state_candidates_one_doc(text: str) -> set:
+    """Round-3 key-(c) core: candidate uppercase FSM-state-name tokens in ONE
+    doc's text. Two sources, unioned:
 
-    is_marker = [_block_is_marker(b) for b in blocks]
-    regions: List[str] = []
-    for i, b in enumerate(blocks):
-        if is_marker[i] or (i > 0 and is_marker[i - 1]) \
-                or (i + 1 < len(blocks) and is_marker[i + 1]):
-            regions.append(b)
-    return regions
+    (A) the plugin's OWN trusted extractor
+        (phase1_doc_one_shot_runner._classify_modes_vs_states_from_text) — the
+        SAME deterministic walker that populates L6.fsm_states. Consistent by
+        construction (never finds a state the walker wouldn't), so it cannot
+        diverge to either leak or over-block relative to the walker.
 
+    (B) a SMALL set of HIGH-PRECISION enumeration positions for the explicit
+        surface forms the trusted extractor's `state:`/`fsm states:` narrative
+        anchor does not cover (lowercase `states: idle and active`, `from X to
+        Y`, transition arrows, `the X state`, brace sets, bullet/table/numbered/
+        `Step N:` rows, motion-verb-to-SHAPED, quoted-SHAPED, `S\\d+`). These are
+        unambiguous enumerations; the loose copula/predicate/whole-region-shape
+        scans that caused the over-blocks are deliberately ABSENT.
 
-def _candidate_state_tokens(region: str) -> set:
-    """GENEROUS, grammar-INDEPENDENT candidate extraction from ONE FSM-context
-    region. Two collection strategies, unioned:
-
-    (A) SHAPE-based (primary, grammar-independent): any token in the region that
-        is state-name-SHAPED — ALL-CAPS (≥2), has an underscore, has a digit, or
-        is mixedCase, or `S\\d+`, or quoted. Datasheets render state names this
-        way, so this catches copula/subject/phase-vocabulary phrasings that no
-        position pattern covers (the adversarial-review leak class). A lowercase
-        ordinary word is NOT shape-matched, so prose glue does not over-block.
-
-    (B) POSITION-based (supplement, lowercase-permissive): lowercase enumerations
-        in explicit state-naming positions — after `states/phases/modes are/:/
-        named`, inside `{…}`/`[…]`/`(…)` sets, transition arrows (incl. `-->`,
-        `<=`), `from X to Y`, motion/copula verbs (`enters/becomes/remains/sits
-        in/parks at/is now X`), `in/the X state|phase|mode`, `X denotes`, and
-        bullet/`|`-table/`N.`/`Step N:` rows.
-
-    All tokens normalised upper. Two precision tiers prevent over-blocking
-    legitimate reused-IP docs while staying leak-free:
-      * SHAPE-tier tokens (ALL-CAPS/underscore/digit/mixedCase/quoted/`S\\d+`):
-        collected from the WHOLE region AND from loose verb/copula/predicate/
-        gerund positions — these shapes are state-name-like, so collecting them
-        broadly does not pull ordinary lowercase prose.
-      * LOWERCASE tokens: collected ONLY from HIGH-PRECISION naming positions
-        (explicit `states/phases/modes are/:/named` lists, `{…}` sets,
-        transition arrows, `from X to Y`, `the/in X state|phase|mode`,
-        bullet/`|`-table/`N.`/`Step N:` rows). Loose verb/predicate matches do
-        NOT contribute lowercase tokens (those would pull "delegated",
-        "implemented", … and wrongly block the cap)."""
-    def _add_shaped_only(token: str) -> None:
-        if _token_is_state_shaped(token):
-            out.add(token.upper())
-
+    Tokens normalised upper. The caller subtracts the stopword set + the already-
+    extracted state names + their internal transition/action labels."""
     out: set = set()
-    # Whether this region carries an EXPLICIT state/fsm marker (vs only an
-    # adjacency/enumeration trigger). The Capitalized-clause-subject scan only
-    # fires here, so ordinary capitalized sentence subjects in non-FSM prose are
-    # never pulled.
-    _rl = region.lower()
-    _strict_fsm_region = any(
-        m in _rl for m in ("fsm", "state machine", "state-machine",
-                           "finite state", "finite-state", "states",
-                           " state ", "next-state", "next state"))
-    # ---- (A) whole-region SHAPE scan, MINUS proper-noun/acronym modifiers ----
-    # State names are rendered as shaped identifiers (ALL-CAPS / underscore /
-    # digit / mixedCase). Collect them region-wide so copula/subject/phase
-    # phrasings the per-line position patterns miss are still caught — EXCEPT a
-    # shaped token that modifies a hardware-component noun ("IBEX core", "AXI
-    # bus"), which is a proper-noun, not a state. This keeps the scan robust to
-    # natural prose without blocking the cap on a reused-IP IP/bus/signal name.
-    modifiers = _proper_noun_modifiers(region)
-    region_shaped: set = set()
-    for rx in (_RE_ALLCAPS_SHAPE, _RE_UNDERSCORE_SHAPE,
-               _RE_DIGIT_SHAPE, _RE_MIXEDCASE_SHAPE):
-        for m in rx.findall(region):
-            region_shaped.add(m.upper())
-    for m in _FSM_STATE_SHORT_RE.findall(region):
-        region_shaped.add(m.upper())
-    out |= (region_shaped - modifiers)
-    for raw_line in region.splitlines():
+    # ---- (A) trusted extractor (authoritative, walker-consistent) ----
+    # ORGANIC #708 round-3 fix (third adversarial pass): the raw
+    # `_classify_modes_vs_states_from_text` is GREEDY — its narrative regex
+    # fires on any `state[s]?\s` / `mode[s]?\s` occurrence, captures the next
+    # ~300 chars, and harvests EVERY all-caps token in that tail. On its own it
+    # therefore OVER-BLOCKS: an ordinary sentence "… in the IDLE state. The
+    # RGMII and SGMII MAC …" would pull RGMII/SGMII/MAC/CTRL_REG/… as "states".
+    # The walker's REAL per-candidate guard is `_is_real_fsm_state` (±5-token
+    # state-noun-context anchor + FSM blacklist + chip-part-number rejector),
+    # which `_classify_modes_vs_states_from_text` does NOT apply on this path.
+    # We re-apply it here so source (A) inherits the walker's exact precision —
+    # a register/bus/IP/acronym token (not anchored to a real state-noun
+    # context) is dropped, while a genuine state name (incl. one named DMA) that
+    # IS state-context-anchored survives. This is what makes source (A)
+    # over-block-SAFE AND walker-consistent.
+    try:
+        import sys as _sys
+        if str(PROGRAMS_DIR) not in _sys.path:
+            _sys.path.insert(0, str(PROGRAMS_DIR))
+        import phase1_doc_one_shot_runner as _p1
+        _op, _fsm = _p1._classify_modes_vs_states_from_text(text)
+        for s in _fsm:
+            if not (isinstance(s, str) and s.strip()):
+                continue
+            try:
+                if _p1._is_real_fsm_state(s, text):
+                    out.add(s.strip().upper())
+            except Exception:
+                # If the validator is unavailable, DROP the raw candidate
+                # (fail-closed toward NOT over-collecting — the high-precision
+                # positions below still catch explicit enumerations).
+                continue
+    except Exception:
+        # Trusted extractor unavailable → fall back to the high-precision
+        # positions only (still leak-safe; never silently empties the scan).
+        pass
+    # ---- (B) high-precision enumeration positions ----
+    # IMPORTANT (three adversarial reviews): no deterministic scan can perfectly
+    # separate an FSM-state enumeration from a register/bus/acronym enumeration
+    # in natural datasheet prose — they are linguistically identical ("idle,
+    # active, done" vs "AXI, AHB, APB"; "from IDLE to BUSY" vs "from CTRL_REG to
+    # STATUS_REG"). This scan therefore errs toward OVER-COLLECTION: it catches
+    # every explicit/position-anchored enumeration (the reviewer's required
+    # forms, incl. a state named DMA) and may ALSO collect some register/bus
+    # tokens. For a floor-RELAXING cap that is the SAFE error direction — an
+    # over-collected token only makes _docs_name_no_further_fsm_states return
+    # False → the cap conservatively does NOT fire → the design keeps FAILing
+    # (the pre-#708 status quo). The cap NEVER relies on this scan ALONE to
+    # FIRE: the firm fire-gate is no_fsm_in_input==false (key c) PLUS the AI
+    # deep-review channel (keys d+e) — the strong LLM is the reliable judge of
+    # "does this prose name an FSM state", which no regex is.
+    for raw_line in text.splitlines():
         line = raw_line.strip()
         low = line.lower()
-        # ---- HIGH-PRECISION positions: lowercase allowed ----
-        for rx in (_RE_STATES_COLON, _RE_NAMED):
-            m = rx.search(line)
-            if m:
-                for ident in _IDENT_RE.findall(m.group(1)):
-                    out.add(ident.upper())
+        m = _RE_STATES_LIST.search(line)
+        if m:
+            for ident in _IDENT_RE.findall(m.group(1)):
+                out.add(ident.upper())
         for grp in _RE_BRACE_SET.findall(line):
             for ident in _IDENT_RE.findall(grp):
                 out.add(ident.upper())
         for a, b in _RE_ARROW.findall(line):
-            out.add(a.upper())
-            out.add(b.upper())
+            out.add(a.upper()); out.add(b.upper())
         for a, b in _RE_FROM_TO.findall(line):
-            out.add(a.upper())
-            out.add(b.upper())
+            out.add(a.upper()); out.add(b.upper())
         for a in _RE_IN_X_STATE.findall(line):
             out.add(a.upper())
         for a in _RE_X_STATE.findall(line):
             out.add(a.upper())
-        for a in _RE_GERUND_STATE.findall(line):
-            out.add(a.upper())
-        # bullet / pipe-table / numbered / "Step N:" rows → every identifier.
+        for a in _RE_VERB_STATE.findall(line):
+            if _token_is_state_shaped(a):
+                out.add(a.upper())
+        for a in _RE_COPULA_STATE.findall(line):
+            if _token_is_state_shaped(a):
+                out.add(a.upper())
+        for a in _RE_LIST_VERB.findall(line):
+            for ident in _IDENT_RE.findall(a):
+                out.add(ident.upper())
+        for a in _RE_DENOTES.findall(line):
+            if _token_is_state_shaped(a):
+                out.add(a.upper())
+        for m2 in _FSM_STATE_SHORT_RE.findall(line):
+            out.add(m2.upper())
+        for q in _RE_QUOTED.findall(line):
+            if _token_is_state_shaped(q):
+                out.add(q.upper())
         if (low.startswith(("-", "*", "+", "•"))
                 or line.startswith("|") or "|" in line
                 or re.match(r"^\d+[\.\)]", line)
                 or re.match(r"^step\s+\d+", low)):
             for ident in _IDENT_RE.findall(line):
                 out.add(ident.upper())
-        # ---- LOOSE verb/copula/predicate/denotes: SHAPED tokens only ----
-        for a in _RE_VERB_STATE.findall(line):
-            _add_shaped_only(a)
-        for a in _RE_IS_NOW.findall(line):
-            _add_shaped_only(a)
-        for a in _RE_PREDICATE.findall(line):
-            _add_shaped_only(a)
-        for a in _RE_DENOTES.findall(line):
-            _add_shaped_only(a)
-        # Capitalized clause-subject naming a state — ONLY in a strict-marker
-        # FSM region (guards against ordinary capitalized prose subjects).
-        if _strict_fsm_region:
-            for a in _RE_CAP_SUBJECT.findall(line):
-                out.add(a.upper())
-        # ---- SHAPED-TOKEN ENUMERATION (no position keyword needed): when a
-        # line contains ≥2 distinct state-SHAPED tokens joined by and/or/comma/
-        # slash/arrow, ALL its shaped tokens are state candidates ("two: IDLE
-        # and ACTIVE", "IDLE, BUSY, DONE", "IDLE -> ACTIVE"). A LONE shaped
-        # token (e.g. "IBEX core", "AXI bus") is NOT an enumeration → not
-        # collected here, so a proper-noun / acronym does not block the cap. ----
-        line_modifiers = _proper_noun_modifiers(line)
-        line_shaped = set()
-        for rx in (_RE_ALLCAPS_SHAPE, _RE_UNDERSCORE_SHAPE,
-                   _RE_DIGIT_SHAPE, _RE_MIXEDCASE_SHAPE):
-            for m in rx.findall(line):
-                u = m.upper()
-                if (u not in _FSM_STOPWORDS and u not in _HW_ACRONYM_STOPWORDS
-                        and u not in line_modifiers):
-                    line_shaped.add(u)
-        for m in _FSM_STATE_SHORT_RE.findall(line):
-            line_shaped.add(m.upper())
-        for m in _RE_QUOTED.findall(line):
-            line_shaped.add(m.upper())
-        if len(line_shaped) >= 2 and re.search(
-                r"[A-Za-z0-9_)\]\"']\s*(?:,|/|->|-->|=>|→|<=|\band\b|\bor\b|"
-                r"\bthen\b|\bto\b)\s*",
-                line, re.IGNORECASE):
-            out |= line_shaped
-        # A quoted shaped token is an explicit state literal even alone.
-        for m in _RE_QUOTED.findall(line):
-            _add_shaped_only(m)
     return out
 
 
 def _doc_fsm_state_literals(text: str) -> set:
-    """KEY (c) detector core — chip-AGNOSTIC, CASE-INSENSITIVE FSM-state-literal
-    scan. Splits the doc into FSM-context REGIONS (whole paragraphs / lists /
-    state-table blocks that contain — or sit adjacent to — a state/FSM/
-    transition/phase/mode/motion-verb marker), then GENEROUSLY collects
-    candidates by SHAPE (any state-name-shaped token) AND by naming POSITION
-    (see _candidate_state_tokens), removes the generic stopword + FSM-vocabulary
-    set, and returns the normalised (upper) candidate set.
+    """KEY (c) SUPPLEMENT — return doc-named FSM-state-name candidates in `text`,
+    MINUS the grammatical/doc-structural stopword set. Anchored on the plugin's
+    own trusted FSM-state extractor (filtered through its `_is_real_fsm_state`
+    guard) PLUS explicit-enumeration positions (see _doc_state_candidates_one_doc).
 
-    §4.05 fail-closed: maximally-generous shape+position scanning means a missed
-    real state (a LEAK) is unlikely; an over-collected non-state token merely
-    makes the cap NOT fire → still FAIL → SAFE. The motivating reused-IP case
-    (docs say "see RTL for FSM details", only IDLE enumerated) yields an empty
-    set after subtracting the extracted IDLE; any doc that ENUMERATES a 2nd
-    state in ANY supported form yields a non-empty remainder."""
-    out: set = set()
-    for region in _split_fsm_context_regions(text):
-        out |= _candidate_state_tokens(region)
-    return out - _FSM_STOPWORDS - _HW_ACRONYM_STOPWORDS
+    DESIGN NOTE (three adversarial reviews): natural datasheet prose makes an
+    FSM-state enumeration and a register/bus/acronym enumeration syntactically
+    indistinguishable, so NO deterministic scan is simultaneously leak-free and
+    over-block-free. This scan deliberately errs toward OVER-COLLECTION (catches
+    every explicit enumeration incl. a state named DMA; may also collect some
+    register/bus tokens). For a floor-RELAXING cap that is the SAFE direction:
+    an over-collected token only makes _docs_name_no_further_fsm_states return
+    False → the cap conservatively does NOT fire → the design keeps FAILing (the
+    pre-#708 status quo, never a NEW defect-ship). The cap's FIRE decision does
+    NOT rest on this scan alone — see _reused_ip_rtl_only_fsm_cap_eligible keys
+    (c)=no_fsm_in_input + (d)+(e)=the AI deep-review channel, which is the
+    reliable judge of doc-named states that a regex cannot be."""
+    return _doc_state_candidates_one_doc(text) - _FSM_STOPWORDS
 
 
 def _l6_prose_text(l6_data: dict) -> str:
@@ -3024,32 +2911,76 @@ def _field_count_fail_is_solely_fsm_floor(gate_stdout: str) -> bool:
     return saw_fsm
 
 
+def _ai_deep_review_sidecar_present(project: Path) -> bool:
+    """ORGANIC #708 round-3 — KEY (e): the #706 ai_deep_review sidecar FILE
+    EXISTS (a parseable phase1/ai_deep_review_patches.json). This is positive,
+    deterministic evidence that the STRONG AI deep-review channel actually
+    examined the input docs for FSM-state content — the AI-ADJUDICATION exit the
+    classifier doctrine requires for a non-deterministic NL judgment.
+
+    WHY it is load-bearing: key (c)'s deterministic doc-scan is over-block-SAFE
+    but, by that conservatism, cannot reliably parse PURE-LOWERCASE-PROSE state
+    enumerations (e.g. "the sequence; idle; active; done") that lack an explicit
+    position keyword or the universal UPPERCASE state-name convention. Rather
+    than chase those with an ever-more-aggressive regex (which empirically
+    re-introduces acronym/register OVER-BLOCKS — wrongly FAILing correct reused-
+    IP designs), the cap requires that an AI deep-review HAS RUN. The AI is the
+    reliable judge of "do the docs name an FSM state the deterministic walker
+    missed"; if it ran and produced no qualifying FSM patch (key (d)), that is a
+    far stronger no-missed-state signal than any regex. If the sidecar is ABSENT
+    (no AI deep-review ran), the cap fail-closes (returns no deferral) — the
+    design keeps FAILing, exactly the pre-#708 status quo (SAFE: a floor-relaxing
+    cap must never fire on un-reviewed docs). Parse error / absent → False."""
+    try:
+        side = _pl.phase1_ai_deep_review_patches_file(project)
+    except Exception:
+        return False
+    if not side.is_file():
+        return False
+    try:
+        json.loads(side.read_text(errors="replace"))
+    except Exception:
+        return False
+    return True
+
+
 def _reused_ip_rtl_only_fsm_cap_eligible(project: Path) -> bool:
     """ORGANIC #708 — fail-closed deferral cap for the L6 ≥2-fsm_states floor
     FAIL of `l_doc_structured_field_count_check` on a REUSED-IP design whose
-    control FSM lives ONLY in vendor RTL. ALL FOUR keys must hold; any single
+    control FSM lives ONLY in vendor RTL. ALL FIVE keys must hold; any single
     false key keeps the FAIL (no leak). Orthogonal to _is_thin_input_eligible:
     fires at 100% completeness, the regime thin-input does NOT cover.
 
     (a) class rtl_gen=null + vendor/reused RTL present,
     (b) completeness == 100% AND input not tiny (negation of thin-input cover),
-    (c) L6 records no_fsm_in_input==false AND docs name no further FSM-state
-        literal beyond the extracted set (THE crux — a doc-enumerated missed
-        state keeps the FAIL),
-    (d) the #706 ai_deep_review sidecar yielded ZERO qualifying FSM patch."""
+    (c) L6 records no_fsm_in_input==false AND the deterministic doc-scan names
+        no further FSM-state literal beyond the extracted set (over-block-safe
+        explicit-enumeration scan — a doc-enumerated missed state keeps the
+        FAIL),
+    (d) the #706 ai_deep_review sidecar yielded ZERO qualifying FSM patch,
+    (e) the #706 ai_deep_review sidecar FILE is PRESENT — positive evidence the
+        strong AI channel examined the docs for FSM content (AI-adjudication
+        exit; bounds key (c)'s lowercase-prose residual). Without it the cap
+        fail-closes."""
     # (a) — class + vendor RTL.
     if not _detected_class_rtl_gen_null_and_vendor_rtl(project):
         return False
     # (b) — 100% completeness, not tiny (else thin-input owns it).
     if not _completeness_is_full_and_not_tiny(project):
         return False
-    # (c) — L6 honestly has an FSM, and docs name no further state literal.
+    # (c) — L6 honestly has an FSM, and the deterministic scan names no further
+    #       state literal beyond the extracted set.
     no_fsm_is_false, l6_data = _l6_doc_records_fsm_present(project)
     if not no_fsm_is_false:
         return False
     if not _docs_name_no_further_fsm_states(project, l6_data):
         return False
-    # (d) — no qualifying #706 FSM patch (else lift via #706, don't defer).
+    # (e) — AI deep-review must have RUN (sidecar file present) so the residual
+    #       NL judgment ("did the docs name a state the walker missed?") rests
+    #       on the strong AI channel, not on the conservative regex alone.
+    if not _ai_deep_review_sidecar_present(project):
+        return False
+    # (d) — and it yielded no qualifying FSM patch (else lift via #706).
     if _sidecar_has_qualifying_fsm_patch(project):
         return False
     return True

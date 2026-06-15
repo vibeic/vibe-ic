@@ -79,25 +79,46 @@ def _compile(tmp_path, sample_path, tb_text):
     return run.returncode, run.stdout
 
 
-# ── END-STATE: the real exporter + a positional TB (the 現象) ────────────────
-def test_export_reorders_to_genre_order(tmp_path):
+# ── SUPERSEDED-BY-#707-ROUND-2 (v1.0.68) ─────────────────────────────────────
+# v1.0.66's per-GENRE port-order guess REGRESSED the Shape-B corpus (#707 reopen,
+# P1): the positional bind order is PER-DESIGN, not per-genre (an inputs-first
+# `alu` and an outputs-first `LFSR` both occur), and the genre guess scrambled
+# the inputs-first one into a TB-failing bind. Round-2 replaced the genre guess
+# with TB-INFERENCE (read the required order from the hidden TB's DUT
+# instantiation) plus a NO-REGRESSION GUARD, and made the genre guess OPT-IN
+# (export ships VERBATIM when no TB is locatable, never genre-scrambles).
+#
+# These tests are RE-EXPRESSED against the round-2 semantics: the LFSR reorder is
+# now driven by its TB (which still derives out,clk,rst), and the bare unit-level
+# genre policy is exercised via the explicit `allow_genre_fallback=True` opt-in.
+def test_export_reorders_to_tb_inferred_order(tmp_path):
+    """END-STATE: with the hidden POSITIONAL TB staged, export infers out,clk,rst
+    from the TB (round-2). (v1.0.66 expected the SAME order from a genre guess —
+    superseded: round-2 reads it from the TB, the reliable per-design signal.)"""
     proj, rtl = _build_shapeb_fixture(tmp_path, _LFSR_PROMPT_ORDER)
+    ds = tmp_path / "dataset" / "LFSR"
+    ds.mkdir(parents=True)
+    (ds / "testbench.v").write_text(_POSITIONAL_TB)
     samples = tmp_path / "samples"
-    res = S.export(rtl, "LFSR", samples)
+    res = S.export(rtl, "LFSR", samples,
+                   dataset=tmp_path / "dataset", design="LFSR")
     assert res["verdict"] == "PASS", res
-    header = (samples / "LFSR.v").read_text().splitlines()[0]
-    # out before clk before rst (sequential genre order)
+    header = (samples / "LFSR.v").read_text().split(");")[0]
+    # out before clk before rst (the TB's positional order)
     assert header.index("out") < header.index("clk") < header.index("rst"), header
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")
 def test_reordered_sample_passes_positional_tb_LOADBEARING(tmp_path):
-    """The reordered sample compiles AND passes the RTLLM positional TB, while
+    """The TB-inferred sample compiles AND passes the RTLLM positional TB, while
     the verbatim prompt-order RTL FAILS it — proving the reorder is load-bearing
-    (not a cosmetic no-op)."""
+    (not a cosmetic no-op). Round-2: the order comes from the TB."""
     proj, rtl = _build_shapeb_fixture(tmp_path, _LFSR_PROMPT_ORDER)
+    ds = tmp_path / "dataset" / "LFSR"
+    ds.mkdir(parents=True)
+    (ds / "testbench.v").write_text(_POSITIONAL_TB)
     samples = tmp_path / "samples"
-    S.export(rtl, "LFSR", samples)
+    S.export(rtl, "LFSR", samples, dataset=tmp_path / "dataset", design="LFSR")
     rc, out = _compile(tmp_path, samples / "LFSR.v", _POSITIONAL_TB)
     assert rc == 0 and "Passed" in out, (rc, out)
 
@@ -110,11 +131,11 @@ def test_reordered_sample_passes_positional_tb_LOADBEARING(tmp_path):
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")
 def test_noleak_named_binding_tb_unaffected(tmp_path):
-    """§4.05: a NAMED-binding TB ignores port order — the reordered sample must
-    still compile + pass it (the reorder never breaks named binding)."""
+    """§4.05: a NAMED-binding TB ignores port order — the exported sample must
+    still compile + pass it (the reorder never breaks named binding). Round-2:
+    a named bind is detected and the reorder is DECLINED (ship verbatim), which
+    still compiles + passes."""
     proj, rtl = _build_shapeb_fixture(tmp_path, _LFSR_PROMPT_ORDER)
-    samples = tmp_path / "samples"
-    S.export(rtl, "LFSR", samples)
     named_tb = (
         "module tb; reg clk_tb=0,rst_tb=1; wire [3:0] out_tb;\n"
         "LFSR DUT(.clk(clk_tb), .rst(rst_tb), .out(out_tb));\n"
@@ -122,15 +143,40 @@ def test_noleak_named_binding_tb_unaffected(tmp_path):
         "initial begin #12 rst_tb=0; #50\n"
         "  $display(\"=========== Your Design Passed ===========\"); $finish; end\n"
         "endmodule\n")
+    ds = tmp_path / "dataset" / "LFSR"
+    ds.mkdir(parents=True)
+    (ds / "testbench.v").write_text(named_tb)
+    samples = tmp_path / "samples"
+    S.export(rtl, "LFSR", samples, dataset=tmp_path / "dataset", design="LFSR")
     rc, out = _compile(tmp_path, samples / "LFSR.v", named_tb)
     assert rc == 0 and "Passed" in out, (rc, out)
 
 
 # ── unit-level reorder_top_ports + §4.05 fall-back fail-safes ────────────────
-def test_sequential_reorder_outputs_clk_reset_inputs():
-    r = S.reorder_top_ports(_LFSR_PROMPT_ORDER, "LFSR")
-    h = r.splitlines()[0]
+def test_sequential_reorder_from_tb_outputs_clk_reset_inputs():
+    """Round-2: the reorder is TB-driven. The positional TB binds out,clk,rst →
+    the inferred order is out,clk,rst. (v1.0.66 derived the same order from a
+    sequential genre policy — superseded by TB-inference.)"""
+    r = S.reorder_top_ports(_LFSR_PROMPT_ORDER, "LFSR", tb_text=_POSITIONAL_TB)
+    h = r.split(");")[0]
     assert h.index("out") < h.index("clk") < h.index("rst"), h
+
+
+def test_sequential_genre_fallback_opt_in_still_works():
+    """The genre policy is retained as an OPT-IN last resort (round-2): with no
+    TB but allow_genre_fallback=True a sequential top still gets
+    outputs→clk→reset→inputs (used only where export's no-regression guard can
+    re-validate it)."""
+    r = S.reorder_top_ports(_LFSR_PROMPT_ORDER, "LFSR",
+                            allow_genre_fallback=True)
+    h = r.split(");")[0]
+    assert h.index("out") < h.index("clk") < h.index("rst"), h
+
+
+def test_no_tb_no_optin_ships_verbatim():
+    """Round-2 core safety: NO TB and NO opt-in → VERBATIM (the genre guess does
+    NOT fire). This is what stops the v1.0.66 inputs-first regression."""
+    assert S.reorder_top_ports(_LFSR_PROMPT_ORDER, "LFSR") == _LFSR_PROMPT_ORDER
 
 
 def test_noleak_already_conventional_byte_identical():
@@ -153,11 +199,24 @@ def test_noleak_name_set_preserved():
     assert names(r) == names(_LFSR_PROMPT_ORDER)
 
 
-def test_combinational_outputs_first():
+def test_combinational_outputs_first_genre_optin():
+    """The combinational genre policy (outputs-first) is retained as an OPT-IN
+    last resort (round-2): with allow_genre_fallback=True a combinational top
+    gets outputs-first. (Round-2 default is VERBATIM — no genre scramble — so the
+    inputs-first Shape-B corpus is never regressed.)"""
     comb = ("module addr(input [3:0] xa, input [3:0] xb, output [4:0] xs);\n"
             "assign xs=xa+xb;\nendmodule\n")
-    h = S.reorder_top_ports(comb, "addr").splitlines()[0]
+    h = S.reorder_top_ports(comb, "addr",
+                            allow_genre_fallback=True).splitlines()[0]
     assert h.index("xs") < h.index("xa") and h.index("xa") < h.index("xb"), h
+
+
+def test_combinational_default_verbatim_no_scramble():
+    """Round-2 regression guard: an inputs-first combinational top ships VERBATIM
+    by default (no genre flip) — the v1.0.66 inputs-first scramble is gone."""
+    comb = ("module addr(input [3:0] xa, input [3:0] xb, output [4:0] xs);\n"
+            "assign xs=xa+xb;\nendmodule\n")
+    assert S.reorder_top_ports(comb, "addr") == comb
 
 
 def test_sequential_detector_overrides_arithmetic_ic_class():
