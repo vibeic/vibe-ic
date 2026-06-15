@@ -64,6 +64,19 @@ v0.1.24/v0.1.25 fail-case loops 2026-05-27/28):
      synth gate. `--fix` fences it with `// synthesis translate_off …
      translate_on` (yosys/DC skip it; iverilog/cocotb keep it live). Safe,
      whole-line-only, idempotent, chip-AGNOSTIC.
+  12. Reset-boundary residual level-enable write (v1.0.76, ORGANIC #723)
+     A clocked register that a reset CLEARS to 0 and then updates under a
+     purely LEVEL-sensitive enable that traces to a TOP-LEVEL INPUT, with NO
+     registered armed/settle/valid-after-reset qualifier, has the
+     stale-enable-post-reset-write hole: a held-high enable can perform a
+     transfer on the FIRST post-reset clock edge, breaking the post-reset
+     invariant. Motivating real case: a `ping_pong_buffer` async-reset test
+     failed because a held-high `write_enable` transferred immediately after
+     reset release; the fix was a registered 2-cycle "armed" guard. Advisory
+     WARN. Conservative: the ubiquitous `if(!rst_n) x<=0; else x<=d;`
+     (unconditional else) does NOT fire; an INTERNAL-enable counter does NOT
+     fire; a design that already carries an armed/settle qualifier does NOT
+     fire. chip-AGNOSTIC: pure SV structure.
 
 Usage:
     python3 rtl_hygiene_lint.py <files.v|.sv ...>
@@ -937,6 +950,234 @@ def autofix_guard_sim_only_assert(path: Path) -> Tuple[int, List[str]]:
     return len(edits), labels
 
 
+# ---------------------------------------------------------------------------
+# Rule 12: Reset-boundary residual level-enable write (ORGANIC #723)
+#
+# A clocked register that a reset CLEARS to 0, and is then UPDATED under a
+# purely LEVEL-sensitive enable that traces to a TOP-LEVEL INPUT, with NO
+# registered "armed"/"settle"/"valid-after-reset" qualifier in the module, has
+# the stale-enable-post-reset-write hole:
+#
+#     always @(posedge clk or negedge rst_n)
+#         if (!rst_n)   cnt <= 0;        // (a) reset clears the register
+#         else if (dw)  cnt <= cnt + 1;  // (b) level enable `dw` (== an input)
+#
+# If the environment leaves `dw`'s source input HIGH across reset (common when a
+# reset test runs after a random-stimulus test that did not clear enables), the
+# very FIRST post-reset clock edge already performs the update, so the post-reset
+# "empty / zero" invariant breaks before any deliberate transaction. The
+# motivating real case: a `ping_pong_buffer` async-reset test failed because a
+# held-high `write_enable` performed a transfer immediately after reset release;
+# the fix was a registered 2-cycle "armed" guard that blocks updates until reset
+# has been de-asserted for >= 1 full cycle.
+#
+# CORPUS-CLEAN narrowing — fire ONLY when ALL of:
+#   (a) the register is RESET-CLEARED to zero inside the block's reset branch, AND
+#   (b) the SAME register is updated in an `else if(<COND>) <reg> <= ...` whose
+#       <COND> gates on a PURELY-COMBINATIONAL enable that TRACES TO A TOP-LEVEL
+#       INPUT (the input port directly, or via `assign`/`wire = ...` chains of
+#       combinational signals) — an environment-controllable enable that can be
+#       held HIGH across reset, AND
+#   (c) the module contains NO registered armed/settle/valid-after-reset
+#       qualifier (a reg whose name signals a post-reset settle guard).
+#
+# This is deliberately conservative: the ubiquitous legitimate shape
+# `if(!rst_n) x<=0; else x<=d;` (unconditional else) does NOT fire (no level
+# enable in the else branch); a counter gated by an INTERNAL (clocked / derived)
+# enable does NOT fire (the enable is not environment-held-across-reset); and a
+# design that already carries an armed/settle qualifier does NOT fire. Advisory
+# WARN only. chip-AGNOSTIC: pure SV structure, no chip/vendor/SKU literal.
+# ---------------------------------------------------------------------------
+_ARMED_QUALIFIER_RE = re.compile(
+    r'\b\w*(?:armed|settl|reset_done|rst_done|reset_rel|rst_rel|por_done|'
+    r'init_done|valid_after_reset|ready_after_reset|warmup|warm_up|'
+    r'startup_done|boot_done|came_out_of_reset)\w*\b', re.I)
+
+
+def _collect_input_ports(src: str) -> Set[str]:
+    """Top-level input port names (chip-AGNOSTIC structural scan)."""
+    ports: Set[str] = set()
+    for m in re.finditer(
+            r'\binput\b(?:\s+wire|\s+reg|\s+logic)?(?:\s+signed)?\s*'
+            r'(?:\[[^\]]+\]\s*)?([A-Za-z_]\w*)\s*(?=[,;)=])', src):
+        nm = m.group(1)
+        if nm and nm not in VERILOG_KEYWORDS:
+            ports.add(nm)
+    # ANSI port lists pack several names per `input` keyword:
+    #   `module m(input clk, rst_n, we, output ...)` — `rst_n` and `we` follow a
+    #   comma, not their own `input`. Walk the port-list header and attribute
+    #   every bare name after an `input` (until the next direction keyword) as an
+    #   input. Pure structural, no literals.
+    # Walk EVERY module header (multi-module files: a non-first module's inputs
+    # are otherwise missed because comma-separated names lack their own `input`).
+    for hm in re.finditer(r'\bmodule\b\s+\w+\s*(#\s*\([^)]*\)\s*)?\(', src):
+        depth = 0
+        end = hm.end() - 1
+        while end < len(src):
+            if src[end] == '(':
+                depth += 1
+            elif src[end] == ')':
+                depth -= 1
+                if depth == 0:
+                    break
+            end += 1
+        header = src[hm.end():end]
+        cur_dir = None
+        for tok in re.finditer(r'\b(input|output|inout)\b|([A-Za-z_]\w*)', header):
+            if tok.group(1):
+                cur_dir = tok.group(1)
+            elif tok.group(2):
+                nm = tok.group(2)
+                if nm in VERILOG_KEYWORDS or nm in ('wire', 'reg', 'logic',
+                                                    'signed', 'unsigned'):
+                    continue
+                if cur_dir == 'input':
+                    ports.add(nm)
+    return ports
+
+
+def _traces_to_input(sig: str, input_ports: Set[str], combinational: Dict[str, str],
+                     clocked: Set[str], _seen: Set[str] | None = None) -> bool:
+    """True if `sig` is a top-level input, or a purely-combinational signal
+    (`assign`/`wire = ...`) whose RHS chain reaches a top-level input WITHOUT
+    passing through a clocked/registered signal. Conservative: a signal driven
+    by a clocked reg short-circuits to False (it is not environment-held).
+    """
+    if _seen is None:
+        _seen = set()
+    if sig in input_ports:
+        return True
+    if sig in clocked:
+        return False
+    if sig in _seen:
+        return False
+    _seen.add(sig)
+    rhs = combinational.get(sig)
+    if rhs is None:
+        return False
+    for tok in re.findall(r'[A-Za-z_]\w*', rhs):
+        if tok in VERILOG_KEYWORDS:
+            continue
+        if _traces_to_input(tok, input_ports, combinational, clocked, _seen):
+            return True
+    return False
+
+
+def _enable_fanin_text(expr: str, combinational: Dict[str, str],
+                       _seen: Set[str] | None = None) -> str:
+    """Concatenate `expr` with the RHS text of every combinational signal it
+    transitively reads. Used to detect reset-self-gating ANYWHERE in the enable's
+    fan-in (e.g. `wire dw = we & rst_n; ... else if(dw) ...` — `dw` is already
+    held low while reset is asserted, so it is NOT a residual-enable hole)."""
+    if _seen is None:
+        _seen = set()
+    parts = [expr]
+    for tok in re.findall(r'[A-Za-z_]\w*', expr):
+        if tok in VERILOG_KEYWORDS or tok in _seen:
+            continue
+        _seen.add(tok)
+        rhs = combinational.get(tok)
+        if rhs is not None:
+            parts.append(_enable_fanin_text(rhs, combinational, _seen))
+    return ' '.join(parts)
+
+
+def rule_reset_boundary_residual_enable(src: str, path: str) -> List[Finding]:
+    """Rule 12 (ORGANIC #723) — flag a reset-cleared register updated under a
+    level-sensitive, top-level-input-traced enable with no armed/settle guard."""
+    findings: List[Finding] = []
+    input_ports = _collect_input_ports(src)
+    if not input_ports:
+        return findings
+
+    # (c) module-wide: if any registered armed/settle qualifier exists, the
+    # design already guards the reset boundary — never fire.
+    # `clocked_lhs`: every `<=` (NBA) target in the file. Used both as the
+    # armed/settle disqualifier set and as the "not environment-held" short
+    # circuit in `_traces_to_input` (a registered signal is never an external
+    # held-high enable). Over-approximating membership is the safe direction.
+    clocked_lhs: Set[str] = set()
+    for mm in re.finditer(r'(?<![<>!=])\b(\w+)(?:\[[^\]]+\])?\s*<=(?!=)', src):
+        clocked_lhs.add(mm.group(1))
+    if any(_ARMED_QUALIFIER_RE.search(nm) for nm in clocked_lhs):
+        return findings
+
+    # Combinational fan-in map: `assign X = expr;` and `wire X = expr;`.
+    combinational: Dict[str, str] = {}
+    for m in re.finditer(r'\bassign\s+([A-Za-z_]\w*)\s*=\s*([^;]+);', src):
+        combinational.setdefault(m.group(1), m.group(2))
+    for m in re.finditer(
+            r'\bwire\b(?:\s+signed)?\s*(?:\[[^\]]+\]\s*)?'
+            r'([A-Za-z_]\w*)\s*=\s*([^;]+);', src):
+        if m.group(1) not in VERILOG_KEYWORDS:
+            combinational.setdefault(m.group(1), m.group(2))
+
+    # Scan each posedge/negedge always block for the reset-clear + level-enable
+    # update on the SAME register.
+    block_re = re.compile(r'\balways\s*@\s*\(\s*(?:pos|neg)edge\b[^)]*\)',
+                          re.M | re.S)
+    for bm in block_re.finditer(src):
+        body_start = bm.end()
+        # Extract the block body (begin..end or up to the next top-level always /
+        # end-of-module). We only need the if/else-if chain text.
+        tail = src[body_start:]
+        # Bound the body: stop at the next `always`/`endmodule` at any depth — the
+        # if-chain we care about is always at the head of the block.
+        nxt = re.search(r'\balways\b|\bendmodule\b', tail)
+        body = tail[:nxt.start()] if nxt else tail
+
+        # (a) reset-clear: `if (<reset-cond>) <reg> <= 0;` (or '0 / {N{1'b0}}).
+        # The reset condition references a reset-name signal.
+        for rm in re.finditer(
+                r'\bif\s*\(\s*([^()]*)\)\s*'
+                r'([A-Za-z_]\w*)\s*<=\s*'
+                r"(?:\d+'[bhdo]?0+|'0|0|\{[^{}]*1'b0[^{}]*\})\s*;",
+                body):
+            cond, reg = rm.group(1), rm.group(2)
+            if not _RESET_NAME_RE.search(cond):
+                continue
+            # (b) same register updated under an `else if(<enable>) reg <= ...`.
+            after = body[rm.end():]
+            em = re.match(
+                r'\s*else\s+if\s*\(\s*([^()]*(?:\([^()]*\)[^()]*)*)\)\s*'
+                r'(?:begin\b)?\s*' + re.escape(reg) + r'\s*<=',
+                after)
+            if not em:
+                continue
+            enable_expr = em.group(1)
+            enable_ids = [t for t in re.findall(r'[A-Za-z_]\w*', enable_expr)
+                          if t not in VERILOG_KEYWORDS]
+            if not enable_ids:
+                continue
+            # the enable must NOT reference reset anywhere in its combinational
+            # fan-in (an enable like `(en & rst_n)`, directly or via a `wire dw =
+            # we & rst_n;` chain, already self-gates on reset release and is not
+            # a residual-enable hole).
+            if _RESET_NAME_RE.search(_enable_fanin_text(enable_expr, combinational)):
+                continue
+            # at least one enable identifier must trace to a top-level input via
+            # a purely-combinational chain (not through a clocked reg).
+            traced = next(
+                (t for t in enable_ids
+                 if _traces_to_input(t, input_ports, combinational, clocked_lhs)),
+                None)
+            if traced is None:
+                continue
+            lineno = src[:body_start + rm.start()].count('\n') + 1
+            findings.append(Finding(
+                path, lineno, 'WARN', 'reset-boundary-residual-enable', reg,
+                f"register `{reg}` is reset-cleared to 0 then updated under the "
+                f"level-sensitive enable `{enable_expr.strip()}` (traces to "
+                f"top-level input `{traced}`) with no registered armed/settle "
+                f"qualifier. A held-high enable can perform a transfer on the "
+                f"FIRST post-reset clock edge, breaking the post-reset invariant. "
+                f"Fix: add a registered armed/settle guard that blocks the update "
+                f"until reset has been de-asserted for >= 1 full cycle (e.g. "
+                f"`else if (armed && {enable_expr.strip()}) {reg} <= ...`)."))
+            break  # one finding per block is enough
+    return findings
+
+
 def lint_file(path: Path) -> List[Finding]:
     raw = path.read_text(errors='replace')
     src = strip_comments(raw)
@@ -949,6 +1190,7 @@ def lint_file(path: Path) -> List[Finding]:
     results += rule_vector_self_shift_fold(src, str(path))
     results += rule_reserved_word_identifier(src, str(path))
     results += rule_unguarded_sim_only_assert(raw, str(path))
+    results += rule_reset_boundary_residual_enable(src, str(path))
     # rule_wire_input_read_in_clocked_block: NOT enabled.
     #
     # v0.1.39 honesty correction (audit Finding 2): the v0.1.38 disable
