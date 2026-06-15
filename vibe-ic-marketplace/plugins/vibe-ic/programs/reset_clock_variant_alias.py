@@ -286,9 +286,19 @@ def design_contract_ports(project: Path) -> set:
 
 
 # Word-boundary anchored: matches both spaced and COMPACT Verilog (#517 r3).
+# ORGANIC #710 — also consume an OPTIONAL SystemVerilog package-qualified type
+# (`pkg::type_t name`) between the net-type block and the port-name capture. A
+# comportable/vendor-IP top exposes struct/enum bus ports like
+# `input tlul_pkg::tl_h2d_t tl_i`; without the `(?:\w+::\w+\s+)?` arm the greedy
+# final `(\w+)` grabbed the package QUALIFIER (`tlul_pkg`) as the port name —
+# losing the real ports (tl_i/tl_o/idle_o) and emitting duplicate `tlul_pkg`
+# pins. The arm fires ONLY when a literal `::` qualifier is present, so plain /
+# ANSI ports (`input wire [7:0] x`, `input logic clk_i`, `inout io_pad`) are
+# byte-for-byte unaffected (§4.05 no-leak). chip-AGNOSTIC: pure SV port grammar.
 _PORT_DECL_RE = re.compile(
     r"\b(input|output|inout)\b\s*"
     r"(?:(?:wire|reg|logic|signed|unsigned)\b\s*)*"
+    r"(?:[A-Za-z_]\w*::\s*[A-Za-z_]\w*\s+)?"   # optional pkg::type_t prefix (#710)
     r"(\[[^\]]+\])?\s*(\w+)")
 
 
