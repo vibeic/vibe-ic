@@ -68,18 +68,34 @@ HONESTY
   * ``--output`` already HIGH before the event → ``LATENCY-ERROR`` rc 2 (a
     meaningless measurement is refused, NEVER reported as a bogus latency 0).
 
+NO-HANDSHAKE STREAMING DESIGNS (ORGANIC #729)
+---------------------------------------------
+A pure STREAMING design (continuous data/valid, no discrete pulse->done
+handshake) has no ``--event``-triggers->``--output`` relationship to measure: the
+output never makes a one-shot assertion after a one-cycle event pulse, so the
+TB simply TIMES OUT. A bare TIMEOUT is the wrong signal there — it is neither a
+real timing BLOCK (the design has no such timing contract) nor a PASS (nothing
+was measured). With ``--allow-no-handshake`` such a TIMEOUT is reclassified to a
+DISTINCT ``NOT_APPLICABLE`` verdict on a DISTINCT exit code (3), so it can never
+be misread as a real PASS (rc 0) or as a real latency BLOCK (rc 1). WITHOUT the
+flag the default behaviour is UNCHANGED: a TIMEOUT stays ``LATENCY-TIMEOUT`` rc
+1 (a design that DOES have a handshake but mis-latches must still hard-block).
+
 chip-AGNOSTIC: pure measurement + comparison; no design/chip/vendor/SKU literal.
 
 Usage:
     python3 latency_conformance_check.py --rtl <design>.sv --top <module>
         --event <start_port> --output <valid_port> --expect "WIDTH+2"
         [--param NAME=VAL ...] [--reset PORT] [--reset-active-low|high]
-        [--input-const N] [--max-cycles N] [--mode latency] [--json OUT]
+        [--input-const N] [--max-cycles N] [--mode latency]
+        [--allow-no-handshake] [--json OUT]
 
 Exit codes:
     0  latency-conformance ok (measured == resolved spec)  OR  SKIP (no iverilog)
     1  LATENCY-MISMATCH  or  LATENCY-TIMEOUT
     2  setup / parse error (missing port, bad --expect, bad --param, …)
+    3  NOT-APPLICABLE — no pulse->done handshake to measure on a streaming
+       design (only with --allow-no-handshake; never a silent PASS)
 """
 from __future__ import annotations
 
@@ -587,11 +603,13 @@ def run_latency_conformance(
     expect: str, params_override: Dict[str, int],
     reset_override: Optional[str], reset_active_low_flag: Optional[bool],
     input_const: int, max_cycles_override: Optional[int],
-    mode: str = "latency",
+    mode: str = "latency", allow_no_handshake: bool = False,
 ) -> Tuple[int, Dict]:
     """Run the gate; return (rc, report). rc is the program exit code.
 
-    rc 0  = ok / SKIP, rc 1 = MISMATCH / TIMEOUT, rc 2 = setup error.
+    rc 0  = ok / SKIP, rc 1 = MISMATCH / TIMEOUT, rc 2 = setup error,
+    rc 3  = NOT_APPLICABLE (no-handshake streaming, only with
+    `allow_no_handshake`).
     """
     report: Dict = {
         "program": "latency_conformance_check",
@@ -730,6 +748,23 @@ def run_latency_conformance(
                             f"signal)")
         return 2, report
     if status == "timeout":
+        # ORGANIC #729 — a TIMEOUT on a STREAMING design with no pulse->done
+        # handshake is NOT a real timing BLOCK and is NOT a PASS: there is no
+        # event->output assertion to measure. Only with --allow-no-handshake do
+        # we reclassify it to a DISTINCT NOT_APPLICABLE verdict on a DISTINCT
+        # exit code (3) so it can never be misread as a real PASS or a real
+        # block. WITHOUT the flag the default behaviour is unchanged (a design
+        # that SHOULD pulse but mis-latches must still hard-block, rc 1).
+        if allow_no_handshake:
+            report["verdict"] = "NOT_APPLICABLE"
+            report["measured_latency"] = None
+            report["reason"] = (
+                f"output {output!r} never asserted within {max_cycles} cycles "
+                f"after the {event!r} pulse — this design has no pulse->done "
+                f"handshake (streaming / continuously-valid), so the "
+                f"event->output latency convention does not apply; "
+                f"NOT-APPLICABLE (NOT a silent PASS, NOT a real timing block)")
+            return 3, report
         report["verdict"] = "TIMEOUT"
         report["measured_latency"] = None
         report["reason"] = (f"output {output!r} never asserted within "
@@ -802,6 +837,12 @@ def main(argv=None) -> int:
                          "4*expected+16))")
     ap.add_argument("--mode", default="latency", choices=_MODES,
                     help="timing-conformance mode (only 'latency' is wired)")
+    ap.add_argument("--allow-no-handshake", dest="allow_no_handshake",
+                    action="store_true", default=False,
+                    help="on a STREAMING design with no pulse->done handshake, "
+                         "report a DISTINCT NOT-APPLICABLE (rc 3) instead of a "
+                         "TIMEOUT — the event->output latency convention does "
+                         "not apply (#729). Default OFF: a TIMEOUT stays rc 1.")
     ap.add_argument("--json", default=None, help="optional JSON report path")
     args = ap.parse_args(argv)
 
@@ -821,7 +862,7 @@ def main(argv=None) -> int:
         expect=args.expect, params_override=overrides,
         reset_override=args.reset, reset_active_low_flag=args.reset_active_low,
         input_const=args.input_const, max_cycles_override=args.max_cycles,
-        mode=args.mode)
+        mode=args.mode, allow_no_handshake=args.allow_no_handshake)
 
     if args.json:
         Path(args.json).write_text(json.dumps(report, indent=2))
@@ -835,6 +876,10 @@ def main(argv=None) -> int:
               f"event {args.event}", file=sys.stderr)
     elif verdict == "ERROR":
         print(f"ERROR: {report['reason']}", file=sys.stderr)
+    elif verdict == "NOT_APPLICABLE":
+        print(f"LATENCY-NOT-APPLICABLE: output {args.output} never asserted "
+              f"after the {args.event} pulse — no pulse->done handshake "
+              f"(streaming design); the latency convention does not apply")
     elif verdict == "TIMEOUT":
         print(f"LATENCY-TIMEOUT: output {args.output} never asserted within "
               f"{report['max_cycles']} cycles")
