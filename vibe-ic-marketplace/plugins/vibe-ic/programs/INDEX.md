@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 685
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 685)
+- **Total programs (excluding helpers / shims):** 687
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 687)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 676 |
+| `any` | 678 |
 
 ## Alphabetical listing
 
@@ -602,6 +602,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `signaltap_recompile_sequence_check` | any | — | Validate that the Quartus |
 | `signaltap_stp_completeness_check` | any | — | Validate that a generated Quartus |
 | `signoff_audit` | any | v0.52 | signoff_audit.py -- Multi-mode signoff evidence checker (LEGACY gate). |
+| `signoff_gate_self_skip_consistency_check` | any | — | META-audit for ORGANIC #721. |
 | `signoff_ladder_run` | any | v0.1.51 | Chip-level 5-tier sign-off ladder runner (B1 from spm pilot). |
 | `signoff_waiver_emit` | any | v0.1.49 | Chipignite/foundry signoff-waiver scaffold emitter. |
 | `signoff_waiver_md_emit` | any | v0.1.49 | Submitter-facing waiver Markdown emitter. |
@@ -686,6 +687,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `utilization_band_check` | any | v0.2.69 | Floorplan/placement utilization band classifier. |
 | `vector_op_rtl_gen` | any | v0.1.8 | deterministic vector-operation → RTL generator. |
 | `vendor_fpga_reference_table_extraction_check` | any | v0.119.30 | gate (LL-29) that |
+| `verdict_token_propagation_check` | any | — | META-audit: producer -> consumer |
 | `verilator_coverage_measure` | any | v0.53 | v0.53 plugin gate |
 | `version_bump_monotonic_check` | any | — | strict version-bump gate for the |
 | `vibe_ic_one_shot_runner` | any | — | full Vibe-IC flow orchestrator. |
@@ -757,7 +759,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (676 programs)
+### `any` (678 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1328,6 +1330,7 @@ _(no programs in this group)_
 - `signaltap_recompile_sequence_check` — Validate that the Quartus
 - `signaltap_stp_completeness_check` — Validate that a generated Quartus
 - `signoff_audit` — signoff_audit.py -- Multi-mode signoff evidence checker (LEGACY gate).  _[v0.52]_
+- `signoff_gate_self_skip_consistency_check` — META-audit for ORGANIC #721.
 - `signoff_ladder_run` — Chip-level 5-tier sign-off ladder runner (B1 from spm pilot).  _[v0.1.51]_
 - `signoff_waiver_emit` — Chipignite/foundry signoff-waiver scaffold emitter.  _[v0.1.49]_
 - `signoff_waiver_md_emit` — Submitter-facing waiver Markdown emitter.  _[v0.1.49]_
@@ -1412,6 +1415,7 @@ _(no programs in this group)_
 - `utilization_band_check` — Floorplan/placement utilization band classifier.  _[v0.2.69]_
 - `vector_op_rtl_gen` — deterministic vector-operation → RTL generator.  _[v0.1.8]_
 - `vendor_fpga_reference_table_extraction_check` — gate (LL-29) that  _[v0.119.30]_
+- `verdict_token_propagation_check` — META-audit: producer -> consumer
 - `verilator_coverage_measure` — v0.53 plugin gate  _[v0.53]_
 - `version_bump_monotonic_check` — strict version-bump gate for the
 - `vibe_ic_one_shot_runner` — full Vibe-IC flow orchestrator.
