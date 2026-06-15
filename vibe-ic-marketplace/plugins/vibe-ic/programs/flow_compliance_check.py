@@ -1798,6 +1798,284 @@ _THIN_INPUT_WAIVER_TICKET = "thin-input-v1.6.97"
 TINY_INPUT_TOTAL_RAW_TOKENS = 100
 
 
+# ─── ORGANIC #708 — reused-IP RTL-only-FSM deferral cap ──────────────────────
+# Monotonicity bug: reaching 100% doc completeness REVOKES the only deferral
+# (--allow-thin-input, predicate _is_thin_input_eligible, keyed on doc-
+# completeness < 100%) for the non-waivable L6 ≥2-fsm_states floor of
+# `l_doc_structured_field_count_check`. The trapped class is REUSED-IP whose
+# control FSM lives ONLY in vendor RTL (states never appear in any input doc):
+#   - cannot claim the #462 no_fsm N/A escape (no_fsm_in_input=false is CORRECT
+#     — the IP really HAS an FSM),
+#   - cannot reach the floor (anti-fabrication forbids inventing a doc-traceable
+#     2nd state),
+#   - cannot lift via the #706 ai_deep_review sidecar (no qualifying doc-
+#     traceable FSM patch exists),
+#   - and now cannot defer (thin-input is revoked at 100% completeness).
+# Every path is closed for a STRUCTURALLY-CORRECT extraction.
+#
+# This cap is an ORTHOGONAL, fail-closed deferral that fires at 100%
+# completeness — the regime --allow-thin-input does NOT cover — and ONLY for
+# the L6 fsm_states floor FAIL. It NEVER touches _is_thin_input_eligible (which
+# owns the < 100% regime). All FOUR keys must hold (see
+# _reused_ip_rtl_only_fsm_cap_eligible); a single false key keeps the FAIL.
+_REUSED_IP_RTL_ONLY_FSM_CAP_TICKET = "reused-ip-rtl-only-fsm-v1.6.708"
+_REUSED_IP_RTL_ONLY_FSM_CAP_GATE = "l_doc_structured_field_count_check"
+# Tokens that mark the L6 FSM-states floor detail line (case-insensitive). The
+# L6 floor FAIL reads uniquely:
+#   "L6 control_logic must carry ≥N typed FSM states in `fsm_states` …"
+# round-2 fix (2): the L9 floor detail line ALSO contains the substring
+# `fsm_states` (it lists "… among (top_module string, fsm_states[], port list,
+# …)"), so a bare `fsm_states` token would mis-classify the L9 line as the FSM
+# floor and let the cap MASK a co-occurring L9 failure. The discriminator
+# phrase `typed fsm states` appears ONLY in the L6 control-logic floor message,
+# never in the L9 message — use it to identify the L6 FSM-states floor line
+# precisely (still chip-AGNOSTIC: a gate-message phrase, no chip/vendor name).
+_FSM_STATES_FLOOR_TOKENS = ("typed fsm states",)
+# Also accept the explicit L6 control-logic floor wording as a second
+# (redundant) discriminator so a future message reword that drops "typed" but
+# keeps "control_logic … fsm_states" is still recognised — both require the L6
+# control-logic context, so neither matches the L9 line.
+_L6_FSM_FLOOR_DISCRIMINATORS = (
+    "typed fsm states",
+    "control_logic must carry",
+)
+
+# ─── ORGANIC #708 round-2 fix (1): GENEROUS key-(c) FSM-state-literal scan ────
+# The original ALL-CAPS-only ±1-line scanner LEAKED — a real doc-traceable 2nd
+# state in lowercase / mixedCase / Capitalized / prose-without-a-marker-on-the-
+# same-line / a bullet or table-row far below the marker slipped past, so the
+# cap WRONGLY fired (the load-bearing leak). The rewrite is GENEROUS within FSM-
+# context REGIONS (fail-closed = catch MORE candidates so the cap fires LESS):
+#  - context window = the whole PARAGRAPH / table-block / bullet-list / section
+#    that contains a state/FSM/finite-state/transition/`->` marker (not just
+#    adjacent lines);
+#  - candidates are CASE-INSENSITIVE identifier-like tokens
+#    (`[A-Za-z_][A-Za-z0-9_]*`, incl. lowercase/mixedCase and `S\d+`) recognised
+#    in state-naming positions (after `state(s):`/`states are`, inside `{...}`
+#    sets, transition arrows / "from X to Y" / "advances/goes/moves to X" /
+#    "the X state", and state-table rows);
+#  - candidates are normalised case-insensitively (upper), a generic English-
+#    stopword + FSM-vocabulary set is removed, then the extracted fsm_states
+#    names are subtracted. A non-empty remainder → key (c) False (still FAIL).
+# A marker word/phrase anywhere in a block makes the WHOLE enclosing block
+# (paragraph or contiguous list/table) an FSM region. round-2 fix (1) follow-up:
+# a block that DESCRIBES a transition without ever using the literal word
+# "state"/"fsm" — e.g. "the machine enters BUSY", "it goes to RUNNING",
+# "switches to STALL" — must ALSO be an FSM region, else its enumerated 2nd
+# state slips past (a leak). So the marker set includes the motion-verb phrases
+# AND the common FSM-subject nouns. Fail-closed: broader region detection scans
+# MORE → cap fires LESS → SAFE.
+_FSM_REGION_MARKERS = (
+    "state", "states", "fsm", "finite state", "finite-state",
+    "transition", "transitions", "->", "-->", "=>", "→", "<=",
+    # FSM-subject nouns
+    "machine", "controller", "sequencer", "control unit", "control logic",
+    # phase/mode synonyms for "state"
+    "phase", "phases", "mode", "modes", "step", "steps", "next-state",
+    "next state",
+    # motion / copula verb phrases (any of these implies a state is named)
+    "advances to", "advance to", "goes to", "go to", "moves to", "move to",
+    "transitions to", "transition to", "returns to", "return to", "jumps to",
+    "proceeds to", "enters ", "enter ", "reaches ", "reach ", "switches to",
+    "switch to", "leaves ", "exits ", "moves into", "goes into", "becomes ",
+    "remains ", "remain ", "sits in", "parks at", "is now", "denotes",
+    "represents", "labelled", "labeled", "named",
+)
+# Identifier-like token (any case).
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# `S0..Sn` short-form state names.
+_FSM_STATE_SHORT_RE = re.compile(r"\bS\d+\b", re.IGNORECASE)
+# State-naming POSITION patterns (capture LOWERCASE-permissive identifiers in a
+# position a state name occupies — these supplement the shape-based scan so a
+# purely-lowercase enumeration like "states: idle and active" is still caught).
+_RE_STATES_COLON = re.compile(
+    r"\b(?:states?|phases?|modes?|steps?)\s*"
+    r"(?:are|:|=|include|comprise|consist of|named|called|labell?ed)\s*(.+)",
+    re.IGNORECASE)
+_RE_NAMED = re.compile(
+    r"\b(?:states?|phases?|modes?)\s+(?:named|called|labell?ed)\s+(.+)",
+    re.IGNORECASE)
+_RE_X_STATE = re.compile(
+    r"\b([A-Za-z_][A-Za-z0-9_]*)\s+(?:state|phase|mode)\b", re.IGNORECASE)
+_RE_IN_X_STATE = re.compile(
+    r"\b(?:in|during|the)\s+(?:the\s+)?([A-Za-z_][A-Za-z0-9_]*)\s+"
+    r"(?:state|phase|mode)\b", re.IGNORECASE)
+_RE_FROM_TO = re.compile(
+    r"\bfrom\s+([A-Za-z_][A-Za-z0-9_]*)\s+to\s+([A-Za-z_][A-Za-z0-9_]*)",
+    re.IGNORECASE)
+# Motion / copula verbs taking a state argument (with or without preposition):
+# "advances to X", "enters X", "becomes X", "is now X", "remains X", "sits in
+# X", "parks at X", "is/are X" (predicate). Generous; stopword-filtered.
+_RE_VERB_STATE = re.compile(
+    r"\b(?:advances?|goes?|moves?|transitions?|returns?|jumps?|proceeds?|"
+    r"enters?|reaches?|switch(?:es)?|leaves?|exits?|becomes?|remains?|"
+    r"asserts?|parks?|sits?|stays?|rests?|lands?|settles?)\s+"
+    r"(?:back\s+)?(?:to|into|in|at|on)?\s*(?:the\s+)?"
+    r"([A-Za-z_][A-Za-z0-9_]*)",
+    re.IGNORECASE)
+_RE_IS_NOW = re.compile(
+    r"\bis\s+now\s+(?:the\s+)?([A-Za-z_][A-Za-z0-9_]*)", re.IGNORECASE)
+_RE_PREDICATE = re.compile(
+    r"\b(?:is|are|was|were|be)\s+(?:either\s+|both\s+|now\s+|currently\s+)?"
+    r"([A-Za-z_][A-Za-z0-9_]*)",
+    re.IGNORECASE)
+_RE_DENOTES = re.compile(
+    r"\b([A-Za-z_][A-Za-z0-9_]*)\s+(?:denotes|represents|means|indicates)\b",
+    re.IGNORECASE)
+# Capitalized clause-subject naming a state then a verb: "Idle holds outputs
+# low. Active asserts the busy flag." — a Capitalized word (NOT all-caps) at a
+# clause start, followed by a lowercase verb. Only fires inside a block that
+# ALREADY has an explicit fsm/state-machine/states marker (see caller guard),
+# so ordinary capitalized sentence subjects in non-FSM prose are not pulled.
+# The captured token is filtered through the stopword set (common capitalized
+# sentence-openers like The/This/When/After are stopwords).
+_RE_CAP_SUBJECT = re.compile(
+    r"(?:^|[.;:]\s+|\b(?:and|then|or|while|when)\s+)"
+    r"([A-Z][a-z]{2,})\s+[a-z]",
+)
+# Gerund activity-state form: "spends time RUNNING", "begins transmitting",
+# "keeps polling", "while flushing" — a state named by the activity verb. The
+# captured gerund is stopword-filtered (common non-state gerunds like
+# "running"/"waiting" that are ALSO valid state names stay candidates — SAFE).
+_RE_GERUND_STATE = re.compile(
+    r"\b(?:spends?\s+time|begins?|starts?|keeps?|continues?|while|when|after|"
+    r"resumes?|finishes?|time|switch(?:es)?\s+to|goes?\s+to|moves?\s+to|"
+    r"enters?|into|to)\s+(?:the\s+)?([A-Za-z][a-z]+ing)\b",
+    re.IGNORECASE)
+# Arrows incl. the common double-dash mermaid form `-->` and RTL `<=`.
+_RE_ARROW = re.compile(
+    r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:-+>|=+>|→|<=)\s*([A-Za-z_][A-Za-z0-9_]*)")
+_RE_BRACE_SET = re.compile(r"[\{\[\(]([^\}\]\)]*)[\}\]\)]")
+# Quoted tokens: 'ACTIVE' / "ACTIVE" — datasheets quote enumerated state names.
+_RE_QUOTED = re.compile(r"['\"]([A-Za-z_][A-Za-z0-9_]*)['\"]")
+# State-name SHAPE: a token that LOOKS like an enumerated identifier rather than
+# an ordinary English word. Datasheets render state names as ALL-CAPS, or with
+# an underscore, or with a digit, or in mixedCase. Such a token inside an FSM
+# region is collected UNCONDITIONALLY (grammar-independent) — this is what makes
+# the scan robust to copula / subject / phase-vocabulary phrasings the position
+# patterns miss. A lowercase ordinary word is NOT shape-matched (it must instead
+# appear in an explicit naming position) so prose glue doesn't over-block.
+_RE_ALLCAPS_SHAPE = re.compile(r"\b([A-Z][A-Z0-9_]{1,})\b")          # BUSY, S2
+_RE_UNDERSCORE_SHAPE = re.compile(r"\b([A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+)\b")
+_RE_DIGIT_SHAPE = re.compile(r"\b([A-Za-z][A-Za-z]*\d[A-Za-z0-9]*)\b")
+# mixedCase / camelCase, EITHER case-first: WaitResp, waitResp, doneFlush.
+_RE_MIXEDCASE_SHAPE = re.compile(r"\b([A-Za-z][a-z0-9]*[A-Z][A-Za-z0-9]*)\b")
+
+
+# Component nouns: when a shaped token is IMMEDIATELY followed by one of these,
+# it is a proper-noun / acronym MODIFIER ("IBEX core", "AXI bus", "USB
+# controller"), NOT an FSM state — exclude it from the whole-region shape scan
+# so a reused-IP datasheet's IP/bus/signal names do not block the cap. (A real
+# state name is followed by "state"/"phase"/"mode" — handled by _RE_X_STATE —
+# or stands alone / in an enumeration, never by a hardware-component noun.)
+_COMPONENT_NOUNS = (
+    "core", "cores", "bus", "buses", "block", "blocks", "module", "modules",
+    "interface", "interfaces", "controller", "unit", "units", "register",
+    "registers", "signal", "signals", "pin", "pins", "port", "ports",
+    "protocol", "protocols", "domain", "domains", "clock", "clocks", "reset",
+    "engine", "engines", "wrapper", "macro", "ip", "subsystem", "peripheral",
+    "memory", "cache", "buffer", "queue", "fifo", "channel", "lane", "link",
+    "instruction", "opcode", "field", "wire", "net", "bit", "bits", "byte",
+)
+_RE_SHAPED_THEN_NOUN = re.compile(
+    r"\b([A-Za-z][A-Za-z0-9_]*)[\s-]+(?:" + "|".join(_COMPONENT_NOUNS) + r")\b",
+    re.IGNORECASE)
+
+
+def _proper_noun_modifiers(text: str) -> set:
+    """Uppercased shaped tokens that sit immediately before a hardware-component
+    noun (e.g. IBEX in "IBEX core") — proper-noun / acronym modifiers, never FSM
+    states. Subtracted from the whole-region shape candidates."""
+    out: set = set()
+    for m in _RE_SHAPED_THEN_NOUN.findall(text):
+        if _token_is_state_shaped(m):
+            out.add(m.upper())
+    return out
+
+
+def _token_is_state_shaped(token: str) -> bool:
+    """True iff `token` LOOKS like an enumerated state identifier (ALL-CAPS ≥2,
+    has `_`, has a digit, or mixedCase) rather than an ordinary lowercase prose
+    word. Used to gate the LOOSE verb/copula/predicate positions so they pull
+    only state-shaped objects ("is ACTIVE", "becomes WAIT_RESP") and never
+    ordinary lowercase past-participles ("is delegated", "is implemented")."""
+    if not token:
+        return False
+    if _RE_ALLCAPS_SHAPE.fullmatch(token):
+        return True
+    if "_" in token:
+        return True
+    if any(c.isdigit() for c in token):
+        return True
+    if _RE_MIXEDCASE_SHAPE.fullmatch(token):
+        return True
+    return False
+
+# A generic English-stopword + FSM/doc-STRUCTURAL-vocabulary set. Subtracted
+# from the candidate pool. CRITICAL fail-closed rule: this set must contain
+# ONLY tokens that are NEVER a state name — pure English glue + words that name
+# the STRUCTURE of the doc/FSM (state, fsm, transition, table, row, section,
+# diagram, …). It must NOT contain words that are commonly used AS state names
+# (idle, done, active, busy, run, wait, ready, reset, fetch, decode, execute,
+# flush, stall, …): putting any of those here would FILTER OUT a real
+# doc-enumerated state and re-open the LEAK. When in doubt, LEAVE A TOKEN OUT —
+# an over-collected non-state word merely makes the cap fire less (SAFE); a
+# pruned real state name leaks (UNSAFE). Already-extracted state names (e.g.
+# IDLE) are handled by the separate extracted-set subtraction, NOT here.
+_FSM_STOPWORDS = frozenset(w.upper() for w in (
+    # FSM / doc structural vocabulary (never a state name)
+    "state", "states", "fsm", "fsms", "finite", "machine", "machines",
+    "control", "logic", "transition", "transitions",
+    "rtl", "vendor", "core", "module", "spec", "specification", "section",
+    "table", "row", "rows", "column", "columns", "diagram", "figure", "see",
+    "details", "detail", "implementation", "implemented", "implements",
+    "described", "describes", "enumerated", "enumerate", "enumerates",
+    "field", "fields", "typed", "structured", "name", "names", "named",
+    "entry", "entries", "first", "second", "third", "fourth", "fifth",
+    "controller", "sequencer", "unit", "block", "design", "document",
+    # generic English glue
+    "the", "a", "an", "and", "or", "of", "to", "from", "in", "on", "at", "by",
+    "for", "with", "is", "are", "be", "as", "it", "this", "that", "these",
+    "those", "then", "when", "while", "which", "into", "back", "via", "per",
+    "all", "any", "each", "one", "two", "three", "four", "five", "no", "not",
+    "has", "have", "having", "carries", "carry", "must", "should", "may",
+    "can", "will", "shall", "only", "also", "such", "where", "between",
+    "after", "before", "until", "during", "upon", "if", "else", "but",
+    "we", "they", "its", "their", "our", "you", "your", "here", "there",
+    "small", "large", "internal", "external", "remaining", "remain", "left",
+    "once", "still", "more", "less", "many", "few",
+    "l6", "l1", "l5", "l9", "etc", "eg", "ie",
+    # NOTE: deliberately NOT including words commonly used AS state names —
+    # running / pending / active / busy / idle / done / wait / fetch / etc. —
+    # putting any here would FILTER a real doc-enumerated state (a LEAK). When
+    # in doubt, leave it out: an over-collected non-state word just blocks the
+    # cap (SAFE).
+))
+
+# Generic hardware/architecture/protocol ACRONYMS that the ALL-CAPS shape scan
+# would otherwise pull from ordinary reused-IP-datasheet prose ("the CPU has an
+# AXI bus", "RISC-V ISA", "USB controller") and wrongly use to BLOCK the cap on
+# a legitimate reused-IP doc that does NOT enumerate a 2nd state. These are
+# NEVER FSM-state names — they name buses / protocols / architectures / units.
+# chip-AGNOSTIC: generic acronyms only, no chip / vendor / SKU literal. Kept as
+# a SEPARATE set so the leak-direction reasoning stays explicit: removing an
+# acronym only lets the cap fire MORE, so this set must hold ONLY tokens that
+# could never be a state name (a state named "CPU"/"AXI" is implausible).
+_HW_ACRONYM_STOPWORDS = frozenset(w.upper() for w in (
+    "cpu", "gpu", "mcu", "soc", "ip", "isa", "alu", "fpu", "mmu", "tlb",
+    "dma", "irq", "nmi", "pll", "dll", "adc", "dac", "pwm", "gpio", "uart",
+    "spi", "i2c", "i2s", "usb", "axi", "ahb", "apb", "ace", "pcie", "pci",
+    "ddr", "sram", "dram", "rom", "ram", "fifo", "lifo", "crc", "ecc", "lru",
+    "risc", "cisc", "arm", "mips", "riscv", "rv32", "rv64", "x86", "jtag",
+    "tap", "bist", "scan", "dft", "sdc", "lef", "def", "gds", "drc", "lvs",
+    "sta", "pnr", "cts", "eco", "ip_", "hdl", "vhdl", "vlsi", "asic", "pdk",
+    "io", "ios", "led", "leds", "tx", "rx", "clk", "rst", "vdd", "vss", "gnd",
+    "id", "addr", "data", "wr", "rd", "en", "oe", "we", "cs", "lsb", "msb",
+    "tcp", "udp", "ip4", "mac", "phy", "mdio", "rgmii", "sgmii", "xgmii",
+    "can", "lin", "sent", "nfc", "ble", "wifi", "lte", "gsm", "rf",
+))
+
+
 # v1.6.210 (#91) — PASS_WITH_OPEN_SOURCE_CONSTRAINTS verdict tier.
 # Canonical map of step ids whose required EDA tools are not present
 # in the open-source iic-osic-tools container and have no equivalent
@@ -2157,6 +2435,624 @@ def _is_thin_input_eligible(project: Path) -> bool:
         except (TypeError, ValueError):
             continue
     return False
+
+
+# ─── ORGANIC #708 — reused-IP RTL-only-FSM deferral cap helpers ──────────────
+def _detected_class_rtl_gen_null_and_vendor_rtl(project: Path) -> bool:
+    """KEY (a): the detected IC class has rtl_gen=null in
+    ic_class_registry.json (a from-spec-RTL / vendor-IP class — processor_cpu /
+    digital_arithmetic_primitive / crypto_accelerator / digital_cmd_driven /
+    … — read from the registry, NEVER a chip-name literal) AND vendor/reused RTL
+    is present (input/vendor_rtl/ has ≥1 .v/.sv, OR the rtl_dir's
+    SOURCE_MANIFEST.json declares reused_ip=true).
+
+    Excludes from-scratch/authored designs (whose docs MUST fully specify the
+    FSM): a class with a deterministic rtl_gen, or a project with no vendor RTL,
+    keeps the FAIL. Fail-closed: any read/import error → False."""
+    import sys as _sys
+    if str(PROGRAMS_DIR) not in _sys.path:
+        _sys.path.insert(0, str(PROGRAMS_DIR))
+    # (a.1) class rtl_gen=null via the registry (same resolution the
+    # pure-analog detector uses above — name OR synonym match).
+    try:
+        from ic_class_profile import detect_ic_class as _detect
+        profile = _detect(project) or {}
+    except Exception:
+        return False
+    ic_class = str(profile.get("ic_class") or "unknown")
+    # ORGANIC #708 round-2 fix (3): an UNRESOLVED / unknown detection must be
+    # fail-closed — a design we couldn't classify gets NO floor relaxation. The
+    # registry carries an `unknown_protocol_class` entry (rtl_gen=null, synonym
+    # `unknown`) used as the runner's fallback target; matching it here would
+    # let an UNCLASSIFIED design with a stray vendor .v ride the cap. Reject the
+    # unknown class (and its registry alias) BEFORE the registry lookup so the
+    # docstring's "unknown/unresolvable → False" contract actually holds.
+    if ic_class in ("", "unknown", "unknown_protocol_class"):
+        return False
+    config = None
+    try:
+        reg = json.loads(
+            (PROGRAMS_DIR / "ic_class_registry.json").read_text())
+        for c in (reg.get("classes") or []):
+            cname = c.get("name")
+            if cname == "unknown_protocol_class":
+                continue  # never the cap's eligibility target (fail-closed)
+            if (cname == ic_class
+                    or ic_class in (c.get("synonyms") or [])):
+                config = c
+                break
+    except Exception:
+        return False
+    if config is None:
+        return False  # unknown/unresolvable class → fail-closed
+    if config.get("rtl_gen") is not None:
+        return False  # from-spec/deterministic-RTL class → docs must specify
+    # (a.2) vendor/reused RTL must be present.
+    vendor_dir = project / "input" / "vendor_rtl"
+    if vendor_dir.is_dir() and (any(vendor_dir.rglob("*.v"))
+                                or any(vendor_dir.rglob("*.sv"))):
+        return True
+    mf = _pl.rtl_dir(project) / "SOURCE_MANIFEST.json"
+    if mf.is_file():
+        try:
+            mdata = json.loads(mf.read_text())
+        except Exception:
+            return False
+        if isinstance(mdata, dict) and mdata.get("reused_ip") is True:
+            return True
+    return False
+
+
+def _completeness_is_full_and_not_tiny(project: Path) -> bool:
+    """KEY (b): every non-reference doc with raw_total>0 in
+    phase1_input_vs_generated_completeness.json has captured_pct >= 1.0 AND the
+    input is NOT tiny (sum(raw_total non-ref) > TINY_INPUT_TOTAL_RAW_TOKENS).
+
+    This is essentially the NEGATION of the thin-input coverage predicate — at
+    < 100% capture the EXISTING --allow-thin-input path owns the deferral, so
+    this cap must NOT fire (no double-demote). Report missing / malformed /
+    empty → False (fail-closed)."""
+    report_path = _pl.report_path(
+        project, "phase1_input_vs_generated_completeness.json")
+    if not report_path.is_file():
+        return False
+    try:
+        data = json.loads(report_path.read_text())
+    except Exception:
+        return False
+    per_doc = data.get("per_doc")
+    if isinstance(per_doc, dict):
+        per_doc = list(per_doc.values())
+    if not isinstance(per_doc, list) or not per_doc:
+        return False
+    total_raw = 0
+    saw_real_doc = False
+    for entry in per_doc:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("reference_doc") is True:
+            continue
+        raw = int(entry.get("raw_total") or 0)
+        if raw <= 0:
+            continue
+        saw_real_doc = True
+        total_raw += raw
+        captured = entry.get("captured_pct", entry.get("capture_pct"))
+        try:
+            if float(captured) < 1.0:
+                return False  # a sub-100% doc → thin-input regime owns it
+        except (TypeError, ValueError):
+            return False  # malformed capture value → fail-closed
+    if not saw_real_doc:
+        return False
+    # NOT tiny: the negation of the v0.1.57 tiny-input thin path.
+    return total_raw > TINY_INPUT_TOTAL_RAW_TOKENS
+
+
+def _l6_doc_records_fsm_present(project: Path) -> tuple[bool, dict]:
+    """Return (no_fsm_in_input_is_false, l6_data). The cap requires the L6
+    generated doc (`generated_docs/L6_CONTROL_LOGIC.json`) to record
+    no_fsm_in_input == false (the IP really HAS FSMs). A missing doc, a missing
+    flag, or no_fsm_in_input==true → (False, {}) — the latter is the existing
+    #462 honest no-FSM N/A escape, NOT this cap."""
+    gd = _pl.generated_docs_dir(project)
+    if not gd.is_dir():
+        gd = project / "generated_docs"
+    p = gd / "L6_CONTROL_LOGIC.json"
+    if not p.is_file():
+        return False, {}
+    try:
+        data = json.loads(p.read_text(errors="replace"))
+    except Exception:
+        return False, {}
+    if not isinstance(data, dict):
+        return False, {}
+    # EXPLICIT boolean False only — a missing/true/string flag does NOT qualify.
+    return (data.get("no_fsm_in_input") is False), data
+
+
+def _extracted_fsm_state_names(l6_data: dict) -> set:
+    """The set of already-extracted FSM-state names (case-insensitive,
+    normalised upper), read from the L6 doc's fsm_states / states / state_table
+    list-of-dicts. These are SUBTRACTED from the doc-scan candidates in
+    key (c)."""
+    out: set = set()
+    states = (l6_data.get("fsm_states") or l6_data.get("states")
+              or l6_data.get("state_table") or [])
+    if isinstance(states, list):
+        for s in states:
+            if isinstance(s, dict):
+                nm = s.get("name") or s.get("state")
+            else:
+                nm = s
+            if isinstance(nm, str) and nm.strip():
+                out.add(nm.strip().upper())
+    # Multi-FSM container schema: fsms:[{name, states:[…]}, …]
+    fsms = l6_data.get("fsms")
+    if isinstance(fsms, list):
+        for f in fsms:
+            if isinstance(f, dict):
+                for s in (f.get("states") or []):
+                    if isinstance(s, dict):
+                        nm = s.get("name") or s.get("state")
+                    else:
+                        nm = s
+                    if isinstance(nm, str) and nm.strip():
+                        out.add(nm.strip().upper())
+    return out
+
+
+def _split_fsm_context_regions(text: str) -> List[str]:
+    """Split `text` into blocks (paragraphs / contiguous line runs), then return
+    every block that is an FSM-context REGION. A block is FSM-context when it
+    contains an _FSM_REGION_MARKERS marker OR is IMMEDIATELY ADJACENT (prev/next
+    block) to such a block — so a markerless enumeration block that FOLLOWS a
+    "… implements a finite state machine." paragraph is still scanned (the
+    block-gating leak the adversarial review found). The WHOLE block is returned
+    so scanning reaches every row, even rows many lines below the marker."""
+    blocks: List[str] = []
+    cur: List[str] = []
+    for ln in text.splitlines():
+        if ln.strip() == "":
+            if cur:
+                blocks.append("\n".join(cur))
+                cur = []
+        else:
+            cur.append(ln)
+    if cur:
+        blocks.append("\n".join(cur))
+    def _block_is_marker(b: str) -> bool:
+        if any(m in b.lower() for m in _FSM_REGION_MARKERS):
+            return True
+        # An ENUMERATION of ≥2 state-name-SHAPED tokens joined by and/or/comma
+        # (e.g. "two: IDLE and ACTIVE", "S0, S1, S2") is itself a state-list
+        # signal even without the literal word "state". This catches the
+        # marker-less enumeration leak (F40) without scanning arbitrary prose
+        # acronyms — a lone "USB" in a paragraph is NOT a 2-token enumeration.
+        shaped = set()
+        for rx in (_RE_ALLCAPS_SHAPE, _RE_UNDERSCORE_SHAPE,
+                   _RE_DIGIT_SHAPE, _RE_MIXEDCASE_SHAPE):
+            for m in rx.findall(b):
+                if m.upper() not in _FSM_STOPWORDS:
+                    shaped.add(m.upper())
+        if len(shaped) >= 2 and re.search(
+                r"[A-Za-z0-9_]\s*(?:,|/|\band\b|\bor\b)\s*[A-Za-z0-9_]",
+                b, re.IGNORECASE):
+            return True
+        return False
+
+    is_marker = [_block_is_marker(b) for b in blocks]
+    regions: List[str] = []
+    for i, b in enumerate(blocks):
+        if is_marker[i] or (i > 0 and is_marker[i - 1]) \
+                or (i + 1 < len(blocks) and is_marker[i + 1]):
+            regions.append(b)
+    return regions
+
+
+def _candidate_state_tokens(region: str) -> set:
+    """GENEROUS, grammar-INDEPENDENT candidate extraction from ONE FSM-context
+    region. Two collection strategies, unioned:
+
+    (A) SHAPE-based (primary, grammar-independent): any token in the region that
+        is state-name-SHAPED — ALL-CAPS (≥2), has an underscore, has a digit, or
+        is mixedCase, or `S\\d+`, or quoted. Datasheets render state names this
+        way, so this catches copula/subject/phase-vocabulary phrasings that no
+        position pattern covers (the adversarial-review leak class). A lowercase
+        ordinary word is NOT shape-matched, so prose glue does not over-block.
+
+    (B) POSITION-based (supplement, lowercase-permissive): lowercase enumerations
+        in explicit state-naming positions — after `states/phases/modes are/:/
+        named`, inside `{…}`/`[…]`/`(…)` sets, transition arrows (incl. `-->`,
+        `<=`), `from X to Y`, motion/copula verbs (`enters/becomes/remains/sits
+        in/parks at/is now X`), `in/the X state|phase|mode`, `X denotes`, and
+        bullet/`|`-table/`N.`/`Step N:` rows.
+
+    All tokens normalised upper. Two precision tiers prevent over-blocking
+    legitimate reused-IP docs while staying leak-free:
+      * SHAPE-tier tokens (ALL-CAPS/underscore/digit/mixedCase/quoted/`S\\d+`):
+        collected from the WHOLE region AND from loose verb/copula/predicate/
+        gerund positions — these shapes are state-name-like, so collecting them
+        broadly does not pull ordinary lowercase prose.
+      * LOWERCASE tokens: collected ONLY from HIGH-PRECISION naming positions
+        (explicit `states/phases/modes are/:/named` lists, `{…}` sets,
+        transition arrows, `from X to Y`, `the/in X state|phase|mode`,
+        bullet/`|`-table/`N.`/`Step N:` rows). Loose verb/predicate matches do
+        NOT contribute lowercase tokens (those would pull "delegated",
+        "implemented", … and wrongly block the cap)."""
+    def _add_shaped_only(token: str) -> None:
+        if _token_is_state_shaped(token):
+            out.add(token.upper())
+
+    out: set = set()
+    # Whether this region carries an EXPLICIT state/fsm marker (vs only an
+    # adjacency/enumeration trigger). The Capitalized-clause-subject scan only
+    # fires here, so ordinary capitalized sentence subjects in non-FSM prose are
+    # never pulled.
+    _rl = region.lower()
+    _strict_fsm_region = any(
+        m in _rl for m in ("fsm", "state machine", "state-machine",
+                           "finite state", "finite-state", "states",
+                           " state ", "next-state", "next state"))
+    # ---- (A) whole-region SHAPE scan, MINUS proper-noun/acronym modifiers ----
+    # State names are rendered as shaped identifiers (ALL-CAPS / underscore /
+    # digit / mixedCase). Collect them region-wide so copula/subject/phase
+    # phrasings the per-line position patterns miss are still caught — EXCEPT a
+    # shaped token that modifies a hardware-component noun ("IBEX core", "AXI
+    # bus"), which is a proper-noun, not a state. This keeps the scan robust to
+    # natural prose without blocking the cap on a reused-IP IP/bus/signal name.
+    modifiers = _proper_noun_modifiers(region)
+    region_shaped: set = set()
+    for rx in (_RE_ALLCAPS_SHAPE, _RE_UNDERSCORE_SHAPE,
+               _RE_DIGIT_SHAPE, _RE_MIXEDCASE_SHAPE):
+        for m in rx.findall(region):
+            region_shaped.add(m.upper())
+    for m in _FSM_STATE_SHORT_RE.findall(region):
+        region_shaped.add(m.upper())
+    out |= (region_shaped - modifiers)
+    for raw_line in region.splitlines():
+        line = raw_line.strip()
+        low = line.lower()
+        # ---- HIGH-PRECISION positions: lowercase allowed ----
+        for rx in (_RE_STATES_COLON, _RE_NAMED):
+            m = rx.search(line)
+            if m:
+                for ident in _IDENT_RE.findall(m.group(1)):
+                    out.add(ident.upper())
+        for grp in _RE_BRACE_SET.findall(line):
+            for ident in _IDENT_RE.findall(grp):
+                out.add(ident.upper())
+        for a, b in _RE_ARROW.findall(line):
+            out.add(a.upper())
+            out.add(b.upper())
+        for a, b in _RE_FROM_TO.findall(line):
+            out.add(a.upper())
+            out.add(b.upper())
+        for a in _RE_IN_X_STATE.findall(line):
+            out.add(a.upper())
+        for a in _RE_X_STATE.findall(line):
+            out.add(a.upper())
+        for a in _RE_GERUND_STATE.findall(line):
+            out.add(a.upper())
+        # bullet / pipe-table / numbered / "Step N:" rows → every identifier.
+        if (low.startswith(("-", "*", "+", "•"))
+                or line.startswith("|") or "|" in line
+                or re.match(r"^\d+[\.\)]", line)
+                or re.match(r"^step\s+\d+", low)):
+            for ident in _IDENT_RE.findall(line):
+                out.add(ident.upper())
+        # ---- LOOSE verb/copula/predicate/denotes: SHAPED tokens only ----
+        for a in _RE_VERB_STATE.findall(line):
+            _add_shaped_only(a)
+        for a in _RE_IS_NOW.findall(line):
+            _add_shaped_only(a)
+        for a in _RE_PREDICATE.findall(line):
+            _add_shaped_only(a)
+        for a in _RE_DENOTES.findall(line):
+            _add_shaped_only(a)
+        # Capitalized clause-subject naming a state — ONLY in a strict-marker
+        # FSM region (guards against ordinary capitalized prose subjects).
+        if _strict_fsm_region:
+            for a in _RE_CAP_SUBJECT.findall(line):
+                out.add(a.upper())
+        # ---- SHAPED-TOKEN ENUMERATION (no position keyword needed): when a
+        # line contains ≥2 distinct state-SHAPED tokens joined by and/or/comma/
+        # slash/arrow, ALL its shaped tokens are state candidates ("two: IDLE
+        # and ACTIVE", "IDLE, BUSY, DONE", "IDLE -> ACTIVE"). A LONE shaped
+        # token (e.g. "IBEX core", "AXI bus") is NOT an enumeration → not
+        # collected here, so a proper-noun / acronym does not block the cap. ----
+        line_modifiers = _proper_noun_modifiers(line)
+        line_shaped = set()
+        for rx in (_RE_ALLCAPS_SHAPE, _RE_UNDERSCORE_SHAPE,
+                   _RE_DIGIT_SHAPE, _RE_MIXEDCASE_SHAPE):
+            for m in rx.findall(line):
+                u = m.upper()
+                if (u not in _FSM_STOPWORDS and u not in _HW_ACRONYM_STOPWORDS
+                        and u not in line_modifiers):
+                    line_shaped.add(u)
+        for m in _FSM_STATE_SHORT_RE.findall(line):
+            line_shaped.add(m.upper())
+        for m in _RE_QUOTED.findall(line):
+            line_shaped.add(m.upper())
+        if len(line_shaped) >= 2 and re.search(
+                r"[A-Za-z0-9_)\]\"']\s*(?:,|/|->|-->|=>|→|<=|\band\b|\bor\b|"
+                r"\bthen\b|\bto\b)\s*",
+                line, re.IGNORECASE):
+            out |= line_shaped
+        # A quoted shaped token is an explicit state literal even alone.
+        for m in _RE_QUOTED.findall(line):
+            _add_shaped_only(m)
+    return out
+
+
+def _doc_fsm_state_literals(text: str) -> set:
+    """KEY (c) detector core — chip-AGNOSTIC, CASE-INSENSITIVE FSM-state-literal
+    scan. Splits the doc into FSM-context REGIONS (whole paragraphs / lists /
+    state-table blocks that contain — or sit adjacent to — a state/FSM/
+    transition/phase/mode/motion-verb marker), then GENEROUSLY collects
+    candidates by SHAPE (any state-name-shaped token) AND by naming POSITION
+    (see _candidate_state_tokens), removes the generic stopword + FSM-vocabulary
+    set, and returns the normalised (upper) candidate set.
+
+    §4.05 fail-closed: maximally-generous shape+position scanning means a missed
+    real state (a LEAK) is unlikely; an over-collected non-state token merely
+    makes the cap NOT fire → still FAIL → SAFE. The motivating reused-IP case
+    (docs say "see RTL for FSM details", only IDLE enumerated) yields an empty
+    set after subtracting the extracted IDLE; any doc that ENUMERATES a 2nd
+    state in ANY supported form yields a non-empty remainder."""
+    out: set = set()
+    for region in _split_fsm_context_regions(text):
+        out |= _candidate_state_tokens(region)
+    return out - _FSM_STOPWORDS - _HW_ACRONYM_STOPWORDS
+
+
+def _l6_prose_text(l6_data: dict) -> str:
+    """Collect the L6 doc's human-PROSE strings (description / notes / summary /
+    comment / overview / behaviour text) — NOT its structured JSON keys/values.
+    Scanning the raw L6 JSON serialization would wrongly pick up the field name
+    `fsm_states` and the transition/action LABELS of the ALREADY-extracted
+    states (e.g. "start"/"hold") as if they were further state names. We instead
+    walk the dict and concatenate string values under prose-bearing keys."""
+    PROSE_KEYS = ("description", "desc", "notes", "note", "summary", "overview",
+                  "comment", "comments", "behavior", "behaviour", "details",
+                  "text", "prose", "rationale", "remarks")
+    chunks: List[str] = []
+
+    def _walk(obj: Any) -> None:
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                kl = str(k).lower()
+                if isinstance(v, str) and any(p in kl for p in PROSE_KEYS):
+                    chunks.append(v)
+                else:
+                    _walk(v)
+        elif isinstance(obj, list):
+            for it in obj:
+                _walk(it)
+
+    _walk(l6_data)
+    return "\n".join(chunks)
+
+
+def _extracted_state_internals(l6_data: dict) -> set:
+    """The transition/action/next/output LABELS belonging to the
+    already-extracted FSM states (normalised upper). These are INTERNALS of
+    extracted states, never NEW states, so they are subtracted from the doc
+    candidates to avoid false-positives (e.g. a state {name:IDLE,
+    transitions:[start], actions:[hold]} must not make `start`/`hold` look like
+    undiscovered states)."""
+    out: set = set()
+
+    def _collect_labels(states) -> None:
+        if not isinstance(states, list):
+            return
+        for s in states:
+            if not isinstance(s, dict):
+                continue
+            for key in ("transitions", "actions", "next", "on", "outputs",
+                        "output", "events", "guards", "conditions"):
+                v = s.get(key)
+                if isinstance(v, str):
+                    for ident in _IDENT_RE.findall(v):
+                        out.add(ident.upper())
+                elif isinstance(v, list):
+                    for item in v:
+                        if isinstance(item, str):
+                            for ident in _IDENT_RE.findall(item):
+                                out.add(ident.upper())
+                        elif isinstance(item, dict):
+                            for iv in item.values():
+                                if isinstance(iv, str):
+                                    for ident in _IDENT_RE.findall(iv):
+                                        out.add(ident.upper())
+
+    _collect_labels(l6_data.get("fsm_states") or l6_data.get("states")
+                    or l6_data.get("state_table"))
+    fsms = l6_data.get("fsms")
+    if isinstance(fsms, list):
+        for f in fsms:
+            if isinstance(f, dict):
+                _collect_labels(f.get("states"))
+    return out
+
+
+def _docs_name_no_further_fsm_states(project: Path, l6_data: dict) -> bool:
+    """KEY (c): scanning the INPUT DOCS (input/docs/*, phase1/input_doc/*) AND
+    the L6 doc's own PROSE, there is NO FSM-state-name literal beyond the
+    already-extracted fsm_states set.
+
+    Returns True ONLY when the remainder (doc candidates − extracted state names
+    − extracted state internal labels) is EMPTY. A non-empty remainder → a
+    doc-enumerated state the walker MISSED → return False so the design keeps
+    FAILing (surfacing the real walker bug — the load-bearing leak guard).
+    Unreadable docs → False (fail-closed)."""
+    extracted = _extracted_fsm_state_names(l6_data)
+    internals = _extracted_state_internals(l6_data)
+    blobs: List[str] = []
+    read_any = False
+    # The L6 doc's own PROSE only (NOT the raw JSON: see _l6_prose_text).
+    try:
+        l6_path = (_pl.generated_docs_dir(project) / "L6_CONTROL_LOGIC.json")
+        if not l6_path.is_file():
+            l6_path = project / "generated_docs" / "L6_CONTROL_LOGIC.json"
+        if l6_path.is_file():
+            try:
+                _l6 = json.loads(l6_path.read_text(errors="replace"))
+            except Exception:
+                _l6 = l6_data if isinstance(l6_data, dict) else {}
+            blobs.append(_l6_prose_text(_l6 if isinstance(_l6, dict)
+                                        else (l6_data or {})))
+            read_any = True
+    except Exception:
+        return False
+    # Input docs (Path A verbatim extracts + any input/docs/ corpus). These are
+    # raw human docs → scanned in full.
+    doc_dirs = [
+        project / "input" / "docs",
+        _pl.input_doc_dir(project),          # phase1/input_doc
+        project / "phase1" / "input_doc",
+    ]
+    seen_dirs: set = set()
+    for d in doc_dirs:
+        try:
+            rp = d.resolve()
+        except Exception:
+            rp = d
+        if rp in seen_dirs:
+            continue
+        seen_dirs.add(rp)
+        if not d.is_dir():
+            continue
+        for f in sorted(d.rglob("*")):
+            if not f.is_file():
+                continue
+            if f.suffix.lower() not in (
+                    ".txt", ".md", ".json", ".rst", ".csv", ".v", ".sv",
+                    ".log", ".yaml", ".yml", ""):
+                continue
+            # §4.05 fail-closed: scan input docs BROADLY (incl. .json/.v/.sv).
+            # Extra noise tokens from a raw JSON / RTL input doc only ADD
+            # candidates → cap fires LESS → SAFE. Scanning fewer file types
+            # would risk MISSING a state a doc enumerates → LEAK. (The L6
+            # generated doc is the ONLY file read prose-only, because its
+            # structured `fsm_states`/transition labels are extraction
+            # internals, not doc-enumerated states — see _l6_prose_text.)
+            try:
+                blobs.append(f.read_text(errors="replace"))
+                read_any = True
+            except Exception:
+                return False
+    if not read_any:
+        return False  # cannot read the docs at all → fail-closed (no leak)
+    candidates: set = set()
+    for blob in blobs:
+        candidates |= _doc_fsm_state_literals(blob)
+    # Stopwords/FSM-vocabulary are already subtracted inside
+    # _doc_fsm_state_literals; here the already-extracted state NAMES and their
+    # internal transition/action LABELS are removed (case-insensitive). A
+    # non-empty remainder = a doc-enumerated 2nd state the walker missed →
+    # key (c) False (still FAIL, no leak).
+    remainder = candidates - extracted - internals
+    return len(remainder) == 0
+
+
+def _sidecar_has_qualifying_fsm_patch(project: Path) -> bool:
+    """KEY (d): True iff #706's ai_deep_review sidecar carries ≥1 layer-6 entry
+    that passes the FSM typed shape (name + transitions/actions). If the strong
+    AI deep-review CAN recover a doc-traceable 2nd state, it must lift the count
+    via #706 — so a present qualifying FSM patch makes the cap NOT fire. Reuses
+    the SAME helpers the #706 field-count gate uses (no looser channel)."""
+    import sys as _sys
+    if str(PROGRAMS_DIR) not in _sys.path:
+        _sys.path.insert(0, str(PROGRAMS_DIR))
+    try:
+        import l_doc_structured_field_count_check as _fc
+        sidecar = _fc._load_field_count_sidecar(project)
+    except Exception:
+        # Fail-closed for the CAP's purpose: if we cannot determine the
+        # sidecar state, do NOT defer — keep FAILing (safe direction).
+        return True
+    entries = sidecar.get(6) or []
+    spec = _fc._SIDECAR_FLOOR_LAYERS.get(6)
+    if not spec:
+        return False
+    _aliases, name_keys, shape_keys = spec
+    for e in entries:
+        try:
+            if _fc._typed_patch_ok(e, name_keys, shape_keys):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _field_count_fail_is_solely_fsm_floor(gate_stdout: str) -> bool:
+    """ORGANIC #708 round-2 fix (2): demote ONLY when the field-count gate's
+    failure is SOLELY the L6 fsm_states floor — never when another floor (e.g.
+    the L9 ≥3-typed-structural-fields floor, or an L3 opcode floor) ALSO failed
+    on the same gate, which the by-name demotion would MASK.
+
+    The gate prints one detail line per failing L doc:
+        FAIL — Wave 31/32 (...): N L doc(s) carry fewer ...:
+          - L6_CONTROL_LOGIC.json: L6 control_logic must carry ≥2 typed FSM
+            states in `fsm_states` ...
+          - L9_INTEGRATION.json: L9 integration_spec must carry ≥3 ...
+    We collect every `  - <Ldoc>: <reason>` detail line and require that AT
+    LEAST ONE names the fsm_states floor AND EVERY such detail line names it.
+    If no detail lines parse (unexpected format) → False (fail-closed: keep the
+    FAIL rather than risk masking)."""
+    detail_lines = []
+    for raw in gate_stdout.splitlines():
+        s = raw.strip()
+        # Per-doc detail lines are rendered as "- <Ldoc.json>: <reason>".
+        if s.startswith("- ") and ".json:" in s.lower():
+            detail_lines.append(s)
+    if not detail_lines:
+        return False
+    saw_fsm = False
+    for ln in detail_lines:
+        lo = ln.lower()
+        # The L6 FSM-states floor line uniquely carries one of the L6
+        # control-logic discriminator phrases (NOT a bare `fsm_states`, which
+        # also appears in the L9 line's allowed-field list — round-2 fix (2)).
+        is_fsm = any(d in lo for d in _L6_FSM_FLOOR_DISCRIMINATORS)
+        if is_fsm:
+            saw_fsm = True
+        else:
+            # A non-FSM floor also failed → do NOT demote (would mask it).
+            return False
+    return saw_fsm
+
+
+def _reused_ip_rtl_only_fsm_cap_eligible(project: Path) -> bool:
+    """ORGANIC #708 — fail-closed deferral cap for the L6 ≥2-fsm_states floor
+    FAIL of `l_doc_structured_field_count_check` on a REUSED-IP design whose
+    control FSM lives ONLY in vendor RTL. ALL FOUR keys must hold; any single
+    false key keeps the FAIL (no leak). Orthogonal to _is_thin_input_eligible:
+    fires at 100% completeness, the regime thin-input does NOT cover.
+
+    (a) class rtl_gen=null + vendor/reused RTL present,
+    (b) completeness == 100% AND input not tiny (negation of thin-input cover),
+    (c) L6 records no_fsm_in_input==false AND docs name no further FSM-state
+        literal beyond the extracted set (THE crux — a doc-enumerated missed
+        state keeps the FAIL),
+    (d) the #706 ai_deep_review sidecar yielded ZERO qualifying FSM patch."""
+    # (a) — class + vendor RTL.
+    if not _detected_class_rtl_gen_null_and_vendor_rtl(project):
+        return False
+    # (b) — 100% completeness, not tiny (else thin-input owns it).
+    if not _completeness_is_full_and_not_tiny(project):
+        return False
+    # (c) — L6 honestly has an FSM, and docs name no further state literal.
+    no_fsm_is_false, l6_data = _l6_doc_records_fsm_present(project)
+    if not no_fsm_is_false:
+        return False
+    if not _docs_name_no_further_fsm_states(project, l6_data):
+        return False
+    # (d) — no qualifying #706 FSM patch (else lift via #706, don't defer).
+    if _sidecar_has_qualifying_fsm_patch(project):
+        return False
+    return True
 
 
 # v1.6.523 — class-aware gate skip-set. The hardwired Phase-2 protocol
@@ -2603,7 +3499,26 @@ def _run_structural_rtl_gates(project: Path,
         if r.returncode == 2:
             skips.append(gate_name)
         elif r.returncode == 1:
-            first_line = (r.stdout.strip() or r.stderr.strip()).split("\n")[0][:200]
+            _full_out = (r.stdout.strip() or r.stderr.strip())
+            first_line = _full_out.split("\n")[0][:200]
+            # ORGANIC #708 — the L6 ≥2-fsm_states floor message lands on a
+            # detail line ("  - L6_…: L6 control_logic must carry ≥N typed FSM
+            # states in `fsm_states` …"), NOT the umbrella's first header line
+            # ("FAIL — Wave 31/32 …"). Scan the FULL gate output (case-
+            # insensitive) using the L6-specific discriminator phrases (round-2
+            # fix (2): a bare `fsm_states` token also matches the L9 line) so the
+            # cap recognises the L6 floor precisely; record that exact floor
+            # line as the cap's first_line evidence.
+            _out_lower = _full_out.lower()
+            _names_fsm_floor = any(
+                d in _out_lower for d in _L6_FSM_FLOOR_DISCRIMINATORS)
+            _fsm_floor_line = first_line
+            if _names_fsm_floor:
+                for _ln in _full_out.split("\n"):
+                    if any(d in _ln.lower()
+                           for d in _L6_FSM_FLOOR_DISCRIMINATORS):
+                        _fsm_floor_line = _ln.strip()[:200]
+                        break
             # v1.6.97 — thin-input waiver eligibility.
             # v1.6.98 — eligibility shifted to coverage-shape; see
             # _is_thin_input_eligible.
@@ -2624,6 +3539,43 @@ def _run_structural_rtl_gates(project: Path,
                         "coverage-shape thin-input (any-doc-<100%-"
                         f"capture, doc count <= {MAX_THICK_DOC_THRESHOLD})"),
                     "first_line": first_line,
+                })
+            # ORGANIC #708 — ORTHOGONAL reused-IP RTL-only-FSM deferral cap.
+            # Fires at 100% completeness (the regime thin-input does NOT cover)
+            # for the L6 ≥2-fsm_states floor FAIL of
+            # `l_doc_structured_field_count_check` ONLY. Entirely separate from
+            # thin_input_eligible above (no double-demote: key (b) requires
+            # 100% capture, which makes _is_thin_input_eligible False). Gated on
+            # the gate output naming the FSM-states floor, the failure being
+            # SOLELY the FSM floor (round-2 fix (2): a co-occurring L9/L3 floor
+            # FAIL must NOT be masked), AND all four keys of
+            # _reused_ip_rtl_only_fsm_cap_eligible. Otherwise the FAIL
+            # propagates exactly as today (fail-closed).
+            elif (gate_name == _REUSED_IP_RTL_ONLY_FSM_CAP_GATE
+                  and _names_fsm_floor
+                  and _field_count_fail_is_solely_fsm_floor(_full_out)
+                  and _reused_ip_rtl_only_fsm_cap_eligible(project)):
+                waivers.append({
+                    "gate": gate_name,
+                    "review_required": True,
+                    "ticket": _REUSED_IP_RTL_ONLY_FSM_CAP_TICKET,
+                    "evidence": (
+                        "reused-IP RTL-only FSM: the detected IC class has "
+                        "rtl_gen=null (vendor/reused RTL present) and the L6 "
+                        "control FSM exists ONLY in vendor RTL — no input doc "
+                        "enumerates a 2nd FSM-state literal beyond the "
+                        "extracted set, the #706 ai_deep_review sidecar yielded "
+                        "no qualifying FSM patch, and completeness is 100% "
+                        "(so --allow-thin-input does not apply). Inventing a "
+                        "doc-traceable 2nd state would be fabrication; the L6 "
+                        "≥2-fsm_states floor is DEFERRED to vendor-RTL FSM "
+                        "review instead of FAILing a structurally-correct "
+                        "extraction."),
+                    "reason": (
+                        "reused-IP RTL-only FSM (class rtl_gen=null + vendor "
+                        "RTL + 100% completeness + no further doc state literal "
+                        "+ no #706 FSM patch)"),
+                    "first_line": _fsm_floor_line,
                 })
             else:
                 fails.append(f"FAIL: {gate_name} — {first_line}")
