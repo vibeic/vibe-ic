@@ -83,6 +83,21 @@ SUBSTITUTIONS = [
         "caveat": "Note the substitution + cocotb version delta",
         "match": ["cvdp-sim", "nvidia/cvdp", "cvdp sim"],
     },
+    {
+        # ORGANIC #717 — completing the VCS→iverilog substitution at the
+        # CONSTRUCT level: a deterministic semantics-preserving source rewrite
+        # of the closed safe subset (break;→labelled-block disable,
+        # continue;→inner-block disable, drop unique/priority qualifier),
+        # written to a `*_iv.v` SIDECAR (original TB untouched) by
+        # tb_vcs_only_construct_remediate.py.
+        "mandated": "VCS-only TB construct (break;/continue;/unique-priority)",
+        "substitute": "semantics-preserving iverilog rewrite (*_iv.v sidecar)",
+        "caveat": "Closed safe subset ONLY; gated on golden-still-passes — a "
+                  "TB-weakening rewrite is rejected. std::randomize / "
+                  "$urandom_range / join_none / queue ops stay FLOOR-D.",
+        "match": ["vcs-only tb construct", "tb construct rewrite",
+                  "semantics-preserving iverilog rewrite"],
+    },
 ]
 
 
