@@ -11,10 +11,15 @@ Acceptance (verbatim from the issue):
   - `git check-ignore <subdir>/_registry.js` → NOT ignored (root-anchored).
   - No existing tracked file is newly removed from tracking.
 """
+import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+
+_PROGRAMS = Path(__file__).resolve().parents[1]
+_GUARD = _PROGRAMS / "gitignore_scratch_guard.py"
 
 
 def _repo_root() -> Path:
@@ -72,6 +77,37 @@ def test_noleak_no_tracked_file_removed_by_rule():
                 if "/" not in f and f.startswith("_") and f.endswith(".js")]
     # the legitimate subdir _registry.js remains tracked
     assert any(f.endswith("mcp-eda/src/devices/_registry.js") for f in tracked)
+
+
+def test_end_state_guard_program_passes_on_real_repo(tmp_path):
+    """END-STATE via the real program: gitignore_scratch_guard exits 0 and its
+    evidence shows the rule present + correctly root-anchored on this repo."""
+    out = tmp_path / "ev.json"
+    cp = subprocess.run(
+        [sys.executable, str(_GUARD), "--json", str(out)],
+        capture_output=True, text=True,
+        cwd=str(Path(__file__).resolve().parent))
+    assert cp.returncode == 0, cp.stderr
+    ev = json.loads(out.read_text())
+    assert ev["ok"] is True
+    assert ev["rule_present"] and ev["root_scratch_ignored"]
+    assert ev["subdir_registry_ignored"] is False
+
+
+def test_end_state_guard_fails_when_rule_absent(tmp_path):
+    """END-STATE (defect-artifact fixture): a git repo WITHOUT the /_*.js rule
+    makes the guard FAIL (exit 1) — proving the guard really enforces the rule,
+    not a trivially-true check."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True)
+    (repo / ".gitignore").write_text("*.log\n")          # rule ABSENT
+    (repo / "keep.txt").write_text("x\n")
+    subprocess.run(["git", "add", "."], cwd=str(repo), check=True)
+    cp = subprocess.run([sys.executable, str(_GUARD), "--root", str(repo)],
+                        capture_output=True, text=True)
+    assert cp.returncode == 1
+    assert '"rule_present": false' in cp.stdout
 
 
 if __name__ == "__main__":
