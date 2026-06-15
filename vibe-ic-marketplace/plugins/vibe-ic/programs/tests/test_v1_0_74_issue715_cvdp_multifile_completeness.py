@@ -104,7 +104,13 @@ def test_end_state_gate_blocks_dropped_file(tmp_path):
     rid = "cvdp_copilot_ping_pong_buffer_0001"
     comp = json.dumps({"code": [{"rtl/ping_pong_buffer.sv": _TOP}]})
     drafts.write_text(json.dumps({"id": rid, "completion": comp}) + "\n")
-    prompts.write_text(json.dumps({"id": rid, "prompt": _PROMPT}) + "\n")
+    # ORGANIC #734 — carry input.context (known-empty: dual_port_memory is NOT a
+    # context module) so the gate KNOWS this is a genuinely-dropped author file
+    # and hard-blocks. Without an input.context key the gate now degrades to an
+    # advisory WARN (it cannot prove dropped-author vs harness-context), so this
+    # round-1 hard-block assertion is exercised in its context-AVAILABLE form.
+    prompts.write_text(json.dumps(
+        {"id": rid, "prompt": _PROMPT, "input": {"context": {}}}) + "\n")
     rc = G.main(["--batch", str(drafts), "--out", str(out),
                  "--prompts", str(prompts), "--report", str(report)])
     assert rc == 1, "the dropped-file draft must be BLOCKED (rc=1)"
