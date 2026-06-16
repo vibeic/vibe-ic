@@ -16,6 +16,7 @@ row for each (the high-word alias was silently dropped).
 spurious rows); `_offset_addrs` on a prose cell returns []. chip-AGNOSTIC.
 """
 import json
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -24,6 +25,8 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import phase1_doc_one_shot_runner as R   # noqa: E402
 import regmap_table_extractor as E        # noqa: E402
+
+_COMPLETENESS = PROGRAMS / "phase1_doc_input_completeness_check.py"
 
 _DOC = ("+----+----+----+\n| CSR Address | Name | Description |\n"
         "+====+====+====+\n| 0xB00 | mcycle | cyc |\n+----+----+----+\n"
@@ -75,6 +78,34 @@ def test_800_offset_addrs_prose_cell_empty():
 
 def test_800_offset_addrs_dedups_identical_pair():
     assert E._offset_addrs("0xC00 (0xC00)") == ["0xc00"]
+
+
+# ── END-STATE: the P0 phase1_doc_input_completeness_check (the real program the
+#    issue says FAILed on the un-captured tokens) now PASSes after the
+#    content-trigger captures the processor_cpu CSR address tokens into L4. ──────
+def _proc_cpu_project(tmp_path):
+    proj = tmp_path / "proj"
+    (proj / "phase1/input_doc").mkdir(parents=True)
+    (proj / "phase1/generated_docs").mkdir(parents=True)
+    (proj / "phase1/generated_docs/L1_DATASHEET.json").write_text(
+        json.dumps({"class_path": "processor_cpu"}))
+    (proj / "phase1/generated_docs/L4_REGMAP.json").write_text(
+        json.dumps({"registers": [], "no_registers_in_input": True}))
+    (proj / "phase1/input_doc/csr.txt").write_text(_DOC)
+    return proj
+
+
+def test_800_endstate_completeness_check_passes_after_content_trigger(tmp_path):
+    proj = _proc_cpu_project(tmp_path)
+    R._post_emit_pdf_regmap_table_rows(proj)        # the content-trigger fix
+    r = subprocess.run(
+        [sys.executable, str(_COMPLETENESS), str(proj)],
+        capture_output=True, text=True)
+    assert r.returncode == 0, (r.stdout + r.stderr)  # un-captured-tokens FAIL gone
+    assert "PASS" in r.stdout
+    # the captured CSR addresses are no longer reported uncaptured.
+    assert "0xb00" not in r.stdout.lower()
+    assert "0xc80" not in r.stdout.lower()
 
 
 if __name__ == "__main__":
