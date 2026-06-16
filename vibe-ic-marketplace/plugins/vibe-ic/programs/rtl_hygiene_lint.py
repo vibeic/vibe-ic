@@ -108,7 +108,7 @@ import re
 import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import List, Dict, Set, Tuple
+from typing import List, Dict, Set, Tuple, Optional
 
 
 @dataclass
@@ -308,8 +308,27 @@ def rule_undriven_and_unread(src: str, path: str) -> List[Finding]:
             # Reads = total - (LHS assignments) - (declaration)
             reads = total_occ - lhs_occ - decl_occ
             if reads <= 0 and name not in inst_sigs:
-                findings.append(Finding(path, lineno, 'WARN', 'unread-reg', name,
-                    f"{kind} '{name}' declared and written but never read."))
+                # #754 / ORGANIC-20260616 (C4) — a write-only UNPACKED MEMORY
+                # ARRAY (`reg [W-1:0] NAME [DEPTH]`) whose only use is an indexed
+                # write is a legitimate single-port-RAM storage pattern whose
+                # read port lives in a sibling/future module (staged/incremental
+                # designs that store spec-mandated fields ahead of their
+                # out-of-scope consumers, e.g. MSHR write_table_q/data_ram_q).
+                # Such a write-only array MUST NOT BLOCK a correct submission, so
+                # it is reported at INFO (advisory, non-blocking, excluded from
+                # the rc=1 condition) rather than WARN. A genuinely dead SCALAR
+                # reg still WARNs/blocks. This reuses the same structural
+                # memory-array detection used by the autofix path so the two
+                # agree, and is purely structural / chip-AGNOSTIC.
+                is_mem_array = re.search(
+                    r'\b(?:reg|logic)\b[^;\n]*\b' + re.escape(name)
+                    + r'\s*\[[^\]]+\]\s*[;,]', src)
+                sev = 'INFO' if is_mem_array else 'WARN'
+                note = (" (write-only memory array — likely a RAM whose read "
+                        "port is in a sibling/future module; advisory only)"
+                        if is_mem_array else "")
+                findings.append(Finding(path, lineno, sev, 'unread-reg', name,
+                    f"{kind} '{name}' declared and written but never read.{note}"))
     return findings
 
 
@@ -414,8 +433,19 @@ def rule_pulse_swallow(src: str, path: str) -> List[Finding]:
 # sys_reset …, common in cross-domain designs): the old anchor required the
 # token to START with rst/reset, so a dual-clock module with w_rst+r_rst was
 # falsely classified reset-less and fed to the power-up autofix.
+# #754 / ORGANIC-20260616 (C4) — the alternation already carried the ASYNC
+# prefix `a?` (areset/arst) and the alphabetic clear spellings sclr/aclr, but
+# had NO SYNC prefix: the canonical synchronous-reset spelling `srst` (= s+rst,
+# no underscore separator) and `sreset` were therefore NOT matched, so a
+# spec-faithful `if (srst) out <= 0;` output was mis-classified reset-less and
+# falsely tripped rule_uninit_registered_output. `(?:\w+_)?` cannot consume the
+# bare `s` (it requires a trailing underscore). Fix: widen the async-only
+# prefix `a?` to `[as]?` on BOTH the reset and rst alternatives so
+# srst/sreset/arst/areset all match — matching the richer reset-name recognition
+# used by the rest of the plugin. Pure recognition widening of canonical
+# sync-reset spellings — chip-AGNOSTIC, deterministic.
 _RESET_NAME_RE = re.compile(
-    r'\b(?:\w+_)?(a?reset[a-z_]*|a?rst[a-z_]*|resetn|nreset|por|sclr|aclr)\b',
+    r'\b(?:\w+_)?([as]?reset[a-z_]*|[as]?rst[a-z_]*|resetn|nreset|por|sclr|aclr)\b',
     re.I)
 
 
@@ -1618,6 +1648,90 @@ def _blank_string_literals(src: str) -> str:
     return "".join(out)
 
 
+def _harvest_header_params(src: str, consts: Dict[str, int],
+                           zero_consts: Dict[str, int],
+                           line_of: Dict[str, int]) -> None:
+    """#750 / ORGANIC #744 R4 — seed the constant environment with module-HEADER
+    parameters `module NAME #( parameter A=.., B=.. ) (...)`. The shipped Rule-14
+    harvested only `;`-terminated decls (via `_LOCALPARAM_DECL_RE`), so a
+    width-truncated divisor whose WIDTH source is a module-header parameter
+    (`localparam [W-1:0] DW = W'(2**W)` with `#(parameter W=8)`) was missed.
+    A header param with a NON-CONSTANT default resolves to None and is skipped
+    (§4.05 — no false-positive risk). chip-AGNOSTIC: pure constant evaluation."""
+    n = len(src)
+    i = 0
+    while True:
+        h = src.find("#", i)
+        if h < 0:
+            break
+        j = h + 1
+        while j < n and src[j] in " \t\r\n":
+            j += 1
+        if j >= n or src[j] != "(":
+            i = h + 1
+            continue
+        depth = 0
+        k = j
+        while k < n:
+            if src[k] == "(":
+                depth += 1
+            elif src[k] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            k += 1
+        body = src[j + 1:k]
+        base_ln = src.count("\n", 0, h) + 1
+        # split on TOP-LEVEL commas
+        entries, d2, last = [], 0, 0
+        for idx, ch in enumerate(body):
+            if ch in "([{":
+                d2 += 1
+            elif ch in ")]}":
+                d2 -= 1
+            elif ch == "," and d2 == 0:
+                entries.append(body[last:idx])
+                last = idx + 1
+        entries.append(body[last:])
+        for ent in entries:
+            m = re.search(
+                r"(?:parameter|localparam)?\s*"
+                r"(?:integer\s+|signed\s+|unsigned\s+|logic\s+|bit\s+|reg\s+)*"
+                r"(?:\[[^\]]*\]\s*)?"
+                r"(?:integer\s+|signed\s+|unsigned\s+)*"
+                r"([A-Za-z_]\w*)\s*=\s*(.+)$", ent.strip(), re.S)
+            if not m:
+                continue
+            name, rhs = m.group(1), m.group(2).strip()
+            if name in VERILOG_KEYWORDS or name in consts:
+                continue
+            val = _eval_const_int(rhs, consts)
+            if val is None:
+                continue
+            # §4.05 — a module-header parameter whose default is a BARE INTEGER
+            # LITERAL is an OVERRIDABLE PLACEHOLDER (the instantiator supplies
+            # the real value, e.g. SERV's `#(parameter width=0)`): it is NOT a
+            # compile-time-provable constant divisor, so it must never enter
+            # `zero_consts` (a `… / width` with a default-0 placeholder is not a
+            # divide-by-zero defect — the design is parameterised). A non-zero
+            # bare literal is still seeded into `consts` so it can resolve a
+            # derived width (`[W-1:0]`), but a bare 0 is dropped entirely so a
+            # derived divisor never reads it as a hard zero. By contrast a value
+            # arising from a DERIVED/TRUNCATING expression (`W'(2**W)`, the #750
+            # idiom) IS provably 0 regardless of override and remains flagged.
+            is_bare_literal = bool(re.fullmatch(r"\d+", rhs))
+            if is_bare_literal:
+                if val != 0:
+                    consts[name] = val
+                    line_of[name] = base_ln
+                continue
+            consts[name] = val
+            line_of[name] = base_ln
+            if val == 0:
+                zero_consts[name] = base_ln
+        i = k + 1
+
+
 def rule_divmod_by_zero_const(src: str, path: str) -> List[Finding]:
     """Rule 14 (ORGANIC #744) — WARN on a `%` or `/` whose divisor is a
     compile-time constant that evaluates to 0 (e.g. a width-truncated
@@ -1630,9 +1744,12 @@ def rule_divmod_by_zero_const(src: str, path: str) -> List[Finding]:
     consts: Dict[str, int] = {}
     zero_consts: Dict[str, int] = {}   # name -> line of a const proven == 0
     line_of: Dict[str, int] = {}
+    # #750 / ORGANIC #744 R4 — seed module-HEADER parameters FIRST so a derived
+    # body localparam whose WIDTH comes from a header param is provable.
+    _harvest_header_params(src, consts, zero_consts, line_of)
     for m in _LOCALPARAM_DECL_RE.finditer(src):
         name, rhs = m.group(1), m.group(2)
-        if name in VERILOG_KEYWORDS:
+        if name in VERILOG_KEYWORDS or name in consts:
             continue
         val = _eval_const_int(rhs, consts)
         ln = src.count("\n", 0, m.start()) + 1
@@ -1680,6 +1797,214 @@ def rule_divmod_by_zero_const(src: str, path: str) -> List[Finding]:
     return findings
 
 
+# ---------------------------------------------------------------------------
+# Rule 15: Assignment width truncation (verilator WIDTHTRUNC equivalent)
+# ---------------------------------------------------------------------------
+# #757 / ORGANIC-20260616 (C7) — a LINT-review prompt names "Width mismatch" as
+# a category to fix, but the enabled rule set carried NO rule that flags a
+# SILENT narrowing assignment (`lhs16 <= rhs32`). bitwidth_consistency_check.py
+# only flags bit-select OUT-OF-RANGE (`name[hi]` beyond declared width), never
+# the assignment side. verilator -Wall reports it as WIDTHTRUNC. This rule
+# reproduces the single-bare-VARREF case 1:1 against verilator, and is
+# deliberately CONSERVATIVE — it fires ONLY when BOTH operand widths are
+# unambiguously known from `[H:L]` / `[W-1:0]` decls (so signed-arithmetic /
+# extension subtleties never produce a false WARN). The author-proposed BLKSEQ /
+# LATCH / UNUSEDPARAM categories are DEFERRED — they are NOT corpus-clean as a
+# pure regex rule (see #757 caveat) and need a verilator-cross-validated path.
+def _collect_decl_widths(src: str) -> Dict[str, int]:
+    """Map declared signal/port name -> declared bit-width, for every
+    wire/reg/logic/output/input declaration whose range is a literal `[H:L]`
+    or a parameterizable `[NAME-1:0]` that resolves to a constant via the
+    already-known localparam/parameter map. A plain (un-ranged) scalar is
+    width 1. Names whose width cannot be resolved deterministically are
+    OMITTED (never guessed) so the consuming rule can only fire on widths it
+    is certain about. chip-AGNOSTIC: pure structural parse, no design literal."""
+    # Known integer params/localparams for resolving `[W-1:0]`.
+    consts: Dict[str, int] = {}
+    for pm in re.finditer(
+            r'\b(?:localparam|parameter)\b[^=;]*?\b([A-Za-z_]\w*)\s*=\s*([^,;)]+)',
+            src):
+        v = _eval_const_int(pm.group(2).strip(), consts)
+        if v is not None:
+            consts[pm.group(1)] = v
+
+    def _range_width(hi: str, lo: str) -> Optional[int]:
+        # Zero-FP discipline: only TRUST two unambiguous range forms, because
+        # the shared _eval_const_int helper does not honor operator precedence
+        # for mixed `*`/`-` (e.g. it reads `2*W-1` as `2*(W-1)`), and cannot
+        # evaluate `$clog2(...)`. A mis-evaluated width could fabricate a
+        # truncation. So:
+        #   (1) PURE-LITERAL `[H:L]` (both integer literals), OR
+        #   (2) the canonical `[NAME-1:0]` parameter form (width == NAME).
+        # Anything else (arithmetic, $clog2, non-zero LSB) -> None (skip).
+        hi_s, lo_s = hi.strip(), lo.strip()
+        if re.fullmatch(r'\d+', hi_s) and re.fullmatch(r'\d+', lo_s):
+            return abs(int(hi_s) - int(lo_s)) + 1
+        if lo_s == '0':
+            m = re.fullmatch(r'([A-Za-z_]\w*)\s*-\s*1', hi_s)
+            if m and m.group(1) in consts:
+                w = consts[m.group(1)]
+                return w if w > 0 else None
+        return None
+
+    widths: Dict[str, int] = {}
+    # Ranged decls: <kind> [signed] [H:L] name1, name2;  (kind covers ports too)
+    decl_re = re.compile(
+        r'\b(?:input|output|inout|wire|reg|logic)\b\s+'
+        r'(?:(?:signed|unsigned)\s+)?(?:wire|reg|logic\s+)?'
+        r'(?:(?:signed|unsigned)\s+)?'
+        r'\[\s*([^:\]]+?)\s*:\s*([^:\]]+?)\s*\]\s*'
+        r'([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*(?=[;,)=])')
+    for m in decl_re.finditer(src):
+        w = _range_width(m.group(1), m.group(2))
+        if w is None or w <= 0:
+            continue
+        for n in m.group(3).split(','):
+            n = n.strip()
+            if n and n not in VERILOG_KEYWORDS:
+                widths.setdefault(n, w)
+    # Scalar (un-ranged) decls -> width 1. Only register a scalar width when the
+    # name was NOT already given a vector width above.
+    scalar_re = re.compile(
+        r'\b(?:input|output|inout|wire|reg|logic)\b\s+'
+        r'(?:(?:signed|unsigned)\s+)?'
+        r'([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*(?=[;,)=])')
+    for m in scalar_re.finditer(src):
+        seg = m.group(0)
+        if '[' in seg:
+            continue
+        for n in m.group(1).split(','):
+            n = n.strip()
+            if n and n not in VERILOG_KEYWORDS:
+                widths.setdefault(n, 1)
+    return widths
+
+
+def rule_assign_width_truncate(src: str, path: str) -> List[Finding]:
+    """Rule 15 (#757) — flag a blocking/non-blocking/continuous assignment whose
+    RHS is a SINGLE declared signal (a bare VARREF, no slice, no operator) wider
+    than the LHS declared signal — a silent width truncation (verilator
+    WIDTHTRUNC).
+
+    Conservative to the point of zero false-positives on the reference corpus:
+      * RHS must be ONE bare identifier (no `[..]`, no operator, no literal) —
+        expression RHS widths depend on signedness/extension rules a regex
+        cannot safely infer, so they are skipped.
+      * LHS must be a WHOLE-signal target (no bit-select on the LHS — a slice
+        target sets its own width and is intentional).
+      * BOTH widths must be known from declarations; if either is unknown the
+        assignment is skipped (never guessed).
+    chip-AGNOSTIC + DETERMINISTIC: no design literal, no chip name, no oracle.
+    """
+    findings: List[Finding] = []
+    widths = _collect_decl_widths(src)
+    if not widths:
+        return findings
+    seen: Set[Tuple[str, str, int]] = set()
+    # <lhs> <= <rhs> ;   or   <lhs> = <rhs> ;   or   assign <lhs> = <rhs> ;
+    # LHS: bare name (no subscript). RHS: bare name only, terminated by `;`.
+    assign_re = re.compile(
+        r'(?:\bassign\s+)?'
+        r'(?<![<>!=.])\b([A-Za-z_]\w*)\s*(<=|=)(?!=)\s*'
+        r'([A-Za-z_]\w*)\s*;')
+    for m in assign_re.finditer(src):
+        lhs, op, rhs = m.group(1), m.group(2), m.group(3)
+        if lhs in VERILOG_KEYWORDS or rhs in VERILOG_KEYWORDS:
+            continue
+        lw = widths.get(lhs)
+        rw = widths.get(rhs)
+        if lw is None or rw is None:
+            continue
+        if rw <= lw:
+            continue
+        ln = src.count('\n', 0, m.start()) + 1
+        key = (lhs, rhs, ln)
+        if key in seen:
+            continue
+        seen.add(key)
+        findings.append(Finding(
+            path, ln, 'WARN', 'assign-width-truncate', lhs,
+            f"width mismatch: `{rhs}` is {rw} bits assigned to `{lhs}` "
+            f"({lw} bits) — the upper {rw - lw} bit(s) are silently dropped. "
+            f"Add an explicit slice/cast (`{lhs} {op} {rhs}[{lw - 1}:0];`) or "
+            f"widen `{lhs}` (verilator WIDTHTRUNC)."))
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# Rule 16: Array-reset loop INSIDE an async-reset block is an INTENDED idiom
+# ---------------------------------------------------------------------------
+# #749 / ORGANIC-20260616 (gshare) — a `for` loop that initialises an array
+# element-by-element with BLOCKING assignments (`arr[i] = val;`) UNDER the reset
+# branch of an async-reset clocked process is the CORRECT way to re-apply a
+# spec-mandated reset value (PHT->weakly-not-taken, scoreboard/regfile clear) on
+# EVERY async reset — the TB applies mid-stream resets, so an `initial`-only
+# init never re-initialises. verilator may emit BLKLOOPINIT/BLKSEQ on that loop;
+# that lint should be WAIVED, NOT "fixed" by evicting the init to `initial`.
+# This rule RECOGNISES that idiom and reports it at INFO (advisory, auto-waive,
+# NON-blocking) so the downstream flow records it as intended.
+#
+# §4.05 fail-SAFE — it does NOT fire (so it never waives) on:
+#   * a combinational `for`/loop (no clock edge in the sensitivity list) — a
+#     genuine combinational loop must still be caught by other rules / verilator;
+#   * a blocking array write in a clocked block that is NOT under a reset branch
+#     (a non-reset blocking-in-sequential is a real BLKSEQ concern, left alone).
+# chip-AGNOSTIC: pure structural SV parse, no chip/vendor/SKU literal.
+def _async_reset_block_bodies(src: str) -> List[Tuple[str, int]]:
+    """Yield (body_text, body_start_offset) for every clocked `always` block
+    whose sensitivity list is EDGE-triggered (posedge/negedge) — i.e. a
+    sequential process. (Async vs sync reset is not distinguished here; the
+    reset-branch dominance is established by the per-write `if(<reset>)` guard,
+    which is what actually matters for re-applying the reset value.)"""
+    out: List[Tuple[str, int]] = []
+    for sens, body, pos in _iter_always_blocks(src):
+        if re.search(r'\b(?:posedge|negedge)\b', sens):
+            out.append((body, pos))
+    return out
+
+
+def rule_array_reset_loop_idiom(src: str, path: str) -> List[Finding]:
+    findings: List[Finding] = []
+    for body, _pos in _async_reset_block_bodies(src):
+        # Find every `for (...) ... arr[i] = val;` blocking write to an indexed
+        # target inside this sequential block, and check it is reset-dominated.
+        for fm in re.finditer(r'\bfor\b\s*\(', body):
+            # Bound the for body: the next `;`-terminated statement or a
+            # begin/end region. Grab a conservative window after the `for(...)`.
+            after = body[fm.start():fm.start() + 600]
+            # Must contain a blocking indexed write `name[idx] = expr;`
+            wm = re.search(r'\b([A-Za-z_]\w*)\s*\[[^\]]+\]\s*=(?!=)\s*[^;]+;', after)
+            if not wm:
+                continue
+            arr = wm.group(1)
+            if arr in VERILOG_KEYWORDS:
+                continue
+            # Reset-dominance: the nearest governing `if (...)` BEFORE the for
+            # loop (within this block) must reference a reset-name signal.
+            prefix = body[:fm.start()]
+            ifs = list(re.finditer(
+                r'\b(if)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)|\b(else)\b', prefix))
+            gov = ifs[-1] if ifs else None
+            if gov is None or gov.group(1) != 'if':
+                continue
+            cond = gov.group(2) or ''
+            # Must be the ASSERTED reset branch (not `!rst` / `==0` deassert).
+            if not _RESET_NAME_RE.search(cond):
+                continue
+            if '!' in cond or '~' in cond or re.search(r'==\s*0', cond):
+                continue
+            ln = src.count('\n', 0, _pos) + body[:fm.start()].count('\n') + 1
+            findings.append(Finding(
+                path, ln, 'INFO', 'array-reset-loop-idiom', arr,
+                f"intended idiom: the `for` loop blocking-initialising array "
+                f"`{arr}` under the asserted-reset branch of a clocked process "
+                f"re-applies the spec reset value on EVERY async reset (the TB "
+                f"applies mid-stream resets). Keep it INSIDE the reset block — "
+                f"do NOT evict to `initial`. If verilator emits "
+                f"BLKLOOPINIT/BLKSEQ here, WAIVE the lint (advisory only)."))
+    return findings
+
+
 def lint_file(path: Path) -> List[Finding]:
     raw = path.read_text(errors='replace')
     src = strip_comments(raw)
@@ -1695,6 +2020,8 @@ def lint_file(path: Path) -> List[Finding]:
     results += rule_reset_boundary_residual_enable(src, str(path))
     results += rule_multidriven_register(src, str(path))
     results += rule_divmod_by_zero_const(src, str(path))
+    results += rule_assign_width_truncate(src, str(path))
+    results += rule_array_reset_loop_idiom(src, str(path))
     # rule_wire_input_read_in_clocked_block: NOT enabled.
     #
     # v0.1.39 honesty correction (audit Finding 2): the v0.1.38 disable

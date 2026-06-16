@@ -177,6 +177,293 @@ def parse_threshold_from_prompt(prompt: str
     return best
 
 
+# ─── per-metric DISJUNCTIVE / CONJUNCTIVE clause parse (ORGANIC #756) ─────────
+# A success criterion can bind a DIFFERENT threshold to EACH metric, joined by
+# 'or' (a disjunction — ANY clause clears the bar) or 'and' (a conjunction — ALL
+# clauses must clear). e.g. "minimum reduction must be 12% for wires OR 8% for
+# cells" → two clauses [(12,'wires'),(8,'cells')] joined by OR.
+# The single-tuple parse_threshold_from_prompt() above grabs only the FIRST '%'
+# and (when both 'cells' and 'wires' bleed into its ±60-char window) collapses to
+# a single 'both' (cells AND wires at the SAME threshold) — doubly wrong (wrong
+# per-metric bars + wrong combinator). parse_threshold_clauses_from_prompt()
+# fixes that: it scans ALL area '%'s and attaches each to the metric word NEAREST
+# it (so 12% binds wires, 8% binds cells), and reads the connective between the
+# clauses. chip-AGNOSTIC: ordinary-English tokens only; no design/SKU literal.
+_COMBINATOR_OR = "or"
+_COMBINATOR_AND = "and"
+# the single metric tokens we bind a clause to, by their character offsets.
+_CELL_TOKEN_RE = re.compile(
+    r"\b(cell|cells|gate|gates|logic|lut|luts)\b", re.IGNORECASE)
+_WIRE_TOKEN_RE = re.compile(
+    r"\b(wire|wires|net|nets|interconnect|routing)\b", re.IGNORECASE)
+
+
+def _nearest_metric_for_pct(text: str, low: str, pct_start: int, pct_end: int
+                            ) -> Optional[str]:
+    """Bind a single '%' (at [pct_start,pct_end)) to the metric word it names.
+
+    PURE. Specs phrase a per-metric clause as "<n>% [...] for <metric>" — the
+    binding metric word FOLLOWS the '%' (e.g. "12% ... for wires", "8% for
+    cells"). So we look FORWARD first: the closest single cell-token / wire-token
+    AFTER the '%' (up to the next '%' or a clause break) is decisive. Only when
+    NO metric word follows within range do we look BACKWARD (a "reduce wires by
+    12%" phrasing where the metric precedes). This forward-priority is what keeps
+    "...for wires OR 8% for cells" from binding the 8% to the previous clause's
+    trailing 'wires': 'cells' follows the 8%, 'wires' precedes it, so 8%→cells.
+    Returns 'cells'/'wires', or None when no single metric word is in range (the
+    caller then falls back to the conservative 'both' bind). Does NOT collapse to
+    'both' on clause-bleed — it picks the clause's OWN metric."""
+    # FORWARD window: from just after the '%' up to the FIRST clause boundary —
+    # the next '%', or a connective that starts the NEXT clause ('and'/'or'/','/
+    # ';'), or +56 chars, whichever comes first. Stopping at the connective is
+    # what keeps the first clause's forward scan ("...20% and wires...") from
+    # reaching into the SECOND clause's metric word.
+    fwd_end = min(len(text), pct_end + 56)
+    nxt = text.find("%", pct_end)
+    if nxt != -1 and nxt < fwd_end:
+        fwd_end = nxt
+    conn = re.search(r"[,;]|\b(?:and|or|either|while|whereas)\b",
+                     text[pct_end:fwd_end], re.IGNORECASE)
+    if conn is not None:
+        fwd_end = pct_end + conn.start()
+    fwd = text[pct_end:fwd_end]
+
+    def _closest_fwd(rx) -> Optional[int]:
+        best: Optional[int] = None
+        for mm in rx.finditer(fwd):
+            if best is None or mm.start() < best:
+                best = mm.start()
+        return best
+
+    fc = _closest_fwd(_CELL_TOKEN_RE)
+    fw = _closest_fwd(_WIRE_TOKEN_RE)
+    if fc is not None or fw is not None:
+        if fw is None:
+            return _METRIC_CELLS
+        if fc is None:
+            return _METRIC_WIRES
+        return _METRIC_CELLS if fc < fw else _METRIC_WIRES
+
+    # BACKWARD fallback: nearest metric word BEFORE the '%' (within 40 chars,
+    # not crossing a previous '%').
+    bwd_start = max(0, pct_start - 40)
+    prev = text.rfind("%", 0, pct_start)
+    if prev != -1 and prev >= bwd_start:
+        bwd_start = prev + 1
+    bwd = text[bwd_start:pct_start]
+
+    def _closest_bwd(rx) -> Optional[int]:
+        best: Optional[int] = None
+        for mm in rx.finditer(bwd):
+            # distance from end of match to the '%' (smaller = nearer)
+            d = len(bwd) - mm.end()
+            if best is None or d < best:
+                best = d
+        return best
+
+    bc = _closest_bwd(_CELL_TOKEN_RE)
+    bw = _closest_bwd(_WIRE_TOKEN_RE)
+    if bc is None and bw is None:
+        return None
+    if bw is None:
+        return _METRIC_CELLS
+    if bc is None:
+        return _METRIC_WIRES
+    return _METRIC_CELLS if bc < bw else _METRIC_WIRES
+
+
+def parse_threshold_clauses_from_prompt(
+        prompt: str) -> Tuple[List[Tuple[float, str]], str]:
+    """Extract per-metric reduction clauses + their combinator from a prompt.
+
+    PURE — no I/O. Returns (clauses, combinator):
+      * clauses = [(threshold_pct, metric), ...] where metric ∈ {cells, wires,
+        both}; one entry per area-reduction '%' in the prompt, each bound to the
+        metric word NEAREST it (so '12% for wires or 8% for cells' → [(12,wires),
+        (8,cells)], NOT a single (12,both)).
+      * combinator ∈ {'or','and'}: 'or' iff an 'or'/'either' connective sits
+        between the clauses (a DISJUNCTION — ANY satisfied clause PASSes);
+        otherwise 'and' (the conservative default — ALL clauses must clear).
+    A clause whose '%' has no single nearby metric word falls back to a 'both'
+    bind for that clause (same conservative default as the single-tuple parse).
+    Raises ThresholdParseError when no area '%' is present (caller → NOT-
+    APPLICABLE). Deduplicates identical (pct,metric) clauses while preserving
+    order so a metric repeated in prose does not inflate the clause set."""
+    if not prompt or not prompt.strip():
+        raise ThresholdParseError("empty prompt")
+    text = prompt
+    low = text.lower()
+    raw: List[Tuple[int, int, float, str]] = []   # (start, end, pct, metric)
+    for m in _PCT_RE.finditer(text):
+        pct = float(m.group(1))
+        a, b = max(0, m.start() - 60), min(len(text), m.end() + 60)
+        window = low[a:b]
+        if not any(w in window for w in _AREA_WORDS):
+            continue
+        metric = _nearest_metric_for_pct(text, low, m.start(), m.end())
+        if metric is None:
+            metric = _METRIC_BOTH   # conservative default for a bare % clause
+        raw.append((m.start(), m.end(), pct, metric))
+    if not raw:
+        raise ThresholdParseError(
+            "no area-reduction percentage found in the prompt (looked for a "
+            "'<n>%' near a reduce/area/cell/wire word)")
+
+    # dedupe identical (pct, metric) clauses, preserve first-seen order.
+    clauses: List[Tuple[float, str]] = []
+    seen = set()
+    for _s, _e, pct, metric in raw:
+        key = (pct, metric)
+        if key not in seen:
+            seen.add(key)
+            clauses.append(key)
+
+    # combinator: look at the connective text BETWEEN the first two clause '%'s.
+    # An explicit 'or'/'either' between them ⇒ disjunction; an explicit 'and'/
+    # 'both' ⇒ conjunction; nothing ⇒ conservative 'and'.
+    combinator = _COMBINATOR_AND
+    if len(raw) >= 2:
+        gap = low[raw[0][1]:raw[1][0]]
+        if re.search(r"\bor\b|\beither\b", gap):
+            combinator = _COMBINATOR_OR
+        elif re.search(r"\band\b|\bboth\b", gap):
+            combinator = _COMBINATOR_AND
+    return clauses, combinator
+
+
+def _metric_red(metric: str, cells_red: Optional[float],
+                wires_red: Optional[float]) -> Optional[float]:
+    """The MAPPED reduction for a SINGLE-metric clause. A 'both' clause is NOT
+    collapsed here — it is expanded into its two underlying metrics and each is
+    classified separately (see `_clause_metrics` / the decide_clauses loop), so a
+    per-metric lazy under-reduction with generic headroom is never hidden behind
+    a min() (#756 adversarial-review leak). PURE."""
+    if metric == _METRIC_CELLS:
+        return cells_red
+    if metric == _METRIC_WIRES:
+        return wires_red
+    vals = [v for v in (cells_red, wires_red) if v is not None]
+    return min(vals) if vals else None
+
+
+def _clause_metrics(metric: str) -> List[str]:
+    """The constituent single metric(s) a clause binds. A 'both' clause expands
+    to BOTH cells and wires so each is classified independently (the conjunction
+    is recombined by the caller); a single-metric clause stays itself."""
+    if metric == _METRIC_BOTH:
+        return [_METRIC_CELLS, _METRIC_WIRES]
+    return [metric]
+
+
+def decide_clauses(
+        cells_red: Optional[float], wires_red: Optional[float],
+        clauses: List[Tuple[float, str]], combinator: str,
+        cells_red_generic: Optional[float] = None,
+        wires_red_generic: Optional[float] = None,
+        ) -> Tuple[str, str]:
+    """Pure verdict for a LIST of per-metric (threshold, metric) clauses joined
+    by `combinator` ∈ {'or','and'}, with the SAME unreachable-target escape and
+    grown-design no-leak that single-clause decide() uses.
+
+    DISJUNCTION ('or'): PASS as soon as ANY clause's bound MAPPED reduction is
+    >= its own threshold. Only when EVERY clause is sub-threshold do we decide
+    BLOCK vs NOT-APPLICABLE: BLOCK iff ANY sub-threshold clause is a REAL failure
+    (its bound metric GREW — negative — OR its GENERIC reduction shows headroom);
+    if every sub-threshold clause is proven near-minimal (generic also sub-
+    threshold, mapped non-negative) the target is unreachable → NOT-APPLICABLE.
+
+    CONJUNCTION ('and'): every clause must clear its own threshold; a single
+    real failure blocks, an unmeasurable/unreachable clause (with no real
+    failure) is NOT-APPLICABLE, else PASS.
+
+    A clause whose bound MAPPED reduction is None (unmeasurable) is treated as
+    NOT-satisfiable for OR (cannot prove it clears the bar) and NOT-APPLICABLE
+    for AND — never a fabricated pass, never a false block.
+    """
+    # evaluate each clause against its own bar.
+    sat: List[str] = []          # clauses that PASS their own threshold
+    failures: List[str] = []     # real, blockable sub-threshold clauses
+    unreachable: List[str] = []  # proven-near-minimal sub-threshold clauses
+    unmeasurable: List[str] = []
+
+    def _classify_single(thr: float, single: str) -> str:
+        """Classify ONE metric against ONE threshold → a label string; appends
+        the human note to the right bucket. Returns 'sat'/'grew'/'headroom'/
+        'unreachable'/'unmeasurable'. A 'both' clause calls this for cells AND
+        wires separately, so a per-metric grew/headroom is never masked."""
+        red = _metric_red(single, cells_red, wires_red)
+        gen = _metric_red(single, cells_red_generic, wires_red_generic)
+        if red is None:
+            return "unmeasurable"
+        if red >= thr:
+            return "sat"
+        if red < 0:
+            failures.append(
+                f"{single} reduction {red:.2f}% < {thr:g}% (design GREW — "
+                f"never a near-minimal/unreachable target)")
+            return "grew"
+        if _generic_headroom(red, gen, thr):
+            failures.append(
+                f"{single} reduction {red:.2f}% < {thr:g}%"
+                + (f" (generic {gen:.2f}% has headroom)"
+                   if gen is not None else ""))
+            return "headroom"
+        unreachable.append(
+            f"{single} mapped {red:.2f}% / generic "
+            f"{gen if gen is None else f'{gen:.2f}'}% both < {thr:g}%")
+        return "unreachable"
+
+    for thr, metric in clauses:
+        # Expand a 'both' clause into its two metrics and classify each
+        # independently; the clause is satisfied only if EVERY metric clears,
+        # a real failure (grew/headroom) on ANY metric is a clause failure,
+        # else unmeasurable/unreachable. A single-metric clause is just itself.
+        labels = [_classify_single(thr, sm) for sm in _clause_metrics(metric)]
+        if any(lb in ("grew", "headroom") for lb in labels):
+            # a real, blockable under-reduction was already appended to failures.
+            continue
+        if all(lb == "sat" for lb in labels):
+            sat.append(f"{metric} reduction meets {thr:g}%")
+        elif any(lb == "unmeasurable" for lb in labels):
+            unmeasurable.append(f"{metric} reduction unmeasurable")
+        else:
+            unreachable.append(f"{metric} near-minimal under {thr:g}%")
+
+    if combinator == _COMBINATOR_OR:
+        # ANY satisfied clause ⇒ PASS (the spec's disjunction is met).
+        if sat:
+            return ("PASS",
+                    "area reduction meets a disjunctive clause: "
+                    + "; ".join(sat))
+        # none satisfied. A REAL failure (headroom / grew) anywhere blocks —
+        # the design could have hit at least one bar but did not.
+        if failures:
+            return ("BLOCK",
+                    "no disjunctive area-reduction clause met and at least one "
+                    "is a real under-reduction: " + "; ".join(failures))
+        # every clause unmeasurable or proven near-minimal → no false block.
+        bits = unreachable + unmeasurable
+        return ("NOT_APPLICABLE",
+                "no disjunctive clause met but none is a real failure "
+                "(unreachable target / unmeasurable): " + "; ".join(bits))
+
+    # CONJUNCTION ('and'): every clause must clear; a single real failure blocks.
+    if failures:
+        return ("BLOCK",
+                "under-threshold area reduction (all clauses bind): "
+                + "; ".join(failures))
+    if unmeasurable:
+        return ("NOT_APPLICABLE",
+                "a bound metric is unmeasurable: " + "; ".join(unmeasurable))
+    if unreachable:
+        return ("NOT_APPLICABLE",
+                "unreachable-target escape (conjunctive clauses, near-minimal "
+                "design): " + "; ".join(unreachable) + " (advisory, NOT a block)")
+    return ("PASS",
+            "area reduction meets every conjunctive clause: "
+            + "; ".join(sat))
+
+
 # ─── yosys stat parse + reduction arithmetic ─────────────────────────────────
 # yosys `stat` has shipped TWO summary spellings over its life:
 #   OLD (≤ ~0.36):  "   Number of cells:                400"
@@ -569,12 +856,18 @@ def run_ppa_area_threshold(
                         "→ NOT-APPLICABLE/advisory, not a block"),
     }
 
-    # ── resolve the threshold + bound metric ──────────────────────────────────
+    # ── resolve the threshold clause(s) + combinator ──────────────────────────
     # explicit --threshold-pct wins; else parse from the prompt. An unparseable
     # threshold is NON-BLOCKING NOT-APPLICABLE (§4.05) — never a false block.
+    # The gate now carries a LIST of (pct, metric) clauses + a combinator
+    # ('or'/'and') so a per-metric DISJUNCTIVE spec ("12% for wires OR 8% for
+    # cells") is honoured instead of being collapsed to a single (12,'both')
+    # conjunction (ORGANIC #756).
     if threshold_override is not None:
         threshold = threshold_override
         metric = metric_override or _METRIC_BOTH
+        clauses = [(threshold, metric)]
+        combinator = _COMBINATOR_AND
         report["threshold_source"] = "explicit"
     else:
         if not prompt_text:
@@ -583,18 +876,27 @@ def run_ppa_area_threshold(
                                 "determine the area-reduction target")
             return 0, report
         try:
-            threshold, metric = parse_threshold_from_prompt(prompt_text)
+            clauses, combinator = parse_threshold_clauses_from_prompt(
+                prompt_text)
         except ThresholdParseError as ex:
             report["verdict"] = "NOT_APPLICABLE"
             report["reason"] = (f"unparseable threshold — {ex}; not blocking "
                                 f"(the prompt has no area-reduction target)")
             return 0, report
-        # a --metric override on top of a parsed threshold lets a caller pin it.
+        # a --metric override on top of a parsed threshold pins EVERY clause to
+        # that metric (caller explicitly overriding the parsed bind).
         if metric_override:
-            metric = metric_override
+            clauses = [(pct, metric_override) for pct, _m in clauses]
+        # back-compat scalar fields: the first clause's threshold + (when all
+        # clauses share one metric) its metric, else 'both'.
+        threshold = clauses[0][0]
+        metric = (clauses[0][1] if len({m for _p, m in clauses}) == 1
+                  else _METRIC_BOTH)
         report["threshold_source"] = "prompt"
     report["threshold_pct"] = threshold
     report["metric"] = metric
+    report["clauses"] = [{"threshold_pct": p, "metric": m} for p, m in clauses]
+    report["combinator"] = combinator
 
     # ── yosys / container availability — refuse-don't-fake (§4.05) ────────────
     if not _docker_available():
@@ -652,9 +954,10 @@ def run_ppa_area_threshold(
     report["cells_reduction_pct_generic"] = cells_red_generic
     report["wires_reduction_pct_generic"] = wires_red_generic
 
-    verdict, reason = decide(cells_red, wires_red, threshold, metric,
-                             cells_red_generic=cells_red_generic,
-                             wires_red_generic=wires_red_generic)
+    verdict, reason = decide_clauses(
+        cells_red, wires_red, clauses, combinator,
+        cells_red_generic=cells_red_generic,
+        wires_red_generic=wires_red_generic)
     report["verdict"] = verdict
     report["reason"] = reason
     if verdict == "BLOCK":

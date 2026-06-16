@@ -575,12 +575,106 @@ def _parse_portlist_segments(rtl_text: str, top: str
     return block, parsed
 
 
+def _raw_portlist_block(rtl_text: str, top: str) -> Optional[str]:
+    """Return the RAW (comment-PRESERVING) paren-contents of `top`'s ANSI port
+    list — the exact substring of `rtl_text` between the module's `(` and its
+    matching `)`. None if `top` has no parseable header.
+
+    ORGANIC #742 reopen — `_rcv._module_portlist_block` (→ `_module_header`)
+    calls `_strip_comments(text)` FIRST, so the block it returns is comment-
+    STRIPPED while `rtl_text` still carries any inline port-list comment
+    (`input rst, // active high`). `_apply_order` then searched `rtl_text` for
+    the STRIPPED block → `find` == -1 → silent fail-safe no-op on EVERY sample
+    that has an inline port comment. This helper anchors the rewrite to the RAW
+    paren-contents so the text we split and the text we search are the SAME."""
+    m = re.search(rf"\bmodule\s+{re.escape(top)}\b", rtl_text)
+    if not m:
+        return None
+    i, n = m.end(), len(rtl_text)
+
+    def _skip_ws(j: int) -> int:
+        while j < n and rtl_text[j].isspace():
+            j += 1
+        return j
+
+    def _consume_imports(k: int) -> int:
+        while True:
+            im = re.match(r"import\s+[\w:\*\s,]+;", rtl_text[k:])
+            if not im:
+                break
+            k = _skip_ws(k + im.end())
+        return k
+
+    def _skip_balanced(j: int) -> Optional[int]:
+        # string-literal aware (mirrors _module_header) so a '(' inside "..."
+        # does not unbalance; returns the index just past the matching ')'.
+        depth = 0
+        while j < n:
+            c = rtl_text[j]
+            if c == '"':
+                j += 1
+                while j < n and rtl_text[j] != '"':
+                    if rtl_text[j] == "\\":
+                        j += 1
+                    j += 1
+                j += 1
+                continue
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    return j + 1
+            j += 1
+        return None
+
+    i = _skip_ws(i)
+    i = _consume_imports(i)
+    if i < n and rtl_text[i] == "#":
+        i = _skip_ws(i + 1)
+        if i < n and rtl_text[i] == "(":
+            j = _skip_balanced(i)
+            if j is None:
+                return None
+            i = _skip_ws(j)
+    i = _consume_imports(i)
+    if i < n and rtl_text[i] == "(":
+        j = _skip_balanced(i)
+        if j is None:
+            return None
+        return rtl_text[i + 1:j - 1]
+    return None
+
+
+def _raw_segment_name(raw_seg: str) -> Optional[str]:
+    """Match a RAW (possibly comment-bearing) port segment to its port NAME by
+    stripping its comments first and re-using the same `_PORT_DECL_RE` the
+    stripped path uses. None if the comment-stripped segment is empty or carries
+    no direction-led declaration (the §4.05 reorder-hazard fail-safe)."""
+    s = _rcv._strip_comments(raw_seg).strip()
+    if not s:
+        return None
+    dm = _rcv._PORT_DECL_RE.match(s)
+    if not dm or not dm.group(1):
+        return None
+    return dm.group(3)
+
+
 def _apply_order(rtl_text: str, block: str,
                  parsed: List[Tuple[str, str, str]],
                  ordered_names: List[str]) -> str:
     """Rewrite `top`'s port block to `ordered_names` order (PURE reorder).
     Returns rtl_text unchanged when the name set changed, the order is a no-op,
-    or the block is not uniquely locatable — the final §4.05 fail-safes."""
+    or the block is not uniquely locatable — the final §4.05 fail-safes.
+
+    ORGANIC #742 reopen — `block`/`parsed` come from the comment-STRIPPED header,
+    so a verbatim `rtl_text.find(block)` misses any sample with an inline port
+    comment. When the stripped block is not found verbatim, re-anchor onto the
+    RAW paren-contents (comment-preserving) extracted from the SAME `rtl_text`,
+    split it into raw segments keyed by their (comment-stripped) port name, and
+    reorder THOSE — so the text we split and the text we search are identical and
+    the inline comment travels with its port. Still a PURE permutation: aborts
+    on any name-set change, ambiguity, or unparseable raw segment."""
     names = [n for _seg, _d, n in parsed]
     if sorted(ordered_names) != sorted(names):
         return rtl_text  # name set changed → abort (never add/drop)
@@ -589,9 +683,110 @@ def _apply_order(rtl_text: str, block: str,
     if new_block == block:
         return rtl_text  # already in this order → byte-identical no-op
     idx = rtl_text.find(block)
-    if idx < 0 or rtl_text.find(block, idx + 1) >= 0:
+    if idx >= 0 and rtl_text.find(block, idx + 1) < 0:
+        return rtl_text[:idx] + new_block + rtl_text[idx + len(block):]
+
+    # The stripped block is NOT verbatim in rtl_text (inline port comment, or it
+    # is ambiguous) → re-anchor onto the RAW paren-contents of the same module.
+    raw_block = _raw_portlist_block(rtl_text, _module_for_block(rtl_text, parsed))
+    if raw_block is None:
+        return rtl_text
+    rstart = rtl_text.find(raw_block)
+    if rstart < 0 or rtl_text.find(raw_block, rstart + 1) >= 0:
         return rtl_text  # not found, or ambiguous (appears twice) → don't risk
-    return rtl_text[:idx] + new_block + rtl_text[idx + len(block):]
+    raw_segs = _rcv._split_top_level_commas(raw_block)
+    raw_by_name: Dict[str, str] = {}
+    for rseg in raw_segs:
+        rname = _raw_segment_name(rseg)
+        if rname is None:
+            return rtl_text  # an unparseable raw segment → §4.05 fail-safe
+        if rname in raw_by_name:
+            return rtl_text  # duplicate name in raw block → abort
+        raw_by_name[rname] = rseg
+    if sorted(raw_by_name) != sorted(names):
+        return rtl_text  # raw name-set diverged from the parsed set → abort
+    new_raw = _join_raw_segments([raw_by_name[n] for n in ordered_names])
+    if new_raw is None:
+        return rtl_text  # a comma-swallowing hazard could not be made safe.
+    if new_raw == raw_block:
+        return rtl_text  # already in this order (in raw terms) → safe no-op
+    return rtl_text[:rstart] + new_raw + rtl_text[rstart + len(raw_block):]
+
+
+def _join_raw_segments(segs: List[str]) -> Optional[str]:
+    """Comma-join reordered RAW port segments WITHOUT letting a `//` line-comment
+    swallow the comma or the following port.
+
+    A raw segment that carries an inline `// …` trailing comment (e.g.
+    `input rst, // active high` splits so the comment LEADS the next segment, or
+    a segment ends mid-line in a comment) becomes dangerous once reordered: the
+    `,` we append after it, and the segment that follows, would be eaten by the
+    line comment. We make the join safe by guaranteeing the separating `,` is
+    NEVER on a line still inside a `//` comment — emit `\\n,` after any segment
+    whose final (un-stripped) line is still inside a `//` line comment, so the
+    comma starts a fresh line. Returns None (→ caller no-ops) only if a segment
+    contains a block comment `/* … */` that is left UNCLOSED (we will not risk
+    repositioning an unterminated block comment)."""
+    out: List[str] = []
+    for k, seg in enumerate(segs):
+        if k > 0:
+            # decide the separator BEFORE this segment, based on the PREVIOUS
+            # segment's trailing comment state.
+            prev = segs[k - 1]
+            if _ends_inside_line_comment(prev):
+                out.append("\n,")     # push the ',' onto a fresh line
+            else:
+                out.append(",")
+        if _has_unclosed_block_comment(seg):
+            return None
+        out.append(seg)
+    return "".join(out)
+
+
+def _ends_inside_line_comment(seg: str) -> bool:
+    """True iff `seg`'s LAST line is still inside a `//` line comment (so any
+    text appended on that same line — a `,` or the next port — is commented
+    out). Block comments are removed first so a `//` inside `/* … */` is ignored."""
+    no_block = re.sub(r"/\*.*?\*/", "", seg, flags=re.DOTALL)
+    last_line = no_block.rsplit("\n", 1)[-1]
+    return "//" in last_line
+
+
+def _has_unclosed_block_comment(seg: str) -> bool:
+    """True iff `seg` opens a `/*` block comment it never closes."""
+    stripped = re.sub(r"/\*.*?\*/", "", seg, flags=re.DOTALL)
+    return "/*" in stripped
+
+
+def _module_for_block(rtl_text: str, parsed: List[Tuple[str, str, str]]
+                      ) -> str:
+    """Best-effort recovery of the module whose RAW port block to re-anchor on:
+    the unique module whose comment-stripped port-NAME set equals `parsed`'s.
+    Falls back to "" (→ _raw_portlist_block returns None) when not uniquely
+    identifiable, keeping the no-op fail-safe."""
+    want = sorted(n for _seg, _d, n in parsed)
+    hits: List[str] = []
+    for mm in re.finditer(r"\bmodule\s+(\w+)\b", _rcv._strip_comments(rtl_text)):
+        mod = mm.group(1)
+        blk = _rcv._module_portlist_block(rtl_text, mod)
+        if blk is None:
+            continue
+        segs = _rcv._split_top_level_commas(blk)
+        snames: List[str] = []
+        ok = True
+        for s in segs:
+            ss = s.strip()
+            if not ss:
+                ok = False
+                break
+            dm = _rcv._PORT_DECL_RE.match(ss)
+            if not dm or not dm.group(1):
+                ok = False
+                break
+            snames.append(dm.group(3))
+        if ok and sorted(snames) == want:
+            hits.append(mod)
+    return hits[0] if len(hits) == 1 else ""
 
 
 def reorder_top_ports(rtl_text: str, top: str,
