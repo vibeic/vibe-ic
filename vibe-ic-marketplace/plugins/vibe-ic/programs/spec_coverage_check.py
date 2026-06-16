@@ -376,42 +376,113 @@ _RTL_PORT_NOISE = {
 }
 
 
-def _rtl_reset_ports(rtl_text: Optional[str]) -> List[str]:
+def _rtl_reset_ports(rtl_text: Optional[str],
+                     tb_text: Optional[str] = None) -> List[str]:
     """Reset-shaped port names parsed from the authored RTL (best-effort).
 
     Returns the concrete reset port identifier(s) so the reset checklist item's
     coverage tokens are the design's REAL reset port(s) — exact, over-fit-free,
-    no-leak (a TB must drive the actual reset port to be counted)."""
+    no-leak (a TB must drive the actual reset port to be counted).
+
+    ORGANIC #770 r5 Step-2.7 — scan the DUT DESIGN modules (the TB-instantiated
+    top + reachable submodules), not just the FIRST module, so a multi-module RTL
+    whose top is not first does not lose a non-standard reset name (init_n/clr).
+    A reset port living ONLY in an un-instantiated helper is excluded (it is not
+    the bound design's reset — §4.05)."""
     if not rtl_text:
         return []
-    try:
-        _, ports = _SRC.parse_rtl_ports(rtl_text, None)
-    except Exception:
-        return []
-    seen, out = set(), []
-    for p in ports:
-        nm = p.name
-        if (nm.lower() not in _RTL_PORT_NOISE
-                and _is_reset_port_name(nm) and nm not in seen):
-            seen.add(nm)
-            out.append(nm)
+    seen: set = set()
+    out: List[str] = []
+    for mod in _dut_module_names(rtl_text, tb_text) or [None]:
+        try:
+            _, ports = _SRC.parse_rtl_ports(rtl_text, mod)
+        except Exception:
+            continue
+        for p in ports:
+            nm = p.name
+            if (nm.lower() not in _RTL_PORT_NOISE
+                    and _is_reset_port_name(nm) and nm not in seen):
+                seen.add(nm)
+                out.append(nm)
     return out
 
 
-def _rtl_port_name_set(rtl_text: Optional[str]) -> set:
-    """Lower-cased set of the authored RTL's port identifiers (best-effort).
-
-    Returns an EMPTY set when no usable port could be parsed, so the caller
-    skips the phantom-port cross-check rather than risk dropping real ports on
-    a parser miss. chip-AGNOSTIC: structural Verilog port parse only."""
-    if not rtl_text:
-        return set()
+def _rtl_module_port_names(rtl_text: str, module: Optional[str]) -> set:
+    """Lower-cased port identifiers of ONE module (or the first when module is
+    None). Empty on a parse miss. chip-AGNOSTIC."""
     try:
-        _, ports = _SRC.parse_rtl_ports(rtl_text, None)
+        _, ports = _SRC.parse_rtl_ports(rtl_text, module)
     except Exception:
         return set()
     return {p.name.lower() for p in ports
             if p.name and p.name.lower() not in _RTL_PORT_NOISE}
+
+
+def _dut_module_names(rtl_text: str, tb_text: Optional[str]) -> List[str]:
+    """ORGANIC #770 r5 Step-2.7 — the DUT design's module name(s): the module the
+    TESTBENCH instantiates (the authoritative DUT top) PLUS its reachable
+    submodules (modules it instantiates, transitively). When the TB / its
+    instantiation cannot be determined, fall back to EVERY module (the wider set
+    is no-leak biased for the never-driven/decoy negatives — they still block).
+
+    The point (§4.05): a `*tready`/reset port that lives ONLY in a HELPER module
+    the DUT top does NOT instantiate is NOT part of the bound design surface, so
+    a TB driving a TB-local same-named reg must not satisfy the coverage item."""
+    mods = re.findall(r"\bmodule\s+(\w+)\b", rtl_text)
+    if not mods:
+        return []
+    modset = set(mods)
+    # module -> set of submodule names it instantiates (`Name inst (...)`).
+    insts: Dict[str, set] = {}
+    for mm in re.finditer(r"\bmodule\s+(\w+)\b(.*?)\bendmodule\b",
+                          rtl_text, re.DOTALL):
+        body = mm.group(2)
+        sub = {im.group(1) for im in
+               re.finditer(r"\b([A-Za-z_]\w*)\s+[A-Za-z_]\w*\s*(?:#\s*\([^)]*\)\s*)?\(",
+                           body)
+               if im.group(1) in modset and im.group(1) != mm.group(1)}
+        insts[mm.group(1)] = sub
+    # the TB-instantiated top.
+    tops: List[str] = []
+    if tb_text:
+        for im in re.finditer(
+                r"\b([A-Za-z_]\w*)\s+[A-Za-z_]\w*\s*(?:#\s*\([^)]*\)\s*)?\(",
+                tb_text):
+            if im.group(1) in modset:
+                tops.append(im.group(1))
+    if not tops:
+        return mods  # can't tell which is the DUT → wider set (no-leak biased)
+    # BFS the reachable design from each TB-instantiated top.
+    reach: set = set()
+    frontier = list(tops)
+    while frontier:
+        m = frontier.pop()
+        if m in reach:
+            continue
+        reach.add(m)
+        frontier.extend(insts.get(m, ()))
+    return sorted(reach)
+
+
+def _rtl_port_name_set(rtl_text: Optional[str],
+                       tb_text: Optional[str] = None) -> set:
+    """Lower-cased set of the DUT design's port identifiers (best-effort).
+
+    Returns an EMPTY set when no usable port could be parsed, so the caller
+    skips the phantom-port cross-check rather than risk dropping real ports on
+    a parser miss. chip-AGNOSTIC: structural Verilog port parse only.
+
+    ORGANIC #770 r5 — `parse_rtl_ports` returns only the FIRST/chosen module, so
+    a MULTI-MODULE RTL whose top is NOT first lost the top's ports. r5 Step-2.7 —
+    do NOT blindly union ALL modules either (a HELPER-only `*tready`/reset port
+    would let a TB-local same-named reg satisfy the item — a §4.05 leak). Union
+    over the DUT DESIGN: the TB-instantiated top + its reachable submodules."""
+    if not rtl_text:
+        return set()
+    names: set = set()
+    for mod in _dut_module_names(rtl_text, tb_text) or [None]:
+        names |= _rtl_module_port_names(rtl_text, mod)
+    return names
 
 
 # ORGANIC #770 — a clocked (registered) block detector, for latency corroboration.
@@ -1117,6 +1188,9 @@ def _tb_exercises_handshake_region(tb_clean: str,
             return False
         # the driven signal must be a real DUT port (when the port set is known)
         # — a TB-local decoy reg never counts as exercising the DUT handshake.
+        # (ORGANIC #770 r5 — the port set is now UNIONED across ALL modules in
+        # `_rtl_port_name_set`, so a multi-module RTL whose top is not first no
+        # longer drops the real handshake port and force-empties this gate.)
         return rtl_ports_lower is None or sig.lower() in rtl_ports_lower
 
     high: set = set()
@@ -1466,7 +1540,7 @@ def run(stations: dict, rtl_text: Optional[str], tb_text: Optional[str],
     # the dominant conventions (rst_in / rst_n / srst / clr). Augment the reset
     # item with the authored RTL's actual reset port identifier(s) so a TB that
     # faithfully drives the real reset port is counted as covering reset.
-    rtl_reset_ports = _rtl_reset_ports(rtl_text)
+    rtl_reset_ports = _rtl_reset_ports(rtl_text, tb_text)
     if rtl_reset_ports:
         for it in items:
             if it.kind == "reset":
@@ -1493,7 +1567,7 @@ def run(stations: dict, rtl_text: Optional[str], tb_text: Optional[str],
             enum_members_all += it.coverage_tokens
 
     attribute_coverage(items, tb_text, enum_members_all,
-                       _rtl_port_name_set(rtl_text) if rtl_text else None)
+                       _rtl_port_name_set(rtl_text, tb_text) if rtl_text else None)
 
     # ── ORGANIC #770 — provenance / confidence tagging ──────────────────────
     # Tag each item STRUCTURAL vs PROSE_HEURISTIC and compute whether the RTL
@@ -1502,8 +1576,8 @@ def run(stations: dict, rtl_text: Optional[str], tb_text: Optional[str],
     # ADVISORY (block_eligible=False); STRUCTURAL gaps keep blocking. No-leak
     # biased: when no RTL is supplied (rtl_text None) every corroboration is
     # UNKNOWN, so NOTHING is downgraded — historical blocking power is preserved.
-    rtl_ports_lower = _rtl_port_name_set(rtl_text) if rtl_text else None
-    rtl_has_reset = bool(_rtl_reset_ports(rtl_text)) if rtl_text else None
+    rtl_ports_lower = _rtl_port_name_set(rtl_text, tb_text) if rtl_text else None
+    rtl_has_reset = bool(_rtl_reset_ports(rtl_text, tb_text)) if rtl_text else None
     rtl_has_clock = _rtl_has_clocked_block(rtl_text) if rtl_text else None
     # ORGANIC #770 r2 — does the RTL structurally implement a valid/ready
     # handshake (a port whose name matches the handshake-signal grammar)? Used to
