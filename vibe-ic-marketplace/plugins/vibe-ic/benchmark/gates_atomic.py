@@ -286,12 +286,28 @@ def main():
     #    ("whenever ... reset, assert <sig> for N cycles") but the RTL ANDs
     #    that output with the negated reset — held/re-asserted reset eats
     #    assertion cycles. Lesson→program promotion (third in the series).
+    # v1.0.93 addition (ORGANIC-20260617 — program-first escalation of the
+    # prose "MANDATORY pre-emit self-TB" discriminators; #718/#733/#741/#776):
+    #  * shift-implemented-as-rotate: spec describes a SHIFTER (not explicitly
+    #    rotate-only) but the RTL is an unambiguous barrel-ROTATE wrap. The
+    #    "shifts or rotates is NOT rotate-only → logical shift" lesson + the
+    #    mandatory all-ones>>max self-TB were prose-only; a fresh author read
+    #    them, cited them, then overrode them. Mechanized as a deterministic
+    #    emit-assert (high-precision rotate signature only; §4.05 disarmed by an
+    #    explicit rotate/circular spec). ZERO false fires over the audited set.
+    #  * waveform-peak-hold-dropped: spec requires a triangle/ramp peak-HOLD but
+    #    the RTL drops it (immediate direction toggle at the extreme, no
+    #    hold/dwell state). Same prose-override signature; disarmed by an
+    #    explicit no-hold / plain-sawtooth spec. Conservative (any hold state →
+    #    silent; under-firing permitted over a false block).
     _BLOCKING_CONFORMANCE_RULES = {"onebased-port-range",
                                    "fsm-output-style-mismatch",
                                    "port-missing",
                                    "zero-output-ports",
                                    "msbfirst-direction-mismatch",
-                                   "moore-output-reset-gated"}
+                                   "moore-output-reset-gated",
+                                   "shift-implemented-as-rotate",
+                                   "waveform-peak-hold-dropped"}
     blocking: list = []
     # ORGANIC #688 — harness-exact self-verify BLOCKs (standalone `-s <top>`
     # codegen / verilator lint) are emit-blocking: the scorer rejects the same

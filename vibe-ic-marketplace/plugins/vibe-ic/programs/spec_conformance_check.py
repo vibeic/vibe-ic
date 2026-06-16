@@ -39,6 +39,17 @@ Findings:
                                    output with the negated reset — a held or
                                    re-asserted reset then eats assertion
                                    cycles (held-reset window N-1 instead of N).
+    shift-implemented-as-rotate  : spec describes a SHIFTER (not explicitly
+                                   rotate-only) but the RTL carries an
+                                   unambiguous barrel-ROTATE wrap signature
+                                   (`(x<<n)|(x>>m)` opposite shifts of one x, or
+                                   `{x[a:0], x[W-1:b]}` zero-fill-free self-wrap).
+                                   A genuine rotate-only spec disarms it (§4.05).
+    waveform-peak-hold-dropped   : spec describes a triangle/ramp/sawtooth
+                                   generator that HOLDS the peak/trough but the
+                                   RTL toggles direction the instant it hits the
+                                   extreme with NO hold/dwell state. An explicit
+                                   no-hold / plain-sawtooth spec disarms it.
   WARN:
     reset-not-found              : spec declares a reset but no reset block found
     pipelined-width-not-parameterized : spec says "pipelined N-bit adder/mul" but
@@ -503,6 +514,182 @@ def _output_reset_gated(rtl_body: str, sig: str,
     return None
 
 
+# ---------------------------------------------------------------------------
+# ERROR: a SHIFTER spec implemented as a ROTATE
+# (ORGANIC-20260617-escalate-prose-mandatory-discriminator-selftbs — program-
+# first escalation of the prose "MANDATORY pre-emit self-TB" discriminator).
+# The lessons corpus already prescribes "'shifts or rotates' is NOT rotate-only
+# → LOGICAL shift" + a mandatory all-ones>>max self-TB, but a fresh clean-room
+# author repeatedly reads it, cites it, then overrides it. This mechanizes the
+# discriminator the lesson names as a deterministic emit-assert the author
+# cannot override.
+#
+# Spec half: the prose describes a SHIFTER ("shift" / "shifts or rotates" / a
+# shift opcode/mode) and does NOT make the operation rotate-only. §4.05
+# OVERRIDE — if the spec EXPLICITLY says the operation is rotate / rotate-only
+# / circular / barrel-rotate, the rule is disarmed (a genuine rotate design is
+# correct).
+#
+# RTL half: a HIGH-PRECISION barrel-ROTATE signature only — the unambiguous
+# idioms that can ONLY be a wrap-around rotate, never a logical shift:
+#   (1) OR of two OPPOSITE shifts of the SAME signal:
+#       (x << n) | (x >> m)   /   (x >> n) | (x << m)
+#       (a logical shift OR-fills with the OTHER end's bits of the SAME word —
+#        the defining wrap of a rotate; a logical shift zero-fills.)
+#   (2) a concat that wraps the SAME vector covering every bit with NO literal
+#       zero/one fill:  {x[a:0], x[W-1:b]}  (both parts bit-selects of one x).
+# A correct LOGICAL-shift design (`x >> n`, `x << n`, a zero-fill concat
+# `{1'b0, x[..]}` / `{x[..], 1'b0}`) carries NEITHER signature, so it NEVER
+# fires. ZERO-FALSE-FIRE is the binding constraint: when the structural form
+# is anything but these two unambiguous rotate idioms, the rule stays silent.
+# chip-AGNOSTIC: pure operator/concat structure + shift/rotate vocabulary.
+# ---------------------------------------------------------------------------
+_SHIFT_VERB_RE = __import__('re').compile(
+    r'\b(?:shift(?:s|ed|ing|er)?|logical[\s-]+shift|arithmetic[\s-]+shift)\b',
+    __import__('re').IGNORECASE)
+# explicit rotate-only / circular intent → §4.05 disarm
+_ROTATE_INTENT_RE = __import__('re').compile(
+    r'\b(?:rotat(?:e|es|ed|ing|or|ion)|circular(?:ly)?\s+shift|'
+    r'barrel[\s-]+rotat\w*|cyclic(?:ally)?\s+shift|wrap[\s-]?around)\b',
+    __import__('re').IGNORECASE)
+
+
+def _spec_describes_plain_shifter(spec_text: str) -> bool:
+    """True iff the prose describes a SHIFTER (shift vocabulary present) and
+    does NOT make the operation a rotate. §4.05: ANY explicit rotate / circular
+    / barrel-rotate / wrap-around / cyclic-shift token disarms the rule — a
+    genuine rotate-only design must emit. 'shifts or rotates' contains a rotate
+    token, so it is treated CONSERVATIVELY as ambiguous and the rule stays
+    silent (under-firing is permitted; a false block is not)."""
+    if not _SHIFT_VERB_RE.search(spec_text):
+        return False
+    if _ROTATE_INTENT_RE.search(spec_text):
+        return False
+    return True
+
+
+def _rtl_rotate_signatures(rtl_body: str) -> List[str]:
+    """Return the matched barrel-ROTATE idiom strings present in the RTL. Only
+    the two unambiguous wrap signatures (see the rule comment); a logical-shift
+    or zero-fill form matches NEITHER. Best-effort, zero-false-fire."""
+    import re
+    out: List[str] = []
+    # (1) OR of two OPPOSITE shifts of the SAME signal: (x<<n)|(x>>m) either order
+    # Each operand is `( <ident> <shiftop> <expr> )` or bare `<ident> <shiftop> <expr>`.
+    shift_operand = (r'\(?\s*([A-Za-z_]\w*)\s*(<<|>>)\s*'
+                     r'[^()|;]+?\)?')
+    or_pat = re.compile(
+        shift_operand + r'\s*\|\s*' + shift_operand)
+    for m in or_pat.finditer(rtl_body):
+        a_sig, a_op, b_sig, b_op = m.group(1), m.group(2), m.group(3), m.group(4)
+        if a_sig == b_sig and a_op != b_op:   # same signal, OPPOSITE directions
+            out.append(m.group(0).strip())
+    # (2) concat wrapping the SAME vector, every bit, NO literal fill:
+    #     {x[a:0], x[W-1:b]}  — both parts are bit-selects of the same x.
+    concat_pat = re.compile(
+        r'\{\s*([A-Za-z_]\w*)\s*\[[^\[\]]*\]\s*,\s*'
+        r'([A-Za-z_]\w*)\s*\[[^\[\]]*\]\s*\}')
+    for m in concat_pat.finditer(rtl_body):
+        # reject if a literal fill (1'b0 / 0 / 1'b1) appears anywhere in concat
+        whole = m.group(0)
+        if re.search(r"\b\d+'[bdh]|\{\s*\d", whole) or re.search(r"[,{]\s*\d", whole):
+            continue
+        if m.group(1) == m.group(2):          # same vector wrapped onto itself
+            out.append(whole.strip())
+    return out
+
+
+# ---------------------------------------------------------------------------
+# ERROR: a triangle/ramp generator that DROPS the spec-required PEAK/TROUGH HOLD
+# (same ORGANIC-20260617 program-first escalation). The lesson + anti-pattern
+# block + §4-E reword all say "keep the peak-hold unless the spec EXPLICITLY
+# forbids it", yet a fresh author drops it via §4-E. This mechanizes it.
+#
+# Spec half: describes a triangle / ramp / sawtooth waveform generator AND
+# EXPLICITLY requires the extreme to be HELD ("hold the peak", "peak held for N
+# cycles", "dwell at the top", "hold at the maximum"). §4.05 OVERRIDE — a spec
+# that explicitly FORBIDS the hold ("no hold", "do not hold", "immediately
+# reverse", "without dwell"), or a plain sawtooth / no-hold spec, must NOT
+# fire. Both an explicit-forbid phrase AND the absence of an explicit-hold
+# phrase disarm the rule.
+#
+# RTL half: an immediate direction REVERSAL at the extreme with NO hold/dwell
+# state — the up/down direction register toggles the same cycle the value hits
+# the peak/trough, and the design carries no `hold`/`dwell`/`pause` counter or
+# flag. ZERO-FALSE-FIRE is binding: a design that HAS any hold/dwell/pause
+# state never fires (we cannot prove the count without simulation, so any hold
+# scaffolding is treated as compliant — under-firing is permitted).
+# chip-AGNOSTIC: pure waveform vocabulary + structural direction-toggle shape.
+# ---------------------------------------------------------------------------
+_WAVEFORM_GEN_RE = __import__('re').compile(
+    r'\b(?:triangle|triangular|ramp|saw[\s-]?tooth)\b'
+    r'[^.!?]{0,40}?\b(?:wave(?:form)?|generat\w*|signal|counter|gen)\b'
+    r'|\b(?:wave(?:form)?|generat\w*|signal)\b[^.!?]{0,40}?'
+    r'\b(?:triangle|triangular|ramp|saw[\s-]?tooth)\b',
+    __import__('re').IGNORECASE)
+_HOLD_REQUIRE_RE = __import__('re').compile(
+    r'\b(?:hold(?:s|ing)?|held|dwell(?:s|ing)?|pause(?:s|d)?|stay(?:s|ed)?|'
+    r'remain(?:s|ed)?)\b[^.!?]{0,40}?'
+    r'\b(?:peak|trough|maximum|minimum|max|min|top|bottom|extreme|apex)\b'
+    r'|\b(?:peak|trough|maximum|minimum|max|min|top|bottom|extreme|apex)\b'
+    r'[^.!?]{0,40}?\b(?:hold(?:s|ing)?|held|dwell\w*|paused?)\b',
+    __import__('re').IGNORECASE)
+_HOLD_FORBID_RE = __import__('re').compile(
+    r'\b(?:no|without|not|never|don.?t|do\s+not)\b[^.!?]{0,30}?'
+    r'\b(?:hold(?:s|ing)?|dwell\w*|pause\w*)\b'
+    r'|\bimmediately\s+revers\w*'
+    r'|\b(?:hold(?:s|ing)?|dwell\w*|pause\w*)[^.!?]{0,20}?'
+    r'\b(?:forbidden|disallowed|prohibited)\b',
+    __import__('re').IGNORECASE)
+
+
+def _spec_requires_peak_hold(spec_text: str) -> bool:
+    """True iff the prose describes a triangle/ramp/sawtooth generator AND
+    explicitly requires the peak/trough to be HELD, AND does not explicitly
+    forbid the hold. Sentence-scoped so a forbid clause elsewhere disarms it."""
+    from _specrtl_common import _soft_unwrap_sentences
+    if not _WAVEFORM_GEN_RE.search(spec_text):
+        return False
+    if _HOLD_FORBID_RE.search(spec_text):
+        return False                          # §4.05: explicit no-hold spec
+    for sent in _soft_unwrap_sentences(spec_text):
+        if _HOLD_REQUIRE_RE.search(sent):
+            return True
+    return False
+
+
+def _rtl_drops_peak_hold(rtl_body: str) -> Optional[str]:
+    """Return the toggled direction signal when the RTL immediately reverses at
+    the extreme with NO hold/dwell scaffolding, else None. Conservative: any
+    hold/dwell/pause register or flag in the design disarms the check (we
+    cannot count the hold without simulation). Looks for a direction/up-down
+    register `dir <= ~dir` / `dir <= !dir` co-located with a peak/trough
+    comparison, and the absence of a hold counter."""
+    import re
+    # disarm if any hold/dwell/pause state exists — cannot prove the count
+    if re.search(r'\b\w*(?:hold|dwell|pause)\w*\b', rtl_body, re.IGNORECASE):
+        return None
+    # a direction toggle: `<sig> <= ~<sig>` / `<sig> <= !<sig>` / `<sig> <= <sig> ^ 1`
+    toggles = set()
+    for m in re.finditer(
+            r'\b([A-Za-z_]\w*)\s*<=\s*(?:[!~]\s*\1\b|\1\s*\^\s*1\b)', rtl_body):
+        toggles.add(m.group(1))
+    if not toggles:
+        return None
+    # require a peak/trough comparison against an extreme in the same body
+    # (==/>=/<= against a max/min literal or all-ones/zero pattern, or a named
+    #  parameter that reads like a peak/max/min/top/bottom).
+    has_extreme_cmp = bool(re.search(
+        r'(?:==|>=|<=|>|<)\s*(?:'
+        r"\{[^}]*1'b1[^}]*\}"                 # all-ones concat
+        r"|\d+'[bdh][0-9a-fA-F_]+"            # sized literal
+        r"|[A-Za-z_]\w*(?:MAX|MIN|PEAK|TOP|BOTTOM|HIGH|LOW|FULL|AMPL\w*)\b"
+        r')', rtl_body, re.IGNORECASE))
+    if not has_extreme_cmp:
+        return None
+    return sorted(toggles)[0]
+
+
 def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
           rtl_resets: dict, rtl_registered: Optional[bool],
           path: str, rtl_body: str = '', spec_text: str = '') -> List[Finding]:
@@ -683,6 +870,40 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
                     f"(held-reset contiguous window comes out N-1, not N). "
                     f"Drive '{sig}' from the FSM state alone; do not gate it "
                     f"with the reset."))
+
+    # ---- SHIFTER spec implemented as a ROTATE (ERROR; lesson→program) ------
+    # Spec describes a shifter and is NOT explicitly rotate-only, but the RTL
+    # carries an unambiguous barrel-ROTATE wrap signature. Mechanizes the prose
+    # "MANDATORY all-ones>>max self-TB" discriminator. See _rtl_rotate_signatures.
+    if spec_text and rtl_body and _spec_describes_plain_shifter(spec_text):
+        for sig in _rtl_rotate_signatures(rtl_body):
+            f.append(Finding(path, 'ERROR', 'shift-implemented-as-rotate',
+                rtl_name or 'module',
+                f"spec describes a SHIFTER (not explicitly rotate-only) but the "
+                f"RTL implements a wrap-around ROTATE: `{sig}`. A logical shift "
+                f"fills the vacated bits with zeros; this wraps the shifted-out "
+                f"bits back in (the MANDATORY all-ones >> max self-TB exposes it: "
+                f"a rotate yields all-ones, a logical shift yields a single set "
+                f"bit). Use the zero-fill shift (`x >> n` / `x << n`) unless the "
+                f"spec EXPLICITLY says rotate/circular."))
+            break  # one finding per module is enough to block emit
+
+    # ---- triangle/ramp generator drops the spec PEAK-HOLD (ERROR; lesson→prog)
+    # Spec explicitly requires the extreme to be HELD; the RTL immediately
+    # reverses at the peak/trough with no hold/dwell state. Mechanizes the prose
+    # "keep peak-hold unless spec forbids" discriminator. See _rtl_drops_peak_hold.
+    if spec_text and rtl_body and _spec_requires_peak_hold(spec_text):
+        toggled = _rtl_drops_peak_hold(rtl_body)
+        if toggled:
+            f.append(Finding(path, 'ERROR', 'waveform-peak-hold-dropped',
+                toggled,
+                f"spec requires the waveform to HOLD the peak/trough, but the "
+                f"RTL toggles the direction signal '{toggled}' the instant the "
+                f"value reaches the extreme — there is no hold/dwell state, so "
+                f"the peak is one cycle wide and the spec dwell is dropped. Add "
+                f"a hold counter that pauses the direction toggle for the "
+                f"spec-stated cycle(s) at the peak/trough (unless the spec "
+                f"EXPLICITLY forbids the hold / is a plain sawtooth)."))
 
     # ---- FSM next-state transition completeness (ERROR; #522) --------------
     # Recurring across benchmark clean-room rounds 1-3: a fresh author makes a
