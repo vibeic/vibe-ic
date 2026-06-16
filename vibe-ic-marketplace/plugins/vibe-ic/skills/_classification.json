@@ -70,6 +70,7 @@
         "equivalence-check",
         "field-agent-loop",
         "formal-verify",
+        "gatekeeper-loop",
         "hls-c2rtl",
         "mixed-signal-cosim",
         "open-benchmark-methodology",

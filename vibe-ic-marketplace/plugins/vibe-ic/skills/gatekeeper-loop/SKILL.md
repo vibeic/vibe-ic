@@ -1,0 +1,432 @@
+---
+name: gatekeeper-loop
+description: Infinite-loop single gatekeeper agent that OWNS main and is the SOLE merger of PRs. Invoke as a cron prompt; each tick polls open non-draft PRs against main (poll_prs.py), runs the MACHINE gates (gatekeeper_review.py — required status checks, cadence-aware) on base=origin/main head=PR-branch, and on green runs the ONE irreducible agent gate (Step-2.7 adversarial review). Machine-red OR a reproducible HIGH agent finding -> `gh pr review --request-changes` with a 繁中 5-section comment; otherwise the PR ENQUEUES to a SERIALIZED merge queue guarded by a repo-level .merge.lock — rebase onto current origin/main, RE-RUN required checks on the rebased tree (catches semantic conflicts a 3-way merge misses), squash-merge (one PR = one squash commit = one version bump, honoring one-version-per-push), release lock, next. Hard rules: the gatekeeper is a DISTINCT identity from the PR author (NEVER self-merge an authored PR), NEVER force/--no-verify, and a documented break-glass path exists so a PR that FIXES a wedged gate cannot deadlock the queue. STOP CONDITION = healthy idle when no open PR; never self-terminate.
+---
+
+
+<!-- WAVE_76_CHIP_AGNOSTIC_BANNER -->
+
+> **Case-study notation.** This skill uses `PR-A` / `branch-A` as the
+> canonical example PR — substitute the real PR number and branch. The
+> rules themselves are chip-AGNOSTIC and apply to any PR against `main`,
+> independent of which IC / vendor / SKU the PR touches. When you adopt
+> this skill, swap `PR-A` → `#<your PR number>` and `branch-A` →
+> `<your head ref>`; the structural gates and the merge-queue protocol
+> do not depend on those values.
+
+# Gatekeeper Loop — Single-Owner PR-Merge Loop for `main`
+
+## Purpose
+
+The gatekeeper is the **review-gate-and-merge** half of the Vibe-IC
+contribution model. Where `core-agent-loop` is an issue-**fix** loop
+(poll open issues → ship a fix → close), the gatekeeper is a PR-**merge**
+loop (poll open PRs → gate them → squash-merge the green ones). It is the
+**single agent that owns `main`** and the **sole party allowed to merge**.
+Centralising the merge authority in one looped identity is what closes
+the *author = approver* hole: no contributor merges their own work; every
+PR passes through the same machine gates and the same one agent gate
+before it lands.
+
+The loop is **infinite** and **stateless across ticks** (all state lives
+in git + GitHub — the PR's open/merged/closed state, its review state,
+its required-check statuses, the `.merge.lock` file). Every cron wake-up
+is a fresh, independent tick:
+
+1. **poll** open, non-draft PRs against `main` (`poll_prs.py`).
+2. for each PR: run the **machine gates** (`gatekeeper_review.py`).
+   Any machine gate red → `request-changes` with the failing program
+   output, in a 繁中 5-section comment; continue to the next PR.
+3. machine-green → run the **one agent gate** (Step-2.7 adversarial
+   review). Only a **reproducible HIGH** finding blocks → request-changes;
+   continue.
+4. green + no reproducible HIGH → **enqueue to the serialized merge
+   queue**: acquire `.merge.lock`, rebase onto current `origin/main`,
+   **re-run** the required checks on the rebased tree, squash-merge,
+   release the lock, next.
+
+The loop is **chip-AGNOSTIC**: every gate and queue rule reads generic PR
+metadata + program verdicts; nothing references `PR-A`, any IC name,
+`Vendor`, or any SKU as control logic.
+
+## The machine-vs-agent-judgment split (the central doctrine)
+
+This is the load-bearing idea, and it mirrors the rest of the plugin's
+"program-first, agent-only-on-failure" doctrine:
+
+| Layer | What it is | How it runs | Who/what decides |
+|-------|------------|-------------|------------------|
+| **Machine gates** | The **required status checks** — the full deterministic gate set (`gatekeeper_review.py`: the plugin test suite the CI way, `source_chip_agnostic_check.py`, `marketplace_version_sync_check.py`, `version_bump_monotonic_check.py`, `git_prohibition_guard.py`, `full_suite_run_check.py`, the per-step compliance checkers, …) | DETERMINISTICALLY, cadence-aware (see §Cadence) | a PROGRAM exit code — no LLM |
+| **The one agent gate** | **Step-2.7 adversarial review** — the *irreducible* judgement: General-not-overfit / §4.05 no-leak / root-cause-not-bypass | the gatekeeper agent reads the diff and tries to BREAK it | an LLM, but ONLY blocks on a **reproducible HIGH** |
+
+Everything that **can** reduce to a program **is** a machine gate; the
+agent gate is the single residue that cannot. The poll itself
+(`poll_prs.py`) is deterministic too — it enumerates candidates and makes
+**no** merge decision. Judgement enters the loop in exactly one place:
+Step-2.7. Anywhere else, "the agent decided" is a smell.
+
+## The four-step loop
+
+### Step 1 — poll
+
+Run **before** any other action, deterministically:
+
+```bash
+python3 plugins/vibe-ic/skills/gatekeeper-loop/programs/poll_prs.py
+```
+
+The program lists every open, **non-draft** PR against `main`,
+**newest-first** (highest PR number first). Exit codes are the cron
+driver's signal:
+
+| rc | Meaning | Gatekeeper action |
+|----|---------|-------------------|
+| 0  | No actionable PRs | Output `(no actionable PRs)` and idle this tick (healthy idle — see §STOP CONDITION) |
+| 1  | ≥1 actionable | Process each PR listed, newest-first |
+| 2  | I/O / auth error | Log + exit; retry next tick (do NOT treat as actionable) |
+
+One rule: **actionable = ANY open, non-draft PR targeting `main`.** A
+draft PR is the author still declaring "not ready" — excluded (the author
+has not asked for the gate). No label gating, no comment classifier. The
+poll surfaces `mergeable` / `mergeStateStatus` / `labels` as **advisory
+context only** — it never filters on them. A PR GitHub currently reports
+`CONFLICTING` is **still** actionable, because the gatekeeper must eject
+it back to the author; silently dropping it from the poll would **wedge**
+the PR with no path forward (a §4.05 leak at the poll layer — the poll
+must not mask a PR that needs the gate to say "fix your branch").
+
+### Step 2 — machine gates (required status checks)
+
+For each actionable PR, run the deterministic gate aggregator against
+`base=origin/main`, `head=<the PR branch>`:
+
+```bash
+git fetch origin
+python3 plugins/vibe-ic/skills/gatekeeper-loop/programs/gatekeeper_review.py \
+    --repo <owner/repo> --pr <num> --base origin/main --head <headRef>
+```
+
+`gatekeeper_review.py` is the **machine-gate aggregator** — it checks out
+the PR head against current `origin/main`, runs the required status checks
+**cadence-aware** (§Cadence), and returns:
+
+- **exit 0** — all required checks green → proceed to Step 2.7.
+- **exit 1** — ≥1 required check RED → the gatekeeper **request-changes**.
+
+On a RED, request changes with the **verbatim failing program output**,
+in a 繁體中文 5-section comment (see §Comment shape), then **continue**
+to the next PR — do NOT block the queue on a red PR:
+
+```bash
+gh pr review <num> --request-changes --body-file <comment_file.md>
+```
+
+> **why this is a program, not judgement:** "did the suite pass", "is the
+> version monotonically bumped", "is the source chip-agnostic" are all
+> exit-code questions. No LLM reads them. The gatekeeper only *relays*
+> the failing output into the review.
+
+### Step 2.7 — the one agent gate (adversarial review)
+
+When **and only when** the machine gates are green, run the irreducible
+agent-judgment gate on the PR diff. This is the Step-2.7 adversarial
+review doctrine carried over from `core-agent-loop` — **try to BREAK the
+change, do not validate it** — with three concrete attack lenses:
+
+1. **General-not-overfit** — does the change encode a chip / vendor / SKU
+   / benchmark-name literal as *logic* (vs the chip-agnostic deny-list /
+   structural form)? A green `source_chip_agnostic_check.py` catches the
+   *known* deny-list tokens; the agent gate catches a *novel* overfit the
+   deny-list hasn't learned yet (e.g. a magic constant tuned to one
+   golden file, a regex that only matches the motivating example).
+2. **§4.05 no-leak** — does a relaxation / new SKIP / widened guard make a
+   gate that was BLOCKING a real defect now PASS it? A relaxation must
+   never mask a real defect. Re-derive: what shape did this gate block
+   before, and does the diff let that shape through now?
+3. **Root-cause-not-bypass** — does the change fix the cause, or
+   `--no-verify` / defer / partial / silently-swallow it? A bypass that
+   makes the symptom disappear without removing the cause is a HIGH.
+
+Spawn independent adversarial reviewers (e.g. `codex-adversarial-review`)
+against the PR diff with these lenses. **Only a finding the reviewer can
+REPRODUCE blocks.** A speculative "this might…" without a reproduction is
+NOT a block — it is at most a review comment. On a reproducible HIGH,
+`request-changes` with the reproduction in the 繁中 comment, then
+continue. No reproducible HIGH → the PR is **mergeable**, proceed to
+Step 2.9.
+
+> **why_not_bucket_a (the judgment residual):** whether a regex is
+> "general" or "tuned to one example", whether a widened guard "masks a
+> real defect", and whether a diff "fixes the cause or hides the symptom"
+> all require reading the change's INTENT against the spec — open-ended
+> reading no regex settles. The *programmable* half (the known
+> deny-list, the version invariants, the full-suite gate) is already in
+> the machine gates; Step-2.7 is the single LLM residue.
+
+### Step 2.9 — serialized merge queue (the lock + rebase + re-run)
+
+A green PR does **not** merge immediately. It **enqueues** to a
+**serialized merge queue**: at most one PR merges at a time, repo-wide,
+so two green PRs can't both rebase-and-merge against the same base and
+land a **semantic conflict** that neither one's checks saw. Serialise
+with a repo-level `.merge.lock` reusing the `_runner_lock.py` PID-lock
+pattern (the same single-driver mechanism the one-shot runners use):
+
+```python
+import sys
+sys.path.insert(0, "plugins/vibe-ic/programs")
+import _runner_lock
+
+# repo root is the "project" the lock keys on; runner_name names the queue.
+lock = _runner_lock.acquire(repo_root, runner_name="gatekeeper-merge-queue")
+if lock is None:
+    # Another gatekeeper instance holds the queue (CONCURRENT_RUN_REFUSED
+    # was printed, naming the live holder pid). There must only ever be
+    # ONE gatekeeper, so this means a previous tick is still mid-merge —
+    # back off and retry this PR next tick. NEVER force the lock.
+    sys.exit(0)
+try:
+    #   1. git fetch origin
+    #   2. rebase the PR branch onto CURRENT origin/main (not the base it
+    #      was opened against — the queue may have moved main since)
+    #   3. RE-RUN the required checks (gatekeeper_review.py) on the REBASED
+    #      tree. A 3-way merge can be clean yet the rebased code semantically
+    #      conflict (e.g. a function this PR calls was renamed by a PR that
+    #      merged five minutes ago); only a re-run on the rebased tree
+    #      catches it.
+    #   4a. rebased checks GREEN -> squash-merge (one squash commit).
+    #   4b. rebased checks RED   -> EJECT: request-changes with the post-
+    #       rebase failure, do NOT merge. The PR goes back to the author.
+finally:
+    lock.release()   # ALWAYS release — even on eject/exception
+```
+
+The **squash-merge** is load-bearing: **one PR = one squash commit = one
+version bump**, honoring the **one-version-per-push** rule. The PR's diff
+must already bump `plugin.json` + `marketplace.json` (a machine gate:
+`version_bump_monotonic_check.py` + `marketplace_version_sync_check.py`);
+the squash collapses the PR's internal commits into the single landing
+commit that carries that one bump. Never merge-commit or rebase-merge a
+multi-commit PR (that would land several version-bumping commits).
+
+```bash
+gh pr merge <num> --squash --delete-branch
+```
+
+The merge uses `--squash` and NEVER `--admin` / `--force` (see §Hard
+rules). After release, the loop moves to the next PR; the next PR rebases
+onto the **now-advanced** `origin/main`, so each landing is serialized and
+re-validated against the latest tree.
+
+> **why re-run on the rebased tree is not optional:** the PR's own CI ran
+> against the base it was opened on. Between then and now, the queue has
+> merged other PRs. A clean 3-way merge proves the *text* doesn't
+> conflict; it does NOT prove the *behaviour* still holds. Re-running the
+> required checks on the rebased tree is the only thing that catches a
+> semantic conflict — this is exactly the class of bug a serialized merge
+> queue exists to prevent.
+
+## Hard rules (non-negotiable)
+
+| # | Rule | Reason | Enforced by |
+|---|------|--------|-------------|
+| 1 | **Distinct identity** — the gatekeeper is a DIFFERENT identity from the PR author; it MUST NEVER merge a PR it itself authored | Self-merge rebuilds the *author = approver* hole the whole loop exists to close | §Self-merge guard below + `git_prohibition_guard.py` family |
+| 2 | NEVER `gh pr merge --admin` / `--force` / bypass branch protection | Bypasses the required status checks (the machine gates) | `git_prohibition_guard.py` |
+| 3 | NEVER `git push --force` / `git commit --no-verify` / `git reset --hard` on `main` | Loss of history; bypasses pre-commit gates | `git_prohibition_guard.py` |
+| 4 | NEVER merge a multi-commit PR with merge-commit / rebase-merge — squash only | one PR = one squash commit = one version bump (one-version-per-push) | `--squash` only; version gates |
+| 5 | NEVER use chip/vendor/SKU string literals as detection logic in any gate | gates must be general | `source_chip_agnostic_check.py` |
+| 6 | ALWAYS release `.merge.lock` (even on eject / exception) and NEVER force-steal a live lock | a stuck lock must heal via the dead-PID path, not a steal | `_runner_lock.py` (atexit/signal release + dead-pid cleanup) |
+
+### Self-merge guard (Hard rule #1, the author≠approver invariant)
+
+Before enqueuing a PR to the merge queue, the gatekeeper MUST confirm the
+PR author is **not** the gatekeeper's own identity:
+
+```bash
+# the PR author login is in the poll report (`author` field) and via:
+gh pr view <num> --json author -q .author.login
+# the gatekeeper's own identity:
+gh api user -q .login        # (or the bot/app login the gatekeeper runs as)
+```
+
+If `pr_author_login == gatekeeper_login`, the gatekeeper MUST NOT merge.
+It leaves the PR for a **different** reviewer/merger and posts a 繁中
+comment stating it cannot self-merge (author = approver is forbidden).
+This is the structural reason there is exactly **one** gatekeeper identity
+and it does **not** also author plugin PRs — so this guard can never be
+the thing blocking the queue under normal operation. (If the gatekeeper
+*must* land its own change, that change goes through a human or a second
+distinct merger — never a self-approve.)
+
+### Break-glass override (so a wedged gate can't deadlock the queue)
+
+A failure mode the loop MUST survive: **a required gate is itself broken**
+(e.g. `gatekeeper_review.py` crashes, or a machine gate has a bug that
+red-flags every PR). If the *only* fix is a PR that repairs that gate, the
+queue deadlocks — the broken gate blocks the very PR that would fix it.
+
+**Break-glass protocol** (documented, auditable, narrow):
+
+1. **Eligibility.** Break-glass applies ONLY to a PR whose diff is scoped
+   to **fixing the wedged gate itself** (the gate program + its tests) —
+   never to a feature/IC PR. The gatekeeper confirms the PR touches only
+   the gate machinery and carries a `break-glass: <gate>` declaration in
+   its body naming the wedged gate and a reproduction of the wedge.
+2. **Human co-sign.** Break-glass requires an explicit second human
+   approval recorded on the PR (`gh pr review --approve` by a distinct
+   maintainer) — it is NOT a unilateral gatekeeper action. This preserves
+   author≠approver even in the escape hatch.
+3. **Reduced gate set, never zero gates.** The wedged gate is the ONLY
+   check skipped; **every other** required check still runs on the rebased
+   tree. The merge still uses `--squash`, never `--admin`/`--force`. (We
+   bypass the BROKEN gate, not branch protection.)
+4. **Self-healing follow-up.** Immediately after the gate-fix lands, the
+   gatekeeper re-runs the full machine gates (now including the repaired
+   gate) on `origin/main` to confirm the wedge is gone, and the normal
+   loop resumes — the next tick re-validates every still-open PR against
+   the repaired gate. The break-glass event is recorded in the PR (the
+   declaration + the human co-sign + the post-merge re-run output) so it
+   is fully auditable.
+
+Break-glass is deliberately painful (scoped diff + human co-sign +
+reduced-not-zero gates + post-merge re-validation) so it can only ever be
+used for its one legitimate purpose: un-wedging a broken gate. It can
+never be used to fast-path a normal PR.
+
+## Cadence (machine-gate test cost)
+
+The machine gates honor the SAME test cadence as the rest of the plugin so
+gatekeeping a routine patch-bump PR doesn't pay the full-suite cost:
+
+- **PATCH-bump PR** (`x.y.Z`, Z>0) → `gatekeeper_review.py` runs the
+  TARGETED regression (the PR's new `test_v*` + the touched module's
+  tests + an affected-family `-k` sweep + `source_chip_agnostic_check.py`).
+- **MINOR-milestone PR** (`x.y.0`) → the FULL both-tree suite the CI way,
+  green required before merge — the periodic cross-module safety net.
+
+The patch rollover (`x.y.99 → x.(y+1).0`) makes the milestone full-test
+land automatically. The **rebased-tree re-run** in Step 2.9 uses the same
+cadence (targeted for a patch, full for a milestone).
+
+## Comment shape (繁體中文, 5 sections)
+
+Every `request-changes` (machine-red or reproducible-HIGH) posts a
+繁體中文 comment in this exact 5-section shape:
+
+```
+Gatekeeper 已 request-changes：PR #<num>（head=<branch>）
+
+**問題**：<重述 PR 的目標 + 觸發 request-changes 的 gate / 發現>
+**根因**：<machine gate 的失敗類別，或 Step-2.7 對抗發現的根因>
+**證據**：
+    <失敗 gate 的逐字輸出，或可重現的 HIGH 對抗重現步驟與輸出>
+**要求**：<請作者修正什麼，才能重新進入 gate>
+**機制說明**：本 PR 由單一 gatekeeper 把關 main；通過 machine gates（required checks）+ Step-2.7 對抗審查（唯一 agent 判斷關卡）後，才會進入序列化合併佇列、rebase 到最新 origin/main、在 rebase 樹上重跑 required checks，並以 squash 合併（一 PR＝一 squash commit＝一次版本 bump）。本機從不 self-merge、從不 --force / --no-verify。
+```
+
+A successful merge is recorded by the squash-merge itself (and the deleted
+branch); no comment is required on the happy path, though the gatekeeper
+MAY post a 繁中 `已 squash-merge：<sha>` note.
+
+## Compliance gate (mandatory)
+
+After producing the 繁體中文 request-changes comment text (before posting),
+save it to a file and run the deterministic publish-layer gate:
+
+```bash
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic/skills/gatekeeper-loop/compliance.yaml \
+    <comment_file.md>
+```
+
+Exit 0 = PASS (post the comment), exit 1 = FAIL with the missing sections
+listed. The gate enforces the canonical 5-section shape (`問題` / `根因` /
+`證據` / `要求` / `機制說明`), the `Gatekeeper 已 request-changes：PR #`
+header, the squash one-version-per-push mention, and a chip-AGNOSTIC
+publish-layer scan. Patch and re-run until PASS, THEN post the comment.
+
+## STOP CONDITION
+
+The cron continues **indefinitely**. The gatekeeper does **not**
+self-terminate — it stays available to gate any future PR. A tick that
+produces `(no actionable PRs)` is a **healthy idle** state, not a stop
+signal. There is no "done": the gatekeeper is the standing owner of
+`main`. (This is the PR-loop analogue of the core-agent's "no actionable
+issues" healthy idle.)
+
+## State
+
+The gatekeeper is **stateless across cron ticks**. All state lives in:
+
+- **git** — `main`'s commit history, each PR branch's state.
+- **GitHub** — PR open/merged/closed, review state (`request-changes` /
+  `approved`), the required-check statuses.
+- **the filesystem** — the `.merge.lock` file (held only WHILE a single
+  merge is in flight, released on exit/signal/atexit per `_runner_lock.py`;
+  a crashed holder's lock is cleaned via the dead-PID path on the next
+  acquire).
+
+Every tick is independent — no `state.json`. This matches the core-agent's
+stateless design and for the same reason: the gatekeeper reacts to one PR
+at a time and the response is fully captured by the PR's review/merge
+transition + the transient lock.
+
+## Cron-invocation template
+
+```
+Run /gatekeeper-loop against <owner/repo> (base=main).
+
+Each tick must:
+1. python3 plugins/vibe-ic/skills/gatekeeper-loop/programs/poll_prs.py --repo <owner/repo> --base main
+2. If rc=0 → output "(no actionable PRs)" and exit (healthy idle).
+3. If rc=2 → log + exit. Retry next tick.
+4. If rc=1 → for each PR in `actionable[]` (newest-first):
+     a. SELF-MERGE GUARD: if the PR author == the gatekeeper's own
+        identity, do NOT merge — leave it for a distinct merger, post the
+        author≠approver note, continue.
+     b. git fetch origin; run gatekeeper_review.py (machine gates,
+        cadence-aware) on base=origin/main head=<headRef>.
+        - RED → gh pr review --request-changes with the verbatim failing
+          output in the 繁中 5-section comment; continue.
+     c. GREEN → Step-2.7 adversarial review on the PR diff
+        (General-not-overfit / §4.05 no-leak / root-cause-not-bypass).
+        Only a REPRODUCIBLE HIGH blocks → request-changes with the
+        reproduction; continue.
+     d. GREEN + no reproducible HIGH → enqueue to the SERIALIZED merge
+        queue: acquire .merge.lock (_runner_lock.py); rebase onto current
+        origin/main; RE-RUN required checks on the rebased tree;
+        - rebased GREEN → gh pr merge <num> --squash --delete-branch
+          (one PR = one squash commit = one version bump).
+        - rebased RED → eject: request-changes with the post-rebase
+          failure; do NOT merge.
+        Release the lock (always, even on eject/exception); next PR.
+Hard rules: distinct identity (never self-merge an authored PR), never
+--admin/--force/--no-verify, squash-only, always release the lock. A
+PR that fixes a wedged gate uses the documented BREAK-GLASS path
+(scoped diff + human co-sign + reduced-not-zero gates + post-merge
+re-validation). See SKILL.md §Hard rules and §Break-glass override.
+End of tick. The cron runs indefinitely — never self-terminate.
+```
+
+Save as the CronCreate `prompt` field; pick a short interval (e.g. 3-4
+minutes) so freshly-pushed PRs are gated promptly.
+
+## Reference
+
+Deterministic gates + programs backing this skill (the loop SCAFFOLD is
+fully programmable; only Step 2.7 is genuine LLM judgment):
+
+- Poll / actionability (every open, non-draft PR against `main`,
+  newest-first): `skills/gatekeeper-loop/programs/poll_prs.py`
+- Machine-gate aggregator (required status checks, cadence-aware):
+  `gatekeeper_review.py` (the required-check runner this loop invokes)
+- Serialized merge-queue lock (one merge in flight, dead-PID self-heal):
+  `programs/_runner_lock.py`
+- Forbidden git/gh ops (rules 2-3): `programs/git_prohibition_guard.py`
+- Chip-AGNOSTIC source scan (rule 5): `programs/source_chip_agnostic_check.py`
+- Version equality (one-version-per-push): `programs/marketplace_version_sync_check.py`
+- Version strict-monotonic bump: `programs/version_bump_monotonic_check.py`
+- Full-suite (not subset) pytest run: `programs/full_suite_run_check.py`
+- Issue-fix counterpart (the other half of the contribution model):
+  `vibe-ic:core-agent-loop`
+- Adversarial-review skill used at Step 2.7: `vibe-ic:codex-adversarial-review`
