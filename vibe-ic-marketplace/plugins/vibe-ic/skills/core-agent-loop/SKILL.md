@@ -242,9 +242,11 @@ not after the field agent reopens.
 ### Step 3 — push
 
 ```bash
-# Bump patch version in BOTH locations:
+# Bump version in BOTH locations:
 #   plugins/vibe-ic/.claude-plugin/plugin.json     ("version": ...)
 #   .claude-plugin/marketplace.json                 (.plugins[0].version)
+# VERSION SCHEME (BINDING, 2026-06-17): patch段 0..99 (兩位數，不進三位數).
+#   x.y.99 之後 = x.(y+1).0  (minor +1, patch 歸 0). 例：1.0.99 → 1.1.0 → 1.1.1.
 # Version invariants are DETERMINISTIC gates, not prose:
 #   - equality (plugin.json == marketplace.json)  -> enforced by
 #     programs/marketplace_version_sync_check.py
@@ -253,12 +255,22 @@ not after the field agent reopens.
 #        (e.g. version_bump_monotonic_check.py --plugin-json <pj> \
 #              --marketplace-json <mj> --base HEAD)
 
-# Verify locally — HARD RULE: run the FULL suite (BOTH test trees), not a
-# subset. A subset run once let a real regression onto main. That "did the
-# agent run the full suite, not a -k/single-file subset" check is enforced by
-# programs/full_suite_run_check.py (feed it the pytest command you ran).
+# Verify locally — TEST CADENCE (BINDING, 2026-06-17):
+#   * PATCH bump (x.y.Z, Z>0)  -> TARGETED regression only: the new
+#     test_v<M>_<m>_<p>_*.py + the touched module's test file(s) + a broad `-k`
+#     sweep over the affected families + source_chip_agnostic_check.py. Do NOT
+#     run the full both-tree suite on a patch — it costs ~14 min and is mostly
+#     redundant when a patch touches 1-2 programs.
+#   * MINOR MILESTONE (x.y.0 — 1.1.0, 1.2.0, …) -> run the FULL suite the CI way
+#     (BOTH test trees), green required, before pushing that milestone. This is
+#     the periodic safety net for cross-module regressions. The patch rollover
+#     (x.y.99 -> x.(y+1).0) makes the milestone full-test land automatically.
+#   full_suite_run_check.py still applies WHEN you run the full suite (it asserts
+#   you ran the whole thing, not a -k subset) — it does not force running it
+#   every version, so this cadence is policy, not a gate change.
 # pytest.ini testpaths pins the trees:
-( cd "$PLUGIN_ROOT" && python3 -m pytest -q )   # collects the full suite
+( cd "$PLUGIN_ROOT" && python3 -m pytest -q )   # FULL suite — only at x.y.0 milestones
+# patch bump: python3 -m pytest -q programs/tests/<new_test>.py programs/tests/<module_test>.py -k "<affected families>"
 python3 -m pytest -q mcp-eda/test        # if MCP server touched
 # (added a program? -> programs/INDEX.md via tools/gen_programs_index.py;
 #  added a skill? -> compliance.yaml + tests/test_compliance.py. The tests/ gates enforce both.)
@@ -393,15 +405,17 @@ Each tick must:
 3. If rc=1 → for each entry in `actionable[]`:
      a. Reproduce the bug from issue body + comments.
      b. Write a chip-AGNOSTIC fix + tests.
-     c. Bump patch version (plugin.json + marketplace.json),
-        commit (`vX.Y.Z — for #<num> <summary>`), push origin main
-        (NO --force, NO --no-verify).
+     c. Bump version (plugin.json + marketplace.json): patch 0..99,
+        x.y.99 → x.(y+1).0; commit (`vX.Y.Z — for #<num> <summary>`),
+        push origin main (NO --force, NO --no-verify).
      d. Self-verify: FIRST execute the issue's `## 驗收` commands
         VERBATIM on the named defect artifact / reproduced fixture
         and capture the END-STATE output, THEN confirm the original
-        failure now passes, THEN run the FULL plugin test suite the
-        CI way; the `本機驗證` evidence MUST quote the acceptance
-        command + its end-state output (not just `N/N PASS`). Run
+        failure now passes, THEN run the test suite per the CADENCE
+        POLICY — TARGETED regression on a PATCH bump, the FULL both-tree
+        suite ONLY at an x.y.0 minor milestone; the `本機驗證` evidence
+        MUST quote the acceptance command + its end-state output (not
+        just `N/N PASS`). Run
         acceptance_evidence_in_fix_comment_check.py +
         defect_artifact_fixture_check.py (#478, exit 0 each) before
         posting.
