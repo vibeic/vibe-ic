@@ -584,17 +584,54 @@ def _rtl_rotate_signatures(rtl_body: str) -> List[str]:
         a_sig, a_op, b_sig, b_op = m.group(1), m.group(2), m.group(3), m.group(4)
         if a_sig == b_sig and a_op != b_op:   # same signal, OPPOSITE directions
             out.append(m.group(0).strip())
-    # (2) concat wrapping the SAME vector, every bit, NO literal fill:
-    #     {x[a:0], x[W-1:b]}  — both parts are bit-selects of the same x.
+    # (2) concat wrapping the SAME vector with a GENUINE BIJECTIVE wrap, NO
+    #     literal fill: {x[a:0], x[W-1:b]} (right rotate) / {x[W-2:0], x[W-1]}
+    #     (left rotate). ORGANIC #790 §4.05 HARDENING of #784: a same-vector
+    #     2-part concat is a rotate ONLY when the two bit-selects PARTITION x's
+    #     index range — every index covered EXACTLY once (a bijection). A rotate
+    #     of a W-bit word permutes all W bits with no loss; the partition test is
+    #     exactly that. A sign-extending ARITHMETIC right shift `{x[MSB], x[MSB:1]}`
+    #     DUPLICATES the MSB (it is in BOTH parts) and DROPS x[0] — NOT a partition
+    #     → NOT a rotate (it is `$signed(x)>>>1`). A replicated sign-fill or a
+    #     constant fill is also not a same-vector bijection. ZERO-FALSE-FIRE
+    #     preserved: overlap, gap, or a literal operand → stay silent; a symbolic
+    #     (non-literal) bit-select is not provably a partition → under-fire (safe).
+    #     chip-AGNOSTIC: parameterised widths, any vector name.
+    sel_pat = re.compile(
+        r'^\s*([A-Za-z_]\w*)\s*\[\s*(\d+)\s*(?::\s*(\d+)\s*)?\]\s*$')
+
+    def _sel_indices(operand: str, vec: str):
+        sm = sel_pat.match(operand)
+        if not sm or sm.group(1) != vec:
+            return None
+        hi = int(sm.group(2))
+        lo = sm.group(3)
+        if lo is None:                       # single bit  x[i]
+            return {hi}
+        lo = int(lo)
+        a, b = (hi, lo) if hi >= lo else (lo, hi)
+        return set(range(b, a + 1))          # inclusive range, either order
+
     concat_pat = re.compile(
-        r'\{\s*([A-Za-z_]\w*)\s*\[[^\[\]]*\]\s*,\s*'
-        r'([A-Za-z_]\w*)\s*\[[^\[\]]*\]\s*\}')
+        r'\{\s*([A-Za-z_]\w*\s*\[[^\[\]{}]*\])\s*,\s*'
+        r'([A-Za-z_]\w*\s*\[[^\[\]{}]*\])\s*\}')
     for m in concat_pat.finditer(rtl_body):
-        # reject if a literal fill (1'b0 / 0 / 1'b1) appears anywhere in concat
         whole = m.group(0)
+        # reject if a literal fill (1'b0 / 0 / 1'b1 / replication count) appears.
         if re.search(r"\b\d+'[bdh]|\{\s*\d", whole) or re.search(r"[,{]\s*\d", whole):
             continue
-        if m.group(1) == m.group(2):          # same vector wrapped onto itself
+        op_a, op_b = m.group(1).strip(), m.group(2).strip()
+        va, vb = sel_pat.match(op_a), sel_pat.match(op_b)
+        if not va or not vb or va.group(1) != vb.group(1):
+            continue                          # not two literal bit-selects of one vector
+        idx_a = _sel_indices(op_a, va.group(1))
+        idx_b = _sel_indices(op_b, vb.group(1))
+        if idx_a is None or idx_b is None:
+            continue
+        if idx_a & idx_b:                     # overlap (e.g. arith MSB dup) → not a rotate
+            continue
+        union = idx_a | idx_b
+        if union == set(range(0, max(union) + 1)):   # disjoint + gap-free [0..W-1]
             out.append(whole.strip())
     return out
 
