@@ -1,0 +1,575 @@
+#!/usr/bin/env python3
+"""gatekeeper_review.py — the DETERMINISTIC half of the single PR gatekeeper.
+
+PURPOSE (Q2)
+============
+This program is the machine half of the one gatekeeper that decides whether a
+PR may land on ``main``. It does NOT re-implement any governance rule — it
+AGGREGATES the existing governance programs against a PR's change-set and emits
+a single verdict. The existing programs it COMPOSES (import or subprocess —
+never re-implemented):
+
+  * source_chip_agnostic_check.py      — chip-AGNOSTIC plugin source guard
+  * git_prohibition_guard.py           — forbidden destructive git ops in the
+                                         PR's commit command strings
+  * version_bump_monotonic_check.py    — strict monotonic version bump
+                                         (current > previous) + the
+                                         marketplace equality re-assert
+  * marketplace_version_sync_check.py  — plugin.json == marketplace.json
+  * agent_checkin_scope_guard.py       — role-based check-in path scope
+  * plugin_full_audit.py               — D1 (every program tested) + D2 (every
+                                         step has a compliance checker)
+  * full_suite_run_check.py            — the cadence-appropriate pytest command
+                                         was actually issued
+  * blindness_audit.py                 — (optional, only when transcripts are
+                                         supplied) prompt-only blindness audit
+
+THE §4.05 / GENERAL / NO-CHEAT BOUNDARY  (read this — it is load-bearing)
+========================================================================
+This program is DETERMINISTIC ONLY. The AGENT-JUDGMENT gate — does a relaxation
+mask a real defect (§4.05 no-leak)? is the change GENERAL rather than
+keyword/overfit? is the root cause fixed without a bypass (no-cheat)? — is
+**deliberately NOT in this program**. That gate is the loop's Step-2.7
+adversarial review (codex-adversarial-review / the human-or-LLM reviewer), an
+irreducibly semantic judgment that no machine gate can stand in for. A green
+verdict here means "every MACHINE gate is green"; it is a NECESSARY but NOT a
+SUFFICIENT condition to land. The caller MUST still run Step-2.7 before merge.
+Folding §4.05 into this program would be the very leak it warns against:
+a machine PASS would silently certify a semantic property it cannot measure.
+
+TEST CADENCE (2026-06-17 policy)
+================================
+The required test cadence is DERIVED from the version bump in the diff, via
+``version_bump_monotonic_check`` semver parsing:
+
+  * a PATCH bump  x.y.Z (Z > 0)  requires only a TARGETED regression run.
+  * an x.y.0 MINOR milestone     requires the FULL both-tree suite
+                                  (``full_suite_run_check`` must see a
+                                  full-suite invocation).
+
+If a ``--pytest-cmd`` is supplied, the cadence selector validates it against
+the required cadence (a FULL milestone cannot be satisfied by a subset run).
+
+CLI
+===
+    gatekeeper_review.py --base <ref> --head <ref>
+                         [--role <author-role>]
+                         [--pytest-cmd "<cmd>"]
+                         [--commit-cmds-file <f>]   # PR commit command strings
+                         [--transcripts <dir/file> --dataset <root>]  # blindness
+                         [--repo <dir>] [--plugin-root <dir>]
+                         [--changed-file <f>]       # override diff (one path/line)
+                         [--json OUT]
+
+VERDICT
+=======
+  MERGE_OK         — all applicable machine gates green.
+  REQUEST_CHANGES  — >=1 fixable gate red (each listed in ``blocking``).
+  REJECT           — an out-of-scope-by-role, unsalvageable change (e.g. a
+                     non-core role touching MCP / plugin secrets). The diff
+                     does not belong to this author at all; it must be re-filed
+                     as a backlog item, not patched.
+
+5-SECTION JSON
+==============
+    {verdict, gates:[{name,rc,summary}], cadence, version_bump, blocking[]}
+
+Exit codes
+----------
+    0  MERGE_OK
+    1  REQUEST_CHANGES
+    2  REJECT  (also: a usage / git error that prevents a meaningful verdict)
+
+chip-AGNOSTIC: reasons over repo paths, role names, semver tuples, and the
+exit codes of the composed governance programs only — no IC / vendor / SKU
+literal appears as logic.
+"""
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import subprocess
+import sys
+from dataclasses import dataclass, field, asdict
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+
+_PROGRAMS_DIR = Path(__file__).resolve().parent
+# repo root = .../vibe-ic-marketplace/plugins/vibe-ic/programs -> up 4
+_PLUGIN_ROOT_DEFAULT = _PROGRAMS_DIR.parent  # .../vibe-ic
+_PLUGIN_JSON_REL = "vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin/plugin.json"
+_MARKETPLACE_JSON_REL = "vibe-ic-marketplace/.claude-plugin/marketplace.json"
+
+
+# --------------------------------------------------------------------------
+# Compose helpers: import the pure-logic neighbours by path so we never have a
+# second copy of their rules. subprocess is reserved for the gates whose unit
+# of work is "walk the filesystem and exit 0/1" (those have no clean importable
+# verdict function or have filesystem side effects).
+# --------------------------------------------------------------------------
+def _load_module(name: str):
+    spec = importlib.util.spec_from_file_location(
+        name, _PROGRAMS_DIR / f"{name}.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_vbm = _load_module("version_bump_monotonic_check")
+_gpg = _load_module("git_prohibition_guard")
+_acs = _load_module("agent_checkin_scope_guard")
+
+
+# --------------------------------------------------------------------------
+# Data model: one machine gate result.
+# --------------------------------------------------------------------------
+@dataclass
+class GateResult:
+    name: str
+    rc: int            # 0 PASS / 1 FAIL / 2 ERROR / -1 SKIP(not-applicable)
+    summary: str
+
+    @property
+    def green(self) -> bool:
+        # rc 0 = pass; rc -1 = not applicable (counts as green / non-blocking).
+        return self.rc in (0, -1)
+
+
+@dataclass
+class Verdict:
+    verdict: str
+    gates: List[GateResult] = field(default_factory=list)
+    cadence: str = ""
+    version_bump: str = ""
+    blocking: List[str] = field(default_factory=list)
+
+
+# --------------------------------------------------------------------------
+# Git plumbing.
+# --------------------------------------------------------------------------
+def _git(repo: Path, *args: str) -> Tuple[int, str, str]:
+    proc = subprocess.run(["git", "-C", str(repo), *args],
+                          capture_output=True, text=True)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def changed_files(repo: Path, base: str, head: str) -> List[str]:
+    """`git diff --name-only base..head`. Honest error → RuntimeError."""
+    rc, out, err = _git(repo, "diff", "--name-only", f"{base}..{head}")
+    if rc != 0:
+        raise RuntimeError(
+            f"git diff --name-only {base}..{head} failed: "
+            f"{err.strip() or 'non-zero exit'}")
+    return [ln.strip() for ln in out.splitlines() if ln.strip()]
+
+
+def _git_show_json_version(repo: Path, ref: str, rel: str) -> Optional[str]:
+    rc, out, _ = _git(repo, "show", f"{ref}:{rel}")
+    if rc != 0:
+        return None
+    try:
+        return json.loads(out).get("version")
+    except Exception:
+        return None
+
+
+def commit_messages(repo: Path, base: str, head: str) -> List[str]:
+    """Subject+body of every commit in base..head (the PR's commit command
+    strings live there if they were recorded; used by git_prohibition_guard).
+    Best-effort: empty list if the range cannot be walked."""
+    rc, out, _ = _git(repo, "log", "--format=%B", f"{base}..{head}")
+    if rc != 0:
+        return []
+    return [ln for ln in out.splitlines()]
+
+
+# --------------------------------------------------------------------------
+# Cadence derivation from the version bump (2026-06-17 policy).
+# --------------------------------------------------------------------------
+def derive_cadence(cur: Optional[str], prev: Optional[str]) -> Tuple[str, str]:
+    """Return (cadence, version_bump_label).
+
+    cadence ∈ {"FULL", "TARGETED", "NONE"}; FULL for an x.y.0 milestone,
+    TARGETED for an x.y.Z patch (Z>0). NONE when there is no parseable bump
+    (no version change in the diff)."""
+    cur_t = _vbm.parse_semver(cur) if cur else None
+    prev_t = _vbm.parse_semver(prev) if prev else None
+    if cur_t is None:
+        return "NONE", f"unparseable/none (current={cur!r})"
+    label = f"{prev}->{cur}" if prev else f"-> {cur}"
+    # An x.y.0 patch component is a MINOR/major milestone -> FULL suite.
+    if cur_t[2] == 0:
+        return "FULL", label
+    return "TARGETED", label
+
+
+# --------------------------------------------------------------------------
+# Role / out-of-scope-by-role -> REJECT classification.
+# Uses agent_checkin_scope_guard.evaluate(); a violation that lands in the MCP
+# or plugin protected zone for a NON-core role is unsalvageable-by-patch and
+# yields REJECT, distinct from a fixable gate red.
+# --------------------------------------------------------------------------
+_REJECT_ZONES = ("MCP (mcp-eda)", "plugin")
+
+
+def role_scope_gate(role: Optional[str],
+                    files: List[str]) -> Tuple[GateResult, bool]:
+    """Return (gate_result, is_reject). When role is None we skip (the PR has
+    no declared author role to enforce). A core-agent is unrestricted."""
+    if role is None:
+        return GateResult("agent_checkin_scope_guard", -1,
+                          "skipped — no --role supplied"), False
+    if role not in _acs.ROLE_ALLOW:
+        return GateResult("agent_checkin_scope_guard", 2,
+                          f"unknown role {role!r}"), False
+    violations = _acs.evaluate(role, files)
+    if not violations:
+        return GateResult("agent_checkin_scope_guard", 0,
+                          f"role '{role}' — all {len(files)} path(s) in scope"), False
+    # Any violation landing in a REJECT zone is unsalvageable-by-patch.
+    reject = any(v["zone"] in _REJECT_ZONES for v in violations)
+    zones = sorted({v["zone"] for v in violations})
+    paths = [v["path"] for v in violations]
+    summary = (f"role '{role}' may NOT check in {len(violations)} path(s) "
+               f"in zone(s) {zones}: {paths[:6]}"
+               + (" …" if len(paths) > 6 else ""))
+    return GateResult("agent_checkin_scope_guard", 1, summary), reject
+
+
+# --------------------------------------------------------------------------
+# Version bump + marketplace equality, via version_bump_monotonic_check.evaluate.
+# --------------------------------------------------------------------------
+def version_bump_gate(cur: Optional[str], prev: Optional[str],
+                      market: Optional[str]) -> GateResult:
+    if cur is None and prev is None:
+        return GateResult("version_bump_monotonic_check", -1,
+                          "skipped — no version change in diff")
+    equality_checked = market is not None
+    report, rc = _vbm.evaluate(cur, prev, market, equality_checked)
+    return GateResult("version_bump_monotonic_check", rc, report.reason)
+
+
+# --------------------------------------------------------------------------
+# marketplace_version_sync_check — run as subprocess (it walks the tree).
+# --------------------------------------------------------------------------
+def marketplace_sync_gate(plugin_or_repo: Path) -> GateResult:
+    prog = _PROGRAMS_DIR / "marketplace_version_sync_check.py"
+    # The program walks UP from --marketplace-dir to find marketplace.json.
+    rc, out, err = _run_program(prog, ["--marketplace-dir", str(plugin_or_repo)])
+    summary = (out.strip().splitlines() or [err.strip()] or [""])[-1][:240]
+    return GateResult("marketplace_version_sync_check", rc, summary or "(no output)")
+
+
+# --------------------------------------------------------------------------
+# source_chip_agnostic_check — subprocess against the plugin root.
+# --------------------------------------------------------------------------
+def chip_agnostic_gate(plugin_root: Path) -> GateResult:
+    prog = _PROGRAMS_DIR / "source_chip_agnostic_check.py"
+    rc, out, err = _run_program(prog, [str(plugin_root)])
+    summary = (out.strip().splitlines() or [err.strip()] or [""])[0][:240]
+    return GateResult("source_chip_agnostic_check", rc, summary or "(no output)")
+
+
+# --------------------------------------------------------------------------
+# plugin_full_audit (D1 + D2) — subprocess against the plugin root.
+# --------------------------------------------------------------------------
+def plugin_audit_gate(plugin_root: Path) -> GateResult:
+    prog = _PROGRAMS_DIR / "plugin_full_audit.py"
+    rc, out, err = _run_program(prog, [str(plugin_root)])
+    last = (out.strip().splitlines() or [err.strip()] or [""])[-1][:240]
+    return GateResult("plugin_full_audit", rc, last or "(no output)")
+
+
+# --------------------------------------------------------------------------
+# git_prohibition_guard — scan the PR's commit command strings (import).
+# --------------------------------------------------------------------------
+def git_prohibition_gate(commit_cmds: List[str]) -> GateResult:
+    if not commit_cmds:
+        return GateResult("git_prohibition_guard", -1,
+                          "skipped — no commit command strings supplied")
+    rep = _gpg.scan_commands(commit_cmds)
+    if rep.vacuous:
+        return GateResult("git_prohibition_guard", -1,
+                          "no command lines scanned (vacuous)")
+    if rep.violations:
+        descs = "; ".join(f"line {v.line_no} {v.rule_id}" for v in rep.violations)
+        return GateResult("git_prohibition_guard", 1,
+                          f"{len(rep.violations)} forbidden git op(s): {descs}")
+    return GateResult("git_prohibition_guard", 0,
+                      f"{rep.scanned} command(s) clean")
+
+
+# --------------------------------------------------------------------------
+# full_suite_run_check — validate the supplied --pytest-cmd against cadence.
+# FULL milestone => full-suite invocation REQUIRED.
+# TARGETED patch  => a (any) pytest invocation suffices; subset is fine.
+# --------------------------------------------------------------------------
+def test_cadence_gate(pytest_cmd: Optional[str], cadence: str) -> GateResult:
+    if pytest_cmd is None:
+        # No command to validate. We do not fabricate a PASS — but absence of a
+        # supplied command is an honest SKIP (the caller may run tests out of
+        # band); the loop's Step-2.7 still requires evidence. For a FULL
+        # milestone we make this a hard FAIL because the policy demands proof.
+        if cadence == "FULL":
+            return GateResult("full_suite_run_check", 1,
+                              "FULL milestone requires a full-suite pytest "
+                              "command (none supplied via --pytest-cmd)")
+        return GateResult("full_suite_run_check", -1,
+                          f"skipped — no --pytest-cmd (cadence={cadence})")
+    rep = _fsr_scan([pytest_cmd])
+    if cadence == "FULL":
+        if rep.full_suite_found:
+            return GateResult("full_suite_run_check", 0,
+                              "FULL cadence satisfied — full-suite invocation present")
+        return GateResult("full_suite_run_check", 1,
+                          "FULL cadence required but pytest cmd is a SUBSET "
+                          "(integration/regression gates skipped)")
+    # TARGETED / NONE: any real pytest invocation satisfies the regression gate.
+    if rep.pytest_invocations >= 1:
+        return GateResult("full_suite_run_check", 0,
+                          f"TARGETED cadence satisfied — {rep.pytest_invocations} "
+                          f"pytest invocation(s)")
+    return GateResult("full_suite_run_check", 1,
+                      "no pytest invocation found in --pytest-cmd")
+
+
+_fsr = None
+
+
+def _fsr_scan(cmds: List[str]):
+    global _fsr
+    if _fsr is None:
+        _fsr = _load_module("full_suite_run_check")
+    return _fsr.scan_commands(cmds)
+
+
+# --------------------------------------------------------------------------
+# blindness_audit — only when transcripts + dataset are supplied (subprocess).
+# --------------------------------------------------------------------------
+def blindness_gate(transcripts: Optional[str],
+                   dataset: Optional[str]) -> GateResult:
+    if not transcripts:
+        return GateResult("blindness_audit", -1,
+                          "skipped — no transcripts supplied")
+    if not dataset:
+        return GateResult("blindness_audit", 2,
+                          "transcripts supplied but --dataset missing")
+    prog = _PROGRAMS_DIR / "blindness_audit.py"
+    rc, out, err = _run_program(prog, [transcripts, "--dataset", dataset])
+    # blindness_audit rc: 0 clean / 1 violation / 2 nothing / 3 AUDIT_ERROR.
+    # rc 2 (nothing to audit) and rc 3 (tool error) are NOT blindness FAILs —
+    # map them to ERROR(2)/SKIP so a tool hiccup never blocks a clean PR.
+    last = (out.strip().splitlines() or [err.strip()] or [""])[-1][:200]
+    if rc == 0:
+        return GateResult("blindness_audit", 0, last or "no blindness violation")
+    if rc == 1:
+        return GateResult("blindness_audit", 1, last or "blindness violation")
+    if rc == 2:
+        return GateResult("blindness_audit", -1, "nothing to audit")
+    return GateResult("blindness_audit", 2, f"audit tool error: {last}")
+
+
+# --------------------------------------------------------------------------
+# subprocess runner for the file-walking gates.
+# --------------------------------------------------------------------------
+def _run_program(prog: Path, args: List[str]) -> Tuple[int, str, str]:
+    proc = subprocess.run([sys.executable, str(prog), *args],
+                          capture_output=True, text=True)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+# --------------------------------------------------------------------------
+# The aggregation: run every applicable gate, derive the verdict.
+# --------------------------------------------------------------------------
+def review(base: str, head: str, *,
+           repo: Path,
+           plugin_root: Path,
+           role: Optional[str] = None,
+           pytest_cmd: Optional[str] = None,
+           commit_cmds: Optional[List[str]] = None,
+           transcripts: Optional[str] = None,
+           dataset: Optional[str] = None,
+           override_files: Optional[List[str]] = None,
+           override_cur: Optional[str] = None,
+           override_prev: Optional[str] = None) -> Verdict:
+    """Run the deterministic gatekeeper and return a Verdict.
+
+    `override_*` let tests inject a synthetic change-set / version pair without
+    a real git history; production callers pass none of them.
+    """
+    # 1. change-set.
+    if override_files is not None:
+        files = list(override_files)
+    else:
+        files = changed_files(repo, base, head)
+
+    # 2. version bump (current=head, previous=base) + marketplace eq.
+    if override_cur is not None or override_prev is not None:
+        cur, prev = override_cur, override_prev
+    else:
+        cur = _git_show_json_version(repo, head, _PLUGIN_JSON_REL)
+        prev = _git_show_json_version(repo, base, _PLUGIN_JSON_REL)
+    market = _git_show_marketplace_version(repo, head) \
+        if override_cur is None else override_cur
+
+    # 3. cadence from the bump.
+    cadence, version_bump = derive_cadence(cur, prev)
+
+    # 4. run gates.
+    gates: List[GateResult] = []
+
+    scope_gate, is_reject = role_scope_gate(role, files)
+    gates.append(scope_gate)
+
+    vb = version_bump_gate(cur, prev, market)
+    gates.append(vb)
+
+    gates.append(marketplace_sync_gate(plugin_root))
+    gates.append(chip_agnostic_gate(plugin_root))
+    gates.append(plugin_audit_gate(plugin_root))
+    gates.append(git_prohibition_gate(commit_cmds or []))
+    gates.append(test_cadence_gate(pytest_cmd, cadence))
+    gates.append(blindness_gate(transcripts, dataset))
+
+    # 5. verdict.
+    blocking = [f"{g.name}: {g.summary}" for g in gates if not g.green]
+    if is_reject:
+        verdict = "REJECT"
+    elif blocking:
+        verdict = "REQUEST_CHANGES"
+    else:
+        verdict = "MERGE_OK"
+
+    return Verdict(verdict=verdict, gates=gates, cadence=cadence,
+                   version_bump=version_bump, blocking=blocking)
+
+
+def _git_show_marketplace_version(repo: Path, ref: str) -> Optional[str]:
+    rc, out, _ = _git(repo, "show", f"{ref}:{_MARKETPLACE_JSON_REL}")
+    if rc != 0:
+        return None
+    try:
+        d = json.loads(out)
+    except Exception:
+        return None
+    for entry in d.get("plugins", []) or []:
+        if isinstance(entry, dict) and entry.get("version") is not None:
+            return entry.get("version")
+    return None
+
+
+# --------------------------------------------------------------------------
+# CLI.
+# --------------------------------------------------------------------------
+def _verdict_to_dict(v: Verdict) -> dict:
+    return {
+        "verdict": v.verdict,
+        "gates": [{"name": g.name, "rc": g.rc, "summary": g.summary}
+                  for g in v.gates],
+        "cadence": v.cadence,
+        "version_bump": v.version_bump,
+        "blocking": v.blocking,
+    }
+
+
+_RC_BY_VERDICT = {"MERGE_OK": 0, "REQUEST_CHANGES": 1, "REJECT": 2}
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    ap = argparse.ArgumentParser(
+        description="Deterministic PR gatekeeper — aggregate the governance "
+                    "programs against a PR diff and emit a verdict.")
+    ap.add_argument("--base", required=True, help="base git ref")
+    ap.add_argument("--head", required=True, help="head git ref")
+    ap.add_argument("--role", default=None, help="PR author agent role")
+    ap.add_argument("--pytest-cmd", default=None,
+                    help="the pytest command string the PR ran")
+    ap.add_argument("--commit-cmds-file", default=None,
+                    help="file of the PR's git/gh command strings (one per line)")
+    ap.add_argument("--transcripts", default=None,
+                    help="blindness-audit transcript dir/file (optional)")
+    ap.add_argument("--dataset", default=None,
+                    help="blindness-audit dataset root (required with --transcripts)")
+    ap.add_argument("--repo", default=None,
+                    help="repo root for git ops (default: cwd's repo)")
+    ap.add_argument("--plugin-root", default=None,
+                    help="plugin root for the file-walking gates "
+                         "(default: this program's plugin)")
+    ap.add_argument("--changed-file", default=None,
+                    help="override the diff with a file of changed paths "
+                         "(one per line; for CI/test without a real range)")
+    ap.add_argument("--json", default=None, help="write the verdict JSON here")
+    args = ap.parse_args(argv)
+
+    repo = Path(args.repo).resolve() if args.repo else _find_repo_root()
+    plugin_root = Path(args.plugin_root).resolve() if args.plugin_root \
+        else _PLUGIN_ROOT_DEFAULT
+
+    commit_cmds: List[str] = []
+    if args.commit_cmds_file:
+        p = Path(args.commit_cmds_file)
+        if not p.is_file():
+            print(f"ERROR: --commit-cmds-file not found: {p}", file=sys.stderr)
+            return 2
+        commit_cmds = p.read_text(encoding="utf-8").splitlines()
+
+    override_files: Optional[List[str]] = None
+    if args.changed_file:
+        p = Path(args.changed_file)
+        if not p.is_file():
+            print(f"ERROR: --changed-file not found: {p}", file=sys.stderr)
+            return 2
+        override_files = [ln.strip() for ln in
+                          p.read_text(encoding="utf-8").splitlines() if ln.strip()]
+
+    try:
+        v = review(args.base, args.head,
+                   repo=repo, plugin_root=plugin_root,
+                   role=args.role, pytest_cmd=args.pytest_cmd,
+                   commit_cmds=commit_cmds,
+                   transcripts=args.transcripts, dataset=args.dataset,
+                   override_files=override_files)
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+    out_dict = _verdict_to_dict(v)
+    if args.json:
+        Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.json).write_text(json.dumps(out_dict, indent=2,
+                                              ensure_ascii=False) + "\n")
+
+    print(f"VERDICT: {v.verdict}   (cadence={v.cadence}, bump={v.version_bump})")
+    for g in v.gates:
+        tag = {0: "PASS", 1: "FAIL", 2: "ERROR", -1: "SKIP"}.get(g.rc, "?")
+        print(f"  [{tag}] {g.name}: {g.summary}")
+    if v.blocking:
+        print("BLOCKING:")
+        for b in v.blocking:
+            print(f"  - {b}")
+    print("NOTE: §4.05/General/no-cheat AGENT-JUDGMENT gate is NOT here — "
+          "it is the loop's Step-2.7 adversarial review (run it before merge).")
+    return _RC_BY_VERDICT[v.verdict]
+
+
+def _find_repo_root() -> Path:
+    proc = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                          capture_output=True, text=True)
+    if proc.returncode == 0 and proc.stdout.strip():
+        return Path(proc.stdout.strip())
+    # fall back to walking up from the plugin to a .git
+    cur = _PLUGIN_ROOT_DEFAULT
+    for _ in range(10):
+        if (cur / ".git").exists():
+            return cur
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+    return _PLUGIN_ROOT_DEFAULT
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "_comment": "AUTHORITATIVE AI-skill inventory \u2014 generated from the skills/ folders by programs/gen_skill_inventory.py. Do NOT hand-edit; the website skill count must read `total` from here.",
-  "total": 58,
+  "total": 59,
   "by_tier": {
     "debug": 13,
     "judgment": 6,
-    "nl_primary": 31,
+    "nl_primary": 32,
     "verification": 8
   },
   "skills": [
@@ -41,6 +41,7 @@
     "fpga-led-probe-allocation",
     "fpga-signaltap",
     "full-test-audit",
+    "gatekeeper-loop",
     "hls-c2rtl",
     "hold-fix",
     "hw-debug-loop",
@@ -228,6 +229,11 @@
       "name": "full-test-audit",
       "frontmatter_name": "full-test-audit",
       "tier": "verification"
+    },
+    {
+      "name": "gatekeeper-loop",
+      "frontmatter_name": "gatekeeper-loop",
+      "tier": "nl_primary"
     },
     {
       "name": "hls-c2rtl",
