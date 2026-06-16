@@ -256,6 +256,7 @@ def _resolve_width(project: Path, ports: List[dict]) -> int:
                 if isinstance(v, str) and v.strip().isdigit():
                     return int(v)
     widest = 0
+    any_parametric = False
     for p in ports:
         # a normalized port already carries the computed `numeric_width`; fall
         # back to re-parsing the raw decl (adversarial-review LOW-3: reading only
@@ -263,6 +264,18 @@ def _resolve_width(project: Path, ports: List[dict]) -> int:
         w = p.get("numeric_width") or _port_numeric_width(p)
         if w and w > widest:
             widest = w
+        if p.get("is_parametric") if "is_parametric" in p else _port_is_parametric(p):
+            any_parametric = True
+    # REOPEN #745: do NOT collapse to a 1-bit width when the ONLY numeric ports
+    # are 1-bit serial control/data lines (clk/rst/y/p) while a real data bus is
+    # PARAMETRIC. Returning 1 there silently disarmed the SERIAL-DEFER guard and
+    # shipped a vacuous N=1 oracle as PASS for a 32-bit serial-parallel
+    # multiplier. When the widest CONCRETE numeric width is 1 but a parametric
+    # bus is present, the true datapath width is the parameter's value (not 1) —
+    # return the conventional parametric datapath default so the mixed-topology
+    # SERIAL-DEFER check fires (it judges parametric-vs-1-bit, not the number).
+    if widest <= 1 and any_parametric:
+        return 32  # parametric datapath default — keeps width != 1 for the guard
     if widest >= 1:
         return widest
     return 32  # conventional datapath default; only used if nothing numeric
@@ -286,6 +299,41 @@ def _port_numeric_width(p: dict) -> Optional[int]:
     return None
 
 
+# A symbol/expression token marking a PARAMETRIC width — any letter or `*`/`+`
+# arithmetic in a width/span field that is NOT a plain literal number. Generic
+# HDL/parameter vocabulary — no chip SKU. The signature is "a bus span that is a
+# symbol or an expression of one" (e.g. `size`, `size-1`, `N-1:0`, `WIDTH-bit`,
+# `2*WIDTH-1`), never any specific design's name.
+_PARAM_WIDTH_RE = re.compile(r"[A-Za-z_]", re.I)
+
+
+def _port_is_parametric(p: dict) -> bool:
+    """True when the port's declared width is PARAMETRIC (a parameter symbol or
+    an expression of one) and therefore has NO closed-form numeric width here.
+
+    The production spec-to-rtl runner emits parametric data buses with a
+    symbolic width string (e.g. ``'N-bit([size-1:0], parameter size 預設 32)'``,
+    ``width_symbolic='size-1:0'``, or ``width='size'`` with ``msb='size-1'``)
+    and NO numeric msb/lsb — so ``_port_numeric_width`` returns None for them. We
+    must DISTINGUISH that 'parametric multi-bit bus' from a genuine literal 1-bit
+    serial port, or the SERIAL-DEFER guard collapses (REOPEN #745: a 32-bit
+    serial-parallel multiplier shipping a vacuous N=1 oracle as PASS).
+
+    Signature (chip-AGNOSTIC): the port has no concrete numeric width, but one of
+    its width/span fields is a SYMBOLIC string (contains a parameter name /
+    arithmetic expression rather than a bare integer)."""
+    if _port_numeric_width(p) is not None:
+        return False
+    for k in ("width", "width_decl", "width_symbolic", "msb", "lsb"):
+        v = p.get(k)
+        # a symbolic (non-numeric) string in a width/span field → parametric;
+        # a bare 1-bit literal port has width==1 (numeric) and is NOT parametric.
+        if isinstance(v, str) and v.strip() and not v.strip().isdigit() \
+                and _PARAM_WIDTH_RE.search(v):
+            return True
+    return False
+
+
 def _load_top_ports(project: Path) -> Tuple[Optional[str], List[dict]]:
     """(top, ports) from L9; reuses oracle_tb_gen's normalisation contract."""
     for cand in ("L9_INTEGRATION_SPEC.json", "L9.json"):
@@ -307,6 +355,7 @@ def _load_top_ports(project: Path) -> Tuple[Optional[str], List[dict]]:
                 "dir": "output" if direction.startswith("o") else "input",
                 "raw": q,
                 "numeric_width": _port_numeric_width(q),
+                "is_parametric": _port_is_parametric(q),
             })
         if norm:
             return top, norm
@@ -376,31 +425,80 @@ def extract_arith_spec(project: Path,
     def _by_name(name, pool):
         return next((p for p in pool if p["name"] == name), None)
 
+    # Rank candidate operands so a PARAMETRIC bus (numeric_width None but a real
+    # multi-bit datapath) outranks a literal 1-bit serial line — otherwise the
+    # `numeric_width or 1` key would pick the 1-bit serial port as an "operand".
+    def _rank_key(p):
+        return (1 if p.get("is_parametric") else 0, p.get("numeric_width") or 0)
+
     op_a = _by_name(lhs_name, inputs) if lhs_name else None
     op_b = _by_name(rhs_name, inputs) if rhs_name else None
     if op_a is None or op_b is None:
-        ranked = sorted(inputs, key=lambda p: (p.get("numeric_width") or 1),
-                        reverse=True)
+        ranked = sorted(inputs, key=_rank_key, reverse=True)
         op_a, op_b = ranked[0], ranked[1]
     result = _by_name(res_name, outputs) if res_name else None
     if result is None:
-        result = max(outputs, key=lambda p: (p.get("numeric_width") or 1))
+        result = max(outputs, key=_rank_key)
 
-    # SERIAL-shape DEFER (§4.05): the closed-form PARALLEL oracle requires
-    # every operand input AND the result to carry a FULL-WIDTH (>1-bit) bus on
-    # a multi-bit datapath. A 1-bit serial operand/result (spm: parallel x,
-    # serial y/p) needs the Plugin-chosen output latency + bit-order to sample
-    # — NOT closed-form-derivable from the spec, so defer to #654 honestly.
-    if width > 1:
-        for p, role in ((op_a, "operand_a"), (op_b, "operand_b"),
-                        (result, "result")):
-            nw = p.get("numeric_width")
-            if nw == 1:
-                return None, (
-                    f"SERIAL/streaming datapath: {role} port {p['name']!r} is "
-                    f"1-bit but the datapath is {width}-bit — bit-serial "
-                    f"delivery with Plugin-chosen latency/bit-order is NOT "
-                    f"closed-form-derivable; defer to #654 (testbench-author)")
+    # SERIAL-shape DEFER (§4.05) — REOPEN #745 HARDENED: the closed-form PARALLEL
+    # oracle requires every operand input AND the result to be a FULL-WIDTH
+    # PARALLEL bus of the SAME datapath. A bit-serial operand/result (spm:
+    # parallel x, serial y/p — y and p are delivered one bit per cycle) needs the
+    # Plugin-chosen output latency + bit-order to sample — NOT closed-form-
+    # derivable from the spec, so defer to #654 honestly.
+    #
+    # The guard is now decided by TOPOLOGY MIX, NOT by the resolved `width`:
+    #   * a port is "literal 1-bit" when its numeric_width == 1 (a real serial
+    #     line: clk/rst-shaped or a 1-bit y/p),
+    #   * a port is "wide" when numeric_width > 1 OR it is parametric (a true
+    #     multi-bit data bus whose span is a parameter).
+    # If ANY of {operand_a, operand_b, result} is literal-1-bit while ANOTHER is
+    # wide/parametric, the datapath is serial-parallel → DEFER. (Crucially this
+    # no longer hangs on `width > 1`: the round-13 collapse-to-N=1 made `width`
+    # untrustworthy, so the topology mix is judged from the ports directly.)
+    def _is_literal_1bit(p):
+        # ORGANIC #745 r2 (Step-2.7): a port is serial when its numeric width is
+        # 1 OR its width PROSE marks it serial — `_port_numeric_width` maps every
+        # natural spelling of a serial line ('serial'/'bit-serial'/'1-bit serial')
+        # to None, so a numeric-only test let a prose-serial operand escape the
+        # guard and ship a vacuous N=1 oracle. A `[0:0]` range also reads serial.
+        if p.get("numeric_width") == 1:
+            return True
+        wraw = str((p.get("raw") or {}).get("width")
+                   or (p.get("raw") or {}).get("width_symbolic") or "").lower()
+        return bool(re.search(r"\bserial\b|bit[- ]?serial|\[\s*0\s*:\s*0\s*\]",
+                              wraw))
+    def _is_wide(p):
+        nw = p.get("numeric_width")
+        return (isinstance(nw, int) and nw > 1) or bool(p.get("is_parametric"))
+
+    roles = ((op_a, "operand_a"), (op_b, "operand_b"), (result, "result"))
+    has_1bit = any(_is_literal_1bit(p) for p, _ in roles)
+    has_wide = any(_is_wide(p) for p, _ in roles)
+    # ORGANIC #745 r2 (Step-2.7) — FULLY-SERIAL COLLAPSE: a multiplier whose spec
+    # declares an N>1-bit datapath (a parametric/N-bit operator expression) yet
+    # ALL operand+result ports resolve to 1-bit serial is NOT a closed-form
+    # parallel oracle either — emitting a 1-bit oracle there is the same vacuous
+    # false-PASS. DEFER when every data role is 1-bit/serial but the spec datapath
+    # is wider than 1.
+    all_serial = all(_is_literal_1bit(p) for p, _ in roles)
+    spec_width_gt1 = bool(
+        re.search(r"\bmod\s*2\s*\^\s*[a-zA-Z]", text)        # p = x*y mod 2^N
+        or re.search(r"\b(\d{2,})\s*[- ]?bit\b", text_l)     # "32-bit"
+        or re.search(r"\bparameter\b[^\n]*\b(width|size|n)\b", text_l))
+    if all_serial and spec_width_gt1:
+        return None, (
+            "fully bit-serial datapath: the spec declares an N>1-bit "
+            "multiplier but every operand/result port is 1-bit/serial — the "
+            "bit-serial latency + order are Plugin-chosen, not closed-form-"
+            "derivable; defer to #654 rather than ship a vacuous N=1 oracle")
+    if has_1bit and has_wide:
+        bad = next((r for p, r in roles if _is_literal_1bit(p)), "port")
+        return None, (
+            f"SERIAL/streaming datapath: {bad} is a literal 1-bit serial port "
+            f"while another operand/result is a wide/parametric bus — bit-serial "
+            f"delivery with Plugin-chosen latency/bit-order is NOT closed-form-"
+            f"derivable; defer to #654 (testbench-author)")
 
     # Per-port resolved widths (folds FACET-2 #643): a parametric port whose
     # numeric width is unknown is bound to the datapath width N so the operand

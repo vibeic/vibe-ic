@@ -188,6 +188,11 @@ class ChecklistItem:
     provenance: str = "STRUCTURAL"
     block_eligible: bool = True
     advisory_note: str = ""
+    # ORGANIC #770 r2 — an enum_set whose `{...}` is a single-signal packed-vector
+    # CONCATENATION literal (`sig = {a,b,c}`) is NOT an enumerated value set; the
+    # extractor records that structural fact here so run() downgrades it to
+    # advisory (CONTRADICTED). Default False (a genuine value set stays blocking).
+    is_concat_literal: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +238,15 @@ _SET_CONTEXT_RE = re.compile(
     r"\b(one\s+of|any\s+of|each\s+of|member\s+of|in\s+(?:the\s+)?set|"
     r"valid\s+(?:value|values|state|states|mode|modes|enum\w*)|"
     r"enumerat\w*|\bstate\s*=|\bmode\s+in\b|\bopcode\s+in\b)\b",
+    re.I)
+# ORGANIC #770 r2 Step-2.7 — additional value-SET vocabulary that marks a brace
+# list as an ENUMERATION (each member a distinct legal value), so a compactly
+# written `NAME = {v1, v2, ...}` is NOT downgraded as a packed-concat literal.
+_ENUM_VALUE_CTX_RE = re.compile(
+    r"\b(discrete\s+(?:level|value|step)s?|calibrated\s+levels?|"
+    r"any\s+other\s+value|reserved|legal\s+values?|allowed\s+values?|"
+    r"accepts?\s+only|each\s+(?:handled|of\s+these|value)|"
+    r"selectable\s+(?:value|level|mode)s?)\b",
     re.I)
 
 
@@ -679,6 +693,21 @@ def extract_checklist(spec_text: str) -> List[ChecklistItem]:
         if not _is_value_enum(m.group(1), members, _ctx):
             continue
         set_repr = "{" + ", ".join(members) + "}"
+        # ORGANIC #770 r2 — a single-signal packed-vector CONCATENATION literal
+        # (`sig = {6'b001100, 6'b110011, ...}`) is one value of one signal, NOT an
+        # enumerated value set whose members must each be 'handled'. Record the
+        # structural fact so run() downgrades it to advisory (CONTRADICTED), and
+        # do NOT emit the outside-the-set boundary for it (a concat literal has no
+        # member-level boundary). A genuine value set is untouched (still blocks).
+        # (configurable_digital_low_pass_filter_0001)
+        if _is_single_signal_concat_assignment(spec_text, m):
+            items.append(ChecklistItem(
+                kind="enum_set",
+                requirement=f"valid enumerated set {set_repr} each handled",
+                evidence=m.group(0),
+                coverage_tokens=list(members),
+                is_concat_literal=True))
+            continue
         items.append(ChecklistItem(
             kind="enum_set",
             requirement=f"valid enumerated set {set_repr} each handled",
@@ -854,6 +883,77 @@ def _markdown_table_text(text: str) -> str:
     return "\n".join(out)
 
 
+def _output_timing_table_text(text: str) -> str:
+    """ORGANIC #770 r2 — concatenated text of only the OUTPUT-TIMING markdown
+    table rows: a `|`-delimited GFM table ROW whose KEY/first-column cell (or a
+    column header) is about OUTPUT / LATENCY / TIMING (e.g.
+    `| Output latency | 1 clock cycle |`, `| Timing | registered |`), NOT an
+    internal-signal / helper / description row.
+
+    The shipped Step-2.7 `_markdown_table_text` returns EVERY table row, so the
+    latency promotion fired on an `## Internal Signals` helper table whose
+    Description cell merely says 'Registered version of the sel signal'
+    (axis_mux_0001) — re-blocking a pure-combinational design. Scoping the
+    latency/timing promotion to OUTPUT-TIMING rows fixes that while a genuine
+    `| Output latency | 1 clock cycle |` row still promotes (no-leak). A row
+    qualifies if its KEY cell (or any column header of its table) matches the
+    output/latency/timing vocabulary AND is NOT an internal-signal/helper
+    descriptor. chip-AGNOSTIC: pure GFM grammar + output-timing header vocabulary;
+    no chip / vendor / SKU literal."""
+    # vocabulary that marks a row/column as OUTPUT-TIMING (the thing whose latency
+    # is a real spec requirement) — distinct from an internal-signal helper row.
+    timing_key = re.compile(
+        r"\b(output\s*(?:timing|latency)?|latency|timing|"
+        r"clock\s*cycles?|throughput|delay|pipeline\s*(?:depth|stage)?)\b",
+        re.I)
+    # an INTERNAL-SIGNAL / helper descriptor column whose 'Registered' mention is
+    # about an internal helper net, NOT the module's output timing.
+    helper_key = re.compile(
+        r"\b(internal|helper|signal|description|note|comment|wire|reg(?:ister)?\s*name)\b",
+        re.I)
+    lines = text.splitlines()
+    n = len(lines)
+    out: List[str] = []
+    i = 0
+    _delim = re.compile(r"\|?[\s:\-|]+\|?")
+    while i < n - 1:
+        if lines[i].count("|") >= 2 and "-" in lines[i + 1] \
+                and _delim.fullmatch(lines[i + 1].strip()):
+            header = [c.strip().strip("`*_ ").lower()
+                      for c in lines[i].strip().strip("|").split("|")]
+            header_timing = any(timing_key.search(h) for h in header)
+            j = i + 2
+            while j < n and lines[j].count("|") >= 2:
+                cells = [c.strip().strip("`*_ ")
+                         for c in lines[j].strip().strip("|").split("|")]
+                key_cell = cells[0].lower() if cells else ""
+                row_text = " ".join(cells).lower()
+                # ORGANIC #770 r2 Step-2.7 — a row is OUTPUT-TIMING if a timing
+                # keyword appears in its key cell, ANY value cell, OR a column
+                # header (the earlier key-cell/header-only scan missed a latency
+                # stated in a Details VALUE cell — a real forgot-to-register bug).
+                row_has_timing = (header_timing
+                                  or timing_key.search(key_cell)
+                                  or any(timing_key.search(c.lower())
+                                         for c in cells[1:]))
+                # NARROW internal-helper exclusion: only skip a row whose KEY is an
+                # internal-net descriptor AND whose value cell is the specific
+                # 'Registered version of the <sig> signal' helper phrasing
+                # (axis_mux_0001) — never a blanket Signal/Description-table skip.
+                is_internal_helper = bool(
+                    re.search(r"registered\s+version\s+of\s+the\s+\w+\s+signal",
+                              row_text)
+                    or (helper_key.search(key_cell)
+                        and re.search(r"\bregistered\s+version\b", row_text)))
+                if row_has_timing and not is_internal_helper:
+                    out.append(lines[j])
+                j += 1
+            i = j
+        else:
+            i += 1
+    return "\n".join(out)
+
+
 def _extract_table_rows(text: str) -> List[dict]:
     """Extract opcode/mode -> output rows from a 2+-column markdown table.
 
@@ -924,13 +1024,154 @@ def _tb_exercises_overflow_region(tb_clean: str) -> bool:
     return bool(_TB_RANGE_DECISION_RE.search(t))
 
 
+# ORGANIC #770 round-2 (axis_joiner_0001) — STRUCTURAL-STIMULUS coverage for the
+# handshake item, the value-region analogue applied to a valid/ready protocol.
+# The shipped attribute_coverage() marked the handshake item covered ONLY when
+# the TB literally NAMES one of the spec coverage tokens (e.g. the noun
+# 'handshake' or the slash-joined token 'valid/ready'). That conflates VOCABULARY
+# with coverage: a faithful AXI-Stream TB drives the protocol by TOGGLING the
+# concrete `m_tready`/`s_tvalid` handshake signals to model backpressure — and
+# never spells the noun 'handshake' anywhere — yet was scored UNCOVERED and
+# hard-BLOCKed under --strict. This helper detects whether the TB structurally
+# EXERCISES the handshake: it assigns (drives) a valid/ready-shaped handshake
+# signal to BOTH an asserted (1/high) AND a deasserted (0/low) value — i.e. it
+# toggles the handshake line, the structural signature of backpressure / a real
+# valid/ready exchange. A TB that merely declares the wires but never drives a
+# both-polarity toggle on a handshake-shaped signal is NOT covering — the gap is
+# real and STILL reported. chip-AGNOSTIC: pure valid/ready signal-naming +
+# both-polarity-drive grammar; no chip / vendor / SKU literal.
+# ORGANIC #770 r2 Step-2.7 — restricted to the VALID/READY two-phase protocol
+# line ONLY. The earlier broad set (ack/req/stall/en) matched ubiquitous local
+# control regs (dma_req/internal_req/irq_ack/stall_dbg) that toggle in nearly
+# every TB, so a decoy toggle spuriously satisfied the handshake item. valid/ready
+# (and the vld/rdy abbreviations) ARE the handshake exchange; a real protocol TB
+# toggles one of them.
+_HANDSHAKE_SIGNAL_RE = re.compile(
+    r"[A-Za-z_]\w*(?:valid|ready|vld|rdy)\b"
+    r"|(?:valid|ready|vld|rdy)[A-Za-z_]*\b",
+    re.I)
+# A blocking/non-blocking assignment to <signal> of a 0/1 (or sized-literal 0/1)
+# RHS. Captured so we can confirm BOTH a high-drive and a low-drive on the SAME
+# handshake-shaped signal (the toggle = backpressure structural signature).
+_HS_DRIVE_RE = re.compile(
+    r"\b([A-Za-z_]\w*)\s*(?:<=|=)\s*"
+    r"(?:\d+'[bBdDhH])?\s*([01])\b",
+    re.I)
+
+
+def _is_handshake_signal(name: str) -> bool:
+    n = name.lower()
+    return bool(_HANDSHAKE_SIGNAL_RE.fullmatch(n)
+                or _HANDSHAKE_SIGNAL_RE.search(n))
+
+
+def _tb_exercises_handshake_region(tb_clean: str,
+                                   rtl_ports_lower: Optional[set] = None) -> bool:
+    """True iff the TB structurally exercises a valid/ready handshake: it drives
+    at least one valid/ready DUT-interface port to BOTH a high (1) and a low (0)
+    value — the backpressure / handshake-exchange toggle signature. Merely
+    declaring the handshake wires without ever toggling one is NOT coverage.
+
+    ORGANIC #770 r2 Step-2.7: the toggled signal must be an actual DUT port
+    (when the RTL port set is known) so a decoy local control reg cannot satisfy
+    the item; and the signal must be a valid/ready line (not the broad
+    req/ack/stall set). chip-AGNOSTIC. (axis_joiner_0001, #770 r2)"""
+    high: set = set()
+    low: set = set()
+    for m in _HS_DRIVE_RE.finditer(tb_clean):
+        sig, val = m.group(1), m.group(2)
+        if not _is_handshake_signal(sig):
+            continue
+        # the toggled signal must be a real DUT port (when the port set is known)
+        # — a TB-local decoy reg never counts as exercising the DUT handshake.
+        if rtl_ports_lower is not None and sig.lower() not in rtl_ports_lower:
+            continue
+        if val == "1":
+            high.add(sig.lower())
+        else:
+            low.add(sig.lower())
+    return bool(high & low)
+
+
+# ORGANIC #770 round-2 (configurable_digital_low_pass_filter_0001) — a
+# SINGLE-SIGNAL packed-vector CONCATENATION literal is NOT an enumerated value
+# set. `data_in = {6'b001100, 6'b110011, 6'b010101, 6'b101010}` is one Verilog
+# assignment whose `{...}` RHS positionally concatenates sub-fields into ONE
+# 24-bit value of ONE signal — the sub-fields are bit-slices of a single packed
+# word, NOT alternative values the design must each 'handle'. The extractor's
+# _is_value_enum already accepts this brace-list as a value set (its members are
+# sized literals), so it demands per-member TB coverage and hard-BLOCKs a TB that
+# drives the packed signal with a normal value. This detector recognises the
+# concatenation-ASSIGNMENT shape: a `lhs = {member, member, ...}` (or `<=`) where
+# the lhs is a single identifier (optionally bit-selected) and the braces are the
+# whole RHS — so the brace-list is downgraded (CONTRADICTED → advisory) rather
+# than charged as an enumerated value set. A genuine enumerated set ("mode in
+# {0x1,0x2,0x3}", a case-label set, a table column) is NOT an assignment RHS and
+# is untouched (still STRUCTURAL → BLOCKs). chip-AGNOSTIC: pure Verilog
+# concatenation-assignment grammar; no chip / vendor / SKU literal.
+_CONCAT_ASSIGN_RE = re.compile(
+    r"[A-Za-z_]\w*(?:\s*\[[^\]]*\])?\s*(?:<=|=|=\s*assign\b)?\s*$")
+
+
+def _is_single_signal_concat_assignment(spec_text: str, brace_match) -> bool:
+    """True iff the `{...}` at `brace_match` is the RHS of a single-signal
+    assignment (`sig = {a, b, c}` / `sig <= {a, b, c}` / `assign sig = {...}`),
+    i.e. a packed-vector CONCATENATION literal of ONE signal — not an enumerated
+    value set. The text immediately BEFORE the `{` must end with
+    `<identifier> [optional bit-select] =|<=` and the `{...}` must be (modulo
+    trailing `;`/whitespace) the WHOLE right-hand side (no comma joining it to a
+    sibling list element). chip-AGNOSTIC. (#770 r2)"""
+    pre = spec_text[:brace_match.start()]
+    # ORGANIC #770 r2 Step-2.7 — do NOT downgrade when the surrounding text is an
+    # ENUMERATED-SET context ('one of', 'any other value is reserved', 'discrete
+    # levels', 'enumerated', a value-set vocabulary). A genuine value-set written
+    # compactly as `GAIN_LEVELS = {8'h10, 8'h20, ...}` has identical syntax to a
+    # packed concat but each member is a distinct LEGAL value, not a positional
+    # bit-field — it must stay BLOCK-eligible.
+    ctx_window = spec_text[max(0, brace_match.start() - 200):
+                           brace_match.end() + 120]
+    if _SET_CONTEXT_RE.search(ctx_window) or _ENUM_VALUE_CTX_RE.search(ctx_window):
+        return False
+    # take the current line's text before the brace (assignment lives on one line)
+    line_start = pre.rfind("\n") + 1
+    pre_line = pre[line_start:]
+    # strip a leading `assign` keyword so `assign sig = {...}` is recognised too.
+    pre_line = re.sub(r"^\s*assign\b", "", pre_line, flags=re.I)
+    pre_stripped = pre_line.rstrip()
+    if not (pre_stripped.endswith("=") or pre_stripped.endswith("<=")):
+        return False
+    # the token chain just before the `=`/`<=` must be a single signal
+    # (identifier, optional bit-select), nothing comma-joined.
+    lhs = re.sub(r"(<=|=)\s*$", "", pre_stripped).rstrip()
+    if "," in lhs or "{" in lhs:
+        return False
+    if not re.fullmatch(r"[A-Za-z_]\w*(?:\s*\[[^\]]*\])?", lhs):
+        return False
+    # ORGANIC #770 r2 Step-2.7 — the SET-CONTEXT vocabulary gate above
+    # (`_SET_CONTEXT_RE` / `_ENUM_VALUE_CTX_RE` over the surrounding window) is the
+    # discriminator: a value-SET written compactly as `NAME = {v1, v2, ...}` is
+    # surrounded by enumeration vocabulary ('discrete levels', 'one of', 'any
+    # other value is reserved', 'each handled') → NOT downgraded (kept block). A
+    # bare `sig = {a, b, c}` with NO such vocabulary is a packed concatenation
+    # literal → downgraded to advisory. (A same-width-members heuristic was tried
+    # and REMOVED: same-width members are equally a 3×6-bit packed concat or a
+    # value-set, so width alone cannot discriminate — the vocabulary does.)
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Coverage attribution against the authored TESTBENCH
 # ---------------------------------------------------------------------------
 def attribute_coverage(items: List[ChecklistItem], tb_text: Optional[str],
-                       enum_members_all: List[str]) -> None:
+                       enum_members_all: List[str],
+                       rtl_ports_lower: Optional[set] = None) -> None:
     """Set .covered / .coverage_note for each checklist item based on whether
-    the authored TB exercises it. No TB => everything UNCOVERED."""
+    the authored TB exercises it. No TB => everything UNCOVERED.
+
+    `rtl_ports_lower` (ORGANIC #770 r2 Step-2.7) is the RTL's port-name set; the
+    handshake structural-coverage check restricts its toggle detection to actual
+    DUT-interface ports so a decoy local control reg (dma_req/internal_req/…)
+    toggling in the TB cannot spuriously satisfy the protocol-handshake item."""
     if tb_text is None:
         for it in items:
             it.covered = False
@@ -1000,6 +1241,34 @@ def attribute_coverage(items: List[ChecklistItem], tb_text: Optional[str],
             else:
                 it.coverage_note = ("no TB stimulus into the overflow region and "
                                     f"no reference to {it.coverage_tokens}")
+            continue
+        # ORGANIC #770 r2 (axis_joiner_0001): the handshake item is a
+        # STRUCTURAL-STIMULUS requirement, not a vocabulary one. A faithful
+        # valid/ready TB exercises the protocol by TOGGLING the concrete
+        # `m_tready`/`s_tvalid` handshake signals (backpressure) and need never
+        # spell the noun 'handshake'. Mark covered iff the TB drives a
+        # handshake-shaped signal to BOTH high and low (the toggle signature), OR
+        # it names a spec token. A TB that never toggles a handshake line (and
+        # never names the token) still GAPs.
+        if it.kind == "handshake":
+            token_hit = any(
+                tok.strip()
+                and re.search(r"\b" + re.escape(tok.strip().lower()) + r"\b",
+                              tb_low)
+                for tok in it.coverage_tokens)
+            region = _tb_exercises_handshake_region(tb_clean, rtl_ports_lower)
+            it.covered = bool(region or token_hit)
+            if region and token_hit:
+                it.coverage_note = ("TB toggles a handshake signal (valid/ready "
+                                    "backpressure) and names the spec token")
+            elif region:
+                it.coverage_note = ("TB toggles a handshake signal high+low "
+                                    "(valid/ready backpressure exchange)")
+            elif token_hit:
+                it.coverage_note = ("TB names the handshake spec token")
+            else:
+                it.coverage_note = ("no TB toggle of a valid/ready handshake "
+                                    f"signal and no reference to {it.coverage_tokens}")
             continue
         # Normal item: covered if ANY of its coverage tokens appears in the TB.
         hit = []
@@ -1152,7 +1421,8 @@ def run(stations: dict, rtl_text: Optional[str], tb_text: Optional[str],
         if it.kind == "enum_set":
             enum_members_all += it.coverage_tokens
 
-    attribute_coverage(items, tb_text, enum_members_all)
+    attribute_coverage(items, tb_text, enum_members_all,
+                       _rtl_port_name_set(rtl_text) if rtl_text else None)
 
     # ── ORGANIC #770 — provenance / confidence tagging ──────────────────────
     # Tag each item STRUCTURAL vs PROSE_HEURISTIC and compute whether the RTL
@@ -1164,6 +1434,13 @@ def run(stations: dict, rtl_text: Optional[str], tb_text: Optional[str],
     rtl_ports_lower = _rtl_port_name_set(rtl_text) if rtl_text else None
     rtl_has_reset = bool(_rtl_reset_ports(rtl_text)) if rtl_text else None
     rtl_has_clock = _rtl_has_clocked_block(rtl_text) if rtl_text else None
+    # ORGANIC #770 r2 — does the RTL structurally implement a valid/ready
+    # handshake (a port whose name matches the handshake-signal grammar)? Used to
+    # corroborate a prose 'handshake' requirement: a prose handshake mention on a
+    # design with NO handshake-shaped port has no structural backing.
+    rtl_has_handshake = (
+        any(_is_handshake_signal(p) for p in rtl_ports_lower)
+        if rtl_ports_lower is not None else None)
     # ORGANIC #770 Step-2.7 — a behavioral requirement STATED IN A MARKDOWN TABLE
     # is a STRUCTURAL source (high confidence), not a free-prose guess, so it must
     # keep its block even when the RTL appears to contradict it. Detect each
@@ -1171,11 +1448,19 @@ def run(stations: dict, rtl_text: Optional[str], tb_text: Optional[str],
     # is structurally sourced and is NOT provenance-downgraded.
     _all_spec = "\n".join(v for v in stations.values() if v)
     _table_txt = _markdown_table_text(_all_spec)
+    # ORGANIC #770 r2 — the LATENCY/TIMING promotion is scoped to OUTPUT-TIMING
+    # table rows only; the shipped promotion fired on an `Internal Signals` helper
+    # table whose Description cell merely says 'Registered version of the sel
+    # signal' (axis_mux_0001), re-blocking a pure-combinational design. A genuine
+    # `| Output latency | 1 clock cycle |` row still promotes (no-leak). The other
+    # behavioral kinds (reset/overflow/handshake/signedness/byte_order) are not
+    # the over-promotion class and keep the full-table source.
+    _timing_table_txt = _output_timing_table_text(_all_spec)
     _structural_kinds = set()
+    if _timing_table_txt and _LATENCY_RE.search(_timing_table_txt):
+        _structural_kinds.add("latency")
     if _table_txt:
         tl = _table_txt.lower()
-        if _LATENCY_RE.search(_table_txt):
-            _structural_kinds.add("latency")
         if re.search(r"\breset\b|\brst\b|\bpor\b", tl):
             _structural_kinds.add("reset")
         if _OVERFLOW_RE.search(_table_txt):
@@ -1202,6 +1487,27 @@ def run(stations: dict, rtl_text: Optional[str], tb_text: Optional[str],
                 # corroborated iff the RTL has a clocked (registered) block; a
                 # prose latency on a provably pure-combinational RTL is contradicted.
                 corr = _prov.corroborate_structural_feature(rtl_has_clock)
+            elif it.kind == "handshake":
+                # ORGANIC #770 r2 — corroborated iff the RTL declares a
+                # handshake-shaped port (…valid/…ready/…ack/…req/…stall). A prose
+                # 'handshake'/'backpressure'/'valid/ready' mention on a design with
+                # NO handshake-shaped port has no structural backing → advisory.
+                # When the RTL DOES have handshake ports, an uncovered handshake is
+                # a genuine coverage gap and STILL blocks (CORROBORATED). No-leak:
+                # None (no RTL) keeps the block. (axis_joiner_0001)
+                if rtl_has_handshake is True:
+                    corr = _prov.CORROBORATED
+                elif rtl_has_handshake is False:
+                    corr = _prov.NO_CORROBORATION
+            elif it.kind == "enum_set" and it.is_concat_literal:
+                # ORGANIC #770 r2 — a single-signal packed-vector CONCATENATION
+                # literal (`sig = {a,b,c}`) is NOT an enumerated value set; its
+                # sub-fields are positional bit-slices of ONE value, not members to
+                # each be 'handled'. The structural shape CONTRADICTS the
+                # enumerated-set reading → advisory. A genuine enumerated value set
+                # (is_concat_literal=False) keeps STRUCTURAL → blocks.
+                # (configurable_digital_low_pass_filter_0001)
+                corr = _prov.CONTRADICTED
             it.block_eligible = _prov.is_block_eligible(it.provenance, corr)
             if not it.block_eligible:
                 it.advisory_note = _prov.advisory_reason(it.provenance, corr)

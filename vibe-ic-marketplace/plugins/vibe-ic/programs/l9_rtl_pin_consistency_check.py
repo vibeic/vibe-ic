@@ -272,7 +272,38 @@ def _manifest_name_set(manifest: dict, keys: tuple[str, ...]) -> set:
     Tolerates each value being a list of strings, a list of dicts (each
     carrying a `name`/`port`/`interface`/`root` field), or a dict whose
     KEYS are the interface names. Chip-AGNOSTIC: structure-only, no
-    literal. Returns a set of stripped names."""
+    literal. Returns a set of stripped names.
+
+    ORGANIC #775 (+ Step-2.7 r2) — ALSO accepts the documented `{l9, rtl}` dict
+    schema (the same shape `flattened_buses` / `flattened_outputs` carry in
+    `catalog-glue-author/SKILL.md`, parsed for `renamed_interfaces` by
+    `_manifest_renamed_groups`). A manifest authored EXACTLY per the docs
+    previously yielded an empty set here (silent no-op) → false chip_top pin
+    hard-FAIL. The {l9,rtl} expansion is CONSUMER-AWARE — the two consumers key
+    on DIFFERENT name families, so folding both into one set is a §4.05 leak
+    (an L9-root name colliding with an RTL pad, or vice-versa, would wave a
+    genuine mismatch through):
+      - `_MANIFEST_FLATTEN_KEYS` (`dict_family='l9'`) keys on the L9 ROOT
+        (`root in declared_flatten`) → take ONLY the `l9` name(s).
+      - `_MANIFEST_EXPOSED_OUTPUT_KEYS` (`dict_family='rtl'`) keys on the RTL
+        PAD (`p in exposed`) → take ONLY the `rtl` wire name(s).
+    Each of `l9`/`rtl` may be a bare string or a list of strings.
+    Chip-AGNOSTIC: structure-only ({l9,rtl} grammar), no chip/vendor literal."""
+    # which family of a {l9,rtl} entry this consumer wants (None ⇒ neither).
+    dict_family = None
+    if keys is _MANIFEST_FLATTEN_KEYS:
+        dict_family = "l9"
+    elif keys is _MANIFEST_EXPOSED_OUTPUT_KEYS:
+        dict_family = "rtl"
+
+    def _add_str_or_list(val) -> None:
+        if isinstance(val, str) and val.strip():
+            out.add(val.strip())
+        elif isinstance(val, list):
+            for s in val:
+                if isinstance(s, str) and s.strip():
+                    out.add(s.strip())
+
     out: set = set()
     if not isinstance(manifest, dict):
         return out
@@ -291,6 +322,11 @@ def _manifest_name_set(manifest: dict, keys: tuple[str, ...]) -> set:
                           or entry.get("interface") or entry.get("root"))
                     if isinstance(nm, str) and nm.strip():
                         out.add(nm.strip())
+                    # ORGANIC #775 r2 — documented {l9, rtl} dict schema,
+                    # CONSUMER-AWARE: take ONLY this consumer's name family so an
+                    # L9 root and an RTL pad never cross-contaminate.
+                    if dict_family is not None:
+                        _add_str_or_list(entry.get(dict_family))
     return out
 
 

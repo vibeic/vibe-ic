@@ -2,14 +2,22 @@
 """Tests for ORGANIC #723 — rtl_hygiene_lint rule
 `reset-boundary-residual-enable`.
 
-The rule WARNs when a clocked register that is RESET-CLEARED to 0 is then
-updated under a purely LEVEL-sensitive enable that traces to a TOP-LEVEL INPUT,
-with NO registered armed/settle/valid-after-reset qualifier — the
-stale-enable-post-reset-write hole (a held-high environment enable performs a
-transfer on the first post-reset clock edge, breaking the post-reset invariant).
+The rule DETECTS a clocked register that is RESET-CLEARED to 0 then updated
+under a purely LEVEL-sensitive enable that traces to a TOP-LEVEL INPUT, with NO
+registered armed/settle/valid-after-reset qualifier — the
+stale-enable-post-reset-write hole.
+
+ORGANIC #770 round-2 (this rule's gating is SUPERSEDED): the level-enable
+heuristic is UNCORROBORATED — a held-high enable on the first post-reset edge is
+the CORRECT behaviour for the overwhelming majority of valid/ready / capture
+registers (AXI `awvalid_q`/`wvalid_q`/`timeout_flag_q`). So the finding is now
+PROSE_HEURISTIC with NO structural corroboration → it is emitted as an ADVISORY
+(`block_eligible == False`, demoted to INFO severity) and NEVER hard-blocks
+(never trips rc=1). It is still REPORTED at `--severity INFO`.
 
 Validates:
-  (a) the `## 驗收` fixture WARNs (rule fires, rc=1 at --severity WARN);
+  (a) the `## 驗收` fixture still DETECTS the pattern but emits it as an
+      ADVISORY (INFO severity, block_eligible False, rc=0 — #770 round-2);
   (b) §4.05 NO-LEAK:
         - a version WITH a registered armed/settle guard does NOT fire;
         - a counter gated by an INTERNAL (non-input) enable does NOT fire;
@@ -29,8 +37,11 @@ assert SCRIPT.exists()
 RULE = 'reset-boundary-residual-enable'
 
 
-def _run(tmp_path, sv_content, name='dut.sv', severity='WARN'):
-    """Run the lint and return (CompletedProcess, list-of-findings-dicts)."""
+def _run(tmp_path, sv_content, name='dut.sv', severity='INFO'):
+    """Run the lint and return (CompletedProcess, list-of-findings-dicts).
+
+    ORGANIC #770 round-2 — the finding is now ADVISORY (INFO severity), so the
+    default capture severity is INFO (else the JSON filter would drop it)."""
     f = tmp_path / name
     f.write_text(sv_content)
     jpath = tmp_path / 'findings.json'
@@ -56,27 +67,33 @@ ACCEPTANCE_FIXTURE = (
 )
 
 
-def test_acceptance_fixture_warns(tmp_path):
+def test_acceptance_fixture_advisory(tmp_path):
+    # ORGANIC #770 round-2 — the pattern is STILL DETECTED, but emitted as an
+    # ADVISORY (block_eligible False, INFO severity) and does NOT hard-block.
     res, findings = _run(tmp_path, ACCEPTANCE_FIXTURE)
     hits = _fires(findings)
-    assert hits, f"expected {RULE} to fire on the 驗收 fixture; got {findings}"
+    assert hits, f"expected {RULE} to be DETECTED on the 驗收 fixture; got {findings}"
     # the offending register is `cnt`
     assert any(h['symbol'] == 'cnt' for h in hits)
-    # severity is advisory WARN
-    assert all(h['severity'] == 'WARN' for h in hits)
-    # a WARN finding makes the program exit nonzero
-    assert res.returncode == 1
+    # #770 round-2 — uncorroborated level-enable heuristic → ADVISORY, INFO
+    assert all(h['severity'] == 'INFO' for h in hits)
+    assert all(h['block_eligible'] is False for h in hits)
+    assert all('ORGANIC #770' in h['advisory_note'] for h in hits)
+    # an advisory-only finding must NOT make the program exit nonzero
+    assert res.returncode == 0
 
 
-def test_acceptance_fixture_warns_via_stdout(tmp_path):
-    """The exact `## 驗收` command shape: WARN severity, rule named in stdout."""
+def test_acceptance_fixture_advisory_via_stdout(tmp_path):
+    """The pattern is reported (at INFO) with an [ADVISORY …] suffix and the
+    program exits 0 — no hard block (ORGANIC #770 round-2)."""
     f = tmp_path / 'r.sv'
     f.write_text(ACCEPTANCE_FIXTURE)
     res = subprocess.run(
-        [sys.executable, str(SCRIPT), '--severity', 'WARN', str(f)],
+        [sys.executable, str(SCRIPT), '--severity', 'INFO', str(f)],
         capture_output=True, text=True)
     assert RULE in res.stdout
-    assert res.returncode == 1
+    assert 'ADVISORY' in res.stdout
+    assert res.returncode == 0
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +212,7 @@ def test_corpus_clean_ordinary_counters(tmp_path, name, sv):
 # extra: the indirect-input-trace path (enable via a chain of comb wires)
 # still fires, proving condition (b) covers `assign`/`wire` chains.
 # ---------------------------------------------------------------------------
-def test_fires_through_combinational_chain(tmp_path):
+def test_detects_through_combinational_chain(tmp_path):
     sv = """
 module m(input clk, rst_n, write_enable, full, output reg [3:0] ptr);
     wire not_full = ~full;
@@ -207,8 +224,10 @@ endmodule
 """
     _, findings = _run(tmp_path, sv)
     hits = _fires(findings)
-    assert hits, f"expected {RULE} to fire through a comb chain; got {findings}"
+    assert hits, f"expected {RULE} to be DETECTED through a comb chain; got {findings}"
     assert any(h['symbol'] == 'ptr' for h in hits)
+    # ORGANIC #770 round-2 — still ADVISORY-only through the comb chain.
+    assert all(h['block_eligible'] is False for h in hits)
 
 
 # ---------------------------------------------------------------------------
@@ -228,10 +247,12 @@ endmodule
 """
     _, findings = _run(tmp_path, sv, name='multi.sv')
     hits = _fires(findings)
-    assert hits, f"expected {RULE} to fire on top.cnt; got {findings}"
+    assert hits, f"expected {RULE} to be DETECTED on top.cnt; got {findings}"
     syms = {h['symbol'] for h in hits}
     assert 'cnt' in syms          # the real hole
     assert 'c' not in syms        # sibling unconditional-else counter is clean
+    # ORGANIC #770 round-2 — the detection is ADVISORY-only (never hard-blocks).
+    assert all(h['block_eligible'] is False for h in hits)
 
 
 if __name__ == '__main__':
