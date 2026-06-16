@@ -676,13 +676,65 @@ def _detect_fsm_output_style(text: str) -> Optional[str]:
     return None
 
 
+# A spec that DECLARES combinational / zero-latency / unregistered behaviour
+# overrides any positive single-cycle latency phrasing: for a combinational
+# block "completes in one clock cycle" means the result is available WITHIN one
+# cycle (zero registered latency), NOT a registered 1-cycle pipeline delay. This
+# suppressor is checked BEFORE the ambiguous single-cycle branch so it can
+# override it, and it is broadened well past the literal "combinational output"
+# substring (which alone misses the far more common "combinational logic" /
+# "changes immediately" / "unregistered" / "no clock" wordings).
+# chip-AGNOSTIC: matches design-intent phrasing, never a benchmark-specific
+# literal.
+_COMBINATIONAL_DECL_RE = re.compile(
+    r'\bpurely\s+combinational\b'
+    r'|\bfully\s+combinational\b'
+    r'|\bcombinational\s+(?:logic|output|circuit|block|design|module|'
+    r'function|path|implementation)\b'
+    r'|\bis\s+combinational\b'
+    r'|\b(?:un|non[- ]?)registered\s+output'
+    r'|\boutput\s+(?:is\s+)?(?:un|non[- ]?)registered'
+    r'|\boutput\s+changes?\s+immediately'
+    r'|\bchanges?\s+immediately\s+(?:based\s+on|with|when|on)'
+    r'|\bzero[- ]?(?:cycle\s+)?latency'
+    r'|\bno\s+(?:clock|register|registers|sequential|state\s+element)',
+    re.I)
+
+
 def _detect_latency(text: str) -> Optional[bool]:
+    """Tri-state output-latency detector.
+
+    True  = the output is registered (a real N>=1-cycle output latency);
+    False = the spec EXPLICITLY declares combinational / zero-latency /
+            unregistered behaviour (no registered output latency);
+    None  = unknown (the spec says nothing about output timing).
+
+    The False verdict is AUTHORITATIVE — the caller must honor it instead of
+    falling through to a keyword-grep that would re-derive a phantom latency
+    item from incidental wording (#758)."""
     low = text.lower()
-    if re.search(r'registered\s+output', low) or \
-       re.search(r'one\s+clock\s+cycle', low) or \
+    # An EXPLICIT registered-OUTPUT declaration is an unambiguous output-timing
+    # statement ("registered output" / "output is registered"); it wins even if
+    # a combinational note about INTERNAL logic is also present, so a real
+    # registered design can never be silently relaxed (no leak). The leading
+    # `\b` word-boundary keeps the glued NEGATED form ("unregistered output")
+    # out of this branch (in "unregistered" the `r` is preceded by a word char,
+    # so `\bregistered` does not match), and the negative lookbehind `(?<!non-)`
+    # / `(?<!non )` keeps the hyphen/space-separated negated form
+    # ("non-registered output") out too. Both fall through to the combinational
+    # suppressor below (#758).
+    if re.search(r'(?<!non-)(?<!non )\bregistered\s+output', low) or \
+       re.search(r'output\s+is\s+(?<!non-)(?<!non )\bregistered', low):
+        return True
+    # Otherwise a combinational / zero-latency / unregistered DECLARATION
+    # suppresses (and overrides) the AMBIGUOUS single-cycle phrasing below: for
+    # a clockless block "completes in one clock cycle" means WITHIN one cycle
+    # (zero registered latency), not a 1-cycle pipeline delay.
+    if _COMBINATIONAL_DECL_RE.search(low):
+        return False
+    if re.search(r'one\s+clock\s+cycle', low) or \
        re.search(r'\b1\s*[- ]?clock[- ]?cycle', low) or \
-       re.search(r'single[- ]cycle', low) or \
-       re.search(r'output\s+is\s+registered', low):
+       re.search(r'single[- ]cycle', low):
         return True
     if re.search(r'combinational\s+output', low):
         return False

@@ -171,26 +171,32 @@ def test_decide_unreachable_target_downgrades_to_not_applicable():
     assert "advisory" in reason.lower()
 
 
-def test_decide_lazy_optimization_with_generic_headroom_still_blocks():
-    """CRUCIAL NO-LEAK: mapped reduction sub-threshold BUT generic reduction has
-    HEADROOM (>= threshold) → the design COULD reach the target → STILL BLOCK.
-    A lazily-optimized design is never downgraded by the escape."""
-    # mapped 3%/2% miss the 20% bar, but generic 40%/30% shows the design had
-    # the headroom to hit it → BLOCK.
+def test_decide_generic_meets_target_passes_when_mapped_subthreshold():
+    """ORGANIC #769 RE-ANCHOR (supersedes the inverted 'generic headroom →
+    BLOCK' premise): mapped reduction sub-threshold BUT generic reduction MEETS
+    the bar (>= threshold) → the GENERIC count is the one the CVDP reference
+    scorer measures (synth -top; clean; stat, NO abc -g cmos2), so the area
+    target IS met → PASS, not a headroom-BLOCK. The mapped shortfall is only a
+    shared/irreducible post-techmap combinational floor diluting the
+    percentage."""
+    # mapped 3%/2% miss the 20% bar, but generic 40%/30% MEET it → PASS.
     verdict, reason = ppa.decide(
         3.0, 2.0, 20.0, "both", cells_red_generic=40.0, wires_red_generic=30.0)
-    assert verdict == "BLOCK", reason
-    assert "headroom" in reason.lower()
+    assert verdict == "PASS", reason
+    assert "generic meets" in reason.lower()
 
 
 def test_decide_mixed_block_dominates_unreachable():
-    """One bound metric has generic headroom (real BLOCK), the other is
+    """One bound metric is a REAL failure (GROWN — negative mapped), the other is
     proven-near-minimal (would escape) → the BLOCK DOMINATES (no-leak: any real
-    headroom failure blocks the whole verdict)."""
-    # cells: mapped 3% / generic 40% → real headroom → BLOCK.
+    failure blocks the whole verdict). ORGANIC #769 RE-ANCHOR: the old version
+    used a generic-headroom cells metric as the 'real failure', but generic >=
+    threshold now MEETS the scorer-measured target (→ PASS), so the surviving
+    hard per-metric failure is a GROWN metric."""
+    # cells: mapped -3% (GREW) → real failure → BLOCK.
     # wires: mapped 2% / generic 1%  → unreachable → would escape.
     verdict, reason = ppa.decide(
-        3.0, 2.0, 20.0, "both", cells_red_generic=40.0, wires_red_generic=1.0)
+        -3.0, 2.0, 20.0, "both", cells_red_generic=40.0, wires_red_generic=1.0)
     assert verdict == "BLOCK", reason
     assert "cells reduction" in reason
 
@@ -314,14 +320,17 @@ def test_decide_motivating_739_near_minimal_still_escapes_post_remediation():
     assert "unreachable" in reason.lower() and "advisory" in reason.lower(), reason
 
 
-def test_decide_no_leak_generic_headroom_still_blocks_post_remediation():
-    """GUARD: the CRUCIAL no-leak (mapped sub-threshold but POSITIVE, generic has
-    headroom → BLOCK) is unchanged by the grown-design remediation."""
+def test_decide_generic_meets_target_passes_post_remediation():
+    """GUARD (ORGANIC #769 RE-ANCHOR): mapped sub-threshold but POSITIVE while
+    the generic reduction MEETS the bar → PASS (the generic count is the one the
+    CVDP scorer measures). The grown-design remediation (#739) and the
+    generic-meets-target correction (#769) coexist: a GROWN metric still BLOCKs,
+    a generic-meeting metric PASSes."""
     verdict, reason = ppa.decide(
         3.0, 2.0, 20.0, "both",
         cells_red_generic=40.0, wires_red_generic=30.0)
-    assert verdict == "BLOCK", reason
-    assert "headroom" in reason.lower(), reason
+    assert verdict == "PASS", reason
+    assert "generic meets" in reason.lower(), reason
 
 
 # ── orchestration: a near-minimal equivalent pair downgrades (no false block) ─
@@ -330,8 +339,13 @@ def test_decide_no_leak_generic_headroom_still_blocks_post_remediation():
 def test_live_near_minimal_equivalent_is_not_applicable(tmp_path):
     """LIVE END-STATE: two functionally-equivalent near-minimal RTLs (a 3-input
     XOR spelled two ways) — synthesis shares the redundancy so NEITHER the
-    mapped NOR the generic count can shrink 20%. The gate must report
-    NOT-APPLICABLE / advisory (rc 0), NOT a hard BLOCK (the #739 false-block)."""
+    mapped NOR the generic count can shrink 20%. ORGANIC #768 RE-ANCHOR: the
+    near-minimal escape is now anchored SUBMISSION-INDEPENDENTLY via a
+    ``--reference`` golden. Supplying a reference golden that ITSELF cannot beat
+    the bar proves the target is genuinely unreachable → the gate reports
+    NOT-APPLICABLE / advisory (rc 0), NOT a hard BLOCK. (WITHOUT a reference the
+    0%-generic pair now trips the #768 no-op floor → BLOCK, since at the gate a
+    do-nothing copy is indistinguishable from an already-minimal design.)"""
     orig = tmp_path / "orig.sv"
     orig.write_text(
         "module m(input a, input b, input c, output y);\n"
@@ -340,9 +354,16 @@ def test_live_near_minimal_equivalent_is_not_applicable(tmp_path):
     equiv.write_text(
         "module m(input a, input b, input c, output y);\n"
         "  wire t = a ^ b;\n  assign y = t ^ c;\nendmodule\n")
+    # the reference golden is ANOTHER equivalent near-minimal spelling — it too
+    # cannot clear 20%, proving the target unreachable (submission-independent).
+    ref = tmp_path / "ref.sv"
+    ref.write_text(
+        "module m(input a, input b, input c, output y);\n"
+        "  assign y = a ^ (b ^ c);\nendmodule\n")
     rc, report = ppa.run_ppa_area_threshold(
         original=orig, optimized=equiv, top="m", prompt_text=None,
-        threshold_override=20.0, metric_override="both", container="iic-eda")
+        threshold_override=20.0, metric_override="both", container="iic-eda",
+        reference=ref)
     if report["verdict"] == "NOT_APPLICABLE" and "unmeasurable" in report.get(
             "reason", "").lower():
         pytest.skip("synth could not measure both stats in this container")
@@ -353,15 +374,46 @@ def test_live_near_minimal_equivalent_is_not_applicable(tmp_path):
     # dual-stat split worked end-to-end.
     assert report.get("cells_reduction_pct_generic") is not None
     assert report.get("wires_reduction_pct_generic") is not None
+    # the reference golden's generic reduction was measured (the reachability
+    # anchor fired) and itself sub-bar (proving unreachability).
+    assert report.get("cells_reduction_pct_ref_generic") is not None
 
 
 @pytest.mark.skipif(not _HAVE_CONTAINER,
                     reason="iic-eda container not running — live yosys path")
-def test_live_generic_headroom_still_blocks(tmp_path):
-    """LIVE NO-LEAK: an 8x8 multiplier reduced to a 7x7 one clears a moderate
-    bar but its GENERIC reduction outpaces its MAPPED reduction; at a threshold
-    pinned BETWEEN them the mapped misses while the generic shows headroom →
-    the gate STILL BLOCKs (rc 1). Proves a reachable target is not downgraded."""
+def test_live_no_reference_noop_copy_blocks_via_floor(tmp_path):
+    """LIVE §4.05 NO-LEAK (ORGANIC #768): a do-nothing copy (the optimized file
+    is byte-identical to the original → 0% generic) WITHOUT a reference trips the
+    no-op floor → BLOCK (rc 1). A submission that removed essentially nothing can
+    never be 'proven near-minimal' without a reference."""
+    orig = tmp_path / "orig.sv"
+    orig.write_text(
+        "module m(input a, input b, input c, output y);\n"
+        "  assign y = (a ^ b) ^ c;\nendmodule\n")
+    copy = tmp_path / "copy.sv"
+    copy.write_text(
+        "module m(input a, input b, input c, output y);\n"
+        "  assign y = (a ^ b) ^ c;\nendmodule\n")
+    rc, report = ppa.run_ppa_area_threshold(
+        original=orig, optimized=copy, top="m", prompt_text=None,
+        threshold_override=20.0, metric_override="both", container="iic-eda")
+    if report["verdict"] == "NOT_APPLICABLE" and "unmeasurable" in report.get(
+            "reason", "").lower():
+        pytest.skip("synth could not measure both stats in this container")
+    assert rc == 1, (report.get("verdict"), report.get("reason"))
+    assert report["verdict"] == "BLOCK", report.get("reason")
+    assert "no-op floor" in report["reason"].lower()
+
+
+@pytest.mark.skipif(not _HAVE_CONTAINER,
+                    reason="iic-eda container not running — live yosys path")
+def test_live_generic_meets_target_passes(tmp_path):
+    """LIVE END-STATE (ORGANIC #769): an 8x8 multiplier reduced to a 7x7 one;
+    its GENERIC reduction outpaces its MAPPED reduction. At a threshold pinned
+    BETWEEN them the MAPPED misses while the GENERIC MEETS the bar — the GENERIC
+    count is the one the CVDP reference scorer measures (synth -top; clean;
+    stat), so the gate now PASSES (rc 0), NOT a headroom-BLOCK. Proves the
+    inverted 'generic headroom → BLOCK' premise is corrected end-to-end."""
     big = tmp_path / "big.sv"
     big.write_text(
         "module m(input [7:0] a, input [7:0] b, output [15:0] y);\n"
@@ -378,13 +430,13 @@ def test_live_generic_headroom_still_blocks(tmp_path):
     generic = rep0.get("cells_reduction_pct_generic")
     if mapped is None or generic is None or not (generic > mapped + 1.0):
         pytest.skip("this container did not produce a generic>mapped gap")
-    thr = (mapped + generic) / 2.0   # strictly between → mapped misses, gen has headroom
+    thr = (mapped + generic) / 2.0   # strictly between → mapped misses, generic MEETS
     rc, report = ppa.run_ppa_area_threshold(
         original=big, optimized=small, top="m", prompt_text=None,
         threshold_override=thr, metric_override="cells", container="iic-eda")
-    assert rc == 1, (report.get("verdict"), report.get("reason"))
-    assert report["verdict"] == "BLOCK", report.get("reason")
-    assert "headroom" in report["reason"].lower()
+    assert rc == 0, (report.get("verdict"), report.get("reason"))
+    assert report["verdict"] == "PASS", report.get("reason")
+    assert "generic meets" in report["reason"].lower()
 
 
 # ── #478 defect-artifact + end-state: shape the issue's ## 驗收 artifact DIRECTLY
@@ -397,16 +449,22 @@ def test_live_generic_headroom_still_blocks(tmp_path):
 def test_acceptance_near_minimal_endstate_via_program_main(tmp_path):
     """END-STATE via the real program's main() on a tmp_path-shaped defect
     artifact: two functionally-equivalent near-minimal RTLs (a 3-input XOR spelled
-    two ways) are reported NOT-APPLICABLE / advisory (rc 0), NOT a hard BLOCK
-    (the #739 false-block)."""
+    two ways), with a reference golden that ITSELF cannot beat the bar, are
+    reported NOT-APPLICABLE / advisory (rc 0), NOT a hard BLOCK (the #739
+    false-block). ORGANIC #768: the near-minimal escape is now anchored on the
+    submission-independent ``--reference`` golden."""
     (tmp_path / "orig.sv").write_text(
         "module m(input a, input b, input c, output y);\n"
         "  assign y = (a ^ b) ^ c;\nendmodule\n")
     (tmp_path / "equiv.sv").write_text(
         "module m(input a, input b, input c, output y);\n"
         "  wire t = a ^ b;\n  assign y = t ^ c;\nendmodule\n")
+    (tmp_path / "ref.sv").write_text(
+        "module m(input a, input b, input c, output y);\n"
+        "  assign y = a ^ (b ^ c);\nendmodule\n")
     rc = ppa.main(["--original", str(tmp_path / "orig.sv"),
                    "--optimized", str(tmp_path / "equiv.sv"),
+                   "--reference", str(tmp_path / "ref.sv"),
                    "--top", "m", "--threshold-pct", "20", "--metric", "both"])
     assert rc == 0, rc   # equivalent near-minimal: advisory NOT_APPLICABLE, not BLOCK
 
