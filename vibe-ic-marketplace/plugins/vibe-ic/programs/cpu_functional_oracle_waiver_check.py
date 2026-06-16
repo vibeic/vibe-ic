@@ -63,6 +63,34 @@ def _read_xml_field(xml: str, tag: str) -> str:
     return (m.group(1).strip() if m else "")
 
 
+def _waiver_track_class_label(xml: str) -> str:
+    """ORGANIC #779 — derive the human-readable '<track> no-oracle <ic_class>
+    class' label from the STRUCTURED results.xml, instead of the hardcoded
+    'generic_full_stack no-oracle CPU/SoC class' literal that MISLABELS non-CPU
+    classes. After #745 made arith_oracle_tb_gen DEFER for serial-parallel
+    multipliers, `digital_arithmetic_primitive` ICs route into this same #654
+    gate — and the hardcoded 'CPU/SoC' string then mis-described them, even
+    though every structured field (verdict / capability_gap /
+    functional_verified / waiver_reason) was already correct. Pure
+    message-accuracy: the verdict logic and exit code are unchanged.
+
+    The connectivity bridge writes <verification_track> directly (e.g.
+    'generic_full_stack') and embeds the real ic_class in <waiver_reason> as a
+    `class '<name>'` token (from _class_uses_aid_reference_tb). Reads a dedicated
+    <ic_class> tag first if a future schema adds one; falls back to a generic
+    label when a field is absent (older artifact). chip-AGNOSTIC — reads the
+    class from structured output, never a chip/vendor/SKU literal."""
+    track = _read_xml_field(xml, "verification_track") or "generic_full_stack"
+    ic_class = _read_xml_field(xml, "ic_class")
+    if not ic_class:
+        m = re.search(r"\bclass\s+'([A-Za-z0-9_]+)'",
+                      _read_xml_field(xml, "waiver_reason"))
+        ic_class = m.group(1) if m else ""
+    if ic_class:
+        return f"{track} no-oracle {ic_class} class"
+    return f"{track} no-oracle class"
+
+
 def _evaluate(project: Path) -> "tuple[int, str]":
     """Return (exit_code, message)."""
     sim_dir = _pl.sim_dir(project)
@@ -122,7 +150,7 @@ def _evaluate(project: Path) -> "tuple[int, str]":
                    "rtl/ was NOT actually demonstrated.")
 
     return 3, (
-        "PASS_WITH_WAIVERS: generic_full_stack no-oracle CPU/SoC class — "
+        f"PASS_WITH_WAIVERS: {_waiver_track_class_label(xml)} — "
         "connectivity-PASS / functional-DEFERRED capability-gap waiver "
         f"({CAP_CPU_FUNCTIONAL_ORACLE}). The connectivity full-stack TB "
         "compiled + ran to FULL_STACK_TB_DONE against the real rtl/ "

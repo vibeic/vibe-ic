@@ -5453,6 +5453,53 @@ def _is_phase2_owned(entry: dict) -> bool:
     return all(str(rel).startswith("phase2/") for rel in outs)
 
 
+def _prune_tail_advisory(cg_report: dict, synth_top: str):
+    """ORGANIC #778 — build a NON-FATAL over-broad-tail advisory from a
+    catalog-glue closure report whose verdict is NOT a duplicate-module defect
+    (i.e. a PASS) but that still flags prunable (unreachable-from-synth_top)
+    staged files.
+
+    Before #778 the prune note lived ONLY inside the DUPLICATE / STAGED_DUPLICATE
+    branch, so on a PASS verdict with files_prunable>0 the runner fed the full
+    flat glob to yosys-slang with ZERO diagnostic — and an unreachable
+    prunable-tail file using a cross-file macro it never `include`s crashes slang
+    opaquely (slang macros don't cross translation units; the #662 undefined-macro
+    precheck misses it because the macro IS globally defined, just not
+    include-visible). This surfaces the over-broad set so the author can prune.
+
+    Returns (advisory_dict, log_line); (None, None) when files_prunable==0 — §4.05:
+    no false noise, and the advisory NEVER changes the PASS verdict. chip-AGNOSTIC
+    (closure-count + filename only, no chip/vendor/IP literal)."""
+    try:
+        n = int(cg_report.get("files_prunable", 0) or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n <= 0:
+        return None, None
+    prunable = cg_report.get("prunable", []) or []
+    examples = [Path(p).name for p in prunable[:8]]
+    reachable = cg_report.get("files_reachable")
+    total = cg_report.get("files_total")
+    advisory = {
+        "issue": "#778",
+        "files_prunable": n,
+        "files_reachable": reachable,
+        "files_total": total,
+        "synth_top": synth_top,
+        "examples": examples,
+        "recommendation": "prune the staged RTL set to the closure of synth_top",
+    }
+    log_line = (
+        f"[ADVISORY] CATALOG_GLUE_CLOSURE (#778): {n} staged file(s) NOT "
+        f"reachable from '{synth_top}' ({reachable} of {total} reachable) — "
+        f"over-broad set fed to synth. The runner never auto-drops a staged "
+        f"file, but an unreachable prunable-tail file using a cross-file macro "
+        f"it never `include`s can crash yosys-slang opaquely with no author "
+        f"hint. Consider pruning to the closure. "
+        f"Examples: {', '.join(examples)}")
+    return advisory, log_line
+
+
 def step_yosys_synth(project: Path, top_name: str = "chip_top",
                      container: str = "iic-eda",
                      ic_class: Optional[str] = None) -> StepResult:
@@ -5828,6 +5875,7 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
     # module literal. The PRUNE half is left advisory (we never auto-drop
     # a staged file at synth time — that would risk dropping a needed dep);
     # only the crash-preventing duplicate-module half hard-gates here.
+    _prune_advisory = None  # ORGANIC #778 — PASS-path over-broad-tail advisory
     try:
         import catalog_glue_closure_resolver as _cg
         _cg_report = _cg.resolve(synth_top, rtl_dir)
@@ -5860,6 +5908,17 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                  f"set — yosys-slang would crash with a raw 'duplicate "
                  f"definition' abort. {_msg}{_prune_note}"),
                 extras={"catalog_glue_closure": _cg_report})
+        else:
+            # ORGANIC #778 — NON-duplicate (PASS) verdict: the runner still feeds
+            # the full flat glob to synth. If the closure flags an over-broad
+            # prunable tail, emit a NON-FATAL advisory (log + extras) so the
+            # author has a hint when an unreachable prunable-tail file later
+            # crashes yosys-slang opaquely. Never auto-drops; never changes the
+            # verdict. Suppressed before #778 (the prune note was DUPLICATE-only).
+            _adv, _adv_log = _prune_tail_advisory(_cg_report, synth_top)
+            if _adv_log:
+                print(_adv_log, file=sys.stderr)
+                _prune_advisory = _adv
     except Exception:  # nosec — preflight is best-effort, never masks synth
         pass
     # Stage stub OTP hex inside synth_dir so $readmemh resolves at synth.
@@ -6108,13 +6167,16 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                  f"-flatten`. Detail: {tail}"),
                 [str(out_v), str(log)],
                 extras={"synth_frontend": synth_frontend})
+        _pass_extras = {"synth_frontend": synth_frontend}
+        if _prune_advisory:  # ORGANIC #778 — surface the over-broad-tail advisory
+            _pass_extras["catalog_glue_prune_advisory"] = _prune_advisory
         return StepResult("yosys_synth", "PASS",
                           time.time() - t0,
                           (f"netlist={out_v.name} cells={cells} "
                            f"synth_top={synth_top} "
                            f"frontend={synth_frontend}"),
                           [str(out_v), str(log)],
-                          extras={"synth_frontend": synth_frontend})
+                          extras=_pass_extras)
     # ORGANIC #586 — staged-RTL closure preflight enrichment. A yosys
     # abort of the form "Module `X' referenced ... is not part of the
     # design" is the silent symptom of a parameter DEFAULT selecting a
