@@ -242,11 +242,30 @@ _SET_CONTEXT_RE = re.compile(
 # ORGANIC #770 r2 Step-2.7 — additional value-SET vocabulary that marks a brace
 # list as an ENUMERATION (each member a distinct legal value), so a compactly
 # written `NAME = {v1, v2, ...}` is NOT downgraded as a packed-concat literal.
+# ORGANIC #770 r3 — NARROWED to STRONG set-membership markers only. The r2 set
+# included weak DSP/filter vocabulary ("discrete/calibrated levels", "selectable")
+# that appears in coefficient/tap specs WITHOUT meaning an enumerated dispatch
+# set — so a single-signal packed concatenation `data_in = {6'b…, 6'b…}` in a
+# "configurable low-pass filter" spec was wrongly KEPT as a value-set and
+# hard-blocked (configurable_digital_low_pass_filter_0001). A genuine value set
+# is marked by EXPLICIT membership / outside-the-set semantics: "any other value
+# is reserved/illegal", "one of", "accepts only", "each of these must be
+# handled", "legal/allowed values". A bare `name = {fields}` with none of those
+# is a concatenation → downgrade.
 _ENUM_VALUE_CTX_RE = re.compile(
-    r"\b(discrete\s+(?:level|value|step)s?|calibrated\s+levels?|"
-    r"any\s+other\s+value|reserved|legal\s+values?|allowed\s+values?|"
-    r"accepts?\s+only|each\s+(?:handled|of\s+these|value)|"
-    r"selectable\s+(?:value|level|mode)s?)\b",
+    r"\b(any\s+other\s+value|otherwise\s+(?:reserved|illegal|invalid)|"
+    r"\bis\s+reserved\b|\bis\s+illegal\b|legal\s+values?|allowed\s+values?|"
+    r"accepts?\s+only|"
+    # "(all of / each of / these …) must be handled" — r3 Step-2.7: the prior arm
+    # required an "each" prefix, so "All of these states must be handled" /
+    # "These modes must be handled" slipped through and a real value-set
+    # downgraded to advisory. Match the membership clause with an OPTIONAL
+    # leading quantifier and an optional noun between it and "must … handled".
+    r"(?:all|each|these|every)\s+(?:of\s+(?:these|the)\s+)?(?:\w+\s+)?"
+    r"must\s+(?:be\s+)?handled|"
+    r"must\s+(?:be\s+)?handled|"
+    r"each\s+of\s+these\s+(?:values?|modes?|states?)|"
+    r"one\s+of\s+(?:the\s+)?(?:following|these))\b",
     re.I)
 
 
@@ -1057,6 +1076,14 @@ _HS_DRIVE_RE = re.compile(
     r"\b([A-Za-z_]\w*)\s*(?:<=|=)\s*"
     r"(?:\d+'[bBdDhH])?\s*([01])\b",
     re.I)
+# ORGANIC #770 r3 — a valid/ready signal that is ASSIGNED AT ALL (any RHS: a
+# variable, an expression, a stall-loop control — `m_tready = (i % 3 != 0)`),
+# not only a literal 0/1. The r2 literal-toggle detector missed a backpressure
+# pattern driven through a loop/expression (axis_joiner_0001), so a correct AXIS
+# TB with real backpressure was scored UNCOVERED. Capture every LHS assignment.
+_HS_ANY_DRIVE_RE = re.compile(
+    r"\b([A-Za-z_]\w*)\s*(?:<=|=)(?!=)\s*\S",
+    re.I)
 
 
 def _is_handshake_signal(name: str) -> bool:
@@ -1075,22 +1102,54 @@ def _tb_exercises_handshake_region(tb_clean: str,
     ORGANIC #770 r2 Step-2.7: the toggled signal must be an actual DUT port
     (when the RTL port set is known) so a decoy local control reg cannot satisfy
     the item; and the signal must be a valid/ready line (not the broad
-    req/ack/stall set). chip-AGNOSTIC. (axis_joiner_0001, #770 r2)"""
+    req/ack/stall set). ORGANIC #770 r3 (+ r3 Step-2.7): coverage requires a real
+    BACKPRESSURE TOGGLE of a valid/ready DUT port — EITHER two distinct literal
+    0/1 writes, OR ≥2 assignments with DISTINCT right-hand sides (the line is
+    re-driven to different values over time), OR an assignment whose RHS is a
+    genuine LOOP/TIME-VARYING expression (it references the for-loop control
+    variable). A single drive of any CONSTANT value — whether a literal, a
+    parameter/macro/named-constant, or a constant arithmetic expression like
+    `2-1` — is just HOLDING the line and does NOT exercise the handshake (r3
+    Step-2.7 caught the syntactic "non-literal ⇒ non-constant" conflation).
+    chip-AGNOSTIC. (axis_joiner_0001, #770 r2/r3)"""
+    def _is_dut_hs(sig: str) -> bool:
+        if not _is_handshake_signal(sig):
+            return False
+        # the driven signal must be a real DUT port (when the port set is known)
+        # — a TB-local decoy reg never counts as exercising the DUT handshake.
+        return rtl_ports_lower is None or sig.lower() in rtl_ports_lower
+
     high: set = set()
     low: set = set()
     for m in _HS_DRIVE_RE.finditer(tb_clean):
         sig, val = m.group(1), m.group(2)
-        if not _is_handshake_signal(sig):
+        if not _is_dut_hs(sig):
             continue
-        # the toggled signal must be a real DUT port (when the port set is known)
-        # — a TB-local decoy reg never counts as exercising the DUT handshake.
-        if rtl_ports_lower is not None and sig.lower() not in rtl_ports_lower:
+        (high if val == "1" else low).add(sig.lower())
+    if high & low:
+        return True
+    # the for-loop control variable name(s) — a drive whose RHS references one is
+    # genuinely time-varying (a stall pattern), not a held constant.
+    loop_vars = {lm.group(1).lower()
+                 for lm in re.finditer(r"\bfor\s*\(\s*([A-Za-z_]\w*)\s*=",
+                                       tb_clean)}
+    rhs_seen: Dict[str, set] = {}
+    loop_driven: set = set()
+    for m in _HS_ANY_DRIVE_RE.finditer(tb_clean):
+        sig = m.group(1)
+        if not _is_dut_hs(sig):
             continue
-        if val == "1":
-            high.add(sig.lower())
-        else:
-            low.add(sig.lower())
-    return bool(high & low)
+        rhs = tb_clean[m.end() - 1:].split(";", 1)[0].strip()
+        rhs_seen.setdefault(sig.lower(), set()).add(re.sub(r"\s+", "", rhs))
+        # RHS references a loop control var (`(i % 3 != 0)`, `i[0]`, …) → toggling.
+        ids = set(re.findall(r"[A-Za-z_]\w*", rhs))
+        if ids & loop_vars:
+            loop_driven.add(sig.lower())
+    if loop_driven:
+        return True
+    # ≥2 DISTINCT right-hand sides on the same port = the line is re-driven to
+    # different values over time (a real toggle); a single constant drive is not.
+    return any(len(v) >= 2 for v in rhs_seen.values())
 
 
 # ORGANIC #770 round-2 (configurable_digital_low_pass_filter_0001) — a
@@ -1122,15 +1181,21 @@ def _is_single_signal_concat_assignment(spec_text: str, brace_match) -> bool:
     trailing `;`/whitespace) the WHOLE right-hand side (no comma joining it to a
     sibling list element). chip-AGNOSTIC. (#770 r2)"""
     pre = spec_text[:brace_match.start()]
-    # ORGANIC #770 r2 Step-2.7 — do NOT downgrade when the surrounding text is an
-    # ENUMERATED-SET context ('one of', 'any other value is reserved', 'discrete
-    # levels', 'enumerated', a value-set vocabulary). A genuine value-set written
-    # compactly as `GAIN_LEVELS = {8'h10, 8'h20, ...}` has identical syntax to a
-    # packed concat but each member is a distinct LEGAL value, not a positional
-    # bit-field — it must stay BLOCK-eligible.
+    # ORGANIC #770 r2/r3 — do NOT downgrade when the surrounding text marks a
+    # genuine ENUMERATED VALUE SET with STRONG membership semantics ('any other
+    # value is reserved/illegal', 'accepts only', 'must handle each', 'one of the
+    # following', 'legal/allowed values'). `GAIN_LEVELS = {8'h10, 8'h20, ...}`
+    # with 'any other value is reserved' has identical syntax to a packed concat
+    # but each member is a distinct LEGAL value — it must stay BLOCK-eligible.
+    # r3: the BROAD `_SET_CONTEXT_RE` (a bare 'one of', 'valid value') was REMOVED
+    # from this override — it fired on DSP/filter prose describing the bit-fields
+    # ('each tap is one of the calibrated levels') and wrongly KEPT a real
+    # single-signal packed concatenation as a value-set
+    # (configurable_digital_low_pass_filter_0001). Only the NARROWED strong-marker
+    # `_ENUM_VALUE_CTX_RE` gates the override now.
     ctx_window = spec_text[max(0, brace_match.start() - 200):
                            brace_match.end() + 120]
-    if _SET_CONTEXT_RE.search(ctx_window) or _ENUM_VALUE_CTX_RE.search(ctx_window):
+    if _ENUM_VALUE_CTX_RE.search(ctx_window):
         return False
     # take the current line's text before the brace (assignment lives on one line)
     line_start = pre.rfind("\n") + 1
@@ -1140,13 +1205,19 @@ def _is_single_signal_concat_assignment(spec_text: str, brace_match) -> bool:
     pre_stripped = pre_line.rstrip()
     if not (pre_stripped.endswith("=") or pre_stripped.endswith("<=")):
         return False
-    # the token chain just before the `=`/`<=` must be a single signal
-    # (identifier, optional bit-select), nothing comma-joined.
-    lhs = re.sub(r"(<=|=)\s*$", "", pre_stripped).rstrip()
-    if "," in lhs or "{" in lhs:
+    # the signal being assigned is the LAST identifier (+ optional bit-select)
+    # immediately before the `=`/`<=`. r3: take only that trailing token — a
+    # prose-prefixed assignment ("the input sample shift register is data_in =
+    # {...}") left the whole phrase as the lhs and failed the identifier
+    # fullmatch, silently skipping the concat downgrade (lpf FP). A comma right
+    # before the `=` (a list element) is still rejected.
+    lhs_region = re.sub(r"(<=|=)\s*$", "", pre_stripped).rstrip()
+    if lhs_region.endswith(","):
         return False
-    if not re.fullmatch(r"[A-Za-z_]\w*(?:\s*\[[^\]]*\])?", lhs):
+    mlhs = re.search(r"([A-Za-z_]\w*(?:\s*\[[^\]]*\])?)\s*$", lhs_region)
+    if not mlhs:
         return False
+    lhs = mlhs.group(1).strip()
     # ORGANIC #770 r2 Step-2.7 — the SET-CONTEXT vocabulary gate above
     # (`_SET_CONTEXT_RE` / `_ENUM_VALUE_CTX_RE` over the surrounding window) is the
     # discriminator: a value-SET written compactly as `NAME = {v1, v2, ...}` is

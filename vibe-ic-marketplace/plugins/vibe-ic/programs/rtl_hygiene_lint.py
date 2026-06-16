@@ -550,11 +550,40 @@ def _localparam_int_values(src: str) -> Dict[str, int]:
     vals: Dict[str, int] = {}
     for m in _LOCALPARAM_DECL_RE.finditer(src):
         name, rhs = m.group(1), m.group(2)
-        if name in VERILOG_KEYWORDS:
-            continue
-        v = _eval_const_int(rhs, vals)
-        if v is not None:
-            vals[name] = v
+        # ORGANIC #770 r3 — a COMMA-SEPARATED multi-declaration
+        # (`localparam IDLE=2'd0, LOAD=2'd1, RUN=2'd2, DONE=2'd3;`) captures the
+        # FIRST name then the whole tail as `rhs`. Split the tail into the
+        # remaining `NAME = value` continuations so every state localparam
+        # resolves (a symbolic-localparam FSM declared on one line was otherwise
+        # unrecognised → case-no-default false WARN, binary_search_tree FP).
+        # Split only at TOP-LEVEL commas (depth-aware so a `{a,b}`/`(a,b)` value
+        # stays intact).
+        segs: List[str] = []
+        depth = 0
+        cur = ""
+        for ch in rhs:
+            if ch in "([{":
+                depth += 1
+            elif ch in ")]}":
+                depth = max(0, depth - 1)
+            if ch == "," and depth == 0:
+                segs.append(cur)
+                cur = ""
+            else:
+                cur += ch
+        if cur:
+            segs.append(cur)
+        pairs = [(name, segs[0] if segs else rhs)]
+        for seg in segs[1:]:
+            pm = re.match(r"\s*([A-Za-z_]\w*)\s*=\s*(.+)$", seg, re.DOTALL)
+            if pm:
+                pairs.append((pm.group(1), pm.group(2)))
+        for nm, vexpr in pairs:
+            if nm in VERILOG_KEYWORDS:
+                continue
+            v = _eval_const_int(vexpr, vals)
+            if v is not None:
+                vals[nm] = v
     return vals
 
 
