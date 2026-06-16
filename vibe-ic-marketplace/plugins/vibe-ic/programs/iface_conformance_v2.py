@@ -142,6 +142,97 @@ _NONANSI_PORT_RE = re.compile(
     r"((?:[A-Za-z_]\w*\s*,\s*)*[A-Za-z_]\w*)\s*;")
 
 
+# A `module <name>` keyword followed by an identifier — the anchor for the
+# depth-aware header scan below. (The full `#(...)` / `(...)` blocks are then
+# extracted by walking paren depth, NOT by a fixed-nesting regex, so a param
+# default with a nested-paren expression — `$clog2(W)`, `(A + $clog2(B))`,
+# nested ternary — no longer makes the whole header un-matchable.)
+_MODULE_KW_RE = re.compile(r"\bmodule\s+([A-Za-z_]\w*)")
+
+
+@dataclass
+class _HdrMatch:
+    """A depth-scanned module-header match, duck-typed to the subset of the
+    re.Match interface `_parse_module_match` uses: `.group(1)` (module name),
+    `.group('ports')` (the port-list blob, or None), and `.end()` (the index
+    just past the closing `;` of the header — where the body begins)."""
+    name: str
+    ports: Optional[str]
+    end_idx: int
+
+    def group(self, key):
+        if key == 1:
+            return self.name
+        if key == "ports":
+            return self.ports
+        raise KeyError(key)
+
+    def end(self) -> int:
+        return self.end_idx
+
+
+def _scan_balanced(src: str, open_idx: int) -> int:
+    """Given `src[open_idx] == '('`, return the index just past the matching
+    ')' to ARBITRARY nesting depth, or -1 if unbalanced. Walks paren depth so
+    nested-paren param defaults / port-type expressions are spanned correctly."""
+    depth = 0
+    i = open_idx
+    n = len(src)
+    while i < n:
+        c = src[i]
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return -1
+
+
+def _find_module_headers(src: str) -> List[_HdrMatch]:
+    """Locate every `module <name> [#(...)] [(...)] ;` header in (comment-
+    stripped) `src` using a paren-depth-aware scan instead of a single-level
+    regex. Returns headers in source order; each carries the module name, the
+    raw port-list blob (or None for a non-ANSI bare-name-less header), and the
+    body-start index. A header that does not terminate in a `;` (e.g. a stray
+    `module` keyword in prose) is skipped."""
+    out: List[_HdrMatch] = []
+    for km in _MODULE_KW_RE.finditer(src):
+        name = km.group(1)
+        i = km.end()
+        n = len(src)
+        # skip whitespace
+        while i < n and src[i].isspace():
+            i += 1
+        # optional #(...) parameter block
+        if i < n and src[i] == "#":
+            j = i + 1
+            while j < n and src[j].isspace():
+                j += 1
+            if j < n and src[j] == "(":
+                close = _scan_balanced(src, j)
+                if close == -1:
+                    continue
+                i = close
+                while i < n and src[i].isspace():
+                    i += 1
+        # optional (ports...) block
+        ports_blob: Optional[str] = None
+        if i < n and src[i] == "(":
+            close = _scan_balanced(src, i)
+            if close == -1:
+                continue
+            ports_blob = src[i + 1:close - 1]
+            i = close
+            while i < n and src[i].isspace():
+                i += 1
+        # header must terminate in `;`
+        if i < n and src[i] == ";":
+            out.append(_HdrMatch(name=name, ports=ports_blob, end_idx=i + 1))
+    return out
+
+
 @dataclass
 class RtlIface:
     module_name: Optional[str] = None
@@ -192,12 +283,18 @@ def _parse_module_match(src: str, m: "re.Match") -> RtlIface:
 def parse_rtl(text: str) -> RtlIface:
     """Parse the FIRST module declaration: name (case-preserved) + ports with
     directions. Handles ANSI (directions in the header) and non-ANSI
-    (directions in the body) port styles. This is the TOP the harness binds."""
+    (directions in the body) port styles. This is the TOP the harness binds.
+
+    Uses a paren-depth-aware header scan (`_find_module_headers`) so a module
+    whose `#(params)` default contains a nested-paren expression (`$clog2(W)`,
+    `(A + $clog2(B))`, nested ternary) is matched correctly instead of being
+    silently skipped — which previously made the parser fall through to a later
+    sub-module and report every real top port as MISSING (ORGANIC #753)."""
     src = _strip_comments(text)
-    m = _MODULE_HDR_RE.search(src)
-    if not m:
+    hdrs = _find_module_headers(src)
+    if not hdrs:
         return RtlIface()
-    return _parse_module_match(src, m)
+    return _parse_module_match(src, hdrs[0])
 
 
 def parse_all_rtl(text: str) -> List[RtlIface]:
@@ -206,7 +303,7 @@ def parse_all_rtl(text: str) -> List[RtlIface]:
     counts as SATISFIED — the prompt's given-code may name a sub-module's ports
     that are legitimately declared on that sub-module, not the top (#726)."""
     src = _strip_comments(text)
-    return [_parse_module_match(src, m) for m in _MODULE_HDR_RE.finditer(src)]
+    return [_parse_module_match(src, m) for m in _find_module_headers(src)]
 
 
 # ── prompt interface extraction ─────────────────────────────────────────────
@@ -220,11 +317,30 @@ _BACKTICK_RE = re.compile(r"`([A-Za-z_]\w*)`")
 # "input `register_addr_i`". The window is intentionally tight so unrelated
 # prose mentions don't fabricate ports (advisory anyway).
 _DIR_NEAR_BEFORE_RE = re.compile(
-    r"\b(input|output|inout)\b[^\n`]{0,40}?`([A-Za-z_]\w*)`",
+    r"\b(input|output|inout)\b([^\n`]{0,40}?)`([A-Za-z_]\w*)`",
     re.IGNORECASE)
 _DIR_NEAR_AFTER_RE = re.compile(
-    r"`([A-Za-z_]\w*)`[^\n`]{0,40}?\b(?:is\s+(?:an?\s+)?)?(input|output|inout)\b",
+    r"`([A-Za-z_]\w*)`([^\n`]{0,40}?)\b(?:is\s+(?:an?\s+)?)?(input|output|inout)\b",
     re.IGNORECASE)
+
+# (#753) COPULAR / VALUE-ASSIGNMENT guard for the direction-word-BEFORE rule:
+# in mux/selector specs a sentence like "the output clock should be `clk2`" /
+# "the output is `clkN`" / "output = `clkN`" describes which INPUT source an
+# output EQUALS, not the backticked net's OWN direction. When the gap between
+# the direction word and the backtick contains a copular / value verb, the
+# backtick is the VALUE, not a port of that direction — skip the record.
+_COPULAR_GAP_RE = re.compile(
+    r"(?:\bshould\s+be\b|\bis\b|\bare\b|\bequals?\b|\bbecomes?\b|\bdrives?\b|=)",
+    re.IGNORECASE)
+
+# (#753) NOUN guard for the direction-word-AFTER rule: "the input"/"the output"
+# where the direction word is the trailing NOUN ("the input word"/"the input")
+# is a reference to the data word, NOT a port-direction tag (e.g.
+# "`sync_header` is the first 2 bits of the input", "`Dx` ... from the input").
+# Reject when the direction word is immediately preceded by the bare article
+# "the" (the indefinite "is an output" port phrasing is already consumed by the
+# rule's optional `is\s+an?\s+` prefix, so it is NOT caught by this guard).
+_NOUN_THE_TAIL_RE = re.compile(r"\bthe\s*$", re.IGNORECASE)
 
 # A given-code module header inside the prompt (e.g. a fenced template the
 # author must complete) — its ports are the authoritative interface.
@@ -325,11 +441,78 @@ def regmap_csr_names(prompt: str) -> Set[str]:
     return names
 
 
+# (#753) A markdown table HEADER that is a DESCRIPTION / FSM-state / metadata
+# table — its first column names a concept (State / Field / Signal description),
+# NOT a port direction. Such a table has NO Direction column (and no Offset
+# column, which would make it a register map). Its first-column backtick names
+# are state labels / internal entry fields, never top-level ports, so they must
+# not be harvested as port names from the bare-`name | word` inline scan.
+_DESC_FIRSTCOL_HDR = re.compile(
+    r"^\s*(state|field|register\s*field|entry|signal|name|parameter|param)\s*$",
+    re.I)
+_DIR_HDR_RE = re.compile(r"^\s*direction\s*$", re.I)
+
+
+def _desc_table_firstcol_names(prompt: str) -> Set[str]:
+    """First-column backtick names of any markdown table whose header first cell
+    is a concept column (State / Field / Entry / Signal) AND which has NO
+    Direction column. These are FSM-state labels / internal-entry-metadata field
+    names (`IDLE`/`LOAD`/`SHIFT`/`LATCH`; `valid`/`cache_line_addr`/`write`/
+    `next`/`next_index`), never top-level ports. Structural + chip-AGNOSTIC: a
+    genuine port table is excluded because it carries a Direction column."""
+    names: Set[str] = set()
+    lines = prompt.splitlines()
+    n = len(lines)
+    i = 0
+    while i < n - 1:
+        line = lines[i]
+        if line.count("|") < 2:
+            i += 1
+            continue
+        header = _split_md_row_local(line)
+        delim = _split_md_row_local(lines[i + 1]) if i + 1 < n else []
+        if not _is_md_delim_local(delim) or len(delim) != len(header):
+            i += 1
+            continue
+        hdr_clean = [h.strip().strip("*_ ") for h in header]
+        has_dir = any(_DIR_HDR_RE.match(h) for h in hdr_clean)
+        first_is_desc = bool(hdr_clean) and bool(_DESC_FIRSTCOL_HDR.match(hdr_clean[0]))
+        if has_dir or not first_is_desc:
+            i += 1
+            continue
+        j = i + 2
+        while j < n:
+            row = lines[j]
+            if row.count("|") < 1:
+                break
+            cells = _split_md_row_local(row)
+            if _is_md_delim_local(cells):
+                j += 1
+                continue
+            if all(c == "" for c in cells):
+                break
+            if cells:
+                cell = cells[0].strip().strip("`*_ ")
+                if re.fullmatch(r"[A-Za-z_]\w*", cell):
+                    names.add(cell)
+            j += 1
+        i = j if j > i else i + 1
+    return names
+
+
 def _table_ports(prompt: str) -> Dict[str, str]:
     """Markdown table rows: first backtick cell = name, a later cell carrying
     a direction word = direction. Returns name→direction (lower, '' if no
-    direction word in the row)."""
+    direction word in the row).
+
+    (#753) A first-column backtick name from a DESCRIPTION / FSM-state / metadata
+    table (a 2-column `State|Description` / `Field|Description` table with NO
+    Direction column) is NOT a port — exclude it from the no-direction
+    (`setdefault(name, "")`) branch so FSM-state labels and internal entry
+    fields are not fabricated as ports. A row that DOES carry a direction word is
+    still harvested unconditionally (a genuine port table)."""
     out: Dict[str, str] = {}
+    desc_only = _desc_table_firstcol_names(prompt)
     # Split on the pipe so an inline single-line table (the acceptance shape)
     # and a true multi-row markdown table both work: scan windows of
     # `\`name\` | dir` regardless of line boundaries.
@@ -338,7 +521,7 @@ def _table_ports(prompt: str) -> Dict[str, str]:
         word = cell_m.group(2).lower()
         if word in ("input", "output", "inout"):
             out[name] = word
-        else:
+        elif name not in desc_only:
             out.setdefault(name, "")
     return out
 
@@ -350,6 +533,72 @@ def _given_code_ports(prompt: str) -> Tuple[Optional[str], Dict[str, str]]:
     if iface.module_name is None and not iface.ports:
         return None, {}
     return iface.module_name, dict(iface.ports)
+
+
+# Internal-net declaration inside a given-code block: `logic [1:0] sync_header;`,
+# `reg [7:0] type_field;`, `wire a, b;`. These are body decls (no input/output
+# keyword), so the named identifiers are authoritatively INTERNAL, never ports.
+_GIVEN_INTERNAL_RE = re.compile(
+    r"(?<![A-Za-z_.])(?:logic|wire|reg)\b"
+    r"(?:\s+(?:signed|unsigned))?"
+    r"(?:\s*\[[^\]]*\])?\s*"
+    r"((?:[A-Za-z_]\w*\s*,\s*)*[A-Za-z_]\w*)\s*[;=]")
+
+
+def given_code_internal_names(prompt: str) -> Set[str]:
+    """Lower-cased identifiers that the prompt's OWN given code declares as
+    INTERNAL nets (`logic`/`wire`/`reg` body decls, NOT ports) or as
+    `localparam`/`parameter` constants. These are authoritatively non-ports —
+    the prompt's skeleton itself fixes them internal — so a prose / table
+    mention of such a name must NOT be charged as a MISSING-PORT. Mirrors the
+    existing module-name (#726b) and regmap-CSR (#738) exclusions; chip-AGNOSTIC
+    (pure structure over the prompt's given code, no design literal).
+
+    Scoped to a fenced/given code region: only `input`/`output`-free body
+    declarations and parameter declarations are collected, so a genuine ANSI
+    port (`input logic [1:0] foo`) is never harvested as internal. The caller
+    still applies a never-mask guard (only suppress a name the RTL does NOT
+    declare as a real port), so this can never hide an actually-missing port."""
+    names: Set[str] = set()
+    # comments stripped so a `// comment` does not bleed into a decl span.
+    text = _strip_comments(prompt)
+    # body internal-net declarations (logic/wire/reg WITHOUT a direction kw):
+    # we exclude any decl whose line carries input/output/inout (that is a port,
+    # handled by the ANSI parser, not an internal net).
+    for m in _GIVEN_INTERNAL_RE.finditer(prompt):
+        # guard: the matched decl must not be an ANSI port decl
+        start = prompt.rfind("\n", 0, m.start()) + 1
+        line = prompt[start:m.start()]
+        if _DIR_WORD_RE.search(line):
+            continue
+        for nm in re.split(r"\s*,\s*", m.group(1).strip()):
+            nm = nm.strip()
+            if nm:
+                names.add(nm.lower())
+    # localparam / parameter constants. Each `parameter`/`localparam` keyword is
+    # followed by `<NAME> = <value>`; subsequent NAMEs may be comma-continued
+    # under ONE keyword (`localparam IDLE=.., LOAD=.., SHIFT=.., LATCH=..;`) or
+    # each carry its own keyword inside an ANSI `#( parameter X=.., parameter
+    # Y=.. )` header. Capture the keyword's own NAME, then any comma-continued
+    # `<NAME> =` that follows up to the next keyword / `;` / `)`.
+    for km in re.finditer(r"\b(localparam|parameter)\b", text):
+        seg = text[km.end():]
+        # stop at the next param keyword, a `;`, or the closing `)` of #(...)
+        stop = re.search(r"\b(?:localparam|parameter)\b|;|\)", seg)
+        seg = seg[:stop.start()] if stop else seg
+        for assign in seg.split(","):
+            nm = assign.split("=")[0]
+            nm = re.sub(r"^\s*(?:int|integer|logic|bit|signed|unsigned|"
+                        r"\[[^\]]*\])\s*", "", nm).strip().strip("`*_ ")
+            if re.fullmatch(r"[A-Za-z_]\w*", nm):
+                names.add(nm.lower())
+    # never-mask: if the given-code's OWN module header declares a name as a
+    # PORT, it is authoritatively a port — drop it from the internal set even if
+    # a (contradictory) body decl also names it. The harness binds it as a port.
+    gm_name, gm_ports = _given_code_ports(prompt)
+    for pn in gm_ports:
+        names.discard(pn.lower())
+    return names
 
 
 @dataclass
@@ -388,9 +637,21 @@ def extract_prompt_iface(prompt: str) -> PromptIface:
                 "given_code")
     # (c) backtick name + nearby direction word (prose)
     for m in _DIR_NEAR_BEFORE_RE.finditer(prompt):
-        pif.add(m.group(2), m.group(1).lower(), "prose")
+        gap = m.group(2) or ""
+        # (#753) skip copular/value-assignment spans ("the output ... should be
+        # `clk2`") — the backtick is the VALUE the (output) signal equals (the
+        # source it selects), not the port's own direction.
+        if _COPULAR_GAP_RE.search(gap):
+            continue
+        pif.add(m.group(3), m.group(1).lower(), "prose")
     for m in _DIR_NEAR_AFTER_RE.finditer(prompt):
-        pif.add(m.group(1), m.group(2).lower(), "prose")
+        gap = m.group(2) or ""
+        # (#753) skip "the input"/"the output" trailing-NOUN references ("`Dx` ...
+        # from the input", "`sync_header` is the first 2 bits of the input") —
+        # here the direction word is the data-word noun, not a port-direction.
+        if _NOUN_THE_TAIL_RE.search(gap):
+            continue
+        pif.add(m.group(1), m.group(3).lower(), "prose")
     # (d) wavedrom signal names (names only, no direction)
     for m in _WAVEDROM_NAME_RE.finditer(prompt):
         pif.add(m.group(1), "", "wavedrom")
@@ -443,6 +704,14 @@ def check_conformance(rid: Optional[str], prompt: str, rtl_text: str,
     # harness never binds to them, so they must not be charged as MISSING-PORT.
     regmap_csrs = regmap_csr_names(prompt)
 
+    # (#753) Names the prompt's OWN given code declares as INTERNAL nets
+    # (`logic`/`wire`/`reg` body decls) or `localparam`/`parameter` constants are
+    # authoritatively non-ports — the skeleton itself fixes them internal. A
+    # prose / FSM-state-table / parameter mention of such a name (`sync_header`,
+    # `type_field`, `IDLE`/`LOAD`/`SHIFT`/`LATCH`, `PIPE_DEPTH`) must NOT be
+    # charged as MISSING-PORT. Same never-mask guard as the regmap rule below.
+    given_internal = given_code_internal_names(prompt)
+
     # (1) MODULE-NAME-CASE: harness top from id must match the RTL module name
     # CASE-EXACTLY. Only flag when the names match case-INSENSITIVELY but
     # differ in case (a genuinely different name is the author's design freedom
@@ -481,6 +750,17 @@ def check_conformance(rid: Optional[str], prompt: str, rtl_text: str,
         # genuine signal): only skip when it is also absent from every module.
         if (name.lower() in regmap_csrs
                 and name.lower() not in all_port_names_lower):
+            continue
+        # (#753) a name the prompt's given code declares internal/parameter is not
+        # a port — but never mask a name the RTL actually declares as a port, NOR
+        # a name the prompt PROSE/table declares with an EXPLICIT DIRECTION
+        # (#753 adversarial-review: an unrelated helper block's internal
+        # `reg data_valid;` must not mask a genuinely-required top port the prompt
+        # declares as `an input data_valid`). Only a name whose sole prompt
+        # evidence is direction-LESS (a bare table/wavedrom mention) is masked.
+        if (name.lower() in given_internal
+                and name.lower() not in all_port_names_lower
+                and not (pif.ports.get(name) or "").strip()):
             continue
         if name.lower() not in all_port_names_lower:
             srcs = ",".join(sorted(pif.sources.get(name, set())))

@@ -145,6 +145,17 @@ _ACTIVE_LOW_RST = ("rst_n", "rstn", "reset_n", "resetn", "arst_n", "arstn",
                    "reset_b", "rst_ni", "resetb_n")
 _RST_NAME_HINT = ("rst", "reset")
 
+# CLEAR-class controls (C5). A synchronous CLEAR/FLUSH input (`clr`, `clear`,
+# `flush`) is reset-EQUIVALENT for measurement: held ACTIVE it permanently
+# flushes the pipeline so the output can NEVER assert. The canonical TB must
+# therefore hold it in its INACTIVE state during measurement (like a reset),
+# NOT pin it to the all-ones data constant. They are active-HIGH by the usual
+# convention (asserted HIGH clears), with the same `_n`/`_b` low-suffix override
+# as resets. This is a NARROW, name-anchored set — it does NOT capture ordinary
+# data inputs.
+_CLEAR_NAME_EXACT = frozenset({"clr", "clear", "clrn", "clr_n", "clear_n",
+                               "flush", "aclr", "sclr", "clra", "clrb"})
+
 # DoS guards (MED). A real event->output latency is small; a huge resolved
 # `--expect` (e.g. `8*1000000`) emitted into the TB loop bound + `#delay`
 # cutoff would stall each record ~120 s. Reject an out-of-range resolved expect
@@ -165,17 +176,81 @@ class ExpectError(ValueError):
     """Raised when --expect cannot be safely evaluated to an integer."""
 
 
+# ─── Verilog literal / $clog2 normalisation (C5 — param-default parse) ────────
+# A module's #(...) defaults are HDL, not Python: a sized/based literal
+# (`'d128`, `8'hFF`, `4'b1010`, `'sd1`) and the elaboration-time function
+# `$clog2(N)` are perfectly legal default RHS values, yet Python's ast.parse
+# chokes on the leading apostrophe and on `$`. Before walking the AST we
+# CANONICALISE the HDL literal forms to plain decimal so a faithful, very common
+# parameterised design can have its #(...) defaults resolved (else the params
+# are silently dropped and the generated TB's port widths stay unresolved →
+# `Unable to bind parameter` compile crash). PURE deterministic text rewrite —
+# still no eval(); the result is re-validated by the strict AST whitelist below.
+import re as _re_lit  # noqa: E402 (literal-normaliser only; main `re` below)
+
+# Verilog based literal:  [size] ' [s] base digits[_digits]
+#   'd128  8'hFF  4'b1010  16'sd1  'b10_10  'hDEAD_BEEF
+_VLOG_BASED_LIT_RE = _re_lit.compile(
+    r"(?<![\w'])(\d+)?\s*'\s*[sS]?\s*([dDbBoOhH])\s*([0-9a-fA-FxXzZ_]+)")
+_VBASE = {"b": 2, "o": 8, "d": 10, "h": 16}
+
+
+def _vlog_literal_to_int(size: Optional[str], base_ch: str, digits: str
+                         ) -> Optional[int]:
+    """Convert one Verilog based literal's (base, digits) to a Python int, or
+    None if it is not a clean integer (e.g. contains x/z don't-cares)."""
+    base = _VBASE[base_ch.lower()]
+    clean = digits.replace("_", "")
+    if not clean or any(c in "xXzZ?" for c in clean):
+        return None  # don't-care literal — not a resolvable constant
+    try:
+        return int(clean, base)
+    except ValueError:
+        return None
+
+
+def _normalise_hdl_literals(expr: str) -> str:
+    """Rewrite Verilog based literals in `expr` to plain decimal so the strict
+    arithmetic AST can parse them. `$clog2(` is mapped to a sentinel call name
+    `clog2(` that the whitelisted evaluator recognises. Unresolvable literals
+    (x/z) are left verbatim so the AST step rejects them honestly."""
+    # $clog2(...) → clog2(...) (a recognised, side-effect-free integer fn)
+    out = expr.replace("$clog2", "clog2")
+
+    def _sub(m: "object") -> str:
+        v = _vlog_literal_to_int(m.group(1), m.group(2), m.group(3))
+        return str(v) if v is not None else m.group(0)
+
+    return _VLOG_BASED_LIT_RE.sub(_sub, out)
+
+
+def _clog2(n: int) -> int:
+    """Verilog $clog2: ceil(log2(n)) — bits needed to index n values.
+    $clog2(0)=$clog2(1)=0; $clog2(2)=1; $clog2(32)=5; $clog2(33)=6."""
+    if n <= 1:
+        return 0
+    return (n - 1).bit_length()
+
+
+# Whitelisted side-effect-free integer functions usable in a param default /
+# --expect (mirroring the HDL elaboration-time functions). NEVER arbitrary code.
+_ALLOWED_CALLS = {"clog2": _clog2}
+
+
 def safe_eval_arith(expr: str, params: Dict[str, int]) -> int:
     """Evaluate a parameter arithmetic expression SAFELY.
 
-    Permitted: integer literals, the parameter NAMEs in `params`, the binary
-    operators ``+ - * //`` and unary ``+ -``, and parentheses. ANYTHING else
-    (function calls, attribute access, names not in `params`, ``/`` true-div,
+    Permitted: integer literals (incl. Verilog based literals `'d128`/`8'hFF`,
+    canonicalised to decimal first), the parameter NAMEs in `params`, the binary
+    operators ``+ - * //`` and unary ``+ -``, parentheses, and the whitelisted
+    side-effect-free integer functions ``$clog2(...)``. ANYTHING else (other
+    function calls, attribute access, names not in `params`, ``/`` true-div,
     ``**`` power, bit ops, …) RAISES ExpectError. Never executes arbitrary
     code — the AST is walked node-by-node against a strict whitelist.
     """
     if not expr or not expr.strip():
         raise ExpectError("empty --expect expression")
+    expr = _normalise_hdl_literals(expr)
     try:
         tree = ast.parse(expr, mode="eval")
     except SyntaxError as e:
@@ -214,6 +289,20 @@ def safe_eval_arith(expr: str, params: Dict[str, int]) -> int:
                     f"--expect may only use integer literals, got "
                     f"{node.value!r}")
             return node.value
+        # a whitelisted side-effect-free integer function call, e.g. $clog2(N)
+        if isinstance(node, ast.Call):
+            fn = node.func
+            if (not isinstance(fn, ast.Name) or fn.id not in _ALLOWED_CALLS
+                    or node.keywords):
+                raise ExpectError(
+                    f"only the whitelisted integer functions "
+                    f"{sorted(_ALLOWED_CALLS)} (e.g. $clog2) are allowed in "
+                    f"--expect / param defaults")
+            argv = [_ev(a) for a in node.args]
+            if len(argv) != 1:
+                raise ExpectError(
+                    f"{fn.id} expects exactly one integer argument")
+            return int(_ALLOWED_CALLS[fn.id](argv[0]))
         # a parameter name
         if isinstance(node, ast.Name):
             if node.id not in params:
@@ -305,20 +394,30 @@ def _is_clock(name: str) -> bool:
     return name.lower() in _CLK_NAMES
 
 
+def _looks_like_clear(name: str) -> bool:
+    """A synchronous CLEAR/FLUSH control — reset-equivalent for MEASUREMENT
+    (held active it permanently flushes the pipeline). NARROW, name-anchored
+    (an exact name in `_CLEAR_NAME_EXACT`); does NOT capture data inputs."""
+    return name.lower() in _CLEAR_NAME_EXACT
+
+
 def _reset_is_active_low(name: str) -> bool:
     lo = name.lower()
     if lo in _ACTIVE_LOW_RST:
         return True
-    # generic low-asserted suffix on a reset-named port
-    if any(h in lo for h in _RST_NAME_HINT):
+    # generic low-asserted suffix on a reset- OR clear-named port
+    if any(h in lo for h in _RST_NAME_HINT) or _looks_like_clear(lo):
         return (lo.endswith("_n") or lo.endswith("n") or lo.endswith("_b")
                 or lo.endswith("b") or lo.startswith("n"))
     return False
 
 
 def _looks_like_reset(name: str) -> bool:
+    """A reset-CLASS control to HOLD INACTIVE during measurement — a reset
+    proper OR a synchronous clear/flush (C5). Holding either ACTIVE would keep
+    the design permanently quiescent so the output could never assert."""
     lo = name.lower()
-    return any(h in lo for h in _RST_NAME_HINT)
+    return any(h in lo for h in _RST_NAME_HINT) or _looks_like_clear(lo)
 
 
 # ─── per-output latency inference from intermediate registers (#740 G3) ───────
@@ -479,8 +578,14 @@ def classify_ports(ports: List[Tuple[str, str, str]],
             if clk is None and _is_clock(name):
                 clk = pi
                 continue
-            is_rst = (reset_override is not None and name == reset_override) or \
-                     (reset_override is None and _looks_like_reset(name))
+            # A reset-CLASS control (reset proper OR a synchronous clear/flush,
+            # C5) is held INACTIVE during measurement. A clear/flush is held
+            # inactive EVEN when an explicit --reset names a different port:
+            # leaving it pinned to the all-ones data constant would permanently
+            # flush the pipeline so the output could never assert.
+            is_rst = (reset_override is not None
+                      and (name == reset_override or _looks_like_clear(name))) \
+                or (reset_override is None and _looks_like_reset(name))
             if is_rst:
                 resets.append(pi)
                 continue
@@ -606,7 +711,14 @@ def build_measurement_tb(top: str, clk: Optional[PortInfo],
     #     (we are just after a negedge) and let purely-combinational logic
     #     settle WITHOUT crossing a posedge (a small in-phase delay). If `out`
     #     goes HIGH with no clock edge → measured = 0.
-    L.append(f"    {ev} = 1'b1;")
+    #     C5: a MULTI-BIT event (e.g. a consensus/AND-reduction `inp[N-1:0]`)
+    #     must be asserted ALL-ONES, not the scalar `1'b1` (which sets only the
+    #     LSB ⇒ a consensus output never asserts). The width is the port's
+    #     concrete (param-substituted) width; a scalar renders as plain `1'b1`.
+    ev_w = _width_token(event_port, params)
+    ev_assert = "1'b1" if ev_w == "1" else f"{{{ev_w}{{1'b1}}}}"
+    ev_deassert = "1'b0" if ev_w == "1" else f"{{{ev_w}{{1'b0}}}}"
+    L.append(f"    {ev} = {ev_assert};")
     L.append("    #1;   // settle combinational paths, still inside the low phase")
     L.append(f"    if ({out} === 1'b1) begin")
     L.append("      measured = 0;")
@@ -620,7 +732,7 @@ def build_measurement_tb(top: str, clk: Optional[PortInfo],
     #       posedge E+1 reflects E's update — `out <= start` reads HIGH ⇒ 1;
     #       a 2-stage `r<=start; out<=r` reads 0 at E+1, HIGH at E+2 ⇒ 2.
     L.append("      @(posedge clk);          // event-latch posedge E (t=0)")
-    L.append(f"      {ev} <= 1'b0;            // one-edge event pulse")
+    L.append(f"      {ev} <= {ev_deassert};   // one-edge event pulse")
     L.append(f"      for (cyc = 1; cyc <= {max_cycles}; cyc = cyc + 1) begin")
     L.append("        @(posedge clk);        // posedge E+cyc")
     L.append(f"        if ({out} === 1'b1) begin")
@@ -682,7 +794,8 @@ _TIMEOUT_RE = re.compile(r"^LATENCY_TIMEOUT\s+(\d+)\s*$", re.MULTILINE)
 _PRECOND_RE = re.compile(r"^LATENCY_PRECONDITION_HIGH\s*$", re.MULTILINE)
 
 
-def measure_latency(rtl_path: Path, tb_text: str, workdir: Path
+def measure_latency(rtl_path: Path, tb_text: str, workdir: Path,
+                    context_files: Optional[List[Path]] = None
                     ) -> Tuple[Optional[int], str, str]:
     """Compile + run the measurement TB; return (measured, status, err).
 
@@ -693,12 +806,19 @@ def measure_latency(rtl_path: Path, tb_text: str, workdir: Path
                              measurement is meaningless).
     `err` is non-empty only on a compile/run failure (status "" then).
     The caller has already confirmed iverilog/vvp are present.
+
+    `context_files` (C5) are EXTRA RTL sources compiled alongside `--rtl` so a
+    DUT that instantiates a prompt-provided submodule (e.g. a leading-zero
+    counter, an sbox) resolves all module references. They are pure context —
+    `-s latency_tb` keeps the top fixed.
     """
     tb_path = workdir / "latency_tb.sv"
     tb_path.write_text(tb_text)
     binp = workdir / "latency_sim.vvp"
+    extra = [str(p) for p in (context_files or [])]
     rc, out, err = _run(["iverilog", "-g2012", "-o", str(binp),
-                         "-s", "latency_tb", str(rtl_path), str(tb_path)])
+                         "-s", "latency_tb", str(rtl_path), *extra,
+                         str(tb_path)])
     if rc != 0:
         blob = ((out or "") + "\n" + (err or "")).strip()
         return None, "", ("RTL + measurement-TB did not compile: "
@@ -725,6 +845,7 @@ def run_latency_conformance(
     reset_override: Optional[str], reset_active_low_flag: Optional[bool],
     input_const: int, max_cycles_override: Optional[int],
     mode: str = "latency", allow_no_handshake: bool = False,
+    context_files: Optional[List[Path]] = None,
 ) -> Tuple[int, Dict]:
     """Run the gate; return (rc, report). rc is the program exit code.
 
@@ -850,9 +971,11 @@ def run_latency_conformance(
                               max_cycles, params=params)
     report["measurement_tb_lines"] = tb.count("\n")
 
+    report["context_files"] = [str(p) for p in (context_files or [])]
     workdir = Path(tempfile.mkdtemp(prefix="latconf_"))
     try:
-        measured, status, err = measure_latency(rtl_path, tb, workdir)
+        measured, status, err = measure_latency(rtl_path, tb, workdir,
+                                                context_files=context_files)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -976,6 +1099,12 @@ def main(argv=None) -> int:
                          "--second-output (arithmetic over module params); when "
                          "given AND the inference is unambiguous, an ADVISORY "
                          "note states whether the inferred latency matches.")
+    ap.add_argument("--context", action="append", default=[],
+                    help="(C5) extra RTL source file(s) to compile alongside "
+                         "--rtl so a DUT that instantiates a prompt-provided "
+                         "submodule (leading-zero counter, sbox, …) resolves "
+                         "all module references. Repeatable; -s keeps the top "
+                         "fixed. A directory expands to its *.v/*.sv files.")
     ap.add_argument("--json", default=None, help="optional JSON report path")
     args = ap.parse_args(argv)
 
@@ -983,6 +1112,22 @@ def main(argv=None) -> int:
     if not rtl_path.is_file():
         print(f"ERROR: --rtl not found: {rtl_path}", file=sys.stderr)
         return 2
+
+    # Resolve --context into a concrete file list (a directory expands to its
+    # HDL sources; the --rtl file itself is never duplicated).
+    context_files: List[Path] = []
+    for c in args.context or []:
+        cp = Path(c)
+        if cp.is_dir():
+            for f in sorted(cp.iterdir()):
+                if f.suffix in (".v", ".sv") and f.resolve() != rtl_path.resolve():
+                    context_files.append(f)
+        elif cp.is_file():
+            if cp.resolve() != rtl_path.resolve():
+                context_files.append(cp)
+        else:
+            print(f"ERROR: --context not found: {cp}", file=sys.stderr)
+            return 2
 
     try:
         overrides = _parse_param_override(args.param)
@@ -995,7 +1140,8 @@ def main(argv=None) -> int:
         expect=args.expect, params_override=overrides,
         reset_override=args.reset, reset_active_low_flag=args.reset_active_low,
         input_const=args.input_const, max_cycles_override=args.max_cycles,
-        mode=args.mode, allow_no_handshake=args.allow_no_handshake)
+        mode=args.mode, allow_no_handshake=args.allow_no_handshake,
+        context_files=context_files)
 
     # ORGANIC #740 (G3) — SECOND-output per-output latency inference (ADVISORY).
     # Never changes rc: it only annotates the report + prints an advisory note.
