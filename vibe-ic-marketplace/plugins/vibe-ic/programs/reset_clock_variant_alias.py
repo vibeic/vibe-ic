@@ -641,6 +641,105 @@ _CONT_PORT_RE = re.compile(
     r"(\[[^\]]+\])?\s*(\w+)")
 
 
+# ORGANIC #766 — NON-ANSI body port declaration:
+# `input [3:0] foo, bar;` / `output reg q;` / `inout io_pad;`. The direction
+# keyword leads, an optional net-type + optional packed width follow, then a
+# comma-separated list of bare port names terminated by `;`. Mirrors the
+# field-verified non-ANSI body scan in iface_conformance_v2 `_parse_module_match`
+# (_NONANSI_PORT_RE) so the SHARED parser handles the same design class.
+# (#766r2) each name may carry trailing UNPACKED-array dimension group(s)
+# (`input [7:0] a [3:0];`). The unpacked dims are NOT captured into the bare-name
+# list — `_parse_nonansi_body_ports` strips them — but tolerating them here keeps
+# the port from being SILENTLY DROPPED (an §4.05 leak: a dropped non-ANSI array
+# port floats in the latency TB and bypasses the ANSI path's rc=3 NOT_APPLICABLE
+# guard, masking a real defect). The returned port re-enters classification with
+# its PACKED width; the unpacked dim is recovered downstream from the RTL text.
+_NONANSI_BODY_PORT_RE = re.compile(
+    r"\b(input|output|inout)\b\s*"
+    r"(?:(?:wire|reg|logic|signed|unsigned)\b\s*)*"
+    r"(\[[^\]]+\])?\s*"
+    r"((?:[A-Za-z_]\w*(?:\s*\[[^\]]+\])*\s*,\s*)*"
+    r"[A-Za-z_]\w*(?:\s*\[[^\]]+\])*)\s*;")
+
+
+def _module_body(text: str, module: str,
+                 defines: "Optional[set]" = None) -> Optional[str]:
+    """Return the BODY of `module <module>` — the text between the `;` that
+    terminates the module header (`module <m> [#(...)] (...);`) and the module's
+    matching `endmodule`. None when the module / header is not found. Used by the
+    non-ANSI fallback in :func:`parse_module_ports` to read the in-body direction
+    declarations of a header that lists only bare port names.
+
+    Comment-strip + (optional) preprocessor-arm resolution match the header
+    parser exactly so the body scan sees the same source surface the ANSI scan
+    did. chip-AGNOSTIC: pure Verilog/SV module-body grammar."""
+    text = _strip_comments(text)
+    if defines is not None:
+        text = _resolve_preprocessor_arms(text, defines)
+    m = re.search(rf"\bmodule\s+{re.escape(module)}\b", text)
+    if not m:
+        return None
+    # Find the `;` that ends the module header: the first ';' at paren depth 0
+    # after the module name (string-literal aware so a ';' inside "..." in a
+    # param default does not terminate the header early).
+    i, n = m.end(), len(text)
+    depth = 0
+    while i < n:
+        c = text[i]
+        if c == '"':
+            i += 1
+            while i < n and text[i] != '"':
+                if text[i] == "\\":
+                    i += 1
+                i += 1
+            i += 1
+            continue
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth = max(0, depth - 1)
+        elif c == ";" and depth == 0:
+            break
+        i += 1
+    if i >= n:
+        return None
+    body = text[i + 1:]
+    em = re.search(r"\bendmodule\b", body)
+    if em:
+        body = body[:em.start()]
+    return body
+
+
+def _parse_nonansi_body_ports(body: str,
+                              header_names: List[str]
+                              ) -> List[Tuple[str, str, str]]:
+    """ORGANIC #766 — bind each bare header port name to the direction/width
+    declared for it in the module BODY (non-ANSI style). `header_names` is the
+    ordered list of bare identifiers from the header port list; `body` is the
+    module body. Returns [(dir, width, name), ...] in HEADER ORDER for the names
+    that have a body direction declaration. Names with no body declaration are
+    dropped (they are not real directioned ports). Mirrors the body scan in
+    iface_conformance_v2 `_parse_module_match`."""
+    dir_by_name: Dict[str, str] = {}
+    width_by_name: Dict[str, str] = {}
+    for pm in _NONANSI_BODY_PORT_RE.finditer(body):
+        direction = pm.group(1)
+        width = (pm.group(2) or "").strip()
+        for nm in re.split(r"\s*,\s*", pm.group(3).strip()):
+            # (#766r2) strip any trailing UNPACKED-array dimension(s) to recover
+            # the bare identifier (`a [3:0]` -> `a`); the unpacked dim is handled
+            # downstream by the latency TB builder, never silently dropped here.
+            nm = re.split(r"\s*\[", nm.strip(), 1)[0].strip()
+            if nm and nm not in dir_by_name:
+                dir_by_name[nm] = direction
+                width_by_name[nm] = width
+    out: List[Tuple[str, str, str]] = []
+    for nm in header_names:
+        if nm in dir_by_name:
+            out.append((dir_by_name[nm], width_by_name[nm], nm))
+    return out
+
+
 def parse_module_ports(rtl_text: str, module: str,
                        defines: "Optional[set]" = None
                        ) -> List[Tuple[str, str, str]]:
@@ -686,6 +785,7 @@ def parse_module_ports(rtl_text: str, module: str,
     out: List[Tuple[str, str, str]] = []
     cur_dir: Optional[str] = None
     cur_width = ""
+    header_bare_names: List[str] = []  # #766 — bare names before any direction
     for seg in _split_top_level_commas(block):
         s = seg.strip()
         if not s:
@@ -699,11 +799,33 @@ def parse_module_ports(rtl_text: str, module: str,
             out.append((cur_dir, cur_width, dm.group(3)))
             continue
         if cur_dir is None:
+            # Directionless token before ANY direction keyword. In an ANSI
+            # header this is a stray; in a NON-ANSI header (`module foo(clk,
+            # resetn,...); input clk; ...`) it is a bare port name whose
+            # direction lives in the body. Record it for the #766 body-scan
+            # fallback below (the ANSI scan still treats it as no port).
+            bm = _CONT_PORT_RE.match(s)
+            if bm is not None:
+                header_bare_names.append(bm.group(2))
             continue  # directionless token before any direction → not an ANSI port
         cm = _CONT_PORT_RE.match(s)
         if cm is not None:
             w = (cm.group(1) or "").strip() or cur_width
             out.append((cur_dir, w, cm.group(2)))
+    # ORGANIC #766 — NON-ANSI fallback. When the header carried ONLY bare port
+    # names (no direction keyword anywhere in the port list, so the ANSI scan
+    # found zero ports), the directions live in the module BODY. Scan the body
+    # for `input|output|inout [w] name1, name2;` declarations and bind each bare
+    # header name to its body direction/width — mirroring the field-verified
+    # non-ANSI body scan in iface_conformance_v2 `_parse_module_match`. This is
+    # ADDITIVE: it fires only when the ANSI scan produced no ports AND the header
+    # had bare names, so every ANSI / comma-bundled header is byte-for-byte
+    # unaffected (§4.05 no-leak). A name with no body direction is dropped, so a
+    # bare non-port token never becomes a phantom port.
+    if not out and header_bare_names:
+        body = _module_body(rtl_text, module, defines)
+        if body:
+            out = _parse_nonansi_body_ports(body, header_bare_names)
     return out
 
 

@@ -273,11 +273,31 @@ def _detect_reset_mode_polarity(text: str):
 # so it matches rst/reset/clr/clear/por/srst/sclr conventions but NOT unrelated
 # identifiers that merely contain the letters (first / burst / worst).
 # chip-AGNOSTIC: generic reset-naming grammar, no design / vendor / SKU literal.
+#
+# #759 — AMBA bus-prefixed ACTIVE-LOW reset convention. The stem above is
+# anchored to start-or-`_`, so a reset stem GLUED to a short bus / clock-domain
+# prefix with NO delimiter is rejected: APB `presetn`/`preset_n`/`PRESETn`
+# (= p+reset), AHB `hresetn`/`hreset_n`, plus generic `sresetn`/`coreresetn`
+# all read as p|h|...+reset and break the `(?:^|_)` boundary, so
+# `_rtl_reset_ports` returned [] and a TB faithfully driving the design's real
+# reset port was scored UNCOVERED (every APB peripheral uses PRESETn). The two
+# extra branches below match a short (1-4 char) bus/domain prefix glued to a
+# reset/rst stem ONLY WHEN it carries the active-low `n` suffix (`reset_?n` /
+# `rst_?n`); that n-suffix is the noun-disambiguator that keeps real resets
+# (presetn/hresetn/sresetn) distinct from the noun `preset`/`preset_value`/
+# `prescaler`/`present`/`pre_setup` and from every other APB port (prdata/
+# pwrite/pready/pselx/penable/paddr/pwdata/pclk).
+# chip-AGNOSTIC: generic AMBA reset-naming grammar, no design / vendor / SKU
+# literal.
 _RESET_PORT_NAME_RE = re.compile(
-    r"(?:^|_)(?:a?rst|s?rst|reset|sclr|clr|clear|por)(?:_|n|ni|[0-9]|$)", re.I)
+    r"(?:^|_)(?:a?rst|s?rst|reset|sclr|clr|clear|por)(?:_|n|ni|[0-9]|$)"
+    r"|(?:^|_)[a-z]{1,4}(?:reset_?n|rst_?n)(?:_|[0-9]|$)"
+    r"|(?:^|_)[a-z]{1,4}(?:reset_?n|rst_?n)$", re.I)
 _RESET_PORT_EXACT = {
     "rst", "reset", "clr", "clear", "por", "srst", "sclr", "arst", "areset",
     "aresetn", "nrst", "nreset", "resetn", "rstn", "rst_n", "reset_n",
+    # AMBA bus-prefixed active-low resets (APB/AHB) — exact forms for safety.
+    "presetn", "preset_n", "hresetn", "hreset_n",
 }
 
 
@@ -397,10 +417,75 @@ def _has_clock(text: str) -> bool:
     return _mention_present_unnegated(text, r"\bclock\b|\bclk\b")
 
 
+# #760 (arithmetic_progression_generator_0015) — preventive/structural-fact
+# guard for the overflow/saturation/truncation structural-keyword extractor.
+# The #743 clause-scoped negation guard (_mention_present_unnegated / _clauses)
+# is wired ONLY into _has_reset/_has_clock; the overflow/signed/byteorder/
+# handshake loop (~line 539) bypasses it and does a bare rx.search(spec_text)
+# with NO comment-stripping and NO context guard. A *width-derivation* note such
+# as "WIDTH_OUT_VAL ... sized to prevent overflow" (carried verbatim from an RTL
+# inline comment // ... to prevent overflow) is a STRUCTURAL fact describing how
+# the design AVOIDS the condition, NOT a behavioral requirement to actively
+# HANDLE it — yet it derived a phantom overflow checklist item that hard-blocks a
+# correct edge-case ($clog2(0)) design under --strict. This guard inspects the
+# CLAUSE the keyword sits in: if the clause states the design PREVENTS/AVOIDS the
+# condition (prevent/avoid/sized to/wide enough to/so it does not …) AND does NOT
+# also state ACTIVE handling (saturate/clamp/wrap/correct/clip/round in the same
+# clause), the match is a width-sizing note, not a behavioral requirement — skip.
+# A real "must saturate to prevent overflow and clamp" keeps the requirement
+# because the active-handling verb co-occurs. chip-AGNOSTIC: pure preventive +
+# active-handling grammar, no chip / vendor / SKU literal.
+_PREVENTIVE_CTX_RE = re.compile(
+    r"\b(prevent|preventing|avoid|avoiding|sized\s+to|wide\s+enough|"
+    r"big\s+enough|large\s+enough|so\s+(?:it|that|they)\s+(?:do(?:es)?\s+not|"
+    r"never|won'?t|cannot)|to\s+ensure\s+no|guard(?:s|ed|ing)?\s+against|"
+    r"without\b)", re.I)
+# Active-handling verbs that mean the design DOES exercise the condition (so the
+# requirement is real even if it sits beside a "prevent" word).
+_ACTIVE_HANDLE_RE = re.compile(
+    r"\b(saturat\w*|clamp\w*|wrap\w*|clip\w*|round(?:s|ed|ing)?|"
+    r"correct\w*|truncat\w*|roll(?:s|ed|ing)?[- ]?over)\b", re.I)
+
+
+def _is_preventive_structural_fact(clause: str, matched_word: str) -> bool:
+    """True iff `clause` describes the design PREVENTING/AVOIDING the matched
+    overflow-family condition (a width-sizing / structural note) rather than
+    actively HANDLING it.
+
+    Suppress ONLY a preventive clause whose match is the bare condition NOUN
+    (overflow / underflow / wrap-around) — i.e. the design AVOIDS that condition.
+    If ANY active-handling verb (saturat*/clamp*/wrap*/clip*/round*/correct*/
+    truncat*) appears ANYWHERE in the clause, the design DOES exercise a
+    region behavior, so the requirement is real and is KEPT — no-leak biased:
+    when in doubt, KEEP. 'sized to prevent overflow' (noun-only, preventive) is
+    suppressed; 'saturate to prevent overflow and clamp', 'truncated output',
+    'wraps around on overflow' are all kept. (#760)"""
+    if not _PREVENTIVE_CTX_RE.search(clause):
+        return False
+    # The condition NOUN alone (overflow/underflow) in a preventive clause is a
+    # width-sizing/structural note. Any active-handling verb anywhere in the
+    # clause means the design HANDLES the region -> keep (do not suppress).
+    if _ACTIVE_HANDLE_RE.search(clause):
+        return False
+    return bool(re.fullmatch(r"(overflow|underflow|wrap[- ]?around)",
+                             matched_word.strip(), re.I))
+
+
 def _detect_latency(text: str) -> Optional[str]:
     """Return a human latency phrase if the spec states one, else None."""
-    if _SRC._detect_latency(text):
+    lat = _SRC._detect_latency(text)
+    if lat is True:
         return "registered / single-cycle latency"
+    # lat is False = the spec EXPLICITLY declares combinational / zero-latency /
+    # unregistered behaviour. That declaration is AUTHORITATIVE and suppresses
+    # the whole latency item — it must override the keyword-grep fallback below,
+    # which would otherwise re-derive a phantom "registered / N-cycle latency"
+    # from incidental wording (e.g. a combinational block that "completes in one
+    # clock cycle" means WITHIN one cycle, i.e. zero registered latency). This
+    # mirrors the #743 negation-guard pattern: a False from the helper is an
+    # explicit absence, not a "keep looking". (#758)
+    if lat is False:
+        return None
     m = _LATENCY_RE.search(text)
     if m:
         n = m.group(1) or m.group(2)
@@ -413,8 +498,68 @@ def _detect_latency(text: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 # Worked example:  "in 0x05 -> out 0x0A",  "f(3)=9",  "input=2 output=4"
 # ---------------------------------------------------------------------------
+# The separator is CAPTURED so a bare '=' (heavily overloaded: assignment,
+# arithmetic equality, encoding-legend "code = label") can be distinguished from
+# the unambiguous worked-example ARROWS ('->', '=>', '→', which mean "maps to /
+# produces"). A bare-'=' match is only charged as a worked example when it is a
+# genuine in==out DATA pair, NOT a control-code -> label ENCODING LEGEND
+# ("00=90 CW, 01=180, 10=270", a 2-bit selector legend on a port comment) nor an
+# arithmetic-expression fragment ("data_out = 8'b... << 4 = 8'b...") — see
+# _is_control_code_legend below. chip-AGNOSTIC: pure legend/expression grammar,
+# no chip / vendor / SKU literal. (#761)
 _WORKED_EXAMPLE_RE = re.compile(
-    r"(0[xXbB][0-9A-Fa-f_]+|\d+)\s*(?:->|→|=>|=)\s*(0[xXbB][0-9A-Fa-f_]+|\d+)")
+    r"(0[xXbB][0-9A-Fa-f_]+|\d+)\s*(->|→|=>|=)\s*(0[xXbB][0-9A-Fa-f_]+|\d+)")
+
+# Two or more comma/、-separated "N = label" entries on one line is an
+# ENUMERATION LEGEND (code -> human-readable label), not a sequence of I/O data
+# pairs. e.g. "00=90 CW, 01=180, 10=270 CW, 11=no rotation",
+# "1 = sign extend, 0 = zero fill". The label half may be non-numeric ("90 CW",
+# "no rotation"), which is exactly what a worked-example DATA pair is not.
+_LEGEND_ENTRY_RE = re.compile(
+    r"(0[xXbB][0-9A-Fa-f_]+|\d+|\d+'[bdh][0-9A-Fa-fxXzZ_]+)\s*[:=]\s*"
+    r"[0-9A-Za-z_]")
+# An arithmetic-operator context around a bare '=' ("<< 4 = 8'b...", "a + b = c")
+# is an equality of an EXPRESSION, not an input->output example.
+_ARITH_OP_RE = re.compile(r"[+\-*/%]|<<|>>|&|\||\^")
+
+
+def _line_of(text: str, pos: int) -> str:
+    """The full source LINE containing offset `pos` (no trailing newline)."""
+    start = text.rfind("\n", 0, pos) + 1
+    end = text.find("\n", pos)
+    if end < 0:
+        end = len(text)
+    return text[start:end]
+
+
+def _is_control_code_legend(text: str, m) -> bool:
+    """True iff a bare-'=' worked-example match is actually a control-code ->
+    label ENCODING LEGEND or an arithmetic-expression fragment rather than an
+    in==out DATA pair. ARROW matches ('->','=>','→') are never legends and never
+    reach this check. chip-AGNOSTIC: structural legend/expression grammar only.
+
+      * legend  : the match's own LINE holds >=2 comma-separated "N = label"
+                  entries (an enumerated selector legend), OR the left operand is
+                  enumerated elsewhere as a sized case label / selector code
+                  ("2'b10" / "10:" / "10 =") — i.e. a control code, not data.
+      * arith   : the match's own line contains an arithmetic operator joining
+                  the operands (the '=' is expression equality, not a mapping).
+    (#761)"""
+    line = _line_of(text, m.start())
+    # legend: two-or-more "N = label" entries on the line, comma/、-separated.
+    if len(_LEGEND_ENTRY_RE.findall(line)) >= 2 and ("," in line or "、" in line):
+        return True
+    # arith: an arithmetic operator on the line between numeric operands.
+    if _ARITH_OP_RE.search(line):
+        return True
+    # selector code: the left operand appears as a sized case label / selector
+    # code somewhere in the chain text (control-code, not data), e.g. the port
+    # comment "[1:0] sel : 00=.., 01=.." plus a "2'b00" case in the RTL/spec.
+    code = m.group(1)
+    if re.fullmatch(r"\d+", code):
+        if re.search(r"\d+'[bdh]0*" + re.escape(code) + r"\b", text):
+            return True
+    return False
 
 # Signed-ness / byte order / overflow / handshake — structural keyword facts.
 _SIGNED_RE = re.compile(r"\b(signed|unsigned|two'?s\s+complement)\b", re.I)
@@ -462,8 +607,11 @@ def extract_checklist(spec_text: str) -> List[ChecklistItem]:
             kind="latency",
             requirement=f"output timing: {lat}",
             evidence=lat,
+            # NOTE: the bare '#' token was dead — attribute_coverage matches it
+            # as `\b#\b` which can never match "#1"/"#10" (`#` is not a word
+            # char, so there is no word boundary around it). Removed (#758).
             coverage_tokens=["latency", "cycle", "@(posedge", "@(negedge",
-                             "#", "posedge", "negedge"]))
+                             "posedge", "negedge"]))
 
     # --- Enumerated set(s) + the outside-the-set / default boundary ---
     for m in _ENUM_SET_RE.finditer(spec_text):
@@ -519,15 +667,28 @@ def extract_checklist(spec_text: str) -> List[ChecklistItem]:
         # skip if this fragment is inside an enumerated `{...}` set
         if _inside_braces(spec_text, m.start()):
             continue
-        key = (m.group(1), m.group(2))
+        sep = m.group(2)
+        lhs, rhs = m.group(1), m.group(3)
+        # #761: a bare '=' is overloaded (assignment / arithmetic equality /
+        # encoding legend). Charge a '='-separated pair as a worked example ONLY
+        # when it is a genuine in==out DATA pair — NOT a control-code -> label
+        # ENCODING LEGEND ("00=90, 01=180, 10=270" on a 2-bit selector port
+        # comment) nor an arithmetic-expression fragment ("... << 4 = 8'b...").
+        # The unambiguous worked-example arrows (-> => →) bypass this guard.
+        # Without it the gate misparses an enumeration legend as I/O vectors and
+        # decides coverage by coincidental numeric-substring overlap
+        # (image_rotate_0015).
+        if sep == "=" and _is_control_code_legend(spec_text, m):
+            continue
+        key = (lhs, rhs)
         if key in seen_examples:
             continue
         seen_examples.add(key)
         items.append(ChecklistItem(
             kind="worked_example",
-            requirement=f"worked example: {m.group(1)} -> {m.group(2)}",
+            requirement=f"worked example: {lhs} -> {rhs}",
             evidence=m.group(0),
-            coverage_tokens=[m.group(1), m.group(2)]))
+            coverage_tokens=[lhs, rhs]))
 
     # --- Signed-ness / byte order / overflow / handshake (structural facts) ---
     for rx, kind, label in (
@@ -537,6 +698,22 @@ def extract_checklist(spec_text: str) -> List[ChecklistItem]:
         (_HANDSHAKE_RE, "handshake", "handshake / protocol timing"),
     ):
         mm = rx.search(spec_text)
+        # #760: the overflow family gets a clause-scoped preventive guard (the
+        # #743 negation guard is wired ONLY into _has_reset/_has_clock and this
+        # loop bypassed it). A "prevent/avoid/sized to ... overflow" width-sizing
+        # note (often carried verbatim from an RTL inline comment) is a
+        # STRUCTURAL fact about how the design AVOIDS the condition, not a
+        # behavioral requirement to HANDLE it — re-scan the clauses and accept
+        # only the FIRST mention whose clause is NOT a bare preventive/width note
+        # (a co-occurring active-handling verb saturate/clamp/wrap/... keeps it).
+        # The other three families are unchanged (output-stable). chip-AGNOSTIC.
+        if kind == "overflow":
+            mm = None
+            for clause in _clauses(spec_text.lower()):
+                cm = rx.search(clause)
+                if cm and not _is_preventive_structural_fact(clause, cm.group(0)):
+                    mm = cm
+                    break
         if mm:
             items.append(ChecklistItem(
                 kind=kind,
@@ -640,6 +817,35 @@ def _extract_table_rows(text: str) -> List[dict]:
     return rows
 
 
+# #760 (bcd_adder_0001) — VALUE-REGION coverage for the overflow/saturation/
+# truncation item. The shipped attribute_coverage() marked the overflow item
+# covered ONLY via a whole-word literal match of the SPEC word (e.g. 'truncated')
+# in non-comment TB code. That conflates VOCABULARY with coverage and is gameable
+# both directions: a degenerate TB declaring an unused `reg truncated;` and
+# driving only 0+0 PASSES, while a semantically-complete exhaustive truncation TB
+# that names its var 'low4'/'mod16' (no literal word) is spuriously BLOCKED. The
+# __OUTSIDE_SET__ enum-boundary branch already shows the right precedent: demand
+# the TB STIMULATE the region, not merely NAME it. This helper detects whether
+# the TB structurally EXERCISES an overflow/region decision: a magnitude/range
+# comparison (<, >, <=, >=) that selects the overflow-vs-normal path.
+# Equality/inequality (===,!==,==,!=) — pass/fail assertions — and shifts
+# (<<,>>) are NOT region decisions and are excluded.
+# chip-AGNOSTIC: pure range-decision grammar, no chip / vendor / SKU literal.
+_TB_RANGE_DECISION_RE = re.compile(r"(?<![<>=!])(<=|>=|<|>)(?![<>=])")
+
+
+def _tb_exercises_overflow_region(tb_clean: str) -> bool:
+    """True iff the TB contains a magnitude/range comparison that can select the
+    overflow / out-of-range path (the value-region analogue of the
+    __OUTSIDE_SET__ outside-the-set stimulus requirement). Shift operators and
+    equality/inequality comparators are stripped first so only a genuine
+    magnitude decision counts. (#760)"""
+    # remove shifts and equality/inequality compound operators so they cannot be
+    # mistaken for a magnitude decision.
+    t = re.sub(r"<<|>>|===|!==|==|!=", " ", tb_clean)
+    return bool(_TB_RANGE_DECISION_RE.search(t))
+
+
 # ---------------------------------------------------------------------------
 # Coverage attribution against the authored TESTBENCH
 # ---------------------------------------------------------------------------
@@ -685,6 +891,37 @@ def attribute_coverage(items: List[ChecklistItem], tb_text: Optional[str],
                 f"TB stimulates outside-the-set value(s) {sorted(outside)}"
                 if outside else
                 "TB only stimulates listed members; no outside-the-set value")
+            continue
+        # #760: the overflow/saturation/truncation item is a VALUE-REGION
+        # requirement, not a vocabulary one. Mark covered iff the TB structurally
+        # EXERCISES the overflow region (a magnitude/range decision selecting the
+        # overflow-vs-normal path). The literal spec token is kept as a
+        # sufficient-WITH-stimulus corroborating signal but is no longer
+        # sufficient ALONE (so a token-only no-stimulus TB no longer passes) nor
+        # necessary (so a genuine exhaustive truncation TB that names its var
+        # differently no longer BLOCKs). A real uncovered-overflow TB — one that
+        # never drives the region (no range decision) — still GAPs / BLOCKs.
+        if it.kind == "overflow":
+            token_hit = any(
+                tok.strip()
+                and re.search(r"\b" + re.escape(tok.strip().lower()) + r"\b",
+                              tb_low)
+                for tok in it.coverage_tokens)
+            region = _tb_exercises_overflow_region(tb_clean)
+            it.covered = bool(region)
+            if region and token_hit:
+                it.coverage_note = ("TB exercises overflow region (range "
+                                    "decision) and names the spec token")
+            elif region:
+                it.coverage_note = ("TB exercises overflow region (range "
+                                    "decision selecting the out-of-range path)")
+            elif token_hit:
+                it.coverage_note = ("TB names the spec token but never drives a "
+                                    "range decision into the overflow region "
+                                    "(vocabulary without stimulus)")
+            else:
+                it.coverage_note = ("no TB stimulus into the overflow region and "
+                                    f"no reference to {it.coverage_tokens}")
             continue
         # Normal item: covered if ANY of its coverage tokens appears in the TB.
         hit = []

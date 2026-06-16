@@ -47,14 +47,57 @@ floor is reached. The MAPPED measurement is right, but an all-or-nothing BLOCK
 on an unreachable target would block EVERY equivalent answer including the
 golden. The escape: when a bound metric's MAPPED reduction is sub-threshold but
 NON-NEGATIVE AND its GENERIC (pre-abc / pre-techmap, technology-independent)
-reduction is ALSO sub-threshold, the target is proven unreachable for this
-design → NOT-APPLICABLE / advisory, not a BLOCK. CRUCIAL no-leak: a
-lazily-optimized design whose GENERIC reduction is AT/ABOVE the threshold (so it
-COULD still reach the target) is STILL BLOCKED — only a proven-near-minimal one
-is downgraded. SECOND no-leak (#739 remediation): a design whose MAPPED
-reduction for a bound metric is NEGATIVE (optimized is LARGER than original —
-the submission made the count WORSE) is never near-minimal, so the escape does
-NOT fire for it and it is STILL BLOCKED regardless of the generic count.
+reduction is ALSO sub-threshold, the design MIGHT be near-minimal. CRUCIAL
+no-leak: a lazily-optimized design whose GENERIC reduction is AT/ABOVE the
+threshold (so it COULD still reach the target) is STILL BLOCKED — only a
+proven-near-minimal one is downgraded. SECOND no-leak (#739 remediation): a
+design whose MAPPED reduction for a bound metric is NEGATIVE (optimized is LARGER
+than original — the submission made the count WORSE) is never near-minimal, so
+the escape does NOT fire for it and it is STILL BLOCKED regardless of the generic
+count.
+
+GENERIC-MEETS-TARGET (ORGANIC #769 / R6C12) — the CVDP scorer measures GENERIC
+-----------------------------------------------------------------------------
+The MAPPED (post-`abc -g cmos2`) count is NOT the ground-truth area metric for
+the CVDP reference scorer: that scorer's synth.tcl ends at ``synth -top; clean``
+with NO techmap/``abc -g cmos2`` and measures the GENERIC ``stat`` cell count
+(.env carries ``CELLS=<orig_generic>`` + ``PERCENT_CELLS=<thr>``). So a metric
+whose GENERIC reduction CLEARS the bar HAS MET the target the scorer enforces —
+even when its MAPPED reduction falls short because a SHARED, irreducible
+post-techmap combinational floor (a fixed permutation/mux network) dilutes the
+mapped percentage. Treating that as "generic headroom → BLOCK" is exactly
+inverted: the generic count the gate would block on is the count the scorer
+PASSES. The fix: a sub-threshold-but-NON-NEGATIVE MAPPED metric whose GENERIC
+reduction MEETS the bar is SATISFIED (PASS), checked BEFORE the headroom/escape
+logic. No-leak: the MAPPED reduction must be NON-NEGATIVE (a GROWN metric is a
+real regression, never excused — tracked in its own bucket that DOMINATES even
+under an OR combinator so no disjunctive PASS can mask it), and the GENERIC
+reduction must itself MEET the bar (a lazy/do-nothing submission has a
+sub-threshold generic reduction so it never reaches here).
+
+REACHABILITY IS SUBMISSION-INDEPENDENT (ORGANIC #768 / R6C11)
+------------------------------------------------------------
+The legacy escape used the SUBMISSION's OWN generic reduction as the
+unreachability proxy: a sub-threshold submission whose OWN generic delta is also
+sub-threshold was labelled "near-minimal / unreachable". That CONFLATES "how much
+THIS submission reduced" with "how much reduction is ACHIEVABLE" — a do-nothing
+copy of the original (0% generic) or a shallow submission (small generic delta
+because it SKIPPED the structural register-merge / resource-share win) is excused
+even though the golden proves the bar is eminently reachable on the SAME
+original. Reachability must be anchored INDEPENDENTLY of the submission. Two
+anchors now gate the escape, and BOTH must fail for it to fire:
+  (1) REFERENCE anchor: when a ``--reference`` golden is supplied, its GENERIC
+      reduction vs the original is measured; if the golden CLEARS the generic bar
+      the target is PROVEN reachable → a sub-threshold submission is a REAL
+      under-reduction (BLOCK), never excused.
+  (2) NO-OP FLOOR (no-reference safety net): with NO reference, a submission
+      whose own GENERIC reduction is at/below a TIGHT epsilon (the no-op floor,
+      just above measurement noise) removed essentially NOTHING — a do-nothing /
+      literal-copy answer — so it is a REAL under-reduction (BLOCK). The epsilon
+      is deliberately tight so a submission that did real-but-insufficient generic
+      work is NOT floor-blocked without a reference (no no-reference false-BLOCK);
+      that small-but-real sub-threshold case is caught only when a --reference
+      golden proves the bar reachable.
 
 The %-computation + threshold-compare is factored into PURE functions
 (``compute_reduction_pct`` / ``parse_threshold_from_prompt`` / ``decide``) so it
@@ -360,6 +403,8 @@ def decide_clauses(
         clauses: List[Tuple[float, str]], combinator: str,
         cells_red_generic: Optional[float] = None,
         wires_red_generic: Optional[float] = None,
+        cells_red_ref_generic: Optional[float] = None,
+        wires_red_ref_generic: Optional[float] = None,
         ) -> Tuple[str, str]:
     """Pure verdict for a LIST of per-metric (threshold, metric) clauses joined
     by `combinator` ∈ {'or','and'}, with the SAME unreachable-target escape and
@@ -382,9 +427,11 @@ def decide_clauses(
     """
     # evaluate each clause against its own bar.
     sat: List[str] = []          # clauses that PASS their own threshold
-    failures: List[str] = []     # real, blockable sub-threshold clauses
+    failures: List[str] = []     # real, blockable sub-threshold (headroom) clauses
+    grown: List[str] = []        # metrics that GREW (negative mapped reduction)
     unreachable: List[str] = []  # proven-near-minimal sub-threshold clauses
     unmeasurable: List[str] = []
+    generic_met: List[str] = []  # metrics SATISFIED on the GENERIC (scorer) count
 
     def _classify_single(thr: float, single: str) -> str:
         """Classify ONE metric against ONE threshold → a label string; appends
@@ -393,20 +440,50 @@ def decide_clauses(
         wires separately, so a per-metric grew/headroom is never masked."""
         red = _metric_red(single, cells_red, wires_red)
         gen = _metric_red(single, cells_red_generic, wires_red_generic)
+        ref_gen = _metric_red(single, cells_red_ref_generic,
+                              wires_red_ref_generic)
         if red is None:
             return "unmeasurable"
         if red >= thr:
             return "sat"
         if red < 0:
-            failures.append(
+            # GROWN metric — the optimized count is LARGER than the original. A
+            # genuine regression that DOMINATES every other verdict (even a
+            # generic-satisfied sibling under OR): tracked in its OWN bucket so a
+            # disjunctive PASS can never mask it (ORGANIC #769 / R6C12).
+            grown.append(
                 f"{single} reduction {red:.2f}% < {thr:g}% (design GREW — "
                 f"never a near-minimal/unreachable target)")
             return "grew"
-        if _generic_headroom(red, gen, thr):
-            failures.append(
-                f"{single} reduction {red:.2f}% < {thr:g}%"
-                + (f" (generic {gen:.2f}% has headroom)"
-                   if gen is not None else ""))
+        # GENERIC-MEETS-TARGET (ORGANIC #769 / R6C12): the MAPPED reduction is
+        # sub-threshold but NON-NEGATIVE, and the GENERIC (tech-independent)
+        # reduction — the count the CVDP reference scorer actually measures
+        # (synth -top; clean; stat, NO abc -g cmos2) — MEETS the bar. The area
+        # target IS met on the metric the scorer enforces; the MAPPED shortfall
+        # is only a shared/irreducible post-techmap combinational floor diluting
+        # the percentage. SATISFIED, not a headroom BLOCK. No-leak: a lazy/
+        # do-nothing submission has a sub-threshold GENERIC reduction so it never
+        # reaches here.
+        if _generic_meets_target(red, gen, thr):
+            generic_met.append(
+                f"{single} generic {gen:.2f}% >= {thr:g}% (mapped {red:.2f}% "
+                f"diluted by post-techmap floor)")
+            return "sat"
+        # The unreachable-target escape fires ONLY when the target is PROVEN
+        # unreachable (no reference golden beats the generic bar AND the
+        # submission removed real area beyond the no-op floor); otherwise a
+        # sub-threshold metric is a REAL under-reduction (ORGANIC #768 / R6C11).
+        if not _escape_eligible(red, gen, thr, ref_gen):
+            note = (f"{single} reduction {red:.2f}% < {thr:g}%")
+            if _target_reachable_via_reference(ref_gen, thr):
+                note += (f" (reference golden generic {ref_gen:.2f}% clears the "
+                         f"bar — target REACHABLE)")
+            elif gen is not None and gen <= _NOOP_GENERIC_FLOOR_PCT:
+                note += (f" (generic {gen:.2f}% <= {_NOOP_GENERIC_FLOOR_PCT:g}% "
+                         f"no-op floor — submission removed ~nothing)")
+            elif gen is not None:
+                note += f" (generic {gen:.2f}% has headroom)"
+            failures.append(note)
             return "headroom"
         unreachable.append(
             f"{single} mapped {red:.2f}% / generic "
@@ -430,12 +507,22 @@ def decide_clauses(
             unreachable.append(f"{metric} near-minimal under {thr:g}%")
 
     if combinator == _COMBINATOR_OR:
+        # A GROWN metric is a genuine regression that DOMINATES — it blocks even
+        # when another clause is satisfied (no-leak: a disjunctive PASS must
+        # never mask a metric that got WORSE) (ORGANIC #769 / R6C12).
+        if grown:
+            return ("BLOCK",
+                    "a bound area metric GREW (worse than original) — blocks "
+                    "regardless of any disjunctive clause: " + "; ".join(grown))
         # ANY satisfied clause ⇒ PASS (the spec's disjunction is met).
         if sat:
-            return ("PASS",
-                    "area reduction meets a disjunctive clause: "
-                    + "; ".join(sat))
-        # none satisfied. A REAL failure (headroom / grew) anywhere blocks —
+            reason = ("area reduction meets a disjunctive clause: "
+                      + "; ".join(sat))
+            if generic_met:
+                reason += (" — generic meets the scorer-measured target: "
+                           + "; ".join(generic_met))
+            return ("PASS", reason)
+        # none satisfied. A REAL failure (headroom) anywhere blocks —
         # the design could have hit at least one bar but did not.
         if failures:
             return ("BLOCK",
@@ -448,10 +535,11 @@ def decide_clauses(
                 "(unreachable target / unmeasurable): " + "; ".join(bits))
 
     # CONJUNCTION ('and'): every clause must clear; a single real failure blocks.
-    if failures:
+    # A grown metric is a real failure that always blocks.
+    if grown or failures:
         return ("BLOCK",
                 "under-threshold area reduction (all clauses bind): "
-                + "; ".join(failures))
+                + "; ".join(grown + failures))
     if unmeasurable:
         return ("NOT_APPLICABLE",
                 "a bound metric is unmeasurable: " + "; ".join(unmeasurable))
@@ -459,9 +547,12 @@ def decide_clauses(
         return ("NOT_APPLICABLE",
                 "unreachable-target escape (conjunctive clauses, near-minimal "
                 "design): " + "; ".join(unreachable) + " (advisory, NOT a block)")
-    return ("PASS",
-            "area reduction meets every conjunctive clause: "
-            + "; ".join(sat))
+    reason = ("area reduction meets every conjunctive clause: "
+              + "; ".join(sat))
+    if generic_met:
+        reason += (" — generic meets the scorer-measured target: "
+                   + "; ".join(generic_met))
+    return ("PASS", reason)
 
 
 # ─── yosys stat parse + reduction arithmetic ─────────────────────────────────
@@ -568,6 +659,21 @@ def compute_reduction_pct(orig: Optional[int], opt: Optional[int]
     return round(100.0 * (orig - opt) / orig, 4)
 
 
+# NO-REFERENCE safety net (ORGANIC #768 / R6C11). The airtight reachability
+# anchor is the --reference golden; this floor only matters when NO reference is
+# supplied. A submission whose GENERIC reduction is at/below this TIGHT epsilon
+# removed essentially NOTHING — it is a do-nothing / literal-copy answer (e.g. an
+# optimized file byte-identical to the original measures 0.0% generic), which can
+# NEVER be "proven near-minimal"; it is a REAL under-reduction (BLOCK). The
+# epsilon is deliberately TIGHT (just above measurement noise) so a submission
+# that did real — even if insufficient — generic work is NOT floor-blocked when
+# no reference is available (avoiding a no-reference false-BLOCK); such a
+# small-but-real-effort sub-threshold submission is only caught as a real miss
+# when a --reference golden proves the bar reachable. chip-AGNOSTIC: a pure
+# percentage epsilon, no design literal.
+_NOOP_GENERIC_FLOOR_PCT = 0.5
+
+
 def _generic_headroom(metric_red: Optional[float], generic_red: Optional[float],
                       threshold_pct: float) -> bool:
     """True iff the GENERIC (tech-independent) reduction for a metric shows REAL
@@ -585,10 +691,110 @@ def _generic_headroom(metric_red: Optional[float], generic_red: Optional[float],
     return generic_red >= threshold_pct
 
 
+def _generic_meets_target(metric_red: Optional[float],
+                          generic_red: Optional[float],
+                          threshold_pct: float) -> bool:
+    """True iff the GENERIC (technology-INDEPENDENT) reduction for a metric MEETS
+    the stated threshold while the MAPPED reduction (sub-threshold but NON-
+    NEGATIVE) did not — i.e. the design DID reach the area target on the
+    tech-independent count, and the only reason the MAPPED count fell short is
+    that a SHARED, irreducible combinational floor (introduced by techmap /
+    abc -g cmos2) dilutes the post-map percentage.
+
+    THE BUG THIS FIXES (ORGANIC #769 / R6C12, cvdp_copilot_image_rotate_0015):
+    the MAPPED count is NOT the ground-truth area metric. The CVDP reference
+    scorer (harness synth.tcl) ends at ``synth -top; clean`` with NO techmap/
+    ``abc -g cmos2`` and measures the GENERIC ``stat`` cell count; its .env
+    carries ``CELLS=<orig_generic>`` + ``PERCENT_CELLS=<thr>``. So a metric whose
+    GENERIC reduction clears the bar HAS MET the target the scorer enforces —
+    even when the MAPPED reduction is below it because a fixed permutation/mux
+    network or other shared combinational mass survives techmap unreduced.
+    Treating that as 'generic headroom → BLOCK' is exactly inverted: the generic
+    count that the gate would block on is the count the scorer PASSES.
+
+    NO-LEAK: the MAPPED reduction must be NON-NEGATIVE — a design whose MAPPED
+    count GREW is a real post-map regression and is NEVER excused here (it is
+    classified 'grew' upstream and stays a BLOCK). And the GENERIC reduction must
+    itself MEET the threshold — a lazy/shallow/do-nothing submission has a
+    sub-threshold GENERIC reduction (the do-nothing copy has 0%), so it does NOT
+    satisfy here and remains blockable. PURE — no I/O."""
+    if metric_red is None or generic_red is None:
+        return False
+    return metric_red >= 0.0 and generic_red >= threshold_pct
+
+
+def _target_reachable_via_reference(ref_generic_red: Optional[float],
+                                    threshold_pct: float) -> bool:
+    """True iff a REFERENCE (golden) optimized RTL proves the generic bar is
+    ACHIEVABLE for this metric on this original — i.e. the reference's GENERIC
+    (tech-independent) reduction is measurable AND at/above the threshold.
+
+    This is the SUBMISSION-INDEPENDENT reachability anchor (ORGANIC #768 /
+    R6C11). The bug it closes: the unreachable-target escape used the
+    SUBMISSION's OWN generic reduction as the reachability proxy, so a shallow /
+    no-op submission (whose own generic delta is small precisely because it
+    skipped the structural win) was wrongly excused as "near-minimal". The
+    reachability question must be answered by what is ACHIEVABLE (the reference),
+    not by what THIS submission happened to do. When a reference clears the
+    generic bar, the target is proven reachable → a sub-threshold submission is a
+    REAL under-reduction (BLOCK).
+
+    PURE — no I/O. Returns False when no reference reduction is available (no
+    reference supplied / unmeasurable) → the escape is then governed by the
+    no-op floor + the submission's own generic, fail-SAFE (never a fabricated
+    'reachable')."""
+    if ref_generic_red is None:
+        return False
+    return ref_generic_red >= threshold_pct
+
+
+def _escape_eligible(metric_red: Optional[float], generic_red: Optional[float],
+                     threshold_pct: float,
+                     ref_generic_red: Optional[float] = None) -> bool:
+    """True iff the unreachable-target escape may fire for ONE sub-threshold,
+    NON-NEGATIVE metric — i.e. the target is PROVEN unreachable, not merely
+    under-delivered by a lazy submission (ORGANIC #768 / R6C11).
+
+    Reachability is decided SUBMISSION-INDEPENDENTLY, with the reference golden
+    as the ground truth and a no-op floor as the no-reference safety net. The
+    precedence is:
+      1. REFERENCE supplied AND CLEARS the generic bar → target REACHABLE → a
+         sub-threshold submission is a REAL miss → NOT eligible (BLOCK). This is
+         the airtight anchor that catches the shallow/no-op leak (#R6C11).
+      2. REFERENCE supplied AND itself SUB-BAR on the generic count → target
+         PROVEN unreachable even by the golden → eligible (escape), regardless
+         of how little THIS submission reduced (a 0% submission that equals an
+         already-minimal golden is correctly excused — no false BLOCK).
+      3. NO reference → fall back to the submission's own evidence:
+           * own generic has headroom (>= threshold) → lazy miss → NOT eligible.
+           * own generic at/below the no-op floor → removed ~nothing → NOT
+             eligible (a do-nothing submission can never be 'near-minimal').
+           * own generic between the floor and the bar → real effort, still
+             sub-bar, no reference to disprove → eligible (advisory escape).
+
+    PURE — no I/O. When it returns False for a sub-threshold non-negative metric,
+    that metric is a REAL under-reduction (BLOCK)."""
+    # ── (1)+(2) reference is the ground truth when present ─────────────────────
+    if ref_generic_red is not None:
+        # a golden that clears the bar proves reachability → real miss; a golden
+        # that itself misses proves the target unreachable → escape.
+        return not _target_reachable_via_reference(ref_generic_red,
+                                                   threshold_pct)
+    # ── (3) no reference: submission's own generic + no-op floor ───────────────
+    if _generic_headroom(metric_red, generic_red, threshold_pct):
+        return False   # submission generic has headroom → real lazy miss
+    if generic_red is None or generic_red <= _NOOP_GENERIC_FLOOR_PCT:
+        return False   # do-nothing / barely-touched → not near-minimal → real miss
+    return True        # real generic effort, still sub-bar, no reference to
+    #                    disprove → genuinely-unreachable (advisory escape)
+
+
 def decide(cells_red: Optional[float], wires_red: Optional[float],
            threshold_pct: float, metric: str,
            cells_red_generic: Optional[float] = None,
            wires_red_generic: Optional[float] = None,
+           cells_red_ref_generic: Optional[float] = None,
+           wires_red_ref_generic: Optional[float] = None,
            ) -> Tuple[str, str]:
     """Pure verdict from the MAPPED reductions + bound metric + threshold, with
     an UNREACHABLE-TARGET escape driven by the GENERIC (tech-independent)
@@ -641,19 +847,45 @@ def decide(cells_red: Optional[float], wires_red: Optional[float],
     # for it even when the generic reduction is small/sub-threshold; keep it a
     # BLOCK. The escape fires ONLY for a genuinely-near-minimal metric: mapped
     # sub-threshold but NON-NEGATIVE, and generic also sub-threshold.
+    #
+    # GENERIC-MEETS-TARGET (ORGANIC #769 / R6C12): a metric whose MAPPED
+    # reduction is sub-threshold but NON-NEGATIVE while its GENERIC (tech-
+    # independent) reduction MEETS the bar HAS met the area target on the count
+    # the CVDP reference scorer measures (synth -top; clean; stat — NO abc -g
+    # cmos2). The mapped shortfall is only a shared, irreducible post-techmap
+    # combinational floor diluting the percentage. It is SATISFIED (neither a
+    # failure nor an unreachable escape). No-leak: a lazy/do-nothing submission
+    # has a sub-threshold GENERIC reduction so this never fires for it.
     failures: List[str] = []         # real, blockable under-reductions
     unreachable: List[str] = []      # proven-near-minimal sub-threshold metrics
+    generic_met: List[str] = []      # generic-satisfied (mapped sub-thr) metrics
     if bind_cells and cells_red < threshold_pct:
         if cells_red < 0:
             failures.append(
                 f"cells reduction {cells_red:.2f}% < {threshold_pct:g}% "
                 f"(design GREW — optimized has MORE cells than original; "
                 f"never a near-minimal/unreachable target)")
-        elif _generic_headroom(cells_red, cells_red_generic, threshold_pct):
-            failures.append(
-                f"cells reduction {cells_red:.2f}% < {threshold_pct:g}%"
-                + (f" (generic {cells_red_generic:.2f}% has headroom)"
-                   if cells_red_generic is not None else ""))
+        elif _generic_meets_target(cells_red, cells_red_generic, threshold_pct):
+            # generic count meets the scorer-measured target → satisfied
+            generic_met.append(
+                f"cells generic {cells_red_generic:.2f}% >= {threshold_pct:g}% "
+                f"(mapped {cells_red:.2f}% diluted by post-techmap floor)")
+        elif not _escape_eligible(cells_red, cells_red_generic, threshold_pct,
+                                  cells_red_ref_generic):
+            note = f"cells reduction {cells_red:.2f}% < {threshold_pct:g}%"
+            if _target_reachable_via_reference(cells_red_ref_generic,
+                                               threshold_pct):
+                note += (f" (reference golden generic "
+                         f"{cells_red_ref_generic:.2f}% clears the bar — target "
+                         f"REACHABLE)")
+            elif (cells_red_generic is not None
+                  and cells_red_generic <= _NOOP_GENERIC_FLOOR_PCT):
+                note += (f" (generic {cells_red_generic:.2f}% <= "
+                         f"{_NOOP_GENERIC_FLOOR_PCT:g}% no-op floor — submission "
+                         f"removed ~nothing)")
+            elif cells_red_generic is not None:
+                note += f" (generic {cells_red_generic:.2f}% has headroom)"
+            failures.append(note)
         else:
             unreachable.append(
                 f"cells mapped {cells_red:.2f}% / generic "
@@ -664,11 +896,27 @@ def decide(cells_red: Optional[float], wires_red: Optional[float],
                 f"wires reduction {wires_red:.2f}% < {threshold_pct:g}% "
                 f"(design GREW — optimized has MORE wires than original; "
                 f"never a near-minimal/unreachable target)")
-        elif _generic_headroom(wires_red, wires_red_generic, threshold_pct):
-            failures.append(
-                f"wires reduction {wires_red:.2f}% < {threshold_pct:g}%"
-                + (f" (generic {wires_red_generic:.2f}% has headroom)"
-                   if wires_red_generic is not None else ""))
+        elif _generic_meets_target(wires_red, wires_red_generic, threshold_pct):
+            # generic count meets the scorer-measured target → satisfied
+            generic_met.append(
+                f"wires generic {wires_red_generic:.2f}% >= {threshold_pct:g}% "
+                f"(mapped {wires_red:.2f}% diluted by post-techmap floor)")
+        elif not _escape_eligible(wires_red, wires_red_generic, threshold_pct,
+                                  wires_red_ref_generic):
+            note = f"wires reduction {wires_red:.2f}% < {threshold_pct:g}%"
+            if _target_reachable_via_reference(wires_red_ref_generic,
+                                               threshold_pct):
+                note += (f" (reference golden generic "
+                         f"{wires_red_ref_generic:.2f}% clears the bar — target "
+                         f"REACHABLE)")
+            elif (wires_red_generic is not None
+                  and wires_red_generic <= _NOOP_GENERIC_FLOOR_PCT):
+                note += (f" (generic {wires_red_generic:.2f}% <= "
+                         f"{_NOOP_GENERIC_FLOOR_PCT:g}% no-op floor — submission "
+                         f"removed ~nothing)")
+            elif wires_red_generic is not None:
+                note += f" (generic {wires_red_generic:.2f}% has headroom)"
+            failures.append(note)
         else:
             unreachable.append(
                 f"wires mapped {wires_red:.2f}% / generic "
@@ -698,9 +946,14 @@ def decide(cells_red: Optional[float], wires_red: Optional[float],
         parts.append(f"cells {cells_red:.2f}%")
     if bind_wires:
         parts.append(f"wires {wires_red:.2f}%")
-    return ("PASS",
-            f"area reduction meets the {threshold_pct:g}% threshold ("
-            + ", ".join(parts) + ")")
+    reason = (f"area reduction meets the {threshold_pct:g}% threshold ("
+              + ", ".join(parts) + ")")
+    if generic_met:
+        # at least one metric cleared the bar on the GENERIC (scorer-measured)
+        # count while its MAPPED reduction was diluted by a post-techmap floor.
+        reason += (" — generic meets the scorer-measured target: "
+                   + "; ".join(generic_met))
+    return ("PASS", reason)
 
 
 # ─── yosys-in-container synth + stat ─────────────────────────────────────────
@@ -834,6 +1087,7 @@ def run_ppa_area_threshold(
     original: Path, optimized: Path, top: str,
     prompt_text: Optional[str], threshold_override: Optional[float],
     metric_override: Optional[str], container: str,
+    reference: Optional[Path] = None,
 ) -> Tuple[int, Dict]:
     """Run the gate; return (rc, report). rc is the program exit code.
 
@@ -954,10 +1208,42 @@ def run_ppa_area_threshold(
     report["cells_reduction_pct_generic"] = cells_red_generic
     report["wires_reduction_pct_generic"] = wires_red_generic
 
+    # ── REFERENCE (golden) reachability anchor (ORGANIC #768 / R6C11) ─────────
+    # The unreachable-target escape must be anchored to what is ACHIEVABLE, NOT
+    # to the SUBMISSION's own generic delta (a shallow/no-op submission has a
+    # tiny generic delta precisely because it skipped the structural win). When
+    # a reference golden is supplied, synth it with the SAME recipe and compute
+    # its GENERIC reduction vs the original: if the golden clears the generic
+    # bar the target is PROVEN reachable, so a sub-threshold submission is a REAL
+    # under-reduction (BLOCK), never excused. No reference → the escape falls
+    # back to the submission's own generic PLUS a no-op floor (a do-nothing
+    # submission can never be excused), fail-SAFE.
+    cells_red_ref_generic: Optional[float] = None
+    wires_red_ref_generic: Optional[float] = None
+    if reference is not None:
+        ref_blob, ref_err = synth_stat_in_container(reference, top, container)
+        if ref_blob is None:
+            report["reference_stat_note"] = (
+                f"reference synth/stat unavailable: {ref_err}; reachability "
+                f"anchored on submission generic + no-op floor only")
+        else:
+            ref_generic_txt, _ref_mapped_txt = split_generic_mapped_stat(
+                ref_blob)
+            ref_stat_generic = parse_stat(ref_generic_txt)
+            report["reference_stat_generic"] = ref_stat_generic
+            cells_red_ref_generic = compute_reduction_pct(
+                orig_stat_generic["cells"], ref_stat_generic["cells"])
+            wires_red_ref_generic = compute_reduction_pct(
+                orig_stat_generic["wires"], ref_stat_generic["wires"])
+            report["cells_reduction_pct_ref_generic"] = cells_red_ref_generic
+            report["wires_reduction_pct_ref_generic"] = wires_red_ref_generic
+
     verdict, reason = decide_clauses(
         cells_red, wires_red, clauses, combinator,
         cells_red_generic=cells_red_generic,
-        wires_red_generic=wires_red_generic)
+        wires_red_generic=wires_red_generic,
+        cells_red_ref_generic=cells_red_ref_generic,
+        wires_red_ref_generic=wires_red_ref_generic)
     report["verdict"] = verdict
     report["reason"] = reason
     if verdict == "BLOCK":
@@ -975,6 +1261,12 @@ def main(argv=None) -> int:
                     help="the ORIGINAL (un-optimized) RTL file")
     ap.add_argument("--optimized", required=True,
                     help="the OPTIMIZED RTL file (same top module)")
+    ap.add_argument("--reference", default=None,
+                    help="optional REFERENCE / golden optimized RTL (same top). "
+                         "Anchors the unreachable-target escape on what is "
+                         "ACHIEVABLE: if the reference clears the generic bar the "
+                         "target is REACHABLE, so a sub-threshold submission is a "
+                         "real BLOCK (not excused as near-minimal).")
     ap.add_argument("--top", required=True,
                     help="the top module name (same in both files)")
     ap.add_argument("--prompt", default=None,
@@ -993,11 +1285,15 @@ def main(argv=None) -> int:
 
     original = Path(args.original)
     optimized = Path(args.optimized)
+    reference = Path(args.reference) if args.reference else None
     if not original.is_file():
         print(f"ERROR: --original not found: {original}", file=sys.stderr)
         return 2
     if not optimized.is_file():
         print(f"ERROR: --optimized not found: {optimized}", file=sys.stderr)
+        return 2
+    if reference is not None and not reference.is_file():
+        print(f"ERROR: --reference not found: {reference}", file=sys.stderr)
         return 2
     if args.threshold_pct is None and args.prompt is None:
         print("ERROR: provide --threshold-pct or --prompt", file=sys.stderr)
@@ -1014,7 +1310,8 @@ def main(argv=None) -> int:
     rc, report = run_ppa_area_threshold(
         original=original, optimized=optimized, top=args.top,
         prompt_text=prompt_text, threshold_override=args.threshold_pct,
-        metric_override=args.metric, container=args.container)
+        metric_override=args.metric, container=args.container,
+        reference=reference)
 
     if args.json:
         Path(args.json).write_text(json.dumps(report, indent=2))

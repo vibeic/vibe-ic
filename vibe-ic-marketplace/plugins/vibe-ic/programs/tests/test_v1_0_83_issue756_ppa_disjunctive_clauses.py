@@ -128,11 +128,19 @@ def test_disjunctive_pass_cells_branch_clears():
 
 
 def test_shipped_single_tuple_decide_false_blocks_same_numbers():
-    # the WRONG verdict the old data-model produced: cells>=12 AND wires>=12.
+    # the single-tuple decide() collapses '12% wires OR 8% cells' into a single
+    # (12,'both') AND-conjunction — the #756 data-model false-collapse.
+    # ORGANIC #769 RE-ANCHOR: at generic 18% >= 12% the GENERIC count (the one
+    # the CVDP reference scorer measures via synth -top; clean; stat) MEETS the
+    # bar, so the corrected verdict is PASS — the generic-meets-target supersedes
+    # the old inverted 'generic headroom → BLOCK' premise. The #756 collapse is
+    # still demonstrable: bind the SAME numbers with a GROWN wires reduction and
+    # the single-tuple 'both' worse-of still hard-blocks (see the grown no-leak
+    # tests). Here we pin the corrected generic-meets PASS.
     verdict, _reason = ppa.decide(
         10.0, 5.0, 12.0, ppa._METRIC_BOTH,
         cells_red_generic=18.0, wires_red_generic=18.0)
-    assert verdict == "BLOCK"   # this is exactly the false-block #756 fixes
+    assert verdict == "PASS"   # generic 18% >= 12% (the scorer-measured count)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -148,14 +156,27 @@ def test_grown_design_still_blocks_under_or():
     assert "GREW" in reason
 
 
-def test_neither_bar_with_generic_headroom_still_blocks_under_or():
-    # neither clause clears, but BOTH have generic headroom (the design COULD
-    # have reduced more) → a real under-reduction → BLOCK.
+def test_neither_bar_with_generic_meets_target_passes_under_or():
+    # ORGANIC #769 RE-ANCHOR: neither MAPPED clause clears its bar, but BOTH
+    # metrics' GENERIC reductions MEET their bar (cells generic 18% >= 8%, wires
+    # generic 18% >= 12%) — the GENERIC count is the one the CVDP reference
+    # scorer measures, so the target IS met → PASS under OR. (The old inverted
+    # premise blocked this as 'lazy headroom'; #769 corrects it.)
     verdict, reason = ppa.decide_clauses(
         5.0, 5.0, [(12.0, "wires"), (8.0, "cells")], ppa._COMBINATOR_OR,
         cells_red_generic=18.0, wires_red_generic=18.0)
+    assert verdict == "PASS", reason
+
+
+def test_neither_bar_real_underreduction_still_blocks_under_or():
+    # §4.05 NO-LEAK (surviving hard block): neither clause clears AND a bound
+    # metric GREW (negative mapped) — a genuine regression → BLOCK under OR, the
+    # grown bucket dominates so a disjunctive PASS can never mask it.
+    verdict, reason = ppa.decide_clauses(
+        -5.0, 5.0, [(12.0, "wires"), (8.0, "cells")], ppa._COMBINATOR_OR,
+        cells_red_generic=18.0, wires_red_generic=18.0)
     assert verdict == "BLOCK", reason
-    assert "headroom" in reason
+    assert "GREW" in reason
 
 
 def test_neither_bar_near_minimal_is_not_applicable_under_or():
@@ -180,9 +201,13 @@ def test_conjunctive_parse_and_combinator():
 
 
 def test_conjunctive_blocks_when_one_clause_fails():
-    # cells_red=10 clears 4% but wires_red=5 misses 11% → AND BLOCKs.
+    # cells_red=10 clears 4% but wires GREW (negative mapped) → AND BLOCKs on the
+    # grown wires clause. ORGANIC #769 RE-ANCHOR: the old version used wires
+    # generic 18% >= 11% which now MEETS the scorer-measured target (→ sat), so a
+    # genuine conjunctive failure must be a real under-reduction — a GROWN metric
+    # (the surviving hard no-leak).
     verdict, reason = ppa.decide_clauses(
-        10.0, 5.0, [(4.0, "cells"), (11.0, "wires")], ppa._COMBINATOR_AND,
+        10.0, -5.0, [(4.0, "cells"), (11.0, "wires")], ppa._COMBINATOR_AND,
         cells_red_generic=18.0, wires_red_generic=18.0)
     assert verdict == "BLOCK", reason
     assert "wires" in reason
@@ -200,14 +225,17 @@ def test_conjunctive_passes_when_all_clauses_clear():
 #    clause, AND combinator; 'both' uses the worse-of mapping = prior decide()).
 # ════════════════════════════════════════════════════════════════════════════
 def test_explicit_single_clause_both_blocks_like_legacy():
-    # explicit path builds clauses=[(12,'both')], combinator AND. With cells 10 /
-    # wires 5 the 'both' clause's worse-of is 5 < 12 → BLOCK (same as the shipped
-    # single-tuple decide()).
+    # explicit path builds clauses=[(12,'both')], combinator AND. ORGANIC #769
+    # RE-ANCHOR: with generic 18% >= 12% the GENERIC count MEETS the bar so the
+    # corrected verdict is PASS, not the old inverted headroom-BLOCK. The
+    # decide_clauses↔decide parity that this test guards is preserved by binding
+    # the SAME numbers with a GROWN wires reduction — both paths still hard-block
+    # identically on the grown 'both' worse-of.
     verdict, _reason = ppa.decide_clauses(
-        10.0, 5.0, [(12.0, ppa._METRIC_BOTH)], ppa._COMBINATOR_AND,
+        10.0, -5.0, [(12.0, ppa._METRIC_BOTH)], ppa._COMBINATOR_AND,
         cells_red_generic=18.0, wires_red_generic=18.0)
     legacy, _r = ppa.decide(
-        10.0, 5.0, 12.0, ppa._METRIC_BOTH,
+        10.0, -5.0, 12.0, ppa._METRIC_BOTH,
         cells_red_generic=18.0, wires_red_generic=18.0)
     assert verdict == legacy == "BLOCK"
 

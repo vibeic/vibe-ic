@@ -335,6 +335,129 @@ def rule_undriven_and_unread(src: str, path: str) -> List[Finding]:
 # ---------------------------------------------------------------------------
 # Rule 3: Case without default + enum coverage hint
 # ---------------------------------------------------------------------------
+
+# Sized integer literal: N'bxx / N'hxx / N'dxx / N'oxx (optional underscores,
+# optional s for signed). Chip-AGNOSTIC: this is plain SystemVerilog syntax.
+_SIZED_LITERAL_RE = re.compile(
+    r"\b(\d+)\s*'\s*([sS]?)([bBoOdDhH])\s*([0-9a-fA-F_xXzZ]+)")
+
+
+def _sized_literal_value(tok: str):
+    """Return the integer value of a sized literal like 2'b10 / 8'hFF.
+
+    Returns None when the literal is non-deterministic (contains x/z, or is not
+    a clean sized literal) so the caller can stay conservative. ORGANIC #764.
+    """
+    m = _SIZED_LITERAL_RE.fullmatch(tok.strip())
+    if not m:
+        return None
+    base = m.group(3).lower()
+    digits = m.group(4).replace('_', '')
+    if any(c in 'xXzZ' for c in digits):
+        return None  # don't-care / hi-Z label — value not determinable
+    try:
+        if base == 'b':
+            return int(digits, 2)
+        if base == 'o':
+            return int(digits, 8)
+        if base == 'd':
+            return int(digits, 10)
+        if base == 'h':
+            return int(digits, 16)
+    except ValueError:
+        return None
+    return None
+
+
+def _resolve_selector_width(src: str, expr: str):
+    """Resolve the bit-width of a case selector from its declaration.
+
+    Only succeeds for a SIMPLE scalar identifier selector whose declaration
+    carries a CONCRETE numeric `[hi:lo]` range (hi/lo are plain integers, not
+    parameter expressions). Returns the width in bits, or None when it cannot
+    be deterministically resolved (parameterized width, no range, expression
+    selector, …). Conservative-by-design: None -> keep the WARN. Chip-AGNOSTIC.
+    ORGANIC #764.
+    """
+    name = expr.strip()
+    # Selector must be a bare identifier (no concat/slice/expression).
+    if not re.fullmatch(r'[A-Za-z_]\w*', name):
+        return None
+    # Find a declaration of this signal carrying a numeric [hi:lo] range.
+    # Matches input/output/inout/reg/wire/logic ... [HI:LO] ... name
+    decl_re = re.compile(
+        r'\b(?:input|output|inout|reg|wire|logic)\b[^;\n]*?'
+        r'\[\s*(\d+)\s*:\s*(\d+)\s*\][^;\n]*?\b' + re.escape(name) + r'\b')
+    for m in decl_re.finditer(src):
+        hi = int(m.group(1))
+        lo = int(m.group(2))
+        return abs(hi - lo) + 1
+    return None
+
+
+def _case_is_exhaustive(src: str, expr: str, block: str):
+    """Return True iff the case PROVABLY enumerates all 2**width selector values.
+
+    Requirements (all must hold, else returns False = stay conservative):
+      * selector width deterministically resolvable to N bits (<= a sane cap),
+      * EVERY case label is a clean sized numeric literal (no symbolic labels,
+        no x/z, no unsized literals, no ranges/comma-lists we can't resolve),
+      * the distinct label values exactly cover {0 .. 2**N - 1}.
+    Purely structural & chip-AGNOSTIC (no design/benchmark literal). ORGANIC #764.
+    """
+    width = _resolve_selector_width(src, expr)
+    if width is None or width <= 0 or width > 12:
+        return False  # unknown or too-wide to enumerate -> conservative
+
+    # Isolate the case body: strip the leading `case (...)` head and the
+    # trailing `endcase`.
+    body = block
+    body = re.sub(r'^\s*\bcase[szx]?\s*\([^)]*\)', '', body, count=1)
+    body = re.sub(r'\bendcase\b.*$', '', body, flags=re.DOTALL)
+
+    # Strip line + block comments so legend text ('// 90 deg') can't be parsed
+    # as a label.
+    body = re.sub(r'//[^\n]*', '', body)
+    body = re.sub(r'/\*.*?\*/', '', body, flags=re.DOTALL)
+
+    # A branch label is the token-list that appears at a statement boundary and
+    # is terminated by ':'. We find each ':' that directly follows a label head
+    # (run of label tokens) at a statement boundary (body start, or just after a
+    # top-level ';' / 'begin' / 'end'). The ':' must NOT be a part-select
+    # (+:/-:), a ternary (?:), a scope resolution (::), or non-blocking-with-
+    # equals (:=). A symbolic identifier sitting at a branch boundary => not
+    # resolvable => bail conservatively. Chip-AGNOSTIC structural scan.
+    labels = []
+    label_re = re.compile(
+        r"(?:(?<=^)|(?<=[;)])|(?<=\bbegin\b)|(?<=\bend\b))"  # statement boundary
+        r"\s*([0-9A-Za-z_',\s]+?)\s*"
+        r":(?![:=+\-])",
+        re.MULTILINE)
+    saw_any = False
+    for m in label_re.finditer(body):
+        head = m.group(1).strip()
+        if not head:
+            continue
+        parts = [p.strip() for p in head.split(',') if p.strip()]
+        if not parts:
+            continue
+        for p in parts:
+            v = _sized_literal_value(p)
+            if v is None:
+                # Symbolic / unsized / x-z / non-literal label at a branch
+                # boundary -> not deterministically resolvable -> conservative.
+                return False
+            if v >= (1 << width):
+                return False  # label out of declared range -> bail
+            labels.append(v)
+        saw_any = True
+
+    if not saw_any or not labels:
+        return False
+
+    return set(labels) == set(range(1 << width))
+
+
 def rule_case_coverage(src: str, path: str) -> List[Finding]:
     findings: List[Finding] = []
     # Find every `case (expr) ... endcase` block with its starting line
@@ -352,6 +475,16 @@ def rule_case_coverage(src: str, path: str) -> List[Finding]:
                 break
         block = '\n'.join(lines[start_line - 1:end_line])
         if not re.search(r'\bdefault\s*:', block):
+            # ORGANIC #764 — suppress when the case is PROVABLY exhaustive: a
+            # fully-enumerated case (all 2**width sized-literal labels present)
+            # cannot infer a latch and has no un-enumerated value, so the WARN
+            # is a false positive (it even fired on the golden/reference
+            # module). Stay conservative: only suppress when the selector width
+            # AND every label are deterministically resolvable; otherwise keep
+            # the WARN (symbolic localparams, parameterized widths, partial
+            # enumerations all stay flagged).
+            if _case_is_exhaustive(src, expr, block):
+                continue
             findings.append(Finding(path, start_line, 'WARN', 'case-no-default', expr.strip(),
                 f"case ({expr.strip()}) has no default branch — "
                 "values not enumerated may generate latch or undefined behavior."))
@@ -452,9 +585,21 @@ _RESET_NAME_RE = re.compile(
 def _block_body_after(src: str, body_start: int) -> str:
     """Return the body text of an always block that starts at `body_start`,
     bounded at the next top-level `always` / `endmodule`. Mirrors the bounding
-    used by rule_reset_boundary_residual_enable so both rules agree on scope."""
+    used by rule_reset_boundary_residual_enable so both rules agree on scope.
+
+    ORGANIC #765 (R6C8) — the boundary MUST match the SAME flavors of `always`
+    that the block discovery does (`_iter_always_blocks` finds
+    `always(?:_ff|_comb|_latch)?`). The old `\\balways\\b` could NOT match
+    `always_ff`/`always_comb`/`always_latch` (the trailing `_` is a word char,
+    so there is no `\\b` between `always` and `_ff`). On any modern-SV design
+    written purely with `always_ff`/`always_comb` (every CDC FIFO/FILO, every
+    APB block), the FIRST block's body then overran to `endmodule`, swallowing
+    EVERY later block — so each register looked written by many blocks across
+    many clock domains and rule_multidriven_register false-WARNed. Widening the
+    boundary to the same flavors keeps every block body scoped to its own block.
+    chip-AGNOSTIC, purely structural."""
     tail = src[body_start:]
-    nxt = re.search(r'\balways\b|\bendmodule\b', tail)
+    nxt = re.search(r'\balways(?:_ff|_comb|_latch)?\b|\bendmodule\b', tail)
     return tail[:nxt.start()] if nxt else tail
 
 

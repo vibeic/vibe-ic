@@ -2322,9 +2322,26 @@ def step_full_stack_tb_gen(project: Path,
         _l9_names = {(_p.get("name") or "").strip()
                      for _p in top_ports if isinstance(_p, dict)}
         _rtl_names = {n for _d, n, _w in _rtl_ports}
+        # ORGANIC #766 round-2 — PRESERVE L9 POWER/ground supply pins the RTL
+        # surface does not expose. Supply pins are declared ONLY inside
+        # `ifdef USE_POWER_PINS, and the RTL surface is parsed under the
+        # SIMULATION/SYNTHESIS define-set (NOT USE_POWER_PINS), so a correct
+        # power-managed top legitimately omits them from `_rtl_ports`. Before
+        # the shared parser learned the non-ANSI body fallback (#766) such a top
+        # parsed to [] and reconcile was skipped entirely (L9 kept verbatim,
+        # incl. its POWER pins); now that the surface parses, a blind overwrite
+        # would DROP the L9 POWER pins and erase the `ifdef USE_POWER_PINS block
+        # (#645). Re-attach them so the supply ifdef is still emitted.
+        _l9_power = [_p for _p in top_ports
+                     if isinstance(_p, dict)
+                     and (_p.get("name") or "").strip()
+                     and (_p.get("name") or "").strip() not in _rtl_names
+                     and _v643_is_power_pin(_p, (_p.get("name") or "").strip())]
         if _l9_names != _rtl_names:
             _dropped = sorted(_rtl_names - _l9_names)
-            _phantom = sorted(_l9_names - _rtl_names)
+            _phantom = sorted((_l9_names - _rtl_names)
+                              - {(_p.get("name") or "").strip()
+                                 for _p in _l9_power})
             _reconcile_note = (
                 f" (RECONCILED to RTL surface — L9.top_ports diverged: "
                 f"missing-from-L9={_dropped}, not-in-RTL={_phantom}; the "
@@ -2333,7 +2350,7 @@ def step_full_stack_tb_gen(project: Path,
         # ORGANIC #643 — carry the parsed RTL width (`[msb:lsb]` cell) so the
         # declaration loop below emits a multi-bit bus at its real width.
         top_ports = [{"name": n, "direction": d, "width_decl": w}
-                     for d, n, w in _rtl_ports]
+                     for d, n, w in _rtl_ports] + _l9_power
 
     sim_dir = _pl.sim_full_stack_dir(project)
     sim_dir.mkdir(parents=True, exist_ok=True)

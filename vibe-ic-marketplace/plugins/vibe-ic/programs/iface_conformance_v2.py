@@ -342,6 +342,137 @@ _COPULAR_GAP_RE = re.compile(
 # rule's optional `is\s+an?\s+` prefix, so it is NOT caught by this guard).
 _NOUN_THE_TAIL_RE = re.compile(r"\bthe\s*$", re.IGNORECASE)
 
+# (#762) ATTRIBUTIVE-NOUN guard for the direction-word-BEFORE rule: in CSR /
+# peripheral specs a phrase like "driven by the output data register (`reg_out`)"
+# or "loaded from the input control register (`reg_in`)" uses the direction word
+# as an ATTRIBUTIVE ADJECTIVE modifying a noun (the GPIO *output-data register*),
+# NOT a port-direction tag for the parenthetically-named INTERNAL net. When the
+# gap between the direction word and the backtick ends in such a head noun
+# (register / signal / data / bus / port / counter / flag / line / wire / net /
+# pin / value / word / field / latch / buffer), the direction word modifies that
+# noun-phrase and the backtick is the internal net's name, not a port of that
+# direction — skip the record. chip-AGNOSTIC: pure English noun-phrase grammar,
+# no design/vendor literal. Mirrors _COPULAR_GAP_RE.
+#
+# The guard is a MULTI-WORD attributive phrase that ALSO opens the parenthetical
+# wrapping the name: `… <mod> <head-noun> (`$ — "output data register (`reg_out`)",
+# "input control register (`reg_in`)". The leading `<mod>` (a modifier word before
+# the head noun) is what distinguishes this from the LEGITIMATE single-noun
+# role-label forms — both the paren form "input data (`x`)" / "output bus (`y`)"
+# (gap " data ("/" bus (") AND the bare appositive "output signal `done_o`" /
+# "input clock `clk_i`" (gap "signal "/"clock ", where the backtick IS that noun).
+# (#763r2) the prior bare-trailing-head-noun arm was REMOVED: it over-fired on the
+# dominant legitimate role-label "output signal `x`" / "input data `x`", silently
+# dropping a real port's direction (an §4.05 leak). reg_out is caught by the
+# multi-word+paren arm; a real bare-noun internal net stays masked by the
+# given-code-internal-net mask, not by prose grammar.
+_HEAD_NOUN = (r"(?:register|signal|data|bus|port|counter|flag|line|wire|net|"
+              r"pin|value|word|field|latch|buffer)s?")
+_ATTRIBUTIVE_NOUN_GAP_RE = re.compile(
+    r"\b\w+\s+" + _HEAD_NOUN + r"\s*\(\s*$",  # multi-word attributive phrase + open paren
+    re.IGNORECASE)
+
+# (#762) NEW-SUBJECT guard for the direction-word-AFTER rule: a genuine prose port
+# predication binds the direction word DIRECTLY to the named net ("`s_ready` is an
+# output", "`data_valid` is an input", "`s_ready` (active high) is an output",
+# "`done`, when asserted, is an output") — the gap between the backtick name and
+# the direction word carries at most a parenthetical annotation or an adverbial
+# subordinate clause, but the SUBJECT of the copula is still the named net. A
+# COINCIDENTAL match instead scrapes a direction word whose clause predicates a
+# DIFFERENT subject ("the pointer (`r_ptr`) decrements, and the data is output" —
+# 'output' predicates "the data", not r_ptr). The discriminating signature is a
+# NEW SUBJECT noun-phrase — a determiner + noun immediately followed by a
+# copula/auxiliary — inside the gap. When present, the direction word belongs to
+# that new subject, not to the backtick name — skip the record. chip-AGNOSTIC:
+# pure clause grammar, no literal.
+# (#762r2) the prior broad clause-break form ([,;)] / and|or|but|…) was REPLACED:
+# it over-fired on a parenthetical annotation ")" or an appositive comma that does
+# NOT detach the copula's subject ("`s_ready` (active high) is an output"),
+# silently dropping a real port direction (an §4.05 leak).
+# The `_DIR_NEAR_AFTER_RE` capture consumes the copula ("is an") itself, so a new
+# subject surfaces as the gap ENDING in a determiner + noun ("…and the data " then
+# the consumed "is output"). An appositive annotation ("(active high) ") or an
+# adverbial subordinate ("when asserted, ") does NOT end in a determiner+noun, so
+# the genuine "`name` (active high) is an output" is preserved.
+_AFTER_NEW_SUBJECT_RE = re.compile(
+    r"\b(?:the|a|an|its|this|that|each|every)\s+\w+\s*$",
+    re.IGNORECASE)
+
+# (#763) VERB / ATTRIBUTIVE-MODIFIER guard for the direction-word-BEFORE rule.
+# The BEFORE rule (`(input|output) <gap> \`name\``) was written for the role-label
+# form "input `foo`" / "output `bar`" — the direction word labels the immediately-
+# following backtick port. But the word "input"/"output" is also an ordinary
+# English VERB / GERUND ("Output the signal", "output by XORing"), an ATTRIBUTIVE
+# NOUN-MODIFIER of a following common noun ("output encoding", "output signal",
+# "GPIO Output Data"), and can sit in a PRIOR clause whose period/colon the 40-char
+# gap window straddles ("Encoded output signal. The encoding applied to `serial_in`").
+# In every such case the direction word is NOT a role-label for the trailing
+# backtick name, so attributing its direction to that name is a false positive
+# (Serial_Line_Converter: `clk_pulse`/`mode`/`serial_in` wrongly tagged output).
+# A genuine role-label has a THIN gap: pure whitespace/punctuation straight to the
+# name, OR a short noun-phrase that PARENTHESIZES the name ("input data (`x`)",
+# "output data register (`y`)"). Everything else is rejected. chip-AGNOSTIC: pure
+# English-grammar structure over the gap, no design / vendor / SKU literal.
+#
+# (1) the gap crosses a sentence / clause boundary (a `.`/`;`/`:` then space, or a
+#     markdown bold close `**` then `.`/`:`): the direction word is in a prior clause.
+_BEFORE_SENT_BOUNDARY_RE = re.compile(r"[.;:]\s|\*\*\s*[.;:]")
+# (2) the direction word governs a DIFFERENT entity than the trailing backtick
+#     name: a RE-TARGETING marker mid-gap — a verb object ("output by XORing"), an
+#     adjunct ("Output the signal only during the"), or a prepositional re-aim
+#     ("select the output encoding based on the") — moves the direction word's
+#     reference away from the name. A genuine appositive role-label gap ("signal ",
+#     "data ", "clock ", "of the module ") carries none of these markers, so it is
+#     preserved. chip-AGNOSTIC English-grammar tokens, no design / vendor literal.
+#     (#763r2) REPLACES the prior lead-noun / lead-verb blanket rejection, which
+#     over-fired on the dominant legitimate forms "output signal `x`" / "input
+#     clock `x`" / "output of the module `x`" — silently dropping a real port's
+#     direction (an §4.05 leak).
+_BEFORE_RETARGET_RE = re.compile(
+    r"\b(?:by|based\s+on|only|during|applied\s+to|via|using|when|if|"
+    r"according\s+to|derived\s+from|depending\s+on)\b",
+    re.IGNORECASE)
+# role-label paren form: the gap is a short noun-phrase ending in an open paren
+# that wraps the name ("input data (`x`)", "input parameters (`y`)"), no sentence
+# break inside — this is a LEGITIMATE role-label, keep it.
+_BEFORE_NOUN_PAREN_RE = re.compile(r"^[^.;:]*\(\s*$")
+
+
+def _before_dir_is_role_label(gap: str) -> bool:
+    """True when the direction-word-BEFORE gap `gap` (the text between the
+    direction word and the backtick name) is a genuine port role-label — i.e.
+    the direction word labels THIS backtick name — and not a verb / gerund /
+    re-targeted modifier / prior-clause leak. chip-AGNOSTIC."""
+    if _BEFORE_SENT_BOUNDARY_RE.search(gap):
+        return False
+    if _BEFORE_NOUN_PAREN_RE.match(gap):
+        return True
+    if _BEFORE_RETARGET_RE.search(gap):
+        return False
+    return True
+
+
+# (#763) DATA-NOUN guard for the direction-word-AFTER rule, complementing the
+# #753 `_NOUN_THE_TAIL_RE` article-prefixed guard. When the direction word is
+# IMMEDIATELY FOLLOWED by a common data-noun ("output data", "input value") it is
+# an attributive modifier of that noun, NOT a role-label for the preceding backtick
+# name — but ONLY when the gap is a VERBAL / CONDITIONAL clause (it carries a finite
+# verb / participle / subordinator), so the direction word sits in a separate
+# predicate from the name ("if `dfmt_enable` is disabled output data will be ...").
+# The dominant LEGITIMATE descriptive form ("`serial_in`: Input signal carrying ...",
+# "`serial_out`: Encoded output signal", "16-bit output signal") has only a copular
+# `is`/label gap and is NOT a verbal clause, so it is preserved. chip-AGNOSTIC.
+_AFTER_DATA_NOUN_RE = re.compile(
+    r"^\s*(?:data|word|words|value|values|signal|signals|payload|stream|"
+    r"sample|samples|bus|bit|bits|register|line|channel|encoding)\b",
+    re.IGNORECASE)
+_AFTER_GAP_CLAUSE_RE = re.compile(
+    r"\b(?:disabled|enabled|asserted|deasserted|low|high|active|inactive|valid|"
+    r"invalid|set|cleared|selects?|controls?|drives?|reaches?|toggled?|"
+    r"configures?|indicates?|when|if|while|then|will|carries|carrying|holds?|"
+    r"stores?|reflects?|provides?)\b",
+    re.IGNORECASE)
+
 # A given-code module header inside the prompt (e.g. a fenced template the
 # author must complete) — its ports are the authoritative interface.
 _WAVEDROM_NAME_RE = re.compile(r'["\']name["\']\s*:\s*["\']([A-Za-z_]\w*)["\']')
@@ -680,6 +811,18 @@ def extract_prompt_iface(prompt: str) -> PromptIface:
         # source it selects), not the port's own direction.
         if _COPULAR_GAP_RE.search(gap):
             continue
+        # (#762) skip attributive-noun phrases ("the output data register
+        # (`reg_out`)") — the direction word modifies the head noun (register),
+        # so the backticked name is that INTERNAL register's name, not a port.
+        if _ATTRIBUTIVE_NOUN_GAP_RE.search(gap):
+            continue
+        # (#763) skip when the direction word is NOT a role-label for THIS name —
+        # a verb/gerund ("Output the signal", "output by XORing"), an attributive
+        # noun-modifier ("output encoding", "output signal"), or a prior-clause
+        # leak across a sentence boundary ("Encoded output signal. The encoding
+        # applied to `serial_in`"). These wrongly invert a correct input→output.
+        if not _before_dir_is_role_label(gap):
+            continue
         pif.add(m.group(3), m.group(1).lower(), "prose")
     for m in _DIR_NEAR_AFTER_RE.finditer(prompt):
         gap = m.group(2) or ""
@@ -687,6 +830,25 @@ def extract_prompt_iface(prompt: str) -> PromptIface:
         # from the input", "`sync_header` is the first 2 bits of the input") —
         # here the direction word is the data-word noun, not a port-direction.
         if _NOUN_THE_TAIL_RE.search(gap):
+            continue
+        # (#762) skip coincidental cross-clause matches ("the pointer (`r_ptr`)
+        # decrements, and the data is output") — the gap introduces a NEW SUBJECT
+        # (determiner + noun + copula) that the direction word predicates, so it
+        # belongs to a different clause, not to the named (internal) net. A genuine
+        # "`name` is an input" / "`name` (active high) is an output" has no new
+        # subject before the copula and is preserved.
+        if _AFTER_NEW_SUBJECT_RE.search(gap):
+            continue
+        # (#763) skip when the direction word is an attributive modifier of a
+        # following data-noun ("output data", "input value") AND the gap is a
+        # verbal/conditional clause ("if `dfmt_enable` is disabled output data
+        # will be ...") — the direction word belongs to that noun phrase, not to
+        # the backtick name (which is the clause's subject), so attributing the
+        # direction to the name inverts a correct input→output. The descriptive
+        # "`x`: Output signal" / "16-bit output signal" forms (no clause verb in
+        # the gap) are preserved.
+        if (_AFTER_DATA_NOUN_RE.match(prompt[m.end():])
+                and _AFTER_GAP_CLAUSE_RE.search(gap)):
             continue
         pif.add(m.group(1), m.group(3).lower(), "prose")
     # (d) wavedrom signal names (names only, no direction)
