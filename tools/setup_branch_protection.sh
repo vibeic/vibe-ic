@@ -104,6 +104,21 @@ json_str() {
   python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$1"
 }
 
+# The PR-review block. When REQUIRED_APPROVALS==0 (the single-identity model —
+# the gatekeeper≠submitter rule was removed, and GitHub forbids approving your
+# OWN PR) we OMIT required_pull_request_reviews entirely (JSON null) so a
+# self-authored PR is not deadlocked by an unsatisfiable Code-Owner review.
+# main stays protected by the required STATUS CHECKS + the loop's Step-2.7.
+# When REQUIRED_APPROVALS>=1 (a distinct bot/human reviewer exists) we require a
+# real Code-Owner review.
+build_reviews_block() {
+  if [ "${REQUIRED_APPROVALS}" -ge 1 ] 2>/dev/null; then
+    printf '{"required_approving_review_count":%s,"require_code_owner_reviews":true,"dismiss_stale_reviews":true}' "${REQUIRED_APPROVALS}"
+  else
+    printf 'null'
+  fi
+}
+
 build_protection_payload() {
   cat <<JSON
 {
@@ -112,11 +127,7 @@ build_protection_payload() {
     "checks": $(build_checks_json)
   },
   "enforce_admins": true,
-  "required_pull_request_reviews": {
-    "required_approving_review_count": ${REQUIRED_APPROVALS},
-    "require_code_owner_reviews": true,
-    "dismiss_stale_reviews": true
-  },
+  "required_pull_request_reviews": $(build_reviews_block),
   "restrictions": $(build_restrictions),
   "required_linear_history": true,
   "allow_force_pushes": false,
@@ -148,8 +159,12 @@ Required order:
 WARN
   echo ""
   echo "WOULD apply to ${REPO}@${BRANCH}:"
-  echo "  - require PR before merge, ${REQUIRED_APPROVALS} approving review(s)"
-  echo "  - require review from Code Owners (CODEOWNERS -> @vibeic/gatekeeper)"
+  echo "  - require PR before merge (no direct push)"
+  if [ "${REQUIRED_APPROVALS}" -ge 1 ] 2>/dev/null; then
+    echo "  - require ${REQUIRED_APPROVALS} Code-Owner approving review(s) (CODEOWNERS -> @vibeic/gatekeeper)"
+  else
+    echo "  - NO PR-review requirement (single-identity self-merge): quality via required STATUS CHECKS + the loop's Step-2.7 (GitHub forbids self-approving your own PR)"
+  fi
   echo "  - required status checks (strict, must match gatekeeper-ci job names):"
   local c
   for c in "${REQUIRED_CHECKS_ARR[@]}"; do

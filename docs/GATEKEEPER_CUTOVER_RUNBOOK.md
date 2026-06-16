@@ -48,38 +48,41 @@ Do not start until ALL are true:
 
 ---
 
-## 2. Phase 1 — Create the gatekeeper identity
+## 2. Phase 1 — Choose the gatekeeper identity
 
-The gatekeeper MUST be a **distinct identity from any authoring agent** — otherwise
-author == approver and the PR rail buys nothing over the backlog model.
+**There is NO author≠approver requirement** (the gatekeeper≠submitter rule was
+removed). The gatekeeper MAY be the **same identity as the author** — quality is
+guaranteed by the GATES (required status checks + the loop's Step-2.7 + the
+serialized re-test-on-rebase merge queue), not by a second person. So for a
+single-maintainer / single-agent project the simplest, fully-supported setup is:
 
-Choose ONE:
-
-**Option A — GitHub App (recommended for production).**
-1. Settings → Developer settings → GitHub Apps → New App. Permissions: `Contents: read/write`, `Pull requests: read/write`, `Checks: read`, `Administration: read`. Subscribe to `pull_request`, `merge_group`.
-2. Install it on `vibeic/vibe-ic`.
-3. Note the app slug (e.g. `vibeic-gatekeeper`). It will be the actor that lands `main`.
-4. The gatekeeper-loop authenticates as the App (installation token), not your PAT.
-
-**Option B — Machine user / bot account (simpler).**
-1. Create a dedicated GitHub user, e.g. `vibeic-gatekeeper-bot`.
-2. Add it to the repo with **write** access only (never admin).
-3. Generate a fine-grained PAT scoped to this repo with the permissions above; store it where the gatekeeper-loop reads its token.
-
-**Then set the CODEOWNERS team.** `.github/CODEOWNERS` currently routes review to the
-placeholder `@vibeic/gatekeeper`. Create that team (org → Teams → `gatekeeper`),
-add ONLY the gatekeeper identity to it, and confirm the handle in CODEOWNERS
-matches. (For Option B with no team, replace `@vibeic/gatekeeper` with the bot
-`@vibeic-gatekeeper-bot` — a single-user code owner is valid.)
-
-Record for the next phases:
+**Option A (recommended) — the OWNER identity IS the gatekeeper (no new account).**
+The owner (e.g. `reyerchu`) authors PRs, runs the gatekeeper-loop, and merges
+their own gated PRs. Nothing to create.
 ```bash
 export REPO="vibeic/vibe-ic"
 export BRANCH="main"
-export GATEKEEPER_ACTOR="vibeic-gatekeeper-bot"   # the App slug or bot login
-export GATEKEEPER_IS_APP="false"                  # "true" if you chose Option A
-export REQUIRED_APPROVALS="1"
+export GATEKEEPER_ACTOR="reyerchu"     # the single owner/agent login
+export GATEKEEPER_IS_APP="false"
+export REQUIRED_APPROVALS="0"          # ← 0: rely on STATUS CHECKS, not PR approvals
 ```
+> ⚠️ **Why `REQUIRED_APPROVALS=0` for single-identity.** GitHub will NOT let an
+> author approve their OWN PR. So if you keep `require Code-Owner review` with the
+> author as the only code owner, a self-authored PR can never satisfy the review
+> and the queue deadlocks. Under single-identity self-merge you therefore drop the
+> PR-review requirement and lean entirely on the **required status checks**
+> (`gatekeeper-ci`) + the gatekeeper-loop's own **Step-2.7** gate. `main` is still
+> protected (no direct push, required checks, squash, no force) — just without a
+> human-approval step that a single identity cannot provide. `setup_branch_protection.sh`
+> omits the `required_pull_request_reviews` block when `REQUIRED_APPROVALS=0`.
+
+**Option B (optional) — a DISTINCT bot identity, only if you want actor/audit separation.**
+Not required for correctness; choose it only if you want merges attributed to a
+separate `…[bot]` actor for provenance. Then a real Code-Owner review IS possible
+(the bot reviews the human's PR), so you may set `REQUIRED_APPROVALS=1` and keep
+`@vibeic/gatekeeper` in CODEOWNERS.
+- *Bot account*: create `vibeic-gatekeeper-bot`, add to repo with **write**, generate a fine-grained PAT (Contents R/W, Pull requests R/W, Checks R, Administration R). Put it in a `gatekeeper` team; keep `@vibeic/gatekeeper` in CODEOWNERS. Set `GATEKEEPER_ACTOR=vibeic-gatekeeper-bot`, `REQUIRED_APPROVALS=1`.
+- *GitHub App*: a stricter alternative, but a GitHub App **cannot be a CODEOWNER**, so the required Code-Owner review must come from a user/team — keep `REQUIRED_APPROVALS=0` or add a human reviewer. Set `GATEKEEPER_IS_APP=true`.
 
 ---
 
@@ -132,9 +135,11 @@ so a problem here costs nothing.
    non-monotonic version) and confirm the loop **`request-changes`** with the
    failing gate's output — it must NOT merge. This proves the gate bites.
 
-4. **Confirm self-merge is refused**: a PR authored BY the gatekeeper identity must
-   NOT be auto-merged by itself (it routes to the second-reviewer / break-glass
-   path). This protects the author≠approver invariant.
+4. **Confirm self-merge of a GATED PR works** (single-identity model): a PR
+   authored BY the gatekeeper identity, once its required checks + Step-2.7 are
+   green, merges through the queue. There is no author≠approver block. Separately
+   confirm a GATE-WEAKENING PR (e.g. one that loosens a required check) is caught
+   by Step-2.7 and held — the gate must not relax itself unobserved.
 
 > If any of steps 1–4 misbehaves, STOP. Fix the loop/checks while `main` is still
 > open. **Do not flip protection on a loop that can't merge a good PR or block a
@@ -220,7 +225,7 @@ This is fully reversible — protection is a setting, not history.
 
 - **Flaky tests amplify in a queue** (a 5%-flaky required check fails the whole queue ~5% of the time). Keep the required-check surface minimal (the three contexts), quarantine known-flaky tests, and keep the FULL both-tree suite as a **milestone-only** (`x.y.0`) check per the cadence policy — patch PRs run the targeted subset only.
 - **Cadence is automatic**: `gatekeeper_review.py` / `gatekeeper-ci.yml` read the version bump and select TARGETED (patch) vs FULL (x.y.0 milestone). The patch→`x.(y+1).0` rollover lands the full suite naturally.
-- **Who gates the gatekeeper**: the gatekeeper's OWN changes (to `gatekeeper_review.py`, the loop, the CI) route through a second reviewer — never self-approved. CODEOWNERS already requires review on those paths.
+- **Changing the gate itself**: the gatekeeper MAY self-merge a change to the gate machinery (`gatekeeper_review.py`, the loop, the CI), but a gate change is the highest-risk diff — its Step-2.7 MUST explicitly hunt for gate-weakening (a removed/loosened check, broadened allow-list, blocking→advisory downgrade) and hold any such finding as a reproducible HIGH. The adversarial review of the gate diff, not a second person, is the safeguard.
 - **Provenance**: every landed change now carries the PR diff + the gate run logs + the gatekeeper's verdict + the issue link. Author≠approver is structural, not a convention.
 - **Keep the post-merge real-benchmark re-audit** (field-agent). The PR rail gives role-independence, not judgment-independence; the deepest spec-interpretation layers are blind to a local self-check and only the real benchmark re-run catches them.
 

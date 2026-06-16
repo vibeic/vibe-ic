@@ -63,8 +63,9 @@ requirements:
       mechanism — single gatekeeper, machine gates (required checks) +
       Step-2.7 adversarial review, serialized merge queue, rebase + re-run
       on the rebased tree, squash-merge (one PR = one version bump), and the
-      never-self-merge / never --force / never --no-verify invariants. This
-      is the author-facing statement of the author≠approver model.
+      never --admin / --force / --no-verify invariants. The gate is the
+      quality guarantee — self-merge of a gated PR is allowed (there is no
+      author≠approver requirement).
     pattern: '\*\*機制說明\*\*：'
 
   - id: R7_squash_one_bump_mention
