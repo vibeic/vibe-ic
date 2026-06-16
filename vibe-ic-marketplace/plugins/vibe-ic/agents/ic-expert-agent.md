@@ -789,6 +789,8 @@ _Captured by benchmark-enhancement-capture 2026-05-28._
 
 **Worked pattern** (anonymized): a triangle-pattern signal generator that decremented on the direction-flip cycle exhibited an off-by-one peak vs the TB's expected waveform; restructuring to hold-then-decrement (flip direction this cycle, decrement next) matched.
 
+**ANTI-PATTERN (§4-E, ORGANIC #776)**: do NOT drop this hold-the-peak lesson by citing §4-E on AMBIGUOUS prose. A spec saying "incremented by 1 / if it reaches 31, transition/reverse" is CONSISTENT with hold-the-peak — it does NOT explicitly say "increment EVERY cycle with NO hold". Overriding the lesson on that inferred reading is the weaponized escape hatch (it caused a real r12 PASS → r13 FAIL regression: 0/100 → 67/100). Deviate ONLY if the spec EXPLICITLY forbids the hold (e.g. literally "no peak hold" / "advances every single cycle including the turn"); otherwise KEEP the hold.
+
 **Why this is GENERAL**: Universal waveform-generator construct.
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
@@ -1481,8 +1483,25 @@ _Captured by benchmark-enhancement-capture 2026-06-15._
 > single-track authoring had abandoned as a FLOOR. They are GENERAL design-class
 > defaults verified by golden-self-consistency — NOT hidden-oracle answers and
 > NOT problem-specific. Every rule applies "for design class X, the conventional
-> choice is Y **unless the spec states otherwise**"; a genuinely spec-ambiguous
-> case stays spec-faithful, never forced to a guessed oracle pick (§4-E).
+> choice is Y **unless the spec states otherwise**".
+>
+> **§4-E (TIGHTENED — ORGANIC #776). The carve-out is "explicit-contradiction →
+> MUST deviate", NOT "ambiguity → may drop".** You may deviate from a present,
+> applicable, same-genre convention lesson ONLY when the spec contains an
+> EXPLICIT, UNAMBIGUOUS sentence that CONTRADICTS it (e.g. "this shifter
+> *rotates*", "rdata is a *wire*", "the counter increments on EVERY cycle with
+> *no* hold"). A spec that is SILENT or AMBIGUOUS on the point — prose that
+> merely *implies* or that you must *argue* into a reading — does NOT license
+> dropping the lesson: **ambiguity resolves TOWARD the present lesson** (it is
+> load-bearing precisely because the spec alone is ambiguous — a golden-self-
+> consistent convention is the disambiguator). Citing §4-E / "the spec governs"
+> in an inline comment to override a same-genre lesson on inferred prose is the
+> ANTI-PATTERN this rule forbids (it caused a real r12 PASS → r13 FAIL
+> regression: signal_generator peak-hold dropped on a "spec governs" argument
+> the spec never made). **§4-E no-leak (original intent preserved):** a
+> GENUINELY explicit contrary spec sentence STILL must be followed over the
+> convention — the tightening only removes the "I can argue ambiguity" escape
+> hatch, never the "the spec literally says the opposite" deviation.
 
 ### Skill: clock divider conventions — half-integer pulse-set + dual-edge, odd via async reset
 

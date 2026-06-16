@@ -104,11 +104,15 @@ Generality: applies to ANY Verilog/SystemVerilog design. Finds bugs #1, #2,
 from __future__ import annotations
 import argparse
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Dict, Set, Tuple, Optional
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _provenance as _prov  # noqa: E402  (ORGANIC #770)
 
 
 @dataclass
@@ -119,6 +123,30 @@ class Finding:
     rule: str
     symbol: str
     message: str
+    # ORGANIC #770 round-2 — provenance/confidence gate. A finding may HARD-BLOCK
+    # (contribute to rc=1) only when block_eligible. A finding derived from an
+    # UNCORROBORATED structural heuristic (a level-enable guess the RTL does not
+    # back, a dead-reg inference the RTL CONTRADICTS by being a cross-domain sync
+    # flop) is ADVISORY (reported, never a hard veto). Default True (fail-closed:
+    # every existing rule keeps its historical blocking power unless a rule
+    # explicitly downgrades a specific finding via _advisory()).
+    block_eligible: bool = True
+    advisory_note: str = ""
+
+
+def _advisory(f: Finding, provenance: str, corroboration: str) -> Finding:
+    """ORGANIC #770 — route ONE finding through the shared provenance layer.
+
+    Returns the SAME Finding with block_eligible / advisory_note set per the
+    single block-decision rule in _provenance.is_block_eligible. A finding that
+    is downgraded is also demoted to INFO severity so it never trips the
+    `warn > 0` exit condition — it stays in the report as an advisory line.
+    chip-AGNOSTIC: no design/vendor literal, pure decision plumbing."""
+    f.block_eligible = _prov.is_block_eligible(provenance, corroboration)
+    if not f.block_eligible:
+        f.advisory_note = _prov.advisory_reason(provenance, corroboration)
+        f.severity = 'INFO'
+    return f
 
 
 # ---------------------------------------------------------------------------
@@ -327,9 +355,125 @@ def rule_undriven_and_unread(src: str, path: str) -> List[Finding]:
                 note = (" (write-only memory array — likely a RAM whose read "
                         "port is in a sibling/future module; advisory only)"
                         if is_mem_array else "")
-                findings.append(Finding(path, lineno, sev, 'unread-reg', name,
-                    f"{kind} '{name}' declared and written but never read.{note}"))
+                f = Finding(path, lineno, sev, 'unread-reg', name,
+                    f"{kind} '{name}' declared and written but never read.{note}")
+                # ORGANIC #770 round-2 — a scalar reg that is written ONLY by a
+                # pure register-pass-through copy (`reg <= <single_identifier>;`)
+                # inside a clocked block is the canonical CDC double-flop
+                # SYNCHRONIZER stage (e.g. async-FIFO `wq2_rptr`): its reader is
+                # the comparison/full-flag logic that lives in a SIBLING module /
+                # the other clock domain, so it is NOT dead — it is a legitimate
+                # cross-domain signal. The dead-reg structural inference is
+                # PROSE_HEURISTIC and the RTL CONTRADICTS it (the flop is a
+                # synchronizer feeding out of this submodule). Downgrade to
+                # ADVISORY. No-leak: a reg written with COMPUTED logic
+                # (`x <= a & b;`, a constant, an expression) is NOT a
+                # pass-through sync flop → stays a hard WARN (block-eligible).
+                if not is_mem_array and _is_sync_passthrough_reg(src, name):
+                    f = _advisory(f, _prov.PROSE_HEURISTIC, _prov.CONTRADICTED)
+                findings.append(f)
     return findings
+
+
+# Single-identifier NBA write of a scalar reg inside a clocked always block —
+# the register-to-register copy that defines a CDC synchronizer / pipeline-pass
+# flop (ORGANIC #770 round-2). chip-AGNOSTIC: pure SystemVerilog structure.
+def _is_sync_passthrough_reg(src: str, name: str) -> bool:
+    """True iff EVERY NBA write of scalar `name` is either a SINGLE bare-
+    identifier register copy (`q2 <= q1;`) or a reset-clear-to-zero
+    (`q2 <= 0;`), AND at least one register-copy write exists inside a
+    posedge/negedge (clocked) always block. That is the double-flop CDC
+    synchronizer signature: reset to 0, then pass the prior stage straight
+    through with no logic. A reg written with COMPUTED logic (operators, a
+    non-zero literal/constant value, a slice/concat/index), or by blocking `=`
+    only, is NOT a pass-through sync flop → returns False (keeps the hard
+    WARN — no-leak biased). chip-AGNOSTIC pure structure."""
+    # All NBA writes of `name` and their RHS up to `;`.
+    write_re = re.compile(
+        r'(?<![<>!=])\b' + re.escape(name) + r'\s*<=\s*([^;]+);')
+    rhss = [m.group(1).strip() for m in write_re.finditer(src)]
+    if not rhss:
+        return False  # no NBA write at all → not a sync flop
+    saw_passthrough = False
+    for rhs in rhss:
+        # A reset-clear write (`<= 0` / `<= 4'd0` / `<= '0` / `<= {N{1'b0}}`) is
+        # allowed — it does not carry datapath logic.
+        if _sized_literal_value(rhs) == 0 or re.fullmatch(
+                r"(?:\d+'[bhdo]?0+|'0|0|\{[^{}]*1'b0[^{}]*\})", rhs):
+            continue
+        # Otherwise the RHS must be exactly ONE bare identifier (a register
+        # pass-through). No operators, no non-zero literals, no slice/concat/
+        # index — those carry logic and are NOT a synchronizer stage.
+        if not re.fullmatch(r'[A-Za-z_]\w*', rhs) or rhs in VERILOG_KEYWORDS:
+            return False
+        saw_passthrough = True
+    if not saw_passthrough:
+        return False  # only reset-clears, no copy → not a synchronizer
+    # At least one register-copy NBA write must sit inside a CLOCKED always
+    # block (level-sensitive `@(*)` pass-throughs are not CDC synchronizers).
+    name_domain = None
+    src_ids: Set[str] = set()
+    for sens, body, _pos in _iter_always_blocks(src):
+        dom = _edge_domain(sens)
+        if not dom:
+            continue  # comb block — not a clocked synchronizer
+        for m in write_re.finditer(body):
+            rhs = m.group(1).strip()
+            if re.fullmatch(r'[A-Za-z_]\w*', rhs) and rhs not in VERILOG_KEYWORDS:
+                name_domain = dom
+                src_ids.add(rhs)
+    if name_domain is None:
+        return False
+    # ORGANIC #770 r2 Step-2.7 — a bare clocked `q2 <= q1` is a SYNCHRONIZER only
+    # with structural corroboration that it crosses or feeds a domain; otherwise
+    # a same-domain copy read NOWHERE is just a dead reg (must keep its WARN).
+    # Corroborate by EITHER:
+    #   (a) `name` is itself read on the RHS of ANOTHER reg's NBA (a 2-flop chain
+    #       qN <= qN-1 downstream — the synchronizer continues), OR
+    #   (b) a source it copies is written in a DIFFERENT clock domain (true CDC).
+    downstream_re = re.compile(
+        r'\b[A-Za-z_]\w*\s*(?:\[[^\]]*\])?\s*<=\s*[^;]*\b'
+        + re.escape(name) + r'\b')
+    feeds_downstream = False
+    for m in downstream_re.finditer(src):
+        # ignore name's own writes (`name <= ... name ...`); require a DIFFERENT LHS.
+        lhs = re.match(r'\s*([A-Za-z_]\w*)', m.group(0))
+        if lhs and lhs.group(1) != name:
+            feeds_downstream = True
+            break
+    if feeds_downstream:
+        return True
+    # (b) true CDC: walk the copy chain back from `name`; if ANY stage copies a
+    # source that is NBA-written in a DIFFERENT edge (clock) domain, the chain
+    # crosses clock domains → genuine synchronizer (async_filo: `wq2 <= wq1 <=
+    # rptr_gray`, rptr_gray registered in the rclk domain). A SINGLE-clock copy
+    # chain (deadcopy: q2<=q1, both wclk, source a same-domain reg or a port) is
+    # NOT a CDC → stays a dead-reg WARN (§4.05 no-leak biased). chip-AGNOSTIC.
+    # Map every NBA-written name → its edge domain(s).
+    dom_of: Dict[str, Set[str]] = {}
+    for sens, body, _pos in _iter_always_blocks(src):
+        dom = _edge_domain(sens)
+        if not dom:
+            continue
+        for am in re.finditer(r'([A-Za-z_]\w*)(?:\s*\[[^\]]*\])?\s*<=', body):
+            dom_of.setdefault(am.group(1), set()).add(dom)
+    seen_chain: Set[str] = set()
+    frontier = set(src_ids)
+    while frontier:
+        sid = frontier.pop()
+        if sid in seen_chain:
+            continue
+        seen_chain.add(sid)
+        # if this stage is written in a domain other than name's → CDC.
+        if any(d != name_domain for d in dom_of.get(sid, set())):
+            return True
+        # follow the chain: what bare register does `sid` copy?
+        for cm in re.finditer(
+                r'(?<![<>!=])\b' + re.escape(sid) + r'\s*<=\s*([^;]+);', src):
+            rhs = cm.group(1).strip()
+            if re.fullmatch(r'[A-Za-z_]\w*', rhs) and rhs not in VERILOG_KEYWORDS:
+                frontier.add(rhs)
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -395,19 +539,55 @@ def _resolve_selector_width(src: str, expr: str):
     return None
 
 
+# ORGANIC #770 round-2 — resolve a SYMBOLIC state-localparam to its integer
+# value so a fully-enumerated FSM written with localparam labels
+# (`case (state) S_IDLE: ... S_DONE: ...`) is recognised as exhaustive exactly
+# like a numeric-literal one. chip-AGNOSTIC: pure SystemVerilog constant parse.
+def _localparam_int_values(src: str) -> Dict[str, int]:
+    """Map every `localparam`/`parameter NAME = <const>;` to its integer value
+    (when the RHS is a deterministically-resolvable constant). Earlier params
+    feed later ones via `_eval_const_int`. Non-constant RHS are skipped."""
+    vals: Dict[str, int] = {}
+    for m in _LOCALPARAM_DECL_RE.finditer(src):
+        name, rhs = m.group(1), m.group(2)
+        if name in VERILOG_KEYWORDS:
+            continue
+        v = _eval_const_int(rhs, vals)
+        if v is not None:
+            vals[name] = v
+    return vals
+
+
+def _label_value(tok: str, params: Dict[str, int]):
+    """Resolve ONE case-label token to its integer value: a sized numeric
+    literal OR a known state-localparam name. Returns None when neither (a
+    symbolic label whose value we cannot prove → caller stays conservative)."""
+    v = _sized_literal_value(tok)
+    if v is not None:
+        return v
+    if re.fullmatch(r'[A-Za-z_]\w*', tok) and tok in params:
+        return params[tok]
+    return None
+
+
 def _case_is_exhaustive(src: str, expr: str, block: str):
     """Return True iff the case PROVABLY enumerates all 2**width selector values.
 
     Requirements (all must hold, else returns False = stay conservative):
       * selector width deterministically resolvable to N bits (<= a sane cap),
-      * EVERY case label is a clean sized numeric literal (no symbolic labels,
-        no x/z, no unsized literals, no ranges/comma-lists we can't resolve),
+      * EVERY case label is a clean sized numeric literal OR a resolvable
+        state-localparam (ORGANIC #770 round-2: a symbolic-localparam FSM whose
+        labels are all `localparam`s of known value is just as enumerable as a
+        numeric-literal one),
       * the distinct label values exactly cover {0 .. 2**N - 1}.
     Purely structural & chip-AGNOSTIC (no design/benchmark literal). ORGANIC #764.
     """
     width = _resolve_selector_width(src, expr)
     if width is None or width <= 0 or width > 12:
         return False  # unknown or too-wide to enumerate -> conservative
+    # ORGANIC #770 round-2 — known localparam/parameter integer values so a
+    # symbolic FSM label (`S_IDLE`/`S_DONE`/…) resolves to its numeric value.
+    params = _localparam_int_values(src)
 
     # Isolate the case body: strip the leading `case (...)` head and the
     # trailing `endcase`.
@@ -442,10 +622,13 @@ def _case_is_exhaustive(src: str, expr: str, block: str):
         if not parts:
             continue
         for p in parts:
-            v = _sized_literal_value(p)
+            v = _label_value(p, params)
             if v is None:
-                # Symbolic / unsized / x-z / non-literal label at a branch
-                # boundary -> not deterministically resolvable -> conservative.
+                # Symbolic-but-unknown / unsized / x-z / non-literal label at a
+                # branch boundary -> not deterministically resolvable ->
+                # conservative. (A symbolic label that IS a known state-localparam
+                # resolves to its integer value via _label_value — ORGANIC #770
+                # round-2 — so a fully-enumerated localparam FSM is recognised.)
                 return False
             if v >= (1 << width):
                 return False  # label out of declared range -> bail
@@ -1450,7 +1633,7 @@ def rule_reset_boundary_residual_enable(src: str, path: str) -> List[Finding]:
             if traced is None:
                 continue
             lineno = src[:body_start + rm.start()].count('\n') + 1
-            findings.append(Finding(
+            f = Finding(
                 path, lineno, 'WARN', 'reset-boundary-residual-enable', reg,
                 f"register `{reg}` is reset-cleared to 0 then updated under the "
                 f"level-sensitive enable `{enable_expr.strip()}` (traces to "
@@ -1459,7 +1642,19 @@ def rule_reset_boundary_residual_enable(src: str, path: str) -> List[Finding]:
                 f"FIRST post-reset clock edge, breaking the post-reset invariant. "
                 f"Fix: add a registered armed/settle guard that blocks the update "
                 f"until reset has been de-asserted for >= 1 full cycle (e.g. "
-                f"`else if (armed && {enable_expr.strip()}) {reg} <= ...`)."))
+                f"`else if (armed && {enable_expr.strip()}) {reg} <= ...`).")
+            # ORGANIC #770 round-2 — this rule is a LEVEL-ENABLE HEURISTIC: it
+            # GUESSES, from a held-high enable tracing to a top-level input, that
+            # a post-reset transfer is a bug. But a held-high enable on the first
+            # post-reset edge is the CORRECT behaviour for the overwhelming
+            # majority of valid/ready / capture registers (e.g. AXI `awvalid_q`,
+            # `wvalid_q`, `timeout_flag_q`) — there is NO structural corroboration
+            # that the post-reset transfer violates this design's intent. The
+            # finding is PROSE_HEURISTIC with NO structural corroboration → it is
+            # advisory ONLY, never a hard veto. (Non-strict callers already only
+            # WARNed; this routes it out of the rc=1 / sole-emit BLOCK set.)
+            f = _advisory(f, _prov.PROSE_HEURISTIC, _prov.NO_CORROBORATION)
+            findings.append(f)
             break  # one finding per block is enough
     return findings
 
@@ -1610,6 +1805,61 @@ def _edge_domain(sens: str) -> frozenset:
         for m in re.finditer(r'\b(pos|neg)edge\s+([A-Za-z_]\w*)', sens))
 
 
+def _names_written_nba_in_edge_block(src: str) -> Set[str]:
+    """ORGANIC #770 r2 Step-2.7 — names that receive a NON-BLOCKING (`<=`) write
+    inside an EDGE-sensitive (`@(posedge/negedge …)`) always block: i.e. real
+    sequential STATE / accumulators. Such a name is NEVER a mere loop index even
+    if declared `integer`. chip-AGNOSTIC: pure edge-block + NBA grammar."""
+    names: Set[str] = set()
+    for bm in re.finditer(
+            r'always(?:_ff)?\s*@\s*\(\s*(?:posedge|negedge)\b[^)]*\)',
+            src, re.I):
+        tail = src[bm.end():]
+        nxt = re.search(r'\balways(?:_ff|_comb|_latch)?\b|\bendmodule\b', tail)
+        body = tail[:nxt.start()] if nxt else tail
+        for am in re.finditer(r'([A-Za-z_]\w*)(?:\s*\[[^\]]*\])?\s*<=', body):
+            names.add(am.group(1))
+    return names
+
+
+def _loop_index_and_genvar_names(src: str) -> Set[str]:
+    """Names that are LOOP-CONTROL / elaboration variables, NOT state/data
+    registers: a `genvar NAME;`, or a `for (NAME = ...)` control variable /
+    `integer NAME;` THAT HAS NO clocked (NBA-in-edge-block) write. ORGANIC #770
+    round-2 (+ Step-2.7 tightening).
+
+    A loop-index `i` reused across several `for` loops in different always
+    blocks is NOT a multi-driven STATE register. BUT `integer` is also the
+    canonical idiom for a wide counter/accumulator: a true cross-domain
+    accumulator (`integer acc; always @(posedge clkX) acc <= ...`) IS legitimate
+    multi-driven state and must KEEP its WARN — so a name written by a
+    non-blocking assignment inside an edge-sensitive block is EXCLUDED from this
+    loop-index set even if declared `integer`. chip-AGNOSTIC."""
+    clocked = _names_written_nba_in_edge_block(src)
+    names: Set[str] = set()
+    # `genvar NAME;` is ALWAYS elaboration-only (never a data reg).
+    for m in re.finditer(r'\bgenvar\b\s+([^;]+);', src):
+        for nm in m.group(1).split(','):
+            nm = re.sub(r'=.*', '', nm).strip()
+            nm = re.sub(r'\[.*', '', nm).strip()
+            if re.fullmatch(r'[A-Za-z_]\w*', nm or '') and nm not in VERILOG_KEYWORDS:
+                names.add(nm)
+    # `integer NAME;` — a loop/elaboration counter ONLY if it has no clocked write.
+    for m in re.finditer(r'\binteger\b\s+([^;]+);', src):
+        for nm in m.group(1).split(','):
+            nm = re.sub(r'=.*', '', nm).strip()
+            nm = re.sub(r'\[.*', '', nm).strip()
+            if (re.fullmatch(r'[A-Za-z_]\w*', nm or '')
+                    and nm not in VERILOG_KEYWORDS and nm not in clocked):
+                names.add(nm)
+    # `for (NAME = ...)` control variable — excludable only when not clocked-written.
+    for m in re.finditer(r'\bfor\s*\(\s*([A-Za-z_]\w*)\s*=', src):
+        nm = m.group(1)
+        if nm not in VERILOG_KEYWORDS and nm not in clocked:
+            names.add(nm)
+    return names
+
+
 def rule_multidriven_register(src: str, path: str) -> List[Finding]:
     """Rule 13 (ORGANIC #740 G4) — WARN when a reg is driven from >1 always
     block in a racing/different clocking domain."""
@@ -1617,6 +1867,12 @@ def rule_multidriven_register(src: str, path: str) -> List[Finding]:
     blocks = [(sens, body, pos) for sens, body, pos in _iter_always_blocks(src)]
     if len(blocks) < 2:
         return findings
+    # ORGANIC #770 round-2 — loop-index integers / genvars are NOT state
+    # registers; exclude them so a `for`-loop control var `i` reused across two
+    # always blocks does not false-fire as a multi-driven STATE race. No-leak: a
+    # genuine DATA/STATE reg (declared `reg`/`logic`, written as an FSM/datapath
+    # value) is never in this set, so a real multi-driven register still WARNs.
+    loop_ctrl = _loop_index_and_genvar_names(src)
     # collect every reg-like LHS per block (NBA or blocking) with its slice info
     # so we can see which regs are written by >1 block.
     reg_block_idx: Dict[str, List[int]] = {}
@@ -1632,6 +1888,10 @@ def rule_multidriven_register(src: str, path: str) -> List[Finding]:
                 reg_block_idx[nm].append(idx)
     for reg, idxs in sorted(reg_block_idx.items()):
         if len(idxs) < 2:
+            continue
+        # ORGANIC #770 round-2 — a loop-index integer / genvar is a transient
+        # iteration counter, not a multi-driven STATE/data register; skip it.
+        if reg in loop_ctrl:
             continue
         # gather per-block clocking domain + guard classification for THIS reg
         domains = [_edge_domain(blocks[i][0]) for i in idxs]
@@ -2427,6 +2687,12 @@ def main():
                          'unguarded-sim-only-assert finding (fence immediate `assert` '
                          'statements in `// synthesis translate_off … translate_on` so '
                          'they stop false-failing the synth gate). Regardless of caller/prompt.')
+    ap.add_argument('--strict', action='store_true',
+                    help='ORGANIC #770 — sole-emit hard-block mode. Identical '
+                         'gating to the default (an ADVISORY prose-heuristic '
+                         'finding never hard-blocks; only a BLOCK-eligible '
+                         'finding trips rc=1); accepted for vocabulary parity '
+                         'with the sibling --strict gates.')
     args = ap.parse_args()
 
     if args.fix:
@@ -2510,12 +2776,24 @@ def main():
     print(f"rtl_hygiene_lint: {err} errors, {warn} warnings, {info} info")
     print("-" * 70)
     for fd in sorted(filtered, key=lambda x: (x.file, x.line, x.severity)):
-        print(f"{fd.file}:{fd.line}: [{fd.severity}] {fd.rule}: {fd.message}")
+        # ORGANIC #770 round-2 — an ADVISORY (non-block-eligible) finding is
+        # printed with an explicit [ADVISORY — …] suffix so it stays visible in
+        # the report without contributing to the rc=1 / sole-emit BLOCK set.
+        suffix = "" if fd.block_eligible else f"  [ADVISORY — {fd.advisory_note}]"
+        print(f"{fd.file}:{fd.line}: [{fd.severity}] {fd.rule}: {fd.message}{suffix}")
 
     if args.json:
         Path(args.json).write_text(json.dumps([asdict(f) for f in filtered], indent=2))
 
-    return 1 if err > 0 or warn > 0 else 0
+    # ORGANIC #770 round-2 — only a BLOCK-eligible finding hard-blocks (trips
+    # rc=1). A STRUCTURAL / corroborated finding (a genuine bug) stays
+    # block-eligible and still blocks; a downgraded prose-heuristic finding is
+    # advisory only. (_advisory() also demotes the severity to INFO, so the
+    # `err`/`warn` counts above already exclude it — this gate is the
+    # authoritative, severity-independent decision point.)
+    blocking = [f for f in all_findings
+                if f.block_eligible and f.severity in ('ERROR', 'WARN')]
+    return 1 if blocking else 0
 
 
 if __name__ == '__main__':

@@ -157,6 +157,51 @@ _RST_NAME_HINT = ("rst", "reset")
 _CLEAR_NAME_EXACT = frozenset({"clr", "clear", "clrn", "clr_n", "clear_n",
                                "flush", "aclr", "sclr", "clra", "clrb"})
 
+# ARBITRATION / MUTUAL-EXCLUSION stimulus class (ORGANIC #770 round-2, Part C).
+# A bus arbiter is a MUTEX design: a set of competing REQUEST inputs map to a set
+# of GRANT outputs, and at most one master is granted per arbitration. The
+# canonical TB drives EVERY non-event data input to the same all-active constant
+# — which, for an arbiter, pins the COMPETING requests ACTIVE *and* (depending on
+# the priority/select wiring) pins the SELECT so a spec-correct arbiter grants a
+# DIFFERENT master than the one being measured. The measured grant is then
+# structurally UNREACHABLE → a false LATENCY-TIMEOUT on correct RTL
+# (`bus_arbiter_0004`). The fix: detect the multi-request / multi-grant
+# structural signature and, when the all-active stimulus makes the measured grant
+# unreachable (a TIMEOUT), RETRY with a ONE-HOT request stimulus — drive ONLY the
+# measured request active (the event), hold the COMPETING request inputs INACTIVE
+# — so the measured grant is reachable and the genuine per-master latency is read.
+#
+# These are name-anchored *request*/*grant* fragments — a NARROW signature, not a
+# data-input net. chip-AGNOSTIC: a structural multi-request/multi-grant shape, no
+# chip / vendor / SKU literal.
+_REQUEST_NAME_FRAGS = ("req", "request")
+_GRANT_NAME_FRAGS = ("grant", "gnt", "gr_")
+
+
+def _looks_like_request(name: str) -> bool:
+    """A bus-arbitration REQUEST input (`req`, `req0`, `m0_request`, `request_i`).
+    NARROW, fragment-anchored on the `req`/`request` token boundary so an
+    ordinary data input (`frequency`, `prequel`) is NOT captured: the fragment
+    must start at a word boundary or be the whole token's prefix segment."""
+    lo = name.lower()
+    for frag in _REQUEST_NAME_FRAGS:
+        # word-anchored: `req`/`request` at the start, or after a `_`/digit
+        # boundary (m0_req, bus_request_2) — never embedded mid-word (frequency).
+        if re.search(r"(?:^|_)" + frag + r"(?:$|_|\d)", lo):
+            return True
+    return False
+
+
+def _looks_like_grant(name: str) -> bool:
+    """A bus-arbitration GRANT output (`grant`, `grant0`, `m1_gnt`, `gnt_o`).
+    Same NARROW word-anchored fragment match as `_looks_like_request`."""
+    lo = name.lower()
+    for frag in _GRANT_NAME_FRAGS:
+        if re.search(r"(?:^|_)" + frag.rstrip("_") + r"(?:$|_|\d)", lo):
+            return True
+    return False
+
+
 # DoS guards (MED). A real event->output latency is small; a huge resolved
 # `--expect` (e.g. `8*1000000`) emitted into the TB loop bound + `#delay`
 # cutoff would stall each record ~120 s. Reject an out-of-range resolved expect
@@ -772,7 +817,8 @@ def build_measurement_tb(top: str, clk: Optional[PortInfo],
                          reset_active_low_map: Dict[str, bool],
                          input_const: int, max_cycles: int,
                          params: Optional[Dict[str, int]] = None,
-                         reset_hold: int = 5) -> str:
+                         reset_hold: int = 5,
+                         inactive_inputs: Optional[set] = None) -> str:
     """Emit the self-contained canonical-latency measurement TB.
 
     Convention:
@@ -783,8 +829,17 @@ def build_measurement_tb(top: str, clk: Optional[PortInfo],
     `params` (resolved module #(...) values + --param overrides) is forwarded
     to the DUT instance as `#(.NAME(VAL))` AND substituted into every TB net
     width so a parameterised design elaborates with no out-of-scope param.
+
+    `inactive_inputs` (ORGANIC #770 round-2, Part C) is the set of `others` port
+    NAMES to drive to their INACTIVE value (all-ZEROS) instead of the all-active
+    data constant. It is the ONE-HOT arbiter retry mechanism: the COMPETING
+    request inputs of a bus arbiter are held inactive so the measured request
+    (the event) wins arbitration and the measured grant is reachable. An empty /
+    None set is the byte-for-byte unchanged default stimulus (§4.05 no-leak: a
+    non-arbiter design never populates this set, so its TB is identical).
     """
     params = params or {}
+    inactive_inputs = inactive_inputs or set()
     L: List[str] = []
     L.append("`timescale 1ns/1ps")
     L.append("module latency_tb;")
@@ -832,7 +887,14 @@ def build_measurement_tb(top: str, clk: Optional[PortInfo],
         # all-ones (or the const) constant so the design progresses. The
         # replication count is the port's concrete width; a fixed small const
         # is rendered as a plain decimal.
-        if input_const < 0:
+        # ORGANIC #770 round-2 (Part C) — a COMPETING request held INACTIVE for
+        # the one-hot arbiter retry is driven to all-ZEROS regardless of the
+        # data constant (so the measured request wins arbitration). Only the
+        # ports the caller named in `inactive_inputs` are affected; every other
+        # `other` keeps its byte-for-byte unchanged data-constant drive.
+        if o.name in inactive_inputs:
+            val = f"{{{_width_token(o, params)}{{1'b0}}}}"
+        elif input_const < 0:
             val = f"{{{_width_token(o, params)}{{1'b1}}}}"
         else:
             val = str(input_const)
@@ -1079,6 +1141,37 @@ def run_latency_conformance(
     report["resets"] = [r.name for r in resets]
     report["other_inputs_held_constant"] = [o.name for o in others]
 
+    # ORGANIC #770 round-2 (Part C) — ARBITER / MUTUAL-EXCLUSION stimulus class.
+    # Detect the structural bus-arbiter signature: the MEASURED request (event)
+    # plus other COMPETING request inputs, against multiple grant outputs. The
+    # signature is name-anchored (request*/grant*), NARROW (≥1 competing request
+    # AND a grant-named output) — a non-arbiter design populates an EMPTY
+    # competing-request set so the one-hot retry below is structurally dead for
+    # it (§4.05 no-leak). The all-output port name set lets us recognise a
+    # multi-grant design even when only one grant is the measured output.
+    all_output_names = [n for d, _w, n in ports if d == "output"]
+    measured_is_request = _looks_like_request(event)
+    competing_requests = [o.name for o in others if _looks_like_request(o.name)]
+    output_is_grant = _looks_like_grant(output)
+    any_grant_output = any(_looks_like_grant(n) for n in all_output_names)
+    # Arbiter-class iff the measured event is a request, the MEASURED OUTPUT is a
+    # grant, AND at least one OTHER competing request exists to hold inactive.
+    # ORGANIC #770 r2 Step-2.7: the measured output MUST itself be a grant
+    # (`output_is_grant`) — the one-hot retry's stimulus surgery (holding req
+    # inputs inactive) is only semantically justified when the thing we measure is
+    # the grant for the measured request. The earlier `any_grant_output` disjunct
+    # let the retry fire while measuring a NON-grant output (e.g. a status/done
+    # line), where suppressing requests can hide a real timing miss. The design
+    # must ALSO expose ≥2 grant outputs (a genuine multi-master arbiter) for the
+    # mutex semantics to apply.
+    grant_outputs = [n for n in all_output_names if _looks_like_grant(n)]
+    is_arbiter_class = bool(
+        measured_is_request and output_is_grant and len(grant_outputs) >= 2
+        and competing_requests)
+    report["arbiter_class"] = is_arbiter_class
+    if is_arbiter_class:
+        report["competing_requests_held_inactive_on_retry"] = competing_requests
+
     # resolve --expect against the module params (+ overrides)
     try:
         params = resolve_params(rtl_text, top, params_override)
@@ -1186,6 +1279,83 @@ def run_latency_conformance(
                                                 context_files=context_files)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+    # ORGANIC #770 round-2 (Part C) — ARBITER ONE-HOT RETRY.
+    # The all-active stimulus pins EVERY competing request ACTIVE, so a
+    # spec-correct arbiter may grant a DIFFERENT master and leave the measured
+    # grant structurally UNREACHABLE → a false TIMEOUT on correct RTL. When (and
+    # ONLY when) the design carries the arbiter signature AND the first
+    # measurement TIMED OUT (the measured grant never asserted under contention),
+    # retry with a ONE-HOT request stimulus: drive ONLY the measured request (the
+    # event) active and hold the COMPETING requests INACTIVE. The measured grant
+    # is then reachable and its genuine per-master latency is read.
+    #
+    # §4.05 no-leak — this retry can ONLY relax a TIMEOUT to a measurement; it can
+    # never mask a real timing miss:
+    #   * it fires ONLY on a TIMEOUT (status == "timeout"); a measured-but-wrong
+    #     latency (MISMATCH) is NEVER retried — a genuine 2-cycle grant vs spec=1
+    #     measures 2 and still hard-blocks.
+    #   * a non-arbiter design has an EMPTY competing-request set (is_arbiter_class
+    #     is False), so the retry is structurally dead for it.
+    #   * if the one-hot retry STILL times out (the grant is genuinely
+    #     unreachable for the measured master), the original TIMEOUT stands.
+    if (status == "timeout" and is_arbiter_class and err == ""):
+        # ORGANIC #770 r2 Step-2.7 — MUTEX-ARTIFACT PROOF before adopting the
+        # one-hot result. The measured grant timing out under all-active stimulus
+        # is a legitimate arbiter MUTEX artifact ONLY if the arbiter DID grant
+        # SOMEONE ELSE under that same stimulus (the measured master simply lost
+        # arbitration). If NO other grant asserted either, the design is genuinely
+        # not granting — a real bug — and the one-hot retry's PASS would MASK it.
+        # Probe each OTHER grant output under the ORIGINAL all-active stimulus; the
+        # mutex artifact is confirmed iff at least one other grant DID assert.
+        other_grants = [n for n in grant_outputs if n.lower() != output.lower()]
+        # widths for the grant outputs, to build a probe PortInfo for each.
+        _width_by_name = {nm: w for d, w, nm in ports if d == "output"}
+        mutex_confirmed = False
+        for og in other_grants:
+            og_port = PortInfo(og, "output", _width_by_name.get(og, ""),
+                               unpacked_map.get(og, ""))
+            pwork = Path(tempfile.mkdtemp(prefix="latconf_probe_"))
+            try:
+                probe_tb = build_measurement_tb(
+                    top, clk, resets, event_port, og_port,
+                    others, reset_active_low_map, input_const, max_cycles,
+                    params=params)
+                _p_measured, p_status, _p_err = measure_latency(
+                    rtl_path, probe_tb, pwork, context_files=context_files)
+            except Exception:
+                p_status = "error"
+            finally:
+                shutil.rmtree(pwork, ignore_errors=True)
+            # BOTH a measured assertion ("ok") AND "precondition_high" (the other
+            # grant is already/independently HIGH under the all-active stimulus)
+            # prove the arbiter DID grant another master — the mutex artifact.
+            if p_status in ("ok", "precondition_high"):
+                mutex_confirmed = True
+                break
+        report["arbiter_mutex_artifact_confirmed"] = mutex_confirmed
+        if mutex_confirmed:
+            retry_tb = build_measurement_tb(
+                top, clk, resets, event_port, output_port, others,
+                reset_active_low_map, input_const, max_cycles, params=params,
+                inactive_inputs=set(competing_requests))
+            rwork = Path(tempfile.mkdtemp(prefix="latconf_onehot_"))
+            try:
+                r_measured, r_status, r_err = measure_latency(
+                    rtl_path, retry_tb, rwork, context_files=context_files)
+            finally:
+                shutil.rmtree(rwork, ignore_errors=True)
+            report["arbiter_onehot_retry"] = {
+                "competing_requests_held_inactive": competing_requests,
+                "retry_status": r_status,
+                "retry_measured_latency": r_measured,
+            }
+            # Adopt the retry result ONLY if it MEASURED a latency (clean ok). A
+            # retry that still times out / errors leaves the original TIMEOUT
+            # untouched (no-leak: a genuinely unreachable grant still blocks).
+            if r_status == "ok" and r_err == "":
+                measured, status, err = r_measured, r_status, r_err
+                report["measured_under_one_hot_arbitration"] = True
 
     if err:
         report["verdict"] = "ERROR"

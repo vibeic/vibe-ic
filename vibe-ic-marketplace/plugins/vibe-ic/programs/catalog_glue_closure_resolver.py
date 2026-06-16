@@ -45,16 +45,25 @@ and the duplicate-module crash BEFORE the expensive elaborate.
 
 VERDICTS
 --------
-  PASS            — closure resolved, no duplicate-module defect, and the
-                    reachable set is non-empty (top found + walked).
+  PASS            — closure resolved, no duplicate-module defect anywhere in
+                    the staged set, and the reachable set is non-empty
+                    (top found + walked).
   DUPLICATE       — reachable closure contains a duplicate-module defect.
+  STAGED_DUPLICATE— a duplicate-module defect exists among the FULL staged
+                    set (the runner feeds the full flat glob to synth, so a
+                    duplicate in the PRUNABLE tail still crashes yosys-slang)
+                    but it is NOT in the reachable closure of `top`.
+                    Distinct from DUPLICATE so #639 (reachable-only) is not
+                    masked; both are hard-gated crash-prevention verdicts.
+                    (ORGANIC #774.)
   TOP_NOT_FOUND   — the named top module is not defined in any file.
   EMPTY           — no .sv/.v files found at all (vacuous; FAIL-safe).
 
 EXIT CODES
 ----------
   0 — PASS
-  1 — DUPLICATE (a real bundle defect was found)
+  1 — DUPLICATE / STAGED_DUPLICATE (a real bundle defect was found that
+      would crash synth — reachable or in the prunable tail)
   2 — TOP_NOT_FOUND / EMPTY / argument error
 
 chip-AGNOSTIC: pure SystemVerilog / Verilog grammar + filename-canonical
@@ -297,6 +306,39 @@ def _canonical_pick(module: str, candidates: List[Path]) -> Tuple[Path,
     return canon, variants
 
 
+def _scan_staged_duplicates(idx: Dict, reachable_set: set) -> List[Dict]:
+    """ORGANIC #774 — scan the FULL staged module-definition index for cross-file
+    duplicate-module definitions, classifying each by scope ('reachable' when
+    every defining file is in `reachable_set` — the #639 facet; 'staged' when any
+    defining file is outside it — the #774 prunable-tail facet). `reachable_set`
+    empty ⇒ every duplicate is scope='staged'. chip-AGNOSTIC."""
+    dup_findings: List[Dict] = []
+    for mod, deffiles in sorted(idx["mod_def"].items()):
+        staged = [f for f in deffiles if f.suffix in _SYNTH_EXTS]
+        uniq = sorted(set(staged), key=str)
+        if len(uniq) > 1:
+            canon, variants = _canonical_pick(mod, uniq)
+            all_reachable = bool(reachable_set) and all(
+                f in reachable_set for f in uniq)
+            scope = "reachable" if all_reachable else "staged"
+            tail_note = ("" if all_reachable else
+                         " (in the PRUNABLE tail — the runner still feeds "
+                         "it to synth, so it still crashes yosys-slang)")
+            dup_findings.append({
+                "module": mod,
+                "scope": scope,
+                "canonical": str(canon),
+                "variants": [str(v) for v in variants],
+                "message": (
+                    f"module {mod!r} is declared in {len(uniq)} staged "
+                    f"files{tail_note} — vendor bundle duplicate-module "
+                    f"defect. Canonical: {canon.name} (filename matches "
+                    f"module name); drop variant/shim file(s): "
+                    f"{', '.join(v.name for v in variants)}."),
+            })
+    return dup_findings
+
+
 def resolve(top: str, rtl_dir: Path) -> Dict:
     files = _gather(rtl_dir)
     if not files:
@@ -305,6 +347,18 @@ def resolve(top: str, rtl_dir: Path) -> Dict:
                 "reachable": [], "prunable": [], "duplicates": []}
     idx = build_index(files)
     if top not in idx["mod_def"]:
+        # ORGANIC #774 round-2 (Step-2.7) — the duplicate-module crash-gate must
+        # run UNCONDITIONALLY over the full staged set, even when `top` does not
+        # resolve. The runner still feeds the entire flat glob to synth, so a
+        # staged duplicate-module pair still crashes yosys-slang raw regardless of
+        # whether the named top is found. With no reachable closure, every dup is
+        # scope='staged'.
+        dup_findings = _scan_staged_duplicates(idx, set())
+        if dup_findings:
+            return {"verdict": "STAGED_DUPLICATE",
+                    "top": top, "files_total": len(files),
+                    "modules_defined": sorted(idx["mod_def"]),
+                    "reachable": [], "prunable": [], "duplicates": dup_findings}
         return {"verdict": "TOP_NOT_FOUND",
                 "error": f"top module {top!r} not defined in any staged file",
                 "top": top,
@@ -314,34 +368,33 @@ def resolve(top: str, rtl_dir: Path) -> Dict:
     reachable, trace = resolve_closure(top, files, idx)
     prunable = sorted(str(f) for f in files if f not in reachable)
 
-    # Duplicate-module detection on the REACHABLE closure: a module name
-    # defined in >1 reachable file is a vendor bundle defect.
-    reachable_set = set(reachable)
-    dup_findings: List[Dict] = []
-    for mod, deffiles in sorted(idx["mod_def"].items()):
-        # Only synthesizable source files (.sv/.v) count as a duplicate-
-        # module defect; an include-only header redeclaring under a guard
-        # is not a vendor bundle defect.
-        in_closure = [f for f in deffiles
-                      if f in reachable_set and f.suffix in _SYNTH_EXTS]
-        # de-dup file list (a file declaring the module twice is a
-        # different defect, not the cross-file duplicate we target).
-        uniq = sorted(set(in_closure), key=str)
-        if len(uniq) > 1:
-            canon, variants = _canonical_pick(mod, uniq)
-            dup_findings.append({
-                "module": mod,
-                "canonical": str(canon),
-                "variants": [str(v) for v in variants],
-                "message": (
-                    f"module {mod!r} is declared in {len(uniq)} staged "
-                    f"files — vendor bundle duplicate-module defect. "
-                    f"Canonical: {canon.name} (filename matches module "
-                    f"name); drop variant/shim file(s): "
-                    f"{', '.join(v.name for v in variants)}."),
-            })
+    # Duplicate-module detection over the FULL staged synth set (ORGANIC
+    # #774). The runner's `_select_asic_rtl_sources` feeds the ENTIRE flat
+    # glob to yosys_synth (prune is advisory — "never auto-drop"), so a
+    # duplicate-module pair living in the PRUNABLE tail is still handed to
+    # synth and still crashes yosys-slang with a raw "duplicate definition"
+    # abort. Scanning only the reachable closure (the pre-#774 behaviour)
+    # left that tail invisible (verdict=PASS, duplicates=[]) → false-PASS.
+    #
+    # We classify each finding by scope:
+    #   scope="reachable" — every defining file is in the reachable closure
+    #                       (the #639 facet → top-level DUPLICATE verdict).
+    #   scope="staged"    — at least one defining file is OUTSIDE the
+    #                       reachable closure (the #774 prunable-tail facet
+    #                       → top-level STAGED_DUPLICATE verdict).
+    # Only synthesizable source files (.sv/.v) count as a duplicate-module
+    # defect; an include-only header redeclaring under a guard is not a
+    # vendor bundle defect.
+    dup_findings = _scan_staged_duplicates(idx, set(reachable))
 
-    verdict = "DUPLICATE" if dup_findings else "PASS"
+    if not dup_findings:
+        verdict = "PASS"
+    elif any(d["scope"] == "reachable" for d in dup_findings):
+        # A reachable-closure duplicate keeps the #639 DUPLICATE verdict so
+        # that facet is never masked by a co-occurring prunable-tail one.
+        verdict = "DUPLICATE"
+    else:
+        verdict = "STAGED_DUPLICATE"
     return {
         "verdict": verdict,
         "top": top,
@@ -381,7 +434,8 @@ def main(argv=None) -> int:
           f"{report['files_reachable']} reachable, "
           f"{report['files_prunable']} prunable")
     for d in report["duplicates"]:
-        print(f"  [DUPLICATE] {d['message']}")
+        tag = "STAGED-DUPLICATE" if d.get("scope") == "staged" else "DUPLICATE"
+        print(f"  [{tag}] {d['message']}")
     return 0 if report["verdict"] == "PASS" else 1
 
 

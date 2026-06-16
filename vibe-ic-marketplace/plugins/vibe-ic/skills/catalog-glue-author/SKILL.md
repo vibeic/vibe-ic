@@ -161,6 +161,19 @@ and #712 (wrapper-exposed output) are **dead code without this file**.
 }
 ```
 
+> **`{l9, rtl}` schema (HARD doc-and-code contract, #775).** Every `{l9, rtl}`
+> dict above is parsed by `l9_rtl_pin_consistency_check._manifest_name_set()`:
+> for `flattened_buses` the `l9` value names the **L9 struct ROOT** the chip-top
+> flattens (the RTL pads are claimed by name-prefix shape `root_*`); for
+> `flattened_outputs` the `rtl` value names the **exact RTL pad names** the
+> wrapper exposes for an output L9 lacks entirely (`#712`). `l9` / `rtl` may each
+> be a bare string or a string list. (Before #775 this consumer ignored the
+> `{l9, rtl}` keys and silently dropped them — a manifest authored exactly per
+> this doc produced an EMPTY relaxation set and the chip-top pin gate hard-FAILed;
+> the consumer now matches the documented schema.) **§4.05 no-leak:** only the
+> names you declare reconcile — a genuinely missing/extra functional port still
+> hard-FAILs.
+
 ### MERGE-preserving rule (HARD)
 
 The auto-emit is **merge-preserving**: it only (re)asserts `reused_ip` / `ip_list`
