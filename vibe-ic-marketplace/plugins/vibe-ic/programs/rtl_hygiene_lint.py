@@ -324,6 +324,38 @@ def rule_undriven_and_unread(src: str, path: str) -> List[Finding]:
         if kind == 'wire' and not driven:
             findings.append(Finding(path, lineno, 'ERROR', 'undriven-wire', name,
                 f"wire '{name}' declared but never driven (no assign, no instance output)."))
+        # ORGANIC R8C3 (#782) — TOTALLY-DEAD reg/logic: declared but NEITHER
+        # driven NOR read. The existing reg/logic arm below guards on
+        # `name in lhs` (written-but-unread), so a `reg`/`logic` that is never
+        # written AND never read fell through entirely and was silently
+        # tolerated — only a dead `wire` was flagged (asymmetry). verilator
+        # -Wall reports UNUSEDSIGNAL ("not driven, nor used") on such a dead
+        # reg/logic. Flag it symmetrically. Carve-outs: skip a memory ARRAY
+        # declaration (a storage element whose read port may live in a
+        # sibling/future module — same INFO carve-out the unread-reg arm uses)
+        # so no-leak holds for staged designs.
+        #
+        # The read-test MUST count occurrences (the `read = name in (rhs -
+        # {name})` short-cut above wrongly removes the name itself from rhs, so
+        # it always says "not read" — that mislabels a READ-BUT-UNDRIVEN signal
+        # `q` in `w_ptr <= q;` as totally dead). A genuinely dead reg appears
+        # ONLY at its own declaration: total token occurrences == 1 (the decl).
+        # One extra occurrence means it is read somewhere (a different,
+        # undriven-read concern that this TOTALLY-dead arm deliberately leaves
+        # alone). chip-AGNOSTIC: pure structural token count.
+        _tot_occ = len(re.findall(r'\b' + re.escape(name) + r'\b', src))
+        if (kind in ('reg', 'logic') and not driven and _tot_occ <= 1):
+            is_mem_array = re.search(
+                r'\b(?:reg|logic)\b[^;\n]*\b' + re.escape(name)
+                + r'\s*\[[^\]]+\]\s*[;,]', src)
+            sev = 'INFO' if is_mem_array else 'WARN'
+            note = (" (write-only/unused memory array — likely storage whose "
+                    "ports are in a sibling/future module; advisory only)"
+                    if is_mem_array else
+                    " (declared but neither driven nor read — dead signal; "
+                    "`verilator -Wall` UNUSEDSIGNAL).")
+            findings.append(Finding(path, lineno, sev, 'unused-signal', name,
+                f"{kind} '{name}' is declared but never used.{note}"))
         if kind in ('reg', 'logic') and name in lhs:
             # declared reg that is written but never read on any RHS
             # Heuristic: if the only occurrences are in always-block-LHS, it's unread.
@@ -647,7 +679,24 @@ def _case_is_exhaustive(src: str, expr: str, block: str):
         head = m.group(1).strip()
         if not head:
             continue
-        parts = [p.strip() for p in head.split(',') if p.strip()]
+        # ORGANIC #781 (round-8 cluster R8C2) — the label-head class
+        # `[0-9A-Za-z_',\s]+?` admits whitespace, and the `(?<=\bbegin\b)` /
+        # `(?<=\bend\b)` statement-boundary lookbehinds do NOT consume the
+        # keyword. So when a branch body uses the ubiquitous
+        # `LABEL: begin … end` idiom, the trailing `end`(s) of one branch
+        # bleed into the NEXT label head, e.g. head = 'end\n end\n
+        # ENTRY_PROCESSING'. The old comma-only split then yielded a single
+        # un-resolvable part and `_label_value` returned None, so a fully-
+        # enumerated begin/end FSM was wrongly judged non-exhaustive and
+        # HARD-BLOCKED (case-no-default WARN). Split each head on whitespace
+        # AND commas, then drop the structural `begin`/`end`/… keyword tokens
+        # (they are never case labels) before resolving. A fully-enumerated
+        # `begin/end` FSM is then recognised exactly like its single-statement
+        # twin, while a genuinely symbolic-unknown label survives the keyword
+        # filter and still bails to False below (§4.05 no-leak preserved — a
+        # partial / symbolic / out-of-range begin/end FSM still hard-blocks).
+        parts = [p for p in re.split(r'[\s,]+', head)
+                 if p and p not in VERILOG_KEYWORDS]
         if not parts:
             continue
         for p in parts:
@@ -964,6 +1013,121 @@ def _reset_covered_signals(src: str) -> Set[str]:
     return covered
 
 
+def _case_spans(src: str) -> List[Tuple[str, int, int]]:
+    """[(selector_text, case_start_off, endcase_start_off)] for every `case`,
+    depth-matched (a nested case closes against the nearest unmatched endcase).
+    chip-AGNOSTIC pure Verilog grammar. (ORGANIC #783 r2.)"""
+    spans: List[Tuple[str, int, int]] = []
+    stack: List[Tuple[int, str]] = []
+    for m in re.finditer(r'\bcase[szx]?\s*\(([^)]*)\)|\bendcase\b', src):
+        if m.group(0).startswith('endcase'):
+            if stack:
+                start, sel = stack.pop()
+                spans.append((sel, start, m.start()))
+        else:
+            stack.append((m.start(), m.group(1) or ''))
+    return spans
+
+
+def _enclosing_begin_end(src: str, pos: int) -> Optional[Tuple[int, int]]:
+    """The INNERMOST [after-`begin`, start-of-matching-`end`) char span that
+    encloses `pos`, or None. Depth-matched; the innermost is the enclosing pair
+    with the largest `begin` offset. (ORGANIC #783 r2 — used to require a
+    done/valid companion in the SAME arm as a terminal output write.)"""
+    best: Optional[Tuple[int, int]] = None
+    stack: List[int] = []
+    for m in re.finditer(r'\b(begin|end)\b', src):
+        if m.group(1) == 'begin':
+            stack.append(m.end())
+        elif stack:
+            bstart = stack.pop()
+            if bstart <= pos < m.start() and (best is None or bstart > best[0]):
+                best = (bstart, m.start())
+    return best
+
+
+def _is_valid_gated_fsm_terminal_output(src: str, name: str,
+                                        reset_covered: Set[str]) -> bool:
+    """ORGANIC #783 (R8C4) — structurally recognise the legitimate
+    *valid-gated FSM-terminal output* pattern, which the prose heuristic
+    "a registered output powers up X but the reference expects 0 at t=0"
+    CONTRADICTS.
+
+    The canonical insertion-sort / compute-then-emit FSM writes its WIDE
+    result register ONLY in a terminal/computed FSM state (e.g. `DONE:
+    out_data <= array[..]`), deliberately OUTSIDE the reset branch, and
+    qualifies it with a companion 1-bit `done`/`valid` output that IS
+    reset-covered. The consumer samples the result only when that valid
+    flag asserts, so the pre-clock X is never observed and forcing
+    `initial <name> = 0;` would DIVERGE the power-up value from a
+    spec-faithful / golden reference (X vs 0) on equivalence/area-opt tasks.
+
+    Downgrade to ADVISORY only when ALL of the following hold (no-leak biased
+    — every clause must be structurally TRUE, else the finding keeps its
+    historical hard-block power):
+
+      (1) the module has a WORKING reset (it reset-covers >= 1 register).
+          A genuinely reset-less module is UNTOUCHED — it still hard-blocks
+          (the original reset-less DFF case the rule was built for).
+      (2) a companion 1-bit reset-covered OUTPUT exists (a `done`/`valid`
+          qualifier with a deterministic power-up value). Without such a
+          handshake, the X power-up could be consumed — keep the block.
+      (3) every `<=` write of `name` is dominated by a `case` whose selector
+          is a reset-covered FSM state register (i.e. the output is a
+          terminal/computed result, not a free-running register that merely
+          FORGOT its reset). A free-running unreset output is NOT state-gated
+          and stays a hard block.
+
+    chip-AGNOSTIC, purely structural — no chip/vendor/SKU literal.
+    """
+    # (1) module has a working reset.
+    if not reset_covered:
+        return False
+    # (2) >= 1 companion 1-bit reset-covered output exists (a done/valid
+    #     qualifier with a deterministic power-up value).
+    one_bit_outs = set(re.findall(
+        r'\boutput\b\s+(?:reg|logic|wire)?\s*([A-Za-z_]\w*)\s*(?=[,;)=])', src))
+    companions = {o for o in one_bit_outs if o in reset_covered and o != name}
+    if not companions:
+        return False
+    # state-case spans: a `case(<sel>) … endcase` whose selector is a
+    # reset-covered FSM state register. (ORGANIC #783 r2 Step-2.7 — the earlier
+    # form computed these selectors but NEVER used them; it only checked that
+    # SOME `case` keyword textually preceded the write, so a write inside a case
+    # keyed on an INPUT, or in a different block entirely, was wrongly credited.)
+    state_cases = [(s, e) for sel, s, e in _case_spans(src)
+                   if set(re.findall(r'[A-Za-z_]\w*', sel)) & reset_covered]
+    if not state_cases:
+        return False
+    writes = list(re.finditer(
+        r'(?<![<>!=])\b' + re.escape(name) + r'(?:\[[^\]]+\])?\s*<=\s*([^;]*);', src))
+    if not writes:
+        return False
+    for w in writes:
+        rhs = w.group(1)
+        # (A) reject a FREE-RUNNING / SELF-ACCUMULATING output (the X poisons
+        #     every cycle and is sampled): `name` appears in its OWN RHS.
+        if re.search(r'(?<![\w.])' + re.escape(name) + r'(?![\w])', rhs):
+            return False
+        # (B) the write must sit textually INSIDE a reset-covered state-case
+        #     (terminal/computed result, not a free-running register that merely
+        #     forgot its reset, nor a case keyed on an input/non-state signal).
+        if not any(s < w.start() < e for s, e in state_cases):
+            return False
+        # (C) a companion 1-bit reset-covered output is assigned in the SAME
+        #     innermost begin/end arm as the write — the done/valid-WITH-result
+        #     idiom that proves the X is qualified out. A coincidental reset-
+        #     covered 1-bit output elsewhere does NOT qualify (§4.05 no-leak).
+        be = _enclosing_begin_end(src, w.start())
+        if be is None:
+            return False
+        arm = src[be[0]:be[1]]
+        if not any(re.search(r'(?<![\w])' + re.escape(c) + r'\s*<=', arm)
+                   for c in companions):
+            return False
+    return True
+
+
 def rule_uninit_registered_output(src: str, path: str) -> List[Finding]:
     """
     Detect a REGISTERED output port (assigned via `<=` in a clocked block) in a
@@ -1022,7 +1186,7 @@ def rule_uninit_registered_output(src: str, path: str) -> List[Finding]:
         if decl_init or (has_initial and re.search(
                 r'\binitial\b[\s\S]{0,200}?\b' + re.escape(name) + r'\s*(<=|=)', src)):
             continue
-        findings.append(Finding(
+        f = Finding(
             path, lineno, 'WARN', 'uninit-registered-output', name,
             f"registered output '{name}' has no reset and no power-up initializer "
             f"-> powers up as X. A deterministic reference (and VerilogEval-style "
@@ -1030,7 +1194,29 @@ def rule_uninit_registered_output(src: str, path: str) -> List[Finding]:
             f"Verilator-clean): add a separate `initial {name} = 0;` block. A "
             f"declaration initializer `output reg ... {name} = 0;` also clears the "
             f"power-up X but trips Verilator PROCASSINIT when '{name}' is ALSO "
-            f"procedurally assigned (`{name} <= ...`), so prefer the `initial` block."))
+            f"procedurally assigned (`{name} <= ...`), so prefer the `initial` block.")
+        # ORGANIC #783 — the *valid-gated FSM-terminal output* pattern (a wide
+        # result register written only in a terminal/computed FSM state of a
+        # reset-bearing module, qualified by a reset-covered `done`/`valid`
+        # companion output) CONTRADICTS the prose heuristic "the reference
+        # expects 0 at t=0": the consumer reads the result only when the valid
+        # flag asserts, so the pre-clock X is never observed, and forcing
+        # `initial 0` here would DIVERGE the power-up value from a spec-faithful /
+        # golden reference (X vs 0) on equivalence/area-opt tasks. Downgrade to
+        # ADVISORY (reported, never a hard block). A truly reset-less module, a
+        # free-running output that merely forgot its reset, or a state-gated
+        # output with NO done/valid companion stays STRUCTURAL → hard block
+        # (§4.05 no-leak — see _is_valid_gated_fsm_terminal_output).
+        if _is_valid_gated_fsm_terminal_output(src, name, reset_covered):
+            f = _advisory(f, _prov.PROSE_HEURISTIC, _prov.CONTRADICTED)
+            f.advisory_note = (
+                "valid-gated FSM-terminal output — written only in a terminal/"
+                "computed FSM state of a reset-bearing module and qualified by a "
+                "reset-covered done/valid companion output, so the pre-clock X is "
+                "never sampled; forcing `initial 0` would diverge the power-up "
+                "value from a spec-faithful / golden reference (X vs 0). "
+                "Advisory, not a hard block (ORGANIC #783)")
+        findings.append(f)
     return findings
 
 
@@ -1786,11 +1972,77 @@ def rule_reset_boundary_residual_enable(src: str, path: str) -> List[Finding]:
 #     3+ always blocks (each driving its own slice) is silent too.
 # Advisory WARN only; structural SV parse; no chip/vendor/SKU literal.
 # ---------------------------------------------------------------------------
-def _iter_always_blocks(src: str):
-    """Yield (sens_list_text, body_text) for every `always`/`always_ff` block.
-    The body is bounded at the next top-level `always`/`endmodule` (the same
-    head-of-block bounding the other rules use)."""
+def _blank_string_literals(src: str) -> str:
+    """Replace the INTERIOR of every Verilog double-quoted string literal with
+    spaces (preserving the surrounding quotes, the TOTAL length, and every
+    newline) so a keyword-shaped token inside a `$display`/`$error`/parameter
+    string — e.g. the word `endmodule` or `module` — is never parsed as a
+    structural boundary. Because length + newline positions are preserved, a
+    caller can scan the blanked copy and index back into the ORIGINAL `src` at
+    the same offsets. chip-AGNOSTIC: pure Verilog string grammar.
+
+    ORGANIC #782 r2 (Step-2.7 §4.05): an `endmodule` token inside a string
+    literal truncated `_module_regions` BEFORE a genuine same-module multidriven
+    / continuous-procedural defect, so the region-scoped scan missed it (the
+    masked register/illegal-l-value race verilator/iverilog flag as a real
+    error). Blanking the string interior closes that leak without shifting any
+    offset."""
+    def _blank(m: "re.Match") -> str:
+        body = m.group(0)[1:-1]
+        inner = ''.join('\n' if c == '\n' else ' ' for c in body)
+        return '"' + inner + '"'
+    return re.sub(r'"(?:\\.|[^"\\])*"', _blank, src)
+
+
+def _module_regions(src: str) -> List[Tuple[str, int, int]]:
+    """ORGANIC R8C3 (#782) — partition a (comment-stripped) source file into its
+    top-level module regions: a list of (module_name, start_off, end_off) where
+    [start_off, end_off) spans from the `module NAME` keyword through its
+    matching `endmodule`. A register name is only a multi-driven candidate when
+    its driving always blocks live in the SAME module region; without this, two
+    DISTINCT registers that merely SHARE A NAME across sibling modules (e.g. a
+    `bit_count`/`data_reg` in both a `tx_block` and an `rx_block`) collide in the
+    whole-file flat scan and false-fire as a bogus cross-domain multidriven race
+    even though verilator -Wall reports ZERO MULTIDRIVEN. Verilog forbids nested
+    module definitions, so a simple keyword walk (no brace nesting) is exact and
+    chip-AGNOSTIC. A region before the first `module` (none, in legal SV) or an
+    unterminated final module both degrade safely to the file tail.
+
+    ORGANIC #782 r2 (Step-2.7 §4.05) — the `module`/`endmodule` walk runs over a
+    STRING-BLANKED copy so a keyword token buried in a `$display`/`$error`
+    string never mis-truncates a region (length-preserving, so the offsets still
+    index the real `src`)."""
+    regions: List[Tuple[str, int, int]] = []
+    scan = _blank_string_literals(src)
+    # `module NAME` … `endmodule`, scanned left-to-right. Verilog disallows a
+    # module declaration inside another, so the next `endmodule` after a
+    # `module NAME` always closes THAT module.
+    for mm in re.finditer(r'\bmodule\b\s+([A-Za-z_]\w*)', scan):
+        name = mm.group(1)
+        start = mm.start()
+        em = re.search(r'\bendmodule\b', scan[mm.end():])
+        end = (mm.end() + em.end()) if em else len(src)
+        regions.append((name, start, end))
+    if not regions:
+        regions.append(('', 0, len(src)))
+    return regions
+
+
+def _iter_always_blocks(src: str, region: Optional[Tuple[int, int]] = None):
+    """Yield (sens_list_text, body_text, abs_start_offset) for every
+    `always`/`always_ff`/`always_comb`/`always_latch` block. The body is bounded
+    at the next top-level `always`/`endmodule` (the same head-of-block bounding
+    the other rules use).
+
+    ORGANIC R8C3 (#782) — when `region`=(lo,hi) is given, only blocks whose
+    header starts inside [lo,hi) are yielded (used by rule_multidriven_register
+    to confine multi-driven candidacy to a SINGLE module scope). The returned
+    `abs_start_offset` is always relative to the FULL `src` so line numbers stay
+    correct, and the bounded body still stops at the next always/endmodule —
+    which, for the last block of a region, is that region's own `endmodule`."""
     for bm in re.finditer(r'\balways(?:_ff|_comb|_latch)?\s*@\s*\(([^)]*)\)', src):
+        if region is not None and not (region[0] <= bm.start() < region[1]):
+            continue
         sens = bm.group(1)
         body = _block_body_after(src, bm.end())
         yield sens, body, bm.start()
@@ -1958,15 +2210,38 @@ def rule_multidriven_register(src: str, path: str) -> List[Finding]:
     """Rule 13 (ORGANIC #740 G4) — WARN when a reg is driven from >1 always
     block in a racing/different clocking domain."""
     findings: List[Finding] = []
-    blocks = [(sens, body, pos) for sens, body, pos in _iter_always_blocks(src)]
-    if len(blocks) < 2:
-        return findings
     # ORGANIC #770 round-2 — loop-index integers / genvars are NOT state
     # registers; exclude them so a `for`-loop control var `i` reused across two
     # always blocks does not false-fire as a multi-driven STATE race. No-leak: a
     # genuine DATA/STATE reg (declared `reg`/`logic`, written as an FSM/datapath
     # value) is never in this set, so a real multi-driven register still WARNs.
     loop_ctrl = _loop_index_and_genvar_names(src)
+    # ORGANIC R8C3 (#782) — PARTITION always-block discovery by MODULE scope
+    # before building reg_block_idx. A register name is only a multi-driven
+    # candidate when its >1 driving always blocks live in the SAME module. Two
+    # DISTINCT registers that merely share a name across sibling modules (a
+    # `bit_count` / `data_reg` in both a `tx_block` and an `rx_block`) were
+    # colliding in the whole-file flat scan and false-firing a bogus
+    # DIFFERENT-clocking multidriven race even though verilator -Wall reports
+    # ZERO MULTIDRIVEN. No-leak: a genuine SAME-module two-block race still
+    # collides within one region and still WARNs (verified). chip-AGNOSTIC: pure
+    # module-scope parse.
+    for _mname, _mlo, _mhi in _module_regions(src):
+        findings += _multidriven_in_region(src, path, _mlo, _mhi, loop_ctrl)
+    return findings
+
+
+def _multidriven_in_region(src: str, path: str, mlo: int, mhi: int,
+                           loop_ctrl: Set[str]) -> List[Finding]:
+    """ORGANIC R8C3 (#782) — the original whole-file multidriven body, now
+    confined to a SINGLE module region [mlo,mhi). Block indices/domains/guards
+    are all computed only from blocks inside this region, so same-named regs in
+    sibling modules never collide."""
+    findings: List[Finding] = []
+    blocks = [(sens, body, pos)
+              for sens, body, pos in _iter_always_blocks(src, (mlo, mhi))]
+    if len(blocks) < 2:
+        return findings
     # collect every reg-like LHS per block (NBA or blocking) with its slice info
     # so we can see which regs are written by >1 block.
     reg_block_idx: Dict[str, List[int]] = {}
@@ -2040,6 +2315,76 @@ def rule_multidriven_register(src: str, path: str) -> List[Finding]:
                 f"non-deterministically (`verilator -Wall` MULTIDRIVEN). Merge "
                 f"the writes into ONE always block (gate the datapath update "
                 f"with the same reset/else the clear uses)."))
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# Rule 13b (ORGANIC R8C3, #782) — CONTINUOUS-vs-PROCEDURAL driver on SAME net.
+# ---------------------------------------------------------------------------
+# A net driven by a continuous `assign` AND ALSO written from a procedural
+# `always` block is illegal: iverilog -g2012 rejects it ("not a valid l-value
+# for a procedural assignment / declared here as a wire") and verilator -Wall
+# emits %Error-PROCASSWIRE. rule_multidriven_register only models always-vs-
+# always races and SHORT-CIRCUITS on <2 always blocks, so a single procedural
+# block fighting a continuous assign (the canonical `binary_to_gray` defect)
+# was missed entirely. This is a hard, two-tool-corroborated structural defect
+# — chip-AGNOSTIC, pure SV parse.
+def rule_continuous_vs_procedural_driver(src: str, path: str) -> List[Finding]:
+    findings: List[Finding] = []
+    for _mname, mlo, mhi in _module_regions(src):
+        region = src[mlo:mhi]
+        # Continuous-assign LHS bases in THIS module (`assign NAME ... = ...`),
+        # allowing an optional bit/part-select on the target.
+        cont_lhs: Set[str] = set()
+        cont_line: Dict[str, int] = {}
+        for m in re.finditer(r'\bassign\b\s+(?:#\s*\S+\s+)?'
+                             r'([A-Za-z_]\w*)(?:\s*\[[^\]]+\])?\s*=(?!=)', region):
+            nm = m.group(1)
+            if nm in VERILOG_KEYWORDS:
+                continue
+            cont_lhs.add(nm)
+            cont_line.setdefault(nm, src[:mlo + m.start()].count('\n') + 1)
+        if not cont_lhs:
+            continue
+        # Procedural-block LHS bases in THIS module (any `<=`/`=` inside an
+        # always block body), reusing the module-scoped block iterator.
+        # IMPORTANT (no-leak) — `_block_body_after` bounds a body at the next
+        # `always`/`endmodule`, so the LAST always block of a module OVERRUNS to
+        # `endmodule` and textually swallows any CONTINUOUS `assign` statements
+        # that follow it. Those swallowed `assign LHS = …;` are NOT procedural
+        # writes — counting them would falsely pair a perfectly legal
+        # `always @(*)`-then-`assign data_out=…` design as continuous+procedural.
+        # Excise every `assign …;` statement from the body before scanning so
+        # only genuine procedural `<=`/`=` writes register as proc_lhs. (iverilog
+        # rc=0 / verilator no-PROCASSWIRE on those designs — confirmed.)
+        proc_lhs: Set[str] = set()
+        proc_line: Dict[str, int] = {}
+        for sens, body, pos in _iter_always_blocks(src, (mlo, mhi)):
+            # blank out continuous-assign statements (keep length/newlines so the
+            # per-write line numbers stay correct)
+            body_noassign = re.sub(
+                r'\bassign\b[^;]*;',
+                lambda m: ''.join('\n' if c == '\n' else ' ' for c in m.group(0)),
+                body)
+            for am in re.finditer(
+                    r'(?<![<>!=])\b([A-Za-z_]\w*)\s*(?:\[[^\]]+\])?\s*(?:<=|=)(?!=)',
+                    body_noassign):
+                nm = am.group(1)
+                if nm in VERILOG_KEYWORDS:
+                    continue
+                proc_lhs.add(nm)
+                # report at the procedural-assignment site (where iverilog points)
+                proc_line.setdefault(nm, src[:pos + am.start()].count('\n') + 1)
+        for nm in sorted(cont_lhs & proc_lhs):
+            ln = proc_line.get(nm, cont_line.get(nm, 1))
+            findings.append(Finding(
+                path, ln, 'ERROR', 'multidriven-continuous-procedural', nm,
+                f"net `{nm}` is driven by BOTH a continuous `assign` (line "
+                f"{cont_line.get(nm, '?')}) and a procedural `always` block — a "
+                f"continuous + procedural driver on the same net is illegal "
+                f"(iverilog: '`{nm}` is not a valid l-value for a procedural "
+                f"assignment'; `verilator -Wall` PROCASSWIRE). Drive `{nm}` from "
+                f"ONE kind of driver only."))
     return findings
 
 
@@ -2518,6 +2863,7 @@ def lint_file(path: Path) -> List[Finding]:
     results += rule_unguarded_sim_only_assert(raw, str(path))
     results += rule_reset_boundary_residual_enable(src, str(path))
     results += rule_multidriven_register(src, str(path))
+    results += rule_continuous_vs_procedural_driver(src, str(path))
     results += rule_divmod_by_zero_const(src, str(path))
     results += rule_assign_width_truncate(src, str(path))
     results += rule_array_reset_loop_idiom(src, str(path))
@@ -2591,8 +2937,13 @@ def autofix_uninit_registered_output(path: Path) -> Tuple[int, List[str]]:
     names: List[str] = []
     seen: Set[str] = set()
     # (a) registered OUTPUT ports with no power-up (the WARN-rule set).
+    # ORGANIC #783 — skip ADVISORY (non-block-eligible) findings: a
+    # valid-gated FSM-terminal output is intentionally power-up-X, and forcing
+    # `initial 0` would DIVERGE it from a spec-faithful / golden reference
+    # (X vs 0) on equivalence/area-opt tasks. Only AUTOFIX a genuine hard-block.
     for f in rule_uninit_registered_output(src_scope_nogen, str(path)):
-        if f.rule == 'uninit-registered-output' and f.symbol not in seen:
+        if (f.rule == 'uninit-registered-output' and f.block_eligible
+                and f.symbol not in seen):
             names.append(f.symbol); seen.add(f.symbol)
     # ORGANIC #727 — signals structurally assigned under a reset condition
     # (single mixed reset+datapath block included). Never give a reset-covered
