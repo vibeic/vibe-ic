@@ -601,6 +601,43 @@ def given_code_internal_names(prompt: str) -> Set[str]:
     return names
 
 
+def given_code_param_names(prompt: str) -> Set[str]:
+    """Lower-cased identifiers the prompt's OWN given code declares as
+    `localparam` / `parameter` constants. A parameter is AUTHORITATIVELY never a
+    port — so unlike an internal NET (which a real required port could
+    coincidentally share a name with), a skeleton-declared parameter must
+    override even an explicit prose-DIRECTION attribution (#753 reopen: the prose
+    "the pipeline takes `PIPE_DEPTH` cycles to propagate input signals" wrongly
+    tagged the parameter `PIPE_DEPTH` an `input` port, defeating the direction-
+    aware never-mask guard). chip-AGNOSTIC: pure given-code parameter grammar. A
+    name the given-code module HEADER declares a real port still wins (it is
+    discarded below), so a genuine port is never masked."""
+    names: Set[str] = set()
+    text = _strip_comments(prompt)
+    for km in re.finditer(r"\b(localparam|parameter)\b", text):
+        seg = text[km.end():]
+        stop = re.search(r"\b(?:localparam|parameter)\b|;|\)", seg)
+        seg = seg[:stop.start()] if stop else seg
+        for assign in seg.split(","):
+            nm = assign.split("=")[0]
+            nm = re.sub(r"^\s*(?:int|integer|logic|bit|signed|unsigned|"
+                        r"\[[^\]]*\])\s*", "", nm).strip().strip("`*_ ")
+            if re.fullmatch(r"[A-Za-z_]\w*", nm):
+                names.add(nm.lower())
+    # a name the given-code header declares a real PORT is authoritatively a
+    # port — but ONLY when it carries a REAL direction (input/output/inout). The
+    # header parser can scrape a bare identifier out of a width expression
+    # (`input [W-1:0] din` yields a spurious `W` with direction 'unknown'); such
+    # a mis-parse must NOT evict the genuinely-declared `parameter W` from the
+    # param set (else W would never be masked and would false-fire as a phantom
+    # MISSING-PORT). A real ANSI port always declares a direction.
+    _gm_name, gm_ports = _given_code_ports(prompt)
+    for pn, pdir in gm_ports.items():
+        if (pdir or "").lower() in ("input", "output", "inout"):
+            names.discard(pn.lower())
+    return names
+
+
 @dataclass
 class PromptIface:
     # port name → direction ('' / 'input' / 'output' / 'inout')
@@ -711,6 +748,10 @@ def check_conformance(rid: Optional[str], prompt: str, rtl_text: str,
     # `type_field`, `IDLE`/`LOAD`/`SHIFT`/`LATCH`, `PIPE_DEPTH`) must NOT be
     # charged as MISSING-PORT. Same never-mask guard as the regmap rule below.
     given_internal = given_code_internal_names(prompt)
+    # (#753 reopen) parameter names are AUTHORITATIVELY never ports — they
+    # override even a spurious prose-DIRECTION attribution, unlike an internal
+    # net which a real port could coincidentally share a name with.
+    given_params = given_code_param_names(prompt)
 
     # (1) MODULE-NAME-CASE: harness top from id must match the RTL module name
     # CASE-EXACTLY. Only flag when the names match case-INSENSITIVELY but
@@ -751,13 +792,21 @@ def check_conformance(rid: Optional[str], prompt: str, rtl_text: str,
         if (name.lower() in regmap_csrs
                 and name.lower() not in all_port_names_lower):
             continue
-        # (#753) a name the prompt's given code declares internal/parameter is not
-        # a port — but never mask a name the RTL actually declares as a port, NOR
-        # a name the prompt PROSE/table declares with an EXPLICIT DIRECTION
-        # (#753 adversarial-review: an unrelated helper block's internal
-        # `reg data_valid;` must not mask a genuinely-required top port the prompt
-        # declares as `an input data_valid`). Only a name whose sole prompt
-        # evidence is direction-LESS (a bare table/wavedrom mention) is masked.
+        # (#753 reopen) a name the given-code skeleton declares as a `parameter`
+        # is AUTHORITATIVELY never a port — mask it even if a (spurious) prose
+        # direction was attributed ("the pipeline takes `PIPE_DEPTH` cycles to
+        # propagate input signals" wrongly tagged PIPE_DEPTH an input). A
+        # parameter cannot be a port, so there is no real-port to protect here.
+        if (name.lower() in given_params
+                and name.lower() not in all_port_names_lower):
+            continue
+        # (#753) a name the prompt's given code declares an internal NET (logic/
+        # wire/reg) is not a port — but never mask a name the RTL actually
+        # declares as a port, NOR a name the prompt PROSE/table declares with an
+        # EXPLICIT DIRECTION (#753 adversarial-review: an unrelated helper block's
+        # internal `reg data_valid;` must not mask a genuinely-required top port
+        # the prompt declares as `an input data_valid`). Only a NET name whose
+        # sole prompt evidence is direction-LESS is masked.
         if (name.lower() in given_internal
                 and name.lower() not in all_port_names_lower
                 and not (pif.ports.get(name) or "").strip()):
