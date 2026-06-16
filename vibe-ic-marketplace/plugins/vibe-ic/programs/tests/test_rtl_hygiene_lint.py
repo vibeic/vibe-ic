@@ -114,6 +114,27 @@ endmodule
 
 class TestCaseCoverage:
     def test_detects_case_without_default(self, tmp_path):
+        # ORGANIC #770 r4 — a COMBINATIONAL `always @(*)` case with no default
+        # CAN infer a latch → still hard-WARNs (block_eligible). (A clocked case
+        # cannot infer a latch and is now advisory — see the next test.)
+        sv = """
+module m(input [1:0] sel, output reg y);
+    always @(*) begin
+        case (sel)
+            2'b00: y = 1'b0;
+            2'b01: y = 1'b1;
+        endcase
+    end
+endmodule
+"""
+        _, findings = run_cli(tmp_path, sv, severity='WARN')
+        hits = [f for f in findings if f['rule'] == 'case-no-default']
+        assert hits and all(f.get('block_eligible', True) for f in hits)
+
+    def test_sequential_case_without_default_is_advisory(self, tmp_path):
+        # ORGANIC #770 r4 — a case inside a CLOCKED (sequential) always block
+        # cannot infer a latch (the reg HOLDS on an unlisted code), so the
+        # case-no-default finding is downgraded to ADVISORY (INFO, not a WARN).
         sv = """
 module m(input clk, input [1:0] sel, output reg y);
     always @(posedge clk) begin
@@ -124,8 +145,9 @@ module m(input clk, input [1:0] sel, output reg y);
     end
 endmodule
 """
-        _, findings = run_cli(tmp_path, sv, severity='WARN')
-        assert any(f['rule'] == 'case-no-default' for f in findings)
+        _, findings = run_cli(tmp_path, sv, severity='INFO')
+        hits = [f for f in findings if f['rule'] == 'case-no-default']
+        assert hits and all(f.get('block_eligible', True) is False for f in hits)
 
     def test_case_with_default_is_clean(self, tmp_path):
         sv = """
