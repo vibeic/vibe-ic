@@ -435,6 +435,90 @@ import re  # noqa: E402  (kept local-late to keep the header import block clean)
 _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 
 
+# ─── ORGANIC #793 — localparam-in-#() exclusion from the DUT override list ────
+def _localparam_names(param_block: "Optional[str]") -> "set":
+    """Return the set of names whose `#(...)` segment leads with the `localparam`
+    keyword (a DERIVED constant the instance inherits, NOT an overridable
+    parameter). A `parameter`-led or keyword-less segment is a real overridable
+    parameter and is NOT included (§4.05 no-leak: a header with no localparams
+    returns an empty set, so the override list is unchanged)."""
+    out: set = set()
+    if not param_block:
+        return out
+    for seg in _split_top_level_commas(param_block):
+        if "=" not in seg:
+            continue
+        lhs, _rhs = seg.split("=", 1)
+        toks = _IDENT_RE.findall(lhs)
+        if not toks:
+            continue
+        # the name is the LAST identifier on the lhs (after parameter/localparam/
+        # type/width tokens); a localparam segment leads with `localparam`.
+        if "localparam" in toks[:-1]:
+            out.add(toks[-1])
+    return out
+
+
+def module_localparam_names(rtl_text: str, module: str) -> "set":
+    """ORGANIC #793 — set of names declared `localparam` INSIDE `module`'s
+    `#(...)` block. Their resolved integer values stay in the `resolve_params`
+    map (the instance inherits them; they are needed for net widths + --expect
+    arithmetic) but they MUST NOT appear in the DUT `#(.NAME(VAL))` override list
+    — overriding a localparam is an iverilog elaboration error ("Cannot override
+    localparam"). Kept as a SEPARATE query so `resolve_params`'s `Dict` return
+    type is unchanged (§4.05 no-leak for every existing caller)."""
+    raw_block, _names = parse_module_params(rtl_text, module)
+    return _localparam_names(raw_block)
+
+
+def _rtl_event_value_candidates(rtl_text: str, ev_width: "Optional[int]") -> List[int]:
+    """ORGANIC #795 — extract candidate EVENT values from the RTL's OWN sized
+    literals whose width matches the event port (e.g. the `case (decoder_in)`
+    labels / comparison constants of a decoder/LUT/ROM).
+
+    A decoder/LUT/ROM responds only to a TINY subset of its input space (its
+    valid codewords); a blind all-ones constant almost never hits one, so the
+    change-detect TIMEs out falsely. The design ITSELF enumerates the meaningful
+    inputs as sized literals exactly `ev_width` bits wide — those are precisely
+    the values guaranteed to move the bus. Reads ONLY the RTL the gate already
+    has (no oracle / hidden TB) and is fully chip-agnostic: any width-matched
+    literal is a candidate; a design with none yields an empty list and falls
+    back to the generic probes (no leak)."""
+    if ev_width is None or ev_width <= 1:
+        return []
+    out: List[int] = []
+    all_ones = (1 << ev_width) - 1
+    for m in re.finditer(r"(\d+)'([bBhHdDoO])([0-9a-fA-F_xXzZ]+)", rtl_text):
+        try:
+            w = int(m.group(1))
+        except ValueError:
+            continue
+        if w != ev_width:
+            continue
+        base = m.group(2).lower()
+        digits = m.group(3).replace("_", "")
+        if any(c in "xXzZ" for c in digits):
+            continue  # an x/z literal cannot be a concrete stimulus
+        try:
+            if base == "b":
+                val = int(digits, 2)
+            elif base == "h":
+                val = int(digits, 16)
+            elif base == "o":
+                val = int(digits, 8)
+            else:
+                val = int(digits, 10)
+        except ValueError:
+            continue
+        val &= all_ones
+        # all-ones is the stimulus that already TIMED OUT; all-zeros is the most
+        # common reset baseline — skip both (they cannot relax the timeout).
+        if val in (0, all_ones) or val in out:
+            continue
+        out.append(val)
+    return out
+
+
 # ─── port classification ─────────────────────────────────────────────────────
 def _is_clock(name: str) -> bool:
     return name.lower() in _CLK_NAMES
@@ -451,10 +535,25 @@ def _reset_is_active_low(name: str) -> bool:
     lo = name.lower()
     if lo in _ACTIVE_LOW_RST:
         return True
-    # generic low-asserted suffix on a reset- OR clear-named port
+    # generic low-asserted marker on a reset- OR clear-named port.
     if any(h in lo for h in _RST_NAME_HINT) or _looks_like_clear(lo):
-        return (lo.endswith("_n") or lo.endswith("n") or lo.endswith("_b")
-                or lo.endswith("b") or lo.startswith("n"))
+        # An UNDERSCORE-separated polarity suffix (`_n`/`_b`) or an `n`-prefix
+        # (`nrst`) is unambiguous.
+        if lo.endswith("_n") or lo.endswith("_b") or lo.startswith("n"):
+            return True
+        # ORGANIC #795 — a BARE trailing `n`/`b` (no separator) is a polarity
+        # marker ONLY when attached DIRECTLY to a reset/clear stem (`rstn`,
+        # `resetn`, `rstb`, `clrn`). It must NOT fire on a trailing DIRECTION
+        # word like `reset_in`/`rst_in` where the final `n` belongs to `_in`,
+        # not the reset stem — those ports are active-HIGH. Strip the candidate
+        # marker and require the remainder to END with a reset/clear stem.
+        if lo.endswith("n") or lo.endswith("b"):
+            stem = lo[:-1]
+            if (any(stem.endswith(h) for h in _RST_NAME_HINT)
+                    or _looks_like_clear(stem)
+                    or stem.endswith("clr") or stem.endswith("clear")):
+                return True
+        return False
     return False
 
 
@@ -875,7 +974,9 @@ def build_measurement_tb(top: str, clk: Optional[PortInfo],
                          params: Optional[Dict[str, int]] = None,
                          reset_hold: int = 5,
                          inactive_inputs: Optional[set] = None,
-                         datapath_mode: bool = False) -> str:
+                         datapath_mode: bool = False,
+                         localparams: Optional[set] = None,
+                         event_value: Optional[str] = None) -> str:
     """Emit the self-contained canonical-latency measurement TB.
 
     Convention:
@@ -897,6 +998,7 @@ def build_measurement_tb(top: str, clk: Optional[PortInfo],
     """
     params = params or {}
     inactive_inputs = inactive_inputs or set()
+    localparams = localparams or set()
     L: List[str] = []
     L.append("`timescale 1ns/1ps")
     L.append("module latency_tb;")
@@ -931,10 +1033,17 @@ def build_measurement_tb(top: str, clk: Optional[PortInfo],
     # DUT instance (named connections; only declared TB nets are wired). The
     # resolved params are passed through #(.NAME(VAL)) so the design's own
     # internal `WIDTH`-typed signals + the --expect resolution agree.
+    # ORGANIC #793 — the override list is built from REAL PARAMETER names ONLY.
+    # Names declared `localparam` inside the `#(...)` block are derived constants
+    # the instance inherits from its own defaults; their VALUES are still used for
+    # the TB net widths above, but emitting them here ("Cannot override
+    # localparam") is an iverilog elaboration error on otherwise-correct RTL.
     inst_params = ""
-    if params:
+    override_params = {nm: val for nm, val in params.items()
+                       if nm not in localparams}
+    if override_params:
         inst_params = " #(" + ", ".join(
-            f".{nm}({val})" for nm, val in sorted(params.items())) + ")"
+            f".{nm}({val})" for nm, val in sorted(override_params.items())) + ")"
     conns: List[str] = []
     if clk is not None:
         conns.append(f".{clk.name}(clk)")
@@ -1023,6 +1132,13 @@ def build_measurement_tb(top: str, clk: Optional[PortInfo],
     ev_w = _width_token(event_port, params)
     ev_assert = "1'b1" if ev_w == "1" else f"{{{ev_w}{{1'b1}}}}"
     ev_deassert = "1'b0" if ev_w == "1" else f"{{{ev_w}{{1'b0}}}}"
+    # ORGANIC #795 — a multi-bit datapath EVENT-VALUE retry overrides the blind
+    # all-ones assert with a concrete distinct codeword so a decoder/LUT/ROM whose
+    # all-ones input is an invalid/no-op symbol (mapping to the reset baseline) is
+    # actually driven to a value that moves the bus. The scalar (1-bit pulse) path
+    # is never touched: a 1-bit event keeps the `1'b1` pulse.
+    if event_value is not None and ev_w != "1":
+        ev_assert = event_value
     L.append(f"    {ev} = {ev_assert};")
     L.append("    #1;   // settle combinational paths, still inside the low phase")
     if datapath_mode:
@@ -1037,7 +1153,15 @@ def build_measurement_tb(top: str, clk: Optional[PortInfo],
         L.append(f"      last_change = 0; change_count = 1; out_prev = {out};")
         L.append("    end")
         L.append("    @(posedge clk);          // event-latch posedge E (t=0)")
-        L.append(f"    {ev} <= {ev_deassert};   // one-edge event pulse")
+        # ORGANIC #795 — for a multi-bit datapath CODE input the event is a LEVEL
+        # codeword, not a pulse: HOLD it steady after the latch. Yanking it back
+        # to all-zeros (the pulse convention) would make the decoded bus change a
+        # SECOND time (codeword→decoded, then →baseline) and be falsely flagged
+        # DATAPATH_MULTI_CHANGE. Holding the codeword yields a single change to
+        # its committed value ⇒ a clean first-change latency. The all-ones /
+        # default path still pulse-deasserts (byte-for-byte unchanged).
+        if event_value is None:
+            L.append(f"    {ev} <= {ev_deassert};   // one-edge event pulse")
         L.append(f"    for (cyc = 1; cyc <= {max_cycles}; cyc = cyc + 1) begin")
         L.append("      @(posedge clk);        // posedge E+cyc")
         L.append(f"      if ({out} !== out_prev) begin")
@@ -1138,6 +1262,10 @@ _PRECOND_RE = re.compile(r"^LATENCY_PRECONDITION_HIGH\s*$", re.MULTILINE)
 # alone (staged partial / glitch), so the measurement is ADVISORY, never a hard
 # PASS that could mask a genuine multi-cycle latency.
 _DP_MULTI_RE = re.compile(r"^DATAPATH_MULTI_CHANGE=(\d+)\s*$", re.MULTILINE)
+# ORGANIC #795 — bound the datapath EVENT-VALUE retry probe count (RTL-own
+# codewords + a small generic spread) so a wide event input cannot explode the
+# sim count on a genuinely-stuck bus (which still TIMEs out after all probes).
+_DP_MAX_EVENT_PROBES = 8
 
 
 def measure_latency(rtl_path: Path, tb_text: str, workdir: Path,
@@ -1302,7 +1430,14 @@ def run_latency_conformance(
     # resolve --expect against the module params (+ overrides)
     try:
         params = resolve_params(rtl_text, top, params_override)
+        # ORGANIC #793 — names declared `localparam` inside the `#(...)` block are
+        # derived constants the instance inherits; their VALUES live in `params`
+        # (for widths + --expect) but they are NEVER overridden in the DUT
+        # instantiation below ("Cannot override localparam" elaboration error).
+        localparams = module_localparam_names(rtl_text, top)
         report["resolved_params"] = params
+        if localparams:
+            report["localparams"] = sorted(localparams)
         expected = safe_eval_arith(expect, params)
     except ExpectError as e:
         report["verdict"] = "ERROR"
@@ -1435,7 +1570,8 @@ def run_latency_conformance(
     tb = build_measurement_tb(top, clk, resets, event_port, output_port,
                               others, reset_active_low_map, input_const,
                               max_cycles, params=params,
-                              datapath_mode=datapath_mode)
+                              datapath_mode=datapath_mode,
+                              localparams=localparams)
     report["measurement_tb_lines"] = tb.count("\n")
 
     report["context_files"] = [str(p) for p in (context_files or [])]
@@ -1486,7 +1622,7 @@ def run_latency_conformance(
                 probe_tb = build_measurement_tb(
                     top, clk, resets, event_port, og_port,
                     others, reset_active_low_map, input_const, max_cycles,
-                    params=params)
+                    params=params, localparams=localparams)
                 _p_measured, p_status, _p_err = measure_latency(
                     rtl_path, probe_tb, pwork, context_files=context_files)
             except Exception:
@@ -1504,7 +1640,8 @@ def run_latency_conformance(
             retry_tb = build_measurement_tb(
                 top, clk, resets, event_port, output_port, others,
                 reset_active_low_map, input_const, max_cycles, params=params,
-                inactive_inputs=set(competing_requests))
+                inactive_inputs=set(competing_requests),
+                localparams=localparams)
             rwork = Path(tempfile.mkdtemp(prefix="latconf_onehot_"))
             try:
                 r_measured, r_status, r_err = measure_latency(
@@ -1522,6 +1659,64 @@ def run_latency_conformance(
             if r_status == "ok" and r_err == "":
                 measured, status, err = r_measured, r_status, r_err
                 report["measured_under_one_hot_arbitration"] = True
+
+    # ORGANIC #795 — DATAPATH EVENT-VALUE RETRY. In datapath_mode a multi-bit
+    # --event DATA/CODE input is driven blind ALL-ONES; for a decoder/LUT/ROM
+    # that is commonly an INVALID/no-op codeword mapping to the reset baseline,
+    # so the `out !== out_rstval` change-detect never fires → a FALSE TIMEOUT on
+    # correct 1-cycle RTL. Retry with distinct codewords — the RTL's OWN
+    # width-matched sized literals (its valid codewords, via
+    # _rtl_event_value_candidates) first, then generic spread probes — each
+    # driven HELD STEADY (event_value path, not pulse-deasserted, to avoid a
+    # false DATAPATH_MULTI_CHANGE). Adopt the first that cleanly measures.
+    # §4.05 no-leak: fires ONLY on a TIMEOUT (never on a MISMATCH); a bus that
+    # does not change under ANY probed value still TIMEs out.
+    if status == "timeout" and datapath_mode and err == "":
+        try:
+            _ev_w_int = int(_width_token(event_port, params))
+        except (ValueError, TypeError):
+            _ev_w_int = 0
+        if _ev_w_int > 1:
+            _all_ones = (1 << _ev_w_int) - 1
+            _rtl_cands = _rtl_event_value_candidates(rtl_text, _ev_w_int)
+            _generic = [1, 2, 1 << (_ev_w_int - 1), _all_ones >> 1]
+            _probes: List[int] = []
+            for _v in _rtl_cands + _generic:
+                if 0 < _v < _all_ones and _v not in _probes:
+                    _probes.append(_v)
+            _probes = _probes[:_DP_MAX_EVENT_PROBES]
+            report["datapath_event_value_probes"] = _probes
+            # ORGANIC #795 Step-2.7 §4.05 — probe EVERY candidate and collect ALL
+            # clean measurements; do NOT hard-PASS off the FIRST clean probe. A
+            # spuriously-correct latency on one incidental codeword would MASK a
+            # genuine multi-cycle bug on a DIFFERENT codeword (an incidental
+            # self-test path at 2 cycles hiding a primary path at 4). Adopt the
+            # WORST (MAX) latency across all cleanly-measured codewords so a
+            # slow/buggy codeword is ALWAYS surfaced; a uniform-latency decoder
+            # (all codewords agree) is unaffected. A genuinely stuck bus measures
+            # nothing clean → the original TIMEOUT stands.
+            _clean: List[Tuple[int, int]] = []   # (event_value, measured_latency)
+            for _v in _probes:
+                ev_tb = build_measurement_tb(
+                    top, clk, resets, event_port, output_port, others,
+                    reset_active_low_map, input_const, max_cycles,
+                    params=params, datapath_mode=datapath_mode,
+                    localparams=localparams,
+                    event_value=f"{_ev_w_int}'d{_v}")
+                ework = Path(tempfile.mkdtemp(prefix="latconf_dpev_"))
+                try:
+                    e_measured, e_status, e_err = measure_latency(
+                        rtl_path, ev_tb, ework, context_files=context_files)
+                finally:
+                    shutil.rmtree(ework, ignore_errors=True)
+                if e_status == "ok" and e_err == "" and e_measured is not None:
+                    _clean.append((_v, e_measured))
+            if _clean:
+                _v_adopt, _m_adopt = max(_clean, key=lambda t: t[1])
+                measured, status, err = _m_adopt, "ok", ""
+                report["measured_under_datapath_event_value"] = _v_adopt
+                report["datapath_event_value_measurements"] = {
+                    str(v): m for v, m in _clean}
 
     if err:
         report["verdict"] = "ERROR"

@@ -130,6 +130,34 @@ _GFM_ACCESS_HDR = {"access", "type", "rw", "mode", "permission", "perm"}
 _GFM_OFFSET_WEAK_HDR = {"default", "reset value", "value"}
 _GFM_SEP_CELL_RE = re.compile(r"^:?-{2,}:?$")
 _GFM_OFFSET_RE = re.compile(r"(0x[0-9A-Fa-f]+|\b\d+\b)")
+# ORGANIC #800 (gapJ) — a CSR offset cell of the form ``0xLOW (0xHIGH)`` carries
+# TWO addresses: the low-word register address + a parenthetical high-word alias
+# (the upper-32b companion CSR of a 64b counter pair). The single-offset regexes
+# capture only the LEADING 0x token, so the high-word alias is lost — one
+# undercounted address token per pair. This captures BOTH. chip-AGNOSTIC: pure
+# ``0x.. (0x..)`` grammar. The parenthetical is OPTIONAL (a plain ``0xC00`` cell
+# yields group(2)=None → a single-address row exactly as before, no duplication).
+_GFM_OFFSET_PAREN_ALIAS_RE = re.compile(
+    r"^\s*(0x[0-9A-Fa-f][0-9A-Fa-f_]*)"                  # primary low-word addr
+    r"(?:\s*\(\s*(0x[0-9A-Fa-f][0-9A-Fa-f_]*)\s*\))?")  # optional (0xHIGH) alias
+
+
+def _offset_addrs(cell: str) -> "List[str]":
+    """ORGANIC #800 — the list of lowercased ``0x..`` addresses an offset cell
+    carries: ``[low]`` for a plain ``0xC00`` cell, ``[low, high]`` for a
+    ``0xC00 (0xC80)`` low/high CSR pair. ``[]`` when the cell does not LEAD with
+    a 0x token (a Description cell that merely mentions a hex in prose
+    contributes nothing — §4.05 no-leak). De-dups so ``0xC00 (0xC00)`` yields a
+    single ``0xc00``."""
+    m = _GFM_OFFSET_PAREN_ALIAS_RE.match(cell)
+    if not m:
+        return []
+    out = [m.group(1).lower()]
+    if m.group(2):
+        hi = m.group(2).lower()
+        if hi != out[0]:
+            out.append(hi)
+    return out
 # Strict `0x...` token (underscored hex like `0x0000_0010` tolerated). Used for
 # the weak-role OFFSET headers and the structural fallback so a bare decimal can
 # never be promoted to an address (§4.05 no-leak).
@@ -225,8 +253,11 @@ def _extract_gfm_pipe_table(text: str, source_path: str) -> List[Dict]:
         mo = _GFM_OFFSET_RE.search(cells[oi])
         if not mo:
             continue
-        off = mo.group(1).lower()
-        addr_hex = off if off.startswith("0x") else hex(int(off))
+        # ORGANIC #800 — emit one row per address for a `0xLOW (0xHIGH)` CSR pair.
+        addrs = _offset_addrs(cells[oi])
+        if not addrs:
+            off = mo.group(1).lower()
+            addrs = [off if off.startswith("0x") else hex(int(off))]
         desc = ""
         if "desc" in cols and cols["desc"] < len(cells):
             desc = cells[cols["desc"]]
@@ -236,7 +267,8 @@ def _extract_gfm_pipe_table(text: str, source_path: str) -> List[Dict]:
         access_norm = ""
         if "access" in cols and cols["access"] < len(cells):
             access_norm = cells[cols["access"]].strip().lower().replace("/", "_")
-        rows.append({
+        for addr_hex in addrs:
+            rows.append({
             "addr_hex": addr_hex,
             "access": access_norm,
             "name": name,
@@ -411,8 +443,13 @@ def _flush_rst_grid_table(header_cells: List[str],
             mo = _GFM_OFFSET_RE.search(cells[oi])
         if not mo:
             continue
-        off = mo.group(1).lower()
-        addr_hex = off if off.startswith("0x") else hex(int(off))
+        # ORGANIC #800 — an address cell that LEADS with a 0x token may carry a
+        # `0xLOW (0xHIGH)` low/high CSR-pair alias; emit one row per address. A
+        # bare-decimal / non-leading-0x offset keeps the single-row path.
+        addrs = _offset_addrs(cells[oi])
+        if not addrs:
+            off = mo.group(1).lower()
+            addrs = [off if off.startswith("0x") else hex(int(off))]
         name = ""
         if ni is not None and ni < len(cells):
             name = _gfm_clean_name(cells[ni])
@@ -431,18 +468,19 @@ def _flush_rst_grid_table(header_cells: List[str],
         access_norm = ""
         if "access" in cols and cols["access"] < len(cells):
             access_norm = cells[cols["access"]].strip().lower().replace("/", "_")
-        out.append({
-            "addr_hex": addr_hex,
-            "access": access_norm,
-            "name": name,
-            "description": desc.strip(),
-            "evidence": {
-                "source": source_path,
-                "line": lineno,
-                "matched_token": raw.strip()[:120],
-                "extraction_strategy": "rst_grid_table_match",
-            },
-        })
+        for addr_hex in addrs:
+            out.append({
+                "addr_hex": addr_hex,
+                "access": access_norm,
+                "name": name,
+                "description": desc.strip(),
+                "evidence": {
+                    "source": source_path,
+                    "line": lineno,
+                    "matched_token": raw.strip()[:120],
+                    "extraction_strategy": "rst_grid_table_match",
+                },
+            })
     return out
 
 

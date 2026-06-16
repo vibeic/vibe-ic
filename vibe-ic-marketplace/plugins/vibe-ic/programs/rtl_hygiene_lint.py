@@ -762,6 +762,190 @@ def _clocked_always_spans(src: str) -> List[tuple]:
     return spans
 
 
+def _procedural_assigned_lhs(text: str) -> Set[str]:
+    """ORGANIC #794 — set of identifiers assigned by a procedural `=` / `<=` at
+    STATEMENT level (paren depth 0) inside `text`.
+
+    Paren-depth gating is the key correctness point: a `<=` (or `=`) INSIDE
+    `(...)` is an `if`/`while` condition or a call argument where `<=` is a
+    COMPARISON, not a non-blocking assignment (e.g. `if (current_floor_reg <=
+    min_request)`), and must NOT be counted as an LHS. `==` / `>=` / `!=` /
+    `<=`-as-compare are rejected by the surrounding-operator guard. A
+    CONCATENATION LHS `{a, b[1:0], c} =` records EVERY identifier inside the
+    braces (Step-2.7 §4.05 — a missed concat LHS would falsely shrink the
+    assigned set and mask a latch); a bit/part-select LHS records the BASE name
+    (the caller separately refuses to PROVE coverage when a subscript is present
+    — see `_lhs_has_subscript`). Purely structural & chip-AGNOSTIC."""
+    out: Set[str] = set()
+    depth = 0
+    n = len(text)
+    i = 0
+    while i < n:
+        c = text[i]
+        if c == '(':
+            depth += 1
+            i += 1
+            continue
+        if c == ')':
+            depth = max(0, depth - 1)
+            i += 1
+            continue
+        if depth == 0 and ((c == '<' and text[i:i + 2] == '<=') or c == '='):
+            if c == '<':
+                op_end = i + 2
+            else:
+                if text[i:i + 2] == '==':       # equality compare, not assign
+                    i += 2
+                    continue
+                if i > 0 and text[i - 1] in '<>!=':  # part of <= >= != ==
+                    i += 1
+                    continue
+                op_end = i + 1
+            # scan back to the LHS identifier, skipping a trailing [..] subscript
+            j = i - 1
+            while j >= 0 and text[j].isspace():
+                j -= 1
+            while j >= 0 and text[j] == ']':
+                d2 = 0
+                while j >= 0:
+                    if text[j] == ']':
+                        d2 += 1
+                    elif text[j] == '[':
+                        d2 -= 1
+                    j -= 1
+                    if d2 == 0:
+                        break
+                while j >= 0 and text[j].isspace():
+                    j -= 1
+            # ORGANIC #794 Step-2.7 §4.05 — a CONCATENATION LHS `{a, b[1:0], c} =`
+            # assigns EVERY identifier inside the braces. The scalar scan-back
+            # below would read only the brace `}` and yield an EMPTY name, so a
+            # case arm assigning `{a,b}` would vanish from the assigned set and a
+            # GENUINE latch on a/b would be falsely downgraded. Extract every
+            # identifier inside the matching `{...}` (over-inclusion of an index
+            # var is the SAFE direction — it can only KEEP a hard WARN).
+            if j >= 0 and text[j] == '}':
+                d3 = 0
+                m = j
+                while m >= 0:
+                    if text[m] == '}':
+                        d3 += 1
+                    elif text[m] == '{':
+                        d3 -= 1
+                    if d3 == 0:
+                        break
+                    m -= 1
+                concat = text[m:j + 1] if m >= 0 else ""
+                for nm in re.findall(r'[A-Za-z_]\w*', concat):
+                    if nm not in VERILOG_KEYWORDS:
+                        out.add(nm)
+                i = op_end
+                continue
+            k = j
+            while k >= 0 and (text[k].isalnum() or text[k] == '_'):
+                k -= 1
+            name = text[k + 1:j + 1]
+            if name and not name[0].isdigit() and name not in VERILOG_KEYWORDS:
+                out.add(name)
+            i = op_end
+            continue
+        i += 1
+    return out
+
+
+# ORGANIC #794 Step-2.7 §4.05 — a SUBSCRIPTED (bit/part-select) assignment LHS
+# means the base-name assigned set CANNOT prove full-vector coverage: a pre-case
+# default on `dout[3:2]` and a case-body write on `dout[1:0]` both reduce to the
+# base `dout`, so a genuine latch on the unwritten slice would be falsely
+# downgraded. These detect a subscripted scalar LHS (`name[...] =`) and a concat
+# LHS containing a slice (`{ ... [..] ... } =`); the caller stays conservative
+# (keeps the hard WARN) whenever EITHER region has one. A false hit (a `]<=` that
+# is actually a condition compare) only KEEPS a hard WARN — the safe direction.
+_SUBSCRIPTED_LHS_RE = re.compile(r'\][ \t]*(?:<=|=(?!=))')
+_CONCAT_SLICE_LHS_RE = re.compile(r'\{[^{}]*\[[^{}]*\}[ \t]*(?:<=|=(?!=))')
+
+
+def _lhs_has_subscript(text: str) -> bool:
+    """True if any assignment in `text` has a SUBSCRIPTED LHS (a bit/part-select
+    scalar, or a concat containing one). #794 Step-2.7 §4.05 — such an assign
+    cannot prove full-vector coverage from a base name."""
+    return bool(_SUBSCRIPTED_LHS_RE.search(text)
+                or _CONCAT_SLICE_LHS_RE.search(text))
+
+
+def _enclosing_always_body(src: str, case_off: int) -> Optional[Tuple[int, int]]:
+    """ORGANIC #794 — (body_start_off, block_end_off) of the TIGHTEST always
+    block textually containing `case_off`, where body_start_off is the char
+    offset just AFTER the `always [@(...)]` header. Handles `always`,
+    `always_comb`, `always_latch`, `always_ff` with or without a sensitivity
+    list. chip-AGNOSTIC: pure begin/end depth tracking."""
+    best: Optional[Tuple[int, int]] = None
+    for bm in re.finditer(
+            r'\balways(?:_ff|_comb|_latch)?\s*(?:@\s*\([^)]*\))?', src):
+        i = bm.end()
+        n = len(src)
+        while i < n and src[i].isspace():
+            i += 1
+        if i < n and re.match(r'\bbegin\b', src[i:]):
+            depth = 0
+            blk_end = n
+            for km in re.finditer(r'\b(begin|end)\b', src[i:]):
+                depth += 1 if km.group(1) == 'begin' else -1
+                if depth == 0:
+                    blk_end = i + km.end()
+                    break
+        else:
+            semi = src.find(';', i)
+            blk_end = (semi + 1) if semi != -1 else n
+        if bm.end() <= case_off < blk_end:
+            if best is None or bm.end() > best[0]:
+                best = (bm.end(), blk_end)
+    return best
+
+
+def _case_lhs_all_pre_assigned(src: str, case_head_off: int) -> bool:
+    """ORGANIC #794 — True iff this combinational `case` is the canonical
+    latch-FREE fallthrough idiom: EVERY identifier assigned inside the case body
+    is ALSO unconditionally assigned (at statement-top — not under any
+    if/else/case/for/while) in the SAME always block, textually BEFORE the case
+    head. Then an unlisted selector code cannot infer a latch — the pre-case
+    default holds — so verilator emits NO %Warning-LATCH (only CASEINCOMPLETE).
+    §4.05 no-leak: returns False (keep the hard WARN) whenever ANY case-body LHS
+    lacks such an unconditional pre-case default, when the pre-case region is not
+    a flat statement-top list, OR when a SUBSCRIPTED (bit/part-select) LHS
+    participates (a base name cannot prove a full-vector default — Step-2.7)."""
+    body = _enclosing_always_body(src, case_head_off)
+    if body is None:
+        return False
+    body_start, blk_end = body
+    pre = src[body_start:case_head_off]
+    # strip the single `begin` that opens the always body, then require the
+    # pre-case region to be a FLAT statement-top list (no control construct). If
+    # any if/else/for/while/case appears before the case, a pre-assignment might
+    # be conditional → not provably unconditional → stay conservative.
+    pre_body = re.sub(r'^\s*begin\b', '', pre, count=1)
+    if re.search(r'\b(if|else|for|while|case[szx]?|repeat|forever)\b', pre_body):
+        return False
+    uncond = _procedural_assigned_lhs(pre_body)
+    if not uncond:
+        return False
+    # case body: from after the `(...)` head to the matching endcase.
+    head_end = src.find(')', case_head_off)
+    endcase_off = src.find('endcase', case_head_off)
+    if head_end == -1 or endcase_off == -1 or endcase_off > blk_end:
+        return False
+    case_body = src[head_end + 1:endcase_off]
+    # Step-2.7 §4.05 — a bit/part-select LHS in EITHER region defeats base-name
+    # coverage proof (a sliced default cannot cover a different sliced write);
+    # stay conservative and keep the hard WARN.
+    if _lhs_has_subscript(case_body) or _lhs_has_subscript(pre_body):
+        return False
+    body_lhs = _procedural_assigned_lhs(case_body)
+    if not body_lhs:
+        return False
+    return body_lhs <= uncond
+
+
 def rule_case_coverage(src: str, path: str) -> List[Finding]:
     findings: List[Finding] = []
     # Find every `case (expr) ... endcase` block with its starting line
@@ -803,7 +987,12 @@ def rule_case_coverage(src: str, path: str) -> List[Finding]:
             # only, so downgrade the sequential-case WARN to ADVISORY (reported,
             # never a hard block). A combinational `always @(*)` case with no
             # default STILL hard-WARNs (real latch risk — §4.05 no-leak).
-            case_off = line_off[start_line - 1]
+            # char offset of the actual `case` token on the start line (not the
+            # line start) — used for both the clocked-span test and the
+            # pre-assigned-default test (#794).
+            line_start = line_off[start_line - 1]
+            cm = re.search(r'\bcase[szx]?\s*\(', lines[start_line - 1])
+            case_off = line_start + (cm.start() if cm else 0)
             in_clocked = any(s <= case_off < e for s, e in clocked_spans)
             if in_clocked:
                 f = _advisory(f, _prov.PROSE_HEURISTIC, _prov.CONTRADICTED)
@@ -813,6 +1002,25 @@ def rule_case_coverage(src: str, path: str) -> List[Finding]:
                                    "state. Latch risk is COMBINATIONAL-only "
                                    "(always @(*)); advisory, not a hard block "
                                    "(ORGANIC #770 r4)")
+            elif _case_lhs_all_pre_assigned(src, case_off):
+                # ORGANIC #794 — a COMBINATIONAL `always @(*)` case with no
+                # default, but EVERY case-body LHS is unconditionally assigned
+                # (statement-top) before the case head. The pre-case default
+                # holds on any unlisted selector code, so NO latch can be
+                # inferred (verilator confirms: only CASEINCOMPLETE, no
+                # %Warning-LATCH). This is the canonical latch-free
+                # combinational-FSM idiom → downgrade to advisory. §4.05 no-leak:
+                # _case_lhs_all_pre_assigned returns False when ANY case-body LHS
+                # lacks an unconditional pre-case default, when a subscripted LHS
+                # defeats base-name coverage, or when a concat LHS is missed.
+                f = _advisory(f, _prov.PROSE_HEURISTIC, _prov.CONTRADICTED)
+                f.advisory_note = ("combinational case with no default but every "
+                                   "case-body LHS is unconditionally pre-assigned "
+                                   "(statement-top) before the case head — the "
+                                   "pre-case default holds on an unlisted code, so "
+                                   "no latch can be inferred (latch-free "
+                                   "fallthrough); advisory, not a hard block "
+                                   "(ORGANIC #794)")
             findings.append(f)
     return findings
 
@@ -2352,6 +2560,50 @@ def _match_begin_end(src: str, begin_kw_off: int) -> int:
     return len(src)
 
 
+def _norm_cond(text: str) -> str:
+    """Collapse a generate-if condition to a whitespace-insensitive canonical
+    form (drop ALL whitespace). chip-AGNOSTIC: pure text normalisation (#799)."""
+    return re.sub(r'\s+', '', text)
+
+
+def _conditions_complementary(a: str, b: str) -> bool:
+    """ORGANIC #799 (cross-ref #788) — True when two SEPARATE single-arm
+    generate-if conditions are STRUCTURALLY complementary, i.e. exactly one of
+    them can ever hold, so a driver in each can never co-elaborate:
+
+      * logical negation        COND vs !COND   (either order)
+      * equality vs inequality  X==K  vs X!=K   (same LHS, same RHS, either order)
+
+    Both forms are decidable at elaboration time from the source text alone, so
+    pairing them is sound WITHOUT a parameter solver. Anything not provably
+    complementary (`if(A)` vs `if(B)`, `if(X==1)` vs `if(X==2)`) returns False so
+    a genuine potential multidriver STAYS flagged.
+
+    DELIBERATELY excludes bitwise `~COND`: `!X` is the boolean complement for ANY
+    width (`!1==0`, `!0==1`), but `~X` is the bit-complement, so for a >1-bit
+    operand `~EN` is still truthy when `EN` is truthy (EN=1 → ~EN=…1110 ≠ 0) and
+    BOTH `if(EN)` / `if(~EN)` arms elaborate — a GENUINE multidriver
+    (iverilog -g2012 rc=1). Pairing `~` would suppress that real race, so only
+    `!` is a complement. chip-AGNOSTIC: pure SV expression grammar."""
+    na, nb = _norm_cond(a), _norm_cond(b)
+    if not na or not nb:
+        return False
+    # logical negation: one side is `!X` and the other is bare `X`
+    for hi, lo in ((na, nb), (nb, na)):
+        if hi[:1] == '!' and hi[1:2] != '=' and hi[1:] == lo:
+            return True
+        # tolerate a redundant outer paren on the negated side: `!(X)` vs `X`
+        if hi[:2] == '!(' and hi[-1:] == ')' and hi[2:-1] == lo:
+            return True
+    # equality vs inequality over the SAME operands: `LHS==RHS` vs `LHS!=RHS`
+    for x, y in ((na, nb), (nb, na)):
+        me = re.fullmatch(r'(.+?)==(.+)', x)
+        mn = re.fullmatch(r'(.+?)!=(.+)', y)
+        if me and mn and me.group(1) == mn.group(1) and me.group(2) == mn.group(2):
+            return True
+    return False
+
+
 def _generate_if_arms(src: str, mlo: int, mhi: int) -> List[List[Tuple[int, int]]]:
     """ORGANIC GAP-A — return the mutually-exclusive arm spans of every
     conditional-generate `if … begin:lbl … end else [if …] begin:lbl … end`
@@ -2366,8 +2618,20 @@ def _generate_if_arms(src: str, mlo: int, mhi: int) -> List[List[Tuple[int, int]
     procedural `if` inside an always block uses an UN-named begin (or no begin),
     so it is never picked up here; this keeps the suppression structurally
     confined to elaboration-time generate selection and never relaxes a genuine
-    procedural same-scope race. chip-AGNOSTIC: pure SV generate-if grammar."""
+    procedural same-scope race. chip-AGNOSTIC: pure SV generate-if grammar.
+
+    ORGANIC #799 (cross-ref #788) — ALSO pairs two SEPARATE single-arm
+    generate-if blocks whose conditions are structurally complementary
+    (`if(COND) begin:gen_a … end` and `if(!COND) begin:gen_b … end`, NOT an
+    if/else chain). #788 only walked the if/ELSE chain, so a net split across two
+    complementary stand-alone ifs falsely tripped
+    multidriven-continuous-procedural even though iverilog -g2012 elaborates
+    exactly one arm (rc=0). Each complementary pair is emitted as its own 2-arm
+    group so the two drivers read as mutually exclusive."""
     groups: List[List[Tuple[int, int]]] = []
+    # #799 — stand-alone single-arm generate-ifs collected for complementary
+    # pairing: (normalised-condition-text, begin_off, end_off).
+    singles: List[Tuple[str, int, int]] = []
     consumed_until = mlo
     for ifm in re.finditer(r'\bif\b\s*\(', src[mlo:mhi]):
         if_abs = mlo + ifm.start()
@@ -2390,6 +2654,7 @@ def _generate_if_arms(src: str, mlo: int, mhi: int) -> List[List[Tuple[int, int]
             j += 1
         if cclose < 0:
             continue
+        cond_text = src[popen + 1:cclose]  # #799 — for complementary pairing
         # require a NAMED begin block immediately after the condition
         bm = re.match(r'\s*begin\b\s*:\s*[A-Za-z_]\w*', src[cclose + 1:mhi])
         if not bm:
@@ -2440,6 +2705,27 @@ def _generate_if_arms(src: str, mlo: int, mhi: int) -> List[List[Tuple[int, int]
         if len(arms) >= 2:
             groups.append(arms)
             consumed_until = arms[-1][1]
+        else:
+            # #799 — a stand-alone single-arm generate-if (no else chain).
+            # Held back for complementary pairing with another stand-alone if.
+            singles.append((cond_text, begin_kw, arm_end))
+            consumed_until = arm_end
+    # #799 — pair stand-alone single-arm ifs whose conditions are structurally
+    # complementary (`if(COND)` + `if(!COND)` / `X==K` + `X!=K`). Each such pair
+    # is its own mutually-exclusive 2-arm group. Greedy: each single is consumed
+    # by at most one pairing so a non-complementary single is never absorbed.
+    used = [False] * len(singles)
+    for i in range(len(singles)):
+        if used[i]:
+            continue
+        for k in range(i + 1, len(singles)):
+            if used[k]:
+                continue
+            if _conditions_complementary(singles[i][0], singles[k][0]):
+                groups.append([(singles[i][1], singles[i][2]),
+                               (singles[k][1], singles[k][2])])
+                used[i] = used[k] = True
+                break
     return groups
 
 

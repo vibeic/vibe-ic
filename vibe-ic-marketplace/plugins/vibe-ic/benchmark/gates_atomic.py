@@ -300,6 +300,13 @@ def main():
     #    hold/dwell state). Same prose-override signature; disarmed by an
     #    explicit no-hold / plain-sawtooth spec. Conservative (any hold state →
     #    silent; under-firing permitted over a false block).
+    # #791 addition (continuous-assign one-hot FSM dropped self-loop):
+    #  * fsm-onehot-missing-transition: spec discloses an arrow-form transition
+    #    table but the RTL's one-hot continuous-assign next-state equation for a
+    #    destination state OMITS a disclosed in-edge (incl self-loop). Exactly
+    #    the Prob150_review2015_fsmonehot dropped-Count-self-loop defect that
+    #    SKIPped the case-driven check and shipped PASS. Zero-false-fire: fires
+    #    only on a disclosed table + parseable one-hot assigns; SKIPs otherwise.
     _BLOCKING_CONFORMANCE_RULES = {"onebased-port-range",
                                    "fsm-output-style-mismatch",
                                    "port-missing",
@@ -307,7 +314,8 @@ def main():
                                    "msbfirst-direction-mismatch",
                                    "moore-output-reset-gated",
                                    "shift-implemented-as-rotate",
-                                   "waveform-peak-hold-dropped"}
+                                   "waveform-peak-hold-dropped",
+                                   "fsm-onehot-missing-transition"}
     blocking: list = []
     # ORGANIC #688 — harness-exact self-verify BLOCKs (standalone `-s <top>`
     # codegen / verilator lint) are emit-blocking: the scorer rejects the same

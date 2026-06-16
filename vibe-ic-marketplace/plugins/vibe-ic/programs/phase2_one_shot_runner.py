@@ -1339,12 +1339,30 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
         _contract_ports = _rcv.design_contract_ports(project)
     except Exception:  # pragma: no cover — defensive
         _contract_ports = set()
-    plan = _rcv.plan_aliases([p[2] for p in ports],
-                             contract_ports=_contract_ports)
-    if not plan:
+    _names = [p[2] for p in ports]
+    full_plan = _rcv.plan_aliases(_names)
+    plan = _rcv.plan_aliases(_names, contract_ports=_contract_ports)
+    # ORGANIC #792 — the RESET renames the #689 contract-suppression dropped (in
+    # full_plan, contract-declared, NOT in the suppressed plan) are NOT abandoned.
+    # The #689 suppression exists because a hidden TB may bind the design's own
+    # contract spelling (`multi_booth`/`up_down` `.reset`, arstn `.arstn`); but a
+    # DIFFERENT hidden TB may instead bind the canonical (`sequence_detector`
+    # `.rst_n`). These are PROVABLY INDISTINGUISHABLE from the contract alone —
+    # only the invisible TB binding differs. So instead of suppress-or-rename,
+    # expose BOTH spellings additively (polarity-safe dual-port reset wrapper):
+    # whichever the TB binds drives the reset, the other defaults INACTIVE. Only
+    # RESETS qualify (a clock has no inactive level → stays suppressed). The
+    # canonical-collision / cross-polarity cases are already absent from
+    # full_plan (plan_aliases skips them), so additive never collides.
+    _contract = {c.lower() for c in _contract_ports}
+    additive_reset_map = {
+        p: full_plan[p] for p in full_plan
+        if p not in plan and p.lower() in _contract
+        and _rcv.classify_reset(p) is not None}
+    if not plan and not additive_reset_map:
         _why = ("the design's own contract already declares the standard "
                 "spelling(s) — refusing to rename the TB-facing contract (#689)"
-                if _contract_ports and _rcv.plan_aliases([p[2] for p in ports])
+                if _contract_ports and full_plan
                 else "top reset/clock ports already canonical")
         return StepResult("reset_clock_variant_aliases", "SKIP",
                           time.time() - t0, _why)
@@ -1371,10 +1389,16 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
         _pinned_sdc = _rcv_sdc.staged_constrained_ports(project)
     except Exception:  # pragma: no cover — defensive
         _pinned_sdc = set()
-    _sdc_pinned = sorted(p for p in plan if p.lower() in _pinned_sdc)
+    # #792 — an SDC-pinned reset stays PURE-SUPPRESSED (not additive): the
+    # design ships a real constraint binding the spec spelling, so keep #618
+    # behavior exactly (no extra canonical port that could surprise the SDC).
+    _sdc_pinned = sorted({p for p in plan if p.lower() in _pinned_sdc}
+                         | {p for p in additive_reset_map
+                            if p.lower() in _pinned_sdc})
     for _p in _sdc_pinned:
-        del plan[_p]
-    if not plan:
+        plan.pop(_p, None)
+        additive_reset_map.pop(_p, None)
+    if not plan and not additive_reset_map:
         return StepResult(
             "reset_clock_variant_aliases", "SKIP", time.time() - t0,
             f"design's staged constraint SDC already pins the original "
@@ -1395,12 +1419,26 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
         if l9_info is not None:
             l9_top, l9_names = l9_info
             pinned = sorted(set(plan) & l9_names)
-            if l9_top == tgt and pinned:
-                return StepResult(
-                    "reset_clock_variant_aliases", "SKIP", time.time() - t0,
-                    f"L9 declares native port spelling(s) {pinned} for "
-                    f"top_module {tgt!r}; in-flow L9-driven TBs bind them — "
-                    f"refusing to rename against the project's own contract")
+            if l9_top == tgt:
+                # #792 — an additive reset L9 pins stays PURE-SUPPRESSED (#689):
+                # the in-flow L9-driven TB binds the spec spelling the un-aliased
+                # core already exposes, so drop it from the additive set.
+                for _p in [p for p in additive_reset_map if p in l9_names]:
+                    del additive_reset_map[_p]
+                if pinned:
+                    # Preserve the exact field-verified #518 SKIP when there is
+                    # nothing additive to keep; otherwise emit the additive
+                    # wrapper but drop only the L9-pinned renames.
+                    if not additive_reset_map:
+                        return StepResult(
+                            "reset_clock_variant_aliases", "SKIP",
+                            time.time() - t0,
+                            f"L9 declares native port spelling(s) {pinned} for "
+                            f"top_module {tgt!r}; in-flow L9-driven TBs bind "
+                            f"them — refusing to rename against the project's "
+                            f"own contract")
+                    for _p in pinned:
+                        del plan[_p]
     try:
         pblock, pnames = _rcv.parse_module_params(target_txt, tgt)
         # ORGANIC #656 — carry the consumed `import pkg::*;` clauses through to
@@ -1409,7 +1447,8 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
         iblock = _rcv.parse_module_imports(target_txt, tgt)
         wrapper = _rcv.emit_variant_alias_wrapper(
             inner, ports, plan, wrapper_name=tgt,
-            param_block=pblock, param_names=pnames, import_block=iblock)
+            param_block=pblock, param_names=pnames, import_block=iblock,
+            additive_reset_map=additive_reset_map)
     except ValueError as e:  # cross-polarity guard — never alias unsafely
         return StepResult("reset_clock_variant_aliases", "SKIP",
                           time.time() - t0, f"polarity-guard declined: {e}")
@@ -1478,10 +1517,15 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
     rewired = len(written) - 1
     resolved_note = (f" (resolved TB-facing leaf {tgt!r} from runner "
                      f"top-name {top!r})" if tgt != top else "")
+    _additive_note = (
+        f"; additive dual-spelling reset port(s) {additive_reset_map} "
+        f"(both contract + canonical exposed, polarity-safe — #792)"
+        if additive_reset_map else "")
     return StepResult(
         "reset_clock_variant_aliases", "PASS", time.time() - t0,
         f"top {tgt!r} reset/clock ports {plan} aliased to canonical; wrapper "
         f"takes the top name, inner renamed {inner!r}{resolved_note}"
+        f"{_additive_note}"
         + (f"; rewired {rewired} internal caller file(s) to the inner"
            if rewired else ""), written)
 
@@ -2239,6 +2283,43 @@ def _v701_tiny_root_warn(project: Path, chosen_dut: Optional[str]) -> str:
         f"{len(suspicious)} total). Possible module-enumerator gap — verify "
         f"the synth/TB top is the real design core, NOT a trivial visible leaf "
         f"(silent false-PASS guard).")
+
+
+def step_l10_unit_tb_gen(project: Path,
+                         top_name: str = "chip_top") -> StepResult:
+    """ORGANIC #797 — run the testbench_gen PRODUCER so L10 `functional_vector`
+    cases get unit-TB skeletons under sim/tb/ (the id-substring trace evidence
+    the Step-4 l10_tb_conformance gate counts). The producer was dormant — never
+    called by any one-shot runner. KIND-SCOPED to functional_vector so a
+    `cmd_response` case (opcode/summary oracle) never gets manufactured evidence
+    (§4.05 no-leak). SKIPs cleanly when there is no L10 / no functional_vector
+    case (arithmetic-DEFER / no-L10 ICs are unaffected)."""
+    t0 = time.time()
+    try:
+        import sys as _sys
+        if str(PROGRAMS_DIR) not in _sys.path:
+            _sys.path.insert(0, str(PROGRAMS_DIR))
+        import testbench_gen as _tbg
+    except Exception as e:  # pragma: no cover — defensive import guard
+        return StepResult("l10_unit_tb_gen", "SKIP", time.time() - t0,
+                          f"producer unavailable: {e}")
+    try:
+        emitted = _tbg.emit_unit_tbs(project, top_name, kind="functional_vector")
+    except Exception as e:
+        return StepResult("l10_unit_tb_gen", "SKIP", time.time() - t0,
+                          f"L10 unreadable: {e}")
+    if emitted < 0:
+        return StepResult("l10_unit_tb_gen", "SKIP", time.time() - t0,
+                          "no L10_TEST_CASES.json — nothing to produce")
+    if emitted == 0:
+        return StepResult("l10_unit_tb_gen", "SKIP", time.time() - t0,
+                          "no functional_vector L10 cases — nothing to produce")
+    out_dir = _pl.sim_dir(project) / "tb"
+    return StepResult(
+        "l10_unit_tb_gen", "PASS", time.time() - t0,
+        f"emitted {emitted} functional_vector unit TB skeleton(s) under "
+        f"{out_dir} for Step-4 l10_tb_conformance evidence",
+        [str(out_dir)])
 
 
 def step_full_stack_tb_gen(project: Path,
@@ -8055,6 +8136,14 @@ def main() -> int:
     # sim_full_stack/ before any iverilog run is invoked, satisfying
     # bit_level_full_stack_tb_check).
     plan.append(step_full_stack_tb_gen(project, args.top_name))
+    # ORGANIC #797 — wire the testbench_gen PRODUCER (it was never called by any
+    # one-shot runner, so L10 `functional_vector` cases got NO Step-4 evidence).
+    # Runs AFTER full_stack_tb_gen (RTL/L9 stable) and BEFORE reference_tb /
+    # simulate / the Step-4 l10_tb_conformance gate, so the per-case skeletons
+    # land under sim/tb/ in time to be counted. KIND-SCOPED to functional_vector
+    # (§4.05 no-leak: a cmd_response case never gets manufactured id-substring
+    # evidence — it stays gated by its opcode/summary oracle).
+    plan.append(step_l10_unit_tb_gen(project, args.top_name))
 
     # v1.6.170 (#60 P0-2) — deterministic ECO-inert hint extractor.
     # When the ECO loop detects byte-identical RTL retry it now
