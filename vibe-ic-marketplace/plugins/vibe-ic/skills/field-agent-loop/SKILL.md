@@ -1,6 +1,6 @@
 ---
 name: field-agent-loop
-description: Closed-loop field-agent that drives plugin quality improvements by running phase1/phase2/phase3 on benchmark IC projects, filing ORGANIC backlog issues for systematic plugin gaps, and AUDITING the fixes the core-agent self-verifies and CLOSES. Invoke as a cron prompt with a target benchmark folder and an LLM-review prompt; every tick the loop first audits CLOSED `core-closed` issues against the real benchmark (VERIFIED → add `field-verified`, NOT adequate → `gh issue reopen` + remove `core-closed`), then self-advances through review → file → monitor → audit until STOP CONDITION (no new gaps + no open primary/secondary issue + no un-audited closed issue).
+description: Closed-loop field-agent that drives plugin quality improvements by running phase1/phase2/phase3 on benchmark IC projects, DRILLING each systematic gap to a fully-converged all-layers-resolved state in its OWN sandbox worktree, then handing the gatekeeper ONE complete verified bundle (candidate.patch + per-layer regression tests + 2-round clean-room proof) to REVIEW + land — not re-discover. Still files ORGANIC backlog issues and AUDITS the fixes the core-agent self-verifies and CLOSES. Invoke as a cron prompt with a target benchmark folder and an LLM-review prompt; every tick the loop first audits CLOSED `core-closed` issues against the real benchmark (VERIFIED → add `field-verified`, NOT adequate → `gh issue reopen` + remove `core-closed`), then self-advances through review → deep-resolve → file-bundle → monitor → audit until STOP CONDITION (no new gaps + no open primary/secondary issue + no un-audited closed issue).
 ---
 
 
@@ -44,6 +44,32 @@ plugin gaps (e.g. "extractor X doesn't match canonical pattern Y"),
 never project-specific bugs. Every YAML passes
 `backlog_sanitize_check` before filing.
 
+### Why discovery alone is not enough — the deeper-layer disease
+
+For most of its history the field-agent reported only the **surface
+layer it could see**: it ran the benchmark, observed the topmost
+failing layer, filed one backlog, and handed it off. The core-agent
+fixed exactly that surface — and then, on the next round, a **deeper
+layer surfaced** that had been hidden behind the one just fixed. The
+record is full of this multi-round drilling done the slow way, one
+layer per round-trip:
+
+- **#770 r2..r6** — five reopen rounds, each peeling one provenance
+  layer the prior fix had unmasked.
+- **#518 r1..r4** — the instantiation-graph / reset-skip family,
+  four rounds because each guard exposed the next wrapper shape.
+- **#780 r1..r2** — two rounds for what was, in hindsight, one
+  convergent defect.
+
+Each round costs a full file → core-fix → push → re-audit cycle just
+to **re-discover** the next layer that was always going to be there.
+The cure is structural: the field-agent must **DRILL to a
+fully-converged, all-layers-resolved state in its OWN sandbox
+worktree FIRST**, then hand the gatekeeper **ONE complete verified
+bundle** to **REVIEW + land** — not a surface symptom for the
+gatekeeper to re-discover layer by layer. This is the
+**deep-resolution contract** in the section of the same name below.
+
 ## State
 
 Every field-agent cron has a state file at the target folder root:
@@ -65,11 +91,19 @@ Schema:
   "agent_status": "<short status string>",
   "issue_number": <int or null>,       // primary tracked issue
   "tracking_secondary": [<int>, ...],  // secondary issues
+  "sandbox_worktree": "<path or null>", // deep-resolution prototype sandbox
+  "bundle_path": "<path or null>",      // handoff bundle dir for the primary
+  "residual_rounds_clean": <int>,       // consecutive clean-room rounds at 0 residual
   "last_summary": "<one paragraph>"
 }
 ```
 
-## The four-step loop
+## The loop
+
+The loop is **review → deep-resolve → file-bundle → monitor →
+audit**. Step 2 is no longer "file a one-line symptom"; it is "drill
+the gap to convergence in a sandbox, then file a complete verified
+**bundle**". Steps 1, 3, 4 are unchanged in shape.
 
 ### Step 1 — review
 
@@ -95,36 +129,76 @@ Dispatch a fresh **general-purpose Agent** with a prompt that:
 
 Save the dispatched agent's task id, set `agent_status=running`.
 
-### Step 2 — file
+### Step 2 — deep-resolve, then file the bundle
 
-When the dispatched agent reports concrete quality gaps:
+When the dispatched agent reports concrete quality gaps, do **not**
+file a surface symptom and hand off. First **drill the gap to a
+fully-converged, all-layers-resolved state in a throwaway sandbox
+worktree** (the full procedure is in **Deep-resolution before
+handoff** below), THEN file a complete verified bundle:
 
-1. For the top gap, write
+1. **Drill to convergence in a sandbox** — run the inner close-loop
+   (run benchmark IC → observe the TOP failing layer → prototype a
+   chip-AGNOSTIC fix → re-run → the next deeper layer surfaces →
+   prototype it too → repeat until **0 residual**). See the
+   deep-resolution section for the exact aggregate/audit probes and
+   the convergence criterion.
+2. **Admit the bundle** through the new admission gate before filing
+   anything:
+   ```bash
+   python3 plugins/vibe-ic/programs/handoff_bundle_check.py \
+       --bundle <bundle_dir>
+   #   exit 0  → bundle is admissible (0 residual × 2 rounds,
+   #             chip-AGNOSTIC candidate, per-LAYER tests, Step-2.7 run)
+   #   exit !0 → NOT admissible; the printed reason names the missing
+   #             criterion — fix it in the sandbox and re-run
+   ```
+   A bundle that does not pass this gate is NOT filed — it is still
+   a surface symptom, not a converged resolution.
+3. For the gap, write the backlog YAML
    `<plugin_root>/community/backlogs/ORGANIC-<YYYYMMDD>-<slug>.yaml`
-   using the schema in the `community-backlog-submit` skill.
-2. Sanitize:
+   using the schema in the `community-backlog-submit` skill, and
+   describe **all** layers the bundle resolves (not just the surface
+   one), so the gatekeeper reviews the converged whole.
+4. Sanitize:
    ```bash
    python3 <plugin_root>/programs/backlog_sanitize_check.py \
        --file <yaml>
    ```
-   If `pass: false` → fix the flagged literal, re-sanitize.
-3. File the GitHub issue (NO confirmation prompt):
+   If `pass: false` → fix the flagged literal, re-sanitize. The
+   `candidate.patch` inside the bundle is sanitized the same way —
+   no `ic-a`, `bench-a`, vendor names, or project paths as logic.
+5. File the GitHub issue (NO confirmation prompt), attaching the
+   bundle as the candidate **PROPOSAL** (never as a self-merged
+   change):
    ```bash
    gh issue create --repo reyerchu/AI_IC_design \
        --title "ORGANIC: <title>" \
        --body "$(cat <yaml>)"
    ```
-4. Save `state.issue_number = <primary>`,
-   `tracking_secondary = [<others>]`, `state.step = 3`.
+   The issue body links the bundle (`candidate.patch`, the per-layer
+   regression tests, the 2-round clean-room residual proof, the
+   Step-2.7 record). The patch rides as an **untrusted proposal** the
+   gatekeeper reviews and independently reproduces — see the
+   guardrails in the deep-resolution section.
+6. Save `state.issue_number = <primary>`,
+   `tracking_secondary = [<others>]`, `state.bundle_path = <dir>`,
+   `state.step = 3`.
 
-For multiple gaps in one review: file each as a separate issue.
-First filed becomes primary; rest go into `tracking_secondary`.
+**One bundle per independent root cause.** If the drill reveals that
+the "deep" problem is actually **several independent root causes**
+(not one convergent chain of layers), SPLIT into multiple
+bundles / issues — first filed becomes primary, the rest go into
+`tracking_secondary`. Do NOT ship one un-bisectable mega-bundle. (A
+single convergent chain of layers — like #770's provenance peel —
+IS one bundle; independent defects are NOT.)
 
-### Step 3 — monitor (until core closes)
+### Step 3 — monitor (until core/gatekeeper lands the bundle)
 
 `gh issue view <issue_number>` and watch for any of:
 - the issue transitions to **CLOSED** with label `core-closed`
-  (the core-agent self-verified + closed it)
+  (the gatekeeper independently reproduced + Step-2.7'd the bundle,
+  landed it, self-verified + closed it)
 - plugin version advances past `state.last_plugin_version`
 - maintainer comment
 
@@ -137,7 +211,14 @@ If plugin version bumps for an unrelated track (e.g. PnR fixes
 on a phase1 issue), just update `state.last_plugin_version` to
 the new version and stay in step 3.
 
-### Step 4 — audit (verify the closed fix, reopen if inadequate)
+> **The bundle is a PROPOSAL, not a merge.** Even a 0-residual
+> bundle is landed by the **gatekeeper only**. The field-agent
+> never pushes the prototype and never self-merges it. "Only
+> Core/gatekeeper edits the plugin" means only the gatekeeper
+> **LANDS** — it does not forbid the field-agent from prototyping
+> the fix. See the deep-resolution guardrails.
+
+### Step 4 — audit (verify the landed fix, reopen if inadequate)
 
 #### Verify discipline — ARTIFACT-FIRST (mandatory, chip-AGNOSTIC default)
 
@@ -289,6 +370,135 @@ echo "STOP cron."
 
 Exit.
 
+## Deep-resolution before handoff
+
+This is the core of the field-agent's job: **converge the whole stack
+of layers in your own sandbox, then hand the gatekeeper one complete
+verified bundle to review + land** — never a surface symptom for the
+gatekeeper to re-discover one layer per round-trip (#770 r2..r6,
+#518 r1..r4, #780 r1..r2). The field-agent is the layer-driller; the
+gatekeeper is the independent reviewer + lander.
+
+### Prototyping is allowed — in a throwaway sandbox only
+
+The field-agent **MAY prototype plugin fixes in a throwaway sandbox
+worktree.** Inside that sandbox it may run `rtl_hygiene_lint --fix`,
+re-synth, re-PnR, re-DRC, and edit programs or skills — whatever it
+takes to reach a converged fix. This is **not** a violation of "only
+Core/gatekeeper edits the plugin": that rule governs who **LANDS** a
+change, not whether the field may **prototype** one. Concretely:
+
+- The prototype lives in a **sandbox worktree** off the project, e.g.
+  `git worktree add <target>/_deep_resolve_sandbox <base-sha>`; record
+  it in `state.sandbox_worktree`.
+- The prototype is **NEVER pushed** and **NEVER self-merged**. It is
+  not committed to any shared branch the gatekeeper would treat as
+  authoritative.
+- The prototype rides into the handoff bundle as
+  **`candidate.patch`** — an **untrusted PROPOSAL**. The gatekeeper
+  independently reproduces it and decides whether to land it (often
+  re-deriving the fix rather than applying the patch verbatim).
+- Tear the sandbox down after the bundle is filed
+  (`git worktree remove`), but keep `candidate.patch` and the test
+  files inside the filed bundle.
+
+### The inner close-loop (drill to 0 residual)
+
+Run the failing benchmark IC through the runner and **peel layers
+until none remain**:
+
+1. **Run** the failing benchmark IC through the one-shot runner
+   (phase1 / phase2 / phase3 as the gap demands), in the sandbox.
+2. **Observe the TOP failing layer.** To answer "is there a *deeper*
+   layer hiding behind the one I'm looking at?", use the aggregate /
+   audit probes — they roll up every per-layer verdict so a fixed
+   surface layer cannot hide the next one:
+   - `python3 plugins/vibe-ic/programs/phase1_verify_aggregate.py <proj>`
+   - `python3 plugins/vibe-ic/programs/phase2_verify_aggregate.py <proj>`
+   - `python3 plugins/vibe-ic/programs/phase3_verify_aggregate.py <proj>`
+   - `python3 plugins/vibe-ic/programs/signoff_audit.py <proj>`
+     (sign-off layer roll-up: DRC / LVS / STA / IR-drop / antenna …)
+3. **Prototype a chip-AGNOSTIC fix** for the top layer in the sandbox
+   (program > skill; the fix must generalize — no chip/vendor/SKU
+   literal as logic, no keyword overfit, root cause not bypass).
+4. **Re-run.** The next deeper layer surfaces (this is exactly the
+   per-round peeling that #770 / #518 did across reopen rounds — now
+   collapsed into one sandbox session).
+5. **Prototype it too**, and **repeat from step 1** until the
+   aggregate/audit probes report **0 residual**.
+
+Capture a **per-LAYER regression test** for every layer you peel —
+both the surface layer and each deeper one — so a future run cannot
+silently re-open the chain. (A bundle that fixes 4 layers ships
+≥4 layer-pinned tests, each built from a clean independent reference
+fixture, never a fixture seeded from the very output under test.)
+
+### Convergence criterion (the bundle's admission gate)
+
+A bundle is **admissible for handoff** — and `handoff_bundle_check.py`
+(the NEW program the core-agent is adding) is the gate that enforces
+it — only when ALL of:
+
+- **0 residual across 2 INDEPENDENT clean-room rounds.** A fresh
+  clean-room re-run on the candidate plugin produces 0 residual that
+  needs a plugin fix, reproduced across **two** consecutive
+  independent rounds (not the same run inspected twice). Track the
+  count in `state.residual_rounds_clean`; it must reach 2.
+- **Candidate is chip-AGNOSTIC.** `candidate.patch` carries no
+  chip/vendor/SKU literal as logic; it passes `backlog_sanitize_check`
+  and the chip-AGNOSTIC source guard.
+- **Per-LAYER regression tests** — one for the surface layer and one
+  for each deeper layer the bundle resolves; each built from a clean
+  independent reference fixture.
+- **Field ran Step-2.7 on its OWN prototype** before handoff (the
+  adversarial multi-lens self-review on the candidate diff, recorded
+  in the bundle). The field does not hand off a prototype it has not
+  itself adversarially reviewed.
+
+Run the gate before filing (see Step 2):
+
+```bash
+python3 plugins/vibe-ic/programs/handoff_bundle_check.py --bundle <bundle_dir>
+#   exit 0  → admissible; file the bundle
+#   exit !0 → NOT admissible; the printed reason names the missing
+#             criterion (residual not 0×2 / not chip-agnostic /
+#             missing layer test / no Step-2.7 record) — fix in the
+#             sandbox and re-run
+```
+
+### CRITICAL guardrails — do NOT over-rotate
+
+Deep-resolution makes the field-agent stronger, not autonomous. The
+following are **non-negotiable** and bound the new power:
+
+1. **The gatekeeper still independently reproduces + Step-2.7s the
+   bundle.** The field's own 0-residual proof is a *proposal*, not a
+   verdict. **Never trust a force-overwrite-to-0 or a subagent-built
+   fixture blindly** — a `candidate.patch` that drives some residual
+   counter to 0 may have done so by *masking* a real defect rather
+   than fixing it (the documented force-overwrite-to-0 masking risk:
+   a detector that over-fires to 0 looks converged but is hiding a
+   mis-fire). The gatekeeper re-derives the fix and re-runs Step-2.7
+   on the bundle from a clean context; a 0 it cannot independently
+   reproduce is rejected.
+2. **KEEP the post-merge real-benchmark re-audit.** Even after the
+   gatekeeper lands the bundle, the field-agent's closed-audit safety
+   net (below) still re-checks the landed fix on the **real
+   benchmark**. A bundle/PR gives **role-independence, not
+   judgment-independence**: the deepest spec-interpretation layers
+   (does the generated design actually *mean* what the spec says?) are
+   blind to any local self-check — only a fresh agent re-reading the
+   spec against the real generated output catches them. The
+   deep-resolution drill does NOT retire the audit/reopen loop.
+3. **SPLIT independent root causes.** When the "deep" problem is
+   actually several **independent** root causes — not one convergent
+   chain of layers — file **multiple bundles / PRs**, never one
+   un-bisectable mega-PR. A mega-PR that bundles unrelated fixes
+   cannot be bisected when one of them regresses, and forces an
+   all-or-nothing review. (One convergent chain of layers, like #770's
+   provenance peel where each layer was hidden behind the previous, IS
+   a single bundle; genuinely independent defects are NOT.)
+
 ## The deterministic closed-audit rule
 
 The core-agent now self-verifies, CLOSES, and stamps `core-closed`
@@ -329,26 +539,36 @@ each, dispatch a fresh verify agent against the **real benchmark**:
 
 This is **non-negotiable**: an un-audited `core-closed` issue
 means a core-agent fix has never been confirmed on real silicon.
-The field-agent no longer waits for any `wait-for-verification`
-label — that label is **RETIRED**; the field audits CLOSED issues
-instead.
+A field-driven deep-resolution bundle does **not** exempt the issue
+from this audit — even a 0-residual bundle is re-checked on the real
+benchmark after it lands, because the bundle proves role-independence,
+not judgment-independence (see guardrail 2). The field-agent no
+longer waits for any `wait-for-verification` label — that label is
+**RETIRED**; the field audits CLOSED issues instead.
 
 ## Constraints (non-negotiable)
 
 - **NO RTL ORACLE**: never inspect `input/rtl/` or any generated
   RTL when assessing input-doc-only extractors. The plugin must
-  derive structure from input docs.
-- **Chip-AGNOSTIC backlog**: every YAML must pass
-  `backlog_sanitize_check`. No `ic-a`, `bench-a`, `vendor`,
-  `usb_hid_tester`, `aid`, vendor IC names, or project paths in the
-  title/pattern/suggested_fix. The authoritative deny-list lives
-  in `tests/chip_deny_list.txt`.
+  derive structure from input docs. (This holds inside the
+  deep-resolution sandbox too — prototyping a fix never licenses
+  reading the RTL oracle to "converge".)
+- **Chip-AGNOSTIC backlog AND candidate.patch**: every YAML and every
+  bundled `candidate.patch` must pass `backlog_sanitize_check`. No
+  `ic-a`, `bench-a`, `vendor`, `usb_hid_tester`, `aid`, vendor IC
+  names, or project paths in the title/pattern/suggested_fix or in the
+  patch logic. The authoritative deny-list lives in
+  `tests/chip_deny_list.txt`.
 - **Field-agent files GENERAL plugin gaps**, never chip-specific
   bugs. The user owns chip-specific fixes; the field-agent owns
   plugin generality.
+- **Prototype, never land.** The field-agent may prototype a fix in a
+  throwaway sandbox and ship it as `candidate.patch`, but it NEVER
+  pushes the prototype and NEVER self-merges. Only the gatekeeper
+  LANDS plugin changes.
 - **No y/n confirmation**: file issues directly. Do not ask.
-- **Sanitize before file**: every YAML, every time, even when
-  you're sure it's clean.
+- **Sanitize before file**: every YAML and every `candidate.patch`,
+  every time, even when you're sure it's clean.
 
 ## Campaign orchestration — single-driver principle
 
@@ -368,7 +588,10 @@ host lessons for keeping that hand-off clean:
   a lock left behind by a dead runner is cleaned as stale and the new
   runner proceeds. Treat a `CONCURRENT_RUN_REFUSED` as a signal to find
   and resolve the other driver — never to delete the lock by hand and
-  retry.
+  retry. **The deep-resolution sandbox is a SEPARATE project dir**
+  (its own worktree): never run the inner close-loop against the live
+  audited project — clone/worktree it so the sandbox runner holds its
+  own lock and never collides with the audit driver.
 
 - **Never abandon a background runner that still holds a project.**
   Before handing a project to a successor agent (or before STOP), the
@@ -376,7 +599,9 @@ host lessons for keeping that hand-off clean:
   or `kill` it. An abandoned, still-alive background runner keeps its
   lock and will (correctly) refuse the successor — and worse, if the
   lock is force-removed, both runners co-write and the run record is
-  silently corrupted.
+  silently corrupted. This applies to sandbox runners too — account
+  for every sandbox runner you spawn and tear the sandbox worktree
+  down after the bundle is filed.
 
 - **The double-driver incident (generic).** In a real campaign an
   orphaned background runner was left driving a project while the cron
@@ -402,6 +627,17 @@ rule (programs/check_closed_for_field_audit.sh): for each CLOSED
 agent against the real benchmark — VERIFIED → add `field-verified`
 (stays closed); NOT adequate → `gh issue reopen` + counter-evidence
 comment + remove `core-closed`.
+
+In Step 2, do NOT file a surface symptom. DRILL the gap to 0 residual
+in a throwaway sandbox worktree first (inner close-loop: run → observe
+top layer via phase{1,2,3}_verify_aggregate / signoff_audit →
+prototype a chip-AGNOSTIC fix → re-run → peel the next deeper layer →
+repeat), gate the bundle with handoff_bundle_check.py (0 residual ×2
+rounds + chip-AGNOSTIC candidate.patch + per-LAYER tests + your own
+Step-2.7), then file ONE complete verified bundle as a PROPOSAL. Split
+independent root causes into separate bundles. NEVER push or self-merge
+the prototype — the gatekeeper independently reproduces + Step-2.7s +
+lands it, and the post-merge real-benchmark re-audit still runs.
 
 [paste the four-step loop above, adapted to the target intent]
 
@@ -454,6 +690,16 @@ verification round) — all are now standing rules for EVERY fix audit:
    genuinely has no `## 驗收` section, fall back to reproducing the
    `現象` to an end-state; do not substitute unit-test trust.)
 
+   **The same trap applies to your OWN deep-resolution bundle.** The
+   bundle's 0-residual proof is *intermediate product of your
+   candidate.patch*, not proof the defect class is gone. Build each
+   per-layer regression test from a clean independent reference fixture
+   (a known-good N-stage shift-reg → N, a comb block → 0), NEVER from a
+   fixture seeded from the patch's own output — a subagent-built
+   fixture seeded from the output under test is circular and its green
+   test lies. This is also why the gatekeeper re-derives the fix rather
+   than trusting your patch's green tests (guardrail 1).
+
    **Filing convention (flow #485):** every `## 驗收` section you FILE
    must contain **at least one concrete executable command in fenced
    code** — narrative-only bullets leave the deterministic
@@ -473,6 +719,11 @@ verification round) — all are now standing rules for EVERY fix audit:
 
 ## Reference
 
+- Handoff bundle admission gate: `programs/handoff_bundle_check.py`
+- Layer roll-up probes (inner close-loop):
+  `programs/phase1_verify_aggregate.py`,
+  `programs/phase2_verify_aggregate.py`,
+  `programs/phase3_verify_aggregate.py`, `programs/signoff_audit.py`
 - Helper script: `programs/check_closed_for_field_audit.sh`
 - Backlog YAML schema + sanitize: `vibe-ic:community-backlog-submit`
 - Phase 1 deep review: `vibe-ic:phase1-completeness-deep-review`
