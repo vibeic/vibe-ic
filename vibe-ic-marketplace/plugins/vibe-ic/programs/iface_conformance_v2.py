@@ -77,6 +77,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+import _provenance as _prov  # noqa: E402  (ORGANIC #770)
+
+# ORGANIC #770 — a prompt interface signal whose ONLY evidence is a free-prose
+# direction-proximity scrape (`_DIR_NEAR_*`, wavedrom name) is a PROSE_HEURISTIC
+# source; a real markdown signal table or the prompt's given-code module header
+# is a STRUCTURAL source. A finding sourced ONLY from prose/wavedrom is
+# provenance-gated against the RTL; a finding with ANY structural source keeps
+# its historical blocking power.
+_STRUCTURAL_IFACE_SOURCES = frozenset({"table", "given_code"})
+
+
+def _iface_provenance(sources: Set[str]) -> str:
+    """STRUCTURAL when any source is a real table / given-code header; else
+    PROSE_HEURISTIC (prose-direction proximity, wavedrom). chip-AGNOSTIC."""
+    if sources & _STRUCTURAL_IFACE_SOURCES:
+        return _prov.STRUCTURAL
+    return _prov.PROSE_HEURISTIC
+
 
 # ── id → canonical harness TOPLEVEL stem ────────────────────────────────────
 # Mirrors cvdp_gate.required_top_from_id but kept self-contained so this gate
@@ -862,6 +880,13 @@ def extract_prompt_iface(prompt: str) -> PromptIface:
 class Finding:
     kind: str       # MODULE-NAME-CASE | MISSING-PORT | PORT-DIRECTION
     message: str
+    # ORGANIC #770 — provenance/confidence gate. A finding may HARD-BLOCK under
+    # --strict only when block_eligible (STRUCTURAL source, or a PROSE_HEURISTIC
+    # source the RTL corroborates). A PROSE_HEURISTIC finding the RTL contradicts
+    # / does not back is ADVISORY (reported, never a veto). Default True
+    # (fail-closed: MODULE-NAME-CASE and any un-tagged finding keep blocking).
+    block_eligible: bool = True
+    advisory_note: str = ""
 
 
 def check_conformance(rid: Optional[str], prompt: str, rtl_text: str,
@@ -974,13 +999,26 @@ def check_conformance(rid: Optional[str], prompt: str, rtl_text: str,
                 and not (pif.ports.get(name) or "").strip()):
             continue
         if name.lower() not in all_port_names_lower:
-            srcs = ",".join(sorted(pif.sources.get(name, set())))
+            name_sources = pif.sources.get(name, set())
+            srcs = ",".join(sorted(name_sources))
+            # ORGANIC #770 — provenance gate. A name from a real signal table /
+            # given-code header (STRUCTURAL) that the RTL omits is a genuine
+            # missing port → BLOCK-eligible. A name whose ONLY evidence is a
+            # free-prose scrape (PROSE_HEURISTIC) and which is ABSENT from the
+            # RTL has NO structural corroboration (a phantom port: `'and'`
+            # scraped from "Input and output ...", an FSM-state name) → ADVISORY.
+            prov = _iface_provenance(name_sources)
+            corr = _prov.corroborate_port_presence(name, all_port_names_lower)
+            block = _prov.is_block_eligible(prov, corr)
             findings.append(Finding(
                 "MISSING-PORT",
                 f"MISSING-PORT: prompt names interface signal '{name}' "
                 f"(source: {srcs}) but the RTL port list does not declare it "
                 f"— the harness binds to this net by name (advisory: confirm "
-                f"it is a port, not an internal signal)"))
+                f"it is a port, not an internal signal)",
+                block_eligible=block,
+                advisory_note=("" if block
+                               else _prov.advisory_reason(prov, corr))))
 
     # (3) PORT-DIRECTION: a TOP port the RTL declares with a direction that
     # disagrees with the prompt's signal table. The harness binds the top, so
@@ -997,11 +1035,26 @@ def check_conformance(rid: Optional[str], prompt: str, rtl_text: str,
         if have in ("unknown", ""):
             continue
         if have != want:
+            # ORGANIC #770 — provenance gate. A direction from a real signal
+            # table / given-code header (STRUCTURAL) that the RTL contradicts is
+            # a genuine direction conflict → BLOCK-eligible. A direction whose
+            # ONLY evidence is a free-prose `_DIR_NEAR_*` scrape
+            # (PROSE_HEURISTIC) that the RTL's OWN structural declaration refutes
+            # (have != want) is the author's RTL winning over a low-confidence
+            # prose guess → ADVISORY (the RTL's explicit declaration is stronger
+            # evidence than a prose-proximity heuristic).
+            name_sources = pif.sources.get(name, set())
+            prov = _iface_provenance(name_sources)
+            corr = _prov.corroborate_direction(want, have)
+            block = _prov.is_block_eligible(prov, corr)
             findings.append(Finding(
                 "PORT-DIRECTION",
                 f"PORT-DIRECTION: prompt declares '{name}' as {want} but the "
                 f"RTL declares it {have} — the harness drives/reads it as "
-                f"{want}, so the opposite direction FAILs functionally"))
+                f"{want}, so the opposite direction FAILs functionally",
+                block_eligible=block,
+                advisory_note=("" if block
+                               else _prov.advisory_reason(prov, corr))))
     return findings
 
 
@@ -1021,8 +1074,13 @@ def run(rid: Optional[str], prompt_path: Path, rtl_path: Path,
         "harness_top": harness_top_from_id(rid),
         "rtl_module": rtl.module_name,
         "rtl_ports": rtl.ports,
-        "findings": [{"kind": f.kind, "message": f.message} for f in findings],
+        "findings": [{"kind": f.kind, "message": f.message,
+                      "block_eligible": f.block_eligible,
+                      "advisory_note": f.advisory_note} for f in findings],
         "conformant": not findings,
+        # ORGANIC #770 — a finding that is reported but not BLOCK-eligible
+        # (a prose-heuristic finding the RTL contradicts) does not hard-block.
+        "blocking_findings": sum(1 for f in findings if f.block_eligible),
         # provenance: prove the gate only read the handed-in files (blind) —
         # the prompt, the authored RTL, and any harness-supplied context RTL.
         "files_read": [str(prompt_path), str(rtl_path)]
@@ -1077,11 +1135,17 @@ def main(argv=None) -> int:
         print("interface-conformance ok")
         return 0
     for f in findings:
-        print(f.message)
+        suffix = "" if f.block_eligible else f"  [ADVISORY — {f.advisory_note}]"
+        print(f.message + suffix)
     mode = "strict" if args.strict else "advisory"
-    print(f"interface-conformance: {len(findings)} finding(s) [{mode}]",
-          file=sys.stderr)
-    return 1 if args.strict else 0
+    # ORGANIC #770 — under --strict, only a BLOCK-eligible finding (STRUCTURAL,
+    # or a prose-heuristic finding the RTL corroborates) hard-blocks. A
+    # prose-heuristic finding the RTL contradicts / does not back is reported but
+    # does NOT veto a correct emit.
+    blocking = [f for f in findings if f.block_eligible]
+    print(f"interface-conformance: {len(findings)} finding(s) "
+          f"({len(blocking)} block-eligible) [{mode}]", file=sys.stderr)
+    return 1 if (args.strict and blocking) else 0
 
 
 if __name__ == "__main__":

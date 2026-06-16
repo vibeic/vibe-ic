@@ -287,9 +287,16 @@ def _nearest_metric_for_pct(text: str, low: str, pct_start: int, pct_end: int
             return _METRIC_WIRES
         return _METRIC_CELLS if fc < fw else _METRIC_WIRES
 
-    # BACKWARD fallback: nearest metric word BEFORE the '%' (within 40 chars,
+    # BACKWARD fallback: nearest metric word BEFORE the '%' (within 60 chars,
     # not crossing a previous '%').
-    bwd_start = max(0, pct_start - 40)
+    # ORGANIC #771 — widened 40→60 to MATCH the single-tuple parser's ±60-char
+    # window (`parse_threshold_from_prompt`, line ~198). The asymmetric 40-char
+    # backward reach let an explicitly single-metric spec ("…the number of wires
+    # used. The minimum reduction must be 50%…") whose metric word sits 41–60
+    # chars before the '%' fall through to the conservative `both` bind, so a
+    # correct wire-only / cell-only optimization silently degraded to a
+    # NOT-APPLICABLE no-enforcement verdict on a degenerate-but-correct design.
+    bwd_start = max(0, pct_start - 60)
     prev = text.rfind("%", 0, pct_start)
     if prev != -1 and prev >= bwd_start:
         bwd_start = prev + 1
@@ -308,6 +315,19 @@ def _nearest_metric_for_pct(text: str, low: str, pct_start: int, pct_end: int
     bw = _closest_bwd(_WIRE_TOKEN_RE)
     if bc is None and bw is None:
         return None
+    # ORGANIC #771 — when BOTH a cell and a wire token sit in the backward window
+    # AND no clause break ('and'/'or'/','/';') separates the nearer one from the
+    # '%', this is a SINGLE "both cells and wires by N%" clause, not two clauses.
+    # Return None so the caller binds the conservative `both` — matching the
+    # single-tuple parser's co-occurrence semantics (line ~204) and preventing the
+    # widened (60-char) backward window from mis-binding a true `both` spec to the
+    # nearer single metric. (Two genuinely separate clauses are split by the
+    # forward-priority scan above before ever reaching here.)
+    if bc is not None and bw is not None:
+        near_off = len(bwd) - min(bc, bw)   # start offset of the NEARER token
+        if not re.search(r"[,;]|\b(?:and|or|either|while|whereas)\b",
+                         bwd[near_off:], re.IGNORECASE):
+            return None
     if bw is None:
         return _METRIC_CELLS
     if bc is None:

@@ -113,6 +113,24 @@ try:
 except ImportError:  # packaged
     from . import _specrtl_common as _SRC  # type: ignore
 
+try:
+    import _provenance as _prov  # ORGANIC #770
+except ImportError:  # packaged
+    from . import _provenance as _prov  # type: ignore
+
+# ORGANIC #770 — checklist kinds whose evidence is a FREE-PROSE keyword/regex
+# (low confidence) vs a real structural source. STRUCTURAL kinds (a real markdown
+# table row, a given-code port header) keep their historical blocking power; a
+# PROSE_HEURISTIC kind's coverage gap blocks only when the RTL corroborates it.
+_PROSE_HEURISTIC_KINDS = frozenset({
+    "reset", "latency", "enum_boundary", "worked_example",
+    "signedness", "byte_order", "overflow", "handshake", "enum_set",
+})
+# 'port' and 'table_row' come from the canonical structural extractor
+# (`extract_spec_contract`: real table / given-code header), so they stay
+# STRUCTURAL — EXCEPT a prose-derived port name that is ABSENT from the RTL (a
+# phantom scraped from prose), which is provenance-downgraded in run().
+
 
 # ---------------------------------------------------------------------------
 # Input-chain stations — ordered USER -> PM -> IC-EXPERT (most-downstream last).
@@ -160,6 +178,16 @@ class ChecklistItem:
     # input-chain stations this requirement was found at + the most-downstream
     stations: List[str] = field(default_factory=list)
     last_station: str = ""
+    # ORGANIC #770 — provenance/confidence gate. STRUCTURAL items (real markdown
+    # table row / given-code port header / measured fact) always BLOCK when
+    # uncovered. A PROSE_HEURISTIC item (free-prose keyword/regex) BLOCKs only
+    # when the RTL corroborates it; a prose item the RTL CONTRADICTS or does not
+    # structurally back is ADVISORY (a coverage GAP is reported but does not
+    # hard-block under --strict). Default STRUCTURAL (fail-closed: an un-tagged
+    # item keeps its historical blocking power).
+    provenance: str = "STRUCTURAL"
+    block_eligible: bool = True
+    advisory_note: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +379,28 @@ def _rtl_port_name_set(rtl_text: Optional[str]) -> set:
         return set()
     return {p.name.lower() for p in ports
             if p.name and p.name.lower() not in _RTL_PORT_NOISE}
+
+
+# ORGANIC #770 — a clocked (registered) block detector, for latency corroboration.
+_CLOCKED_BLOCK_RE = re.compile(
+    r"@\s*\(\s*(?:posedge|negedge)\b", re.IGNORECASE)
+
+
+def _rtl_has_clocked_block(rtl_text: Optional[str]) -> Optional[bool]:
+    """True iff the RTL has a clock-edge-sensitive (registered) block; False iff
+    it parses but has NONE (provably pure-combinational); None when no RTL.
+
+    Used to corroborate a prose 'latency'/'registered' requirement: a prose
+    latency claim on a design with no clocked block at all is CONTRADICTED by the
+    RTL structure. chip-AGNOSTIC: pure Verilog edge-sensitivity grammar; comment-
+    stripped so a `// posedge` mention never false-positives."""
+    if not rtl_text:
+        return None
+    try:
+        stripped = _SRC._strip_comments(rtl_text)
+    except Exception:
+        stripped = rtl_text
+    return bool(_CLOCKED_BLOCK_RE.search(stripped))
 
 
 # ORGANIC #743 — negation-aware feature presence. A spec whose ONLY mention of
@@ -776,6 +826,34 @@ def _inside_braces(text: str, pos: int) -> bool:
 _GFM_ROW_RE = re.compile(r"^\s*\|(.+)\|\s*$", re.M)
 
 
+def _markdown_table_text(text: str) -> str:
+    """ORGANIC #770 Step-2.7 — concatenated text of every markdown TABLE ROW in
+    `text` (a `|`-delimited line that belongs to a GFM table: it sits next to a
+    `|---|`-style delimiter row). Used to tell whether a behavioral requirement
+    (latency / reset / overflow / …) has a STRUCTURAL source (stated in a table
+    cell, e.g. `| Output latency | 1 clock cycle |`) versus only a free-prose
+    mention — a structural-sourced behavioral item must NOT be downgraded to
+    advisory even when the RTL appears to contradict it. chip-AGNOSTIC, pure GFM
+    grammar; no-leak biased (it only PROMOTES items to STRUCTURAL)."""
+    lines = text.splitlines()
+    n = len(lines)
+    out: List[str] = []
+    i = 0
+    _delim = re.compile(r"\|?[\s:\-|]+\|?")
+    while i < n - 1:
+        if lines[i].count("|") >= 2 and "-" in lines[i + 1] \
+                and _delim.fullmatch(lines[i + 1].strip()):
+            out.append(lines[i])            # header row
+            j = i + 2
+            while j < n and lines[j].count("|") >= 2:
+                out.append(lines[j])        # body rows
+                j += 1
+            i = j
+        else:
+            i += 1
+    return "\n".join(out)
+
+
 def _extract_table_rows(text: str) -> List[dict]:
     """Extract opcode/mode -> output rows from a 2+-column markdown table.
 
@@ -1076,7 +1154,70 @@ def run(stations: dict, rtl_text: Optional[str], tb_text: Optional[str],
 
     attribute_coverage(items, tb_text, enum_members_all)
 
+    # ── ORGANIC #770 — provenance / confidence tagging ──────────────────────
+    # Tag each item STRUCTURAL vs PROSE_HEURISTIC and compute whether the RTL
+    # corroborates a prose item. A coverage GAP on a PROSE_HEURISTIC item that
+    # the RTL CONTRADICTS or does not structurally back is downgraded to
+    # ADVISORY (block_eligible=False); STRUCTURAL gaps keep blocking. No-leak
+    # biased: when no RTL is supplied (rtl_text None) every corroboration is
+    # UNKNOWN, so NOTHING is downgraded — historical blocking power is preserved.
+    rtl_ports_lower = _rtl_port_name_set(rtl_text) if rtl_text else None
+    rtl_has_reset = bool(_rtl_reset_ports(rtl_text)) if rtl_text else None
+    rtl_has_clock = _rtl_has_clocked_block(rtl_text) if rtl_text else None
+    # ORGANIC #770 Step-2.7 — a behavioral requirement STATED IN A MARKDOWN TABLE
+    # is a STRUCTURAL source (high confidence), not a free-prose guess, so it must
+    # keep its block even when the RTL appears to contradict it. Detect each
+    # behavioral kind's trigger inside the table-cell text; if present, that kind
+    # is structurally sourced and is NOT provenance-downgraded.
+    _all_spec = "\n".join(v for v in stations.values() if v)
+    _table_txt = _markdown_table_text(_all_spec)
+    _structural_kinds = set()
+    if _table_txt:
+        tl = _table_txt.lower()
+        if _LATENCY_RE.search(_table_txt):
+            _structural_kinds.add("latency")
+        if re.search(r"\breset\b|\brst\b|\bpor\b", tl):
+            _structural_kinds.add("reset")
+        if _OVERFLOW_RE.search(_table_txt):
+            _structural_kinds.add("overflow")
+        if _HANDSHAKE_RE.search(_table_txt):
+            _structural_kinds.add("handshake")
+        if _SIGNED_RE.search(_table_txt):
+            _structural_kinds.add("signedness")
+        if _BYTEORDER_RE.search(_table_txt):
+            _structural_kinds.add("byte_order")
+    for it in items:
+        if it.kind in _PROSE_HEURISTIC_KINDS and it.kind not in _structural_kinds:
+            it.provenance = _prov.PROSE_HEURISTIC
+            corr = _prov.UNKNOWN
+            if it.kind == "reset":
+                # corroborated iff the RTL actually has a reset port; a prose
+                # 'reset' mention with NO reset port AND no clock (pure comb) has
+                # no structural backing.
+                if rtl_has_reset is True:
+                    corr = _prov.CORROBORATED
+                elif rtl_text is not None and not rtl_has_reset and not rtl_has_clock:
+                    corr = _prov.NO_CORROBORATION
+            elif it.kind == "latency":
+                # corroborated iff the RTL has a clocked (registered) block; a
+                # prose latency on a provably pure-combinational RTL is contradicted.
+                corr = _prov.corroborate_structural_feature(rtl_has_clock)
+            it.block_eligible = _prov.is_block_eligible(it.provenance, corr)
+            if not it.block_eligible:
+                it.advisory_note = _prov.advisory_reason(it.provenance, corr)
+        # NOTE (#770 §4.05): the `port` kind is DELIBERATELY NOT
+        # provenance-downgraded here. A spec port absent from the RTL port set
+        # cannot be told apart from a phantom by absence alone — that exact
+        # "drop if absent from RTL" cross-check WAS the #752 §4.05 leak (it waved
+        # through an RTL that wrongly omitted a real required port; see the
+        # comment block above). Phantom prose-words like `'and'` (scraped from
+        # "Input and output signals ...") are fixed AT EXTRACTION in
+        # `_specrtl_common._nl_port_is_prose`, never by a downstream absence test.
+        # So `port` stays STRUCTURAL → a genuine missing port still BLOCKs.
+
     gaps = [it for it in items if it.covered is False]
+    # ORGANIC #770 — only a BLOCK-eligible gap hard-blocks under --strict.
+    blocking_gaps = [it for it in gaps if it.block_eligible]
     report = {
         "gate": "spec_coverage_check",
         "doctrine": "spec-first coverage attribution (#697): 'spec' is the whole "
@@ -1094,10 +1235,14 @@ def run(stations: dict, rtl_text: Optional[str], tb_text: Optional[str],
         report["failure_attribution"] = attribute_failure(
             failure_text, items, stations)
 
-    # block decision: only TESTBENCH-COVERAGE GAPs gate (and only in --strict)
+    # block decision: only BLOCK-eligible TESTBENCH-COVERAGE GAPs gate (#770),
+    # and only in --strict. An advisory (prose-heuristic, RTL-contradicted /
+    # uncorroborated) gap is reported but never a hard veto.
     report["pass"] = (len(gaps) == 0)
+    report["advisory_gaps"] = len(gaps) - len(blocking_gaps)
+    report["blocking_gaps"] = len(blocking_gaps)
     report["strict"] = strict
-    report["blocked"] = bool(strict and gaps)
+    report["blocked"] = bool(strict and blocking_gaps)
     return report
 
 
@@ -1110,6 +1255,11 @@ def _print_human(report: dict) -> None:
         loc = f" [{it.get('last_station', '')}]" if it.get("last_station") else ""
         if it["covered"]:
             print(f"  [OK]   {it['kind']}{loc}: {it['requirement']}")
+        elif not it.get("block_eligible", True):
+            # ORGANIC #770 — a prose-heuristic gap the RTL contradicts / does not
+            # back is reported but does NOT hard-block.
+            print(f"  [ADVISORY] {it['kind']}{loc}: {it['requirement']} "
+                  f"(UNCOVERED, advisory — {it.get('advisory_note', '')})")
         else:
             print(f"  [GAP]  {it['kind']}{loc}: {it['requirement']} (UNCOVERED) "
                   f"-- {it['coverage_note']}")
