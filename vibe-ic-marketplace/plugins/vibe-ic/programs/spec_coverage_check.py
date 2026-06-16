@@ -485,6 +485,53 @@ def _rtl_port_name_set(rtl_text: Optional[str],
     return names
 
 
+def _tb_instantiated_module_types(tb_text: Optional[str], modset: set) -> List[str]:
+    """The DISTINCT RTL module type names the TB instantiates, in order
+    (`Type inst (...)` / `Type #(...) inst (...)`). chip-AGNOSTIC, pure Verilog
+    instantiation grammar."""
+    if not tb_text:
+        return []
+    out: List[str] = []
+    seen: set = set()
+    for im in re.finditer(
+            r"\b([A-Za-z_]\w*)\s+[A-Za-z_]\w*\s*(?:#\s*\([^)]*\)\s*)?\(",
+            tb_text):
+        t = im.group(1)
+        if t in modset and t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+
+def _ambiguous_port_names(rtl_text: Optional[str],
+                          tb_text: Optional[str]) -> set:
+    """Lower-cased port names declared by ≥2 DISTINCT module TYPES the TESTBENCH
+    instantiates — e.g. a DUT and a separate monitor/driver module that happen to
+    share a port name like `m_axis_tready`.
+
+    ORGANIC #770 r6 Step-2.7 (§4.05 no-leak): a named instance connection
+    `.shared_port(local)` cannot be unambiguously attributed to the DUT instance
+    vs the sibling's, so the handshake alias-credit path must NOT trust it — a TB
+    that toggles only a MONITOR's same-named handshake port (while the DUT's port
+    is tied to a constant) would otherwise be wrongly credited as exercising the
+    DUT handshake. Empty when the TB instantiates <2 distinct module types (the
+    common single-DUT self-TB), so the legitimate single-design alias path
+    (r6 FP, axis_joiner_0001) is untouched. chip-AGNOSTIC."""
+    if not rtl_text or not tb_text:
+        return set()
+    mods = set(re.findall(r"\bmodule\s+(\w+)\b", rtl_text))
+    if not mods:
+        return set()
+    types = _tb_instantiated_module_types(tb_text, mods)
+    if len(types) < 2:
+        return set()
+    counts: Dict[str, int] = {}
+    for t in types:
+        for nm in _rtl_module_port_names(rtl_text, t):
+            counts[nm] = counts.get(nm, 0) + 1
+    return {nm for nm, c in counts.items() if c >= 2}
+
+
 # ORGANIC #770 — a clocked (registered) block detector, for latency corroboration.
 _CLOCKED_BLOCK_RE = re.compile(
     r"@\s*\(\s*(?:posedge|negedge)\b", re.IGNORECASE)
@@ -1163,8 +1210,32 @@ def _is_handshake_signal(name: str) -> bool:
                 or _HANDSHAKE_SIGNAL_RE.search(n))
 
 
+# ORGANIC #770 r6 — a NAMED instance port connection `.<dut_port>(<tb_local>)`.
+# The TB declares a LOCAL reg (`reg m_tready;`) and wires it to the DUT's port
+# (`.m_axis_tready(m_tready)`); it then TOGGLES the local reg. The DUT-port set
+# holds the PORT name (`m_axis_tready`), so a membership test on the toggled
+# LOCAL name (`m_tready`) misses. This captures the local↔port alias so a driven
+# local name can be mapped to its DUT port before the membership test.
+_NAMED_CONN_RE = re.compile(
+    r"\.\s*([A-Za-z_]\w*)\s*\(\s*([A-Za-z_]\w*)\s*\)")
+
+
+def _tb_local_to_dut_port(tb_clean: str) -> Dict[str, str]:
+    """Map each TB-local signal name -> the DUT port it is connected to via a
+    NAMED instance connection `.dut_port(local)`. chip-AGNOSTIC, pure grammar.
+    (ORGANIC #770 r6, axis_joiner_0001 `.m_axis_tready(m_tready)`.)"""
+    amap: Dict[str, str] = {}
+    for m in _NAMED_CONN_RE.finditer(tb_clean):
+        dut_port, local = m.group(1).lower(), m.group(2).lower()
+        # a same-name connection (`.clk(clk)`) is a no-op for the alias.
+        if local != dut_port:
+            amap[local] = dut_port
+    return amap
+
+
 def _tb_exercises_handshake_region(tb_clean: str,
-                                   rtl_ports_lower: Optional[set] = None) -> bool:
+                                   rtl_ports_lower: Optional[set] = None,
+                                   ambiguous_ports: Optional[set] = None) -> bool:
     """True iff the TB structurally exercises a valid/ready handshake: it drives
     at least one valid/ready DUT-interface port to BOTH a high (1) and a low (0)
     value — the backpressure / handshake-exchange toggle signature. Merely
@@ -1183,15 +1254,39 @@ def _tb_exercises_handshake_region(tb_clean: str,
     `2-1` — is just HOLDING the line and does NOT exercise the handshake (r3
     Step-2.7 caught the syntactic "non-literal ⇒ non-constant" conflation).
     chip-AGNOSTIC. (axis_joiner_0001, #770 r2/r3)"""
+    # ORGANIC #770 r6 — TB-local → DUT-port alias from named connections, so a
+    # toggled local reg (`m_tready`) wired to a DUT handshake port
+    # (`.m_axis_tready(m_tready)`) is recognised as exercising that DUT port.
+    alias = _tb_local_to_dut_port(tb_clean)
+
     def _is_dut_hs(sig: str) -> bool:
-        if not _is_handshake_signal(sig):
-            return False
-        # the driven signal must be a real DUT port (when the port set is known)
-        # — a TB-local decoy reg never counts as exercising the DUT handshake.
-        # (ORGANIC #770 r5 — the port set is now UNIONED across ALL modules in
-        # `_rtl_port_name_set`, so a multi-module RTL whose top is not first no
-        # longer drops the real handshake port and force-empties this gate.)
-        return rtl_ports_lower is None or sig.lower() in rtl_ports_lower
+        s = sig.lower()
+        mapped = alias.get(s, s)
+        # Resolve the DUT PORT this driven signal reaches: the signal itself if it
+        # is a port, else the port it aliases to via a named connection.
+        if rtl_ports_lower is None:
+            # no port set to judge — accept on the handshake-shaped name alone
+            # (the signal itself, or the port it maps to).
+            return _is_handshake_signal(s) or _is_handshake_signal(mapped)
+        if s in rtl_ports_lower:
+            dut_port = s
+        elif mapped in rtl_ports_lower:
+            # ORGANIC #770 r6 Step-2.7 §4.05: the credit here comes via a NAMED
+            # CONNECTION alias (`.mapped(s)`), not s being a DUT port itself. If
+            # `mapped` is a port name shared by ≥2 distinct TB-instantiated module
+            # types, the connection cannot be attributed to the DUT instance (it
+            # may target a sibling MONITOR's same-named port) → do NOT credit the
+            # handshake via this ambiguous alias.
+            if ambiguous_ports and mapped in ambiguous_ports:
+                return False
+            dut_port = mapped
+        else:
+            return False                      # reaches no DUT port → decoy
+        # the DUT PORT it drives must itself be a valid/ready handshake line. A
+        # local whose NAME contains 'ready' but is wired to a NON-handshake port
+        # (e.g. `.m_axis_tdata(myready)`) is NOT exercising the handshake (r6
+        # Step-2.7: judge the PORT, not the local name).
+        return _is_handshake_signal(dut_port)
 
     high: set = set()
     low: set = set()
@@ -1309,7 +1404,8 @@ def _is_single_signal_concat_assignment(spec_text: str, brace_match) -> bool:
 # ---------------------------------------------------------------------------
 def attribute_coverage(items: List[ChecklistItem], tb_text: Optional[str],
                        enum_members_all: List[str],
-                       rtl_ports_lower: Optional[set] = None) -> None:
+                       rtl_ports_lower: Optional[set] = None,
+                       ambiguous_ports: Optional[set] = None) -> None:
     """Set .covered / .coverage_note for each checklist item based on whether
     the authored TB exercises it. No TB => everything UNCOVERED.
 
@@ -1401,7 +1497,8 @@ def attribute_coverage(items: List[ChecklistItem], tb_text: Optional[str],
                 and re.search(r"\b" + re.escape(tok.strip().lower()) + r"\b",
                               tb_low)
                 for tok in it.coverage_tokens)
-            region = _tb_exercises_handshake_region(tb_clean, rtl_ports_lower)
+            region = _tb_exercises_handshake_region(
+                tb_clean, rtl_ports_lower, ambiguous_ports)
             it.covered = bool(region or token_hit)
             if region and token_hit:
                 it.coverage_note = ("TB toggles a handshake signal (valid/ready "
@@ -1566,8 +1663,10 @@ def run(stations: dict, rtl_text: Optional[str], tb_text: Optional[str],
         if it.kind == "enum_set":
             enum_members_all += it.coverage_tokens
 
-    attribute_coverage(items, tb_text, enum_members_all,
-                       _rtl_port_name_set(rtl_text, tb_text) if rtl_text else None)
+    attribute_coverage(
+        items, tb_text, enum_members_all,
+        _rtl_port_name_set(rtl_text, tb_text) if rtl_text else None,
+        _ambiguous_port_names(rtl_text, tb_text) if rtl_text else None)
 
     # ── ORGANIC #770 — provenance / confidence tagging ──────────────────────
     # Tag each item STRUCTURAL vs PROSE_HEURISTIC and compute whether the RTL
