@@ -66,16 +66,23 @@ def test_753_prose_directional_port_not_masked_by_helper_internal():
     assert "data_valid" in blob and "MISSING-PORT" in blob
 
 
-# ── #756 — a 'both' clause with a per-metric lazy under-reduction (one metric
-#    has real generic headroom) must BLOCK, matching legacy decide() (MEDIUM:
-#    the min()-collapse downgraded BLOCK → NOT_APPLICABLE) ─────────────────────
-def test_756_both_clause_per_metric_headroom_blocks():
+# ── #756 — a 'both' clause with a per-metric REAL under-reduction must BLOCK,
+#    matching legacy decide() (MEDIUM: the min()-collapse downgraded BLOCK →
+#    NOT_APPLICABLE). ORGANIC #769 RE-ANCHOR: a metric whose GENERIC reduction
+#    meets the bar now PASSES (the scorer measures the GENERIC count), and a
+#    no-reference real-but-insufficient generic delta is advisory NOT_APPLICABLE
+#    (#768 fail-safe). The surviving hard per-metric no-leak is a GROWN metric —
+#    pin BOTH decide_clauses and decide on it so the parity this test guards
+#    holds. ──────────────────────────────────────────────────────────────────
+def test_756_both_clause_per_metric_grown_blocks():
     clauses, comb = P.parse_threshold_clauses_from_prompt(
         "reduce the total area by 10%")
     assert clauses == [(10.0, "both")] and comb == "and"
-    new = P.decide_clauses(4.0, 5.0, clauses, comb,
+    # cells GREW (negative mapped) → a real per-metric regression; wires clears
+    # on its generic count. The 'both' clause must BLOCK on the grown cells.
+    new = P.decide_clauses(-4.0, 5.0, clauses, comb,
                            cells_red_generic=3.0, wires_red_generic=20.0)[0]
-    legacy = P.decide(4.0, 5.0, 10.0, "both",
+    legacy = P.decide(-4.0, 5.0, 10.0, "both",
                       cells_red_generic=3.0, wires_red_generic=20.0)[0]
     assert new == "BLOCK", new
     assert new == legacy

@@ -184,10 +184,20 @@ def test_rtl_top_ports_helper_excludes_parameter(tmp_path):
     assert "size" not in names
 
 
-def test_rtl_top_ports_helper_empty_on_non_ansi(tmp_path):
+def test_rtl_top_ports_helper_parses_non_ansi(tmp_path):
+    # ORGANIC #766 — the shared parse_module_ports now falls back to a NON-ANSI
+    # body scan, so the helper recovers the real DUT port surface of a non-ANSI
+    # top (`module mul_top(a, z); input a; output z;`) instead of returning [].
+    # (Before #766 the shared parser dropped every bare header name and this
+    # helper returned [] on the entire non-ANSI class — a documented limitation
+    # that the #766 fix removes; the TB reconcile now sees the true port list.)
     proj = _seed(tmp_path, _L9_CORRUPT,
                  "module mul_top(a, z);\n input a; output z;\nendmodule\n")
-    assert P2._v629_rtl_top_ports(proj, "mul_top") == []
+    ports = P2._v629_rtl_top_ports(proj, "mul_top")
+    names = [t[1] for t in ports]
+    dirs = [t[0] for t in ports]
+    assert names == ["a", "z"], ports
+    assert dirs == ["input", "output"], ports
 
 
 if __name__ == "__main__":

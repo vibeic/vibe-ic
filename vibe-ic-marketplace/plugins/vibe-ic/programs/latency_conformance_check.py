@@ -128,6 +128,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from reset_clock_variant_alias import (  # noqa: E402
     parse_module_ports,
     parse_module_params,
+    _module_body,
 )
 
 # The timing-conformance family. Only `latency` is fully implemented; the
@@ -541,31 +542,130 @@ def _width_of(width_str: str) -> int:
 
 
 class PortInfo:
-    __slots__ = ("name", "direction", "width_str")
+    __slots__ = ("name", "direction", "width_str", "unpacked_dims")
 
-    def __init__(self, name: str, direction: str, width_str: str):
+    def __init__(self, name: str, direction: str, width_str: str,
+                 unpacked_dims: str = ""):
         self.name = name
         self.direction = direction
         self.width_str = (width_str or "").strip()
+        # ORGANIC #767 — the trailing UNPACKED array dimension(s) declared
+        # AFTER the port name (`input wire [7:0] lane [7:0]` /
+        # `... mem [0:3][7:0]`). The shared parser's 3-tuple keeps only the
+        # PACKED width + name; this carries the post-name dimension string
+        # (e.g. "[7:0]" or "[0:3][7:0]") so the measurement TB can model the
+        # port as an array (per-element decl + drive) instead of wiring a
+        # scalar reg to a DUT array port (an iverilog elaboration ERROR).
+        # Empty string for an ordinary scalar/packed-only port (no leak).
+        self.unpacked_dims = (unpacked_dims or "").strip()
+
+    @property
+    def is_array(self) -> bool:
+        return bool(self.unpacked_dims)
+
+
+# ─── unpacked-array dimension recovery (ORGANIC #767) ────────────────────────
+# The shared `parse_module_ports` returns 3-tuples (dir, packed-width, name) and
+# DROPS any trailing UNPACKED array dimension declared AFTER the port name
+# (`input wire [7:0] lane [7:0]`). Widening that shared contract to a 4-tuple
+# would break every 3-tuple caller (l9/shape_b/phase2/leaf_typo all unpack
+# `for d, _w, n in ports`), so we recover the post-name dimension LOCALLY from
+# the same RTL text instead — a pure, additive, name-anchored scan that touches
+# nothing the shared parser already produces.
+#
+# Grammar of an ANSI port-list entry with an unpacked array:
+#   <dir> [net-type]* [packed-width] <NAME> <UNPACKED-DIMS>
+# where UNPACKED-DIMS is one or more `[..]` groups that follow the NAME (and only
+# the name) before the comma / closing paren. A SCALAR or packed-only port has
+# nothing between its name and the separator, so this returns "" for it (no leak:
+# a non-array port's TB modelling is byte-for-byte unchanged).
+_UNPACKED_PORT_RE = re.compile(
+    r"\b(?:input|output|inout)\b"          # direction-led ANSI entry
+    r"(?:\s*(?:wire|reg|logic|signed|unsigned)\b)*"
+    r"(?:\s*[A-Za-z_]\w*::\s*[A-Za-z_]\w*)?"   # optional pkg::type_t
+    r"\s*(?:\[[^\]]+\])?"                   # optional packed width
+    # (1) the port NAME — never a net-type/sign keyword. Without this guard the
+    # engine backtracks on a scalar packed port (`input wire [7:0] data_in`):
+    # it consumes nothing as the net-type, captures `wire` as the NAME, and the
+    # packed `[7:0]` as a phantom trailing UNPACKED dim. The negative lookahead
+    # forbids that — a net-type/sign token can only be the leading qualifier,
+    # never the port name. (chip-AGNOSTIC: pure SV port grammar.)
+    r"\s*(?!(?:wire|reg|logic|signed|unsigned)\b)(\w+)"
+    r"\s*((?:\[[^\]]+\]\s*)+)")             # (2) one+ trailing UNPACKED dims
+
+
+def parse_unpacked_dims(rtl_text: str, module: str) -> Dict[str, str]:
+    """name -> concatenated trailing unpacked-dimension string for every ANSI
+    port of `module` that declares one (e.g. {"lane": "[7:0]"}). Ports with no
+    post-name dimension are simply absent from the map. Best-effort, pure text —
+    never raises; an unparsed module yields {}."""
+    out: Dict[str, str] = {}
+    # (1) ANSI header port-list block.
+    block = _module_portlist_block(rtl_text, module)
+    # (2) (#766r2) NON-ANSI body direction declarations carry their unpacked dims
+    # in the body (`input [7:0] mem [3:0];`), not the header. Scan the body too so
+    # a non-ANSI unpacked-array port recovers its dim and the TB builds a proper
+    # array net — reaching the SAME #767 element-wise / NOT_APPLICABLE path the
+    # ANSI class does (rc=3 parity), instead of building a scalar net that fails to
+    # compile (a hard rc=2) — and never the dropped/floating scalar that silently
+    # PASSed before the #766 port-recovery fix.
+    body = _module_body(rtl_text, module) or ""
+    for src in (block, body):
+        if not src:
+            continue
+        for m in _UNPACKED_PORT_RE.finditer(src):
+            name, dims = m.group(1), m.group(2)
+            dims = re.sub(r"\s+", "", dims)  # collapse "[0:3] [7:0]" -> "[0:3][7:0]"
+            if dims and name not in out:
+                out[name] = dims
+    return out
+
+
+def _module_portlist_block(rtl_text: str, module: str) -> str:
+    """The raw text inside `module <module> ( ... )` (ANSI header). Empty if not
+    found. Local, minimal counterpart of the shared parser's block extractor —
+    only used to recover post-name unpacked dims, so it does not need the shared
+    parser's full define/ifdef machinery."""
+    mm = re.search(r"\bmodule\s+" + re.escape(module) + r"\b", rtl_text)
+    if not mm:
+        return ""
+    i = rtl_text.find("(", mm.end())
+    if i < 0:
+        return ""
+    depth = 0
+    for j in range(i, len(rtl_text)):
+        c = rtl_text[j]
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return rtl_text[i + 1:j]
+    return ""
 
 
 def classify_ports(ports: List[Tuple[str, str, str]],
                    event_name: str, output_name: str,
-                   reset_override: Optional[str]
+                   reset_override: Optional[str],
+                   unpacked_map: Optional[Dict[str, str]] = None
                    ) -> Tuple[Optional[PortInfo], List[PortInfo],
                               Optional[PortInfo], Optional[PortInfo],
                               List[PortInfo]]:
     """Return (clk, resets, event_port, output_port, other_inputs).
 
     `ports` is the shared parser's [(dir, width, name), ...].
+    `unpacked_map` (ORGANIC #767) maps a port name to its trailing UNPACKED
+    array-dimension string (from `parse_unpacked_dims`); a name not in the map is
+    a scalar/packed-only port (unpacked_dims="").
     """
+    unpacked_map = unpacked_map or {}
     clk: Optional[PortInfo] = None
     resets: List[PortInfo] = []
     event_port: Optional[PortInfo] = None
     output_port: Optional[PortInfo] = None
     others: List[PortInfo] = []
     for direction, width, name in ports:
-        pi = PortInfo(name, direction, width)
+        pi = PortInfo(name, direction, width, unpacked_map.get(name, ""))
         if name == output_name and direction == "output":
             output_port = pi
             continue
@@ -619,6 +719,53 @@ def _decl_width(pi: PortInfo, params: Dict[str, int]) -> str:
     return f" {w}" if w else ""
 
 
+# ─── unpacked-array TB modelling helpers (ORGANIC #767) ──────────────────────
+def _decl_unpacked(pi: PortInfo, params: Dict[str, int]) -> str:
+    """The trailing UNPACKED dimension fragment for a TB net mirroring this
+    port (rendered AFTER the net name: `reg [7:0] lane [7:0];`). Empty for a
+    scalar/packed-only port. Parameterised bounds are param-substituted, like
+    the packed width, so a parameterised array port elaborates."""
+    if not pi.unpacked_dims:
+        return ""
+    return " " + _concretise_width(pi.unpacked_dims, params)
+
+
+def _unpacked_indices(pi: PortInfo, params: Dict[str, int]) -> Optional[List[int]]:
+    """The concrete list of element indices for a SINGLE-dimension unpacked
+    array port (e.g. "[7:0]" -> [7,6,..,0], "[0:3]" -> [0,1,2,3]). Returns None
+    when the port is not an array, has a non-constant bound, or has MORE than one
+    unpacked dimension (multi-dim is conservatively left to the rc=3 fallback —
+    we never fabricate a drive we can't model exactly)."""
+    if not pi.unpacked_dims:
+        return None
+    dims = _concretise_width(pi.unpacked_dims, params)
+    groups = re.findall(r"\[([^\]]+)\]", dims)
+    if len(groups) != 1:
+        return None  # multi-dim — not modelled element-wise
+    g = groups[0].strip()
+    # `[N]` short-form unpacked dimension == `[0:N-1]` (indices 0..N-1).
+    if ":" not in g:
+        try:
+            n = int(g)
+        except ValueError:
+            return None
+        if n <= 0:
+            return None
+        return list(range(n))
+    m = re.match(r"\s*([^:]+?)\s*:\s*([^:]+?)\s*$", g)
+    if not m:
+        return None
+    try:
+        a, b = int(m.group(1)), int(m.group(2))
+    except ValueError:
+        return None
+    # Inclusive index set in DECLARATION order (handles both `[7:0]` descending
+    # and `[0:3]` ascending unpacked ranges — the order only affects emission,
+    # every element is driven the same constant).
+    step = 1 if b >= a else -1
+    return list(range(a, b + step, step))
+
+
 def build_measurement_tb(top: str, clk: Optional[PortInfo],
                          resets: List[PortInfo], event_port: PortInfo,
                          output_port: PortInfo, others: List[PortInfo],
@@ -643,11 +790,15 @@ def build_measurement_tb(top: str, clk: Optional[PortInfo],
     L.append("module latency_tb;")
     L.append("  reg clk = 0;")
     for r in resets:
-        L.append(f"  reg{_decl_width(r, params)} {r.name};")
-    L.append(f"  reg{_decl_width(event_port, params)} {event_port.name};")
+        L.append(f"  reg{_decl_width(r, params)} {r.name}"
+                 f"{_decl_unpacked(r, params)};")
+    L.append(f"  reg{_decl_width(event_port, params)} {event_port.name}"
+             f"{_decl_unpacked(event_port, params)};")
     for o in others:
-        L.append(f"  reg{_decl_width(o, params)} {o.name};")
-    L.append(f"  wire{_decl_width(output_port, params)} {output_port.name};")
+        L.append(f"  reg{_decl_width(o, params)} {o.name}"
+                 f"{_decl_unpacked(o, params)};")
+    L.append(f"  wire{_decl_width(output_port, params)} {output_port.name}"
+             f"{_decl_unpacked(output_port, params)};")
     L.append("  integer cyc;")
     L.append("  integer measured;")
     # DUT instance (named connections; only declared TB nets are wired). The
@@ -682,9 +833,20 @@ def build_measurement_tb(top: str, clk: Optional[PortInfo],
         # replication count is the port's concrete width; a fixed small const
         # is rendered as a plain decimal.
         if input_const < 0:
-            L.append(f"    {o.name} = {{{_width_token(o, params)}{{1'b1}}}};")
+            val = f"{{{_width_token(o, params)}{{1'b1}}}}"
         else:
-            L.append(f"    {o.name} = {input_const};")
+            val = str(input_const)
+        # ORGANIC #767 — an UNPACKED-ARRAY input cannot take a single flat
+        # assignment (`bus = {8{1'b1}}` is illegal on `reg [7:0] bus [7:0]`).
+        # Drive it ELEMENT-WISE with the SAME per-element constant so each lane
+        # carries the data the design expects. Single-dim concrete arrays only;
+        # a non-modellable shape is screened to rc=3 before the TB is built.
+        idxs = _unpacked_indices(o, params)
+        if idxs is not None:
+            for k in idxs:
+                L.append(f"    {o.name}[{k}] = {val};")
+        else:
+            L.append(f"    {o.name} = {val};")
     # hold reset for `reset_hold` posedges
     L.append(f"    repeat ({reset_hold}) @(posedge clk);")
     # deassert reset
@@ -891,8 +1053,15 @@ def run_latency_conformance(
                             f"module exist and use an ANSI port list?)")
         return 2, report
 
+    # ORGANIC #767 — recover any trailing UNPACKED array dimensions the shared
+    # 3-tuple parser drops, so an `input wire [7:0] lane [7:0]` array port is
+    # modelled as an array in the measurement TB (per-element decl + drive)
+    # rather than wired scalar-to-array (an iverilog elaboration ERROR → a false
+    # rc=2 BLOCK on correct RTL). Empty map for a design with no array ports.
+    unpacked_map = parse_unpacked_dims(rtl_text, top)
+    report["array_ports"] = unpacked_map
     clk, resets, event_port, output_port, others = classify_ports(
-        ports, event, output, reset_override)
+        ports, event, output, reset_override, unpacked_map)
 
     if event_port is None:
         report["verdict"] = "ERROR"
@@ -936,6 +1105,45 @@ def run_latency_conformance(
                             f"only stall the sim)")
         return 2, report
     report["expected_latency"] = expected
+
+    # ORGANIC #767 — UNPACKED-ARRAY port modelling guard.
+    # A single-dimension, constant-bound array INPUT (e.g. `lane [7:0]`) is
+    # fully modelled by the TB (per-element decl + element-wise drive), so it
+    # proceeds normally. But two shapes the latency convention cannot model
+    # FAITHFULLY are reclassified to a DISTINCT NOT_APPLICABLE (rc 3) rather than
+    # left to crash the compile with a misleading hard rc=2 BLOCK on correct RTL:
+    #   (a) the measured EVENT or the measured OUTPUT port is itself an array —
+    #       the convention pulses a single event bit and reads a single output-
+    #       assertion bit; an array event/output has no single-bit semantics here.
+    #   (b) any held input is a MULTI-DIMENSION or NON-CONSTANT-bound array — we
+    #       refuse to fabricate a drive we cannot enumerate exactly.
+    # A scalar/packed-only design hits NONE of these (unpacked_dims=="") so its
+    # behaviour is byte-for-byte unchanged (§4.05 no-leak).
+    na_reason = None
+    if event_port.is_array:
+        na_reason = (f"--event port {event!r} is an UNPACKED-ARRAY "
+                     f"({event_port.unpacked_dims}); the event->output latency "
+                     f"convention pulses a single event bit and has no single-"
+                     f"bit semantics for an array event")
+    elif output_port.is_array:
+        na_reason = (f"--output port {output!r} is an UNPACKED-ARRAY "
+                     f"({output_port.unpacked_dims}); the latency convention "
+                     f"counts cycles to a single output-assertion bit and has "
+                     f"no single-bit semantics for an array output")
+    else:
+        for o in (others + resets):
+            if o.is_array and _unpacked_indices(o, params) is None:
+                na_reason = (f"input port {o.name!r} is a MULTI-DIMENSION or "
+                             f"NON-CONSTANT-bound unpacked array "
+                             f"({o.unpacked_dims}); refusing to fabricate an "
+                             f"un-enumerable element-wise drive")
+                break
+    if na_reason is not None:
+        report["verdict"] = "NOT_APPLICABLE"
+        report["measured_latency"] = None
+        report["reason"] = (na_reason + "; NOT-APPLICABLE (NOT a silent PASS, "
+                            "NOT a real timing block)")
+        return 3, report
 
     # reset polarity map
     reset_active_low_map: Dict[str, bool] = {}
