@@ -1,6 +1,6 @@
 ---
 name: gatekeeper-loop
-description: Infinite-loop single gatekeeper agent that OWNS main and is the SOLE merger of PRs. Invoke as a cron prompt; each tick polls open non-draft PRs against main (poll_prs.py), runs the MACHINE gates (gatekeeper_review.py — required status checks, cadence-aware) on base=origin/main head=PR-branch, and on green runs the ONE irreducible agent gate (Step-2.7 adversarial review). Machine-red OR a reproducible HIGH agent finding -> `gh pr review --request-changes` with a 繁中 5-section comment; otherwise the PR ENQUEUES to a SERIALIZED merge queue guarded by a repo-level .merge.lock — rebase onto current origin/main, RE-RUN required checks on the rebased tree (catches semantic conflicts a 3-way merge misses), squash-merge (one PR = one squash commit = one version bump, honoring one-version-per-push), release lock, next. Hard rules: the gatekeeper is a DISTINCT identity from the PR author (NEVER self-merge an authored PR), NEVER force/--no-verify, and a documented break-glass path exists so a PR that FIXES a wedged gate cannot deadlock the queue. STOP CONDITION = healthy idle when no open PR; never self-terminate.
+description: Infinite-loop single gatekeeper agent that OWNS main and is the SOLE merger of PRs. Invoke as a cron prompt; each tick polls open non-draft PRs against main (poll_prs.py), runs the MACHINE gates (gatekeeper_review.py — required status checks, cadence-aware) on base=origin/main head=PR-branch, and on green runs the ONE irreducible agent gate (Step-2.7 adversarial review). Machine-red OR a reproducible HIGH agent finding -> `gh pr review --request-changes` with a 繁中 5-section comment; otherwise the PR ENQUEUES to a SERIALIZED merge queue guarded by a repo-level .merge.lock — rebase onto current origin/main, RE-RUN required checks on the rebased tree (catches semantic conflicts a 3-way merge misses), squash-merge (one PR = one squash commit = one version bump, honoring one-version-per-push), release lock, next. The gatekeeper MAY be the same identity as the PR author and MAY merge its own authored PRs — quality is guaranteed by the GATES (machine required checks + Step-2.7 + the serialized re-test-on-rebase merge queue), not by identity separation. Hard rules: NEVER force/--no-verify/--admin/bypass branch-protection, squash-only, and a documented break-glass path exists so a PR that FIXES a wedged gate cannot deadlock the queue. STOP CONDITION = healthy idle when no open PR; never self-terminate.
 ---
 
 
@@ -23,10 +23,13 @@ contribution model. Where `core-agent-loop` is an issue-**fix** loop
 (poll open issues → ship a fix → close), the gatekeeper is a PR-**merge**
 loop (poll open PRs → gate them → squash-merge the green ones). It is the
 **single agent that owns `main`** and the **sole party allowed to merge**.
-Centralising the merge authority in one looped identity is what closes
-the *author = approver* hole: no contributor merges their own work; every
-PR passes through the same machine gates and the same one agent gate
-before it lands.
+Centralising the merge authority in one looped identity is what makes the
+contribution model trustworthy: every PR — including one the gatekeeper
+authored itself — passes through the SAME machine gates, the SAME one
+agent gate (Step-2.7), and the SAME serialized re-test-on-rebase merge
+queue before it lands. The gate is the quality guarantee, not a separation
+of author from approver: a single identity MAY both author and merge,
+because nothing lands without surviving the gates on the rebased tree.
 
 The loop is **infinite** and **stateless across ticks** (all state lives
 in git + GitHub — the PR's open/merged/closed state, its review state,
@@ -228,35 +231,31 @@ re-validated against the latest tree.
 
 ## Hard rules (non-negotiable)
 
+> **The gatekeeper MAY self-merge.** A single identity may both author and
+> merge its own PRs — there is NO author≠approver requirement. The gates
+> (machine required checks + Step-2.7 + the serialized re-test-on-rebase
+> queue), not identity separation, are what make a merge trustworthy.
+> Nothing lands without surviving every gate on the rebased tree, whoever
+> authored it.
+
 | # | Rule | Reason | Enforced by |
 |---|------|--------|-------------|
-| 1 | **Distinct identity** — the gatekeeper is a DIFFERENT identity from the PR author; it MUST NEVER merge a PR it itself authored | Self-merge rebuilds the *author = approver* hole the whole loop exists to close | §Self-merge guard below + `git_prohibition_guard.py` family |
-| 2 | NEVER `gh pr merge --admin` / `--force` / bypass branch protection | Bypasses the required status checks (the machine gates) | `git_prohibition_guard.py` |
-| 3 | NEVER `git push --force` / `git commit --no-verify` / `git reset --hard` on `main` | Loss of history; bypasses pre-commit gates | `git_prohibition_guard.py` |
-| 4 | NEVER merge a multi-commit PR with merge-commit / rebase-merge — squash only | one PR = one squash commit = one version bump (one-version-per-push) | `--squash` only; version gates |
-| 5 | NEVER use chip/vendor/SKU string literals as detection logic in any gate | gates must be general | `source_chip_agnostic_check.py` |
-| 6 | ALWAYS release `.merge.lock` (even on eject / exception) and NEVER force-steal a live lock | a stuck lock must heal via the dead-PID path, not a steal | `_runner_lock.py` (atexit/signal release + dead-pid cleanup) |
+| 1 | NEVER `gh pr merge --admin` / `--force` / bypass branch protection | Bypasses the required status checks (the machine gates) | `git_prohibition_guard.py` |
+| 2 | NEVER `git push --force` / `git commit --no-verify` / `git reset --hard` on `main` | Loss of history; bypasses pre-commit gates | `git_prohibition_guard.py` |
+| 3 | NEVER merge a multi-commit PR with merge-commit / rebase-merge — squash only | one PR = one squash commit = one version bump (one-version-per-push) | `--squash` only; version gates |
+| 4 | NEVER use chip/vendor/SKU string literals as detection logic in any gate | gates must be general | `source_chip_agnostic_check.py` |
+| 5 | ALWAYS release `.merge.lock` (even on eject / exception) and NEVER force-steal a live lock | a stuck lock must heal via the dead-PID path, not a steal | `_runner_lock.py` (atexit/signal release + dead-pid cleanup) |
 
-### Self-merge guard (Hard rule #1, the author≠approver invariant)
+### Self-merge is allowed (no author≠approver requirement)
 
-Before enqueuing a PR to the merge queue, the gatekeeper MUST confirm the
-PR author is **not** the gatekeeper's own identity:
-
-```bash
-# the PR author login is in the poll report (`author` field) and via:
-gh pr view <num> --json author -q .author.login
-# the gatekeeper's own identity:
-gh api user -q .login        # (or the bot/app login the gatekeeper runs as)
-```
-
-If `pr_author_login == gatekeeper_login`, the gatekeeper MUST NOT merge.
-It leaves the PR for a **different** reviewer/merger and posts a 繁中
-comment stating it cannot self-merge (author = approver is forbidden).
-This is the structural reason there is exactly **one** gatekeeper identity
-and it does **not** also author plugin PRs — so this guard can never be
-the thing blocking the queue under normal operation. (If the gatekeeper
-*must* land its own change, that change goes through a human or a second
-distinct merger — never a self-approve.)
+There is **no** identity-separation rule: the gatekeeper MAY merge a PR it
+authored itself. The PR author login is irrelevant to the merge decision —
+a PR lands iff it survives every gate (machine required checks + Step-2.7 +
+the serialized re-test-on-rebase queue), regardless of who wrote it. This
+keeps a single-maintainer / single-agent project self-sufficient: the same
+identity can author a fix, open a PR, and — once the gates are green — merge
+it through the queue. The quality guarantee is the GATE, not a second
+person.
 
 ### Break-glass override (so a wedged gate can't deadlock the queue)
 
@@ -272,10 +271,13 @@ queue deadlocks — the broken gate blocks the very PR that would fix it.
    never to a feature/IC PR. The gatekeeper confirms the PR touches only
    the gate machinery and carries a `break-glass: <gate>` declaration in
    its body naming the wedged gate and a reproduction of the wedge.
-2. **Human co-sign.** Break-glass requires an explicit second human
-   approval recorded on the PR (`gh pr review --approve` by a distinct
-   maintainer) — it is NOT a unilateral gatekeeper action. This preserves
-   author≠approver even in the escape hatch.
+2. **Explicit recorded approval.** Break-glass is never silent: the
+   gatekeeper records an explicit `break-glass: <gate>` approval on the PR
+   (a `gh pr review --approve` + a comment naming the wedged gate and the
+   reproduction of the wedge) BEFORE merging. Skipping a safety gate is the
+   one high-risk action the loop can take, so it must always leave an
+   auditable trail — even though self-merge of an ordinary gated PR is
+   allowed, a gate-SKIP must be declared, not hidden.
 3. **Reduced gate set, never zero gates.** The wedged gate is the ONLY
    check skipped; **every other** required check still runs on the rebased
    tree. The merge still uses `--squash`, never `--admin`/`--force`. (We
@@ -321,7 +323,7 @@ Gatekeeper 已 request-changes：PR #<num>（head=<branch>）
 **證據**：
     <失敗 gate 的逐字輸出，或可重現的 HIGH 對抗重現步驟與輸出>
 **要求**：<請作者修正什麼，才能重新進入 gate>
-**機制說明**：本 PR 由單一 gatekeeper 把關 main；通過 machine gates（required checks）+ Step-2.7 對抗審查（唯一 agent 判斷關卡）後，才會進入序列化合併佇列、rebase 到最新 origin/main、在 rebase 樹上重跑 required checks，並以 squash 合併（一 PR＝一 squash commit＝一次版本 bump）。本機從不 self-merge、從不 --force / --no-verify。
+**機制說明**：本 PR 由單一 gatekeeper 把關 main；通過 machine gates（required checks）+ Step-2.7 對抗審查（唯一 agent 判斷關卡）後，才會進入序列化合併佇列、rebase 到最新 origin/main、在 rebase 樹上重跑 required checks，並以 squash 合併（一 PR＝一 squash commit＝一次版本 bump）。品質由 gate 保證（非作者≠審核者之身分分離）；本機從不 --admin / --force / --no-verify / 繞過 branch protection。
 ```
 
 A successful merge is recorded by the squash-merge itself (and the deleted
@@ -380,19 +382,18 @@ Each tick must:
 1. python3 plugins/vibe-ic/skills/gatekeeper-loop/programs/poll_prs.py --repo <owner/repo> --base main
 2. If rc=0 → output "(no actionable PRs)" and exit (healthy idle).
 3. If rc=2 → log + exit. Retry next tick.
-4. If rc=1 → for each PR in `actionable[]` (newest-first):
-     a. SELF-MERGE GUARD: if the PR author == the gatekeeper's own
-        identity, do NOT merge — leave it for a distinct merger, post the
-        author≠approver note, continue.
-     b. git fetch origin; run gatekeeper_review.py (machine gates,
+4. If rc=1 → for each PR in `actionable[]` (newest-first). The PR author is
+   irrelevant — the gatekeeper MAY merge its OWN authored PR; the gates are
+   the quality guarantee, not identity separation:
+     a. git fetch origin; run gatekeeper_review.py (machine gates,
         cadence-aware) on base=origin/main head=<headRef>.
         - RED → gh pr review --request-changes with the verbatim failing
           output in the 繁中 5-section comment; continue.
-     c. GREEN → Step-2.7 adversarial review on the PR diff
+     b. GREEN → Step-2.7 adversarial review on the PR diff
         (General-not-overfit / §4.05 no-leak / root-cause-not-bypass).
         Only a REPRODUCIBLE HIGH blocks → request-changes with the
         reproduction; continue.
-     d. GREEN + no reproducible HIGH → enqueue to the SERIALIZED merge
+     c. GREEN + no reproducible HIGH → enqueue to the SERIALIZED merge
         queue: acquire .merge.lock (_runner_lock.py); rebase onto current
         origin/main; RE-RUN required checks on the rebased tree;
         - rebased GREEN → gh pr merge <num> --squash --delete-branch
@@ -400,11 +401,11 @@ Each tick must:
         - rebased RED → eject: request-changes with the post-rebase
           failure; do NOT merge.
         Release the lock (always, even on eject/exception); next PR.
-Hard rules: distinct identity (never self-merge an authored PR), never
---admin/--force/--no-verify, squash-only, always release the lock. A
-PR that fixes a wedged gate uses the documented BREAK-GLASS path
-(scoped diff + human co-sign + reduced-not-zero gates + post-merge
-re-validation). See SKILL.md §Hard rules and §Break-glass override.
+Hard rules: never --admin/--force/--no-verify, squash-only, always release
+the lock. Self-merge of an ordinary gated PR is ALLOWED. A PR that fixes a
+wedged gate uses the documented BREAK-GLASS path (scoped diff + recorded
+break-glass approval + reduced-not-zero gates + post-merge re-validation).
+See SKILL.md §Hard rules and §Break-glass override.
 End of tick. The cron runs indefinitely — never self-terminate.
 ```
 
@@ -422,8 +423,8 @@ fully programmable; only Step 2.7 is genuine LLM judgment):
   `gatekeeper_review.py` (the required-check runner this loop invokes)
 - Serialized merge-queue lock (one merge in flight, dead-PID self-heal):
   `programs/_runner_lock.py`
-- Forbidden git/gh ops (rules 2-3): `programs/git_prohibition_guard.py`
-- Chip-AGNOSTIC source scan (rule 5): `programs/source_chip_agnostic_check.py`
+- Forbidden git/gh ops (rules 1-2): `programs/git_prohibition_guard.py`
+- Chip-AGNOSTIC source scan (rule 4): `programs/source_chip_agnostic_check.py`
 - Version equality (one-version-per-push): `programs/marketplace_version_sync_check.py`
 - Version strict-monotonic bump: `programs/version_bump_monotonic_check.py`
 - Full-suite (not subset) pytest run: `programs/full_suite_run_check.py`
