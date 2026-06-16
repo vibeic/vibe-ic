@@ -261,6 +261,27 @@ _NL_PORT = re.compile(
     r'(?P<tail>[ \t]*[:]?[^\n]*)?$',
     re.I | re.M)
 
+# ORGANIC #772 — DIRECTION-LABEL-COLON bullet form. Many datasheets declare a
+# port as `- **Input**: \`binary_in\` (\`BINARY_WIDTH\` bits) ...` / `- Output:
+# valid (1 bit)` — the direction word is a LABEL (optionally markdown-emphasised
+# **/__/*/_), followed by a colon, then the (optionally-backticked) name, then a
+# width annotation. The canonical `_NL_PORT` requires the direction word to be
+# immediately followed by the bare name (no colon, no emphasis), so this common
+# style returned ZERO ports → a vacuous `spec-coverage ok` on a spec that clearly
+# declares ports. To avoid re-introducing a phantom-port leak from ordinary prose
+# bullets (`- **Note**: the output is ...`), the label-colon form REQUIRES a
+# structural WIDTH ANCHOR — `(N bits)` or `(\`WIDTH\` bits)` — right after the
+# name. A genuine port declaration in this style always carries that width
+# annotation; a prose sentence does not. chip-AGNOSTIC: pure markdown/English
+# grammar, no chip / vendor / SKU literal.
+_NL_PORT_LABEL = re.compile(
+    r'^[ \t]*[-*][ \t]*'
+    r'(?:\*\*|__|\*|_)?(input|output|inout)(?:\*\*|__|\*|_)?'  # (1) emphasised dir
+    r'[ \t]*:[ \t]*'                                            # (2) colon label
+    r'`?([A-Za-z_]\w*)`?[ \t]*'                                 # (3) (backtick) name
+    r'\([ \t]*(?:`?\w+`?[ \t]+)?(\d+|`\w+`)[ \t]*bits?[ \t]*\)',  # (4) width anchor
+    re.I | re.M)
+
 # Non-port English words that recur as the "name" of a PROSE bullet (`- Input
 # ports:`, `- Input coefficients [...]`, `- Output all zeros`). chip-AGNOSTIC:
 # generic English, never a chip/SKU literal. 'data'/'addr'/'valid' are NOT here
@@ -271,19 +292,48 @@ _NL_PORT_PROSE_NAMES = frozenset({
     "bits", "bit", "width", "widths", "behavior", "behaviour", "outputs",
     "inputs", "interface", "interfaces", "description", "note", "notes",
 })
+# ORGANIC #770 — coordinating conjunctions / articles that, when captured as the
+# "name" by `_NL_PORT`, mark the bullet as a prose SENTENCE rather than a port
+# declaration ("- Input and output AXI Stream signals adhere to ..." → phantom
+# name "and"). These are NOT in `_NL_PORT_PROSE_NAMES` because a single-letter or
+# short token CAN be a real port name (`- input a (8 bits)`); they are rejected
+# ONLY when NOT immediately followed by a structural width anchor `(N bits)`
+# (#770 Step-2.7 blast-radius finding: a blanket prose-name set dropped the
+# legitimate ports `a` / `an`). chip-AGNOSTIC: pure English function-word grammar.
+_NL_PORT_FUNCTION_WORDS = frozenset({
+    "and", "or", "nor", "but", "plus", "with", "the", "a", "an",
+})
+# a width annotation `(N bits)` / `(`WIDTH` bits)` immediately after the name is
+# the structural anchor that proves a function-word token is actually a port name.
+_NL_PORT_WIDTH_ANCHOR_RE = re.compile(
+    r"^[ \t]*\([ \t]*(?:`?\w+`?[ \t]+)?(?:\d+|`\w+`)[ \t]*bits?[ \t]*\)",
+    re.IGNORECASE)
 # Copular / auxiliary verbs that mark the bullet as a SENTENCE, not a port decl.
 _NL_PORT_COPULA_RE = re.compile(
     r'^[ \t]*(?:is|are|was|were|will|shall|should|must|can|may|has|have|'
     r'represents?|denotes?|indicates?|holds?|carries|specif\w+)\b', re.I)
 
 
-def _nl_port_is_prose(name: str, tail: str) -> bool:
+def _nl_port_is_prose(name: str, tail: str, has_width: bool = False) -> bool:
     """True when an `- input <name> <tail>` bullet is ordinary PROSE rather than
-    a port declaration: the name is a known non-port word, the bullet is a
-    heading (`name:`), or the tail is a copular sentence (`name is …`)."""
+    a port declaration: the name is a known non-port word, a function word with
+    NO width anchor (a conjunction/article scraped from a sentence), the bullet
+    is a heading (`name:`), or the tail is a copular sentence (`name is …`).
+
+    `has_width` is True when the caller's port regex already consumed a `(N bits)`
+    width group for this bullet (the structural anchor the function-word check
+    looks for, but eaten before the tail)."""
     if name.lower() in _NL_PORT_PROSE_NAMES:
         return True
     t = tail or ""
+    # ORGANIC #770 — a function word (and/or/the/a/an/…) is a phantom port ONLY
+    # when it is NOT immediately followed by a structural width anchor. A real
+    # short/single-letter port (`- input a (8 bits)`) carries the anchor and is
+    # kept; a conjunction in a sentence (`- Input and output signals …`) does not.
+    if (name.lower() in _NL_PORT_FUNCTION_WORDS
+            and not has_width
+            and not _NL_PORT_WIDTH_ANCHOR_RE.match(t)):
+        return True
     if t.lstrip().startswith(":"):
         return True                       # "- Input ports:" heading
     if _NL_PORT_COPULA_RE.match(t):
@@ -293,12 +343,36 @@ def _nl_port_is_prose(name: str, tail: str) -> bool:
 
 def _parse_nl_ports(text: str) -> List[Port]:
     ports: List[Port] = []
+    canonical_lines: set = set()   # source lines the canonical pass already used
     for m in _NL_PORT.finditer(text):
         direction = m.group(1).lower()
         name = m.group(2)
-        if _nl_port_is_prose(name, m.group("tail") or ""):
+        if _nl_port_is_prose(name, m.group("tail") or "",
+                             has_width=bool(m.group(3))):
             continue
+        # NOTE: NO name-dedup here — `spec_self_consistency_check` relies on
+        # `_parse_nl_ports` returning EVERY bullet (including a duplicate port
+        # name) so it can detect the duplicate-port error. (#770 Step-2.7
+        # blast-radius finding: a `seen`-set dedup here silently hid duplicates.)
+        canonical_lines.add(text[:m.start()].count("\n"))
         width = int(m.group(3)) if m.group(3) else 1
+        ports.append(Port(name, direction, width))
+    # ORGANIC #772 — the direction-label-colon datasheet form (`- **Input**:
+    # `name` (N bits)`). The width anchor in the regex already gates out prose
+    # bullets, so no `_nl_port_is_prose` post-filter is needed here. A symbolic
+    # width (`(`WIDTH` bits)`) is not a concrete bit-count, so default to 1 (the
+    # port's PRESENCE + direction is the structural fact spec-coverage needs; the
+    # exact width is corroborated against the RTL elsewhere). Only skip a label
+    # match on a line the CANONICAL pass already consumed (some bullets match
+    # both regexes) — never a same-NAME dedup (duplicates on distinct lines are
+    # preserved for the duplicate-port detector).
+    for m in _NL_PORT_LABEL.finditer(text):
+        if text[:m.start()].count("\n") in canonical_lines:
+            continue
+        direction = m.group(1).lower()
+        name = m.group(2)
+        w = m.group(3) or ""
+        width = int(w) if w.isdigit() else 1
         ports.append(Port(name, direction, width))
     return ports
 

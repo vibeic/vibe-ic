@@ -195,11 +195,33 @@ def test_endstate_serial_converter_no_phantom_strict(tmp_path):
     assert "interface-conformance ok" in r.stdout
 
 
-def test_endstate_noleak_direction_reversal_strict_exit1(tmp_path):
-    """The #478 end-state NO-LEAK: a genuine reversed direction under --strict
-    exits 1 and names PORT-DIRECTION."""
+def test_endstate_prose_direction_reversal_is_advisory_770(tmp_path):
+    """ORGANIC #770 RE-ANCHOR: a PROSE-ONLY direction the RTL CONTRADICTS is now
+    ADVISORY (reported, but does NOT hard-block under --strict) — the author's
+    compilable structural RTL declaration is stronger evidence than a free-prose
+    direction-proximity scrape. The finding is still PRINTED (a reviewer sees
+    it), but rc is 0. (Pre-#770 this exited 1; #770 deliberately supersedes that:
+    13 of the round5-7 iface FPs were exactly this prose-vs-RTL direction
+    conflict where the RTL was correct.)"""
     (tmp_path / "spec.txt").write_text(
         "The input `serial_in` is used as the data source.")
+    (tmp_path / "rtl.sv").write_text("module foo(output serial_in); endmodule")
+    r = subprocess.run(
+        [sys.executable, str(PROG),
+         "--prompt", str(tmp_path / "spec.txt"),
+         "--rtl", str(tmp_path / "rtl.sv"), "--strict"],
+        capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "PORT-DIRECTION" in r.stdout and "ADVISORY" in r.stdout
+
+
+def test_endstate_noleak_table_direction_reversal_strict_exit1(tmp_path):
+    """ORGANIC #770 §4.05 NO-LEAK: a STRUCTURAL (markdown signal-table) direction
+    the RTL contradicts MUST STILL hard-BLOCK under --strict (rc 1). The
+    provenance relaxation applies ONLY to free-prose sources; a real table /
+    given-code direction is high-confidence and keeps its veto."""
+    (tmp_path / "spec.txt").write_text(
+        "| Signal | Direction |\n|---|---|\n| `serial_in` | input |\n")
     (tmp_path / "rtl.sv").write_text("module foo(output serial_in); endmodule")
     r = subprocess.run(
         [sys.executable, str(PROG),
