@@ -295,12 +295,42 @@ endmodule
 """
 
 
-def test_noleak_partial_symbolic_case_still_blocks(tmp_path):
-    proc, findings = _lint(tmp_path, NL2_PARTIAL_SYMBOLIC_CASE, severity="WARN")
+# ORGANIC #770 r4 — NL2 is a CLOCKED (sequential) FSM. A partial case in a
+# clocked block cannot infer a LATCH (the state reg HOLDS on an unlisted code),
+# so it is now ADVISORY, not a hard block. The §4.05 no-leak moves to the
+# COMBINATIONAL partial case below, which DOES risk a latch and STILL hard-WARNs.
+NL2_PARTIAL_COMBINATIONAL_CASE = """
+module partial_comb(input [1:0] sel, output reg [3:0] o);
+    localparam [1:0] A = 2'd0, B = 2'd1, C = 2'd3;
+    always @(*) begin
+        case (sel)
+            A: o = 4'd0;
+            B: o = 4'd1;
+            C: o = 4'd2;
+        endcase
+    end
+endmodule
+"""
+
+
+def test_770r4_clocked_partial_case_is_advisory(tmp_path):
+    """ORGANIC #770 r4 RE-ANCHOR: a partial case inside a CLOCKED always block is
+    ADVISORY (no latch can be inferred — the state reg holds), reported but NOT a
+    hard block."""
+    proc, findings = _lint(tmp_path, NL2_PARTIAL_SYMBOLIC_CASE, severity="INFO")
+    hits = _by_rule(findings, "case-no-default")
+    assert hits and all(h["block_eligible"] is False for h in hits), findings
+
+
+def test_noleak_partial_combinational_case_still_blocks(tmp_path):
+    """§4.05 NO-LEAK: a partial case in a COMBINATIONAL `always @(*)` DOES risk a
+    latch → still WARNs/block-eligible (rc 1)."""
+    proc, findings = _lint(tmp_path, NL2_PARTIAL_COMBINATIONAL_CASE,
+                           severity="WARN")
     hits = _by_rule(findings, "case-no-default")
     assert any(h["severity"] == "WARN" and h["block_eligible"] is True
                for h in hits), (
-        f"a non-fully-enumerated symbolic case must still WARN/block; got {findings}")
+        f"a combinational non-exhaustive case must still WARN/block; got {findings}")
     assert proc.returncode == 1
 
 
