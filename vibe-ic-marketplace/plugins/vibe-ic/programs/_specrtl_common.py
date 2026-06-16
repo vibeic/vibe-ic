@@ -237,10 +237,58 @@ class SpecContract:
 # Natural-language interface bullet:  " - input  d   (8 bits)"  /  " - output q"
 # Line-anchored with [ \t] (never \s) so a greedy match cannot swallow the next
 # bullet's newline and skip ports.
+#
+# END-anchored (ORGANIC-20260614 C1, #751): a TRUE interface bullet is
+# `- input <name>` optionally followed by an `(N bits)` width annotation and then
+# the END of the line — nothing else. Without the trailing `[ \t]*$` anchor this
+# regex harvested ordinary PROSE bullets as phantom ports: `- Input ports:` ->
+# 'ports', `- Output all zeros (...)` -> 'all', `- Output latency is 1 clock
+# cycle.` -> 'latency', `- Input coefficients [..]` -> 'coefficients'. Each
+# carries trailing prose after the captured word, so the end-anchor rejects them
+# while every legitimate `- input clk` / `- input d (8 bits)` bullet still matches.
+# Natural-language interface bullet:  " - input  d   (8 bits)  data bus"
+# Line-anchored with [ \t] (never \s). The NAME + optional `(N bits)` width is
+# captured; a TRAILING DESCRIPTION (the common datasheet shape `- input clk
+# system clock`) is allowed (group 4) — an earlier end-anchored version dropped
+# every described bullet, collapsing the whole port set (#751 adversarial-review
+# HIGH). To still reject ordinary PROSE bullets ("- Input ports:", "- Output
+# latency is 1 clock cycle.", "- Output all zeros"), the captured name is
+# post-filtered by `_nl_port_is_prose` below — a heading (`name:`), a copular
+# sentence (`name is/are/…`), or a closed set of non-port plural/abstract nouns.
 _NL_PORT = re.compile(
     r'^[ \t]*[-*][ \t]*(input|output|inout)\b[ \t]+'
-    r'([A-Za-z_]\w*)[ \t]*(?:\([ \t]*(\d+)[ \t]*bits?[ \t]*\))?',
+    r'([A-Za-z_]\w*)[ \t]*(?:\([ \t]*(\d+)[ \t]*bits?[ \t]*\))?'
+    r'(?P<tail>[ \t]*[:]?[^\n]*)?$',
     re.I | re.M)
+
+# Non-port English words that recur as the "name" of a PROSE bullet (`- Input
+# ports:`, `- Input coefficients [...]`, `- Output all zeros`). chip-AGNOSTIC:
+# generic English, never a chip/SKU literal. 'data'/'addr'/'valid' are NOT here
+# (they are common real port names).
+_NL_PORT_PROSE_NAMES = frozenset({
+    "ports", "port", "signals", "signal", "coefficients", "latency",
+    "all", "none", "both", "zeros", "ones", "value", "values", "list",
+    "bits", "bit", "width", "widths", "behavior", "behaviour", "outputs",
+    "inputs", "interface", "interfaces", "description", "note", "notes",
+})
+# Copular / auxiliary verbs that mark the bullet as a SENTENCE, not a port decl.
+_NL_PORT_COPULA_RE = re.compile(
+    r'^[ \t]*(?:is|are|was|were|will|shall|should|must|can|may|has|have|'
+    r'represents?|denotes?|indicates?|holds?|carries|specif\w+)\b', re.I)
+
+
+def _nl_port_is_prose(name: str, tail: str) -> bool:
+    """True when an `- input <name> <tail>` bullet is ordinary PROSE rather than
+    a port declaration: the name is a known non-port word, the bullet is a
+    heading (`name:`), or the tail is a copular sentence (`name is …`)."""
+    if name.lower() in _NL_PORT_PROSE_NAMES:
+        return True
+    t = tail or ""
+    if t.lstrip().startswith(":"):
+        return True                       # "- Input ports:" heading
+    if _NL_PORT_COPULA_RE.match(t):
+        return True                       # "- Output latency is 1 cycle"
+    return False
 
 
 def _parse_nl_ports(text: str) -> List[Port]:
@@ -248,6 +296,8 @@ def _parse_nl_ports(text: str) -> List[Port]:
     for m in _NL_PORT.finditer(text):
         direction = m.group(1).lower()
         name = m.group(2)
+        if _nl_port_is_prose(name, m.group("tail") or ""):
+            continue
         width = int(m.group(3)) if m.group(3) else 1
         ports.append(Port(name, direction, width))
     return ports
@@ -694,7 +744,21 @@ def extract_spec_contract(text: str, is_json: bool = False,
             if tbl_ports:
                 ports = tbl_ports
                 source = 'md-table'
-            elif re.search(r'\bmodule\b', clean):   # non-ANSI module declaration
+            elif re.search(r'\bmodule\s+\w+[\s\S]*?\bendmodule\b', clean):
+                # A genuine non-ANSI Verilog module FENCE (`module <name> ... ;
+                # input/output decls ... endmodule`). ORGANIC-20260614 C1 (#751):
+                # the old guard fired on the bare WORD 'module' anywhere in prose
+                # ("Design a GP module", "Modify the existing module"), so the
+                # ENTIRE natural-language spec was scanned as Verilog and the
+                # _PORT_DECL regex harvested English phrases as phantom ports
+                # ('1-bit input signal'->'signal', 'output of that'->'of',
+                # 'output every clock'->'every'). Requiring a real
+                # `module ... endmodule` fence — which prose never has — keeps
+                # the legitimate non-ANSI module path while restoring the
+                # documented invariant: never scan raw prose for input/output
+                # words. (Real ANSI/non-ANSI headers in the corpus are already
+                # caught by _module_port_region above; this branch only covers a
+                # truly fenced non-ANSI declaration.)
                 # Prefer the TopModule target if the spec embeds several module decls.
                 _, ports = parse_rtl_ports(clean, "TopModule")
                 source = 'verilog'

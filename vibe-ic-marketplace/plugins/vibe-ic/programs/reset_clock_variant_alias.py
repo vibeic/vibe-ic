@@ -205,12 +205,57 @@ _CONTRACT_PHRASE_RE = re.compile(
     rf"|\b`?({_CONTRACT_NAME_TOKENS})`?\s+(?:port|signal|pin)\b",
     re.IGNORECASE)
 
+# ORGANIC #518 reopen (round-11) — the DOMINANT RTLLM/VerilogEval port-contract
+# form is a colon list under an `Input ports:` / `Output ports:` heading:
+#     Input ports:
+#         arstn: active-low async reset
+#         clk:   system clock
+# The four context regexes above (backtick / table cell / Verilog decl /
+# `port <name>` phrasing) never match this `NAME: <description>` line, so the
+# spec-declared reset/clock port (e.g. `arstn`) was NOT registered as a contract
+# port → #518 canonicalised it (arstn -> rst_n) UNSUPPRESSED and the hidden TB
+# binding `.arstn(arstn)` then `port 'arstn' is not a port of dut`-FAILed.
+#
+# Recognise a colon-form port LINE (multiline-anchored `^\s*<token>\s*:`) but
+# ONLY inside an `Input/Output ports:` SECTION, so a stray `reset:` in loose
+# prose elsewhere never over-suppresses (no-leak). The section runs from its
+# heading to the next blank line / next `*** ports:` heading / EOF.
+_CONTRACT_PORTSECTION_HDR_RE = re.compile(
+    r"^[ \t>*#-]*\b(?:input|output|inout|i/o|in|out)\b[ \t]*ports?\s*:?\s*$",
+    re.IGNORECASE | re.MULTILINE)
+_CONTRACT_COLON_LINE_RE = re.compile(
+    rf"^[ \t>*#-]*`?\s*({_CONTRACT_NAME_TOKENS})\s*`?\s*:",
+    re.IGNORECASE | re.MULTILINE)
+
+
+def _contract_ports_from_colon_form(text: str) -> set:
+    """ORGANIC #518 reopen — reset/clock spellings declared in the RTLLM /
+    VerilogEval `Input ports:` / `Output ports:` colon-form. A `NAME: <desc>`
+    line registers ONLY when it sits inside such a port section (heading → next
+    blank line / next ports heading / EOF), so a `reset:` in unrelated prose is
+    never registered — the suppression stays scoped to genuine port contracts."""
+    found: set = set()
+    hdrs = list(_CONTRACT_PORTSECTION_HDR_RE.finditer(text))
+    for k, h in enumerate(hdrs):
+        start = h.end()
+        # The section body ends at the next ports-heading, the first blank line
+        # after the body began, or EOF — whichever comes first.
+        nxt_hdr = hdrs[k + 1].start() if k + 1 < len(hdrs) else len(text)
+        body = text[start:nxt_hdr]
+        blank = re.search(r"\n[ \t]*\n", body)
+        if blank:
+            body = body[:blank.start()]
+        for m in _CONTRACT_COLON_LINE_RE.finditer(body):
+            found.add(m.group(1).lower())
+    return found
+
 
 def _contract_ports_from_text(text: str) -> set:
     """The reset/clock spellings declared as PORTS in one contract-doc `text`.
     Only port-declaration contexts count (backtick name / markdown table cell /
-    Verilog port decl / explicit `port <name>` phrasing) — loose prose mentions
-    of "reset"/"clock" do NOT register, so the suppression never over-fires."""
+    Verilog port decl / explicit `port <name>` phrasing / `Input ports:` colon-
+    form) — loose prose mentions of "reset"/"clock" do NOT register, so the
+    suppression never over-fires."""
     found: set = set()
     for re_ in (_CONTRACT_BACKTICK_RE, _CONTRACT_TABLECELL_RE,
                 _CONTRACT_VERILOG_RE):
@@ -220,6 +265,7 @@ def _contract_ports_from_text(text: str) -> set:
         tok = m.group(1) or m.group(2)
         if tok:
             found.add(tok.lower())
+    found |= _contract_ports_from_colon_form(text)
     return found
 
 

@@ -843,17 +843,27 @@ def _l6_staged_fsm_credit(data: dict, project, ic_class: str) -> int:
 
     Keys (ALL required, fail-closed):
       (a) ic_class has rtl_gen=null in the registry (reused-IP / from-spec
-          class; bare_fpga / unknown rejected by _class_rtl_gen_null);
+          class; bare_fpga / unknown rejected by _class_rtl_gen_null) AND is
+          registry-flagged `sparse_control_timing` (a genuinely-sparse compute /
+          CPU class — processor_cpu / digital_arithmetic_primitive /
+          crypto_accelerator). #748-reopen §4.05: a non-sparse reused-IP PROTOCOL
+          class (digital_cmd_driven / bus_interconnect_protocol /
+          serial_peripheral_protocol / bus_peripheral — all rtl_gen=null but
+          sparse_control_timing=False, strict l6_min=5) carries a RICH protocol
+          state machine and MUST keep the strict floor, so the staged-RTL harvest
+          credit must NEVER fire for it (mirrors the L6/L8 floor relaxation, which
+          is keyed on _class_sparse_control_timing — NOT _class_rtl_gen_null);
       (b) reused RTL is provably present — a staged input/vendor_rtl/ dir with
           ≥1 .v/.sv file, OR the doc carries an honest `fsm_in_staged_rtl: true`
           flag (the runner's explicit "the FSM lives in staged RTL" signal);
       (c) the staged RTL actually enumerates an FSM-state typedef enum.
 
     When all hold, return the harvested state count (≥1). Otherwise 0 — the
-    plain L6 floor stays in force (no leak: a class without rtl_gen=null, a
-    project with no staged RTL and no honest flag, or staged RTL with no
-    FSM-typed enum, earns nothing)."""
-    if not _class_rtl_gen_null(ic_class):
+    plain L6 floor stays in force (no leak: a class without rtl_gen=null or not
+    sparse_control_timing, a project with no staged RTL and no honest flag, or
+    staged RTL with no FSM-typed enum, earns nothing)."""
+    if not (_class_rtl_gen_null(ic_class)
+            and _class_sparse_control_timing(ic_class)):
         return 0
     rtl_text = _staged_vendor_rtl_text(project)
     honest_flag = _explicit_true(data.get("fsm_in_staged_rtl"))
@@ -1164,7 +1174,20 @@ def _check_l_doc(layer: int, data: dict,
         # is present (or the doc carries an honest `fsm_in_staged_rtl: true`
         # flag) — credit the harvested state count. The FSM provably exists in
         # the staged RTL; phase-1 prose just under-counts it.
-        if 1 <= n_states < l6_min and _class_rtl_gen_null(ic_class):
+        # #748-reopen §4.05: ALSO key on _class_sparse_control_timing — a
+        # non-sparse reused-IP PROTOCOL class (digital_cmd_driven /
+        # bus_interconnect_protocol / serial_peripheral_protocol / bus_peripheral,
+        # all rtl_gen=null but sparse_control_timing=False, strict l6_min=5) has a
+        # RICH protocol FSM spec and MUST keep the strict floor; only genuinely-
+        # sparse compute/CPU classes (processor_cpu / digital_arithmetic_primitive
+        # / crypto_accelerator) earn the staged-RTL harvest credit. Mirrors the
+        # l6_min/l8_min relaxation above, which is likewise keyed on
+        # _class_sparse_control_timing — NOT _class_rtl_gen_null. Both keys are
+        # ALSO enforced inside _l6_staged_fsm_credit (defense-in-depth) so neither
+        # path leaks; the option-(ii) flag-only relaxation below is gated here.
+        if (1 <= n_states < l6_min
+                and _class_rtl_gen_null(ic_class)
+                and _class_sparse_control_timing(ic_class)):
             harvested = _l6_staged_fsm_credit(data, project, ic_class)
             if harvested > n_states:
                 n_states = harvested

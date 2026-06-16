@@ -193,6 +193,36 @@ def _split_enum_members(blob: str) -> List[str]:
     return members
 
 
+_VALUE_MEMBER_RE = re.compile(
+    r"(0[xXbB][0-9A-Fa-f_]+|\d+|\d+'[bdh][0-9A-Fa-fxXzZ_]+)")
+# An explicit "enumerated VALUE set" context that licenses an identifier-only
+# brace-list (e.g. "mode in {IDLE, RUN, DONE}", "one of {A, B, C}",
+# "valid states {S0, S1}"). Without such a context an identifier-only `{...}`
+# is, far more often, a Verilog bit-field CONCATENATION ({E7,...,E0}, {a,b,c})
+# or a code expression — NOT an enumerated value set the TB must cover member
+# by member. chip-AGNOSTIC: pure set-builder grammar, no design literal.
+_SET_CONTEXT_RE = re.compile(
+    r"\b(one\s+of|any\s+of|each\s+of|member\s+of|in\s+(?:the\s+)?set|"
+    r"valid\s+(?:value|values|state|states|mode|modes|enum\w*)|"
+    r"enumerat\w*|\bstate\s*=|\bmode\s+in\b|\bopcode\s+in\b)\b",
+    re.I)
+
+
+def _is_value_enum(member_blob: str, members: List[str], context: str) -> bool:
+    """Decide whether a brace-list `{...}` is a genuine enumerated VALUE set
+    (member-by-member TB coverage is testable) versus a Verilog CONCATENATION /
+    code expression that merely shares the `{...}` shape.
+
+    Accept when ANY member is a value-shaped literal (hex/dec/bin) — a real
+    value set. An identifier-ONLY brace-list is accepted ONLY in an explicit
+    enumerated-set context window (see _SET_CONTEXT_RE); otherwise it is treated
+    as a concatenation/expression and NOT charged as an enum requirement (the
+    decoder_0011 {E7..E0} output-assembly false positive)."""
+    if any(_VALUE_MEMBER_RE.fullmatch(m) for m in members):
+        return True
+    return bool(_SET_CONTEXT_RE.search(context))
+
+
 # ---------------------------------------------------------------------------
 # Reset / latency facts (delegated to _specrtl_common, augmented for shorthand)
 # ---------------------------------------------------------------------------
@@ -229,6 +259,78 @@ def _detect_reset_mode_polarity(text: str):
         elif _SYNC_SHORTHAND.search(rctx):
             mode = "synchronous"
     return mode, polarity
+
+
+# A reset-shaped PORT NAME (whole-identifier), used to derive reset COVERAGE
+# TOKENS from the design's actual reset port(s) instead of a fixed
+# ['reset','rst','por'] list. The shipped gate hard-coded those three tokens and
+# matched them with `\b<tok>\b`, so the dominant sync/async-reset naming
+# conventions never matched: `\brst\b` fails inside `rst_in` / `rst_n` / `srst`
+# (the `_`/adjacent letter kills the word boundary) and `clr`/`sclr` matched
+# nothing. A TB that faithfully drives the design's real reset port was scored
+# UNCOVERED (decoder_0001 `rst_in`, Muller_C `srst`/`clr`, gaussian_div `rst_n`).
+# The stem is bound to an identifier delimiter (start / `_` / trailing n|ni|digit)
+# so it matches rst/reset/clr/clear/por/srst/sclr conventions but NOT unrelated
+# identifiers that merely contain the letters (first / burst / worst).
+# chip-AGNOSTIC: generic reset-naming grammar, no design / vendor / SKU literal.
+_RESET_PORT_NAME_RE = re.compile(
+    r"(?:^|_)(?:a?rst|s?rst|reset|sclr|clr|clear|por)(?:_|n|ni|[0-9]|$)", re.I)
+_RESET_PORT_EXACT = {
+    "rst", "reset", "clr", "clear", "por", "srst", "sclr", "arst", "areset",
+    "aresetn", "nrst", "nreset", "resetn", "rstn", "rst_n", "reset_n",
+}
+
+
+def _is_reset_port_name(name: str) -> bool:
+    n = name.lower()
+    return n in _RESET_PORT_EXACT or bool(_RESET_PORT_NAME_RE.search(n))
+
+
+# Verilog keywords the (best-effort) RTL port parser can leak as "port" names
+# when a body declaration is mis-scoped — never real ports; filtered from the
+# cross-check set so they cannot accidentally rescue a spec phantom.
+_RTL_PORT_NOISE = {
+    "reg", "wire", "logic", "input", "output", "inout", "signed", "unsigned",
+    "parameter", "localparam", "integer", "genvar", "wand", "wor", "tri",
+}
+
+
+def _rtl_reset_ports(rtl_text: Optional[str]) -> List[str]:
+    """Reset-shaped port names parsed from the authored RTL (best-effort).
+
+    Returns the concrete reset port identifier(s) so the reset checklist item's
+    coverage tokens are the design's REAL reset port(s) — exact, over-fit-free,
+    no-leak (a TB must drive the actual reset port to be counted)."""
+    if not rtl_text:
+        return []
+    try:
+        _, ports = _SRC.parse_rtl_ports(rtl_text, None)
+    except Exception:
+        return []
+    seen, out = set(), []
+    for p in ports:
+        nm = p.name
+        if (nm.lower() not in _RTL_PORT_NOISE
+                and _is_reset_port_name(nm) and nm not in seen):
+            seen.add(nm)
+            out.append(nm)
+    return out
+
+
+def _rtl_port_name_set(rtl_text: Optional[str]) -> set:
+    """Lower-cased set of the authored RTL's port identifiers (best-effort).
+
+    Returns an EMPTY set when no usable port could be parsed, so the caller
+    skips the phantom-port cross-check rather than risk dropping real ports on
+    a parser miss. chip-AGNOSTIC: structural Verilog port parse only."""
+    if not rtl_text:
+        return set()
+    try:
+        _, ports = _SRC.parse_rtl_ports(rtl_text, None)
+    except Exception:
+        return set()
+    return {p.name.lower() for p in ports
+            if p.name and p.name.lower() not in _RTL_PORT_NOISE}
 
 
 # ORGANIC #743 — negation-aware feature presence. A spec whose ONLY mention of
@@ -367,6 +469,16 @@ def extract_checklist(spec_text: str) -> List[ChecklistItem]:
     for m in _ENUM_SET_RE.finditer(spec_text):
         members = _split_enum_members(m.group(1))
         if len(members) < 2:
+            continue
+        # A `{...}` is charged as an enumerated VALUE set ONLY when it is a real
+        # value set (>=1 hex/dec/bin literal) or it sits in an explicit
+        # set-builder context. An identifier-only brace-list with no set context
+        # is a Verilog bit-field CONCATENATION / code expression (e.g. the
+        # {E7,E6,...,E0} output-assembly column of a decoder table) and must NOT
+        # demand per-member TB coverage. Window = the line/clause around the set.
+        _ws, _we = m.start(), m.end()
+        _ctx = spec_text[max(0, _ws - 80):min(len(spec_text), _we + 40)]
+        if not _is_value_enum(m.group(1), members, _ctx):
             continue
         set_repr = "{" + ", ".join(members) + "}"
         items.append(ChecklistItem(
@@ -554,7 +666,20 @@ def attribute_coverage(items: List[ChecklistItem], tb_text: Optional[str],
     for it in items:
         # The enum-boundary item needs an OUTSIDE-the-set value in the TB.
         if "__OUTSIDE_SET__" in it.coverage_tokens:
-            outside = tb_values_norm - members_norm if members_norm else set()
+            # When the enum has NO value-shaped members (identifier-only set),
+            # "outside the set" is undefinable over value literals, so the
+            # boundary requirement is structurally unsatisfiable for ANY TB.
+            # Auto-satisfy it instead of unconditionally failing — the legacy
+            # `... if members_norm else set()` made it impossible to pass
+            # (decoder_0011). A value set with members still demands a real
+            # outside-the-set stimulus below.
+            if not members_norm:
+                it.covered = True
+                it.coverage_note = ("enum has no value-shaped members; "
+                                    "outside-the-set boundary not value-testable "
+                                    "(auto-satisfied)")
+                continue
+            outside = tb_values_norm - members_norm
             it.covered = bool(outside)
             it.coverage_note = (
                 f"TB stimulates outside-the-set value(s) {sorted(outside)}"
@@ -681,6 +806,32 @@ def run(stations: dict, rtl_text: Optional[str], tb_text: Optional[str],
     """`stations` maps STATION_ORDER keys -> text (only the provided ones)."""
     items = extract_chain(stations)
 
+    # --- Reset coverage tokens from the design's REAL reset port(s) ----------
+    # The shipped reset item hard-codes ['reset','rst','por'] which never match
+    # the dominant conventions (rst_in / rst_n / srst / clr). Augment the reset
+    # item with the authored RTL's actual reset port identifier(s) so a TB that
+    # faithfully drives the real reset port is counted as covering reset.
+    rtl_reset_ports = _rtl_reset_ports(rtl_text)
+    if rtl_reset_ports:
+        for it in items:
+            if it.kind == "reset":
+                for nm in rtl_reset_ports:
+                    if nm not in it.coverage_tokens:
+                        it.coverage_tokens.append(nm)
+
+    # --- (#752 → #751 adversarial-review remediation) -----------------------
+    # An EARLIER version of this fix DROPPED any spec-derived `port` checklist
+    # item absent from the authored RTL port set, to suppress prose-fabricated
+    # phantom ports. That cross-check was a §4.05 LEAK: it could not tell a
+    # prose phantom apart from a REAL spec port the RTL WRONGLY OMITS (a defect
+    # of exactly the class this gate exists to catch), so a TB for an RTL that
+    # dropped a required port passed --strict. The phantom source is now fixed
+    # AT EXTRACTION — `_specrtl_common._NL_PORT` no longer harvests prose bullets
+    # and the prose-scan fallback is fenced on a real `module … endmodule`
+    # (#751) — so there is nothing legitimate left for a downstream drop to do,
+    # and the drop only created the leak. It is removed; a spec port absent from
+    # the RTL now correctly stays a requirement (a missing real port still GAPs /
+    # BLOCKs under --strict).
     enum_members_all: List[str] = []
     for it in items:
         if it.kind == "enum_set":
