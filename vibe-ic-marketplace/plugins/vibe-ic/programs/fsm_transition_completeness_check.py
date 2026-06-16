@@ -294,6 +294,205 @@ def check_text(text: str) -> Tuple[List[Finding], str]:
     return (findings, "CHECKED")
 
 
+# --------------------------------------------------------------------------- #
+# ONE-HOT CONTINUOUS-ASSIGN next-state completeness (ORGANIC #791)             #
+# --------------------------------------------------------------------------- #
+# The case-driven analyser above is BLIND to a one-hot FSM authored as pure
+# continuous-assigns (no `case`): such a design has no state `localparam` case
+# items, so parse_states() returns [] and check_text() SKIPs (-no-state-
+# declarations). VerilogEval Prob150_review2015_fsmonehot is exactly this shape
+# — and a fresh author dropped a SPEC-DISCLOSED self-loop in-edge
+# (`Count --done_counting=0--> Count`) from the `Count_next` equation, so the
+# functionally-wrong sample shipped hard_gates_pass=true (hidden-TB mismatches
+# on every cycle exercising that transition). The "enumerate every in-edge incl
+# self-loops" rule lived only as ic-expert PROSE — unenforced.
+#
+# This check needs the SPEC's disclosed transition table (the in-edges live in
+# the prompt, not the RTL), so it takes BOTH the RTL and the spec text. It is
+# scoped TIGHT to be zero-false-fire (§4.05 NO-FALSE-FIRE):
+#   * It fires ONLY when the spec discloses an arrow-form transition table
+#     (`<src> ... --<cond>--> <dst>` rows, requiring a `--label-->` arrow — a
+#     bare prose `A --> B` does NOT match) AND the RTL has parseable one-hot
+#     next-state assigns (`assign <Dst>_next = ...` / `assign next_state[<i>] =
+#     ...`) for the disclosed destinations.
+#   * A CORRECT one-hot FSM (every disclosed in-edge present) is NOT flagged.
+#   * A design with NO disclosed transition table stays SKIP (no false fire).
+#   * A destination with no parseable next-state assign is UNDER-flagged (the
+#     edge is skipped) rather than guessed — a miss is acceptable, a false flag
+#     on a correct FSM is not.
+# chip-AGNOSTIC: pure structure — no chip / state / opcode literal.
+
+# A disclosed in-edge row: `<src> (<output>) --<input_cond>--> <dst>` — the
+# `--label-->` arrow form. Anchored so the RHS is an identifier-only end-of-line
+# (a real table row): a header `state ... --input--> next state` (trailing word)
+# fails the `$` anchor, and a bare prose `data --> register` (no leading `--`)
+# fails the mandatory `--<cond>--` segment.
+_EDGE_RE = re.compile(
+    r"^\s*([A-Za-z_]\w*)\b[^\n>]*?--[^\n>]*?-->\s*([A-Za-z_]\w*)\s*$",
+    re.MULTILINE)
+
+# one-hot encoding disclosure tuple:
+#   (S, S1, ..., Wait) = (10'b0000000001, 10'b0000000010, ...)
+# The bit index is the position in the left tuple (LSB-first, matching the
+# first 10'b...0001 entry). The `= (` lookahead requires the RHS to BE another
+# parenthesised list, which excludes a bare port-interface tuple. The list items
+# are BARE identifiers (`S, S1`), so a Verilog port tuple (`input a, input b`)
+# never matches.
+_ENCODING_RE = re.compile(
+    r"\(\s*([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)+)\s*\)\s*=\s*\(", re.DOTALL)
+
+# RTL next-state assigns.
+#  Form A (per-destination named output):  assign <Dst>_next = <expr> ;
+#  Form B (indexed next-state vector):      assign next_state[<idx|name>] = <expr> ;
+_ASSIGN_NEXT_NAMED_RE = re.compile(
+    r"\bassign\s+([A-Za-z_]\w*)_next\s*=\s*(.*?);", re.DOTALL)
+_ASSIGN_NEXT_VEC_RE = re.compile(
+    r"\bassign\s+(?:next_state|state_next|nstate|ns)\s*\[\s*([A-Za-z_0-9]\w*)\s*\]"
+    r"\s*=\s*(.*?);", re.DOTALL)
+
+
+def parse_transition_table(spec_text: str) -> List[Tuple[str, str]]:
+    """Return disclosed (src, dst) in-edges from a spec arrow-form transition
+    table. Empty when no such table is disclosed (→ caller SKIPs)."""
+    return [(m.group(1), m.group(2)) for m in _EDGE_RE.finditer(spec_text)]
+
+
+def parse_onehot_encoding(spec_text: str) -> dict:
+    """Map state-name → bit index from the disclosed one-hot encoding tuple.
+    Empty when no encoding tuple is disclosed."""
+    m = _ENCODING_RE.search(spec_text)
+    if not m:
+        return {}
+    names = [n.strip() for n in m.group(1).split(",")]
+    return {n: i for i, n in enumerate(names)}
+
+
+def _parse_int_localparams(body: str) -> dict:
+    """Map NAME→int for integer `localparam/parameter NAME=val` declarations —
+    used to resolve a named one-hot index (`state[Count]` where Count=8)."""
+    out: dict = {}
+    for m in re.finditer(
+            r"\b(?:localparam|parameter)\b\s*(?:\[[^\]]*\]\s*)?"
+            r"((?:[A-Za-z_]\w*\s*=\s*[^;,]+[,;]\s*)+)", body):
+        for am in re.finditer(r"([A-Za-z_]\w*)\s*=\s*([^;,]+)[,;]", m.group(1)):
+            mnum = re.match(r"^(\d+)$", am.group(2).strip())
+            if mnum:
+                out[am.group(1)] = int(mnum.group(1))
+    return out
+
+
+def _state_vector_names(dst_exprs) -> "set":
+    """ORGANIC #791 Step-2.7 — DERIVE the current-state one-hot vector name(s)
+    from the RTL instead of hard-coding `state`. The one-hot source terms are
+    `<VEC>[<idx|name>]` where VEC is the registered current-state vector; common
+    real spellings are `state` / `state_q` / `state_reg` / `cur_state` / `cs` /
+    `q`. VEC is the base read MOST OFTEN as `VEC[...]` across the next-state
+    equations (a data bus is indexed in at most one equation; the state vector in
+    essentially all). Return the maximal-frequency base(s); ties keep all (a
+    permissive source-term match under-flags rather than false-fires)."""
+    from collections import Counter
+    cnt: "Counter" = Counter()
+    for expr in dst_exprs:
+        for base in set(re.findall(r"\b([A-Za-z_]\w*)\s*\[", expr)):
+            cnt[base] += 1
+    if not cnt:
+        return set()
+    top = max(cnt.values())
+    return {b for b, c in cnt.items() if c == top}
+
+
+def _expr_refs_source(expr: str, src: str, src_idx: Optional[int],
+                      localparams: dict, state_vecs: "set") -> bool:
+    """True if `expr` references the source state `src` as a one-hot term —
+    `<VEC>[src]` (named) or `<VEC>[src_idx]` (numeric) or `<VEC>[ALIAS]` where a
+    localparam ALIAS resolves to src_idx, for any current-state vector VEC the
+    design uses (derived, NOT hard-coded — #791 Step-2.7: a correct FSM whose
+    register is named `state_q`/`cur_state`/`q` must not be falsely flagged)."""
+    if not state_vecs:
+        return False
+    vec_alt = "|".join(re.escape(v) for v in sorted(state_vecs, key=len,
+                                                     reverse=True))
+    for tok in re.findall(rf"\b(?:{vec_alt})\s*\[\s*([A-Za-z_0-9]\w*)\s*\]",
+                          expr):
+        if tok == src:
+            return True
+        if tok.isdigit() and src_idx is not None and int(tok) == src_idx:
+            return True
+        if (tok in localparams and src_idx is not None
+                and localparams[tok] == src_idx):
+            return True
+    return False
+
+
+def check_onehot_continuous_assign(
+        rtl_text: str, spec_text: str) -> Tuple[List[Finding], str]:
+    """One-hot continuous-assign next-state completeness vs the spec's disclosed
+    transition table. Flags a disclosed in-edge (incl self-loop) absent from the
+    destination state's next-state equation.
+
+    SKIP (no false fire) when: no spec text, no disclosed transition table, or
+    the RTL has no parseable one-hot next-state assigns / no matched
+    destination. Returns (findings, 'CHECKED-ONEHOT' | 'SKIP-<reason>')."""
+    if not spec_text:
+        return ([], "SKIP-no-spec")
+    edges = parse_transition_table(spec_text)
+    if len(edges) < 2:
+        return ([], "SKIP-no-transition-table")
+    enc = parse_onehot_encoding(spec_text)
+
+    body = _strip_comments(rtl_text)
+    localparams = _parse_int_localparams(body)
+
+    dst_expr = {m.group(1): m.group(2)
+                for m in _ASSIGN_NEXT_NAMED_RE.finditer(body)}
+    vec_dst_expr = {m.group(1): m.group(2)
+                    for m in _ASSIGN_NEXT_VEC_RE.finditer(body)}
+    if not dst_expr and not vec_dst_expr:
+        return ([], "SKIP-no-onehot-next-state-assign")
+
+    # ORGANIC #791 Step-2.7 — DERIVE the current-state vector name(s) from the
+    # next-state equations (NOT hard-coded `state`). If the equations index NO
+    # `<vec>[...]` at all, the one-hot source terms cannot be judged → SKIP
+    # (a non-bit-indexed encoding we do not parse — under-flag, never a false
+    # block of a correct design).
+    state_vecs = _state_vector_names(
+        list(dst_expr.values()) + list(vec_dst_expr.values()))
+    if not state_vecs:
+        return ([], "SKIP-no-state-vector")
+
+    findings: List[Finding] = []
+    checked_any = False
+    for src, dst in edges:
+        expr = None
+        if dst in dst_expr:
+            expr = dst_expr[dst]
+        elif dst in vec_dst_expr:
+            expr = vec_dst_expr[dst]
+        elif enc.get(dst) is not None and str(enc[dst]) in vec_dst_expr:
+            expr = vec_dst_expr[str(enc[dst])]
+        if expr is None:
+            # destination has no parseable next-state assign — under-flag, don't
+            # guess.
+            continue
+        checked_any = True
+        src_idx = enc.get(src)
+        if not _expr_refs_source(expr, src, src_idx, localparams, state_vecs):
+            kind = "self-loop" if src == dst else "in-edge"
+            _vec = sorted(state_vecs)[0]
+            findings.append(Finding(
+                "fsm-onehot-missing-transition", "ERROR", dst,
+                f"spec discloses the {kind} {src!r} --> {dst!r} but the one-hot "
+                f"next-state equation for {dst!r} omits the {src!r} source term "
+                f"(e.g. `{_vec}[{src}]`"
+                + (f"/`{_vec}[{src_idx}]`" if src_idx is not None else "")
+                + "). The hidden TB exercising that transition will mismatch — "
+                "enumerate EVERY disclosed in-edge (incl self-loops) into the "
+                "destination's one-hot next-state OR."))
+    if not checked_any:
+        return ([], "SKIP-no-matched-destination")
+    return (findings, "CHECKED-ONEHOT")
+
+
 def check_rtl_dir(rtl_dir: Path) -> Tuple[List[Tuple[Path, Finding]], str]:
     out: List[Tuple[Path, Finding]] = []
     any_checked = False
@@ -313,9 +512,14 @@ def check_rtl_dir(rtl_dir: Path) -> Tuple[List[Tuple[Path, Finding]], str]:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
-        description="Structural FSM next-state completeness check (#522).")
+        description="Structural FSM next-state completeness check (#522; "
+                    "#791 one-hot continuous-assign extension).")
     ap.add_argument("target", help="RTL file OR directory")
     ap.add_argument("--json", default=None, help="write JSON findings here")
+    ap.add_argument("--spec", default=None,
+                    help="spec/prompt file disclosing the transition table — "
+                         "enables the one-hot continuous-assign next-state "
+                         "completeness check (#791). Single-RTL targets only.")
     ap.add_argument("--warn-only", action="store_true",
                     help="exit 0 even on ERROR findings (advisory mode)")
     args = ap.parse_args(argv)
@@ -324,12 +528,29 @@ def main(argv=None) -> int:
         print(f"ERROR: target not found: {p}", file=sys.stderr)
         return 2
 
+    spec_text = ""
+    if args.spec:
+        sp = Path(args.spec)
+        if not sp.is_file():
+            print(f"ERROR: --spec not found: {sp}", file=sys.stderr)
+            return 2
+        spec_text = sp.read_text(errors="replace")
+
     if p.is_dir():
         pairs, status = check_rtl_dir(p)
         findings = [{"file": str(fp), **asdict(fd)} for fp, fd in pairs]
     else:
-        fl, status = check_text(p.read_text(errors="replace"))
+        rtl_text = p.read_text(errors="replace")
+        fl, status = check_text(rtl_text)
         findings = [{"file": str(p), **asdict(fd)} for fd in fl]
+        # #791: one-hot continuous-assign next-state completeness (needs spec).
+        if spec_text:
+            ohfl, ohstatus = check_onehot_continuous_assign(rtl_text, spec_text)
+            findings += [{"file": str(p), **asdict(fd)} for fd in ohfl]
+            if status.startswith("SKIP") and ohstatus == "CHECKED-ONEHOT":
+                status = ohstatus
+            elif status.startswith("SKIP") and ohstatus.startswith("SKIP"):
+                status = f"{status}+{ohstatus}"
 
     summary = {
         "status": status,

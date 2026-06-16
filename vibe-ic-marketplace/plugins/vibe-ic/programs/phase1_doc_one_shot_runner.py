@@ -46179,9 +46179,22 @@ def _post_emit_pdf_regmap_table_rows(project: Path) -> None:
         return
     if not isinstance(l1, dict):
         return
-    class_path = l1.get("class_path")
-    if class_path not in _REGMAP_TABLE_CLASSES:
-        return
+    # ORGANIC #800 (gapJ) — CONTENT-based trigger replaces the class allow-list
+    # gate. Pre-#800 this hard-returned whenever `class_path` was not in
+    # `_REGMAP_TABLE_CLASSES`, so a `processor_cpu` (or register-mapped
+    # peripheral IP) whose docs carry a `0x..` CSR/address-column table never
+    # reached the extractor — its address tokens were dropped and the P0
+    # `phase1_doc_input_completeness_check` FAILed. The class allow-list was a
+    # PROXY for "this doc has a register-address table" but it both under-fired
+    # AND is redundant: `extract_regmap_table` is STRUCTURALLY strict (it emits
+    # rows only for genuine `0x..` dash/column/GFM-pipe/rst-grid tables and
+    # returns [] for prose). So run the picker for ANY class and append only
+    # what the strict extractor finds. §4.05 NEG: a class whose docs contain no
+    # address table appends nothing (no spurious rows); the existing eligible
+    # classes are unaffected. chip-AGNOSTIC: structural content detection drives
+    # the emit, not a class literal. `_REGMAP_TABLE_CLASSES` is retained only as
+    # documentation of the always-eligible crypto/memory/storage classes.
+    class_path = l1.get("class_path")  # retained for evidence/back-compat
 
     # v1.6.108 (#40 Bug 1A P0) — use canonical layout helper.
     # Pre-v1.6.108 hardcode `project / "extracted_docs"` early-returned

@@ -112,9 +112,25 @@ _TB_PASS_RE = re.compile(
     r"\bPASSED\b|"
     r"^\s*PASS\s*$",
     re.IGNORECASE | re.MULTILINE)
+# ORGANIC #796 — a bare `error` word is BENIGN in a PASSING line (`error count
+# = 0`, `no errors`, an `error-flag` status noun): it is NOT a verdict. The FAIL
+# tokens are STRUCTURAL / NONZERO forms only — a verdict banner (`TEST FAIL` /
+# `FAILED` / a bare `FAIL` line), a severity task (`$error` / `$fatal` /
+# `FATAL`), or a NONZERO error count (`errors: 3` / `3 errors`). A zero count
+# (`error count = 0`, `errors == 0`) never matches (floored by `[1-9]`).
 _TB_FAIL_RE = re.compile(
-    r"\bTEST[_\s]?FAIL|\bFAILED\b|\bERROR\b|^\s*FAIL\s*$",
+    r"\bTEST[_\s]?FAIL|"
+    r"\bFAILED\b|"
+    r"^\s*FAIL\s*$|"
+    r"\bFATAL\b|"
+    r"\$(?:error|fatal)\b|"
+    r"\bERRORS?\s*[:=]\s*[1-9]|"        # errors: 3 / error = 7  (nonzero)
+    r"\b[1-9]\d*\s+ERRORS?\b",          # 3 errors               (nonzero)
     re.IGNORECASE | re.MULTILINE)
+# Case-SENSITIVE bare UPPERCASE `ERROR`/`ERRORS` banner — a fail token only when
+# no clear PASS banner is present (checked AFTER the PASS test in _tb_verdict),
+# so a PASSING TB whose stdout merely mentions a lowercase `error` is unaffected.
+_TB_FAIL_UPPER_RE = re.compile(r"\bERRORS?\b", re.MULTILINE)
 _TB_MISMATCH_RE = re.compile(r"Mismatches?\s*:\s*(\d+)\s+in\s+(\d+)",
                              re.IGNORECASE)
 
@@ -297,10 +313,16 @@ def _tb_verdict(sim_out: str) -> Tuple[Optional[bool], str]:
         if tot > 0 and mism == 0:
             return True, f"functional TB: 0 mismatches in {tot}"
         return False, f"functional TB: {mism} mismatches in {tot}"
+    # ORGANIC #796 — a STRUCTURAL / NONZERO fail token wins outright. Then a
+    # clear PASS banner wins over a bare uppercase `ERROR` mention (an
+    # `error-flag asserted ... TEST PASSED` line is a PASS); only with NO PASS
+    # banner does a bare uppercase ERROR banner block.
     if _TB_FAIL_RE.search(sim_out):
         return False, "functional TB printed a FAIL/ERROR token"
     if _TB_PASS_RE.search(sim_out):
         return True, "functional TB printed a PASS token"
+    if _TB_FAIL_UPPER_RE.search(sim_out):
+        return False, "functional TB printed a bare ERROR banner (no PASS)"
     return None, "functional TB printed no recognised PASS/FAIL verdict line"
 
 

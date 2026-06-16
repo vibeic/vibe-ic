@@ -341,9 +341,22 @@ def design_contract_ports(project: Path) -> set:
 # pins. The arm fires ONLY when a literal `::` qualifier is present, so plain /
 # ANSI ports (`input wire [7:0] x`, `input logic clk_i`, `inout io_pad`) are
 # byte-for-byte unaffected (§4.05 no-leak). chip-AGNOSTIC: pure SV port grammar.
+# ORGANIC #792 — the net-type / sign qualifiers that may sit between a port's
+# direction keyword and its name. The historical set was just
+# `wire|reg|logic|signed|unsigned`; the standard Verilog NET TYPES (`tri`,
+# `tri0`, `tri1`, `wand`, `wor`, … — used by the additive dual-spelling reset
+# wrapper to give an undriven alias a defined inactive default) were missing, so
+# `input tri1 reset_n` parsed the net-type `tri1` AS the port name and dropped
+# `reset_n`. Shared single source (Step-2.7 rule 3 — no hand-copied lists) so the
+# three port-surface regexes never drift. Longest-first is irrelevant (each is a
+# whole-word `\b` alternation) but kept readable.
+_NET_QUAL_RE = (r"(?:(?:wire|reg|logic|signed|unsigned|"
+                r"tri|tri0|tri1|triand|trior|trireg|wand|wor|uwire|"
+                r"supply0|supply1)\b\s*)*")
+
 _PORT_DECL_RE = re.compile(
     r"\b(input|output|inout)\b\s*"
-    r"(?:(?:wire|reg|logic|signed|unsigned)\b\s*)*"
+    + _NET_QUAL_RE +
     r"(?:[A-Za-z_]\w*::\s*[A-Za-z_]\w*\s+)?"   # optional pkg::type_t prefix (#710)
     r"(\[[^\]]+\])?\s*(\w+)")
 
@@ -637,7 +650,7 @@ def _split_top_level_commas(block: str) -> List[str]:
 # (`input clk, rst_n` → the `rst_n` segment carries no direction keyword):
 # optional net-type, optional packed width, then the port name.
 _CONT_PORT_RE = re.compile(
-    r"^(?:(?:wire|reg|logic|signed|unsigned)\b\s*)*"
+    r"^" + _NET_QUAL_RE +
     r"(\[[^\]]+\])?\s*(\w+)")
 
 
@@ -656,7 +669,7 @@ _CONT_PORT_RE = re.compile(
 # its PACKED width; the unpacked dim is recovered downstream from the RTL text.
 _NONANSI_BODY_PORT_RE = re.compile(
     r"\b(input|output|inout)\b\s*"
-    r"(?:(?:wire|reg|logic|signed|unsigned)\b\s*)*"
+    + _NET_QUAL_RE +
     r"(\[[^\]]+\])?\s*"
     r"((?:[A-Za-z_]\w*(?:\s*\[[^\]]+\])*\s*,\s*)*"
     r"[A-Za-z_]\w*(?:\s*\[[^\]]+\])*)\s*;")
@@ -835,7 +848,9 @@ def emit_variant_alias_wrapper(core_module: str,
                                wrapper_name: Optional[str] = None,
                                param_block: Optional[str] = None,
                                param_names: Optional[List[str]] = None,
-                               import_block: Optional[List[str]] = None) -> str:
+                               import_block: Optional[List[str]] = None,
+                               additive_reset_map: "Optional[Dict[str, str]]"
+                               = None) -> str:
     """Render a wrapper that exposes each renamed reset/clock port under its
     TB-facing variant name and wires it 1:1 to the core's original port; all
     other ports pass straight through. RAISES ValueError on a cross-polarity
@@ -851,20 +866,54 @@ def emit_variant_alias_wrapper(core_module: str,
     header and the port list) so package-scoped port-width identifiers —
     e.g. a bus-pkg width localparam used as `[PKG_WIDTH-1:0]` in the inherited
     port decls — resolve on the outer wrapper instead of erroring as
-    `use of undeclared identifier`. None/[] re-emits no import line."""
-    for orig, new in rename_map.items():
+    `use of undeclared identifier`. None/[] re-emits no import line.
+
+    ORGANIC #792 — ADDITIVE dual-spelling RESET ports. `additive_reset_map` maps
+    a core RESET port's spec spelling → its canonical-per-polarity spelling for
+    resets whose spec spelling is the design's OWN contract (so it must stay
+    bindable) BUT whose hidden TB may instead bind the canonical (the #689↔#518
+    indistinguishability — only the invisible TB binding differs). For each such
+    reset the wrapper exposes BOTH spellings as input ports and combines them
+    POLARITY-SAFELY into the core's single reset port:
+      * active-low : `tri1` pull (undriven alias → 1 = deasserted), AND-combine
+      * active-high: `tri0` pull (undriven alias → 0 = deasserted), OR-combine
+    so whichever spelling the TB binds drives the reset and the OTHER (undriven)
+    alias defaults INACTIVE — never floating to `x`. The `tri0`/`tri1` net types
+    are hidden from yosys (which rejects them) behind `` `ifndef YOSYS `` so
+    synthesis sees a plain `input` while iverilog/verilator get the pull. The
+    `_NET_QUAL_RE` port parser skips the net-type, and the port NAME appears only
+    once per declaration (the directive wraps only the qualifier token) so a
+    take-every-arm parse never doubles the port. Disjoint from `rename_map`."""
+    additive = dict(additive_reset_map or {})
+    for orig, new in list(rename_map.items()) + list(additive.items()):
         if not _same_class(orig, new):
             raise ValueError(
                 f"refusing cross-polarity/role reset-clock alias "
                 f"{orig!r} -> {new!r}: "
                 f"{orig}={classify_reset(orig) or ('clock' if is_clock(orig) else '?')}, "
                 f"{new}={classify_reset(new) or ('clock' if is_clock(new) else '?')}")
+    for orig in additive:
+        if classify_reset(orig) is None:
+            raise ValueError(
+                f"refusing additive dual-spelling alias on a NON-reset port "
+                f"{orig!r}: the inactive-default pull is only polarity-safe for "
+                f"resets (a clock has no inactive level).")
+        if orig in rename_map:
+            raise ValueError(
+                f"port {orig!r} is in BOTH rename_map and additive_reset_map — "
+                f"the additive (dual-port) and rename (1:1) paths are disjoint.")
     wrapper_name = wrapper_name or f"{core_module}_aliased"
-    # Defensive duplicate-face guard (#518): the TB-facing port names (after
-    # renaming) must be UNIQUE — a rename_map that collapses two ports onto one
-    # name would emit invalid Verilog (`input rst_n, input rst_n`). plan_aliases
-    # already prevents this; reject any hand-built map that doesn't.
-    faces = [rename_map.get(name, name) for _d, _w, name in ports]
+    # Defensive duplicate-face guard (#518): the TB-facing port names must be
+    # UNIQUE — a rename that collapses two ports onto one name (or an additive
+    # canonical that collides with an existing port) would emit invalid Verilog
+    # (`input rst_n, input rst_n`). plan_aliases already prevents this; reject any
+    # hand-built map that doesn't.
+    faces: List[str] = []
+    for _d, _w, name in ports:
+        if name in additive:
+            faces.extend((name, additive[name]))   # both spellings are faces
+        else:
+            faces.append(rename_map.get(name, name))
     dupes = sorted({f for f in faces if faces.count(f) > 1})
     if dupes:
         raise ValueError(
@@ -884,22 +933,41 @@ def emit_variant_alias_wrapper(core_module: str,
     import_hdr = ""
     if import_block:
         import_hdr = "\n  " + "\n  ".join(c.strip() for c in import_block)
-    decls, conns = [], []
+    decls, conns, combine_wires = [], [], []
     for direction, width, name in ports:
-        face = rename_map.get(name, name)
         w = f" {width}" if width else ""
-        decls.append(f"    {direction}{w} {face}")
-        conns.append(f"        .{name}({face})")
+        if name in additive:
+            canon = additive[name]
+            pol = classify_reset(name)
+            tri = "tri1" if pol == "active_low" else "tri0"
+            op = "&" if pol == "active_low" else "|"
+            net = f"{name}__rcvar_net"
+            # Dual-spelling additive reset: expose BOTH spellings; the net-type
+            # qualifier is hidden from yosys via `` `ifndef YOSYS `` (synthesis
+            # sees a plain input) while simulators get the inactive-default pull.
+            # The port name appears ONCE per decl (directive wraps only the tri
+            # token) so a take-every-arm parse never doubles the port.
+            for face in (name, canon):
+                decls.append(
+                    f"    {direction}{w}\n`ifndef YOSYS\n    {tri}\n`endif\n"
+                    f"    {face}")
+            combine_wires.append(f"    wire {net} = {name} {op} {canon};")
+            conns.append(f"        .{name}({net})")
+        else:
+            face = rename_map.get(name, name)
+            decls.append(f"    {direction}{w} {face}")
+            conns.append(f"        .{name}({face})")
     lines = [
         f"// {wrapper_name} — reset/clock NAME-VARIANT alias wrapper for "
         f"`{core_module}`",
         "// Exposes the canonical-per-polarity reset/clock spelling so a hidden",
         "// testbench using a different but equivalent STANDARD name elaborates.",
         "// Polarity is preserved 1:1. Generated by reset_clock_variant_alias.py"
-        " (#518).",
+        " (#518/#792).",
         f"module {wrapper_name}{import_hdr}{param_hdr} (",
         ",\n".join(decls),
         ");",
+        *combine_wires,
         f"    {core_module}{inst_params} u_{core_module} (",
         ",\n".join(conns),
         "    );",
