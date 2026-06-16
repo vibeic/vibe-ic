@@ -670,11 +670,59 @@ def _case_is_exhaustive(src: str, expr: str, block: str):
     return set(labels) == set(range(1 << width))
 
 
+def _clocked_always_spans(src: str) -> List[tuple]:
+    """ORGANIC #770 r4 — (start, end) char-offset spans of every CLOCKED
+    (edge-sensitive `@(posedge/negedge …)` / always_ff) always block. A `case`
+    inside such a block CANNOT infer a latch: on an unlisted selector code the
+    state register simply HOLDS its value (the canonical registered-FSM idiom).
+    Latch risk only exists in a COMBINATIONAL `always @(*)` / always_comb / a
+    level-sensitive block. chip-AGNOSTIC: pure edge-sensitivity grammar.
+
+    r4 Step-2.7: the span END must be the clocked block's OWN matching `end`
+    (or its single statement), NOT `_block_body_after`'s result — that extends to
+    the NEXT always/endmodule, so a combinational case textually FOLLOWING a
+    clocked block fell inside the over-extended span and was wrongly downgraded
+    (a §4.05 leak). Compute the real end by `begin/end` depth tracking from the
+    statement that opens the block body."""
+    spans: List[tuple] = []
+    for bm in re.finditer(
+            r'\balways(?:_ff)?\s*@\s*\(([^)]*)\)', src):
+        sens = bm.group(1)
+        if not _edge_domain(sens):
+            continue
+        i = bm.end()
+        n = len(src)
+        # skip whitespace to the first body token.
+        while i < n and src[i].isspace():
+            i += 1
+        if i < n and re.match(r'\bbegin\b', src[i:]):
+            # a begin/end block — find the MATCHING end by depth counting over
+            # begin/end keyword tokens (string/comment-free enough for our RTL).
+            depth = 0
+            for km in re.finditer(r'\b(begin|end)\b', src[i:]):
+                depth += 1 if km.group(1) == 'begin' else -1
+                if depth == 0:
+                    spans.append((bm.start(), i + km.end()))
+                    break
+            else:
+                spans.append((bm.start(), n))
+        else:
+            # a single (non-begin) statement — ends at the next ';'.
+            semi = src.find(';', i)
+            spans.append((bm.start(), (semi + 1) if semi != -1 else n))
+    return spans
+
+
 def rule_case_coverage(src: str, path: str) -> List[Finding]:
     findings: List[Finding] = []
     # Find every `case (expr) ... endcase` block with its starting line
     # Simple scan: find `case(...)` opening, find matching endcase
     lines = src.split('\n')
+    clocked_spans = _clocked_always_spans(src)
+    # char offset of the start of each line (for the clocked-span test).
+    line_off = [0]
+    for ln in lines:
+        line_off.append(line_off[-1] + len(ln) + 1)
     case_starts = [(i, m.group(1))
                    for i, ln in enumerate(lines, start=1)
                    for m in re.finditer(r'\bcase[szx]?\s*\(([^)]+)\)', ln)]
@@ -697,9 +745,26 @@ def rule_case_coverage(src: str, path: str) -> List[Finding]:
             # enumerations all stay flagged).
             if _case_is_exhaustive(src, expr, block):
                 continue
-            findings.append(Finding(path, start_line, 'WARN', 'case-no-default', expr.strip(),
+            f = Finding(path, start_line, 'WARN', 'case-no-default', expr.strip(),
                 f"case ({expr.strip()}) has no default branch — "
-                "values not enumerated may generate latch or undefined behavior."))
+                "values not enumerated may generate latch or undefined behavior.")
+            # ORGANIC #770 r4 — a case inside a CLOCKED (sequential) always block
+            # cannot infer a LATCH (the state register HOLDS on an unlisted code,
+            # the canonical registered-FSM idiom). Latch risk is COMBINATIONAL
+            # only, so downgrade the sequential-case WARN to ADVISORY (reported,
+            # never a hard block). A combinational `always @(*)` case with no
+            # default STILL hard-WARNs (real latch risk — §4.05 no-leak).
+            case_off = line_off[start_line - 1]
+            in_clocked = any(s <= case_off < e for s, e in clocked_spans)
+            if in_clocked:
+                f = _advisory(f, _prov.PROSE_HEURISTIC, _prov.CONTRADICTED)
+                f.advisory_note = ("case in a CLOCKED block — on an unlisted code "
+                                   "any assigned variable (state reg / temp) HOLDS "
+                                   "its previous value; no latch / uninitialised "
+                                   "state. Latch risk is COMBINATIONAL-only "
+                                   "(always @(*)); advisory, not a hard block "
+                                   "(ORGANIC #770 r4)")
+            findings.append(f)
     return findings
 
 
