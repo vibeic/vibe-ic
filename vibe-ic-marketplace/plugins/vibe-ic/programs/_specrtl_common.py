@@ -312,6 +312,34 @@ _NL_PORT_WIDTH_ANCHOR_RE = re.compile(
 _NL_PORT_COPULA_RE = re.compile(
     r'^[ \t]*(?:is|are|was|were|will|shall|should|must|can|may|has|have|'
     r'represents?|denotes?|indicates?|holds?|carries|specif\w+)\b', re.I)
+# The same copula/auxiliary set, but matched ANYWHERE in the tail (not anchored).
+# Used by the descriptive-noun-tail guard below to catch the "name-before-copula
+# with an intervening noun" prose shape ("- Input data elements ARE divided into
+# pairs …" → `_NL_PORT_COPULA_RE` misses it because the NOUN `elements` sits
+# between the captured name `data` and the copula `are`). chip-AGNOSTIC: pure
+# English grammar, no chip/SKU literal.
+_NL_PORT_COPULA_ANYWHERE_RE = re.compile(
+    r'\b(?:is|are|was|were|will|shall|should|must|can|may|has|have|'
+    r'represents?|denotes?|indicates?|holds?|carries|specif\w+)\b', re.I)
+# A leading optional packed-dimension `[range]` (literal or parameterized) that a
+# genuine described-port tail may carry before the real port name
+# (`- input logic [N-1:0] o_count : Output count`). Stripped before inspecting the
+# first descriptive token so a ranged-but-genuine port tail is not misread.
+_NL_PORT_TAIL_LEADING_RANGE_RE = re.compile(r'^[ \t]*\[[^\]]*\][ \t]*')
+# ORGANIC #785 r2 (Step-2.7 §4.05) — CANONICAL control/clock/reset/handshake
+# signal names. A bullet whose port NAME is one of these is a genuine port even
+# when it carries only a short descriptive tail (`- input load enable.`,
+# `- input reset active high.`), so the descriptive-noun-tail guard must NOT drop
+# it. Deliberately EXCLUDES generic datapath nouns (data/average/sum/result/…),
+# which remain phantom-prone so the #785 positive (drop `- Input data stream.`)
+# still holds. chip-AGNOSTIC: a general digital-hardware signal vocabulary, no
+# chip/vendor/SKU literal.
+_NL_PORT_CANONICAL_NAMES = frozenset({
+    'clk', 'clock', 'rst', 'reset', 'resetn', 'rstn', 'nreset', 'clr', 'clear',
+    'load', 'en', 'enable', 'start', 'stop', 'go', 'run', 'valid', 'ready',
+    'done', 'ack', 'req', 'busy', 'cs', 'we', 're', 'oe', 'ce', 'wr', 'rd',
+    'sel', 'flush', 'stall', 'hold', 'pause', 'irq', 'int', 'err', 'error',
+    'fault', 'overflow', 'underflow', 'carry', 'borrow', 'zero', 'sign'})
 
 
 def _nl_port_is_prose(name: str, tail: str, has_width: bool = False) -> bool:
@@ -338,6 +366,56 @@ def _nl_port_is_prose(name: str, tail: str, has_width: bool = False) -> bool:
         return True                       # "- Input ports:" heading
     if _NL_PORT_COPULA_RE.match(t):
         return True                       # "- Output latency is 1 cycle"
+    # ORGANIC-20260617 R9C1 (#785) — DESCRIPTIVE-NOUN-TAIL / NOUN-BEFORE-COPULA
+    # prose. A datasheet prose bullet under a port HEADING ("- Input data
+    # stream.", "- Output average over the window.", "- Input data elements are
+    # divided into pairs …") is mis-harvested as a phantom port whose NAME is a
+    # common noun (`data`/`average`) that is deliberately NOT in
+    # `_NL_PORT_PROSE_NAMES` (they are legitimate real port names elsewhere). The
+    # two prior guards miss it: there is no leading colon (not a heading) and the
+    # copula either is absent ("stream.") or is preceded by an intervening noun
+    # ("data ELEMENTS are …") so the anchored `_NL_PORT_COPULA_RE` does not fire.
+    # Distinguish prose from a genuine described port by the structural anchors a
+    # real port carries and prose does not:
+    #   • a width anchor `(N bits)`  (then `has_width` / `_NL_PORT_WIDTH_ANCHOR_RE`)
+    #   • a `name : description` colon mid-tail (kept by the existing flow)
+    #   • a bare/identifier tail with NO terminal sentence period
+    #     ("- input clk system clock", "- input clk_in : Clock input").
+    # Reject ONLY when the bullet carries NO width anchor AND the tail, after an
+    # optional leading packed range, begins with a lowercase descriptive English
+    # word (not an `_`/digit identifier, not a kept function word) AND EITHER it
+    # ends in a sentence period `.` OR a copula appears later (noun-before-copula).
+    # chip-AGNOSTIC: pure English grammar, no chip/vendor/SKU literal.
+    if not has_width and not _NL_PORT_WIDTH_ANCHOR_RE.match(t):
+        # ORGANIC #785 r2 (Step-2.7 §4.05): NEVER drop a bullet whose NAME is a
+        # genuine port. The descriptive-tail heuristic keys on the TAIL only, so
+        # `- input load enable.` / `- input reset active high.` (real control
+        # ports `load`/`reset` + a short description) were wrongly dropped — a
+        # missing such port then leaks past spec_conformance. A name is a real
+        # port (not a phantom) when it is a CANONICAL control/clock/reset/
+        # handshake signal name OR is IDENTIFIER-shaped (carries `_` or a digit:
+        # rst_n, data_valid, clk_in). Only a BARE GENERIC datapath noun
+        # (data/average/stream/…) — never a canonical signal — stays
+        # phantom-prone, so the #785 positive (drop `- Input data stream.`) holds.
+        nlow = name.lower()
+        name_is_real_port = (
+            nlow in _NL_PORT_CANONICAL_NAMES
+            or "_" in name
+            or any(c.isdigit() for c in name))
+        core = _NL_PORT_TAIL_LEADING_RANGE_RE.sub("", t).strip()
+        if not name_is_real_port and core and ":" not in core:
+            mtok = re.match(r"([A-Za-z_]\w*)", core)
+            first = mtok.group(1) if mtok else ""
+            descriptive = (
+                bool(first)
+                and first.islower()
+                and "_" not in first
+                and not any(c.isdigit() for c in first)
+                and first not in _NL_PORT_FUNCTION_WORDS)
+            if descriptive and (
+                    core.rstrip().endswith(".")
+                    or _NL_PORT_COPULA_ANYWHERE_RE.search(core)):
+                return True
     return False
 
 

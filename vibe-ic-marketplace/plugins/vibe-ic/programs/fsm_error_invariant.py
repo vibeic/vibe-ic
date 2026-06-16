@@ -42,6 +42,66 @@ ERROR_NAMES = re.compile(
     re.IGNORECASE)
 
 
+# v1.1.1 (R9C2) — a fault/error STATE is a state whose label name itself
+# denotes a fault/error/abort condition (e.g. FAULT, ERROR, ERR, FAIL,
+# ABORT, FATAL, TIMEOUT, REJECT, INVALID, S_ERROR, ST_FAULT). When an
+# error output is asserted INSIDE such a state branch, that is the literal
+# spec requirement for an error/fault state ("FAULT: Asserts o_error to
+# indicate a fault condition") — NOT the cross-layer anti-pattern this gate
+# targets (a recoverable error fired mid-operation that an upper FSM
+# wrongly treats as packet-terminating). Reuses the same error-semantic
+# vocabulary as ERROR_NAMES plus `fault`/`fatal`, so the recognition is
+# symmetric: `o_error <= 1'b1` in a FAULT/ERROR/FAIL state is spec-mandated;
+# the same assignment in IDLE/RUN/PROCESS/RX (a non-error-named operational
+# state) still fires. Chip-AGNOSTIC: keyed only on the state LABEL's name.
+_FAULT_STATE_NAME = re.compile(
+    r'(?:error|err|fail|fault|abort|fatal|timeout|reject|invalid)',
+    re.IGNORECASE)
+# ORGANIC #786 r2 (Step-2.7 §4.05) — whole-TOKEN fault vocab (NOT a substring).
+_FAULT_WORDS = frozenset({
+    'error', 'err', 'fail', 'fault', 'abort', 'fatal', 'timeout', 'reject',
+    'invalid', 'exception', 'panic', 'halt', 'illegal', 'violation'})
+# A token that makes the state OPERATIONAL (a recovery / wait / negation /
+# control state), so even if another token is a fault word the state is NOT a
+# terminal fault state and the error-assertion anti-pattern must still fire.
+_FAULT_NEGATER_WORDS = frozenset({
+    'no', 'non', 'not', 'clear', 'cleared', 'recover', 'recovery', 'recovered',
+    'less', 'safe', 'free', 'wait', 'waiting', 'check', 'checking', 'validate',
+    'validating', 'handle', 'handling', 'handler', 'exit', 'done', 'ack',
+    'default', 'resync', 'retry', 'normal', 'ok', 'pass', 'idle', 'run'})
+
+
+def _is_fault_state(label) -> bool:
+    """True iff the case-state label name semantically denotes a
+    fault/error/abort state — i.e. a state the spec would mandate to
+    assert an error output. A numeric/literal label (e.g. 2'b11) or a
+    missing label carries no such semantics -> False (the genuine
+    mid-FSM spurious-error anti-pattern is preserved)."""
+    if not label:
+        return False
+    # A sized numeric literal (e.g. 2'b11 / 3'd5) carries no fault
+    # semantics — only a NAMED localparam/parameter label can.
+    if re.match(r"^\d+'[sS]?[dbhoxDBHOX]\w+$", label):
+        return False
+    # Strip an optional leading state-prefix (S_/ST_/STATE_) so e.g.
+    # S_FAULT / ST_ERROR resolve correctly.
+    name = re.sub(r'^(?:s|st|state)_', '', label, flags=re.IGNORECASE)
+    # ORGANIC #786 r2 (Step-2.7 §4.05) — WHOLE-TOKEN semantics, not a substring.
+    # The prior `_FAULT_STATE_NAME.search(name)` SUBSTRING match wrongly exempted
+    # operational states whose name merely CONTAINS a fault word — ERROR_RECOVERY,
+    # WAIT_TIMEOUT, FAILSAFE, NO_FAULT, CLEAR_ERROR, FAULT_CLEAR, S_FAULTLESS,
+    # DEFAULT — silently suppressing genuine mid-FSM spurious-error anti-patterns.
+    # Split on `_`/non-word and judge tokens: a negater/operational token ANYWHERE
+    # forces NOT-a-fault-state (still fires); exempt ONLY when a WHOLE token is
+    # exactly a fault word. chip-AGNOSTIC: general error vocabulary.
+    tokens = [tok.lower() for tok in re.split(r'[_\W]+', name) if tok]
+    if not tokens:
+        return False
+    if any(tok in _FAULT_NEGATER_WORDS for tok in tokens):
+        return False
+    return any(tok in _FAULT_WORDS for tok in tokens)
+
+
 @dataclass
 class Finding:
     file: str
@@ -128,10 +188,21 @@ def find_error_assertions(src: str, path: str) -> List[Finding]:
         if 'endcase' in line:
             in_case = max(0, in_case - 1)
             current_state_label = None
-        # Detect state label within case: S_XXX: or 3'dN:
+        # Detect state label within case. v1.1.1 (R9C2): widened to also
+        # recognise NAMED (localparam/parameter) case labels — e.g.
+        # `FAULT:`, `S_ERROR:`, `READY:` — not only `S_\w+`/numeric
+        # literals. The prior regex left localparam-named labels
+        # unresolved (current_state_label stayed None), so a spec-mandated
+        # FAULT branch was mis-attributed to "<not in case branch>" and the
+        # gate could not tell it was the error state. Matches a bare
+        # identifier label or a sized numeric literal at branch start;
+        # avoids `default:` and statement labels by requiring the line to
+        # be only `<label> :` optionally followed by `begin`.
         if in_case > 0:
-            lm = re.match(r'\s*(S_\w+|\d+\'[dbh]\w+)\s*:', line)
-            if lm:
+            lm = re.match(
+                r'\s*([A-Za-z_]\w*|\d+\'[sS]?[dbhoxDBHOX]\w+)\s*:'
+                r'\s*(?:begin\b)?\s*$', line)
+            if lm and lm.group(1).lower() != 'default':
                 current_state_label = lm.group(1)
         # Find: errSig <= 1'b1;
         assign = re.search(
@@ -152,6 +223,16 @@ def find_error_assertions(src: str, path: str) -> List[Finding]:
             if _has_intent_comment(raw_lines, lineno, "recoverable"):
                 continue
             if _has_intent_comment(raw_lines, lineno, "intentional"):
+                continue
+            # v1.1.1 (R9C2): skip when the error output is asserted inside
+            # a fault/error-named state branch. Asserting an error signal in
+            # a state whose label literally denotes a fault/error condition
+            # (FAULT/ERROR/FAIL/ABORT/...) is the spec's literal requirement
+            # for that state, not the cross-layer recoverable-error anti-
+            # pattern this gate targets. A spurious error assertion in a
+            # NON-error-named operational state (IDLE/RUN/PROCESS/RX/...) or
+            # under a numeric/unknown label still fires (no-leak).
+            if _is_fault_state(current_state_label):
                 continue
             state = current_state_label or "<not in case branch>"
             findings.append(Finding(

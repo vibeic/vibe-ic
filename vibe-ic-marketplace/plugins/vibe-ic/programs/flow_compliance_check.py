@@ -57,6 +57,7 @@ Waivers (<project>/waivers.json):
 from __future__ import annotations
 
 import argparse
+import functools
 import glob
 import json
 import re
@@ -3588,8 +3589,126 @@ def _check_json_field_true(project: Path, spec: Dict[str, Any]) -> tuple[bool, s
     return (v == expect), f"{field_key} = {v!r}"
 
 
-def _evaluate_gate(project: Path, gate: Dict[str, Any]) -> tuple[bool, List[str]]:
-    """Evaluate a gate spec, return (passed, reasons)."""
+# ORGANIC #789 GAP-B — --skip-analog forwarding into optional/required gate
+# commands.
+#
+# The P0 structural-RTL umbrella (#632) and the final-audit aggregation
+# (#609) already honour ``skip_analog`` by SUPPRESSING analog sub-gates.
+# But the per-step ``optional_program_exit_zero`` / ``program_exit_zero``
+# gate branches ran ``spec["command"]`` VERBATIM and never forwarded the
+# flag. So an analog-aware gate that ITSELF knows how to defer its
+# analog-only cases under ``--skip-analog`` (e.g. the L10/L12 tb-conformance
+# gates, #773) was invoked WITHOUT it — and hard-FAILed Step 4 for a
+# legitimately-deferred analog track. This is a WIRING gap, not a gate-logic
+# gap: the gate CAN honour the flag; the runner just never handed it over.
+#
+# The fix is generic + structural: when ``skip_analog`` is set, we ask the
+# gate's OWN program (via its ``--help``) whether it ACCEPTS ``--skip-analog``
+# and only then append it. There is NO chip / vendor / SKU / program literal
+# anywhere — the decision is "does this program's argparse declare the flag",
+# discovered at runtime, so it auto-extends to any future analog-aware gate
+# and never touches a gate that doesn't opt in.
+@functools.lru_cache(maxsize=256)
+def _program_accepts_flag(prog_name: str, flag: str) -> bool:
+    """True iff the gate program named ``prog_name`` declares ``flag`` in its
+    ``--help`` output. chip-AGNOSTIC + structural: a capability probe of the
+    program's own argparse, never a hard-coded program/chip allow-list.
+
+    Fail-closed: any resolution / probe error returns False so the flag is
+    NOT appended (the gate runs exactly as before — no behaviour change).
+    Cached so a single compliance run probes each program at most once.
+    """
+    try:
+        prog = prog_name if prog_name.endswith(".py") else f"{prog_name}.py"
+        prog_path = PROGRAMS_DIR / prog
+        if not prog_path.is_file():
+            return False
+        r = subprocess.run(
+            [sys.executable, str(prog_path), "--help"],
+            capture_output=True, text=True, timeout=30,
+        )
+        help_text = (r.stdout or "") + (r.stderr or "")
+        # Match the flag as a whole token (argparse renders it as `--skip-analog`
+        # possibly followed by space / `=` / `,` / newline / metavar).
+        return bool(re.search(rf"(?<![\w-]){re.escape(flag)}(?![\w-])",
+                              help_text))
+    except Exception:
+        return False
+
+
+def _resolve_skip_analog_anchor(project: Path) -> Optional[str]:
+    """Resolve a REVIEWABLE capability-gap anchor for an analog-deferral
+    waiver, mirroring the precedence the analog-aware gates use themselves
+    (#773 ``analog_skip_anchor``): the runner's connectivity-bridge
+    ``sim/results.xml``. Returns the RELATIVE path string if a candidate FILE
+    exists (resolved relative to the project, which is the cwd the gate program
+    runs under), else None (the gate then re-FAILs an unanchored deferral — no
+    blanket pass). chip-AGNOSTIC: structural project paths, no chip literal."""
+    for rel in ("phase2/stage1/sim/results.xml",
+                "sim/results.xml",
+                "reports/sim/results.xml"):
+        cand = project / rel
+        if cand.is_file():
+            return rel
+    return None
+
+
+def _maybe_forward_skip_analog(project: Path, cmd_str: str,
+                               skip_analog: bool) -> str:
+    """Return ``cmd_str`` with ``--skip-analog`` (and, when the program also
+    accepts it, a reviewable ``--analog-anchor <path>``) appended IFF
+    ``skip_analog`` is set AND the gate's program declares ``--skip-analog``.
+
+    §4.05 NO-LEAK guarantees:
+      * ``skip_analog=False`` → returns ``cmd_str`` BYTE-IDENTICAL (the flag
+        is never appended; behaviour is unchanged for every non-deferred run).
+      * a non-analog optional gate (one whose program does NOT declare
+        ``--skip-analog``) → returns ``cmd_str`` unchanged (the flag is never
+        forced onto a gate that can't honour it).
+      * already-present ``--skip-analog`` in the authored command → not
+        duplicated.
+      * the gate program is the one that scopes the relaxation to ANALOG-only
+        intents (#773): a DIGITAL intent with no evidence STILL FAILs even
+        with ``--skip-analog`` appended. This wiring only HANDS OVER the flag;
+        it never weakens any digital floor.
+    """
+    if not skip_analog:
+        return cmd_str
+    try:
+        parts = shlex.split(cmd_str)
+    except ValueError:
+        return cmd_str
+    if not parts:
+        return cmd_str
+    prog_name = parts[0]
+    if not _program_accepts_flag(prog_name, "--skip-analog"):
+        return cmd_str
+    extra: List[str] = []
+    if "--skip-analog" not in parts:
+        extra.append("--skip-analog")
+    # Append a reviewable analog anchor only if (a) the program accepts the
+    # flag, (b) one isn't already authored, and (c) one resolves. The gate
+    # itself re-FAILs an unanchored deferral, so a missing anchor degrades
+    # safely to the pre-fix FAIL rather than a blanket pass.
+    if ("--analog-anchor" not in parts
+            and _program_accepts_flag(prog_name, "--analog-anchor")):
+        anchor = _resolve_skip_analog_anchor(project)
+        if anchor:
+            extra += ["--analog-anchor", anchor]
+    if not extra:
+        return cmd_str
+    return cmd_str + " " + " ".join(shlex.quote(t) for t in extra)
+
+
+def _evaluate_gate(project: Path, gate: Dict[str, Any],
+                   skip_analog: bool = False) -> tuple[bool, List[str]]:
+    """Evaluate a gate spec, return (passed, reasons).
+
+    ``skip_analog`` (GAP-B, #789) is threaded down to the program-running
+    branches so an analog-aware optional/required gate is invoked WITH
+    ``--skip-analog`` (and a reviewable ``--analog-anchor``) when the run
+    defers the analog track. Defaults to False → byte-identical to the
+    pre-fix behaviour."""
     reasons: List[str] = []
 
     # `files_exist` - top-level (any_of / all_of via flag)
@@ -3636,6 +3755,11 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any]) -> tuple[bool, List[str]
                 return False, reasons
         else:
             _cmd = _pez
+        # GAP-B (#789) — forward --skip-analog (+ reviewable --analog-anchor) to
+        # an analog-aware required gate so a deferred analog track doesn't hard-
+        # FAIL it. No-op when skip_analog is False or the program doesn't
+        # accept the flag (byte-identical command otherwise).
+        _cmd = _maybe_forward_skip_analog(project, _cmd, skip_analog)
         passed, out = _check_program_exit_zero(project, _cmd)
         if not passed:
             reasons.append(f"program failed: {_cmd}")
@@ -3690,6 +3814,13 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any]) -> tuple[bool, List[str]
             present.extend(project.glob(pat))
         if not present:
             return True, reasons  # no inputs -> N/A -> pass
+        # GAP-B (#789) — forward --skip-analog (+ reviewable --analog-anchor)
+        # when the run defers the analog track AND this optional gate's program
+        # declares the flag (e.g. l10/l12 tb-conformance, #773). Verbatim
+        # otherwise. The gate program itself scopes the relaxation to ANALOG-only
+        # intents, so a digital intent with no evidence STILL FAILs; this only
+        # hands over the flag the gate already knows how to honour.
+        cmd = _maybe_forward_skip_analog(project, cmd, skip_analog)
         passed, out = _check_program_exit_zero(project, cmd)
         if not passed:
             reasons.append(f"optional program failed: {cmd}")
@@ -3717,7 +3848,7 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any]) -> tuple[bool, List[str]
         for sub in gate["all_of"]:
             if not isinstance(sub, dict):
                 continue
-            p, r = _evaluate_gate(project, sub)
+            p, r = _evaluate_gate(project, sub, skip_analog=skip_analog)
             if not p:
                 reasons.extend(r)
                 return False, reasons
@@ -3743,7 +3874,7 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any]) -> tuple[bool, List[str]
         for sub in gate["any_of"]:
             if not isinstance(sub, dict):
                 continue
-            p, _ = _evaluate_gate(project, sub)
+            p, _ = _evaluate_gate(project, sub, skip_analog=skip_analog)
             if p:
                 return True, reasons
         reasons.append(f"no sub-gate passed in any_of")
@@ -4682,7 +4813,13 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
             )
 
     if gate:
-        passed, reasons = _evaluate_gate(project, gate)
+        # GAP-B (#789) — thread the run's skip_analog into the gate evaluation
+        # so an analog-aware optional/required gate (#773) is invoked WITH
+        # --skip-analog when the analog track is explicitly deferred. The P0
+        # umbrella (#632) + final_audit (#609) already honour the flag; this
+        # closes the per-step optional/required gate wiring gap. No-op when
+        # skip_analog is False.
+        passed, reasons = _evaluate_gate(project, gate, skip_analog=skip_analog)
         # Wave 93 — VACUOUS_PASS verdict tier promotion. If the gate
         # passed AND every reason carries the __VACUOUS_HINT__ marker
         # (and at least one was emitted), the step ran but every

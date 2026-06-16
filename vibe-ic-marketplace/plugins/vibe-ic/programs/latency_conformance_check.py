@@ -586,6 +586,62 @@ def _width_of(width_str: str) -> int:
         return 1  # symbolic width — handled in _build_tb
 
 
+# ─── ORGANIC #787 — multi-bit DATAPATH output width + handshake detection ─────
+# The measurement TB models the --output as a 1-BIT done/valid PULSE: it counts
+# posedges from the event to the first `out === 1'b1`. That convention is only
+# meaningful for a 1-bit handshake flag. A MULTI-BIT DATAPATH result bus (e.g.
+# `result_real[31:0]`) is NOT a 1-bit pulse: `out === 1'b1` matches ONLY when the
+# WHOLE bus equals exactly 1, so a correct registered datapath never "asserts"
+# (→ false TIMEOUT rc=1) — or worse, its quiescent value happens to equal 1 and
+# the PRECONDITION fires (→ false rc=2). For such a bus the latency is the first
+# cycle the bus CHANGES away from its settled post-reset value (`out !== baseline`)
+# — a faithful SIMULATION, not a pulse that will never come. These two helpers
+# decide when to switch the measurement TB to that change-detect assertion.
+def _resolved_output_width(width_str: str, params: Dict[str, int]) -> Optional[int]:
+    """The CONCRETE numeric bit-width of a `[MSB:LSB]` packed width, evaluating
+    arithmetic / parameterised bounds via the SAME safe arithmetic evaluator used
+    for --expect (so `[OUT_WIDTH-1:0]` with OUT_WIDTH=32 → 32, `[31:0]` → 32,
+    a scalar → 1). Returns None when a bound is non-constant / unresolved — the
+    caller then conservatively keeps the unchanged simulation path (no leak)."""
+    ws = _concretise_width(width_str or "", params)
+    if not ws:
+        return 1  # scalar port (no packed width) is 1 bit
+    m = re.match(r"\s*\[\s*([^:\]]+?)\s*:\s*([^:\]]+?)\s*\]\s*$", ws)
+    if not m:
+        return None
+    try:
+        msb = safe_eval_arith(m.group(1), {})
+        lsb = safe_eval_arith(m.group(2), {})
+    except ExpectError:
+        return None
+    return abs(msb - lsb) + 1
+
+
+# A 1-bit OUTPUT named like a handshake/status flag (done/valid/ready/ack/grant/
+# busy/error/...) genuinely uses the pulse->assert model, so even when (rare) it
+# is declared as a >1-bit vector we keep the pulse TB. This is NARROW + word-
+# anchored so a DATAPATH bus (`result_real`, `sum`, `q`, `data_out`) is NOT
+# matched — those are measured by change-detection. §4.05: a real 1-bit done/valid
+# still flows through the unchanged pulse model.
+_PULSE_NAME_FRAGS = ("done", "valid", "vld", "ready", "rdy", "ack", "grant",
+                     "gnt", "busy", "error", "err", "irq", "intr", "complete",
+                     "finish", "eop", "sop", "empty", "full", "overflow",
+                     "underflow", "match", "hit", "flag")
+
+
+def _looks_like_pulse_output(name: str) -> bool:
+    """True when `name` reads like a 1-bit handshake/status PULSE output (done /
+    valid / ready / ack / ...), so the event->`out===1` pulse model applies even
+    on a wide declaration. Word-anchored fragment match (start, or after a `_` /
+    digit boundary) so a datapath name (`result_real`, `data_out`, `sum`) — whose
+    latency is measured by change-detection — is never captured."""
+    lo = name.lower()
+    for frag in _PULSE_NAME_FRAGS:
+        if re.search(r"(?:^|_)" + re.escape(frag) + r"(?:$|_|\d)", lo):
+            return True
+    return False
+
+
 class PortInfo:
     __slots__ = ("name", "direction", "width_str", "unpacked_dims")
 
@@ -818,7 +874,8 @@ def build_measurement_tb(top: str, clk: Optional[PortInfo],
                          input_const: int, max_cycles: int,
                          params: Optional[Dict[str, int]] = None,
                          reset_hold: int = 5,
-                         inactive_inputs: Optional[set] = None) -> str:
+                         inactive_inputs: Optional[set] = None,
+                         datapath_mode: bool = False) -> str:
     """Emit the self-contained canonical-latency measurement TB.
 
     Convention:
@@ -854,6 +911,21 @@ def build_measurement_tb(top: str, clk: Optional[PortInfo],
                  f"{_decl_unpacked(o, params)};")
     L.append(f"  wire{_decl_width(output_port, params)} {output_port.name}"
              f"{_decl_unpacked(output_port, params)};")
+    # ORGANIC #787 — in DATAPATH mode the output is a multi-bit result bus, not a
+    # 1-bit pulse: latency is the first cycle the bus CHANGES from its settled
+    # post-reset value. Capture that baseline so the assert predicate can be
+    # `out !== out_rstval` instead of `out === 1'b1`.
+    if datapath_mode:
+        L.append(f"  reg{_decl_width(output_port, params)} out_rstval;")
+        # ORGANIC #787 r2 (Step-2.7 §4.05) — measure the SETTLE cycle (the LAST
+        # change), not the FIRST change: a staged-partial / glitch bus moves
+        # before it commits, so first-change under-measures the latency. Track
+        # the previous bus value, the last cycle it changed, and how many times
+        # it changed (>1 ⇒ the committed-result cycle is ambiguous ⇒ ADVISORY,
+        # never a hard PASS).
+        L.append(f"  reg{_decl_width(output_port, params)} out_prev;")
+        L.append("  integer last_change;")
+        L.append("  integer change_count;")
     L.append("  integer cyc;")
     L.append("  integer measured;")
     # DUT instance (named connections; only declared TB nets are wired). The
@@ -927,10 +999,19 @@ def build_measurement_tb(top: str, clk: Optional[PortInfo],
     #     distinct error sentinel and stop (→ rc 2). Sampled in the clk LOW
     #     phase (after a negedge), so it reflects the settled steady state.
     L.append("    @(negedge clk);")
-    L.append(f"    if ({out} === 1'b1) begin")
-    L.append('      $display("LATENCY_PRECONDITION_HIGH");')
-    L.append("      $finish;")
-    L.append("    end")
+    if datapath_mode:
+        # ORGANIC #787 — a multi-bit datapath bus has an ARBITRARY settled
+        # post-reset value (often non-zero); `out === 1'b1` is not a meaningful
+        # precondition. Capture the settled baseline and detect the first CHANGE
+        # away from it as the assertion — never flag "already HIGH".
+        L.append(f"    out_rstval = {out};")
+        assert_pred = f"({out} !== out_rstval)"
+    else:
+        L.append(f"    if ({out} === 1'b1) begin")
+        L.append('      $display("LATENCY_PRECONDITION_HIGH");')
+        L.append("      $finish;")
+        L.append("    end")
+        assert_pred = f"({out} === 1'b1)"
     # (2) COMBINATIONAL latency 0 — assert event HIGH in the SAME clk LOW phase
     #     (we are just after a negedge) and let purely-combinational logic
     #     settle WITHOUT crossing a posedge (a small in-phase delay). If `out`
@@ -944,7 +1025,43 @@ def build_measurement_tb(top: str, clk: Optional[PortInfo],
     ev_deassert = "1'b0" if ev_w == "1" else f"{{{ev_w}{{1'b0}}}}"
     L.append(f"    {ev} = {ev_assert};")
     L.append("    #1;   // settle combinational paths, still inside the low phase")
-    L.append(f"    if ({out} === 1'b1) begin")
+    if datapath_mode:
+        # ORGANIC #787 r2 — SETTLE measurement: latency = the LAST cycle the bus
+        # changes (its committed/held value), not the first transient move. A bus
+        # that changes more than once after the event (staged partial, glitch) is
+        # AMBIGUOUS → emit DATAPATH_MULTI_CHANGE (advisory), never a hard PASS.
+        L.append("    out_prev = out_rstval;")
+        L.append("    last_change = -1;")
+        L.append("    change_count = 0;")
+        L.append(f"    if {assert_pred} begin   // combinational (latency-0) change")
+        L.append(f"      last_change = 0; change_count = 1; out_prev = {out};")
+        L.append("    end")
+        L.append("    @(posedge clk);          // event-latch posedge E (t=0)")
+        L.append(f"    {ev} <= {ev_deassert};   // one-edge event pulse")
+        L.append(f"    for (cyc = 1; cyc <= {max_cycles}; cyc = cyc + 1) begin")
+        L.append("      @(posedge clk);        // posedge E+cyc")
+        L.append(f"      if ({out} !== out_prev) begin")
+        L.append(f"        last_change = cyc; change_count = change_count + 1; out_prev = {out};")
+        L.append("      end")
+        L.append("    end")
+        L.append("    if (last_change < 0) begin")
+        L.append(f'      $display("LATENCY_TIMEOUT %0d", {max_cycles});')
+        L.append("    end else if (change_count > 1) begin")
+        L.append('      $display("DATAPATH_MULTI_CHANGE=%0d", last_change);')
+        L.append("    end else begin")
+        L.append('      $display("MEASURED_LATENCY=%0d", last_change);')
+        L.append("    end")
+        L.append("    $finish;")
+        L.append("  end")
+        # shared tail: global hard cutoff + endmodule (identical to the pulse path)
+        L.append("  initial begin")
+        L.append(f"    #{(max_cycles + reset_hold + 32) * 10 * 4};")
+        L.append('    $display("LATENCY_TIMEOUT %0d", ' + str(max_cycles) + ");")
+        L.append("    $finish;")
+        L.append("  end")
+        L.append("endmodule")
+        return "\n".join(L) + "\n"
+    L.append(f"    if {assert_pred} begin")
     L.append("      measured = 0;")
     L.append("    end else begin")
     # (3) REGISTERED latency >= 1 — `out` is still LOW after the comb settle.
@@ -959,7 +1076,7 @@ def build_measurement_tb(top: str, clk: Optional[PortInfo],
     L.append(f"      {ev} <= {ev_deassert};   // one-edge event pulse")
     L.append(f"      for (cyc = 1; cyc <= {max_cycles}; cyc = cyc + 1) begin")
     L.append("        @(posedge clk);        // posedge E+cyc")
-    L.append(f"        if ({out} === 1'b1) begin")
+    L.append(f"        if {assert_pred} begin")
     L.append("          measured = cyc;")
     L.append(f"          cyc = {max_cycles} + 1;   // break")
     L.append("        end")
@@ -1016,6 +1133,11 @@ def _run(cmd: List[str], timeout: int = 120) -> Tuple[int, str, str]:
 _MEAS_RE = re.compile(r"^MEASURED_LATENCY=(\d+)\s*$", re.MULTILINE)
 _TIMEOUT_RE = re.compile(r"^LATENCY_TIMEOUT\s+(\d+)\s*$", re.MULTILINE)
 _PRECOND_RE = re.compile(r"^LATENCY_PRECONDITION_HIGH\s*$", re.MULTILINE)
+# ORGANIC #787 r2 (Step-2.7 §4.05) — a datapath bus that changed MORE THAN ONCE
+# after the event: the committed-result cycle cannot be inferred from latency
+# alone (staged partial / glitch), so the measurement is ADVISORY, never a hard
+# PASS that could mask a genuine multi-cycle latency.
+_DP_MULTI_RE = re.compile(r"^DATAPATH_MULTI_CHANGE=(\d+)\s*$", re.MULTILINE)
 
 
 def measure_latency(rtl_path: Path, tb_text: str, workdir: Path,
@@ -1055,6 +1177,11 @@ def measure_latency(rtl_path: Path, tb_text: str, workdir: Path,
     mm = _MEAS_RE.search(sim)
     if mm:
         return int(mm.group(1)), "ok", ""
+    dpm = _DP_MULTI_RE.search(sim)
+    if dpm:
+        # the bus settled at this cycle but moved more than once getting there →
+        # ambiguous; report the settle cycle but mark the status advisory.
+        return int(dpm.group(1)), "datapath_ambiguous", ""
     if _TIMEOUT_RE.search(sim):
         return None, "timeout", ""
     return None, "", ("measurement TB produced no MEASURED_LATENCY line "
@@ -1238,6 +1365,44 @@ def run_latency_conformance(
                             "NOT a real timing block)")
         return 3, report
 
+    # ─── ORGANIC #787 — MULTI-BIT DATAPATH OUTPUT change-detect measurement ────
+    # The measurement TB below models the --output as a 1-BIT done/valid PULSE
+    # (`out === 1'b1`). That convention is meaningless for a MULTI-BIT DATAPATH
+    # result bus: the bus only `=== 1'b1` when ALL bits happen to equal exactly
+    # 1, so a correct registered datapath either never "asserts" (false TIMEOUT
+    # rc=1) or its quiescent value coincidentally equals 1 and the PRECONDITION
+    # fires (false rc=2) — both HARD-BLOCK correct RTL. When the PRIMARY --output
+    # is a resolved width>1 bus that is NOT named like a handshake flag, MEASURE
+    # the latency the faithful way: the same posedge-counting TB, but the
+    # assertion is the FIRST CHANGE of the output away from its settled
+    # post-reset value (`out !== <captured baseline>`) instead of `out === 1'b1`.
+    # This is a real SIMULATION (not a structural guess), so the verdict reflects
+    # the design's ACTUAL cycle-accurate latency — including FSM/enable-gated
+    # multi-cycle datapaths a naive register-chain walk would mis-count.
+    #
+    # §4.05 no-leak — this only changes the ASSERT predicate for a genuine
+    # multi-bit datapath bus:
+    #   * a 1-bit output (width==1) keeps the unchanged `out===1'b1` pulse TB;
+    #   * a wide output named done/valid/ready/ack/... (a real handshake declared
+    #     as a vector) keeps the pulse TB (`_looks_like_pulse_output`);
+    #   * a non-constant / unresolved width (None) keeps the pulse TB;
+    #   * an UNPACKED-ARRAY output is screened to rc=3 above (never reaches here);
+    #   * the latency is STILL MEASURED by simulation, so a GENUINE datapath
+    #     latency mismatch (measured != --expect) still MISMATCHes (rc 1) and a
+    #     bus that never changes still TIMEs out (rc 1). It can only convert a
+    #     false `out===1`-model TIMEOUT/PRECONDITION on a CORRECT datapath bus
+    #     into the faithful measured latency.
+    out_width = _resolved_output_width(output_port.width_str, params)
+    report["output_width"] = out_width
+    datapath_mode = bool(out_width is not None and out_width > 1
+                         and not output_port.is_array
+                         and not _looks_like_pulse_output(output))
+    report["datapath_output"] = datapath_mode
+    if datapath_mode:
+        report["measurement_method"] = (
+            "first-change-from-reset-value (multi-bit datapath output; the 1-bit "
+            "pulse `out===1` model does not apply to a result bus)")
+
     # reset polarity map
     reset_active_low_map: Dict[str, bool] = {}
     for r in resets:
@@ -1269,7 +1434,8 @@ def run_latency_conformance(
 
     tb = build_measurement_tb(top, clk, resets, event_port, output_port,
                               others, reset_active_low_map, input_const,
-                              max_cycles, params=params)
+                              max_cycles, params=params,
+                              datapath_mode=datapath_mode)
     report["measurement_tb_lines"] = tb.count("\n")
 
     report["context_files"] = [str(p) for p in (context_files or [])]
@@ -1392,6 +1558,25 @@ def run_latency_conformance(
         report["reason"] = (f"output {output!r} never asserted within "
                             f"{max_cycles} cycles")
         return 1, report
+    if status == "datapath_ambiguous":
+        # ORGANIC #787 r2 (Step-2.7 §4.05) — the datapath bus changed MORE THAN
+        # ONCE after the event (staged partial / glitch before commit), so the
+        # committed-result cycle cannot be inferred from latency alone. Do NOT
+        # certify it as a PASS (that would mask a genuine multi-cycle latency, the
+        # reproduced leak); do NOT hard-block it either (a legitimately staged
+        # datapath is not a timing bug). Emit a DISTINCT advisory verdict on the
+        # NOT-APPLICABLE exit code (3): the measured settle cycle is reported but
+        # the latency convention does not reliably apply.
+        report["verdict"] = "DATAPATH_AMBIGUOUS"
+        report["measured_latency"] = measured
+        report["advisory"] = True
+        report["reason"] = (
+            f"datapath output {output!r} settled at cycle {measured} but its bus "
+            f"changed more than once after the {event!r} event (staged/transient "
+            f"value before commit), so an event->output latency cannot be reliably "
+            f"measured — ADVISORY (NOT a PASS that could mask a multi-cycle "
+            f"latency, NOT a hard timing block)")
+        return 3, report
 
     report["measured_latency"] = measured
     if measured != expected:

@@ -2329,14 +2329,152 @@ def _multidriven_in_region(src: str, path: str, mlo: int, mhi: int,
 # block fighting a continuous assign (the canonical `binary_to_gray` defect)
 # was missed entirely. This is a hard, two-tool-corroborated structural defect
 # — chip-AGNOSTIC, pure SV parse.
+def _match_begin_end(src: str, begin_kw_off: int) -> int:
+    """Given the offset of a `begin` keyword, return the offset just past its
+    matching `end`. begin/end nest; the scanner also tracks the structural
+    keyword pairs that introduce their OWN begin-less arms
+    (case/casez/casex…endcase, function…endfunction, task…endtask,
+    fork…join[_any|_none]) by counting them on the SAME depth stack so an inner
+    `case` arm's `end`-less statements never desync the begin/end balance.
+    chip-AGNOSTIC: pure SystemVerilog block grammar."""
+    depth = 0
+    for m in re.finditer(
+            r'\b(begin|end|case|casez|casex|endcase|function|endfunction|'
+            r'task|endtask|fork|join|join_any|join_none)\b',
+            src[begin_kw_off:]):
+        kw = m.group(1)
+        if kw in ('begin', 'case', 'casez', 'casex', 'function', 'task', 'fork'):
+            depth += 1
+        else:  # end / endcase / endfunction / endtask / join*
+            depth -= 1
+            if depth == 0:
+                return begin_kw_off + m.end()
+    return len(src)
+
+
+def _generate_if_arms(src: str, mlo: int, mhi: int) -> List[List[Tuple[int, int]]]:
+    """ORGANIC GAP-A — return the mutually-exclusive arm spans of every
+    conditional-generate `if … begin:lbl … end else [if …] begin:lbl … end`
+    chain inside module region [mlo,mhi). Each returned group is a list of
+    (arm_start_off, arm_end_off) byte spans; AT MOST ONE arm of a group ever
+    elaborates, so two drivers landing in DIFFERENT arms of the SAME group are
+    mutually exclusive and can never co-drive a net.
+
+    Only NAMED begin-block arms (`begin : label`) are tracked — a named begin
+    immediately after `if(...)`/`else` is the canonical conditional-generate
+    marker (`if (USE_FF) begin : gen_ff … end else begin : gen_comb …`). A bare
+    procedural `if` inside an always block uses an UN-named begin (or no begin),
+    so it is never picked up here; this keeps the suppression structurally
+    confined to elaboration-time generate selection and never relaxes a genuine
+    procedural same-scope race. chip-AGNOSTIC: pure SV generate-if grammar."""
+    groups: List[List[Tuple[int, int]]] = []
+    consumed_until = mlo
+    for ifm in re.finditer(r'\bif\b\s*\(', src[mlo:mhi]):
+        if_abs = mlo + ifm.start()
+        if if_abs < consumed_until:
+            continue  # already swallowed as the `else if` of an earlier chain
+        # balance the if-condition parens
+        popen = mlo + ifm.end() - 1
+        depth = 0
+        cclose = -1
+        j = popen
+        while j < mhi:
+            c = src[j]
+            if c == '(':
+                depth += 1
+            elif c == ')':
+                depth -= 1
+                if depth == 0:
+                    cclose = j
+                    break
+            j += 1
+        if cclose < 0:
+            continue
+        # require a NAMED begin block immediately after the condition
+        bm = re.match(r'\s*begin\b\s*:\s*[A-Za-z_]\w*', src[cclose + 1:mhi])
+        if not bm:
+            continue
+        begin_kw = src.index('begin', cclose + 1)
+        arm_end = _match_begin_end(src, begin_kw)
+        arms = [(begin_kw, arm_end)]
+        # walk the `else` / `else if` chain — all arms are mutually exclusive
+        cur = arm_end
+        while True:
+            em = re.match(r'\s*else\b', src[cur:mhi])
+            if not em:
+                break
+            after_else = cur + em.end()
+            ifm2 = re.match(r'\s*if\b\s*\(', src[after_else:mhi])
+            if ifm2:  # else if (...) begin : lbl
+                po = after_else + ifm2.end() - 1
+                d = 0
+                k = po
+                cc = -1
+                while k < mhi:
+                    if src[k] == '(':
+                        d += 1
+                    elif src[k] == ')':
+                        d -= 1
+                        if d == 0:
+                            cc = k
+                            break
+                    k += 1
+                if cc < 0:
+                    break
+                bm2 = re.match(r'\s*begin\b\s*:\s*[A-Za-z_]\w*', src[cc + 1:mhi])
+                if not bm2:
+                    break
+                bkw = src.index('begin', cc + 1)
+                aend = _match_begin_end(src, bkw)
+                arms.append((bkw, aend))
+                cur = aend
+            else:  # else begin : lbl  (terminal arm)
+                bm2 = re.match(r'\s*begin\b\s*:\s*[A-Za-z_]\w*', src[after_else:mhi])
+                if not bm2:
+                    break
+                bkw = src.index('begin', after_else)
+                aend = _match_begin_end(src, bkw)
+                arms.append((bkw, aend))
+                cur = aend
+                break
+        if len(arms) >= 2:
+            groups.append(arms)
+            consumed_until = arms[-1][1]
+    return groups
+
+
+def _drivers_mutually_exclusive(groups: List[List[Tuple[int, int]]],
+                                off_a: int, off_b: int) -> bool:
+    """True when off_a and off_b fall into DIFFERENT arms of the SAME
+    conditional-generate group — i.e. only one of the two drivers ever
+    elaborates, so they can never co-drive the net. Returns False when either
+    offset is outside every tracked group, or when both land in the SAME arm (a
+    genuine same-scope race that MUST stay flagged)."""
+    for arms in groups:
+        a_idx = next((i for i, (s, e) in enumerate(arms) if s <= off_a < e), None)
+        b_idx = next((i for i, (s, e) in enumerate(arms) if s <= off_b < e), None)
+        if a_idx is not None and b_idx is not None and a_idx != b_idx:
+            return True
+    return False
+
+
 def rule_continuous_vs_procedural_driver(src: str, path: str) -> List[Finding]:
     findings: List[Finding] = []
     for _mname, mlo, mhi in _module_regions(src):
         region = src[mlo:mhi]
+        # ORGANIC GAP-A — mutually-exclusive conditional-generate arms in THIS
+        # module. A net whose continuous `assign` driver lives in one arm and
+        # whose procedural `always` write lives in a DIFFERENT arm of the same
+        # generate-if is LEGITIMATE RTL (only one arm ever elaborates), so it
+        # must NOT be reported as continuous+procedural multidriven (iverilog
+        # -g2012 rc=0 on such a design — confirmed). Track the absolute driver
+        # offsets so the two arms can be compared structurally below.
+        gen_groups = _generate_if_arms(src, mlo, mhi)
         # Continuous-assign LHS bases in THIS module (`assign NAME ... = ...`),
         # allowing an optional bit/part-select on the target.
         cont_lhs: Set[str] = set()
         cont_line: Dict[str, int] = {}
+        cont_off: Dict[str, int] = {}
         for m in re.finditer(r'\bassign\b\s+(?:#\s*\S+\s+)?'
                              r'([A-Za-z_]\w*)(?:\s*\[[^\]]+\])?\s*=(?!=)', region):
             nm = m.group(1)
@@ -2344,6 +2482,7 @@ def rule_continuous_vs_procedural_driver(src: str, path: str) -> List[Finding]:
                 continue
             cont_lhs.add(nm)
             cont_line.setdefault(nm, src[:mlo + m.start()].count('\n') + 1)
+            cont_off.setdefault(nm, mlo + m.start())
         if not cont_lhs:
             continue
         # Procedural-block LHS bases in THIS module (any `<=`/`=` inside an
@@ -2359,6 +2498,7 @@ def rule_continuous_vs_procedural_driver(src: str, path: str) -> List[Finding]:
         # rc=0 / verilator no-PROCASSWIRE on those designs — confirmed.)
         proc_lhs: Set[str] = set()
         proc_line: Dict[str, int] = {}
+        proc_off: Dict[str, int] = {}
         for sens, body, pos in _iter_always_blocks(src, (mlo, mhi)):
             # blank out continuous-assign statements (keep length/newlines so the
             # per-write line numbers stay correct)
@@ -2375,7 +2515,16 @@ def rule_continuous_vs_procedural_driver(src: str, path: str) -> List[Finding]:
                 proc_lhs.add(nm)
                 # report at the procedural-assignment site (where iverilog points)
                 proc_line.setdefault(nm, src[:pos + am.start()].count('\n') + 1)
+                proc_off.setdefault(nm, pos + am.start())
         for nm in sorted(cont_lhs & proc_lhs):
+            # ORGANIC GAP-A — suppress when the continuous driver and the
+            # procedural driver live in MUTUALLY-EXCLUSIVE conditional-generate
+            # arms (only one arm elaborates → never a real multidriver). A
+            # genuine SAME-scope (or SAME-arm) continuous+procedural race lands
+            # both offsets outside any group / in the same arm and STILL fires.
+            if _drivers_mutually_exclusive(
+                    gen_groups, cont_off.get(nm, -1), proc_off.get(nm, -1)):
+                continue
             ln = proc_line.get(nm, cont_line.get(nm, 1))
             findings.append(Finding(
                 path, ln, 'ERROR', 'multidriven-continuous-procedural', nm,
