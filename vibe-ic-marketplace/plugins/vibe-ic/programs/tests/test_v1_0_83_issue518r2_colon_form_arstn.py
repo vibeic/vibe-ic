@@ -163,17 +163,20 @@ def _stage_project(tmp_path, spec, rtl_text, design="synchronizer"):
 
 
 def test_runner_gate_suppresses_arstn_rename_with_colon_spec(tmp_path):
-    """END-STATE: the runner gate (invoked as the orchestrator does, with the
-    default auto-wrapper top name 'chip_top') resolves the leaf and SKIPs the
-    rename because the colon-form contract declares `arstn` — arstn stays a port,
-    rst_n never appears."""
+    """END-STATE (#792 ADDITIVE doctrine): the runner gate (invoked as the
+    orchestrator does, with the default auto-wrapper top name 'chip_top')
+    resolves the leaf and, because the colon-form contract declares `arstn`,
+    emits an ADDITIVE dual-spelling reset wrapper (PASS) — `arstn` STAYS a
+    bindable port AND the canonical `rst_n` is ALSO exposed (active-low → tri1
+    pull, AND-combine). The contract spelling is never destructively renamed; the
+    arstn-binding hidden TB still elaborates (see the elaborate test below)."""
     proj, rtl = _stage_project(tmp_path, _SPEC_COLON, _RTL_SYNC)
     res = R.step_reset_clock_variant_aliases(proj, "chip_top")
-    assert res.status == "SKIP", (res.status, res.detail)
-    assert "contract" in res.detail.lower(), res.detail
+    assert res.status == "PASS", (res.status, res.detail)
+    assert "additive" in res.detail.lower(), res.detail
     txt = rtl.read_text()
-    assert "arstn" in txt, txt          # spec port preserved
-    assert "rst_n" not in txt, txt      # NOT canonicalised to a different standard
+    assert "arstn" in txt, txt          # spec port preserved (still bindable)
+    assert "rst_n" in txt, txt          # canonical ALSO exposed additively (#792)
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")

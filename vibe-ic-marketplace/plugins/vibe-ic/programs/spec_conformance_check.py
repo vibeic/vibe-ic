@@ -965,6 +965,33 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
         except Exception:  # nosec — structural check is best-effort
             pass
 
+    # ---- one-hot continuous-assign next-state completeness (ERROR; #791) -----
+    # The case-driven check above is BLIND to a one-hot FSM authored as pure
+    # continuous-assigns (no `case`) — it never registers fsm_output_style and
+    # check_text() SKIPs (-no-state-declarations). VerilogEval
+    # Prob150_review2015_fsmonehot dropped a SPEC-DISCLOSED self-loop
+    # (`Count --done_counting=0--> Count`) and shipped PASS. This wires the
+    # deterministic, zero-false-fire one-hot check (it needs the spec's disclosed
+    # transition table, so it takes BOTH rtl_body and spec_text). Gated on a
+    # disclosed arrow-form transition table + parseable one-hot next-state
+    # assigns — SKIPs otherwise (no false fire). Best-effort: a parser hiccup
+    # never fails the gate.
+    if rtl_body and spec_text:
+        try:
+            import sys as _sys
+            _here = str(Path(__file__).resolve().parent)
+            if _here not in _sys.path:
+                _sys.path.insert(0, _here)
+            from fsm_transition_completeness_check import (
+                check_onehot_continuous_assign as _oh_chk)
+            _oh_findings, _ = _oh_chk(rtl_body, spec_text)
+            for _of in _oh_findings:
+                if _of.severity == 'ERROR':
+                    f.append(Finding(path, 'ERROR', _of.rule, _of.state,
+                                     _of.detail))
+        except Exception:  # nosec — structural check is best-effort
+            pass
+
     # ---- multi-cycle valid/ready handshake structural checks (ERROR; #523) ---
     # Two recurring author bugs in an N-cycle valid/ready datapath that PASS the
     # author's own TB but hang / corrupt under an always-ready consumer:

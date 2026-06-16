@@ -217,10 +217,12 @@ def _stage_contract_md(proj, body):
 
 
 def test_step_facet1_contract_declares_reset_skips_and_elaborates(tmp_path):
-    # FACET 1 over-fire fix: the design's contract declares `reset` and the
-    # hidden TB binds `.reset(...)`. The step must NOT rename -> `reset` survives
-    # -> the spec-correct TB elaborates. (Before the fix: `reset`->`rst`, wrapper
-    # exposes only `rst`, TB `.reset(...)` -> compile_error.)
+    # FACET 1 (#689 over-fire) → #792 ADDITIVE doctrine. The contract declares
+    # `reset` and ITS hidden TB binds `.reset(...)`, but a DIFFERENT hidden TB may
+    # bind the canonical `.rst(...)` (indistinguishable from the contract alone).
+    # The step now emits an ADDITIVE dual-spelling reset wrapper (PASS): `reset`
+    # STAYS bindable (no regression) AND `rst` is ALSO exposed, polarity-safe
+    # (active-high → tri0 pull, OR-combine), so BOTH bindings elaborate.
     f = _stage_rtl(tmp_path, MULTI_BOOTH_RTL, "multi_booth_8bit.v")
     _stage_contract_md(
         tmp_path,
@@ -231,57 +233,70 @@ def test_step_facet1_contract_declares_reset_skips_and_elaborates(tmp_path):
         "| reset | 1 | input | active-high reset |\n"
         "| a | 8 | input | multiplicand |\n")
     res = R.step_reset_clock_variant_aliases(tmp_path, "multi_booth_8bit")
-    assert res.status == "SKIP", (res.status, res.detail)
-    assert "#689" in res.detail
+    assert res.status == "PASS", (res.status, res.detail)
+    assert "#792" in res.detail and "additive" in res.detail.lower()
     body = f.read_text()
-    assert "reset" in body and "__rcvar_inner" not in body, \
-        "the contract-declared `reset` spelling must survive verbatim"
+    assert "reset" in body and "__rcvar_inner" in body
+    assert "rst" in body, "additive canonical spelling must be exposed"
 
     iv = shutil.which("iverilog")
     if not iv:
         pytest.skip("iverilog not on this host — structural checks only")
-    tb = tmp_path / "tb.v"
-    tb.write_text(
-        "module tb;\n reg clk=0, reset=0; reg [7:0] a=0,b=0;"
-        " wire [15:0] p; wire rdy;\n"
-        " multi_booth_8bit dut(.clk(clk), .reset(reset), .a(a), .b(b),"
-        " .p(p), .rdy(rdy));\nendmodule\n")
-    r = subprocess.run(
-        [iv, "-g2012", "-s", "tb", "-o", str(tmp_path / "tb.out"),
-         str(f), str(tb)], capture_output=True, text=True, timeout=60)
-    assert r.returncode == 0, r.stderr
+
+    def _elab(bind):
+        tb = tmp_path / f"tb_{bind}.v"
+        tb.write_text(
+            f"module tb;\n reg clk=0, {bind}=0; reg [7:0] a=0,b=0;"
+            f" wire [15:0] p; wire rdy;\n"
+            f" multi_booth_8bit dut(.clk(clk), .{bind}({bind}), .a(a), .b(b),"
+            f" .p(p), .rdy(rdy));\nendmodule\n")
+        return subprocess.run(
+            [iv, "-g2012", "-s", "tb", "-o", str(tmp_path / f"{bind}.out"),
+             str(f), str(tb)], capture_output=True, text=True, timeout=60)
+    # NO-REGRESSION: the contract `.reset` binding still elaborates.
+    assert _elab("reset").returncode == 0
+    # #792 RESCUE: the canonical `.rst` binding now ALSO elaborates.
+    assert _elab("rst").returncode == 0
 
 
 def test_step_facet2_up_down_counter_contract_preserves_reset(tmp_path):
-    # FACET 2 lossy repro on the second RTLLM design: up_down_counter declares
-    # `reset` in its contract -> preserved; TB binding `.reset(...)` elaborates.
+    # FACET 2 → #792: up_down_counter declares `reset`; the step now exposes BOTH
+    # `reset` (contract) and `rst` (canonical) additively. TBs binding either
+    # `.reset(...)` (no regression) or `.rst(...)` (rescue) elaborate.
     f = _stage_rtl(tmp_path, UP_DOWN_RTL, "up_down_counter.v")
     _stage_contract_md(
         tmp_path,
         "module up_down_counter(input clk, input reset, input up_down,"
         " output reg [15:0] count);")
     res = R.step_reset_clock_variant_aliases(tmp_path, "up_down_counter")
-    assert res.status == "SKIP", (res.status, res.detail)
+    assert res.status == "PASS", (res.status, res.detail)
+    assert "#792" in res.detail and "additive" in res.detail.lower()
     body = f.read_text()
-    assert "input             reset" in body or "reset" in body
-    assert "__rcvar_inner" not in body
+    assert "reset" in body and "__rcvar_inner" in body
 
     iv = shutil.which("iverilog")
     if not iv:
         pytest.skip("iverilog not on this host")
-    tb = tmp_path / "tb.v"
-    tb.write_text(
-        "module tb; reg clk=0,reset=0,up_down=0; wire [15:0] count;"
-        " up_down_counter dut(.clk(clk),.reset(reset),.up_down(up_down),"
-        ".count(count)); endmodule\n")
-    r = subprocess.run(
-        [iv, "-g2012", "-o", str(tmp_path / "u"), str(tb), str(f)],
-        capture_output=True, text=True, timeout=60)
-    assert r.returncode == 0, r.stderr
+
+    def _elab(bind):
+        tb = tmp_path / f"tb_{bind}.v"
+        tb.write_text(
+            f"module tb; reg clk=0,{bind}=0,up_down=0; wire [15:0] count;"
+            f" up_down_counter dut(.clk(clk),.{bind}({bind}),.up_down(up_down),"
+            f".count(count)); endmodule\n")
+        return subprocess.run(
+            [iv, "-g2012", "-o", str(tmp_path / f"{bind}.out"), str(tb), str(f)],
+            capture_output=True, text=True, timeout=60)
+    assert _elab("reset").returncode == 0    # no regression
+    assert _elab("rst").returncode == 0      # #792 rescue
 
 
 def test_step_facet1_clock_shape_contract_preserves_clock(tmp_path):
-    # the `clock` shape: contract declares `clock` (+ `reset`) -> both survive.
+    # the `clock` shape: contract declares `clock` (+ `reset`). A CLOCK has no
+    # inactive level → it is NEVER additive (stays suppressed: `clock` survives,
+    # not renamed). The active-high `reset` becomes ADDITIVE (PASS): `reset`
+    # stays bindable AND `rst` is exposed. The `.clock`+`.reset` binding (and the
+    # `.clock`+`.rst` rescue) elaborate; the clock is not rescued (no `.clk`).
     rtl = (
         "module dut_clk (\n  input clock, input reset, input d,"
         " output reg q\n);\n"
@@ -292,22 +307,28 @@ def test_step_facet1_clock_shape_contract_preserves_clock(tmp_path):
         "Ports: `clock` (input, system clock), `reset` (input, active-high), "
         "`d`, `q`.")
     res = R.step_reset_clock_variant_aliases(tmp_path, "dut_clk")
-    assert res.status == "SKIP", (res.status, res.detail)
+    assert res.status == "PASS", (res.status, res.detail)
+    assert "#792" in res.detail and "additive" in res.detail.lower()
     body = f.read_text()
-    assert "input clock" in body and "input reset" in body
-    assert "__rcvar_inner" not in body
+    # clock stays its contract spelling (no `clk` rename); reset is additive.
+    assert "clock" in body and "reset" in body and "__rcvar_inner" in body
+    assert "rst" in body
 
     iv = shutil.which("iverilog")
     if not iv:
         pytest.skip("iverilog not on this host")
-    tb = tmp_path / "tb.v"
-    tb.write_text(
-        "module tb; reg clock=0,reset=0,d=0; wire q;"
-        " dut_clk dut(.clock(clock),.reset(reset),.d(d),.q(q)); endmodule\n")
-    r = subprocess.run(
-        [iv, "-g2012", "-o", str(tmp_path / "c"), str(tb), str(f)],
-        capture_output=True, text=True, timeout=60)
-    assert r.returncode == 0, r.stderr
+
+    def _elab(rbind):
+        tb = tmp_path / f"tb_{rbind}.v"
+        tb.write_text(
+            f"module tb; reg clock=0,{rbind}=0,d=0; wire q;"
+            f" dut_clk dut(.clock(clock),.{rbind}({rbind}),.d(d),.q(q));"
+            f" endmodule\n")
+        return subprocess.run(
+            [iv, "-g2012", "-o", str(tmp_path / f"{rbind}.out"), str(tb), str(f)],
+            capture_output=True, text=True, timeout=60)
+    assert _elab("reset").returncode == 0    # no regression (clock + spec reset)
+    assert _elab("rst").returncode == 0      # #792 rescue (clock + canon reset)
 
 
 # ════════════════════════════════════════════════════════════════════════

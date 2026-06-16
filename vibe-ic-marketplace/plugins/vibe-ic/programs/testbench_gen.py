@@ -48,31 +48,54 @@ endmodule
     return f
 
 
-def main() -> int:
-    p = argparse.ArgumentParser()
-    p.add_argument("project", type=Path)
-    p.add_argument("--top", default="chip_top")
-    args = p.parse_args()
-    l10_path = _pl.generated_docs_dir(args.project) / "L10_TEST_CASES.json"
+def emit_unit_tbs(project: Path, top: str = "chip_top",
+                  kind: "str | None" = None) -> int:
+    """ORGANIC #797 — importable producer entry point. Emit one unit TB per L10
+    test case under `<project>/sim/tb/`, optionally KIND-SCOPED. Returns the
+    number of TBs emitted (-1 when no L10 is present, so the caller can SKIP).
+
+    `kind` (e.g. `functional_vector`) restricts emission to cases of that kind —
+    the §4.05 no-leak scoping: the runner wiring only auto-produces skeletons for
+    `functional_vector` cases (whose oracle is an id-substring trace), so a
+    `cmd_response` case whose oracle is the stricter opcode/summary path NEVER
+    gets manufactured evidence and STILL fails the Step-4 gate when uncovered."""
+    l10_path = _pl.generated_docs_dir(project) / "L10_TEST_CASES.json"
     if not l10_path.is_file():
-        print(f"[SKIP] testbench_gen: no L10_TEST_CASES.json")
-        return 0
-    try:
-        l10 = json.loads(l10_path.read_text())
-    except Exception as e:
-        print(f"[FAIL] testbench_gen: L10 parse failed: {e}")
-        return 1
-    out_dir = _pl.sim_dir(args.project) / "tb"
+        return -1
+    l10 = json.loads(l10_path.read_text())
+    out_dir = _pl.sim_dir(project) / "tb"
     out_dir.mkdir(parents=True, exist_ok=True)
     cases = l10.get("test_cases") or l10.get("cases") or []
     emitted = 0
     for c in cases:
         if not isinstance(c, dict):
             continue
-        if emit_unit_tb(c, out_dir, args.top) is not None:
+        if kind is not None and c.get("kind") != kind:
+            continue
+        if emit_unit_tb(c, out_dir, top) is not None:
             emitted += 1
+    return emitted
+
+
+def main() -> int:
+    p = argparse.ArgumentParser()
+    p.add_argument("project", type=Path)
+    p.add_argument("--top", default="chip_top")
+    p.add_argument("--kind", default=None,
+                   help="emit ONLY cases of this L10 kind (e.g. "
+                        "functional_vector); omit to emit every case")
+    args = p.parse_args()
+    try:
+        emitted = emit_unit_tbs(args.project, args.top, args.kind)
+    except Exception as e:
+        print(f"[FAIL] testbench_gen: L10 parse failed: {e}")
+        return 1
+    if emitted < 0:
+        print("[SKIP] testbench_gen: no L10_TEST_CASES.json")
+        return 0
     print(f"[PASS] testbench_gen: {emitted} unit TB files emitted "
-          f"under sim/tb/")
+          f"under sim/tb/"
+          + (f" (kind={args.kind})" if args.kind else ""))
     return 0
 
 
