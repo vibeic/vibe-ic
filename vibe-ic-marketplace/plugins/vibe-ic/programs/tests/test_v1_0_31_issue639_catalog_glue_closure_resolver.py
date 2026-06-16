@@ -134,11 +134,15 @@ def test_empty_dir_is_failsafe_not_pass(tmp_path):
 
 
 def test_top_not_found_is_failsafe_not_pass(tmp_path):
-    """A top module not defined in any staged file must NOT pass — verdict
-    TOP_NOT_FOUND (a foreign / under-populated set is still caught)."""
+    """A top module not defined in any staged file must NOT pass — a foreign /
+    under-populated set is still caught. ORGANIC #774 round-2: the
+    duplicate-module scan now runs UNCONDITIONALLY over the full staged set even
+    when the top does not resolve; `_FILES` contains a duplicate
+    `tlul_adapter_vh`, so the (more specific, equally fail-safe) verdict is
+    STAGED_DUPLICATE — never PASS."""
     d = _stage(tmp_path / "vendor_rtl", _FILES)
     rep = R.resolve("no_such_top_module", d)
-    assert rep["verdict"] == "TOP_NOT_FOUND"
+    assert rep["verdict"] in ("TOP_NOT_FOUND", "STAGED_DUPLICATE")
     assert rep["verdict"] != "PASS"
     assert rep["reachable"] == []
 

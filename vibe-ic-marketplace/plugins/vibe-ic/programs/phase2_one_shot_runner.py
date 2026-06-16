@@ -5831,7 +5831,15 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
     try:
         import catalog_glue_closure_resolver as _cg
         _cg_report = _cg.resolve(synth_top, rtl_dir)
-        if _cg_report.get("verdict") == "DUPLICATE":
+        # ORGANIC #774 — gate on STAGED_DUPLICATE too, not just the #639
+        # reachable-only DUPLICATE. `_select_asic_rtl_sources` feeds the
+        # FULL flat glob to yosys_synth (prune is advisory — "never
+        # auto-drop"), so a duplicate-module pair in the PRUNABLE tail is
+        # still handed to synth and still crashes yosys-slang raw with a
+        # "duplicate definition" abort. Scanning only the reachable closure
+        # left that tail invisible (verdict=PASS) → false-PASS-then-crash.
+        if _cg_report.get("verdict") in ("DUPLICATE", "STAGED_DUPLICATE"):
+            _verdict = _cg_report["verdict"]
             _dups = _cg_report.get("duplicates", [])
             _msg = "; ".join(d["message"] for d in _dups[:8])
             _prune_n = _cg_report.get("files_prunable", 0)
@@ -5839,12 +5847,17 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                 f" Closure also flags {_prune_n} staged file(s) NOT "
                 f"reachable from {synth_top} (over-broad set — "
                 f"consider pruning to the closure)." if _prune_n else "")
+            _issue = "#774" if _verdict == "STAGED_DUPLICATE" else "#639"
+            _facet = (" in the PRUNABLE tail (the runner still feeds the "
+                      "full flat glob to synth)"
+                      if _verdict == "STAGED_DUPLICATE"
+                      else " in the reachable closure")
             return StepResult(
                 "yosys_synth", "FAIL",
                 time.time() - t0,
-                (f"CATALOG_GLUE_CLOSURE (#639): vendor bundle "
-                 f"duplicate-module defect in the staged synth set — "
-                 f"yosys-slang would crash with a raw 'duplicate "
+                (f"CATALOG_GLUE_CLOSURE ({_issue}): vendor bundle "
+                 f"duplicate-module defect{_facet} of the staged synth "
+                 f"set — yosys-slang would crash with a raw 'duplicate "
                  f"definition' abort. {_msg}{_prune_note}"),
                 extras={"catalog_glue_closure": _cg_report})
     except Exception:  # nosec — preflight is best-effort, never masks synth
