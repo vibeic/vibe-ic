@@ -2882,10 +2882,21 @@ def main():
     # ORGANIC #770 round-2 — only a BLOCK-eligible finding hard-blocks (trips
     # rc=1). A STRUCTURAL / corroborated finding (a genuine bug) stays
     # block-eligible and still blocks; a downgraded prose-heuristic finding is
-    # advisory only. (_advisory() also demotes the severity to INFO, so the
-    # `err`/`warn` counts above already exclude it — this gate is the
-    # authoritative, severity-independent decision point.)
-    blocking = [f for f in all_findings
+    # advisory only.
+    #
+    # ORGANIC #777 — the block set is computed from `filtered` (the same
+    # ≥ --severity set that stdout + the --json artifact use), NOT `all_findings`.
+    # #770-r2 (166e6aa05) sourced this from `all_findings`, which is
+    # severity-INDEPENDENT: at `--severity ERROR` (the canonical Step-2 lint
+    # gate) a block-eligible WARN was filtered OUT of stdout+JSON yet STILL
+    # tripped rc=1 — an INVISIBLE FAIL ('0 errors, 0 warnings, 0 info' + JSON
+    # '[]' + rc=1) that cascade-blocked ~25 downstream steps with zero evidence.
+    # Sourcing from `filtered` makes rc=1 ALWAYS correspond to a printed + JSON'd
+    # finding. §4.05 (this relaxes a gate): a real ERROR at --severity ERROR is
+    # in `filtered` → still rc=1 + visible; a block-eligible WARN at
+    # --severity WARN is in `filtered` → still rc=1 + visible. Only the
+    # below-threshold + invisible combination stops tripping a silent rc=1.
+    blocking = [f for f in filtered
                 if f.block_eligible and f.severity in ('ERROR', 'WARN')]
     return 1 if blocking else 0
 
