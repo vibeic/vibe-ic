@@ -786,9 +786,52 @@ def _binary_nibble_has_grouped_source(text: str, nibble: str) -> bool:
     n = len(nibble)
     for tm in re.finditer(r"[01][01_]*[01]", text):
         tok = tm.group(0).replace("_", "")
-        if len(tok) > n and len(tok) >= 2 * n and nibble in tok:
-            return True
+        if len(tok) <= n or len(tok) < 2 * n:
+            continue
+        # NIBBLE-ALIGNED containment only (ORGANIC #780 r2 Step-2.7 §4.05): a
+        # per-digit decomposition places each digit on an n-bit boundary, so the
+        # nibble must occur at an offset that is a MULTIPLE of n. This rejects a
+        # COINCIDENTAL substring match in an unrelated wide TB/spec literal (where
+        # the nibble lands at a non-aligned offset), which would otherwise
+        # falsely downgrade a genuine standalone binary->decimal example.
+        idx = tok.find(nibble)
+        while idx != -1:
+            if idx % n == 0:
+                return True
+            idx = tok.find(nibble, idx + 1)
     return False
+
+
+def _worked_example_is_covered_parent_gloss(coverage_tokens: List[str],
+                                            combined_text: str) -> bool:
+    """ORGANIC #780 r2 (field reopen) — True iff a worked_example item is a
+    binary-nibble NOTATIONAL gloss (LHS bits == RHS value, e.g. `0101 -> 5`) that
+    is a per-digit STEP of a LARGER grouped binary value present in the spec OR
+    the TESTBENCH — i.e. the parent example input the TB actually stimulates
+    (binary_to_BCD_0010: the spec lists MSD/Middle/LSD digits separately but the
+    TB drives the full `bcd_in = 0010_0101_0111`, so `0101 -> 5` is an
+    intermediate algorithm step of a COVERED parent, not an independent I/O
+    vector). The extraction-time `we_structural_artifact` only sees the SPEC, so
+    a spec that shows the digits separately (table / "MSD 0010, Middle 0101")
+    misses the parent — this run()-time check adds the TESTBENCH text, where the
+    grouped parent input is driven.
+
+    §4.05 no-leak: a GENUINE standalone binary->decimal example the TB never
+    drives a CONTAINING parent value for (no grouped >=2-nibble source anywhere)
+    is NOT downgraded → still BLOCKS. A TB that drives only the bare nibble
+    itself (a 4-bit `4'b0101`) is NOT a >=2-nibble parent, so a real decoder
+    vector keeps its blocking power. chip-AGNOSTIC."""
+    if len(coverage_tokens) != 2:
+        return False
+    lhs, rhs = coverage_tokens[0], coverage_tokens[1]
+    if not (re.fullmatch(r"[01]{2,}", lhs) and re.fullmatch(r"\d+", rhs)):
+        return False
+    try:
+        if not (int(lhs, 2) == int(rhs, 10) and int(lhs, 2) != int(lhs, 10)):
+            return False
+    except ValueError:
+        return False
+    return _binary_nibble_has_grouped_source(combined_text, lhs)
 
 
 def _worked_example_structural_artifact(text: str, m) -> bool:
@@ -1859,6 +1902,19 @@ def run(stations: dict, rtl_text: Optional[str], tb_text: Optional[str],
                 #  3'b010"; cvdp_copilot_binary_to_BCD_0010: the single example
                 #  0010_0101_0111->257 split into 0010=2 / 0101=5 / 0111=7.)
                 if it.we_structural_artifact:
+                    corr = _prov.NO_CORROBORATION
+                # ORGANIC #780 r2 (field reopen) — the extraction-time artifact
+                # check sees only the SPEC, so a spec that lists the per-digit
+                # steps SEPARATELY (table / "MSD 0010, Middle 0101, LSD 0111")
+                # misses that they decompose ONE example whose grouped parent
+                # input (`bcd_in = 0010_0101_0111`) the TESTBENCH drives. Re-check
+                # against spec+TB: a binary-nibble gloss that is a slice of a
+                # grouped parent the TB stimulates is an intermediate step →
+                # advisory. A genuine standalone example the TB never drives a
+                # containing parent for still BLOCKS (§4.05).
+                elif _worked_example_is_covered_parent_gloss(
+                        it.coverage_tokens,
+                        _all_spec + "\n" + (tb_text or "")):
                     corr = _prov.NO_CORROBORATION
             it.block_eligible = _prov.is_block_eligible(it.provenance, corr)
             if not it.block_eligible:
