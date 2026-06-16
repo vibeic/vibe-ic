@@ -193,6 +193,17 @@ class ChecklistItem:
     # extractor records that structural fact here so run() downgrades it to
     # advisory (CONTRADICTED). Default False (a genuine value set stays blocking).
     is_concat_literal: bool = False
+    # ORGANIC #780 (#770 r7, R8C1) — a worked_example match that is NOT a real
+    # in->out DATA pair but a STRUCTURAL ARTIFACT of the surrounding Verilog /
+    # notation:
+    #   * the LHS digit is the numeric suffix of an identifier (GRANT_2, STATE_3);
+    #   * the RHS digit is the bit-WIDTH field of a sized literal (3'b010);
+    #   * a binary-nibble = its-own-decimal-value notational gloss ("0101 = 5",
+    #     a per-digit decomposition of ONE example, not an independent vector).
+    # The extractor records this so run() tags the gap NO_CORROBORATION -> advisory
+    # (the prose-heuristic worked_example has no structural backing as a data
+    # pair). Default False (a genuine in->out example stays blocking). chip-AGNOSTIC.
+    we_structural_artifact: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -762,6 +773,73 @@ def _is_control_code_legend(text: str, m) -> bool:
             return True
     return False
 
+
+def _binary_nibble_has_grouped_source(text: str, nibble: str) -> bool:
+    """ORGANIC #780 r2 (Step-2.7 §4.05) — True iff `nibble` (a bare binary token)
+    appears as a CONTIGUOUS slice of a LARGER multi-nibble grouped/concatenated
+    binary literal in `text` — the per-digit decomposition SOURCE (e.g.
+    `0010_0101_0111` for the gloss `0101`). The source must carry >= 2 nibbles'
+    worth of bits so a GENUINE standalone binary->decimal vector (a real
+    binary-to-BCD / decoder test like `0101 -> 5`, which has NO such grouped
+    source) is NOT mistaken for a decomposition gloss and keeps BLOCKING.
+    chip-AGNOSTIC: pure binary-literal grammar."""
+    n = len(nibble)
+    for tm in re.finditer(r"[01][01_]*[01]", text):
+        tok = tm.group(0).replace("_", "")
+        if len(tok) > n and len(tok) >= 2 * n and nibble in tok:
+            return True
+    return False
+
+
+def _worked_example_structural_artifact(text: str, m) -> bool:
+    """ORGANIC #780 (#770 r7, R8C1) — True iff a worked-example match is NOT a
+    real in->out DATA pair but a STRUCTURAL ARTIFACT of the surrounding Verilog /
+    notation, so a coverage gap on it has no structural backing and must be
+    ADVISORY (NO_CORROBORATION), not a hard block. chip-AGNOSTIC: pure
+    Verilog/notation grammar, no chip / vendor / SKU literal.
+
+    Three shapes, each independently observed to hard-block correct RTL:
+      (A) the LHS digit is the numeric SUFFIX of an identifier — the char
+          immediately before it is [A-Za-z_] — e.g. the "2" of `GRANT_2`,
+          `STATE_3`. A state-encoding localparam legend, not a data operand.
+          (cvdp_copilot_bus_arbiter_0001: "GRANT_2 = 3'b010" -> phantom 2->3.)
+      (B) the RHS digit is the bit-WIDTH field of a sized literal — the char
+          immediately after it is an apostrophe — e.g. the "3" of `3'b010`.
+          A sized-literal width, not a data value. (same case.)
+      (C) a binary-nibble = its-own-decimal-value notational GLOSS: the LHS is a
+          bare binary-shaped multi-bit token (all 0/1, >=2 chars, NO base
+          prefix) whose binary value EQUALS the RHS decimal AND differs from its
+          own decimal reading — e.g. "0101 = 5" (bin 0101 = 5). This is a
+          per-digit decomposition gloss of ONE worked example, not an
+          independent input->output vector. (cvdp_copilot_binary_to_BCD_0010:
+          the single example bcd_in=0010_0101_0111 -> 257 is split into
+          0010=2 / 0101=5 / 0111=7 by the per-digit "Process MSD/Middle/LSD"
+          annotation lines.)
+    """
+    lhs, rhs = m.group(1), m.group(3)
+    s_lhs, e_rhs = m.start(1), m.end(3)
+    # (A) LHS digit is the numeric suffix of an identifier.
+    if s_lhs > 0 and re.match(r"[A-Za-z_]", text[s_lhs - 1]):
+        return True
+    # (B) RHS digit is immediately followed by a sized-literal apostrophe.
+    if e_rhs < len(text) and text[e_rhs] == "'":
+        return True
+    # (C) binary-nibble = its-own-decimal-value notational gloss. To avoid eating
+    # a GENUINE standalone binary->decimal vector (a real binary-to-BCD / decoder
+    # test like "0101 -> 5"), the nibble must ALSO be a constituent of a larger
+    # multi-nibble grouped binary literal in the spec (the decomposition SOURCE,
+    # e.g. `0010_0101_0111`). A standalone vector has no such source and keeps
+    # BLOCKING (ORGANIC #780 r2 Step-2.7 §4.05 — the gloss detector was too broad).
+    if re.fullmatch(r"[01]{2,}", lhs) and re.fullmatch(r"\d+", rhs):
+        try:
+            if (int(lhs, 2) == int(rhs, 10) and int(lhs, 2) != int(lhs, 10)
+                    and _binary_nibble_has_grouped_source(text, lhs)):
+                return True
+        except ValueError:
+            pass
+    return False
+
+
 # Signed-ness / byte order / overflow / handshake — structural keyword facts.
 _SIGNED_RE = re.compile(r"\b(signed|unsigned|two'?s\s+complement)\b", re.I)
 _BYTEORDER_RE = re.compile(
@@ -900,11 +978,18 @@ def extract_checklist(spec_text: str) -> List[ChecklistItem]:
         if key in seen_examples:
             continue
         seen_examples.add(key)
+        # ORGANIC #780 (#770 r7, R8C1) — record whether this match is a structural
+        # ARTIFACT (identifier-suffix LHS / sized-literal-width RHS / binary-
+        # nibble=decimal gloss) rather than a real in->out data pair, so run()'s
+        # #770 provenance loop can downgrade an uncorroborated worked_example gap
+        # to advisory instead of hard-blocking correct RTL. chip-AGNOSTIC.
         items.append(ChecklistItem(
             kind="worked_example",
             requirement=f"worked example: {lhs} -> {rhs}",
             evidence=m.group(0),
-            coverage_tokens=[lhs, rhs]))
+            coverage_tokens=[lhs, rhs],
+            we_structural_artifact=_worked_example_structural_artifact(
+                spec_text, m)))
 
     # --- Signed-ness / byte order / overflow / handshake (structural facts) ---
     for rx, kind, label in (
@@ -971,6 +1056,11 @@ def extract_chain(stations: dict) -> List[ChecklistItem]:
             if k in merged:
                 if st not in merged[k].stations:
                     merged[k].stations.append(st)
+                # ORGANIC #780 (#770 r7, R8C1) — a worked_example identified as a
+                # structural artifact at ANY station stays an artifact after the
+                # cross-station merge (the structural shape is the same text).
+                if it.we_structural_artifact:
+                    merged[k].we_structural_artifact = True
             else:
                 it.stations = [st]
                 merged[k] = it
@@ -1752,6 +1842,24 @@ def run(stations: dict, rtl_text: Optional[str], tb_text: Optional[str],
                 # (is_concat_literal=False) keeps STRUCTURAL → blocks.
                 # (configurable_digital_low_pass_filter_0001)
                 corr = _prov.CONTRADICTED
+            elif it.kind == "worked_example":
+                # ORGANIC #780 (#770 r7, R8C1) — a worked_example gap blocks only
+                # when the matched `LHS -> RHS` is a REAL in->out DATA pair. When
+                # the match is a STRUCTURAL ARTIFACT of the surrounding Verilog /
+                # notation (the LHS digit is the numeric suffix of an identifier
+                # like GRANT_2; the RHS digit is a sized-literal bit-WIDTH like
+                # 3'b010; or a binary-nibble=decimal gloss like "0101 = 5" that is
+                # one per-digit step of ONE example) it has NO structural backing
+                # as a data pair → NO_CORROBORATION → advisory. A genuine in->out
+                # example (we_structural_artifact False) keeps its historical
+                # blocking power (UNKNOWN → block), so a worked example the TB
+                # never stimulates STILL hard-blocks. No-leak biased: only the
+                # provably-non-data shapes downgrade.
+                # (cvdp_copilot_bus_arbiter_0001: phantom 2->3 from "GRANT_2 =
+                #  3'b010"; cvdp_copilot_binary_to_BCD_0010: the single example
+                #  0010_0101_0111->257 split into 0010=2 / 0101=5 / 0111=7.)
+                if it.we_structural_artifact:
+                    corr = _prov.NO_CORROBORATION
             it.block_eligible = _prov.is_block_eligible(it.provenance, corr)
             if not it.block_eligible:
                 it.advisory_note = _prov.advisory_reason(it.provenance, corr)
