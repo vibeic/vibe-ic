@@ -350,9 +350,23 @@ def design_contract_ports(project: Path) -> set:
 # `reset_n`. Shared single source (Step-2.7 rule 3 — no hand-copied lists) so the
 # three port-surface regexes never drift. Longest-first is irrelevant (each is a
 # whole-word `\b` alternation) but kept readable.
+# ORGANIC #801 (extends #792) — the SystemVerilog INTEGRAL / NUMERIC DATA TYPES
+# were still missing from the same alternation. A spec may MANDATE a 2-state
+# clock/data port (`Use bit for the clock input` → `input bit clk_in`), and the
+# four-state `logic` was the only data type covered. With `bit` absent the final
+# `(\w+)` grabbed the DATA TYPE (`bit`) as the port name and dropped the real
+# port (`clk_in`) → a downstream latency TB emitted `reg bit;` + `.bit(bit)`
+# (reserved SV keyword + non-existent port) → rc=2 compile crash. Same CLASS as
+# #792 (a qualifier eaten as the name). Whole-word `\b` alternation →
+# order-independent (`int` cannot pre-empt `integer`: the `\b` after a bare `int`
+# fails on the `e`, so the engine backtracks to the longer arm). ADDITIVE — these
+# are all SV reserved keywords, never legal port names, so a header with no SV
+# data-type qualifier is matched byte-for-byte as before (§4.05 no-leak).
 _NET_QUAL_RE = (r"(?:(?:wire|reg|logic|signed|unsigned|"
                 r"tri|tri0|tri1|triand|trior|trireg|wand|wor|uwire|"
-                r"supply0|supply1)\b\s*)*")
+                r"supply0|supply1|"
+                r"bit|byte|int|integer|shortint|longint|"
+                r"time|real|shortreal|realtime)\b\s*)*")
 
 _PORT_DECL_RE = re.compile(
     r"\b(input|output|inout)\b\s*"

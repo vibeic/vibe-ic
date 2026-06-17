@@ -70,6 +70,41 @@ _FAULT_NEGATER_WORDS = frozenset({
     'validating', 'handle', 'handling', 'handler', 'exit', 'done', 'ack',
     'default', 'resync', 'retry', 'normal', 'ok', 'pass', 'idle', 'run'})
 
+# ORGANIC #804 (Step-2.7 §4.05) — standard BUS-PROTOCOL error-RESPONSE outputs.
+# When one of these is asserted in the `default:` branch of an address-DECODE
+# case (a case whose selector is an *addr*/*adr* expression), that is the
+# protocol-mandated bad-address error response — APB PSLVERR, AXI BRESP/RRESP
+# (SLVERR/DECERR), AHB HRESP, Wishbone ERR_O — NOT the cross-layer
+# recoverable-mid-FSM-error anti-pattern this gate targets. Keyed only on generic
+# bus-protocol vocabulary; chip-AGNOSTIC. A spurious error assertion in a NORMAL
+# operational state (numbered FSM state, or a non-addr case, or a generic `err`
+# in the addr default) still fires — the default-branch-of-an-address-decode is
+# the narrow, protocol-grounded exemption.
+_BUS_ERR_RESP = re.compile(
+    r'^(?:'
+    r'\w*pslverr\w*|'              # APB PSLVERR (any prefix/suffix)
+    r'\w*slverr\w*|'              # generic SLVERR
+    r'\w*bresp\w*|\w*rresp\w*|'   # AXI write/read response (SLVERR/DECERR)
+    r'\w*hresp\w*|'              # AHB response
+    r'err_o|'                    # Wishbone err_o — BARE/EXACT only
+    r'\w*decerr\w*|\w*slv_err\w*|\w*bus_err\w*|\w*dec_err\w*'
+    r')$', re.IGNORECASE)
+# ORGANIC #804 Step-2.7 §4.05 — the Wishbone `err_o` arm is EXACT (bare `err_o`,
+# the Wishbone convention), NOT the generic functional-error `_o`/`_out` output
+# convention. A prefixed/suffixed form (`crc_err_o`, `parity_err_o`,
+# `rx_err_out`, `timeout_err_o`, `err_overflow`) is a genuine error flag, NOT a
+# protocol bus-error RESPONSE — it MUST still fire. A bus-prefixed `wb_err_o`
+# falling through to a (false) hard-block is the SAFE direction (§4.05: a false
+# block is a field reopen; masking a real recoverable-error anti-pattern is a
+# silent leak).
+
+# An address-DECODE case selector: a *addr* / *adr* expression (paddr, haddr,
+# awaddr, address, mem_adr, …). Step-2.7 §4.05 — `addr`/`adr` must be a real
+# address TOKEN (at end, or followed by `_`/digit), or the word `address` — NOT a
+# substring buried inside another word (squadron / quadrant / cadre / padre).
+_ADDR_SELECTOR_RE = re.compile(
+    r'a(?:ddr|dr)(?![a-z])|address', re.IGNORECASE)
+
 
 def _is_fault_state(label) -> bool:
     """True iff the case-state label name semantically denotes a
@@ -178,16 +213,27 @@ def find_error_assertions(src: str, path: str) -> List[Finding]:
 
     current_state_label = None
     in_case = 0
+    # ORGANIC #804 — per-case selector stack + a default-branch flag, so a
+    # bus-error RESPONSE asserted in the `default:` of an address-decode case is
+    # exempted (the protocol-mandated bad-address response), while every other
+    # site still fires.
+    selector_stack: List[str] = []
+    in_default = False
 
     for lineno, line in enumerate(lines, start=1):
         # Detect case open
         case_m = re.search(r'\bcase[szx]?\s*\(([^)]+)\)', line)
         if case_m:
             in_case += 1
+            selector_stack.append(case_m.group(1))
+            in_default = False
         # Detect endcase
         if 'endcase' in line:
             in_case = max(0, in_case - 1)
             current_state_label = None
+            if selector_stack:
+                selector_stack.pop()
+            in_default = False
         # Detect state label within case. v1.1.1 (R9C2): widened to also
         # recognise NAMED (localparam/parameter) case labels — e.g.
         # `FAULT:`, `S_ERROR:`, `READY:` — not only `S_\w+`/numeric
@@ -204,6 +250,20 @@ def find_error_assertions(src: str, path: str) -> List[Finding]:
                 r'\s*(?:begin\b)?\s*$', line)
             if lm and lm.group(1).lower() != 'default':
                 current_state_label = lm.group(1)
+            # ORGANIC #804 — track the default branch ROBUSTLY: a `default:` whose
+            # body is on the SAME line (`default: pslverr <= 1'b1;`) is missed by
+            # the label-ALONE `lm` regex above. Detect a label at line START
+            # (trailing body allowed); `default:` opens the default branch (and
+            # does NOT inherit the prior numeric case label — the mis-attribution
+            # bug), any other label at line-start ends it.
+            _lbl0 = re.match(
+                r'\s*(default|[A-Za-z_]\w*|\d+\'[sS]?[dbhoxDBHOX]\w+)\s*:', line)
+            if _lbl0:
+                if _lbl0.group(1).lower() == 'default':
+                    in_default = True
+                    current_state_label = None
+                else:
+                    in_default = False
         # Find: errSig <= 1'b1;
         assign = re.search(
             r'\b(\w*(?:error|err|fail|abort|timeout|reject|invalid)\w*)\s*<=\s*1(?:\'b1|b1|\'d1)',
@@ -233,6 +293,20 @@ def find_error_assertions(src: str, path: str) -> List[Finding]:
             # NON-error-named operational state (IDLE/RUN/PROCESS/RX/...) or
             # under a numeric/unknown label still fires (no-leak).
             if _is_fault_state(current_state_label):
+                continue
+            # ORGANIC #804 (Step-2.7 §4.05) — a standard bus-protocol error
+            # RESPONSE (PSLVERR/SLVERR/BRESP/RRESP/HRESP/ERR_O/DECERR) asserted in
+            # the `default:` branch of an ADDRESS-DECODE case is the
+            # protocol-mandated unmapped-address response, NOT the
+            # recoverable-mid-FSM-error anti-pattern. Exempt ONLY that narrow
+            # site: in_default AND the enclosing case selector is an *addr*/*adr*
+            # expression AND the signal is bus-error-response vocabulary. A
+            # generic `err` in the addr default, a bus-resp in a non-addr case, a
+            # bus-resp in a MAPPED (non-default) branch, and any mid-FSM error all
+            # still fire (no-leak).
+            _sel = selector_stack[-1] if selector_stack else ""
+            if (in_default and _ADDR_SELECTOR_RE.search(_sel)
+                    and _BUS_ERR_RESP.match(sig)):
                 continue
             state = current_state_label or "<not in case branch>"
             findings.append(Finding(

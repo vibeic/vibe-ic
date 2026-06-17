@@ -762,6 +762,15 @@ def _clocked_always_spans(src: str) -> List[tuple]:
     return spans
 
 
+# ORGANIC #803 Step-2.7 §4.05 — `VERILOG_KEYWORDS` over-broadly includes the
+# hi-Z / don't-care LITERAL-spelling tokens `x`/`z`, which are ALSO legal Verilog
+# IDENTIFIERS. A token that appears as an assignment LHS (immediately before
+# `=`/`<=`) is ALWAYS a real signal (you cannot assign to a literal), so it must
+# never be dropped as a keyword — else a case-body output literally named `x`/`z`
+# vanishes from the coverage set and a genuine inferred latch is masked.
+_LHS_LITERAL_NAMES = frozenset({"x", "z"})
+
+
 def _procedural_assigned_lhs(text: str) -> Set[str]:
     """ORGANIC #794 — set of identifiers assigned by a procedural `=` / `<=` at
     STATEMENT level (paren depth 0) inside `text`.
@@ -837,7 +846,7 @@ def _procedural_assigned_lhs(text: str) -> Set[str]:
                     m -= 1
                 concat = text[m:j + 1] if m >= 0 else ""
                 for nm in re.findall(r'[A-Za-z_]\w*', concat):
-                    if nm not in VERILOG_KEYWORDS:
+                    if nm not in VERILOG_KEYWORDS or nm in _LHS_LITERAL_NAMES:
                         out.add(nm)
                 i = op_end
                 continue
@@ -845,7 +854,9 @@ def _procedural_assigned_lhs(text: str) -> Set[str]:
             while k >= 0 and (text[k].isalnum() or text[k] == '_'):
                 k -= 1
             name = text[k + 1:j + 1]
-            if name and not name[0].isdigit() and name not in VERILOG_KEYWORDS:
+            if (name and not name[0].isdigit()
+                    and (name not in VERILOG_KEYWORDS
+                         or name in _LHS_LITERAL_NAMES)):
                 out.add(name)
             i = op_end
             continue
@@ -924,9 +935,22 @@ def _case_lhs_all_pre_assigned(src: str, case_head_off: int) -> bool:
     # any if/else/for/while/case appears before the case, a pre-assignment might
     # be conditional → not provably unconditional → stay conservative.
     pre_body = re.sub(r'^\s*begin\b', '', pre, count=1)
-    if re.search(r'\b(if|else|for|while|case[szx]?|repeat|forever)\b', pre_body):
-        return False
-    uncond = _procedural_assigned_lhs(pre_body)
+    # ORGANIC #803 (extends #794): the unconditional pre-case defaults are the
+    # LEADING FLAT statement-top prefix — from the body start up to the FIRST
+    # control-construct token (if/else/for/while/case/repeat/forever). The
+    # original #794 bailed entirely the moment ANY control token appeared in the
+    # pre-case region, which MISSED the ubiquitous "priority-if-before-case" FSM
+    # idiom: statement-top defaults, then `if (highest_priority) X; else
+    # case(...)` (forced by any "from ANY state / regardless of current state"
+    # spec). Those leading flat defaults provably HOLD on any unlisted selector
+    # code REGARDLESS of an intervening priority if/else (whose own branches only
+    # re-assign vars ALREADY defaulted in the flat prefix). §4.05 boundary
+    # preserved: a case-LHS FIRST assigned only inside/after a conditional is NOT
+    # in the flat prefix → body_lhs ⊄ uncond → hard WARN (proven latch).
+    _ctrl = re.search(r'\b(if|else|for|while|case[szx]?|repeat|forever)\b',
+                      pre_body)
+    flat_prefix = pre_body[:_ctrl.start()] if _ctrl else pre_body
+    uncond = _procedural_assigned_lhs(flat_prefix)
     if not uncond:
         return False
     # case body: from after the `(...)` head to the matching endcase.
@@ -935,10 +959,10 @@ def _case_lhs_all_pre_assigned(src: str, case_head_off: int) -> bool:
     if head_end == -1 or endcase_off == -1 or endcase_off > blk_end:
         return False
     case_body = src[head_end + 1:endcase_off]
-    # Step-2.7 §4.05 — a bit/part-select LHS in EITHER region defeats base-name
-    # coverage proof (a sliced default cannot cover a different sliced write);
-    # stay conservative and keep the hard WARN.
-    if _lhs_has_subscript(case_body) or _lhs_has_subscript(pre_body):
+    # Step-2.7 §4.05 — a bit/part-select LHS in the case body or the FLAT prefix
+    # defeats base-name coverage proof (a sliced default cannot cover a different
+    # sliced write); stay conservative and keep the hard WARN.
+    if _lhs_has_subscript(case_body) or _lhs_has_subscript(flat_prefix):
         return False
     body_lhs = _procedural_assigned_lhs(case_body)
     if not body_lhs:
@@ -1473,6 +1497,17 @@ def rule_incomplete_sensitivity(src: str, path: str) -> List[Finding]:
             if semi == -1:
                 continue
             body = rest[:semi + 1]
+        # ORGANIC #802 — strip BASED NUMERIC LITERALS before the identifier scan.
+        # A sized/unsized based literal (4'b0000, 8'hFF, 20'd0, 'h0) has a
+        # base-letter-prefixed VALUE tail (b0000 / hFF / d0) that the
+        # `[A-Za-z_]\w*` read scan below treats as an identifier; the sole literal
+        # guard `not re.match(r"^\d", t)` only rejects DIGIT-prefixed tokens, so
+        # the value tail survives and is falsely reported as a missing-sensitivity
+        # read on correct combinational RTL. A based numeric literal can never be
+        # a sensitivity signal, so removing it is always safe. The regex is
+        # ANCHORED on the apostrophe, so a signal merely NAMED `d0` (read as
+        # `q = d0;`, no apostrophe) is never over-stripped. chip-AGNOSTIC.
+        body = re.sub(r"\b\d*'[sS]?[bBoOdDhH][0-9a-fA-FxXzZ_]+", " ", body)
         # LHS targets (assigned) are not "reads"; everything else read must be in the list.
         lhs = set(re.findall(r'(\w+)(?:\s*\[[^\]]*\])?\s*(?:<=|=)(?!=)', body))
         reads = {t for t in re.findall(r'[A-Za-z_]\w*', body)
