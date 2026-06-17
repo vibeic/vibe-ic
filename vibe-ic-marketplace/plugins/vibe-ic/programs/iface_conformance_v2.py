@@ -85,7 +85,17 @@ import _provenance as _prov  # noqa: E402  (ORGANIC #770)
 # is a STRUCTURAL source. A finding sourced ONLY from prose/wavedrom is
 # provenance-gated against the RTL; a finding with ANY structural source keeps
 # its historical blocking power.
-_STRUCTURAL_IFACE_SOURCES = frozenset({"table", "given_code"})
+#
+# ORGANIC #809 (R12C3) — a bold-label structured port declaration is ALSO a
+# STRUCTURAL source: a markdown bullet `- **<Name>:** ...` under a
+# direction-asserting section heading (`### New Input:` / `### Inputs`), OR a
+# bullet `- **<name> (input, wire)**: ...` carrying the direction inside the
+# bold label, declares an interface port as authoritatively as a port table
+# row. (CVDP cvdp_copilot_moving_average_0005 declares its sole new port `enable`
+# ONLY in this form — `## New Input` + `- **enable:** 1-bit` — which the prose /
+# table / given-code extractors never see, so an RTL OMITTING `enable` slipped
+# through `interface-conformance ok`.) chip-AGNOSTIC: pure markdown structure.
+_STRUCTURAL_IFACE_SOURCES = frozenset({"table", "given_code", "bold_label"})
 
 
 def _iface_provenance(sources: Set[str]) -> str:
@@ -496,6 +506,137 @@ _AFTER_GAP_CLAUSE_RE = re.compile(
 _WAVEDROM_NAME_RE = re.compile(r'["\']name["\']\s*:\s*["\']([A-Za-z_]\w*)["\']')
 
 
+# ── (#809 / R12C3) bold-label structured port declaration ───────────────────
+# Some CVDP specs declare ports NOT in a markdown table and NOT in a given-code
+# header, but as bold-label markdown bullets. TWO precise forms are recognized:
+#
+#   FORM-A — direction EXPLICIT in the bullet's bold-label parenthetical:
+#       - **clk (input, wire)**: Clock signal ...
+#       - **data_out (output, wire[11:0])**: 12-bit output ...
+#     the `(input|output|inout, ...)` clause inside the `**...**` label gives
+#     BOTH the name and its direction with NO ambiguity, so it is harvested
+#     regardless of the heading. HIGH PRECISION — a real port is the only thing
+#     that carries an inline direction in its bold label.
+#
+#   FORM-B — direction carried by a PORT-SECTION heading, bare-name bullet:
+#       ## New Input
+#       - **enable:** 1-bit
+#     the bullet is a bare bold-label name (`**enable:**`); the DIRECTION comes
+#     from a heading that is a PORT-SECTION declaration ("New Input", "Inputs",
+#     "Output Ports"). FORM-B is DELIBERATELY NARROW (it fires on bare prose-ish
+#     bold labels, so it must not fabricate phantoms): it requires (1) the heading
+#     to be a SHORT port-section heading asserting ONE unambiguous direction, AND
+#     (2) the bullet body to look like a port type spec (`1-bit`, `[7:0]`, `wire`,
+#     a width/`bit` token) — NOT a prose sentence, AND (3) the name to not be a
+#     reserved direction / generic-prose-label word. A bullet under a descriptive
+#     heading ("Behavior", "Example Operations", "Interface Signals",
+#     "Specifications", "Edge Cases") or whose body is a prose sentence is NOT a
+#     port and is skipped — so prose labels (`**Input**:`, `**Note**:`,
+#     `**Behavior**:`, `**Parameters**:`, `**Purpose**:`) and internal-net /
+#     param / FSM-state bold bullets are never fabricated as ports.
+#
+# chip-AGNOSTIC: pure markdown bullet + heading grammar, no design/vendor literal.
+_BOLDLABEL_FORMA_RE = re.compile(
+    r"^\s*[-*+]\s+\*\*\s*([A-Za-z_]\w*)\s*"          # 1: port name
+    r"\(\s*(input|output|inout)\b[^)]*\)\s*"          # 2: inline direction (req)
+    r":?\s*\*\*",                                      # close the bold label
+    re.IGNORECASE)
+# FORM-B candidate: a bare-name bold-label bullet `- **<name>:** <body>`
+# (no inline direction paren). Captures name (1) and the bullet body (2) so the
+# body can be required to be a port type-spec, not a prose sentence.
+_BOLDLABEL_FORMB_RE = re.compile(
+    r"^\s*[-*+]\s+\*\*\s*([A-Za-z_]\w*)\s*:?\s*\*\*\s*:?\s*(.*)$",
+    re.IGNORECASE)
+# A markdown heading line (`#`/`##`/`###` ...) — capture its text so a
+# PORT-SECTION heading ("New Input", "Inputs", "Output Ports") can give the
+# direction to FORM-B bare-name bullets that follow it.
+_MD_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$")
+# A heading that is a SHORT PORT-SECTION declaration asserting ONE direction:
+# an optional leading qualifier (New / Additional / Module) then Input(s) /
+# Output(s) optionally followed by Port(s) / Signal(s) / Pin(s). The `$` anchor
+# keeps it SHORT — "Inputs and Outputs" (mixed), "Interface Signals" (no
+# direction word), "Example Operations", "Behavior" do NOT match, so FORM-B
+# never fires under them. chip-AGNOSTIC.
+_PORT_SECTION_HDR_RE = re.compile(
+    r"^\s*(?:new\s+|additional\s+|module\s+)?"
+    r"(input|output)s?"
+    r"(?:\s+(?:port|signal|pin)s?)?\s*$",
+    re.IGNORECASE)
+# A FORM-B bullet BODY that looks like a port TYPE SPEC (a width / bit-count /
+# net-type token) rather than a prose sentence. `1-bit`, `[7:0]`, `12-bit wire`,
+# `wire`, `logic [3:0]`, `8 bits`. A prose body ("Clock signal that drives ...")
+# does NOT match, so a descriptive bullet is not harvested as a port. The body
+# may be empty (the name + a following table/desc). chip-AGNOSTIC.
+_PORTSPEC_BODY_RE = re.compile(
+    r"^\s*(?:"
+    r"\d+\s*[-\s]?\s*bits?\b"          # 1-bit, 12 bit, 8 bits
+    r"|\[[^\]]*\]"                       # [7:0]
+    r"|(?:wire|reg|logic|bit|signed|unsigned)\b"  # net type
+    r")",
+    re.IGNORECASE)
+# Reserved direction / generic-prose-label words that are NEVER a port name even
+# under a port-section heading (a bullet `- **Input:** ...` / `- **Note:** ...`
+# is a prose label, not a port). chip-AGNOSTIC English nouns + dir words.
+_NONPORT_LABEL_WORDS = frozenset({
+    "input", "output", "inout", "inputs", "outputs",
+    "note", "notes", "behavior", "behaviour", "parameters", "parameter",
+    "purpose", "computation", "example", "examples", "description",
+    "overview", "summary", "specification", "specifications", "interface",
+    "clock", "reset", "latency",  # role NOUNS used as section labels here
+})
+
+
+def _heading_direction(heading_text: str) -> str:
+    """The single port direction asserted by a SHORT port-section heading
+    ("New Input" → input, "Output Ports" → output), or '' when the heading is
+    not a short single-direction port-section heading ("Inputs and Outputs",
+    "Interface Signals", "Behavior" → ''). chip-AGNOSTIC."""
+    m = _PORT_SECTION_HDR_RE.match(heading_text or "")
+    if not m:
+        return ""
+    return m.group(1).lower()
+
+
+def bold_label_ports(prompt: str) -> Dict[str, str]:
+    """Extract ports declared as bold-label markdown bullets (#809 / R12C3).
+
+    FORM-A (inline direction `- **name (input, ...)**:`) is harvested
+    unconditionally — its direction is explicit and unambiguous. FORM-B
+    (`- **name:** <type-spec>` under a SHORT single-direction port-section
+    heading) is harvested ONLY when the bullet body is a port type-spec, the name
+    is not a reserved prose-label word, and the heading is a port-section
+    heading — so prose labels / internal nets / FSM-state bold bullets are never
+    fabricated as ports. Returns name→direction (lower). chip-AGNOSTIC."""
+    out: Dict[str, str] = {}
+    cur_dir = ""
+    for line in prompt.splitlines():
+        hm = _MD_HEADING_RE.match(line)
+        if hm:
+            cur_dir = _heading_direction(hm.group(1))
+            continue
+        # FORM-A — inline direction, always trustworthy.
+        am = _BOLDLABEL_FORMA_RE.match(line)
+        if am:
+            out[am.group(1)] = am.group(2).lower()
+            continue
+        # FORM-B — bare name under a port-section heading, narrow guards.
+        if not cur_dir:
+            continue
+        bm = _BOLDLABEL_FORMB_RE.match(line)
+        if not bm:
+            continue
+        name = bm.group(1)
+        body = bm.group(2) or ""
+        if name.lower() in _NONPORT_LABEL_WORDS:
+            continue
+        if not _PORTSPEC_BODY_RE.match(body):
+            continue
+        # a concrete inline-direction (FORM-A) already recorded wins; otherwise
+        # take the heading direction.
+        out.setdefault(name, cur_dir)
+    return out
+
+
 # ── register-map / CSR name exclusion (ORGANIC #738 secondary) ───────────────
 # A name that appears ONLY in a register-map 'Register Name' / 'Field Name'
 # column (a table that ALSO has an Offset/Address column) and is prose-tagged as
@@ -838,6 +979,12 @@ def extract_prompt_iface(prompt: str) -> PromptIface:
     for name, direction in gm_ports.items():
         pif.add(name, "" if direction == "unknown" else direction,
                 "given_code")
+    # (b2) (#809 / R12C3) bold-label structured port declarations — a STRUCTURAL
+    # source equal in authority to a port table. `- **<name> (input, ...)**:`
+    # (inline direction) or `- **<name>:**` under a direction-asserting heading
+    # (`## New Input`). chip-AGNOSTIC markdown grammar.
+    for name, direction in bold_label_ports(prompt).items():
+        pif.add(name, direction, "bold_label")
     # (c) backtick name + nearby direction word (prose)
     for m in _DIR_NEAR_BEFORE_RE.finditer(prompt):
         gap = m.group(2) or ""
@@ -1090,7 +1237,7 @@ def run(rid: Optional[str], prompt_path: Path, rtl_path: Path,
     rtl = parse_rtl(rtl_text)
     report = {
         "program": "iface_conformance_v2",
-        "version": "1.0.0",
+        "version": "1.0.1",
         "id": rid,
         "harness_top": harness_top_from_id(rid),
         "rtl_module": rtl.module_name,
