@@ -866,11 +866,26 @@ def _given_code_ports(prompt: str) -> Tuple[Optional[str], Dict[str, str]]:
 # Internal-net declaration inside a given-code block: `logic [1:0] sync_header;`,
 # `reg [7:0] type_field;`, `wire a, b;`. These are body decls (no input/output
 # keyword), so the named identifiers are authoritatively INTERNAL, never ports.
+#
+# (R13C4) UNPACKED-ARRAY tolerance: an unpacked-array internal reg
+# (`reg [3:0] wait_counters [0:9];`, `reg [4:0] effective_priority [0:9];`)
+# carries one-or-more trailing unpacked dimensions BETWEEN the name and the `;`/`=`
+# terminator. The original tail `(<names>)\s*[;=]` required the terminator to
+# IMMEDIATELY follow the name, so it harvested the packed/scalar skeleton regs
+# (`pending_interrupts`, `active_mask`, `service_timer`) but SILENTLY MISSED the
+# unpacked-array ones — leaving them out of `given_code_internal_names()`, so the
+# never-mask guard did not suppress them and a "Register Summary Table" row naming
+# such a skeleton-internal reg false-fired as a block-eligible MISSING-PORT on the
+# author's correct, skeleton-conforming RTL. The tail now tolerates zero-or-more
+# trailing unpacked dimensions `[...]` before the terminator. chip-AGNOSTIC: pure
+# Verilog unpacked-array declaration grammar, no design/vendor literal.
 _GIVEN_INTERNAL_RE = re.compile(
     r"(?<![A-Za-z_.])(?:logic|wire|reg)\b"
     r"(?:\s+(?:signed|unsigned))?"
     r"(?:\s*\[[^\]]*\])?\s*"
-    r"((?:[A-Za-z_]\w*\s*,\s*)*[A-Za-z_]\w*)\s*[;=]")
+    r"((?:[A-Za-z_]\w*\s*,\s*)*[A-Za-z_]\w*)"
+    r"(?:\s*\[[^\]]*\])*"   # trailing unpacked dimension(s): `name [0:9]`
+    r"\s*[;=]")
 
 
 def given_code_internal_names(prompt: str) -> Set[str]:
