@@ -1587,6 +1587,14 @@ _Captured by benchmark-enhancement-capture 2026-06-15._
 
 **Why this is GENERAL**: the column-per-index / Gray-row reading is the mechanical K-map-to-mux mapping; getting the Gray order right is the only subtlety.
 
+### Skill: saturating counter — a counter/accumulator spec'd with NO upper limit / "cannot overflow" / "counts indefinitely" SATURATES at its max, it does NOT wrap
+
+**Pattern**: When the spec describes a counter or accumulator that has **no upper limit**, that **cannot overflow**, that **counts indefinitely** toward a threshold/decision, or whose value "only matters up to" some compare point, the conventional design SATURATES (clamps) at the register's maximum value and HOLDS there — it does NOT wrap back to zero (modulo) when the width overflows. A finite-width register physically rolls over at `2^W`, so a free-running `cnt <= cnt + 1` silently WRAPS; the spec's "no upper limit" phrasing means the design must intend `cnt <= (cnt == MAX) ? MAX : cnt + 1` (or an equivalent "stop at max" guard), so that the value stays monotonic and any "once it reaches threshold T" decision keeps firing for arbitrarily large counts.
+
+**When to apply**: any counter / dwell-counter / timeout / accumulator whose prose says it has no maximum / cannot overflow / runs without bound / "however long it takes" toward a threshold comparison — **unless the spec states otherwise** (i.e. it explicitly says the counter is modulo / wraps / rolls over / is a free-running ring or modulo-N counter, or names a finite range it cycles through). A genuinely modulo/wrapping/ring counter, or one the spec gives an explicit roll-over value, is the marked case and is NOT clamped.
+
+**Why this is GENERAL**: "a quantity with no stated upper bound must not silently overflow" is a textbook finite-state-arithmetic discipline, not a hidden-test answer — a wrapping counter under a "no upper limit" spec turns a `cnt >= T` decision back to false after the width rolls over, which is a functional defect for any long-running input. The clamp-vs-wrap choice is determined by the spec's overflow language, not by any oracle; the "unless the spec states otherwise" guard preserves legitimate modulo / ring / wrap designs.
+
 _Captured by benchmark-enhancement-capture 2026-06-15 (#716 dual-track convergence, #718). Spec-faithful genre defaults — §4-E: apply only "unless the spec states otherwise"; never an oracle answer._
 
 ### Skill: reference-anchored RCA + minimal-edit + real-check iteration (ORGANIC #725)
