@@ -230,6 +230,77 @@ def _has_digital_signal(case: Dict[str, Any], is_cmd_rsp: bool) -> bool:
     return cat in _DIGITAL_CLASS_TOKENS
 
 
+# ----- ORGANIC #808 — verification_checklist (DV-milestone) classification ----
+#
+# NEW gap, surfaced after #799 unblocked Step-4. Phase 1 emits a project's
+# verification checklist table (e.g. an OpenTitan-style DV checklist) as L10
+# `kind=verification_checklist` rows. Those rows are DV PROCESS MILESTONES
+# (status Done / N/A / Waived / blank), NOT TB-traceable functional vectors:
+# no testbench can ever carry an id-substring / opcode trace for a process
+# milestone. The TB-evidence demand therefore counted EVERY checklist row as
+# "lack evidence" → 103/103 → Step-4 hard-FAIL on opentitan_aes.
+#
+# Fix: scope verification_checklist rows OUT of the TB-evidence requirement and
+# instead credit the row's CARRIED status. chip-AGNOSTIC — a KIND vocabulary +
+# a status vocabulary, never a chip/vendor/SKU literal.
+
+# Kind/category/type tokens (case-insensitive) that denote a DV-milestone
+# checklist row whose satisfaction is its carried status, not a TB trace.
+_VERIFICATION_CHECKLIST_KINDS = frozenset({
+    "verification_checklist",
+    "dv_checklist",
+    "checklist",
+    "milestone",
+    "verification_milestone",
+})
+
+# Carried statuses that mark a checklist row as SATISFIED or explicitly DEFERRED
+# (so the row is credited, not counted as a TB-evidence miss). A status
+# vocabulary, chip-AGNOSTIC.
+_CHECKLIST_SATISFIED_STATUSES = frozenset({
+    "done", "complete", "completed", "pass", "passed", "ok", "yes",
+    "n/a", "na", "not applicable", "waived", "waiver", "deferred",
+})
+
+# Carried statuses that mark a checklist row as an EXPLICIT shortfall — it must
+# still surface as a checklist gap (don't blanket-pass every row). §4.05 NO-LEAK.
+_CHECKLIST_FAIL_STATUSES = frozenset({
+    "fail", "failed", "error", "blocked", "no", "incomplete", "not done",
+})
+
+
+def is_verification_checklist(case: Dict[str, Any]) -> bool:
+    """True iff this case's KIND denotes a DV-milestone checklist row
+    (chip-AGNOSTIC — a kind vocabulary, never a chip/vendor/SKU literal)."""
+    return case_kind(case) in _VERIFICATION_CHECKLIST_KINDS
+
+
+def checklist_status(case: Dict[str, Any]) -> str:
+    """Normalised carried status of a checklist row (lowercased; '' when blank).
+
+    A blank/None status is a checklist gap but NOT a TB-evidence failure."""
+    raw = case.get("status", case.get("state", case.get("result", "")))
+    return str(raw or "").strip().lower()
+
+
+def classify_checklist(case: Dict[str, Any]) -> str:
+    """Classify a verification_checklist row by its carried status.
+
+    Returns one of:
+      'satisfied'      — Done / N/A / Waived / Pass …  (credited, not a miss)
+      'checklist_gap'  — blank/None, or an explicit FAIL/blocked status
+                         (surfaced as a checklist shortfall; NOT a TB-evidence
+                         failure, so it cannot mask a missing digital TB).
+    §4.05 NO-LEAK: this classifier is reached ONLY for verification_checklist
+    rows. A functional_vector / functional / cmd_response case never gets here,
+    so the TB-evidence demand is unchanged for genuine functional vectors."""
+    st = checklist_status(case)
+    if st in _CHECKLIST_SATISFIED_STATUSES:
+        return "satisfied"
+    # blank/None, an explicit fail status, or any unrecognised status → gap.
+    return "checklist_gap"
+
+
 def _read_xml_field(xml: str, tag: str) -> str:
     m = re.search(rf"<{tag}>(.*?)</{tag}>", xml, re.IGNORECASE | re.DOTALL)
     return (m.group(1).strip() if m else "")
@@ -284,10 +355,20 @@ def evaluate(
 ) -> Tuple[List[Dict[str, Any]], int, int]:
     """Return (results, ok_count, fail_count).
 
-    The per-case ``status`` field ("pass" / "fail" / "waived") and a
-    project-level ``waive_count`` are derivable from the returned ``results``
-    list (see ``count_waived``); the 3-tuple return shape is preserved for
-    backward compatibility with existing callers.
+    The per-case ``status`` field ("pass" / "fail" / "waived" /
+    "checklist_gap") and the project-level ``waive_count`` / checklist-gap
+    count are derivable from the returned ``results`` list (see
+    ``count_waived`` / ``count_checklist_gaps``); the 3-tuple return shape is
+    preserved for backward compatibility with existing callers.
+
+    ORGANIC #808 — ``kind=verification_checklist`` (DV-milestone) rows are
+    scoped OUT of the TB-evidence requirement: a DV process milestone is not
+    TB-traceable. A satisfied/deferred row (Done/N/A/Waived/Pass) is credited
+    into ``ok_count``; a blank/None-or-explicit-FAIL row is carried separately
+    as a checklist gap (status ``checklist_gap``, review_required) and is NOT
+    folded into ``fail_count`` — so a checklist row can never mask a missing
+    digital testbench (§4.05 NO-LEAK), and functional_vector / functional /
+    cmd_response cases STILL require TB evidence (unchanged).
 
     ORGANIC #773 — when ``skip_analog`` is set AND ``analog_anchor`` resolves
     to a reviewable capability-gap bridge, a `verification_intent` (A/M-track)
@@ -300,11 +381,63 @@ def evaluate(
     results: List[Dict[str, Any]] = []
     ok_count = 0
     fail_count = 0
+    checklist_gap_count = 0
     waiver_active = bool(skip_analog) and bool(analog_anchor)
     for c in cases:
         case_id = str(c.get("id", c.get("name", "")))
         category = c.get("category", c.get("type", c.get("kind", "")))
         is_cmd_rsp = category.lower() in ("cmd_response", "cmd_rsp", "happy", "happy_path") if category else False
+
+        # ORGANIC #808 — verification_checklist (DV-milestone) rows are scoped
+        # OUT of the TB-evidence demand: a DV process milestone is not
+        # TB-traceable, so credit the row's CARRIED status instead. A
+        # satisfied/deferred row (Done/N/A/Waived/Pass) is credited as ok; a
+        # blank/None-or-explicit-FAIL row surfaces as a checklist gap (NOT a
+        # TB-evidence failure, so it can never mask a missing digital TB).
+        # §4.05 NO-LEAK: only kind=verification_checklist reaches this branch —
+        # functional_vector / functional / cmd_response cases fall through to the
+        # unchanged TB-evidence logic below.
+        if is_verification_checklist(c):
+            cls = classify_checklist(c)
+            st = checklist_status(c) or "none"
+            if cls == "satisfied":
+                results.append({
+                    "id": case_id,
+                    "category": category,
+                    "kind": case_kind(c),
+                    "evidence": [
+                        f"verification_checklist DV-milestone satisfied "
+                        f"(status={st}); not TB-traceable, credited by carried "
+                        f"status (ORGANIC #808)"
+                    ],
+                    "pass": True,
+                    "status": "pass",
+                    "waived": False,
+                    "checklist_gap": False,
+                    "review_required": False,
+                    "capability_gap": None,
+                })
+                ok_count += 1
+            else:
+                results.append({
+                    "id": case_id,
+                    "category": category,
+                    "kind": case_kind(c),
+                    "evidence": [
+                        f"verification_checklist DV-milestone NOT satisfied "
+                        f"(status={st}); surfaced as a checklist shortfall, NOT "
+                        f"a TB-evidence failure (ORGANIC #808; review_required)"
+                    ],
+                    "pass": False,
+                    "status": "checklist_gap",
+                    "waived": False,
+                    "checklist_gap": True,
+                    "review_required": True,
+                    "capability_gap": None,
+                })
+                checklist_gap_count += 1
+            continue
+
         evidence: List[str] = []
         if is_cmd_rsp:
             if case_has_opcode_evidence(c, tb_blob):
@@ -366,6 +499,14 @@ def evaluate(
 def count_waived(results: List[Dict[str, Any]]) -> int:
     """Number of results carrying the ORGANIC #773 WAIVED-DEFERRED status."""
     return sum(1 for r in results if r.get("status") == "waived")
+
+
+def count_checklist_gaps(results: List[Dict[str, Any]]) -> int:
+    """ORGANIC #808 — number of verification_checklist DV-milestone rows that
+    are NOT satisfied (blank/None or an explicit FAIL status). These are
+    checklist shortfalls (review_required) — surfaced separately, NOT folded
+    into fail_count (which is reserved for genuine TB-evidence misses)."""
+    return sum(1 for r in results if r.get("status") == "checklist_gap")
 
 
 def _tb_files_under(d: Path) -> bool:
@@ -485,12 +626,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         skip_analog=args.skip_analog, analog_anchor=analog_anchor,
     )
     waive_count = count_waived(results)
+    checklist_gap_count = count_checklist_gaps(results)
 
     out = {
         "total": len(cases),
         "ok": ok_count,
         "fail": fail_count,
         "waived": waive_count,
+        "checklist_gaps": checklist_gap_count,
         "capability_gap": (CAP_ANALOG_VERIFICATION_INTENT if waive_count else None),
         "analog_anchor": analog_anchor,
         "results": results,
@@ -513,20 +656,31 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
         return 1
 
-    if waive_count:
-        # ORGANIC #773 — class/kind-aware A/M-track waiver. Every genuine
-        # digital case had evidence; the only un-traced cases are
-        # verification_intent (A/M-track) cases under an anchored
-        # --skip-analog. Mirror #651: rc=3 + line-start PASS_WITH_WAIVERS
-        # sentinel so flow_compliance_check promotes Step 4 to
-        # WAIVED-DEFERRED (Overall PASS_WITH_WAIVERS), not a hard FAIL.
+    if waive_count or checklist_gap_count:
+        # ORGANIC #773 — class/kind-aware A/M-track waiver, AND/OR
+        # ORGANIC #808 — verification_checklist (DV-milestone) checklist gaps.
+        # In both cases every genuine digital / functional case that REQUIRES a
+        # TB trace had its evidence (fail_count == 0 here). The only un-credited
+        # rows are verification_intent (A/M-track) cases under an anchored
+        # --skip-analog and/or verification_checklist (DV-milestone) rows whose
+        # carried status is blank/None/FAIL. Mirror #651/#773: rc=3 +
+        # line-start PASS_WITH_WAIVERS sentinel so flow_compliance_check
+        # promotes Step 4 to WAIVED-DEFERRED (Overall PASS_WITH_WAIVERS),
+        # not a hard FAIL.
+        bits = [f"{ok_count}/{len(cases)} cases satisfied"]
+        if waive_count:
+            bits.append(
+                f"{waive_count}/{len(cases)} verification_intent A/M-track "
+                f"case(s) WAIVED-DEFERRED ({CAP_ANALOG_VERIFICATION_INTENT}, "
+                f"review_required; anchor: {analog_anchor})")
+        if checklist_gap_count:
+            bits.append(
+                f"{checklist_gap_count}/{len(cases)} verification_checklist "
+                f"DV-milestone row(s) not satisfied (review_required; "
+                f"ORGANIC #808 — process milestone, not TB-traceable)")
         print(
-            f"PASS_WITH_WAIVERS: l10_tb_conformance — {ok_count}/{len(cases)} "
-            f"digital cases traced; {waive_count}/{len(cases)} "
-            f"verification_intent A/M-track case(s) WAIVED-DEFERRED "
-            f"({CAP_ANALOG_VERIFICATION_INTENT}, review_required) — analog "
-            f"track deferred via --skip-analog, reviewable anchor: "
-            f"{analog_anchor}  → {args.out}")
+            "PASS_WITH_WAIVERS: l10_tb_conformance — " + "; ".join(bits)
+            + f"  → {args.out}")
         return 3
 
     print(f"[l10-tb-conformance] PASS  {ok_count}/{len(cases)} cases covered  → {args.out}")
