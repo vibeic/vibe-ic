@@ -137,8 +137,40 @@ from reset_clock_variant_alias import (  # noqa: E402
 # discipline. `--mode latency` is the default and the only one wired today.
 _MODES = ("latency",)
 
-# Canonical free-running clock spellings (input clk auto-bind for the TB).
+# Canonical free-running clock spellings (input clk auto-bind for the TB). Kept
+# as the FAST-PATH exact set; `_is_clock` below ALSO accepts the universal clock
+# family by a NARROW, token-anchored `clk`/`clock` match (ORGANIC #805/#807).
 _CLK_NAMES = frozenset({"clk", "clock", "clk_i", "clock_i", "clk_in", "clk_in1"})
+# ORGANIC #805/#807 — well-known SINGLE-TOKEN glued clock spellings (no '_' to
+# split on): AMBA bus clocks + common glued forms. A CLOSED allow-list (not a
+# fuzzy match) so it cannot swallow data ports like `block`/`lock`/`tick`.
+_CLK_GLUED_NAMES = frozenset({
+    "aclk", "pclk", "hclk", "mclk", "gclk", "refclk", "sclk", "fclk",
+    "wclk", "rclk", "txclk", "rxclk", "sysclk", "coreclk", "busclk"})
+_CLK_STEMS = frozenset({"clk", "clock"})
+# Qualifier tokens that, when paired with a `clk`/`clock` stem, mark a
+# clock-DERIVED CONTROL/DATA port (clock-enable / gate / divider / select / …)
+# — held at the data constant, NOT bound as the free-running clock.
+_CLK_QUALIFIER_DENY = frozenset({
+    "en", "ena", "enable", "enabled", "gate", "gated", "gating", "div",
+    "divider", "divided", "ratio", "sel", "select", "mux", "cnt", "count",
+    "counter", "data", "valid", "ready", "req", "ack", "rst", "reset", "n",
+    "b", "pol", "edge", "mask", "freq", "period", "phase", "src", "source",
+    "out",
+    # ORGANIC #805/#807 Step-2.7 §4.05 — the clock-STATUS / HEALTH / MONITOR /
+    # TEST family: a `clk_<word>` INPUT carrying clock STATUS (PLL lock, stable,
+    # ok, error) or a test/debug/monitor tap is NOT the free-running clock and
+    # must NOT inflate the multi-clock CDC count (which would false-screen a
+    # genuine single-clock measurable design to rc=3 NOT_APPLICABLE, hiding a
+    # real timing bug).
+    # (unambiguous status/health/error words only — ambiguous clock qualifiers
+    # like `sync`/`active` are deliberately NOT denied; the edge-aware CDC count
+    # below is the decisive backstop, so a real `clk_sync` clock is never
+    # over-rejected.)
+    "lock", "locked", "lol", "status", "stat", "stable", "vld", "ok", "good",
+    "mon", "monitor", "test", "tst", "dbg", "debug", "err", "error", "loss",
+    "lost", "present", "skew", "jitter", "fault", "fail", "detect", "detected",
+    "rdy", "alarm", "warn", "miss"})
 
 # Active-low reset spelling fragments (name-based auto-detect of polarity).
 _ACTIVE_LOW_RST = ("rst_n", "rstn", "reset_n", "resetn", "arst_n", "arstn",
@@ -521,7 +553,29 @@ def _rtl_event_value_candidates(rtl_text: str, ev_width: "Optional[int]") -> Lis
 
 # ─── port classification ─────────────────────────────────────────────────────
 def _is_clock(name: str) -> bool:
-    return name.lower() in _CLK_NAMES
+    """ORGANIC #805/#807 — recognise the clock family beyond the fixed
+    `_CLK_NAMES` set. The exact whitelist mis-classified every conventional but
+    non-listed clock spelling (`i_clk`, async-FIFO `w_clk`/`r_clk`, `sys_clk`,
+    AMBA `aclk`/`pclk`/`hclk`, `clk0`, `core_clk`) as an ordinary data input held
+    to the all-ones constant — so the generated TB drove a free-running `clk` net
+    wired to NOTHING in the DUT, the design never saw a clock edge, and CORRECT
+    RTL hard-blocked with a false LATENCY-TIMEOUT. Recognise the clock by a
+    NARROW token-anchored `clk`/`clock` match: strip a directional `i_`/`o_`/`io_`
+    prefix and trailing index digits, require a `clk`/`clock` WHOLE TOKEN, and a
+    clock-control deny-list rejects derived control/data ports (`clk_en`,
+    `clk_div`, `clk_sel`, `clk_gate`, `en_clk_dsp`, …). chip-AGNOSTIC."""
+    n = name.lower()
+    if n in _CLK_NAMES or n in _CLK_GLUED_NAMES:
+        return True
+    core = re.sub(r"^(?:i|o|io)_", "", n)   # directional prefix
+    core = re.sub(r"\d+$", "", core)         # trailing index digits (clk0, clk1)
+    toks = [t for t in core.split("_") if t]
+    if not toks or not any(t in _CLK_STEMS for t in toks):
+        return False
+    # a clk/clock stem paired with a control/data qualifier is NOT the clock.
+    if any(t in _CLK_QUALIFIER_DENY for t in toks):
+        return False
+    return True
 
 
 def _looks_like_clear(name: str) -> bool:
@@ -1395,6 +1449,35 @@ def run_latency_conformance(
     report["clk"] = clk.name if clk else None
     report["resets"] = [r.name for r in resets]
     report["other_inputs_held_constant"] = [o.name for o in others]
+
+    # ORGANIC #807 — MULTI-CLOCK (CDC) guard. A single free-running-clock
+    # event→output LATENCY is UNDEFINED across asynchronous clock domains: an
+    # async-FIFO (`w_clk`/`r_clk`) or any ≥2-clock-input design cannot be measured
+    # by the single-clock convention. Screen it to the DISTINCT rc=3
+    # NOT_APPLICABLE verdict (never a false rc=1 TIMEOUT, never a fake rc=0 PASS).
+    # The robust `_is_clock` (#805/#807) now recognises the non-standard spellings
+    # so this count is accurate. A single-clock design (n==1) measures as before.
+    # Step-2.7 §4.05 — count ONLY a clock-named input that is actually EDGE-SENSED
+    # (`posedge <n>` / `negedge <n>`) in the RTL. A clock-STATUS/HEALTH input
+    # (clk_lock / clk_mon / clk_stable — a PLL-lock or monitor tap) is read
+    # combinationally, never in a clock-edge sensitivity, so it can never inflate
+    # the CDC count and false-screen a genuine single-clock design to rc=3.
+    def _is_edge_sensed(nm: str) -> bool:
+        return re.search(r"\b(?:pos|neg)edge\s+" + re.escape(nm) + r"\b",
+                         rtl_text) is not None
+    clock_inputs = [n for d, _w, n in ports
+                    if d == "input" and n != event and _is_clock(n)
+                    and _is_edge_sensed(n)]
+    if len(clock_inputs) >= 2:
+        report["verdict"] = "NOT_APPLICABLE"
+        report["clock_inputs"] = clock_inputs
+        report["measured_latency"] = None
+        report["reason"] = (
+            f"design has {len(clock_inputs)} clock inputs {clock_inputs} "
+            f"(multi-clock / CDC) — a single free-running-clock event->output "
+            f"latency is undefined across asynchronous domains; NOT-APPLICABLE "
+            f"(rc=3, NOT a false TIMEOUT or a fake PASS)")
+        return 3, report
 
     # ORGANIC #770 round-2 (Part C) — ARBITER / MUTUAL-EXCLUSION stimulus class.
     # Detect the structural bus-arbiter signature: the MEASURED request (event)

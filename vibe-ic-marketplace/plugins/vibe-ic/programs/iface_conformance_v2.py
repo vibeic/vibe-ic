@@ -793,6 +793,17 @@ class PromptIface:
     ports: Dict[str, str] = field(default_factory=dict)
     given_module: Optional[str] = None
     sources: Dict[str, Set[str]] = field(default_factory=dict)
+    # ORGANIC #806 (#770) — source(s) that supplied the NON-EMPTY direction now
+    # stored in `ports[name]`. A source that names a port in a DIRECTION-LESS
+    # context (a markdown table with NO Direction column; a given-code bare-name
+    # whose 'unknown' direction normalised to '') contributes to `sources` (it
+    # proves the NAME exists) but NOT to `dir_sources` (it did not assert the
+    # DIRECTION). The PORT-DIRECTION provenance is computed from `dir_sources`,
+    # so a direction whose ONLY evidence is a free-prose scrape stays
+    # PROSE_HEURISTIC even when a direction-LESS table ALSO named the port —
+    # collapsing the "Data output from FIFO" prose-noun leak into the #770
+    # advisory class. chip-AGNOSTIC.
+    dir_sources: Dict[str, Set[str]] = field(default_factory=dict)
 
     def add(self, name: str, direction: str, source: str) -> None:
         cur = self.ports.get(name, "")
@@ -800,8 +811,14 @@ class PromptIface:
         # directions are left as the first-seen (table is most authoritative)
         if not cur and direction:
             self.ports[name] = direction
+            # this source ESTABLISHED the stored direction → owns its provenance.
+            self.dir_sources.setdefault(name, set()).add(source)
         elif name not in self.ports:
             self.ports[name] = direction
+        elif cur and direction == cur:
+            # a later source that AGREES with the stored direction corroborates
+            # it STRUCTURALLY → also owns the direction provenance.
+            self.dir_sources.setdefault(name, set()).add(source)
         self.sources.setdefault(name, set()).add(source)
 
 
@@ -1043,8 +1060,12 @@ def check_conformance(rid: Optional[str], prompt: str, rtl_text: str,
             # (have != want) is the author's RTL winning over a low-confidence
             # prose guess → ADVISORY (the RTL's explicit declaration is stronger
             # evidence than a prose-proximity heuristic).
-            name_sources = pif.sources.get(name, set())
-            prov = _iface_provenance(name_sources)
+            # ORGANIC #806 — provenance from the DIRECTION sources only (not the
+            # NAME sources union): a directionless-table name no longer confers
+            # STRUCTURAL on a prose-only direction, so a CONTRADICTED RTL
+            # declaration correctly downgrades it to advisory.
+            dir_srcs = pif.dir_sources.get(name, set())
+            prov = _iface_provenance(dir_srcs)
             corr = _prov.corroborate_direction(want, have)
             block = _prov.is_block_eligible(prov, corr)
             findings.append(Finding(
