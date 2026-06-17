@@ -172,7 +172,7 @@ handoff** below), THEN file a complete verified bundle:
    bundle as the candidate **PROPOSAL** (never as a self-merged
    change):
    ```bash
-   gh issue create --repo reyerchu/AI_IC_design \
+   gh issue create --repo vibeic/vibe-ic \
        --title "ORGANIC: <title>" \
        --body "$(cat <yaml>)"
    ```

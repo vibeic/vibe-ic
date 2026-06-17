@@ -69,9 +69,11 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-# The gatekeeper owns ``main`` of the PUBLIC PR repo. (The issue-fix
-# core-agent loop polls a DIFFERENT repo — reyerchu/AI_IC_design — for
-# issues; PRs and the merge queue live here.) Override with --repo.
+# The gatekeeper owns ``main`` of the vibe-ic repo. Issues AND PRs both live in
+# vibeic/vibe-ic — the issue-fix core-agent loop polls vibeic/vibe-ic ISSUES and
+# the gatekeeper polls vibeic/vibe-ic PRs (same repo, different object type).
+# (`AI_IC_design` is the local design WORKSPACE directory, not an issue repo.)
+# Override with --repo.
 _DEFAULT_REPO = "vibeic/vibe-ic"
 _DEFAULT_BASE = "main"
 _API_BASE = "https://api.github.com"

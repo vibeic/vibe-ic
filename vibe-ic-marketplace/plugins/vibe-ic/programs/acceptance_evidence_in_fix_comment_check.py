@@ -713,7 +713,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "own ## 驗收 acceptance commands.")
     # Network mode args (mirror regression_issue_intake_check.py).
     ap.add_argument("--issue-number", type=int, default=None)
-    ap.add_argument("--repo", default="reyerchu/AI_IC_design")
+    ap.add_argument("--repo", default="vibeic/vibe-ic")
     ap.add_argument("--token-file", default=None)
     # Offline mode arg.
     ap.add_argument("--issue-body-file", default=None)
