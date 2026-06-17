@@ -236,7 +236,29 @@ def _extract_gfm_pipe_table(text: str, source_path: str) -> List[Dict]:
                     if c in _GFM_NAME_HDR:
                         cols.setdefault("name", i)
                     elif c in _GFM_OFFSET_HDR:
-                        cols.setdefault("offset", i)
+                        # #747-r2 weak-offset guard, ported onto the GFM PRIMARY
+                        # path: a generic Value/Default/Reset-Value column is a
+                        # WEAK offset role — its cell must hold a real 0x... token
+                        # before becoming an address, so a `| Field | Value |`
+                        # SPEC table (decimals in the Value prose) cannot
+                        # fabricate phantom registers (§4.05).
+                        #
+                        # CRITICAL (§4.05 no-false-block): the weak flag MUST bind
+                        # to the column that actually CLAIMS the offset role, not
+                        # to a weak sibling that merely co-exists in the header. A
+                        # strong `Offset`/`Address` column staying decimal-
+                        # tolerant must not be gated to HEX-only just because a
+                        # `Reset Value`/`Default` column is also present. So the
+                        # first offset-role column claims it and its OWN weakness
+                        # sets the gate; a later STRONG column supersedes an
+                        # earlier WEAK claim (strong-preferred).
+                        is_weak = c in _GFM_OFFSET_WEAK_HDR
+                        if "offset" not in cols:
+                            cols["offset"] = i
+                            cols["offset_weak"] = is_weak
+                        elif cols.get("offset_weak") and not is_weak:
+                            cols["offset"] = i
+                            cols["offset_weak"] = False
                     elif c in _GFM_LEN_HDR:
                         cols.setdefault("length", i)
                     elif c in _GFM_DESC_HDR:
@@ -250,7 +272,15 @@ def _extract_gfm_pipe_table(text: str, source_path: str) -> List[Dict]:
         name = _gfm_clean_name(cells[ni])
         if not name or _is_header_row(name):
             continue
-        mo = _GFM_OFFSET_RE.search(cells[oi])
+        # A WEAK offset column (Value/Default/Reset Value) only yields an address
+        # from a genuine 0x... token — never a bare decimal — exactly as the
+        # rst-grid path gates it (_flush_rst_grid_table). A strong Offset/Address
+        # column keeps the decimal-tolerant match (an `Offset` of `4` is a real
+        # byte offset). This is the §4.05 weak-offset guard.
+        if cols.get("offset_weak"):
+            mo = _GFM_OFFSET_HEX_RE.search(cells[oi])
+        else:
+            mo = _GFM_OFFSET_RE.search(cells[oi])
         if not mo:
             continue
         # ORGANIC #800 — emit one row per address for a `0xLOW (0xHIGH)` CSR pair.
