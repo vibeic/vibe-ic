@@ -25,7 +25,7 @@ Usage
     # json output for machine consumption.
     python3 plugins/vibe-ic/skills/core-agent-loop/programs/poll.py --json
 
-    # different repo (default: reyerchu/AI_IC_design).
+    # different repo (default: vibeic/vibe-ic).
     python3 plugins/vibe-ic/skills/core-agent-loop/programs/poll.py --repo owner/name
 
 Exit codes
@@ -37,22 +37,40 @@ Exit codes
 
 Auth
 ----
-    Reads GitHub PAT from $GITHUB_TOKEN, then $GH_TOKEN, then
-    ~/.config/github/token (mode 0600 preferred). chip-AGNOSTIC.
+    Reads GitHub PAT from $GITHUB_TOKEN, then $GH_TOKEN, then the live `gh`
+    CLI auth (`gh auth token`), then ~/.config/github/token. The `gh` CLI
+    fallback matters because the issue repo (vibeic/vibe-ic) is PRIVATE: a
+    stale/public-scoped file PAT gets a 404 (GitHub masks a private repo it
+    cannot see), whereas `gh` is authenticated as the maintainer and is the
+    same auth the rest of the loop uses for `gh pr`/`gh issue`. chip-AGNOSTIC.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import subprocess
 import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-_DEFAULT_REPO = "reyerchu/AI_IC_design"
+_DEFAULT_REPO = "vibeic/vibe-ic"
 _API_BASE = "https://api.github.com"
+
+
+def _gh_cli_token() -> Optional[str]:
+    """The token the `gh` CLI is authenticated with, or None if gh is absent /
+    not logged in. This is the SAME identity the loop's `gh pr`/`gh issue`
+    commands use, so it reaches the private vibeic/vibe-ic repo."""
+    try:
+        out = subprocess.run(["gh", "auth", "token"], capture_output=True,
+                             text=True, timeout=10)
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return None
+    tok = (out.stdout or "").strip()
+    return tok or None
 
 
 def _load_pat() -> Optional[str]:
@@ -60,6 +78,12 @@ def _load_pat() -> Optional[str]:
         v = os.environ.get(env)
         if v and v.strip():
             return v.strip()
+    # Prefer the live `gh` CLI auth over the on-disk file token: the file token
+    # may be stale / scoped only to a public repo and 404 on the private issue
+    # repo, while `gh` is authenticated as the maintainer.
+    gh_tok = _gh_cli_token()
+    if gh_tok:
+        return gh_tok
     token_path = Path.home() / ".config" / "github" / "token"
     if token_path.is_file():
         try:
