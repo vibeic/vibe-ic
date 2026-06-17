@@ -106,6 +106,56 @@ _ADDR_SELECTOR_RE = re.compile(
     r'a(?:ddr|dr)(?![a-z])|address', re.IGNORECASE)
 
 
+# ORGANIC #786 r3 (Step-2.7 §4.05) — SIGNAL-NAME error vocabulary as a
+# whole-TOKEN set (mirrors the state-LABEL fix of #786 r2). The assignment-LHS
+# locator regex below (`\w*(?:error|err|...)\w*`) is a SUBSTRING match: it fires
+# on any identifier that merely CONTAINS an error word — most notably the whole
+# `interrupt_*` family, because "int-ERR-upt" embeds `err` (cpu_interrupt,
+# interrupt_valid, interrupt_idx, interrupt_requests, nvic_interrupt, ...). Those
+# are normal functional outputs, not error flags, so a `cpu_interrupt <= 1'b1`
+# was wrongly hard-blocked. Fix: after the locator finds a candidate, confirm the
+# LHS is GENUINELY an error signal by underscore/camelCase segment membership —
+# an EXACT segment must be one of these words. This retains prefix/suffix forms
+# (err_o, o_error, timeout_err, fail_flag, rx_error, crc_err_o, errorFlag) while
+# exempting names that only embed an error word as a substring (interrupt,
+# terror, merrily). chip-AGNOSTIC: keyed on generic error vocabulary only.
+_SIGNAL_ERR_TOKENS = frozenset({
+    'error', 'err', 'fail', 'abort', 'timeout', 'reject', 'invalid'})
+
+
+def _signal_segments(name: str) -> List[str]:
+    """Split a signal identifier into lower-cased segments on underscore,
+    non-word, and camelCase / letter<->digit boundaries."""
+    segs: List[str] = []
+    for chunk in re.split(r'[_\W]+', name):
+        if not chunk:
+            continue
+        sub = re.findall(
+            r'[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+', chunk)
+        segs.extend(sub if sub else [chunk])
+    return [s.lower() for s in segs]
+
+
+def _signal_is_error(name: str) -> bool:
+    """True iff an underscore/camelCase segment of `name` is an error-vocabulary
+    word, or carries one as a segment PREFIX or SUFFIX — but NOT when the error
+    word is strictly INTERNAL to a segment (letters on both sides). So `err_o`/
+    `o_error`/`timeout_err`/`rx_error`/`fail_flag` (whole segment) and `pslverr`
+    (the APB slave-error signal: `err` as a segment SUFFIX, ORGANIC #804) fire,
+    while `cpu_interrupt`/`interrupt_valid`/`interrupt_idx` (where `err` is
+    strictly internal: int-ERR-upt) and `merrily` (m-ERR-ily) do not.
+
+    The suffix rule that is required to catch `pslverr` necessarily also matches
+    a word like `terror` (ends with `error`); this is benign — no real non-error
+    hardware signal is named `terror` — and pure tokenization cannot separate the
+    two, so we bias toward NOT regressing the shipped #804 pslverr detection."""
+    for seg in _signal_segments(name):
+        for tok in _SIGNAL_ERR_TOKENS:
+            if seg == tok or seg.startswith(tok) or seg.endswith(tok):
+                return True
+    return False
+
+
 def _is_fault_state(label) -> bool:
     """True iff the case-state label name semantically denotes a
     fault/error/abort state — i.e. a state the spec would mandate to
@@ -270,6 +320,16 @@ def find_error_assertions(src: str, path: str) -> List[Finding]:
             line, re.IGNORECASE)
         if assign:
             sig = assign.group(1)
+            # ORGANIC #786 r3 (Step-2.7 §4.05) — the locator regex matches the
+            # error vocabulary as a SUBSTRING (`\w*err\w*`), so it also fires on
+            # the whole `interrupt_*` family ("int-ERR-upt" embeds `err`) and any
+            # name that merely contains an error word. Confirm the LHS is a
+            # GENUINE error signal by whole-TOKEN (underscore/camelCase segment)
+            # membership; otherwise it is a normal functional output (cpu_interrupt,
+            # interrupt_valid, interrupt_idx) and must NOT be flagged. Real error
+            # flags (err_o, o_error, timeout_err, rx_error, fail_flag) still fire.
+            if not _signal_is_error(sig):
+                continue
             # Skip if context is reset-block clause (rst_n / !rst_n)
             # Heuristic: check last 5 lines for rst_n
             ctx = '\n'.join(lines[max(0, lineno-6):lineno])
