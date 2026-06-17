@@ -1,6 +1,6 @@
 ---
 name: gatekeeper-loop
-description: Infinite-loop single gatekeeper agent that OWNS main and is the SOLE merger of PRs. Invoke as a cron prompt; each tick polls open non-draft PRs against main (poll_prs.py), runs the MACHINE gates (gatekeeper_review.py — required status checks, cadence-aware) on base=origin/main head=PR-branch, and on green runs the ONE irreducible agent gate (Step-2.7 adversarial review). Machine-red OR a reproducible HIGH agent finding -> `gh pr review --request-changes` with a 繁中 5-section comment; otherwise the PR ENQUEUES to a SERIALIZED merge queue guarded by a repo-level .merge.lock — rebase onto current origin/main, RE-RUN required checks on the rebased tree (catches semantic conflicts a 3-way merge misses), squash-merge (one PR = one squash commit = one version bump, honoring one-version-per-push), release lock, next. The gatekeeper MAY be the same identity as the PR author and MAY merge its own authored PRs — quality is guaranteed by the GATES (machine required checks + Step-2.7 + the serialized re-test-on-rebase merge queue), not by identity separation. Hard rules: NEVER force/--no-verify/--admin/bypass branch-protection, squash-only, and a documented break-glass path exists so a PR that FIXES a wedged gate cannot deadlock the queue. STOP CONDITION = healthy idle when no open PR; never self-terminate.
+description: Infinite-loop single gatekeeper agent that OWNS main and is the SOLE merger of PRs. Invoke as a cron prompt; each tick polls open non-draft PRs against main (poll_prs.py), runs the MACHINE gates (gatekeeper_review.py — required status checks, cadence-aware) on base=origin/main head=PR-branch, and on green runs the ONE irreducible agent gate (Step-2.7 adversarial review). Machine-red OR a reproducible HIGH agent finding -> `gh pr review --request-changes` with a 繁中 5-section comment; otherwise the PR ENQUEUES to a SERIALIZED merge queue guarded by a repo-level .merge.lock — rebase onto current origin/main, RE-RUN required checks on the rebased tree (catches semantic conflicts a 3-way merge misses), ASSIGN the version (authoring PRs are VERSION-LESS — the gatekeeper alone assigns the next strictly-monotonic version at merge via gatekeeper_assign_version.py, so two in-flight PRs can't collide; then re-run the checks WITHOUT --version-by-gatekeeper to ENFORCE the bump + cadence-correct suite), squash-merge (one PR = one squash commit = one gatekeeper-assigned version bump, honoring one-version-per-push), release lock, next. The gatekeeper MAY be the same identity as the PR author and MAY merge its own authored PRs — quality is guaranteed by the GATES (machine required checks + Step-2.7 + the serialized re-test-on-rebase merge queue), not by identity separation. Hard rules: NEVER force/--no-verify/--admin/bypass branch-protection, squash-only, and a documented break-glass path exists so a PR that FIXES a wedged gate cannot deadlock the queue. STOP CONDITION = healthy idle when no open PR; never self-terminate.
 ---
 
 
@@ -192,25 +192,50 @@ try:
     #   1. git fetch origin
     #   2. rebase the PR branch onto CURRENT origin/main (not the base it
     #      was opened against — the queue may have moved main since)
-    #   3. RE-RUN the required checks (gatekeeper_review.py) on the REBASED
-    #      tree. A 3-way merge can be clean yet the rebased code semantically
-    #      conflict (e.g. a function this PR calls was renamed by a PR that
-    #      merged five minutes ago); only a re-run on the rebased tree
-    #      catches it.
-    #   4a. rebased checks GREEN -> squash-merge (one squash commit).
-    #   4b. rebased checks RED   -> EJECT: request-changes with the post-
-    #       rebase failure, do NOT merge. The PR goes back to the author.
+    #   3. RE-RUN the required checks on the REBASED tree with
+    #      --version-by-gatekeeper (the PR is VERSION-LESS — the version gate
+    #      DEFERS): gatekeeper_review.py --base origin/main --head <branch>
+    #      --role <author-role> --version-by-gatekeeper. A 3-way merge can be
+    #      clean yet the rebased code semantically conflict (e.g. a function
+    #      this PR calls was renamed by a PR that merged five minutes ago);
+    #      only a re-run on the rebased tree catches it.
+    #   3.5 GREEN -> ASSIGN THE VERSION (this is the gatekeeper's sole right):
+    #      gatekeeper_assign_version.py --write reads the CURRENT origin/main
+    #      version and writes the next strictly-monotonic version (patch 0..99;
+    #      x.y.99 -> x.(y+1).0) into plugin.json + marketplace.json on the
+    #      rebased branch; commit it ("vX.Y.Z — assign version for #<n>").
+    #      Because the queue is serialized and rebased onto the latest main,
+    #      this version cannot collide with a sibling PR's.
+    #   3.6 RE-RUN gatekeeper_review.py WITHOUT the flag on the now-versioned
+    #      tree: the monotonic+equality bump is now fully ENFORCED, and the
+    #      cadence-correct suite is required (FULL on an x.y.0 milestone the
+    #      gatekeeper just assigned, TARGETED on a patch). This is the
+    #      gatekeeper OWNING the milestone-cadence decision the author could
+    #      not know.
+    #   4a. both runs GREEN -> squash-merge (one squash commit = the one
+    #      gatekeeper-assigned version bump).
+    #   4b. any run RED     -> EJECT: request-changes with the failure, do NOT
+    #       merge. The PR goes back to the author (version assignment is
+    #       reverted with the branch — it lands only on a clean merge).
 finally:
     lock.release()   # ALWAYS release — even on eject/exception
 ```
 
 The **squash-merge** is load-bearing: **one PR = one squash commit = one
-version bump**, honoring the **one-version-per-push** rule. The PR's diff
-must already bump `plugin.json` + `marketplace.json` (a machine gate:
-`version_bump_monotonic_check.py` + `marketplace_version_sync_check.py`);
-the squash collapses the PR's internal commits into the single landing
-commit that carries that one bump. Never merge-commit or rebase-merge a
-multi-commit PR (that would land several version-bumping commits).
+gatekeeper-assigned version bump**, honoring the **one-version-per-push**
+rule. **The gatekeeper assigns ALL versions** (owner directive 2026-06-17:
+*"all versions are given by gatekeeper"*) — the authoring PR is VERSION-LESS
+(it does NOT touch `plugin.json` / `marketplace.json`), because two PRs in
+flight that each self-bumped would COLLIDE (both pick `x.y.(z+1)`). Only the
+SERIALIZED queue, landing PRs one at a time onto an advancing `origin/main`,
+can assign a strictly-monotonic version: at Step 3.5 above
+`gatekeeper_assign_version.py --write` writes the next version into both
+files on the rebased branch, then the enforced re-run
+(`version_bump_monotonic_check.py` + `marketplace_version_sync_check.py`,
+flag OFF) validates it. The squash collapses the PR's internal commits +
+that version-assignment commit into the single landing commit that carries
+the one bump. Never merge-commit or rebase-merge a multi-commit PR (that
+would land several commits).
 
 ```bash
 gh pr merge <num> --squash --delete-branch
@@ -385,8 +410,9 @@ Each tick must:
 4. If rc=1 → for each PR in `actionable[]` (newest-first). The PR author is
    irrelevant — the gatekeeper MAY merge its OWN authored PR; the gates are
    the quality guarantee, not identity separation:
-     a. git fetch origin; run gatekeeper_review.py (machine gates,
-        cadence-aware) on base=origin/main head=<headRef>.
+     a. git fetch origin; run gatekeeper_review.py --version-by-gatekeeper
+        (machine gates; the PR is VERSION-LESS so the version gate DEFERS)
+        on base=origin/main head=<headRef>.
         - RED → gh pr review --request-changes with the verbatim failing
           output in the 繁中 5-section comment; continue.
      b. GREEN → Step-2.7 adversarial review on the PR diff
@@ -395,9 +421,16 @@ Each tick must:
         reproduction; continue.
      c. GREEN + no reproducible HIGH → enqueue to the SERIALIZED merge
         queue: acquire .merge.lock (_runner_lock.py); rebase onto current
-        origin/main; RE-RUN required checks on the rebased tree;
-        - rebased GREEN → gh pr merge <num> --squash --delete-branch
-          (one PR = one squash commit = one version bump).
+        origin/main; RE-RUN required checks (--version-by-gatekeeper) on the
+        rebased tree;
+        - rebased GREEN → ASSIGN THE VERSION:
+          gatekeeper_assign_version.py --write (next monotonic version →
+          plugin.json + marketplace.json), commit it, then RE-RUN
+          gatekeeper_review.py WITHOUT the flag (version bump now ENFORCED,
+          cadence-correct suite — FULL on the x.y.0 milestone you assigned).
+          - enforced run GREEN → gh pr merge <num> --squash --delete-branch
+            (one PR = one squash commit = one gatekeeper-assigned version bump).
+          - enforced run RED → eject: request-changes; do NOT merge.
         - rebased RED → eject: request-changes with the post-rebase
           failure; do NOT merge.
         Release the lock (always, even on eject/exception); next PR.
@@ -427,6 +460,12 @@ fully programmable; only Step 2.7 is genuine LLM judgment):
 - Chip-AGNOSTIC source scan (rule 4): `programs/source_chip_agnostic_check.py`
 - Version equality (one-version-per-push): `programs/marketplace_version_sync_check.py`
 - Version strict-monotonic bump: `programs/version_bump_monotonic_check.py`
+- Gatekeeper version ASSIGNMENT at merge (the gatekeeper's sole right —
+  next monotonic version → plugin.json + marketplace.json):
+  `programs/gatekeeper_assign_version.py`
+- PR machine gate — `--version-by-gatekeeper` DEFERS the version gate for
+  the version-less authoring PR; the post-assignment re-run (flag OFF)
+  enforces the bump: `programs/gatekeeper_review.py`
 - Full-suite (not subset) pytest run: `programs/full_suite_run_check.py`
 - Issue-fix counterpart (the other half of the contribution model):
   `vibe-ic:core-agent-loop`
