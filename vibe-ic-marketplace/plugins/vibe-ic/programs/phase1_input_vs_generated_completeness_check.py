@@ -404,16 +404,19 @@ def _load_generated_haystacks(project: Path):
     Sidecar credit: the AI deep-review sidecar is the durable home of
     AI-recovered cells (``phase1_one_shot_runner`` rewrites
     generated_docs/L*.json from scratch each run, so inline AI patches
-    do NOT survive regeneration). We REUSE the sibling gate's
-    ``_load_ai_patches_sidecar`` mechanism unchanged. A sidecar layer's
-    serialised patch text is APPENDED to that layer's haystack, so a
+    do NOT survive regeneration). We credit ONLY the RECOVERED
+    ``value``/``field`` of each patch (via
+    ``_load_sidecar_recovered_values``), NEVER the patch's
+    ``source_quote`` provenance — a source_quote is a verbatim copy of
+    prompt text, so crediting it would auto-pass every quoted design
+    token and blanket-pass a genuinely incomplete generated doc set
+    (§4.05 no-leak: the sidecar credits RECOVERY, not the quote). A
     prompt token is creditable iff it literally appears in the L doc OR
-    in the sidecar text — the sidecar can only credit tokens it
-    actually carries, never blanket-pass.
+    in a recovered sidecar VALUE.
     """
     out: dict = {}
     gen = _pl.generated_docs_dir(project)
-    sidecar = _doc_input._load_ai_patches_sidecar(project)
+    sidecar = _load_sidecar_recovered_values(project)
     seen_layers: set = set()
     if gen.is_dir():
         for p in sorted(gen.glob("L*.json")):
@@ -448,11 +451,65 @@ def _load_generated_haystacks(project: Path):
             pass
     # Sidecar layers with no matching generated_docs/L*.json — uncommon
     # but legitimate (patches pre-staged before phase1 ran). Surface
-    # them under a sidecar-tagged key so their tokens still count.
-    for layer, sidecar_text in sidecar.items():
-        if layer in seen_layers or not sidecar_text:
+    # them under a sidecar-tagged key so their tokens still count — but
+    # ONLY when Phase 1 has actually produced a generated_docs dir.
+    # With ZERO generated docs the gate must SKIP ("run phase1 first"),
+    # exactly as the sibling guards before its sidecar loop; injecting
+    # sidecar-only layers here would otherwise turn a no-output project
+    # into a spurious verdict. §4.05.
+    if gen.is_dir():
+        for layer, sidecar_text in sidecar.items():
+            if layer in seen_layers or not sidecar_text:
+                continue
+            out[layer + ".sidecar"] = _make_blob(sidecar_text)
+    return out
+
+
+def _load_sidecar_recovered_values(project: Path) -> dict:
+    """Return {layer: text} crediting ONLY the AI-RECOVERED ``value``/``field``
+    of each ai_deep_review_patch entry — NEVER the ``source_quote`` (or any
+    prompt-echoing provenance field).
+
+    §4.05 no-leak: a patch's ``source_quote`` is a verbatim copy of prompt text;
+    appending it to the completeness haystack would auto-credit every design
+    token the agent quoted as provenance, so a generated doc set that captured
+    NONE of the prompt facts would still be credited 100% complete. Crediting
+    only the recovered cell value (the fact that actually landed) keeps the
+    sidecar a genuine AI-recovery channel without blanket-passing.
+    """
+    side = _doc_input._resolve_sidecar_path(project)
+    if side is None:
+        return {}
+    try:
+        data = json.loads(side.read_text(errors="replace"))
+    except Exception:
+        return {}
+    patches = data.get("patches") or {}
+    if not isinstance(patches, dict):
+        return {}
+    out: dict = {}
+    for layer, lst in patches.items():
+        if not isinstance(lst, list):
             continue
-        out[layer + ".sidecar"] = _make_blob(sidecar_text)
+        vals: list = []
+        for entry in lst:
+            if not isinstance(entry, dict):
+                continue
+            # credit ONLY the recovered cell: the value(s) it fills and the
+            # field name it targets. Everything else (source_quote, quote,
+            # evidence, rationale, provenance) is excluded.
+            for key in ("value", "values", "field"):
+                v = entry.get(key)
+                if v is None:
+                    continue
+                if isinstance(v, (list, tuple)):
+                    vals.extend(str(x) for x in v)
+                elif isinstance(v, dict):
+                    vals.extend(str(x) for x in v.values())
+                else:
+                    vals.append(str(v))
+        if vals:
+            out[layer] = " ".join(vals)
     return out
 
 
