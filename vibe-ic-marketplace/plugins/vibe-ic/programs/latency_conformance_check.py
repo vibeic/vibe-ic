@@ -204,6 +204,19 @@ _CLEAR_NAME_EXACT = frozenset({"clr", "clear", "clrn", "clr_n", "clear_n",
 _CLEAR_EQUIV_LONG = ("clear", "flush", "complete", "finish", "abort", "cancel",
                      "purge", "drain", "discard", "invalidate", "reset")
 _CLEAR_EQUIV_SEG = frozenset({"clr", "rst", "done", "init", "eot", "eof"})
+# ORGANIC #811 r2 (Step-2.7 §4.05) — LOAD-BEARING-CONTROL deny override. A name
+# can carry a clear-vocab substring yet denote a load-bearing FUNCTIONAL control
+# (`finish_mode` = a MODE select; `drain_sel` = a path SELECT) — held inactive,
+# such a control changes WHICH functional path is measured and masks a real
+# latency bug (Step-2.7 reproduced this on the localparam-resolved path). When a
+# name carries BOTH a clear token AND a functional-control SEGMENT below, the
+# functional reading wins and the name is NOT a clear-equivalent: §4.05 biases to
+# NOT relaxing (a false-timeout on a genuine clear is a missed FP-fix, far safer
+# than masking a bug). chip-AGNOSTIC: generic control-role English segments.
+_LOADBEARING_CTRL_SEG = frozenset({
+    "mode", "sel", "select", "mux", "load", "capture", "hold", "en", "enable",
+    "phase", "cfg", "config", "ctrl", "op", "opcode", "cmd", "func", "fn",
+    "stage", "step", "addr", "index", "idx", "way", "bank", "channel", "chan"})
 
 
 def _clear_equiv_segments(name: str) -> List[str]:
@@ -221,11 +234,19 @@ def _looks_like_clear_equiv_name(name: str) -> bool:
     gate the structural clear-equivalent relaxation requires so a load-bearing
     functional control (capture/mode/hold/enable) is never held inactive (§4.05
     no-leak). Long unambiguous words match anywhere; short fragments only as a
-    whole segment."""
+    whole segment.
+
+    ORGANIC #811 r2: a name with a load-bearing-control SEGMENT
+    (`_LOADBEARING_CTRL_SEG` — mode/sel/select/load/...) is NOT a clear even when
+    it ALSO carries a clear token (`finish_mode`, `drain_sel`), because such a
+    control held inactive masks a real latency bug. The functional reading wins."""
+    segs = _clear_equiv_segments(name)
+    if any(seg in _LOADBEARING_CTRL_SEG for seg in segs):
+        return False
     low = name.lower()
     if any(w in low for w in _CLEAR_EQUIV_LONG):
         return True
-    return any(seg in _CLEAR_EQUIV_SEG for seg in _clear_equiv_segments(name))
+    return any(seg in _CLEAR_EQUIV_SEG for seg in segs)
 
 # SET/RESET SCALAR MUTEX CONTROL class (ORGANIC #809 round-12, C1). A sequential
 # primitive (SR / JK flip-flop, gated latch) carries a pair of MUTUALLY-EXCLUSIVE
@@ -993,7 +1014,13 @@ def detect_structural_clear_equiv(
     body = re.sub(r"//[^\n]*", " ", body)
     body = re.sub(r"/\*.*?\*/", " ", body, flags=re.S)
     bool_params = _bool_param_map(rtl_text)
-    const_vals = _const_value_map(rtl_text)        # ORGANIC #811 localparam values
+    # ORGANIC #811 r2 (Step-2.7 §4.05) — resolve localparam values from the DUT
+    # MODULE BODY, not the whole file: a SIBLING module's `localparam RUN = 0`
+    # would otherwise first-decl-win and poison the DUT's `RUN = 2'b01`, making a
+    # jam-to-RUN (non-reset) branch falsely resolve to the reset value and mis-
+    # classify a load-bearing control as a clear. `body` is already
+    # `_module_body(rtl_text, top)`, so this scopes the const map to the DUT.
+    const_vals = _const_value_map(body)            # ORGANIC #811 localparam values
     found: Dict[str, bool] = {}
     # Walk sequential always-blocks only (an edge-sensitive sensitivity list).
     for am in re.finditer(r"always\s*@\s*\(([^)]*)\)", body):
@@ -1089,7 +1116,26 @@ def detect_structural_clear_equiv(
                             ok = False
                             break
                     localparam_clear = ok and matched_reset
-            if literal_clear or localparam_clear:
+            # ORGANIC #811 r2 (Step-2.7 §4.05) — RESET-CONSISTENCY guard binding
+            # BOTH paths: when the async-reset values are known, a branch that
+            # drives ANY reset-tracked register to a NON-reset constant
+            # (`state <= RUN` while the reset state is IDLE) is NOT a clear —
+            # it jams the FSM into a wrong state, the exact (d) negative. PATH 1
+            # (`literal_clear`) alone only required "all const + ≥1 zero", so a
+            # `state<=RUN(nonzero); cnt<=0; o_ready<=0;` branch slipped through on
+            # the zeroed siblings and masked a real permanent-jam timeout. Reject
+            # the whole branch when any reset-tracked reg goes to a non-reset
+            # value (a load-bearing control that forces a wrong state must still
+            # hard-block).
+            violates_reset = False
+            if reset_vals:
+                for lhs, rhs in assigns:
+                    v = _resolve_const_token(rhs, const_vals)
+                    if (v is not None and lhs in reset_vals
+                            and v != reset_vals[lhs]):
+                        violates_reset = True
+                        break
+            if (literal_clear or localparam_clear) and not violates_reset:
                 found.setdefault(sig, active_low)
     return found
 
