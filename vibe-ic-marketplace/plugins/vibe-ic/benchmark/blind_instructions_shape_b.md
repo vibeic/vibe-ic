@@ -21,7 +21,8 @@ author EACH design, you MUST: (1) OPEN the staged `<RUNDIR>/lessons.md`; (2)
 KEYWORD-MATCH the design genre against the digest genre-convention sections -
 `barrel shifter`, `frequency divider / odd / dual-edge`, `async FIFO`,
 `serial<->parallel`, `edge/pulse detect`, `FSM Moore`, `gshare`, `serial twos
-complement`, `K-map -> mux`, `IEEE-754 float multiply`; (3) APPLY the matched
+complement`, `K-map -> mux`, `IEEE-754 float multiply`, `saturating counter /
+no upper limit / cannot overflow`; (3) APPLY the matched
 section to your RTL. section 4-E NO-LEAK: apply a convention ONLY "unless the
 spec states otherwise" - never override an explicit spec; a spec-ambiguous case
 stays spec-faithful (no oracle answer). The #716 recovered-floor gain is only
