@@ -166,6 +166,24 @@ def classify(cols, rows, ins, outs, rtl):
         # output port) -> the registered-replay timing does not model it -> skip
         if re.search(r'\bassign\s+' + re.escape(out_col) + r'\b', rtl):
             return None, out_col, in_cols, "combinational_output_in_clocked_design"
+        # §4.05 #716 r2 (Step-2.7): Envelope B replays the NBA `@(posedge) a<=val`
+        # convention, which leaves the input — and hence the registered output —
+        # X at the FIRST posedge (the value only arrives at that edge). A table
+        # whose OUTPUT is already a CONCRETE 0/1 at the first posedge was
+        # published under the SAME-EDGE sampling convention instead, for which
+        # this replay is NOT faithful: replaying it as NBA would false-block a
+        # CORRECT design. So SKIP (never false-block; never a fabricated PASS).
+        # The canonical NBA table has X at the first posedge and stays in
+        # Envelope B (so a genuine extra-stage / wrong-logic design still blocks).
+        bidx = {c: i for i, c in enumerate(body)}
+        if clk_name in bidx and out_col in bidx:
+            ci, oi = bidx[clk_name], bidx[out_col]
+            for _t, vals in rows:
+                if ci < len(vals) and vals[ci] == '1':      # first posedge sample
+                    if oi < len(vals) and vals[oi].lower() != 'x':
+                        return (None, out_col, in_cols,
+                                "same_edge_output_convention")
+                    break
         return 'B', out_col, in_cols, None
     else:
         return 'A', out_col, in_cols, None
