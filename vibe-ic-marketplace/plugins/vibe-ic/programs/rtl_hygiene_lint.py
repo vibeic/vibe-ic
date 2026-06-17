@@ -3209,9 +3209,37 @@ def rule_assign_width_truncate(src: str, path: str) -> List[Finding]:
       * BOTH widths must be known from declarations; if either is unknown the
         assignment is skipped (never guessed).
     chip-AGNOSTIC + DETERMINISTIC: no design literal, no chip name, no oracle.
+
+    ORGANIC #757r2 (gapP) — PARTITION the width map + the assign scan by MODULE
+    scope using `_module_regions` (the same helper the multidriven rule adopted
+    for #782). A FLAT file-wide first-decl-wins width map collides two sibling
+    modules that declare a same-named reg at DIFFERENT widths (e.g. a `mem_addr_r`
+    declared `[9:0]` in one module and `[31:0]` in another): a width-CORRECT
+    in-module assignment was being looked up against the OTHER module's narrower
+    width → a FALSE WIDTHTRUNC WARN even though verilator -Wall reports ZERO
+    truncation. Confining BOTH the decl-width map and the assign scan to a single
+    region eliminates the cross-module collision while a genuine within-module
+    truncation still fires (verified). chip-AGNOSTIC: pure module-scope parse.
     """
     findings: List[Finding] = []
-    widths = _collect_decl_widths(src)
+    for _mname, _mlo, _mhi in _module_regions(src):
+        findings += _assign_width_truncate_in_region(src, path, _mlo, _mhi)
+    return findings
+
+
+def _assign_width_truncate_in_region(src: str, path: str,
+                                     mlo: int, mhi: int) -> List[Finding]:
+    """ORGANIC #757r2 (gapP) — the original whole-file width-truncation body, now
+    confined to a SINGLE module region [mlo,mhi). The decl-width map is built from
+    THIS region's declarations only, and only assignments inside this region are
+    scanned, so same-named regs at different widths in sibling modules never
+    collide. Reported line numbers are computed against the FULL `src` via the
+    region base offset (the `_mlo + m.start()` idiom the other module-scoped rules
+    use), so line numbers stay correct. Param-width `[W-1:0]` resolution is
+    preserved WITHIN the region (the localparam/parameter is in-region too)."""
+    findings: List[Finding] = []
+    region = src[mlo:mhi]
+    widths = _collect_decl_widths(region)
     if not widths:
         return findings
     seen: Set[Tuple[str, str, int]] = set()
@@ -3221,7 +3249,7 @@ def rule_assign_width_truncate(src: str, path: str) -> List[Finding]:
         r'(?:\bassign\s+)?'
         r'(?<![<>!=.])\b([A-Za-z_]\w*)\s*(<=|=)(?!=)\s*'
         r'([A-Za-z_]\w*)\s*;')
-    for m in assign_re.finditer(src):
+    for m in assign_re.finditer(region):
         lhs, op, rhs = m.group(1), m.group(2), m.group(3)
         if lhs in VERILOG_KEYWORDS or rhs in VERILOG_KEYWORDS:
             continue
@@ -3231,7 +3259,7 @@ def rule_assign_width_truncate(src: str, path: str) -> List[Finding]:
             continue
         if rw <= lw:
             continue
-        ln = src.count('\n', 0, m.start()) + 1
+        ln = src.count('\n', 0, mlo + m.start()) + 1
         key = (lhs, rhs, ln)
         if key in seen:
             continue
