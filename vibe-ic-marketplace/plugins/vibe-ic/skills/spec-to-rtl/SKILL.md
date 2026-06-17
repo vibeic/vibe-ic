@@ -379,6 +379,55 @@ a second derivation): #705 supplies the absolute latency yard-stick those two do
 not.
 
 
+## "Read the simulation waveform" tables — the PROGRAM replays the published table (#716)
+
+When the prompt embeds a **literal simulation table** — rows of
+`time [clk] <input...> [internal...] <output>` under a "**Read the simulation
+waveforms to determine what the circuit does, then implement it**" instruction
+(the VerilogEval `circuitN` family) — the table **IS** a directed test vector you
+must reproduce **exactly**. The trap that fails the hidden scorer is
+**MIS-COUNTING PIPELINE STAGES**: the early rows where the output reads `x` are
+the **input-sampling NBA race** (`@(posedge) a<=val` leaves the input `x` on the
+first edge), **NOT** an extra register stage. An agent who reads that X-window as
+a second stage authors a TWO-stage `q1<=~a; q<=q1` pipeline when the spec is the
+ONE-stage `q<=~a`; its self-TB still "passes" but it scores ~58/123 mismatches on
+the hidden TB (Prob098_circuit7, the round-18 FAIL). The X-window is consumed by
+the X-match convention — it does **not** license an added latency stage. Count
+stages from the **first DEFINED output transition**, not from the first `x`.
+
+`waveform_table_conformance_check.py` is the independent yard-stick. It parses the
+table, replays it the way the scorer compares (X in the table matches anything;
+X in the DUT only matches a table X), and **BLOCKS on any mismatch**:
+
+```bash
+python3 plugins/vibe-ic/programs/waveform_table_conformance_check.py \
+    --prompt <prompt.txt> --rtl <your_rtl.sv> --top <module>
+```
+
+- `WTC_PASS` (rc 0) — the RTL reproduces the published table; emit.
+- `WTC_FAIL mismatches=<n>` + per-row `WTC_MISMATCH t=.. expected=.. got=..`
+  (rc 1) — your RTL diverges from the table (the stage-count / inversion /
+  function is wrong). Fix and re-run.
+- `WTC_SKIP_<reason>` / `WTC_NO_TABLE` (rc 0) — the prompt has no table, OR the
+  design is **outside the proven-faithful envelope** (a negedge / level-sensitive
+  **transparent latch**, a **multi-bit/hex** output column, a Moore FSM exposing
+  **multiple observable outputs**, or non-binary table values). The gate
+  **refuses to block** these — its replay timing is only proven faithful for
+  combinational truth-tables and single-bit single-clock **posedge-registered**
+  outputs, so for everything else it advises rather than blocks (NO false-block).
+- iverilog absent → `WTC_SKIP_no_tools` (rc 0), never a fabricated PASS.
+
+**why_not_bucket_a:** parsing the table, building the directed replay TB, running
+it under the scorer's X-match, and comparing every row IS the deterministic
+program. The LLM residual is reading the prose to confirm it is a
+"read-the-waveform" problem and, on a `WTC_FAIL`, deciding WHICH clause of the
+RTL (stage count, polarity, function) the mismatch implicates. This is the
+DIRECTED-VECTOR complement to **#700** (a random differential cross-check, which
+is circular here because a stage-count misread biases BOTH the RTL and a
+hand-derived `ref`) and **#705** (which needs a prose latency literal a
+waveform-only prompt does not supply).
+
+
 ## Compliance gate (mandatory)
 
 After producing your output, save it to a file and run:
