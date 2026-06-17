@@ -380,6 +380,63 @@ negative requires understanding what the exemption *intends* to wave through —
 the legitimate case are structurally identical except for the semantic property the reviewer
 must reason about; no regex derives it from the exemption code itself.)
 
+### § 4.2 — program-first + AI-backup: the AI must TRY, and a general no-cheat recovery MUST be absorbed (user directive 2026-06-18, BINDING)
+
+> **Binding rule:** every benchmark fail case must be **DUAL-verified** — by a
+> **PROGRAM** (the plugin scorer / gate) AND by an **AI independent blind solve**.
+> The AI must genuinely **TRY ITS BEST** to solve each fail. **IF the AI CAN solve
+> it with a GENERAL + NO-CHEATING method, that recovery MUST be absorbed into the
+> plugin** — as a deterministic **PROGRAM rule**, OR as an **AI step GATED BY A
+> PROGRAM**. A `RECOVERABLE_AUTHORING` / `AUTHORING` label is **NOT a free pass to
+> skip** the absorption.
+
+This is the program-first/AI-backup doctrine of `benchmark-enhancement-capture`
+(#716 dual-track convergence) applied at the benchmark-campaign exit gate. The
+A–H triage (§ 4) classifies; this subsection states the **convergence bar** that
+the classification must clear before you may claim a campaign converged.
+
+- **no-cheating** = does NOT over-fit the hidden testbench (Category E) — reads
+  only legitimate spec clues / genre conventions (the whole input chain of § 3.9).
+- **general** = chip/problem-**AGNOSTIC** (no SKU/poly/address/port-order literal).
+
+A benchmark campaign **CONVERGES only when every residual fail is one of**:
+
+1. **TRUE_FLOOR** — the AI **also** cannot solve it without cheating, the golden
+   is self-consistent, AND the spec genuinely under-discloses. This requires the
+   FLOOR-proof (§ 4.1, #724): the independent blind solve must have actually been
+   **run and FAILED** (`independent_blind_passes == false`). A FLOOR **label is
+   not evidence** — labelling something FLOOR cannot dodge a hard solve.
+2. **DATASET_DEFECT** — the golden **fails its own TB** (run it; quote the
+   assertion).
+3. **ABSORBED-RECOVERY** — its AI-recovery has been absorbed into the plugin
+   (deterministic program OR AI-step-gated-by-program) **and field-verified**.
+   Route the absorption via `benchmark-enhancement-capture` (Bucket A program
+   rule preferred; Bucket B = AI skill step, always paired with a program gate
+   per the §4.05 no-leak proof). `RECOVERABLE_AUTHORING` / `LESSON_GATE_GAP` /
+   `SCORING_HARNESS_GAP` / `EXTRACTION_GAP` / `COVERAGE_GAP` / a blind-solve that
+   PASSED — **all of these are AI-solvable and MUST carry an `absorption_ref`.**
+
+> **PROGRAM-FIRST enforcement (prose alone regresses — this codebase's repeated
+> lesson; v0.1.25 in-gate fix held, the same as free text regressed):** before
+> claiming convergence, run the machine-checkable convergence bar over the triage
+> result:
+> ```bash
+> python3 programs/benchmark_triage_absorption_audit.py <triage-result.json> [--json OUT]
+> ```
+> It ASSERTS that every fail whose verdict implies AI-solvability carries an
+> `absorption_ref`, and that any `TRUE_FLOOR` / `DATASET_DEFECT` exemption carries
+> `floor_evidence` (a `TRUE_FLOOR` additionally requires `independent_blind_passes
+> == false`). Exit 0 = PASS (converged), nonzero = FAIL (lists the un-absorbed
+> AI-solvable fails). This pairs with `triage_record_check.py` (§ 4 / § 6.4 A–H
+> self-consistency) and `convergence_doctrine_present_check.py` (#716).
+
+This audit is itself a **guard that must not leak** (§ 4.05): the `TRUE_FLOOR` /
+`DATASET_DEFECT` exemptions are guard-relaxing carve-outs, so they require
+positive **evidence** — they cannot wave through an un-solved, un-absorbed,
+AI-solvable fail. The deterministic half is the bookkeeping assertion above; the
+READING judgment — *is this genuinely a floor or did the AI just not try hard
+enough* — stays the § 4 LLM core.
+
 ### § 4.1 — Default action on a benchmark run: CLEAN-ROOM FULL re-run (user directive 2026-06-04)
 
 > **Enforced by `programs/benchmark_dispatch.py` (clean-room default) +
