@@ -8,27 +8,34 @@ commit would touch, it PASSes iff every path is inside that role's allow-list,
 and FAILs (listing each offending path + the protected zone it lands in)
 otherwise.
 
-Roles + check-in authority (the canonical 5-agent governance matrix):
+Roles + check-in authority (the governance matrix):
 
   | role             | may check in to                              |
   |------------------|----------------------------------------------|
-  | core-agent       | EVERYTHING (the only role that edits the     |
-  |                  | plugin + MCP; consumes backlog, fixes, pushes)|
+  | repo-gatekeeper  | EVERYTHING — the SINGLE maintainer role that |
+  |                  | authors fixes into plugin + MCP AND gates /  |
+  |                  | assigns versions / lands them on main        |
+  | core-agent       | alias of repo-gatekeeper (author half)       |
+  | gatekeeper       | alias of repo-gatekeeper (land half)         |
   | benchmark-agent  | benchmark-data/  +  community/backlogs/      |
   | field-agent      | community/backlogs/  (files backlog only)    |
   | pm-agent         | NOTHING (Phase-1 design-time; no repo commit) |
   | ic-expert-agent  | NOTHING (Phase-1 design-time; no repo commit) |
 
-Doctrine: the plugin and the MCP server are owned by the CORE agent alone.
-Field and Benchmark agents that discover a problem do NOT fix the plugin/MCP
-themselves — they file an ORGANIC backlog item (community/backlogs/ + a GitHub
-issue) and the Core agent resolves it into the plugin/MCP. The Benchmark agent
-additionally owns benchmark-data/ (it checks in run results / samples / reports);
-the Field agent owns nothing but the backlog mirror.
+Doctrine: the plugin and the MCP server are owned by the single REPO-GATEKEEPER
+role (2026-06-18, owner directive — the former `core-agent` author role and
+`gatekeeper` land role are now ONE role: repo-gatekeeper authors the fix AND
+gates + assigns the version + lands it; `core-agent`/`gatekeeper` remain as
+aliases). Field and Benchmark agents that discover a problem do NOT edit the
+plugin/MCP — they file an ORGANIC backlog item / a version-less PR and the
+repo-gatekeeper resolves it into the plugin/MCP and lands it. The Benchmark
+agent additionally owns benchmark-data/; the Field agent owns nothing but the
+backlog mirror.
 
 This is an ALLOW-LIST model (default-deny for every restricted role) — a path
-that matches no allowed prefix is a violation. `core-agent` has an open
-allow-list (None) and may touch anything.
+that matches no allowed prefix is a violation. `repo-gatekeeper` (and its
+`core-agent`/`gatekeeper` aliases) has an open allow-list (None) and may touch
+anything.
 
 Usage:
     # explicit path list
@@ -82,7 +89,16 @@ _ZONE_ORDER: Tuple[Tuple[str, str], ...] = (
 # allowed iff it starts with one of the listed prefixes.
 # --------------------------------------------------------------------------
 ROLE_ALLOW: Dict[str, Optional[List[str]]] = {
-    "core-agent": None,  # owner of plugin + MCP + everything else
+    # repo-gatekeeper (2026-06-18, owner directive): the SINGLE role that both
+    # AUTHORS fixes into the plugin/MCP and GATES + assigns versions + LANDS them
+    # on main — the unification of the former `core-agent` (author) and
+    # `gatekeeper` (land). Unrestricted check-in scope.
+    "repo-gatekeeper": None,
+    # `core-agent` and `gatekeeper` are retained as ALIASES of repo-gatekeeper
+    # (same unrestricted scope) so existing `--role core-agent` invocations and
+    # the gatekeeper flow keep working — they denote the SAME single role.
+    "core-agent": None,        # alias of repo-gatekeeper (author half)
+    "gatekeeper": None,        # alias of repo-gatekeeper (land half)
     "benchmark-agent": [ZONE_BENCHMARK_DATA, ZONE_BACKLOG],
     "field-agent": [ZONE_BACKLOG],
     "pm-agent": [],
@@ -91,7 +107,9 @@ ROLE_ALLOW: Dict[str, Optional[List[str]]] = {
 
 # One-line description per role (for --list-roles + error context).
 ROLE_DESC: Dict[str, str] = {
-    "core-agent": "owns plugin + MCP; consumes backlog, fixes, pushes — may check in anywhere",
+    "repo-gatekeeper": "the SINGLE maintainer role — authors fixes into plugin + MCP AND gates/assigns-version/lands on main (former core-agent + gatekeeper unified); may check in anywhere",
+    "core-agent": "alias of repo-gatekeeper (author half) — may check in anywhere",
+    "gatekeeper": "alias of repo-gatekeeper (land half) — may check in anywhere",
     "benchmark-agent": "runs Benchmark Evaluation / Benchmark IC — checks in benchmark-data/ + backlog only",
     "field-agent": "general field usage — files backlog only; NO benchmark-data / plugin / MCP",
     "pm-agent": "Phase-1 NL dialogue — design-time, no repo check-in",
