@@ -189,6 +189,30 @@ _RST_NAME_HINT = ("rst", "reset")
 _CLEAR_NAME_EXACT = frozenset({"clr", "clear", "clrn", "clr_n", "clear_n",
                                "flush", "aclr", "sclr", "clra", "clrb"})
 
+# SET/RESET SCALAR MUTEX CONTROL class (ORGANIC #809 round-12, C1). A sequential
+# primitive (SR / JK flip-flop, gated latch) carries a pair of MUTUALLY-EXCLUSIVE
+# 1-bit SET and RESET controls (`i_S`/`i_R`, `S`/`R`, `set`/`reset`, `sd`/`rd`,
+# `preset`/`clr`). The canonical TB pins EVERY non-event input to the all-ones
+# data constant — which pins the SET/RESET MUTEX PARTNER of the measured event
+# ACTIVE. With the pulsed measured control AND its partner both held active the
+# DUT enters its spec INVALID state (`{i_S,i_R}=2'b11 -> o_Q<=0` per the SR truth
+# table), so the measured output can NEVER assert -> a FALSE LATENCY-TIMEOUT on
+# CORRECT RTL (`cvdp_copilot_flop_0001`). These scalar mutex controls are NOT
+# resets/clears (held ACTIVE they do not flush the pipeline — they DRIVE a
+# specific value), but for MEASUREMENT they must likewise be held INACTIVE so the
+# measured event reaches the output. This is a NARROW, name-anchored EXACT set of
+# the conventional SET/RESET bit spellings — `reset`/`rst`/`clr`/`clear`/`preset`
+# are already caught by `_looks_like_reset`/`_looks_like_clear`, so this set
+# captures only the BARE S/R/SET/SD/RD-style scalar spellings they miss. It does
+# NOT capture multi-bit data buses (it is applied only to 1-bit scalar inputs in
+# `classify_ports`). chip-AGNOSTIC: a generic sequential-primitive control shape.
+_SETRESET_BIT_NAME_EXACT = frozenset({
+    "s", "r", "set", "reset_bit",
+    "sd", "rd",            # set-direct / reset-direct (FPGA primitive style)
+    "i_s", "i_r", "o_s", "o_r",
+    "s_i", "r_i",
+    "set_i", "reset_i", "sd_i", "rd_i"})
+
 # ARBITRATION / MUTUAL-EXCLUSION stimulus class (ORGANIC #770 round-2, Part C).
 # A bus arbiter is a MUTEX design: a set of competing REQUEST inputs map to a set
 # of GRANT outputs, and at most one master is granted per arbitration. The
@@ -585,6 +609,16 @@ def _looks_like_clear(name: str) -> bool:
     return name.lower() in _CLEAR_NAME_EXACT
 
 
+def _looks_like_setreset_bit(name: str) -> bool:
+    """A SCALAR SET/RESET mutex control of a sequential primitive (ORGANIC #809).
+    NARROW, name-anchored EXACT match of the BARE S/R/SET/SD/RD-style scalar
+    spellings the reset/clear recognisers miss (`i_S`/`i_R`, `S`/`R`, `sd`/`rd`,
+    `set_i`/`reset_i`). Held inactive during MEASUREMENT so the pulsed measured
+    event is not fought by its all-ones-pinned mutex partner. Caller applies this
+    ONLY to 1-bit scalar inputs, so it can never capture a multi-bit data bus."""
+    return name.lower() in _SETRESET_BIT_NAME_EXACT
+
+
 def _reset_is_active_low(name: str) -> bool:
     lo = name.lower()
     if lo in _ACTIVE_LOW_RST:
@@ -940,6 +974,24 @@ def classify_ports(ports: List[Tuple[str, str, str]],
             is_rst = (reset_override is not None
                       and (name == reset_override or _looks_like_clear(name))) \
                 or (reset_override is None and _looks_like_reset(name))
+            # ORGANIC #809 (C1) — a SCALAR (1-bit) SET/RESET MUTEX control of a
+            # sequential primitive (`i_S`/`i_R`, `S`/`R`, `sd`/`rd`, `set_i`/
+            # `reset_i`) CAN, when pinned to the all-ones data constant, hold the
+            # measured event's mutex partner ACTIVE and drive the DUT into its
+            # spec INVALID state (a FALSE TIMEOUT on correct RTL,
+            # `cvdp_copilot_flop_0001`).
+            #
+            # §4.05 CRITICAL — this MUST NOT be handled by UNCONDITIONALLY
+            # reclassifying the bit as a reset (held inactive for the canonical
+            # measurement): a name like `set` is ALSO a legitimate FUNCTIONAL
+            # control, and holding it inactive would MASK a genuine off-by-N
+            # latency bug that only manifests at its canonical (all-ones) value.
+            # The discriminator is TIMEOUT: an SR-flop's invalid-state partner
+            # makes the output NEVER assert (timeout) — safe to retry inactive;
+            # a functional-control bug produces a WRONG-but-present latency
+            # (MISMATCH, not timeout) which must hard-block. So the set/reset-bit
+            # handling lives ONLY in the TIMEOUT-gated mutex-bit retry below, NOT
+            # here. (Was: an unconditional `is_rst = True` here — a §4.05 leak.)
             if is_rst:
                 resets.append(pi)
                 continue
@@ -1800,6 +1852,51 @@ def run_latency_conformance(
                 report["measured_under_datapath_event_value"] = _v_adopt
                 report["datapath_event_value_measurements"] = {
                     str(v): m for v, m in _clean}
+
+    # ORGANIC #809 round-12 (C1) — SET/RESET MUTEX-BIT on-timeout retry.
+    # On a plain (non-arbiter, non-datapath) TIMEOUT, the all-ones data constant
+    # may be pinning the measured event's MUTEX PARTNER ACTIVE — a SET/RESET bit
+    # of a sequential primitive whose HIGH state structurally prevents the
+    # measured output from asserting (e.g. SR-FF invalid state {S,R}=11 -> Q=0).
+    # RETRY driving each such bit INACTIVE (0) ONE AT A TIME and adopt the FIRST
+    # clean measurement.
+    #
+    # §4.05 NO-LEAK — the retry is NARROWLY name-anchored and TIMEOUT-gated so it
+    # can ONLY relax a structural invalid-state timeout, never mask a real bug:
+    #   * fires ONLY on status=="timeout" (a measured-but-wrong MISMATCH is NEVER
+    #     retried — a genuine off-by-N still hard-blocks);
+    #   * the probe set is ONLY the conventional SET/RESET mutex-bit spellings
+    #     (`_looks_like_setreset_bit`: S/R/SD/RD/set/i_s/i_r…) — a GENERIC 1-bit
+    #     functional control (`en`, `cfg`, `mode`, a select) is NEVER deactivated,
+    #     so a design whose output is legitimately gated by such a control and is
+    #     BUGGY at its canonical (all-ones) value still TIMES OUT and hard-blocks.
+    #     (An earlier form probed EVERY 1-bit input and adopted any clean result —
+    #     that masked real `en`/`cfg`-gated bugs; §4.05 leak, removed.)
+    #   * excluded for arbiter-class (its own one-hot retry owns that) and for
+    #     datapath_mode (its own event-value retry owns that);
+    #   * if NO single set/reset-bit deactivation makes the output assert, the
+    #     original TIMEOUT stands (a genuinely mis-latching design still blocks).
+    if (status == "timeout" and err == "" and not is_arbiter_class
+            and not datapath_mode):
+        _scalar_others = [o for o in others
+                          if not o.is_array and _width_of(o.width_str) == 1
+                          and _looks_like_setreset_bit(o.name)]
+        report["mutex_bit_retry_candidates"] = [o.name for o in _scalar_others]
+        for _o in _scalar_others:
+            rtb = build_measurement_tb(
+                top, clk, resets, event_port, output_port, others,
+                reset_active_low_map, input_const, max_cycles, params=params,
+                inactive_inputs={_o.name}, localparams=localparams)
+            rwork = Path(tempfile.mkdtemp(prefix="latconf_mutexbit_"))
+            try:
+                r_measured, r_status, r_err = measure_latency(
+                    rtl_path, rtb, rwork, context_files=context_files)
+            finally:
+                shutil.rmtree(rwork, ignore_errors=True)
+            if r_status == "ok" and r_err == "" and r_measured is not None:
+                measured, status, err = r_measured, "ok", ""
+                report["measured_with_inactive_bit"] = _o.name
+                break
 
     if err:
         report["verdict"] = "ERROR"

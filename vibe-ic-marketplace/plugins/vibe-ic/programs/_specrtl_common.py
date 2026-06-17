@@ -110,6 +110,15 @@ def parse_rtl_ports(src: str, top: Optional[str]) -> Tuple[str, List[Port]]:
     name = chosen.group(1)
     nxt = re.search(r'\bendmodule\b', src[chosen.end():])
     region = src[chosen.end():chosen.end() + (nxt.start() if nxt else len(src))]
+    # Strip Verilog comments BEFORE the port-declaration scan: an ANSI header with
+    # inline port comments (`// Clock input`, `// J input of the flip-flop`) makes
+    # the _PORT_DECL regex match the comment word `input`/`output` and harvest the
+    # following comment token as a phantom port, while consuming the next REAL
+    # `input`/`output` keyword into the name group — injecting phantom ports and
+    # DROPPING real ports (e.g. a dropped reset port collapses reset coverage to a
+    # fixed fallback list that never matches the TB). chip-AGNOSTIC: Verilog comment
+    # grammar only. Done first so _strip_subprograms then sees comment-free text.
+    region = strip_comments(region)
     # Ignore input/output declarations inside function/task bodies (not module ports).
     region = _strip_subprograms(region)
     return name, parse_verilog_ports(region)
