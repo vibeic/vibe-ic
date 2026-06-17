@@ -44,11 +44,14 @@ _RICH_PROMPT = (
 
 
 def _make_project(tmp_path: Path, prompt: str, gen_blob: str) -> Path:
+    # Canonical layout: Phase-1 artefacts nest under phase1/ (resolved
+    # via _path_layout.generated_docs_dir), matching how the runner and
+    # the sibling phase1_doc_input_completeness_check write/read them.
     proj = tmp_path / "proj"
     (proj / "input").mkdir(parents=True)
     (proj / "input" / "prompt.md").write_text(prompt)
-    gen = proj / "generated_docs"
-    gen.mkdir()
+    gen = mod._pl.generated_docs_dir(proj)
+    gen.mkdir(parents=True)
     (gen / "L1.json").write_text(gen_blob)
     return proj
 
@@ -138,7 +141,7 @@ def test_skip_no_generated_output(tmp_path):
 # ----------------------------------------------------------------------
 def test_skip_no_prompt(tmp_path):
     proj = tmp_path / "proj"
-    gen = proj / "generated_docs"
+    gen = mod._pl.generated_docs_dir(proj)
     gen.mkdir(parents=True)
     (gen / "L1.json").write_text("{}")
     rc = mod.main([str(proj)])
