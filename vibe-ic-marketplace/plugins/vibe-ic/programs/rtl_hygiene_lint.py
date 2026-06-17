@@ -3125,16 +3125,26 @@ def rule_divmod_by_zero_const(src: str, path: str) -> List[Finding]:
 # extension subtleties never produce a false WARN). The author-proposed BLKSEQ /
 # LATCH / UNUSEDPARAM categories are DEFERRED — they are NOT corpus-clean as a
 # pure regex rule (see #757 caveat) and need a verilator-cross-validated path.
-def _collect_decl_widths(src: str) -> Dict[str, int]:
+def _collect_decl_widths(src: str,
+                         extra_consts: Optional[Dict[str, int]] = None
+                         ) -> Dict[str, int]:
     """Map declared signal/port name -> declared bit-width, for every
     wire/reg/logic/output/input declaration whose range is a literal `[H:L]`
     or a parameterizable `[NAME-1:0]` that resolves to a constant via the
     already-known localparam/parameter map. A plain (un-ranged) scalar is
     width 1. Names whose width cannot be resolved deterministically are
     OMITTED (never guessed) so the consuming rule can only fire on widths it
-    is certain about. chip-AGNOSTIC: pure structural parse, no design literal."""
-    # Known integer params/localparams for resolving `[W-1:0]`.
-    consts: Dict[str, int] = {}
+    is certain about. chip-AGNOSTIC: pure structural parse, no design literal.
+
+    `extra_consts` SEEDS the param map with constants resolved OUTSIDE this text
+    (package-scope / file-scope parameters), so a per-module call can still
+    resolve `[NAME-1:0]` when NAME is declared in a `package` or at file scope
+    (§4.05: omitting them silently dropped a genuine within-module truncate).
+    In-region params OVERRIDE the seed, so a module's own localparam still wins
+    (no cross-module same-name-param collision)."""
+    # Known integer params/localparams for resolving `[W-1:0]` — seeded with the
+    # global (package/file-scope) consts, then overridden by in-region params.
+    consts: Dict[str, int] = dict(extra_consts or {})
     for pm in re.finditer(
             r'\b(?:localparam|parameter)\b[^=;]*?\b([A-Za-z_]\w*)\s*=\s*([^,;)]+)',
             src):
@@ -3209,9 +3219,69 @@ def rule_assign_width_truncate(src: str, path: str) -> List[Finding]:
       * BOTH widths must be known from declarations; if either is unknown the
         assignment is skipped (never guessed).
     chip-AGNOSTIC + DETERMINISTIC: no design literal, no chip name, no oracle.
+
+    ORGANIC #757r2 (gapP) — PARTITION the width map + the assign scan by MODULE
+    scope using `_module_regions` (the same helper the multidriven rule adopted
+    for #782). A FLAT file-wide first-decl-wins width map collides two sibling
+    modules that declare a same-named reg at DIFFERENT widths (e.g. a `mem_addr_r`
+    declared `[9:0]` in one module and `[31:0]` in another): a width-CORRECT
+    in-module assignment was being looked up against the OTHER module's narrower
+    width → a FALSE WIDTHTRUNC WARN even though verilator -Wall reports ZERO
+    truncation. Confining BOTH the decl-width map and the assign scan to a single
+    region eliminates the cross-module collision while a genuine within-module
+    truncation still fires (verified). chip-AGNOSTIC: pure module-scope parse.
     """
     findings: List[Finding] = []
-    widths = _collect_decl_widths(src)
+    # §4.05: resolve package-/file-scope params GLOBALLY and seed each region, so
+    # a reg whose width param lives in a `package` (outside the module) still
+    # resolves [NAME-1:0] and a genuine within-module truncate is not dropped.
+    gconsts = _global_param_consts(src)
+    for _mname, _mlo, _mhi in _module_regions(src):
+        findings += _assign_width_truncate_in_region(src, path, _mlo, _mhi,
+                                                     gconsts)
+    return findings
+
+
+def _global_param_consts(src: str) -> Dict[str, int]:
+    """Integer parameters/localparams declared OUTSIDE any module region —
+    i.e. package-scope and file-scope params, which SystemVerilog scoping makes
+    visible inside every module. A param declared INSIDE another module is
+    deliberately excluded (it does not leak across module boundaries), so this
+    cannot reintroduce the cross-module same-name collision the per-region scan
+    fixes. Used to SEED per-region width resolution (`extra_consts`)."""
+    regions = _module_regions(src)
+
+    def _in_module(pos: int) -> bool:
+        return any(lo <= pos < hi for _n, lo, hi in regions)
+
+    consts: Dict[str, int] = {}
+    for pm in re.finditer(
+            r'\b(?:localparam|parameter)\b[^=;]*?\b([A-Za-z_]\w*)\s*=\s*([^,;)]+)',
+            src):
+        if _in_module(pm.start()):
+            continue
+        v = _eval_const_int(pm.group(2).strip(), consts)
+        if v is not None:
+            consts[pm.group(1)] = v
+    return consts
+
+
+def _assign_width_truncate_in_region(src: str, path: str,
+                                     mlo: int, mhi: int,
+                                     extra_consts: Optional[Dict[str, int]] = None
+                                     ) -> List[Finding]:
+    """ORGANIC #757r2 (gapP) — the original whole-file width-truncation body, now
+    confined to a SINGLE module region [mlo,mhi). The decl-width map is built from
+    THIS region's declarations only, and only assignments inside this region are
+    scanned, so same-named regs at different widths in sibling modules never
+    collide. Reported line numbers are computed against the FULL `src` via the
+    region base offset (the `_mlo + m.start()` idiom the other module-scoped rules
+    use), so line numbers stay correct. Param-width `[W-1:0]` resolution is
+    preserved WITHIN the region, and `extra_consts` supplies package-/file-scope
+    params declared OUTSIDE the region so they still resolve (§4.05 no-leak)."""
+    findings: List[Finding] = []
+    region = src[mlo:mhi]
+    widths = _collect_decl_widths(region, extra_consts=extra_consts)
     if not widths:
         return findings
     seen: Set[Tuple[str, str, int]] = set()
@@ -3221,7 +3291,7 @@ def rule_assign_width_truncate(src: str, path: str) -> List[Finding]:
         r'(?:\bassign\s+)?'
         r'(?<![<>!=.])\b([A-Za-z_]\w*)\s*(<=|=)(?!=)\s*'
         r'([A-Za-z_]\w*)\s*;')
-    for m in assign_re.finditer(src):
+    for m in assign_re.finditer(region):
         lhs, op, rhs = m.group(1), m.group(2), m.group(3)
         if lhs in VERILOG_KEYWORDS or rhs in VERILOG_KEYWORDS:
             continue
@@ -3231,7 +3301,7 @@ def rule_assign_width_truncate(src: str, path: str) -> List[Finding]:
             continue
         if rw <= lw:
             continue
-        ln = src.count('\n', 0, m.start()) + 1
+        ln = src.count('\n', 0, mlo + m.start()) + 1
         key = (lhs, rhs, ln)
         if key in seen:
             continue
