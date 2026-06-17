@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 699
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 699)
+- **Total programs (excluding helpers / shims):** 700
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 700)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 690 |
+| `any` | 691 |
 
 ## Alphabetical listing
 
@@ -717,6 +717,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `wake_pulse_width_matches_measurement_check` | any | Wave 18 | Wave 18 silent-bug gate. |
 | `warn_acceptance_policy_check` | any | — | O3: Enforce that every WARN finding from |
 | `waveform_artifact_hygiene_check` | any | — | no sim waveform dumps in the bundle. |
+| `waveform_table_conformance_check` | any | — | plugin gate (ORGANIC #716 / Prob098_circuit7). |
 | `wishbone_protocol_synth` | any | v0.1.85 | Wishbone B4 protocol synth helper. |
 | `xlsx_extract` | any | — | Extract tables from .xlsx spec documents into JSON. |
 | `yield_fix_cost_rank` | any | — | D3 program-first extraction of the |
@@ -771,7 +772,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (690 programs)
+### `any` (691 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1456,6 +1457,7 @@ _(no programs in this group)_
 - `wake_pulse_width_matches_measurement_check` — Wave 18 silent-bug gate.  _[Wave 18]_
 - `warn_acceptance_policy_check` — O3: Enforce that every WARN finding from
 - `waveform_artifact_hygiene_check` — no sim waveform dumps in the bundle.
+- `waveform_table_conformance_check` — plugin gate (ORGANIC #716 / Prob098_circuit7).
 - `wishbone_protocol_synth` — Wishbone B4 protocol synth helper.  _[v0.1.85]_
 - `xlsx_extract` — Extract tables from .xlsx spec documents into JSON.
 - `yield_fix_cost_rank` — D3 program-first extraction of the
