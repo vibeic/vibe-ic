@@ -239,51 +239,82 @@ not after the field agent reopens.
    `from <shared_tokens> import …` over re-typing a regex, and pin
    the emitter's current format in the checker's tests.
 
-### Step 3 — push
+### Step 3 — ship via the PR-method (gatekeeper-gated)
+
+**BINDING (2026-06-17, owner directive — supersedes the old direct-push):** the
+core-agent does NOT `git push origin main` directly. It assembles ONE **verified
+bundle**, applies it in a worktree off `origin/main`, opens ONE **PR** to
+`vibeic/vibe-ic` base `main`, and lets the **gatekeeper machine** gate it. CLOSED
+issues are still the terminal state, but the fix LANDS only through the PR gate.
+
+A **verified bundle** is exactly three things:
+1. `candidate.patch` — the unified diff of the fix (chip-AGNOSTIC source change).
+2. the regression test(s) — `test_v<M>_<m>_<p>_*.py` covering the new path AND a
+   regression guard (≥1 per issue; multi-issue batches carry one per issue).
+3. the version bump — `plugin.json` + the marketplace `marketplace.json` bumped
+   together (the same DETERMINISTIC version gates apply: equality via
+   `marketplace_version_sync_check.py`, strict monotonic bump via
+   `version_bump_monotonic_check.py --base origin/main`).
 
 ```bash
-# Bump version in BOTH locations:
-#   plugins/vibe-ic/.claude-plugin/plugin.json     ("version": ...)
-#   .claude-plugin/marketplace.json                 (.plugins[0].version)
-# VERSION SCHEME (BINDING, 2026-06-17): patch段 0..99 (兩位數，不進三位數).
-#   x.y.99 之後 = x.(y+1).0  (minor +1, patch 歸 0). 例：1.0.99 → 1.1.0 → 1.1.1.
-# Version invariants are DETERMINISTIC gates, not prose:
-#   - equality (plugin.json == marketplace.json)  -> enforced by
-#     programs/marketplace_version_sync_check.py
-#   - strict monotonic bump (new > previous commit) + equality re-assert
-#     -> enforced by programs/version_bump_monotonic_check.py
-#        (e.g. version_bump_monotonic_check.py --plugin-json <pj> \
-#              --marketplace-json <mj> --base HEAD)
+# VERSION SCHEME (BINDING): patch段 0..99；x.y.99 之後 = x.(y+1).0.
+# TEST CADENCE (BINDING): PATCH (x.y.Z, Z>0) -> TARGETED regression only;
+#   MINOR MILESTONE (x.y.0) -> FULL both-tree suite (the gatekeeper-ci runs it
+#   too, gated by the cadence decision read from plugin.json).
 
-# Verify locally — TEST CADENCE (BINDING, 2026-06-17):
-#   * PATCH bump (x.y.Z, Z>0)  -> TARGETED regression only: the new
-#     test_v<M>_<m>_<p>_*.py + the touched module's test file(s) + a broad `-k`
-#     sweep over the affected families + source_chip_agnostic_check.py. Do NOT
-#     run the full both-tree suite on a patch — it costs ~14 min and is mostly
-#     redundant when a patch touches 1-2 programs.
-#   * MINOR MILESTONE (x.y.0 — 1.1.0, 1.2.0, …) -> run the FULL suite the CI way
-#     (BOTH test trees), green required, before pushing that milestone. This is
-#     the periodic safety net for cross-module regressions. The patch rollover
-#     (x.y.99 -> x.(y+1).0) makes the milestone full-test land automatically.
-#   full_suite_run_check.py still applies WHEN you run the full suite (it asserts
-#   you ran the whole thing, not a -k subset) — it does not force running it
-#   every version, so this cadence is policy, not a gate change.
-# pytest.ini testpaths pins the trees:
-( cd "$PLUGIN_ROOT" && python3 -m pytest -q )   # FULL suite — only at x.y.0 milestones
-# patch bump: python3 -m pytest -q programs/tests/<new_test>.py programs/tests/<module_test>.py -k "<affected families>"
-python3 -m pytest -q mcp-eda/test        # if MCP server touched
-# (added a program? -> programs/INDEX.md via tools/gen_programs_index.py;
-#  added a skill? -> compliance.yaml + tests/test_compliance.py. The tests/ gates enforce both.)
-bash tools/sync_opensource.sh --no-test     # mirror to opensource_repo/
+# 1) Build the bundle in a worktree off origin/main (NEVER edit the live main
+#    checkout — a concurrent session's pull can wipe uncommitted tracked edits).
+git fetch origin
+WT=/home/reyerchu/vibe-ic-pr/<slug>
+git worktree add -b core-pr/<slug> "$WT" origin/main
+#    …make the fix + tests + version bump IN $WT…
+git -C "$WT" diff > "$WT/candidate.patch"     # the bundle artifact (record)
 
-# Commit ONLY the files you touched:
-git add <specific files>
-git commit -m "vX.Y.Z — for #<num> <one-line summary>"
+# 2) Run the MACHINE GATES locally — the same gates the gatekeeper runs. The
+#    aggregate verdict program is the gate of record:
+( cd "$WT/vibe-ic-marketplace/plugins/vibe-ic" \
+  && python3 programs/gatekeeper_review.py --base origin/main --head HEAD \
+       --role core-agent --json /tmp/gk.json )   # MERGE_OK(0)/REQUEST_CHANGES(1)/REJECT(2)
+#    (gatekeeper_review composes: source_chip_agnostic_check, git_prohibition_guard,
+#     version_bump_monotonic_check, marketplace_version_sync_check,
+#     agent_checkin_scope_guard --role core-agent, plugin_full_audit, the
+#     cadence-correct pytest, blindness/full-suite asserts.) Fix every red gate
+#    until the verdict is MERGE_OK before opening the PR.
 
-# Push (NEVER --force, NEVER --no-verify — see §Hard prohibitions,
-# enforced by programs/git_prohibition_guard.py):
-git push origin main
+# 3) Commit ONLY the files you touched (NEVER -A/--force/--no-verify) + push the
+#    BRANCH (not main):
+git -C "$WT" add <specific files>
+git -C "$WT" commit -m "vX.Y.Z — for #<num> <one-line summary>"
+git -C "$WT" push -u origin core-pr/<slug>
+
+# 4) Open ONE PR to base main (gh fires the gatekeeper-ci pull_request workflow
+#    where Actions is enabled; the loop's gatekeeper_review is the gate of
+#    record regardless):
+gh pr create --repo vibeic/vibe-ic --base main --head core-pr/<slug> \
+  --title "[core-agent] vX.Y.Z — #<num> <summary>" --body-file /tmp/pr_body.md
 ```
+
+**Gatekeeper machine gates → merge.** The gatekeeper (single identity, post-v1.1.1
+may author AND self-merge — quality is the GATE, not identity separation) runs
+`gatekeeper_review.py --base origin/main --head <branch> --role core-agent`; on
+**MERGE_OK** + a clean **Step-2.7** adversarial pass it **squash-merges** (one PR
+= one commit = one version bump): `gh pr merge <num> --squash --delete-branch`.
+A red gate → `gh pr review <num> --request-changes` (繁中 5-section) and the bundle
+is re-worked. NEVER `--admin`/`--force`/`--no-verify`; squash-only.
+
+> **Environment note (vibeic/vibe-ic, private free plan):** GitHub branch
+> protection is unavailable (Pro/public-only) and Actions may be disabled, so the
+> gatekeeper-ci required-check cannot be ENFORCED by GitHub today. The
+> `gatekeeper_review.py` verdict, run locally by the gatekeeper, is therefore the
+> AUTHORITATIVE machine gate; the merge is the gatekeeper's gated self-merge. When
+> the repo is made public / Pro, run `tools/setup_branch_protection.sh --confirm`
+> (after the gatekeeper-loop is live) to make the gate GitHub-enforced — see
+> `docs/GATEKEEPER_CUTOVER_RUNBOOK.md`.
+
+(Added a program? -> `programs/INDEX.md` via `tools/gen_programs_index.py`. Added a
+skill? -> `compliance.yaml` + `tests/test_compliance.py`. Touched the MCP server?
+-> `python3 -m pytest -q mcp-eda/test`. Mirror with `bash tools/sync_opensource.sh
+--no-test` inside the bundle when the opensource mirror is tracked.)
 
 ### Step 4 — self-verify + CLOSE
 
@@ -405,9 +436,14 @@ Each tick must:
 3. If rc=1 → for each entry in `actionable[]`:
      a. Reproduce the bug from issue body + comments.
      b. Write a chip-AGNOSTIC fix + tests.
-     c. Bump version (plugin.json + marketplace.json): patch 0..99,
-        x.y.99 → x.(y+1).0; commit (`vX.Y.Z — for #<num> <summary>`),
-        push origin main (NO --force, NO --no-verify).
+     c. SHIP via the PR-METHOD (see SKILL.md §Step 3 — supersedes direct
+        push): assemble the verified bundle (candidate.patch + regression
+        tests + version bump, patch 0..99 / x.y.99 → x.(y+1).0), apply it in
+        a worktree off origin/main, run `gatekeeper_review.py --base
+        origin/main --head HEAD --role core-agent` until MERGE_OK, commit
+        (`vX.Y.Z — for #<num> <summary>`, NO --force/--no-verify), push the
+        BRANCH, open ONE PR to vibeic/vibe-ic base main, and self-merge (squash)
+        once the gatekeeper machine returns MERGE_OK + Step-2.7 is clean.
      d. Self-verify: FIRST execute the issue's `## 驗收` commands
         VERBATIM on the named defect artifact / reproduced fixture
         and capture the END-STATE output, THEN confirm the original
