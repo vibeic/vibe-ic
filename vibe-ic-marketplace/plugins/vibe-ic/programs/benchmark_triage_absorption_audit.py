@@ -226,6 +226,14 @@ def audit_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         rid = extract_id(rec, i)
         verdict = extract_verdict(rec)
         blind = extract_bool(rec, _BLIND_KEYS)
+        # ORGANIC #812 r2 (Step-2.7 §4.05) — distinguish a blind field that is
+        # ABSENT from one that is PRESENT-BUT-UNPARSEABLE. `extract_bool` collapses
+        # both to None; a present-but-unparseable blind result (e.g.
+        # `independent_blind_passes: "solved on retry"`) is AMBIGUOUS and must NOT
+        # let an EXEMPT verdict launder a possibly-solved fail to a PASS. A raw
+        # value present with a None tri-state means "present but unparseable".
+        blind_present_unparseable = (
+            _first_present(rec, _BLIND_KEYS) is not None and blind is None)
         absorb = extract_str(rec, _ABSORB_KEYS)
         floor_ev = extract_str(rec, _FLOOR_EV_KEYS)
 
@@ -243,6 +251,22 @@ def audit_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         ai_solvable = verdict in AI_SOLVABLE_VERDICTS or blind is True
 
         if verdict in EXEMPT_VERDICTS and blind is not True:
+            # ORGANIC #812 r2 (§4.05) — a PRESENT-BUT-UNPARSEABLE blind result
+            # cannot certify ANY exempt verdict: the string `"solved on retry"`
+            # carries the same fact as `independent_blind_passes: true` (the AI
+            # solved it blind) but slips past the bool guard. Treat an ambiguous
+            # blind result as a hard violation for both TRUE_FLOOR and
+            # DATASET_DEFECT — fail-safe, never launder a possibly-solved fail.
+            if blind_present_unparseable:
+                violations.append({
+                    "id": rid, "rule": "exempt_blind_unparseable",
+                    "verdict": verdict,
+                    "detail": ("independent_blind_passes is present but not a "
+                               "parseable true/false — an exempt verdict "
+                               "(TRUE_FLOOR/DATASET_DEFECT) cannot be certified "
+                               "by an ambiguous blind result; emit a bool"),
+                })
+                continue
             # candidate exemption — must carry floor evidence
             if not floor_ev:
                 violations.append({
