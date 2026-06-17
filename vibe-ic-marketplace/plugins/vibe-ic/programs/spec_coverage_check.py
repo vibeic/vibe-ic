@@ -565,6 +565,178 @@ def _rtl_has_clocked_block(rtl_text: Optional[str]) -> Optional[bool]:
     return bool(_CLOCKED_BLOCK_RE.search(stripped))
 
 
+# ORGANIC R13C3 (cvdp_copilot_ir_receiver_0001) — RTL BIT-ORDERING SIGNATURE, for
+# byte_order corroboration. A serial-receiver / packer that assembles a vector one
+# bit at a time has a structural shift-insert signature that fixes the bit order:
+#   LSB-first: the FIRST-arriving bit ends up in bit[0]; each new bit is inserted
+#              at the MSB and the register shifts RIGHT —  reg <= {new, reg[N-1:1]}
+#   MSB-first: the FIRST-arriving bit ends up in bit[N-1]; each new bit is inserted
+#              at the LSB and the register shifts LEFT  —  reg <= {reg[N-2:0], new}
+# Detect the shift-insert concat shape and classify by which side the existing
+# register slice sits on. chip-AGNOSTIC: pure Verilog concat/slice grammar, no
+# chip / vendor / signal-name literal; comment-stripped so a `// lsb first` note
+# never false-positives. Returns "lsb", "msb", or None (no orderable structure).
+# A right-shift slice  reg[HI:1]  (drops bit 0, keeps the high end)  -> LSB-first.
+# A left-shift  slice  reg[HI:0]  with HI < width-1 (drops MSB)      -> MSB-first.
+_SHIFT_INSERT_RE = re.compile(
+    r"\{([^{}]+)\}", re.IGNORECASE)
+_REG_HI1_SLICE_RE = re.compile(
+    r"([A-Za-z_]\w*)\s*\[\s*\d+\s*:\s*1\s*\]")          # reg[N-1:1]  (right shift)
+_REG_HI0_SLICE_RE = re.compile(
+    r"([A-Za-z_]\w*)\s*\[\s*\d+\s*:\s*0\s*\]")          # reg[N-2:0]  (left shift)
+# An incoming 1-bit term: a bare 1-bit literal or a simple identifier / indexed
+# bit (the just-decoded bit). Anything that is plausibly the freshly-arrived bit.
+_BIT_TERM_RE = re.compile(
+    r"^(?:1'b[01xz]|[A-Za-z_]\w*(?:\s*\[[^\]]+\])?)$", re.IGNORECASE)
+
+
+def _rtl_byte_order_signature(rtl_text: Optional[str]) -> Optional[str]:
+    """Classify the RTL's serial bit-ordering as "lsb" / "msb" / None.
+
+    Scans concatenation shift-insert assignments `lhs <= {a, b}` where exactly one
+    side is a same-vector contiguous slice and the other is the freshly-arrived
+    bit. A `{new, reg[N-1:1]}` (slice on the HIGH side, dropping bit 0, shifting
+    right) packs LSB-first; a `{reg[N-2:0], new}` (slice on the LOW side, dropping
+    the MSB, shifting left) packs MSB-first. Returns the SOLE consistent order, or
+    None when there is no shift-insert structure / it is contradictory.
+    chip-AGNOSTIC, comment-stripped, pure grammar."""
+    if not rtl_text:
+        return None
+    try:
+        s = _SRC._strip_comments(rtl_text)
+    except Exception:
+        s = rtl_text
+    orders = set()
+    for cm in _SHIFT_INSERT_RE.finditer(s):
+        body = cm.group(1)
+        # split the top-level concat into exactly two comma terms
+        parts = [p.strip() for p in body.split(",")]
+        if len(parts) != 2:
+            continue
+        a, b = parts
+        a_hi1 = _REG_HI1_SLICE_RE.fullmatch(a)
+        b_hi1 = _REG_HI1_SLICE_RE.fullmatch(b)
+        a_hi0 = _REG_HI0_SLICE_RE.fullmatch(a)
+        b_hi0 = _REG_HI0_SLICE_RE.fullmatch(b)
+        # LSB-first: {bit, reg[HI:1]} — bit on the LEFT, right-shift slice on RIGHT
+        if b_hi1 and _BIT_TERM_RE.match(a):
+            orders.add("lsb")
+        # MSB-first: {reg[HI:0], bit} — left-shift slice on LEFT, bit on the RIGHT
+        elif a_hi0 and _BIT_TERM_RE.match(b) and not a_hi1:
+            orders.add("msb")
+    if len(orders) == 1:
+        return next(iter(orders))
+    return None
+
+
+def _spec_byte_order_intent(evidence: str) -> Optional[str]:
+    """Map the matched byte_order spec phrase to "lsb" / "msb" / None.
+
+    "LSB First" / "little-endian" -> lsb ; "MSB First" / "big-endian" -> msb ;
+    a generic 'byte order' / 'bit order' phrase with no direction -> None (not
+    classifiable -> cannot be CONTRADICTED, only CORROBORATED-or-not)."""
+    e = (evidence or "").lower()
+    if re.search(r"lsb[- ]first|little[- ]endian", e):
+        return "lsb"
+    if re.search(r"msb[- ]first|big[- ]endian", e):
+        return "msb"
+    return None
+
+
+# ORGANIC R13C3 — TB STRUCTURAL-STIMULUS coverage for the byte_order item, the
+# ordering analogue of _tb_exercises_overflow_region / _tb_exercises_handshake_
+# region. The shipped attribute_coverage() marked byte_order covered ONLY when the
+# TB literally NAMES the spec phrase ("lsb first") in code — conflating VOCABULARY
+# with coverage. A faithful ordering TB drives a vector ONE INDEXED BIT AT A TIME
+# (a loop `for(i...) send(frame[i])`) and then asserts the packed output equals
+# the source vector (`out === frame`) — proving the arrival order maps to the
+# packed bit positions — yet never spells "lsb first". This helper detects that
+# structural ordering exercise: an INDEXED bit-by-bit drive of a vector together
+# with a whole-vector / per-index equality assertion. A TB that does NOT exercise
+# the ordering (no indexed per-bit drive, or no ordering equality check) is NOT
+# covering — the §4.05 gap is real and STILL reported. chip-AGNOSTIC: pure
+# indexed-drive + equality-assertion grammar; no chip / signal-name literal.
+_TB_INDEXED_DRIVE_RE = re.compile(
+    r"\b([A-Za-z_]\w*)\s*\[\s*([A-Za-z_]\w*)\s*\]")     # vec[i]  (variable index)
+# An ORDERING ASSERTION: an equality whose BOTH operands are vector REFERENCES (a
+# bare identifier, or an identifier indexed by a VARIABLE) — i.e. `out === frame`
+# or `out[i] === frame[i]`. Critically NEITHER operand may be a numeric/sized
+# literal, so `i == 4` (loop counter vs constant) and `junk[i] == 8'h00` (a bit
+# vs a literal) are NOT ordering assertions. This is the "packed result ===
+# ordered source" check that proves the arrival order maps to the bit positions.
+_TB_ORDER_ASSERT_RE = re.compile(
+    r"([A-Za-z_]\w*)(?:\s*\[\s*[A-Za-z_]\w*\s*\])?\s*"
+    r"(?:===|!==|==|!=)\s*"
+    r"([A-Za-z_]\w*)(?:\s*\[\s*[A-Za-z_]\w*\s*\])?(?!\s*[\w'])")
+
+
+def _tb_exercises_byte_order_region(
+        tb_clean: str, rtl_ports_lower: Optional[set] = None) -> bool:
+    """True iff the TB structurally exercises a serial bit ORDERING.
+
+    Requires ALL of: (1) a loop construct, (2) a per-bit indexed drive `vec[i]`
+    of some vector, and (3) an ORDERING ASSERTION — a vector===vector equality
+    (`out === frame`, never `counter == literal` or `bit == literal`) in which
+    one operand is the bit-indexed-driven vector AND, when the RTL port set is
+    known, one operand is a DUT PORT (so the assertion checks the DUT's packing,
+    not a self-comparison of unrelated TB scratch).
+
+    §4.05 no-leak: incidental loop + `scratch[i]=i` + `i==4` (or `junk[i]==8'h00`)
+    does NOT count — those carry no vector===vector assertion tying a bit-driven
+    vector to the DUT, so a TB that never verifies the ordering still GAPs.
+    chip-AGNOSTIC, comment-stripped grammar."""
+    if not tb_clean:
+        return False
+    if not re.search(r"\bfor\b|\brepeat\b|\bforeach\b|\bwhile\b", tb_clean):
+        return False
+    indexed_vecs = {m.group(1).lower()
+                    for m in _TB_INDEXED_DRIVE_RE.finditer(tb_clean)}
+    if not indexed_vecs:
+        return False
+    ports = {p.lower() for p in (rtl_ports_lower or set())}
+    for m in _TB_ORDER_ASSERT_RE.finditer(tb_clean):
+        operands = {m.group(1).lower(), m.group(2).lower()}
+        ties_drive = bool(operands & indexed_vecs)
+        ties_dut = (not ports) or bool(operands & ports)
+        if ties_drive and ties_dut:
+            return True
+    return False
+
+
+# ORGANIC #770 (R13C1) — does the RTL STRUCTURALLY declare any `signed`
+# port/variable/operation? Used to corroborate a prose 'signedness' requirement.
+# Verilog's DEFAULT arithmetic is UNSIGNED, so a design that never writes the
+# `signed` keyword is structurally unsigned — a prose "unsigned integers" mention
+# is then BACKED by the RTL's signed-absence (no behavioral gap to cover) and the
+# checklist item must NOT hard-block (it had no corroboration branch and stayed
+# UNKNOWN->block, false-positive-ing every spec-faithful unsigned design). A spec
+# whose RTL DOES declare `signed` (e.g. a 16qam_mapper's `input signed [...]`) is
+# genuinely signed: an uncovered signedness item there is a real gap → keeps
+# blocking (no-leak). True iff the comment-stripped RTL contains the `signed`
+# keyword as a declaration/operation qualifier; False iff it parses but has none;
+# None when no RTL is supplied (cannot judge → keep block). chip-AGNOSTIC: pure
+# Verilog `signed` keyword grammar, comment-stripped so a `// signed` mention
+# never false-positives. The bare `unsigned` keyword is explicitly NOT treated as
+# a signed declaration (`\bsigned\b` does not match inside `unsigned`).
+_RTL_SIGNED_DECL_RE = re.compile(
+    r"\b(?:input|output|inout|reg|wire|logic|var|integer|bit|byte|"
+    r"shortint|int|longint)\b[^;,()=\n]*?\bsigned\b"
+    r"|\$signed\b"
+    r"|\bsigned\b\s*(?:\[[^\]]*\]\s*)?[A-Za-z_]\w*\s*(?:[;,=]|\[)")
+
+
+def _rtl_declares_signed(rtl_text: Optional[str]) -> Optional[bool]:
+    """True iff the RTL structurally declares a `signed` port/var/op; False iff it
+    parses but declares none (unsigned-by-default); None when no RTL is supplied."""
+    if not rtl_text:
+        return None
+    try:
+        stripped = _SRC._strip_comments(rtl_text)
+    except Exception:
+        stripped = rtl_text
+    return bool(_RTL_SIGNED_DECL_RE.search(stripped))
+
+
 # ORGANIC #743 — negation-aware feature presence. A spec whose ONLY mention of
 # a reset/clock is the NEGATED phrasing ("no clock or reset inputs", "no reset",
 # "without a reset", "operates entirely combinationally, with no clock") must
@@ -1645,6 +1817,35 @@ def attribute_coverage(items: List[ChecklistItem], tb_text: Optional[str],
                 it.coverage_note = ("no TB toggle of a valid/ready handshake "
                                     f"signal and no reference to {it.coverage_tokens}")
             continue
+        # ORGANIC R13C3 (cvdp_copilot_ir_receiver_0001): the byte_order item is a
+        # STRUCTURAL-STIMULUS requirement, not a vocabulary one. A faithful
+        # ordering TB drives a vector ONE INDEXED BIT AT A TIME and asserts the
+        # packed output equals the source vector (`out === frame`), proving the
+        # arrival order maps to the packed bit positions — and need never spell
+        # the phrase "lsb first". Mark covered iff the TB structurally exercises
+        # the ordering (indexed per-bit drive + an equality assertion in a loop),
+        # OR it names a spec token. A TB that never drives an ordered per-bit
+        # stimulus (and never names the token) still GAPs — §4.05 no-leak.
+        if it.kind == "byte_order":
+            token_hit = any(
+                tok.strip()
+                and re.search(r"\b" + re.escape(tok.strip().lower()) + r"\b",
+                              tb_low)
+                for tok in it.coverage_tokens)
+            region = _tb_exercises_byte_order_region(tb_clean, rtl_ports_lower)
+            it.covered = bool(region or token_hit)
+            if region and token_hit:
+                it.coverage_note = ("TB drives an indexed per-bit ordered stimulus "
+                                    "and names the spec token")
+            elif region:
+                it.coverage_note = ("TB drives an indexed per-bit ordered stimulus "
+                                    "with an ordering equality assertion")
+            elif token_hit:
+                it.coverage_note = ("TB names the byte/bit-order spec token")
+            else:
+                it.coverage_note = ("no TB indexed per-bit ordered stimulus and "
+                                    f"no reference to {it.coverage_tokens}")
+            continue
         # Normal item: covered if ANY of its coverage tokens appears in the TB.
         hit = []
         for tok in it.coverage_tokens:
@@ -1915,6 +2116,61 @@ def run(stations: dict, rtl_text: Optional[str], tb_text: Optional[str],
                 elif _worked_example_is_covered_parent_gloss(
                         it.coverage_tokens,
                         _all_spec + "\n" + (tb_text or "")):
+                    corr = _prov.NO_CORROBORATION
+            elif it.kind == "byte_order":
+                # ORGANIC R13C3 (cvdp_copilot_ir_receiver_0001) — a PROSE/example
+                # byte_order requirement (not in a markdown table -> not in
+                # _structural_kinds) corroborated against the RTL's structural
+                # bit-ordering signature. The shipped code had NO elif here, so
+                # corr stayed UNKNOWN and is_block_eligible(PROSE_HEURISTIC,
+                # UNKNOWN) returned True — a prose-only "LSB First" hard-BLOCKed a
+                # correct LSB-first design that the TB faithfully ordered, while
+                # the only way to "pass" was to inject the functionless literal
+                # 'lsb first' into the TB (gaming a token, not verifying order).
+                #   - RTL has a shift-insert order matching the spec direction
+                #     -> CORROBORATED: the requirement is real; an uncovered order
+                #        STILL blocks, but the structural ordering stimulus above
+                #        now counts as coverage (no literal phrase needed).
+                #   - RTL implements the OPPOSITE order -> CONTRADICTED -> advisory
+                #     (the prose finding is refuted by the structure).
+                #   - RTL has NO orderable shift-insert structure (the design does
+                #     not serially pack a vector) -> NO_CORROBORATION -> advisory
+                #     (a prose byte-order mention with no structural backing).
+                #   - no RTL supplied -> UNKNOWN -> keep block (no-leak biased).
+                # No-leak: a byte_order stated in a markdown TABLE is already in
+                # _structural_kinds and never reaches this branch, so it keeps its
+                # hard block. chip-AGNOSTIC: pure shift-insert concat grammar.
+                rtl_order = _rtl_byte_order_signature(rtl_text)
+                spec_order = _spec_byte_order_intent(it.evidence)
+                if rtl_text is None:
+                    corr = _prov.UNKNOWN
+                elif rtl_order is None:
+                    corr = _prov.NO_CORROBORATION
+                elif spec_order is None:
+                    # direction-less spec phrase but the RTL DOES pack serially:
+                    # the ordering requirement is structurally backed -> block.
+                    corr = _prov.CORROBORATED
+                elif rtl_order == spec_order:
+                    corr = _prov.CORROBORATED
+                else:
+                    corr = _prov.CONTRADICTED
+            elif it.kind == "signedness":
+                # ORGANIC R13C3 + #770 (R13C1) — signedness shares the byte_order
+                # gap: it is in _PROSE_HEURISTIC_KINDS with no corroboration branch,
+                # so a prose-only signed/unsigned note hard-blocked. Corroborate
+                # against whether the RTL STRUCTURALLY declares `signed` via the
+                # shared tri-state `_rtl_declares_signed()` detector: no structural
+                # signed declaration -> NO_CORROBORATION -> advisory (a prose
+                # "unsigned integers" mention is backed by the signed-absence, the
+                # Verilog default; e.g. montgomery_0001); present -> CORROBORATED ->
+                # keep block (e.g. 16qam_mapper); no RTL -> UNKNOWN -> keep block.
+                # No-leak: a markdown-table signedness stays structural.
+                _sg = _rtl_declares_signed(rtl_text)
+                if _sg is None:
+                    corr = _prov.UNKNOWN
+                elif _sg:
+                    corr = _prov.CORROBORATED
+                else:
                     corr = _prov.NO_CORROBORATION
             it.block_eligible = _prov.is_block_eligible(it.provenance, corr)
             if not it.block_eligible:
