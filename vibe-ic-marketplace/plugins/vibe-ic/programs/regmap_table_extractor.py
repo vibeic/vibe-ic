@@ -236,17 +236,29 @@ def _extract_gfm_pipe_table(text: str, source_path: str) -> List[Dict]:
                     if c in _GFM_NAME_HDR:
                         cols.setdefault("name", i)
                     elif c in _GFM_OFFSET_HDR:
-                        cols.setdefault("offset", i)
                         # #747-r2 weak-offset guard, ported onto the GFM PRIMARY
                         # path: a generic Value/Default/Reset-Value column is a
                         # WEAK offset role — its cell must hold a real 0x... token
                         # before becoming an address, so a `| Field | Value |`
                         # SPEC table (decimals in the Value prose) cannot
-                        # fabricate phantom registers (§4.05). First-offset-wins
-                        # via setdefault keeps a strong `Offset`/`Address` column
-                        # decimal-tolerant.
-                        if c in _GFM_OFFSET_WEAK_HDR:
-                            cols.setdefault("offset_weak", True)
+                        # fabricate phantom registers (§4.05).
+                        #
+                        # CRITICAL (§4.05 no-false-block): the weak flag MUST bind
+                        # to the column that actually CLAIMS the offset role, not
+                        # to a weak sibling that merely co-exists in the header. A
+                        # strong `Offset`/`Address` column staying decimal-
+                        # tolerant must not be gated to HEX-only just because a
+                        # `Reset Value`/`Default` column is also present. So the
+                        # first offset-role column claims it and its OWN weakness
+                        # sets the gate; a later STRONG column supersedes an
+                        # earlier WEAK claim (strong-preferred).
+                        is_weak = c in _GFM_OFFSET_WEAK_HDR
+                        if "offset" not in cols:
+                            cols["offset"] = i
+                            cols["offset_weak"] = is_weak
+                        elif cols.get("offset_weak") and not is_weak:
+                            cols["offset"] = i
+                            cols["offset_weak"] = False
                     elif c in _GFM_LEN_HDR:
                         cols.setdefault("length", i)
                     elif c in _GFM_DESC_HDR:
