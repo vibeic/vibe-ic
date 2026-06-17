@@ -640,11 +640,38 @@ def _is_clock(name: str) -> bool:
     return True
 
 
+# ORGANIC #811 round-16 — generic DIRECTIONAL prefix strip (`i_`/`o_`/`io_`/
+# `in_`/`out_`). The exact-token name recognisers (`_looks_like_clear`,
+# `_looks_like_setreset_bit`) matched only the BARE token, UNLIKE `_is_clock`
+# which strips a directional prefix — so a port `i_clear`/`o_clr`/`i_flush` was
+# NOT recognised as a clear (it fell into the all-ones-pinned `others` and was
+# pinned ACTIVE → permanent flush → false LATENCY-TIMEOUT on correct RTL,
+# `cvdp_copilot_signed_adder_0001`). This helper MIRRORS `_is_clock`'s prefix
+# handling but covers the full generic directional family. chip-AGNOSTIC: only
+# universal port-direction prefixes, no chip / vendor / signal-name literal.
+_DIR_PREFIX_RE = re.compile(r"^(?:i|o|io|in|out)_")
+
+
+def _strip_dir_prefix(name: str) -> str:
+    """Strip ONE leading generic directional prefix (`i_`/`o_`/`io_`/`in_`/
+    `out_`) from `name`. Returns the lowered core token. A name with no such
+    prefix is returned unchanged (lowered), so an exact match on the bare token
+    still works."""
+    return _DIR_PREFIX_RE.sub("", name.lower())
+
+
 def _looks_like_clear(name: str) -> bool:
     """A synchronous CLEAR/FLUSH control — reset-equivalent for MEASUREMENT
     (held active it permanently flushes the pipeline). NARROW, name-anchored
-    (an exact name in `_CLEAR_NAME_EXACT`); does NOT capture data inputs."""
-    return name.lower() in _CLEAR_NAME_EXACT
+    (an exact name in `_CLEAR_NAME_EXACT`); does NOT capture data inputs.
+
+    ORGANIC #811 — the match is tried on BOTH the bare lowered name AND the name
+    with a leading directional prefix stripped (`i_clear`/`o_clr`/`i_flush` →
+    `clear`/`clr`/`flush`), MIRRORING `_is_clock`'s prefix handling. The set
+    itself is unchanged, so an ordinary data input (`i_enable`→`enable`,
+    `i_data`→`data`) is still NOT in the clear allowlist (§4.05 no-leak)."""
+    lo = name.lower()
+    return lo in _CLEAR_NAME_EXACT or _strip_dir_prefix(lo) in _CLEAR_NAME_EXACT
 
 
 def _looks_like_setreset_bit(name: str) -> bool:
@@ -653,8 +680,16 @@ def _looks_like_setreset_bit(name: str) -> bool:
     spellings the reset/clear recognisers miss (`i_S`/`i_R`, `S`/`R`, `sd`/`rd`,
     `set_i`/`reset_i`). Held inactive during MEASUREMENT so the pulsed measured
     event is not fought by its all-ones-pinned mutex partner. Caller applies this
-    ONLY to 1-bit scalar inputs, so it can never capture a multi-bit data bus."""
-    return name.lower() in _SETRESET_BIT_NAME_EXACT
+    ONLY to 1-bit scalar inputs, so it can never capture a multi-bit data bus.
+
+    ORGANIC #811 — like `_looks_like_clear`, the EXACT match is tried on BOTH the
+    bare name and the directional-prefix-stripped core, so `i_set`/`o_set`/`i_sd`
+    are recognised. The EXACT set already enumerates the `i_`/`o_` forms it cares
+    about; the strip only adds the generic `in_`/`out_` family and is harmless
+    for the rest (the bare core must still be one of the bare spellings)."""
+    lo = name.lower()
+    return (lo in _SETRESET_BIT_NAME_EXACT
+            or _strip_dir_prefix(lo) in _SETRESET_BIT_NAME_EXACT)
 
 
 def _reset_is_active_low(name: str) -> bool:
@@ -764,13 +799,170 @@ def _is_const_expr(rhs: str, bool_params: Dict[str, int]) -> bool:
 
 
 def _is_zero_const(rhs: str) -> bool:
-    """True iff `rhs` is a constant ZERO literal (the reset/clear value)."""
+    """True iff `rhs` is a constant ZERO literal (the reset/clear value).
+
+    ORGANIC #811 — the zero-replication count may be a PARAMETER expression, not
+    a digit (`{DATA_WIDTH{1'b0}}` — the canonical parameterised reset value), so
+    the replication-count slot accepts any non-`{` token, and the replicated bit
+    may be `1'b0` or `0`. Still ZERO-only (a `1'b1` replication never matches)."""
     s = rhs.strip()
     return bool(re.fullmatch(
         r"(?:\d+)?'[hbdoHBDO]0+"                      # 4'b0000  8'h00  'd0
         r"|'0"                                        # '0
         r"|0+"                                        # 0  00
-        r"|\{\s*\d*\s*\{\s*1'b0\s*\}\s*\}", s))        # {N{1'b0}}
+        # {N{1'b0}} / {DATA_WIDTH{1'b0}} — replication of a single ZERO bit.
+        r"|\{\s*[^{}]*\s*\{\s*1'b0\s*\}\s*\}", s))
+
+
+# ─── ORGANIC #811 round-16 — localparam-RESOLVED constant value map ───────────
+# An FSM clear branch writes its state/status register to a SYMBOLIC reset/idle
+# state — `state <= IDLE;` where `localparam [1:0] IDLE = 2'b00;` — NOT to a bare
+# literal. `_is_const_expr` (literal-only) rejects `IDLE`, so the round-15
+# structural clear detector returns {} for the entire FSM family and the clear
+# escapes recognition (`cvdp_copilot_signed_adder_0001`). This map resolves a
+# localparam/parameter whose default is a CONSTANT integer (literal or a chain of
+# already-resolved constants) to its integer VALUE, so `state <= IDLE` can be
+# compared against the register's ASYNC-RESET value: the genuine "this control
+# forces the FSM to its reset/idle state" signature. PURE deterministic text
+# parse; chip-AGNOSTIC (Verilog localparam grammar, no signal-name literal).
+def _const_value_map(rtl_text: str) -> Dict[str, int]:
+    """Map each `parameter`/`localparam` whose default resolves to a CONSTANT
+    integer to that value. Handles sized/unsized literals (`2'b00`, `8'hFF`,
+    `'d4`, plain decimal) directly, and resolves a name-RHS (`localparam X = Y;`)
+    against earlier entries via a bounded fixpoint so a chain of symbolic
+    constants resolves. A non-constant / datapath RHS is simply omitted (so a
+    register write to a non-constant name is later treated as NOT a clear).
+    A comma-separated multi-name declaration (`localparam [1:0] IDLE = 2'b00,
+    LOAD = 2'b01, ...;` — the canonical FSM state encoding) yields ALL its
+    name=value pairs, not just the first."""
+    raw: List[Tuple[str, str]] = []
+    # Strip comments FIRST so a `parameter`/`localparam` word inside a comment
+    # cannot make the `[^;]*` declaration capture span into real RTL (which would
+    # pollute the map with a register-assignment LHS=RHS pair).
+    clean = re.sub(r"//[^\n]*", " ", rtl_text)
+    clean = re.sub(r"/\*.*?\*/", " ", clean, flags=re.S)
+    # Each `parameter`/`localparam` declaration up to its terminating `;`; the
+    # leading `[w:l]` width applies to the whole comma list.
+    for decl in re.finditer(
+            r"\b(?:parameter|localparam)\b\s*(?:\[[^\]]*\]\s*)?([^;]*);",
+            clean):
+        for seg in _split_top_level_commas(decl.group(1)):
+            if "=" not in seg:
+                continue
+            lhs, rhs = seg.split("=", 1)
+            nm = _IDENT_RE.findall(lhs)
+            if nm:
+                raw.append((nm[-1], rhs.strip()))
+    vm: Dict[str, int] = {}
+
+    def _lit(val: str) -> Optional[int]:
+        s = val.strip()
+        m = re.fullmatch(
+            r"(?:(\d+)\s*)?'[sS]?([hbdoHBDO])([0-9a-fA-F_]+)", s)
+        if m:
+            return _vlog_literal_to_int(m.group(1), m.group(2), m.group(3))
+        if re.fullmatch(r"\d+", s):
+            return int(s)
+        return None
+
+    # up to a few passes so `localparam B = A;` resolves after `A`.
+    for _ in range(8):
+        progressed = False
+        for nm, val in raw:
+            if nm in vm:
+                continue
+            v = _lit(val)
+            if v is None:
+                s = val.strip()
+                if s in vm:                  # name-RHS resolved earlier
+                    v = vm[s]
+            if v is not None:
+                vm[nm] = v
+                progressed = True
+        if not progressed:
+            break
+    return vm
+
+
+def _resolve_const_token(rhs: str, const_vals: Dict[str, int]) -> Optional[int]:
+    """Resolve `rhs` (a register-assignment RHS) to its integer constant value
+    via a literal parse OR a localparam/parameter lookup; None if it carries any
+    datapath signal (so it is NOT a constant clear/reset write)."""
+    s = rhs.strip()
+    if s in const_vals:
+        return const_vals[s]
+    m = re.fullmatch(r"(?:(\d+)\s*)?'[sS]?([hbdoHBDO])([0-9a-fA-F_]+)", s)
+    if m:
+        return _vlog_literal_to_int(m.group(1), m.group(2), m.group(3))
+    if re.fullmatch(r"\d+", s):
+        return int(s)
+    # `{N{1'b0}}` / `'0` replication of zero — a concrete zero constant.
+    if _is_zero_const(s):
+        return 0
+    return None
+
+
+def _async_reset_values(blk: str, const_vals: Dict[str, int]) -> Dict[str, int]:
+    """ORGANIC #811 — for ONE sequential always-block `blk`, find the
+    ASYNCHRONOUS-reset branch (`if (!rst_n)` / `if (rst)` etc., the guarded
+    branch a `posedge clk or negedge rst` block opens with) and return
+    {reg_name: resolved_const_value} for every register it drives to a CONSTANT.
+    The reset branch is identified as the FIRST top-level `if (<bare/neg sig>)`
+    whose body assigns ONLY constants and drives ≥1 register to ZERO — the
+    unmistakable reset signature. Returns {} when no such branch is found (so a
+    register whose reset value is UNKNOWN is never used to relax — bias to NOT
+    classifying, per the no-leak requirement)."""
+    for m in re.finditer(
+            r"\b(?:else\s+)?if\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)\s*", blk):
+        cond = m.group(1).strip()
+        if not (re.fullmatch(r"\s*[!~]?\s*[A-Za-z_]\w*\s*", cond)
+                or re.fullmatch(
+                    r"\s*[A-Za-z_]\w*\s*==\s*[A-Za-z_0-9']+\s*", cond)):
+            continue
+        body = _branch_body_text(blk[m.end():])
+        assigns = re.findall(
+            r"\b([A-Za-z_]\w*)\s*(?:\[[^\]]+\])?\s*<=\s*([^;]+);", body)
+        vals: Dict[str, int] = {}
+        all_const = bool(assigns)
+        saw_zero = False
+        for lhs, rhs in assigns:
+            v = _resolve_const_token(rhs, const_vals)
+            if v is None:
+                all_const = False
+                break
+            vals[lhs] = v
+            if v == 0:
+                saw_zero = True
+        if all_const and saw_zero:
+            return vals
+    return {}
+
+
+def _branch_body_text(tail: str) -> str:
+    """The body of a guarded branch starting at `tail`: a balanced `begin..end`
+    block or a single statement up to the next `;`. Shared by the reset-value
+    extractor and the clear-branch scan."""
+    if tail.lstrip().startswith("begin"):
+        i = tail.find("begin")
+        depth = 0
+        j = i
+        while j < len(tail):
+            if tail[j:j + 5] == "begin":
+                depth += 1
+                j += 5
+                continue
+            if (tail[j:j + 3] == "end"
+                    and (j + 3 >= len(tail)
+                         or not (tail[j + 3].isalnum() or tail[j + 3] == "_"))):
+                depth -= 1
+                if depth == 0:
+                    break
+                j += 3
+                continue
+            j += 1
+        return tail[i + 5:j]
+    semi = tail.find(";")
+    return tail[:semi + 1] if semi >= 0 else ""
 
 
 def detect_structural_clear_equiv(
@@ -783,13 +975,25 @@ def detect_structural_clear_equiv(
     a structural-only match also captures a load-bearing functional control
     buggy at its canonical value, masking a real latency bug. PURE structural +
     name; no simulation. `scalar_input_names` restricts the scan to 1-bit inputs
-    so a multi-bit data bus is never captured."""
+    so a multi-bit data bus is never captured.
+
+    ORGANIC #811 round-16 — a clear branch that assigns the state/status register
+    to a LOCALPARAM/parameter idle state (`if (i_clear) state <= IDLE;` where
+    `localparam IDLE = 2'b00;`) is ALSO recognised, iff the localparam's RESOLVED
+    constant value equals the value that register takes in the design's
+    ASYNCHRONOUS-RESET branch — the genuine "this control forces the FSM to its
+    reset/idle state" signature. A branch that assigns the register to a
+    NON-reset state localparam (`if (S) state <= RUN`) does NOT match (no-leak):
+    `RUN`'s value differs from the async-reset value. If the register's reset
+    value is UNKNOWN (no async-reset branch parsed), the localparam path does NOT
+    fire — bias to keeping the input pinned."""
     body = _module_body(rtl_text, top)
     # strip comments so a commented-out assignment inside a branch body is never
     # parsed as a real assign (false clear-signature) — and vice versa.
     body = re.sub(r"//[^\n]*", " ", body)
     body = re.sub(r"/\*.*?\*/", " ", body, flags=re.S)
     bool_params = _bool_param_map(rtl_text)
+    const_vals = _const_value_map(rtl_text)        # ORGANIC #811 localparam values
     found: Dict[str, bool] = {}
     # Walk sequential always-blocks only (an edge-sensitive sensitivity list).
     for am in re.finditer(r"always\s*@\s*\(([^)]*)\)", body):
@@ -799,6 +1003,10 @@ def detect_structural_clear_equiv(
         nxt = re.search(r"\balways\b", blk)
         if nxt:
             blk = blk[:nxt.start()]
+        # ORGANIC #811 — the per-block ASYNC-RESET register values (the FSM's
+        # reset/idle state) so a `state <= IDLE` clear can be compared against
+        # the register's genuine reset value. {} when no reset branch is parsed.
+        reset_vals = _async_reset_values(blk, const_vals)
         # every guarded branch `(else )?if ( COND )` inside the block
         for im in re.finditer(
                 r"\b(?:else\s+)?if\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)\s*", blk):
@@ -831,42 +1039,57 @@ def detect_structural_clear_equiv(
                 continue
             # the branch body: a `begin ... end` block (balanced) or a single
             # statement up to the next `;`.
-            tail = blk[im.end():]
-            if tail.lstrip().startswith("begin"):
-                i = tail.find("begin")
-                depth = 0
-                j = i
-                while j < len(tail):
-                    if tail[j:j + 5] == "begin":
-                        depth += 1
-                        j += 5
-                        continue
-                    if (tail[j:j + 3] == "end"
-                            and (j + 3 >= len(tail)
-                                 or not (tail[j + 3].isalnum()
-                                         or tail[j + 3] == "_"))):
-                        depth -= 1
-                        if depth == 0:
-                            break
-                        j += 3
-                        continue
-                    j += 1
-                bodytxt = tail[i + 5:j]
-            else:
-                semi = tail.find(";")
-                bodytxt = tail[:semi + 1] if semi >= 0 else ""
+            bodytxt = _branch_body_text(blk[im.end():])
             assigns = re.findall(
                 r"\b([A-Za-z_]\w*)\s*(?:\[[^\]]+\])?\s*<=\s*([^;]+);", bodytxt)
             if not assigns:
                 continue
-            # the branch is a CLEAR signature iff EVERY assigned RHS is a pure
-            # constant (no datapath signal) AND at least one is a ZERO constant
-            # AND the control's NAME carries clear/flush/completion semantics
-            # (§4.05 no-leak: a structural-only match would also hold a
-            # load-bearing functional control inactive and mask a real bug).
-            if (all(_is_const_expr(rhs, bool_params) for _, rhs in assigns)
-                    and any(_is_zero_const(rhs) for _, rhs in assigns)
-                    and _looks_like_clear_equiv_name(sig)):
+            if not _looks_like_clear_equiv_name(sig):
+                # the NAME gate is REQUIRED for BOTH structural paths (§4.05
+                # no-leak): a structural-only match would also hold a
+                # load-bearing functional control inactive and mask a real bug.
+                continue
+            # PATH 1 (round-15) — every assigned RHS is a pure literal constant
+            # AND at least one is a ZERO literal (the unmistakable `<=const-zero`
+            # clear signature).
+            literal_clear = (
+                all(_is_const_expr(rhs, bool_params) for _, rhs in assigns)
+                and any(_is_zero_const(rhs) for _, rhs in assigns))
+            # PATH 2 (ORGANIC #811) — the LOCALPARAM-RESOLVED clear: this control
+            # forces the FSM to its RESET/IDLE state. The branch qualifies iff
+            #   * every assigned RHS resolves to a CONSTANT (literal OR
+            #     localparam/parameter — no datapath signal); AND
+            #   * every assigned register that HAS a known async-reset value goes
+            #     to EXACTLY that reset value (so `state <= RUN` — RUN != the
+            #     IDLE reset value — DISQUALIFIES the whole branch, even if the
+            #     branch incidentally zeroes another output); AND
+            #   * every assigned register WITHOUT a known reset value is a ZERO
+            #     constant (conservative: an unknown-reset register may only be
+            #     cleared to zero, never set to an arbitrary non-zero constant);
+            #   * AND at least one register actually matches a known reset value
+            #     (the branch genuinely drives a reset-tracked register home).
+            # §4.05 no-leak: a control that jams the FSM into a NON-reset state
+            # (the exact (d) negative) is REJECTED — its value differs from the
+            # reset value — so a real "stuck in a wrong state" timeout still
+            # hard-blocks. An unknown reset value (empty reset_vals) never fires.
+            localparam_clear = False
+            if reset_vals:
+                resolved = [(lhs, _resolve_const_token(rhs, const_vals))
+                            for lhs, rhs in assigns]
+                if all(v is not None for _, v in resolved):
+                    matched_reset = False
+                    ok = True
+                    for lhs, v in resolved:
+                        if lhs in reset_vals:
+                            if v != reset_vals[lhs]:
+                                ok = False
+                                break
+                            matched_reset = True
+                        elif v != 0:
+                            ok = False
+                            break
+                    localparam_clear = ok and matched_reset
+            if literal_clear or localparam_clear:
                 found.setdefault(sig, active_low)
     return found
 
@@ -1911,9 +2134,24 @@ def run_latency_conformance(
             "pulse `out===1` model does not apply to a result bus)")
 
     # reset polarity map
+    #
+    # ORGANIC #811 round-16 — the `--reset-active-low`/`--reset-active-high`
+    # flag forces the polarity of the RESET the user named, NOT of every
+    # reset-EQUIVALENT control held inactive alongside it. A synchronous
+    # CLEAR/FLUSH (`i_clear`, `clr`, `flush`) has its OWN active-HIGH-by-default
+    # convention (with the usual `_n`/`_b` low-suffix override) — applying the
+    # reset's `--reset-active-low` to it would hold an active-HIGH clear HIGH
+    # (== its CLEARING value) for the whole measurement, permanently flushing the
+    # FSM → the SAME false LATENCY-TIMEOUT the name-strip fix was meant to cure
+    # (`cvdp_copilot_signed_adder_0001`). So the explicit flag governs ONLY the
+    # true reset port(s); a clear-class port always uses its own name-inferred
+    # polarity. §4.05 no-leak: this only changes the held value of a clear that
+    # the canonical TB would otherwise hold ACTIVE (a guaranteed timeout), never
+    # a true reset's polarity.
     reset_active_low_map: Dict[str, bool] = {}
     for r in resets:
-        if reset_active_low_flag is not None:
+        is_clear_class = _looks_like_clear(r.name) and r.name != reset_override
+        if reset_active_low_flag is not None and not is_clear_class:
             reset_active_low_map[r.name] = reset_active_low_flag
         else:
             reset_active_low_map[r.name] = _reset_is_active_low(r.name)
