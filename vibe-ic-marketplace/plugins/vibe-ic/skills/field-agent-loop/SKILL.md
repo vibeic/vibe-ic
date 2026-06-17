@@ -454,6 +454,13 @@ it — only when ALL of:
   adversarial multi-lens self-review on the candidate diff, recorded
   in the bundle). The field does not hand off a prototype it has not
   itself adversarially reviewed.
+- **NO version bump in the bundle** (owner directive 2026-06-17:
+  *"field dont need to have version to issue pr. all versions are given
+  by gatekeeper"*). `candidate.patch` must NOT touch `plugin.json` /
+  `marketplace.json` — the gatekeeper assigns the next strictly-monotonic
+  version at merge (`gatekeeper_assign_version.py`), because two in-flight
+  bundles that each self-bumped would collide. The field's job is the
+  converged fix + tests + clean-room proof, not the version.
 
 Run the gate before filing (see Step 2):
 

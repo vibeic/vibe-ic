@@ -272,7 +272,16 @@ and declared a FALSE convergence. They were in fact real plugin enhancements
 
 4. **Review the candidates** (Bucket A program rules need corpus-sweep verification BEFORE being applied; Bucket B skills can be appended directly; Bucket C backlogs can be filed immediately).
 
-5. **Apply Bucket A + B**. Commit + push. Bump plugin patch version.
+5. **Apply Bucket A + B**, then SHIP via the PR-METHOD — a VERSION-LESS
+   fix+test PR (owner directive 2026-06-17: *"field dont need to have version to
+   issue pr. all versions are given by gatekeeper"* — the same applies to the
+   benchmark/enhancement capture path). Do NOT bump `plugin.json` /
+   `marketplace.json` and do NOT direct-push: open ONE PR to `vibeic/vibe-ic`
+   base `main` carrying only the rule/skill change + its regression test, gated
+   by `gatekeeper_review.py --version-by-gatekeeper`. The **gatekeeper** assigns
+   the next strictly-monotonic version at merge (`gatekeeper_assign_version.py`)
+   and owns the milestone-cadence decision — see `vibe-ic:gatekeeper-loop` and
+   `vibe-ic:core-agent-loop` §Step 3.
 
 6. **Verify forward**: the NEXT benchmark run should pick up the rule
    automatically. If the same design now passes from a fresh run without

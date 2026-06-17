@@ -1,7 +1,7 @@
 """Q3 — handoff_bundle_check: the COMPLETENESS-CONTRACT gate for a Field
 deep-resolution handoff.
 
-A bundle ADMITs only when ALL SIX contract items hold:
+A bundle ADMITs only when ALL SEVEN contract items hold:
   (1) root-cause statement per peeled layer (>=1), each naming station/program
   (2) candidate.patch non-empty + applies clean (git apply --check)
   (3) two-depth regression: surface test + deeper-layer test (>=2 files OR
@@ -9,8 +9,10 @@ A bundle ADMITs only when ALL SIX contract items hold:
   (4) clean-room: two INDEPENDENT 0-residual rounds
   (5) fix_surface_classify verdict = ROOT-CAUSE (PRODUCER), not surface
   (6) chip-AGNOSTIC candidate (source_chip_agnostic_check clean on patched files)
+  (7) version-less candidate (patch does NOT bump a .claude-plugin version
+      file — the gatekeeper assigns ALL versions at merge)
 
-§4.05 fail-closed: each of the six missing-one variants → INCOMPLETE naming
+§4.05 fail-closed: each of the seven missing-one variants → INCOMPLETE naming
 the gap; an INCOMPLETE bundle NEVER ADMITs.
 
 The fixtures build a REAL throwaway git repo so `git apply --check` runs for
@@ -207,6 +209,7 @@ def test_complete_bundle_admits(tmp_path: Path) -> None:
         "root_cause_per_layer", "candidate_applies_clean",
         "two_depth_regression", "clean_room_two_rounds",
         "root_cause_not_surface", "chip_agnostic_candidate",
+        "version_less_candidate",
     }
 
 

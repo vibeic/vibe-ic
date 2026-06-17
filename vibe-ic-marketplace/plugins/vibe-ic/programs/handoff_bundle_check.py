@@ -43,11 +43,19 @@ ADMIT only when ALL of the following hold, else INCOMPLETE naming the gap:
       must come back clean on the files the candidate patches — a deep fix
       must not smuggle a chip / vendor / SKU literal into plugin source.
 
+  (7) VERSION-LESS candidate. The candidate.patch must NOT bump a version
+      file (`.claude-plugin/{plugin,marketplace}.json`). Owner directive
+      2026-06-17: "field dont need to have version to issue pr. all versions
+      are given by gatekeeper" — two in-flight bundles that each self-bumped
+      would COLLIDE; only the serialized gatekeeper assigns the next
+      strictly-monotonic version at merge (gatekeeper_assign_version.py). A
+      bundle whose patch touches a version file is INCOMPLETE.
+
 §4.05 (no-leak): this gate is FAIL-CLOSED. An INCOMPLETE bundle must NEVER
 ADMIT. A missing clean-room round, a single-layer test, a non-applying
-patch, a CONSUMER_ONLY/MIXED surface-classify verdict, or a chip-specific
-literal each independently BLOCK. ADMIT requires ALL SIX green. Nothing is
-waived; "missing item" never degrades to a warning.
+patch, a CONSUMER_ONLY/MIXED surface-classify verdict, a chip-specific
+literal, or a version-file bump each independently BLOCK. ADMIT requires ALL
+SEVEN green. Nothing is waived; "missing item" never degrades to a warning.
 
 chip-AGNOSTIC: this program hardcodes no chip / vendor / benchmark name; it
 operates purely on the bundle's structural contract.
@@ -299,6 +307,49 @@ def check_candidate(man: dict, bundle_root: Path, repo_root: Path
         return False, "candidate patch is not a unified diff", patch
     ok, detail = _git_apply_check(repo_root, patch)
     return ok, f"candidate.patch: {detail}", patch
+
+
+# ── (7) version-less candidate (gatekeeper assigns ALL versions) ─────────────
+# Owner directive 2026-06-17: "field dont need to have version to issue pr. all
+# versions are given by gatekeeper". A field bundle's candidate.patch must NOT
+# bump the version — two in-flight bundles that each self-bumped would COLLIDE;
+# only the serialized gatekeeper, landing one at a time onto an advancing main,
+# can assign a strictly-monotonic version (gatekeeper_assign_version.py). Detect
+# any hunk touching a version file (the .claude-plugin/{plugin,marketplace}.json
+# that the version gates read) and INCOMPLETE the bundle if found.
+_VERSION_FILE_RE = re.compile(
+    r"\.claude-plugin/(?:plugin|marketplace)\.json\s*$")
+
+
+def _patched_paths(body: str) -> List[str]:
+    """The file paths a unified diff touches, from its `+++ b/<path>` headers
+    (strip the `b/` prefix; ignore /dev/null deletions' destination)."""
+    paths: List[str] = []
+    for ln in body.splitlines():
+        if ln.startswith("+++ "):
+            p = ln[4:].strip()
+            if p in ("/dev/null",):
+                continue
+            if p.startswith("b/"):
+                p = p[2:]
+            # strip a trailing tab-timestamp some diff tools append
+            p = p.split("\t", 1)[0].strip()
+            paths.append(p)
+    return paths
+
+
+def check_version_less(patch: Optional[Path]) -> Tuple[bool, str]:
+    if patch is None or not patch.is_file():
+        return False, "no candidate.patch to scan for a version bump"
+    try:
+        body = patch.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        return False, f"candidate patch unreadable: {e}"
+    hits = [p for p in _patched_paths(body) if _VERSION_FILE_RE.search(p)]
+    if hits:
+        return False, ("candidate.patch bumps a version file (gatekeeper "
+                       f"assigns ALL versions): {sorted(set(hits))}")
+    return True, "version-less — gatekeeper assigns the version at merge"
 
 
 # ── (3) two-depth (surface + deeper-layer) regression ───────────────────────
@@ -590,6 +641,10 @@ def evaluate(bundle_dir: Optional[Path], manifest_path: Optional[Path],
     # (6) chip-AGNOSTIC candidate — composed
     ok6, d6 = check_chip_agnostic(patch, repo_root)
     rep.add("chip_agnostic_candidate", ok6, d6)
+
+    # (7) version-less candidate — the gatekeeper assigns ALL versions
+    ok7, d7 = check_version_less(patch)
+    rep.add("version_less_candidate", ok7, d7)
 
     # §4.05 fail-closed: ADMIT iff ALL items green; else INCOMPLETE.
     rep.verdict = "ADMIT" if all(it.ok for it in rep.items) else "INCOMPLETE"
