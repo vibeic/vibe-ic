@@ -584,6 +584,26 @@ _NONPORT_LABEL_WORDS = frozenset({
     "overview", "summary", "specification", "specifications", "interface",
     "clock", "reset", "latency",  # role NOUNS used as section labels here
 })
+# A markdown bullet line. Used for FORM-B CONTIGUITY: FORM-B harvests ONLY the
+# immediate contiguous bullet list directly under a port-section heading; a
+# non-blank NON-bullet line (intervening prose / table / a paragraph that
+# introduces a CSR bit-field list) ENDS that port list. (Step-2.7 §4.05: CSR
+# bit-fields listed as bold bullets AFTER a prose sentence under `## Inputs`
+# were wrongly fabricated as input ports.)
+_BULLET_LINE_RE = re.compile(r"^\s*[-*+]\s+")
+# A FORM-B bullet BODY that describes an INTERNAL STORAGE element (an FSM/state
+# register, a counter, a flip-flop, an internal signal) — NOT an interface port,
+# even under a port-section heading. NB: bare "register" is deliberately NOT
+# matched (a real port body like "8-bit register address" must stay a port);
+# only the storage-element phrasings are denied. (Step-2.7 §4.05: an FSM-state
+# register described in a bullet under `## Outputs` was wrongly fabricated as an
+# output port.) chip-AGNOSTIC English storage vocabulary.
+_INTERNAL_SIGNAL_BODY_RE = re.compile(
+    r"\b(?:fsm|finite\s+state|state\s+machine|state\s+register|"
+    r"internal(?:\s+(?:register|signal|net|state|reg|wire))?|"
+    r"counter|accumulator|shift\s+register|flip[-\s]?flop|flop)\b"
+    r"|hold(?:s|ing)\s+the\s+current",
+    re.IGNORECASE)
 
 
 def _heading_direction(heading_text: str) -> str:
@@ -603,10 +623,14 @@ def bold_label_ports(prompt: str) -> Dict[str, str]:
     FORM-A (inline direction `- **name (input, ...)**:`) is harvested
     unconditionally — its direction is explicit and unambiguous. FORM-B
     (`- **name:** <type-spec>` under a SHORT single-direction port-section
-    heading) is harvested ONLY when the bullet body is a port type-spec, the name
-    is not a reserved prose-label word, and the heading is a port-section
-    heading — so prose labels / internal nets / FSM-state bold bullets are never
-    fabricated as ports. Returns name→direction (lower). chip-AGNOSTIC."""
+    heading) is harvested ONLY when ALL of: the heading is a port-section
+    heading, the bullet is in the IMMEDIATE contiguous bullet list under it
+    (intervening prose / a table ends the list), the bullet body is a port
+    type-spec, the body does NOT describe an internal storage element
+    (FSM/state register / counter / flip-flop), and the name is not a reserved
+    prose-label word — so prose labels, CSR bit-fields introduced by a
+    paragraph, internal nets and FSM-state bold bullets are never fabricated as
+    ports. Returns name→direction (lower). chip-AGNOSTIC."""
     out: Dict[str, str] = {}
     cur_dir = ""
     for line in prompt.splitlines():
@@ -614,13 +638,22 @@ def bold_label_ports(prompt: str) -> Dict[str, str]:
         if hm:
             cur_dir = _heading_direction(hm.group(1))
             continue
-        # FORM-A — inline direction, always trustworthy.
+        # FORM-A — inline direction, always trustworthy (heading-independent).
         am = _BOLDLABEL_FORMA_RE.match(line)
         if am:
             out[am.group(1)] = am.group(2).lower()
             continue
         # FORM-B — bare name under a port-section heading, narrow guards.
         if not cur_dir:
+            continue
+        # CONTIGUITY: a blank line stays inside the list; a non-blank NON-bullet
+        # line (prose/table) ENDS the immediate port list under the heading, so
+        # later bullets (e.g. a CSR bit-field list introduced by a sentence) are
+        # NOT ports. §4.05 no-false-block.
+        if not line.strip():
+            continue
+        if not _BULLET_LINE_RE.match(line):
+            cur_dir = ""
             continue
         bm = _BOLDLABEL_FORMB_RE.match(line)
         if not bm:
@@ -630,6 +663,11 @@ def bold_label_ports(prompt: str) -> Dict[str, str]:
         if name.lower() in _NONPORT_LABEL_WORDS:
             continue
         if not _PORTSPEC_BODY_RE.match(body):
+            continue
+        # INTERNAL-STORAGE body: a bullet describing an FSM/state register,
+        # counter, flip-flop or internal signal is NOT an interface port even
+        # under a port-section heading. §4.05 no-false-block.
+        if _INTERNAL_SIGNAL_BODY_RE.search(body):
             continue
         # a concrete inline-direction (FORM-A) already recorded wins; otherwise
         # take the heading direction.

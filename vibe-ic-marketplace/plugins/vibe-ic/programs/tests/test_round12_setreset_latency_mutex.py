@@ -9,17 +9,33 @@ held =1, driving the DUT into its spec INVALID state ({i_S,i_R}=2'b11 -> o_Q<=0)
 so the output can never assert -> a FALSE TIMEOUT (rc=1) on correct, spec-faithful
 RTL. `_looks_like_reset`/`_looks_like_clear` do not match the bit name `i_R`.
 
-FIX (chip-agnostic, no-leak):
-  (a) NARROW: recognise a SCALAR SET/RESET mutex control (`i_S`/`i_R`, `S`/`R`,
-      `sd`/`rd`, `set_i`/`reset_i`) and HOLD IT INACTIVE during measurement.
-  (b) GENERIC backstop: on a plain (non-arbiter, non-datapath) TIMEOUT, retry
-      driving each held 1-bit input INACTIVE one at a time; adopt the first clean
-      measurement. Fires ONLY on status=='timeout' — never relaxes a MISMATCH.
+FIX (chip-agnostic, no-leak — Step-2.7 §4.05 remediated form):
+  The set/reset-bit handling is a SINGLE mechanism: a TIMEOUT-gated retry that is
+  NARROWLY NAME-ANCHORED. On a plain (non-arbiter, non-datapath) TIMEOUT, retry
+  driving each held 1-bit input WHOSE NAME IS A CONVENTIONAL SET/RESET-BIT
+  SPELLING (`i_S`/`i_R`, `S`/`R`, `sd`/`rd`, `set_i`/`reset_i`) INACTIVE one at a
+  time; adopt the first clean measurement. Fires ONLY on status=='timeout'.
+
+  Step-2.7 §4.05 NOTE — two earlier forms were §4.05 LEAKS and were removed:
+    * an UNCONDITIONAL classify-time reclassification of a set/reset-bit as a
+      reset (held inactive for the CANONICAL measurement) — that MASKED a real
+      off-by-N bug that only manifests at the bit's canonical (all-ones) value,
+      because a name like `set` is ALSO a legitimate functional control;
+    * a GENERIC retry that probed EVERY 1-bit input and adopted any clean
+      result — that masked real bugs gated by a generic control (`en`/`cfg`).
+  The discriminator is TIMEOUT (invalid-state never-asserts) vs MISMATCH (wrong
+  but present latency); only a TIMEOUT on a CONVENTIONALLY-named set/reset bit is
+  retried. An unconventionally-named mutex partner is a DELIBERATE under-fix
+  (false-timeout) — far safer than masking a real functional-control bug.
 
 This test:
-  POSITIVE — the affected correct SR flip-flop now PASSES (rc=0, measured==spec).
-  POSITIVE-GENERIC — an UNCONVENTIONALLY-named mutex partner (missed by the name
-      recogniser) is recovered by the generic per-1-bit-input retry.
+  POSITIVE — the affected correct SR flip-flop now PASSES (rc=0, measured==spec)
+      via the timeout-gated retry holding its CONVENTIONALLY-named partner `i_R`
+      inactive.
+  UNDER-FIX (§4.05 tradeoff) — an UNCONVENTIONALLY-named mutex partner is NOT
+      auto-recovered (it still TIMES OUT, rc=1): the narrow name-anchored retry
+      never deactivates an arbitrary 1-bit input, so it can never mask an
+      `en`/`cfg`-style functional-control bug.
   NEGATIVE (§4.05 no-leak) — a genuine 2-cycle SET latency vs spec=1 STILL
       MISMATCHes (rc=1), and a genuinely mis-latching SR-FF whose output never
       asserts STILL TIMES OUT (rc=1) after the retry exhausts.
@@ -141,13 +157,18 @@ def test_positive_sr_flipflop_passes(tmp_path):
     assert rc == 0, f"expected rc=0 (PASS), got rc={rc} verdict={rep.get('verdict')}"
     assert rep["verdict"] == "PASS"
     assert rep["measured_latency"] == 1
-    # the mutex partner i_R must be held inactive (in resets), not pinned all-ones
-    assert "i_R" in rep["resets"]
-    assert "i_R" not in rep["other_inputs_held_constant"]
+    # §4.05-remediated: the conventionally-named partner i_R is recovered by the
+    # TIMEOUT-gated retry (held inactive ONLY after the canonical measurement
+    # timed out), NOT by an unconditional classify-time reclassification.
+    assert rep.get("measured_with_inactive_bit") == "i_R"
+    # it is NOT pre-classified as a reset (that would mask canonical-value bugs).
+    assert "i_R" not in rep.get("resets", [])
 
 
-# ── POSITIVE (generic backstop): unconventional mutex name is recovered ──────
-def test_positive_generic_retry_unconventional_name(tmp_path):
+# ── UNDER-FIX (§4.05 tradeoff): an unconventionally-named partner is NOT
+#    auto-recovered — the narrow name-anchored retry never deactivates an
+#    arbitrary 1-bit input, so it can never mask an en/cfg-style functional bug.
+def test_unconventional_mutex_name_is_not_auto_recovered(tmp_path):
     m = _load()
     # the unconventional name is NOT matched by any reset/clear/set-reset-bit
     assert not m._looks_like_reset("xyz_part")
@@ -155,10 +176,14 @@ def test_positive_generic_retry_unconventional_name(tmp_path):
     assert not m._looks_like_setreset_bit("xyz_part")
     rtl = _write(tmp_path, SR_CORRECT_UNCONV)
     rc, rep = _run(m, rtl)
-    assert rc == 0, f"expected rc=0 via generic retry, got rc={rc} {rep.get('verdict')}"
-    assert rep["verdict"] == "PASS"
-    assert rep["measured_latency"] == 1
-    assert rep.get("measured_with_inactive_bit") == "xyz_part"
+    # DELIBERATE under-fix: a false-timeout on a correct-but-oddly-named SR-FF is
+    # far safer than masking a real functional-control bug; the design needs a
+    # conventional set/reset-bit name or an explicit --reset override.
+    assert rc == 1, f"expected rc=1 (deliberate under-fix), got rc={rc}"
+    assert rep["verdict"] == "TIMEOUT"
+    assert rep.get("measured_with_inactive_bit") is None
+    # xyz_part must NOT be among the retry candidates (name-anchored, not generic)
+    assert "xyz_part" not in rep.get("mutex_bit_retry_candidates", [])
 
 
 # ── NEGATIVE (§4.05 no-leak): genuine off-by-one STILL MISMATCHes ────────────
