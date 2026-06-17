@@ -40,11 +40,32 @@ recognises canonical pattern); no fix references `IC-A`,
 `BENCH-A`, `Vendor`, `usb_hid_tester`, `aid`, or any vendor IC name as
 detection logic.
 
+## Issue repo + per-tick scope (BINDING)
+
+**ALL vibe-ic issues are filed to, polled from, and closed on
+`vibeic/vibe-ic`** — the plugin's own GitHub repo. `AI_IC_design` is the
+local **design-WORKSPACE directory** (the mounted RTL/GDS tree), NOT an
+issue tracker; never poll or file issues against it. `poll.py` defaults to
+`vibeic/vibe-ic`.
+
+**Every tick performs TWO fresh checks (PRs FIRST, then issues):**
+1. **Open PRs** — `gh pr list --repo vibeic/vibe-ic --state open`. Any
+   non-draft open PR is auto-landed via the gatekeeper flow (cherry-pick onto
+   current main → `gatekeeper_review.py --version-by-gatekeeper` → Step-2.7
+   adversarial review → remediate every reproduced finding + pin a §4.05
+   regression test → `gatekeeper_assign_version.py --write` → enforced
+   re-gate → squash-merge). "Fix PR automatically" is a STANDING per-tick
+   action, not one-shot.
+2. **Open issues** — `poll.py` (below).
+
+A tick may report idle ONLY after BOTH checks were actually run THIS tick —
+never assert "no open PR" / "no issues" from memory or a prior tick.
+
 ## The four-step loop
 
 ### Step 1 — poll
 
-Run **before** any other action, deterministically:
+Run **before** any other action, deterministically (polls `vibeic/vibe-ic`):
 
 ```bash
 python3 plugins/vibe-ic/skills/core-agent-loop/programs/poll.py
@@ -444,11 +465,18 @@ dispatch to track.
 ## Cron-invocation template
 
 ```
-Run /core-agent-loop against reyerchu/AI_IC_design.
+Run /core-agent-loop against vibeic/vibe-ic.
 
-Each tick must:
-1. python3 plugins/vibe-ic/skills/core-agent-loop/programs/poll.py
-2. If rc=0 → output "(no actionable issues)" and exit.
+Each tick must (FRESH-CHECK both; PRs FIRST):
+0. gh pr list --repo vibeic/vibe-ic --state open  → for each non-draft open
+   PR, auto-land via the gatekeeper flow (cherry-pick onto current main →
+   gatekeeper_review.py --version-by-gatekeeper → Step-2.7 → remediate every
+   reproduced finding + pin a §4.05 test → gatekeeper_assign_version.py --write
+   → enforced re-gate → squash-merge). Never assert "no open PR" without
+   running this THIS tick.
+1. python3 plugins/vibe-ic/skills/core-agent-loop/programs/poll.py  (issues on
+   vibeic/vibe-ic)
+2. If rc=0 (and step 0 found no PR) → output "(no actionable issues)" and exit.
 3. If rc=1 → for each entry in `actionable[]`:
      a. Reproduce the bug from issue body + comments.
      b. Write a chip-AGNOSTIC fix + tests.

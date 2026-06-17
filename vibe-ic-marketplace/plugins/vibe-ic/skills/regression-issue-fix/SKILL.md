@@ -20,7 +20,7 @@ Skipping it reproduces the issue-#5 thrashing pattern.
 ```bash
 python3 vibe-ic-marketplace/plugins/vibe-ic/programs/regression_issue_intake_check.py \
     --issue-number <N> \
-    --repo reyerchu/AI_IC_design
+    --repo vibeic/vibe-ic
 ```
 
 Three possible outcomes:
@@ -81,8 +81,8 @@ cd vibe-ic-marketplace/plugins/vibe-ic && python3 -m pytest   # full suite
 git push origin main
 
 # 3) close + tag core-closed (the field-audit target marker)
-gh issue close <N> --repo reyerchu/AI_IC_design
-gh issue edit <N> --repo reyerchu/AI_IC_design --add-label core-closed
+gh issue close <N> --repo vibeic/vibe-ic
+gh issue edit <N> --repo vibeic/vibe-ic --add-label core-closed
 ```
 
 Post a 繁體中文 close comment in the canonical 5-section shape

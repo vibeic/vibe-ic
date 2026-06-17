@@ -246,7 +246,7 @@ Ask the user if they want to contribute this backlog to the community:
 If the user agrees:
 
 ```bash
-gh issue create --repo reyerchu/AI_IC_design \
+gh issue create --repo vibeic/vibe-ic \
     --title "ORGANIC: <title from YAML>" \
     --body "$(cat community/backlogs/ORGANIC-<file>.yaml)" \
     --label organic-backlog

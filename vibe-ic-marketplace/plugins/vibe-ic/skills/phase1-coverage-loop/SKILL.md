@@ -80,7 +80,7 @@ List CLOSED ORGANIC issues authored by me that carry `core-closed`
 and LACK `field-verified` (these are the audit targets):
 
 ```bash
-gh issue list --repo reyerchu/AI_IC_design --state closed \
+gh issue list --repo vibeic/vibe-ic --state closed \
     --author "@me" --label core-closed \
     --search "ORGANIC-phase1 in:title" --json number,title,labels \
   | python3 -c 'import sys,json; \
@@ -161,7 +161,7 @@ When the review agent reports concrete systematic gaps:
    If `pass: false` → fix the flagged literal, re-sanitize.
 3. File the GitHub issue (NO confirmation prompt):
    ```bash
-   gh issue create --repo reyerchu/AI_IC_design \
+   gh issue create --repo vibeic/vibe-ic \
        --title "ORGANIC-phase1: <title>" \
        --body "$(cat <yaml>)"
    ```
