@@ -655,20 +655,32 @@ def _int_literal(s: str):
 
 def _select_next_state_case(body: str, state_consts: dict):
     """Among ALL `case (...) ... endcase` blocks, return the (selector, body) of
-    the one whose arms assign declared STATE constants (the next-state case) —
-    NOT an output-decode case. None when no such case exists."""
-    best = None
+    the NEXT-STATE case — the one whose arms ASSIGN declared STATE constants on
+    the RHS — NOT an output-decode case. None when no such case exists.
+
+    §4.05 (Step-2.7 #810 r2): count state constants ONLY in the assignment RHS
+    (the text after `=`/`<=`), NEVER the case LABEL. An output-decode
+    `case (state) IDLE: out=1'b0; RUN: out=1'b1;` has its state constants ONLY in
+    the labels, so it must score ZERO here — otherwise it is wrongly returned
+    first and its non-ternary arms make the whole check SKIP, silently passing a
+    real next-state mismatch in a later `case (state)` next-state block."""
     for m in re.finditer(r"\bcase\s*\(\s*([A-Za-z_]\w*)\s*\)\s*(.*?)\bendcase\b",
                          body, re.DOTALL):
         cbody = m.group(2)
-        hits = 0
+        rhs_hits = 0
         for stmt in cbody.split(";"):
-            for tok in re.findall(r"\b([A-Za-z_]\w*)\b", stmt):
+            # drop the leading `LABEL:` (the case label) — its state constant is
+            # the selector value, not a next-state assignment.
+            arm = re.sub(r"^\s*[A-Za-z_]\w*\s*:", "", stmt, count=1)
+            asg = re.search(r"(?:<=|=)(.*)$", arm, re.DOTALL)
+            if not asg:
+                continue
+            for tok in re.findall(r"\b([A-Za-z_]\w*)\b", asg.group(1)):
                 if tok in state_consts:
-                    hits += 1
-        if hits >= 2:
+                    rhs_hits += 1
+        if rhs_hits >= 1:
             return (m.group(1), cbody)
-    return best
+    return None
 
 
 def check_single_input_moore(rtl_text: str, spec_text: str
@@ -710,18 +722,34 @@ def check_single_input_moore(rtl_text: str, spec_text: str
                 return ([], f"SKIP-arm-rhs-unresolved({label})")
             per_state[label] = (cv, neg, tdst, fdst)
     else:
-        # inline state-INDEPENDENT shape: `<sv> <= cond ? X : Y;`
-        tern = re.search(
-            r"[A-Za-z_]\w*\s*<=\s*([!~]?\s*[A-Za-z_]\w*)\s*\?\s*"
-            r"([A-Za-z_0-9']+)\s*:\s*([A-Za-z_0-9']+)\s*;", body)
-        if not tern:
+        # inline state-INDEPENDENT shape: `<sv> <= cond ? X : Y;`.
+        # §4.05 (Step-2.7 #810 r2) — this single-ternary fallback applies ONE
+        # mapping to EVERY state, so it is valid ONLY when the design is
+        # genuinely state-INDEPENDENT (exactly ONE next-state ternary mapping).
+        # A case-less but state-DEPENDENT FSM (`if (state==A) state<=in?B:A;
+        # else state<=in?A:B;`) has TWO distinct next-state mappings; applying
+        # state A's arm to state B fabricates a mismatch and BLOCKS correct RTL.
+        # So: collect EVERY next-state ternary whose BOTH destinations resolve to
+        # state constants; if ≥2 DISTINCT mappings exist the design is
+        # state-dependent → SKIP (fail-safe). Exactly one mapping → genuinely
+        # state-independent → apply to all states (so a state-independent design
+        # that contradicts a state-dependent table is still correctly flagged).
+        mappings = []
+        for tm in re.finditer(
+                r"[A-Za-z_]\w*\s*<=\s*([!~]?\s*[A-Za-z_]\w*)\s*\?\s*"
+                r"([A-Za-z_0-9']+)\s*:\s*([A-Za-z_0-9']+)\s*;", body):
+            tdst = _resolve_state(tm.group(2), sc)
+            fdst = _resolve_state(tm.group(3), sc)
+            if tdst is None or fdst is None:
+                continue  # a datapath ternary (not a next-state assignment)
+            cv = re.sub(r"^[!~]\s*", "", tm.group(1))
+            neg = tm.group(1).lstrip().startswith(("!", "~"))
+            mappings.append((cv, neg, tdst, fdst))
+        if not mappings:
             return ([], "SKIP-no-next-state-ternary")
-        cv = re.sub(r"^[!~]\s*", "", tern.group(1))
-        neg = tern.group(1).lstrip().startswith(("!", "~"))
-        tdst = _resolve_state(tern.group(2), sc)
-        fdst = _resolve_state(tern.group(3), sc)
-        if tdst is None or fdst is None:
-            return ([], "SKIP-inline-rhs-unresolved")
+        if len(set(mappings)) >= 2:
+            return ([], "SKIP-state-dependent-no-next-state-case")
+        cv, neg, tdst, fdst = mappings[0]
         for s in states:
             per_state[s] = (cv, neg, tdst, fdst)
 
