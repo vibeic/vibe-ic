@@ -13,17 +13,24 @@ below prevent it.
 
 ## Agent roster & check-in governance
 
-Vibe-IC is operated by **five agent roles**. They differ by *scenario* and,
-critically, by *what they are allowed to check in (git commit) to*. The rule
-that ties them together: **only the Core Agent edits the plugin or the MCP
-server; everyone else who finds a problem files it on the backlog and lets the
-Core Agent resolve it.**
+Vibe-IC is operated by a small set of agent roles. They differ by *scenario*
+and, critically, by *what they are allowed to check in (git commit) to*. The
+rule that ties them together: **only the Repo Gatekeeper edits the plugin or the
+MCP server and lands changes on `main`; everyone else who finds a problem files
+it upstream (backlog issue / version-less PR) and lets the Repo Gatekeeper
+resolve and land it.**
+
+> **2026-06-18 (owner directive):** the former **Core Agent** (author) and
+> **Gatekeeper** (land) are now ONE role — **`vibe-ic:repo-gatekeeper`** — which
+> BOTH authors the chip-AGNOSTIC fix AND gates it (machine checks + Step-2.7
+> §4.05 review), assigns the version at merge, and squash-merges. `core-agent`
+> and `gatekeeper` remain as aliases (same unrestricted check-in scope).
 
 | Agent | Scenario | May check in to | Plugin (`plugins/vibe-ic/`) | MCP (`mcp-eda/`) | On finding a problem |
 |---|---|---|---|---|---|
-| **Field Agent** (`vibe-ic:field-agent`) | General usage / audit | `community/backlogs/` only | ❌ | ❌ | → backlog → Core Agent |
-| **Benchmark Agent** (`vibe-ic:benchmark-agent`) | Maintainer official runs **+ end-user local runs** | `benchmark-data/` + `community/backlogs/` | ❌ | ❌ | → backlog → Core Agent |
-| **Core Agent** (`vibe-ic:core-agent`) | Maintainer | **everything** (owns plugin + MCP) | ✅ only role | ✅ only role | resolves backlog → fixes plugin/MCP |
+| **Field Agent** (`vibe-ic:field-agent`) | General usage / audit | `community/backlogs/` only | ❌ | ❌ | → backlog / version-less PR → Repo Gatekeeper |
+| **Benchmark Agent** (`vibe-ic:benchmark-agent`) | Maintainer official runs **+ end-user local runs** | `benchmark-data/` + `community/backlogs/` | ❌ | ❌ | → backlog / version-less PR → Repo Gatekeeper |
+| **Repo Gatekeeper** (`vibe-ic:repo-gatekeeper`) | Maintainer (author + gate + land) | **everything** (owns plugin + MCP) | ✅ only role | ✅ only role | authors the fix, gates it, assigns the version, lands it. Aliases: `core-agent` / `gatekeeper` |
 | **PM Agent** (`vibe-ic:pm-agent`) | Phase 1 — NL dialogue front door | — design-time, no repo check-in | — | — | — |
 | **IC Expert Agent** (`vibe-ic:ic-expert-agent`) | Phase 1 — technical review | — design-time, no repo check-in | — | — | — |
 
