@@ -189,6 +189,44 @@ _RST_NAME_HINT = ("rst", "reset")
 _CLEAR_NAME_EXACT = frozenset({"clr", "clear", "clrn", "clr_n", "clear_n",
                                "flush", "aclr", "sclr", "clra", "clrb"})
 
+# ORGANIC #810 r2 (Step-2.7 §4.05) — CLEAR/FLUSH/COMPLETION semantic vocabulary
+# for the structural clear-equivalent detector. A purely STRUCTURAL `if(ctrl)
+# reg<=const-zero` branch is NOT sufficient to hold `ctrl` inactive during the
+# canonical measurement: a load-bearing functional control (capture / mode /
+# hold / enable) buggy at its canonical (active) value produces the SAME shape
+# and the SAME timeout, so structurally relaxing it MASKS a real latency bug
+# (the exact failure class PR #3 removed for set/reset bits). The relaxation
+# therefore fires ONLY when `ctrl`'s NAME also carries clear/flush/completion
+# semantics — the motivating `Present_Processing_Completed` (a done/flush
+# control) matches via `complete`, while `capture`/`mode`/`hold` do not. Long,
+# unambiguous words match as a substring; short fragments only as a whole
+# underscore/camelCase segment (so `done` does not fire inside `abandoned`).
+_CLEAR_EQUIV_LONG = ("clear", "flush", "complete", "finish", "abort", "cancel",
+                     "purge", "drain", "discard", "invalidate", "reset")
+_CLEAR_EQUIV_SEG = frozenset({"clr", "rst", "done", "init", "eot", "eof"})
+
+
+def _clear_equiv_segments(name: str) -> List[str]:
+    segs: List[str] = []
+    for chunk in re.split(r"[_\W]+", name):
+        if not chunk:
+            continue
+        sub = re.findall(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+", chunk)
+        segs.extend(sub if sub else [chunk])
+    return [s.lower() for s in segs]
+
+
+def _looks_like_clear_equiv_name(name: str) -> bool:
+    """True iff `name` carries clear / flush / completion semantics — the NAME
+    gate the structural clear-equivalent relaxation requires so a load-bearing
+    functional control (capture/mode/hold/enable) is never held inactive (§4.05
+    no-leak). Long unambiguous words match anywhere; short fragments only as a
+    whole segment."""
+    low = name.lower()
+    if any(w in low for w in _CLEAR_EQUIV_LONG):
+        return True
+    return any(seg in _CLEAR_EQUIV_SEG for seg in _clear_equiv_segments(name))
+
 # SET/RESET SCALAR MUTEX CONTROL class (ORGANIC #809 round-12, C1). A sequential
 # primitive (SR / JK flip-flop, gated latch) carries a pair of MUTUALLY-EXCLUSIVE
 # 1-bit SET and RESET controls (`i_S`/`i_R`, `S`/`R`, `set`/`reset`, `sd`/`rd`,
@@ -738,11 +776,19 @@ def _is_zero_const(rhs: str) -> bool:
 def detect_structural_clear_equiv(
         rtl_text: str, top: str,
         scalar_input_names: "set") -> Dict[str, bool]:
-    """Return {input_name: active_low} for each 1-bit input that is a STRUCTURAL
-    synchronous-clear-equivalent (see the module-level note). PURE structural;
-    no simulation. `scalar_input_names` restricts the scan to 1-bit inputs so a
-    multi-bit data bus is never captured."""
+    """Return {input_name: active_low} for each 1-bit input that is a
+    clear-equivalent control: it has the STRUCTURAL `if(ctrl) reg<=const-zero`
+    signature AND a NAME carrying clear/flush/completion semantics
+    (`_looks_like_clear_equiv_name`). The name gate is REQUIRED (§4.05 no-leak):
+    a structural-only match also captures a load-bearing functional control
+    buggy at its canonical value, masking a real latency bug. PURE structural +
+    name; no simulation. `scalar_input_names` restricts the scan to 1-bit inputs
+    so a multi-bit data bus is never captured."""
     body = _module_body(rtl_text, top)
+    # strip comments so a commented-out assignment inside a branch body is never
+    # parsed as a real assign (false clear-signature) — and vice versa.
+    body = re.sub(r"//[^\n]*", " ", body)
+    body = re.sub(r"/\*.*?\*/", " ", body, flags=re.S)
     bool_params = _bool_param_map(rtl_text)
     found: Dict[str, bool] = {}
     # Walk sequential always-blocks only (an edge-sensitive sensitivity list).
@@ -814,9 +860,13 @@ def detect_structural_clear_equiv(
             if not assigns:
                 continue
             # the branch is a CLEAR signature iff EVERY assigned RHS is a pure
-            # constant (no datapath signal) AND at least one is a ZERO constant.
+            # constant (no datapath signal) AND at least one is a ZERO constant
+            # AND the control's NAME carries clear/flush/completion semantics
+            # (§4.05 no-leak: a structural-only match would also hold a
+            # load-bearing functional control inactive and mask a real bug).
             if (all(_is_const_expr(rhs, bool_params) for _, rhs in assigns)
-                    and any(_is_zero_const(rhs) for _, rhs in assigns)):
+                    and any(_is_zero_const(rhs) for _, rhs in assigns)
+                    and _looks_like_clear_equiv_name(sig)):
                 found.setdefault(sig, active_low)
     return found
 
