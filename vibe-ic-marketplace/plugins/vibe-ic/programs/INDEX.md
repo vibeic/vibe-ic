@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 698
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 698)
+- **Total programs (excluding helpers / shims):** 699
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 699)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 689 |
+| `any` | 690 |
 
 ## Alphabetical listing
 
@@ -345,6 +345,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `json_schema_check` | any | — | Deterministic JSON schema key checker. |
 | `jtag_protocol_synth` | any | — | IEEE 1149.1 JTAG TAP controller deterministic |
 | `klayout_deck_mode_check` | any | v0.112 | BACKLOG-v10 P0.1 enforcement loop. |
+| `kmap_truth_table_oracle_check` | any | — | prompt-disclosed combinational oracle gate. |
 | `l10_tb_conformance_check` | any | v0.53 | v0.53 plugin gate |
 | `l10_test_cases_cover_l3_constraints_check` | any | Wave 39 | Wave 39 / D1 |
 | `l11_otp_lock_dependencies_typed_check` | any | Wave 38 | Wave 38 / B5 |
@@ -770,7 +771,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (689 programs)
+### `any` (690 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1087,6 +1088,7 @@ _(no programs in this group)_
 - `json_schema_check` — Deterministic JSON schema key checker.
 - `jtag_protocol_synth` — IEEE 1149.1 JTAG TAP controller deterministic
 - `klayout_deck_mode_check` — BACKLOG-v10 P0.1 enforcement loop.  _[v0.112]_
+- `kmap_truth_table_oracle_check` — prompt-disclosed combinational oracle gate.
 - `l10_tb_conformance_check` — v0.53 plugin gate  _[v0.53]_
 - `l10_test_cases_cover_l3_constraints_check` — Wave 39 / D1  _[Wave 39]_
 - `l11_otp_lock_dependencies_typed_check` — Wave 38 / B5  _[Wave 38]_

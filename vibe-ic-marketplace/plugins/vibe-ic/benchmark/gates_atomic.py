@@ -332,6 +332,49 @@ def main():
         except Exception:
             pass
 
+    # 4b. PROMPT-DISCLOSED COMBINATIONAL ORACLE self-check (ORGANIC #716 —
+    # Prob122_kmap4). A prompt that hands a FULLY-SPECIFIED K-map / truth table
+    # IS a complete functional oracle, blind. No prior step simulated the RTL
+    # against it, so a K-map misread (Prob122_kmap4 author dropped `c`:
+    # `out=a^b^d` vs the K-map's `a^b^c^d`) compiled clean, passed every
+    # structural rule, emitted, then failed the hidden TB 121/232.
+    # kmap_truth_table_oracle_check parses a HIGH-CONFIDENCE complete oracle
+    # (clean truth table OR standard Gray K-map, scalar 1-bit axes, single 1-bit
+    # output, NO don't-cares) and simulates all 2^N combos; rc=1 = care-cell
+    # mismatch → emit-BLOCK. §4.05: it SKIPs (rc=0, non-blocking) on ANY
+    # ambiguity — don't-cares (a minimized correct design may legally drop a
+    # variable — Prob125_kmap3/Prob116), multi-bit bus axes (Prob113/Prob116),
+    # non-Gray column order, mux-selector transforms (Prob093). The
+    # reconstructed oracle was validated 16/16 against the dataset golden for
+    # Prob122_kmap4 + Prob057_kmap2, so a BLOCK is always a genuine bug.
+    ktt_json = wd / "kmap_oracle_findings.json"
+    rc, out = run([sys.executable, str(PROGRAMS / "kmap_truth_table_oracle_check.py"),
+                   "--prompt", str(prompt), "--rtl", str(sample),
+                   "--top", top_module, "--json", str(ktt_json)], env=cli_env)
+    # rc==1 → BLOCK; rc==0 → PASS or SKIP (read the JSON verdict to distinguish);
+    # rc==2 → tool absent / usage (disclosed, non-blocking — the hard iverilog
+    # gate still applies). A SKIP means no high-confidence complete oracle was
+    # parseable, so the check makes no claim either way.
+    ktt_verd = "BLOCK" if rc == 1 else ("DISCLOSED_TOOL_GAP" if rc == 2 else "PASS")
+    if rc == 0 and ktt_json.is_file():
+        try:
+            ktt_verd = json.loads(ktt_json.read_text()).get("verdict", "PASS")
+        except Exception:
+            pass
+    steps["kmap_truth_table_oracle"] = {"verdict": ktt_verd, "rc": rc,
+                                        "log": out[-500:]}
+    if rc == 1 and ktt_json.is_file():
+        try:
+            kj = json.loads(ktt_json.read_text())
+            if kj.get("verdict") == "BLOCK":
+                blocking.append({"program": "kmap_truth_table_oracle_check",
+                                 "rule": "kmap-truth-table-oracle-mismatch",
+                                 "message": ("authored RTL mismatches the "
+                                             "prompt-disclosed K-map/truth-table "
+                                             "oracle: " + str(kj.get("log", ""))[:300])})
+        except Exception:
+            pass
+
     # 5a. ENFORCED power-up determinism (v0.1.24 lesson) — repair reset-less
     #     registered outputs IN-PLACE before emit. Structural + prompt-blind.
     rc, out = run([sys.executable, str(PROGRAMS / "rtl_hygiene_lint.py"),
