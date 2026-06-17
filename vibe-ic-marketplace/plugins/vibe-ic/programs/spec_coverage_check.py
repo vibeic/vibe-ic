@@ -658,25 +658,49 @@ def _spec_byte_order_intent(evidence: str) -> Optional[str]:
 # indexed-drive + equality-assertion grammar; no chip / signal-name literal.
 _TB_INDEXED_DRIVE_RE = re.compile(
     r"\b([A-Za-z_]\w*)\s*\[\s*([A-Za-z_]\w*)\s*\]")     # vec[i]  (variable index)
-_TB_ORDER_EQ_RE = re.compile(
-    r"(?:===|!==|==|!=)")                                # an equality comparator
+# An ORDERING ASSERTION: an equality whose BOTH operands are vector REFERENCES (a
+# bare identifier, or an identifier indexed by a VARIABLE) — i.e. `out === frame`
+# or `out[i] === frame[i]`. Critically NEITHER operand may be a numeric/sized
+# literal, so `i == 4` (loop counter vs constant) and `junk[i] == 8'h00` (a bit
+# vs a literal) are NOT ordering assertions. This is the "packed result ===
+# ordered source" check that proves the arrival order maps to the bit positions.
+_TB_ORDER_ASSERT_RE = re.compile(
+    r"([A-Za-z_]\w*)(?:\s*\[\s*[A-Za-z_]\w*\s*\])?\s*"
+    r"(?:===|!==|==|!=)\s*"
+    r"([A-Za-z_]\w*)(?:\s*\[\s*[A-Za-z_]\w*\s*\])?(?!\s*[\w'])")
 
 
-def _tb_exercises_byte_order_region(tb_clean: str) -> bool:
-    """True iff the TB structurally exercises a serial bit ORDERING: it drives a
-    vector with a VARIABLE bit index (a per-bit loop `vec[i]`) AND contains an
-    equality comparison (the ordering assertion that relates the ordered arrival
-    to the packed result). Merely declaring a vector, or driving only constant-
-    index bits, or having no equality check, is NOT exercising the order — the
-    gap stays real. chip-AGNOSTIC, comment-stripped grammar."""
+def _tb_exercises_byte_order_region(
+        tb_clean: str, rtl_ports_lower: Optional[set] = None) -> bool:
+    """True iff the TB structurally exercises a serial bit ORDERING.
+
+    Requires ALL of: (1) a loop construct, (2) a per-bit indexed drive `vec[i]`
+    of some vector, and (3) an ORDERING ASSERTION — a vector===vector equality
+    (`out === frame`, never `counter == literal` or `bit == literal`) in which
+    one operand is the bit-indexed-driven vector AND, when the RTL port set is
+    known, one operand is a DUT PORT (so the assertion checks the DUT's packing,
+    not a self-comparison of unrelated TB scratch).
+
+    §4.05 no-leak: incidental loop + `scratch[i]=i` + `i==4` (or `junk[i]==8'h00`)
+    does NOT count — those carry no vector===vector assertion tying a bit-driven
+    vector to the DUT, so a TB that never verifies the ordering still GAPs.
+    chip-AGNOSTIC, comment-stripped grammar."""
     if not tb_clean:
         return False
-    indexed = _TB_INDEXED_DRIVE_RE.search(tb_clean)
-    has_eq = _TB_ORDER_EQ_RE.search(tb_clean)
-    # also require a loop construct so a single ambiguous vec[i] (e.g. a stray
-    # local index) is not enough — a real ordering drive iterates the bits.
-    has_loop = bool(re.search(r"\bfor\b|\brepeat\b|\bforeach\b|\bwhile\b", tb_clean))
-    return bool(indexed and has_eq and has_loop)
+    if not re.search(r"\bfor\b|\brepeat\b|\bforeach\b|\bwhile\b", tb_clean):
+        return False
+    indexed_vecs = {m.group(1).lower()
+                    for m in _TB_INDEXED_DRIVE_RE.finditer(tb_clean)}
+    if not indexed_vecs:
+        return False
+    ports = {p.lower() for p in (rtl_ports_lower or set())}
+    for m in _TB_ORDER_ASSERT_RE.finditer(tb_clean):
+        operands = {m.group(1).lower(), m.group(2).lower()}
+        ties_drive = bool(operands & indexed_vecs)
+        ties_dut = (not ports) or bool(operands & ports)
+        if ties_drive and ties_dut:
+            return True
+    return False
 
 
 # ORGANIC #770 (R13C1) — does the RTL STRUCTURALLY declare any `signed`
@@ -1808,7 +1832,7 @@ def attribute_coverage(items: List[ChecklistItem], tb_text: Optional[str],
                 and re.search(r"\b" + re.escape(tok.strip().lower()) + r"\b",
                               tb_low)
                 for tok in it.coverage_tokens)
-            region = _tb_exercises_byte_order_region(tb_clean)
+            region = _tb_exercises_byte_order_region(tb_clean, rtl_ports_lower)
             it.covered = bool(region or token_hit)
             if region and token_hit:
                 it.coverage_note = ("TB drives an indexed per-bit ordered stimulus "

@@ -121,6 +121,17 @@ _ADDR_SELECTOR_RE = re.compile(
 # terror, merrily). chip-AGNOSTIC: keyed on generic error vocabulary only.
 _SIGNAL_ERR_TOKENS = frozenset({
     'error', 'err', 'fail', 'abort', 'timeout', 'reject', 'invalid'})
+# UNAMBIGUOUS multi-letter error words that may appear GLUED inside a single
+# segment as a derivational form — `rxfailure`, `txaborted`, `pktrejected`,
+# `parityfailure`, `crcfailure`, `rxtimeout`, `dataerror`. Unlike the short
+# `err` (embedded in the common non-error word `interrupt`), these full words do
+# NOT occur inside ordinary non-error identifiers, so they are safe to match as a
+# substring ANYWHERE in the name. This restores detection of glued all-lowercase
+# error flags that the segment prefix/suffix rule alone drops (Step-2.7 §4.05:
+# a genuine mid-FSM error/abort/reject/failure flag must fire regardless of
+# naming convention). `interrupt`/`interrupt_valid` carry none of these and stay
+# exempt. chip-AGNOSTIC.
+_LONG_ERR_SUBSTRINGS = ('error', 'failure', 'abort', 'reject', 'timeout')
 
 
 def _signal_segments(name: str) -> List[str]:
@@ -153,7 +164,12 @@ def _signal_is_error(name: str) -> bool:
         for tok in _SIGNAL_ERR_TOKENS:
             if seg == tok or seg.startswith(tok) or seg.endswith(tok):
                 return True
-    return False
+    # Glued derivational forms (rxfailure / txaborted / pktrejected) where the
+    # error word is internal to the segment: caught via the unambiguous
+    # multi-letter substrings (never present inside `interrupt`-style non-error
+    # names). §4.05 no-leak.
+    low = name.lower()
+    return any(sub in low for sub in _LONG_ERR_SUBSTRINGS)
 
 
 def _is_fault_state(label) -> bool:
