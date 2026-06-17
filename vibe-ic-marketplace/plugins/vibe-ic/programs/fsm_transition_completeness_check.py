@@ -493,6 +493,285 @@ def check_onehot_continuous_assign(
     return (findings, "CHECKED-ONEHOT")
 
 
+# --------------------------------------------------------------------------- #
+# SINGLE-1-BIT-INPUT MOORE TRANSITION-FUNCTION CONFORMANCE (#810)              #
+# --------------------------------------------------------------------------- #
+# The #791 extension above checks one-hot CONTINUOUS-ASSIGN edge PRESENCE. It
+# is BLIND to the most common FSM shape — a `case (state)`-or-inline Moore
+# machine that drives a NEXT-state via a ternary (`next = in ? X : Y`). A fresh
+# author can wire such an FSM with the RIGHT edge SET but the WRONG per-input
+# mapping (e.g. a state-INDEPENDENT `state <= in ? B : A` for a table whose
+# transitions are state-DEPENDENT) — the hidden TB then mismatches on every
+# cycle that exercises the wrong arm, yet every structural lint passes. The
+# header above (lines 13-45) deliberately left this to a behavioural TB BECAUSE
+# the wrong-but-reachable target "is not structurally separable from a correct
+# design WITHOUT the spec's intended transition table". The arrow-grammar
+# prompt SUPPLIES that intended table — so with `--spec` we CAN evaluate it.
+#
+# Measured class (VerilogEval iccad2023): Prob107_fsm1s + Prob109_fsm1 round-17
+# samples ship a state-INDEPENDENT next-state that contradicts the prompt's
+# state-DEPENDENT table (118/230 and 79/228 hidden-TB mismatches) while every
+# structural gate passes. This check catches them by EVALUATING the RTL's
+# next-state ternary for in in {0,1} per state and comparing to the table.
+#
+# §4.05 NO-FALSE-BLOCK — scoped TIGHT to the ONE shape that is unambiguously
+# checkable, SKIP everything else (a miss is acceptable, a false flag is not):
+#   * PROMPT must parse as a single-1-bit-input FULL Moore table: every state
+#     has BOTH in=0 and in=1 edges, conditions are bare `0`/`1` OR a single
+#     `NAME=0/1` (NOT two inputs `j`/`k`, NOT multi-input `r1=0,r2=1`, NOT a
+#     Mealy edge-output `--x=0 (z=0)-->`, NOT `(always go to next cycle)`), and
+#     no contradictory rows. Two-input (Prob110/111), Mealy (Prob088), arbiter
+#     (Prob148) and one-hot-equation (Prob091/099/135/143/150) prompts SKIP.
+#   * RTL must be the case/inline Moore shape: a registered state, declared
+#     state localparams matching the prompt names, and EVERY prompt state's
+#     next-state given by a `cond ? X : Y` ternary whose X/Y resolve to declared
+#     states. A comparison-cond (`(in==1'b1)?`), if/else-if arm, begin/end arm,
+#     or any unresolved RHS → SKIP that whole design (never a false fire).
+#   * The branch variable must be a declared 1-bit module INPUT (guards against
+#     mis-reading a derived signal as the input).
+#   * The OUTPUT mismatch is INFO-only (never blocks): on the real corpus it
+#     never fired and only adds false-block surface (output encoding can be
+#     legitimately inverted by state-name), so only the NEXT-state mismatch is
+#     an ERROR.
+# NO-CHEAT: reads ONLY the prompt (the legitimate spec the author was given) +
+# the candidate RTL — never the hidden TB / _ref.sv.
+# chip-AGNOSTIC: pure Verilog/arrow-grammar structure, no chip/state literal.
+
+# Prompt arrow row, capturing the optional per-state output and the edge:
+#   `STATE (out) --cond--> NEXT`  or  `STATE --cond--> NEXT`
+_MOORE_EDGE_RE = re.compile(
+    r"^\s*([A-Za-z_]\w*)\s*(?:\(([^)]*)\)\s*)?--\s*([^>]*?)\s*-->\s*"
+    r"([A-Za-z_]\w*)\s*$", re.MULTILINE)
+
+
+def parse_single_input_moore_table(spec_text: str):
+    """Parse the prompt into a single-1-bit-input full Moore table. Return
+    {'table': {(state,in_val): next}, 'out': {state: 0/1}, 'states': [...],
+     'named_input': name|None} or None when the prompt is not that shape."""
+    rows = []
+    for m in _MOORE_EDGE_RE.finditer(spec_text):
+        rows.append((m.group(1), (m.group(2) or "").strip(),
+                     m.group(3).strip(), m.group(4)))
+    if len(rows) < 2:
+        return None
+    state_out = {}
+    for src, outp, _c, _d in rows:
+        if outp != "" and src not in state_out:
+            state_out[src] = outp
+    in_names = set()
+    parsed = []  # (src, dst, in_val)
+    for src, _o, cond, dst in rows:
+        c = cond
+        if "(" in c or "," in c:        # Mealy edge-output / multi-input → bail
+            return None
+        m2 = re.match(r"^([A-Za-z_]\w*)\s*=\s*([01])$", c)
+        if m2:
+            in_names.add(m2.group(1))
+            parsed.append((src, dst, int(m2.group(2))))
+        elif re.match(r"^[01]$", c):
+            in_names.add("__BARE__")
+            parsed.append((src, dst, int(c)))
+        else:                            # prose cond ("always go to next") → bail
+            return None
+    named = in_names - {"__BARE__"}
+    if "__BARE__" in in_names and named:  # mixed bare/named → bail
+        return None
+    if len(named) > 1:                    # two named inputs (j/k) → bail
+        return None
+    table = {}
+    for src, dst, val in parsed:
+        if (src, val) in table and table[(src, val)] != dst:
+            return None                   # contradictory (arbiter) table → bail
+        table[(src, val)] = dst
+    srcs = {s for (s, _v) in table}
+    for s in srcs:                        # require BOTH in=0 and in=1 per state
+        if (s, 0) not in table or (s, 1) not in table:
+            return None
+    out_map = {}
+    for s, o in state_out.items():
+        mm = re.match(r"^(?:[A-Za-z_]\w*\s*=\s*)?([01])$", o)
+        if not mm:                        # multi-output / non-binary → bail
+            return None
+        out_map[s] = int(mm.group(1))
+    return {"table": table, "out": out_map, "states": sorted(srcs),
+            "named_input": (sorted(named)[0] if named else None)}
+
+
+def _parse_state_localparams(body: str, prompt_states) -> dict:
+    """Map declared state NAME→value-string for localparam/parameter — limited
+    to names that ARE prompt states (so data constants are never swept in)."""
+    out = {}
+    pset = set(prompt_states)
+    for m in re.finditer(
+            r"\b(?:localparam|parameter)\b\s*(?:\[[^\]]*\]\s*)?"
+            r"((?:[A-Za-z_]\w*\s*=\s*[^;,]+[,;]\s*)+)", body):
+        for am in re.finditer(r"([A-Za-z_]\w*)\s*=\s*([^;,]+)[,;]", m.group(1)):
+            if am.group(1) in pset:
+                out[am.group(1)] = am.group(2).strip()
+    return out
+
+
+def _module_input_names(body: str) -> "set":
+    """Set of declared `input` port identifiers (ANSI `input [w] name,` or
+    non-ANSI `input name;`). Each `input` keyword introduces ONE port up to the
+    next `,`/`;`/newline-keyword; we take the LAST identifier on that segment
+    (after an optional `wire|reg|logic` + range) so `input wire [3:0] sel` →
+    `sel`. Used to confirm the RTL branches on an actual input."""
+    names = set()
+    for m in re.finditer(
+            r"\binput\b((?:\s+(?:wire|reg|logic))?\s*(?:\[[^\]]*\]\s*)?\s*)"
+            r"([A-Za-z_]\w*)", body):
+        names.add(m.group(2))
+    return names
+
+
+def _resolve_state(tok: str, state_consts: dict):
+    """Resolve a next-state RHS token to a prompt state NAME: a direct name, or a
+    numeric literal equal to a declared state's value."""
+    tok = tok.strip()
+    if tok in state_consts:
+        return tok
+    tv = _int_literal(tok)
+    if tv is not None:
+        for nm, cv in state_consts.items():
+            if _int_literal(cv) == tv:
+                return nm
+    return None
+
+
+def _int_literal(s: str):
+    s = s.strip()
+    m = re.match(r"^\d+\s*'\s*[sS]?\s*([bBdDhH])\s*([0-9a-fA-F_]+)$", s)
+    if m:
+        digits = m.group(2).replace("_", "")
+        try:
+            return int(digits, {"b": 2, "d": 10, "h": 16}[m.group(1).lower()])
+        except ValueError:
+            return None
+    if re.match(r"^\d+$", s):
+        return int(s)
+    return None
+
+
+def _select_next_state_case(body: str, state_consts: dict):
+    """Among ALL `case (...) ... endcase` blocks, return the (selector, body) of
+    the one whose arms assign declared STATE constants (the next-state case) —
+    NOT an output-decode case. None when no such case exists."""
+    best = None
+    for m in re.finditer(r"\bcase\s*\(\s*([A-Za-z_]\w*)\s*\)\s*(.*?)\bendcase\b",
+                         body, re.DOTALL):
+        cbody = m.group(2)
+        hits = 0
+        for stmt in cbody.split(";"):
+            for tok in re.findall(r"\b([A-Za-z_]\w*)\b", stmt):
+                if tok in state_consts:
+                    hits += 1
+        if hits >= 2:
+            return (m.group(1), cbody)
+    return best
+
+
+def check_single_input_moore(rtl_text: str, spec_text: str
+                             ) -> Tuple[List[Finding], str]:
+    """Single-1-bit-input Moore transition-FUNCTION conformance vs the prompt's
+    arrow-grammar table. Returns (findings, 'CHECKED-MOORE' | 'SKIP-<reason>').
+    Only NEXT-state mismatches are ERROR; output mismatches are INFO."""
+    if not spec_text:
+        return ([], "SKIP-no-spec")
+    prompt = parse_single_input_moore_table(spec_text)
+    if prompt is None:
+        return ([], "SKIP-prompt-not-single-input-moore")
+    body = _strip_comments(rtl_text)
+    states = prompt["states"]
+    sc = _parse_state_localparams(body, states)
+    if len(sc) < 2:
+        return ([], "SKIP-no-state-localparams")
+
+    per_state = {}  # state → (cond_var, negated, true_dst, false_dst)
+    ns_case = _select_next_state_case(body, sc)
+    if ns_case is not None:
+        _sel, cbody = ns_case
+        for stmt in cbody.split(";"):
+            lab = re.match(r"\s*([A-Za-z_]\w*)\s*:", stmt)
+            if not lab or lab.group(1) not in sc:
+                continue
+            label = lab.group(1)
+            arm = stmt[lab.end():]
+            tern = re.search(
+                r"(?:<=|=)\s*([!~]?\s*[A-Za-z_]\w*)\s*\?\s*"
+                r"([A-Za-z_0-9']+)\s*:\s*([A-Za-z_0-9']+)", arm)
+            if not tern:
+                return ([], f"SKIP-arm-not-ternary({label})")
+            cv = re.sub(r"^[!~]\s*", "", tern.group(1))
+            neg = tern.group(1).lstrip().startswith(("!", "~"))
+            tdst = _resolve_state(tern.group(2), sc)
+            fdst = _resolve_state(tern.group(3), sc)
+            if tdst is None or fdst is None:
+                return ([], f"SKIP-arm-rhs-unresolved({label})")
+            per_state[label] = (cv, neg, tdst, fdst)
+    else:
+        # inline state-INDEPENDENT shape: `<sv> <= cond ? X : Y;`
+        tern = re.search(
+            r"[A-Za-z_]\w*\s*<=\s*([!~]?\s*[A-Za-z_]\w*)\s*\?\s*"
+            r"([A-Za-z_0-9']+)\s*:\s*([A-Za-z_0-9']+)\s*;", body)
+        if not tern:
+            return ([], "SKIP-no-next-state-ternary")
+        cv = re.sub(r"^[!~]\s*", "", tern.group(1))
+        neg = tern.group(1).lstrip().startswith(("!", "~"))
+        tdst = _resolve_state(tern.group(2), sc)
+        fdst = _resolve_state(tern.group(3), sc)
+        if tdst is None or fdst is None:
+            return ([], "SKIP-inline-rhs-unresolved")
+        for s in states:
+            per_state[s] = (cv, neg, tdst, fdst)
+
+    for s in states:
+        if s not in per_state:
+            return ([], f"SKIP-state-{s}-not-in-rtl")
+
+    # the branch variable must be a declared module input (guards a mis-read).
+    inputs = _module_input_names(body)
+    branch_vars = {per_state[s][0] for s in states}
+    if inputs and not (branch_vars & inputs):
+        return ([], "SKIP-branch-var-not-an-input")
+
+    def eval_next(state, in_val):
+        cv, neg, tdst, fdst = per_state[state]
+        return tdst if (in_val ^ (1 if neg else 0)) else fdst
+
+    findings: List[Finding] = []
+    for (s, v), want in prompt["table"].items():
+        got = eval_next(s, v)
+        if got != want:
+            findings.append(Finding(
+                "fsm-prompt-transition-mismatch", "ERROR", s,
+                f"prompt discloses {s!r} --{v}--> {want!r} but the RTL "
+                f"next-state for state {s!r} on in={v} evaluates to {got!r}. "
+                "The hidden TB exercising that (state,input) will mismatch — "
+                "wire EACH (state,input) edge from the disclosed transition "
+                "table; a state-INDEPENDENT next-state cannot implement a "
+                "state-DEPENDENT table."))
+
+    # OUTPUT conformance — INFO only (never blocks): match `out = (state==NAME)`
+    out_one = set()
+    om = re.search(r"\bassign\s+\w+\s*=\s*(.*?);", body, re.DOTALL)
+    if om:
+        for cmpm in re.finditer(r"==\s*([A-Za-z_0-9']+)", om.group(1)):
+            nm = _resolve_state(cmpm.group(1), sc)
+            if nm:
+                out_one.add(nm)
+    if out_one:
+        for s, wo in prompt["out"].items():
+            go = 1 if s in out_one else 0
+            if go != wo:
+                findings.append(Finding(
+                    "fsm-prompt-output-mismatch", "INFO", s,
+                    f"prompt discloses output {wo} in state {s!r} but the RTL "
+                    f"output decode gives {go} (advisory — verify the Moore "
+                    "output decode; output encoding may be state-name relative)."))
+    return (findings, "CHECKED-MOORE")
+
+
 def check_rtl_dir(rtl_dir: Path) -> Tuple[List[Tuple[Path, Finding]], str]:
     out: List[Tuple[Path, Finding]] = []
     any_checked = False
@@ -513,13 +792,16 @@ def check_rtl_dir(rtl_dir: Path) -> Tuple[List[Tuple[Path, Finding]], str]:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="Structural FSM next-state completeness check (#522; "
-                    "#791 one-hot continuous-assign extension).")
+                    "#791 one-hot continuous-assign extension; #810 "
+                    "single-1-bit-input Moore transition-function conformance).")
     ap.add_argument("target", help="RTL file OR directory")
     ap.add_argument("--json", default=None, help="write JSON findings here")
     ap.add_argument("--spec", default=None,
                     help="spec/prompt file disclosing the transition table — "
                          "enables the one-hot continuous-assign next-state "
-                         "completeness check (#791). Single-RTL targets only.")
+                         "completeness check (#791) AND the single-1-bit-input "
+                         "Moore transition-function conformance check (#810). "
+                         "Single-RTL targets only.")
     ap.add_argument("--warn-only", action="store_true",
                     help="exit 0 even on ERROR findings (advisory mode)")
     args = ap.parse_args(argv)
@@ -551,6 +833,13 @@ def main(argv=None) -> int:
                 status = ohstatus
             elif status.startswith("SKIP") and ohstatus.startswith("SKIP"):
                 status = f"{status}+{ohstatus}"
+            # #810: single-1-bit-input Moore transition-function conformance.
+            mfl, mstatus = check_single_input_moore(rtl_text, spec_text)
+            findings += [{"file": str(p), **asdict(fd)} for fd in mfl]
+            if status.startswith("SKIP") and mstatus == "CHECKED-MOORE":
+                status = mstatus
+            elif status.startswith("SKIP") and mstatus.startswith("SKIP"):
+                status = f"{status}+{mstatus}"
 
     summary = {
         "status": status,
