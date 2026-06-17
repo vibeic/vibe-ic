@@ -189,6 +189,44 @@ _RST_NAME_HINT = ("rst", "reset")
 _CLEAR_NAME_EXACT = frozenset({"clr", "clear", "clrn", "clr_n", "clear_n",
                                "flush", "aclr", "sclr", "clra", "clrb"})
 
+# ORGANIC #810 r2 (Step-2.7 §4.05) — CLEAR/FLUSH/COMPLETION semantic vocabulary
+# for the structural clear-equivalent detector. A purely STRUCTURAL `if(ctrl)
+# reg<=const-zero` branch is NOT sufficient to hold `ctrl` inactive during the
+# canonical measurement: a load-bearing functional control (capture / mode /
+# hold / enable) buggy at its canonical (active) value produces the SAME shape
+# and the SAME timeout, so structurally relaxing it MASKS a real latency bug
+# (the exact failure class PR #3 removed for set/reset bits). The relaxation
+# therefore fires ONLY when `ctrl`'s NAME also carries clear/flush/completion
+# semantics — the motivating `Present_Processing_Completed` (a done/flush
+# control) matches via `complete`, while `capture`/`mode`/`hold` do not. Long,
+# unambiguous words match as a substring; short fragments only as a whole
+# underscore/camelCase segment (so `done` does not fire inside `abandoned`).
+_CLEAR_EQUIV_LONG = ("clear", "flush", "complete", "finish", "abort", "cancel",
+                     "purge", "drain", "discard", "invalidate", "reset")
+_CLEAR_EQUIV_SEG = frozenset({"clr", "rst", "done", "init", "eot", "eof"})
+
+
+def _clear_equiv_segments(name: str) -> List[str]:
+    segs: List[str] = []
+    for chunk in re.split(r"[_\W]+", name):
+        if not chunk:
+            continue
+        sub = re.findall(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+", chunk)
+        segs.extend(sub if sub else [chunk])
+    return [s.lower() for s in segs]
+
+
+def _looks_like_clear_equiv_name(name: str) -> bool:
+    """True iff `name` carries clear / flush / completion semantics — the NAME
+    gate the structural clear-equivalent relaxation requires so a load-bearing
+    functional control (capture/mode/hold/enable) is never held inactive (§4.05
+    no-leak). Long unambiguous words match anywhere; short fragments only as a
+    whole segment."""
+    low = name.lower()
+    if any(w in low for w in _CLEAR_EQUIV_LONG):
+        return True
+    return any(seg in _CLEAR_EQUIV_SEG for seg in _clear_equiv_segments(name))
+
 # SET/RESET SCALAR MUTEX CONTROL class (ORGANIC #809 round-12, C1). A sequential
 # primitive (SR / JK flip-flop, gated latch) carries a pair of MUTUALLY-EXCLUSIVE
 # 1-bit SET and RESET controls (`i_S`/`i_R`, `S`/`R`, `set`/`reset`, `sd`/`rd`,
@@ -653,6 +691,186 @@ def _looks_like_reset(name: str) -> bool:
     return any(h in lo for h in _RST_NAME_HINT) or _looks_like_clear(lo)
 
 
+# ─── STRUCTURAL synchronous-CLEAR-equivalent detection (ORGANIC #810) ─────────
+# The name allowlist `_CLEAR_NAME_EXACT` ({clr,clear,flush,aclr,sclr,...}) is
+# the ONLY way the gate recognises a clear/flush control today. A design may
+# carry a 1-bit input that is a synchronous-CLEAR / FLUSH-equivalent under a
+# DIFFERENT spelling the allowlist misses (e.g. `Present_Processing_Completed`,
+# `abort`, `kill`, `halt_clr`): when ASSERTED it DOMINATINGLY forces the
+# state/output register(s) to their reset/zero constant EVERY clock, exactly
+# like `if (clear) State <= '0;`. Pinned to the all-ones data constant by the
+# canonical TB, such a control is held ACTIVE — permanently flushing the FSM so
+# the measured output (`State != 0`) can NEVER assert → a FALSE LATENCY-TIMEOUT
+# on CORRECT RTL (`cvdp_copilot_rs_232_0001`). This is the SAME false-TIMEOUT
+# family the gate documents (C1 SR-mutex, C5 clear/flush) — only the spelling
+# escapes the name anchor.
+#
+# `detect_structural_clear_equiv` is a PURE structural parse (no simulation):
+# for each 1-bit input it scans the module's sequential always-blocks for a
+# DOMINATING guarded branch `(else) if (<sig at one polarity>) <reg> <= <const>`
+# whose body assigns ONLY constants (no datapath signal RHS) and drives at
+# least one register to a ZERO constant — the unmistakable synchronous-clear
+# signature. It returns {name: active_low} so the caller can HOLD the control
+# in its NON-clearing (INACTIVE) value during measurement, the same way an
+# explicit clear is held inactive. The ACTIVE polarity is INFERRED from the
+# branch condition (`if(S)`/`S==HIGH`/`S==1'b1` → active-HIGH; `if(!S)`/`if(~S)`
+# /`S==LOW`/`S==1'b0` → active-LOW) so "hold inactive" pins the control to the
+# value that does NOT clear, NOT blindly to all-ones.
+#
+# §4.05 NO-LEAK — this detector is NARROW by construction AND its USE is
+# TIMEOUT-GATED + ONE-AT-A-TIME (the caller holds each candidate inactive only
+# after a plain TIMEOUT and adopts the FIRST clean measurement), so it can
+# only RELAX a structural permanent-flush timeout, never mask a real bug:
+#   * the branch body must assign ONLY constant literals — an ordinary
+#     data/enable input whose branch loads a SIGNAL (`if (load) r <= data_in`)
+#     or increments (`if (en) cnt <= cnt + 1`) is NOT a constant assignment and
+#     is NEVER flagged, so a genuine data/enable dependency is preserved;
+#   * at least one register must be driven to ZERO — a SET-to-all-ones control
+#     (not a clear) does not match;
+#   * applied ONLY to 1-bit scalar inputs, so it can never capture a data bus;
+#   * because adoption is TIMEOUT-gated, a measured-but-WRONG latency (MISMATCH)
+#     is NEVER retried — a genuine off-by-N still hard-blocks;
+#   * if holding the candidate inactive does NOT make the output assert, the
+#     original TIMEOUT stands.
+# chip-AGNOSTIC: pure Verilog grammar (guarded const-zero register branch); no
+# chip / vendor / SKU / signal-name literal.
+def _bool_param_map(rtl_text: str) -> Dict[str, int]:
+    """Map each `parameter`/`localparam` whose default is a 1-bit boolean
+    constant (`1'b1`, `1`, `1'b0`, `0`) to that 0/1 value — so a clear branch
+    written `if (S == HIGH)` (HIGH a parameter = 1'b1) resolves its polarity."""
+    bm: Dict[str, int] = {}
+    for nm, val in re.findall(
+            r"\b(?:parameter|localparam)\s+(?:\[[^\]]*\]\s*)?"
+            r"([A-Za-z_]\w*)\s*=\s*([^,;\n)]+)", rtl_text):
+        mm = re.match(r"^\s*(?:\d+)?'[bB]([01])\s*$|^\s*([01])\s*$", val)
+        if mm:
+            bm[nm] = int(mm.group(1) if mm.group(1) is not None else mm.group(2))
+    return bm
+
+
+def _is_const_expr(rhs: str, bool_params: Dict[str, int]) -> bool:
+    """True iff `rhs` is a pure CONSTANT (sized/unsized literal, replication of a
+    1-bit literal, or a boolean parameter) — i.e. carries NO datapath signal. A
+    branch body that assigns a constant to every register it touches is a CLEAR
+    /SET, never a data load or an arithmetic update."""
+    s = rhs.strip()
+    if s in bool_params:
+        return True
+    return bool(re.fullmatch(
+        r"(?:\d+)?'[hbdoHBDO][0-9a-fA-FxXzZ_]+"     # sized literal  4'b0000 8'hFF
+        r"|\d+"                                       # plain decimal  0  255
+        r"|'[01]"                                     # '0  '1
+        r"|\{\s*\d*\s*\{\s*1'b[01]\s*\}\s*\}", s))    # {N{1'b0}}  {1'b0}
+
+
+def _is_zero_const(rhs: str) -> bool:
+    """True iff `rhs` is a constant ZERO literal (the reset/clear value)."""
+    s = rhs.strip()
+    return bool(re.fullmatch(
+        r"(?:\d+)?'[hbdoHBDO]0+"                      # 4'b0000  8'h00  'd0
+        r"|'0"                                        # '0
+        r"|0+"                                        # 0  00
+        r"|\{\s*\d*\s*\{\s*1'b0\s*\}\s*\}", s))        # {N{1'b0}}
+
+
+def detect_structural_clear_equiv(
+        rtl_text: str, top: str,
+        scalar_input_names: "set") -> Dict[str, bool]:
+    """Return {input_name: active_low} for each 1-bit input that is a
+    clear-equivalent control: it has the STRUCTURAL `if(ctrl) reg<=const-zero`
+    signature AND a NAME carrying clear/flush/completion semantics
+    (`_looks_like_clear_equiv_name`). The name gate is REQUIRED (§4.05 no-leak):
+    a structural-only match also captures a load-bearing functional control
+    buggy at its canonical value, masking a real latency bug. PURE structural +
+    name; no simulation. `scalar_input_names` restricts the scan to 1-bit inputs
+    so a multi-bit data bus is never captured."""
+    body = _module_body(rtl_text, top)
+    # strip comments so a commented-out assignment inside a branch body is never
+    # parsed as a real assign (false clear-signature) — and vice versa.
+    body = re.sub(r"//[^\n]*", " ", body)
+    body = re.sub(r"/\*.*?\*/", " ", body, flags=re.S)
+    bool_params = _bool_param_map(rtl_text)
+    found: Dict[str, bool] = {}
+    # Walk sequential always-blocks only (an edge-sensitive sensitivity list).
+    for am in re.finditer(r"always\s*@\s*\(([^)]*)\)", body):
+        if "edge" not in am.group(1):
+            continue
+        blk = body[am.end():]
+        nxt = re.search(r"\balways\b", blk)
+        if nxt:
+            blk = blk[:nxt.start()]
+        # every guarded branch `(else )?if ( COND )` inside the block
+        for im in re.finditer(
+                r"\b(?:else\s+)?if\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)\s*", blk):
+            cond = im.group(1).strip()
+            sig: Optional[str] = None
+            active_low: Optional[bool] = None
+            m_bare = re.fullmatch(r"\s*([A-Za-z_]\w*)\s*", cond)
+            m_neg = re.fullmatch(r"\s*[!~]\s*([A-Za-z_]\w*)\s*", cond)
+            m_cmp = re.fullmatch(
+                r"\s*([A-Za-z_]\w*)\s*==\s*([A-Za-z_0-9']+)\s*", cond)
+            if m_bare:
+                sig, active_low = m_bare.group(1), False
+            elif m_neg:
+                sig, active_low = m_neg.group(1), True
+            elif m_cmp:
+                sig = m_cmp.group(1)
+                rhs = m_cmp.group(2)
+                rv = bool_params.get(rhs)
+                if rv is None:
+                    mm = re.fullmatch(r"(?:\d+)?'[bB]([01])|([01])", rhs)
+                    if mm:
+                        rv = int(mm.group(1) if mm.group(1) is not None
+                                 else mm.group(2))
+                if rv is None:
+                    continue
+                active_low = (rv == 0)
+            else:
+                continue
+            if sig not in scalar_input_names:
+                continue
+            # the branch body: a `begin ... end` block (balanced) or a single
+            # statement up to the next `;`.
+            tail = blk[im.end():]
+            if tail.lstrip().startswith("begin"):
+                i = tail.find("begin")
+                depth = 0
+                j = i
+                while j < len(tail):
+                    if tail[j:j + 5] == "begin":
+                        depth += 1
+                        j += 5
+                        continue
+                    if (tail[j:j + 3] == "end"
+                            and (j + 3 >= len(tail)
+                                 or not (tail[j + 3].isalnum()
+                                         or tail[j + 3] == "_"))):
+                        depth -= 1
+                        if depth == 0:
+                            break
+                        j += 3
+                        continue
+                    j += 1
+                bodytxt = tail[i + 5:j]
+            else:
+                semi = tail.find(";")
+                bodytxt = tail[:semi + 1] if semi >= 0 else ""
+            assigns = re.findall(
+                r"\b([A-Za-z_]\w*)\s*(?:\[[^\]]+\])?\s*<=\s*([^;]+);", bodytxt)
+            if not assigns:
+                continue
+            # the branch is a CLEAR signature iff EVERY assigned RHS is a pure
+            # constant (no datapath signal) AND at least one is a ZERO constant
+            # AND the control's NAME carries clear/flush/completion semantics
+            # (§4.05 no-leak: a structural-only match would also hold a
+            # load-bearing functional control inactive and mask a real bug).
+            if (all(_is_const_expr(rhs, bool_params) for _, rhs in assigns)
+                    and any(_is_zero_const(rhs) for _, rhs in assigns)
+                    and _looks_like_clear_equiv_name(sig)):
+                found.setdefault(sig, active_low)
+    return found
+
+
 # ─── per-output latency inference from intermediate registers (#740 G3) ───────
 # A SECOND output port often has NO event->output handshake to MEASURE (the
 # canonical TB measures ONE event->output relationship), yet its intended
@@ -1095,15 +1313,30 @@ def build_measurement_tb(top: str, clk: Optional[PortInfo],
     width so a parameterised design elaborates with no out-of-scope param.
 
     `inactive_inputs` (ORGANIC #770 round-2, Part C) is the set of `others` port
-    NAMES to drive to their INACTIVE value (all-ZEROS) instead of the all-active
-    data constant. It is the ONE-HOT arbiter retry mechanism: the COMPETING
-    request inputs of a bus arbiter are held inactive so the measured request
-    (the event) wins arbitration and the measured grant is reachable. An empty /
+    NAMES to drive to their INACTIVE value instead of the all-active data
+    constant. It is the ONE-HOT arbiter retry mechanism: the COMPETING request
+    inputs of a bus arbiter are held inactive so the measured request (the
+    event) wins arbitration and the measured grant is reachable. An empty /
     None set is the byte-for-byte unchanged default stimulus (§4.05 no-leak: a
     non-arbiter design never populates this set, so its TB is identical).
+
+    ORGANIC #810 — `inactive_inputs` may instead be a DICT {name: bit} where
+    `bit` is the per-port INACTIVE single-bit value ("1'b0" or "1'b1"). A
+    STRUCTURAL synchronous-clear-equivalent control (see
+    `detect_structural_clear_equiv`) is held in its NON-clearing value, whose
+    polarity is INFERRED — an active-HIGH clear is held LOW ("1'b0"), an
+    active-LOW clear held HIGH ("1'b1"). A plain `set` keeps the legacy
+    all-ZEROS drive (the arbiter / mutex-bit retries), so those paths are
+    byte-for-byte unchanged.
     """
     params = params or {}
-    inactive_inputs = inactive_inputs or set()
+    # `inactive_inputs` accepts a set (legacy all-zeros) or a dict
+    # {name: inactive_bit}. Normalise to {name: bit}; a set maps every name to
+    # the all-zeros bit "1'b0" (the unchanged arbiter / mutex-bit behaviour).
+    if isinstance(inactive_inputs, dict):
+        inactive_map: Dict[str, str] = dict(inactive_inputs)
+    else:
+        inactive_map = {nm: "1'b0" for nm in (inactive_inputs or set())}
     localparams = localparams or set()
     L: List[str] = []
     L.append("`timescale 1ns/1ps")
@@ -1179,8 +1412,12 @@ def build_measurement_tb(top: str, clk: Optional[PortInfo],
         # data constant (so the measured request wins arbitration). Only the
         # ports the caller named in `inactive_inputs` are affected; every other
         # `other` keeps its byte-for-byte unchanged data-constant drive.
-        if o.name in inactive_inputs:
-            val = f"{{{_width_token(o, params)}{{1'b0}}}}"
+        # ORGANIC #810 — a STRUCTURAL clear-equivalent is held in its inferred
+        # NON-clearing value (`inactive_map[o.name]` = "1'b0" for an active-HIGH
+        # clear, "1'b1" for an active-LOW clear), replicated across the port
+        # width; the arbiter / mutex-bit set path maps to the unchanged all-zeros.
+        if o.name in inactive_map:
+            val = f"{{{_width_token(o, params)}{{{inactive_map[o.name]}}}}}"
         elif input_const < 0:
             val = f"{{{_width_token(o, params)}{{1'b1}}}}"
         else:
@@ -1896,6 +2133,65 @@ def run_latency_conformance(
             if r_status == "ok" and r_err == "" and r_measured is not None:
                 measured, status, err = r_measured, "ok", ""
                 report["measured_with_inactive_bit"] = _o.name
+                break
+
+    # ORGANIC #810 — STRUCTURAL synchronous-CLEAR-EQUIVALENT on-timeout retry.
+    # On a plain (non-arbiter, non-datapath) TIMEOUT that the name-based clear
+    # allowlist did NOT catch, a 1-bit input that the canonical all-ones constant
+    # pins ACTIVE may be a synchronous-CLEAR / FLUSH-equivalent — when asserted it
+    # DOMINATINGLY forces the state/output register(s) to ZERO every clock (the
+    # `if (S) State <= '0;` signature), so the measured output can NEVER assert
+    # (`cvdp_copilot_rs_232_0001` / `Present_Processing_Completed`). RETRY holding
+    # each STRUCTURALLY-detected clear-equivalent in its inferred NON-clearing
+    # (INACTIVE) value ONE AT A TIME and adopt the FIRST clean measurement.
+    #
+    # §4.05 NO-LEAK — the detector is structurally NARROW (a guarded branch that
+    # assigns ONLY constants and drives a register to ZERO; never a data load or
+    # arithmetic update) AND the retry is TIMEOUT-gated + one-at-a-time, so it can
+    # ONLY relax a structural permanent-flush timeout, never mask a real bug:
+    #   * fires ONLY on status=="timeout" (a measured-but-wrong MISMATCH is NEVER
+    #     retried — a genuine off-by-N still hard-blocks);
+    #   * an ordinary data/enable input is NOT a constant-only zeroing branch, so
+    #     it is NEVER flagged → its real latency dependency is preserved;
+    #   * the inferred ACTIVE polarity makes "hold inactive" pin the control to
+    #     the NON-clearing value (LOW for an active-HIGH clear), not all-ones;
+    #   * excluded for arbiter-class / datapath_mode (their own retries own those);
+    #   * if NO clear-equivalent deactivation makes the output assert, the
+    #     original TIMEOUT stands (a genuinely mis-latching design still blocks).
+    if (status == "timeout" and err == "" and not is_arbiter_class
+            and not datapath_mode):
+        _scalar_in_names = {n for d, w, n in ports
+                            if d == "input" and n != event
+                            and _width_of(w) == 1}
+        _clear_equiv = detect_structural_clear_equiv(rtl_text, top,
+                                                     _scalar_in_names)
+        # only `others` (constant-driven) ports matter — a reset already held
+        # inactive needs no retry; the event is excluded above.
+        _other_names = {o.name for o in others}
+        _clear_cands = {nm: al for nm, al in _clear_equiv.items()
+                        if nm in _other_names}
+        report["structural_clear_equiv_candidates"] = {
+            nm: ("active_low" if al else "active_high")
+            for nm, al in _clear_cands.items()}
+        for _nm, _active_low in _clear_cands.items():
+            # hold the clear-equivalent at its NON-clearing value: an active-HIGH
+            # clear is held LOW ("1'b0"), an active-LOW clear held HIGH ("1'b1").
+            _inactive_bit = "1'b1" if _active_low else "1'b0"
+            ctb = build_measurement_tb(
+                top, clk, resets, event_port, output_port, others,
+                reset_active_low_map, input_const, max_cycles, params=params,
+                inactive_inputs={_nm: _inactive_bit}, localparams=localparams)
+            cwork = Path(tempfile.mkdtemp(prefix="latconf_clearequiv_"))
+            try:
+                c_measured, c_status, c_err = measure_latency(
+                    rtl_path, ctb, cwork, context_files=context_files)
+            finally:
+                shutil.rmtree(cwork, ignore_errors=True)
+            if c_status == "ok" and c_err == "" and c_measured is not None:
+                measured, status, err = c_measured, "ok", ""
+                report["measured_with_inactive_clear_equiv"] = _nm
+                report["inactive_clear_equiv_polarity"] = (
+                    "active_low" if _active_low else "active_high")
                 break
 
     if err:
