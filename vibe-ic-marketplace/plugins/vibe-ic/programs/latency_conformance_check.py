@@ -48,6 +48,29 @@ The generated testbench:
     asserts within the bounded window). An N-stage shift register measures
     EXACTLY N for N=0,1,2,3,…
 
+COUNTING ORIGIN (``--latency-origin``, ORGANIC #744 round-17)
+------------------------------------------------------------
+The gate MEASURES with a fixed EXCLUSIVE origin: it counts the posedges STRICTLY
+AFTER the event-latch edge E (E itself is cycle 0). A spec may enumerate the SAME
+timing INCLUSIVELY — counting the event-latch cycle itself as cycle 1 (the
+canonical "1 cycle registering inputs + N cycles compute + 1 cycle asserting the
+output = N+2" decomposition). An author who transcribes that inclusive literal
+verbatim into ``--expect`` would see a false off-by-one MISMATCH on CORRECT RTL
+(``measured`` reads one lower than the inclusive literal).
+
+``--latency-origin inclusive`` lets the author DECLARE that ``--expect`` is stated
+in the inclusive convention; the gate then compares ``measured + 1`` (the
+exclusive measurement plus the event-latch cycle) against ``--expect``. The
+default ``exclusive`` is the original behaviour, byte-for-byte.
+
+This is a DECLARED CONVENTION, NOT a ``+-1`` TOLERANCE: under a FIXED origin the
+comparison stays EXACT, so a real one-cycle latency bug still MISMATCHes — a
+design one cycle EARLY measures exclusive E-1 (inclusive E ≠ the declared E+1) and
+one cycle LATE measures exclusive E+1 (inclusive E+2 ≠ E+1). A blanket "accept
+measured+1==expected" WOULD leak (it would silently pass an exclusive-spec design
+whose RTL asserts one cycle early), which is precisely why the resolution is an
+author-declared origin rather than a tolerance band.
+
 --expect RESOLUTION
 -------------------
 ``--expect`` is a literal arithmetic expression over the module's parameters
@@ -1937,6 +1960,7 @@ def run_latency_conformance(
     input_const: int, max_cycles_override: Optional[int],
     mode: str = "latency", allow_no_handshake: bool = False,
     context_files: Optional[List[Path]] = None,
+    latency_origin: str = "exclusive",
 ) -> Tuple[int, Dict]:
     """Run the gate; return (rc, report). rc is the program exit code.
 
@@ -2534,15 +2558,62 @@ def run_latency_conformance(
         return 3, report
 
     report["measured_latency"] = measured
-    if measured != expected:
+    # ORGANIC #744 round-17 — AUTHOR-DECLARED counting-origin convention.
+    #
+    # The gate MEASURES latency with a fixed EXCLUSIVE origin: it counts the
+    # posedges STRICTLY AFTER the event-latch edge E (E itself is cycle 0). A spec
+    # may instead enumerate the SAME timing INCLUSIVELY — counting the event-latch
+    # cycle itself as cycle 1 (the canonical "1 cycle IDLE->BUSY + N cycles BUSY +
+    # 1 cycle DONE = N+2" decomposition). An author who faithfully transcribes the
+    # inclusive spec literal into --expect then sees an off-by-one that the #744
+    # hint already explains but the gate could not RESOLVE — a false MISMATCH on
+    # CORRECT RTL.
+    #
+    # `--latency-origin inclusive` lets the author DECLARE that --expect is stated
+    # in the inclusive convention; the gate then compares the inclusive latency
+    # (measured + 1, i.e. the exclusive measurement plus the event-latch cycle)
+    # against --expect. Default `exclusive` => measured == expected, the v1.1.17
+    # behaviour byte-for-byte (§4.05 no-leak for every existing invocation).
+    #
+    # §4.05 NO-LEAK — this is a DECLARED CONVENTION, not a +-1 TOLERANCE. Under a
+    # FIXED origin the comparison stays EXACT, so a real +-1 latency bug still
+    # MISMATCHes: a design 1 cycle EARLY measures exclusive E-1 (inclusive E), a
+    # design 1 cycle LATE measures exclusive E+1 (inclusive E+2) — neither equals
+    # the declared inclusive --expect=E+1. A blanket "accept measured+1==expected"
+    # WOULD leak (it accepts an exclusive-spec design whose RTL is 1 cycle early),
+    # which is exactly why the resolution is an author-declared origin, NOT a
+    # tolerance: the +1 is applied to ONE side under the author's explicit
+    # declaration, the gate never widens the accepted band to +-1.
+    origin = (latency_origin or "exclusive").lower()
+    report["latency_origin"] = origin
+    if origin == "inclusive":
+        # The latency the author declared is the inclusive count = exclusive
+        # measurement + the event-latch cycle.
+        measured_in_convention = measured + 1
+    else:
+        measured_in_convention = measured
+    report["measured_latency_in_convention"] = measured_in_convention
+    if measured_in_convention != expected:
         report["verdict"] = "MISMATCH"
-        report["reason"] = (f"measured latency {measured} != resolved spec "
-                            f"{expect}={expected}")
+        if origin == "inclusive":
+            report["reason"] = (
+                f"inclusive latency {measured_in_convention} (exclusive measured "
+                f"{measured} + the event-latch cycle) != resolved spec "
+                f"{expect}={expected}")
+        else:
+            report["reason"] = (f"measured latency {measured} != resolved spec "
+                                f"{expect}={expected}")
         return 1, report
 
     report["verdict"] = "PASS"
-    report["reason"] = (f"measured latency {measured} == resolved spec "
-                        f"{expect}={expected}")
+    if origin == "inclusive":
+        report["reason"] = (
+            f"inclusive latency {measured_in_convention} (exclusive measured "
+            f"{measured} + the event-latch cycle) == resolved spec "
+            f"{expect}={expected}")
+    else:
+        report["reason"] = (f"measured latency {measured} == resolved spec "
+                            f"{expect}={expected}")
     return 0, report
 
 
@@ -2599,6 +2670,18 @@ def main(argv=None) -> int:
                          "4*expected+16))")
     ap.add_argument("--mode", default="latency", choices=_MODES,
                     help="timing-conformance mode (only 'latency' is wired)")
+    ap.add_argument("--latency-origin", dest="latency_origin",
+                    choices=("exclusive", "inclusive"), default="exclusive",
+                    help="AUTHOR-DECLARED counting origin for --expect (#744 "
+                         "round-17). 'exclusive' (default, unchanged): --expect "
+                         "counts posedges AFTER the event-latch edge (that edge "
+                         "is cycle 0). 'inclusive': --expect counts the "
+                         "event-latch cycle itself as cycle 1 (the canonical "
+                         "'1 cycle in + N cycles compute + 1 cycle out = N+2' "
+                         "spec decomposition); the gate then compares measured+1 "
+                         "against --expect. This is a DECLARED convention, NOT a "
+                         "+-1 tolerance: a real 1-cycle-early/late latency bug "
+                         "still MISMATCHes under the fixed declared origin.")
     ap.add_argument("--allow-no-handshake", dest="allow_no_handshake",
                     action="store_true", default=False,
                     help="on a STREAMING design with no pulse->done handshake, "
@@ -2659,7 +2742,7 @@ def main(argv=None) -> int:
         reset_override=args.reset, reset_active_low_flag=args.reset_active_low,
         input_const=args.input_const, max_cycles_override=args.max_cycles,
         mode=args.mode, allow_no_handshake=args.allow_no_handshake,
-        context_files=context_files)
+        context_files=context_files, latency_origin=args.latency_origin)
 
     # ORGANIC #740 (G3) — SECOND-output per-output latency inference (ADVISORY).
     # Never changes rc: it only annotates the report + prints an advisory note.
@@ -2704,18 +2787,35 @@ def main(argv=None) -> int:
         print(f"LATENCY-TIMEOUT: output {args.output} never asserted within "
               f"{report['max_cycles']} cycles")
     elif verdict == "MISMATCH":
-        print(f"LATENCY-MISMATCH: measured={report['measured_latency']} but "
-              f"spec {expr}={report['expected_latency']}")
+        _conv = report.get("measured_latency_in_convention",
+                           report['measured_latency'])
+        if report.get("latency_origin") == "inclusive":
+            print(f"LATENCY-MISMATCH: inclusive latency {_conv} (exclusive "
+                  f"measured={report['measured_latency']} + the event-latch "
+                  f"cycle) but spec {expr}={report['expected_latency']}")
+        else:
+            print(f"LATENCY-MISMATCH: measured={report['measured_latency']} but "
+                  f"spec {expr}={report['expected_latency']}")
         # ORGANIC #744 (R3-2 author-UX hint) — counting-origin disambiguation.
         # `measured` counts posedges AFTER the event-latch edge (that edge is
         # t=0). A spec phrasing the SAME timing INCLUSIVELY (counting the latch
         # edge itself) reads one higher, so an author who transcribed the
         # inclusive literal into --expect sees an off-by-one that LOOKS like an
-        # RTL bug but is a counting-origin convention difference.
-        print("  hint (#744): `measured` counts posedges AFTER the event-latch "
-              "edge (that edge is t=0); a spec that counts INCLUSIVELY expects "
-              "measured+1 — re-check whether --expect uses the inclusive origin "
-              "before treating this as an RTL off-by-one.")
+        # RTL bug but is a counting-origin convention difference. Round-17: the
+        # hint now names the deterministic resolution — `--latency-origin
+        # inclusive` — so the author can DECLARE the convention instead of being
+        # told only to re-check. (The default origin stays exclusive, so the hint
+        # only ever fires when the author has NOT yet declared inclusive.)
+        if report.get("latency_origin") != "inclusive":
+            print("  hint (#744): `measured` counts posedges AFTER the "
+                  "event-latch edge (that edge is t=0); a spec that counts "
+                  "INCLUSIVELY expects measured+1. If your --expect is stated in "
+                  "the inclusive convention (e.g. a 'WIDTH+2 = 1 cycle in + WIDTH "
+                  "compute + 1 cycle out' spec), re-run with `--latency-origin "
+                  "inclusive` to declare it — that is an EXACT comparison under "
+                  "the declared origin, NOT a +-1 tolerance, so a real 1-cycle "
+                  "latency bug still blocks. Otherwise treat this as a real RTL "
+                  "off-by-one.")
     elif verdict == "PASS":
         print(f"latency-conformance ok: measured={report['measured_latency']} "
               f"== spec {expr}")
