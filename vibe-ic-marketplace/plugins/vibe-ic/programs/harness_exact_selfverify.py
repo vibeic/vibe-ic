@@ -268,12 +268,28 @@ _LINT_STYLE_SUPPRESS = (
 # `%Warning-CASEINCOMPLETE` — STILL BLOCKS (those are the genuine "forgot a
 # branch in pure-function logic" bug shapes the hidden TB catches).
 _LATCH_SIG_RE = re.compile(r"Latch inferred for signal '([^']+)'")
-# Clock / level-enable guard names. chip-AGNOSTIC name heuristic mirroring the
-# existing plugin patterns (cdc_async_input_check.py / arith_oracle_tb_gen.py):
-# only a CLOCK-class guard marks a latch as an INTENDED transparent latch; a
-# data-enable (`en`, `valid`, ...) does NOT and keeps the block.
-_CLOCK_GUARD_RE = re.compile(
-    r"^(clk|clock|gclk|clkg|clkgate|clk_?en|en_?clk|g)(\d+|_.*)?$", re.I)
+# Clock guard names. chip-AGNOSTIC name heuristic: only a genuine CLOCK guard
+# marks a latch as an INTENDED transparent latch (the VerilogEval waveform
+# RefModule idiom `always @(*) if(clock) p=a;`). A data-enable / clock-ENABLE /
+# clock-GATE-enable (`en`, `valid`, `clk_en`, `clken`, `clkgate`, a bare `g`)
+# does NOT — held high it is the SAME accidental forgot-the-else latch shape the
+# hidden TB catches, so it MUST keep blocking (Step-2.7 §4.05 #813 r2: the prior
+# set matched `g`/`clken`/`enclk`/`clk_en`/`clkgate`, laundering a real inferred
+# latch by merely renaming its data-enable guard).
+#   match:  clk, clock, ck, gclk, hclk/pclk/sclk/mclk/aclk, clk0, clk_main
+#   reject: g, en, enable, valid, sel, clk_en, clken, en_clk, enclk, clkg,
+#           clkgate, clk_gate, clk_ce
+_CLOCK_NAME_RE = re.compile(r"^(?:[hpsmaice]?clk|[hpsma]?clock|ck)(?:\d+|_[a-z0-9_]+)?$", re.I)
+_CLOCK_ENABLE_DENY_RE = re.compile(
+    r"_(?:en|enable|ce|gate|gat|g|valid|sel)(?:_|\d*$)", re.I)
+
+
+def _is_clock_guard(name: str) -> bool:
+    """True iff `name` is a GENUINE clock guard (clk/clock/ck family), NOT a
+    clock-enable / clock-gate-enable / data-enable. §4.05: only a real clock
+    level marks an INTENDED transparent latch; an enable-guarded latch is the
+    accidental forgot-the-else bug and keeps blocking."""
+    return bool(_CLOCK_NAME_RE.match(name)) and not _CLOCK_ENABLE_DENY_RE.search(name)
 
 
 def _strip_sv_comments(code: str) -> str:
@@ -318,7 +334,7 @@ def _is_intended_transparent_latch(code: str, sig: str) -> bool:
         if len(guards) != 1:
             return False  # zero or many ifs → not the clean single-guard idiom
         gm = re.match(r"^\s*!?\s*([A-Za-z_]\w*)\s*$", guards[0])
-        if not gm or not _CLOCK_GUARD_RE.match(gm.group(1)):
+        if not gm or not _is_clock_guard(gm.group(1)):
             return False  # data-enable guard / expression → keep blocking
         if len(sig_re.findall(body)) != 1:
             return False  # sig assigned more than once → keep blocking
