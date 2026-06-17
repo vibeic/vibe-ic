@@ -397,7 +397,16 @@ def evaluate(
         # §4.05 NO-LEAK: only kind=verification_checklist reaches this branch —
         # functional_vector / functional / cmd_response cases fall through to the
         # unchanged TB-evidence logic below.
-        if is_verification_checklist(c):
+        #
+        # CRITICAL (§4.05 no-leak, mirrors the #773 r2 _has_digital_signal
+        # guard): a case carrying a GENUINE DIGITAL signal (is_cmd_rsp, an
+        # opcode/cmd field, or a digital category token) is a real functional
+        # vector that the digital TB MUST exercise — a spurious
+        # `kind=verification_checklist` mislabel must NOT exempt it from the
+        # TB-evidence demand. So the checklist branch fires ONLY for a row that
+        # carries no digital signal; a digital case falls through and still
+        # FAILs without TB evidence.
+        if is_verification_checklist(c) and not _has_digital_signal(c, is_cmd_rsp):
             cls = classify_checklist(c)
             st = checklist_status(c) or "none"
             if cls == "satisfied":
