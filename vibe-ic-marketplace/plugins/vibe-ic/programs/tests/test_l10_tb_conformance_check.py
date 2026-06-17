@@ -143,6 +143,155 @@ def test_evaluate_uncovered_case():
 
 
 # ---------------------------------------------------------------------------
+# ORGANIC #808 — verification_checklist (DV-milestone) kind-scoping.
+#
+# NEW gap, surfaced after #799 unblocked Step-4: phase1 emits a project's DV
+# verification checklist table (e.g. OpenTitan-style) as L10
+# kind=verification_checklist rows (status Done/N/A/Waived/None) — DV PROCESS
+# MILESTONES, not TB-traceable functional vectors. The TB-evidence demand
+# counted EVERY checklist row as "lack evidence" -> hard-FAIL Step-4. These
+# tests pin the kind-scope: satisfied/deferred checklist rows are credited,
+# blank/None/FAIL rows surface as a (non-fatal) checklist gap, and
+# functional_vector / cmd_response cases STILL require TB evidence (§4.05).
+# ---------------------------------------------------------------------------
+def test_checklist_classify_helpers():
+    assert gate.is_verification_checklist({"kind": "verification_checklist"})
+    assert gate.is_verification_checklist({"kind": "dv_checklist"})
+    assert not gate.is_verification_checklist({"kind": "functional_vector"})
+    assert gate.classify_checklist({"status": "Done"}) == "satisfied"
+    assert gate.classify_checklist({"status": "N/A"}) == "satisfied"
+    assert gate.classify_checklist({"status": "Waived"}) == "satisfied"
+    assert gate.classify_checklist({"status": None}) == "checklist_gap"
+    assert gate.classify_checklist({"status": ""}) == "checklist_gap"
+    assert gate.classify_checklist({"status": "Fail"}) == "checklist_gap"
+
+
+def test_evaluate_checklist_done_credited_not_failed():
+    """POS — a Done/N/A/Waived checklist row is credited (ok), NOT a TB miss."""
+    cases = [
+        {"name": "spec_complete", "kind": "verification_checklist", "status": "Done"},
+        {"name": "csr_defined", "kind": "verification_checklist", "status": "N/A"},
+        {"name": "sec_cm", "kind": "verification_checklist", "status": "Waived"},
+    ]
+    results, ok, fail = gate.evaluate(cases, "// empty tb", "")
+    assert ok == 3 and fail == 0
+    assert gate.count_checklist_gaps(results) == 0
+    assert all(r["status"] == "pass" for r in results)
+
+
+def test_evaluate_checklist_none_is_gap_not_tb_fail():
+    """NEG-3 — a blank/None checklist row surfaces as a checklist gap
+    (review_required), NOT folded into fail_count, NOT blanket-passed."""
+    cases = [
+        {"name": "sim_smoke", "kind": "verification_checklist", "status": None},
+        {"name": "fpv_main", "kind": "verification_checklist"},  # no status field
+    ]
+    results, ok, fail = gate.evaluate(cases, "// empty tb", "")
+    assert ok == 0 and fail == 0          # not a TB-evidence failure
+    assert gate.count_checklist_gaps(results) == 2
+    assert all(r["status"] == "checklist_gap" for r in results)
+    assert all(r["review_required"] is True for r in results)
+
+
+def test_evaluate_checklist_explicit_fail_is_gap_not_blanket_pass():
+    """NEG-3 (explicit) — a checklist row with status=Fail is a checklist gap,
+    NOT a blanket pass; it stays review_required."""
+    cases = [{"name": "x", "kind": "verification_checklist", "status": "Fail"}]
+    results, ok, fail = gate.evaluate(cases, "// empty tb", "")
+    assert ok == 0 and fail == 0
+    assert gate.count_checklist_gaps(results) == 1
+    assert results[0]["status"] == "checklist_gap"
+    assert results[0]["review_required"] is True
+
+
+def test_evaluate_functional_vector_still_requires_tb_evidence():
+    """NEG-1 — a kind=functional_vector case with NO TB evidence STILL FAILs;
+    the checklist relaxation must never leak to genuine functional vectors."""
+    cases = [{"id": "VEC_GHOST", "kind": "functional_vector", "opcode": "FF"}]
+    results, ok, fail = gate.evaluate(cases, "// unrelated content", "")
+    assert fail == 1 and ok == 0
+    assert gate.count_checklist_gaps(results) == 0
+    assert results[0]["status"] == "fail"
+
+
+def test_evaluate_mixed_l10_functional_strict_checklist_scoped():
+    """MIXED — functional_vector (covered) + checklist Done (credited) +
+    checklist None (gap). The functional case keeps its strict TB demand."""
+    cases = [
+        {"id": "VEC_OK", "kind": "functional_vector"},
+        {"name": "spec_complete", "kind": "verification_checklist", "status": "Done"},
+        {"name": "sim_smoke", "kind": "verification_checklist", "status": None},
+    ]
+    tb_blob = "// task drives VEC_OK trace"
+    results, ok, fail = gate.evaluate(cases, tb_blob, "")
+    assert fail == 0
+    assert ok == 2  # functional_vector traced + 1 checklist Done
+    assert gate.count_checklist_gaps(results) == 1
+
+
+def test_evaluate_mixed_functional_miss_still_hard_fails():
+    """NO-LEAK — a functional_vector with NO trace STILL hard-FAILs even when
+    a sibling checklist row is Done (the checklist credit cannot mask it)."""
+    cases = [
+        {"id": "VEC_GHOST", "kind": "functional_vector"},
+        {"name": "spec_complete", "kind": "verification_checklist", "status": "Done"},
+    ]
+    results, ok, fail = gate.evaluate(cases, "// unrelated xyz", "")
+    assert fail == 1          # the functional miss dominates
+    assert ok == 1            # the checklist Done credited
+    assert gate.count_checklist_gaps(results) == 0
+
+
+def test_cli_checklist_only_l10_returns_pass_with_waivers(tmp_path):
+    """CLI/consumer-contract — an all-checklist L10 (mix Done + None), with an
+    empty TB, returns rc=3 PASS_WITH_WAIVERS (NOT rc=1 hard-FAIL): the
+    OpenTitan-style 103/103 false hard-FAIL is the defect this fixes."""
+    tb_dir, summary = _make_tree(
+        tmp_path,
+        [
+            {"name": "spec_complete", "kind": "verification_checklist", "status": "Done"},
+            {"name": "csr_defined", "kind": "verification_checklist", "status": "N/A"},
+            {"name": "sim_smoke", "kind": "verification_checklist", "status": None},
+        ],
+        {"tb_dummy.v": "// no functional vectors here"},
+        "")
+    out = tmp_path / "out.json"
+    rc = gate.main([
+        "--l10", str(tmp_path / "phase1" / "generated_docs" / "L10.json"),
+        "--tb-dir", str(tb_dir),
+        "--summary", str(summary),
+        "--out", str(out),
+    ])
+    assert rc == 3
+    data = json.loads(out.read_text())
+    assert data["total"] == 3
+    assert data["ok"] == 2          # Done + N/A credited
+    assert data["fail"] == 0        # NOT a hard-FAIL
+    assert data["checklist_gaps"] == 1
+
+
+def test_cli_checklist_plus_functional_miss_still_hard_fails(tmp_path):
+    """CLI NO-LEAK — a functional_vector with no TB trace alongside checklist
+    rows STILL hard-FAILs (rc=1); the checklist scoping never relaxes it."""
+    tb_dir, summary = _make_tree(
+        tmp_path,
+        [
+            {"id": "VEC_GHOST", "kind": "functional_vector"},
+            {"name": "spec_complete", "kind": "verification_checklist", "status": "Done"},
+        ],
+        {"tb_dummy.v": "// unrelated content xyz"},
+        "")
+    out = tmp_path / "out.json"
+    rc = gate.main([
+        "--l10", str(tmp_path / "phase1" / "generated_docs" / "L10.json"),
+        "--tb-dir", str(tb_dir),
+        "--summary", str(summary),
+        "--out", str(out),
+    ])
+    assert rc == 1
+
+
+# ---------------------------------------------------------------------------
 # main() CLI
 # ---------------------------------------------------------------------------
 def _make_tree(tmp_path, l10_cases, tb_files, summary_text=""):
