@@ -243,10 +243,22 @@ def role_scope_gate(role: Optional[str],
 # Version bump + marketplace equality, via version_bump_monotonic_check.evaluate.
 # --------------------------------------------------------------------------
 def version_bump_gate(cur: Optional[str], prev: Optional[str],
-                      market: Optional[str]) -> GateResult:
+                      market: Optional[str],
+                      version_by_gatekeeper: bool = False) -> GateResult:
     if cur is None and prev is None:
         return GateResult("version_bump_monotonic_check", -1,
                           "skipped — no version change in diff")
+    # AUTHORING PR under the gatekeeper-assigns-versions doctrine (2026-06-17):
+    # field/core PRs carry NO version bump (cur==prev) — two PRs in flight that
+    # each self-bumped would COLLIDE; only the serialized gatekeeper, landing
+    # PRs one at a time onto an advancing main, can assign a monotonic version.
+    # DEFER the version gate here; the gatekeeper assigns the version at merge
+    # (gatekeeper_assign_version.py) and RE-RUNS this review WITHOUT the flag on
+    # the bumped tree, where the monotonic+equality check is fully ENFORCED.
+    if version_by_gatekeeper and cur == prev:
+        return GateResult("version_bump_monotonic_check", -1,
+                          f"deferred — version assigned by gatekeeper at merge "
+                          f"(authoring PR at {cur})")
     equality_checked = market is not None
     report, rc = _vbm.evaluate(cur, prev, market, equality_checked)
     return GateResult("version_bump_monotonic_check", rc, report.reason)
@@ -392,10 +404,18 @@ def review(base: str, head: str, *,
            commit_cmds: Optional[List[str]] = None,
            transcripts: Optional[str] = None,
            dataset: Optional[str] = None,
+           version_by_gatekeeper: bool = False,
            override_files: Optional[List[str]] = None,
            override_cur: Optional[str] = None,
            override_prev: Optional[str] = None) -> Verdict:
     """Run the deterministic gatekeeper and return a Verdict.
+
+    `version_by_gatekeeper=True` is the AUTHORING-side review of a version-less
+    PR (field/core PRs carry no bump; the gatekeeper assigns the version at
+    merge): the version gate DEFERS when cur==prev and the authoring-time
+    cadence floor is TARGETED. The gatekeeper's FINAL review (after
+    gatekeeper_assign_version.py writes the real version) is run WITHOUT the
+    flag, fully enforcing the monotonic+equality bump on the assigned version.
 
     `override_*` let tests inject a synthetic change-set / version pair without
     a real git history; production callers pass none of them.
@@ -415,8 +435,15 @@ def review(base: str, head: str, *,
     market = _git_show_marketplace_version(repo, head) \
         if override_cur is None else override_cur
 
-    # 3. cadence from the bump.
-    cadence, version_bump = derive_cadence(cur, prev)
+    # 3. cadence from the bump. A version-less authoring PR (cur==prev) under
+    #    --version-by-gatekeeper can't know its merge-time version, so its
+    #    authoring cadence floor is TARGETED; the gatekeeper re-derives the real
+    #    cadence (FULL on an x.y.0 milestone) from the version it assigns.
+    if version_by_gatekeeper and cur is not None and cur == prev:
+        cadence = "TARGETED"
+        version_bump = f"deferred — gatekeeper assigns at merge (authoring at {cur})"
+    else:
+        cadence, version_bump = derive_cadence(cur, prev)
 
     # 4. run gates.
     gates: List[GateResult] = []
@@ -424,7 +451,7 @@ def review(base: str, head: str, *,
     scope_gate, is_reject = role_scope_gate(role, files)
     gates.append(scope_gate)
 
-    vb = version_bump_gate(cur, prev, market)
+    vb = version_bump_gate(cur, prev, market, version_by_gatekeeper)
     gates.append(vb)
 
     gates.append(marketplace_sync_gate(plugin_root))
@@ -501,6 +528,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--changed-file", default=None,
                     help="override the diff with a file of changed paths "
                          "(one per line; for CI/test without a real range)")
+    ap.add_argument("--version-by-gatekeeper", action="store_true",
+                    help="AUTHORING-side review of a version-less PR: DEFER the "
+                         "version-bump gate when cur==prev (the gatekeeper "
+                         "assigns the version at merge via "
+                         "gatekeeper_assign_version.py and re-runs this review "
+                         "WITHOUT the flag on the bumped tree)")
     ap.add_argument("--json", default=None, help="write the verdict JSON here")
     args = ap.parse_args(argv)
 
@@ -531,6 +564,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                    role=args.role, pytest_cmd=args.pytest_cmd,
                    commit_cmds=commit_cmds,
                    transcripts=args.transcripts, dataset=args.dataset,
+                   version_by_gatekeeper=args.version_by_gatekeeper,
                    override_files=override_files)
     except RuntimeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
