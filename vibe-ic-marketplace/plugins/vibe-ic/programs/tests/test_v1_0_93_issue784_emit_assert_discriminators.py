@@ -112,12 +112,40 @@ def test_shift_rule_silent_on_explicit_rotate_only_spec():
     assert _findings(rot_spec, _ROTATE_CONCAT_RTL, RULE_SHIFT) == []
 
 
-def test_shift_rule_silent_on_shifts_or_rotates_ambiguous_spec():
-    # "shifts or rotates" carries a rotate token → CONSERVATIVELY ambiguous →
-    # the rule stays silent (under-firing is permitted; a false block is not).
+def test_shift_or_rotates_disjunction_spec_BLOCKS_rotate_rtl():
+    # ORGANIC-20260618 (RTLLM round-19 barrel_shifter): a spec that OFFERS BOTH
+    # operations in a disjunction ("shifts or rotates") is NOT rotate-only — the
+    # lessons corpus binds it to a LOGICAL shift with zero-fill. A rotate RTL
+    # under such a spec is WRONG and MUST be blocked. (Supersedes the prior
+    # conservative under-firing pin, which let the wrong rotate design pass the
+    # hidden right-shift TB.)
     spec = _SHIFT_SPEC.replace("Build an 8-bit barrel SHIFTER",
                                "Build an 8-bit unit that shifts or rotates")
-    assert _findings(spec, _ROTATE_OR_RTL, RULE_SHIFT) == []
+    fs = _findings(spec, _ROTATE_OR_RTL, RULE_SHIFT)
+    assert any(f.rule == "shift-implemented-as-rotate" for f in fs), fs
+
+
+def test_shift_rule_still_silent_on_rotate_ONLY_spec_no_leak():
+    # §4.05 NO-LEAK: a GENUINE rotate-only spec (rotate / circular present, NO
+    # shift-or-rotate disjunction) still disarms — a correct rotate design must
+    # NOT be false-blocked.
+    rot_only = ("Build an 8-bit barrel ROTATOR: rotate the input left by ctrl "
+                "positions (a circular shift — the bits wrap around).\n\n"
+                " - input  [7:0] din\n - input  [2:0] ctrl\n"
+                " - output [7:0] dout\n")
+    assert _findings(rot_only, _ROTATE_OR_RTL, RULE_SHIFT) == []
+
+
+def test_shift_or_rotates_disjunction_silent_on_correct_logical_shift():
+    # §4.05 NO-FALSE-BLOCK: the SAME "shifts or rotates" spec with a CORRECT
+    # logical-shift RTL (zero-fill) must stay silent — only the rotate form fires.
+    spec = _SHIFT_SPEC.replace("Build an 8-bit barrel SHIFTER",
+                               "Build an 8-bit unit that shifts or rotates")
+    good = ("module TopModule(input [7:0] din, input [2:0] ctrl,\n"
+            "                 output [7:0] dout);\n"
+            "  assign dout = din >> ctrl;\n"
+            "endmodule\n")
+    assert _findings(spec, good, RULE_SHIFT) == []
 
 
 def test_shift_rule_silent_on_or_with_nonshift_mask():
@@ -136,6 +164,311 @@ def test_shift_rule_silent_on_same_direction_or():
            "  assign dout = (a << 2) | (b << 4);\n"
            "endmodule\n")
     assert _findings(_SHIFT_SPEC, rtl, RULE_SHIFT) == []
+
+
+# ---------------------------------------------------------------------------
+# §4.05 false-fire fix (ORGANIC-20260618 round-2 — Step-2.7 on the re-arm PR):
+# a "shift OR rotate" spec describes a MODE-SELECTABLE unit; its CORRECT
+# implementation co-presents a logical-shift branch AND a rotate branch, mux-
+# selected. The re-arm must NOT false-block that dual-mode design — only a
+# rotate-ONLY RTL (no co-present logical-shift mux) under the disjunction fires.
+# ---------------------------------------------------------------------------
+_BOTH_OFFERED_SPEC = _SHIFT_SPEC.replace(
+    "Build an 8-bit barrel SHIFTER",
+    "Build an 8-bit unit that shifts or rotates, selected by op_mode")
+
+# CORRECT dual-mode barrel shifter: op_mode picks logical-shift vs left-rotate.
+# (iverilog-verified shape from the reviewer: shift branch `din >> ctrl`, rotate
+# branch `(din >> ctrl) | (din << (8-ctrl))`, ternary-muxed by op_mode.)
+_DUAL_MODE_TERNARY_RTL = (
+    "module TopModule(input [7:0] din, input [2:0] ctrl, input op_mode,\n"
+    "                 output [7:0] dout);\n"
+    "  wire [7:0] shifted = din >> ctrl;\n"
+    "  wire [7:0] rotated = (din >> ctrl) | (din << (8 - ctrl));\n"
+    "  assign dout = op_mode ? rotated : shifted;\n"
+    "endmodule\n")
+
+# same dual-mode design expressed with a case mux instead of a ternary
+_DUAL_MODE_CASE_RTL = (
+    "module TopModule(input [7:0] din, input [2:0] ctrl, input op_mode,\n"
+    "                 output reg [7:0] dout);\n"
+    "  wire [7:0] shifted = din << ctrl;\n"
+    "  wire [7:0] rotated = (din << ctrl) | (din >> (8 - ctrl));\n"
+    "  always @* case (op_mode)\n"
+    "    1'b0: dout = shifted;\n"
+    "    default: dout = rotated;\n"
+    "  endcase\n"
+    "endmodule\n")
+
+
+def test_disjunction_silent_on_correct_DUAL_MODE_ternary_no_false_block():
+    # §4.05 NO-FALSE-BLOCK (Step-2.7 HIGH #1): a CORRECT mode-selectable barrel
+    # shifter (shift in one mode, rotate in another, op_mode select) MUST NOT be
+    # blocked — its rotate branch is legitimate, not a shifter-mis-as-rotate.
+    assert _findings(_BOTH_OFFERED_SPEC, _DUAL_MODE_TERNARY_RTL, RULE_SHIFT) == []
+
+
+def test_disjunction_silent_on_correct_DUAL_MODE_case_no_false_block():
+    # §4.05 NO-FALSE-BLOCK (Step-2.7 HIGH #2): the same dual-mode design with a
+    # `case` mux (not a ternary) must also stay silent.
+    assert _findings(_BOTH_OFFERED_SPEC, _DUAL_MODE_CASE_RTL, RULE_SHIFT) == []
+
+
+def test_disjunction_STILL_fires_on_rotate_only_no_leak():
+    # §4.05 NO-LEAK: the dual-mode SKIP must not disarm the wrong case — a
+    # rotate-ONLY RTL (no co-present logical-shift mux) under the SAME "shifts
+    # or rotates" spec is still WRONG and MUST fire.
+    fs = _findings(_BOTH_OFFERED_SPEC, _ROTATE_OR_RTL, RULE_SHIFT)
+    assert [f.severity for f in fs] == ["ERROR"], fs
+
+
+def test_dead_shift_wire_without_mux_still_fires_no_launder():
+    # §4.05 NO-LAUNDER: a dead logical-shift wire that never reaches a mux does
+    # NOT make a rotate-only output a dual-mode design — without a select
+    # construct the gate still fires (the skip needs BOTH a plain-shift datapath
+    # AND a ternary/case mux).
+    rtl = ("module TopModule(input [7:0] din, input [2:0] ctrl,\n"
+           "                 output [7:0] dout);\n"
+           "  wire [7:0] dead = din << ctrl;\n"     # dead, no mux
+           "  assign dout = (din >> ctrl) | (din << (8 - ctrl));\n"
+           "endmodule\n")
+    fs = _findings(_BOTH_OFFERED_SPEC, rtl, RULE_SHIFT)
+    assert [f.severity for f in fs] == ["ERROR"], fs
+
+
+def test_decoy_ternary_rotate_vs_zero_still_fires_no_launder():
+    # §4.05 NO-LAUNDER (branch-aware): a dead shift wire PLUS a decoy ternary
+    # whose branches are rotate-vs-ZERO (the shift wire is never a mux branch)
+    # is a rotate-ONLY output and MUST still fire — the skip requires the SELECT
+    # to genuinely pick a shift branch against a rotate branch.
+    rtl = ("module TopModule(input [7:0] din, input [2:0] ctrl, input en,\n"
+           "                 output [7:0] dout);\n"
+           "  wire [7:0] dead = din << ctrl;\n"                 # decoy, unused by mux
+           "  assign dout = en ? ((din >> ctrl) | (din << (8 - ctrl))) : 8'b0;\n"
+           "endmodule\n")
+    fs = _findings(_BOTH_OFFERED_SPEC, rtl, RULE_SHIFT)
+    assert [f.severity for f in fs] == ["ERROR"], fs
+
+
+def test_output_aware_decoy_mux_dead_wire_still_fires_no_launder():
+    # §4.05 NO-LAUNDER round-3 (Step-2.7 re-review HIGH#1): a rotate-ONLY OUTPUT
+    # plus a dead decoy mux on an UNUSED wire (genuine shift-vs-rotate branches,
+    # but driving `junk`, not the output) must STILL fire — the skip is now
+    # OUTPUT-AWARE: only the output's OWN driving mux can suppress the finding.
+    rtl = ("module TopModule(input [7:0] din, input [2:0] shamt, input mode,\n"
+           "                 output [7:0] dout);\n"
+           "  assign dout = (din << shamt) | (din >> (8 - shamt));\n"   # rotate-ONLY BUG
+           "  wire [7:0] junk;\n"
+           "  assign junk = mode ? (din << shamt)\n"                    # dead decoy mux
+           "                     : ((din >> shamt) | (din << (8 - shamt)));\n"
+           "endmodule\n")
+    fs = _findings(_BOTH_OFFERED_SPEC, rtl, RULE_SHIFT)
+    assert [f.severity for f in fs] == ["ERROR"], fs
+
+
+def test_output_aware_both_branches_rotate_split_wire_still_fires_no_leak():
+    # §4.05 NO-LEAK round-3 (Step-2.7 re-review HIGH#2): the output mux selects
+    # between TWO rotates — `sh` is a split-wire LEFT ROTATE ((din<<n)|wrap with
+    # wrap=din>>(8-n)); no mode ever does the spec's logical shift. Full
+    # recursive resolution must read `sh` as a rotate, so the gate STILL fires.
+    rtl = ("module TopModule(input [7:0] din, input [2:0] shamt, input mode,\n"
+           "                 output [7:0] dout);\n"
+           "  wire [7:0] wrap = din >> (8 - shamt);\n"
+           "  wire [7:0] sh   = (din << shamt) | wrap;\n"        # actually a rotate
+           "  wire [7:0] rot  = (din >> shamt) | (din << (8 - shamt));\n"
+           "  assign dout = mode ? sh : rot;\n"                  # BOTH modes rotate
+           "endmodule\n")
+    fs = _findings(_BOTH_OFFERED_SPEC, rtl, RULE_SHIFT)
+    assert [f.severity for f in fs] == ["ERROR"], fs
+
+
+def test_output_aware_decoy_case_dead_reg_still_fires_no_launder():
+    # §4.05 NO-LAUNDER round-3 (Step-2.7 re-review HIGH#3): the case variant — a
+    # dead reg `junk` driven by a shift-item + rotate-item case must NOT suppress
+    # the rotate-ONLY live combinational output. Confirms output-awareness holds
+    # across BOTH the ternary and case paths.
+    rtl = ("module TopModule(input [7:0] din, input [2:0] shamt, input [1:0] op,\n"
+           "                 output [7:0] dout);\n"
+           "  reg [7:0] junk;\n"
+           "  always @(*) begin\n"
+           "    case (op)\n"
+           "      2'd0: junk = din << shamt;\n"
+           "      2'd1: junk = (din >> shamt) | (din << (8 - shamt));\n"
+           "      default: junk = din;\n"
+           "    endcase\n"
+           "  end\n"
+           "  assign dout = (din << shamt) | (din >> (8 - shamt));\n"   # rotate-ONLY BUG
+           "endmodule\n")
+    fs = _findings(_BOTH_OFFERED_SPEC, rtl, RULE_SHIFT)
+    assert [f.severity for f in fs] == ["ERROR"], fs
+
+
+def test_dead_blocking_overwrite_still_fires_no_launder():
+    # §4.05 NO-LAUNDER round-4 (Step-2.7 re-review HIGH): a sequential blocking
+    # assignment where a decoy logical-shift is immediately OVERWRITTEN by the
+    # real rotate (last-write-wins → functionally rotate-ONLY) must STILL fire.
+    # A leaf is only taken from a genuine LIVE mux, never a bare unconditional
+    # assign, so the dead first write cannot fake dual-mode.
+    rtl = ("module TopModule(input [7:0] din, input [2:0] sh,\n"
+           "                 output reg [7:0] dout);\n"
+           "  always @(*) begin\n"
+           "    dout = din >> sh;\n"                              # DEAD (overwritten)
+           "    dout = (din >> sh) | (din << (8 - sh));\n"        # live ROTATE wins
+           "  end\n"
+           "endmodule\n")
+    fs = _findings(_BOTH_OFFERED_SPEC, rtl, RULE_SHIFT)
+    assert [f.severity for f in fs] == ["ERROR"], fs
+
+
+def test_constant_selector_case_still_fires_no_launder():
+    # §4.05 NO-LAUNDER round-4 (Step-2.7 re-review HIGH, case variant): a CONSTANT
+    # case selector (`case(1'b1)`) is not a runtime mux — the dead 1'b0 shift
+    # label never executes, the live 1'b1 rotate label drives the output. Must
+    # fire; a constant-selector case cannot fake dual-mode.
+    rtl = ("module TopModule(input [7:0] din, input [2:0] sh,\n"
+           "                 output reg [7:0] dout);\n"
+           "  always @(*) begin\n"
+           "    case (1'b1)\n"
+           "      1'b0: dout = din >> sh;\n"                      # dead label
+           "      1'b1: dout = (din >> sh) | (din << (8 - sh));\n"  # live rotate
+           "      default: dout = din;\n"
+           "    endcase\n"
+           "  end\n"
+           "endmodule\n")
+    fs = _findings(_BOTH_OFFERED_SPEC, rtl, RULE_SHIFT)
+    assert [f.severity for f in fs] == ["ERROR"], fs
+
+
+def test_disjunction_silent_on_correct_DUAL_MODE_ifelse_no_false_block():
+    # §4.05 NO-FALSE-BLOCK round-4: a CORRECT mode-selectable shifter expressed
+    # as a simple `if(mode) rotate; else shift;` in an always block is a genuine
+    # live mux and must stay silent (not re-introduce the round-1 false-block).
+    rtl = ("module TopModule(input [7:0] din, input [2:0] sh, input mode,\n"
+           "                 output reg [7:0] dout);\n"
+           "  always @(*)\n"
+           "    if (mode) dout = (din >> sh) | (din << (8 - sh));\n"
+           "    else dout = din >> sh;\n"
+           "endmodule\n")
+    assert _findings(_BOTH_OFFERED_SPEC, rtl, RULE_SHIFT) == []
+
+
+def test_doubled_vector_rotate_fires_under_plain_shift_spec():
+    # §4.05 round-4 (Step-2.7): an inline DOUBLED-vector rotate `{din,din} >> k`
+    # is a genuine rotate (the duplication supplies the wrap bits) — it must
+    # BLOCK under a plain shifter spec, closing the _rtl_rotate_signatures blind
+    # spot. (Split-wire resolution is exercised by the dual-mode launder test.)
+    rtl = ("module TopModule(input [7:0] din, input [2:0] ctrl,\n"
+           "                 output [7:0] dout);\n"
+           "  assign dout = {din, din} >> ctrl;\n"
+           "endmodule\n")
+    fs = _findings(_SHIFT_SPEC, rtl, RULE_SHIFT)
+    assert [f.severity for f in fs] == ["ERROR"], fs
+
+
+def test_or_rotate_no_space_parenthesised_amount_fires():
+    # §4.05 round-4 (Step-2.7): the OR-of-opposite-shifts rotate with NO spaces
+    # and a PARENTHESISED shift amount `(din>>shamt)|(din<<(8-shamt))` must be
+    # detected — the old amount pattern excluded parens and dropped the whole
+    # signature, letting a functionally rotate-ONLY design pass a shifter spec.
+    rtl = ("module TopModule(input [7:0] din, input [2:0] shamt,\n"
+           "                 output [7:0] dout);\n"
+           "  assign dout=(din>>shamt)|(din<<(8-shamt));\n"
+           "endmodule\n")
+    fs = _findings(_SHIFT_SPEC, rtl, RULE_SHIFT)
+    assert [f.severity for f in fs] == ["ERROR"], fs
+
+
+def test_doubled_vector_replication_rotate_fires_under_plain_shift_spec():
+    # §4.05 round-4: the replication form `{2{din}} >> k` is the same rotate.
+    rtl = ("module TopModule(input [7:0] din, input [2:0] ctrl,\n"
+           "                 output [7:0] dout);\n"
+           "  assign dout = {2{din}} >> ctrl;\n"
+           "endmodule\n")
+    fs = _findings(_SHIFT_SPEC, rtl, RULE_SHIFT)
+    assert [f.severity for f in fs] == ["ERROR"], fs
+
+
+def test_doubled_vector_rotate_does_not_launder_dual_mode_no_leak():
+    # §4.05 NO-LAUNDER round-4 (Step-2.7 re-review HIGH): a ternary muxing an
+    # OR-rotate leaf against a DOUBLED-vector rotate leaf (`{din,din} >> k`) is
+    # functionally rotate-ONLY in every mode (no logical zero-fill shift). The
+    # doubled-vector leaf must now classify as 'rotate', so the mux is NOT
+    # dual-mode and the gate STILL fires.
+    rtl = ("module TopModule(input [7:0] din, input [2:0] shamt, input mode,\n"
+           "                 output [7:0] dout);\n"
+           "  wire [7:0]  rA  = (din >> shamt) | (din << (8 - shamt));\n"
+           "  wire [15:0] dbl = {din, din};\n"
+           "  wire [7:0]  rB  = dbl >> shamt;\n"
+           "  assign dout = mode ? rA : rB;\n"   # both leaves rotate (mode is decoy)
+           "endmodule\n")
+    fs = _findings(_BOTH_OFFERED_SPEC, rtl, RULE_SHIFT)
+    assert [f.severity for f in fs] == ["ERROR"], fs
+
+
+def test_zerofill_concat_not_misread_as_doubled_rotate():
+    # §4.05 ZERO-FALSE-FIRE round-4: a {bit-select, literal} zero-fill shift and
+    # a {x, y} two-different-vector funnel must NOT match the doubled-vector
+    # rotate signature — they stay silent under a shifter spec.
+    zerofill = ("module TopModule(input [7:0] din, output [7:0] dout);\n"
+                "  assign dout = {din[6:0], 1'b0};\n"
+                "endmodule\n")
+    funnel = ("module TopModule(input [7:0] a, input [7:0] b, input [2:0] k,\n"
+              "                 output [7:0] dout);\n"
+              "  assign dout = {a, b} >> k;\n"   # two DIFFERENT vectors → funnel
+              "endmodule\n")
+    assert _findings(_SHIFT_SPEC, zerofill, RULE_SHIFT) == []
+    assert _findings(_SHIFT_SPEC, funnel, RULE_SHIFT) == []
+
+
+def test_xor_form_rotate_fires_under_plain_shift_spec():
+    # §4.05 round-5 (Step-2.7): the XOR-form rotate `(din<<(8-s))^(din>>s)` is
+    # identically the OR-form rotate when the two halves are bit-disjoint
+    # (a+b==W) — it must BLOCK under a plain shifter spec, closing the
+    # _rtl_rotate_signatures `|`-only blind spot.
+    rtl = ("module TopModule(input [7:0] din, input [2:0] shamt,\n"
+           "                 output [7:0] dout);\n"
+           "  assign dout = (din << (8 - shamt)) ^ (din >> shamt);\n"
+           "endmodule\n")
+    fs = _findings(_SHIFT_SPEC, rtl, RULE_SHIFT)
+    assert [f.severity for f in fs] == ["ERROR"], fs
+
+
+def test_xor_form_rotate_does_not_launder_dual_mode_no_leak():
+    # §4.05 NO-LAUNDER round-5 (Step-2.7 re-review LOW): a ternary muxing an
+    # OR-rotate leaf against an XOR-form rotate leaf is functionally rotate-ONLY
+    # in every mode. The XOR leaf must now classify as 'rotate', so the mux is
+    # NOT dual-mode and the gate STILL fires.
+    rtl = ("module TopModule(input [7:0] din, input [2:0] shamt, input mode,\n"
+           "                 output [7:0] dout);\n"
+           "  wire [7:0] rot_or  = (din >> shamt) | (din << (8 - shamt));\n"
+           "  wire [7:0] rot_xor = (din << (8 - shamt)) ^ (din >> shamt);\n"
+           "  assign dout = mode ? rot_or : rot_xor;\n"   # both leaves rotate
+           "endmodule\n")
+    fs = _findings(_BOTH_OFFERED_SPEC, rtl, RULE_SHIFT)
+    assert [f.severity for f in fs] == ["ERROR"], fs
+
+
+def test_xor_of_different_signals_not_misread_as_rotate():
+    # §4.05 ZERO-FALSE-FIRE round-5: XOR of shifts of DIFFERENT signals (or same
+    # direction) is NOT a rotate — must stay silent under a shifter spec.
+    diff_sig = ("module TopModule(input [7:0] a, input [7:0] b, input [2:0] k,\n"
+                "                 output [7:0] dout);\n"
+                "  assign dout = (a << k) ^ (b >> k);\n"   # different signals
+                "endmodule\n")
+    assert _findings(_SHIFT_SPEC, diff_sig, RULE_SHIFT) == []
+
+
+def test_plain_shifter_spec_unaffected_by_dual_mode_skip():
+    # §4.05 REGRESSION: the dual-mode skip is gated on the disjunction; a plain
+    # 'shifter' spec (no "shift or rotate") with a rotate RTL — even one that
+    # happens to carry a ternary — still fires, original gate preserved.
+    rtl = ("module TopModule(input [7:0] din, input [2:0] ctrl, input s,\n"
+           "                 output [7:0] dout);\n"
+           "  assign dout = s ? ((din >> ctrl) | (din << (8 - ctrl)))\n"
+           "                  : ((din >> ctrl) | (din << (8 - ctrl)));\n"
+           "endmodule\n")
+    fs = _findings(_SHIFT_SPEC, rtl, RULE_SHIFT)
+    assert [f.severity for f in fs] == ["ERROR"], fs
 
 
 # ===========================================================================
