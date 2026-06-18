@@ -315,7 +315,8 @@ def main():
                                    "moore-output-reset-gated",
                                    "shift-implemented-as-rotate",
                                    "waveform-peak-hold-dropped",
-                                   "fsm-onehot-missing-transition"}
+                                   "fsm-onehot-missing-transition",
+                                   "sync-reset-next-state-redundant-gate"}
     blocking: list = []
     # ORGANIC #688 — harness-exact self-verify BLOCKs (standalone `-s <top>`
     # codegen / verilator lint) are emit-blocking: the scorer rejects the same
