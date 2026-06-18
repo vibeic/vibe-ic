@@ -894,36 +894,90 @@ def _sync_reset_next_state_redundant_gate(rtl_body: str):
         semi = src.find(';', after)
         return src[after:semi + 1] if semi >= 0 else src[after:]
 
+    def _comb_body(src, after):
+        # Full body of an always block: a balanced begin/end, a complete
+        # case…endcase (so a redundant arm in a NON-first position of a
+        # begin/end-LESS `always @(*) case(…) endcase` is not truncated at the
+        # first `;` — ORGANIC-20260618 round-3 §4.05 false-skip fix), else the
+        # single trailing statement.
+        m = _re.match(r'\s*', src[after:])
+        pos = after + m.end()
+        if _re.match(r'begin\b', src[pos:], _re.I):
+            return _blk(src, pos)
+        if _re.match(r'(?:unique\s+|priority\s+)?case[zx]?\b', src[pos:], _re.I):
+            depth = 0
+            for t in _re.finditer(r'\bcase[zx]?\b|\bendcase\b', src[pos:], _re.I):
+                if t.group(0).lower().startswith('case'):
+                    depth += 1
+                else:
+                    depth -= 1
+                    if depth == 0:
+                        return src[pos:pos + t.end()]
+            return src[pos:]
+        semi = src.find(';', pos)
+        return src[pos:semi + 1] if semi >= 0 else src[pos:]
+
+    # a reset VALUE may be a named param OR a sized/plain numeric literal
+    _RVAL = r"([A-Za-z_]\w*|\d+\s*'[sS]?[bdhoBDHO][0-9a-fA-FxXzZ_]+|\d+)"
     out = []
     for R in sync_only:
         rE = _re.escape(R)
-        reset_val = state_reg = None
+        # collect EVERY FSM driven by this reset (a module may carry more than
+        # one same-reset FSM; round-3 §4.05 false-skip fix — do not stop at the
+        # first sequential block).
+        fsms = []
         for sm in _SEQ.finditer(rtl_body):
             blk = _blk(rtl_body, sm.start())
             if not _re.search(r'\b' + rE + r'\b', blk):
                 continue
             ra = _re.search(
                 r'if\s*\(\s*[!~]?\s*' + rE + r'\b[^)]*\)\s*(?:begin)?\s*'
-                r'(\w+)\s*<=\s*([A-Za-z_]\w*)', blk)
-            if ra:
-                state_reg, reset_val = ra.group(1), ra.group(2)
-                break
-        if not (state_reg and reset_val):
-            continue
-        rvE = _re.escape(reset_val)
-        for cm in _COMB.finditer(rtl_body):
-            blk = _blk(rtl_body, cm.end())
-            if not _re.search(r'\w+\s*=(?!=)', blk):
+                r'(\w+)\s*<=\s*' + _RVAL, blk)
+            if not ra:
                 continue
-            arm = _re.search(
-                rvE + r'\s*:\s*\w+\s*=\s*([^;]*)\b' + rE + r'\b[^;]*;', blk)
-            if not arm:
+            state_reg, reset_val = ra.group(1), ra.group(2)
+            # The NEXT-STATE signal is the BARE-IDENTIFIER RHS of the OTHER
+            # (non-reset) assignment to the state register in the same seq block
+            # (`state <= next;`). Binding the redundancy check to THIS signal is
+            # what makes the gate fire only on the real next-state datapath —
+            # ORGANIC-20260618 round-2 §4.05: without it the gate false-fired on
+            # an output-decode (`IDLE: out_valid = resetn;`) or an unrelated
+            # `sel`-selected decoder (`RST_ST: dout = resetn ? din : RST_ST;`).
+            # If the seq block computes the next state INLINE (`state<=state+1`),
+            # there is no separate next-state reg → no redundant-comb pattern →
+            # skip (fail-safe under-fire).
+            # Scan the WHOLE body (not the begin/end-less seq block, which `_blk`
+            # truncates at the first `;`) for the non-reset `state <= next;`.
+            srE = _re.escape(state_reg)
+            next_sig = None
+            for nm in _re.finditer(srE + r'\s*<=\s*([A-Za-z_]\w*)\s*;', rtl_body):
+                if nm.group(1) != reset_val:
+                    next_sig = nm.group(1)
+                    break
+            if next_sig:
+                fsms.append((state_reg, reset_val, next_sig))
+        for state_reg, reset_val, next_sig in fsms:
+            rvE = _re.escape(reset_val)
+            nsE = _re.escape(next_sig)
+            for cm in _COMB.finditer(rtl_body):
+                body = _comb_body(rtl_body, cm.end())
+                # only the comb block that actually DRIVES the next-state register
+                if not _re.search(r'(?<![\w.])' + nsE + r'\s*=(?!=)', body):
+                    continue
+                # FORM A — the reset-VALUE state's case-arm gates the NEXT-STATE
+                # register on the reset signal: `<reset_val> : [begin] next=…R…;`
                 arm = _re.search(
-                    r'if\s*\(\s*[!~]?\s*' + rE + r'\b[^)]*\)\s*(?:begin)?\s*'
-                    r'\w+\s*=\s*' + rvE + r'\b[^;]*;', blk)
-            if arm:
-                out.append((R, reset_val, arm.group(0).strip()))
-                break
+                    r'\b' + rvE + r'\s*:\s*(?:begin\b\s*)?' + nsE +
+                    r'\s*=\s*([^;]*\b' + rE + r'\b[^;]*);', body)
+                # FORM B — a redundant `if(!R) next = <reset_val>` in the comb
+                if not arm:
+                    arm = _re.search(
+                        r'if\s*\(\s*[!~]?\s*' + rE + r'\b[^)]*\)\s*'
+                        r'(?:begin\b\s*)?' + nsE + r'\s*=\s*' + rvE +
+                        r'\b[^;]*;', body)
+                if arm:
+                    out.append((R, reset_val, arm.group(0).strip()))
+                    break
     return out
 
 

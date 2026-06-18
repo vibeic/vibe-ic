@@ -136,6 +136,145 @@ def test_gated_on_enable_not_reset_is_clean():
     assert _findings(_SPEC, rtl) == []
 
 
+# ── §4.05 round-2 (Step-2.7): bind the arm to the next-state register ────────
+
+def test_output_decode_referencing_reset_does_not_false_fire():
+    # Step-2.7 HIGH#1: a SEPARATE output-decode block where the reset-state arm
+    # legitimately references the reset as a release-from-reset status output
+    # (`IDLE: out_valid = resetn;`) must NOT fire — its LHS is an OUTPUT, not the
+    # next-state register. The next-state logic is clean/unconditional.
+    rtl = (
+        "module TopModule(input clk, input resetn, input go,\n"
+        "                 output reg out_valid, output reg [1:0] state_o);\n"
+        "  localparam IDLE=2'd0, RUN=2'd1, DONE=2'd2;\n"
+        "  reg [1:0] state, next_state;\n"
+        "  always @(*) begin\n"
+        "    case (state)\n"
+        "      IDLE: out_valid = resetn;\n"          # status output, not next-state
+        "      RUN:  out_valid = 1'b1;\n"
+        "      default: out_valid = 1'b0;\n"
+        "    endcase\n"
+        "  end\n"
+        "  always @(*) begin\n"
+        "    case (state)\n"
+        "      IDLE: next_state = go ? RUN : IDLE;\n"  # clean, no reset gate
+        "      RUN:  next_state = DONE;\n"
+        "      default: next_state = IDLE;\n"
+        "    endcase\n"
+        "  end\n"
+        "  always @(posedge clk) if (!resetn) state <= IDLE; else state <= next_state;\n"
+        "  always @(*) state_o = state;\n"
+        "endmodule\n")
+    assert _findings(_SPEC, rtl) == []
+
+
+def test_unrelated_sel_decoder_does_not_false_fire():
+    # Step-2.7 HIGH#2: an independent combinational decoder selected by `sel`
+    # (not the FSM state) whose reset-value-named case label samples reset as
+    # data (`RST_ST: dout = resetn ? din : RST_ST;`) must NOT fire — its LHS is
+    # `dout`, not the next-state register, and the seq block's next state is
+    # computed inline (`state <= state + 1`), so there is no redundant comb gate.
+    rtl = (
+        "module TopModule(input clk, input resetn, input [1:0] sel,\n"
+        "                 input [1:0] din, output reg [1:0] dout,\n"
+        "                 output [1:0] state_o);\n"
+        "  localparam [1:0] RST_ST=2'd0, S1=2'd1, S2=2'd2;\n"
+        "  reg [1:0] state;\n"
+        "  always @(posedge clk)\n"
+        "    if (!resetn) state <= RST_ST; else state <= state + 2'd1;\n"
+        "  always @(*) begin\n"
+        "    case (sel)\n"
+        "      RST_ST: dout = resetn ? din : RST_ST;\n"
+        "      S1:     dout = S2;\n"
+        "      default: dout = RST_ST;\n"
+        "    endcase\n"
+        "  end\n"
+        "  assign state_o = state;\n"
+        "endmodule\n")
+    assert _findings(_SPEC, rtl) == []
+
+
+def test_rule_fires_on_begin_end_wrapped_arm_no_false_skip():
+    # Step-2.7 MED: the genuinely-redundant reset-state next-state, wrapped in a
+    # begin/end case-item body, must STILL fire (was a false-skip).
+    rtl = _BUG_TERNARY.replace(
+        "      A: next = resetn ? B : A;\n",
+        "      A: begin next = resetn ? B : A; end\n")
+    fs = _findings(_SPEC, rtl)
+    assert [f.severity for f in fs] == ["ERROR"]
+
+
+# ── §4.05 round-3 (Step-2.7): consistency — same shape must fire regardless ──
+
+def test_rule_fires_on_numeric_literal_reset_value():
+    # round-3 LOW false-skip: a reset value written as a NUMERIC literal (`2'd0`)
+    # rather than a named param must fire identically to the named-param shape.
+    rtl = (
+        "module fsm(input clk, input resetn, output reg out);\n"
+        "  reg [1:0] state, next;\n"
+        "  always @(*) begin\n"
+        "    case (state)\n"
+        "      2'd0: next = resetn ? 2'd1 : 2'd0;\n"   # redundant reset gate
+        "      2'd1: next = 2'd2;\n"
+        "      default: next = 2'd0;\n"
+        "    endcase\n"
+        "  end\n"
+        "  always @(posedge clk)\n"
+        "    if (!resetn) state <= 2'd0; else state <= next;\n"
+        "endmodule\n")
+    fs = _findings(_SPEC, rtl)
+    assert [f.severity for f in fs] == ["ERROR"]
+
+
+def test_rule_fires_on_begin_end_less_case_non_first_arm():
+    # round-3 LOW false-skip: a begin/end-LESS `always @(*) case(…) endcase`
+    # whose redundant reset-state arm is NOT the first case item must fire (the
+    # _blk-truncation-at-first-semicolon gap is closed by _comb_body).
+    rtl = (
+        "module TopModule(input clk, input resetn, output f);\n"
+        "  localparam S0=0, S1=1, S2=2, RST=3;\n"
+        "  reg [1:0] state, next;\n"
+        "  always @(*)\n"
+        "    case (state)\n"
+        "      S0: next = S1;\n"
+        "      S1: next = S2;\n"
+        "      S2: next = RST;\n"
+        "      RST: next = resetn ? S0 : RST;\n"       # redundant, non-first arm
+        "      default: next = RST;\n"
+        "    endcase\n"
+        "  always @(posedge clk)\n"
+        "    if (!resetn) state <= RST; else state <= next;\n"
+        "  assign f = (state == S2);\n"
+        "endmodule\n")
+    fs = _findings(_SPEC, rtl)
+    assert [f.severity for f in fs] == ["ERROR"]
+
+
+def test_rule_fires_on_second_same_reset_fsm():
+    # round-3 LOW false-skip: two FSMs share one sync reset; the FIRST is clean,
+    # the SECOND carries the redundant arm — must still fire (gate iterates all
+    # same-reset sequential blocks, no early break).
+    rtl = (
+        "module two(input clk, input resetn, output reg oa, output reg ob);\n"
+        "  parameter A=0, B=1, C=2;\n"
+        "  reg [1:0] sa, na, sb, nb;\n"
+        "  always @(*) begin\n"
+        "    case (sa)\n"
+        "      A: na = B; B: na = C; C: na = A; default: na = A;\n"
+        "    endcase\n"
+        "  end\n"
+        "  always @(*) begin\n"
+        "    case (sb)\n"
+        "      A: nb = B; C: nb = resetn ? A : C; default: nb = A;\n"  # redundant
+        "    endcase\n"
+        "  end\n"
+        "  always @(posedge clk) if (!resetn) sa <= A; else sa <= na;\n"
+        "  always @(posedge clk) if (!resetn) sb <= C; else sb <= nb;\n"
+        "endmodule\n")
+    fs = _findings(_SPEC, rtl)
+    assert [f.severity for f in fs] == ["ERROR"]
+
+
 # ── gates_atomic end-to-end: BLOCK the bug, emit the canonical ───────────────
 
 def _stage(tmp_path, prompt_text, sample_body):
