@@ -772,21 +772,142 @@ def _clauses(low: str) -> List[str]:
     return [c for c in _CLAUSE_SPLIT_RE.split(low) if c and c.strip()]
 
 
+_HEADING_CLAUSE_RE = re.compile(r"^\s*#{1,6}\s")
+# A presence-denial token that DIRECTLY governs the keyword: "no [explicit]
+# reset", "without a reset", "has no reset", "lacks reset", "does not use a
+# reset". ORGANIC #845 round-3 (Step-2.7): only ADJECTIVE/article/qualifier
+# fillers may sit between the denial and the keyword — NOT an arbitrary noun.
+# The round-2 `(?:\s+\w+){0,3}` arm let a negated OTHER noun intrude ("no GLITCH
+# on the reset" wrongly read as denying the reset → a genuine reset dropped, a
+# §4.05 leak). So the negated head-noun must BE the keyword.
+_DENIAL_FILLER = (
+    r"(?:\s+(?:a|an|the|any|explicit|dedicated|external|internal|separate|"
+    r"global|local|true|real|actual|physical|valid|async\w*|sync\w*|"
+    r"hardware|software|power[\s-]?on|active[\s-]?(?:low|high)|"
+    r"additional|extra|special|generic|standard|single|common))*\s+")
+_DENIAL_BEFORE = (
+    r"\b(?:no|without|has\s+no|have\s+no|lacks?|lacking|devoid\s+of|"
+    r"free\s+of|sans|requires?\s+no|needs?\s+no|"
+    r"do(?:es)?\s+n(?:o|')t\s+(?:use|have|require|need|include|provide|"
+    r"contain|implement|support)|don'?t\s+(?:use|have|require|need|include|"
+    r"provide|contain|implement|support))\b")
+# A presence-denial that follows the keyword: "<kw> is not provided/present/
+# required/needed/implemented/used/supported/available", "<kw> ... not exist",
+# "<kw> ... is omitted/removed/absent/excluded/disabled" (ORGANIC #845 round-3).
+_DENIAL_AFTER_VERB = (
+    r"(?:(?:not|never)\s+(?:a\s+|an\s+|the\s+|any\s+)?"
+    r"(?:provided|present|required|needed|implemented|used|supported|"
+    r"available|exist\w*|include\w*)"
+    r"|(?:is|are|being|intentionally|deliberately)?\s*"
+    r"(?:omitted|removed|excluded|stripped|disabled|absent))")
+# A REAFFIRMATION that the feature genuinely EXISTS despite a kind-denial: "no
+# separate reset (it SHARES the bus reset)", "no dedicated reset, DERIVED FROM
+# the global reset". When present, the clause denies a particular KIND, not the
+# feature's existence, so it must NOT veto. ORGANIC #845 round-3 (Step-2.7). The
+# "use" family is deliberately EXCLUDED — it collides with the denial verb "does
+# not USE a reset" (which must stay a denial); "shared/derived/common/bus/…"
+# unambiguously reaffirm a still-present (shared) reset.
+_REAFFIRM_VERB = (
+    r"\b(?:shares?|sharing|shared|derived\s+from|deriv\w*|common|global|"
+    r"system|bus|same|tied\s+to|connected\s+to|driven\s+by|instead)\b")
+# An ABSENCE verb that denies the feature exists even though it is not a token in
+# `_NEG_TOKENS_RE`: "reset … is OMITTED / REMOVED / ABSENT". ORGANIC #845 round-3.
+_ABSENCE_VERB_RE = re.compile(
+    r"\b(?:omitted|removed|excluded|stripped|absent|disabled)\b", re.I)
+# Any negation token that can govern an absence verb in the same clause and make
+# it a DOUBLE NEGATIVE reaffirming presence: "the reset is NEVER disabled", "the
+# reset CANNOT be disabled", "the reset is NOT to be disabled", "at NO point is
+# the reset omitted". ORGANIC #845 round-4/5 (Step-2.7): the absence-verb arm
+# wrongly read these as denials and dropped a PRESENT (always-on) reset — a §4.05
+# leak. Rather than require the negation ADJACENT to the absence verb (round-4 was
+# too narrow — `cannot`/`not to be`/`no point` broke adjacency), a clause that
+# carries BOTH an absence verb AND any negation token is a reaffirming double
+# negative (the §4.05-safe direction is to DERIVE). A genuine absence ("the reset
+# is disabled/omitted", no negation) still denies.
+_NEG_GOVERNS_RE = re.compile(
+    r"\b(?:never|not|no|nor|none|cannot|can['’]?t|n['’]?t|"
+    r"without|unable)\b", re.I)
+_DENIAL_CACHE: Dict[str, "re.Pattern[str]"] = {}
+_REAFFIRM_CACHE: Dict[str, "re.Pattern[str]"] = {}
+
+
+def _clause_denies_existence(clause: str, keyword_re: str) -> bool:
+    """True iff the clause's negation DENIES THE KEYWORD'S EXISTENCE (not merely
+    an incidental negation governing some OTHER noun, NOR a denial of a particular
+    KIND while the feature still exists). ORGANIC #845 round-2/3 (Step-2.7): a
+    clause like 'a power-on reset is not optional', 'on reset there are no
+    outstanding transactions', 'there must be no glitch on the reset', or 'no
+    separate reset (it shares the bus reset)' negates something OTHER than the
+    reset's existence, so it must NOT veto a `## Reset` heading affirmative
+    (not-deriving a genuine reset is the §4.05 leak direction). The denial token
+    must DIRECTLY govern the keyword (`no [explicit] <kw>`, `does not use a <kw>`,
+    `<kw> is not provided`, `<kw> is omitted`) AND the clause must carry NO
+    reaffirmation that the feature still exists (`shares`/`derived from`/… <kw>)."""
+    pat = _DENIAL_CACHE.get(keyword_re)
+    if pat is None:
+        kwp = r"(?:" + keyword_re + r")"
+        pat = re.compile(
+            _DENIAL_BEFORE + _DENIAL_FILLER + kwp
+            + r"|" + kwp + r"\b(?:\s+\w+){0,4}?\s+(?:is|are|will\s+be|gets?|"
+            r"being)?\s*" + _DENIAL_AFTER_VERB,
+            re.I)
+        _DENIAL_CACHE[keyword_re] = pat
+    if pat.search(clause) is None:
+        return False
+    # a NEGATED absence verb ("never disabled", "cannot be disabled", "not to be
+    # disabled", "at no point omitted") is a double negative reaffirming presence
+    # → not an existence-denial. Any negation token co-occurring with an absence
+    # verb in the clause suffices (lean to DERIVE = §4.05-safe).
+    if _ABSENCE_VERB_RE.search(clause) and _NEG_GOVERNS_RE.search(clause):
+        return False
+    # a reaffirmation that the feature still exists (shared/derived) → kind-denial
+    # only, not an existence-denial → does NOT veto.
+    rea = _REAFFIRM_CACHE.get(keyword_re)
+    if rea is None:
+        kwp = r"(?:" + keyword_re + r")"
+        rea = re.compile(
+            _REAFFIRM_VERB + r"[^.!?;]{0,40}?" + kwp
+            + r"|" + kwp + r"[^.!?;]{0,40}?" + _REAFFIRM_VERB,
+            re.I)
+        _REAFFIRM_CACHE[keyword_re] = rea
+    return rea.search(clause) is None
+
+
 def _mention_present_unnegated(text: str, keyword_re: str) -> bool:
     """True iff the keyword appears in at least one CLAUSE where it is NOT
     governed by a negation token. If EVERY clause mentioning the keyword negates
-    it (e.g. 'with no clock or reset inputs', 'a reset is not required'), the
-    feature is genuinely absent and no requirement is derived. A real reset
-    clause comma-joined to an unrelated negated clause still derives."""
+    it, the feature is genuinely absent and no requirement is derived.
+
+    ORGANIC #845 (gmii_axis_0001) — a markdown SECTION HEADING (`## Reset`) is a
+    topic LABEL, not an affirmative requirement statement. Split into its own
+    clause it carries the keyword with no negation token, so it would wrongly
+    count as an affirmative mention even when the section BODY documents the
+    legitimate ABSENCE of the feature ('No explicit reset port is provided').
+    A heading-only affirmative mention is honored ONLY when no body clause
+    DENIES THE FEATURE'S EXISTENCE (`_EXISTENCE_DENIAL_RE`). ORGANIC #845
+    round-2 (Step-2.7): a body clause whose negation is incidental ('a power-on
+    reset is NOT optional', 'reset is NEVER deasserted until …') does NOT veto
+    the heading — only a presence-denial does (no-leak: not-deriving a genuine
+    reset is the leak direction, so an ambiguous negation still derives)."""
     low = text.lower()
     kw = re.compile(keyword_re, re.I)
-    saw_mention = False
+    heading_affirmative = False
+    negated_body = False
     for clause in _clauses(low):
-        if kw.search(clause):
-            saw_mention = True
-            if not _NEG_TOKENS_RE.search(clause):
-                return True   # an affirmative clause — feature is present
-    # mentions existed but ALL clauses negated → absent; no mention → absent.
+        if not kw.search(clause):
+            continue
+        negated = bool(_NEG_TOKENS_RE.search(clause)
+                       or _ABSENCE_VERB_RE.search(clause))
+        is_heading = bool(_HEADING_CLAUSE_RE.search(clause))
+        if not is_heading and not negated:
+            return True   # an affirmative BODY clause — feature is present
+        if is_heading and not negated:
+            heading_affirmative = True
+        if (not is_heading and negated
+                and _clause_denies_existence(clause, keyword_re)):
+            negated_body = True
+    if heading_affirmative and not negated_body:
+        return True
     return False
 
 
