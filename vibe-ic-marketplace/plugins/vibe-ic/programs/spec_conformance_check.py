@@ -841,6 +841,147 @@ def _rtl_dual_mode_shift_rotate(rtl_body: str, rotate_sigs: List[str],
 
 
 # ---------------------------------------------------------------------------
+# ERROR: a SYNCHRONOUS-reset FSM whose COMBINATIONAL next-state for the
+# reset/initial state is REDUNDANTLY gated on the same reset signal
+# (ORGANIC-20260618-sync-reset-next-state-redundant-gate) — lesson→program
+# promotion from VerilogEval-Human Prob139_2013_q2bfsm.
+#
+# A synchronous-reset sequential block already forces  state <= <RESET_STATE>
+# whenever <RESET> is asserted. If the COMBINATIONAL next-state logic ALSO
+# conditions the transition OUT of <RESET_STATE> on the SAME <RESET> signal
+# (`<RESET_STATE>: next = <RESET> ? <LAUNCH> : <RESET_STATE>;`  or
+# `if(<RESET>) next = <RESET_STATE>`), the reset is double-counted: under a sync
+# reset the FSM should leave the reset state on the first non-reset edge, but
+# this keeps it in the reset state an extra/shifted cycle, corrupting the
+# post-reset launch timing (Prob139: the f-pulse and g-window both slip).
+#
+# Conservative guards (chip-AGNOSTIC; the empirical false-positive surface over
+# all 156 VerilogEval-Human golden references is EMPTY):
+#   (a) ONLY a purely-SYNCHRONOUS reset signal qualifies — a signal used with an
+#       asynchronous reset anywhere is skipped (async legitimately handles reset
+#       in/around combinational logic, and reset-in-sensitivity is out of scope).
+#   (b) the gated next-state arm must reference the SAME reset signal the
+#       sequential block resets the state register with — a transition gated on
+#       a DIFFERENT control (enable/start/etc.) is legitimate and never fires.
+#   (c) the arm examined is the one for the RESET-VALUE state only — gating a
+#       NON-reset state's transition on reset is a different (rarer) shape and
+#       out of this structural rule's scope.
+# ---------------------------------------------------------------------------
+def _sync_reset_next_state_redundant_gate(rtl_body: str):
+    """Return [(reset_sig, reset_state, arm_text), …] for each FSM whose
+    synchronous-reset reset-state next-state arm is redundantly gated on the
+    reset signal. chip-AGNOSTIC: purely structural."""
+    import re as _re
+    resets = classify_rtl_resets(rtl_body)
+    sync_only = [r for r, rec in resets.items()
+                 if 'synchronous' in rec['mode']
+                 and 'asynchronous' not in rec['mode']]
+    if not sync_only:
+        return []
+    _SEQ = _re.compile(r'\balways\s*@\s*\(\s*posedge\b', _re.I)
+    _COMB = _re.compile(r'\balways(?:_comb\b|\s*@\s*\(\s*\*\s*\))', _re.I)
+
+    def _blk(src, after):
+        toks = list(_re.finditer(r'\b(begin|end)\b', src[after:]))
+        depth = 0
+        for t in toks:
+            if t.group(1) == 'begin':
+                depth += 1
+            else:
+                depth -= 1
+                if depth == 0:
+                    return src[after:after + t.end()]
+        semi = src.find(';', after)
+        return src[after:semi + 1] if semi >= 0 else src[after:]
+
+    def _comb_body(src, after):
+        # Full body of an always block: a balanced begin/end, a complete
+        # case…endcase (so a redundant arm in a NON-first position of a
+        # begin/end-LESS `always @(*) case(…) endcase` is not truncated at the
+        # first `;` — ORGANIC-20260618 round-3 §4.05 false-skip fix), else the
+        # single trailing statement.
+        m = _re.match(r'\s*', src[after:])
+        pos = after + m.end()
+        if _re.match(r'begin\b', src[pos:], _re.I):
+            return _blk(src, pos)
+        if _re.match(r'(?:unique\s+|priority\s+)?case[zx]?\b', src[pos:], _re.I):
+            depth = 0
+            for t in _re.finditer(r'\bcase[zx]?\b|\bendcase\b', src[pos:], _re.I):
+                if t.group(0).lower().startswith('case'):
+                    depth += 1
+                else:
+                    depth -= 1
+                    if depth == 0:
+                        return src[pos:pos + t.end()]
+            return src[pos:]
+        semi = src.find(';', pos)
+        return src[pos:semi + 1] if semi >= 0 else src[pos:]
+
+    # a reset VALUE may be a named param OR a sized/plain numeric literal
+    _RVAL = r"([A-Za-z_]\w*|\d+\s*'[sS]?[bdhoBDHO][0-9a-fA-FxXzZ_]+|\d+)"
+    out = []
+    for R in sync_only:
+        rE = _re.escape(R)
+        # collect EVERY FSM driven by this reset (a module may carry more than
+        # one same-reset FSM; round-3 §4.05 false-skip fix — do not stop at the
+        # first sequential block).
+        fsms = []
+        for sm in _SEQ.finditer(rtl_body):
+            blk = _blk(rtl_body, sm.start())
+            if not _re.search(r'\b' + rE + r'\b', blk):
+                continue
+            ra = _re.search(
+                r'if\s*\(\s*[!~]?\s*' + rE + r'\b[^)]*\)\s*(?:begin)?\s*'
+                r'(\w+)\s*<=\s*' + _RVAL, blk)
+            if not ra:
+                continue
+            state_reg, reset_val = ra.group(1), ra.group(2)
+            # The NEXT-STATE signal is the BARE-IDENTIFIER RHS of the OTHER
+            # (non-reset) assignment to the state register in the same seq block
+            # (`state <= next;`). Binding the redundancy check to THIS signal is
+            # what makes the gate fire only on the real next-state datapath —
+            # ORGANIC-20260618 round-2 §4.05: without it the gate false-fired on
+            # an output-decode (`IDLE: out_valid = resetn;`) or an unrelated
+            # `sel`-selected decoder (`RST_ST: dout = resetn ? din : RST_ST;`).
+            # If the seq block computes the next state INLINE (`state<=state+1`),
+            # there is no separate next-state reg → no redundant-comb pattern →
+            # skip (fail-safe under-fire).
+            # Scan the WHOLE body (not the begin/end-less seq block, which `_blk`
+            # truncates at the first `;`) for the non-reset `state <= next;`.
+            srE = _re.escape(state_reg)
+            next_sig = None
+            for nm in _re.finditer(srE + r'\s*<=\s*([A-Za-z_]\w*)\s*;', rtl_body):
+                if nm.group(1) != reset_val:
+                    next_sig = nm.group(1)
+                    break
+            if next_sig:
+                fsms.append((state_reg, reset_val, next_sig))
+        for state_reg, reset_val, next_sig in fsms:
+            rvE = _re.escape(reset_val)
+            nsE = _re.escape(next_sig)
+            for cm in _COMB.finditer(rtl_body):
+                body = _comb_body(rtl_body, cm.end())
+                # only the comb block that actually DRIVES the next-state register
+                if not _re.search(r'(?<![\w.])' + nsE + r'\s*=(?!=)', body):
+                    continue
+                # FORM A — the reset-VALUE state's case-arm gates the NEXT-STATE
+                # register on the reset signal: `<reset_val> : [begin] next=…R…;`
+                arm = _re.search(
+                    r'\b' + rvE + r'\s*:\s*(?:begin\b\s*)?' + nsE +
+                    r'\s*=\s*([^;]*\b' + rE + r'\b[^;]*);', body)
+                # FORM B — a redundant `if(!R) next = <reset_val>` in the comb
+                if not arm:
+                    arm = _re.search(
+                        r'if\s*\(\s*[!~]?\s*' + rE + r'\b[^)]*\)\s*'
+                        r'(?:begin\b\s*)?' + nsE + r'\s*=\s*' + rvE +
+                        r'\b[^;]*;', body)
+                if arm:
+                    out.append((R, reset_val, arm.group(0).strip()))
+                    break
+    return out
+
+
+# ---------------------------------------------------------------------------
 # ERROR: a triangle/ramp generator that DROPS the spec-required PEAK/TROUGH HOLD
 # (same ORGANIC-20260617 program-first escalation). The lesson + anti-pattern
 # block + §4-E reword all say "keep the peak-hold unless the spec EXPLICITLY
@@ -1111,6 +1252,24 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
                     f"(held-reset contiguous window comes out N-1, not N). "
                     f"Drive '{sig}' from the FSM state alone; do not gate it "
                     f"with the reset."))
+
+    # ---- sync-reset FSM next-state redundantly gated on reset (ERROR) -------
+    # The sequential block's synchronous reset already holds the FSM in the
+    # reset state; gating the comb next-state of that state on the SAME reset
+    # double-counts it and slips the post-reset launch timing. See the rule
+    # comment above _sync_reset_next_state_redundant_gate (Prob139_2013_q2bfsm).
+    if rtl_body:
+        for rsig, rstate, arm in _sync_reset_next_state_redundant_gate(rtl_body):
+            f.append(Finding(path, 'ERROR',
+                'sync-reset-next-state-redundant-gate', rstate,
+                f"the sequential block already applies a SYNCHRONOUS reset "
+                f"('{rsig}' holds the FSM in '{rstate}'), but the combinational "
+                f"next-state for '{rstate}' is ALSO gated on '{rsig}' "
+                f"(`{arm}`) — this double-counts the reset and slips the "
+                f"post-reset launch by a cycle. Drive the reset-state "
+                f"transition UNCONDITIONALLY (`{rstate}: next = <launch>;`); the "
+                f"sync reset in the sequential block holds '{rstate}' on its own."))
+            break  # one finding per module is enough to block emit
 
     # ---- SHIFTER spec implemented as a ROTATE (ERROR; lesson→program) ------
     # Spec describes a shifter and is NOT explicitly rotate-only, but the RTL
