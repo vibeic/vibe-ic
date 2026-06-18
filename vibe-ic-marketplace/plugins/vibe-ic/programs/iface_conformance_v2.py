@@ -689,6 +689,30 @@ _REGMAP_NAME_HDR = re.compile(
     r'^\s*(register\s*name|field\s*name|reg\s*name|register|field)\s*$', re.I)
 _REGMAP_OFFSET_HDR = re.compile(
     r'^\s*(offset|address|addr|reg\s*offset)\s*$', re.I)
+# (#844 issue #24) A GENERIC name-column header — a plain `Name` / `Register` /
+# `Reg` / `Field` / `CSR` — is, on its own, too ambiguous to mark a name column
+# (a port table can also have a `Name` column). It names the register column ONLY
+# when the SAME table also has an offset/address column AND no Direction column
+# (so it is a register map, not a port table). Names recognised THIS way are
+# masked at the consumer ONLY under a structural PROVENANCE guard (direction-less
+# + sole evidence is a table), so a genuine top-level port is never absorbed.
+_REGMAP_GENERIC_NAME_HDR = re.compile(
+    r'^\s*(name|register|reg|field|csr)\s*$', re.I)
+_DIR_COL_HDR = re.compile(
+    r'^\s*(direction|dir\.?|i\s*/?\s*o|inout|mode|type|r\s*/?\s*w)\s*$', re.I)
+# (#844 issue #24, Step-2.7 round-2/3) The generic-`Name`-header mask is the
+# §4.05-RISKY path (it REMOVES a MISSING-PORT block), so it fires ONLY for a table
+# under a STRICT register-MAP / CSR heading — restricted to the UNAMBIGUOUS
+# address-map terms (`register map` / `csr map` / `csr` / `csrs`). apb_dsp's
+# `## Register Map (CSR)` matches. Deliberately EXCLUDED (round-3 — they hold
+# genuine memory-mapped/exposed top-level ports just as often as internal CSRs,
+# so masking under them is a §4.05 false-skip): `control and status registers`,
+# `register file` (CPU GP regs), `memory-mapped registers`, `register
+# block/bank/set`, and any `register layout`/`pin …` heading. A "register MAP" is
+# specifically a bus address→register map — internal CSRs, not ports.
+_REGMAP_STRICT_HEADING_RE = re.compile(
+    r'^\s{0,3}#{1,6}\s+.*\b(?:register\s*map|csr\s*map|csrs?)\b',
+    re.I)
 _REGMAP_INTERNAL_PROSE = re.compile(
     r'\b(?:internal\s+(?:csr|register)|'
     r'csr(?:s)?\b|'
@@ -767,6 +791,109 @@ def regmap_csr_names(prompt: str) -> Set[str]:
             j += 1
         i = j if j > i else i + 1
     return names
+
+
+_PORTS_SECTION_HDR = re.compile(
+    r'^\s{0,3}#{1,6}\s+.*\b(?:ports?|port\s+list|interface|signals?|'
+    r'i\s*/?\s*o|pin\s*out|pinout|pin\s+(?:description|map|assignment|list)|'
+    r'connections?|top[\s-]*level\s+(?:ports?|signals?|interface|i\s*/?\s*o)|'
+    r'external\s+(?:ports?|signals?|interface))\b',
+    re.I)
+_ANY_HEADING_LINE_RE = re.compile(r'^\s{0,3}#{1,6}\s+')
+
+
+def _names_under_ports_section(prompt: str) -> Set[str]:
+    """Lower-cased backtick identifiers that appear under a markdown PORTS /
+    INTERFACE / SIGNALS section heading (until the next heading). A name declared
+    in such a section is an author-asserted top-level port even if its direction
+    prose is unrecognised by the extractor — so it must NEVER be masked by the
+    generic-regmap relaxation. (#844 issue #24, the round-4 `status` leak: a
+    genuine output declared under `## Ports` with prose direction the extractor
+    misses, ALSO listed in a generic-`Name` regmap table, would otherwise read
+    identically to an internal CSR.) chip-AGNOSTIC: pure markdown structure."""
+    names: Set[str] = set()
+    lines = prompt.splitlines()
+    in_ports = False
+    for line in lines:
+        if _ANY_HEADING_LINE_RE.match(line):
+            in_ports = bool(_PORTS_SECTION_HDR.match(line))
+            continue
+        if in_ports:
+            for m in re.finditer(r'`([A-Za-z_]\w*)`', line):
+                names.add(m.group(1).lower())
+    return names
+
+
+def regmap_generic_csr_names(prompt: str) -> Set[str]:
+    """Lower-cased names from an internal-CSR register-map table whose name column
+    uses a GENERIC header (a bare `Name`/`Register`/`Reg`/`Field`/`CSR`) rather
+    than the STRICT `Register Name`/`Field Name` header that `regmap_csr_names`
+    requires. The table must ALSO carry an offset/address column and NO Direction
+    column (a port table has a Direction column, not an offset). (#844 issue #24:
+    the apb_dsp_unit FP — 4 APB CSRs under a `| Addr | Name | Function | Reset |`
+    table were false-flagged MISSING-PORT because the bare `Name` header was not
+    recognised.) These names are masked at the consumer ONLY under a structural
+    PROVENANCE guard (direction-less + sole evidence is a table), so a genuine
+    direction-ful or Ports-section port is never absorbed. chip-AGNOSTIC."""
+    if not _REGMAP_INTERNAL_PROSE.search(prompt):
+        return set()
+    strict = regmap_csr_names(prompt)
+    names: Set[str] = set()
+    lines = prompt.splitlines()
+    n = len(lines)
+    i = 0
+    # the generic mask fires ONLY for a table under a STRICT register-map/CSR
+    # heading (#844 issue #24 Step-2.7 round-2 — kills the `## Pin Description` /
+    # `## Connections` / `## Register Layout` false-skips: those headings are not
+    # register MAPS, so their offset-bearing port tables are never absorbed).
+    under_regmap_heading = False
+    while i < n - 1:
+        line = lines[i]
+        if _ANY_HEADING_LINE_RE.match(line):
+            under_regmap_heading = bool(_REGMAP_STRICT_HEADING_RE.match(line))
+            i += 1
+            continue
+        if line.count("|") < 2 or not under_regmap_heading:
+            i += 1
+            continue
+        header = _split_md_row_local(line)
+        delim = _split_md_row_local(lines[i + 1]) if i + 1 < n else []
+        if not _is_md_delim_local(delim) or len(delim) != len(header):
+            i += 1
+            continue
+        hdr_clean = [h.strip().strip("`*_ ") for h in header]
+        has_dir = any(_DIR_COL_HDR.match(h) for h in hdr_clean)
+        off_col = next(
+            (k for k, h in enumerate(header) if _REGMAP_OFFSET_HDR.match(h)), None)
+        # generic name column, NOT also a strict-name column; offset present; no
+        # direction column → an internal register map with a bare `Name` header.
+        strict_col = next(
+            (k for k, h in enumerate(header) if _REGMAP_NAME_HDR.match(h)), None)
+        gen_col = next(
+            (k for k, h in enumerate(header)
+             if _REGMAP_GENERIC_NAME_HDR.match(h)), None)
+        if strict_col is not None or gen_col is None or off_col is None \
+                or has_dir:
+            i += 1
+            continue
+        j = i + 2
+        while j < n:
+            row = lines[j]
+            if row.count("|") < 1:
+                break
+            cells = _split_md_row_local(row)
+            if _is_md_delim_local(cells):
+                j += 1
+                continue
+            if all(c == "" for c in cells):
+                break
+            if len(cells) > gen_col:
+                cell = cells[gen_col].strip().strip("`*_ ")
+                if re.fullmatch(r"[A-Za-z_]\w*", cell):
+                    names.add(cell.lower())
+            j += 1
+        i = j if j > i else i + 1
+    return names - strict
 
 
 # (#753) A markdown table HEADER that is a DESCRIPTION / FSM-state / metadata
@@ -1144,6 +1271,11 @@ def check_conformance(rid: Optional[str], prompt: str, rtl_text: str,
     # internal CSRs are bus-accessed registers, NOT top-level ports — the
     # harness never binds to them, so they must not be charged as MISSING-PORT.
     regmap_csrs = regmap_csr_names(prompt)
+    # (#844 issue #24) generic-`Name`-header internal-CSR names. Masked ONLY under
+    # a structural PROVENANCE guard below — never the prose port-detection that
+    # leaked across PR #23's Step-2.7 rounds.
+    regmap_generic_csrs = regmap_generic_csr_names(prompt)
+    ports_section_names = _names_under_ports_section(prompt)
 
     # (#753) Names the prompt's OWN given code declares as INTERNAL nets
     # (`logic`/`wire`/`reg` body decls) or `localparam`/`parameter` constants are
@@ -1195,6 +1327,29 @@ def check_conformance(rid: Optional[str], prompt: str, rtl_text: str,
         # genuine signal): only skip when it is also absent from every module.
         if (name.lower() in regmap_csrs
                 and name.lower() not in all_port_names_lower):
+            continue
+        # (#844 issue #24) a generic-`Name`-header regmap CSR is masked ONLY under
+        # a STRUCTURAL PROVENANCE guard: it must be DIRECTION-LESS *and* its sole
+        # interface evidence must be a TABLE (`sources == {'table'}`). A genuine
+        # top-level port always carries either a direction (PORT-DIRECTION
+        # provenance) or a Ports-section/bullet source ('prose'/'bold_label'), so
+        # the PR #23 Step-2.7 leak cases never match: a direction-ful `irq`
+        # (dir!=''), or a `status` also named in a Ports section (sources ⊇
+        # {'prose','table'}). apb_dsp's CSRs (dir='', sources={'table'}) DO match
+        # → the false MISSING-PORT is removed. No prose port-detection.
+        # DOCUMENTED LOW RESIDUAL (Step-2.7 round-3, accepted): a spec that lists
+        # GENUINE top-level ports under a `## Register Map`/`## CSR` heading in a
+        # generic-Name offset table with NO direction anywhere (no Direction/R-W
+        # column, no direction prose, not under `## Ports`) is masked. This is
+        # structurally identical to an internal CSR map and contrived for CVDP-
+        # class specs — a port genuinely bound by the hidden TB must state its
+        # direction (drive vs sample), and every realistic direction expression
+        # defuses this mask (adds a non-table source or a Direction column).
+        if (name.lower() in regmap_generic_csrs
+                and name.lower() not in all_port_names_lower
+                and name.lower() not in ports_section_names
+                and not (pif.ports.get(name) or "").strip()
+                and pif.sources.get(name, set()) == {"table"}):
             continue
         # (#753 reopen) a name the given-code skeleton declares as a `parameter`
         # is AUTHORITATIVELY never a port — mask it even if a (spurious) prose
