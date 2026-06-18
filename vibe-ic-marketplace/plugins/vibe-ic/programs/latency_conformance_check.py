@@ -168,8 +168,8 @@ _CLK_NAMES = frozenset({"clk", "clock", "clk_i", "clock_i", "clk_in", "clk_in1"}
 # split on): AMBA bus clocks + common glued forms. A CLOSED allow-list (not a
 # fuzzy match) so it cannot swallow data ports like `block`/`lock`/`tick`.
 _CLK_GLUED_NAMES = frozenset({
-    "aclk", "pclk", "hclk", "mclk", "gclk", "refclk", "sclk", "fclk",
-    "wclk", "rclk", "txclk", "rxclk", "sysclk", "coreclk", "busclk"})
+    "aclk", "bclk", "pclk", "hclk", "mclk", "gclk", "refclk", "sclk", "fclk",
+    "wclk", "rclk", "txclk", "rxclk", "sysclk", "coreclk", "busclk"})  # ORGANIC #844: bclk is aclk B-side CDC pair
 _CLK_STEMS = frozenset({"clk", "clock"})
 # Qualifier tokens that, when paired with a `clk`/`clock` stem, mark a
 # clock-DERIVED CONTROL/DATA port (clock-enable / gate / divider / select / …)

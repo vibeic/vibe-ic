@@ -153,26 +153,47 @@ def _advisory(f: Finding, provenance: str, corroboration: str) -> Finding:
 # Tokenization (comment stripper + simple lexer good enough for our patterns)
 # ---------------------------------------------------------------------------
 def strip_comments(src: str) -> str:
-    """Remove // line comments and /* block */ comments, preserving newlines."""
-    # Block comments — preserve newlines for line tracking
+    """Remove // line comments and /* block */ comments, preserving newlines and
+    byte offsets (comments → spaces). STRING-AWARE (ORGANIC #843 round-3,
+    Step-2.7): a `//` or `/*` INSIDE a double-quoted string literal is NOT a
+    comment, so the string's bytes are copied verbatim and never trigger a
+    comment scan — previously a `/*` inside a string truncated the whole
+    remaining source (the string-unaware `break`), silently dropping real code
+    after it (a §4.05 leak for every consumer rule). An UNTERMINATED comment now
+    blanks to end-of-source (offset-preserving) rather than dropping the tail."""
     out = []
-    i = 0
-    while i < len(src):
-        if src[i:i+2] == '/*':
-            end = src.find('*/', i+2)
-            if end == -1:
-                break
-            # Keep newlines so line numbers stay correct
-            out.append(''.join('\n' if c == '\n' else ' ' for c in src[i:end+2]))
-            i = end + 2
-        elif src[i:i+2] == '//':
+    i, n = 0, len(src)
+    while i < n:
+        c = src[i]
+        if c == '"':
+            # copy the string literal verbatim (escapes included); no comment
+            # processing inside it.
+            out.append('"')
+            i += 1
+            while i < n and src[i] != '"':
+                if src[i] == '\\' and i + 1 < n:
+                    out.append(src[i:i + 2])
+                    i += 2
+                    continue
+                out.append(src[i])
+                i += 1
+            if i < n:
+                out.append('"')
+                i += 1
+        elif src[i:i + 2] == '/*':
+            end = src.find('*/', i + 2)
+            stop = (end + 2) if end != -1 else n
+            out.append(''.join('\n' if ch == '\n' else ' '
+                               for ch in src[i:stop]))
+            i = stop
+        elif src[i:i + 2] == '//':
             end = src.find('\n', i)
             if end == -1:
-                break
+                end = n
             out.append(' ' * (end - i))
             i = end
         else:
-            out.append(src[i])
+            out.append(c)
             i += 1
     return ''.join(out)
 
@@ -1360,6 +1381,123 @@ def _is_valid_gated_fsm_terminal_output(src: str, name: str,
     return True
 
 
+# ORGANIC #843 (CVDP round-18 perceptron FP) — registered-output (NBA-LHS)
+# detection. The bare `(?<![<>!=])\b(\w+)(?:\[[^\]]+\])?\s*<=` regex puts its
+# negative lookbehind BEFORE the IDENTIFIER, not before the `<=` OPERATOR, so a
+# RELATIONAL `<=` COMPARISON whose left operand is an identifier (`y_in <=
+# threshold`, `if (a <= b)`, `x >= -t && x <= t`) is mis-read as a non-blocking
+# ASSIGNMENT and the identifier is wrongly added to the "registered" set —
+# flagging a purely COMBINATIONAL output (written only by blocking `=` inside an
+# `always_comb`) as a reset-less registered output. A combinational output
+# cannot power-up-X-then-be-clocked, so the rule's premise is inapplicable.
+#
+# The robust discriminator: a real non-blocking ASSIGNMENT `lhs <= rhs;` is a
+# procedural STATEMENT (paren depth 0), whereas a relational `<=` COMPARISON
+# lives inside an `if (...)` / `while (...)` / ternary condition or a wider
+# expression — i.e. inside `(...)`, at paren depth > 0. We therefore keep the
+# proven regex (so the matched-LHS scope is BYTE-IDENTICAL to the shipped one —
+# critical for §4.05 no-leak: this must NOT start matching anything new) and
+# ACCEPT a match only when its `<=` token sits at paren depth 0. This is
+# STRICTLY NARROWER than the shipped set: it removes ONLY the relational-
+# comparison false matches and adds nothing, so every genuine reset-less
+# registered output (`always @(posedge clk) q <= d;`) STILL enters the set and
+# STILL warns. Purely structural & chip-AGNOSTIC.
+_NBA_LHS_RE = re.compile(r'(?<![<>!=])\b(\w+)(?:\[[^\]]+\])?\s*<=')
+
+
+def _mask_comments_and_strings(s: str) -> str:
+    """Length-preserving SINGLE-PASS lexer that blanks the CONTENTS of line
+    comments, block comments, AND double-quoted string literals — tracking all
+    three states simultaneously so a `//`/`/*` INSIDE a string is inert, and a
+    `"` inside a comment is inert. ORGANIC #843 round-3 (Step-2.7): a two-stage
+    `strip_comments` (string-unaware) then `blank_strings` mis-handled a `/*`/`//`
+    embedded in a string literal — it treated the in-string token as a real
+    comment and truncated the whole remaining source, silently dropping a genuine
+    reset-less registered output (a §4.05 leak). Delimiters are preserved; only
+    inner bytes become spaces, so byte offsets are unchanged."""
+    out: List[str] = []
+    i, n = 0, len(s)
+    while i < n:
+        c = s[i]
+        if c == '/' and i + 1 < n and s[i + 1] == '/':
+            out.append('  ')
+            i += 2
+            while i < n and s[i] != '\n':
+                out.append(' ')
+                i += 1
+        elif c == '/' and i + 1 < n and s[i + 1] == '*':
+            out.append('  ')
+            i += 2
+            while i < n and not (s[i] == '*' and i + 1 < n and s[i + 1] == '/'):
+                out.append('\n' if s[i] == '\n' else ' ')
+                i += 1
+            if i + 1 < n:
+                out.append('  ')
+                i += 2
+        elif c == '"':
+            out.append('"')
+            i += 1
+            while i < n and s[i] != '"':
+                if s[i] == '\\' and i + 1 < n:
+                    out.append('  ')
+                    i += 2
+                    continue
+                out.append('\n' if s[i] == '\n' else ' ')
+                i += 1
+            if i < n:
+                out.append('"')
+                i += 1
+        else:
+            out.append(c)
+            i += 1
+    return ''.join(out)
+
+
+def _registered_nba_lhs(src: str) -> Set[str]:
+    """Identifiers that are the LHS of a non-blocking procedural assignment
+    (`<=` at paren depth 0). See the ORGANIC #843 note above — paren-depth
+    gating rejects a relational `<=` COMPARISON inside `(...)` while keeping a
+    genuine `lhs <= rhs;` STATEMENT. chip-AGNOSTIC.
+
+    ORGANIC #843 round-3 (Step-2.7) — the paren depth is measured over a
+    STRUCTURAL view of the source (`_mask_comments_and_strings`): a raw GLOBAL
+    byte-count of `(`/`)` is corrupted by ANY unbalanced paren in a preceding
+    COMMENT or STRING (`// see foo(`, `$display("(")`, a string literal whose
+    bytes are `/* (`), which would push a genuine reset-less `q <= d;` to
+    apparent depth>0 and silently DROP it (a §4.05 leak). The single-pass masker
+    handles comment/string tokens nested in one another; the regex runs over the
+    masked copy so a `<=` inside a string/comment is never matched (strictly
+    narrower than the shipped raw scan — code bytes are identical in masked, so
+    every genuine NBA still registers)."""
+    masked = _mask_comments_and_strings(src)
+    registered: Set[str] = set()
+    for mm in _NBA_LHS_RE.finditer(masked):
+        op = masked.find('<=', mm.start(), mm.end())
+        if op == -1:
+            continue
+        if masked.count('(', 0, op) - masked.count(')', 0, op) != 0:
+            continue   # `<=` inside `(...)` is a relational comparison
+        # ORGANIC #843 round-3 (Step-2.7) — a depth-0 relational `<=` in a
+        # CONTINUOUS-ASSIGN / blocking RHS (`assign le = sum <= b;`, `flag = a <=
+        # b;`) is NOT a non-blocking assignment. A real NBA `lhs <= rhs;` begins a
+        # STATEMENT, so the token immediately before the LHS identifier is a
+        # statement boundary (`;` `)` `}` `begin`/`end`/`else`, or buffer start) —
+        # NEVER an EXPRESSION operator (`=` `?` `:` or a binary operator). Reject
+        # the expression-context case so a combinational output assigned only by a
+        # continuous `assign` is not mistaken for a registered output.
+        # Reject ONLY clear EXPRESSION operators. `:` `,` `.` are NOT rejected —
+        # they legitimately precede a genuine NBA LHS (a `case` item `2'd0: q <=
+        # d;`, a concat `{a, b} <= c`, a hierarchical `a.b <= c`), so rejecting
+        # them would LEAK a real reset-less registered output.
+        j = mm.start() - 1
+        while j >= 0 and masked[j] in ' \t\r\n':
+            j -= 1
+        if j >= 0 and masked[j] in '=?+-*/&|^~<>!%':
+            continue
+        registered.add(mm.group(1))
+    return registered
+
+
 def rule_uninit_registered_output(src: str, path: str) -> List[Finding]:
     """
     Detect a REGISTERED output port (assigned via `<=` in a clocked block) in a
@@ -1401,8 +1539,12 @@ def rule_uninit_registered_output(src: str, path: str) -> List[Finding]:
     reset_covered = _reset_covered_signals(src)
 
     # Registered = appears on LHS of a non-blocking assignment.
-    registered = {mm.group(1)
-                  for mm in re.finditer(r'(?<![<>!=])\b(\w+)(?:\[[^\]]+\])?\s*<=', src)}
+    # ORGANIC #843 — paren-depth-gated so a RELATIONAL `<=` comparison
+    # (`y_in <= threshold` inside an `if (...)` / expression) is NOT mistaken for
+    # a non-blocking ASSIGNMENT. Strictly narrower than the old bare regex: same
+    # matched-LHS scope minus the in-paren relational-comparison false matches
+    # (§4.05 no-leak — see `_registered_nba_lhs`).
+    registered = _registered_nba_lhs(src)
     has_initial = bool(re.search(r'\binitial\b', src))
 
     for name, lineno in out_ports.items():
