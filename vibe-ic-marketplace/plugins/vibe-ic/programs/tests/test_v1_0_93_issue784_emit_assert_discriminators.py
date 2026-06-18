@@ -112,12 +112,40 @@ def test_shift_rule_silent_on_explicit_rotate_only_spec():
     assert _findings(rot_spec, _ROTATE_CONCAT_RTL, RULE_SHIFT) == []
 
 
-def test_shift_rule_silent_on_shifts_or_rotates_ambiguous_spec():
-    # "shifts or rotates" carries a rotate token → CONSERVATIVELY ambiguous →
-    # the rule stays silent (under-firing is permitted; a false block is not).
+def test_shift_or_rotates_disjunction_spec_BLOCKS_rotate_rtl():
+    # ORGANIC-20260618 (RTLLM round-19 barrel_shifter): a spec that OFFERS BOTH
+    # operations in a disjunction ("shifts or rotates") is NOT rotate-only — the
+    # lessons corpus binds it to a LOGICAL shift with zero-fill. A rotate RTL
+    # under such a spec is WRONG and MUST be blocked. (Supersedes the prior
+    # conservative under-firing pin, which let the wrong rotate design pass the
+    # hidden right-shift TB.)
     spec = _SHIFT_SPEC.replace("Build an 8-bit barrel SHIFTER",
                                "Build an 8-bit unit that shifts or rotates")
-    assert _findings(spec, _ROTATE_OR_RTL, RULE_SHIFT) == []
+    fs = _findings(spec, _ROTATE_OR_RTL, RULE_SHIFT)
+    assert any(f.rule == "shift-implemented-as-rotate" for f in fs), fs
+
+
+def test_shift_rule_still_silent_on_rotate_ONLY_spec_no_leak():
+    # §4.05 NO-LEAK: a GENUINE rotate-only spec (rotate / circular present, NO
+    # shift-or-rotate disjunction) still disarms — a correct rotate design must
+    # NOT be false-blocked.
+    rot_only = ("Build an 8-bit barrel ROTATOR: rotate the input left by ctrl "
+                "positions (a circular shift — the bits wrap around).\n\n"
+                " - input  [7:0] din\n - input  [2:0] ctrl\n"
+                " - output [7:0] dout\n")
+    assert _findings(rot_only, _ROTATE_OR_RTL, RULE_SHIFT) == []
+
+
+def test_shift_or_rotates_disjunction_silent_on_correct_logical_shift():
+    # §4.05 NO-FALSE-BLOCK: the SAME "shifts or rotates" spec with a CORRECT
+    # logical-shift RTL (zero-fill) must stay silent — only the rotate form fires.
+    spec = _SHIFT_SPEC.replace("Build an 8-bit barrel SHIFTER",
+                               "Build an 8-bit unit that shifts or rotates")
+    good = ("module TopModule(input [7:0] din, input [2:0] ctrl,\n"
+            "                 output [7:0] dout);\n"
+            "  assign dout = din >> ctrl;\n"
+            "endmodule\n")
+    assert _findings(spec, good, RULE_SHIFT) == []
 
 
 def test_shift_rule_silent_on_or_with_nonshift_mask():

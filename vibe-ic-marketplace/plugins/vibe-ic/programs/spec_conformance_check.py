@@ -552,18 +552,41 @@ _ROTATE_INTENT_RE = __import__('re').compile(
     r'\b(?:rotat(?:e|es|ed|ing|or|ion)|circular(?:ly)?\s+shift|'
     r'barrel[\s-]+rotat\w*|cyclic(?:ally)?\s+shift|wrap[\s-]?around)\b',
     __import__('re').IGNORECASE)
+# ORGANIC-20260618 barrel_shifter (RTLLM round-19) HARDENING of the §784 carve-
+# out. A spec that OFFERS BOTH operations in a disjunction — "shift OR rotate",
+# "shifts or rotates [the bits]", "shift/rotate" — is NOT rotate-only: the
+# lessons corpus (lessons.md "barrel shifter — default is LOGICAL shift") binds
+# it to a LOGICAL shift with zero-fill for the asserted (default) test. The
+# previous "ANY rotate token disarms" rule UNDER-FIRED on exactly this canonical
+# case (a pure left-rotate RTL silently passed the right-shift hidden TB). This
+# phrase RE-ARMS the gate ONLY for the BOTH-OFFERED disjunction; a genuine
+# rotate-ONLY spec (rotate / circular present but NO shift-VERB-or-rotate
+# disjunction) still disarms. Both word orders, short window, hyphen/slash form.
+_SHIFT_OR_ROTATE_RE = __import__('re').compile(
+    r'\b(?:'
+    r'shift\w*\s*(?:/|\bor\b|\band\b)\s*rotat\w*'     # shift or/and/slash rotate
+    r'|rotat\w*\s*(?:/|\bor\b|\band\b)\s*shift\w*'    # rotate or/and/slash shift
+    r')',
+    __import__('re').IGNORECASE)
 
 
 def _spec_describes_plain_shifter(spec_text: str) -> bool:
-    """True iff the prose describes a SHIFTER (shift vocabulary present) and
-    does NOT make the operation a rotate. §4.05: ANY explicit rotate / circular
-    / barrel-rotate / wrap-around / cyclic-shift token disarms the rule — a
-    genuine rotate-only design must emit. 'shifts or rotates' contains a rotate
-    token, so it is treated CONSERVATIVELY as ambiguous and the rule stays
-    silent (under-firing is permitted; a false block is not)."""
+    """True iff the prose describes a SHIFTER (shift vocabulary present) and the
+    operation is NOT rotate-only.
+
+    §4.05 disarm: a genuine rotate / circular / barrel-rotate / wrap-around /
+    cyclic-shift token normally disarms the rule — a genuine rotate-only design
+    must emit unblocked.
+
+    EXCEPTION (ORGANIC-20260618): a spec that OFFERS BOTH operations in a
+    disjunction ("shift or rotate" / "shifts or rotates" / "shift/rotate") is
+    NOT rotate-only — the lessons corpus binds it to a LOGICAL shift with
+    zero-fill, so the gate RE-ARMS even though a rotate token is present. Only
+    the BOTH-offered disjunction re-arms; a rotate-only spec stays disarmed."""
     if not _SHIFT_VERB_RE.search(spec_text):
         return False
-    if _ROTATE_INTENT_RE.search(spec_text):
+    both_offered = _SHIFT_OR_ROTATE_RE.search(spec_text) is not None
+    if _ROTATE_INTENT_RE.search(spec_text) and not both_offered:
         return False
     return True
 
