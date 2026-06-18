@@ -239,6 +239,155 @@ def test_partB_resolve_prompt_text_never_reads_tb():
         assert "module tb" not in txt  # the TB was never read
 
 
+# ─── Step-2.7 round-2 §4.05: precise disarm (no false-skip on logical shifts) ─
+# Round-1's widened vocabulary FALSE-DISARMED common LOGICAL-shift specs whose
+# prose incidentally contains MSB/LSB/cyclic/wrap wording — a §4.05 FALSE-SKIP
+# (a wrong rotate then ships under a plain-shifter spec). Each of these is a
+# genuine LOGICAL shift (explicit zero/feedback fill) and MUST stay ARMED.
+_STEP27_LOGICAL_SHIFT_SPECS = {
+    "msb_out_lsb_zero":
+        "This 4-bit shift register performs a logical left shift each clock. "
+        "The most significant bit is shifted out of the register while the "
+        "least significant bit is filled with a zero.",
+    "lfsr":
+        "A linear feedback shift register. On each clock the bits shift right "
+        "and the most significant bit is loaded with the XOR feedback, while "
+        "the least significant bit is shifted out as the serial output.",
+    "circular_buffer":
+        "A 4-bit logical shift register. Results are stored into a circular "
+        "buffer for later inspection. Each clock the register shifts left and "
+        "fills the vacated bit with zero.",
+    "counter_wraps":
+        "A 4-bit shift register with an index counter. When the counter reaches "
+        "its maximum it wraps around to zero. The shift register itself performs "
+        "a plain logical left shift, filling the LSB with zero each clock.",
+    "moves_msb_to_lsb":
+        "An 8-bit logical shift register. On each clock the data moves from the "
+        "most significant bit toward the least significant bit, and a zero is "
+        "shifted into the MSB position.",
+    # round-2 residuals: a plain logical shift that names a rotate/cyclic token
+    # WITHOUT an explicit fill — caught by the logical-shift / discard / negation
+    # veto (these EVADED the round-1 explicit-fill-only veto).
+    "unlike_ring_counter":
+        "Design an 8-bit logical right shift register. Unlike a ring counter, "
+        "the shifted-out bit is discarded rather than recirculated.",
+    "left_shift_travel":
+        "A shift register performing a logical left shift each clock, where the "
+        "least significant bit is shifted into the most significant bit across "
+        "successive clocks.",
+    "circular_buffer_pointer_wrap":
+        "A 4-bit logical left shift register feeding a circular buffer; the "
+        "buffer pointer wraps around to bit 0 after the last entry.",
+    # round-3 residual: a cross-register MSB->LSB side-feed (to a DIFFERENT
+    # register) is not a self-wrap; zero-fill phrased as "set to 0".
+    "crc_cross_register_sidefeed":
+        "An 8-bit shift register; bits shift left and the LSB is set to 0. The "
+        "most significant bit is carried to the least significant bit of the "
+        "CRC register.",
+    # round-4: a CONTROL-PATH pointer/counter "wraps back" while the DATA path is
+    # an explicit zero-fill logical shift — must stay ARMED (the bare wrap-back
+    # arm was removed).
+    "buffer_pointer_wraps_back":
+        "A logical shift register feeding a circular buffer whose write pointer "
+        "wraps back to index zero; the data word itself is shifted with zero "
+        "fill.",
+    "fifo_addr_loops_back":
+        "An 8-bit logical right shift with zero fill; a separate FIFO address "
+        "counter loops back to zero after the last slot.",
+    # round-5: a plain SIPO whose MSB and LSB go to DIFFERENT destinations
+    # across a clause boundary ("...into the output register AND the least
+    # significant bit is loaded with d") is NOT a self-wrap — the tempered
+    # to/into destination gap (stops at and/or/clause) keeps it ARMED.
+    "sipo_msb_lsb_different_dests":
+        "Module shifter: an 8-bit shift register. The most significant bit is "
+        "shifted into the output register and the least significant bit is "
+        "loaded with d. The register shifts left by one each clock.",
+    "sipo_serial_dests":
+        "On each clock the most significant bit is shifted into serial_out, and "
+        "the least significant bit receives serial_in.",
+}
+
+# round-3: genuine rotate/cyclic designs whose prose contains discard/negation/
+# logical-shift tokens must STILL DISARM (the polarity-blind round-3 veto wrongly
+# false-fired and emit-blocked these CORRECT ring counters / recirculators).
+_STEP27_GENUINE_ROTATE_SPECS = {
+    "ring_counter_nothing_dropped":
+        "An 8-bit ring counter: each clock it shifts and the last bit feeds the "
+        "first; nothing is dropped.",
+    "ring_counter_logical_wrap":
+        "A ring counter implemented as a logical shift of a one-hot vector that "
+        "wraps the MSB back to the LSB.",
+    "serializer_recirculated":
+        "A serializer where the most significant bit is shifted to the least "
+        "significant bit, not discarded but recirculated.",
+    # round-4: a contrastive intro whose negation targets a DIFFERENT device must
+    # NOT suppress the ring-counter disarm (adjacency-anchored polarity).
+    "unlike_lfsr_ring":
+        "Unlike a LFSR, the ring counter shifts the hot bit around the register "
+        "each clock.",
+    "rather_than_binary_ring":
+        "Rather than a binary counter, a ring counter shifts a one-hot token "
+        "around its bits.",
+    "no_decoder_ring":
+        "No decoder is needed: the ring counter shifts the active bit "
+        "cyclically each clock.",
+}
+
+
+@pytest.mark.parametrize("key", list(_STEP27_GENUINE_ROTATE_SPECS))
+def test_partA_step27_genuine_rotate_with_neg_tokens_disarms_no_false_fire(key):
+    assert scc._spec_describes_plain_shifter(
+        _STEP27_GENUINE_ROTATE_SPECS[key]) is False
+
+
+@pytest.mark.parametrize("key", list(_STEP27_LOGICAL_SHIFT_SPECS))
+def test_partA_step27_logical_shift_prose_stays_armed_no_leak(key):
+    assert scc._spec_describes_plain_shifter(
+        _STEP27_LOGICAL_SHIFT_SPECS[key]) is True
+
+
+def test_partA_step27_gate_fires_on_rotate_under_logical_shift_spec():
+    # end-to-end: a rotate RTL under a logical-shift spec is still BLOCKED.
+    rtl = ("module m(input [7:0] din, output [7:0] dout);\n"
+           "  assign dout = {din[6:0], din[7]};\n"
+           "endmodule\n")
+    rc, findings = _run_shapeC(_STEP27_LOGICAL_SHIFT_SPECS["lfsr"], rtl)
+    assert rc == 1
+    assert any(f.rule == "shift-implemented-as-rotate" for f in findings)
+
+
+# ─── Step-2.7 round-2: Part B integration + blindness ────────────────────────
+def test_partB_step27_project_only_invocation_blocks(tmp_path):
+    # integration HIGH: the DOCUMENTED --project-only invocation (no
+    # --prompt/--dataset) must resolve the runner-staged prompt
+    # (input/phase1_prompt.md) so the gate FIRES — else it is a dead #529 gate.
+    project = tmp_path / "work" / "shifter"
+    rtl_dir = project / "phase2" / "stage1" / "rtl"
+    rtl_dir.mkdir(parents=True)
+    (rtl_dir / "shifter.v").write_text(
+        "module shifter(input [7:0] din, input [2:0] shamt, output [7:0] dout);\n"
+        "  assign dout = (din >> shamt) | (din << (8-shamt));\n"
+        "endmodule\n")
+    (project / "input").mkdir()
+    (project / "input" / "phase1_prompt.md").write_text(
+        "Design module shifter that performs a logical right shift of the 8-bit "
+        "input din by shamt bits. The shifted-in bits are zero.\n")
+    samples = tmp_path / "samples"
+    res = sbx.export(rtl_dir, "shifter", samples, spec_module="shifter",
+                     project=project)
+    assert res["verdict"] == "FAIL"
+    assert res["reason"] == "shift_rotate_emit_block"
+    assert not (samples / "shifter.v").exists()
+
+
+def test_partB_step27_readme_not_read_blindness():
+    # blindness MED: README.md (too generic — may carry TB/golden text) is no
+    # longer read; the runner-staged prompt names ARE read.
+    assert "README.md" not in sbx._PROMPT_FILENAMES
+    assert "phase1_prompt.md" in sbx._PROMPT_FILENAMES
+    assert "design_description.md" in sbx._PROMPT_FILENAMES
+
+
 # ─────────────────────────────── helpers ───────────────────────────────────
 def _run_shapeC(spec_text: str, rtl_text: str):
     """Drive the Shape-C `spec_conformance_check.check` on a spec/RTL pair and

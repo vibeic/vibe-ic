@@ -925,8 +925,14 @@ def discover_testbench(rtl_dir: Path, leaf: str,
 # prompt under the project (`phase1/input_prompt/` / `input/`). Returns "" (an
 # empty string → emit-block stays disarmed, fail-safe) when no prompt is
 # locatable. chip-AGNOSTIC: generic prompt-filename vocabulary only.
-_PROMPT_FILENAMES = ("design_description.txt", "PROMPT.txt", "prompt.txt",
-                     "description.txt", "spec.md", "README.md")
+# ORGANIC-20260618 round-2 (Step-2.7): include the RUNNER-STAGED prompt names so
+# the gate actually fires on the documented `--project`-only Shape-B invocation
+# (else it is a dead #529-class gate). `README.md` is REMOVED — it is too generic
+# and may carry testbench / golden text (a blindness risk); only spec/prompt-
+# specific names are read.
+_PROMPT_FILENAMES = ("design_description.txt", "design_description.md",
+                     "phase1_prompt.md", "phase1_prompt.txt",
+                     "PROMPT.txt", "prompt.txt", "description.txt", "spec.md")
 
 
 def resolve_prompt_text(rtl_dir: Path, leaf: str,
@@ -963,7 +969,7 @@ def resolve_prompt_text(rtl_dir: Path, leaf: str,
     bases: List[Path] = []
     if project is not None:
         bases += [_pl.input_prompt_dir(project), _pl.input_doc_dir(project),
-                  project / "input", project]
+                  project / "input", project / "input" / "docs", project]
     bases += [rtl_dir.parent, rtl_dir.parent.parent]
     seen: set = set()
     for base in bases:
