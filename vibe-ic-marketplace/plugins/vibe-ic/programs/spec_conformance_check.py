@@ -599,10 +599,24 @@ def _rtl_rotate_signatures(rtl_body: str) -> List[str]:
     out: List[str] = []
     # (1) OR of two OPPOSITE shifts of the SAME signal: (x<<n)|(x>>m) either order
     # Each operand is `( <ident> <shiftop> <expr> )` or bare `<ident> <shiftop> <expr>`.
+    # The shift AMOUNT may itself be PARENTHESISED (`<< (8-shamt)`) and the form
+    # may carry NO whitespace (`(din<<(8-shamt))`) — ORGANIC-20260618 round-4: the
+    # old `[^()|;]+?` excluded parens, so a parenthesised amount silently dropped
+    # the whole rotate signature (a functionally rotate-ONLY design then passed a
+    # shifter spec). Allow ONE level of parens in the amount. zero-false-fire is
+    # still guaranteed by the same-signal + opposite-direction check below.
     shift_operand = (r'\(?\s*([A-Za-z_]\w*)\s*(<<|>>)\s*'
-                     r'[^()|;]+?\)?')
+                     r'(?:\([^()]*\)|[^()|^;])+?\)?')
+    # The combiner is OR `|` or XOR `^` of the two opposite shifts: when the two
+    # halves of a rotate are bit-disjoint (a+b == W) `^` is identically `|`, so
+    # `(x<<a)^(x>>b)` is the same rotate as `(x<<a)|(x>>b)`. ORGANIC-20260618
+    # round-5: the `|`-only combiner mislabeled the XOR form as a plain shift.
+    # ADD `+` is deliberately NOT a combiner here — `(x<<a)+(x>>b)` can be real
+    # arithmetic (e.g. 2.5*x), so recognising it risks a false-fire; the ADD-form
+    # rotate is a documented honest UNDER-fire (fail-safe). zero-false-fire is
+    # still guaranteed by the same-signal + opposite-direction check below.
     or_pat = re.compile(
-        shift_operand + r'\s*\|\s*' + shift_operand)
+        shift_operand + r'\s*[|^]\s*' + shift_operand)
     for m in or_pat.finditer(rtl_body):
         a_sig, a_op, b_sig, b_op = m.group(1), m.group(2), m.group(3), m.group(4)
         if a_sig == b_sig and a_op != b_op:   # same signal, OPPOSITE directions
@@ -656,7 +670,174 @@ def _rtl_rotate_signatures(rtl_body: str) -> List[str]:
         union = idx_a | idx_b
         if union == set(range(0, max(union) + 1)):   # disjoint + gap-free [0..W-1]
             out.append(whole.strip())
+    # (3) a DOUBLED / REPLICATED same-vector fed into a SINGLE shift:
+    #     {x, x} >> k   /   {N{x}} >> k   (N >= 2)   — the duplication supplies
+    #     the wrap-around bits, so a single shift of the doubled vector is a
+    #     ROTATE (right form keeps the low W bits, left form the high W bits).
+    #     ORGANIC-20260618 round-4: this evaded (1) [no OR-of-opposite-shifts]
+    #     and (2) [the concat is a DUPLICATION, not a fill-free PARTITION of x],
+    #     so a {x,x}>>k rotate was mis-read as a plain shift. ZERO-FALSE-FIRE:
+    #     requires the SAME vector duplicated (x,x or N{x}) AND a trailing shift;
+    #     a {bit-select, literal} zero-fill or a {x,y} funnel will NOT match.
+    #     chip-AGNOSTIC: any vector name / parameterised width.
+    dbl_concat = re.compile(
+        r'\{\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\}\s*\)?\s*(?:>>|<<)')
+    for m in dbl_concat.finditer(rtl_body):
+        if m.group(1) == m.group(2):          # SAME vector doubled (not a funnel)
+            out.append(m.group(0).strip())
+    dbl_rep = re.compile(
+        r'\{\s*(\d+)\s*\{\s*([A-Za-z_]\w*)\s*\}\s*\}\s*\)?\s*(?:>>|<<)')
+    for m in dbl_rep.finditer(rtl_body):
+        if int(m.group(1)) >= 2:              # {N{x}} with N>=2 is a duplication
+            out.append(m.group(0).strip())
     return out
+
+
+def _ternary_leaf_branches(expr: str) -> List[str]:
+    """Split a top-level ternary `cond ? A : B` into its leaf branch exprs
+    (recursively, right-associative). A non-ternary expr is its own only leaf.
+    Paren/bracket/brace depth tracked so nested ?: and bit-selects don't fool
+    the split."""
+    def _find_top(e: str, ch_set, start: int = 0) -> int:
+        depth = 0
+        for i in range(start, len(e)):
+            c = e[i]
+            if c in '([{':
+                depth += 1
+            elif c in ')]}':
+                depth -= 1
+            elif depth == 0 and c in ch_set:
+                return i
+        return -1
+    q = _find_top(expr, '?')
+    if q < 0:
+        return [expr.strip()]
+    c = _find_top(expr, ':', q + 1)
+    if c < 0:
+        return [expr.strip()]
+    return (_ternary_leaf_branches(expr[q + 1:c])
+            + _ternary_leaf_branches(expr[c + 1:]))
+
+
+def _rtl_dual_mode_shift_rotate(rtl_body: str, rotate_sigs: List[str],
+                                out_names) -> bool:
+    """True iff a MODULE OUTPUT is driven by a select (ternary / case) that
+    genuinely muxes a plain-LOGICAL-SHIFT branch against a ROTATE branch.
+
+    ORGANIC-20260618 round-2 §4.05 false-fire fix. A spec that OFFERS BOTH
+    operations ("shift OR rotate", selected by a mode) is correctly implemented
+    with BOTH a logical-shift branch AND a rotate branch, mux-selected; the
+    rotate branch trips the rotate signature, so the re-armed gate must SKIP
+    (fail-safe under-fire) on this dual-mode shape. Used ONLY on the disjunction
+    re-arm path — a plain 'shifter' spec never reaches this guard, so the
+    original #784/#790 gate behaviour is byte-for-byte preserved. (A leaf is
+    'rotate' iff _rtl_rotate_signatures matches it — OR/XOR of opposite shifts,
+    bijective same-vector concat, or doubled/replicated-vector shift; the rarer
+    ADD-form rotate is a documented under-fire, see _rtl_rotate_signatures.)
+
+    OUTPUT-AWARE NO-LAUNDER (§4.05, round-3): the decision looks ONLY at the
+    expressions that drive the MODULE OUTPUT(s). A decoy mux on a dead/unused
+    wire cannot launder a rotate-only output, because that wire is not an output
+    driver. Branch exprs are FULLY (recursively) resolved through wire
+    assignments before classification, so a split-wire rotate (`sh = (x<<n) |
+    wrap; wrap = x>>(W-n)`) is correctly read as a rotate, not mis-labelled a
+    plain shift.
+
+    LIVE-MUX-ONLY NO-LAUNDER (§4.05, round-4): the shift and rotate leaves must
+    be MUTUALLY-EXCLUSIVE LIVE branches of a genuine select — only three shapes
+    qualify: (1) a TERNARY `cond ? A : B` driving the output (non-literal cond),
+    (2) a CASE with a NON-CONSTANT selector whose items assign the output, (3) a
+    simple `if(cond) out=..; else out=..;` (non-literal cond). A leaf is NEVER
+    taken from a bare unconditional assignment, so a sequential dead-then-
+    overwrite (`out=shift; out=rotate;` — last write wins, functionally
+    rotate-ONLY) and a CONSTANT-selector case (`case(1'b1)`) cannot fake
+    dual-mode; the gate fails SAFE (fires) on them. Any output-driver shape NOT
+    in {ternary, non-const case, simple if/else} also fails safe to fire.
+    dual-mode requires the output's OWN live-mux branches to contain BOTH a
+    genuine shift AND a genuine rotate. chip-AGNOSTIC: any vector name /
+    parameterised width.
+    """
+    import re
+    out_names = set(out_names or ())
+    if not rotate_sigs or not out_names:
+        return False
+    # resolution map: wire/reg/assign  name -> rhs expr (last assign wins for
+    # continuous `assign`; first decl-init kept otherwise).
+    assigns: dict = {}
+    for am in re.finditer(r'\b(?:wire|reg|logic)\b[^=;]*?([A-Za-z_]\w*)\s*='
+                          r'\s*([^;]+);', rtl_body):
+        assigns.setdefault(am.group(1), am.group(2))
+    for am in re.finditer(r'\bassign\s+([A-Za-z_]\w*)\s*=\s*([^;]+);', rtl_body):
+        assigns[am.group(1)] = am.group(2)
+
+    def _resolve(expr: str, seen=None, depth: int = 0) -> str:
+        """Recursively substitute resolvable wire names with their RHS so a
+        split-wire rotate collapses to its inline form. Bounded + cycle-safe."""
+        if depth > 12:
+            return expr
+        seen = seen or set()
+
+        def _repl(m):
+            nm = m.group(0)
+            if nm in assigns and nm not in out_names and nm not in seen:
+                return '(' + _resolve(assigns[nm], seen | {nm}, depth + 1) + ')'
+            return nm
+        return re.sub(r'\b[A-Za-z_]\w*\b', _repl, expr)
+
+    def _class(expr: str):
+        full = _resolve(expr.strip())
+        if _rtl_rotate_signatures(full):
+            return 'rotate'
+        if re.search(r'<<|>>', full):
+            return 'shift'
+        return None
+
+    def _is_literal_sel(sel: str) -> bool:
+        """A constant case/ternary selector (`1'b1`, `2'd0`, `0`) — NOT a real
+        runtime mux."""
+        return re.fullmatch(r"\s*(?:\d+\s*'[bdhBDH][0-9a-fA-FxXzZ_]+|\d+)\s*",
+                            sel or '') is not None
+
+    # collect leaves ONLY from genuine mutually-exclusive LIVE mux structures.
+    classes = set()
+    for out in out_names:
+        ow = re.escape(out)
+        # FORM 1: a TERNARY (non-literal cond) drives the output — its leaves are
+        # mutually exclusive. A bare non-ternary `out = expr;` yields ONE leaf →
+        # never enough for dual-mode (kills the dead-overwrite launder).
+        for dm in re.finditer(
+                r'(?<![\w.])(?:assign\s+)?' + ow + r'\s*(?:<=|=)\s*([^;]+);',
+                rtl_body):
+            rhs = dm.group(1)
+            leaves = _ternary_leaf_branches(rhs)
+            if len(leaves) < 2:
+                continue                          # not a ternary → not a mux
+            qpos = rhs.find('?')
+            if _is_literal_sel(rhs[:qpos]):
+                continue                          # constant ternary selector
+            for leaf in leaves:
+                classes.add(_class(leaf))
+        # FORM 3: a simple `if(cond) out=..; else out=..;` (non-literal cond)
+        for im in re.finditer(
+                r'\bif\s*\(\s*([^()]*?)\s*\)\s*(?:begin\b\s*)?(?<![\w.])' + ow +
+                r'\s*(?:<=|=)\s*([^;]+);\s*(?:end\s*)?else\s*(?:begin\b\s*)?'
+                r'(?<![\w.])' + ow + r'\s*(?:<=|=)\s*([^;]+);', rtl_body, re.S):
+            if _is_literal_sel(im.group(1)):
+                continue
+            classes.add(_class(im.group(2)))
+            classes.add(_class(im.group(3)))
+    # FORM 2: a CASE with a NON-CONSTANT selector whose items assign the output.
+    for cm in re.finditer(r'\bcase[zx]?\s*\(\s*([^()]*?)\s*\)(.*?)\bendcase',
+                          rtl_body, re.S):
+        sel, body = cm.group(1), cm.group(2)
+        if _is_literal_sel(sel):
+            continue                              # constant selector → not a mux
+        for out in out_names:
+            ow = re.escape(out)
+            for im in re.finditer(
+                    r'(?<![\w.])' + ow + r'\s*(?:<=|=)\s*([^;]+);', body):
+                classes.add(_class(im.group(1)))
+    return 'shift' in classes and 'rotate' in classes
 
 
 # ---------------------------------------------------------------------------
@@ -936,7 +1117,19 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
     # carries an unambiguous barrel-ROTATE wrap signature. Mechanizes the prose
     # "MANDATORY all-ones>>max self-TB" discriminator. See _rtl_rotate_signatures.
     if spec_text and rtl_body and _spec_describes_plain_shifter(spec_text):
-        for sig in _rtl_rotate_signatures(rtl_body):
+        rotate_sigs = _rtl_rotate_signatures(rtl_body)
+        # §4.05 false-fire fix (ORGANIC-20260618 round-2): the disjunction re-arm
+        # ("shift OR rotate") now recognises the spec, but a CORRECT mode-
+        # selectable barrel shifter has BOTH a logical-shift datapath AND a
+        # rotate datapath, mux-selected — its rotate branch trips the signature.
+        # SKIP (fail-safe under-fire) when the spec OFFERS BOTH operations AND
+        # the RTL is that dual-mode shape; only a rotate-ONLY RTL (no co-present
+        # logical-shift mux) still fires. A plain 'shifter' spec is unaffected.
+        _out_names = {p.name for p in rtl_ports if p.direction == 'output'}
+        dual_mode_ok = (_SHIFT_OR_ROTATE_RE.search(spec_text) is not None
+                        and _rtl_dual_mode_shift_rotate(rtl_body, rotate_sigs,
+                                                        _out_names))
+        for sig in ([] if dual_mode_ok else rotate_sigs):
             f.append(Finding(path, 'ERROR', 'shift-implemented-as-rotate',
                 rtl_name or 'module',
                 f"spec describes a SHIFTER (not explicitly rotate-only) but the "
