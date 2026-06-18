@@ -107,6 +107,7 @@ if str(HERE) not in sys.path:
 import _path_layout as _pl  # noqa: E402
 import reset_clock_variant_alias as _rcv  # noqa: E402
 import port_convention_corpus as _pcc  # noqa: E402
+import spec_conformance_check as _scc  # noqa: E402
 
 # The runner's own inner-rename suffix (step_reset_clock_variant_aliases,
 # phase2_one_shot_runner.py). chip-AGNOSTIC structural token, not a chip name.
@@ -914,6 +915,132 @@ def discover_testbench(rtl_dir: Path, leaf: str,
     return None
 
 
+# ── ORGANIC-20260618 — spec-text resolution for the shift-vs-rotate emit-block ─
+# The shift-vs-rotate emit-block (#529 class) needs the design's SPEC/PROMPT
+# prose — the SAME single readable file the Shape-B blindness rule allows
+# (`<dataset>/<design>/design_description.txt`). It reads ONLY that prompt, never
+# the hidden testbench / golden `verified_*.v`. Resolution order mirrors
+# `discover_testbench` but targets the prompt: an explicit `--prompt`, then the
+# dataset `<dataset>/<design>/<prompt_filename>`, then the runner's own staged
+# prompt under the project (`phase1/input_prompt/` / `input/`). Returns "" (an
+# empty string → emit-block stays disarmed, fail-safe) when no prompt is
+# locatable. chip-AGNOSTIC: generic prompt-filename vocabulary only.
+# ORGANIC-20260618 round-2 (Step-2.7): include the RUNNER-STAGED prompt names so
+# the gate actually fires on the documented `--project`-only Shape-B invocation
+# (else it is a dead #529-class gate). `README.md` is REMOVED — it is too generic
+# and may carry testbench / golden text (a blindness risk); only spec/prompt-
+# specific names are read.
+_PROMPT_FILENAMES = ("design_description.txt", "design_description.md",
+                     "phase1_prompt.md", "phase1_prompt.txt",
+                     "PROMPT.txt", "prompt.txt", "description.txt", "spec.md")
+
+
+def resolve_prompt_text(rtl_dir: Path, leaf: str,
+                        explicit: Optional[Path] = None,
+                        dataset: Optional[Path] = None,
+                        design: Optional[str] = None,
+                        project: Optional[Path] = None) -> str:
+    """Best-effort resolve the design's SPEC/PROMPT prose (NEVER the testbench).
+
+    Resolution order (first non-empty hit wins):
+      1. `explicit` — a `--prompt` path (trusted verbatim).
+      2. `<dataset>/<design>/<prompt_filename>` — the dataset's canonical prompt
+         location (the same file the blindness rule allows the author to read).
+      3. The runner's staged prompt under `<project>`
+         (`phase1/input_prompt/*.txt|*.md` / `input/*.txt|*.md`) or in the
+         rtl_dir's project tree — the actual prompt the runner ingested.
+    Returns "" when nothing is locatable (caller treats "" as
+    nothing-to-check → the emit-block stays disarmed, the §4.05 fail-safe).
+    The hidden TB / golden ref are NEVER touched here."""
+    def _read(p: Path) -> str:
+        try:
+            return p.read_text(errors="replace") if p.is_file() else ""
+        except OSError:
+            return ""
+
+    if explicit is not None:
+        return _read(explicit)
+    if dataset is not None and design:
+        for name in _PROMPT_FILENAMES:
+            t = _read(dataset / design / name)
+            if t.strip():
+                return t
+    # Staged-prompt discovery under the project, NEVER reading a TB / golden.
+    bases: List[Path] = []
+    if project is not None:
+        bases += [_pl.input_prompt_dir(project), _pl.input_doc_dir(project),
+                  project / "input", project / "input" / "docs", project]
+    bases += [rtl_dir.parent, rtl_dir.parent.parent]
+    seen: set = set()
+    for base in bases:
+        try:
+            rb = base.resolve()
+        except OSError:
+            continue
+        if rb in seen or not base.is_dir():
+            continue
+        seen.add(rb)
+        for name in _PROMPT_FILENAMES:
+            t = _read(base / name)
+            if t.strip():
+                return t
+        # leaf-named prompt (e.g. <leaf>_prompt.txt / <leaf>.md) directly in base.
+        for cand in (f"{leaf}_prompt.txt", f"{leaf}.txt", f"{leaf}.md",
+                     f"{leaf}_description.txt"):
+            t = _read(base / cand)
+            if t.strip():
+                return t
+    return ""
+
+
+# Backwards/forwards-compatible private alias (the spec-side analog name).
+_resolve_prompt_text = resolve_prompt_text
+
+
+def shift_rotate_emit_block(spec_text: str, rtl_text: str,
+                            top: Optional[str] = None) -> Optional[str]:
+    """Return a human-readable BLOCK reason when the spec describes a plain
+    (non-rotate-only) SHIFTER but the RTL carries an unambiguous barrel-ROTATE
+    wrap signature — else None (EMIT). Reuses the §4.05-safe detectors from
+    `spec_conformance_check` verbatim, so this emit path inherits Part A's
+    baseline false-fire fix (ring_counter / parallel2serial DISARM).
+
+    Mirrors the Shape-C `shift-implemented-as-rotate` gate (#784/#790/#20) but on
+    the Shape-B SOLE EMIT PATH (#529 class — a gate that never fires on the emit
+    path is dead). The dual-mode `shift OR rotate` carve-out is honoured: a
+    genuine mode-selectable barrel shifter (BOTH a logical-shift datapath AND a
+    rotate datapath, mux-selected) is NOT blocked. Reads ONLY spec_text +
+    rtl_text; NEVER the hidden testbench."""
+    if not spec_text or not rtl_text:
+        return None  # nothing to check → fail-safe EMIT
+    if not _scc._spec_describes_plain_shifter(spec_text):
+        return None  # spec is rotate-only / cyclic / not a shifter → EMIT
+    rotate_sigs = _scc._rtl_rotate_signatures(rtl_text)
+    if not rotate_sigs:
+        return None  # RTL is a genuine logical shift (zero-fill) → EMIT
+    # dual-mode carve-out: a 'shift OR rotate' spec whose RTL mux-selects a
+    # genuine logical-shift branch against a rotate branch is CORRECT → EMIT
+    # (fail-safe under-fire). Output-aware, same guard the Shape-C gate uses.
+    try:
+        ports = _rcv.parse_module_ports(rtl_text, top) if top else None
+    except Exception:
+        ports = None
+    out_names = ({n for _d, _w, n in ports if _d == "output"}
+                 if ports else set())
+    if (_scc._SHIFT_OR_ROTATE_RE.search(spec_text) is not None
+            and out_names
+            and _scc._rtl_dual_mode_shift_rotate(rtl_text, rotate_sigs,
+                                                 out_names)):
+        return None
+    return (f"shift-implemented-as-rotate: spec describes a SHIFTER (not "
+            f"explicitly rotate-only) but the RTL implements a wrap-around "
+            f"ROTATE: `{rotate_sigs[0]}`. A logical shift zero-fills the vacated "
+            f"bits; this wraps the shifted-out bits back in (the all-ones >> max "
+            f"self-TB exposes it: a rotate yields all-ones, a logical shift a "
+            f"single set bit). Use the zero-fill shift (`x >> n` / `x << n`) "
+            f"unless the spec EXPLICITLY says rotate/circular.")
+
+
 def _compiles_with_tb(sample: Path, tb: Path) -> Optional[bool]:
     """Compile `sample` + `tb` with `iverilog -g2012`, cwd = the TB's directory
     so `$readmemh`/`$readmemb` relative paths resolve. Returns:
@@ -940,7 +1067,9 @@ def export(rtl_dir: Path, leaf: str, samples_dir: Path,
            ic_class: Optional[str] = None,
            testbench: Optional[Path] = None,
            dataset: Optional[Path] = None,
-           design: Optional[str] = None) -> dict:
+           design: Optional[str] = None,
+           prompt: Optional[Path] = None,
+           project: Optional[Path] = None) -> dict:
     """Deterministic Shape-B export. Returns a result dict; writes
     `samples/<leaf>.v` on a passing guard. Never mutates rtl_dir.
 
@@ -960,6 +1089,28 @@ def export(rtl_dir: Path, leaf: str, samples_dir: Path,
     samples_dir.mkdir(parents=True, exist_ok=True)
     dst = samples_dir / f"{leaf}.v"
     original = src.read_text(errors="replace")
+
+    # ── SHIFT-vs-ROTATE EMIT-BLOCK (ORGANIC-20260618, #529 class) ────────────
+    # A Shape-B sample that implements a wrap-around ROTATE while the spec
+    # describes a plain (non-rotate-only) SHIFTER is functionally wrong (logical
+    # 255>>7 == 1, a rotate yields 255) and FAILS the hidden TB. The Shape-C path
+    # already gates this (`shift-implemented-as-rotate`, #784/#790/#20) but it was
+    # NEVER wired into THIS sole emit path, so a rotate-as-shift sample shipped a
+    # false-green gate. This is the gate-as-sole-emit-path fix (#529): block emit
+    # here, reusing the §4.05-safe detectors verbatim (so it inherits Part A's
+    # baseline false-fire fix — ring_counter / parallel2serial DISARM). Reads
+    # ONLY the design's spec/prompt prose + the RTL; NEVER the hidden testbench.
+    spec_text = resolve_prompt_text(rtl_dir, leaf, prompt, dataset, design,
+                                    project)
+    block_reason = shift_rotate_emit_block(spec_text, original, top)
+    if block_reason:
+        # Do NOT write the sample — an emit-BLOCK means the sample is rejected so
+        # the scorer reports no_sample (honest) rather than a TB compile/func
+        # FAIL on a known-wrong file. The author must re-derive a LOGICAL shift.
+        return {"verdict": "FAIL", "reason": "shift_rotate_emit_block",
+                "tb_facing_top": top, "source_file": str(src),
+                "note": note, "block_reason": block_reason,
+                "prompt_resolved": bool(spec_text.strip()), "exported": None}
 
     tb = discover_testbench(rtl_dir, leaf, testbench, dataset, design, top)
     tb_text = None
@@ -1092,6 +1243,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--design", default=None,
                     help="optional design dir (relative to --dataset) for "
                          "testbench auto-location.")
+    ap.add_argument("--prompt", default=None,
+                    help="optional explicit path to the design's SPEC/PROMPT "
+                         "prose (the shift-vs-rotate emit-block reads it; "
+                         "ORGANIC-20260618). When omitted it is resolved from "
+                         "<dataset>/<design>/design_description.txt or the "
+                         "project's staged prompt. NEVER the hidden testbench.")
     a = ap.parse_args(argv)
 
     if a.rtl_dir:
@@ -1116,7 +1273,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     res = export(rtl_dir, a.leaf, Path(a.samples), a.module, ic_class,
                  testbench=(Path(a.testbench) if a.testbench else None),
                  dataset=(Path(a.dataset) if a.dataset else None),
-                 design=a.design)
+                 design=a.design,
+                 prompt=(Path(a.prompt) if a.prompt else None),
+                 project=(Path(a.project) if a.project else None))
     if a.json:
         Path(a.json).write_text(json.dumps(res, indent=2) + "\n")
     print(json.dumps(res, indent=2))

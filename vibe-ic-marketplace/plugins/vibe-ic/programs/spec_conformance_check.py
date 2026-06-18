@@ -568,6 +568,148 @@ _SHIFT_OR_ROTATE_RE = __import__('re').compile(
     r'|rotat\w*\s*(?:/|\bor\b|\band\b)\s*shift\w*'    # rotate or/and/slash shift
     r')',
     __import__('re').IGNORECASE)
+# ORGANIC-20260618 ring_counter / parallel2serial §4.05 BASELINE FALSE-FIRE FIX.
+# The baseline disarm vocabulary (`_ROTATE_INTENT_RE`) only matched a rotate
+# token glued to "shift" ("circular SHIFT" / "cyclic SHIFT") plus a bare
+# "rotate" / "wraparound". It UNDER-disarmed two CORRECT RTLLM designs whose
+# specs legitimately describe a CYCLIC / WRAP-AROUND operation in OTHER words
+# and whose golden RTL is a same-vector bijective concat (a true rotate):
+#   • ring_counter  — "8-bit ring counter for cyclic state sequences ... it
+#                      wraps around to the LSB, creating a cyclic sequence"
+#                      (golden: `{state[6:0], state[7]}`)
+#   • parallel2serial — "shifts the data register one bit to the left, with the
+#                      most significant bit shifted to the least significant
+#                      bit" (golden: `{data[2:0], data[3]}`)
+# Neither spec carries the disjunction, both pass their own hidden TBs, so they
+# are CORRECT and MUST emit. This widens the rotate/cyclic disarm vocabulary so
+# such a spec DISARMS the gate (as a genuine rotate-only design must).
+#   (1) _CYCLIC_WRAP_RE — bare cyclic / circular / rotational / ring-counter
+#       vocabulary + a "wrap(s)? (a)round" phrase (the generic rotate idiom,
+#       not requiring the word "shift" beside it).
+#   (2) _MSB_TO_LSB_WRAP_RE — the STRUCTURAL prose signature of a wrap: a
+#       most-significant-bit ↔ least-significant-bit move/shift/wrap/rotate/feed
+#       within one sentence (either MSB→LSB or LSB→MSB order). This is exactly
+#       the bijective self-wrap a rotate performs and is what the same-vector
+#       concat in the golden RTL implements.
+# ZERO-FALSE-DISARM is binding: a PLAIN shifter spec ("logical shift", "shift
+# right/left", "shifted-in bits are zero", "insert d into the MSB") carries
+# NEITHER signature, so it stays ARMED. A "shift OR rotate" disjunction spec
+# (barrel_shifter) keeps `both_offered=True` so it STAYS ARMED regardless — the
+# original #784/#790/#20 gate behaviour on the disjunction case is byte-for-byte
+# preserved. chip-AGNOSTIC: pure rotate/cyclic vocabulary + MSB↔LSB structure.
+#
+# ORGANIC-20260618 round-2 (Step-2.7) — the round-1 vocabulary was FAR TOO BROAD
+# and FALSE-DISARMED common LOGICAL-shift specs (a §4.05 FALSE-SKIP: a wrong
+# rotate then ships under a plain-shifter spec). Three precision fixes:
+#   (1) _CYCLIC_WRAP_RE no longer matches a BARE cyclic/circular/rotational token
+#       (those hit "circular BUFFER", "CYCLIC redundancy" etc.); it requires a
+#       ring-counter, OR a wrap-around whose target is a BIT POSITION
+#       (LSB/MSB/bit/first|last bit/other end) — not a counter "wraps around to
+#       zero/its max".
+#   (2) _MSB_TO_LSB_WRAP_RE requires the bit to MOVE *to/into* the other end
+#       (a genuine wrap: "MSB shifted TO the LSB"), NOT merely co-mention
+#       ("MSB shifted OUT … LSB filled with zero" is a logical shift).
+#   (3) _LOGICAL_FILL_VETO_RE — an explicit zero-fill / constant-fill / feedback-
+#       load statement PROVES a logical shift, so it VETOES the widened disarm
+#       (the genuine ring_counter / parallel2serial wraps carry no such fill).
+# ORGANIC-20260618 round-3 (Step-2.7): reduced to the ring-counter token ONLY.
+# The round-2 "wrap(s) around to a BIT" branch still false-disarmed a LOGICAL
+# shifter feeding a "circular BUFFER" whose POINTER "wraps around to bit 0", and
+# a bare cyclic/circular token hit unrelated prose. A genuine rotate is caught
+# either by `_ROTATE_INTENT_RE` (rotate / circular-shift / wrap-around) or, for
+# the ring_counter design, by this ring-counter token; parallel2serial is caught
+# by `_MSB_TO_LSB_WRAP_RE`. For a bug-catching EMIT-BLOCK the §4.05 fail-safe is
+# to STAY ARMED when ambiguous, so the vocabulary is kept tight.
+_CYCLIC_WRAP_RE = __import__('re').compile(
+    r'\bring[\s-]?counter\b',
+    __import__('re').IGNORECASE)
+# The destination bit carries a SAME-REGISTER constraint `(?!\s+of\b)` — a wrap
+# is the shifted-out bit re-entering the SAME word, so a CROSS-register side-feed
+# ("MSB carried to the LSB OF the CRC register") is NOT a self-wrap and must not
+# disarm (ORGANIC-20260618 round-4 §4.05 false-skip fix).
+# The "to/into" DESTINATION gap is TEMPERED — it stops at a conjunction
+# (and/or) or a clause boundary (,;.!?), so the destination must be the LSB/MSB
+# ITSELF, not a DIFFERENT named target in a separate clause. ORGANIC-20260618
+# round-6 §4.05 false-skip fix: a plain SIPO/shift-register spec where the MSB
+# is shifted into one destination ("…into the output register AND the least
+# significant bit is loaded with d") must NOT match the self-wrap signature.
+_MSB_TO_LSB_WRAP_RE = __import__('re').compile(
+    r'\b(?:most[\s-]+significant[\s-]+bit|msb)\b[^.!?]{0,40}?'
+    r'\b(?:shift|wrap|rotat|mov|cycl|carr|feed|rout|copy|copi)\w*\s+'
+    r'(?:in)?to\b(?:(?!\b(?:and|or)\b)[^.!?,;]){0,25}?'
+    r'\b(?:least[\s-]+significant[\s-]+bit|lsb)\b(?!\s+of\b)'
+    r'|\b(?:least[\s-]+significant[\s-]+bit|lsb)\b[^.!?]{0,40}?'
+    r'\b(?:shift|wrap|rotat|mov|cycl|carr|feed|rout|copy|copi)\w*\s+'
+    r'(?:in)?to\b(?:(?!\b(?:and|or)\b)[^.!?,;]){0,25}?'
+    r'\b(?:most[\s-]+significant[\s-]+bit|msb)\b(?!\s+of\b)',
+    __import__('re').IGNORECASE)
+# A negation/contrast token IMMEDIATELY before a disarm signal (only an optional
+# article may intervene) suppresses it — "Unlike a ring counter" / "rather than a
+# ring counter". ORGANIC-20260618 round-5: ADJACENCY-anchored, NOT a 28-char
+# window — the wide window false-suppressed "Unlike a LFSR, the ring counter…"
+# (the negation there targets a DIFFERENT device, so the ring-counter disarm must
+# survive). The contrasted token must directly follow the negation+article.
+_NEG_BEFORE_RE = __import__('re').compile(
+    r'\b(?:not|never|unlike|other\s+than|rather\s+than|instead\s+of)\s+'
+    r'(?:a|an|the|any|some|each|one)?\s*$',
+    __import__('re').IGNORECASE)
+# A LOGICAL-shift signal that PROVES the design is NOT rotate-only and so VETOES
+# the (step-4) MSB↔LSB self-wrap disarm only (stay ARMED → the gate still fires
+# on a rotate RTL). Two families: (a) an explicit zero / constant / feedback /
+# set-to-0 / cleared fill of the vacated bit; (b) an explicit "logical|arithmetic
+# shift" assertion. ORGANIC-20260618 round-4: the polarity-BLIND discard /
+# negation arms were REMOVED (they false-fired on a genuine ring counter that
+# said "nothing is dropped"); discard/negation is now handled by the polarity-
+# aware `_affirmative_at` on the positive signals, and an affirmative wrap-back
+# (`_RECIRCULATE_RE`) takes priority OVER this veto.
+_LOGICAL_FILL_VETO_RE = __import__('re').compile(
+    r'\bzero[\s-]?fill\w*'
+    r'|\bfill\w*\b[^.!?]{0,30}?\b(?:0|zero|zeros|low|logic\s*0)\b'
+    r'|\b(?:0|zero|zeros)\b[^.!?]{0,20}?\b(?:fill\w*|shift\w*\s+in(?:to)?|'
+    r'inserted?|loaded|fed)\b'
+    r'|\b(?:set|cleared?|becomes?|driven|forced?|tied)\b[^.!?]{0,15}?'
+    r'\b(?:to\s+)?(?:0|zero|low|logic\s*0)\b'
+    r'|\bshift\w*[\s-]+in(?:to)?\b[^.!?]{0,30}?\b(?:0|zero|zeros|low)\b'
+    r'|\b(?:inserted?|loaded|fed)\b[^.!?]{0,30}?\b(?:0|zero|zeros|'
+    r'feedback|xor|serial)\b'
+    r'|\bloaded\s+with\b[^.!?]{0,30}?\b(?:feedback|xor|0|zero)\b'
+    r'|\bvacated\b[^.!?]{0,20}?\b(?:0|zero)\b'
+    r'|\b(?:logical|arithmetic)\b[\s-]*(?:left[\s-]+|right[\s-]+)?shift\w*'
+    r'|\bshift\w*\b[^.!?]{0,15}?\b(?:logical|arithmetic)\b',
+    __import__('re').IGNORECASE)
+
+
+def _affirmative_at(spec_text: str, start: int) -> bool:
+    """True iff the disarm signal at `start` is NOT negated/contrasted by a
+    nearby preceding token (same sentence, ~28 chars) — so "Unlike a ring
+    counter" / "rather than recirculated" do NOT disarm."""
+    return _NEG_BEFORE_RE.search(spec_text[:start]) is None
+
+
+def _spec_describes_rotate_or_cyclic(spec_text: str) -> bool:
+    """True iff the prose expresses a genuine rotate / circular-shift / cyclic /
+    wrap-around intent. PRIORITY-ORDERED (ORGANIC-20260618 round-5):
+      (1) the precise rotate-token vocabulary (`_ROTATE_INTENT_RE`) always wins;
+      (2) an AFFIRMATIVE ring-counter token (`_CYCLIC_WRAP_RE`, not negated);
+      (3) a SAME-REGISTER MSB↔LSB self-wrap (`_MSB_TO_LSB_WRAP_RE`) UNLESS an
+          explicit zero/constant/logical-shift fill (`_LOGICAL_FILL_VETO_RE`)
+          proves a logical shift.
+    The round-4 `_RECIRCULATE_RE` step was REMOVED — every genuine-rotate case
+    already disarms via the ring-counter token or the MSB↔LSB self-wrap, so the
+    bare "wraps back" arm only added a FALSE-SKIP surface (it matched a control-
+    path POINTER/COUNTER "wraps back to zero" while the DATA path was a plain
+    zero-fill shift). Step 2 is polarity-aware (`_affirmative_at`). Used by
+    `_spec_describes_plain_shifter` as the §4.05 disarm predicate (gated by the
+    BOTH-offered disjunction exception)."""
+    if _ROTATE_INTENT_RE.search(spec_text) is not None:
+        return True
+    m = _CYCLIC_WRAP_RE.search(spec_text)
+    if m is not None and _affirmative_at(spec_text, m.start()):
+        return True
+    if (_MSB_TO_LSB_WRAP_RE.search(spec_text) is not None
+            and _LOGICAL_FILL_VETO_RE.search(spec_text) is None):
+        return True
+    return False
 
 
 def _spec_describes_plain_shifter(spec_text: str) -> bool:
@@ -575,18 +717,23 @@ def _spec_describes_plain_shifter(spec_text: str) -> bool:
     operation is NOT rotate-only.
 
     §4.05 disarm: a genuine rotate / circular / barrel-rotate / wrap-around /
-    cyclic-shift token normally disarms the rule — a genuine rotate-only design
-    must emit unblocked.
+    cyclic-shift / cyclic / rotational / ring-counter intent, OR the structural
+    MSB↔LSB wrap signature (`_spec_describes_rotate_or_cyclic`), normally disarms
+    the rule — a genuine rotate/cyclic design must emit unblocked. (ORGANIC-
+    20260618 widened the vocabulary so the CORRECT ring_counter /
+    parallel2serial specs — which describe a cyclic / MSB↔LSB-wrap operation in
+    words other than "circular shift" — DISARM instead of false-blocking.)
 
     EXCEPTION (ORGANIC-20260618): a spec that OFFERS BOTH operations in a
     disjunction ("shift or rotate" / "shifts or rotates" / "shift/rotate") is
     NOT rotate-only — the lessons corpus binds it to a LOGICAL shift with
     zero-fill, so the gate RE-ARMS even though a rotate token is present. Only
-    the BOTH-offered disjunction re-arms; a rotate-only spec stays disarmed."""
+    the BOTH-offered disjunction re-arms; a rotate-only / cyclic spec stays
+    disarmed."""
     if not _SHIFT_VERB_RE.search(spec_text):
         return False
     both_offered = _SHIFT_OR_ROTATE_RE.search(spec_text) is not None
-    if _ROTATE_INTENT_RE.search(spec_text) and not both_offered:
+    if _spec_describes_rotate_or_cyclic(spec_text) and not both_offered:
         return False
     return True
 
