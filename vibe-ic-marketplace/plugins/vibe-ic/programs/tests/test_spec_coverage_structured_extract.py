@@ -151,6 +151,156 @@ def test_partial_unclosed_portlist_yields_real_ports_not_prose():
         assert phantom not in names
 
 
+def test_truncated_header_no_body_keyword_does_not_leak_prose_ports():
+    """S4-OVM1 — a TRUNCATED ANSI header whose port list has no closing `);` AND
+    is NOT followed by any body-boundary keyword previously ran the fallback
+    region to EOF, so parse_verilog_ports harvested PROSE words that merely follow
+    the literal token input/output as phantom ports. The bounded port-list prefix
+    must yield ONLY the real ports."""
+    txt = (
+        "module TopModule ( input wire clk, output reg dout, "
+        "the input stream is latched and the output carries result data\n"
+    )
+    names = {p.name for p in SRC.parse_verilog_ports(SRC._module_port_region(txt))}
+    assert names == {"clk", "dout"}, names
+    for phantom in ("stream", "is", "result", "data", "the", "carries", "input"):
+        assert phantom not in names
+
+
+def test_portlist_prefix_len_bounds_at_clean_port_terminators():
+    """The bounding helper consumes comma/newline-separated ports and stops the
+    region at the first non-port-list structure — WITHOUT dropping a direction-
+    declared port. Step-2.7 (S4-OVM1 round-2) found the prior bound false-SKIPped
+    real ports (the §4.05-WORSE direction) to kill prose; the bound now keeps every
+    direction-anchored port and resyncs past a same-line description."""
+    # a clean comma-separated, EOR-terminated prefix is fully consumed
+    full = "( input a, output b"
+    assert SRC._portlist_prefix_len(full) == len(full)
+    # a direction-anchored port trailed by a same-line description is KEPT, and the
+    # walk resyncs to the next port keyword instead of cascade-dropping a real port
+    s = full + " then prose input here"
+    kept = {p.name for p in SRC.parse_verilog_ports(s[:SRC._portlist_prefix_len(s)])}
+    assert "a" in kept and "b" in kept          # NEVER drop a real declared port
+    # inherited-direction siblings are kept (no direction on `valid`/`ready`)
+    inh = "( output q, valid, ready"
+    assert SRC._portlist_prefix_len(inh) == len(inh)
+    # nothing port-shaped follows the `(` -> only the `(` itself is consumed
+    assert SRC._portlist_prefix_len("( the input is processed") == 1
+
+
+def test_s4ovm1_sa_copula_sentence_no_port_verb_residual_bounded():
+    """S-A regression (§4.05-safe re-derivation): a COPULA/auxiliary verb after a
+    direction keyword (`input is …`) is a SENTENCE and yields NO port (copula verbs
+    are never legal port names). A 3rd-person verb (`enables`/`drives`/`connects`)
+    is LEXICALLY a port name (`output wire enables` == `output wire <name>`),
+    indistinguishable from a genuine port, so it is KEPT as a §4.05-SAFE false-FIRE
+    residual — dropping it would false-SKIP a real same-shaped port. Crucially the
+    bound still caps the harvest to ONE in-region token, never the unbounded
+    document-wide prose scrape #27 did."""
+    # copula verbs are never legal port names -> safely rejected
+    assert {p.name for p in SRC.parse_verilog_ports(
+        SRC._module_port_region("module M ( input is required by the spec\n"))} == set()
+    # ambiguous verb -> bounded to at most the one token (NOT an unbounded scrape)
+    for txt in (
+        "module M ( output wire enables the chip\n",
+        "module M ( input drives the select line\n",
+        "module M ( inout connects two domains here\n",
+    ):
+        names = {p.name for p in SRC.parse_verilog_ports(SRC._module_port_region(txt))}
+        assert len(names) <= 1, (txt, names)    # bounded; no document-wide leak
+
+
+def test_s4ovm1_sa_real_ports_never_dropped_across_inline_described_port():
+    """The real comma-terminated ports are ALWAYS kept; an inline-described port
+    later in the list does NOT cascade-drop them. Step-2.7 found the prior bound
+    dropped clk/dout here (a §4.05 leak — the conformance gate would false-SKIP a
+    genuinely-missing clk/dout). `drives` (lexically a port name) may remain as a
+    bounded §4.05-safe residual, but the real ports must never be lost."""
+    txt = ("module TopModule ( input clk, output reg dout, "
+           "input drives the chip select line\n")
+    names = {p.name for p in SRC.parse_verilog_ports(
+        SRC._module_port_region(txt, prefer="TopModule"))}
+    assert {"clk", "dout"} <= names             # real ports NEVER dropped (§4.05 contract)
+
+
+def test_s4ovm1_sb_inherited_direction_siblings_kept_equals_balanced():
+    """S-B regression: an inherited-direction list in a truncated header must yield
+    the SAME ports as its balanced form, so the bidirectional conformance gate
+    cannot fire a spurious port-extra on a dropped sibling."""
+    trunc = "module M ( output q, valid, ready\n"
+    bal = "module M ( output q, valid, ready );\nendmodule\n"
+    n_trunc = {p.name for p in SRC.parse_verilog_ports(SRC._module_port_region(trunc))}
+    n_bal = {p.name for p in SRC.parse_verilog_ports(SRC._module_port_region(bal))}
+    assert n_trunc == {"q", "valid", "ready"}, n_trunc
+    assert n_trunc == n_bal, (n_trunc, n_bal)
+
+
+def test_s4ovm1_sa_direction_anchored_names_kept_blacklist_gates_only_continuations():
+    """S-A (round 3, §4.05-safe re-derivation): a DIRECTION keyword anchors a real
+    port even when its NAME is a common prose noun (`input signals`, `output
+    values`) — consistent with how parse_verilog_ports treats a BALANCED
+    `module M (input signals, output values);` header (a balanced/truncated split
+    would otherwise yield different ports for the same text). Step-2.7 found the
+    prior blacklist-on-direction false-SKIPped these real ports. The prose-noun
+    blacklist STILL gates a bare COMMA-CONTINUATION (`…, ports interface
+    description`), stopping the prose tail."""
+    md = "module M ( input signals, output values, ports interface description\n"
+    names = {p.name for p in SRC.parse_verilog_ports(SRC._module_port_region(md))}
+    assert names == {"signals", "values"}       # direction-anchored -> kept
+    assert "ports" not in names                 # comma-continuation prose noun -> stopped
+    c = SRC.extract_spec_contract(md, confirm=False)
+    assert {p.name for p in c.ports} == {"signals", "values"}, (c.source, [p.name for p in c.ports])
+
+
+def test_s4ovm1_sb_fenced_truncated_header_keeps_last_port():
+    """S-B (round 2): a truncated header whose LAST port is followed only by a
+    markdown code-fence (no body keyword) must KEEP that last port — a newline /
+    fence is a clean terminator. Dropping it would make the bidirectional
+    conformance gate fire a spurious port-extra on a faithful design."""
+    md = ("```\nmodule gray_to_binary (\n"
+          "    input  [3:0] gray,\n"
+          "    output [3:0] binary\n```\n")
+    names = {p.name for p in SRC.parse_verilog_ports(SRC._module_port_region(md))}
+    assert names == {"gray", "binary"}, names
+
+
+def test_s4ovm1_own_line_prose_word_not_inherited():
+    """A bare word on its OWN line (reached across a newline, not a comma) does
+    not inherit a direction, so a trailing prose line cannot leak — while the real
+    port that precedes it is kept."""
+    md = "module M ( output binary\n    driven high when ready is asserted\n"
+    names = {p.name for p in SRC.parse_verilog_ports(SRC._module_port_region(md))}
+    assert names == {"binary"}, names
+    assert "driven" not in names and "ready" not in names
+
+
+def test_truncated_header_pure_prose_after_paren_yields_no_ports():
+    """If nothing port-shaped follows the unbalanced `(`, no phantom is produced."""
+    txt = "module Foo ( the design accepts an input and drives an output signal\n"
+    names = {p.name for p in SRC.parse_verilog_ports(SRC._module_port_region(txt))}
+    assert names == set(), names
+
+
+def test_body_keyword_bounded_truncated_header_unaffected_by_s4ovm1_fix():
+    """Regression guard: the EXISTING body-keyword-bounded path (gray_to_binary
+    style) is untouched by the S4-OVM1 else-branch."""
+    txt = (
+        "```\nmodule gray_to_binary (\n"
+        "    input  logic [3:0] gray_in,\n"
+        "    output logic [3:0] binary_out\n\n"
+        "  logic [3:0] tmp;\n  always @* begin end\nendmodule\n```\n"
+    )
+    names = {p.name for p in SRC.parse_verilog_ports(SRC._module_port_region(txt))}
+    assert names == {"gray_in", "binary_out"}, names
+
+
+def test_balanced_header_unaffected_by_s4ovm1_fix():
+    """Regression guard: a normal CLOSED header still returns its full port list."""
+    txt = "module M ( input a, output b, inout c );\nendmodule\n"
+    names = {p.name for p in SRC.parse_verilog_ports(SRC._module_port_region(txt))}
+    assert names == {"a", "b", "c"}, names
+
+
 def test_prose_scrape_fp_passes(tmp_path):
     """The image_rotate prose-scrape FP: real ANSI ports, prose words gone."""
     prompt = (
