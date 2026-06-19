@@ -154,6 +154,20 @@ _MODULE_HDR_RE = re.compile(
     r"(?:\((?P<ports>(?:[^()]|\([^()]*\))*)\))?\s*;",
     re.DOTALL)
 
+# Canonical SystemVerilog DIRECTION + TYPE/SIGN keywords. These are the tokens
+# the header-port parsers (`_ANSI_PORT_RE` / `_NONANSI_PORT_RE`) consume as
+# direction / net-type / sign qualifiers and that `_parse_module_match` already
+# excludes from its bare-name harvest (the inline tuple it used). Promoted to a
+# single named frozenset so every prompt-side extractor that harvests candidate
+# port NAMES filters them through the SAME set rather than re-inventing a
+# divergent list. A SystemVerilog reserved TYPE/DIRECTION keyword is NEVER a
+# legal port identifier, so excluding it as a candidate name can only remove a
+# phantom — it can never mask a genuine port. chip-AGNOSTIC.
+_SV_PORT_KEYWORDS = frozenset({
+    "input", "output", "inout",
+    "wire", "reg", "logic", "bit", "signed", "unsigned",
+})
+
 # ANSI port declaration inside the header port list, e.g.
 # `input wire [3:0] foo`, `output reg bar`, `inout baz`.
 _ANSI_PORT_RE = re.compile(
@@ -285,8 +299,7 @@ def _parse_module_match(src: str, m: "re.Match") -> RtlIface:
     if ports_blob.strip():
         # tokens that look like identifiers not already captured as ANSI ports
         for nm in re.findall(r"[A-Za-z_]\w*", ports_blob):
-            if nm in ("input", "output", "inout", "wire", "reg", "logic",
-                      "bit", "signed", "unsigned"):
+            if nm in _SV_PORT_KEYWORDS:
                 continue
             header_names.append(nm)
     # non-ANSI body declarations — scan ONLY this module's body (header → its
@@ -965,7 +978,22 @@ def _table_ports(prompt: str) -> Dict[str, str]:
     Direction column) is NOT a port — exclude it from the no-direction
     (`setdefault(name, "")`) branch so FSM-state labels and internal entry
     fields are not fabricated as ports. A row that DOES carry a direction word is
-    still harvested unconditionally (a genuine port table)."""
+    still harvested unconditionally (a genuine port table).
+
+    (ORGANIC FIR_0001) A backtick cell that is a SystemVerilog reserved
+    TYPE/DIRECTION keyword (`logic`/`wire`/`reg`/`bit`/`signed`/`unsigned`/
+    `input`/`output`/`inout`) is NEVER a legal port identifier — it is the
+    contents of a TYPE column in a `| \`name\` | \`type\` | desc |` port table.
+    The pipe-window scan can straddle a cell boundary and match `\`logic\` |
+    System` (the type cell of one row + the first word of the description cell),
+    fabricating a phantom port named `logic` (source=table → STRUCTURAL →
+    block-eligible → spurious rc=1). Candidate NAMES are therefore filtered
+    through the SAME `_SV_PORT_KEYWORDS` set the header-port parsers already use
+    (whole-token, case-SENSITIVE — the phantom is always the literal lowercase keyword). This can only DROP a phantom keyword name;
+    a real port whose identifier merely CONTAINS such a keyword as a substring
+    (`logic_en`, `reg_file_addr`, `wire_sel`) is a distinct whole token and is
+    still harvested — so the relaxation never masks a genuine MISSING-PORT.
+    chip-AGNOSTIC: pure SV-keyword set + markdown grammar."""
     out: Dict[str, str] = {}
     desc_only = _desc_table_firstcol_names(prompt)
     # Split on the pipe so an inline single-line table (the acceptance shape)
@@ -974,6 +1002,15 @@ def _table_ports(prompt: str) -> Dict[str, str]:
     for cell_m in re.finditer(r"`([A-Za-z_]\w*)`\s*\|\s*([A-Za-z]+)", prompt):
         name = cell_m.group(1)
         word = cell_m.group(2).lower()
+        # (FIR_0001) a candidate name equal (whole-token) to a reserved SV
+        # type/direction keyword is a Type-column cell, not a port — skip it.
+        # CASE-SENSITIVE (Step-2.7): the phantom is always the literal lowercase
+        # keyword (`logic`/`reg`/…); a CAPITALIZED identifier (`Reg`, `Logic`,
+        # `Wire`) is a LEGAL distinct SV port name, NOT a reserved keyword, so it
+        # must NOT be excluded — matching the header parser's case-sensitive
+        # lowercase membership keeps the no-leak invariant the docstring asserts.
+        if name in _SV_PORT_KEYWORDS:
+            continue
         if word in ("input", "output", "inout"):
             out[name] = word
         elif name not in desc_only:
