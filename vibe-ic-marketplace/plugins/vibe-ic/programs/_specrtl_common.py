@@ -678,6 +678,78 @@ def _skip_balanced_parens(text: str, i: int) -> Optional[int]:
     return None
 
 
+# One ANSI port-list segment: an OPTIONAL direction (a continuation segment
+# inherits the previous one), optional net/sign kinds, an optional packed
+# dimension, the port name, an optional unpacked dimension. The TRAILING run is
+# same-line whitespace ONLY (`[ \t]*`, not `\s*`) so the char right after a port
+# name reveals whether the port ended its line (`,`/`)`/newline) or is trailed by
+# a same-line prose word. Used ONLY to bound a TRUNCATED (unbalanced-`(`) header —
+# see the S4-OVM1 fallback in `_module_port_region`.
+_PORTLIST_SEG = re.compile(
+    r'\s*(?P<dir>input|output|inout)?\s*'
+    r'(?:(?:wire|reg|logic|signed|unsigned)\b\s*)*'
+    r'(?:\[[^\]]*\]\s*)?'
+    r'(?P<name>[A-Za-z_]\w*)'
+    r'(?:[ \t]*\[[^\]]*\])?[ \t]*')
+
+
+def _portlist_prefix_len(region: str) -> int:
+    """Length, measured from the opening `(`, of the well-formed ANSI port-list
+    PREFIX of `region` (which must start with `(`).
+
+    Bounds a TRUNCATED module header whose port list has no closing `);` AND is
+    not followed by a body-boundary keyword. Without this bound the region runs
+    to EOF and `parse_verilog_ports` harvests any PROSE word that merely follows
+    the literal token `input`/`output`/`inout` as a phantom port. Consumption
+    walks comma/newline-separated segments and accepts a segment as a port only
+    when ALL hold:
+      * it carries a direction, OR is a bare identifier that continues a list via
+        a COMMA (inherited direction `input a, b, c` / `output q, valid, ready`) —
+        a bare identifier reached only across a NEWLINE does not inherit (it is
+        more likely prose, e.g. a verb on its own line);
+      * its name is not a known prose noun (`signals`, `values`, `ports`, … —
+        the shared `_NL_PORT_PROSE_NAMES` blacklist the NL path already uses);
+      * its name is cleanly terminated by `,`, `)`, newline, end-of-region, or a
+        non-identifier char (a markdown code-fence `` ` ``, `;`, a comment) — a
+        name trailed by a same-line bare word (`input is required`,
+        `output wire enables the chip`) ends consumption.
+    Newline/fence termination keeps the LAST port of a fenced or one-port-per-line
+    truncated header (`… output [3:0] binary`<NL>```` ``` ````), which a balanced
+    header would also yield. This MONOTONICALLY SHRINKS the prior unbounded-to-EOF
+    harvest (it kills the sentence-run `Gray is computed by inverting …` and
+    blacklisted-noun `signals, values, ports` phantom classes) and is never worse
+    than it on any input. The IRREDUCIBLE residual is prose that is lexically
+    identical to a real port list (`input pending, output stalled` — every token a
+    valid Verilog identifier); that case is indistinguishable from a genuine
+    header and the prior fallback harvested it too, so this is not a regression.
+    chip-AGNOSTIC."""
+    n = len(region)
+    i = 1 if region[:1] == '(' else 0
+    last = i
+    have_dir = False
+    prev_comma = False
+    while i < n:
+        m = _PORTLIST_SEG.match(region, i)
+        if not m or m.end() == i:
+            break
+        if m.group('dir'):
+            have_dir = True
+        elif not (have_dir and prev_comma):
+            break                       # a bare segment not continuing a comma list
+        if m.group('name').lower() in _NL_PORT_PROSE_NAMES:
+            break                       # a known prose noun, not a port
+        j = m.end()
+        ch = region[j] if j < n else ''
+        if ch == ',':
+            last = j; i = j + 1; prev_comma = True; continue
+        if ch in '\r\n':
+            last = j; i = j; prev_comma = False; continue   # last port on its line
+        if ch == '' or not (ch.isalpha() or ch == '_'):
+            last = j; break             # `)`, EOR, code-fence, `;`, comment …
+        break                           # a same-line bare prose word trails the name
+    return last
+
+
 def _module_port_region(text: str, prefer: str = "TopModule") -> Optional[str]:
     """Return the ANSI port-list inside `module name ( ... )`, or None.
 
@@ -741,6 +813,16 @@ def _module_port_region(text: str, prefer: str = "TopModule") -> Optional[str]:
         region)
     if boundary is not None:
         region = region[:boundary.start()]
+    else:
+        # S4-OVM1 — no body-boundary keyword follows the unbalanced `(`, so the
+        # region above runs to EOF and parse_verilog_ports could harvest any PROSE
+        # word that merely follows the literal token `input`/`output`/`inout`
+        # (e.g. a single-line template `... output reg dout the input stream
+        # carries result data` -> phantom ports `result`/`data`/…). Bound the
+        # region to the well-formed comma-separated ANSI port-list PREFIX instead.
+        # §4.05-safe: in this degraded truncated-header path this can only DROP a
+        # real port, never ADD a phantom. chip-AGNOSTIC.
+        region = region[:_portlist_prefix_len(region)]
     return text[start:open_i] + region
 
 
