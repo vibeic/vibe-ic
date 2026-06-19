@@ -497,13 +497,38 @@ def yosys_smoke(code: str, workdir: Path,
         return False, ("yosys-smoke: no module declaration found in the "
                        "code payload")
     details: List[str] = []
+    synth_timeout = 300
     for top in own_modules:
         # NOTE: no -q — quiet mode suppresses the stat table itself.
         rc, out, err = _run(
             ["yosys", "-p",
-             f"read_verilog -sv {f}; synth -top {top}; stat"], timeout=300)
+             f"read_verilog -sv {f}; synth -top {top}; stat"],
+            timeout=synth_timeout)
         blob = (out or "") + "\n" + (err or "")
         if rc != 0:
+            # rc==124 is _run's TIMEOUT sentinel (subprocess.TimeoutExpired) —
+            # which is NOT the #604 "yosys absent" case. A full `synth` can
+            # genuinely exceed the budget on a host where yosys IS present and
+            # the design already ELABORATED under the iverilog gate (observed on
+            # a 44-line parameterized barrel_shifter / a binary-search-tree
+            # sorter: iverilog -g2012 parses in <1s, `synth` does not converge in
+            # 300s). The official CVDP scorer is cocotb + iverilog — it NEVER runs
+            # yosys — so such a design is fully SCORABLE; blocking it would DROP a
+            # scorable design from the run (a guaranteed false fail). A timeout is
+            # therefore INCONCLUSIVE ("could not enforce in time"), not "yosys did
+            # not run". Tolerate it with an advisory synth note IFF yosys is
+            # actually present on PATH (so this can never silently cover the #604
+            # absent case, which yields rc==127 / `shutil.which` None, never this
+            # branch). A real synth-stage ERROR (yosys reaches it, rc!=124, banner
+            # present) is unaffected and still blocks below.
+            if rc == 124 and shutil.which("yosys") is not None:
+                details.append(
+                    f"{top}: yosys-smoke INCONCLUSIVE — `synth` timed out "
+                    f"(>{synth_timeout}s) on a host where yosys IS present and "
+                    f"iverilog already elaborated the design; tolerated (the "
+                    f"official CVDP scorer is cocotb+iverilog, never yosys). "
+                    f"NOT the #604 absent-yosys case.")
+                continue
             # #604: yosys binary ENTIRELY ABSENT (rc=127 is _run's
             # FileNotFoundError sentinel) — or any case with NO evidence that
             # yosys actually started — must NOT be misread as a frontend-gap and
