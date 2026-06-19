@@ -691,6 +691,43 @@ _PORTLIST_SEG = re.compile(
     r'(?:\[[^\]]*\]\s*)?'
     r'(?P<name>[A-Za-z_]\w*)'
     r'(?:[ \t]*\[[^\]]*\])?[ \t]*')
+# A direction keyword at a genuine PORT POSITION — immediately preceded (modulo
+# same-line whitespace) by a port-list separator `,` / newline. `_portlist_prefix_len`
+# RESYNCS to it past a prose interruption, so a described / prose-named segment never
+# cascade-drops the real ports after it. Keying on a SEPARATOR-anchored keyword (not a
+# bare `\binput\b`) is what distinguishes a real later port (`…, output valid`) from a
+# keyword merely MENTIONED inside a description (`… the input stream is latched`), so
+# the resync cannot scrape a prose word as a phantom.
+_RESYNC_KW_RE = re.compile(r'[,\r\n][ \t]*(input|output|inout)\b')
+
+
+def _mask_comments_len(s: str) -> str:
+    """Length-PRESERVING comment blanking — the non-truncating sibling of
+    `strip_comments()`. `strip_comments` returns early on an UNTERMINATED `//`/`/*`
+    (changing the string length); `_portlist_prefix_len` walks a TRUNCATED header
+    where an unterminated comment is plausible AND maps masked-string indices back
+    onto the RAW region, so length MUST be preserved. Mirrors `strip_comments`'
+    token rules (`//` to end-of-line, `/* … */` block) but always emits spaces
+    (newlines kept) and runs an unterminated comment to EOF. Aligning the bound's
+    tokenization with the consumer's (`parse_verilog_ports` strip_comments BEFORE
+    its port scan) stops an inline `// …` / `/* … */` in a truncated port list from
+    cutting the region mid-list and dropping a real port. chip-AGNOSTIC."""
+    out, i, n = [], 0, len(s)
+    while i < n:
+        two = s[i:i + 2]
+        if two == '/*':
+            end = s.find('*/', i + 2)
+            stop = end + 2 if end != -1 else n
+            out.append(''.join('\n' if c == '\n' else ' ' for c in s[i:stop]))
+            i = stop
+        elif two == '//':
+            end = s.find('\n', i)
+            stop = end if end != -1 else n
+            out.append(' ' * (stop - i))
+            i = stop
+        else:
+            out.append(s[i]); i += 1
+    return ''.join(out)
 
 
 def _portlist_prefix_len(region: str) -> int:
@@ -698,55 +735,121 @@ def _portlist_prefix_len(region: str) -> int:
     PREFIX of `region` (which must start with `(`).
 
     Bounds a TRUNCATED module header whose port list has no closing `);` AND is
-    not followed by a body-boundary keyword. Without this bound the region runs
-    to EOF and `parse_verilog_ports` harvests any PROSE word that merely follows
-    the literal token `input`/`output`/`inout` as a phantom port. Consumption
-    walks comma/newline-separated segments and accepts a segment as a port only
-    when ALL hold:
-      * it carries a direction, OR is a bare identifier that continues a list via
-        a COMMA (inherited direction `input a, b, c` / `output q, valid, ready`) —
-        a bare identifier reached only across a NEWLINE does not inherit (it is
-        more likely prose, e.g. a verb on its own line);
-      * its name is not a known prose noun (`signals`, `values`, `ports`, … —
-        the shared `_NL_PORT_PROSE_NAMES` blacklist the NL path already uses);
-      * its name is cleanly terminated by `,`, `)`, newline, end-of-region, or a
-        non-identifier char (a markdown code-fence `` ` ``, `;`, a comment) — a
-        name trailed by a same-line bare word (`input is required`,
-        `output wire enables the chip`) ends consumption.
-    Newline/fence termination keeps the LAST port of a fenced or one-port-per-line
-    truncated header (`… output [3:0] binary`<NL>```` ``` ````), which a balanced
-    header would also yield. This MONOTONICALLY SHRINKS the prior unbounded-to-EOF
-    harvest (it kills the sentence-run `Gray is computed by inverting …` and
-    blacklisted-noun `signals, values, ports` phantom classes) and is never worse
-    than it on any input. The IRREDUCIBLE residual is prose that is lexically
-    identical to a real port list (`input pending, output stalled` — every token a
-    valid Verilog identifier); that case is indistinguishable from a genuine
-    header and the prior fallback harvested it too, so this is not a regression.
-    chip-AGNOSTIC."""
-    n = len(region)
-    i = 1 if region[:1] == '(' else 0
+    not followed by a body-boundary keyword. Without this bound the region runs to
+    EOF and `parse_verilog_ports` harvests any PROSE word that merely follows the
+    literal token `input`/`output`/`inout` as a phantom port. This walk recognises
+    ports off the SAME structural anchor the consumer uses — the DIRECTION keyword
+    `input`/`output`/`inout` — and keeps EVERY direction-anchored port, so it never
+    DROPS a real declared port (a drop would §4.05-LEAK: the downstream conformance
+    gate would false-SKIP a genuinely-missing RTL port). Rules:
+      * a segment carrying a DIRECTION keyword is a real port (the keyword anchors
+        it exactly as `parse_verilog_ports` keys on it), recorded EVEN when a
+        same-line description trails its name (`input clk the system clock`,
+        `output reg dout the input stream …`). The prose-NOUN blacklist does NOT
+        gate a direction-anchored name (`input value` / `input signals` are
+        legitimate ports — consistent with how the BALANCED header is parsed).
+      * a bare identifier continues a list ONLY across a COMMA with an inherited
+        direction (`input a, b, c`).
+      * a PROSE segment — a copula sentence (`input is computed …`), a comma-
+        continuation prose noun (`…, signals …`), or any name trailed by a same-
+        line prose word — does NOT terminate the walk. It RESYNCS to the next
+        DIRECTION keyword and continues, so a real later port (`… input rst the
+        reset, output valid`, `input clk active, gated by enable, output done`) is
+        NEVER cascade-dropped. The resync keys ONLY on the direction keyword — an
+        intervening comma/newline INSIDE a description is prose punctuation, not a
+        port-list separator (round-2 §4.05 review: a min(keyword, separator) resync
+        landed on an in-prose comma and re-introduced the cascade-drop, and the
+        per-port separator search was O(n²) on a long single-line prose tail).
+    The walk ends at a STRUCTURAL boundary — `)`/`;`/fence/comment/EOF, a bare word
+    that is neither a port nor a comma-continuation, or no further PORT-POSITION
+    direction keyword. This bounds the trailing-prose run after a clean port list
+    (#28's intent) WITHOUT the false-SKIP of dropping a real direction-declared
+    port. The IRREDUCIBLE residual is a token lexically identical to a real port
+    declaration (`input stream` inside the prose `… the input stream`); that is
+    indistinguishable from a genuine header, the prior fallback harvested it too,
+    and keeping it is the §4.05-SAFE direction (a bounded false-FIRE over-flag, not
+    a false-SKIP defect-mask). chip-AGNOSTIC."""
+    masked = _mask_comments_len(region)   # align tokenization with parse_verilog_ports
+    n = len(masked)
+
+    def _resync(p: int) -> int:
+        """Index of the next PORT-POSITION direction keyword (>= p) on which real
+        ports resume — a keyword anchored to a `,`/newline separator, so a keyword
+        merely MENTIONED in the skipped prose (`… the input stream …`) is not a
+        resync target. Returns -1 if none. Crosses a blank line: a blank line is a
+        legitimate visual grouping of a newline-separated port list, so a real port
+        after it (`input clk …`<blank>`input rst_n …`) must NOT be abandoned (round-3
+        §4.05 review: a paragraph-break bound here false-SKIPped grouped reset/output
+        ports). The residual — a PROSE line that starts, after a separator, with a
+        lowercase `input`/`output` token — yields one bounded false-FIRE phantom, the
+        §4.05-SAFE direction. O(distance): the scanned span is then consumed (i jumps
+        to it), so the whole walk stays linear (no per-port scan-to-EOF)."""
+        m2 = _RESYNC_KW_RE.search(masked, p)
+        return m2.start(1) if m2 is not None else -1
+
+    i = 1 if masked[:1] == '(' else 0
     last = i
     have_dir = False
     prev_comma = False
     while i < n:
-        m = _PORTLIST_SEG.match(region, i)
-        if not m or m.end() == i:
+        # Skip inter-token whitespace MANUALLY before matching, so `_PORTLIST_SEG`
+        # is never applied to a long whitespace run that then fails the required
+        # name (its two `\s*` groups would backtrack O(n²) on, e.g., a truncated
+        # `(` followed by thousands of blank lines).
+        while i < n and masked[i] in ' \t\r\n':
+            i += 1
+        if i >= n:
             break
-        if m.group('dir'):
+        m = _PORTLIST_SEG.match(masked, i)
+        if not m or m.end() == i:
+            break                       # STRUCTURAL end: `)`, fence, `;`, a non-port char
+        seg_dir = bool(m.group('dir'))
+        is_cont = (not seg_dir) and have_dir and prev_comma
+        if not (seg_dir or is_cont):
+            break                       # STRUCTURAL: a bare word, not a port/continuation
+        nm = m.group('name').lower()
+        # --- PROSE segments: skip (resync), do NOT terminate the walk ----------- #
+        # A copula/auxiliary verb as the "name" marks a SENTENCE (`input is computed
+        # …`) — never a legal port name. (Gate copula verbs ONLY, NOT coordinating
+        # function words like `a`/`an`: a single-letter `a` is a common real port.)
+        if seg_dir and _NL_PORT_COPULA_RE.match(nm):
+            r = _resync(m.end())
+            if r < 0:
+                break
+            i = r; prev_comma = False; continue
+        # A bare comma-continuation whose name is a known prose noun (`…, signals …`)
+        # is a sentence continuation, not a port.
+        if is_cont and nm in _NL_PORT_PROSE_NAMES:
+            r = _resync(m.end())
+            if r < 0:
+                break
+            i = r; prev_comma = False; continue
+        # --- a real port (direction-anchored, or a clean comma-continuation) ----- #
+        if seg_dir:
             have_dir = True
-        elif not (have_dir and prev_comma):
-            break                       # a bare segment not continuing a comma list
-        if m.group('name').lower() in _NL_PORT_PROSE_NAMES:
-            break                       # a known prose noun, not a port
         j = m.end()
-        ch = region[j] if j < n else ''
+        ch = masked[j] if j < n else ''
         if ch == ',':
             last = j; i = j + 1; prev_comma = True; continue
         if ch in '\r\n':
             last = j; i = j; prev_comma = False; continue   # last port on its line
         if ch == '' or not (ch.isalpha() or ch == '_'):
-            last = j; break             # `)`, EOR, code-fence, `;`, comment …
-        break                           # a same-line bare prose word trails the name
+            last = j; break             # `)`, EOR, code-fence, `;`, comment-now-space …
+        # A same-line bare word trails the name.
+        if not seg_dir:
+            # a comma-continuation trailed by prose (`…, computed by …`) is prose
+            r = _resync(j)
+            if r < 0:
+                break
+            i = r; prev_comma = False; continue
+        # A direction-anchored REAL port with a trailing same-line description:
+        # RECORD it (never drop a direction-declared port), then resync to the next
+        # real port so a clean later port is not cascade-dropped.
+        last = j
+        r = _resync(j)
+        if r < 0:
+            break
+        i = r; prev_comma = False
     return last
 
 
