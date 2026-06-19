@@ -263,10 +263,32 @@ _SET_CONTEXT_RE = re.compile(
 # keep the window search — they describe the set without needing to govern it.
 _SET_OBJECT_GOVERN_RE = re.compile(
     r"(?:"
-    r"\b(?:one|any|each|member)\s+of\s+"
-    r"(?:the|a|following|these|set)?[\s:=]*(?:following|set)?"
+    r"\b(?:one|any|each|member|some)\s+of\b"
+    # optional determiners/qualifiers (Step-2.7 #27: `one of the modes {…}`,
+    # `one of: {…}`, `one of the following codes: {…}` are genuine pre-brace
+    # enums the shipped anchor dropped — broaden WITHOUT re-admitting the
+    # post-brace `{c1,c2,c3} … any of the bits` FP, which lives AFTER the brace
+    # and so never appears in this pre-brace window).
+    r"(?:[\s:=]+(?:the|a|an|any|these|those|its|all|valid|legal|allowed|"
+    r"permitted|possible|following|defined|supported|distinct))*"
+    # optional explicit set-enumeration noun directly before the brace
+    r"(?:[\s:=]+(?:modes?|values?|states?|commands?|opcodes?|codes?|options?|"
+    r"choices?|symbols?|levels?|types?|colou?rs?|elements?|items?|entries|"
+    r"entry|sets?))?"
+    r"[\s:=]*"
     r"|\bin\s+(?:the\s+)?set\s+(?:of\s+)?"
-    r")[\s:=]*$",
+    r"(?:modes?|values?|states?|codes?|options?)?[\s:=]*"
+    r")$",
+    re.I)
+# Step-2.7 #27 (LOW): a POST-brace enumeration phrase governs the brace ONLY when
+# it names a VALUE-set noun (`{RED,GREEN,BLUE} … any of the three colors`) — never
+# a signal/structural noun (`{c1,c2,c3} … any of the bits`, the hamming concat).
+# Window-searched (like the descriptive markers); the value-noun requirement is
+# what separates a real value enum from a Verilog concatenation.
+_SET_VALUE_NOUN_WINDOW_RE = re.compile(
+    r"\b(?:one|any|each|all|member)\s+of\s+(?:the\s+)?(?:\w+\s+){0,2}?"
+    r"(?:modes?|values?|states?|commands?|opcodes?|codes?|options?|choices?|"
+    r"symbols?|levels?|colou?rs?|categor\w+|kinds?)\b",
     re.I)
 # Legacy (no pre-brace position): the object-governing markers anywhere in the
 # window. Used only by direct unit callers that don't pass pre_context.
@@ -326,6 +348,11 @@ def _is_value_enum(member_blob: str, members: List[str], context: str,
     if any(_VALUE_MEMBER_RE.fullmatch(m) for m in members):
         return True
     if _SET_DESCRIPTIVE_RE.search(context):
+        return True
+    # Step-2.7 #27 (LOW): a post-brace enumeration over a VALUE-set noun ("…any of
+    # the three colors") governs the brace — but a structural noun ("…any of the
+    # bits", the concat) does not. Window-searched, value-noun-gated.
+    if _SET_VALUE_NOUN_WINDOW_RE.search(context):
         return True
     if pre_context is None:
         # Legacy API (no brace position supplied): fall back to the historical

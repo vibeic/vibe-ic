@@ -356,5 +356,69 @@ def test_neg_real_identifier_value_set_uncovered_still_blocks(tmp_path):
     assert "IDLE" in r.stdout
 
 
+
+# ── Step-2.7 §4.05 remediations (PR #27 review) ─────────────────────────────
+
+
+def test_step27_enum_pre_brace_set_noun_still_demanded():
+    """MED #3: `one of the modes {IDLE,RUN,DONE}` / `one of: {…}` are genuine
+    pre-brace enums — the over-strict anchor dropped them; they must be enums."""
+    assert SC._is_value_enum("", ["IDLE","RUN","DONE"],
+        "The mode is one of the modes {IDLE, RUN, DONE}.",
+        "The mode is one of the modes ") is True
+    assert SC._is_value_enum("", ["LOAD","STORE","JUMP"],
+        "field is one of: {LOAD, STORE, JUMP}.", "field is one of: ") is True
+
+
+def test_step27_enum_post_brace_value_noun_still_demanded():
+    """LOW #1: a post-brace enumeration over a VALUE noun (`{RED,GREEN,BLUE} …
+    any of the three colors`) is a genuine enum; the structural-noun concat
+    (`{c1,c2,c3} … any of the bits`, hamming) is NOT."""
+    assert SC._is_value_enum("", ["RED","GREEN","BLUE"],
+        "The output color must be {RED, GREEN, BLUE}, and is any of the three colors.",
+        "The output color must be ") is True
+    assert SC._is_value_enum("", ["c1","c2","c3"],
+        "parity bits {c1, c2, c3}: Result of 1 in any of the bits",
+        "parity bits ") is False
+
+
+def test_step27_iface_port_listing_table_header_not_masked():
+    """MED #2: a no-Direction table that lists ports as backtick COLUMN HEADERS
+    (no test-vector metadata column) is NOT a results table — its header names
+    must NOT be excluded, so a genuinely omitted `overflow` still blocks."""
+    leak = ("The module computes a sum. The table below lists the ports.\n\n"
+            "| `clk` | `rst` | `a` | `b` | `sum` | `overflow` | Notes |\n"
+            "|------|------|----|----|------|------------|-------|\n"
+            "| 1    | 1    | 8  | 8  | 8    | 1          | wraps |\n")
+    # overflow must NOT be excluded (no results-metadata column present)
+    assert "overflow" not in IF._directionless_table_names(leak)
+
+
+def test_step27_iface_results_table_header_still_excluded():
+    """A genuine results table (Test ID / Latency / Explanation columns) still
+    excludes its quoted column headers (the square_root motivating case)."""
+    sqrt = ("Compute the square root.\n\n"
+            "| WIDTH | Test ID | `num` | `final_root` | `expected_root` | Latency | Explanation |\n"
+            "|-------|---------|------|-------------|----------------|---------|-------------|\n"
+            "| 8     | 1       | 16   | 4           | 4              | 3       | exact       |\n")
+    excl = IF._directionless_table_names(sqrt)
+    assert "expected_root" in excl and "final_root" in excl
+
+
+def test_step27r2_port_table_meta_col_plus_body_dir_words_not_masked():
+    """Round-2 §4.05: a port-listing table that carries a results-meta column
+    (`Expected`/`Test ID`) AND direction WORDS in its body rows (`in`/`out`) is a
+    PORT table, not a results table — its header names must NOT be excluded, so a
+    genuinely omitted `overflow` still blocks. (A header-only Direction-column
+    check missed this; the body-direction-word guard catches it.)"""
+    leak = ("Module `alu`.\n\n"
+            "| `clk` | `rst` | `a` | `b` | `sum` | `overflow` | Expected |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| in | in | in | in | out | out | ok |\n")
+    assert "overflow" not in IF._directionless_table_names(leak)
+    # the same table with `Test ID` / `#` meta column also stays a port table
+    leak2 = leak.replace("Expected", "Test ID")
+    assert "overflow" not in IF._directionless_table_names(leak2)
+
 if __name__ == "__main__":
     sys.exit(subprocess.call([sys.executable, "-m", "pytest", __file__, "-v"]))
