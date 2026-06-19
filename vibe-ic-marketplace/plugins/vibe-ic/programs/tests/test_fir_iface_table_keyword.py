@@ -13,7 +13,7 @@ named `logic` with source=table → STRUCTURAL → block_eligible → strict rc=
 correct, spec-faithful RTL that declares exactly the spec's real ports.
 
 FIX: candidate port NAMES in `_table_ports()` are filtered (whole-token,
-case-insensitive) through the SAME `_SV_PORT_KEYWORDS` set the header-port
+case-SENSITIVE) through the SAME `_SV_PORT_KEYWORDS` set the header-port
 parsers already use. A reserved SV type/direction keyword is never a legal port
 identifier, so excluding it can only DROP a phantom — it can never mask a real
 port. A real port whose identifier merely CONTAINS such a keyword as a SUBSTRING
@@ -211,6 +211,38 @@ def test_noleak_keyword_substring_port_harvested(tmp_path):
     assert r_miss.returncode == 1, "keyword-substring port was masked!"
     assert "reg_file_addr" in r_miss.stdout
 
+
+
+# ── Step-2.7 no-leak: a CAPITALIZED identifier (`Reg`/`Logic`/`Wire`) is a LEGAL
+# distinct SV port name, NOT a reserved keyword — the case-SENSITIVE exclusion
+# must keep it harvested so a genuine missing such port still hard-blocks. ──
+_CAPVAR_PROMPT = """# Spec
+
+| Signal | Direction | Type |
+|--------|-----------|------|
+| `Reg`  | output    | logic |
+| `clk`  | input     | logic |
+"""
+_CAPVAR_RTL = "module top (\n    input clk\n);\nendmodule\n"
+
+
+def test_noleak_capitalized_keyword_port_still_blocks(tmp_path):
+    """`Reg` (capital) is a legal port identifier, NOT the reserved `reg`; a
+    direction-ful missing `Reg` must STILL hard-block (rc=1) — the keyword
+    exclusion is case-SENSITIVE so it never masks a capitalized real port."""
+    r = _run_cli(tmp_path, _CAPVAR_RTL, _CAPVAR_PROMPT, rid="cvdp_copilot_reg_0001")
+    assert r.returncode == 1, (
+        "a capitalized legal identifier `Reg` declared output and omitted by the "
+        f"RTL must remain block-eligible\n{r.stdout}{r.stderr}")
+    assert "Reg" in r.stdout
+
+
+def test_capitalized_keyword_variants_harvested_unit():
+    assert "Reg" in M._table_ports("| `Reg` | output | r |\n")
+    assert "Logic" in M._table_ports("| `Logic` | input | l |\n")
+    assert "Wire" in M._table_ports("| `Wire` | input | w |\n")
+    # lowercase reserved keyword still excluded
+    assert "logic" not in M._table_ports("| `clk` | `logic` | desc |\n")
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
