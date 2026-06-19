@@ -968,6 +968,122 @@ def _desc_table_firstcol_names(prompt: str) -> Set[str]:
     return names
 
 
+# ORGANIC-20260618 (square_root_0003) — a TEST-VECTOR RESULTS table names its
+# data columns in the HEADER row (`| WIDTH | Test ID | \`num\` | \`final_root\` |
+# \`expected_root\` | Latency | Explanation |`) and carries numeric VALUES in the
+# body rows. Those header-cell backtick names are column labels, NOT ports — yet
+# the iface scraper's directionless `setdefault(name, "")` branch fabricated them
+# as ports (source=table → STRUCTURAL → block-eligible → spurious rc=1). This
+# excludes backtick names that occur ONLY in the HEADER cells of such a
+# directionless (no-Direction-column) table AND nowhere else in the prompt.
+# Restricting to HEADER cells (a results-table signature) — never body-row Name
+# cells — means a `## Pin Description` / register-map table that lists port/CSR
+# names in a BODY `Name` column (req/gnt; irq/status) is untouched, so a real
+# MISSING-PORT is never masked (§4.05 no-leak — issue#24 negatives). The
+# canonical shared parser already requires a Direction column for a port table.
+# chip-AGNOSTIC: pure markdown table grammar.
+# (Step-2.7 #27) Unambiguous TEST-VECTOR / RESULTS-table column headers. At least
+# one must be present for a no-Direction table's backtick header names to be
+# excluded as non-ports — this separates a results table (square_root) from a
+# port-listing table whose ports happen to be column headers (the `overflow`
+# leak). Deliberately EXCLUDES generic words a port table may carry (Notes /
+# Description / Comment / Width / Function).
+# A cell whose whole content is a port DIRECTION word (incl. the `in`/`out`
+# shorthand used in body rows of a port-listing table). Step-2.7 #27 round-2.
+_DIR_WORD_RE = re.compile(r"^(?:input|output|inout|in|out|i/o)$", re.I)
+_RESULTS_META_HDR = re.compile(
+    r"^\s*(?:test(?:\s*(?:id|case|vector|no\.?|#|num\w*))?|vectors?|"
+    r"latency|cycles?|clk\s*cycles?|expected(?:\s+\w+)?|golden|reference|"
+    r"case\s*\d*|example|iteration|scenario|stimulus|input\s+vector|"
+    r"output\s+vector|explanation|step\s*\d*|#)\s*$",
+    re.I)
+
+
+def _directionless_table_names(prompt: str) -> Set[str]:
+    """Backtick identifiers that appear ONLY in the HEADER row of a proper
+    header+delimiter markdown table with NO Direction column (a results /
+    test-vector table whose columns are quoted), and nowhere else in the prompt.
+    Such header labels are not ports. A name that also appears outside the header
+    (a body Name cell, a `## Ports` section, prose) is NOT returned, so a real
+    MISSING-PORT is never masked. chip-AGNOSTIC: pure markdown table grammar."""
+    lines = prompt.splitlines()
+    n = len(lines)
+    header_lines: Set[int] = set()              # directionless-table HEADER rows
+    candidates: Set[str] = set()
+    i = 0
+    while i < n - 1:
+        line = lines[i]
+        if line.count("|") < 2:
+            i += 1
+            continue
+        header = _split_md_row_local(line)
+        delim = _split_md_row_local(lines[i + 1]) if i + 1 < n else []
+        if not _is_md_delim_local(delim) or len(delim) != len(header):
+            i += 1
+            continue
+        hdr_clean = [h.strip().strip("*_` ") for h in header]
+        has_dir = any(_DIR_HDR_RE.match(h) for h in hdr_clean)
+        if has_dir:
+            i += 2
+            continue
+        # (Step-2.7 #27) Absence of a Direction column is NOT enough — a port
+        # table that lists its ports as backtick COLUMN HEADERS (no Direction
+        # col) looks identical, and excluding its header names would mask a real
+        # MISSING-PORT (the `overflow` leak). Require POSITIVE test-vector /
+        # results-table evidence: at least one column header is unambiguous
+        # test-vector metadata (Test ID / Vector / Latency / Cycle / Expected /
+        # Case / Iteration / #). A pure port-listing table has none, so its
+        # header names stay block-eligible. chip-AGNOSTIC: markdown grammar.
+        if not any(_RESULTS_META_HDR.match(h) for h in hdr_clean):
+            i += 2
+            continue
+        # (Step-2.7 #27 round-2) A genuine results / test-vector table holds DATA
+        # VALUES in its body; a PORT-listing table (ports as headers) holds
+        # DIRECTION WORDS (`in`/`out`/`input`/`output`/`inout`) in its body rows —
+        # even when there is no Direction header COLUMN. `_DIR_HDR_RE` only checks
+        # header cells, so a port table with body direction words + a coincidental
+        # `Expected`/`Test ID` meta column would be mis-excluded, re-masking a real
+        # MISSING-PORT (`overflow`). Scan this table's BODY rows: any direction
+        # word means it is a port table, NOT a results table — do not exclude.
+        body_has_dir = False
+        b = i + 2
+        while b < n:
+            row = lines[b]
+            if row.count("|") < 1:
+                break
+            cells = _split_md_row_local(row)
+            if _is_md_delim_local(cells):
+                b += 1
+                continue
+            if all(c == "" for c in cells):
+                break
+            if any(_DIR_WORD_RE.match(c.strip().strip("*_` "))
+                   for c in cells):
+                body_has_dir = True
+                break
+            b += 1
+        if body_has_dir:
+            i += 2
+            continue
+        # collect backtick names from the HEADER row only (results-table columns)
+        header_lines.add(i)
+        for cell in header:
+            for mm in re.finditer(r"`([A-Za-z_]\w*)`", cell):
+                candidates.add(mm.group(1))
+        i += 2
+    # keep only candidates whose EVERY backtick occurrence is in a directionless
+    # header row — a name also seen elsewhere (body Name cell, prose, ## Ports)
+    # is a real port mention and must not be masked.
+    elsewhere: Set[str] = set()
+    for k, line in enumerate(lines):
+        if k in header_lines:
+            continue
+        for mm in re.finditer(r"`([A-Za-z_]\w*)`", line):
+            elsewhere.add(mm.group(1))
+    names = candidates - elsewhere
+    return names
+
+
 def _table_ports(prompt: str) -> Dict[str, str]:
     """Markdown table rows: first backtick cell = name, a later cell carrying
     a direction word = direction. Returns name→direction (lower, '' if no
@@ -996,6 +1112,10 @@ def _table_ports(prompt: str) -> Dict[str, str]:
     chip-AGNOSTIC: pure SV-keyword set + markdown grammar."""
     out: Dict[str, str] = {}
     desc_only = _desc_table_firstcol_names(prompt)
+    # (ORGANIC-20260618) names that occur ONLY inside a directionless table (no
+    # Direction column) — a results / metadata table, never a port table. Mirrors
+    # the shared `_parse_md_table_ports` Direction-column discipline.
+    directionless = _directionless_table_names(prompt)
     # Split on the pipe so an inline single-line table (the acceptance shape)
     # and a true multi-row markdown table both work: scan windows of
     # `\`name\` | dir` regardless of line boundaries.
@@ -1013,7 +1133,7 @@ def _table_ports(prompt: str) -> Dict[str, str]:
             continue
         if word in ("input", "output", "inout"):
             out[name] = word
-        elif name not in desc_only:
+        elif name not in desc_only and name not in directionless:
             out.setdefault(name, "")
     return out
 
