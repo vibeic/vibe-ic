@@ -61,10 +61,20 @@ class Port:
     width: int       # 1 for scalar
 
 
+# The width bracket tolerates ANY range expression, not only a `\d+:\d+` literal
+# range. A parameterized bus (`[INPUT_ADDR_WIDTH-1:0]`, `[(IN_ROW*IN_COL*W)-1:0]`,
+# `[IN_DATA_WIDTH*IN_DATA_NS-1:0]`) failed the old digits-only bracket; the regex
+# then backtracked, the type-keyword run (`logic`/`reg`/…) matched ZERO reps, and
+# the NAME group captured the type keyword `logic` as a phantom port WHILE DROPPING
+# the real parameterized port (ORGANIC-20260618 — exposed once the balanced
+# `_module_port_region` reaches these ANSI headers). The bracket now matches
+# `[ ... ]` (no inner `]`); the numeric WIDTH is extracted only when the range is a
+# pure `<int>:<int>` literal, else width defaults to 1 (unknown). chip-AGNOSTIC.
 _PORT_DECL = re.compile(
     r'\b(input|output|inout)\b\s*(?:reg|wire|logic|signed|unsigned|\s)*'
-    r'(?:\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*)?'
+    r'(?:(\[[^\]]*\])\s*)?'
     r'([A-Za-z_]\w*(?:\s*,\s*(?!(?:input|output|inout)\b)[A-Za-z_]\w*)*)')
+_LITERAL_RANGE = re.compile(r'\[\s*(\d+)\s*:\s*(\d+)\s*\]')
 
 
 # function/task argument declarations use the same input/output keywords as module
@@ -84,11 +94,12 @@ def parse_verilog_ports(text: str) -> List[Port]:
     ports: List[Port] = []
     for m in _PORT_DECL.finditer(text):
         direction = m.group(1)
+        width = 1
         if m.group(2) is not None:
-            width = abs(int(m.group(2)) - int(m.group(3))) + 1
-        else:
-            width = 1
-        for nm in re.split(r'\s*,\s*', m.group(4)):
+            lit = _LITERAL_RANGE.fullmatch(m.group(2).strip())
+            if lit:
+                width = abs(int(lit.group(1)) - int(lit.group(2))) + 1
+        for nm in re.split(r'\s*,\s*', m.group(3)):
             nm = nm.strip()
             if nm:
                 ports.append(Port(nm, direction, width))
@@ -648,6 +659,25 @@ def _parse_md_table_ports(text: str) -> Tuple[List[Port], List[str]]:
     return best_ports, notes
 
 
+def _skip_balanced_parens(text: str, i: int) -> Optional[int]:
+    """`text[i]` must be `(`. Return the index JUST PAST the matching `)`, or
+    None if unbalanced. Balances nested parens so a `#( ... )` parameter block
+    containing inner parens (`$clog2(BUFFER_DEPTH)`, `(IN_ROW > IN_COL) ? ..`,
+    `{N{1'b1}}`) is consumed whole."""
+    if i >= len(text) or text[i] != '(':
+        return None
+    depth, n = 0, len(text)
+    while i < n:
+        if text[i] == '(':
+            depth += 1
+        elif text[i] == ')':
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return None
+
+
 def _module_port_region(text: str, prefer: str = "TopModule") -> Optional[str]:
     """Return the ANSI port-list inside `module name ( ... )`, or None.
 
@@ -657,22 +687,61 @@ def _module_port_region(text: str, prefer: str = "TopModule") -> Optional[str]:
     When the spec embeds MULTIPLE module declarations (e.g. a reference or buggy
     module shown before the real target header — common in code-completion and
     bug-fix prompts), prefer the one named `prefer` (default TopModule, the target)
-    so the contract is taken from the target header, not the embedded example."""
-    headers = list(re.finditer(r'\bmodule\s+(\w+)\s*(?:#\s*\([^)]*\)\s*)?\(', text))
+    so the contract is taken from the target header, not the embedded example.
+
+    ORGANIC-20260618 (cascaded_adder_0025 / image_rotate_0001 /
+    write_buffer_merge_0001): the optional parameter block `#( ... )` is BALANCE-
+    matched, not regex-`[^)]*`-matched. A real ANSI header whose param list
+    embeds nested parens (`#( parameter X = $clog2(N) )`, `( (A>B)?A:B )`,
+    `{N{1'b1}}`) was MISSED by the old `#\\s*\\([^)]*\\)` regex (it cannot span an
+    inner `)`), so the contract extractor fell through to the prose-scan fallback
+    and harvested English words as phantom ports. Balancing the param block reaches
+    the real port-list `( ... )` and the phantom-port class disappears at source."""
+    n = len(text)
+    headers: List[Tuple[str, int, int]] = []   # (name, header_start, portlist_open)
+    for m in re.finditer(r'\bmodule\s+(\w+)\s*', text):
+        j = m.end()
+        # optional `#( ... )` parameter block, balance-matched
+        if j < n and text[j] == '#':
+            k = j + 1
+            while k < n and text[k] in ' \t\r\n':
+                k += 1
+            if k < n and text[k] == '(':
+                end = _skip_balanced_parens(text, k)
+                if end is None:
+                    continue
+                j = end
+                while j < n and text[j] in ' \t\r\n':
+                    j += 1
+        if j < n and text[j] == '(':
+            headers.append((m.group(1), m.start(), j))
     if not headers:
         return None
-    m = next((h for h in headers if h.group(1) == prefer), headers[0])
-    i = text.index('(', m.start())
-    depth, n = 0, len(text)
-    while i < n:
-        if text[i] == '(':
-            depth += 1
-        elif text[i] == ')':
-            depth -= 1
-            if depth == 0:
-                return text[m.start():i]
-        i += 1
-    return None
+    name, start, open_i = next((h for h in headers if h[0] == prefer), headers[0])
+    end = _skip_balanced_parens(text, open_i)
+    if end is not None:
+        return text[start:end - 1]      # exclude the closing ')'
+    # ORGANIC-20260618 (gray_to_binary_0001) — a PARTIAL / truncated code template
+    # may show the ANSI port list with NO closing `);` (the body decls start right
+    # after the last port). The unbalanced `(` made this header un-matchable, so
+    # the contract extractor fell through to the prose-scan fallback and scraped
+    # English words ('Gray Input'->'Gray', '... is ...'->'is', 'by inverting'->'by',
+    # 'upon changes'->'upon') as phantom ports. Bound the port-list region at the
+    # first BODY boundary instead — the first line that begins a non-port body
+    # declaration (`logic`/`wire`/`reg` WITHOUT input/output, `always`/`assign`/
+    # `genvar`/`generate`/`localparam`/`function`/`task`) or `endmodule`. Within
+    # this bounded region, parse_verilog_ports only harvests `input/output/inout`
+    # declarations, so NO prose word can leak as a port. chip-AGNOSTIC.
+    region = text[open_i:]
+    boundary = re.search(
+        r'(?m)^[ \t]*(?:'
+        r'(?:logic|wire|reg|integer|genvar)\b'   # body net/var decl …
+        r'|always\b|assign\b|generate\b|localparam\b|parameter\b'
+        r'|function\b|task\b|initial\b|endmodule\b)',
+        region)
+    if boundary is not None:
+        region = region[:boundary.start()]
+    return text[start:open_i] + region
 
 
 # An active-low-shaped reset name: trailing `_n`/`n`, or a leading `n` on a

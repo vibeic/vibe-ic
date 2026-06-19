@@ -250,6 +250,55 @@ _SET_CONTEXT_RE = re.compile(
     r"valid\s+(?:value|values|state|states|mode|modes|enum\w*)|"
     r"enumerat\w*|\bstate\s*=|\bmode\s+in\b|\bopcode\s+in\b)\b",
     re.I)
+# ORGANIC-20260618 (hamming_code_tx_and_rx_0003) — the OBJECT-GOVERNING membership
+# markers (`one of` / `any of` / `each of` / `member of` / `in (the) set`) license
+# an identifier-only brace as an enumerated value set ONLY when the brace is the
+# OBJECT of the phrase (`one of {A,B,C}`). The shipped `_SET_CONTEXT_RE` matched
+# these anywhere in the ±window, so `{c1, c2, c3}:` immediately followed by
+# "- Result of 1 in any of the bits" (where "any of" governs "the bits", not the
+# brace) wrongly promoted a Verilog SIGNAL concatenation to a value enum and
+# demanded per-member TB coverage of identifiers c1/c2/c3. These markers are now
+# accepted only when they directly PRECEDE the brace (object-of-membership). The
+# DESCRIPTIVE markers (valid values / enumerat / state= / mode in / opcode in)
+# keep the window search — they describe the set without needing to govern it.
+_SET_OBJECT_GOVERN_RE = re.compile(
+    r"(?:"
+    r"\b(?:one|any|each|member|some)\s+of\b"
+    # optional determiners/qualifiers (Step-2.7 #27: `one of the modes {…}`,
+    # `one of: {…}`, `one of the following codes: {…}` are genuine pre-brace
+    # enums the shipped anchor dropped — broaden WITHOUT re-admitting the
+    # post-brace `{c1,c2,c3} … any of the bits` FP, which lives AFTER the brace
+    # and so never appears in this pre-brace window).
+    r"(?:[\s:=]+(?:the|a|an|any|these|those|its|all|valid|legal|allowed|"
+    r"permitted|possible|following|defined|supported|distinct))*"
+    # optional explicit set-enumeration noun directly before the brace
+    r"(?:[\s:=]+(?:modes?|values?|states?|commands?|opcodes?|codes?|options?|"
+    r"choices?|symbols?|levels?|types?|colou?rs?|elements?|items?|entries|"
+    r"entry|sets?))?"
+    r"[\s:=]*"
+    r"|\bin\s+(?:the\s+)?set\s+(?:of\s+)?"
+    r"(?:modes?|values?|states?|codes?|options?)?[\s:=]*"
+    r")$",
+    re.I)
+# Step-2.7 #27 (LOW): a POST-brace enumeration phrase governs the brace ONLY when
+# it names a VALUE-set noun (`{RED,GREEN,BLUE} … any of the three colors`) — never
+# a signal/structural noun (`{c1,c2,c3} … any of the bits`, the hamming concat).
+# Window-searched (like the descriptive markers); the value-noun requirement is
+# what separates a real value enum from a Verilog concatenation.
+_SET_VALUE_NOUN_WINDOW_RE = re.compile(
+    r"\b(?:one|any|each|all|member)\s+of\s+(?:the\s+)?(?:\w+\s+){0,2}?"
+    r"(?:modes?|values?|states?|commands?|opcodes?|codes?|options?|choices?|"
+    r"symbols?|levels?|colou?rs?|categor\w+|kinds?)\b",
+    re.I)
+# Legacy (no pre-brace position): the object-governing markers anywhere in the
+# window. Used only by direct unit callers that don't pass pre_context.
+_SET_OBJECT_GOVERN_WINDOW_RE = re.compile(
+    r"\b(?:one\s+of|any\s+of|each\s+of|member\s+of|in\s+(?:the\s+)?set)\b",
+    re.I)
+_SET_DESCRIPTIVE_RE = re.compile(
+    r"\b(valid\s+(?:value|values|state|states|mode|modes|enum\w*)|"
+    r"enumerat\w*|\bstate\s*=|\bmode\s+in\b|\bopcode\s+in\b)\b",
+    re.I)
 # ORGANIC #770 r2 Step-2.7 — additional value-SET vocabulary that marks a brace
 # list as an ENUMERATION (each member a distinct legal value), so a compactly
 # written `NAME = {v1, v2, ...}` is NOT downgraded as a packed-concat literal.
@@ -280,19 +329,40 @@ _ENUM_VALUE_CTX_RE = re.compile(
     re.I)
 
 
-def _is_value_enum(member_blob: str, members: List[str], context: str) -> bool:
+def _is_value_enum(member_blob: str, members: List[str], context: str,
+                   pre_context: Optional[str] = None) -> bool:
     """Decide whether a brace-list `{...}` is a genuine enumerated VALUE set
     (member-by-member TB coverage is testable) versus a Verilog CONCATENATION /
     code expression that merely shares the `{...}` shape.
 
     Accept when ANY member is a value-shaped literal (hex/dec/bin) — a real
-    value set. An identifier-ONLY brace-list is accepted ONLY in an explicit
-    enumerated-set context window (see _SET_CONTEXT_RE); otherwise it is treated
-    as a concatenation/expression and NOT charged as an enum requirement (the
-    decoder_0011 {E7..E0} output-assembly false positive)."""
+    value set. An identifier-ONLY brace-list is accepted in two cases:
+      * a DESCRIPTIVE set marker (valid values / enumerat / mode in / …) anywhere
+        in the surrounding window; OR
+      * an OBJECT-GOVERNING membership phrase (one of / any of / each of / member
+        of / in the set) that directly PRECEDES the brace (the brace is its
+        object: `one of {A,B,C}`).
+    Otherwise it is treated as a concatenation/expression and NOT charged as an
+    enum requirement (the decoder_0011 {E7..E0} output-assembly false positive;
+    the hamming {c1,c2,c3} signal-concat false positive)."""
     if any(_VALUE_MEMBER_RE.fullmatch(m) for m in members):
         return True
-    return bool(_SET_CONTEXT_RE.search(context))
+    if _SET_DESCRIPTIVE_RE.search(context):
+        return True
+    # Step-2.7 #27 (LOW): a post-brace enumeration over a VALUE-set noun ("…any of
+    # the three colors") governs the brace — but a structural noun ("…any of the
+    # bits", the concat) does not. Window-searched, value-noun-gated.
+    if _SET_VALUE_NOUN_WINDOW_RE.search(context):
+        return True
+    if pre_context is None:
+        # Legacy API (no brace position supplied): fall back to the historical
+        # window search for ANY object-governing marker in the context. The
+        # production call site below always supplies pre_context and gets the
+        # stricter pre-brace anchoring that fixes the post-brace 'any of the bits'
+        # FP — so this branch only preserves back-compat for direct unit callers.
+        return bool(_SET_OBJECT_GOVERN_WINDOW_RE.search(context))
+    # object-governing markers must directly precede the brace (pre-brace text)
+    return bool(_SET_OBJECT_GOVERN_RE.search(pre_context))
 
 
 # ---------------------------------------------------------------------------
@@ -670,6 +740,34 @@ _TB_ORDER_ASSERT_RE = re.compile(
     r"([A-Za-z_]\w*)(?:\s*\[\s*[A-Za-z_]\w*\s*\])?(?!\s*[\w'])")
 
 
+# ORGANIC-20260618 (data_serializer_0001) — a TB binds a DUT port to a LOCAL net
+# at instantiation (`data_serializer ... (.s_data_o(c_sd), …)`), then writes its
+# ordering assertion against that local net (`c_sd !== expvec[k]`). The DUT-tie
+# check compared the assertion operand to the DUT PORT NAME (`s_data_o`) and so
+# never credited the port-connection ALIAS (`c_sd`) — a faithful ordering TB was
+# scored UNCOVERED. This resolves the named-port-connection aliases `.port(net)`
+# so a net bound to a DUT port counts as DUT-tied. Positional connections are not
+# resolved (no port name to anchor on) and named connections to a CONSTANT/expr
+# (`.PARAM(8)`) are not aliases. chip-AGNOSTIC: Verilog named-connection grammar.
+_TB_PORT_CONN_RE = re.compile(r"\.\s*([A-Za-z_]\w*)\s*\(\s*([A-Za-z_]\w*)\s*\)")
+
+
+def _tb_port_connection_aliases(tb_clean: str,
+                                rtl_ports_lower: Optional[set]) -> set:
+    """Lower-cased TB net names bound, at instantiation, to a DUT PORT via a
+    named connection `.port(net)`. Restricted to nets bound to a name in the
+    known DUT port set (when supplied) so an unrelated `.foo(bar)` macro/instance
+    cannot widen the tie. chip-AGNOSTIC."""
+    if not tb_clean or rtl_ports_lower is None:
+        return set()
+    ports = {p.lower() for p in rtl_ports_lower}
+    aliases: set = set()
+    for m in _TB_PORT_CONN_RE.finditer(tb_clean):
+        if m.group(1).lower() in ports:
+            aliases.add(m.group(2).lower())
+    return aliases
+
+
 def _tb_exercises_byte_order_region(
         tb_clean: str, rtl_ports_lower: Optional[set] = None) -> bool:
     """True iff the TB structurally exercises a serial bit ORDERING.
@@ -678,8 +776,9 @@ def _tb_exercises_byte_order_region(
     of some vector, and (3) an ORDERING ASSERTION — a vector===vector equality
     (`out === frame`, never `counter == literal` or `bit == literal`) in which
     one operand is the bit-indexed-driven vector AND, when the RTL port set is
-    known, one operand is a DUT PORT (so the assertion checks the DUT's packing,
-    not a self-comparison of unrelated TB scratch).
+    known, one operand is a DUT PORT — resolved through named port-connection
+    aliases `.port(net)` so a TB net bound to a DUT port counts (so the assertion
+    checks the DUT's packing, not a self-comparison of unrelated TB scratch).
 
     §4.05 no-leak: incidental loop + `scratch[i]=i` + `i==4` (or `junk[i]==8'h00`)
     does NOT count — those carry no vector===vector assertion tying a bit-driven
@@ -694,6 +793,8 @@ def _tb_exercises_byte_order_region(
     if not indexed_vecs:
         return False
     ports = {p.lower() for p in (rtl_ports_lower or set())}
+    # widen the DUT-tie set with nets bound to a DUT port at instantiation
+    ports |= _tb_port_connection_aliases(tb_clean, rtl_ports_lower)
     for m in _TB_ORDER_ASSERT_RE.finditer(tb_clean):
         operands = {m.group(1).lower(), m.group(2).lower()}
         ties_drive = bool(operands & indexed_vecs)
@@ -1241,7 +1342,11 @@ def extract_checklist(spec_text: str) -> List[ChecklistItem]:
         # demand per-member TB coverage. Window = the line/clause around the set.
         _ws, _we = m.start(), m.end()
         _ctx = spec_text[max(0, _ws - 80):min(len(spec_text), _we + 40)]
-        if not _is_value_enum(m.group(1), members, _ctx):
+        # pre-brace text only — object-governing membership markers must directly
+        # precede the `{` (the brace is the OBJECT: `one of {A,B,C}`), so a phrase
+        # AFTER the brace ("{c1,c2,c3}: any of the bits") does not license it.
+        _pre = spec_text[max(0, _ws - 60):_ws]
+        if not _is_value_enum(m.group(1), members, _ctx, _pre):
             continue
         set_repr = "{" + ", ".join(members) + "}"
         # ORGANIC #770 r2 — a single-signal packed-vector CONCATENATION literal
@@ -1587,6 +1692,41 @@ def _tb_exercises_overflow_region(tb_clean: str) -> bool:
     return bool(_TB_RANGE_DECISION_RE.search(t))
 
 
+# ORGANIC-20260618 (car_parking_management_0015) — `rounding` and `truncation`
+# are lumped into the overflow family by `_OVERFLOW_RE`, but they are NOT a
+# saturation/wrap value-region decision: a ceil/floor-division design has no
+# range comparator selecting an "overflow path", so the range-decision model
+# (`_tb_exercises_overflow_region`) cannot be satisfied by a faithful rounding TB
+# and the item hard-blocked a correct division-rounding design. A rounding/
+# truncation requirement is covered when the TB structurally exercises rounding:
+# the ceil/floor-division IDIOM (`(x + N-1)/N`, `(x + DIV-1)`, `$ceil`/`$floor`)
+# OR a REFERENCE-MODEL equality assertion (`got !== exp`, `===`/`!==`/`==`/`!=`
+# between two non-literal operands) that checks the rounded result. A real
+# saturate/overflow/wrap/clip spec is unaffected — those trigger words keep the
+# strict range-decision model (this branch fires only for rounding/truncation).
+# §4.05 no-leak: a rounding TB that drives no division idiom AND no reference
+# equality still GAPs. chip-AGNOSTIC: pure ceil/floor-idiom + equality grammar.
+_TB_CEIL_FLOOR_IDIOM_RE = re.compile(
+    r"\$\s*(?:ceil|floor)\b"                      # $ceil / $floor
+    r"|\+\s*\(?\s*[A-Za-z_0-9']+\s*-\s*1\s*\)?\s*\)?\s*/"   # (x + N-1)/
+    r"|/\s*[A-Za-z_0-9']+\s*\+\s*\(",             # x / N + (rem != 0)
+    re.I)
+_TB_REF_EQ_RE = re.compile(
+    r"([A-Za-z_]\w*)(?:\s*\[[^\]]*\])?\s*(?:===|!==|==|!=)\s*"
+    r"([A-Za-z_]\w*)(?:\s*\[[^\]]*\])?(?!\s*[\w'])")
+
+
+def _tb_exercises_rounding(tb_clean: str) -> bool:
+    """True iff the TB structurally exercises a rounding/truncation computation:
+    a ceil/floor-division idiom, OR a reference-model equality assertion between
+    two non-literal operands (`got !== exp`). chip-AGNOSTIC."""
+    if not tb_clean:
+        return False
+    if _TB_CEIL_FLOOR_IDIOM_RE.search(tb_clean):
+        return True
+    return bool(_TB_REF_EQ_RE.search(tb_clean))
+
+
 # ORGANIC #770 round-2 (axis_joiner_0001) — STRUCTURAL-STIMULUS coverage for the
 # handshake item, the value-region analogue applied to a valid/ready protocol.
 # The shipped attribute_coverage() marked the handshake item covered ONLY when
@@ -1894,8 +2034,18 @@ def attribute_coverage(items: List[ChecklistItem], tb_text: Optional[str],
                               tb_low)
                 for tok in it.coverage_tokens)
             region = _tb_exercises_overflow_region(tb_clean)
-            it.covered = bool(region)
-            if region and token_hit:
+            # ORGANIC-20260618 — a rounding/truncation trigger (NOT saturate/
+            # overflow/wrap/clip) is not a value-region decision; accept the
+            # ceil/floor-division idiom or a reference-model equality as covering.
+            _is_rounding = any(
+                re.fullmatch(r"rounding|truncat\w*", (tok or "").strip().lower())
+                for tok in it.coverage_tokens)
+            rounding = _is_rounding and _tb_exercises_rounding(tb_clean)
+            it.covered = bool(region or rounding)
+            if rounding and not region:
+                it.coverage_note = ("TB exercises rounding/truncation (ceil/floor "
+                                    "division idiom or reference-model equality)")
+            elif region and token_hit:
                 it.coverage_note = ("TB exercises overflow region (range "
                                     "decision) and names the spec token")
             elif region:
