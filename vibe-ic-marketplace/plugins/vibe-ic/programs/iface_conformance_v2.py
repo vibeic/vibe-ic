@@ -968,6 +968,66 @@ def _desc_table_firstcol_names(prompt: str) -> Set[str]:
     return names
 
 
+# ORGANIC-20260618 (square_root_0003) — a TEST-VECTOR RESULTS table names its
+# data columns in the HEADER row (`| WIDTH | Test ID | \`num\` | \`final_root\` |
+# \`expected_root\` | Latency | Explanation |`) and carries numeric VALUES in the
+# body rows. Those header-cell backtick names are column labels, NOT ports — yet
+# the iface scraper's directionless `setdefault(name, "")` branch fabricated them
+# as ports (source=table → STRUCTURAL → block-eligible → spurious rc=1). This
+# excludes backtick names that occur ONLY in the HEADER cells of such a
+# directionless (no-Direction-column) table AND nowhere else in the prompt.
+# Restricting to HEADER cells (a results-table signature) — never body-row Name
+# cells — means a `## Pin Description` / register-map table that lists port/CSR
+# names in a BODY `Name` column (req/gnt; irq/status) is untouched, so a real
+# MISSING-PORT is never masked (§4.05 no-leak — issue#24 negatives). The
+# canonical shared parser already requires a Direction column for a port table.
+# chip-AGNOSTIC: pure markdown table grammar.
+def _directionless_table_names(prompt: str) -> Set[str]:
+    """Backtick identifiers that appear ONLY in the HEADER row of a proper
+    header+delimiter markdown table with NO Direction column (a results /
+    test-vector table whose columns are quoted), and nowhere else in the prompt.
+    Such header labels are not ports. A name that also appears outside the header
+    (a body Name cell, a `## Ports` section, prose) is NOT returned, so a real
+    MISSING-PORT is never masked. chip-AGNOSTIC: pure markdown table grammar."""
+    lines = prompt.splitlines()
+    n = len(lines)
+    header_lines: Set[int] = set()              # directionless-table HEADER rows
+    candidates: Set[str] = set()
+    i = 0
+    while i < n - 1:
+        line = lines[i]
+        if line.count("|") < 2:
+            i += 1
+            continue
+        header = _split_md_row_local(line)
+        delim = _split_md_row_local(lines[i + 1]) if i + 1 < n else []
+        if not _is_md_delim_local(delim) or len(delim) != len(header):
+            i += 1
+            continue
+        hdr_clean = [h.strip().strip("*_` ") for h in header]
+        has_dir = any(_DIR_HDR_RE.match(h) for h in hdr_clean)
+        if has_dir:
+            i += 2
+            continue
+        # collect backtick names from the HEADER row only (results-table columns)
+        header_lines.add(i)
+        for cell in header:
+            for mm in re.finditer(r"`([A-Za-z_]\w*)`", cell):
+                candidates.add(mm.group(1))
+        i += 2
+    # keep only candidates whose EVERY backtick occurrence is in a directionless
+    # header row — a name also seen elsewhere (body Name cell, prose, ## Ports)
+    # is a real port mention and must not be masked.
+    elsewhere: Set[str] = set()
+    for k, line in enumerate(lines):
+        if k in header_lines:
+            continue
+        for mm in re.finditer(r"`([A-Za-z_]\w*)`", line):
+            elsewhere.add(mm.group(1))
+    names = candidates - elsewhere
+    return names
+
+
 def _table_ports(prompt: str) -> Dict[str, str]:
     """Markdown table rows: first backtick cell = name, a later cell carrying
     a direction word = direction. Returns name→direction (lower, '' if no
@@ -996,6 +1056,10 @@ def _table_ports(prompt: str) -> Dict[str, str]:
     chip-AGNOSTIC: pure SV-keyword set + markdown grammar."""
     out: Dict[str, str] = {}
     desc_only = _desc_table_firstcol_names(prompt)
+    # (ORGANIC-20260618) names that occur ONLY inside a directionless table (no
+    # Direction column) — a results / metadata table, never a port table. Mirrors
+    # the shared `_parse_md_table_ports` Direction-column discipline.
+    directionless = _directionless_table_names(prompt)
     # Split on the pipe so an inline single-line table (the acceptance shape)
     # and a true multi-row markdown table both work: scan windows of
     # `\`name\` | dir` regardless of line boundaries.
@@ -1013,7 +1077,7 @@ def _table_ports(prompt: str) -> Dict[str, str]:
             continue
         if word in ("input", "output", "inout"):
             out[name] = word
-        elif name not in desc_only:
+        elif name not in desc_only and name not in directionless:
             out.setdefault(name, "")
     return out
 
