@@ -145,12 +145,53 @@ def check_versions(probe_output: str) -> Tuple[List[Dict], List[str]]:
 _OSS_PNR_TEMPLATE = "__OSS_PNR_IMAGE__"
 _HARNESS_SCAN_SUFFIXES = (
     ".synth", ".sim", ".mk", ".sh", ".yaml", ".yml", ".json", ".env", ".cfg")
+# After `run_benchmark.py` MATERIALIZES a harness, the `__OSS_PNR_IMAGE__`
+# template is already SUBSTITUTED to whatever `OSS_PNR_IMAGE` resolved to — and
+# in CVDP v1.1.0 the default is the GATED proprietary `nvidia/cvdp-sim:<tag>`
+# (the upstream README pins `OSS_PNR_IMAGE=nvidia/cvdp-sim:v1.0.0`). A preflight
+# that only looks for the pre-substitution `__OSS_PNR_IMAGE__` token therefore
+# returns "not required" on the very score dir whose synth container pulls the
+# gated image → `pull access denied` → the synth subtest FALSE-FAILS on correct
+# RTL (field-measured: 16/302 area-opt problems, all logged as a ~650-byte
+# "TRUNCATED"). Detect the materialized gated literal too. chip-AGNOSTIC: keys on
+# the official CVDP gated-image repository name, no design/vendor-SKU literal.
+#
+# The GATED thing is the proprietary REPO `nvidia/cvdp-sim`, regardless of how it
+# is referenced — `:tag` (the pinned `:v1.0.0` default), `@sha256:<digest>`, or
+# tagless (→ `:latest`). All three need auth and `pull access denied` on a
+# clean-room host, so the detector keys on the repo name and treats the optional
+# `:tag` / `@digest` as cosmetic. The trailing `(?![\w.\-/])` keeps a longer repo
+# (`nvidia/cvdp-sim-extended`, `nvidia/cvdp-sim/sub`) from matching; the leading
+# `\b` keeps `mynvidia/cvdp-sim` out while still matching a registry prefix
+# (`nvcr.io/nvidia/cvdp-sim:…`).
+_GATED_PNR_LITERAL = re.compile(
+    r"\bnvidia/cvdp-sim(?:[:@][\w.\-]+)?(?![\w.\-/])", re.I)
+
+
+def _strip_hash_comments(text: str) -> str:
+    """Blank each line's `#`…EOL comment so a gated-image NAME that is merely
+    MENTIONED in a comment (e.g. a materialized Dockerfile documenting the gated
+    default it replaced) is not mistaken for the ACTIVE base image. A real base
+    reference (`FROM …`, `image: …`, `OSS_PNR_IMAGE=…`) never sits after a `#`
+    (a leading `#` comments the whole line), so this can only drop comment text,
+    never an active reference. Dockerfile / shell / make / yaml / env / cfg all
+    use `#`; JSON has none, so this is a no-op there."""
+    return "\n".join(ln.split("#", 1)[0] for ln in text.splitlines())
+
+
+def _has_gated_pnr_literal(text: str) -> bool:
+    """True iff the COMMENT-STRIPPED text references the gated proprietary
+    `nvidia/cvdp-sim` base image as an ACTIVE reference. A `#`-comment mention of
+    the image name is NOT a pull and must not REFUSE a correct OSS harness."""
+    return bool(_GATED_PNR_LITERAL.search(_strip_hash_comments(text)))
 
 
 def harness_requires_pnr_image(problem_dir: Path) -> Tuple[bool, List[Path]]:
     """True iff any harness file under `problem_dir` references the
-    `__OSS_PNR_IMAGE__` template (an area-opt / synth problem). Returns
-    (required, [files…]). Scans only cheap harness-shaped files."""
+    `__OSS_PNR_IMAGE__` template (a pre-materialization area-opt / synth problem)
+    OR a MATERIALIZED gated `nvidia/cvdp-sim:<tag>` base image (the template
+    already substituted to the proprietary default). Returns (required, [files…]).
+    Scans only cheap harness-shaped files."""
     hits: List[Path] = []
     if not problem_dir.is_dir():
         return False, hits
@@ -161,10 +202,11 @@ def harness_requires_pnr_image(problem_dir: Path) -> Tuple[bool, List[Path]]:
                 or f.suffix in _HARNESS_SCAN_SUFFIXES):
             continue
         try:
-            if _OSS_PNR_TEMPLATE in f.read_text(errors="ignore"):
-                hits.append(f)
+            txt = f.read_text(errors="ignore")
         except OSError:
             continue
+        if _OSS_PNR_TEMPLATE in txt or _has_gated_pnr_literal(txt):
+            hits.append(f)
     return (len(hits) > 0), hits
 
 
@@ -233,9 +275,38 @@ def main(argv=None) -> int:
         if required:
             verdict["oss_pnr_image_template_files"] = [
                 str(f) for f in hit_files]
+            # A MATERIALIZED harness already baked the gated `nvidia/cvdp-sim`
+            # literal into its synth Dockerfile — the env no longer matters for
+            # THIS dir; it will pull the gated image and false-fail. Flag it
+            # regardless of OSS_PNR_IMAGE so a post-materialization preflight
+            # (the realistic check point) catches the block #714 only caught
+            # pre-materialization.
+            baked_gated = any(
+                _has_gated_pnr_literal(f.read_text(errors="ignore"))
+                for f in hit_files if f.is_file())
+            verdict["oss_pnr_image_materialized_gated"] = baked_gated
             pnr = (os.environ.get("OSS_PNR_IMAGE") or "").strip()
             verdict["oss_pnr_image_set"] = bool(pnr)
-            if not pnr:
+            if baked_gated:
+                # The fix is to RE-MATERIALIZE the harness from the OSS image —
+                # NOT to retag the OSS image to the gated name. Retagging is
+                # rejected on two counts: (1) this gate intentionally REFUSEs on
+                # the baked gated literal regardless of local pullability, so a
+                # retag would never clear it; (2) a clean-room / OSS-reproducible
+                # score must build from the verified open base, so depending on a
+                # locally-retagged gated name defeats the reproducibility this
+                # gate exists to enforce.
+                deviations.append(
+                    "area-opt synth harness has a MATERIALIZED gated "
+                    "`nvidia/cvdp-sim` base image baked into its synth "
+                    "Dockerfile — that container pulls the proprietary image "
+                    "(`pull access denied`) and the synth gate FALSE-FAILS on "
+                    "correct RTL (#714 round-2: the __OSS_PNR_IMAGE__ template "
+                    "was already substituted to the gated default). RE-MATERIALIZE "
+                    "the harness with OSS_PNR_IMAGE set to a verified OSS PnR "
+                    "image so the synth container builds from a pullable open "
+                    "base.")
+            elif not pnr:
                 deviations.append(
                     "area-opt synth harness references __OSS_PNR_IMAGE__ but "
                     "OSS_PNR_IMAGE is UNSET — the synth container would default "
