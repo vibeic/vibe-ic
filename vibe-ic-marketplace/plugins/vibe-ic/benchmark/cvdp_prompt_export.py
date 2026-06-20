@@ -50,8 +50,22 @@ def _rtl_context(rec: dict) -> Dict[str, str]:
     out: Dict[str, str] = {}
     if isinstance(ctx, dict):
         for k, v in ctx.items():
-            if isinstance(k, str) and isinstance(v, str) and v.strip():
-                out[k] = v
+            if not isinstance(k, str):
+                continue
+            if isinstance(v, str):
+                if v.strip():
+                    out[k] = v
+            elif isinstance(v, dict):
+                # symmetry with the list branch below: a non-canonical HF dump
+                # may wrap the source as {content|text: <src>} instead of a bare
+                # string. Unwrap it so a GIVEN input.context file is never
+                # silently re-blinded (this program's whole purpose is to stop
+                # dropping input.context). Still input-side only — never output.
+                inner = v.get("content")
+                if inner is None:
+                    inner = v.get("text")
+                if isinstance(inner, str) and inner.strip():
+                    out[k] = inner
     elif isinstance(ctx, list):
         for e in ctx:
             if not isinstance(e, dict):

@@ -78,6 +78,34 @@ def test_scratch_record_has_no_context_key(tmp_path):
     assert set(recs[0].keys()) == {"id", "prompt"}
 
 
+def test_dict_branch_unwraps_content_wrapper_no_reblind(tmp_path):
+    """COMPLETENESS symmetry (Step-2.7 LOW): a non-canonical dict value wrapped as
+    {content|text: <src>} must NOT be silently dropped — the dict branch unwraps
+    it like the list branch, so a GIVEN input.context file is never re-blinded."""
+    rec = {
+        "id": "cvdp_copilot_wrap_0001",
+        "input": {
+            "prompt": "Complete the module.",
+            "context": {
+                "rtl/a.sv": {"content": "module a; endmodule"},   # wrapper value
+                "rtl/b.sv": {"text": "module b; endmodule"},       # alt wrapper key
+                "rtl/c.sv": "module c; endmodule",                 # canonical str
+            },
+        },
+        "output": {"response": "GOLDEN WRAP MUST NOT LEAK"},
+    }
+    ds = _write(tmp_path, [rec])
+    recs, n_total, n_ctx = EX.export_records(ds)
+    assert n_total == 1 and n_ctx == 1
+    assert recs[0]["context"] == {
+        "rtl/a.sv": "module a; endmodule",
+        "rtl/b.sv": "module b; endmodule",
+        "rtl/c.sv": "module c; endmodule",
+    }
+    # the unwrap stays input-side: golden never appears
+    assert "GOLDEN WRAP MUST NOT LEAK" not in json.dumps(recs)
+
+
 def test_main_writes_jsonl_and_batches(tmp_path):
     ds = _write(tmp_path, [_CTX_REC, _SCRATCH_REC])
     out = tmp_path / "prompts.jsonl"
