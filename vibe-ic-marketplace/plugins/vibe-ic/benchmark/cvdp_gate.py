@@ -643,6 +643,39 @@ def _load_synth_scored_map(path) -> Dict[str, bool]:
     return out
 
 
+def _load_expected_files_map(path) -> Dict[str, List[str]]:
+    """{id: [expected rtl/*.sv, …]} from a CVDP dataset JSONL — the
+    AUTHORITATIVE per-id list of files the official harness writes the response
+    into (the record's `output.context` keys; values may be blank in the public
+    set but the KEYS name the deliverable files). Used to split a single-blob
+    completion for a MULTI-FILE problem so the scorer does not duplicate every
+    module into every slot. chip-AGNOSTIC: pure file-path structure."""
+    out: Dict[str, List[str]] = {}
+    p = Path(path)
+    if not p.is_file():
+        return out
+    for ln in p.read_text(errors="replace").splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            d = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(d, dict):
+            continue
+        rid = d.get("id")
+        oc = (d.get("output") or {}).get("context") \
+            if isinstance(d.get("output"), dict) else None
+        if rid is None or not isinstance(oc, dict):
+            continue
+        rtl = [k for k in oc
+               if isinstance(k, str) and k.lower().endswith(_RTL_SUFFIXES)]
+        if len(rtl) > 1:                      # only multi-file ids are relevant
+            out[str(rid)] = sorted(rtl)
+    return out
+
+
 def yosys_smoke(code: str, workdir: Path,
                 stubs_text: str = "",
                 synth_scored: Optional[bool] = None) -> Tuple[bool, str]:
@@ -846,9 +879,85 @@ def yosys_smoke(code: str, workdir: Path,
     return True, headline + " (" + "; ".join(details) + ")"
 
 
+# ── MULTI-FILE emit split (ORGANIC — convergence campaign 2026-06-21) ────────
+# A MULTI-FILE problem (the dataset's output.context lists >1 rtl/*.sv) whose
+# completion is a SINGLE concatenated blob (one bare/fenced module set, or a
+# single-file-shaped JSON) is mis-assembled by the official scorer: it writes
+# the WHOLE blob into EACH expected rtl/ slot, so every module is declared once
+# per file → iverilog 'already declared' duplicate-module compile error → the
+# whole design fails to elaborate even though the RTL is correct. (Root cause of
+# 7 residual failures this campaign: axis_border_gen, elevator_control_*,
+# huffman, ping_pong_buffer.) When --dataset supplies the authoritative expected
+# file list, SPLIT the blob into one file per expected path so the scorer writes
+# exactly one module per file. chip-AGNOSTIC: pure module-name structure.
+
+def _parse_modules(text: str) -> Dict[str, str]:
+    """{module_name: full `module…endmodule` source block}. Verilog modules do
+    not nest, so a flat scan from each `module <name>` to its next `endmodule`
+    is exact. Leading preamble (timescale/comments before the first module) is
+    not captured here — it is re-attached to the first file by the splitter."""
+    mods: Dict[str, str] = {}
+    for m in re.finditer(r"\bmodule\s+([A-Za-z_]\w*)", text):
+        em = re.search(r"\bendmodule\b", text[m.end():])
+        if not em:
+            continue
+        mods[m.group(1)] = text[m.start():m.end() + em.end()]
+    return mods
+
+
+def _rtl_only(files: List[str]) -> List[str]:
+    return [f for f in files if str(f).lower().endswith(_RTL_SUFFIXES)]
+
+
+def _split_blob_to_expected(combined: str,
+                            expected_files: List[str]) -> Optional[Dict[str, str]]:
+    """Split a single concatenated RTL blob into {expected_path: source}, one
+    module per expected file matched by basename (rtl/foo.sv ← module foo).
+    CONSERVATIVE: returns None (→ caller keeps the single-blob emit) unless
+    EVERY expected rtl file has a matching module in the blob — a partial split
+    would write an empty/wrong file and is never safer than the status quo.
+    Any extra (helper/submodule) modules with no expected file are appended to
+    the first expected file so each module still appears EXACTLY once across the
+    set (compiles clean when the harness concatenates them)."""
+    rtl_files = _rtl_only(expected_files)
+    if len(rtl_files) <= 1:
+        return None
+    mods = _parse_modules(combined)
+    if not mods:
+        return None
+    result: Dict[str, str] = {}
+    used: set = set()
+    for f in rtl_files:
+        base = f.rsplit("/", 1)[-1]
+        base = base[:base.rfind(".")] if "." in base else base
+        if base not in mods:
+            return None                      # incomplete → do not force a split
+        result[f] = mods[base]
+        used.add(base)
+    extra = [src for name, src in mods.items() if name not in used]
+    if extra:
+        result[rtl_files[0]] = result[rtl_files[0]] + "\n\n" + "\n\n".join(extra)
+    return result
+
+
+def _emit_or_split(combined: str,
+                   expected_files: Optional[List[str]]) -> str:
+    """Return the completion bytes to emit. For a MULTI-FILE problem with a
+    clean complete split, emit the official `{"code":[{path:src},…]}` envelope
+    (the harness decodes it file-by-file); otherwise emit the bare blob (the
+    dominant single-file no_schema shape)."""
+    if expected_files and len(_rtl_only(expected_files)) > 1:
+        split = _split_blob_to_expected(combined, expected_files)
+        if split is not None:
+            return json.dumps({"code": [{k: v} for k, v in split.items()]},
+                              ensure_ascii=False)
+    return combined
+
+
 def gate_record(rec: Dict, workdir: Path,
                 prompt_text: Optional[str] = None,
-                synth_scored: Optional[bool] = None) -> Tuple[bool, Dict, Dict]:
+                synth_scored: Optional[bool] = None,
+                expected_files: Optional[List[str]] = None) -> Tuple[bool, Dict, Dict]:
     """Gate one {id, completion} record → (ok, out_record, report_entry).
 
     Hygiene runs PER CODE FENCE (each fence body is fixed separately — a
@@ -961,9 +1070,14 @@ def gate_record(rec: Dict, workdir: Path,
             # to look for a fence there is none to become a line-1 backtick macro
             # directive (the #626 ELAB_ERROR shape). Invariant: the bytes the
             # gate COMPILED == the bytes the scorer compiles from the emit.
-            entry["emit_format"] = ("bare RTL (single-file no_schema "
-                                    "normalize, #680)")
-            out_rec["completion"] = combined
+            # MULTI-FILE split (when --dataset names >1 expected file) takes
+            # precedence over the single-file bare normalize; else bare.
+            emitted = _emit_or_split(combined, expected_files)
+            entry["emit_format"] = (
+                "json_dict (multi-file split from blob)"
+                if emitted is not combined and emitted != combined
+                else "bare RTL (single-file no_schema normalize, #680)")
+            out_rec["completion"] = emitted
         return True, out_rec, entry
     if kind == "bare":
         fixed, notes = hygiene_fix(code, workdir)
@@ -980,8 +1094,11 @@ def gate_record(rec: Dict, workdir: Path,
             return False, rec, entry
         entry["verdict"] = "PASS"
         out_rec = dict(rec)
-        if fixed != code:
-            out_rec["completion"] = fixed
+        # always route through the multi-file splitter (a single bare blob for a
+        # multi-file problem must be split); for single-file it returns `fixed`.
+        emitted = _emit_or_split(fixed, expected_files)
+        if emitted != code:
+            out_rec["completion"] = emitted
         return True, out_rec, entry
     # fenced: hygiene each code fence separately, compile the concatenation
     fences = code_fences(completion)
@@ -1017,8 +1134,9 @@ def gate_record(rec: Dict, workdir: Path,
     # concatenates ALL hygiene-fixed fence bodies (multi-fence safe) and drops
     # any inter-fence prose that would itself break a verbatim-written .sv.
     # Unconditional (not gated on a hygiene diff): an unchanged fenced draft was
-    # the dominant ELAB_ERROR shape — it kept the fence verbatim.
-    out_rec["completion"] = combined
+    # the dominant ELAB_ERROR shape — it kept the fence verbatim. MULTI-FILE
+    # problems route through the splitter (one module per expected file).
+    out_rec["completion"] = _emit_or_split(combined, expected_files)
     return True, out_rec, entry
 
 
@@ -1628,6 +1746,16 @@ def main(argv=None) -> int:
               "any id — the yosys-smoke synth-timeout fail-safe will BLOCK every "
               "timeout (cannot confirm a problem is non-synth-scored).",
               file=sys.stderr)
+    # MULTI-FILE expected-file map (convergence 2026-06-21) — {id: [rtl files]}
+    # for ids whose official deliverable spans >1 rtl/*.sv. Lets the gate SPLIT a
+    # single-blob completion into one file per expected path so the scorer does
+    # not duplicate every module into every slot (duplicate-declaration FAIL).
+    # Only --dataset carries output.context; --prompts typically does not.
+    expected_files_map: Dict[str, List[str]] = {}
+    for _ef_src in (args.dataset, args.prompts):
+        if _ef_src:
+            for _rid, _efs in _load_expected_files_map(_ef_src).items():
+                expected_files_map.setdefault(_rid, _efs)
     # ORGANIC #705 — optional per-id latency specs the gate ENFORCES (measured
     # vs spec literal) as a pre-emit BLOCK.
     latency_specs = (_load_latency_specs(args.latency_specs)
@@ -1645,7 +1773,8 @@ def main(argv=None) -> int:
             # JSON code-dict emit (single-file → bare RTL, multi-file → JSON).
             ok, out_rec, entry = gate_record(
                 rec, wd, prompt_text=prompts.get(str(rec.get("id"))),
-                synth_scored=synth_scored_map.get(str(rec.get("id"))))
+                synth_scored=synth_scored_map.get(str(rec.get("id"))),
+                expected_files=expected_files_map.get(str(rec.get("id"))))
             # ORGANIC #559 — filename/module-name conformance (only when a
             # prompt for this id states a required rtl/<name>.sv). The
             # harness builds TOPLEVEL from the file layout, so a completion
