@@ -122,7 +122,12 @@ def _sop(in_names: List[str], minterms: List[Tuple[str, ...]]) -> str:
 
 
 def synth(prompt: str, top: str = "TopModule") -> Optional[str]:
-    """Return synthesized module text, or None to SKIP (outside the envelope)."""
+    """Return synthesized module text, or None to SKIP. Tries the combinational
+    envelope, then the single-flip-flop observable-state sequential envelope."""
+    return _synth_combinational(prompt, top) or _synth_sequential_1ff(prompt, top)
+
+
+def _synth_combinational(prompt: str, top: str = "TopModule") -> Optional[str]:
     if not _is_combinational(prompt):
         return None
     ports = parse_ports(prompt)
@@ -176,6 +181,120 @@ def synth(prompt: str, top: str = "TopModule") -> Optional[str]:
     return "\n".join(lines) + "\n"
 
 
+# A prompt that observes the single flip-flop through a named output:
+# "the output of the flip-flop has been made observable through the output state".
+_FF_OBSERVABLE = re.compile(
+    r"one (?:bit of memory|flip[- ]?flop).*?observable through the output\s+"
+    r"([A-Za-z_]\w*)", re.IGNORECASE | re.DOTALL)
+
+
+def _synth_sequential_1ff(prompt: str, top: str = "TopModule") -> Optional[str]:
+    """Single-flip-flop, observable-state sequential waveform → RTL.
+
+    The prompt names the FF's observable output (`state`); the table samples
+    clk + inputs + state + combinational outputs every half-period. For every
+    consecutive pair of POSEDGE rows, the registered state at the later edge is a
+    function of (inputs, state) at the earlier edge — a deterministic next-state
+    truth table; each combinational output is a function of (inputs, state) read
+    per row. Fires ONLY for: exactly one observable-state 1-bit output, a single
+    posedge clk, all-1-bit ports, every table column a declared port, and
+    self-consistent next-state + output tables. SKIPs otherwise (§4.05 no-leak)."""
+    m = _FF_OBSERVABLE.search(prompt)
+    if not m:
+        return None
+    state_name = m.group(1).lower()
+    if "negedge" in prompt.lower():
+        return None
+    ports = parse_ports(prompt)
+    if not ports:
+        return None
+    parsed = _wtc.parse_table(prompt)
+    if not parsed:
+        return None
+    cols, rows = parsed
+    body = cols[1:]
+    clk_cols = [c for c in body if c in CLOCK_NAMES]
+    if len(clk_cols) != 1:
+        return None
+    clk = clk_cols[0]
+    if state_name not in ports or ports[state_name][0] != "output" or ports[state_name][1] != 1:
+        return None
+    in_cols = [c for c in body if ports.get(c, ('', 0, ''))[0] == "input" and c not in CLOCK_NAMES]
+    out_cols = [c for c in body if ports.get(c, ('', 0, ''))[0] == "output"]
+    if state_name not in out_cols or any(ports[c][1] != 1 for c in (in_cols + out_cols)):
+        return None
+    if (len(in_cols) + len(out_cols) + 1) != len(body):
+        return None  # an unmapped/internal column -> SKIP
+    if not _wtc.values_are_binary(rows, len(body)):
+        return None
+    idx = {c: i for i, c in enumerate(body)}
+    comb_outs = [o for o in out_cols if o != state_name]
+    ff_in = list(in_cols) + [state_name]   # next-state depends on (inputs, state)
+
+    # posedge rows: clk == 1 whose previous row's clk == 0
+    pos = []
+    for i, (_t, vals) in enumerate(rows):
+        if vals[idx[clk]] == '1' and (i == 0 or rows[i - 1][1][idx[clk]] == '0'):
+            pos.append(i)
+
+    def _collect(in_names, out_col, sample_rows, next_offset=0):
+        ones, seen = [], {}
+        for r in sample_rows:
+            ri = r + next_offset
+            if ri >= len(rows):
+                continue
+            combo = tuple(rows[r][1][idx[c]] for c in in_names)
+            ov = rows[ri][1][idx[out_col]]
+            if any(b.lower() == 'x' for b in combo) or ov.lower() == 'x':
+                continue
+            prev = seen.get(combo)
+            if prev is not None and prev != ov:
+                return None
+            seen[combo] = ov
+            if prev is None and ov == '1':
+                ones.append(combo)
+        return ones
+
+    # next-state: (inputs,state) at posedge r -> state at the NEXT posedge
+    ns_ones = []
+    ns_seen = {}
+    for a_i in range(len(pos) - 1):
+        r, rn = pos[a_i], pos[a_i + 1]
+        combo = tuple(rows[r][1][idx[c]] for c in ff_in)
+        ov = rows[rn][1][idx[state_name]]
+        if any(b.lower() == 'x' for b in combo) or ov.lower() == 'x':
+            continue
+        prev = ns_seen.get(combo)
+        if prev is not None and prev != ov:
+            return None
+        ns_seen[combo] = ov
+        if prev is None and ov == '1':
+            ns_ones.append(combo)
+    # combinational outputs: (inputs,state) at a row -> out at the SAME row
+    comb_ones = {}
+    for o in comb_outs:
+        res = _collect(ff_in, o, range(len(rows)), next_offset=0)
+        if res is None:
+            return None
+        comb_ones[o] = res
+
+    ff_in_orig = [ports[c][2] for c in ff_in]
+    decl = []
+    for nm in body:
+        d, w, orig = ports[nm]
+        if nm == state_name and d == "output":
+            decl.append(f"    output reg {orig}")
+        else:
+            decl.append(f"    {d:<6} {orig}")
+    lines = [f"module {top} (", ",\n".join(decl), ");", ""]
+    lines.append(f"  always @(posedge {ports[clk][2]})")
+    lines.append(f"    {ports[state_name][2]} <= {_sop(ff_in_orig, ns_ones)};")
+    for o in comb_outs:
+        lines.append(f"  assign {ports[o][2]} = {_sop(ff_in_orig, comb_ones[o])};")
+    lines.append("endmodule")
+    return "\n".join(lines) + "\n"
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--prompt", required=True)
@@ -185,7 +304,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     prompt = Path(a.prompt).read_text(errors="replace")
     rtl = synth(prompt, a.top)
     if rtl is None:
-        print("SKIP: outside the combinational-waveform synth envelope", file=sys.stderr)
+        print("SKIP: outside the waveform synth envelope", file=sys.stderr)
         return 2
     if a.out:
         Path(a.out).write_text(rtl)

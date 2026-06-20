@@ -102,5 +102,50 @@ def test_skip_when_word_combinational_absent():
     assert W.synth(p, "TopModule") is None
 
 
+# ── SEQUENTIAL 1-FF observable-state envelope ─────────────────────────────────
+# A plain D flip-flop: next-state = a; q = state (combinational). The table pairs
+# each posedge's `a` to the NEXT posedge's `state`. posedges at 5/15/25/35/45ns:
+#   a@5=1 -> state@15=1 ; a@15=0 -> state@25=0 ; a@25=1 -> state@35=1 ;
+#   a@35=1 -> state@45=1. q mirrors state each row.
+_SEQ_FF_PROMPT = """
+Implement a module named TopModule.
+  input clk,
+  input a,
+  output q,
+  output state
+
+This is a sequential circuit consisting of combinational logic and one bit of
+memory (i.e., one flip-flop). The output of the flip-flop has been made
+observable through the output state.
+
+  time  clk a   state q
+  0ns   0   1   0     0
+  5ns   1   1   0     0
+  10ns  0   0   0     0
+  15ns  1   0   1     1
+  20ns  0   1   1     1
+  25ns  1   1   0     0
+  30ns  0   1   0     0
+  35ns  1   1   1     1
+  40ns  0   0   1     1
+  45ns  1   0   1     1
+"""
+
+
+def test_sequential_1ff_fires_and_is_correct():
+    rtl = W.synth(_SEQ_FF_PROMPT, "TopModule")
+    assert rtl is not None, "1-FF observable-state sequential must synthesize"
+    assert "always @(posedge clk)" in rtl
+    assert "output reg state" in rtl
+    assert "assign q" in rtl
+    # next-state = a (D-FF): state'=1 exactly when a=1
+    assert "(a & ~state)" in rtl and "(a & state)" in rtl
+
+
+def test_sequential_skip_on_negedge_prompt():
+    p = _SEQ_FF_PROMPT + "\nThe flip-flop is triggered on the negedge of clk."
+    assert W.synth(p, "TopModule") is None
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
