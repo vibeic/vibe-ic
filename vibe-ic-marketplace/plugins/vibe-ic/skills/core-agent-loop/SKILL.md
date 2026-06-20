@@ -61,6 +61,40 @@ issue tracker; never poll or file issues against it. `poll.py` defaults to
 A tick may report idle ONLY after BOTH checks were actually run THIS tick —
 never assert "no open PR" / "no issues" from memory or a prior tick.
 
+> **BINDING (owner directive 2026-06-19): the repo-gatekeeper FIXES every
+> open PR, it does not merely merge-or-bounce it.** When a PR carries a
+> reproduced finding, the single-identity gatekeeper **AUTHORS the
+> remediation itself** (a structural code/test fix committed onto the
+> landing branch) and lands the corrected PR — it does NOT leave the PR
+> bounced-and-waiting for some external author. "Fix all open PRs" means
+> *no open PR is left un-actioned each tick*: either it lands clean, or the
+> gatekeeper authors the fix and lands the corrected version. Bounce-via-
+> `gh pr comment` (the single identity cannot `--request-changes` its own
+> PR) is reserved for the rare case where the correct fix genuinely cannot
+> be authored this tick (needs a design decision only the owner can make);
+> even then the PR stays OPEN and the NEXT tick must attempt the fix again,
+> not idle past it.
+>
+> **REPRODUCE ON THE REAL ARTIFACT BEFORE FIXING OR BOUNCING (the #40
+> lesson).** A finding — and the fix it motivates — MUST be reproduced on
+> the **REAL benchmark artifact** (the dataset's own prompt + its reference
+> golden / official testbench), NEVER only on a hand-crafted or synthetic
+> fixture. A synthetic fixture can silently encode the WRONG convention and
+> invert the verdict: PR #40's wired test hand-crafted a *same-edge*
+> circuit7 waveform, but the real VerilogEval TB drives inputs via NBA at
+> the posedge (`@(posedge clk) a<=val`), so the real published table is
+> *NBA-lead* (output lags the input by one edge, X at the first posedge).
+> Reviewing on the hand-crafted table "reproduced" a false-block that does
+> NOT exist on the real prompt — the shipped check was correct all along
+> (it PASSes the real golden `q<=~a` and BLOCKs the real wrong sample, and
+> a sweep over ALL real circuitN goldens false-blocked ZERO). The phantom
+> nearly drove an inverted "fix" that would have broken the gate on real
+> data. So: pull the real `*_prompt.txt` + `*_ref.sv` + `*_test.sv` from the
+> dataset, reproduce there, and when in doubt sweep the whole real-golden
+> family to prove no-leak — a green synthetic fixture proves nothing about
+> the axis (here: the TB's input-drive convention) that actually decides the
+> verdict.
+
 ## The four-step loop
 
 ### Step 1 — poll
