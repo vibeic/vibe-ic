@@ -85,3 +85,22 @@ def test_reset_polarity_inferred():
     r = PX.extract("input rst_n; // active-low asynchronous reset")
     assert r["reset"]["name"].lower() == "rst_n"
     assert r["reset"]["polarity"] == "active_low"
+
+
+def test_prose_does_not_inject_phantom_ports():
+    """PRECISION: parse_verilog_ports is run ONLY inside real Verilog code regions
+    (fenced blocks / module…endmodule), so a prose sentence that merely contains
+    `input`/`output` words never scrapes a phantom port (the #27/#28 prose-scrape
+    class). A pure-prose spec with no table/code yields ZERO ports — not garbage."""
+    prose = ("The module takes input data and produces an output result. The "
+             "input is latched and the output drives the bus. Inputs include a "
+             "clock and a reset signal.")
+    assert PX.extract_ports(prose) == []
+
+
+def test_code_block_ports_extracted_but_its_comments_are_not():
+    code = ("```verilog\nmodule m (\n"
+            "  input  wire clk,        // the system clock\n"
+            "  output reg  done\n);\nendmodule\n```\n")
+    names = {p["name"] for p in PX.extract_ports(code)}
+    assert names == {"clk", "done"}, names  # 'the' (comment) must NOT appear

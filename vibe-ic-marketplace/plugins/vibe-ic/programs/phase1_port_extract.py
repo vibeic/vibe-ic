@@ -26,7 +26,7 @@ from typing import Dict, List
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _specrtl_common import (  # noqa: E402
-    parse_verilog_ports, _parse_md_table_ports, Port,
+    parse_verilog_ports, _parse_md_table_ports, Port, strip_comments,
 )
 
 # `parameter NAME = VALUE` / `localparam NAME = VALUE` (Verilog form).
@@ -47,13 +47,32 @@ def _dedup_ports(ports: List[Port]) -> List[Dict]:
     return out
 
 
+# A Verilog code region: a fenced ```…``` block, or a `module … endmodule` span.
+# parse_verilog_ports is ONLY run inside these — running it on free PROSE scrapes
+# the English word after a literal `input`/`output` as a phantom port
+# (`input data vector` -> 'data'/'vector'); the markdown-table parser is precise
+# on its own and needs no such region gating.
+_FENCE = re.compile(r'```[a-zA-Z]*\n(.*?)```', re.S)
+_MODULE_SPAN = re.compile(r'\bmodule\b.*?\bendmodule\b', re.S)
+
+
+def _verilog_regions(text: str) -> str:
+    regions = [m.group(1) for m in _FENCE.finditer(text)]
+    regions += [m.group(0) for m in _MODULE_SPAN.finditer(text)]
+    # strip comments so an inline `// the reset …` comment after a port decl
+    # cannot scrape its first word as a phantom port.
+    return strip_comments("\n".join(regions))
+
+
 def extract_ports(prompt: str) -> List[Dict]:
-    """Union of inline-Verilog-declared ports and markdown-interface-table ports."""
-    inline = parse_verilog_ports(prompt)
+    """Union of markdown-interface-table ports (precise on the whole text) and
+    inline-Verilog-declared ports — the latter parsed ONLY from real Verilog code
+    regions so a prose sentence can never inject a phantom port."""
     # union=True: a spec often splits its interface across separate clock/reset,
     # input and output tables — Phase 1 needs every port, not just the largest table.
     table, _notes = _parse_md_table_ports(prompt, union=True)
-    return _dedup_ports(list(inline) + list(table))
+    inline = parse_verilog_ports(_verilog_regions(prompt))
+    return _dedup_ports(list(table) + list(inline))
 
 
 def extract_params(prompt: str) -> List[Dict]:

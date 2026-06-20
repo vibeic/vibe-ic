@@ -230,9 +230,66 @@ def step_ingest_render(project: Path, ic_name: str) -> StepResult:
                           time.time() - t0,
                           f"rc={cp.returncode} "
                           f"stderr_tail={cp.stderr[-1200:]}")
-    return StepResult("phase1_ingest_render", "PASS",
-                      time.time() - t0,
-                      f"facts={facts.name} out={out_dir.name}")
+    # Deterministic structural-port seed: the LLM-based ingest captures only
+    # ~17% of an AI's ports (CVDP audit), missing ports stated in markdown
+    # interface tables / inline Verilog. Merge the program-extracted ports /
+    # params / reset into L1.pinout + L8R so the structural facts that drive
+    # correct RTL are present even on the deterministic path. Best-effort —
+    # never fails the render.
+    seeded = _seed_structural_ports(project, out_dir)
+    note = f"facts={facts.name} out={out_dir.name}"
+    if seeded:
+        note += f" +{seeded} structural ports seeded (L1.pinout/L8R)"
+    return StepResult("phase1_ingest_render", "PASS", time.time() - t0, note)
+
+
+def _prompt_text_for(project: Path) -> str:
+    """Best-effort: the free-text spec the ingest consumed."""
+    for p in (project / "input" / "phase1_prompt.md",
+              project / "input" / "docs" / "design_description.md"):
+        if p.is_file():
+            return p.read_text(errors="replace")
+    docs = project / "input" / "docs"
+    if docs.is_dir():
+        return "\n".join(f.read_text(errors="replace")
+                         for f in sorted(docs.glob("*")) if f.is_file())
+    return ""
+
+
+def _seed_structural_ports(project: Path, out_dir: Path) -> int:
+    """Merge deterministic phase1_port_extract ports/params/reset into the
+    generated L1 (pinout) + L8R JSON. Returns the number of ports seeded.
+    Never raises — a seeding failure must not break the render."""
+    try:
+        sys.path.insert(0, str(PROGRAMS_DIR))
+        import phase1_port_extract as _ppx
+        prompt = _prompt_text_for(project)
+        if not prompt.strip():
+            return 0
+        facts = _ppx.extract(prompt)
+        ports = facts.get("ports") or []
+        if not ports:
+            return 0
+        # L1.pinout — only fill if absent/empty (never clobber a richer LLM view)
+        l1p = out_dir / "L1_DATASHEET.json"
+        if l1p.is_file():
+            l1 = json.loads(l1p.read_text())
+            if not l1.get("pinout"):
+                l1["pinout"] = ports
+                l1p.write_text(json.dumps(l1, indent=2))
+        # L8R — structural RTL constants: ports + parameters + reset
+        l8r = out_dir / "L8_RTL_CONSTANTS.json"
+        d = json.loads(l8r.read_text()) if l8r.is_file() else {}
+        if not d.get("ports"):
+            d["ports"] = ports
+        if facts.get("parameters") and not d.get("parameters"):
+            d["parameters"] = facts["parameters"]
+        if facts.get("reset") and not d.get("reset"):
+            d["reset"] = facts["reset"]
+        l8r.write_text(json.dumps(d, indent=2))
+        return len(ports)
+    except Exception:
+        return 0
 
 
 def step_human_docs(project: Path) -> StepResult:
