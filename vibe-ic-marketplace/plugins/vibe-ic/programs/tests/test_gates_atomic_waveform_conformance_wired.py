@@ -3,14 +3,27 @@ gates_atomic as an emit-block.
 
 Prob098_circuit7 (a single-stage registered inverter `q<=~a`) was shipped WRONG in
 the clean-room: a blind author mis-read the TB's first-edge X-window as an extra
-pipeline stage (`r<=a; q<=~r`), which self-verifies but FAILs the hidden TB. The
+pipeline stage (`tmp<=a; q<=~tmp`), which self-verifies but FAILs the hidden TB. The
 deterministic waveform_table_conformance_check detected this (it replays the
-prompt's literal `time clk a q` table) but was never wired into the per-problem
-gate, so the wrong sample shipped. It is now wired (rc==1 → emit-BLOCK).
+prompt's literal `time clk a q` table the way the official scorer compares) but was
+never wired into the per-problem gate, so the wrong sample shipped. It is now wired
+(rc==1 → emit-BLOCK).
 
-§4.05 no-leak: the check fires ONLY inside its proven-faithful envelope and SKIPs
-(rc==0) on every latch / negedge / multi-bit / combinational case, so it cannot
-false-block the correct single-stage read (which ships).
+CONVENTION (critical — the fixture is the REAL prompt, NOT a hand-crafted table):
+the official VerilogEval circuitN testbench drives the input via NBA AT the posedge
+(`@(posedge clk) a <= $urandom`), so the DUT samples the PRE-edge input and the
+published waveform shows the output LAGGING the displayed input by one posedge
+(q is X at the first posedge). The real Prob098_circuit7 table below is therefore
+NBA-LEAD, and the golden one-stage `q<=~a` reproduces it exactly. (An earlier draft
+of this test used a hand-crafted SAME-EDGE table; that misrepresented the real
+convention and is replaced here with the verbatim dataset prompt.)
+
+§4.05 no-leak (the dangerous direction for an emit-BLOCK is FALSE-BLOCK): the check
+replays the published waveform with the same NBA-at-posedge convention, so on the
+REAL prompt the golden single-stage `q<=~a` PASSes and SHIPs (test_correct_*),
+the wrong extra-stage pipe BLOCKs (test_wrong_*), and a combinational prompt is
+SKIPped (outside the sequential-replay envelope). Verified end-to-end against the
+real golden RefModule and the real shipped-wrong sample.
 """
 import json
 import shutil
@@ -23,30 +36,49 @@ import pytest
 PLUGIN = Path(__file__).resolve().parents[2]
 GATES = PLUGIN / "benchmark" / "gates_atomic.py"
 
+# The REAL VerilogEval Prob098_circuit7 prompt (dataset_spec-to-rtl), verbatim.
+# NBA-lead: q lags the displayed a by one posedge; q is X at the first posedge.
 _PROMPT = """\
-I would like you to implement a module named TopModule.
+I would like you to implement a module named TopModule with the following
+interface. All input and output ports are one bit unless otherwise
+specified.
 
-  input clk,
-  input a,
-  output reg q
+ - input  clk
+ - input  a
+ - output q
 
-This is a sequential circuit. Read the simulation waveforms.
+This is a sequential circuit. Read the simulation waveforms to determine
+what the circuit does, then implement it.
 
   time  clk a   q
-  0ns   0   1   x
-  5ns   1   1   x
+  0ns   0   x   x
+  5ns   1   0   x
   10ns  0   0   x
   15ns  1   0   1
   20ns  0   0   1
-  25ns  1   1   0
-  30ns  0   1   0
-  35ns  1   0   1
-  40ns  0   0   1
+  25ns  1   0   1
+  30ns  0   0   1
+  35ns  1   1   1
+  40ns  0   1   1
   45ns  1   1   0
+  50ns  0   1   0
+  55ns  1   1   0
+  60ns  0   1   0
+  65ns  1   1   0
+  70ns  0   1   0
+  75ns  1   1   0
+  80ns  0   1   0
+  85ns  1   1   0
+  90ns  0   1   0
+
+Assume all sequential logic is triggered on the positive edge of the
+clock.
 """
+# The REAL golden RefModule (one-stage registered inverter).
 _CORRECT = "module TopModule(input clk, input a, output reg q);\n  always @(posedge clk) q <= ~a;\nendmodule\n"
+# The REAL shipped-wrong sample (phantom extra pipeline stage).
 _WRONG = ("module TopModule(input clk, input a, output reg q);\n"
-          "  reg r;\n  always @(posedge clk) begin r <= a; q <= ~r; end\nendmodule\n")
+          "  reg tmp;\n  always @(posedge clk) begin tmp <= a; q <= ~tmp; end\nendmodule\n")
 
 
 def _stage(tmp, body):
@@ -66,6 +98,25 @@ def _run(tmp, ds):
         [sys.executable, str(GATES), "--prob", "ProbXX_circuit7",
          "--workdir", str(tmp / "work"), "--dataset", str(ds),
          "--bench", "verilogeval-human"], capture_output=True, text=True)
+
+
+@pytest.mark.skipif(shutil.which("iverilog") is None, reason="iverilog absent")
+def test_correct_sequential_waveform_read_is_NOT_blocked(tmp_path):
+    # §4.05 FALSE-BLOCK guard (the dangerous direction for an emit-BLOCK gate): the
+    # REAL golden one-stage `q<=~a` reproduces the REAL NBA-lead prompt table and
+    # must PASS the replay and SHIP — it must NOT be blocked. The absence of this
+    # assertion is what let an inverted-convention misread go unnoticed; pinning it
+    # against the verbatim dataset prompt makes the no-leak claim concrete.
+    ds, wd = _stage(tmp_path, _CORRECT)
+    r = _run(tmp_path, ds)
+    gj = json.loads((wd / "gates.json").read_text())
+    assert gj["steps"]["waveform_table_conformance"]["verdict"] == "PASS_OR_SKIP", \
+        gj["steps"].get("waveform_table_conformance")
+    assert "WTC_PASS" in gj["steps"]["waveform_table_conformance"]["log"]
+    rules = [f["rule"] for f in gj["steps"].get("structural_emit_block", {}).get("findings", [])]
+    assert "waveform-table-conformance-mismatch" not in rules
+    # the correct sample is EMITTED (not suppressed by a false-block)
+    assert (tmp_path / "samples" / "ProbXX_circuit7_sample01.sv").exists()
 
 
 @pytest.mark.skipif(shutil.which("iverilog") is None, reason="iverilog absent")
