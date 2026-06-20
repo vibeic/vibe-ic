@@ -241,6 +241,17 @@ LAYER_CODES = ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L8R", "L9"]
 EXTENSION_LAYER_CODES = ["L10", "L11", "L12", "L13"]
 ALL_LAYER_CODES = LAYER_CODES + EXTENSION_LAYER_CODES
 
+# OPT-IN advanced layers — generatable (a caller passes them to render_layers and
+# facts tagged with their view render into them) but NOT part of the REQUIRED
+# ALL_LAYER_CODES set, so a simple digital block is never forced to carry them and
+# the existing "all L docs present" gates (which key on ALL_LAYER_CODES) are
+# unaffected. L14-L24 are the advanced/protocol layers; L25-L27 close the
+# all-chip-classes coverage gaps (reliability/mission-profile, MEMS/transduction,
+# memory-module SPD) found by the cited L1-L24-completeness survey.
+ADVANCED_LAYER_CODES = ["L14", "L15", "L16", "L17", "L18", "L19", "L20",
+                        "L21", "L22", "L23", "L24", "L25", "L26", "L27"]
+GENERATABLE_LAYER_CODES = ALL_LAYER_CODES + ADVANCED_LAYER_CODES
+
 LAYER_FILE_NAMES = {
     "L1":  "L1_DATASHEET.json",
     "L2":  "L2_FRS.json",
@@ -271,6 +282,21 @@ LAYER_FILE_NAMES = {
     # The previous v0.58 name `L13_HARDWARE_OBSERVED.json` made the gate
     # silently fail with file-not-found.
     "L13": "L13_LAB_CALIBRATION.json",
+    # Advanced / coverage-completeness layers (opt-in, see ADVANCED_LAYER_CODES).
+    "L14": "L14_PROTOCOL_VERSIONING.json",
+    "L15": "L15_ENCODING_TABLES.json",
+    "L16": "L16_COMPLIANCE.json",
+    "L17": "L17_CHANNEL_SIGNAL_CATALOG.json",
+    "L18": "L18_INTERCONNECT.json",
+    "L19": "L19_CONSTRAINTS_PDK.json",
+    "L20": "L20_DFT_SCAN.json",
+    "L21": "L21_POWER_INTENT.json",
+    "L22": "L22_VERIFICATION_PLAN.json",
+    "L23": "L23_SECURITY.json",
+    "L24": "L24_SIGNOFF.json",
+    "L25": "L25_RELIABILITY_MISSION_PROFILE.json",
+    "L26": "L26_MECHANICAL_TRANSDUCTION.json",
+    "L27": "L27_MEMORY_MODULE_SPD.json",
 }
 
 # Human-readable, DISAMBIGUATED layer titles — the authoritative source for any

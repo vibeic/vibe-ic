@@ -12,7 +12,11 @@ from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parent.parent.parent / "tools"
 sys.path.insert(0, str(TOOLS))
-from phase1_engine.schema import LAYER_FILE_NAMES, LAYER_TITLES  # noqa: E402
+from phase1_engine.schema import (  # noqa: E402
+    LAYER_FILE_NAMES, LAYER_TITLES, ALL_LAYER_CODES, ADVANCED_LAYER_CODES,
+    GENERATABLE_LAYER_CODES, FactGraph)
+from phase1_engine import render as _render  # noqa: E402
+import tempfile  # noqa: E402
 
 
 def test_layer_titles_cover_every_file_code():
@@ -61,3 +65,25 @@ def test_coverage_completeness_layers_l25_l27_added():
     assert "mems" in mech or "transduction" in mech or "mechanical" in mech
     mem = LAYER_TITLES["L27"].lower()
     assert "spd" in mem or "self-describing" in mem
+
+
+def test_advanced_layers_are_optin_not_required():
+    """The new layers are GENERATABLE but NOT in the REQUIRED ALL_LAYER_CODES, so a
+    simple digital block is never forced to carry them and the all-L-docs-present
+    gates (which key on ALL_LAYER_CODES) are unaffected."""
+    for code in ["L14", "L21", "L25", "L26", "L27"]:
+        assert code not in ALL_LAYER_CODES, f"{code} must NOT be required"
+        assert code in ADVANCED_LAYER_CODES and code in GENERATABLE_LAYER_CODES
+        assert code in LAYER_FILE_NAMES, f"{code} needs a generatable file name"
+
+
+def test_new_layers_actually_render():
+    """L25-L27 are first-class generatable: render_layers emits them from facts
+    with the matching `L<N>.` path prefix when the caller opts in."""
+    fg = FactGraph(ic_name="ddr5_dimm", class_path="memory/dram")
+    fg.add_fact("L25.mission_profile.temp_max_c", 125, ["L25"], "user_stated")
+    fg.add_fact("L27.spd.module_capacity_gb", 16, ["L27"], "user_stated")
+    d = Path(tempfile.mkdtemp())
+    _render.render_layers(fg, d, layers=GENERATABLE_LAYER_CODES)
+    assert (d / LAYER_FILE_NAMES["L25"]).is_file()
+    assert (d / LAYER_FILE_NAMES["L27"]).is_file()
