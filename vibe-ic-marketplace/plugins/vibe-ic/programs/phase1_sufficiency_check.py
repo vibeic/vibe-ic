@@ -17,12 +17,20 @@ ask plain-language question (no silicon jargon), so the user is never shown
 Severity model (conservative — avoid false "insufficient" loop-backs):
   REQUIRED   : block (a design genuinely cannot be authored without it)
                  - a module / chip name
-                 - at least one external port (signal)
-  CONDITIONAL: required ONLY when the design is sequential (a clock port, OR
-               an FSM/control-logic layer, OR stated timing) implies it needs
-                 - a clock signal
-                 - a reset signal
-  ADVISORY   : warn only (helps but not blocking)
+                 - at least one REAL external port (a signal carrying a
+                   direction/width, or sitting in a pinout/ports/io container —
+                   a chip name / parameter / placeholder is NOT a port)
+  ADVISORY   : warn only — surfaced for the IC-Expert AI track to judge, NEVER
+               blocking (clock/reset is advisory even on a sequential design):
+                 - a clock / reset signal, when the design is detected
+                   SEQUENTIAL. NOTE: 'sequential' here is inferred ONLY from an
+                   actual clock/reset PORT name, deliberately NOT from the mere
+                   presence of an L6/L8/L12 layer body — every project emits a
+                   24-layer skeleton whose hint strings would otherwise fire a
+                   clock/reset over-demand on purely combinational parts (a known
+                   false-'insufficient' class). The prose-level "this runs on
+                   each clock" judgment is the IC-Expert AI track's job; the
+                   deterministic gate never blocks on clock/reset.
                  - parameters, a register map / protocol when indicated
 
 chip-AGNOSTIC: structural inspection of the layer JSON only; no chip-specific
@@ -45,6 +53,24 @@ _CLOCK_RE = re.compile(r"\b(clk|clock|sclk|hclk|pclk|aclk)\b", re.I)
 _RESET_RE = re.compile(r"\b(rst|reset|resetn|rst_n|nreset|areset|sreset)\b",
                        re.I)
 _PORTISH_KEYS = ("name", "signal", "port", "pin")
+# A dict is a REAL port only when it carries a direction/width indicator OR sits
+# inside an explicit port CONTAINER — a bare `name`/`signal` key alone also
+# describes a chip name, a parameter, or a document author, so counting those as
+# ports lets a design with ZERO real I/O pass the REQUIRED "≥1 port" fact
+# (Step-2.7 §4.05 false-skip).
+_PORT_EVIDENCE_KEYS = ("dir", "direction", "mode", "io", "inout", "in_out",
+                       "input", "output", "width", "bits", "bit_width", "msb",
+                       "lsb", "active", "polarity", "sense")
+_PORT_CONTAINER_KEYS = ("pinout", "pin_table", "pins", "ports", "port_list",
+                        "port_table", "io", "ios", "io_list", "signals",
+                        "signal_list", "interface", "interfaces")
+# Sentinel / unfilled-template port values that are NOT a real signal.
+_PLACEHOLDER_RE = re.compile(r"[<>]|fill[\s_-]*in|todo|tbd|xxx|placeholder|"
+                             r"^_+$|example", re.I)
+
+
+def _is_placeholder_port(name: str) -> bool:
+    return bool(_PLACEHOLDER_RE.search(name)) or not name.strip()
 
 
 def _load_layers(path: Path) -> Dict[str, Any]:
@@ -93,30 +119,43 @@ def _iter_strings(node: Any) -> List[str]:
 
 
 def _collect_port_names(layers: Dict[str, Any]) -> List[str]:
-    """Pull port/signal names from the port-bearing layers (L1 pinout, L8R)."""
+    """Pull REAL port/signal names from the port-bearing layers (L1 pinout, L8R).
+
+    A dict with a `name`/`signal`/`port`/`pin` key counts as a port ONLY when it
+    ALSO carries a direction/width indicator OR it sits inside an explicit port
+    CONTAINER (pinout / ports / io / signals …). A lone name key alone is NOT a
+    port — chip names, parameter names, and document-author names all bear one,
+    and an unfilled `<fill-in-port-name>` template placeholder is rejected. Without
+    these guards a design with zero real I/O satisfied the REQUIRED "≥1 port"
+    fact (Step-2.7 §4.05 false-skip)."""
     names: List[str] = []
 
-    def _scan(node: Any) -> None:
+    def _port_name(node: dict) -> Optional[str]:
+        for k in _PORTISH_KEYS:
+            for kk, vv in node.items():
+                if str(kk).lower() == k and isinstance(vv, (str, int)):
+                    return str(vv)
+        return None
+
+    def _has_evidence(node: dict) -> bool:
+        return any(str(kk).lower() in _PORT_EVIDENCE_KEYS for kk in node)
+
+    def _scan(node: Any, in_container: bool) -> None:
         if isinstance(node, dict):
-            nm = None
-            for k in _PORTISH_KEYS:
-                for kk, vv in node.items():
-                    if str(kk).lower() == k and isinstance(vv, (str, int)):
-                        nm = str(vv)
-                        break
-                if nm:
-                    break
-            if nm:
+            nm = _port_name(node)
+            if nm and (in_container or _has_evidence(node)) \
+                    and not _is_placeholder_port(nm):
                 names.append(nm)
-            for v in node.values():
-                _scan(v)
+            for kk, vv in node.items():
+                child_in = in_container or str(kk).lower() in _PORT_CONTAINER_KEYS
+                _scan(vv, child_in)
         elif isinstance(node, list):
             for v in node:
-                _scan(v)
+                _scan(v, in_container)
 
     for code in ("L1", "L8R", "L5", "L17"):
         if code in layers:
-            _scan(layers[code])
+            _scan(layers[code], False)
     return names
 
 
@@ -155,10 +194,13 @@ _QUESTIONS = {
     "name": "What should we call this chip / part?",
     "ports": "What signals does this part use to connect to the outside "
              "world — what information goes in, and what comes out?",
-    "clock": "Does this part work in steps driven by a regular timing beat "
-             "(does it need a clock)? If so, what should it be called?",
-    "reset": "Is there a way to put this part back to a known starting state "
-             "(a reset)? Should it start fresh when the signal is on, or off?",
+    # NO silicon jargon in the user-facing strings (the agent reads these
+    # verbatim) — the gate's own contract forbids showing the user tokens like
+    # `reset`/`clock`; describe the concept in plain product language instead.
+    "clock": "Does this part work in steps driven by a regular timing beat? "
+             "If so, what should that timing signal be called?",
+    "reset": "Is there a way to put this part back to a known starting state? "
+             "Should it return to that state when the signal is on, or off?",
 }
 
 

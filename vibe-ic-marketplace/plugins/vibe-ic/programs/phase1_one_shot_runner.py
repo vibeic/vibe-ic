@@ -354,8 +354,25 @@ def _run_docs_mode(project: Path, ic_name: str,
     #   - phase1_structured.yaml (dialogue convergence fact-graph) -> rendered
     #     into a freestyle design-description doc via phase1_dialogue_render.
     #   - phase1_prompt.md (raw prose) -> it IS a document; copied verbatim.
+    # A real document wins — but "a real document" means an actual non-empty,
+    # ingestible FILE, NOT merely "input/docs/ contains some entry". A bare
+    # `.gitkeep` (the standard git empty-dir marker), an empty/hidden file, or an
+    # empty subdir must NOT suppress the dialogue/prompt render-bridge — else the
+    # staged phase1_structured.yaml dialogue is silently DROPPED and the
+    # doc-extraction track ingests an empty dir → empty L-docs with no error
+    # (Step-2.7 §4.05). Test for a non-empty real document file.
     docs_dir = project / "input" / "docs"
-    if not (docs_dir.is_dir() and any(docs_dir.iterdir())):
+
+    def _has_real_doc(d: Path) -> bool:
+        if not d.is_dir():
+            return False
+        for f in d.rglob("*"):
+            if (f.is_file() and not f.name.startswith(".")
+                    and f.stat().st_size > 0):
+                return True
+        return False
+
+    if not _has_real_doc(docs_dir):
         structured = project / "input" / "phase1_structured.yaml"
         prompt_md = project / "input" / "phase1_prompt.md"
         rendered: Optional[str] = None

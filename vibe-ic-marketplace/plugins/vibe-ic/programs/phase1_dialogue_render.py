@@ -57,6 +57,16 @@ def _is_record_list(val: Any) -> bool:
             and all(isinstance(x, dict) for x in val))
 
 
+def _cell(v: Any) -> str:
+    """Sanitize a markdown TABLE cell so a one-row record always yields exactly
+    len(cols) cells. An unescaped `|` adds phantom columns and a newline splits
+    the row into a phantom line — both corrupt the very port/register tables the
+    doc-extraction track re-anchors on (Step-2.7 §4.05). Escape `|`; collapse
+    any CR/newline to a space."""
+    return str(v).replace("\\", "\\\\").replace("|", "\\|").replace(
+        "\r", " ").replace("\n", " ").strip()
+
+
 def _table(rows: List[Dict[str, Any]]) -> List[str]:
     # union of keys, stable first-seen order
     cols: List[str] = []
@@ -66,11 +76,11 @@ def _table(rows: List[Dict[str, Any]]) -> List[str]:
                 cols.append(k)
     if not cols:
         return []
-    out = ["| " + " | ".join(cols) + " |",
+    out = ["| " + " | ".join(_cell(c) for c in cols) + " |",
            "| " + " | ".join("---" for _ in cols) + " |"]
     for r in rows:
         out.append("| " + " | ".join(
-            str(r.get(c, "")) for c in cols) + " |")
+            _cell(r.get(c, "")) for c in cols) + " |")
     return out
 
 

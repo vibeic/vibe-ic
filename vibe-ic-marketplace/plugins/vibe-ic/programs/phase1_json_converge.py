@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -42,21 +43,45 @@ _ID_KEYS = ("name", "signal", "port", "field", "register", "reg",
             "parameter", "param", "state", "opcode", "key", "id")
 
 
+# Address/offset keys ALSO discriminate a record (two `STATUS` registers at
+# different offsets are different records). Combined with _ID_KEYS so a record
+# identity is a COMPOSITE of every present discriminator, not just the first.
+_ADDR_KEYS = ("addr", "address", "offset", "index", "idx", "bit", "position")
+
+
 def _id_of(rec: Dict[str, Any]) -> Optional[str]:
-    for k in _ID_KEYS:
+    """A COMPOSITE identity over every present, NON-EMPTY id/discriminator key —
+    not just the first id key. Keying on only the first key (Step-2.7 §4.05)
+    collapsed records distinguished by a later key (two ports with an empty
+    `name` but distinct `signal`; two `STATUS` regs at different `addr`) into one
+    identity, so _flatten last-wins silently DROPPED a record and manufactured a
+    phantom conflict. A blank value cannot discriminate, so it is skipped."""
+    parts = []
+    for k in _ID_KEYS + _ADDR_KEYS:
         if k in rec and isinstance(rec[k], (str, int)):
-            return f"{k}={rec[k]}"
-    return None
+            val = str(rec[k]).strip()
+            if val:
+                parts.append(f"{k}={val}")
+    return ";".join(parts) if parts else None
 
 
 def _flatten(node: Any, prefix: str, out: Dict[str, Any]) -> None:
     if isinstance(node, dict):
+        if not node:
+            # an EMPTY object is an affirmative fact ("present but empty") — emit
+            # a leaf so a present-empty vs present-populated cross-track diff
+            # surfaces as a disagreement instead of vanishing (Step-2.7 §4.05).
+            out[prefix] = "<empty-object>"
+            return
         for k, v in node.items():
             _flatten(v, f"{prefix}.{k}" if prefix else str(k), out)
     elif isinstance(node, list):
-        # record-list with identity keys -> index by identity; else by pos
+        if not node:
+            out[prefix] = "<empty-list>"   # affirmative "none" — see above
+            return
+        # record-list with UNIQUE identity keys -> index by identity; else by pos
         ids = [(_id_of(x) if isinstance(x, dict) else None) for x in node]
-        if node and all(i is not None for i in ids):
+        if node and all(i is not None for i in ids) and len(set(ids)) == len(ids):
             for ident, item in zip(ids, node):
                 _flatten(item, f"{prefix}[{ident}]", out)
         else:
@@ -66,15 +91,26 @@ def _flatten(node: Any, prefix: str, out: Dict[str, Any]) -> None:
         out[prefix] = node
 
 
+# A CANONICAL plain decimal/integer: optional sign, no leading zeros (except a
+# lone 0), no exponent, no underscores. Only these are safe to numeric-FOLD for
+# equality; a leading-zero string (`010`), an exponent (`1e3`), or a grouped
+# (`1_000`) value carries an author-visible distinction that must NOT be erased
+# (Step-2.7 §4.05 — folding it would silently auto-accept a different value).
+_CANON_NUM_RE = re.compile(r"^-?(?:0|[1-9]\d*)(?:\.\d+)?$")
+
+
 def _norm(v: Any) -> str:
-    """Normalize a leaf value for equality: numeric-aware, ws-trimmed,
-    case-folded."""
+    """Normalize a leaf value for equality: case-folded + numeric-aware, but the
+    numeric fold is restricted to CANONICAL decimals so author-visible forms
+    (`010`, `1e3`, `1_000`) stay distinct and surface as disagreements."""
     s = str(v).strip()
-    try:
-        f = float(s)
-        return str(int(f)) if f == int(f) else str(f)
-    except (ValueError, OverflowError):
-        return s.lower()
+    if _CANON_NUM_RE.match(s):
+        try:
+            f = float(s)
+            return str(int(f)) if f == int(f) else str(f)
+        except (ValueError, OverflowError):
+            pass
+    return s.lower()
 
 
 def _load_layer_json(path: Path) -> Dict[str, Dict[str, Any]]:
