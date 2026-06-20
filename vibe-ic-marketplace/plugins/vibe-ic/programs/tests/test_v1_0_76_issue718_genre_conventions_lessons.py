@@ -38,6 +38,11 @@ _CONVENTION_MARKERS = [
     "branch predictor (gshare-class)",
     "serial 2's-complementer",
     "K-map → mux decomposition",
+    # 2026-06-20 v1.1.31 clean-room triage: the existing serial / clock-divider
+    # sections existed yet first-pass authors still mis-timed them — strengthen
+    # with the load-bearing phase/timing detail the blind triage rediscovered.
+    "Reactive (not predictive), ungated valid",
+    "Half-integer dual-edge OR structure",
 ]
 
 
