@@ -378,9 +378,19 @@ def _nl_port_is_prose(name: str, tail: str, has_width: bool = False) -> bool:
     # when it is NOT immediately followed by a structural width anchor. A real
     # short/single-letter port (`- input a (8 bits)`) carries the anchor and is
     # kept; a conjunction in a sentence (`- Input and output signals …`) does not.
+    # 2026-06-20 (v1.1.34 clean-room, VerilogEval Prob145_circuit8) — a function
+    # word with an EMPTY tail (`- input a` / `- output q`, the lone token on the
+    # bullet) is a genuine 1-bit port under the prompt's "all ports are one bit
+    # unless otherwise specified" convention, NOT a conjunction scraped from a
+    # sentence. Only the #770 SENTENCE shape carries a prose TAIL after the
+    # function word (`- Input and output signals adhere to …`), so restrict the
+    # drop to a NON-EMPTY tail. §4.05 no-leak: every #770/#785 prose bullet keeps
+    # its descriptive tail, so each is still dropped; only the bare lone-token
+    # port is rescued. chip-AGNOSTIC: pure English function-word grammar.
     if (name.lower() in _NL_PORT_FUNCTION_WORDS
             and not has_width
-            and not _NL_PORT_WIDTH_ANCHOR_RE.match(t)):
+            and not _NL_PORT_WIDTH_ANCHOR_RE.match(t)
+            and t.strip()):
         return True
     if t.lstrip().startswith(":"):
         return True                       # "- Input ports:" heading
