@@ -6,13 +6,29 @@ clean-room blindness doctrine + GATE-AS-SOLE-EMIT-PATH, ORGANIC #528/#529).
 
 ## What you MAY read
 
-* The exported prompt records given to you (id + prompt text), and nothing
-  else of the dataset.
+* The exported prompt records given to you. A record is `{id, prompt}` and, for
+  a "modify / lint / optimize / complete an existing RTL" problem, **also
+  `context`** — a map `{"rtl/<name>.sv": "<original source>"}` of the ORIGINAL
+  RTL the task asks you to work on. This `context` is **GIVEN INPUT, not oracle
+  data**: the prompt literally says "modify this design", the official scorer
+  drops these exact files into `/code/rtl/` and compiles your top against them.
+  You **MUST read your own record's `context` and honor it** — keep the exact
+  module name(s), port names/directions/widths, and parameters of the given RTL;
+  do the SPECIFIC change the prompt asks, not a from-scratch rewrite. The hidden
+  TOPLEVEL is normally the top module declared in that context (`rtl/<X>.sv` →
+  module `<X>`); name your top + file EXACTLY that. Ignoring the given context and
+  re-inventing the interface is the #1 cause of ELAB_ERROR / functional-mismatch
+  fails. Use **`cvdp_prompt_export.py`** to produce these context-complete records
+  — it is the input-side sole-source (a hand-rolled `{id, prompt}`-only export
+  silently strips `input.context`, which prose alone never prevents).
 
 ## What you MUST NOT do
 
-* MUST NOT read the dataset's raw JSONL, golden/reference solutions,
-  harness/testbench files, or ANY other problem's materials.
+* MUST NOT read the dataset's raw JSONL, golden/reference solutions
+  (`output.response` / `output.context`), harness/testbench files, or ANY OTHER
+  problem's materials. (Your OWN problem's `input.context` is allowed — see above;
+  it is the given starting material, distinct from the forbidden golden output and
+  other problems' context.)
 * MUST NOT run `run_benchmark.py`, any scorer, or any verdict-level oracle.
   Scoring is the HOST's post-generation step. Your self-verification means
   your OWN mini-testbench only.
