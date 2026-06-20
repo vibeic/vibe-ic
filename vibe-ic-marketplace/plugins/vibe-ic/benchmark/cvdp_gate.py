@@ -466,8 +466,165 @@ def _confirming_rerun(code_text: str, top: str, workdir: Path,
                    f"masked): " + "; ".join(tail))
 
 
+# A synthesis-AREA noun — the anchor that distinguishes a cid007 area-opt prompt
+# ("reduce the cell AREA by N%") from an incidental "reduce <latency|power> by N%"
+# functional prompt. Required in addition to the #729 threshold parse (which alone
+# fires on the bare verb "reduce"). "gating" (a clock-gating verb) deliberately does
+# NOT match `\bgates?\b`. chip-AGNOSTIC: pure synthesis vocabulary.
+_AREA_NOUN_RE = re.compile(
+    r'\b(?:area|cells?|wires?|gates?|luts?|netlist|'
+    r'logic\s+elements?|slices?)\b', re.I)
+# An area-OPTIMISATION verb — paired with `_AREA_NOUN_RE` it recognises a
+# qualitative (no-`%`) cid007 directive. chip-AGNOSTIC synthesis vocabulary.
+_AREA_OPT_VERB_RE = re.compile(
+    r'\b(?:reduce\w*|minimi[sz]\w*|optimi[sz]\w*|shrink\w*|'
+    r'smaller|fewer|lower|decreas\w*)\b', re.I)
+# A CVDP category code (`cidNNN`) — used to tell a KNOWN non-synth category from
+# an UNKNOWN one (no category metadata) for the fail-safe tri-state.
+_CID_RE = re.compile(r'^cid\d{3}$', re.I)
+
+
+def _problem_is_synth_scored(prompt_text: Optional[str] = None,
+                             rec: Optional[Dict] = None) -> bool:
+    """True iff this CVDP problem's OFFICIAL harness runs yosys `synth` on the
+    completion — the area-optimization / synth-quality category (cid007), whose
+    scorer IS yosys 0.40, NOT cocotb/iverilog (cvdp_fail_triage SYNTH_GATE /
+    SYNTH_THRESHOLD official fail modes; cvdp_env_preflight #714 __OSS_PNR_IMAGE__
+    synth Dockerfile; ppa_area_threshold_check #729 "reduce the area of this RTL").
+
+    This gates the synth-TIMEOUT tolerance in `yosys_smoke`: for a synth-scored
+    problem a tolerated timeout would EMIT a design the official synth gate may
+    FAIL and lose the re-author the #531 smoke exists to trigger — a §4.05
+    false-SKIP — so the timeout must BLOCK (fail-safe), whereas for the dominant
+    cocotb/iverilog functional population yosys is never scored and the timeout is
+    a true false-fail to be tolerated. Three corroborating SINGLE-SOURCE signals;
+    ANY positive ⇒ synth-scored:
+      (1) the prompt parses an area-reduction threshold — the #729 detector
+          (a cid007 task definition is literally "reduce the area … by N%");
+      (2) the record's `categories` carries `cid007`;
+      (3) the record's `input.context` harness references `__OSS_PNR_IMAGE__` (#714).
+    Absence of all three ⇒ treated as non-synth-scored. chip-AGNOSTIC: pure
+    CVDP-category structure (no design name / problem-id / oracle value)."""
+    # (1) area-reduction threshold in the prompt — reuse the #729 gate (single-source),
+    # BUT additionally require an explicit SYNTHESIS-AREA noun. The #729 parser treats
+    # the bare verb "reduce" as an area word, so "reduce latency/power by N%" would
+    # otherwise false-fire and OVER-BLOCK a functional (cocotb-scored) problem's
+    # synth-timeout (Step-2.7 round-2: a synthesis-area noun anchors it to cid007).
+    if isinstance(prompt_text, str) and _AREA_NOUN_RE.search(prompt_text):
+        # (1a) a parseable area-reduction `%` threshold (#729), OR
+        try:
+            if str(PROGRAMS_DIR) not in sys.path:
+                sys.path.insert(0, str(PROGRAMS_DIR))
+            from ppa_area_threshold_check import (  # noqa: E402
+                parse_threshold_from_prompt, ThresholdParseError)
+            try:
+                parse_threshold_from_prompt(prompt_text)
+                return True
+            except ThresholdParseError:
+                pass
+        except Exception:  # noqa: BLE001 — detector import/parse is best-effort
+            pass
+        # (1b) a QUALITATIVE area-optimization directive (no literal `%` / a
+        # word-fraction / a far-apart threshold the #729 window misses): an
+        # area-opt VERB together with the synthesis-area noun gate above —
+        # "minimize the silicon area / use as few cells as possible / reduce the
+        # gate count". Over-detecting synth-scored here is the §4.05-SAFE
+        # direction (block-and-re-author, never under-detect → leak).
+        if _AREA_OPT_VERB_RE.search(prompt_text):
+            return True
+    if isinstance(rec, dict):
+        # (2) categories cid007
+        cats = rec.get("categories") or []
+        if isinstance(cats, (list, tuple)) and any(
+                str(c).strip().lower() == "cid007" for c in cats):
+            return True
+        # (3) __OSS_PNR_IMAGE__ in the harness-provided input.context (#714)
+        ctx = rec.get("input", {})
+        ctx = ctx.get("context") if isinstance(ctx, dict) else None
+        if isinstance(ctx, dict):
+            if any("__OSS_PNR_IMAGE__" in str(v) for v in ctx.values()):
+                return True
+        elif isinstance(ctx, str) and "__OSS_PNR_IMAGE__" in ctx:
+            return True
+    return False
+
+
+def _rec_categories_known(rec: Optional[Dict]) -> bool:
+    """True iff this record carries a parseable CVDP category code (`cidNNN`) —
+    i.e. the gate KNOWS the problem's category (so a non-cid007 value is a
+    POSITIVE confirmation of non-synth-scored, distinct from 'no metadata')."""
+    if not isinstance(rec, dict):
+        return False
+    cats = rec.get("categories") or []
+    return isinstance(cats, (list, tuple)) and any(
+        _CID_RE.match(str(c).strip()) for c in cats)
+
+
+def _resolve_synth_scored(prompt_text: Optional[str] = None,
+                          rec: Optional[Dict] = None,
+                          hint: Optional[bool] = None) -> Optional[bool]:
+    """Tri-state synth-scored resolution for the yosys-smoke timeout fail-safe:
+      * True  — POSITIVELY synth-scored (area-opt/cid007: the `hint` from
+                --dataset/--prompts, or an in-rec/prompt signal) → BLOCK a timeout.
+      * False — POSITIVELY non-synth-scored (a known CVDP category that is NOT
+                cid007, OR a hint of False) → TOLERATE a timeout (no false-fail).
+      * None  — UNKNOWN (no category metadata reached the gate) → fail-safe BLOCK.
+    The `hint` is the authoritative per-id value the operator's --dataset/--prompts
+    supplies (`_load_synth_scored_map`); the in-rec/prompt detector is the fallback
+    when no dataset/prompts metadata is available for this id."""
+    if hint is True or _problem_is_synth_scored(prompt_text, rec):
+        return True
+    if hint is False or _rec_categories_known(rec):
+        return False
+    return None
+
+
+def _load_synth_scored_map(path) -> Dict[str, bool]:
+    """{id: True|False} from a CVDP dataset / prompts JSONL — the AUTHORITATIVE
+    per-id synth-scored signal the documented {id, completion} draft record lacks
+    (Step-2.7 round-2: without this the detector is structurally signal-1-only).
+    True  iff the source record is area-opt/cid007 (categories cid007, an
+          `input.context` referencing `__OSS_PNR_IMAGE__` #714, or an area-opt
+          prompt); False iff its categories are KNOWN and exclude cid007 (a
+          positive non-synth confirmation). Ids with no category metadata are
+          OMITTED (→ the tri-state resolves them to None = fail-safe BLOCK).
+    chip-AGNOSTIC: pure CVDP-category structure."""
+    out: Dict[str, bool] = {}
+    p = Path(path)
+    if not p.is_file():
+        return out
+    for ln in p.read_text(errors="replace").splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            d = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(d, dict):     # a JSON array / scalar line, not a record
+            continue
+        rid = d.get("id")
+        if rid is None:
+            continue
+        rid = str(rid)
+        prompt = d.get("prompt") or d.get("input") if isinstance(
+            d.get("input"), str) else d.get("prompt")
+        # "True WINS" union — intra-file too (Step-2.7 round-3): a positive
+        # synth-scored signal must never be DOWNGRADED to False by a later
+        # duplicate-id line (a multi-record-per-problem dataset, or a cat'd
+        # prompts+dataset file). A True is unconditional; a False only
+        # `setdefault`s, so it can seed but never overwrite a True.
+        if _problem_is_synth_scored(prompt if isinstance(prompt, str) else None, d):
+            out[rid] = True
+        elif _rec_categories_known(d):
+            out.setdefault(rid, False)
+        # else: no metadata → omit (resolves to None = fail-safe)
+    return out
+
+
 def yosys_smoke(code: str, workdir: Path,
-                stubs_text: str = "") -> Tuple[bool, str]:
+                stubs_text: str = "",
+                synth_scored: Optional[bool] = None) -> Tuple[bool, str]:
     """ORGANIC #531 — synthesizability smoke. 13/92 first-round CVDP fails
     were harness synth-gate failures the emit gate never caught.
 
@@ -497,13 +654,72 @@ def yosys_smoke(code: str, workdir: Path,
         return False, ("yosys-smoke: no module declaration found in the "
                        "code payload")
     details: List[str] = []
+    timed_out: List[str] = []          # modules whose synth only TIMED OUT (unverified)
+    synth_timeout = 300
     for top in own_modules:
         # NOTE: no -q — quiet mode suppresses the stat table itself.
         rc, out, err = _run(
             ["yosys", "-p",
-             f"read_verilog -sv {f}; synth -top {top}; stat"], timeout=300)
+             f"read_verilog -sv {f}; synth -top {top}; stat"],
+            timeout=synth_timeout)
         blob = (out or "") + "\n" + (err or "")
         if rc != 0:
+            # A genuine `synth` TIMEOUT is _run's TimeoutExpired sentinel — the
+            # EXACT empty-blob SHAPE `(124, "", "timeout")` — NOT the #604 "yosys
+            # absent" case (rc==127). It is matched on that shape, NOT bare rc==124:
+            # a PRESENT yosys exiting 124 WITH output (e.g. via a `timeout(N)`
+            # PATH wrapper enforcing a site synth budget) carries a real banner /
+            # ERROR (`out != ""`), so it does NOT match here and falls through to
+            # the #604 banner guard, which blocks the real synth ERROR (Step-2.7
+            # round-1 lens B: keying on bare 124 mis-tolerated a wrapped real error).
+            #
+            # A genuine synth-timeout is INCONCLUSIVE about synthesizability. Whether
+            # tolerating it is §4.05-SAFE depends on the problem CATEGORY:
+            #  * SYNTH-SCORED (area-opt / cid007) — the OFFICIAL harness runs yosys
+            #    0.40 on the completion (cvdp_fail_triage SYNTH_GATE/SYNTH_THRESHOLD;
+            #    #714 __OSS_PNR_IMAGE__; #729 area-threshold). Tolerating would EMIT a
+            #    design the official synth gate may FAIL and lose the re-author the
+            #    #531 smoke exists to trigger — a §4.05 false-SKIP. So it BLOCKS
+            #    (fail-safe → re-author). (Step-2.7 round-1 lens A: the prior blanket
+            #    "official scorer never runs yosys" was FALSE for this category.)
+            #  * NON-synth-scored (the dominant cocotb/iverilog functional set) —
+            #    yosys is NEVER scored, so a synth-timeout is a true false-fail of a
+            #    SCORABLE design (observed clean-room: a 44-line parameterized
+            #    barrel_shifter / a binary-search-tree sorter parse in <1s but synth
+            #    does not converge in 300s). It is tolerated as INCONCLUSIVE rather
+            #    than manufacture a guaranteed false fail.
+            is_timeout = (rc == 124 and (out or "") == ""
+                          and (err or "").strip() == "timeout")
+            if is_timeout and shutil.which("yosys") is not None:
+                # FAIL-SAFE tri-state (Step-2.7 round-2: the category signals
+                # are structurally absent on a bare {id,completion} draft, so a
+                # bool default would tolerate EVERY cid007 timeout in a no-dataset
+                # run = §4.05 false-SKIP). Tolerate ONLY when the problem is
+                # POSITIVELY confirmed NON-synth-scored (`synth_scored is False`);
+                # BLOCK on synth-scored (`True`) AND on UNKNOWN (`None`) — a
+                # synth-timeout is tolerated only when we can prove the official
+                # scorer ignores yosys for this problem.
+                if synth_scored is not False:
+                    reason = ("a SYNTH-SCORED (area-opt/cid007) problem whose "
+                              "OFFICIAL harness runs yosys" if synth_scored
+                              else "a problem whose category is UNKNOWN here "
+                              "(supply --dataset/--prompts so a non-synth-scored "
+                              "problem can be confirmed)")
+                    return False, (
+                        f"yosys-smoke BLOCK on module {top!r}: `synth` timed out "
+                        f"(>{synth_timeout}s) on {reason} — tolerating would emit "
+                        f"a design the official synth gate may fail and lose the "
+                        f"re-author (§4.05 fail-safe; NOT the #604 absent-yosys "
+                        f"case).")
+                timed_out.append(top)
+                details.append(
+                    f"{top}: yosys-smoke INCONCLUSIVE — `synth` timed out "
+                    f"(>{synth_timeout}s); yosys IS present and iverilog already "
+                    f"elaborated the design, and this is NOT a synth-scored "
+                    f"(cid007) problem (the official scorer is cocotb+iverilog for "
+                    f"this category), so the timeout is tolerated rather than a "
+                    f"false fail. NOT the #604 absent-yosys case.")
+                continue
             # #604: yosys binary ENTIRELY ABSENT (rc=127 is _run's
             # FileNotFoundError sentinel) — or any case with NO evidence that
             # yosys actually started — must NOT be misread as a frontend-gap and
@@ -601,11 +817,17 @@ def yosys_smoke(code: str, workdir: Path,
                            f"downstream harness KeyError trap)")
         cells = max(int(m.group(1) or m.group(2)) for m in matches)
         details.append(f"{top}: {cells} cells")
-    return True, "yosys-smoke ok (" + "; ".join(details) + ")"
+    # HONEST VERDICT (Step-2.7 round-1 lens C): when one or more modules were only
+    # TIMEOUT-tolerated (zero real synth verification), the top-line must read
+    # INCONCLUSIVE — NOT a clean "yosys-smoke ok" — so a run audit / verdict-token
+    # consumer can see the synth coverage was incomplete, not a verified PASS.
+    headline = "yosys-smoke INCONCLUSIVE" if timed_out else "yosys-smoke ok"
+    return True, headline + " (" + "; ".join(details) + ")"
 
 
 def gate_record(rec: Dict, workdir: Path,
-                prompt_text: Optional[str] = None) -> Tuple[bool, Dict, Dict]:
+                prompt_text: Optional[str] = None,
+                synth_scored: Optional[bool] = None) -> Tuple[bool, Dict, Dict]:
     """Gate one {id, completion} record → (ok, out_record, report_entry).
 
     Hygiene runs PER CODE FENCE (each fence body is fixed separately — a
@@ -642,6 +864,12 @@ def gate_record(rec: Dict, workdir: Path,
         return False, rec, entry
     code, kind = extract_code(completion)
     entry: Dict = {"id": rid, "kind": kind, "notes": []}
+    # Does THIS problem's official harness run yosys synth (area-opt/cid007)? — gates
+    # the yosys-smoke synth-TIMEOUT tolerance (tri-state fail-safe): tolerate a
+    # timeout ONLY for a POSITIVELY non-synth-scored problem; BLOCK for synth-scored
+    # AND for unknown-category. `synth_scored` (if passed) is the authoritative
+    # per-id hint from the operator's --dataset/--prompts (`_load_synth_scored_map`).
+    synth_scored = _resolve_synth_scored(prompt_text, rec, synth_scored)
     if kind == "doc_only":
         entry["verdict"] = "PASS_DOC_ONLY"
         return True, rec, entry
@@ -669,7 +897,7 @@ def gate_record(rec: Dict, workdir: Path,
         if not ok:
             entry["verdict"] = "BLOCKED"
             return False, rec, entry
-        ok2, why2 = yosys_smoke(combined, workdir, stubs)
+        ok2, why2 = yosys_smoke(combined, workdir, stubs, synth_scored=synth_scored)
         entry["synth"] = why2
         if not ok2:
             entry["verdict"] = "BLOCKED"
@@ -724,7 +952,7 @@ def gate_record(rec: Dict, workdir: Path,
         if not ok:
             entry["verdict"] = "BLOCKED"
             return False, rec, entry
-        ok2, why2 = yosys_smoke(fixed, workdir, stubs)
+        ok2, why2 = yosys_smoke(fixed, workdir, stubs, synth_scored=synth_scored)
         entry["synth"] = why2
         if not ok2:
             entry["verdict"] = "BLOCKED"
@@ -749,7 +977,7 @@ def gate_record(rec: Dict, workdir: Path,
     if not ok:
         entry["verdict"] = "BLOCKED"
         return False, rec, entry
-    ok2, why2 = yosys_smoke(combined, workdir, stubs)
+    ok2, why2 = yosys_smoke(combined, workdir, stubs, synth_scored=synth_scored)
     entry["synth"] = why2
     if not ok2:
         entry["verdict"] = "BLOCKED"
@@ -1363,6 +1591,22 @@ def main(argv=None) -> int:
               "(wrong file / path / non-CVDP JSONL?) — the #715 context "
               "protection stays INACTIVE and multi-file hard-blocks degrade to "
               "advisory WARNs.", file=sys.stderr)
+    # PR #29 remediation — AUTHORITATIVE per-id synth-scored map from --prompts
+    # AND/OR --dataset (the documented {id, completion} draft carries no category
+    # metadata, so without this the yosys-smoke timeout fail-safe has no live
+    # category signal). {id: True=area-opt/cid007, False=known-non-cid007}; an id
+    # absent from BOTH sources resolves to None = fail-safe BLOCK of a synth-timeout.
+    synth_scored_map: Dict[str, bool] = {}
+    for _ss_src in (args.prompts, args.dataset):
+        if _ss_src:
+            for _rid, _ss in _load_synth_scored_map(_ss_src).items():
+                # a positive synth-scored (True) from EITHER source wins
+                synth_scored_map[_rid] = synth_scored_map.get(_rid, False) or _ss
+    if (args.prompts or args.dataset) and not synth_scored_map:
+        print("WARN (PR#29): --prompts/--dataset carried NO category metadata for "
+              "any id — the yosys-smoke synth-timeout fail-safe will BLOCK every "
+              "timeout (cannot confirm a problem is non-synth-scored).",
+              file=sys.stderr)
     # ORGANIC #705 — optional per-id latency specs the gate ENFORCES (measured
     # vs spec literal) as a pre-emit BLOCK.
     latency_specs = (_load_latency_specs(args.latency_specs)
@@ -1379,7 +1623,8 @@ def main(argv=None) -> int:
             # determine_schema's single-vs-multi signal when normalizing a
             # JSON code-dict emit (single-file → bare RTL, multi-file → JSON).
             ok, out_rec, entry = gate_record(
-                rec, wd, prompt_text=prompts.get(str(rec.get("id"))))
+                rec, wd, prompt_text=prompts.get(str(rec.get("id"))),
+                synth_scored=synth_scored_map.get(str(rec.get("id"))))
             # ORGANIC #559 — filename/module-name conformance (only when a
             # prompt for this id states a required rtl/<name>.sv). The
             # harness builds TOPLEVEL from the file layout, so a completion
