@@ -72,9 +72,15 @@ _PORT_BULLET = re.compile(
     re.IGNORECASE | re.MULTILINE)
 # Code-complete (iccad2023) module-header decl: "  input a," / "  input [3:0] a," /
 # "  output reg q" — a Verilog port declaration line inside the embedded header.
+# A trailing line comment (`// 10-bit one-hot current state`) or block comment is
+# tolerated: VerilogEval code-complete headers routinely annotate a port line, and
+# the `$`-anchored decl must not be broken by it (else e.g. the `state` port of
+# Prob150_review2015_fsmonehot is dropped and the one-hot synth SKIPs a solvable
+# problem). chip-AGNOSTIC: pure Verilog port-decl grammar.
 _PORT_DECL = re.compile(
     r"^\s*(input|output)\b\s*(?:wire|reg|logic|signed|unsigned)?\s*"
-    r"(?:\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*)?([A-Za-z_]\w*)\s*,?\s*$",
+    r"(?:\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*)?([A-Za-z_]\w*)\s*,?\s*"
+    r"(?://[^\n]*|/\*.*?\*/)?\s*$",
     re.IGNORECASE | re.MULTILINE)
 
 # Sequential / clocked idioms that take a prompt OUT of the combinational envelope.
