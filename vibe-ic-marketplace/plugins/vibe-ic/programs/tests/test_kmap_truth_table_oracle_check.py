@@ -241,21 +241,28 @@ def test_gates_atomic_blocks_wrong_kmap_and_emits_correct(tmp_path):
     (dataset / "Prob122_kmap4_prompt.txt").write_text(KMAP4_PROMPT)
     work = tmp_path / "work"
 
-    # wrong read → hard gates FAIL, NO sample emitted
+    # v1.1.38 §4.2 absorption SUPERSEDES the block-and-retry for a don't-care-FREE
+    # K-map: the deterministic kmap_grid_synth (gates_atomic step 0) now REPLACES a
+    # wrong authored read with the exact SOP BEFORE the oracle gate runs — so the
+    # safety invariant "a wrong K-map never ships" is preserved in a STRONGER form
+    # (the CORRECT one is auto-synthesized and ships, no re-author needed). The
+    # oracle BLOCK gate remains the guard for the cases the synth SKIPs (don't-care
+    # / mux-decomposition K-maps), covered by test_wrong_kmap_read_blocks above.
     _stage(work, "Prob122_kmap4", _ports_abcd(), K4_WRONG)
     r = subprocess.run([sys.executable, str(GATES), "--prob", "Prob122_kmap4",
                         "--workdir", str(work), "--dataset", str(dataset),
                         "--bench", "verilogeval-v2"],
                        capture_output=True, text=True)
-    assert r.returncode == 1
+    assert r.returncode == 0, r.stdout + r.stderr   # synth auto-corrected the wrong read
     gj = json.loads((work / "Prob122_kmap4" / "gates.json").read_text())
-    assert gj["hard_gates_pass"] is False
-    assert gj["steps"]["kmap_truth_table_oracle"]["verdict"] == "BLOCK"
-    rules = [f["rule"] for f in gj["steps"]["structural_emit_block"]["findings"]]
-    assert "kmap-truth-table-oracle-mismatch" in rules
-    assert not (tmp_path / "samples" / "Prob122_kmap4_sample01.sv").exists()
+    assert gj["hard_gates_pass"] is True
+    assert gj["steps"]["deterministic_synth"]["kind"] == "kmap_grid"
+    assert gj["steps"]["kmap_truth_table_oracle"]["verdict"] == "PASS"
+    emitted = (work.parent / "samples" / "Prob122_kmap4_sample01.sv").read_text()
+    assert "a ^ b ^ d" not in emitted        # the wrong authored read is gone
+    assert (work.parent / "samples" / "Prob122_kmap4_sample01.sv").exists()
 
-    # correct read → hard gates PASS, sample emitted
+    # correct read → still PASS + emit (synth produces the same canonical RTL)
     (work / "Prob122_kmap4" / "sample.sv").write_text(K4_CORRECT)
     r = subprocess.run([sys.executable, str(GATES), "--prob", "Prob122_kmap4",
                         "--workdir", str(work), "--dataset", str(dataset),

@@ -146,6 +146,42 @@ def main():
             print(f"MISSING {f} — agent must author it first")
             sys.exit(2)
 
+    # 0. DETERMINISTIC SPEC SYNTHESIS (v1.1.38 §4.2 absorption).
+    # A family of VerilogEval prompts embeds a COMPLETE, oracle-free specification
+    # whose RTL is mechanical — yet a blind author re-derives it by eye and flips
+    # it across clean-room rounds (single-shot variance). Per § 4.2 a GENERAL
+    # no-cheat recovery MUST be absorbed as a PROGRAM, not re-solved per round:
+    #   * combinational waveform / truth table -> SOP   (waveform_truth_table_synth)
+    #   * don't-care-FREE Karnaugh map -> SOP           (kmap_grid_synth)
+    #   * one-hot FSM next-state/output by inspection   (onehot_fsm_synth)
+    # Each FIRES only inside its proven-faithful envelope and SKIPs (returns None,
+    # leaving the author's sample untouched) on every under-determined / sequential
+    # / ambiguous case — §4.05 no-leak, so none can ship a wrong sample (verified
+    # 0-mismatch on 9 problems, clean SKIP on the don't-care K-maps + sequential
+    # circuitN + mux-decomposition). When one fires its deterministic RTL REPLACES
+    # the author's guess and still flows through every downstream hard gate below.
+    _prompt_text = prompt.read_text(errors="replace")
+    _synth_rtl = None
+    _synth_kind = None
+    try:
+        sys.path.insert(0, str(PLUGIN / "programs"))
+        import waveform_truth_table_synth as _wsynth
+        import kmap_grid_synth as _kmsynth
+        import onehot_fsm_synth as _ohsynth
+        for _kind, _mod in (("waveform", _wsynth),  # combinational OR seq-1FF envelope
+                            ("kmap_grid", _kmsynth),
+                            ("onehot_fsm", _ohsynth)):
+            _r = _mod.synth(_prompt_text, top_module)
+            if _r:
+                _synth_rtl, _synth_kind = _r, _kind
+                break
+    except Exception:
+        _synth_rtl = None
+    if _synth_rtl:
+        sample.write_text(_synth_rtl)
+        steps["deterministic_synth"] = {"applied": True, "kind": _synth_kind,
+                                        "note": "exact RTL from the prompt's own spec table"}
+
     # v0.1.38 fix (Bucket A — 3 agents reported): probe BOTH locations for
     # `tools/phase1_engine`. In a monorepo checkout the package lives at
     # `<vibe-ic-repo>/tools/phase1_engine` (= PLUGIN.parents[1]/tools/phase1_engine);
