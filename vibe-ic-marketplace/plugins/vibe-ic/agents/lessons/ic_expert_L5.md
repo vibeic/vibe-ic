@@ -1,8 +1,14 @@
-# IC Expert Schema & Lessons — L5
+# IC Expert Schema & Lessons — L5 (Analog-Digital Interface)
+
+> **L5 "ADI" = ANALOG-DIGITAL INTERFACE** — the analog↔digital boundary spec
+> (ADC/DAC interfaces, mixed-signal pads, PHY analog front-end, reference
+> voltages, sense/trim/test pads). It is a **functional layer**, **NOT** the
+> vendor *Analog Devices Inc.* (the acronym collides). For a pure-digital design
+> this layer is correctly **empty**.
 
 ## Schema (REQUIRED top-level keys, benchmark-derived)
 
-Target filename: `L5_ADI_SPEC.json`
+Target filename: `L5_ADI_SPEC.json`  (human title: *Analog-Digital Interface*)
 
 The output JSON **must** have exactly these top-level keys, in this order:
 

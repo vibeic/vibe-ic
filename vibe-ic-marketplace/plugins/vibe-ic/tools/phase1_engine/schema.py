@@ -246,6 +246,13 @@ LAYER_FILE_NAMES = {
     "L2":  "L2_FRS.json",
     "L3":  "L3_CMD_PROTOCOL.json",
     "L4":  "L4_REGMAP.json",
+    # L5 "ADI" = ANALOG-DIGITAL INTERFACE — the analog↔digital boundary spec
+    # (ADC/DAC interfaces, mixed-signal pads, PHY analog front-end, reference
+    # voltages, sense/trim/test pads). It is a FUNCTIONAL layer, NOT the vendor
+    # "Analog Devices Inc." (the acronym unfortunately collides). For a pure-
+    # digital design this layer is correctly empty. The human-readable,
+    # disambiguated name is in LAYER_TITLES below; the L5_ADI_SPEC.json file name
+    # is retained for back-compat (149 references across the plugin).
     "L5":  "L5_ADI_SPEC.json",
     "L6":  "L6_CONTROL_LOGIC.json",
     "L7":  "L7_TEST_DEBUG.json",
@@ -264,4 +271,26 @@ LAYER_FILE_NAMES = {
     # The previous v0.58 name `L13_HARDWARE_OBSERVED.json` made the gate
     # silently fail with file-not-found.
     "L13": "L13_LAB_CALIBRATION.json",
+}
+
+# Human-readable, DISAMBIGUATED layer titles — the authoritative source for any
+# report / human-doc that renders a layer name, so cryptic file-name acronyms
+# (esp. L5 "ADI") never read as a vendor or get misinterpreted. chip-AGNOSTIC:
+# every title is a FUNCTIONAL dimension, never a vendor/SKU.
+LAYER_TITLES = {
+    "L1":  "Datasheet (top-level function, parameters, pinout)",
+    "L2":  "Functional Requirements Specification",
+    "L3":  "Command / Protocol (opcodes, handshake, bus protocols)",
+    "L4":  "Register Map",
+    "L5":  "Analog-Digital Interface (ADC/DAC, mixed-signal pads, PHY AFE) "
+           "— NOT the vendor 'Analog Devices Inc.'",
+    "L6":  "Control Logic / FSM",
+    "L7":  "Test & Debug",
+    "L8":  "Timing / Waveform",
+    "L8R": "RTL Constants (ports, reset, enums, magic numbers)",
+    "L9":  "Integration Specification (sub-modules, file layout)",
+    "L10": "Test Cases / Vectors",
+    "L11": "Calibration",
+    "L12": "Behavioral Sequences",
+    "L13": "Lab / Hardware Calibration (contract + evidence)",
 }
