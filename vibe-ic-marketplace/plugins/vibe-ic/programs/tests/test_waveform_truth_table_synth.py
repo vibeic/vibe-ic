@@ -147,5 +147,78 @@ def test_sequential_skip_on_negedge_prompt():
     assert W.synth(p, "TopModule") is None
 
 
+# ── Step-2.7 §4.05 remediations: never EMIT a wrong sample ────────────────────
+
+def test_skip_multibit_declared_port_combinational():
+    """A multi-bit declared port whose observed rows are 0/1 must SKIP (the SOP
+    model is 1-bit-only; `assign q = …` over a bus is width-broken)."""
+    assert W.synth(_COMB_PROMPT.replace("  output q", "  output q (4 bits)"),
+                   "TopModule") is None
+
+
+@pytest.mark.parametrize("mangle,desc", [
+    (lambda p: p.replace("  10ns  1  0  1\n", "\n  10ns  1  0  1\n"), "blank-line grouping"),
+    (lambda p: p.replace("  15ns  1  1  0\n", "  15ns  1  1  0  <- glitch\n"), "annotation token"),
+    (lambda p: p.replace("  10ns  1  0  1\n", "  10  1  0  1\n"), "non-ns time unit"),
+])
+def test_skip_on_truncated_combinational_table(mangle, desc):
+    """parse_table stops at the first un-parseable row; an SOP over the surviving
+    prefix is a wrong function (and the sibling CHECK shares the parser) → SKIP."""
+    assert W.synth(mangle(_COMB_PROMPT), "TopModule") is None, desc
+
+
+def test_skip_when_declared_port_absent_from_table_combinational():
+    """A declared port absent from the table columns would be dropped from the
+    emitted interface (port-truncated wrong module) → SKIP."""
+    p = _COMB_PROMPT.replace("  input b,\n", "  input b,\n  input c,\n")
+    assert W.synth(p, "TopModule") is None
+
+
+def test_sequential_skip_on_truncated_table():
+    """The 1-FF path shares the parse_table truncation hazard — a blank-line-
+    grouped table builds a wrong next-state SOP over a prefix → must SKIP."""
+    trunc = _SEQ_FF_PROMPT.replace("  15ns  1   0   1     1\n",
+                                   "  15ns  1   0   1     1\n\n")
+    assert W.synth(trunc, "TopModule") is None
+
+
+# A D-FF (state<=a, q=state) sampled every 5ns, the clock LEADING HIGH at 0ns.
+# The real posedges are 10/20/30ns (each preceded by a clk=0). If row 0 (clk=1,
+# no preceding clk=0) were wrongly counted as a posedge, the pair (a@0=1,state@0=0)
+# →state@10=0 would CONTRADICT the real pair (a@10=1,state@10=0)→state@20=1 (same
+# input combo, different next-state) → the contradiction guard would SKIP. So with
+# the phantom-posedge BUG this fixture SKIPs; with the fix it FIRES `(a & ~state)`.
+_SEQ_FF_LEADING_HIGH = """
+Implement a module named TopModule.
+  input clk,
+  input a,
+  output q,
+  output state
+
+This is a sequential circuit consisting of combinational logic and one bit of
+memory (i.e., one flip-flop). The output of the flip-flop has been made
+observable through the output state.
+
+  time  clk a   state q
+  0ns   1   1   0     0
+  5ns   0   1   0     0
+  10ns  1   1   0     0
+  15ns  0   0   0     0
+  20ns  1   0   1     1
+  25ns  0   1   1     1
+  30ns  1   1   0     0
+"""
+
+
+def test_sequential_skip_phantom_row0_posedge():
+    """A waveform starting with clk already HIGH must NOT treat row 0 as a posedge
+    (no preceding 0→1). With the bug, the phantom row-0 pair contradicts a real
+    pair → SKIP; with the fix, row 0 is ignored and the synth FIRES the correct
+    next-state. This fixture therefore FIRES only when the phantom is suppressed."""
+    rtl = W.synth(_SEQ_FF_LEADING_HIGH, "TopModule")
+    assert rtl is not None and "always @(posedge clk)" in rtl
+    assert "(a & ~state)" in rtl  # the one real next-state minterm
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

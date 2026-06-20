@@ -58,5 +58,28 @@ def test_kmap_skip_when_not_a_kmap():
     assert K.synth("Implement TopModule, a combinational adder.", "TopModule") is None
 
 
+# ── Step-2.7 §4.05 remediations ───────────────────────────────────────────────
+
+def test_kmap_skip_multibit_output():
+    """A K-map is a single-bit function. A multi-bit output driven by the 1-bit
+    SOP (`output [3:0] q; assign q = <sop>`) compiles clean and PASSes
+    spec_conformance → it would ship a width-broken sample SILENTLY. SKIP."""
+    assert K.synth(_KMAP_2IN.replace(" - output q", " - output q (4 bits)"),
+                   "TopModule") is None
+
+
+def test_kmap_skip_when_axis_not_declared_port():
+    """Axis labels are read from grid LAYOUT; a case-mismatch (`A`/`B` vs declared
+    `a`/`b`) or stray word makes the SOP reference UNDECLARED signals → a wrong
+    sample. Every axis bit must be a declared input port → else SKIP."""
+    up = _KMAP_2IN.replace("       a\n", "       A\n").replace("  b   0   1", "  B   0   1")
+    assert K.synth(up, "TopModule") is None
+
+
+def test_kmap_clean_still_fires():
+    rtl = K.synth(_KMAP_2IN, "TopModule")
+    assert rtl is not None and "(~b & a)" in rtl and "(b & ~a)" in rtl
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

@@ -107,6 +107,47 @@ def _is_combinational(prompt: str) -> bool:
     return ("combinational" in prompt.lower()) and not _SEQ_HINT.search(prompt)
 
 
+# A timestamp-led waveform DATA row, mirroring (and broadening) parse_table's own
+# `^\d+ns$` first-token test: any `<digits>` optionally with an alpha unit suffix
+# (`ns`/`ps`/`us`/none). Used ONLY to DETECT truncation, never to parse.
+_TS_LOOSE_RE = re.compile(r"^\d+[a-z]*$", re.IGNORECASE)
+_BINVAL_RE = re.compile(r"^[01xzXZ]$")
+
+
+def _table_is_complete(prompt: str, cols: List[str], n_rows: int) -> bool:
+    """True only when `parse_table` consumed the WHOLE waveform table with no
+    silently-dropped row. `parse_table` stops at the first row it cannot parse —
+    a blank line GROUPING the table, a trailing annotation token (wrong arity), or
+    a non-`ns` time unit — so a synth built on its output can emit an SOP over a
+    TRUNCATED prefix → a wrong boolean function (Step-2.7 §4.05: the shared parser
+    means even the sibling conformance CHECK replays the same truncation and
+    passes the wrong sample). This independent scan re-counts every timestamp-led
+    line in the table region: a CLEAN `<ts> <bits…>` row that parse_table accepts
+    is counted; any timestamp-led row parse_table would DROP (malformed/annotated,
+    or clean-but-after a break) makes the parse untrustworthy. If the clean-row
+    count differs from the rows parse_table returned, or any timestamp-led row is
+    malformed, the caller SKIPs. chip-AGNOSTIC: pure table-shape arithmetic."""
+    lines = prompt.splitlines()
+    hdr = next((i for i, ln in enumerate(lines)
+                if ln.split() and ln.split()[0].lower() == "time"), None)
+    if hdr is None:
+        return False
+    width = len(cols)            # time + value columns (a full parseable row)
+    clean = 0                    # rows parse_table would accept
+    for ln in lines[hdr + 1:]:
+        t = ln.split()
+        if not t or not _TS_LOOSE_RE.match(t[0]):
+            continue             # blank / prose line — not a data row
+        is_clean = (re.match(r"^\d+ns$", t[0], re.IGNORECASE)
+                    and len(t) == width
+                    and all(_BINVAL_RE.match(v) for v in t[1:]))
+        if is_clean:
+            clean += 1
+        else:
+            return False         # a timestamp-led row parse_table drops → truncation
+    return clean == n_rows
+
+
 def _sop(in_names: List[str], minterms: List[Tuple[str, ...]]) -> str:
     """Sum-of-products literal over `in_names` for the given 1-rows (each a tuple of
     '0'/'1' aligned to in_names). Empty -> 1'b0; full canonical SOP otherwise."""
@@ -138,6 +179,13 @@ def _synth_combinational(prompt: str, top: str = "TopModule") -> Optional[str]:
         return None
     cols, rows = parsed
     body = cols[1:]  # drop the leading 'time'
+    # The table must be parsed IN FULL. parse_table truncates at the first row it
+    # can't read (blank-line table grouping, a trailing annotation token, a non-ns
+    # time unit), so an SOP over the surviving prefix is a WRONG function — and the
+    # sibling conformance CHECK shares the same truncating parser, so it would pass
+    # the wrong sample. A truncated/untrustworthy parse → SKIP. (Step-2.7 §4.05.)
+    if not _table_is_complete(prompt, cols, len(rows)):
+        return None
     # No clock-like column allowed in the combinational envelope.
     if any(c in CLOCK_NAMES for c in body):
         return None
@@ -146,6 +194,21 @@ def _synth_combinational(prompt: str, top: str = "TopModule") -> Optional[str]:
     out_cols = [c for c in body if ports.get(c, ('', 0, ''))[0] == 'output']
     if not out_cols or (len(in_cols) + len(out_cols)) != len(body):
         return None  # an unmapped/internal column -> SKIP
+    # …and CONVERSELY every DECLARED port must appear as a table column. The synth
+    # builds the emitted module interface from the table columns, so a declared
+    # port absent from the table would be SILENTLY DROPPED from the port list → a
+    # port-truncated module (a wrong sample whose interface mismatches the
+    # reference). The table is then not a complete spec for the interface → SKIP.
+    if any(p not in body for p in ports):
+        return None
+    # Every table column must be a 1-BIT port. The SOP model treats each column as
+    # a single boolean variable, so a MULTI-BIT declared port (`input [1:0] a`) is
+    # out of envelope: even when its observed rows show only 0/1 (so
+    # values_are_binary passes), emitting `assign q = a` over a bus is
+    # width-mismatched and wrong for any unobserved bus value. Enforce on the
+    # DECLARED width, not just observed values. (Step-2.7 §4.05.)
+    if any(ports[c][1] != 1 for c in body):
+        return None
     # Pure-binary only (multi-bit/hex tables are out of envelope).
     if not _wtc.values_are_binary(rows, len(body)):
         return None
@@ -212,6 +275,13 @@ def _synth_sequential_1ff(prompt: str, top: str = "TopModule") -> Optional[str]:
     if not parsed:
         return None
     cols, rows = parsed
+    # Same truncation hazard as the combinational path: parse_table stops at the
+    # first un-parseable row (blank-line grouping / annotation token / non-ns
+    # unit), so a next-state SOP built on a TRUNCATED prefix is a wrong sequential
+    # function. The combinational path SKIPs on this; the sequential path must too.
+    # (Step-2.7 §4.05 — a truncated parse must never EMIT.)
+    if not _table_is_complete(prompt, cols, len(rows)):
+        return None
     body = cols[1:]
     clk_cols = [c for c in body if c in CLOCK_NAMES]
     if len(clk_cols) != 1:
@@ -231,10 +301,15 @@ def _synth_sequential_1ff(prompt: str, top: str = "TopModule") -> Optional[str]:
     comb_outs = [o for o in out_cols if o != state_name]
     ff_in = list(in_cols) + [state_name]   # next-state depends on (inputs, state)
 
-    # posedge rows: clk == 1 whose previous row's clk == 0
+    # posedge rows: clk == 1 whose PREVIOUS row's clk == 0 (a genuine 0→1 edge).
+    # Step-2.7 §4.05: row 0 must NOT be treated as a posedge — a waveform that
+    # starts with clk already high (no preceding clk=0) carries no edge into row 0,
+    # so pairing its (inputs,state) sample as a registering edge injects a PHANTOM
+    # next-state minterm and emits wrong next-state logic. Require a real 0→1
+    # transition; a leading-high first row simply isn't an edge.
     pos = []
     for i, (_t, vals) in enumerate(rows):
-        if vals[idx[clk]] == '1' and (i == 0 or rows[i - 1][1][idx[clk]] == '0'):
+        if vals[idx[clk]] == '1' and i > 0 and rows[i - 1][1][idx[clk]] == '0':
             pos.append(i)
 
     def _collect(in_names, out_col, sample_rows, next_offset=0):

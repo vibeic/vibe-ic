@@ -99,6 +99,19 @@ def synth(prompt: str, top: str = "TopModule") -> Optional[str]:
     for ln in prompt.splitlines():
         m = _TRANS.match(ln)
         if not m:
+            # A line that is CLEARLY a transition FROM an encoded state (its first
+            # token is a state name, and it carries the `-->` arrow) but does not
+            # fully parse (e.g. a missing `(out)` group) would otherwise be
+            # silently skipped, DROPPING that edge and emitting an INCOMPLETE
+            # next-state equation (a wrong function that still compiles). The
+            # docstring promises SKIP-on-any-unparseable-piece; honor it — a
+            # malformed transition row makes the whole table untrustworthy → SKIP.
+            # The `first token in idx` qualifier excludes the legend/header line
+            # (e.g. `state (output) --input--> next state`), whose first token is
+            # not an encoded state. (Step-2.7 §4.05: never EMIT over a partial parse.)
+            toks = ln.split()
+            if "-->" in ln and toks and toks[0] in idx:
+                return None
             continue
         frm, outs, cond, to = m.group(1), m.group(2), m.group(3), m.group(4)
         if frm not in idx or to not in idx:
@@ -112,6 +125,14 @@ def synth(prompt: str, top: str = "TopModule") -> Optional[str]:
             if frm not in asserts[o]:
                 asserts[o].append(frm)
     if not edges:
+        return None
+    # The emit references `state[<bit>]`, so `state` MUST be a declared input port
+    # WIDE ENOUGH for the highest one-hot index — else the RTL references an
+    # undeclared signal (caught only by the downstream compiler) or an
+    # out-of-range bit-select that silently evaluates 1'bx (wrong + compiles).
+    # Validate structurally and SKIP otherwise. (Step-2.7 §4.05.)
+    st = ports.get("state")
+    if not st or st[0] != "input" or st[1] <= max(idx.values()):
         return None
 
     def term(frm: str, ce: str) -> str:

@@ -135,6 +135,13 @@ def synth(prompt: str, top: str = "TopModule") -> Optional[str]:
     outs = [n for n, v in ports.items() if v[0] == "output"]
     if len(outs) != 1:
         return None  # multi-output (mux decomposition) -> out of envelope
+    if ports[outs[0]][1] != 1:
+        # A K-map is a single-bit boolean function. A MULTI-BIT output declared
+        # `output [3:0] q` driven by the 1-bit SOP (`assign q = <sop>`) is a
+        # width-broken emit that compiles clean (q[3:1] tie 0) and PASSes
+        # spec_conformance (decl width matches) → it would ship SILENTLY. SKIP.
+        # (Step-2.7 §4.05 — never emit a wrong sample.)
+        return None
     out = ports[outs[0]][2]  # original-case output name
     if "mux_in" in prompt:  # external-mux decomposition family -> SKIP
         return None
@@ -142,6 +149,20 @@ def synth(prompt: str, top: str = "TopModule") -> Optional[str]:
     if not parsed:
         return None
     col_bits, row_bits, col_codes, (row_codes, grid) = parsed
+    # Every K-map axis bit must be a DECLARED input port (matching the waveform
+    # synth's own all-columns-are-ports guard). The axis labels are read purely
+    # from the grid LAYOUT, so a case-mismatched (`A`/`B` vs ports `a`/`b`) or a
+    # stray bare-word header makes the emitted SOP reference UNDECLARED signals
+    # (the real ports go unused) — a wrong sample the synth must not author. A
+    # bracketed bit-select `x[0]` is valid iff its base `x` is a declared port.
+    # (Step-2.7 §4.05.) chip-AGNOSTIC: structural name/width checks only.
+    _in_orig = {orig for (d, _w, orig) in ports.values() if d == "input"}
+
+    def _axis_base(tok: str) -> str:
+        mm = re.match(r"([A-Za-z_]\w*)", tok)
+        return mm.group(1) if mm else tok
+    if any(_axis_base(b) not in _in_orig for b in (list(row_bits) + list(col_bits))):
+        return None
     # build minterms (1-cells); SKIP on any don't-care
     minterms: List[Dict[str, str]] = []
     for i, rcode in enumerate(row_codes):

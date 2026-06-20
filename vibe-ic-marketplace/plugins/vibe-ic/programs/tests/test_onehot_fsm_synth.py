@@ -68,5 +68,32 @@ def test_onehot_skip_when_not_onehot():
     assert O.synth(p, "TopModule") is None
 
 
+# ── Step-2.7 §4.05 remediations ───────────────────────────────────────────────
+
+def test_onehot_skip_on_malformed_transition_drops_edge():
+    """A transition row FROM an encoded state that fails to parse (e.g. a missing
+    `(out)` group) would be silently dropped → an INCOMPLETE next-state that still
+    compiles. A malformed transition makes the table untrustworthy → SKIP. The
+    legend header (`--input-->`) is NOT a transition (its first token is not an
+    encoded state) and must not trip it."""
+    drop = _FSM.replace("  A     ()         --d=0--> A", "  A --d=0--> A")
+    assert O.synth(drop, "TopModule") is None
+
+
+def test_onehot_skip_when_state_port_absent_or_too_narrow():
+    """The emit references `state[<bit>]`, so `state` must be a declared input port
+    wide enough for the highest one-hot index — else undeclared-signal /
+    out-of-range-select RTL. SKIP on absent or too-narrow `state`."""
+    assert O.synth(_FSM.replace(" - input  state (3 bits)\n", ""), "TopModule") is None
+    narrow = _FSM.replace(" - input  state (3 bits)", " - input  state (2 bits)")
+    # encoding has C at index 2 → needs width ≥ 3; width 2 must SKIP
+    assert O.synth(narrow, "TopModule") is None
+
+
+def test_onehot_clean_still_fires():
+    rtl = O.synth(_FSM, "TopModule")
+    assert rtl is not None and "assign go = state[1];" in rtl
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
