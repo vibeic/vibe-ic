@@ -382,15 +382,40 @@ def _nl_port_is_prose(name: str, tail: str, has_width: bool = False) -> bool:
     # word with an EMPTY tail (`- input a` / `- output q`, the lone token on the
     # bullet) is a genuine 1-bit port under the prompt's "all ports are one bit
     # unless otherwise specified" convention, NOT a conjunction scraped from a
-    # sentence. Only the #770 SENTENCE shape carries a prose TAIL after the
-    # function word (`- Input and output signals adhere to …`), so restrict the
-    # drop to a NON-EMPTY tail. §4.05 no-leak: every #770/#785 prose bullet keeps
-    # its descriptive tail, so each is still dropped; only the bare lone-token
-    # port is rescued. chip-AGNOSTIC: pure English function-word grammar.
+    # sentence. The original #770 SENTENCE shape carries a prose TAIL after the
+    # function word (`- Input and output signals adhere to …`), so a NON-EMPTY
+    # same-line tail still drops.
+    #
+    # 2026-06-20 (PR #31 Step-2.7 §4.05) — the original bare `t.strip()` test
+    # was line-anchored and admitted a line-WRAPPED prose sentence whose first
+    # physical line ends ON a function word (`- Input and⏎  output ports adhere …`
+    # → phantom `and`; `- Input a⏎  stream of 8-bit samples …` → phantom `a`),
+    # emitting a false `ERROR port-missing` against conformant RTL. The
+    # STRUCTURAL discriminator is `len(name) > 1`: of the function-word set, only
+    # the single-CHARACTER article `a` is a plausible 1-bit port name; the
+    # multi-letter conjunctions/articles (and/or/nor/but/plus/with/the/an) are
+    # never genuine ports (and/or/nor are reserved keywords), so they are dropped
+    # whether bare (`- input or`) or as a wrapped sentence (`- Input and⏎ …`).
+    #
+    # The single-char `a` is IRREDUCIBLE: `- Input a⏎  stream of samples` (prose)
+    # and `- input a⏎  the primary data input` (a genuine port `a` with a wrapped
+    # description) are STRUCTURALLY IDENTICAL — same name, empty same-line tail,
+    # bare indented continuation — so any rule that drops one drops the other. A
+    # first attempt (a `followed_by_prose` next-line probe) dropped BOTH, which a
+    # Step-2.7 re-review proved is a §4.05 FALSE-SKIP: a genuine lone `- input a`
+    # followed by its own description / a sibling `Outputs:` heading vanished from
+    # the spec contract, so RTL that truly OMITS port `a` would pass unflagged.
+    # §4.05 ranks a false-SKIP (mask a real defect) STRICTLY WORSE than a
+    # false-FIRE (spurious port-missing a human dismisses), so this suppressor
+    # resolves the single-char `a` ambiguity toward RESCUE: `a` is kept whenever
+    # its same-line tail is empty, closing the original lone-port false-SKIP the
+    # PR targets; the residual `- Input a⏎ …`-sentence phantom is an accepted SAFE
+    # false-fire. chip-AGNOSTIC: pure English function-word grammar + identifier
+    # plausibility (no chip / vendor / SKU literal, no next-line heuristic).
     if (name.lower() in _NL_PORT_FUNCTION_WORDS
             and not has_width
             and not _NL_PORT_WIDTH_ANCHOR_RE.match(t)
-            and t.strip()):
+            and (t.strip() or len(name) > 1)):
         return True
     if t.lstrip().startswith(":"):
         return True                       # "- Input ports:" heading
