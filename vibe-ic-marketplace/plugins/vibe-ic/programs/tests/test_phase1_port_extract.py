@@ -125,3 +125,50 @@ def test_port_table_not_mistaken_for_regmap():
     txt = ("| Name | In/Out | Length |\n|---|---|---|\n"
            "| clk | in | 1 |\n| dout | out | 8 |\n")
     assert PX.extract_regmap(txt) == []
+
+
+# ── structured-prose signal-definition list (no table / no code) ──────────────
+
+_PROSE_SIGLIST = """\
+- **Inputs**:
+  - `clk`: Clock signal, positive edge.
+  - `rst`: Active high synchronous reset signal.
+  - `go`: Start signal. Active high.
+  - `A [WIDTH-1:0]`: input value A.
+- **Outputs**:
+  - `done`: Signal indicating completion.
+  - `OUT [WIDTH-1:0]`: the GCD result.
+"""
+
+
+def test_prose_signal_definition_list_extracted_with_direction():
+    by = {p["name"]: p for p in PX.extract_prose_ports(_PROSE_SIGLIST)}
+    assert set(by) == {"clk", "rst", "go", "A", "done", "OUT"}
+    assert by["clk"]["dir"] == "input" and by["done"]["dir"] == "output"
+
+
+def test_prose_reference_bullet_not_a_port():
+    """PRECISION: a bullet that REFERENCES signals in prose (name NOT immediately
+    followed by `:`) must not be harvested — only definition bullets are."""
+    txt = ("- `item_button` and `cancel` are treated as toggle signals.\n"
+           "- This prevents continuous-signal registration.\n")
+    assert PX.extract_prose_ports(txt) == []
+
+
+def test_prose_section_descriptor_label_not_a_port():
+    """PRECISION: a TitleCase descriptor bullet ('- **Clock:** the `clk` signal …')
+    is a section label, not the port (the real port is the backtick token)."""
+    txt = ("- **Clock:** The `clk` signal is the rising edge of the clock.\n"
+           "- **Reset:** Active-low asynchronous reset.\n")
+    names = {p["name"] for p in PX.extract_prose_ports(txt)}
+    assert "Clock" not in names and "Reset" not in names
+
+
+def test_prose_fallback_only_when_no_table_or_code():
+    """The prose list is a FALLBACK — a design with a real port table uses the
+    table (higher confidence), not the prose path."""
+    txt = ("| Name | In/Out | Length |\n|---|---|---|\n"
+           "| clk | in | 1 |\n| dout | out | 8 |\n"
+           "- `something`: described in prose elsewhere\n")
+    names = {p["name"] for p in PX.extract_ports(txt)}
+    assert names == {"clk", "dout"}

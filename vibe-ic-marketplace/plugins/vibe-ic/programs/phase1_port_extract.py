@@ -72,7 +72,13 @@ def extract_ports(prompt: str) -> List[Dict]:
     # input and output tables — Phase 1 needs every port, not just the largest table.
     table, _notes = _parse_md_table_ports(prompt, union=True)
     inline = parse_verilog_ports(_verilog_regions(prompt))
-    return _dedup_ports(list(table) + list(inline))
+    table_inline = _dedup_ports(list(table) + list(inline))
+    if table_inline:
+        return table_inline
+    # only fall back to the structured-prose signal-definition list when no table
+    # / code interface was found (tables/code are higher-confidence).
+    prose = extract_prose_ports(prompt)
+    return _dedup_ports([Port(p["name"], p["dir"], p["width"]) for p in prose])
 
 
 def extract_params(prompt: str) -> List[Dict]:
@@ -160,6 +166,93 @@ def extract_regmap(prompt: str) -> List[Dict]:
             out.append(rec)
             j += 1
         i = j if j > i else i + 1
+    return out
+
+
+# Prose signal-DEFINITION bullet: `- [**|`]?[ [w-1:0] ]?NAME[`|**]? : description`.
+# The NAME must be IMMEDIATELY followed by `:` (a definition), which excludes a
+# prose REFERENCE bullet like "- `a` and `b` are toggle signals" (name followed by
+# a word, not a colon). Optional leading width `[3:0]` / `[WIDTH-1:0]`.
+_PROSE_SIG = re.compile(
+    r'^\s*[-*]\s*\**\s*(?:\[\s*([^\]]*?)\s*\]\s*)?`?\**\s*'
+    r'([A-Za-z_]\w*)\s*'
+    r'(?:\[\s*([^\]]*?)\s*\])?\**`?\**\s*:',
+)
+_INPUTS_HDR = re.compile(r'\binputs?\b', re.I)
+_OUTPUTS_HDR = re.compile(r'\boutputs?\b', re.I)
+# TitleCase English labels that head a descriptor bullet, never a real signal name.
+_PROSE_STOP = frozenset((
+    "inputs", "outputs", "input", "output", "note", "notes", "step", "clock",
+    "reset", "signal", "signals", "data", "description", "functionality",
+    "behavior", "behaviour", "overview", "constraints", "interface", "ports",
+    "parameters", "parameter", "registers", "example", "examples", "summary",
+    "default", "state", "states", "operation", "functionality:", "general",
+))
+
+
+def _width_from(expr: Optional[str]) -> int:
+    if not expr:
+        return 1
+    m = re.fullmatch(r'\s*(\d+)\s*:\s*(\d+)\s*', expr)
+    return abs(int(m.group(1)) - int(m.group(2))) + 1 if m else 1
+
+
+def extract_prose_ports(prompt: str) -> List[Dict]:
+    """Deterministic ports from a STRUCTURED-PROSE signal-definition list — the
+    `**Inputs**:` / `**Outputs**:` sectioned bullet form common when a spec has no
+    interface table. Direction comes from the section header or an `N-bit
+    input/output` phrase in the description; precision-anchored on the
+    NAME-immediately-followed-by-colon definition shape (a prose reference to a
+    signal does not match)."""
+    out: List[Dict] = []
+    seen = set()
+    section = None  # 'input' | 'output' | None
+    for line in prompt.splitlines():
+        # a short header line that names Inputs/Outputs sets the section — strip
+        # leading bullets (`- `, `* `, `•`), markdown emphasis, numbering and the
+        # trailing colon, then match the alphanumeric core.
+        core = re.sub(r'[^a-z ]', '', line.strip().lower()).strip()
+        if core in ("inputs", "input ports", "input signals", "input",
+                    "input interface"):
+            section = "input"; continue
+        if core in ("outputs", "output ports", "output signals", "output",
+                    "output interface"):
+            section = "output"; continue
+        m = _PROSE_SIG.match(line)
+        if not m:
+            continue
+        name = m.group(2)
+        # section-DESCRIPTOR bullets ("- **Clock:** the `clk` signal is …",
+        # "- Reset: …", "- Inputs:") use a TitleCase English label, not the real
+        # signal name (which is the backtick token in the description). Skip them.
+        if name.lower() in _PROSE_STOP:
+            continue
+        # A `[A-Z][a-z]{2,}` TitleCase English WORD (Address, Operation, Result,
+        # Default, Status…) heads a descriptor bullet — never a real port. Real
+        # ports are lowercase/snake_case (clk, coin_input) or short all-caps
+        # acronyms (A, B, OUT), which this does NOT match.
+        if re.fullmatch(r'[A-Z][a-z]{2,}', name):
+            continue
+        desc = line.split(':', 1)[1] if ':' in line else ""
+        # direction: explicit N-bit input/output in the description wins, else section
+        d = None
+        dm = re.search(r'\b(\d+\s*-?\s*bit\s+)?(input|output|inout)\b', desc, re.I)
+        if dm:
+            d = dm.group(2).lower()
+        elif re.search(r'\bclock\b|\breset\b|\bclk\b', desc, re.I) and section is None:
+            d = "input"
+        else:
+            d = section
+        if d is None:
+            continue
+        width = _width_from(m.group(1) or m.group(3))
+        if width == 1:
+            bm = re.search(r'(\d+)\s*-?\s*bit', desc)
+            if bm:
+                width = int(bm.group(1))
+        if name not in seen:
+            seen.add(name)
+            out.append({"name": name, "dir": d, "width": width})
     return out
 
 
