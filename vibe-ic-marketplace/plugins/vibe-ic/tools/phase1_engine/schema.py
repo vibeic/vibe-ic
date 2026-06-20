@@ -293,4 +293,32 @@ LAYER_TITLES = {
     "L11": "Calibration",
     "L12": "Behavioral Sequences",
     "L13": "Lab / Hardware Calibration (contract + evidence)",
+    # ── Advanced / protocol layers (L14-L24) — formalized here from the
+    # *_protocol_synth.py producers; emitted only when a design carries such
+    # content (a simple block leaves them empty). ──────────────────────────
+    "L14": "Protocol Versioning",
+    "L15": "Encoding / Parameter Tables",
+    "L16": "Compliance Properties",
+    "L17": "Channel / Signal Catalog",
+    "L18": "Interconnect Topology",
+    "L19": "Constraints / PDK",
+    "L20": "DFT / Scan Topology",
+    "L21": "Power Intent (UPF / IEEE 1801)",
+    "L22": "Verification Plan",
+    "L23": "Security Requirements",
+    "L24": "Signoff / Tapeout Checklist",
+    # ── Coverage-completeness layers (L25-L27) — added per the L1-L24
+    # all-chip-classes survey (cited research): the L1-L24 set is complete for
+    # digital/SoC/processor classes but MISSED three whole spec dimensions that
+    # some chip classes require. These close that gap; chip-AGNOSTIC and empty
+    # for any design that does not need them. ─────────────────────────────────
+    "L25": "Reliability / Qualification & Mission-Profile "
+           "(JESD47, AEC-Q100/Q200; lifetime-weighted environmental loads "
+           "— temperature, humidity, drop/shock, vibration)",
+    "L26": "Mechanical / Transduction (MEMS & analog-physical: movable "
+           "membranes/cantilevers/springs, transduction principle, stiction "
+           "and mechanical failure modes — not captured by any RTL layer)",
+    "L27": "Memory-Module Self-Describing Config "
+           "(JEDEC SPD — EE1004-v / TSE2004av / SPD5118; module-level metadata "
+           "distinct from the on-die register map)",
 }

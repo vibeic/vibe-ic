@@ -40,3 +40,24 @@ def test_no_layer_title_is_a_vendor_name():
             if code == "L5" and v in ("analog devices",):
                 continue
             assert v not in low, f"{code} title names a vendor: {v!r}"
+
+
+def test_advanced_layers_l14_l24_formalized():
+    # the advanced/protocol layers are documented (not only scattered in the
+    # protocol_synth producers)
+    for code in [f"L{n}" for n in range(14, 25)]:
+        assert code in LAYER_TITLES and LAYER_TITLES[code].strip()
+    # L21 power intent is the UPF/IEEE-1801 dimension (research-verified mapping)
+    assert "UPF" in LAYER_TITLES["L21"] or "1801" in LAYER_TITLES["L21"]
+
+
+def test_coverage_completeness_layers_l25_l27_added():
+    """Per the L1-L24 all-chip-classes survey: three spec dimensions were absent
+    from L1-L24 and are added so the taxonomy can claim ALL chip classes."""
+    rel = LAYER_TITLES["L25"].lower()
+    assert "reliability" in rel and ("jesd47" in rel or "aec" in rel
+                                     or "mission" in rel)
+    mech = LAYER_TITLES["L26"].lower()
+    assert "mems" in mech or "transduction" in mech or "mechanical" in mech
+    mem = LAYER_TITLES["L27"].lower()
+    assert "spd" in mem or "self-describing" in mem
