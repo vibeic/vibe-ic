@@ -62,11 +62,15 @@ def _patch_which(monkeypatch, yosys_path):
 
 def test_synth_timeout_with_yosys_present_is_inconclusive_not_block(
         tmp_path, monkeypatch):
-    """POSITIVE: rc=124 (timeout) + yosys present → tolerate as INCONCLUSIVE."""
+    """POSITIVE: rc=124 (timeout) + yosys present + a POSITIVELY non-synth-scored
+    problem (`synth_scored=False`) → tolerate as INCONCLUSIVE. (Gatekeeper PR #29
+    remediation: the tolerance is category-aware — `synth_scored=False` is the
+    confirmed cocotb/iverilog functional case; UNKNOWN / synth-scored fail-safe
+    BLOCK — see test_v1_1_34_pr29_*.)"""
     _patch_run(monkeypatch, 124, "", "timeout")
     _patch_which(monkeypatch, "/usr/bin/yosys")
-    ok, why = G.yosys_smoke(_CODE, tmp_path)
-    assert ok is True, f"a synth timeout with yosys present must NOT block: {why}"
+    ok, why = G.yosys_smoke(_CODE, tmp_path, synth_scored=False)
+    assert ok is True, f"a non-synth-scored synth timeout must NOT block: {why}"
     assert "INCONCLUSIVE" in why, why
     assert "CANNOT ENFORCE" not in why, (
         f"a timeout must not be reported as the #604 absent-yosys block: {why}")
