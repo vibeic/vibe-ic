@@ -105,10 +105,26 @@ def _detect_input_mode(project: Path) -> str:
             for f in legacy_input_docs.iterdir()
         )
         return "prompt" if has_layer_json else "docs"
+    # A dialogue convergence fact-graph YAML (phase1_structured.yaml) is the
+    # DIALOGUE artefact (User<->IC-Expert convergence). Per the unified-backend
+    # directive (2026-06-20) it is rendered into a freestyle document by
+    # phase1_dialogue_render and flows through the SAME DOC->JSON doc-extraction
+    # track as every other input, so the emitted L1-L24 JSON is HOMOGENEOUS
+    # regardless of source. _run_docs_mode performs the render-bridge; the
+    # IC-Expert Agent supplies the independent AI track + convergence. (The
+    # legacy engine reverse-extractor is still reachable via `--mode prompt`.)
     if (project / "input" / "phase1_structured.yaml").is_file():
-        return "prompt"
+        return "docs"
+    # A free-text `phase1_prompt.md` is RAW PROSE — a concrete spec DESCRIPTION,
+    # exactly like a doc under input/docs/. It must go through the doc-extraction
+    # track (the canonical raw-corpus → L1-L24 ingester), NOT the engine reverse-
+    # extractor (which "only ingests pre-structured L*.json and yields 0 facts on
+    # raw prose"). Routing it to "prompt" was the defect that gave a concrete spec
+    # only the deterministic floor instead of the full doc pipeline; the engine
+    # "prompt" path is reserved for the DIALOGUE artifact (phase1_structured.yaml)
+    # above. The docs dispatch bridges this file into input/docs/ (_run_docs_mode).
     if (project / "input" / "phase1_prompt.md").is_file():
-        return "prompt"
+        return "docs"
     return "none"
 
 
@@ -331,6 +347,29 @@ def _run_docs_mode(project: Path, ic_name: str,
     dispatcher then composes that summary into the unified
     `reports/phase1_one_shot.json` so callers see one entry point.
     """
+    # Bridge a DIALOGUE / PROMPT front-end into `input/docs/` so the
+    # doc-extraction track consumes it as a freestyle document — the unified
+    # DOC->JSON backend (owner directive 2026-06-20). Only when `input/docs/`
+    # holds no document yet (a real document always wins).
+    #   - phase1_structured.yaml (dialogue convergence fact-graph) -> rendered
+    #     into a freestyle design-description doc via phase1_dialogue_render.
+    #   - phase1_prompt.md (raw prose) -> it IS a document; copied verbatim.
+    docs_dir = project / "input" / "docs"
+    if not (docs_dir.is_dir() and any(docs_dir.iterdir())):
+        structured = project / "input" / "phase1_structured.yaml"
+        prompt_md = project / "input" / "phase1_prompt.md"
+        rendered: Optional[str] = None
+        if structured.is_file():
+            try:
+                import phase1_dialogue_render as _dlg
+                rendered, _kind = _dlg.render_dialogue(structured)
+            except Exception:  # noqa: BLE001 — never hard-fail the bridge
+                rendered = structured.read_text(errors="replace")
+        elif prompt_md.is_file():
+            rendered = prompt_md.read_text(errors="replace")
+        if rendered is not None:
+            docs_dir.mkdir(parents=True, exist_ok=True)
+            (docs_dir / "design_description.md").write_text(rendered)
     # Build argv for phase1_doc_one_shot_runner.main(). Its argparse
     # takes the project dir as positional + accepts the standard
     # one-shot flags. Forward any extra runner-specific args.
