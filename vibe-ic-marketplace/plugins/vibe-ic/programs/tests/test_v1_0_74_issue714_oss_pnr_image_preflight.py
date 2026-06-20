@@ -94,5 +94,113 @@ def test_noleak_no_args_is_input_error():
     assert E.main([]) == 2
 
 
+# ── #714 round-2: materialized (post-substitution) gated literal ──────────────
+
+def test_materialized_gated_literal_detected_and_refused(tmp_path, monkeypatch):
+    """ROUND-2: after run_benchmark MATERIALIZES the harness, `__OSS_PNR_IMAGE__`
+    is already substituted to the gated `nvidia/cvdp-sim:<tag>` literal. The
+    preflight must still detect the synth requirement AND refuse — even with
+    OSS_PNR_IMAGE set, because THIS dir's container will pull the gated image.
+    Field: 16/302 area-opt problems false-failed this way, logged as ~650-byte
+    'TRUNCATED'; 9 flipped to PASS once the OSS image was substituted."""
+    src = tmp_path / "harness" / "57" / "src"
+    src.mkdir(parents=True)
+    (src / "Dockerfile.synth").write_text(
+        "FROM nvidia/cvdp-sim:v1.0.0 AS BASE\nRUN pip install pytest==8.3.2\n")
+    monkeypatch.setenv("OSS_PNR_IMAGE", "cvdp-sim-oss:v110")
+    out_json = tmp_path / "verdict.json"
+    rc = E.main(["--problem-dir", str(tmp_path), "--json", str(out_json)])
+    v = json.loads(out_json.read_text())
+    assert v["oss_pnr_image_required"] is True
+    assert v["oss_pnr_image_materialized_gated"] is True
+    assert rc == 1 and v["verdict"] == "REFUSE"
+    assert any("MATERIALIZED gated" in d for d in v["deviations"])
+
+
+def test_noleak_materialized_oss_image_not_flagged(tmp_path, monkeypatch):
+    """§4.05 no-leak: a synth Dockerfile materialized with the OSS image (NOT the
+    gated literal) is NOT flagged — the detector keys on the gated repo name, so
+    a correctly-substituted OSS harness scores without a false refusal."""
+    src = tmp_path / "harness" / "57" / "src"
+    src.mkdir(parents=True)
+    (src / "Dockerfile.synth").write_text("FROM cvdp-sim-oss:v110 AS BASE\n")
+    monkeypatch.delenv("OSS_PNR_IMAGE", raising=False)
+    out_json = tmp_path / "verdict.json"
+    rc = E.main(["--problem-dir", str(tmp_path), "--json", str(out_json)])
+    v = json.loads(out_json.read_text())
+    assert v["oss_pnr_image_required"] is False
+    assert rc == 0 and v["verdict"] == "PASS"
+
+
+# ── #714 round-2 Step-2.7 remediations ────────────────────────────────────────
+
+def test_comment_mention_gated_not_flagged(tmp_path, monkeypatch):
+    """Step-2.7 (MED): a synth Dockerfile that uses the OSS base but merely NAMES
+    the gated image in a `#` comment (e.g. documenting the default it replaced)
+    must NOT be flagged — the gated scan is comment-stripped, so a mention is not
+    mistaken for the active base."""
+    src = tmp_path / "harness" / "57" / "src"
+    src.mkdir(parents=True)
+    (src / "Dockerfile.synth").write_text(
+        "# default base (overridden via OSS_PNR_IMAGE): nvidia/cvdp-sim:v1.0.0\n"
+        "FROM cvdp-sim-oss:v110 AS BASE\nRUN yosys -V\n")
+    monkeypatch.setenv("OSS_PNR_IMAGE", "cvdp-sim-oss:v110")
+    out_json = tmp_path / "verdict.json"
+    rc = E.main(["--problem-dir", str(tmp_path), "--json", str(out_json)])
+    v = json.loads(out_json.read_text())
+    assert v["oss_pnr_image_required"] is False
+    assert rc == 0 and v["verdict"] == "PASS"
+
+
+@pytest.mark.parametrize("from_line", [
+    "FROM nvidia/cvdp-sim\n",                                  # tagless → :latest
+    "FROM nvidia/cvdp-sim@sha256:" + ("a" * 64) + "\n",        # digest-pinned
+    "FROM nvcr.io/nvidia/cvdp-sim:v1.0.0\n",                   # registry-prefixed
+])
+def test_tagless_and_digest_gated_refused(tmp_path, monkeypatch, from_line):
+    """Step-2.7 (false-SKIP): the gated REPO is proprietary regardless of how it
+    is referenced — tagless, digest-pinned, or registry-prefixed all need auth
+    and `pull access denied`, so each must still REFUSE."""
+    src = tmp_path / "harness" / "57" / "src"
+    src.mkdir(parents=True)
+    (src / "Dockerfile.synth").write_text(from_line + "RUN yosys -V\n")
+    monkeypatch.setenv("OSS_PNR_IMAGE", "cvdp-sim-oss:v110")
+    out_json = tmp_path / "verdict.json"
+    rc = E.main(["--problem-dir", str(tmp_path), "--json", str(out_json)])
+    v = json.loads(out_json.read_text())
+    assert v["oss_pnr_image_materialized_gated"] is True
+    assert rc == 1 and v["verdict"] == "REFUSE"
+
+
+def test_deviation_offers_only_the_working_remedy(tmp_path, monkeypatch):
+    """Step-2.7 (MED): the baked-gated deviation must NOT advertise the
+    'retag the OSS image to the gated name' remedy (it never clears this gate and
+    defeats OSS reproducibility) — only the re-materialize-with-OSS remedy."""
+    src = tmp_path / "harness" / "57" / "src"
+    src.mkdir(parents=True)
+    (src / "Dockerfile.synth").write_text("FROM nvidia/cvdp-sim:v1.0.0 AS BASE\n")
+    monkeypatch.setenv("OSS_PNR_IMAGE", "cvdp-sim-oss:v110")
+    out_json = tmp_path / "verdict.json"
+    E.main(["--problem-dir", str(tmp_path), "--json", str(out_json)])
+    dev = " ".join(json.loads(out_json.read_text())["deviations"])
+    assert "retag" not in dev.lower(), "the non-working retag remedy must be gone"
+    assert "MATERIALIZE" in dev.upper(), "re-materialize remedy must be present"
+
+
+def test_noleak_sibling_repo_not_flagged(tmp_path, monkeypatch):
+    """§4.05: a sibling repo (`nvidia/cvdp-bench`) or a longer name
+    (`nvidia/cvdp-sim-extended`) must NOT match the gated detector."""
+    src = tmp_path / "src"
+    src.mkdir(parents=True)
+    (src / "Dockerfile.synth").write_text(
+        "FROM nvidia/cvdp-bench:v1.0.0\nRUN echo nvidia/cvdp-sim-extended:x\n")
+    monkeypatch.delenv("OSS_PNR_IMAGE", raising=False)
+    out_json = tmp_path / "verdict.json"
+    rc = E.main(["--problem-dir", str(tmp_path), "--json", str(out_json)])
+    v = json.loads(out_json.read_text())
+    assert v["oss_pnr_image_required"] is False
+    assert rc == 0 and v["verdict"] == "PASS"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
