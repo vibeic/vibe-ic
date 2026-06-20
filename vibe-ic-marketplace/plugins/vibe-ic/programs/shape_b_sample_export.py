@@ -1090,6 +1090,31 @@ def export(rtl_dir: Path, leaf: str, samples_dir: Path,
     dst = samples_dir / f"{leaf}.v"
     original = src.read_text(errors="replace")
 
+    # ── leaf-typo alias COMPLETENESS (v1.1.34 — RTLLM fixed_point_substractor) ─
+    # The runner's step_leaf_typo_aliases (`leaf_typo_alias_emit`) emits the
+    # canonical-spelling alias wrapper as a SEPARATE rtl-dir file when the leaf is
+    # a single-edit typo of a canonical hardware term (`fixed_point_substractor`
+    # → `fixed_point_subtractor`, a thin wrapper that instantiates the leaf). The
+    # hidden TB may bind EITHER spelling, so the single-file sample must carry
+    # BOTH. resolve_tb_facing_file picks ONE file (the leaf's), DROPPING the
+    # separate alias file → a TB that instantiates the canonical spelling hits
+    # `Unknown module type`. Fold the separate alias file in (mirrors the #518
+    # rcvar same-file wrapper completeness, for the #517 separate-file case).
+    # chip-AGNOSTIC: reuses leaf_typo_alias_emit's curated canonical-term detector
+    # (no chip/SKU literal); only fires for a genuine 1-edit typo leaf.
+    try:
+        import leaf_typo_alias_emit as _lta_mod
+        _canon_leaf = _lta_mod.detect_leaf_typo(leaf)
+    except Exception:
+        _canon_leaf = None
+    if _canon_leaf and _canon_leaf != leaf \
+            and _canon_leaf not in set(_module_names(original)):
+        _alias_src = _file_modules(rtl_dir).get(_canon_leaf)
+        # only fold a GENUINELY-separate file whose alias module is not already
+        # in the exported text (never duplicate a module → no compile clash).
+        if _alias_src and _alias_src[0] != src:
+            original = original.rstrip() + "\n\n" + _alias_src[1].lstrip()
+
     # ── SHIFT-vs-ROTATE EMIT-BLOCK (ORGANIC-20260618, #529 class) ────────────
     # A Shape-B sample that implements a wrap-around ROTATE while the spec
     # describes a plain (non-rotate-only) SHIFTER is functionally wrong (logical
