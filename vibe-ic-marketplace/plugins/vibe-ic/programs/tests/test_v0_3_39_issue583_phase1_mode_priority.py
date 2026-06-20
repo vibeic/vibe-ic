@@ -14,6 +14,16 @@ Fixes: docs-populated outranks the prompt file in `_phase1_decision`
 (structured YAML still wins — a deliberately-authored fact graph);
 `run-all` force-upserts graph.ic_name + the L1.ic_name fact when
 --ic-name is given (CLI > docs per #541).
+
+SUPERSEDED — UNIFIED DOC->JSON backend (owner directive 2026-06-20): part
+(a)'s mode-PRIORITY question is now moot because EVERY front-end (vendor
+docs, a free-text prompt, OR a dialogue convergence fact-graph) resolves to
+"docs" — they all flow through the one doc-extraction track so the L1-L24 JSON
+is homogeneous. `phase1_one_shot_runner --mode docs` render-bridges a
+phase1_structured.yaml / phase1_prompt.md into input/docs/. The #583 invariant
+that still holds: a prompt's content is never LOST to an empty (.gitkeep-only)
+docs/ — it is carried through the render-bridge. The legacy engine path stays
+reachable only via an explicit `--mode prompt`.
 """
 import subprocess
 import sys
@@ -62,18 +72,22 @@ def test_input_doc_corpus_outranks_prompt(tmp_path):
     assert (run, mode) == (True, "docs")
 
 
-def test_prompt_only_still_prompt_mode(tmp_path):
+def test_prompt_only_now_docs_mode_unified(tmp_path):
+    """UNIFIED backend (2026-06-20): a free-text prompt is itself a document
+    and now resolves to docs mode (was 'prompt'); the render-bridge copies it
+    into input/docs/ before the doc-extraction track ingests it."""
     proj = _stage(tmp_path, prompt=True)
     run, mode = ORCH._phase1_decision(proj, force_skip=False)
-    assert (run, mode) == (True, "prompt")
+    assert (run, mode) == (True, "docs")
 
 
-def test_structured_yaml_still_wins_over_docs(tmp_path):
-    """A deliberately-authored structured fact graph is the strongest
-    Path-A signal — docs do not displace it (regression guard)."""
+def test_structured_yaml_now_docs_mode_unified(tmp_path):
+    """UNIFIED backend: a dialogue convergence fact-graph also flows through
+    the doc track (rendered to a freestyle document), so it resolves to docs —
+    no separate engine 'prompt' priority anymore."""
     proj = _stage(tmp_path, struct=True, docs=True)
     run, mode = ORCH._phase1_decision(proj, force_skip=False)
-    assert (run, mode) == (True, "prompt")
+    assert (run, mode) == (True, "docs")
 
 
 def test_docs_only_still_docs_mode(tmp_path):
@@ -87,15 +101,18 @@ def test_no_inputs_no_run(tmp_path):
     assert (run, mode) == (False, "")
 
 
-def test_gitkeep_only_docs_does_not_displace_prompt(tmp_path):
-    """Adversarial guard: an empty docs/ holding only a .gitkeep
-    placeholder must NOT flip a prompt-only project into docs mode."""
+def test_gitkeep_only_docs_keeps_prompt_content_via_docs_bridge(tmp_path):
+    """The surviving #583 invariant under the unified backend: an empty docs/
+    holding only a .gitkeep must NOT cause the real prompt content to be lost.
+    A .gitkeep is not extractable, so the prompt still drives the run — now as
+    docs mode (the render-bridge carries phase1_prompt.md into input/docs/),
+    never a SKIP/no-run that would drop the prompt."""
     proj = _stage(tmp_path, prompt=True)
     d = proj / "input" / "docs"
     d.mkdir()
     (d / ".gitkeep").write_text("")
     run, mode = ORCH._phase1_decision(proj, force_skip=False)
-    assert (run, mode) == (True, "prompt")
+    assert (run, mode) == (True, "docs")
 
 
 # ── (b) run-all honors --ic-name (the NL/prompt-bridged path) ───────────────

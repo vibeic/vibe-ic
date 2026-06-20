@@ -1,6 +1,6 @@
 ---
 name: phase1
-description: Phase 1 = the **prompt / dialogue entry point** to the Vibe-IC platform. Takes natural language (Chinese or English), runs PM Agent + IC Expert Agent dialogue, produces both (a) machine-readable L1-L23 JSON layer docs that feed Phase 2 directly AND (b) human-readable Markdown views of the same content for stakeholder review. Skips Phase 1 entirely — the L1-L23 JSON is the universal handoff format and Phase 1 emits it directly. Triggers when the user says "start a new IC design", "run Phase 1", "design a chip in natural language", provides only a prompt or wants AI to author the spec from scratch.
+description: Phase 1 = the **prompt / dialogue entry point** to the Vibe-IC platform. Takes natural language (Chinese or English), runs the IC Expert Agent dialogue (it faces the user in a plain-language register — the former PM Agent role is merged into it), produces both (a) machine-readable L1-L23 JSON layer docs that feed Phase 2 directly AND (b) human-readable Markdown views of the same content for stakeholder review. Skips Phase 1 entirely — the L1-L23 JSON is the universal handoff format and Phase 1 emits it directly. Triggers when the user says "start a new IC design", "run Phase 1", "design a chip in natural language", provides only a prompt or wants AI to author the spec from scratch.
 ---
 
 # Phase 1 — prompt / dialogue entry point
@@ -33,8 +33,8 @@ Both entry points converge at L1-L23 JSON, then enter Phase 2 → Phase 3.
 
 1. Ingest a prompt (NL) or structured YAML into a `facts.yaml` (UUID-tagged, provenance-tracked fact graph)
 2. Detect gaps against the IC class template
-3. Run PM Agent dialogue (asks user about gaps in plain language)
-4. IC Expert Agent fills residual gaps from K3 industry defaults / class reference / retrieved-neighbour ICs
+3. Run the IC Expert Agent dialogue (the merged front-door role asks the user about gaps in its plain-language register)
+4. The same IC Expert Agent fills residual gaps from K3 industry defaults / class reference / retrieved-neighbour ICs
 5. **Render**:
    - `generated_docs/L*.json` — the canonical machine-readable form (fed to Phase 2)
    - `human_docs/L*.md` — Markdown views of the same content (for stakeholder review; added v0.60)
@@ -82,7 +82,7 @@ are just views over it.
 
 | User gives you … | How Phase 1 runs |
 |---|---|
-| A paragraph in plain language | **NL mode** — PM Agent calls `nl-ingest`, runs gap dialogue, then renders |
+| A paragraph in plain language | **NL mode** — IC Expert Agent (plain-language register) calls `nl-ingest`, runs gap dialogue, then renders |
 | A structured `spec.yaml` | **Fast-path** — one `run-all` call, no dialogue, renders |
 | A pin-table CSV (v0.74) | `ingest-pins` → L1.pinout.* facts (optionally `--merge-into` an existing facts.yaml) |
 | A register-map CSV (v0.74) | `ingest-regmap-csv` → L4.registers.* facts |
@@ -101,7 +101,7 @@ There is no default model — the skill does not prefer any specific one.
 
 ### NL mode (common / medium user — "design a chip in natural language")
 
-Invoked by PM Agent (see `../../agents/pm-agent.md`). Minimal end-to-end:
+Invoked by the IC Expert Agent (see `../../agents/ic-expert-agent.md`; the PM Agent role is merged into it). Minimal end-to-end:
 
 ```bash
 # 1. NL → seed facts (calls Anthropic API if ANTHROPIC_API_KEY set)
@@ -113,7 +113,7 @@ python3 -m tools.phase1_engine.cli nl-ingest \
 # 2. detect gaps
 python3 -m tools.phase1_engine.cli gaps facts.yaml --out-json gaps.json
 
-# 3. PM Agent iterates: for each gap, pick K2 qbank variant, ask user, then:
+# 3. IC Expert Agent iterates: for each gap, pick K2 qbank variant, ask user, then:
 python3 -m tools.phase1_engine.cli set-fact facts.yaml \
     --path "L3.frame_format.crc.poly" --value "0x31" --source user_stated
 
@@ -202,13 +202,14 @@ ingest + PM-Agent dialogue + render pipeline. They remain archived at
 
 ### Dialogue-driven (common / medium user)
 
-The PM Agent (see `../../agents/pm-agent.md`) drives an interactive
-session, calling `tools/phase1_engine/cli.py` internally:
+The IC Expert Agent (see `../../agents/ic-expert-agent.md`; the PM Agent role is
+merged into it) drives an interactive session in its plain-language register,
+calling `tools/phase1_engine/cli.py` internally:
 
 1. `prompt-intake` gathers initial free-text.
 2. Whatever facts can be parsed from the text become the seed fact graph.
 3. `gaps` reports remaining required-but-missing facts.
-4. PM Agent asks the user about each gap (using the Q-bank, K2).
+4. IC Expert Agent asks the user about each gap in its plain-language register (using the Q-bank, K2).
 5. Unanswered gaps → IC Expert fills from K3 / class_reference / retrieved
    neighbour with `source=defaulted` or `source=retrieved`.
 6. `render` emits the **14 layer JSONs** — 10 core (L1-L23 + L8R) plus
@@ -253,16 +254,16 @@ absent skip cleanly.
 
 ## Agents
 
-Two agents still collaborate — but on the fact graph, not on layer docs:
+ONE agent operates in two registers on the fact graph (not on layer docs):
 
-- **PM Agent** translates user intent into fact-level updates (one fact
-  per dialogue turn). Never asks a technical question the user cannot
-  answer at their level.
-- **IC Expert Agent** reviews the fact graph for consistency, fills gaps
+- **External register** translates user intent into fact-level updates (one
+  fact per dialogue turn). Never asks a technical question the user cannot
+  answer at their level — plain product language only, no silicon jargon.
+- **Internal register** reviews the fact graph for consistency, fills gaps
   from K3 / retrieved neighbours, flags high-impact conflicts for user
-  confirmation.
+  confirmation (surfaced back through the external register).
 
-See `../../agents/pm-agent.md` and `../../agents/ic-expert-agent.md`.
+See `../../agents/ic-expert-agent.md` (the PM Agent role is merged into it).
 
 ## Where Things Live
 
