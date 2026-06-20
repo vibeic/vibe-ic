@@ -222,3 +222,17 @@ def test_sequential_skip_phantom_row0_posedge():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ── code-complete port decl with a trailing comment (v1.1.41 prod gap) ─────────
+def test_parse_ports_tolerates_trailing_comment():
+    # VerilogEval code-complete headers annotate a port: `input [9:0] state, // ...`
+    # The decl regex must not drop the port (Prob150 one-hot synth SKIPped without it).
+    p = ("Implement TopModule.\n"
+         "  input d,\n"
+         "  input [9:0] state, // 10-bit one-hot current state\n"
+         "  output q\n")
+    ports = W.parse_ports(p)
+    assert ports is not None
+    assert "state" in ports and ports["state"][1] == 10
+    assert "q" in ports
