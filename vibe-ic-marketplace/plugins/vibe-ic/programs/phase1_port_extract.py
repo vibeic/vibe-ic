@@ -55,10 +55,46 @@ def _dedup_ports(ports: List[Port]) -> List[Dict]:
 _FENCE = re.compile(r'```[a-zA-Z]*\n(.*?)```', re.S)
 _MODULE_SPAN = re.compile(r'\bmodule\b.*?\bendmodule\b', re.S)
 
+# Step-2.7 §4.05 — a candidate region (fence or module-span) is only fed to
+# parse_verilog_ports when it ACTUALLY LOOKS LIKE Verilog. A markdown code fence
+# is the universal container for logs / pseudo-code / ASCII waveforms / register
+# dumps, and the bare words `module`/`endmodule` are common in IC spec PROSE — so
+# gating merely on "inside a fence / module-span" (not on Verilog content) let a
+# non-Verilog fence (` ```\ninput message byte stream\n``` `) and a prose span
+# (`Each module accepts an input signal … endmodule …`) scrape phantom ports,
+# defeating this module's own anti-phantom contract. A region qualifies iff it
+# has a REAL module header (`module <name> (`/`#(`) OR a genuine Verilog port
+# DECL line — a direction keyword NOT followed by `=`/`:`/`(` (excludes Python
+# `output = compute(x)` / `input(...)`), an optional net-type/width, an
+# identifier, then the decl-terminating `,`/`;`. Prose `input message byte
+# stream` (no terminator) and pseudo-code never match.
+_VERILOG_MODULE_HDR = re.compile(r'\bmodule\s+\w+\s*[#(]', re.I)
+_VERILOG_PORT_DECL = re.compile(
+    r'^\s*(?:input|output|inout)\b(?!\s*[=:(])'
+    r'(?:\s+(?:wire|reg|logic|signed|unsigned|tri\d?|bit|byte))*'
+    r'\s*(?:\[[^\]]*\]\s*)?\w+\s*[,;]', re.I | re.M)
+# A genuine Verilog parameter/localparam declaration (`localparam IDLE = 2'b00`)
+# also marks a region as Verilog — it carries the enum/param content the
+# extractor wants, and a param-only block has no input/output so it can still
+# never inject a phantom PORT. Prose ("the parameter is configurable") lacks the
+# `<name> =` form and does not match.
+_VERILOG_PARAM_DECL = re.compile(
+    r'\b(?:localparam|parameter)\b\s+(?:\w+\s+)?\w+\s*=', re.I)
+
+
+def _looks_like_verilog(region: str) -> bool:
+    return bool(_VERILOG_MODULE_HDR.search(region)
+                or _VERILOG_PORT_DECL.search(region)
+                or _VERILOG_PARAM_DECL.search(region))
+
 
 def _verilog_regions(text: str) -> str:
-    regions = [m.group(1) for m in _FENCE.finditer(text)]
-    regions += [m.group(0) for m in _MODULE_SPAN.finditer(text)]
+    cand = [m.group(1) for m in _FENCE.finditer(text)]
+    cand += [m.group(0) for m in _MODULE_SPAN.finditer(text)]
+    # Only KEEP regions whose content is actually Verilog (see above) — a fence
+    # holding logs/pseudo-code or a prose module…endmodule span is dropped, so a
+    # non-Verilog region can never inject a phantom port.
+    regions = [r for r in cand if _looks_like_verilog(r)]
     # strip comments so an inline `// the reset …` comment after a port decl
     # cannot scrape its first word as a phantom port.
     return strip_comments("\n".join(regions))

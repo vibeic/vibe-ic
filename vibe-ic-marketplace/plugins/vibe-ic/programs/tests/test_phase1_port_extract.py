@@ -187,3 +187,38 @@ def test_enums_verilog_multi_decl_and_table():
 
 def test_enums_prose_no_false_positive():
     assert PX.extract_enums("The state word appears in prose; clk = the clock.") == []
+
+
+# ── Step-2.7 §4.05: region gate must validate Verilog CONTENT, not just "in a
+# fence / module-span" — else a non-Verilog fence or a prose module…endmodule
+# span scrapes phantom ports into an otherwise-empty L-doc. ───────────────────
+
+def test_no_phantom_from_non_verilog_fence():
+    """A bare/pseudo-code fence (logs, pseudo-code) must not be scraped: a line
+    `input message byte stream` is prose, not a Verilog port decl."""
+    crc = ("# CRC8 Generator\n```\n"
+           "input message byte stream\noutput crc value after last byte\n```\n")
+    assert PX.extract_ports(crc) == []
+
+
+def test_no_phantom_from_prose_module_span():
+    """The bare words module…endmodule in spec prose must not form a parseable
+    Verilog region."""
+    prose = ("Each module accepts an input signal stream and produces an output "
+             "result. You must declare every endmodule explicitly.")
+    assert PX.extract_ports(prose) == []
+
+
+def test_no_phantom_from_fenced_python():
+    """A python fence using input()/`output =` must yield no ports."""
+    py = "```python\nx = input('go: ')\noutput = compute(x)\nfor input in items:\n    pass\n```"
+    assert PX.extract_ports(py) == []
+
+
+def test_genuine_verilog_regions_still_extracted():
+    """Regression: real Verilog (module header, bare `,`-terminated port snippet,
+    `;`-terminated decls) must STILL be extracted after the content gate."""
+    mod = "```verilog\nmodule m(input clk, input [7:0] a, output reg q); endmodule\n```"
+    assert {p["name"] for p in PX.extract_ports(mod)} == {"clk", "a", "q"}
+    snip = "```\ninput clk,\noutput q\n```"
+    assert {p["name"] for p in PX.extract_ports(snip)} >= {"clk", "q"}
