@@ -287,6 +287,13 @@ def _seed_structural_ports(project: Path, out_dir: Path) -> int:
         if facts.get("reset") and not d.get("reset"):
             d["reset"] = facts["reset"]
         l8r.write_text(json.dumps(d, indent=2))
+        # L4 — register map (markdown register table with an offset column)
+        if facts.get("regmap"):
+            l4p = out_dir / "L4_REGMAP.json"
+            l4 = json.loads(l4p.read_text()) if l4p.is_file() else {}
+            if not l4.get("registers") and not l4.get("regmap"):
+                l4["registers"] = facts["regmap"]
+                l4p.write_text(json.dumps(l4, indent=2))
         return len(ports)
     except Exception:
         return 0

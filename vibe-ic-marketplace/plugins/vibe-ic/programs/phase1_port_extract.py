@@ -97,6 +97,72 @@ def extract_params(prompt: str) -> List[Dict]:
     return [{"name": k, "default": v} for k, v in out.items()]
 
 
+# Register-map table column vocabulary. A regmap table is distinguished from a
+# port table by an OFFSET/ADDRESS column (a port table has a direction column).
+_REGNAME_HDR = re.compile(r'^\s*(register|reg|field|name)\s*$', re.I)
+_OFFSET_HDR = re.compile(r'^\s*(offset|address|addr|adr|location)\s*$', re.I)
+_ACCESS_HDR = re.compile(r'^\s*(access|type|mode|r\s*/\s*w|rw|permission)\s*$', re.I)
+from _specrtl_common import (  # noqa: E402
+    _split_md_row, _is_md_delim_row, _strip_md_emphasis)
+
+
+def extract_regmap(prompt: str) -> List[Dict]:
+    """Parse a markdown REGISTER-MAP table: a table carrying a name column AND an
+    OFFSET/ADDRESS column (the offset is what makes it a regmap, not a port list).
+    Returns [{name, offset, width?, access?}]."""
+    lines = prompt.splitlines()
+    out: List[Dict] = []
+    seen = set()
+    i, n = 0, len(lines)
+    while i < n - 1:
+        if lines[i].count('|') < 2:
+            i += 1
+            continue
+        header = [_strip_md_emphasis(h) for h in _split_md_row(lines[i])]
+        delim = _split_md_row(lines[i + 1]) if i + 1 < n else []
+        if not _is_md_delim_row(delim) or len(delim) != len(header):
+            i += 1
+            continue
+        name_c = next((k for k, h in enumerate(header) if _REGNAME_HDR.match(h)), None)
+        off_c = next((k for k, h in enumerate(header) if _OFFSET_HDR.match(h)), None)
+        if name_c is None or off_c is None:
+            i += 1
+            continue
+        acc_c = next((k for k, h in enumerate(header) if _ACCESS_HDR.match(h)), None)
+        wid_c = next((k for k, h in enumerate(header)
+                      if re.match(r'^\s*(width|bits?|size|len(?:gth)?|bit\s*width)\s*$',
+                                  h, re.I)), None)
+        j = i + 2
+        while j < n:
+            cells = _split_md_row(lines[j])
+            if not cells or _is_md_delim_row(cells) or all(c == '' for c in cells):
+                break
+            if len(cells) <= max(name_c, off_c):
+                j += 1
+                continue
+            name = _strip_md_emphasis(cells[name_c])
+            off = _strip_md_emphasis(cells[off_c])
+            if (not re.fullmatch(r'[A-Za-z_]\w*', name)
+                    or not re.search(r'0x[0-9a-fA-F]+|\d', off)):
+                j += 1
+                continue
+            if name in seen:
+                j += 1
+                continue
+            seen.add(name)
+            rec = {"name": name, "offset": off}
+            if acc_c is not None and len(cells) > acc_c and cells[acc_c]:
+                rec["access"] = _strip_md_emphasis(cells[acc_c])
+            if wid_c is not None and len(cells) > wid_c:
+                w = re.search(r'\d+', cells[wid_c])
+                if w:
+                    rec["width"] = int(w.group(0))
+            out.append(rec)
+            j += 1
+        i = j if j > i else i + 1
+    return out
+
+
 def extract_reset(prompt: str) -> Dict:
     """Best-effort reset name + polarity from prose / decls (advisory)."""
     names = re.findall(r'\b(rst_n|reset_n|rst|reset|clr|clear|nreset|por)\b',
@@ -111,11 +177,13 @@ def extract_reset(prompt: str) -> Dict:
 
 
 def extract(prompt: str) -> Dict:
-    """The L8R-shaped structural fact bundle from a prompt."""
+    """The structural fact bundle from a prompt (ports/params/reset → L8R,
+    regmap → L4)."""
     return {
         "ports": extract_ports(prompt),
         "parameters": extract_params(prompt),
         "reset": extract_reset(prompt),
+        "regmap": extract_regmap(prompt),
     }
 
 

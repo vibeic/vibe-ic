@@ -104,3 +104,24 @@ def test_code_block_ports_extracted_but_its_comments_are_not():
             "  output reg  done\n);\nendmodule\n```\n")
     names = {p["name"] for p in PX.extract_ports(code)}
     assert names == {"clk", "done"}, names  # 'the' (comment) must NOT appear
+
+
+def test_regmap_table_extracted_with_offset_access_width():
+    """A register-map table (distinguished by an Offset/Address column, headers
+    possibly **bold**) is parsed into {name, offset, access, width}."""
+    txt = ("| **Register** | **Offset** | **Access** | **Bit Width** |\n"
+           "|---|---|---|---|\n"
+           "| Beat  | 0x100 | Read/Write | 20 |\n"
+           "| ID    | 0x500 | Read-Only  | 32 |\n")
+    regs = {r["name"]: r for r in PX.extract_regmap(txt)}
+    assert set(regs) == {"Beat", "ID"}
+    assert regs["Beat"]["offset"] == "0x100" and regs["Beat"]["width"] == 20
+    assert regs["ID"]["access"] == "Read-Only"
+
+
+def test_port_table_not_mistaken_for_regmap():
+    """§4.05: a port table (direction column, NO offset column) must NOT be
+    harvested as a register map."""
+    txt = ("| Name | In/Out | Length |\n|---|---|---|\n"
+           "| clk | in | 1 |\n| dout | out | 8 |\n")
+    assert PX.extract_regmap(txt) == []
