@@ -155,7 +155,35 @@ _HARNESS_SCAN_SUFFIXES = (
 # RTL (field-measured: 16/302 area-opt problems, all logged as a ~650-byte
 # "TRUNCATED"). Detect the materialized gated literal too. chip-AGNOSTIC: keys on
 # the official CVDP gated-image repository name, no design/vendor-SKU literal.
-_GATED_PNR_LITERAL = re.compile(r"\bnvidia/cvdp-sim:[\w.\-]+", re.I)
+#
+# The GATED thing is the proprietary REPO `nvidia/cvdp-sim`, regardless of how it
+# is referenced — `:tag` (the pinned `:v1.0.0` default), `@sha256:<digest>`, or
+# tagless (→ `:latest`). All three need auth and `pull access denied` on a
+# clean-room host, so the detector keys on the repo name and treats the optional
+# `:tag` / `@digest` as cosmetic. The trailing `(?![\w.\-/])` keeps a longer repo
+# (`nvidia/cvdp-sim-extended`, `nvidia/cvdp-sim/sub`) from matching; the leading
+# `\b` keeps `mynvidia/cvdp-sim` out while still matching a registry prefix
+# (`nvcr.io/nvidia/cvdp-sim:…`).
+_GATED_PNR_LITERAL = re.compile(
+    r"\bnvidia/cvdp-sim(?:[:@][\w.\-]+)?(?![\w.\-/])", re.I)
+
+
+def _strip_hash_comments(text: str) -> str:
+    """Blank each line's `#`…EOL comment so a gated-image NAME that is merely
+    MENTIONED in a comment (e.g. a materialized Dockerfile documenting the gated
+    default it replaced) is not mistaken for the ACTIVE base image. A real base
+    reference (`FROM …`, `image: …`, `OSS_PNR_IMAGE=…`) never sits after a `#`
+    (a leading `#` comments the whole line), so this can only drop comment text,
+    never an active reference. Dockerfile / shell / make / yaml / env / cfg all
+    use `#`; JSON has none, so this is a no-op there."""
+    return "\n".join(ln.split("#", 1)[0] for ln in text.splitlines())
+
+
+def _has_gated_pnr_literal(text: str) -> bool:
+    """True iff the COMMENT-STRIPPED text references the gated proprietary
+    `nvidia/cvdp-sim` base image as an ACTIVE reference. A `#`-comment mention of
+    the image name is NOT a pull and must not REFUSE a correct OSS harness."""
+    return bool(_GATED_PNR_LITERAL.search(_strip_hash_comments(text)))
 
 
 def harness_requires_pnr_image(problem_dir: Path) -> Tuple[bool, List[Path]]:
@@ -177,7 +205,7 @@ def harness_requires_pnr_image(problem_dir: Path) -> Tuple[bool, List[Path]]:
             txt = f.read_text(errors="ignore")
         except OSError:
             continue
-        if _OSS_PNR_TEMPLATE in txt or _GATED_PNR_LITERAL.search(txt):
+        if _OSS_PNR_TEMPLATE in txt or _has_gated_pnr_literal(txt):
             hits.append(f)
     return (len(hits) > 0), hits
 
@@ -254,21 +282,30 @@ def main(argv=None) -> int:
             # (the realistic check point) catches the block #714 only caught
             # pre-materialization.
             baked_gated = any(
-                _GATED_PNR_LITERAL.search(f.read_text(errors="ignore"))
+                _has_gated_pnr_literal(f.read_text(errors="ignore"))
                 for f in hit_files if f.is_file())
             verdict["oss_pnr_image_materialized_gated"] = baked_gated
             pnr = (os.environ.get("OSS_PNR_IMAGE") or "").strip()
             verdict["oss_pnr_image_set"] = bool(pnr)
             if baked_gated:
+                # The fix is to RE-MATERIALIZE the harness from the OSS image —
+                # NOT to retag the OSS image to the gated name. Retagging is
+                # rejected on two counts: (1) this gate intentionally REFUSEs on
+                # the baked gated literal regardless of local pullability, so a
+                # retag would never clear it; (2) a clean-room / OSS-reproducible
+                # score must build from the verified open base, so depending on a
+                # locally-retagged gated name defeats the reproducibility this
+                # gate exists to enforce.
                 deviations.append(
                     "area-opt synth harness has a MATERIALIZED gated "
-                    "`nvidia/cvdp-sim:<tag>` base image baked into its synth "
+                    "`nvidia/cvdp-sim` base image baked into its synth "
                     "Dockerfile — that container pulls the proprietary image "
                     "(`pull access denied`) and the synth gate FALSE-FAILS on "
-                    "correct RTL (#714 round-2: the template was already "
-                    "substituted). Re-materialize with OSS_PNR_IMAGE set to a "
-                    "verified OSS PnR image, or retag the OSS image to the gated "
-                    "name before scoring.")
+                    "correct RTL (#714 round-2: the __OSS_PNR_IMAGE__ template "
+                    "was already substituted to the gated default). RE-MATERIALIZE "
+                    "the harness with OSS_PNR_IMAGE set to a verified OSS PnR "
+                    "image so the synth container builds from a pullable open "
+                    "base.")
             elif not pnr:
                 deviations.append(
                     "area-opt synth harness references __OSS_PNR_IMAGE__ but "
