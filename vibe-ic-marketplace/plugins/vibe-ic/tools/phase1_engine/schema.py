@@ -241,11 +241,29 @@ LAYER_CODES = ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L8R", "L9"]
 EXTENSION_LAYER_CODES = ["L10", "L11", "L12", "L13"]
 ALL_LAYER_CODES = LAYER_CODES + EXTENSION_LAYER_CODES
 
+# OPT-IN advanced layers — generatable (a caller passes them to render_layers and
+# facts tagged with their view render into them) but NOT part of the REQUIRED
+# ALL_LAYER_CODES set, so a simple digital block is never forced to carry them and
+# the existing "all L docs present" gates (which key on ALL_LAYER_CODES) are
+# unaffected. L14-L24 are the advanced/protocol layers; L25-L27 close the
+# all-chip-classes coverage gaps (reliability/mission-profile, MEMS/transduction,
+# memory-module SPD) found by the cited L1-L24-completeness survey.
+ADVANCED_LAYER_CODES = ["L14", "L15", "L16", "L17", "L18", "L19", "L20",
+                        "L21", "L22", "L23", "L24", "L25", "L26", "L27"]
+GENERATABLE_LAYER_CODES = ALL_LAYER_CODES + ADVANCED_LAYER_CODES
+
 LAYER_FILE_NAMES = {
     "L1":  "L1_DATASHEET.json",
     "L2":  "L2_FRS.json",
     "L3":  "L3_CMD_PROTOCOL.json",
     "L4":  "L4_REGMAP.json",
+    # L5 "ADI" = ANALOG-DIGITAL INTERFACE — the analog↔digital boundary spec
+    # (ADC/DAC interfaces, mixed-signal pads, PHY analog front-end, reference
+    # voltages, sense/trim/test pads). It is a FUNCTIONAL layer, NOT the vendor
+    # "Analog Devices Inc." (the acronym unfortunately collides). For a pure-
+    # digital design this layer is correctly empty. The human-readable,
+    # disambiguated name is in LAYER_TITLES below; the L5_ADI_SPEC.json file name
+    # is retained for back-compat (149 references across the plugin).
     "L5":  "L5_ADI_SPEC.json",
     "L6":  "L6_CONTROL_LOGIC.json",
     "L7":  "L7_TEST_DEBUG.json",
@@ -264,4 +282,69 @@ LAYER_FILE_NAMES = {
     # The previous v0.58 name `L13_HARDWARE_OBSERVED.json` made the gate
     # silently fail with file-not-found.
     "L13": "L13_LAB_CALIBRATION.json",
+    # Advanced / coverage-completeness layers (opt-in, see ADVANCED_LAYER_CODES).
+    "L14": "L14_PROTOCOL_VERSIONING.json",
+    "L15": "L15_ENCODING_TABLES.json",
+    "L16": "L16_COMPLIANCE.json",
+    "L17": "L17_CHANNEL_SIGNAL_CATALOG.json",
+    "L18": "L18_INTERCONNECT.json",
+    "L19": "L19_CONSTRAINTS_PDK.json",
+    "L20": "L20_DFT_SCAN.json",
+    "L21": "L21_POWER_INTENT.json",
+    "L22": "L22_VERIFICATION_PLAN.json",
+    "L23": "L23_SECURITY.json",
+    "L24": "L24_SIGNOFF.json",
+    "L25": "L25_RELIABILITY_MISSION_PROFILE.json",
+    "L26": "L26_MECHANICAL_TRANSDUCTION.json",
+    "L27": "L27_MEMORY_MODULE_SPD.json",
+}
+
+# Human-readable, DISAMBIGUATED layer titles — the authoritative source for any
+# report / human-doc that renders a layer name, so cryptic file-name acronyms
+# (esp. L5 "ADI") never read as a vendor or get misinterpreted. chip-AGNOSTIC:
+# every title is a FUNCTIONAL dimension, never a vendor/SKU.
+LAYER_TITLES = {
+    "L1":  "Datasheet (top-level function, parameters, pinout)",
+    "L2":  "Functional Requirements Specification",
+    "L3":  "Command / Protocol (opcodes, handshake, bus protocols)",
+    "L4":  "Register Map",
+    "L5":  "Analog-Digital Interface (ADC/DAC, mixed-signal pads, PHY AFE) "
+           "— NOT the vendor 'Analog Devices Inc.'",
+    "L6":  "Control Logic / FSM",
+    "L7":  "Test & Debug",
+    "L8":  "Timing / Waveform",
+    "L8R": "RTL Constants (ports, reset, enums, magic numbers)",
+    "L9":  "Integration Specification (sub-modules, file layout)",
+    "L10": "Test Cases / Vectors",
+    "L11": "Calibration",
+    "L12": "Behavioral Sequences",
+    "L13": "Lab / Hardware Calibration (contract + evidence)",
+    # ── Advanced / protocol layers (L14-L24) — formalized here from the
+    # *_protocol_synth.py producers; emitted only when a design carries such
+    # content (a simple block leaves them empty). ──────────────────────────
+    "L14": "Protocol Versioning",
+    "L15": "Encoding / Parameter Tables",
+    "L16": "Compliance Properties",
+    "L17": "Channel / Signal Catalog",
+    "L18": "Interconnect Topology",
+    "L19": "Constraints / PDK",
+    "L20": "DFT / Scan Topology",
+    "L21": "Power Intent (UPF / IEEE 1801)",
+    "L22": "Verification Plan",
+    "L23": "Security Requirements",
+    "L24": "Signoff / Tapeout Checklist",
+    # ── Coverage-completeness layers (L25-L27) — added per the L1-L24
+    # all-chip-classes survey (cited research): the L1-L24 set is complete for
+    # digital/SoC/processor classes but MISSED three whole spec dimensions that
+    # some chip classes require. These close that gap; chip-AGNOSTIC and empty
+    # for any design that does not need them. ─────────────────────────────────
+    "L25": "Reliability / Qualification & Mission-Profile "
+           "(JESD47, AEC-Q100/Q200; lifetime-weighted environmental loads "
+           "— temperature, humidity, drop/shock, vibration)",
+    "L26": "Mechanical / Transduction (MEMS & analog-physical: movable "
+           "membranes/cantilevers/springs, transduction principle, stiction "
+           "and mechanical failure modes — not captured by any RTL layer)",
+    "L27": "Memory-Module Self-Describing Config "
+           "(JEDEC SPD — EE1004-v / TSE2004av / SPD5118; module-level metadata "
+           "distinct from the on-die register map)",
 }
