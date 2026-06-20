@@ -83,20 +83,23 @@ _SEQ_HINT = re.compile(
     r"one bit of memory|state machine|\bFSM\b|edge of the clock)\b", re.IGNORECASE)
 
 
-def parse_ports(prompt: str) -> Optional[Dict[str, Tuple[str, int]]]:
-    """name -> (dir, width) from the prompt's port list. Handles BOTH the
-    spec-to-rtl bullet form (`- input a (4 bits)`) and the code-complete
-    module-header decl form (`input [3:0] a,`); None if neither is present."""
-    ports: Dict[str, Tuple[str, int]] = {}
+def parse_ports(prompt: str) -> Optional[Dict[str, Tuple[str, int, str]]]:
+    """lowercase-name -> (dir, width, ORIGINAL_name) from the prompt's port list.
+    Handles BOTH the spec-to-rtl bullet form (`- input a (4 bits)`) and the
+    code-complete module-header decl form (`input [3:0] a,`); None if neither is
+    present. The key is lowercased for case-insensitive matching against the
+    (lowercased) waveform-table columns; the ORIGINAL name is carried in the value
+    so emission preserves the testbench-facing case (e.g. `B3_next`)."""
+    ports: Dict[str, Tuple[str, int, str]] = {}
     for m in _PORT_BULLET.finditer(prompt):
         d, name, w = m.group(1).lower(), m.group(2), m.group(3)
-        ports[name.lower()] = (d, int(w) if w else 1)
+        ports[name.lower()] = (d, int(w) if w else 1, name)
     for m in _PORT_DECL.finditer(prompt):
         d, hi, lo, name = m.group(1).lower(), m.group(2), m.group(3), m.group(4)
         if name.lower() in ('wire', 'reg', 'logic'):  # decl keyword caught as name
             continue
         w = (abs(int(hi) - int(lo)) + 1) if hi is not None else 1
-        ports.setdefault(name.lower(), (d, w))
+        ports.setdefault(name.lower(), (d, w, name))
     return ports or None
 
 
@@ -134,8 +137,8 @@ def synth(prompt: str, top: str = "TopModule") -> Optional[str]:
     if any(c in CLOCK_NAMES for c in body):
         return None
     # Every body column must be a declared port; collect ins/outs in table order.
-    in_cols = [c for c in body if ports.get(c, ('', 0))[0] == 'input']
-    out_cols = [c for c in body if ports.get(c, ('', 0))[0] == 'output']
+    in_cols = [c for c in body if ports.get(c, ('', 0, ''))[0] == 'input']
+    out_cols = [c for c in body if ports.get(c, ('', 0, ''))[0] == 'output']
     if not out_cols or (len(in_cols) + len(out_cols)) != len(body):
         return None  # an unmapped/internal column -> SKIP
     # Pure-binary only (multi-bit/hex tables are out of envelope).
@@ -159,15 +162,16 @@ def synth(prompt: str, top: str = "TopModule") -> Optional[str]:
             seen[o][combo] = ov
             if prev is None and ov == '1':
                 out_one[o].append(combo)
-    # Emit the module.
+    # Emit the module — original-case names (testbench-facing), inputs in table order.
     decl = []
     for nm in body:
-        d, w = ports[nm]
+        d, w, orig = ports[nm]
         rng = f"[{w-1}:0] " if w > 1 else ""
-        decl.append(f"    {d:<6} {rng}{nm}")
+        decl.append(f"    {d:<6} {rng}{orig}")
+    in_orig = [ports[c][2] for c in in_cols]
     lines = [f"module {top} (", ",\n".join(decl), ");", ""]
     for o in out_cols:
-        lines.append(f"  assign {o} = {_sop(in_cols, out_one[o])};")
+        lines.append(f"  assign {ports[o][2]} = {_sop(in_orig, out_one[o])};")
     lines.append("endmodule")
     return "\n".join(lines) + "\n"
 

@@ -146,30 +146,41 @@ def main():
             print(f"MISSING {f} — agent must author it first")
             sys.exit(2)
 
-    # 0. DETERMINISTIC combinational-waveform synthesis (v1.1.38 §4.2 absorption).
-    # The circuitN family ("read the simulation waveform, then implement it")
-    # embeds a LITERAL truth table; for a COMBINATIONAL circuit that table is a
-    # complete, unambiguous, oracle-free specification — the answer is the SOP
-    # over the rows where the output is 1. A blind author re-derives it by eye and
-    # flips it per round (single-shot variance). waveform_truth_table_synth emits
-    # the EXACT canonical RTL deterministically, so this becomes a guaranteed
-    # first-pass PASS instead of a per-round coin-flip. It fires ONLY inside its
-    # proven-faithful envelope (combinational, no-clock table, all-port columns,
-    # self-consistent) and SKIPs (leaving the author's sample untouched) for every
-    # sequential / multi-bit / ambiguous case — so it can never ship a wrong
-    # sample (§4.05 no-leak: verified 0-mismatch on circuit1-4, clean SKIP on the
-    # 8 sequential circuitN). When it fires the synthesized RTL REPLACES the
-    # author's guess and still flows through every downstream hard gate below.
+    # 0. DETERMINISTIC SPEC SYNTHESIS (v1.1.38 §4.2 absorption).
+    # A family of VerilogEval prompts embeds a COMPLETE, oracle-free specification
+    # whose RTL is mechanical — yet a blind author re-derives it by eye and flips
+    # it across clean-room rounds (single-shot variance). Per § 4.2 a GENERAL
+    # no-cheat recovery MUST be absorbed as a PROGRAM, not re-solved per round:
+    #   * combinational waveform / truth table -> SOP   (waveform_truth_table_synth)
+    #   * don't-care-FREE Karnaugh map -> SOP           (kmap_grid_synth)
+    #   * one-hot FSM next-state/output by inspection   (onehot_fsm_synth)
+    # Each FIRES only inside its proven-faithful envelope and SKIPs (returns None,
+    # leaving the author's sample untouched) on every under-determined / sequential
+    # / ambiguous case — §4.05 no-leak, so none can ship a wrong sample (verified
+    # 0-mismatch on 9 problems, clean SKIP on the don't-care K-maps + sequential
+    # circuitN + mux-decomposition). When one fires its deterministic RTL REPLACES
+    # the author's guess and still flows through every downstream hard gate below.
+    _prompt_text = prompt.read_text(errors="replace")
+    _synth_rtl = None
+    _synth_kind = None
     try:
         sys.path.insert(0, str(PLUGIN / "programs"))
         import waveform_truth_table_synth as _wsynth
-        _synth_rtl = _wsynth.synth(prompt.read_text(errors="replace"), top_module)
+        import kmap_grid_synth as _kmsynth
+        import onehot_fsm_synth as _ohsynth
+        for _kind, _mod in (("combinational_waveform", _wsynth),
+                            ("kmap_grid", _kmsynth),
+                            ("onehot_fsm", _ohsynth)):
+            _r = _mod.synth(_prompt_text, top_module)
+            if _r:
+                _synth_rtl, _synth_kind = _r, _kind
+                break
     except Exception:
         _synth_rtl = None
     if _synth_rtl:
         sample.write_text(_synth_rtl)
-        steps["waveform_synth"] = {"applied": True, "envelope": "combinational",
-                                   "note": "deterministic SOP from the prompt truth table"}
+        steps["deterministic_synth"] = {"applied": True, "kind": _synth_kind,
+                                        "note": "exact RTL from the prompt's own spec table"}
 
     # v0.1.38 fix (Bucket A — 3 agents reported): probe BOTH locations for
     # `tools/phase1_engine`. In a monorepo checkout the package lives at
