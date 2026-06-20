@@ -541,8 +541,17 @@ _DIR_TOKEN = {
 
 # Header-cell predicates (column-role detection by header text).
 _NAME_HDR = re.compile(r'^\s*(signal|pin|port|name|signal\s*name|port\s*name)\s*$', re.I)
-_DIR_HDR = re.compile(r'^\s*(dir|direction|i\s*/\s*o|i/o|io|mode|type)\s*$', re.I)
-_WIDTH_HDR = re.compile(r'^\s*(width|bits?|size|\[?\s*msb\s*:\s*lsb\s*\]?|range)\s*$', re.I)
+# Direction-column header vocabulary. `in\s*/\s*out` matches the common
+# `In/Out` interface-table header (the dominant CVDP form); the existing `i/o`
+# only matched the abbreviated `I/O`. `direction` covers `Direction`.
+_DIR_HDR = re.compile(
+    r'^\s*(dir|direction|in\s*/\s*out|in\s*-\s*out|i\s*/\s*o|i/o|io|mode|type)\s*$',
+    re.I)
+# Width-column header vocabulary. `length`/`len` matches the common `Length`
+# interface-table column (CVDP form); the existing set had width/bits/size/range.
+_WIDTH_HDR = re.compile(
+    r'^\s*(width|bits?|size|len(?:gth)?|\[?\s*msb\s*:\s*lsb\s*\]?|range)\s*$',
+    re.I)
 
 
 def _split_md_row(line: str) -> List[str]:
@@ -604,15 +613,23 @@ def _parse_width_cell(cell: str) -> Optional[int]:
     return None
 
 
-def _parse_md_table_ports(text: str) -> Tuple[List[Port], List[str]]:
+def _parse_md_table_ports(text: str, union: bool = False) -> Tuple[List[Port], List[str]]:
     """Parse a markdown PIN/interface table into ports.
 
     Returns (ports, notes). `notes` carries an advisory string when a qualifying
     table header was found but some body rows could not be parsed into ports, so
     the caller can surface it (a partial parse must never be a silent 0-port skip).
+
+    `union` (default False — preserves the single-best contract the conformance
+    gates rely on): when True, UNION the ports of EVERY qualifying interface table
+    (deduped by name, first-seen wins) instead of returning only the largest one.
+    A spec often splits its interface across separate clock/reset, input, and
+    output tables; the Phase-1 ingester needs all of them.
     """
     lines = text.splitlines()
     best_ports: List[Port] = []
+    union_ports: List[Port] = []
+    _seen_union = set()
     notes: List[str] = []
     i = 0
     n = len(lines)
@@ -682,6 +699,10 @@ def _parse_md_table_ports(text: str) -> Tuple[List[Port], List[str]]:
         # generic report/regmap table that happens to share a header word.
         if (ports and dir_valued_rows >= 2
                 and dir_valued_rows * 2 >= body_rows):
+            for p in ports:                       # accumulate for the union mode
+                if p.name not in _seen_union:
+                    _seen_union.add(p.name)
+                    union_ports.append(p)
             if len(ports) >= len(best_ports):
                 best_ports = ports
                 notes = []
@@ -691,7 +712,7 @@ def _parse_md_table_ports(text: str) -> Tuple[List[Port], List[str]]:
                         f"port(s) parsed from {body_rows} row(s) — verify the "
                         f"interface table is fully captured."]
         i = j if j > i else i + 1
-    return best_ports, notes
+    return (union_ports if union else best_ports), notes
 
 
 def _skip_balanced_parens(text: str, i: int) -> Optional[int]:
