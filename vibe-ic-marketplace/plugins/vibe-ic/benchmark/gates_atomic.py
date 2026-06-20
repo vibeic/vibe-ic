@@ -412,6 +412,32 @@ def main():
         except Exception:
             pass
 
+    # 4c. WAVEFORM-TABLE conformance (v1.1.41 §4.2 — Prob098_circuit7 / the
+    # sequential-waveform misread class). When a prompt embeds a literal
+    # `time [clk] <inputs...> <output>` simulation table, the authored RTL must
+    # reproduce its OUTPUT column. The classic miss is reading the TB's first-edge
+    # X-window as an extra pipeline stage (`q1<=~a; q<=q1`) when the spec is a
+    # single-stage `q<=~a` — a wrong sample that self-verifies but FAILs the hidden
+    # TB and SHIPS (this CHECK existed but was never wired into the per-problem
+    # gate). waveform_table_conformance_check replays the table the way the scorer
+    # compares and rc==1 → emit-BLOCK. §4.05: it fires ONLY inside its
+    # proven-faithful envelope (combinational truth-table OR single-clock
+    # posedge-registered single-bit) and SKIPs (rc==0) on every latch / negedge /
+    # multi-bit / internal-state case, so it can never false-block (verified: BLOCKs
+    # the wrong 2-stage circuit7 read, PASSes the correct single-stage, SKIPs the
+    # combinational circuitN already handled by the deterministic synth).
+    wtc_json = wd / "waveform_conformance_findings.json"
+    rc, out = run([sys.executable, str(PROGRAMS / "waveform_table_conformance_check.py"),
+                   "--prompt", str(prompt), "--rtl", str(sample)], env=cli_env)
+    wtc_verd = "BLOCK" if rc == 1 else ("DISCLOSED_TOOL_GAP" if rc == 2 else "PASS_OR_SKIP")
+    steps["waveform_table_conformance"] = {"verdict": wtc_verd, "rc": rc, "log": out[-300:]}
+    if rc == 1:
+        blocking.append({"program": "waveform_table_conformance_check",
+                         "rule": "waveform-table-conformance-mismatch",
+                         "message": ("authored RTL does not reproduce the "
+                                     "prompt's disclosed simulation-waveform "
+                                     "table: " + str(out)[-300:])})
+
     # 5a. ENFORCED power-up determinism (v0.1.24 lesson) — repair reset-less
     #     registered outputs IN-PLACE before emit. Structural + prompt-blind.
     rc, out = run([sys.executable, str(PROGRAMS / "rtl_hygiene_lint.py"),
