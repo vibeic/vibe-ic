@@ -168,7 +168,7 @@ def main():
         import waveform_truth_table_synth as _wsynth
         import kmap_grid_synth as _kmsynth
         import onehot_fsm_synth as _ohsynth
-        for _kind, _mod in (("combinational_waveform", _wsynth),
+        for _kind, _mod in (("waveform", _wsynth),  # combinational OR seq-1FF envelope
                             ("kmap_grid", _kmsynth),
                             ("onehot_fsm", _ohsynth)):
             _r = _mod.synth(_prompt_text, top_module)
