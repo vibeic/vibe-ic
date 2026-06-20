@@ -94,5 +94,43 @@ def test_noleak_no_args_is_input_error():
     assert E.main([]) == 2
 
 
+# ── #714 round-2: materialized (post-substitution) gated literal ──────────────
+
+def test_materialized_gated_literal_detected_and_refused(tmp_path, monkeypatch):
+    """ROUND-2: after run_benchmark MATERIALIZES the harness, `__OSS_PNR_IMAGE__`
+    is already substituted to the gated `nvidia/cvdp-sim:<tag>` literal. The
+    preflight must still detect the synth requirement AND refuse — even with
+    OSS_PNR_IMAGE set, because THIS dir's container will pull the gated image.
+    Field: 16/302 area-opt problems false-failed this way, logged as ~650-byte
+    'TRUNCATED'; 9 flipped to PASS once the OSS image was substituted."""
+    src = tmp_path / "harness" / "57" / "src"
+    src.mkdir(parents=True)
+    (src / "Dockerfile.synth").write_text(
+        "FROM nvidia/cvdp-sim:v1.0.0 AS BASE\nRUN pip install pytest==8.3.2\n")
+    monkeypatch.setenv("OSS_PNR_IMAGE", "cvdp-sim-oss:v110")
+    out_json = tmp_path / "verdict.json"
+    rc = E.main(["--problem-dir", str(tmp_path), "--json", str(out_json)])
+    v = json.loads(out_json.read_text())
+    assert v["oss_pnr_image_required"] is True
+    assert v["oss_pnr_image_materialized_gated"] is True
+    assert rc == 1 and v["verdict"] == "REFUSE"
+    assert any("MATERIALIZED gated" in d for d in v["deviations"])
+
+
+def test_noleak_materialized_oss_image_not_flagged(tmp_path, monkeypatch):
+    """§4.05 no-leak: a synth Dockerfile materialized with the OSS image (NOT the
+    gated literal) is NOT flagged — the detector keys on the gated repo name, so
+    a correctly-substituted OSS harness scores without a false refusal."""
+    src = tmp_path / "harness" / "57" / "src"
+    src.mkdir(parents=True)
+    (src / "Dockerfile.synth").write_text("FROM cvdp-sim-oss:v110 AS BASE\n")
+    monkeypatch.delenv("OSS_PNR_IMAGE", raising=False)
+    out_json = tmp_path / "verdict.json"
+    rc = E.main(["--problem-dir", str(tmp_path), "--json", str(out_json)])
+    v = json.loads(out_json.read_text())
+    assert v["oss_pnr_image_required"] is False
+    assert rc == 0 and v["verdict"] == "PASS"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

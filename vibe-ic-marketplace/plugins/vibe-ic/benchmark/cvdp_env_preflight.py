@@ -145,12 +145,25 @@ def check_versions(probe_output: str) -> Tuple[List[Dict], List[str]]:
 _OSS_PNR_TEMPLATE = "__OSS_PNR_IMAGE__"
 _HARNESS_SCAN_SUFFIXES = (
     ".synth", ".sim", ".mk", ".sh", ".yaml", ".yml", ".json", ".env", ".cfg")
+# After `run_benchmark.py` MATERIALIZES a harness, the `__OSS_PNR_IMAGE__`
+# template is already SUBSTITUTED to whatever `OSS_PNR_IMAGE` resolved to — and
+# in CVDP v1.1.0 the default is the GATED proprietary `nvidia/cvdp-sim:<tag>`
+# (the upstream README pins `OSS_PNR_IMAGE=nvidia/cvdp-sim:v1.0.0`). A preflight
+# that only looks for the pre-substitution `__OSS_PNR_IMAGE__` token therefore
+# returns "not required" on the very score dir whose synth container pulls the
+# gated image → `pull access denied` → the synth subtest FALSE-FAILS on correct
+# RTL (field-measured: 16/302 area-opt problems, all logged as a ~650-byte
+# "TRUNCATED"). Detect the materialized gated literal too. chip-AGNOSTIC: keys on
+# the official CVDP gated-image repository name, no design/vendor-SKU literal.
+_GATED_PNR_LITERAL = re.compile(r"\bnvidia/cvdp-sim:[\w.\-]+", re.I)
 
 
 def harness_requires_pnr_image(problem_dir: Path) -> Tuple[bool, List[Path]]:
     """True iff any harness file under `problem_dir` references the
-    `__OSS_PNR_IMAGE__` template (an area-opt / synth problem). Returns
-    (required, [files…]). Scans only cheap harness-shaped files."""
+    `__OSS_PNR_IMAGE__` template (a pre-materialization area-opt / synth problem)
+    OR a MATERIALIZED gated `nvidia/cvdp-sim:<tag>` base image (the template
+    already substituted to the proprietary default). Returns (required, [files…]).
+    Scans only cheap harness-shaped files."""
     hits: List[Path] = []
     if not problem_dir.is_dir():
         return False, hits
@@ -161,10 +174,11 @@ def harness_requires_pnr_image(problem_dir: Path) -> Tuple[bool, List[Path]]:
                 or f.suffix in _HARNESS_SCAN_SUFFIXES):
             continue
         try:
-            if _OSS_PNR_TEMPLATE in f.read_text(errors="ignore"):
-                hits.append(f)
+            txt = f.read_text(errors="ignore")
         except OSError:
             continue
+        if _OSS_PNR_TEMPLATE in txt or _GATED_PNR_LITERAL.search(txt):
+            hits.append(f)
     return (len(hits) > 0), hits
 
 
@@ -233,9 +247,29 @@ def main(argv=None) -> int:
         if required:
             verdict["oss_pnr_image_template_files"] = [
                 str(f) for f in hit_files]
+            # A MATERIALIZED harness already baked the gated `nvidia/cvdp-sim`
+            # literal into its synth Dockerfile — the env no longer matters for
+            # THIS dir; it will pull the gated image and false-fail. Flag it
+            # regardless of OSS_PNR_IMAGE so a post-materialization preflight
+            # (the realistic check point) catches the block #714 only caught
+            # pre-materialization.
+            baked_gated = any(
+                _GATED_PNR_LITERAL.search(f.read_text(errors="ignore"))
+                for f in hit_files if f.is_file())
+            verdict["oss_pnr_image_materialized_gated"] = baked_gated
             pnr = (os.environ.get("OSS_PNR_IMAGE") or "").strip()
             verdict["oss_pnr_image_set"] = bool(pnr)
-            if not pnr:
+            if baked_gated:
+                deviations.append(
+                    "area-opt synth harness has a MATERIALIZED gated "
+                    "`nvidia/cvdp-sim:<tag>` base image baked into its synth "
+                    "Dockerfile — that container pulls the proprietary image "
+                    "(`pull access denied`) and the synth gate FALSE-FAILS on "
+                    "correct RTL (#714 round-2: the template was already "
+                    "substituted). Re-materialize with OSS_PNR_IMAGE set to a "
+                    "verified OSS PnR image, or retag the OSS image to the gated "
+                    "name before scoring.")
+            elif not pnr:
                 deviations.append(
                     "area-opt synth harness references __OSS_PNR_IMAGE__ but "
                     "OSS_PNR_IMAGE is UNSET — the synth container would default "
