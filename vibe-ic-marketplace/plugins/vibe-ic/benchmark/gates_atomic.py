@@ -146,6 +146,31 @@ def main():
             print(f"MISSING {f} — agent must author it first")
             sys.exit(2)
 
+    # 0. DETERMINISTIC combinational-waveform synthesis (v1.1.38 §4.2 absorption).
+    # The circuitN family ("read the simulation waveform, then implement it")
+    # embeds a LITERAL truth table; for a COMBINATIONAL circuit that table is a
+    # complete, unambiguous, oracle-free specification — the answer is the SOP
+    # over the rows where the output is 1. A blind author re-derives it by eye and
+    # flips it per round (single-shot variance). waveform_truth_table_synth emits
+    # the EXACT canonical RTL deterministically, so this becomes a guaranteed
+    # first-pass PASS instead of a per-round coin-flip. It fires ONLY inside its
+    # proven-faithful envelope (combinational, no-clock table, all-port columns,
+    # self-consistent) and SKIPs (leaving the author's sample untouched) for every
+    # sequential / multi-bit / ambiguous case — so it can never ship a wrong
+    # sample (§4.05 no-leak: verified 0-mismatch on circuit1-4, clean SKIP on the
+    # 8 sequential circuitN). When it fires the synthesized RTL REPLACES the
+    # author's guess and still flows through every downstream hard gate below.
+    try:
+        sys.path.insert(0, str(PLUGIN / "programs"))
+        import waveform_truth_table_synth as _wsynth
+        _synth_rtl = _wsynth.synth(prompt.read_text(errors="replace"), top_module)
+    except Exception:
+        _synth_rtl = None
+    if _synth_rtl:
+        sample.write_text(_synth_rtl)
+        steps["waveform_synth"] = {"applied": True, "envelope": "combinational",
+                                   "note": "deterministic SOP from the prompt truth table"}
+
     # v0.1.38 fix (Bucket A — 3 agents reported): probe BOTH locations for
     # `tools/phase1_engine`. In a monorepo checkout the package lives at
     # `<vibe-ic-repo>/tools/phase1_engine` (= PLUGIN.parents[1]/tools/phase1_engine);
