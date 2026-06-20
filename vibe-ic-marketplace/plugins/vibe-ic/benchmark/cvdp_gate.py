@@ -157,6 +157,27 @@ def json_code_files(completion: str) -> Optional[Dict[str, str]]:
         for k, v in code.items():
             if isinstance(k, str) and isinstance(v, str):
                 files[k] = v
+    # FLAT FILE-MAP fallback — a `{"rtl/foo.sv": "module foo...", ...}` object
+    # with NO "code" wrapper key. Agents (especially on multi-file problems)
+    # repeatedly emit this shape; the official `parse_model_response` only
+    # unwraps a "code" key, so the raw JSON was written verbatim as the .sv →
+    # a line-1 `{` syntax error → ELAB_ERROR even though clean RTL was inside.
+    # Recover the files here so the gate's #680 emit-normalization re-emits the
+    # format the harness decodes. TIGHT GUARD (must not misread a JSON-schema /
+    # doc-only answer object as code): fire ONLY when there is no "code" key AND
+    # at least one value carries a REAL Verilog module (a `module` declaration
+    # AND `endmodule`); a SystemRDL/JSON-schema deliverable carries neither.
+    if not files and "code" not in obj:
+        cand: Dict[str, str] = {}
+        for k, v in obj.items():
+            if (isinstance(k, str) and isinstance(v, str)
+                    and (k.lower().endswith(_RTL_SUFFIXES)
+                         or _MODULE_RE.search(_detection_text(v)))):
+                cand[k] = v
+        if any(_MODULE_RE.search(_detection_text(v))
+               and re.search(r"\bendmodule\b", _detection_text(v))
+               for v in cand.values()):
+            files = cand
     return files or None
 
 
