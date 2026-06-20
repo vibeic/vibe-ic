@@ -256,6 +256,57 @@ def extract_prose_ports(prompt: str) -> List[Dict]:
     return out
 
 
+# An enumerated constant: a `localparam`/`parameter` NAME = <sized literal>
+# (`2'b01`, `8'hAF`, `3'd5`) — the canonical FSM-state / opcode / mode encoding.
+# Also a markdown encoding-table row `| NAME | <sized-literal|0x..|int> |`.
+# Every `NAME = <sized literal>` pair (the sized literal `2'b01` is the precision
+# anchor) — catches comma-separated enums in one `localparam A=.., B=.., C=..`.
+_ENUM_DECL = re.compile(
+    r'\b([A-Za-z_]\w*)\s*=\s*'
+    r"(\d+'[bdhoBDHO][0-9a-fA-FxXzZ_]+)")
+_ENUM_VAL = re.compile(r"^(?:\d+'[bdhoBDHO][0-9a-fA-FxXzZ_]+|0x[0-9a-fA-F]+|\d+)$")
+
+
+def extract_enums(prompt: str) -> List[Dict]:
+    """Enumerated constants (FSM states / opcodes / mode encodings): Verilog
+    `localparam NAME = <sized literal>` (parsed from code regions to stay precise)
+    + markdown encoding-table rows `| NAME | <sized-literal/hex/int> |`."""
+    out: List[Dict] = []
+    seen = set()
+    for m in _ENUM_DECL.finditer(_verilog_regions(prompt)):
+        nm, val = m.group(1), m.group(2)
+        if nm not in seen:
+            seen.add(nm)
+            out.append({"name": nm, "value": val})
+    # markdown encoding tables: a 2+-col row whose 1st cell is an UPPER/ident name
+    # and 2nd cell is a sized-literal / hex / int — only when a sibling header row
+    # names an encoding column (state/mode/opcode/encoding/code/value).
+    lines = prompt.splitlines()
+    for i in range(len(lines) - 1):
+        if lines[i].count('|') < 2:
+            continue
+        hdr = [_strip_md_emphasis(c).lower() for c in _split_md_row(lines[i])]
+        if not any(re.search(r'state|mode|opcode|encod|code|value|command', h)
+                   for h in hdr):
+            continue
+        delim = _split_md_row(lines[i + 1])
+        if not _is_md_delim_row(delim) or len(delim) != len(hdr):
+            continue
+        for j in range(i + 2, len(lines)):
+            cells = _split_md_row(lines[j])
+            if not cells or _is_md_delim_row(cells) or all(c == '' for c in cells):
+                break
+            if len(cells) < 2:
+                continue
+            nm = _strip_md_emphasis(cells[0])
+            val = _strip_md_emphasis(cells[1])
+            if re.fullmatch(r'[A-Za-z_]\w*', nm) and _ENUM_VAL.match(val) \
+                    and nm not in seen and nm.lower() not in _PROSE_STOP:
+                seen.add(nm)
+                out.append({"name": nm, "value": val})
+    return out
+
+
 def extract_reset(prompt: str) -> Dict:
     """Best-effort reset name + polarity from prose / decls (advisory)."""
     names = re.findall(r'\b(rst_n|reset_n|rst|reset|clr|clear|nreset|por)\b',
@@ -270,13 +321,14 @@ def extract_reset(prompt: str) -> Dict:
 
 
 def extract(prompt: str) -> Dict:
-    """The structural fact bundle from a prompt (ports/params/reset → L8R,
+    """The structural fact bundle from a prompt (ports/params/reset/enums → L8R,
     regmap → L4)."""
     return {
         "ports": extract_ports(prompt),
         "parameters": extract_params(prompt),
         "reset": extract_reset(prompt),
         "regmap": extract_regmap(prompt),
+        "enums": extract_enums(prompt),
     }
 
 

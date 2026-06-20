@@ -286,6 +286,8 @@ def _seed_structural_ports(project: Path, out_dir: Path) -> int:
             d["parameters"] = facts["parameters"]
         if facts.get("reset") and not d.get("reset"):
             d["reset"] = facts["reset"]
+        if facts.get("enums") and not d.get("enums"):
+            d["enums"] = facts["enums"]
         l8r.write_text(json.dumps(d, indent=2))
         # L4 — register map (markdown register table with an offset column)
         if facts.get("regmap"):

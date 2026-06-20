@@ -172,3 +172,18 @@ def test_prose_fallback_only_when_no_table_or_code():
            "- `something`: described in prose elsewhere\n")
     names = {p["name"] for p in PX.extract_ports(txt)}
     assert names == {"clk", "dout"}
+
+
+def test_enums_verilog_multi_decl_and_table():
+    code = ("```\nlocalparam IDLE = 2'b00, RUN = 2'b01, DONE = 2'b10;\n"
+            "parameter MODE_ADD = 8'h01;\n```\n")
+    by = {e["name"]: e["value"] for e in PX.extract_enums(code)}
+    assert by == {"IDLE": "2'b00", "RUN": "2'b01", "DONE": "2'b10",
+                  "MODE_ADD": "8'h01"}
+    tbl = "| State | Encoding |\n|---|---|\n| S_IDLE | 2'b00 |\n| S_GO | 2'b01 |\n"
+    names = {e["name"] for e in PX.extract_enums(tbl)}
+    assert names == {"S_IDLE", "S_GO"}
+
+
+def test_enums_prose_no_false_positive():
+    assert PX.extract_enums("The state word appears in prose; clk = the clock.") == []
