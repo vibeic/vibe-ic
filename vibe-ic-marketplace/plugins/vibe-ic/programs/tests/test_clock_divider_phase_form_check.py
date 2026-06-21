@@ -107,6 +107,61 @@ def test_self_toggle_without_or_output_does_not_fire():
     assert _risky(rtl) is False
 
 
+# -------- Step-2.7 §4.05 reproduced FALSE-FIRES, now pinned SKIP --------
+# A div-by-2 in the DEGENERATE OR form: ONE self-toggle operand + one constant.
+# iverilog proved this is waveform-IDENTICAL to the level-decode golden, yet the
+# pre-narrowing gate BLOCKed it. Requires >=2 self-toggle operands ⇒ now SKIPs.
+RTL_EVEN_OR_SINGLE_TOGGLE = """
+module d2(input clk, input rst_n, output clk_div);
+  reg clk_div1, clk_div2;
+  always @(posedge clk or negedge rst_n)
+    if(!rst_n) begin clk_div1<=1'b0; clk_div2<=1'b0; end
+    else begin clk_div1<=~clk_div1; clk_div2<=1'b0; end
+  assign clk_div = clk_div1 | clk_div2;
+endmodule
+"""
+
+# A NON-clock-divider: two ping-pong status flags merely NAMED with a `div`
+# substring, ORed. No `clk`/`clock` root ⇒ the tightened _DIVOUT_RE excludes it.
+RTL_NON_CLOCK_DIV_SUBSTRING = """
+module merge(input c, input rst_n, output any_active);
+  reg bank_a_div, bank_b_en;
+  always @(posedge c or negedge rst_n)
+    if(!rst_n) begin bank_a_div<=1'b0; bank_b_en<=1'b0; end
+    else begin bank_a_div<=~bank_a_div; bank_b_en<=~bank_b_en; end
+  assign any_active = bank_a_div | bank_b_en;
+endmodule
+"""
+
+# A clock-named two-edge-OR whose intermediates are reset HIGH (plausibly
+# phase-correct) — defense-in-depth: the gate must err to false-SKIP.
+RTL_DUAL_TOGGLE_RESET_HIGH = """
+module dhi(input clk, input rst_n, output clk_div);
+  reg clk_div1, clk_div2;
+  always @(posedge clk or negedge rst_n)
+    if(!rst_n) clk_div1<=1'b1; else clk_div1 <= ~clk_div1;
+  always @(negedge clk or negedge rst_n)
+    if(!rst_n) clk_div2<=1'b1; else clk_div2 <= ~clk_div2;
+  assign clk_div = clk_div1 | clk_div2;
+endmodule
+"""
+
+
+def test_even_divider_OR_form_single_toggle_does_not_fire():
+    # HIGH false-fire: degenerate OR with ONE self-toggle is phase-CORRECT
+    assert _risky(RTL_EVEN_OR_SINGLE_TOGGLE) is False
+
+
+def test_non_clock_div_substring_or_does_not_fire():
+    # MED false-fire: a `div`-substring name without a clk/clock root is not a clock
+    assert _risky(RTL_NON_CLOCK_DIV_SUBSTRING) is False
+
+
+def test_dual_self_toggle_reset_high_does_not_fire():
+    # defense-in-depth: reset-HIGH self-toggle is plausibly phase-correct → SKIP
+    assert _risky(RTL_DUAL_TOGGLE_RESET_HIGH) is False
+
+
 # -------- CLI --------
 def test_cli_block_on_toggle(tmp_path, capsys):
     p = tmp_path / "d.v"; p.write_text(RTL_TOGGLE_OR)
