@@ -23,61 +23,20 @@ REGISTRY = HARNESS / "BENCHMARK_REGISTRY.json"
 EXPERT_AGENT_MD = Path(__file__).resolve().parent.parent / "agents" / "ic-expert-agent.md"
 
 
-def _render_lesson_digest(run_p: Path,
-                          expert_md: Path = EXPERT_AGENT_MD) -> int:
-    """ORGANIC-20260605-shapec-lesson-digest-injection — surface captured
-    lessons to blind single-shot authors.
-
-    The benchmark-enhancement-capture loop appends general-pattern
-    `### Skill:` sections to agents/ic-expert-agent.md, but batch authoring
-    agents historically received only the blind instructions + the prompt, so
-    already-captured recoveries recurred in the very next clean-room campaign
-    (4 of 6 close-loop recoveries in the v0.2.42 two-track run were
-    recurrences). This renders every ACTIVE `### Skill:` section (retired
-    `### ~~Skill:` strikethrough sections excluded) into
-    `<RUNDIR>/lessons.md`, which blind_instructions_shape_c.md makes a
-    MUST-READ before authoring.
-
-    Blindness is preserved by the capture policy itself: captured sections are
-    chip-AGNOSTIC general patterns with no design identifiers and no oracle
-    data. Deterministic extraction — no LLM. Returns the lesson count.
-    """
-    if not expert_md.is_file():
-        return 0
-    lessons: list[str] = []
-    cur: list[str] | None = None
-    for line in expert_md.read_text(errors="replace").splitlines():
-        if line.startswith("### "):
-            if cur:
-                lessons.append("\n".join(cur).rstrip())
-            cur = [line] if line.startswith("### Skill:") else None
-            continue
-        if line.startswith("## ") or line.startswith("# "):
-            if cur:
-                lessons.append("\n".join(cur).rstrip())
-            cur = None
-            continue
-        if cur is not None:
-            cur.append(line)
-    if cur:
-        lessons.append("\n".join(cur).rstrip())
-    if not lessons:
-        return 0
-    head = (
-        "# Captured-lesson digest (READ BEFORE AUTHORING)\n\n"
-        "Rendered by `benchmark_dispatch.py --setup` from the general-pattern\n"
-        "`### Skill:` sections of `agents/ic-expert-agent.md`\n"
-        "(ORGANIC-20260605-shapec-lesson-digest-injection). These are\n"
-        "chip-AGNOSTIC patterns captured from prior close-loop recoveries —\n"
-        "no design identifiers, no oracle data — so reading them preserves\n"
-        "blindness while preventing already-captured recoveries from\n"
-        "recurring.\n\n"
-        "MANDATORY (ORGANIC #733 - staged != consumed): BEFORE authoring EACH\n"
-        "design you MUST (1) open this digest, (2) keyword-match the design\n"
-        "genre, and (3) APPLY any matched genre-convention section. section\n"
-        "4-E: apply ONLY unless the spec states otherwise.\n\n")
-    (run_p / "lessons.md").write_text(head + "\n\n".join(lessons) + "\n")
-    return len(lessons)
+# ORGANIC-20260605-shapec-lesson-digest-injection — surface captured lessons to
+# blind single-shot authors. The renderer was hoisted to the shared module
+# `_lesson_digest` so the PRODUCTION spec-to-rtl path (phase2_one_shot_runner
+# step_rtl_gen WAIVE) surfaces the SAME corpus to runner-driven authors. This
+# thin alias preserves the historical `benchmark_dispatch._render_lesson_digest`
+# entry point (Shape-C `--setup`) and its name for existing tests.
+#
+# CONSUME CONTRACT (#733 — staged != consumed): the rendered digest header makes
+# it MANDATORY that BEFORE authoring each design the author keyword-match the
+# design genre against each section's "When to apply" and apply every matched
+# section (Section 4-E: apply unless the spec states otherwise). The digest is
+# blindness-clean — `_lesson_digest` scrubs benchmark design identifiers so no
+# design-name->solution association is surfaced.
+from _lesson_digest import render_lesson_digest as _render_lesson_digest  # noqa: E402
 
 
 def _load_registry() -> dict:
