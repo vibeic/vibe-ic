@@ -35,27 +35,43 @@ DEFAULT_GATE = HERE / "cvdp_gate.py"
 DEFAULT_SIM_IMAGE = os.environ.get("OSS_SIM_IMAGE", "cvdp-sim-oss:v110")
 
 
+# CVDP records a test's `result` as the integer 0 OR the string "0" for PASS
+# (the official harness emits both forms). This matches the in-repo schema
+# authority `cvdp_fail_triage.py` (`result in (0, "0")` == passing); strict
+# `== 0` would FALSE-FAIL a genuinely-passing design recorded with string
+# results and trap the convergence loop in an endless re-author.
+_PASS_RESULTS = (0, "0")
+
+
 def parse_result(raw_result_path: Path, design_id: str) -> Tuple[str, List[str]]:
     """Read the official run_benchmark raw_result.json and return
     (verdict, fail_logs). verdict ∈ {'PASS','FAIL','NO_RESULT'}.
 
-    CVDP result semantics: a test's `result` is 0 = PASS, 1 = FAIL. A design
-    PASSES iff it has tests and ALL of them are result==0."""
+    CVDP result semantics: a test's `result` is 0/"0" = PASS, else FAIL. A design
+    PASSES iff it has tests and ALL of them pass. ANY malformed / wrong-shape
+    result degrades to NO_RESULT (could-not-score) — NEVER a fabricated PASS or a
+    misleading FAIL: a crashed/partial harness must not be read as a definitive
+    verdict."""
     if not raw_result_path.is_file():
         return "NO_RESULT", []
     try:
         raw = json.loads(raw_result_path.read_text())
     except (json.JSONDecodeError, OSError):
         return "NO_RESULT", []
+    if not isinstance(raw, dict):                 # valid JSON, wrong top shape
+        return "NO_RESULT", []
     rec = raw.get(design_id)
     if not isinstance(rec, dict):
         return "NO_RESULT", []
-    tests = rec.get("tests") or []
-    if not tests:
+    tests = rec.get("tests")
+    if not isinstance(tests, list) or not tests:
         return "NO_RESULT", []
+    if not all(isinstance(t, dict) for t in tests):   # a non-dict entry =
+        return "NO_RESULT", []                         # untrustworthy → no verdict
     fail_logs = [t.get("log") for t in tests
-                 if t.get("result") != 0 and t.get("log")]
-    verdict = "PASS" if all(t.get("result") == 0 for t in tests) else "FAIL"
+                 if t.get("result") not in _PASS_RESULTS and t.get("log")]
+    verdict = ("PASS" if all(t.get("result") in _PASS_RESULTS for t in tests)
+               else "FAIL")
     return verdict, fail_logs
 
 

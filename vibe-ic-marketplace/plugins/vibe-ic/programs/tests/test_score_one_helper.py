@@ -40,6 +40,29 @@ def test_parse_result_no_tests_is_no_result(tmp_path):
     assert S.parse_result(r, "d")[0] == "NO_RESULT"
 
 
+def test_parse_result_string_zero_is_pass(tmp_path):
+    # Step-2.7: the CVDP harness can record `result` as the string "0" (the
+    # in-repo schema authority cvdp_fail_triage.py treats it as passing). Strict
+    # `== 0` would FALSE-FAIL a genuinely-passing design and loop the re-author.
+    r = _raw(tmp_path, {"d": {"tests": [{"result": "0"}, {"result": "0"}]}})
+    assert S.parse_result(r, "d") == ("PASS", [])
+    # a real fail mixed in still FAILs
+    r2 = _raw(tmp_path, {"d": {"tests": [
+        {"result": "0"}, {"result": 1, "log": "/x/1.txt"}]}})
+    assert S.parse_result(r2, "d") == ("FAIL", ["/x/1.txt"])
+
+
+def test_parse_result_wrong_shape_degrades_to_no_result(tmp_path):
+    # Step-2.7: valid-JSON-but-wrong-shape raw_result.json (a crashed/partial
+    # harness can write these) must degrade to NO_RESULT (could-not-score),
+    # NEVER crash → exit 1 (mislabeled FAIL) and NEVER a fabricated PASS.
+    for payload in (None, 42, "PASS", [{"d": 1}],
+                    {"d": {"tests": {"result": 0}}},   # tests is a dict
+                    {"d": {"tests": ["passed"]}}):      # a non-dict test entry
+        r = _raw(tmp_path, payload)
+        assert S.parse_result(r, "d")[0] == "NO_RESULT", payload
+
+
 def test_parse_result_missing_id_is_no_result(tmp_path):
     r = _raw(tmp_path, {"other": {"tests": [{"result": 0}]}})
     assert S.parse_result(r, "d")[0] == "NO_RESULT"
