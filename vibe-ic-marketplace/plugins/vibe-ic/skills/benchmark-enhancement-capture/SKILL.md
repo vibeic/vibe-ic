@@ -10,6 +10,39 @@ every AI-judgment recovery — at ANY step in the flow — is a one-off that
 evaporates with the session. With it, every recovery has a path to permanently
 improve the plugin so the same fix is automatic next time.
 
+## ⭐ THE BENCHMARK AGENT'S #1 MANDATE — converge → capture → distill-to-program (BINDING)
+
+> **Owner directive (2026-06-22, emphatic): "請把這整套透過 Benchmark 不斷去收斂，然後
+> capture 這些 fail case 變成可以解，並將所有可以解的都淬鍊在我們的 program 裡面。這是
+> Benchmark Agent 最重要的事情了。"**
+
+The Benchmark Agent's PRIMARY, never-ending job is a LOOP, not a one-shot score:
+
+1. **CONVERGE continuously.** Run the benchmark; for EVERY fail, drive it to an
+   OFFICIAL PASS — RCA against the harness oracle in convergence mode (§3.9
+   oracle-for-RCA) → author → verify with the official scorer (e.g.
+   `benchmark/score_one.py`). A fail is NEVER accepted as a "floor" until
+   `spec_coverage_check --failure` proves it `spec-absent`.
+2. **CAPTURE every fail into a solvable case.** Record `(design, prior-fail,
+   recovered-pass, RCA)` so the recovery is reproducible — never a one-off.
+3. **DISTILL every generalizable fix into the PROGRAM layer (program-first).**
+   Turn each recovery into a deterministic rule / gate / extractor in
+   `programs/*.py` (or the gate it belongs to) so the NEXT BLIND run auto-recovers
+   it WITHOUT an agent. **This is the load-bearing step: it is what makes the
+   benchmark number COMPOUND instead of evaporating.** The gap between the blind
+   pass@1 and the converged 100% IS the backlog of fixes still to distill.
+
+**Proven (CVDP campaign, 2026-06):** each program-first fix removed a whole
+failure CLASS and lifted the blind floor — PR #42 (gate multi-file split +
+flat-file-map recovery), #43 (`score_one` official single-design scorer), #46
+(Phase-1 directional-prose port extraction — fixed the #1 blind cause: empty L1
+pin_table → guessed port-name/CASE → cocotb "no child object named X"). Full-302
+blind reached 185/302 = 61.3% (~1.8× the published SOTA 34 %); convergence reaches
+~100 %. **Convergence has truly closed only when a fresh BLIND run produces 0
+residual that needs a plugin fix, across TWO consecutive rounds** — until then,
+every loop tick MUST end by distilling its recoveries into programs via the
+bucket ladder below.
+
 ## The fix-all-into-the-plugin principle
 
 > When you report a backlog / find an issue, the expectation is **NOT** to triage it into a

@@ -21,6 +21,15 @@ sweep (see `benchmark_external/RESULT_MCP_EDA_v0125_FRESH.md`, `benchmark_clean/
 ⛔ **Do not pick the run-shape by feel.** Read § 1 (taxonomy) and § 2 (decision matrix) below
 before invoking any benchmark agent or runner.
 
+> ⭐ **The Benchmark Agent's #1 mandate is not the score — it is the LOOP** (owner directive
+> 2026-06-22): **continuously converge → capture every fail into a solvable case → distill every
+> generalizable fix into the deterministic PROGRAM layer**, so the next BLIND run auto-recovers it.
+> Producing a number is only half the job; the other (load-bearing) half is closing the gap
+> between the blind pass@1 and the converged 100 % by moving recoveries into `programs/*.py`. The
+> full doctrine + bucket ladder lives in the **`benchmark-enhancement-capture`** skill — invoke it
+> after EVERY benchmark close-loop. A benchmark run that scores but distills nothing has done only
+> half the Benchmark Agent's job.
+
 ## § 1 — Where Vibe-IC is a PROGRAM and where it's an LLM (the boundary every benchmark designer must respect)
 
 In v0.1.26 the plugin's `phase2_one_shot_runner.step_rtl_gen` for the `digital_arithmetic_primitive`

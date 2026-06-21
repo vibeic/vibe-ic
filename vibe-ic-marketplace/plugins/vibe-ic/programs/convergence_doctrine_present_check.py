@@ -43,6 +43,13 @@ _REQUIRED_MARKERS = (
     "lone-track",
     # explicitly rejects the on-failure-only misreading
     "only when the program fails",
+    # the Benchmark Agent's #1 MANDATE — converge → capture → distill-to-program
+    # (owner directive 2026-06-22). PROGRAM-FIRST lesson: prose alone regresses,
+    # so the load-bearing doctrine MUST be pinned or a future skill edit can
+    # silently drop it with no test going red (Step-2.7 #51).
+    "#1 mandate",
+    "capture every fail",
+    "distill-to-program",
 )
 
 
