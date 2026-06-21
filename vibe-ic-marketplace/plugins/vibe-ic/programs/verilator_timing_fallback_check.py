@@ -60,8 +60,19 @@ import tempfile
 from pathlib import Path
 from typing import List
 
-_DEFAULT_PASS = ("Your Design Passed", "PASS", "Passed", "successful")
-_DEFAULT_FAIL = ("Failed", "failures", "Error", "ERROR", "mismatch", "WRONG", "incorrect")
+# Defaults MIRROR the authoritative official RTLLM scorer
+# (benchmark-data/evaluation/rtllm/score_rtllm.py): PASS iff "Your Design Passed"
+# is present AND no real failure marker "Test failed" / "Your Design Failed"
+# appears. The scorer DELIBERATELY TOLERATES a zero-count summary line
+# ("0/100 failures", "Error count: 0", "No mismatch") on a pass — so the fail
+# veto must be the SPECIFIC failure verdict, NOT the generic words
+# "failures"/"Error"/"mismatch" (over-flooring those would mis-classify a
+# genuinely-recoverable floor as unrecoverable, contradicting the official
+# scorer). §4.05: the pass token is the specific phrase (word-boundary, not a
+# generic "PASS"/"successful" that matches "bypass"/"unsuccessful"). A non-RTLLM
+# benchmark supplies its own --pass-token / --fail-token.
+_DEFAULT_PASS = ("Your Design Passed",)
+_DEFAULT_FAIL = ("Test failed", "Your Design Failed")
 
 
 def verilator_available() -> bool:
@@ -69,11 +80,19 @@ def verilator_available() -> bool:
 
 
 def _rename_top(golden_src: str, golden_top: str, dut_name: str) -> str:
-    """Rename the golden's top module to the name the TB instantiates (only the
-    whole-word module identifier; submodules with other names are untouched)."""
+    """Rename the golden's top module to the name the TB instantiates. Step-2.7:
+    rename ONLY the module DECLARATION header (and a named `endmodule : <top>`),
+    NOT every whole-word occurrence — a blanket `\\b<top>\\b` sub also rewrote the
+    name inside string literals / comments / a same-named signal, corrupting the
+    golden. A single-module golden's declaration is the only site the TB's
+    instantiation needs renamed."""
     if golden_top == dut_name:
         return golden_src
-    return re.sub(rf"\b{re.escape(golden_top)}\b", dut_name, golden_src)
+    src = re.sub(rf"\bmodule\s+{re.escape(golden_top)}\b",
+                 f"module {dut_name}", golden_src)
+    src = re.sub(rf"\bendmodule\s*:\s*{re.escape(golden_top)}\b",
+                 f"endmodule : {dut_name}", src)
+    return src
 
 
 def adjudicate(tb: Path, golden: Path, tb_top: str, dut_name: str,
@@ -95,11 +114,15 @@ def adjudicate(tb: Path, golden: Path, tb_top: str, dut_name: str,
             for f in data_dir.iterdir():
                 if f.suffix.lower() in (".txt", ".dat", ".mem", ".hex", ".data", ".bin") and f.is_file():
                     shutil.copy(f, work / f.name)
-        build = subprocess.run(
-            ["verilator", "--binary", "--timing", "-Wno-fatal", "-Wno-lint",
-             "-Wno-PINNOTFOUND", "-Wno-WIDTH", "--top-module", tb_top,
-             "golden.v", "testbench.v", "-o", "sim"],
-            cwd=work, capture_output=True, text=True)
+        try:
+            build = subprocess.run(
+                ["verilator", "--binary", "--timing", "-Wno-fatal", "-Wno-lint",
+                 "-Wno-PINNOTFOUND", "-Wno-WIDTH", "--top-module", tb_top,
+                 "golden.v", "testbench.v", "-o", "sim"],
+                cwd=work, capture_output=True, text=True, timeout=300)
+        except subprocess.TimeoutExpired:
+            return 1, ("VERILATOR_BUILD_TIMEOUT: Verilator build exceeded 300s → "
+                       "cannot adjudicate; the FLOOR-D stands.")
         if build.returncode != 0:
             tailerr = "\n".join(
                 ln for ln in build.stderr.splitlines() if "%Error" in ln)[:400]
@@ -110,23 +133,53 @@ def adjudicate(tb: Path, golden: Path, tb_top: str, dut_name: str,
             # some verilator versions place the -o binary at work/sim
             alt = work / "sim"
             simbin = alt if alt.exists() else simbin
-        run = subprocess.run([str(simbin)], cwd=work, capture_output=True, text=True)
+        try:
+            run = subprocess.run([str(simbin)], cwd=work, capture_output=True,
+                                 text=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            return 1, ("VERILATOR_SIM_TIMEOUT: the golden's TB did not finish within "
+                       "120s under Verilator → no faithful pass; the FLOOR-D stands.")
         out = run.stdout + run.stderr
-        # The SUCCESS token is the decisive verdict: RTLLM testbenches print it
-        # ONLY when their error counter is zero. Per-sample diagnostic lines like
-        # "Failed at i=0 …" (a tolerated reset/first-cycle artifact) must NOT
-        # override a final success token — so the success token, when present,
-        # decides PASS. Absence of it = the golden did not pass under Verilator.
-        has_pass = any(t.lower() in out.lower() for t in pass_tokens)
+        # §4.05 — the DANGEROUS direction is FALSE-FAITHFUL (declare a golden a
+        # pass when it did not cleanly pass → recover a NON-real floor → inflate
+        # the published number). So FAITHFUL requires ALL THREE, and any ambiguity
+        # falls to FLOOR-stands (the safe, conservative direction):
+        #   (1) the sim EXITED CLEANLY (returncode 0) — a TB that prints a pass
+        #       token then $fatal/$stop/segfaults exits non-zero and is NOT a pass;
+        #   (2) a SUCCESS token is present (word-boundary, not substring — else a
+        #       FAIL line "Test unsuccessful"/"bypass"/"surpassed" would substring-
+        #       match "successful"/"PASS"); the default token is the SPECIFIC RTLLM
+        #       verdict phrase, not a generic status word;
+        #   (3) NO real FAILURE marker co-occurs — mirroring the official scorer
+        #       (score_rtllm.py): when "Your Design Passed" is present it is a PASS
+        #       UNLESS a real "Test failed"/"Your Design Failed" appears. A zero-
+        #       count summary ("0/100 failures", "Error count: 0", "No mismatch")
+        #       is DELIBERATELY TOLERATED — vetoing on it would mis-floor a
+        #       genuinely-recoverable design, contradicting the official scorer.
+        # (1) is a Verilator-substitution safety the official scorer does not need
+        # (a Verilator-specific crash where VCS would not crash = unfaithful → floor);
+        # an operator widens --fail-token for a non-RTLLM benchmark's failure marker.
+        def _tok_re(t: str):
+            return re.compile(r"\b" + re.escape(t) + r"\b", re.IGNORECASE)
+        pass_res = [_tok_re(t) for t in pass_tokens]
+        fail_res = [_tok_re(t) for t in fail_tokens]
+        has_pass = any(r.search(out) for r in pass_res)
+        has_fail = any(r.search(out) for r in fail_res)
         decisive = [ln for ln in out.splitlines()
-                    if any(t.lower() in ln.lower() for t in (*pass_tokens, *fail_tokens))][:4]
-        if has_pass:
-            return 0, ("VERILATOR_FAITHFUL: the golden PASSES its own TB under "
-                       "Verilator --timing → NOT a tool-gap floor. Score candidates "
-                       "under Verilator (disclose the iverilog→Verilator substitution).\n"
-                       + "\n".join(decisive))
-        return 1, ("VERILATOR_UNFAITHFUL: the golden FAILS its own TB under Verilator "
-                   "(scheduling/CDC mismatch with VCS) → FLOOR-D stands (needs VCS).\n"
+                    if any(r.search(ln) for r in (*pass_res, *fail_res))][:4]
+        if run.returncode == 0 and has_pass and not has_fail:
+            return 0, ("VERILATOR_FAITHFUL: the golden cleanly PASSES its own TB under "
+                       "Verilator --timing (exit 0, success token, no failure token) → "
+                       "NOT a tool-gap floor. Score candidates under Verilator (disclose "
+                       "the iverilog→Verilator substitution).\n" + "\n".join(decisive))
+        if run.returncode != 0:
+            why = f"the sim exited NON-ZERO ({run.returncode}) — not a clean pass"
+        elif has_fail:
+            why = "a FAILURE token co-occurs with the success token — not a clean pass"
+        else:
+            why = "no success token in the sim output"
+        return 1, ("VERILATOR_UNFAITHFUL: the golden did not cleanly pass its own TB "
+                   "under Verilator (" + why + ") → FLOOR-D stands (needs VCS).\n"
                    + "\n".join(decisive or out.splitlines()[-3:]))
     finally:
         shutil.rmtree(work, ignore_errors=True)
