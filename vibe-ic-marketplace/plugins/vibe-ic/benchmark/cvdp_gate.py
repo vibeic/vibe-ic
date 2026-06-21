@@ -174,6 +174,25 @@ def _looks_like_verilog(v: str) -> bool:
         or re.search(r"(?m)^\s*`(?:define|include|timescale|ifdef|ifndef|else|endif)\b", t))
 
 
+def _is_complete_verilog_unit(v: str) -> bool:
+    """True when `v` carries a COMPLETE compilation unit — a module/package/
+    interface/program with BOTH its declaration head AND its matching `end…`
+    keyword. Used as the final accept guard for a recovered flat file-map: prose
+    can mention a head OR an end keyword but essentially never both in the
+    correct declaration form, so this cannot be faked by documentation."""
+    t = _detection_text(v)
+    return bool(
+        (_MODULE_DECL_RE.search(t) and re.search(r"\bendmodule\b", t))
+        or (re.search(r"(?m)^\s*package\s+[A-Za-z_]\w*\s*;", t)
+            and re.search(r"\bendpackage\b", t))
+        # interface/program require the declaration form (name then ; ( or #)
+        # so prose like "the interface between modules" cannot match.
+        or (re.search(r"(?m)^\s*interface\s+[A-Za-z_]\w*\s*[;(#]", t)
+            and re.search(r"\bendinterface\b", t))
+        or (re.search(r"(?m)^\s*program\s+[A-Za-z_]\w*\s*[;(#]", t)
+            and re.search(r"\bendprogram\b", t)))
+
+
 # icarus stderr classification
 _UNKNOWN_MOD_RE = re.compile(r"Unknown module type", re.IGNORECASE)
 _ELAB_COUNT_RE = re.compile(r"^\s*\d+ error\(s\) during elaboration",
@@ -257,12 +276,12 @@ def json_code_files(completion: str) -> Optional[Dict[str, str]]:
                     and k.lower().endswith(_RTL_SUFFIXES)
                     and _looks_like_verilog(v)):
                 cand[k] = v
-        # Confirm it is genuinely a CODE map: at least one value is a complete
-        # `module <name>(…) … endmodule` (a real module declaration header, not
-        # a loose `module` token in prose).
-        if any(_MODULE_DECL_RE.search(_detection_text(v))
-               and re.search(r"\bendmodule\b", _detection_text(v))
-               for v in cand.values()):
+        # Confirm it is genuinely a CODE map: at least one value is a COMPLETE
+        # Verilog unit — a `module <name>(…) … endmodule`, or (a legitimate
+        # no-top-level-module deliverable) a `package … endpackage` /
+        # `interface … endinterface` / `program … endprogram`. A complete unit
+        # cannot be faked by prose (which has the head xor the end keyword).
+        if any(_is_complete_verilog_unit(v) for v in cand.values()):
             files = cand
     return files or None
 
@@ -1171,6 +1190,16 @@ def gate_record(rec: Dict, workdir: Path,
                     for k in list(code_field):
                         if k in fixed_map:
                             code_field[k] = fixed_map[k]
+                else:
+                    # FLAT file-map (no "code" wrapper, recovered by
+                    # json_code_files): the files ARE the top-level keys. Write
+                    # the hygiene-FIXED body back into each so the emit carries
+                    # the EXACT bytes the gate compiled (Step-2.7: otherwise the
+                    # writeback silently dropped the --fix on a flat multi-file
+                    # completion, breaking compile-equals-emit).
+                    for k in list(obj):
+                        if k in fixed_map:
+                            obj[k] = fixed_map[k]
                 out_rec["completion"] = (completion[:i]
                                          + json.dumps(obj, ensure_ascii=False)
                                          + completion[j + 1:])

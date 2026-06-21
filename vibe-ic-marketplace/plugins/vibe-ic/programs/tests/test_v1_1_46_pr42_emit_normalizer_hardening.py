@@ -160,6 +160,39 @@ def test_single_file_emit_unchanged():
     assert G._emit_or_split(_MOD_FOO, ["rtl/only.sv"]) == _MOD_FOO
 
 
+def test_pure_package_interface_map_recovered():
+    # Step-2.7 re-review false-EXCLUDE: a legitimate no-top-level-module
+    # deliverable (only a package + an interface) must be recovered, not dropped
+    # (else the raw JSON is emitted verbatim → line-1 `{` syntax error).
+    comp = json.dumps({
+        "rtl/config_pkg.sv": "package config_pkg; typedef logic[7:0] byte_t; "
+                             "localparam int DEPTH=16; endpackage",
+        "rtl/axi_if.sv": "interface axi_if(input clk); logic[31:0] addr; "
+                         "logic valid; modport master(output addr, valid); endinterface"})
+    r = G.json_code_files(comp)
+    assert r is not None and set(r) == {"rtl/config_pkg.sv", "rtl/axi_if.sv"}
+    # a doc map with the head xor end keyword is still rejected
+    assert G.json_code_files(json.dumps(
+        {"explanation": "the module foo and package bar are described"})) is None
+
+
+def test_flat_multifile_emit_carries_hygiene_fix(tmp_path):
+    # Step-2.7 re-review HIGH: a FLAT file-map multi-file completion whose bodies
+    # hygiene --fix changed must emit the FIXED bytes (compile-equals-emit), not
+    # the original un-fixed JSON (the writeback used to handle only "code" keys).
+    foo = "module foo(input clk, output reg q); always @(posedge clk) q<=~q; endmodule"
+    bar = "module bar(input clk, output reg r); always @(posedge clk) r<=~r; endmodule"
+    comp = json.dumps({"rtl/foo.sv": foo, "rtl/bar.sv": bar})
+    ok, out_rec, entry = G.gate_record(
+        {"id": "x", "completion": comp}, tmp_path,
+        expected_files=["rtl/foo.sv", "rtl/bar.sv"])
+    assert ok and entry["verdict"] == "PASS", entry
+    emit = out_rec["completion"]
+    # the power-up-determinism `initial` block --fix inserts must reach the emit
+    assert "initial" in emit
+    assert emit.lstrip().startswith("{")          # still a decodable JSON envelope
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-q"]))
