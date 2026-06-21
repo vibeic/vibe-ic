@@ -83,6 +83,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import _path_layout as _pl
+import _lesson_digest  # surface the captured-lesson digest to spec-to-rtl authors
 import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
 # v0.2.33 (ORGANIC-20260526-sv-synth-frontend) — shared SV-frontend
 # decision logic (same module Phase-3 step_synth delegates to), so the
@@ -1663,6 +1664,31 @@ def step_rtl_gen(project: Path, ic_class: str) -> StepResult:
                 extras={"fallback_skill": None,
                         "deferred_to": "analog_track",
                         "class_config": config})
+        # ROUTING FIX — surface the captured-lesson digest to the spec-to-rtl /
+        # catalog-glue author. Shape-C blind authors already get this digest
+        # (benchmark_dispatch._render_lesson_digest); a runner-driven (Shape-B)
+        # author got NOTHING and re-invented genre-DETERMINED topologies (e.g.
+        # the odd/fractional clock-divider dual-edge-OR level form), falling into
+        # wording traps. Deterministically write the SAME chip-AGNOSTIC corpus
+        # (every active `### Skill:`, no per-genre filter -> no mis-route, no
+        # leak) next to the expected RTL so the author MUST-READ it before
+        # authoring. Best-effort: a render failure never blocks the WAIVE.
+        digest_path = None
+        n_lessons = 0
+        try:
+            stage1 = _pl.phase2_stage1_dir(project)
+            n_lessons = _lesson_digest.render_lesson_digest(stage1)
+            if n_lessons:
+                digest_path = str(stage1 / "lessons.md")
+        except Exception:
+            pass
+        lessons_hint = (
+            f"\nMANDATORY before authoring: open `{digest_path}` ({n_lessons} "
+            f"chip-AGNOSTIC genre-convention lessons) and APPLY every section "
+            f"whose '**When to apply**' matches this design's genre — these are "
+            f"captured general topology/convention patterns, NOT per-problem "
+            f"answers."
+            if digest_path else "")
         skill = config.get("fallback_skill") or "spec-to-rtl"
         if catalog_matches_summary:
             skill = "catalog-glue-author"
@@ -1671,10 +1697,12 @@ def step_rtl_gen(project: Path, ic_class: str) -> StepResult:
             time.time() - t0,
             f"IC class {ic_class!r} registered but rtl_gen=null. "
             f"Recommended action: AI invokes skill `{skill}`."
-            + catalog_hint,
+            + catalog_hint + lessons_hint,
             extras={"fallback_skill": skill,
                     "class_config": config,
-                    "ip_catalog_matches": catalog_matches_summary})
+                    "ip_catalog_matches": catalog_matches_summary,
+                    "lessons_digest": digest_path,
+                    "lessons_count": n_lessons})
 
     gen = PROGRAMS_DIR / gen_name
     if not gen.is_file():
