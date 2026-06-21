@@ -341,20 +341,22 @@ adder, LFSR (Galois/Fibonacci), Gray-code counter, one-hot/Johnson counter, pari
 generator/checker, priority encoder, barrel shifter, edge detector — implement its **canonical
 form** from domain knowledge rather than re-deriving from scratch; the reference is the standard
 implementation. This is general IC knowledge applied to a spec that explicitly invokes a known
-circuit (NOT reading any hidden reference). **Moore/Mealy tension when realising a named circuit:**
-some named functions have an output that is inherently a function of the CURRENT input (e.g. a
-serial 2's-complementer outputs `z = x ^ (a 1 has already been seen)`). A spec's "Moore" label
-describes the **state register**, not a prohibition on an input-dependent output expression — so the
-realisation is 2 states A="no 1 seen" / B="a 1 seen" (registered, async reset→A) with a
-combinational `z = x ^ (state==B)` (state A → `z=x` copy incl. the first 1; state B → `z=~x`
-invert). Recognise the named algorithm; then anchor it to the stated reset/boundary.
-*Cautionary residual (anonymized):* a serial 2's-complementer family — three independent blind
-forms all mismatch the bench despite computing the correct function (hand-verified 4→4, 6→2
-LSB-first). When the canonical function is provably right yet the testbench still mismatches every
-vector, the bench is enforcing an **output-latency / reset convention the prompt does not state**
-(registered-vs-combinational output phase, value during reset). That is an underspecification —
-**flag it** (see the spec-defect skill); do NOT keep mutating the output phase against the hidden
-bench, which is overfitting.
+circuit (NOT reading any hidden reference). **Moore vs Mealy when realising a named serial circuit —
+the prose's machine-type label is BINDING:** when a spec explicitly says **"Moore"**, the output is
+a function of the registered **STATE ONLY**, never of the current input — even when the named
+function has a tempting compact Mealy form. A serial 2's-complementer, for example, *can* be written
+in 2 states with a combinational `z = x ^ (state==B)`, but that Mealy output asserts ONE CYCLE EARLY
+and mismatches a Moore reference on ≈ HALF the vectors. The faithful **Moore** realisation keeps the
+output state-only and accepts the one-cycle lag the Moore testbench samples for: the canonical
+3-state form `A: x?C:A;  B: x?B:C;  C: x?B:C;` (async reset→A) with `z = (state==C)` — the output
+reads STATE, not `x`. Recognise the named algorithm, then realise it in the machine TYPE the prose
+states.
+*Discriminating signature:* a **≈N/2 (~50%) mismatch on a "Moore"-declared serial scanner is the
+one-cycle output-timing error** — fix it by moving to the state-only registered Moore output; do
+**NOT** mislabel it an output-latency underspecification / spec defect (the Moore reference is
+faithful — the prose already bound the machine type). Cross-ref the "A Moore machine registers its
+output" skill. (A genuine spec-defect flag stays reserved for a function that is provably correct
+under BOTH machine types yet still mismatches — not for choosing the wrong type against a stated one.)
 
 ## Cross-Layer Consistency Matrix
 
