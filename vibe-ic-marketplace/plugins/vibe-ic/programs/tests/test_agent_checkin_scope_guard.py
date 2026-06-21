@@ -40,26 +40,47 @@ def test_core_agent_may_touch_anything(path):
 
 
 # --------------------------------------------------------------------------
-# benchmark-agent — benchmark-data/ + backlog allowed; plugin/MCP/other denied
+# benchmark-agent (2026-06-21 "USE PR to issue bugs"): benchmark-data/ (results)
+# AND plugin/MCP (fixes via version-less PR) allowed — but NEVER MIXED in one
+# commit (the anti-gaming NO-MIX invariant). backlog + other paths denied.
 # --------------------------------------------------------------------------
-@pytest.mark.parametrize("path", [P_BENCH_DATA, P_BENCH_RUN, P_BACKLOG])
-def test_benchmark_agent_allowed_paths_pass(path):
+@pytest.mark.parametrize("path", [
+    P_BENCH_DATA, P_BENCH_RUN,         # results
+    P_PLUGIN, P_PLUGIN_SKILL, P_MCP,   # plugin/MCP fixes (pure commit, for a PR)
+])
+def test_benchmark_agent_pure_result_or_pure_fix_passes(path):
     assert g.evaluate("benchmark-agent", [path]) == []
 
 
 @pytest.mark.parametrize("path,zone", [
-    (P_PLUGIN, "plugin"),
-    (P_PLUGIN_SKILL, "plugin"),
-    (P_MCP, "MCP (mcp-eda)"),   # NO-LEAK: MCP is under the plugin tree
+    (P_BACKLOG, "backlog"),        # NO MORE backlog — must now be caught
     (P_ROOT, "repo (other)"),
     (P_TOOLS, "repo (other)"),
 ])
 def test_benchmark_agent_forbidden_paths_still_caught(path, zone):
-    """NO-LEAK: benchmark-agent must NEVER pass a plugin / MCP / other path."""
+    """NO-LEAK: benchmark-agent must NEVER pass a backlog / root / tools path."""
     viol = g.evaluate("benchmark-agent", [path])
     assert len(viol) == 1
     assert viol[0]["path"] == path
     assert viol[0]["zone"] == zone
+
+
+def test_benchmark_agent_NOMIX_results_plus_plugin_is_blocked():
+    """§4.05 LOAD-BEARING: the anti-gaming NO-MIX invariant must catch a commit
+    that bundles a benchmark RESULT with a plugin/MCP edit (the hand-patch-and-
+    report-the-inflated-number vector)."""
+    for fix in (P_PLUGIN, P_PLUGIN_SKILL, P_MCP):
+        viol = g.evaluate("benchmark-agent", [P_BENCH_DATA, fix])
+        zones = [v["zone"] for v in viol]
+        assert any(z.startswith("NO-MIX") for z in zones), (fix, zones)
+
+
+def test_benchmark_agent_NOMIX_no_leak_pure_commits_pass():
+    """§4.05 no-leak boundary: ONLY the MIX is blocked — a pure plugin-fix commit
+    (no results) and a pure result commit (no plugin) both PASS, so the gate is
+    not too wide and still lets the legitimate PR / result channels through."""
+    assert g.evaluate("benchmark-agent", [P_PLUGIN, P_PLUGIN_SKILL, P_MCP]) == []   # pure fix
+    assert g.evaluate("benchmark-agent", [P_BENCH_DATA, P_BENCH_RUN]) == []          # pure results
 
 
 # --------------------------------------------------------------------------
@@ -96,20 +117,23 @@ def test_design_time_roles_may_not_check_in_anything(role, path):
 # Mixed lists, dedup, normalization
 # --------------------------------------------------------------------------
 def test_mixed_list_reports_only_the_offender():
-    viol = g.evaluate("benchmark-agent", [P_BENCH_DATA, P_PLUGIN, P_BACKLOG])
-    assert [v["path"] for v in viol] == [P_PLUGIN]
+    # benchmark-agent: a pure result + a now-forbidden backlog path -> only the
+    # backlog is an offender (no plugin present, so no NO-MIX).
+    viol = g.evaluate("benchmark-agent", [P_BENCH_DATA, P_BACKLOG])
+    assert [v["path"] for v in viol] == [P_BACKLOG]
 
 
 def test_path_normalization_absolute_and_dotslash():
-    abs_plugin = "/home/reyerchu/vibe-ic/" + P_PLUGIN
-    assert g.normalize_path(abs_plugin) == P_PLUGIN
+    abs_backlog = "/home/reyerchu/vibe-ic/" + P_BACKLOG
+    assert g.normalize_path("/home/reyerchu/vibe-ic/" + P_PLUGIN) == P_PLUGIN
     assert g.normalize_path("./" + P_BENCH_DATA) == P_BENCH_DATA
-    # benchmark-agent: the absolute plugin path still gets caught
-    assert len(g.evaluate("benchmark-agent", [abs_plugin])) == 1
+    # benchmark-agent: an absolute BACKLOG path (now forbidden) still gets caught
+    assert len(g.evaluate("benchmark-agent", [abs_backlog])) == 1
 
 
 def test_duplicate_paths_collapsed():
-    viol = g.evaluate("benchmark-agent", [P_PLUGIN, P_PLUGIN, "./" + P_PLUGIN])
+    # use a still-forbidden path (backlog) so dedup collapses to a single violation
+    viol = g.evaluate("benchmark-agent", [P_BACKLOG, P_BACKLOG, "./" + P_BACKLOG])
     assert len(viol) == 1
 
 
@@ -127,10 +151,19 @@ def test_cli_pass(capsys):
 
 
 def test_cli_fail(capsys):
-    rc = g.main(["--role", "benchmark-agent", "--paths", P_PLUGIN])
+    # backlog is now forbidden for benchmark-agent (PR-not-backlog directive)
+    rc = g.main(["--role", "benchmark-agent", "--paths", P_BACKLOG])
     assert rc == 1
     out = capsys.readouterr().out
-    assert "FAIL" in out and "plugin" in out
+    assert "FAIL" in out and "backlog" in out
+
+
+def test_cli_fail_nomix(capsys):
+    # NO-MIX: bundling a result with a plugin edit fails with the split hint
+    rc = g.main(["--role", "benchmark-agent", "--paths", P_BENCH_DATA, P_PLUGIN])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "FAIL" in out and "NO-MIX" in out and "SPLIT" in out.upper()
 
 
 def test_cli_unknown_role_is_arg_error():
