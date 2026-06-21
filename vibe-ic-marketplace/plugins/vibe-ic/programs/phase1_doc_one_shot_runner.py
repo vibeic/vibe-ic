@@ -2955,6 +2955,119 @@ def _l1_bullet_port_extract(text: str) -> List[Dict[str, Any]]:
     return out
 
 
+# ── directional-prose port extractor (Inputs:/Outputs: headings) ─────────────
+# Convergence 2026-06-21: a large class of CVDP specs state their ports as a
+# bullet list under a DIRECTION heading rather than a "Ports:" heading, in two
+# forms the `markdown_bullet_under_heading` walker above does not catch:
+#   - Inputs:                          #### Inputs (1-bit width each):
+#       - [7:0] in:  An 8-bit ...      - **i_S**: Set signal
+#       - [2:0] out: A 3-bit ...       - **i_clk**: Clock signal
+# i.e. (1) a `[msb:lsb]` WIDTH PREFIX before the name, and (2) a MARKDOWN-BOLD
+# `**name**` identifier — both under an `Inputs:`/`Output(s):`/`Inout:` heading
+# (bulleted `- Inputs:`, `#### Inputs ...:`, `**Inputs:**`, or a plain line).
+# Direction comes from the HEADING (not a default). When the deterministic
+# extractor leaves these ports out, a blind RTL author guesses the port
+# name/case and the cocotb harness fails to bind ("contains no child object
+# named X"). Emitted via _add_pin, whose width-aware dedup keeps the richer of
+# any name collision — so this NEW source can only ADD or ENRICH, never drop a
+# port another extractor already found (zero-regression by construction).
+# chip-AGNOSTIC: direction-heading + bullet-definition shape only.
+_RE_DIRECTIONAL_PORT_HEADING = re.compile(
+    r"(?im)^\s*(?:[-*+]\s+|#{1,6}\s+)?\*{0,2}_{0,2}"
+    r"(?P<dir>input|output|inout)s?\b"
+    r"[^:\n]{0,40}?:?\s*\*{0,2}\s*$"
+)
+# a bullet that DEFINES a port: optional [w] prefix, optional **/` wrappers,
+# the identifier, optional [w] suffix, then a COLON (definition, not prose).
+_RE_DIRECTIONAL_PORT_BULLET = re.compile(
+    r"^\s*[-*+]\s+"
+    r"(?:\[(?P<wpre>[^\]\n]{1,24})\]\s*)?"
+    r"(?:\*{1,2}|__|`)?\s*"
+    r"(?P<name>[A-Za-z_]\w{1,40})"
+    r"(?:\*{1,2}|__|`)?\s*"
+    r"(?:\[(?P<wpost>[^\]\n]{1,24})\]\s*)?"
+    r"\s*[:：]"
+    r"(?P<desc>[^\n]{0,200})?$"
+)
+_DIRECTIONAL_PORT_STOP = {
+    "input", "inputs", "output", "outputs", "inout", "inouts",
+    "signal", "signals", "port", "ports", "pin", "pins", "description",
+    "parameter", "parameters", "note", "notes", "example", "examples",
+    "functionality", "behavior", "behaviour", "overview", "interface",
+    "where", "the", "this", "register", "registers", "field", "fields",
+}
+
+
+def _l1_directional_prose_port_extract(text: str) -> List[Dict[str, Any]]:
+    """Ports stated as bullets under an `Inputs:`/`Output(s):`/`Inout:`
+    heading, with a `[msb:lsb]` width prefix or a `**bold**` name. Returns
+    [{name, mode, width, description}]. Precision: a bullet contributes ONLY
+    when it is a COLON definition (name immediately followed by `:`); a prose
+    sentence and a stop-word token never qualify."""
+    out: List[Dict[str, Any]] = []
+    if not text:
+        return out
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        hm = _RE_DIRECTIONAL_PORT_HEADING.match(lines[i])
+        if not hm:
+            i += 1
+            continue
+        mode = {"input": "input", "output": "output",
+                "inout": "inout"}[hm.group("dir").lower()]
+        # a heading parenthetical width default, e.g. "(1-bit width each)"
+        head_w = None
+        hw = re.search(r"(\d{1,5})\s*[- ]?bit", lines[i], re.I)
+        if hw:
+            head_w = hw.group(1)
+        # consume the bullet block that follows (any indent), stop at the
+        # next directional heading or a non-bullet, non-blank narrative line.
+        j = i + 1
+        while j < len(lines):
+            ln = lines[j]
+            if not ln.strip():
+                j += 1
+                continue
+            if _RE_DIRECTIONAL_PORT_HEADING.match(ln):
+                break
+            if not re.match(r"\s*[-*+]\s+", ln):
+                # a non-bullet line ends the block UNLESS it is an indented
+                # continuation of the previous bullet's description.
+                if ln[:1] in (" ", "\t"):
+                    j += 1
+                    continue
+                break
+            bm = _RE_DIRECTIONAL_PORT_BULLET.match(ln)
+            j += 1
+            if not bm:
+                continue
+            name = bm.group("name")
+            if not name or name.lower() in _DIRECTIONAL_PORT_STOP \
+                    or len(name) < 2:
+                continue
+            wpre, wpost = bm.group("wpre"), bm.group("wpost")
+            wraw = wpre or wpost
+            width = None
+            if wraw and ":" in wraw:                 # [msb:lsb]
+                bw = re.match(r"\s*([^:]+):([^\]]+)\s*$", wraw)
+                if bw:
+                    try:
+                        width = str(abs(int(bw.group(1).strip())
+                                        - int(bw.group(2).strip())) + 1)
+                    except ValueError:
+                        width = f"[{wraw}]"
+            elif wraw and wraw.strip().isdigit():     # [8]
+                width = wraw.strip()
+            if width is None and head_w:
+                width = head_w
+            desc = (bm.group("desc") or "").strip() or None
+            out.append({"name": name, "mode": mode,
+                        "width": width, "description": desc})
+        i = j
+    return out
+
+
 # v1.6.256 — for #116 field-agent round-2 feedback. Same
 # parenthetical-relaxation as the L1 port heading above.
 _RE_L9_BULLET_SUBMOD_HEADING = re.compile(
@@ -18897,6 +19010,15 @@ def gen_l1_datasheet(project: Path,
                 ev.append({
                     "literal": lit,
                     "label": "pin (markdown bullet under heading)"})
+        # Convergence 2026-06-21 — directional-prose ports are a WEAK source
+        # (Inputs:/Output(s): heading + `[w:0] name:` / `**name**:` bullets).
+        # They are NOT added here in the primary per-file pass: doing so made
+        # pin_table non-empty and shadowed the richer L9 cross-walk mirror
+        # (wb2ahb 21→10, dot_product 13→11, …). Instead the prose source runs
+        # ONLY as a post-cross-walk FALLBACK for a still-empty pin_table — see
+        # _v1_6_555_crosswalk_l9_ports_to_l1_pin_table's caller below — so it
+        # captures the prose-only designs (8x3_priority_encoder 0→2,
+        # apb_gpio 0→11, …) with ZERO regression to any richer-source design.
         # v1.6.250 — for #109 field-agent round-3 feedback. Markdown
         # CommonMark 4-space-indented Verilog blocks. The scanner
         # tolerates internal blank lines between port groups (per
@@ -51630,19 +51752,43 @@ def _post_emit_crosswalk_l9_ports_to_l1_pin_table_v1_6_555(
         l1 = _try_load_l_doc(project, "L1_DATASHEET")
     except Exception:
         l1 = None
+    if not isinstance(l1, dict):
+        return
     try:
         l9 = _try_load_l_doc(project, "L9_INTEGRATION_SPEC")
     except Exception:
         l9 = None
-    if not isinstance(l1, dict) or not isinstance(l9, dict):
-        return
-    l9_ports = (
-        l9.get("ports")
-        or l9.get("top_ports")
-        or l9.get("top_module_pins")
-        or [])
-    if not _v1_6_555_crosswalk_l9_ports_to_l1_pin_table(
-            l1, l9_ports):
+    changed = False
+    # (1) L9 cross-walk mirror — the RICHER source; runs first and wins.
+    if isinstance(l9, dict):
+        l9_ports = (
+            l9.get("ports")
+            or l9.get("top_ports")
+            or l9.get("top_module_pins")
+            or [])
+        if _v1_6_555_crosswalk_l9_ports_to_l1_pin_table(l1, l9_ports):
+            changed = True
+    # (2) directional-prose FALLBACK — convergence 2026-06-21. ONLY when the
+    # pin_table is STILL empty after the primary harvest AND the L9 mirror, so
+    # it never shadows a richer source (zero-regression): it recovers the
+    # prose-only designs whose ports live in `Inputs:`/`Output(s):` bullets the
+    # structural walkers miss (8x3_priority_encoder 0→2, apb_gpio 0→11, …).
+    if not (l1.get("pin_table") or []):
+        prose_text = _v1_6_collect_input_docs_text(project)
+        prose = _l1_directional_prose_port_extract(prose_text or "")
+        if prose:
+            l1["pin_table"] = [{
+                "name": e["name"],
+                "mode": e.get("mode"),
+                "width": e.get("width"),
+                "io_standard": None,
+                "function": e.get("description"),
+                "evidence": "directional-prose Inputs/Outputs bullet",
+                "extraction_strategy": "directional_prose_port",
+            } for e in prose]
+            l1["no_pin_table_in_input"] = False
+            changed = True
+    if not changed:
         return
     _ensure_bool_flags(l1)
     out = (_pl.generated_docs_dir(project)
@@ -51650,6 +51796,26 @@ def _post_emit_crosswalk_l9_ports_to_l1_pin_table_v1_6_555(
     out.write_text(
         json.dumps(l1, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8")
+
+
+def _v1_6_collect_input_docs_text(project: Path) -> str:
+    """Concatenate the project's input-doc text (the source the L-doc walkers
+    ran on) for a late prose re-scan. Chip-AGNOSTIC: reads the staged input
+    corpus only."""
+    chunks: List[str] = []
+    for d in (project / "input" / "docs",
+              project / "input_doc",
+              _pl.input_doc_dir(project) if hasattr(_pl, "input_doc_dir")
+              else None):
+        if d and d.is_dir():
+            for f in sorted(d.iterdir()):
+                if f.is_file() and f.suffix.lower() in (
+                        ".md", ".txt", ".rst", ".adoc", ".markdown", ""):
+                    try:
+                        chunks.append(f.read_text(errors="replace"))
+                    except Exception:
+                        pass
+    return "\n\n".join(chunks)
 
 
 # v1.6.554 — for #376 P3 ORGANIC. Bidirectional L2.timing ↔ L8.synthesis
