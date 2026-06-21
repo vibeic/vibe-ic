@@ -229,8 +229,13 @@ def role_scope_gate(role: Optional[str],
     if not violations:
         return GateResult("agent_checkin_scope_guard", 0,
                           f"role '{role}' — all {len(files)} path(s) in scope"), False
-    # Any violation landing in a REJECT zone is unsalvageable-by-patch.
-    reject = any(v["zone"] in _REJECT_ZONES for v in violations)
+    # Any violation landing in a REJECT zone is unsalvageable-by-patch. A NO-MIX
+    # violation (a measure-and-author role bundling benchmark results WITH a
+    # plugin/MCP edit — the anti-gaming vector) is likewise unsalvageable: it
+    # cannot be patched, only SPLIT into a pure result commit + a pure plugin-fix
+    # PR, so it is a REJECT too.
+    reject = any(v["zone"] in _REJECT_ZONES or v["zone"].startswith("NO-MIX")
+                 for v in violations)
     zones = sorted({v["zone"] for v in violations})
     paths = [v["path"] for v in violations]
     summary = (f"role '{role}' may NOT check in {len(violations)} path(s) "
