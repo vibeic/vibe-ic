@@ -100,6 +100,99 @@ def _detection_text(code: str) -> str:
     t = _BLOCK_COMMENT_RE.sub(" ", code)
     t = _LINE_COMMENT_RE.sub(" ", t)
     return _STRING_LIT_RE.sub('""', t)
+
+
+def _mask_code(code: str) -> str:
+    """An EQUAL-LENGTH copy of `code` with the *contents* of // line comments,
+    /* */ block comments and "..." string literals replaced by spaces (newlines
+    preserved). Unlike `_detection_text` (which collapses spans and shifts
+    offsets) this preserves a 1:1 offset map, so a keyword match on the mask
+    indexes directly back into the RAW bytes — required for slicing real
+    `module…endmodule` blocks out of a blob without being fooled by the words
+    `module` / `endmodule` sitting inside a comment or a string literal."""
+    out = list(code)
+    i, n = 0, len(code)
+    state = None  # None | 'line' | 'block' | 'str'
+    while i < n:
+        c = code[i]
+        if state is None:
+            if c == '/' and i + 1 < n and code[i + 1] == '/':
+                out[i] = out[i + 1] = ' '; state = 'line'; i += 2; continue
+            if c == '/' and i + 1 < n and code[i + 1] == '*':
+                out[i] = out[i + 1] = ' '; state = 'block'; i += 2; continue
+            if c == '"':
+                out[i] = ' '; state = 'str'; i += 1; continue
+            i += 1
+        elif state == 'line':
+            if c == '\n':
+                state = None
+            else:
+                out[i] = ' '
+            i += 1
+        elif state == 'block':
+            if c == '*' and i + 1 < n and code[i + 1] == '/':
+                out[i] = out[i + 1] = ' '; state = None; i += 2; continue
+            if c != '\n':
+                out[i] = ' '
+            i += 1
+        else:  # 'str'
+            if c == '\\' and i + 1 < n:
+                out[i] = ' '; out[i + 1] = ' ' if code[i + 1] != '\n' else '\n'
+                i += 2; continue
+            if c == '"':
+                out[i] = ' '; state = None; i += 1; continue
+            if c != '\n':
+                out[i] = ' '
+            i += 1
+    return ''.join(out)
+
+
+# A REAL module declaration header: `module <name>` immediately followed by a
+# port list `(`, a parameter list `#(`, a bare `;`, or a package-import header
+# `import <pkg>::…`. Distinguishes genuine RTL from prose that merely says "the
+# module foo connects ... endmodule" or "module fifo extends the base buffer"
+# (where the name is followed by an ordinary English word). The import arm
+# requires the `pkg::` scope-resolution token so a prose "module fetch import
+# stage" cannot match; `extends` is intentionally NOT accepted (a module never
+# `extends`, but the word is common in English descriptions).
+_MODULE_DECL_RE = re.compile(
+    r"\bmodule\s+[A-Za-z_]\w*\s*(?:#\s*\(|\(|;|import\s+[A-Za-z_]\w*\s*::)")
+
+
+def _looks_like_verilog(v: str) -> bool:
+    """True when `v` is plausibly Verilog SOURCE (not prose that mentions RTL
+    keywords). Used to keep a doc/notes value out of a recovered flat file-map.
+    Judged on the comment/string-stripped view so a fenced snippet or a comment
+    cannot vote yes. The directive and package/interface/program arms are
+    LINE-ANCHORED (a real declaration / directive starts its line) so an English
+    sentence that merely mentions ``the package`` or ``remember to `include``
+    mid-line cannot vote yes (Step-2.7 re-review)."""
+    t = _detection_text(v)
+    return bool(
+        _MODULE_DECL_RE.search(t)
+        or re.search(r"(?m)^\s*(?:package|interface|program)\s+[A-Za-z_]\w*\s*[;(]", t)
+        or re.search(r"(?m)^\s*`(?:define|include|timescale|ifdef|ifndef|else|endif)\b", t))
+
+
+def _is_complete_verilog_unit(v: str) -> bool:
+    """True when `v` carries a COMPLETE compilation unit — a module/package/
+    interface/program with BOTH its declaration head AND its matching `end…`
+    keyword. Used as the final accept guard for a recovered flat file-map: prose
+    can mention a head OR an end keyword but essentially never both in the
+    correct declaration form, so this cannot be faked by documentation."""
+    t = _detection_text(v)
+    return bool(
+        (_MODULE_DECL_RE.search(t) and re.search(r"\bendmodule\b", t))
+        or (re.search(r"(?m)^\s*package\s+[A-Za-z_]\w*\s*;", t)
+            and re.search(r"\bendpackage\b", t))
+        # interface/program require the declaration form (name then ; ( or #)
+        # so prose like "the interface between modules" cannot match.
+        or (re.search(r"(?m)^\s*interface\s+[A-Za-z_]\w*\s*[;(#]", t)
+            and re.search(r"\bendinterface\b", t))
+        or (re.search(r"(?m)^\s*program\s+[A-Za-z_]\w*\s*[;(#]", t)
+            and re.search(r"\bendprogram\b", t)))
+
+
 # icarus stderr classification
 _UNKNOWN_MOD_RE = re.compile(r"Unknown module type", re.IGNORECASE)
 _ELAB_COUNT_RE = re.compile(r"^\s*\d+ error\(s\) during elaboration",
@@ -157,6 +250,39 @@ def json_code_files(completion: str) -> Optional[Dict[str, str]]:
         for k, v in code.items():
             if isinstance(k, str) and isinstance(v, str):
                 files[k] = v
+    # FLAT FILE-MAP fallback — a `{"rtl/foo.sv": "module foo...", ...}` object
+    # with NO "code" wrapper key. Agents (especially on multi-file problems)
+    # repeatedly emit this shape; the official `parse_model_response` only
+    # unwraps a "code" key, so the raw JSON was written verbatim as the .sv →
+    # a line-1 `{` syntax error → ELAB_ERROR even though clean RTL was inside.
+    # Recover the files here so the gate's #680 emit-normalization re-emits the
+    # format the harness decodes. TIGHT GUARD (must not misread a JSON-schema /
+    # doc-only answer object as code): fire ONLY when there is no "code" key AND
+    # at least one value carries a REAL Verilog module (a `module` declaration
+    # AND `endmodule`); a SystemRDL/JSON-schema deliverable carries neither.
+    if not files and "code" not in obj:
+        cand: Dict[str, str] = {}
+        for k, v in obj.items():
+            # A flat file-map's KEY is a code-FILE PATH (`rtl/foo.sv`); a
+            # doc/prose answer's key (`explanation` / `answer` / `spec` /
+            # `reasoning` / `description`) is NOT. Collect ONLY code-suffix keys
+            # whose VALUE is real Verilog source — so prose that merely mentions
+            # `module … endmodule` (Step-2.7: a doc answer or an in-string ```
+            # fence under a non-path key) is never mis-recovered and force-
+            # compiled into a false BLOCK of the tolerated doc_only path. A
+            # `.vh`/`.svh` value that is documentation (not source) is likewise
+            # excluded so it is not pulled into the compile payload.
+            if (isinstance(k, str) and isinstance(v, str)
+                    and k.lower().endswith(_RTL_SUFFIXES)
+                    and _looks_like_verilog(v)):
+                cand[k] = v
+        # Confirm it is genuinely a CODE map: at least one value is a COMPLETE
+        # Verilog unit — a `module <name>(…) … endmodule`, or (a legitimate
+        # no-top-level-module deliverable) a `package … endpackage` /
+        # `interface … endinterface` / `program … endprogram`. A complete unit
+        # cannot be faked by prose (which has the head xor the end keyword).
+        if any(_is_complete_verilog_unit(v) for v in cand.values()):
+            files = cand
     return files or None
 
 
@@ -622,6 +748,39 @@ def _load_synth_scored_map(path) -> Dict[str, bool]:
     return out
 
 
+def _load_expected_files_map(path) -> Dict[str, List[str]]:
+    """{id: [expected rtl/*.sv, …]} from a CVDP dataset JSONL — the
+    AUTHORITATIVE per-id list of files the official harness writes the response
+    into (the record's `output.context` keys; values may be blank in the public
+    set but the KEYS name the deliverable files). Used to split a single-blob
+    completion for a MULTI-FILE problem so the scorer does not duplicate every
+    module into every slot. chip-AGNOSTIC: pure file-path structure."""
+    out: Dict[str, List[str]] = {}
+    p = Path(path)
+    if not p.is_file():
+        return out
+    for ln in p.read_text(errors="replace").splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            d = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(d, dict):
+            continue
+        rid = d.get("id")
+        oc = (d.get("output") or {}).get("context") \
+            if isinstance(d.get("output"), dict) else None
+        if rid is None or not isinstance(oc, dict):
+            continue
+        rtl = [k for k in oc
+               if isinstance(k, str) and k.lower().endswith(_RTL_SUFFIXES)]
+        if len(rtl) > 1:                      # only multi-file ids are relevant
+            out[str(rid)] = sorted(rtl)
+    return out
+
+
 def yosys_smoke(code: str, workdir: Path,
                 stubs_text: str = "",
                 synth_scored: Optional[bool] = None) -> Tuple[bool, str]:
@@ -825,9 +984,116 @@ def yosys_smoke(code: str, workdir: Path,
     return True, headline + " (" + "; ".join(details) + ")"
 
 
+# ── MULTI-FILE emit split (ORGANIC — convergence campaign 2026-06-21) ────────
+# A MULTI-FILE problem (the dataset's output.context lists >1 rtl/*.sv) whose
+# completion is a SINGLE concatenated blob (one bare/fenced module set, or a
+# single-file-shaped JSON) is mis-assembled by the official scorer: it writes
+# the WHOLE blob into EACH expected rtl/ slot, so every module is declared once
+# per file → iverilog 'already declared' duplicate-module compile error → the
+# whole design fails to elaborate even though the RTL is correct. (Root cause of
+# 7 residual failures this campaign: axis_border_gen, elevator_control_*,
+# huffman, ping_pong_buffer.) When --dataset supplies the authoritative expected
+# file list, SPLIT the blob into one file per expected path so the scorer writes
+# exactly one module per file. chip-AGNOSTIC: pure module-name structure.
+
+def _parse_modules(text: str) -> Dict[str, str]:
+    """{module_name: full `module…endmodule` source block}. Verilog modules do
+    not nest, so a flat scan from each `module <name>` to its next `endmodule`
+    is exact. Boundary detection runs on the COMMENT/STRING-MASKED view (Step-2.7
+    fix) so the literal words `module` / `endmodule` sitting inside a // comment,
+    a /* */ block, or a string literal can neither truncate a block early nor
+    re-key it — the captured bytes are sliced from the RAW text at the masked
+    offsets (the mask is length-preserving). Leading preamble before the first
+    module is re-attached to the first file by the splitter."""
+    mods: Dict[str, str] = {}
+    mask = _mask_code(text)
+    for m in re.finditer(r"\bmodule\s+([A-Za-z_]\w*)", mask):
+        em = re.search(r"\bendmodule\b", mask[m.end():])
+        if not em:
+            continue
+        mods[m.group(1)] = text[m.start():m.end() + em.end()]
+    return mods
+
+
+def _rtl_only(files: List[str]) -> List[str]:
+    return [f for f in files if str(f).lower().endswith(_RTL_SUFFIXES)]
+
+
+def _basename_stem(path: str) -> str:
+    base = path.rsplit("/", 1)[-1]
+    return base[:base.rfind(".")] if "." in base else base
+
+
+def _split_blob_to_expected(combined: str,
+                            expected_files: List[str]) -> Optional[Dict[str, str]]:
+    """Split a single concatenated RTL blob into {expected_path: source}, one
+    module per expected file matched by basename (rtl/foo.sv ← module foo).
+    CONSERVATIVE — returns None (→ caller falls back to a lossless emit) unless
+    a clean, LOSSLESS 1:1 partition exists:
+      * EVERY expected rtl file has a matching `module <basename>` in the blob;
+      * the expected rtl basenames are UNIQUE (two paths sharing a basename —
+        rtl/foo.sv + sub/foo.sv — would duplicate the SAME module into both and
+        re-introduce the very `already declared` error this splitter prevents).
+    Leading PREAMBLE before the first module (a `package`/`import`/`` `timescale``
+    block) is preserved by prepending it to the first file (Step-2.7: it must
+    NOT be dropped). Any extra (helper/submodule) modules with no expected file
+    are appended to the first expected file so each module appears EXACTLY once
+    across the set."""
+    rtl_files = _rtl_only(expected_files)
+    if len(rtl_files) <= 1:
+        return None
+    bases = [_basename_stem(f) for f in rtl_files]
+    if len(set(bases)) != len(bases):       # basename collision → cannot map 1:1
+        return None
+    mods = _parse_modules(combined)
+    if not mods:
+        return None
+    result: Dict[str, str] = {}
+    used: set = set()
+    for f, base in zip(rtl_files, bases):
+        if base not in mods:
+            return None                      # incomplete → do not force a split
+        result[f] = mods[base]
+        used.add(base)
+    # preserve any leading preamble (package / import / `timescale) that sits
+    # before the first module — dropping it would ELAB_ERROR the split.
+    mask = _mask_code(combined)
+    first = re.search(r"\bmodule\s+[A-Za-z_]\w*", mask)
+    preamble = combined[:first.start()].strip() if first else ""
+    if preamble:
+        result[rtl_files[0]] = preamble + "\n\n" + result[rtl_files[0]]
+    extra = [src for name, src in mods.items() if name not in used]
+    if extra:
+        result[rtl_files[0]] = result[rtl_files[0]] + "\n\n" + "\n\n".join(extra)
+    return result
+
+
+def _emit_or_split(combined: str,
+                   expected_files: Optional[List[str]]) -> str:
+    """Return the completion bytes to emit. For a MULTI-FILE problem the emit is
+    ALWAYS the official `{"code":[{path:src},…]}` envelope (the harness decodes
+    it file-by-file) — NEVER a bare blob, which the scorer would write into EACH
+    expected slot → duplicate-module FAIL. When a clean per-module split exists
+    it is used; otherwise the whole compiled blob goes into the FIRST expected
+    file with the others left EMPTY — a LOSSLESS, no-duplication fallback whose
+    concatenation equals exactly the bytes the gate compiled. For the dominant
+    single-file (0/1 expected rtl) shape the bare blob is emitted unchanged."""
+    rtl_files = _rtl_only(expected_files) if expected_files else []
+    if len(rtl_files) > 1:
+        split = _split_blob_to_expected(combined, expected_files)
+        if split is None:
+            split = {rtl_files[0]: combined}
+            for f in rtl_files[1:]:
+                split[f] = ""
+        return json.dumps({"code": [{k: v} for k, v in split.items()]},
+                          ensure_ascii=False)
+    return combined
+
+
 def gate_record(rec: Dict, workdir: Path,
                 prompt_text: Optional[str] = None,
-                synth_scored: Optional[bool] = None) -> Tuple[bool, Dict, Dict]:
+                synth_scored: Optional[bool] = None,
+                expected_files: Optional[List[str]] = None) -> Tuple[bool, Dict, Dict]:
     """Gate one {id, completion} record → (ok, out_record, report_entry).
 
     Hygiene runs PER CODE FENCE (each fence body is fixed separately — a
@@ -924,6 +1190,16 @@ def gate_record(rec: Dict, workdir: Path,
                     for k in list(code_field):
                         if k in fixed_map:
                             code_field[k] = fixed_map[k]
+                else:
+                    # FLAT file-map (no "code" wrapper, recovered by
+                    # json_code_files): the files ARE the top-level keys. Write
+                    # the hygiene-FIXED body back into each so the emit carries
+                    # the EXACT bytes the gate compiled (Step-2.7: otherwise the
+                    # writeback silently dropped the --fix on a flat multi-file
+                    # completion, breaking compile-equals-emit).
+                    for k in list(obj):
+                        if k in fixed_map:
+                            obj[k] = fixed_map[k]
                 out_rec["completion"] = (completion[:i]
                                          + json.dumps(obj, ensure_ascii=False)
                                          + completion[j + 1:])
@@ -940,9 +1216,14 @@ def gate_record(rec: Dict, workdir: Path,
             # to look for a fence there is none to become a line-1 backtick macro
             # directive (the #626 ELAB_ERROR shape). Invariant: the bytes the
             # gate COMPILED == the bytes the scorer compiles from the emit.
-            entry["emit_format"] = ("bare RTL (single-file no_schema "
-                                    "normalize, #680)")
-            out_rec["completion"] = combined
+            # MULTI-FILE split (when --dataset names >1 expected file) takes
+            # precedence over the single-file bare normalize; else bare.
+            emitted = _emit_or_split(combined, expected_files)
+            entry["emit_format"] = (
+                "json_dict (multi-file split from blob)"
+                if emitted is not combined and emitted != combined
+                else "bare RTL (single-file no_schema normalize, #680)")
+            out_rec["completion"] = emitted
         return True, out_rec, entry
     if kind == "bare":
         fixed, notes = hygiene_fix(code, workdir)
@@ -959,8 +1240,11 @@ def gate_record(rec: Dict, workdir: Path,
             return False, rec, entry
         entry["verdict"] = "PASS"
         out_rec = dict(rec)
-        if fixed != code:
-            out_rec["completion"] = fixed
+        # always route through the multi-file splitter (a single bare blob for a
+        # multi-file problem must be split); for single-file it returns `fixed`.
+        emitted = _emit_or_split(fixed, expected_files)
+        if emitted != code:
+            out_rec["completion"] = emitted
         return True, out_rec, entry
     # fenced: hygiene each code fence separately, compile the concatenation
     fences = code_fences(completion)
@@ -996,8 +1280,9 @@ def gate_record(rec: Dict, workdir: Path,
     # concatenates ALL hygiene-fixed fence bodies (multi-fence safe) and drops
     # any inter-fence prose that would itself break a verbatim-written .sv.
     # Unconditional (not gated on a hygiene diff): an unchanged fenced draft was
-    # the dominant ELAB_ERROR shape — it kept the fence verbatim.
-    out_rec["completion"] = combined
+    # the dominant ELAB_ERROR shape — it kept the fence verbatim. MULTI-FILE
+    # problems route through the splitter (one module per expected file).
+    out_rec["completion"] = _emit_or_split(combined, expected_files)
     return True, out_rec, entry
 
 
@@ -1607,6 +1892,16 @@ def main(argv=None) -> int:
               "any id — the yosys-smoke synth-timeout fail-safe will BLOCK every "
               "timeout (cannot confirm a problem is non-synth-scored).",
               file=sys.stderr)
+    # MULTI-FILE expected-file map (convergence 2026-06-21) — {id: [rtl files]}
+    # for ids whose official deliverable spans >1 rtl/*.sv. Lets the gate SPLIT a
+    # single-blob completion into one file per expected path so the scorer does
+    # not duplicate every module into every slot (duplicate-declaration FAIL).
+    # Only --dataset carries output.context; --prompts typically does not.
+    expected_files_map: Dict[str, List[str]] = {}
+    for _ef_src in (args.dataset, args.prompts):
+        if _ef_src:
+            for _rid, _efs in _load_expected_files_map(_ef_src).items():
+                expected_files_map.setdefault(_rid, _efs)
     # ORGANIC #705 — optional per-id latency specs the gate ENFORCES (measured
     # vs spec literal) as a pre-emit BLOCK.
     latency_specs = (_load_latency_specs(args.latency_specs)
@@ -1624,7 +1919,8 @@ def main(argv=None) -> int:
             # JSON code-dict emit (single-file → bare RTL, multi-file → JSON).
             ok, out_rec, entry = gate_record(
                 rec, wd, prompt_text=prompts.get(str(rec.get("id"))),
-                synth_scored=synth_scored_map.get(str(rec.get("id"))))
+                synth_scored=synth_scored_map.get(str(rec.get("id"))),
+                expected_files=expected_files_map.get(str(rec.get("id"))))
             # ORGANIC #559 — filename/module-name conformance (only when a
             # prompt for this id states a required rtl/<name>.sv). The
             # harness builds TOPLEVEL from the file layout, so a completion
