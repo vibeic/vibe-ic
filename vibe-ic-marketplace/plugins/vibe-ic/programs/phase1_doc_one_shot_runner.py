@@ -2974,8 +2974,19 @@ def _l1_bullet_port_extract(text: str) -> List[Dict[str, Any]]:
 # chip-AGNOSTIC: direction-heading + bullet-definition shape only.
 _RE_DIRECTIONAL_PORT_HEADING = re.compile(
     r"(?im)^\s*(?:[-*+]\s+|#{1,6}\s+)?\*{0,2}_{0,2}"
-    r"(?P<dir>input|output|inout)s?\b"
-    r"[^:\n]{0,40}?:?\s*\*{0,2}\s*$"
+    r"(?P<dir>input|output|inout)s?"
+    # Step-2.7: ONLY a port-list synonym (`ports`/`signals`/`pins`/`interface`/
+    # `list`) and/or a `(width)` parenthetical may follow the direction word. A
+    # heading with OTHER trailing words — "Output format:", "Input validation:",
+    # "Input requirements:", "Output stage description:" — is a documentation
+    # section, NOT a port list, and must NOT open a port block (its bullets are
+    # features/options, not pins). The old `[^:\n]{0,40}?` arm accepted any
+    # words and harvested those feature lists as phantom ports.
+    r"(?:\s+(?:ports?|signals?|pins?|interface|list))?"
+    r"(?:\s*\([^)\n]*\))?"
+    # the colon may sit on EITHER side of the closing emphasis wrapper, so both
+    # `**Inputs:**` (colon inside) and `**Inputs**:` (colon outside) match.
+    r"\s*[:：]?\s*\*{0,2}_{0,2}\s*[:：]?\s*$"
 )
 # a bullet that DEFINES a port: optional [w] prefix, optional **/` wrappers,
 # the identifier, optional [w] suffix, then a COLON (definition, not prose).
@@ -2995,6 +3006,14 @@ _DIRECTIONAL_PORT_STOP = {
     "parameter", "parameters", "note", "notes", "example", "examples",
     "functionality", "behavior", "behaviour", "overview", "interface",
     "where", "the", "this", "register", "registers", "field", "fields",
+    # Step-2.7: attribute/parameter words that are NEVER a top-level I/O port
+    # name — a `- Width: configurable` / `- Latency: 3 cycles` colon-bullet
+    # under an Inputs:/Outputs: heading describes a CONFIG value, not a pin.
+    # (reset / enable / valid / clock / mode are deliberately NOT here — those
+    # ARE common real port names.)
+    "width", "latency", "throughput", "protocol", "frequency",
+    "endianness", "depth", "bandwidth", "resolution", "period", "duty",
+    "encoding", "polarity", "format", "size",
 }
 
 
@@ -3046,6 +3065,17 @@ def _l1_directional_prose_port_extract(text: str) -> List[Dict[str, Any]]:
             if not name or name.lower() in _DIRECTIONAL_PORT_STOP \
                     or len(name) < 2:
                 continue
+            desc = (bm.group("desc") or "").strip() or None
+            # Step-2.7: a colon-bullet whose description is a short REGISTER /
+            # memory-map LABEL is an internal addressable register, not a
+            # top-level I/O port (`- CTRL: control register`). The label form is
+            # `[adj] register(s)` (≤2 words then "register") — NOT a port whose
+            # description merely mentions a register in a sentence (`- data_out:
+            # drives the shift register`), which must still extract as a port.
+            if desc and (
+                    re.search(r"(?i)^\W*(?:\w+\W+){0,2}registers?\W*$", desc)
+                    or re.search(r"(?i)\b(?:memory[\s-]?map|address\s+map)\b", desc)):
+                continue
             wpre, wpost = bm.group("wpre"), bm.group("wpost")
             wraw = wpre or wpost
             width = None
@@ -3056,12 +3086,14 @@ def _l1_directional_prose_port_extract(text: str) -> List[Dict[str, Any]]:
                         width = str(abs(int(bw.group(1).strip())
                                         - int(bw.group(2).strip())) + 1)
                     except ValueError:
-                        width = f"[{wraw}]"
+                        # Step-2.7: a parameterized range ("[WIDTH-1:0]") is NOT
+                        # a numeric Verilog width — emit None (unknown) so the
+                        # author derives it from the parameter, not a junk string.
+                        width = None
             elif wraw and wraw.strip().isdigit():     # [8]
                 width = wraw.strip()
             if width is None and head_w:
                 width = head_w
-            desc = (bm.group("desc") or "").strip() or None
             out.append({"name": name, "mode": mode,
                         "width": width, "description": desc})
         i = j
