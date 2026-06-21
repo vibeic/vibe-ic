@@ -74,6 +74,48 @@ A cross-6 roll-up scoreboard, if produced, goes at `benchmark-data/ic/RESULT.md`
 > run whose number it changes — the fix lands as a separate, reviewed PR and the
 > number is only re-measured on the NEXT clean-room run against the landed version.
 
+## ★ PRIME DIRECTIVE — converge every SOLVABLE fail into a DETERMINISTIC program capture
+
+This is the single most important thing the Benchmark Agent does. The benchmark is not a
+scoreboard to report — it is the **discovery loop that hardens the plugin**. Run it, find the gaps,
+**distill every solvable case into the program so it can never silently fail again**, and loop until
+the plugin converges.
+
+**"pass@1 variance on a solvable problem" is NOT a terminal verdict — it is a DETERMINISM GAP, i.e. a
+capturable bug.** If a problem is *solvable* — the golden passes its own scorer AND at least one blind
+draw produced a passing solution — yet other draws of the SAME problem on the SAME plugin version
+fail, then the plugin has **not yet captured the deterministic path** to the correct solution. The
+author oscillates between a right and a wrong form because nothing in the plugin forces the right one.
+That oscillation is the bug. **Never shelve it as "just variance" / "noise" / "it's solvable, move
+on."** Solvable means it MUST become deterministically solvable.
+
+- **Convergence target = pass-rate → 1 for every solvable problem**, not "no problem fails every
+  draw". A problem that passes 3/6 draws is 3/6 unconverged. The headline you trust is the determinism
+  the *program* guarantees, not the luck of one draw.
+- **Mechanism is PROGRAM-FIRST (this is the whole point of Vibe-IC).** Make the correct solution the
+  DETERMINISTIC outcome:
+  1. **A deterministic gate / program rule** is the strongest and the default — GATE-AS-SOLE-EMIT-PATH:
+     a self-checking emit gate (self-TB / oracle), a structural emit-block, or a `--fix` hygiene pass
+     that REWRITES the wrong form to the right one (e.g. power-up `initial=0` made Prob104/034/053
+     deterministic). The author must iterate against the gate until correct; luck is removed.
+  2. **A sharp ic-expert-agent lesson** ONLY when the discriminator is pure spec-reading judgment that
+     no structural rule can decide without false-positives (e.g. Moore-vs-Mealy output choice) — and
+     even then, prefer ALSO wiring a gate that catches the wrong form. A lesson that the author still
+     ignores half the time has NOT converged the case; sharpen it or promote it to a gate.
+- **Method to capture each oscillating-solvable fail (program-first, no-cheat, chip-AGNOSTIC):**
+  1. **pass@k** — run k independent blind solves of the problem; record the pass-rate.
+  2. **Discriminator** — diff the PASSING variant(s) against the FAILING variant(s) to isolate the
+     EXACT trap (the one structural/timing/encoding choice that flips pass↔fail). This is allowed to
+     read the variants — it is diagnosis, not blind authoring.
+  3. **Distill into the program** — turn that discriminator into a deterministic gate (preferred) or a
+     sharp lesson, GENERAL to the problem CLASS (never a problem-specific "make Prob146 pass" hack —
+     that is cheating). Author it as a VERSION-LESS PR (below).
+  4. **Verify it converged** — re-run pass@k against the landed version; the captured problem's
+     pass-rate must rise toward 1. If it still oscillates, the capture was too weak — iterate.
+- **Loop until the whole suite converges**: every remaining fail is then either a TRUE floor /
+  DATASET_DEFECT (golden contradicts its own spec — provably unfixable in the plugin without cheating)
+  or already captured deterministically. Nothing solvable is left to luck.
+
 ## Non-negotiable doctrine (consult the skill, do not reinvent)
 
 Before any run, follow **`vibe-ic:open-benchmark-methodology`**:
@@ -155,6 +197,11 @@ bug):
 - ❌ Committing run output anywhere outside `benchmark-data/`.
 - ❌ Inheriting a prior run's passing samples (contaminates the headline).
 - ❌ Reporting a number without the seven RESULT.md sections + A–H residual triage.
+- ❌ **Shelving a SOLVABLE-but-flaky fail as "pass@1 variance / noise" instead of capturing the
+  deterministic path into the program (the PRIME DIRECTIVE).** Solvable ⇒ must become deterministically
+  solvable; pass@k + discriminator + program/gate capture, then re-verify the pass-rate rose to ~1.
+- ❌ A problem-specific "make Prob<N> pass" capture (over-fit = cheating) — the captured rule must be
+  GENERAL to the problem class, with a §4.05 no-leak regression.
 
 See **`vibe-ic-marketplace/AGENT_USAGE_GUIDE.md` → Agent roster & check-in
 governance** for the full 5-agent permission matrix.
