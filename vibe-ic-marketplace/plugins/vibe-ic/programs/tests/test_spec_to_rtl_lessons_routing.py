@@ -95,6 +95,29 @@ def test_scrubber_masks_dataset_ids_but_not_general_prose():
         assert keep in scrub(f"x {keep} y"), f"over-scrubbed general prose: {keep}"
 
 
+def test_scrubber_case_insensitive_and_cvdp_and_breaks_oracle_binding():
+    # NON-CIRCULAR adversarial guard (Step-2.7 re-review): the scrubber must not
+    # be fooled by case variants or the CVDP cid form, and must BREAK a design→
+    # oracle-value association (a value is only a cheat when bound to a NAMED
+    # design — strip the name and the value is unusable).
+    scrub = _lesson_digest._scrub_design_identifiers
+    ph = "a benchmark design"
+    # case variants of the structured ids (NOT the literal lower-case patterns)
+    for tok in ("PROB099", "Circuit7", "FREQ_DIVBYODD", "Prob042", "KMAP4",
+                "Verified_freq_divbyodd"):
+        assert tok not in scrub(f"see {tok} here"), f"case-variant not scrubbed: {tok}"
+    # CVDP cid
+    assert "cvdp_copilot_fifo_0007" not in scrub("cvdp_copilot_fifo_0007 splits")
+    # a design→oracle-value sentence: the NAME is removed (binding broken),
+    # the standalone value alone is harmless without it
+    out = scrub("Prob099 expects output 0xF2 at reset")
+    assert "Prob099" not in out and ph in out
+    # general words that merely CONTAIN a pattern substring stay intact
+    for keep in ("the problem domain", "CVDP harness", "circuit topology",
+                 "verified results", "this is a frequency-divider genre"):
+        assert keep in scrub(f"z {keep} z"), f"over-scrubbed: {keep}"
+
+
 # ── NO OVER-FIRE: pure-analog WAIVE (no RTL track) surfaces no digest ─────────
 
 def test_pure_analog_waive_surfaces_no_digest(tmp_path):

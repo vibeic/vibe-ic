@@ -40,20 +40,34 @@ EXPERT_AGENT_MD = Path(__file__).resolve().parent.parent / "agents" / "ic-expert
 # content is untouched; only the leaking provenance token is neutralised. This
 # protects BOTH the Shape-C and the production spec-to-rtl digests, and guards
 # future lessons that name a design.
+# Case-INSENSITIVE (Step-2.7: PROB099 / Circuit7 / FREQ_DIVBYODD case-variants
+# must scrub too). Robustly neutralising the STRUCTURED dataset identifiers also
+# defangs an oracle-value leak: a concrete value is only a cheat when BOUND to a
+# named design ("Prob099 expects 0xF2"); strip the name and "a benchmark design
+# expects 0xF2" carries no usable association. Bare ad-hoc design leafs (a raw
+# module name) and standalone general constants are deliberately NOT scrubbed
+# here — they cannot be enumerated mechanically and a value-class scrub would
+# over-scrub general protocol facts (e.g. the public eSPI error code 0x02); their
+# blindness is the CAPTURE-TIME policy's job (a `### Skill:` section is a GENERAL
+# pattern by construction, verified blindness-clean on the live 83-lesson corpus).
 _DESIGN_ID_RE = re.compile(
     r"\b(?:"
-    r"Prob\d+(?:_[A-Za-z0-9]+)*"       # VerilogEval ProbNNN[_name]
+    r"cvdp_[A-Za-z0-9_]+"               # CVDP cid (cvdp_copilot_<x>_0007)
+    r"|Prob\d+(?:_[A-Za-z0-9]+)*"       # VerilogEval ProbNNN[_name]
     r"|circuit\d+"                       # VerilogEval circuitN family
     r"|freq_div[a-z]+"                   # RTLLM frequency dividers
     r"|verified_[A-Za-z0-9_]+"           # RTLLM golden filenames
     r"|kmap\d+"                          # K-map problem leafs
-    r")\b"
+    r")\b",
+    re.IGNORECASE,
 )
 
 
 def _scrub_design_identifiers(text: str) -> str:
     """Neutralise benchmark design identifiers so the author-facing digest carries
-    no design-name→solution association (blindness-preserving)."""
+    no design-name→solution association (blindness-preserving). See _DESIGN_ID_RE
+    for scope (structured dataset ids, case-insensitive) and its honest limit
+    (bare leafs / standalone constants are the capture-time policy's domain)."""
     return _DESIGN_ID_RE.sub("a benchmark design", text)
 
 _DIGEST_HEAD = (
