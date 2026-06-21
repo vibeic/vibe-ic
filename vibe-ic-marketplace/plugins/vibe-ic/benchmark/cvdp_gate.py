@@ -100,6 +100,80 @@ def _detection_text(code: str) -> str:
     t = _BLOCK_COMMENT_RE.sub(" ", code)
     t = _LINE_COMMENT_RE.sub(" ", t)
     return _STRING_LIT_RE.sub('""', t)
+
+
+def _mask_code(code: str) -> str:
+    """An EQUAL-LENGTH copy of `code` with the *contents* of // line comments,
+    /* */ block comments and "..." string literals replaced by spaces (newlines
+    preserved). Unlike `_detection_text` (which collapses spans and shifts
+    offsets) this preserves a 1:1 offset map, so a keyword match on the mask
+    indexes directly back into the RAW bytes — required for slicing real
+    `module…endmodule` blocks out of a blob without being fooled by the words
+    `module` / `endmodule` sitting inside a comment or a string literal."""
+    out = list(code)
+    i, n = 0, len(code)
+    state = None  # None | 'line' | 'block' | 'str'
+    while i < n:
+        c = code[i]
+        if state is None:
+            if c == '/' and i + 1 < n and code[i + 1] == '/':
+                out[i] = out[i + 1] = ' '; state = 'line'; i += 2; continue
+            if c == '/' and i + 1 < n and code[i + 1] == '*':
+                out[i] = out[i + 1] = ' '; state = 'block'; i += 2; continue
+            if c == '"':
+                out[i] = ' '; state = 'str'; i += 1; continue
+            i += 1
+        elif state == 'line':
+            if c == '\n':
+                state = None
+            else:
+                out[i] = ' '
+            i += 1
+        elif state == 'block':
+            if c == '*' and i + 1 < n and code[i + 1] == '/':
+                out[i] = out[i + 1] = ' '; state = None; i += 2; continue
+            if c != '\n':
+                out[i] = ' '
+            i += 1
+        else:  # 'str'
+            if c == '\\' and i + 1 < n:
+                out[i] = ' '; out[i + 1] = ' ' if code[i + 1] != '\n' else '\n'
+                i += 2; continue
+            if c == '"':
+                out[i] = ' '; state = None; i += 1; continue
+            if c != '\n':
+                out[i] = ' '
+            i += 1
+    return ''.join(out)
+
+
+# A REAL module declaration header: `module <name>` immediately followed by a
+# port list `(`, a parameter list `#(`, a bare `;`, or a package-import header
+# `import <pkg>::…`. Distinguishes genuine RTL from prose that merely says "the
+# module foo connects ... endmodule" or "module fifo extends the base buffer"
+# (where the name is followed by an ordinary English word). The import arm
+# requires the `pkg::` scope-resolution token so a prose "module fetch import
+# stage" cannot match; `extends` is intentionally NOT accepted (a module never
+# `extends`, but the word is common in English descriptions).
+_MODULE_DECL_RE = re.compile(
+    r"\bmodule\s+[A-Za-z_]\w*\s*(?:#\s*\(|\(|;|import\s+[A-Za-z_]\w*\s*::)")
+
+
+def _looks_like_verilog(v: str) -> bool:
+    """True when `v` is plausibly Verilog SOURCE (not prose that mentions RTL
+    keywords). Used to keep a doc/notes value out of a recovered flat file-map.
+    Judged on the comment/string-stripped view so a fenced snippet or a comment
+    cannot vote yes. The directive and package/interface/program arms are
+    LINE-ANCHORED (a real declaration / directive starts its line) so an English
+    sentence that merely mentions ``the package`` or ``remember to `include``
+    mid-line cannot vote yes (Step-2.7 re-review)."""
+    t = _detection_text(v)
+    return bool(
+        _MODULE_DECL_RE.search(t)
+        or re.search(r"(?m)^\s*(?:package|interface|program)\s+[A-Za-z_]\w*\s*[;(]", t)
+        or re.search(r"(?m)^\s*`(?:define|include|timescale|ifdef|ifndef|else|endif)\b", t))
+
+
 # icarus stderr classification
 _UNKNOWN_MOD_RE = re.compile(r"Unknown module type", re.IGNORECASE)
 _ELAB_COUNT_RE = re.compile(r"^\s*\d+ error\(s\) during elaboration",
@@ -170,11 +244,23 @@ def json_code_files(completion: str) -> Optional[Dict[str, str]]:
     if not files and "code" not in obj:
         cand: Dict[str, str] = {}
         for k, v in obj.items():
+            # A flat file-map's KEY is a code-FILE PATH (`rtl/foo.sv`); a
+            # doc/prose answer's key (`explanation` / `answer` / `spec` /
+            # `reasoning` / `description`) is NOT. Collect ONLY code-suffix keys
+            # whose VALUE is real Verilog source — so prose that merely mentions
+            # `module … endmodule` (Step-2.7: a doc answer or an in-string ```
+            # fence under a non-path key) is never mis-recovered and force-
+            # compiled into a false BLOCK of the tolerated doc_only path. A
+            # `.vh`/`.svh` value that is documentation (not source) is likewise
+            # excluded so it is not pulled into the compile payload.
             if (isinstance(k, str) and isinstance(v, str)
-                    and (k.lower().endswith(_RTL_SUFFIXES)
-                         or _MODULE_RE.search(_detection_text(v)))):
+                    and k.lower().endswith(_RTL_SUFFIXES)
+                    and _looks_like_verilog(v)):
                 cand[k] = v
-        if any(_MODULE_RE.search(_detection_text(v))
+        # Confirm it is genuinely a CODE map: at least one value is a complete
+        # `module <name>(…) … endmodule` (a real module declaration header, not
+        # a loose `module` token in prose).
+        if any(_MODULE_DECL_RE.search(_detection_text(v))
                and re.search(r"\bendmodule\b", _detection_text(v))
                for v in cand.values()):
             files = cand
@@ -894,11 +980,16 @@ def yosys_smoke(code: str, workdir: Path,
 def _parse_modules(text: str) -> Dict[str, str]:
     """{module_name: full `module…endmodule` source block}. Verilog modules do
     not nest, so a flat scan from each `module <name>` to its next `endmodule`
-    is exact. Leading preamble (timescale/comments before the first module) is
-    not captured here — it is re-attached to the first file by the splitter."""
+    is exact. Boundary detection runs on the COMMENT/STRING-MASKED view (Step-2.7
+    fix) so the literal words `module` / `endmodule` sitting inside a // comment,
+    a /* */ block, or a string literal can neither truncate a block early nor
+    re-key it — the captured bytes are sliced from the RAW text at the masked
+    offsets (the mask is length-preserving). Leading preamble before the first
+    module is re-attached to the first file by the splitter."""
     mods: Dict[str, str] = {}
-    for m in re.finditer(r"\bmodule\s+([A-Za-z_]\w*)", text):
-        em = re.search(r"\bendmodule\b", text[m.end():])
+    mask = _mask_code(text)
+    for m in re.finditer(r"\bmodule\s+([A-Za-z_]\w*)", mask):
+        em = re.search(r"\bendmodule\b", mask[m.end():])
         if not em:
             continue
         mods[m.group(1)] = text[m.start():m.end() + em.end()]
@@ -909,31 +1000,49 @@ def _rtl_only(files: List[str]) -> List[str]:
     return [f for f in files if str(f).lower().endswith(_RTL_SUFFIXES)]
 
 
+def _basename_stem(path: str) -> str:
+    base = path.rsplit("/", 1)[-1]
+    return base[:base.rfind(".")] if "." in base else base
+
+
 def _split_blob_to_expected(combined: str,
                             expected_files: List[str]) -> Optional[Dict[str, str]]:
     """Split a single concatenated RTL blob into {expected_path: source}, one
     module per expected file matched by basename (rtl/foo.sv ← module foo).
-    CONSERVATIVE: returns None (→ caller keeps the single-blob emit) unless
-    EVERY expected rtl file has a matching module in the blob — a partial split
-    would write an empty/wrong file and is never safer than the status quo.
-    Any extra (helper/submodule) modules with no expected file are appended to
-    the first expected file so each module still appears EXACTLY once across the
-    set (compiles clean when the harness concatenates them)."""
+    CONSERVATIVE — returns None (→ caller falls back to a lossless emit) unless
+    a clean, LOSSLESS 1:1 partition exists:
+      * EVERY expected rtl file has a matching `module <basename>` in the blob;
+      * the expected rtl basenames are UNIQUE (two paths sharing a basename —
+        rtl/foo.sv + sub/foo.sv — would duplicate the SAME module into both and
+        re-introduce the very `already declared` error this splitter prevents).
+    Leading PREAMBLE before the first module (a `package`/`import`/`` `timescale``
+    block) is preserved by prepending it to the first file (Step-2.7: it must
+    NOT be dropped). Any extra (helper/submodule) modules with no expected file
+    are appended to the first expected file so each module appears EXACTLY once
+    across the set."""
     rtl_files = _rtl_only(expected_files)
     if len(rtl_files) <= 1:
+        return None
+    bases = [_basename_stem(f) for f in rtl_files]
+    if len(set(bases)) != len(bases):       # basename collision → cannot map 1:1
         return None
     mods = _parse_modules(combined)
     if not mods:
         return None
     result: Dict[str, str] = {}
     used: set = set()
-    for f in rtl_files:
-        base = f.rsplit("/", 1)[-1]
-        base = base[:base.rfind(".")] if "." in base else base
+    for f, base in zip(rtl_files, bases):
         if base not in mods:
             return None                      # incomplete → do not force a split
         result[f] = mods[base]
         used.add(base)
+    # preserve any leading preamble (package / import / `timescale) that sits
+    # before the first module — dropping it would ELAB_ERROR the split.
+    mask = _mask_code(combined)
+    first = re.search(r"\bmodule\s+[A-Za-z_]\w*", mask)
+    preamble = combined[:first.start()].strip() if first else ""
+    if preamble:
+        result[rtl_files[0]] = preamble + "\n\n" + result[rtl_files[0]]
     extra = [src for name, src in mods.items() if name not in used]
     if extra:
         result[rtl_files[0]] = result[rtl_files[0]] + "\n\n" + "\n\n".join(extra)
@@ -942,15 +1051,23 @@ def _split_blob_to_expected(combined: str,
 
 def _emit_or_split(combined: str,
                    expected_files: Optional[List[str]]) -> str:
-    """Return the completion bytes to emit. For a MULTI-FILE problem with a
-    clean complete split, emit the official `{"code":[{path:src},…]}` envelope
-    (the harness decodes it file-by-file); otherwise emit the bare blob (the
-    dominant single-file no_schema shape)."""
-    if expected_files and len(_rtl_only(expected_files)) > 1:
+    """Return the completion bytes to emit. For a MULTI-FILE problem the emit is
+    ALWAYS the official `{"code":[{path:src},…]}` envelope (the harness decodes
+    it file-by-file) — NEVER a bare blob, which the scorer would write into EACH
+    expected slot → duplicate-module FAIL. When a clean per-module split exists
+    it is used; otherwise the whole compiled blob goes into the FIRST expected
+    file with the others left EMPTY — a LOSSLESS, no-duplication fallback whose
+    concatenation equals exactly the bytes the gate compiled. For the dominant
+    single-file (0/1 expected rtl) shape the bare blob is emitted unchanged."""
+    rtl_files = _rtl_only(expected_files) if expected_files else []
+    if len(rtl_files) > 1:
         split = _split_blob_to_expected(combined, expected_files)
-        if split is not None:
-            return json.dumps({"code": [{k: v} for k, v in split.items()]},
-                              ensure_ascii=False)
+        if split is None:
+            split = {rtl_files[0]: combined}
+            for f in rtl_files[1:]:
+                split[f] = ""
+        return json.dumps({"code": [{k: v} for k, v in split.items()]},
+                          ensure_ascii=False)
     return combined
 
 
