@@ -270,6 +270,26 @@ def guard_export(sample: Path) -> Tuple[bool, List[str]]:
                     f"{inner!r} which is NOT in the exported file — scorer hits "
                     f"'Unknown module type: {inner}'")
 
+    # C. odd / double-edge clock-divider PHASE-FORM (level-decode vs self-toggle).
+    #    A two-intermediate OR divider (`clk_div = clk_div1 | clk_div2`) whose
+    #    intermediate is a SELF-TOGGLE (`X <= ~X`, reset 0) is phase-inverted on the
+    #    first cycle and host-FAILs (freq_divbyodd pass@6 = 0/6). The deterministic
+    #    gate SKIPs unless that exact anti-pattern holds, so it never false-blocks the
+    #    level-decode golden / a plain even divider / a non-divider.
+    try:
+        import clock_divider_phase_form_check as _cdp  # noqa: E402
+        _pf = _cdp.analyze(txt)
+        if _pf.get("phase_risky"):
+            _f = _pf["findings"][0]
+            problems.append(
+                f"clock-divider phase-form trap: output {_f['output']!r} ORs "
+                f"intermediates {_f['or_operands']} but {_f['self_toggled']} is a "
+                f"SELF-TOGGLE (`X <= ~X`) — the reset-0 toggle form is phase-INVERTED "
+                f"on the first cycle and the TB rejects it. Use the level-decode form "
+                f"`clk_divK <= (cntK < N/2)`, each intermediate reset HIGH (`1'b1`).")
+    except Exception:
+        pass
+
     # A. standalone compile. An unavailable tool is a NOTE, never a hard FAIL —
     # the structural completeness check (B) still governs the verdict.
     notes: List[str] = []
