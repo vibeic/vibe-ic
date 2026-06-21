@@ -31,6 +31,21 @@ When `phase2_one_shot_runner.step_rtl_gen` WAIVES with the message:
      `<project>/input/phase1_prompt.md` or `<project>/input/docs/*.md`. The
      prompt typically has clearer port-name and behavioral details than the
      auto-extracted L docs.
+
+   **— and CONSULT THE CAPTURED-LESSON DIGEST (MANDATORY) —**
+   The runner's WAIVE step deterministically writes
+   `<project>/phase2/stage1/lessons.md` (and sets `lessons_digest` +
+   `lessons_count` in its handoff `extras`): a chip-AGNOSTIC digest of every
+   `### Skill:` genre/topology convention captured from prior recoveries.
+   BEFORE you author, OPEN it, keyword-match THIS design's genre against each
+   section's `**When to apply**` line, and APPLY every match. These are general
+   patterns (frequency/clock-divider dual-edge-OR LEVEL topology,
+   shifter logical-vs-rotate default, FIFO Gray-pointer, restoring-divider
+   remainder width, overlapping-sequence FSM re-seed, valid/ready handshake
+   inference, …), **NOT per-problem answers** — applying them is REQUIRED, not
+   optional. A runner-driven author that skipped this re-invented a
+   genre-determined topology from the prompt's loose wording and failed; this is
+   the SAME digest Shape-C blind authors already MUST read.
 2. **Respect the blind rule**: read ONLY the L docs + original prompt. NEVER
    read `testbench.v`, `verified_*.v`, hidden cocotb harness, or any reference
    RTL the upstream benchmark ships. This is enforced by the open-benchmark-
