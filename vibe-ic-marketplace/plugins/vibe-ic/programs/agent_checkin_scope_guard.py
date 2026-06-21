@@ -149,12 +149,31 @@ def normalize_path(raw: str) -> str:
         return ""
     while p.startswith("./"):
         p = p[2:]
-    # Absolute or nested checkout path → cut at the first known repo marker.
-    for marker in _REPO_MARKERS:
-        idx = p.find(marker)
-        if idx > 0:  # marker present but not already at position 0
-            p = p[idx:]
-            break
+    # Canonicalize redundant separators a manually-supplied --paths/--paths-file
+    # might carry (Step-2.7 defense-in-depth: git --name-only is already clean, so
+    # these only enter via the operator route, but a `//` or mid-path `/./` would
+    # otherwise defeat the startswith-zone check below and weaken NO-MIX).
+    while "//" in p:
+        p = p.replace("//", "/")
+    while "/./" in p:
+        p = p.replace("/./", "/")
+    # Already repo-root-relative (the path STARTS at a known zone marker) → do
+    # NOT re-truncate, even when a LATER marker nests inside it. Step-2.7
+    # anti-gaming: the old "first marker in list order with idx>0" cut discarded
+    # the LEADING zone of a result path like
+    # `benchmark-data/run/work/vibe-ic-marketplace/.../SCORE.md` (it became
+    # `vibe-ic-marketplace/...`), so `has_result` went False and the NO-MIX gate
+    # silently failed to fire on a genuinely mixed result+plugin PR. It also
+    # mis-rooted a legit `benchmark-data/.../IP/...` result and a plugin
+    # `vibe-ic-marketplace/plugins/vibe-ic/tools/...` file.
+    if any(p.startswith(m) for m in _REPO_MARKERS):
+        return p.lstrip("/")
+    # Absolute / nested-checkout path → cut at the LEFTMOST known repo marker
+    # (smallest index), so a nested later marker cannot strip a leading zone.
+    cut = min((i for i in (p.find(m) for m in _REPO_MARKERS) if i > 0),
+              default=-1)
+    if cut > 0:
+        p = p[cut:]
     return p.lstrip("/")
 
 
