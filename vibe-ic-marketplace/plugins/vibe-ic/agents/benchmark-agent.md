@@ -111,7 +111,10 @@ on."** Solvable means it MUST become deterministically solvable.
      sharp lesson, GENERAL to the problem CLASS (never a problem-specific "make Prob146 pass" hack —
      that is cheating). Author it as a VERSION-LESS PR (below).
   4. **Verify it converged** — re-run pass@k against the landed version; the captured problem's
-     pass-rate must rise toward 1. If it still oscillates, the capture was too weak — iterate.
+     pass-rate must rise toward 1. If it still oscillates, the capture was too weak — iterate the
+     GENERAL discriminator / gate (sharpen the structural rule), NEVER converge the draft against the
+     hidden TB (that is overfitting, not capture). Every iteration must still pass the §4.05 no-leak
+     regression and land as a separate reviewed PR re-measured clean-room.
 - **Loop until the whole suite converges**: every remaining fail is then either a TRUE floor /
   DATASET_DEFECT (golden contradicts its own spec — provably unfixable in the plugin without cheating)
   or already captured deterministically. Nothing solvable is left to luck.
