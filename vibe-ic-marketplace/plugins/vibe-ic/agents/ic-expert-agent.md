@@ -700,6 +700,18 @@ _Captured by benchmark-enhancement-capture 2026-06-08 (ORGANIC #520)._
 
 _Captured by benchmark-enhancement-capture 2026-05-28._
 
+### Skill: signed integer divider — C-truncated semantics + spec-stated {remainder, quotient} packing
+
+**Pattern**: A spec-stated divider that handles "signed OR unsigned" operands and packs BOTH quotient and remainder into one result word fails the hidden TB in two silent ways even when the magnitude division is correct: (a) wrong SIGNED convention, and (b) wrong RESULT BIT-PACKING. Standard integer division is **C-truncated** (round toward zero): the quotient's sign is `dividend_sign XOR divisor_sign`, and the **remainder takes the DIVIDEND's sign** (not the divisor's). Authoring on the magnitudes and forgetting to re-apply these signs — or packing `{quotient, remainder}` when the spec says the remainder is in the UPPER bits and the quotient in the LOWER bits — self-verifies against a TB written with the same wrong convention yet mismatches the dataset TB whose `expected` is computed by the language's own signed `/` and `%`.
+
+**When to apply**: Any divider whose prose says "signed or unsigned" / has a `sign` input AND whose single result port carries both quotient and remainder (e.g. "result: remainder in the upper 8 bits, quotient in the lower 8 bits").
+
+**What to do**: Capture the operands; compute `|a| / |b|` and `|a| % |b|` on the absolute values; re-apply C-truncated signs — `q = (sign & (a[msb]^b[msb])) ? -|q| : |q|`, `r = (sign & a[msb]) ? -|r| : |r|`; assemble `result` in the EXACT bit order the spec names (read the spec's "upper/lower bits" sentence literally). Self-check the SIGNED edge vectors (−a/+b, +a/−b, −a/−b, and a remainder of 0) AND the packing order against the spec's stated layout — both are invisible to a same-convention self-TB.
+
+**Why this is GENERAL**: C-truncated division (dividend-signed remainder) is the universal Verilog/C signed `/`,`%` semantic that every dataset's reference uses; spec-stated result packing is read off the port description. No design identifier, no per-problem value.
+
+_Captured by benchmark-enhancement-capture 2026-06-21 (RTLLM signed-divider re-check: a correct C-truncated {remainder, quotient} design host-PASSes — the design is recoverable, not a floor; a shipped reference's signed bug is irrelevant because the TB's expected is the language's own signed /,%)._
+
 ### Skill: sequence detector overlap — trailing match-bit re-seeds prefix
 
 **Pattern**: For an overlapping sequence detector (e.g. detecting `10011` with overlap allowed), the trailing 1-or-0 of the matched sequence that ALSO BEGINS a new candidate prefix must re-seed that prefix. The transition from the match state on the trailing-bit input is NOT 'restart at idle'; it's 'jump to the state corresponding to that single bit as a prefix'.
