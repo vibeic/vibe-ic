@@ -303,14 +303,51 @@ def test_out_of_scope_role_touching_mcp_rejects(tmp_path):
 
 
 def test_out_of_scope_role_touching_plugin_rejects(tmp_path):
+    # field-agent is still backlog-only — touching the plugin is out-of-scope -> REJECT.
     repo, plugin = _build_clean_plugin(tmp_path, version="1.0.96")
     v = gk.review(
         "BASE", "HEAD",
         repo=repo, plugin_root=plugin,
-        role="benchmark-agent",                # benchmark-data + backlog only
+        role="field-agent",                    # backlog only
         pytest_cmd="python3 -m pytest -q programs/tests",
         override_files=[
             "vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py",  # plugin!
+        ],
+        override_cur="1.0.96", override_prev="1.0.95",
+    )
+    assert v.verdict == "REJECT", v.blocking
+
+
+def test_benchmark_agent_pure_plugin_fix_not_rejected_by_scope(tmp_path):
+    """2026-06-21 "USE PR to issue bugs": a benchmark-agent PURE plugin-fix PR
+    (no benchmark-data/ paths) is in-scope — the scope gate must NOT REJECT it."""
+    repo, plugin = _build_clean_plugin(tmp_path, version="1.0.96")
+    v = gk.review(
+        "BASE", "HEAD",
+        repo=repo, plugin_root=plugin,
+        role="benchmark-agent",
+        pytest_cmd="python3 -m pytest -q programs/tests",
+        override_files=[
+            "vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py",  # pure plugin fix
+        ],
+        override_cur="1.0.96", override_prev="1.0.95",
+    )
+    assert v.verdict != "REJECT", v.blocking
+
+
+def test_benchmark_agent_mixed_results_and_plugin_rejects(tmp_path):
+    """NO-MIX anti-gaming: a benchmark-agent commit that bundles a benchmark RESULT
+    with a plugin edit is unsalvageable -> REJECT (split into a pure result commit
+    + a pure plugin-fix PR)."""
+    repo, plugin = _build_clean_plugin(tmp_path, version="1.0.96")
+    v = gk.review(
+        "BASE", "HEAD",
+        repo=repo, plugin_root=plugin,
+        role="benchmark-agent",
+        pytest_cmd="python3 -m pytest -q programs/tests",
+        override_files=[
+            "benchmark-data/evaluation/rtllm/run/RESULT.md",          # a RESULT
+            "vibe-ic-marketplace/plugins/vibe-ic/programs/widget.py",  # + a plugin edit
         ],
         override_cur="1.0.96", override_prev="1.0.95",
     )

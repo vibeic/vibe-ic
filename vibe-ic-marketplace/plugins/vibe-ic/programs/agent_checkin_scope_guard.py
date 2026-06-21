@@ -17,20 +17,22 @@ Roles + check-in authority (the governance matrix):
   |                  | assigns versions / lands them on main        |
   | core-agent       | alias of repo-gatekeeper (author half)       |
   | gatekeeper       | alias of repo-gatekeeper (land half)         |
-  | benchmark-agent  | benchmark-data/  +  community/backlogs/      |
+  | benchmark-agent  | benchmark-data/ (results) + plugin/MCP (fixes |
+  |                  | via version-less PR) — NO-MIX in one commit  |
   | field-agent      | community/backlogs/  (files backlog only)    |
   | pm-agent         | NOTHING (Phase-1 design-time; no repo commit) |
   | ic-expert-agent  | NOTHING (Phase-1 design-time; no repo commit) |
 
-Doctrine: the plugin and the MCP server are owned by the single REPO-GATEKEEPER
-role (2026-06-18, owner directive — the former `core-agent` author role and
-`gatekeeper` land role are now ONE role: repo-gatekeeper authors the fix AND
-gates + assigns the version + lands it; `core-agent`/`gatekeeper` remain as
-aliases). Field and Benchmark agents that discover a problem do NOT edit the
-plugin/MCP — they file an ORGANIC backlog item / a version-less PR and the
-repo-gatekeeper resolves it into the plugin/MCP and lands it. The Benchmark
-agent additionally owns benchmark-data/; the Field agent owns nothing but the
-backlog mirror.
+Doctrine: the plugin and the MCP server are LANDED on main only by the single
+REPO-GATEKEEPER role (2026-06-18 — author + gate + version + land unified;
+`core-agent`/`gatekeeper` are aliases). The BENCHMARK agent (2026-06-21 owner
+directive "USE PR to issue bugs") may AUTHOR chip-AGNOSTIC plugin/MCP fixes as a
+VERSION-LESS PR (the repo-gatekeeper reviews + assigns the version + lands it) —
+it NO LONGER files a backlog. Its measure-only HONESTY is preserved not by a
+plugin ban but by the NO-MIX invariant: a single commit may carry benchmark
+RESULTS (benchmark-data/) OR plugin/MCP EDITS, never BOTH, so a hand-patch can
+never ride along in the run whose published number it changes. The Field agent
+still files the backlog mirror only; pm/ic-expert are design-time (no check-in).
 
 This is an ALLOW-LIST model (default-deny for every restricted role) — a path
 that matches no allowed prefix is a violation. `repo-gatekeeper` (and its
@@ -99,18 +101,33 @@ ROLE_ALLOW: Dict[str, Optional[List[str]]] = {
     # the gatekeeper flow keep working — they denote the SAME single role.
     "core-agent": None,        # alias of repo-gatekeeper (author half)
     "gatekeeper": None,        # alias of repo-gatekeeper (land half)
-    "benchmark-agent": [ZONE_BENCHMARK_DATA, ZONE_BACKLOG],
+    # benchmark-agent (2026-06-21, owner directive "USE PR to issue bugs"): MEASURES
+    # the plugin AND may AUTHOR chip-AGNOSTIC plugin/MCP fixes via a VERSION-LESS PR
+    # (no longer files backlog). The measure-only honesty is preserved NOT by a
+    # plugin ban but by the NO-MIX invariant below: results and plugin edits must
+    # land in SEPARATE commits, so a hand-patch can never be bundled into the run
+    # whose number it inflates.
+    "benchmark-agent": [ZONE_BENCHMARK_DATA, ZONE_PLUGIN, ZONE_MCP],
     "field-agent": [ZONE_BACKLOG],
     "pm-agent": [],
     "ic-expert-agent": [],
 }
+
+# NO-MIX anti-gaming invariant — roles that MEASURE the plugin AND may author
+# plugin/MCP fixes via PR may NOT carry BOTH benchmark RESULTS (benchmark-data/)
+# AND plugin/MCP EDITS in a SINGLE commit. Bundling a plugin patch with the run
+# that "passed because of it" is the benchmark-gaming vector; the published number
+# must reflect the runner, never a hand-patch committed alongside it. So a result
+# commit is pure benchmark-data, and a fix commit is pure plugin/MCP (a version-less
+# PR branch). repo-gatekeeper (the lander) is exempt.
+NO_MIX_ROLES = ("benchmark-agent",)
 
 # One-line description per role (for --list-roles + error context).
 ROLE_DESC: Dict[str, str] = {
     "repo-gatekeeper": "the SINGLE maintainer role — authors fixes into plugin + MCP AND gates/assigns-version/lands on main (former core-agent + gatekeeper unified); may check in anywhere",
     "core-agent": "alias of repo-gatekeeper (author half) — may check in anywhere",
     "gatekeeper": "alias of repo-gatekeeper (land half) — may check in anywhere",
-    "benchmark-agent": "runs Benchmark Evaluation / Benchmark IC — checks in benchmark-data/ + backlog only",
+    "benchmark-agent": "runs Benchmark Evaluation / Benchmark IC — checks in benchmark-data/ (results) and may author plugin/MCP fixes via a version-less PR; NO-MIX: never both in one commit",
     "field-agent": "general field usage — files backlog only; NO benchmark-data / plugin / MCP",
     "pm-agent": "Phase-1 NL dialogue — design-time, no repo check-in",
     "ic-expert-agent": "Phase-1 technical review — design-time, no repo check-in",
@@ -164,13 +181,26 @@ def evaluate(role: str, paths: List[str]) -> List[Dict[str, str]]:
     """
     violations: List[Dict[str, str]] = []
     seen = set()
+    norms: List[str] = []
     for raw in paths:
         norm = normalize_path(raw)
         if not norm or norm in seen:
             continue
         seen.add(norm)
+        norms.append(norm)
         if not path_allowed(role, norm):
             violations.append({"path": norm, "zone": classify_zone(norm)})
+    # NO-MIX anti-gaming invariant: a single commit may carry benchmark RESULTS
+    # OR plugin/MCP EDITS, never BOTH (ZONE_PLUGIN already covers ZONE_MCP since
+    # the MCP tree lives under the plugin tree).
+    if role in NO_MIX_ROLES:
+        has_result = any(n.startswith(ZONE_BENCHMARK_DATA) for n in norms)
+        has_plugin = any(n.startswith(ZONE_PLUGIN) for n in norms)
+        if has_result and has_plugin:
+            violations.append({
+                "path": "<this commit MIXES benchmark-data/ results with plugin/MCP edits>",
+                "zone": "NO-MIX (anti-gaming: split into a pure result commit + a pure plugin-fix PR)",
+            })
     return violations
 
 
@@ -263,8 +293,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         scope = "EVERYTHING" if allow is None else (
             ", ".join(allow) if allow else "NOTHING (design-time role)")
         print(f"  allowed scope for '{args.role}': {scope}")
-        print("  → file the change via an ORGANIC backlog item so the core-agent "
-              "lands it (see skill community-backlog-submit); do NOT commit it here.")
+        if any(v["zone"].startswith("NO-MIX") for v in violations):
+            print("  → SPLIT this commit: land the benchmark RESULTS as a pure "
+                  "benchmark-data/ commit, and the plugin/MCP fix as a SEPARATE "
+                  "version-less PR commit (no benchmark-data/ paths). Never bundle "
+                  "a plugin patch with the run whose number it changes.")
+        else:
+            print("  → open a VERSION-LESS PR for a plugin/MCP fix (the repo-gatekeeper "
+                  "lands it); do NOT file a backlog and do NOT bundle it with results.")
         return 1
 
     print(f"PASS: role '{args.role}' — all {result['checked']} path(s) within "
