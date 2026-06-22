@@ -31,7 +31,17 @@ WAVE2_KEYS = {
     "mealy_fsm_sequence", "fsm_prose", "dff_edge", "counter_popcount",
     "priority_encoder", "vector_ops", "timing_waveform_ext", "comb_gate",
     "residual_combinational",
+    # wave-3 (aggressive remainder)
+    "arithmetic", "counter_advanced", "serial_protocol_fsm", "nextstate_misc",
+    "behavioral_fsm", "comb_advanced",
 }
+
+# Prob099_m2014_q6c is a KNOWN dataset defect: the official testbench instantiates
+# ports Y2/Y4 that neither the prompt nor the reference declares, so it cannot
+# compile against ANY implementation. nextstate_misc emits the correct (ref-
+# equivalent) RTL but the problem is unscoreable — excluded from the host-PASS
+# accounting, not a solver leak.
+KNOWN_DATASET_DEFECTS = {"Prob099_m2014_q6c"}
 
 # documented benign multi-recognition: a complete single-output combinational table
 # is isomorphic across these views; first-fire picks one, all host-verified correct.
@@ -111,6 +121,13 @@ def test_real_dataset_dispatch_spotcheck():
         "Prob088_ece241_2014_q5b": "mealy_fsm_sequence",
         "Prob005_notgate": "comb_gate",
         "Prob001_zero": "residual_combinational",
+        # wave-3
+        "Prob024_hadd": "arithmetic",
+        "Prob068_countbcd": "counter_advanced",
+        "Prob137_fsm_serial": "serial_protocol_fsm",
+        "Prob070_ece241_2013_q2": "nextstate_misc",
+        "Prob096_review2015_fsmseq": "behavioral_fsm",
+        "Prob055_conditional": "comb_advanced",
     }
     checked = 0
     for prob, want in expect.items():

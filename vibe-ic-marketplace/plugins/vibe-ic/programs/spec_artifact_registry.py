@@ -58,6 +58,13 @@ import vector_ops_synth as _vec                 # noqa: E402  bit/byte reverse /
 import waveform_ext_synth as _wfx               # noqa: E402  waveform-table envelope extension -> RTL
 import comb_gate_synth as _cg                   # noqa: E402  single gate / wire / boolean equation -> RTL
 import residual_combinational_synth as _rc      # noqa: E402  constant output / equality comparator -> RTL
+# --- v1.1.76 extraction-completeness families (wave-3: aggressive remainder) ---
+import arithmetic_synth as _arith               # noqa: E402  half/full/N-bit/2's-comp adder + add-sub -> RTL
+import counter_advanced_synth as _cadv          # noqa: E402  BCD/saturating/down/clock counter -> RTL
+import serial_protocol_fsm_synth as _spf        # noqa: E402  serial/HDLC/protocol receiver FSM -> RTL
+import nextstate_misc_synth as _nsm             # noqa: E402  named one-hot next-state-bit / decode / QM SOP-POS -> RTL
+import behavioral_fsm_synth as _bfsm            # noqa: E402  latched seq-detector / reset-pulse counter -> RTL
+import comb_advanced_synth as _cadvc            # noqa: E402  advanced combinational catch-all (dedup'd) -> RTL
 
 
 # --------------------------------------------------------------------------- #
@@ -187,6 +194,30 @@ def _rec_residual_combinational(text: str):
     return {"present": True} if _rc.synth(text, "TopModule") else None
 
 
+def _rec_arithmetic(text: str):
+    return {"present": True} if _arith.synth(text, "TopModule") else None
+
+
+def _rec_counter_advanced(text: str):
+    return {"present": True} if _cadv.synth(text, "TopModule") else None
+
+
+def _rec_serial_protocol_fsm(text: str):
+    return {"present": True} if _spf.synth(text, "TopModule") else None
+
+
+def _rec_nextstate_misc(text: str):
+    return {"present": True} if _nsm.synth(text, "TopModule") else None
+
+
+def _rec_behavioral_fsm(text: str):
+    return {"present": True} if _bfsm.synth(text, "TopModule") else None
+
+
+def _rec_comb_advanced(text: str):
+    return {"present": True} if _cadvc.synth(text, "TopModule") else None
+
+
 # --------------------------------------------------------------------------- #
 # The catalog
 # --------------------------------------------------------------------------- #
@@ -288,6 +319,39 @@ REGISTRY: Tuple[ArtifactType, ...] = (
                  ("L4", "L15"), _rec_residual_combinational, _rc.synth,
                  "Tiny stateless circuit stated directly: constant output or an "
                  "equality comparator (boolean equations are owned by comb_gate)."),
+    # --- v1.1.76 wave-3 (aggressive remainder). Dedicated solvers before the
+    #     comb_advanced catch-all (which had its adder/one-hot shapes removed so
+    #     arithmetic / nextstate_misc own them — exactly one generator per prompt).
+    ArtifactType("arithmetic", "Integer Arithmetic Datapath", ("L4", "L15"),
+                 _rec_arithmetic, _arith.synth,
+                 "Half/full adder, N-bit ripple adder (overflow MSB), signed "
+                 "two's-complement adder + signed-overflow flag, or add/subtract by "
+                 "a stated control bit (optional zero flag). SKIPs unstated signedness."),
+    ArtifactType("counter_advanced", "Advanced Counter / Timer / Clock", ("L6", "L4", "L15"),
+                 _rec_counter_advanced, _cadv.synth,
+                 "Multi-digit BCD counter, saturating up/down counter (clamp), "
+                 "down-counter timer (load+terminal-count), 12-hour BCD clock, or "
+                 "shift-or-decrement/rollback dual register — each fully stated."),
+    ArtifactType("serial_protocol_fsm", "Serial / Protocol Receiver FSM", ("L6", "L3"),
+                 _rec_serial_protocol_fsm, _spf.synth,
+                 "Prose serial/protocol receiver FSM (start/N-data/stop framing "
+                 "[+byte capture], HDLC consecutive-1s, serial 2's complementer, "
+                 "pattern-detect+delay timer), built from stated parameters."),
+    ArtifactType("nextstate_misc", "Named Next-State Bit / Decode / Don't-Care SOP-POS",
+                 ("L6", "L4", "L15"), _rec_nextstate_misc, _nsm.synth,
+                 "Named one-hot next-state bits (Y<k>=y[k]), binary present-state "
+                 "combinational decode + Moore output, or prose don't-care minimum "
+                 "SOP/POS (Quine-McCluskey, host-verified)."),
+    ArtifactType("behavioral_fsm", "Behavioral-Prose Moore FSM", ("L6", "L3"),
+                 _rec_behavioral_fsm, _bfsm.synth,
+                 "Mechanically-complete behavioral-prose Moore FSM: latched sequence "
+                 "detector (KMP, asserts forever until reset) or reset-pulse counter. "
+                 "Narrative FSMs (Lemmings, PS/2) stay an honest AI-floor SKIP."),
+    ArtifactType("comb_advanced", "Advanced Combinational (catch-all)", ("L4", "L15", "L6"),
+                 _rec_comb_advanced, _cadvc.synth,
+                 "case-map / min-max / neighbour-vector / dual-impl / OR-of-ANDs / "
+                 "wire-list / pairwise-equality / D-latch (adders + one-hot FSM are "
+                 "deduped out — owned by arithmetic / nextstate_misc)."),
 )
 
 _BY_KEY: Dict[str, ArtifactType] = {a.key: a for a in REGISTRY}
