@@ -36,8 +36,10 @@ def test_catalog_is_typed_and_nonempty():
 
 def test_program_baseline_extracts_the_table():
     base = DP.program_baseline(FSM)
-    assert [e["element_type"] for e in base] == ["fsm_transition_table"]
-    el = base[0]
+    types = [e["element_type"] for e in base]
+    assert "fsm_transition_table" in types           # the table artifact
+    assert "pinout_table" in types                   # + the universal port baseline
+    el = next(e for e in base if e["element_type"] == "fsm_transition_table")
     assert el["metadata"]["source"] == "program" and el["metadata"]["tier"] == "table"
     assert set(el["data"]["states"]) == {"A", "B", "C", "D"}
 
