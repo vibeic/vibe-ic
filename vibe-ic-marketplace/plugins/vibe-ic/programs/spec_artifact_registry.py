@@ -41,6 +41,8 @@ import kmap_grid_synth as _kg                  # noqa: E402  K-map -> SOP RTL
 import waveform_truth_table_synth as _wf       # noqa: E402  waveform table -> RTL
 import onehot_fsm_synth as _oh                 # noqa: E402  one-hot FSM -> RTL
 import full_moore_fsm_synth as _fm             # noqa: E402  Moore FSM table -> RTL
+import ff_truth_table_synth as _ff             # noqa: E402  flip-flop truth table -> RTL
+import comb_state_table_synth as _cs           # noqa: E402  combinational state table -> RTL
 
 
 # --------------------------------------------------------------------------- #
@@ -103,6 +105,14 @@ def _rec_onehot_fsm(text: str):
     return {"present": True} if _oh.synth(text, "TopModule") else None
 
 
+def _rec_ff_truth_table(text: str):
+    return {"present": True} if _ff.synth(text, "TopModule") else None
+
+
+def _rec_comb_state_table(text: str):
+    return {"present": True} if _cs.synth(text, "TopModule") else None
+
+
 # --------------------------------------------------------------------------- #
 # The catalog
 # --------------------------------------------------------------------------- #
@@ -135,6 +145,12 @@ REGISTRY: Tuple[ArtifactType, ...] = (
     ArtifactType("onehot_fsm", "One-Hot FSM", ("L6",),
                  _rec_onehot_fsm, _oh.synth,
                  "One-hot encoded FSM next-state/output by inspection."),
+    ArtifactType("ff_truth_table", "Flip-Flop Truth Table", ("L6", "L15"),
+                 _rec_ff_truth_table, _ff.synth,
+                 "Clocked flip-flop truth table with Qold/~Qold next-state cells (JK/D/T/SR)."),
+    ArtifactType("comb_state_table", "Combinational State Table", ("L6",),
+                 _rec_comb_state_table, _cs.synth,
+                 "Combinational next_state+output logic from a table + GIVEN state encoding."),
 )
 
 _BY_KEY: Dict[str, ArtifactType] = {a.key: a for a in REGISTRY}
