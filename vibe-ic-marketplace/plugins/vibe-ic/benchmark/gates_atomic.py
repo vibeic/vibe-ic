@@ -172,6 +172,11 @@ def main():
         import full_moore_fsm_synth as _fmsynth
         import ff_truth_table_synth as _ffsynth
         import comb_state_table_synth as _cssynth
+        import mux_synth as _muxsynth                 # v1.1.75 completeness families
+        import shift_register_synth as _srsynth
+        import cellular_automaton_synth as _casynth
+        import lfsr_synth as _lfsynth
+        import kmap_sop_synth as _ksopsynth
         for _kind, _mod in (("waveform", _wsynth),  # combinational OR seq-1FF envelope
                             ("kmap_grid", _kmsynth),
                             ("onehot_fsm", _ohsynth),
@@ -186,7 +191,17 @@ def main():
                             # a COMPLETE Moore FSM table + fully-specified reset -> emit
                             # the whole state machine (free internal encoding) —
                             # Prob109_fsm1, Prob138_2012_q2fsm.
-                            ("full_moore_fsm", _fmsynth)):
+                            ("full_moore_fsm", _fmsynth),
+
+                            # v1.1.75 extraction-completeness families (append-only:
+                            # every entry above keeps its first-fire; these catch
+                            # previously-unsolved prompts). All §4.05 SKIP-safe + each
+                            # host-verified 0-mismatch on its VE-Human targets.
+                            ("multiplexer", _muxsynth),
+                            ("shift_register", _srsynth),
+                            ("cellular_automaton", _casynth),
+                            ("galois_lfsr", _lfsynth),
+                            ("kmap_sop", _ksopsynth)):    # don't-care/reordered K-maps
             _r = _mod.synth(_prompt_text, top_module)
             if _r:
                 _synth_rtl, _synth_kind = _r, _kind

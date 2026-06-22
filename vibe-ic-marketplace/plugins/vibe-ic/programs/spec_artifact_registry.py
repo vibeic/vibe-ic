@@ -43,6 +43,11 @@ import onehot_fsm_synth as _oh                 # noqa: E402  one-hot FSM -> RTL
 import full_moore_fsm_synth as _fm             # noqa: E402  Moore FSM table -> RTL
 import ff_truth_table_synth as _ff             # noqa: E402  flip-flop truth table -> RTL
 import comb_state_table_synth as _cs           # noqa: E402  combinational state table -> RTL
+import mux_synth as _mux                        # noqa: E402  N:1 multiplexer -> RTL
+import shift_register_synth as _sr              # noqa: E402  shift/rotate/barrel -> RTL
+import cellular_automaton_synth as _ca          # noqa: E402  1-D Wolfram Rule-N CA -> RTL
+import lfsr_synth as _lf                        # noqa: E402  Galois LFSR -> RTL
+import kmap_sop_synth as _ksop                  # noqa: E402  K-map incl. don't-care (host-verified) -> RTL
 
 
 # --------------------------------------------------------------------------- #
@@ -88,12 +93,15 @@ def _rec_fsm_transition_table(text: str):
     r = _fm._parse_fsm_table(text)
     if not r:
         return None
-    states, trans, mout = r
+    states, trans, mout, gov = r
     rp = _fm._parse_reset(text, set(states))
     reset = None
     if rp:
         reset = {"state": rp[0], "async": rp[1], "active_high": rp[2]}
-    return {"states": states, "transitions": trans, "moore_output": mout, "reset": reset}
+    # governing_input: per-state input name (a 2-input arrow FSM gates each state
+    # on its own named input); None-valued for the single-implicit-input forms.
+    return {"states": states, "transitions": trans, "moore_output": mout,
+            "reset": reset, "governing_input": gov}
 
 
 def _rec_waveform(text: str):
@@ -111,6 +119,26 @@ def _rec_ff_truth_table(text: str):
 
 def _rec_comb_state_table(text: str):
     return {"present": True} if _cs.synth(text, "TopModule") else None
+
+
+def _rec_multiplexer(text: str):
+    return {"present": True} if _mux.synth(text, "TopModule") else None
+
+
+def _rec_shift_register(text: str):
+    return {"present": True} if _sr.synth(text, "TopModule") else None
+
+
+def _rec_cellular_automaton(text: str):
+    return {"present": True} if _ca.synth(text, "TopModule") else None
+
+
+def _rec_galois_lfsr(text: str):
+    return {"present": True} if _lf.synth(text, "TopModule") else None
+
+
+def _rec_kmap_sop(text: str):
+    return {"present": True} if _ksop.synth(text, "TopModule") else None
 
 
 # --------------------------------------------------------------------------- #
@@ -151,6 +179,27 @@ REGISTRY: Tuple[ArtifactType, ...] = (
     ArtifactType("comb_state_table", "Combinational State Table", ("L6",),
                  _rec_comb_state_table, _cs.synth,
                  "Combinational next_state+output logic from a table + GIVEN state encoding."),
+    # --- v1.1.75 extraction-completeness families (append-only: every entry above
+    #     keeps its generate() first-fire; these catch previously-unsolved prompts).
+    ArtifactType("multiplexer", "Multiplexer", ("L4", "L15"),
+                 _rec_multiplexer, _mux.synth,
+                 "N:1 multiplexer (individual ports or packed bus) with stated data/"
+                 "select widths and, when the select space exceeds N, a stated default."),
+    ArtifactType("shift_register", "Shift / Rotate / Barrel Register", ("L6", "L8T"),
+                 _rec_shift_register, _sr.synth,
+                 "Clocked shift/rotate/barrel register: width+direction+arith/logical+"
+                 "control-priority fully stated."),
+    ArtifactType("cellular_automaton", "Cellular Automaton", ("L6", "L4"),
+                 _rec_cellular_automaton, _ca.synth,
+                 "1-D Wolfram Rule-N CA: stated rule + 3-cell neighbourhood + 0-boundaries."),
+    ArtifactType("galois_lfsr", "Galois LFSR", ("L6", "L3"),
+                 _rec_galois_lfsr, _lf.synth,
+                 "Galois-right LFSR fully stated by width + tap positions + sync reset/seed."),
+    ArtifactType("karnaugh_map_sop", "Karnaugh Map (SOP, don't-care-tolerant)", ("L15",),
+                 _rec_kmap_sop, _ksop.synth,
+                 "K-map grid incl. don't-cares (assigned 0, host-verified), reordered "
+                 "headers, 1-var/bus-indexed axes; single 1-bit output. Superset of "
+                 "karnaugh_map (which stays the don't-care-free fast path above)."),
 )
 
 _BY_KEY: Dict[str, ArtifactType] = {a.key: a for a in REGISTRY}
