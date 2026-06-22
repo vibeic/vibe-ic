@@ -118,9 +118,20 @@ def _extract_residual(text: str) -> List[dict]:
     return [_element(d["element_type"], d["data"]) for d in rows]
 
 
+def _extract_figures(text: str) -> List[dict]:
+    """The VISION tier: every figure reference + caption, classified to a vision
+    element_type and routed lead=vision for the runtime image model."""
+    try:
+        import figure_extractor as _F
+        rows = _F.extract_figures(text)
+    except Exception:
+        rows = []
+    return [_element(d["element_type"], d["data"]) for d in rows]
+
+
 # extraction-only baseline contributors (no RTL generator, feed the AI + the gates)
 _BASELINE_EXTRACTORS = (_extract_register_map, _extract_pinout, _extract_tables,
-                        _extract_parametric, _extract_residual)
+                        _extract_parametric, _extract_residual, _extract_figures)
 
 
 def program_baseline(doc_text: str) -> List[dict]:

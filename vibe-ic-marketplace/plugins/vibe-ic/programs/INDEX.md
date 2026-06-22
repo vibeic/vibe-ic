@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 722
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 722)
+- **Total programs (excluding helpers / shims):** 723
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 723)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 713 |
+| `any` | 714 |
 
 ## Alphabetical listing
 
@@ -239,6 +239,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ff_truth_table_synth` | any | — | deterministic SOLVER for a flip-flop truth table. |
 | `fibre_channel_protocol_synth` | any | — | Fibre Channel (INCITS T11 FC-FS / FC-PH) protocol synth helper. |
 | `field_agent_terminology_scan` | any | — | terminology guard for external text |
+| `figure_extractor` | any | — | the VISION tier's deterministic program side. |
 | `final_report_generate` | any | — | generate canonical, chip-AGNOSTIC final |
 | `final_test_attestation_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered |
 | `fix_fault_cut_names` | any | v0.63 | Rewrite Fault-cut netlist so escaped identifiers with embedded dots |
@@ -794,7 +795,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (713 programs)
+### `any` (714 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1005,6 +1006,7 @@ _(no programs in this group)_
 - `ff_truth_table_synth` — deterministic SOLVER for a flip-flop truth table.
 - `fibre_channel_protocol_synth` — Fibre Channel (INCITS T11 FC-FS / FC-PH) protocol synth helper.
 - `field_agent_terminology_scan` — terminology guard for external text
+- `figure_extractor` — the VISION tier's deterministic program side.
 - `final_report_generate` — generate canonical, chip-AGNOSTIC final
 - `final_test_attestation_check` — gate (v1.6.13 Wave 88, renumbered  _[Wave 88]_
 - `fix_fault_cut_names` — Rewrite Fault-cut netlist so escaped identifiers with embedded dots  _[v0.63]_
