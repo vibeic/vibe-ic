@@ -169,6 +169,7 @@ def main():
         import kmap_grid_synth as _kmsynth
         import onehot_fsm_synth as _ohsynth
         import oracle_table_synth as _otsynth
+        import full_moore_fsm_synth as _fmsynth
         for _kind, _mod in (("waveform", _wsynth),  # combinational OR seq-1FF envelope
                             ("kmap_grid", _kmsynth),
                             ("onehot_fsm", _ohsynth),
@@ -176,7 +177,11 @@ def main():
                             # (truth table / binary-encoded FSM next-state-bit) -> emit
                             # it directly, moving the problem from AI-authored+gated to
                             # program-GENERATED (Prob069_truthtable1, Prob135_m2014_q6b).
-                            ("oracle_table", _otsynth)):
+                            ("oracle_table", _otsynth),
+                            # a COMPLETE Moore FSM table + fully-specified reset -> emit
+                            # the whole state machine (free internal encoding) —
+                            # Prob109_fsm1, Prob138_2012_q2fsm.
+                            ("full_moore_fsm", _fmsynth)):
             _r = _mod.synth(_prompt_text, top_module)
             if _r:
                 _synth_rtl, _synth_kind = _r, _kind
