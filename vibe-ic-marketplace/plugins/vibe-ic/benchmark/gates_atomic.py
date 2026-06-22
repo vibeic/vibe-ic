@@ -170,9 +170,14 @@ def main():
         import onehot_fsm_synth as _ohsynth
         import oracle_table_synth as _otsynth
         import full_moore_fsm_synth as _fmsynth
+        import ff_truth_table_synth as _ffsynth
+        import comb_state_table_synth as _cssynth
         for _kind, _mod in (("waveform", _wsynth),  # combinational OR seq-1FF envelope
                             ("kmap_grid", _kmsynth),
                             ("onehot_fsm", _ohsynth),
+                            ("ff_truth_table", _ffsynth),    # flip-flop truth table (Qold)
+                            ("comb_state_table", _cssynth),  # combinational next_state+out
+
                             # any COMPLETE prompt-disclosed oracle the gate can parse
                             # (truth table / binary-encoded FSM next-state-bit) -> emit
                             # it directly, moving the problem from AI-authored+gated to
