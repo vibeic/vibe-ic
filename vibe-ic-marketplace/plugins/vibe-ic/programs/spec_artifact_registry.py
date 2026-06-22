@@ -65,6 +65,10 @@ import serial_protocol_fsm_synth as _spf        # noqa: E402  serial/HDLC/protoc
 import nextstate_misc_synth as _nsm             # noqa: E402  named one-hot next-state-bit / decode / QM SOP-POS -> RTL
 import behavioral_fsm_synth as _bfsm            # noqa: E402  latched seq-detector / reset-pulse counter -> RTL
 import comb_advanced_synth as _cadvc            # noqa: E402  advanced combinational catch-all (dedup'd) -> RTL
+# --- v1.1.77 wave-4 (multi-part decomposition of the hardest clusters) ---
+import sequential_waveform_synth as _seqwf       # noqa: E402  multi-bit/sequential waveform -> RTL
+import conway_2d_synth as _c2d                   # noqa: E402  2-D Game-of-Life-class CA -> RTL
+import gshare_predictor_synth as _gsh            # noqa: E402  gshare predictor (gate-ready; SKIPs till spec complete) -> RTL
 
 
 # --------------------------------------------------------------------------- #
@@ -218,6 +222,18 @@ def _rec_comb_advanced(text: str):
     return {"present": True} if _cadvc.synth(text, "TopModule") else None
 
 
+def _rec_sequential_waveform(text: str):
+    return {"present": True} if _seqwf.synth(text, "TopModule") else None
+
+
+def _rec_conway_2d(text: str):
+    return {"present": True} if _c2d.synth(text, "TopModule") else None
+
+
+def _rec_gshare_predictor(text: str):
+    return {"present": True} if _gsh.synth(text, "TopModule") else None
+
+
 # --------------------------------------------------------------------------- #
 # The catalog
 # --------------------------------------------------------------------------- #
@@ -352,6 +368,22 @@ REGISTRY: Tuple[ArtifactType, ...] = (
                  "case-map / min-max / neighbour-vector / dual-impl / OR-of-ANDs / "
                  "wire-list / pairwise-equality / D-latch (adders + one-hot FSM are "
                  "deduped out — owned by arithmetic / nextstate_misc)."),
+    # --- v1.1.77 wave-4: multi-part decomposition of the hardest clusters. Each is
+    #     §4.05 SKIP-safe + host-verified; mutually exclusive with all entries above.
+    ArtifactType("sequential_waveform_multibit", "Sequential / Multi-bit Waveform Table", ("L8T",),
+                 _rec_sequential_waveform, _seqwf.synth,
+                 "Multi-bit/sequential waveform variants the binary solvers skip: "
+                 "counter-by-delta, multi-bit LUT, symbolic mux, negedge-FF+transparent-"
+                 "latch, submodule composition; host-verified."),
+    ArtifactType("conway_2d", "2-D Cellular Automaton (Game of Life-class)", ("L6", "L4"),
+                 _rec_conway_2d, _c2d.synth,
+                 "2-D toroidal Moore (8-neighbour) CA: stated HxW grid + row-major packed "
+                 "vector + B.../S... birth/survival rule. Orthogonal to the 1-D Rule-N CA."),
+    ArtifactType("gshare_predictor", "gshare Branch Predictor (gate-ready)", ("L6", "L4"),
+                 _rec_gshare_predictor, _gsh.synth,
+                 "Full gshare datapath (history reg + 2-bit-saturating PHT + PC^history "
+                 "index + predict/train bypass). SKIPs unless the reset VALUES are stated "
+                 "(spec-absent in Prob153 -> honest floor); fires once a complete spec appears."),
 )
 
 _BY_KEY: Dict[str, ArtifactType] = {a.key: a for a in REGISTRY}
