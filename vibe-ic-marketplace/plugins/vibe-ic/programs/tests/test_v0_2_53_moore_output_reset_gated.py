@@ -175,14 +175,25 @@ def _block_rules(run):
     return gates, {f["rule"] for f in blk.get("findings", [])}
 
 
-def test_gate_blocks_reset_gated_form(tmp_path):
+def test_gate_auto_corrects_reset_gated_form(tmp_path):
+    # v1.1.76: the registry's `behavioral_fsm` solver fires on this reset-pulse spec
+    # ("assert shift_ena for 4 cycles then 0 forever") and emits the correct
+    # reset-pulse counter, REPLACING the author's wrong reset-gated read
+    # (`shift_ena = (cnt!=0) && !reset`) BEFORE the gate runs. The safety invariant
+    # "a wrong reset-gated read never ships" is preserved in its STRONGER form
+    # (auto-corrected, not merely blocked) — behavioral_fsm is host-verified on the
+    # real Prob095_review2015_fsmshift. The structural rule still fires STANDALONE
+    # (test_rule_fires_on_reset_gated_output), guarding the cases the synth SKIPs.
     ds, run = _stage(tmp_path, _SPEC, _GATED_RTL)
     r = _run_gate(ds, run)
-    assert r.returncode == 1, r.stdout + r.stderr
-    gates, rules = _block_rules(run)
-    assert gates["hard_gates_pass"] is False
-    assert RULE in rules
-    assert not (run / "samples" / "ProbP_sample01.sv").exists()
+    assert r.returncode == 0, r.stdout + r.stderr
+    gates, _ = _block_rules(run)
+    assert gates["steps"]["deterministic_synth"]["applied"] is True
+    assert gates["steps"]["deterministic_synth"]["kind"] == "behavioral_fsm"
+    # the wrong reset-gated read never ships — the correct auto-synthesized RTL does.
+    emitted = (run / "samples" / "ProbP_sample01.sv").read_text()
+    assert "&& !reset" not in emitted and "! reset" not in emitted
+    assert "reset-pulse counter" in emitted
 
 
 def test_gate_emits_canonical_form(tmp_path):
