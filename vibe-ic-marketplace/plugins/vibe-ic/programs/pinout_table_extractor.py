@@ -68,11 +68,12 @@ def _pipe_table(text: str) -> List[Dict]:
             continue
         idx = {}
         for j, c in enumerate(cells):
-            if c in ("pin", "signal", "name", "port"):
+            c = c.strip("`*").strip()
+            if c in ("pin", "signal", "name", "port", "訊號", "訊號名", "信號", "端口", "名稱"):
                 idx["name"] = j
-            elif c in ("dir", "direction", "i/o", "io", "type"):
+            elif c in ("dir", "direction", "i/o", "io", "type", "方向"):
                 idx["dir"] = j
-            elif c in ("width", "bits", "size"):
+            elif c in ("width", "bits", "size", "寬度", "位寬"):
                 idx["width"] = j
         if "name" in idx and "dir" in idx:
             hdr_i, cols = i, idx
@@ -81,7 +82,7 @@ def _pipe_table(text: str) -> List[Dict]:
         return []
     out = []
     for ln in lines[hdr_i + 1:]:
-        cells = [c.strip() for c in ln.split("|")]
+        cells = [c.strip().strip("`*").strip() for c in ln.split("|")]   # backtick/bold
         if len(cells) <= max(cols.values()):
             continue
         name = cells[cols["name"]]
@@ -90,11 +91,22 @@ def _pipe_table(text: str) -> List[Dict]:
         d = cells[cols["dir"]].lower().strip()
         if d not in _DIR:
             continue
-        w = None
+        w, wp = None, None
         if "width" in cols:
-            mw = re.search(r"\d+", cells[cols["width"]])
-            w = int(mw.group()) if mw else None
-        out.append({"name": name, "dir": _DIR[d], "width": w, "source": "pipe"})
+            wc = cells[cols["width"]]
+            mb = re.search(r"\[\s*([\w-]+)\s*:\s*([\w-]+)\s*\]", wc)       # [hi:lo] / [size-1:0]
+            mn = re.search(r"(\d+)\s*-?\s*bit|^\s*(\d+)\s*$", wc)
+            if mb and mb.group(1).isdigit() and mb.group(2).isdigit():
+                w = abs(int(mb.group(1)) - int(mb.group(2))) + 1
+            elif mn:
+                w = int(mn.group(1) or mn.group(2))
+            else:
+                ms = re.search(r"\b([A-Za-z]\w*)\b", wc)                  # symbolic (N / size)
+                wp = ms.group(1) if ms else None
+        row = {"name": name, "dir": _DIR[d], "width": w, "source": "pipe"}
+        if wp:
+            row["width_param"] = wp
+        out.append(row)
     return out
 
 
