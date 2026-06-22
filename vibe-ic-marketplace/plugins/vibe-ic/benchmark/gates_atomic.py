@@ -168,9 +168,15 @@ def main():
         import waveform_truth_table_synth as _wsynth
         import kmap_grid_synth as _kmsynth
         import onehot_fsm_synth as _ohsynth
+        import oracle_table_synth as _otsynth
         for _kind, _mod in (("waveform", _wsynth),  # combinational OR seq-1FF envelope
                             ("kmap_grid", _kmsynth),
-                            ("onehot_fsm", _ohsynth)):
+                            ("onehot_fsm", _ohsynth),
+                            # any COMPLETE prompt-disclosed oracle the gate can parse
+                            # (truth table / binary-encoded FSM next-state-bit) -> emit
+                            # it directly, moving the problem from AI-authored+gated to
+                            # program-GENERATED (Prob069_truthtable1, Prob135_m2014_q6b).
+                            ("oracle_table", _otsynth)):
             _r = _mod.synth(_prompt_text, top_module)
             if _r:
                 _synth_rtl, _synth_kind = _r, _kind
