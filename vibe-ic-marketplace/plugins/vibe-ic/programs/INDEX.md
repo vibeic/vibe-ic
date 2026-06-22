@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 714
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 714)
+- **Total programs (excluding helpers / shims):** 716
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 716)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 705 |
+| `any` | 707 |
 
 ## Alphabetical listing
 
@@ -153,6 +153,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `cmd_protocol_crc_verify` | any | — | Derive + verify CRC params from xlsx golden vectors. |
 | `cmd_response_conformance_check` | any | v0.50 | v0.50 plugin gate |
 | `cmd_response_otp_provenance_check` | any | — | for opcodes whose response |
+| `comb_state_table_synth` | any | — | deterministic SOLVER for a COMBINATIONAL state |
 | `connect_vs_send_test_parity_check` | any | Wave 27 | Wave 27 (v0.119.59) gate. |
 | `constants_validation` | any | — | Deterministic compliance check for rtl-constants-gen. |
 | `convergence_doctrine_present_check` | any | — | ORGANIC #716 |
@@ -235,6 +236,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `extraction_evidence_schema_check` | any | Wave 23 | gate (LL-40, v0.119.39). |
 | `fault_atpg_run` | any | — | Open-source ATPG via Fault (cloudv-io/fault). |
 | `fetch_round_trip_sentinel_check` | any | — | P0.1 deterministic gate |
+| `ff_truth_table_synth` | any | — | deterministic SOLVER for a flip-flop truth table. |
 | `fibre_channel_protocol_synth` | any | — | Fibre Channel (INCITS T11 FC-FS / FC-PH) protocol synth helper. |
 | `field_agent_terminology_scan` | any | — | terminology guard for external text |
 | `final_report_generate` | any | — | generate canonical, chip-AGNOSTIC final |
@@ -786,7 +788,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (705 programs)
+### `any` (707 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -913,6 +915,7 @@ _(no programs in this group)_
 - `cmd_protocol_crc_verify` — Derive + verify CRC params from xlsx golden vectors.
 - `cmd_response_conformance_check` — v0.50 plugin gate  _[v0.50]_
 - `cmd_response_otp_provenance_check` — for opcodes whose response
+- `comb_state_table_synth` — deterministic SOLVER for a COMBINATIONAL state
 - `connect_vs_send_test_parity_check` — Wave 27 (v0.119.59) gate.  _[Wave 27]_
 - `constants_validation` — Deterministic compliance check for rtl-constants-gen.
 - `convergence_doctrine_present_check` — ORGANIC #716
@@ -993,6 +996,7 @@ _(no programs in this group)_
 - `extraction_evidence_schema_check` — gate (LL-40, v0.119.39).  _[Wave 23]_
 - `fault_atpg_run` — Open-source ATPG via Fault (cloudv-io/fault).
 - `fetch_round_trip_sentinel_check` — P0.1 deterministic gate
+- `ff_truth_table_synth` — deterministic SOLVER for a flip-flop truth table.
 - `fibre_channel_protocol_synth` — Fibre Channel (INCITS T11 FC-FS / FC-PH) protocol synth helper.
 - `field_agent_terminology_scan` — terminology guard for external text
 - `final_report_generate` — generate canonical, chip-AGNOSTIC final
