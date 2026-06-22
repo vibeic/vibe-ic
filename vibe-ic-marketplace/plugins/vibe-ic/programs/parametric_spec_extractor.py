@@ -160,8 +160,12 @@ def extract_number_format(text: str) -> Optional[Dict]:
 
 
 def extract_pdk_target(text: str) -> Optional[Dict]:
-    m = re.search(r"\b(sky130\w*|gf180\w*|gf130\w*|asap7|nangate\w*|freepdk\w*|tsmc\w*|"
-                  r"(\d+)\s*nm)\b", text, re.I)
+    # an explicit "pdk: <value>" label wins regardless of foundry (IHP SG13G2, XFAB, ...)
+    m = re.search(r"\bpdk\b\s*[:=]\s*([A-Za-z0-9][\w .-]{1,30})", text, re.I)
+    if m:
+        return {"pdk": m.group(1).strip().rstrip(".")}
+    m = re.search(r"\b(sky130\w*|gf180\w*|gf130\w*|ihp\w*|sg13\w*|asap7|nangate\w*|"
+                  r"freepdk\w*|x?fab\w*|tsmc\w*|(\d+)\s*nm)\b", text, re.I)
     return {"pdk": m.group(1)} if m else None
 
 
