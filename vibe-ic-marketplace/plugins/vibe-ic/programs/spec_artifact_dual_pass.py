@@ -61,11 +61,37 @@ def _element(etype: str, data, *, eid: Optional[str] = None, title: Optional[str
     }
 
 
+def _extract_register_map(text: str) -> List[dict]:
+    try:
+        import regmap_table_extractor as _R
+        rows = _R.extract_regmap_table(text, "prompt")
+    except Exception:
+        rows = []
+    return [_element("register_map", {"regs": rows})] if rows else []
+
+
+def _extract_pinout(text: str) -> List[dict]:
+    try:
+        import pinout_table_extractor as _P
+        rows = _P.extract_pinout(text)
+    except Exception:
+        rows = []
+    return [_element("pinout_table", {"pins": rows})] if rows else []
+
+
+# extraction-only baseline contributors (no RTL generator, feed the AI + the gates)
+_BASELINE_EXTRACTORS = (_extract_register_map, _extract_pinout)
+
+
 def program_baseline(doc_text: str) -> List[dict]:
-    """Deterministic baseline: every LIVE program recognizer that fires, as an
-    element. This is the floor — guaranteed, zero-variance on what it covers."""
-    return [_element(a["type"], a["structured"], source="program")
-            for a in _REG.detect(doc_text)]
+    """Deterministic baseline: every LIVE program recognizer that fires + the wired
+    extraction-only extractors (register map, pinout). This is the floor —
+    guaranteed, zero-variance on what it covers."""
+    els = [_element(a["type"], a["structured"], source="program")
+           for a in _REG.detect(doc_text)]
+    for ex in _BASELINE_EXTRACTORS:
+        els += ex(doc_text)
+    return els
 
 
 def _key(el: dict):

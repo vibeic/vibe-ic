@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 718
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 718)
+- **Total programs (excluding helpers / shims):** 719
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 719)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 709 |
+| `any` | 710 |
 
 ## Alphabetical listing
 
@@ -510,6 +510,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `phase3_verify_aggregate` | any | v0.1.50 | Phase 3 backend verification aggregator (Pattern-C → program). |
 | `phy_counter_audit` | any | — | Detect bus-state-sampling anti-pattern in TX PHY counters. |
 | `picker_fixture_thrash_guard` | any | — | v1.6.63 |
+| `pinout_table_extractor` | any | — | chip-agnostic extractor for the PORT / PINOUT table. |
 | `placement_legality_check` | any | — | Step 17 (Placement) SUBSTANCE gate. |
 | `plugin_change_pytest_gate` | any | — | plugin_change_pytest_gate.py -- "Plugin-test hard rule" pre-claim-DONE gate. |
 | `plugin_full_audit` | any | — | deterministic D1 + D2 of the "have full test" audit. |
@@ -790,7 +791,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (709 programs)
+### `any` (710 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1271,6 +1272,7 @@ _(no programs in this group)_
 - `phase3_verify_aggregate` — Phase 3 backend verification aggregator (Pattern-C → program).  _[v0.1.50]_
 - `phy_counter_audit` — Detect bus-state-sampling anti-pattern in TX PHY counters.
 - `picker_fixture_thrash_guard` — v1.6.63
+- `pinout_table_extractor` — chip-agnostic extractor for the PORT / PINOUT table.
 - `placement_legality_check` — Step 17 (Placement) SUBSTANCE gate.
 - `plugin_change_pytest_gate` — plugin_change_pytest_gate.py -- "Plugin-test hard rule" pre-claim-DONE gate.
 - `plugin_full_audit` — deterministic D1 + D2 of the "have full test" audit.
