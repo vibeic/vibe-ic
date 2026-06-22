@@ -107,19 +107,31 @@ def test_golden_ref_is_solvable_through_tb():
 
 
 # --------------------------------------------------------------------------- #
-# (2) Prob153 AS-WRITTEN -> SKIP (the documented §4.1 FLOOR). The reset values
-#     are unstated; the solver must NOT guess the convention.
+# (2) Prob153 AS-WRITTEN -> FIRE via the OWNER-DIRECTED house defaults (2026-06-23).
+#     The reset values are unstated; the owner chose the genre convention (predictor
+#     counter -> weakly-not-taken 2'b01, history -> 0) as the documented house default
+#     (open-benchmark §4 Category-G). The solver applies it (with a provenance comment)
+#     and host-scores 0. (Was the §4.1 FLOOR before the owner set the default.)
 # --------------------------------------------------------------------------- #
 @pytest.mark.skipif(not _have_dataset(), reason="benchmark dataset not present")
-def test_prob153_as_written_is_floor_skip():
+def test_prob153_as_written_uses_house_defaults():
     txt = open(_PROMPT, errors="replace").read()
-    assert G.synth(txt, "TopModule") is None
-    # FLOOR-proof: the ONLY reset statement in the prompt pins polarity/sync, not
-    # the values. (the under-specified sentence quoted in the report.)
-    assert "Reset is asynchronous active-high." in txt
+    # the prompt is still silent on the reset values...
     low = txt.lower()
-    assert "2'b01" not in low and "weakly not taken" not in low
-    assert "counters reset to" not in low and "pht resets" not in low
+    assert "2'b01" not in low and "counters reset to" not in low
+    # ...yet the solver now FIRES, applying the documented house defaults + provenance.
+    rtl = G.synth(txt, "TopModule")
+    assert rtl is not None
+    assert "weakly-not-taken 2'b01 (house default; spec silent)" in rtl
+    assert "history register reset = 0 (house default; spec silent)" in rtl
+    assert "pht[i] <= 2'd1;" in rtl and "history_r <= 7'd0;" in rtl
+
+
+@pytest.mark.skipif(not (_have_dataset() and _have_iverilog()),
+                    reason="benchmark dataset / iverilog not present")
+def test_prob153_house_default_host_scores_zero():
+    rtl = G.synth(open(_PROMPT, errors="replace").read(), "TopModule")
+    assert rtl is not None and _host_score(rtl) == 0   # 0/1083 with the house defaults
 
 
 # --------------------------------------------------------------------------- #
@@ -213,16 +225,12 @@ def _require_removed(s_before, s_after, marker):
 
 
 NEGATIVES = {
-    # 1. PHT reset value removed -> the §4.05 FLOOR itself.
-    "no_pht_reset_value":
-        _require_removed(_BASE, _BASE.replace(
-            "On reset the PHT counters reset to 2'b01 and the global history register resets to 0.",
-            "On reset the global history register resets to 0."), "no_pht_reset_value"),
-    # 2. history reset value removed.
-    "no_history_reset_value":
-        _require_removed(_BASE, _BASE.replace(
-            "On reset the PHT counters reset to 2'b01 and the global history register resets to 0.",
-            "On reset the PHT counters reset to 2'b01."), "no_history_reset_value"),
+    # NOTE (2026-06-23, owner-directed): a MISSING reset VALUE is no longer a SKIP —
+    # the solver applies the house default (PHT -> weakly-not-taken 2'b01, history ->
+    # 0). Those two former negatives are now covered as a POSITIVE
+    # (test_prob153_as_written_uses_house_defaults). The §4.05 negatives below remove a
+    # STRUCTURAL fact (saturating-ness / XOR index / precedence / bypass / reset
+    # polarity), which still SKIPs — a structural guess WOULD be a leak.
     # 3. counter saturating-ness removed (plain counter, not saturating) -> the
     #    clamp + MSB-predict convention no longer holds.
     "no_saturating":

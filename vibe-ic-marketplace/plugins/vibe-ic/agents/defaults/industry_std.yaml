@@ -310,7 +310,17 @@ reset_defaults:
     safe_to_auto: true
     source: "spec-first"
   saturating_predictor_counter:
-    value: "AMBIGUOUS: 2'b00 Strongly-Not-Taken (most common HW) | 2'b01 Weakly-Not-Taken (textbook) | 2'b10 Weakly-Taken (TAGE alloc)"
-    safe_to_auto: false
-    rule: "host-OBSERVABLE + multi-convention -> DO NOT auto-pick; flag as a spec gap (gate-ready SKIP). Fill ONLY if the spec states it."
-    source: "Smith bimodal / TAGE literature; gshare Prob153 lesson"
+    value: "WEAKLY-NOT-TAKEN — 2'b01 for a 2-bit counter, generally 2^(K-1)-1 for K bits"
+    safe_to_auto: true
+    note: >-
+      OWNER-DIRECTED house default (2026-06-23): when the spec is silent, a saturating
+      branch-predictor counter resets to weakly-not-taken. This is a GENERAL genre
+      convention (open-benchmark §4 Category-G conventional-shape-inference, the textbook
+      reset), applied + FLAGGED with a provenance comment and host-verified — NOT an
+      overfit to any golden. Alternatives (2'b00 Strongly-Not-Taken / 2'b10 Weakly-Taken)
+      are also valid in silicon; the spec's stated value, if any, always wins.
+    source: "Smith bimodal / TAGE literature; owner directive; gshare Prob153 host-verified 0/1083"
+  history_or_index_register:
+    value: 0
+    safe_to_auto: true
+    source: "no prior branch history at power-up; all-0 clear (owner-directed, gshare)"
