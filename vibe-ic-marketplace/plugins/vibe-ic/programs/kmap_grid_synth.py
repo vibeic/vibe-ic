@@ -111,6 +111,18 @@ def _parse_kmap(prompt: str) -> Optional[Tuple[List[str], List[str], List[str], 
     col_label = lines[col_i].strip() if col_i >= 0 else ""
     col_bits = _label_bits(col_label)
     row_bits = _label_bits(row_label)
+    code_w = len(col_codes[0])
+    # COMPRESSED layout (VE-v2 twin): the code line carries NO row label (just the
+    # column codes), and the line above lists ALL axis bits as ONE combined label
+    # (e.g. `x[1]x[2]x[3]x[4]` over a `00 01 11 10` code line). The standard K-map
+    # reading is column-axis = the FIRST code_w bits, row-axis = the REMAINING bits.
+    # We only take this branch when the separate row label is absent and the combined
+    # label has more bits than the column-code width (so the split is unambiguous);
+    # the row-code-width validation below still cross-checks the split.
+    if (not row_bits) and col_bits and len(col_bits) > code_w \
+            and all(len(c) == code_w for c in col_codes):
+        row_bits = col_bits[code_w:]
+        col_bits = col_bits[:code_w]
     if not col_bits or not row_bits:
         return None
     # validate widths: each col code length == #col_bits; each row label len == #row_bits
@@ -188,13 +200,33 @@ def synth(prompt: str, top: str = "TopModule") -> Optional[str]:
             lits = [(b if m[b] == "1" else f"~{b}") for b in all_bits]
             terms.append("(" + " & ".join(lits) + ")")
         sop = " | ".join(terms)
-    # emit module with the prompt's exact (original-case) port list
+    # emit module with the prompt's exact (original-case) port list. PRESERVE the
+    # declared bit RANGE verbatim (`[hi:lo]`) rather than normalising to `[w-1:0]`:
+    # the K-map axis labels (and hence the emitted SOP) use the prompt's own bit
+    # indices — a 1-based `input [4:1] x` (VE-v2 twin) means the SOP references
+    # x[1..4], which a normalised `[3:0]` decl would push out of range. The host
+    # connects a same-width net LSB-aligned, so any contiguous range works.
     decl = []
     for nm, (d, w, orig) in ports.items():
-        rng = f"[{w-1}:0] " if w > 1 else ""
+        rng = _decl_range(prompt, orig, w)
         decl.append(f"    {d:<6} {rng}{orig}")
     body = f"  assign {out} = {sop};"
     return f"module {top} (\n" + ",\n".join(decl) + "\n);\n\n" + body + "\nendmodule\n"
+
+
+def _decl_range(prompt: str, port: str, width: int) -> str:
+    """The original `[hi:lo] ` range string for `port` as declared in the prompt's
+    module header, or `[width-1:0] ` (falling back to the parsed width) when no
+    explicit range is found, or `""` for a scalar. Preserves a non-zero-LSB range
+    (e.g. `[4:1]`) so emitted bit-selects stay in range."""
+    if width <= 1:
+        return ""
+    m = re.search(r"\b(?:input|output)\b\s+(?:wire|reg|logic)?\s*"
+                  r"\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*" + re.escape(port) + r"\b",
+                  prompt)
+    if m:
+        return f"[{m.group(1)}:{m.group(2)}] "
+    return f"[{width-1}:0] "
 
 
 def main(argv: Optional[List[str]] = None) -> int:
