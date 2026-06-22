@@ -98,7 +98,7 @@ CATALOG: Tuple[ElementType, ...] = (
                 "{time, inputs, outputs}", None,
                 "waveform_truth_table_synth.synth", "live"),
     ElementType("timing_parameter_table", "Timing Parameter Table", "timing", ("L8T",), "table",
-                "{setup, hold, tco, tpd, ...}", None, None, "extractor_exists"),
+                "{setup, hold, tco, tpd, ...}", None, None, "to_build"),
     ElementType("timing_diagram", "Timing Diagram (waveform)", "timing", ("L8T",), "vision",
                 "{signals[], edges[]}", None, None, "vision_pending"),
     ElementType("timing_constraints", "Timing Constraints (SDC)", "timing", ("L19",), "prose",
@@ -108,10 +108,11 @@ CATALOG: Tuple[ElementType, ...] = (
 
     # ---- D. Interface / Register ----
     ElementType("pinout_table", "Pinout / Port Table", "interface", ("L1",), "table",
-                "{pins[{name,dir,width,type,desc}]}", None, None, "extractor_exists"),
+                "{pins[{name,dir,width,type,desc}]}",
+                "pinout_table_extractor.extract_pinout", None, "live"),
     ElementType("register_map", "Register Map", "interface", ("L4",), "table",
                 "{regs[{addr,offset,access,reset,fields[]}]}",
-                "regmap_table_extractor.extract_register_table", None, "extractor_exists"),
+                "regmap_table_extractor.extract_regmap_table", None, "live"),
     ElementType("memory_map", "Memory Map", "interface", ("L4",), "table",
                 "{ranges[{start,end,block}]}", None, None, "to_build"),
     ElementType("channel_signal_catalog", "Channel Signal Catalog", "interface", ("L17",), "table",
@@ -126,7 +127,7 @@ CATALOG: Tuple[ElementType, ...] = (
                 "{fields[{name,bits,byteorder}]}", None, None, "to_build"),
     ElementType("crc_checksum_spec", "CRC / Checksum Spec", "protocol", ("L8C",), "prose",
                 "{poly, init, width, refin, refout, xorout}",
-                "crc_parameters_extracted_check", None, "extractor_exists"),
+                "crc_parameters_extracted_check", None, "to_build"),
 
     # ---- F. Arithmetic / Data ----
     ElementType("arithmetic_spec", "Arithmetic Primitive Spec", "arithmetic", ("L2", "L8C"), "prose",
@@ -140,12 +141,12 @@ CATALOG: Tuple[ElementType, ...] = (
     ElementType("memory_spec", "Memory Spec", "memory", ("L4", "L8C"), "prose",
                 "{kind, depth, width, ports, latency}", None, None, "to_build"),
     ElementType("otp_fuse_content", "OTP / Fuse Content", "memory", ("L11",), "table",
-                "{addr->bits, layout}", None, None, "extractor_exists"),
+                "{addr->bits, layout}", None, None, "to_build"),
 
     # ---- H. Analog / Mixed-Signal ----
     ElementType("analog_electrical_spec", "Analog Electrical Spec", "analog", ("L5",), "prose",
                 "{gain, bw, noise, psrr, v/i_range}",
-                "analog_a1_spec_extract", None, "extractor_exists"),
+                "analog_a1_spec_extract", None, "to_build"),
     ElementType("pvt_corner_table", "PVT Corner Table", "analog", ("L19",), "table",
                 "{corner->{p,v,t}}", None, None, "to_build"),
     ElementType("circuit_schematic", "Circuit Schematic", "analog", ("L5", "L18"), "vision",
