@@ -372,9 +372,15 @@ def _synth_binary_nextstate_moore(prompt: str, ins, outs, top: str):
     out_specs = [(n, w) for n, w in outs]
     if any(w != 1 for _, w in out_specs):
         return None
-    # the next-state-bit output must be stated as `Y[0] of the next state` (which
-    # index of the next state it is). We support the single stated bit form: the
-    # output whose prompt clause says `is Y[<k>] of the next state`.
+    # the next-state-bit output is one bit of the tabulated NEXT STATE. Two stated
+    # forms pin which bit it is — both load-bearing facts the TB compares:
+    #   (a) VE-human prose clause: `<name> is Y[<k>] of the next state`.
+    #   (b) VE-v2 terse form: the table header NAMES the next-state vector explicitly
+    #       as `Next state Y[hi:0]`, the prose asks to `implement the logic functions
+    #       Y[<k>] ...`, and the output is named `Y<k>`. Then `Y<k>` is bit k of that
+    #       next state. We require the explicit `Next state Y[...]` header so we never
+    #       guess the `Y<k>` digit is a bit index on a table that does not name Y as
+    #       the next-state vector.
     nsb = None      # (out_name, bit_index)
     for nm, _ in out_specs:
         m = re.search(
@@ -384,6 +390,19 @@ def _synth_binary_nextstate_moore(prompt: str, ins, outs, top: str):
             if nsb is not None:
                 return None  # >1 next-state-bit clauses -> ambiguous -> SKIP
             nsb = (nm, int(m.group(1)))
+    if nsb is None:
+        # (b) VE-v2: table header explicitly labels the next-state column `Next state
+        #     Y[hi:0]`; the `Y<k>`-named output is then bit k of that next state.
+        header_names_Y = re.search(r"next\s+state\s+Y\s*\[\s*\d+\s*:\s*\d+\s*\]",
+                                    prompt, re.I)
+        if header_names_Y:
+            for nm, _ in out_specs:
+                mk = re.fullmatch(r"Y(\d+)", nm)
+                if not mk:
+                    continue
+                if nsb is not None:
+                    return None  # >1 Y<k> next-state-bit outputs -> ambiguous -> SKIP
+                nsb = (nm, int(mk.group(1)))
     if nsb is None:
         return None
     nsb_name, nsb_bit = nsb
@@ -612,9 +631,12 @@ def _synth_dontcare_sop_pos(prompt: str, ins, outs, top: str):
 def _verify_msb_first(prompt: str, in_names) -> bool:
     """Confirm the prompt's worked example pins the input order as MSB-first over the
     declared input names (e.g. "7 corresponds to a,b,c,d being set to 0,1,1,1")."""
+    # whitespace-insensitive around every word so a LINE WRAP between tokens (the VE-v2
+    # twin wraps "corresponds\nto a,b,c,d being\nset to ...") parses the same as the
+    # one-line VE-human form. `\s+` (not a literal space) spans the newline.
     m = re.search(
-        r"(\d+)\s+corresponds? to\s+" + r"\s*,\s*".join(re.escape(x) for x in in_names)
-        + r"\s+being set to\s+((?:[01]\s*,\s*){%d}[01])" % (len(in_names) - 1),
+        r"(\d+)\s+corresponds?\s+to\s+" + r"\s*,\s*".join(re.escape(x) for x in in_names)
+        + r"\s+being\s+set\s+to\s+((?:[01]\s*,\s*){%d}[01])" % (len(in_names) - 1),
         prompt, re.I)
     if not m:
         return False
@@ -663,9 +685,13 @@ def synth(prompt_text: str, top: str = "TopModule"):
         rtl = _synth_named_onehot_nextstate(prompt_text, ins, outs, top)
         if rtl:
             return rtl
-    # S2: binary present-state decode + Moore output
-    if re.search(r"next\s+state", prompt_text, re.I) and re.search(
-            r"of\s+the\s+next\s+state", prompt_text, re.I):
+    # S2: binary present-state decode + Moore output. Fires when the prompt either
+    # states a `... of the next state` bit clause (VE-human) OR labels the table's
+    # next-state column explicitly as `Next state Y[hi:0]` (VE-v2 terse form); the
+    # solver itself resolves which bit each `Y<k>` output is and SKIPs on ambiguity.
+    if re.search(r"next\s+state", prompt_text, re.I) and (
+            re.search(r"of\s+the\s+next\s+state", prompt_text, re.I)
+            or re.search(r"next\s+state\s+Y\s*\[\s*\d+\s*:\s*\d+\s*\]", prompt_text, re.I)):
         rtl = _synth_binary_nextstate_moore(prompt_text, ins, outs, top)
         if rtl:
             return rtl

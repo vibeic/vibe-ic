@@ -111,7 +111,12 @@ def _parse_reset(prompt, known):
     # transition to state D and forces the machine to state A") names two and must
     # SKIP, never grab the first (Step-2.7 tabular review Finding 1).
     targets = []
-    for m in re.finditer(r"resets?\b([^.\n]*)", prompt, re.I):
+    # Capture the reset clause up to the SENTENCE end (`.`), not the first newline:
+    # the VE-v2 twin soft-wraps the clause ("...reset that resets\nthe FSM to state A"
+    # / "...resets the FSM to\nstate A"), so the "to state X" target lives on the next
+    # physical line. Spanning to the period keeps the whole clause together; the
+    # UNIQUE-target guard below still SKIPs if two different states are named.
+    for m in re.finditer(r"resets?\b([^.]*)", prompt, re.I):
         for t in re.finditer(r"\b(?:into|to)\s+state\s+(\w+)", m.group(1), re.I):
             if t.group(1) in known:
                 targets.append(t.group(1))

@@ -145,8 +145,12 @@ def _is_latched_output(prompt: str) -> bool:
     a forever/until-reset qualifier so a plain pulse never qualifies."""
     if not re.search(r"\b(?:forever|until\s+reset)\b", prompt, re.I):
         return False
+    # `[^.]` (not `[^.\n]`) so the assert-verb→1 phrase may span a soft LINE WRAP: the
+    # VE-v2 twin wraps "it should set\nstart_shifting to 1, forever, until reset". The
+    # non-greedy match still stops at the nearest "1" within the same sentence, and the
+    # forever/until-reset gate above keeps a plain pulse from qualifying.
     return bool(re.search(
-        r"\b(?:set|assert|hold|drive|keep|raise)\b[^.\n]*?\b(?:to\s+)?1\b",
+        r"\b(?:set|assert|hold|drive|keep|raise)\b[^.]*?\b(?:to\s+)?1\b",
         prompt, re.I))
 
 

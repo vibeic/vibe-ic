@@ -158,8 +158,10 @@ def _single_named_gate(text: str, ins, outs, top: str) -> Optional[str]:
     low = text.lower()
 
     # NOT gate / inverter — exactly one input, equal width.
-    if re.search(r"\bimplement\s+(?:a|an)\s+(?:1-?input\s+)?not\s+gate\b", low) or \
-       re.search(r"\bimplement\s+(?:a|an)\s+inverter\b", low):
+    # The function-fixing verb appears as "implement" (VE-human imperative/modal) or
+    # "implements" (VE-v2 "a module that implements ..."); accept both 3rd-person forms.
+    if re.search(r"\bimplements?\s+(?:a|an)\s+(?:1-?input\s+)?not\s+gate\b", low) or \
+       re.search(r"\bimplements?\s+(?:a|an)\s+inverter\b", low):
         if len(ins) != 1:
             return None
         in_name, in_w = ins[0]
@@ -173,7 +175,7 @@ def _single_named_gate(text: str, ins, outs, top: str) -> Optional[str]:
 
     # 2-input (or N-input) AND/OR/NAND/NOR/XOR/XNOR gate.
     m = re.search(
-        r"\bimplement\s+(?:a|an)\s+(?:(\d+)\s*-?\s*input\s+)?"
+        r"\bimplements?\s+(?:a|an)\s+(?:(\d+)\s*-?\s*input\s+)?"
         r"(and|or|nand|nor|xnor|xor)\s+gate\b",
         low,
     )
@@ -231,7 +233,9 @@ def _single_named_gate(text: str, ins, outs, top: str) -> Optional[str]:
 # --------------------------------------------------------------------------- #
 def _wire_passthrough(text: str, ins, outs, top: str) -> Optional[str]:
     low = text.lower()
-    is_wire = bool(re.search(r"\bbehave\s+like\s+a\s+wire\b", low))
+    # "behave like a wire" (VE-human modal) or "behaves like a wire" (VE-v2 "a module
+    # that behaves like a wire"); accept both 3rd-person verb forms.
+    is_wire = bool(re.search(r"\bbehaves?\s+like\s+a\s+wire\b", low))
     is_same = bool(
         re.search(
             r"\bassign\s+the\s+output\s+port\s+to\s+the\s+same\s+value\s+as\s+the\s+"
