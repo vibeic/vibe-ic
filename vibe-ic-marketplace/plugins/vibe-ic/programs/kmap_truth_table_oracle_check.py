@@ -188,6 +188,137 @@ def parse_kmap(prompt: str, ins, outs):
     return ("kmap", in_names, out_name, table)
 
 
+def _parse_state_encoding(prompt: str, states):
+    """Return {state_name: int code} from the prompt's DECLARED code map, or None.
+
+    Handles two forms and SKIPs (None) on anything else so a non-sequential /
+    sparse / out-of-order encoding can NEVER be silently mis-assumed (the §4.05
+    HIGH the adversarial review caught — the old code used listing order):
+      (a) EXPLICIT list — `state codes y = 000, 001, 010, 100, 011, 110 for
+          states A, B, C, D, E, F`: zip names<->codes by NAME order (so a table
+          that lists states out of order, or a sparse/Gray map, encodes right).
+      (b) ELLIPSIS form — `y = 000, 001, ..., 101 for states A, B, ..., F`:
+          sequential A=0,B=1,... by NAME (the canonical Prob135 case), validated
+          by a 000,001 start + single-letter states counted from the first.
+    """
+    m = re.search(r"state codes?\s+\w+\s*=\s*([^\n]+?)\s+for\s+states?\s+([^\n]+)",
+                  prompt, re.I)
+    if not m:
+        return None
+    codes_str, names_str = m.group(1), m.group(2)
+    names_str = re.split(r"\brespectively\b", names_str, flags=re.I)[0].rstrip(" .")
+    ell = any(e in codes_str or e in names_str for e in ("...", "…"))
+
+    def _toks(s):
+        return [t for t in re.split(r"[,\s]+", s.strip())
+                if t and t not in (".", "..", "...", "…")]
+
+    codes, names = _toks(codes_str), _toks(names_str)
+    if not ell:
+        # explicit bijection: every code a binary literal, names<->codes 1:1
+        if len(codes) != len(names) or not all(re.fullmatch(r"[01]+", c) for c in codes):
+            return None
+        cmap = {n: int(c, 2) for n, c in zip(names, codes)}
+        if len(set(cmap.values())) != len(cmap):       # must be a bijection
+            return None
+        if set(states) - set(cmap):                    # every transition state encoded
+            return None
+        return cmap
+    # ellipsis form: 000,001 sequential start + single-letter states from the first
+    bins = [c for c in codes if re.fullmatch(r"[01]+", c)]
+    if len(bins) < 2 or int(bins[0], 2) != 0 or int(bins[1], 2) != 1:
+        return None
+    bvals = [int(b, 2) for b in bins]
+    # the explicit codes must be a CLEAN sequential prefix 0,1,2,... + a final N-1;
+    # a self-contradictory tail like `000,001,...,011,111` (jump-codes listed) is
+    # not a pure ellipsis -> SKIP (Step-2.7 confirmation soft spot).
+    if bvals[:-1] != list(range(len(bvals) - 1)):
+        return None
+    n_states = bvals[-1] + 1                            # last listed code = N-1
+    letters = [n for n in names if re.fullmatch(r"[A-Za-z]", n)]
+    if not letters:
+        return None
+    first = letters[0].upper()
+    cmap = {}
+    for s in states:
+        if not re.fullmatch(r"[A-Za-z]", s):
+            return None
+        c = ord(s.upper()) - ord(first)
+        if c < 0 or c >= n_states:
+            return None
+        cmap[s] = c
+    if len(set(cmap.values())) != len(cmap):
+        return None
+    return cmap
+
+
+def parse_fsm_next_state_bit(prompt: str, ins, outs):
+    """FSM next-state-BIT oracle (Prob135_m2014_q6b class). A prompt that hands a
+    COMPLETE state-transition table + a sequential state encoding + asks for ONE
+    next-state bit (`output Y1 is y[1]`, combinational in (state-bus, scalar-input))
+    IS a complete combinational oracle, blind. Build the (state_code, input) ->
+    next-state-bit truth table and gate the authored RTL against it.
+
+    §4.05 SAFETY — fires ONLY when fully unambiguous, SKIPs (None) otherwise:
+      - exactly ONE multi-bit input bus (the state vector) + exactly ONE 1-bit
+        scalar input (the FSM input); a single 1-bit output;
+      - the requested bit `<bus>[N]` is named in the prompt and N < bus width;
+      - EVERY listed state has BOTH input=0 and input=1 transitions (complete table);
+      - a SEQUENTIAL state encoding is declared (`state codes y = 000, 001, ...`),
+        so state_i -> code i; UNUSED codes (>= #states) are DON'T-CARE (never checked).
+    Returns ("fsm", in_specs, out_name, table) where in_specs=[(bus,w),(scalar,1)]
+    and table maps (state_code, input) -> required bit; or None to SKIP."""
+    if len(outs) != 1 or outs[0][1] != 1:
+        return None
+    out_name = outs[0][0]
+    buses = [(n, w) for n, w in ins if w > 1]
+    scalars = [(n, w) for n, w in ins if w == 1]
+    if len(buses) != 1 or len(scalars) != 1:
+        return None  # conservative cut: one state bus + one 1-bit FSM input
+    state_bus, sb_w = buses[0]
+    scalar_in = scalars[0][0]
+    # the requested bit MUST come from the OUTPUT / next-state clause — never the
+    # first `<bus>[N]` token anywhere (a prompt may mention `y[2] is the MSB`).
+    # Collect EVERY such clause and require they AGREE: a descriptive
+    # `output Y is y[1]` that disagrees with the task `next-state logic for y[2]`
+    # is ambiguous -> SKIP, never guess (Step-2.7 confirmation Finding 2).
+    req_bits = {int(m.group(1)) for m in re.finditer(
+        rf"(?:output\s+\w+\s+is|next[-\s]?state\s+logic\s+for)\s+"
+        rf"{re.escape(state_bus)}\s*\[\s*(\d+)\s*\]", prompt, re.I)}
+    if len(req_bits) != 1:
+        return None
+    req_bit = req_bits.pop()
+    if req_bit >= sb_w:
+        return None
+    trans, states = {}, []
+    for m in re.finditer(r"^\s*(\w+)\s*\(\s*\d+\s*\)\s*--\s*(\d+)\s*-->\s*(\w+)", prompt, re.M):
+        s, inp, nxt = m.group(1), m.group(2), m.group(3)
+        if s not in states:
+            states.append(s)
+        trans.setdefault(s, {})[inp] = nxt
+    if len(states) < 2:
+        return None
+    # state encoding from the DECLARED code map (NOT listing order) — SKIP if ambiguous
+    code = _parse_state_encoding(prompt, states)
+    if code is None:
+        return None
+    # a declared code value wider than the state bus is an inconsistent map; an
+    # over-width case literal would truncate + collide -> SKIP (Step-2.7 Finding 1).
+    if any(v >= (1 << sb_w) for v in code.values()):
+        return None
+    for s in states:
+        if set(trans.get(s, {}).keys()) != {"0", "1"}:
+            return None  # incomplete table -> SKIP
+    table = {}
+    for s in states:
+        for w in (0, 1):
+            nxt = trans[s][str(w)]
+            if nxt not in code:
+                return None
+            table[(code[s], w)] = (code[nxt] >> req_bit) & 1
+    return ("fsm", [(state_bus, sb_w), (scalar_in, 1)], out_name, table)
+
+
 def build_oracle(prompt: str):
     ins, outs = parse_ports(prompt)
     if not ins or not outs:
@@ -200,23 +331,33 @@ def build_oracle(prompt: str):
         r = parse_kmap(prompt, ins, outs)
         if r:
             return r
+    # FSM next-state-bit: a state machine with a complete transition table whose
+    # requested output is a single next-state bit (no kmap/truth-table keywords).
+    if re.search(r"-->", prompt) and re.search(r"state", prompt, re.I):
+        r = parse_fsm_next_state_bit(prompt, ins, outs)
+        if r:
+            return r
     return None
 
 
-def simulate(rtl_path: str, top: str, in_names, out_name, table):
-    n = len(in_names)
-    tb = ["`timescale 1ns/1ps", "module _kmap_tb;"]
-    for nm in in_names:
-        tb.append(f"  reg {nm};")
+def simulate(rtl_path: str, top: str, in_specs, out_name, table):
+    """in_specs: list of (name, width). table: {tuple-of-int-values -> exp bit},
+    keys carry one int per input (respecting its width); for the 1-bit kmap/truth
+    cut these are the full 2^N product, for the FSM cut only the CARE state codes
+    (unused codes are don't-care and absent). Drives each input at its width."""
+    tb = ["`timescale 1ns/1ps", "module _oracle_tb;"]
+    for nm, w in in_specs:
+        tb.append(f"  reg [{w-1}:0] {nm};" if w > 1 else f"  reg {nm};")
     tb.append(f"  wire {out_name};")
-    portmap = ", ".join(f".{nm}({nm})" for nm in in_names) + f", .{out_name}({out_name})"
+    portmap = ", ".join(f".{nm}({nm})" for nm, _ in in_specs) + f", .{out_name}({out_name})"
     tb.append(f"  {top} dut({portmap});")
     tb.append("  reg [31:0] errs;")
     tb.append("  initial begin errs=0;")
-    for combo in itertools.product([0, 1], repeat=n):
-        assigns = " ".join(f"{nm}={v};" for nm, v in zip(in_names, combo))
-        exp = table[combo]
-        idx = "".join(str(b) for b in combo)
+    for key in sorted(table):
+        assigns = " ".join((f"{nm}={w}'d{val};" if w > 1 else f"{nm}={val};")
+                           for (nm, w), val in zip(in_specs, key))
+        exp = table[key]
+        idx = "_".join(str(v) for v in key)
         tb.append(f"    {assigns} #1;")
         tb.append(
             f"    if ({out_name} !== 1'b{exp}) begin errs=errs+1; "
@@ -250,9 +391,11 @@ def check(prompt_text: str, rtl_path: str, top: str = "TopModule"):
     oracle = build_oracle(prompt_text)
     if not oracle:
         return ("SKIP", {"reason": "no high-confidence complete oracle parseable from prompt"})
-    kind, in_names, out_name, table = oracle
-    verdict, log = simulate(rtl_path, top, in_names, out_name, table)
-    detail = {"kind": kind, "inputs": in_names, "output": out_name,
+    kind, in_field, out_name, table = oracle
+    # normalize: kmap/truth-table parsers return bare 1-bit names; FSM returns (name,width)
+    in_specs = [(x, 1) if isinstance(x, str) else tuple(x) for x in in_field]
+    verdict, log = simulate(rtl_path, top, in_specs, out_name, table)
+    detail = {"kind": kind, "inputs": [n for n, _ in in_specs], "output": out_name,
               "cells": len(table), "log": log}
     return (verdict, detail)
 
