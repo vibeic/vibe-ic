@@ -403,7 +403,10 @@ def _try_plain_shift(text, ins, outs, top):
 
     # -- Prob061: single-stage shift register with explicit load/enable priority. -- #
     #    "Input E is for enabling shift, R for value to load, L is asserted when it
-    #     should load, and w is the input from the previous stage."
+    #     should load, and w is the input from the previous stage." (VE-human) — the
+    #    VE-v2 twin describes the SAME serial-data port w as "the input TO the FIRST
+    #    stage of the shift register" instead of "from the previous stage". Both pin w
+    #    as the shift-in serial data of this stage; accept either phrasing.
     L = _find(ins, "l")
     R = _find(ins, "r")
     E = _find(ins, "e")
@@ -412,7 +415,8 @@ def _try_plain_shift(text, ins, outs, top):
             and re.search(r"enabl\w*\s+shift", text, re.I)
             and re.search(r"\bvalue\s+to\s+load\b|for\s+value\s+to\s+load", text, re.I)
             and re.search(r"asserted\s+when\s+it\s+should\s+load", text, re.I)
-            and re.search(r"input\s+from\s+the\s+pre\w*\s+stage", text, re.I)):
+            and (re.search(r"input\s+from\s+the\s+pre\w*\s+stage", text, re.I)
+                 or re.search(r"input\s+to\s+the\s+first\s+stage", text, re.I))):
         # load (L) has priority over enable (E): the order in the prose ("L is
         # asserted when it should load ... E is for enabling shift") + the n-bit
         # shift-register-stage convention give load-first. Require the explicit

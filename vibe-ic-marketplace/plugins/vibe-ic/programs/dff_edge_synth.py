@@ -154,8 +154,12 @@ def _detect_reset(prompt: str, ins) -> object:
     # "reset to 0" / "reset output to zero" / "set the output to zero" => 0
     # "reset to 0x34" / "reset to 8'h34" => 0x34
     mhex = re.search(r"reset(?:\s+\w+){0,3}?\s+to\s+0x([0-9a-fA-F]+)", prompt)
-    mhex2 = re.search(r"reset\s+to\s+(\d+)'h([0-9a-fA-F]+)", prompt)
-    mdec = re.search(r"reset(?:\s+\w+){0,3}?\s+to\s+(\d+)\b", prompt)
+    # a Verilog-sized hex literal `N'h..`; allow intervening words ("a reset THAT
+    # RESETS to 12'h5a") so the indirect phrasing is read as hex, not as decimal N.
+    mhex2 = re.search(r"reset(?:\s+\w+){0,3}?\s+to\s+(\d+)'\s*[hH]([0-9a-fA-F]+)", prompt)
+    # plain decimal value — but NEVER the WIDTH PREFIX of a sized literal `N'h..`
+    # (the negative lookahead stops `12'h5a` being misread as decimal 12).
+    mdec = re.search(r"reset(?:\s+\w+){0,3}?\s+to\s+(\d+)\b(?!\s*'\s*[hbdHBD])", prompt)
     if mhex:
         rval = int(mhex.group(1), 16)
     elif mhex2:
@@ -304,13 +308,17 @@ def _synth_edge(prompt_text, top, ins, outs, clk, is_capture) -> Optional[str]:
     if dw != ow:
         return None
 
-    # clock edge: edge logic is positive-edge in every VE case; require it stated
+    # clock edge: edge-detect/capture logic is positive-edge in every VE case.
+    # The VE-human twin states "triggered on the positive edge of the clock"; the
+    # VE-v2 twin states the cross-cycle behaviour ("the cycle after", "1 in one clock
+    # cycle to 0 the next") WITHOUT naming the edge. Cross-cycle sampling on a single
+    # clock is positive-edge by universal convention (and every VE reference uses
+    # posedge), so an UNSTATED edge defaults to posedge here. An explicit "negative
+    # edge"/negedge still SKIPs (outside the proven envelope), so we never silently
+    # emit the wrong polarity when the prompt does name it.
     edge = _clock_edge(prompt_text)
     if edge is None:
-        # default to posedge ONLY if prose says "positive edge of the clock"
-        if not re.search(r"positive\s+edge", low):
-            return None
-        edge = "posedge"
+        edge = "posedge"   # unstated edge on a clocked edge-detect/capture -> posedge
     if edge != "posedge":
         return None   # negedge edge-detect not in proven envelope -> SKIP
 

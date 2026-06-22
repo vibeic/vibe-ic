@@ -93,7 +93,11 @@ def _parse_reset_level(prompt: str):
 def _parse_reset_state(prompt: str, known):
     """Return the UNIQUE named reset state (for the table form), or None."""
     targets = []
-    for m in re.finditer(r"resets?\b([^.\n]*)", prompt, re.I):
+    # Capture to the SENTENCE end (`.`), not the first newline: the VE-v2 twin
+    # soft-wraps the reset clause ("Resets into\nstate A and ..."), so the "into
+    # state X" target lives on the next physical line. The UNIQUE-target guard below
+    # still SKIPs if two different reset states are named.
+    for m in re.finditer(r"resets?\b([^.]*)", prompt, re.I):
         for t in re.finditer(r"\b(?:into|to)\s+state\s+(\w+)", m.group(1), re.I):
             if t.group(1) in known:
                 targets.append(t.group(1))
