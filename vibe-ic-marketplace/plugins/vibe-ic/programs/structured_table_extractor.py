@@ -47,6 +47,14 @@ SIGNATURES: Dict[str, Tuple[Set[str], Set[str]]] = {
                               {"input", "output", "decimal", "binary", "gray", "bcd"}),
     "channel_signal_catalog": ({"channel", "signal"},
                                {"direction", "width", "description", "role"}),
+    "lookup_rom_table":      ({"rom", "lookup", "lut", "memory"},
+                              {"data", "value", "contents", "entry"}),
+    "behavioral_sequence":   ({"cycle", "step", "time", "clock"},
+                              {"state", "action", "transaction", "operation"}),
+    "timing_parameter_table": ({"parameter", "timing", "symbol"},
+                               {"min", "max", "typ", "ns", "setup", "hold"}),
+    "packet_frame_format":   ({"field", "frame", "packet", "byte"},
+                              {"offset", "bytes", "length", "bits", "position"}),
 }
 
 

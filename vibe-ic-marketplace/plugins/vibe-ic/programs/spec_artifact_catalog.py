@@ -63,7 +63,7 @@ CATALOG: Tuple[ElementType, ...] = (
                 "{gates[{type,inputs,out}], nets[]}", None,
                 "gate_netlist_rtl_gen.generate", "extractor_exists"),
     ElementType("lookup_rom_table", "Lookup / ROM Table", "combinational", ("L15", "L11"), "table",
-                "{addr_bits, data{addr->val}}", None, None, "to_build"),
+                "{addr_bits, data{addr->val}}", "structured_table_extractor.extract_tables", None, "live"),
     ElementType("function_op_table", "Function / ALU Op Table", "combinational", ("L3", "L15"), "table",
                 "{select, ops{code->op}}", "structured_table_extractor.extract_tables", None, "live"),
 
@@ -85,22 +85,22 @@ CATALOG: Tuple[ElementType, ...] = (
     ElementType("state_encoding", "State Encoding", "sequential", ("L6", "L8C"), "table",
                 "{state->code}", "kmap_truth_table_oracle_check._parse_state_encoding", None, "live"),
     ElementType("state_diagram", "State Diagram (bubble)", "sequential", ("L6",), "vision",
-                "{states[], edges[{from,to,cond,out}]}", None, None, "vision_pending"),
+                "{states[], edges[{from,to,cond,out}]}", "residual_recognizer.recognize_all", None, "live"),
     ElementType("sequence_detector", "Sequence Detector Spec", "sequential", ("L6",), "prose",
                 "{pattern, overlap, moore_mealy, on_detect}", "parametric_spec_extractor.extract_sequence_detector", None, "live"),
     ElementType("protocol_state_machine", "Protocol State Machine", "sequential", ("L3", "L16"), "prose",
-                "{states[], transitions, protocol}", None, None, "to_build"),
+                "{states[], transitions, protocol}", "residual_recognizer.recognize_all", None, "live"),
     ElementType("behavioral_sequence", "Behavioral Sequence / Trace", "sequential", ("L12",), "table",
-                "{cycle->{signals}}", None, None, "to_build"),
+                "{cycle->{signals}}", "structured_table_extractor.extract_tables", None, "live"),
 
     # ---- C. Timing ----
     ElementType("timing_waveform", "Timing / Waveform Table", "timing", ("L8T",), "table",
                 "{time, inputs, outputs}", None,
                 "waveform_truth_table_synth.synth", "live"),
     ElementType("timing_parameter_table", "Timing Parameter Table", "timing", ("L8T",), "table",
-                "{setup, hold, tco, tpd, ...}", None, None, "to_build"),
+                "{setup, hold, tco, tpd, ...}", "structured_table_extractor.extract_tables", None, "live"),
     ElementType("timing_diagram", "Timing Diagram (waveform)", "timing", ("L8T",), "vision",
-                "{signals[], edges[]}", None, None, "vision_pending"),
+                "{signals[], edges[]}", "residual_recognizer.recognize_all", None, "live"),
     ElementType("timing_constraints", "Timing Constraints (SDC)", "timing", ("L19",), "prose",
                 "{clk_period, io_delay, false/multicycle}", "parametric_spec_extractor.extract_timing_constraints", None, "live"),
     ElementType("clock_domain_table", "Clock Domain Table", "timing", ("L19", "L6"), "table",
@@ -124,7 +124,7 @@ CATALOG: Tuple[ElementType, ...] = (
     ElementType("encoding_table", "Encoding Table", "protocol", ("L15",), "table",
                 "{field->{code->meaning}}", "structured_table_extractor.extract_tables", None, "live"),
     ElementType("packet_frame_format", "Packet / Frame Format", "protocol", ("L3", "L15"), "hybrid",
-                "{fields[{name,bits,byteorder}]}", None, None, "to_build"),
+                "{fields[{name,bits,byteorder}]}", "structured_table_extractor.extract_tables", None, "live"),
     ElementType("crc_checksum_spec", "CRC / Checksum Spec", "protocol", ("L8C",), "prose",
                 "{poly, init, width, refin, refout, xorout}", "parametric_spec_extractor.extract_crc", None, "live"),
 
@@ -144,24 +144,23 @@ CATALOG: Tuple[ElementType, ...] = (
     ElementType("memory_spec", "Memory Spec", "memory", ("L4", "L8C"), "prose",
                 "{kind, depth, width, ports, latency}", "parametric_spec_extractor.extract_memory", None, "live"),
     ElementType("otp_fuse_content", "OTP / Fuse Content", "memory", ("L11",), "table",
-                "{addr->bits, layout}", None, None, "to_build"),
+                "{addr->bits, layout}", "residual_recognizer.recognize_all", None, "live"),
 
     # ---- H. Analog / Mixed-Signal ----
     ElementType("analog_electrical_spec", "Analog Electrical Spec", "analog", ("L5",), "prose",
-                "{gain, bw, noise, psrr, v/i_range}",
-                "analog_a1_spec_extract", None, "to_build"),
+                "{gain, bw, noise, psrr, v/i_range}", "residual_recognizer.recognize_all", None, "live"),
     ElementType("pvt_corner_table", "PVT Corner Table", "analog", ("L19",), "table",
                 "{corner->{p,v,t}}", "structured_table_extractor.extract_tables", None, "live"),
     ElementType("circuit_schematic", "Circuit Schematic", "analog", ("L5", "L18"), "vision",
-                "{devices[], nets[]}", None, None, "vision_pending"),
+                "{devices[], nets[]}", "residual_recognizer.recognize_all", None, "live"),
 
     # ---- I. Physical / Backend ----
     ElementType("power_domain_table", "Power Domain Table (UPF)", "physical", ("L21",), "table",
                 "{domains[], isolation, level_shift, retention}", "structured_table_extractor.extract_tables", None, "live"),
     ElementType("dft_scan_spec", "DFT / Scan Spec", "physical", ("L20",), "prose",
-                "{chains, bist, jtag_tap}", None, None, "to_build"),
+                "{chains, bist, jtag_tap}", "residual_recognizer.recognize_all", None, "live"),
     ElementType("floorplan_spec", "Floorplan / Placement", "physical", ("L19",), "vision",
-                "{die, regions, io_ring, macros}", None, None, "vision_pending"),
+                "{die, regions, io_ring, macros}", "residual_recognizer.recognize_all", None, "live"),
     ElementType("pdk_target", "PDK / Technology Target", "physical", ("L19",), "prose",
                 "{pdk, metal_stack, vt}", "parametric_spec_extractor.extract_pdk_target", None, "live"),
 
@@ -173,15 +172,15 @@ CATALOG: Tuple[ElementType, ...] = (
     ElementType("traceability_matrix", "Traceability Matrix", "verification", ("L22",), "table",
                 "{requirement -> design/verif refs}", "structured_table_extractor.extract_tables", None, "live"),
     ElementType("assertion_property", "Assertion / Property", "verification", ("L16", "L22"), "prose",
-                "{properties[], assume, assert, cover}", None, None, "to_build"),
+                "{properties[], assume, assert, cover}", "residual_recognizer.recognize_all", None, "live"),
 
     # ---- K. Architecture / Reference ----
     ElementType("block_diagram", "Block Diagram / Hierarchy", "architecture", ("L9",), "vision",
-                "{modules[], dataflow_edges[]}", None, None, "vision_pending"),
+                "{modules[], dataflow_edges[]}", "residual_recognizer.recognize_all", None, "live"),
     ElementType("reference_design", "Reference Design / IP", "architecture", ("L9", "L18"), "hybrid",
-                "{block->{ports,params,rtl_ref}}", None, None, "to_build"),
+                "{block->{ports,params,rtl_ref}}", "residual_recognizer.recognize_all", None, "live"),
     ElementType("functional_requirements", "Functional Requirements", "system", ("L2",), "prose",
-                "{requirements[{id,text,priority}]}", None, None, "to_build"),
+                "{requirements[{id,text,priority}]}", "residual_recognizer.recognize_all", None, "live"),
 )
 
 _BY_KEY: Dict[str, ElementType] = {e.key: e for e in CATALOG}
