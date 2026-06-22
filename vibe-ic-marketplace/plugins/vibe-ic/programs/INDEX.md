@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 720
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 720)
+- **Total programs (excluding helpers / shims):** 721
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 721)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 711 |
+| `any` | 712 |
 
 ## Alphabetical listing
 
@@ -461,6 +461,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `packaging_intake_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered |
 | `packet_length_check_present` | any | — | Static audit for packet-length sanity |
 | `pad_drive_high_active_check` | any | v0.114 | v0.114 (BACKLOG-v6 P1). |
+| `parametric_spec_extractor` | any | — | deterministic baseline extractors for the PROSE |
 | `payload_bit_position_check` | any | — | Cross-reference spec doc bit-layout |
 | `pcie_gen5_protocol_synth` | any | v0.1.89 | PCI Express 5.0 (Gen5) protocol synth helper. |
 | `pcie_protocol_synth` | any | v0.1.84 | PCI Express-class protocol synth helper. |
@@ -792,7 +793,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (711 programs)
+### `any` (712 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1224,6 +1225,7 @@ _(no programs in this group)_
 - `packaging_intake_check` — gate (v1.6.13 Wave 88, renumbered  _[Wave 88]_
 - `packet_length_check_present` — Static audit for packet-length sanity
 - `pad_drive_high_active_check` — v0.114 (BACKLOG-v6 P1).  _[v0.114]_
+- `parametric_spec_extractor` — deterministic baseline extractors for the PROSE
 - `payload_bit_position_check` — Cross-reference spec doc bit-layout
 - `pcie_gen5_protocol_synth` — PCI Express 5.0 (Gen5) protocol synth helper.  _[v0.1.89]_
 - `pcie_protocol_synth` — PCI Express-class protocol synth helper.  _[v0.1.84]_
