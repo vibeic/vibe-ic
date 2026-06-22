@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 719
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 719)
+- **Total programs (excluding helpers / shims):** 720
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 720)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 710 |
+| `any` | 711 |
 
 ## Alphabetical listing
 
@@ -664,6 +664,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `staged_rtl_closure_preflight` | any | — | ORGANIC #586. |
 | `staged_rtl_reused_ip_manifest_emit` | any | — | auto-emit the keystone SOURCE_MANIFEST.json on the |
 | `step_internal_fail_bubble_up_check` | any | — | anti-fabrication gate (v1.6.44). |
+| `structured_table_extractor` | any | — | ONE general extractor for the whole TABLE tier. |
 | `sustained_vs_edge_check` | any | — | Flag RTL using edge-detect when spec calls for sustained. |
 | `sv2v_mixed_driver_fixup` | any | — | deterministic post-pass to repair Verilog |
 | `sv_compat_check` | any | — | Check if Verilog files require the -sv flag for Yosys synthesis. |
@@ -791,7 +792,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (710 programs)
+### `any` (711 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1424,6 +1425,7 @@ _(no programs in this group)_
 - `staged_rtl_closure_preflight` — ORGANIC #586.
 - `staged_rtl_reused_ip_manifest_emit` — auto-emit the keystone SOURCE_MANIFEST.json on the
 - `step_internal_fail_bubble_up_check` — anti-fabrication gate (v1.6.44).
+- `structured_table_extractor` — ONE general extractor for the whole TABLE tier.
 - `sustained_vs_edge_check` — Flag RTL using edge-detect when spec calls for sustained.
 - `sv2v_mixed_driver_fixup` — deterministic post-pass to repair Verilog
 - `sv_compat_check` — Check if Verilog files require the -sv flag for Yosys synthesis.
