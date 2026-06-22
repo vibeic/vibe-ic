@@ -443,6 +443,38 @@ hand-derived `ref`) and **#705** (which needs a prose latency literal a
 waveform-only prompt does not supply).
 
 
+## Behavioral-prose Moore FSM — extract the table, let the PROGRAM emit (2026-06-23)
+
+A FSM whose states + transitions are stated in NARRATIVE PROSE (Lemmings "if bumped
+on the left it walks right; if it falls for >20 cycles it splatters"; a PS/2 byte-
+boundary search; a sliding-window counter; a multi-phase controller) is the case
+where reading prose → structure genuinely needs a language model — no deterministic
+parser extracts it (so `spec_artifact_registry.generate()` correctly SKIPs it). But
+once the structure is a COMPLETE enumerated table, emitting correct RTL is a pure
+formula. So DO NOT hand-author the always-blocks — split the work:
+
+1. **You (AI) extract the COMPLETE canonical Moore-FSM table from the prose** — every
+   state, every Moore output per state, the reset (state + sync/async + level), and
+   EVERY transition (one row per state × every input combination; UNROLL a counter
+   like "falls for >20 cycles" into explicit states — the internal encoding is FREE
+   because the TB observes only the Moore outputs). Inputs may be a 1-bit port or a
+   bus bit-select (`in[3]`). The format is the docstring of
+   `programs/moore_fsm_table_emit.py`.
+2. **The PROGRAM emits + gates**: `python3 programs/moore_fsm_table_emit.py --prompt
+   <prompt> --table <your.tbl> --top <TopModule>`. It VALIDATES the table is complete
+   and matches the declared interface (rejects a hallucinated port, a missing input
+   combo, an unknown next-state, a missing output) and emits the RTL, or SKIPs
+   (exit 1). The emitted RTL is then your authored sample.
+
+This is the §4.2 **AI-step-gated-by-program** pattern, not free-text authoring: the
+program guarantees the RTL is a pure function of a table it proved complete, so a
+mis-extraction becomes a SKIP, never a wrong-but-plausible machine. Proven
+0-mismatch on the full Lemmings family (1–4, incl. the 47-state >20-cycle splatter
+counter), PS/2 (`in[3]`), the 3-cycle window counter, and the multi-phase motor
+controller. If your first table mismatches its self-TB, RE-READ THE PROMPT (never
+the hidden reference) to fix the offending transition/output.
+
+
 ## Compliance gate (mandatory)
 
 After producing your output, save it to a file and run:
