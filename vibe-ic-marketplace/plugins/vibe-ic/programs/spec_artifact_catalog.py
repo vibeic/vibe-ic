@@ -110,6 +110,8 @@ CATALOG: Tuple[ElementType, ...] = (
     ElementType("pinout_table", "Pinout / Port Table", "interface", ("L1",), "table",
                 "{pins[{name,dir,width,type,desc}]}",
                 "pinout_table_extractor.extract_pinout", None, "live"),
+    ElementType("bit_field_table", "Register Bit-Field Table", "interface", ("L4",), "table",
+                "{rows[{bit,name,function}]}", "structured_table_extractor.extract_tables", None, "live"),
     ElementType("register_map", "Register Map", "interface", ("L4",), "table",
                 "{regs[{addr,offset,access,reset,fields[]}]}",
                 "regmap_table_extractor.extract_regmap_table", None, "live"),

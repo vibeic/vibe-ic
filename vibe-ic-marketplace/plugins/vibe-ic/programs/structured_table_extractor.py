@@ -51,18 +51,34 @@ SIGNATURES: Dict[str, Tuple[Set[str], Set[str]]] = {
                               {"data", "value", "contents", "entry"}),
     "behavioral_sequence":   ({"cycle", "step", "time", "clock"},
                               {"state", "action", "transaction", "operation"}),
-    "timing_parameter_table": ({"parameter", "timing", "symbol"},
-                               {"min", "max", "typ", "ns", "setup", "hold"}),
-    "packet_frame_format":   ({"field", "frame", "packet", "byte"},
-                              {"offset", "bytes", "length", "bits", "position"}),
+    "timing_parameter_table": ({"parameter", "timing", "symbol", "參數"},
+                               {"min", "max", "typ", "ns", "setup", "hold", "最小", "最大"}),
+    "packet_frame_format":   ({"field", "frame", "packet", "byte", "封包", "欄位"},
+                              {"offset", "bytes", "length", "bits", "position", "位元組"}),
+    # a register bit-field / bit-definition table (the actual register semantics)
+    "bit_field_table":       ({"bit", "bits", "位元", "field", "欄位"},
+                              {"name", "function", "description", "名稱", "功能", "meaning", "reset", "說明"}),
 }
+
+# CJK header synonyms appended to the matching signatures (real docs are bilingual)
+for _et, (_a, _s) in {
+    "register_map": ({"位址", "暫存器", "地址", "偏移"}, {"位元", "欄位", "存取", "寬度", "名稱"}),
+    "command_opcode_table": ({"操作", "命令", "指令"}, {"描述", "方式", "編碼"}),
+    "encoding_table": ({"編碼", "代碼"}, {"意義", "狀態", "名稱", "描述"}),
+    "test_vector_table": ({"測試", "向量", "場景", "scenario", "criteria"},
+                          {"預期", "輸出", "結果", "expected", "pass", "check", "assertion"}),
+    "coverage_matrix": ({"覆蓋", "功能", "scenario"}, {"測試", "狀態", "status", "check"}),
+}.items():
+    _na, _ns = SIGNATURES[_et]
+    SIGNATURES[_et] = (_na | _a, _ns | _s)
 
 
 def _cells(line: str) -> List[str]:
     s = line.strip().strip("|")
     if "|" not in s:
         return []
-    return [c.strip() for c in s.split("|")]
+    # real docs wrap identifiers in backticks / bold (`clk`, `0x00`, **NAME**)
+    return [c.strip().strip("`*").strip() for c in s.split("|")]
 
 
 def _is_sep(cells: List[str]) -> bool:
@@ -70,14 +86,17 @@ def _is_sep(cells: List[str]) -> bool:
 
 
 def _classify(header_cells: List[str]) -> Optional[str]:
-    # tokenize header cells into WORDS (not substrings: anchor "op" must not match
-    # "opcode"/"operation"). "r/w" is kept as a token via the / class.
-    words: Set[str] = set()
-    for c in header_cells:
-        words |= set(re.findall(r"[a-z][a-z/]*", c.lower()))
+    flat = " ".join(c.lower() for c in header_cells)
+    # English keywords match on a WORD boundary (anchor "op" must not match "opcode");
+    # CJK keywords (no word boundaries) match as a substring (位址 is unambiguous).
+    words: Set[str] = set(re.findall(r"[a-z][a-z/]*", flat))
+
+    def _has(kw: str) -> bool:
+        return kw in words if re.fullmatch(r"[a-z/]+", kw) else (kw in flat)
+
     matched = []
     for etype, (anchors, supports) in SIGNATURES.items():
-        if (anchors & words) and (supports & words):
+        if any(_has(a) for a in anchors) and any(_has(s) for s in supports):
             matched.append(etype)
     if len(matched) == 1:
         return matched[0]
