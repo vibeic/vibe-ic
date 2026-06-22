@@ -243,9 +243,20 @@ def _adder(text: str, ins: List[Port], outs: List[Port], top: str) -> Optional[s
 # --------------------------------------------------------------------------- #
 def _min_max(text: str, ins: List[Port], outs: List[Port], top: str) -> Optional[str]:
     low = text.lower()
-    m = re.search(r"\b(minimum|maximum)\s+of\s+the\s+(\w+)\s+input", low)
+    # VE-human: "find the minimum of the four input values" (explicit "of the N input").
+    # VE-v2:    "find the minimum." (the operand count comes from the interface, not the
+    #           prose). Accept BOTH: the "of the ... input" long form OR the bare
+    #           "find the minimum/maximum" verb form. Either way the operands are ALL
+    #           the declared inputs; the structural guards below (>=2 equal-width inputs,
+    #           output width == input width, single output) keep this safe. The unsigned
+    #           "a < b" comparison cue must be present so we never fire on a signed /
+    #           arg-min / index-returning variant.
+    m = re.search(r"\b(minimum|maximum)\s+of\s+the\s+\w+\s+input", low) \
+        or re.search(r"\bfind\s+the\s+(minimum|maximum)\b", low)
     if not m:
         return None
+    if not re.search(r"\ba\s*<\s*b\b", low):
+        return None  # the explicit unsigned-comparison cue both twins state
     kind = m.group(1)
     if len(outs) != 1:
         return None
@@ -385,7 +396,23 @@ def _neighbour_vector(text: str, ins: List[Port], outs: List[Port],
     by = {n.lower(): (n, w) for n, w in outs}
     if not ({"out_both", "out_any", "out_different"} <= set(by)):
         return None
-    if any(by[k][1] != N for k in ("out_both", "out_any", "out_different")):
+    if len(outs) != 3:
+        return None
+    # The boundary outputs (out_both / out_any) carry a single don't-care bit at the
+    # vector edge (in[N-1] has no left neighbour; in[0] has no right neighbour). The
+    # VE-human twin declares all three outputs FULL width N and the spec sets the
+    # don't-care bit to x/0; the VE-v2 twin instead OMITS that bit from the port range
+    # (out_both[N-2:0], out_any[N-1:1]) so those two outputs are declared width N-1.
+    # Accept N (full) OR N-1 (edge-bit omitted) for the two boundary outputs, and N for
+    # out_different (no don't-care). We ALWAYS emit at full width N: the host always
+    # connects a full-width net to the port and aligns by LSB, so a full-N output with
+    # the boundary bit driven to 0 matches both twins' nets (the ref's edge bit is x =
+    # a don't-care in the `===` compare).
+    if by["out_different"][1] != N:
+        return None
+    if by["out_both"][1] not in (N, N - 1):
+        return None
+    if by["out_any"][1] not in (N, N - 1):
         return None
     # The prose must state the canonical relations: both=AND with left(higher index),
     # any=OR with right(lower index), different=XOR with left wrap-around. Verify the
@@ -399,6 +426,7 @@ def _neighbour_vector(text: str, ins: List[Port], outs: List[Port],
     # any[i]  = in[i] | in[i-1] for i in 1..N-1 ; any[0]  = 0.
     # different[i] = in[i] ^ in[(i-1) mod N]   (wrap).
     # The benchmark accepts the don't-care boundary bit as 0 OR x; emit 0 (safe).
+    emit_outs = [(ob, N), (oa, N), (od, N)]  # full-width N declaration for all three
     body = [
         f"    assign {ob} = {{ 1'b0, ({in_name}[{N-2}:0] & {in_name}[{N-1}:1]) }};",
         f"    assign {oa} = {{ ({in_name}[{N-2}:0] | {in_name}[{N-1}:1]), 1'b0 }};",
@@ -406,7 +434,7 @@ def _neighbour_vector(text: str, ins: List[Port], outs: List[Port],
     ]
     return "\n".join(
         ["// program-SOLVED per-bit neighbour vector relations; deterministic."]
-        + _header(top, ins, outs) + body + ["endmodule", ""])
+        + _header(top, ins, emit_outs) + body + ["endmodule", ""])
 
 
 # --------------------------------------------------------------------------- #
@@ -611,7 +639,9 @@ def _dual_impl(text: str, ins: List[Port], outs: List[Port],
 def _wire_connections(text: str, ins: List[Port], outs: List[Port],
                       top: str) -> Optional[str]:
     low = text.lower()
-    if not re.search(r"behave\s+like\s+wires?\b", low):
+    # "behave like wires" (VE-human modal) or "behaves like wires" (VE-v2 "a module
+    # that behaves like wires"); accept both 3rd-person verb forms.
+    if not re.search(r"behaves?\s+like\s+wires?\b", low):
         return None
     in_names = {n for n, _ in ins}
     out_names = {n for n, _ in outs}
