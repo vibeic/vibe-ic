@@ -79,19 +79,41 @@ def _extract_pinout(text: str) -> List[dict]:
     return [_element("pinout_table", {"pins": rows})] if rows else []
 
 
+def _extract_tables(text: str) -> List[dict]:
+    """The general table-tier extractor: every pipe table classified to a SPECIFIC
+    element_type by its header signature (register/command/encoding/memory/clock/
+    power/PVT/test-vector/coverage/...). Generic/unclassified tables are NOT emitted
+    here (they are usually the FSM/truth tables the registry already covers, or
+    genuinely-unknown tables that belong to the AI pass / convergence signal)."""
+    try:
+        import structured_table_extractor as _T
+        tabs = _T.extract_tables(text)
+    except Exception:
+        tabs = []
+    return [_element(t["element_type"], {"columns": t["columns"], "rows": t["rows"]})
+            for t in tabs if t["element_type"] != "structured_table"]
+
+
 # extraction-only baseline contributors (no RTL generator, feed the AI + the gates)
-_BASELINE_EXTRACTORS = (_extract_register_map, _extract_pinout)
+_BASELINE_EXTRACTORS = (_extract_register_map, _extract_pinout, _extract_tables)
 
 
 def program_baseline(doc_text: str) -> List[dict]:
     """Deterministic baseline: every LIVE program recognizer that fires + the wired
-    extraction-only extractors (register map, pinout). This is the floor —
-    guaranteed, zero-variance on what it covers."""
+    extraction-only extractors (register map, pinout, the general table tier). This
+    is the floor — guaranteed, zero-variance on what it covers. Deduped by
+    element_type (the most-specific source, run first, wins)."""
     els = [_element(a["type"], a["structured"], source="program")
            for a in _REG.detect(doc_text)]
     for ex in _BASELINE_EXTRACTORS:
         els += ex(doc_text)
-    return els
+    seen, out = set(), []
+    for e in els:
+        if e["element_type"] in seen:
+            continue
+        seen.add(e["element_type"])
+        out.append(e)
+    return out
 
 
 def _key(el: dict):
@@ -164,6 +186,45 @@ def extract_dual_pass(doc_text: str, ai_elements: Optional[List[dict]] = None, *
             merged[_key(e)] = e
     container["structural_elements"] = list(merged.values())
     return {"container": container, **rep}
+
+
+def log_disagreements(report: Dict, backlog_path: str, doc_id: str = "doc") -> int:
+    """STEP-1 convergence hook: append this run's ai_only finds (program missed it)
+    + conflicts to a JSONL backlog. Across many runs this becomes the DATA-DRIVEN
+    new-extractor queue — build the type the program misses MOST, not by guessing.
+    Returns the number of lines appended."""
+    import json
+    rows = []
+    for c in report.get("ai_only_new_extractor_candidates", []):
+        rows.append({"doc": doc_id, "kind": "ai_only", **c})
+    for c in report.get("conflicts", []):
+        rows.append({"doc": doc_id, "kind": "conflict", "element_type": c["element_type"]})
+    if rows:
+        with open(backlog_path, "a") as f:
+            for r in rows:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    return len(rows)
+
+
+def convergence_summary(reports: List[Dict]) -> Dict:
+    """Given many reconcile reports, measure convergence of the DETERMINISTIC layer:
+    the mean agreement rate, and the ranked count of ai_only element types (the
+    program's blind spots). The deterministic layer has CONVERGED for a type when it
+    no longer appears as ai_only (the program baseline now covers it). What remains
+    ai_only at the end is the genuine AI/vision residual."""
+    from collections import Counter
+    miss = Counter()
+    rates = []
+    for rep in reports:
+        rates.append(rep.get("agreement_rate", 0.0))
+        for c in rep.get("ai_only_new_extractor_candidates", []):
+            miss[c["element_type"]] += 1
+    return {
+        "runs": len(reports),
+        "mean_agreement_rate": round(sum(rates) / len(rates), 3) if rates else 0.0,
+        "program_blind_spots_ranked": miss.most_common(),
+        "converged": not miss,                 # no program-missed types left
+    }
 
 
 def main(argv=None) -> int:

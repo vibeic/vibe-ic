@@ -65,7 +65,7 @@ CATALOG: Tuple[ElementType, ...] = (
     ElementType("lookup_rom_table", "Lookup / ROM Table", "combinational", ("L15", "L11"), "table",
                 "{addr_bits, data{addr->val}}", None, None, "to_build"),
     ElementType("function_op_table", "Function / ALU Op Table", "combinational", ("L3", "L15"), "table",
-                "{select, ops{code->op}}", None, None, "to_build"),
+                "{select, ops{code->op}}", "structured_table_extractor.extract_tables", None, "live"),
 
     # ---- B. Sequential / FSM ----
     ElementType("fsm_transition_table", "State Transition Table", "sequential", ("L6", "L3"), "table",
@@ -104,7 +104,7 @@ CATALOG: Tuple[ElementType, ...] = (
     ElementType("timing_constraints", "Timing Constraints (SDC)", "timing", ("L19",), "prose",
                 "{clk_period, io_delay, false/multicycle}", None, None, "to_build"),
     ElementType("clock_domain_table", "Clock Domain Table", "timing", ("L19", "L6"), "table",
-                "{domains[], crossings[]}", None, None, "to_build"),
+                "{domains[], crossings[]}", "structured_table_extractor.extract_tables", None, "live"),
 
     # ---- D. Interface / Register ----
     ElementType("pinout_table", "Pinout / Port Table", "interface", ("L1",), "table",
@@ -114,15 +114,15 @@ CATALOG: Tuple[ElementType, ...] = (
                 "{regs[{addr,offset,access,reset,fields[]}]}",
                 "regmap_table_extractor.extract_regmap_table", None, "live"),
     ElementType("memory_map", "Memory Map", "interface", ("L4",), "table",
-                "{ranges[{start,end,block}]}", None, None, "to_build"),
+                "{ranges[{start,end,block}]}", "structured_table_extractor.extract_tables", None, "live"),
     ElementType("channel_signal_catalog", "Channel Signal Catalog", "interface", ("L17",), "table",
-                "{channel->signals[]}", None, None, "to_build"),
+                "{channel->signals[]}", "structured_table_extractor.extract_tables", None, "live"),
 
     # ---- E. Protocol / Command ----
     ElementType("command_opcode_table", "Command / Opcode Table", "protocol", ("L3",), "table",
-                "{opcode->{op,operands}}", None, None, "to_build"),
+                "{opcode->{op,operands}}", "structured_table_extractor.extract_tables", None, "live"),
     ElementType("encoding_table", "Encoding Table", "protocol", ("L15",), "table",
-                "{field->{code->meaning}}", None, None, "to_build"),
+                "{field->{code->meaning}}", "structured_table_extractor.extract_tables", None, "live"),
     ElementType("packet_frame_format", "Packet / Frame Format", "protocol", ("L3", "L15"), "hybrid",
                 "{fields[{name,bits,byteorder}]}", None, None, "to_build"),
     ElementType("crc_checksum_spec", "CRC / Checksum Spec", "protocol", ("L8C",), "prose",
@@ -135,7 +135,7 @@ CATALOG: Tuple[ElementType, ...] = (
     ElementType("number_format", "Number Format", "arithmetic", ("L8C",), "prose",
                 "{fixed_q | float | bcd}", None, None, "to_build"),
     ElementType("data_conversion_table", "Data Conversion Table", "arithmetic", ("L15",), "table",
-                "{in->out}", None, None, "to_build"),
+                "{in->out}", "structured_table_extractor.extract_tables", None, "live"),
 
     # ---- G. Memory ----
     ElementType("memory_spec", "Memory Spec", "memory", ("L4", "L8C"), "prose",
@@ -148,13 +148,13 @@ CATALOG: Tuple[ElementType, ...] = (
                 "{gain, bw, noise, psrr, v/i_range}",
                 "analog_a1_spec_extract", None, "to_build"),
     ElementType("pvt_corner_table", "PVT Corner Table", "analog", ("L19",), "table",
-                "{corner->{p,v,t}}", None, None, "to_build"),
+                "{corner->{p,v,t}}", "structured_table_extractor.extract_tables", None, "live"),
     ElementType("circuit_schematic", "Circuit Schematic", "analog", ("L5", "L18"), "vision",
                 "{devices[], nets[]}", None, None, "vision_pending"),
 
     # ---- I. Physical / Backend ----
     ElementType("power_domain_table", "Power Domain Table (UPF)", "physical", ("L21",), "table",
-                "{domains[], isolation, level_shift, retention}", None, None, "to_build"),
+                "{domains[], isolation, level_shift, retention}", "structured_table_extractor.extract_tables", None, "live"),
     ElementType("dft_scan_spec", "DFT / Scan Spec", "physical", ("L20",), "prose",
                 "{chains, bist, jtag_tap}", None, None, "to_build"),
     ElementType("floorplan_spec", "Floorplan / Placement", "physical", ("L19",), "vision",
@@ -164,11 +164,11 @@ CATALOG: Tuple[ElementType, ...] = (
 
     # ---- J. Verification ----
     ElementType("test_vector_table", "Test Vector / Worked Example", "verification", ("L10",), "table",
-                "{in->expected_out}", None, None, "to_build"),
+                "{in->expected_out}", "structured_table_extractor.extract_tables", None, "live"),
     ElementType("coverage_matrix", "Coverage Matrix", "verification", ("L22",), "table",
-                "{feature x test -> covered}", None, None, "to_build"),
+                "{feature x test -> covered}", "structured_table_extractor.extract_tables", None, "live"),
     ElementType("traceability_matrix", "Traceability Matrix", "verification", ("L22",), "table",
-                "{requirement -> design/verif refs}", None, None, "to_build"),
+                "{requirement -> design/verif refs}", "structured_table_extractor.extract_tables", None, "live"),
     ElementType("assertion_property", "Assertion / Property", "verification", ("L16", "L22"), "prose",
                 "{properties[], assume, assert, cover}", None, None, "to_build"),
 
