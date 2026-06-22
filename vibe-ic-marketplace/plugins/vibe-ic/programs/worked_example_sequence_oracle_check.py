@@ -5,15 +5,15 @@ spec's PROSE input→output worked example into a self-checking oracle.
 WHY (benchmark close-loop, pulse_detect pass@6 ≈ 1/6 — PRIME DIRECTIVE capture):
 Many serial / detector specs disclose a complete cycle-by-cycle worked example, e.g.
 pulse_detect: "if data_in is 01010(5 cycles), the data_out is 00101". That example IS a
-deterministic functional oracle — every cycle's required output is given, blind. Yet the
-recurring failure is OUTPUT TIMING (Moore registered vs Mealy combinational): the worked
-example asserts the output in the SAME cycle as the triggering input (Mealy), but blind
-authors stochastically write a registered (Moore) output that lags one cycle and host-FAILs
-on ~half the vectors. A STRUCTURAL form-gate is whack-a-mole across code variants; a
-FUNCTIONAL self-TB built from the spec's own example catches EVERY timing/logic deviation
-regardless of how the RTL is written — and never false-blocks a correct design (a design that
-passes the host passes this oracle: verified to AGREE with the host scorer 6/6 on the real
-pulse_detect attempts).
+deterministic functional oracle — every cycle's required output is given, blind. The
+recurring failure is OUTPUT TIMING/LOGIC: blind authors stochastically pick the wrong output
+cycle alignment (e.g. a registered output that lags, or a combinational one that leads, the
+disclosed trace) and host-FAIL on ~half the vectors. A STRUCTURAL form-gate is whack-a-mole
+across code variants; a FUNCTIONAL self-TB that REPLAYS the spec's own example trace catches
+EVERY per-cycle deviation regardless of how the RTL is written. The gate is an index-aligned
+LITERAL REPLAY of the disclosed example (NOT a Mealy/Moore classifier): a design that
+reproduces the disclosed trace at the example's alignment PASSes, any other trace BLOCKs.
+(Validated against the real pulse_detect blind attempts during development.)
 
 WHAT it does — given the spec prose + the authored RTL:
   1. Parse a HIGH-CONFIDENCE worked example: `if <inport> is <bits>, ... <outport> is <bits>`
@@ -24,16 +24,22 @@ WHAT it does — given the spec prose + the authored RTL:
   3. iverilog/vvp it; BLOCK (rc 1) on any mismatch, PASS (rc 0) on a clean match.
 
 §4.05 SAFETY — the load-bearing half is the NEGATIVE no-leak: the gate SKIPs (rc 0, advisory)
-unless it can parse a complete, unambiguous example AND map every port. It builds the oracle
-ONLY when:
-  - exactly one "is <bits>" pair maps to an INPUT port and one to an OUTPUT port;
+unless it can build an UNAMBIGUOUS oracle that drives EVERY relevant input. It BLOCKs ONLY when:
+  - EXACTLY ONE distinct worked-example interpretation maps to a (1-bit input, 1-bit output)
+    pair — if a decoy/illustrative sentence yields a SECOND equal-length pair on the same ports
+    (reset default, conceptual illustration, register table, power-up value), it is AMBIGUOUS
+    → SKIP (never build the oracle from the wrong bits);
   - both bitstrings are the same length (≥3) — a cycle-by-cycle correspondence;
   - the module has a single 1-bit clk and a detectable reset (rst_n/reset_n/resetn = active-low,
     rst/reset = active-high);
-  - iverilog is available.
-Otherwise → SKIP. A correct design passes the host ⇒ passes this oracle (same functional check
-from the same disclosed example), so a clean parse cannot false-block a correct design — only a
-MIS-parse could, which the conservative gating avoids by SKIPping on any ambiguity.
+  - the module has NO OTHER input port beyond clk/reset/<inport> — an extra input the TB cannot
+    drive would float (X) and mis-drive a correct multi-input design → SKIP;
+  - iverilog is available, the TB ELABORATES, and the sim COMPLETES — any build/sim error or
+    TIMEOUT is caught and yields SKIP, never BLOCK (fail-safe both in the library and the CLI);
+  - the verdict is read from a TB-written FILE the DUT cannot spoof via $display.
+Otherwise → SKIP. Under these conditions a design that reproduces the disclosed trace passes;
+the conservative gating means a mis-parse / undriveable input / tool failure SKIPs rather than
+false-blocks a correct design.
 
 chip-AGNOSTIC, prompt-blind (reads only the spec the author already reads + the authored RTL),
 deterministic.
@@ -63,10 +69,16 @@ def _strip(src: str) -> str:
 _PAIR_RE = re.compile(r"\b([A-Za-z_]\w*)\s+is\s+([01]{3,})\b")
 
 
-def parse_example(spec: str):
-    """Return (inport, outport, in_bits, out_bits) or None — high-confidence only."""
+def parse_examples(spec: str):
+    """Return ALL candidate (name1, name2, bits1, bits2) worked-example interpretations
+    (distinct names, EQUAL-LENGTH >=3-bit bitstrings), order-preserving + de-duplicated.
+    analyze() resolves these against the module ports and SKIPs on ambiguity (>1 distinct
+    interpretation maps to a 1-bit in/out pair), so an incidental DECOY sentence (a reset
+    default, a conceptual illustration, a register table, a power-up value) that reuses the
+    real port names can never silently hijack the oracle and false-block a correct design
+    (Step-2.7 §4.05: 'first equal-length pair' was the wrong selector)."""
     pairs = _PAIR_RE.findall(spec)
-    # keep (name, bits) pairs; need at least two with equal-length bitstrings
+    out, seen = [], set()
     for i in range(len(pairs)):
         for j in range(len(pairs)):
             if i == j:
@@ -74,8 +86,18 @@ def parse_example(spec: str):
             n1, b1 = pairs[i]
             n2, b2 = pairs[j]
             if n1 != n2 and len(b1) == len(b2) >= 3:
-                return (n1, n2, b1, b2)
-    return None
+                key = (n1, n2, b1, b2)
+                if key not in seen:
+                    seen.add(key)
+                    out.append(key)
+    return out
+
+
+def parse_example(spec: str):
+    """Return the FIRST candidate (name1, name2, bits1, bits2) or None (back-compat).
+    Ambiguity-aware selection lives in analyze() via parse_examples()."""
+    cands = parse_examples(spec)
+    return cands[0] if cands else None
 
 
 def _ports(rtl: str):
@@ -114,16 +136,18 @@ def _find_clk_reset(ports):
     return clk, rst, pol
 
 
-def _build_tb(modname, clk, rst, pol, inp, outp, in_bits, out_bits):
+def _build_tb(modname, clk, rst, pol, inp, outp, in_bits, out_bits, result_path):
     n = len(in_bits)
     assert_v = "1'b0" if pol == "low" else "1'b1"
     deassert_v = "1'b1" if pol == "low" else "1'b0"
     inset = "".join(f"        in_v[{i}] = 1'b{in_bits[i]};\n" for i in range(n))
     exset = "".join(f"        ex_v[{i}] = 1'b{out_bits[i]};\n" for i in range(n))
+    # The verdict is written to a FILE whose path the DUT cannot know — so authored RTL
+    # that $displays "PASS"/"FAIL" on stdout cannot spoof the verdict (Step-2.7 LOW).
     return f"""module wex_tb;
   reg clk=0, rstp; reg din; wire dout;
   reg in_v[0:{n-1}]; reg ex_v[0:{n-1}];
-  integer i, err=0;
+  integer i, err=0, vf;
   {modname} dut(.{clk}(clk), .{rst}(rstp), .{inp}(din), .{outp}(dout));
   always #5 clk=~clk;
   initial begin
@@ -139,7 +163,9 @@ def _build_tb(modname, clk, rst, pol, inp, outp, in_bits, out_bits):
         $display("MISMATCH cycle=%0d din=%b dout=%b exp=%b", i, din, dout, ex_v[i]);
       end
     end
-    if (err==0) $display("ORACLE_PASS"); else $display("ORACLE_FAIL err=%0d", err);
+    vf = $fopen("{result_path}", "w");
+    if (err==0) $fdisplay(vf, "WEX_VERDICT PASS"); else $fdisplay(vf, "WEX_VERDICT FAIL %0d", err);
+    $fclose(vf);
     $finish;
   end
 endmodule
@@ -155,51 +181,86 @@ def _iverilog():
 
 def analyze(rtl: str, spec: str) -> dict:
     res = {"applicable": False, "verdict": "SKIP", "reason": ""}
-    ex = parse_example(spec)
-    if not ex:
+    cands = parse_examples(spec)
+    if not cands:
         res["reason"] = "no high-confidence input→output worked example in spec"
         return res
-    p1, p2, b1, b2 = ex
     modname, ports = _ports(rtl)
     if not modname:
         res["reason"] = "could not parse module header"; return res
-    # map p1/p2 to in/out ports (1-bit). Accept either order.
+
     def is_in(p): return p in ports and ports[p][0] == "input" and ports[p][1]
     def is_out(p): return p in ports and ports[p][0] == "output" and ports[p][1]
-    if is_in(p1) and is_out(p2):
-        inp, outp, in_bits, out_bits = p1, p2, b1, b2
-    elif is_in(p2) and is_out(p1):
-        inp, outp, in_bits, out_bits = p2, p1, b2, b1
-    else:
-        res["reason"] = f"example ports {p1!r}/{p2!r} are not a 1-bit input/output pair"
+
+    # Resolve EVERY candidate against the ports; keep only those mapping one name to a
+    # 1-bit input and the other to a 1-bit output, de-duped by the resolved tuple.
+    interps = []
+    for (p1, p2, b1, b2) in cands:
+        if is_in(p1) and is_out(p2):
+            iv = (p1, p2, b1, b2)
+        elif is_in(p2) and is_out(p1):
+            iv = (p2, p1, b2, b1)
+        else:
+            continue
+        if iv not in interps:
+            interps.append(iv)
+    if not interps:
+        res["reason"] = "worked-example ports are not a 1-bit input/output pair"
         return res
+    if len(interps) > 1:
+        # a decoy/illustrative pair on the same ports could hijack the oracle → fail-safe SKIP
+        res["reason"] = (f"ambiguous: {len(interps)} distinct worked-example interpretations map to "
+                         f"1-bit in/out ports — skip (fail-safe; never build the oracle from a decoy)")
+        return res
+    inp, outp, in_bits, out_bits = interps[0]
+
     clk, rst, pol = _find_clk_reset(ports)
     if not clk or not rst:
         res["reason"] = "no detectable clk/reset port"; return res
+    # The self-TB can drive ONLY clk/reset/<inp>; any OTHER input port would float (X) and
+    # mis-drive a CORRECT multi-input design → false-BLOCK. Fail-safe SKIP when one exists.
+    extra_in = sorted(p for p, (d, _one) in ports.items()
+                      if d == "input" and p not in (clk, rst, inp))
+    if extra_in:
+        res["reason"] = (f"module has undriveable extra input port(s) {extra_in} — skip (fail-safe; "
+                         f"the oracle drives only clk/reset/{inp})")
+        return res
     if not _iverilog():
         res["reason"] = "iverilog unavailable"; return res
     res.update(applicable=True, inport=inp, outport=outp, in_bits=in_bits, out_bits=out_bits,
                clk=clk, rst=rst, pol=pol, module=modname)
-    tb = _build_tb(modname, clk, rst, pol, inp, outp, in_bits, out_bits)
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
+        result_path = td / "wex_verdict.txt"
+        tb = _build_tb(modname, clk, rst, pol, inp, outp, in_bits, out_bits, str(result_path))
         (td / "dut.v").write_text(rtl)
         (td / "tb.v").write_text(tb)
-        c = subprocess.run(["iverilog", "-g2012", "-o", str(td / "sim"), str(td / "dut.v"), str(td / "tb.v")],
-                           capture_output=True, text=True)
+        try:  # build hang / tool error → fail-safe SKIP, never BLOCK
+            c = subprocess.run(["iverilog", "-g2012", "-o", str(td / "sim"),
+                                str(td / "dut.v"), str(td / "tb.v")],
+                               capture_output=True, text=True, timeout=60)
+        except Exception as e:
+            res.update(verdict="SKIP", reason="oracle build timeout/error (skip): " + str(e)[:160])
+            return res
         if c.returncode != 0:
             res.update(verdict="SKIP", reason="oracle TB did not elaborate (skip, not block): "
                        + (c.stdout + c.stderr).strip()[-200:])
             return res
-        r = subprocess.run(["vvp", str(td / "sim")], capture_output=True, text=True, timeout=60)
+        try:  # sim hang/timeout → fail-safe SKIP per the documented contract, never BLOCK
+            r = subprocess.run(["vvp", str(td / "sim")], capture_output=True, text=True, timeout=60)
+        except Exception as e:
+            res.update(verdict="SKIP", reason="oracle sim timeout/error (skip): " + str(e)[:160])
+            return res
         out = r.stdout + r.stderr
-    if "ORACLE_PASS" in out:
+        verdict_txt = result_path.read_text(errors="replace") if result_path.is_file() else ""
+    # verdict is read from the TB-written FILE (unspoofable by DUT $display output)
+    if "WEX_VERDICT PASS" in verdict_txt:
         res["verdict"] = "PASS"
-    elif "ORACLE_FAIL" in out:
+    elif "WEX_VERDICT FAIL" in verdict_txt:
         res["verdict"] = "BLOCK"
         res["log"] = "\n".join(l for l in out.splitlines() if "MISMATCH" in l)[:400]
     else:
-        res.update(verdict="SKIP", reason="oracle produced no verdict (skip)")
+        res.update(verdict="SKIP", reason="oracle produced no verdict file (skip)")
     return res
 
 
@@ -217,10 +278,10 @@ def main(argv=None) -> int:
         a.json.write_text(json.dumps(res, indent=1))
     v = res["verdict"]
     if v == "BLOCK":
-        print(f"BLOCK: authored RTL mismatches the spec's worked example "
-              f"({res['inport']}={res['in_bits']} → {res['outport']} expected {res['out_bits']}). "
-              f"The output asserts in the SAME cycle as the triggering input (combinational/Mealy) per the "
-              f"example — a registered (Moore) output lags one cycle and fails. {res.get('log','')}")
+        print(f"BLOCK: authored RTL does not reproduce the spec's disclosed worked example "
+              f"({res['inport']}={res['in_bits']} → {res['outport']} should be {res['out_bits']}). "
+              f"Its per-cycle output trace differs from the example — check your output's "
+              f"cycle-by-cycle timing/logic against the spec's worked example. {res.get('log','')}")
         return 1
     print(f"PASS/SKIP: {res['verdict']} — {res.get('reason','matches the spec worked example')}")
     return 0

@@ -2,12 +2,12 @@
 self-TB oracle (pulse_detect Moore/Mealy output-timing capture).
 
 §4.05 doctrine: a BLOCKING functional gate, so the load-bearing half is the NEGATIVE
-no-leak — it must SKIP unless a complete, unambiguous example parses AND all ports map,
-and it must never BLOCK a CORRECT design. The positive case proves it catches the
-registered-output (Moore) one-cycle-lag error the worked example forbids.
-
-Validated on the real pulse_detect: the gate AGREES with the host scorer on all 6 blind
-attempts (1 correct Mealy PASS, 5 Moore BLOCK) and false-fires on 0/362 corpus goldens.
+no-leak — it must SKIP unless EXACTLY ONE unambiguous example parses, all ports map, and
+the module has no extra undriveable input, and it must never BLOCK a CORRECT design. The
+positive case proves it catches the one-cycle output-trace deviation the worked example
+forbids; the negative cases (below) pin the Step-2.7 §4.05 false-fires that were remediated:
+an extra-input detector, a decoy-before-example spec, a Moore-correct design, a sim timeout,
+and a DUT that tries to spoof the verdict token — all must SKIP/PASS, never false-BLOCK.
 """
 import shutil
 import sys
@@ -147,3 +147,73 @@ def test_shape_b_guard_no_prompt_skips_oracle(tmp_path):
     p = tmp_path / "pulse_detect.v"; p.write_text(RTL_MOORE)
     _ok, problems = sb.guard_export(p, "")  # empty prompt
     assert not any("worked-example oracle" in s for s in problems), problems
+
+
+# -------- Step-2.7 §4.05 reproduced FALSE-FIRES, now pinned SKIP/PASS --------
+# (1) HIGH: a CORRECT detector with an extra control input the TB cannot drive → SKIP
+#     (the old gate left `en` unconnected → floated X → false-BLOCKed a correct design).
+RTL_EXTRA_INPUT = """
+module edge_det(input clk, input rst_n, input en, input data_in, output reg data_out);
+  reg prev;
+  always @(posedge clk or negedge rst_n)
+    if(!rst_n) begin prev<=0; data_out<=0; end
+    else if(en) begin prev<=data_in; data_out<=data_in & ~prev; end
+endmodule
+"""
+
+# (2) HIGH: a decoy "<port> is <bits>" sentence on the SAME real ports before the real
+#     example → 2 interpretations → ambiguous → SKIP (never build the oracle from a decoy).
+SPEC_DECOY = ("pulse_detect: clk, active-low rst_n, input data_in, output data_out. "
+              "Reset illustration: when data_in is 000 the data_out is 111. "
+              "The real functional example: if data_in is 01010, the data_out is 00101.")
+
+# (3) a genuinely Moore (registered, lag-1) CORRECT design whose example is lag-aligned → PASS.
+RTL_MOORE_CORRECT = """
+module dff(input clk, input rst_n, input in_d, output reg out_q);
+  always @(posedge clk or negedge rst_n) if(!rst_n) out_q<=1'b0; else out_q<=in_d;
+endmodule
+"""
+SPEC_DFF = ("A 1-cycle delay. in_d is a 1-bit input, out_q a 1-bit output. "
+            "For example, if in_d is 10110, the out_q is 01011.")
+
+
+def test_extra_input_port_skips_no_false_block():
+    r = g.analyze(RTL_EXTRA_INPUT, SPEC)
+    assert r["verdict"] == "SKIP" and "extra input" in r["reason"]
+
+
+def test_decoy_before_example_is_ambiguous_skip():
+    r = g.analyze(RTL_MEALY, SPEC_DECOY)
+    assert r["verdict"] == "SKIP" and "ambiguous" in r["reason"]
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")
+def test_moore_correct_design_passes():
+    r = g.analyze(RTL_MOORE_CORRECT, SPEC_DFF)
+    assert r["applicable"] is True
+    assert r["verdict"] == "PASS", r  # a correct registered design is never blocked
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")
+def test_dut_cannot_spoof_verdict_token():
+    # a WRONG (Moore-lag) design that $displays the verdict token must STILL BLOCK,
+    # because the verdict is read from a TB-written file, not the DUT's stdout.
+    spoof = RTL_MOORE.replace(
+        "endmodule", 'initial $display("WEX_VERDICT PASS spoof from DUT"); endmodule', 1)
+    r = g.analyze(spoof, SPEC)
+    assert r["verdict"] == "BLOCK", r
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")
+def test_sim_timeout_yields_skip_not_block(monkeypatch):
+    # a vvp timeout must FAIL-SAFE to SKIP (rc 0 advisory), never raise / never BLOCK.
+    real_run = g.subprocess.run
+
+    def fake_run(cmd, *a, **k):
+        if cmd and cmd[0] == "vvp":
+            raise g.subprocess.TimeoutExpired(cmd, 60)
+        return real_run(cmd, *a, **k)
+
+    monkeypatch.setattr(g.subprocess, "run", fake_run)
+    r = g.analyze(RTL_MEALY, SPEC)
+    assert r["verdict"] == "SKIP" and "timeout" in r["reason"].lower()
