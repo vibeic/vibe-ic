@@ -531,7 +531,8 @@ def version_disclosure() -> Dict:
 
 def selfverify(rtl_path: Path, top: Optional[str],
                tb_path: Optional[Path] = None,
-               require_tools: bool = False) -> Dict:
+               require_tools: bool = False,
+               lint_advisory: bool = False) -> Dict:
     """Run the three harness-exact self-verify gates over one RTL file.
 
     Returns a report dict with per-gate verdicts, the resolved top, the
@@ -571,8 +572,24 @@ def selfverify(rtl_path: Path, top: Optional[str],
             gate_c_functional_tb(rtl_path, tb_path, workdir, require_tools))
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
-    blocking = [g for g in report["gates"]
-                if g.get("verdict") in ("BLOCK", "ERROR")]
+    # --lint-advisory: for an IVERILOG-scored benchmark (VerilogEval / RTLLM
+    # Shape C), GATE A (iverilog `-s <top>` standalone codegen) + the host
+    # (iverilog compile + functional TB) ARE the scorer's authority, so GATE B
+    # (verilator `--lint-only -Wall`) does not match the scorer and its
+    # verilator-only findings (WIDTH*/LATCH/COMBDLY style + verilator-LIMITATION
+    # %Errors like BLKLOOPINIT that iverilog runs fine) are pure FALSE-BLOCKs of
+    # host-PASSING designs. In advisory mode GATE B still RUNS + is disclosed in
+    # the report, but does NOT block emit. NO-LEAK: a genuine iverilog compile
+    # error still BLOCKs at GATE A; a real functional defect is caught by the
+    # host TB (the final arbiter). Strict (verilator-scored, e.g. CVDP) keeps B.
+    def _is_block(g):
+        if g.get("verdict") not in ("BLOCK", "ERROR"):
+            return False
+        if lint_advisory and g.get("gate") == "B_verilator_lint":
+            return False
+        return True
+    blocking = [g for g in report["gates"] if _is_block(g)]
+    report["lint_advisory"] = lint_advisory
     report["emit"] = not blocking
     report["blocking_gates"] = [g["gate"] for g in blocking]
     return report
@@ -603,6 +620,12 @@ def main(argv=None) -> int:
                     help="treat an absent iverilog/verilator as a hard error "
                          "(exit 2) — for a CI/container run that MUST enforce "
                          "the deterministic gates")
+    ap.add_argument("--lint-advisory", action="store_true",
+                    help="GATE B (verilator lint) reports but does NOT block "
+                         "emit — for an IVERILOG-scored benchmark (VerilogEval/"
+                         "RTLLM) where GATE A + the iverilog host are the "
+                         "scorer's authority and verilator-only findings are "
+                         "false-blocks. GATE A (iverilog) still blocks.")
     args = ap.parse_args(argv)
 
     rtl_path = Path(args.rtl)
@@ -611,7 +634,8 @@ def main(argv=None) -> int:
         return 2
     tb_path = Path(args.tb) if args.tb else None
 
-    report = selfverify(rtl_path, args.top, tb_path, args.require_tools)
+    report = selfverify(rtl_path, args.top, tb_path, args.require_tools,
+                        lint_advisory=args.lint_advisory)
 
     if args.report:
         Path(args.report).write_text(json.dumps(report, indent=2,
