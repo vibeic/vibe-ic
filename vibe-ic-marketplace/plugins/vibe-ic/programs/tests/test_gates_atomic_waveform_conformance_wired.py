@@ -120,14 +120,29 @@ def test_correct_sequential_waveform_read_is_NOT_blocked(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("iverilog") is None, reason="iverilog absent")
-def test_wrong_sequential_waveform_read_is_blocked(tmp_path):
+def test_wrong_sequential_waveform_read_is_auto_corrected(tmp_path):
+    # v1.1.76: gates_atomic now delegates deterministic-synth to
+    # spec_artifact_registry.generate(), whose `timing_waveform_ext` solver FIRES on
+    # this circuit7-style posedge-1FF prompt and EMITS the correct one-stage
+    # `q <= ~a` — REPLACING the author's wrong two-stage `q <= ~tmp` read BEFORE the
+    # conformance gate runs. The safety invariant "a wrong waveform read never ships"
+    # is preserved in its STRONGER form (auto-corrected, not merely blocked); the
+    # BLOCK gate remains the guard for the misreads the synth SKIPs. (timing_waveform_ext
+    # is host-verified 0-mismatch on the real Prob098_circuit7.)
     ds, wd = _stage(tmp_path, _WRONG)
     r = _run(tmp_path, ds)
     gj = json.loads((wd / "gates.json").read_text())
-    assert gj["steps"]["waveform_table_conformance"]["verdict"] == "BLOCK"
+    # the deterministic solver fired and produced the CORRECT RTL...
+    assert gj["steps"]["deterministic_synth"]["applied"] is True
+    assert gj["steps"]["deterministic_synth"]["kind"] in ("timing_waveform_ext", "timing_waveform")
+    # ...so the wrong authored read never ships — the emitted sample is the correct
+    # one-stage `~a`, NOT the wrong two-stage `~tmp`.
+    emitted = (tmp_path / "samples" / "ProbXX_circuit7_sample01.sv").read_text()
+    assert "~a" in emitted and "tmp" not in emitted
+    # the conformance gate now sees correct RTL (no mismatch finding / no block)
+    assert gj["steps"]["waveform_table_conformance"]["verdict"] != "BLOCK"
     rules = [f["rule"] for f in gj["steps"].get("structural_emit_block", {}).get("findings", [])]
-    assert "waveform-table-conformance-mismatch" in rules
-    assert not (tmp_path / "samples" / "ProbXX_circuit7_sample01.sv").exists()
+    assert "waveform-table-conformance-mismatch" not in rules
 
 
 # §4.05 no-leak: a COMBINATIONAL prompt is OUTSIDE the sequential-replay envelope,
