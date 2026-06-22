@@ -33,6 +33,79 @@ def _parse_ports(prompt):
     return ins, outs
 
 
+def _parse_fsm_table(prompt):
+    """Return (states, trans, mout) from a COMPLETE Moore table, or None. Accepts
+    two formats, SKIPs on any conflict/incompleteness:
+      (a) arrow:   `A (0) --1--> B`   (state (output) --input--> next)
+      (b) tabular: `A | A, B | 0`     (state | next@in=0, next@in=1 | output)
+    """
+    trans, mout, states = {}, {}, []
+    arrow = False
+    for m in re.finditer(r"^\s*(\w+)\s*\(\s*([01])\s*\)\s*--\s*([01])\s*-->\s*(\w+)", prompt, re.M):
+        arrow = True
+        s, o, i, nx = m.groups()
+        if s not in states:
+            states.append(s)
+        _d = trans.setdefault(s, {})
+        if i in _d and _d[i] != nx:
+            return None
+        _d[i] = nx
+        if s in mout and mout[s] != int(o):
+            return None
+        mout[s] = int(o)
+    if not arrow:
+        for m in re.finditer(r"^\s*(\w+)\s*\|\s*(\w+)\s*,\s*(\w+)\s*\|\s*([01])\s*$", prompt, re.M):
+            s, n0, n1, o = m.groups()
+            if s.lower() == "state":            # header row
+                continue
+            if s in trans:                      # duplicate row -> SKIP
+                return None
+            states.append(s)
+            trans[s] = {"0": n0, "1": n1}
+            mout[s] = int(o)
+    if len(states) < 2:
+        return None
+    known = set(states)
+    for s in states:
+        if set(trans.get(s, {}).keys()) != {"0", "1"}:    # incomplete -> SKIP
+            return None
+        if any(nx not in known for nx in trans[s].values()):
+            return None
+    return states, trans, mout
+
+
+def _parse_reset(prompt, known):
+    """Return (reset_state, is_async, active_high) or None — fully-specified only."""
+    # collect EVERY reset-anchored "to/into state X" (X a known state); require a
+    # UNIQUE target — an intervening clause ("reset takes priority over the
+    # transition to state D and forces the machine to state A") names two and must
+    # SKIP, never grab the first (Step-2.7 tabular review Finding 1).
+    targets = []
+    for m in re.finditer(r"resets?\b([^.\n]*)", prompt, re.I):
+        for t in re.finditer(r"\b(?:into|to)\s+state\s+(\w+)", m.group(1), re.I):
+            if t.group(1) in known:
+                targets.append(t.group(1))
+    if len(set(targets)) != 1:
+        return None
+    reset_state = targets[0]
+    # "asynchronous" CONTAINS "synchronous" — match on a word boundary.
+    is_async = bool(re.search(r"\basynchronous", prompt, re.I))
+    is_sync = bool(re.search(r"\bsynchronous", prompt, re.I))
+    if is_async == is_sync:
+        return None
+    active_low = bool(re.search(r"active[-\s]?low|reset\s+(?:is\s+)?(?:active\s+)?low", prompt, re.I))
+    active_high = bool(re.search(r"active[-\s]?high|reset\s+if\s+high|reset\s+(?:is\s+)?high", prompt, re.I))
+    # an async reset described as "positive/negative edge triggered" fixes the level
+    if not active_high and not active_low and is_async:
+        if re.search(r"positive[-\s]edge[-\s]?triggered\s+asynchronous", prompt, re.I):
+            active_high = True
+        elif re.search(r"negative[-\s]edge[-\s]?triggered\s+asynchronous", prompt, re.I):
+            active_low = True
+    if active_low == active_high:               # need an unambiguous level
+        return None
+    return reset_state, is_async, active_high
+
+
 def synth(prompt_text: str, top: str = "TopModule"):
     ins, outs = _parse_ports(prompt_text)
     if not ins or len(outs) != 1 or outs[0][1] != 1:
@@ -49,48 +122,16 @@ def synth(prompt_text: str, top: str = "TopModule"):
         return None
     fin = fsm_ins[0]
 
-    # Moore transition table: <state> (<out>) --<in>--> <next>
-    trans, mout, states = {}, {}, []
-    for m in re.finditer(r"^\s*(\w+)\s*\(\s*([01])\s*\)\s*--\s*([01])\s*-->\s*(\w+)",
-                         prompt_text, re.M):
-        s, o, i, nx = m.groups()
-        if s not in states:
-            states.append(s)
-        _d = trans.setdefault(s, {})
-        if i in _d and _d[i] != nx:             # conflicting duplicate (state,input) -> SKIP
-            return None
-        _d[i] = nx
-        if s in mout and mout[s] != int(o):     # inconsistent output annotation -> SKIP
-            return None
-        mout[s] = int(o)
-    if len(states) < 2:
+    parsed = _parse_fsm_table(prompt_text)
+    if parsed is None:
         return None
+    states, trans, mout = parsed
     known = set(states)
-    for s in states:
-        if set(trans.get(s, {}).keys()) != {"0", "1"}:   # incomplete -> SKIP
-            return None
-        if any(nx not in known for nx in trans[s].values()):
-            return None
 
-    # reset MUST be fully specified
-    mrs = re.search(r"reset[s]?\s+(?:in?to|to)\s+state\s+(\w+)", prompt_text, re.I)
-    if not mrs:
+    rparsed = _parse_reset(prompt_text, known)
+    if rparsed is None:
         return None
-    reset_state = mrs.group(1)
-    if reset_state not in known:
-        return None
-    # NOTE: "asynchronous" CONTAINS "synchronous" — match on a word boundary so the
-    # async case is not also read as sync (would SKIP a valid async-reset FSM).
-    is_async = bool(re.search(r"\basynchronous", prompt_text, re.I))
-    is_sync = bool(re.search(r"\bsynchronous", prompt_text, re.I))
-    if is_async == is_sync:                     # need exactly one stated
-        return None
-    active_low = bool(re.search(r"active[-\s]?low", prompt_text, re.I)) or \
-        bool(re.search(r"reset\s+(?:is\s+)?(?:active\s+)?low", prompt_text, re.I))
-    active_high = bool(re.search(r"active[-\s]?high|reset\s+if\s+high|if\s+reset\s+if\s+high"
-                                 r"|reset\s+(?:is\s+)?high", prompt_text, re.I))
-    if active_low == active_high:               # need an unambiguous level
-        return None
+    reset_state, is_async, active_high = rparsed
 
     # sequential encoding (FREE — TB observes only the output)
     code = {s: i for i, s in enumerate(states)}
