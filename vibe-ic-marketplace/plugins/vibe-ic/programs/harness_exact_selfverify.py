@@ -252,6 +252,16 @@ def gate_a_standalone_compile(rtl_path: Path, top: str, workdir: Path,
 _LINT_STYLE_SUPPRESS = (
     "UNUSEDSIGNAL", "UNUSEDPARAM", "DECLFILENAME", "UNDRIVEN",
     "PINCONNECTEMPTY", "UNOPTFLAT", "UNUSEDGENVAR",
+    # COMBDLY / BLKSEQ are ASSIGNMENT-OPERATOR STYLE warnings (`<=` in a
+    # combinational always / `=` in a sequential always). iverilog accepts both
+    # and the real VerilogEval / RTLLM scorer runs ONLY iverilog+vvp and NEVER
+    # lints — so blocking emit on them is a pure FALSE-BLOCK of a correct design
+    # (the gate is the sole emit path → it would silently drop a host-passing
+    # design and lower pass@1; Prob028_m2014_q4a's correct D-latch tripped this).
+    # No-leak: if the operator choice causes a REAL functional mismatch, the
+    # hidden TB (the final arbiter, run AFTER emit) catches it — a genuine
+    # %Error / non-style %Warning- still BLOCKs.
+    "COMBDLY", "BLKSEQ",
 )
 
 # ── intended-transparent-latch discriminator (ORGANIC #716 / Prob145_circuit8)

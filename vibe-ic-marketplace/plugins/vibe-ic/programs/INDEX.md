@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 700
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 700)
+- **Total programs (excluding helpers / shims):** 711
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 711)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 691 |
+| `any` | 702 |
 
 ## Alphabetical listing
 
@@ -100,6 +100,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `behavioral_evidence_per_spec_item_check` | any | v0.100 | v0.100 J1 |
 | `benchmark_clean_room_check` | any | — | clean-room run-dir guard (ORGANIC-20260604). |
 | `benchmark_dispatch` | any | — | entry point for /vibe-ic-benchmark. |
+| `benchmark_golden_capture` | any | — | record a HOST-VERIFIED, vibe-ic-AUTHORED solution as |
 | `benchmark_result_md_lint` | any | — | presence-check linter for the |
 | `benchmark_score_cwd_guard` | any | — | assert the host scorer is invoked |
 | `benchmark_setup` | any | — | environment check + dataset-clone helper for open benchmarks. |
@@ -142,6 +143,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `clause_smoke_tb` | any | — | ORGANIC #740 (G2) [chip-AGNOSTIC] |
 | `clock_cascade_synthesis_check` | any | — | refuse a top-level RTL that ties |
 | `clock_divider_period_check` | any | v0.116 | BACKLOG-v11 P0.2. |
+| `clock_divider_phase_form_check` | any | — | deterministic emit gate for the odd / |
 | `clock_plan_check` | any | — | Step 16 (Clock planning) substance gate. |
 | `clock_scale_consistency_check` | any | — | Catch un-rescaled threshold values. |
 | `cmd_arg_range_validation_check` | any | — | M4: Verify that command argument fields |
@@ -345,6 +347,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `json_schema_check` | any | — | Deterministic JSON schema key checker. |
 | `jtag_protocol_synth` | any | — | IEEE 1149.1 JTAG TAP controller deterministic |
 | `klayout_deck_mode_check` | any | v0.112 | BACKLOG-v10 P0.1 enforcement loop. |
+| `kmap_grid_synth` | any | — | DETERMINISTIC Karnaugh-map → RTL synthesizer |
 | `kmap_truth_table_oracle_check` | any | — | prompt-disclosed combinational oracle gate. |
 | `l10_tb_conformance_check` | any | v0.53 | v0.53 plugin gate |
 | `l10_test_cases_cover_l3_constraints_check` | any | Wave 39 | Wave 39 / D1 |
@@ -432,6 +435,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ocp_protocol_synth` | any | — | Open Core Protocol (OCP) SoC-bus protocol synth helper (protocol #70). |
 | `oe_pattern_check` | any | — | Analyze output-enable (OE) patterns for tristate bus drivers. |
 | `offgrid_drc_classify_check` | any | — | ORGANIC #594. |
+| `onehot_fsm_synth` | any | — | DETERMINISTIC one-hot FSM next-state/output synthesizer |
 | `onewire_protocol_synth` | any | v0.1.84 | 1-Wire-class protocol synth helper. |
 | `onfi_protocol_synth` | any | v0.1.84 | ONFI NAND-Flash protocol synth helper. |
 | `opcode_dispatch_completeness_check` | any | Wave 13 | v0.119.45 (Wave 13) gate. |
@@ -471,22 +475,26 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `phase1_consistency_check` | any | — | Cross-layer consistency gate (K4). |
 | `phase1_coverage_report_gen` | any | Wave 4 | Phase 1 (doc-extraction) extraction-coverage REPORT. |
 | `phase1_coverage_report_present_check` | any | Wave 5 | gate (BACKLOG-v13 Wave 5). |
+| `phase1_dialogue_render` | any | — | render a Phase-1 DIALOGUE artifact into a |
 | `phase1_doc_content_implementation_completeness_check` | any | Wave 47 | Wave 47 |
 | `phase1_doc_input_completeness_check` | any | — | strong gate |
 | `phase1_doc_one_shot_runner` | any | Wave 49 | chip-AGNOSTIC Phase 1 (doc-extraction) orchestrator. |
 | `phase1_doc_presence_check` | any | Wave 8 | Fail if fewer than 10 Phase-1 layer docs exist. |
 | `phase1_gate_contract_check` | any | v0.74 | Meta-checker for Phase 1 deterministic gates. |
 | `phase1_input_vs_generated_completeness_check` | any | v0.60 | Phase 1 coverage gate |
+| `phase1_json_converge` | any | — | deterministic comparator for the Phase-1 |
 | `phase1_k5_quality_check` | any | — | catch the 6 K5 issues found by real Phase-2 synth. |
 | `phase1_loop_stop_condition_check` | any | — | deterministic STOP gate for the |
 | `phase1_no_waivers_used_check` | any | Wave 23 | gate (Wave 23, v0.119.55). |
 | `phase1_one_shot_runner` | any | — | Phase 1 unified dispatcher. |
+| `phase1_port_extract` | any | — | deterministic PORT / PARAM / RESET extraction for the |
 | `phase1_post_process` | any | v0.1.51 | phase1 output post-processor. |
 | `phase1_protocol_spec_extract` | any | v0.1.51 | Phase 1 protocol-spec extractor (L14-L18). |
 | `phase1_provenance_presence_check` | any | — | Phase 1 D6-traceability gate. |
 | `phase1_quality_parity_check` | any | v0.50 | v0.50 gate |
 | `phase1_rotation_state_advance` | any | — | deterministic rotation for the |
 | `phase1_structured_field_substance_check` | any | — | Tier-2 sibling of the |
+| `phase1_sufficiency_check` | any | — | the SUFFICIENCY GATE of the Phase-1 dialogue |
 | `phase1_verify_aggregate` | any | v0.1.50 | Phase 1 output verification aggregator (Pattern-C → program). |
 | `phase23_completion_self_audit_check` | any | v0.109 | v0.109 mandatory self-audit gate. |
 | `phase23_one_shot_runner` | any | — | Phase 2 + Phase 3 chain. |
@@ -701,6 +709,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `vendor_fpga_reference_table_extraction_check` | any | v0.119.30 | gate (LL-29) that |
 | `verdict_token_propagation_check` | any | — | META-audit: producer -> consumer |
 | `verilator_coverage_measure` | any | v0.53 | v0.53 plugin gate |
+| `verilator_timing_fallback_check` | any | — | golden-self-test-guarded Verilator fallback |
 | `version_bump_monotonic_check` | any | — | strict version-bump gate for the |
 | `vibe_ic_one_shot_runner` | any | — | full Vibe-IC flow orchestrator. |
 | `wafer_map_pattern_classify` | any | — | D3 program-first extraction of the |
@@ -718,7 +727,9 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `warn_acceptance_policy_check` | any | — | O3: Enforce that every WARN finding from |
 | `waveform_artifact_hygiene_check` | any | — | no sim waveform dumps in the bundle. |
 | `waveform_table_conformance_check` | any | — | plugin gate (ORGANIC #716 / Prob098_circuit7). |
+| `waveform_truth_table_synth` | any | — | DETERMINISTIC combinational-waveform → RTL |
 | `wishbone_protocol_synth` | any | v0.1.85 | Wishbone B4 protocol synth helper. |
+| `worked_example_sequence_oracle_check` | any | — | deterministic emit gate that turns a |
 | `xlsx_extract` | any | — | Extract tables from .xlsx spec documents into JSON. |
 | `yield_fix_cost_rank` | any | — | D3 program-first extraction of the |
 | `yosys_hilomap_required_check` | any | — | Assert a Yosys .ys script's commands occur |
@@ -772,7 +783,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (691 programs)
+### `any` (702 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -848,6 +859,7 @@ _(no programs in this group)_
 - `behavioral_evidence_per_spec_item_check` — v0.100 J1  _[v0.100]_
 - `benchmark_clean_room_check` — clean-room run-dir guard (ORGANIC-20260604).
 - `benchmark_dispatch` — entry point for /vibe-ic-benchmark.
+- `benchmark_golden_capture` — record a HOST-VERIFIED, vibe-ic-AUTHORED solution as
 - `benchmark_result_md_lint` — presence-check linter for the
 - `benchmark_score_cwd_guard` — assert the host scorer is invoked
 - `benchmark_setup` — environment check + dataset-clone helper for open benchmarks.
@@ -889,6 +901,7 @@ _(no programs in this group)_
 - `clause_smoke_tb` — ORGANIC #740 (G2) [chip-AGNOSTIC]
 - `clock_cascade_synthesis_check` — refuse a top-level RTL that ties
 - `clock_divider_period_check` — BACKLOG-v11 P0.2.  _[v0.116]_
+- `clock_divider_phase_form_check` — deterministic emit gate for the odd /
 - `clock_plan_check` — Step 16 (Clock planning) substance gate.
 - `clock_scale_consistency_check` — Catch un-rescaled threshold values.
 - `cmd_arg_range_validation_check` — M4: Verify that command argument fields
@@ -1089,6 +1102,7 @@ _(no programs in this group)_
 - `json_schema_check` — Deterministic JSON schema key checker.
 - `jtag_protocol_synth` — IEEE 1149.1 JTAG TAP controller deterministic
 - `klayout_deck_mode_check` — BACKLOG-v10 P0.1 enforcement loop.  _[v0.112]_
+- `kmap_grid_synth` — DETERMINISTIC Karnaugh-map → RTL synthesizer
 - `kmap_truth_table_oracle_check` — prompt-disclosed combinational oracle gate.
 - `l10_tb_conformance_check` — v0.53 plugin gate  _[v0.53]_
 - `l10_test_cases_cover_l3_constraints_check` — Wave 39 / D1  _[Wave 39]_
@@ -1175,6 +1189,7 @@ _(no programs in this group)_
 - `ocp_protocol_synth` — Open Core Protocol (OCP) SoC-bus protocol synth helper (protocol #70).
 - `oe_pattern_check` — Analyze output-enable (OE) patterns for tristate bus drivers.
 - `offgrid_drc_classify_check` — ORGANIC #594.
+- `onehot_fsm_synth` — DETERMINISTIC one-hot FSM next-state/output synthesizer
 - `onewire_protocol_synth` — 1-Wire-class protocol synth helper.  _[v0.1.84]_
 - `onfi_protocol_synth` — ONFI NAND-Flash protocol synth helper.  _[v0.1.84]_
 - `opcode_dispatch_completeness_check` — v0.119.45 (Wave 13) gate.  _[Wave 13]_
@@ -1214,22 +1229,26 @@ _(no programs in this group)_
 - `phase1_consistency_check` — Cross-layer consistency gate (K4).
 - `phase1_coverage_report_gen` — Phase 1 (doc-extraction) extraction-coverage REPORT.  _[Wave 4]_
 - `phase1_coverage_report_present_check` — gate (BACKLOG-v13 Wave 5).  _[Wave 5]_
+- `phase1_dialogue_render` — render a Phase-1 DIALOGUE artifact into a
 - `phase1_doc_content_implementation_completeness_check` — Wave 47  _[Wave 47]_
 - `phase1_doc_input_completeness_check` — strong gate
 - `phase1_doc_one_shot_runner` — chip-AGNOSTIC Phase 1 (doc-extraction) orchestrator.  _[Wave 49]_
 - `phase1_doc_presence_check` — Fail if fewer than 10 Phase-1 layer docs exist.  _[Wave 8]_
 - `phase1_gate_contract_check` — Meta-checker for Phase 1 deterministic gates.  _[v0.74]_
 - `phase1_input_vs_generated_completeness_check` — Phase 1 coverage gate  _[v0.60]_
+- `phase1_json_converge` — deterministic comparator for the Phase-1
 - `phase1_k5_quality_check` — catch the 6 K5 issues found by real Phase-2 synth.
 - `phase1_loop_stop_condition_check` — deterministic STOP gate for the
 - `phase1_no_waivers_used_check` — gate (Wave 23, v0.119.55).  _[Wave 23]_
 - `phase1_one_shot_runner` — Phase 1 unified dispatcher.
+- `phase1_port_extract` — deterministic PORT / PARAM / RESET extraction for the
 - `phase1_post_process` — phase1 output post-processor.  _[v0.1.51]_
 - `phase1_protocol_spec_extract` — Phase 1 protocol-spec extractor (L14-L18).  _[v0.1.51]_
 - `phase1_provenance_presence_check` — Phase 1 D6-traceability gate.
 - `phase1_quality_parity_check` — v0.50 gate  _[v0.50]_
 - `phase1_rotation_state_advance` — deterministic rotation for the
 - `phase1_structured_field_substance_check` — Tier-2 sibling of the
+- `phase1_sufficiency_check` — the SUFFICIENCY GATE of the Phase-1 dialogue
 - `phase1_verify_aggregate` — Phase 1 output verification aggregator (Pattern-C → program).  _[v0.1.50]_
 - `phase23_completion_self_audit_check` — v0.109 mandatory self-audit gate.  _[v0.109]_
 - `phase23_one_shot_runner` — Phase 2 + Phase 3 chain.
@@ -1442,6 +1461,7 @@ _(no programs in this group)_
 - `vendor_fpga_reference_table_extraction_check` — gate (LL-29) that  _[v0.119.30]_
 - `verdict_token_propagation_check` — META-audit: producer -> consumer
 - `verilator_coverage_measure` — v0.53 plugin gate  _[v0.53]_
+- `verilator_timing_fallback_check` — golden-self-test-guarded Verilator fallback
 - `version_bump_monotonic_check` — strict version-bump gate for the
 - `vibe_ic_one_shot_runner` — full Vibe-IC flow orchestrator.
 - `wafer_map_pattern_classify` — D3 program-first extraction of the
@@ -1458,7 +1478,9 @@ _(no programs in this group)_
 - `warn_acceptance_policy_check` — O3: Enforce that every WARN finding from
 - `waveform_artifact_hygiene_check` — no sim waveform dumps in the bundle.
 - `waveform_table_conformance_check` — plugin gate (ORGANIC #716 / Prob098_circuit7).
+- `waveform_truth_table_synth` — DETERMINISTIC combinational-waveform → RTL
 - `wishbone_protocol_synth` — Wishbone B4 protocol synth helper.  _[v0.1.85]_
+- `worked_example_sequence_oracle_check` — deterministic emit gate that turns a
 - `xlsx_extract` — Extract tables from .xlsx spec documents into JSON.
 - `yield_fix_cost_rank` — D3 program-first extraction of the
 - `yosys_hilomap_required_check` — Assert a Yosys .ys script's commands occur
