@@ -92,25 +92,34 @@ per-element default from `agents/defaults/industry_std.yaml::reset_defaults` as
    0 (or its named reload); a shift/history register clears to all-0; a data/output
    register clears to 0 (or the spec's named POR/idle value). Apply these + flag the
    assumption — they are the hardware-simplest, spec-faithful choice.
-2. **NOT safe to auto** (`safe_to_auto: false`): a reset value that **verification can
-   OBSERVE** and that has **more than one plausible convention** is NOT a default you
-   may pick. **Surface it as a SPEC GAP** — relay a plain-language question to the
-   user, and (in a benchmark/scored context) let the deterministic solver SKIP
-   (`gate-ready`). NEVER silently pick a convention to make a hidden testbench pass —
-   that is the convention-guess leak the no-cheat doctrine forbids.
+2. **Owner-set house default for an observable-ambiguous value** (`safe_to_auto: true`
+   WITH a documented `note`): a value that verification can OBSERVE and that has more
+   than one silicon convention may STILL be auto-applied **iff the owner has set an
+   explicit, GENERAL, documented house default** in `reset_defaults` (a genre
+   convention, open-benchmark §4 Category-G — not an overfit to a golden). Apply it,
+   FLAG it with a provenance trace, and let host-verification confirm. The standing
+   owner defaults (2026-06-23): a **saturating branch-predictor counter → weakly-not-
+   taken** (`2'b01` for 2-bit, `2^(K-1)-1` for K), a **history/index register → 0**.
+3. **No house default + observable + multi-convention** → **surface as a SPEC GAP**:
+   relay a plain-language question to the user; never SILENTLY pick a convention to
+   make a hidden testbench pass — that bare guess is the convention-guess leak the
+   no-cheat doctrine forbids. (The difference from (2) is the *explicit, general,
+   documented* owner default vs. a silent per-problem guess.)
 
-> **Worked example (why a silent default is unsafe):** a 2-bit SATURATING
-> branch-predictor counter. `2'b00` (Strongly-Not-Taken) is the most common HARDWARE
-> reset; `2'b01` (Weakly-Not-Taken) is the textbook one; `2'b10` (Weakly-Taken) is
-> TAGE new-entry allocation. For `Prob153_gshare` the host-OBSERVABLE-correct value
-> was `2'b01`, so even "most common HW" (`00`) would have shipped WRONG RTL. The
-> history register, by contrast, reset to all-0 (safe-to-auto). So: split the reset
-> values — apply the all-0 / named-state safe defaults (+flag), and surface the
-> multi-convention observable one as a gap, don't guess it.
+> **Worked example:** a 2-bit SATURATING branch-predictor counter. `2'b00`
+> (Strongly-Not-Taken) is the most common HARDWARE reset; `2'b01` (Weakly-Not-Taken)
+> is the textbook one; `2'b10` (Weakly-Taken) is TAGE allocation. For `Prob153_gshare`
+> the host-OBSERVABLE-correct value was `2'b01` — so even "most common HW" (`00`)
+> would have shipped WRONG RTL. The owner therefore set `2'b01` as the GENERAL house
+> default (applied to ALL predictor counters, flagged, host-verified 0/1083), and the
+> history register → 0. This is a documented genre convention, not a per-problem
+> guess: `gshare_predictor_synth` now emits it with a `// ... house default; spec
+> silent` provenance comment and fires only inside the gshare-detected shape.
 
-The split is the point: most reset values ARE safe auto-defaults (apply + document);
-only a host-observable, multi-convention value (a predictor counter's bias, a
-priority-encoder's tie, a CDC synchronizer's metastable seed) must be surfaced.
+The line is: a value gets auto-filled iff it has a SAFE default (named/all-0) OR an
+explicit GENERAL owner house default (predictor → weakly-not-taken, history → 0),
+always FLAGGED; an observable, multi-convention value WITHOUT such a default
+(a CDC synchronizer seed, an undocumented priority tie) is surfaced, never guessed.
 
 ## Per-Layer Review Checklist
 

@@ -130,7 +130,9 @@ def test_real_dataset_dispatch_spotcheck():
         "Prob070_ece241_2013_q2": "nextstate_misc",
         "Prob096_review2015_fsmseq": "behavioral_fsm",
         "Prob055_conditional": "comb_advanced",
-        # wave-4 (gshare_predictor SKIPs Prob153 as-written -> not spotchecked)
+        # wave-4 (gshare_predictor now fires on Prob153 via the owner-directed house
+        # default: predictor counter -> weakly-not-taken 2'b01, history -> 0)
+        "Prob153_gshare": "gshare_predictor",
         "Prob144_conwaylife": "conway_2d",
         "Prob117_circuit9": "sequential_waveform_multibit",
         "Prob145_circuit8": "sequential_waveform_multibit",
