@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 724
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 724)
+- **Total programs (excluding helpers / shims):** 748
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 748)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 715 |
+| `any` | 739 |
 
 ## Alphabetical listing
 
@@ -89,6 +89,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `arinc429_protocol_synth` | any | v0.1.83 | ARINC 429 (Mark 33 DITS) protocol synth helper. |
 | `arith_oracle_tb_gen` | any | — | deterministic CLOSED-FORM oracle TB generator for |
 | `arith_ss_corner_risk_check` | any | — | slow-corner arithmetic-architecture advisor. |
+| `arithmetic_synth` | any | — | deterministic SOLVER for the integer-ARITHMETIC family |
 | `assertion_covers_l3_constraints_check` | any | Wave 39 | Wave 39 / D3 |
 | `assertion_property_check` | any | — | Deterministic compliance check for assertion-gen. |
 | `auto_diagnostic_led_synth` | any | v0.114 | v0.114 (BACKLOG-v6 D1). |
@@ -98,6 +99,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `backlog_sanitize_check` | any | — | Organic Plugin gate: verify that a community |
 | `backlog_severity_classify` | any | — | deterministic severity table-lookup for |
 | `behavioral_evidence_per_spec_item_check` | any | v0.100 | v0.100 J1 |
+| `behavioral_fsm_synth` | any | — | deterministic SOLVER for two GENERAL, mechanically- |
 | `benchmark_clean_room_check` | any | — | clean-room run-dir guard (ORGANIC-20260604). |
 | `benchmark_dispatch` | any | — | entry point for /vibe-ic-benchmark. |
 | `benchmark_golden_capture` | any | — | record a HOST-VERIFIED, vibe-ic-AUTHORED solution as |
@@ -133,6 +135,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `catalog_glue_closure_resolver` | any | — | REUSED-IP / catalog-glue staging |
 | `cdc_async_input_check` | any | — | deterministic compliance check derived from <chip-class> v040 debug. |
 | `cdc_crossing_check` | any | — | cdc_crossing_check.py -- Deterministic CDC report checker. |
+| `cellular_automaton_synth` | any | — | DETERMINISTIC 1-D cellular-automaton → RTL synth. |
 | `changelog_command_reproducibility_check` | any | — | anti-fabrication gate |
 | `changelog_metric_reproducibility_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `checkpoint_gate_check` | any | — | deterministic phase-transition checkpoint gate. |
@@ -153,14 +156,19 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `cmd_protocol_crc_verify` | any | — | Derive + verify CRC params from xlsx golden vectors. |
 | `cmd_response_conformance_check` | any | v0.50 | v0.50 plugin gate |
 | `cmd_response_otp_provenance_check` | any | — | for opcodes whose response |
+| `comb_advanced_synth` | any | — | deterministic SOLVER for ADVANCED purely-combinational |
+| `comb_gate_synth` | any | — | deterministic SOLVER for the COMBINATIONAL GATE / WIRE / |
 | `comb_state_table_synth` | any | — | deterministic SOLVER for a COMBINATIONAL state |
 | `connect_vs_send_test_parity_check` | any | Wave 27 | Wave 27 (v0.119.59) gate. |
 | `constants_validation` | any | — | Deterministic compliance check for rtl-constants-gen. |
 | `convergence_doctrine_present_check` | any | — | ORGANIC #716 |
+| `conway_2d_synth` | any | — | DETERMINISTIC 2-D cellular-automaton (Conway's Game of |
 | `coresight_protocol_synth` | any | — | ARM CoreSight on-chip debug & trace architecture synth helper (protocol #64). |
 | `corner_coverage_audit` | any | — | Audit PVT corner coverage in IC design flows. |
 | `corner_schedule_policy` | any | — | deterministic corner-schedule policy for |
 | `corner_yield_vs_spec_check` | any | — | independent yield-vs-spec.json gate |
+| `counter_advanced_synth` | any | — | deterministic SOLVER for the SUBTLE counter / |
+| `counter_popcount_synth` | any | — | deterministic SOLVER for the counter / popcount / |
 | `coverage_closure` | any | — | read coverage report; identify gaps. |
 | `coverage_metric_check` | any | — | coverage_metric_check.py -- Deterministic coverage report metric checker. |
 | `cpu_functional_oracle_waiver_check` | any | — | Step 4 connectivity-PASS / |
@@ -199,6 +207,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `design_complexity_estimator` | any | — | design_complexity_estimator.py -- Heuristic design-complexity score and |
 | `deterministic_rtl_dispatcher` | any | v0.1.9 | Phase-2 program-first RTL router. |
 | `device_response_no_br_check` | any | — | deterministic compliance check derived from |
+| `dff_edge_synth` | any | — | deterministic SOLVER for the D-flip-flop / edge-detect / |
 | `dfm_screen_check` | any | — | Step 35 DFM screen (v2.3). |
 | `dft_atpg_coverage_check` | any | — | REAL stuck-at coverage gate (Step 11 DFT/ATPG). |
 | `diff_verify_harness` | any | — | independent DIFFERENTIAL self-verification |
@@ -224,6 +233,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `em_report_check` | any | — | wrapper for eda_report_audit --mode em. |
 | `emitter_failure_mode_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `emmc_protocol_synth` | any | v0.1.84 | Embedded MultiMediaCard (eMMC, JEDEC JESD84-B51 / eMMC 5.1) protocol synth. |
+| `encoder_decoder_synth` | any | — | deterministic SOLVER for the PRIORITY-ENCODER family. |
 | `enhancement_emit` | any | v0.1.35 | driver for the benchmark-enhancement-capture skill. |
 | `erc_density_check` | any | — | Step-30 ERC + sign-off density-rule verification (real substance). |
 | `erc_float_owner_classify` | any | v0.3.16 | ORGANIC #514. Classify ERC floating nets/pins BY OWNER into |
@@ -279,6 +289,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `frontend_backend_handoff_check` | any | — | Verify all frontend deliverables are |
 | `frs_timing_range_check` | any | — | gate that catches L2 timing fields stored as |
 | `fsm_error_invariant` | any | — | Detect FSMs where an error signal can break upper-layer |
+| `fsm_prose_synth` | any | — | deterministic SOLVER for the COMBINATIONAL one-hot |
 | `fsm_state_coverage_check` | any | Wave 13 | v0.119.45 (Wave 13) gate. |
 | `fsm_table_rtl_gen` | any | v0.1.6 | deterministic FSM-table → synthesizable RTL generator. |
 | `fsm_transition_completeness_check` | any | v0.3.21 | v0.3.21 (ORGANIC #522). |
@@ -302,6 +313,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gen_skill_inventory` | any | — | single source of truth for the AI-skill count. |
 | `git_prohibition_guard` | any | — | deterministic guard for the core-agent loop |
 | `gitignore_scratch_guard` | any | — | ORGANIC #720 |
+| `gshare_predictor_synth` | any | — | deterministic SOLVER for the gshare branch-predictor |
 | `half_duplex_frame_end_idle_reset_check` | any | — | structural-RTL gate for |
 | `half_duplex_response_window_check` | any | — | LL-4. |
 | `half_duplex_wrapper_open_drain_check` | any | — | structural-RTL gate that |
@@ -352,6 +364,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `jtag_protocol_synth` | any | — | IEEE 1149.1 JTAG TAP controller deterministic |
 | `klayout_deck_mode_check` | any | v0.112 | BACKLOG-v10 P0.1 enforcement loop. |
 | `kmap_grid_synth` | any | — | DETERMINISTIC Karnaugh-map → RTL synthesizer |
+| `kmap_sop_synth` | any | — | deterministic Karnaugh-map (K-map) -> RTL SOLVER. |
 | `kmap_truth_table_oracle_check` | any | — | prompt-disclosed combinational oracle gate. |
 | `l10_tb_conformance_check` | any | v0.53 | v0.53 plugin gate |
 | `l10_test_cases_cover_l3_constraints_check` | any | Wave 39 | Wave 39 / D1 |
@@ -390,6 +403,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `lec_equivalence_check` | any | — | Step 13 deterministic LEC substance gate. |
 | `lessons_corpus_consistency_check` | any | — | ORGANIC #741 |
 | `level_shifter_required_check` | any | — | M2 gate (substance-verifying). |
+| `lfsr_synth` | any | — | deterministic SOLVER for the LINEAR-FEEDBACK-SHIFT-REGISTER |
 | `lin_protocol_synth` | any | v0.1.84 | LIN-class protocol synth helper. |
 | `literal_verdict_keyword_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `llm_semantic_confirm` | any | — | LLM double-confirm for program-extracted SEMANTIC fields. |
@@ -411,6 +425,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `mask_application_check` | any | — | Verify any AND-mask rule the spec declares |
 | `mcp_execution_verify` | any | — | Deterministic MCP tool execution verifier. |
 | `mdio_protocol_synth` | any | — | IEEE 802.3 Management Data Input/Output (MDIO) protocol synth helper. |
+| `mealy_sequence_synth` | any | — | deterministic SOLVER for the MEALY FSM table / |
 | `memory_read_pipeline_check` | any | — | Registered-read memory modules must |
 | `metadata_content_substance_check` | any | — | guard against empty / near-empty |
 | `metal_fill_density_check` | any | — | Verify metal fill was inserted and density is within bounds. |
@@ -428,10 +443,13 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `mixed_signal_top_lvs_run` | any | — | REAL top-level mixed-signal merge + |
 | `modbus_protocol_synth` | any | v0.1.84 | Modbus-class protocol synth helper. |
 | `module_port_audit` | any | v0.36 | Deterministic port-name mismatch detector for multi-module |
+| `moore_fsm_table_emit` | any | — | the PROGRAM half of the AI-extracts / program-emits |
 | `mpw_precheck_cleanup` | any | v0.1.51 | mpw_precheck cleanup automator (B4 from spm pilot). |
+| `mux_synth` | any | — | deterministic SOLVER for the MULTIPLEXER family (spec -> RTL). |
 | `nba_addr_read_race_check` | any | — | FSM consuming addressed data without pipelining. |
 | `nba_shift_register_same_cycle_read_check` | any | Wave 12 | v0.119.44 (Wave 12) plugin gate. |
 | `netlist_src_coord_canonicalize` | any | — | make a synthesised netlist reproducible |
+| `nextstate_misc_synth` | any | — | deterministic SOLVER for the remaining mechanically- |
 | `nfc_protocol_synth` | any | v0.1.84 | NFC / ISO 14443 contactless-protocol synth helper. |
 | `no_protocol_consistency_check` | any | v0.56 | v0.56 plugin gate |
 | `nvlink_protocol_synth` | any | v0.1.89 | NVIDIA NVLink (high-speed GPU / die-to-die interconnect) protocol synth helper. |
@@ -572,6 +590,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `reset_clock_variant_alias` | any | v0.3.18 | v0.3.18 (ORGANIC #518). |
 | `reset_dependency_check` | any | — | deterministic compliance check derived from <chip-class> v040 debug. |
 | `reset_discipline_check` | any | — | deterministic reset-discipline lint. |
+| `residual_combinational_synth` | any | — | deterministic spec->RTL for the RESIDUAL |
 | `residual_recognizer` | any | — | routing recognizers for the genuinely-PROSE and VISION |
 | `response_latency_observability_check` | any | — | LL-5. |
 | `response_payload_template_check` | any | — | M5: Verify that response payload bytes |
@@ -621,8 +640,11 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `self_rx_mask_required_check` | any | Wave 16 | Wave 16 silent-bug gate. |
 | `send_test_active_drive_check` | any | Wave 27 | Wave 27 (v0.119.59) gate. |
 | `sent_protocol_synth` | any | — | Single Edge Nibble Transmission (SENT) protocol synth helper. |
+| `sequential_waveform_synth` | any | — | DETERMINISTIC multi-bit / sequential waveform → RTL. |
+| `serial_protocol_fsm_synth` | any | — | deterministic SOLVER for serial / protocol |
 | `sgmii_protocol_synth` | any | — | Serial-GMII (SGMII) protocol synth helper. |
 | `shape_b_sample_export` | any | — | deterministic Shape-B sample-export (ORGANIC #678). |
+| `shift_register_synth` | any | — | deterministic SOLVER for the shift-register / rotate / |
 | `si_crosstalk_check` | any | — | Verify signal integrity / crosstalk analysis was performed. |
 | `si_signoff_timing_aware` | any | — | OPEN-SOURCE timing-window-aware SI ADVISORY screen. |
 | `signaltap_recompile_sequence_check` | any | — | Validate that the Quartus |
@@ -719,6 +741,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `usb_protocol_synth` | any | v0.1.82 | USB-class protocol synth helper. |
 | `utilization_band_check` | any | v0.2.69 | Floorplan/placement utilization band classifier. |
 | `vector_op_rtl_gen` | any | v0.1.8 | deterministic vector-operation → RTL generator. |
+| `vector_ops_synth` | any | — | deterministic SOLVER for the VECTOR-MANIPULATION family |
 | `vendor_fpga_reference_table_extraction_check` | any | v0.119.30 | gate (LL-29) that |
 | `verdict_token_propagation_check` | any | — | META-audit: producer -> consumer |
 | `verilator_coverage_measure` | any | v0.53 | v0.53 plugin gate |
@@ -739,6 +762,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `wake_pulse_width_matches_measurement_check` | any | Wave 18 | Wave 18 silent-bug gate. |
 | `warn_acceptance_policy_check` | any | — | O3: Enforce that every WARN finding from |
 | `waveform_artifact_hygiene_check` | any | — | no sim waveform dumps in the bundle. |
+| `waveform_ext_synth` | any | — | DETERMINISTIC waveform → RTL synthesizer, COMPLEMENT |
 | `waveform_table_conformance_check` | any | — | plugin gate (ORGANIC #716 / Prob098_circuit7). |
 | `waveform_truth_table_synth` | any | — | DETERMINISTIC combinational-waveform → RTL |
 | `wishbone_protocol_synth` | any | v0.1.85 | Wishbone B4 protocol synth helper. |
@@ -796,7 +820,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (715 programs)
+### `any` (739 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -861,6 +885,7 @@ _(no programs in this group)_
 - `arinc429_protocol_synth` — ARINC 429 (Mark 33 DITS) protocol synth helper.  _[v0.1.83]_
 - `arith_oracle_tb_gen` — deterministic CLOSED-FORM oracle TB generator for
 - `arith_ss_corner_risk_check` — slow-corner arithmetic-architecture advisor.
+- `arithmetic_synth` — deterministic SOLVER for the integer-ARITHMETIC family
 - `assertion_covers_l3_constraints_check` — Wave 39 / D3  _[Wave 39]_
 - `assertion_property_check` — Deterministic compliance check for assertion-gen.
 - `auto_diagnostic_led_synth` — v0.114 (BACKLOG-v6 D1).  _[v0.114]_
@@ -870,6 +895,7 @@ _(no programs in this group)_
 - `backlog_sanitize_check` — Organic Plugin gate: verify that a community
 - `backlog_severity_classify` — deterministic severity table-lookup for
 - `behavioral_evidence_per_spec_item_check` — v0.100 J1  _[v0.100]_
+- `behavioral_fsm_synth` — deterministic SOLVER for two GENERAL, mechanically-
 - `benchmark_clean_room_check` — clean-room run-dir guard (ORGANIC-20260604).
 - `benchmark_dispatch` — entry point for /vibe-ic-benchmark.
 - `benchmark_golden_capture` — record a HOST-VERIFIED, vibe-ic-AUTHORED solution as
@@ -904,6 +930,7 @@ _(no programs in this group)_
 - `catalog_glue_closure_resolver` — REUSED-IP / catalog-glue staging
 - `cdc_async_input_check` — deterministic compliance check derived from <chip-class> v040 debug.
 - `cdc_crossing_check` — cdc_crossing_check.py -- Deterministic CDC report checker.
+- `cellular_automaton_synth` — DETERMINISTIC 1-D cellular-automaton → RTL synth.
 - `changelog_command_reproducibility_check` — anti-fabrication gate
 - `changelog_metric_reproducibility_check` — anti-fabrication gate (v1.6.38).
 - `checkpoint_gate_check` — deterministic phase-transition checkpoint gate.
@@ -923,14 +950,19 @@ _(no programs in this group)_
 - `cmd_protocol_crc_verify` — Derive + verify CRC params from xlsx golden vectors.
 - `cmd_response_conformance_check` — v0.50 plugin gate  _[v0.50]_
 - `cmd_response_otp_provenance_check` — for opcodes whose response
+- `comb_advanced_synth` — deterministic SOLVER for ADVANCED purely-combinational
+- `comb_gate_synth` — deterministic SOLVER for the COMBINATIONAL GATE / WIRE /
 - `comb_state_table_synth` — deterministic SOLVER for a COMBINATIONAL state
 - `connect_vs_send_test_parity_check` — Wave 27 (v0.119.59) gate.  _[Wave 27]_
 - `constants_validation` — Deterministic compliance check for rtl-constants-gen.
 - `convergence_doctrine_present_check` — ORGANIC #716
+- `conway_2d_synth` — DETERMINISTIC 2-D cellular-automaton (Conway's Game of
 - `coresight_protocol_synth` — ARM CoreSight on-chip debug & trace architecture synth helper (protocol #64).
 - `corner_coverage_audit` — Audit PVT corner coverage in IC design flows.
 - `corner_schedule_policy` — deterministic corner-schedule policy for
 - `corner_yield_vs_spec_check` — independent yield-vs-spec.json gate
+- `counter_advanced_synth` — deterministic SOLVER for the SUBTLE counter /
+- `counter_popcount_synth` — deterministic SOLVER for the counter / popcount /
 - `coverage_closure` — read coverage report; identify gaps.
 - `coverage_metric_check` — coverage_metric_check.py -- Deterministic coverage report metric checker.
 - `cpu_functional_oracle_waiver_check` — Step 4 connectivity-PASS /
@@ -968,6 +1000,7 @@ _(no programs in this group)_
 - `design_complexity_estimator` — design_complexity_estimator.py -- Heuristic design-complexity score and
 - `deterministic_rtl_dispatcher` — Phase-2 program-first RTL router.  _[v0.1.9]_
 - `device_response_no_br_check` — deterministic compliance check derived from
+- `dff_edge_synth` — deterministic SOLVER for the D-flip-flop / edge-detect /
 - `dfm_screen_check` — Step 35 DFM screen (v2.3).
 - `dft_atpg_coverage_check` — REAL stuck-at coverage gate (Step 11 DFT/ATPG).
 - `diff_verify_harness` — independent DIFFERENTIAL self-verification
@@ -992,6 +1025,7 @@ _(no programs in this group)_
 - `em_report_check` — wrapper for eda_report_audit --mode em.
 - `emitter_failure_mode_check` — anti-fabrication gate (v1.6.38).
 - `emmc_protocol_synth` — Embedded MultiMediaCard (eMMC, JEDEC JESD84-B51 / eMMC 5.1) protocol synth.  _[v0.1.84]_
+- `encoder_decoder_synth` — deterministic SOLVER for the PRIORITY-ENCODER family.
 - `enhancement_emit` — driver for the benchmark-enhancement-capture skill.  _[v0.1.35]_
 - `erc_density_check` — Step-30 ERC + sign-off density-rule verification (real substance).
 - `erc_float_owner_classify` — ORGANIC #514. Classify ERC floating nets/pins BY OWNER into  _[v0.3.16]_
@@ -1047,6 +1081,7 @@ _(no programs in this group)_
 - `frontend_backend_handoff_check` — Verify all frontend deliverables are
 - `frs_timing_range_check` — gate that catches L2 timing fields stored as
 - `fsm_error_invariant` — Detect FSMs where an error signal can break upper-layer
+- `fsm_prose_synth` — deterministic SOLVER for the COMBINATIONAL one-hot
 - `fsm_state_coverage_check` — v0.119.45 (Wave 13) gate.  _[Wave 13]_
 - `fsm_table_rtl_gen` — deterministic FSM-table → synthesizable RTL generator.  _[v0.1.6]_
 - `fsm_transition_completeness_check` — v0.3.21 (ORGANIC #522).  _[v0.3.21]_
@@ -1070,6 +1105,7 @@ _(no programs in this group)_
 - `gen_skill_inventory` — single source of truth for the AI-skill count.
 - `git_prohibition_guard` — deterministic guard for the core-agent loop
 - `gitignore_scratch_guard` — ORGANIC #720
+- `gshare_predictor_synth` — deterministic SOLVER for the gshare branch-predictor
 - `half_duplex_frame_end_idle_reset_check` — structural-RTL gate for
 - `half_duplex_response_window_check` — LL-4.
 - `half_duplex_wrapper_open_drain_check` — structural-RTL gate that
@@ -1120,6 +1156,7 @@ _(no programs in this group)_
 - `jtag_protocol_synth` — IEEE 1149.1 JTAG TAP controller deterministic
 - `klayout_deck_mode_check` — BACKLOG-v10 P0.1 enforcement loop.  _[v0.112]_
 - `kmap_grid_synth` — DETERMINISTIC Karnaugh-map → RTL synthesizer
+- `kmap_sop_synth` — deterministic Karnaugh-map (K-map) -> RTL SOLVER.
 - `kmap_truth_table_oracle_check` — prompt-disclosed combinational oracle gate.
 - `l10_tb_conformance_check` — v0.53 plugin gate  _[v0.53]_
 - `l10_test_cases_cover_l3_constraints_check` — Wave 39 / D1  _[Wave 39]_
@@ -1157,6 +1194,7 @@ _(no programs in this group)_
 - `lec_equivalence_check` — Step 13 deterministic LEC substance gate.
 - `lessons_corpus_consistency_check` — ORGANIC #741
 - `level_shifter_required_check` — M2 gate (substance-verifying).
+- `lfsr_synth` — deterministic SOLVER for the LINEAR-FEEDBACK-SHIFT-REGISTER
 - `lin_protocol_synth` — LIN-class protocol synth helper.  _[v0.1.84]_
 - `literal_verdict_keyword_check` — anti-fabrication gate (v1.6.38).
 - `llm_semantic_confirm` — LLM double-confirm for program-extracted SEMANTIC fields.
@@ -1178,6 +1216,7 @@ _(no programs in this group)_
 - `mask_application_check` — Verify any AND-mask rule the spec declares
 - `mcp_execution_verify` — Deterministic MCP tool execution verifier.
 - `mdio_protocol_synth` — IEEE 802.3 Management Data Input/Output (MDIO) protocol synth helper.
+- `mealy_sequence_synth` — deterministic SOLVER for the MEALY FSM table /
 - `memory_read_pipeline_check` — Registered-read memory modules must
 - `metadata_content_substance_check` — guard against empty / near-empty
 - `metal_fill_density_check` — Verify metal fill was inserted and density is within bounds.
@@ -1195,10 +1234,13 @@ _(no programs in this group)_
 - `mixed_signal_top_lvs_run` — REAL top-level mixed-signal merge +
 - `modbus_protocol_synth` — Modbus-class protocol synth helper.  _[v0.1.84]_
 - `module_port_audit` — Deterministic port-name mismatch detector for multi-module  _[v0.36]_
+- `moore_fsm_table_emit` — the PROGRAM half of the AI-extracts / program-emits
 - `mpw_precheck_cleanup` — mpw_precheck cleanup automator (B4 from spm pilot).  _[v0.1.51]_
+- `mux_synth` — deterministic SOLVER for the MULTIPLEXER family (spec -> RTL).
 - `nba_addr_read_race_check` — FSM consuming addressed data without pipelining.
 - `nba_shift_register_same_cycle_read_check` — v0.119.44 (Wave 12) plugin gate.  _[Wave 12]_
 - `netlist_src_coord_canonicalize` — make a synthesised netlist reproducible
+- `nextstate_misc_synth` — deterministic SOLVER for the remaining mechanically-
 - `nfc_protocol_synth` — NFC / ISO 14443 contactless-protocol synth helper.  _[v0.1.84]_
 - `no_protocol_consistency_check` — v0.56 plugin gate  _[v0.56]_
 - `nvlink_protocol_synth` — NVIDIA NVLink (high-speed GPU / die-to-die interconnect) protocol synth helper.  _[v0.1.89]_
@@ -1339,6 +1381,7 @@ _(no programs in this group)_
 - `reset_clock_variant_alias` — v0.3.18 (ORGANIC #518).  _[v0.3.18]_
 - `reset_dependency_check` — deterministic compliance check derived from <chip-class> v040 debug.
 - `reset_discipline_check` — deterministic reset-discipline lint.
+- `residual_combinational_synth` — deterministic spec->RTL for the RESIDUAL
 - `residual_recognizer` — routing recognizers for the genuinely-PROSE and VISION
 - `response_latency_observability_check` — LL-5.
 - `response_payload_template_check` — M5: Verify that response payload bytes
@@ -1386,8 +1429,11 @@ _(no programs in this group)_
 - `self_rx_mask_required_check` — Wave 16 silent-bug gate.  _[Wave 16]_
 - `send_test_active_drive_check` — Wave 27 (v0.119.59) gate.  _[Wave 27]_
 - `sent_protocol_synth` — Single Edge Nibble Transmission (SENT) protocol synth helper.
+- `sequential_waveform_synth` — DETERMINISTIC multi-bit / sequential waveform → RTL.
+- `serial_protocol_fsm_synth` — deterministic SOLVER for serial / protocol
 - `sgmii_protocol_synth` — Serial-GMII (SGMII) protocol synth helper.
 - `shape_b_sample_export` — deterministic Shape-B sample-export (ORGANIC #678).
+- `shift_register_synth` — deterministic SOLVER for the shift-register / rotate /
 - `si_crosstalk_check` — Verify signal integrity / crosstalk analysis was performed.
 - `si_signoff_timing_aware` — OPEN-SOURCE timing-window-aware SI ADVISORY screen.
 - `signaltap_recompile_sequence_check` — Validate that the Quartus
@@ -1484,6 +1530,7 @@ _(no programs in this group)_
 - `usb_protocol_synth` — USB-class protocol synth helper.  _[v0.1.82]_
 - `utilization_band_check` — Floorplan/placement utilization band classifier.  _[v0.2.69]_
 - `vector_op_rtl_gen` — deterministic vector-operation → RTL generator.  _[v0.1.8]_
+- `vector_ops_synth` — deterministic SOLVER for the VECTOR-MANIPULATION family
 - `vendor_fpga_reference_table_extraction_check` — gate (LL-29) that  _[v0.119.30]_
 - `verdict_token_propagation_check` — META-audit: producer -> consumer
 - `verilator_coverage_measure` — v0.53 plugin gate  _[v0.53]_
@@ -1503,6 +1550,7 @@ _(no programs in this group)_
 - `wake_pulse_width_matches_measurement_check` — Wave 18 silent-bug gate.  _[Wave 18]_
 - `warn_acceptance_policy_check` — O3: Enforce that every WARN finding from
 - `waveform_artifact_hygiene_check` — no sim waveform dumps in the bundle.
+- `waveform_ext_synth` — DETERMINISTIC waveform → RTL synthesizer, COMPLEMENT
 - `waveform_table_conformance_check` — plugin gate (ORGANIC #716 / Prob098_circuit7).
 - `waveform_truth_table_synth` — DETERMINISTIC combinational-waveform → RTL
 - `wishbone_protocol_synth` — Wishbone B4 protocol synth helper.  _[v0.1.85]_
