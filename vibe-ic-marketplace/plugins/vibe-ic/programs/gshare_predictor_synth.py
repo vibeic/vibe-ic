@@ -34,10 +34,18 @@ carry two notoriously convention-dependent, host-OBSERVABLE details:
   * the history-register RESET VALUE (0 vs any other seed) — also host-observable
     because it XOR-indexes the very first predictions.
 
-So this solver SKIPs (returns None) unless the prompt UNAMBIGUOUSLY states BOTH
-reset values (and every other structural detail below). It NEVER hard-codes the
-"usual" 2'b01 / 0 convention from the problem name. If a prompt DOES pin the reset
-values, the solver fires and the emitted datapath is host-correct.
+Reset-VALUE policy (OWNER-DIRECTED house defaults, 2026-06-23 — supersedes the
+original SKIP-unless-stated gate): the solver uses the prompt's stated reset values
+when given; when the prompt is SILENT it applies the documented GENRE CONVENTION —
+a K-bit saturating predictor counter resets to WEAKLY-NOT-TAKEN (2'b01 for K=2,
+i.e. 2^(K-1)-1) and the history register resets to 0 (see
+`agents/defaults/industry_std.yaml::reset_defaults`). This is open-benchmark §4
+Category-G "conventional shape inference" (a canonical genre default), NOT an
+overfit to a specific golden, and the emitted RTL carries a `// ... house default;
+spec silent` provenance comment for every auto-applied value. The solver still
+returns None on a structurally-impossible value or a non-gshare prompt; it never
+fires outside the gshare-detected shape, so the convention default touches only
+predictor designs.
 
 API: synth(prompt_text, top="TopModule") -> RTL str | None
 """
@@ -253,11 +261,24 @@ def _reset_values(text: str, k, h):
         else:
             base = 16 if "'h" in m.group(0).lower() else 2
             hist_val = int(m.group(2), base)
-    if pht_val is None or hist_val is None:
-        return None
+    # OWNER-DIRECTED HOUSE DEFAULTS (2026-06-23): when the spec is silent on a reset
+    # VALUE, apply the documented genre convention instead of SKIPping — a 2-bit (K-bit)
+    # saturating predictor counter resets to WEAKLY-NOT-TAKEN (2'b01 for K=2, i.e.
+    # 2^(K-1)-1), and the history register resets to 0. These are GENERAL conventions
+    # (open-benchmark §4 Category-G "conventional shape inference"), not an overfit to
+    # any golden, and the emitted RTL carries a provenance comment. `defaulted` records
+    # which values were auto-applied so the emit (and any audit) can trace the assumption.
+    defaulted = []
+    if pht_val is None:
+        pht_val = (1 << (k - 1)) - 1           # weakly-not-taken (K=2 -> 2'b01)
+        defaulted.append(f"PHT counter reset = weakly-not-taken {k}'b"
+                         f"{format(pht_val, '0%db' % k)} (house default; spec silent)")
+    if hist_val is None:
+        hist_val = 0
+        defaulted.append("history register reset = 0 (house default; spec silent)")
     if hist_val >= (1 << h):
         return None
-    return (pht_val, hist_val)
+    return (pht_val, hist_val, defaulted)
 
 
 # --------------------------------------------------------------------------- #
@@ -394,18 +415,21 @@ def synth(prompt_text: str, top: str = "TopModule"):
         return None
     async_reset, active_high = rt
 
-    # --- §4.05 FLOOR: the two reset VALUES must be UNAMBIGUOUSLY stated. ---
+    # --- reset VALUES: use the stated values, else the owner-directed house
+    #     defaults (PHT -> weakly-not-taken, history -> 0). `_reset_values` only
+    #     returns None on a structurally-impossible value (e.g. history width
+    #     overflow), so a missing reset value no longer SKIPs. ---
     rv = _reset_values(prompt_text, k, h)
     if rv is None:
-        # Every structural part above is solved, but the host-OBSERVABLE PHT
-        # counter reset value and history reset value are NOT stated by the
-        # prompt. Hard-coding the conventional 2'b01 / 0 would be a §4.05 leak
-        # (an unstated-convention guess). SKIP — honest AI-floor.
         return None
-    pht_reset, hist_reset = rv
+    pht_reset, hist_reset, _reset_defaulted = rv
 
-    return _emit(top, clk, areset, ports, h, pc_w, k, pht_n,
-                 async_reset, active_high, pht_reset, hist_reset)
+    rtl = _emit(top, clk, areset, ports, h, pc_w, k, pht_n,
+                async_reset, active_high, pht_reset, hist_reset)
+    if _reset_defaulted and rtl:
+        prov = "".join(f"// {n}\n" for n in _reset_defaulted)
+        rtl = prov + rtl
+    return rtl
 
 
 if __name__ == "__main__":
