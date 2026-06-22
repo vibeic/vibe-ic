@@ -59,13 +59,71 @@ def extract_counter(text: str) -> Optional[Dict]:
 
 
 def extract_shift_register(text: str) -> Optional[Dict]:
-    if not re.search(r"shift\s*register|\bLFSR\b|barrel\s*shifter|shifts?\s+(?:left|right)", text, re.I):
+    if not re.search(r"shift\s*register|\bLFSR\b|barrel\s*shifter|shifts?\s+(?:left|right)|"
+                     r"(?:left|right)[\s-]*shift(?:er)?", text, re.I):
         return None
-    direction = "right" if re.search(r"shift\w*\s+right|right[\s-]*shift|MSB[- ]?first",
+    direction = "right" if re.search(r"shift\w*\s+right|right[\s-]*shift(?:er)?|MSB[- ]?first",
                                      text, re.I) else "left"
     return {"width": _width(text), "direction": direction,
             "lfsr": bool(re.search(r"\bLFSR\b", text, re.I)),
             "load": bool(re.search(r"\bload\b|parallel\s+load", text, re.I))}
+
+
+def extract_sequence_detector_v2(text: str) -> Optional[Dict]:
+    m = (re.search(r"(?:sequence|pattern)\s+[\"']?([01]{2,})[\"']?", text, re.I)
+         or re.search(r"detect(?:s|ing)?\s+(?:the\s+)?(?:sequence|pattern)?\s*[\"']?([01]{3,})", text, re.I)
+         or re.search(r"when\s+(?:the\s+)?input\s+is\s+[\"']?([01]{3,})", text, re.I)
+         or re.search(r"\b([01]{4,})\b[^.]{0,40}?(?:is\s+detected|detected|\bmatch)", text, re.I))
+    if not m:
+        return None
+    return {"pattern": m.group(1),
+            "overlap": bool(re.search(r"overlap", text, re.I)),
+            "mealy": bool(re.search(r"\bMealy\b", text, re.I)),
+            "moore": bool(re.search(r"\bMoore\b", text, re.I))}
+
+
+def extract_edge_detector(text: str) -> Optional[Dict]:
+    if not re.search(r"edge\s+detect|detect\w*\s+(?:the\s+)?edge|changes?\s+from\s+0\s+to\s+1|"
+                     r"rising\s+edge|falling\s+edge", text, re.I):
+        return None
+    edge = ("rising" if re.search(r"0\s+to\s+1|rising|low\s+to\s+high", text, re.I)
+            else "falling" if re.search(r"1\s+to\s+0|falling|high\s+to\s+low", text, re.I) else "any")
+    return {"detect": "edge", "edge": edge}
+
+
+def extract_pulse_detector(text: str) -> Optional[Dict]:
+    if not re.search(r"pulse\s+detect|detect\w*\s+(?:a\s+)?pulse", text, re.I):
+        return None
+    return {"detect": "pulse"}
+
+
+def extract_clock_generator(text: str) -> Optional[Dict]:
+    if not re.search(r"clock\s+generator|generates?\s+(?:a\s+)?(?:periodic\s+)?clock|"
+                     r"clock\s+divider|frequency\s+divider|divide[- ]by[- ]\d", text, re.I):
+        return None
+    d = {"kind": "clock_generator"}
+    m = re.search(r"divide[- ]by[- ](\d+)|period\D{0,8}(\d+)", text, re.I)
+    if m:
+        d["divisor"] = int(next(g for g in m.groups() if g))
+    return d
+
+
+def extract_signal_generator(text: str) -> Optional[Dict]:
+    m = re.search(r"\b(triangle|sawtooth|square|sine|ramp)\b\s*wave|waveform\s+generat|"
+                  r"signal\s+generator", text, re.I)
+    if not m:
+        return None
+    return {"kind": "signal_generator", "wave": (m.group(1).lower() if m.group(1) else None),
+            "width": _width(text)}
+
+
+def extract_timekeeping(text: str) -> Optional[Dict]:
+    if not re.search(r"\bcalendar\b|second\w*\D{0,30}minute|\bRTC\b|real[- ]time\s+clock|"
+                     r"stopwatch|hh:mm:ss", text, re.I):
+        return None
+    fields = [f for f in ("second", "minute", "hour", "day", "month", "year")
+              if re.search(rf"\b{f}", text, re.I)]
+    return {"kind": "timekeeping", "fields": fields}
 
 
 def extract_boolean_expression(text: str) -> Optional[Dict]:
@@ -143,11 +201,16 @@ EXTRACTORS = {
     "counter_spec": extract_counter,
     "shift_register_spec": extract_shift_register,
     "boolean_expression": extract_boolean_expression,
-    "sequence_detector": extract_sequence_detector,
+    "sequence_detector": extract_sequence_detector_v2,
     "number_format": extract_number_format,
     "pdk_target": extract_pdk_target,
     "timing_constraints": extract_timing_constraints,
     "crc_checksum_spec": extract_crc,
+    "edge_detector": extract_edge_detector,
+    "pulse_detector": extract_pulse_detector,
+    "clock_generator": extract_clock_generator,
+    "signal_generator": extract_signal_generator,
+    "timekeeping": extract_timekeeping,
 }
 
 
