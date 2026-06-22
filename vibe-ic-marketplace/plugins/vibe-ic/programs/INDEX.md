@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 713
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 713)
+- **Total programs (excluding helpers / shims):** 714
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 714)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 704 |
+| `any` | 705 |
 
 ## Alphabetical listing
 
@@ -638,6 +638,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `spare_cell_coverage_check` | any | — | Design-for-ECO READINESS gate (Step 18). |
 | `spare_cell_preservation_check` | any | — | Design-for-ECO PRESERVATION gate. |
 | `spdif_protocol_synth` | any | v0.1.84 | S/PDIF-class protocol synth helper. |
+| `spec_artifact_registry` | any | — | SINGLE SOURCE OF TRUTH for the canonical STRUCTURED |
 | `spec_conformance_check` | any | — | Spec↔RTL contract-conformance gate. |
 | `spec_coverage_check` | any | — | ORGANIC #697 [P1, chip-AGNOSTIC] |
 | `spec_example_smoke_tb` | any | — | ORGANIC #728 [P1, chip-AGNOSTIC] |
@@ -785,7 +786,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (704 programs)
+### `any` (705 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1392,6 +1393,7 @@ _(no programs in this group)_
 - `spare_cell_coverage_check` — Design-for-ECO READINESS gate (Step 18).
 - `spare_cell_preservation_check` — Design-for-ECO PRESERVATION gate.
 - `spdif_protocol_synth` — S/PDIF-class protocol synth helper.  _[v0.1.84]_
+- `spec_artifact_registry` — SINGLE SOURCE OF TRUTH for the canonical STRUCTURED
 - `spec_conformance_check` — Spec↔RTL contract-conformance gate.
 - `spec_coverage_check` — ORGANIC #697 [P1, chip-AGNOSTIC]
 - `spec_example_smoke_tb` — ORGANIC #728 [P1, chip-AGNOSTIC]
