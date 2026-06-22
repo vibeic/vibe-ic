@@ -85,7 +85,7 @@ CATALOG: Tuple[ElementType, ...] = (
     ElementType("state_encoding", "State Encoding", "sequential", ("L6", "L8C"), "table",
                 "{state->code}", "kmap_truth_table_oracle_check._parse_state_encoding", None, "live"),
     ElementType("state_diagram", "State Diagram (bubble)", "sequential", ("L6",), "vision",
-                "{states[], edges[{from,to,cond,out}]}", "residual_recognizer.recognize_all", None, "live"),
+                "{states[], edges[{from,to,cond,out}]}", "figure_extractor.extract_figures", None, "live"),
     ElementType("sequence_detector", "Sequence Detector Spec", "sequential", ("L6",), "prose",
                 "{pattern, overlap, moore_mealy, on_detect}", "parametric_spec_extractor.extract_sequence_detector", None, "live"),
     ElementType("protocol_state_machine", "Protocol State Machine", "sequential", ("L3", "L16"), "prose",
@@ -100,7 +100,7 @@ CATALOG: Tuple[ElementType, ...] = (
     ElementType("timing_parameter_table", "Timing Parameter Table", "timing", ("L8T",), "table",
                 "{setup, hold, tco, tpd, ...}", "structured_table_extractor.extract_tables", None, "live"),
     ElementType("timing_diagram", "Timing Diagram (waveform)", "timing", ("L8T",), "vision",
-                "{signals[], edges[]}", "residual_recognizer.recognize_all", None, "live"),
+                "{signals[], edges[]}", "figure_extractor.extract_figures", None, "live"),
     ElementType("timing_constraints", "Timing Constraints (SDC)", "timing", ("L19",), "prose",
                 "{clk_period, io_delay, false/multicycle}", "parametric_spec_extractor.extract_timing_constraints", None, "live"),
     ElementType("clock_domain_table", "Clock Domain Table", "timing", ("L19", "L6"), "table",
@@ -152,7 +152,7 @@ CATALOG: Tuple[ElementType, ...] = (
     ElementType("pvt_corner_table", "PVT Corner Table", "analog", ("L19",), "table",
                 "{corner->{p,v,t}}", "structured_table_extractor.extract_tables", None, "live"),
     ElementType("circuit_schematic", "Circuit Schematic", "analog", ("L5", "L18"), "vision",
-                "{devices[], nets[]}", "residual_recognizer.recognize_all", None, "live"),
+                "{devices[], nets[]}", "figure_extractor.extract_figures", None, "live"),
 
     # ---- I. Physical / Backend ----
     ElementType("power_domain_table", "Power Domain Table (UPF)", "physical", ("L21",), "table",
@@ -160,7 +160,7 @@ CATALOG: Tuple[ElementType, ...] = (
     ElementType("dft_scan_spec", "DFT / Scan Spec", "physical", ("L20",), "prose",
                 "{chains, bist, jtag_tap}", "residual_recognizer.recognize_all", None, "live"),
     ElementType("floorplan_spec", "Floorplan / Placement", "physical", ("L19",), "vision",
-                "{die, regions, io_ring, macros}", "residual_recognizer.recognize_all", None, "live"),
+                "{die, regions, io_ring, macros}", "figure_extractor.extract_figures", None, "live"),
     ElementType("pdk_target", "PDK / Technology Target", "physical", ("L19",), "prose",
                 "{pdk, metal_stack, vt}", "parametric_spec_extractor.extract_pdk_target", None, "live"),
 
@@ -176,11 +176,13 @@ CATALOG: Tuple[ElementType, ...] = (
 
     # ---- K. Architecture / Reference ----
     ElementType("block_diagram", "Block Diagram / Hierarchy", "architecture", ("L9",), "vision",
-                "{modules[], dataflow_edges[]}", "residual_recognizer.recognize_all", None, "live"),
+                "{modules[], dataflow_edges[]}", "figure_extractor.extract_figures", None, "live"),
     ElementType("reference_design", "Reference Design / IP", "architecture", ("L9", "L18"), "hybrid",
                 "{block->{ports,params,rtl_ref}}", "residual_recognizer.recognize_all", None, "live"),
     ElementType("functional_requirements", "Functional Requirements", "system", ("L2",), "prose",
                 "{requirements[{id,text,priority}]}", "residual_recognizer.recognize_all", None, "live"),
+    ElementType("figure", "Figure (untyped diagram)", "architecture", ("L9",), "vision",
+                "{lead:vision, caption, figure, ref}", "figure_extractor.extract_figures", None, "live"),
 )
 
 _BY_KEY: Dict[str, ElementType] = {e.key: e for e in CATALOG}
