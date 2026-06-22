@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 716
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 716)
+- **Total programs (excluding helpers / shims):** 718
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 718)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 707 |
+| `any` | 709 |
 
 ## Alphabetical listing
 
@@ -640,6 +640,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `spare_cell_coverage_check` | any | — | Design-for-ECO READINESS gate (Step 18). |
 | `spare_cell_preservation_check` | any | — | Design-for-ECO PRESERVATION gate. |
 | `spdif_protocol_synth` | any | v0.1.84 | S/PDIF-class protocol synth helper. |
+| `spec_artifact_catalog` | any | — | the MASTER CATALOG of structured ELEMENT TYPES that |
+| `spec_artifact_dual_pass` | any | — | the DUAL-PASS understanding layer. |
 | `spec_artifact_registry` | any | — | SINGLE SOURCE OF TRUTH for the canonical STRUCTURED |
 | `spec_conformance_check` | any | — | Spec↔RTL contract-conformance gate. |
 | `spec_coverage_check` | any | — | ORGANIC #697 [P1, chip-AGNOSTIC] |
@@ -788,7 +790,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (707 programs)
+### `any` (709 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1397,6 +1399,8 @@ _(no programs in this group)_
 - `spare_cell_coverage_check` — Design-for-ECO READINESS gate (Step 18).
 - `spare_cell_preservation_check` — Design-for-ECO PRESERVATION gate.
 - `spdif_protocol_synth` — S/PDIF-class protocol synth helper.  _[v0.1.84]_
+- `spec_artifact_catalog` — the MASTER CATALOG of structured ELEMENT TYPES that
+- `spec_artifact_dual_pass` — the DUAL-PASS understanding layer.
 - `spec_artifact_registry` — SINGLE SOURCE OF TRUTH for the canonical STRUCTURED
 - `spec_conformance_check` — Spec↔RTL contract-conformance gate.
 - `spec_coverage_check` — ORGANIC #697 [P1, chip-AGNOSTIC]
