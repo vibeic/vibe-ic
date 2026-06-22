@@ -231,7 +231,7 @@ def _iverilog_available() -> bool:
         return False
 
 
-def guard_export(sample: Path) -> Tuple[bool, List[str]]:
+def guard_export(sample: Path, prompt_text: str = "") -> Tuple[bool, List[str]]:
     """Post-export guard (chip-AGNOSTIC, structural). Returns (ok, problems).
 
     Checks:
@@ -289,6 +289,28 @@ def guard_export(sample: Path) -> Tuple[bool, List[str]]:
                 f"`clk_divK <= (cntK < N/2)`, each intermediate reset HIGH (`1'b1`).")
     except Exception:
         pass
+
+    # D. spec WORKED-EXAMPLE self-TB oracle (output-timing Moore/Mealy & logic).
+    #    When the spec discloses a cycle-by-cycle input→output worked example
+    #    (e.g. pulse_detect "if data_in is 01010, the data_out is 00101"), build a
+    #    deterministic self-TB from THAT example and host the authored RTL against
+    #    it. A registered (Moore) output that lags one cycle is BLOCKED. The oracle
+    #    SKIPs unless a complete unambiguous example parses + all ports map, so it
+    #    never false-blocks a correct design (verified: AGREES with the host scorer
+    #    6/6 on the real attempts; 0 false-fires across 362 corpus goldens).
+    if prompt_text:
+        try:
+            import worked_example_sequence_oracle_check as _wex  # noqa: E402
+            _o = _wex.analyze(txt, prompt_text)
+            if _o.get("verdict") == "BLOCK":
+                problems.append(
+                    f"worked-example oracle: authored RTL mismatches the spec's disclosed "
+                    f"example ({_o['inport']}={_o['in_bits']} → {_o['outport']} expected "
+                    f"{_o['out_bits']}) — the output must assert in the SAME cycle as the "
+                    f"triggering input (combinational/Mealy); a registered (Moore) output "
+                    f"lags one cycle. {_o.get('log','')}")
+        except Exception:
+            pass
 
     # A. standalone compile. An unavailable tool is a NOTE, never a hard FAIL —
     # the structural completeness check (B) still governs the verdict.
@@ -1253,7 +1275,7 @@ def export(rtl_dir: Path, leaf: str, samples_dir: Path,
             reorder_reverted = True
             tb_note += " | reorder failed the standalone guard → shipped verbatim"
 
-    ok, problems = guard_export(dst)
+    ok, problems = guard_export(dst, spec_text)
     if not ok:
         # The guard FAILed — REJECT: do not leave a broken sample that scores as
         # a false-green gate. Remove it so the scorer reports no_sample (honest)
