@@ -274,3 +274,43 @@ open_pdk:
     min_feature_nm:      180
     metal_layers:        5
     source: "GlobalFoundries 180nm MCU/IOT Open PDK"
+
+# -----------------------------------------------------------------------------
+# Reset-VALUE defaults — applied as auto_decided ONLY when the spec states the
+# reset polarity/timing but is SILENT on the value, and ALWAYS flagged.
+#
+# §4.05 BOUNDARY (gshare lesson, 2026-06-23): a reset value that the verification
+# can OBSERVE and that has MORE THAN ONE plausible convention is NOT a safe
+# auto-default — surface it as a SPEC GAP (deterministic solver SKIPs = gate-ready),
+# never silently pick a convention to make a hidden testbench pass. For Prob153_gshare
+# the OBSERVABLE-correct PHT reset was 2'b01, so even the most-common-HW default
+# 2'b00 would have shipped WRONG RTL. Only the spec (or the golden) decides it.
+# -----------------------------------------------------------------------------
+reset_defaults:
+  fsm_state:
+    value: "the spec-NAMED reset/initial state; if genuinely unnamed, the first state listed"
+    safe_to_auto: true
+    source: "design convention; always prefer a spec-named reset state"
+  counter_timer:
+    value: 0
+    note: "or the spec's named reload/preset value if stated"
+    safe_to_auto: true
+    source: "hardware-simplest (all-0 clear); free if not observed"
+  shift_or_history_register:
+    value: 0
+    safe_to_auto: true
+    source: "no prior history at power-up; all-0 clear"
+  data_register:
+    value: 0
+    note: "or the spec's stated POR/idle value"
+    safe_to_auto: true
+    source: "hardware-simplest"
+  output_register:
+    value: "the spec's stated reset/idle output; else 0"
+    safe_to_auto: true
+    source: "spec-first"
+  saturating_predictor_counter:
+    value: "AMBIGUOUS: 2'b00 Strongly-Not-Taken (most common HW) | 2'b01 Weakly-Not-Taken (textbook) | 2'b10 Weakly-Taken (TAGE alloc)"
+    safe_to_auto: false
+    rule: "host-OBSERVABLE + multi-convention -> DO NOT auto-pick; flag as a spec gap (gate-ready SKIP). Fill ONLY if the spec states it."
+    source: "Smith bimodal / TAGE literature; gshare Prob153 lesson"
