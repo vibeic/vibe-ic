@@ -482,5 +482,58 @@ def test_corpus_every_nondefect_fire_host_verifies_zero():
         assert verdict == "RAN" and mm == 0, f"{base}: {verdict} {mm}/{samp}"
 
 
+# §4.05 Step-2.7 regression (v1.1.76): the VE-v2 Prob099 declares the one-hot state
+# bus with a NON-ZERO LSB `input [6:1] y` + a 1-based `y[6:1] = ...` encoding and asks
+# for `Y2`/`Y4`. The solver emitted a 0-based bus and mis-indexed the output->bit map
+# -> a 9/12-mismatch false-fire. It must now SKIP (we only handle a 0-based bus). The
+# discriminating line `input [6:1] y` is embedded VERBATIM from the real prompt.
+_V2_PROB099_NONZERO_LSB = """\
+Consider the state machine shown below:
+
+  A (0) --0--> B
+  A (0) --1--> A
+  B (0) --0--> C
+  B (0) --1--> D
+  C (0) --0--> E
+  C (0) --1--> D
+  D (0) --0--> F
+  D (0) --1--> A
+  E (1) --0--> E
+  E (1) --1--> D
+  F (1) --0--> C
+  F (1) --1--> D
+
+Resets into state A. For this part, assume that a one-hot code is used
+with the state assignment y[6:1] = 000001, 000010, 000100, 001000,
+010000, 100000 for states A, B,..., F, respectively.
+
+Write Verilog for the next-state signals Y2 and Y4 corresponding to
+signal y[2] and y[4]. Derive the logic equations by inspection assuming a
+one-hot encoding.
+
+module TopModule (
+  input [6:1] y,
+  input w,
+  output Y2,
+  output Y4
+);
+"""
+
+
+def test_nonzero_lsb_state_bus_skips():
+    # would emit a mis-indexed (off-by-one) machine -> must SKIP, not fire.
+    assert M.synth(_V2_PROB099_NONZERO_LSB) is None
+
+
+def test_zero_lsb_same_shape_still_fires():
+    # the SAME machine re-declared with a 0-based bus must still FIRE (the guard is
+    # specific to the non-zero LSB, not a blanket suppression of the shape).
+    zero_based = _V2_PROB099_NONZERO_LSB.replace("[6:1]", "[5:0]").replace(
+        "y[6:1] =", "y[5:0] =").replace("Y2 and Y4", "Y0 and Y2").replace(
+        "signal y[2] and y[4]", "signal y[0] and y[2]").replace(
+        "output Y2,", "output Y0,").replace("output Y4", "output Y2")
+    assert M.synth(zero_based) is not None
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

@@ -246,6 +246,17 @@ def _synth_named_onehot_nextstate(prompt: str, ins, outs, top: str):
         return None
     state_bus, sb_w = buses[0]
     fsm_in = scalars[0][0]
+    # §4.05 NO-LEAK (Step-2.7 v1.1.76, VE-v2 Prob099): we emit a 0-based
+    # `[sb_w-1:0]` bus and map the prompt's `Y<k>` output names against 0-based
+    # bit indices (state_of_bit). A state bus DECLARED with a non-zero LSB — e.g.
+    # `[6:1] y` / `y[6:1]` — makes that mapping off-by-one, so the emitted
+    # next-state logic is WRONG (the bug was a 9/12-mismatch false-fire). We only
+    # handle a 0-based bus: SKIP a non-zero-LSB declaration rather than emit a
+    # mis-indexed machine.
+    _bd = re.search(r"\[\s*\d+\s*:\s*(\d+)\s*\]\s*" + re.escape(state_bus) + r"\b", prompt) \
+        or re.search(re.escape(state_bus) + r"\s*\[\s*\d+\s*:\s*(\d+)\s*\]", prompt)
+    if _bd and int(_bd.group(1)) != 0:
+        return None
     # the prompt must CALL the bus a one-hot state vector (so we don't mis-read a
     # generic multi-bit input as a state register).
     if not re.search(r"one[-\s]?hot", prompt, re.I):
