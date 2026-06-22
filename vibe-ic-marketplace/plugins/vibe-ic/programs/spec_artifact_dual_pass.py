@@ -106,9 +106,21 @@ def _extract_parametric(text: str) -> List[dict]:
     return [_element(d["element_type"], d["data"]) for d in rows]
 
 
+def _extract_residual(text: str) -> List[dict]:
+    """Routing recognizers for the genuinely-prose / vision element types: recognize
+    presence + lift partial data, mark lead=ai|vision so the dual-pass AI/vision pass
+    completes the extraction. Closes the catalog (every type has a coverage path)."""
+    try:
+        import residual_recognizer as _RR
+        rows = _RR.recognize_all(text)
+    except Exception:
+        rows = []
+    return [_element(d["element_type"], d["data"]) for d in rows]
+
+
 # extraction-only baseline contributors (no RTL generator, feed the AI + the gates)
-_BASELINE_EXTRACTORS = (_extract_register_map, _extract_pinout,
-                        _extract_tables, _extract_parametric)
+_BASELINE_EXTRACTORS = (_extract_register_map, _extract_pinout, _extract_tables,
+                        _extract_parametric, _extract_residual)
 
 
 def program_baseline(doc_text: str) -> List[dict]:

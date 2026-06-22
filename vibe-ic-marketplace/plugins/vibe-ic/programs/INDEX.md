@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 721
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 721)
+- **Total programs (excluding helpers / shims):** 722
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 722)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 712 |
+| `any` | 713 |
 
 ## Alphabetical listing
 
@@ -570,6 +570,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `reset_clock_variant_alias` | any | v0.3.18 | v0.3.18 (ORGANIC #518). |
 | `reset_dependency_check` | any | — | deterministic compliance check derived from <chip-class> v040 debug. |
 | `reset_discipline_check` | any | — | deterministic reset-discipline lint. |
+| `residual_recognizer` | any | — | routing recognizers for the genuinely-PROSE and VISION |
 | `response_latency_observability_check` | any | — | LL-5. |
 | `response_payload_template_check` | any | — | M5: Verify that response payload bytes |
 | `result_md_audit_provenance_check` | any | Wave 33 | Wave 33 (v0.119.65). |
@@ -793,7 +794,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (712 programs)
+### `any` (713 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1334,6 +1335,7 @@ _(no programs in this group)_
 - `reset_clock_variant_alias` — v0.3.18 (ORGANIC #518).  _[v0.3.18]_
 - `reset_dependency_check` — deterministic compliance check derived from <chip-class> v040 debug.
 - `reset_discipline_check` — deterministic reset-discipline lint.
+- `residual_recognizer` — routing recognizers for the genuinely-PROSE and VISION
 - `response_latency_observability_check` — LL-5.
 - `response_payload_template_check` — M5: Verify that response payload bytes
 - `result_md_audit_provenance_check` — Wave 33 (v0.119.65).  _[Wave 33]_
