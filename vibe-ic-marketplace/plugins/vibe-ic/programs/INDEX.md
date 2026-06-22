@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 712
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 712)
+- **Total programs (excluding helpers / shims):** 713
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 713)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 703 |
+| `any` | 704 |
 
 ## Alphabetical listing
 
@@ -279,6 +279,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `fsm_state_coverage_check` | any | Wave 13 | v0.119.45 (Wave 13) gate. |
 | `fsm_table_rtl_gen` | any | v0.1.6 | deterministic FSM-table → synthesizable RTL generator. |
 | `fsm_transition_completeness_check` | any | v0.3.21 | v0.3.21 (ORGANIC #522). |
+| `full_moore_fsm_synth` | any | — | deterministic SOLVER for a full Moore FSM. |
 | `full_suite_run_check` | any | — | full-suite (not subset) pytest gate for the |
 | `function_void_with_output_check` | any | Wave 29 | Wave 29 (v0.119.61) gate. |
 | `functional_state_transition_coverage_check` | any | — | Verify TBs exercise the |
@@ -784,7 +785,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (703 programs)
+### `any` (704 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1035,6 +1036,7 @@ _(no programs in this group)_
 - `fsm_state_coverage_check` — v0.119.45 (Wave 13) gate.  _[Wave 13]_
 - `fsm_table_rtl_gen` — deterministic FSM-table → synthesizable RTL generator.  _[v0.1.6]_
 - `fsm_transition_completeness_check` — v0.3.21 (ORGANIC #522).  _[v0.3.21]_
+- `full_moore_fsm_synth` — deterministic SOLVER for a full Moore FSM.
 - `full_suite_run_check` — full-suite (not subset) pytest gate for the
 - `function_void_with_output_check` — Wave 29 (v0.119.61) gate.  _[Wave 29]_
 - `functional_state_transition_coverage_check` — Verify TBs exercise the
