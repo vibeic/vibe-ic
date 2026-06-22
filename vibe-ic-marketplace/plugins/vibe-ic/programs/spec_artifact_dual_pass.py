@@ -94,8 +94,21 @@ def _extract_tables(text: str) -> List[dict]:
             for t in tabs if t["element_type"] != "structured_table"]
 
 
+def _extract_parametric(text: str) -> List[dict]:
+    """The prose PARAMETRIC tier: arithmetic / memory / counter / shift / boolean /
+    sequence / number-format / PDK / timing-constraints / CRC — the key parameters a
+    regex can lift with confidence (the AI pass still leads the full understanding)."""
+    try:
+        import parametric_spec_extractor as _PS
+        rows = _PS.extract_all(text)
+    except Exception:
+        rows = []
+    return [_element(d["element_type"], d["data"]) for d in rows]
+
+
 # extraction-only baseline contributors (no RTL generator, feed the AI + the gates)
-_BASELINE_EXTRACTORS = (_extract_register_map, _extract_pinout, _extract_tables)
+_BASELINE_EXTRACTORS = (_extract_register_map, _extract_pinout,
+                        _extract_tables, _extract_parametric)
 
 
 def program_baseline(doc_text: str) -> List[dict]:

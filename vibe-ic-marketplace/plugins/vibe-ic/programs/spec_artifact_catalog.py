@@ -58,7 +58,7 @@ CATALOG: Tuple[ElementType, ...] = (
                 "kmap_truth_table_oracle_check.parse_kmap",
                 "kmap_grid_synth.synth", "live"),
     ElementType("boolean_expression", "Boolean Expression", "combinational", ("L6", "L15"), "prose",
-                "{output, expr_ast, inputs[]}", None, None, "to_build"),
+                "{output, expr_ast, inputs[]}", "parametric_spec_extractor.extract_boolean_expression", None, "live"),
     ElementType("gate_level_schematic", "Gate-Level Netlist", "combinational", ("L18",), "hybrid",
                 "{gates[{type,inputs,out}], nets[]}", None,
                 "gate_netlist_rtl_gen.generate", "extractor_exists"),
@@ -87,7 +87,7 @@ CATALOG: Tuple[ElementType, ...] = (
     ElementType("state_diagram", "State Diagram (bubble)", "sequential", ("L6",), "vision",
                 "{states[], edges[{from,to,cond,out}]}", None, None, "vision_pending"),
     ElementType("sequence_detector", "Sequence Detector Spec", "sequential", ("L6",), "prose",
-                "{pattern, overlap, moore_mealy, on_detect}", None, None, "to_build"),
+                "{pattern, overlap, moore_mealy, on_detect}", "parametric_spec_extractor.extract_sequence_detector", None, "live"),
     ElementType("protocol_state_machine", "Protocol State Machine", "sequential", ("L3", "L16"), "prose",
                 "{states[], transitions, protocol}", None, None, "to_build"),
     ElementType("behavioral_sequence", "Behavioral Sequence / Trace", "sequential", ("L12",), "table",
@@ -102,7 +102,7 @@ CATALOG: Tuple[ElementType, ...] = (
     ElementType("timing_diagram", "Timing Diagram (waveform)", "timing", ("L8T",), "vision",
                 "{signals[], edges[]}", None, None, "vision_pending"),
     ElementType("timing_constraints", "Timing Constraints (SDC)", "timing", ("L19",), "prose",
-                "{clk_period, io_delay, false/multicycle}", None, None, "to_build"),
+                "{clk_period, io_delay, false/multicycle}", "parametric_spec_extractor.extract_timing_constraints", None, "live"),
     ElementType("clock_domain_table", "Clock Domain Table", "timing", ("L19", "L6"), "table",
                 "{domains[], crossings[]}", "structured_table_extractor.extract_tables", None, "live"),
 
@@ -126,20 +126,23 @@ CATALOG: Tuple[ElementType, ...] = (
     ElementType("packet_frame_format", "Packet / Frame Format", "protocol", ("L3", "L15"), "hybrid",
                 "{fields[{name,bits,byteorder}]}", None, None, "to_build"),
     ElementType("crc_checksum_spec", "CRC / Checksum Spec", "protocol", ("L8C",), "prose",
-                "{poly, init, width, refin, refout, xorout}",
-                "crc_parameters_extracted_check", None, "to_build"),
+                "{poly, init, width, refin, refout, xorout}", "parametric_spec_extractor.extract_crc", None, "live"),
 
     # ---- F. Arithmetic / Data ----
     ElementType("arithmetic_spec", "Arithmetic Primitive Spec", "arithmetic", ("L2", "L8C"), "prose",
-                "{op, width, signed, overflow/sat/round}", None, None, "to_build"),
+                "{op, width, signed, overflow}", "parametric_spec_extractor.extract_arithmetic", None, "live"),
+    ElementType("counter_spec", "Counter Spec", "arithmetic", ("L2", "L6"), "prose",
+                "{width, direction, modulo}", "parametric_spec_extractor.extract_counter", None, "live"),
+    ElementType("shift_register_spec", "Shift Register Spec", "arithmetic", ("L2", "L6"), "prose",
+                "{width, direction, lfsr, load}", "parametric_spec_extractor.extract_shift_register", None, "live"),
     ElementType("number_format", "Number Format", "arithmetic", ("L8C",), "prose",
-                "{fixed_q | float | bcd}", None, None, "to_build"),
+                "{fixed_q | float | bcd}", "parametric_spec_extractor.extract_number_format", None, "live"),
     ElementType("data_conversion_table", "Data Conversion Table", "arithmetic", ("L15",), "table",
                 "{in->out}", "structured_table_extractor.extract_tables", None, "live"),
 
     # ---- G. Memory ----
     ElementType("memory_spec", "Memory Spec", "memory", ("L4", "L8C"), "prose",
-                "{kind, depth, width, ports, latency}", None, None, "to_build"),
+                "{kind, depth, width, ports, latency}", "parametric_spec_extractor.extract_memory", None, "live"),
     ElementType("otp_fuse_content", "OTP / Fuse Content", "memory", ("L11",), "table",
                 "{addr->bits, layout}", None, None, "to_build"),
 
@@ -160,7 +163,7 @@ CATALOG: Tuple[ElementType, ...] = (
     ElementType("floorplan_spec", "Floorplan / Placement", "physical", ("L19",), "vision",
                 "{die, regions, io_ring, macros}", None, None, "vision_pending"),
     ElementType("pdk_target", "PDK / Technology Target", "physical", ("L19",), "prose",
-                "{pdk, metal_stack, vt}", None, None, "to_build"),
+                "{pdk, metal_stack, vt}", "parametric_spec_extractor.extract_pdk_target", None, "live"),
 
     # ---- J. Verification ----
     ElementType("test_vector_table", "Test Vector / Worked Example", "verification", ("L10",), "table",
