@@ -251,6 +251,27 @@ def build_tb(envelope, cols, rows, out_col, in_cols, top, clk_name):
     return "\n".join(L) + "\n"
 
 
+# A waveform table EXPLICITLY attributed to a named module — "Module B can be
+# described by the following simulation waveform". When that module is NOT the top,
+# the table is that SUB-MODULE's function, not the top's I/O; the top is built FROM
+# it (a structural composition). Replaying a sub-module's table against the top
+# false-blocks a correct design (Prob131_mt2015_q4: top z = (A1|B1)^(A2&B2), but the
+# table describes Module B = XNOR). §4.05-narrow: fires ONLY on an explicit
+# "Module <X> ... waveform" attribution with X != top — the circuitN family
+# describes the waveform as the TOP's own behaviour and is unaffected.
+_SUBMOD_WAVEFORM_RE = re.compile(
+    r'\bModule\s+([A-Za-z]\w*)\b[^.\n]{0,80}?\b(?:simulation\s+waveform|waveform|timing\s+diagram)',
+    re.I)
+
+
+def table_scoped_to_other_module(prompt, top):
+    """Return a sub-module name if the waveform is attributed to a named module != top, else None."""
+    for m in _SUBMOD_WAVEFORM_RE.finditer(prompt or ""):
+        if m.group(1).lower() != (top or "").lower():
+            return m.group(1)
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser(description="Waveform-table conformance gate (#716).")
     g = ap.add_mutually_exclusive_group(required=True)
@@ -263,6 +284,14 @@ def main():
     a = ap.parse_args()
 
     src = open(a.prompt or a.table_file).read()
+    # SKIP when a --prompt attributes the waveform to a named SUB-module (not the top):
+    # the table is that sub-module's function, not the top's I/O (Prob131_mt2015_q4).
+    if a.prompt:
+        other = table_scoped_to_other_module(src, a.top)
+        if other:
+            print(f"WTC_SKIP_table_scoped_to_module_{other}: waveform attributed to module "
+                  f"{other!r}, not top {a.top!r} -> SKIP (no block)")
+            sys.exit(0)
     parsed = parse_table(src)
     if not parsed:
         print("WTC_NO_TABLE: no waveform table found -> SKIP")
