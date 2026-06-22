@@ -45,7 +45,7 @@ def synth(prompt_text: str, top: str = "TopModule"):
     parsed = _fm._parse_fsm_table(prompt_text)
     if parsed is None:
         return None
-    states, trans, mout = parsed
+    states, trans, mout, _gov = parsed          # gov (per-state input) unused here
     # GIVEN encoding: "A=2'b00, B=2'b01, ..." (every state, within the bus width)
     code = {}
     for m in re.finditer(r"\b(\w+)\s*=\s*\d*'?[bB]([01]+)\b", prompt_text):
