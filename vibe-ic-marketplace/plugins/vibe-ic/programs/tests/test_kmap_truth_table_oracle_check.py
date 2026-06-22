@@ -256,7 +256,13 @@ def test_gates_atomic_blocks_wrong_kmap_and_emits_correct(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr   # synth auto-corrected the wrong read
     gj = json.loads((work / "Prob122_kmap4" / "gates.json").read_text())
     assert gj["hard_gates_pass"] is True
-    assert gj["steps"]["deterministic_synth"]["kind"] == "kmap_grid"
+    # v1.1.76: gates_atomic now delegates to spec_artifact_registry.generate()
+    # (single source of truth). A don't-care-free K-map is isomorphic to a truth
+    # table / SOP, so the registry's first-fire deterministically labels it with a
+    # table-family solver — the load-bearing invariant is that A deterministic solver
+    # fired and REPLACED the wrong authored read (asserted below), not which label.
+    assert gj["steps"]["deterministic_synth"]["kind"] in (
+        "truth_table", "karnaugh_map", "karnaugh_map_sop", "kmap_grid")
     assert gj["steps"]["kmap_truth_table_oracle"]["verdict"] == "PASS"
     emitted = (work.parent / "samples" / "Prob122_kmap4_sample01.sv").read_text()
     assert "a ^ b ^ d" not in emitted        # the wrong authored read is gone
