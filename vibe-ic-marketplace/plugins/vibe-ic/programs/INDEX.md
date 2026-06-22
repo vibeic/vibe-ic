@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 711
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 711)
+- **Total programs (excluding helpers / shims):** 712
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 712)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 702 |
+| `any` | 703 |
 
 ## Alphabetical listing
 
@@ -443,6 +443,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `openroad_hold_repair_tcl_gen` | any | — | emit the OpenROAD `repair_timing -hold` |
 | `openroad_tcl_deprecation_check` | any | v0.69 | Recursively scan a plugin tree for |
 | `oracle_dump_required_check` | any | — | Category-B workflow gate. |
+| `oracle_table_synth` | any | — | deterministic SOLVER from a prompt-disclosed oracle. |
 | `oracle_tb_gen` | any | — | deterministic per-IC oracle testbench generator |
 | `oracle_vector_gen` | any | v0.114 | v0.114 (BACKLOG-v6 C1 closure). |
 | `organic_issue_body_lint` | any | — | deterministic FILING-TIME lint for |
@@ -783,7 +784,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (702 programs)
+### `any` (703 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1197,6 +1198,7 @@ _(no programs in this group)_
 - `openroad_hold_repair_tcl_gen` — emit the OpenROAD `repair_timing -hold`
 - `openroad_tcl_deprecation_check` — Recursively scan a plugin tree for  _[v0.69]_
 - `oracle_dump_required_check` — Category-B workflow gate.
+- `oracle_table_synth` — deterministic SOLVER from a prompt-disclosed oracle.
 - `oracle_tb_gen` — deterministic per-IC oracle testbench generator
 - `oracle_vector_gen` — v0.114 (BACKLOG-v6 C1 closure).  _[v0.114]_
 - `organic_issue_body_lint` — deterministic FILING-TIME lint for
