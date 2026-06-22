@@ -34,6 +34,8 @@ WAVE2_KEYS = {
     # wave-3 (aggressive remainder)
     "arithmetic", "counter_advanced", "serial_protocol_fsm", "nextstate_misc",
     "behavioral_fsm", "comb_advanced",
+    # wave-4 (multi-part decomposition of the hardest clusters)
+    "sequential_waveform_multibit", "conway_2d", "gshare_predictor",
 }
 
 # Prob099_m2014_q6c is a KNOWN dataset defect: the official testbench instantiates
@@ -128,6 +130,10 @@ def test_real_dataset_dispatch_spotcheck():
         "Prob070_ece241_2013_q2": "nextstate_misc",
         "Prob096_review2015_fsmseq": "behavioral_fsm",
         "Prob055_conditional": "comb_advanced",
+        # wave-4 (gshare_predictor SKIPs Prob153 as-written -> not spotchecked)
+        "Prob144_conwaylife": "conway_2d",
+        "Prob117_circuit9": "sequential_waveform_multibit",
+        "Prob145_circuit8": "sequential_waveform_multibit",
     }
     checked = 0
     for prob, want in expect.items():
