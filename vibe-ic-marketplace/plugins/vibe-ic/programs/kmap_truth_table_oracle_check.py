@@ -64,14 +64,12 @@ GRAY2 = ["00", "01", "11", "10"]  # standard 2-var Gray column/row order
 
 
 def parse_ports(prompt: str):
-    ins, outs = [], []
-    for m in re.finditer(
-        r"^\s*-\s*(input|output)\s+(\w+)(\s*\(\s*(\d+)\s*bits?\s*\))?", prompt, re.M
-    ):
-        d, name, _, w = m.groups()
-        width = int(w) if w else 1
-        (ins if d == "input" else outs).append((name, width))
-    return ins, outs
+    # shared reader: bullet form OR Verilog module header (the v2/human twins).
+    import os
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import port_parser
+    return port_parser.parse_ports(prompt)
 
 
 def _is_kmap_prompt(prompt: str) -> bool:

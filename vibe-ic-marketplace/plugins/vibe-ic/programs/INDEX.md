@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 723
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 723)
+- **Total programs (excluding helpers / shims):** 724
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 724)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 714 |
+| `any` | 715 |
 
 ## Alphabetical listing
 
@@ -521,6 +521,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pnr_timing_repair_completeness_check` | any | v0.1.26 | chip-AGNOSTIC static audit of an |
 | `pnr_via_stack_completeness_check` | any | — | chip-AGNOSTIC audit of how |
 | `port_convention_corpus` | any | v0.3.18 | v0.3.18 (ORGANIC #520, Bucket C). |
+| `port_parser` | any | — | the SHARED interface-port reader for the deterministic solvers. |
 | `post_layout_sim_check` | any | — | Verify post-layout gate-level simulation with SDF back-annotation. |
 | `power_domain_crossing_check` | any | — | M2 gate (substance-verifying). |
 | `power_report_check` | any | — | wrapper for eda_report_audit --mode power. |
@@ -795,7 +796,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (714 programs)
+### `any` (715 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1287,6 +1288,7 @@ _(no programs in this group)_
 - `pnr_timing_repair_completeness_check` — chip-AGNOSTIC static audit of an  _[v0.1.26]_
 - `pnr_via_stack_completeness_check` — chip-AGNOSTIC audit of how
 - `port_convention_corpus` — v0.3.18 (ORGANIC #520, Bucket C).  _[v0.3.18]_
+- `port_parser` — the SHARED interface-port reader for the deterministic solvers.
 - `post_layout_sim_check` — Verify post-layout gate-level simulation with SDF back-annotation.
 - `power_domain_crossing_check` — M2 gate (substance-verifying).
 - `power_report_check` — wrapper for eda_report_audit --mode power.

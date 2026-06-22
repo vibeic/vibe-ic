@@ -26,12 +26,11 @@ _CELL = {"qold": "Q", "~qold": "~Q", "!qold": "~Q", "0": "1'b0", "1": "1'b1"}
 
 
 def _parse_ports(prompt):
-    ins, outs = [], []
-    for m in re.finditer(r"^\s*-\s*(input|output)\s+(\w+)(\s*\(\s*(\d+)\s*bits?\s*\))?",
-                         prompt, re.M):
-        d, name, _, w = m.groups()
-        (ins if d == "input" else outs).append((name, int(w) if w else 1))
-    return ins, outs
+    import os
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import port_parser   # bullet form OR Verilog module header (the v2/human twins)
+    return port_parser.parse_ports(prompt)
 
 
 def synth(prompt_text: str, top: str = "TopModule"):
