@@ -161,51 +161,20 @@ def main():
     # circuitN + mux-decomposition). When one fires its deterministic RTL REPLACES
     # the author's guess and still flows through every downstream hard gate below.
     _prompt_text = prompt.read_text(errors="replace")
+    # SINGLE SOURCE OF TRUTH (v1.1.76): the deterministic-solver catalog lives in
+    # spec_artifact_registry.REGISTRY. This benchmark gate USED to keep a second,
+    # hand-maintained dispatch tuple here — it drifted from the registry (the
+    # registry gained mux/shift/cellular/lfsr/kmap_sop/dff_edge/…; this list lagged).
+    # We now delegate to registry.generate(), which walks the registry's
+    # specificity-ordered generators (first-fire-wins, every one §4.05 SKIP-safe).
+    # A fire REPLACES the author's guess with host-verified RTL and still flows
+    # through every downstream hard gate below. ONE list, ONE order, no drift.
     _synth_rtl = None
     _synth_kind = None
     try:
         sys.path.insert(0, str(PLUGIN / "programs"))
-        import waveform_truth_table_synth as _wsynth
-        import kmap_grid_synth as _kmsynth
-        import onehot_fsm_synth as _ohsynth
-        import oracle_table_synth as _otsynth
-        import full_moore_fsm_synth as _fmsynth
-        import ff_truth_table_synth as _ffsynth
-        import comb_state_table_synth as _cssynth
-        import mux_synth as _muxsynth                 # v1.1.75 completeness families
-        import shift_register_synth as _srsynth
-        import cellular_automaton_synth as _casynth
-        import lfsr_synth as _lfsynth
-        import kmap_sop_synth as _ksopsynth
-        for _kind, _mod in (("waveform", _wsynth),  # combinational OR seq-1FF envelope
-                            ("kmap_grid", _kmsynth),
-                            ("onehot_fsm", _ohsynth),
-                            ("ff_truth_table", _ffsynth),    # flip-flop truth table (Qold)
-                            ("comb_state_table", _cssynth),  # combinational next_state+out
-
-                            # any COMPLETE prompt-disclosed oracle the gate can parse
-                            # (truth table / binary-encoded FSM next-state-bit) -> emit
-                            # it directly, moving the problem from AI-authored+gated to
-                            # program-GENERATED (Prob069_truthtable1, Prob135_m2014_q6b).
-                            ("oracle_table", _otsynth),
-                            # a COMPLETE Moore FSM table + fully-specified reset -> emit
-                            # the whole state machine (free internal encoding) —
-                            # Prob109_fsm1, Prob138_2012_q2fsm.
-                            ("full_moore_fsm", _fmsynth),
-
-                            # v1.1.75 extraction-completeness families (append-only:
-                            # every entry above keeps its first-fire; these catch
-                            # previously-unsolved prompts). All §4.05 SKIP-safe + each
-                            # host-verified 0-mismatch on its VE-Human targets.
-                            ("multiplexer", _muxsynth),
-                            ("shift_register", _srsynth),
-                            ("cellular_automaton", _casynth),
-                            ("galois_lfsr", _lfsynth),
-                            ("kmap_sop", _ksopsynth)):    # don't-care/reordered K-maps
-            _r = _mod.synth(_prompt_text, top_module)
-            if _r:
-                _synth_rtl, _synth_kind = _r, _kind
-                break
+        import spec_artifact_registry as _reg
+        _synth_kind, _synth_rtl = _reg.generate(_prompt_text, top_module)
     except Exception:
         _synth_rtl = None
     if _synth_rtl:

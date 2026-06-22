@@ -48,6 +48,16 @@ import shift_register_synth as _sr              # noqa: E402  shift/rotate/barre
 import cellular_automaton_synth as _ca          # noqa: E402  1-D Wolfram Rule-N CA -> RTL
 import lfsr_synth as _lf                        # noqa: E402  Galois LFSR -> RTL
 import kmap_sop_synth as _ksop                  # noqa: E402  K-map incl. don't-care (host-verified) -> RTL
+# --- v1.1.76 extraction-completeness families (wave-2) ---
+import mealy_sequence_synth as _mealy           # noqa: E402  Mealy FSM table / sequence detector -> RTL
+import fsm_prose_synth as _fp                    # noqa: E402  combinational one-hot FSM decode -> RTL
+import dff_edge_synth as _dffedge               # noqa: E402  DFF / edge-detect / edge-capture -> RTL
+import counter_popcount_synth as _cp            # noqa: E402  counter / popcount / parity -> RTL
+import encoder_decoder_synth as _enc            # noqa: E402  priority encoder -> RTL
+import vector_ops_synth as _vec                 # noqa: E402  bit/byte reverse / extend / split / concat -> RTL
+import waveform_ext_synth as _wfx               # noqa: E402  waveform-table envelope extension -> RTL
+import comb_gate_synth as _cg                   # noqa: E402  single gate / wire / boolean equation -> RTL
+import residual_combinational_synth as _rc      # noqa: E402  constant output / equality comparator -> RTL
 
 
 # --------------------------------------------------------------------------- #
@@ -141,6 +151,42 @@ def _rec_kmap_sop(text: str):
     return {"present": True} if _ksop.synth(text, "TopModule") else None
 
 
+def _rec_mealy_sequence(text: str):
+    return {"present": True} if _mealy.synth(text, "TopModule") else None
+
+
+def _rec_fsm_prose(text: str):
+    return {"present": True} if _fp.synth(text, "TopModule") else None
+
+
+def _rec_dff_edge(text: str):
+    return {"present": True} if _dffedge.synth(text, "TopModule") else None
+
+
+def _rec_counter_popcount(text: str):
+    return {"present": True} if _cp.synth(text, "TopModule") else None
+
+
+def _rec_priority_encoder(text: str):
+    return {"present": True} if _enc.synth(text, "TopModule") else None
+
+
+def _rec_vector_ops(text: str):
+    return {"present": True} if _vec.synth(text, "TopModule") else None
+
+
+def _rec_waveform_ext(text: str):
+    return {"present": True} if _wfx.synth(text, "TopModule") else None
+
+
+def _rec_comb_gate(text: str):
+    return {"present": True} if _cg.synth(text, "TopModule") else None
+
+
+def _rec_residual_combinational(text: str):
+    return {"present": True} if _rc.synth(text, "TopModule") else None
+
+
 # --------------------------------------------------------------------------- #
 # The catalog
 # --------------------------------------------------------------------------- #
@@ -200,6 +246,48 @@ REGISTRY: Tuple[ArtifactType, ...] = (
                  "K-map grid incl. don't-cares (assigned 0, host-verified), reordered "
                  "headers, 1-var/bus-indexed axes; single 1-bit output. Superset of "
                  "karnaugh_map (which stays the don't-care-free fast path above)."),
+    # --- v1.1.76 extraction-completeness families (wave-2). Ordered specific-first,
+    #     conservative catch-alls (comb_gate / residual) LAST. The whole REGISTRY is
+    #     mutual-exclusion-checked (test_v1_1_76_registry_integration): at most one
+    #     generator fires per benchmark prompt, so ordering is a documented tie-break,
+    #     not a correctness crutch.
+    ArtifactType("mealy_fsm_sequence", "Mealy FSM / Sequence Detector", ("L6", "L3"),
+                 _rec_mealy_sequence, _mealy.synth,
+                 "Mealy transition+output table, or a stated bit-sequence detector "
+                 "(KMP prefix FSM, overlap stated). Output depends on (state,input)."),
+    ArtifactType("fsm_prose", "Combinational One-Hot FSM Decode", ("L6", "L8T"),
+                 _rec_fsm_prose, _fp.synth,
+                 "Pure combinational state[N]->next_state[N] one-hot decode + Moore "
+                 "outputs with the encoding pinned by the prompt (next_state is a port)."),
+    ArtifactType("dff_edge", "D-Flip-Flop / Edge Detect / Edge Capture", ("L6", "L8T"),
+                 _rec_dff_edge, _dffedge.synth,
+                 "Simple clocked register: plain/reset(sync|async,polarity,value)/"
+                 "byte-enable/feedback DFF, edge-detect (0->1 / 1->0 / any), "
+                 "edge-capture (set-and-hold to reset), dual-edge FF."),
+    ArtifactType("counter_popcount", "Counter / Popcount / Parity", ("L6", "L4", "L15"),
+                 _rec_counter_popcount, _cp.synth,
+                 "Population count, parity/reduction-XOR (even ^ / odd ~^), or "
+                 "modulo-N up counter (sync active-high reset + optional enable)."),
+    ArtifactType("priority_encoder", "Priority Encoder", ("L4", "L15"),
+                 _rec_priority_encoder, _enc.synth,
+                 "LSB-first priority encoder: input width N + stated direction + "
+                 "stated zero-input default; output width ceil(log2(N))."),
+    ArtifactType("vector_ops", "Vector Manipulation", ("L4", "L15"),
+                 _rec_vector_ops, _vec.synth,
+                 "Pure bit-wiring op (bit/byte reverse, sign/zero-extend, hi/lo "
+                 "split, passthrough+position bits, concat-then-split), fully stated."),
+    ArtifactType("timing_waveform_ext", "Timing/Waveform Table (ext envelope)", ("L8T",),
+                 _rec_waveform_ext, _wfx.synth,
+                 "Waveform variants the base timing_waveform skips: combinational-by-"
+                 "consistency (no clock col) and general posedge-1FF; host-verified."),
+    ArtifactType("comb_gate", "Combinational Gate / Wire / Boolean Equation", ("L4", "L15"),
+                 _rec_comb_gate, _cg.synth,
+                 "Single named logic gate, wire pass-through, per-output reduction/"
+                 "2-input gate bank, or an explicit boolean equation (no table)."),
+    ArtifactType("residual_combinational", "Residual Combinational (constant / equality)",
+                 ("L4", "L15"), _rec_residual_combinational, _rc.synth,
+                 "Tiny stateless circuit stated directly: constant output or an "
+                 "equality comparator (boolean equations are owned by comb_gate)."),
 )
 
 _BY_KEY: Dict[str, ArtifactType] = {a.key: a for a in REGISTRY}
