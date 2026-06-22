@@ -252,9 +252,16 @@ def main():
     # scorer. The functional gate-C is AI-authored (prompt examples) and is run
     # by the cvdp/full_stack path, not here. Emit-BLOCKING on a BLOCK verdict.
     hxsv_json = wd / "harness_exact_selfverify.json"
+    # Shape C atomic benchmarks (VerilogEval / RTLLM) are scored by IVERILOG, so
+    # GATE A (iverilog standalone -s codegen) + the iverilog host ARE the
+    # scorer's authority; GATE B (verilator --lint-only -Wall) does NOT match
+    # this scorer and its verilator-only WIDTH*/LATCH/COMBDLY/BLKLOOPINIT
+    # findings false-block host-PASSING designs (VE-human 028/030/044/144/153).
+    # Run GATE B ADVISORY (reported, not blocking); GATE A still blocks a
+    # genuine iverilog compile error (no-leak).
     rc, out = run([sys.executable, str(PROGRAMS / "harness_exact_selfverify.py"),
                    "--rtl", str(sample), "--top", top_module,
-                   "--report", str(hxsv_json)], env=cli_env)
+                   "--lint-advisory", "--report", str(hxsv_json)], env=cli_env)
     hxsv_verd = "PASS" if rc == 0 else ("FAIL" if rc == 1 else "SKIP")
     steps["harness_exact_selfverify"] = {"verdict": hxsv_verd, "rc": rc,
                                          "log": out[-500:]}
