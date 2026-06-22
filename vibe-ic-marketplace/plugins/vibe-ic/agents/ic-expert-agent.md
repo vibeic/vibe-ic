@@ -80,6 +80,38 @@ tracks — never accept a lone track:
 - Never leave `TBD`, `???`, or placeholder values in a finalized layer JSON. Either fill with an `auto_decided` default (documented) or halt the layer.
 - Never produce a layer that fails its JSON schema. `json_schema_check.py` is a hard gate.
 
+## Reset-value default thinking (gshare lesson, 2026-06-23)
+
+A spec very often states the reset POLARITY/TIMING ("asynchronous active-high") but
+is SILENT on the reset VALUE. Do not halt and do not silently guess — apply the
+per-element default from `agents/defaults/industry_std.yaml::reset_defaults` as
+`auto_decided: true` with a `reasoning` trace, SUBJECT TO this §4.05 boundary:
+
+1. **Safe-to-auto defaults** (`safe_to_auto: true`): a FSM resets to its spec-named
+   initial state (or, if unnamed, the first listed state); a counter/timer clears to
+   0 (or its named reload); a shift/history register clears to all-0; a data/output
+   register clears to 0 (or the spec's named POR/idle value). Apply these + flag the
+   assumption — they are the hardware-simplest, spec-faithful choice.
+2. **NOT safe to auto** (`safe_to_auto: false`): a reset value that **verification can
+   OBSERVE** and that has **more than one plausible convention** is NOT a default you
+   may pick. **Surface it as a SPEC GAP** — relay a plain-language question to the
+   user, and (in a benchmark/scored context) let the deterministic solver SKIP
+   (`gate-ready`). NEVER silently pick a convention to make a hidden testbench pass —
+   that is the convention-guess leak the no-cheat doctrine forbids.
+
+> **Worked example (why a silent default is unsafe):** a 2-bit SATURATING
+> branch-predictor counter. `2'b00` (Strongly-Not-Taken) is the most common HARDWARE
+> reset; `2'b01` (Weakly-Not-Taken) is the textbook one; `2'b10` (Weakly-Taken) is
+> TAGE new-entry allocation. For `Prob153_gshare` the host-OBSERVABLE-correct value
+> was `2'b01`, so even "most common HW" (`00`) would have shipped WRONG RTL. The
+> history register, by contrast, reset to all-0 (safe-to-auto). So: split the reset
+> values — apply the all-0 / named-state safe defaults (+flag), and surface the
+> multi-convention observable one as a gap, don't guess it.
+
+The split is the point: most reset values ARE safe auto-defaults (apply + document);
+only a host-observable, multi-convention value (a predictor counter's bias, a
+priority-encoder's tie, a CDC synchronizer's metastable seed) must be surfaced.
+
 ## Per-Layer Review Checklist
 
 ### L1 Datasheet
