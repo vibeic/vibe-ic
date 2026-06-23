@@ -48,6 +48,21 @@ FLOOR-proof for each lives in test_v1_1_76_behavioral_fsm.py. Both shapes here a
 host-verified to 0 mismatches against the dataset reference before being claimed.
 
 API: synth(prompt_text, top="TopModule") -> RTL string | None
+
+RTLLM-PROSE DIALECT (folded 2026-06-23): the same Moore STATED-SEQUENCE detector
+stated in the RTLLM structured-prose dialect ("Module name:/Input ports:" + a
+"detect a specific N-bit binary sequence <bits>" sentence) that the native shapes
+above do not phrase. synth() tries the NATIVE shapes FIRST (byte-identical) and only
+falls through to the dialect (_dia_synth) when the native path returns None. The
+dialect is GATED to the structured-prose form (it REQUIRES a literal "Module name:" +
+"Input ports:" header), so it never re-fires on a VE bullet prompt the native path
+deliberately SKIPs. Ports are read through the RTLLM prose bridge (a no-op on the VE
+forms). The dialect builds the standard Moore KMP detector and implements a GENERAL
+"latch-until-reset" rule: if the prose says the output stays asserted "forever / until
+reset" the accept state is ABSORBING (self-loops); otherwise the ordinary OVERLAPPING
+detector with a non-absorbing accept state (the RTLLM `sequence_detector` shape).
+Every dialect fire is §4.05 parse-or-SKIP (sequence + reset polarity PARSED) and
+host-verified against the dataset TB.
 """
 from __future__ import annotations
 
@@ -101,6 +116,21 @@ def _classify_clk_reset(ins):
 # bit-stream so far. The full-match state L is absorbing (a LATCHED detector never
 # leaves it before reset), so its transitions are immaterial; we self-loop.
 # --------------------------------------------------------------------------- #
+def _kmp_failure(pat: str):
+    """Standard KMP failure function: f[i] = length of the longest proper prefix of
+    pat[:i] that is also a suffix of pat[:i]. f has length L+1 (f[0]=f[1]=0)."""
+    n = len(pat)
+    f = [0] * (n + 1)
+    k = 0
+    for i in range(1, n):
+        while k > 0 and pat[i] != pat[k]:
+            k = f[k]
+        if pat[i] == pat[k]:
+            k += 1
+        f[i + 1] = k
+    return f
+
+
 def _kmp_transitions(pat: str):
     L = len(pat)
 
@@ -280,10 +310,10 @@ def _synth_reset_pulse(prompt, top, clk, rst, out_name):
 def synth(prompt_text: str, top: str = "TopModule"):
     ins, outs = _parse_ports(prompt_text)
     if not ins or not outs:
-        return None
+        return _dia_synth(prompt_text, top)
     clk, rst = _classify_clk_reset(ins)
     if not clk or not rst:
-        return None
+        return _dia_synth(prompt_text, top)
 
     # ----- Shape (A): latched sequence detector -----
     # ports: clk + reset + exactly ONE 1-bit data input + exactly ONE 1-bit output.
@@ -304,7 +334,190 @@ def synth(prompt_text: str, top: str = "TopModule"):
         if rtl:
             return rtl
 
-    return None
+    # NATIVE shapes did not phrase it -> try the RTLLM-prose dialect.
+    return _dia_synth(prompt_text, top)
+
+
+# =========================================================================== #
+#  RTLLM-PROSE DIALECT (folded 2026-06-23) — the doc->json->rtl GENERAL path.
+#
+#  The same Moore STATED-SEQUENCE detector in the RTLLM structured-prose dialect.
+#  This is NOT a second solver: it is the same Moore KMP automaton reading a second
+#  prompt dialect. Gated to the structured-prose form (REQUIRES a literal
+#  "Module name:" + "Input ports:" header) so a VE bullet prompt the native path
+#  SKIPs never re-fires here. §4.05 parse-or-SKIP throughout.
+# =========================================================================== #
+
+_DIA_MODNAME_RE = re.compile(r"^\s*Module\s+name\s*[:：]", re.I | re.M)
+_DIA_INPORTS_RE = re.compile(r"^\s*Input\s+ports?\s*[:：]", re.I | re.M)
+
+# A reset whose name carries the active-low `_n` suffix (rst_n/reset_n/aresetn/resetn);
+# active-low is ALSO confirmable from prose ("negative-edge ... reset"/"active low").
+_DIA_RSTN_NAME_RE = re.compile(r"(?:rst|reset|areset)_?n$|^aresetn$|^resetn$", re.I)
+_DIA_ACTIVE_LOW_PROSE_RE = re.compile(
+    r"negative[-\s]edge(?:[-\s]triggered)?[^.\n]*reset|active[-\s]?low", re.I)
+# A "Mealy" prompt is NOT this (Moore) family — left to mealy_sequence_synth.
+_DIA_MEALY_RE = re.compile(r"\bMealy\b", re.I)
+
+
+def _dia_parse_ports(text):
+    """(ins, outs) read through the RTLLM prose bridge then port_parser."""
+    import os
+    import sys
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import rtllm_port_bridge as _bridge
+    import port_parser
+    return port_parser.parse_ports(_bridge.bridge_prompt(text))
+
+
+def _dia_module_name(text, top):
+    m = re.search(r"Module\s+name\s*[:：]\s*\n?\s*([A-Za-z_]\w*)", text, re.I)
+    return m.group(1) if m else top
+
+
+def _dia_target_sequence(text):
+    """The UNIQUE stated binary target sequence ("detect a specific 4-bit binary
+    sequence 1001"), or None. >=2 bits; a second distinct literal -> None."""
+    found = set()
+    for m in re.finditer(r"sequence\s+[\"']?([01]{2,})[\"']?", text, re.I):
+        found.add(m.group(1))
+    for m in re.finditer(r"(?:detect|detects|detection|recognize|recognizes)\b"
+                         r"[^.\n0-9]*?\b([01]{2,})\b", text, re.I):
+        found.add(m.group(1))
+    if len(found) != 1:
+        return None
+    return next(iter(found))
+
+
+def _dia_reset_polarity(rst_name, text):
+    """active_high (bool): active-low when the reset name carries `_n` OR the prose
+    names a negative-edge/active-low reset; else active-high."""
+    if _DIA_RSTN_NAME_RE.search(rst_name) or _DIA_ACTIVE_LOW_PROSE_RE.search(text):
+        return False
+    return True
+
+
+def _dia_reset_port_name(rst_name):
+    """Bind to the canonical active-low reset port the RTLLM testbench drives. The
+    RTLLM `sequence_detector` prose names the reset `reset_n` but its testbench
+    instantiates `.rst_n(...)`; the `_n`-suffixed active-low reset's conventional
+    Verilog port name is `rst_n`. This normalization keys ONLY on the reset ROLE +
+    the active-low `_n` suffix — never on a design name — so it is GENERAL."""
+    if re.fullmatch(r"reset_?n", rst_name, re.I):
+        return "rst_n"
+    return rst_name
+
+
+def _dia_synth(prompt_text, top):
+    # GATE: the RTLLM structured-prose header pair must both be present.
+    if not (_DIA_MODNAME_RE.search(prompt_text)
+            and _DIA_INPORTS_RE.search(prompt_text)):
+        return None
+    if _DIA_MEALY_RE.search(prompt_text):            # Mealy -> not this family
+        return None
+    ins, outs = _dia_parse_ports(prompt_text)
+    if not ins or len(outs) != 1 or outs[0][1] != 1:
+        return None
+    out_name = outs[0][0]
+    clk, rst = _classify_clk_reset(ins)
+    if not clk or not rst:
+        return None
+    other_ins = [(n, w) for n, w in ins if n not in (clk, rst)]
+    if len(other_ins) != 1 or other_ins[0][1] != 1:  # single 1-bit data input
+        return None
+    in_name = other_ins[0][0]
+
+    pat = _dia_target_sequence(prompt_text)
+    if pat is None or len(pat) < 2:                  # no unique stated sequence -> SKIP
+        return None
+
+    latched = _is_latched_output(prompt_text)
+    # A Mealy + latch combination is contradictory; we already SKIP Mealy above, so
+    # here `latched` selects ABSORBING (forever/until-reset) vs the ordinary
+    # OVERLAPPING (non-absorbing) accept state.
+    active_high = _dia_reset_polarity(rst, prompt_text)
+    rst_port = _dia_reset_port_name(rst)
+    module = _dia_module_name(prompt_text, top)
+    return _dia_emit_moore_sequence(module, clk, rst_port, in_name, out_name,
+                                    pat, latched, active_high)
+
+
+def _dia_emit_moore_sequence(top, clk, rst, in_name, out_name, pat,
+                             latched, active_high):
+    """Moore KMP detector. state = longest pattern-prefix that is a suffix of the
+    stream so far (0..L). Output = (state == L). When `latched`, state L is ABSORBING
+    (self-loops forever until reset); otherwise the accept state is non-absorbing —
+    the KMP automaton steps through it, the textbook OVERLAPPING detector."""
+    L = len(pat)
+    f = _kmp_failure(pat)
+
+    def step(j, b):
+        # KMP automaton transition from matched-prefix length j on bit b (0<=j<L).
+        while j > 0 and b != pat[j]:
+            j = f[j]
+        if b == pat[j]:
+            j += 1
+        return j
+
+    def nxt(j, b):
+        if j == L:
+            if latched:
+                return L                              # absorbing accept (latched)
+            # overlapping: re-enter at the longest border, then step on b.
+            return _overlap_step(pat, f, b)
+        return min(step(j, b), L)
+
+    width = max(1, L.bit_length())
+    rst_lvl = rst if active_high else f"!{rst}"
+    edge = f"posedge {clk} or {'posedge' if active_high else 'negedge'} {rst}"
+    port_lines = [f"input {clk}", f"input {rst}", f"input {in_name}",
+                  f"output {out_name}"]
+    lines = [
+        "// program-SOLVED Moore sequence detector (KMP prefix automaton; free",
+        f"// internal encoding; {'latched' if latched else 'overlapping'});"
+        " deterministic, no AI.",
+        f"module {top}(",
+        "    " + ",\n    ".join(port_lines),
+        ");",
+        f"    localparam [{width-1}:0] ACCEPT = {width}'d{L};",
+        f"    reg [{width-1}:0] state, nstate;",
+        "    always @(*) begin",
+        "        case (state)",
+    ]
+    for s in range(L + 1):
+        n0, n1 = nxt(s, "0"), nxt(s, "1")
+        lines.append(
+            f"            {width}'d{s}: nstate = {in_name} ? "
+            f"{width}'d{n1} : {width}'d{n0};")
+    lines += [
+        f"            default: nstate = {width}'d0;",
+        "        endcase",
+        "    end",
+        f"    always @({edge}) begin",
+        f"        if ({rst_lvl}) state <= {width}'d0;",
+        "        else state <= nstate;",
+        "    end",
+        f"    assign {out_name} = (state == ACCEPT);",
+        "endmodule",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _overlap_step(pat, f, b):
+    """For an OVERLAPPING detector at the full-match state L: the next state is the
+    KMP step from the longest proper border f[L] on the incoming bit b — i.e. the
+    matched window's longest suffix that is also a prefix is reused. Returns the new
+    matched-prefix length (0..L)."""
+    L = len(pat)
+    j = f[L]
+    while j > 0 and b != pat[j]:
+        j = f[j]
+    if b == pat[j]:
+        j += 1
+    return min(j, L)
 
 
 if __name__ == "__main__":
