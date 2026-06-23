@@ -93,6 +93,10 @@ import cvdp_atomic_bridge as _bridge  # noqa: E402
 # param-override). A width stated as a parameter expression with a derivable
 # default is an EXTRACTABLE fact, not a gap.
 import cvdp_width_resolve as _W  # noqa: E402
+# The PROVIDED input.context RTL module HEADER is part of the interface spec
+# (§3.9) — when the prose never states a port's width but the context file
+# DECLARES it, that declaration resolves the width (header-only; never the body).
+import cvdp_context_interface_recover as _ctxrec  # noqa: E402
 
 # Reused (NOT modified) — v1.1.82 structural extractors. Imported defensively so a
 # not-yet-present extractor simply contributes nothing (the layer never crashes).
@@ -573,6 +577,17 @@ def _complete_interface(record: dict, top: str
     iface: List[dict] = []
     gaps: List[dict] = []
 
+    # §3.9 interface source: the PROVIDED input.context module HEADER. When the
+    # prose never states a port's width, the context file's `module <top>(...)`
+    # declaration resolves it (header-only — never the body; only the harness
+    # TOPLEVEL target). This closes `width_not_stated` gaps with the authoritative
+    # declared width (Tier3 -> Tier2), not a guess.
+    try:
+        ctx_widths = {p["name"]: p["width"] for p in _ctxrec.recover_interface(record, top)
+                      if p.get("width") is not None}
+    except Exception:
+        ctx_widths = {}
+
     def _place(name: str, direction: str):
         if name in params:
             return  # a config parameter — not a port (correctly filtered)
@@ -580,6 +595,12 @@ def _complete_interface(record: dict, top: str
         if w is not None:
             iface.append({"name": name, "dir": direction, "width": w,
                           "signed": signed, "source": src})
+            return
+        # the PROVIDED input.context module header DECLARES this port's width — an
+        # authoritative interface fact (§3.9), used when the prose was silent.
+        if name in ctx_widths:
+            iface.append({"name": name, "dir": direction, "width": ctx_widths[name],
+                          "signed": signed, "source": "context_header"})
             return
         # a port whose width is a PARAMETER EXPRESSION with no resolvable default
         # (`bits [N*IN_WIDTH-1:0]`): the PORT is known and must be PLACED (with an

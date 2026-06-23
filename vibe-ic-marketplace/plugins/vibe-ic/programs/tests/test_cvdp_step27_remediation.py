@@ -155,6 +155,55 @@ def test_test_py_still_preferred_over_tb_py():
     assert "dut.w_clk" in txt
 
 
+# --------------------------------------------------------------------------- #
+# (T3->T2) input.context module header resolves a `width_not_stated` gap
+# --------------------------------------------------------------------------- #
+WIDTHLESS_PROMPT = """Design `acc`. An accumulator.
+- `clk`: clock
+- `din`: input sample to accumulate
+- `acc_o`: the running total
+"""
+WIDTHLESS_TB = """import cocotb
+@cocotb.test()
+async def run(dut):
+    dut.clk.value = 0
+    dut.din.value = 7
+    _ = dut.acc_o.value
+"""
+
+
+def test_context_header_width_closes_width_not_stated_gap():
+    # the prose never states din/acc_o widths -> without the context they are a
+    # `width_not_stated` gap (Tier3). The provided input.context module header
+    # DECLARES them -> the widths resolve (authoritative §3.9 interface fact), the
+    # ports carry the declared width tagged `context_header`, and the record
+    # becomes COMPLETE -> Tier2.
+    ctx = {"rtl/acc.sv": (
+        "module acc (input clk, input [11:0] din, output [31:0] acc_o);\n"
+        "  // body must NOT be read\n"
+        "  always @(posedge clk) acc_o <= acc_o + din;\n"
+        "endmodule\n")}
+    rec = _rec("acc", WIDTHLESS_PROMPT, WIDTHLESS_TB, ctx=ctx)
+    spec = CE.extract(rec)
+    by = {p["name"]: p for p in spec["interface"]}
+    assert by["din"]["width"] == 12 and by["din"]["source"] == "context_header"
+    assert by["acc_o"]["width"] == 32 and by["acc_o"]["source"] == "context_header"
+    assert spec["completeness"] == "COMPLETE"
+    assert SP.solve(rec)["tier"] == SP.TIER_AI_EMIT  # Tier2
+
+
+def test_context_header_absent_port_stays_a_gap():
+    # §4.05: a port the context header does NOT declare keeps its honest gap — the
+    # context fill never fabricates a width for a port it doesn't carry.
+    ctx = {"rtl/acc.sv": "module acc (input clk, input [11:0] din);\nendmodule\n"}
+    rec = _rec("acc", WIDTHLESS_PROMPT, WIDTHLESS_TB, ctx=ctx)
+    spec = CE.extract(rec)
+    by = {p["name"]: p for p in spec["interface"]}
+    assert by["din"]["width"] == 12          # context declares din
+    assert by.get("acc_o", {}).get("width") is None  # acc_o not in context -> unresolved
+    assert spec["completeness"] != "COMPLETE"
+
+
 def test_runner_only_harness_is_not_picked_as_test():
     # a harness with ONLY test_runner.py (no real test, no dut.) stays empty — the
     # fallback must not pick the runner (it has no dut.<sig> interface).
