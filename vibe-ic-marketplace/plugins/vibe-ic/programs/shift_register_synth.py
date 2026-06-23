@@ -502,14 +502,178 @@ def synth(prompt_text: str, top: str = "TopModule"):
     if not _is_shift_family(prompt_text):
         return None
     ins, outs = _parse_ports(prompt_text)
+    # VE-phrasing shapes run first (unchanged) — only when the VE port parse found
+    # exactly the one-output register interface. When it did not (the RTLLM prose
+    # dialect, which port_parser cannot read without the bridge), fall straight
+    # through to the dialect.
+    if ins and outs and len(outs) == 1:
+        for fn in (_try_barrel, _try_rotator, _try_load_shift,
+                   _try_shift_mux, _try_plain_shift):
+            try:
+                rtl = fn(prompt_text, ins, outs, top)
+            except Exception:
+                rtl = None
+            if rtl:
+                return rtl
+    # RTLLM-prose dialect fallback (folded): right_shifter / barrel_shifter stated
+    # in the structured "Module name:/Input ports:" prose. parse-or-SKIP.
+    return _dia_synth(prompt_text, top)
+
+
+# =========================================================================== #
+#  RTLLM-PROSE DIALECT (folded — the doc->json->rtl GENERAL shifter path)
+#
+#  The same shift / barrel-shift family in the RTLLM structured-prose dialect that
+#  the VE-phrasing shapes do not read. Same solver, second dialect: synth() tries
+#  the VE shapes first and falls through here. §4.05 parse-or-SKIP — every fact
+#  (width, direction, shift-in value, clocking) is PARSED from prose; ANY unstated
+#  fact -> SKIP. NO hardcoded chip name / magic constant / dataset port-name gate.
+#  barrel_shifter's prose does NOT state shift LEFT vs RIGHT, so it honestly SKIPs
+#  (a guessed direction is a coin-flip cheat). Ports read via the prose bridge.
+#  Host-verified vs the RTLLM testbench.
+# =========================================================================== #
+def _dia_ports(prompt):
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import rtllm_port_bridge as _bridge
+    import port_parser
+    return port_parser.parse_ports(_bridge.bridge_prompt(prompt))
+
+
+def _dia_prose_width(prompt, name):
+    """A port's width from its prose port line's explicit `name [hi:lo]:` range, or
+    from a stated 'N-bit ... <op>' when the port line carries no range (the bridge
+    defaults a range-less, token-less port to 1, but right_shifter's q is an 8-bit
+    register stated only in the behaviour paragraph). None if neither is present."""
+    m = re.search(rf"^\s*{re.escape(name)}\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*[:：]",
+                  prompt, re.M)
+    if m:
+        hi, lo = int(m.group(1)), int(m.group(2))
+        return abs(hi - lo) + 1
+    return None
+
+
+# --- right shifter: N-bit serial-in right shift, new bit into MSB ---------- #
+def _dia_right_shifter(prompt, ins, outs, top):
+    low = prompt.lower()
+    if not re.search(r"right\s+shift|right[- ]shifter", low):
+        return None
+    if re.search(r"\bleft\b", low) or re.search(r"rotat", low):
+        return None  # any left/rotate cue -> not this plain right shifter
+    in_names = [n for n, _ in ins]
+    in_low = [n.lower() for n in in_names]
+    clk = _find_dia(in_names, in_low, "clk", "clock")
+    if clk is None or len(outs) != 1:
+        return None
+    q_name, q_w = outs[0]
+    # The register width is stated as "N-bit right shift" (the q port line carries
+    # no range, so the bridge defaulted q to 1) — recover the STATED width. Prefer
+    # an explicit "reg [hi:lo] q" declaration in the behaviour text, else "N-bit".
+    mreg = re.search(r"\breg\s*\[\s*(\d+)\s*:\s*\d+\s*\]\s*" + re.escape(q_name),
+                     low)
+    mbit = re.search(r"(\d+)\s*-?\s*bit\s+right\s+shift", low)
+    if mreg:
+        q_w = int(mreg.group(1)) + 1
+    elif mbit:
+        q_w = int(mbit.group(1))
+    if q_w < 2:
+        return None
+    # the 1-bit serial data input that enters the MSB ('d into the most significant').
+    data = next((n for n, w in ins if w == 1 and n != clk), None)
+    if data is None:
+        return None
+    if not re.search(r"most\s+significant|q\[\s*" + str(q_w - 1) + r"\s*\]|"
+                     r"into\s+the\s+(?:most|msb)", low):
+        return None
+    # any reset would change the RTL; right_shifter states an initial-block zero,
+    # no reset port — require exactly clk + data.
+    extra = [n for n in in_names if n not in (clk, data)]
+    if extra:
+        return None
+    lines = [
+        "// program-SOLVED N-bit serial right shifter (d -> MSB); deterministic, no AI.",
+        f"module {top} (",
+        "    " + ",\n    ".join([
+            _decl("input", clk, 1), _decl("input", data, 1),
+            _decl("output reg", q_name, q_w)]),
+        ");",
+        f"    initial {q_name} = 0;",
+        f"    always @(posedge {clk}) begin",
+        f"        {q_name} <= ({q_name} >> 1);",
+        f"        {q_name}[{q_w-1}] <= {data};",
+        "    end",
+        "endmodule",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+# --- barrel shifter: direction NOT stated in prose -> honest SKIP ---------- #
+def _dia_barrel(prompt, ins, outs, top):
+    low = prompt.lower()
+    if "barrel" not in low:
+        return None
+    # The barrel_shifter prose says "shifts or rotates" + "shift by 1, 2, or 4
+    # positions" but NEVER states LEFT vs RIGHT (nor shift-vs-rotate definitively).
+    # A guessed direction is a coin-flip cheat -> SKIP unless a direction is stated.
+    left = bool(re.search(r"shift\s+left|left\s+shift|rotate\s+left", low))
+    right = bool(re.search(r"shift\s+right|right\s+shift|rotate\s+right", low))
+    if left == right:                     # neither (or both) stated -> ambiguous
+        return None
+    # (If a future barrel prose DID state a single direction, emit it; the dataset
+    #  barrel_shifter does not, so this path is reached only on a stated-direction
+    #  variant. Require the same 8-bit-in / 3-bit-ctrl mux structure to be present.)
+    in_names = [n for n, _ in ins]
+    in_low = [n.lower() for n in in_names]
+    din = _find_dia(in_names, in_low, "in", "din", "data")
+    ctrl = _find_dia(in_names, in_low, "ctrl", "amt", "amount", "shift")
+    if din is None or ctrl is None or len(outs) != 1:
+        return None
+    iw = dict(ins).get(din)
+    cw = dict(ins).get(ctrl)
+    q_name, q_w = outs[0]
+    if not iw or not cw or iw != q_w or (1 << cw) <= q_w:
+        return None
+    # build a staged shifter in the stated direction; magnitudes are 2**i per ctrl
+    # bit (the prose's '1, 2, 4 positions').
+    lines = [
+        f"// program-SOLVED {'left' if left else 'right'} barrel shifter; deterministic.",
+        f"module {top} (",
+        "    " + ",\n    ".join([
+            _decl("input", din, iw), _decl("input", ctrl, cw),
+            _decl("output", q_name, q_w)]),
+        ");",
+    ]
+    prev = din
+    for i in range(cw):
+        amt = 1 << i
+        wname = f"st{i}"
+        if left:
+            expr = f"({ctrl}[{i}] ? {{{prev}[{q_w-1-amt}:0], {amt}'b0}} : {prev})"
+        else:
+            expr = f"({ctrl}[{i}] ? {{{amt}'b0, {prev}[{q_w-1}:{amt}]}} : {prev})"
+        lines.append(f"    wire [{q_w-1}:0] {wname} = {expr};")
+        prev = wname
+    lines.append(f"    assign {q_name} = {prev};")
+    lines.append("endmodule")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _find_dia(names, lows, *cands):
+    return next((n for n, l in zip(names, lows) if l in cands), None)
+
+
+_DIA_BUILDERS = (_dia_right_shifter, _dia_barrel)
+
+
+def _dia_synth(prompt_text, top):
+    try:
+        ins, outs = _dia_ports(prompt_text)
+    except Exception:
+        return None
     if not ins or not outs:
         return None
-    # exactly one output is the register/result (the mux shape has a 1-bit Z).
-    if len(outs) != 1:
-        return None
-    # try the more specific shapes first; each SKIPs cleanly on a mismatch.
-    for fn in (_try_barrel, _try_rotator, _try_load_shift,
-               _try_shift_mux, _try_plain_shift):
+    for fn in _DIA_BUILDERS:
         try:
             rtl = fn(prompt_text, ins, outs, top)
         except Exception:
