@@ -415,6 +415,31 @@ highest-precedence condition is the first `if`. Re-ordering the branches (e.g. t
 testing ground) silently changes behavior only on the cycles where two conditions co-occur, so it
 passes most random draws and fails a few — a determinism gap. Copy the stated order verbatim.
 
+### Skill: multi-phase / dual-edge clock dividers — a 50%-duty or fractional divide needs BOTH clock edges
+A frequency divider that must keep a **50% duty cycle** at an **ODD** divide ratio, or a
+**FRACTIONAL** ratio, cannot be done with a single posedge counter — the high/low half-periods
+would be unequal. The canonical realization uses **two counters/flags, one on `posedge clk` and one on
+`negedge clk`, combined by OR** (the negedge path supplies the missing half-cycle):
+- *Odd 50%-duty (÷N, N odd):* `cnt1` on posedge (0..N-1), `clk_div1 = cnt1 < N/2`; `cnt2` on negedge,
+  `clk_div2 = cnt2 < N/2`; `assign clk_div = clk_div1 | clk_div2;`.
+- *Fractional (×2/N):* a `clk_ave` set on posedge at `cnt==0` and `cnt==N/2+1`, plus a `clk_adjust`
+  set on negedge at `cnt==1` and `cnt==N/2+1`; `assign clk_div = clk_ave | clk_adjust;`.
+- *Even ÷N:* the simple case — toggle `clk_div` when `cnt == N/2-1`, single posedge counter.
+The divide ratio (N) is a SPEC value, not invented. A posedge-only attempt at an odd/fractional ratio
+passes some self-checks but mismatches the duty/phase the hidden TB samples — a determinism gap, not a
+spec ambiguity. (Worked: RTLLM `freq_divbyodd`/`freq_divbyfrac`/`freq_divbyeven` — converged to 5/5 only
+with the dual-edge structure.)
+
+### Skill: multi-stage pipeline — align the valid/enable delay to the data-path latency EXACTLY
+In a pipelined datapath (e.g. a multi-stage multiplier: partial-products → pairwise-adds → final-sum),
+the **output-valid / enable strobe must be delayed the SAME number of register stages as the data**.
+Build an enable shift-register (`en_reg <= {en_reg[k-2:0], en_in}; en_out <= en_reg[k-1];`) whose depth
+EQUALS the data pipeline depth, and gate the output with the aligned enable. An off-by-one in the
+enable delay (or forgetting to register the inputs the same cycle the partial products are formed)
+makes the output valid one cycle early/late — it passes most random vectors and fails the boundary
+ones (a determinism gap). Count the data stages, match the enable stages. (Worked: RTLLM
+`multi_pipe_8bit` — 3 data stages ⇒ 3-deep enable pipeline.)
+
 ### Skill: author STRICTLY to the GIVEN interface header — it can differ across dataset/spec variants
 The verification harness binds the EXACT interface in the prompt's own header (port names, directions,
 widths, **and index base**). The SAME logical design can ship with DIFFERENT interfaces in different
