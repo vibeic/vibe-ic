@@ -276,21 +276,30 @@ async def test_penc(dut):
 """
 
 
-def test_param_expression_without_default_stays_gap():
+def test_param_expression_without_default_places_port_width_unknown():
     # N and M are read as config params but the prompt states NO default for them,
-    # so `[N-1:0]` / `[M-1:0]` cannot be resolved -> the ports stay gaps.
+    # so `[N-1:0]` / `[M-1:0]` cannot be RESOLVED to an int.
     pd = W.param_defaults(UNSTATED_PARAM_PROMPT)
     assert "N" not in pd and "M" not in pd, "no default should be invented for N/M"
     assert W.symbolic_width(UNSTATED_PARAM_PROMPT, "in_vec", pd) is None, \
-        "§4.05: an unresolvable param expression must NOT yield a width"
+        "§4.05: an unresolvable param expression must NOT yield a (fabricated) width"
+    # ...but the param-expression DECLARATION is structurally present, so the width
+    # is UNKNOWN, not a coincidental prose literal:
+    assert W.has_param_expr_width(UNSTATED_PARAM_PROMPT, "in_vec") is True
     rec = _make_record("penc", UNSTATED_PARAM_PROMPT, UNSTATED_PARAM_TB)
     spec = CE.extract(rec)
-    iface = {p["name"] for p in spec["interface"]}
-    assert "in_vec" not in iface, "a port with an unresolvable param width must NOT be placed"
-    assert "N" not in iface and "M" not in iface, "config params are not ports"
-    assert spec["completeness"] == "INCOMPLETE_EXTRACTION_GAP"
-    types = {g["type"] for g in spec["gaps"] if g["kind"] == "INCOMPLETE_EXTRACTION_GAP"}
-    assert "param_expression_width" in types
+    by = {p["name"]: p for p in spec["interface"]}
+    # the PORT is real (harness-driven) -> PLACED, but with width=None, never a
+    # fabricated literal. (Step-2.7 §4.05: placing it width=None keeps the record
+    # gate-able on presence+dir; dropping it emptied the interface.)
+    assert "in_vec" in by, "a real harness port must be placed even when its width is symbolic"
+    assert by["in_vec"]["width"] is None, "an unresolvable param width must NOT be fabricated"
+    assert "N" not in by and "M" not in by, "config params are not ports"
+    # N and M ARE recognised config parameters (read via int(dut.N.value)), so the
+    # `[N-1:0]` / `[M-1:0]` widths are FULLY specified as PARAMETERISED -> COMPLETE
+    # (the AI writes the param expression; the width is not unknown, it is the
+    # parameter). A genuinely-unknown symbol would instead stay a gap.
+    assert spec["completeness"] == "COMPLETE"
 
 
 def test_genuinely_silent_width_stays_spec_absent():
