@@ -76,10 +76,15 @@ if str(_HERE) not in sys.path:
 # Reused (import, read — NOT modified) — the three shipped pieces we compose.
 import cvdp_atomic_bridge as _bridge        # noqa: E402  Tier-1 deterministic emit
 import cvdp_complete_extract as _extract     # noqa: E402  complete spec + verdict
+import cvdp_context_interface_recover as _ctx_recover  # noqa: E402  input.context header
 
 TIER_PROGRAM = 1   # deterministic bridge emit (no AI)
-TIER_AI_EMIT = 2   # AI-calls-extractor-then-program-emits (bridge-internal path)
-TIER_AI_GATED = 3  # AI authors; the conformance gate constrains + stabilizes
+TIER_AI_EMIT = 2   # a PROGRAM (cvdp_complete_extract) extracted a COMPLETE spec
+                   # JSON; the AI authors from that complete spec + the gate. The
+                   # most stable AI tier — every testable fact was program-pinned.
+TIER_AI_GATED = 3  # AI authors reading the prose; a MEANINGFUL conformance gate
+                   # (interface +/- structure) constrains + stabilizes it, but the
+                   # extracted spec was not fully COMPLETE.
 TIER_UNGATED = 4   # too-incomplete to gate meaningfully + no convention applies
 TIER_FLOOR = 5     # genuine floor (spec self-contradictory / harness broken)
 
@@ -198,6 +203,29 @@ def _floor_evidence(record: dict, spec: dict) -> Optional[str]:
     return None
 
 
+def _augment_gate_with_context(record: dict, gate: dict) -> dict:
+    """CONVERGE lever (Tier4 -> Tier3): when prose extraction placed NO interface
+    ports, recover the TARGET module's port header from the PROVIDED input.context
+    RTL (interface = spec, header-only — see cvdp_context_interface_recover). A
+    meaningful interface gate is what separates a stabilizable Tier-3 author from
+    an ungated Tier-4 one: it pins port names/dirs/widths so the AI output cannot
+    drift on the contract the cocotb harness binds. Returns the gate unchanged
+    when it already has ports or nothing is recoverable (§4.05 SKIP)."""
+    if gate.get("ports"):
+        return gate
+    target = gate.get("module_name") or _bridge.toplevel_name(record)
+    try:
+        recovered = _ctx_recover.recover_interface(record, target)
+    except Exception:
+        recovered = []
+    if not recovered:
+        return gate
+    gate = dict(gate)
+    gate["ports"] = recovered
+    gate["ports_source"] = "input_context_header"
+    return gate
+
+
 def classify(record: dict, spec: Optional[dict] = None,
              rtl: Optional[str] = None) -> int:
     """The tier integer for this record (cheap; does not build the full result).
@@ -223,23 +251,25 @@ def classify(record: dict, spec: Optional[dict] = None,
     if _floor_evidence(record, spec):
         return TIER_FLOOR
 
-    completeness = (spec or {}).get("completeness")
-    gate = build_gate(spec)
-    # Tier 3 — the spec is COMPLETE or near-complete (only an EXTRACTION_GAP
-    # remains: the fact IS in the prompt, so the gate can still pin the rest of
-    # the interface + structure and constrain the AI). A gate is MEANINGFUL when
-    # it carries at least the module name AND a non-empty interface (something to
-    # check against).
+    gate = _augment_gate_with_context(record, build_gate(spec))
+    # A gate is MEANINGFUL when it carries the module name AND a non-empty port
+    # set — something the AI output is held to. The interface may come from prose
+    # extraction or from the provided input.context header; either way it pins the
+    # contract the cocotb harness binds, so the AI cannot drift on it.
     gate_meaningful = bool(gate.get("module_name")) and bool(gate.get("ports"))
-    if completeness == "COMPLETE" and gate_meaningful:
-        return TIER_AI_GATED
-    if completeness == "INCOMPLETE_EXTRACTION_GAP" and gate_meaningful:
-        # the residual gap is a fact we COULD read (param-expression width, etc.);
-        # the rest of the interface is still placed, so the gate constrains the AI.
+    if gate_meaningful:
+        # Tier 2 — a PROGRAM extracted a COMPLETE spec (every testable fact
+        # pinned). The AI authors from the complete structured spec + gate: the
+        # most stable AI tier.
+        if (spec or {}).get("completeness") == "COMPLETE":
+            return TIER_AI_EMIT
+        # Tier 3 — the gate constrains a meaningful interface but the extracted
+        # spec was not fully COMPLETE; the AI fills the remaining function from
+        # the prose. Stability depends on gate coverage.
         return TIER_AI_GATED
 
-    # Tier 4 — too-incomplete to gate AND no genre convention pinned a width.
-    # (SPEC_ABSENT with no meaningful gate, or no cocotb interface to bind.)
+    # Tier 4 — nothing to gate: no interface from prose, no target header in the
+    # provided context, and no genre convention pinned a width.
     return TIER_UNGATED
 
 
@@ -267,7 +297,7 @@ def solve(record: dict) -> dict:
         spec = _extract.extract(record)
     except Exception:
         spec = {}
-    gate = build_gate(spec)
+    gate = _augment_gate_with_context(record, build_gate(spec))
 
     if rtl:
         return {"tier": TIER_PROGRAM, "rtl": rtl, "spec": spec, "gate": gate}
@@ -443,7 +473,7 @@ def _token_represented(rtl: str, tok: str) -> bool:
 # CLI — measure the tier distribution over a jsonl
 # --------------------------------------------------------------------------- #
 def _tier_label(t: int) -> str:
-    return {1: "Tier1 (program-solved)", 2: "Tier2 (AI+extractor emit)",
+    return {1: "Tier1 (program-solved)", 2: "Tier2 (program COMPLETE-spec + gate)",
             3: "Tier3 (gate-able)", 4: "Tier4 (too-incomplete)",
             5: "Tier5 (floor)"}.get(t, f"Tier{t}")
 
@@ -482,11 +512,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             floor_reasons.append((r.get("id"), res["gate"].get("floor_reason", "")))
 
     total = len(recs)
-    stable = counts[1] + counts[3]
+    stable = counts[1] + counts[2] + counts[3]
     print(f"TOTAL = {total}")
     for t in (1, 2, 3, 4, 5):
         print(f"  {_tier_label(t):30s} = {counts[t]}")
-    print(f"\nSTABLE BASELINE (Tier1 + Tier3) = {stable}  ({100.0*stable/total:.1f}%)")
+    print(f"\nSTABLE BASELINE (Tier1 + Tier2 + Tier3) = {stable}  "
+          f"({100.0*stable/total:.1f}%)")
     if floor_reasons:
         print("\nTier5 floor evidence:")
         for i, why in floor_reasons:

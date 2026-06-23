@@ -142,12 +142,15 @@ async def test_traffic_ctl(dut):
 """
 
 
-def test_tier3_complete_spec_is_gateable():
-    """A complete-spec FSM the bridge skips -> Tier3 (AI authors, gate constrains).
-    No RTL is emitted; the gate carries the module name + placed interface."""
+def test_complete_spec_fsm_is_tier2():
+    """A COMPLETE-spec FSM the bridge skips -> Tier2: a PROGRAM
+    (cvdp_complete_extract) pinned every testable fact, so the AI authors from the
+    complete structured spec + gate (the most stable AI tier). No RTL is emitted;
+    the gate carries the module name + placed interface."""
     rec = _make_record("traffic_ctl", FSM_PROMPT, FSM_TB)
     res = SP.solve(rec)
-    assert res["tier"] == SP.TIER_AI_GATED
+    assert res["tier"] == SP.TIER_AI_EMIT
+    assert res["spec"].get("completeness") == "COMPLETE"
     assert res["rtl"] is None
     g = res["gate"]
     assert g["module_name"] == "traffic_ctl"
@@ -510,8 +513,10 @@ def test_chip_agnostic_tier_and_gate_invariant_under_rename():
     rec1 = _make_record(
         "zylo3", _rename(FSM_PROMPT, mapping), _rename(FSM_TB, mapping), rid="renamed")
     r0, r1 = SP.solve(rec0), SP.solve(rec1)
-    # SAME tier
-    assert r0["tier"] == r1["tier"] == SP.TIER_AI_GATED
+    # SAME tier — invariant under rename (chip-AGNOSTIC); both land in the gated
+    # AI band (Tier2/Tier3), never shifting because an identifier changed.
+    assert r0["tier"] == r1["tier"]
+    assert r0["tier"] in (SP.TIER_AI_EMIT, SP.TIER_AI_GATED)
     # SAME interface shape (count + widths + dirs), names renamed in lock-step
     p0 = sorted((p["dir"], p["width"]) for p in r0["gate"]["ports"])
     p1 = sorted((p["dir"], p["width"]) for p in r1["gate"]["ports"])
