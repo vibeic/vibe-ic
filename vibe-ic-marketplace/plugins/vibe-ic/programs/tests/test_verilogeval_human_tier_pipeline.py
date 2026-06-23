@@ -310,10 +310,12 @@ def test_correct_deterministic_emit_is_tier1():
 
 
 @_needs_bench
-def test_wrong_emit_drops_below_tier1():
-    # gatesv100 / gatesv: the registry FIRES but the emit does NOT pass _test.sv.
-    # It must NOT be Tier1 — it drops to the gated AI tier (the interface is
-    # complete via _ifc.txt, so Tier2), and the WRONG RTL is never shipped.
+def test_gatesv_now_promoted_via_supplemental_solver():
+    # gatesv100 / gatesv: the registry mis-WIDTHS the emit (out_both/out_any must
+    # be ONE bit narrower than `in`), so the registry hit FAILS _test.sv. The
+    # supplemental VE-HUMAN structural solver re-emits at the EXACT _ifc.txt
+    # widths and iverilog-PASSES, so deterministic_emit now returns a VERIFIED
+    # emit and these land in Tier1 (the wrong-width RTL is never shipped).
     found = False
     for stem in ("Prob092_gatesv100", "Prob094_gatesv"):
         if not (_DATASET / f"{stem}_ifc.txt").exists():
@@ -321,12 +323,42 @@ def test_wrong_emit_drops_below_tier1():
         found = True
         prob = P.load_problem(str(_DATASET), stem)
         kind, rtl = P.deterministic_emit(prob)
-        assert rtl, f"{stem}: expected the registry to FIRE (this guard targets a wrong-emit)"
-        ok, _log = P.tier1_verify(prob, rtl)
-        assert ok is False, f"{stem}: emit unexpectedly PASSES — re-examine the guard"
+        assert rtl, f"{stem}: a deterministic emit must fire"
+        # deterministic_emit now prefers the VERIFIED supplemental emit.
+        assert kind == "neighbour_vector_exact_width", \
+            f"{stem}: expected the exact-width supplemental emit, got {kind}"
+        ok, log = P.tier1_verify(prob, rtl)
+        assert ok, f"{stem}: the adopted emit must pass _test.sv: {log}"
         res = P.solve(prob, verify_tier1=True)
-        assert res["tier"] != P.TIER_PROGRAM, \
-            f"{stem}: a WRONG emit was wrongly classified Tier1"
-        assert res["rtl"] is None  # the wrong RTL is NOT shipped
+        assert res["tier"] == P.TIER_PROGRAM, \
+            f"{stem}: a VERIFIED deterministic emit must be Tier1"
+        assert "Mismatches: 0" in (res.get("verify_log") or "")
     if not found:
         pytest.skip("gatesv problems absent")
+
+
+@_needs_bench
+def test_unverified_emit_is_never_tier1_synthetic():
+    # The load-bearing §4.05 INVARIANT (kept guarded with a synthetic wrong emit
+    # so it no longer depends on a now-fixed problem): an emit that does NOT pass
+    # _test.sv is NEVER classified Tier1. We feed a deliberately-wrong candidate
+    # for a real problem and assert tier1_verify rejects it.
+    stem = "Prob094_gatesv"
+    if not (_DATASET / f"{stem}_ifc.txt").exists():
+        pytest.skip(f"{stem} absent")
+    prob = P.load_problem(str(_DATASET), stem)
+    # a syntactically-valid but WRONG TopModule (constant outputs) at the exact
+    # interface widths — compiles, but mismatches the reference.
+    wrong = (
+        "module TopModule (\n"
+        "  input [3:0] in,\n"
+        "  output [2:0] out_both,\n"
+        "  output [3:1] out_any,\n"
+        "  output [3:0] out_different\n"
+        ");\n"
+        "  assign out_both = 3'b0;\n"
+        "  assign out_any = 3'b0;\n"
+        "  assign out_different = 4'b0;\n"
+        "endmodule\n")
+    ok, _log = P.tier1_verify(prob, wrong)
+    assert ok is False, "a WRONG emit must NOT verify as Tier1"

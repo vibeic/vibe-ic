@@ -73,6 +73,9 @@ if str(_HERE) not in sys.path:
 
 # Reused (import, read — the shipped deterministic emitter), §4.05 SKIP-on-doubt.
 import spec_artifact_registry as _registry  # noqa: E402  generate(text,top)->(kind,rtl)
+# Supplemental VE-HUMAN structural Tier-1 emitters — a STRICT add-only fallback,
+# consulted only on a registry miss/fail (see deterministic_emit). §4.05-clean.
+import verilogeval_human_tier1_solvers as _supplemental_solvers  # noqa: E402
 
 TIER_PROGRAM = 1   # registry DETERMINISTICALLY emits RTL that iverilog-PASSES _test.sv
 TIER_AI_EMIT = 2   # COMPLETE spec (ifc interface + every stated structure) + gate
@@ -337,22 +340,72 @@ def floor_evidence(prob: dict) -> Optional[str]:
 # (5) Tier-1 deterministic emit + iverilog VERIFY
 # --------------------------------------------------------------------------- #
 def deterministic_emit(prob: dict) -> Tuple[Optional[str], Optional[str]]:
-    """(artifact_type, rtl) from the registry generate() over the PROMPT (prose +
-    interface). (None, None) when nothing fires. NO AI; §4.05 SKIP-on-doubt is
-    inherited from each underlying generator."""
+    """(artifact_type, rtl) for one problem. NO AI; §4.05 SKIP-on-doubt.
+
+    Two deterministic sources, registry-FIRST so the existing 125 verified Tier1
+    are NEVER perturbed (the registry hit that already verifies short-circuits
+    before the supplemental solver is even consulted):
+
+      1. the shared `spec_artifact_registry.generate()` over the PROMPT — the
+         canonical, mutual-exclusion-checked emitter (owns the 125);
+      2. ONLY when the registry MISSES (no hit) OR its hit does NOT iverilog-pass
+         the official _test.sv, the supplemental VE-HUMAN structural solver
+         (`verilogeval_human_tier1_solvers.emit`) is tried; its emit replaces the
+         registry's iff it iverilog-VERIFIES. This rescues (a) the gatesv
+         neighbour-vector emit the registry mis-widths, and (b) the
+         FSM-by-inspection / full-Moore-FSM table shapes the registry SKIPs.
+
+    The supplemental solver is a STRICT improvement: it is consulted only on a
+    registry miss/fail and adopted only on a verified pass, so it can add Tier1s
+    but never remove one. Each adopted emit is independently iverilog-proven by
+    the caller's tier1_verify (the SOLE Tier1 authority)."""
     try:
-        return _registry.generate(prob.get("prompt") or "", "TopModule")
+        reg_kind, reg_rtl = _registry.generate(prob.get("prompt") or "", "TopModule")
     except Exception:
-        return None, None
+        reg_kind, reg_rtl = None, None
+    # registry hit that already passes ⇒ keep it verbatim (preserves the 125;
+    # no supplemental call, no behavioural change for every currently-Tier1 emit).
+    if reg_rtl:
+        ok, _log = tier1_verify(prob, reg_rtl)
+        if ok:
+            return reg_kind, reg_rtl
+    # registry missed or its hit failed — try the supplemental structural solver.
+    try:
+        sup_kind, sup_rtl = _supplemental_solvers.emit(prob)
+    except Exception:
+        sup_kind, sup_rtl = None, None
+    if sup_rtl:
+        ok, _log = tier1_verify(prob, sup_rtl)
+        if ok:
+            return sup_kind, sup_rtl
+    # neither produced a verified emit — return the registry's original result
+    # (possibly a fired-but-failing hit) so the caller's fall-through logic
+    # (tier1_ruled_out) is unchanged.
+    return reg_kind, reg_rtl
+
+
+_VERIFY_CACHE: Dict[Tuple[str, str], Tuple[bool, str]] = {}
 
 
 def tier1_verify(prob: dict, rtl: str) -> Tuple[bool, str]:
     """iverilog-VERIFY that `rtl` (a candidate TopModule) PASSES the official
     _test.sv. This is the SOLE authority for Tier1 — a registry hit that does not
-    verify here is NOT Tier1."""
+    verify here is NOT Tier1.
+
+    Memoized on (test_path, rtl): `deterministic_emit` now verifies internally to
+    pick the registry-vs-supplemental emit, and `solve`/`classify` verify the same
+    (prob, rtl) again — the cache makes that repeat free (the verdict is a pure
+    function of the candidate RTL + the fixed official test). The cache is a pure
+    speed-up; it never changes a verdict."""
     if not rtl:
         return False, "no rtl"
-    return _run_iverilog(rtl, prob.get("ref_path"), prob.get("test_path"))
+    key = (prob.get("test_path") or "", rtl)
+    hit = _VERIFY_CACHE.get(key)
+    if hit is not None:
+        return hit
+    res = _run_iverilog(rtl, prob.get("ref_path"), prob.get("test_path"))
+    _VERIFY_CACHE[key] = res
+    return res
 
 
 # --------------------------------------------------------------------------- #
