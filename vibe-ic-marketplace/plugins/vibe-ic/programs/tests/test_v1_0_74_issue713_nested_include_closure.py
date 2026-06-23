@@ -36,7 +36,7 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
-import phase2_one_shot_runner as P  # noqa: E402
+import design_one_shot_runner as P  # noqa: E402
 
 BT = chr(96)  # backtick
 
@@ -125,7 +125,7 @@ def test_mk_skips_unresolved_make_vars(tmp_path):
 def test_synth_fallback_wires_helper():
     """The synth fallback references the #713 closure helper (regression guard
     that the wiring is not silently removed)."""
-    src = (_PROGRAMS / "phase2_one_shot_runner.py").read_text()
+    src = (_PROGRAMS / "design_one_shot_runner.py").read_text()
     assert "_v713_includable_sv_closure" in src
     assert "inc_flag" in src
     # both -I sites use the multi-dir flag, not the old single inc_dir

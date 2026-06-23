@@ -76,7 +76,7 @@ def test_cli_exit_code_on_stale(tmp_path):
 def test_runner_refreshes_canonical_alias_unconditionally():
     # source-shape pin: the pre-fix `if not canon_v.is_file()` guard around
     # the alias write must stay gone — the alias is refreshed on EVERY pass.
-    src = (PLUGIN / "programs" / "phase2_one_shot_runner.py").read_text()
+    src = (PLUGIN / "programs" / "design_one_shot_runner.py").read_text()
     i = src.index('canon_v = synth_dir / "netlist.v"')
     window = src[i:i + 700]
     assert "if not canon_v.is_file()" not in window

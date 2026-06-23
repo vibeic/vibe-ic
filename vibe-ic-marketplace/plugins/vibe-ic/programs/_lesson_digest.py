@@ -8,7 +8,7 @@ The benchmark-enhancement-capture loop appends chip-AGNOSTIC general-pattern
 `### Skill:` sections to `agents/ic-expert-agent.md`. The Shape-C benchmark
 setup (`benchmark_dispatch._render_lesson_digest`) already renders them into a
 `lessons.md` that blind single-shot authors MUST read. But the PRODUCTION
-spec-to-rtl path — `phase2_one_shot_runner.step_rtl_gen` WAIVING to the AI
+spec-to-rtl path — `design_one_shot_runner.step_rtl_gen` WAIVING to the AI
 author (Shape-B / runner-driven) — surfaced NO lessons, so a runner-driven
 author re-invented a genre-DETERMINED topology (e.g. the canonical
 odd/fractional clock-divider dual-edge-OR LEVEL form) and fell into a wording

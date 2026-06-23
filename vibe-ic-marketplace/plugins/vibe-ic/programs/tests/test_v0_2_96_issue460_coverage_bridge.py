@@ -44,10 +44,10 @@ import pytest
 
 PROG_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG_DIR))
-import phase2_one_shot_runner as P  # noqa: E402
+import design_one_shot_runner as P  # noqa: E402
 import _path_layout as PL  # noqa: E402
 
-RUNNER_SRC = (PROG_DIR / "phase2_one_shot_runner.py").read_text()
+RUNNER_SRC = (PROG_DIR / "design_one_shot_runner.py").read_text()
 
 DUT = ("module datacore(input clk, input d, output reg q);\n"
        "  always @(posedge clk) q <= d;\nendmodule\n")

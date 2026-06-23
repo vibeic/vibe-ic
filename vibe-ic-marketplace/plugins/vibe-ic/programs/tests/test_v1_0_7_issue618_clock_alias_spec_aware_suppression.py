@@ -33,7 +33,7 @@ from pathlib import Path
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PLUGIN / "programs"))
 import sdc_constraints as S  # noqa: E402
-import phase2_one_shot_runner as R  # noqa: E402
+import design_one_shot_runner as R  # noqa: E402
 
 # The real on-disk #618 evidence, verbatim (OpenROAD-flow-scripts Tcl-var form).
 REAL_618_SDC = (

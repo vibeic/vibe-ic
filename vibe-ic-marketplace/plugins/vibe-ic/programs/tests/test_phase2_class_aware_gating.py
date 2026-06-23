@@ -27,7 +27,7 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 
 import ic_class_profile as icp  # noqa: E402
-import phase2_one_shot_runner as p2  # noqa: E402
+import design_one_shot_runner as p2  # noqa: E402
 import flow_compliance_check as fcc  # noqa: E402
 import analog_content_detected_must_emit_l5_check as acd  # noqa: E402
 

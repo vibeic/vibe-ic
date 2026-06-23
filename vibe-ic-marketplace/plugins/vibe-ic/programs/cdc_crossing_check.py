@@ -80,7 +80,7 @@ CDC_FILE_PATTERNS = [
     "*clock_domain*", "*clock_crossing*",
 ]
 
-# v1.6.36 — canonical-JSON path emitted by phase2_one_shot_runner.
+# v1.6.36 — canonical-JSON path emitted by design_one_shot_runner.
 # When a project has run the runner, this JSON carries `verdict: PASS`
 # and a `crossings` list — the substance the gate should accept WITHOUT
 # requiring an external CDC tool's report. We treat the canonical JSON
@@ -118,7 +118,7 @@ CROSSING_RE = re.compile(
     re.I,
 )
 
-# ORGANIC-20260606 #458 — wording emitted by phase2_one_shot_runner for a
+# ORGANIC-20260606 #458 — wording emitted by design_one_shot_runner for a
 # single-clock design ("single clock domain [...] — no clock-domain
 # crossings exist"). Used by the third accept-path to recognise a
 # legitimate zero-crossing PASS whose `crossings` list is (correctly) empty.
@@ -219,7 +219,7 @@ def audit_cdc(project_dir: Path) -> AuditResult:
         found.extend(project_dir.rglob(pat))
 
     # v1.6.36 — also accept canonical JSON emissions from
-    # phase2_one_shot_runner. If a JSON at one of the canonical paths
+    # design_one_shot_runner. If a JSON at one of the canonical paths
     # carries `verdict: PASS` and has crossings/synchroniser content,
     # that is the runner's machine-readable equivalent of a *.cdc.rpt
     # from a third-party CDC tool. Same substance check applies (clock

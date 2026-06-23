@@ -264,7 +264,7 @@ def test_l8_clock_domains_skipped_when_no_clk_pin_no_freq(tmp_path):
 def test_step_full_stack_tb_emits_tb_full_v(tmp_path):
     """phase2 runner emits tb_<top>_full.v from L9.top_ports under
     sim_full_stack/, satisfying bit_level_full_stack_tb_check."""
-    from programs.phase2_one_shot_runner import step_full_stack_tb_gen
+    from programs.design_one_shot_runner import step_full_stack_tb_gen
     project = tmp_path
     docs = project / "phase1" / "generated_docs"
     docs.mkdir(parents=True, exist_ok=True)
@@ -316,7 +316,7 @@ def test_step_full_stack_tb_emits_tb_full_v(tmp_path):
 def test_step_full_stack_tb_skip_when_l9_missing(tmp_path):
     """Reject-test: SKIP (not FAIL) when L9 is absent — phase1 hasn't
     run yet."""
-    from programs.phase2_one_shot_runner import step_full_stack_tb_gen
+    from programs.design_one_shot_runner import step_full_stack_tb_gen
     project = tmp_path
     (project / "phase1" / "generated_docs").mkdir(parents=True, exist_ok=True)
     result = step_full_stack_tb_gen(project)
@@ -333,7 +333,7 @@ def test_full_stack_tb_gen_populates_concrete_golden(tmp_path):
     """When L3 provides concrete response_payload_template hex values,
     the TB-gen populates expected_bytes with the real golden (never
     'XX'), and the results.json scores those vectors with a golden."""
-    from programs.phase2_one_shot_runner import step_full_stack_tb_gen
+    from programs.design_one_shot_runner import step_full_stack_tb_gen
     project = tmp_path
     docs = project / "phase1" / "generated_docs"
     docs.mkdir(parents=True, exist_ok=True)
@@ -376,7 +376,7 @@ def test_full_stack_tb_gen_never_emits_placeholder_pass(tmp_path):
     """Regression: the runner must NEVER write a per_vector entry with
     expected_bytes='XX' + verdict='PASS' (the original false-PASS shape)
     — not even in the >=8 padding loop."""
-    from programs.phase2_one_shot_runner import step_full_stack_tb_gen
+    from programs.design_one_shot_runner import step_full_stack_tb_gen
     project = tmp_path
     docs = project / "phase1" / "generated_docs"
     docs.mkdir(parents=True, exist_ok=True)

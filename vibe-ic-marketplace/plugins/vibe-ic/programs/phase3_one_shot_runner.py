@@ -7881,7 +7881,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         import sys as _sys609
         if str(PROGRAMS_DIR) not in _sys609.path:
             _sys609.path.insert(0, str(PROGRAMS_DIR))
-        import phase2_one_shot_runner as _p2_609
+        import design_one_shot_runner as _p2_609
         if _p2_609._v1_6_609_upgrade_coverage_from_functional_tb(project):
             written.append("reports/phase2/coverage/coverage_actual.json")
             notes.append("#609: upgraded coverage_actual.json to functional-TB "
