@@ -180,3 +180,30 @@ def test_extract_returns_checklistitem_shape():
 def test_empty_input_returns_empty():
     assert cwe.extract("") == []
     assert cwe.extract(None) == []  # type: ignore[arg-type]
+
+
+# --------------------------------------------------------------------------- #
+# §4.05 STRUCTURAL-ARTIFACT — a `X -> Y` whose LHS is the SUFFIX of a larger
+# grouped/identifier token is a NOTATIONAL ARTIFACT, not a real I/O pair, and must
+# NOT be emitted as a block-eligible coverage requirement (ORGANIC #780: the
+# binary-to-BCD `0010_0101_0111 -> 257` phantom hard-blocked correct RTL).
+# --------------------------------------------------------------------------- #
+def test_grouped_binary_suffix_arrow_is_not_a_phantom_example():
+    # `0010_0101_0111 -> 257`: the underscore breaks the numeric run so a naive
+    # arrow regex pairs the LAST nibble `0111` with the full decimal `257`. That
+    # phantom (0111 != 257; the real per-digit glosses are stated separately) must
+    # be SUPPRESSED.
+    prompt = ("Binary-to-BCD converter.\n"
+              "Worked example: bcd_in = 0010_0101_0111 -> 257.\n"
+              "Process MSD: 0010 = 2\nProcess Middle: 0101 = 5\nProcess LSD: 0111 = 7\n")
+    we = _of_kind(cwe.extract(prompt), "worked_example")
+    reqs = " | ".join(it["requirement"] for it in we)
+    assert not any("0111" in it["requirement"] and "257" in it["requirement"] for it in we), reqs
+
+
+def test_genuine_standalone_arrow_still_emitted():
+    # §4.05 NO-LEAK: a GENUINE `X -> Y` whose LHS is NOT a token suffix (preceded by
+    # whitespace / start) is a real worked example and MUST still be extracted.
+    we = _of_kind(cwe.extract("Worked example: 0111 -> 7.\n"), "worked_example")
+    assert any("0111" in it["requirement"] and "7" in it["requirement"] for it in we), \
+        "a genuine standalone arrow pair must still be a (block-eligible) worked example"

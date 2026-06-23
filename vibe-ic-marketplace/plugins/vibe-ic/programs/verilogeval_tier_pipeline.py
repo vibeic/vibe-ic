@@ -340,8 +340,11 @@ def iverilog_score(prob: Problem, candidate_rtl: str,
             return False, "compile error: " + (comp.stderr.strip().splitlines()[0]
                                                if comp.stderr.strip() else "unknown")
         try:
+            # run vvp FROM the temp dir (cwd=tdp) so a testbench `$dumpfile("wave.vcd")`
+            # writes its dump INSIDE the auto-cleaned TemporaryDirectory, not into the
+            # plugin's programs/ tree (which the waveform-hygiene gate forbids).
             run = subprocess.run(["vvp", str(sim)], capture_output=True,
-                                 text=True, timeout=timeout)
+                                 text=True, timeout=timeout, cwd=str(tdp))
         except subprocess.TimeoutExpired:
             return False, "vvp timeout"
         out = run.stdout + run.stderr
