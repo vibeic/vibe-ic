@@ -126,9 +126,18 @@ Before any run, follow **`vibe-ic:open-benchmark-methodology`**:
 1. **Clean-room FULL re-run is the default** — author every problem fresh,
    blind to prior samples / agent memory / cached scores / sibling references /
    the host scorer. Never inherit a prior run's passes.
-2. **Program-first, GATE-AS-SOLE-EMIT-PATH** — the designated plugin gate /
-   runner WRITES the scoring artifact; an agent that does not execute the
-   program cannot emit a sample. Free-text "please self-verify" always regresses.
+2. **Program-first, GATE-AS-SOLE-EMIT-PATH (now ENFORCED, not honor-system)** — the
+   designated emit-path program (`benchmark/gates_atomic.py` Shape C /
+   `programs/shape_b_sample_export.py` Shape B; the full runner calls them) authors RTL into
+   a WORK dir, applies the emit gates + port-reorder, and writes the scoreable sample to
+   `samples/` ONLY on a clean pass, stamping an `emit_attestation` (sha256 + gate set). Do
+   NOT author a sample directly into `samples/` and host-score it: that bypasses the gates +
+   reorder and measures the raw LLM, not the runner (it silently undercounts
+   emit-gate-recoverable designs and is gameable). `benchmark_dispatch.py --score` now
+   HARD-BLOCKs any run whose `samples/` carry no valid `emit_attestation`
+   (`emit_attestation_check.py`); an ungated run is NON-CANONICAL — `--allow-ungated` opts a
+   disclosed exploratory run out (its RESULT.md must say so). Free-text "please self-verify"
+   always regresses.
 3. **Pick the run shape with the classifier** (`benchmark_shape_classify.py` /
    `benchmark_dispatch.py`), not by feel: A=full runner, B=runner --skip-phase3,
    C=gates.py atomic harness, D=agentic-with-runner, E=blocked/out-of-scope.
