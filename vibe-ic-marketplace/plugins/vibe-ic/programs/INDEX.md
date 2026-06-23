@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 789
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 789)
+- **Total programs (excluding helpers / shims):** 793
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 793)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 780 |
+| `any` | 784 |
 
 ## Alphabetical listing
 
@@ -216,6 +216,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `cvdp_serdes_decode_synth` | any | — | a DETERMINISTIC solver for two ATOMIC CVDP |
 | `cvdp_shift_counter_synth` | any | — | deterministic SOLVER for the CVDP barrel-shift / |
 | `cvdp_solve_pipeline` | any | — | the CVDP TIER-1→3 AUTHORING-GATE PIPELINE. |
+| `cvdp_spec_parse` | any | — | a GENERAL prose-port-block reader for the CVDP benchmark |
 | `cvdp_table_lut_synth` | any | — | a DETERMINISTIC solver for the CVDP TABLE-DRIVEN |
 | `cvdp_width_resolve` | any | — | SHARED parameterized-width reader for the CVDP layer. |
 | `cvdp_worked_example_extract` | any | — | PROGRAM-FIRST structural worked-example / |
@@ -233,6 +234,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `defect_artifact_snapshot` | any | v0.2.98 | v0.2.98 |
 | `derived_clock_sdc_required_check` | any | — | Verify any register-divided clock |
 | `design_complexity_estimator` | any | — | design_complexity_estimator.py -- Heuristic design-complexity score and |
+| `design_one_shot_runner` | any | Wave 45 | the DESIGN one-shot runner (Phase 1 -> Phase 2: |
 | `deterministic_rtl_dispatcher` | any | v0.1.9 | Phase-2 program-first RTL router. |
 | `device_response_no_br_check` | any | — | deterministic compliance check derived from |
 | `dff_edge_synth` | any | — | deterministic SOLVER for the D-flip-flop / edge-detect / |
@@ -260,6 +262,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `eda_report_audit` | any | — | eda_report_audit.py -- Multi-mode EDA report checker for backend skills. |
 | `edp_protocol_synth` | any | v0.1.95 | VESA Embedded DisplayPort (eDP) protocol synth helper. |
 | `em_report_check` | any | — | wrapper for eda_report_audit --mode em. |
+| `emit_attestation` | any | — | GATE-AS-SOLE-EMIT-PATH enforcement (shared helper). |
+| `emit_attestation_check` | any | — | score-time GATE-AS-SOLE-EMIT-PATH enforcement. |
 | `emitter_failure_mode_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `emmc_protocol_synth` | any | v0.1.84 | Embedded MultiMediaCard (eMMC, JEDEC JESD84-B51 / eMMC 5.1) protocol synth. |
 | `encoder_decoder_synth` | any | — | deterministic SOLVER for the PRIORITY-ENCODER family. |
@@ -553,7 +557,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `phase1_verify_aggregate` | any | v0.1.50 | Phase 1 output verification aggregator (Pattern-C → program). |
 | `phase23_completion_self_audit_check` | any | v0.109 | v0.109 mandatory self-audit gate. |
 | `phase23_one_shot_runner` | any | — | Phase 2 + Phase 3 chain. |
-| `design_one_shot_runner` | any | Wave 45 | Phase 2 main impl (L1-L23 → RTL → SOF → <half-duplex-tester>). |
+| `phase2_one_shot_runner` | any | — | public-name shim over design_one_shot_runner. |
 | `phase2_scaffold_gen` | any | v0.1.88 | Phase 1 L docs → Phase 2 Verilog scaffolding. |
 | `phase2_verify_aggregate` | any | v0.1.50 | Phase 2 output verification aggregator (Pattern-C → program). |
 | `phase3_backend_step` | any | — | single dispatcher for Phase 3 backend per-step entries. |
@@ -861,7 +865,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (780 programs)
+### `any` (784 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1050,6 +1054,7 @@ _(no programs in this group)_
 - `cvdp_serdes_decode_synth` — a DETERMINISTIC solver for two ATOMIC CVDP
 - `cvdp_shift_counter_synth` — deterministic SOLVER for the CVDP barrel-shift /
 - `cvdp_solve_pipeline` — the CVDP TIER-1→3 AUTHORING-GATE PIPELINE.
+- `cvdp_spec_parse` — a GENERAL prose-port-block reader for the CVDP benchmark
 - `cvdp_table_lut_synth` — a DETERMINISTIC solver for the CVDP TABLE-DRIVEN
 - `cvdp_width_resolve` — SHARED parameterized-width reader for the CVDP layer.
 - `cvdp_worked_example_extract` — PROGRAM-FIRST structural worked-example /
@@ -1067,6 +1072,7 @@ _(no programs in this group)_
 - `defect_artifact_snapshot` — v0.2.98  _[v0.2.98]_
 - `derived_clock_sdc_required_check` — Verify any register-divided clock
 - `design_complexity_estimator` — design_complexity_estimator.py -- Heuristic design-complexity score and
+- `design_one_shot_runner` — the DESIGN one-shot runner (Phase 1 -> Phase 2:  _[Wave 45]_
 - `deterministic_rtl_dispatcher` — Phase-2 program-first RTL router.  _[v0.1.9]_
 - `device_response_no_br_check` — deterministic compliance check derived from
 - `dff_edge_synth` — deterministic SOLVER for the D-flip-flop / edge-detect /
@@ -1093,6 +1099,8 @@ _(no programs in this group)_
 - `eda_report_audit` — eda_report_audit.py -- Multi-mode EDA report checker for backend skills.
 - `edp_protocol_synth` — VESA Embedded DisplayPort (eDP) protocol synth helper.  _[v0.1.95]_
 - `em_report_check` — wrapper for eda_report_audit --mode em.
+- `emit_attestation` — GATE-AS-SOLE-EMIT-PATH enforcement (shared helper).
+- `emit_attestation_check` — score-time GATE-AS-SOLE-EMIT-PATH enforcement.
 - `emitter_failure_mode_check` — anti-fabrication gate (v1.6.38).
 - `emmc_protocol_synth` — Embedded MultiMediaCard (eMMC, JEDEC JESD84-B51 / eMMC 5.1) protocol synth.  _[v0.1.84]_
 - `encoder_decoder_synth` — deterministic SOLVER for the PRIORITY-ENCODER family.
@@ -1385,7 +1393,7 @@ _(no programs in this group)_
 - `phase1_verify_aggregate` — Phase 1 output verification aggregator (Pattern-C → program).  _[v0.1.50]_
 - `phase23_completion_self_audit_check` — v0.109 mandatory self-audit gate.  _[v0.109]_
 - `phase23_one_shot_runner` — Phase 2 + Phase 3 chain.
-- `design_one_shot_runner` — Phase 2 main impl (L1-L23 → RTL → SOF → <half-duplex-tester>).  _[Wave 45]_
+- `phase2_one_shot_runner` — public-name shim over design_one_shot_runner.
 - `phase2_scaffold_gen` — Phase 1 L docs → Phase 2 Verilog scaffolding.  _[v0.1.88]_
 - `phase2_verify_aggregate` — Phase 2 output verification aggregator (Pattern-C → program).  _[v0.1.50]_
 - `phase3_backend_step` — single dispatcher for Phase 3 backend per-step entries.
