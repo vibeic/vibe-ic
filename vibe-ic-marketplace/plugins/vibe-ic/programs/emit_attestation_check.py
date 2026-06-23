@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """emit_attestation_check.py — score-time GATE-AS-SOLE-EMIT-PATH enforcement.
 
-Asserts that EVERY scoreable sample in a run's `samples/` was produced by the deterministic
-emit path (`gates_atomic.py` / `shape_b_sample_export.py`) — i.e. carries a valid
-`emit_attestation` whose sha256 matches the on-disk bytes. A sample authored directly into
-`samples/` (bypassing the emit gates + port-reorder) or mutated after emit has NO valid
-attestation, so the run is NOT canonical: its number measures the raw author, not the runner.
+Asserts that EVERY scoreable sample in a run's `samples/` is CANONICAL: it was produced by
+the deterministic emit path (`gates_atomic.py` / `shape_b_sample_export.py`) — carrying a
+valid `emit_attestation` whose sha256 matches the on-disk bytes AND whose Phase-1 provenance
+shows the RTL flowed through `(doc|prompt) → Phase1(L*.json) → Phase2`. A sample authored
+directly into `samples/` (bypassing the emit gates + port-reorder), mutated after emit, OR
+authored with Phase 1 skipped is NOT canonical: its number measures the raw author, not the
+runner.
 
 Wired into `benchmark_dispatch.py --score`. Modes:
   default  : WARN + rc 1 — the score is reported but flagged NON-CANONICAL (ungated samples
@@ -41,6 +43,8 @@ def main(argv=None) -> int:
     if not a.samples.is_dir():
         print(f"ERROR: no such samples dir {a.samples}", file=sys.stderr)
         return 2
+    # Phase-1 provenance is REQUIRED for canonical (a Phase-1-skipping sample is
+    # non-canonical), alongside the emit-path attestation.
     ok, ungated, total = _ea.verify(a.samples)
     res = {"ok": ok, "total": total, "ungated_count": len(ungated),
            "ungated": ungated, "strict": a.strict,
@@ -55,9 +59,10 @@ def main(argv=None) -> int:
               f"(GATE-AS-SOLE-EMIT-PATH honored).")
         return 0
     head = "FAIL" if a.strict else "NON-CANONICAL"
-    print(f"{head}: {len(ungated)}/{total} sample(s) have NO valid emit-path attestation — "
-          f"authored directly into samples/ (bypassing the emit gates + port-reorder) or "
-          f"mutated after emit. This run's number measures the raw author, NOT the runner. "
+    print(f"{head}: {len(ungated)}/{total} sample(s) are NOT canonical — no valid emit-path "
+          f"attestation (authored directly into samples/ bypassing the emit gates + "
+          f"port-reorder / mutated after emit) OR no Phase-1 provenance (RTL authored with "
+          f"Phase 1 skipped). This run's number measures the raw author, NOT the runner. "
           f"Re-run through the emit path "
           f"(gates_atomic.py / shape_b_sample_export.py). Ungated: {ungated[:15]}"
           + (" …" if len(ungated) > 15 else ""))
