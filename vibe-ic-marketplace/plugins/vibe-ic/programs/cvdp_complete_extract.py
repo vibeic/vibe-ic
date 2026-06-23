@@ -89,6 +89,10 @@ if str(_HERE) not in sys.path:
 
 # Reused (NOT modified) — interface + module-name + cue helpers.
 import cvdp_atomic_bridge as _bridge  # noqa: E402
+# Symbolic / parameter-expression width reader (param-expr / range-before-name /
+# param-override). A width stated as a parameter expression with a derivable
+# default is an EXTRACTABLE fact, not a gap.
+import cvdp_width_resolve as _W  # noqa: E402
 
 # Reused (NOT modified) — v1.1.82 structural extractors. Imported defensively so a
 # not-yet-present extractor simply contributes nothing (the layer never crashes).
@@ -183,9 +187,22 @@ def _explicit_range_width(prompt: str, name: str) -> Optional[int]:
     return abs(int(m.group(1)) - int(m.group(2))) + 1 if m else None
 
 
-def _resolve_width(prompt: str, table: Dict[str, int], name: str) -> Tuple[Optional[int], str]:
+def _resolve_width(prompt: str, table: Dict[str, int], name: str,
+                   params: Optional[Dict[str, int]] = None) -> Tuple[Optional[int], str]:
     """Best stated width for `name` + the structural SOURCE tag. None when the
-    prompt is silent (then the caller decides 1-bit-control vs SPEC_ABSENT)."""
+    prompt is silent (then the caller decides 1-bit-control vs SPEC_ABSENT).
+
+    Sources, in priority order:
+      explicit_range      — a literal `name [hi:lo]` tied to the name;
+      prose_width         — a `N-bit name` / port-table width column;
+      test_case_table     — a hex-column width in the worked-example table;
+      param_expression_width / range_before_name / param_override_width — a
+                            PARAMETER-EXPRESSION (`[N-1:0]`, `[DATA_WIDTH-1:0]`,
+                            `[N*W-1:0]`, `[$clog2(D)-1:0]`) or a range-before-name
+                            literal, resolved to its integer DEFAULT from the
+                            parameter table. §4.05: an unresolvable expression
+                            returns None (stays a gap), never a fabricated width.
+    """
     er = _explicit_range_width(prompt, name)
     if er is not None:
         return er, "explicit_range"
@@ -195,7 +212,50 @@ def _resolve_width(prompt: str, table: Dict[str, int], name: str) -> Tuple[Optio
     key = name.lower()
     if key in table:
         return table[key], "test_case_table"
+    if params is not None:
+        sw = _W.symbolic_width(prompt, name, params)
+        if sw is not None:
+            _sym, default_w, tag = sw
+            return default_w, tag
+    # a port DECLARED as a scalar (typed, no bracket range) is explicitly 1-bit —
+    # a STATED width, not absent (e.g. `**\`name\`** (logic):`).
+    if _W.scalar_one_bit(prompt, name):
+        return 1, "scalar_declared"
     return None, ""
+
+
+# --------------------------------------------------------------------------- #
+# harness-derived width (§3.9 — the spec is the WHOLE input chain, incl. the
+# harness interface). A cocotb test that drives a port with values PROVABLY in
+# {0,1} pins it to 1 bit. We credit ONLY this unambiguous 1-bit pin: a bare
+# `randint(0, MAX)` upper bound is a LOWER bound on a (possibly wider) bus, so it
+# is NOT a width (crediting it would fabricate a too-narrow width — §4.05).
+# --------------------------------------------------------------------------- #
+def _harness_one_bit(tb: str, name: str) -> bool:
+    """True iff every value the cocotb test drives onto `dut.<name>` is provably a
+    single bit. Recognized §4.05-safe forms:
+      * `dut.name.value = random.randint(0, 1)`            (direct 0/1)
+      * `v = random.randint(0, 1); ...; dut.name.value = v` (via a 0/1 variable)
+      * `dut.name.value = (<expr> & 0x.. ) >> k`           (one masked bit shifted
+                                                            down to bit 0)
+    A `randint(0, MAX>1)` or an unmasked assignment does NOT qualify.
+    """
+    esc = re.escape(name)
+    # direct randint(0,1)
+    if re.search(rf"dut\.{esc}\.value\s*=\s*random\.randint\(\s*0\s*,\s*1\s*\)", tb):
+        return True
+    # a single masked-and-shifted bit: ... & 0xMASK ) >> k  (collapses to {0,1})
+    for m in re.finditer(rf"dut\.{esc}\.value\s*=\s*([^\n]+)", tb):
+        rhs = m.group(1)
+        if re.search(r"&\s*0x[0-9A-Fa-f]+\s*\)\s*>>\s*\d+", rhs) or \
+           re.search(r"&\s*1\b", rhs):
+            return True
+    # var = randint(0,1) ; dut.name.value = var
+    for vm in re.finditer(r"(\b\w+)\s*=\s*random\.randint\(\s*0\s*,\s*1\s*\)", tb):
+        var = vm.group(1)
+        if re.search(rf"dut\.{esc}\.value\s*=\s*{re.escape(var)}\b", tb):
+            return True
+    return False
 
 
 # --------------------------------------------------------------------------- #
@@ -329,6 +389,10 @@ def _complete_interface(record: dict, top: str
     # (b) cocotb dut.<sig> set — the harness's bound interface.
     c_ins, c_outs = _bridge._cocotb_io(tb)
     params = _harness_params(tb)
+    # parameter-DEFAULT table (NAME -> int) harvested from the prompt's partial
+    # module header / prose defaults / parameter table — the values that resolve a
+    # `[N-1:0]` / `[DATA_WIDTH-1:0]` width to its integer default.
+    param_defaults = _W.param_defaults(prompt, tb)
     table = _bridge._test_case_table(prompt) or {}
     signed = bool(re.search(r"(?i)\bsigned\b|two'?s?\s+complement|2'?s?\s+complement", prompt))
 
@@ -338,7 +402,7 @@ def _complete_interface(record: dict, top: str
     def _place(name: str, direction: str):
         if name in params:
             return  # a config parameter — not a port (correctly filtered)
-        w, src = _resolve_width(prompt, table, name)
+        w, src = _resolve_width(prompt, table, name, param_defaults)
         if w is not None:
             iface.append({"name": name, "dir": direction, "width": w,
                           "signed": signed, "source": src})
@@ -351,12 +415,21 @@ def _complete_interface(record: dict, top: str
             iface.append({"name": name, "dir": direction, "width": 1,
                           "signed": False, "source": "one_bit_convention"})
             return
+        # §3.9 HARNESS-as-source: the cocotb test drives this port with values
+        # provably in {0,1} -> it is a 1-bit port pinned by the harness interface,
+        # not a spec-absent fact. (Only the unambiguous 1-bit pin is credited; a
+        # bare `randint(0,MAX)` upper bound is a lower bound, never a width.)
+        if _harness_one_bit(tb, name):
+            iface.append({"name": name, "dir": direction, "width": 1,
+                          "signed": False, "source": "harness_one_bit"})
+            return
         # A DATA port the cocotb drives but no width is stated. Decide gap kind:
         #   EXTRACTION_GAP — a width FORM exists in the prompt but our reader missed
         #     it (e.g. a `#(...)`-override default, an `N*WIDTH` expression, a width
         #     stated against a synonym of this name);
-        #   SPEC_ABSENT    — the prompt is truly silent on this port's width.
-        gkind, gtype = _classify_width_gap(prompt, name, params)
+        #   SPEC_ABSENT    — the prompt is truly silent on this port's width AND the
+        #     harness does not pin it.
+        gkind, gtype = _classify_width_gap(prompt, name, params, param_defaults)
         gaps.append({"kind": gkind, "type": gtype,
                      "detail": f"{direction} port `{name}` width unresolved",
                      "evidence": _evidence_line(prompt, name)})
@@ -399,9 +472,20 @@ def _is_param_range(span: str) -> bool:
     return bool(_HAS_IDENT.search(hi) or _HAS_IDENT.search(lo))
 
 
-def _classify_width_gap(prompt: str, name: str, params: set) -> Tuple[str, str]:
-    """EXTRACTION_GAP (a width form is present we failed to parse) vs SPEC_ABSENT
-    (the prompt is genuinely silent). Returns (completeness_kind, gap_type)."""
+def _classify_width_gap(prompt: str, name: str, params: set,
+                        param_defaults: Optional[Dict[str, int]] = None
+                        ) -> Tuple[str, str]:
+    """EXTRACTION_GAP (a width form is present, the AI/harness could pin it) vs
+    SPEC_ABSENT (the prompt is genuinely silent AND the harness does not pin it).
+    Returns (completeness_kind, gap_type).
+
+    REACHED ONLY AFTER the symbolic resolver failed — i.e. a parameter expression
+    is present but its default is NOT derivable from the parameter table (so we
+    correctly did NOT fabricate a width). The width FORM still IS in the prompt, so
+    the residual port keeps an EXTRACTION_GAP type that names which un-resolved form
+    it is; only a port with NO width form at all is SPEC_ABSENT (§4.05 — never
+    fabricate, but be honest about whether the fact is present-but-unresolved or
+    truly absent)."""
     # the port appears with a PARAMETER-EXPRESSION width range somewhere near it.
     m = re.search(rf"\b{re.escape(name)}\b[^\n|]*?(\[[^\]]*[A-Za-z_][^\]]*\])", prompt)
     if m and _is_param_range(m.group(1)):
@@ -414,7 +498,9 @@ def _classify_width_gap(prompt: str, name: str, params: set) -> Tuple[str, str]:
     # a range-before-name declaration `[7:0] name` (range precedes the identifier).
     if re.search(rf"\[\s*\d+\s*:\s*\d+\s*\]\s*{re.escape(name)}\b", prompt):
         return "INCOMPLETE_EXTRACTION_GAP", "range_before_name"
-    # truly silent — the AI must infer the width from domain knowledge.
+    # truly silent — the AI must infer the width from domain knowledge, and the
+    # harness does not pin it either (the 1-bit harness pin was already tried by
+    # the caller before this classifier). §3.9 spec-absent.
     return "INCOMPLETE_SPEC_ABSENT", "width_not_stated"
 
 
@@ -515,9 +601,15 @@ def _completeness(record: dict, iface: List[dict], c_ins: List[str],
         return "INCOMPLETE_EXTRACTION_GAP", "missed fact(s): " + ", ".join(types)
     if has_spec_absent:
         types = sorted({g["type"] for g in gaps if g["kind"] == "INCOMPLETE_SPEC_ABSENT"})
-        return "INCOMPLETE_SPEC_ABSENT", "prompt-silent fact(s): " + ", ".join(types)
+        # §3.9 HIGH bar: name the sources searched so a SPEC_ABSENT is auditable —
+        # the fact is absent from the prose width forms (explicit range / N-bit /
+        # table / parameter expression), AND the harness does not pin it (no 1-bit
+        # drive, no parameter default), AND no clear genre convention applies.
+        return ("INCOMPLETE_SPEC_ABSENT",
+                "fact(s) absent from prompt prose + harness interface + convention: "
+                + ", ".join(types))
 
-    return "COMPLETE", "every harness-checked port placed; stated structures captured"
+    return "COMPLETE", "every harness-checked port placed (prose/param-expr/harness); stated structures captured"
 
 
 # --------------------------------------------------------------------------- #
