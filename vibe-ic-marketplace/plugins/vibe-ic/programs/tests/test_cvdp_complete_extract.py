@@ -277,8 +277,10 @@ def test_chip_agnostic_rename_invariant():
 
 
 # --------------------------------------------------------------------------- #
-# (6) range-before-name EXTRACTION_GAP: a `[1:0] name` declaration (range PRECEDES
-# the identifier) is a width form our name-first reader misses -> EXTRACTION_GAP.
+# (6) range-before-name RESOLUTION: a `[1:0] name` declaration (range PRECEDES the
+# identifier) is now RESOLVED to its literal width and PLACED (source
+# range_before_name) — it is no longer a gap. The record stays SPEC_ABSENT here
+# ONLY because a DIFFERENT port (`data_o`) is explicitly width-unspecified.
 # --------------------------------------------------------------------------- #
 RANGE_BEFORE_PROMPT = """Design `respmod`. The response port is declared as
 **`[1:0] resp_o`**: a two-bit field indicating success or error, and `data_o`
@@ -299,14 +301,19 @@ async def test_respmod(dut):
 """
 
 
-def test_classifier_range_before_name_is_extraction_gap():
+def test_range_before_name_now_resolves_and_is_placed():
     rec = _make_record("respmod", RANGE_BEFORE_PROMPT, RANGE_BEFORE_TB)
     spec = CE.extract(rec)
-    # at least one EXTRACTION_GAP of the range_before_name type (resp_o has a
-    # `[1:0] resp_o` range our name-first reader cannot tie to the name)
-    assert spec["completeness"] == "INCOMPLETE_EXTRACTION_GAP"
-    types = {g["type"] for g in spec["gaps"] if g["kind"] == "INCOMPLETE_EXTRACTION_GAP"}
-    assert "range_before_name" in types
+    # resp_o's `[1:0]` range (declared before the name) is now resolved to width 2
+    iface = {p["name"]: p for p in spec["interface"]}
+    assert iface["resp_o"]["width"] == 2
+    assert iface["resp_o"]["source"] == "range_before_name"
+    # the ONLY residual gap is the genuinely-width-unspecified data_o (SPEC_ABSENT),
+    # NOT a range_before_name gap (we no longer miss that form).
+    assert spec["completeness"] == "INCOMPLETE_SPEC_ABSENT", spec["completeness_reason"]
+    gap_ports = {g["detail"] for g in spec["gaps"]}
+    assert any("data_o" in d for d in gap_ports)
+    assert all(g["type"] != "range_before_name" for g in spec["gaps"])
 
 
 # --------------------------------------------------------------------------- #
