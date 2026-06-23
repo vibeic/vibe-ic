@@ -19,9 +19,32 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 _TESTS_DIR = Path(__file__).resolve().parent       # .../programs/tests
 _PROGRAMS = _TESTS_DIR.parent                       # .../programs
 _PLUGIN_ROOT = _PROGRAMS.parent                     # .../vibe-ic
+
+
+# Test-hygiene (#574 companion): several plugin programs run `vvp` on a testbench
+# that carries `$dumpfile("wave.vcd")`; when a test invokes such a program from
+# the programs/ cwd the dump lands in the plugin tree and trips the waveform-
+# hygiene gate on a FULL-suite run (order-dependent). Snapshot the *.vcd present
+# BEFORE any test runs — a genuinely COMMITTED dump is in this baseline, so the
+# hygiene gate still catches it (non-masking) — and after each test remove only a
+# *.vcd a test NEWLY created. Robust to any vvp-leaking program, present or future.
+_VCD_BASELINE = {p.resolve() for p in _PROGRAMS.glob("*.vcd")}
+
+
+@pytest.fixture(autouse=True)
+def _clean_stray_waveform_dumps():
+    yield
+    for _vcd in _PROGRAMS.glob("*.vcd"):
+        if _vcd.resolve() not in _VCD_BASELINE:
+            try:
+                _vcd.unlink()
+            except OSError:
+                pass
 
 for _p in (str(_PROGRAMS), str(_PLUGIN_ROOT)):
     if _p not in sys.path:
