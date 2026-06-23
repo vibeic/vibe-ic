@@ -76,8 +76,10 @@ def _host_score(prob: str, rtl: str):
             capture_output=True, text=True,
         )
         assert comp.returncode == 0, f"{prob} compile failed:\n{comp.stderr}"
+        # cwd=wd so the official TB's `$dumpfile("wave.vcd")` lands in the
+        # auto-cleaned temp dir, never the plugin tree (ORGANIC #574 hygiene).
         run = subprocess.run(["vvp", str(wd / "a.vvp")], capture_output=True,
-                             text=True)
+                             text=True, cwd=str(wd))
         out = run.stdout + run.stderr
         m = re.search(r"Total mismatched samples is (\d+)", out)
         assert m is not None, f"{prob}: no mismatch line in vvp output:\n{out}"

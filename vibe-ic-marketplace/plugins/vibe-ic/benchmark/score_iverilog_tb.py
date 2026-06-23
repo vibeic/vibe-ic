@@ -41,9 +41,17 @@ Honesty: this scorer ONLY touches the hidden testbench/ref/golden at scoring tim
 The generation step must be blind (per the skill's absolute-blindness rule).
 """
 from __future__ import annotations
-import argparse, json, subprocess, tempfile, os, re, shutil, sys
+import argparse, atexit, json, subprocess, tempfile, os, re, shutil, sys
 from pathlib import Path
 from typing import Optional
+
+# ORGANIC #574 — the official testbenches carry `$dumpfile("wave.vcd")`; running
+# vvp with cwd=None inherits the caller's cwd (e.g. the plugin tree under pytest),
+# leaking a stray wave.vcd that the waveform-hygiene gate then flags. When we are
+# NOT pinning cwd to the design dir (no relative $readmemh), run vvp in a process
+# scratch dir instead of None, so every waveform dump lands in throwaway temp.
+_VVP_SCRATCH_CWD = tempfile.mkdtemp(prefix="score_iverilog_vvp_scratch_")
+atexit.register(lambda: shutil.rmtree(_VVP_SCRATCH_CWD, ignore_errors=True))
 
 # ORGANIC #707 round-3 — the SCORE-SIDE pure-permutation rescue reuses the
 # TB-inference helpers authored for the #707-r2 EXPORT path. They live in
@@ -420,7 +428,7 @@ def _golden_ref_fails_own_tb_runtime(design: str, dataset: Path,
         try:
             r = subprocess.run(["vvp", binp], capture_output=True, text=True,
                                timeout=120,
-                               cwd=str(design_dir) if use_cwd else None)
+                               cwd=str(design_dir) if use_cwd else _VVP_SCRATCH_CWD)
         except subprocess.TimeoutExpired:
             # Golden's own TB hangs — treat as no determination (could be a TB
             # that waits forever); don't flip a model FAIL into a defect on a
@@ -866,7 +874,7 @@ def _score_side_port_permutation_rescue_shape_b(
         try:
             r = subprocess.run(
                 ["vvp", binp], capture_output=True, text=True, timeout=120,
-                cwd=str(design_dir) if use_cwd else None)
+                cwd=str(design_dir) if use_cwd else _VVP_SCRATCH_CWD)
         except subprocess.TimeoutExpired:
             return None  # permuted candidate hangs → not a rescue → keep FAIL.
     out = r.stdout + r.stderr
@@ -1033,7 +1041,7 @@ def _param_passthrough_retry_shape_b(
     try:
         r = subprocess.run(["vvp", binp], capture_output=True, text=True,
                            timeout=120,
-                           cwd=str(dataset / design) if use_cwd else None)
+                           cwd=str(dataset / design) if use_cwd else _VVP_SCRATCH_CWD)
     except subprocess.TimeoutExpired:
         return {"design": design, "verdict": "FAIL", "reason": "sim_timeout"}
     out = r.stdout + r.stderr
@@ -1162,7 +1170,7 @@ def _score_shape_b_impl(design: str, samples: Path, dataset: Path,
             # cwd=design dir so the TB's relative-path $readmemh works (skill §3)
             r = subprocess.run(["vvp", binp], capture_output=True, text=True,
                                timeout=120,
-                               cwd=str(dataset / design) if args.get("cwd_design_dir", True) else None)
+                               cwd=str(dataset / design) if args.get("cwd_design_dir", True) else _VVP_SCRATCH_CWD)
         except subprocess.TimeoutExpired:
             return {"design": design, "verdict": "FAIL", "reason": "sim_timeout"}
         out = r.stdout + r.stderr
@@ -1285,7 +1293,7 @@ def _canonical_disagrees_with_golden(prob: str, dataset: Path, layout: dict,
             return None
         try:
             r = subprocess.run(["vvp", binp], capture_output=True, text=True,
-                               timeout=120)
+                               timeout=120, cwd=_VVP_SCRATCH_CWD)
         except subprocess.TimeoutExpired:
             return None
         out = r.stdout + r.stderr
@@ -1352,7 +1360,7 @@ def _score_shape_c_impl(prob: str, samples: Path, dataset: Path,
         try:
             r = subprocess.run(["vvp", binp], capture_output=True, text=True,
                                timeout=120,
-                               cwd=str(dataset) if args.get("cwd_design_dir", False) else None)
+                               cwd=str(dataset) if args.get("cwd_design_dir", False) else _VVP_SCRATCH_CWD)
         except subprocess.TimeoutExpired:
             return {"problem": prob, "verdict": "FAIL", "reason": "sim_timeout"}
         out = r.stdout + r.stderr
