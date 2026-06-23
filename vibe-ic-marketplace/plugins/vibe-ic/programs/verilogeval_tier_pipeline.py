@@ -76,6 +76,7 @@ import dff_primitive_synth as _dff_primitive      # noqa: E402  bare D-FF primit
 from _specrtl_common import (                     # noqa: E402  the spec contract extractor
     extract_spec_contract, parse_rtl_ports, strip_comments,
 )
+import semantic_spec_floor_check as _semfloor     # noqa: E402  golden-vs-prompt semantic floor
 
 # Extra deterministic emitters tried AFTER the shipped registry (so they can never
 # hijack a problem an existing registry solver already handles). Each keys on
@@ -377,22 +378,33 @@ def iverilog_score(prob: Problem, candidate_rtl: str,
 # (4) Tier5 floor evidence — golden ref FAILS its own test under iverilog
 # --------------------------------------------------------------------------- #
 def floor_evidence(prob: Problem, timeout: int = 60) -> Optional[str]:
-    """Return a CITED reason iff this is a GENUINE floor — the golden _ref.sv does
-    not even pass its OWN _test.sv under iverilog (a broken/contradictory dataset
-    problem). Proven by building a TopModule that is a verbatim copy of RefModule
-    (rename RefModule->TopModule) and scoring it: a sound problem MUST score
-    `Mismatches: 0` with the golden as the DUT. If that fails, no candidate can
-    ever score — a real Tier5 floor. Returns None for every sound problem.
+    """Return a CITED reason iff this is a GENUINE floor. TWO defect classes:
+
+    (1) STRUCTURAL — the golden _ref.sv does not even pass its OWN _test.sv under
+        iverilog (a broken golden/test pair). Proven by renaming RefModule->TopModule
+        and scoring: a sound problem MUST score `Mismatches: 0` with the golden as DUT.
+    (2) SEMANTIC — the golden PASSES its own (golden-derived) testbench yet
+        CONTRADICTS the prompt's own machine-extractable spec (a Karnaugh map, or an
+        embedded 'fix the bug' reference whose select polarity the golden inverts).
+        The golden-derived TB can never catch this (it is generated FROM the golden);
+        an INDEPENDENT prompt-derived oracle does (semantic_spec_floor_check). A
+        spec-faithful blind answer then fails against a golden that is itself wrong.
+
+    Returns None for every sound problem. (2) fires only on an unambiguous extraction
+    + a cited contradiction, so it never false-floors a sound design.
     """
     ref_text = prob.ref_path.read_text(errors="replace")
-    # rename the golden module RefModule -> TopModule (word-boundary) so the test's
-    # TopModule instance is bound to the golden logic itself.
+    # (1) structural: rename golden RefModule -> TopModule and run its own test.
     golden_as_top = re.sub(r"\bRefModule\b", "TopModule", ref_text)
     ok, detail = iverilog_score(prob, golden_as_top, timeout=timeout)
-    if ok:
-        return None
-    return (f"golden _ref.sv fails its OWN _test.sv under iverilog "
-            f"(golden-as-TopModule -> {detail}); no candidate can ever score")
+    if not ok:
+        return (f"golden _ref.sv fails its OWN _test.sv under iverilog "
+                f"(golden-as-TopModule -> {detail}); no candidate can ever score")
+    # (2) semantic: golden passes its own test but may contradict the prompt spec.
+    sem = _semfloor.semantic_floor_evidence(prob.prompt_text, ref_text, timeout=timeout)
+    if sem:
+        return f"golden passes its own _test.sv but {sem}"
+    return None
 
 
 # --------------------------------------------------------------------------- #

@@ -76,6 +76,7 @@ import spec_artifact_registry as _registry  # noqa: E402  generate(text,top)->(k
 # Supplemental VE-HUMAN structural Tier-1 emitters — a STRICT add-only fallback,
 # consulted only on a registry miss/fail (see deterministic_emit). §4.05-clean.
 import verilogeval_human_tier1_solvers as _supplemental_solvers  # noqa: E402
+import semantic_spec_floor_check as _semfloor  # noqa: E402  golden-vs-prompt semantic floor
 
 TIER_PROGRAM = 1   # registry DETERMINISTICALLY emits RTL that iverilog-PASSES _test.sv
 TIER_AI_EMIT = 2   # COMPLETE spec (ifc interface + every stated structure) + gate
@@ -323,17 +324,26 @@ def _run_iverilog(top_sv_text: Optional[str], ref_path: str, test_path: str,
 
 
 def floor_evidence(prob: dict) -> Optional[str]:
-    """Return a cited reason iff this is a GENUINE Tier-5 floor — the GOLDEN
-    _ref.sv FAILS the official _test.sv (so no correct answer can ever pass).
-    Conservative: only golden-fails-its-own-test is a floor; mere incompleteness
-    is Tier 4, never Tier 5."""
+    """Return a cited reason iff this is a GENUINE Tier-5 floor. TWO defect classes:
+    (1) STRUCTURAL — the GOLDEN _ref.sv FAILS the official _test.sv (broken pair).
+    (2) SEMANTIC — the golden PASSES its own (golden-derived) test yet CONTRADICTS
+        the prompt's own machine-extractable spec (a Karnaugh map, or an embedded
+        'fix the bug' reference whose select polarity the golden inverts). The
+        golden-derived TB can never catch this; an independent prompt-derived oracle
+        (semantic_spec_floor_check) does. Conservative — (2) fires only on an
+        unambiguous extraction + cited contradiction, never false-flooring a sound
+        design; mere incompleteness is Tier 4, never Tier 5."""
     ref_p, test_p = prob.get("ref_path"), prob.get("test_path")
     if not (ref_p and test_p and Path(ref_p).exists() and Path(test_p).exists()):
         return None
     passed, log = _run_iverilog(None, ref_p, test_p)
-    if passed:
-        return None
-    return f"golden _ref.sv FAILS its own _test.sv ({log.splitlines()[0] if log else 'unknown'})"
+    if not passed:
+        return f"golden _ref.sv FAILS its own _test.sv ({log.splitlines()[0] if log else 'unknown'})"
+    sem = _semfloor.semantic_floor_evidence(prob.get("prompt") or "",
+                                            Path(ref_p).read_text(errors="replace"))
+    if sem:
+        return f"golden passes its own _test.sv but {sem}"
+    return None
 
 
 # --------------------------------------------------------------------------- #
