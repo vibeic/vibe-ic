@@ -273,8 +273,10 @@ module that fixes the bug.
     assert A.synth(txt, "TopModule") is None
 
 
-def test_neg_multiplier_out_of_scope():
-    # A multiplier is explicitly out of scope (no honest host-verified close here).
+def test_combinational_multiplier_now_solved_by_prose_dialect():
+    # v1.1.84 fold: a COMBINATIONAL multiplier is solved deterministically (p = a*b),
+    # host-verified by the RTLLM multi_8bit testbench. (A *sequential* multiplier whose
+    # cycle protocol is guessed remains DEFERRED -> SKIP; see _dialect_synth's drop set.)
     txt = """
  - input  a (4 bits)
  - input  b (4 bits)
@@ -282,7 +284,8 @@ def test_neg_multiplier_out_of_scope():
 
 Implement a 4-bit unsigned multiplier: p = a * b.
 """
-    assert A.synth(txt, "TopModule") is None
+    rtl = A.synth(txt, "TopModule")
+    assert rtl is not None and "a * b" in rtl and "endmodule" in rtl
 
 
 def test_neg_serial_2s_complementer_is_fsm_not_arith():
