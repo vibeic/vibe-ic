@@ -335,7 +335,11 @@ def _parse_candidate_header(rtl: str) -> Optional[Tuple[str, List[dict], str, st
     ports_text = m.group("ports") or ""
     ports: List[dict] = []
     for pm in re.finditer(
-            r"\b(input|output|inout)\b\s+(?:wire|reg|logic)?\s*(?:signed\s*)?"
+            # the type keyword needs a trailing \b so `reg`/`wire`/`logic` match
+            # ONLY the standalone keyword and never the prefix of a port NAME like
+            # `registers` / `wire_sel` / `logic_out` (a §4.05 false-reject bug:
+            # `(?:reg)?` greedily ate the `reg` of `registers`, leaving `isters`).
+            r"\b(input|output|inout)\b\s+(?:(?:wire|reg|logic)\b\s*)?(?:signed\b\s*)?"
             r"(?:\[\s*([^\]:]+)\s*:\s*([^\]]+)\s*\]\s*)?(\w+)", ports_text):
         d, hi, lo, pname = pm.groups()
         w = _range_width(hi, lo)

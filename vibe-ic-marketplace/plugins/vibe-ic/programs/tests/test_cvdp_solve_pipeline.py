@@ -314,6 +314,29 @@ def test_gate_accepts_conformant_rtl():
     assert res["violations"] == []
 
 
+def test_gate_no_false_reject_on_keyword_prefixed_port_names():
+    """§4.05 false-reject regression (Step-2.7, corpus-caught on hmac_register):
+    a port whose NAME begins with a type keyword (`registers` / `logic_out` /
+    `wire_sel`) must be parsed as that full name — the candidate parser's
+    `(?:wire|reg|logic)` match needs a trailing word boundary, else `reg` ate the
+    prefix of `registers` (leaving `isters`) and a CORRECT answer was rejected."""
+    rtl = (
+        "module m (\n"
+        "    input  [7:0] addr,\n"
+        "    output       registers,\n"
+        "    output [1:0] logic_out,\n"
+        "    input        wire_sel\n"
+        ");\nendmodule\n")
+    parsed = SP._parse_candidate_header(rtl)
+    assert parsed is not None
+    names = {p["name"] for p in parsed[1]}
+    assert {"addr", "registers", "logic_out", "wire_sel"} <= names, names
+    # and the keyword-typed port still parses correctly (reg/logic as a TYPE)
+    rtl2 = "module n (output reg [3:0] cnt, output logic done);\nendmodule\n"
+    names2 = {p["name"] for p in SP._parse_candidate_header(rtl2)[1]}
+    assert {"cnt", "done"} <= names2, names2
+
+
 def test_gate_rejects_wrong_port_width():
     """A drifting AI output (sum declared 7-bit instead of 8) is REJECTED with a
     concrete, fixable width violation — the Tier-3 stabilizer."""
