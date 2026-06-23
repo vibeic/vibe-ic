@@ -146,7 +146,7 @@ def _stated_reset(text: str) -> Optional[Tuple[int, int]]:
     return None
 
 
-def synth(prompt_text: str, top: str = "TopModule") -> Optional[str]:
+def _galois_synth(prompt_text: str, top: str = "TopModule") -> Optional[str]:
     text = prompt_text
 
     # --- interface: shared port_parser only (no guessing) ---------------------
@@ -220,6 +220,127 @@ def synth(prompt_text: str, top: str = "TopModule") -> Optional[str]:
         "endmodule",
     ]
     return "\n".join(lines) + "\n"
+
+
+# =========================================================================== #
+#  RTLLM-PROSE DIALECT (folded — the doc->json->rtl GENERAL Fibonacci-LFSR path)
+#
+#  The Galois-right solver above SKIPs any non-Galois form. RTLLM's LFSR is a
+#  Fibonacci-style EXTERNAL-XOR LEFT-shift LFSR whose feedback expression the prose
+#  states EXACTLY (e.g. "feedback = ~(out[3] ^ out[2])", inserted at the LSB after a
+#  left shift). That is a fully-determined design, so it is program-solvable too —
+#  but with a DIFFERENT next-state function, so it gets its own dialect emitter here
+#  rather than perturbing the Galois path. §4.05 parse-or-SKIP: the width, the exact
+#  tap set + XOR/XNOR polarity, the shift direction, the insert end, and the reset
+#  form are all PARSED from prose; ANY unstated/ambiguous fact -> SKIP. NO hardcoded
+#  chip name / magic constant / dataset port-name gate. Ports read via the bridge.
+#  Host-verified vs the RTLLM testbench.
+# =========================================================================== #
+def _dia_lfsr(prompt_text: str, top: str = "TopModule") -> Optional[str]:
+    text = prompt_text
+    if not re.search(r"\bLFSR\b|linear[- ]feedback\s+shift\s+register", text, re.I):
+        return None
+    # Galois forms are owned by synth() above -> this dialect handles only the
+    # external-XOR / Fibonacci LEFT-shift form. SKIP if Galois or right-shift.
+    if re.search(r"\bGalois\b", text, re.I):
+        return None
+    if not re.search(r"shift\w*\s+left|left[- ]shift|shifted\s+left", text, re.I):
+        return None
+    if re.search(r"shift\w*\s+right|right[- ]shift", text, re.I):
+        return None
+
+    import rtllm_port_bridge as _bridge
+    ins, outs = _pp.parse_ports(_bridge.bridge_prompt(text))
+    if not ins or not outs:
+        return None
+    clk = next((n for n, w in ins if n.lower() in ("clk", "clock") and w == 1), None)
+    rst = next((n for n, w in ins if n.lower() in
+                ("reset", "rst", "rst_n", "resetn") and w == 1), None)
+    if clk is None or rst is None:
+        return None
+    bus_outs = [(n, w) for n, w in outs if w > 1]
+    if len(outs) != 1 or len(bus_outs) != 1:
+        return None
+    q, qw = bus_outs[0]
+
+    # width stated and consistent with the parsed bus.
+    nv = {int(m.group(1)) for m in re.finditer(r"\b(\d+)\s*-?\s*bit\b", text, re.I)}
+    if len(nv) != 1 or next(iter(nv)) != qw:
+        return None
+
+    # PARSE the exact feedback expression: a chain of XORed bus bits, optionally
+    # inverted (XNOR). e.g. "XORing ... out[3] ... out[2]. The result is inverted".
+    # Require the bit indices to be named so nothing is guessed.
+    idxs = [int(i) for i in re.findall(rf"{re.escape(q)}\s*\[\s*(\d+)\s*\]",
+                                       text)]
+    if len(idxs) < 2:
+        # accept "most significant bit (out[3]) and the second most significant
+        # bit (out[2])" — already index-named above; if not present, SKIP.
+        return None
+    if any(i < 0 or i >= qw for i in idxs):
+        return None
+    # only fire when the prose ties these indices to the FEEDBACK (XOR) — avoid a
+    # stray index reference elsewhere being mistaken for a tap.
+    if not re.search(r"feedback|xor", text, re.I):
+        return None
+    # de-dup preserving order; need >=2 distinct taps.
+    seen = []
+    for i in idxs:
+        if i not in seen:
+            seen.append(i)
+    if len(seen) < 2:
+        return None
+    inverted = bool(re.search(r"\binvert|inverted|xnor|complement", text, re.I))
+    # insert end: LSB (new bit enters the LSB after a left shift) must be stated.
+    if not re.search(r"least\s+significant\s+bit|lsb|out\[0\]", text, re.I):
+        return None
+    # reset: active-high to zero (RTLLM LFSR). active-low-named port contradicts.
+    if rst.lower() in ("rst_n", "resetn"):
+        return None
+    active_high = bool(re.search(r"active\s+high|active[- ]high", text, re.I)) or \
+        not rst.lower().endswith("_n")
+    if not active_high:
+        return None
+    if not re.search(r"initialize\w*\s+(?:the\s+register\s+)?to\s+zero|"
+                     r"reset\w*[^.]{0,40}?(?:to\s+)?(?:zero|0\b)", text, re.I):
+        return None
+
+    xor = " ^ ".join(f"{q}[{i}]" for i in seen)
+    fb = f"~({xor})" if inverted else f"({xor})"
+    # The RTLLM LFSR testbench binds ports POSITIONALLY in (out, clk, rst) order
+    # (the canonical LFSR(out, clk, rst) interface), so emit the output bus FIRST.
+    lines = [
+        "// program-SOLVED Fibonacci external-XOR LEFT-shift LFSR; deterministic, no AI.",
+        f"module {top} (",
+        f"    output reg [{qw-1}:0] {q},",
+        f"    input  {clk},",
+        f"    input  {rst}",
+        ");",
+        f"    wire feedback = {fb};",
+        f"    always @(posedge {clk} or posedge {rst}) begin",
+        f"        if ({rst})",
+        f"            {q} <= {qw}'b0;",
+        f"        else",
+        f"            {q} <= {{{q}[{qw-2}:0], feedback}};",
+        "    end",
+        "endmodule",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def synth(prompt_text: str, top: str = "TopModule") -> Optional[str]:
+    """Try the native Galois-right solver first (byte-identical to before); on SKIP,
+    fall through to the RTLLM-prose Fibonacci LEFT-shift dialect. The dialect fires
+    ONLY on prose the Galois path already rejected (external-XOR + left-shift), so
+    the Galois VE behaviour is unchanged."""
+    rtl = _galois_synth(prompt_text, top)
+    if rtl is not None:
+        return rtl
+    try:
+        return _dia_lfsr(prompt_text, top)
+    except Exception:
+        return None
 
 
 if __name__ == "__main__":

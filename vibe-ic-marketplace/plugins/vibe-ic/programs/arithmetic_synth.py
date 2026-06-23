@@ -426,7 +426,8 @@ def synth(prompt_text: str, top: str = "TopModule") -> Optional[str]:
     # RTLLM-prose dialect (folded): the same arithmetic family in the structured
     # "Module name:/Input ports:" dialect — comparator/ALU/accumulator/fixed-point/
     # combinational-multiplier/divider/separate-sum-cout adder. recognize() is §4.05
-    # parse-or-SKIP; the seq-multiplier/pipelined shapes are DEFERRED (audit H1/H2/M3).
+    # parse-or-SKIP; the seq-multiplier/pipelined shapes PARSE their stated
+    # completion latency / pipeline depth and fire when stated, else honest-SKIP.
     return _dialect_synth(prompt_text, top)
 
 
@@ -528,6 +529,77 @@ _RE_ALU = re.compile(r"\bALU\b", re.I)
 _RE_PARAM = re.compile(r"\bparameter\s+(\w+)\s*=\s*(\d+'[bdh][0-9a-fxz_]+)\s*;", re.I)
 # Active-low / active-high reset cues (for sequential emits).
 _RE_RST_N = re.compile(r"\brst_n\b|active[- ]low\b", re.I)
+
+
+# ----------------------------------------------------------------------------- #
+#  STATED-LATENCY PARSERS  (§4.05: PARSE the cycle/stage count, never guess)
+#
+#  These read the completion latency / pipeline depth straight from the prose.
+#  Each returns None when the count is genuinely NOT stated in this design's
+#  prose — the caller then keeps the shape DEFERRED (honest SKIP), it NEVER
+#  falls back to a width-derived or constant guess.
+# ----------------------------------------------------------------------------- #
+
+# spelled-out small integers that prose uses for a stage/level count.
+_WORD_NUM = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+             "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+
+
+def _parse_counter_bound(text: str) -> Optional[int]:
+    """The loop bound a start->done / rdy counter FSM tests against, e.g.
+    '...register (i) is less than 17' or 'counter (5bit ctr) is less than 16'.
+    Returns the integer N, or None if no such 'less than N' bound is stated."""
+    m = re.search(r"(?:counter|register|\bctr\b|\bi\b)[^.\n]*?"
+                  r"\bis\s+less\s+than\s+(\d+)\b", text, re.I)
+    return int(m.group(1)) if m else None
+
+
+def _parse_done_raise_cycle(text: str) -> Optional[int]:
+    """The counter value at which the done flag is SET to 1, e.g.
+    '...(i) is equal to 16, indicating the completion ... (done_r) is set to 1'.
+    Returns the integer, or None if the prose does not state it."""
+    m = re.search(r"\bis\s+equal\s+to\s+(\d+)\b[^.\n]*?\b(?:done\w*)\b"
+                  r"[^.\n]*?\b(?:is\s+)?set\s+to\s+1\b", text, re.I)
+    return int(m.group(1)) if m else None
+
+
+def _parse_done_clear_cycle(text: str) -> Optional[int]:
+    """The counter value at which the done flag is RESET to 0, e.g.
+    '...(i) is equal to 17, ... (done_r) is reset to 0'. Returns the integer, or
+    None if the prose does not state it (then the done window is left open)."""
+    m = re.search(r"\bis\s+equal\s+to\s+(\d+)\b[^.\n]*?\b(?:done\w*)\b"
+                  r"[^.\n]*?\b(?:is\s+)?(?:reset|set)\s+to\s+0\b", text, re.I)
+    return int(m.group(1)) if m else None
+
+
+def _parse_rdy_raise_count(text: str) -> Optional[int]:
+    """The counter value at which the rdy flag is raised, e.g.
+    'Once the counter (ctr) reaches 16, ... the ready signal (rdy) is set to 1'.
+    Returns the integer, or None if the prose does not state it."""
+    m = re.search(r"\b(?:reaches|equal\s+to|equals)\s+(\d+)\b[^.\n]*?"
+                  r"\b(?:ready\s+signal|\brdy\b)\b[^.\n]*?"
+                  r"\b(?:is\s+)?set\s+to\s+1\b", text, re.I)
+    return int(m.group(1)) if m else None
+
+
+def _parse_pipeline_stages(text: str) -> Optional[int]:
+    """The stated pipeline depth (number of register levels / stages), e.g.
+    'consists of two levels of registers' or 'N pipeline stages'. Returns the
+    integer N when the prose states an explicit numeric/spelled count, else None.
+    An indefinite quantifier ('several', 'multiple', 'some' registers/stages) is
+    NOT a count -> None (the caller must honestly SKIP)."""
+    # explicit digit forms: 'N pipeline stages', 'N levels of registers', etc.
+    m = re.search(r"\b(\d+)\s+(?:pipeline\s+)?(?:stages?|levels?)\b"
+                  r"(?:\s+of\s+registers?)?", text, re.I)
+    if m:
+        return int(m.group(1))
+    # spelled-out forms: 'two levels of registers', 'three pipeline stages'.
+    m = re.search(r"\b(" + "|".join(_WORD_NUM) +
+                  r")\s+(?:pipeline\s+)?(?:stages?|levels?)\b"
+                  r"(?:\s+of\s+registers?)?", text, re.I)
+    if m:
+        return _WORD_NUM[m.group(1).lower()]
+    return None
 
 
 # ----------------------------------------------------------------------------- #
@@ -707,15 +779,19 @@ def _recognize_adder(text: str, ins, outs) -> Optional[Dict]:
         result = _find(("result", "sum", "y"), outs)
         oen = _find(("o_en", "oen", "en_out"), outs)
         if clk and rst and ien and result and oen:
-            stages_m = re.search(r"(\d+)\s*(?:pipeline\s*)?stages?", text, re.I)
-            stages = int(stages_m.group(1)) if stages_m else 4
-            stages = max(1, min(stages, 8))
-            return {"op": "adder_pipe", "clk": clk[0], "rst_n": rst[0],
+            # §4.05: PARSE the stated number of pipeline stages; do NOT default
+            # to 4. 'several registers/stages' is an indefinite quantifier, not a
+            # count -> the depth is unstated and the shape stays DEFERRED.
+            stages = _parse_pipeline_stages(text)
+            spec = {"op": "adder_pipe", "clk": clk[0], "rst_n": rst[0],
                     "i_en": ien[0], "adda": A[0], "addb": B[0], "w": A[1],
                     "result": result[0], "rw": result[1], "o_en": oen[0],
                     "stages": stages,
                     "rst_active_high": not _RE_RST_N.search(rst[0]),
                     "ins": ins, "outs": outs}
+            if stages is None:
+                spec["_latency_unparsed"] = True
+            return spec
         return None
 
     # BCD adder: per-digit add + decimal correction.
@@ -781,22 +857,47 @@ def _recognize_multiplier(text: str, ins, outs) -> Optional[Dict]:
             "clk": clk[0], "ins": ins, "outs": outs}
 
     if rst and start and done:                      # multi_16bit shape
-        base.update({"op": "mult_seq_done", "start": start[0], "done": done[0]})
+        # §4.05: PARSE the completion cycle from the prose, never guess it.
+        bound = _parse_counter_bound(text)           # 'i is less than N'
+        raise_at = _parse_done_raise_cycle(text)     # 'i==K -> done=1'
+        clear_at = _parse_done_clear_cycle(text)     # 'i==J -> done=0'
+        base.update({"op": "mult_seq_done", "start": start[0], "done": done[0],
+                     "bound": bound, "raise_at": raise_at, "clear_at": clear_at})
+        # The product is latched at i==0 and done must rise at the parsed cycle;
+        # if the raise cycle is not stated, the latency is a guess -> DEFER.
+        if raise_at is None:
+            base["_latency_unparsed"] = True
         return base
     if rst and rdy and not start:                   # multi_booth_8bit shape
-        base.update({"op": "mult_seq_rdy", "rdy": rdy[0]})
+        # §4.05: PARSE the counter bound at which rdy rises, never guess it.
+        bound = _parse_counter_bound(text)           # 'ctr is less than N'
+        raise_at = _parse_rdy_raise_count(text)      # 'ctr reaches N -> rdy=1'
+        base.update({"op": "mult_seq_rdy", "rdy": rdy[0],
+                     "bound": bound, "raise_at": raise_at})
+        if raise_at is None and bound is None:
+            base["_latency_unparsed"] = True
         return base
     if rst and en_in and en_out:                    # multi_pipe_8bit shape
-        base.update({"op": "mult_pipe_en", "en_in": en_in[0], "en_out": en_out[0]})
+        # §4.05: PARSE the stated pipeline depth; SKIP if unstated.
+        stages = _parse_pipeline_stages(text)
+        base.update({"op": "mult_pipe_en", "en_in": en_in[0], "en_out": en_out[0],
+                     "stages": stages})
+        if stages is None:
+            base["_latency_unparsed"] = True
         return base
     if rst and not (start or rdy or en_in):         # multi_pipe_4bit shape
         # A stated `Parameter: size = K` means the testbench binds the operand
         # width by name (`#(.size(K))`), so the module must be parameterized.
         pm = re.search(r"\b(size)\s*=\s*(\d+)\b", text, re.I)
-        base.update({"op": "mult_pipe_plain"})
+        # §4.05: PARSE the stated pipeline depth ('two levels of registers');
+        # SKIP if unstated.
+        stages = _parse_pipeline_stages(text)
+        base.update({"op": "mult_pipe_plain", "stages": stages})
         if pm:
             base["param_name"] = pm.group(1)
             base["param_default"] = int(pm.group(2))
+        if stages is None:
+            base["_latency_unparsed"] = True
         return base
     return None
 
@@ -1110,14 +1211,26 @@ def _emit_fixed_sub(s, m):
 
 def _emit_mult_seq_done(s, m):
     # Sequential multiplier with start->done handshake (multi_16bit shape). The
-    # prose states a counter FSM that raises done after the multiply completes.
+    # counter FSM cycle counts are PARSED from the prose (never guessed):
+    #   bound    = the 'i is less than N' loop bound,
+    #   raise_at = the 'i==K -> done=1' cycle,
+    #   clear_at = the 'i==J -> done=0' cycle.
     h = _dia_header(m, s["ins"], s["outs"])
     pw = s["pw"]
     rst = s["rst"]
     edge = "posedge " + rst if s["rst_active_high"] else "negedge " + rst
     rst_test = rst if s["rst_active_high"] else f"!{rst}"
-    cnt_w = max(2, (s["aw"] + 2).bit_length())
-    nstages = s["aw"]            # one shift per multiplier bit
+    raise_at = s["raise_at"]
+    # bound defaults to raise_at+1 only when the prose did not state a separate
+    # 'less than N' bound but DID state the raise cycle (so the counter still
+    # advances at least up to the raise cycle); clear_at is left open if unstated.
+    bound = s["bound"] if s["bound"] is not None else raise_at + 1
+    clear_at = s["clear_at"]
+    cnt_w = max(2, (bound + 1).bit_length())
+    done_lines = [f"            if (i == {raise_at}) done_r <= 1;"]
+    if clear_at is not None:
+        done_lines.append(f"            else if (i == {clear_at}) done_r <= 0;")
+    body_done = "\n".join(done_lines)
     return (f"{h}\n"
             f"    reg [{cnt_w-1}:0] i;\n"
             f"    reg done_r;\n"
@@ -1127,9 +1240,8 @@ def _emit_mult_seq_done(s, m):
             f"            i <= 0; done_r <= 0; yout_r <= 0;\n"
             f"        end else if ({s['start']}) begin\n"
             f"            if (i == 0) yout_r <= {s['a']} * {s['b']};\n"
-            f"            if (i < {nstages+1}) i <= i + 1;\n"
-            f"            if (i == {nstages}) done_r <= 1;\n"
-            f"            else if (i == {nstages+1}) done_r <= 0;\n"
+            f"            if (i < {bound}) i <= i + 1;\n"
+            f"{body_done}\n"
             f"        end else begin\n"
             f"            i <= 0; done_r <= 0;\n"
             f"        end\n"
@@ -1141,12 +1253,18 @@ def _emit_mult_seq_done(s, m):
 
 def _emit_mult_seq_rdy(s, m):
     # Signed Booth-style multiplier with a rdy flag (multi_booth_8bit shape).
-    # Reset is active-HIGH per the prose; rdy rises when the counter completes.
+    # Reset is active-HIGH per the prose. The counter bound at which rdy rises is
+    # PARSED from the prose ('ctr reaches N -> rdy=1' / 'ctr is less than N'),
+    # never guessed: rdy rises when ctr first reaches `raise` after counting
+    # 0..raise-1 while ctr<raise.
     h = _dia_header(m, s["ins"], s["outs"])
     pw = s["pw"]
     rst = s["rst"]
-    nstages = 2 * s["aw"]        # radix-4 booth runs ~2*width/2 == width steps;
-    cnt_w = max(2, (nstages + 2).bit_length())
+    # raise_at is the stated completion count; fall back to the stated 'less than'
+    # bound when only that is given (the loop runs while ctr<bound, completing at
+    # ctr==bound). At least one is guaranteed present (else this op is deferred).
+    raise_n = s["raise_at"] if s["raise_at"] is not None else s["bound"]
+    cnt_w = max(2, (raise_n + 1).bit_length())
     return (f"{h}\n"
             f"    reg [{cnt_w-1}:0] ctr;\n"
             f"    reg rdy_r;\n"
@@ -1156,8 +1274,8 @@ def _emit_mult_seq_rdy(s, m):
             f"            ctr <= 0; rdy_r <= 0;\n"
             f"            p_r <= $signed({s['a']}) * $signed({s['b']});\n"
             f"        end else begin\n"
-            f"            if (ctr < {nstages}) ctr <= ctr + 1;\n"
-            f"            if (ctr == {nstages-1}) rdy_r <= 1;\n"
+            f"            if (ctr < {raise_n}) ctr <= ctr + 1;\n"
+            f"            if (ctr == {raise_n}) rdy_r <= 1;\n"
             f"        end\n"
             f"    end\n"
             f"    assign {s['prod']} = p_r;\n"
@@ -1173,7 +1291,7 @@ def _emit_mult_pipe_en(s, m):
     pw = s["pw"]
     rst = s["rst"]
     edge = "negedge " + rst   # active-low rst_n per the prose
-    st = 3
+    st = s["stages"]          # PARSED pipeline depth (the enable pipe matches it)
     lines = [h]
     lines.append(f"    reg [{pw-1}:0] p_pipe [0:{st-1}];")
     lines.append(f"    reg en_pipe [0:{st-1}];")
@@ -1200,48 +1318,45 @@ def _emit_mult_pipe_en(s, m):
 
 
 def _emit_mult_pipe_plain(s, m):
-    # 2-stage registered pipeline multiplier (multi_pipe_4bit shape): mul_out is
-    # valid two clocks after the inputs are applied.
+    # Registered pipeline multiplier (multi_pipe_4bit shape): mul_out is valid
+    # `stages` clocks after the inputs are applied. The depth is PARSED from the
+    # prose ('two levels of registers'), never assumed.
     rst = s["rst"]
     edge = "negedge " + rst
+    st = s["stages"]
+    # pipeline-register stages p[0..st-1]: p[0] takes the product, each later
+    # stage shifts the previous, mul_out is the last stage.
     pn = s.get("param_name")
     if pn:
         # parameterized: ports size off the stated parameter (testbench binds it
         # by name, e.g. #(.size(4))).
         pd = s["param_default"]
-        return (
-            f"module {m} #(parameter {pn} = {pd}) (\n"
-            f"    input {s['clk']},\n"
-            f"    input {rst},\n"
-            f"    input [{pn}-1:0] {s['a']},\n"
-            f"    input [{pn}-1:0] {s['b']},\n"
-            f"    output [2*{pn}-1:0] {s['prod']}\n"
-            f");\n"
-            f"    reg [2*{pn}-1:0] p0, p1;\n"
-            f"    always @(posedge {s['clk']} or {edge}) begin\n"
-            f"        if (!{rst}) begin\n"
-            f"            p0 <= 0; p1 <= 0;\n"
-            f"        end else begin\n"
-            f"            p0 <= {s['a']} * {s['b']};\n"
-            f"            p1 <= p0;\n"
-            f"        end\n"
-            f"    end\n"
-            f"    assign {s['prod']} = p1;\n"
-            f"endmodule\n")
-    h = _dia_header(m, s["ins"], s["outs"])
-    pw = s["pw"]
-    return (f"{h}\n"
-            f"    reg [{pw-1}:0] p0, p1;\n"
-            f"    always @(posedge {s['clk']} or {edge}) begin\n"
-            f"        if (!{rst}) begin\n"
-            f"            p0 <= 0; p1 <= 0;\n"
-            f"        end else begin\n"
-            f"            p0 <= {s['a']} * {s['b']};\n"
-            f"            p1 <= p0;\n"
-            f"        end\n"
-            f"    end\n"
-            f"    assign {s['prod']} = p1;\n"
-            f"endmodule\n")
+        body = [
+            f"module {m} #(parameter {pn} = {pd}) (",
+            f"    input {s['clk']},",
+            f"    input {rst},",
+            f"    input [{pn}-1:0] {s['a']},",
+            f"    input [{pn}-1:0] {s['b']},",
+            f"    output [2*{pn}-1:0] {s['prod']}",
+            ");",
+            f"    reg [2*{pn}-1:0] p [0:{st-1}];",
+        ]
+    else:
+        h = _dia_header(m, s["ins"], s["outs"])
+        pw = s["pw"]
+        body = [h, f"    reg [{pw-1}:0] p [0:{st-1}];"]
+    body.append("    integer k;")
+    body.append(f"    always @(posedge {s['clk']} or {edge}) begin")
+    body.append(f"        if (!{rst}) begin")
+    body.append(f"            for (k = 0; k < {st}; k = k + 1) p[k] <= 0;")
+    body.append("        end else begin")
+    body.append(f"            p[0] <= {s['a']} * {s['b']};")
+    body.append(f"            for (k = 1; k < {st}; k = k + 1) p[k] <= p[k-1];")
+    body.append("        end")
+    body.append("    end")
+    body.append(f"    assign {s['prod']} = p[{st-1}];")
+    body.append("endmodule\n")
+    return "\n".join(body)
 
 
 _EMITTERS = {
@@ -1271,17 +1386,18 @@ def _dialect_synth(text: str, top: str) -> Optional[str]:
     """The RTLLM-prose dialect entry: recognize the structured spec, SKIP on any
     §4.05 ambiguity (None / op==SKIP), else emit deterministic RTL.
 
-    v1.1.84 scoping: the sequential-multiplier / pipelined shapes (mult_seq_*,
-    mult_pipe_*, adder_pipe) are DEFERRED — the adversarial audit found their
-    done/rdy latency + pipeline-stage count were guessed, not parsed; they SKIP here
-    until the parse-the-stated-cycle-count remediation lands. The combinational +
-    accumulator + ALU + fixed-point shapes are audit-clean and fire."""
+    The sequential-multiplier / pipelined shapes (mult_seq_*, mult_pipe_*,
+    adder_pipe) now PARSE their completion latency / pipeline-stage count straight
+    from the prose (see the STATED-LATENCY PARSERS). When the prose genuinely
+    states the cycle/stage count, recognize() attaches it and the shape FIRES;
+    when the count is unstated (an indefinite 'several'/'multiple' quantifier),
+    recognize() flags `_latency_unparsed` and the shape stays DEFERRED here — an
+    honest SKIP, never a width-derived or constant guess (§4.05 parse-or-SKIP)."""
     spec = recognize(text)
     if not spec or spec.get("op") == "SKIP":
         return None
-    if spec.get("op") in ("mult_seq_done", "mult_seq_rdy", "mult_pipe_en",
-                          "mult_pipe_plain", "adder_pipe"):
-        return None  # DEFERRED overfit shapes (audit H1/H2/M3) -> honest SKIP
+    if spec.get("_latency_unparsed"):
+        return None  # stated latency/stage count absent -> honest §4.05 SKIP
     return _dia_emit(spec, top)
 
 
