@@ -72,7 +72,7 @@ import spec_artifact_registry as _R  # noqa: E402  the deterministic solver cata
 _FAMILY_SOLVERS = []
 for _fam in ("cvdp_gf_synth", "cvdp_bcd_synth", "cvdp_crc_synth",
              "cvdp_encoder_synth", "cvdp_graycode_parity_synth",
-             "cvdp_shift_counter_synth", "cvdp_compose_synth"):
+             "cvdp_shift_counter_synth", "cvdp_compose_synth", "cvdp_hamming_synth", "cvdp_mux_compare_synth", "cvdp_accumulate_synth", "cvdp_memory_synth", "cvdp_arith_variants_synth"):
     try:
         _FAMILY_SOLVERS.append(__import__(_fam))
     except Exception:
