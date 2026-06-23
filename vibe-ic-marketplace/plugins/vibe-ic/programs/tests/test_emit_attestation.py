@@ -23,12 +23,32 @@ def _samples(tmp_path):
     return d
 
 
+def _proj_with_ldocs(tmp_path):
+    """A project root carrying Phase-1 generated_docs/L*.json so record() can stamp
+    canonical provenance (the real emit callers always pass this)."""
+    gd = tmp_path / "proj" / "phase1" / "generated_docs"
+    gd.mkdir(parents=True)
+    for n in ("L1", "L9"):
+        (gd / f"{n}.json").write_text(f'{{"layer": "{n}"}}')
+    return tmp_path / "proj"
+
+
 def test_recorded_sample_verifies(tmp_path):
     d = _samples(tmp_path)
     s = d / "foo.v"; s.write_text("module foo; endmodule\n")
-    ea.record(d, s, gates=["gates_atomic"], shape="C")
+    ea.record(d, s, gates=["gates_atomic"], shape="C", phase1=_proj_with_ldocs(tmp_path))
     ok, ungated, total = ea.verify(d)
     assert ok is True and ungated == [] and total == 1
+
+
+def test_recorded_sample_without_phase1_is_non_canonical(tmp_path):
+    # No-back-compat contract: Phase-1 provenance is REQUIRED. A sample that passed
+    # the emit gates but skipped Phase 1 is NON-canonical by default.
+    d = _samples(tmp_path)
+    s = d / "noprov.v"; s.write_text("module noprov; endmodule\n")
+    ea.record(d, s, gates=["gates_atomic"], shape="C")  # no phase1
+    ok, ungated, total = ea.verify(d)
+    assert ok is False and ungated == ["noprov.v"] and total == 1
 
 
 def test_directly_authored_sample_is_ungated(tmp_path):
@@ -50,7 +70,7 @@ def test_mutated_after_emit_is_ungated(tmp_path):
 def test_mixed_run_lists_only_the_ungated(tmp_path):
     d = _samples(tmp_path)
     g = d / "gated.v"; g.write_text("module gated; endmodule\n")
-    ea.record(d, g, gates=["gates_atomic"], shape="C")
+    ea.record(d, g, gates=["gates_atomic"], shape="C", phase1=_proj_with_ldocs(tmp_path))
     (d / "bypass.v").write_text("module bypass; endmodule\n")
     ok, ungated, total = ea.verify(d)
     assert ok is False and ungated == ["bypass.v"] and total == 2
@@ -70,7 +90,7 @@ def test_attestation_file_is_hidden_and_not_scoreable(tmp_path):
 def test_check_pass_on_fully_gated(tmp_path, capsys):
     d = _samples(tmp_path)
     s = d / "a.v"; s.write_text("module a; endmodule\n")
-    ea.record(d, s, gates=["gates_atomic"], shape="C")
+    ea.record(d, s, gates=["gates_atomic"], shape="C", phase1=_proj_with_ldocs(tmp_path))
     assert chk.main(["--samples", str(d)]) == 0
     assert "PASS" in capsys.readouterr().out
 
