@@ -108,6 +108,7 @@ import _path_layout as _pl  # noqa: E402
 import reset_clock_variant_alias as _rcv  # noqa: E402
 import port_convention_corpus as _pcc  # noqa: E402
 import spec_conformance_check as _scc  # noqa: E402
+import emit_attestation as _ea  # noqa: E402
 
 # The runner's own inner-rename suffix (step_reset_clock_variant_aliases,
 # phase2_one_shot_runner.py). chip-AGNOSTIC structural token, not a chip name.
@@ -1287,6 +1288,15 @@ def export(rtl_dir: Path, leaf: str, samples_dir: Path,
         return {"verdict": "FAIL", "reason": "guard_rejected",
                 "tb_facing_top": top, "source_file": str(src),
                 "note": note, "problems": problems, "exported": None}
+    # GATE-AS-SOLE-EMIT-PATH: attest that this sample passed the Shape-B emit guard
+    # (+ port-reorder) so the score-time check can prove it was not authored direct.
+    try:
+        _ea.record(samples_dir, dst,
+                   gates=["shape_b_guard_export",
+                          "port_reorder" if (reordered != original and not reorder_reverted) else "verbatim"],
+                   shape="B")
+    except Exception:
+        pass
     return {"verdict": "PASS", "tb_facing_top": top,
             "source_file": str(src), "note": note,
             "exported": str(dst),
