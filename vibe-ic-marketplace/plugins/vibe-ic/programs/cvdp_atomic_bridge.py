@@ -89,7 +89,7 @@ _FAMILY_SOLVER_NAMES = (
     "cvdp_shift_counter_synth", "cvdp_compose_synth", "cvdp_hamming_synth",
     "cvdp_mux_compare_synth", "cvdp_accumulate_synth", "cvdp_memory_synth",
     "cvdp_arith_variants_synth", "cvdp_table_lut_synth", "cvdp_saturate_synth",
-    "cvdp_bitmanip_synth", "cvdp_serdes_decode_synth",
+    "cvdp_bitmanip_synth", "cvdp_serdes_decode_synth", "cvdp_modify_complete_synth",
 )
 _FAMILY_SOLVERS: List = []  # populated by _load_family_solvers() at module-load bottom
 
