@@ -588,6 +588,14 @@ def _complete_interface(record: dict, top: str
     except Exception:
         ctx_widths = {}
 
+    # the set of RECOGNISED config parameters: harness-driven params + every param
+    # with a default (prompt or context) + module `#(parameter NAME ...)` decls. A
+    # port whose width is a param expression over ONLY these is COMPLETELY specified
+    # as PARAMETERISED (the AI writes `[PARAM-1:0]`, correct under every harness
+    # override) — not an extraction gap.
+    config_params = set(params) | set(param_defaults) | set(
+        re.findall(r"\bparameter\b\s+(?:\w+\s+)?([A-Za-z_]\w*)", prompt))
+
     def _place(name: str, direction: str):
         if name in params:
             return  # a config parameter — not a port (correctly filtered)
@@ -612,6 +620,14 @@ def _complete_interface(record: dict, top: str
         if src == "param_expression_width":
             iface.append({"name": name, "dir": direction, "width": None,
                           "signed": signed, "source": "param_expression_width"})
+            # PARAMETERISED-COMPLETE: when every identifier in the width expression
+            # is a RECOGNISED config parameter, the width is FULLY specified (the AI
+            # writes `[PARAM-1:0]`, correct under every override) — NOT a gap. Only a
+            # width expression carrying an UNKNOWN symbol (no default, not harness-
+            # driven, not a module param) is a genuine extraction gap.
+            idents = _W.param_expr_idents(prompt, name)
+            if idents and idents <= config_params:
+                return
             gaps.append({"kind": "INCOMPLETE_EXTRACTION_GAP",
                          "type": "param_expression_width",
                          "detail": f"{direction} port `{name}` width is a parameter "

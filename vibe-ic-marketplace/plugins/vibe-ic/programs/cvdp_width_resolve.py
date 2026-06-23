@@ -371,6 +371,42 @@ def has_param_expr_width(prompt: str, name: str) -> bool:
     return False
 
 
+# words that appear inside a width expression but are NOT parameters (functions /
+# numeric literals' stray letters). `$clog2`/`clog2`/`log2` are width FUNCTIONS.
+_NON_PARAM_TOKENS = {"clog2", "log2", "ceil", "floor", "x"}
+
+
+def param_expr_idents(prompt: str, name: str) -> set:
+    """The set of IDENTIFIERS appearing in `name`'s param-expression width (the
+    bracket range in either order, or a table width-cell), excluding width
+    functions (clog2/log2). Empty when no param-expression width is tied to the
+    name. The caller decides whether every identifier is a KNOWN config parameter
+    — if so the port is COMPLETELY specified as parameterised (the AI writes
+    `[PARAM-1:0]`, correct under every harness override), not an extraction gap."""
+    esc = re.escape(name)
+    inners = []
+    for pat in (rf"\b{esc}\b[^\n|]{{0,40}}?\[\s*([^\]]*?)\s*\]",
+                rf"\[\s*([^\]]*?)\s*\]\s*{esc}\b"):
+        for m in re.finditer(pat, prompt):
+            inner = m.group(1)
+            if ":" in inner and _has_ident_span(inner):
+                inners.append(inner)
+    for rm in re.finditer(rf"^\s*\|\s*`?{esc}`?\s*\|\s*`?([^|`]+?)`?\s*[|(]",
+                          prompt, re.M):
+        cell = rm.group(1).strip()
+        if _IDENT.search(cell) and re.fullmatch(r"[\w\s()+\-*/]+", cell) \
+                and re.search(r"[*/+\-]", cell):
+            inners.append(cell)
+    if not inners:
+        return set()
+    idents = set()
+    for inner in inners:
+        for tok in re.findall(r"[A-Za-z_]\w*", inner):
+            if tok not in _NON_PARAM_TOKENS:
+                idents.add(tok)
+    return idents
+
+
 def symbolic_width(prompt: str, name: str, params: Dict[str, int]
                    ) -> Optional[Tuple[str, int, str]]:
     """Resolve a port's width when it is stated as a parameter expression, a

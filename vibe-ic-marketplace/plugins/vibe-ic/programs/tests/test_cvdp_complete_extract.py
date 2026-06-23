@@ -152,26 +152,40 @@ async def test_penc(dut):
 """
 
 
-def test_classifier_param_expression_width_is_extraction_gap():
+def test_param_expression_over_config_params_is_parameterized_complete():
     rec = _make_record("penc", PARAM_WIDTH_PROMPT, PARAM_WIDTH_TB)
     spec = CE.extract(rec)
     # N and M are config parameters (read via int(dut.X.value)), NOT ports
     assert "N" in spec["harness"]["params"]
     assert "M" in spec["harness"]["params"]
-    iface_names = {p["name"] for p in spec["interface"]}
-    assert "N" not in iface_names and "M" not in iface_names, \
+    by = {p["name"]: p for p in spec["interface"]}
+    assert "N" not in by and "M" not in by, \
         "single-letter int(dut.X.value) parameter must not become a port"
     # valid is a 1-bit control by convention
-    assert any(p["name"] == "valid" and p["width"] == 1 for p in spec["interface"])
-    # the data ports in_vec / idx have a param-expression width -> EXTRACTION_GAP
+    assert by.get("valid", {}).get("width") == 1
+    # in_vec / idx have a param-expression width over ONLY config params (N, M) ->
+    # the width is FULLY specified as PARAMETERISED (the AI writes `[N-1:0]`,
+    # correct under every override): the ports are PLACED with width=None and the
+    # spec is COMPLETE — NOT an extraction gap (the width is not unknown, it is
+    # parameterised). No fabricated literal.
+    assert by["in_vec"]["width"] is None
+    assert by["in_vec"]["source"] == "param_expression_width"
+    assert by["idx"]["width"] is None
+    assert spec["completeness"] == "COMPLETE"
+
+
+def test_param_expression_over_unknown_symbol_stays_a_gap():
+    # the SAME shape but the width parameter is NOT a recognised config param
+    # (never declared, never harness-driven) -> we genuinely do not know the width,
+    # so it stays an honest EXTRACTION_GAP (NOT falsely COMPLETE, NOT fabricated).
+    prompt = "Design `m`.\n- `dout [MYSTERY-1:0]`: the output bus.\n"
+    tb = ("import cocotb\n@cocotb.test()\nasync def test_m(dut):\n"
+          "    _ = dut.dout.value\n")
+    spec = CE.extract(_make_record("m", prompt, tb))
+    by = {p["name"]: p for p in spec["interface"]}
+    assert by["dout"]["width"] is None, "unknown-symbol width is never fabricated"
     assert spec["completeness"] == "INCOMPLETE_EXTRACTION_GAP"
-    gap_types = {g["type"] for g in spec["gaps"]
-                 if g["kind"] == "INCOMPLETE_EXTRACTION_GAP"}
-    assert "param_expression_width" in gap_types
-    # the evidence is a REAL prompt line that carries the param range
-    for g in spec["gaps"]:
-        if g["type"] == "param_expression_width":
-            assert "[" in g["evidence"] and "]" in g["evidence"]
+    assert any(g["type"] == "param_expression_width" for g in spec["gaps"])
 
 
 # --------------------------------------------------------------------------- #
