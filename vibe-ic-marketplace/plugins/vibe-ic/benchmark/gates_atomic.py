@@ -549,9 +549,12 @@ def main():
             if str(PROGRAMS) not in sys.path:
                 sys.path.insert(0, str(PROGRAMS))
             import emit_attestation as _ea
+            _gd = next((d for d in (wd / "out" / "generated_docs",
+                                    wd / "phase1_proj" / "phase1" / "generated_docs")
+                        if d.is_dir() and any(d.glob("L*.json"))), None)
             _ea.record(samples_dir, dst,
                        gates=["gates_atomic", "phase1_run_all", "iverilog_compile",
-                              "structural_emit_rules"], shape="C")
+                              "structural_emit_rules"], shape="C", phase1=_gd)
         except Exception:
             pass
 
