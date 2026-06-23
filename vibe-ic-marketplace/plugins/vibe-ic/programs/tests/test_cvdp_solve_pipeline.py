@@ -412,17 +412,22 @@ endmodule
 """
 
 
-def test_gate_rejects_missing_param():
-    """The stated parameter WIDTH must be declared; an output that drops it is
-    REJECTED."""
+def test_missing_param_is_not_a_violation():
+    """§4.05 (Step-2.7): parameter PRESENCE is NOT a hard gate. The extracted
+    `params` list mixes genuine harness-driven parameters with prose nouns that are
+    not module parameters (`latency` = a cycle count, `poly` = a CRC value) and even
+    bus PORTS — and even a real parameter may legitimately be a localparam,
+    hardcoded, or renamed. So a candidate that does NOT declare a stated parameter
+    is NOT rejected for it (a correct answer was being false-rejected). The
+    interface (ports) + structures are the load-bearing gate."""
     rec = _make_record("preg", PARAM_PROMPT, PARAM_TB)
+    # WIDTH is still carried in the gate for DIAGNOSIS ...
     assert "WIDTH" in SP.solve(rec)["gate"]["params"]
+    # ... but dropping the `#(parameter WIDTH=8)` produces NO missing_param violation.
     bad = PARAM_GOOD.replace("#(parameter WIDTH = 8) ", "")
     res = SP.gate_check(rec, bad)
-    assert res["pass"] is False
-    assert any(v["kind"] == "missing_param" and "WIDTH" in v["detail"]
-               for v in res["violations"])
-    # ... and the conformant RTL that declares it is ACCEPTED.
+    assert not any(v["kind"] == "missing_param" for v in res["violations"]), res["violations"]
+    # the conformant RTL that declares it is of course also accepted.
     assert SP.gate_check(rec, PARAM_GOOD)["pass"] is True
 
 

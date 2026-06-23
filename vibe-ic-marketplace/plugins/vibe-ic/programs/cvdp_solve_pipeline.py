@@ -107,9 +107,17 @@ def build_gate(spec: dict) -> dict:
     """
     spec = spec or {}
     iface = spec.get("interface") or []
+    # A port whose width was resolved from a PARAMETER EXPRESSION (`[DATA_WIDTH-1:0]`,
+    # `N*IN_WIDTH`, `$clog2(D)`) has a width that DEPENDS ON THE HARNESS PARAMETER
+    # OVERRIDE — its resolved default is for completeness/display only and must NOT
+    # be enforced as a hard literal: a correct candidate that writes the
+    # harness-driven width (or the param-expression itself) would otherwise be
+    # false-rejected (§4.05, Step-2.7). We carry width=None for such ports so the
+    # gate enforces presence + direction but skips the literal-width check.
+    _PARAM_EXPR_SOURCES = {"param_expression_width", "param_override_width"}
     ports = [{"name": p.get("name"), "dir": p.get("dir"),
-              "width": p.get("width")} for p in iface
-             if p.get("name")]
+              "width": None if p.get("source") in _PARAM_EXPR_SOURCES else p.get("width")}
+             for p in iface if p.get("name")]
 
     structures = spec.get("structures") or {}
     reg = structures.get("register_map") or []
@@ -425,22 +433,16 @@ def gate_check_spec(gate: dict, candidate_rtl: str) -> dict:
                 "kind": "port_width",
                 "detail": f"port `{nm}` width {cw} != spec width {sw}"})
 
-    # (c) params — every stated parameter must be DECLARED (presence only). The
-    #     param may appear in the `#( ... )` header OR as a `parameter`/`localparam`
-    #     in the body. §4.05: presence, never a required value (the harness drives
-    #     the override). Skip a param that is actually a placed PORT (no double-count).
-    body_params = set(re.findall(r"\b(?:parameter|localparam)\b[^\n;]*?\b(\w+)\s*=", candidate_rtl or ""))
-    header_params = set(re.findall(r"\bparameter\b\s+(?:\w+\s+)?(\w+)\s*=", params_text))
-    header_params |= set(re.findall(r"\bparameter\b\s+(\w+)\b", params_text))
-    declared_params = body_params | header_params
-    port_names = set(cand_by_name)
-    for pn in gate.get("params", []):
-        if pn in port_names:
-            continue  # was placed as a port, not a parameter — fine
-        if pn not in declared_params:
-            violations.append({
-                "kind": "missing_param",
-                "detail": f"stated parameter `{pn}` not declared in candidate"})
+    # (c) params — NOT a hard conformance check. Parameter PRESENCE cannot be
+    #     reliably enforced without false-rejecting a correct answer (§4.05,
+    #     Step-2.7): the extracted `params` list mixes genuine harness-driven
+    #     parameters (DATA_WIDTH) with prose nouns that are NOT module parameters
+    #     (`latency` = a cycle count, `poly` = a CRC polynomial value, lowercase
+    #     `width`/`depth`) and even bus PORTS (PADDR/HRDATA) — and even a real
+    #     parameter may legitimately be a localparam, hardcoded, or renamed. The
+    #     harness binds parameter overrides at elaboration time; the load-bearing
+    #     gate is the interface (ports) + structures. `gate["params"]` is therefore
+    #     carried for DIAGNOSIS only and never produces a violation.
 
     # (d) structures — each enumerated mode / FSM state / register the extractor
     #     recovered must be REPRESENTED as a token somewhere in the candidate RTL

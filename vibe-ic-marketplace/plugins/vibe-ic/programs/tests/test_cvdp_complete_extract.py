@@ -594,12 +594,18 @@ async def test_gpio2(dut):
 """
 
 
-def test_param_expression_with_no_stated_default_stays_a_gap():
+def test_param_expression_with_no_stated_default_is_placed_width_unknown():
     rec = _make_record("gpio2", ABSENT_DEFAULT_PROMPT, ABSENT_DEFAULT_TB)
     spec = CE.extract(rec)
-    # GPIO_WIDTH has no derivable default here -> gpio is NOT placed with a width
-    iface = {p["name"] for p in spec["interface"]}
-    assert "gpio" not in iface, \
+    # GPIO_WIDTH has no derivable default. The PORT is real (harness-driven), so it
+    # is PLACED — but with width=None (UNKNOWN), never a fabricated/guessed literal
+    # and never a coincidental same-line prose number. The width stays an honest
+    # gap. (Step-2.7 §4.05 fix: dropping the port emptied the interface and dropped
+    # the record to an un-gateable tier; grabbing a prose literal over-claimed a
+    # wrong width. Placing it width=None lets the gate enforce presence+dir only.)
+    by = {p["name"]: p for p in spec["interface"]}
+    assert "gpio" in by, "a real harness port must be placed even when its width is unknown"
+    assert by["gpio"]["width"] is None, \
         "a param-expression width with no stated default must NOT be fabricated"
     assert spec["completeness"] == "INCOMPLETE_EXTRACTION_GAP"
     gtypes = {g["type"] for g in spec["gaps"]

@@ -176,8 +176,19 @@ def toplevel_name(record: dict) -> Optional[str]:
 
 
 def _cocotb_test_text(files: Dict[str, str]) -> str:
+    # prefer the conventional `test_*.py` cocotb test module.
     for k, v in files.items():
         if re.search(r"test_.*\.py$", k) and "runner" not in k:
+            return v
+    # FALLBACK: a cocotb test commonly lives in a non-`test_`-named harness file —
+    # `tb.py`, `testbench.py`, `cocotb_<x>.py` — that drives the DUT via `dut.<sig>`.
+    # The `dut.<sig>.value` accesses ARE the authoritative interface the scorer
+    # binds, so recovering them is the most faithful interface source (no prose
+    # inference). Return the dut-referencing harness `.py` (excluding the runner).
+    # A general cocotb file-naming tolerance, not a dataset-specific rule; purely
+    # additive — only fires when no `test_*.py` exists (the previously-empty case).
+    for k, v in files.items():
+        if k.endswith(".py") and "runner" not in k and "dut." in v:
             return v
     return ""
 

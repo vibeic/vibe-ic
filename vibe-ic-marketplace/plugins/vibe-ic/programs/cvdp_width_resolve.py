@@ -346,6 +346,31 @@ def _has_ident_span(span_inner: str) -> bool:
     return bool(_IDENT.search(parts[0]) or _IDENT.search(parts[1]))
 
 
+def has_param_expr_width(prompt: str, name: str) -> bool:
+    """True iff a PARAMETER-EXPRESSION width is DECLARED for `name` — a bracket
+    range carrying an identifier in EITHER order (`name [P-1:0]` / `[P-1:0] name`)
+    or a markdown table width-cell with a param-arithmetic expression
+    (`| name | N*W |`). This is the STRUCTURAL presence of the declaration,
+    independent of whether the parameter table can RESOLVE it to an int. The
+    caller uses it to refuse a coincidental same-line prose `N bits` literal for a
+    port that is genuinely param-width: if the expression cannot be resolved the
+    width is UNKNOWN (a gap), never the neighbour's literal (§4.05)."""
+    esc = re.escape(name)
+    for pat in (rf"\b{esc}\b[^\n|]{{0,40}}?\[\s*([^\]]*?)\s*\]",
+                rf"\[\s*([^\]]*?)\s*\]\s*{esc}\b"):
+        for m in re.finditer(pat, prompt):
+            inner = m.group(1)
+            if ":" in inner and _has_ident_span(inner):
+                return True
+    for rm in re.finditer(rf"^\s*\|\s*`?{esc}`?\s*\|\s*`?([^|`]+?)`?\s*[|(]",
+                          prompt, re.M):
+        cell = rm.group(1).strip()
+        if _IDENT.search(cell) and re.fullmatch(r"[\w\s()+\-*/]+", cell) \
+                and re.search(r"[*/+\-]", cell):
+            return True
+    return False
+
+
 def symbolic_width(prompt: str, name: str, params: Dict[str, int]
                    ) -> Optional[Tuple[str, int, str]]:
     """Resolve a port's width when it is stated as a parameter expression, a

@@ -345,18 +345,30 @@ def _resolve_width(prompt: str, table: Dict[str, int], name: str,
     er = _explicit_range_width(prompt, name)
     if er is not None:
         return er, "explicit_range"
-    # A DECLARATION-STRENGTH parameter-expression bracket tied directly to the name
-    # (`name [PARAM-1:0]`) outranks the bridge's LOOSE same-line `N-bit` prose match
-    # — the latter can false-fire on an unrelated "... data width, default is 8
-    # bits" line that merely shares a substring with the port name. We consult the
-    # symbolic reader FIRST when the name is immediately bracket-declared, so the
-    # port binds to ITS OWN stated parameter width, not a neighbour's literal.
-    if params is not None and re.search(
-            rf"\b{re.escape(name)}\s*\[[^\]]*[A-Za-z_][^\]]*\]", prompt):
+    # A DECLARATION-STRENGTH parameter-expression width tied to the name OUTRANKS
+    # the bridge's LOOSE same-line `N-bit` prose match. `symbolic_width` recognises
+    # the param-expression declaration in EITHER order (`name [PARAM-1:0]` OR
+    # `[PARAM-1:0] name`) AND as a markdown table width-cell (`| name | N*W |`), and
+    # returns None when no such declaration is tied to the name (then we fall to
+    # prose for a genuinely prose-only port). Consulting it FIRST binds the port to
+    # ITS OWN declared parameter width, never a neighbour's coincidental literal.
+    # §4.05 false-reject + false-COMPLETE fix (Step-2.7): `[DATA_WIDTH-1:0] wdata_i`
+    # (range BEFORE the name) was losing to a "Updates the 20-bit counter" prose
+    # line, and a `| bits | N*IN_WIDTH |` cell to "each group of 4 bits" — wrong
+    # literal widths that both rejected the correct candidate AND over-claimed
+    # COMPLETE. (The old guard only matched the range-AFTER-name order.)
+    if params is not None:
         sw0 = _W.symbolic_width(prompt, name, params)
         if sw0 is not None:
             _sym, default_w, tag = sw0
             return default_w, tag
+    # the port has a param-EXPRESSION width declaration but it did NOT resolve from
+    # the parameter table (an unknown default, e.g. `bits [N*IN_WIDTH-1:0]` when N /
+    # IN_WIDTH have no stated default) -> the width is UNKNOWN, NOT a coincidental
+    # prose `N bits` literal. Return a gap so the gate enforces presence/dir but no
+    # wrong literal width (§4.05 false-reject + false-COMPLETE fix, Step-2.7).
+    if _W.has_param_expr_width(prompt, name):
+        return None, "param_expression_width"
     pw = _bridge._prose_width(prompt, name)
     if pw is not None:
         return pw, "prose_width"
@@ -568,6 +580,22 @@ def _complete_interface(record: dict, top: str
         if w is not None:
             iface.append({"name": name, "dir": direction, "width": w,
                           "signed": signed, "source": src})
+            return
+        # a port whose width is a PARAMETER EXPRESSION with no resolvable default
+        # (`bits [N*IN_WIDTH-1:0]`): the PORT is known and must be PLACED (with an
+        # unknown width=None so the gate enforces presence + direction but not a
+        # literal), while the WIDTH is recorded as an honest extraction gap. Do NOT
+        # drop the port (that emptied the interface and dropped the record to an
+        # un-gateable Tier4) and do NOT let a coincidental prose literal stand in
+        # (the §4.05 false-COMPLETE the Step-2.7 review flagged).
+        if src == "param_expression_width":
+            iface.append({"name": name, "dir": direction, "width": None,
+                          "signed": signed, "source": "param_expression_width"})
+            gaps.append({"kind": "INCOMPLETE_EXTRACTION_GAP",
+                         "type": "param_expression_width",
+                         "detail": f"{direction} port `{name}` width is a parameter "
+                                   f"expression with no resolvable default",
+                         "evidence": _evidence_line(prompt, name)})
             return
         if _is_clk(name) or _is_rst(name):
             iface.append({"name": name, "dir": direction, "width": 1,
