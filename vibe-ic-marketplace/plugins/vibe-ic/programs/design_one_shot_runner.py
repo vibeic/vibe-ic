@@ -937,6 +937,170 @@ def _enforce_power_up_determinism(rtl_dir: Path) -> int:
     return 0
 
 
+def _gather_spec_text(project: Path) -> str:
+    """Concatenate the design's natural-language spec sources (input prompt,
+    input docs, and the generated L-doc JSON) so a spec-PROSE gate (e.g. the
+    worked-example oracle) can read the SAME worked-example prose the author
+    saw. Best-effort + bounded; returns "" when no text source exists."""
+    chunks: List[str] = []
+    for d in (_pl.input_prompt_dir(project), _pl.input_doc_dir(project)):
+        if d.is_dir():
+            for f in sorted(d.rglob("*")):
+                if f.is_file() and f.suffix.lower() in (".md", ".txt"):
+                    try:
+                        chunks.append(f.read_text(errors="replace"))
+                    except OSError:
+                        pass
+    gd = _pl.generated_docs_dir(project)
+    if gd.is_dir():
+        for f in sorted(gd.glob("L*.json")):
+            try:
+                chunks.append(f.read_text(errors="replace"))
+            except OSError:
+                pass
+    return "\n\n".join(chunks)
+
+
+_DETERMINISM_MODULE_RE = re.compile(r"\bmodule\b\s+(\w+).*?\bendmodule\b", re.S)
+
+
+def _iter_module_texts(rtl: str):
+    """Yield (module_name, full `module..endmodule` text) for each module in `rtl`.
+    Verilog modules are flat (never nested), so a non-greedy `module..endmodule`
+    slice is exact enough; a mis-slice at worst leaves the worked-example oracle
+    unable to parse a module header → it SKIPs (fail-safe), never false-blocks."""
+    for m in _DETERMINISM_MODULE_RE.finditer(rtl):
+        yield m.group(1), m.group(0)
+
+
+def _resolve_top_module_text(mod_texts: Dict[str, str], top_name: str,
+                             project: Path) -> Optional[str]:
+    """Resolve the single TOP/DUT module's text for the spec worked-example oracle,
+    so the oracle never replays the DUT's example against an unrelated sibling.
+    Priority: explicit `top_name` → L9 `top_module` → the sole module. Returns None
+    when several modules exist and none is identifiable as the top (skip, never
+    guess — a false block is a §4.05 leak; a coverage gap is not)."""
+    if top_name and top_name in mod_texts:
+        return mod_texts[top_name]
+    try:
+        l9 = _rcvar_l9_top_ports(project)
+        if l9 and l9[0] and l9[0] in mod_texts:
+            return mod_texts[l9[0]]
+    except Exception:
+        pass
+    if len(mod_texts) == 1:
+        return next(iter(mod_texts.values()))
+    return None
+
+
+def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
+    """Run the structural DETERMINISM gates over the authored RTL — the SAME
+    gates the benchmark emit path applies (`shape_b_sample_export.guard_export`
+    checks C/D), now sedimented into the PRODUCTION phase-2 chain so a real
+    design gets the same determinism guarantee, not only a benchmark sample.
+    Same wiring intent as `_enforce_power_up_determinism` / `step_leaf_typo_aliases`:
+    a gate must live in the REAL emit flow, not only a benchmark harness — closing
+    the benchmark-vs-production asymmetry so both walk one `(doc|prompt) → Phase1
+    → Phase2(RTL+gates)` path.
+
+    Gates (both chip-AGNOSTIC + §4.05-self-skip — each fires ONLY on its exact
+    anti-pattern, verified to never false-block an unrelated design, so a clean
+    or not-applicable design always passes):
+      • clock-divider PHASE-FORM (`clock_divider_phase_form_check`) — a
+        two-intermediate OR divider whose intermediate is a reset-0 SELF-TOGGLE
+        (`X <= ~X`) is phase-inverted on cycle 1. The §4.05 hardening (≥2 risky
+        intermediates AND none reset HIGH) lives inside `analyze()`.
+      • spec WORKED-EXAMPLE oracle (`worked_example_sequence_oracle_check`) —
+        replays the spec's own cycle-by-cycle input→output example against the
+        RTL; a registered (Moore) output that lags one cycle is caught. SKIPs
+        unless a complete unambiguous example parses and all ports map.
+
+    A fired gate is a real determinism bug → FAIL (an ECO point), exactly what
+    the benchmark path blocks emit on; both gates self-skip otherwise."""
+    t0 = time.time()
+    rtl_dir = _pl.rtl_dir(project)
+    if not rtl_dir.is_dir():
+        return StepResult("determinism_gates", "SKIP", time.time() - t0,
+                          "no rtl/ directory yet")
+    rtl_files = [p for p in sorted(rtl_dir.rglob("*"))
+                 if p.suffix in (".v", ".sv") and p.is_file()]
+    if not rtl_files:
+        return StepResult("determinism_gates", "SKIP", time.time() - t0,
+                          "no RTL files under rtl/")
+    try:
+        import sys as _sys
+        if str(PROGRAMS_DIR) not in _sys.path:
+            _sys.path.insert(0, str(PROGRAMS_DIR))
+        import clock_divider_phase_form_check as _cdp  # noqa: E402
+        import worked_example_sequence_oracle_check as _wex  # noqa: E402
+    except Exception as e:  # pragma: no cover — defensive import guard
+        return StepResult("determinism_gates", "SKIP", time.time() - t0,
+                          f"gate modules unavailable: {e}")
+    spec_text = _gather_spec_text(project)
+    findings: List[str] = []
+    n_checked = 0
+    mod_texts: Dict[str, str] = {}
+    for f in rtl_files:
+        try:
+            txt = f.read_text(errors="replace")
+        except OSError:
+            continue
+        n_checked += 1
+        for mname, mtext in _iter_module_texts(txt):
+            mod_texts.setdefault(mname, mtext)
+        # clock-divider phase-form runs PER FILE — a self-toggle OR divider is a
+        # real phase-inversion bug WHEREVER it appears (a submodule divider is
+        # still a bug), and the gate is verified not to false-fire on level-decode
+        # / single-toggle / non-divider designs, so per-module is correct here.
+        try:
+            pf = _cdp.analyze(txt)
+            if pf.get("phase_risky"):
+                fd = pf["findings"][0]
+                findings.append(
+                    f"{f.name}: clock-divider phase-form trap — output "
+                    f"{fd['output']!r} ORs {fd['or_operands']} but "
+                    f"{fd['self_toggled']} is a reset-0 SELF-TOGGLE "
+                    f"(phase-inverted on cycle 1). Use the level-decode form "
+                    f"`clk_divK <= (cntK < N/2)`, each intermediate reset HIGH.")
+        except Exception:
+            pass
+    # spec WORKED-EXAMPLE oracle runs ONCE, on the TOP/DUT module ONLY. The
+    # disclosed example describes the DUT's I/O behaviour; replaying it against a
+    # sibling / reused submodule that merely shares generic 1-bit `data_in`/
+    # `data_out` port names would FALSE-FAIL a correct multi-module design
+    # (§4.05). Resolve the top from the caller's top_name, else L9's top_module,
+    # else the sole module; when several modules exist and none is identifiable as
+    # the top, SKIP rather than guess (a coverage gap is acceptable; a false block
+    # is not).
+    if spec_text and mod_texts:
+        top_text = _resolve_top_module_text(mod_texts, top_name, project)
+        if top_text is not None:
+            try:
+                o = _wex.analyze(top_text, spec_text)
+                if o.get("verdict") == "BLOCK":
+                    findings.append(
+                        f"{o.get('module', 'top')}: worked-example oracle — RTL "
+                        f"mismatches the spec's disclosed example "
+                        f"({o['inport']}={o['in_bits']} → {o['outport']} expected "
+                        f"{o['out_bits']}); the output must assert in the SAME cycle "
+                        f"as the trigger (a registered Moore output lags one cycle). "
+                        f"{o.get('log', '')}")
+            except Exception:
+                pass
+    if findings:
+        return StepResult(
+            "determinism_gates", "FAIL", time.time() - t0,
+            "; ".join(findings),
+            extras={"gate": "determinism_gates",
+                    "source": "shape_b_sample_export.guard_export checks C/D "
+                              "(promoted to the shared phase-2 chain)"})
+    return StepResult(
+        "determinism_gates", "PASS", time.time() - t0,
+        f"determinism gates clean over {n_checked} RTL file(s) "
+        f"(clock-divider phase-form + worked-example oracle; both self-skip "
+        f"when not applicable)")
+
+
 def step_leaf_typo_aliases(project: Path) -> StepResult:
     """ORGANIC #517 — auto-emit canonical-spelling alias wrappers for any
     emitted RTL leaf module whose name is a probable typo of a canonical
@@ -8155,6 +8319,15 @@ def main() -> int:
     # wrapper TAKES OVER the top name (port-rename, not module-rename). Best-
     # effort + polarity-safe; never gates.
     plan.append(step_reset_clock_variant_aliases(project, args.top_name))
+
+    # Structural DETERMINISM gates — the SAME gates the benchmark emit path
+    # applies (shape_b_sample_export.guard_export checks C/D: clock-divider
+    # phase-form + spec worked-example oracle), promoted into the production
+    # phase-2 chain so a real design gets the same determinism guarantee, not
+    # only a benchmark sample. Runs over rtl/ once RTL + aliases are stable.
+    # Both gates are §4.05-self-skip (fire ONLY on their exact anti-pattern),
+    # so a clean / not-applicable design always passes.
+    plan.append(step_determinism_gates(project, args.top_name))
 
     # Step 2a — design-complexity advisory (ADVISORY-ONLY, NON-GATING).
     # Runs right after RTL is available so the estimator can scan it.
