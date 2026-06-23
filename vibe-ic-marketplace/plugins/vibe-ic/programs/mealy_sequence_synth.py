@@ -38,6 +38,18 @@ Moore-style "assert forever until reset" latching output is requested (that is a
 Moore-output recognizer, not a Mealy pulse — left to other solvers).
 
 API: synth(prompt_text, top="TopModule") -> RTL string | None
+
+RTLLM-PROSE DIALECT (folded 2026-06-23): the same Mealy STATED-SEQUENCE detector
+stated in the RTLLM structured-prose dialect ("Module name:/Input ports:" + a
+"detects ... When the input is <bits>, output <NAME> is 1" sentence) that the
+VE-phrasing forms above do not phrase. synth() tries the NATIVE VE forms FIRST
+(byte-identical) and only falls through to the dialect (_dia_synth) when the native
+path returns None. The dialect is GATED to the structured-prose form (it REQUIRES a
+literal "Module name:" + "Input ports:" header), so it never re-fires on a VE bullet
+prompt the native path deliberately SKIPs. Ports are read through the RTLLM prose
+bridge; the bridge is a no-op on the VE bullet/header forms, so the VE path is
+unchanged. Every dialect fire is §4.05 parse-or-SKIP (the target sequence and the
+reset polarity are PARSED from the prose) and host-verified against the dataset TB.
 """
 from __future__ import annotations
 import re
@@ -359,7 +371,9 @@ def synth(prompt_text: str, top: str = "TopModule"):
         return None
     ins, outs = _parse_ports(prompt_text)
     if not ins or len(outs) != 1 or outs[0][1] != 1:
-        return None
+        # NATIVE VE path needs a bullet/header interface; fall through to the
+        # RTLLM-prose dialect (which reads its interface through the bridge).
+        return _dia_synth(prompt_text, top)
     out_name = outs[0][0]
     names = [n for n, _ in ins]
     clk = next((n for n in names if n.lower() in ("clk", "clock")), None)
@@ -368,18 +382,18 @@ def synth(prompt_text: str, top: str = "TopModule"):
                 or n.lower() in ("rst", "rst_n", "arst", "areset", "aresetn", "resetn")),
                None)
     if not clk or not rst:
-        return None
+        return _dia_synth(prompt_text, top)
     # any non-clk/non-reset multi-bit port would be silently dropped -> SKIP
     if any(w != 1 for n, w in ins if n not in (clk, rst)):
-        return None
+        return _dia_synth(prompt_text, top)
     fsm_ins = [n for n, w in ins if w == 1 and n not in (clk, rst)]
     if len(fsm_ins) != 1:                     # Mealy table/sequence is a single 1-bit input
-        return None
+        return _dia_synth(prompt_text, top)
     in_name = fsm_ins[0]
 
     level = _parse_reset_level(prompt_text)
     if level is None:
-        return None
+        return _dia_synth(prompt_text, top)
 
     # FORM (a): explicit Mealy transition+output table wins (it is fully determined).
     rtl = _synth_table(prompt_text, top, clk, rst, in_name, out_name, level)
@@ -390,8 +404,146 @@ def synth(prompt_text: str, top: str = "TopModule"):
     # detector (the output asserts on the completing input, never a latched 'forever'
     # output — that latch case is excluded inside _synth_sequence / _is_latching_output).
     if not _says_mealy(prompt_text):
+        return _dia_synth(prompt_text, top)
+    rtl = _synth_sequence(prompt_text, top, clk, rst, in_name, out_name, level)
+    if rtl is not None:
+        return rtl
+    # NATIVE forms did not phrase it -> try the RTLLM-prose dialect.
+    return _dia_synth(prompt_text, top)
+
+
+# =========================================================================== #
+#  RTLLM-PROSE DIALECT (folded 2026-06-23) — the doc->json->rtl GENERAL path.
+#
+#  The same Mealy STATED-SEQUENCE detector in the RTLLM structured-prose dialect.
+#  This is NOT a second solver: it is the same Mealy KMP automaton reading a second
+#  prompt dialect. Gated to the structured-prose form (REQUIRES a literal
+#  "Module name:" + "Input ports:" header) so a VE bullet prompt the native path
+#  SKIPs never re-fires here. §4.05 parse-or-SKIP throughout.
+# =========================================================================== #
+
+# The dialect fires ONLY on the structured-prose header pair; both must be present.
+_DIA_MODNAME_RE = re.compile(r"^\s*Module\s+name\s*[:：]", re.I | re.M)
+_DIA_INPORTS_RE = re.compile(r"^\s*Input\s+ports?\s*[:：]", re.I | re.M)
+
+# A reset port whose name carries the active-low `_n` suffix (rst_n/reset_n/aresetn/
+# resetn). Active-low is then ALSO confirmable from prose ("negative-edge ... reset" /
+# "active low"); active-high otherwise.
+_DIA_RSTN_NAME_RE = re.compile(r"(?:rst|reset|areset)_?n$|^aresetn$|^resetn$", re.I)
+_DIA_ACTIVE_LOW_PROSE_RE = re.compile(
+    r"negative[-\s]edge(?:[-\s]triggered)?[^.\n]*reset|active[-\s]?low", re.I)
+
+
+def _dia_parse_ports(text):
+    """(ins, outs) read through the RTLLM prose bridge then port_parser."""
+    import os
+    import sys
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import rtllm_port_bridge as _bridge
+    import port_parser
+    return port_parser.parse_ports(_bridge.bridge_prompt(text))
+
+
+def _dia_module_name(text, top):
+    """Bind to the `Module name:` field (the name the TB instantiates), else `top`."""
+    m = re.search(r"Module\s+name\s*[:：]\s*\n?\s*([A-Za-z_]\w*)", text, re.I)
+    return m.group(1) if m else top
+
+
+def _dia_target_sequence(text):
+    """The UNIQUE stated binary target sequence for the RTLLM phrasing
+    ("When the input is 10011, output MATCH is 1"), or None. >=2 bits; a second
+    distinct literal -> ambiguous -> None."""
+    found = set()
+    # "When the input is <bits>, output ... is 1" — the RTLLM detector phrasing.
+    for m in re.finditer(
+            r"when\s+the\s+input\s+is\s+([01]{2,})\b", text, re.I):
+        found.add(m.group(1))
+    # also the generic quoted / 'sequence <bits>' phrasings (shared with native).
+    for m in re.finditer(r"sequence\s+[\"']?([01]{2,})[\"']?", text, re.I):
+        found.add(m.group(1))
+    for m in re.finditer(r"(?:detects?|detection)\b[^.\n0-9]*?\b([01]{2,})\b",
+                         text, re.I):
+        found.add(m.group(1))
+    if len(found) != 1:
         return None
-    return _synth_sequence(prompt_text, top, clk, rst, in_name, out_name, level)
+    return next(iter(found))
+
+
+def _dia_reset_polarity(rst_name, text):
+    """Return active_high (bool). Active-low when the reset name carries the `_n`
+    suffix OR the prose names a negative-edge / active-low reset; else active-high."""
+    if _DIA_RSTN_NAME_RE.search(rst_name) or _DIA_ACTIVE_LOW_PROSE_RE.search(text):
+        return False
+    return True
+
+
+def _dia_synth(prompt_text, top):
+    if _is_moore(prompt_text):                       # never steal a Moore problem
+        return None
+    # GATE: the RTLLM structured-prose header pair must both be present, so a VE
+    # bullet prompt (no "Module name:"/"Input ports:" headers) never reaches here.
+    if not (_DIA_MODNAME_RE.search(prompt_text)
+            and _DIA_INPORTS_RE.search(prompt_text)):
+        return None
+    # MEALY-ONLY: a Mealy detector is observably different from a Moore one (output a
+    # function of state AND input, asserted on the COMPLETING bit). Require an explicit
+    # Mealy cue so a Moore-style state-only sequence_detector (which says neither
+    # "Mealy" nor "Moore") falls through to behavioral_fsm_synth, never stolen here.
+    if not _says_mealy(prompt_text):
+        return None
+    ins, outs = _dia_parse_ports(prompt_text)
+    if not ins or len(outs) != 1 or outs[0][1] != 1:
+        return None
+    out_name = outs[0][0]
+    names = [n for n, _ in ins]
+    clk = next((n for n in names if n.lower() in ("clk", "clock")), None)
+    rst = next((n for n in names
+                if "reset" in n.lower()
+                or n.lower() in ("rst", "rst_n", "arst", "areset", "aresetn",
+                                 "resetn", "reset_n")),
+               None)
+    if not clk or not rst:
+        return None
+    if any(w != 1 for n, w in ins if n not in (clk, rst)):
+        return None
+    fsm_ins = [n for n, w in ins if w == 1 and n not in (clk, rst)]
+    if len(fsm_ins) != 1:                            # single 1-bit data input
+        return None
+    in_name = fsm_ins[0]
+
+    # A latched 'forever/until reset' output is a MOORE recognizer, not a Mealy pulse
+    # -> not this family (left to behavioral_fsm_synth). SKIP.
+    if _is_latching_output(prompt_text):
+        return None
+    pat = _dia_target_sequence(prompt_text)
+    if pat is None or len(pat) < 2:                  # no unique stated sequence -> SKIP
+        return None
+    # If the prose explicitly says non-overlapping, honour it; the RTLLM detector
+    # default (and what this family states with "continuous input/loop detection")
+    # is the standard OVERLAPPING KMP automaton.
+    mode = _overlap_mode(prompt_text)
+    overlapping = True if mode is None else mode
+
+    # RTLLM reset: async (the prose drives it on a clock/RST edge) — emit a posedge
+    # clk + reset edge. Polarity PARSED from the name's `_n` suffix / active-low prose.
+    active_high = _dia_reset_polarity(rst, prompt_text)
+    out, nxt = _build_sequence_fsm(pat, overlapping)
+    L = len(pat)
+    states = [f"P{j}" for j in range(L)]
+    code = {f"P{j}": j for j in range(L)}
+    w = max(1, (L - 1).bit_length())
+    nxt_cases, out_cases = [], []
+    for j in range(L):
+        nxt_cases.append(
+            f"            S_P{j}: nstate = {in_name} ? S_P{nxt[j]['1']} : S_P{nxt[j]['0']};")
+        out_cases.append(
+            f"            S_P{j}: {out_name} = {in_name} ? 1'b{out[j]['1']} : 1'b{out[j]['0']};")
+    module = _dia_module_name(prompt_text, top)
+    return _emit(module, clk, rst, in_name, out_name, states, code, w,
+                 out_cases, nxt_cases, 0, True, active_high)
 
 
 if __name__ == "__main__":
