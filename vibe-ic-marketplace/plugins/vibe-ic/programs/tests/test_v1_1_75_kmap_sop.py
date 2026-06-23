@@ -128,7 +128,13 @@ def test_prob113_2012_q1g_bus_indexed_lookup():
 def test_prob116_m2014_q3_bus_indexed_dontcare():
     rtl = kmap_sop_synth.synth(_prompt("Prob116_m2014_q3"))
     assert rtl is not None
-    assert "input [3:0] x" in rtl
+    # The K-map axes are 1-based (x[1]..x[4]); the synth MUST declare the
+    # prompt's 1-based bus range [4:1], not a normalized zero-based [3:0]
+    # (which the onebased-port-range conformance guard correctly emit-blocks).
+    # var_bit maps the smallest axis index to the LSB, so [4:1] keeps x[1] at
+    # bit 0 — value-consistent with the case table (host-score confirms below).
+    assert "input [4:1] x" in rtl
+    assert "input [3:0] x" not in rtl
     assert "case (x)" in rtl
     # the don't-care assignment (->0) must be accepted by the golden TB on the
     # CARE cells; the host-score is the authoritative validation of that choice.
