@@ -171,15 +171,30 @@ def _floor_evidence(record: dict, spec: dict) -> Optional[str]:
     #     DIFFERENT non-control widths in the prompt prose (the AI cannot satisfy
     #     both; the spec contradicts itself).
     prompt = (record.get("input") or {}).get("prompt") or ""
-    for name in {p.get("name") for p in (spec.get("interface") or [])}:
+    for name in {p.get("name") for p in ((spec or {}).get("interface") or [])}:
         if not name:
             continue
         widths = set()
-        for m in re.finditer(rf"\b{re.escape(name)}\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]", prompt):
+        # ONLY count a width that comes from an ACTUAL HDL PORT DECLARATION of
+        # `name` — the `input/output/inout` keyword precedes the packed `[hi:lo]`
+        # width and the name (optionally separated by a type word like `logic`/
+        # `wire`/`reg`/`signed`). A bare `name[hi:lo]` ANYWHERE ELSE is a
+        # BIT-SELECT / SLICE of the port, a concatenation literal, or a worked
+        # example — NEVER a width declaration — and must not be read as a
+        # conflicting width. Counting slices was a false-FLOOR generator: a
+        # legitimate 66-bit port sliced as `name[65:64]` (2) and `name[63:0]`
+        # (64) looked like "conflicting widths [2, 64]"; an `RRRGGGBB` port
+        # sliced `name[7:5]`/`name[1:0]` looked like "[2, 3]". A floor (the
+        # spec genuinely contradicts itself) requires TWO real declarations
+        # disagreeing — slices/literals/examples cannot manufacture one.
+        decl_re = re.compile(
+            rf"\b(?:input|output|inout)\b[^;\n,]*?"
+            rf"\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*(?:\b\w+\s+)*?{re.escape(name)}\b")
+        for m in decl_re.finditer(prompt):
             widths.add(abs(int(m.group(1)) - int(m.group(2))) + 1)
         if len(widths) > 1:
             return (f"self-contradictory spec: port `{name}` declared with "
-                    f"conflicting widths {sorted(widths)} in the prompt")
+                    f"conflicting widths {sorted(widths)} in TWO HDL declarations")
     return None
 
 

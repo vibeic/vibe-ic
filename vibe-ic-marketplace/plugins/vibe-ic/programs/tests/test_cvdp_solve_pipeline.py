@@ -181,15 +181,10 @@ def test_tier4_no_interface_is_ungateable():
     assert res["gate"]["ports"] == []
 
 
-# A self-contradictory spec: the SAME data port is declared with two different
-# widths in the prompt -> the AI cannot satisfy both -> Tier5 floor (cited).
-CONTRADICT_PROMPT = """Design a module `widget` with a data path.
-
-In one section the spec says `data_in [7:0]` is an 8-bit input.
-In another section the spec says `data_in [15:0]` is a 16-bit input.
-The output `result [7:0]` is 8 bits.
-"""
-
+# A GENUINE floor: the same port is DECLARED twice in real HDL declaration
+# syntax (`input ... [hi:lo] name`) with two different widths -> the AI cannot
+# satisfy both. This is the ONLY shape that may be called a floor; prose
+# mentions / bit-selects / worked examples may NOT manufacture one.
 CONTRADICT_TB = """import cocotb
 from cocotb.triggers import Timer
 
@@ -200,15 +195,98 @@ async def test_widget(dut):
     r = int(dut.result.value)
 """
 
+GENUINE_FLOOR_PROMPT = """Design a module `widget` with a data path.
 
-def test_tier5_self_contradictory_spec_is_floor():
-    rec = _make_record("widget", CONTRADICT_PROMPT, CONTRADICT_TB)
+In the first variant the interface is:
+    input  logic [7:0]  data_in,
+    output logic [7:0]  result
+
+In the second variant the interface is:
+    input  logic [15:0] data_in,
+    output logic [7:0]  result
+"""
+
+
+def test_tier5_genuine_two_decl_contradiction_is_floor():
+    rec = _make_record("widget", GENUINE_FLOOR_PROMPT, CONTRADICT_TB)
     res = SP.solve(rec)
     assert res["tier"] == SP.TIER_FLOOR
     assert "floor_reason" in res["gate"]
     assert "data_in" in res["gate"]["floor_reason"]
-    # the cited evidence names the conflicting widths.
+    # the cited evidence names the conflicting DECLARED widths.
     assert "8" in res["gate"]["floor_reason"] and "16" in res["gate"]["floor_reason"]
+
+
+# --------------------------------------------------------------------------- #
+# §4.05 NO-FALSE-FLOOR — the dominant lens for a suppressor gate: a floor means
+# "unsolvable, give up", so a FALSE floor is far worse than a missed one. These
+# pin the EXACT real-dataset shapes the old slice-blind detector wrongly called
+# floors (64b66b_decoder / sync_serial_communication / vga_controller). Each
+# port has ONE consistent declared width; the multiple bracketed numbers are
+# BIT-SELECTS / multi-mode prose / worked examples — NOT conflicting decls.
+# --------------------------------------------------------------------------- #
+def test_no_false_floor_on_bit_slices_of_one_port():
+    # decoder_data_in is one 66-bit port; `[65:64]` (sync header) and `[63:0]`
+    # (payload) are SLICES — must NOT read as conflicting widths [2, 64].
+    prompt = """Implement `dec`. The decoder processes a 66-bit word.
+    input  logic [65:0] decoder_data_in,
+    output logic [63:0] decoder_data_out
+
+The sync header is `decoder_data_in[65:64]` and the payload is
+`decoder_data_in[63:0]`. Example: decoder_data_in = {2'b01, 64'hA5A5A5A5A5A5A5A5}.
+"""
+    tb = CONTRADICT_TB.replace("data_in", "decoder_data_in").replace("test_widget", "test_dec")
+    rec = _make_record("dec", prompt, tb)
+    res = SP.solve(rec)
+    assert res["tier"] != SP.TIER_FLOOR, res["gate"].get("floor_reason")
+
+
+def test_no_false_floor_on_multimode_valid_bits():
+    # data_in is a 64-bit port; the 8/16/32/64 are MODE-selected valid-bit counts
+    # in prose, not conflicting declarations.
+    prompt = """Implement `ser`. Transmitter with selectable width.
+    input  logic [63:0] data_in,
+    output logic        tx
+
+- `3'h1`: 8 bits. `data_in [7:0]` is the valid data.
+- `3'h2`: 16 bits. `data_in [15:0]` is the valid data.
+- `3'h3`: 32 bits. `data_in [31:0]` is the valid data.
+- `3'h4`: 64 bits. `data_in [63:0]` is the valid data.
+"""
+    rec = _make_record("ser", prompt, CONTRADICT_TB.replace("test_widget", "test_ser"))
+    res = SP.solve(rec)
+    assert res["tier"] != SP.TIER_FLOOR, res["gate"].get("floor_reason")
+
+
+def test_no_false_floor_on_rgb_subfield_slices():
+    # color_in is one 8-bit RRRGGGBB port; `[7:5]`/`[4:2]`/`[1:0]` are subfields.
+    prompt = """Implement `vga`. Pixel color in RRRGGGBB format.
+    input  logic [7:0] color_in,
+    output logic [7:0] red
+
+- `red`   = {color_in[7:5], 5'd0};
+- `green` = {color_in[4:2], 5'd0};
+- `blue`  = {color_in[1:0], 6'd0};
+"""
+    tb = CONTRADICT_TB.replace("data_in", "color_in").replace("test_widget", "test_vga")
+    rec = _make_record("vga", prompt, tb)
+    res = SP.solve(rec)
+    assert res["tier"] != SP.TIER_FLOOR, res["gate"].get("floor_reason")
+
+
+def test_prose_double_width_is_ambiguous_not_floor():
+    # Two PROSE mentions of different widths (no real HDL declaration) are
+    # AMBIGUOUS, not provably contradictory -> NOT a floor (let the AI attempt).
+    # This is the exact fixture the old false-floor test used.
+    prompt = """Design a module `widget` with a data path.
+
+In one section the spec says `data_in [7:0]` is an 8-bit input.
+In another section the spec says `data_in [15:0]` is a 16-bit input.
+The output `result [7:0]` is 8 bits.
+"""
+    rec = _make_record("widget", prompt, CONTRADICT_TB)
+    res = SP.solve(rec)
+    assert res["tier"] != SP.TIER_FLOOR, res["gate"].get("floor_reason")
 
 
 # --------------------------------------------------------------------------- #
