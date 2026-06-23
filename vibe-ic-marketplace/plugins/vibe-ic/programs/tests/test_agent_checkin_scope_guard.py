@@ -22,7 +22,7 @@ import agent_checkin_scope_guard as g  # noqa: E402
 P_BENCH_DATA = "benchmark-data/ic/spm/reports/final_summary.md"
 P_BENCH_RUN = "benchmark-data/evaluation/rtllm/run_blind/samples/foo.v"
 P_BACKLOG = "vibe-ic-marketplace/community/backlogs/ORGANIC-20260613-x.yaml"
-P_PLUGIN = "vibe-ic-marketplace/plugins/vibe-ic/programs/phase2_one_shot_runner.py"
+P_PLUGIN = "vibe-ic-marketplace/plugins/vibe-ic/programs/design_one_shot_runner.py"
 P_PLUGIN_SKILL = "vibe-ic-marketplace/plugins/vibe-ic/skills/phase1/SKILL.md"
 P_MCP = "vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/src/index.js"
 P_ROOT = "README.md"

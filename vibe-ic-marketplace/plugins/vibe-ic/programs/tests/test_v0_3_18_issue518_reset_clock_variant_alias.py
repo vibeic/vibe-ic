@@ -187,7 +187,7 @@ def test_parameterized_module_ports_parse(tmp_path):
 # ── REOPEN ROUND-2 REGRESSIONS (#518): wired into the runner (was DORMANT) ──
 
 def _runner():
-    import phase2_one_shot_runner as P
+    import design_one_shot_runner as P
     import _path_layout as _pl
     return P, _pl
 

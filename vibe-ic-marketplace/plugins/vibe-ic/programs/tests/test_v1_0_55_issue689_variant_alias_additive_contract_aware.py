@@ -45,7 +45,7 @@ import pytest
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PLUGIN / "programs"))
 import reset_clock_variant_alias as V  # noqa: E402
-import phase2_one_shot_runner as R  # noqa: E402
+import design_one_shot_runner as R  # noqa: E402
 
 
 # ════════════════════════════════════════════════════════════════════════

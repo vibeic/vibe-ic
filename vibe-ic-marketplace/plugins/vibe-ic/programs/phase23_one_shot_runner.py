@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """phase23_one_shot_runner.py — Phase 2 + Phase 3 chain.
 
-Thin orchestrator that calls phase2_one_shot_runner.py and then
+Thin orchestrator that calls design_one_shot_runner.py and then
 phase3_one_shot_runner.py, aggregating their results into a unified
 report.
 
 This file replaces the legacy monolithic phase23 runner — Phase 2 logic
-now lives in phase2_one_shot_runner.py, Phase 3 in phase3_one_shot_runner.py.
+now lives in design_one_shot_runner.py, Phase 3 in phase3_one_shot_runner.py.
 phase23 is just the chain.
 
 Usage:
@@ -111,7 +111,7 @@ def main() -> int:
             return 0
 
     t0 = time.time()
-    p2_runner = PROGRAMS_DIR / "phase2_one_shot_runner.py"
+    p2_runner = PROGRAMS_DIR / "design_one_shot_runner.py"
     p3_runner = PROGRAMS_DIR / "phase3_one_shot_runner.py"
     if not p2_runner.is_file() or not p3_runner.is_file():
         print(f"ERROR: child runners missing — phase2={p2_runner.is_file()} "

@@ -194,7 +194,7 @@ def test_step_yosys_synth_pre_gates_duplicate(tmp_path, monkeypatch):
     invoke the REAL step_yosys_synth. The PRE-synth #639 gate must FAIL
     with the catalog-glue closure diagnostic, and (load-bearing) yosys must
     NOT have been invoked — the crash is prevented, not triaged after."""
-    import phase2_one_shot_runner as P2
+    import design_one_shot_runner as P2
 
     proj = tmp_path / "proj"
     rtl = proj / "phase2" / "stage1" / "rtl"
@@ -220,7 +220,7 @@ def test_step_yosys_synth_no_false_gate_on_clean(tmp_path, monkeypatch):
     """NEGATIVE no-leak integration: a clean closure (no duplicate) must
     NOT trip the #639 gate — step_yosys_synth proceeds past it to the
     actual yosys invocation (which we stub to a sentinel)."""
-    import phase2_one_shot_runner as P2
+    import design_one_shot_runner as P2
 
     proj = tmp_path / "proj"
     rtl = proj / "phase2" / "stage1" / "rtl"

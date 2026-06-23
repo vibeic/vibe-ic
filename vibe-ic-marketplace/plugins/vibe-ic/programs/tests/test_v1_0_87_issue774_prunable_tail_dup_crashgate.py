@@ -5,7 +5,7 @@ crashed yosys-slang raw.
 現象 (round-14 v1.0.85, opentitan_aes reused-IP, adversarial-verified NEW):
 the #639 duplicate-module crash-gate scans only the reachable closure of
 synth_top (catalog_glue_closure_resolver.resolve, ~L325-326 pre-fix), but
-`phase2_one_shot_runner._select_asic_rtl_sources` feeds the FULL flat glob
+`design_one_shot_runner._select_asic_rtl_sources` feeds the FULL flat glob
 to yosys_synth (prune is advisory — "never auto-drop"). So a duplicate-
 module pair classified PRUNABLE is invisible to the gate (duplicates=[],
 verdict=PASS) yet still handed to synth → yosys-slang aborts raw with
@@ -98,7 +98,7 @@ def test_step_yosys_synth_gates_prunable_tail_duplicate(tmp_path,
     must FAIL with the #774 STAGED_DUPLICATE diagnostic, and (load-bearing)
     yosys must NOT have been invoked — the crash is prevented, not triaged
     after it aborts."""
-    import phase2_one_shot_runner as P2
+    import design_one_shot_runner as P2
 
     proj = tmp_path / "proj"
     rtl = proj / "phase2" / "stage1" / "rtl"

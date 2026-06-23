@@ -31,7 +31,7 @@ Run AFTER program PASS to spot-check the deterministic output for false-PASS / g
 | Skill | Pairs with | Verifies |
 |---|---|---|
 | `phase1-output-verify`          | phase1_one_shot_runner  | L docs schema + `__TODO__` cleanness + cross-doc consistency + anti-fabrication |
-| `phase2-rtl-verify`             | phase2_one_shot_runner  | RTL ↔ L9 contract + dead-state/dead-reg + Wave-34 device-BR + self-RX mask + reference TB scenario coverage |
+| `phase2-rtl-verify`             | design_one_shot_runner  | RTL ↔ L9 contract + dead-state/dead-reg + Wave-34 device-BR + self-RX mask + reference TB scenario coverage |
 | `phase3-backend-verify`         | phase3_one_shot_runner  | Synth quality + util sweet-spot + multi-corner STA + DRC violations + LVS clean + GDS sanity |
 | `analog-output-verify`          | analog_one_shot_runner  | A1..A8 corner sweep + A6/A8 vs A4 deltas + LEF/lib completeness |
 | `compliance-gate-spot-check`    | flow_compliance_check   | Random sample of PASS gates against gameable patterns; waiver rationale quality |

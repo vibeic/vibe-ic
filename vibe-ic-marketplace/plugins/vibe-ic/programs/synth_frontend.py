@@ -1,7 +1,7 @@
 """Shared SystemVerilog-frontend selection logic.
 
-Both the Phase-2 (`phase2_one_shot_runner.step_yosys_synth`,
-`phase2_one_shot_runner.step_reference_tb`) and the Phase-3
+Both the Phase-2 (`design_one_shot_runner.step_yosys_synth`,
+`design_one_shot_runner.step_reference_tb`) and the Phase-3
 (`phase3_one_shot_runner.step_synth`) backend steps read RTL with a
 *default* frontend that only handles a SystemVerilog SUBSET:
 

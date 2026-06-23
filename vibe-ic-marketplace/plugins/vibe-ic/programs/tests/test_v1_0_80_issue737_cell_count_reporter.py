@@ -11,7 +11,7 @@ Two reporters shared one naming convention and BOTH missed real cells:
     backslash-dollar) and ZERO lowercase liberty cells (`sky130_fd_sc_hd__*`).
     A fully-populated post-synth netlist of either style reported 0 cells.
 
-(2) phase2_one_shot_runner keyed its synth-cells parser on the substring
+(2) design_one_shot_runner keyed its synth-cells parser on the substring
     `'Number of cells'` and read stdout ONLY. Some yosys builds print only a
     bare `'NNNNN cells'` stat line, and any count that lands on stderr was
     dropped → yosys_synth reported cells=? for a real netlist.
@@ -23,7 +23,7 @@ FIX (chip-AGNOSTIC, Bucket A):
       generic gates + lowercase liberty cells. A genuinely-empty netlist still
       reports 0 but is FLAGGED DISTINCTLY (`empty_netlist=True`) so a
       parser-miss is never confused with a real empty netlist.
-  (2) phase2_one_shot_runner matches BOTH stat forms over stdout+stderr via the
+  (2) design_one_shot_runner matches BOTH stat forms over stdout+stderr via the
       shared `_parse_yosys_stat_cells` helper.
 
 This module pins the actual yosys `stat` line FORMAT so the emitter↔checker
@@ -36,7 +36,7 @@ from pathlib import Path
 import pytest
 
 import final_report_generate as frg
-import phase2_one_shot_runner as p2
+import design_one_shot_runner as p2
 
 
 # --- fixtures: the EXACT yosys stat / netlist shapes -----------------------

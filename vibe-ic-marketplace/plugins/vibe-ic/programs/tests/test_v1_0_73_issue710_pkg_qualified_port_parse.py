@@ -182,7 +182,7 @@ def test_end_state_emitted_tb_binds_real_pins(tmp_path):
     """END-STATE: step_full_stack_tb_gen emits a TB that binds the REAL
     ports (tl_i/tl_o/idle_o) and NEVER the duplicate `.tlul_pkg(...)` /
     `reg tlul_pkg`."""
-    import phase2_one_shot_runner as P2
+    import design_one_shot_runner as P2
     proj = _build_l9_project(tmp_path)
     res = P2.step_full_stack_tb_gen(proj, "chip_top")
     assert res.status in ("SKIP", "PASS", "WAIVED"), res.status
@@ -205,7 +205,7 @@ def test_end_state_emitted_tb_compiles_vs_flattened_dut(tmp_path):
     iverilog = shutil.which("iverilog")
     if not iverilog:
         pytest.skip("iverilog not available")
-    import phase2_one_shot_runner as P2
+    import design_one_shot_runner as P2
     proj = _build_l9_project(tmp_path)
     P2.step_full_stack_tb_gen(proj, "chip_top")
     tb = (proj / "phase2" / "stage1" / "sim_full_stack"

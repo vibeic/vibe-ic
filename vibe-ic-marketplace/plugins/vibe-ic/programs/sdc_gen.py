@@ -133,7 +133,7 @@ def _is_aid_class(project: Path, l9: dict,
 
     v1.6.96 (issue #28 Bug 1) — also consult the ``--ic-class`` CLI arg
     first. The arg is the verdict from
-    ``phase2_one_shot_runner.detect_ic_class`` (e.g.
+    ``design_one_shot_runner.detect_ic_class`` (e.g.
     ``aid_class_half_duplex``); when present it short-circuits the
     L-doc scan, which was DEAD CODE on benchmark projects whose
     phase1 never propagated the verdict into any L doc.

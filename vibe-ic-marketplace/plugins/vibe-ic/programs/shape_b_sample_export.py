@@ -111,7 +111,7 @@ import spec_conformance_check as _scc  # noqa: E402
 import emit_attestation as _ea  # noqa: E402
 
 # The runner's own inner-rename suffix (step_reset_clock_variant_aliases,
-# phase2_one_shot_runner.py). chip-AGNOSTIC structural token, not a chip name.
+# design_one_shot_runner.py). chip-AGNOSTIC structural token, not a chip name.
 RCVAR_INNER_SUFFIX = "__rcvar_inner"
 
 # Comment/string-stripping reused from the alias program so a `module X` token

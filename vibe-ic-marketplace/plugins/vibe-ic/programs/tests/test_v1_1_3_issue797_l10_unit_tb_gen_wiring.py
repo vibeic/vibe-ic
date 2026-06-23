@@ -17,7 +17,7 @@ from pathlib import Path
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import testbench_gen as TBG          # noqa: E402
-import phase2_one_shot_runner as R   # noqa: E402
+import design_one_shot_runner as R   # noqa: E402
 import _path_layout as _pl            # noqa: E402
 
 

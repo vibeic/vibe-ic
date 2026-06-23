@@ -40,7 +40,7 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import reset_clock_variant_alias as V        # noqa: E402
-import phase2_one_shot_runner as R           # noqa: E402
+import design_one_shot_runner as R           # noqa: E402
 import _path_layout as PL                     # noqa: E402
 
 _IV = shutil.which("iverilog")

@@ -3,7 +3,7 @@
 ip_catalog_query.py — IP catalog query + match + pull engine.
 
 Plugin pipeline hooks:
-  - phase2_one_shot_runner.step_rtl_gen → query catalog when rtl_gen=null
+  - design_one_shot_runner.step_rtl_gen → query catalog when rtl_gen=null
   - ic_class_profile.detect_ic_class → annotate profile with catalog hits
   - catalog-glue-author skill → consume CatalogMatch list to pull RTL
 

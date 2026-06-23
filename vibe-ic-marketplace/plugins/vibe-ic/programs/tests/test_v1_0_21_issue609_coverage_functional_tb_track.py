@@ -37,7 +37,7 @@ from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PLUGIN / "programs"))
-import phase2_one_shot_runner as P  # noqa: E402
+import design_one_shot_runner as P  # noqa: E402
 
 PASS_XML = ('<testsuite name="func" tests="1" failures="0" errors="0">'
             '<testcase name="blinky_gpio_toggle"/></testsuite>\n')

@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import flow_compliance_check as F  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parent.parent
-_SRC = (PROGRAMS / "phase2_one_shot_runner.py").read_text()
+_SRC = (PROGRAMS / "design_one_shot_runner.py").read_text()
 
 
 def test_no_sim_to_all_proved_derivation_in_runner():

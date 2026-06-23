@@ -20,7 +20,7 @@ from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PLUGIN / "programs"))
-import phase2_one_shot_runner as P  # noqa: E402
+import design_one_shot_runner as P  # noqa: E402
 
 _MACRO_HEADER = (
     "`ifndef PRIM_ASSERT_SV\n"

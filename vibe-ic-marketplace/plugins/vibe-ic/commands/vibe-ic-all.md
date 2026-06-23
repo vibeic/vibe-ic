@@ -18,7 +18,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/programs/vibe_ic_one_shot_runner.py $ARGUMENTS
 
 This runner is the **top-level chain**:
 1. Auto-detect Path A (NL prompt) vs Path B (vendor docs) → run `phase1_one_shot_runner` if needed
-2. `phase2_one_shot_runner` (= phase1 + phase2)
+2. `design_one_shot_runner` (= phase1 + phase2)
 3. `analog_one_shot_runner` (only runs if analog blocks are declared; analog FAIL does not block digital)
 4. `phase3_one_shot_runner` (synth → PnR → GDS → DRC → LVS)
 

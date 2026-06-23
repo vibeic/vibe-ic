@@ -14,21 +14,21 @@ import sys
 from pathlib import Path
 
 P2_DIR = Path(__file__).resolve().parents[1]
-P2_SCRIPT = P2_DIR / "phase2_one_shot_runner.py"
+P2_SCRIPT = P2_DIR / "design_one_shot_runner.py"
 
 
 def _load_p2():
-    """phase2_one_shot_runner uses @dataclass at module scope which requires
+    """design_one_shot_runner uses @dataclass at module scope which requires
     sys.modules registration BEFORE exec — otherwise dataclass field resolution
     raises AttributeError on cls.__module__.__dict__.
     """
-    if "phase2_one_shot_runner" in sys.modules:
-        return sys.modules["phase2_one_shot_runner"]
+    if "design_one_shot_runner" in sys.modules:
+        return sys.modules["design_one_shot_runner"]
     # Put programs/ on sys.path so the module's relative imports resolve, then
     # use the standard importlib.import_module mechanism.
     sys.path.insert(0, str(P2_DIR))
     try:
-        return importlib.import_module("phase2_one_shot_runner")
+        return importlib.import_module("design_one_shot_runner")
     finally:
         # Leave on path for subsequent tests
         pass
@@ -69,7 +69,7 @@ def test_build_final_audit_cmd_preserves_order_for_other_flags():
 
 
 def test_main_argparse_accepts_skip_analog():
-    """phase2_one_shot_runner.main() argparse must accept --skip-analog."""
+    """design_one_shot_runner.main() argparse must accept --skip-analog."""
     mod = _load_p2()
     # Construct an isolated argparse mimicking main's parser
     import argparse
@@ -93,5 +93,5 @@ def test_vibe_ic_runner_forwards_skip_analog_to_phase2():
     # The forwarding logic added at v0.1.54 capture
     assert "if args.skip_analog:" in src
     assert 'p2_args.append("--skip-analog")' in src, (
-        "vibe_ic_one_shot_runner must forward --skip-analog to phase2_one_shot_runner.py "
+        "vibe_ic_one_shot_runner must forward --skip-analog to design_one_shot_runner.py "
         "so final_audit doesn't FAIL a digital-only project on analog file checks.")

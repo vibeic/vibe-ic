@@ -1,5 +1,5 @@
 """ORGANIC #778 (P2) — the catalog-glue over-broad PRUNE advisory was gated
-behind `if verdict in (DUPLICATE, STAGED_DUPLICATE)` (phase2_one_shot_runner.py),
+behind `if verdict in (DUPLICATE, STAGED_DUPLICATE)` (design_one_shot_runner.py),
 so on a PASS verdict with files_prunable>0 the advisory was suppressed entirely
 and the runner fed the FULL flat glob to yosys-slang with ZERO diagnostic. An
 unreachable prunable-tail file using a cross-file macro it never `include`s then
@@ -22,7 +22,7 @@ import pytest
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 import catalog_glue_closure_resolver as CG  # noqa: E402
-import phase2_one_shot_runner as P  # noqa: E402
+import design_one_shot_runner as P  # noqa: E402
 
 
 def _mk_rtl(tmp_path):

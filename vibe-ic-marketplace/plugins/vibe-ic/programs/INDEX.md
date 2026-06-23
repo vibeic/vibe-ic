@@ -553,7 +553,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `phase1_verify_aggregate` | any | v0.1.50 | Phase 1 output verification aggregator (Pattern-C → program). |
 | `phase23_completion_self_audit_check` | any | v0.109 | v0.109 mandatory self-audit gate. |
 | `phase23_one_shot_runner` | any | — | Phase 2 + Phase 3 chain. |
-| `phase2_one_shot_runner` | any | Wave 45 | Phase 2 main impl (L1-L23 → RTL → SOF → <half-duplex-tester>). |
+| `design_one_shot_runner` | any | Wave 45 | Phase 2 main impl (L1-L23 → RTL → SOF → <half-duplex-tester>). |
 | `phase2_scaffold_gen` | any | v0.1.88 | Phase 1 L docs → Phase 2 Verilog scaffolding. |
 | `phase2_verify_aggregate` | any | v0.1.50 | Phase 2 output verification aggregator (Pattern-C → program). |
 | `phase3_backend_step` | any | — | single dispatcher for Phase 3 backend per-step entries. |
@@ -1385,7 +1385,7 @@ _(no programs in this group)_
 - `phase1_verify_aggregate` — Phase 1 output verification aggregator (Pattern-C → program).  _[v0.1.50]_
 - `phase23_completion_self_audit_check` — v0.109 mandatory self-audit gate.  _[v0.109]_
 - `phase23_one_shot_runner` — Phase 2 + Phase 3 chain.
-- `phase2_one_shot_runner` — Phase 2 main impl (L1-L23 → RTL → SOF → <half-duplex-tester>).  _[Wave 45]_
+- `design_one_shot_runner` — Phase 2 main impl (L1-L23 → RTL → SOF → <half-duplex-tester>).  _[Wave 45]_
 - `phase2_scaffold_gen` — Phase 1 L docs → Phase 2 Verilog scaffolding.  _[v0.1.88]_
 - `phase2_verify_aggregate` — Phase 2 output verification aggregator (Pattern-C → program).  _[v0.1.50]_
 - `phase3_backend_step` — single dispatcher for Phase 3 backend per-step entries.

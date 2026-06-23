@@ -27,7 +27,7 @@ from pathlib import Path
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import synth_frontend as SF  # noqa: E402
-import phase2_one_shot_runner as R  # noqa: E402
+import design_one_shot_runner as R  # noqa: E402
 
 
 # the field agent's exact sv2v stderr signature (round-3 reproduction):
