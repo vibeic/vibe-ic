@@ -301,7 +301,15 @@ def parse_kmap_grid(prompt: str):
         bit_of = {ix: pos for pos, ix in enumerate(order)}
         var_bit = {v: bit_of[int(re.fullmatch(rf"{re.escape(bus_name)}\[(\d+)\]", v).group(1))]
                    for v in all_vars}
-        in_field = ("bus", bus_name, bus_w)
+        # PRESERVE the prompt's DECLARED bus index range instead of normalizing to
+        # zero-based [w-1:0]. The K-map axis indices ARE the declared bit indices
+        # (x[1]..x[4] => 1-based => [4:1]); a hardcoded [3:0] declaration is an
+        # off-by-one vs the prompt and is (correctly) emit-blocked by the
+        # `onebased-port-range` conformance guard. `var_bit` already maps the
+        # smallest index to bit 0 (the LSB), so a `[hi:lo]` declaration with
+        # lo=min(idxs) keeps that index at the LSB — value-consistent with the
+        # case table. (0-based axes give lo=0,hi=w-1 => [w-1:0], unchanged.)
+        in_field = ("bus", bus_name, bus_w, min(order), max(order))
     else:
         in_names = [n for n, _ in ins]
         if any(w != 1 for _, w in ins):
@@ -350,9 +358,11 @@ def _emit_case_rtl(in_field, out_name, table, top: str) -> str:
     bus_form = isinstance(in_field, tuple) and in_field and in_field[0] == "bus"
     lines = []
     if bus_form:
-        _, bus_name, bus_w = in_field
+        # in_field may be the legacy 3-tuple or the range-carrying 5-tuple.
+        bus_name, bus_w = in_field[1], in_field[2]
+        lo, hi = (in_field[3], in_field[4]) if len(in_field) >= 5 else (0, bus_w - 1)
         lines.append(f"module {top} (")
-        lines.append(f"  input [{bus_w-1}:0] {bus_name},")
+        lines.append(f"  input [{hi}:{lo}] {bus_name},")
         lines.append(f"  output reg {out_name}")
         lines.append(");")
         lines.append("  always @(*) begin")
