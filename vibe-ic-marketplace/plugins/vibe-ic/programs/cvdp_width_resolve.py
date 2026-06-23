@@ -198,6 +198,41 @@ def param_defaults(prompt: str, tb: str = "") -> Dict[str, int]:
     return out
 
 
+def context_param_defaults(record: dict) -> Dict[str, int]:
+    """Parameter -> default-int harvested from the PROVIDED `input['context']` RTL
+    (the `parameter NAME = N` / `localparam NAME = N` declarations of the surrounding
+    design files the submitter is given).
+
+    §3.9 + §4.05: a parameter's DECLARED DEFAULT is part of the interface/config
+    contract the spec hands the author — NOT the functional answer — so reading it
+    from the provided context is the same header-level recovery the bridge already
+    performs on the skeleton header. We read ONLY `parameter`/`localparam = <int>`
+    declarations (never the body), and the caller merges these BELOW the
+    prompt/testbench defaults (a value the prompt states is never overridden). This
+    resolves `[DATA_WIDTH-1:0]`-style widths whose default lives only in the
+    provided RTL (closing the `param_expression_width` extraction gap honestly —
+    the value IS in the spec chain, just in the context file rather than the prose).
+    """
+    out: Dict[str, int] = {}
+    if not isinstance(record, dict):
+        return out
+    ctx = (record.get("input") or {}).get("context") or {}
+    if not isinstance(ctx, dict):
+        return out
+    for k, v in ctx.items():
+        if not (isinstance(v, str) and (k.endswith(".v") or k.endswith(".sv"))):
+            continue
+        for rx in (_CODE_PARAM_RE, _LOCALPARAM_RE):
+            for m in rx.finditer(v):
+                nm, tok = m.group(1), m.group(2)
+                if nm and nm not in out:
+                    try:
+                        out[nm] = _as_int(tok)
+                    except ValueError:
+                        pass
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # (2) safe width-expression evaluator
 # --------------------------------------------------------------------------- #

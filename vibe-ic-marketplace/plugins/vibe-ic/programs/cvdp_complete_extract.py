@@ -533,6 +533,13 @@ def _complete_interface(record: dict, top: str
     # `[N-1:0]` / `[DATA_WIDTH-1:0]` width to its integer default. Computed up front
     # so the recovered-read corroboration can use the width resolver.
     param_defaults = _W.param_defaults(prompt, tb)
+    # merge parameter defaults declared in the PROVIDED input.context RTL, BELOW the
+    # prompt/testbench defaults (a prompt-stated value is never overridden). Closes
+    # `param_expression_width` gaps whose default lives only in the context file —
+    # §3.9: the value IS in the spec chain (interface/config, header-level, never
+    # the body); §4.05: only fills a width the prose/tb left unresolved.
+    for _nm, _v in _W.context_param_defaults(record).items():
+        param_defaults.setdefault(_nm, _v)
     table = _bridge._test_case_table(prompt) or {}
 
     # (a) prefer a non-empty skeleton header (header only) — fully self-describing.
