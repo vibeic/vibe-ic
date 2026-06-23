@@ -118,6 +118,19 @@ try:
 except ImportError:  # packaged
     from . import _provenance as _prov  # type: ignore
 
+# CVDP enhance — program-first STRUCTURAL extractors for the four artifact classes
+# the legacy checklist extractor missed (register-map, enumerated-mode literal map +
+# outside-set boundary, FSM transition graph, worked-example I/O pairs, rounding/
+# packing semantics). Each exposes extract(text)->[dict] with ChecklistItem fields;
+# they are §4.05-conservative (only structural-anchored items, [] otherwise).
+_CVDP_EXTRACTORS = []
+for _modname in ("cvdp_regmap_extract", "cvdp_enumset_extract", "cvdp_fsm_extract",
+                 "cvdp_numeric_pack_extract", "cvdp_worked_example_extract"):
+    try:
+        _CVDP_EXTRACTORS.append(__import__(_modname))
+    except Exception:  # extractor not present in this checkout -> skip silently
+        pass
+
 # ORGANIC #770 — checklist kinds whose evidence is a FREE-PROSE keyword/regex
 # (low confidence) vs a real structural source. STRUCTURAL kinds (a real markdown
 # table row, a given-code port header) keep their historical blocking power; a
@@ -1462,6 +1475,28 @@ def extract_checklist(spec_text: str) -> List[ChecklistItem]:
                 requirement=f"{label}: {mm.group(0).strip()}",
                 evidence=mm.group(0).strip(),
                 coverage_tokens=[mm.group(1) if mm.groups() else mm.group(0)]))
+
+    # --- CVDP program-first structural extractors (register-map / enum-set +
+    #     boundary / FSM transitions / worked-examples / rounding-packing). Each
+    #     emits ChecklistItem-shaped dicts anchored to a real structure; they
+    #     recover the four classes the legacy extractor above misses. Items are
+    #     merged with the above by extract_chain's _item_key (dups collapse). ---
+    for _ext in _CVDP_EXTRACTORS:
+        try:
+            for d in (_ext.extract(spec_text) or []):
+                if not isinstance(d, dict) or not d.get("kind") or not d.get("requirement"):
+                    continue
+                items.append(ChecklistItem(
+                    kind=str(d["kind"]),
+                    requirement=str(d["requirement"]),
+                    evidence=str(d.get("evidence", ""))[:200],
+                    coverage_tokens=list(d.get("coverage_tokens", []) or []),
+                    provenance=str(d.get("provenance", "STRUCTURAL")),
+                    block_eligible=bool(d.get("block_eligible", True))))
+        except Exception:
+            # an extractor must never break the canonical checklist — §4.05 it stays
+            # additive; a malformed extractor result is dropped, not propagated.
+            continue
 
     return items
 
