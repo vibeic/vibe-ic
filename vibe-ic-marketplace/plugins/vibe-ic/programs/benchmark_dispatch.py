@@ -393,7 +393,7 @@ def cmd_reattempt_floor(bench: str) -> int:
     return 0
 
 
-def cmd_score(bench: str, run: str, dataset: str | None):
+def cmd_score(bench: str, run: str, dataset: str | None, allow_ungated: bool = False):
     e = _entry(bench)
     if e["shape"] not in ("B", "C"):
         raise SystemExit(f"--score only handles Shape B + C here. Shape {e['shape']} → use score_cocotb_mcp.py / benchmark-verify skill.")
@@ -456,6 +456,24 @@ def cmd_score(bench: str, run: str, dataset: str | None):
               "scored on this branch MUST disclose 'blindness audit "
               "unavailable' in its RESULT.md (ORGANIC-20260605-transcripts-"
               "export-default).")
+    # Front-door GATE-AS-SOLE-EMIT-PATH guard: every scoreable sample MUST carry a
+    # valid emit-path attestation (gates_atomic / shape_b_sample_export wrote it on a
+    # clean emit). A sample authored directly into samples/ — bypassing the emit gates
+    # + port-reorder — has none, so the number would measure the raw author, not the
+    # runner (and silently undercount emit-gate-recoverable designs). HARD-BLOCK by
+    # default, exactly like the clean-room + blindness guards; --allow-ungated opts an
+    # exploratory direct-author run out (its RESULT.md MUST then disclose NON-CANONICAL).
+    emit_chk = Path(__file__).resolve().parent / "emit_attestation_check.py"
+    if emit_chk.is_file():
+        rc = subprocess.call([sys.executable, str(emit_chk), "--samples",
+                              str(run_p / "samples")] + ([] if allow_ungated else ["--strict"]))
+        if rc != 0 and not allow_ungated:
+            raise SystemExit(
+                "emit-attestation guard FAILed — one or more samples were NOT produced "
+                "by the deterministic emit path (gates_atomic.py / shape_b_sample_export.py), "
+                "so the emit gates + port-reorder never fired and this run is NON-CANONICAL. "
+                "Author into a work dir and emit through the gate (the runner does this "
+                "automatically), or pass --allow-ungated for a disclosed exploratory run.")
     scorer = HARNESS / e.get("scorer", "score_iverilog_tb.py")
     cmd = [sys.executable, str(scorer), "--bench", bench, "--dataset", str(ds_p), "--run", str(run_p)]
     print("$ " + " ".join(cmd))
@@ -481,6 +499,10 @@ def main():
                          "clean-room FULL re-run.")
     ap.add_argument("--dataset", help="dataset path on disk")
     ap.add_argument("--run", help="run dir")
+    ap.add_argument("--allow-ungated", action="store_true",
+                    help="OPT-IN: score even if some samples lack an emit-path attestation "
+                         "(a disclosed exploratory direct-author run, NON-CANONICAL). Default "
+                         "HARD-BLOCKs ungated samples so the published number reflects the runner.")
     a = ap.parse_args()
 
     if a.list:
@@ -504,7 +526,7 @@ def main():
     if a.score:
         if not a.run:
             raise SystemExit("--score requires --run")
-        cmd_score(a.bench, a.run, a.dataset)
+        cmd_score(a.bench, a.run, a.dataset, allow_ungated=a.allow_ungated)
         return
     if a.reattempt_floor:
         sys.exit(cmd_reattempt_floor(a.bench))
