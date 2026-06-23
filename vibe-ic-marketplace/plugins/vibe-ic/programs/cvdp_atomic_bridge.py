@@ -73,7 +73,7 @@ import cvdp_width_resolve as _W  # noqa: E402  symbolic/param-expression width r
 _FAMILY_SOLVERS = []
 for _fam in ("cvdp_gf_synth", "cvdp_bcd_synth", "cvdp_crc_synth",
              "cvdp_encoder_synth", "cvdp_graycode_parity_synth",
-             "cvdp_shift_counter_synth", "cvdp_compose_synth", "cvdp_hamming_synth", "cvdp_mux_compare_synth", "cvdp_accumulate_synth", "cvdp_memory_synth", "cvdp_arith_variants_synth", "cvdp_table_lut_synth", "cvdp_saturate_synth"):
+             "cvdp_shift_counter_synth", "cvdp_compose_synth", "cvdp_hamming_synth", "cvdp_mux_compare_synth", "cvdp_accumulate_synth", "cvdp_memory_synth", "cvdp_arith_variants_synth", "cvdp_table_lut_synth", "cvdp_saturate_synth", "cvdp_bitmanip_synth"):
     try:
         _FAMILY_SOLVERS.append(__import__(_fam))
     except Exception:
@@ -555,9 +555,10 @@ def solve(record: dict) -> Optional[str]:
         return None
     # Specialized family solvers FIRST — they correctly emit the special-algebra
     # datapaths (GF/BCD/CRC/MSB-priority/gray/saturating) the registry path SKIPs.
+    import copy as _copy
     for _fam in _FAMILY_SOLVERS:
         try:
-            _rtl = _fam.solve(record)
+            _rtl = _fam.solve(_copy.deepcopy(record))
         except Exception:
             _rtl = None
         if _rtl:
