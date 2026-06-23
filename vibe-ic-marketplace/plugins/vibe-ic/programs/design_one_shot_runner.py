@@ -961,6 +961,38 @@ def _gather_spec_text(project: Path) -> str:
     return "\n\n".join(chunks)
 
 
+_DETERMINISM_MODULE_RE = re.compile(r"\bmodule\b\s+(\w+).*?\bendmodule\b", re.S)
+
+
+def _iter_module_texts(rtl: str):
+    """Yield (module_name, full `module..endmodule` text) for each module in `rtl`.
+    Verilog modules are flat (never nested), so a non-greedy `module..endmodule`
+    slice is exact enough; a mis-slice at worst leaves the worked-example oracle
+    unable to parse a module header → it SKIPs (fail-safe), never false-blocks."""
+    for m in _DETERMINISM_MODULE_RE.finditer(rtl):
+        yield m.group(1), m.group(0)
+
+
+def _resolve_top_module_text(mod_texts: Dict[str, str], top_name: str,
+                             project: Path) -> Optional[str]:
+    """Resolve the single TOP/DUT module's text for the spec worked-example oracle,
+    so the oracle never replays the DUT's example against an unrelated sibling.
+    Priority: explicit `top_name` → L9 `top_module` → the sole module. Returns None
+    when several modules exist and none is identifiable as the top (skip, never
+    guess — a false block is a §4.05 leak; a coverage gap is not)."""
+    if top_name and top_name in mod_texts:
+        return mod_texts[top_name]
+    try:
+        l9 = _rcvar_l9_top_ports(project)
+        if l9 and l9[0] and l9[0] in mod_texts:
+            return mod_texts[l9[0]]
+    except Exception:
+        pass
+    if len(mod_texts) == 1:
+        return next(iter(mod_texts.values()))
+    return None
+
+
 def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
     """Run the structural DETERMINISM gates over the authored RTL — the SAME
     gates the benchmark emit path applies (`shape_b_sample_export.guard_export`
@@ -1007,13 +1039,19 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
     spec_text = _gather_spec_text(project)
     findings: List[str] = []
     n_checked = 0
+    mod_texts: Dict[str, str] = {}
     for f in rtl_files:
         try:
             txt = f.read_text(errors="replace")
         except OSError:
             continue
         n_checked += 1
-        # clock-divider phase-form (structural; no spec needed)
+        for mname, mtext in _iter_module_texts(txt):
+            mod_texts.setdefault(mname, mtext)
+        # clock-divider phase-form runs PER FILE — a self-toggle OR divider is a
+        # real phase-inversion bug WHEREVER it appears (a submodule divider is
+        # still a bug), and the gate is verified not to false-fire on level-decode
+        # / single-toggle / non-divider designs, so per-module is correct here.
         try:
             pf = _cdp.analyze(txt)
             if pf.get("phase_risky"):
@@ -1026,17 +1064,27 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
                     f"`clk_divK <= (cntK < N/2)`, each intermediate reset HIGH.")
         except Exception:
             pass
-        # spec worked-example oracle (needs the disclosed prose example)
-        if spec_text:
+    # spec WORKED-EXAMPLE oracle runs ONCE, on the TOP/DUT module ONLY. The
+    # disclosed example describes the DUT's I/O behaviour; replaying it against a
+    # sibling / reused submodule that merely shares generic 1-bit `data_in`/
+    # `data_out` port names would FALSE-FAIL a correct multi-module design
+    # (§4.05). Resolve the top from the caller's top_name, else L9's top_module,
+    # else the sole module; when several modules exist and none is identifiable as
+    # the top, SKIP rather than guess (a coverage gap is acceptable; a false block
+    # is not).
+    if spec_text and mod_texts:
+        top_text = _resolve_top_module_text(mod_texts, top_name, project)
+        if top_text is not None:
             try:
-                o = _wex.analyze(txt, spec_text)
+                o = _wex.analyze(top_text, spec_text)
                 if o.get("verdict") == "BLOCK":
                     findings.append(
-                        f"{f.name}: worked-example oracle — RTL mismatches the "
-                        f"spec's disclosed example ({o['inport']}={o['in_bits']} → "
-                        f"{o['outport']} expected {o['out_bits']}); the output must "
-                        f"assert in the SAME cycle as the trigger (a registered "
-                        f"Moore output lags one cycle). {o.get('log', '')}")
+                        f"{o.get('module', 'top')}: worked-example oracle — RTL "
+                        f"mismatches the spec's disclosed example "
+                        f"({o['inport']}={o['in_bits']} → {o['outport']} expected "
+                        f"{o['out_bits']}); the output must assert in the SAME cycle "
+                        f"as the trigger (a registered Moore output lags one cycle). "
+                        f"{o.get('log', '')}")
             except Exception:
                 pass
     if findings:

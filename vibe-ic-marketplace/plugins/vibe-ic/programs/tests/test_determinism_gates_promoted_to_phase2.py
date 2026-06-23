@@ -135,3 +135,63 @@ def test_worked_example_without_spec_does_not_fire(tmp_path):
     proj = _make_project(tmp_path, RTL_MOORE)  # Moore RTL but NO spec
     res = r.step_determinism_gates(proj)
     assert res.status == "PASS", res.detail
+
+
+# --- §4.05 cross-module fan-out fix (PR #77 gatekeeper review HIGH) ---------
+
+# A CORRECT top that reproduces the disclosed trace (Mealy falling-edge form).
+RTL_PULSE_OK = """
+module pulse_detect(input clk, input rst_n, input data_in, output data_out);
+  reg prev;
+  always @(posedge clk or negedge rst_n) if(!rst_n) prev<=0; else prev<=data_in;
+  assign data_out = prev & ~data_in;
+endmodule
+"""
+
+# A SEPARATE, internally-correct reusable cell that SHARES the generic 1-bit
+# data_in/data_out port names (a registered inverter) — the false-fail vector.
+RTL_SIBLING_INV = """
+module inv_reg(input clk, input rst_n, input data_in, output reg data_out);
+  always @(posedge clk or negedge rst_n) if(!rst_n) data_out<=0; else data_out<=~data_in;
+endmodule
+"""
+
+
+def _make_multimodule(tmp_path, top_rtl, sibling_rtl, *, spec=SPEC):
+    proj = tmp_path / "proj"
+    rtl_dir = _pl.rtl_dir(proj)
+    rtl_dir.mkdir(parents=True, exist_ok=True)
+    (rtl_dir / "pulse_detect.v").write_text(top_rtl)
+    (rtl_dir / "inv_reg.v").write_text(sibling_rtl)
+    pdir = _pl.input_prompt_dir(proj)
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / "phase1_prompt.md").write_text(spec)
+    return proj
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="worked-example oracle needs iverilog")
+def test_correct_top_with_sibling_sharing_port_names_passes(tmp_path):
+    # The repro from the gatekeeper review: a correct DUT + a correct sibling that
+    # shares data_in/data_out must NOT false-FAIL — the oracle runs on the TOP only.
+    proj = _make_multimodule(tmp_path, RTL_PULSE_OK, RTL_SIBLING_INV)
+    res = r.step_determinism_gates(proj, "pulse_detect")
+    assert res.status == "PASS", res.detail
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="worked-example oracle needs iverilog")
+def test_buggy_top_still_caught_despite_sibling(tmp_path):
+    # The fix must NOT over-suppress: a Moore-lag TOP is still BLOCKed even with a
+    # sibling present (oracle scoped to the top, but the top itself is the bug).
+    proj = _make_multimodule(tmp_path, RTL_MOORE, RTL_SIBLING_INV)
+    res = r.step_determinism_gates(proj, "pulse_detect")
+    assert res.status == "FAIL", res.detail
+    assert "worked-example" in res.detail and "pulse_detect" in res.detail
+
+
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="worked-example oracle needs iverilog")
+def test_unresolvable_top_skips_oracle(tmp_path):
+    # >1 module, no top_name, no L9 → the top is unidentifiable → oracle SKIPs
+    # (no guess) rather than risk a false block.
+    proj = _make_multimodule(tmp_path, RTL_MOORE, RTL_SIBLING_INV)
+    res = r.step_determinism_gates(proj)  # no top_name
+    assert res.status == "PASS", res.detail
