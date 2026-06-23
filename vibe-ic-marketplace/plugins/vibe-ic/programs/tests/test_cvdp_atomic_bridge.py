@@ -216,12 +216,15 @@ def test_toplevel_name_from_env():
 # =========================================================================== #
 # §4.05 / NO-CHEAT NEGATIVES — each MUST SKIP
 # =========================================================================== #
-def test_galois_field_multiplier_skips_no_wrong_emit():
-    # GF multiply is NOT result=A*B; a plain-integer emit would be functionally
-    # wrong. The special-algebra guard must SKIP it (a wrong op is worse than a
-    # skip). This is the bridge's central NO-CHEAT guard.
-    assert B.solve(_gf_record()) is None
-    assert B.family_of(_gf_record()) is None
+def test_galois_field_multiplier_solved_correctly_not_plain_mult():
+    # GF multiply is NOT result=A*B. The registry's plain `*` would be a functional
+    # LIE — so the bridge's special-algebra guard SKIPs the registry path, and the
+    # cvdp_gf_synth FAMILY solver now emits the CORRECT carry-less-multiply-then-
+    # reduce datapath (parsed irreducible polynomial), NEVER a plain integer multiply.
+    rtl = B.solve(_gf_record())
+    assert rtl is not None
+    assert "A * B" not in rtl and "A*B" not in rtl and "a * b" not in rtl
+    assert "10011" in rtl   # the parsed poly drives the GF reduction (no fabrication)
 
 
 def test_axi_composite_skips():
@@ -273,12 +276,16 @@ def test_chip_agnostic_rename_solves_identically():
 
 
 def test_chip_agnostic_guard_fires_on_semantics_not_name():
-    # rename the GF multiplier to an innocuous name: it must STILL skip, because
-    # the guard fires on the "Galois field / irreducible polynomial" semantics.
+    # rename the GF multiplier to an innocuous name: it must STILL be GF-solved
+    # (keyed on the "Galois field / irreducible polynomial" semantics, never the
+    # name), emitting the correct GF datapath under the TOPLEVEL name — not a plain
+    # integer multiply.
     rec = _make_record("plain_mult", "rtl/plain_mult.sv",
                        GF_PROMPT.replace("gf_multiplier", "plain_mult"),
                        GF_COCOTB.replace("gf_mult", "plain_mult"))
-    assert B.solve(rec) is None
+    rtl = B.solve(rec)
+    assert rtl is not None and "module plain_mult" in rtl
+    assert "A * B" not in rtl and "A*B" not in rtl   # GF, never plain multiply
 
 
 # =========================================================================== #
