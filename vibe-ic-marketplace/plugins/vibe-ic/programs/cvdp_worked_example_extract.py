@@ -424,6 +424,18 @@ def extract(prompt_text: str) -> List[Dict]:
 
     # (1c) inline arrows / worded I/O / arithmetic / function-application.
     for m in _ARROW_RE.finditer(prompt_text):
+        # §4.05 STRUCTURAL-ARTIFACT suppression — when the LHS value is the SUFFIX
+        # of a larger grouped / identifier token (the char immediately before it is
+        # [A-Za-z_]), the `X -> Y` pair is a NOTATIONAL ARTIFACT of that token, not
+        # a real input->output vector: e.g. the trailing `0111` of a grouped binary
+        # `0010_0101_0111 -> 257` (the underscore breaks the numeric run so the
+        # arrow regex pairs only the last nibble with the full decimal). The real
+        # grouped value and its per-segment glosses are extracted elsewhere; emitting
+        # this phantom as a block-eligible coverage requirement HARD-BLOCKS correct
+        # RTL (ORGANIC #780 binary-to-BCD). Mirrors the legacy detector's case (A).
+        s = m.start(1)
+        if s > 0 and re.match(r"[A-Za-z_]", prompt_text[s - 1]):
+            continue
         _add_we([m.group(1)], [m.group(2)],
                 _line_of(prompt_text, m.start()), source="inline_arrow")
     for m in _WORDED_IO_RE.finditer(prompt_text):
