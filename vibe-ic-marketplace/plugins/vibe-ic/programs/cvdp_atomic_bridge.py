@@ -63,6 +63,21 @@ if str(_HERE) not in sys.path:
 
 import spec_artifact_registry as _R  # noqa: E402  the deterministic solver catalog
 
+# Specialized CVDP family solvers — each emits a CORRECT datapath for a family the
+# registry's plain +/-/* ops would MIS-EMIT (GF(2^n) carry-less multiply, BCD decimal
+# arithmetic, CRC, MSB-first priority encoder, gray/parity, saturating shift/counter).
+# Each exposes solve(record)->RTL|None and is §4.05 parse-or-SKIP. Tried BEFORE the
+# registry path so the special-algebra families are SOLVED, not SKIPped. Imported
+# dynamically so a not-yet-present solver simply doesn't contribute.
+_FAMILY_SOLVERS = []
+for _fam in ("cvdp_gf_synth", "cvdp_bcd_synth", "cvdp_crc_synth",
+             "cvdp_encoder_synth", "cvdp_graycode_parity_synth",
+             "cvdp_shift_counter_synth"):
+    try:
+        _FAMILY_SOLVERS.append(__import__(_fam))
+    except Exception:
+        pass
+
 Port = Tuple[str, int]  # (name, width)
 
 # Verilog keywords / type words that must never be mistaken for a port NAME when a
@@ -444,6 +459,15 @@ def solve(record: dict) -> Optional[str]:
     design. Never reads the golden RTL."""
     if not isinstance(record, dict):
         return None
+    # Specialized family solvers FIRST — they correctly emit the special-algebra
+    # datapaths (GF/BCD/CRC/MSB-priority/gray/saturating) the registry path SKIPs.
+    for _fam in _FAMILY_SOLVERS:
+        try:
+            _rtl = _fam.solve(record)
+        except Exception:
+            _rtl = None
+        if _rtl:
+            return _rtl
     top = toplevel_name(record)
     if not top:
         return None
