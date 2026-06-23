@@ -72,6 +72,7 @@ if str(_HERE) not in sys.path:
 # Reused (import, read — NOT modified) — the shipped deterministic pieces.
 import spec_artifact_registry as _registry       # noqa: E402  Tier-1 deterministic emit
 import moore_arrow_fsm_synth as _moore_arrow      # noqa: E402  arrow-Moore-FSM fallback
+import dff_primitive_synth as _dff_primitive      # noqa: E402  bare D-FF primitive fallback
 from _specrtl_common import (                     # noqa: E402  the spec contract extractor
     extract_spec_contract, parse_rtl_ports, strip_comments,
 )
@@ -81,7 +82,7 @@ from _specrtl_common import (                     # noqa: E402  the spec contrac
 # STRUCTURE, returns None (SKIP) on any ambiguity, and its emit is iverilog-VERIFIED
 # by tier_result(--verify) before being banked as Tier1. NEW solvers are added
 # here (a thin fallback chain) without editing the shared registry file.
-_FALLBACK_SYNTHS = (_moore_arrow.synth,)
+_FALLBACK_SYNTHS = (_moore_arrow.synth, _dff_primitive.synth)
 
 TIER_PROGRAM = 1   # deterministic registry emit, VERIFIED to pass _test.sv
 TIER_AI_EMIT = 2   # COMPLETE spec (module+interface+>=1 structure) + gate
