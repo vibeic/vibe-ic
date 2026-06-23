@@ -83,7 +83,7 @@ program (Bucket A) and target skill (Bucket B), declared in
 |---|---|---|
 | Phase 1 NL ingestion | `phase1_one_shot_runner.py`, `phase1_engine/ingest.py` | `agents/ic-expert-agent.md` |
 | Phase 2 spec→RTL | `rtl_hygiene_lint.py`, `chip_top_gate_wrapper_gen.py`, `spec_conformance_check.py` | `agents/ic-expert-agent.md` |
-| Phase 2 yosys / eco_loop | `phase2_one_shot_runner.py` | `synth-doctor`, `rtl-repair`, `phase2-rtl-verify` |
+| Phase 2 yosys / eco_loop | `design_one_shot_runner.py` | `synth-doctor`, `rtl-repair`, `phase2-rtl-verify` |
 | Phase 3 synth / PnR | `phase3_one_shot_runner.py` | `synth-doctor`, `sta-review` |
 | Phase 3 CTS / hold | `phase3_one_shot_runner.py` | `hold-fix`, `sta-review` |
 | Phase 3 DRC | `phase3_one_shot_runner.py` | `drc-fix` |

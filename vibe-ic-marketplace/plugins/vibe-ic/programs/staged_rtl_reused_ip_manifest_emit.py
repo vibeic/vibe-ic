@@ -10,7 +10,7 @@ Reused-IP / catalog-glue designs reach phase2 via TWO entry paths:
       whenever ≥1 IP was actually pulled.
 
   (2) pre-staged vendor RTL — ``input/vendor_rtl/`` is already populated, so
-      ``phase2_one_shot_runner.step_rtl_gen`` WAIVES immediately with
+      ``design_one_shot_runner.step_rtl_gen`` WAIVES immediately with
       ``fallback_skill=catalog-glue-author`` and RETURNS. It never queries the
       catalog, never calls ``ip_catalog_pull``, and (pre-#732) never emitted
       the manifest. Because ``l9_rtl_pin_consistency_check.load_source_manifest``

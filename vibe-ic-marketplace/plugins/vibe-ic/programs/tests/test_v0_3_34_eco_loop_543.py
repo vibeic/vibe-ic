@@ -6,7 +6,7 @@ from pathlib import Path
 
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
-import phase2_one_shot_runner as R  # noqa: E402
+import design_one_shot_runner as R  # noqa: E402
 
 
 def test_543_named_tb_preferred_over_stale(tmp_path):

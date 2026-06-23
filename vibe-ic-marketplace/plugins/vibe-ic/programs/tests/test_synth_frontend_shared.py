@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 sf = importlib.import_module("synth_frontend")
-p2 = importlib.import_module("phase2_one_shot_runner")
+p2 = importlib.import_module("design_one_shot_runner")
 p3 = importlib.import_module("phase3_one_shot_runner")
 
 _CONTAINER = "iic-eda"

@@ -25,7 +25,7 @@ EXPERT_AGENT_MD = Path(__file__).resolve().parent.parent / "agents" / "ic-expert
 
 # ORGANIC-20260605-shapec-lesson-digest-injection — surface captured lessons to
 # blind single-shot authors. The renderer was hoisted to the shared module
-# `_lesson_digest` so the PRODUCTION spec-to-rtl path (phase2_one_shot_runner
+# `_lesson_digest` so the PRODUCTION spec-to-rtl path (design_one_shot_runner
 # step_rtl_gen WAIVE) surfaces the SAME corpus to runner-driven authors. This
 # thin alias preserves the historical `benchmark_dispatch._render_lesson_digest`
 # entry point (Shape-C `--setup`) and its name for existing tests.

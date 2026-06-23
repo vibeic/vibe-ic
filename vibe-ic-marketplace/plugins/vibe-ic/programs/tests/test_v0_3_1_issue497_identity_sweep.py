@@ -43,7 +43,7 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
 import phase1_doc_one_shot_runner as p1  # noqa: E402
-import phase2_one_shot_runner as p2  # noqa: E402
+import design_one_shot_runner as p2  # noqa: E402
 import cross_design_identity_check as cdi  # noqa: E402
 import _path_layout as _pl  # noqa: E402
 

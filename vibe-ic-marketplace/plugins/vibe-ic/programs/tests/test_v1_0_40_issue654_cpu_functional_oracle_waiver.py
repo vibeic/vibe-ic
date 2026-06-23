@@ -25,7 +25,7 @@ from pathlib import Path
 
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
-import phase2_one_shot_runner as R  # noqa: E402
+import design_one_shot_runner as R  # noqa: E402
 import cpu_functional_oracle_waiver_check as G  # noqa: E402
 import flow_compliance_check as F  # noqa: E402
 

@@ -115,7 +115,7 @@ def test_self_reported_skip_becomes_step_skip(tmp_path):
 # ── #433(a)/(c): phase2 manifest emitter shapes (source pins) ──────────────
 
 def test_formal_manifest_never_copies_tb_results():
-    src = (PROGRAMS / "phase2_one_shot_runner.py").read_text()
+    src = (PROGRAMS / "design_one_shot_runner.py").read_text()
     i = src.index("Step 5: formal")
     window = src[i:i + 1800]
     assert "SKIPPED-CONDITION" in window
@@ -126,7 +126,7 @@ def test_formal_manifest_never_copies_tb_results():
 
 
 def test_sim_pass_pair_requires_real_transcript():
-    src = (PROGRAMS / "phase2_one_shot_runner.py").read_text()
+    src = (PROGRAMS / "design_one_shot_runner.py").read_text()
     i = src.index("Step 4: simulation")
     window = src[i:i + 2200]
     assert 'rglob("ref_tb.log")' in window

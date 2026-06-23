@@ -47,7 +47,7 @@ import cdc_crossing_check as C  # noqa: E402
 # --------------------------------------------------------------------------
 def _write_canonical(proj: Path, payload: dict) -> None:
     """Write the three runner-canonical CDC JSONs with the same payload,
-    exactly as phase2_one_shot_runner does for the SKIPPED-CONDITION and
+    exactly as design_one_shot_runner does for the SKIPPED-CONDITION and
     no-RTL branches."""
     d = proj / "reports" / "phase2" / "cdc"
     d.mkdir(parents=True, exist_ok=True)
@@ -56,7 +56,7 @@ def _write_canonical(proj: Path, payload: dict) -> None:
 
 
 def _multiclock_skip_payload() -> dict:
-    # The exact shape phase2_one_shot_runner emits for a multi-clock design.
+    # The exact shape design_one_shot_runner emits for a multi-clock design.
     return {
         "verdict": "SKIPPED-CONDITION",
         "reason": ("multi-clock design (root_clocks=['user_clock2', "

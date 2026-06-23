@@ -35,7 +35,7 @@ from pathlib import Path
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import reset_clock_variant_alias as RCV  # noqa: E402
-import phase2_one_shot_runner as R  # noqa: E402
+import design_one_shot_runner as R  # noqa: E402
 import _path_layout as _pl  # noqa: E402
 
 

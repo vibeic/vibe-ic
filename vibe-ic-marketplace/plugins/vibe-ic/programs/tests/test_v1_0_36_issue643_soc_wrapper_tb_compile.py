@@ -39,7 +39,7 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
-import phase2_one_shot_runner as P2  # noqa: E402
+import design_one_shot_runner as P2  # noqa: E402
 
 _HAS_IVERILOG = shutil.which("iverilog") is not None
 

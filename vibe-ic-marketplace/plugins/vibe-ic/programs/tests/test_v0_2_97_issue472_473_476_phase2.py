@@ -1,6 +1,6 @@
 """programs/tests/test_v0_2_97_issue472_473_476_phase2.py
 
-End-to-end + regression coverage for three phase2_one_shot_runner defects
+End-to-end + regression coverage for three design_one_shot_runner defects
 (all chip-AGNOSTIC; fixtures use synthetic structural names only):
 
   #472 (HIGH)  provenance.jsonl truncate-rewrite — a phase2 re-invocation
@@ -42,7 +42,7 @@ for _p in (str(_PROGRAMS),):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-import phase2_one_shot_runner as p2  # noqa: E402
+import design_one_shot_runner as p2  # noqa: E402
 import _path_layout as _pl  # noqa: E402
 
 

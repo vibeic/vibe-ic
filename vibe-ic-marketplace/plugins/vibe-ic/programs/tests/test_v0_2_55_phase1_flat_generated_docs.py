@@ -104,7 +104,7 @@ def test_runner_prompt_mode_emits_flat_and_precheck_passes(tmp_path):
         "no nested generated_docs/generated_docs"
     # phase2's precheck must count them (dry-run stops after the plan print)
     r2 = subprocess.run(
-        [sys.executable, str(PROGRAMS / "phase2_one_shot_runner.py"),
+        [sys.executable, str(PROGRAMS / "design_one_shot_runner.py"),
          str(proj), "--dry-run"],
         capture_output=True, text=True, timeout=300)
     assert f"{n}/13 L docs present" in r2.stdout, r2.stdout + r2.stderr
@@ -119,7 +119,7 @@ def test_precheck_names_nested_path_explicitly(tmp_path):
     for i in (1, 2, 3):
         (nested / f"L{i}_X.json").write_text("{}")
     r = subprocess.run(
-        [sys.executable, str(PROGRAMS / "phase2_one_shot_runner.py"),
+        [sys.executable, str(PROGRAMS / "design_one_shot_runner.py"),
          str(proj)],
         capture_output=True, text=True, timeout=300)
     assert r.returncode == 1

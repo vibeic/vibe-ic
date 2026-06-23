@@ -13,7 +13,7 @@ sys.path.insert(0, str(PROG))
 import derived_clock_sdc_required_check as DC   # noqa: E402
 import clock_plan_check as CP                   # noqa: E402
 import flow_compliance_check as FC              # noqa: E402
-import phase2_one_shot_runner as P2             # noqa: E402
+import design_one_shot_runner as P2             # noqa: E402
 import l10_tb_conformance_check as L10          # noqa: E402
 
 

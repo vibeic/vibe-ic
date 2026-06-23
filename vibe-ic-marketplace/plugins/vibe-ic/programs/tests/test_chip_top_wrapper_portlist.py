@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Regression tests for the chip_top auto-emit port-list extraction
-(phase2_one_shot_runner, v0.1.62).
+(design_one_shot_runner, v0.1.62).
 
 Root cause pinned: the spm benchmark (doc→GDS Shape A) FAILed phase2 yosys_synth
 because the auto-emitted chip_top wrapper had a truncated, unclosed port list.
@@ -20,7 +20,7 @@ import pytest
 
 PROG_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG_DIR))
-import phase2_one_shot_runner as P  # noqa: E402
+import design_one_shot_runner as P  # noqa: E402
 
 
 def _extract(src: str):

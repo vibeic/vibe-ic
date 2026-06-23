@@ -1,6 +1,6 @@
 ---
 name: vibe-ic-phase2
-description: Run Phase 2 (L1-L23 → RTL → SOF → <half-duplex-tester> byte[6]=0xF2) via phase2_one_shot_runner. AI-monitored + close-loop ECO.
+description: Run Phase 2 (L1-L23 → RTL → SOF → <half-duplex-tester> byte[6]=0xF2) via design_one_shot_runner. AI-monitored + close-loop ECO.
 argument-hint: <project-dir> [--top-name chip_top] [--skip-hardware] [--max-eco 3]
 ---
 > **Missing arg?** When `$ARGUMENTS` is empty, prompt the user first:
@@ -15,7 +15,7 @@ argument-hint: <project-dir> [--top-name chip_top] [--skip-hardware] [--max-eco 
 Main execution (**program-driven**):
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/programs/phase2_one_shot_runner.py $ARGUMENTS
+python3 ${CLAUDE_PLUGIN_ROOT}/programs/design_one_shot_runner.py $ARGUMENTS
 ```
 
 The runner runs: rig_topology skeleton → detect_ic_class → rtl_gen → reference_tb → yosys → qsf/sdc → otp_image_check → fpga_compile → fpga_burn → md905_verify → phase2_manifests → final_audit.

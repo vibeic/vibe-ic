@@ -1,6 +1,6 @@
 ---
 name: spec-to-rtl
-description: "MANDATORY entry point when `phase2_one_shot_runner.step_rtl_gen` WAIVES with `fallback_skill='spec-to-rtl'`. This is invoked for every IC class with `rtl_gen=null` in `ic_class_registry.json` (currently: digital_arithmetic_primitive, digital_cmd_driven, bare_fpga, processor_cpu, unknown_protocol_class). The runner has already (1) ingested the prompt into L1-L23, (2) detected the IC class, (3) set the expected RTL path. This skill authors synthesizable RTL into the runner's expected path so the runner's downstream gates (chip_top auto-emit, rtl_hygiene_lint --fix, eda_lint, eda_synth, eco_loop, spec_conformance_check, full_stack_tb_gen) can fire on it. Triggered automatically by the runner's WAIVE message; also fires on phrases like 'AI invokes spec-to-rtl', 'runner WAIVED rtl_gen', 'spec-to-rtl handoff'. THIS IS THE RUNNER'S INTENDED PATH — NOT BYPASS. Bypass means authoring with MCP outside the runner's pipeline (what the 2026-05-28 wrong-shape RTLLM 37/50 did)."
+description: "MANDATORY entry point when `design_one_shot_runner.step_rtl_gen` WAIVES with `fallback_skill='spec-to-rtl'`. This is invoked for every IC class with `rtl_gen=null` in `ic_class_registry.json` (currently: digital_arithmetic_primitive, digital_cmd_driven, bare_fpga, processor_cpu, unknown_protocol_class). The runner has already (1) ingested the prompt into L1-L23, (2) detected the IC class, (3) set the expected RTL path. This skill authors synthesizable RTL into the runner's expected path so the runner's downstream gates (chip_top auto-emit, rtl_hygiene_lint --fix, eda_lint, eda_synth, eco_loop, spec_conformance_check, full_stack_tb_gen) can fire on it. Triggered automatically by the runner's WAIVE message; also fires on phrases like 'AI invokes spec-to-rtl', 'runner WAIVED rtl_gen', 'spec-to-rtl handoff'. THIS IS THE RUNNER'S INTENDED PATH — NOT BYPASS. Bypass means authoring with MCP outside the runner's pipeline (what the 2026-05-28 wrong-shape RTLLM 37/50 did)."
 ---
 
 # spec-to-rtl — the runner-orchestrated AI authoring step
@@ -14,7 +14,7 @@ the AI inside its own pipeline**, so the surrounding gates still fire.
 
 ## Invocation contract
 
-When `phase2_one_shot_runner.step_rtl_gen` WAIVES with the message:
+When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
 
 > *IC class 'XXX' registered but rtl_gen=null. Recommended action: AI invokes
 > skill `spec-to-rtl`.*
