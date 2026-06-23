@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 793
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 793)
+- **Total programs (excluding helpers / shims):** 794
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 794)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 784 |
+| `any` | 785 |
 
 ## Alphabetical listing
 
@@ -678,6 +678,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `self_audit_doc_claim_consistency_check` | any | — | anti-fabrication gate. |
 | `self_rx_mask_check` | any | — | Verify any *_oe / *_drive_low output that drives a |
 | `self_rx_mask_required_check` | any | Wave 16 | Wave 16 silent-bug gate. |
+| `semantic_spec_floor_check` | any | — | SEMANTIC dataset-defect floor detection. |
 | `send_test_active_drive_check` | any | Wave 27 | Wave 27 (v0.119.59) gate. |
 | `sent_protocol_synth` | any | — | Single Edge Nibble Transmission (SENT) protocol synth helper. |
 | `sequential_waveform_synth` | any | — | DETERMINISTIC multi-bit / sequential waveform → RTL. |
@@ -865,7 +866,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (784 programs)
+### `any` (785 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1512,6 +1513,7 @@ _(no programs in this group)_
 - `self_audit_doc_claim_consistency_check` — anti-fabrication gate.
 - `self_rx_mask_check` — Verify any *_oe / *_drive_low output that drives a
 - `self_rx_mask_required_check` — Wave 16 silent-bug gate.  _[Wave 16]_
+- `semantic_spec_floor_check` — SEMANTIC dataset-defect floor detection.
 - `send_test_active_drive_check` — Wave 27 (v0.119.59) gate.  _[Wave 27]_
 - `sent_protocol_synth` — Single Edge Nibble Transmission (SENT) protocol synth helper.
 - `sequential_waveform_synth` — DETERMINISTIC multi-bit / sequential waveform → RTL.

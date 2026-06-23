@@ -389,6 +389,43 @@ reads as "contradictory" (e.g. "open dfr when the previous level was lower" vs a
 it at the bottom), the resolution is usually a hysteresis FSM with a defined reset-arrival state,
 not an actual contradiction — model the history explicitly before declaring a defect.
 
+### Skill: saturating event-counter threshold — pin the count-start, the cap, and `>=` vs `>`
+When a spec gates a transition on "after the event has lasted **more than** N cycles" (a fall-then-
+splat timer, a debounce, a watchdog, a timeout), the FAIL mode is the off-by-one in the counter, NOT
+the FSM topology. Pin three things from the spec wording, every time:
+- **Count start**: the counter starts at 0 the cycle the counting STATE is entered (e.g. the first
+  FALL cycle), and increments once per cycle while in that state.
+- **Saturation cap**: cap the counter at the threshold so it cannot wrap (`if (cnt < N) cnt <= cnt+1`);
+  a free-running counter that wraps re-arms the condition and mismatches on long events.
+- **Comparison sense**: "**more than** N cycles then hits ground" ⇒ the threshold test is
+  `cnt >= N` evaluated *at the hit-ground transition* (with the 0-based, cap-at-N counting above);
+  "**at least**/"after N" may instead be `cnt >= N-1` — derive it from the counting convention, do
+  not guess. Reset the counter to 0 whenever the counting state is left.
+*Worked pattern (anonymized):* a faller that "splatters if it falls for more than 20 cycles then
+hits ground" — correct is `fall_counter` 0-based, saturated with `if (fall_counter<20) fall_counter<=+1`,
+and `ground ? (fall_counter>=20 ? DEAD : resume) : keep_falling`. A `>20` test, an un-capped counter,
+or counting from 1 each mismatches only on the splat-boundary vectors (a ~pass-some-draws / fail-some
+instability that is a determinism gap, not noise).
+
+### Skill: honor the spec's STATED multi-condition precedence exactly
+When a spec enumerates a precedence among simultaneously-satisfiable actions ("if more than one of
+these is satisfied, **fall has higher precedence than dig, which has higher precedence than switching
+directions**"), encode that order as the `if / else if` chain order in the next-state logic — the
+highest-precedence condition is the first `if`. Re-ordering the branches (e.g. testing a bump before
+testing ground) silently changes behavior only on the cycles where two conditions co-occur, so it
+passes most random draws and fails a few — a determinism gap. Copy the stated order verbatim.
+
+### Skill: author STRICTLY to the GIVEN interface header — it can differ across dataset/spec variants
+The verification harness binds the EXACT interface in the prompt's own header (port names, directions,
+widths, **and index base**). The SAME logical design can ship with DIFFERENT interfaces in different
+spec variants — e.g. one variant exposes `input [2:0] s` with outputs `fr2,fr1,fr0`, another the very
+same machine as `input [3:1] s` (one-based) with outputs `fr3,fr2,fr1`. NEVER carry an interface,
+port-name set, or index base from one variant (or from memory of "this problem") into another: read
+the header you were given and match it verbatim. A one-based `[N:1]` port shifts every bit index by
+one vs `[N-1:0]`; a renamed output set (`fr3..fr1` vs `fr2..fr0`) must be wired to the names actually
+declared. Mapping the logic correctly but onto the wrong variant's port names/index base is a guaranteed
+elaboration or compare failure even when the behavior is right.
+
 ### Skill: dual-edge flip-flop (both clock edges)
 A flop that must capture `d` on BOTH clock edges cannot use `always @(posedge clk or negedge clk)`
 (illegal for synthesis/iverilog). The canonical, correct realization is two independent edge flops
