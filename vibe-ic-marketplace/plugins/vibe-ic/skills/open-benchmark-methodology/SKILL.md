@@ -653,3 +653,77 @@ FLOOR misread. *why_not_bucket_a*: deciding whether two assertions are truly
 mutually exclusive for identical stimulus is an open-ended meaning judgment no
 regex makes; the deterministic half (a FLOOR claim MUST carry the original-RTL-
 also-fails scorer evidence) is the gate condition recorded here.
+
+## § 9 — The 5-TIER CONVERGE method (classify → push every tier up → only a proven defect is a floor)
+
+The capture loop (`benchmark-enhancement-capture`) says *move every recovery into
+the program layer*. § 9 is the **measurement + promotion harness** that makes that
+loop legible per problem. It classifies every benchmark problem into a STABILITY
+tier and pushes each tier upward as far as is HONESTLY possible. The reference
+implementation is `programs/cvdp_solve_pipeline.py`; each suite has its own
+mirror: `programs/{verilogeval_tier_pipeline, verilogeval_human_tier_pipeline,
+rtllm_tier_pipeline}.py` (each exposes `classify` / `build_gate` / `gate_check` /
+a floor-prover / an iverilog Tier-1 verifier + a `--dist` CLI).
+
+### The tiers (highest stability first)
+
+| Tier | meaning | how a problem qualifies |
+|---|---|---|
+| **T1** | deterministic program emit | a solver (registry / family / canonical) emits RTL that PASSES the design's own testbench under iverilog (`Mismatches: 0`). No AI. |
+| **T2** | program-extract COMPLETE spec + gate | a program extracts every testable fact (COMPLETE); the AI authors from that complete spec and a conformance gate verifies it. |
+| **T3** | gate-able | a meaningful interface/structure gate constrains the AI author; the extracted spec is not fully COMPLETE. |
+| **T4** | ungated | too-incomplete to build a meaningful gate. |
+| **T5** | real floor | the GOLDEN reference fails its OWN testbench (proven per § 4.1) — a dataset/oracle/tool defect, never "AI can't". |
+
+GOAL: T1+T2+T3 stably solved every run (they all carry a program gate or a
+deterministic emit); only T5 is a true floor.
+
+### The converge levers (run STEP-BY-STEP, bottom tier first, verify after each)
+
+1. **T5→lower** — for every candidate floor run § 4.1's golden-vs-its-own-testbench
+   proof; reclassify every golden-PASSES problem. A benign `$display("TIMEOUT")`
+   watchdog print is NOT a failure — grade strictly on the `Mismatches:` line.
+2. **T4→T3** — recover the interface (prompt header / `_ifc.txt` / provided
+   `input.context` RTL header / cocotb `dut.<sig>` set, incl. a `tb.py`/non-`test_`
+   harness file) so a gate can bind. Interface = spec (§ 3.9).
+3. **T3→T2** — close extraction gaps so the spec is COMPLETE. The #1 gap is an
+   unstated WIDTH: resolve it from a literal, a named-parameter expression
+   (parameterised width IS complete), a context param default, or a harness-pinned
+   width — never a coincidental same-line prose number (false-COMPLETE).
+4. **T2→T1** — build/extend a DETERMINISTIC solver and iverilog-VERIFY its emit
+   against the testbench. Promote ONLY on a real pass.
+
+### The two honesty gates that make the number trustworthy
+
+- **iverilog-authoritative**: a Tier-1 claim is accepted ONLY on a real
+  `Mismatches: 0` pass; a fired-but-wrong emit is dropped to T2, never shipped.
+- **GENERAL-not-OVERFIT (the §4.05 bar a Tier-1 solver MUST clear)**: a solver may
+  be promoted to the deterministic tier ONLY if it keys on operation/structure
+  semantics and reads EVERY constant from the interface width or parsed prose. A
+  solver that gates on a design-category keyword and emits hardcoded
+  design-specific constants (e.g. a traffic-light reload `8'd60/8'd5`, a calendar
+  `6'd59`, an ALU's MIPS opcode table, an LFSR's hardcoded taps) is a disguised
+  golden lookup — it is iverilog-PASS yet still a CHEAT, because it would emit
+  WRONG RTL for a different instance of the same operation. Such a solver is
+  REJECTED even though it "passes": the design stays honestly at T2 (gate + AI),
+  exactly like a prose-only design. (Real campaign evidence: a "promote all 33"
+  RTLLM sweep was rejected on this bar; only 13 genuinely-general emitters — each
+  reading widths/constants from the spec — were salvaged, the rest stayed T2.)
+
+### Snapshot (4-suite converge, 664 problems, iverilog-authoritative)
+
+| Suite | total | T1 | T2 | T3 | T5 | gated |
+|---|---|---|---|---|---|---|
+| CVDP | 302 | 33 | 191 | 78 | 0 | 302/302 |
+| VerilogEval-v2 | 156 | 131 | 0 | 24 | 1 | 155/156 |
+| VerilogEval-Human | 156 | 130 | 26 | 0 | 0 | 156/156 |
+| RTLLM | 50 | 26 | 20 | 0 | 4 | 46/50 |
+
+The 5 T5 are all proven defects/tool-gaps (golden fails its own testbench).
+
+**Summary**: classify into 5 tiers, push each up step-by-step, accept a Tier-1
+only on an iverilog pass by a GENERAL (not overfit) solver, and label a floor only
+after the § 4.1 golden-also-fails proof.
+
+Next: run `python3 programs/<suite>_tier_pipeline.py --dist` to measure, then drive
+the lever for the lowest non-empty promotable tier.

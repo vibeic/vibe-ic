@@ -80,16 +80,45 @@ _LOCALPARAM_RE = re.compile(
 # `parameter/localparam NAME = <EXPRESSION>` where the RHS is a DERIVED expression
 # over OTHER params (a ternary `(A>B)?A:B`, an arithmetic `A*B`, a `$clog2(D)`),
 # not a bare literal. Captured up to the line-terminating comma / comment / newline.
+# NOTE: the keyword alternation is `(?:localparam|parameter)` — NOT
+# `(?:local)?parameter`, which would match `localparameter`/`parameter` but MISS
+# the real Verilog `localparam` keyword (a derived `localparam X = (A+$clog2(B))`
+# was silently dropped, so a port sized by that derived constant stayed a gap).
 _DERIVED_PARAM_RE = re.compile(
-    r"\b(?:local)?parameter\b\s*(?:integer|int|logic|reg|signed|unsigned|\[[^\]]*\]|\s)*?"
+    r"\b(?:localparam|parameter)\b\s*(?:integer|int|logic|reg|signed|unsigned|\[[^\]]*\]|\s)*?"
     r"([A-Za-z_]\w*)\s*=\s*([^,\n/]+)")
-# prose: "`NAME` ... default value is `32`" / "default value of 8 bits".
-_PROSE_DEFAULT_RE = re.compile(
-    r"`?([A-Z][A-Z0-9_]*)`?[^\n]{0,80}?\bdefault\s+value\s+(?:is|of)\b[^\n]{0,20}?"
-    r"`?(\d+)`?", re.I)
-# prose / list: "`NAME` (Default: 32)" or "- `NAME` (Default 32)".
-_PAREN_DEFAULT_RE = re.compile(
-    r"`?([A-Z][A-Z0-9_]*)`?[^\n]{0,40}?\(\s*Default\s*[:=]?\s*(\d+)\s*\)", re.I)
+# The NAME of a prose-stated default is anchored line-by-line in `param_defaults`
+# (the line's LEADING param token), so these readers do NOT carry their own name
+# group — that previously let a nearby lowercase word win over the real ALL-CAPS
+# parameter when the name sat >40 chars before the "default" phrase. We match only
+# the "default ... <int>" PHRASE here and bind the name from the line head.
+#   "default value is `32`" / "default value of 8 bits" / "default value 4" /
+#   "default 4" / "default is **8 bits**"  (markdown bold/code around the int is
+#   tolerated — `**`/`` ` `` are presentation, not part of the value).
+_PROSE_DEFAULT_PHRASE_RE = re.compile(
+    r"\bdefault(?:\s+value)?\s+(?:is\s+|of\s+|=\s*|:\s*)?[`*]{0,2}(\d+)", re.I)
+# "(Default: 32)" / "(Default 32)" / "(Default 4, must be > 0)" — the int may be
+# followed by a comma / qualifying clause before the closing paren (the original
+# reader required the `)` to follow the int immediately and so missed
+# "(Default 4, must be greater than 0)").
+_PAREN_DEFAULT_PHRASE_RE = re.compile(
+    r"\(\s*Default\s*[:=]?\s*(\d+)\b", re.I)
+# A Verilog parameter token at (or near) the head of a bullet line, tolerant of
+# markdown bold/code decoration and the two parameter-naming conventions in this
+# dataset — ALL-CAPS (`GPIO_WIDTH`, `ROW_A`, `INPUT_WIDTH`) and a lowercase
+# `p_`-prefixed name (`p_data_width`, `p_max_set_bit_count_width`):
+#   "- **`GPIO_WIDTH`** ..."  /  "8. `INPUT_WIDTH`: ..."  /  "- `p_data_width`: ..."
+# Used to bind a line's prose/paren default to the RIGHT parameter name.
+_PARAM_TOKEN = r"(?:[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*|p_[a-z0-9]+(?:_[a-z0-9]+)*)"
+_LINE_HEAD_PARAM_RE = re.compile(
+    r"^\s*(?:[-*]|\d+[.)])?\s*(?:\*\*\s*)?`?(" + _PARAM_TOKEN + r")`?")
+# An inline-code parameter assignment annotated as a default:
+#   "- `GPIO_WIDTH = 8` (default, configurable)."  — a real `NAME = <int>` token
+#   inside backticks (NOT a `parameter`-keyword line) that the prose explicitly
+#   calls a default. §4.05: a STATED default, anchored to the literal assignment.
+_INLINE_CODE_DEFAULT_RE = re.compile(
+    r"`\s*([A-Z][A-Z0-9_]*)\s*=\s*(\d+|0[xX][0-9A-Fa-f]+)\s*`[^\n]{0,30}?\bdefault\b",
+    re.I)
 # a markdown parameter table row: | `NAME` | ... | <default-int> |  (default cell).
 _PARAM_TABLE_ROW = re.compile(
     r"^\s*\|\s*`?([A-Za-z_]\w*)`?\s*\|.*?\|\s*`?(\d+|0[xX][0-9A-Fa-f]+)`?\s*\|?\s*$",
@@ -148,11 +177,59 @@ def param_defaults(prompt: str, tb: str = "") -> Dict[str, int]:
             if nm.lower() in ("parameter", "name", "description", "signal", "width"):
                 continue
             _add(nm, m.group(2))
-    # prose defaults.
-    for m in _PROSE_DEFAULT_RE.finditer(prompt):
+    # inline-code assignment annotated as a default — `NAME = 8` (default ...).
+    # Anchored to the literal assignment, so the name is never guessed.
+    for m in _INLINE_CODE_DEFAULT_RE.finditer(prompt):
         _add(m.group(1), m.group(2))
-    for m in _PAREN_DEFAULT_RE.finditer(prompt):
-        _add(m.group(1), m.group(2))
+    # prose / paren defaults — bound LINE-BY-LINE to the line's leading ALL-CAPS
+    # parameter token, so the name can never be a stray nearby lowercase word.
+    # A line states a default ONLY when it both names a parameter at its head AND
+    # carries a "default ... <int>" (or "(Default <int>...)" ) phrase.
+    for line in prompt.splitlines():
+        hm = _LINE_HEAD_PARAM_RE.match(line)
+        if not hm:
+            continue
+        nm = hm.group(1)
+        if nm in out or nm in ("DEFAULT", "NOTE", "BITS", "INPUTS", "OUTPUTS"):
+            continue
+        pm = _PROSE_DEFAULT_PHRASE_RE.search(line) or _PAREN_DEFAULT_PHRASE_RE.search(line)
+        if pm:
+            _add(nm, pm.group(1))
+    return out
+
+
+def context_param_defaults(record: dict) -> Dict[str, int]:
+    """Parameter -> default-int harvested from the PROVIDED `input['context']` RTL
+    (the `parameter NAME = N` / `localparam NAME = N` declarations of the surrounding
+    design files the submitter is given).
+
+    §3.9 + §4.05: a parameter's DECLARED DEFAULT is part of the interface/config
+    contract the spec hands the author — NOT the functional answer — so reading it
+    from the provided context is the same header-level recovery the bridge already
+    performs on the skeleton header. We read ONLY `parameter`/`localparam = <int>`
+    declarations (never the body), and the caller merges these BELOW the
+    prompt/testbench defaults (a value the prompt states is never overridden). This
+    resolves `[DATA_WIDTH-1:0]`-style widths whose default lives only in the
+    provided RTL (closing the `param_expression_width` extraction gap honestly —
+    the value IS in the spec chain, just in the context file rather than the prose).
+    """
+    out: Dict[str, int] = {}
+    if not isinstance(record, dict):
+        return out
+    ctx = (record.get("input") or {}).get("context") or {}
+    if not isinstance(ctx, dict):
+        return out
+    for k, v in ctx.items():
+        if not (isinstance(v, str) and (k.endswith(".v") or k.endswith(".sv"))):
+            continue
+        for rx in (_CODE_PARAM_RE, _LOCALPARAM_RE):
+            for m in rx.finditer(v):
+                nm, tok = m.group(1), m.group(2)
+                if nm and nm not in out:
+                    try:
+                        out[nm] = _as_int(tok)
+                    except ValueError:
+                        pass
     return out
 
 
@@ -171,8 +248,21 @@ def eval_width_expr(expr: str, params: Dict[str, int]) -> Optional[int]:
     s = expr.strip()
     if not s:
         return None
+    # strip markdown code decoration that wraps identifiers INSIDE a stated width
+    # expression — e.g. `[(`IN_DATA_WIDTH` + $clog2(`IN_DATA_NS`)) - 1 : 0]`. The
+    # backtick is presentation, not an operator; removing it exposes the plain
+    # `(IN_DATA_WIDTH + $clog2(IN_DATA_NS)) - 1` the evaluator understands. (Only the
+    # backtick — NOT `**`, which is the power operator the evaluator accepts.)
+    s = s.replace("`", "")
     # normalize the SV ceil-log2 system function to a python-callable token.
     s = re.sub(r"\$\s*clog2", "clog2", s)
+    # normalize a SPEC-NOTATION multiply: a whitespace-delimited `x` or a `×`
+    # between two operands means multiplication (e.g. `ROW_A x COL_A x WIDTH`,
+    # `4 × 4 × 8`). Both sides must be whitespace so a hex `0x..` or an identifier
+    # bearing an `x` is never touched. §4.05: only an unambiguous operator `x`/`×`
+    # standing alone is rewritten — never a letter inside a token.
+    s = s.replace("×", "*")            # the unicode multiplication sign
+    s = re.sub(r"(?<=[\w\)])\s+[xX]\s+(?=[\w\(])", "*", s)
     # translate a Verilog ternary `cond ? a : b` to python `(a) if (cond) else (b)`.
     # done only when both `?` and `:` are present and balanced (a single ternary).
     s = _ternary_to_python(s)
@@ -256,6 +346,67 @@ def _has_ident_span(span_inner: str) -> bool:
     return bool(_IDENT.search(parts[0]) or _IDENT.search(parts[1]))
 
 
+def has_param_expr_width(prompt: str, name: str) -> bool:
+    """True iff a PARAMETER-EXPRESSION width is DECLARED for `name` — a bracket
+    range carrying an identifier in EITHER order (`name [P-1:0]` / `[P-1:0] name`)
+    or a markdown table width-cell with a param-arithmetic expression
+    (`| name | N*W |`). This is the STRUCTURAL presence of the declaration,
+    independent of whether the parameter table can RESOLVE it to an int. The
+    caller uses it to refuse a coincidental same-line prose `N bits` literal for a
+    port that is genuinely param-width: if the expression cannot be resolved the
+    width is UNKNOWN (a gap), never the neighbour's literal (§4.05)."""
+    esc = re.escape(name)
+    for pat in (rf"\b{esc}\b[^\n|]{{0,40}}?\[\s*([^\]]*?)\s*\]",
+                rf"\[\s*([^\]]*?)\s*\]\s*{esc}\b"):
+        for m in re.finditer(pat, prompt):
+            inner = m.group(1)
+            if ":" in inner and _has_ident_span(inner):
+                return True
+    for rm in re.finditer(rf"^\s*\|\s*`?{esc}`?\s*\|\s*`?([^|`]+?)`?\s*[|(]",
+                          prompt, re.M):
+        cell = rm.group(1).strip()
+        if _IDENT.search(cell) and re.fullmatch(r"[\w\s()+\-*/]+", cell) \
+                and re.search(r"[*/+\-]", cell):
+            return True
+    return False
+
+
+# words that appear inside a width expression but are NOT parameters (functions /
+# numeric literals' stray letters). `$clog2`/`clog2`/`log2` are width FUNCTIONS.
+_NON_PARAM_TOKENS = {"clog2", "log2", "ceil", "floor", "x"}
+
+
+def param_expr_idents(prompt: str, name: str) -> set:
+    """The set of IDENTIFIERS appearing in `name`'s param-expression width (the
+    bracket range in either order, or a table width-cell), excluding width
+    functions (clog2/log2). Empty when no param-expression width is tied to the
+    name. The caller decides whether every identifier is a KNOWN config parameter
+    — if so the port is COMPLETELY specified as parameterised (the AI writes
+    `[PARAM-1:0]`, correct under every harness override), not an extraction gap."""
+    esc = re.escape(name)
+    inners = []
+    for pat in (rf"\b{esc}\b[^\n|]{{0,40}}?\[\s*([^\]]*?)\s*\]",
+                rf"\[\s*([^\]]*?)\s*\]\s*{esc}\b"):
+        for m in re.finditer(pat, prompt):
+            inner = m.group(1)
+            if ":" in inner and _has_ident_span(inner):
+                inners.append(inner)
+    for rm in re.finditer(rf"^\s*\|\s*`?{esc}`?\s*\|\s*`?([^|`]+?)`?\s*[|(]",
+                          prompt, re.M):
+        cell = rm.group(1).strip()
+        if _IDENT.search(cell) and re.fullmatch(r"[\w\s()+\-*/]+", cell) \
+                and re.search(r"[*/+\-]", cell):
+            inners.append(cell)
+    if not inners:
+        return set()
+    idents = set()
+    for inner in inners:
+        for tok in re.findall(r"[A-Za-z_]\w*", inner):
+            if tok not in _NON_PARAM_TOKENS:
+                idents.add(tok)
+    return idents
+
+
 def symbolic_width(prompt: str, name: str, params: Dict[str, int]
                    ) -> Optional[Tuple[str, int, str]]:
     """Resolve a port's width when it is stated as a parameter expression, a
@@ -306,6 +457,24 @@ def symbolic_width(prompt: str, name: str, params: Dict[str, int]
     if m:
         hi, lo = int(m.group(1)), int(m.group(2))
         return f"{hi}:{lo}", abs(hi - lo) + 1, "range_before_name"
+
+    # (D) a PARENTHETICAL param-bits width annotation tied to the name (no bracket
+    #     range): "`o_data_out` (`p_data_width` bit)" / "`o_set_bit_count`
+    #     (`p_max_set_bit_count_width` bits)" / "`bus` (DATA_WIDTH bits)". The width
+    #     is the named PARAMETER's default (or a literal `(8 bits)`). §4.05: resolved
+    #     only when the parameter's default is in the table; else None (stays a gap).
+    pm = re.search(
+        rf"`?{esc}`?\s*\(\s*`?([A-Za-z_]\w*|\d+)`?\s*-?\s*bits?\b", prompt)
+    if pm:
+        tok = pm.group(1)
+        if tok.isdigit():
+            w = int(tok)
+            if w > 0:
+                return f"{tok} bits", w, "param_expression_width"
+        elif tok in params:
+            w = params[tok]
+            if w > 0:
+                return f"{tok} bits", w, "param_expression_width"
 
     return None
 

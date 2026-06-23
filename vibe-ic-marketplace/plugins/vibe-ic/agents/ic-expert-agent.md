@@ -121,6 +121,66 @@ explicit GENERAL owner house default (predictor → weakly-not-taken, history �
 always FLAGGED; an observable, multi-convention value WITHOUT such a default
 (a CDC synchronizer seed, an undocumented priority tie) is surfaced, never guessed.
 
+## Spec-completeness → downstream extractability (benchmark-converge learning, 2026-06-23)
+
+Your L-docs are the station that makes a spec **COMPLETE**. A spec is "complete"
+when a deterministic program can extract EVERY testable fact from it — the
+property that lets the downstream flow program-solve or program-gate the design
+(the stable tiers) instead of free-authoring it (the lossy tier). A large
+cross-design completeness sweep (664 designs across four open design suites)
+showed the **dominant** completeness gap by a wide margin is an **unstated port /
+signal WIDTH** (`width_not_stated` — ~478 instances), followed by missing
+structural facts (FSM transitions, enumerated-set boundaries, truth-table rows).
+Closing those at the L-doc station is the single highest-leverage thing you do.
+
+> **PROGRAM-FIRST — `spec_coverage_check.py` is the deterministic checklist.**
+> Run it over the L-docs you produce; it extracts the testable-requirement set
+> (ports/widths/dirs, reset value+polarity+sync/async, every table row + worked
+> example, every ENUMERATED SET + its outside-the-set/default boundary, signed-
+> ness, byte order/packing, overflow/saturation/rounding, handshake timing). Every
+> `extraction-gap` it reports is a fact you must either FILL (it exists upstream)
+> or surface as a genuine SPEC GAP. Your judgment fills what no regex can read; the
+> program tells you what is still missing.
+
+**WIDTH-COMPLETENESS RULE (the #1 lever).** Every port, register, and named signal
+in L1/L4/L5/L8-constants/L9 MUST carry a resolved width that is ONE of:
+  1. a **literal** bit-width (`[7:0]`, "8 bits"), OR
+  2. a **named config parameter** expression (`[DATA_WIDTH-1:0]`, `[N*W-1:0]`,
+     `[$clog2(DEPTH)-1:0]`) where the parameter is DECLARED (an `L8 localparam` /
+     an `L4`/`L9` parameter / a harness-driven override). **A parameterised width
+     is COMPLETE** — the RTL writes `[PARAM-1:0]` and is correct under every
+     override; do NOT demand a frozen integer for a genuinely parameterised port.
+A width that is NEITHER (no literal, no declared parameter) is the dominant gap:
+FILL it from the chain if the value is anywhere upstream (a `#(parameter ...)`
+default, a worked example's hex width, the harness's driven-value width), else
+surface it as a SPEC GAP. §4.05: NEVER fabricate a width from a coincidental prose
+number on the same line (a "20-bit counter" sentence next to a `[DATA_WIDTH-1:0]`
+port does NOT make the port 20 bits — that mislabel both ships wrong RTL and
+falsely claims completeness).
+
+**LOAD-BEARING CONTRACT vs OVER-CONSTRAINT (avoid downstream false-rejects).** The
+verification harness binds the **interface** — port NAMES, directions, widths — so
+pin those EXACTLY (they are the load-bearing contract). But do NOT over-specify
+facts a correct design may legitimately realise differently, or the downstream
+conformance gate will FALSE-REJECT a correct RTL:
+  - **FSM state NAMES / encodings** are a diagram convention, not a contract — a
+    correct design may rename `OFF/ON`→`A/B` or pick any one-hot/binary encoding.
+    Record the TRANSITION STRUCTURE (which input drives which state→state edge and
+    the Moore/Mealy output per state), not a mandated state-label or encoding.
+  - **Parameter PRESENCE / names** are not a contract — a value may be a
+    `localparam`, hard-coded, or renamed. Record the parameter's ROLE + default,
+    never "the RTL must declare a parameter literally named X".
+  - A param-expression-width port's width is **not enforced as a literal** by the
+    gate (it depends on the override) — so don't record a frozen width that would
+    reject the parameterised form.
+
+**SPEC = THE WHOLE CHAIN (don't false-floor).** A fact is "absent" only if it is
+nowhere in prompt → fact-graph → L-docs → harness. A width pinned by the testbench
+(a `len(dut.x)` / a mask / a `getrandbits(N)`), a parameter default in a provided
+context module header, an enumerated boundary implied by a worked example — these
+are PRESENT (§3.9). Surface a SPEC GAP only after the fact is genuinely nowhere;
+a derivable fact wrongly called "unspecifiable" is a false-floor.
+
 ## Per-Layer Review Checklist
 
 ### L1 Datasheet

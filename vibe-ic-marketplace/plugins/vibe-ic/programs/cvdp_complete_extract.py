@@ -93,6 +93,10 @@ import cvdp_atomic_bridge as _bridge  # noqa: E402
 # param-override). A width stated as a parameter expression with a derivable
 # default is an EXTRACTABLE fact, not a gap.
 import cvdp_width_resolve as _W  # noqa: E402
+# The PROVIDED input.context RTL module HEADER is part of the interface spec
+# (§3.9) — when the prose never states a port's width but the context file
+# DECLARES it, that declaration resolves the width (header-only; never the body).
+import cvdp_context_interface_recover as _ctxrec  # noqa: E402
 
 # Reused (NOT modified) — v1.1.82 structural extractors. Imported defensively so a
 # not-yet-present extractor simply contributes nothing (the layer never crashes).
@@ -128,7 +132,13 @@ _RANGE_PARAM_RE = re.compile(
 # Reset / clock synonyms, broader than the bridge's _SEQ_PORTS so a `rst_in`,
 # `reset_i`, `arst_n`, `sync_rst` etc. resolves to a 1-bit control rather than an
 # unresolved data port. Keyed on the universal reset/clock naming shape.
-_CLK_RE = re.compile(r"(?i)^(clk|clock|sclk|aclk|hclk|pclk)([_\.]?(in|i|sys|core))?$")
+# A clock is ALWAYS 1-bit, so a clock OUTPUT (`clk_out`, `clock_out`, `clk_o`,
+# `clk_div`, `clk_gen`) is just as 1-bit as a clock input — the suffix set covers
+# both an in-clock and an out/derived-clock so a generated divided clock resolves
+# to width 1 by the universal convention (§4.05: a clock literally cannot be >1b).
+_CLK_RE = re.compile(
+    r"(?i)^(clk|clock|sclk|aclk|hclk|pclk)"
+    r"([_\.]?(in|i|sys|core|out|o|div|gen|en))?$")
 _RST_RE = re.compile(
     r"(?i)(^|_)(rst|reset|arst|areset|srst|nreset|resetn|rstn)([_\.]?(in|i|n|b|async|sync))?($|_)"
 )
@@ -168,6 +178,99 @@ def _harness_params(tb: str) -> set:
     return params
 
 
+# --------------------------------------------------------------------------- #
+# cocotb interface RECOVERY — additional driven/read access forms the bridge's
+# `_cocotb_io` does not recognise. The bridge reads only `dut.X.value = ` (driven)
+# and `= dut.X.value` / `int(dut.X.value)` / `.value.integer` (read). Real CVDP
+# cocotb tests bind harness signals through MORE forms; missing them left the WHOLE
+# interface empty (the `cocotb test present but no dut.<sig> interface recovered`
+# EXTRACTION_GAP). Each form below is a genuine harness binding of a DUT port:
+#   * `dut.X.value == ` / `!= ` / `< ` ...  — an ASSERT comparison READ of an output
+#   * `{dut.X.value}` / `{dut.X.value:..}`  — an f-string interpolation READ
+#   * `dut['name'].value = `                — a BRACKET-driven input (Python-keyword
+#                                             port names such as `in` must use this)
+#   * `dut['name'].value` (read)            — a bracket-accessed read
+#   * `dut.X[i].value` / `dut['x'][i].value`— an INDEXED (packed-array) port read
+# §4.05: every name here is a literal `dut.<name>` / `dut['<name>']` reference in the
+# submitter-visible cocotb test — never invented. Direction mirrors the bridge:
+# an `=` (not `==`/`!=`/`<=`/`>=`) assignment is an INPUT; any other reference is a
+# READ (OUTPUT, unless also driven). Config parameters are removed by the caller.
+_NAME = r"(?:\.(\w+)|\[\s*['\"](\w+)['\"]\s*\])"  # dut.NAME  or  dut['NAME']
+# a driven assignment: dut.X.value = ...   (a single `=`, NOT ==/!=/<=/>=)
+_RECOVER_DRIVEN_RE = re.compile(
+    r"dut" + _NAME + r"(?:\[[^\]]*\])?\.value\s*=(?![=<>])")
+# any READ reference to dut.X.value (comparison, f-string, indexed, bare).
+_RECOVER_READ_RE = re.compile(
+    r"dut" + _NAME + r"(?:\[[^\]]*\])?\.value\b")
+
+
+# cocotb framework attributes that are NEVER a DUT port — a `dut.<attr>` access to
+# the cocotb handle's own API, not to a signal. Excluded from recovered I/O.
+_COCOTB_NONPORT = {"_log", "_id", "_name", "_path", "_handle", "_range",
+                   "_discover_all", "_sub_handles", "log"}
+
+
+def _recover_cocotb_io(tb: str) -> Tuple[List[str], List[str]]:
+    """Augmented (driven, read) signal-name lists covering the additional access
+    forms above. Names are returned RAW (params/dedup handled by the caller)."""
+    def _names(rx) -> set:
+        out = set()
+        for m in rx.finditer(tb):
+            out.add(m.group(1) or m.group(2))
+        out.discard(None)
+        return out - _COCOTB_NONPORT
+    return sorted(_names(_RECOVER_DRIVEN_RE)), sorted(_names(_RECOVER_READ_RE))
+
+
+def _port_corroborated(name: str, prompt: str, table: Dict[str, int],
+                       param_defaults: Optional[Dict[str, int]]) -> bool:
+    """True iff a recovered READ-ONLY signal is corroborated as a real INTERFACE
+    port (vs an INTERNAL register a white-box `assert dut.reg.value == k` probes).
+
+    A `dut.X.value == k` / f-string read is direction-ambiguous: it can read an
+    OUTPUT port OR an internal state register. We credit it as a port ONLY with
+    interface evidence — a resolvable stated width, a clk/rst/1-bit naming
+    convention, or a backtick-wrapped prose reference (the prompt's port list cites
+    it as `` `name` ``). An internal counter the prompt never names as a signal
+    (e.g. `refresh_counter`, `clk_counter`) has NONE of these and is dropped.
+    §4.05: this never invents a port — it only KEEPS a recovered read that the
+    prompt itself corroborates as part of the interface."""
+    if _is_clk(name) or _is_rst(name) or _ONE_BIT_RE.match(name):
+        return True
+    w, _src = _resolve_width(prompt, table, name, param_defaults)
+    if w is not None:
+        return True
+    # a backtick-wrapped prose reference `name` / `name[..]` — the port list cites it.
+    return bool(re.search(r"`\s*" + re.escape(name) + r"\s*[`\[]", prompt))
+
+
+def _cocotb_io_full(tb: str, prompt: str = "", table: Optional[Dict[str, int]] = None,
+                    param_defaults: Optional[Dict[str, int]] = None
+                    ) -> Tuple[List[str], List[str]]:
+    """The bridge's `_cocotb_io` UNION the recovered access forms. A signal driven
+    by EITHER reader is an INPUT; a signal only read is an OUTPUT. Config parameters
+    (ALL-CAPS / int(dut.X.value) / range-bound) are removed so a width/loop-bound
+    read never becomes a phantom port. §4.05: this only ADDS signals the harness
+    really references — it never drops a signal the bridge already found, and a
+    recovered READ-ONLY signal is kept only when the prompt corroborates it as a
+    port (so a white-box internal-register probe is not promoted to an interface)."""
+    table = table or {}
+    b_ins, b_outs = _bridge._cocotb_io(tb)
+    r_driven, r_read = _recover_cocotb_io(tb)
+    params = _harness_params(tb)
+    driven = (set(b_ins) | set(r_driven)) - params
+    # a recovered DRIVEN signal is an input by construction (the harness writes it).
+    # a recovered READ-ONLY signal (not in the bridge's set, not driven) must be
+    # corroborated as a port before it joins the interface.
+    bridge_read = set(b_outs)
+    recovered_read_only = (set(r_read) - bridge_read - driven - params)
+    kept_recovered = {n for n in recovered_read_only
+                      if _port_corroborated(n, prompt, table, param_defaults)}
+    read = (bridge_read | kept_recovered) - params
+    outs = read - driven                 # a driven-and-read signal stays an INPUT
+    return sorted(driven), sorted(outs)
+
+
 def _is_clk(name: str) -> bool:
     return bool(_CLK_RE.match(name)) or name.lower() in _bridge._SEQ_PORTS \
         and re.search(r"clk|clock", name, re.I) is not None
@@ -185,6 +288,46 @@ def _explicit_range_width(prompt: str, name: str) -> Optional[int]:
     """A bus range LITERALLY tied to this exact name: `name [hi:lo]`."""
     m = re.search(rf"\b{re.escape(name)}\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]", prompt)
     return abs(int(m.group(1)) - int(m.group(2))) + 1 if m else None
+
+
+# A GROUP-HEADER width that applies to a following BULLET LIST of port names:
+#   **Heating Control (1-bit each)**        <- group header carries the width
+#   - `o_heater_full`                       <- members inherit "1-bit"
+#   - `o_heater_low`
+#   **Fan Control (1-bit)**                 <- a new header re-scopes the width
+#   - `o_fan`
+# A common CVDP layout: the width is stated ONCE for a category and the individual
+# ports are listed beneath. §4.05: the width IS stated (the "(N-bit ...)" header is
+# the structural source); we bind it to a port ONLY when that exact backtick-name
+# appears in the header's bullet block, never to an unlisted name.
+_GROUP_WIDTH_HEADER_RE = re.compile(
+    r"\(\s*(\d+)\s*-?\s*bits?\b[^)]*\)", re.I)
+_BULLET_NAME_RE = re.compile(r"^\s*[-*]\s*`([A-Za-z_]\w*)`")
+
+
+def _grouped_bullet_width(prompt: str, name: str) -> Optional[int]:
+    """Width for `name` when it is a backtick bullet member under a `(N-bit ...)`
+    group header. Scans lines: a header sets the active width; a `- \\`port\\`` line
+    inherits it; a non-bullet, non-blank line that is not itself a header ends the
+    block (so the width never bleeds past the list it scopes)."""
+    active: Optional[int] = None
+    for line in prompt.splitlines():
+        hm = _GROUP_WIDTH_HEADER_RE.search(line)
+        is_bullet = _BULLET_NAME_RE.match(line)
+        if hm:
+            active = int(hm.group(1))
+            # a header may itself be `- **`port`** (1-bit)` — check the bullet too.
+            if is_bullet and is_bullet.group(1) == name:
+                return active
+            continue
+        if is_bullet:
+            if active is not None and is_bullet.group(1) == name:
+                return active
+            continue
+        # a blank line keeps the active group; any other prose ends it.
+        if line.strip():
+            active = None
+    return None
 
 
 def _resolve_width(prompt: str, table: Dict[str, int], name: str,
@@ -206,9 +349,36 @@ def _resolve_width(prompt: str, table: Dict[str, int], name: str,
     er = _explicit_range_width(prompt, name)
     if er is not None:
         return er, "explicit_range"
+    # A DECLARATION-STRENGTH parameter-expression width tied to the name OUTRANKS
+    # the bridge's LOOSE same-line `N-bit` prose match. `symbolic_width` recognises
+    # the param-expression declaration in EITHER order (`name [PARAM-1:0]` OR
+    # `[PARAM-1:0] name`) AND as a markdown table width-cell (`| name | N*W |`), and
+    # returns None when no such declaration is tied to the name (then we fall to
+    # prose for a genuinely prose-only port). Consulting it FIRST binds the port to
+    # ITS OWN declared parameter width, never a neighbour's coincidental literal.
+    # §4.05 false-reject + false-COMPLETE fix (Step-2.7): `[DATA_WIDTH-1:0] wdata_i`
+    # (range BEFORE the name) was losing to a "Updates the 20-bit counter" prose
+    # line, and a `| bits | N*IN_WIDTH |` cell to "each group of 4 bits" — wrong
+    # literal widths that both rejected the correct candidate AND over-claimed
+    # COMPLETE. (The old guard only matched the range-AFTER-name order.)
+    if params is not None:
+        sw0 = _W.symbolic_width(prompt, name, params)
+        if sw0 is not None:
+            _sym, default_w, tag = sw0
+            return default_w, tag
+    # the port has a param-EXPRESSION width declaration but it did NOT resolve from
+    # the parameter table (an unknown default, e.g. `bits [N*IN_WIDTH-1:0]` when N /
+    # IN_WIDTH have no stated default) -> the width is UNKNOWN, NOT a coincidental
+    # prose `N bits` literal. Return a gap so the gate enforces presence/dir but no
+    # wrong literal width (§4.05 false-reject + false-COMPLETE fix, Step-2.7).
+    if _W.has_param_expr_width(prompt, name):
+        return None, "param_expression_width"
     pw = _bridge._prose_width(prompt, name)
     if pw is not None:
         return pw, "prose_width"
+    gw = _grouped_bullet_width(prompt, name)
+    if gw is not None:
+        return gw, "grouped_bullet_width"
     key = name.lower()
     if key in table:
         return table[key], "test_case_table"
@@ -374,6 +544,19 @@ def _complete_interface(record: dict, top: str
     prompt = (record.get("input") or {}).get("prompt") or ""
     files = _bridge._harness_files(record)
     tb = _bridge._cocotb_test_text(files)
+    # parameter-DEFAULT table (NAME -> int) harvested from the prompt's partial
+    # module header / prose defaults / parameter table — the values that resolve a
+    # `[N-1:0]` / `[DATA_WIDTH-1:0]` width to its integer default. Computed up front
+    # so the recovered-read corroboration can use the width resolver.
+    param_defaults = _W.param_defaults(prompt, tb)
+    # merge parameter defaults declared in the PROVIDED input.context RTL, BELOW the
+    # prompt/testbench defaults (a prompt-stated value is never overridden). Closes
+    # `param_expression_width` gaps whose default lives only in the context file —
+    # §3.9: the value IS in the spec chain (interface/config, header-level, never
+    # the body); §4.05: only fills a width the prose/tb left unresolved.
+    for _nm, _v in _W.context_param_defaults(record).items():
+        param_defaults.setdefault(_nm, _v)
+    table = _bridge._test_case_table(prompt) or {}
 
     # (a) prefer a non-empty skeleton header (header only) — fully self-describing.
     sk = _bridge._skeleton_ports(record, top)
@@ -383,21 +566,35 @@ def _complete_interface(record: dict, top: str
             for n, w in _bridge._clean_ports(lst):
                 iface.append({"name": n, "dir": d, "width": w,
                               "signed": False, "source": "skeleton_header"})
-        c_ins, c_outs = _bridge._cocotb_io(tb)
+        c_ins, c_outs = _cocotb_io_full(tb, prompt, table, param_defaults)
         return iface, c_ins, c_outs, set(), []
 
     # (b) cocotb dut.<sig> set — the harness's bound interface.
-    c_ins, c_outs = _bridge._cocotb_io(tb)
+    c_ins, c_outs = _cocotb_io_full(tb, prompt, table, param_defaults)
     params = _harness_params(tb)
-    # parameter-DEFAULT table (NAME -> int) harvested from the prompt's partial
-    # module header / prose defaults / parameter table — the values that resolve a
-    # `[N-1:0]` / `[DATA_WIDTH-1:0]` width to its integer default.
-    param_defaults = _W.param_defaults(prompt, tb)
-    table = _bridge._test_case_table(prompt) or {}
     signed = bool(re.search(r"(?i)\bsigned\b|two'?s?\s+complement|2'?s?\s+complement", prompt))
 
     iface: List[dict] = []
     gaps: List[dict] = []
+
+    # §3.9 interface source: the PROVIDED input.context module HEADER. When the
+    # prose never states a port's width, the context file's `module <top>(...)`
+    # declaration resolves it (header-only — never the body; only the harness
+    # TOPLEVEL target). This closes `width_not_stated` gaps with the authoritative
+    # declared width (Tier3 -> Tier2), not a guess.
+    try:
+        ctx_widths = {p["name"]: p["width"] for p in _ctxrec.recover_interface(record, top)
+                      if p.get("width") is not None}
+    except Exception:
+        ctx_widths = {}
+
+    # the set of RECOGNISED config parameters: harness-driven params + every param
+    # with a default (prompt or context) + module `#(parameter NAME ...)` decls. A
+    # port whose width is a param expression over ONLY these is COMPLETELY specified
+    # as PARAMETERISED (the AI writes `[PARAM-1:0]`, correct under every harness
+    # override) — not an extraction gap.
+    config_params = set(params) | set(param_defaults) | set(
+        re.findall(r"\bparameter\b\s+(?:\w+\s+)?([A-Za-z_]\w*)", prompt))
 
     def _place(name: str, direction: str):
         if name in params:
@@ -406,6 +603,36 @@ def _complete_interface(record: dict, top: str
         if w is not None:
             iface.append({"name": name, "dir": direction, "width": w,
                           "signed": signed, "source": src})
+            return
+        # the PROVIDED input.context module header DECLARES this port's width — an
+        # authoritative interface fact (§3.9), used when the prose was silent.
+        if name in ctx_widths:
+            iface.append({"name": name, "dir": direction, "width": ctx_widths[name],
+                          "signed": signed, "source": "context_header"})
+            return
+        # a port whose width is a PARAMETER EXPRESSION with no resolvable default
+        # (`bits [N*IN_WIDTH-1:0]`): the PORT is known and must be PLACED (with an
+        # unknown width=None so the gate enforces presence + direction but not a
+        # literal), while the WIDTH is recorded as an honest extraction gap. Do NOT
+        # drop the port (that emptied the interface and dropped the record to an
+        # un-gateable Tier4) and do NOT let a coincidental prose literal stand in
+        # (the §4.05 false-COMPLETE the Step-2.7 review flagged).
+        if src == "param_expression_width":
+            iface.append({"name": name, "dir": direction, "width": None,
+                          "signed": signed, "source": "param_expression_width"})
+            # PARAMETERISED-COMPLETE: when every identifier in the width expression
+            # is a RECOGNISED config parameter, the width is FULLY specified (the AI
+            # writes `[PARAM-1:0]`, correct under every override) — NOT a gap. Only a
+            # width expression carrying an UNKNOWN symbol (no default, not harness-
+            # driven, not a module param) is a genuine extraction gap.
+            idents = _W.param_expr_idents(prompt, name)
+            if idents and idents <= config_params:
+                return
+            gaps.append({"kind": "INCOMPLETE_EXTRACTION_GAP",
+                         "type": "param_expression_width",
+                         "detail": f"{direction} port `{name}` width is a parameter "
+                                   f"expression with no resolvable default",
+                         "evidence": _evidence_line(prompt, name)})
             return
         if _is_clk(name) or _is_rst(name):
             iface.append({"name": name, "dir": direction, "width": 1,
