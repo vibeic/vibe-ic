@@ -542,6 +542,18 @@ def main():
         dst = samples_dir / f"{a.prob}_sample01.sv"
         dst.write_text(sample.read_text())
         steps["sample_emitted"] = str(dst)
+        # GATE-AS-SOLE-EMIT-PATH: attest this sample passed the Shape-C hard gates
+        # (phase1 + compile + structural emit-blocking rules + hygiene), so the
+        # score-time check can prove it was not authored directly into samples/.
+        try:
+            if str(PROGRAMS) not in sys.path:
+                sys.path.insert(0, str(PROGRAMS))
+            import emit_attestation as _ea
+            _ea.record(samples_dir, dst,
+                       gates=["gates_atomic", "phase1_run_all", "iverilog_compile",
+                              "structural_emit_rules"], shape="C")
+        except Exception:
+            pass
 
     (wd / "gates.json").write_text(json.dumps({"prob": a.prob,
                                                "hard_gates_pass": hard_ok,
