@@ -62,6 +62,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import spec_artifact_registry as _R  # noqa: E402  the deterministic solver catalog
+import cvdp_width_resolve as _W  # noqa: E402  symbolic/param-expression width reader
 
 # Specialized CVDP family solvers — each emits a CORRECT datapath for a family the
 # registry's plain +/-/* ops would MIS-EMIT (GF(2^n) carry-less multiply, BCD decimal
@@ -72,7 +73,7 @@ import spec_artifact_registry as _R  # noqa: E402  the deterministic solver cata
 _FAMILY_SOLVERS = []
 for _fam in ("cvdp_gf_synth", "cvdp_bcd_synth", "cvdp_crc_synth",
              "cvdp_encoder_synth", "cvdp_graycode_parity_synth",
-             "cvdp_shift_counter_synth", "cvdp_compose_synth", "cvdp_hamming_synth", "cvdp_mux_compare_synth", "cvdp_accumulate_synth", "cvdp_memory_synth", "cvdp_arith_variants_synth"):
+             "cvdp_shift_counter_synth", "cvdp_compose_synth", "cvdp_hamming_synth", "cvdp_mux_compare_synth", "cvdp_accumulate_synth", "cvdp_memory_synth", "cvdp_arith_variants_synth", "cvdp_table_lut_synth", "cvdp_saturate_synth"):
     try:
         _FAMILY_SOLVERS.append(__import__(_fam))
     except Exception:
@@ -332,7 +333,19 @@ def _prose_ports(prompt: str) -> Tuple[List[Port], List[Port]]:
 # --------------------------------------------------------------------------- #
 # interface resolution (priority a -> b -> c/d), with width cross-check
 # --------------------------------------------------------------------------- #
-def extract_interface(record: dict, top: str) -> Optional[Tuple[List[Port], List[Port]]]:
+# Side metadata an interface carries for the PARAMETERIZED emit path:
+#   params   — {PARAM_NAME: default_int}   (the parameter table to declare in #())
+#   symbolic — {port_name: symbolic_expr}  ("N-1:0", "DATA_WIDTH-1:0")  for ports
+#              whose width is a parameter expression; absent for literal-width ports.
+def extract_interface_ex(record: dict, top: str
+                         ) -> Optional[Tuple[List[Port], List[Port], Dict[str, int], Dict[str, str]]]:
+    """Like extract_interface but ALSO returns the parameter-default table and the
+    per-port symbolic width expression (for parameterized RTL emit). A port whose
+    width is a parameter expression (`[N-1:0]`, `[DATA_WIDTH-1:0]`, `[N*W-1:0]`,
+    `[$clog2(DEPTH)-1:0]`) is resolved to its integer default for the registry's
+    logic AND carries the symbolic expression so the emit can re-parameterize it.
+    §4.05: an unresolvable parameter expression keeps the port UNRESOLVED -> SKIP.
+    """
     prompt = (record.get("input") or {}).get("prompt") or ""
     files = _harness_files(record)
     tb = _cocotb_test_text(files)
@@ -341,7 +354,7 @@ def extract_interface(record: dict, top: str) -> Optional[Tuple[List[Port], List
     sk = _skeleton_ports(record, top)
     if sk:
         ins, outs = _clean_ports(sk[0]), _clean_ports(sk[1])
-        return (ins, outs) if ins and outs else None
+        return (ins, outs, {}, {}) if ins and outs else None
 
     # (d-first for completeness) prose port block, if the prompt has one.
     p_ins, p_outs = _prose_ports(prompt)
@@ -349,6 +362,11 @@ def extract_interface(record: dict, top: str) -> Optional[Tuple[List[Port], List
     # (b) cocotb-derived names; widths from prose / table.
     c_ins, c_outs = _cocotb_io(tb)
     table = _test_case_table(prompt) or {}
+
+    # parameter-default table + a place to record per-port symbolic widths so the
+    # emit can produce a `module M #(parameter N=<default>, ...)` header.
+    params = _W.param_defaults(prompt, tb)
+    symbolic: Dict[str, str] = {}
 
     # Unmistakable 1-bit signals (carry/borrow/flag/handshake): 1-bit by
     # definition. We trust a stray "N-bit" prose token for these ONLY if an
@@ -371,10 +389,24 @@ def extract_interface(record: dict, top: str) -> Optional[Tuple[List[Port], List
         pw = _prose_width(prompt, name)
         if pw is not None:
             return pw
+        # PARAMETER-EXPRESSION / range-before-name / param-override width: resolve
+        # the symbolic form to its integer default AND record the symbolic expr.
+        sw = _W.symbolic_width(prompt, name, params)
+        if sw is not None:
+            sym, default_w, _tag = sw
+            # only treat it as a true PARAMETER width (worth re-parameterizing) when
+            # the expression carries an identifier; a pure-literal `[1:0] name`
+            # range-before-name resolves to a constant width (no #() needed).
+            if re.search(r"[A-Za-z_]", sym):
+                symbolic[name] = sym
+            return default_w
         # table corroboration: column key equals the port name (or sum/carry forms).
         key = name.lower()
         if key in table:
             return table[key]
+        # a port DECLARED as a scalar (typed, no bracket range) is explicitly 1-bit.
+        if _W.scalar_one_bit(prompt, name):
+            return 1
         return None
 
     if c_ins and c_outs:
@@ -416,15 +448,40 @@ def extract_interface(record: dict, top: str) -> Optional[Tuple[List[Port], List
         # we never guess a data-path width.
         if unresolved or not ins or not outs:
             return None
-        return ins, outs
+        # keep only the symbolic entries that survived as real placed ports.
+        kept = {n for n, _ in ins} | {n for n, _ in outs}
+        symbolic = {k: v for k, v in symbolic.items() if k in kept}
+        used_params = _params_referenced(symbolic, params)
+        return ins, outs, used_params, symbolic
 
     # (d) prose-only fallback (already parsed by the registry path itself, but if
     # the prose block has explicit widths we can still build the block).
     p_ins, p_outs = _clean_ports(p_ins), _clean_ports(p_outs)
     if p_ins and p_outs:
-        return p_ins, p_outs
+        return p_ins, p_outs, {}, {}
 
     return None
+
+
+def _params_referenced(symbolic: Dict[str, str], params: Dict[str, int]) -> Dict[str, int]:
+    """The subset of the parameter table actually referenced by a kept symbolic
+    width — those are the params we declare in the emitted `#( ... )` header."""
+    used: Dict[str, int] = {}
+    for expr in symbolic.values():
+        for tok in re.findall(r"[A-Za-z_]\w*", expr):
+            if tok in params:
+                used[tok] = params[tok]
+    return used
+
+
+def extract_interface(record: dict, top: str) -> Optional[Tuple[List[Port], List[Port]]]:
+    """Backward-compatible 2-tuple interface (ports only) — the contract the family
+    solvers and the existing tests depend on. Delegates to extract_interface_ex."""
+    ex = extract_interface_ex(record, top)
+    if ex is None:
+        return None
+    ins, outs, _params, _sym = ex
+    return ins, outs
 
 
 # --------------------------------------------------------------------------- #
@@ -448,6 +505,43 @@ def _build_port_block(top: str, ins: List[Port], outs: List[Port]) -> str:
 def _rename_module(rtl: str, top: str) -> str:
     """Ensure the emitted module is named exactly per the harness TOPLEVEL."""
     return re.sub(r"(\bmodule\s+)\w+", rf"\g<1>{top}", rtl, count=1)
+
+
+def _parameterize_rtl(rtl: str, top: str, params: Dict[str, int],
+                      symbolic: Dict[str, Tuple[int, str]]) -> str:
+    """Re-parameterize the registry-emitted RTL: declare the referenced parameters
+    in a `module M #( parameter N = <default>, ... )` block, and rewrite each
+    symbolic-width port's literal `[default-1:0]` range to its symbolic form
+    `[N-1:0]`. The registry emitted CORRECT logic at the default width; this only
+    re-expresses the WIDTHS symbolically so the harness's `#(.N(...))` override
+    drives a correctly-parameterized module.
+
+    symbolic: {port_name: (default_width_int, symbolic_expr)} — e.g.
+              {"i_adc_data_in": (8, "DATA_WIDTH-1:0")}.
+    §4.05: only rewrites a literal range that EXACTLY equals the resolved default
+    `[w-1:0]` immediately adjacent to the port name, so a same-width unrelated
+    literal is never silently swapped.
+    """
+    if not params or not symbolic:
+        return rtl
+
+    # (1) insert the #(parameter ...) block right after `module <top>`.
+    decls = ", ".join(f"parameter {p} = {v}" for p, v in sorted(params.items()))
+    param_block = f" #(\n    {decls}\n)"
+    # only insert if not already parameterized.
+    if not re.search(rf"\bmodule\s+{re.escape(top)}\s*#", rtl):
+        rtl = re.sub(rf"(\bmodule\s+{re.escape(top)}\b)", rf"\g<1>{param_block}",
+                     rtl, count=1)
+
+    # (2) rewrite each symbolic port's literal `[w-1:0] name` range to `[expr] name`.
+    for name, (default_w, expr) in symbolic.items():
+        if default_w <= 1:
+            continue
+        lit = rf"\[\s*{default_w - 1}\s*:\s*0\s*\]"
+        # `[w-1:0] <name>` — width precedes the port name (declaration site).
+        rtl = re.sub(rf"{lit}(\s*{re.escape(name)}\b)",
+                     rf"[{expr}]\g<1>", rtl)
+    return rtl
 
 
 # --------------------------------------------------------------------------- #
@@ -480,10 +574,10 @@ def solve(record: dict) -> Optional[str]:
     if _COMPOSITE_RE.search(prompt) or _SPECIAL_ALGEBRA_RE.search(prompt):
         return None
 
-    iface = extract_interface(record, top)
+    iface = extract_interface_ex(record, top)
     if not iface:
         return None
-    ins, outs = iface
+    ins, outs, used_params, symbolic = iface
 
     block = _build_port_block(top, ins, outs)
     # Prepend the clean port block to the ORIGINAL prompt prose. The registry
@@ -496,7 +590,16 @@ def solve(record: dict) -> Optional[str]:
         return None
     if not rtl:
         return None
-    return _rename_module(rtl, top)
+    rtl = _rename_module(rtl, top)
+    # Re-parameterize: if any placed port's width was a parameter expression
+    # (`[N-1:0]`, `[DATA_WIDTH-1:0]`, ...), declare those params in a `#(...)`
+    # block and restore the symbolic width forms, so the harness's `#(.N(...))`
+    # override drives a correctly-parameterized module (not a default-width-only).
+    if used_params and symbolic:
+        widthmap = {n: w for n, w in ins + outs}
+        sym_full = {n: (widthmap.get(n, 1), expr) for n, expr in symbolic.items()}
+        rtl = _parameterize_rtl(rtl, top, used_params, sym_full)
+    return rtl
 
 
 def family_of(record: dict, rtl: Optional[str] = None) -> Optional[str]:
