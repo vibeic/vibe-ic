@@ -1,5 +1,5 @@
 """ORGANIC #640 — the reference-TB sv2v pre-pass
-(`phase2_one_shot_runner._iverilog_compile_with_sv_fallback`) historically
+(`design_one_shot_runner._iverilog_compile_with_sv_fallback`) historically
 (a) staged NO .svh / *_pkg.* closure and passed NO -I include path, and
 (b) hardcoded `sv2v -DSIMULATION`. On a SYNTHESIS-pruned REUSED-IP closure
 the canonical assertion-macro header
@@ -28,7 +28,7 @@ import importlib
 import inspect
 
 sf = importlib.import_module("synth_frontend")
-p2 = importlib.import_module("phase2_one_shot_runner")
+p2 = importlib.import_module("design_one_shot_runner")
 
 
 # Canonical vendor assertion-macro header: synth-arm uses the dummy

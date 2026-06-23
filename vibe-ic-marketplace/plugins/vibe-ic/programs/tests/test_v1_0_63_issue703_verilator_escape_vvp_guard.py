@@ -34,7 +34,7 @@ from pathlib import Path
 
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
-import phase2_one_shot_runner as R  # noqa: E402
+import design_one_shot_runner as R  # noqa: E402
 
 # The real escape transcript shape — the verilator native binary ran to
 # completion and printed the full-stack completion marker.

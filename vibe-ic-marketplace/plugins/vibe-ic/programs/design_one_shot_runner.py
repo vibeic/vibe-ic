@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
-"""phase2_one_shot_runner.py — Phase 2 main impl (L1-L23 → RTL → SOF → <half-duplex-tester>).
+"""design_one_shot_runner.py — the DESIGN one-shot runner (Phase 1 -> Phase 2:
+(doc|prompt) → L1-L27 JSON → RTL → SOF → <half-duplex-tester>).
 
-Phase 2 consumes Phase 1 (doc-extraction)'s `generated_docs/L*.json` and produces:
+This is the single production design runner. It STARTS FROM Phase 1: `step_phase1`
+auto-chains `phase1_one_shot_runner.py` when `generated_docs/L*.json` is absent or
+sparse (so either Phase-1 entry — doc-extraction OR prompt/dialogue — flows through
+the same (doc|prompt) → Phase1(L*.json) → Phase2 chain), then runs Phase 2:
   - rtl/*.sv|.v               (deterministic AID-class RTL via aid_class_rtl_gen)
   - sim/reference_tb/*.log    (iverilog protocol TB; ECO loop)
   - sim_full_stack/*.json     (oracle for protocol_ip_simulation_required_check)
@@ -9,8 +13,9 @@ Phase 2 consumes Phase 1 (doc-extraction)'s `generated_docs/L*.json` and produce
   - fpga/<top>.qsf, .sdc, output_files/*.sof
   - reports/phase2_one_shot.json
 
-Pre-condition: 13 L docs in `<project>/generated_docs/`. Caller chains
-this with phase1 via `/vibe-ic-phase2` (= phase2_one_shot_runner.py).
+Canonical Phase-1 L-doc range: L1-L27 (+ L8R) — the superset emitted by the
+phase1 engine / dialogue render. If `generated_docs/` is already populated the
+Phase-1 chain is SKIPped. Entry point: `/vibe-ic-phase2` (= design_one_shot_runner.py).
 chip-AGNOSTIC.
 
 Chains the deterministic generators / verifiers so a fresh-agent does NOT
@@ -725,7 +730,7 @@ def detect_ic_class(project: Path) -> Tuple[str, str]:
     if not gd.is_dir():
         return ("unknown", "generated_docs/ not present — Phase 1 (doc-extraction) not run")
 
-    # Lazy-import the canonical classifier; phase2_one_shot_runner
+    # Lazy-import the canonical classifier; design_one_shot_runner
     # historically loaded without ic_class_profile available, so fall
     # back to a conservative ``unknown`` rather than crashing if the
     # module is missing for any reason.
@@ -4998,7 +5003,7 @@ def step_reference_tb(project: Path, top_name: str = "chip_top",
             per_vector,
             tb_name=PROTOCOL_TB.name,
             dut=top_name,
-            source="phase2_one_shot_runner.step_reference_tb",
+            source="design_one_shot_runner.step_reference_tb",
             evidence=l3_evidence,
             opcodes_tested=_opcodes_tested,
             extra={
@@ -5938,7 +5943,7 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         wrapper = (
             f"// SPDX-License-Identifier: Apache-2.0\n"
             f"{_GENERATED_DESIGN_HEADER}"
-            f"// v0.1.62 auto-emitted chip_top wrapper (phase2_one_shot_runner).\n"
+            f"// v0.1.62 auto-emitted chip_top wrapper (design_one_shot_runner).\n"
             f"// L9.top_module = '{synth_top}' but rtl/ only defined '{mod_name}'\n"
             f"// (in {src_file.name}). This thin pass-through lets yosys synth\n"
             f"// against L9's expected top without modifying the authored RTL.\n"
@@ -8083,7 +8088,7 @@ def main() -> int:
     # ORGANIC #588 — single-driver lock honored by the standalone phase2
     # runner; re-enters the orchestrator's lock via the env token, or
     # refuses a second concurrent standalone phase2 on a live project.
-    _lock = _runner_lock.acquire_or_reenter(project, "phase2_one_shot_runner")
+    _lock = _runner_lock.acquire_or_reenter(project, "design_one_shot_runner")
     if _lock is None:
         return 3
 
@@ -8092,7 +8097,7 @@ def main() -> int:
     # Step 0 — Phase 1 (doc-extraction) (v0.122: chain phase1_one_shot_runner if needed)
     plan.append(step_rig_topology_skeleton(project))
     # Phase 2 precondition: 13 L docs must already exist (caller is
-    # responsible for running phase1 first — chained by phase2_one_shot_runner).
+    # responsible for running phase1 first — chained by design_one_shot_runner).
     gd = _pl.generated_docs_dir(project)
     L_count = len(list(gd.glob("L*.json"))) if gd.is_dir() else 0
     if L_count < 13:
@@ -8118,7 +8123,7 @@ def main() -> int:
         out = _pl.report_path(project, "phase2_one_shot.json")
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
-        print(f"\n=== phase2_one_shot_runner DONE — {out}")
+        print(f"\n=== design_one_shot_runner DONE — {out}")
         print(f"verdict: FAIL — phase1 precondition unmet")
         return 1
     plan.append(StepResult("phase1_precheck", "PASS", 0.0,
@@ -8526,7 +8531,7 @@ def main() -> int:
     out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
     # v1.6.32: emit canonical final_summary.md (best-effort).
     fs_ok = _pl.emit_final_summary(project, PROGRAMS_DIR)
-    print(f"\n=== phase2_one_shot_runner DONE — {out}")
+    print(f"\n=== design_one_shot_runner DONE — {out}")
     print(f"verdict: {summary['verdict']}")
     for s in plan:
         print(f"  {s.status:8} {s.name:20} {s.detail[:120]}")

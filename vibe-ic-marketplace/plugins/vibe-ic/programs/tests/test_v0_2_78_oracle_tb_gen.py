@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import oracle_tb_gen as OTG  # noqa: E402
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
-_P2_SRC = (PLUGIN / "programs" / "phase2_one_shot_runner.py").read_text()
+_P2_SRC = (PLUGIN / "programs" / "design_one_shot_runner.py").read_text()
 _REG = json.loads((PLUGIN / "programs" / "ic_class_registry.json").read_text())
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for phase2_one_shot_runner.py — Phase 2b orchestrator (L docs → SOF).
+"""Tests for design_one_shot_runner.py — Phase 2b orchestrator (L docs → SOF).
 
 Wave 83 — coverage for previously untested orchestrator.
 
@@ -31,7 +31,7 @@ import sys
 from pathlib import Path
 
 PROG = Path(__file__).resolve().parent.parent / \
-    "phase2_one_shot_runner.py"
+    "design_one_shot_runner.py"
 
 
 def _run(args: list, timeout: int = 90) -> subprocess.CompletedProcess:

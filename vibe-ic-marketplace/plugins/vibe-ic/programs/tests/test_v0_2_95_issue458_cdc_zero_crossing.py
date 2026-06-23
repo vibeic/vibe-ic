@@ -3,7 +3,7 @@
 legitimate single-clock design (zero clock-domain crossings).
 
 Bug (v0.2.90): the checker FAILed every legit single-clock design.
-phase2_one_shot_runner emits, for a single-clock RTL scan:
+design_one_shot_runner emits, for a single-clock RTL scan:
 
     reports/phase2/cdc/crossing.json = {
         "verdict": "PASS",

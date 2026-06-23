@@ -1,4 +1,4 @@
-"""Routing fix — phase2_one_shot_runner.step_rtl_gen surfaces the captured-lesson
+"""Routing fix — design_one_shot_runner.step_rtl_gen surfaces the captured-lesson
 digest to the spec-to-rtl / catalog-glue author.
 
 A runner-driven (Shape-B) spec-to-rtl author previously got NO lessons (only the
@@ -30,7 +30,7 @@ _PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROGRAMS))
 
 import _lesson_digest  # noqa: E402
-import phase2_one_shot_runner as r  # noqa: E402
+import design_one_shot_runner as r  # noqa: E402
 
 # a registered class with rtl_gen=null + fallback_skill=spec-to-rtl
 _NULL_RTL_CLASS = "digital_arithmetic_primitive"

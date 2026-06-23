@@ -737,7 +737,7 @@ unambiguous closest, not an inflected/British/real-word form) is a typo; the pro
 canonical-spelled passthrough alias wrapper automatically (inheriting the leaf's `#(...)` parameter
 block when it is parameterized, so the wrapper elaborates). It will NOT fire on a correct canonical
 leaf, a leaf far from every term, an ambiguous tie, or a short abbreviation (addr/alu/mux/ram).
-**Wired into the runner**: `phase2_one_shot_runner` calls it automatically over the emitted RTL
+**Wired into the runner**: `design_one_shot_runner` calls it automatically over the emitted RTL
 after authoring, so the rescue no longer depends on the author remembering this section; the
 residual judgment (a typo of a term NOT in the curated root set, or a non-arithmetic novel-name
 typo) stays here. (distance was tightened from the original 1..2 to exactly 1 in the #517 reopen,

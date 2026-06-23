@@ -1,4 +1,4 @@
-"""Tests for v0.1.58 R8 capture: phase2_one_shot_runner must regenerate
+"""Tests for v0.1.58 R8 capture: design_one_shot_runner must regenerate
 `reports/final_summary.md` BEFORE invoking step_final_audit so the audit's
 agent_report_sha256_attestation_check sees fresh attestations for every
 artefact this phase2 run just emitted.
@@ -18,7 +18,7 @@ import re
 from pathlib import Path
 
 PROGRAMS = Path(__file__).resolve().parents[1]
-RUNNER = PROGRAMS / "phase2_one_shot_runner.py"
+RUNNER = PROGRAMS / "design_one_shot_runner.py"
 
 
 def test_emit_final_summary_precedes_step_final_audit():

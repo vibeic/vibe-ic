@@ -1,6 +1,6 @@
 ---
 name: vibe-ic-phase23
-description: Chain /vibe-ic-phase2 → /vibe-ic-phase3 via phase23_one_shot_runner (true chained orchestrator — delegates to phase2_one_shot_runner.py + phase3_one_shot_runner.py, not monolithic). AI-monitored + close-loop.
+description: Chain /vibe-ic-phase2 → /vibe-ic-phase3 via phase23_one_shot_runner (true chained orchestrator — delegates to design_one_shot_runner.py + phase3_one_shot_runner.py, not monolithic). AI-monitored + close-loop.
 argument-hint: <project-dir> [--top-name chip_top] [--skip-hardware] [--max-eco 3] [--skip-phase2|--skip-phase3]
 ---
 > **Missing arg?** When `$ARGUMENTS` is empty, prompt the user first:
@@ -17,7 +17,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/programs/phase23_one_shot_runner.py $ARGUMENTS
 ```
 
 This runner is a **thin-shell chain**:
-1. Delegates to `phase2_one_shot_runner.py` to run Phase 2 (rig_topology skeleton → phase1 → rtl_gen → reference_tb → yosys → qsf/sdc → otp_check → fpga compile/burn → <half-duplex-tester> → manifests → final_audit @phase 2)
+1. Delegates to `design_one_shot_runner.py` to run Phase 2 (rig_topology skeleton → phase1 → rtl_gen → reference_tb → yosys → qsf/sdc → otp_check → fpga compile/burn → <half-duplex-tester> → manifests → final_audit @phase 2)
 2. If Phase 2 verdict==FAIL, **auto-halt** without entering Phase 3 (unless `--skip-phase3` is the user-specified alias usage)
 3. Phase 2 PASS / PASS_WITH_WAIVERS → delegates to `phase3_one_shot_runner.py` to run Phase 3 (synth/PnR/GDS/DRC/LVS)
 4. Aggregates JSON reports from both phases → `<project>/reports/phase23_one_shot.json`

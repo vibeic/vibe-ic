@@ -261,7 +261,7 @@ def test_766r2_nonansi_unpacked_output_reaches_same_verdict_as_ansi(tmp_path):
 #    POWER pins / erase the supply ifdef (the #645 invariant). ─────────────────
 def test_766r2_nonansi_top_preserves_l9_power_pins_ifdef(tmp_path):
     import json
-    import phase2_one_shot_runner as P2
+    import design_one_shot_runner as P2
     l9 = {"top_module": "soc_top", "top_ports": [
         {"name": "wb_clk_i", "direction": "input", "width": 1},
         {"name": "wbs_dat_i", "direction": "input", "width": 32,

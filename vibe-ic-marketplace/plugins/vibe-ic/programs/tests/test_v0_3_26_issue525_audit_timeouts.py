@@ -29,7 +29,7 @@ from pathlib import Path
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import _path_layout as _pl  # noqa: E402
-import phase2_one_shot_runner as P2  # noqa: E402
+import design_one_shot_runner as P2  # noqa: E402
 import flow_compliance_check as FCC  # noqa: E402
 import phase23_completion_self_audit_check as SA  # noqa: E402
 import eda_report_audit as ERA  # noqa: E402

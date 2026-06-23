@@ -110,7 +110,7 @@ def test_child_env_propagates_inherited_token_when_reentrant(
     top = RL.acquire_or_reenter(tmp_path, "vibe_ic_one_shot_runner")
     token = RL.child_env(tmp_path, held_lock=top)[RL.REENTRANCY_ENV]
     monkeypatch.setenv(RL.REENTRANCY_ENV, token)
-    mid = RL.acquire_or_reenter(tmp_path, "phase2_one_shot_runner")
+    mid = RL.acquire_or_reenter(tmp_path, "design_one_shot_runner")
     assert getattr(mid, "reentrant", False) is True
     env = RL.child_env(tmp_path, held_lock=mid)
     assert env[RL.REENTRANCY_ENV] == token  # propagated, not rewritten
@@ -123,7 +123,7 @@ def test_all_four_runners_call_acquire_or_reenter():
     import inspect
     import vibe_ic_one_shot_runner as orch
     import phase1_one_shot_runner as p1
-    import phase2_one_shot_runner as p2
+    import design_one_shot_runner as p2
     import phase3_one_shot_runner as p3
     for mod in (orch, p1, p2, p3):
         src = inspect.getsource(mod.main)

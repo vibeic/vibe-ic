@@ -1,13 +1,13 @@
 ---
 name: catalog-glue-author
-description: When phase2_one_shot_runner.step_rtl_gen WAIVES rtl_gen and ip_catalog_query has emitted matches, this skill pulls the matched open-source IP RTL into the project's canonical phase2/stage1/rtl/ directory and authors only the integration wrapper / chip-top + OpenLane config glue from L1-L23 spec. Replaces full-from-scratch spec-to-rtl authoring for SoC-class designs where pre-validated open-source IPs exist in the catalog. Triggers automatically when phase2 WAIVES with `fallback_skill=catalog-glue-author`.
+description: When design_one_shot_runner.step_rtl_gen WAIVES rtl_gen and ip_catalog_query has emitted matches, this skill pulls the matched open-source IP RTL into the project's canonical phase2/stage1/rtl/ directory and authors only the integration wrapper / chip-top + OpenLane config glue from L1-L23 spec. Replaces full-from-scratch spec-to-rtl authoring for SoC-class designs where pre-validated open-source IPs exist in the catalog. Triggers automatically when phase2 WAIVES with `fallback_skill=catalog-glue-author`.
 ---
 
 # catalog-glue-author — Plugin IP integrator path
 
 ## When this skill fires
 
-When `phase2_one_shot_runner.step_rtl_gen` returns:
+When `design_one_shot_runner.step_rtl_gen` returns:
 ```
 WAIVED rtl_gen — IC class registered but rtl_gen=null.
                  Recommended action: AI invokes skill `catalog-glue-author`.
@@ -134,7 +134,7 @@ and #712 (wrapper-exposed output) are **dead code without this file**.
   AUTO-EMITS the manifest at pull time (`generated_by:"ip_catalog_pull"`). No
   action needed.
 - **pre-staged vendor RTL path** (`input/vendor_rtl/` populated, the pull never
-  runs): as of #732 `phase2_one_shot_runner.step_rtl_gen` AUTO-EMITS a minimal
+  runs): as of #732 `design_one_shot_runner.step_rtl_gen` AUTO-EMITS a minimal
   keystone manifest `{reused_ip:true, ip_list:[…], rtl_strategy:"catalog_lookup_plus_ai_glue",
   generated_by:"phase2_runner_prestaged"}` the moment it WAIVES to this skill
   (it reports the path in `extras.source_manifest_emitted`). You do **not** need
@@ -207,7 +207,7 @@ When a pulled IP is assertion-macro SystemVerilog (the `prim_assert`
 pattern: a header whose `` `ifdef VERILATOR / `elsif SYNTHESIS / `else ``
 chain `` `include ``s a macros file, plus packages and `.svh` headers),
 **stage the files as-is and let the runner convert them**. As of
-v0.3.41 `phase2_one_shot_runner._phase2_sv_synth_fallback` does the full
+v0.3.41 `design_one_shot_runner._phase2_sv_synth_fallback` does the full
 recipe in-container:
 
 - stages the FULL closure — `.sv` sources **plus** `.svh`/`.vh`/`.h`

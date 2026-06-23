@@ -883,7 +883,7 @@ def _strip_param_block(src: str) -> str:
 # are EXCLUDED before extraction. Without it, the parser harvests
 # conditionally-compiled ports the DUT never exposes AND leaks the
 # last-seen direction token across a stripped conditional boundary into
-# the next real port. Mirrors phase2_one_shot_runner._v671_tb_compile_defines
+# the next real port. Mirrors design_one_shot_runner._v671_tb_compile_defines
 # exactly (base SIMULATION, flipped to SYNTHESIS only when the simulation
 # arm leaves an include-closure hole the synthesis arm resolves). A
 # formal/debug/coverage define (e.g. RISCV_FORMAL) is in NEITHER set, so
@@ -936,7 +936,7 @@ def parse_rtl_top_ports(rtl_path: Path,
     ONTO the SHARED preprocessor-aware parser
     `reset_clock_variant_alias.parse_module_ports(text, module, defines)`
     (the #671 parser already consumed by l9_submodule_conformance_check /
-    leaf_typo_alias_emit / phase2_one_shot_runner). The shared parser
+    leaf_typo_alias_emit / design_one_shot_runner). The shared parser
     handles comment + balanced-paren `#(...)` parameter stripping + SV
     `import pkg::*;` clauses AND — when `defines` is supplied — BLANKS the
     bodies of NOT-TAKEN `ifdef/`ifndef/`elsif/`else arms BEFORE the port

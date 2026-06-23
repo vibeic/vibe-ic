@@ -32,7 +32,7 @@ before invoking any benchmark agent or runner.
 
 ## § 1 — Where Vibe-IC is a PROGRAM and where it's an LLM (the boundary every benchmark designer must respect)
 
-In v0.1.26 the plugin's `phase2_one_shot_runner.step_rtl_gen` for the `digital_arithmetic_primitive`
+In v0.1.26 the plugin's `design_one_shot_runner.step_rtl_gen` for the `digital_arithmetic_primitive`
 class (and any class whose `rtl_gen=null`) **WAIVES with `fallback_skill=spec-to-rtl`**. The
 spec-to-rtl skill is an AI skill — there is **no deterministic spec→Verilog program**, because
 natural language to RTL fundamentally requires a language model. What IS deterministic:
@@ -40,7 +40,7 @@ natural language to RTL fundamentally requires a language model. What IS determi
 | Step | Deterministic program? | Where |
 |---|---|---|
 | Phase 1: NL prompt → L1-L23 JSON | ✅ | `phase1_engine` / `phase1_one_shot_runner.py` |
-| ic_class detection + dispatch | ✅ | `phase2_one_shot_runner.py` + `ic_class_profile.py` |
+| ic_class detection + dispatch | ✅ | `design_one_shot_runner.py` + `ic_class_profile.py` |
 | **spec → RTL authoring** | **❌ AI skill** | `spec-to-rtl` (fallback skill) |
 | RTL hygiene (power-up `--fix`, latch repair) | ✅ | `rtl_hygiene_lint.py --fix` |
 | Spec-conformance gate (ports/widths/reset) | ✅ | `spec_conformance_check.py` |

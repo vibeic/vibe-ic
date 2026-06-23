@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from programs.phase2_one_shot_runner import detect_ic_class
+from programs.design_one_shot_runner import detect_ic_class
 import pytest
 
 

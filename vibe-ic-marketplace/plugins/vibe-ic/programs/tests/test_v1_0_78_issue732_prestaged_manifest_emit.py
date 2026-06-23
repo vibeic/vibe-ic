@@ -6,7 +6,7 @@ DEFECT (round-11 v1.0.77 6-IC clean-room; OpenTitan-AES reused-IP SoC):
     (1) catalog-pull — ip_catalog_pull.pull_all_catalog_matches copies the IP
         and (since #711) auto-emits phase2/stage1/rtl/SOURCE_MANIFEST.json.
     (2) pre-staged vendor RTL — input/vendor_rtl/ is already populated, so
-        phase2_one_shot_runner.step_rtl_gen WAIVES immediately with
+        design_one_shot_runner.step_rtl_gen WAIVES immediately with
         fallback_skill=catalog-glue-author and RETURNS — it never queries the
         catalog, never calls ip_catalog_pull, and (pre-#732) never emitted the
         manifest.
@@ -42,7 +42,7 @@ if str(_PROGRAMS) not in sys.path:
 
 import staged_rtl_reused_ip_manifest_emit as SRM  # noqa: E402
 import l9_rtl_pin_consistency_check as G  # noqa: E402
-import phase2_one_shot_runner as R  # noqa: E402
+import design_one_shot_runner as R  # noqa: E402
 
 
 _VENDOR_AES_SV = """\

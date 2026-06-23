@@ -28,11 +28,11 @@
     },
     "phase2.chip_top_wrapper": {
       "bucket_A_program": "programs/chip_top_gate_wrapper_gen.py",
-      "bucket_A_related": ["programs/phase2_one_shot_runner.py"],
+      "bucket_A_related": ["programs/design_one_shot_runner.py"],
       "bucket_B_skill_file": "agents/ic-expert-agent.md"
     },
     "phase2.yosys_synth": {
-      "bucket_A_program": "programs/phase2_one_shot_runner.py",
+      "bucket_A_program": "programs/design_one_shot_runner.py",
       "bucket_B_skill_file": "skills/synth-doctor/SKILL.md"
     },
     "phase2.reference_tb": {
@@ -40,7 +40,7 @@
       "bucket_B_skill_file": "skills/phase2-rtl-verify/SKILL.md"
     },
     "phase2.eco_loop": {
-      "bucket_A_program": "programs/phase2_one_shot_runner.py",
+      "bucket_A_program": "programs/design_one_shot_runner.py",
       "bucket_B_skill_file": "skills/rtl-repair/SKILL.md"
     },
     "phase2.spec_conformance": {

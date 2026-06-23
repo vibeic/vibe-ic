@@ -90,7 +90,7 @@ def test_pure_digital_auto_injects_skip_analog(tmp_path, monkeypatch):
     cap = _drive_main(monkeypatch, project,
                       argv_extra=["--skip-phase1", "--skip-phase3"],
                       need_analog=False)
-    p2 = cap["phase_args"].get("phase2_one_shot_runner.py")
+    p2 = cap["phase_args"].get("design_one_shot_runner.py")
     assert p2 is not None, "phase2 must have been invoked"
     assert "--skip-analog" in p2, (
         "orchestrator must auto-forward --skip-analog to phase2 when its own "
@@ -119,7 +119,7 @@ def test_analog_project_does_not_inject_skip_analog(tmp_path, monkeypatch):
     cap = _drive_main(monkeypatch, project,
                       argv_extra=["--skip-phase1", "--skip-phase3"],
                       need_analog=True)
-    p2 = cap["phase_args"].get("phase2_one_shot_runner.py")
+    p2 = cap["phase_args"].get("design_one_shot_runner.py")
     assert p2 is not None, "phase2 must have been invoked"
     assert "--skip-analog" not in p2, (
         "must NOT inject --skip-analog for an analog/mixed-signal project — "
@@ -147,7 +147,7 @@ def test_user_skip_analog_forwarded_even_when_need_analog_true(tmp_path, monkeyp
                                   "--skip-analog"],
                       # force_skip path returns False; pin both consistent
                       need_analog=True)
-    p2 = cap["phase_args"].get("phase2_one_shot_runner.py")
+    p2 = cap["phase_args"].get("design_one_shot_runner.py")
     assert p2 is not None
     assert "--skip-analog" in p2
     assert "analog_one_shot_runner.py" not in cap["phase_args"]
@@ -161,7 +161,7 @@ def test_skip_analog_appears_once(tmp_path, monkeypatch):
                       argv_extra=["--skip-phase1", "--skip-phase3",
                                   "--skip-analog"],
                       need_analog=False)
-    p2 = cap["phase_args"].get("phase2_one_shot_runner.py")
+    p2 = cap["phase_args"].get("design_one_shot_runner.py")
     assert p2.count("--skip-analog") == 1, (
         f"--skip-analog must appear exactly once, not duplicated: {p2}")
 

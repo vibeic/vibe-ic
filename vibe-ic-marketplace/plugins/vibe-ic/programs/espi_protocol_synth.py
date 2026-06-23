@@ -381,7 +381,7 @@ def _canon():
             # checks submodules[] vs rtl/, so these names MUST match the RTL.
             # ports[] use the `direction` key (input/output/inout) — this is
             # the key both the full_stack TB generator
-            # (phase2_one_shot_runner.step_full_stack_tb_gen) and the L9
+            # (design_one_shot_runner.step_full_stack_tb_gen) and the L9
             # conformance gate read; widths mirror the actual chip_top.v
             # declaration. Outputs are emitted as TB wires (DUT-driven), inputs
             # as TB regs — so the generated TB compiles against the real RTL.
