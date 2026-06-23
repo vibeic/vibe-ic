@@ -70,14 +70,28 @@ import cvdp_width_resolve as _W  # noqa: E402  symbolic/param-expression width r
 # Each exposes solve(record)->RTL|None and is §4.05 parse-or-SKIP. Tried BEFORE the
 # registry path so the special-algebra families are SOLVED, not SKIPped. Imported
 # dynamically so a not-yet-present solver simply doesn't contribute.
-_FAMILY_SOLVERS = []
-for _fam in ("cvdp_gf_synth", "cvdp_bcd_synth", "cvdp_crc_synth",
-             "cvdp_encoder_synth", "cvdp_graycode_parity_synth",
-             "cvdp_shift_counter_synth", "cvdp_compose_synth", "cvdp_hamming_synth", "cvdp_mux_compare_synth", "cvdp_accumulate_synth", "cvdp_memory_synth", "cvdp_arith_variants_synth", "cvdp_table_lut_synth", "cvdp_saturate_synth", "cvdp_bitmanip_synth"):
-    try:
-        _FAMILY_SOLVERS.append(__import__(_fam))
-    except Exception:
-        pass
+#
+# ORDERING (binding — DO NOT move this loop up): the canonical solver NAMES live here
+# so the dispatch ORDER (precedence — first-firing wins) is declared at the top where
+# it is read, but the actual __import__ is DEFERRED to _load_family_solvers() at the
+# very BOTTOM of this module. WHY: a family solver may `import cvdp_atomic_bridge` and
+# reference a bridge MODULE-SCOPE attribute (e.g. cvdp_table_lut_synth does
+# `_COMPOSITE_RE = _bridge._COMPOSITE_RE` at its own import time). If we import the
+# solvers HERE, the bridge is only half-initialized — `_COMPOSITE_RE` (defined ~40
+# lines below) does not exist yet — so the solver's import raises AttributeError, which
+# the loop's `except` SILENTLY swallows, DROPPING that solver from _FAMILY_SOLVERS and
+# making the bridge return None for records that solver alone solves (the GP / table_lut
+# routing bug). Deferring the import until the bridge module is FULLY defined breaks the
+# circular-import race for every present-and-future solver, GENERAL-ly.
+_FAMILY_SOLVER_NAMES = (
+    "cvdp_gf_synth", "cvdp_bcd_synth", "cvdp_crc_synth",
+    "cvdp_encoder_synth", "cvdp_graycode_parity_synth",
+    "cvdp_shift_counter_synth", "cvdp_compose_synth", "cvdp_hamming_synth",
+    "cvdp_mux_compare_synth", "cvdp_accumulate_synth", "cvdp_memory_synth",
+    "cvdp_arith_variants_synth", "cvdp_table_lut_synth", "cvdp_saturate_synth",
+    "cvdp_bitmanip_synth",
+)
+_FAMILY_SOLVERS: List = []  # populated by _load_family_solvers() at module-load bottom
 
 Port = Tuple[str, int]  # (name, width)
 
@@ -622,6 +636,40 @@ def family_of(record: dict, rtl: Optional[str] = None) -> Optional[str]:
     except Exception:
         return None
     return kind if r else None
+
+
+# --------------------------------------------------------------------------- #
+# DEFERRED family-solver import (see _FAMILY_SOLVER_NAMES note up top). Runs at the
+# BOTTOM of the module — after EVERY bridge module-scope attribute (_COMPOSITE_RE,
+# _SPECIAL_ALGEBRA_RE, the extract_/_build_/toplevel_ helpers) is defined — so a solver
+# that references the bridge at its OWN import time sees a FULLY-initialized bridge and
+# does not get silently dropped by a circular-import AttributeError. _IMPORT_ERRORS
+# records any genuine import failure for diagnostics (a real ModuleNotFound for an
+# absent solver is recorded but non-fatal — the bridge still works with the rest).
+# --------------------------------------------------------------------------- #
+_IMPORT_ERRORS: List[Tuple[str, str]] = []
+
+
+def _load_family_solvers() -> List:
+    """Import the family solvers in _FAMILY_SOLVER_NAMES order and populate
+    _FAMILY_SOLVERS. Idempotent: re-loading replaces the list in place so the dispatch
+    order is always the declared one. A solver missing a `solve` callable is skipped."""
+    _FAMILY_SOLVERS.clear()
+    _IMPORT_ERRORS.clear()
+    for _fam in _FAMILY_SOLVER_NAMES:
+        try:
+            _mod = __import__(_fam)
+        except Exception as _e:  # genuinely absent / broken solver — record, skip.
+            _IMPORT_ERRORS.append((_fam, repr(_e)))
+            continue
+        if not callable(getattr(_mod, "solve", None)):
+            _IMPORT_ERRORS.append((_fam, "no callable solve()"))
+            continue
+        _FAMILY_SOLVERS.append(_mod)
+    return _FAMILY_SOLVERS
+
+
+_load_family_solvers()
 
 
 # --------------------------------------------------------------------------- #
