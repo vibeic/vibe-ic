@@ -738,10 +738,44 @@ def _spec_describes_plain_shifter(spec_text: str) -> bool:
     return True
 
 
+def _concat_assignment_lhs(rtl_body: str, concat_start: int):
+    """The variable a `{a, b}` concat starting at `concat_start` is assigned to:
+    `q_next = {q[0], q[31:1]};` -> 'q_next'. Returns the base name or None."""
+    import re
+    head = rtl_body[:concat_start].rstrip()
+    m = re.search(r'([A-Za-z_]\w*)\s*(?:<=|=)\s*$', head)
+    return m.group(1) if m else None
+
+
+def _has_galois_tap_feedback(rtl_body: str, vec_base: str) -> bool:
+    """A Galois LFSR uses the SAME `{q[0], q[W-1:1]}` wrap concat as a right-rotate
+    but then XOR-modifies specific TAP bits of the assigned word with the fed-back
+    bit (`q_next[21] ^= q[0]` or `q_next[21] = q_next[21] ^ q[0]`). That tap-XOR is
+    LINEAR FEEDBACK — it breaks the bijection, so the wrap is NOT a data rotate.
+    A PURE rotate has no such bit-indexed XOR-assignment of the rotated word, so it
+    is unaffected (the §4.05 no-leak property). chip-AGNOSTIC: any vector name."""
+    import re
+    if not vec_base:
+        return False
+    v = re.escape(vec_base)
+    # form 1: q_next[<idx>] ^= <fb>
+    if re.search(rf'\b{v}\s*\[[^\]]+\]\s*\^=', rtl_body):
+        return True
+    # form 2: q_next[<idx>] = q_next[<idx>] ^ <fb>   (self bit-XOR feedback)
+    if re.search(rf'\b{v}\s*\[[^\]]+\]\s*=\s*{v}\s*\[[^\]]+\]\s*\^', rtl_body):
+        return True
+    return False
+
+
 def _rtl_rotate_signatures(rtl_body: str) -> List[str]:
     """Return the matched barrel-ROTATE idiom strings present in the RTL. Only
     the two unambiguous wrap signatures (see the rule comment); a logical-shift
-    or zero-fill form matches NEITHER. Best-effort, zero-false-fire."""
+    or zero-fill form matches NEITHER. Best-effort, zero-false-fire.
+
+    §4.05 LFSR carve-out: a Galois LFSR's `{q[0], q[W-1:1]}` wrap is feedback, not a
+    data rotate, when the assigned word is subsequently XOR-modified at tap bits
+    (`_has_galois_tap_feedback`). Such a signature is excluded; a PURE rotate (no
+    tap-XOR) still matches and still trips the rule (no leak)."""
     import re
     out: List[str] = []
     # (1) OR of two OPPOSITE shifts of the SAME signal: (x<<n)|(x>>m) either order
@@ -816,6 +850,12 @@ def _rtl_rotate_signatures(rtl_body: str) -> List[str]:
             continue
         union = idx_a | idx_b
         if union == set(range(0, max(union) + 1)):   # disjoint + gap-free [0..W-1]
+            # §4.05 LFSR carve-out: skip if the assigned word is XOR-tap-modified
+            # (Galois linear feedback, not a data rotate). A pure rotate has no
+            # tap-XOR and is unaffected — it still trips the rule (no leak).
+            lhs = _concat_assignment_lhs(rtl_body, m.start())
+            if lhs and _has_galois_tap_feedback(rtl_body, lhs):
+                continue
             out.append(whole.strip())
     # (3) a DOUBLED / REPLICATED same-vector fed into a SINGLE shift:
     #     {x, x} >> k   /   {N{x}} >> k   (N >= 2)   — the duplication supplies
