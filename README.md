@@ -14,7 +14,7 @@
 Vibe-IC is a Claude Code plugin + Model Context Protocol (MCP) server
 that bridges large language models to real open-source EDA tools so that
 designers can drive an entire IC flow — from a one-paragraph intent
-through L1-L23 design documents, RTL, FPGA verification, and tape-out
+through L1-L27 design documents, RTL, FPGA verification, and tape-out
 sign-off — in natural language, with every step gated by deterministic
 checkers (no fabrication, no hallucinated PASS).
 
@@ -81,7 +81,7 @@ output, SOIC-8 package."
 ```
 
 Claude will dispatch the appropriate skills, invoke MCP-EDA tools, and
-emit L1-L23 design docs + RTL + a verified bitstream.
+emit L1-L27 design docs + RTL + a verified bitstream.
 
 Optional for full lab integration:
 
@@ -101,7 +101,7 @@ Optional for full lab integration:
                        ▼
      ┌────────────────────────────────────┐
      │   Phase 1  (doc / spec extraction) │
-     │   L1-L23 JSON design documents     │
+     │   L1-L27 JSON design documents     │
      └─────────────────┬──────────────────┘
                        ▼
      ┌────────────────────────────────────┐
@@ -119,6 +119,14 @@ Optional for full lab integration:
      │   KLayout DRC → Netgen LVS → GDS   │
      └────────────────────────────────────┘
 ```
+
+**Every project enters at Phase 1.** Both entry paths — Path A (existing
+design docs) and Path B (a natural-language prompt / dialogue) — converge on
+the same universal handoff, the **L1-L27 JSON** design-document set. Phase 2
+cannot start without it: the canonical-flow gate hard-requires Phase 1's
+`generated_docs/L*.json` before any RTL is authored. There is no "skip to
+Phase 2" entry — the L1-L27 handoff is what makes the downstream flow uniform
+regardless of how the design was specified.
 
 For **analog and mixed-signal** designs, two extra stage tracks
 interleave with the digital phases:
