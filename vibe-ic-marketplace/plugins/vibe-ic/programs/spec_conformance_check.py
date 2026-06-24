@@ -92,6 +92,23 @@ except ImportError:  # allow running from another cwd
                                  extract_spec_contract, parse_rtl_ports,
                                  strip_comments)
 
+# The canonical set of conformance rules whose ERROR finding is EMIT-BLOCKING in
+# the Shape-C gate (benchmark/gates_atomic.py). Single source of truth: the gate
+# AND the tier/stability pipeline both consult this so a "Tier-1 solved" emit must
+# survive the SAME conformance the real blind run applies (no stability-test gap).
+EMIT_BLOCKING_CONFORMANCE_RULES = frozenset({
+    "onebased-port-range",
+    "fsm-output-style-mismatch",
+    "port-missing",
+    "zero-output-ports",
+    "msbfirst-direction-mismatch",
+    "moore-output-reset-gated",
+    "shift-implemented-as-rotate",
+    "waveform-peak-hold-dropped",
+    "fsm-onehot-missing-transition",
+    "sync-reset-next-state-redundant-gate",
+})
+
 
 @dataclass
 class Finding:
