@@ -310,12 +310,17 @@ def test_correct_deterministic_emit_is_tier1():
 
 
 @_needs_bench
-def test_gatesv_now_promoted_via_supplemental_solver():
-    # gatesv100 / gatesv: the registry mis-WIDTHS the emit (out_both/out_any must
-    # be ONE bit narrower than `in`), so the registry hit FAILS _test.sv. The
-    # supplemental VE-HUMAN structural solver re-emits at the EXACT _ifc.txt
-    # widths and iverilog-PASSES, so deterministic_emit now returns a VERIFIED
-    # emit and these land in Tier1 (the wrong-width RTL is never shipped).
+def test_gatesv_deterministic_emit_is_correct_width_tier1():
+    # gatesv100 / gatesv: out_both/out_any are declared ONE bit narrower than `in`
+    # (the VE-Human twin uses out_both[N-2:0] / out_any[N-1:1]). The PRIMARY registry
+    # solver `comb_advanced._neighbour_vector` now emits each output at its DECLARED
+    # range (fix #4) and iverilog-PASSES, so deterministic_emit returns a VERIFIED
+    # PRIMARY emit — the SAME emit path the real gate (gates_atomic) uses. This is
+    # the root fix: the earlier supplemental `neighbour_vector_exact_width` solver
+    # fixed only the tier-pipeline CLASSIFICATION while the gate still shipped the
+    # wrong-width comb_advanced (a stability-test-vs-blind-run gap); the gate now
+    # ships the correct width too. Either solver kind is acceptable as long as the
+    # adopted emit is correct-width and Tier1.
     found = False
     for stem in ("Prob092_gatesv100", "Prob094_gatesv"):
         if not (_DATASET / f"{stem}_ifc.txt").exists():
@@ -324,9 +329,16 @@ def test_gatesv_now_promoted_via_supplemental_solver():
         prob = P.load_problem(str(_DATASET), stem)
         kind, rtl = P.deterministic_emit(prob)
         assert rtl, f"{stem}: a deterministic emit must fire"
-        # deterministic_emit now prefers the VERIFIED supplemental emit.
-        assert kind == "neighbour_vector_exact_width", \
-            f"{stem}: expected the exact-width supplemental emit, got {kind}"
+        assert kind in ("comb_advanced", "neighbour_vector_exact_width"), \
+            f"{stem}: unexpected solver kind {kind}"
+        # the adopted emit must NOT declare the boundary-omitted outputs full-width
+        # (the bug): out_any must keep its declared [N-1:1] offset, not [N-1:0].
+        import re as _re
+        if "out_any" in rtl:
+            m = _re.search(r'output\s+\[(\d+):(\d+)\]\s+out_any', rtl)
+            if m:
+                assert int(m.group(2)) >= 1, \
+                    f"{stem}: out_any must keep its declared offset LSB, got [{m.group(1)}:{m.group(2)}]"
         ok, log = P.tier1_verify(prob, rtl)
         assert ok, f"{stem}: the adopted emit must pass _test.sv: {log}"
         res = P.solve(prob, verify_tier1=True)

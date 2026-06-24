@@ -381,6 +381,20 @@ def _case_map_valued(text: str, ins: List[Port], outs: List[Port],
 # --------------------------------------------------------------------------- #
 # S4 — per-bit neighbour vector relations                                     #
 # --------------------------------------------------------------------------- #
+def _decl_out_range(text: str, name: str, N: int):
+    """The DECLARED (lo, hi) port range for output `name` in the prompt. The
+    Verilog-header twin states it explicitly (`output [98:0] out_both`,
+    `output [99:1] out_any`); the bullet twin states only a width ("100 bits")
+    so the range is the full [N-1:0]. chip-AGNOSTIC: any vector name / width."""
+    m = re.search(
+        r'\boutput\b(?:\s+(?:wire|reg|logic))?\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*'
+        + re.escape(name) + r'\b', text)
+    if m:
+        hi, lo = int(m.group(1)), int(m.group(2))
+        return (min(hi, lo), max(hi, lo))
+    return (0, N - 1)
+
+
 def _neighbour_vector(text: str, ins: List[Port], outs: List[Port],
                       top: str) -> Optional[str]:
     low = text.lower()
@@ -425,16 +439,46 @@ def _neighbour_vector(text: str, ins: List[Port], outs: List[Port],
     # both[i] = in[i] & in[i+1] for i in 0..N-2 ; both[N-1] = 0 (stated obvious/x).
     # any[i]  = in[i] | in[i-1] for i in 1..N-1 ; any[0]  = 0.
     # different[i] = in[i] ^ in[(i-1) mod N]   (wrap).
-    # The benchmark accepts the don't-care boundary bit as 0 OR x; emit 0 (safe).
-    emit_outs = [(ob, N), (oa, N), (od, N)]  # full-width N declaration for all three
+    # PRESERVE each output's DECLARED port range (#4). The VE-v2 twin declares all
+    # three FULL width [N-1:0] (boundary bit present, set to 0); the VE-Human twin
+    # OMITS the don't-care boundary bit from the port range: out_both[N-2:0] (lo=0,
+    # hi=N-2) and out_any[N-1:1] (lo=1, hi=N-1). Emitting full-width for a [N-1:1]
+    # port mis-aligns: the body's LSB 0-bit lands at the TB's bit 1 (the hidden TB
+    # connects an [N-1:1] net LSB-first), corrupting every bit. So emit each output
+    # at its DECLARED [hi:lo] with the body aligned to that range.
+    rb_lo, rb_hi = _decl_out_range(text, ob, N)   # out_both
+    ra_lo, ra_hi = _decl_out_range(text, oa, N)   # out_any
+    rd_lo, rd_hi = _decl_out_range(text, od, N)   # out_different (no don't-care: full)
+
+    # out_both covers bits 0..N-2 = in[i]&in[i+1]. If the port declares the full
+    # width (hi==N-1) the boundary bit N-1 is present and set to 0; else omitted.
+    if rb_hi >= N - 1:
+        ob_rhs = f"{{ 1'b0, ({in_name}[{N-2}:0] & {in_name}[{N-1}:1]) }}"
+    else:
+        ob_rhs = f"({in_name}[{N-2}:0] & {in_name}[{N-1}:1])"
+    # out_any covers bits 1..N-1 = in[i]|in[i-1]. If the port declares the full
+    # width (lo==0) the boundary bit 0 is present and set to 0; else omitted.
+    if ra_lo <= 0:
+        oa_rhs = f"{{ ({in_name}[{N-2}:0] | {in_name}[{N-1}:1]), 1'b0 }}"
+    else:
+        oa_rhs = f"({in_name}[{N-1}:1] | {in_name}[{N-2}:0])"
+    od_rhs = f"{in_name} ^ {{ {in_name}[0], {in_name}[{N-1}:1] }}"
+
+    plines = []
+    for n, w in ins:
+        plines.append(f"    input {n}" if w == 1 else f"    input [{w-1}:0] {n}")
+    for name, lo, hi in ((ob, rb_lo, rb_hi), (oa, ra_lo, ra_hi), (od, rd_lo, rd_hi)):
+        plines.append(f"    output {name}" if hi == lo
+                      else f"    output [{hi}:{lo}] {name}")
+    header = [f"module {top} (", ",\n".join(plines), ");"]
     body = [
-        f"    assign {ob} = {{ 1'b0, ({in_name}[{N-2}:0] & {in_name}[{N-1}:1]) }};",
-        f"    assign {oa} = {{ ({in_name}[{N-2}:0] | {in_name}[{N-1}:1]), 1'b0 }};",
-        f"    assign {od} = {in_name} ^ {{ {in_name}[0], {in_name}[{N-1}:1] }};",
+        f"    assign {ob} = {ob_rhs};",
+        f"    assign {oa} = {oa_rhs};",
+        f"    assign {od} = {od_rhs};",
     ]
     return "\n".join(
         ["// program-SOLVED per-bit neighbour vector relations; deterministic."]
-        + _header(top, ins, emit_outs) + body + ["endmodule", ""])
+        + header + body + ["endmodule", ""])
 
 
 # --------------------------------------------------------------------------- #
