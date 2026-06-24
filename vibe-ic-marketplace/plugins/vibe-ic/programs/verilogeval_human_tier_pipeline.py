@@ -442,9 +442,11 @@ def classify(prob: dict, gate: Optional[dict] = None,
             if not verify_tier1:
                 return TIER_PROGRAM
             ok, _log = tier1_verify(prob, rtl)
-            if ok:
+            # GATE PARITY: Tier-1 requires the emit to also survive the gate's
+            # conformance (not iverilog alone) — else the blind run can't emit it.
+            if ok and not conformance_emit_blocked(prob, rtl):
                 return TIER_PROGRAM
-            # emit fired but does NOT pass — fall through, NOT Tier1.
+            # emit fired but does NOT pass iverilog OR the gate would block it — NOT Tier1.
 
     # Tier 5 — genuine floor (golden fails its own test).
     if floor_evidence(prob):
@@ -464,6 +466,44 @@ def classify(prob: dict, gate: Optional[dict] = None,
     return TIER_UNGATED
 
 
+def conformance_emit_blocked(prob: dict, rtl: str, timeout: int = 60) -> List[str]:
+    """Run the SAME `spec_conformance_check` the real Shape-C gate runs on a Tier-1
+    emit; return the EMIT-BLOCKING rules that fire ([] = the gate would emit it).
+
+    Closes the stability-test-vs-blind-run gap for the VE-Human pipeline: an emit
+    that iverilog-PASSES but the gate BLOCKS can never reach the host TB, so it is
+    NOT genuinely Tier-1. Single source of truth for the rule set:
+    spec_conformance_check.EMIT_BLOCKING_CONFORMANCE_RULES (the same set the gate
+    consults). On any tool/IO error returns [] (never fabricates a block)."""
+    if not rtl or not rtl.strip():
+        return []
+    try:
+        from spec_conformance_check import EMIT_BLOCKING_CONFORMANCE_RULES as _BLOCK
+    except Exception:
+        return []
+    with tempfile.TemporaryDirectory() as td:
+        tdp = Path(td)
+        (tdp / "TopModule.sv").write_text(rtl)
+        (tdp / "prompt.txt").write_text(prob.get("prompt") or "")
+        outj = tdp / "conf.json"
+        try:
+            subprocess.run(
+                [sys.executable, str(_HERE / "spec_conformance_check.py"),
+                 "--rtl-dir", str(tdp), "--spec", str(tdp / "prompt.txt"),
+                 "--top", "TopModule", "--json", str(outj)],
+                capture_output=True, text=True, timeout=timeout)
+        except Exception:
+            return []
+        if not outj.exists():
+            return []
+        try:
+            findings = json.loads(outj.read_text())
+        except Exception:
+            return []
+        return sorted({f.get("rule") for f in findings
+                       if isinstance(f, dict) and f.get("rule") in _BLOCK})
+
+
 def solve(prob: dict, verify_tier1: bool = True) -> dict:
     """The pipeline entry point. Returns {tier, rtl, gate, artifact_type,
     verify_log, floor_reason}."""
@@ -475,10 +515,15 @@ def solve(prob: dict, verify_tier1: bool = True) -> dict:
     tier1_ruled_out = False  # an emit fired but FAILED iverilog verify
     if rtl and verify_tier1:
         ok, verify_log = tier1_verify(prob, rtl)
-        if ok:
+        # GATE PARITY: a Tier-1 emit must also survive the gate's conformance, not
+        # iverilog alone — else the real blind run BLOCKs it (no_sample).
+        blocked = conformance_emit_blocked(prob, rtl) if ok else []
+        if ok and not blocked:
             return {"tier": TIER_PROGRAM, "rtl": rtl, "gate": gate,
                     "artifact_type": kind, "verify_log": verify_log}
-        rtl = None  # fired but failed verify — not Tier1
+        if blocked:
+            verify_log = (verify_log or "") + " | gate-blocked: " + ",".join(blocked)
+        rtl = None  # fired but failed verify (or gate-blocked) — not Tier1
         tier1_ruled_out = True  # do NOT let the fall-through re-trust the hit
     elif rtl and not verify_tier1:
         return {"tier": TIER_PROGRAM, "rtl": rtl, "gate": gate,
