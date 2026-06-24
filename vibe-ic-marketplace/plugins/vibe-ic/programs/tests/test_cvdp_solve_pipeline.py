@@ -570,5 +570,81 @@ def test_chip_agnostic_gate_reject_invariant_under_rename():
     assert any(v["kind"] == "port_width" for v in res["violations"])
 
 
+# --------------------------------------------------------------------------- #
+# (4) Tier-1 BEHAVIOURAL-VERIFY honesty gate (ORGANIC-20260624). The CVDP Tier-1
+#     was emit-fires==Tier1 with no behavioural verification. The fix: default
+#     solve() is emit-only (honest, fast); verify_behavioral=True gates Tier-1 on
+#     the design's own cocotb harness (the ONLY sound gate). Crucially the
+#     conformance gate is NOT used to demote Tier-1 — it false-rejects correct
+#     param-/equivalent-width emits (measured cocotb-PASS) AND misses logic-wrong
+#     ones, so wiring it as the Tier-1 gate is a §4.05 false-reject + a miss.
+# --------------------------------------------------------------------------- #
+_VB_REC = {"id": "vb1", "input": {"prompt": "p", "context": {}},
+           "harness": {"files": {}}, "output": {"context": {}}}
+_VB_RTL = "module TopModule(input a, output y); assign y = a; endmodule"
+
+
+def test_default_solve_is_emit_only(monkeypatch):
+    """A fired bridge emit is Tier-1 by DEFAULT, stamped verified='emit-only'
+    (NOT behaviourally verified) — and is NEVER conformance-demoted (the §4.05
+    no-false-reject guarantee: a correct emit must not be dropped)."""
+    monkeypatch.setattr(SP._bridge, "solve", lambda r: _VB_RTL)
+    s = SP.solve(_VB_REC)
+    assert s["tier"] == SP.TIER_PROGRAM
+    assert s.get("verified") == "emit-only"
+    assert s.get("rtl") == _VB_RTL
+
+
+def test_verify_behavioral_demotes_cocotb_fail(monkeypatch):
+    """verify_behavioral=True: a cocotb-FAIL emit is fired-but-wrong → demoted out
+    of Tier-1 (the §9 honesty gate)."""
+    monkeypatch.setattr(SP._bridge, "solve", lambda r: _VB_RTL)
+    monkeypatch.setattr(SP, "tier1_cocotb_verify",
+                        lambda rec, rtl, **k: (False, "cocotb FAIL (1/1 tests failed)"))
+    s = SP.solve(_VB_REC, verify_behavioral=True)
+    assert s["tier"] != SP.TIER_PROGRAM        # demoted
+    assert s.get("rtl") is None
+
+
+def test_verify_behavioral_keeps_cocotb_pass(monkeypatch):
+    """verify_behavioral=True: a cocotb-PASS emit stays Tier-1, verified='cocotb'."""
+    monkeypatch.setattr(SP._bridge, "solve", lambda r: _VB_RTL)
+    monkeypatch.setattr(SP, "tier1_cocotb_verify",
+                        lambda rec, rtl, **k: (True, "cocotb PASS"))
+    s = SP.solve(_VB_REC, verify_behavioral=True)
+    assert s["tier"] == SP.TIER_PROGRAM
+    assert s.get("verified") == "cocotb"
+
+
+def test_verify_behavioral_none_stays_emit_only(monkeypatch):
+    """verify_behavioral=True but docker absent (None verdict): cannot prove either
+    way → stay emit-only Tier-1 with a verify_note (never falsely 'cocotb')."""
+    monkeypatch.setattr(SP._bridge, "solve", lambda r: _VB_RTL)
+    monkeypatch.setattr(SP, "tier1_cocotb_verify",
+                        lambda rec, rtl, **k: (None, "docker not available"))
+    s = SP.solve(_VB_REC, verify_behavioral=True)
+    assert s["tier"] == SP.TIER_PROGRAM
+    assert s.get("verified") == "emit-only"
+    assert "docker" in (s.get("verify_note") or "")
+
+
+def test_tier1_cocotb_verify_failsafe_no_repo(monkeypatch):
+    """tier1_cocotb_verify is fail-safe: no benchmark repo → (None, reason), never
+    raises and never falsely claims a pass."""
+    monkeypatch.setattr(SP, "_find_cvdp_benchmark_repo", lambda: None)
+    verdict, detail = SP.tier1_cocotb_verify(_VB_REC, _VB_RTL)
+    assert verdict is None
+    assert "repo" in detail.lower()
+
+
+def test_classify_default_vs_behavioral(monkeypatch):
+    """classify() mirrors solve(): default trusts a fired emit as Tier-1; with
+    verify_behavioral=True a cocotb-FAIL emit is not Tier-1."""
+    monkeypatch.setattr(SP._bridge, "solve", lambda r: _VB_RTL)
+    assert SP.classify(_VB_REC) == SP.TIER_PROGRAM
+    monkeypatch.setattr(SP, "tier1_cocotb_verify", lambda rec, rtl, **k: (False, "x"))
+    assert SP.classify(_VB_REC, verify_behavioral=True) != SP.TIER_PROGRAM
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
