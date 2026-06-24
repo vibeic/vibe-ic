@@ -443,6 +443,50 @@ def _spec_is_complete(gate: dict, structures: dict) -> bool:
                 or structures.get("waveform_edges"))
 
 
+_PROGRAMS_DIR = Path(__file__).resolve().parent
+
+
+def conformance_emit_blocked(prob: Problem, emit: str, timeout: int = 60) -> List[str]:
+    """Run the SAME `spec_conformance_check` the real Shape-C gate runs, on a
+    Tier-1 candidate emit, and return the EMIT-BLOCKING rule names that fire
+    (empty list = the gate would emit this RTL).
+
+    This closes the stability-test-vs-blind-run gap (#why-not-history-high): an
+    emit that iverilog-PASSES but the gate BLOCKS (e.g. a galois_lfsr wrap caught
+    by shift-implemented-as-rotate, or a comb_advanced wrong-width caught by a
+    width rule) is NOT genuinely Tier-1 — the blind run can never emit it. The
+    blocking-rule set is the single source of truth in
+    spec_conformance_check.EMIT_BLOCKING_CONFORMANCE_RULES (the same set the gate
+    consults). chip-AGNOSTIC; on any tool/IO error returns [] (never fabricates a
+    block — a missing checker must not silently demote a real Tier-1)."""
+    if not emit or not emit.strip():
+        return []
+    try:
+        from spec_conformance_check import EMIT_BLOCKING_CONFORMANCE_RULES as _BLOCK
+    except Exception:
+        return []
+    with tempfile.TemporaryDirectory() as td:
+        tdp = Path(td)
+        (tdp / "TopModule.sv").write_text(emit)
+        outj = tdp / "conf.json"
+        try:
+            subprocess.run(
+                [sys.executable, str(_PROGRAMS_DIR / "spec_conformance_check.py"),
+                 "--rtl-dir", str(tdp), "--spec", str(prob.prompt_path),
+                 "--top", "TopModule", "--json", str(outj)],
+                capture_output=True, text=True, timeout=timeout)
+        except Exception:
+            return []
+        if not outj.exists():
+            return []
+        try:
+            findings = json.loads(outj.read_text())
+        except Exception:
+            return []
+        return sorted({f.get("rule") for f in findings
+                       if isinstance(f, dict) and f.get("rule") in _BLOCK})
+
+
 def tier_result(prob: Problem, verify: bool = False,
                 timeout: int = 60) -> dict:
     """Full per-problem result: {tier, rtl, gate, spec, verified, detail}.
@@ -466,9 +510,21 @@ def tier_result(prob: Problem, verify: bool = False,
             ok, detail = iverilog_score(prob, emit, timeout=timeout)
             verified = ok
             if ok:
-                return {"tier": TIER_PROGRAM, "rtl": emit, "gate": gate,
-                        "spec": spec, "verified": True, "detail": detail}
-            # emit did not score — DROP to gate tiers (do not trust the claim).
+                # GATE PARITY: a Tier-1 emit must survive the SAME conformance the
+                # real blind run applies, not just iverilog. An emit that the gate
+                # would BLOCK can never reach the host TB (no_sample) — it is NOT
+                # Tier-1. Without this the tier pipeline reported "Tier-1 solved"
+                # while the gate blocked the emit (galois_lfsr / comb_advanced).
+                blocked = conformance_emit_blocked(prob, emit, timeout=timeout)
+                if blocked:
+                    verified = False
+                    detail = ("iverilog PASS but gate conformance BLOCKS emit: "
+                              + ",".join(blocked))
+                    # fall through to the gate tiers (do not grant Tier-1)
+                else:
+                    return {"tier": TIER_PROGRAM, "rtl": emit, "gate": gate,
+                            "spec": spec, "verified": True, "detail": detail}
+            # emit did not score (or the gate would block it) — DROP to gate tiers.
         else:
             # unverified claim — count it as Tier1 for the BEFORE snapshot.
             return {"tier": TIER_PROGRAM, "rtl": emit, "gate": gate,
