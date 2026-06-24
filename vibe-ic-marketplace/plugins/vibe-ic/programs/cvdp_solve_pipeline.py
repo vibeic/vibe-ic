@@ -5,8 +5,21 @@ GOAL (owner directive 2026-06-23): make the AI's CVDP solve STABLE by enforcing
 the PROGRAM-EXTRACTED spec on every problem. This realizes the owner's 5-tier
 model:
 
-  Tier 1  program-solve (DETERMINISTIC). The atomic bridge emits correct RTL with
-          no AI in the loop — the score for these is fixed by construction.
+  Tier 1  program-solve (DETERMINISTIC). The atomic bridge emits RTL with no AI in
+          the loop AND that emit must survive the conformance gate (v1.2.4 parity:
+          module name / ports / widths / structures must not drift). The score for
+          these is fixed by construction.
+          ⚠ NOT BEHAVIOURALLY VERIFIED IN-PROCESS. Unlike VE/RTLLM — whose Tier-1
+          is accepted ONLY on a real iverilog `Mismatches: 0` pass — CVDP's oracle
+          is a cocotb harness that needs the OSS-sim docker image, too heavy to run
+          per-emit in the classifier. So a CVDP Tier-1 is "deterministic emit +
+          interface-conformant", which the conformance gate canNOT prove to be the
+          right FUNCTION. Measured: 4 of 33 classified Tier-1 emits failed their own
+          cocotb harness (ORGANIC-20260624-cvdp-tier1-not-behaviorally-verified).
+          BEFORE TRUSTING A CVDP TIER-1 NUMBER, run `tier1_cocotb_verify(record,
+          rtl)` (docker) — it returns True/False/None and is the only behavioural
+          gate. solve() stamps `verified="conformance"` on Tier-1 to keep this
+          distinction explicit.
   Tier 2  AI-calls-extractor-then-program-emits. (Same machinery as Tier 1 from
           this pipeline's POV — a record the bridge solves is Tier 1; this label
           is reserved for the extractor-assisted emit path the bridge already
@@ -52,10 +65,13 @@ chip-AGNOSTIC: every decision keys on STRUCTURE (the extracted spec shape +
 generic Verilog grammar), never on a design name, problem id, or SKU literal.
 
 Public API
-    solve(record) -> {tier:int, rtl:str|None, spec:dict, gate:dict}
+    solve(record) -> {tier:int, rtl:str|None, spec:dict, gate:dict, verified?:str}
     gate_check(record, candidate_rtl) -> {pass:bool, violations:[...]}
     build_gate(spec) -> dict          # the conformance-gate spec (also in solve())
-    classify(record) -> int           # the tier integer alone (cheap)
+    classify(record, trust_emit=True) -> int   # the tier integer alone (cheap)
+    tier1_cocotb_verify(record, rtl) -> (True|False|None, detail)  # OPTIONAL docker
+                                          # behavioural gate — run before trusting a
+                                          # Tier-1 number; None when docker absent
 
 CLI
     python3 cvdp_solve_pipeline.py --jsonl FILE [--dist] [--id ID] [--demo]
@@ -235,19 +251,44 @@ def _augment_gate_with_context(record: dict, gate: dict) -> dict:
 
 
 def classify(record: dict, spec: Optional[dict] = None,
-             rtl: Optional[str] = None) -> int:
+             rtl: Optional[str] = None, verify_behavioral: bool = False,
+             trust_emit: bool = True) -> int:
     """The tier integer for this record (cheap; does not build the full result).
-    Pass a pre-computed `spec`/`rtl` to avoid recomputation."""
+    Pass a pre-computed `spec`/`rtl` to avoid recomputation. `trust_emit=False`
+    skips the deterministic-emit Tier-1 shortcut entirely (used by solve()'s
+    fall-through after it has ALREADY found the emit absent or cocotb-FAIL — the
+    emit must not be re-trusted as Tier-1 there).
+
+    `verify_behavioral` controls the Tier-1 honesty gate:
+      * False (default, FAST — for `--dist`): a deterministic bridge emit is a
+        Tier-1 CANDIDATE the instant it fires. This is emit-only — NOT behaviourally
+        verified — so the Tier-1 NUMBER is provisional (see solve()'s `verified`).
+      * True (docker): the emit must PASS the design's own cocotb harness
+        (`tier1_cocotb_verify`) to be a TRUSTED Tier-1; a cocotb-FAIL emit is a
+        fired-but-wrong T1 and falls through to the gate tiers. A None verdict
+        (docker absent) keeps the emit-only Tier-1 (cannot prove either way).
+
+    WHY NOT the conformance gate as the Tier-1 gate (the tempting v1.2.4 mirror):
+    the conformance gate is the WRONG gate for CVDP Tier-1 — it BOTH false-rejects
+    correct emits (4 param-/equivalent-width emits demoted on `port_width` were each
+    measured cocotb-PASS — a §4.05 false-reject) AND misses the logic-wrong emits
+    (4 interface-conformant emits measured cocotb-FAIL). The cocotb harness is the
+    only sound behavioural gate (ORGANIC-20260624-cvdp-tier1-not-behaviorally-verified)."""
     if not isinstance(record, dict):
         return TIER_UNGATED
-    # Tier 1 — the bridge program-solves it deterministically.
-    if rtl is None:
+    # Tier 1 — deterministic bridge emit. Default: emit-fires == Tier-1 candidate.
+    if rtl is None and trust_emit:
         try:
             rtl = _bridge.solve(record)
         except Exception:
             rtl = None
-    if rtl:
-        return TIER_PROGRAM
+    if rtl and trust_emit:
+        if not verify_behavioral:
+            return TIER_PROGRAM
+        ok, _detail = tier1_cocotb_verify(record, rtl)
+        if ok is not False:          # True (verified) or None (cannot run) → keep T1
+            return TIER_PROGRAM
+        # ok is False → fired-but-wrong; fall through to the gate tiers.
 
     if spec is None:
         try:
@@ -281,11 +322,24 @@ def classify(record: dict, spec: Optional[dict] = None,
     return TIER_UNGATED
 
 
-def solve(record: dict) -> dict:
+def solve(record: dict, verify_behavioral: bool = False) -> dict:
     """The pipeline entry point.
 
-    Returns {tier, rtl, spec, gate}:
-      tier=1  rtl is the DETERMINISTIC bridge emit (no AI). gate still supplied.
+    `verify_behavioral` (default False) gates Tier-1 honesty:
+      * False — a deterministic bridge emit is Tier-1 the instant it fires, stamped
+        `verified="emit-only"`: the score is NOT behaviourally verified, so the
+        Tier-1 NUMBER is provisional (run `tier1_cocotb_verify`, or pass
+        `verify_behavioral=True`, before trusting it).
+      * True (docker) — the emit must PASS the design's own cocotb harness to be
+        Tier-1 (`verified="cocotb"`); a cocotb-FAIL emit is a fired-but-wrong T1 and
+        falls through to the gate tiers; a None verdict (docker absent) keeps the
+        emit-only Tier-1 with `verified="emit-only"` and a `verify_note`.
+
+    Returns {tier, rtl, spec, gate, verified?, verify_note?}:
+      tier=1  DETERMINISTIC bridge emit. `verified` ∈ {"emit-only","cocotb"} — see
+              above. NOT conformance-gated: the conformance gate is the WRONG Tier-1
+              gate for CVDP (it false-rejects correct param-width emits AND misses
+              logic-wrong ones — measured both ways). gate still supplied.
       tier=2  reserved (the bridge's extractor-assisted emit is folded into t1).
       tier=3  rtl=None — the AI authors; `gate` constrains it and `gate_check`
               REJECTS a drifting output (the stabilizer).
@@ -295,7 +349,6 @@ def solve(record: dict) -> dict:
     if not isinstance(record, dict):
         return {"tier": TIER_UNGATED, "rtl": None, "spec": {}, "gate": {}}
 
-    # Tier 1 first — deterministic emit short-circuits everything.
     try:
         rtl = _bridge.solve(record)
     except Exception:
@@ -307,8 +360,20 @@ def solve(record: dict) -> dict:
         spec = {}
     gate = _augment_gate_with_context(record, build_gate(spec))
 
+    # Tier 1 — deterministic emit. Default emit-only (NOT behaviourally verified);
+    # with verify_behavioral the cocotb harness is the gate (the only sound one).
     if rtl:
-        return {"tier": TIER_PROGRAM, "rtl": rtl, "spec": spec, "gate": gate}
+        if not verify_behavioral:
+            return {"tier": TIER_PROGRAM, "rtl": rtl, "spec": spec, "gate": gate,
+                    "verified": "emit-only"}
+        ok, detail = tier1_cocotb_verify(record, rtl)
+        if ok is True:
+            return {"tier": TIER_PROGRAM, "rtl": rtl, "spec": spec, "gate": gate,
+                    "verified": "cocotb"}
+        if ok is None:               # docker unavailable — cannot prove; stay emit-only
+            return {"tier": TIER_PROGRAM, "rtl": rtl, "spec": spec, "gate": gate,
+                    "verified": "emit-only", "verify_note": detail}
+        # ok is False → fired-but-wrong; fall through to floor / gate tiers.
 
     floor = _floor_evidence(record, spec)
     if floor:
@@ -316,8 +381,97 @@ def solve(record: dict) -> dict:
         gate["floor_reason"] = floor
         return {"tier": TIER_FLOOR, "rtl": None, "spec": spec, "gate": gate}
 
-    tier = classify(record, spec=spec, rtl=None)
+    # An emit, if any, was absent or cocotb-FAIL — do NOT re-trust it as Tier-1.
+    tier = classify(record, spec=spec, rtl=None, trust_emit=False)
     return {"tier": tier, "rtl": None, "spec": spec, "gate": gate}
+
+
+# --------------------------------------------------------------------------- #
+# (2b) OPTIONAL behavioural Tier-1 verifier — the OSS-sim cocotb harness (docker)
+# --------------------------------------------------------------------------- #
+# The in-process conformance gate (_tier1_conforms) catches INTERFACE drift but
+# NOT a wrong function. The design's own cocotb harness is the only behavioural
+# gate, and it needs the OSS-sim docker image — too heavy to run inside the
+# classifier on every emit. This OPTIONAL verifier lets a caller (the benchmark
+# agent) confirm a Tier-1 *number* before trusting it: score the emit through the
+# official run_benchmark.py local_import path (docker, NO API key).
+_DEFAULT_OSS_SIM_IMAGE = "cvdp-sim-local:latest"
+
+
+def _find_cvdp_benchmark_repo() -> Optional[str]:
+    """Locate a checkout of nvidia/cvdp-benchmark (provides run_benchmark.py).
+    Honours $CVDP_BENCHMARK_REPO, else probes conventional paths. None when not
+    found → the verifier becomes a no-op (Tier-1 stays conformance-only, never
+    falsely reported as behaviourally verified)."""
+    import os
+    cands = [os.environ.get("CVDP_BENCHMARK_REPO"),
+             str(Path.home() / "AI_IC_design" / "_extbench" / "cvdp_benchmark"),
+             str(Path.home() / "cvdp_benchmark")]
+    for c in cands:
+        if c and (Path(c) / "run_benchmark.py").is_file():
+            return c
+    return None
+
+
+def tier1_cocotb_verify(record: dict, rtl: str, *,
+                        sim_image: Optional[str] = None,
+                        benchmark_repo: Optional[str] = None,
+                        timeout: int = 900) -> Tuple[Optional[bool], str]:
+    """OPTIONAL behavioural Tier-1 verification through the design's OWN cocotb
+    harness, via the official run_benchmark.py `local_import` path (docker, NO API
+    key). This is the gate the in-process conformance check structurally cannot be:
+    it runs the logic. Use it before trusting a CVDP Tier-1 number
+    (ORGANIC-20260624-cvdp-tier1-not-behaviorally-verified).
+
+    Returns (verdict, detail):
+      (True,  ...)  emit PASSED its cocotb harness — a genuinely verified Tier-1.
+      (False, ...)  emit FAILED its harness — a fired-but-wrong Tier-1; demote it.
+      (None,  ...)  could not run (no docker / no benchmark repo / no harness) →
+                    Tier-1 stays conformance-only, NOT behaviourally verified.
+
+    chip-AGNOSTIC: keys only on record['id'] + the record's own harness; emits a
+    one-record dataset + a {id, completion} responses file and scores them. Never
+    raises (any failure → (None, reason))."""
+    import os, shutil, subprocess, tempfile  # noqa: E401 — local to the optional path
+    try:
+        rid = record.get("id") if isinstance(record, dict) else None
+        if not rid or not rtl:
+            return None, "missing id or rtl"
+        repo = benchmark_repo or _find_cvdp_benchmark_repo()
+        if not repo:
+            return None, "cvdp-benchmark repo not found (set $CVDP_BENCHMARK_REPO)"
+        if not shutil.which("docker"):
+            return None, "docker not available"
+        image = sim_image or os.environ.get("OSS_SIM_IMAGE") or _DEFAULT_OSS_SIM_IMAGE
+        with tempfile.TemporaryDirectory() as td:
+            ds = Path(td) / "one.jsonl"
+            ds.write_text(json.dumps(record) + "\n")
+            resp = Path(td) / "resp.jsonl"
+            resp.write_text(json.dumps({"id": rid, "completion": rtl}) + "\n")
+            out = Path(td) / "work"
+            env = dict(os.environ, OSS_SIM_IMAGE=image)
+            cmd = ["python3", "run_benchmark.py", "-f", str(ds), "--llm",
+                   "-m", "local_import", "--prompts-responses-file", str(resp),
+                   "-i", str(rid), "-p", str(out)]
+            try:
+                subprocess.run(cmd, cwd=repo, env=env, capture_output=True,
+                               text=True, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                return None, "cocotb verify timed out"
+            raw = out / "raw_result.json"
+            if not raw.is_file():
+                return None, "no raw_result.json (harness did not run)"
+            d = json.loads(raw.read_text())
+            v = d.get(rid) or (list(d.values())[0] if d else {})
+            tests = v.get("tests") or []
+            if not tests:
+                return None, "no tests in result"
+            nfail = sum(1 for t in tests if t.get("result") != 0)
+            passed = nfail == 0
+            return bool(passed), ("cocotb PASS" if passed
+                                  else f"cocotb FAIL ({nfail}/{len(tests)} tests failed)")
+    except Exception as e:  # noqa: BLE001 — best-effort optional verifier
+        return None, f"verify error: {e!r}"
 
 
 # --------------------------------------------------------------------------- #
