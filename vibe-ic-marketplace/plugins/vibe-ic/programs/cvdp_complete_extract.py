@@ -102,7 +102,14 @@ import cvdp_context_interface_recover as _ctxrec  # noqa: E402
 # not-yet-present extractor simply contributes nothing (the layer never crashes).
 _EXTRACTORS: Dict[str, object] = {}
 for _name in ("spec_regmap_extract", "spec_enumset_extract", "spec_fsm_extract",
-              "spec_numeric_pack_extract", "spec_worked_example_extract"):
+              "spec_numeric_pack_extract", "spec_worked_example_extract",
+              # GENERAL L-doc facet extractors (L5 analog / L7 test-debug / L11 OTP /
+              # L13 calibration / per-signal signedness / clock-freq + electrical).
+              # Composed into _structures() so a doc's structured representation —
+              # and the general engine's assess_spec output — carries these facets.
+              "spec_analog_iface_extract", "spec_test_debug_extract",
+              "spec_otp_extract", "spec_calibration_extract",
+              "spec_signedness_extract", "spec_electrical_extract"):
     try:
         _EXTRACTORS[_name] = __import__(_name)
     except Exception:
@@ -817,6 +824,10 @@ def _structures(prompt: str) -> Dict[str, object]:
         "register_map": [], "enum_modes": [],
         "fsm": {"states": [], "transitions": []},
         "truth_table": [], "worked_examples": [], "test_vectors": [],
+        # GENERAL L-doc facets (additive — never affect the completeness verdict,
+        # which keys on interface/width only; these enrich the structured doc).
+        "analog_interface": [], "test_debug": [], "otp": [],
+        "calibration": [], "signedness": [], "electrical": [],
     }
     rm = _EXTRACTORS.get("spec_regmap_extract")
     if rm:
@@ -840,6 +851,18 @@ def _structures(prompt: str) -> Dict[str, object]:
         # latencies surface under timing too, but keep the raw items available.
         out["test_vectors"] = [it for it in witems
                                if it.get("kind") == "test_vector"]
+    # GENERAL L-doc facets — each composed module returns []-or-items; the facet
+    # key collects ALL its items (the kinds are facet-internal). §4.05: a module
+    # that finds no structural anchor contributes [] (empty key), never a guess.
+    for _mod, _key in (("spec_analog_iface_extract", "analog_interface"),
+                       ("spec_test_debug_extract", "test_debug"),
+                       ("spec_otp_extract", "otp"),
+                       ("spec_calibration_extract", "calibration"),
+                       ("spec_signedness_extract", "signedness"),
+                       ("spec_electrical_extract", "electrical")):
+        _ex = _EXTRACTORS.get(_mod)
+        if _ex:
+            out[_key] = _ex.extract(prompt)
     return out
 
 
