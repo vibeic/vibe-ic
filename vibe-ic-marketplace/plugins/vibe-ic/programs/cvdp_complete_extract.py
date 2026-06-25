@@ -115,6 +115,15 @@ for _name in ("spec_regmap_extract", "spec_enumset_extract", "spec_fsm_extract",
     except Exception:
         pass
 
+# L14-L18 PROTOCOL-spec extractor (versioning / encoding / compliance / channel
+# catalog / interconnect). Returns {fields, evidence, extraction_status} per layer
+# rather than a ChecklistItem list, so it is composed separately in _structures.
+# Imported defensively; absent in a minimal checkout -> protocol facets stay empty.
+try:
+    _PROTOCOL = __import__("phase1_protocol_spec_extract")
+except Exception:
+    _PROTOCOL = None
+
 
 # --------------------------------------------------------------------------- #
 # parameter / reset / clock structural classification (harness-anchored)
@@ -828,6 +837,10 @@ def _structures(prompt: str) -> Dict[str, object]:
         # which keys on interface/width only; these enrich the structured doc).
         "analog_interface": [], "test_debug": [], "otp": [],
         "calibration": [], "signedness": [], "electrical": [],
+        # L14-L18 protocol facets (populated only for an AMBA/USB/PCIe-style
+        # protocol spec; empty for an ordinary block — §4.05).
+        "protocol_versioning": [], "encoding_tables": [], "compliance": [],
+        "channel_catalog": [], "interconnect": [],
     }
     rm = _EXTRACTORS.get("spec_regmap_extract")
     if rm:
@@ -863,6 +876,25 @@ def _structures(prompt: str) -> Dict[str, object]:
         _ex = _EXTRACTORS.get(_mod)
         if _ex:
             out[_key] = _ex.extract(prompt)
+    # L14-L18 protocol facets — each protocol extractor returns
+    # {fields, evidence, extraction_status}; we surface its harvested `evidence`
+    # list under the facet key ONLY when it actually extracted something (status
+    # EXTRACTED). §4.05: a non-protocol doc leaves these empty, never fabricated.
+    if _PROTOCOL is not None:
+        for _fn, _key in (("extract_l14_versioning", "protocol_versioning"),
+                          ("extract_l15_encoding_tables", "encoding_tables"),
+                          ("extract_l16_compliance", "compliance"),
+                          ("extract_l17_channels", "channel_catalog"),
+                          ("extract_l18_interconnect", "interconnect")):
+            fn = getattr(_PROTOCOL, _fn, None)
+            if fn is None:
+                continue
+            try:
+                res = fn(prompt) or {}
+            except Exception:
+                continue
+            if str(res.get("extraction_status", "")).upper().startswith("EXTRACTED"):
+                out[_key] = list(res.get("evidence", []) or [])
     return out
 
 
