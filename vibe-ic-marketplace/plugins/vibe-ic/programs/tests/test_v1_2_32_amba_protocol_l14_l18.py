@@ -86,10 +86,9 @@ def test_l14_versioning_extracts_history_and_deprecation():
     r = P.extract_l14_versioning(_AMBA)
     assert r["extraction_status"] == "EXTRACTED"
     assert len(r["fields"]["versions"]) == 3
-    # a deprecation IS detected and its quote names the WID signal (the extractor
-    # captures the noun before "is deprecated", so check the quote, not the slot)
+    # the deprecated FEATURE NAME is captured (v1.2.33: skips the generic noun)
     deps = r["fields"]["deprecated_features"]
-    assert deps and any("WID" in d["quote"] for d in deps)
+    assert any(d["feature"] == "WID" for d in deps)
 
 
 def test_l15_encoding_tables_extracted():
