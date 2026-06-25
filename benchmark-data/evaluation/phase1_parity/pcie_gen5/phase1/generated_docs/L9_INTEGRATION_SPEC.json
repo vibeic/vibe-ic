@@ -87,24 +87,8 @@
   "submodules": [],
   "no_submodules_in_input": true,
   "sim_only_modules": [],
-  "fsm_states": [
-    {
-      "name": "DOWN",
-      "transitions": [],
-      "evidence": "input/docs/pcie_gen5_spec.txt (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "EXTENDED",
-      "transitions": [],
-      "evidence": "input/docs/pcie_gen5_spec.txt (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "TRAIN",
-      "transitions": [],
-      "evidence": "input/docs/pcie_gen5_spec.txt (prose state-to-state v1.6.484)"
-    }
-  ],
-  "no_fsm_states_in_input": false,
+  "fsm_states": [],
+  "no_fsm_states_in_input": true,
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
   "internal_wires": [],
@@ -135,7 +119,7 @@
       "port_count": null,
       "depth": null,
       "width": null,
-      "evidence_file": "pcie_gen5_spec.txt",
+      "evidence_file": "pcie_gen5_spec.pdf",
       "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
       "low_confidence": true
     }

@@ -2,37 +2,36 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "Universal Flash Storage (JEDEC JESD220, UFS 4.0)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
   "external_components": [],
-  "electrical_specs": [],
-  "design_parameters": [
+  "electrical_specs": [
     {
-      "parameter": "Mass storage file transfer",
-      "value": "6",
-      "source": "ufs_spec.txt",
-      "raw": "Mass storage file transfer : 6 Gbit/s",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "1.1",
+      "unit": "A",
+      "source": "ufs_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
     },
     {
-      "parameter": "Chip-to-chip connectivity",
-      "value": "1",
-      "source": "ufs_spec.txt",
-      "raw": "Chip-to-chip connectivity: 1 Gbit to 24 Gbit/s",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "M-PHY 5.0. HS-Gear 5",
-      "value": "23.2",
-      "source": "ufs_spec.txt",
-      "raw": "M-PHY 5.0. HS-Gear 5 = 23.2 Gbit/s per lane; UFS uses up to",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "20.0",
+      "unit": "A",
+      "source": "ufs_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
     }
   ],
-  "extraction_evidence": {
-    "input/docs/ufs_spec.txt": []
-  },
+  "design_parameters": [],
+  "source_documents": [
+    "input/docs/ufs_spec.pdf",
+    "input/docs/ufs_spec.txt"
+  ],
+  "extraction_evidence": {},
   "analog_digital_interface_present": true,
   "signaling_summary": "The UFS physical layer is MIPI M-PHY 5.0, a high-speed differential serial interface (LVDS-style, impedance-controlled differential pairs). M-PHY transmits using two signaling families: a high-speed (HS) mode using 8b/10b line coding (HS-Gear 1..5) and a low-speed (LS) mode using PWM encoding. UFS 4.0 HS-Gear 5 = 23.2 Gbit/s per lane. Communication occurs in bursts with extended low-power idle periods (SLEEP / STALL / HIBERN8) between bursts, suiting battery-powered mobile devices. The host supplies a reference clock (REF_CLK) and an active-low RESET_n; data flows on separate device TX (DOUT) and RX (DIN) differential pairs (up to 2 lanes each direction).",
   "phy_layer": "MIPI M-PHY 5.0 (embedded-clock serial; supersedes D-PHY for storage)",

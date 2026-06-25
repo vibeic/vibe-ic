@@ -5,134 +5,15 @@
   "top_module": "hdmi",
   "top_module_extraction_strategy": "l1_ic_name_fallback",
   "no_top_module_in_input": false,
-  "ports": [
-    {
-      "name": "hsync",
-      "mode": "input",
-      "direction": "input",
-      "io": "3.3-V LVTTL",
-      "evidence": "input/docs/HDMI_Spec.pdf"
-    },
-    {
-      "name": "vsync",
-      "mode": "input",
-      "direction": "input",
-      "io": "3.3-V LVTTL",
-      "evidence": "input/docs/HDMI_Spec.pdf"
-    },
-    {
-      "name": "dken",
-      "mode": "input",
-      "direction": "input",
-      "io": "3.3-V LVTTL",
-      "evidence": "input/docs/HDMI_Spec.pdf"
-    },
-    {
-      "name": "de",
-      "mode": "input",
-      "direction": "input",
-      "io": "3.3-V LVTTL",
-      "evidence": "input/docs/HDMI_Spec.pdf"
-    },
-    {
-      "name": "dvi",
-      "mode": "output",
-      "direction": "output",
-      "io": "3.3-V LVTTL",
-      "evidence": "input/docs/HDMI_Spec.pdf"
-    }
-  ],
-  "top_ports": [
-    {
-      "name": "hsync",
-      "mode": "input",
-      "direction": "input",
-      "io": "3.3-V LVTTL",
-      "evidence": "input/docs/HDMI_Spec.pdf"
-    },
-    {
-      "name": "vsync",
-      "mode": "input",
-      "direction": "input",
-      "io": "3.3-V LVTTL",
-      "evidence": "input/docs/HDMI_Spec.pdf"
-    },
-    {
-      "name": "dken",
-      "mode": "input",
-      "direction": "input",
-      "io": "3.3-V LVTTL",
-      "evidence": "input/docs/HDMI_Spec.pdf"
-    },
-    {
-      "name": "de",
-      "mode": "input",
-      "direction": "input",
-      "io": "3.3-V LVTTL",
-      "evidence": "input/docs/HDMI_Spec.pdf"
-    },
-    {
-      "name": "dvi",
-      "mode": "output",
-      "direction": "output",
-      "io": "3.3-V LVTTL",
-      "evidence": "input/docs/HDMI_Spec.pdf"
-    }
-  ],
-  "top_module_pins": [
-    {
-      "name": "hsync",
-      "mode": "input",
-      "direction": "input",
-      "io": "3.3-V LVTTL",
-      "evidence": "input/docs/HDMI_Spec.pdf"
-    },
-    {
-      "name": "vsync",
-      "mode": "input",
-      "direction": "input",
-      "io": "3.3-V LVTTL",
-      "evidence": "input/docs/HDMI_Spec.pdf"
-    },
-    {
-      "name": "dken",
-      "mode": "input",
-      "direction": "input",
-      "io": "3.3-V LVTTL",
-      "evidence": "input/docs/HDMI_Spec.pdf"
-    },
-    {
-      "name": "de",
-      "mode": "input",
-      "direction": "input",
-      "io": "3.3-V LVTTL",
-      "evidence": "input/docs/HDMI_Spec.pdf"
-    },
-    {
-      "name": "dvi",
-      "mode": "output",
-      "direction": "output",
-      "io": "3.3-V LVTTL",
-      "evidence": "input/docs/HDMI_Spec.pdf"
-    }
-  ],
+  "ports": [],
+  "top_ports": [],
+  "top_module_pins": [],
   "no_integration_in_input": false,
   "submodules": [],
   "no_submodules_in_input": true,
   "sim_only_modules": [],
-  "fsm_states": [
-    {
-      "name": "CHANGED",
-      "transitions": [],
-      "evidence": "input/docs/HDMI_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "THEIR",
-      "transitions": [],
-      "evidence": "input/docs/HDMI_Spec.pdf (prose state-to-state v1.6.484)"
-    }
-  ],
-  "no_fsm_states_in_input": false,
+  "fsm_states": [],
+  "no_fsm_states_in_input": true,
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
   "internal_wires": [],
@@ -179,7 +60,6 @@
   "interface_types": [],
   "no_interface_types_in_input": true,
   "chip_top_interfaces": [],
-  "class_path": "serial_peripheral_protocol",
   "module_role": "DVI 1.0 / HDMI video-only transmitter. Sits between a graphics controller's parallel RGB pixel interface (24-bit single-edge or 12-bit dual-edge with DE/HSYNC/VSYNC/CTL) and the DVI / HDMI connector. Encodes per-pixel RGB to 10-bit T.M.D.S. characters, serialises onto 3 differential data pairs + 1 differential clock pair, drives current-mode differential outputs to a DVI/HDMI receiver across a twisted-pair cable. Optional sideband I2C target/DDC bridge for register access + EDID/HDCP transport.",
   "integration_overview": {
     "physical_topology": "All devices' SDA pins connected together; all SCL pins connected together; both lines pulled up to VDD via Rp.",

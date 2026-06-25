@@ -8,6 +8,7 @@
   "otp_ip_macro": {},
   "internal_registers": [],
   "extraction_evidence": {
+    "input/docs/ufs_spec.pdf": [],
     "input/docs/ufs_spec.txt": []
   },
   "register_map_present": true,

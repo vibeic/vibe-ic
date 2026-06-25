@@ -4,7 +4,7 @@
   "ic_name": "PROFIBUS-DP (IEC 61158 Type 3 / IEC 61784-1 CPF 3)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
+  "no_calibration": true,
   "extraction_evidence": {},
   "slave_startup_sequence": [
     "1. POWER_ON: the slave powers up and waits for its master.",

@@ -3,33 +3,11 @@
   "doc_class": "control_logic",
   "ic_name": "MIPI DSI v1.01.00 (Display Serial Interface, MIPI Alliance)",
   "reject_rules": [],
-  "fsm_states": [
-    {
-      "name": "LINK",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/MIPI_DSI_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "TRANSMIT",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/MIPI_DSI_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "RESPONDING",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/MIPI_DSI_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    }
-  ],
+  "fsm_states": [],
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
-  "no_fsm_states_in_input": false,
-  "no_fsm_in_input": false,
+  "no_fsm_states_in_input": true,
+  "no_fsm_in_input": true,
   "fsm_tokens": [
     {
       "name": "Timer",
@@ -45,7 +23,6 @@
       }
     ]
   },
-  "class_path": "serial_peripheral_protocol",
   "fsm_states_transmitter": [
     {
       "name": "TX_LP11_STOP",

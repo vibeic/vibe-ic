@@ -4,7 +4,7 @@
   "ic_name": "OCP-IP Open Core Protocol Specification",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
+  "no_calibration": true,
   "extraction_evidence": {},
   "single_read_sequence": [
     "1. Master drives MCmd=RD and MAddr.",

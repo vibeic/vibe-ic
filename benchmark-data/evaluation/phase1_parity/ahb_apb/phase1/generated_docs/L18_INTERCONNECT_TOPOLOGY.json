@@ -7,65 +7,13 @@
       "found_at_line": 252,
       "quote": "9.2       Multi-copy atomicity ............................................................................................... 9-79",
       "required_from": "AXI5 Issue G+",
-      "english": "A system is multi-copy atomic iff (a) writes to the same location are observed in the same order by all agents AND (b) a write to a location that is observable by one agent is observable by all agents.",
-      "property_name": "Multi_Copy_Atomicity",
-      "value": "Implementation_defined",
-      "required_for": "Issue G and later of this specification (also required if Arm v8 architecture processors are connected).",
-      "implementation_options": [
-        "MCA = true (system guarantees multi-copy atomicity)",
-        "MCA = false (system does NOT guarantee multi-copy atomicity; software must compensate)"
-      ],
-      "values": {
-        "True": "Multi-copy atomicity is supported",
-        "False": "Not supported (or not declared)"
-      }
+      "english": "Once a write is observed by one observer, all observers must see it (no write coalescing or store-buffer divergence)"
     },
     "axprot_polarity": null,
     "id_routing": {
       "description": "Interconnect may append bits to AxID to identify the originating master; slave-side ID_WIDTH > master-side ID_WIDTH",
-      "compliance_note": "Returning ID is the WIDER value; routing strips appended bits before returning to the master",
-      "implication": "A slave-port ID_WIDTH parameter must accommodate the maximum of (master-port ID_WIDTH + ceil(log2(number_of_masters_routed))) so that no two masters' IDs collide at the slave."
+      "compliance_note": "Returning ID is the WIDER value; routing strips appended bits before returning to the master"
     },
-    "interconnect_role": {
-      "definition": "An interconnect between devices is equivalent to another device with symmetrical master and slave roles aggregated; it must obey the same protocol rules as direct master-slave connections.",
-      "responsibilities": [
-        "Address decode and route to target slave",
-        "ID widening on master-side ports",
-        "Arbitration when multiple masters target the same slave",
-        "Order preservation per (master, ID) pair"
-      ],
-      "register_slices": "Each AXI channel transfers information in only one direction, with no fixed relationship between channels; an interconnect may insert register slices on any channel to break long combinational paths."
-    },
-    "ordering_guarantees": {
-      "guaranteed": [
-        "Transaction requests on the same channel with the same ID and destination arrive in order at the slave",
-        "Write responses with the same AWID are returned in order to the master",
-        "Read data with the same ARID is returned in order"
-      ],
-      "not_guaranteed": [
-        "Inter-channel order (e.g. read vs write at same address)",
-        "Order between different xIDs",
-        "Order between different masters"
-      ],
-      "device_ordering_axi4_only": "AXI4: All Device (Non-modifiable) transactions using the same ID to the same slave must be observed in issue order."
-    },
-    "memory_vs_peripheral_regions": {
-      "Memory_location": "Read returns last value written; write updates value retrievable by subsequent reads. Reorderable per ordering rules.",
-      "Peripheral_region": "Read may not return last value written; write may not update value retrievable by subsequent reads. Access has side effects; ordering must be strictly preserved per master+ID.",
-      "ahb_memory_subordinate": "Maps to a memory region; handles all bursts/sizes correctly.",
-      "ahb_peripheral_subordinate": "Typically connected via an AHB-to-APB bridge; APB peripheral behaviour governed by APB protocol.",
-      "apb_peripheral_region": "PADDR-mapped peripheral register set; one PSELx per logical peripheral."
-    },
-    "slave_classification": {
-      "Memory_slave": "Required to handle all transaction types correctly. Memory slaves use Tables A9-1..A9-4 for default signal values when signals are omitted.",
-      "Peripheral_slave": "Has an IMPLEMENTATION DEFINED method of access. Any non-conforming access must complete protocol-compliantly but the peripheral is not required to operate correctly under all access patterns; side effects per access; reorder restrictions; may support a subset of transaction types."
-    },
-    "default_signal_values_evidence_tables": [
-      "Table A9-1 Master interface write channel signals and default signal values",
-      "Table A9-2 Slave interface write channel signals and default signal values",
-      "Table A9-3 Master interface read channel signals and default signal values",
-      "Table A9-4 Slave interface read channel signals and default signal values"
-    ],
     "ic_name": "AMBA AHB + APB (ARM IHI 0033C + IHI 0024C)",
     "typical_topologies_ahb": [
       "Single-Manager AHB-Lite (Figure 1-1).",
@@ -142,6 +90,11 @@
         "Ordering across multiple independent APB busses."
       ]
     },
+    "memory_vs_peripheral_regions": {
+      "ahb_memory_subordinate": "Maps to a memory region; handles all bursts/sizes correctly.",
+      "ahb_peripheral_subordinate": "Typically connected via an AHB-to-APB bridge; APB peripheral behaviour governed by APB protocol.",
+      "apb_peripheral_region": "PADDR-mapped peripheral register set; one PSELx per logical peripheral."
+    },
     "slave_classification_ahb": {
       "Memory_Subordinate": "Handles all AHB transaction types.",
       "Peripheral_Subordinate": "Often APB peripheral behind AHB-to-APB bridge.",
@@ -152,7 +105,15 @@
       "Fixed_two_cycle_peripheral": "PREADY tied HIGH; every transfer completes in exactly 2 PCLK cycles.",
       "PSLVERR_supporting": "Drives PSLVERR=1 in the cycle PREADY=1 to indicate failure.",
       "Non_PSLVERR_supporting": "PSLVERR input to the bridge tied LOW."
-    }
+    },
+    "default_signal_values_evidence_tables": [
+      "AHB Table 2-2 Manager signals",
+      "AHB Table 2-3 Subordinate signals",
+      "AHB Table 2-4 Decoder signals",
+      "AHB Table 2-5 Multiplexor signals",
+      "AHB Appendix A Signal matrix",
+      "APB Table 2-1 APB signal descriptions"
+    ]
   },
   "extraction_status": "EXTRACTED",
   "schema_version": "v0.1.62",

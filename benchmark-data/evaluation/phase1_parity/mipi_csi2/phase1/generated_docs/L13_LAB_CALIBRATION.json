@@ -14,7 +14,6 @@
   "no_l13_test_cases_in_input": true,
   "trim_loop": [],
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
   "lab_calibration_present": false,
   "notes": "No CSI-2-protocol lab calibration content. D-PHY/C-PHY electrical compliance (eye diagram, jitter) is a PHY-level concern; sensor image calibration is vendor-specific over CCI.",
   "calibration_categories": [

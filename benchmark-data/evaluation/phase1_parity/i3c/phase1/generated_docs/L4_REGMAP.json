@@ -72,7 +72,6 @@
   "extraction_evidence": {
     "input/docs/I3C_Spec.pdf": []
   },
-  "class_path": "serial_peripheral_protocol",
   "register_map_present": "partial",
   "base_address": "Defined at SoC level; offsets given relative to module base.",
   "notes": "MIPI I3C Basic is a wire-level protocol specification, not a controller block guide. There is no SoC-level architectural register map. However, the spec defines three protocol-level characteristics registers that every device on the bus must expose (or hold virtually for I2C Slaves) — BCR, DCR, and (for legacy I2C devices) LVR.",

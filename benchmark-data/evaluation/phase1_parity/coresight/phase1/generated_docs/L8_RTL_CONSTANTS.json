@@ -21,7 +21,6 @@
   "extraction_evidence": {
     "input/docs/coresight_spec.txt": []
   },
-  "class_path": "digital_arithmetic_primitive",
   "width_parameters": {
     "MANDATORY_PIN_COUNT": 2,
     "OPTIONAL_PIN_COUNT": 2,

@@ -2,16 +2,12 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "DDR4 SDRAM (JEDEC JESD79-4)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
-  "external_components": [
-    {
-      "value": "240ohm",
-      "source": "ddr4_spec.txt",
-      "extraction_strategy": "external_anchored_kv"
-    }
-  ],
+  "external_components": [],
   "electrical_specs": [
     {
       "param": "VDD",
@@ -44,25 +40,45 @@
       "source": "ddr4_spec.txt",
       "raw": "VPP  = 2.5 V (DRAM activating / wordline pump supply, new in DDR4)",
       "extraction_strategy": "bullet_kv_pair_spec"
-    }
-  ],
-  "design_parameters": [
+    },
     {
-      "parameter": "x16 devices",
-      "value": "2",
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "800.0",
+      "unit": "MHz",
       "source": "ddr4_spec.txt",
-      "raw": "- x16 devices       : 2 bank groups",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "1600.0",
+      "unit": "MHz",
+      "source": "ddr4_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.5",
+      "unit": "V",
+      "source": "ddr4_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "2.5",
+      "unit": "V",
+      "source": "ddr4_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
     }
   ],
-  "extraction_evidence": {
-    "input/docs/ddr4_spec.txt": [
-      {
-        "literal": "240ohm",
-        "label": "BOM/spec value (external-anchored)"
-      }
-    ]
-  },
+  "design_parameters": [],
+  "source_documents": [
+    "input/docs/ddr4_spec.txt"
+  ],
+  "extraction_evidence": {},
   "analog_digital_interface_present": true,
   "signaling_summary": "DDR4 uses POD12 (Pseudo Open Drain, 1.2 V) single-ended signaling on the command/address bus and DQ, with differential CK_t/CK_c and differential DQS_t/DQS_c. Data is double-data-rate on the DQS edges. On-die termination (Rtt_Nom / Rtt_WR / Rtt_PARK) terminates to VDDQ; the DQ reference VREFDQ is generated internally (on-die) and centered by VrefDQ training. ZQ calibration trims the output driver and ODT against an external RZQ (240 ohm) resistor.",
   "notes": "DDR4 uses POD12 (1.2 V) single-ended CA/DQ signaling with differential CK_t/CK_c and DQS_t/DQS_c. VREFCA is external; VREFDQ is internal (on-die) and centered by VrefDQ training. ODT (Rtt_Nom/Rtt_WR/Rtt_PARK) terminates to VDDQ; ZQ calibration trims against RZQ (240 ohm).",

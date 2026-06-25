@@ -222,12 +222,17 @@
       {
         "name": "R",
         "direction_majority": "Slave",
-        "signal_count": 6,
+        "signal_count": 7,
         "signals": [
           {
             "name": "RID",
             "direction": "Slave",
             "semantics": "Read ID tag. This signal is the identification tag for the read data group of signals"
+          },
+          {
+            "name": "RDATA",
+            "direction": "Slave",
+            "semantics": "Read data."
           },
           {
             "name": "RRESP",

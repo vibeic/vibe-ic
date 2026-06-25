@@ -5,13 +5,13 @@
 - **overall.pct = 97.4%**
 - status: **PASS** (target ≥80%)
 - curated: **1557/1599 = 97.4%**
-- hands_on: **1604/1646 = 97.4%**
+- hands_on: **1607/1649 = 97.5%**
 
 ## Per-L-doc
 
 - L1_DATASHEET: evidence=12 todo=0
 - L2_FRS: evidence=24 todo=0
-- L3_CMD_PROTOCOL: evidence=19 todo=0
+- L3_CMD_PROTOCOL: evidence=18 todo=0
 - L4_REGMAP: evidence=0 todo=0
 - L5_ADI_SPEC: evidence=5 todo=0
 - L6_CONTROL_LOGIC: evidence=2 todo=0

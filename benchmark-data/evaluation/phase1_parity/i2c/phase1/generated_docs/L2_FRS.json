@@ -586,7 +586,6 @@
       }
     ]
   },
-  "class_path": "serial_peripheral_protocol",
   "auto_cited_sections": [
     {
       "file_ref": "phase1/input_doc/UM10204_NXP_i2c_bus_spec_rev6.txt:9",

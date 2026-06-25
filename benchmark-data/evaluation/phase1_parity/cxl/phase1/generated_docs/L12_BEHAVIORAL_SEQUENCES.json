@@ -4,8 +4,15 @@
   "ic_name": "Compute Express Link (CXL) 3.0 (CXL Consortium)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
-  "extraction_evidence": {},
+  "no_calibration": true,
+  "extraction_evidence": {
+    "derived_no_calibration_source": [
+      {
+        "literal": "no calibration / trim / OTP-cal source in input",
+        "label": "L12 no_calibration auto-set (#634 facet e) — absence-based, mirrors L5.no_analog"
+      }
+    ]
+  },
   "link_bring_up_sequence": [
     "1. PERST# deassertion; PCIe Flex Bus begins LTSSM training.",
     "2. Both ends advertise CXL capability + version via the PCIe Alternate Protocol mechanism in modified TS1/TS2 ordered sets.",

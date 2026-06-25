@@ -19,7 +19,6 @@
   "extraction_evidence": {
     "input/docs/EtherCAT_Spec.pdf": []
   },
-  "class_path": "digital_arithmetic_primitive",
   "protocol_type": "EtherCAT runs three nested protocols in one packet: (a) outer Ethernet frame (DA + SA + EtherType 0x88A4 + Payload + FCS), (b) EtherCAT header (Length + Reserved + Type=0x1), (c) one or more EtherCAT datagrams chained by the Next bit, each carrying its own Cmd / Idx / Address / Length / IRQ / Data / WKC.",
   "channels": [
     {

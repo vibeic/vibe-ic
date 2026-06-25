@@ -3,6 +3,11 @@
     "versions": [],
     "deprecated_features": [
       {
+        "feature": "carrying",
+        "quote": "without the burden of carrying obsolete interfaces or losing compatibility.",
+        "line": 771
+      },
+      {
         "feature": "are",
         "quote": "are removed in that state.",
         "line": 15373

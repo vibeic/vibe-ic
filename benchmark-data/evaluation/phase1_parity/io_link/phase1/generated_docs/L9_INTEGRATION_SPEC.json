@@ -14,16 +14,6 @@
   "sim_only_modules": [],
   "fsm_states": [
     {
-      "name": "BACK",
-      "transitions": [],
-      "evidence": "input/docs/io_link_spec.txt (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "EVENTS",
-      "transitions": [],
-      "evidence": "input/docs/io_link_spec.txt (prose state-to-state v1.6.484)"
-    },
-    {
       "name": "OPERATE",
       "transitions": [],
       "evidence": "input/docs/io_link_spec.txt (prose 'in X state')"

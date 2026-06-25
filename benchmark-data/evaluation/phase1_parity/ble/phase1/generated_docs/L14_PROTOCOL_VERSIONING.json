@@ -3,12 +3,87 @@
     "versions": [],
     "deprecated_features": [
       {
-        "feature": "were",
+        "feature": "A",
+        "quote": "Appendix A Deprecated commands, events, and configuration",
+        "line": 2981
+      },
+      {
+        "feature": "A.10",
+        "quote": "A.10 Deprecated parameters ...................................................... 2766",
+        "line": 2992
+      },
+      {
+        "feature": "to",
+        "quote": "Removed references to deprecated and withdrawn ver-",
+        "line": 4455
+      },
+      {
+        "feature": "to",
+        "quote": "• Removed references to deprecated and withdrawn ver-",
+        "line": 4575
+      },
+      {
+        "feature": "keys",
+        "quote": "• Unit keys were deprecated and removed; see [Vol 1] Part",
+        "line": 4581
+      },
+      {
+        "feature": "State",
+        "quote": "• Park State was deprecated and removed",
+        "line": 4597
+      },
+      {
+        "feature": "or",
+        "quote": "age to other volumes or were deprecated:",
+        "line": 4700
+      },
+      {
+        "feature": "to",
+        "quote": "• Removed references to deprecated and withdrawn ver-",
+        "line": 4767
+      },
+      {
+        "feature": "the",
+        "quote": "the specification that specifies the deprecated features.",
+        "line": 16672
+      },
+      {
+        "feature": "Features",
+        "quote": "Features deprecated in version 1.2 are:",
+        "line": 16719
+      },
+      {
+        "feature": "only",
+        "quote": "The only feature deprecated in version 2.0 + EDR is the Page Scan Period",
+        "line": 16772
+      },
+      {
+        "feature": "features",
+        "quote": "No features were deprecated in v2.1 + EDR.",
+        "line": 16802
+      },
+      {
+        "feature": "features",
+        "quote": "No features were deprecated in v3.0 + HS.",
+        "line": 16835
+      },
+      {
+        "feature": "features",
+        "quote": "No features were deprecated in v4.0.",
+        "line": 16866
+      },
+      {
+        "feature": "features",
+        "quote": "No features were deprecated in v4.1.",
+        "line": 16931
+      },
+      {
+        "feature": "features",
         "quote": "The following features were removed in this version of the specification:",
         "line": 17068
       },
       {
-        "feature": "were",
+        "feature": "features",
         "quote": "The following features were removed in this version of the specification:",
         "line": 17405
       },
@@ -16,6 +91,11 @@
         "feature": "action",
         "quote": "negative form, it indicates a certain course of action is deprecated but not",
         "line": 18268
+      },
+      {
+        "feature": "a",
+        "quote": "indicates that a field or value was used for a deprecated feature (see [Vol 1]",
+        "line": 18382
       }
     ],
     "backward_compat_traps": [

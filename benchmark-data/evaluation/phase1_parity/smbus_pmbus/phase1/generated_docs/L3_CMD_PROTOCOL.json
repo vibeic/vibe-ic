@@ -6,8 +6,17 @@
   "no_opcodes_in_input": true,
   "placeholder_opcode_count": 0,
   "no_opcode_names_in_input": false,
-  "crc_parameters": null,
-  "no_crc_parameters_in_input": true,
+  "crc_parameters": {
+    "polynomial_hex": null,
+    "polynomial_reflected_hex": null,
+    "init_hex": "0x00",
+    "bit_order": "lsb_first",
+    "xorout_hex": "0x00",
+    "residue_check_hex": "0x00",
+    "reset_at_break": true,
+    "golden_vectors": []
+  },
+  "no_crc_parameters_in_input": false,
   "verdict_byte_offset": null,
   "verdict_byte_hex": null,
   "no_verdict_byte_in_input": true,
@@ -17,7 +26,12 @@
   "no_payload_semantics_in_input": true,
   "opcode_synthesis_skipped_reason": "L2.protocol_overview.half_duplex is not True and no explicit opcode/command-table heading was found in input/docs/. Free-form hex bytes in prose, SVG labels, or PDF text do not constitute opcode evidence.",
   "extraction_evidence": {
-    "input/docs/smbus_pmbus_spec.txt": []
+    "input/docs/smbus_pmbus_spec.txt": [
+      {
+        "literal": "0x00",
+        "label": "CRC init"
+      }
+    ]
   },
   "protocol_type": "I2C-derived byte-oriented bus protocol with a fixed set of SMBus transaction formats. Each transaction is START, slave-address+RW, [command code], [byte count], data byte(s), [PEC], STOP. PMBus carries its command codes in the SMBus Write/Read Byte/Word/Block transactions.",
   "byte_oriented": true,

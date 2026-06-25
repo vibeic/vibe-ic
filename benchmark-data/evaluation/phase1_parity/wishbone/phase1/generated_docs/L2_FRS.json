@@ -454,11 +454,6 @@
   ],
   "no_frs_sections_in_input": false,
   "protocol_overview": {
-    "half_duplex": false,
-    "wire_count": 4,
-    "byte_order": null,
-    "wake_required_pre_command": null,
-    "evidence": "interface keyword match (i2c/spi/uart/...)",
     "bus_role": "Wishbone is a flexible MASTER/SLAVE on-chip interconnect for portable SoC IP cores. The protocol defines only the data-exchange signaling between MASTER and SLAVE; application-specific functions are outside the scope.",
     "synchronous": "All transfers are synchronous, single-clock-edge (rising [CLK_I]).",
     "handshake_modes": [
@@ -497,7 +492,7 @@
     ],
     "syscon_module": "SYSCON generates [CLK_O] and [RST_O]; INTERCON routes [CLK_O] -> all [CLK_I] inputs and [RST_O] -> all [RST_I] inputs of MASTERs and SLAVEs."
   },
-  "no_protocol_overview_in_input": false,
+  "no_protocol_overview_in_input": true,
   "compliance_requirements": [
     "All MASTER interfaces MUST include at least [ACK_I], [CLK_I], [CYC_O], [RST_I], [STB_O] (RULE 3.40).",
     "All SLAVE interfaces MUST include at least [ACK_O], [CLK_I], [CYC_I], [STB_I], [RST_I] (RULE 3.40).",
@@ -624,9 +619,15 @@
         "literal": "3.2.1 Classic standard SINGLE READ Cycle_____________________________40",
         "label": "FRS section"
       }
+    ],
+    "v1.6.295.protocol_overview_class_gate_suppressed": [
+      {
+        "literal": "class_path='processor_cpu', hd_signal_count=0",
+        "label": "v1.6.295 (#180) — protocol_overview suppressed: CPU / analog class OR fewer than 2 half-duplex shape signals in source"
+      }
     ]
   },
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "processor_cpu",
   "auto_cited_sections": [
     {
       "file_ref": "phase1/input_doc/Wishbone_Spec.txt:13",

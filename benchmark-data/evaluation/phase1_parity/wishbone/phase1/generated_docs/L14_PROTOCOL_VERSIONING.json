@@ -19,7 +19,7 @@
     ],
     "deprecated_features": [
       {
-        "feature": "is",
+        "feature": "data",
         "quote": "two devices. In FIFO memories, data is removed in the same order that they were added.",
         "line": 874
       }

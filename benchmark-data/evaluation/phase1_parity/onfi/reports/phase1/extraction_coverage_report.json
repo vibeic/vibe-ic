@@ -2,20 +2,20 @@
   "overall": {
     "denominator": 665,
     "total": 1157,
-    "numerator": 665,
-    "pct": 100.0,
+    "numerator": 663,
+    "pct": 99.7,
     "target_pct": 80.0,
     "status": "PASS"
   },
   "curated": {
     "denominator": 665,
-    "numerator": 665,
-    "pct": 100.0
+    "numerator": 663,
+    "pct": 99.7
   },
   "hands_on": {
     "denominator": 693,
-    "numerator": 693,
-    "pct": 100.0
+    "numerator": 691,
+    "pct": 99.7
   },
   "per_l_doc": [
     {
@@ -40,7 +40,7 @@
     },
     {
       "name": "L5_ADI_SPEC",
-      "evidence_count": 4,
+      "evidence_count": 0,
       "todo_count": 0
     },
     {

@@ -19,7 +19,6 @@
   "extraction_evidence": {
     "input/docs/HDMI_Spec.pdf": []
   },
-  "class_path": "serial_peripheral_protocol",
   "protocol_type": "Per-pixel streaming serial protocol with NO opcode/register transport on the TMDS wires themselves. Each pixel produces 1 × 10-bit T.M.D.S. character per channel (Blue/Green/Red). Control characters delimit blanking. Side-band I2C (DDC) carries register reads/writes to the TFP410 itself and also bridges to the display's EDID + HDCP devices.",
   "channels": [
     {

@@ -16,7 +16,6 @@
   ],
   "no_bring_up_sequence_in_input": false,
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
   "test_cases_present": true,
   "derived_compliance_test_categories": [
     {

@@ -2,15 +2,83 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "LPDDR5 SDRAM (JEDEC JESD209-5)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
   "external_components": [],
-  "electrical_specs": [],
+  "electrical_specs": [
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "533.0",
+      "unit": "MHz",
+      "source": "lpddr5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "800.0",
+      "unit": "MHz",
+      "source": "lpddr5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "3200.0",
+      "unit": "MHz",
+      "source": "lpddr5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.8",
+      "unit": "V",
+      "source": "lpddr5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.2",
+      "unit": "V",
+      "source": "lpddr5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.1",
+      "unit": "V",
+      "source": "lpddr5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "0.6",
+      "unit": "V",
+      "source": "lpddr5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.12",
+      "unit": "V",
+      "source": "lpddr5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    }
+  ],
   "design_parameters": [],
-  "extraction_evidence": {
-    "input/docs/lpddr5_spec.pdf": []
-  },
+  "source_documents": [
+    "input/docs/lpddr5_spec.pdf"
+  ],
+  "extraction_evidence": {},
   "analog_digital_interface_present": false,
   "signaling_summary": "All-digital low-voltage-swing low-power signaling. CA[6:0] and CS are single-ended referenced to Vref(ca); DQ / DMI are single-ended referenced to Vref(dq). CK (quarter-speed), WCK (full-speed write clock) and RDQS (read strobe) are differential. VDDQ is reduced to 0.5 V (vs DDR3's 1.5 V) to minimize IO power. Core supplies are VDD1 (~1.8 V) and VDD2H/VDD2L (DVFSC-selected). The receiver uses Decision Feedback Equalization (DFE) and (in JESD209-5B) tx/rx equalization for SI at 6400+ Mbit/s. The ZQ pin calibrates output-driver / ODT impedance against an external precision reference resistor over Process / Voltage / Temperature.",
   "voltage_classes": [

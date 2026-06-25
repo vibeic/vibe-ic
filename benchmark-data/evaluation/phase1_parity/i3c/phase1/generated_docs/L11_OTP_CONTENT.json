@@ -4,11 +4,11 @@
   "applicability": "N/A",
   "ic_class": "serial_peripheral_protocol",
   "rationale": "No OTP fuses",
-  "emitted_by": "l_doc_taxonomy.na_stub v0.1.51",
+  "extraction_evidence": {},
+  "emitted_by": "l_doc_taxonomy.na_stub v0.2.14",
   "extraction_strategy": {
     "ic_class_applicability_gate_v0_1_62": "ic_class='serial_peripheral_protocol' declares LL11 not applicable; emitted as N/A stub (l_doc_taxonomy.na_stub)"
   },
-  "class_path": "serial_peripheral_protocol",
   "no_otp_fsm_in_input": true,
   "otp_present": true,
   "notes": "Unlike pure I2C, MIPI I3C requires every I3C-compliant device to expose a 48-bit Provisional ID (PID) that is either factory-burnt (Vendor Fixed Value, Type Selector PID[32]=0) or vendor-test-mode-random (Type Selector PID[32]=1). The Vendor Fixed Value is intended to live in factory non-volatile memory (typically OTP / e-fuse / mask-ROM). In addition, BCR and DCR carry device role / capability data that are normally factory-set and read-only.",

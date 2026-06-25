@@ -4,31 +4,16 @@
   "ic_name": "AMBA AHB + APB (ARM IHI 0033C + IHI 0024C)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
-  "extraction_evidence": {},
-  "extraction_strategy": {
-    "hallucination_scrub_v0_1_60": [
+  "no_calibration": true,
+  "extraction_evidence": {
+    "derived_no_calibration_source": [
       {
-        "l_doc": "L12_BEHAVIORAL_SEQUENCES",
-        "pattern_name": "ic_name_from_license_clause",
-        "path": "ic_name",
-        "old_value": "SUCH ARM TECHNOLOGY",
-        "new_value": "UNKNOWN_IC",
-        "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
+        "literal": "no calibration / trim / OTP-cal source in input",
+        "label": "L12 no_calibration auto-set (#634 facet e) — absence-based, mirrors L5.no_analog"
       }
     ]
   },
-  "class_path": "digital_arithmetic_primitive",
-  "ordering_rules_summary": {
-    "device_transactions_AXI4_same_ID_same_slave": "AXI4 Device-class accesses with the same ID to the same slave must remain in issue order.",
-    "different_memory_regions": "Transactions to different memory regions may be reordered freely if IDs differ.",
-    "write_after_read_same_ID": "Write after read on the same ID must be observed in issue order.",
-    "read_after_write_same_ID": "Read after write on the same ID must be observed in issue order.",
-    "ahb_single_manager": "AHB-Lite is single-Manager; no out-of-order; one outstanding transfer at a time (pipelined address + data).",
-    "ahb_burst_order": "All beats of a burst are sequential and the address relationship (INCR / WRAP) is encoded in HBURST.",
-    "ahb_multi_manager": "Multi-Manager AHB requires an interconnect with arbitration; arbitration ordering is interconnect-defined (see ARM DVI 0045 Multi-layer AHB Technical Overview).",
-    "apb_ordering": "APB is single-Manager (the bridge); strictly in-order; one transfer at a time."
-  },
+  "class_path": "bus_peripheral",
   "typical_ahb_read_sequence_single": [
     "1. Manager drives HADDR=A, HWRITE=0, HSIZE=size, HBURST=SINGLE, HTRANS=NONSEQ.",
     "2. Decoder asserts HSELx in the next data phase.",
@@ -101,6 +86,12 @@
     "3. Peripheral state after error is implementation-specific.",
     "4. Bridge maps PSLVERR=1 -> HRESP=ERROR (AHB) / RRESP=SLVERR (AXI)."
   ],
+  "ordering_rules_summary": {
+    "ahb_single_manager": "AHB-Lite is single-Manager; no out-of-order; one outstanding transfer at a time (pipelined address + data).",
+    "ahb_burst_order": "All beats of a burst are sequential and the address relationship (INCR / WRAP) is encoded in HBURST.",
+    "ahb_multi_manager": "Multi-Manager AHB requires an interconnect with arbitration; arbitration ordering is interconnect-defined (see ARM DVI 0045 Multi-layer AHB Technical Overview).",
+    "apb_ordering": "APB is single-Manager (the bridge); strictly in-order; one transfer at a time."
+  },
   "narrow_transfer_sequence": "Both AHB and APB support narrower-than-bus transfers. AHB: HSIZE + HADDR + (optional) HWSTRB determine active lanes. APB: PSTRB explicitly indicates active lanes on writes.",
   "early_burst_termination_ahb": "Fixed-length AHB bursts must terminate with SEQ. The only early-termination paths are (a) Subordinate ERROR response with Manager driving HTRANS=IDLE, or (b) multi-layer interconnect terminating the burst."
 }

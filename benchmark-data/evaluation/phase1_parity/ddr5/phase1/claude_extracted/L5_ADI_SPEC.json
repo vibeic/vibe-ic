@@ -65,13 +65,6 @@
   ],
   "design_parameters": [
     {
-      "parameter": "granularity (32 bits x 16",
-      "value": "64",
-      "source": "ddr5_spec.txt",
-      "raw": "granularity (32 bits x 16 = 64 bytes) per sub-channel, doubling the",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
       "parameter": "x4 / x8 device",
       "value": "32",
       "source": "ddr5_spec.txt",

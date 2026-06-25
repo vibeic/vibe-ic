@@ -136,7 +136,6 @@
   ],
   "no_bring_up_sequence_in_input": false,
   "extraction_evidence": {},
-  "class_path": "serial_peripheral_protocol",
   "test_cases_present": "partial — DSI v1.01.00 defines detailed compliance behaviors (packet formats, ECC + Checksum algorithms, BTA, EoTp, Tearing Effect, video timing) and the Acknowledge-and-Error-Report mechanism, but is not a self-contained testbench; the formal conformance suite is operated by MIPI Alliance.",
   "derived_compliance_test_categories": [
     "Reset behavior verification.",

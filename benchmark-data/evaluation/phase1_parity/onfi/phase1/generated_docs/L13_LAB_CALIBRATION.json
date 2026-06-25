@@ -14,7 +14,6 @@
   "no_l13_test_cases_in_input": true,
   "trim_loop": [],
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
   "lab_calibration_present": true,
   "notes": "ONFI 4.1 calibration is entirely host-driven; the device exposes training-pattern emit + round-trip pattern + ZQ impedance loop. The host owns the optimization loops (RX phase, TX phase, drive strength, periodic ZQ). Internal trim is factory-set.",
   "calibration_summary": "Host-driven calibration loops: ZQ Calibration (Long F9h, Short D9h), NV-DDR3 DCC Training (18h Implicit), Read DQ Training (62h), Write TX DQ Training (63h pattern + 64h readback), Write RX DQ Training (76h), and Set Features I/O Drive Strength (EFh + 10h).",

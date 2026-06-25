@@ -4,7 +4,7 @@
   "ic_name": "SpaceWire_Link_Router (ECSS-E-ST-50-12C)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
+  "no_calibration": true,
   "extraction_evidence": {},
   "class_path": "digital_arithmetic_primitive",
   "link_initialization_sequence": [

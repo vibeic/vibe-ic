@@ -17,46 +17,6 @@
       "name": "OPERA",
       "transitions": [],
       "evidence": "input/docs/LIN_Spec.pdf (prose transition v1.6.484)"
-    },
-    {
-      "name": "REFERS",
-      "transitions": [],
-      "evidence": "input/docs/LIN_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "CLUSTER",
-      "transitions": [],
-      "evidence": "input/docs/LIN_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "LEFT",
-      "transitions": [],
-      "evidence": "input/docs/LIN_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "CONNECTION",
-      "transitions": [],
-      "evidence": "input/docs/LIN_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "POWER",
-      "transitions": [],
-      "evidence": "input/docs/LIN_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "APPLIES",
-      "transitions": [],
-      "evidence": "input/docs/LIN_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SOFTWARE",
-      "transitions": [],
-      "evidence": "input/docs/LIN_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "RECOMMENDED",
-      "transitions": [],
-      "evidence": "input/docs/LIN_Spec.pdf (prose state-to-state v1.6.484)"
     }
   ],
   "no_fsm_states_in_input": false,

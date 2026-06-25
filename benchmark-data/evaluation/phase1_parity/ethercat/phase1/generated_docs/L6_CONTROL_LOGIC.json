@@ -3,45 +3,15 @@
   "doc_class": "control_logic",
   "ic_name": "EtherCAT (IEC 61158 Type 12)",
   "reject_rules": [],
-  "fsm_states": [
-    {
-      "name": "INHERENT",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/EtherCAT_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "CHECKSUM",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/EtherCAT_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "SCAN",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/EtherCAT_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "PROVIDED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/EtherCAT_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    }
-  ],
+  "fsm_states": [],
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
-  "no_fsm_states_in_input": false,
-  "no_fsm_in_input": false,
+  "no_fsm_states_in_input": true,
+  "no_fsm_in_input": true,
   "fsm_tokens": [],
   "extraction_evidence": {
     "input/docs/EtherCAT_Spec.pdf": []
   },
-  "class_path": "digital_arithmetic_primitive",
   "fsm_hints": "ESM and on-the-fly engine are implementable as small synchronous state machines clocked at the wire rate. FMMU lookup is a sorted-window compare against the 8 entries; SyncManager arbitration is single-buffer per channel. DC PI loop converges within 100-1000 cycles.",
   "anti_deadlock_rule": "ESM transitions only on MainDevice request via AL Control 0x0120 with one exception: PD Watchdog expiry forces Op → SafeOp. SubDevice never escalates state autonomously beyond the safe direction. Mailbox handshake on SM0/SM1 is atomic on the wire; a half-completed mailbox write cannot be observed by the SubDevice CPU. The on-the-fly engine has no internal queues; one frame in, one frame out, deterministic latency.",
   "exit_from_reset_or_poweron": "BMCR Reset (0.15 = 1) or PHY power-on: PHY clears BMCR + BMSR to defaults; AutoNeg Enable (0.12) defaults to 1 if the PHY supports AutoNeg, else 0. PHY runs the AutoNeg state machine (if enabled), then on completion the negotiated PMA / PMD takes the link to Link Up and BMSR bit 1.5 + bit 1.2 are set. The MAC is held in RX_IDLE / TX_IDLE until the MAC client and the PHY both signal Link Up.",

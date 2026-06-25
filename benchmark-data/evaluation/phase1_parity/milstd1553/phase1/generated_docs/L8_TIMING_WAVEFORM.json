@@ -26,6 +26,18 @@
       "source_pin": "clk"
     }
   ],
+  "clocks": [
+    {
+      "name": "clk",
+      "type": "input",
+      "freq_mhz": 1.0,
+      "extraction_strategy": "seeded_from_l1_clock_port_v1_6_571",
+      "freq_hz": 1000000,
+      "period_ns": 1000.0,
+      "role": "primary",
+      "domain_kind": "primary"
+    }
+  ],
   "clock_mhz": 1.0,
   "word_format_structure": {
     "TOTAL_DURATION": "20 µs per word (3 µs sync + 16 µs data + 1 µs parity)",

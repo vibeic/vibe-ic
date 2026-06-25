@@ -74,14 +74,6 @@
         "label": "opcode → happy + negative test-cases"
       },
       {
-        "literal": "<HALLUCINATION_SCRUBBED> TXD",
-        "label": "opcode → happy + negative test-cases"
-      },
-      {
-        "literal": "<HALLUCINATION_SCRUBBED> TXD",
-        "label": "opcode → happy + negative test-cases"
-      },
-      {
         "literal": "0x18 COL",
         "label": "opcode → happy + negative test-cases"
       },
@@ -135,6 +127,14 @@
       },
       {
         "literal": "0x1C AC",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x3A PI",
+        "label": "opcode → happy + negative test-cases"
+      },
+      {
+        "literal": "0x3B PI",
         "label": "opcode → happy + negative test-cases"
       }
     ]

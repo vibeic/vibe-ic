@@ -2,52 +2,35 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "MIPI CSI-2 (Camera Serial Interface 2, MIPI Alliance)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
   "external_components": [],
-  "electrical_specs": [],
-  "design_parameters": [
+  "electrical_specs": [
     {
-      "parameter": "RAW8",
-      "value": "1",
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "100.0",
+      "unit": "kHz",
       "source": "mipi_csi2_spec.txt",
-      "raw": "- RAW8 : 1 pixel per byte.",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
     },
     {
-      "parameter": "RAW10",
-      "value": "4",
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "400.0",
+      "unit": "kHz",
       "source": "mipi_csi2_spec.txt",
-      "raw": "- RAW10: 4 pixels packed into 5 bytes (4 high bytes + 1 byte holding the 4",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "RAW12",
-      "value": "2",
-      "source": "mipi_csi2_spec.txt",
-      "raw": "- RAW12: 2 pixels packed into 3 bytes.",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "RGB888",
-      "value": "3",
-      "source": "mipi_csi2_spec.txt",
-      "raw": "- RGB888: 3 bytes per pixel (R, G, B).",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "YUV422 8-bit",
-      "value": "2",
-      "source": "mipi_csi2_spec.txt",
-      "raw": "- YUV422 8-bit: 2 bytes per pixel (interleaved Y/U/Y/V).",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
     }
   ],
-  "extraction_evidence": {
-    "input/docs/mipi_csi2_spec.txt": []
-  },
-  "class_path": "digital_arithmetic_primitive",
+  "design_parameters": [],
+  "source_documents": [
+    "input/docs/mipi_csi2_spec.txt"
+  ],
+  "extraction_evidence": {},
   "analog_digital_interface_present": true,
   "voltage_levels": {
     "HS_differential_swing_mV": [

@@ -24,7 +24,6 @@
       }
     ]
   },
-  "class_path": "digital_arithmetic_primitive",
   "protocol_type": "Packet-based half-duplex display-traffic protocol on top of source-synchronous DDR D-PHY. Two transaction styles coexist: (a) command/parameter transactions (Command Mode) using DCS and Generic Read/Write Short/Long Packets, and (b) real-time pixel-stream transactions (Video Mode) using Sync Event Short Packets + Packed/Loosely-Packed RGB Long Packets + Blanking/Null Long Packets.",
   "burst_based": true,
   "byte_oriented": true,

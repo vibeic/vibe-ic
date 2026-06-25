@@ -4,8 +4,15 @@
   "ic_name": "SAS_Controller",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
-  "extraction_evidence": {},
+  "no_calibration": true,
+  "extraction_evidence": {
+    "derived_no_calibration_source": [
+      {
+        "literal": "no calibration / trim / OTP-cal source in input",
+        "label": "L12 no_calibration auto-set (#634 facet e) — absence-based, mirrors L5.no_analog"
+      }
+    ]
+  },
   "hba_software_initialization_sequence": [
     "1. Enable HBA in PCI cfg: CMD.MSE=1 + CMD.BME=1.",
     "2. Read ABAR (PCI cfg offset 24h).",

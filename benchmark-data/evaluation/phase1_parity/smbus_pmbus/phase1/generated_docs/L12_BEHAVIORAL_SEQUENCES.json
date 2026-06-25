@@ -4,8 +4,15 @@
   "ic_name": "System Management Bus (SMBus 3.1) + Power Management Bus (PMBus 1.3)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
-  "extraction_evidence": {},
+  "no_calibration": true,
+  "extraction_evidence": {
+    "derived_no_calibration_source": [
+      {
+        "literal": "no calibration / trim / OTP-cal source in input",
+        "label": "L12 no_calibration auto-set (#634 facet e) — absence-based, mirrors L5.no_analog"
+      }
+    ]
+  },
   "write_word_with_pec_sequence": [
     "1. Master issues START.",
     "2. Master sends Address + Write; slave ACKs.",

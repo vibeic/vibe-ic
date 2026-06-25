@@ -7,7 +7,6 @@
   "bring_up_sequence": [],
   "no_bring_up_sequence_in_input": true,
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
   "derived_compliance_test_categories": [
     "Short Packet (FS/FE/LS/LE) frame/line sync correctness",
     "Long Packet header ECC single-bit correction / double-bit detection",

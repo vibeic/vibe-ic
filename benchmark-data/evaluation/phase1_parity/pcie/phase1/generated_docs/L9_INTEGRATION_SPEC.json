@@ -2,8 +2,8 @@
   "schema_version": 2,
   "doc_class": "integration_spec",
   "ic_name": "PCI Express Base Specification Rev 1.0",
-  "top_module": "PM_PME",
-  "top_module_extraction_strategy": "l1_ic_name_fallback",
+  "top_module": "chip_top",
+  "top_module_extraction_strategy": "canonical_chip_top_sentinel",
   "no_top_module_in_input": true,
   "ports": [],
   "top_ports": [],
@@ -47,159 +47,14 @@
       "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose transition v1.6.484)"
     },
     {
-      "name": "PERMITTED",
+      "name": "FC_INIT1",
       "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (spec text)"
     },
     {
-      "name": "OPTIMIZE",
+      "name": "FC_INIT2",
       "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "REQUIRED",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SUPPORT",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "USED",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "MOVE",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SOLVING",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "INTERNAL",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "INFORMATION",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "MACHINE",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "PERFORM",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ENTRY",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "DL_INACTIVE",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "DEFAULT",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ENTRANCE",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "DL_INIT",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "TRANSITION",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "PASSED",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ADDITION",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "EXCHANGE",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "MEANS",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SEND",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "EXIT",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "CONFIG",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "NUMBERS",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "CONTROL",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "PRIOR",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "INITIALIZED",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "POLLING",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "CONFIGURATION",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "DIRECTED",
-      "transitions": [],
-      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/PCIe_1.0_base_spec.pdf (spec text)"
     }
   ],
   "no_fsm_states_in_input": false,
@@ -255,11 +110,6 @@
   "memory_map": [],
   "no_memory_map_in_input": true,
   "no_instantiation_template_in_input": true,
-  "top_module_pins_evidence": {
-    "reason": "no_module_declaration_in_input_docs",
-    "fallback_source": "L1.ic_name",
-    "extraction_strategy_marker": "fallback_explicit_v1_6_581"
-  },
   "extraction_evidence": {
     "derived_from_L3": []
   },

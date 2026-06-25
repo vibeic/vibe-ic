@@ -25,8 +25,170 @@
     }
   ],
   "no_analog": false,
+  "analog_digital_interface_present": true,
   "external_components": [],
-  "electrical_specs": [],
+  "electrical_specs": [
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "60.0",
+      "unit": "Hz",
+      "source": "usb4_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "120.0",
+      "unit": "Hz",
+      "source": "usb4_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "648.91",
+      "unit": "MHz",
+      "source": "usb4_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "48.0",
+      "unit": "V",
+      "source": "usb4_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "5.0",
+      "unit": "V",
+      "source": "usb4_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "18.0",
+      "unit": "V",
+      "source": "usb4_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "20.0",
+      "unit": "V",
+      "source": "usb4_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "0.0",
+      "unit": "V",
+      "source": "usb4_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "28.0",
+      "unit": "V",
+      "source": "usb4_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "36.0",
+      "unit": "V",
+      "source": "usb4_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "5.5",
+      "unit": "V",
+      "source": "usb4_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "5.0",
+      "unit": "A",
+      "source": "usb4_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "12.0",
+      "unit": "A",
+      "source": "usb4_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "550.0",
+      "unit": "mA",
+      "source": "usb4_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "3000.0",
+      "unit": "mA",
+      "source": "usb4_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "3.0",
+      "unit": "A",
+      "source": "usb4_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "1.5",
+      "unit": "A",
+      "source": "usb4_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "500.0",
+      "unit": "mA",
+      "source": "usb4_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "1.1",
+      "unit": "A",
+      "source": "usb4_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "900.0",
+      "unit": "mA",
+      "source": "usb4_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    }
+  ],
   "design_parameters": [
     {
       "parameter": "asymmetric 3",
@@ -91,7 +253,6 @@
     ]
   },
   "class_path": "pure_analog",
-  "analog_digital_interface_present": true,
   "signaling_summary": "USB4 high-speed signalling uses two bidirectional lanes over a USB-C connector. Each lane is a TX differential pair + an RX differential pair. Gen 2 = 10.3125 Gbaud/lane with 64b/66b encoding; Gen 3 = 20.625 Gbaud/lane with 128b/132b encoding; USB4 v2 (Gen 4) uses PAM-3 multilevel signalling for 40 Gbps effective per lane (80 Gbps symmetric). Link is brought up with LT-LFPS (Low-Frequency Periodic Signaling) ordered sets and adaptive equalization. SBU sideband is a low-speed management pair; CC1/CC2 carry USB Power Delivery. VBUS power is set by the negotiated PD contract.",
   "voltage_classes_of_devices": [
     "USB Power Delivery up to 100 W (20 V / 5 A) over VBUS.",

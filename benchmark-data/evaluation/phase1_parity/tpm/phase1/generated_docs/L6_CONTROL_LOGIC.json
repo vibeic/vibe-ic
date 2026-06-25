@@ -63,7 +63,7 @@
       }
     ]
   },
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "crypto_accelerator",
   "fsm_states_tpm_operational": [
     {
       "name": "Power-Off",

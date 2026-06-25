@@ -18,52 +18,8 @@
   "no_engineer_mode_unlock_in_input": true,
   "vsuite_per_kw_cap_skipped_v1_6_373": 0,
   "extraction_evidence": {},
-  "extraction_strategy": {
-    "hallucination_scrub_v0_1_60": [
-      {
-        "l_doc": "L7_TEST_DEBUG",
-        "pattern_name": "ic_name_from_license_clause",
-        "path": "ic_name",
-        "old_value": "SUCH ARM TECHNOLOGY",
-        "new_value": "UNKNOWN_IC",
-        "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
-      }
-    ]
-  },
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "bus_peripheral",
   "test_debug_architecture_present": false,
-  "spec_provided_observability": [
-    {
-      "name": "AxUSER / RUSER / WUSER / BUSER",
-      "purpose": "Implementation-defined user signals carried alongside each channel."
-    },
-    {
-      "name": "AxQOS",
-      "purpose": "4-bit Quality-of-Service identifier (AXI4)."
-    },
-    {
-      "name": "AxREGION",
-      "purpose": "4-bit region identifier (AXI4)."
-    },
-    {
-      "name": "AxTRACE",
-      "purpose": "Trace tagging sideband (AXI5 Issue G)."
-    }
-  ],
-  "AXI5_E1_features_mentioned_in_TOC": [
-    "E1.1 Atomic transactions",
-    "E1.2 Cache stashing",
-    "E1.3 Deallocating transactions",
-    "E1.4 Persist cache maintenance",
-    "E1.5 Non-secure access identifier (NSAccess)"
-  ],
-  "parity_and_protection_AXI5_E2": [
-    "E2.1 Poison",
-    "E2.2 Parity use in AMBA",
-    "E2.3 Configuration of interface protection",
-    "E2.4 Optional read data parity",
-    "E2.5 Optional write data parity"
-  ],
   "rationale": "Neither AHB IHI 0033C nor APB IHI 0024C defines a JTAG / scan / BIST / MBIST / debug architecture. There is no dedicated debug interface in either protocol. Debug visibility, if any, must be added by the integrator (e.g. ARM CoreSight components) outside these specs.",
   "spec_provided_observability_ahb": [
     {

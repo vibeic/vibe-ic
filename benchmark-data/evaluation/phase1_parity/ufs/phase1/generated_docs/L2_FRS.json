@@ -7,6 +7,118 @@
       "section": "300",
       "title": "MB/s",
       "content": "1\n\n300 MB/s\n\n1.0\n\n1.4\n\n1200 MB/s\n\n3.0\n\n1.6\n\n2900 MB/s\n\n4.1\n\n1.8\n\n2900 MB/s\n\n5800 MB/s\n\n5.0\n\n2.0\n\n5400 MB/s\n\n10800 MB/s\n\n6.0",
+      "evidence": "input/docs/ufs_spec.pdf",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "3.0",
+      "title": "Maximum",
+      "content": "bandwidth\n\nM-PHY\nversion\n\nUniPro\nversion\n\n600 MB/s\n\n3.0\n\n1.6\n\n1200 MB/s\n\n4.1\n\n1.8\n\n600 MB/s\n\n1450 MB/s",
+      "evidence": "input/docs/ufs_spec.pdf",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "2",
+      "title": "UFS Card",
+      "content": "Version\n\nIntroduced\n\n1.0[31]\n\n2016-03-30\n\n1.1[27]\n\n2018-01-30\n\n3.0[32]\n\n2020-12-08\n\nBandwidth per\nlane\n\nMaximum\nlanes\n\n600 MB/s\n1\n1200 MB/s\n\n\nImplementation\nUFS 2.0 has been implemented in Snapdragon 820 and 821. Kirin 950 and 955. Exynos",
+      "evidence": "input/docs/ufs_spec.pdf",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "7420",
+      "title": "Nvidia Jetson AGX Xavier SOMs",
+      "content": "UFS 2.1 has been implemented in Snapdragon 712 (710&720G), 730G, 732G, 835, 845\nand 855. Kirin 960, 970 and 980. Exynos 9609,[33] 9610,[34] 9611,[35] 9810 and 980.[36]\nUFS 3.0 has been implemented in Snapdragon 855, 855+, 860, 865, Exynos 9820–9825,[37]\nand Kirin 990.[38]\nUFS 3.1 has been implemented in Snapdragon 855+/860, Snapdragon 865, Snapdragon\n870, Snapdragon 888, Exynos 2100, Exynos 2200 and Snapdragon 7s gen 2.[39][40][41][42]\nUFS 4.0 has been implemented in Google Tensor G5, MediaTek Dimensity 9200, MediaTek\nDimensity 8300 and Snapdragon 8 Gen 2.[43]\n\nComplementary UFS standards\nOn 30 March 2016, JEDEC published version 1.0 of the UFS Card Extension Standard (JESD220-2),\nwhich offered many of the features and much of the same functionality as the existing UFS 2.0 embedded\ndevice …",
+      "evidence": "input/docs/ufs_spec.pdf",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "6",
+      "title": "September",
+      "content": "2006",
+      "evidence": "input/docs/ufs_spec.pdf",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "26",
+      "title": "February",
+      "content": "2007\n\nTechnology preview of UniPro 1.0\n\nUniPro\n1.00.00",
+      "evidence": "input/docs/ufs_spec.pdf",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "25",
+      "title": "August",
+      "content": "2007",
+      "evidence": "input/docs/ufs_spec.pdf",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "14",
+      "title": "January",
+      "content": "2008\n\nLimited changes compared to UniPro 1.0. All the basics for a chipto-chip link via the D-PHY\n\nUniPro\n1.10.00",
+      "evidence": "input/docs/ufs_spec.pdf",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "29",
+      "title": "July",
+      "content": "2009\n\n22 January\n2010\n\n\"Hardened\": formal reference models for 2 protocol layers;\nreadability and testability improvements\n\nUniPro\n1.40.00\n\n31 January\n2011",
+      "evidence": "input/docs/ufs_spec.pdf",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "28",
+      "title": "April",
+      "content": "",
+      "evidence": "input/docs/ufs_spec.pdf",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "2011",
+      "title": "UniPro",
+      "content": "1.41.00",
+      "evidence": "input/docs/ufs_spec.pdf",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "4",
+      "title": "May 2012",
+      "content": "",
+      "evidence": "input/docs/ufs_spec.pdf",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "30",
+      "title": "July 2012",
+      "content": "Upgrade to support M-PHY v2.0 with HS-G2\n\nUniPro\n1.60.00\n\n6 August\n2013\n\n30\nSeptember\n2013\n\nUpgrade to support M-PHY v3.0 with HS-Gear3, Power Reduction\nduring M-PHY Sleep and Stall States, Scrambling for EMI\nMitiUpgrade to support M-PHY v3.0 with HS-Gear3gation, Removal\nof D-PHY and SDL Reference\n\n8 February\n2018[15]\n\nUpgrade to support M-PHY v4.1 with HS-Gear4[16]\n\nUniPro",
+      "evidence": "input/docs/ufs_spec.pdf",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "1.8",
+      "title": "Description",
+      "content": "\"M-PHY\": support for a new physical layer technology. M-PHY v1.0\nwith HS-G1. Formal reference model for the whole stack. Peer\nConfiguration. Versioning.\n\n\"Endpoint\": fully networkable endpoint including inband\nconfiguration protocol.\n\nfuture\nreleases\n\nt.b.d.\n\nt.b.d.\n\n\"Switches\": network switches.\nSharing of the link between several applications.\nDynamic Connection Management.\nHot Plugging.\nSecurity features.\nReal Time Traffic Class.\n\nProtocol stack architecture\nThe UniPro protocol stack follows the classical OSI reference architecture (ref). For practical reasons,\nOSI's Physical Layer is split into two sub-layers: Layer 1 (the actual physical layer) and Layer 1.5 (the\nPHY Adapter layer) which abstracts from differences between alternative Layer 1 technologies.\n\n\nUniPro protocol stack (this…",
+      "evidence": "input/docs/ufs_spec.pdf",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "1.5",
+      "title": "PHY adapter",
+      "content": "Physical layer abstraction and multi-lane support\n\nUniPro symbol\n\nPhysical layer\n(PHY)\n\nSignaling, clocking, line encoding, power modes\n\nPHY symbol\n\nDME\n\nLayer 1\n\nThe UniPro specification itself covers Layers 1.5, 2, 3, 4 and the DME (Device Management Entity). The\nApplication Layer (LA) is out of scope because different uses of UniPro will require different LA\nprotocols. The Physical Layer (L1) is covered in separate MIPI specifications in order to allow the PHY\nto be reused by other (less generic) protocols if needed(ref).\nOSI Layers 5 (Session) and 6 (Presentation) are, where applicable, counted as part of the Application\nLayer.\n\nDiscussion of value proposition\nUniPro and system integration\nUniPro is specifically targeted by MIPI to simplify the creation of increasingly complex products…",
+      "evidence": "input/docs/ufs_spec.pdf",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "18",
+      "title": "NoTA, messaging protocol and library",
+      "content": "19. MIPI Membership Agreement November 1, 2006 (https://members.mipi.org/mipi/file/Governi\nng%20Documents/mipi-ma-2006.pdf) Archived (https://web.archive.org/web/201110071901\n36/https://members.mipi.org/mipi/file/Governing%20Documents/mipi-ma-2006.pdf) October\n7, 2011, at the Wayback Machine, requires an account at the MIPI website\n20. MIPI Alliance web site (http://www.mipi.org)\n\nExternal links\nwww.MIPI.org (http://www.MIPI.org) - MIPI Alliance (document access requires an account)\n\"MIPI Alliance announces M-PHY v2.0 and UniPro v1.41\" (http://www.mipi.org/content/mip\ni%C2%AE-alliance-speeds-m-physm-and-expands-uniprosm-specifications-mobile-device-a\npplications) Archived (https://web.archive.org/web/20120628080749/http://mipi.org/content/\nmipi%C2%AE-alliance-speeds-m-physm-and-expands-uni…",
+      "evidence": "input/docs/ufs_spec.pdf",
+      "heading_shape": "numbered"
+    },
+    {
+      "section": "300",
+      "title": "MB/s",
+      "content": "1\n\n300 MB/s\n\n1.0\n\n1.4\n\n1200 MB/s\n\n3.0\n\n1.6\n\n2900 MB/s\n\n4.1\n\n1.8\n\n2900 MB/s\n\n5800 MB/s\n\n5.0\n\n2.0\n\n5400 MB/s\n\n10800 MB/s\n\n6.0",
       "evidence": "input/docs/ufs_spec.txt",
       "heading_shape": "numbered"
     },
@@ -152,6 +264,72 @@
   "fmax_mhz": null,
   "no_fmax_mhz_in_input": true,
   "extraction_evidence": {
+    "input/docs/ufs_spec.pdf": [
+      {
+        "literal": "300 MB/s",
+        "label": "FRS section"
+      },
+      {
+        "literal": "3.0 Maximum",
+        "label": "FRS section"
+      },
+      {
+        "literal": "2 UFS Card",
+        "label": "FRS section"
+      },
+      {
+        "literal": "7420 Nvidia Jetson AGX Xavier SOMs",
+        "label": "FRS section"
+      },
+      {
+        "literal": "6 September",
+        "label": "FRS section"
+      },
+      {
+        "literal": "26 February",
+        "label": "FRS section"
+      },
+      {
+        "literal": "25 August",
+        "label": "FRS section"
+      },
+      {
+        "literal": "14 January",
+        "label": "FRS section"
+      },
+      {
+        "literal": "29 July",
+        "label": "FRS section"
+      },
+      {
+        "literal": "28 April",
+        "label": "FRS section"
+      },
+      {
+        "literal": "2011 UniPro",
+        "label": "FRS section"
+      },
+      {
+        "literal": "4 May 2012",
+        "label": "FRS section"
+      },
+      {
+        "literal": "30 July 2012",
+        "label": "FRS section"
+      },
+      {
+        "literal": "1.8 Description",
+        "label": "FRS section"
+      },
+      {
+        "literal": "1.5 PHY adapter",
+        "label": "FRS section"
+      },
+      {
+        "literal": "18 NoTA, messaging protocol and library",
+        "label": "FRS section"
+      }
+    ],
     "input/docs/ufs_spec.txt": [
       {
         "literal": "300 MB/s",

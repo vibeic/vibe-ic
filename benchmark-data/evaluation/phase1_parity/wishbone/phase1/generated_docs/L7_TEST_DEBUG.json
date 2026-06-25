@@ -18,7 +18,7 @@
   "no_engineer_mode_unlock_in_input": true,
   "vsuite_per_kw_cap_skipped_v1_6_373": 0,
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "processor_cpu",
   "test_debug_architecture_present": false,
   "rationale": "Wishbone B4 does NOT define a JTAG / scan / BIST / MBIST / debug architecture. There is no dedicated debug interface in the protocol. Debug visibility, if any, must be added by the integrator outside this spec. The Wishbone goal is explicitly that the architecture be 'independent of FPGA and ASIC test methodologies' (1.1 WISHBONE Features).",
   "spec_provided_observability": [

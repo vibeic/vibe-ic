@@ -3,80 +3,15 @@
   "doc_class": "control_logic",
   "ic_name": "ONFI 4.1 (Open NAND Flash Interface)",
   "reject_rules": [],
-  "fsm_states": [
-    {
-      "name": "PERFORM",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/ONFI_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "USED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/ONFI_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "DESCRIBE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/ONFI_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "STATES",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/ONFI_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "ACCOMPLISH",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/ONFI_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "PRIOR",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/ONFI_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "INDICATE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/ONFI_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "MACHINE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/ONFI_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "INDICATED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/ONFI_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    }
-  ],
+  "fsm_states": [],
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
-  "no_fsm_states_in_input": false,
-  "no_fsm_in_input": false,
+  "no_fsm_states_in_input": true,
+  "no_fsm_in_input": true,
   "fsm_tokens": [],
   "extraction_evidence": {
     "input/docs/ONFI_Spec.pdf": []
   },
-  "class_path": "digital_arithmetic_primitive",
   "fsm_states_target": [
     {
       "name": "Idle",

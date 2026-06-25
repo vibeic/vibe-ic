@@ -1,7 +1,13 @@
 {
   "fields": {
     "versions": [],
-    "deprecated_features": [],
+    "deprecated_features": [
+      {
+        "feature": "been",
+        "quote": "20 V limit for 5 A cables has been deprecated in favor of 48 V. The combination of higher voltage support and 5 A current support is",
+        "line": 2740
+      }
+    ],
     "backward_compat_traps": [
       {
         "trap_name": "tunnel_vs_native_usb",
@@ -49,7 +55,7 @@
     "version_naming_history_note": "USB4 is maintained by the USB Implementers Forum (USB-IF). Its base protocol is Thunderbolt 3, donated by Intel. USB4 1.0 was published August 29, 2019; USB4 2.0 (2022) added 80 Gbps. USB4 sits above earlier USB generations (USB 2.0 480 Mbps, USB 3.2 up to 20 Gbps) which it carries natively or via tunnels.",
     "ic_name": "USB4 (USB Implementers Forum, Intel Thunderbolt 3 base)"
   },
-  "extraction_status": "EXTRACTION_FOUND_NOTHING",
+  "extraction_status": "EXTRACTED",
   "schema_version": "v0.1.62",
   "doc_class": "L14",
   "emitted_by": "phase1_protocol_spec_extract.extract_l14_versioning v0.1.62",

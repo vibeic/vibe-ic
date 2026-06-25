@@ -2,6 +2,8 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "TIA/EIA-485 (RS-485 via TI SLLA272C Design Guide)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
@@ -36,41 +38,69 @@
       "source": "RS485_Spec.pdf",
       "raw": "- VAB = 0.25 V",
       "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.5",
+      "unit": "V",
+      "source": "RS485_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "200.0",
+      "unit": "mV",
+      "source": "RS485_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "10.0",
+      "unit": "mV",
+      "source": "RS485_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "4.75",
+      "unit": "V",
+      "source": "RS485_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "5.0",
+      "unit": "V",
+      "source": "RS485_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "0.25",
+      "unit": "V",
+      "source": "RS485_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "3109.0",
+      "unit": "A",
+      "source": "RS485_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
     }
   ],
-  "design_parameters": [
-    {
-      "parameter": "Type",
-      "value": "4",
-      "source": "RS485_Spec.pdf",
-      "raw": "Type : 4 - pair, 22 AWG PLCT /CM",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "Impedance",
-      "value": "120",
-      "source": "RS485_Spec.pdf",
-      "raw": "Impedance : 120 W",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "Capacitance",
-      "value": "11",
-      "source": "RS485_Spec.pdf",
-      "raw": "Capacitance : 11 pF/ft",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "Z0",
-      "value": "120",
-      "source": "RS485_Spec.pdf",
-      "raw": "Z0 = 120 W, the cable trunk is commonly terminated with 120-W resistors, one at each cable end (see Figure",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    }
+  "design_parameters": [],
+  "source_documents": [
+    "input/docs/RS485_Spec.pdf"
   ],
-  "extraction_evidence": {
-    "input/docs/RS485_Spec.pdf": []
-  },
+  "extraction_evidence": {},
   "class_path": "digital_cmd_driven",
   "analog_digital_interface_present": true,
   "signaling_summary": "RS-485 IS a mixed-signal analog-digital interface: differential analog bus driven by digital TTL/CMOS-level driver-input D and producing a digital TTL/CMOS-level receiver-output R. The bus side carries analog voltages; the host side carries logic levels.",

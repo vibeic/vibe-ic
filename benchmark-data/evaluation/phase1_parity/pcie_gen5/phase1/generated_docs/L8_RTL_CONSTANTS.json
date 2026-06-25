@@ -4,83 +4,9 @@
   "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)",
   "rx_classifier_ticks": null,
   "no_rx_classifier_ticks_in_input": true,
-  "timing_constants": [
-    {
-      "name": "CorpusID",
-      "value": 7456382,
-      "unit": "ticks",
-      "source": "input/docs/pcie_gen5_spec.txt"
-    },
-    {
-      "name": "wapkw",
-      "value": 32415,
-      "unit": "ticks",
-      "source": "input/docs/pcie_gen5_spec.txt"
-    },
-    {
-      "name": "newsid",
-      "value": 6021,
-      "unit": "ticks",
-      "source": "input/docs/pcie_gen5_spec.txt"
-    },
-    {
-      "name": "doc_id",
-      "value": 13300,
-      "unit": "ticks",
-      "source": "input/docs/pcie_gen5_spec.txt"
-    },
-    {
-      "name": "newsID",
-      "value": 5846,
-      "unit": "ticks",
-      "source": "input/docs/pcie_gen5_spec.txt"
-    }
-  ],
-  "no_timing_constants_in_input": false,
-  "timing_parameters": [
-    {
-      "name": "CorpusID",
-      "value": 7456382,
-      "unit": "ticks",
-      "source": "input/docs/pcie_gen5_spec.txt",
-      "literal": "7456382"
-    },
-    {
-      "name": "wapkw",
-      "value": 32415,
-      "unit": "ticks",
-      "source": "input/docs/pcie_gen5_spec.txt",
-      "literal": "032415"
-    },
-    {
-      "name": "newsid",
-      "value": 6021,
-      "unit": "ticks",
-      "source": "input/docs/pcie_gen5_spec.txt",
-      "literal": "6021"
-    },
-    {
-      "name": "doc_id",
-      "value": 13300,
-      "unit": "ticks",
-      "source": "input/docs/pcie_gen5_spec.txt",
-      "literal": "13300"
-    },
-    {
-      "name": "doc_id",
-      "value": 1330006,
-      "unit": "ticks",
-      "source": "input/docs/pcie_gen5_spec.txt",
-      "literal": "1330006"
-    },
-    {
-      "name": "newsID",
-      "value": 5846,
-      "unit": "ticks",
-      "source": "input/docs/pcie_gen5_spec.txt",
-      "literal": "5846"
-    }
-  ],
+  "timing_constants": [],
+  "no_timing_constants_in_input": true,
+  "timing_parameters": [],
   "clock_mhz": null,
   "no_clock_mhz_in_input": true,
   "clock_domains": [
@@ -103,55 +29,10 @@
   "parameters": [],
   "peripheral_only_emit_skipped_v1_6_376": 0,
   "extraction_strategy": {
-    "l8_evidence_population_v1_6_395": 11
+    "l8_evidence_population_v1_6_395": 0
   },
   "extraction_evidence": {
-    "input/docs/pcie_gen5_spec.txt": [
-      {
-        "literal": "7456382",
-        "label": "timing parameter CorpusID"
-      },
-      {
-        "literal": "032415",
-        "label": "timing parameter wapkw"
-      },
-      {
-        "literal": "6021",
-        "label": "timing parameter newsid"
-      },
-      {
-        "literal": "13300",
-        "label": "timing parameter doc_id"
-      },
-      {
-        "literal": "1330006",
-        "label": "timing parameter doc_id"
-      },
-      {
-        "literal": "5846",
-        "label": "timing parameter newsID"
-      },
-      {
-        "literal": "CorpusID = 7456382 ticks",
-        "label": "timing_constant_promoted_from_timing_parameter"
-      },
-      {
-        "literal": "wapkw = 32415 ticks",
-        "label": "timing_constant_promoted_from_timing_parameter"
-      },
-      {
-        "literal": "newsid = 6021 ticks",
-        "label": "timing_constant_promoted_from_timing_parameter"
-      },
-      {
-        "literal": "doc_id = 13300 ticks",
-        "label": "timing_constant_promoted_from_timing_parameter"
-      },
-      {
-        "literal": "newsID = 5846 ticks",
-        "label": "timing_constant_promoted_from_timing_parameter"
-      }
-    ]
+    "input/docs/pcie_gen5_spec.pdf": []
   },
   "class_path": "digital_cmd_driven",
   "auto_discovered_literals": [
@@ -159,7 +40,7 @@
       "literal": "133MHz",
       "value": "133",
       "unit": "MHz",
-      "source_doc": "pcie_gen5_spec.txt",
+      "source_doc": "pcie_gen5_spec.pdf",
       "kind": "frequency",
       "source": "phase1_auto_extraction"
     },
@@ -167,7 +48,7 @@
       "literal": "12V",
       "value": "12",
       "unit": "V",
-      "source_doc": "pcie_gen5_spec.txt",
+      "source_doc": "pcie_gen5_spec.pdf",
       "kind": "voltage",
       "source": "phase1_auto_extraction"
     },
@@ -175,7 +56,7 @@
       "literal": "3.3V",
       "value": "3.3",
       "unit": "V",
-      "source_doc": "pcie_gen5_spec.txt",
+      "source_doc": "pcie_gen5_spec.pdf",
       "kind": "voltage",
       "source": "phase1_auto_extraction"
     },
@@ -183,7 +64,7 @@
       "literal": "9.9W",
       "value": "9.9",
       "unit": "W",
-      "source_doc": "pcie_gen5_spec.txt",
+      "source_doc": "pcie_gen5_spec.pdf",
       "kind": "power",
       "source": "phase1_auto_extraction"
     },
@@ -191,7 +72,7 @@
       "literal": "25W",
       "value": "25",
       "unit": "W",
-      "source_doc": "pcie_gen5_spec.txt",
+      "source_doc": "pcie_gen5_spec.pdf",
       "kind": "power",
       "source": "phase1_auto_extraction"
     },
@@ -199,7 +80,7 @@
       "literal": "5.5A",
       "value": "5.5",
       "unit": "A",
-      "source_doc": "pcie_gen5_spec.txt",
+      "source_doc": "pcie_gen5_spec.pdf",
       "kind": "current",
       "source": "phase1_auto_extraction"
     },
@@ -207,7 +88,7 @@
       "literal": "66W",
       "value": "66",
       "unit": "W",
-      "source_doc": "pcie_gen5_spec.txt",
+      "source_doc": "pcie_gen5_spec.pdf",
       "kind": "power",
       "source": "phase1_auto_extraction"
     },
@@ -215,7 +96,7 @@
       "literal": "75W",
       "value": "75",
       "unit": "W",
-      "source_doc": "pcie_gen5_spec.txt",
+      "source_doc": "pcie_gen5_spec.pdf",
       "kind": "power",
       "source": "phase1_auto_extraction"
     },
@@ -223,7 +104,7 @@
       "literal": "150W",
       "value": "150",
       "unit": "W",
-      "source_doc": "pcie_gen5_spec.txt",
+      "source_doc": "pcie_gen5_spec.pdf",
       "kind": "power",
       "source": "phase1_auto_extraction"
     },
@@ -231,7 +112,7 @@
       "literal": "300W",
       "value": "300",
       "unit": "W",
-      "source_doc": "pcie_gen5_spec.txt",
+      "source_doc": "pcie_gen5_spec.pdf",
       "kind": "power",
       "source": "phase1_auto_extraction"
     },
@@ -239,7 +120,7 @@
       "literal": "600W",
       "value": "600",
       "unit": "W",
-      "source_doc": "pcie_gen5_spec.txt",
+      "source_doc": "pcie_gen5_spec.pdf",
       "kind": "power",
       "source": "phase1_auto_extraction"
     },
@@ -247,7 +128,7 @@
       "literal": "1.5V",
       "value": "1.5",
       "unit": "V",
-      "source_doc": "pcie_gen5_spec.txt",
+      "source_doc": "pcie_gen5_spec.pdf",
       "kind": "voltage",
       "source": "phase1_auto_extraction"
     },
@@ -255,7 +136,7 @@
       "literal": "6ns",
       "value": "6",
       "unit": "ns",
-      "source_doc": "pcie_gen5_spec.txt",
+      "source_doc": "pcie_gen5_spec.pdf",
       "kind": "time",
       "source": "phase1_auto_extraction"
     },
@@ -263,7 +144,7 @@
       "literal": "225W",
       "value": "225",
       "unit": "W",
-      "source_doc": "pcie_gen5_spec.txt",
+      "source_doc": "pcie_gen5_spec.pdf",
       "kind": "power",
       "source": "phase1_auto_extraction"
     }

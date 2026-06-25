@@ -4,38 +4,11 @@
   "ic_name": "AMBA AXI4-Stream Protocol (ARM IHI 0051, Single Unidirectional Stream Channel)",
   "top_module": "TDATA_WIDTH",
   "top_module_extraction_strategy": "l1_ic_name_fallback",
-  "no_top_module_in_input": false,
-  "ports": [
-    {
-      "name": "dma",
-      "mode": "input",
-      "direction": "input",
-      "io": null,
-      "evidence": "input/docs/axi_stream_spec.txt",
-      "extraction_strategy": "markdown_bullet_under_heading"
-    }
-  ],
-  "top_ports": [
-    {
-      "name": "dma",
-      "mode": "input",
-      "direction": "input",
-      "io": null,
-      "evidence": "input/docs/axi_stream_spec.txt",
-      "extraction_strategy": "markdown_bullet_under_heading"
-    }
-  ],
-  "top_module_pins": [
-    {
-      "name": "dma",
-      "mode": "input",
-      "direction": "input",
-      "io": null,
-      "evidence": "input/docs/axi_stream_spec.txt",
-      "extraction_strategy": "markdown_bullet_under_heading"
-    }
-  ],
-  "no_integration_in_input": false,
+  "no_top_module_in_input": true,
+  "ports": [],
+  "top_ports": [],
+  "top_module_pins": [],
+  "no_integration_in_input": true,
   "submodules": [],
   "no_submodules_in_input": true,
   "sim_only_modules": [],
@@ -59,6 +32,11 @@
   "memory_map": [],
   "no_memory_map_in_input": true,
   "no_instantiation_template_in_input": true,
+  "top_module_pins_evidence": {
+    "reason": "no_module_declaration_in_input_docs",
+    "fallback_source": "L1.ic_name",
+    "extraction_strategy_marker": "fallback_explicit_v1_6_581"
+  },
   "extraction_evidence": {
     "derived_from_L3": []
   },

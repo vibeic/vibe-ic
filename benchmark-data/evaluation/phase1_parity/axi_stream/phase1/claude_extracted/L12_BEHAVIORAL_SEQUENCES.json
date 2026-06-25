@@ -4,7 +4,7 @@
   "ic_name": "AMBA AXI4-Stream Protocol (ARM IHI 0051, Single Unidirectional Stream Channel)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
+  "no_calibration": true,
   "extraction_evidence": {},
   "ordering_rules_summary": {
     "device_transactions_AXI4_same_ID_same_slave": "AXI4 Device-class accesses with the same ID to the same slave must remain in issue order.",

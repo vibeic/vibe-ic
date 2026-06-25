@@ -2,15 +2,18 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "SD Memory Card (SD Simplified Physical Layer Specification)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
   "external_components": [],
   "electrical_specs": [],
   "design_parameters": [],
-  "extraction_evidence": {
-    "input/docs/SD_simplified.pdf": []
-  },
+  "source_documents": [
+    "input/docs/SD_simplified.pdf"
+  ],
+  "extraction_evidence": {},
   "class_path": "digital_cmd_driven",
   "analog_digital_interface_present": false,
   "signaling_summary": "All-digital CMOS / LVCMOS signaling on CLK, CMD, DAT0..DAT3. Two normative voltage classes: HVR (VDD = 2.7-3.6 V, 3.3 V signaling) and LVR / UHS-I (VDD = 1.65-1.95 V, 1.8 V signaling after CMD11). UHS-II uses LVDS differential signaling on a separate pin row. VIH_min = 0.625 × VDD, VIL_max = 0.25 × VDD at 3.3 V.",

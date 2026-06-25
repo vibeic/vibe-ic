@@ -63,7 +63,7 @@
       }
     ]
   },
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "processor_cpu",
   "auto_discovered_literals": [
     {
       "literal": "150MHz",

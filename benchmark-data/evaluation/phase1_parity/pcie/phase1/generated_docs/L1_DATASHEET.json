@@ -63,7 +63,7 @@
   ],
   "no_electrical_specs_in_input": false,
   "ordering_info": {
-    "part_number": "PM_PME",
+    "part_number": "pcie",
     "vendor": null,
     "no_vendor_in_input": true
   },

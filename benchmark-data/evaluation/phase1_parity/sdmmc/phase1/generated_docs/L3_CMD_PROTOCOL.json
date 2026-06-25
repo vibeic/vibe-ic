@@ -106,40 +106,6 @@
       "argument_constraints": []
     },
     {
-      "hex": "<HALLUCINATION_SCRUBBED>",
-      "name": "D1",
-      "rx_len": "var",
-      "tx_len": "var",
-      "response_opcode_hex": "0x17",
-      "pre_wake_allowed": false,
-      "evidence": "input/docs/SD_simplified.pdf",
-      "response_payload_template": [
-        {
-          "byte_offset": 0,
-          "value": "0x17",
-          "description": "response opcode echo"
-        }
-      ],
-      "argument_constraints": []
-    },
-    {
-      "hex": "<HALLUCINATION_SCRUBBED>",
-      "name": "VSS5",
-      "rx_len": "var",
-      "tx_len": "var",
-      "response_opcode_hex": "0x18",
-      "pre_wake_allowed": false,
-      "evidence": "input/docs/SD_simplified.pdf",
-      "response_payload_template": [
-        {
-          "byte_offset": 0,
-          "value": "0x18",
-          "description": "response opcode echo"
-        }
-      ],
-      "argument_constraints": []
-    },
-    {
       "hex": "0xBE",
       "name": "BE",
       "rx_len": "var",
@@ -270,40 +236,6 @@
         {
           "byte_offset": 0,
           "value": "0x26",
-          "description": "response opcode echo"
-        }
-      ],
-      "argument_constraints": []
-    },
-    {
-      "hex": "<HALLUCINATION_SCRUBBED>",
-      "name": "LOCK_UNLOCK_FAIL",
-      "rx_len": "var",
-      "tx_len": "var",
-      "response_opcode_hex": "0x25",
-      "pre_wake_allowed": false,
-      "evidence": "input/docs/SD_simplified.pdf",
-      "response_payload_template": [
-        {
-          "byte_offset": 0,
-          "value": "0x25",
-          "description": "response opcode echo"
-        }
-      ],
-      "argument_constraints": []
-    },
-    {
-      "hex": "<HALLUCINATION_SCRUBBED>",
-      "name": "COM_CRC_ERROR",
-      "rx_len": "var",
-      "tx_len": "var",
-      "response_opcode_hex": "0x24",
-      "pre_wake_allowed": false,
-      "evidence": "input/docs/SD_simplified.pdf",
-      "response_payload_template": [
-        {
-          "byte_offset": 0,
-          "value": "0x24",
           "description": "response opcode echo"
         }
       ],
@@ -504,6 +436,14 @@
         "old_value": "0x23",
         "new_value": "<HALLUCINATION_SCRUBBED>",
         "why": "hex value matches a 2-digit decimal page-format number commonly lifted from byte-position figures; not a real opcode encoding"
+      },
+      {
+        "l_doc": "L3_CMD_PROTOCOL",
+        "pattern_name": "drop_scrubbed_opcode_zombie",
+        "path": "opcodes",
+        "old_value": "22 entries",
+        "new_value": "18 entries",
+        "why": "dropped 4 opcode(s) whose hex was scrubbed as a hallucination; a scrubbed-hex opcode carries no real encoding (consistent with ic_class_profile._l3_has_commands)"
       }
     ]
   },

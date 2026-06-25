@@ -2,100 +2,91 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "800 Gigabit Ethernet (IEEE 802.3df, 800GBASE)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
   "external_components": [],
-  "electrical_specs": [],
-  "design_parameters": [
+  "electrical_specs": [
     {
-      "parameter": "OM4",
-      "value": "100",
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "13.28125",
+      "unit": "GHz",
       "source": "ethernet_800g_spec.pdf",
-      "raw": "OM4: 100                                        direction",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
     },
     {
-      "parameter": "QSFP          OM3",
-      "value": "30",
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "26.56",
+      "unit": "GHz",
       "source": "ethernet_800g_spec.pdf",
-      "raw": "QSFP          OM3: 30",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
     },
     {
-      "parameter": "SFP-DD112       OM4",
-      "value": "50",
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "160.0",
+      "unit": "MHz",
       "source": "ethernet_800g_spec.pdf",
-      "raw": "SFP-DD112       OM4: 50",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
     },
     {
-      "parameter": "QSFP          OM3",
-      "value": "60",
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "200.0",
+      "unit": "MHz",
       "source": "ethernet_800g_spec.pdf",
-      "raw": "QSFP          OM3: 60",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
     },
     {
-      "parameter": "SFP-DD112       OM4",
-      "value": "100",
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "500.0",
+      "unit": "MHz",
       "source": "ethernet_800g_spec.pdf",
-      "raw": "SFP-DD112       OM4: 100",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
     },
     {
-      "parameter": "OM3",
-      "value": "70",
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "1500.0",
+      "unit": "MHz",
       "source": "ethernet_800g_spec.pdf",
-      "raw": "OM3: 70",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
     },
     {
-      "parameter": "OM5",
-      "value": "100",
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "3500.0",
+      "unit": "MHz",
       "source": "ethernet_800g_spec.pdf",
-      "raw": "OM5: 100",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
     },
     {
-      "parameter": "OM5",
-      "value": "150",
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "1850.0",
+      "unit": "MHz",
       "source": "ethernet_800g_spec.pdf",
-      "raw": "OM5: 150",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
     },
     {
-      "parameter": "OM3",
-      "value": "30",
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "53.125",
+      "unit": "GHz",
       "source": "ethernet_800g_spec.pdf",
-      "raw": "OM3: 30",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "OM5",
-      "value": "50",
-      "source": "ethernet_800g_spec.pdf",
-      "raw": "OM5: 50",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "OM3",
-      "value": "60",
-      "source": "ethernet_800g_spec.pdf",
-      "raw": "OM3: 60",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "modulation (DP-16QAM) - Line rate",
-      "value": "123.6364",
-      "source": "ethernet_800g_spec.pdf",
-      "raw": "modulation (DP-16QAM) - Line rate: 123.6364 GBd - Full-Duplex)",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
     }
   ],
-  "extraction_evidence": {
-    "input/docs/ethernet_800g_spec.pdf": []
-  },
+  "design_parameters": [],
+  "source_documents": [
+    "input/docs/ethernet_800g_spec.pdf"
+  ],
+  "extraction_evidence": {},
   "analog_digital_interface_present": true,
   "signaling_summary": "The 800G data path is PAM4 (4-level pulse-amplitude modulation) on each electrical/optical lane at 106.25 GBd. The electrical attachment (800GAUI-8 / 800GAUI-4) is differential PAM4 with transmitter FFE pre-emphasis + receiver CTLE/DFE equalisation and link training; compliance is measured via TDECQ-class eye / amplitude / return-loss metrics. The optical PMD modulates PAM4 onto 8 parallel fibers (DR8/SR8/VR8) or 2x4 CWDM wavelengths (2xFR4) on single-mode fiber. RS-FEC(544,514) is required because the raw PAM4 per-lane error ratio (~1e-4..1e-5) is far above the 1e-13 link target.",
   "mii_dc_characteristics": {

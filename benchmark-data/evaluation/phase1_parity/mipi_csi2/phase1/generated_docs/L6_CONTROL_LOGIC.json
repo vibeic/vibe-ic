@@ -47,13 +47,12 @@
   ],
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
-  "no_fsm_states_in_input": false,
-  "no_fsm_in_input": false,
+  "no_fsm_states_in_input": true,
+  "no_fsm_in_input": true,
   "fsm_tokens": [],
   "extraction_evidence": {
     "input/docs/mipi_csi2_spec.txt": []
   },
-  "class_path": "digital_arithmetic_primitive",
   "anti_deadlock_rule": "Required timers HRX_TO (HS RX Timeout, peripheral), HTX_TO (HS TX Timeout, host), LTX-P_TO (LP TX Peripheral Timeout), LRX-H_TO (LP RX Host Timeout) ensure the bus returns to LP-11 Stop state within bounded time after any transient fault. LRX-H_TO MUST be longer than LTX-P_TO so the peripheral has returned to LP-RX before host timer expires. Optional TA_TO (Turnaround Acknowledge Timeout) and PR_TO (Peripheral Reset Timeout) provide additional safety nets.",
   "exit_from_reset": "After reset, the device must release both SDA and SCL (both HIGH). Master can begin a transaction only when both lines are HIGH (bus free). Bus-clear procedure: if SDA stuck LOW, master sends 9 SCL pulses to allow the stuck device to release.",
   "default_ready_state_recommendation": {

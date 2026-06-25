@@ -3,11 +3,86 @@
   "doc_class": "integration_spec",
   "ic_name": "SD Memory Card (SD Simplified Physical Layer Specification)",
   "top_module": "SD_Memory_Card",
-  "top_module_extraction_strategy": "l1_ic_name_fallback",
+  "top_module_extraction_strategy": "canonical_chip_top_sentinel",
   "no_top_module_in_input": true,
-  "ports": [],
-  "top_ports": [],
-  "top_module_pins": [],
+  "ports": [
+    {
+      "name": "clk",
+      "mode": "input",
+      "direction": "input",
+      "io": "1.8-V LVCMOS",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    },
+    {
+      "name": "reset_n",
+      "mode": "input",
+      "direction": "input",
+      "io": "1.8-V LVCMOS",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    },
+    {
+      "name": "id_bus",
+      "mode": "inout",
+      "direction": "inout",
+      "io": "open-drain single-wire",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    }
+  ],
+  "top_ports": [
+    {
+      "name": "clk",
+      "mode": "input",
+      "direction": "input",
+      "io": "1.8-V LVCMOS",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    },
+    {
+      "name": "reset_n",
+      "mode": "input",
+      "direction": "input",
+      "io": "1.8-V LVCMOS",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    },
+    {
+      "name": "id_bus",
+      "mode": "inout",
+      "direction": "inout",
+      "io": "open-drain single-wire",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    }
+  ],
+  "top_module_pins": [
+    {
+      "name": "clk",
+      "mode": "input",
+      "direction": "input",
+      "io": "1.8-V LVCMOS",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    },
+    {
+      "name": "reset_n",
+      "mode": "input",
+      "direction": "input",
+      "io": "1.8-V LVCMOS",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    },
+    {
+      "name": "id_bus",
+      "mode": "inout",
+      "direction": "inout",
+      "io": "open-drain single-wire",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    }
+  ],
   "no_integration_in_input": true,
   "submodules": [
     {
@@ -39,111 +114,6 @@
       "name": "CMD42",
       "transitions": [],
       "evidence": "input/docs/SD_simplified.pdf (prose transition v1.6.484)"
-    },
-    {
-      "name": "MANDATORY",
-      "transitions": [],
-      "evidence": "input/docs/SD_simplified.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "INITIALIZE",
-      "transitions": [],
-      "evidence": "input/docs/SD_simplified.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ZERO",
-      "transitions": [],
-      "evidence": "input/docs/SD_simplified.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ABLE",
-      "transitions": [],
-      "evidence": "input/docs/SD_simplified.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SELECT",
-      "transitions": [],
-      "evidence": "input/docs/SD_simplified.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "BACK",
-      "transitions": [],
-      "evidence": "input/docs/SD_simplified.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "STAND",
-      "transitions": [],
-      "evidence": "input/docs/SD_simplified.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "HOST",
-      "transitions": [],
-      "evidence": "input/docs/SD_simplified.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "RESERVE",
-      "transitions": [],
-      "evidence": "input/docs/SD_simplified.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "REFER",
-      "transitions": [],
-      "evidence": "input/docs/SD_simplified.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "TABLE",
-      "transitions": [],
-      "evidence": "input/docs/SD_simplified.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "RESPOND",
-      "transitions": [],
-      "evidence": "input/docs/SD_simplified.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "IDENTIFICATION",
-      "transitions": [],
-      "evidence": "input/docs/SD_simplified.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SENT",
-      "transitions": [],
-      "evidence": "input/docs/SD_simplified.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ALLOWS",
-      "transitions": [],
-      "evidence": "input/docs/SD_simplified.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ASSIGNED",
-      "transitions": [],
-      "evidence": "input/docs/SD_simplified.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "COMMAND",
-      "transitions": [],
-      "evidence": "input/docs/SD_simplified.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SWITCH",
-      "transitions": [],
-      "evidence": "input/docs/SD_simplified.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "RETURN",
-      "transitions": [],
-      "evidence": "input/docs/SD_simplified.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "USED",
-      "transitions": [],
-      "evidence": "input/docs/SD_simplified.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "VERIFY",
-      "transitions": [],
-      "evidence": "input/docs/SD_simplified.pdf (prose state-to-state v1.6.484)"
     },
     {
       "name": "FORCE",
@@ -178,20 +148,7 @@
       "extraction_strategy": "l9_port_reset_shape_v1_6_369"
     }
   ],
-  "memories": [
-    {
-      "name": "CMD16",
-      "kind": "cache",
-      "type": "Cache",
-      "port_count": null,
-      "depth": null,
-      "width": null,
-      "evidence_file": "SD_simplified.pdf",
-      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
-      "low_confidence": true,
-      "name_origin": "bare_token_left_context"
-    }
-  ],
+  "memories": [],
   "memory_candidates": [
     {
       "name": null,
@@ -225,6 +182,18 @@
       "evidence_file": "SD_simplified.pdf",
       "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
       "low_confidence": true
+    },
+    {
+      "name": "CMD16",
+      "kind": "cache",
+      "type": "Cache",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "SD_simplified.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "bare_token_left_context"
     }
   ],
   "no_memory_candidates_in_input": false,
@@ -232,11 +201,6 @@
   "memory_map": [],
   "no_memory_map_in_input": true,
   "no_instantiation_template_in_input": true,
-  "top_module_pins_evidence": {
-    "reason": "no_module_declaration_in_input_docs",
-    "fallback_source": "L1.ic_name",
-    "extraction_strategy_marker": "fallback_explicit_v1_6_581"
-  },
   "extraction_evidence": {
     "derived_from_L2.protocol_overview": [
       {
@@ -345,6 +309,25 @@
       "evidence": {
         "source": "input/docs/SD_simplified.pdf"
       }
+    }
+  ],
+  "resets": [
+    {
+      "name": "reset_n",
+      "polarity": "active_low",
+      "extraction_strategy": "l9_top_port_reset_derive"
+    }
+  ],
+  "clocks": [
+    {
+      "name": "clk",
+      "edge": "posedge",
+      "extraction_strategy": "l9_top_port_clock_derive",
+      "freq_hz": 208000000,
+      "freq_mhz": 208.0,
+      "period_ns": 4.807692,
+      "role": "primary",
+      "domain_kind": "primary"
     }
   ],
   "interface_type": null,

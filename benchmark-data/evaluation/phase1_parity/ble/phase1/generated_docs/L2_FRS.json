@@ -668,7 +668,7 @@
       }
     ]
   },
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "crypto_accelerator",
   "auto_cited_sections": [
     {
       "file_ref": "phase1/input_doc/BLE_Spec.txt:1",

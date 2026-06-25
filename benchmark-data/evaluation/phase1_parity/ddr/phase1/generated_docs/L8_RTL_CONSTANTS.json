@@ -21,7 +21,6 @@
   "extraction_evidence": {
     "input/docs/DDR3_Spec.pdf": []
   },
-  "class_path": "digital_arithmetic_primitive",
   "auto_discovered_literals": [
     {
       "literal": "240W",

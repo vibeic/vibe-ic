@@ -12,39 +12,8 @@
   "submodules": [],
   "no_submodules_in_input": true,
   "sim_only_modules": [],
-  "fsm_states": [
-    {
-      "name": "ACCESS",
-      "transitions": [],
-      "evidence": "input/docs/UM10204_NXP_i2c_bus_spec_rev6.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ANOTHER",
-      "transitions": [],
-      "evidence": "input/docs/UM10204_NXP_i2c_bus_spec_rev6.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "MASTER",
-      "transitions": [],
-      "evidence": "input/docs/UM10204_NXP_i2c_bus_spec_rev6.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SEND",
-      "transitions": [],
-      "evidence": "input/docs/UM10204_NXP_i2c_bus_spec_rev6.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "CONTINUES",
-      "transitions": [],
-      "evidence": "input/docs/UM10204_NXP_i2c_bus_spec_rev6.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "BACK",
-      "transitions": [],
-      "evidence": "input/docs/UM10204_NXP_i2c_bus_spec_rev6.pdf (prose state-to-state v1.6.484)"
-    }
-  ],
-  "no_fsm_states_in_input": false,
+  "fsm_states": [],
+  "no_fsm_states_in_input": true,
   "pipeline_stages": [
     {
       "name": "IF",
@@ -116,7 +85,6 @@
       "matched_token": "I2C"
     }
   ],
-  "class_path": "serial_peripheral_protocol",
   "module_role": "Wire-level inter-IC serial bus specification. Defines the protocol between any two or more I2C-compatible ICs sharing a 2-wire bus (SDA + SCL). Concrete I2C controller / target IP blocks implement this protocol behind an MCU register interface (per SoC integration).",
   "integration_overview": {
     "physical_topology": "All devices' SDA pins connected together; all SCL pins connected together; both lines pulled up to VDD via Rp.",

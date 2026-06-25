@@ -25,32 +25,7 @@
   "expected_verdict_byte_hex_low_confidence": false,
   "cpu_interrupts": [],
   "no_cpu_interrupts_in_input": true,
-  "memories": [
-    {
-      "name": "LPDDR3",
-      "kind": "ram",
-      "type": "RAM",
-      "port_count": null,
-      "depth": null,
-      "width": null,
-      "evidence_file": "lpddr5_spec.pdf",
-      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
-      "low_confidence": true,
-      "name_origin": "bare_token_left_context"
-    },
-    {
-      "name": "LPDDR5X",
-      "kind": "ram",
-      "type": "DRAM",
-      "port_count": null,
-      "depth": null,
-      "width": null,
-      "evidence_file": "lpddr5_spec.pdf",
-      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
-      "low_confidence": true,
-      "name_origin": "bare_token_left_context"
-    }
-  ],
+  "memories": [],
   "memory_candidates": [
     {
       "name": null,
@@ -64,6 +39,18 @@
       "low_confidence": true
     },
     {
+      "name": "LPDDR3",
+      "kind": "ram",
+      "type": "RAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "lpddr5_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "bare_token_left_context"
+    },
+    {
       "name": null,
       "kind": "fifo",
       "type": "FIFO",
@@ -73,6 +60,18 @@
       "evidence_file": "lpddr5_spec.pdf",
       "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
       "low_confidence": true
+    },
+    {
+      "name": "LPDDR5X",
+      "kind": "ram",
+      "type": "DRAM",
+      "port_count": null,
+      "depth": null,
+      "width": null,
+      "evidence_file": "lpddr5_spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true,
+      "name_origin": "bare_token_left_context"
     }
   ],
   "no_memory_candidates_in_input": false,

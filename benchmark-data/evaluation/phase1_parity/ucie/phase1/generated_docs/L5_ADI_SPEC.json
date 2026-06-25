@@ -2,15 +2,35 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "Universal Chiplet Interconnect Express (UCIe 1.1)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
   "external_components": [],
-  "electrical_specs": [],
+  "electrical_specs": [
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "32.0",
+      "unit": "GHz",
+      "source": "ucie_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "800.0",
+      "unit": "MHz",
+      "source": "ucie_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    }
+  ],
   "design_parameters": [],
-  "extraction_evidence": {
-    "input/docs/ucie_spec.pdf": []
-  },
+  "source_documents": [
+    "input/docs/ucie_spec.pdf"
+  ],
+  "extraction_evidence": {},
   "analog_digital_interface_present": true,
   "signaling_summary": "Per-module single-ended (not differential) data lanes carrying unencoded NRZ at 4/8/12/16/24/32 GT/s, source-synchronous to a per-module forwarded Track/clock lane, with a per-module Valid lane framing the data. The very short, low-loss on-package channel (Advanced <=2 mm, Standard <=25 mm) and fine bump pitch permit single-ended signaling without a DC-balancing line code; integrity is provided at the D2D Adapter by a 16-bit per-Flit CRC + Retry. A separate always-on sideband (2 lanes/direction @ 800 MHz) handles training, management, and registers. UCIe targets Tx+Rx latency < 2 ns and power efficiency 0.5 pJ/b (Standard) / 0.25 pJ/b (Advanced).",
   "modulation": "NRZ (two-level), single-ended, unencoded mainband.",

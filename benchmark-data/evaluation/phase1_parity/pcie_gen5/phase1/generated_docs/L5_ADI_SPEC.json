@@ -2,15 +2,107 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
   "external_components": [],
-  "electrical_specs": [],
+  "electrical_specs": [
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "133.0",
+      "unit": "MHz",
+      "source": "pcie_gen5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "5.0",
+      "unit": "V",
+      "source": "pcie_gen5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "12.0",
+      "unit": "V",
+      "source": "pcie_gen5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "3.3",
+      "unit": "V",
+      "source": "pcie_gen5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "48.0",
+      "unit": "V",
+      "source": "pcie_gen5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.5",
+      "unit": "V",
+      "source": "pcie_gen5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "3.0",
+      "unit": "A",
+      "source": "pcie_gen5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "0.5",
+      "unit": "A",
+      "source": "pcie_gen5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "2.1",
+      "unit": "A",
+      "source": "pcie_gen5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "5.5",
+      "unit": "A",
+      "source": "pcie_gen5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "15.0",
+      "unit": "A",
+      "source": "pcie_gen5_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    }
+  ],
   "design_parameters": [],
-  "extraction_evidence": {
-    "input/docs/pcie_gen5_spec.txt": []
-  },
+  "source_documents": [
+    "input/docs/pcie_gen5_spec.pdf"
+  ],
+  "extraction_evidence": {},
   "class_path": "digital_cmd_driven",
   "analog_digital_interface_present": true,
   "signaling_summary": "Per-Lane low-voltage differential signaling on TXp/TXn and RXp/RXn pairs, NRZ (two-level), at 32 GT/s per Lane per direction (Gen5). Both ends are AC-coupled. Gen5 mandates a four-phase enhanced transmitter-equalization handshake (Phase 0-3) with preset hints, supports optional transmitter precoding, allows up to two protocol-aware retimers per link, and mandates Lane Margining at the Receiver. Encoding is 128b/130b; the embedded clock is recovered by the receiver CDR from the scrambled block stream.",

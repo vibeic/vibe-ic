@@ -15,7 +15,6 @@
   "no_operating_modes_in_input": true,
   "fsm_state_catalogue": [],
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
   "no_otp_fsm_in_input": true,
   "otp_present": false,
   "notes": "MIPI CSI-2 defines a streaming camera link protocol with no one-time-programmable content. Sensor OTP (calibration, ID) is vendor-specific and accessed over CCI, outside the CSI-2 data path."

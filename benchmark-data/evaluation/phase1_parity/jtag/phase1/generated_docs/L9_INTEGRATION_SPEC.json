@@ -19,72 +19,12 @@
       "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose transition v1.6.484)"
     },
     {
-      "name": "RESPONDS",
-      "transitions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ADJACENT",
-      "transitions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "USED",
-      "transitions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SPECIFY",
-      "transitions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "GOES",
-      "transitions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)"
-    },
-    {
       "name": "DREXIT1",
       "transitions": [],
       "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)"
     },
     {
       "name": "DRPAUSE",
-      "transitions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "CONFIGURED",
-      "transitions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "TEST",
-      "transitions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "PERFORM",
-      "transitions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "TIME",
-      "transitions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "MARKET",
-      "transitions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "RELATIONSHIP",
-      "transitions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "TESTABILITY",
       "transitions": [],
       "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)"
     }

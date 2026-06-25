@@ -251,57 +251,6 @@
       "source": "phase1_auto_extraction"
     }
   ],
-  "release_history": [
-    {
-      "date": "16 June 2003",
-      "issue": "A",
-      "change": "First release"
-    },
-    {
-      "date": "19 March 2004",
-      "issue": "B",
-      "change": "First release as standalone document"
-    },
-    {
-      "date": "31 January 2010",
-      "issue": "C",
-      "change": "Renamed to AMBA AXI; AXI4 + AXI4-Lite added"
-    },
-    {
-      "date": "22 February 2011",
-      "issue": "D",
-      "change": "Errata corrections"
-    },
-    {
-      "date": "28 October 2011",
-      "issue": "E",
-      "change": "Additional clarifications"
-    },
-    {
-      "date": "28 February 2013",
-      "issue": "F",
-      "change": "Additional clarifications"
-    },
-    {
-      "date": "29 January 2021",
-      "issue": "G",
-      "change": "AXI5 introduced; multi-copy atomicity; QoS accept; trace signals"
-    },
-    {
-      "date": "29 November 2022",
-      "issue": "H",
-      "change": "Additional issue updates"
-    }
-  ],
-  "protocol_variants_described": [
-    "AXI3 (AMBA 3)",
-    "AXI4 (AMBA 4)",
-    "AXI4-Lite (AMBA 4)",
-    "AXI5 (AMBA 5)",
-    "AXI5-Lite (AMBA 5)",
-    "ACE (AMBA 4)",
-    "ACE-Lite (AMBA 4)"
-  ],
   "key_features": [
     "Standard FPGA-SoC interface family for Intel/Altera Platform Designer (Qsys), Nios II, and Quartus.",
     "Seven interface types: Avalon-MM, Avalon-ST, Conduit, Interrupt, Clock, Reset, Tristate Conduit (Avalon-TC).",
@@ -313,11 +262,6 @@
     "Avalon-ST packets: startofpacket / endofpacket framing with empty on the final beat; channel and error qualifiers.",
     "Transfer properties: addressUnits (word vs byte), readLatency, setupTime, holdTime, waitrequestAllowance, burst alignment, readyLatency, symbolsPerBeat.",
     "Platform Designer generates the interconnect: address decoding, round-robin arbitration, data-path mux, width/burst adaptation, clock crossing."
-  ],
-  "supported_interconnect_topologies": [
-    "Shared address and data buses",
-    "Shared address buses and multiple data buses",
-    "Multilayer, with multiple address and data buses"
   ],
   "document_title": "Avalon Interface Specifications",
   "version": "Avalon Interface Specifications (MNL-AVABUSREF)",

@@ -228,62 +228,6 @@
       "evidence": "L3.opcodes"
     },
     {
-      "name": "sequence_txd",
-      "trigger": "host_sends_<HALLUCINATION_SCRUBBED>",
-      "steps": [
-        {
-          "step": 1,
-          "action": "host_BR",
-          "expected_signal": "BR_pulse",
-          "latency_us": 5,
-          "next_state": "S_RX_BIT"
-        },
-        {
-          "step": 2,
-          "action": "host_byte=<HALLUCINATION_SCRUBBED>",
-          "expected_signal": "byte_valid",
-          "latency_us": 70,
-          "next_state": "S_DISPATCH"
-        },
-        {
-          "step": 3,
-          "action": "DUT_response",
-          "expected_signal": "tx_byte",
-          "latency_us": 80,
-          "next_state": "S_IDLE"
-        }
-      ],
-      "evidence": "L3.opcodes"
-    },
-    {
-      "name": "sequence_txd",
-      "trigger": "host_sends_<HALLUCINATION_SCRUBBED>",
-      "steps": [
-        {
-          "step": 1,
-          "action": "host_BR",
-          "expected_signal": "BR_pulse",
-          "latency_us": 5,
-          "next_state": "S_RX_BIT"
-        },
-        {
-          "step": 2,
-          "action": "host_byte=<HALLUCINATION_SCRUBBED>",
-          "expected_signal": "byte_valid",
-          "latency_us": 70,
-          "next_state": "S_DISPATCH"
-        },
-        {
-          "step": 3,
-          "action": "DUT_response",
-          "expected_signal": "tx_byte",
-          "latency_us": 80,
-          "next_state": "S_IDLE"
-        }
-      ],
-      "evidence": "L3.opcodes"
-    },
-    {
       "name": "sequence_col",
       "trigger": "host_sends_0x18",
       "steps": [
@@ -450,6 +394,62 @@
         }
       ],
       "evidence": "L3.opcodes"
+    },
+    {
+      "name": "sequence_rx",
+      "trigger": "host_sends_0x2B",
+      "steps": [
+        {
+          "step": 1,
+          "action": "host_BR",
+          "expected_signal": "BR_pulse",
+          "latency_us": 5,
+          "next_state": "S_RX_BIT"
+        },
+        {
+          "step": 2,
+          "action": "host_byte=0x2B",
+          "expected_signal": "byte_valid",
+          "latency_us": 70,
+          "next_state": "S_DISPATCH"
+        },
+        {
+          "step": 3,
+          "action": "DUT_response",
+          "expected_signal": "tx_byte",
+          "latency_us": 80,
+          "next_state": "S_IDLE"
+        }
+      ],
+      "evidence": "L3.opcodes"
+    },
+    {
+      "name": "sequence_mb",
+      "trigger": "host_sends_0x25",
+      "steps": [
+        {
+          "step": 1,
+          "action": "host_BR",
+          "expected_signal": "BR_pulse",
+          "latency_us": 5,
+          "next_state": "S_RX_BIT"
+        },
+        {
+          "step": 2,
+          "action": "host_byte=0x25",
+          "expected_signal": "byte_valid",
+          "latency_us": 70,
+          "next_state": "S_DISPATCH"
+        },
+        {
+          "step": 3,
+          "action": "DUT_response",
+          "expected_signal": "tx_byte",
+          "latency_us": 80,
+          "next_state": "S_IDLE"
+        }
+      ],
+      "evidence": "L3.opcodes"
     }
   ],
   "no_behavioral_sequences_in_input": false,
@@ -489,14 +489,6 @@
         "label": "behavioral sequence per opcode"
       },
       {
-        "literal": "<HALLUCINATION_SCRUBBED> TXD",
-        "label": "behavioral sequence per opcode"
-      },
-      {
-        "literal": "<HALLUCINATION_SCRUBBED> TXD",
-        "label": "behavioral sequence per opcode"
-      },
-      {
         "literal": "0x18 COL",
         "label": "behavioral sequence per opcode"
       },
@@ -518,6 +510,14 @@
       },
       {
         "literal": "0x82 BT",
+        "label": "behavioral sequence per opcode"
+      },
+      {
+        "literal": "0x2B RX",
+        "label": "behavioral sequence per opcode"
+      },
+      {
+        "literal": "0x25 MB",
         "label": "behavioral sequence per opcode"
       }
     ]

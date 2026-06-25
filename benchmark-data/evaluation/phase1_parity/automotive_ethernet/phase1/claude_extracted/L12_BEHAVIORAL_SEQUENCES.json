@@ -1,6 +1,6 @@
 {
   "ic_name": "Automotive Ethernet (single-pair, 100BASE-T1 / 1000BASE-T1 / 10BASE-T1S / 10BASE-T1L; IEEE 802.3bw / 802.3bp / 802.3cg)",
-  "no_calibration": false,
+  "no_calibration": true,
   "link_bring_up_sequence": [
     "1. Power-on / reset.",
     "2. Master/slave roles applied (config or auto-negotiation); the two ends must be opposite.",

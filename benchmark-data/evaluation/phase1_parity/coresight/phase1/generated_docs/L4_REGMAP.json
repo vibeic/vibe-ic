@@ -381,7 +381,6 @@
   "extraction_evidence": {
     "input/docs/coresight_spec.txt": []
   },
-  "class_path": "digital_arithmetic_primitive",
   "register_map_present": true,
   "base_address": "DP registers are at addresses 0x0/0x4/0x8/0xC (A[2:3] encoded into the Request packet); each AP exposes 64 bytes (16 registers) at offsets 0x00..0x3C via A[2:3] + APBANKSEL banking; AP IDR is at fixed offset 0xFC, BASE at 0xF8.",
   "notes": "CoreSight register space has three tiers: (1) the DAP Debug Port registers (DPIDR, CTRL/STAT, SELECT, RDBUFF); (2) the Access Port registers (CSW, TAR, DRW, BD0-3, CFG, BASE, IDR); (3) each CoreSight component's memory-mapped 4 KB register block (over the Debug APB), which always includes the identification registers (CIDR0-3, PIDR0-7, DEVARCH, DEVTYPE) and the management registers (CLAIMSET/CLAIMCLR, LAR/LSR, AUTHSTATUS, DEVID/DEVAFF) plus its function-specific registers. Exact bit layouts are ARM proprietary / implementation-defined.",

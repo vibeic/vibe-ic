@@ -4,8 +4,15 @@
   "ic_name": "LoRaWAN_Modem",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
-  "extraction_evidence": {},
+  "no_calibration": true,
+  "extraction_evidence": {
+    "derived_no_calibration_source": [
+      {
+        "literal": "no calibration / trim / OTP-cal source in input",
+        "label": "L12 no_calibration auto-set (#634 facet e) — absence-based, mirrors L5.no_analog"
+      }
+    ]
+  },
   "otaa_join_sequence": [
     "1. Device sends a Join-Request (DevEUI, JoinEUI, DevNonce) as a LoRa uplink.",
     "2. A gateway forwards it to the network/join server.",

@@ -44,7 +44,7 @@
       "port_count": null,
       "depth": null,
       "width": null,
-      "evidence_file": "ufs_spec.txt",
+      "evidence_file": "ufs_spec.pdf",
       "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
       "low_confidence": true
     },
@@ -55,7 +55,7 @@
       "port_count": null,
       "depth": null,
       "width": null,
-      "evidence_file": "ufs_spec.txt",
+      "evidence_file": "ufs_spec.pdf",
       "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
       "low_confidence": true
     }

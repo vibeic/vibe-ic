@@ -15,7 +15,7 @@
   "no_operating_modes_in_input": true,
   "fsm_state_catalogue": [],
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "crypto_accelerator",
   "no_otp_fsm_in_input": true,
   "otp_present": true,
   "notes": "TPM 2.0 has multiple persistent / OTP-style state elements at different protection levels. The Endorsement Primary Seed (EPS) is the most security-critical OTP-class value: it is factory-provisioned, never changes during the TPM's operational lifetime, and is the cryptographic root of the platform's permanent identity. The Storage Primary Seed (SPS) and Platform Primary Seed (PPS) are also persistent but may be re-randomized (TPM2_Clear for SPS; TPM2_ChangePPS for PPS) under controlled hierarchy authorization. The EK certificate (issued at TPM manufacture, X.509 chain) is OTP from the host's perspective.",

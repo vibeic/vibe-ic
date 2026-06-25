@@ -4,7 +4,7 @@
   "ic_name": "InfiniBand Architecture (IBTA)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
+  "no_calibration": true,
   "extraction_evidence": {},
   "link_bring_up_sequence": [
     "1. Physical link trains: Down -> Polling -> Configuration -> LinkUp (negotiate width/speed, de-skew lanes).",

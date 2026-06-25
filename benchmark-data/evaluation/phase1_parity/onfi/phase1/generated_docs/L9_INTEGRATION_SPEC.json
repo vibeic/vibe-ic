@@ -12,54 +12,8 @@
   "submodules": [],
   "no_submodules_in_input": true,
   "sim_only_modules": [],
-  "fsm_states": [
-    {
-      "name": "PERFORM",
-      "transitions": [],
-      "evidence": "input/docs/ONFI_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "USED",
-      "transitions": [],
-      "evidence": "input/docs/ONFI_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "DESCRIBE",
-      "transitions": [],
-      "evidence": "input/docs/ONFI_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "STATES",
-      "transitions": [],
-      "evidence": "input/docs/ONFI_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ACCOMPLISH",
-      "transitions": [],
-      "evidence": "input/docs/ONFI_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "PRIOR",
-      "transitions": [],
-      "evidence": "input/docs/ONFI_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "INDICATE",
-      "transitions": [],
-      "evidence": "input/docs/ONFI_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "MACHINE",
-      "transitions": [],
-      "evidence": "input/docs/ONFI_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "INDICATED",
-      "transitions": [],
-      "evidence": "input/docs/ONFI_Spec.pdf (prose state-to-state v1.6.484)"
-    }
-  ],
-  "no_fsm_states_in_input": false,
+  "fsm_states": [],
+  "no_fsm_states_in_input": true,
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
   "internal_wires": [],
@@ -134,7 +88,6 @@
   "interface_types": [],
   "no_interface_types_in_input": true,
   "chip_top_interfaces": [],
-  "class_path": "digital_arithmetic_primitive",
   "module_role": "Hardware host-device interface between a NAND Flash controller (master) and one or more NAND Targets (slaves) within a NAND package, defining wires + cycle types + command set + status / parameter / unique-ID readback + features.",
   "integration_overview": {
     "wire_count_sdr_x8_basic": "12-14 (CE_n, CLE, ALE, WE_n, RE_n, WP_n, R/B_n, DQ[7:0], Vcc/VccQ/Vss/VssQ)",

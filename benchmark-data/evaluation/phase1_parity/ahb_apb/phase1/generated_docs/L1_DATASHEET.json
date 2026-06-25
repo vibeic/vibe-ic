@@ -10,7 +10,7 @@
   "electrical_specs": [],
   "no_electrical_specs_in_input": true,
   "ordering_info": {
-    "part_number": "SUCH ARM TECHNOLOGY",
+    "part_number": "ahb_apb",
     "vendor": null,
     "no_vendor_in_input": true
   },
@@ -43,19 +43,7 @@
     "input/docs/ARM_AHB_Lite.pdf": [],
     "input/docs/ARM_APB.pdf": []
   },
-  "extraction_strategy": {
-    "hallucination_scrub_v0_1_60": [
-      {
-        "l_doc": "L1_DATASHEET",
-        "pattern_name": "ic_name_from_license_clause",
-        "path": "ic_name",
-        "old_value": "SUCH ARM TECHNOLOGY",
-        "new_value": "UNKNOWN_IC",
-        "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
-      }
-    ]
-  },
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "bus_peripheral",
   "no_class_path_in_input": false,
   "auto_discovered_identifiers": [
     {
@@ -2166,72 +2154,6 @@
       "source": "ARM_AHB_Lite.pdf"
     }
   ],
-  "release_history": [
-    {
-      "date": "16 June 2003",
-      "issue": "A",
-      "change": "First release"
-    },
-    {
-      "date": "19 March 2004",
-      "issue": "B",
-      "change": "First release as standalone document"
-    },
-    {
-      "date": "31 January 2010",
-      "issue": "C",
-      "change": "Renamed to AMBA AXI; AXI4 + AXI4-Lite added"
-    },
-    {
-      "date": "22 February 2011",
-      "issue": "D",
-      "change": "Errata corrections"
-    },
-    {
-      "date": "28 October 2011",
-      "issue": "E",
-      "change": "Additional clarifications"
-    },
-    {
-      "date": "28 February 2013",
-      "issue": "F",
-      "change": "Additional clarifications"
-    },
-    {
-      "date": "29 January 2021",
-      "issue": "G",
-      "change": "AXI5 introduced; multi-copy atomicity; QoS accept; trace signals"
-    },
-    {
-      "date": "29 November 2022",
-      "issue": "H",
-      "change": "Additional issue updates"
-    }
-  ],
-  "protocol_variants_described": [
-    "AXI3 (AMBA 3)",
-    "AXI4 (AMBA 4)",
-    "AXI4-Lite (AMBA 4)",
-    "AXI5 (AMBA 5)",
-    "AXI5-Lite (AMBA 5)",
-    "ACE (AMBA 4)",
-    "ACE-Lite (AMBA 4)"
-  ],
-  "key_features": [
-    "Separate address/control and data phases",
-    "Unaligned data transfers via byte strobes",
-    "Burst-based transactions with only start address",
-    "Separate read and write data channels for full-duplex DMA",
-    "Multiple outstanding addresses (transaction reordering by ID)",
-    "Out-of-order transaction completion for different IDs",
-    "QoS (AXI4) and Region (AXI4) sideband",
-    "Multi-copy atomicity (AXI5)"
-  ],
-  "supported_interconnect_topologies": [
-    "Shared address and data buses",
-    "Shared address buses and multiple data buses",
-    "Multilayer, with multiple address and data buses"
-  ],
   "document_title_ahb": "AMBA AHB Protocol Specification",
   "document_title_apb": "AMBA APB Protocol Specification",
   "document_number_ahb": "ARM IHI 0033C (ID090921)",
@@ -2453,6 +2375,14 @@
       "issue": "C",
       "change": "First release for v2.0 (adds PPROT + PSTRB)"
     }
+  ],
+  "protocol_variants_described": [
+    "AHB-Lite (single-Manager pipelined high-performance bus, Issue A)",
+    "AHB5 (extends AHB-Lite with optional secure / exclusive / user / parity features, Issue B onwards)",
+    "AHB (Issue C C terminology supersedes Master/Slave with Manager/Subordinate)",
+    "APB2 (AMBA 2 APB Specification, basic two-phase peripheral bus)",
+    "APB3 (AMBA 3 APB v1.0 - adds PREADY wait states and PSLVERR error response)",
+    "APB4 (AMBA APB v2.0 - adds PPROT protection and PSTRB write strobes)"
   ],
   "purpose": "Defines the AMBA AHB and APB on-chip bus protocols. AHB is a high-performance, pipelined, synchronous bus suitable for memory-bandwidth-intensive Managers/Subordinates; APB is a low-cost, low-power, non-pipelined peripheral bus optimized for register-mapped peripheral access. APB is normally connected to AHB through an AHB-to-APB bridge. Both are members of the AMBA family (which also includes AXI/ACE).",
   "ahb_4kb_burst_rule": "An incrementing burst (INCR / INCRn) must not cross a 1KB address boundary (note: AHB uses 1KB not the AXI 4KB).",

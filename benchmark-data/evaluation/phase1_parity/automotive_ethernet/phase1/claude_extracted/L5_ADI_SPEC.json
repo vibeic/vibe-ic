@@ -2,22 +2,7 @@
   "ic_name": "Automotive Ethernet (single-pair, 100BASE-T1 / 1000BASE-T1 / 10BASE-T1S / 10BASE-T1L; IEEE 802.3bw / 802.3bp / 802.3cg)",
   "analog_blocks_detected": false,
   "no_analog": true,
-  "design_parameters": [
-    {
-      "parameter": "pulse-amplitude modulation",
-      "value": "-1,",
-      "source": "automotive_ethernet_spec.txt",
-      "raw": "pulse-amplitude modulation: -1, 0, +1) at 66.67 MBd, with a 4B3B + 3B2T",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "Line modulation ..... PAM3 (3-level",
-      "value": "-1,",
-      "source": "automotive_ethernet_spec.txt",
-      "raw": "Line modulation ..... PAM3 (3-level: -1, 0, +1; ternary)",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    }
-  ],
+  "design_parameters": [],
   "analog_digital_interface_present": true,
   "signaling_summary": "The single-pair data path is PAM3 (3-level ternary: -1, 0, +1) on ONE balanced twisted pair, transmitted simultaneously in both directions and separated by an adaptive echo canceller. The transmitter shapes the PAM3 spectrum (scrambler + pulse shaping) for automotive EMC; the receiver uses adaptive FFE/DFE equalisation and the echo canceller, loop-timing the slave to the master. SNR and MSE are the analog link-quality metrics. 100BASE-T1 runs at 66.67 MBd, 1000BASE-T1 at 750 MBd.",
   "mii_dc_characteristics": {

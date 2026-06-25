@@ -75,13 +75,12 @@
   ],
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
-  "no_fsm_states_in_input": false,
-  "no_fsm_in_input": false,
+  "no_fsm_states_in_input": true,
+  "no_fsm_in_input": true,
   "fsm_tokens": [],
   "extraction_evidence": {
     "input/docs/SoundWire_Spec.pdf": []
   },
-  "class_path": "digital_arithmetic_primitive",
   "fsm_overview": "SoundWire defines several normative state machines: (a) Master/Slave bus lifecycle (Power-up → Sync acquisition → Enumeration → Operating → ClockStop/Wake), (b) Channel Prepare CP_SM per channel per Port for safe activation/deactivation of data streams, (c) ClockStopPrepare CSP_SM for orderly entry into ClockStop modes 0 and 1, (d) Monitor arbitration over BREQ/BREL bits, and (e) Enumeration arbitration when multiple Slaves contend at Device 0.",
   "channel_prepare_state_machine_cp_sm": {
     "purpose": "Make sure a Slave channel of a Port is ready to render/capture before audio data is transported.",

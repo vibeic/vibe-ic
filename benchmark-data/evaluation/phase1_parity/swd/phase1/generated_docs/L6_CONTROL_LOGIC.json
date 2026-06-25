@@ -19,104 +19,6 @@
       "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
     },
     {
-      "name": "CONNECTION",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "INTERFACE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "REFERRING",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "DBGTAPSM",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "POSSIBLE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "VARY",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "PROTOCOL",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "ENSURE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "DORMANT",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "ZERO",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "EQUAL",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "SEVEN",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "WRAP",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "RETURNS",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
       "name": "BRFIFO1",
       "transitions": [],
       "actions": [],
@@ -139,27 +41,6 @@
     },
     {
       "name": "BWFIFO4",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "REGISTERS",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "ACCESS",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "ACCESSES",
       "transitions": [],
       "actions": [],
       "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)",

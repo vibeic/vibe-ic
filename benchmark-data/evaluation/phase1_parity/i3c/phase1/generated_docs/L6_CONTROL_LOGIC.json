@@ -79,8 +79,8 @@
   ],
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
-  "no_fsm_states_in_input": false,
-  "no_fsm_in_input": false,
+  "no_fsm_states_in_input": true,
+  "no_fsm_in_input": true,
   "fsm_tokens": [
     {
       "name": "FSM",
@@ -105,7 +105,6 @@
       }
     ]
   },
-  "class_path": "serial_peripheral_protocol",
   "fsm_hints": {
     "trigger": "Either Master starts a frame from Bus Free / Available, or Slave starts a request (IBI / Hot-Join / Secondary Master Request) from Bus Available / Bus Idle.",
     "rule": "Address Header has 9 SCL bits; SDR Data Word has 9 SCL bits (8 data + 1 T-Bit). On Push-Pull SDA, only one driver may be active. Slave NEVER drives SCL.",

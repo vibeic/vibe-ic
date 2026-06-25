@@ -16,6 +16,7 @@
     }
   ],
   "no_analog": false,
+  "analog_digital_interface_present": true,
   "external_components": [],
   "electrical_specs": [
     {
@@ -27,6 +28,22 @@
       "source": "profibus_spec.txt",
       "raw": "* Bus termination: 220 ohm pull termination network with 390 ohm",
       "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "5.0",
+      "unit": "V",
+      "source": "profibus_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "9.0",
+      "unit": "mA",
+      "source": "profibus_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
     }
   ],
   "design_parameters": [
@@ -53,7 +70,6 @@
       }
     ]
   },
-  "analog_digital_interface_present": true,
   "signaling_summary": "PROFIBUS-DP uses a balanced (differential) RS-485 two-wire line (A-line / B-line), half-duplex NRZ, with active 220 ohm termination at both segment ends (390 ohm pull-up to VP/+5 V and 390 ohm pull-down to DGND). The transceiver direction is switched per telegram (RTS). PROFIBUS-PA uses MBP / IEC 61158-2: a Manchester-encoded, bus-powered signal (current modulation +-9 mA around a DC base current) at 31.25 kbit/s, intrinsically safe.",
   "modulation": "DP: differential NRZ on RS-485 (A-line / B-line), half-duplex. PA: Manchester-encoded current modulation on the bus-powered MBP pair.",
   "clocking": "Asynchronous UART character timing on RS-485 (DP): 11-bit character (1 start + 8 data + 1 even parity + 1 stop), baud-rate-selected. PA: synchronous Manchester self-clocking at 31.25 kbit/s.",

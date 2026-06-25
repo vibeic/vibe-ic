@@ -1,19 +1,38 @@
 {
   "fields": {
     "tables": [
-      "Table 2-1 — Transaction Types for Different Address Spaces",
-      "Table 2-8 — Fmt[1:0] and Type[4:0] Field Encodings",
-      "Table 2-16 — Flow Control Credit Types",
-      "Table 3-1 — DLLP Type Encodings",
-      "Table 3-2 — Mapping of Bits into CRC Field",
-      "Table 3-3 — Mapping of Bits into LCRC Field",
-      "Table 4-1 — Special Symbols",
-      "Table 4-2 — TS1 Ordered-Set",
-      "Table 4-3 — TS2 Ordered-Set",
-      "Table 4-4 — Differential Transmitter (Tx) Output Specifications",
-      "Table 4-5 — Differential Receiver (Rx) Input Specifications",
-      "Table B-1 — 8b/10b Data Symbol Codes",
-      "Table B-2 — 8b/10b Special Character Symbol Codes"
+      {
+        "table_id": "Table 2-4",
+        "name": "Definition of TC Field Encodings",
+        "line": 2335,
+        "rows": [
+          "TC Field Value           Definition",
+          "000           TC0: Best Effort service class (General Purpose I/O)",
+          "(Default TC – must be supported by every PCI Express device)",
+          "001 – 111       TC1-TC7: Differentiated service classes",
+          "(Differentiation based on Weighted-Round-Robin and/or Priority)",
+          "It is up to the system software to determine TC labeling and TC/VC mapping in order to",
+          "provide differentiated services that meet target platform requirements. For example, for a",
+          "platform that supports isochronous data traffic, TC7 is reserved for isochronous",
+          "transactions and TC7 must be mapped to the VC with the highest weight/priority. See",
+          "Section 7.3.4 for details on isochronous support.",
+          "The concept of Traffic Class applies only within the PCI Express interconnect fabric.",
+          "Specific requirements of how PCI Express TC service policies are translated into policies on",
+          "non-PCI Express interconnects or within Root Complex or Endpoints is outside of the",
+          "scope of this specification.",
+          "2.5.             Transaction Ordering",
+          "Table 2-5 defines the ordering requirements for PCI Express Transactions. The rules",
+          "defined in this table apply uniformly to all types of Transactions on PCI Express including",
+          "Memory, I/O, Configuration, and Messages. The ordering rules defined in this table apply",
+          "within a single Traffic Class (TC). There is no ordering among transactions within different",
+          "TCs. Note that this also implies that there is no ordering required between traffic that flows",
+          "through different Virtual Channels since transactions with the same TC label are not allowed",
+          "to be mapped to multiple VCs on any PCI Express Link.",
+          "For Table 2-5, the columns represent a first issued Transaction, and the rows represent a",
+          "subsequently issued Transaction. The table entry indicates the ordering relationship between",
+          "the two Transactions. The table entries are defined as follows:"
+        ]
+      }
     ],
     "special_symbols_table": {
       "header_columns": [
@@ -336,7 +355,7 @@
     },
     "8b_10b_encoding_note": "The PCI Express Physical Layer uses the IBM 8b/10b code published by Widmer + Franaszek in IBM J. Res. Dev. Vol 27 #5 (Sept 1983) — same code as Fibre Channel, Gigabit Ethernet 1000BASE-X, Serial ATA, and InfiniBand 1x. Provides DC balance + ≤ 5-bit run length + 12 unique 'comma' K-codes used by PCI Express as Special Symbols."
   },
-  "extraction_status": "EXTRACTION_FOUND_NOTHING",
+  "extraction_status": "EXTRACTED",
   "schema_version": "v0.1.62",
   "doc_class": "L15",
   "emitted_by": "phase1_protocol_spec_extract.extract_l15_encoding_tables v0.1.62",

@@ -4,8 +4,15 @@
   "ic_name": "SPI Block (S12SPIV4)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
-  "extraction_evidence": {},
+  "no_calibration": true,
+  "extraction_evidence": {
+    "derived_no_calibration_source": [
+      {
+        "literal": "no calibration / trim / OTP-cal source in input",
+        "label": "L12 no_calibration auto-set (#634 facet e) — absence-based, mirrors L5.no_analog"
+      }
+    ]
+  },
   "typical_master_transmit_sequence": [
     "1. Software writes SPICR1 to set SPE=1, MSTR=1 + desired {CPOL, CPHA, LSBFE, SSOE, SPIE, SPTIE}.",
     "2. Software writes SPICR2 to set MODFEN / SPC0 / BIDIROE / SPISWAI as needed.",

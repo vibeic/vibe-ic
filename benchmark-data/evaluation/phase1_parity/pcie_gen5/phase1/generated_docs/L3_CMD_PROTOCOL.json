@@ -10,7 +10,7 @@
       "tx_len": "var",
       "response_opcode_hex": "0x12",
       "pre_wake_allowed": false,
-      "evidence": "input/docs/pcie_gen5_spec.txt",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
       "response_payload_template": [
         {
           "byte_offset": 0,
@@ -27,7 +27,7 @@
       "tx_len": "var",
       "response_opcode_hex": "0x13",
       "pre_wake_allowed": false,
-      "evidence": "input/docs/pcie_gen5_spec.txt",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
       "response_payload_template": [
         {
           "byte_offset": 0,
@@ -44,7 +44,7 @@
       "tx_len": "var",
       "response_opcode_hex": "0x15",
       "pre_wake_allowed": false,
-      "evidence": "input/docs/pcie_gen5_spec.txt",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
       "response_payload_template": [
         {
           "byte_offset": 0,
@@ -61,7 +61,7 @@
       "tx_len": "var",
       "response_opcode_hex": "0x16",
       "pre_wake_allowed": false,
-      "evidence": "input/docs/pcie_gen5_spec.txt",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
       "response_payload_template": [
         {
           "byte_offset": 0,
@@ -78,7 +78,7 @@
       "tx_len": "var",
       "response_opcode_hex": "0x1A",
       "pre_wake_allowed": false,
-      "evidence": "input/docs/pcie_gen5_spec.txt",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
       "response_payload_template": [
         {
           "byte_offset": 0,
@@ -95,7 +95,7 @@
       "tx_len": "var",
       "response_opcode_hex": "0x21",
       "pre_wake_allowed": false,
-      "evidence": "input/docs/pcie_gen5_spec.txt",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
       "response_payload_template": [
         {
           "byte_offset": 0,
@@ -112,7 +112,7 @@
       "tx_len": "var",
       "response_opcode_hex": "0x28",
       "pre_wake_allowed": false,
-      "evidence": "input/docs/pcie_gen5_spec.txt",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
       "response_payload_template": [
         {
           "byte_offset": 0,
@@ -129,7 +129,7 @@
       "tx_len": "var",
       "response_opcode_hex": "0x29",
       "pre_wake_allowed": false,
-      "evidence": "input/docs/pcie_gen5_spec.txt",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
       "response_payload_template": [
         {
           "byte_offset": 0,
@@ -146,7 +146,7 @@
       "tx_len": "var",
       "response_opcode_hex": "0x31",
       "pre_wake_allowed": false,
-      "evidence": "input/docs/pcie_gen5_spec.txt",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
       "response_payload_template": [
         {
           "byte_offset": 0,
@@ -163,7 +163,7 @@
       "tx_len": "var",
       "response_opcode_hex": "0x34",
       "pre_wake_allowed": false,
-      "evidence": "input/docs/pcie_gen5_spec.txt",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
       "response_payload_template": [
         {
           "byte_offset": 0,
@@ -180,7 +180,7 @@
       "tx_len": "var",
       "response_opcode_hex": "0x35",
       "pre_wake_allowed": false,
-      "evidence": "input/docs/pcie_gen5_spec.txt",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
       "response_payload_template": [
         {
           "byte_offset": 0,
@@ -197,7 +197,7 @@
       "tx_len": "var",
       "response_opcode_hex": "0x38",
       "pre_wake_allowed": false,
-      "evidence": "input/docs/pcie_gen5_spec.txt",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
       "response_payload_template": [
         {
           "byte_offset": 0,
@@ -214,7 +214,7 @@
       "tx_len": "var",
       "response_opcode_hex": "0x39",
       "pre_wake_allowed": false,
-      "evidence": "input/docs/pcie_gen5_spec.txt",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
       "response_payload_template": [
         {
           "byte_offset": 0,
@@ -231,7 +231,7 @@
       "tx_len": "var",
       "response_opcode_hex": "0x42",
       "pre_wake_allowed": false,
-      "evidence": "input/docs/pcie_gen5_spec.txt",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
       "response_payload_template": [
         {
           "byte_offset": 0,
@@ -248,7 +248,7 @@
       "tx_len": "var",
       "response_opcode_hex": "0x43",
       "pre_wake_allowed": false,
-      "evidence": "input/docs/pcie_gen5_spec.txt",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
       "response_payload_template": [
         {
           "byte_offset": 0,
@@ -265,7 +265,7 @@
       "tx_len": "var",
       "response_opcode_hex": "0x46",
       "pre_wake_allowed": false,
-      "evidence": "input/docs/pcie_gen5_spec.txt",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
       "response_payload_template": [
         {
           "byte_offset": 0,
@@ -282,7 +282,7 @@
       "tx_len": "var",
       "response_opcode_hex": "0x47",
       "pre_wake_allowed": false,
-      "evidence": "input/docs/pcie_gen5_spec.txt",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
       "response_payload_template": [
         {
           "byte_offset": 0,
@@ -299,7 +299,7 @@
       "tx_len": "var",
       "response_opcode_hex": "0x11",
       "pre_wake_allowed": false,
-      "evidence": "input/docs/pcie_gen5_spec.txt",
+      "evidence": "input/docs/pcie_gen5_spec.pdf",
       "response_payload_template": [
         {
           "byte_offset": 0,
@@ -324,7 +324,7 @@
   "no_payload_semantics_in_input": false,
   "opcode_synthesis_skipped_reason": null,
   "extraction_evidence": {
-    "input/docs/pcie_gen5_spec.txt": [
+    "input/docs/pcie_gen5_spec.pdf": [
       {
         "literal": "0x11 WAKE",
         "label": "opcode declaration"

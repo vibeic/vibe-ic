@@ -15,7 +15,6 @@
   "no_operating_modes_in_input": true,
   "fsm_state_catalogue": [],
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
   "no_otp_fsm_in_input": true,
   "otp_present": true,
   "notes": "Every SoundWire Slave is required to expose a 48-bit hard-coded enumeration value composed of SoundWire spec version + UniqueID + MIPI ManufacturerID + PartID + Class. This value is intended to live in factory non-volatile memory (typically OTP / e-fuse / mask-ROM / hard-wired registers), exposed to the Master through 6 SCP_Device0..5 registers that the Master reads via consecutive READ commands during enumeration.",

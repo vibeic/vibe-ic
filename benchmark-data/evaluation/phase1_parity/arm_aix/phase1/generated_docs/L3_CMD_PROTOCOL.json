@@ -32,14 +32,6 @@
     "hallucination_scrub_v0_1_60": [
       {
         "l_doc": "L3_CMD_PROTOCOL",
-        "pattern_name": "ic_name_from_license_clause",
-        "path": "ic_name",
-        "old_value": "SUCH ARM TECHNOLOGY",
-        "new_value": "UNKNOWN_IC",
-        "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
-      },
-      {
-        "l_doc": "L3_CMD_PROTOCOL",
         "pattern_name": "opcode_from_two_digit_decimal_page_number",
         "path": "opcodes[0].hex",
         "old_value": "0x16",
@@ -287,12 +279,17 @@
     {
       "name": "R",
       "direction_majority": "Slave",
-      "signal_count": 6,
+      "signal_count": 7,
       "signals": [
         {
           "name": "RID",
           "direction": "Slave",
           "semantics": "Identification tag for read data and response."
+        },
+        {
+          "name": "RDATA",
+          "direction": "Slave",
+          "semantics": "Read data."
         },
         {
           "name": "RRESP",

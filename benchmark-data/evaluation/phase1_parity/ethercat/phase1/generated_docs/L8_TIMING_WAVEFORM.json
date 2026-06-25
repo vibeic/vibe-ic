@@ -6,7 +6,6 @@
   "timing_constants": [],
   "waveforms": [],
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
   "data_rate_waveforms": {
     "100BASE-TX": {
       "line_rate_Mb_s": 100,

@@ -3,36 +3,14 @@
   "doc_class": "control_logic",
   "ic_name": "PCI Express 5.0 (PCI-SIG Base Specification Rev 5.0)",
   "reject_rules": [],
-  "fsm_states": [
-    {
-      "name": "DOWN",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/pcie_gen5_spec.txt (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "EXTENDED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/pcie_gen5_spec.txt (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "TRAIN",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/pcie_gen5_spec.txt (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    }
-  ],
+  "fsm_states": [],
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
-  "no_fsm_states_in_input": false,
-  "no_fsm_in_input": false,
+  "no_fsm_states_in_input": true,
+  "no_fsm_in_input": true,
   "fsm_tokens": [],
   "extraction_evidence": {
-    "input/docs/pcie_gen5_spec.txt": []
+    "input/docs/pcie_gen5_spec.pdf": []
   },
   "class_path": "digital_cmd_driven",
   "fsm_states_ltssm": [

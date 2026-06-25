@@ -3,138 +3,11 @@
   "doc_class": "control_logic",
   "ic_name": "Modbus Application Protocol V1.1b3 (Modbus.org)",
   "reject_rules": [],
-  "fsm_states": [
-    {
-      "name": "USED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "READ",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "WRITE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "OUTPUT",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "EITHER",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "REQUEST",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "REMOTE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "DEVICE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "RETURN",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "IDENTICAL",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "FORCE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "COILS",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "SPECIFIC",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "PERFORM",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "MODIFY",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "ALLOWS",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "ASKED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "REFER",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    }
-  ],
+  "fsm_states": [],
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
-  "no_fsm_states_in_input": false,
-  "no_fsm_in_input": false,
+  "no_fsm_states_in_input": true,
+  "no_fsm_in_input": true,
   "fsm_tokens": [
     {
       "name": "Counter",
@@ -168,7 +41,6 @@
       }
     ]
   },
-  "class_path": "digital_arithmetic_primitive",
   "fsm_states_server_transaction": [
     {
       "name": "WAIT_FOR_MB_INDICATION",

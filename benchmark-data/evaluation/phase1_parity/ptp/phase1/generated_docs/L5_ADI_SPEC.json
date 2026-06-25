@@ -2,15 +2,18 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "IEEE 1588 Precision Time Protocol (PTP) Clock Synchronization Engine (PTPv2 / IEEE 802.1AS)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
   "external_components": [],
   "electrical_specs": [],
   "design_parameters": [],
-  "extraction_evidence": {
-    "input/docs/ptp_spec.txt": []
-  },
+  "source_documents": [
+    "input/docs/ptp_spec.txt"
+  ],
+  "extraction_evidence": {},
   "class_path": "digital_arithmetic_primitive",
   "analog_digital_interface_present": true,
   "signaling_summary": "PTP is a packet protocol carried over an underlying Ethernet (Layer 2, EtherType 0x88F7) or UDP/IPv4/IPv6 link; it does not define its own line signaling. The accuracy-critical analog/timing element is the hardware-timestamp unit: a free-running PTP clock counter (seconds + nanoseconds) sampled at the MAC/PHY reference plane on the start of an event message, and a servo (PI controller) that disciplines the local oscillator's frequency and phase. A 1PPS / time-of-day output exposes the disciplined local time.",

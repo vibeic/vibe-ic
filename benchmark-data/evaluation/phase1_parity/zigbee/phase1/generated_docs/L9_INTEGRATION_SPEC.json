@@ -79,7 +79,7 @@
   "chip_top_interfaces": [
     {
       "name": "rf_if",
-      "type": "analog/digital RF",
+      "type": "analog-digital RF",
       "signals": [
         "rf_p",
         "rf_n",

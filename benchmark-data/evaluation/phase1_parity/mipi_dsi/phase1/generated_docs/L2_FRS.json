@@ -581,7 +581,6 @@
       }
     ]
   },
-  "class_path": "serial_peripheral_protocol",
   "auto_cited_sections": [
     {
       "file_ref": "phase1/input_doc/MIPI_DSI_Spec.txt:24",

@@ -14,6 +14,7 @@
     }
   ],
   "no_analog": false,
+  "analog_digital_interface_present": true,
   "external_components": [],
   "electrical_specs": [
     {
@@ -73,6 +74,454 @@
       "source": "PCIe_1.0_base_spec.pdf",
       "raw": "VRX-DIFF = 0 mV                                     VRX-DIFF = 0 mV",
       "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "2.5",
+      "unit": "GHz",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "30.0",
+      "unit": "kHz",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "500.0",
+      "unit": "MHz",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "33.0",
+      "unit": "kHz",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "250.0",
+      "unit": "MHz",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "1.25",
+      "unit": "GHz",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "50.0",
+      "unit": "MHz",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "66.0",
+      "unit": "MHz",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "2.0",
+      "unit": "Hz",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "0.5",
+      "unit": "V",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "0.0",
+      "unit": "V",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "2000.0",
+      "unit": "V",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "800.0",
+      "unit": "V",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "0.6",
+      "unit": "V",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "0.3",
+      "unit": "V",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "0.25",
+      "unit": "V",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "800.0",
+      "unit": "mV",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "175.0",
+      "unit": "mV",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.2",
+      "unit": "V",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "20.0",
+      "unit": "mV",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "100.0",
+      "unit": "mV",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "25.0",
+      "unit": "mV",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "600.0",
+      "unit": "mV",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "0.0",
+      "unit": "mV",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "566.0",
+      "unit": "mV",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "505.0",
+      "unit": "mV",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "12.0",
+      "unit": "V",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "3.3",
+      "unit": "V",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.8",
+      "unit": "V",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "381.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "383.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "385.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "386.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "1.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "388.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "389.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "390.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "391.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "392.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "393.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "394.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "395.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "396.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "14.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "18.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "375.0",
+      "unit": "mA",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "20.0",
+      "unit": "mA",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "0.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "2.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "3.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "4.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "5.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "6.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "7.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "8.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "9.0",
+      "unit": "A",
+      "source": "PCIe_1.0_base_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
     }
   ],
   "design_parameters": [
@@ -295,7 +744,6 @@
       }
     ]
   },
-  "analog_digital_interface_present": true,
   "signaling_summary": "Per-Lane low-voltage differential signaling on TXp/TXn (transmit) and RXp/RXn (receive) pairs. Both ends are AC-coupled — DC common-mode voltages at TX and RX can be different (process-technology independent). The Physical Layer Electrical Sub-Block specifies the differential transmitter (Section 4.3.3) and receiver (Section 4.3.4) characteristics. Gen 1 line rate is 2.5 Gb/s per Lane per direction. Embedded clock is recovered by the receiver from the 8b/10b-encoded stream (no separate clock line on the Link).",
   "transmitter_specs_minimum_canonical": {
     "unit_interval_ns_nominal": 0.4,

@@ -14,7 +14,6 @@
   "no_l13_test_cases_in_input": true,
   "trim_loop": [],
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
   "lab_calibration_present": false,
   "notes": "EtherCAT does not require analog calibration. The 'calibration' content is the DC propagation-delay measurement during start-up, captured into System Time Delay per SubDevice. Once captured, runs deterministically forever (PI-loop drift only).",
   "lab_measurement_targets_from_spec": [

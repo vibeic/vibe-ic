@@ -19,7 +19,7 @@
   "extraction_evidence": {
     "input/docs/TPM_Spec.pdf": []
   },
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "crypto_accelerator",
   "protocol_type": "Host-mastered command-response over LPC / SPI / I2C MMIO FIFO; commands are octet streams that begin with a 10-byte header (TPM_ST + commandSize + commandCode) followed by handle area, authorization session area, and parameter area; responses mirror the framing.",
   "frame_format": {
     "command_header": {

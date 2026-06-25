@@ -12,19 +12,8 @@
   "submodules": [],
   "no_submodules_in_input": true,
   "sim_only_modules": [],
-  "fsm_states": [
-    {
-      "name": "IMAGE",
-      "transitions": [],
-      "evidence": "input/docs/coresight_spec.txt (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "RECONSTRUCT",
-      "transitions": [],
-      "evidence": "input/docs/coresight_spec.txt (prose state-to-state v1.6.484)"
-    }
-  ],
-  "no_fsm_states_in_input": false,
+  "fsm_states": [],
+  "no_fsm_states_in_input": true,
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
   "internal_wires": [],
@@ -101,7 +90,6 @@
   "interface_types": [],
   "no_interface_types_in_input": true,
   "chip_top_interfaces": [],
-  "class_path": "digital_arithmetic_primitive",
   "module_role": "Standardized debug-access architecture instantiated inside virtually every Arm Cortex-based SoC. Each compliant SoC contains a Debug Access Port (DAP) consisting of: (1) a 2-pin (SWD-DP) or 4-pin (JTAG-DP) or mode-switchable (SWJ-DP) Debug Port at the wire layer, (2) a DP register file, and (3) one or more Access Ports (MEM-AP variants, JTAG-AP, etc.) selected by SELECT.APSEL.",
   "integration_overview": {
     "wire_count_mandatory": 2,

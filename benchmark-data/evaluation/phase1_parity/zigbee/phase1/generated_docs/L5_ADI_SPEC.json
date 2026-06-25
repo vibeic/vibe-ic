@@ -14,6 +14,7 @@
     }
   ],
   "no_analog": false,
+  "analog_digital_interface_present": true,
   "external_components": [],
   "electrical_specs": [
     {
@@ -35,6 +36,70 @@
       "source": "zigbee_spec.txt",
       "raw": "Channel 11 = 2405 MHz ... Channel 26 = 2480 MHz.",
       "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "2.4",
+      "unit": "GHz",
+      "source": "zigbee_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "915.0",
+      "unit": "MHz",
+      "source": "zigbee_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "868.0",
+      "unit": "MHz",
+      "source": "zigbee_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "5.0",
+      "unit": "MHz",
+      "source": "zigbee_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "2405.0",
+      "unit": "MHz",
+      "source": "zigbee_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "2480.0",
+      "unit": "MHz",
+      "source": "zigbee_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "868.3",
+      "unit": "MHz",
+      "source": "zigbee_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "32.0",
+      "unit": "MHz",
+      "source": "zigbee_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
     }
   ],
   "design_parameters": [
@@ -195,7 +260,6 @@
     ]
   },
   "class_path": "pure_analog",
-  "analog_digital_interface_present": true,
   "signaling_summary": "2.4 GHz RF: Offset-QPSK (O-QPSK) with half-sine pulse shaping (equivalent to MSK) over Direct Sequence Spread Spectrum. Each 4-bit symbol selects one of 16 nearly-orthogonal 32-chip PN sequences; chip rate 2.0 Mchip/s, symbol rate 62.5 ksymbol/s, 250 kbps. Receiver provides Energy Detection (ED), Clear Channel Assessment (CCA), Link Quality Indication (LQI) and RSSI. The RF port is differential (RF_P/RF_N) to an external balun/antenna match.",
   "modulation": "O-QPSK, half-sine pulse shaping (2.4 GHz); BPSK at 868/915 MHz.",
   "spreading": {
