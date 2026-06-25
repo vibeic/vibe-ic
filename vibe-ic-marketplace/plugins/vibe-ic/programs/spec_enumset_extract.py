@@ -242,19 +242,53 @@ def _strip_example_sections(text: str) -> str:
     return "".join(out)
 
 
+# A REGISTER-MAP table header (Offset/Address + Access/Width) — its rows map an
+# OFFSET to a register NAME, NOT a code to a meaning, so it is owned by
+# spec_regmap_extract and must NOT be read as an enum set (the SPI-datasheet
+# precision leak: `| 0x00 | CTRL | RW | 32 |` was minting an enum member).
+_REGMAP_HDR_OFFSET_RE = re.compile(r"\b(offset|address|addr)\b", re.I)
+_REGMAP_HDR_ACCESS_RE = re.compile(r"\b(access|width|r/?w|rw|ro|wo)\b", re.I)
+# A SELECTOR/ENCODING column name in the FIRST header cell — a table whose first
+# column enumerates a mode / select / encoding / type field MAY use small DECIMAL
+# codes (0,1,2,3) that the sized/hex/bin literal matchers do not catch.
+_SELECTOR_HDR_RE = re.compile(
+    r"\b(mode|sel|select|selector|encoding|enc|state|type|code|field|opcode|"
+    r"cmd|command|setting|option|config)\b", re.I)
+_SMALL_DEC_RE = re.compile(r"^\d{1,3}$")
+
+
 def _from_pipe_tables(text: str) -> List[tuple]:
-    """Each `| code | meaning |` row whose FIRST cell holds a code literal."""
+    """Each `| code | meaning |` row whose FIRST cell holds a code literal.
+
+    Table-aware: a REGISTER-MAP table (Offset/Address + Access/Width header) is
+    skipped (it is a register map, not an enum), and a SELECTOR table (first
+    header column = mode/sel/encoding/…) additionally accepts a small DECIMAL code
+    so a `| MODE | … |` / `0 | … | meaning` mode table is recovered."""
     out: List[tuple] = []
-    for raw in text.splitlines():
+    lines = text.splitlines()
+    is_regmap = False
+    is_selector = False
+    for i, raw in enumerate(lines):
         m = _MD_ROW_RE.match(raw)
         if not m:
+            is_regmap = is_selector = False   # left the table
             continue
-        body = m.group(1)
         if _MD_DELIM_RE.match(raw.strip().strip("|")):
-            continue  # header delimiter row
-        cells = [c.strip() for c in body.split("|")]
+            continue  # header delimiter row (state already set from the header)
+        cells = [c.strip() for c in m.group(1).split("|")]
         if len(cells) < 2:
             continue
+        # A header row is one IMMEDIATELY FOLLOWED BY a `|---|` delimiter — classify
+        # the table from it and consume no data from it.
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        if _MD_DELIM_RE.match(nxt.strip().strip("|")):
+            hdr = " ".join(cells).lower()
+            is_regmap = bool(_REGMAP_HDR_OFFSET_RE.search(hdr)
+                             and _REGMAP_HDR_ACCESS_RE.search(hdr))
+            is_selector = bool(_SELECTOR_HDR_RE.search(cells[0]))
+            continue
+        if is_regmap:
+            continue  # a register map is NOT an enum set (owned by spec_regmap_extract)
         # find the code cell (the first cell containing a code literal)
         code_cell = None
         code_lit = None
@@ -265,6 +299,10 @@ def _from_pipe_tables(text: str) -> List[tuple]:
                 code_cell = c
                 code_lit = lit.group(0)
                 break
+        # a SELECTOR table may encode with a small decimal in the first cell
+        if code_lit is None and is_selector and _SMALL_DEC_RE.match(cells[0]):
+            code_cell = cells[0]
+            code_lit = cells[0]
         if code_lit is None:
             continue
         # meaning = the concatenation of the OTHER cells (the value/description)
@@ -330,6 +368,12 @@ def _from_bullets(text: str) -> List[tuple]:
         line = raw.strip()
         if not line:
             continue
+        # A markdown TABLE ROW is owned by `_from_pipe_tables` (which applies the
+        # register-map / selector classification). Skipping it here prevents a
+        # register-map row (`| 0x00 | CTRL | RW | … |`) the table pass deliberately
+        # dropped from being re-minted as a bare-literal bullet enum. chip-AGNOSTIC.
+        if _MD_ROW_RE.match(raw):
+            continue
         lit = (_SIZED_RE.search(line) or _HEX0X_RE.search(line)
                or _BIN0B_RE.search(line))
         if lit:
@@ -367,6 +411,13 @@ def _lit_cohort(code: str) -> tuple:
         return (len(re.sub(r"^0[bB]", "", code)), "b0b")
     if re.fullmatch(r"[01]{2,8}", code):
         return (len(code), "bare")
+    # A bare small DECIMAL selector code (`MODE` table 0/1/2/3). These reach the
+    # cohorter ONLY from `_from_pipe_tables`' SELECTOR-table path (no other source
+    # emits a bare decimal — table rows are skipped by `_from_bullets`), so a fixed
+    # survivable cohort groups the mode values without admitting incidental
+    # decimals. chip-AGNOSTIC.
+    if re.fullmatch(r"\d{1,3}", code):
+        return (2, "dec")
     return (0, "?")
 
 
