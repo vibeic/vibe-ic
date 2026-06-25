@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""test_cvdp_context_param_defaults.py — pins cvdp_width_resolve.context_param_defaults:
+"""test_cvdp_context_param_defaults.py — pins verilog_width_resolve.context_param_defaults:
 the CONVERGE lever that closes `param_expression_width` extraction gaps by reading a
 parameter's DECLARED DEFAULT from the PROVIDED input.context RTL (§3.9 spec chain;
 header-level config, never the functional body; merged BELOW prompt/tb defaults).
@@ -13,7 +13,7 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
-import cvdp_width_resolve as W  # noqa: E402
+import verilog_width_resolve as W  # noqa: E402
 
 
 def _rec(ctx_files):

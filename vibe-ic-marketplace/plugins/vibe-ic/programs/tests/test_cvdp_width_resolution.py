@@ -8,7 +8,7 @@ EXPRESSION the literal `[\\d+:\\d+]` reader could not resolve:
   param_override_width    — `[N*IN_WIDTH-1:0]` / a `NUM_INPUTS * WIDTH` cell
   range_before_name       — `[1:0] resp_o` (literal range PRECEDES the name)
 
-cvdp_width_resolve reads those forms WITHOUT touching any golden RTL body: it
+verilog_width_resolve reads those forms WITHOUT touching any golden RTL body: it
 harvests the parameter-DEFAULT table from the prompt's partial module header /
 prose / parameter table, then resolves each port's symbolic width to its integer
 default. The bridge re-emits a PARAMETERIZED header so the harness's `#(.N(...))`
@@ -41,7 +41,7 @@ if str(PROG) not in sys.path:
 
 import cvdp_atomic_bridge as B  # noqa: E402
 import cvdp_complete_extract as CE  # noqa: E402
-import cvdp_width_resolve as W  # noqa: E402
+import verilog_width_resolve as W  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #

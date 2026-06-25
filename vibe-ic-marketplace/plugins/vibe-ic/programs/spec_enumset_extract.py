@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cvdp_enumset_extract.py — PROGRAM-FIRST structural extractor for CVDP
+"""spec_enumset_extract.py — PROGRAM-FIRST structural extractor for CVDP
 enumerated-mode (control-map) specs. [chip-AGNOSTIC, §4.05 no-leak]
 
 WHY
@@ -46,7 +46,7 @@ chip-AGNOSTIC: keyed on the literal-map STRUCTURE (sized literals, pipe tables,
 parameter decls, case labels) — NO chip / vendor / SKU / problem-id literal.
 
 CLI
-    python3 cvdp_enumset_extract.py --prompt FILE   # -> JSON list to stdout
+    python3 spec_enumset_extract.py --prompt FILE   # -> JSON list to stdout
 """
 from __future__ import annotations
 

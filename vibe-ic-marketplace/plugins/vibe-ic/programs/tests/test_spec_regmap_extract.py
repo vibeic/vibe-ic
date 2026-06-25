@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tests/test_cvdp_regmap_extract.py — cvdp_regmap_extract structural extractor.
+"""tests/test_spec_regmap_extract.py — spec_regmap_extract structural extractor.
 
 Covers the three load-bearing contracts:
   (a) POSITIVE  — a real CVDP register-map table (verbatim from ttc_lite_0001)
@@ -9,12 +9,12 @@ Covers the three load-bearing contracts:
                   NO `0xNN` offset yields [] (no fabrication);
   (c) chip-AGNOSTIC — renaming every identifier yields the SAME item count.
 
-Bare `import cvdp_regmap_extract` resolves via the tree conftest (programs/ on
+Bare `import spec_regmap_extract` resolves via the tree conftest (programs/ on
 sys.path).
 """
 from __future__ import annotations
 
-import cvdp_regmap_extract as rm
+import spec_regmap_extract as rm
 
 
 # Verbatim register-map table from cvdp_copilot_ttc_lite_0001.txt (the prompt

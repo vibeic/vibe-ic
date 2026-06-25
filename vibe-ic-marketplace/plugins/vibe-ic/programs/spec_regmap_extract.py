@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cvdp_regmap_extract.py — PROGRAM-FIRST structural register-map extractor.
+"""spec_regmap_extract.py — PROGRAM-FIRST structural register-map extractor.
 
 A CVDP "register map" spec states a peripheral's programming model as either
 
@@ -47,7 +47,7 @@ Public API
         stations=['user_prompt'] so it drops straight into the checklist.
 
 CLI
-    python3 cvdp_regmap_extract.py --prompt FILE   # prints items as JSON
+    python3 spec_regmap_extract.py --prompt FILE   # prints items as JSON
 """
 from __future__ import annotations
 

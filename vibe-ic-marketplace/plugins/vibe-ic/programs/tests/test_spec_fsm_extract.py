@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for cvdp_fsm_extract.extract — PROGRAM-FIRST structural extractor for
+"""Tests for spec_fsm_extract.extract — PROGRAM-FIRST structural extractor for
 CVDP FSM-transition specs (fsm_state + fsm_transition items).
 
 Covers (per the deliverable contract):
@@ -21,7 +21,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from cvdp_fsm_extract import extract  # noqa: E402
+from spec_fsm_extract import extract  # noqa: E402
 
 
 def _states(items):

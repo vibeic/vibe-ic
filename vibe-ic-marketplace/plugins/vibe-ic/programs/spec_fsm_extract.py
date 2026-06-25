@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cvdp_fsm_extract.py — PROGRAM-FIRST structural extractor for stated FSMs.
+"""spec_fsm_extract.py — PROGRAM-FIRST structural extractor for stated FSMs.
 
 A large family of CVDP `code_generation` prompts (and any L-doc / datasheet)
 state a Finite State Machine EXPLICITLY: a set of NAMED states plus the
@@ -49,8 +49,8 @@ CONTRACT
     }
 
 CLI
-    python3 cvdp_fsm_extract.py <prompt.txt> [--json]
-    cat prompt.txt | python3 cvdp_fsm_extract.py -
+    python3 spec_fsm_extract.py <prompt.txt> [--json]
+    cat prompt.txt | python3 spec_fsm_extract.py -
 """
 from __future__ import annotations
 

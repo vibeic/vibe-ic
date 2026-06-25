@@ -33,7 +33,7 @@ _PROG = Path(__file__).resolve().parents[1]
 if str(_PROG) not in sys.path:
     sys.path.insert(0, str(_PROG))
 
-import cvdp_width_resolve as W  # noqa: E402
+import verilog_width_resolve as W  # noqa: E402
 import cvdp_complete_extract as E  # noqa: E402
 
 _DATASET = Path("/home/reyerchu/AI_IC_design/_extbench/cvdp_open_v110/"

@@ -41,7 +41,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import cvdp_atomic_bridge as _bridge  # toplevel_name
-import cvdp_width_resolve as _wr       # param_defaults / eval_width_expr
+import verilog_width_resolve as _wr       # param_defaults / eval_width_expr
 
 
 _DIR_RE = re.compile(r"^(input|output|inout)\b")
@@ -108,7 +108,7 @@ def _strip_comments(s: str) -> str:
 
 
 def _width_from_range(span: str, params: Dict[str, int]) -> Optional[int]:
-    """`[hi:lo]` -> width int, resolving param expressions via cvdp_width_resolve.
+    """`[hi:lo]` -> width int, resolving param expressions via verilog_width_resolve.
     A scalar (no range) -> 1. Unresolvable param expr -> None (presence only)."""
     span = span.strip()
     if not span:

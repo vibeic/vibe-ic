@@ -22,7 +22,7 @@ REUSE: the shipped `cvdp_atomic_bridge` supplies the INTERFACE — `toplevel_nam
 re-derive the harness plumbing. (We do NOT edit the bridge — this solver is a
 standalone family solver exposing the same `solve(record)->Optional[str]` shape as
 the other `cvdp_*_synth` modules.) The literal-cell / table-row grammar is composed
-HERE, extending the markdown forms `cvdp_enumset_extract` / `oracle_table_synth`
+HERE, extending the markdown forms `spec_enumset_extract` / `oracle_table_synth`
 miss (multi-output literal columns + a per-table input/output split).
 
 §4.05 PARSE-OR-SKIP / NO-CHEAT (binding):

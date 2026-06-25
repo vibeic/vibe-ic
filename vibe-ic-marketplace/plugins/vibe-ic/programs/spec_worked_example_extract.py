@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cvdp_worked_example_extract.py — PROGRAM-FIRST structural worked-example /
+"""spec_worked_example_extract.py — PROGRAM-FIRST structural worked-example /
 latency extractor for CVDP worked-example-style prompts.
 
 WHY THIS EXISTS
@@ -49,8 +49,8 @@ chip-AGNOSTIC: pure example/latency grammar; NO chip / vendor / SKU literal
 (enforced by `programs/source_chip_agnostic_check.py .`).
 
 CLI
-    python3 cvdp_worked_example_extract.py PROMPT_FILE [PROMPT_FILE ...]
-    python3 cvdp_worked_example_extract.py --text "for input 0x3 the output is 5"
+    python3 spec_worked_example_extract.py PROMPT_FILE [PROMPT_FILE ...]
+    python3 spec_worked_example_extract.py --text "for input 0x3 the output is 5"
     (add --json for machine-readable output)
 """
 from __future__ import annotations

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cvdp_width_resolve.py — SHARED parameterized-width reader for the CVDP layer.
+"""verilog_width_resolve.py — SHARED parameterized-width reader (Verilog/SystemVerilog spec prose). chip-AGNOSTIC: any benchmark (CVDP/VerilogEval/RTLLM) or Phase-1 design doc.
 
 WHY (owner directive 2026-06-23): the dominant CVDP EXTRACTION_GAP types are ports
 whose WIDTH is stated as a PARAMETER EXPRESSION the literal `[\\d+:\\d+]` reader
