@@ -30868,6 +30868,38 @@ def gen_l5_adi_spec(project: Path,
                     "raw": entry["raw"],
                     "extraction_strategy": "bullet_kv_pair_spec",
                 })
+        # v1.2.35 — CLEAN electrical pass (spec_electrical_extract). The
+        # bullet_kv_pair_spec parser above was deliberately tightened to drop
+        # prose-fragment noise, which also dropped real prose-embedded electrical
+        # specs ("VDD = 1.2 V", "runs at 800 MHz"). `spec_electrical_extract` is
+        # the §4.05-safe recovery: it fires ONLY on a real number+SI-unit +
+        # qualifying context (supply / clock / current), so it adds the genuine
+        # electrical facts WITHOUT re-introducing the prose noise. Additive +
+        # deduped against elec_seen; chip-AGNOSTIC.
+        try:
+            import spec_electrical_extract as _ee_mod
+            _ee_label = {"supply_voltage": "VDD", "clock_frequency": "FREQ",
+                         "current_spec": "IDD"}
+            for _ee_it in _ee_mod.extract(text or ""):
+                _ee_kind = _ee_it.get("kind")
+                if _ee_kind not in _ee_label:
+                    continue
+                _ee_unit = _ee_it.get("unit") or ""
+                _ee_val = str(_ee_it.get("value"))
+                _ee_key = (_ee_label[_ee_kind], _ee_val + _ee_unit)
+                if _ee_key in elec_seen:
+                    continue
+                elec_seen.add(_ee_key)
+                elec_specs.append({
+                    "param": _ee_label[_ee_kind],
+                    "parameter": _ee_it.get("kind"),
+                    "value": _ee_val,
+                    "unit": _ee_unit,
+                    "source": fname,
+                    "extraction_strategy": "spec_electrical_extract",
+                })
+        except Exception:
+            pass
 
     # v1.6.321 — for #220 ORGANIC P2. Heading-style and RST
     # `:Parameter:` extractor pass. Runs across every extracted
@@ -31173,7 +31205,13 @@ def gen_l5_adi_spec(project: Path,
             "analog_blocks": [],
             "no_analog": True,
             "external_components": [],
-            "electrical_specs": [],
+            # v1.2.35 — a digital-only IC still has REAL electrical specs (supply
+            # rails / clock / current). The clean `spec_electrical_extract` pass
+            # (number+SI-unit+context, §4.05-safe — NOT the prose-noise bullet_kv)
+            # already populated `elec_specs` above; carry it here so a no-analog
+            # protocol's VDD/clock are not discarded. design_parameters stays []
+            # (its unitless prose-bullet form is the LLM/program-first boundary).
+            "electrical_specs": elec_specs,
             "design_parameters": [],
             "source_documents": [f"input/docs/{f}" for f in
                                  sorted(extracted.keys())],
