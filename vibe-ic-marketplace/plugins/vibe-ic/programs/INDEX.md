@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 797
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 797)
+- **Total programs (excluding helpers / shims):** 798
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 798)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 788 |
+| `any` | 789 |
 
 ## Alphabetical listing
 
@@ -205,6 +205,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `cvdp_dice_roller_synth` | any | — | DETERMINISTIC solver for the CVDP digital dice-roller. |
 | `cvdp_encoder_synth` | any | — | deterministic SOLVER for the CVDP PRIORITY-ENCODER / |
 | `cvdp_enumset_extract` | any | — | PROGRAM-FIRST structural extractor for CVDP |
+| `cvdp_firstbit_synth` | any | — | DETERMINISTIC solver for the CVDP first-bit decoder. |
 | `cvdp_fsm_extract` | any | — | PROGRAM-FIRST structural extractor for stated FSMs. |
 | `cvdp_gf_synth` | any | — | a DETERMINISTIC solver for the CVDP Galois-field / carry-less |
 | `cvdp_graycode_parity_synth` | any | — | a DETERMINISTIC solver for the CVDP gray-code |
@@ -869,7 +870,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (788 programs)
+### `any` (789 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1047,6 +1048,7 @@ _(no programs in this group)_
 - `cvdp_dice_roller_synth` — DETERMINISTIC solver for the CVDP digital dice-roller.
 - `cvdp_encoder_synth` — deterministic SOLVER for the CVDP PRIORITY-ENCODER /
 - `cvdp_enumset_extract` — PROGRAM-FIRST structural extractor for CVDP
+- `cvdp_firstbit_synth` — DETERMINISTIC solver for the CVDP first-bit decoder.
 - `cvdp_fsm_extract` — PROGRAM-FIRST structural extractor for stated FSMs.
 - `cvdp_gf_synth` — a DETERMINISTIC solver for the CVDP Galois-field / carry-less
 - `cvdp_graycode_parity_synth` — a DETERMINISTIC solver for the CVDP gray-code
