@@ -186,6 +186,141 @@ def _has_gated_pnr_literal(text: str) -> bool:
     return bool(_GATED_PNR_LITERAL.search(_strip_hash_comments(text)))
 
 
+# --------------------------------------------------------------------------- #
+# Harness compose WORKING_DIR normalization (read-only-build-dir false-FAIL).
+# --------------------------------------------------------------------------- #
+# A CVDP harness `docker-compose.yml` mounts `./src:/src:ro` (read-only) and runs
+# `pytest /src/test_runner.py`. cocotb's `runner.build()` creates its `sim_build/`
+# directory RELATIVE TO THE WORKING DIRECTORY; when the compose service declares
+# `working_dir: /code/rundir` (the scorer mounts `rundir` writable) the build lands
+# in a writable dir and the test runs. A harness whose compose OMITS `working_dir`
+# leaves the cwd at the image default, so cocotb tries to mkdir `sim_build` under
+# the read-only `/src` mount → `OSError: [Errno 30] Read-only file system:
+# '/src/sim_build'` → pytest exits nonzero → the WHOLE problem false-FAILs even
+# though the RTL is correct (field-measured on fibonacci_series_0001: the DUT
+# PASSes 2/2 when a writable cwd is provided, FAILs at collection otherwise).
+#
+# This is a harness PACKAGING gap, not a DUT defect: sibling problems (sorter,
+# dice) ship `working_dir: /code/rundir` and score fine. The normalizer injects
+# the same `working_dir` into any service that lacks one, making the OSS score
+# reproduce the writable-build-dir the well-formed harnesses already get.
+# chip-AGNOSTIC: a pure compose-env fix; no design/vendor knowledge.
+_RUNDIR_WORKDIR = "/code/rundir"
+_COMPOSE_NAMES = ("docker-compose.yml", "docker-compose.yaml")
+
+
+def _compose_service_blocks(text: str) -> bool:
+    """Cheap check: does this look like a compose file with a `services:` map and
+    at least one `command:`/`image:` service (i.e. a harness runner)?"""
+    return "services:" in text and ("command" in text or "image:" in text)
+
+
+def compose_missing_working_dir(problem_dir: Path) -> List[Path]:
+    """Return every harness compose file under `problem_dir` that declares a
+    runnable service but NO `working_dir:` — the read-only-build-dir false-FAIL
+    shape. Pure text scan (no YAML dependency); a `working_dir` anywhere in the
+    file is treated as already-set (compose files here carry one service)."""
+    hits: List[Path] = []
+    if not problem_dir.is_dir():
+        return hits
+    for f in sorted(problem_dir.rglob("*")):
+        if not (f.is_file() and f.name in _COMPOSE_NAMES):
+            continue
+        try:
+            txt = f.read_text(errors="ignore")
+        except OSError:
+            continue
+        if _compose_service_blocks(txt) and not re.search(
+                r"^\s*working_dir\s*:", txt, re.M):
+            hits.append(f)
+    return hits
+
+
+def inject_working_dir(text: str, workdir: str = _RUNDIR_WORKDIR) -> str:
+    """Return the compose text with `working_dir: <workdir>` added to every
+    service that lacks one. A service is a 4-space-indented `image:`/`command:`
+    key under `services:`; the new line is inserted just before the service's
+    `command:` (or `image:` if no command) at the same indent. Idempotent: a file
+    that already has a `working_dir` is returned unchanged."""
+    if re.search(r"^\s*working_dir\s*:", text, re.M):
+        return text
+    lines = text.splitlines(keepends=True)
+    # find the FIRST service-level `image:`/`env_file:`/`command:` key (6-space
+    # indent under `  service:` which is 2-space) and insert before it.
+    anchor_re = re.compile(r"^(\s+)(image|command|env_file)\s*:", )
+    for i, ln in enumerate(lines):
+        m = anchor_re.match(ln)
+        if m:
+            indent = m.group(1)
+            lines.insert(i + 1 if m.group(2) == "image" else i,
+                         f"{indent}working_dir : {workdir}\n")
+            return "".join(lines)
+    return text
+
+
+# A harness compose whose command does `pip install <pkg> && pytest …` fails under
+# the OSS scorer because the harness container runs as `--user $UID:$GID` (non-root)
+# against a PEP-668 externally-managed system Python: bare `pip install` REFUSES
+# (`error: externally-managed-environment`), the `&&` short-circuits, pytest never
+# runs, and the WHOLE problem false-FAILs on correct RTL (field-measured on
+# fibonacci_series_0001 — the ONLY no_commercial problem with a `pip install` in its
+# harness command). The fix adds `--break-system-packages`, the supported way to
+# install into the system env, idempotently. chip-AGNOSTIC: a pip-invocation env fix.
+_PIP_INSTALL_RE = re.compile(
+    r"\bpip(?:3)?\s+install\s+(?!--break-system-packages\b)")
+
+
+def compose_pip_needs_break_system(problem_dir: Path) -> List[Path]:
+    """Harness compose files whose command runs a bare `pip install` (no
+    `--break-system-packages`) — the PEP-668 non-root false-FAIL shape."""
+    hits: List[Path] = []
+    if not problem_dir.is_dir():
+        return hits
+    for f in sorted(problem_dir.rglob("*")):
+        if not (f.is_file() and f.name in _COMPOSE_NAMES):
+            continue
+        try:
+            txt = f.read_text(errors="ignore")
+        except OSError:
+            continue
+        if _PIP_INSTALL_RE.search(txt):
+            hits.append(f)
+    return hits
+
+
+def inject_pip_break_system(text: str) -> str:
+    """Add `--break-system-packages` to every bare `pip install` in the text.
+    Idempotent (an already-fixed invocation is not matched)."""
+    return _PIP_INSTALL_RE.sub(
+        lambda m: m.group(0) + "--break-system-packages ", text)
+
+
+def normalize_compose_working_dir(problem_dir: Path) -> List[Path]:
+    """FIX every harness compose under `problem_dir` whose scoring would false-FAIL
+    on correct RTL because of a read-only build dir (missing `working_dir`) AND/OR a
+    PEP-668 non-root `pip install` (missing `--break-system-packages`). Applies both
+    fixes idempotently; returns the list of files changed."""
+    changed: List[Path] = []
+    targets = set(compose_missing_working_dir(problem_dir)) | \
+        set(compose_pip_needs_break_system(problem_dir))
+    for f in sorted(targets):
+        try:
+            txt = f.read_text(errors="ignore")
+            new = inject_pip_break_system(inject_working_dir(txt))
+            if new != txt:
+                f.write_text(new)
+                changed.append(f)
+        except OSError:
+            continue
+    return changed
+
+
+def compose_needs_env_fix(problem_dir: Path) -> List[Path]:
+    """Union of the two false-FAIL shapes (missing working_dir OR bare pip install)."""
+    return sorted(set(compose_missing_working_dir(problem_dir)) |
+                  set(compose_pip_needs_break_system(problem_dir)))
+
+
 def harness_requires_pnr_image(problem_dir: Path) -> Tuple[bool, List[Path]]:
     """True iff any harness file under `problem_dir` references the
     `__OSS_PNR_IMAGE__` template (a pre-materialization area-opt / synth problem)
@@ -238,6 +373,10 @@ def main(argv=None) -> int:
     ap.add_argument("--problem-dir", default=None,
                     help="a CVDP problem dir to scan for an OSS_PNR_IMAGE "
                          "(area-opt synth) requirement (#714)")
+    ap.add_argument("--fix-compose-workdir", action="store_true",
+                    help="inject `working_dir: /code/rundir` into any harness "
+                         "compose under --problem-dir that lacks one (fixes the "
+                         "read-only-build-dir false-FAIL); requires --problem-dir")
     ap.add_argument("--json", default=None, help="write JSON verdict here")
     args = ap.parse_args(argv)
 
@@ -267,6 +406,25 @@ def main(argv=None) -> int:
             "tools": results,
         })
         deviations.extend(sim_dev)
+
+    # ── harness compose env scan / fix (when --problem-dir) ──
+    # Two false-FAIL shapes a harness compose can carry under the OSS scorer's
+    # non-root / read-only env: a missing `working_dir` (read-only build dir) and a
+    # bare `pip install` (PEP-668 externally-managed). Both make a CORRECT-RTL
+    # problem score as FAIL; `--fix-compose-workdir` repairs both idempotently.
+    if args.problem_dir:
+        pdir = Path(args.problem_dir)
+        if args.fix_compose_workdir:
+            fixed = normalize_compose_working_dir(pdir)
+            verdict["compose_env_fixed"] = [str(f) for f in fixed]
+        else:
+            needs = compose_needs_env_fix(pdir)
+            verdict["compose_needs_env_fix"] = [str(f) for f in needs]
+            if needs:
+                deviations.append(
+                    f"{len(needs)} harness compose file(s) would false-FAIL under "
+                    f"the OSS scorer (missing `working_dir` and/or a bare "
+                    f"`pip install`); pass --fix-compose-workdir to repair")
 
     # ── #714: OSS_PNR_IMAGE (synth) requirement scan (when --problem-dir) ──
     if args.problem_dir:
