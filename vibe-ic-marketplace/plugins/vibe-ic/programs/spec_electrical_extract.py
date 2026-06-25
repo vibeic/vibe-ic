@@ -121,6 +121,12 @@ _VOLT_RE = re.compile(
 _SUPPLY_CTX_RE = re.compile(
     r"\b(supply|VDDIO|VDDA|VDD|VCCIO|VCC|operating\s+voltage|core\s+voltage|"
     r"io\s+voltage|power\s+rail|rail)\b", re.IGNORECASE)
+# A REFERENCE voltage context (Vref / bandgap / a `REF` pin / "reference") within
+# the short window before a volt value — that value is a reference, not a supply
+# rail (precision guard). Searched (not anchored) so an intervening pin name
+# ("bandgap `REF` = 2.048 V") still triggers the skip. chip-AGNOSTIC.
+_REF_CTX_RE = re.compile(r"(V[_ ]?REF\w*|band[\s-]?gap|\bREF\b|reference)",
+                         re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +193,9 @@ _CELL_CURR_U = re.compile(r"^(mA|[uµμ]A|nA|A)$")
 _SUPPLY_NAME_RE = re.compile(
     r"\b(vdd|vcc|vddio|vccio|vin|vout|vldo|core|supply|rail|iovdd|avdd|dvdd)\b",
     re.IGNORECASE)
+# a FULL-SCALE / input-range qualifier on a voltage row -> a signal range, NOT a
+# supply rail (e.g. an ADC `Vin (FS, diff)` full-scale input). chip-AGNOSTIC.
+_FS_NAME_RE = re.compile(r"\b(fs|full[\s-]?scale|input\s+range)\b", re.IGNORECASE)
 
 
 def _table_cells(line: str):
@@ -225,7 +234,10 @@ def _table_items(text: str) -> List[dict]:
                             "name": name})
                 break
             if _CELL_VOLT_U.match(c):
-                if _SUPPLY_NAME_RE.search(name):
+                # "Vin" names a rail (LDO input) OR an ADC FULL-SCALE INPUT range —
+                # the latter is a signal range, not a supply. Exclude a full-scale /
+                # input-range row (precision). chip-AGNOSTIC.
+                if _SUPPLY_NAME_RE.search(name) and not _FS_NAME_RE.search(name):
                     out.append({"kind": "supply_voltage", "value": _to_float(num),
                                 "unit": c, "disp": num + " " + c,
                                 "evidence": line.strip()[:120], "name": name})
@@ -301,6 +313,17 @@ def extract(prompt_text: str) -> List[dict]:
         for m in _VOLT_RE.finditer(text):
             val = _to_float(m.group(1))
             if val is None:
+                continue
+            # PRECISION: a voltage that is a REFERENCE (Vref / bandgap) is owned by
+            # the analog reference_voltage facet, NOT a supply rail. Skip a volt
+            # whose preceding context — WITHIN THE CURRENT CLAUSE (after the last
+            # ;/|/newline, ≤40 chars) — names a reference. The clause bound stops a
+            # `REF` in a PRIOR clause from suppressing a real later supply rail.
+            _lo = max(text.rfind(";", max(0, m.start() - 40), m.start()),
+                      text.rfind("|", max(0, m.start() - 40), m.start()),
+                      text.rfind("\n", max(0, m.start() - 40), m.start()),
+                      m.start() - 40, 0)
+            if _REF_CTX_RE.search(text[_lo:m.start()]):
                 continue
             unit = m.group(2)
             disp = m.group(1).strip() + " " + unit

@@ -209,9 +209,14 @@ def _detect_converters(text: str) -> List[Dict[str, object]]:
 # ===========================================================================
 # (2) REFERENCE VOLTAGE (Vref) + value or named pin
 # ===========================================================================
-# The reference TOKEN: Vref / V_REF / VREF / "reference voltage". chip-AGNOSTIC.
+# The reference TOKEN: Vref / V_REF / VREF / "reference voltage" / "bandgap"
+# (a bandgap IS a voltage reference). chip-AGNOSTIC.
 _VREF_TOKEN_RE = re.compile(
-    r"\b(V[_ ]?REF\w*|reference\s+voltage)\b", re.IGNORECASE)
+    r"\b(V[_ ]?REF\w*|reference\s+voltage|band[\s-]?gap(?:\s+reference)?)\b",
+    re.IGNORECASE)
+# unit-only volt cell for a markdown reference-table row (`| Vref | 2.048 | … | V |`)
+_CELL_VOLT_ONLY_RE = re.compile(r"^(mV|V|volts?)$", re.IGNORECASE)
+_CELL_NUM_ONLY_RE = re.compile(r"^[±+-]?\s*(\d+(?:\.\d+)?)$")
 
 # A VOLTAGE VALUE qualifier: "1.2 V", "2.5V", "800 mV", "1.8 volts". The unit
 # (V / mV / volts) makes it a voltage; a bare number does not qualify.
@@ -275,6 +280,29 @@ def _detect_vref(text: str) -> List[Dict[str, object]]:
             "pin": pin,
             "evidence": clause.strip()[:140],
         })
+
+    # MARKDOWN reference-table row: `| Vref (internal) | 2.048 | — | V |` — the
+    # value and the unit live in SEPARATE cells, so the clause/prose value pass
+    # above misses them. A row whose NAME cell carries a Vref token + a numeric
+    # cell + a volt-unit cell is a stated reference voltage. §4.05: requires all
+    # three (ref-name + number + unit).
+    for line in text.splitlines():
+        if line.count("|") < 2:
+            continue
+        cells = [c.strip().strip("`* ") for c in line.strip().strip("|").split("|")]
+        name = cells[0] if cells else ""
+        if not _VREF_TOKEN_RE.search(name):
+            continue
+        num = next((m.group(1) for c in cells
+                    for m in [_CELL_NUM_ONLY_RE.match(c)] if m), None)
+        has_v = any(_CELL_VOLT_ONLY_RE.match(c) for c in cells)
+        if num is None or not has_v:
+            continue
+        value = num + " V"
+        if (value, None) in seen:
+            continue
+        seen.add((value, None))
+        out.append({"value": value, "pin": None, "evidence": line.strip()[:140]})
     return out
 
 
@@ -298,7 +326,9 @@ _ANALOG_PAD_TOKEN_RE = re.compile(
 # Three independent forms for a named analog signal/pad. Searched as SEPARATE
 # passes (not one alternation) so an "<deny-word> pin" hit — e.g. "input pin" —
 # does not consume the "pin <name>" that follows it ("pin ain"). chip-AGNOSTIC.
-_PAD_BACKTICK_RE = re.compile(r"`([A-Za-z_]\w*)`")
+# A backtick pad name, allowing a RANGE inside one pair (`AIN0..AIN3`): capture
+# the leading identifier (AIN0) even when a `..hi` range follows before the close.
+_PAD_BACKTICK_RE = re.compile(r"`([A-Za-z_]\w*)(?:\.\.[A-Za-z0-9_]+)?`")
 _PAD_PIN_THEN_NAME_RE = re.compile(
     r"\b(?:pin|pad|signal|port)\s+(?:named|called|labell?ed\s+)?"
     r"`?([A-Za-z_]\w*)`?", re.IGNORECASE)                # "pin [named] X"
