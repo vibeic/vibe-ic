@@ -125,7 +125,16 @@ except ImportError:  # packaged
 # they are §4.05-conservative (only structural-anchored items, [] otherwise).
 _CVDP_EXTRACTORS = []
 for _modname in ("spec_regmap_extract", "spec_enumset_extract", "spec_fsm_extract",
-                 "spec_numeric_pack_extract", "spec_worked_example_extract"):
+                 "spec_numeric_pack_extract", "spec_worked_example_extract",
+                 # GENERAL L-doc facet extractors (close the Phase-1 completeness
+                 # gaps the survey found: L5 analog/digital interface, L7 test/debug,
+                 # L11 OTP, L13 lab calibration, per-signal signedness, clock-freq +
+                 # electrical). Each is §4.05-conservative (structural-anchored only,
+                 # [] otherwise) and benchmark-agnostic — they enrich the spec-coverage
+                 # checklist for ANY design doc, not just a benchmark record.
+                 "spec_analog_iface_extract", "spec_test_debug_extract",
+                 "spec_otp_extract", "spec_calibration_extract",
+                 "spec_signedness_extract", "spec_electrical_extract"):
     try:
         _CVDP_EXTRACTORS.append(__import__(_modname))
     except Exception:  # extractor not present in this checkout -> skip silently
@@ -138,6 +147,15 @@ for _modname in ("spec_regmap_extract", "spec_enumset_extract", "spec_fsm_extrac
 _PROSE_HEURISTIC_KINDS = frozenset({
     "reset", "latency", "enum_boundary", "worked_example",
     "signedness", "byte_order", "overflow", "handshake", "enum_set",
+    # GENERAL L-doc facet kinds (additive coverage; non-blocking unless the RTL
+    # corroborates them) from the L5/L7/L11/L13/signedness/electrical extractors.
+    "analog_converter", "reference_voltage", "analog_pad",
+    "scan_chain", "jtag_tap", "bist", "test_mode",
+    "otp_field", "otp_lock",
+    "calibration_field", "calibration_procedure",
+    "signed_operand",
+    "clock_frequency", "supply_voltage", "current_spec",
+    "temperature_range", "slew_rate",
 })
 # 'port' and 'table_row' come from the canonical structural extractor
 # (`extract_spec_contract`: real table / given-code header), so they stay
