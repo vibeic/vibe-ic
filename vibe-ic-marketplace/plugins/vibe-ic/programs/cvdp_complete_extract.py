@@ -599,6 +599,15 @@ def _complete_interface(record: dict, top: str
     def _place(name: str, direction: str):
         if name in params:
             return  # a config parameter — not a port (correctly filtered)
+        # a name DECLARED as a `parameter`/`localparam` (it resolved to a default in
+        # `param_defaults`) is a CONFIG PARAMETER, never a port — even if the cocotb
+        # harness reads it as a top-level signal. `strobe_divider` declares
+        # `#(parameter MaxRatio_g = 10, parameter Latency_g = 1)`; without this guard
+        # the `_g`-suffixed params were emitted as output ports and reported a false
+        # `width_not_stated` gap. (`params` above is only the HARNESS-driven set; this
+        # adds the prompt/context-declared parameter defaults.)
+        if name in param_defaults:
+            return
         w, src = _resolve_width(prompt, table, name, param_defaults)
         if w is not None:
             iface.append({"name": name, "dir": direction, "width": w,
