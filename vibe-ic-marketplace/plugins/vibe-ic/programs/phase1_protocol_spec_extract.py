@@ -93,9 +93,16 @@ def extract_l14_versioning(text: str) -> Dict[str, Any]:
 
     # Deprecated features — sentences shaped "is deprecated" or
     # "no longer supported" or "removed in".
+    # Capture the deprecated FEATURE NAME, skipping an optional generic noun that
+    # often sits between the name and the verb ("The WID signal is deprecated" ->
+    # WID, not "signal"). The noun is consumed but not captured. chip-AGNOSTIC.
     dep_re = re.compile(
-        r"\b(\w[\w.\-]*)\s+(?:is\s+deprecated|"
-        r"no\s+longer\s+supported|removed\s+in)\b", re.I)
+        r"\b([A-Za-z_][\w.\-]*)\s+"
+        r"(?:signal|feature|field|mode|bit|option|register|attribute|"
+        r"capability|interface)?\s*"
+        r"(?:is|are|was|were)?\s*"   # consume the auxiliary so "PID is no longer
+                                     # supported" captures PID, not "is"
+        r"(?:deprecated|no\s+longer\s+supported|removed\s+in|obsolete)\b", re.I)
     for i, line in enumerate(_lines_of(text), start=1):
         m = dep_re.search(line)
         if m:
@@ -129,8 +136,12 @@ def extract_l14_versioning(text: str) -> Dict[str, Any]:
 # explicit "<bits>: <name>" pattern). This drops document-layout tables,
 # section-summary tables, and generic data tables that aren't truly
 # encoding lookups.
+# `Table A2-3 <name>` (ARM AMBA) OR `Table 8-1 <name>` (USB / PCIe / most specs) —
+# the leading section LETTER is optional so a numeric table id is recovered too.
+# The body still must carry an encoding-shape row (or an encoding-keyword title),
+# so a generic numeric data table is NOT promoted to an encoding table. §4.05.
 _L15_TABLE_HEADER_RE = re.compile(
-    r"^\s*(?P<table>Table\s+[A-Z]\d+-\d+)\s+(?P<name>[A-Z].+?)\s*$"
+    r"^\s*(?P<table>Table\s+[A-Z]?\d+-\d+)\s+(?P<name>[A-Z].+?)\s*$"
 )
 
 # Patterns that indicate a row carries an encoding (vs prose).
@@ -284,7 +295,10 @@ _L17_SIG_RE = re.compile(
         r"ID|USER|DATA|STRB|LAST|RESP|CHK))"
     r"\s+"
     r"(?P<dir>Master|Slave)\s+"
-    r"(?P<sem>[A-Z].{10,200})\s*$"
+    # semantics: a real description, but as short as "Read data." / "Read ID." —
+    # the old `.{10,200}` floor (>=11 chars) dropped a legitimate short-semantics
+    # signal row (e.g. RDATA). >=4 chars still rejects a bare token. chip-AGNOSTIC.
+    r"(?P<sem>[A-Z].{3,200})\s*$"
 )
 
 
