@@ -45,7 +45,7 @@
       }
     ]
   },
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "crypto_accelerator",
   "auto_discovered_literals": [
     {
       "literal": "1s",

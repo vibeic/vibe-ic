@@ -34,7 +34,7 @@
     ],
     "deprecated_features": [
       {
-        "feature": "32-bits",
+        "feature": "bits",
         "quote": "greater than 32-bits is deprecated.",
         "line": 14330
       }

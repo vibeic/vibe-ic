@@ -2,20 +2,20 @@
   "overall": {
     "denominator": 3219,
     "total": 4500,
-    "numerator": 2198,
-    "pct": 68.3,
+    "numerator": 2196,
+    "pct": 68.2,
     "target_pct": 80.0,
     "status": "FAIL"
   },
   "curated": {
     "denominator": 3219,
-    "numerator": 2198,
-    "pct": 68.3
+    "numerator": 2196,
+    "pct": 68.2
   },
   "hands_on": {
     "denominator": 3257,
-    "numerator": 2236,
-    "pct": 68.7
+    "numerator": 2234,
+    "pct": 68.6
   },
   "per_l_doc": [
     {
@@ -30,7 +30,7 @@
     },
     {
       "name": "L3_CMD_PROTOCOL",
-      "evidence_count": 2,
+      "evidence_count": 1,
       "todo_count": 0
     },
     {
@@ -75,7 +75,7 @@
     },
     {
       "name": "L12_BEHAVIORAL_SEQUENCES",
-      "evidence_count": 0,
+      "evidence_count": 1,
       "todo_count": 0
     },
     {

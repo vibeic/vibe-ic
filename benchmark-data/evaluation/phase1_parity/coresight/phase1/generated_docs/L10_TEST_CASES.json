@@ -145,7 +145,6 @@
   ],
   "no_bring_up_sequence_in_input": false,
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
   "test_cases_present": "implicit",
   "derived_compliance_test_categories": [
     "Line reset — drive ≥ 50 SWCLK cycles with SWDIO=HIGH from each state; verify SW-DP returns to Idle.",

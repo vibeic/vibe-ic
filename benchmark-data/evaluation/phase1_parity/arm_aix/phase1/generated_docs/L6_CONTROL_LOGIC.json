@@ -306,33 +306,6 @@
       }
     ]
   },
-  "extraction_strategy": {
-    "hallucination_scrub_v0_1_60": [
-      {
-        "l_doc": "L6_CONTROL_LOGIC",
-        "pattern_name": "ic_name_from_license_clause",
-        "path": "ic_name",
-        "old_value": "SUCH ARM TECHNOLOGY",
-        "new_value": "UNKNOWN_IC",
-        "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
-      }
-    ],
-    "l6_control_logic_v0_1_72": "R42: overlaid 9 L6 concepts (paragraph + L17-channel-synth)"
-  },
-  "interleaving": "interleaving of write data with different IDs was permitted in AXI3, but is deprecated in AXI4 and later.",
-  "default_ready_state_recommendation": {
-    "AWREADY": "Default HIGH recommended (slave must accept any valid address in one cycle).",
-    "WREADY": "May default HIGH only if slave can always accept write data in one cycle.",
-    "BREADY": "May default HIGH only if master can always accept a write response in one cycle.",
-    "ARREADY": "Default HIGH recommended (same reasoning).",
-    "RREADY": "May default HIGH only if master can accept read data immediately at start of read."
-  },
-  "read_transaction_fsm_master": [
-    "Drive ARADDR + AR* fields; assert ARVALID.",
-    "Wait for ARREADY handshake.",
-    "Sample RDATA + RRESP per beat when RVALID HIGH.",
-    "Assert RREADY each beat until RLAST observed."
-  ],
   "exit_from_reset": "earliest point after reset that a master is permitted to begin driving ARVALID, AWVALID, or WVALID HIGH is at a rising ACLK edge after ARESETn is HIGH.",
   "channel_dependency_rules_AXI4_AXI5_write": {
     "BVALID_dependency": [
@@ -344,6 +317,33 @@
     ],
     "note": "AXI4/AXI5 add an additional slave dependency on AW handshake before BVALID, so slaves take fewer buffering decisions independent of the address."
   },
+  "write_transaction_fsm_master": [
+    "Drive AWADDR + AW* fields; assert AWVALID.",
+    "Drive WDATA + WSTRB + WLAST per beat; assert WVALID.",
+    "Wait for AWREADY and WREADY handshakes per channel.",
+    "Wait for BVALID; sample BRESP.",
+    "Assert BREADY to complete write response."
+  ],
+  "channel_dependency_rules_AXI3_write": {
+    "BVALID_dependency": [
+      "WVALID",
+      "WREADY",
+      "WLAST"
+    ]
+  },
+  "read_transaction_fsm_master": [
+    "Drive ARADDR + AR* fields; assert ARVALID.",
+    "Wait for ARREADY handshake.",
+    "Sample RDATA + RRESP per beat when RVALID HIGH.",
+    "Assert RREADY each beat until RLAST observed."
+  ],
+  "channel_dependency_rules_read": {
+    "RVALID_dependency": [
+      "ARVALID",
+      "ARREADY"
+    ]
+  },
+  "interleaving": "interleaving of write data with different IDs was permitted in AXI3, but is deprecated in AXI4 and later.",
   "fsm_hints": {
     "per_channel_states": [
       "IDLE      (VALID=0)",
@@ -352,26 +352,16 @@
     ],
     "rule": "Source MUST NOT wait for READY before asserting VALID. Destination MAY wait for VALID before asserting READY. Once VALID is asserted it must remain asserted until the handshake cycle (rising ACLK with both VALID and READY HIGH)."
   },
-  "channel_dependency_rules_AXI3_write": {
-    "BVALID_dependency": [
-      "WVALID",
-      "WREADY",
-      "WLAST"
-    ]
+  "default_ready_state_recommendation": {
+    "AWREADY": "Default HIGH recommended (slave must accept any valid address in one cycle).",
+    "WREADY": "May default HIGH only if slave can always accept write data in one cycle.",
+    "BREADY": "May default HIGH only if master can always accept a write response in one cycle.",
+    "ARREADY": "Default HIGH recommended (same reasoning).",
+    "RREADY": "May default HIGH only if master can accept read data immediately at start of read."
   },
-  "channel_dependency_rules_read": {
-    "RVALID_dependency": [
-      "ARVALID",
-      "ARREADY"
-    ]
+  "extraction_strategy": {
+    "l6_control_logic_v0_1_72": "R42: overlaid 9 L6 concepts (paragraph + L17-channel-synth)"
   },
-  "write_transaction_fsm_master": [
-    "Drive AWADDR + AW* fields; assert AWVALID.",
-    "Drive WDATA + WSTRB + WLAST per beat; assert WVALID.",
-    "Wait for AWREADY and WREADY handshakes per channel.",
-    "Wait for BVALID; sample BRESP.",
-    "Assert BREADY to complete write response."
-  ],
   "anti_deadlock_rule": "Inside the slave, VALID for an outgoing channel must not be combinationally dependent on the READY of the same channel; this prevents combinational deadlock.",
   "fields": {
     "ic_name": "AMBA AXI / ACE Protocol Specification",

@@ -602,7 +602,6 @@
       }
     ]
   },
-  "class_path": "serial_peripheral_protocol",
   "auto_cited_sections": [
     {
       "file_ref": "phase1/input_doc/HDMI_Spec.txt:45",

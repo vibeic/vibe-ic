@@ -3,26 +3,11 @@
   "doc_class": "control_logic",
   "ic_name": "ARM CoreSight On-Chip Debug and Trace Architecture",
   "reject_rules": [],
-  "fsm_states": [
-    {
-      "name": "IMAGE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/coresight_spec.txt (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "RECONSTRUCT",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/coresight_spec.txt (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    }
-  ],
+  "fsm_states": [],
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
-  "no_fsm_states_in_input": false,
-  "no_fsm_in_input": false,
+  "no_fsm_states_in_input": true,
+  "no_fsm_in_input": true,
   "fsm_tokens": [
     {
       "name": "Buffer",
@@ -47,7 +32,6 @@
       }
     ]
   },
-  "class_path": "digital_arithmetic_primitive",
   "fsm_summary": "SWD wire-level state machine sequences each 46-bit transaction through 6 phases (Request → Turnaround → ACK → Data → Parity → Turnaround). SWDIO direction flips at the Turnaround periods. The SWJ-DP variant adds a mode-select state machine that watches for the 16-bit JTAG-to-SWD (0xE79E) and SWD-to-JTAG (0xE73C) selection sequences.",
   "fsm_states_swd_transaction": [
     {

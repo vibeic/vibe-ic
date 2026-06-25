@@ -54,20 +54,6 @@
       "purpose": "Intel tools (System Console, JTAG-to-Avalon-MM master) issue Avalon-MM transfers for in-system debug."
     }
   ],
-  "AXI5_E1_features_mentioned_in_TOC": [
-    "E1.1 Atomic transactions",
-    "E1.2 Cache stashing",
-    "E1.3 Deallocating transactions",
-    "E1.4 Persist cache maintenance",
-    "E1.5 Non-secure access identifier (NSAccess)"
-  ],
-  "parity_and_protection_AXI5_E2": [
-    "E2.1 Poison",
-    "E2.2 Parity use in AMBA",
-    "E2.3 Configuration of interface protection",
-    "E2.4 Optional read data parity",
-    "E2.5 Optional write data parity"
-  ],
   "error_detection_mechanisms": [
     "Avalon-MM response codes (SLAVEERROR, DECODEERROR) flag failed / unmapped transfers.",
     "Avalon-ST error bits flag per-beat data errors.",

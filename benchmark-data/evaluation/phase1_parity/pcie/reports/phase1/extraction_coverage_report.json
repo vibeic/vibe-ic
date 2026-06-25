@@ -13,8 +13,8 @@
     "pct": 100.0
   },
   "hands_on": {
-    "denominator": 724,
-    "numerator": 724,
+    "denominator": 723,
+    "numerator": 723,
     "pct": 100.0
   },
   "per_l_doc": [
@@ -30,7 +30,7 @@
     },
     {
       "name": "L3_CMD_PROTOCOL",
-      "evidence_count": 1,
+      "evidence_count": 0,
       "todo_count": 0
     },
     {
@@ -75,7 +75,7 @@
     },
     {
       "name": "L12_BEHAVIORAL_SEQUENCES",
-      "evidence_count": 0,
+      "evidence_count": 1,
       "todo_count": 0
     },
     {

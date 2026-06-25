@@ -12,39 +12,8 @@
   "submodules": [],
   "no_submodules_in_input": true,
   "sim_only_modules": [],
-  "fsm_states": [
-    {
-      "name": "ACCORDING",
-      "transitions": [],
-      "evidence": "input/docs/I3C_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "USED",
-      "transitions": [],
-      "evidence": "input/docs/I3C_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SYNCHRONIZE",
-      "transitions": [],
-      "evidence": "input/docs/I3C_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "START",
-      "transitions": [],
-      "evidence": "input/docs/I3C_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "MOVES",
-      "transitions": [],
-      "evidence": "input/docs/I3C_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SLAVE",
-      "transitions": [],
-      "evidence": "input/docs/I3C_Spec.pdf (prose state-to-state v1.6.484)"
-    }
-  ],
-  "no_fsm_states_in_input": false,
+  "fsm_states": [],
+  "no_fsm_states_in_input": true,
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
   "internal_wires": [],
@@ -135,7 +104,6 @@
   "interface_types": [],
   "no_interface_types_in_input": true,
   "chip_top_interfaces": [],
-  "class_path": "serial_peripheral_protocol",
   "module_role": "Wire-level inter-IC serial bus specification for the I3C Basic family. Defines the protocol between any two or more I3C / Legacy-I2C-compatible devices sharing a two-wire bus (SDA + SCL). Concrete I3C Master / Slave / Secondary Master / Bridge IP blocks implement this protocol behind an MCU register interface at the SoC integration level.",
   "integration_overview": {
     "physical_topology": "All devices' SDA pins connected together; all SCL pins connected together; SDA pulled up to VDD via a Pull-Up Resistor; optional High-Keeper across SDA; SCL Push-Pull-driven by the Main Master (legacy fallback to Open-Drain when serving Legacy I2C devices).",

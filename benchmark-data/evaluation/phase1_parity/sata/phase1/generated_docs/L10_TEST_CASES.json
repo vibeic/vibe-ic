@@ -134,7 +134,7 @@
         "label": "opcode → happy + negative test-cases"
       },
       {
-        "literal": "<HALLUCINATION_SCRUBBED> RO",
+        "literal": "0x19 RO",
         "label": "opcode → happy + negative test-cases"
       }
     ]

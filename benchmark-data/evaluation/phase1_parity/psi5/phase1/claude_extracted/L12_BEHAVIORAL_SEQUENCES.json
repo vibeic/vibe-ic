@@ -4,7 +4,7 @@
   "ic_name": "Peripheral Sensor Interface 5 (PSI5)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
+  "no_calibration": true,
   "extraction_evidence": {},
   "synchronous_transmission_sequence": [
     "1. ECU powers the two-wire current loop; the sensor(s) draw quiescent supply current.",

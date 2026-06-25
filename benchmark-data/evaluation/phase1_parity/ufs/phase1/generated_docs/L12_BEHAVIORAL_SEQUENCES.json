@@ -4,8 +4,15 @@
   "ic_name": "Universal Flash Storage (JEDEC JESD220, UFS 4.0)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
-  "extraction_evidence": {},
+  "no_calibration": true,
+  "extraction_evidence": {
+    "derived_no_calibration_source": [
+      {
+        "literal": "no calibration / trim / OTP-cal source in input",
+        "label": "L12 no_calibration auto-set (#634 facet e) — absence-based, mirrors L5.no_analog"
+      }
+    ]
+  },
   "link_startup_and_init_sequence": [
     "1. Host applies power rails (VCC, VCCQ, VCCQ2) and drives REF_CLK; RESET_n is held LOW then released HIGH.",
     "2. Host enables the UFS host controller (UFSHCI HCE=1).",

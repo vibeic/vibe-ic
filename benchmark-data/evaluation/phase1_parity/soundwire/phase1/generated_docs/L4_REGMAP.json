@@ -212,7 +212,6 @@
   "extraction_evidence": {
     "input/docs/SoundWire_Spec.pdf": []
   },
-  "class_path": "digital_arithmetic_primitive",
   "register_map_present": "partial — public webinar describes the normative-register address ranges and the specific SCP_ / DPst_ register groups required for enumeration, control, and interrupt handling. Per-Slave bit-level field maps for every register are defined in the gated SoundWire v1.0 spec.",
   "base_address": "Defined at SoC level; offsets given relative to module base.",
   "notes": "Module memory map per spec. Reads from reserved bits return zeros and writes to reserved bits have no effect.",

@@ -33,7 +33,6 @@
       }
     ]
   },
-  "class_path": "digital_arithmetic_primitive",
   "protocol_type": "Host-mastered byte-cycle protocol over 8-bit DQ. Each cycle is {Command (CLE=1, ALE=0, WE_n rising → DQ=opcode), Address (CLE=0, ALE=1, WE_n rising → DQ=address byte), Write Data (CLE=0, ALE=0, WE_n rising → DQ=write byte), Read Data (CLE=0, ALE=0, RE_n falling → device drives DQ=read byte)}.",
   "cmd_format": {
     "command_byte_width": 8,

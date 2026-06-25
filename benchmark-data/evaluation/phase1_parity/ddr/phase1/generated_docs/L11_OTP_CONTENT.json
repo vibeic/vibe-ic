@@ -20,7 +20,6 @@
   "no_operating_modes_in_input": false,
   "fsm_state_catalogue": [],
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
   "no_otp_fsm_in_input": true,
   "otp_present": "indirect (SPD on DIMM)",
   "notes": "From the controller / host's perspective, the SPD is the canonical 'OTP fingerprint' of a DDR3 DIMM — manufacturer ID, model, capacity, supported speed bins, timing parameters, organization, voltage, optional feature support are all read from SPD at boot. JEDEC JESD21-C Annex K is the definitive document for the SPD layout; this layer (L11) summarizes the key fields a host BIOS / controller IP must parse.",

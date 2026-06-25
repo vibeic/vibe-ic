@@ -4,11 +4,11 @@
   "applicability": "N/A",
   "ic_class": "serial_peripheral_protocol",
   "rationale": "No lab calibration",
-  "emitted_by": "l_doc_taxonomy.na_stub v0.1.51",
+  "extraction_evidence": {},
+  "emitted_by": "l_doc_taxonomy.na_stub v0.2.14",
   "extraction_strategy": {
     "ic_class_applicability_gate_v0_1_62": "ic_class='serial_peripheral_protocol' declares LL13 not applicable; emitted as N/A stub (l_doc_taxonomy.na_stub)"
   },
-  "class_path": "serial_peripheral_protocol",
   "lab_calibration_present": true,
   "notes": "MIPI DSI v1.01.00 inherits all PHY-level lab characterization from D-PHY v0.90.00 (eye, swing, skew, PLL). Above the PHY, DSI-specific calibration centers on (a) verifying T_INIT power-up timing, (b) EoTp enable/disable interoperability, (c) BTA + contention-recovery timers, (d) TE wait period, and (e) Set Maximum Return Packet Size default. Annex B of the spec provides four reference CRC-16 test vectors with expected outputs that are the canonical regression inputs for any DSI receiver's checksum verifier.",
   "ic_name": "MIPI DSI v1.01.00 (Display Serial Interface, MIPI Alliance)",

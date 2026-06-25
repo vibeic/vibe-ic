@@ -32,16 +32,6 @@
   "peripheral_only_emit_skipped_v1_6_376": 0,
   "extraction_strategy": {
     "l8_evidence_population_v1_6_395": 0,
-    "hallucination_scrub_v0_1_60": [
-      {
-        "l_doc": "L8_RTL_CONSTANTS",
-        "pattern_name": "ic_name_from_license_clause",
-        "path": "ic_name",
-        "old_value": "SUCH ARM TECHNOLOGY",
-        "new_value": "UNKNOWN_IC",
-        "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
-      }
-    ],
     "l8_protocol_widths_v0_1_65": "R19 extractor: width_parameters=51"
   },
   "extraction_evidence": {

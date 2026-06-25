@@ -2,6 +2,8 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "Embedded MultiMediaCard (eMMC 5.1, JEDEC JESD84-B51)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
@@ -16,20 +18,61 @@
       "source": "emmc_spec.txt",
       "raw": "HS400               : 200 MHz clock, Dual Data Rate on the 8-bit bus, with",
       "extraction_strategy": "bullet_kv_pair_spec"
-    }
-  ],
-  "design_parameters": [
+    },
     {
-      "parameter": "High Speed DDR",
-      "value": "52",
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "26.0",
+      "unit": "MHz",
       "source": "emmc_spec.txt",
-      "raw": "High Speed DDR      : 52 MHz, Dual Data Rate on 4/8-bit, 1.8 V/3.3 V.",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "52.0",
+      "unit": "MHz",
+      "source": "emmc_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "200.0",
+      "unit": "MHz",
+      "source": "emmc_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "3.3",
+      "unit": "V",
+      "source": "emmc_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.8",
+      "unit": "V",
+      "source": "emmc_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.2",
+      "unit": "V",
+      "source": "emmc_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
     }
   ],
-  "extraction_evidence": {
-    "input/docs/emmc_spec.txt": []
-  },
+  "design_parameters": [],
+  "source_documents": [
+    "input/docs/emmc_spec.txt"
+  ],
+  "extraction_evidence": {},
   "analog_digital_interface_present": false,
   "signaling_summary": "Digital protocol block; signaling is on the named external pins per the protocol specification.",
   "io_supplies": {

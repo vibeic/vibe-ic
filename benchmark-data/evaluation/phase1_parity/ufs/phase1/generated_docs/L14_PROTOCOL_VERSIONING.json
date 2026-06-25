@@ -3,14 +3,24 @@
     "versions": [],
     "deprecated_features": [
       {
-        "feature": "is",
+        "feature": "SDL",
         "quote": "solely of the UniPro specification document, SDL is no longer supported. The UniPro v1.6 Specification",
         "line": 492
       },
       {
-        "feature": "is",
+        "feature": "D-PHY",
         "quote": "the M-PHY physical layer. As D-PHY is no longer supported on v1.60, backwards compatibility for DPHY operation cannot be maintained.",
         "line": 571
+      },
+      {
+        "feature": "SDL",
+        "quote": "solely of the UniPro specification document, SDL is no longer supported. The UniPro v1.6 Specification",
+        "line": 1640
+      },
+      {
+        "feature": "D-PHY",
+        "quote": "the M-PHY physical layer. As D-PHY is no longer supported on v1.60, backwards compatibility for DPHY operation cannot be maintained.",
+        "line": 1719
       }
     ],
     "backward_compat_traps": [

@@ -12,29 +12,8 @@
   "submodules": [],
   "no_submodules_in_input": true,
   "sim_only_modules": [],
-  "fsm_states": [
-    {
-      "name": "INHERENT",
-      "transitions": [],
-      "evidence": "input/docs/EtherCAT_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "CHECKSUM",
-      "transitions": [],
-      "evidence": "input/docs/EtherCAT_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SCAN",
-      "transitions": [],
-      "evidence": "input/docs/EtherCAT_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "PROVIDED",
-      "transitions": [],
-      "evidence": "input/docs/EtherCAT_Spec.pdf (prose state-to-state v1.6.484)"
-    }
-  ],
-  "no_fsm_states_in_input": false,
+  "fsm_states": [],
+  "no_fsm_states_in_input": true,
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
   "internal_wires": [],
@@ -58,6 +37,17 @@
       "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
       "low_confidence": true,
       "name_origin": "bare_token_left_context"
+    },
+    {
+      "name": null,
+      "kind": "memory",
+      "type": "memory",
+      "port_count": "dual",
+      "depth": null,
+      "width": null,
+      "evidence_file": "EtherCAT_Spec.pdf",
+      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
+      "low_confidence": true
     }
   ],
   "memory_candidates": [
@@ -66,17 +56,6 @@
       "kind": "ram",
       "type": "RAM",
       "port_count": null,
-      "depth": null,
-      "width": null,
-      "evidence_file": "EtherCAT_Spec.pdf",
-      "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
-      "low_confidence": true
-    },
-    {
-      "name": null,
-      "kind": "memory",
-      "type": "memory",
-      "port_count": "dual",
       "depth": null,
       "width": null,
       "evidence_file": "EtherCAT_Spec.pdf",
@@ -102,7 +81,6 @@
   "interface_types": [],
   "no_interface_types_in_input": true,
   "chip_top_interfaces": [],
-  "class_path": "digital_arithmetic_primitive",
   "module_role": "EtherCAT defines two distinct silicon roles. (1) The EtherCAT SubDevice (Slave) integrates an EtherCAT Slave Controller (ESC) — 2-4 Ethernet ports + on-the-fly engine + FMMU + SyncManager + DPRAM + DC + SII + PDI — alongside a local application µC. (2) The MainDevice (Master) uses a standard PC + commodity Ethernet NIC; no EtherCAT-specific silicon on the controller side.",
   "topology_description": "Daisy-chain (line) is canonical. Each SubDevice ESC has hardware auto-loopback on any port without an active link partner, so the frame physically traverses every device twice on the same cable (outbound + return), creating one logical bus. Tree topologies use 3- or 4-port SubDevices. Ring topology with cable redundancy uses two MainDevice NICs.",
   "integration_overview": "Typical SubDevice integration: ESC IP (Beckhoff ET1100/ET1200/ET1815, Microchip LAN9252, or FPGA IP) is placed between Ethernet PHYs and application µC. The ESC's Ethernet ports connect via MII/RMII/RGMII to two integrated 10/100 Ethernet PHYs. The PDI connects to the application µC's external bus / SPI. An external SII EEPROM holds the ESI XML descriptor. SYNC0/SYNC1 outputs drive the µC's cycle interrupt.",

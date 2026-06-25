@@ -5,53 +5,10 @@
   "reject_rules": [],
   "fsm_states": [
     {
-      "name": "ENHANCEMENTS",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
       "name": "L2CAP",
       "transitions": [],
       "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "IMPROVEMENTS",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "SECURITY",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "ADDED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "DEFINED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "SUPPORT",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+      "evidence": "input/docs/BLE_Spec.pdf (prose 'in X state')"
     }
   ],
   "pipeline_stages": [],
@@ -118,7 +75,7 @@
       }
     ]
   },
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "crypto_accelerator",
   "fsm_states_transmitter": [
     {
       "name": "TX_IDLE",

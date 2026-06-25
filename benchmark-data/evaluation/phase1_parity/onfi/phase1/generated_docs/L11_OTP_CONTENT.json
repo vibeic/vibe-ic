@@ -15,7 +15,6 @@
   "no_operating_modes_in_input": true,
   "fsm_state_catalogue": [],
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
   "no_otp_fsm_in_input": true,
   "otp_present": true,
   "notes": "Parameter Page + Read ID + Unique ID + Factory Defect Map form the OTP-style fingerprint of an ONFI device. The Parameter Page CRC + redundancy + Extended Parameter Page provide retrieval-error robustness without host bookkeeping. The Unique ID + complement scheme self-validates via XOR-equals-all-ones.",

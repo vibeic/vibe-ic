@@ -13,8 +13,8 @@
     "pct": 100.0
   },
   "hands_on": {
-    "denominator": 410,
-    "numerator": 410,
+    "denominator": 447,
+    "numerator": 447,
     "pct": 100.0
   },
   "per_l_doc": [
@@ -75,7 +75,7 @@
     },
     {
       "name": "L12_BEHAVIORAL_SEQUENCES",
-      "evidence_count": 0,
+      "evidence_count": 1,
       "todo_count": 0
     },
     {

@@ -4,7 +4,7 @@
   "ic_name": "SAS_Controller",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
+  "no_calibration": true,
   "extraction_evidence": {},
   "hba_software_initialization_sequence": [
     "1. Enable HBA in PCI cfg: CMD.MSE=1 + CMD.BME=1.",

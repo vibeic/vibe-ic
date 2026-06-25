@@ -12,29 +12,8 @@
   "submodules": [],
   "no_submodules_in_input": true,
   "sim_only_modules": [],
-  "fsm_states": [
-    {
-      "name": "READY",
-      "transitions": [],
-      "evidence": "input/docs/SoundWire_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "RENDER",
-      "transitions": [],
-      "evidence": "input/docs/SoundWire_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SWITCH",
-      "transitions": [],
-      "evidence": "input/docs/SoundWire_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "AVOID",
-      "transitions": [],
-      "evidence": "input/docs/SoundWire_Spec.pdf (prose state-to-state v1.6.484)"
-    }
-  ],
-  "no_fsm_states_in_input": false,
+  "fsm_states": [],
+  "no_fsm_states_in_input": true,
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
   "internal_wires": [],
@@ -89,7 +68,6 @@
   "interface_types": [],
   "no_interface_types_in_input": true,
   "chip_top_interfaces": [],
-  "class_path": "digital_arithmetic_primitive",
   "module_role": "Wire-level audio interface specification for the MIPI Alliance SoundWire family. Defines the bus protocol between an Application-Processor-class Master and one or more audio-peripheral Slaves (microphones, codecs, smart amplifiers) plus optional Monitor (test equipment) sharing a single SoundWire_Clock + SoundWire_Data line pair (with optional additional Data Lanes 1..7). Concrete SoundWire Master / Slave / Monitor IP blocks implement this protocol behind an SoC bus interface (e.g. AHB / AXI / APB) and provide DMA, audio FIFOs, and per-Port transport-layer logic at the integration level.",
   "integration_overview": {
     "physical_topology": "Multi-drop bus: a single SoundWire_Clock line driven by the Master + a single SoundWire_Data line (Lane 0) shared by Master, Slaves, and optional Monitor. Lanes 1..7 are optional and may be shared among all devices or private to a group of devices for higher aggregate bandwidth. For device-to-device lanes a bus-keeper must be enabled on one of the devices.",

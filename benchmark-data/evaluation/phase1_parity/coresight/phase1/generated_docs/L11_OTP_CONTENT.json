@@ -15,7 +15,6 @@
   "no_operating_modes_in_input": true,
   "fsm_state_catalogue": [],
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
   "no_otp_fsm_in_input": true,
   "otp_present": false,
   "notes": "CoreSight defines no OTP/fuse content of its own. In practice a SoC's security/lifecycle fuses may DRIVE the CoreSight authentication signals (DBGEN/NIDEN/SPIDEN/SPNIDEN) to permanently disable debug in production, but that fuse policy is a SoC concern outside the CoreSight architecture itself.",

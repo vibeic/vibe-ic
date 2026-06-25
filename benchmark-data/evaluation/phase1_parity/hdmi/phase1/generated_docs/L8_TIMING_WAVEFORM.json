@@ -26,7 +26,6 @@
       "source_pin": "clk"
     }
   ],
-  "class_path": "serial_peripheral_protocol",
   "clock_mhz": 165.0,
   "clock_and_reset_waveform": {
     "SCL_idle": "HIGH",

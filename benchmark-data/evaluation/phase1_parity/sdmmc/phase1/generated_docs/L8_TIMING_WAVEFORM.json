@@ -72,6 +72,18 @@
       "source_pin": "RCLK"
     }
   ],
+  "clocks": [
+    {
+      "name": "clk",
+      "type": "input",
+      "freq_mhz": 208.0,
+      "extraction_strategy": "seeded_from_l1_clock_port_v1_6_571",
+      "freq_hz": 208000000,
+      "period_ns": 4.807692,
+      "role": "primary",
+      "domain_kind": "primary"
+    }
+  ],
   "class_path": "digital_cmd_driven",
   "clock_mhz": 208.0,
   "clock_waveform": {

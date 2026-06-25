@@ -6,7 +6,6 @@
   "timing_constants": [],
   "waveforms": [],
   "extraction_evidence": {},
-  "class_path": "serial_peripheral_protocol",
   "clock_waveform": {
     "Clock_Lane_DDR": "Host drives differential Clock Lane (Clock+ / Clock-). DDR — both edges latch one bit per Data Lane → data-rate-per-lane = 2 × Clock-Lane-Hz. Clock Lane is host → peripheral ONLY; peripheral never drives Clock Lane.",
     "HS_clock_swing_inherits": "D-PHY HS — 100-200 mV differential (sub-LVDS, 100 Ω terminated).",

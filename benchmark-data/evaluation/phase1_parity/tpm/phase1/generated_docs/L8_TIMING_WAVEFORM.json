@@ -26,7 +26,7 @@
       "source_pin": "clk"
     }
   ],
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "crypto_accelerator",
   "clock_mhz": 10.0,
   "clock_waveform": {
     "CLK_source": "Host-supplied bus clock — LCLK (LPC, 33 MHz), SCLK (SPI, up to 33 MHz), SCL (I2C, 400 kHz / 1 MHz).",

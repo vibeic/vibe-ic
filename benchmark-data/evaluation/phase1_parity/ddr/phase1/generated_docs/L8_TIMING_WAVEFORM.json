@@ -453,7 +453,6 @@
       }
     ]
   },
-  "class_path": "digital_arithmetic_primitive",
   "clock_waveform": {
     "CK_source": "Controller-generated differential clock; runs continuously during normal operation.",
     "data_rate_DDR3_800_MTps": 800,

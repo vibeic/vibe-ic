@@ -21,7 +21,6 @@
   "no_l13_test_cases_in_input": true,
   "trim_loop": [],
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
   "lab_calibration_present": true,
   "notes": "The ZQ / Write Leveling / Read Leveling loops are host-controlled closed loops with on-die assistance — the DRAM exposes a feedback mechanism (ZQ engine for ZQ; DQ-as-CK-sample-feedback for WL; predefined MPR pattern for RL) and the controller drives the iteration. JESD79-3C standardizes the feedback mechanism; the iteration algorithm and scheduling is vendor / controller-IP-specific.",
   "calibration_summary": "DDR3 SDRAM defines three normative calibration loops at the system / lab level: (1) ZQ Calibration — trim DRAM output driver Ron and ODT Rtt against a 240 Ω ±1% external reference; (2) Write Leveling — controller-side closed loop to align DQS to CK on fly-by DIMMs; (3) Read Leveling / MPR — controller-side closed loop to find the optimal DQ sampling phase using the MPR predefined pattern. In addition, DLL Reset initializes the on-die DLL; tDLLK is the locking latency.",

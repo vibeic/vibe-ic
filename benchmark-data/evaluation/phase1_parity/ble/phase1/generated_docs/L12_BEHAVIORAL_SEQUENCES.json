@@ -4,9 +4,16 @@
   "ic_name": "Bluetooth Low Energy 5.2 (Bluetooth Core Specification)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
-  "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
+  "no_calibration": true,
+  "extraction_evidence": {
+    "derived_no_calibration_source": [
+      {
+        "literal": "no calibration / trim / OTP-cal source in input",
+        "label": "L12 no_calibration auto-set (#634 facet e) — absence-based, mirrors L5.no_analog"
+      }
+    ]
+  },
+  "class_path": "crypto_accelerator",
   "initialization_sequence": [
     "1. Pulse MR HIGH for ≥ 1 µs to reset the chip.",
     "2. Write LCR with DLAB=1 + desired word length / parity / stop bits.",

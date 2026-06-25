@@ -265,7 +265,6 @@
   "extraction_evidence": {
     "input/docs/HDMI_Spec.pdf": []
   },
-  "class_path": "serial_peripheral_protocol",
   "register_map_present": true,
   "base_address": "Defined at SoC level; offsets given relative to module base.",
   "notes": "All registers are 8-bit-wide on the I2C wire; 16-bit and 11-bit fields span 2 consecutive sub-addresses with auto-increment. After ISEL pulse-low reset, all registers return to defaults — notably PD=0 (powered down) so the host MUST set CTL_1_MODE.PD=1 over I2C before TMDS output is enabled.",

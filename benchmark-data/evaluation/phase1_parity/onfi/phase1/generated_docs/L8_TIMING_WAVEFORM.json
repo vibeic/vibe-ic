@@ -26,7 +26,6 @@
       "source_pin": "clk"
     }
   ],
-  "class_path": "digital_arithmetic_primitive",
   "clock_mhz": 100.0,
   "clock_waveform": {
     "SDR_strobe_source": "Host-generated WE_n / RE_n; asynchronous.",

@@ -16,7 +16,6 @@
   ],
   "no_bring_up_sequence_in_input": false,
   "extraction_evidence": {},
-  "class_path": "serial_peripheral_protocol",
   "test_cases_present": "partial - the spec provides functional descriptions and waveform figures that map to compliance test scenarios but does not provide a formal test plan or testbench.",
   "derived_compliance_test_categories": [
     "Reset behavior verification.",

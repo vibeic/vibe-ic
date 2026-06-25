@@ -21,7 +21,6 @@
   "extraction_evidence": {
     "input/docs/Modbus_Spec.pdf": []
   },
-  "class_path": "digital_arithmetic_primitive",
   "width_parameters": {
     "FUNCTION_CODE_WIDTH_bits": 8,
     "EXCEPTION_CODE_WIDTH_bits": 8,

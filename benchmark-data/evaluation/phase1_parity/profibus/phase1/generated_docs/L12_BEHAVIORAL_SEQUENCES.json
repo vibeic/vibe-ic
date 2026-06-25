@@ -4,8 +4,15 @@
   "ic_name": "PROFIBUS-DP (IEC 61158 Type 3 / IEC 61784-1 CPF 3)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
-  "extraction_evidence": {},
+  "no_calibration": true,
+  "extraction_evidence": {
+    "derived_no_calibration_source": [
+      {
+        "literal": "no calibration / trim / OTP-cal source in input",
+        "label": "L12 no_calibration auto-set (#634 facet e) — absence-based, mirrors L5.no_analog"
+      }
+    ]
+  },
   "slave_startup_sequence": [
     "1. POWER_ON: the slave powers up and waits for its master.",
     "2. Wait_Prm: the master sends Set_Parameters (Set_Prm, SAP 61) — watchdog, min TSDR, group, Ident_Number, user parameters.",

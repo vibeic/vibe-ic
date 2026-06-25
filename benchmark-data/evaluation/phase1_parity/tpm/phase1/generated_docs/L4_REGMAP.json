@@ -99,7 +99,7 @@
   "extraction_evidence": {
     "input/docs/TPM_Spec.pdf": []
   },
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "crypto_accelerator",
   "register_map_present": true,
   "base_address": "Defined at SoC level; offsets given relative to module base.",
   "notes": "TPM 2.0 Architecture (Part 1) defines the protocol-level command/response framing; the host-side MMIO register file (TPM_ACCESS, TPM_INT_ENABLE, TPM_STS, TPM_DATA_FIFO, etc.) is normatively defined in the platform-specific TPM Interface Specification (TIS) or PC Client Platform TPM Profile (PTP). Most platforms place the register file at base 0xFED40000 with per-locality 4 KB windows (locality n at 0xFED40000 + 0x1000*n).",

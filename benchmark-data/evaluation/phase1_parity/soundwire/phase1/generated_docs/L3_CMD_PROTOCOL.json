@@ -19,7 +19,6 @@
   "extraction_evidence": {
     "input/docs/SoundWire_Spec.pdf": []
   },
-  "class_path": "digital_arithmetic_primitive",
   "protocol_type": "Two-pin DDR multi-drop audio bus with Modified-NRZI encoding, configurable 2-D frame structure (rows × columns matrix) carrying both audio Payload and an embedded 48-bit Control Word in Column 0 Rows 0..47. Commands are embedded in the Control Word so no I2C/SPI sideband is required.",
   "opcodes_summary": "SoundWire's embedded command set is small: PING (Slave status / multi-stream synchronization / Monitor arbitration), READ (16-bit address, 8-bit payload), WRITE (16-bit address, 8-bit payload), with Bulk Register Access (BRA / BTP) on DataPort 0 (DP0) for fast block transfers. Commands are address-able to a single Slave (Device 1..11), a group of Slaves (group address), or broadcast (Device 0xF).",
   "channels": [

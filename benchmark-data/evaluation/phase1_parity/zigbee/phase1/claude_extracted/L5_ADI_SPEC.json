@@ -74,13 +74,6 @@
       "extraction_strategy": "bullet_kv_pair_spec"
     },
     {
-      "parameter": "Bits per symbol",
-      "value": "4",
-      "source": "zigbee_spec.txt",
-      "raw": "- Bits per symbol   : 4",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
       "parameter": "aMaxPHYPacketSize",
       "value": "127",
       "source": "zigbee_spec.txt",
@@ -99,13 +92,6 @@
       "value": "60",
       "source": "zigbee_spec.txt",
       "raw": "aBaseSlotDuration = 60 symbols; aNumSuperframeSlots = 16.",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "MIC length",
-      "value": "0,",
-      "source": "zigbee_spec.txt",
-      "raw": "MIC length       : 0, 32, 64, or 128 bits (security level dependent)",
       "extraction_strategy": "bullet_kv_pair_spec"
     },
     {
@@ -155,13 +141,6 @@
       "value": "3",
       "source": "zigbee_spec.txt",
       "raw": "macMaxFrameRetries       = 3",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "Max GTS per superframe",
-      "value": "7",
-      "source": "zigbee_spec.txt",
-      "raw": "Max GTS per superframe   = 7",
       "extraction_strategy": "bullet_kv_pair_spec"
     },
     {

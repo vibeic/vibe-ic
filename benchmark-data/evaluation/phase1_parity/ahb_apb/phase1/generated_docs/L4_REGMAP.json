@@ -9,19 +9,7 @@
   "otp_ip_macro": {},
   "internal_registers": [],
   "extraction_evidence": {},
-  "extraction_strategy": {
-    "hallucination_scrub_v0_1_60": [
-      {
-        "l_doc": "L4_REGMAP",
-        "pattern_name": "ic_name_from_license_clause",
-        "path": "ic_name",
-        "old_value": "SUCH ARM TECHNOLOGY",
-        "new_value": "UNKNOWN_IC",
-        "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
-      }
-    ]
-  },
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "bus_peripheral",
   "register_map_present": false,
   "base_address": "Defined at SoC level; offsets given relative to module base.",
   "notes": "If a future system-integration L4 is required, the canonical 'address-side fields' to capture would be: HADDR width (10..64), HBURST 1KB-boundary rule, HPROT[3:0]/HPROT[6:0] depending on Extended_Memory_Types property, HSEL signal per AHB Subordinate; PADDR width (up to 32), PPROT[2:0] (APB4), PSELx per peripheral.",

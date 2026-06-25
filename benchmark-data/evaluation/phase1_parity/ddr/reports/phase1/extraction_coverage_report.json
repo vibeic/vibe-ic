@@ -2,20 +2,20 @@
   "overall": {
     "denominator": 400,
     "total": 736,
-    "numerator": 400,
-    "pct": 100.0,
+    "numerator": 399,
+    "pct": 99.8,
     "target_pct": 80.0,
     "status": "PASS"
   },
   "curated": {
     "denominator": 400,
-    "numerator": 400,
-    "pct": 100.0
+    "numerator": 399,
+    "pct": 99.8
   },
   "hands_on": {
     "denominator": 427,
-    "numerator": 427,
-    "pct": 100.0
+    "numerator": 426,
+    "pct": 99.8
   },
   "per_l_doc": [
     {
@@ -30,7 +30,7 @@
     },
     {
       "name": "L3_CMD_PROTOCOL",
-      "evidence_count": 1,
+      "evidence_count": 0,
       "todo_count": 0
     },
     {
@@ -40,7 +40,7 @@
     },
     {
       "name": "L5_ADI_SPEC",
-      "evidence_count": 5,
+      "evidence_count": 0,
       "todo_count": 0
     },
     {

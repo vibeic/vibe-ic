@@ -4,11 +4,11 @@
   "applicability": "N/A",
   "ic_class": "serial_peripheral_protocol",
   "rationale": "No lab calibration",
-  "emitted_by": "l_doc_taxonomy.na_stub v0.1.51",
+  "extraction_evidence": {},
+  "emitted_by": "l_doc_taxonomy.na_stub v0.2.14",
   "extraction_strategy": {
     "ic_class_applicability_gate_v0_1_62": "ic_class='serial_peripheral_protocol' declares LL13 not applicable; emitted as N/A stub (l_doc_taxonomy.na_stub)"
   },
-  "class_path": "serial_peripheral_protocol",
   "lab_calibration_present": true,
   "notes": "TFP410 has multiple analog risk areas — TFADJ-controlled current driver, 10× PLL, differential clock crossover detector, low-swing input comparator. Lab characterization on every new board is recommended. Compliance test suites: DVI Compliance Test Specification (DDWG) and HDMI Compliance Test Specification (HDMI LLC) provide the formal test programmes.",
   "ic_name": "HDMI / DVI TMDS (TI TFP410 PanelBus Digital Transmitter — subset)",

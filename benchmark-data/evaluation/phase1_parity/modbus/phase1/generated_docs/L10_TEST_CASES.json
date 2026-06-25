@@ -7,7 +7,6 @@
   "bring_up_sequence": [],
   "no_bring_up_sequence_in_input": true,
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
   "test_cases_present": "partial - the spec provides per-function-code state diagrams (Figures 11..14 etc.), normal/error response tables, and example request/response byte traces, but no formal compliance testbench. The cases below are derived from the validation gates in Figure 9 (Define MODBUS Transaction state diagram) plus the per-function-code state diagrams in Section 6.",
   "derived_compliance_test_categories": [
     "PDU minimum case — Function Code only (e.g. FC 0x07 Read Exception Status with no data).",

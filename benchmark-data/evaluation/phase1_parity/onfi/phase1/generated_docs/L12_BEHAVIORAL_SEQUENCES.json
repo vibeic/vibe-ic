@@ -293,7 +293,6 @@
       }
     ]
   },
-  "class_path": "digital_arithmetic_primitive",
   "initialization_sequence": [
     "1. Power-up: ramp Vcc + VccQ (staggered per Section 2.14 if multi-target).",
     "2. CE_n HIGH; WP_n LOW during boot.",

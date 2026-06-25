@@ -1,7 +1,28 @@
 {
   "fields": {
     "versions": [],
-    "deprecated_features": [],
+    "deprecated_features": [
+      {
+        "feature": "This",
+        "quote": "This field is obsolete. It previously contained the number of data bytes per partial page.",
+        "line": 9282
+      },
+      {
+        "feature": "This",
+        "quote": "This field is obsolete. It previously contained the number of spare bytes per partial page.",
+        "line": 9285
+      },
+      {
+        "feature": "This",
+        "quote": "This field is obsolete. It previously indicated the attributes for partial page programming that the",
+        "line": 9375
+      },
+      {
+        "feature": "This",
+        "quote": "This field is obsolete. It previously indicated the SDR timing modes supported for Page Cache",
+        "line": 9519
+      }
+    ],
     "backward_compat_traps": [
       {
         "trap_name": "power_up_default_sdr",
@@ -152,7 +173,7 @@
       }
     ]
   },
-  "extraction_status": "EXTRACTION_FOUND_NOTHING",
+  "extraction_status": "EXTRACTED",
   "schema_version": "v0.1.62",
   "doc_class": "L14",
   "emitted_by": "phase1_protocol_spec_extract.extract_l14_versioning v0.1.62",

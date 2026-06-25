@@ -2,6 +2,8 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "HyperBus (HyperRAM / HyperFlash) memory interface (Cypress / Infineon)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
@@ -16,12 +18,37 @@
       "source": "hyperbus_spec.txt",
       "raw": "- RWDS low = 1x",
       "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "166.0",
+      "unit": "MHz",
+      "source": "hyperbus_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.8",
+      "unit": "V",
+      "source": "hyperbus_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "3.0",
+      "unit": "V",
+      "source": "hyperbus_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
     }
   ],
   "design_parameters": [],
-  "extraction_evidence": {
-    "input/docs/hyperbus_spec.txt": []
-  },
+  "source_documents": [
+    "input/docs/hyperbus_spec.txt"
+  ],
+  "extraction_evidence": {},
   "analog_digital_interface_present": true,
   "signaling_summary": "Single-ended CMOS signalling on DQ[7:0] and RWDS with a differential clock CK/CK# (single-ended CK option at 1.8 V). Data is double-data-rate (clocked on both CK edges). Read data is captured against the memory-driven RWDS strobe (source-synchronous, edge-aligned), so the host does not re-derive read timing from CK. Output Drive Strength of DQ and RWDS is programmable (CR0) to tune board signal integrity. The interface supports 1.8 V and 3.0 V supply variants and reaches up to 166 MHz / 333 MB/s.",
   "modulation": "Single-ended CMOS levels on DQ/RWDS; differential CK/CK# clock.",

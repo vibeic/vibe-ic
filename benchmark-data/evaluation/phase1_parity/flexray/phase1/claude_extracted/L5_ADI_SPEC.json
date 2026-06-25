@@ -7,15 +7,7 @@
   "no_analog": true,
   "external_components": [],
   "electrical_specs": [],
-  "design_parameters": [
-    {
-      "parameter": "Header segment (5 bytes",
-      "value": "40",
-      "source": "flexray_spec.txt",
-      "raw": "Header segment (5 bytes = 40 bits):",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    }
-  ],
+  "design_parameters": [],
   "extraction_evidence": {
     "input/docs/flexray_spec.txt": []
   },

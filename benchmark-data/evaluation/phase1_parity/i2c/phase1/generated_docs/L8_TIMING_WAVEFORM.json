@@ -6,7 +6,6 @@
   "timing_constants": [],
   "waveforms": [],
   "extraction_evidence": {},
-  "class_path": "serial_peripheral_protocol",
   "clock_and_reset_waveform": {
     "SCL_idle": "HIGH",
     "SDA_idle": "HIGH",

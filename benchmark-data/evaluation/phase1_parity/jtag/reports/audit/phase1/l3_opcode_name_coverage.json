@@ -6,5 +6,10 @@
   "placeholders": 0,
   "placeholder_ratio": 0.0,
   "threshold": 0.0,
-  "placeholder_hexes": []
+  "placeholder_hexes": [],
+  "design_identity": {
+    "design": "jtag",
+    "ic_name": "jtag",
+    "top": "jtag"
+  }
 }

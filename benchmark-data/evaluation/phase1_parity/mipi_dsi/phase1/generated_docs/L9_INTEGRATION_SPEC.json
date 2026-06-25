@@ -2,8 +2,8 @@
   "schema_version": 2,
   "doc_class": "integration_spec",
   "ic_name": "MIPI DSI v1.01.00 (Display Serial Interface, MIPI Alliance)",
-  "top_module": "TA_TO",
-  "top_module_extraction_strategy": "l1_ic_name_fallback",
+  "top_module": "chip_top",
+  "top_module_extraction_strategy": "canonical_chip_top_sentinel",
   "no_top_module_in_input": true,
   "ports": [],
   "top_ports": [],
@@ -12,24 +12,8 @@
   "submodules": [],
   "no_submodules_in_input": true,
   "sim_only_modules": [],
-  "fsm_states": [
-    {
-      "name": "LINK",
-      "transitions": [],
-      "evidence": "input/docs/MIPI_DSI_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "TRANSMIT",
-      "transitions": [],
-      "evidence": "input/docs/MIPI_DSI_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "RESPONDING",
-      "transitions": [],
-      "evidence": "input/docs/MIPI_DSI_Spec.pdf (prose state-to-state v1.6.484)"
-    }
-  ],
-  "no_fsm_states_in_input": false,
+  "fsm_states": [],
+  "no_fsm_states_in_input": true,
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
   "internal_wires": [],
@@ -48,11 +32,6 @@
   "memory_map": [],
   "no_memory_map_in_input": true,
   "no_instantiation_template_in_input": true,
-  "top_module_pins_evidence": {
-    "reason": "no_module_declaration_in_input_docs",
-    "fallback_source": "L1.ic_name",
-    "extraction_strategy_marker": "fallback_explicit_v1_6_581"
-  },
   "extraction_evidence": {
     "derived_from_L3": []
   },
@@ -61,7 +40,6 @@
   "interface_types": [],
   "no_interface_types_in_input": true,
   "chip_top_interfaces": [],
-  "class_path": "serial_peripheral_protocol",
   "module_role": "Packet-based serial display interface stack inside a SoC, layered as Application → Low Level Protocol → Lane Management → PHY (per DSI §4.1). Provides the wire-level transport for both Video Mode pixel streaming (DPI-2-like) and Command Mode command/parameter delivery (DBI-2-like + DCS).",
   "integration_overview": {
     "wire_count": "2 + 2 × N_data_lanes (N=1..4); 4..10 pins.",

@@ -44,7 +44,7 @@
       "source_pin": "clk"
     }
   ],
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "crypto_accelerator",
   "clock_mhz": 2400.0,
   "clock_and_reset_waveform": {
     "XIN": "External clock input; ≤ 24.0 MHz; drives baud rate generator.",

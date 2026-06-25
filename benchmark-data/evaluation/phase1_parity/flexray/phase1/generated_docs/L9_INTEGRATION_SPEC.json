@@ -14,11 +14,6 @@
   "sim_only_modules": [],
   "fsm_states": [
     {
-      "name": "CONNECTS",
-      "transitions": [],
-      "evidence": "input/docs/flexray_spec.txt (prose state-to-state v1.6.484)"
-    },
-    {
       "name": "CONFIG",
       "transitions": [],
       "evidence": "input/docs/flexray_spec.txt (prose 'in X state')"

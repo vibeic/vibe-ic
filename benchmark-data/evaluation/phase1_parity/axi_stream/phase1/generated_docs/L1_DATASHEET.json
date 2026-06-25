@@ -5,20 +5,7 @@
   "no_ic_name_in_input": false,
   "package_info": null,
   "no_package_in_input": true,
-  "pin_table": [
-    {
-      "name": "DMA",
-      "mode": "input",
-      "aliases": [],
-      "rtl_name": "dma",
-      "board_name": "DMA",
-      "io_standard": null,
-      "no_io_standard_in_input": true,
-      "function": "input",
-      "evidence": "input/docs/axi_stream_spec.txt",
-      "extraction_strategy": "markdown_bullet_under_heading"
-    }
-  ],
+  "pin_table": [],
   "no_pin_table_in_input": false,
   "electrical_specs": [
     {

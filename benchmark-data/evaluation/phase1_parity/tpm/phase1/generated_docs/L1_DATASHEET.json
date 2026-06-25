@@ -34,7 +34,7 @@
       }
     ]
   },
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "crypto_accelerator",
   "no_class_path_in_input": false,
   "auto_discovered_identifiers": [
     {

@@ -55,13 +55,12 @@
     }
   ],
   "no_pipeline_stages_in_input": false,
-  "no_fsm_states_in_input": false,
-  "no_fsm_in_input": false,
+  "no_fsm_states_in_input": true,
+  "no_fsm_in_input": true,
   "fsm_tokens": [],
   "extraction_evidence": {
     "input/docs/UM10204_NXP_i2c_bus_spec_rev6.pdf": []
   },
-  "class_path": "serial_peripheral_protocol",
   "fsm_hints": {
     "trigger": "Master initiates by driving START (S); slave responds when its address is matched.",
     "rule": "Every byte requires 9 SCL pulses (8 data + 1 ACK). Data on SDA is stable while SCL HIGH; SDA only changes when SCL LOW.",

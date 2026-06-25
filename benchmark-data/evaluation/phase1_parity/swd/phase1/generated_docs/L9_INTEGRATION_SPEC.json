@@ -41,76 +41,6 @@
       "evidence": "input/docs/SWD_ADIv5.pdf (prose transition v1.6.484)"
     },
     {
-      "name": "CONNECTION",
-      "transitions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "INTERFACE",
-      "transitions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "REFERRING",
-      "transitions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "DBGTAPSM",
-      "transitions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "POSSIBLE",
-      "transitions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "VARY",
-      "transitions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "PROTOCOL",
-      "transitions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ENSURE",
-      "transitions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "DORMANT",
-      "transitions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ZERO",
-      "transitions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "EQUAL",
-      "transitions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SEVEN",
-      "transitions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "WRAP",
-      "transitions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "RETURNS",
-      "transitions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)"
-    },
-    {
       "name": "BRFIFO1",
       "transitions": [],
       "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)"
@@ -127,21 +57,6 @@
     },
     {
       "name": "BWFIFO4",
-      "transitions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "REGISTERS",
-      "transitions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ACCESS",
-      "transitions": [],
-      "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ACCESSES",
       "transitions": [],
       "evidence": "input/docs/SWD_ADIv5.pdf (prose state-to-state v1.6.484)"
     },

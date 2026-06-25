@@ -3,75 +3,11 @@
   "doc_class": "control_logic",
   "ic_name": "DDR3 SDRAM (JEDEC JESD79-3C)",
   "reject_rules": [],
-  "fsm_states": [
-    {
-      "name": "INTENDED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/DDR3_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "PROVIDE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/DDR3_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "COMMANDS",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/DDR3_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "CONTROL",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/DDR3_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "PROGRAMMED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/DDR3_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "CLOCK",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/DDR3_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "DATA",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/DDR3_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "COMPARED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/DDR3_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "STROBE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/DDR3_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    }
-  ],
+  "fsm_states": [],
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
-  "no_fsm_states_in_input": false,
-  "no_fsm_in_input": false,
+  "no_fsm_states_in_input": true,
+  "no_fsm_in_input": true,
   "fsm_tokens": [
     {
       "name": "Buffer",
@@ -87,7 +23,6 @@
       }
     ]
   },
-  "class_path": "digital_arithmetic_primitive",
   "fsm_states_sdram": [
     {
       "name": "Power Applied",

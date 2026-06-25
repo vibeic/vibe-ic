@@ -3,6 +3,16 @@
     "versions": [],
     "deprecated_features": [
       {
+        "feature": "e.g.",
+        "quote": "tains all functionality of a LIN 2.0 master node, e.g. obsolete functions like Assign",
+        "line": 712
+      },
+      {
+        "feature": "identifier",
+        "quote": "0xB1           Assign frame identifier      Obsolete    See LIN2.0 specification",
+        "line": 3066
+      },
+      {
         "feature": "groups",
         "quote": "The group definition was a feature of LIN 1.3. Use of signal groups is deprecated and",
         "line": 8146

@@ -12,19 +12,8 @@
   "submodules": [],
   "no_submodules_in_input": true,
   "sim_only_modules": [],
-  "fsm_states": [
-    {
-      "name": "CHANNEL",
-      "transitions": [],
-      "evidence": "input/docs/mipi_csi2_spec.txt (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "TYPE",
-      "transitions": [],
-      "evidence": "input/docs/mipi_csi2_spec.txt (prose state-to-state v1.6.484)"
-    }
-  ],
-  "no_fsm_states_in_input": false,
+  "fsm_states": [],
+  "no_fsm_states_in_input": true,
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
   "internal_wires": [],
@@ -76,7 +65,6 @@
   "interface_types": [],
   "no_interface_types_in_input": true,
   "chip_top_interfaces": [],
-  "class_path": "digital_arithmetic_primitive",
   "module_role": "Packet-based serial display interface stack inside a SoC, layered as Application → Low Level Protocol → Lane Management → PHY (per DSI §4.1). Provides the wire-level transport for both Video Mode pixel streaming (DPI-2-like) and Command Mode command/parameter delivery (DBI-2-like + DCS).",
   "interconnect_topologies_supported": [
     "Point-to-point — host ↔ one peripheral per physical DSI Link (normative scope).",

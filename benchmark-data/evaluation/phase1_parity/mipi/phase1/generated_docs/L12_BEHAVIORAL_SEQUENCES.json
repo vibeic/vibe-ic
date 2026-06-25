@@ -4,8 +4,15 @@
   "ic_name": "MIPI D-PHY / CSI-2 (TI SLLA414 application note)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
-  "extraction_evidence": {},
+  "no_calibration": true,
+  "extraction_evidence": {
+    "derived_no_calibration_source": [
+      {
+        "literal": "no calibration / trim / OTP-cal source in input",
+        "label": "L12 no_calibration auto-set (#634 facet e) — absence-based, mirrors L5.no_analog"
+      }
+    ]
+  },
   "frame_transmit_sequence": [
     "1. Source completes any prior burst and forces all lanes to LP-11 (Stop state).",
     "2. Source initiates HS Entry: LP-11 → LP-01 (T-LPX) → LP-00 (T-LPX) → HS-0 (T-HS-PREPARE + T-HS-ZERO) → Sync pattern 8'b00011101.",

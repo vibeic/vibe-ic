@@ -34,10 +34,9 @@
     ],
     "deprecated_features": [
       {
-        "feature": "Master/Slave terminology (AHB)",
-        "deprecated_in_version": "AHB Issue C (2021)",
-        "rationale": "Regularized to Manager / Subordinate for inclusive language. Issue A/B used Master/Slave.",
-        "supports_through": "Backward compatible at signal level; terminology change only."
+        "feature": "now",
+        "quote": "The APB Specification Rev E, released in 1998, is now obsolete and is superseded by the",
+        "line": 4949
       }
     ],
     "backward_compat_traps": [

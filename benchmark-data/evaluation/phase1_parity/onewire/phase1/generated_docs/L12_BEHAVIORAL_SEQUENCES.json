@@ -4,8 +4,15 @@
   "ic_name": "1-Wire bus (Maxim AN148 Reliable 1-Wire Networks)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
-  "extraction_evidence": {},
+  "no_calibration": true,
+  "extraction_evidence": {
+    "derived_no_calibration_source": [
+      {
+        "literal": "no calibration / trim / OTP-cal source in input",
+        "label": "L12 no_calibration auto-set (#634 facet e) — absence-based, mirrors L5.no_analog"
+      }
+    ]
+  },
   "typical_transaction_sequence": [
     "1. Master initiates a Reset Pulse: pull DQ LOW for ≥ 480 µs (standard) or ≥ 48 µs (overdrive), then release.",
     "2. Slave(s) respond with a Presence Pulse: 15-60 µs after master release, slave pulls DQ LOW for 60-240 µs; master samples LOW to confirm at least one slave is present.",

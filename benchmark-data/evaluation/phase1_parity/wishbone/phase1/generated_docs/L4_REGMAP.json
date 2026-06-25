@@ -212,7 +212,7 @@
   "extraction_evidence": {
     "input/docs/Wishbone_Spec.pdf": []
   },
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "processor_cpu",
   "register_map_present": false,
   "base_address": "Defined at SoC level; offsets given relative to module base.",
   "notes": "If a future system-integration L4 is required for a Wishbone-compliant IP, the canonical 'address-side fields' to capture would be: [ADR_O()] width, [SEL_O()] width = port_size/granularity, [TGA_O()] semantics (per WISHBONE DATASHEET), [SEL_O()] -> byte-lane mapping (BIG / LITTLE ENDIAN per Section 3.5), and (for Registered Feedback) the [CTI_O()] + [BTE_O()] burst tags.",

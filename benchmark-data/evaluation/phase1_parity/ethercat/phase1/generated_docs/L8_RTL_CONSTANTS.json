@@ -21,7 +21,6 @@
   "extraction_evidence": {
     "input/docs/EtherCAT_Spec.pdf": []
   },
-  "class_path": "digital_arithmetic_primitive",
   "auto_discovered_literals": [
     {
       "literal": "1µs",

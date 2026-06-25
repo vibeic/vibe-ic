@@ -4,7 +4,7 @@
   "ic_name": "DisplayPort (VESA DP 1.4a/2.0/2.1)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
+  "no_calibration": true,
   "extraction_evidence": {},
   "connect_and_link_bringup_sequence": [
     "1. USB-C partner detected; orientation + USB Power Delivery contract negotiated on CC pins.",

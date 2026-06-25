@@ -5,48 +5,6 @@
   "reject_rules": [],
   "fsm_states": [
     {
-      "name": "REFER",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/NVMe_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "FIGURE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/NVMe_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "UNABLE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/NVMe_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "SUCCESSFULLY",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/NVMe_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "SUBJECT",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/NVMe_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "SECTION",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/NVMe_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
       "name": "D3HOT",
       "transitions": [],
       "actions": [],

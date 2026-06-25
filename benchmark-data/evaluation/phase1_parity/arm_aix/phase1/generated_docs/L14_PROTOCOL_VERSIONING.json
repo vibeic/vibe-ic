@@ -47,6 +47,11 @@
         "feature": "domain",
         "quote": "Shareable domain is deprecated in the following interfaces:",
         "line": 22568
+      },
+      {
+        "feature": "Shareable",
+        "quote": "0b01              Inner Shareable    Deprecated, use 0b10",
+        "line": 22585
       }
     ],
     "backward_compat_traps": [

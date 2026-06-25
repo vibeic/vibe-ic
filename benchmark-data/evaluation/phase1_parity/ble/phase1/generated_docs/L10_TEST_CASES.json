@@ -136,7 +136,7 @@
   ],
   "no_bring_up_sequence_in_input": false,
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "crypto_accelerator",
   "test_cases_present": "partial - the spec defines compliance behaviors that map to formal qualification (Bluetooth SIG Profile Tuning Suite, PTS) plus Direct Test Mode (Vol 6 Part F) for production RF tests, but the spec itself does not include a testbench.",
   "derived_compliance_test_categories": [
     "Reset behavior verification.",

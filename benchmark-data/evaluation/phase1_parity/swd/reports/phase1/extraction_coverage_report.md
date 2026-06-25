@@ -5,7 +5,7 @@
 - **overall.pct = 100.0%**
 - status: **PASS** (target ≥80%)
 - curated: **401/401 = 100.0%**
-- hands_on: **410/410 = 100.0%**
+- hands_on: **447/447 = 100.0%**
 
 ## Per-L-doc
 
@@ -20,7 +20,7 @@
 - L9_INTEGRATION_SPEC: evidence=0 todo=0
 - L10_TEST_CASES: evidence=0 todo=0
 - L11_OTP_CONTENT: evidence=0 todo=0
-- L12_BEHAVIORAL_SEQUENCES: evidence=0 todo=0
+- L12_BEHAVIORAL_SEQUENCES: evidence=1 todo=0
 - L13_LAB_CALIBRATION: evidence=0 todo=0
 - L8_TIMING_WAVEFORM: evidence=0 todo=0
 - L14_PROTOCOL_VERSIONING: evidence=0 todo=0

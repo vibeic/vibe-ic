@@ -44,7 +44,7 @@
       "source_pin": "clk"
     }
   ],
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "processor_cpu",
   "clock_mhz": 150.0,
   "clock_and_reset_waveform": {
     "CLK_I": "Single rising-edge clock per WISHBONE interface. All output signals are registered at the rising edge of CLK_I.",

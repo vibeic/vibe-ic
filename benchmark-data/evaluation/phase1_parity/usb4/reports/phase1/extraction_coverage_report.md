@@ -10,7 +10,7 @@
 ## Per-L-doc
 
 - L1_DATASHEET: evidence=3 todo=0
-- L2_FRS: evidence=11 todo=0
+- L2_FRS: evidence=12 todo=0
 - L3_CMD_PROTOCOL: evidence=0 todo=0
 - L4_REGMAP: evidence=0 todo=0
 - L5_ADI_SPEC: evidence=2 todo=0
@@ -20,7 +20,7 @@
 - L9_INTEGRATION_SPEC: evidence=0 todo=0
 - L10_TEST_CASES: evidence=0 todo=0
 - L11_OTP_CONTENT: evidence=0 todo=0
-- L12_BEHAVIORAL_SEQUENCES: evidence=0 todo=0
+- L12_BEHAVIORAL_SEQUENCES: evidence=1 todo=0
 - L13_LAB_CALIBRATION: evidence=0 todo=0
 - L8_TIMING_WAVEFORM: evidence=0 todo=0
 - L14_PROTOCOL_VERSIONING: evidence=0 todo=0

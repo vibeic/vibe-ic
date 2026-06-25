@@ -9,7 +9,7 @@
   "crc_parameters": {
     "polynomial_hex": null,
     "polynomial_reflected_hex": null,
-    "init_hex": "0xCA",
+    "init_hex": "0x18",
     "bit_order": "lsb_first",
     "xorout_hex": "0x00",
     "residue_check_hex": "0x00",
@@ -28,12 +28,11 @@
   "extraction_evidence": {
     "input/docs/CAN_FD_Spec.pdf": [
       {
-        "literal": "0xCA",
+        "literal": "0x18",
         "label": "CRC init"
       }
     ]
   },
-  "class_path": "serial_peripheral_protocol",
   "protocol_type": "Frame-based serial messaging protocol with optional flexible data-rate extension; content-addressed by IDENTIFIER; no opcode/command set at the wire layer; controller register-level command set via M_CAN's 512-byte register map.",
   "channels": [
     {

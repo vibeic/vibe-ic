@@ -113,7 +113,6 @@
       }
     ]
   },
-  "class_path": "digital_arithmetic_primitive",
   "auto_cited_sections": [
     {
       "file_ref": "phase1/input_doc/mipi_csi2_spec.txt:8",

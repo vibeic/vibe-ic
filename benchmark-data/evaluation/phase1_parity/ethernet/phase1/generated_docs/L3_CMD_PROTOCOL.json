@@ -140,40 +140,6 @@
       "argument_constraints": []
     },
     {
-      "hex": "<HALLUCINATION_SCRUBBED>",
-      "name": "TXD",
-      "rx_len": "var",
-      "tx_len": "var",
-      "response_opcode_hex": "0x17",
-      "pre_wake_allowed": false,
-      "evidence": "input/docs/Ethernet_Spec.pdf",
-      "response_payload_template": [
-        {
-          "byte_offset": 0,
-          "value": "0x17",
-          "description": "response opcode echo"
-        }
-      ],
-      "argument_constraints": []
-    },
-    {
-      "hex": "<HALLUCINATION_SCRUBBED>",
-      "name": "TXD",
-      "rx_len": "var",
-      "tx_len": "var",
-      "response_opcode_hex": "0x18",
-      "pre_wake_allowed": false,
-      "evidence": "input/docs/Ethernet_Spec.pdf",
-      "response_payload_template": [
-        {
-          "byte_offset": 0,
-          "value": "0x18",
-          "description": "response opcode echo"
-        }
-      ],
-      "argument_constraints": []
-    },
-    {
       "hex": "0x18",
       "name": "COL",
       "rx_len": "var",
@@ -517,17 +483,8 @@
   "no_opcodes_in_input": false,
   "placeholder_opcode_count": 0,
   "no_opcode_names_in_input": false,
-  "crc_parameters": {
-    "polynomial_hex": null,
-    "polynomial_reflected_hex": null,
-    "init_hex": "0xFA",
-    "bit_order": "lsb_first",
-    "xorout_hex": "0x00",
-    "residue_check_hex": "0x00",
-    "reset_at_break": true,
-    "golden_vectors": []
-  },
-  "no_crc_parameters_in_input": false,
+  "crc_parameters": null,
+  "no_crc_parameters_in_input": true,
   "verdict_byte_offset": null,
   "verdict_byte_hex": null,
   "no_verdict_byte_in_input": true,
@@ -609,10 +566,6 @@
       {
         "literal": "0x25 MB",
         "label": "opcode declaration"
-      },
-      {
-        "literal": "0xFA",
-        "label": "CRC init"
       }
     ]
   },
@@ -633,6 +586,14 @@
         "old_value": "0x17",
         "new_value": "<HALLUCINATION_SCRUBBED>",
         "why": "hex value matches a 2-digit decimal page-format number commonly lifted from byte-position figures; not a real opcode encoding"
+      },
+      {
+        "l_doc": "L3_CMD_PROTOCOL",
+        "pattern_name": "drop_scrubbed_opcode_zombie",
+        "path": "opcodes",
+        "old_value": "30 entries",
+        "new_value": "28 entries",
+        "why": "dropped 2 opcode(s) whose hex was scrubbed as a hallucination; a scrubbed-hex opcode carries no real encoding (consistent with ic_class_profile._l3_has_commands)"
       }
     ]
   },

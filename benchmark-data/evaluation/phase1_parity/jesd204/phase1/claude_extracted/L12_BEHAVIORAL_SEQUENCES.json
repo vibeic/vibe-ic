@@ -4,7 +4,7 @@
   "ic_name": "JESD204 Serial Interface for Data Converters (JESD204B/C)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
+  "no_calibration": true,
   "extraction_evidence": {},
   "link_bring_up_sequence": [
     "1. Reset; Device Clock running; (Subclass 1) SYSREF establishes the LMFC phase at TX and RX.",

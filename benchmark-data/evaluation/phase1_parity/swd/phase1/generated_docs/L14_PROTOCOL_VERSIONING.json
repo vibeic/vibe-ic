@@ -17,7 +17,18 @@
         "change": "Final        Third issue, for ADIv5.0 to ADIv5.2."
       }
     ],
-    "deprecated_features": [],
+    "deprecated_features": [
+      {
+        "feature": "state",
+        "quote": "initial state                                          deprecated",
+        "line": 6514
+      },
+      {
+        "feature": "change",
+        "quote": "Deprecated state change                              deprecated",
+        "line": 6540
+      }
+    ],
     "backward_compat_traps": [
       {
         "trap_name": "dpidr_lsb_must_be_RAO",

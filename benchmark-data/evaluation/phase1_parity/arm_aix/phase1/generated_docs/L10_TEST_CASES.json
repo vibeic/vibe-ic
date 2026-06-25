@@ -7,18 +7,6 @@
   "bring_up_sequence": [],
   "no_bring_up_sequence_in_input": true,
   "extraction_evidence": {},
-  "extraction_strategy": {
-    "hallucination_scrub_v0_1_60": [
-      {
-        "l_doc": "L10_TEST_CASES",
-        "pattern_name": "ic_name_from_license_clause",
-        "path": "ic_name",
-        "old_value": "SUCH ARM TECHNOLOGY",
-        "new_value": "UNKNOWN_IC",
-        "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
-      }
-    ]
-  },
   "test_cases_present": "partial — derived from protocol requirements; spec does not provide a formal test plan.",
   "derived_compliance_test_categories": [
     "Channel handshake compliance (VALID stable until READY, no combinational VALID-from-READY dependency)",

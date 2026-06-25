@@ -2,24 +2,75 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "MIPI SoundWire (Overview)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
   "external_components": [],
-  "electrical_specs": [],
-  "design_parameters": [
+  "electrical_specs": [
     {
-      "parameter": "BREL",
-      "value": "1",
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "13.0",
+      "unit": "MHz",
       "source": "SoundWire_Spec.pdf",
-      "raw": "- BREL=1 is an illegal sequence",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "12.288",
+      "unit": "MHz",
+      "source": "SoundWire_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "44.1",
+      "unit": "kHz",
+      "source": "SoundWire_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "48.0",
+      "unit": "kHz",
+      "source": "SoundWire_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "96.0",
+      "unit": "kHz",
+      "source": "SoundWire_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "192.0",
+      "unit": "kHz",
+      "source": "SoundWire_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "32.0",
+      "unit": "kHz",
+      "source": "SoundWire_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
     }
   ],
-  "extraction_evidence": {
-    "input/docs/SoundWire_Spec.pdf": []
-  },
-  "class_path": "digital_arithmetic_primitive",
+  "design_parameters": [],
+  "source_documents": [
+    "input/docs/SoundWire_Spec.pdf"
+  ],
+  "extraction_evidence": {},
   "analog_digital_interface_present": false,
   "signaling_summary": "Pure-digital two-pin DDR bus with carefully-specified analog DC and AC characteristics. Supply rails are 1.2 V or 1.8 V. The Modified-NRZI encoding requires a bus-keeper on SoundWire_Data — a weak active driver that maintains the last driven level when no device is actively driving — so Logic 0 (passive unchanged level) can be reliably distinguished from a floating bus. SoundWire_Clock is Push-Pull from the Master with no inversion; SoundWire_Data is bidirectional and dynamically shared. Maximum bus Clock 13 MHz typical (faster in restricted geometries); audio-friendly natural Clock frequencies 9.6 MHz, 12 MHz, 12.288 MHz. Clock quality is constrained to meet PHY parameters; jitter is limited for best audio quality but the SoundWire spec sets no normative ppm or ps requirement on jitter — it is a system-design and differentiating concern. Three data handover cases (high-Z→driving, driving→driving across two devices, driving→high-Z) are governed by tDZ_Data_Max < tZD_Data_Min with margin for devices detecting the clock edge at different times; even a device that drives two adjacent BitSlots is required to momentarily tri-state between them, with optional self-timed turn-off bounded by tOH_Data_Min.",
   "key_analog_parameters": {

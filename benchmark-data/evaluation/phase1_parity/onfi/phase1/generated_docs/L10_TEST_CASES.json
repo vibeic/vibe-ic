@@ -136,7 +136,6 @@
   ],
   "no_bring_up_sequence_in_input": false,
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
   "test_cases_present": "partial - the spec defines command opcodes, address-cycle counts, status-register bits, parameter-page layout, multi-LUN / multi-plane rules, and behavioural-flow state machines (Section 7) that map directly to compliance scenarios; ONFI does not publish a formal compliance test plan in the spec itself.",
   "derived_compliance_test_categories": [
     "Reset behavior verification.",

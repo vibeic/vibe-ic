@@ -4,7 +4,7 @@
   "ic_name": "MIPI SPMI v2.0 + RFFE v3.0 (System Power Management + RF Front-End Control)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
+  "no_calibration": true,
   "extraction_evidence": {},
   "class_path": "serial_peripheral_protocol",
   "typical_master_write_sequence": [

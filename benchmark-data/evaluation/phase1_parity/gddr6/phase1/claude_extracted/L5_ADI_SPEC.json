@@ -46,24 +46,10 @@
   ],
   "design_parameters": [
     {
-      "parameter": "channel transfers BL16 over 8 DQ",
-      "value": "16",
-      "source": "gddr6_spec.txt",
-      "raw": "channel transfers BL16 over 8 DQ = 16 bytes independently.",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
       "parameter": "organization",
       "value": "4",
       "source": "gddr6_spec.txt",
       "raw": "organization: 4 bank groups x 4 banks = 16 banks per channel (density dependent).",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "Per-pin data rate",
-      "value": "16",
-      "source": "gddr6_spec.txt",
-      "raw": "Per-pin data rate: 16 Gb/s to 18 Gb/s (NRZ).",
       "extraction_strategy": "bullet_kv_pair_spec"
     }
   ],

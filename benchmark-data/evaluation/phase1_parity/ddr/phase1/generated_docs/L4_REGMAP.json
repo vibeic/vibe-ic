@@ -24,7 +24,6 @@
   "extraction_evidence": {
     "input/docs/DDR3_Spec.pdf": []
   },
-  "class_path": "digital_arithmetic_primitive",
   "registers_extraction_strategy": "register_name_promotion_from_l12",
   "register_map_present": true,
   "base_address": "Defined at SoC level; offsets given relative to module base.",

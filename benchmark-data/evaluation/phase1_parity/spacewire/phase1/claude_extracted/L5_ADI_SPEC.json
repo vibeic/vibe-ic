@@ -9,13 +9,6 @@
   "electrical_specs": [],
   "design_parameters": [
     {
-      "parameter": "Signals per direction",
-      "value": "2",
-      "source": "spacewire_spec.txt",
-      "raw": "- Signals per direction:   2 (Data and Strobe), each a differential pair",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
       "parameter": "Differential pairs",
       "value": "4",
       "source": "spacewire_spec.txt",

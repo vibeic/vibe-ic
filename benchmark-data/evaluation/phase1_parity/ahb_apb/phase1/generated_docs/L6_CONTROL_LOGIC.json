@@ -32,20 +32,7 @@
     "input/docs/ARM_AHB_Lite.pdf": [],
     "input/docs/ARM_APB.pdf": []
   },
-  "extraction_strategy": {
-    "hallucination_scrub_v0_1_60": [
-      {
-        "l_doc": "L6_CONTROL_LOGIC",
-        "pattern_name": "ic_name_from_license_clause",
-        "path": "ic_name",
-        "old_value": "SUCH ARM TECHNOLOGY",
-        "new_value": "UNKNOWN_IC",
-        "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
-      }
-    ]
-  },
-  "class_path": "digital_arithmetic_primitive",
-  "anti_deadlock_rule": "Inside the slave, VALID for an outgoing channel must not be combinationally dependent on the READY of the same channel; this prevents combinational deadlock.",
+  "class_path": "bus_peripheral",
   "ahb_fsm_hints": {
     "per_transfer_phases": [
       "ADDRESS_PHASE (one HCLK cycle, extended by previous data phase).",
@@ -142,6 +129,10 @@
       "cond": "PREADY=1 + back-to-back transfer"
     }
   ],
+  "anti_deadlock_rule": {
+    "ahb": "No combinational path from any HREADY back to a Manager output (HSEL/HTRANS); Manager drives address-phase signals from registered state only.",
+    "apb": "Bridge must not feed PREADY combinationally back into PSELx or PENABLE; bridge holds outputs stable while PREADY=LOW."
+  },
   "exit_from_reset": {
     "ahb": "Earliest non-IDLE transfer = first rising HCLK after HRESETn=HIGH; integrators typically initialize HTRANS=IDLE during reset.",
     "apb": "Bus enters IDLE (PSELx=0, PENABLE=0) on PRESETn=LOW."

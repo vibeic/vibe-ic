@@ -4,11 +4,11 @@
   "applicability": "N/A",
   "ic_class": "serial_peripheral_protocol",
   "rationale": "No analog interface; pure digital serial protocol",
-  "emitted_by": "l_doc_taxonomy.na_stub v0.1.51",
+  "extraction_evidence": {},
+  "emitted_by": "l_doc_taxonomy.na_stub v0.2.14",
   "extraction_strategy": {
     "ic_class_applicability_gate_v0_1_62": "ic_class='serial_peripheral_protocol' declares LL5 not applicable; emitted as N/A stub (l_doc_taxonomy.na_stub)"
   },
-  "class_path": "serial_peripheral_protocol",
   "analog_digital_interface_present": true,
   "signaling_summary": "DSI inherits the dual-mode analog/mixed-signal D-PHY physical layer described in MIPI Alliance Specification for D-PHY v0.90.00 (8-Oct-2007). The DSI spec itself (§1.1, §5) explicitly declares electrical specifications and physical specifications out of scope — those are covered by D-PHY. DSI specifies WHEN HS vs LP is used (forward HS payload, reverse LP only, BTA via Escape Mode) and the protocol-level timing relationships (T_INIT, HRX_TO, LTX-P_TO, etc.) but not the electrical waveforms.",
   "ic_name": "MIPI DSI v1.01.00 (Display Serial Interface, MIPI Alliance)",

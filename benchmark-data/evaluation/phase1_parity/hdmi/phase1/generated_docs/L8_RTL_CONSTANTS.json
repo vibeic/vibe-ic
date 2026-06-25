@@ -45,7 +45,6 @@
       }
     ]
   },
-  "class_path": "serial_peripheral_protocol",
   "auto_discovered_literals": [
     {
       "literal": "165MHz",

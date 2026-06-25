@@ -2,6 +2,8 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "AMBA AXI4-Stream Protocol (ARM IHI 0051, Single Unidirectional Stream Channel)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
@@ -28,18 +30,11 @@
       "extraction_strategy": "bullet_kv_pair_spec"
     }
   ],
-  "design_parameters": [
-    {
-      "parameter": "TSTRB",
-      "value": "1",
-      "source": "axi_stream_spec.txt",
-      "raw": "- TSTRB = 1 is not permitted.",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    }
+  "design_parameters": [],
+  "source_documents": [
+    "input/docs/axi_stream_spec.txt"
   ],
-  "extraction_evidence": {
-    "input/docs/axi_stream_spec.txt": []
-  },
+  "extraction_evidence": {},
   "analog_digital_interface_present": false,
   "signaling_summary": "AXI4-Stream is a synchronous-logic on-chip interface, not an electrical/analog interface. All signals (TVALID, TREADY, TDATA, TSTRB, TKEEP, TLAST, TID, TDEST, TUSER, TWAKEUP) are single-ended synchronous-logic signals sampled on the rising edge of the common ACLK; there is no line code, no differential signaling, and no physical-layer electrical specification in the AXI4-Stream protocol.",
   "modulation": "n/a (synchronous-logic interface; no modulation)",

@@ -11,7 +11,6 @@
   "extraction_evidence": {
     "input/docs/UM10204_NXP_i2c_bus_spec_rev6.pdf": []
   },
-  "class_path": "serial_peripheral_protocol",
   "register_map_present": false,
   "base_address": "Defined at SoC level; offsets given relative to module base.",
   "notes": "I2C is a wire-level protocol specification, not a peripheral block guide. There is no architectural register map at the protocol layer. Concrete I2C-controller IP blocks define their own register file (typically: address register, data register, status/interrupt register, control register, baud rate register) at the SoC integration level — covered by individual block guides, not by UM10204."

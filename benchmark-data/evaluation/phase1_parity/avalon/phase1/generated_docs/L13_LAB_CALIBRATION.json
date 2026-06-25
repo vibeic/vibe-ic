@@ -15,7 +15,7 @@
   "trim_loop": [],
   "extraction_evidence": {},
   "lab_calibration_present": false,
-  "notes": "Avalon is a synchronous-logic on-chip interface; there is no analog/lab calibration in the specification. Timing is closed by FPGA synthesis/STA, not by bench calibration. This layer is essentially N/A for the Avalon contract.",
+  "notes": "Avalon is a synchronous-logic on-chip interface; there is no analog or lab calibration in the specification. Timing is closed by FPGA synthesis/STA, not by bench calibration. This layer is essentially N/A for the Avalon contract.",
   "lab_measurement_targets_from_spec": [
     {
       "name": "Handshake timing closure",

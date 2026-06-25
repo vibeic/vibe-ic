@@ -19,7 +19,6 @@
   "extraction_evidence": {
     "input/docs/I3C_Spec.pdf": []
   },
-  "class_path": "serial_peripheral_protocol",
   "protocol_type": "Two-wire synchronous serial bus with I2C-compatible signaling, Push-Pull native data drive, dynamic 7-bit addressing, Broadcast/Direct Common Command Code (CCC) framework, and slave-initiated In-Band Interrupts / Hot-Join",
   "channels": [
     {

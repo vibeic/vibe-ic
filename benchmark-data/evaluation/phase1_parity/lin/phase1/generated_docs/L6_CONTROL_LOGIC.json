@@ -10,62 +10,6 @@
       "actions": [],
       "evidence": "input/docs/LIN_Spec.pdf (prose transition v1.6.484)",
       "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "REFERS",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/LIN_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "CLUSTER",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/LIN_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "LEFT",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/LIN_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "CONNECTION",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/LIN_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "POWER",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/LIN_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "APPLIES",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/LIN_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "SOFTWARE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/LIN_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "RECOMMENDED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/LIN_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
     }
   ],
   "pipeline_stages": [],

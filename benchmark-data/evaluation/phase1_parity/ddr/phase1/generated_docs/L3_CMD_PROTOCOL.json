@@ -19,7 +19,6 @@
   "extraction_evidence": {
     "input/docs/DDR3_Spec.pdf": []
   },
-  "class_path": "digital_arithmetic_primitive",
   "protocol_type": "Controller-mastered command-driven parallel memory bus. Every command is decoded from the simultaneous state of CKE / CS# / RAS# / CAS# / WE# at a rising edge of CK; address / bank fields encode the operand. Data transfers are double-data-rate on DQ, framed by bidirectional differential DQS.",
   "channels": [
     {

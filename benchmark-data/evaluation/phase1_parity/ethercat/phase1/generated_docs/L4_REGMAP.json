@@ -11,7 +11,6 @@
   "extraction_evidence": {
     "input/docs/EtherCAT_Spec.pdf": []
   },
-  "class_path": "digital_arithmetic_primitive",
   "register_map_present": true,
   "base_address": "Defined at SoC level; offsets given relative to module base.",
   "notes": "Clause 22 defines registers 0-7 as mandatory + reserves 8-15 for standardization; many gigabit / 10G / EEE / TPS-1 features moved to Clause 45 MMD space. Vendor-specific registers live in 16-31 (Clause 22) or DEVAD 30-31 (Clause 45). The PHY ID (registers 2/3) is OTP / metal-mask burned and reflects the IEEE-assigned manufacturer OUI.",

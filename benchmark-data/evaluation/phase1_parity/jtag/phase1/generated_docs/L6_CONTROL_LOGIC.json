@@ -12,41 +12,6 @@
       "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
     },
     {
-      "name": "RESPONDS",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "ADJACENT",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "USED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "SPECIFY",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "GOES",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
       "name": "DREXIT1",
       "transitions": [],
       "actions": [],
@@ -55,55 +20,6 @@
     },
     {
       "name": "DRPAUSE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "CONFIGURED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "TEST",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "PERFORM",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "TIME",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "MARKET",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "RELATIONSHIP",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "TESTABILITY",
       "transitions": [],
       "actions": [],
       "evidence": "input/docs/TI_SSYA002C_JTAG_primer.pdf (prose state-to-state v1.6.484)",

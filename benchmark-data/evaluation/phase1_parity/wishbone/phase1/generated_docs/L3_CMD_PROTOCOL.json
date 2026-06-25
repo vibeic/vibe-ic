@@ -19,7 +19,7 @@
   "extraction_evidence": {
     "input/docs/Wishbone_Spec.pdf": []
   },
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "processor_cpu",
   "rationale": "Wishbone is NOT an opcode/byte-oriented command protocol. It is an address-and-control on-chip bus protocol. The 'commands' are encoded as field tuples driven by the MASTER (address [ADR_O], byte-select [SEL_O], write-enable [WE_O], cycle-type tag [TGC_O] / [CTI_O] / [BTE_O]) together with the cycle markers [CYC_O] + [STB_O], and terminated by the SLAVE via one of [ACK_O], [ERR_O], or [RTY_O].",
   "channels": [
     {

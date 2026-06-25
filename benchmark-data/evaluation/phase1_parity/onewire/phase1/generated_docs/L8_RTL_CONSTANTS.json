@@ -9,8 +9,21 @@
   "timing_parameters": [],
   "clock_mhz": null,
   "no_clock_mhz_in_input": true,
-  "clock_domains": [],
-  "no_clock_domains_in_input": true,
+  "clock_domains": [
+    {
+      "name": "clk",
+      "source_pin": "clk",
+      "domain_kind": "primary",
+      "role": "master",
+      "source": "synthesised-from-L9.top_ports",
+      "evidence": "L9.top_ports",
+      "reset_strategy": "unspecified",
+      "freq_hz": null,
+      "freq_mhz": null,
+      "period_ns": null
+    }
+  ],
+  "no_clock_domains_in_input": false,
   "synthesis_targets": [],
   "no_synthesis_targets_in_input": true,
   "parameters": [],

@@ -6,7 +6,6 @@
   "no_behavioral_sequences_in_input": true,
   "no_calibration": false,
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
   "pause_frame_sequence": [
     "1. Receive MAC's RX FIFO crosses high-watermark; MAC Control sublayer constructs a PAUSE frame with DA = 01:80:C2:00:00:01, SA = own MAC, EtherType = 0x8808, opcode = 0x0001, pause_quanta = N (1 quantum = 512 BT).",
     "2. PAUSE frame transmitted; partner receive MAC recognises and signals MAC Control.",

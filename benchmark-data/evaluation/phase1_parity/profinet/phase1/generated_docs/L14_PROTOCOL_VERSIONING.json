@@ -50,7 +50,7 @@
     ],
     "version_naming_history_note": "PROFINET is standardized in IEC 61158 (Type 10) and IEC 61784-2 (Communication Profile Family 3) and maintained by PI (PROFIBUS & PROFINET International), the same organization behind the serial PROFIBUS fieldbus. PROFINET is the Ethernet successor to PROFIBUS, replacing RS-485 token-passing / SD1-SD4 telegrams / GSD / DPV1 with switched Ethernet, GSDML, names, and a provider/consumer cyclic model. The communication profiles RT_CLASS_1 / RT_CLASS_2 / RT_CLASS_3(IRT) / RT_CLASS_UDP correspond to the NRT/RT/IRT performance classes."
   },
-  "extraction_status": "EXTRACTION_FOUND_NOTHING",
+  "extraction_status": "EXTRACTED",
   "schema_version": "v0.1.62",
   "doc_class": "L14",
   "emitted_by": "phase1_protocol_spec_extract.extract_l14_versioning v0.1.62",

@@ -2,7 +2,7 @@
   "doc_id": "L19",
   "doc_name": "L19_CONSTRAINTS_PDK",
   "applicability": "APPLICABLE",
-  "ic_class": "digital_arithmetic_primitive",
+  "ic_class": "bus_peripheral",
   "fields": {
     "pdk_target": null,
     "die_area_budget_um": null,

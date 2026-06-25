@@ -162,14 +162,6 @@
         "label": "opcode → happy + negative test-cases"
       },
       {
-        "literal": "<HALLUCINATION_SCRUBBED> D1",
-        "label": "opcode → happy + negative test-cases"
-      },
-      {
-        "literal": "<HALLUCINATION_SCRUBBED> VSS5",
-        "label": "opcode → happy + negative test-cases"
-      },
-      {
         "literal": "0xBE BE",
         "label": "opcode → happy + negative test-cases"
       },
@@ -199,14 +191,6 @@
       },
       {
         "literal": "0x25 CARD_IS_LOCKED",
-        "label": "opcode → happy + negative test-cases"
-      },
-      {
-        "literal": "<HALLUCINATION_SCRUBBED> LOCK_UNLOCK_FAIL",
-        "label": "opcode → happy + negative test-cases"
-      },
-      {
-        "literal": "<HALLUCINATION_SCRUBBED> COM_CRC_ERROR",
         "label": "opcode → happy + negative test-cases"
       },
       {

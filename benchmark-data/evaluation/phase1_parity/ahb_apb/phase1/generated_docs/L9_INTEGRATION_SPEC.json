@@ -2,8 +2,8 @@
   "schema_version": 2,
   "doc_class": "integration_spec",
   "ic_name": "AMBA AHB + APB (ARM IHI 0033C + IHI 0024C)",
-  "top_module": "SUCH_ARM_TECHNOLOGY",
-  "top_module_extraction_strategy": "l1_ic_name_fallback",
+  "top_module": "chip_top",
+  "top_module_extraction_strategy": "canonical_chip_top_sentinel",
   "no_top_module_in_input": true,
   "ports": [],
   "top_ports": [],
@@ -41,8 +41,7 @@
   "expected_verdict_byte_hex_low_confidence": false,
   "cpu_interrupts": [],
   "no_cpu_interrupts_in_input": true,
-  "memories": [],
-  "memory_candidates": [
+  "memories": [
     {
       "name": null,
       "kind": "memory",
@@ -53,7 +52,9 @@
       "evidence_file": "ARM_AHB_Lite.pdf",
       "extraction_strategy": "l9_memory_prose_walker_v1_6_426",
       "low_confidence": true
-    },
+    }
+  ],
+  "memory_candidates": [
     {
       "name": null,
       "kind": "cache",
@@ -93,25 +94,8 @@
   "memory_map": [],
   "no_memory_map_in_input": true,
   "no_instantiation_template_in_input": true,
-  "top_module_pins_evidence": {
-    "reason": "no_module_declaration_in_input_docs",
-    "fallback_source": "L1.ic_name",
-    "extraction_strategy_marker": "fallback_explicit_v1_6_581"
-  },
   "extraction_evidence": {
     "derived_from_L3": []
-  },
-  "extraction_strategy": {
-    "hallucination_scrub_v0_1_60": [
-      {
-        "l_doc": "L9_INTEGRATION_SPEC",
-        "pattern_name": "ic_name_from_license_clause",
-        "path": "ic_name",
-        "old_value": "SUCH ARM TECHNOLOGY",
-        "new_value": "UNKNOWN_IC",
-        "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
-      }
-    ]
   },
   "interface_type": "apb",
   "no_interface_type_in_input": false,
@@ -140,13 +124,7 @@
       "matched_token": "AHB"
     }
   ],
-  "class_path": "digital_arithmetic_primitive",
-  "interconnect_id_handling": {
-    "id_widening": "When a master is connected to an interconnect, the interconnect appends additional bits to the master's xID to distinguish requests from different masters at the slave-side port.",
-    "id_collision_avoidance": "The slave-side ID_WIDTH must accommodate the maximum of (master-side ID_WIDTH + log2(number_of_masters)).",
-    "id_routing": "For read data, interconnect uses the appended bits of RID to determine which master port the data is destined for. Interconnect removes these bits before passing RID back to the originating master."
-  },
-  "default_signal_values_when_omitted": "Refer to Tables A9-1..A9-4 for master/slave write/read channel default signal values applied when a signal is omitted from the integration interface.",
+  "class_path": "bus_peripheral",
   "interconnect_topology_options_ahb": [
     "Single-Manager AHB-Lite: one decoder + one multiplexor (Figure 1-1).",
     "Multi-Manager / multi-layer AHB: requires interconnect with arbitration (DVI 0045)."

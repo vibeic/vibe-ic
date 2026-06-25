@@ -61,126 +61,6 @@
   ],
   "fsm_states": [
     {
-      "name": "ATTACHED",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "STATE",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ANOTHER",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "RESPONSE",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "FRAME",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "PXCI",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "DETERMINE",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "COMMANDS",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "TRANSMIT",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "REFER",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SECTION",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "VARIABLES",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "THEIR",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "REGISTER",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "TRANSMITTED",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "MACHINE",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ENSURE",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "INITIALIZATION",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "COMPLETE",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "CONDITIONS",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "COMRESET",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "POWER",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "WRITTEN",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "FIELD",
-      "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
-    },
-    {
       "name": "IDLE",
       "transitions": [],
       "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
@@ -201,24 +81,29 @@
       "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
     },
     {
-      "name": "AGAIN",
+      "name": "D3COLD",
       "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose 'in X state')"
     },
     {
-      "name": "SEND",
+      "name": "L_IDLE",
       "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose 'in X state')"
     },
     {
-      "name": "CLEAR",
+      "name": "AHCI",
       "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose 'in X state')"
     },
     {
-      "name": "INDICATE",
+      "name": "DEVSLP",
       "transitions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose 'in X state')"
+    },
+    {
+      "name": "ATAPI",
+      "transitions": [],
+      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (arrow transition (rhs))"
     }
   ],
   "no_fsm_states_in_input": false,
