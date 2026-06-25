@@ -357,12 +357,18 @@ def _lifo_param_decls(prompt: str, params: Dict[str, int], W: int,
         width_expr = W
 
     # --- depth: prefer an explicit *_DEPTH entry-count param; else 2**ADDR_WIDTH.
-    depth_param = next((nm for nm in _DEPTH_PARAM_NAMES if nm in params), None)
+    #     Exclude the already-chosen width_name from address candidacy so a single
+    #     param that matched BOTH (e.g. a spec that names only `ADDR_WIDTH` and whose
+    #     default happens to equal W) is never declared twice (a duplicate `parameter`
+    #     is an iverilog error). The width binding wins; depth then falls back to the
+    #     literal. The final dedupe below is the airtight backstop.
+    depth_param = next((nm for nm in _DEPTH_PARAM_NAMES
+                        if nm in params and nm != width_name), None)
     addr_param = None
     if depth_param is None:
         # 2^{ADDR_WIDTH} form — declare ADDR_WIDTH, depth = (1 << ADDR_WIDTH)
         m = re.search(r"2\s*[\^*]{1,2}\s*\{?\s*`?([A-Za-z_]\w*)`?\s*\}?", prompt)
-        if m and m.group(1) in params:
+        if m and m.group(1) in params and m.group(1) != width_name:
             addr_param = m.group(1)
     if depth_param is not None:
         decls.append(f"parameter {depth_param} = {params[depth_param]}")
@@ -372,6 +378,16 @@ def _lifo_param_decls(prompt: str, params: Dict[str, int], W: int,
         depth_expr = f"(1 << {addr_param})"
     else:
         depth_expr = str(depth)  # literal-only depth (no param stated) — still valid
+
+    # Backstop: never emit the same `parameter NAME` twice (a duplicate decl is an
+    # iverilog compile error), preserving first-seen order.
+    seen, deduped = set(), []
+    for d in decls:
+        key = d.split("=", 1)[0].strip()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(d)
+    decls = deduped
     return decls, width_expr, depth_expr
 
 
