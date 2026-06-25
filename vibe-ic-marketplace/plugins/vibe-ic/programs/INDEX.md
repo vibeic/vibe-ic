@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 796
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 796)
+- **Total programs (excluding helpers / shims):** 797
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 797)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 787 |
+| `any` | 788 |
 
 ## Alphabetical listing
 
@@ -202,6 +202,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `cvdp_context_interface_recover` | any | — | recover the TARGET module's PORT INTERFACE |
 | `cvdp_conv_encoder_synth` | any | — | DETERMINISTIC solver for the CVDP convolutional |
 | `cvdp_crc_synth` | any | — | a DETERMINISTIC solver for the CVDP CRC family. |
+| `cvdp_dice_roller_synth` | any | — | DETERMINISTIC solver for the CVDP digital dice-roller. |
 | `cvdp_encoder_synth` | any | — | deterministic SOLVER for the CVDP PRIORITY-ENCODER / |
 | `cvdp_enumset_extract` | any | — | PROGRAM-FIRST structural extractor for CVDP |
 | `cvdp_fsm_extract` | any | — | PROGRAM-FIRST structural extractor for stated FSMs. |
@@ -868,7 +869,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (787 programs)
+### `any` (788 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1043,6 +1044,7 @@ _(no programs in this group)_
 - `cvdp_context_interface_recover` — recover the TARGET module's PORT INTERFACE
 - `cvdp_conv_encoder_synth` — DETERMINISTIC solver for the CVDP convolutional
 - `cvdp_crc_synth` — a DETERMINISTIC solver for the CVDP CRC family.
+- `cvdp_dice_roller_synth` — DETERMINISTIC solver for the CVDP digital dice-roller.
 - `cvdp_encoder_synth` — deterministic SOLVER for the CVDP PRIORITY-ENCODER /
 - `cvdp_enumset_extract` — PROGRAM-FIRST structural extractor for CVDP
 - `cvdp_fsm_extract` — PROGRAM-FIRST structural extractor for stated FSMs.
