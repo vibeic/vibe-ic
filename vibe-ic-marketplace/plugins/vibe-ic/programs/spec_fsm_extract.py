@@ -227,8 +227,11 @@ _ENC_VAL_FIRST_RE = re.compile(
 # (5) An explicit "<NAME> state" / "state <NAME>" prose mention — a weaker source
 #     used ONLY to ADMIT a token already structurally implied (it never alone
 #     creates a state; see _collect_states).
+# Backtick-aware: a datasheet routinely backtick-quotes the state name
+# ("In the `IDLE` state", "state `LOAD`"), so the optional backticks around the
+# name let `IDLE` state / state `LOAD` register as a prose state source.
 _NAME_STATE_PROSE_RE = re.compile(
-    r"\b([A-Z][A-Z0-9_]+)\s+state\b|\bstate\s+`?([A-Z][A-Z0-9_]+)`?\b")
+    r"`?([A-Z][A-Z0-9_]+)`?\s+state\b|\bstate\s+`?([A-Z][A-Z0-9_]+)`?\b")
 # (6) An FSM-STATE-LIST cue LINE that explicitly announces an enumerated state
 #     list and ENDS WITH A COLON, e.g. "Implements an FSM with states for:",
 #     "The FSM has the following states:", "with states:". The CONTIGUOUS
@@ -394,7 +397,15 @@ def _collect_states(prose: str, code: str) -> Tuple[List[str], Dict[str, str]]:
     for m in _ENC_NAME_FIRST_RE.finditer(prose):
         _add(m.group(1), m.group(0).strip(), structural=True)
     for m in _ENC_VAL_FIRST_RE.finditer(prose):
-        _add(_canon_multiword(m.group(2)), m.group(0).strip(), structural=True)
+        # §4.05 PRECISION: a state-encoding NAME is conventionally CAPITALIZED
+        # ("0 = Idle", "01 = Transmit", "10 = IDLE"). A lower-case phrase after a
+        # single-bit value is a bit-FIELD value gloss ("1 = enabled", "0 = shift
+        # LSB first"), NOT a state — reject it so a register bit-field table does
+        # not mint phantom FSM states. chip-AGNOSTIC.
+        name = m.group(2).strip()
+        if not name[:1].isupper():
+            continue
+        _add(_canon_multiword(name), m.group(0).strip(), structural=True)
 
     # (3) STRONG: markdown encoded / "state"-worded section headers. The two
     # "state"-WORDED forms (`**NAME State**`, `## NAME state`) are strong only when
@@ -436,7 +447,30 @@ def _collect_states(prose: str, code: str) -> Tuple[List[str], Dict[str, str]]:
             if nm in evidence or nm.lower() in corroborated:
                 _add(nm, "localparam " + nm + " = " + val, structural=True)
 
-    # (6) prose-only FSM fallback (no structural state found)
+    # (6) TRANSITION-IMPLIED states (always runs). A datasheet FSM is often stated
+    # purely as transition prose ("In the `IDLE` state … transitions to `LOAD`;
+    # from `LOAD` … moves to `SHIFT` …"). Per this module's own doctrine, a token a
+    # transition VERB explicitly moves TO — or an explicit `in/from <NAME> state`
+    # SOURCE — is, by that fact, a state. This must run UNCONDITIONALLY (not only
+    # when `order` is empty): a state-shaped token elsewhere in a multi-section
+    # datasheet (a register/mode table) would otherwise make `order` non-empty and
+    # silently drop the real transition-prose FSM. §4.05: only ALL_CAPS / S<n>
+    # state-shaped tokens are admitted (a lower-case "the next stage" never
+    # qualifies) AND each must be named by a real transition verb / `… state`
+    # phrase, so this stays no-leak.
+    for m in _TRANS_RE.finditer(prose):
+        nm = _norm(m.group(1))
+        if _is_state_token(nm):
+            _add(nm, "transition target: " + nm, structural=False)
+    for m in re.finditer(
+            r"\b(?:in|from|within|during|while\s+in)\s+(?:the\s+)?`?\*?\*?"
+            r"\b([A-Za-z_]\w*)\b`?\*?\*?\s+state\b", prose, re.IGNORECASE):
+        nm = _norm(m.group(1))
+        if _is_state_token(nm):
+            _add(nm, "transition source: " + nm, structural=False)
+
+    # (7) prose-only fallback — a `<NAME> state` mention with no transition (a
+    # degenerate single-state mention) still seeds the prose state set.
     if not order:
         for nm in sorted(prose_states):
             _add(nm, "prose state mention: " + nm, structural=False)
