@@ -71,6 +71,44 @@ The bucket ladder (A>B>C>D) below decides *where* a fix goes; it NEVER decides *
 "not a plugin gap", "clean-room variance", and "design-side" are explicitly **NOT** valid Bucket-D
 discard reasons — only genuine non-generalizable over-fit is.
 
+## ⭐ THE GENERAL-CORE / THIN-ADAPTER PRINCIPLE — benchmark convergence MUST flow back to general cases (BINDING)
+
+> **The point of converging a benchmark is NOT the benchmark number — it is to make the GENERAL
+> Vibe-IC flow (Phase-1 design docs, any user prompt) better.** A fix that raises a benchmark
+> score but is locked inside a benchmark-named module, unreachable from the general Phase-1 path,
+> has captured only HALF its value. The other (load-bearing) half is making the SAME logic serve a
+> plain design doc that has no benchmark harness.
+
+Therefore every enhancement obeys a **two-layer architecture**:
+
+1. **GENERAL CORE (benchmark-AGNOSTIC, no benchmark prefix).** The actual logic — width
+   resolution, register-map / FSM / enum / numeric-pack / worked-example extraction, completeness
+   assessment, RTL synthesis knowledge — operates on **plain strings + a supplied interface**
+   (`prompt: str`, a port list), NEVER on a benchmark record format. It is named for WHAT IT DOES
+   (`verilog_width_resolve`, `spec_regmap_extract`, `spec_complete_extract`, `bubble_sort_emit`),
+   not for the benchmark it was first written against. Any benchmark OR a Phase-1 doc can call it.
+
+2. **THIN ADAPTER (benchmark-SPECIFIC, the `cvdp_`/`rtllm_`/`verilogeval_` prefix is CORRECT here).**
+   It does ONLY the IO mapping: read THIS benchmark's record format (cocotb `dut.<sig>` harness,
+   `.env` TOPLEVEL, prose `### Inputs/Outputs`, a markdown table) and hand the recovered interface
+   to the general core. It contains no reusable logic.
+
+**The naming test (apply on EVERY enhancement):** if a file is named `cvdp_…` / `rtllm_…` /
+`verilogeval_…`, ask *"does its LOGIC read a benchmark literal / record format, or is it pure
+prose/param logic that merely got written here first?"* If the latter, the prefix is **naming debt
+that hides the general value** — extract it to a benchmark-neutral name so the next benchmark and
+the Phase-1 path actually reuse it. (Evidence: 6 extractors were buried under a `cvdp_` prefix with
+ZERO benchmark literal in their logic — no other path would ever have reused a `cvdp_*` module;
+renaming them surfaced the general engine `spec_complete_extract`, which then scored a harness-less
+Phase-1 design doc identically to a CVDP record.)
+
+**The completeness test for "did convergence flow back":** after a benchmark-convergence fix, a
+plain Phase-1 design doc that exercises the SAME spec shape (e.g. a `[DATA_WIDTH-1:0]` port whose
+default sits in a `| Parameter | … | Default | … |` column) must get the SAME completeness verdict
+— with NO benchmark harness present. If it does not, the fix is still adapter-trapped; lift it into
+the general core. This is **Bucket A done right**: a deterministic program rule that fires for
+benchmarks AND general usage, not just the benchmark it was born in.
+
 ## Applies to EVERY step, not just RTL authoring
 
 The first time this skill landed (v0.1.34) it captured 9 RTLLM spec-to-RTL

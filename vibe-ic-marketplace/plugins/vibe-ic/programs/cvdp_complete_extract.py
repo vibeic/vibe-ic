@@ -859,41 +859,70 @@ def _completeness(record: dict, iface: List[dict], c_ins: List[str],
 # --------------------------------------------------------------------------- #
 # public API
 # --------------------------------------------------------------------------- #
+def _recover_cvdp_interface(record: dict, top: str):
+    """CVDP-ADAPTER interface recovery: read the record's cocotb `dut.<sig>` harness
+    (+ a skeleton module header, + a provided input.context header) into the signal
+    sets the GENERAL engine assesses. Returns
+    (skeleton_iface|None, inputs, outputs, params, param_defaults, table, ctx_widths,
+     tb). Everything CVDP-record-specific lives HERE; the verdict logic is general."""
+    prompt = (record.get("input") or {}).get("prompt") or ""
+    files = _bridge._harness_files(record)
+    tb = _bridge._cocotb_test_text(files)
+    param_defaults = _W.param_defaults(prompt, tb)
+    for _nm, _v in _W.context_param_defaults(record).items():
+        param_defaults.setdefault(_nm, _v)
+    table = _bridge._test_case_table(prompt) or {}
+
+    # (a) a non-empty skeleton module header is fully self-describing.
+    sk = _bridge._skeleton_ports(record, top)
+    if sk:
+        skiface = []
+        for d, lst in (("input", sk[0]), ("output", sk[1])):
+            for n, w in _bridge._clean_ports(lst):
+                skiface.append({"name": n, "dir": d, "width": w,
+                                "signed": False, "source": "skeleton_header"})
+        c_ins, c_outs = _cocotb_io_full(tb, prompt, table, param_defaults)
+        return skiface, c_ins, c_outs, set(), param_defaults, table, {}, tb
+
+    # (b) the cocotb dut.<sig> set is the harness's bound interface.
+    c_ins, c_outs = _cocotb_io_full(tb, prompt, table, param_defaults)
+    params = _harness_params(tb)
+    try:
+        ctx_widths = {p["name"]: p["width"]
+                      for p in _ctxrec.recover_interface(record, top)
+                      if p.get("width") is not None}
+    except Exception:
+        ctx_widths = {}
+    return None, c_ins, c_outs, params, param_defaults, table, ctx_widths, tb
+
+
 def extract(record: dict) -> dict:
-    """Build the most complete structured spec dict the prompt+harness support,
-    plus a completeness verdict. §4.05: every field anchored to a real source."""
+    """CVDP ADAPTER over the GENERAL `spec_complete_extract.assess_spec` engine:
+    recover the interface from the CVDP record's cocotb harness / skeleton header,
+    then delegate the completeness assessment. The general-spec engine is what
+    actually scores COMPLETE / EXTRACTION_GAP / SPEC_ABSENT, so the same machinery
+    serves any benchmark or a Phase-1 design doc. §4.05: every field anchored."""
     if not isinstance(record, dict):
         return {"completeness": "INCOMPLETE_SPEC_ABSENT",
                 "completeness_reason": "not a record", "gaps": []}
 
+    import spec_complete_extract as _eng
     prompt = (record.get("input") or {}).get("prompt") or ""
     top = _bridge.toplevel_name(record) or ""
+    skiface, c_ins, c_outs, params, param_defaults, table, ctx_widths, tb = \
+        _recover_cvdp_interface(record, top)
 
-    iface, c_ins, c_outs, params, gaps = _complete_interface(record, top)
-    structures = _structures(prompt)
-    timing = _timing(prompt)
-    completeness, reason = _completeness(
-        record, iface, c_ins, c_outs, params, gaps, structures)
-
-    spec = {
-        "id": record.get("id"),
-        "module_name": top or None,
-        "interface": iface,
-        "operation_family": _operation_family(prompt),
-        "params": _prompt_params(prompt),
-        "structures": structures,
-        "reset": _reset_semantics(prompt, c_ins),
-        "timing": timing,
-        "byte_order": _byte_order(prompt),
-        "completeness": completeness,
-        "completeness_reason": reason,
-        "gaps": gaps,
-        "harness": {
-            "toplevel": top or None,
-            "cocotb_inputs": c_ins,
-            "cocotb_outputs": c_outs,
-            "params": sorted(params),
-        },
+    spec = _eng.assess_spec(
+        prompt, c_ins, c_outs, module_name=top, skeleton_iface=skiface,
+        param_defaults=param_defaults, table=table, tb=tb, params=params,
+        ctx_widths=ctx_widths, record_id=record.get("id"))
+    # back-compat: the CVDP callers (cvdp_solve_pipeline, tests) read a `harness`
+    # block with the cocotb signal sets. Re-attach it from the recovered interface.
+    spec["harness"] = {
+        "toplevel": top or None,
+        "cocotb_inputs": c_ins,
+        "cocotb_outputs": c_outs,
+        "params": sorted(params),
     }
     return spec
 
