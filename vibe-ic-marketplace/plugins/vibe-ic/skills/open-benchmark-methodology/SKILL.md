@@ -30,6 +30,23 @@ before invoking any benchmark agent or runner.
 > after EVERY benchmark close-loop. A benchmark run that scores but distills nothing has done only
 > half the Benchmark Agent's job.
 
+## § 0 — GENERAL-CORE / THIN-ADAPTER: benchmark convergence MUST flow back to general usage (BINDING)
+
+> The reason we converge a benchmark is to make the **general Vibe-IC flow** (Phase-1 design docs,
+> any user prompt) better — NOT to win a number. So every benchmark-convergence fix lands as a
+> **benchmark-AGNOSTIC GENERAL CORE** (operates on plain prose + a supplied interface — named for
+> what it does: `verilog_width_resolve`, `spec_complete_extract`, …) called by a **THIN
+> benchmark ADAPTER** (the `cvdp_`/`rtllm_`/`verilogeval_` prefix is correct ONLY for the IO shell
+> that maps that benchmark's record format → the general core). A fix trapped inside a
+> benchmark-named module, unreachable from the Phase-1 path, has captured only half its value.
+>
+> **Naming test:** a `cvdp_…`/`rtllm_…`/`verilogeval_…` file whose LOGIC is pure prose/param
+> handling (no record-format / dataset literal) is naming debt — rename to a neutral name so the
+> next benchmark AND general usage reuse it. **Flow-back test:** a plain Phase-1 doc exercising the
+> same spec shape must get the SAME completeness verdict with no harness present. Full doctrine +
+> the bucket-A "done right" rule: `benchmark-enhancement-capture` → THE GENERAL-CORE / THIN-ADAPTER
+> PRINCIPLE.
+
 ## § 1 — Where Vibe-IC is a PROGRAM and where it's an LLM (the boundary every benchmark designer must respect)
 
 In v0.1.26 the plugin's `design_one_shot_runner.step_rtl_gen` for the `digital_arithmetic_primitive`

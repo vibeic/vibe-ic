@@ -140,6 +140,20 @@ For each actionable issue:
    from `tests/chip_deny_list.txt`). Heuristics must use deny-list
    / length-floor / structural checks, not chip-class string
    literals; the fix must work across **every** benchmark chip.
+   **GENERAL-CORE / THIN-ADAPTER (BINDING):** a fix found while
+   converging a benchmark must land in a **benchmark-AGNOSTIC general
+   core** (operates on plain prose + a supplied interface; named for
+   what it does — `verilog_width_resolve`, `spec_complete_extract`),
+   called by a **thin benchmark adapter** (the `cvdp_`/`rtllm_`/
+   `verilogeval_` prefix is correct ONLY for the record-IO shell).
+   Never fuse reusable logic into a benchmark-named file — that traps
+   the value away from the Phase-1 general path. If you touch a
+   `cvdp_…`/`rtllm_…` file whose logic is pure prose/param handling
+   (no record literal), it is naming debt: extract it to a neutral
+   name. Verify flow-back: a plain Phase-1 doc of the same spec shape
+   gets the SAME verdict with no harness. Full doctrine:
+   `benchmark-enhancement-capture` → THE GENERAL-CORE / THIN-ADAPTER
+   PRINCIPLE.
 4. Add tests covering BOTH the new path AND a regression-guard for
    the prior behaviour. Convention: `tests/test_v1_<MAJOR>_<MINOR>_<PATCH>_<slug>.py`.
 5. **Self-verify** before closing. New-tests-green +
