@@ -276,7 +276,7 @@ verification FAILURE is almost always **one of our own gaps**, not an unfixable 
 
   - **(1) SPEC-EXTRACTION GAP** — the requirement EXISTS somewhere in the chain but was not carried
     end-to-end. The fix routes to the **LAST station that still held it**: prompt had it but the
-    fact graph dropped it → **pm-agent** elicitation; fact graph had it but the L-docs dropped it →
+    fact graph dropped it → **ic-expert-agent** elicitation (plain-language register); fact graph had it but the L-docs dropped it →
     **ic-expert-agent** L-doc completion; L-docs/prompt had it but spec-to-rtl didn't read it out →
     **spec-to-rtl** extraction.
   - **(2) TESTBENCH-COVERAGE GAP** — we DID extract it, but our own self-TB never exercised it, so
@@ -299,7 +299,7 @@ not-in-spec. A majority of the residual was initially mis-shelved as "FLOOR".
 > overflow/saturation/rounding, handshake timing), MERGES identical requirements across stations
 > (recording the most-downstream holding station), attributes each to whether the authored TB
 > exercises it (TESTBENCH-COVERAGE GAP = WARN default, BLOCK in `--strict` sole-emit), and on a
-> failure attributes it to **coverage-gap / extraction-gap (with `route_to:` pm-agent /
+> failure attributes it to **coverage-gap / extraction-gap (with `route_to:` ic-expert-agent /
 > ic-expert-agent / spec-to-rtl) / spec-absent**.
 
 **BINDING RULE: a fail may be labelled FLOOR (Category A–E below) ONLY AFTER `spec_coverage_check

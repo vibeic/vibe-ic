@@ -31,7 +31,6 @@ resolve and land it.**
 | **Field Agent** (`vibe-ic:field-agent`) | General usage / audit | `community/backlogs/` only | ❌ | ❌ | → backlog / version-less PR → Repo Gatekeeper |
 | **Benchmark Agent** (`vibe-ic:benchmark-agent`) | Maintainer official runs **+ end-user local runs** | `benchmark-data/` + `community/backlogs/` | ❌ | ❌ | → backlog / version-less PR → Repo Gatekeeper |
 | **Repo Gatekeeper** (`vibe-ic:repo-gatekeeper`) | Maintainer (author + gate + land) | **everything** (owns plugin + MCP) | ✅ only role | ✅ only role | authors the fix, gates it, assigns the version, lands it. Aliases: `core-agent` / `gatekeeper` |
-| **PM Agent** (`vibe-ic:pm-agent`) | Phase 1 — NL dialogue front door | — design-time, no repo check-in | — | — | — |
 | **IC Expert Agent** (`vibe-ic:ic-expert-agent`) | Phase 1 — technical review | — design-time, no repo check-in | — | — | — |
 
 Notes:
@@ -57,7 +56,7 @@ The check-in boundary is a **deterministic gate**, not a suggestion. Before any
 
 ```bash
 python3 plugins/vibe-ic/programs/agent_checkin_scope_guard.py \
-    --role <field-agent|benchmark-agent|core-agent|pm-agent|ic-expert-agent> --staged
+    --role <field-agent|benchmark-agent|core-agent|ic-expert-agent> --staged
 # exit 0 → every staged path is within the role's scope → safe to commit
 # exit 1 → a path is outside scope (each offending path + its protected zone is
 #          listed) → remove it; if it is a plugin/MCP improvement, file a backlog

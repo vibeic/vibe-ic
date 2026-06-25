@@ -1,6 +1,6 @@
 ---
 name: phase1
-description: Phase 1 = the **prompt / dialogue entry point** to the Vibe-IC platform. Takes natural language (Chinese or English), runs the IC Expert Agent dialogue (it faces the user in a plain-language register — the former PM Agent role is merged into it), produces both (a) machine-readable L1-L23 JSON layer docs that feed Phase 2 directly AND (b) human-readable Markdown views of the same content for stakeholder review. Skips Phase 1 entirely — the L1-L23 JSON is the universal handoff format and Phase 1 emits it directly. Triggers when the user says "start a new IC design", "run Phase 1", "design a chip in natural language", provides only a prompt or wants AI to author the spec from scratch.
+description: Phase 1 = the **prompt / dialogue entry point** to the Vibe-IC platform. Takes natural language (Chinese or English), runs the IC Expert Agent dialogue (it faces the user in a plain-language register and owns silicon depth), produces both (a) machine-readable L1-L23 JSON layer docs that feed Phase 2 directly AND (b) human-readable Markdown views of the same content for stakeholder review. Skips Phase 1 entirely — the L1-L23 JSON is the universal handoff format and Phase 1 emits it directly. Triggers when the user says "start a new IC design", "run Phase 1", "design a chip in natural language", provides only a prompt or wants AI to author the spec from scratch.
 ---
 
 # Phase 1 — prompt / dialogue entry point
@@ -101,7 +101,7 @@ There is no default model — the skill does not prefer any specific one.
 
 ### NL mode (common / medium user — "design a chip in natural language")
 
-Invoked by the IC Expert Agent (see `../../agents/ic-expert-agent.md`; the PM Agent role is merged into it). Minimal end-to-end:
+Invoked by the IC Expert Agent (see `../../agents/ic-expert-agent.md`). Minimal end-to-end:
 
 ```bash
 # 1. NL → seed facts (calls Anthropic API if ANTHROPIC_API_KEY set)
@@ -197,13 +197,13 @@ with this new register added") without re-running the whole pipeline.
 
 The v0.51 `prompt-intake` and `phase1-orchestrate` skills are NOT
 restored — their function is fully subsumed by this `phase1` skill's
-ingest + PM-Agent dialogue + render pipeline. They remain archived at
+ingest + IC Expert Agent dialogue + render pipeline. They remain archived at
 `legacy/skills_phase1_v051/` for reference.
 
 ### Dialogue-driven (common / medium user)
 
-The IC Expert Agent (see `../../agents/ic-expert-agent.md`; the PM Agent role is
-merged into it) drives an interactive session in its plain-language register,
+The IC Expert Agent (see `../../agents/ic-expert-agent.md`) drives an
+interactive session in its plain-language register,
 calling `tools/phase1_engine/cli.py` internally:
 
 1. `prompt-intake` gathers initial free-text.
@@ -263,7 +263,7 @@ ONE agent operates in two registers on the fact graph (not on layer docs):
   from K3 / retrieved neighbours, flags high-impact conflicts for user
   confirmation (surfaced back through the external register).
 
-See `../../agents/ic-expert-agent.md` (the PM Agent role is merged into it).
+See `../../agents/ic-expert-agent.md`.
 
 ## Where Things Live
 

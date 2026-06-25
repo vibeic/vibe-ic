@@ -87,7 +87,7 @@ Vibe-IC brings the "Vibe Coding" paradigm to IC design. Instead of manually driv
 
 ```
 ┌────────────┬────────────────────────────────────────────────┬────────────────────────┐
-│ Phase 1    │ Dialogue → L1-L23 design documents              │ pm-agent → ic-expert-  │
+│ Phase 1    │ Dialogue → L1-L23 design documents              │ ic-expert-agent        │
 │            │ (phase1-orchestrate, 10 lesson files)          │ agent → L1..L9 JSON    │
 ├────────────┼────────────────────────────────────────────────┼────────────────────────┤
 │ Phase 2    │ Step 01-06: RTL generation + verification      │ RTL + sim + formal     │
@@ -212,7 +212,6 @@ Rubber-stamp waivers are rejected: reason must be ≥ 20 chars and not a placeho
 
 ### Two agents, strict separation of concerns
 
-- **`pm-agent.md`** — dialogue-only PM. Reads the layer's fact manifest and asks the user one targeted question at a time (adapting phrasing to the user's declared skill level: beginner / intermediate / expert). Emits `pm_collected.json` with every fact tagged as `user_answered` or `deferred`. **Never** writes the final L1-L23 doc.
 - **`ic-expert-agent.md`** — consumes `pm_collected.json` + the fact manifest + per-layer lessons. For every `deferred` fact, fills in the documented `ic_expert_default` along with its reasoning. Emits the final L1-L23 JSON doc. **Never** reads the benchmark.
 
 ### Fact manifest — Phase-1 source of truth
@@ -235,12 +234,12 @@ Rubber-stamp waivers are rejected: reason must be ≥ 20 chars and not a placeho
 ```
 
 - **Built by `tools/training/extract_fact_manifest.py`** (internal training tool) which walks a benchmark JSON and emits every leaf value as a fact skeleton. A curator (human or IC-Expert subagent) fills in the Q-bank, defaults, and provenance.
-- **Used at inference** by PM + IC Expert — no benchmark read.
+- **Used at inference** by the IC Expert Agent — no benchmark read.
 - **Current status**: L1 manifest has all 40 facts curated (PoC). L2-L9 manifests are still schema-only prose lessons (`lessons/ic_expert_L2..L9.md`).
 
 ### Sample dialogues (reference only)
 
-`docs/tutorials/phase1_sample_dialogue_{beginner,intermediate,expert}{,_zh}.md` — six dialogues (EN + ZH × three user levels) showing the PM agent's intended shape.
+`docs/tutorials/phase1_sample_dialogue_{beginner,intermediate,expert}{,_zh}.md` — six dialogues (EN + ZH × three user levels) showing the IC Expert Agent's intended dialogue shape.
 
 ### Tutorial
 
@@ -278,7 +277,7 @@ cp -r vibe-ic-marketplace/plugins/vibe-ic-d    /path/to/your-project/.claude/plu
 
 ```bash
 # ---- Phase 1 ---- dialogue + doc generation -------------------------
-"I want a chip that does X"                   → pm-agent (dialogue)
+"I want a chip that does X"                   → ic-expert-agent (dialogue)
    └→ handoff                                 → ic-expert-agent (L1..L9 JSON)
 
 # ---- Phase 2+3 ---- 33-step canonical flow --------------------------
@@ -305,8 +304,8 @@ Grouped by design-flow phase.
 ### Phase 1 — Dialogue → L1-L23 (11 skills)
 | Skill | Purpose |
 |---|---|
-| **phase1-orchestrate** | Entry point; drives pm-agent + ic-expert-agent |
-| **prompt-intake** | Initial user-dialogue intake for the PM Agent |
+| **phase1-orchestrate** | Entry point; drives the ic-expert-agent dialogue |
+| **prompt-intake** | Initial user-dialogue intake for the IC Expert Agent |
 | **datasheet-gen** | Generate structured datasheet-style L1 doc |
 | **frs-gen** | L2 Functional Requirements |
 | **cmd-protocol-gen** | L3 Command Protocol |
@@ -406,7 +405,6 @@ vibe-ic-marketplace/
     │   ├── flow/
     │   │   └── phase2_phase3.yaml   ← 33-step source of truth
     │   ├── agents/
-    │   │   ├── pm-agent.md           ← dialogue-only PM (asks per manifest)
     │   │   ├── ic-expert-agent.md    ← assembles JSON from answers + defaults
     │   │   └── lessons/
     │   │       ├── ic_expert_L1..L9.md   ← prose lessons per layer

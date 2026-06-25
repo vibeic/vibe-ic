@@ -291,7 +291,7 @@ You are the Phase 1 coverage field-agent loop for
 LLM-review prompt body (Step 1):
 "Run /vibe-ic-phase1 on the IC at <path>. Use README.md as the
 prompt (it is the closest stand-in for what an experienced user
-would describe to the PM Agent). After Phase 1 emits, run
+would describe to the IC Expert Agent). After Phase 1 emits, run
 `python3 vibe-ic-marketplace/plugins/vibe-ic/programs/phase1_input_vs_generated_completeness_check.py <path>`.
 Read the per-layer hits, the missing-token sample, and the
 verdict. Then report:

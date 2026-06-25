@@ -12,7 +12,7 @@ floor.
 ANY station:
 
     input prompt (USER)
-      -> structured input data / fact graph (PM AGENT)
+      -> structured input data / fact graph (IC EXPERT AGENT, plain-language register)
         -> input Design Documents / L1-L23 (IC EXPERT AGENT)
           -> spec-to-rtl authoring (RTL)
 
@@ -22,7 +22,7 @@ WHICH station last held the requirement so the fix routes to the right place:
   (1) SPEC-EXTRACTION GAP — the requirement EXISTS somewhere in the chain but
       was not carried end-to-end. Report the LAST station that still held it:
         * USER prompt had it but the fact graph didn't  -> route: enhance
-          PM-AGENT elicitation (pm-agent);
+          IC EXPERT AGENT elicitation (ic-expert-agent, plain-language register);
         * fact graph had it but the L-docs didn't        -> route: enhance
           IC-EXPERT doc completion (ic-expert-agent);
         * L-docs / prompt had it but spec-to-rtl didn't read it out -> route:
@@ -41,7 +41,7 @@ fires deterministically rather than relying on an agent remembering the rule.
 
 WHAT IT DOES
   INPUT : one or more input-chain stations — `--prompt` (USER), `--fact-graph`
-          (PM agent structured input), `--ldocs` (IC-expert L1-L23). `--spec`
+          (IC Expert Agent structured input), `--ldocs` (IC-expert L1-L23). `--spec`
           is an alias for the prompt (back-compat). Plus optionally the authored
           `--rtl` and `--tb`.
   STEP 1: extract from EACH station a COMPLETE checklist of testable
@@ -72,7 +72,7 @@ JUDGMENT BOUNDARY (honest, documented — NOT faked in the program)
   DETERMINISTIC and belong in this program. The residual READING judgment —
   "does THIS prose sentence state a testable requirement" — is the LLM step,
   documented in skills/spec-to-rtl, skills/benchmark-verify,
-  skills/open-benchmark-methodology + agents/pm-agent, agents/ic-expert-agent.
+  skills/open-benchmark-methodology + agents/ic-expert-agent.
   This program never fabricates a requirement out of free prose: every emitted
   checklist item is anchored to a structural feature (a `{...}` / table /
   example / explicit reset|latency keyword), so a white-box internal name the
@@ -85,7 +85,7 @@ extraction; NO chip / vendor / SKU literal (enforced by
 CLI
     python3 spec_coverage_check.py
         (--spec PROMPT | --prompt PROMPT)        # USER station (alias)
-        [--fact-graph FG]                        # PM-agent structured input
+        [--fact-graph FG]                        # IC Expert Agent structured input
         [--ldocs LDOCS]                          # IC-expert L1-L23 (file or dir)
         [--rtl RTL] [--tb TB]
         [--failure TEXT] [--strict] [--json OUT]
@@ -155,9 +155,9 @@ STATION_ORDER = ["user_prompt", "fact_graph", "l_docs"]
 # Routing target for an extraction-gap whose LAST holding station is <key>:
 # the next station downstream is the one that DROPPED it.
 STATION_ROUTE = {
-    "user_prompt": ("pm-agent",
+    "user_prompt": ("ic-expert-agent",
                     "USER prompt stated it but the fact graph dropped it — "
-                    "enhance PM-agent elicitation"),
+                    "enhance IC Expert Agent elicitation (plain-language register)"),
     "fact_graph": ("ic-expert-agent",
                    "fact graph held it but the L-docs dropped it — "
                    "enhance IC-expert L-doc completion"),
@@ -2202,7 +2202,7 @@ def attribute_failure(failure_text: str, items: List[ChecklistItem],
     - extraction-gap: the failing behavior is present at some chain STATION but
                      is NOT in our checklist (we dropped it). The last holding
                      station + STATION_ROUTE name which downstream station
-                     dropped it (pm-agent / ic-expert-agent / spec-to-rtl).
+                     dropped it (ic-expert-agent / spec-to-rtl).
     - spec-absent  : the failing behavior is nowhere in the chain — genuine
                      FLOOR; must cite the stations searched as evidence.
     """
@@ -2589,7 +2589,7 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--spec", default=None,
                     help="Alias for --prompt (back-compat).")
     ap.add_argument("--fact-graph", dest="fact_graph", default=None,
-                    help="PM-agent structured input / fact graph (station 2).")
+                    help="IC Expert Agent structured input / fact graph (station 2).")
     ap.add_argument("--ldocs", default=None,
                     help="IC-expert L1-L23 Design Documents (file or directory; "
                          "input-chain station 3).")

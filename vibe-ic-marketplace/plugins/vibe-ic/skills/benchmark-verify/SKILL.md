@@ -56,7 +56,7 @@ confirm it PASSES against the generated RTL.
 > handshake) must be COVERED by the self-TB. A `--strict` BLOCK means our TB is weaker than the
 > hidden one — close the gap (write the missing assertion) before PASS. On any FAIL, run with
 > `--failure "<behavior>"`: a `coverage-gap` ⇒ enhance our TB; an `extraction-gap` ⇒ the program
-> names the `route_to:` station (pm-agent / ic-expert-agent / spec-to-rtl) that dropped the
+> names the `route_to:` station (ic-expert-agent / spec-to-rtl) that dropped the
 > requirement; only a `spec-absent` (nowhere in the chain, with the searched stations cited) is a
 > genuine floor and never a Pillar-1 fail. (The structural extraction + per-station routing is
 > deterministic; deciding whether a prose sentence is a distinct *testable* requirement is the LLM

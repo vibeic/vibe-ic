@@ -2,7 +2,7 @@
 # -----------------------------------------
 # Inheritance tree — each child inherits parent's fact requirements, then adds its own.
 # Used by IC Expert to select the correct fact manifest for a given IC class.
-# Used by PM Agent to pick appropriate Q-bank entries.
+# Used by the IC Expert Agent to pick appropriate Q-bank entries.
 #
 # v0.41 update: synthesised from 23 IC characterizations under
 # /tmp/phase1_e2/characterizations/. New siblings and subclasses added:

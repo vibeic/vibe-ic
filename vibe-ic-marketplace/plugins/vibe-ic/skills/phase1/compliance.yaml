@@ -40,9 +40,9 @@ requirements:
     pattern: '(phase1_doc_presence_check|phase1_consistency_check|phase1_quality_parity_check|json_schema_check)'
     skill_section: 'Gates'
 
-  - id: R_pm_agent_role
-    description: "PM Agent role spelled out — dialogue drives gaps, not layers"
-    pattern: '(PM Agent|pm-agent)'
+  - id: R_ic_expert_agent_role
+    description: "IC Expert Agent role spelled out — dialogue drives gaps, not layers"
+    pattern: '(IC Expert Agent|ic-expert-agent)'
     skill_section: 'Agents'
 
   - id: R_ic_expert_role

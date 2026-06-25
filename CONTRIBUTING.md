@@ -17,7 +17,7 @@ vibe-ic-marketplace/
 └── plugins/vibe-ic/      Claude Code plugin — one install = everything
     ├── skills/           One folder per skill — SKILL.md + assets
     ├── programs/         Deterministic checks / gates / generators
-    ├── agents/           PM Agent, IC Expert Agent, lessons, defaults
+    ├── agents/           IC Expert Agent, lessons, defaults
     ├── mcp-eda/              Bundled MCP server — 55 tools, auto-registered
     ├── ip-catalog/       Open-source IP catalogue (manifests)
     ├── benchmark/        Benchmark harness + registry

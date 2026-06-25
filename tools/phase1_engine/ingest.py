@@ -10,7 +10,7 @@ Supported inputs
                   (overview, pinout, electrical_characteristics, protocol,
                   otp, timing, …) — gets mapped into the appropriate layer
                   view via a lookup table.
-  text          : (stub) natural-language prompt. MVP delegates to PM agent.
+  text          : (stub) natural-language prompt. MVP delegates to the IC Expert Agent.
 
 The MVP expects either `existing_docs` or `structured` input; `user_yaml`
 and `text` land in later iterations.

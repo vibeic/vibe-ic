@@ -154,7 +154,7 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
    directed stimulus/assertion (especially an OUTSIDE-the-set value for any
    enumerated set). On a downstream FAIL, re-run with `--failure "<behavior>"`:
    a `coverage-gap` ⇒ enhance your TB; an `extraction-gap` ⇒ the program names
-   the `route_to:` station (pm-agent / ic-expert-agent / spec-to-rtl) that
+   the `route_to:` station (ic-expert-agent / spec-to-rtl) that
    dropped the requirement (community-backlog it); only a cited `spec-absent` is
    a genuine floor. The structural extraction + routing is deterministic;
    deciding whether a prose sentence is a distinct *testable* requirement (so
