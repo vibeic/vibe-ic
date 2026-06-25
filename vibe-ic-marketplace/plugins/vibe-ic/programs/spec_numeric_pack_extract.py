@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cvdp_numeric_pack_extract.py — PROGRAM-FIRST numeric-semantics + packing
+"""spec_numeric_pack_extract.py — PROGRAM-FIRST numeric-semantics + packing
 extractor (chip-AGNOSTIC, §4.05 no-leak).
 
 WHY THIS EXISTS
@@ -60,8 +60,8 @@ API
         each dict: {kind, requirement, evidence, ...structured fields}
 
 CLI
-    python3 cvdp_numeric_pack_extract.py PROMPT.txt
-    cat PROMPT.txt | python3 cvdp_numeric_pack_extract.py -
+    python3 spec_numeric_pack_extract.py PROMPT.txt
+    cat PROMPT.txt | python3 spec_numeric_pack_extract.py -
 """
 from __future__ import annotations
 
@@ -558,7 +558,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] in ("-h", "--help"):
         sys.stderr.write(
-            "usage: cvdp_numeric_pack_extract.py PROMPT.txt | -\n"
+            "usage: spec_numeric_pack_extract.py PROMPT.txt | -\n"
             "       (reads prompt text, prints extracted numeric/pack items "
             "as JSON)\n")
         return 2

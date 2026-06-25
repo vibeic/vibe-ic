@@ -124,8 +124,8 @@ except ImportError:  # packaged
 # packing semantics). Each exposes extract(text)->[dict] with ChecklistItem fields;
 # they are §4.05-conservative (only structural-anchored items, [] otherwise).
 _CVDP_EXTRACTORS = []
-for _modname in ("cvdp_regmap_extract", "cvdp_enumset_extract", "cvdp_fsm_extract",
-                 "cvdp_numeric_pack_extract", "cvdp_worked_example_extract"):
+for _modname in ("spec_regmap_extract", "spec_enumset_extract", "spec_fsm_extract",
+                 "spec_numeric_pack_extract", "spec_worked_example_extract"):
     try:
         _CVDP_EXTRACTORS.append(__import__(_modname))
     except Exception:  # extractor not present in this checkout -> skip silently

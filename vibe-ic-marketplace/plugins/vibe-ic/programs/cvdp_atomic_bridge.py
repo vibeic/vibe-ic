@@ -62,7 +62,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import spec_artifact_registry as _R  # noqa: E402  the deterministic solver catalog
-import cvdp_width_resolve as _W  # noqa: E402  symbolic/param-expression width reader
+import verilog_width_resolve as _W  # noqa: E402  symbolic/param-expression width reader
 
 # Specialized CVDP family solvers — each emits a CORRECT datapath for a family the
 # registry's plain +/-/* ops would MIS-EMIT (GF(2^n) carry-less multiply, BCD decimal

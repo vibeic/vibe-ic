@@ -204,18 +204,14 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `cvdp_crc_synth` | any | — | a DETERMINISTIC solver for the CVDP CRC family. |
 | `cvdp_dice_roller_synth` | any | — | DETERMINISTIC solver for the CVDP digital dice-roller. |
 | `cvdp_encoder_synth` | any | — | deterministic SOLVER for the CVDP PRIORITY-ENCODER / |
-| `cvdp_enumset_extract` | any | — | PROGRAM-FIRST structural extractor for CVDP |
 | `cvdp_fibonacci_synth` | any | — | DETERMINISTIC solver for the CVDP Fibonacci generator. |
 | `cvdp_firstbit_synth` | any | — | DETERMINISTIC solver for the CVDP first-bit decoder. |
-| `cvdp_fsm_extract` | any | — | PROGRAM-FIRST structural extractor for stated FSMs. |
 | `cvdp_gf_synth` | any | — | a DETERMINISTIC solver for the CVDP Galois-field / carry-less |
 | `cvdp_graycode_parity_synth` | any | — | a DETERMINISTIC solver for the CVDP gray-code |
 | `cvdp_hamming_synth` | any | — | a DETERMINISTIC solver for the CVDP Hamming / ECC family. |
 | `cvdp_memory_synth` | any | — | a DETERMINISTIC solver for the CVDP parameterized MEMORY |
 | `cvdp_modify_complete_synth` | any | — | deterministic SOLVER for two CVDP |
 | `cvdp_mux_compare_synth` | any | — | a DETERMINISTIC solver for the CVDP |
-| `cvdp_numeric_pack_extract` | any | — | PROGRAM-FIRST numeric-semantics + packing |
-| `cvdp_regmap_extract` | any | — | PROGRAM-FIRST structural register-map extractor. |
 | `cvdp_saturate_synth` | any | — | deterministic SOLVER for the CVDP SATURATE / CLAMP / |
 | `cvdp_serdes_decode_synth` | any | — | a DETERMINISTIC solver for two ATOMIC CVDP |
 | `cvdp_shift_counter_synth` | any | — | deterministic SOLVER for the CVDP barrel-shift / |
@@ -223,8 +219,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `cvdp_sort_synth` | any | — | DETERMINISTIC solver for the CVDP bubble-sort engine family. |
 | `cvdp_spec_parse` | any | — | a GENERAL prose-port-block reader for the CVDP benchmark |
 | `cvdp_table_lut_synth` | any | — | a DETERMINISTIC solver for the CVDP TABLE-DRIVEN |
-| `cvdp_width_resolve` | any | — | SHARED parameterized-width reader for the CVDP layer. |
-| `cvdp_worked_example_extract` | any | — | PROGRAM-FIRST structural worked-example / |
 | `cxl_protocol_synth` | any | v0.1.89 | Compute Express Link (CXL) cache-coherent interconnect synth helper. |
 | `dali_protocol_synth` | any | v0.1.84 | DALI-class protocol synth helper. |
 | `ddr4_protocol_synth` | any | — | protocol class #58. |
@@ -720,12 +714,17 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `spec_artifact_registry` | any | — | SINGLE SOURCE OF TRUTH for the canonical STRUCTURED |
 | `spec_conformance_check` | any | — | Spec↔RTL contract-conformance gate. |
 | `spec_coverage_check` | any | — | ORGANIC #697 [P1, chip-AGNOSTIC] |
+| `spec_enumset_extract` | any | — | PROGRAM-FIRST structural extractor for CVDP |
 | `spec_example_smoke_tb` | any | — | ORGANIC #728 [P1, chip-AGNOSTIC] |
+| `spec_fsm_extract` | any | — | PROGRAM-FIRST structural extractor for stated FSMs. |
+| `spec_numeric_pack_extract` | any | — | PROGRAM-FIRST numeric-semantics + packing |
+| `spec_regmap_extract` | any | — | PROGRAM-FIRST structural register-map extractor. |
 | `spec_response_delay_check` | any | — | Response path must honour spec-declared |
 | `spec_review_lint` | any | v0.2.14 | deterministic structural presence lint for a NL spec. |
 | `spec_rtl_port_fidelity_check` | any | — | spec↔RTL port-fidelity + garbled-port lint. |
 | `spec_self_consistency_check` | any | v0.1.5 | pre-RTL spec self-consistency lint. |
 | `spec_validator` | any | — | DS<->AN(<->Spec) cross-consistency checker. |
+| `spec_worked_example_extract` | any | — | PROGRAM-FIRST structural worked-example / |
 | `spef_extraction_check` | any | — | Verify parasitic extraction (SPEF) was produced after routing. |
 | `spi_protocol_synth` | any | v0.1.77 | SPI-class protocol synth helper. |
 | `spice_correlation_check` | any | — | deterministic gate for post-layout SPICE verification |
@@ -794,6 +793,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `verdict_token_propagation_check` | any | — | META-audit: producer -> consumer |
 | `verilator_coverage_measure` | any | v0.53 | v0.53 plugin gate |
 | `verilator_timing_fallback_check` | any | — | golden-self-test-guarded Verilator fallback |
+| `verilog_width_resolve` | any | — | SHARED parameterized-width reader (Verilog/SystemVerilog spec prose). chip-AGNOSTIC: any benchmark (CVDP/VerilogEval/RTLLM) or Phase-1 de... |
 | `verilogeval_human_tier1_solvers` | any | — | supplemental DETERMINISTIC Tier-1 emitters |
 | `verilogeval_human_tier_pipeline` | any | — | the VerilogEval-HUMAN (code-complete, |
 | `verilogeval_tier_pipeline` | any | — | the VerilogEval-v2 (spec-to-rtl) TIER-1→5 |
@@ -1048,18 +1048,14 @@ _(no programs in this group)_
 - `cvdp_crc_synth` — a DETERMINISTIC solver for the CVDP CRC family.
 - `cvdp_dice_roller_synth` — DETERMINISTIC solver for the CVDP digital dice-roller.
 - `cvdp_encoder_synth` — deterministic SOLVER for the CVDP PRIORITY-ENCODER /
-- `cvdp_enumset_extract` — PROGRAM-FIRST structural extractor for CVDP
 - `cvdp_fibonacci_synth` — DETERMINISTIC solver for the CVDP Fibonacci generator.
 - `cvdp_firstbit_synth` — DETERMINISTIC solver for the CVDP first-bit decoder.
-- `cvdp_fsm_extract` — PROGRAM-FIRST structural extractor for stated FSMs.
 - `cvdp_gf_synth` — a DETERMINISTIC solver for the CVDP Galois-field / carry-less
 - `cvdp_graycode_parity_synth` — a DETERMINISTIC solver for the CVDP gray-code
 - `cvdp_hamming_synth` — a DETERMINISTIC solver for the CVDP Hamming / ECC family.
 - `cvdp_memory_synth` — a DETERMINISTIC solver for the CVDP parameterized MEMORY
 - `cvdp_modify_complete_synth` — deterministic SOLVER for two CVDP
 - `cvdp_mux_compare_synth` — a DETERMINISTIC solver for the CVDP
-- `cvdp_numeric_pack_extract` — PROGRAM-FIRST numeric-semantics + packing
-- `cvdp_regmap_extract` — PROGRAM-FIRST structural register-map extractor.
 - `cvdp_saturate_synth` — deterministic SOLVER for the CVDP SATURATE / CLAMP /
 - `cvdp_serdes_decode_synth` — a DETERMINISTIC solver for two ATOMIC CVDP
 - `cvdp_shift_counter_synth` — deterministic SOLVER for the CVDP barrel-shift /
@@ -1067,8 +1063,6 @@ _(no programs in this group)_
 - `cvdp_sort_synth` — DETERMINISTIC solver for the CVDP bubble-sort engine family.
 - `cvdp_spec_parse` — a GENERAL prose-port-block reader for the CVDP benchmark
 - `cvdp_table_lut_synth` — a DETERMINISTIC solver for the CVDP TABLE-DRIVEN
-- `cvdp_width_resolve` — SHARED parameterized-width reader for the CVDP layer.
-- `cvdp_worked_example_extract` — PROGRAM-FIRST structural worked-example /
 - `cxl_protocol_synth` — Compute Express Link (CXL) cache-coherent interconnect synth helper.  _[v0.1.89]_
 - `dali_protocol_synth` — DALI-class protocol synth helper.  _[v0.1.84]_
 - `ddr4_protocol_synth` — protocol class #58.
@@ -1560,12 +1554,17 @@ _(no programs in this group)_
 - `spec_artifact_registry` — SINGLE SOURCE OF TRUTH for the canonical STRUCTURED
 - `spec_conformance_check` — Spec↔RTL contract-conformance gate.
 - `spec_coverage_check` — ORGANIC #697 [P1, chip-AGNOSTIC]
+- `spec_enumset_extract` — PROGRAM-FIRST structural extractor for CVDP
 - `spec_example_smoke_tb` — ORGANIC #728 [P1, chip-AGNOSTIC]
+- `spec_fsm_extract` — PROGRAM-FIRST structural extractor for stated FSMs.
+- `spec_numeric_pack_extract` — PROGRAM-FIRST numeric-semantics + packing
+- `spec_regmap_extract` — PROGRAM-FIRST structural register-map extractor.
 - `spec_response_delay_check` — Response path must honour spec-declared
 - `spec_review_lint` — deterministic structural presence lint for a NL spec.  _[v0.2.14]_
 - `spec_rtl_port_fidelity_check` — spec↔RTL port-fidelity + garbled-port lint.
 - `spec_self_consistency_check` — pre-RTL spec self-consistency lint.  _[v0.1.5]_
 - `spec_validator` — DS<->AN(<->Spec) cross-consistency checker.
+- `spec_worked_example_extract` — PROGRAM-FIRST structural worked-example /
 - `spef_extraction_check` — Verify parasitic extraction (SPEF) was produced after routing.
 - `spi_protocol_synth` — SPI-class protocol synth helper.  _[v0.1.77]_
 - `spice_correlation_check` — deterministic gate for post-layout SPICE verification
@@ -1634,6 +1633,7 @@ _(no programs in this group)_
 - `verdict_token_propagation_check` — META-audit: producer -> consumer
 - `verilator_coverage_measure` — v0.53 plugin gate  _[v0.53]_
 - `verilator_timing_fallback_check` — golden-self-test-guarded Verilator fallback
+- `verilog_width_resolve` — SHARED parameterized-width reader (Verilog/SystemVerilog spec prose). chip-AGNOSTIC: any benchmark (CVDP/VerilogEval/RTLLM) or Phase-1 de...
 - `verilogeval_human_tier1_solvers` — supplemental DETERMINISTIC Tier-1 emitters
 - `verilogeval_human_tier_pipeline` — the VerilogEval-HUMAN (code-complete,
 - `verilogeval_tier_pipeline` — the VerilogEval-v2 (spec-to-rtl) TIER-1→5

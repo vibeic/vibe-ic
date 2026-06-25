@@ -1,4 +1,4 @@
-"""Tests for cvdp_numeric_pack_extract.extract — PROGRAM-FIRST structural
+"""Tests for spec_numeric_pack_extract.extract — PROGRAM-FIRST structural
 numeric-semantics (rounding/saturation) + packing/width-conversion extractor.
 
 Coverage:
@@ -13,7 +13,7 @@ Coverage:
 """
 from __future__ import annotations
 
-import cvdp_numeric_pack_extract as M
+import spec_numeric_pack_extract as M
 
 
 # ---------------------------------------------------------------------------

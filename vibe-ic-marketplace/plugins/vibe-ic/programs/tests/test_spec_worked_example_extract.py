@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for cvdp_worked_example_extract.extract — structural worked-example /
+"""Tests for spec_worked_example_extract.extract — structural worked-example /
 latency extraction with a §4.05 no-leak guarantee and chip-AGNOSTIC behaviour."""
 import os
 import sys
@@ -7,7 +7,7 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import cvdp_worked_example_extract as cwe  # noqa: E402
+import spec_worked_example_extract as cwe  # noqa: E402
 
 
 def _kinds(items):
