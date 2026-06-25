@@ -305,6 +305,92 @@ def _decl(direction: str, name: str, width: int, reg=False) -> str:
     return f"{kw} [{width-1}:0] {name}" if width > 1 else f"{kw} {name}"
 
 
+def _w_hi(wexpr) -> str:
+    """High bit of a width that may be an int (literal) or a `NAME` parameter id."""
+    return f"{wexpr}-1" if isinstance(wexpr, str) else str(int(wexpr) - 1)
+
+
+def _decl_sym(direction: str, name: str, wexpr, reg=False) -> str:
+    """Like _decl but the width may be a PARAMETER identifier (symbolic), so the
+    emitted port is `[DATA_WIDTH-1:0]` (overridable) rather than a baked literal."""
+    if isinstance(wexpr, str):
+        kw = f"{direction} reg" if reg else direction
+        return f"{kw} [{wexpr}-1:0] {name}"
+    return _decl(direction, name, int(wexpr), reg=reg)
+
+
+# Width parameter names this dataset uses (NOT the address/depth params).
+_WIDTH_PARAM_RE = re.compile(r"(?:^|_)(?:DATA_)?WIDTH$|^WIDTH$|DWIDTH$|_DW$", re.I)
+# Depth-by-entries vs depth-by-address-bits parameter names.
+_DEPTH_PARAM_NAMES = ("DEPTH", "FILO_DEPTH", "FIFO_DEPTH", "LIFO_DEPTH",
+                      "STACK_DEPTH", "MEM_DEPTH", "RAM_DEPTH", "BUFFER_DEPTH",
+                      "NUM_ENTRIES", "ENTRIES")
+
+
+def _lifo_param_decls(prompt: str, params: Dict[str, int], W: int,
+                      depth: int):
+    """Resolve the SPEC'S OWN parameter names so the emit is a genuinely
+    parameterized module the harness can `-P<top>.NAME=...` override.
+
+    Returns (param_decl_lines, width_expr, depth_expr):
+      * param_decl_lines : ["parameter DATA_WIDTH = 8", "parameter FILO_DEPTH = 16"]
+      * width_expr       : "DATA_WIDTH" (str, symbolic) or W (int, when no width param)
+      * depth_expr       : "FILO_DEPTH" / "(1 << ADDR_WIDTH)" / str(depth)
+    GENERAL — every value read from the parsed param defaults; never invented."""
+    decls: List[str] = []
+
+    # --- width parameter: a *WIDTH param whose default == the resolved data width.
+    width_name = None
+    for nm, val in params.items():
+        if _WIDTH_PARAM_RE.search(nm) and val == W:
+            width_name = nm
+            break
+    if width_name is None:  # accept any param named exactly DATA_WIDTH even if W parse differs
+        for nm in ("DATA_WIDTH", "WIDTH", "DWIDTH"):
+            if nm in params:
+                width_name = nm
+                break
+    if width_name is not None:
+        decls.append(f"parameter {width_name} = {params[width_name]}")
+        width_expr = width_name
+    else:
+        width_expr = W
+
+    # --- depth: prefer an explicit *_DEPTH entry-count param; else 2**ADDR_WIDTH.
+    #     Exclude the already-chosen width_name from address candidacy so a single
+    #     param that matched BOTH (e.g. a spec that names only `ADDR_WIDTH` and whose
+    #     default happens to equal W) is never declared twice (a duplicate `parameter`
+    #     is an iverilog error). The width binding wins; depth then falls back to the
+    #     literal. The final dedupe below is the airtight backstop.
+    depth_param = next((nm for nm in _DEPTH_PARAM_NAMES
+                        if nm in params and nm != width_name), None)
+    addr_param = None
+    if depth_param is None:
+        # 2^{ADDR_WIDTH} form — declare ADDR_WIDTH, depth = (1 << ADDR_WIDTH)
+        m = re.search(r"2\s*[\^*]{1,2}\s*\{?\s*`?([A-Za-z_]\w*)`?\s*\}?", prompt)
+        if m and m.group(1) in params and m.group(1) != width_name:
+            addr_param = m.group(1)
+    if depth_param is not None:
+        decls.append(f"parameter {depth_param} = {params[depth_param]}")
+        depth_expr = depth_param
+    elif addr_param is not None:
+        decls.append(f"parameter {addr_param} = {params[addr_param]}")
+        depth_expr = f"(1 << {addr_param})"
+    else:
+        depth_expr = str(depth)  # literal-only depth (no param stated) — still valid
+
+    # Backstop: never emit the same `parameter NAME` twice (a duplicate decl is an
+    # iverilog compile error), preserving first-seen order.
+    seen, deduped = set(), []
+    for d in decls:
+        key = d.split("=", 1)[0].strip()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(d)
+    decls = deduped
+    return decls, width_expr, depth_expr
+
+
 # --------------------------------------------------------------------------- #
 # §4.05 up-front SKIP cues (composite / extra-feature / async-CDC).
 # --------------------------------------------------------------------------- #
@@ -538,7 +624,6 @@ def _try_lifo(prompt: str, ins, outs, params, top) -> Optional[str]:
     push_n, pop_n = push[0], pop[0]
     din_n, dout_n = din[0], dout[0]
     full_n, empty_n = full[0], empty[0]
-    spw = max(1, depth.bit_length())  # SP counts 0..depth
 
     active_low = _active_low(rst_n, prompt)
     async_rst = _async_reset(rst_n, prompt)
@@ -550,21 +635,31 @@ def _try_lifo(prompt: str, ins, outs, params, top) -> Optional[str]:
     # through (stated for the CVDP FILO). Only emitted when explicitly stated.
     feedthrough = bool(re.search(r"feed[-\s]?through", low))
 
-    ports = [_decl("input", din_n, W), _decl("input", push_n, 1),
+    # GENERAL parameterization (§9 GENERAL-not-OVERFIT): the cocotb harness drives
+    # this module with `-P<top>.DATA_WIDTH=...` / `-P<top>.FILO_DEPTH=...` /
+    # `-P<top>.ADDR_WIDTH=...` overrides, so the emit MUST declare those parameters
+    # (a literal-baked width/depth has nothing to override -> iverilog compile fail).
+    # Resolve the spec's OWN parameter NAMES; never invent a width/depth constant.
+    pblock, wexpr, depth_expr = _lifo_param_decls(prompt, params, W, depth)
+
+    ports = [_decl_sym("input", din_n, wexpr), _decl("input", push_n, 1),
              _decl("input", pop_n, 1), _decl("input", rst_n, 1),
              _decl("input", clk_n, 1),
-             _decl("output", dout_n, W, reg=True),
+             _decl_sym("output", dout_n, wexpr, reg=True),
              _decl("output", full_n, 1, reg=True),
              _decl("output", empty_n, 1, reg=True)]
+    head = f"module {top} (" if not pblock else (
+        f"module {top} #(\n    " + ",\n    ".join(pblock) + "\n) (")
     lines = [
         "// program-SOLVED synchronous LIFO/stack "
         "(stated depth/width, push/pop, full/empty); deterministic, no AI.",
-        f"module {top} (",
+        head,
         "    " + ",\n    ".join(ports),
         ");",
-        f"    localparam DEPTH = {depth};",
-        f"    reg [{W-1}:0] mem [0:DEPTH-1];",
-        f"    reg [{spw}:0] sp;",  # stack pointer = number of valid entries
+        f"    localparam DEPTH = {depth_expr};",
+        "    localparam AW = $clog2(DEPTH);",
+        f"    reg [{_w_hi(wexpr)}:0] mem [0:DEPTH-1];",
+        "    reg [AW:0] sp;",  # stack pointer / count = number of valid entries (0..DEPTH)
         f"    wire do_push = {push_n} && !{full_n};",
         f"    wire do_pop  = {pop_n} && !{empty_n};",
         f"    always @({sens}) begin",
@@ -586,15 +681,15 @@ def _try_lifo(prompt: str, ins, outs, params, top) -> Optional[str]:
             "            if (do_push && !do_pop) begin",
         ]
     lines += [
-        f"                mem[sp[{spw-1}:0]] <= {din_n};",
+        f"                mem[sp[AW-1:0]] <= {din_n};",
         "                sp <= sp + 1;",
         "            end else if (do_pop && !do_push) begin",
-        f"                {dout_n} <= mem[sp[{spw-1}:0] - 1'b1];",
+        f"                {dout_n} <= mem[sp[AW-1:0] - 1'b1];",
         "                sp <= sp - 1;",
         "            end else if (do_push && do_pop) begin",
         # simultaneous push+pop on a non-empty stack: replace the top element.
-        f"                mem[sp[{spw-1}:0] - 1'b1] <= {din_n};",
-        f"                {dout_n} <= mem[sp[{spw-1}:0] - 1'b1];",
+        f"                mem[sp[AW-1:0] - 1'b1] <= {din_n};",
+        f"                {dout_n} <= mem[sp[AW-1:0] - 1'b1];",
         "            end",
         "            // flags reflect the post-update occupancy",
         f"            {empty_n} <= ((sp + (do_push && !do_pop ? 1 : 0)"
