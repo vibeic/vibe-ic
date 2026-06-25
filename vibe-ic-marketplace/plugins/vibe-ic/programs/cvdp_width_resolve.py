@@ -164,6 +164,48 @@ def _as_int(tok: str) -> int:
     return int(tok, 16) if tok.lower().startswith("0x") else int(tok)
 
 
+def _header_default_table(prompt: str) -> Dict[str, int]:
+    """Read parameter defaults from a markdown table that has an explicit
+    `| Parameter | Description | Default | Constraints |` header — the default
+    value sits in the COLUMN under the `Default` (or `Value`) header, which may NOT
+    be the last column (the `_PARAM_TABLE_ROW` last-cell heuristic misses it). We
+    locate the `Default`-header column index from the header row and read that exact
+    cell of each subsequent data row, until the table ends (a non-`|` line).
+    §4.05: a value is bound ONLY from the Default-header column of a row whose first
+    cell is a parameter NAME and whose Default cell is a bare integer literal —
+    never a width-expression cell, never a guessed column. chip-AGNOSTIC."""
+    out: Dict[str, int] = {}
+    lines = prompt.splitlines()
+    for i, ln in enumerate(lines):
+        cells = [c.strip() for c in ln.split("|")]
+        # header detection: a `| Parameter | ... | Default | ... |` row.
+        lc = [c.lower() for c in cells]
+        if "default" not in lc and "value" not in lc:
+            continue
+        if not any(c in ("parameter", "name", "param") for c in lc):
+            continue
+        di = lc.index("default") if "default" in lc else lc.index("value")
+        ni = next((j for j, c in enumerate(lc)
+                   if c in ("parameter", "name", "param")), None)
+        if ni is None:
+            continue
+        # walk the data rows beneath this header (skip the `|---|---|` separator).
+        for dl in lines[i + 1:]:
+            if "|" not in dl:
+                break
+            dc = [c.strip() for c in dl.split("|")]
+            if len(dc) <= max(di, ni):
+                continue
+            if set(dc[di].replace("-", "").replace(":", "")) <= set():
+                continue  # separator row
+            nm = dc[ni].strip("`* ")
+            val = dc[di].strip("`* ")
+            if re.fullmatch(r"[A-Za-z_]\w*", nm) and \
+                    re.fullmatch(r"\d+|0[xX][0-9A-Fa-f]+", val):
+                out.setdefault(nm, _as_int(val))
+    return out
+
+
 def param_defaults(prompt: str, tb: str = "") -> Dict[str, int]:
     """The parameter -> default-int table, harvested from every submitter-visible
     source: the partial `module #(parameter ...)` header / a `parameter NAME = N`
@@ -222,6 +264,11 @@ def param_defaults(prompt: str, tb: str = "") -> Dict[str, int]:
             if nm.lower() in ("parameter", "name", "description", "signal", "width"):
                 continue
             _add(nm, m.group(2))
+    # a parameter table with an explicit `Default`-header column that is NOT the last
+    # column (the last-cell heuristic above misses it) — read the value from the cell
+    # under the `Default` header of each row.
+    for nm, val in _header_default_table(prompt).items():
+        _add(nm, str(val))
     # inline-code assignment annotated as a default — `NAME = 8` (default ...).
     # Anchored to the literal assignment, so the name is never guessed.
     for m in _INLINE_CODE_DEFAULT_RE.finditer(prompt):
