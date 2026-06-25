@@ -143,6 +143,13 @@ _CLK_RE = re.compile(
 _RST_RE = re.compile(
     r"(?i)(^|_)(rst|reset|arst|areset|srst|nreset|resetn|rstn)([_\.]?(in|i|n|b|async|sync))?($|_)"
 )
+# AMBA bus-prefixed active-low resets where the bus letter attaches DIRECTLY to
+# "reset" (no underscore), so `_RST_RE`'s `(^|_)` anchor misses them: APB `PRESETn`,
+# AHB `HRESETn`, AXI `ARESETn` (+ `_n` spelling). The TRAILING `n` is REQUIRED — it
+# is what distinguishes a 1-bit active-low reset from a multi-bit "preset value"
+# load input (§4.05: never size a `preset`/`hold` data port to 1). A reset is
+# definitionally single-bit, so this is a stated interface fact, not a guess.
+_AMBA_RST_RE = re.compile(r"(?i)^[abph]reset_?n$")
 # 1-bit control / handshake / flag shapes (besides clk/rst) — single-bit by the
 # universal naming convention. Used ONLY to assign a width of 1 to a cocotb signal
 # the prompt does not give an explicit bus range for. A signal counts as 1-bit
@@ -285,7 +292,8 @@ def _is_clk(name: str) -> bool:
 
 
 def _is_rst(name: str) -> bool:
-    return bool(_RST_RE.search(name)) or name.lower() in _bridge._SEQ_PORTS \
+    return bool(_RST_RE.search(name)) or bool(_AMBA_RST_RE.match(name)) \
+        or name.lower() in _bridge._SEQ_PORTS \
         and re.search(r"rst|reset", name, re.I) is not None
 
 
