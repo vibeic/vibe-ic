@@ -142,6 +142,22 @@ _PARAM_TABLE_ROW = re.compile(
 _BULLET_PARAM_DEFAULT_RE = re.compile(
     r"^\s*(?:[-*]|\d+[.)])?\s*\*{0,2}`?([A-Z][A-Z0-9_]*)`?\s*=\s*"
     r"`?(\d+|0[xX][0-9A-Fa-f]+)`?\*{0,2}\s*$", re.M)
+# a PROSE-DERIVED parameter — a line that NAMES an ALL-CAPS parameter at its head
+# (bullet bold `- **ENCODED_DATA**:` or a table cell `| `NBW_PRED` |`) and states its
+# value as an arithmetic EXPRESSION over OTHER params inside backticks, introduced by
+# a derivation phrase:
+#   "- **ENCODED_DATA**: Calculated as the sum of `PARITY_BIT + DATA_WIDTH + 1`"
+#   "| `NBW_PRED` | ... It is defined as `2 * DATA_WIDTH + 1` ... |"
+# The NAME is bound from the LINE HEAD (not the loose `\bNAME\b` that grabbed `Bit`
+# of "Bit-width"); the EXPR is resolved by eval_width_expr against the known params,
+# so a non-arithmetic prose value ("the minimum number of bits to index ENCODED_DATA")
+# never resolves and is dropped. §4.05: the binding is added ONLY when the expression
+# evaluates to an int from STATED params — never fabricated. chip-AGNOSTIC.
+_DERIV_PHRASE = (r"(?:calculated\s+as|defined\s+as|computed\s+as|equal\s+to|"
+                 r"is\s+the\s+sum\s+of|given\s+by|set\s+to)")
+_PROSE_DERIVED_HEAD_RE = re.compile(
+    r"^\s*(?:[-*]|\d+[.)])?\s*\|?\s*\*{0,2}`?([A-Z][A-Z0-9_]{2,})`?\*{0,2}\s*[:|]")
+_PROSE_DERIVED_EXPR_RE = re.compile(_DERIV_PHRASE + r"[^`\n]*?`([^`\n]+)`", re.I)
 
 
 def _as_int(tok: str) -> int:
@@ -176,23 +192,28 @@ def param_defaults(prompt: str, tb: str = "") -> Dict[str, int]:
     for blk in _PARAM_HEADER_BLOCK_RE.finditer(prompt):
         for im in _PARAM_HEADER_ITEM_RE.finditer(blk.group("body")):
             _add(im.group(1), im.group(2))
-    # DERIVED params: `parameter NAME = (A>B)?A:B` / `A*B` / `$clog2(D)`. Resolve
-    # over the literal params already in `out` (iterate to a fixed point so a
-    # chain of derivations settles). §4.05: only added when the expression fully
-    # resolves to an int from KNOWN params — never a fabricated default.
+    # DERIVED params: `parameter NAME = (A>B)?A:B` / `A*B` / `$clog2(D)`, AND
+    # prose-derived ("ENCODED_DATA: Calculated as `PARITY_BIT + DATA_WIDTH + 1`").
+    # COLLECTED here, but RESOLVED at the very end (after every LITERAL default
+    # source has populated `out`), iterating to a fixed point so a chain settles.
+    # §4.05: only added when the expression fully resolves to an int from KNOWN
+    # params — never a fabricated default.
     derived = [(m.group(1), m.group(2).strip()) for m in _DERIVED_PARAM_RE.finditer(prompt)
                if m.group(1) not in out]
-    for _ in range(len(derived) + 1):
-        progressed = False
-        for nm, expr in derived:
-            if nm in out:
-                continue
-            val = eval_width_expr(expr, out)
-            if val is not None:
-                out[nm] = val
-                progressed = True
-        if not progressed:
-            break
+    # PROSE-derived params: a line whose HEAD names an ALL-CAPS parameter and states
+    # its value as an arithmetic EXPRESSION over other params. Bind name from the line
+    # head, expr from the backticked span; only kept if it later resolves (a
+    # non-arithmetic prose value drops at resolution time).
+    for line in prompt.splitlines():
+        hm = _PROSE_DERIVED_HEAD_RE.match(line)
+        if not hm:
+            continue
+        nm = hm.group(1)
+        if nm in out or any(nm == d[0] for d in derived):
+            continue
+        em = _PROSE_DERIVED_EXPR_RE.search(line)
+        if em and any(c in em.group(1) for c in "+-*/"):  # must be an EXPRESSION
+            derived.append((nm, em.group(1).strip()))
     # a markdown parameter table only when the prompt actually frames a parameter
     # section (avoids harvesting a generic numeric table as a param default).
     if re.search(r"(?i)\bparameter", prompt):
@@ -224,6 +245,21 @@ def param_defaults(prompt: str, tb: str = "") -> Dict[str, int]:
         pm = _PROSE_DEFAULT_PHRASE_RE.search(line) or _PAREN_DEFAULT_PHRASE_RE.search(line)
         if pm:
             _add(nm, pm.group(1))
+    # RESOLVE the derived/prose-derived params now that every literal default is in
+    # `out`. Iterate to a fixed point (a chain like NBW_DELTA -> NBW_ERROR -> NBW_PRED
+    # settles); only bind when the expression fully resolves to an int from KNOWN
+    # params (a non-arithmetic prose value never resolves and is silently dropped).
+    for _ in range(len(derived) + 1):
+        progressed = False
+        for nm, expr in derived:
+            if nm in out:
+                continue
+            val = eval_width_expr(expr, out)
+            if val is not None:
+                out[nm] = val
+                progressed = True
+        if not progressed:
+            break
     return out
 
 
