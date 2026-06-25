@@ -14,8 +14,8 @@ shipped pieces —
     test-case table + prose), module name (.env TOPLEVEL), composite/special-
     algebra cues, prose width resolution; and
   * the v1.1.82 structural extractors
-      cvdp_regmap_extract / cvdp_enumset_extract / cvdp_fsm_extract /
-      cvdp_numeric_pack_extract / cvdp_worked_example_extract
+      spec_regmap_extract / spec_enumset_extract / spec_fsm_extract /
+      spec_numeric_pack_extract / spec_worked_example_extract
 
 — into ONE complete spec dict per record, PLUS a per-record COMPLETENESS verdict.
 
@@ -92,7 +92,7 @@ import cvdp_atomic_bridge as _bridge  # noqa: E402
 # Symbolic / parameter-expression width reader (param-expr / range-before-name /
 # param-override). A width stated as a parameter expression with a derivable
 # default is an EXTRACTABLE fact, not a gap.
-import cvdp_width_resolve as _W  # noqa: E402
+import verilog_width_resolve as _W  # noqa: E402
 # The PROVIDED input.context RTL module HEADER is part of the interface spec
 # (§3.9) — when the prose never states a port's width but the context file
 # DECLARES it, that declaration resolves the width (header-only; never the body).
@@ -101,8 +101,8 @@ import cvdp_context_interface_recover as _ctxrec  # noqa: E402
 # Reused (NOT modified) — v1.1.82 structural extractors. Imported defensively so a
 # not-yet-present extractor simply contributes nothing (the layer never crashes).
 _EXTRACTORS: Dict[str, object] = {}
-for _name in ("cvdp_regmap_extract", "cvdp_enumset_extract", "cvdp_fsm_extract",
-              "cvdp_numeric_pack_extract", "cvdp_worked_example_extract"):
+for _name in ("spec_regmap_extract", "spec_enumset_extract", "spec_fsm_extract",
+              "spec_numeric_pack_extract", "spec_worked_example_extract"):
     try:
         _EXTRACTORS[_name] = __import__(_name)
     except Exception:
@@ -519,7 +519,7 @@ def _reset_semantics(prompt: str, ins: List[str]) -> Dict[str, Optional[str]]:
 
 
 def _byte_order(prompt: str) -> Optional[str]:
-    np = _EXTRACTORS.get("cvdp_numeric_pack_extract")
+    np = _EXTRACTORS.get("spec_numeric_pack_extract")
     if np:
         for it in np.extract(prompt):
             if it.get("kind") == "byte_order":
@@ -764,21 +764,21 @@ def _structures(prompt: str) -> Dict[str, object]:
         "fsm": {"states": [], "transitions": []},
         "truth_table": [], "worked_examples": [], "test_vectors": [],
     }
-    rm = _EXTRACTORS.get("cvdp_regmap_extract")
+    rm = _EXTRACTORS.get("spec_regmap_extract")
     if rm:
         out["register_map"] = rm.extract(prompt)
-    en = _EXTRACTORS.get("cvdp_enumset_extract")
+    en = _EXTRACTORS.get("spec_enumset_extract")
     if en:
         out["enum_modes"] = [it for it in en.extract(prompt)
                              if it.get("kind") == "enum_set"]
-    fs = _EXTRACTORS.get("cvdp_fsm_extract")
+    fs = _EXTRACTORS.get("spec_fsm_extract")
     if fs:
         fitems = fs.extract(prompt)
         out["fsm"] = {
             "states": [it for it in fitems if it.get("kind") == "fsm_state"],
             "transitions": [it for it in fitems if it.get("kind") == "fsm_transition"],
         }
-    we = _EXTRACTORS.get("cvdp_worked_example_extract")
+    we = _EXTRACTORS.get("spec_worked_example_extract")
     if we:
         witems = we.extract(prompt)
         out["worked_examples"] = [it for it in witems
@@ -791,7 +791,7 @@ def _structures(prompt: str) -> Dict[str, object]:
 
 def _timing(prompt: str) -> Dict[str, object]:
     timing: Dict[str, object] = {"latency": None, "pipeline": None}
-    we = _EXTRACTORS.get("cvdp_worked_example_extract")
+    we = _EXTRACTORS.get("spec_worked_example_extract")
     if we:
         for it in we.extract(prompt):
             if it.get("kind") == "latency":

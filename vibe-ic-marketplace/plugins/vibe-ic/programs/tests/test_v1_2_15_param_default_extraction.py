@@ -22,7 +22,7 @@ _PROG = Path(__file__).resolve().parents[1]
 if str(_PROG) not in sys.path:
     sys.path.insert(0, str(_PROG))
 
-import cvdp_width_resolve as W  # noqa: E402
+import verilog_width_resolve as W  # noqa: E402
 
 
 def test_multi_param_header_all_items():

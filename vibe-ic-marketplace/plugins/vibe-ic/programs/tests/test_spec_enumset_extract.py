@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for cvdp_enumset_extract.extract — PROGRAM-FIRST structural extractor
+"""Tests for spec_enumset_extract.extract — PROGRAM-FIRST structural extractor
 for CVDP enumerated-mode control maps (enum_set + outside-the-set boundary).
 
 Covers (per the deliverable contract):
@@ -17,7 +17,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from cvdp_enumset_extract import extract  # noqa: E402
+from spec_enumset_extract import extract  # noqa: E402
 
 
 def _kinds(items):
