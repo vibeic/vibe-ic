@@ -160,7 +160,7 @@ def test_positive_decomposes_and_emits_top():
     # the emitted top is named per TOPLEVEL and is a structural wrapper around a sum core.
     assert "module cascaded_adder" in rtl
     assert "sum_comb" in rtl and "+" in rtl          # the atomic '+'-reduction core
-    assert "o_valid <= v[2]" in rtl                  # the depth-2 valid pipeline
+    assert "v1 <= i_valid" in rtl and "o_valid <= v1" in rtl  # the 2-cycle valid pipeline
     assert "endmodule" in rtl
 
 
@@ -230,6 +230,11 @@ def test_emit_functionally_matches_harness():
     #   harness_library packs input_1d = (input_1d<<W)|val (sum is order-independent),
     #   drives i_data/i_valid one cycle, then counts edges to o_valid (expects 2),
     #   and checks o_data == sum. Vectors: DIRECT_MAX (overflow), RANDOM, MIN + reset.
+    # Latency reference (matches the cocotb harness): count edges starting from the edge
+    # that SAMPLES i_valid (the cocotb harness's `RisingEdge` reference), so a 2-cycle
+    # registered wrapper (input reg -> comb -> output reg) measures latency 2. (A loop that
+    # only counts edges AFTER deassert reports a value 1 lower than cocotb — a phasing
+    # mismatch with the authoritative harness, not a different design.)
     tb = r"""`timescale 1ns/1ps
 module tb;
   localparam W=16,N=4,OW=18; reg clk=0,rst_n=0,i_valid=0; reg[W*N-1:0]i_data;
@@ -242,8 +247,9 @@ module tb;
       if(m==1) v={W{1'b1}}; else if(m==2) v=0; else v=$random;
       i_data=(i_data<<W)|v; golden=golden+v; end end endtask
   task chk(input integer m); begin
-    @(posedge clk);#1;gen(m);i_valid=1; @(posedge clk);#1;i_valid=0;
-    latency=0; while(o_valid!==1'b1) begin @(posedge clk);#1;latency=latency+1; end
+    @(posedge clk);#1;gen(m);i_valid=1;
+    @(posedge clk);#1;i_valid=0;   // i_valid sampled at this edge (latency reference)
+    latency=1; while(o_valid!==1'b1) begin @(posedge clk);#1;latency=latency+1; end
     if(latency!==2) begin $display("FAIL lat=%0d",latency);errors=errors+1; end
     if(o_data!==golden) begin $display("FAIL data=%h exp=%h",o_data,golden);errors=errors+1; end
   end endtask
