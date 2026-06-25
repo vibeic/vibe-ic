@@ -204,7 +204,39 @@ _QUESTIONS = {
 }
 
 
-def check(path: Path) -> Dict[str, Any]:
+def _width_completeness_advisories(doc_text: str, port_names: List[str]
+                                   ) -> List[Dict[str, str]]:
+    """Run the GENERAL completeness engine (spec_complete_extract.assess_spec) over
+    the original design doc + the collected ports, and turn any width gap into a
+    plain-language ADVISORY the IC Expert Agent can ask the user. This is how the
+    benchmark-convergence width-extraction work (CVDP/RTLLM/VE) reaches the general
+    Phase-1 flow: a port whose width the doc never states becomes a user question,
+    instead of an AI silently guessing a bus width. §4.05: a width gap is reported,
+    never auto-filled; the agent elicits the real value."""
+    if not doc_text or not port_names:
+        return []
+    try:
+        import spec_complete_extract as _eng
+        # the doc is the spec; we cannot know each port's direction here, so pass
+        # all collected names as inputs (direction does not affect width gaps).
+        spec = _eng.assess_spec(doc_text, list(port_names), [])
+    except Exception:
+        return []
+    advs: List[Dict[str, str]] = []
+    for g in spec.get("gaps", []):
+        if g.get("type") in ("width_not_stated", "param_expression_width"):
+            m = re.search(r"port `?(\w+)`?", g.get("detail", ""))
+            sig = m.group(1) if m else "a signal"
+            advs.append({
+                "fact": f"width:{sig}",
+                "question": (f"How many bits wide is the `{sig}` connection — "
+                             f"is it a single on/off line, or does it carry a "
+                             f"number / several bits at once?"),
+            })
+    return advs
+
+
+def check(path: Path, doc_text: str = "") -> Dict[str, Any]:
     layers = _load_layers(path)
     port_names = _collect_port_names(layers)
     has_name = _name_present(layers)
@@ -212,6 +244,7 @@ def check(path: Path) -> Dict[str, Any]:
     sequential = _is_sequential(layers, port_names)
     has_clock = any(_CLOCK_RE.search(n) for n in port_names)
     has_reset = any(_RESET_RE.search(n) for n in port_names)
+    width_advisories = _width_completeness_advisories(doc_text, port_names)
 
     required: List[Dict[str, Any]] = []
     conditional: List[Dict[str, Any]] = []
@@ -239,6 +272,10 @@ def check(path: Path) -> Dict[str, Any]:
     sufficient = not missing_required
     questions = [i["question"] for i in missing_required if i["question"]]
     advisories = [i["question"] for i in missing_conditional if i["question"]]
+    # width-completeness advisories from the general engine — surfaced for the
+    # IC-Expert Agent to elicit, NEVER blocking (an unstated bus width is a
+    # question to ask, not a reason to fail the gate).
+    advisories += [a["question"] for a in width_advisories]
     return {
         "verdict": "sufficient" if sufficient else "insufficient",
         "sequential": sequential,
@@ -248,6 +285,7 @@ def check(path: Path) -> Dict[str, Any]:
         "conditional": conditional,
         "missing_required": [i["fact"] for i in missing_required],
         "missing_conditional": [i["fact"] for i in missing_conditional],
+        "width_gaps": [a["fact"] for a in width_advisories],
         "questions_for_user": questions,
         "advisories_for_agent": advisories,
     }
@@ -275,11 +313,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="write the full sufficiency report here")
     ap.add_argument("--strict", action="store_true",
                     help="exit 1 when a REQUIRED fact is missing (block)")
+    ap.add_argument("--doc", type=Path, default=None,
+                    help="the original design-doc / prompt text — runs the general "
+                         "completeness engine to surface unstated-width advisories")
     args = ap.parse_args(argv)
     if not (args.layers.is_dir() or args.layers.is_file()):
         print(f"ERROR: not found: {args.layers}", file=sys.stderr)
         return 2
-    rep = check(args.layers)
+    doc_text = ""
+    if args.doc and args.doc.is_file():
+        doc_text = args.doc.read_text(errors="ignore")
+    rep = check(args.layers, doc_text=doc_text)
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(json.dumps(rep, indent=2, ensure_ascii=False))

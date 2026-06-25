@@ -298,6 +298,44 @@ def _explicit_range_width(prompt: str, name: str) -> Optional[int]:
     return abs(int(m.group(1)) - int(m.group(2))) + 1 if m else None
 
 
+def _port_table_width(prompt: str, name: str,
+                      param_defaults: Dict[str, int]) -> Optional[int]:
+    """A markdown PORT/SIGNAL table whose HEADER names a `Width` / `Bit Width`
+    column: bind `name`'s row's Width cell to its value (a literal int, or a
+    PARAMETER name resolved via the param table). General: any benchmark or doc
+    that lists ports as `| Signal | Direction | Bit Width | … |`.
+        | Signal | Direction | Bit Width | … |
+        | `i_A`  | Input     | `WIDTH`   | … |   -> WIDTH(=5) -> 5
+        | `o_eq` | Output    | 1         | … |   -> 1
+    §4.05: a Width cell that is neither a literal nor a RESOLVABLE parameter
+    yields None (stays a gap) — never a guessed width."""
+    lines = prompt.splitlines()
+    for i, ln in enumerate(lines):
+        cells = [c.strip() for c in ln.split("|")]
+        lc = [c.lower() for c in cells]
+        wi = next((j for j, c in enumerate(lc)
+                   if c in ("width", "bit width", "bit-width", "bitwidth")), None)
+        if wi is None:
+            continue
+        # found a header row with a Width column — scan the data rows beneath.
+        for dl in lines[i + 1:]:
+            if "|" not in dl:
+                break
+            dc = [c.strip() for c in dl.split("|")]
+            if len(dc) <= wi:
+                continue
+            row_name = dc[1].strip("`* ") if len(dc) > 1 else ""
+            if row_name != name:
+                continue
+            cell = dc[wi].strip("`* ")
+            if re.fullmatch(r"\d+", cell):
+                return int(cell)
+            if re.fullmatch(r"[A-Za-z_]\w*", cell) and cell in param_defaults:
+                return param_defaults[cell]
+            return None  # an expression / unresolved param — stays a gap
+    return None
+
+
 # A GROUP-HEADER width that applies to a following BULLET LIST of port names:
 #   **Heating Control (1-bit each)**        <- group header carries the width
 #   - `o_heater_full`                       <- members inherit "1-bit"
@@ -357,6 +395,14 @@ def _resolve_width(prompt: str, table: Dict[str, int], name: str,
     er = _explicit_range_width(prompt, name)
     if er is not None:
         return er, "explicit_range"
+    # A markdown port table with a dedicated `Width` / `Bit Width` HEADER column
+    # binds each port's row to its width cell (a literal, or a parameter resolved
+    # from the table). High-confidence (the table EXPLICITLY assigns the width to
+    # this exact port name), so it ranks just below an inline `name[hi:lo]` range.
+    if params is not None:
+        ptw = _port_table_width(prompt, name, params)
+        if ptw is not None:
+            return ptw, "port_table_width"
     # A DECLARATION-STRENGTH parameter-expression width tied to the name OUTRANKS
     # the bridge's LOOSE same-line `N-bit` prose match. `symbolic_width` recognises
     # the param-expression declaration in EITHER order (`name [PARAM-1:0]` OR
