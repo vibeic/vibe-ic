@@ -23,9 +23,19 @@ def _kinds(text):
     return {i.kind for i in S.extract_checklist(text)}
 
 
-def test_all_five_extractors_loaded():
-    # the integration imports all five (any missing would silently degrade recovery)
-    assert len(S._CVDP_EXTRACTORS) == 5
+def test_all_extractors_loaded():
+    # the original 5 structural extractors + the 6 GENERAL L-doc facet extractors
+    # (L5 analog / L7 test-debug / L11 OTP / L13 calibration / signedness /
+    # electrical) — any missing would silently degrade coverage recovery.
+    loaded = {getattr(m, "__name__", "") for m in S._CVDP_EXTRACTORS}
+    expected = {
+        "spec_regmap_extract", "spec_enumset_extract", "spec_fsm_extract",
+        "spec_numeric_pack_extract", "spec_worked_example_extract",
+        "spec_analog_iface_extract", "spec_test_debug_extract", "spec_otp_extract",
+        "spec_calibration_extract", "spec_signedness_extract", "spec_electrical_extract",
+    }
+    assert expected <= loaded, f"missing extractors: {sorted(expected - loaded)}"
+    assert len(S._CVDP_EXTRACTORS) == 11
 
 
 def test_register_map_enters_checklist():
