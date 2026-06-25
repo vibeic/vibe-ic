@@ -274,10 +274,27 @@ _SEQ_PORTS = {"clk", "clock", "rst", "reset", "rstn", "rst_n", "resetn",
               "reset_n", "areset", "aresetn", "clk_en", "clken", "srst"}
 
 
+# spelled-out small bit-counts: "a one-bit signal", "single-bit", "two-bit value".
+# A STATED width (§4.05-safe) — common in design-doc prose where the width is
+# narrated rather than bracketed. Only the lengths that actually occur as words.
+_WORDNUM = {"one": 1, "single": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+            "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+            "twelve": 12, "sixteen": 16, "twenty-four": 24, "twenty four": 24,
+            "thirty-two": 32, "thirty two": 32, "sixty-four": 64, "sixty four": 64}
+_BITNUM_ALT = r"(\d+|" + "|".join(re.escape(w) for w in _WORDNUM) + r")"
+
+
+def _bitnum(tok: str) -> int:
+    """A digit string or a spelled-out number token -> int."""
+    tok = tok.strip().lower()
+    return int(tok) if tok.isdigit() else _WORDNUM[tok]
+
+
 def _prose_width(prompt: str, name: str) -> Optional[int]:
     """Width of a single port from the prompt prose.
-    Order: explicit `name [hi:lo]`, then a same-line `N-bit name` / `name ... N-bit`,
-    then a per-row width column in a markdown port table. None if not stated."""
+    Order: explicit `name [hi:lo]`, then a same-line `N-bit name` / `name ... N-bit`
+    (N digits OR spelled out, e.g. "a one-bit signal"), then a per-row width column
+    in a markdown port table. None if not stated."""
     # explicit bus range tied to the name: `name [hi:lo]`
     m = re.search(rf"\b{re.escape(name)}\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]", prompt)
     if m:
@@ -294,12 +311,23 @@ def _prose_width(prompt: str, name: str) -> Optional[int]:
             return int(wm.group(1))
         if re.search(r"\b1\b", cell) and re.search(r"\bbit\b", cell, re.I):
             return 1
-    # a same-line "N-bit <name>" or "<name> ... N-bit"
+    # a same-line "N-bit <name>" or "<name> ... N-bit" (digit N). UNCHANGED — keeps
+    # the digit-form behaviour byte-identical (any tightening here would silently
+    # re-classify existing COMPLETE records).
     for pat in (rf"\b(\d+)\s*-?\s*bits?\b[^\n]*?\b{re.escape(name)}\b",
                 rf"\b{re.escape(name)}\b[^\n]*?\b(\d+)\s*-?\s*bits?\b"):
         m = re.search(pat, prompt, re.I)
         if m:
             return int(m.group(1))
+    # SPELLED-OUT bit count ("a one-bit signal", "two-bit selector"). Added as a
+    # SEPARATE, tightly-scoped rule so it never perturbs the digit forms above:
+    # the NARRATED form "`port`: … N-bit …" only (name FIRST), and the gap may NOT
+    # cross a clause boundary (`,`/`;`/`.`) — §4.05 NO-LEAK, so a neighbour's width
+    # ("a two-bit field …, and `data_o`") never bleeds onto a later-named port.
+    m = re.search(rf"\b{re.escape(name)}\b[^\n,;.]*?\b{_BITNUM_ALT}\s*-?\s*bits?\b",
+                  prompt, re.I)
+    if m and not m.group(1).isdigit():
+        return _bitnum(m.group(1))
     return None
 
 
