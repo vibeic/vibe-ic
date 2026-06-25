@@ -77,7 +77,14 @@ from typing import Dict, List, Optional, Tuple
 # the requirement can name "ADC" vs "DAC".
 _CONVERTER_TOKEN_RE = re.compile(
     r"\b(ADC|DAC|analog[ \-]?to[ \-]?digital(?:\s+converter)?|"
-    r"digital[ \-]?to[ \-]?analog(?:\s+converter)?)\b", re.IGNORECASE)
+    r"digital[ \-]?to[ \-]?analog(?:\s+converter)?|"
+    # named converter ARCHITECTURES — each is an ADC/DAC by definition, so a
+    # datasheet that names the topology (without the literal "ADC") still states a
+    # converter. chip-AGNOSTIC (generic data-converter vocabulary).
+    r"delta[ \-–]?sigma|sigma[ \-–]?delta|SAR|successive[ \-]?approximation|"
+    r"pipelined?(?:\s+(?:ADC|converter))?|dual[ \-]?slope|incremental(?:\s+"
+    r"(?:delta[ \-–]?sigma|converter|ADC))?|delta[ \-–]?sigma\s+modulator)\b",
+    re.IGNORECASE)
 
 # RESOLUTION qualifier: "12-bit", "12 bit", "12bit" — an N-bit width. A
 # resolution is a small-to-moderate positive integer; we keep 1..512 to admit
@@ -85,10 +92,13 @@ _CONVERTER_TOKEN_RE = re.compile(
 # stated N-bit number qualifies a converter.
 _RESOLUTION_RE = re.compile(r"\b(\d{1,4})[ \-]?bit\b", re.IGNORECASE)
 
-# CHANNEL-COUNT qualifier: "8-channel", "8 channels", "8 ch". A multiplexed
-# converter states its channel count explicitly.
+# CHANNEL-COUNT qualifier: "8-channel", "8 channels", "8 ch", and the datasheet
+# array form "6 … modulator channels" / "6 identical … copies" where descriptive
+# words sit between the count and the noun. Bounded non-greedy gap (no clause
+# terminator) keeps it within one converter clause; the converter-clause gate in
+# _detect_converters prevents a stray count elsewhere from minting a converter.
 _CHANNEL_RE = re.compile(
-    r"\b(\d{1,4})[ \-]?(?:channel|channels|ch)\b", re.IGNORECASE)
+    r"\b(\d{1,4})\b[^.;\n|]{0,40}?\b(?:channels?|copies|ch)\b", re.IGNORECASE)
 
 # SAMPLE-RATE qualifier: "1 MSPS", "500 kSPS", "2 GS/s", "1 MS/s", "100 kHz
 # sampling", "sampling rate of 1 MHz", "samples at 1 MHz". The unit makes it a
@@ -109,7 +119,10 @@ _SAMPLE_RATE_PRE_RE = re.compile(
 # A clause-terminating "." is a sentence period (followed by whitespace / EOL),
 # NOT a decimal point inside a number ("2.5 V") — so a value never gets split
 # away from its token. We split on sentence-ending . / ; / newline / list dashes.
-_CLAUSE_SPLIT_RE = re.compile(r"(?<!\d)\.(?!\d)|[;\n]|\s-\s|•|·|—")
+# A clause-terminating "." must not be a decimal point (`2.5 V`) NOR part of a
+# `..` / `...` RANGE-or-ellipsis (`IN1..IN6`, a common pin-range datasheet form) —
+# splitting inside the range would sever the analog token from its pad names.
+_CLAUSE_SPLIT_RE = re.compile(r"(?<!\d)(?<!\.)\.(?!\d)(?!\.)|[;\n]|\s-\s|•|·|—")
 
 
 def _clauses(text: str) -> List[str]:
@@ -272,9 +285,11 @@ def _detect_vref(text: str) -> List[Dict[str, object]]:
 # pad, a bias pin, a PHY-analog, or an analog front-end. chip-AGNOSTIC — generic
 # analog-boundary vocabulary. A BARE "analog" (no input/output/pin/pad/front-end
 # qualifier) is NOT in this set, so it cannot fire alone.
+# Trailing `s?` on the boundary nouns so the PLURAL datasheet form ("Analog
+# inputs IN1..IN6", "sense pads") fires as well as the singular. chip-AGNOSTIC.
 _ANALOG_PAD_TOKEN_RE = re.compile(
-    r"\b(analog\s+input|analog\s+output|analog\s+pin|analog\s+pad|"
-    r"analog\s+front[ \-]?end|sense\s+pad|bias\s+pin|PHY\s+analog|"
+    r"\b(analog\s+inputs?|analog\s+outputs?|analog\s+pins?|analog\s+pads?|"
+    r"analog\s+front[ \-]?ends?|sense\s+pads?|bias\s+pins?|PHY\s+analog|"
     r"analog\s+I/O|analog\s+io)\b", re.IGNORECASE)
 
 # A NAMED SIGNAL / PAD anchor near the analog token. Either a backtick-quoted

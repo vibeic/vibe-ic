@@ -113,6 +113,29 @@ def _has_strong_otp_anchor(text: str) -> bool:
     return bool(_OTP_STRONG_ANCHOR_RE.search(text))
 
 
+# A NEGATION immediately before an OTP/fuse token turns it into a NON-anchor:
+# "無 OTP", "no OTP", "not applicable ... fuse", "without fuses", "non-OTP" —
+# common in an N/A datasheet section. chip-AGNOSTIC (CJK + English negators).
+_NEG_BEFORE_RE = re.compile(r"(?:無|沒有|\bno\b|\bnot\b|\bwithout\b|\bn/?a\b|\bnon-)"
+                            r"[^\n。.]{0,24}$", re.IGNORECASE)
+
+
+def _local_otp_anchor(text: str, pos: int, window: int = 160) -> bool:
+    """True iff a NON-negated OTP/fuse anchor sits within `window` chars of `pos`.
+
+    §4.05 PRECISION (the real-datasheet leak): the doc-wide `strong` gate let an
+    OTP mention in an N/A section ("無 OTP-based calibration") bind every
+    "register" on the far side of a multi-section design doc as a fuse field.
+    A NAMED field is OTP only when a real OTP/fuse anchor is LOCAL to it AND that
+    anchor is not negated."""
+    lo, hi = max(0, pos - window), min(len(text), pos + window)
+    seg = text[lo:hi]
+    for m in _OTP_ANCHOR_RE.finditer(seg):
+        if not _NEG_BEFORE_RE.search(seg[:m.start()]):
+            return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # LOCK grammar — the programmability-lock vocabulary (otp_lock anchor)
 # ---------------------------------------------------------------------------
@@ -271,7 +294,6 @@ def _collect_fields(text: str) -> List[Tuple[str, str, List[str]]]:
     order: List[str] = []
     evidence: Dict[str, str] = {}
     tokens: Dict[str, List[str]] = {}
-    strong = _has_strong_otp_anchor(text)
 
     def _add(name: str, ev: str, toks: List[str]) -> None:
         nm = _norm(name)
@@ -294,11 +316,13 @@ def _collect_fields(text: str) -> List[Tuple[str, str, List[str]]]:
             w = _WIDTH_RE.search(line)
             if w:
                 toks.append(w.group(1) + "-bit")
-            # §4.05 guard: a NAMED-field match admits only when the doc has a
-            # strong (noun-context) OTP anchor OR this very line carries a real
-            # width/offset qualifier — so the verb "fuse" ("fuse the clocks")
-            # with no strong anchor and no qualifier never mints a phantom field.
-            if not (strong or toks):
+            # §4.05 PRECISION guard: a NAMED field/register is an OTP field ONLY
+            # when a NON-negated OTP/fuse anchor is LOCAL to it. The old doc-wide
+            # `strong` gate bound every "register" in a multi-section design doc to
+            # an OTP mention in an unrelated (often N/A) section — the real-
+            # datasheet leak. An ordinary "register file" / "config register" with
+            # no local OTP anchor now mints NOTHING.
+            if not _local_otp_anchor(text, m.start()):
                 continue
             _add(nm, line or m.group(0), toks)
 

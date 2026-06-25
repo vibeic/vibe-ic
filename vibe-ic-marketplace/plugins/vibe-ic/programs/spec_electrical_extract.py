@@ -170,6 +170,83 @@ _SLEW_VALUE_RE = re.compile(
 
 
 # ---------------------------------------------------------------------------
+# (6) MARKDOWN SPEC-TABLE ROWS — `| param | value | range | unit | note |`
+# ---------------------------------------------------------------------------
+# Real datasheets state most electricals in a TABLE where the parameter name, the
+# numeric value, and the SI unit live in SEPARATE cells, so the prose number+unit
+# passes (which need adjacency) miss them. This pass reads a markdown table row,
+# binds the first non-empty cell as the PARAMETER NAME, finds a numeric cell and a
+# unit cell, and maps the unit -> facet. §4.05: a row mints an item ONLY when a
+# real number cell AND a real unit cell AND a name cell are all present.
+_CELL_NUM_RE = re.compile(r"^[≤≥~<>]?\s*([+-]?\d+(?:\.\d+)?)$")
+_CELL_FREQ_U = re.compile(r"^(GHz|MHz|kHz|KHz|Hz)$")
+_CELL_VOLT_U = re.compile(r"^(mV|V)$")
+_CELL_CURR_U = re.compile(r"^(mA|[uµμ]A|nA|A)$")
+# a supply-rail PARAMETER name (vs a Vref / threshold, which the analog extractor
+# owns) — the voltage-row facet only fires for a supply-ish name. chip-AGNOSTIC.
+_SUPPLY_NAME_RE = re.compile(
+    r"\b(vdd|vcc|vddio|vccio|vin|vout|vldo|core|supply|rail|iovdd|avdd|dvdd)\b",
+    re.IGNORECASE)
+
+
+def _table_cells(line: str):
+    """Cells of a markdown table row (outer pipes stripped), or None if the line
+    is not a `|`-delimited data row (header separators `|---|` are skipped)."""
+    if line.count("|") < 2:
+        return None
+    if re.fullmatch(r"\s*\|?[\s:|+-]+\|?\s*", line):   # |---|---| separator
+        return None
+    inner = line.strip()
+    inner = inner[1:] if inner.startswith("|") else inner
+    inner = inner[:-1] if inner.endswith("|") else inner
+    return [c.strip().strip("`* ") for c in inner.split("|")]
+
+
+def _table_items(text: str) -> List[dict]:
+    """Electrical items recovered from markdown spec-table rows (clock / supply /
+    current). Temperature ranges are handled by the slash-list pass. The doc-wide
+    context gates still apply (enforced by the caller)."""
+    out: List[dict] = []
+    for line in text.splitlines():
+        cells = _table_cells(line)
+        if not cells or len(cells) < 2:
+            continue
+        name = next((c for c in cells if c), "")
+        if not name:
+            continue
+        num = next((m.group(1) for c in cells
+                    for m in [_CELL_NUM_RE.match(c)] if m), None)
+        if num is None:
+            continue
+        for c in cells:
+            if _CELL_FREQ_U.match(c):
+                out.append({"kind": "clock_frequency", "value": _to_float(num),
+                            "unit": c, "disp": num + " " + c, "evidence": line.strip()[:120],
+                            "name": name})
+                break
+            if _CELL_VOLT_U.match(c):
+                if _SUPPLY_NAME_RE.search(name):
+                    out.append({"kind": "supply_voltage", "value": _to_float(num),
+                                "unit": c, "disp": num + " " + c,
+                                "evidence": line.strip()[:120], "name": name})
+                break
+            if _CELL_CURR_U.match(c):
+                out.append({"kind": "current_spec", "value": _to_float(num),
+                            "unit": c, "disp": num + " " + c, "evidence": line.strip()[:120],
+                            "name": name})
+                break
+    return out
+
+
+# A slash / comma LIST of corner temperatures with a single trailing unit:
+# "−40/27/125 °C", "-40, 27, 125 degC". The operating range is min..max of the
+# list. chip-AGNOSTIC (the value list + a degree unit).
+_TEMP_LIST_RE = re.compile(
+    r"([+-]?\d{1,3}(?:\s*[/,]\s*[+-]?\d{1,3}){1,5})\s*(?:°\s*C|degC|deg\s*C)",
+    re.IGNORECASE)
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 def extract(prompt_text: str) -> List[dict]:
@@ -185,7 +262,11 @@ def extract(prompt_text: str) -> List[dict]:
     keys on number + SI unit + qualifier word, never a problem id."""
     if not prompt_text or not isinstance(prompt_text, str):
         return []
-    text = prompt_text
+    # Normalize the Unicode MINUS SIGN (U+2212, common in datasheets: "−40 °C")
+    # to ASCII '-' so a signed value parses. The EN-DASH (U+2013 '–') is LEFT
+    # intact — it is the numeric RANGE separator ("0.1–10") and must not become a
+    # sign. chip-AGNOSTIC.
+    text = prompt_text.replace("−", "-")
     items: List[dict] = []
 
     # --- (1) Clock frequency: a freq number, gated on clock context -----------
@@ -309,6 +390,49 @@ def extract(prompt_text: str) -> List[dict]:
                 "unit": unit,
                 "coverage_tokens": [m.group(1).strip(), unit],
                 "provenance": "STRUCTURAL",
+            })
+
+    # --- (6) markdown spec-TABLE rows (param | value | … | unit) --------------
+    # value and unit live in separate cells, so the prose passes above miss them.
+    # The same doc-wide context gate decides whether a table number is in-facet.
+    _present = {(it["kind"], it.get("value"), it.get("unit")) for it in items}
+    for ti in _table_items(text):
+        if ti["kind"] == "clock_frequency" and not _CLOCK_CTX_RE.search(text):
+            continue
+        if ti["kind"] == "current_spec" and not _CURRENT_CTX_RE.search(text):
+            continue
+        if (ti["kind"], ti["value"], ti["unit"]) in _present:
+            continue
+        _present.add((ti["kind"], ti["value"], ti["unit"]))
+        label = {"clock_frequency": "clock frequency", "supply_voltage": "supply voltage",
+                 "current_spec": "current spec"}[ti["kind"]]
+        items.append({
+            "kind": ti["kind"],
+            "requirement": (label + " (" + ti["name"] + "): " + ti["disp"]
+                            + "; from the spec table — constraints/TB must honor it."),
+            "evidence": ti["evidence"], "value": ti["value"], "unit": ti["unit"],
+            "coverage_tokens": [ti["name"], ti["disp"]], "provenance": "STRUCTURAL",
+        })
+
+    # --- (7) slash/comma corner-temperature LIST ("−40/27/125 °C") ------------
+    if _TEMP_CTX_RE.search(text):
+        seen_tl = {(it.get("lo"), it.get("hi")) for it in items
+                   if it["kind"] == "temperature_range"}
+        for m in _TEMP_LIST_RE.finditer(text):
+            nums = [_to_float(x) for x in re.split(r"[/,]", m.group(1))]
+            nums = [n for n in nums if n is not None]
+            if len(nums) < 2:
+                continue
+            lo, hi = min(nums), max(nums)
+            if (lo, hi) in seen_tl:
+                continue
+            seen_tl.add((lo, hi))
+            items.append({
+                "kind": "temperature_range",
+                "requirement": ("operating temperature range: " + str(lo) + " to "
+                                + str(hi) + " °C (corner list); corners must cover it."),
+                "evidence": m.group(0).strip(), "lo": lo, "hi": hi, "unit": "C",
+                "coverage_tokens": [str(lo), str(hi)], "provenance": "STRUCTURAL",
             })
 
     return items
