@@ -14,36 +14,6 @@
   "sim_only_modules": [],
   "fsm_states": [
     {
-      "name": "REFER",
-      "transitions": [],
-      "evidence": "input/docs/NVMe_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "FIGURE",
-      "transitions": [],
-      "evidence": "input/docs/NVMe_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "UNABLE",
-      "transitions": [],
-      "evidence": "input/docs/NVMe_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SUCCESSFULLY",
-      "transitions": [],
-      "evidence": "input/docs/NVMe_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SUBJECT",
-      "transitions": [],
-      "evidence": "input/docs/NVMe_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SECTION",
-      "transitions": [],
-      "evidence": "input/docs/NVMe_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
       "name": "D3HOT",
       "transitions": [],
       "evidence": "input/docs/NVMe_Spec.pdf (prose 'in X state')"

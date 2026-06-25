@@ -5,67 +5,10 @@
   "reject_rules": [],
   "fsm_states": [
     {
-      "name": "ENOUGH",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Wishbone_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "FIND",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Wishbone_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "DIFFICULT",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Wishbone_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "PREDICT",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Wishbone_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "NEEDED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Wishbone_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "SUPERVISE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Wishbone_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "STATE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Wishbone_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "WAIT4ACK",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/Wishbone_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
       "name": "IDLE",
       "transitions": [],
       "actions": [],
-      "evidence": "input/docs/Wishbone_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+      "evidence": "input/docs/Wishbone_Spec.pdf (spec text)"
     }
   ],
   "pipeline_stages": [],
@@ -87,7 +30,7 @@
       }
     ]
   },
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "processor_cpu",
   "fsm_hints_standard_handshake": {
     "per_cycle_phases": [
       "RESET: [RST_I] asserted; MASTER drives [STB_O]=0, [CYC_O]=0; SLAVE state machines initialize.",

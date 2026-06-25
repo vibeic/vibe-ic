@@ -2,15 +2,18 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "AFDX End System / Switch (ARINC 664 Part 7)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
   "external_components": [],
   "electrical_specs": [],
   "design_parameters": [],
-  "extraction_evidence": {
-    "input/docs/afdx_spec.txt": []
-  },
+  "source_documents": [
+    "input/docs/afdx_spec.txt"
+  ],
+  "extraction_evidence": {},
   "analog_digital_interface_present": true,
   "signaling_summary": "AFDX uses standard IEEE 802.3 full-duplex Ethernet at the physical layer — typically 100BASE-TX (100 Mbit/s, MLT-3 over twisted pair) or 10BASE-T, point-to-point full-duplex (no shared medium, no collisions, no CSMA/CD). Each End System has TWO physical ports — one to Network A and one to Network B — that are electrically independent so a single physical-layer fault affects only one network. Determinism is enforced above the PHY (BAG shaping, policing); the analog layer is commercial Ethernet.",
   "mii_dc_characteristics": {

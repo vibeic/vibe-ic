@@ -44,7 +44,6 @@
       "source_pin": "clk"
     }
   ],
-  "class_path": "serial_peripheral_protocol",
   "clock_mhz": 3.125,
   "clock_and_reset_waveform": {
     "SCL_idle": "HIGH (released by Master; Push-Pull when driven)",

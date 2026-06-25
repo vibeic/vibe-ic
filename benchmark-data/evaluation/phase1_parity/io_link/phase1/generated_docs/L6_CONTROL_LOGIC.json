@@ -5,20 +5,6 @@
   "reject_rules": [],
   "fsm_states": [
     {
-      "name": "BACK",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/io_link_spec.txt (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "EVENTS",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/io_link_spec.txt (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
       "name": "OPERATE",
       "transitions": [],
       "actions": [],

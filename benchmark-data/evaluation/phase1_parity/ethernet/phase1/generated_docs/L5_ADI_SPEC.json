@@ -49,6 +49,7 @@
     }
   ],
   "no_analog": false,
+  "analog_digital_interface_present": true,
   "external_components": [],
   "electrical_specs": [
     {
@@ -180,6 +181,1078 @@
       "source": "Ethernet_Spec.pdf",
       "raw": "IPeak = 0.4A minimum for 50ms",
       "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "16.0",
+      "unit": "MHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "100.0",
+      "unit": "MHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "25.0",
+      "unit": "MHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "2.5",
+      "unit": "MHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "30.0",
+      "unit": "MHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "159.0",
+      "unit": "MHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "500.0",
+      "unit": "MHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "50.0",
+      "unit": "Hz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "60.0",
+      "unit": "Hz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "12.5",
+      "unit": "MHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "2.0",
+      "unit": "MHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "100.0",
+      "unit": "kHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "10.1",
+      "unit": "MHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "15.0",
+      "unit": "MHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "1.7",
+      "unit": "MHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "500.0",
+      "unit": "kHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "20.0",
+      "unit": "Hz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "125.0",
+      "unit": "MHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "20.0",
+      "unit": "kHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "1.0",
+      "unit": "MHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "20.0",
+      "unit": "MHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "250.0",
+      "unit": "kHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "50.0",
+      "unit": "MHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "6.5",
+      "unit": "MHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "6.0",
+      "unit": "MHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "23.0",
+      "unit": "MHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "500.0",
+      "unit": "Hz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "150.0",
+      "unit": "kHz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "5.0",
+      "unit": "Hz",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "3.3",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "0.0",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "5.5",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "7.3",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.8",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "2.4",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "0.4",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "200.0",
+      "unit": "mV",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "2.0",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "0.8",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "5.25",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "5.0",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "0.0",
+      "unit": "mV",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "50.0",
+      "unit": "mV",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "467.0",
+      "unit": "mV",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "225.0",
+      "unit": "mV",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "4.5",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "3.5",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1500.0",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "2400.0",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "3.15",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "3.85",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "100.0",
+      "unit": "mV",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "15.0",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1000.0",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "325.0",
+      "unit": "mV",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "8.7",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "25.0",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "175.0",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.0",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "40.0",
+      "unit": "mV",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "500.0",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.71",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.91",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.81",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "25.0",
+      "unit": "mV",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "15.5",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "20.5",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "44.0",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "30.0",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "10.0",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "60.0",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "2.5",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.9",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "57.0",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "2.7",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "10.1",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "14.5",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "10.0",
+      "unit": "mV",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "0.3",
+      "unit": "V",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "87.0",
+      "unit": "mV",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "69.0",
+      "unit": "mV",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "22.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "32.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "4.0",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "750.0",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "5.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "23.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "420.0",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "0.75",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "0.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "28.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "30.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "4.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "31.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "43.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "50.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "62.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "63.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "3.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "16.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "300.0",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "1.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "5.0",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "33.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "100.0",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "51.0",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "0.0",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "8.0",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "13.0",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "16.0",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "21.0",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "25.0",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "31.0",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "35.0",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "45.0",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "0.4",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "60.0",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "10.5",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "10.0",
+      "unit": "µA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "12.0",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "20.0",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "30.0",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "44.0",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "10.0",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "350.0",
+      "unit": "mA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "12.0",
+      "unit": "µA",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "45.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "2.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "6.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "7.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "8.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "9.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "27.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "29.0",
+      "unit": "A",
+      "source": "Ethernet_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
     }
   ],
   "design_parameters": [
@@ -650,7 +1723,6 @@
     ]
   },
   "class_path": "digital_cmd_driven",
-  "analog_digital_interface_present": true,
   "signaling_summary": "The MII (Clause 22), GMII (Clause 35), and MDIO (Clauses 22 + 45) themselves carry only single-ended LVTTL / LVCMOS digital signals — the analog signaling is entirely encapsulated inside the PHY, on the MDI side. Per Clause 22.4.4, MII receivers interpret Vi ≥ 2.00 V as logic-1 and Vi ≤ 0.80 V as logic-0; MII drivers must produce Voh ≥ 2.40 V at Ioh = -4.0 mA and Vol ≤ 0.40 V at Iol = 4.0 mA. The MDI-side line coding is PMD-specific: 10BASE-T uses Manchester @ 10 Mbaud with ±2.5 V differential pulses on Cat 3 UTP; 100BASE-TX uses 4B/5B + MLT-3 @ 125 Mbaud with three-level (~±1 V) signaling on Cat 5 UTP; 100BASE-FX uses 4B/5B + NRZI on multimode fiber; 1000BASE-T uses PAM5 (5-level, ±2 V / ±1 V / 0) @ 125 Mbaud on each of 4 Cat 5e pairs simultaneously (8B1Q4 + Trellis coding); 1000BASE-X uses 8B/10B @ 1.25 GBd on fiber or shielded copper.",
   "mii_dc_characteristics": {
     "logic_high_output_voltage_V_min": 2.4,

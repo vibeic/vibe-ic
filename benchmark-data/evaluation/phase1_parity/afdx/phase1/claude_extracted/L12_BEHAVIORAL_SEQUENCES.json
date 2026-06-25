@@ -4,7 +4,7 @@
   "ic_name": "AFDX End System / Switch (ARINC 664 Part 7)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
+  "no_calibration": true,
   "extraction_evidence": {},
   "link_bring_up_sequence": [
     "1. PHY hardware reset (RESET#) or BMCR.Reset (0.15 = 1). PHY clears BMCR + BMSR to defaults; PHYAD is sampled from strap pins.",

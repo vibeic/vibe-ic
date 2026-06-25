@@ -83,11 +83,10 @@
   ],
   "no_frs_sections_in_input": false,
   "protocol_overview": {
-    "half_duplex": false,
-    "byte_order": null,
-    "wake_required_pre_command": null,
-    "evidence": "interface keyword match (i2c/spi/uart/...)",
     "type": "Router-based tunneling fabric; host-managed (Connection Manager allocates paths + tunnels).",
+    "duplex": "full-duplex (independent TX and RX differential pairs per lane)",
+    "lanes": 2,
+    "lane_bonding": "Two lanes bonded to a single logical link (2 x 20 Gbps = 40 Gbps Gen 3x2).",
     "synchronous_serial": false,
     "wire_names": [
       "TX1+/TX1-",
@@ -100,11 +99,8 @@
       "GND",
       "D+/D-"
     ],
-    "encoding": "64b/66b (Gen 2, 10.3125 Gbaud) and 128b/132b (Gen 3, 20.625 Gbaud); PAM-3 in USB4 v2 (Gen 4).",
-    "duplex": "full-duplex (independent TX and RX differential pairs per lane)",
-    "lanes": 2,
-    "lane_bonding": "Two lanes bonded to a single logical link (2 x 20 Gbps = 40 Gbps Gen 3x2).",
     "high_speed_lane_pairs": 4,
+    "encoding": "64b/66b (Gen 2, 10.3125 Gbaud) and 128b/132b (Gen 3, 20.625 Gbaud); PAM-3 in USB4 v2 (Gen 4).",
     "line_rate_per_lane": {
       "Gen2": "10 Gbps",
       "Gen3": "20 Gbps",
@@ -125,7 +121,7 @@
     "sideband": "SBU sideband channel for low-speed inter-router management.",
     "time_management": "Time Management Unit (TMU) distributes a fabric-wide time base."
   },
-  "no_protocol_overview_in_input": false,
+  "no_protocol_overview_in_input": true,
   "compliance_requirements": [
     "USB-C connector + USB Power Delivery compliance (CC pin negotiation).",
     "Backward compatibility with USB 3.2 and USB 2.0 on the same port.",
@@ -182,6 +178,12 @@
       {
         "literal": "4 DisplayPort",
         "label": "FRS section"
+      }
+    ],
+    "v1.6.295.protocol_overview_class_gate_suppressed": [
+      {
+        "literal": "class_path='pure_analog', hd_signal_count=3",
+        "label": "v1.6.295 (#180) — protocol_overview suppressed: CPU / analog class OR fewer than 2 half-duplex shape signals in source"
       }
     ]
   },

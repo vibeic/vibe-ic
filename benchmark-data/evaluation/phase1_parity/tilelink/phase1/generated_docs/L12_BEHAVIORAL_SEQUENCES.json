@@ -4,8 +4,15 @@
   "ic_name": "TileLink 1.7.1 (SiFive)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
-  "extraction_evidence": {},
+  "no_calibration": true,
+  "extraction_evidence": {
+    "derived_no_calibration_source": [
+      {
+        "literal": "no calibration / trim / OTP-cal source in input",
+        "label": "L12 no_calibration auto-set (#634 facet e) — absence-based, mirrors L5.no_analog"
+      }
+    ]
+  },
   "extraction_strategy": {
     "l12_behavioral_sequences_v0_1_73": "R43: overlaid 0 L12 sequences"
   },

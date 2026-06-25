@@ -98,7 +98,6 @@
       }
     ]
   },
-  "class_path": "digital_arithmetic_primitive",
   "initialization_sequence": [
     "1. Apply VDD and VDDQ; maintain RESET# ≤ 0.2 × VDD and CKE LOW.",
     "2. VDD ramp from 300 mV to VDDmin within ≤ 200 ms.",

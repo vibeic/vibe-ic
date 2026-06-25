@@ -4,7 +4,7 @@
   "ic_name": "HyperBus (HyperRAM / HyperFlash) memory interface (Cypress / Infineon)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
+  "no_calibration": true,
   "extraction_evidence": {},
   "read_transaction_sequence": [
     "1. Host drives CS# low.",

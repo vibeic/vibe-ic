@@ -36,7 +36,6 @@
   "extraction_evidence": {
     "input/docs/UM10204_NXP_i2c_bus_spec_rev6.pdf": []
   },
-  "class_path": "serial_peripheral_protocol",
   "auto_discovered_literals": [
     {
       "literal": "5V",

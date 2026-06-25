@@ -21,7 +21,6 @@
   "extraction_evidence": {
     "input/docs/MIPI_DSI_Spec.pdf": []
   },
-  "class_path": "serial_peripheral_protocol",
   "width_parameters": {
     "CLOCK_LANE_PAIRS": 1,
     "DATA_LANE_PAIRS_MIN": 1,

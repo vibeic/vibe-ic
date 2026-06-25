@@ -44,7 +44,6 @@
       "source_pin": "clk"
     }
   ],
-  "class_path": "digital_arithmetic_primitive",
   "clock_mhz": 13.0,
   "clock_and_reset_waveform": {
     "SoundWire_Clock_idle_during_clockstop": "Parked Low after a 'Stopping Frame' (Master drives all BitSlots of the Stopping Frame, ending with Clock + Data both Low).",

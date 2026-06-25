@@ -4,7 +4,7 @@
   "ic_name": "IEEE 1588 Precision Time Protocol (PTP) Clock Synchronization Engine (PTPv2 / IEEE 802.1AS)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
+  "no_calibration": true,
   "extraction_evidence": {},
   "class_path": "digital_arithmetic_primitive",
   "link_bring_up_sequence": [

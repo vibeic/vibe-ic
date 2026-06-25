@@ -6,6 +6,11 @@
         "feature": "be",
         "quote": "this may be removed in a future revision.",
         "line": 826
+      },
+      {
+        "feature": "use",
+        "quote": "This is not used in this specification and its use was deprecated in",
+        "line": 9932
       }
     ],
     "backward_compat_traps": [

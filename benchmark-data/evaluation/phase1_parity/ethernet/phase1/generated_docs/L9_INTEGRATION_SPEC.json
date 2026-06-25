@@ -9,19 +9,8 @@
   "top_ports": [],
   "top_module_pins": [],
   "no_integration_in_input": true,
-  "submodules": [
-    {
-      "name": "Resistor",
-      "instances": 1,
-      "type": "markdown bullet under heading",
-      "extraction_strategy": "markdown_bullet_under_heading",
-      "evidence": {
-        "file": "input/docs/Ethernet_Spec.pdf"
-      },
-      "role": "documented submodule"
-    }
-  ],
-  "no_submodules_in_input": false,
+  "submodules": [],
+  "no_submodules_in_input": true,
   "sim_only_modules": [],
   "fsm_states": [
     {
@@ -40,149 +29,119 @@
       "evidence": "input/docs/Ethernet_Spec.pdf (prose transition v1.6.484)"
     },
     {
-      "name": "MODIFICATION",
-      "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "USED",
-      "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "DENOTE",
-      "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "REFERENCES",
-      "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "CONTROL",
-      "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "CONFORM",
-      "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "NIBBLES",
-      "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "FORM",
-      "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ACCORDING",
-      "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "DATA",
-      "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SERVES",
-      "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "EXPLAIN",
-      "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "FREE",
-      "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "CONSTRUCT",
-      "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "IDENTICAL",
-      "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "REGISTERS",
-      "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "MANAGE",
-      "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "GROUPS",
-      "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "REQUIRED",
-      "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SYNTHESIZE",
-      "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "OPPOSED",
-      "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "EARLY",
-      "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
       "name": "RX_ER",
       "transitions": [],
       "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
     },
     {
-      "name": "REPORTED",
+      "name": "LINK_PASS",
       "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/Ethernet_Spec.pdf (prose 'in X state')"
     },
     {
-      "name": "DESCRIBE",
+      "name": "ISOLATION",
       "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/Ethernet_Spec.pdf (prose 'in X state')"
     },
     {
-      "name": "OBLIGATION",
+      "name": "START",
       "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/Ethernet_Spec.pdf (prose 'in X state')"
     },
     {
-      "name": "IMPLEMENT",
+      "name": "JABBER",
       "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/Ethernet_Spec.pdf (prose 'in X state')"
     },
     {
-      "name": "DELIMITER",
+      "name": "CURRENT",
       "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/Ethernet_Spec.pdf (prose 'in X state')"
     },
     {
-      "name": "SYNCHRONOUS",
+      "name": "EXPIRED",
       "transitions": [],
-      "evidence": "input/docs/Ethernet_Spec.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/Ethernet_Spec.pdf (prose 'in X state')"
+    },
+    {
+      "name": "DEFAULTED",
+      "transitions": [],
+      "evidence": "input/docs/Ethernet_Spec.pdf (prose 'in X state')"
+    },
+    {
+      "name": "INITIALIZE",
+      "transitions": [],
+      "evidence": "input/docs/Ethernet_Spec.pdf (prose 'in X state')"
+    },
+    {
+      "name": "LACP_DISABLED",
+      "transitions": [],
+      "evidence": "input/docs/Ethernet_Spec.pdf (prose 'in X state')"
+    },
+    {
+      "name": "PORT_DISABLED",
+      "transitions": [],
+      "evidence": "input/docs/Ethernet_Spec.pdf (prose 'in X state')"
+    },
+    {
+      "name": "DETACHED",
+      "transitions": [],
+      "evidence": "input/docs/Ethernet_Spec.pdf (prose 'in X state')"
+    },
+    {
+      "name": "WAITING",
+      "transitions": [],
+      "evidence": "input/docs/Ethernet_Spec.pdf (prose 'in X state')"
+    },
+    {
+      "name": "ATTACHED",
+      "transitions": [],
+      "evidence": "input/docs/Ethernet_Spec.pdf (prose 'in X state')"
+    },
+    {
+      "name": "COLLECTING",
+      "transitions": [],
+      "evidence": "input/docs/Ethernet_Spec.pdf (prose 'in X state')"
+    },
+    {
+      "name": "DISTRIBUTING",
+      "transitions": [],
+      "evidence": "input/docs/Ethernet_Spec.pdf (prose 'in X state')"
+    },
+    {
+      "name": "COLLECTING_DISTRIBUTING",
+      "transitions": [],
+      "evidence": "input/docs/Ethernet_Spec.pdf (prose 'in X state')"
+    },
+    {
+      "name": "ACTOR_CHURN_MONITOR",
+      "transitions": [],
+      "evidence": "input/docs/Ethernet_Spec.pdf (prose 'in X state')"
+    },
+    {
+      "name": "ACTOR_CHURN",
+      "transitions": [],
+      "evidence": "input/docs/Ethernet_Spec.pdf (prose 'in X state')"
+    },
+    {
+      "name": "PARTNER_CHURN_MONITOR",
+      "transitions": [],
+      "evidence": "input/docs/Ethernet_Spec.pdf (prose 'in X state')"
+    },
+    {
+      "name": "PARTNER_CHURN",
+      "transitions": [],
+      "evidence": "input/docs/Ethernet_Spec.pdf (prose 'in X state')"
+    },
+    {
+      "name": "IN_SYNC",
+      "transitions": [],
+      "evidence": "input/docs/Ethernet_Spec.pdf (prose 'in X state')"
+    },
+    {
+      "name": "NOT_MDI_POWERED",
+      "transitions": [],
+      "evidence": "input/docs/Ethernet_Spec.pdf (prose 'in X state')"
     }
   ],
   "no_fsm_states_in_input": false,

@@ -14,39 +14,9 @@
   "sim_only_modules": [],
   "fsm_states": [
     {
-      "name": "ENHANCEMENTS",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
       "name": "L2CAP",
       "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "IMPROVEMENTS",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SECURITY",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ADDED",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "DEFINED",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SUPPORT",
-      "transitions": [],
-      "evidence": "input/docs/BLE_Spec.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/BLE_Spec.pdf (prose 'in X state')"
     }
   ],
   "no_fsm_states_in_input": false,
@@ -139,7 +109,7 @@
       "matched_token": "CAN\n"
     }
   ],
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "crypto_accelerator",
   "module_role": "Wireless personal-area-network protocol stack specification. Defines the full BLE stack (Volume 6 LE Controller PHY + Link Layer + Direct Test Mode; Volume 3 Host = L2CAP, ATT, GATT, SMP, GAP) plus the Host Controller Interface (Volume 4 Part E) that bridges Controller and Host. SoC-internal hardware register map of a BLE controller is NOT specified — that is vendor-specific.",
   "integration_overview": {
     "host_bus_side": "8-bit data bus + 3 address pins + 3 chip-select pins + RD/WR strobes + optional ADS latch + INTR + DDIS bus-direction signal.",

@@ -2,164 +2,27 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "Modbus Application Protocol V1.1b3 (Modbus.org)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
   "external_components": [],
-  "electrical_specs": [],
-  "design_parameters": [
+  "electrical_specs": [
     {
-      "parameter": "bytes)",
-      "value": "253",
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "0.0",
+      "unit": "A",
       "source": "Modbus_Spec.pdf",
-      "raw": "bytes) = 253 bytes.",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "RS232 / RS485 ADU",
-      "value": "253",
-      "source": "Modbus_Spec.pdf",
-      "raw": "RS232 / RS485 ADU = 253 bytes + Server address (1 byte) + CRC (2 bytes) = 256 bytes.",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "TCP MODBUS ADU",
-      "value": "253",
-      "source": "Modbus_Spec.pdf",
-      "raw": "TCP MODBUS ADU = 253 bytes + MBAP (7 bytes) = 260 bytes.",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "ExeptionCode",
-      "value": "1",
-      "source": "Modbus_Spec.pdf",
-      "raw": "ExeptionCode = 1",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "ExceptionCode",
-      "value": "2",
-      "source": "Modbus_Spec.pdf",
-      "raw": "ExceptionCode = 2        [invalid]",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "ExceptionCode",
-      "value": "3",
-      "source": "Modbus_Spec.pdf",
-      "raw": "ExceptionCode = 3",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "ExceptionCode",
-      "value": "4,",
-      "source": "Modbus_Spec.pdf",
-      "raw": "ExceptionCode = 4, 5, 6       [invalid]",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "MSB",
-      "value": "20",
-      "source": "Modbus_Spec.pdf",
-      "raw": "MSB: 20 . . . 27, 28 . . . 35, and so on.",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "ExceptionCode",
-      "value": "01",
-      "source": "Modbus_Spec.pdf",
-      "raw": "ExceptionCode = 01",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "ExceptionCode",
-      "value": "03",
-      "source": "Modbus_Spec.pdf",
-      "raw": "ExceptionCode = 03",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "ExceptionCode",
-      "value": "02",
-      "source": "Modbus_Spec.pdf",
-      "raw": "ExceptionCode = 02",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "ExceptionCode",
-      "value": "04",
-      "source": "Modbus_Spec.pdf",
-      "raw": "ExceptionCode = 04",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "Bit",
-      "value": "1",
-      "source": "Modbus_Spec.pdf",
-      "raw": "Bit:            1   1   0    0   1    1    0    1   0   0    0    0    0    0   0   1",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "Output",
-      "value": "27",
-      "source": "Modbus_Spec.pdf",
-      "raw": "Output:         27 26 25 24 23 22 21 20 –               –    –    –    –    –   29 28",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "Current Contents",
-      "value": "12",
-      "source": "Modbus_Spec.pdf",
-      "raw": "Current Contents=             12      0001 0010",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "Or_Mask",
-      "value": "25",
-      "source": "Modbus_Spec.pdf",
-      "raw": "Or_Mask =                     25      0010 0101",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "Result",
-      "value": "17",
-      "source": "Modbus_Spec.pdf",
-      "raw": "Result =                                 17        0001 0111",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "ExceptiCode",
-      "value": "01",
-      "source": "Modbus_Spec.pdf",
-      "raw": "ExceptiCode = 01                                 Object Id OK",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "Except.Code",
-      "value": "02",
-      "source": "Modbus_Spec.pdf",
-      "raw": "Except.Code = 02                                   YES",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "Except. Code",
-      "value": "03",
-      "source": "Modbus_Spec.pdf",
-      "raw": "Except. Code =03",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
-      "parameter": "Next Object ID",
-      "value": "00",
-      "source": "Modbus_Spec.pdf",
-      "raw": "Next Object ID = 00",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
     }
   ],
-  "extraction_evidence": {
-    "input/docs/Modbus_Spec.pdf": []
-  },
-  "class_path": "digital_arithmetic_primitive",
+  "design_parameters": [],
+  "source_documents": [
+    "input/docs/Modbus_Spec.pdf"
+  ],
+  "extraction_evidence": {},
   "analog_digital_interface_present": false,
   "signaling_summary": "Not applicable at the application-protocol level. MODBUS is OSI layer 7; all wire-level signaling (voltage levels, line drivers, differential pairs, optical interfaces, Ethernet PHY) is delegated to the chosen transport layer — EIA/TIA-232, EIA/TIA-422, EIA/TIA-485, fiber, radio, MODBUS PLUS, or TCP/IP-over-Ethernet. The MODBUS spec only constrains the byte sequence on the wire and the framing markers (3.5-char silence for RTU, ':' + CR LF for ASCII, MBAP Length for TCP)."
 }

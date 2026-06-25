@@ -16,7 +16,6 @@
   ],
   "no_bring_up_sequence_in_input": false,
   "extraction_evidence": {},
-  "class_path": "serial_peripheral_protocol",
   "test_cases_present": "partial — the M_CAN User's Manual describes operating modes, register semantics, and protocol behaviors per ISO 11898-1:2015 that directly map to compliance test scenarios but no formal testbench is shipped.",
   "derived_compliance_test_categories": [
     "Classical CAN DATA FRAME with each DLC value 0..8.",

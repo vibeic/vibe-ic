@@ -13,9 +13,9 @@
     "pct": 97.4
   },
   "hands_on": {
-    "denominator": 1646,
-    "numerator": 1604,
-    "pct": 97.4
+    "denominator": 1649,
+    "numerator": 1607,
+    "pct": 97.5
   },
   "per_l_doc": [
     {
@@ -30,7 +30,7 @@
     },
     {
       "name": "L3_CMD_PROTOCOL",
-      "evidence_count": 19,
+      "evidence_count": 18,
       "todo_count": 0
     },
     {

@@ -9,13 +9,6 @@
   "electrical_specs": [],
   "design_parameters": [
     {
-      "parameter": "Start-of-frame delimiter",
-      "value": "2.25",
-      "source": "lora_spec.txt",
-      "raw": "- Start-of-frame delimiter: 2.25 down-chirps marking the end of the preamble.",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    },
-    {
       "parameter": "FPort (1 B)",
       "value": "0",
       "source": "lora_spec.txt",

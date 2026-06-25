@@ -6,7 +6,6 @@
   "timing_constants": [],
   "waveforms": [],
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
   "rtu_frame_waveform": {
     "frame_layout": "Address (1 B) | Function Code (1 B) | Data (0..252 B) | CRC-Lo (1 B) | CRC-Hi (1 B) — total ≤ 256 B.",
     "start_of_frame": "First bit of the first byte after ≥ T3.5 silent line.",

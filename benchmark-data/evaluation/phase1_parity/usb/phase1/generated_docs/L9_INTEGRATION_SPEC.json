@@ -19,159 +19,74 @@
       "evidence": "input/docs/USB_2.0_specification.pdf (prose transition v1.6.484)"
     },
     {
-      "name": "REQUIRED",
+      "name": "DIAGRAM",
       "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/USB_2.0_specification.pdf (prose init v1.6.484)"
     },
     {
-      "name": "DECODE",
+      "name": "DEVICE",
       "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/USB_2.0_specification.pdf (spec text)"
     },
     {
-      "name": "MACHINE",
+      "name": "PENDING",
       "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/USB_2.0_specification.pdf (spec text)"
     },
     {
-      "name": "SPECIFY",
+      "name": "NO_MATCH",
       "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/USB_2.0_specification.pdf (spec text)"
     },
     {
-      "name": "REFERENCE",
+      "name": "MATCH_BUSY",
       "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/USB_2.0_specification.pdf (spec text)"
     },
     {
-      "name": "ANOTHER",
+      "name": "STATES",
       "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/USB_2.0_specification.pdf (spec text)"
     },
     {
-      "name": "USED",
+      "name": "PING",
       "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/USB_2.0_specification.pdf (prose 'in X state')"
     },
     {
-      "name": "CONNECT",
+      "name": "WFEOPFU",
       "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/USB_2.0_specification.pdf (prose 'in X state')"
     },
     {
-      "name": "RELATES",
+      "name": "WFOEP",
       "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/USB_2.0_specification.pdf (prose 'in X state')"
     },
     {
-      "name": "JOIN",
+      "name": "WFEOP",
       "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/USB_2.0_specification.pdf (prose 'in X state')"
     },
     {
-      "name": "TIME",
+      "name": "GEOPTU",
       "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/USB_2.0_specification.pdf (prose 'in X state')"
     },
     {
-      "name": "PROCESS",
+      "name": "WFSOP",
       "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/USB_2.0_specification.pdf (prose 'in X state')"
     },
     {
-      "name": "RESPOND",
+      "name": "WFSOPFU",
       "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/USB_2.0_specification.pdf (prose 'in X state')"
     },
     {
-      "name": "RESPONSES",
+      "name": "SETUP",
       "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "RETURN",
-      "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "USING",
-      "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "BACK",
-      "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "INITIALIZED",
-      "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "DATA0",
-      "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "MECHANISM",
-      "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "GUARANTEE",
-      "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "PROPAGATION",
-      "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "INDICATION",
-      "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SYNCHRONIZED",
-      "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SIGNALING",
-      "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "EMULATE",
-      "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SOP_FD",
-      "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ENTRY",
-      "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SIGNAL",
-      "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "LABELING",
-      "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "IDENTIFY",
-      "transitions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/USB_2.0_specification.pdf (prose 'in X state')"
     }
   ],
   "no_fsm_states_in_input": false,

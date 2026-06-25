@@ -4,7 +4,7 @@
   "ic_name": "MIPI CSI-2 (Camera Serial Interface 2, MIPI Alliance)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
+  "no_calibration": true,
   "extraction_evidence": {},
   "class_path": "digital_arithmetic_primitive",
   "typical_master_write_sequence": [

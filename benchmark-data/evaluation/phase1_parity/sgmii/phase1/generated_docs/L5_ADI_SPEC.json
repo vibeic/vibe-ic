@@ -2,30 +2,35 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "Serial Gigabit Media Independent Interface (SGMII)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
   "external_components": [],
-  "electrical_specs": [],
-  "design_parameters": [
+  "electrical_specs": [
     {
-      "parameter": "Bit 0",
-      "value": "1",
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "625.0",
+      "unit": "MHz",
       "source": "Cisco_SGMII_Specification.txt",
-      "raw": "Bit 0     : 1 (must be set, identifies SGMII Config_Reg)",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
     },
     {
-      "parameter": "Bits 9",
-      "value": "1",
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "125.0",
+      "unit": "MHz",
       "source": "Cisco_SGMII_Specification.txt",
-      "raw": "Bits 9:1  : Reserved (0)",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
     }
   ],
-  "extraction_evidence": {
-    "input/docs/Cisco_SGMII_Specification.txt": []
-  },
+  "design_parameters": [],
+  "source_documents": [
+    "input/docs/Cisco_SGMII_Specification.txt"
+  ],
+  "extraction_evidence": {},
   "analog_digital_interface_present": true,
   "signaling_summary": "The MII (Clause 22), GMII (Clause 35), and MDIO (Clauses 22 + 45) themselves carry only single-ended LVTTL / LVCMOS digital signals — the analog signaling is entirely encapsulated inside the PHY, on the MDI side. Per Clause 22.4.4, MII receivers interpret Vi ≥ 2.00 V as logic-1 and Vi ≤ 0.80 V as logic-0; MII drivers must produce Voh ≥ 2.40 V at Ioh = -4.0 mA and Vol ≤ 0.40 V at Iol = 4.0 mA. The MDI-side line coding is PMD-specific: 10BASE-T uses Manchester @ 10 Mbaud with ±2.5 V differential pulses on Cat 3 UTP; 100BASE-TX uses 4B/5B + MLT-3 @ 125 Mbaud with three-level (~±1 V) signaling on Cat 5 UTP; 100BASE-FX uses 4B/5B + NRZI on multimode fiber; 1000BASE-T uses PAM5 (5-level, ±2 V / ±1 V / 0) @ 125 Mbaud on each of 4 Cat 5e pairs simultaneously (8B1Q4 + Trellis coding); 1000BASE-X uses 8B/10B @ 1.25 GBd on fiber or shielded copper.",
   "mii_dc_characteristics": {

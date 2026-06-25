@@ -583,18 +583,6 @@
       }
     ]
   },
-  "extraction_strategy": {
-    "hallucination_scrub_v0_1_60": [
-      {
-        "l_doc": "L2_FRS",
-        "pattern_name": "ic_name_from_license_clause",
-        "path": "ic_name",
-        "old_value": "SUCH ARM TECHNOLOGY",
-        "new_value": "UNKNOWN_IC",
-        "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
-      }
-    ]
-  },
   "auto_cited_sections": [
     {
       "file_ref": "phase1/input_doc/IHI0022H_amba_axi_protocol_spec.txt:7",

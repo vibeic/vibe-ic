@@ -12,54 +12,8 @@
   "submodules": [],
   "no_submodules_in_input": true,
   "sim_only_modules": [],
-  "fsm_states": [
-    {
-      "name": "INTENDED",
-      "transitions": [],
-      "evidence": "input/docs/DDR3_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "PROVIDE",
-      "transitions": [],
-      "evidence": "input/docs/DDR3_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "COMMANDS",
-      "transitions": [],
-      "evidence": "input/docs/DDR3_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "CONTROL",
-      "transitions": [],
-      "evidence": "input/docs/DDR3_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "PROGRAMMED",
-      "transitions": [],
-      "evidence": "input/docs/DDR3_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "CLOCK",
-      "transitions": [],
-      "evidence": "input/docs/DDR3_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "DATA",
-      "transitions": [],
-      "evidence": "input/docs/DDR3_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "COMPARED",
-      "transitions": [],
-      "evidence": "input/docs/DDR3_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "STROBE",
-      "transitions": [],
-      "evidence": "input/docs/DDR3_Spec.pdf (prose state-to-state v1.6.484)"
-    }
-  ],
-  "no_fsm_states_in_input": false,
+  "fsm_states": [],
+  "no_fsm_states_in_input": true,
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
   "internal_wires": [],
@@ -103,7 +57,6 @@
   "interface_types": [],
   "no_interface_types_in_input": true,
   "chip_top_interfaces": [],
-  "class_path": "digital_arithmetic_primitive",
   "module_role": "Source-synchronous parallel memory device intended to be paired with a DDR3 memory controller + PHY. JESD79-3C standardizes the SDRAM component side; the controller / PHY side is OUT of scope but must implement clock + DQS generation, command scheduling, ZQ calibration, Write Leveling, Read training, per-bank state tracking.",
   "integration_overview": {
     "external_pin_count_x8_single_die": 78,

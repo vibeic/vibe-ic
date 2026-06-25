@@ -4,8 +4,15 @@
   "ic_name": "InfiniBand Architecture (IBTA)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
-  "extraction_evidence": {},
+  "no_calibration": true,
+  "extraction_evidence": {
+    "derived_no_calibration_source": [
+      {
+        "literal": "no calibration / trim / OTP-cal source in input",
+        "label": "L12 no_calibration auto-set (#634 facet e) — absence-based, mirrors L5.no_analog"
+      }
+    ]
+  },
   "link_bring_up_sequence": [
     "1. Physical link trains: Down -> Polling -> Configuration -> LinkUp (negotiate width/speed, de-skew lanes).",
     "2. Subnet Manager sweeps, reads NodeInfo/PortInfo, assigns a 16-bit LID, configures VLs / MTU / SL-to-VL, programs forwarding tables.",

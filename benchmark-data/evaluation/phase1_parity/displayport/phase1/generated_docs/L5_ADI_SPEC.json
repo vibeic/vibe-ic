@@ -2,15 +2,18 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "DisplayPort (VESA DP 1.4a/2.0/2.1)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
   "external_components": [],
   "electrical_specs": [],
   "design_parameters": [],
-  "extraction_evidence": {
-    "input/docs/displayport_spec.txt": []
-  },
+  "source_documents": [
+    "input/docs/displayport_spec.txt"
+  ],
+  "extraction_evidence": {},
   "analog_digital_interface_present": true,
   "signaling_summary": "Main Link: 1/2/4 AC-coupled differential pairs carrying NRZ at RBR 1.62 / HBR 2.7 / HBR2 5.4 / HBR3 8.1 Gbps/lane with ANSI 8b/10b coding (DC-balanced, transition-rich, LFSR-scrambled) so the Sink can recover the embedded clock; DP 2.0/2.1 UHBR10/13.5/20 Gbps/lane uses 128b/132b coding with mandatory FEC. Each lane carries per-lane voltage-swing (4 levels) and pre-emphasis (4 levels) set during training. AUX: one AC-coupled bidirectional half-duplex differential pair, Manchester-II coded at ~1 Mbps.",
   "line_rates": {

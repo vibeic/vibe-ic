@@ -17,6 +17,7 @@
   "no_payload_semantics_in_input": true,
   "opcode_synthesis_skipped_reason": null,
   "extraction_evidence": {
+    "input/docs/ufs_spec.pdf": [],
     "input/docs/ufs_spec.txt": []
   },
   "protocol_type": "Host-mastered, UPIU-based transaction protocol. The host submits Command UPIUs carrying SCSI/UFS CDBs over the UFS Transport Protocol (UTP); the device returns Response, Data In, RTT, Query Response, Task-Management Response, NOP In and Reject UPIUs. Transport is MIPI UniPro over MIPI M-PHY.",

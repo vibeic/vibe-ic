@@ -12,99 +12,8 @@
   "submodules": [],
   "no_submodules_in_input": true,
   "sim_only_modules": [],
-  "fsm_states": [
-    {
-      "name": "USED",
-      "transitions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "READ",
-      "transitions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "WRITE",
-      "transitions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "OUTPUT",
-      "transitions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "EITHER",
-      "transitions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "REQUEST",
-      "transitions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "REMOTE",
-      "transitions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "DEVICE",
-      "transitions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "RETURN",
-      "transitions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "IDENTICAL",
-      "transitions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "FORCE",
-      "transitions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "COILS",
-      "transitions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SPECIFIC",
-      "transitions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "PERFORM",
-      "transitions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "MODIFY",
-      "transitions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ALLOWS",
-      "transitions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "ASKED",
-      "transitions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "REFER",
-      "transitions": [],
-      "evidence": "input/docs/Modbus_Spec.pdf (prose state-to-state v1.6.484)"
-    }
-  ],
-  "no_fsm_states_in_input": false,
+  "fsm_states": [],
+  "no_fsm_states_in_input": true,
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
   "internal_wires": [],
@@ -148,7 +57,6 @@
   "interface_types": [],
   "no_interface_types_in_input": true,
   "chip_top_interfaces": [],
-  "class_path": "digital_arithmetic_primitive",
   "module_role": "MODBUS application-layer server (and/or client) module — implements the function-code processor + ADU framer/parser for one or more of the three published transports (RTU, ASCII, TCP). Exposes the four data tables plus diagnostic counters and an optional Encapsulated Interface (FC 0x2B) handler.",
   "integration_overview": {
     "host_side": "Two memory-mapped regions: (a) configuration/control/status registers, (b) the four MODBUS data tables.",

@@ -221,7 +221,6 @@
   "extraction_evidence": {
     "input/docs/Modbus_Spec.pdf": []
   },
-  "class_path": "digital_arithmetic_primitive",
   "protocol_type": "Request/reply application-layer protocol. The client (master) initiates every transaction by sending a Function Code + Data PDU, and the server (slave) replies with either a normal response or an exception response (FC | 0x80) + Exception Code. The same PDU rides three published ADU framings: Modbus RTU, Modbus ASCII, and Modbus TCP.",
   "function_code_ranges": {
     "Public_low_range": "1..64 + 73..99 + 111..127",

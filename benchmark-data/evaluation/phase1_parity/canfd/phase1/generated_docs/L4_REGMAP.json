@@ -187,7 +187,6 @@
   "extraction_evidence": {
     "input/docs/CAN_FD_Spec.pdf": []
   },
-  "class_path": "serial_peripheral_protocol",
   "register_map_present": true,
   "base_address": "Defined at SoC level; offsets given relative to module base.",
   "notes": "M_CAN's register file is the architectural register map for CAN-FD operation. There is no protocol-level register map outside this controller — Classical CAN 2.0 is a wire-level protocol; M_CAN is the Bosch reference CAN-FD controller cited by ISO 11898-1:2015 derivatives. Each filter element, Rx Buffer, Tx Buffer, and Tx Event FIFO element resides in external Message RAM (not in this register address space).",

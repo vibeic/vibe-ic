@@ -83,7 +83,6 @@
       }
     ]
   },
-  "class_path": "digital_arithmetic_primitive",
   "test_debug_architecture_present": true,
   "test_debug_features": [
     "SWD IS the debug architecture — ADIv5 enables in-system halt/resume, single-step, breakpoints, watchpoints, memory R/W on Arm Cortex SoCs.",

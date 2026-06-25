@@ -1,11 +1,11 @@
 # Extraction coverage report
 
 - denominator (unique literals in input_doc/): **665**
-- numerator (cited in L*.json extraction_evidence): **665**
-- **overall.pct = 100.0%**
+- numerator (cited in L*.json extraction_evidence): **663**
+- **overall.pct = 99.7%**
 - status: **PASS** (target ≥80%)
-- curated: **665/665 = 100.0%**
-- hands_on: **693/693 = 100.0%**
+- curated: **663/665 = 99.7%**
+- hands_on: **691/693 = 99.7%**
 
 ## Per-L-doc
 
@@ -13,7 +13,7 @@
 - L2_FRS: evidence=24 todo=0
 - L3_CMD_PROTOCOL: evidence=1 todo=0
 - L4_REGMAP: evidence=0 todo=0
-- L5_ADI_SPEC: evidence=4 todo=0
+- L5_ADI_SPEC: evidence=0 todo=0
 - L6_CONTROL_LOGIC: evidence=0 todo=0
 - L7_TEST_DEBUG: evidence=0 todo=0
 - L8_RTL_CONSTANTS: evidence=1 todo=0

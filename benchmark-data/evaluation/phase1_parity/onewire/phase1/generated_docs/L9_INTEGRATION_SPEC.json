@@ -2,12 +2,87 @@
   "schema_version": 2,
   "doc_class": "integration_spec",
   "ic_name": "1-Wire bus (Maxim AN148 Reliable 1-Wire Networks)",
-  "top_module": "DS2480B",
-  "top_module_extraction_strategy": "l1_ic_name_fallback",
+  "top_module": "chip_top",
+  "top_module_extraction_strategy": "canonical_chip_top_sentinel",
   "no_top_module_in_input": true,
-  "ports": [],
-  "top_ports": [],
-  "top_module_pins": [],
+  "ports": [
+    {
+      "name": "clk",
+      "mode": "input",
+      "direction": "input",
+      "io": "1.8-V LVCMOS",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    },
+    {
+      "name": "reset_n",
+      "mode": "input",
+      "direction": "input",
+      "io": "1.8-V LVCMOS",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    },
+    {
+      "name": "id_bus",
+      "mode": "inout",
+      "direction": "inout",
+      "io": "open-drain single-wire",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    }
+  ],
+  "top_ports": [
+    {
+      "name": "clk",
+      "mode": "input",
+      "direction": "input",
+      "io": "1.8-V LVCMOS",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    },
+    {
+      "name": "reset_n",
+      "mode": "input",
+      "direction": "input",
+      "io": "1.8-V LVCMOS",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    },
+    {
+      "name": "id_bus",
+      "mode": "inout",
+      "direction": "inout",
+      "io": "open-drain single-wire",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    }
+  ],
+  "top_module_pins": [
+    {
+      "name": "clk",
+      "mode": "input",
+      "direction": "input",
+      "io": "1.8-V LVCMOS",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    },
+    {
+      "name": "reset_n",
+      "mode": "input",
+      "direction": "input",
+      "io": "1.8-V LVCMOS",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    },
+    {
+      "name": "id_bus",
+      "mode": "inout",
+      "direction": "inout",
+      "io": "open-drain single-wire",
+      "extraction_strategy": "aid_class_canonical_pin_augment",
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract."
+    }
+  ],
   "no_integration_in_input": true,
   "submodules": [],
   "no_submodules_in_input": true,
@@ -42,11 +117,6 @@
   "memory_map": [],
   "no_memory_map_in_input": true,
   "no_instantiation_template_in_input": true,
-  "top_module_pins_evidence": {
-    "reason": "no_module_declaration_in_input_docs",
-    "fallback_source": "L1.ic_name",
-    "extraction_strategy_marker": "fallback_explicit_v1_6_581"
-  },
   "extraction_evidence": {
     "derived_from_L2.protocol_overview": [
       {
@@ -60,6 +130,37 @@
     ],
     "derived_from_L3": []
   },
+  "clock_domains": [
+    {
+      "name": "clk",
+      "source_pin": "clk",
+      "domain_kind": "primary",
+      "role": "master",
+      "source": "synthesised-from-L9.top_ports",
+      "evidence": "L9.top_ports",
+      "reset_strategy": "unspecified",
+      "freq_hz": null,
+      "freq_mhz": null,
+      "period_ns": null
+    }
+  ],
+  "resets": [
+    {
+      "name": "reset_n",
+      "polarity": "active_low",
+      "extraction_strategy": "l9_top_port_reset_derive"
+    }
+  ],
+  "clocks": [
+    {
+      "name": "clk",
+      "edge": "posedge",
+      "extraction_strategy": "l9_top_port_clock_derive",
+      "role": "master",
+      "source": "synthesised-from-L9.top_ports",
+      "domain_kind": "primary"
+    }
+  ],
   "interface_type": null,
   "no_interface_type_in_input": true,
   "interface_types": [],

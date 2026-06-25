@@ -7,7 +7,7 @@
   "bring_up_sequence": [],
   "no_bring_up_sequence_in_input": true,
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "crypto_accelerator",
   "test_cases_present": "partial - the spec defines mandatory protocol behavior, response codes, hierarchy semantics, PCR rules, session-authorization rules, and the operational state machine; TCG maintains a separate normative TPM 2.0 Common Test Plan that is out of scope of Part 1.",
   "derived_compliance_test_categories": [
     "Reset behavior verification.",

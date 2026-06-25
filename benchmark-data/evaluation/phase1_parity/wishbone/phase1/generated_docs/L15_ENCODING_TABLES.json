@@ -2,163 +2,118 @@
   "fields": {
     "tables": [
       {
-        "table_id": "Wishbone Table 3-1",
-        "name": "TAG TYPEs",
-        "field_bits": "TAG TYPE assignment per signal",
-        "encoding": [
-          {
-            "value": "TGA_O()",
-            "name": "Address tag (MASTER)",
-            "semantics": "Associated with [ADR_O()]; qualified by [STB_O]."
-          },
-          {
-            "value": "TGA_I()",
-            "name": "Address tag (SLAVE)",
-            "semantics": "Associated with [ADR_I()]; qualified by [STB_I]."
-          },
-          {
-            "value": "TGD_I()",
-            "name": "Data tag, input",
-            "semantics": "Associated with [DAT_I()]; qualified by [STB_I]."
-          },
-          {
-            "value": "TGD_O()",
-            "name": "Data tag, output",
-            "semantics": "Associated with [DAT_O()]; qualified by [STB_O]."
-          },
-          {
-            "value": "TGC_O()",
-            "name": "Cycle tag (MASTER)",
-            "semantics": "Associated with Bus Cycle; qualified by [CYC_O]."
-          },
-          {
-            "value": "TGC_I()",
-            "name": "Cycle tag (SLAVE)",
-            "semantics": "Associated with Bus Cycle; qualified by [CYC_I]."
-          }
+        "table_id": "Table 4-1",
+        "name": "Burst comparison",
+        "line": 3018,
+        "rows": [
+          "Asynchronou",
+          "Synchronous                 Advanced",
+          "Burst        s",
+          "length                   Cycle                Synchronous",
+          "Cycle",
+          "termination           Cycle termination",
+          "termination",
+          "1          1 (200%)         2 (100%)              2",
+          "2           2 (150%)         4 (75%)               3",
+          "4            4 (125%)        8 (62%)                5",
+          "8            8 (112%)        16 (56%)              9",
+          "16          16 (106%)        32 (53%)              17",
+          "32          32 (103%)        64 (51%)              33",
+          "Table 4-1 shows a comparison between the discussed cycle termination types, for zero wait",
+          "state bursts at a given bus-frequency. Asynchronous cycle termination requires only one",
+          "cycle per transfer, synchronous cycle termination requires two cycles per transfer, and the",
+          "advanced synchronous cycle termination requires (burst_length+1) cycles. The",
+          "percentages show the relative throughput for a burst length, where the advanced",
+          "synchronous cycle termination is set to 100%.",
+          "Advanced synchronous cycle termination appears to get the best from both the",
+          "synchronous and asynchronous termination schemes. For single transfers it performs as",
+          "well as the normal synchronous termination scheme, for large bursts it performs as well as",
+          "the asynchronous termination scheme.",
+          "NOTE that for a system that already needs wait states, the advanced synchronous scheme",
+          "provides the same throughput as the asynchronous scheme."
         ]
       },
       {
-        "table_id": "Wishbone Table 3-1 (Data Transfer Nomenclature)",
-        "name": "Data transfer width nomenclature",
-        "field_bits": "Operand width",
-        "encoding": [
-          {
-            "value": "BYTE(N)",
-            "name": "8-bit BYTE transfer at address 'N'",
-            "semantics": "Granularity = 8-bit."
-          },
-          {
-            "value": "WORD(N)",
-            "name": "16-bit WORD transfer at address 'N'",
-            "semantics": "Granularity = 16-bit."
-          },
-          {
-            "value": "DWORD(N)",
-            "name": "32-bit Double WORD transfer",
-            "semantics": "Granularity = 32-bit."
-          },
-          {
-            "value": "QWORD(N)",
-            "name": "64-bit Quadruple WORD transfer",
-            "semantics": "Granularity = 64-bit."
-          }
+        "table_id": "Table 4-2",
+        "name": "Cycle Type Identifiers",
+        "line": 3123,
+        "rows": [
+          "CTI_O(2:0) Description",
+          "‘000’     Classic cycle.",
+          "‘001’     Constant address burst cycle",
+          "‘010’     Incrementing burst cycle",
+          "‘011’    Reserved",
+          "‘100’     Reserved",
+          "‘101    Reserved",
+          "‘110’    Reserved",
+          "‘111’    End-of-Burst",
+          "PERMISSION 4.05",
+          "MASTER and SLAVE interfaces MAY be designed to support the [CTI_I()] and [CTI_O()]",
+          "signals. Also MASTER and SLAVE interfaces MAY be designed to support a limited",
+          "number of burst types.",
+          "Back to TOC             Copyright © 2010 OpenCores             Page 69 / 128",
+          "Wishbone B4",
+          "RULE 4.05",
+          "MASTER and SLAVE interfaces that do support the [CTI_I()] and [CTI_O()] signals",
+          "MUST at least support the Classic cycle [CTI_IO()=’000’] and the End-of-Cycle",
+          "[CTI_IO()=’111’].",
+          "RULE 4.10"
         ]
       },
       {
-        "table_id": "Wishbone Table 4-2 CTI_O",
-        "name": "Cycle Type Identifiers (Registered Feedback)",
-        "field_bits": "CTI_O(2:0) / CTI_I(2:0)",
-        "encoding": [
-          {
-            "value": "3'b000",
-            "name": "Classic cycle",
-            "semantics": "Backwards compatible with non-Registered-Feedback SLAVEs."
-          },
-          {
-            "value": "3'b001",
-            "name": "Constant address burst cycle",
-            "semantics": "Multiple beats to same ADR_O."
-          },
-          {
-            "value": "3'b010",
-            "name": "Incrementing burst cycle",
-            "semantics": "Multiple beats; wrap mode set by BTE_O()."
-          },
-          {
-            "value": "3'b011",
-            "name": "Reserved",
-            "semantics": "Reserved for future use."
-          },
-          {
-            "value": "3'b100",
-            "name": "Reserved",
-            "semantics": "Reserved for future use."
-          },
-          {
-            "value": "3'b101",
-            "name": "Reserved",
-            "semantics": "Reserved for future use."
-          },
-          {
-            "value": "3'b110",
-            "name": "Reserved",
-            "semantics": "Reserved for future use."
-          },
-          {
-            "value": "3'b111",
-            "name": "End-of-Burst",
-            "semantics": "Asserted on last beat to signal burst end."
-          }
+        "table_id": "Table 4-2",
+        "name": "Burst Type Extension for Incrementing and",
+        "line": 3185,
+        "rows": [
+          "Decrementing bursts",
+          "BTE_IO(1:0) Description",
+          "‘00’       Linear burst",
+          "‘01’       4-beat wrap burst",
+          "‘10’       8-beat wrap burst",
+          "‘11’      16-beat wrap burst",
+          "RULE 4.20",
+          "MASTER and SLAVE interfaces that support incrementing burst cycles MUST support the",
+          "[BTE_O()] and [BTE_I()] signals.",
+          "Back to TOC               Copyright © 2010 OpenCores               Page 70 / 128",
+          "Wishbone B4",
+          "PERMISSION 4.25",
+          "MASTER and SLAVE interfaces MAY be designed to support a limited number of burst",
+          "extensions.",
+          "RULE 4.25",
+          "MASTER and SLAVE interfaces that are designed to support a limited number of burst",
+          "extensions MUST complete the unsupported cycles as though they were WISHBONE",
+          "Classic cycle, i.e. [CTI_IO()= 000’].",
+          "4.4         Bus Cycles",
+          "4.4.1       Classic Cycle",
+          "A Classic Cycle indicates that the current cycle is a WISHBONE Classic cycle. The SLAVE",
+          "terminates the cycle as described in chapter 3. There is no information about what the"
         ]
       },
       {
-        "table_id": "Wishbone Table 4-2 BTE_IO",
-        "name": "Burst Type Extension for Incrementing/Decrementing Bursts",
-        "field_bits": "BTE_O(1:0) / BTE_I(1:0)",
-        "encoding": [
-          {
-            "value": "2'b00",
-            "name": "Linear burst",
-            "semantics": "Address increments by data size each beat, no wrap."
-          },
-          {
-            "value": "2'b01",
-            "name": "4-beat wrap burst",
-            "semantics": "Address wraps at (4 * data-size)-byte boundary."
-          },
-          {
-            "value": "2'b10",
-            "name": "8-beat wrap burst",
-            "semantics": "Address wraps at (8 * data-size)-byte boundary."
-          },
-          {
-            "value": "2'b11",
-            "name": "16-beat wrap burst",
-            "semantics": "Address wraps at (16 * data-size)-byte boundary."
-          }
-        ]
-      },
-      {
-        "table_id": "Wishbone Termination Encoding",
-        "name": "Cycle termination signals (mutually exclusive per RULE 3.45)",
-        "field_bits": "SLAVE response signals",
-        "encoding": [
-          {
-            "value": "ACK_O=1",
-            "name": "Normal termination",
-            "semantics": "Cycle completed successfully."
-          },
-          {
-            "value": "ERR_O=1",
-            "name": "Error termination",
-            "semantics": "Abnormal termination (optional)."
-          },
-          {
-            "value": "RTY_O=1",
-            "name": "Retry termination",
-            "semantics": "Bus not ready; MASTER should retry (optional)."
-          }
+        "table_id": "Table 4-3",
+        "name": "Wrap Size address increments",
+        "line": 3510,
+        "rows": [
+          "Starting address’ LSBs       Linear             Wrap-4              Wrap-8",
+          "000            0-1-2-3-4-5-6-7   0-1-2-3-4-5-6-7       0-1-2-3-4-5-6-7",
+          "001           1-2-3-4-5-6-7-8   1-2-3-0-5-6-7-4       1-2-3-4-5-6-7-0",
+          "010           2-3-4-5-6-7-8-9   2-3-0-1-6-7-4-5       2-3-4-5-6-7-0-1",
+          "011           3-4-5-6-7-8-9-A 3-0-1-2-7-4-5-6         3-4-5-6-7-0-1-2",
+          "100           4-5-6-7-8-9-A-B 4-5-6-7-8-9-A-B         4-5-6-7-0-1-2-3",
+          "101           5-6-7-8-9-A-B-C 5-6-7-4-9-A-B-8         5-6-7-0-1-2-3-4",
+          "110           6-7-8-9-A-B-C-D 6-7-4-5-A-B-8-9         6-7-0-1-2-3-4-5",
+          "111           7-8-9-A-B-C-D-E 7-4-5-6-B-8-9-A         7-0-1-2-3-4-5-6",
+          "Example: Processor cache line read",
+          "Back to TOC               Copyright © 2010 OpenCores              Page 79 / 128",
+          "Wishbone B4",
+          "RULE 4.40",
+          "A MASTER signaling an incrementing burst MUST initiate another cycle, the next cycle",
+          "MUST be the same operation (either read or write), the select lines [SEL_O()] MUST have",
+          "the same value, the address array [ADR_O()] MUST be incremented, and the wrap size",
+          "MUST be set by the burst type extension [BTE_O()] signals.",
+          "PERMISSION 4.45",
+          "When the MASTER signals an incrementing burst, the SLAVE MAY assert the termination",
+          "signal for the next cycle as soon as the current cycle terminates."
         ]
       }
     ],
@@ -176,7 +131,7 @@
       "LITTLE_ENDIAN": "Byte-lane ordering where the most significant byte is stored at the HIGHER address."
     }
   },
-  "extraction_status": "EXTRACTION_FOUND_NOTHING",
+  "extraction_status": "EXTRACTED",
   "schema_version": "v0.1.62",
   "doc_class": "L15",
   "emitted_by": "phase1_protocol_spec_extract.extract_l15_encoding_tables v0.1.62",

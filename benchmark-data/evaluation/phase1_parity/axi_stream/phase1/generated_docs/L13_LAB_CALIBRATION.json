@@ -15,7 +15,7 @@
   "trim_loop": [],
   "extraction_evidence": {},
   "lab_calibration_present": false,
-  "notes": "AXI4-Stream is a synchronous-logic on-chip interface; there is no analog/lab calibration in the specification. Timing is closed by synthesis/STA at ACLK, not by bench calibration. This layer is essentially N/A for the AXI4-Stream contract.",
+  "notes": "AXI4-Stream is a synchronous-logic on-chip interface; there is no analog or lab calibration in the specification. Timing is closed by synthesis/STA at ACLK, not by bench calibration. This layer is essentially N/A for the AXI4-Stream contract.",
   "lab_measurement_targets_from_spec": [
     {
       "name": "Handshake timing closure",

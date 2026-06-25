@@ -7,7 +7,6 @@
   "bring_up_sequence": [],
   "no_bring_up_sequence_in_input": true,
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
   "test_cases_present": "partial — the public webinar describes mandatory features (PHY test modes per Master pin table, Transport Test Modes Static0/Static1/PRBS per Port, Monitor role, ClockStop modes) and normative state machines (CP_SM, CSP_SM, enumeration arbitration) that map directly to compliance test scenarios; the gated v1.0 spec defines the formal compliance test suite.",
   "derived_compliance_test_categories": [
     "PHY-level — DDR sampling on both clock edges, Modified-NRZI encoding (Logic 1 = active change; Logic 0 = passive level held by bus-keeper) correctness verification.",

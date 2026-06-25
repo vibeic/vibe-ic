@@ -14,7 +14,6 @@
   "no_l13_test_cases_in_input": true,
   "trim_loop": [],
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
   "lab_calibration_present": false,
   "notes": "CoreSight defines no analog lab calibration of its own. Trace-port (TPIU) electrical bring-up — eye/skew/deskew of TRACECLK vs TRACEDATA, or SWO baud — is a board/probe characterization concern handled by the trace-analyzer tooling, not a CoreSight calibration procedure. No calibration constants are defined or invented.",
   "board_bring_up_characterizations_typical": [

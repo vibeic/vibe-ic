@@ -8,18 +8,6 @@
   "extraction_evidence": {
     "input/docs/IHI0022H_amba_axi_protocol_spec.pdf": []
   },
-  "extraction_strategy": {
-    "hallucination_scrub_v0_1_60": [
-      {
-        "l_doc": "L8_TIMING_WAVEFORM",
-        "pattern_name": "ic_name_from_license_clause",
-        "path": "ic_name",
-        "old_value": "SUCH ARM TECHNOLOGY",
-        "new_value": "UNKNOWN_IC",
-        "why": "lifted from license clause 'USE OR IMPLEMENTATION OF SUCH ARM TECHNOLOGY WILL NOT INFRINGE ...'; not a real product name"
-      }
-    ]
-  },
   "clock_and_reset_waveform": {
     "ACLK": "Single rising-edge clock per AXI interface.",
     "ARESETn": "Active LOW. Async assert; sync deassert. After ARESETn=HIGH, earliest rising ACLK edge that the master may drive VALID HIGH is one cycle later (see Figure A3-1 'Exit from reset').",

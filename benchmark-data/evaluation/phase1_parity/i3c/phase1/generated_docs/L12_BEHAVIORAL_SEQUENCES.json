@@ -6,7 +6,6 @@
   "no_behavioral_sequences_in_input": true,
   "no_calibration": false,
   "extraction_evidence": {},
-  "class_path": "serial_peripheral_protocol",
   "typical_master_private_write_sequence_sdr": [
     "1. Wait for Bus Free Condition (≥ tCAS) or Bus Available Condition (≥ tAVAL).",
     "2. Generate START (S): SDA HIGH→LOW while SCL HIGH.",

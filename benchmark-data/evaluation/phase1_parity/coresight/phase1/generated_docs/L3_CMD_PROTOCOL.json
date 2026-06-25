@@ -19,7 +19,6 @@
   "extraction_evidence": {
     "input/docs/coresight_spec.txt": []
   },
-  "class_path": "digital_arithmetic_primitive",
   "protocol_type": "Memory-mapped debug-register access architecture plus a trace transport. The debugger reaches every CoreSight component through the DAP (Debug Port + Access Port) as memory-mapped register accesses over the Debug APB; trace flows the other way as ATB transactions from sources through funnels/replicators to sinks. CoreSight is layered over the JTAG/SWD wire transport but is itself a component/register/trace architecture, not a line protocol.",
   "request_packet_format": {
     "total_bits": 8,

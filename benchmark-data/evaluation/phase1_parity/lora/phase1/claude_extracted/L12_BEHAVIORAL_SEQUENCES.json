@@ -4,7 +4,7 @@
   "ic_name": "LoRaWAN_Modem",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
+  "no_calibration": true,
   "extraction_evidence": {},
   "otaa_join_sequence": [
     "1. Device sends a Join-Request (DevEUI, JoinEUI, DevNonce) as a LoRa uplink.",

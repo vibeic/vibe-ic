@@ -3,26 +3,11 @@
   "doc_class": "control_logic",
   "ic_name": "CAN-FD (Bosch M_CAN Controller v3.3.1, ISO 11898-1:2015)",
   "reject_rules": [],
-  "fsm_states": [
-    {
-      "name": "STORED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/CAN_FD_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "THREE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/CAN_FD_Spec.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    }
-  ],
+  "fsm_states": [],
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
-  "no_fsm_states_in_input": false,
-  "no_fsm_in_input": false,
+  "no_fsm_states_in_input": true,
+  "no_fsm_in_input": true,
   "fsm_tokens": [
     {
       "name": "FIFO",
@@ -74,7 +59,6 @@
       }
     ]
   },
-  "class_path": "serial_peripheral_protocol",
   "fault_confinement_states": [
     {
       "name": "error active",

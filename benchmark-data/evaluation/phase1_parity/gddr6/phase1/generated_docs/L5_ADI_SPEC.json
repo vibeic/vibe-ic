@@ -2,6 +2,8 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "GDDR6 SGRAM (JEDEC JESD250)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
@@ -42,34 +44,29 @@
       "source": "gddr6_spec.txt",
       "raw": "VPP  = 1.8 V nominal (wordline pump).",
       "extraction_strategy": "bullet_kv_pair_spec"
-    }
-  ],
-  "design_parameters": [
-    {
-      "parameter": "channel transfers BL16 over 8 DQ",
-      "value": "16",
-      "source": "gddr6_spec.txt",
-      "raw": "channel transfers BL16 over 8 DQ = 16 bytes independently.",
-      "extraction_strategy": "bullet_kv_pair_spec"
     },
     {
-      "parameter": "organization",
-      "value": "4",
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "8.0",
+      "unit": "GHz",
       "source": "gddr6_spec.txt",
-      "raw": "organization: 4 bank groups x 4 banks = 16 banks per channel (density dependent).",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
     },
     {
-      "parameter": "Per-pin data rate",
-      "value": "16",
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.8",
+      "unit": "V",
       "source": "gddr6_spec.txt",
-      "raw": "Per-pin data rate: 16 Gb/s to 18 Gb/s (NRZ).",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
     }
   ],
-  "extraction_evidence": {
-    "input/docs/gddr6_spec.txt": []
-  },
+  "design_parameters": [],
+  "source_documents": [
+    "input/docs/gddr6_spec.txt"
+  ],
+  "extraction_evidence": {},
   "analog_digital_interface_present": true,
   "signaling_summary": "HBM3 uses low-swing single-ended signaling for data (DQ) and command/address, with differential clocking (CK_t/CK_c) and differential data strobes (WDQS write, RDQS read). The wide, short interposer-routed links allow low per-pin swing while reaching 6.4 Gb/s/pin. Separate VDDC/VDDQ/VDDQL/VPP rails keep high-bandwidth IO power-efficient. Interconnect is TSV + microbumps on a 2.5D silicon interposer.",
   "voltage_classes": [

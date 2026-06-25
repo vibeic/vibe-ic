@@ -18,7 +18,6 @@
   "no_engineer_mode_unlock_in_input": true,
   "vsuite_per_kw_cap_skipped_v1_6_373": 0,
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
   "test_debug_architecture_present": true,
   "interrupt_sources": [
     {

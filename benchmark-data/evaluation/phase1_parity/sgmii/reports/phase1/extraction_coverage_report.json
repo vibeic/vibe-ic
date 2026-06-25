@@ -1,7 +1,7 @@
 {
   "overall": {
     "denominator": 52,
-    "total": 53,
+    "total": 56,
     "numerator": 52,
     "pct": 100.0,
     "target_pct": 80.0,
@@ -75,7 +75,7 @@
     },
     {
       "name": "L12_BEHAVIORAL_SEQUENCES",
-      "evidence_count": 0,
+      "evidence_count": 1,
       "todo_count": 0
     },
     {

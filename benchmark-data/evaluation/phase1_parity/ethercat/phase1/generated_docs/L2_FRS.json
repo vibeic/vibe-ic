@@ -294,7 +294,6 @@
       }
     ]
   },
-  "class_path": "digital_arithmetic_primitive",
   "auto_cited_sections": [
     {
       "file_ref": "phase1/input_doc/EtherCAT_Spec.txt:22",

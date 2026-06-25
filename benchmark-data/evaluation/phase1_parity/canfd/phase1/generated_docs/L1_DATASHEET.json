@@ -10,7 +10,7 @@
   "electrical_specs": [],
   "no_electrical_specs_in_input": true,
   "ordering_info": {
-    "part_number": "M_CAN",
+    "part_number": "canfd",
     "vendor": null,
     "no_vendor_in_input": true
   },
@@ -32,8 +32,8 @@
       }
     ]
   },
-  "class_path": "serial_peripheral_protocol",
-  "no_class_path_in_input": false,
+  "class_path": null,
+  "no_class_path_in_input": true,
   "auto_discovered_identifiers": [
     {
       "name": "M_CAN",

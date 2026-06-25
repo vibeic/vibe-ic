@@ -11,7 +11,6 @@
   "extraction_evidence": {
     "input/docs/mipi_csi2_spec.txt": []
   },
-  "class_path": "digital_arithmetic_primitive",
   "register_map_present": false,
   "base_address": "Defined at SoC level; offsets given relative to module base.",
   "notes": "CSI-2 is a streaming serial protocol with no addressable register map on the high-speed data path. Sensor registers (resolution, frame rate, exposure, gain, streaming start/stop) are accessed over the Camera Control Interface (CCI), an I2C-based sideband using 16-bit register addresses and 8-bit data; the specific register map is sensor-vendor-defined.",

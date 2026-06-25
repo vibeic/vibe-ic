@@ -26,7 +26,6 @@
       "source_pin": "clk"
     }
   ],
-  "class_path": "digital_arithmetic_primitive",
   "clock_mhz": 0.1,
   "clock_and_reset_waveform": {
     "SCL_idle": "HIGH",

@@ -12,16 +12,17 @@
     {
       "name": "Queue",
       "type": "structure",
-      "source": "ufs_spec.txt"
+      "source": "ufs_spec.pdf"
     }
   ],
   "extraction_evidence": {
-    "input/docs/ufs_spec.txt": [
+    "input/docs/ufs_spec.pdf": [
       {
         "literal": "Queue",
         "label": "FSM structure token"
       }
-    ]
+    ],
+    "input/docs/ufs_spec.txt": []
   },
   "fsm_states_device": [
     {

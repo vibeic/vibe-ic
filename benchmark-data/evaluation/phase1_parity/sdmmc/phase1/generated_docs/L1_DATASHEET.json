@@ -5,8 +5,30 @@
   "no_ic_name_in_input": false,
   "package_info": null,
   "no_package_in_input": true,
-  "pin_table": [],
-  "no_pin_table_in_input": true,
+  "pin_table": [
+    {
+      "name": "clk",
+      "mode": "in",
+      "io_standard": null,
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract.",
+      "extraction_strategy": "cross_walk_from_l9_ports_v1_6_555"
+    },
+    {
+      "name": "reset_n",
+      "mode": "in",
+      "io_standard": null,
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract.",
+      "extraction_strategy": "cross_walk_from_l9_ports_v1_6_555"
+    },
+    {
+      "name": "id_bus",
+      "mode": "inout",
+      "io_standard": null,
+      "evidence": "v1.6.269 (#127): AID-class half-duplex detected via L2.protocol_overview; aid_class_rtl_gen.py always emits clk/reset_n/inout id_bus on chip_top.sv, so L9 is augmented to match RTL contract.",
+      "extraction_strategy": "cross_walk_from_l9_ports_v1_6_555"
+    }
+  ],
+  "no_pin_table_in_input": false,
   "electrical_specs": [
     {
       "name": "voltage",
@@ -24,7 +46,7 @@
   ],
   "no_electrical_specs_in_input": false,
   "ordering_info": {
-    "part_number": "SD Specifications",
+    "part_number": "sdmmc",
     "vendor": null,
     "no_vendor_in_input": true
   },

@@ -2,23 +2,27 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "Peripheral Sensor Interface 5 (PSI5)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
   "external_components": [],
-  "electrical_specs": [],
-  "design_parameters": [
+  "electrical_specs": [
     {
-      "parameter": "Bit rates",
-      "value": "125",
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "26.0",
+      "unit": "mA",
       "source": "psi5_spec.txt",
-      "raw": "- Bit rates: 125 kbps and 189 kbps",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
     }
   ],
-  "extraction_evidence": {
-    "input/docs/psi5_spec.txt": []
-  },
+  "design_parameters": [],
+  "source_documents": [
+    "input/docs/psi5_spec.txt"
+  ],
+  "extraction_evidence": {},
   "analog_digital_interface_present": true,
   "signaling_summary": "PSI5 is a current-mode interface on a two-wire current loop. The ECU applies a supply voltage across the two wires and powers the sensor; the sensor transmits by current modulation — it draws a modulated supply current, producing current pulses of nominally +-26 mA superimposed on its quiescent supply current. The ECU senses the loop current (e.g. with a sense resistor in the supply path) to receive the Manchester-coded data. In synchronous mode the ECU applies a voltage sync pulse on the supply to trigger transmission.",
   "physical_layer": "two-wire current loop",

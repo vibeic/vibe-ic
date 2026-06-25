@@ -14,49 +14,9 @@
   "sim_only_modules": [],
   "fsm_states": [
     {
-      "name": "ENOUGH",
-      "transitions": [],
-      "evidence": "input/docs/Wishbone_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "FIND",
-      "transitions": [],
-      "evidence": "input/docs/Wishbone_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "DIFFICULT",
-      "transitions": [],
-      "evidence": "input/docs/Wishbone_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "PREDICT",
-      "transitions": [],
-      "evidence": "input/docs/Wishbone_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "NEEDED",
-      "transitions": [],
-      "evidence": "input/docs/Wishbone_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "SUPERVISE",
-      "transitions": [],
-      "evidence": "input/docs/Wishbone_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "STATE",
-      "transitions": [],
-      "evidence": "input/docs/Wishbone_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "WAIT4ACK",
-      "transitions": [],
-      "evidence": "input/docs/Wishbone_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
       "name": "IDLE",
       "transitions": [],
-      "evidence": "input/docs/Wishbone_Spec.pdf (prose state-to-state v1.6.484)"
+      "evidence": "input/docs/Wishbone_Spec.pdf (spec text)"
     }
   ],
   "no_fsm_states_in_input": false,
@@ -193,7 +153,7 @@
       "matched_token": "Wishbone"
     }
   ],
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "processor_cpu",
   "interconnect_topology_options": [
     "Point-to-point (Figure 1-7 / Section 8.9).",
     "Shared bus (Figure 1-8/1-9 / Section 8.10).",

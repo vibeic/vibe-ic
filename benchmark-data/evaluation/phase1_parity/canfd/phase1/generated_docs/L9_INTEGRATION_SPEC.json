@@ -2,8 +2,8 @@
   "schema_version": 2,
   "doc_class": "integration_spec",
   "ic_name": "CAN-FD (Bosch M_CAN Controller v3.3.1, ISO 11898-1:2015)",
-  "top_module": "M_CAN",
-  "top_module_extraction_strategy": "l1_ic_name_fallback",
+  "top_module": "chip_top",
+  "top_module_extraction_strategy": "canonical_chip_top_sentinel",
   "no_top_module_in_input": true,
   "ports": [],
   "top_ports": [],
@@ -12,19 +12,8 @@
   "submodules": [],
   "no_submodules_in_input": true,
   "sim_only_modules": [],
-  "fsm_states": [
-    {
-      "name": "STORED",
-      "transitions": [],
-      "evidence": "input/docs/CAN_FD_Spec.pdf (prose state-to-state v1.6.484)"
-    },
-    {
-      "name": "THREE",
-      "transitions": [],
-      "evidence": "input/docs/CAN_FD_Spec.pdf (prose state-to-state v1.6.484)"
-    }
-  ],
-  "no_fsm_states_in_input": false,
+  "fsm_states": [],
+  "no_fsm_states_in_input": true,
   "pipeline_stages": [],
   "no_pipeline_stages_in_input": true,
   "internal_wires": [],
@@ -66,11 +55,6 @@
   "memory_map": [],
   "no_memory_map_in_input": true,
   "no_instantiation_template_in_input": true,
-  "top_module_pins_evidence": {
-    "reason": "no_module_declaration_in_input_docs",
-    "fallback_source": "L1.ic_name",
-    "extraction_strategy_marker": "fallback_explicit_v1_6_581"
-  },
   "extraction_evidence": {
     "derived_from_L3": []
   },
@@ -114,7 +98,6 @@
       "matched_token": "CAN"
     }
   ],
-  "class_path": "serial_peripheral_protocol",
   "module_role": "Synthesizable CAN-FD communication controller IP (Bosch M_CAN), integrable as stand-alone or part of an ASIC. Performs communication per ISO 11898-1:2015. Includes CAN Core + Tx/Rx Handlers + Generic Slave Interface (Host CPU) + Generic Master Interface (32-bit Message RAM) + Extension Interface (optional). Requires external CAN transceiver + external Message RAM.",
   "layered_structure_summary": [
     "Application Layer — out of scope.",

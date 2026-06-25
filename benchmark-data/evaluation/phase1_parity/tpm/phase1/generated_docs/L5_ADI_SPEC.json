@@ -2,38 +2,76 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "TPM 2.0 Library Part 1: Architecture (TCG)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
   "external_components": [],
-  "electrical_specs": [],
-  "design_parameters": [
+  "electrical_specs": [
     {
-      "parameter": "CBC         Cipher-block Chaining                     m",
-      "value": "1",
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "10.0",
+      "unit": "MHz",
       "source": "TPM_Spec.pdf",
-      "raw": "CBC         Cipher-block Chaining                     m=1       interleave factor",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
     },
     {
-      "parameter": "property",
-      "value": "02",
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "227.0",
+      "unit": "A",
       "source": "TPM_Spec.pdf",
-      "raw": "- property = 02 00 00 00 16 )",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
     },
     {
-      "parameter": "Auth Index",
-      "value": "1",
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "1.0",
+      "unit": "A",
       "source": "TPM_Spec.pdf",
-      "raw": "Auth Index: 1",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "2.0",
+      "unit": "A",
+      "source": "TPM_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "3.0",
+      "unit": "A",
+      "source": "TPM_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "0.0",
+      "unit": "A",
+      "source": "TPM_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "IDD",
+      "parameter": "current_spec",
+      "value": "56.0",
+      "unit": "A",
+      "source": "TPM_Spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
     }
   ],
-  "extraction_evidence": {
-    "input/docs/TPM_Spec.pdf": []
-  },
-  "class_path": "digital_arithmetic_primitive",
+  "design_parameters": [],
+  "source_documents": [
+    "input/docs/TPM_Spec.pdf"
+  ],
+  "extraction_evidence": {},
+  "class_path": "crypto_accelerator",
   "analog_digital_interface_present": false,
   "signaling_summary": "TPM 2.0 Library Part 1: Architecture defines a fully-digital command-response interface. Electrical signaling is delegated to the platform-specific TPM Interface Specification (e.g. LPC, SPI, I2C). The TPM itself has internal analog content (RNG noise source, charge-pump for NV flash, ring-oscillator for clock) that is intentionally out-of-scope of Part 1 and instead covered by the TCG TPM Protection Profile (Common Criteria EAL4+ requirements).",
   "physical_layer_references": [

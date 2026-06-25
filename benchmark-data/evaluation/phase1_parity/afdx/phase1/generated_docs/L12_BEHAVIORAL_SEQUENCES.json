@@ -4,8 +4,15 @@
   "ic_name": "AFDX End System / Switch (ARINC 664 Part 7)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
-  "extraction_evidence": {},
+  "no_calibration": true,
+  "extraction_evidence": {
+    "derived_no_calibration_source": [
+      {
+        "literal": "no calibration / trim / OTP-cal source in input",
+        "label": "L12 no_calibration auto-set (#634 facet e) — absence-based, mirrors L5.no_analog"
+      }
+    ]
+  },
   "link_bring_up_sequence": [
     "1. PHY hardware reset (RESET#) or BMCR.Reset (0.15 = 1). PHY clears BMCR + BMSR to defaults; PHYAD is sampled from strap pins.",
     "2. If AutoNeg is enabled (BMCR 0.12 = 1), PHY enters AN_ABILITY_DETECT and starts transmitting Fast Link Pulse bursts encoding ANAR (reg 4) — Base Page advertising local capabilities.",

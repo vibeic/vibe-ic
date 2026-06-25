@@ -5,5 +5,10 @@
   "total": 0,
   "placeholders": 0,
   "placeholder_ratio": 0.0,
-  "threshold": 0.0
+  "threshold": 0.0,
+  "design_identity": {
+    "design": "ddr",
+    "ic_name": "ddr",
+    "top": "DDR3_SDRAM_component"
+  }
 }

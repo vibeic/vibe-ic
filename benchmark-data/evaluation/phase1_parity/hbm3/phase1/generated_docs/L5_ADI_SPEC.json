@@ -2,6 +2,8 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "High Bandwidth Memory 3 (JEDEC JESD238)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
@@ -12,20 +14,29 @@
       "parameter": "HBM",
       "value": "4               A",
       "source": "hbm3_spec.pdf"
-    }
-  ],
-  "design_parameters": [
+    },
     {
-      "parameter": "two capacities",
-      "value": "16",
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "500.0",
+      "unit": "MHz",
       "source": "hbm3_spec.pdf",
-      "raw": "two capacities: 16 GB and 24 GB, aligning with 8-Hi and 12-Hi stacks respectively. The stacks consisted",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.2",
+      "unit": "V",
+      "source": "hbm3_spec.pdf",
+      "extraction_strategy": "spec_electrical_extract"
     }
   ],
-  "extraction_evidence": {
-    "input/docs/hbm3_spec.pdf": []
-  },
+  "design_parameters": [],
+  "source_documents": [
+    "input/docs/hbm3_spec.pdf"
+  ],
+  "extraction_evidence": {},
   "analog_digital_interface_present": true,
   "signaling_summary": "HBM3 uses low-swing single-ended signaling for data (DQ) and command/address, with differential clocking (CK_t/CK_c) and differential data strobes (WDQS write, RDQS read). The wide, short interposer-routed links allow low per-pin swing while reaching 6.4 Gb/s/pin. Separate VDDC/VDDQ/VDDQL/VPP rails keep high-bandwidth IO power-efficient. Interconnect is TSV + microbumps on a 2.5D silicon interposer.",
   "clocking": {

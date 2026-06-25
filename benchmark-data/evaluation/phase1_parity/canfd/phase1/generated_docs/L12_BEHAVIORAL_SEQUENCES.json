@@ -6,7 +6,6 @@
   "no_behavioral_sequences_in_input": true,
   "no_calibration": false,
   "extraction_evidence": {},
-  "class_path": "serial_peripheral_protocol",
   "typical_data_frame_transmit_sequence": [
     "1. Wait for bus idle (≥ 11 consecutive recessive bits).",
     "2. Drive START OF FRAME (1 dominant bit); all nodes hard-synchronize.",

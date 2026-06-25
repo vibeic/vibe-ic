@@ -2,23 +2,18 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "PROFINET IO Controller/Device (IEC 61158 Type 10)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
   "external_components": [],
   "electrical_specs": [],
-  "design_parameters": [
-    {
-      "parameter": "cyclic data uses PCP",
-      "value": "6",
-      "source": "profinet_spec.txt",
-      "raw": "cyclic data uses PCP = 6 (high priority); other classes use lower",
-      "extraction_strategy": "bullet_kv_pair_spec"
-    }
+  "design_parameters": [],
+  "source_documents": [
+    "input/docs/profinet_spec.txt"
   ],
-  "extraction_evidence": {
-    "input/docs/profinet_spec.txt": []
-  },
+  "extraction_evidence": {},
   "analog_digital_interface_present": true,
   "signaling_summary": "PROFINET uses the STANDARD IEEE 802.3 Ethernet physical layer unchanged: 100BASE-TX (MLT-3, 125 MBd) or 1000BASE-T (PAM-5) over twisted pair, full duplex, with a standard Ethernet PHY and transformer/magnetics. PROFINET does not define a new analog front end; its real-time behavior is achieved at the MAC/application layer (prioritized Layer-2 for RT, hardware scheduling for IRT), not by changing the line code.",
   "mii_dc_characteristics": {

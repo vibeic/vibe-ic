@@ -14,7 +14,7 @@
   "no_l13_test_cases_in_input": true,
   "trim_loop": [],
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "crypto_accelerator",
   "lab_calibration_present": true,
   "notes": "TPM 2.0 has two host-controlled calibration loops at the protocol level: (1) Burst-count flow control on the FIFO — the host adapts its burst length to the TPM-reported burstCount; (2) RNG entropy collection — TPM2_StirRandom can mix host-collected entropy into the TPM RNG state for healthy startup. Plus several vendor-level analog calibrations (NV charge-pump trim, ring-oscillator frequency trim) that are not host-visible.",
   "calibration_summary": "The TPM is an autonomous cryptographic device. Most calibration is internal and one-time at vendor manufacture (entropy-source health, RSA prime-search budget, NV write-time tuning). The only host-visible calibration is FIFO flow control via burstCount and the optional TPM2_StirRandom entropy mix.",

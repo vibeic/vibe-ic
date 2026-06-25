@@ -2,23 +2,27 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "NFC / ISO 14443 (NXP AN10833 MIFARE family — subset)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
   "external_components": [],
-  "electrical_specs": [],
-  "design_parameters": [
+  "electrical_specs": [
     {
-      "parameter": "i.e. bit 2",
-      "value": "1",
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "13.56",
+      "unit": "MHz",
       "source": "NFC_Spec.pdf",
-      "raw": "- i.e. bit 2 = 1 might give a different meaning to all other",
-      "extraction_strategy": "bullet_kv_pair_spec"
+      "extraction_strategy": "spec_electrical_extract"
     }
   ],
-  "extraction_evidence": {
-    "input/docs/NFC_Spec.pdf": []
-  },
+  "design_parameters": [],
+  "source_documents": [
+    "input/docs/NFC_Spec.pdf"
+  ],
+  "extraction_evidence": {},
   "analog_digital_interface_present": true,
   "signaling_summary": "ISO/IEC 14443 is fundamentally an analog/mixed-signal protocol because Layer 2 is an RF air interface. The PCD generates a 13.56 MHz unmodulated carrier at field strength H within Hmin (1.5 A/m) and Hmax (7.5 A/m); Type A PCD→PICC bits are 100% ASK Modified-Miller pulses (pause durations 2.0..3.0 μs); Type B uses 10% ASK NRZ-L. The PICC harvests power from the carrier, demodulates the envelope, and replies by switching a load resistor in/out of the resonant antenna at the 847.5 kHz subcarrier rate (Manchester for Type A, BPSK for Type B). All digital framing — bits, parity, CRC — is layered on top of this analog substrate.",
   "voltage_classes": [

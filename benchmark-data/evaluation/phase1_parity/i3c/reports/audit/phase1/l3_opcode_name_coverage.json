@@ -5,5 +5,10 @@
   "total": 0,
   "placeholders": 0,
   "placeholder_ratio": 0.0,
-  "threshold": 0.0
+  "threshold": 0.0,
+  "design_identity": {
+    "design": "i3c",
+    "ic_name": "i3c",
+    "top": "i3c"
+  }
 }

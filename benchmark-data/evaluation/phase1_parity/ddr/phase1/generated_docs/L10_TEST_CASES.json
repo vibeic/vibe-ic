@@ -96,7 +96,6 @@
   ],
   "no_bring_up_sequence_in_input": false,
   "extraction_evidence": {},
-  "class_path": "digital_arithmetic_primitive",
   "test_cases_present": "partial - the spec defines command set, mode register fields, state machine, and AC timing parameters that map directly to compliance test scenarios; JEDEC and DRAM vendors maintain separate normative compliance test procedures that are out of scope of this physical layer standard.",
   "derived_compliance_test_categories": [
     "Reset behavior verification.",

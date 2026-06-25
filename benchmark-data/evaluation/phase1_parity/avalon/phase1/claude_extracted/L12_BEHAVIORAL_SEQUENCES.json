@@ -4,14 +4,8 @@
   "ic_name": "Avalon Interface (Intel/Altera FPGA-SoC Interconnect, MNL-AVABUSREF)",
   "behavioral_sequences": [],
   "no_behavioral_sequences_in_input": true,
-  "no_calibration": false,
+  "no_calibration": true,
   "extraction_evidence": {},
-  "ordering_rules_summary": {
-    "device_transactions_AXI4_same_ID_same_slave": "AXI4 Device-class accesses with the same ID to the same slave must remain in issue order.",
-    "different_memory_regions": "Transactions to different memory regions may be reordered freely if IDs differ.",
-    "write_after_read_same_ID": "Write after read on the same ID must be observed in issue order.",
-    "read_after_write_same_ID": "Read after write on the same ID must be observed in issue order."
-  },
   "mm_read_sequence": [
     "1. Host drives address and asserts read (and byteenable).",
     "2. If the agent asserts waitrequest, the host holds address/read stable (wait-state insertion).",

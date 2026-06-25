@@ -33,11 +33,6 @@
       "ahb_pipeline": "Address phase of transfer N+1 overlaps data phase of transfer N.",
       "apb_state_transitions": "IDLE -> SETUP on transfer-required; SETUP -> ACCESS unconditional next PCLK; ACCESS -> ACCESS while PREADY=0; ACCESS -> IDLE or SETUP on PREADY=1."
     },
-    "ordering_rules": {
-      "ahb_strict_in_order": "AHB-Lite is single-Manager and strictly in-order; one outstanding transfer with address/data pipelining.",
-      "ahb_burst_order": "Beats of a burst are in HBURST-defined order (incrementing or wrapping); all beats use same HSIZE / HWRITE / HPROT / HMASTLOCK.",
-      "apb_strict_in_order": "APB is single-Manager (bridge); strictly in-order; one transfer in progress at a time."
-    },
     "ic_name": "AMBA AHB + APB (ARM IHI 0033C + IHI 0024C)",
     "ahb_global_signals": [
       {
@@ -312,7 +307,12 @@
         "name": "HREADYCHK",
         "purpose": "Parity check signal for HREADY."
       }
-    ]
+    ],
+    "ordering_rules": {
+      "ahb_strict_in_order": "AHB-Lite is single-Manager and strictly in-order; one outstanding transfer with address/data pipelining.",
+      "ahb_burst_order": "Beats of a burst are in HBURST-defined order (incrementing or wrapping); all beats use same HSIZE / HWRITE / HPROT / HMASTLOCK.",
+      "apb_strict_in_order": "APB is single-Manager (bridge); strictly in-order; one transfer in progress at a time."
+    }
   },
   "extraction_status": "EXTRACTION_FOUND_NOTHING",
   "schema_version": "v0.1.62",

@@ -24,6 +24,7 @@
     }
   ],
   "no_analog": false,
+  "analog_digital_interface_present": true,
   "external_components": [],
   "electrical_specs": [
     {
@@ -61,6 +62,134 @@
       "source": "ddr5_spec.txt",
       "raw": "- VPP  = 1.8 V (wordline pump, same as DDR4)",
       "extraction_strategy": "bullet_kv_pair_spec"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "1600.0",
+      "unit": "MHz",
+      "source": "ddr5_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "1800.0",
+      "unit": "MHz",
+      "source": "ddr5_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "2000.0",
+      "unit": "MHz",
+      "source": "ddr5_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "2200.0",
+      "unit": "MHz",
+      "source": "ddr5_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "2400.0",
+      "unit": "MHz",
+      "source": "ddr5_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "2600.0",
+      "unit": "MHz",
+      "source": "ddr5_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "2800.0",
+      "unit": "MHz",
+      "source": "ddr5_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "3000.0",
+      "unit": "MHz",
+      "source": "ddr5_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "3200.0",
+      "unit": "MHz",
+      "source": "ddr5_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "3600.0",
+      "unit": "MHz",
+      "source": "ddr5_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "4000.0",
+      "unit": "MHz",
+      "source": "ddr5_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "FREQ",
+      "parameter": "clock_frequency",
+      "value": "4200.0",
+      "unit": "MHz",
+      "source": "ddr5_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.2",
+      "unit": "V",
+      "source": "ddr5_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.8",
+      "unit": "V",
+      "source": "ddr5_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "12.0",
+      "unit": "V",
+      "source": "ddr5_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
+    },
+    {
+      "param": "VDD",
+      "parameter": "supply_voltage",
+      "value": "1.5",
+      "unit": "V",
+      "source": "ddr5_spec.txt",
+      "extraction_strategy": "spec_electrical_extract"
     }
   ],
   "design_parameters": [
@@ -99,7 +228,6 @@
     ]
   },
   "class_path": "pure_analog",
-  "analog_digital_interface_present": true,
   "signaling_summary": "DDR5 is a parallel, source-synchronous DRAM. Commands/addresses are captured on CA[13:0] relative to the differential clock CK_t/CK_c; data is captured on the bidirectional DQ bus on both edges of the differential data strobe DQS_t/DQS_c (double data rate). DQ uses POD-style single-ended signaling referenced to an internal VrefDQ. Decision Feedback Equalization (DFE) on the DQ receivers and a Duty-Cycle Adjuster (DCA) maintain the eye at high data rates. There is no embedded/serial clock and no separate Write Clock (WCK).",
   "voltage_classes": [
     {

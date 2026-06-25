@@ -19,8 +19,8 @@
   "extraction_evidence": {
     "input/docs/coresight_spec.txt": []
   },
-  "class_path": "digital_arithmetic_primitive",
-  "no_class_path_in_input": false,
+  "class_path": null,
+  "no_class_path_in_input": true,
   "auto_discovered_identifiers": [
     {
       "name": "ARM",

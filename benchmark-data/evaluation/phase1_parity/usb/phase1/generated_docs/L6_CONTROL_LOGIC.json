@@ -12,221 +12,89 @@
       "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
     },
     {
-      "name": "REQUIRED",
+      "name": "DIAGRAM",
       "transitions": [],
       "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
+      "evidence": "input/docs/USB_2.0_specification.pdf (prose init v1.6.484)",
       "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
     },
     {
-      "name": "DECODE",
+      "name": "DEVICE",
       "transitions": [],
       "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+      "evidence": "input/docs/USB_2.0_specification.pdf (spec text)"
     },
     {
-      "name": "MACHINE",
+      "name": "PENDING",
       "transitions": [],
       "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+      "evidence": "input/docs/USB_2.0_specification.pdf (spec text)"
     },
     {
-      "name": "SPECIFY",
+      "name": "NO_MATCH",
       "transitions": [],
       "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+      "evidence": "input/docs/USB_2.0_specification.pdf (spec text)"
     },
     {
-      "name": "REFERENCE",
+      "name": "MATCH_BUSY",
       "transitions": [],
       "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+      "evidence": "input/docs/USB_2.0_specification.pdf (spec text)"
     },
     {
-      "name": "ANOTHER",
+      "name": "STATES",
       "transitions": [],
       "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+      "evidence": "input/docs/USB_2.0_specification.pdf (spec text)"
     },
     {
-      "name": "USED",
+      "name": "PING",
       "transitions": [],
       "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+      "evidence": "input/docs/USB_2.0_specification.pdf (prose 'in X state')"
     },
     {
-      "name": "CONNECT",
+      "name": "WFEOPFU",
       "transitions": [],
       "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+      "evidence": "input/docs/USB_2.0_specification.pdf (prose 'in X state')"
     },
     {
-      "name": "RELATES",
+      "name": "WFOEP",
       "transitions": [],
       "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+      "evidence": "input/docs/USB_2.0_specification.pdf (prose 'in X state')"
     },
     {
-      "name": "JOIN",
+      "name": "WFEOP",
       "transitions": [],
       "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+      "evidence": "input/docs/USB_2.0_specification.pdf (prose 'in X state')"
     },
     {
-      "name": "TIME",
+      "name": "GEOPTU",
       "transitions": [],
       "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+      "evidence": "input/docs/USB_2.0_specification.pdf (prose 'in X state')"
     },
     {
-      "name": "PROCESS",
+      "name": "WFSOP",
       "transitions": [],
       "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+      "evidence": "input/docs/USB_2.0_specification.pdf (prose 'in X state')"
     },
     {
-      "name": "RESPOND",
+      "name": "WFSOPFU",
       "transitions": [],
       "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+      "evidence": "input/docs/USB_2.0_specification.pdf (prose 'in X state')"
     },
     {
-      "name": "RESPONSES",
+      "name": "SETUP",
       "transitions": [],
       "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "RETURN",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "USING",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "BACK",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "INITIALIZED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "DATA0",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "MECHANISM",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "GUARANTEE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "PROPAGATION",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "INDICATION",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "SYNCHRONIZED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "SIGNALING",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "EMULATE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "SOP_FD",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "ENTRY",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "SIGNAL",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "LABELING",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "IDENTIFY",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/USB_2.0_specification.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+      "evidence": "input/docs/USB_2.0_specification.pdf (prose 'in X state')"
     }
   ],
   "pipeline_stages": [],

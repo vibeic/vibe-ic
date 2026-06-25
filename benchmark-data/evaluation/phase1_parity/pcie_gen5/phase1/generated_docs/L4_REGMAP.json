@@ -9,7 +9,7 @@
   "otp_ip_macro": {},
   "internal_registers": [],
   "extraction_evidence": {
-    "input/docs/pcie_gen5_spec.txt": []
+    "input/docs/pcie_gen5_spec.pdf": []
   },
   "class_path": "digital_cmd_driven",
   "register_map_present": false,

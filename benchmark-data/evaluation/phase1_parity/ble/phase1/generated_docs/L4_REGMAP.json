@@ -62,7 +62,7 @@
   "extraction_evidence": {
     "input/docs/BLE_Spec.pdf": []
   },
-  "class_path": "digital_arithmetic_primitive",
+  "class_path": "crypto_accelerator",
   "register_map_present": false,
   "base_address": "Defined at SoC level; offsets given relative to module base.",
   "notes": "Bluetooth Core v5.2 is a wireless protocol + host-controller-interface spec; no controller-internal register map is mandated. The closest controller-visible register set is the HCI command/event interface (Volume 4 Part E) plus the LL Data PDU header + Advertising PDU header bitfield layouts above. SoC-integrated BLE controllers expose additional vendor-specific control registers but those are out of scope of the Core Spec.",

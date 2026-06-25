@@ -1,7 +1,13 @@
 {
   "fields": {
     "versions": [],
-    "deprecated_features": [],
+    "deprecated_features": [
+      {
+        "feature": "carrying",
+        "quote": "adequate room for product versatility and market differentiation without the burden of carrying obsolete",
+        "line": 1294
+      }
+    ],
     "backward_compat_traps": [
       {
         "trap_name": "HS_chirp_handshake_required",
@@ -53,7 +59,7 @@
     ],
     "version_naming_history_note": "USB-IF (USB Implementers Forum) maintains the spec. Original specifiers were Compaq, HP, Intel, Lucent, Microsoft, NEC, Philips (the 'Promoter Group'). Later revisions: USB 3.0 (2008) added SuperSpeed 5 Gb/s; USB 3.1 (2013) 10 Gb/s; USB 3.2 (2017) 20 Gb/s; USB4 (2019) 40 Gb/s."
   },
-  "extraction_status": "EXTRACTION_FOUND_NOTHING",
+  "extraction_status": "EXTRACTED",
   "schema_version": "v0.1.62",
   "doc_class": "L14",
   "emitted_by": "phase1_protocol_spec_extract.extract_l14_versioning v0.1.62",

@@ -2,15 +2,18 @@
   "schema_version": 2,
   "doc_class": "adi_spec",
   "ic_name": "NVIDIA NVLink (high-speed GPU / die-to-die interconnect)",
+  "applicability": "NOT_APPLICABLE",
+  "applicability_reason": "no analog blocks detected in the input documents — digital-only IC; the analog interface spec layer is not applicable and is intentionally left empty",
   "analog_blocks_detected": false,
   "analog_blocks": [],
   "no_analog": true,
   "external_components": [],
   "electrical_specs": [],
   "design_parameters": [],
-  "extraction_evidence": {
-    "input/docs/nvlink_spec.pdf": []
-  },
+  "source_documents": [
+    "input/docs/nvlink_spec.pdf"
+  ],
+  "extraction_evidence": {},
   "analog_digital_interface_present": true,
   "signaling_summary": "Per-lane NVHS (NVIDIA High-Speed) low-voltage differential signaling on TX and RX differential pairs. Lanes are grouped into a sub-link ('brick' = 8 differential lane pairs per direction). NVLink 1.0-3.0 use two-level NRZ; NVLink 4.0 (Hopper / H100) uses four-level PAM4. The embedded clock is recovered by the receiver CDR from the serial stream. Per direction per link is 25 GB/s (Gen2-4); 18 links on H100 aggregate to 900 GB/s bidirectional.",
   "modulation": "NRZ (two-level) for NVLink 1.0-3.0; PAM4 (four-level) for NVLink 4.0.",

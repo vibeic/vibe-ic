@@ -10,7 +10,7 @@
   "electrical_specs": [],
   "no_electrical_specs_in_input": true,
   "ordering_info": {
-    "part_number": "QoS",
+    "part_number": "ace_chi",
     "vendor": null,
     "no_vendor_in_input": true
   },
@@ -1408,15 +1408,15 @@
       "source": "AMBA_ACE_or_CHI.pdf"
     }
   ],
-  "intended_audience": "Hardware and software engineers familiar with AMBA AXI3/AXI4 who design coherent multi-master systems, processor clusters, accelerators, or IO bridges.",
   "electrical_specs_rationale": "Protocol spec defines only logical signal semantics (synchronous, sampled on rising clock edge). Electrical levels are per-implementation.",
-  "package_info_rationale": "Bus protocol specification, not a packaged IC. No package / pinout / electrical info applies.",
   "package_info_present": false,
-  "confidentiality": "Non-Confidential",
-  "burst_boundary_rule": "A burst must not cross a 4KB address boundary (inherited from AXI).",
-  "electrical_specs_present": false,
-  "document_id": "ARM IHI 0022E (ID022613)",
   "issuer": "Arm Limited (originally ARM Limited)",
+  "document_id": "ARM IHI 0022E (ID022613)",
+  "package_info_rationale": "Bus protocol specification, not a packaged IC. No package / pinout / electrical info applies.",
+  "confidentiality": "Non-Confidential",
+  "intended_audience": "Hardware and software engineers familiar with AMBA AXI3/AXI4 who design coherent multi-master systems, processor clusters, accelerators, or IO bridges.",
+  "electrical_specs_present": false,
+  "burst_boundary_rule": "A burst must not cross a 4KB address boundary (inherited from AXI).",
   "five_channels": [
     {
       "name": "AW",

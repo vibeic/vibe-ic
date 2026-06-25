@@ -5,174 +5,6 @@
   "reject_rules": [],
   "fsm_states": [
     {
-      "name": "ATTACHED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "STATE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "ANOTHER",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "RESPONSE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "FRAME",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "PXCI",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "DETERMINE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "COMMANDS",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "TRANSMIT",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "REFER",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "SECTION",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "VARIABLES",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "THEIR",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "REGISTER",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "TRANSMITTED",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "MACHINE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "ENSURE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "INITIALIZATION",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "COMPLETE",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "CONDITIONS",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "COMRESET",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "POWER",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "WRITTEN",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
-      "name": "FIELD",
-      "transitions": [],
-      "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
-    },
-    {
       "name": "IDLE",
       "transitions": [],
       "actions": [],
@@ -201,32 +33,34 @@
       "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
     },
     {
-      "name": "AGAIN",
+      "name": "D3COLD",
       "transitions": [],
       "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose 'in X state')"
     },
     {
-      "name": "SEND",
+      "name": "L_IDLE",
       "transitions": [],
       "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose 'in X state')"
     },
     {
-      "name": "CLEAR",
+      "name": "AHCI",
       "transitions": [],
       "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose 'in X state')"
     },
     {
-      "name": "INDICATE",
+      "name": "DEVSLP",
       "transitions": [],
       "actions": [],
-      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose state-to-state v1.6.484)",
-      "extraction_strategy": "l6_fsm_prose_walker_v1_6_484"
+      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (prose 'in X state')"
+    },
+    {
+      "name": "ATAPI",
+      "transitions": [],
+      "actions": [],
+      "evidence": "input/docs/SATA_AHCI_1_3_1.pdf (arrow transition (rhs))"
     }
   ],
   "pipeline_stages": [],
