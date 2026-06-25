@@ -123,7 +123,12 @@ _DERIVED_PARAM_RE = re.compile(
 #   "default 4" / "default is **8 bits**"  (markdown bold/code around the int is
 #   tolerated — `**`/`` ` `` are presentation, not part of the value).
 _PROSE_DEFAULT_PHRASE_RE = re.compile(
-    r"\bdefault(?:\s+value)?\s+(?:is\s+|of\s+|=\s*|:\s*)?[`*]{0,2}(\d+)", re.I)
+    # "default value: 5" / "default value is 5" / "default is 5" / "default 5".
+    # After the optional "value", accept EITHER whitespace OR an immediate
+    # `:`/`=` separator ("value: 5" with no space) before the int — the latter was
+    # missed by the previous `\s+`-mandatory form (comparator's `WIDTH` default).
+    r"\bdefault(?:\s+value)?(?:\s+|\s*[:=]\s*)(?:is\s+|of\s+|=\s*|:\s*)?[`*]{0,2}(\d+)",
+    re.I)
 # "(Default: 32)" / "(Default 32)" / "(Default 4, must be > 0)" — the int may be
 # followed by a comma / qualifying clause before the closing paren (the original
 # reader required the `)` to follow the int immediately and so missed
