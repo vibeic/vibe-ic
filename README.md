@@ -159,7 +159,6 @@ the plugin/MCP.
 | **Field Agent** | General usage / audit | `community/backlogs/` only | ❌ | ❌ | → backlog → Core Agent |
 | **Benchmark Agent** | Maintainer official runs + end-user local runs | `benchmark-data/` + backlog | ❌ | ❌ | → backlog → Core Agent |
 | **Core Agent** | Maintainer | everything (owns plugin + MCP) | ✅ only role | ✅ only role | resolves backlog → fixes plugin/MCP |
-| **PM Agent** | Phase 1 — natural-language dialogue | design-time, no repo check-in | — | — | — |
 | **IC Expert Agent** | Phase 1 — technical review | design-time, no repo check-in | — | — | — |
 
 - The **MCP server lives under the plugin tree** (`plugins/vibe-ic/mcp-eda/`),

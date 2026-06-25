@@ -68,7 +68,7 @@ namespace with cross-layer `views` (e.g. one CRC-poly fact with
   in a follow-up (align K1 template paths to actual render paths).
 - ⏳ Bulk parsers (`pin_table`, `reg_map_csv`, `otp_hex`) — not yet
   implemented.
-- ⏳ Free-text ingest via LLM — delegated to PM Agent for now.
+- ⏳ Free-text ingest via LLM — delegated to the IC Expert Agent for now.
 - ⏳ Fact-level feedback from Phase 2/3 failures — not yet wired.
 
 ## CLI

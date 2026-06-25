@@ -7,7 +7,7 @@
 
 **Important caveat — this audit DOES NOT recommend deleting most "redundant" skills.** Vibe-IC explicitly supports two entry points:
 
-- **Path A** — natural-language prompt → PM-Agent + IC-Expert dialogue → `phase1_one_shot_runner.py` → L1..L13 JSON. The 19 fallback-tier skills (`datasheet-gen`, `frs-gen`, ... `phase2a-coverage-report-gen`) are the NL-dialogue methodology that drives the agents on this path.
+- **Path A** — natural-language prompt → IC Expert Agent dialogue (plain-language register) → `phase1_one_shot_runner.py` → L1..L13 JSON. The 19 fallback-tier skills (`datasheet-gen`, `frs-gen`, ... `phase2a-coverage-report-gen`) are the NL-dialogue methodology that drives the agents on this path.
 - **Path B** — existing vendor docs → `phase2a_one_shot_runner.py` (regex extraction over `input/docs/`). For this path the same 19 skills are redundant.
 
 Skills that look "redundant" relative to a runner are still essential for Path A. The cure is documentation/discoverability, not deletion.
@@ -46,7 +46,7 @@ Skills that look "redundant" relative to a runner are still essential for Path A
 
 1. **Skill audit method.** Each skill's tier is curated in `skills/_classification.json` (122 lines). I cross-referenced this with `SKILL_VS_RUNNER_DECISION.md` and spot-checked SKILL.md content for `datasheet-gen`, `spec-to-rtl`, `flow-orchestrate`, `phase1`, and `regmap-gen` to confirm the tier label matches the SKILL.md's actual deliverable. Result: every spot-check matched.
 2. **Program audit method.** The `_STRUCTURAL_RTL_GATES` tuple in `flow_compliance_check.py` lines 119-1009 contains 180 gate names. I additionally scanned the 8 one-shot runners and `flow/phase2_phase3.yaml` for any other gate references, giving 244 total wired identifiers. The 49 `*_check.py` files not in that union were further classified by searching `tests/`, `skills/`, `flow/`, `commands/`, `agents/`, `hooks/`.
-3. **Definition of REDUNDANT_FULL.** A skill is REDUNDANT_FULL if and only if (a) its core deliverable is fully produced by a deterministic program AND (b) a fresh-agent could omit the skill without functional loss on either Path A or Path B. **No skill in the plugin meets this definition** because every fallback-tier skill drives the PM-Agent dialogue on Path A.
+3. **Definition of REDUNDANT_FULL.** A skill is REDUNDANT_FULL if and only if (a) its core deliverable is fully produced by a deterministic program AND (b) a fresh-agent could omit the skill without functional loss on either Path A or Path B. **No skill in the plugin meets this definition** because every fallback-tier skill drives the IC Expert Agent dialogue on Path A.
 
 ---
 
@@ -458,7 +458,7 @@ Note: several of these (e.g. `frontend_backend_handoff_check`, `waiver_growth_ch
 
 The 19 `fallback_when_runner_waives` skills are functionally redundant when Path B (`phase2a_one_shot_runner.py`) is the entry point. They MUST stay because:
 
-- Path A (NL prompt → L1..L13) routes through PM-Agent + IC-Expert dialogue using these skills as the per-layer methodology.
+- Path A (NL prompt → L1..L13) routes through the IC Expert Agent dialogue (plain-language register) using these skills as the per-layer methodology.
 - The deterministic runner is a regex/template extractor over already-existing `input/docs/`. It cannot synthesise an L1 datasheet from an empty project.
 
 **Recommendation: tag the SKILL.md frontmatter with `entry_path: A` so the AI dispatcher knows not to invoke them when a Path B runner is already running.** The 19 skills:

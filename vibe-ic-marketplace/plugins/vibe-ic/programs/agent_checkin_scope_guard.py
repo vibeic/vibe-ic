@@ -20,7 +20,6 @@ Roles + check-in authority (the governance matrix):
   | benchmark-agent  | benchmark-data/ (results) + plugin/MCP (fixes |
   |                  | via version-less PR) — NO-MIX in one commit  |
   | field-agent      | community/backlogs/  (files backlog only)    |
-  | pm-agent         | NOTHING (Phase-1 design-time; no repo commit) |
   | ic-expert-agent  | NOTHING (Phase-1 design-time; no repo commit) |
 
 Doctrine: the plugin and the MCP server are LANDED on main only by the single
@@ -32,7 +31,7 @@ it NO LONGER files a backlog. Its measure-only HONESTY is preserved not by a
 plugin ban but by the NO-MIX invariant: a single commit may carry benchmark
 RESULTS (benchmark-data/) OR plugin/MCP EDITS, never BOTH, so a hand-patch can
 never ride along in the run whose published number it changes. The Field agent
-still files the backlog mirror only; pm/ic-expert are design-time (no check-in).
+still files the backlog mirror only; ic-expert is design-time (no check-in).
 
 This is an ALLOW-LIST model (default-deny for every restricted role) — a path
 that matches no allowed prefix is a violation. `repo-gatekeeper` (and its
@@ -109,7 +108,6 @@ ROLE_ALLOW: Dict[str, Optional[List[str]]] = {
     # whose number it inflates.
     "benchmark-agent": [ZONE_BENCHMARK_DATA, ZONE_PLUGIN, ZONE_MCP],
     "field-agent": [ZONE_BACKLOG],
-    "pm-agent": [],
     "ic-expert-agent": [],
 }
 
@@ -129,8 +127,7 @@ ROLE_DESC: Dict[str, str] = {
     "gatekeeper": "alias of repo-gatekeeper (land half) — may check in anywhere",
     "benchmark-agent": "runs Benchmark Evaluation / Benchmark IC — checks in benchmark-data/ (results) and may author plugin/MCP fixes via a version-less PR; NO-MIX: never both in one commit",
     "field-agent": "general field usage — files backlog only; NO benchmark-data / plugin / MCP",
-    "pm-agent": "Phase-1 NL dialogue — design-time, no repo check-in",
-    "ic-expert-agent": "Phase-1 technical review — design-time, no repo check-in",
+    "ic-expert-agent": "Phase-1 NL dialogue (plain-language register) + technical review — design-time, no repo check-in",
 }
 
 # Repo-root markers used to strip an absolute path down to repo-relative.
@@ -261,7 +258,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.list_roles:
         print("Agent check-in scope matrix:")
         for role in ("core-agent", "benchmark-agent", "field-agent",
-                     "pm-agent", "ic-expert-agent"):
+                     "ic-expert-agent"):
             allow = ROLE_ALLOW[role]
             scope = "EVERYTHING" if allow is None else (
                 ", ".join(allow) if allow else "NOTHING")
