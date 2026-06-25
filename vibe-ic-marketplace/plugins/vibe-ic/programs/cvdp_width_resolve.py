@@ -61,8 +61,12 @@ from typing import Dict, Optional, Tuple
 _IDENT = re.compile(r"[A-Za-z_]\w*")
 
 # Tokens that appear inside a width expression but are NOT parameter identifiers we
-# must resolve from the table — `clog2` is the SV system function we evaluate.
-_EXPR_FUNCS = {"clog2"}
+# must resolve from the table — these are all ceil-log2 width FUNCTIONS evaluated as
+# the SV `$clog2`. `clog2`/`$clog2` is the canonical SystemVerilog system function;
+# `log2ceil` and `clogb2` are the common user-function synonyms RTL authors define
+# (a `function integer log2ceil;` body the prompt ships) — all compute ceil(log2(x)),
+# so a port sized `[log2ceil(MaxRatio_g)-1:0]` resolves exactly like `[$clog2(..)-1:0]`.
+_EXPR_FUNCS = {"clog2", "log2ceil", "clogb2"}
 
 
 # --------------------------------------------------------------------------- #
@@ -70,9 +74,16 @@ _EXPR_FUNCS = {"clog2"}
 # --------------------------------------------------------------------------- #
 # `parameter [type] NAME = <int>` — the partial module header stub in the PROMPT.
 # Accepts an optional `integer`/`int`/`logic`/width-prefix and a trailing comma.
+# §4.05 BARE-LITERAL ONLY: the integer must be the WHOLE right-hand side — i.e.
+# followed by an end-of-statement boundary (`,`, `;`, `)`, newline, or whitespace-
+# then-comment), NEVER by an arithmetic operator. `parameter NBW = 2*DATA_WIDTH+1`
+# previously matched the leading `2` and mis-bound NBW to 2; an EXPRESSION RHS must
+# be left for `_DERIVED_PARAM_RE` + the fixed-point loop to compute (2*16+1 = 33).
+# The trailing `(?=...)` lookahead asserts the boundary WITHOUT consuming it.
+_RHS_END = r"(?=\s*(?:[,;)]|//|/\*|$))"
 _CODE_PARAM_RE = re.compile(
     r"\bparameter\b\s*(?:integer|int|logic|reg|signed|unsigned|\[[^\]]*\]|\s)*?"
-    r"([A-Za-z_]\w*)\s*=\s*(\d+|0[xX][0-9A-Fa-f]+)")
+    r"([A-Za-z_]\w*)\s*=\s*(\d+|0[xX][0-9A-Fa-f]+)" + _RHS_END, re.M)
 # A Verilog parameter HEADER list shares ONE `parameter` keyword across
 # comma-separated items: `#(parameter ADDR_WIDTH = 8, PAGE_WIDTH = 8, TLB_SIZE = 4)`.
 # _CODE_PARAM_RE only captures the FIRST item (the one right after `parameter`);
@@ -84,10 +95,15 @@ _PARAM_HEADER_BLOCK_RE = re.compile(r"#\s*\((?P<body>[^)]*\bparameter\b[^)]*)\)"
 _PARAM_HEADER_ITEM_RE = re.compile(
     r"(?:\bparameter\b\s*(?:integer|int|logic|reg|signed|unsigned|\[[^\]]*\]|\s)*?)?"
     r"\b([A-Za-z_]\w*)\s*=\s*(0[xX][0-9A-Fa-f]+|\d+)")
-# `localparam NAME = <int>` — a derived constant, equally usable as a default.
+# `localparam NAME = <int>` — a literal-valued constant, equally usable as a
+# default. §4.05 BARE-LITERAL ONLY (same boundary as `_CODE_PARAM_RE`): the integer
+# must be the WHOLE RHS. `localparam NBW_PRED = 2*DATA_WIDTH + 1;` previously matched
+# the leading `2`, wrongly binding NBW_PRED to 2 (a false-COMPLETE); an EXPRESSION
+# RHS is now left for `_DERIVED_PARAM_RE` + the fixed-point loop (here it resolves to
+# 33). A genuine `localparam X = 8;` still binds to 8 (`8` IS the whole RHS).
 _LOCALPARAM_RE = re.compile(
     r"\blocalparam\b\s*(?:integer|int|logic|reg|signed|unsigned|\[[^\]]*\]|\s)*?"
-    r"([A-Za-z_]\w*)\s*=\s*(\d+|0[xX][0-9A-Fa-f]+)")
+    r"([A-Za-z_]\w*)\s*=\s*(\d+|0[xX][0-9A-Fa-f]+)" + _RHS_END, re.M)
 # `parameter/localparam NAME = <EXPRESSION>` where the RHS is a DERIVED expression
 # over OTHER params (a ternary `(A>B)?A:B`, an arithmetic `A*B`, a `$clog2(D)`),
 # not a bare literal. Captured up to the line-terminating comma / comment / newline.
@@ -240,7 +256,11 @@ def param_defaults(prompt: str, tb: str = "") -> Dict[str, int]:
     # source has populated `out`), iterating to a fixed point so a chain settles.
     # §4.05: only added when the expression fully resolves to an int from KNOWN
     # params — never a fabricated default.
-    derived = [(m.group(1), m.group(2).strip()) for m in _DERIVED_PARAM_RE.finditer(prompt)
+    # The RHS span `[^,\n/]+` includes a trailing `;` statement terminator (and any
+    # trailing whitespace); strip both so `2*DATA_WIDTH + 1;` evaluates as the bare
+    # `2*DATA_WIDTH + 1` (the `;` is not in the evaluator's vetted char class).
+    derived = [(m.group(1), m.group(2).strip().rstrip(";").strip())
+               for m in _DERIVED_PARAM_RE.finditer(prompt)
                if m.group(1) not in out]
     # PROSE-derived params: a line whose HEAD names an ALL-CAPS parameter and states
     # its value as an arithmetic EXPRESSION over other params. Bind name from the line
@@ -331,9 +351,11 @@ def context_param_defaults(record: dict) -> Dict[str, int]:
     ctx = (record.get("input") or {}).get("context") or {}
     if not isinstance(ctx, dict):
         return out
+    derived: list[Tuple[str, str]] = []
     for k, v in ctx.items():
         if not (isinstance(v, str) and (k.endswith(".v") or k.endswith(".sv"))):
             continue
+        # (a) bare-literal `parameter/localparam NAME = <int>` defaults.
         for rx in (_CODE_PARAM_RE, _LOCALPARAM_RE):
             for m in rx.finditer(v):
                 nm, tok = m.group(1), m.group(2)
@@ -342,6 +364,30 @@ def context_param_defaults(record: dict) -> Dict[str, int]:
                         out[nm] = _as_int(tok)
                     except ValueError:
                         pass
+        # (b) DERIVED `parameter/localparam NAME = <EXPRESSION>` header declarations
+        # (`parameter NWIDTH = $clog2(N)`, `TWIDTH = $clog2(N*R)`) — the SAME
+        # param_expression_width gap class, just rooted in the provided context RTL.
+        # §4.05 + §3.9: only the `parameter`/`localparam` HEADER keyword is read (never
+        # a body `assign`); each is resolved BELOW the literals against the known param
+        # table, so a value is bound only when the chain fully resolves to an int.
+        for m in _DERIVED_PARAM_RE.finditer(v):
+            nm = m.group(1)
+            expr = m.group(2).strip().rstrip(";").strip()
+            if nm and nm not in out and not nm.isdigit():
+                derived.append((nm, expr))
+    # resolve the derived context params to a fixed point (a chain like
+    # TWIDTH -> N,R settles), seeded by the literal context defaults harvested above.
+    for _ in range(len(derived) + 1):
+        progressed = False
+        for nm, expr in derived:
+            if nm in out:
+                continue
+            val = eval_width_expr(expr, out)
+            if val is not None:
+                out[nm] = val
+                progressed = True
+        if not progressed:
+            break
     return out
 
 
@@ -368,6 +414,10 @@ def eval_width_expr(expr: str, params: Dict[str, int]) -> Optional[int]:
     s = s.replace("`", "")
     # normalize the SV ceil-log2 system function to a python-callable token.
     s = re.sub(r"\$\s*clog2", "clog2", s)
+    # the user-function synonyms `log2ceil`/`clogb2` compute the SAME ceil-log2; map
+    # them onto `clog2` so a `[log2ceil(MaxRatio_g)-1:0]` width resolves identically.
+    # \b-anchored so a parameter name merely CONTAINING the substring is untouched.
+    s = re.sub(r"\b(?:log2ceil|clogb2)\b", "clog2", s)
     # normalize a SPEC-NOTATION multiply: a whitespace-delimited `x` or a `×`
     # between two operands means multiplication (e.g. `ROW_A x COL_A x WIDTH`,
     # `4 × 4 × 8`). Both sides must be whitespace so a hex `0x..` or an identifier
@@ -485,7 +535,7 @@ def has_param_expr_width(prompt: str, name: str) -> bool:
 
 # words that appear inside a width expression but are NOT parameters (functions /
 # numeric literals' stray letters). `$clog2`/`clog2`/`log2` are width FUNCTIONS.
-_NON_PARAM_TOKENS = {"clog2", "log2", "ceil", "floor", "x"}
+_NON_PARAM_TOKENS = {"clog2", "log2ceil", "clogb2", "log2", "ceil", "floor", "x"}
 
 
 def param_expr_idents(prompt: str, name: str) -> set:
