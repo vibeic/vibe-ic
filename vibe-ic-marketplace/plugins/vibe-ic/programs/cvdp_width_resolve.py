@@ -73,6 +73,17 @@ _EXPR_FUNCS = {"clog2"}
 _CODE_PARAM_RE = re.compile(
     r"\bparameter\b\s*(?:integer|int|logic|reg|signed|unsigned|\[[^\]]*\]|\s)*?"
     r"([A-Za-z_]\w*)\s*=\s*(\d+|0[xX][0-9A-Fa-f]+)")
+# A Verilog parameter HEADER list shares ONE `parameter` keyword across
+# comma-separated items: `#(parameter ADDR_WIDTH = 8, PAGE_WIDTH = 8, TLB_SIZE = 4)`.
+# _CODE_PARAM_RE only captures the FIRST item (the one right after `parameter`);
+# the comma-continued siblings have no keyword of their own and were dropped, so a
+# port sized by `[PAGE_WIDTH-1:0]` stayed a `param_expression_width` gap even though
+# its default IS stated in the same header. This captures every `NAME = <int>` item
+# inside a `#( … )` parameter block. chip-AGNOSTIC: pure Verilog-header parse.
+_PARAM_HEADER_BLOCK_RE = re.compile(r"#\s*\((?P<body>[^)]*\bparameter\b[^)]*)\)", re.S)
+_PARAM_HEADER_ITEM_RE = re.compile(
+    r"(?:\bparameter\b\s*(?:integer|int|logic|reg|signed|unsigned|\[[^\]]*\]|\s)*?)?"
+    r"\b([A-Za-z_]\w*)\s*=\s*(0[xX][0-9A-Fa-f]+|\d+)")
 # `localparam NAME = <int>` — a derived constant, equally usable as a default.
 _LOCALPARAM_RE = re.compile(
     r"\blocalparam\b\s*(?:integer|int|logic|reg|signed|unsigned|\[[^\]]*\]|\s)*?"
@@ -123,6 +134,14 @@ _INLINE_CODE_DEFAULT_RE = re.compile(
 _PARAM_TABLE_ROW = re.compile(
     r"^\s*\|\s*`?([A-Za-z_]\w*)`?\s*\|.*?\|\s*`?(\d+|0[xX][0-9A-Fa-f]+)`?\s*\|?\s*$",
     re.M)
+# a STANDALONE markdown bullet/line that is itself a parameter default assignment:
+#   "- **WIDTH = 32**"  /  "* `DATA_WIDTH = 16`"  — an ALL-CAPS parameter NAME set to
+# an integer literal, alone on the line (optional list marker + markdown bold/code).
+# Anchored to the WHOLE line so a mid-prose "x = 5" never matches; the ALL-CAPS name
+# requirement keeps it to parameter-style identifiers. chip-AGNOSTIC.
+_BULLET_PARAM_DEFAULT_RE = re.compile(
+    r"^\s*(?:[-*]|\d+[.)])?\s*\*{0,2}`?([A-Z][A-Z0-9_]*)`?\s*=\s*"
+    r"`?(\d+|0[xX][0-9A-Fa-f]+)`?\*{0,2}\s*$", re.M)
 
 
 def _as_int(tok: str) -> int:
@@ -152,6 +171,11 @@ def param_defaults(prompt: str, tb: str = "") -> Dict[str, int]:
         _add(m.group(1), m.group(2))
     for m in _LOCALPARAM_RE.finditer(prompt):
         _add(m.group(1), m.group(2))
+    # comma-separated siblings inside a `#(parameter A = 1, B = 2, …)` header that
+    # share the single `parameter` keyword — _CODE_PARAM_RE caught only the first.
+    for blk in _PARAM_HEADER_BLOCK_RE.finditer(prompt):
+        for im in _PARAM_HEADER_ITEM_RE.finditer(blk.group("body")):
+            _add(im.group(1), im.group(2))
     # DERIVED params: `parameter NAME = (A>B)?A:B` / `A*B` / `$clog2(D)`. Resolve
     # over the literal params already in `out` (iterate to a fixed point so a
     # chain of derivations settles). §4.05: only added when the expression fully
@@ -180,6 +204,11 @@ def param_defaults(prompt: str, tb: str = "") -> Dict[str, int]:
     # inline-code assignment annotated as a default — `NAME = 8` (default ...).
     # Anchored to the literal assignment, so the name is never guessed.
     for m in _INLINE_CODE_DEFAULT_RE.finditer(prompt):
+        _add(m.group(1), m.group(2))
+    # a standalone bullet/line `- **WIDTH = 32**` — an ALL-CAPS param NAME set to an
+    # integer literal, alone on the line. The whole-line anchor + ALL-CAPS name keep
+    # it from harvesting mid-prose `x = 5`.
+    for m in _BULLET_PARAM_DEFAULT_RE.finditer(prompt):
         _add(m.group(1), m.group(2))
     # prose / paren defaults — bound LINE-BY-LINE to the line's leading ALL-CAPS
     # parameter token, so the name can never be a stray nearby lowercase word.
