@@ -138,7 +138,8 @@ _RANGE_PARAM_RE = re.compile(
 # to width 1 by the universal convention (§4.05: a clock literally cannot be >1b).
 _CLK_RE = re.compile(
     r"(?i)^(clk|clock|sclk|aclk|hclk|pclk)"
-    r"([_\.]?(in|i|sys|core|out|o|div|gen|en))?$")
+    r"(\d+)?"                                   # numbered clocks: clk1, clk2, clock0
+    r"([_\.]?(in|i|sys|core|out|o|div|gen|en))?(\d+)?$")
 _RST_RE = re.compile(
     r"(?i)(^|_)(rst|reset|arst|areset|srst|nreset|resetn|rstn)([_\.]?(in|i|n|b|async|sync))?($|_)"
 )
@@ -155,7 +156,14 @@ _CTRL_WORD = (
     r"valid|ready|ack|req|start|stop|done|busy|enable|"
     r"overflow|underflow|ovf|borrow|parity|found|hit|miss|sel|"
     r"carry|cin|cout|flag|trigger|strobe|clk_?en|clken|wr_?en|rd_?en|"
-    r"interrupt|irq|empty|full|almost_?full|almost_?empty"
+    r"interrupt|irq|empty|full|almost_?full|almost_?empty|"
+    # AMBA protocol 1-bit control/handshake words — each is single-bit by the
+    # published APB/AHB/AXI spec (a §3.9 interface fact, not a guess): APB
+    # pwrite/psel(x)/penable/pready/pslverr; AXI handshake *valid/*ready and the
+    # *last burst-terminator. A `pselx`/`psel0` numeric/x suffix is tolerated.
+    r"pwrite|psel[x0-9]?|penable|pready|pslverr|pprot|"
+    r"awvalid|wvalid|bvalid|arvalid|rvalid|awready|wready|bready|arready|rready|"
+    r"wlast|rlast|awlock|arlock"
 )
 _ONE_BIT_RE = re.compile(
     r"(?i)^("
