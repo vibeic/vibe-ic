@@ -105,9 +105,9 @@ def test_field_agent_forbidden_paths_still_caught(path, zone):
 
 
 # --------------------------------------------------------------------------
-# pm-agent / ic-expert-agent — design-time, NOTHING may be checked in
+# ic-expert-agent — design-time, NOTHING may be checked in
 # --------------------------------------------------------------------------
-@pytest.mark.parametrize("role", ["pm-agent", "ic-expert-agent"])
+@pytest.mark.parametrize("role", ["ic-expert-agent"])
 @pytest.mark.parametrize("path", [P_BENCH_DATA, P_BACKLOG, P_PLUGIN, P_MCP, P_ROOT])
 def test_design_time_roles_may_not_check_in_anything(role, path):
     assert len(g.evaluate(role, [path])) == 1

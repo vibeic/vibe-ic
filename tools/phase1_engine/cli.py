@@ -122,7 +122,7 @@ def _cmd_gaps(args: argparse.Namespace) -> int:
 def _cmd_auto_fill(args: argparse.Namespace) -> int:
     """Apply every gap's suggested_default into the fact graph.
 
-    Used by the training loop to automate what PM Agent dialogue does in
+    Used by the training loop to automate what the IC Expert Agent dialogue (plain-language register) does in
     interactive mode: fill required-but-missing facts with K3 / class
     reference defaults, so subsequent `render` + gates have enough content
     to pass.
@@ -581,7 +581,7 @@ def _cmd_ingest_extracted(args: argparse.Namespace) -> int:
 def _cmd_set_fact(args: argparse.Namespace) -> int:
     """Interactive gap-fill: add/override a single fact.
 
-    Used by PM Agent during gap dialogue. Each confirmed answer becomes one
+    Used by the IC Expert Agent during gap dialogue (plain-language register). Each confirmed answer becomes one
     fact with source=user_stated.
     """
     graph = FactGraph.load(Path(args.facts))
@@ -660,7 +660,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     a = sub.add_parser("auto-fill",
                        help="apply every gap's suggested_default into facts.yaml "
-                            "(training-loop drop-in for PM Agent dialogue)")
+                            "(training-loop drop-in for IC Expert Agent dialogue)")
     a.add_argument("facts", help="path to facts.yaml to augment")
     a.add_argument("--out", help="output path (defaults to overwriting input)")
     a.set_defaults(fn=_cmd_auto_fill)

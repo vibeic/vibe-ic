@@ -9,7 +9,7 @@ Phase 1 produces structured L1-L23 JSON from one of two input modes:
   - input_prompt : free-text prompt under `input/phase1_prompt.md` or
                 structured YAML under `input/phase1_structured.yaml`,
                 processed by `tools/phase1_engine/cli.py run-all`
-                (PM Agent dialogue path).
+                (IC Expert Agent dialogue path, plain-language register).
 
 Both modes write to `phase1/generated_docs/L*.json` + `phase1/human_docs/L*.md`.
 
@@ -128,7 +128,7 @@ def _detect_input_mode(project: Path) -> str:
     return "none"
 
 
-# ── Prompt mode (PM Agent / dialogue → phase1_engine) ──────────────
+# ── Prompt mode (IC Expert Agent / dialogue → phase1_engine) ───────
 
 def _find_phase1_engine() -> "Tuple[Optional[Path], List[str]]":
     """Resolve tools/phase1_engine/cli.py via an explicit fallback chain
@@ -213,7 +213,7 @@ def step_ingest_render(project: Path, ic_name: str) -> StepResult:
                               "neither input/phase1_structured.yaml nor "
                               "input/docs/ nor input/phase1_prompt.md "
                               "present — Phase 1 needs at least one input. "
-                              "Caller (PM agent) must populate "
+                              "Caller (IC Expert Agent) must populate "
                               "input/phase1_structured.yaml from dialogue.")
     # cli.py uses package-relative imports (``from .ingest import ...``),
     # so it must be run as a module (``python -m phase1_engine.cli``) with

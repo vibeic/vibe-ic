@@ -6,7 +6,7 @@ so a verification FAILURE is almost always ONE OF OUR OWN GAPS — (1) a
 SPEC-EXTRACTION gap (the requirement exists somewhere in the input chain but we
 dropped it before some downstream station) or (2) a TESTBENCH-COVERAGE gap (we
 extracted it but our self-TB never exercised it). "Spec" is the WHOLE input
-chain: prompt (USER) -> fact graph (PM agent) -> L1-L23 (IC expert). FLOOR is
+chain: prompt (USER) -> fact graph (IC Expert Agent) -> L1-L23 (IC expert). FLOOR is
 allowed ONLY when the failing thing is NOWHERE in the chain, with cited
 evidence of the stations searched.
 
@@ -147,9 +147,10 @@ def test_outside_set_requires_non_member_value(tmp_path):
 
 
 # ── POSITIVE: which-station routing (the scope refinement) ───────────────────
-def test_route_extraction_gap_prompt_only_to_pm_agent(tmp_path):
+def test_route_extraction_gap_prompt_only_to_ic_expert_agent(tmp_path):
     """A behavior present ONLY in the USER prompt (not in our checklist, dropped
-    before the fact graph) -> extraction-gap routed to pm-agent."""
+    before the fact graph) -> extraction-gap routed to the IC Expert Agent (the
+    plain-language elicitation register that owns the user-facing front door)."""
     p = _w(tmp_path, "p.md",
            "A FIFO. It asserts almostfull when occupancy exceeds the watermark.\n")
     l = _w(tmp_path, "l.md", "L1: a FIFO with ports clk, data.\n")
@@ -157,7 +158,7 @@ def test_route_extraction_gap_prompt_only_to_pm_agent(tmp_path):
              failure="almostfull never asserts at watermark")
     assert r.returncode == 0  # advisory (no --strict)
     assert "extraction-gap" in r.stdout
-    assert "route_to: pm-agent" in r.stdout
+    assert "route_to: ic-expert-agent" in r.stdout
     assert "user_prompt" in r.stdout
 
 
