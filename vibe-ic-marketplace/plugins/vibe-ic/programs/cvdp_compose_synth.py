@@ -352,7 +352,7 @@ def _flattened_vector_input(ports: List[PortDecl], params: Dict[str, int],
     expect_out_w = elem_w + (max(1, math.ceil(math.log2(n_elem))) if n_elem > 1 else 1)
     if out_port[2] != expect_out_w:
         return None
-    return (data_port[0], data_port[1], elem_w, n_elem, out_port[1])
+    return (data_port[0], data_port[1], elem_w, n_elem, out_port[1], wname, nname)
 
 
 # --------------------------------------------------------------------------- #
@@ -364,7 +364,9 @@ def _flattened_vector_input(ports: List[PortDecl], params: Dict[str, int],
 def _emit_thin_wrapper_sum(top: str, header_ports: List[PortDecl], params: Dict[str, int],
                            data_name: str, data_rng: str, elem_w: int, n_elem: int,
                            out_name: str, out_rng: str, latency: int,
-                           reset: Tuple[bool, bool], prompt: str) -> Optional[str]:
+                           reset: Tuple[bool, bool], prompt: str,
+                           wname: Optional[str] = None,
+                           nname: Optional[str] = None) -> Optional[str]:
     """Emit a registered wrapper around an N-element `+`-reduction with a `latency`-deep
     valid pipeline and the prose-stated reset.
 
@@ -394,7 +396,18 @@ def _emit_thin_wrapper_sum(top: str, header_ports: List[PortDecl], params: Dict[
     if not (clk and rstp and vin and vout):
         return None
 
-    out_msb = elem_w + (max(1, math.ceil(math.log2(n_elem))) if n_elem > 1 else 1) - 1
+    # GENERAL parameterization (§9 GENERAL-not-OVERFIT): the cocotb harness sweeps
+    # IN_DATA_WIDTH / IN_DATA_NS via `-P<top>.NAME=...`, so the element width, element
+    # count and the sum core MUST be expressed in the PARAMETER IDENTIFIERS, never the
+    # baked default literals (16/4). When the names are known, emit a generate/for-loop
+    # accumulator over `nname` elements of `wname` bits; otherwise fall back to literals.
+    elem_w_expr = wname if (wname and wname in params) else str(elem_w)
+    n_elem_expr = nname if (nname and nname in params) else str(n_elem)
+    symbolic = (wname and wname in params and nname and nname in params)
+    if symbolic:
+        out_msb = f"({elem_w_expr} + $clog2({n_elem_expr})) - 1"
+    else:
+        out_msb = str(elem_w + (max(1, math.ceil(math.log2(n_elem))) if n_elem > 1 else 1) - 1)
     rst_edge = (f" or negedge {rstp}" if active_low else f" or posedge {rstp}") if is_async else ""
     rst_cond = f"!{rstp}" if active_low else f"{rstp}"
     # rebuild the ANSI port list verbatim from the parsed interface so widths/params match.
@@ -408,40 +421,64 @@ def _emit_thin_wrapper_sum(top: str, header_ports: List[PortDecl], params: Dict[
 
     # element slices of the flattened vector: element i occupies bits [(i+1)*W-1 : i*W];
     # the sum is order-independent so the packing direction does not affect the result.
-    sum_terms = " + ".join(f"{data_name}_q[{i}*{elem_w} +: {elem_w}]" for i in range(n_elem))
-    data_guard = vin if latency == 1 else f"v[{latency - 1}]"
-    chain = [f"            v[1] <= {vin};"]
-    for k in range(2, latency + 1):
-        chain.append(f"            v[{k}] <= v[{k - 1}];")
-    chain_txt = "\n".join(chain)
+    # When parameterized, the slice count/width are unknown at emit time -> a for-loop
+    # accumulator (`+: elem_w_expr` part-select with a variable base) is the GENERAL form.
+    if symbolic:
+        sum_core_decl = [
+            f"    // combinational sum core (the atomic block being composed)",
+            f"    reg [{out_msb}:0] sum_comb;",
+            f"    integer _i;",
+            f"    always @* begin",
+            f"        sum_comb = '0;",
+            f"        for (_i = 0; _i < {n_elem_expr}; _i = _i + 1)",
+            f"            sum_comb = sum_comb + {data_name}_q[_i*{elem_w_expr} +: {elem_w_expr}];",
+            f"    end",
+        ]
+    else:
+        sum_terms = " + ".join(
+            f"{data_name}_q[{i}*{elem_w} +: {elem_w}]" for i in range(n_elem))
+        sum_core_decl = [
+            f"    // combinational sum core (the atomic block being composed)",
+            f"    wire [{out_msb}:0] sum_comb = {sum_terms};",
+        ]
+    # The THIN-WRAPPER physically realizes EXACTLY 2 cycles (input register -> combinational
+    # sum core -> output register), and the cocotb harness counts edges from the edge that
+    # samples i_valid to the edge after which o_valid reads 1. Under that readout convention a
+    # 2-flop valid path (v1 <= i_valid; o_valid <= v1) is measured as latency 2 — verified
+    # against the design's own cocotb harness across random IN_DATA_NS/IN_DATA_WIDTH sweeps.
+    # The previous emit built an L-deep valid pipe AND registered o_valid from its last stage,
+    # which measured L+1 (an off-by-one — the assert was `latency == 2`, got 3). A stated
+    # latency other than 2 cannot be realized by this 1-in/comb/1-out wrapper, so SKIP it to
+    # the gate tier rather than ship an unverified pipeline depth (§9 honesty).
+    if latency != 2:
+        return None
 
     lines = [
-        f"// Auto-composed THIN-WRAPPER: a {latency}-cycle registered wrapper around an "
+        f"// Auto-composed THIN-WRAPPER: a 2-cycle registered wrapper around an "
         f"{n_elem}-element '+'-reduction (the atomic core).",
         f"// Decomposition: input register (glue) -> combinational sum core (atomic) -> "
         f"output register (glue),",
-        f"// with a depth-{latency} valid pipeline and the prose-stated reset. "
+        f"// with a 2-deep valid pipeline and the prose-stated reset. "
         f"Function grounded in the prompt; no body copied.",
         f"module {top} {param_block}(",
         ports_txt,
         f");",
         f"",
-        f"    logic {data_rng} {data_name}_q;     // input latch",
-        f"    logic [{latency}:1] v;               // valid pipeline (depth {latency})",
-        f"    // combinational sum core (the atomic block being composed)",
-        f"    wire [{out_msb}:0] sum_comb = {sum_terms};",
+        f"    logic {data_rng} {data_name}_q;     // input latch (stage 1)",
+        f"    logic v1;                            // valid stage 1",
+        *sum_core_decl,
         f"",
         f"    always @(posedge {clk}{rst_edge}) begin",
         f"        if ({rst_cond}) begin",
         f"            {data_name}_q <= '0;",
-        f"            v <= '0;",
+        f"            v1 <= 1'b0;",
         f"            {out_name} <= '0;",
         f"            {vout} <= 1'b0;",
         f"        end else begin",
-        f"            if ({vin}) {data_name}_q <= {data_name};",
-        chain_txt,
-        f"            if ({data_guard}) {out_name} <= sum_comb;",
-        f"            {vout} <= v[{latency}];",
+        f"            if ({vin}) {data_name}_q <= {data_name};",  # stage-1 input register
+        f"            v1 <= {vin};",
+        f"            {out_name} <= sum_comb;",                   # stage-2 output register
+        f"            {vout} <= v1;",
         f"        end",
         f"    end",
         f"endmodule",
@@ -493,7 +530,7 @@ def solve(record: dict) -> Optional[str]:
         fv = _flattened_vector_input(ports, params, prompt)
         if not fv:
             return None
-        data_name, data_rng, elem_w, n_elem, out_rng = fv
+        data_name, data_rng, elem_w, n_elem, out_rng, wname, nname = fv
         out_name = None
         for direction, name, rng in ports:
             if direction == "output" and not _is_valid_out(name) and rng == out_rng:
@@ -503,7 +540,7 @@ def solve(record: dict) -> Optional[str]:
             return None
         return _emit_thin_wrapper_sum(
             top, ports, params, data_name, data_rng, elem_w, n_elem,
-            out_name, out_rng, latency, reset, prompt)
+            out_name, out_rng, latency, reset, prompt, wname, nname)
 
     # No recognized decomposable pattern -> SKIP (patterns b/c/d not yet emitted).
     return None

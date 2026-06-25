@@ -269,22 +269,25 @@ def test_moving_average_solves():
     assert rtl is not None
     assert "module moving_average" in rtl
     assert S.family_of(rec) == "moving_average_pow2"
-    assert "sum[14:3]" in rtl          # /8 == >>3 power-of-2 divisor, 12-bit average
+    assert "sum_next[14:3]" in rtl     # /8 == >>3 of the NEXT running sum (incl. this sample)
     assert "buffer [0:7]" in rtl       # last-8 ring buffer
     assert "if (reset)" in rtl         # sync active-high reset parsed
 
 
 def _movavg_model(seq, window=8):
-    """The EXACT harness model: queue of last `window`, current_sum, avg = sum//N;
-    the DUT publishes the OLD avg each edge (1-cycle latency), 0 right after reset."""
-    q, s, out, prev = [], 0, [], 0
+    """The EXACT harness model: queue of last `window`, current_sum, avg = sum//N.
+    The DUT registers each sample on the edge it is applied and publishes, on that same
+    edge, the average INCLUDING that sample (the official cocotb harness compares the
+    DUT output against the average that folds in the just-applied input — verified against
+    the design's own harness). The earlier 'publish the OLD avg' model lagged one cycle and
+    FAILED the real harness (`Mismatch ... got 0`)."""
+    q, s, out = [], 0, []
     for x in seq:
-        out.append(prev)
         if len(q) < window:
             q.append(x); s += x
         else:
             old = q.pop(0); s += x - old; q.append(x)
-        prev = s // window
+        out.append(s // window)   # avg including the current sample, published this edge
     return out
 
 
@@ -527,7 +530,7 @@ def test_real_moving_average_solves_under_any_toplevel():
     rtl = S.solve(rec2)
     assert rtl is not None
     assert "module zz_block" in rtl
-    assert "buffer [0:7]" in rtl and "sum[14:3]" in rtl
+    assert "buffer [0:7]" in rtl and "sum_next[14:3]" in rtl
 
 
 if __name__ == "__main__":  # pragma: no cover

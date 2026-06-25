@@ -602,11 +602,18 @@ def _try_moving_average(prompt: str, ins, outs, top) -> Optional[str]:
     # sum must hold N*(2^W-1): W + log2(N) bits suffices.
     SW = W + shift
     ptr_w = max(1, shift)
-    # average = sum >> log2(N) = the high (SW-shift) bits of sum, truncated to the
-    # output's declared width OW (a wider sum-quotient is masked to OW bits).
+    # The harness applies data_in[k] on the SAME edge the DUT registers it, then on the
+    # NEXT iteration compares data_out against the average that INCLUDES sample k. So the
+    # registered output published on each edge must be the NEXT running sum (the one that
+    # folds in the just-sampled input), >> log2(N) — NOT the old sum (that lags one extra
+    # cycle: harness `Mismatch ... got 0`). Compute the next-sum once and both publish its
+    # quotient and store it.
+    next_sum = f"(sum + {din} - buffer[wr_ptr])"
+    # average = next_sum >> log2(N) = the high (SW-shift) bits, truncated to the output's
+    # declared width OW (a wider sum-quotient is masked to OW bits).
     quot_bits = SW - shift                       # == W
     take = min(OW, quot_bits)
-    avg_slice = f"sum[{shift + take - 1}:{shift}]"
+    avg_slice = f"sum_next[{shift + take - 1}:{shift}]"
     pad = "" if take >= OW else f"{{{OW - take}{{1'b0}}}}, "
     avg_expr = avg_slice if take >= OW else f"{{{pad}{avg_slice}}}"
     rst_test = f"!{rst_name}" if active_low else rst_name
@@ -617,6 +624,7 @@ def _try_moving_average(prompt: str, ins, outs, top) -> Optional[str]:
         f"    reg [{W-1}:0] buffer [0:{n-1}];\n"
         f"    reg [{ptr_w-1}:0] wr_ptr;\n"
         f"    reg [{SW-1}:0] sum;\n"
+        f"    wire [{SW-1}:0] sum_next = {next_sum};\n"
         f"    integer k;\n"
         f"    always @(posedge {clk[0]}) begin\n"
         f"        if ({rst_test}) begin\n"
@@ -625,8 +633,8 @@ def _try_moving_average(prompt: str, ins, outs, top) -> Optional[str]:
         f"            {dout} <= 0;\n"
         f"            for (k = 0; k < {n}; k = k + 1) buffer[k] <= 0;\n"
         f"        end else {guard}begin\n"
-        f"            {dout} <= {avg_expr};\n"  # OLD sum >> log2(N) -> 1-cycle latency
-        f"            sum <= sum + {din} - buffer[wr_ptr];\n"
+        f"            {dout} <= {avg_expr};\n"  # average INCLUDING the just-sampled input
+        f"            sum <= sum_next;\n"
         f"            buffer[wr_ptr] <= {din};\n"
         f"            wr_ptr <= wr_ptr + 1;\n"
         f"        end\n"
