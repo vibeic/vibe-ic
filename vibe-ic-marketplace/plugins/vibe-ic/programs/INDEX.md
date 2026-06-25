@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 795
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 795)
+- **Total programs (excluding helpers / shims):** 796
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 796)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 786 |
+| `any` | 787 |
 
 ## Alphabetical listing
 
@@ -217,6 +217,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `cvdp_serdes_decode_synth` | any | — | a DETERMINISTIC solver for two ATOMIC CVDP |
 | `cvdp_shift_counter_synth` | any | — | deterministic SOLVER for the CVDP barrel-shift / |
 | `cvdp_solve_pipeline` | any | — | the CVDP TIER-1→3 AUTHORING-GATE PIPELINE. |
+| `cvdp_sort_synth` | any | — | DETERMINISTIC solver for the CVDP bubble-sort engine family. |
 | `cvdp_spec_parse` | any | — | a GENERAL prose-port-block reader for the CVDP benchmark |
 | `cvdp_table_lut_synth` | any | — | a DETERMINISTIC solver for the CVDP TABLE-DRIVEN |
 | `cvdp_width_resolve` | any | — | SHARED parameterized-width reader for the CVDP layer. |
@@ -867,7 +868,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (786 programs)
+### `any` (787 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1057,6 +1058,7 @@ _(no programs in this group)_
 - `cvdp_serdes_decode_synth` — a DETERMINISTIC solver for two ATOMIC CVDP
 - `cvdp_shift_counter_synth` — deterministic SOLVER for the CVDP barrel-shift /
 - `cvdp_solve_pipeline` — the CVDP TIER-1→3 AUTHORING-GATE PIPELINE.
+- `cvdp_sort_synth` — DETERMINISTIC solver for the CVDP bubble-sort engine family.
 - `cvdp_spec_parse` — a GENERAL prose-port-block reader for the CVDP benchmark
 - `cvdp_table_lut_synth` — a DETERMINISTIC solver for the CVDP TABLE-DRIVEN
 - `cvdp_width_resolve` — SHARED parameterized-width reader for the CVDP layer.
