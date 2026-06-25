@@ -178,3 +178,32 @@ def test_new_kinds_are_non_blocking_prose_heuristic():
 def test_empty_doc_adds_no_facets():
     kinds = {it.kind for it in COV.extract_checklist("Add two numbers and output the sum.")}
     assert not (_NEW_KINDS & kinds)
+
+
+# ── general-engine structures wiring (assess_spec carries every facet) ──
+_FACET_KEYS = ("analog_interface", "test_debug", "otp",
+               "calibration", "signedness", "electrical")
+
+
+def test_general_engine_surfaces_all_facets():
+    import spec_complete_extract as SCE
+    doc = (
+        "Design `msc`. Ports: input wire [7:0] din, output reg [7:0] dout.\n"
+        "A 12-bit ADC with 8 channels samples the input. Vref = 2.5 V. analog input pin ain.\n"
+        "JTAG TAP (TMS,TCK,TDI,TDO), scan chain with scan_en, MBIST, test_mode pin.\n"
+        "32-bit OTP fuse bank with trim_code at offset 0x10; write-once lock bit.\n"
+        "8-bit cal_code register at 0x4; calibration step 1 measures reference.\n"
+        "input signed [15:0] coeff. Runs at 100 MHz, 1.8 V supply, 5 mA, slew rate 2 V/ns.\n")
+    st = SCE.assess_spec(doc, ["din", "coeff"], ["dout"], module_name="msc")["structures"]
+    for k in _FACET_KEYS:
+        assert k in st and len(st[k]) > 0, f"facet {k} not surfaced by assess_spec"
+
+
+def test_facets_additive_empty_on_plain_doc():
+    # a plain arithmetic doc yields every facet key present but EMPTY (§4.05: no
+    # facet fabricated where there is no structural anchor).
+    import spec_complete_extract as SCE
+    doc = "Design `add8`. input [7:0] a, input [7:0] b, output [8:0] y. y = a + b."
+    st = SCE.assess_spec(doc, ["a", "b"], ["y"], module_name="add8")["structures"]
+    for k in _FACET_KEYS:
+        assert st.get(k) == [], f"facet {k} fabricated on a plain doc: {st.get(k)}"
