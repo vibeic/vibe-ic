@@ -219,7 +219,7 @@ def test_toplevel_name_from_env():
 def test_galois_field_multiplier_solved_correctly_not_plain_mult():
     # GF multiply is NOT result=A*B. The registry's plain `*` would be a functional
     # LIE — so the bridge's special-algebra guard SKIPs the registry path, and the
-    # cvdp_gf_synth FAMILY solver now emits the CORRECT carry-less-multiply-then-
+    # gf_synth FAMILY solver now emits the CORRECT carry-less-multiply-then-
     # reduce datapath (parsed irreducible polynomial), NEVER a plain integer multiply.
     rtl = B.solve(_gf_record())
     assert rtl is not None

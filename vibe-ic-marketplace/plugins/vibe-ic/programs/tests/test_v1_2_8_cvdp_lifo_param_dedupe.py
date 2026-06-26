@@ -21,7 +21,7 @@ _PROG = Path(__file__).resolve().parents[1]
 if str(_PROG) not in sys.path:
     sys.path.insert(0, str(_PROG))
 
-import cvdp_memory_synth as M  # noqa: E402
+import memory_synth as M  # noqa: E402
 
 
 def _param_names(decls):

@@ -76,11 +76,11 @@ try:
 except Exception:                              # pragma: no cover
     _iface = None
 try:
-    import rtllm_arith_ext_synth as _arith_ext  # noqa: E402  iverilog-proven adder ext
+    import arith_ext_synth as _arith_ext  # noqa: E402  iverilog-proven adder ext
 except Exception:                              # pragma: no cover
     _arith_ext = None
 try:
-    import rtllm_general_synth as _general     # noqa: E402  §4.05-approved structural bank
+    import general_synth as _general     # noqa: E402  §4.05-approved structural bank
 except Exception:                              # pragma: no cover
     _general = None
 try:
@@ -104,7 +104,7 @@ TIER_FLOOR = 5     # golden fails its own testbench (cited evidence)
 #   RTLLM_DISABLE_ARITHEXT=1    : skip the iverilog-proven arithmetic extension
 #                                 (T2->T1) — baseline for STEP 4.
 #   RTLLM_DISABLE_GENERAL=1     : skip the §4.05-approved general structural bank
-#                                 (rtllm_general_synth) — T2->T1 for the standard
+#                                 (general_synth) — T2->T1 for the standard
 #                                 structures (comparator/subtractor/bcd/multiplier/
 #                                 divider/counters/shifters/detectors/pipe-adder).
 def _flag(name: str) -> bool:
@@ -406,7 +406,7 @@ def deterministic_emit(design_dir: str, top: Optional[str] = None
         except Exception:
             rtl = None
         if rtl:
-            return "rtllm_arith_ext", rtl
+            return "arith_ext", rtl
     # the §4.05-approved general structural bank — same prose+interface contract as
     # the arith ext, after it (narrower forms first) and before the registry. The
     # caller still iverilog-VERIFIES the emit against the testbench (tier1_emit_verified)
@@ -418,7 +418,7 @@ def deterministic_emit(design_dir: str, top: Optional[str] = None
         except Exception:
             rtl = None
         if rtl:
-            return "rtllm_general", rtl
+            return "general", rtl
     try:
         kind, rtl = _registry.generate(bridged, top)
     except Exception:
