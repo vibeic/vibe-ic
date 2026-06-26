@@ -1283,6 +1283,46 @@ def gate_record(rec: Dict, workdir: Path,
     # the dominant ELAB_ERROR shape — it kept the fence verbatim. MULTI-FILE
     # problems route through the splitter (one module per expected file).
     out_rec["completion"] = _emit_or_split(combined, expected_files)
+    # ORGANIC v1.2.45 — emit-side hang hint (RTL BYTE-EQUIVALENT: completion
+    # is unchanged; ONLY `out_rec["hang_predicted"]` / `hang_reason` /
+    # `hang_signatures` carry the tag). The scorer reads verdict-fields
+    # (category-verdict), NEVER `out_rec["hang_predicted"]` — i.e. THIS LAYER
+    # IS PURELY ADVISORY and CANNOT flip a pass to a fail (§4.05 no-leak).
+    #
+    # On a baseline sweep of 302 scored responses, 28 carry `predicted_hang=True`
+    # AND 17 of THOSE are on the score-final PASS list (combinational self-loop
+    # / forever-in-@* shapes that are LEGITIMATE in a context the heuristic
+    # doesn't see). The 6 file-named hang subjects in the run are NOT in this
+    # 28 set; they fail on ROOT-CAUSE shapes (wrong-data / timing / w-r-ptr)
+    # that the current heuristic does not catch — the metadata is therefore
+    # an ADVISORY SIGNAL for the next scoring layer to surface in its own
+    # audit, not a BLOCKING input here.
+    #
+    # STRICT §4.05 discipline: the tag is written TWICE (once on `entry` for
+    # the build-side audit trail, once on `out_rec` so the next scoring run
+    # can see it on the produced JSONL surface) but NEVER:
+    #   (a) wedged into the `completion` string (the score-verdict input)
+    #   (b) joined to a verdict-flipping clause in this same module
+    # Any future layer that wants to use the tag MUST come back with a tighter
+    # chip-AGNOSTIC detector and PROVE no-leak on the real benchmark.
+    # See cvdp_hang_detect.py for the heuristic set.
+    try:
+        from cvdp_hang_detect import predict_hang
+        _ph, _reason, _sigs = predict_hang(combined)
+        if _ph:
+            entry["hang_predicted"] = True
+            entry["hang_reason"] = _reason
+            entry["hang_signatures"] = _sigs
+            # ALSO write to out_rec so the next scoring run sees the tag on the
+            # JSONL surface — the TAG ITSELF does not flip verdict, but the
+            # next layer can AUDIT it without recompiling. Note: out_rec
+            # already carries `completion` (byte-identical to the score-verdict
+            # input); adding these keys is metadata-only, never mod-cell.
+            out_rec["hang_predicted"] = True
+            out_rec["hang_reason"] = _reason
+            out_rec["hang_signatures"] = _sigs
+    except Exception as _e:  # pragma: no cover — heuristics are advisory only
+        _ = _e                     # never let a hint crash the gate
     return True, out_rec, entry
 
 
