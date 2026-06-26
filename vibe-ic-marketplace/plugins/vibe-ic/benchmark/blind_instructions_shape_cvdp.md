@@ -57,3 +57,33 @@ re-run.
 
 Disk truth: progress is counted from the gate-written responses JSONL,
 never from your own tallies.
+
+## Model selection for blind authoring (cost policy)
+
+**DEFAULT to a cheaper model with LOW reasoning effort for the blind
+authoring pass; reserve Opus for hard triage only.**
+
+Rationale (run_v1239_converge cost lesson): the blind authoring pass is a
+large fan-out over many small, well-scoped, single-module problems whose
+spec is fully given in the prompt (+ `input.context`). The bulk of these
+are routine RTL the GATE verifies deterministically anyway (it ENFORCES
+`rtl_hygiene_lint --fix` + the icarus-13 parse/elaboration gate as the sole
+emit path), so the marginal pass@1 from spending a frontier model on every
+problem is small while the token cost is large. Spending Opus on the whole
+fan-out is the dominant, avoidable cost.
+
+Policy:
+
+* **Blind authoring fan-out → a CHEAPER model + LOW reasoning effort.**
+  Prefer **Haiku** (`claude-haiku-4-5-20251001`) for the routine bulk; step
+  up to **Sonnet** (`claude-sonnet-4-6`) for a problem the cheaper model
+  visibly struggles with (its own mini-TB fails, or the spec is dense).
+* **Reserve Opus** (`claude-opus-4-8`) for the **hard triage / close-loop**
+  step ONLY — the residual fails that need careful spec re-reading, FLOOR
+  proofs (§4.1), or §4.2 independent blind re-solves — not for the
+  first-pass author of every problem.
+* This is a **cost** policy, not a quality shortcut: the deterministic gate
+  is the same regardless of authoring model, so a cheaper author that
+  passes the gate emits an equally-valid scoring artifact. If a cheaper
+  model measurably depresses pass@1 on a given problem class, step that
+  class up — but the DEFAULT is cheap + low-effort.
