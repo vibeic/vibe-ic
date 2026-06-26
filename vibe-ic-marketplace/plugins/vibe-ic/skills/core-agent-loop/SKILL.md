@@ -1,6 +1,6 @@
 ---
 name: core-agent-loop
-description: Closed-loop core-agent that fixes plugin issues filed by the field-agent. Invoke as a cron prompt; the loop polls the repo for ANY OPEN non-PR issue (new OR reopened — no label gating, no comment classifier), reproduces and fixes the bug chip-AGNOSTIC-ally, SELF-VERIFIES (reproduce + run the cadence-correct plugin test suite the CI way), then SHIPS via the PR-METHOD — a VERSION-LESS verified bundle (candidate.patch + regression tests; the gatekeeper assigns ALL versions at merge) opened as ONE PR to vibeic/vibe-ic base main, gated by `gatekeeper_review.py --role core-agent --version-by-gatekeeper` (MERGE_OK) + Step-2.7, then gated squash self-merge — posts a 繁體中文 fix comment in the canonical 5-section shape (incl 本機驗證 evidence), then `gh issue close` + adds the `core-closed` label. CLOSED is the terminal state; the field-agent audits closed issues on the real benchmark and reopens any it finds inadequate.
+description: Closed-loop core-agent that fixes plugin issues filed by the field-agent. Invoke as a cron prompt; the loop polls the repo for ANY OPEN non-PR issue (new OR reopened — no label gating, no comment classifier), reproduces and fixes the bug chip-AGNOSTIC-ally, SELF-VERIFIES (reproduce + run the cadence-correct plugin test suite the CI way), then SHIPS by DIRECT PUSH (2026-06-26 owner directive — direct commit + `git push origin main`, no PR ceremony) gated by `gatekeeper_review.py --role core-agent` (MERGE_OK) + Step-2.7 + `gatekeeper_assign_version.py --write` (the pusher assigns the monotonic version pre-push) — posts a 繁體中文 fix comment in the canonical 5-section shape (incl 本機驗證 evidence), then `gh issue close` + adds the `core-closed` label. CLOSED is the terminal state; the field-agent audits closed issues on the real benchmark and reopens any it finds inadequate.
 ---
 
 
@@ -49,13 +49,15 @@ issue tracker; never poll or file issues against it. `poll.py` defaults to
 `vibeic/vibe-ic`.
 
 **Every tick performs TWO fresh checks (PRs FIRST, then issues):**
-1. **Open PRs** — `gh pr list --repo vibeic/vibe-ic --state open`. Any
-   non-draft open PR is auto-landed via the gatekeeper flow (cherry-pick onto
-   current main → `gatekeeper_review.py --version-by-gatekeeper` → Step-2.7
-   adversarial review → remediate every reproduced finding + pin a §4.05
-   regression test → `gatekeeper_assign_version.py --write` → enforced
-   re-gate → squash-merge). "Fix PR automatically" is a STANDING per-tick
-   action, not one-shot.
+1. **Open PRs** — `gh pr list --repo vibeic/vibe-ic --state open`. The
+   core-agent itself ships by DIRECT PUSH (Step 3), so it normally opens NO
+   PRs; but a PR filed from ELSEWHERE (an external contributor, or a legacy
+   in-flight branch) is still auto-landed via the gatekeeper flow (rebase onto
+   current main → `gatekeeper_review.py` MERGE_OK → Step-2.7 adversarial review
+   → remediate every reproduced finding + pin a §4.05 regression test →
+   `gatekeeper_assign_version.py --write` → enforced re-gate →
+   squash-merge). "Land/fix any open PR" is a STANDING per-tick action, not
+   one-shot.
 2. **Open issues** — `poll.py` (below).
 
 A tick may report idle ONLY after BOTH checks were actually run THIS tick —
@@ -331,93 +333,83 @@ not after the field agent reopens.
    > the gate's NAME-identifier grounding + the smoke-test's stay-clean /
    > stay-effective assertions — is what's pinned here.
 
-### Step 3 — ship via the PR-method (gatekeeper-gated)
+### Step 3 — ship by DIRECT PUSH (gatekeeper-gated)
 
-**BINDING (2026-06-17, owner directive — supersedes the old direct-push):** the
-core-agent does NOT `git push origin main` directly. It assembles ONE **verified
-bundle**, applies it in a worktree off `origin/main`, opens ONE **PR** to
-`vibeic/vibe-ic` base `main`, and lets the **gatekeeper machine** gate it. CLOSED
-issues are still the terminal state, but the fix LANDS only through the PR gate.
+**BINDING (2026-06-26, owner directive — STANDING preference; supersedes the
+2026-06-17 PR-method):** the core-agent ships by **direct commit + `git push
+origin main`** — NO `gh pr create`, NO PR branch, NO worktree-PR. Only the PR
+*ceremony* is dropped; **every quality GATE is retained.** Because ONE identity
+serializes its direct pushes to `main`, there is no two-in-flight collision, so
+the pusher assigns the monotonic version **pre-push** (no version-less bundle
+needed). CLOSED issues are still the terminal state.
 
-A **verified bundle** is exactly two things — **NO version bump** (owner directive
-2026-06-17: *"field dont need to have version to issue pr. all versions are given
-by gatekeeper"* — and the same applies to the core-agent's authoring PR):
-1. `candidate.patch` — the unified diff of the fix (chip-AGNOSTIC source change).
-2. the regression test(s) — `test_v<M>_<m>_<p>_*.py` covering the new path AND a
-   regression guard (≥1 per issue; multi-issue batches carry one per issue).
-   The `<M>_<m>_<p>` filename slug is just a label for the version the gatekeeper
-   is expected to assign next; it does NOT touch `plugin.json` /
-   `marketplace.json` — leave both version files UNCHANGED in the bundle.
+> **Doctrine history (so the flip-flop is legible):** direct-push through v1.1.5
+> → PR-method 2026-06-17 (to serialize concurrent authors via a gatekeeper merge
+> queue) → **direct-push again 2026-06-26 owner directive** — the gates are
+> retained in every era; only the landing *ceremony* changed.
 
-**Why version-less:** two PRs in flight that each self-bumped would COLLIDE (both
-pick `x.y.(z+1)`). Only the SERIALIZED **gatekeeper**, landing PRs one at a time
-onto an advancing `main`, can assign a strictly-monotonic version. The gatekeeper
-assigns it at merge (`gatekeeper_assign_version.py --write`) and owns the
-milestone-cadence decision (an `x.y.0` rollover → FULL suite).
+The gates that MUST be green before the push are unchanged from the PR era:
+1. `gatekeeper_review.py` → **MERGE_OK** is the AUTHORITATIVE machine gate of
+   record (run locally — it composes `source_chip_agnostic_check`,
+   `git_prohibition_guard`, `marketplace_version_sync_check`,
+   `version_bump_monotonic_check`, `agent_checkin_scope_guard --role core-agent`,
+   `plugin_full_audit`, the cadence-correct pytest, blindness/full-suite asserts).
+2. **Step-2.7** adversarial review on any guard/transform/extractor diff.
+3. `gatekeeper_assign_version.py --write` for the strictly-monotonic version bump
+   (one push = one version bump — honors `one-version-per-push`).
+
+A regression test (`test_v<M>_<m>_<p>_*.py`) covering the new path AND a
+regression guard is REQUIRED (≥1 per issue; multi-issue batches carry one per
+issue). The `<M>_<m>_<p>` slug should match the version you assign below.
 
 ```bash
-# VERSION SCHEME (the gatekeeper applies it, not the author): patch段 0..99;
-#   x.y.99 之後 = x.(y+1).0.  The author leaves plugin.json/marketplace.json AS-IS.
-# TEST CADENCE for the AUTHORING PR (version-less): TARGETED regression — the
-#   author cannot know the merge-time version, so runs the targeted floor; the
-#   gatekeeper re-runs the cadence-correct suite (FULL on an x.y.0 it assigns).
+# VERSION SCHEME: patch段 0..99; x.y.99 之後 = x.(y+1).0. The PUSHER assigns it
+#   pre-push now (serialized single identity — no collision). An x.y.0 rollover
+#   is a milestone → run the FULL suite (cadence-correct) before the push.
 
-# 1) Build the bundle in a worktree off origin/main (NEVER edit the live main
-#    checkout — a concurrent session's pull can wipe uncommitted tracked edits).
-git fetch origin
-WT=/home/reyerchu/vibe-ic-pr/<slug>
-git worktree add -b core-pr/<slug> "$WT" origin/main
-#    …make the fix + tests IN $WT (do NOT touch plugin.json / marketplace.json)…
-git -C "$WT" diff > "$WT/candidate.patch"     # the bundle artifact (record)
+# 0) Work on the MAIN checkout, but commit ONLY your own touched files by explicit
+#    path (concurrent-tree hazard: another session's pull/edit shares this tree).
+#    Re-poll (gh pr list / gh issue list) IMMEDIATELY before the push; if main
+#    moved, `git pull --rebase` (or --ff-only) FIRST. NEVER edit unrelated files.
+git fetch origin && git pull --ff-only origin main
+#    …make the fix + tests in the working tree…
 
-# 2) Run the MACHINE GATES locally with --version-by-gatekeeper so the version
-#    gate DEFERS (the bundle is version-less; the gatekeeper assigns at merge):
-( cd "$WT/vibe-ic-marketplace/plugins/vibe-ic" \
+# 1) Run the MACHINE GATES locally — version gate ENFORCED (this is a direct push,
+#    so the bump is real here, not deferred to a gatekeeper merge):
+( cd vibe-ic-marketplace/plugins/vibe-ic \
+  && python3 programs/gatekeeper_assign_version.py --write \
   && python3 programs/gatekeeper_review.py --base origin/main --head HEAD \
-       --role core-agent --version-by-gatekeeper --json /tmp/gk.json )
-#    -> MERGE_OK(0)/REQUEST_CHANGES(1)/REJECT(2). gatekeeper_review composes:
-#     source_chip_agnostic_check, git_prohibition_guard, marketplace_version_sync_check,
-#     version_bump_monotonic_check (DEFERRED — cur==prev under the flag),
-#     agent_checkin_scope_guard --role core-agent, plugin_full_audit, the
-#     cadence-correct pytest, blindness/full-suite asserts. Drive every red gate
-#    to green (MERGE_OK) before opening the PR.
+       --role core-agent --json /tmp/gk.json )
+#    -> MERGE_OK(0)/REQUEST_CHANGES(1)/REJECT(2). Drive every red gate to green
+#    (MERGE_OK) BEFORE the push. + run Step-2.7 on any guard/transform/extractor
+#    diff. (gatekeeper_assign_version.py --write bumps plugin.json + marketplace.json
+#    so version_bump_monotonic_check + marketplace_version_sync_check PASS.)
 
-# 3) Commit ONLY the files you touched (NEVER -A/--force/--no-verify) + push the
-#    BRANCH (not main). The commit subject carries NO version (gatekeeper assigns):
-git -C "$WT" add <specific files>
-git -C "$WT" commit -m "for #<num> — <one-line summary> (version by gatekeeper)"
-git -C "$WT" push -u origin core-pr/<slug>
+# 2) Commit ONLY the files you touched (NEVER -A/--force/--no-verify) — the fix +
+#    its tests + the two version files — then push DIRECTLY to main:
+git add <specific source files> <test files> \
+        vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin/plugin.json \
+        vibe-ic-marketplace/.claude-plugin/marketplace.json
+git commit -m "vX.Y.Z — for #<num> — <one-line summary>
 
-# 4) Open ONE PR to base main (gh fires the gatekeeper-ci pull_request workflow
-#    where Actions is enabled; the loop's gatekeeper_review is the gate of
-#    record regardless). NO version in the title:
-gh pr create --repo vibeic/vibe-ic --base main --head core-pr/<slug> \
-  --title "[core-agent] #<num> — <summary>" --body-file /tmp/pr_body.md
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
+git push origin main
 ```
 
-**Gatekeeper machine gates → ASSIGN version → merge.** The gatekeeper (single
-identity, post-v1.1.1 may author AND self-merge — quality is the GATE, not
-identity separation) (a) runs `gatekeeper_review.py --base origin/main --head
-<branch> --role core-agent --version-by-gatekeeper` (version gate deferred); on
-**MERGE_OK** + a clean **Step-2.7** adversarial pass it (b) **assigns the version**
-on the PR branch — `python3 programs/gatekeeper_assign_version.py --write` writes
-the next monotonic version into `plugin.json` + `marketplace.json`, commits it
-(`vX.Y.Z — assign version for #<num>`) — (c) **re-runs `gatekeeper_review.py`
-WITHOUT the flag** (now the monotonic+equality bump is fully ENFORCED, and the
-cadence-correct suite is required), then (d) **squash-merges** (one PR = one
-commit = one gatekeeper-assigned version bump): `gh pr merge <num> --squash
---delete-branch`. A red gate → `gh pr review <num> --request-changes` (繁中
-5-section) and the bundle is re-worked. NEVER `--admin`/`--force`/`--no-verify`;
-squash-only.
+**One identity authors, gates, and pushes** (post-v1.1.1 — quality is the GATE,
+not identity separation). The order is fixed: drive `gatekeeper_review.py` to
+**MERGE_OK** + a clean **Step-2.7** pass, assign the version
+(`gatekeeper_assign_version.py --write`), then `git push origin main`. A red gate
+is NOT pushed — fix it first. If the push is rejected because `main` advanced,
+`git pull --rebase origin main`, RE-RUN `gatekeeper_review.py` on the rebased tree
+(catches a semantic conflict a 3-way merge misses), and push again. NEVER
+`--admin`/`--force`/`--no-verify`/`--no-ff` bypass of a gate.
 
 > **Environment note (vibeic/vibe-ic, private free plan):** GitHub branch
 > protection is unavailable (Pro/public-only) and Actions may be disabled, so the
-> gatekeeper-ci required-check cannot be ENFORCED by GitHub today. The
-> `gatekeeper_review.py` verdict, run locally by the gatekeeper, is therefore the
-> AUTHORITATIVE machine gate; the merge is the gatekeeper's gated self-merge. When
-> the repo is made public / Pro, run `tools/setup_branch_protection.sh --confirm`
-> (after the gatekeeper-loop is live) to make the gate GitHub-enforced — see
-> `docs/GATEKEEPER_CUTOVER_RUNBOOK.md`.
+> `gatekeeper_review.py` verdict, run locally by the pusher BEFORE the push, is
+> the AUTHORITATIVE machine gate. The push to `main` is gated by that local
+> verdict, not by a GitHub required check.
 
 (Added a program? -> `programs/INDEX.md` via `tools/gen_programs_index.py`. Added a
 skill? -> `compliance.yaml` + `tests/test_compliance.py`. Touched the MCP server?
@@ -539,9 +531,10 @@ dispatch to track.
 Run /core-agent-loop against vibeic/vibe-ic.
 
 Each tick must (FRESH-CHECK both; PRs FIRST):
-0. gh pr list --repo vibeic/vibe-ic --state open  → for each non-draft open
-   PR, auto-land via the gatekeeper flow (cherry-pick onto current main →
-   gatekeeper_review.py --version-by-gatekeeper → Step-2.7 → remediate every
+0. gh pr list --repo vibeic/vibe-ic --state open  → the core-agent ships by
+   DIRECT PUSH so it opens no PRs of its own, but any PR filed from elsewhere
+   (external / legacy in-flight) is auto-landed via the gatekeeper flow (rebase
+   onto current main → gatekeeper_review.py MERGE_OK → Step-2.7 → remediate every
    reproduced finding + pin a §4.05 test → gatekeeper_assign_version.py --write
    → enforced re-gate → squash-merge). Never assert "no open PR" without
    running this THIS tick.
@@ -551,19 +544,17 @@ Each tick must (FRESH-CHECK both; PRs FIRST):
 3. If rc=1 → for each entry in `actionable[]`:
      a. Reproduce the bug from issue body + comments.
      b. Write a chip-AGNOSTIC fix + tests.
-     c. SHIP via the PR-METHOD (see SKILL.md §Step 3 — supersedes direct
-        push): assemble the VERSION-LESS verified bundle (candidate.patch +
-        regression tests; do NOT touch plugin.json / marketplace.json — the
-        gatekeeper assigns ALL versions), apply it in a worktree off
-        origin/main, run `gatekeeper_review.py --base origin/main --head HEAD
-        --role core-agent --version-by-gatekeeper` until MERGE_OK (the version
-        gate DEFERS), commit (`for #<num> <summary> (version by gatekeeper)`,
-        NO version in the subject, NO --force/--no-verify), push the BRANCH,
-        open ONE PR to vibeic/vibe-ic base main. As gatekeeper: on MERGE_OK +
-        clean Step-2.7, ASSIGN the version (`gatekeeper_assign_version.py
-        --write` → patch 0..99 / x.y.99 → x.(y+1).0), commit it, re-run
-        `gatekeeper_review.py` WITHOUT the flag (version bump now ENFORCED),
-        then self-merge (squash).
+     c. SHIP by DIRECT PUSH (see SKILL.md §Step 3 — 2026-06-26 owner
+        directive, supersedes the PR-method): on the MAIN checkout (re-poll +
+        `git pull --ff-only` first; commit ONLY your own touched files by
+        explicit path), ASSIGN the version (`gatekeeper_assign_version.py
+        --write` → patch 0..99 / x.y.99 → x.(y+1).0, bumps plugin.json +
+        marketplace.json), run `gatekeeper_review.py --base origin/main --head
+        HEAD --role core-agent` until MERGE_OK (version bump ENFORCED), run
+        Step-2.7 on any guard/transform/extractor diff, commit (`vX.Y.Z — for
+        #<num> <summary>`, NO --force/--no-verify), then `git push origin main`.
+        If the push is rejected because main advanced: `git pull --rebase`,
+        RE-RUN gatekeeper_review.py on the rebased tree, push again.
      d. Self-verify: FIRST execute the issue's `## 驗收` commands
         VERBATIM on the named defect artifact / reproduced fixture
         and capture the END-STATE output, THEN confirm the original
@@ -618,9 +609,10 @@ programmable; only Step 2 fix-authoring is genuine LLM judgment):
 - Terminology guard (prohibition 6): `programs/field_agent_terminology_scan.py`
 - Version equality: `programs/marketplace_version_sync_check.py`
 - Version strict-monotonic bump: `programs/version_bump_monotonic_check.py`
-- PR machine gate (`--version-by-gatekeeper` DEFERS the version gate for a
-  version-less authoring PR): `programs/gatekeeper_review.py`
-- Gatekeeper version assignment at merge (next monotonic version →
-  plugin.json + marketplace.json): `programs/gatekeeper_assign_version.py`
+- Authoritative machine gate (run locally → MERGE_OK before the direct push;
+  `--version-by-gatekeeper` is the legacy flag that DEFERS the version gate for
+  an externally-filed version-less PR): `programs/gatekeeper_review.py`
+- Version assignment (next monotonic version → plugin.json + marketplace.json;
+  the pusher runs `--write` pre-push): `programs/gatekeeper_assign_version.py`
 - Full-suite (not subset) pytest run: `programs/full_suite_run_check.py`
 - Field-agent counterpart: `vibe-ic:field-agent-loop`

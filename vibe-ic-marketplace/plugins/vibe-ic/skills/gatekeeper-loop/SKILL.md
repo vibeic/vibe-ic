@@ -1,6 +1,6 @@
 ---
 name: gatekeeper-loop
-description: Infinite-loop single gatekeeper agent that OWNS main and is the SOLE merger of PRs. Invoke as a cron prompt; each tick polls open non-draft PRs against main (poll_prs.py), runs the MACHINE gates (gatekeeper_review.py — required status checks, cadence-aware) on base=origin/main head=PR-branch, and on green runs the ONE irreducible agent gate (Step-2.7 adversarial review). Machine-red OR a reproducible HIGH agent finding -> `gh pr review --request-changes` with a 繁中 5-section comment; otherwise the PR ENQUEUES to a SERIALIZED merge queue guarded by a repo-level .merge.lock — rebase onto current origin/main, RE-RUN required checks on the rebased tree (catches semantic conflicts a 3-way merge misses), ASSIGN the version (authoring PRs are VERSION-LESS — the gatekeeper alone assigns the next strictly-monotonic version at merge via gatekeeper_assign_version.py, so two in-flight PRs can't collide; then re-run the checks WITHOUT --version-by-gatekeeper to ENFORCE the bump + cadence-correct suite), squash-merge (one PR = one squash commit = one gatekeeper-assigned version bump, honoring one-version-per-push), release lock, next. The gatekeeper MAY be the same identity as the PR author and MAY merge its own authored PRs — quality is guaranteed by the GATES (machine required checks + Step-2.7 + the serialized re-test-on-rebase merge queue), not by identity separation. Hard rules: NEVER force/--no-verify/--admin/bypass branch-protection, squash-only, and a documented break-glass path exists so a PR that FIXES a wedged gate cannot deadlock the queue. STOP CONDITION = healthy idle when no open PR; never self-terminate.
+description: Infinite-loop single gatekeeper agent that OWNS main. Under the 2026-06-26 owner directive (direct-push, supersedes the 2026-06-17 PR-method) the maintainer ships its OWN fixes by direct commit + `git push origin main` with this same gate sequence applied PRE-PUSH (gatekeeper_review MERGE_OK → Step-2.7 → gatekeeper_assign_version --write → push); the PR-merge-queue machinery here is RETAINED for any externally-filed PR and the gatekeeper is the SOLE merger of those. Invoke as a cron prompt; each tick polls open non-draft PRs against main (poll_prs.py), runs the MACHINE gates (gatekeeper_review.py — required status checks, cadence-aware) on base=origin/main head=PR-branch, and on green runs the ONE irreducible agent gate (Step-2.7 adversarial review). Machine-red OR a reproducible HIGH agent finding -> `gh pr review --request-changes` with a 繁中 5-section comment; otherwise the PR ENQUEUES to a SERIALIZED merge queue guarded by a repo-level .merge.lock — rebase onto current origin/main, RE-RUN required checks on the rebased tree (catches semantic conflicts a 3-way merge misses), ASSIGN the version (authoring PRs are VERSION-LESS — the gatekeeper alone assigns the next strictly-monotonic version at merge via gatekeeper_assign_version.py, so two in-flight PRs can't collide; then re-run the checks WITHOUT --version-by-gatekeeper to ENFORCE the bump + cadence-correct suite), squash-merge (one PR = one squash commit = one gatekeeper-assigned version bump, honoring one-version-per-push), release lock, next. The gatekeeper MAY be the same identity as the PR author and MAY merge its own authored PRs — quality is guaranteed by the GATES (machine required checks + Step-2.7 + the serialized re-test-on-rebase merge queue), not by identity separation. Hard rules: NEVER force/--no-verify/--admin/bypass branch-protection, squash-only, and a documented break-glass path exists so a PR that FIXES a wedged gate cannot deadlock the queue. STOP CONDITION = healthy idle when no open PR; never self-terminate.
 ---
 
 
@@ -18,11 +18,27 @@ description: Infinite-loop single gatekeeper agent that OWNS main and is the SOL
 
 ## Purpose
 
+> **DOCTRINE NOTE (2026-06-26 owner directive — STANDING preference; supersedes
+> the 2026-06-17 PR-method).** The maintainer now ships its OWN fixes by **direct
+> push** to `main` (direct commit + `git push origin main`, NO `gh pr create` —
+> see `vibe-ic:core-agent-loop` §Step 3). The gatekeeper's **gate SEQUENCE is
+> unchanged and still authoritative** — it is just applied PRE-PUSH on the main
+> checkout (drive `gatekeeper_review.py` to MERGE_OK → Step-2.7 on any
+> guard/transform diff → `gatekeeper_assign_version.py --write` → `git push`)
+> instead of on a PR branch. The **PR-merge-queue machinery in this skill is
+> RETAINED** for any PR filed from ELSEWHERE (an external contributor, or a legacy
+> in-flight branch): such a PR is still gated + version-assigned + squash-merged
+> exactly as below. Doctrine history (so the flip-flop is legible): direct-push
+> through v1.1.5 → PR-method 2026-06-17 → direct-push again 2026-06-26; the gates
+> are retained in every era, only the landing ceremony changed.
+
 The gatekeeper is the **review-gate-and-merge** half of the Vibe-IC
 contribution model. Where `core-agent-loop` is an issue-**fix** loop
 (poll open issues → ship a fix → close), the gatekeeper is a PR-**merge**
-loop (poll open PRs → gate them → squash-merge the green ones). It is the
-**single agent that owns `main`** and the **sole party allowed to merge**.
+loop (poll open PRs → gate them → squash-merge the green ones) for any
+EXTERNALLY-filed PR, AND the pre-push gate authority for the maintainer's
+own direct-push fixes. It is the **single agent that owns `main`** and the
+**sole party allowed to merge** an external PR.
 Centralising the merge authority in one looped identity is what makes the
 contribution model trustworthy: every PR — including one the gatekeeper
 authored itself — passes through the SAME machine gates, the SAME one

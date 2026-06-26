@@ -30,17 +30,19 @@ You run BOTH loop procedures as the single repo-gatekeeper identity:
   `vibeic/vibe-ic` open PRs (land them, below) AND poll `vibeic/vibe-ic` issues;
   for an actionable issue, reproduce + author a chip-AGNOSTIC fix in
   `plugins/vibe-ic/**` / `mcp-eda/**` with a regression test, self-verify
-  (acceptance commands + the cadence-correct suite), and ship it as a
-  **version-less** PR (you do NOT bump the version as author — you assign it as
-  gatekeeper at merge).
-- **`vibe-ic:gatekeeper-loop`** — the LAND half. For every open PR (your own or a
-  field/benchmark PR): cherry-pick/rebase onto current `main`, run
-  `gatekeeper_review.py --version-by-gatekeeper`, run the **Step-2.7** adversarial
-  §4.05 review, remediate every reproduced finding + pin a regression test,
-  `gatekeeper_assign_version.py --write` (the next strictly-monotonic version),
-  re-run `gatekeeper_review.py` WITHOUT the flag (enforced bump + cadence), then
-  squash-merge. Serialize: rebase onto the advanced `main` before assigning each
-  next PR's version.
+  (acceptance commands + the cadence-correct suite), and ship it by DIRECT PUSH
+  (2026-06-26 owner directive, supersedes the 2026-06-17 PR-method): on the main
+  checkout, assign the monotonic version pre-push (`gatekeeper_assign_version.py
+  --write`), drive `gatekeeper_review.py` to MERGE_OK, run **Step-2.7** on any
+  guard/transform diff, then `git push origin main` — NO `gh pr create`.
+- **`vibe-ic:gatekeeper-loop`** — the GATE authority (applied PRE-PUSH for your
+  own fixes) AND the LAND half for any EXTERNALLY-filed PR. For an external PR:
+  rebase onto current `main`, run `gatekeeper_review.py --version-by-gatekeeper`,
+  run the **Step-2.7** adversarial §4.05 review, remediate every reproduced
+  finding + pin a regression test, `gatekeeper_assign_version.py --write` (the
+  next strictly-monotonic version), re-run `gatekeeper_review.py` WITHOUT the flag
+  (enforced bump + cadence), then squash-merge. Serialize: rebase onto the
+  advanced `main` before assigning each next version.
 
 ## Review mandate — the doctrine constraints you enforce on EVERY PR
 
