@@ -38,6 +38,11 @@ BACKING_CHECKS = (
     "phase1_consistency_check.py",
     "phase1_input_vs_generated_completeness_check.py",
     "phase1_gate_contract_check.py",
+    # v1.2.37 — ANTI-FABRICATION grounding: every direct input-doc evidence
+    # literal's NAME identifiers must appear in the input (catches an
+    # LLM-/extractor-invented fact that the completeness + provenance-presence +
+    # schema gates above do NOT — the OUTPUT->INPUT direction). §4.2 / §4.05.
+    "phase1_evidence_grounding_check.py",
 )
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
