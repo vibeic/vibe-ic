@@ -36178,6 +36178,15 @@ def gen_l8_timing_waveform(project: Path,
         r"response[_ -]?time)",
         re.IGNORECASE,
     )
+    # v1.2.37 — a GENUINE wake-context keyword. The broad arms above
+    # (`pulse width` / `pulse low` / `response time`) are GENERIC timing-table
+    # vocabulary that fires on an unrelated parameter (a UART `tMR Master Reset
+    # Pulse Width 5000 ns` was mislabeled as a wake-pulse "vendor measurement"
+    # and given input-doc provenance for a spec with ZERO wake concept — the
+    # phase1_evidence_grounding_check finding). The generic arms are only
+    # trustworthy on a measurement-HINT file (a PPTX scope-shot where the `wake`
+    # label is lost); on any other doc REQUIRE a genuine wake keyword. §4.05.
+    _RE_WAKE_GENUINE = re.compile(r"(?:wake|wkp|脈衝|脈寬)", re.IGNORECASE)
     _RE_WAKE_PROX_VALUE = re.compile(
         r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>(?:µ|u)s|ns|ms)\b",
         re.IGNORECASE,
@@ -36190,6 +36199,7 @@ def gen_l8_timing_waveform(project: Path,
     _wake_pulse_us: Optional[float] = None
     _wake_pulse_evidence: Optional[str] = None
     _wake_pulse_strategy: Optional[str] = None
+    _wake_pulse_literal: Optional[str] = None   # the VERBATIM source quote (§4.05)
     for fname, text in extracted.items():
         if not text:
             continue
@@ -36213,6 +36223,7 @@ def gen_l8_timing_waveform(project: Path,
         _wake_pulse_us = v_us
         _wake_pulse_evidence = f"input/docs/{fname}"
         _wake_pulse_strategy = "doc_wake_pulse_measurement_literal"
+        _wake_pulse_literal = m.group(0).strip()
         break
 
     # v1.6.201 (#84 item 2) — proximity-fallback. Triggered ONLY
@@ -36228,8 +36239,15 @@ def gen_l8_timing_waveform(project: Path,
         for fname, text in _ranked_docs:
             if not text:
                 continue
+            _is_measurement_doc = bool(_MEASUREMENT_FILENAME_HINT.search(fname))
             for line in text.splitlines():
-                if not _RE_WAKE_PROX_KEYWORD.search(line):
+                # genuine wake keyword fires on any doc; the GENERIC arms
+                # (pulse-width / response-time) only on a measurement-hint file —
+                # else a protocol datasheet's unrelated timing parameter (UART
+                # `Master Reset Pulse Width`) is NOT mistaken for a wake pulse.
+                if not (_RE_WAKE_GENUINE.search(line)
+                        or (_is_measurement_doc
+                            and _RE_WAKE_PROX_KEYWORD.search(line))):
                     continue
                 m = _RE_WAKE_PROX_VALUE.search(line)
                 if not m:
@@ -36251,13 +36269,18 @@ def gen_l8_timing_waveform(project: Path,
                 _wake_pulse_evidence = f"input/docs/{fname}"
                 _wake_pulse_strategy = (
                     "doc_wake_pulse_proximity_fallback")
+                _wake_pulse_literal = line.strip()
                 break
             if _wake_pulse_us is not None:
                 break
 
     if _wake_pulse_us is not None:
+        # §4.05: the evidence literal is the VERBATIM source quote the value came
+        # from (so phase1_evidence_grounding_check can confirm it against the
+        # input), NOT a synthesised "wake_pulse measurement N us" string whose
+        # `wake_pulse` token need not appear in the spec.
         evidence.setdefault(_wake_pulse_evidence, []).append({
-            "literal": f"wake_pulse measurement {_wake_pulse_us} us",
+            "literal": _wake_pulse_literal or f"wake_pulse measurement {_wake_pulse_us} us",
             "label": "wake-pulse LOW width (vendor measurement)",
         })
 
