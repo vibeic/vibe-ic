@@ -1,4 +1,4 @@
-"""Tests for rtllm_tier_pipeline.py + rtllm_iface_recover.py + rtllm_arith_ext_synth.py
+"""Tests for rtllm_tier_pipeline.py + rtllm_iface_recover.py + arith_ext_synth.py
 — the RTLLM 5-tier converge pipeline (mirror of cvdp_solve_pipeline / the
 VerilogEval tier pipelines).
 
@@ -25,7 +25,7 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import rtllm_tier_pipeline as P            # noqa: E402
 import rtllm_iface_recover as R            # noqa: E402
-import rtllm_arith_ext_synth as AX         # noqa: E402
+import arith_ext_synth as AX         # noqa: E402
 import port_parser as PP                   # noqa: E402
 import rtllm_port_bridge as BR             # noqa: E402
 
@@ -161,7 +161,7 @@ def test_recover_range_is_authoritative_over_prose_token():
 
 
 # --------------------------------------------------------------------------- #
-# rtllm_arith_ext_synth — POSITIVE + §4.05 NEGATIVES
+# arith_ext_synth — POSITIVE + §4.05 NEGATIVES
 # --------------------------------------------------------------------------- #
 def _adder_prompt():
     return ("Implement an 8-bit adder with multiple bit-level adders.\n"

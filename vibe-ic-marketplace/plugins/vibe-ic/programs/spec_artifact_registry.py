@@ -470,6 +470,82 @@ def generate(text: str, top: str = "TopModule") -> Tuple[Optional[str], Optional
     return None, None
 
 
+# --------------------------------------------------------------------------- #
+# Record-level operation solvers — the UNIFIED dispatch.
+#
+# These operation-named solvers (gf / bcd / crc / hamming / encoder / memory /
+# shift_counter / …) take a full benchmark RECORD and do their OWN interface
+# extraction (via the record-adapter helpers in `cvdp_atomic_bridge`, which is the
+# thin record→ports adapter, NOT a dispatcher). They program-SOLVE special-algebra
+# / structural datapaths the text-level REGISTRY above SKIPs. They run FIRST (their
+# declared order is the precedence — first non-None wins), then `generate()` is the
+# text-level fall-through. This is the SINGLE deterministic-solver dispatch: the
+# bridge is now a thin driver that calls ONLY `generate_from_record()`.
+#
+# DEFERRED import (the solvers `import cvdp_atomic_bridge` for the record-adapter
+# helpers; importing them at registry module-load time, while the bridge is still
+# importing the registry's own helpers, would race a half-initialized module). The
+# load runs lazily on the first `generate_from_record()` call, by which time every
+# module is fully defined — GENERAL for every present + future record solver.
+_RECORD_SOLVER_NAMES = (
+    "gf_synth", "bcd_synth", "crc_synth",
+    "conv_encoder_synth", "sort_synth", "dice_roller_synth",
+    "firstbit_synth", "fibonacci_synth",
+    "encoder_synth", "graycode_parity_synth",
+    "shift_counter_synth", "compose_synth", "hamming_synth",
+    "mux_compare_synth", "accumulate_synth", "memory_synth",
+    "arith_variants_synth", "table_lut_synth", "saturate_synth",
+    "bitmanip_synth", "serdes_decode_synth", "modify_complete_synth",
+)
+_RECORD_SOLVERS: List = []
+_RECORD_SOLVER_IMPORT_ERRORS: List[Tuple[str, str]] = []
+
+
+def _load_record_solvers() -> List:
+    """Import the record solvers in `_RECORD_SOLVER_NAMES` order (declared
+    precedence) and populate `_RECORD_SOLVERS`. Idempotent. A solver missing a
+    callable `solve` is skipped (recorded in `_RECORD_SOLVER_IMPORT_ERRORS`)."""
+    if _RECORD_SOLVERS:
+        return _RECORD_SOLVERS
+    _RECORD_SOLVER_IMPORT_ERRORS.clear()
+    for _name in _RECORD_SOLVER_NAMES:
+        try:
+            _mod = __import__(_name)
+        except Exception as _e:               # absent / broken solver — record, skip
+            _RECORD_SOLVER_IMPORT_ERRORS.append((_name, repr(_e)))
+            continue
+        if not callable(getattr(_mod, "solve", None)):
+            _RECORD_SOLVER_IMPORT_ERRORS.append((_name, "no callable solve()"))
+            continue
+        _RECORD_SOLVERS.append(_mod)
+    return _RECORD_SOLVERS
+
+
+def generate_from_record(record: dict, text_fallthrough=None) -> Optional[str]:
+    """The UNIFIED deterministic-solver dispatch for a benchmark RECORD.
+    Runs every record-level operation solver in declared precedence (first
+    non-None wins); returns its RTL, or None. The text-level `generate()`
+    fall-through is the caller's responsibility (the bridge supplies the
+    record→ports adaptation it needs first), passed as `text_fallthrough` —
+    a `() -> Optional[str]` thunk — and invoked only when no record solver fires."""
+    import copy as _copy
+    if not isinstance(record, dict):
+        return None
+    for _solver in _load_record_solvers():
+        try:
+            _rtl = _solver.solve(_copy.deepcopy(record))
+        except Exception:
+            _rtl = None
+        if _rtl:
+            return _rtl
+    if text_fallthrough is not None:
+        try:
+            return text_fallthrough()
+        except Exception:
+            return None
+    return None
+
+
 def main(argv=None) -> int:
     import argparse
     import json
