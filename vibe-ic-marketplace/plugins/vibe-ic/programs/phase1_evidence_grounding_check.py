@@ -99,16 +99,24 @@ def _idents(s: str) -> set:
 
 def _input_haystack(project: Path) -> Optional[str]:
     """Normalised union of the project's input-doc text, or None if no input text
-    is discoverable (then the gate silent-skips — chip-AGNOSTIC, no false alert)."""
+    is discoverable (then the gate silent-skips — chip-AGNOSTIC, no false alert).
+
+    Reads every TEXT-BEARING input doc, RECURSIVELY — `.txt` (extracted vendor-PDF
+    text), `.md` (markdown spec / README), `.rst` (Sphinx docs), `.adoc`
+    (AsciiDoc). Two real gaps this closes (cv32e40p_p3): the docs were `.rst`, and
+    they sat in a NESTED `input/docs/source/` subdir — reading only top-level
+    `.txt` made the haystack empty and false-failed every fact."""
+    _TEXT_EXT = (".txt", ".md", ".markdown", ".rst", ".adoc", ".asciidoc", ".text")
     texts: List[str] = []
     for sub in (project / "input" / "docs", project / "phase1" / "input_doc",
                 project / "input_doc"):
         if sub.is_dir():
-            for f in sorted(sub.glob("*.txt")):
-                try:
-                    texts.append(f.read_text(errors="ignore"))
-                except Exception:
-                    pass
+            for f in sorted(sub.rglob("*")):
+                if f.is_file() and f.suffix.lower() in _TEXT_EXT:
+                    try:
+                        texts.append(f.read_text(errors="ignore"))
+                    except Exception:
+                        pass
     if not texts:
         return None
     return _norm("\n".join(texts))
