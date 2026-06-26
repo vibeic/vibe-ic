@@ -364,6 +364,41 @@ def _image_pullable(image: str, runner=None) -> Optional[bool]:
         return None
 
 
+# ── ORGANIC (run_v1239_converge) — DETERMINISTIC sim-hang watchdog env ──────
+# A handful of CVDP problems HANG inside cocotb with no watchdog (a non-advancing
+# sim never returns), so a scoring run STALLS until a human `docker kill`s the
+# container. The official harness ALREADY honours DOCKER_TIMEOUT / TASK_TIMEOUT
+# (read from os.environ via its ConfigManager, defaults 600s / 300s); the gap is
+# that our scoring DRIVER did not pin them, so the kill was manual.
+#
+# This is a ROBUSTNESS / reproducibility fix, NOT a score lever: the watchdog
+# only AUTOMATES the kill of an already-doomed hung sim. A hung DUT is a genuine
+# bug and still scores as a FAIL — the timeout merely makes that FAIL
+# deterministic and unattended. The values are set GENEROUSLY (the harness's own
+# defaults, ≈ the manual ~8-min kill threshold) so the watchdog changes ZERO
+# existing pass/fail verdicts — a passing sim finishes in well under the budget.
+#
+# chip-AGNOSTIC: pure scoring-infrastructure env; no design / vendor knowledge.
+_SCORING_WATCHDOG_ENV: Dict[str, str] = {
+    # per-container hard cap (the official ConfigManager default is 600).
+    "DOCKER_TIMEOUT": "600",
+    # per-task (cocotb test) cap (the official default is 300); a sim that has
+    # not advanced in 300s is hung — a generous budget vs the seconds a real
+    # functional test takes.
+    "TASK_TIMEOUT": "300",
+}
+
+
+def recommended_scoring_env() -> Dict[str, str]:
+    """The deterministic-watchdog environment a CVDP scoring driver SHOULD export
+    before invoking the official `run_benchmark.py`, so a hung cocotb sim becomes
+    an UNATTENDED timeout-FAIL instead of a manual `docker kill` stall. Returns a
+    fresh dict (caller may merge into os.environ / a shell export block). The
+    values are the harness's own generous defaults, chosen to be verdict-neutral:
+    they only bound a non-advancing sim, never a passing one."""
+    return dict(_SCORING_WATCHDOG_ENV)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="CVDP scoring-image preflight (#536 sim-image tool-spec "
@@ -378,7 +413,19 @@ def main(argv=None) -> int:
                          "compose under --problem-dir that lacks one (fixes the "
                          "read-only-build-dir false-FAIL); requires --problem-dir")
     ap.add_argument("--json", default=None, help="write JSON verdict here")
+    ap.add_argument("--print-scoring-env", action="store_true",
+                    help="print the deterministic sim-hang watchdog env "
+                         "(DOCKER_TIMEOUT/TASK_TIMEOUT) as `export K=V` lines a "
+                         "scoring driver can `eval`/source before run_benchmark.py "
+                         "— so a hung cocotb sim is an unattended timeout-FAIL "
+                         "instead of a manual docker-kill stall (verdict-neutral)")
     args = ap.parse_args(argv)
+
+    # The watchdog-env emit is a standalone utility (no image/problem-dir needed).
+    if args.print_scoring_env:
+        for k, v in recommended_scoring_env().items():
+            print(f"export {k}={v}")
+        return 0
 
     if not args.image and not args.problem_dir:
         print("ERROR: pass --image and/or --problem-dir", file=sys.stderr)
