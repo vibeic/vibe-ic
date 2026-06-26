@@ -308,6 +308,29 @@ not after the field agent reopens.
    `from <shared_tokens> import …` over re-typing a regex, and pin
    the emitter's current format in the checker's tests.
 
+4. **A Phase-1 doc-extraction fix must keep the ANTI-FABRICATION grounding
+   gate green (§4.05, OUTPUT→INPUT).** The Phase-1 gates verify COMPLETENESS
+   (`extraction_coverage_check`, INPUT→OUTPUT — did we drop an input fact) and
+   PROVENANCE PRESENCE + SCHEMA, but the load-bearing anti-fabrication direction
+   is `phase1_evidence_grounding_check.py`: every direct input-doc evidence
+   `literal`'s NAME identifiers must appear in the input, so an
+   LLM-/extractor-INVENTED fact (a hallucinated port / register / opcode) is
+   caught. Any fix that touches doc extraction or L-doc emission MUST run it on
+   the affected project (it is also composed into `phase1_verify_aggregate`), and
+   MUST keep an emitted evidence `literal` a VERBATIM source quote — never a
+   synthesised string whose token need not be in the spec (the `wake_pulse` leak).
+   This is **program-first wired into the loop**: `test_v1_2_39_grounding_loop_smoke`
+   runs the gate on the committed `synthetic_benchmark_phase1` fixtures (stay-clean)
+   AND on a fabricated fixture (stay-effective) inside the suite that
+   `gatekeeper_review.py` -> `full_suite_run_check` runs every iteration — so a
+   change that makes the extractor fabricate, OR that weakens the gate, fails the
+   loop's own gate before merge.
+
+   > **why_not_bucket_a:** whether a literal is a faithful quote vs a
+   > synthesised description is a reading judgment; the deterministic residue —
+   > the gate's NAME-identifier grounding + the smoke-test's stay-clean /
+   > stay-effective assertions — is what's pinned here.
+
 ### Step 3 — ship via the PR-method (gatekeeper-gated)
 
 **BINDING (2026-06-17, owner directive — supersedes the old direct-push):** the
