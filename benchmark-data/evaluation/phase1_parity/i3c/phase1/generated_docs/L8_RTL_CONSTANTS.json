@@ -86,7 +86,7 @@
   "extraction_evidence": {
     "input/docs/I3C_Spec.pdf": [
       {
-        "literal": "wake_pulse measurement 50.0 us",
+        "literal": "1020   request is repeated 50us later, i.e., after the Slave re-awakens). As a result, the Slave shall wake up either",
         "label": "wake-pulse LOW width (vendor measurement)"
       },
       {

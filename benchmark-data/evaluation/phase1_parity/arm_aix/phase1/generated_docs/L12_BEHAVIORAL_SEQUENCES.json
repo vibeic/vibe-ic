@@ -13,17 +13,6 @@
       }
     ]
   },
-  "locked_access_sequence_AXI3_only": [
-    "1. Master ensures no other outstanding transactions before starting.",
-    "2. Master asserts AxLOCK = Locked at start of locked sequence.",
-    "3. Interconnect arbitrates exclusively for the master until LOCK released.",
-    "4. Master clears AxLOCK after the locked transaction sequence completes."
-  ],
-  "early_response_rules": {
-    "early_read_response": "Intermediate can respond with locally-cached read data when consistent.",
-    "early_write_response": "Intermediate can send early B-response for Bufferable writes with no downstream observers."
-  },
-  "byte_invariance_sequence": "Big-endian and little-endian elements can coexist in one memory; any byte transfer to address X always references the same physical byte regardless of the bus data width or the producer's byte order.",
   "typical_write_sequence_AXI4": [
     "1. Master drives AWID, AWADDR, AWLEN, AWSIZE, AWBURST, AWLOCK, AWCACHE, AWPROT.",
     "2. Master asserts AWVALID; slave asserts AWREADY when ready.",
@@ -31,6 +20,19 @@
     "4. Slave asserts WREADY; transfer completes per beat.",
     "5. Slave drives BID, BRESP; asserts BVALID.",
     "6. Master asserts BREADY to acknowledge write response."
+  ],
+  "byte_invariance_sequence": "Big-endian and little-endian elements can coexist in one memory; any byte transfer to address X always references the same physical byte regardless of the bus data width or the producer's byte order.",
+  "locked_access_sequence_AXI3_only": [
+    "1. Master ensures no other outstanding transactions before starting.",
+    "2. Master asserts AxLOCK = Locked at start of locked sequence.",
+    "3. Interconnect arbitrates exclusively for the master until LOCK released.",
+    "4. Master clears AxLOCK after the locked transaction sequence completes."
+  ],
+  "typical_read_sequence_AXI4": [
+    "1. Master drives ARID, ARADDR, ARLEN, ARSIZE, ARBURST, ARLOCK, ARCACHE, ARPROT.",
+    "2. Master asserts ARVALID; slave asserts ARREADY when ready.",
+    "3. Slave drives RID, RDATA, RRESP per beat; asserts RLAST on final beat.",
+    "4. Master asserts RREADY each beat; transfer completes per beat."
   ],
   "ordering_rules_summary": {
     "same_master_same_ID_same_location": "Strictly ordered (W1 before W2; W1 before R1).",
@@ -43,13 +45,10 @@
     "write_after_read_same_ID": "Write after read on the same ID must be observed in issue order.",
     "read_after_write_same_ID": "Read after write on the same ID must be observed in issue order."
   },
-  "typical_read_sequence_AXI4": [
-    "1. Master drives ARID, ARADDR, ARLEN, ARSIZE, ARBURST, ARLOCK, ARCACHE, ARPROT.",
-    "2. Master asserts ARVALID; slave asserts ARREADY when ready.",
-    "3. Slave drives RID, RDATA, RRESP per beat; asserts RLAST on final beat.",
-    "4. Master asserts RREADY each beat; transfer completes per beat."
-  ],
-  "narrow_transfer_sequence": "When transfer width is narrower than data bus, the address+size determine which byte lanes carry valid data per beat; unused lanes are don't-care (write) or ignored (read).",
+  "early_response_rules": {
+    "early_read_response": "Intermediate can respond with locally-cached read data when consistent.",
+    "early_write_response": "Intermediate can send early B-response for Bufferable writes with no downstream observers."
+  },
   "exclusive_read_modify_write_sequence": [
     "1. Master issues exclusive read: ARLOCK = Exclusive at address X with ARID=I.",
     "2. Slave returns RDATA with RRESP = EXOKAY (exclusive monitor set).",
@@ -57,6 +56,7 @@
     "4. Master issues exclusive write: AWLOCK = Exclusive at same address X with AWID=I.",
     "5. Slave returns BRESP = EXOKAY (write succeeded) or OKAY (monitor lost; retry)."
   ],
+  "narrow_transfer_sequence": "When transfer width is narrower than data bus, the address+size determine which byte lanes carry valid data per beat; unused lanes are don't-care (write) or ignored (read).",
   "extraction_strategy": {
     "l12_behavioral_sequences_v0_1_73": "R43: overlaid 8 L12 sequences"
   },
