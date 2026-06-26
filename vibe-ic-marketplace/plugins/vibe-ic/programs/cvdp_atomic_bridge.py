@@ -61,39 +61,22 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-import spec_artifact_registry as _R  # noqa: E402  the deterministic solver catalog
+# NOTE: `spec_artifact_registry` is imported LAZILY inside solve()/family_of(),
+# NOT at module scope. The registry's record-level solvers import THIS module for
+# the record-adapter helpers (toplevel_name / extract_interface / _COMPOSITE_RE …),
+# so a module-scope `import spec_artifact_registry` here would be a circular import
+# (bridge → registry → solver → bridge). The lazy import runs after both modules
+# are fully defined.
 import verilog_width_resolve as _W  # noqa: E402  symbolic/param-expression width reader
 
-# Specialized CVDP family solvers — each emits a CORRECT datapath for a family the
-# registry's plain +/-/* ops would MIS-EMIT (GF(2^n) carry-less multiply, BCD decimal
-# arithmetic, CRC, MSB-first priority encoder, gray/parity, saturating shift/counter).
-# Each exposes solve(record)->RTL|None and is §4.05 parse-or-SKIP. Tried BEFORE the
-# registry path so the special-algebra families are SOLVED, not SKIPped. Imported
-# dynamically so a not-yet-present solver simply doesn't contribute.
-#
-# ORDERING (binding — DO NOT move this loop up): the canonical solver NAMES live here
-# so the dispatch ORDER (precedence — first-firing wins) is declared at the top where
-# it is read, but the actual __import__ is DEFERRED to _load_family_solvers() at the
-# very BOTTOM of this module. WHY: a family solver may `import cvdp_atomic_bridge` and
-# reference a bridge MODULE-SCOPE attribute (e.g. cvdp_table_lut_synth does
-# `_COMPOSITE_RE = _bridge._COMPOSITE_RE` at its own import time). If we import the
-# solvers HERE, the bridge is only half-initialized — `_COMPOSITE_RE` (defined ~40
-# lines below) does not exist yet — so the solver's import raises AttributeError, which
-# the loop's `except` SILENTLY swallows, DROPPING that solver from _FAMILY_SOLVERS and
-# making the bridge return None for records that solver alone solves (the GP / table_lut
-# routing bug). Deferring the import until the bridge module is FULLY defined breaks the
-# circular-import race for every present-and-future solver, GENERAL-ly.
-_FAMILY_SOLVER_NAMES = (
-    "cvdp_gf_synth", "cvdp_bcd_synth", "cvdp_crc_synth",
-    "cvdp_conv_encoder_synth", "cvdp_sort_synth", "cvdp_dice_roller_synth",
-    "cvdp_firstbit_synth", "cvdp_fibonacci_synth",
-    "cvdp_encoder_synth", "cvdp_graycode_parity_synth",
-    "cvdp_shift_counter_synth", "cvdp_compose_synth", "cvdp_hamming_synth",
-    "cvdp_mux_compare_synth", "cvdp_accumulate_synth", "cvdp_memory_synth",
-    "cvdp_arith_variants_synth", "cvdp_table_lut_synth", "cvdp_saturate_synth",
-    "cvdp_bitmanip_synth", "cvdp_serdes_decode_synth", "cvdp_modify_complete_synth",
-)
-_FAMILY_SOLVERS: List = []  # populated by _load_family_solvers() at module-load bottom
+# The record-level operation solvers (gf / bcd / crc / hamming / encoder / …) and the
+# dispatch over them MOVED to `spec_artifact_registry.generate_from_record()` — the
+# SINGLE deterministic-solver dispatch. This module is now the thin record→ports
+# ADAPTER + driver: it exposes the record-adapter helpers the solvers reuse
+# (`toplevel_name` / `extract_interface[_ex]` / `_COMPOSITE_RE` / `_build_port_block`
+# …) and a `solve()` that simply calls `generate_from_record()`. The solvers
+# `import cvdp_atomic_bridge` for those helpers, which is why the registry is imported
+# LAZILY here (see the module-top note) — registry → solver → bridge must stay acyclic.
 
 Port = Tuple[str, int]  # (name, width)
 
@@ -608,53 +591,53 @@ def solve(record: dict) -> Optional[str]:
     design. Never reads the golden RTL."""
     if not isinstance(record, dict):
         return None
-    # Specialized family solvers FIRST — they correctly emit the special-algebra
-    # datapaths (GF/BCD/CRC/MSB-priority/gray/saturating) the registry path SKIPs.
-    import copy as _copy
-    for _fam in _FAMILY_SOLVERS:
+    # UNIFIED dispatch: the record-level operation solvers (gf/bcd/crc/…) run
+    # FIRST (their declared precedence, inside spec_artifact_registry), then the
+    # text-level registry `generate()` is the fall-through. The bridge is now a
+    # THIN driver — it owns only the record→ports adaptation the text path needs,
+    # supplied as the `text_fallthrough` thunk. Lazy registry import keeps the
+    # bridge free of a module-scope dependency on the registry (the registry's
+    # record solvers import THIS module for the adapter helpers, so a module-scope
+    # `import spec_artifact_registry` here would be a cycle).
+    import spec_artifact_registry as _R
+
+    def _text_path() -> Optional[str]:
+        top = toplevel_name(record)
+        if not top:
+            return None
+        prompt = (record.get("input") or {}).get("prompt") or ""
+        if not prompt.strip():
+            return None
+        # §4.05 up-front composite / special-algebra SKIP (NO-CHEAT: never let a
+        # plain-integer emit stand in for a GF / modular / fixed-point / saturating
+        # function the registry's plain op would get wrong).
+        if _COMPOSITE_RE.search(prompt) or _SPECIAL_ALGEBRA_RE.search(prompt):
+            return None
+        iface = extract_interface_ex(record, top)
+        if not iface:
+            return None
+        ins, outs, used_params, symbolic = iface
+        block = _build_port_block(top, ins, outs)
+        # Prepend the clean port block to the ORIGINAL prompt prose. The registry
+        # recognizes the OPERATION from the real prompt; the bridge only supplies
+        # the parseable interface. We never paraphrase the function.
+        spec = block + "\n" + prompt
         try:
-            _rtl = _fam.solve(_copy.deepcopy(record))
+            kind, _rtl = _R.generate(spec, top)
         except Exception:
-            _rtl = None
-        if _rtl:
-            return _rtl
-    top = toplevel_name(record)
-    if not top:
-        return None
-    prompt = (record.get("input") or {}).get("prompt") or ""
-    if not prompt.strip():
-        return None
-    # §4.05 up-front composite / special-algebra SKIP (NO-CHEAT: never let a
-    # plain-integer emit stand in for a GF / modular / fixed-point / saturating
-    # function the registry's plain op would get wrong).
-    if _COMPOSITE_RE.search(prompt) or _SPECIAL_ALGEBRA_RE.search(prompt):
-        return None
+            return None
+        if not _rtl:
+            return None
+        _rtl = _rename_module(_rtl, top)
+        if used_params and symbolic:
+            widthmap = {n: w for n, w in ins + outs}
+            sym_full = {n: (widthmap.get(n, 1), expr) for n, expr in symbolic.items()}
+            _rtl = _parameterize_rtl(_rtl, top, used_params, sym_full)
+        return _rtl
 
-    iface = extract_interface_ex(record, top)
-    if not iface:
-        return None
-    ins, outs, used_params, symbolic = iface
-
-    block = _build_port_block(top, ins, outs)
-    # Prepend the clean port block to the ORIGINAL prompt prose. The registry
-    # recognizes the OPERATION from the real prompt; the bridge only supplies the
-    # parseable interface. We never paraphrase the function.
-    spec = block + "\n" + prompt
-    try:
-        kind, rtl = _R.generate(spec, top)
-    except Exception:
-        return None
+    rtl = _R.generate_from_record(record, text_fallthrough=_text_path)
     if not rtl:
         return None
-    rtl = _rename_module(rtl, top)
-    # Re-parameterize: if any placed port's width was a parameter expression
-    # (`[N-1:0]`, `[DATA_WIDTH-1:0]`, ...), declare those params in a `#(...)`
-    # block and restore the symbolic width forms, so the harness's `#(.N(...))`
-    # override drives a correctly-parameterized module (not a default-width-only).
-    if used_params and symbolic:
-        widthmap = {n: w for n, w in ins + outs}
-        sym_full = {n: (widthmap.get(n, 1), expr) for n, expr in symbolic.items()}
-        rtl = _parameterize_rtl(rtl, top, used_params, sym_full)
     return rtl
 
 
@@ -672,45 +655,12 @@ def family_of(record: dict, rtl: Optional[str] = None) -> Optional[str]:
         return None
     ins, outs = iface
     spec = _build_port_block(top, ins, outs) + "\n" + prompt
+    import spec_artifact_registry as _R  # lazy — see module-top note (cycle)
     try:
         kind, r = _R.generate(spec, top)
     except Exception:
         return None
     return kind if r else None
-
-
-# --------------------------------------------------------------------------- #
-# DEFERRED family-solver import (see _FAMILY_SOLVER_NAMES note up top). Runs at the
-# BOTTOM of the module — after EVERY bridge module-scope attribute (_COMPOSITE_RE,
-# _SPECIAL_ALGEBRA_RE, the extract_/_build_/toplevel_ helpers) is defined — so a solver
-# that references the bridge at its OWN import time sees a FULLY-initialized bridge and
-# does not get silently dropped by a circular-import AttributeError. _IMPORT_ERRORS
-# records any genuine import failure for diagnostics (a real ModuleNotFound for an
-# absent solver is recorded but non-fatal — the bridge still works with the rest).
-# --------------------------------------------------------------------------- #
-_IMPORT_ERRORS: List[Tuple[str, str]] = []
-
-
-def _load_family_solvers() -> List:
-    """Import the family solvers in _FAMILY_SOLVER_NAMES order and populate
-    _FAMILY_SOLVERS. Idempotent: re-loading replaces the list in place so the dispatch
-    order is always the declared one. A solver missing a `solve` callable is skipped."""
-    _FAMILY_SOLVERS.clear()
-    _IMPORT_ERRORS.clear()
-    for _fam in _FAMILY_SOLVER_NAMES:
-        try:
-            _mod = __import__(_fam)
-        except Exception as _e:  # genuinely absent / broken solver — record, skip.
-            _IMPORT_ERRORS.append((_fam, repr(_e)))
-            continue
-        if not callable(getattr(_mod, "solve", None)):
-            _IMPORT_ERRORS.append((_fam, "no callable solve()"))
-            continue
-        _FAMILY_SOLVERS.append(_mod)
-    return _FAMILY_SOLVERS
-
-
-_load_family_solvers()
 
 
 # --------------------------------------------------------------------------- #

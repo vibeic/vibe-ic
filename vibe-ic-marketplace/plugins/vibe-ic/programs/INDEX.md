@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 800
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 800)
+- **Total programs (excluding helpers / shims):** 808
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 808)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 791 |
+| `any` | 799 |
 
 ## Alphabetical listing
 
@@ -27,6 +27,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 |---|---|---|---|
 | `a2b_protocol_synth` | any | — | Automotive Audio Bus (A2B) protocol synth helper. |
 | `acceptance_evidence_in_fix_comment_check` | any | v0.2.97 | v0.2.97 |
+| `accumulate_synth` | any | — | deterministic SOLVER for the CVDP sequential |
 | `ace_protocol_synth` | any | — | AMBA AXI/ACE coherency-extension protocol synth helper. |
 | `afdx_protocol_synth` | any | — | AFDX / ARINC 664 Part 7 protocol synth helper. |
 | `agent_checkin_scope_guard` | any | — | role-based check-in (commit) path-scope gate. |
@@ -87,8 +88,10 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `arch_dse_pareto` | any | — | arch_dse_pareto.py -- Deterministic micro-architecture design-space exploration. |
 | `argparse_help_format_check` | any | — | pin the bare-% argparse help-string class. |
 | `arinc429_protocol_synth` | any | v0.1.83 | ARINC 429 (Mark 33 DITS) protocol synth helper. |
+| `arith_ext_synth` | any | — | a deterministic SOLVER for the one integer-arithmetic |
 | `arith_oracle_tb_gen` | any | — | deterministic CLOSED-FORM oracle TB generator for |
 | `arith_ss_corner_risk_check` | any | — | slow-corner arithmetic-architecture advisor. |
+| `arith_variants_synth` | any | — | deterministic SOLVER for the CVDP integer |
 | `arithmetic_synth` | any | — | deterministic SOLVER for the integer-ARITHMETIC family |
 | `assertion_covers_l3_constraints_check` | any | Wave 39 | Wave 39 / D3 |
 | `assertion_property_check` | any | — | Deterministic compliance check for assertion-gen. |
@@ -98,9 +101,11 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `axi_stream_protocol_synth` | any | — | ARM AMBA AXI4-Stream Protocol synth helper (protocol #70). |
 | `backlog_sanitize_check` | any | — | Organic Plugin gate: verify that a community |
 | `backlog_severity_classify` | any | — | deterministic severity table-lookup for |
+| `bcd_synth` | any | — | a DETERMINISTIC solver for the CVDP binary-coded-decimal |
 | `behavioral_evidence_per_spec_item_check` | any | v0.100 | v0.100 J1 |
 | `behavioral_fsm_synth` | any | — | deterministic SOLVER for two GENERAL, mechanically- |
 | `benchmark_clean_room_check` | any | — | clean-room run-dir guard (ORGANIC-20260604). |
+| `benchmark_completeness` | any | — | THIN per-benchmark adapters over the GENERAL |
 | `benchmark_dispatch` | any | — | entry point for /vibe-ic-benchmark. |
 | `benchmark_golden_capture` | any | — | record a HOST-VERIFIED, vibe-ic-AUTHORED solution as |
 | `benchmark_result_md_lint` | any | — | presence-check linter for the |
@@ -114,6 +119,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `bit_count_modulo_check` | any | — | M3: Verify that serial RX bit assemblers |
 | `bit_level_full_stack_tb_check` | any | v0.52 | v0.52 plugin gate |
 | `bit_level_full_stack_tb_oracle_check` | any | Wave 12 | v0.119.44 (Wave 12) plugin gate. |
+| `bitmanip_synth` | any | — | deterministic SOLVER for the CVDP BIT-MANIPULATION |
 | `bitwidth_consistency_check` | any | — | flag Verilog bit-selects that exceed the |
 | `ble_protocol_synth` | any | v0.1.84 | Bluetooth Low Energy 5.2-class protocol synth helper. |
 | `blindness_audit` | any | — | deterministic prompt-only blindness audit. |
@@ -160,8 +166,10 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `comb_advanced_synth` | any | — | deterministic SOLVER for ADVANCED purely-combinational |
 | `comb_gate_synth` | any | — | deterministic SOLVER for the COMBINATIONAL GATE / WIRE / |
 | `comb_state_table_synth` | any | — | deterministic SOLVER for a COMBINATIONAL state |
+| `compose_synth` | any | — | a CVDP DECOMPOSE -> SOLVE-EACH -> COMPOSE engine. |
 | `connect_vs_send_test_parity_check` | any | Wave 27 | Wave 27 (v0.119.59) gate. |
 | `constants_validation` | any | — | Deterministic compliance check for rtl-constants-gen. |
+| `conv_encoder_synth` | any | — | DETERMINISTIC solver for the CVDP convolutional |
 | `convergence_doctrine_present_check` | any | — | ORGANIC #716 |
 | `conway_2d_synth` | any | — | DETERMINISTIC 2-D cellular-automaton (Conway's Game of |
 | `coresight_protocol_synth` | any | — | ARM CoreSight on-chip debug & trace architecture synth helper (protocol #64). |
@@ -185,6 +193,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `crc_residual_check` | any | — | deterministic compliance check derived from |
 | `crc_residue_settle_state_required_check` | any | Wave 26 | Wave 26 (v0.119.58) gate. |
 | `crc_seed_consistency_check` | any | — | Validate that RTL CRC params match spec test vectors. |
+| `crc_synth` | any | — | a DETERMINISTIC solver for the CVDP CRC family. |
 | `crc_validation_present` | aid_class_half_duplex, digital_cmd_driven, mixed_signal_otp | Wave 58 | Wave 58 / BACKLOG-v12 P0.3 plugin gate. |
 | `crc_vector_gen` | any | — | General parametric CRC RTL + reference + test-vector generator. |
 | `cross_constant_invariant_check` | any | — | Verify named timing/protocol constants |
@@ -192,33 +201,11 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `cross_module_1cycle_handshake_check` | any | v0.116 | BACKLOG-v11 P0.3. |
 | `crypto_arch_extractor` | any | — | Extract crypto architecture parameters from README/text docs. |
 | `cts_quality_check` | any | — | Step 19 CTS substance gate. |
-| `cvdp_accumulate_synth` | any | — | deterministic SOLVER for the CVDP sequential |
-| `cvdp_arith_variants_synth` | any | — | deterministic SOLVER for the CVDP integer |
 | `cvdp_atomic_bridge` | any | — | a CVDP-prose -> atomic-spec BRIDGE that lets the existing |
-| `cvdp_bcd_synth` | any | — | a DETERMINISTIC solver for the CVDP binary-coded-decimal |
-| `cvdp_bitmanip_synth` | any | — | deterministic SOLVER for the CVDP BIT-MANIPULATION |
 | `cvdp_complete_extract` | any | — | a UNIFIED CVDP complete-extraction layer. |
-| `cvdp_compose_synth` | any | — | a CVDP DECOMPOSE -> SOLVE-EACH -> COMPOSE engine. |
 | `cvdp_context_interface_recover` | any | — | recover the TARGET module's PORT INTERFACE |
-| `cvdp_conv_encoder_synth` | any | — | DETERMINISTIC solver for the CVDP convolutional |
-| `cvdp_crc_synth` | any | — | a DETERMINISTIC solver for the CVDP CRC family. |
-| `cvdp_dice_roller_synth` | any | — | DETERMINISTIC solver for the CVDP digital dice-roller. |
-| `cvdp_encoder_synth` | any | — | deterministic SOLVER for the CVDP PRIORITY-ENCODER / |
-| `cvdp_fibonacci_synth` | any | — | DETERMINISTIC solver for the CVDP Fibonacci generator. |
-| `cvdp_firstbit_synth` | any | — | DETERMINISTIC solver for the CVDP first-bit decoder. |
-| `cvdp_gf_synth` | any | — | a DETERMINISTIC solver for the CVDP Galois-field / carry-less |
-| `cvdp_graycode_parity_synth` | any | — | a DETERMINISTIC solver for the CVDP gray-code |
-| `cvdp_hamming_synth` | any | — | a DETERMINISTIC solver for the CVDP Hamming / ECC family. |
-| `cvdp_memory_synth` | any | — | a DETERMINISTIC solver for the CVDP parameterized MEMORY |
-| `cvdp_modify_complete_synth` | any | — | deterministic SOLVER for two CVDP |
-| `cvdp_mux_compare_synth` | any | — | a DETERMINISTIC solver for the CVDP |
-| `cvdp_saturate_synth` | any | — | deterministic SOLVER for the CVDP SATURATE / CLAMP / |
-| `cvdp_serdes_decode_synth` | any | — | a DETERMINISTIC solver for two ATOMIC CVDP |
-| `cvdp_shift_counter_synth` | any | — | deterministic SOLVER for the CVDP barrel-shift / |
 | `cvdp_solve_pipeline` | any | — | the CVDP TIER-1→3 AUTHORING-GATE PIPELINE. |
-| `cvdp_sort_synth` | any | — | DETERMINISTIC solver for the CVDP bubble-sort engine family. |
 | `cvdp_spec_parse` | any | — | a GENERAL prose-port-block reader for the CVDP benchmark |
-| `cvdp_table_lut_synth` | any | — | a DETERMINISTIC solver for the CVDP TABLE-DRIVEN |
 | `cxl_protocol_synth` | any | v0.1.89 | Compute Express Link (CXL) cache-coherent interconnect synth helper. |
 | `dali_protocol_synth` | any | v0.1.84 | DALI-class protocol synth helper. |
 | `ddr4_protocol_synth` | any | — | protocol class #58. |
@@ -240,6 +227,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `dff_primitive_synth` | any | — | DETERMINISTIC emitter for the canonical single-bit |
 | `dfm_screen_check` | any | — | Step 35 DFM screen (v2.3). |
 | `dft_atpg_coverage_check` | any | — | REAL stuck-at coverage gate (Step 11 DFT/ATPG). |
+| `dice_roller_synth` | any | — | DETERMINISTIC solver for the CVDP digital dice-roller. |
 | `diff_verify_harness` | any | — | independent DIFFERENTIAL self-verification |
 | `dispatch_fetch_loop_population_check` | any | — | Stub multi-frame fetch loop detector. |
 | `dispatch_handler_completeness` | aid_class_half_duplex, digital_cmd_driven, mixed_signal_otp | Wave 58 | Wave 58 / BACKLOG-v12 P0.2 plugin gate. |
@@ -266,6 +254,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `emitter_failure_mode_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `emmc_protocol_synth` | any | v0.1.84 | Embedded MultiMediaCard (eMMC, JEDEC JESD84-B51 / eMMC 5.1) protocol synth. |
 | `encoder_decoder_synth` | any | — | deterministic SOLVER for the PRIORITY-ENCODER family. |
+| `encoder_synth` | any | — | deterministic SOLVER for the CVDP PRIORITY-ENCODER / |
 | `enhancement_emit` | any | v0.1.35 | driver for the benchmark-enhancement-capture skill. |
 | `erc_density_check` | any | — | Step-30 ERC + sign-off density-rule verification (real substance). |
 | `erc_float_owner_classify` | any | v0.3.16 | ORGANIC #514. Classify ERC floating nets/pins BY OWNER into |
@@ -279,11 +268,13 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `fault_atpg_run` | any | — | Open-source ATPG via Fault (cloudv-io/fault). |
 | `fetch_round_trip_sentinel_check` | any | — | P0.1 deterministic gate |
 | `ff_truth_table_synth` | any | — | deterministic SOLVER for a flip-flop truth table. |
+| `fibonacci_synth` | any | — | DETERMINISTIC solver for the CVDP Fibonacci generator. |
 | `fibre_channel_protocol_synth` | any | — | Fibre Channel (INCITS T11 FC-FS / FC-PH) protocol synth helper. |
 | `field_agent_terminology_scan` | any | — | terminology guard for external text |
 | `figure_extractor` | any | — | the VISION tier's deterministic program side. |
 | `final_report_generate` | any | — | generate canonical, chip-AGNOSTIC final |
 | `final_test_attestation_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered |
+| `firstbit_synth` | any | — | DETERMINISTIC solver for the CVDP first-bit decoder. |
 | `fix_fault_cut_names` | any | v0.63 | Rewrite Fault-cut netlist so escaped identifiers with embedded dots |
 | `fix_surface_classify` | any | — | fix_surface_classify: deterministic consumer-vs-producer |
 | `flexray_protocol_synth` | any | — | FlexRay Communications System protocol synth helper (protocol #49). |
@@ -343,12 +334,16 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gds_size_check` | any | — | Deterministic GDS file existence and size checker. |
 | `gds_topcell_name_check` | any | — | Deterministic GDSII top-cell-name verifier. |
 | `gen_skill_inventory` | any | — | single source of truth for the AI-skill count. |
+| `general_synth` | any | — | GENERAL (§4.05-audited) deterministic STRUCTURAL solvers |
+| `gf_synth` | any | — | a DETERMINISTIC solver for the CVDP Galois-field / carry-less |
 | `git_prohibition_guard` | any | — | deterministic guard for the core-agent loop |
 | `gitignore_scratch_guard` | any | — | ORGANIC #720 |
+| `graycode_parity_synth` | any | — | a DETERMINISTIC solver for the CVDP gray-code |
 | `gshare_predictor_synth` | any | — | deterministic SOLVER for the gshare branch-predictor |
 | `half_duplex_frame_end_idle_reset_check` | any | — | structural-RTL gate for |
 | `half_duplex_response_window_check` | any | — | LL-4. |
 | `half_duplex_wrapper_open_drain_check` | any | — | structural-RTL gate that |
+| `hamming_synth` | any | — | a DETERMINISTIC solver for the CVDP Hamming / ECC family. |
 | `handoff_bundle_check` | any | — | the COMPLETENESS-CONTRACT gate (Q3). |
 | `handshake_check` | any | — | deterministic compliance check derived from <chip-class> v040 debug. |
 | `handshake_livelock_result_stability_check` | any | v0.3.22 | v0.3.22 (ORGANIC #523). |
@@ -460,6 +455,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `mealy_sequence_synth` | any | — | deterministic SOLVER for the MEALY FSM table / |
 | `memory_array_synth` | any | — | deterministic SOLVER for the register-array MEMORY |
 | `memory_read_pipeline_check` | any | — | Registered-read memory modules must |
+| `memory_synth` | any | — | a DETERMINISTIC solver for the CVDP parameterized MEMORY |
 | `metadata_content_substance_check` | any | — | guard against empty / near-empty |
 | `metal_fill_density_check` | any | — | Verify metal fill was inserted and density is within bounds. |
 | `migrate_to_canonical_taxonomy` | any | — | one-shot migration tool that moves |
@@ -475,10 +471,12 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `mixed_signal_signoff_check` | any | — | gate M4 (hardened, anti-fabrication). |
 | `mixed_signal_top_lvs_run` | any | — | REAL top-level mixed-signal merge + |
 | `modbus_protocol_synth` | any | v0.1.84 | Modbus-class protocol synth helper. |
+| `modify_complete_synth` | any | — | deterministic SOLVER for two CVDP |
 | `module_port_audit` | any | v0.36 | Deterministic port-name mismatch detector for multi-module |
 | `moore_arrow_fsm_synth` | any | — | DETERMINISTIC Moore-FSM emitter for the ARROW |
 | `moore_fsm_table_emit` | any | — | the PROGRAM half of the AI-extracts / program-emits |
 | `mpw_precheck_cleanup` | any | v0.1.51 | mpw_precheck cleanup automator (B4 from spm pilot). |
+| `mux_compare_synth` | any | — | a DETERMINISTIC solver for the CVDP |
 | `mux_synth` | any | — | deterministic SOLVER for the MULTIPLEXER family (spec -> RTL). |
 | `nba_addr_read_race_check` | any | — | FSM consuming addressed data without pipelining. |
 | `nba_shift_register_same_cycle_read_check` | any | Wave 12 | v0.119.44 (Wave 12) plugin gate. |
@@ -538,6 +536,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `phase1_doc_input_completeness_check` | any | — | strong gate |
 | `phase1_doc_one_shot_runner` | any | Wave 49 | chip-AGNOSTIC Phase 1 (doc-extraction) orchestrator. |
 | `phase1_doc_presence_check` | any | Wave 8 | Fail if fewer than 10 Phase-1 layer docs exist. |
+| `phase1_evidence_grounding_check` | any | — | Phase-1 ANTI-FABRICATION grounding gate. |
 | `phase1_gate_contract_check` | any | v0.74 | Meta-checker for Phase 1 deterministic gates. |
 | `phase1_input_vs_generated_completeness_check` | any | v0.60 | Phase 1 coverage gate |
 | `phase1_json_converge` | any | — | deterministic comparator for the Phase-1 |
@@ -643,8 +642,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `rtl_scan_scope` | any | — | shared authoritative-RTL scan-scope policy (ORGANIC #545). |
 | `rtl_signal_name_semantic_check` | any | — | v1.6.232 (merged v229+v231). |
 | `rtl_unit_test_coverage_check` | any | v0.50.2 | v0.50.2 plugin gate |
-| `rtllm_arith_ext_synth` | any | — | a deterministic SOLVER for the one integer-arithmetic |
-| `rtllm_general_synth` | any | — | GENERAL (§4.05-audited) deterministic STRUCTURAL solvers |
 | `rtllm_iface_recover` | any | — | a GENERAL interface recoverer for the RTLLM prose |
 | `rtllm_port_bridge` | any | — | a GENERAL prose-port-block reader for the RTLLM benchmark |
 | `rtllm_tier_pipeline` | any | — | the RTLLM TIER-1->5 CONVERGE / AUTHORING-GATE PIPELINE. |
@@ -662,6 +659,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `sata_protocol_synth` | any | v0.1.84 | Serial ATA AHCI protocol synth helper. |
 | `sata_state_extractor` | any | — | for #36 Bug 9 (L9 portion): SATA state-machine literal picker. |
 | `sata_timing_extractor` | any | — | for #36 Bug 9 (L8 portion): SATA-spec timing literal picker. |
+| `saturate_synth` | any | — | deterministic SOLVER for the CVDP SATURATE / CLAMP / |
 | `scope_long_decode` | any | v0.119.1 | LL-9 (debug helper, not a structural gate). |
 | `scope_periodic_pulse_check` | any | v0.64 | Layer-3 hardware attestation gate. |
 | `scope_reply_preamble_check` | aid_class_half_duplex | Wave 58 | Wave 58 / BACKLOG-v12 P0.4 plugin gate. |
@@ -681,10 +679,12 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `send_test_active_drive_check` | any | Wave 27 | Wave 27 (v0.119.59) gate. |
 | `sent_protocol_synth` | any | — | Single Edge Nibble Transmission (SENT) protocol synth helper. |
 | `sequential_waveform_synth` | any | — | DETERMINISTIC multi-bit / sequential waveform → RTL. |
+| `serdes_decode_synth` | any | — | a DETERMINISTIC solver for two ATOMIC CVDP |
 | `serdes_width_synth` | any | — | deterministic SOLVER for the serial<->parallel / |
 | `serial_protocol_fsm_synth` | any | — | deterministic SOLVER for serial / protocol |
 | `sgmii_protocol_synth` | any | — | Serial-GMII (SGMII) protocol synth helper. |
 | `shape_b_sample_export` | any | — | deterministic Shape-B sample-export (ORGANIC #678). |
+| `shift_counter_synth` | any | — | deterministic SOLVER for the CVDP barrel-shift / |
 | `shift_register_synth` | any | — | deterministic SOLVER for the shift-register / rotate / |
 | `si_crosstalk_check` | any | — | Verify signal integrity / crosstalk analysis was performed. |
 | `si_signoff_timing_aware` | any | — | OPEN-SOURCE timing-window-aware SI ADVISORY screen. |
@@ -703,27 +703,34 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `skill_doc_section_present_check` | any | — | ORGANIC #724 / #725 |
 | `slave_tx_no_device_break_check` | any | Wave 25 | Wave 25/34 silent-bug gate. |
 | `smbus_pmbus_protocol_synth` | any | v0.1.91 | System Management Bus (SMBus 3.x) + Power Management Bus (PMBus 1.3) |
+| `sort_synth` | any | — | DETERMINISTIC solver for the CVDP bubble-sort engine family. |
 | `soundwire_protocol_synth` | any | v0.1.84 | MIPI SoundWire-class protocol synth helper. |
 | `source_chip_agnostic_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `spacewire_protocol_synth` | any | — | SpaceWire protocol synth helper (ECSS-E-ST-50-12C). |
 | `spare_cell_coverage_check` | any | — | Design-for-ECO READINESS gate (Step 18). |
 | `spare_cell_preservation_check` | any | — | Design-for-ECO PRESERVATION gate. |
 | `spdif_protocol_synth` | any | v0.1.84 | S/PDIF-class protocol synth helper. |
+| `spec_analog_iface_extract` | any | — | PROGRAM-FIRST structural extractor for the L5 |
 | `spec_artifact_catalog` | any | — | the MASTER CATALOG of structured ELEMENT TYPES that |
 | `spec_artifact_dual_pass` | any | — | the DUAL-PASS understanding layer. |
 | `spec_artifact_registry` | any | — | SINGLE SOURCE OF TRUTH for the canonical STRUCTURED |
+| `spec_calibration_extract` | any | — | PROGRAM-FIRST structural extractor for the |
 | `spec_complete_extract` | any | — | the GENERAL (benchmark-agnostic) complete-spec |
 | `spec_conformance_check` | any | — | Spec↔RTL contract-conformance gate. |
 | `spec_coverage_check` | any | — | ORGANIC #697 [P1, chip-AGNOSTIC] |
+| `spec_electrical_extract` | any | — | PROGRAM-FIRST structural extractor for stated |
 | `spec_enumset_extract` | any | — | PROGRAM-FIRST structural extractor for CVDP |
 | `spec_example_smoke_tb` | any | — | ORGANIC #728 [P1, chip-AGNOSTIC] |
 | `spec_fsm_extract` | any | — | PROGRAM-FIRST structural extractor for stated FSMs. |
 | `spec_numeric_pack_extract` | any | — | PROGRAM-FIRST numeric-semantics + packing |
+| `spec_otp_extract` | any | — | PROGRAM-FIRST structural extractor for stated OTP content. |
 | `spec_regmap_extract` | any | — | PROGRAM-FIRST structural register-map extractor. |
 | `spec_response_delay_check` | any | — | Response path must honour spec-declared |
 | `spec_review_lint` | any | v0.2.14 | deterministic structural presence lint for a NL spec. |
 | `spec_rtl_port_fidelity_check` | any | — | spec↔RTL port-fidelity + garbled-port lint. |
 | `spec_self_consistency_check` | any | v0.1.5 | pre-RTL spec self-consistency lint. |
+| `spec_signedness_extract` | any | — | PROGRAM-FIRST per-SIGNAL signedness extractor |
+| `spec_test_debug_extract` | any | — | PROGRAM-FIRST structural extractor for the L7 |
 | `spec_validator` | any | — | DS<->AN(<->Spec) cross-consistency checker. |
 | `spec_worked_example_extract` | any | — | PROGRAM-FIRST structural worked-example / |
 | `spef_extraction_check` | any | — | Verify parasitic extraction (SPEF) was produced after routing. |
@@ -749,6 +756,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `synth_netlist_check` | any | — | Deterministic synthesis netlist validation checker. |
 | `synth_wrapper_check` | any | — | Deterministic compliance check for synth-wrapper-gen. |
 | `synth_wrapper_gen` | any | — | auto-generate synthesis wrapper for inout-port designs. |
+| `table_lut_synth` | any | — | a DETERMINISTIC solver for the CVDP TABLE-DRIVEN |
 | `tapeout_checklist_gen` | any | — | emit Step 36 (v2.3) reports/audit/tapeout_checklist.json. |
 | `tapeout_signoff_check` | any | — | wrapper for signoff_audit --mode tapeout. |
 | `tb_timing_extremes_check` | any | — | LL-6. |
@@ -872,10 +880,11 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (791 programs)
+### `any` (799 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
+- `accumulate_synth` — deterministic SOLVER for the CVDP sequential
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
 - `afdx_protocol_synth` — AFDX / ARINC 664 Part 7 protocol synth helper.
 - `agent_checkin_scope_guard` — role-based check-in (commit) path-scope gate.
@@ -935,8 +944,10 @@ _(no programs in this group)_
 - `arch_dse_pareto` — arch_dse_pareto.py -- Deterministic micro-architecture design-space exploration.
 - `argparse_help_format_check` — pin the bare-% argparse help-string class.
 - `arinc429_protocol_synth` — ARINC 429 (Mark 33 DITS) protocol synth helper.  _[v0.1.83]_
+- `arith_ext_synth` — a deterministic SOLVER for the one integer-arithmetic
 - `arith_oracle_tb_gen` — deterministic CLOSED-FORM oracle TB generator for
 - `arith_ss_corner_risk_check` — slow-corner arithmetic-architecture advisor.
+- `arith_variants_synth` — deterministic SOLVER for the CVDP integer
 - `arithmetic_synth` — deterministic SOLVER for the integer-ARITHMETIC family
 - `assertion_covers_l3_constraints_check` — Wave 39 / D3  _[Wave 39]_
 - `assertion_property_check` — Deterministic compliance check for assertion-gen.
@@ -946,9 +957,11 @@ _(no programs in this group)_
 - `axi_stream_protocol_synth` — ARM AMBA AXI4-Stream Protocol synth helper (protocol #70).
 - `backlog_sanitize_check` — Organic Plugin gate: verify that a community
 - `backlog_severity_classify` — deterministic severity table-lookup for
+- `bcd_synth` — a DETERMINISTIC solver for the CVDP binary-coded-decimal
 - `behavioral_evidence_per_spec_item_check` — v0.100 J1  _[v0.100]_
 - `behavioral_fsm_synth` — deterministic SOLVER for two GENERAL, mechanically-
 - `benchmark_clean_room_check` — clean-room run-dir guard (ORGANIC-20260604).
+- `benchmark_completeness` — THIN per-benchmark adapters over the GENERAL
 - `benchmark_dispatch` — entry point for /vibe-ic-benchmark.
 - `benchmark_golden_capture` — record a HOST-VERIFIED, vibe-ic-AUTHORED solution as
 - `benchmark_result_md_lint` — presence-check linter for the
@@ -962,6 +975,7 @@ _(no programs in this group)_
 - `bit_count_modulo_check` — M3: Verify that serial RX bit assemblers
 - `bit_level_full_stack_tb_check` — v0.52 plugin gate  _[v0.52]_
 - `bit_level_full_stack_tb_oracle_check` — v0.119.44 (Wave 12) plugin gate.  _[Wave 12]_
+- `bitmanip_synth` — deterministic SOLVER for the CVDP BIT-MANIPULATION
 - `bitwidth_consistency_check` — flag Verilog bit-selects that exceed the
 - `ble_protocol_synth` — Bluetooth Low Energy 5.2-class protocol synth helper.  _[v0.1.84]_
 - `blindness_audit` — deterministic prompt-only blindness audit.
@@ -1006,8 +1020,10 @@ _(no programs in this group)_
 - `comb_advanced_synth` — deterministic SOLVER for ADVANCED purely-combinational
 - `comb_gate_synth` — deterministic SOLVER for the COMBINATIONAL GATE / WIRE /
 - `comb_state_table_synth` — deterministic SOLVER for a COMBINATIONAL state
+- `compose_synth` — a CVDP DECOMPOSE -> SOLVE-EACH -> COMPOSE engine.
 - `connect_vs_send_test_parity_check` — Wave 27 (v0.119.59) gate.  _[Wave 27]_
 - `constants_validation` — Deterministic compliance check for rtl-constants-gen.
+- `conv_encoder_synth` — DETERMINISTIC solver for the CVDP convolutional
 - `convergence_doctrine_present_check` — ORGANIC #716
 - `conway_2d_synth` — DETERMINISTIC 2-D cellular-automaton (Conway's Game of
 - `coresight_protocol_synth` — ARM CoreSight on-chip debug & trace architecture synth helper (protocol #64).
@@ -1031,39 +1047,18 @@ _(no programs in this group)_
 - `crc_residual_check` — deterministic compliance check derived from
 - `crc_residue_settle_state_required_check` — Wave 26 (v0.119.58) gate.  _[Wave 26]_
 - `crc_seed_consistency_check` — Validate that RTL CRC params match spec test vectors.
+- `crc_synth` — a DETERMINISTIC solver for the CVDP CRC family.
 - `crc_vector_gen` — General parametric CRC RTL + reference + test-vector generator.
 - `cross_constant_invariant_check` — Verify named timing/protocol constants
 - `cross_design_identity_check` — cross-design byte-identity gate
 - `cross_module_1cycle_handshake_check` — BACKLOG-v11 P0.3.  _[v0.116]_
 - `crypto_arch_extractor` — Extract crypto architecture parameters from README/text docs.
 - `cts_quality_check` — Step 19 CTS substance gate.
-- `cvdp_accumulate_synth` — deterministic SOLVER for the CVDP sequential
-- `cvdp_arith_variants_synth` — deterministic SOLVER for the CVDP integer
 - `cvdp_atomic_bridge` — a CVDP-prose -> atomic-spec BRIDGE that lets the existing
-- `cvdp_bcd_synth` — a DETERMINISTIC solver for the CVDP binary-coded-decimal
-- `cvdp_bitmanip_synth` — deterministic SOLVER for the CVDP BIT-MANIPULATION
 - `cvdp_complete_extract` — a UNIFIED CVDP complete-extraction layer.
-- `cvdp_compose_synth` — a CVDP DECOMPOSE -> SOLVE-EACH -> COMPOSE engine.
 - `cvdp_context_interface_recover` — recover the TARGET module's PORT INTERFACE
-- `cvdp_conv_encoder_synth` — DETERMINISTIC solver for the CVDP convolutional
-- `cvdp_crc_synth` — a DETERMINISTIC solver for the CVDP CRC family.
-- `cvdp_dice_roller_synth` — DETERMINISTIC solver for the CVDP digital dice-roller.
-- `cvdp_encoder_synth` — deterministic SOLVER for the CVDP PRIORITY-ENCODER /
-- `cvdp_fibonacci_synth` — DETERMINISTIC solver for the CVDP Fibonacci generator.
-- `cvdp_firstbit_synth` — DETERMINISTIC solver for the CVDP first-bit decoder.
-- `cvdp_gf_synth` — a DETERMINISTIC solver for the CVDP Galois-field / carry-less
-- `cvdp_graycode_parity_synth` — a DETERMINISTIC solver for the CVDP gray-code
-- `cvdp_hamming_synth` — a DETERMINISTIC solver for the CVDP Hamming / ECC family.
-- `cvdp_memory_synth` — a DETERMINISTIC solver for the CVDP parameterized MEMORY
-- `cvdp_modify_complete_synth` — deterministic SOLVER for two CVDP
-- `cvdp_mux_compare_synth` — a DETERMINISTIC solver for the CVDP
-- `cvdp_saturate_synth` — deterministic SOLVER for the CVDP SATURATE / CLAMP /
-- `cvdp_serdes_decode_synth` — a DETERMINISTIC solver for two ATOMIC CVDP
-- `cvdp_shift_counter_synth` — deterministic SOLVER for the CVDP barrel-shift /
 - `cvdp_solve_pipeline` — the CVDP TIER-1→3 AUTHORING-GATE PIPELINE.
-- `cvdp_sort_synth` — DETERMINISTIC solver for the CVDP bubble-sort engine family.
 - `cvdp_spec_parse` — a GENERAL prose-port-block reader for the CVDP benchmark
-- `cvdp_table_lut_synth` — a DETERMINISTIC solver for the CVDP TABLE-DRIVEN
 - `cxl_protocol_synth` — Compute Express Link (CXL) cache-coherent interconnect synth helper.  _[v0.1.89]_
 - `dali_protocol_synth` — DALI-class protocol synth helper.  _[v0.1.84]_
 - `ddr4_protocol_synth` — protocol class #58.
@@ -1085,6 +1080,7 @@ _(no programs in this group)_
 - `dff_primitive_synth` — DETERMINISTIC emitter for the canonical single-bit
 - `dfm_screen_check` — Step 35 DFM screen (v2.3).
 - `dft_atpg_coverage_check` — REAL stuck-at coverage gate (Step 11 DFT/ATPG).
+- `dice_roller_synth` — DETERMINISTIC solver for the CVDP digital dice-roller.
 - `diff_verify_harness` — independent DIFFERENTIAL self-verification
 - `dispatch_fetch_loop_population_check` — Stub multi-frame fetch loop detector.
 - `dispatch_register_default_reset_check` — Response register reset at frame boundaries.
@@ -1110,6 +1106,7 @@ _(no programs in this group)_
 - `emitter_failure_mode_check` — anti-fabrication gate (v1.6.38).
 - `emmc_protocol_synth` — Embedded MultiMediaCard (eMMC, JEDEC JESD84-B51 / eMMC 5.1) protocol synth.  _[v0.1.84]_
 - `encoder_decoder_synth` — deterministic SOLVER for the PRIORITY-ENCODER family.
+- `encoder_synth` — deterministic SOLVER for the CVDP PRIORITY-ENCODER /
 - `enhancement_emit` — driver for the benchmark-enhancement-capture skill.  _[v0.1.35]_
 - `erc_density_check` — Step-30 ERC + sign-off density-rule verification (real substance).
 - `erc_float_owner_classify` — ORGANIC #514. Classify ERC floating nets/pins BY OWNER into  _[v0.3.16]_
@@ -1123,11 +1120,13 @@ _(no programs in this group)_
 - `fault_atpg_run` — Open-source ATPG via Fault (cloudv-io/fault).
 - `fetch_round_trip_sentinel_check` — P0.1 deterministic gate
 - `ff_truth_table_synth` — deterministic SOLVER for a flip-flop truth table.
+- `fibonacci_synth` — DETERMINISTIC solver for the CVDP Fibonacci generator.
 - `fibre_channel_protocol_synth` — Fibre Channel (INCITS T11 FC-FS / FC-PH) protocol synth helper.
 - `field_agent_terminology_scan` — terminology guard for external text
 - `figure_extractor` — the VISION tier's deterministic program side.
 - `final_report_generate` — generate canonical, chip-AGNOSTIC final
 - `final_test_attestation_check` — gate (v1.6.13 Wave 88, renumbered  _[Wave 88]_
+- `firstbit_synth` — DETERMINISTIC solver for the CVDP first-bit decoder.
 - `fix_fault_cut_names` — Rewrite Fault-cut netlist so escaped identifiers with embedded dots  _[v0.63]_
 - `fix_surface_classify` — fix_surface_classify: deterministic consumer-vs-producer
 - `flexray_protocol_synth` — FlexRay Communications System protocol synth helper (protocol #49).
@@ -1187,12 +1186,16 @@ _(no programs in this group)_
 - `gds_size_check` — Deterministic GDS file existence and size checker.
 - `gds_topcell_name_check` — Deterministic GDSII top-cell-name verifier.
 - `gen_skill_inventory` — single source of truth for the AI-skill count.
+- `general_synth` — GENERAL (§4.05-audited) deterministic STRUCTURAL solvers
+- `gf_synth` — a DETERMINISTIC solver for the CVDP Galois-field / carry-less
 - `git_prohibition_guard` — deterministic guard for the core-agent loop
 - `gitignore_scratch_guard` — ORGANIC #720
+- `graycode_parity_synth` — a DETERMINISTIC solver for the CVDP gray-code
 - `gshare_predictor_synth` — deterministic SOLVER for the gshare branch-predictor
 - `half_duplex_frame_end_idle_reset_check` — structural-RTL gate for
 - `half_duplex_response_window_check` — LL-4.
 - `half_duplex_wrapper_open_drain_check` — structural-RTL gate that
+- `hamming_synth` — a DETERMINISTIC solver for the CVDP Hamming / ECC family.
 - `handoff_bundle_check` — the COMPLETENESS-CONTRACT gate (Q3).
 - `handshake_check` — deterministic compliance check derived from <chip-class> v040 debug.
 - `handshake_livelock_result_stability_check` — v0.3.22 (ORGANIC #523).  _[v0.3.22]_
@@ -1303,6 +1306,7 @@ _(no programs in this group)_
 - `mealy_sequence_synth` — deterministic SOLVER for the MEALY FSM table /
 - `memory_array_synth` — deterministic SOLVER for the register-array MEMORY
 - `memory_read_pipeline_check` — Registered-read memory modules must
+- `memory_synth` — a DETERMINISTIC solver for the CVDP parameterized MEMORY
 - `metadata_content_substance_check` — guard against empty / near-empty
 - `metal_fill_density_check` — Verify metal fill was inserted and density is within bounds.
 - `migrate_to_canonical_taxonomy` — one-shot migration tool that moves
@@ -1318,10 +1322,12 @@ _(no programs in this group)_
 - `mixed_signal_signoff_check` — gate M4 (hardened, anti-fabrication).
 - `mixed_signal_top_lvs_run` — REAL top-level mixed-signal merge +
 - `modbus_protocol_synth` — Modbus-class protocol synth helper.  _[v0.1.84]_
+- `modify_complete_synth` — deterministic SOLVER for two CVDP
 - `module_port_audit` — Deterministic port-name mismatch detector for multi-module  _[v0.36]_
 - `moore_arrow_fsm_synth` — DETERMINISTIC Moore-FSM emitter for the ARROW
 - `moore_fsm_table_emit` — the PROGRAM half of the AI-extracts / program-emits
 - `mpw_precheck_cleanup` — mpw_precheck cleanup automator (B4 from spm pilot).  _[v0.1.51]_
+- `mux_compare_synth` — a DETERMINISTIC solver for the CVDP
 - `mux_synth` — deterministic SOLVER for the MULTIPLEXER family (spec -> RTL).
 - `nba_addr_read_race_check` — FSM consuming addressed data without pipelining.
 - `nba_shift_register_same_cycle_read_check` — v0.119.44 (Wave 12) plugin gate.  _[Wave 12]_
@@ -1381,6 +1387,7 @@ _(no programs in this group)_
 - `phase1_doc_input_completeness_check` — strong gate
 - `phase1_doc_one_shot_runner` — chip-AGNOSTIC Phase 1 (doc-extraction) orchestrator.  _[Wave 49]_
 - `phase1_doc_presence_check` — Fail if fewer than 10 Phase-1 layer docs exist.  _[Wave 8]_
+- `phase1_evidence_grounding_check` — Phase-1 ANTI-FABRICATION grounding gate.
 - `phase1_gate_contract_check` — Meta-checker for Phase 1 deterministic gates.  _[v0.74]_
 - `phase1_input_vs_generated_completeness_check` — Phase 1 coverage gate  _[v0.60]_
 - `phase1_json_converge` — deterministic comparator for the Phase-1
@@ -1485,8 +1492,6 @@ _(no programs in this group)_
 - `rtl_scan_scope` — shared authoritative-RTL scan-scope policy (ORGANIC #545).
 - `rtl_signal_name_semantic_check` — v1.6.232 (merged v229+v231).
 - `rtl_unit_test_coverage_check` — v0.50.2 plugin gate  _[v0.50.2]_
-- `rtllm_arith_ext_synth` — a deterministic SOLVER for the one integer-arithmetic
-- `rtllm_general_synth` — GENERAL (§4.05-audited) deterministic STRUCTURAL solvers
 - `rtllm_iface_recover` — a GENERAL interface recoverer for the RTLLM prose
 - `rtllm_port_bridge` — a GENERAL prose-port-block reader for the RTLLM benchmark
 - `rtllm_tier_pipeline` — the RTLLM TIER-1->5 CONVERGE / AUTHORING-GATE PIPELINE.
@@ -1504,6 +1509,7 @@ _(no programs in this group)_
 - `sata_protocol_synth` — Serial ATA AHCI protocol synth helper.  _[v0.1.84]_
 - `sata_state_extractor` — for #36 Bug 9 (L9 portion): SATA state-machine literal picker.
 - `sata_timing_extractor` — for #36 Bug 9 (L8 portion): SATA-spec timing literal picker.
+- `saturate_synth` — deterministic SOLVER for the CVDP SATURATE / CLAMP /
 - `scope_long_decode` — LL-9 (debug helper, not a structural gate).  _[v0.119.1]_
 - `scope_periodic_pulse_check` — Layer-3 hardware attestation gate.  _[v0.64]_
 - `scope_response_byte_decode_check` — P0.3 deterministic gate
@@ -1522,10 +1528,12 @@ _(no programs in this group)_
 - `send_test_active_drive_check` — Wave 27 (v0.119.59) gate.  _[Wave 27]_
 - `sent_protocol_synth` — Single Edge Nibble Transmission (SENT) protocol synth helper.
 - `sequential_waveform_synth` — DETERMINISTIC multi-bit / sequential waveform → RTL.
+- `serdes_decode_synth` — a DETERMINISTIC solver for two ATOMIC CVDP
 - `serdes_width_synth` — deterministic SOLVER for the serial<->parallel /
 - `serial_protocol_fsm_synth` — deterministic SOLVER for serial / protocol
 - `sgmii_protocol_synth` — Serial-GMII (SGMII) protocol synth helper.
 - `shape_b_sample_export` — deterministic Shape-B sample-export (ORGANIC #678).
+- `shift_counter_synth` — deterministic SOLVER for the CVDP barrel-shift /
 - `shift_register_synth` — deterministic SOLVER for the shift-register / rotate /
 - `si_crosstalk_check` — Verify signal integrity / crosstalk analysis was performed.
 - `si_signoff_timing_aware` — OPEN-SOURCE timing-window-aware SI ADVISORY screen.
@@ -1544,27 +1552,34 @@ _(no programs in this group)_
 - `skill_doc_section_present_check` — ORGANIC #724 / #725
 - `slave_tx_no_device_break_check` — Wave 25/34 silent-bug gate.  _[Wave 25]_
 - `smbus_pmbus_protocol_synth` — System Management Bus (SMBus 3.x) + Power Management Bus (PMBus 1.3)  _[v0.1.91]_
+- `sort_synth` — DETERMINISTIC solver for the CVDP bubble-sort engine family.
 - `soundwire_protocol_synth` — MIPI SoundWire-class protocol synth helper.  _[v0.1.84]_
 - `source_chip_agnostic_check` — anti-fabrication gate (v1.6.38).
 - `spacewire_protocol_synth` — SpaceWire protocol synth helper (ECSS-E-ST-50-12C).
 - `spare_cell_coverage_check` — Design-for-ECO READINESS gate (Step 18).
 - `spare_cell_preservation_check` — Design-for-ECO PRESERVATION gate.
 - `spdif_protocol_synth` — S/PDIF-class protocol synth helper.  _[v0.1.84]_
+- `spec_analog_iface_extract` — PROGRAM-FIRST structural extractor for the L5
 - `spec_artifact_catalog` — the MASTER CATALOG of structured ELEMENT TYPES that
 - `spec_artifact_dual_pass` — the DUAL-PASS understanding layer.
 - `spec_artifact_registry` — SINGLE SOURCE OF TRUTH for the canonical STRUCTURED
+- `spec_calibration_extract` — PROGRAM-FIRST structural extractor for the
 - `spec_complete_extract` — the GENERAL (benchmark-agnostic) complete-spec
 - `spec_conformance_check` — Spec↔RTL contract-conformance gate.
 - `spec_coverage_check` — ORGANIC #697 [P1, chip-AGNOSTIC]
+- `spec_electrical_extract` — PROGRAM-FIRST structural extractor for stated
 - `spec_enumset_extract` — PROGRAM-FIRST structural extractor for CVDP
 - `spec_example_smoke_tb` — ORGANIC #728 [P1, chip-AGNOSTIC]
 - `spec_fsm_extract` — PROGRAM-FIRST structural extractor for stated FSMs.
 - `spec_numeric_pack_extract` — PROGRAM-FIRST numeric-semantics + packing
+- `spec_otp_extract` — PROGRAM-FIRST structural extractor for stated OTP content.
 - `spec_regmap_extract` — PROGRAM-FIRST structural register-map extractor.
 - `spec_response_delay_check` — Response path must honour spec-declared
 - `spec_review_lint` — deterministic structural presence lint for a NL spec.  _[v0.2.14]_
 - `spec_rtl_port_fidelity_check` — spec↔RTL port-fidelity + garbled-port lint.
 - `spec_self_consistency_check` — pre-RTL spec self-consistency lint.  _[v0.1.5]_
+- `spec_signedness_extract` — PROGRAM-FIRST per-SIGNAL signedness extractor
+- `spec_test_debug_extract` — PROGRAM-FIRST structural extractor for the L7
 - `spec_validator` — DS<->AN(<->Spec) cross-consistency checker.
 - `spec_worked_example_extract` — PROGRAM-FIRST structural worked-example /
 - `spef_extraction_check` — Verify parasitic extraction (SPEF) was produced after routing.
@@ -1590,6 +1605,7 @@ _(no programs in this group)_
 - `synth_netlist_check` — Deterministic synthesis netlist validation checker.
 - `synth_wrapper_check` — Deterministic compliance check for synth-wrapper-gen.
 - `synth_wrapper_gen` — auto-generate synthesis wrapper for inout-port designs.
+- `table_lut_synth` — a DETERMINISTIC solver for the CVDP TABLE-DRIVEN
 - `tapeout_checklist_gen` — emit Step 36 (v2.3) reports/audit/tapeout_checklist.json.
 - `tapeout_signoff_check` — wrapper for signoff_audit --mode tapeout.
 - `tb_timing_extremes_check` — LL-6.
