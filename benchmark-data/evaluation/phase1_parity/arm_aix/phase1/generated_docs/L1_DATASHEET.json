@@ -3688,21 +3688,20 @@
       "source": "IHI0022H_amba_axi_protocol_spec.pdf"
     }
   ],
-  "purpose": "Defines the AMBA AXI/ACE on-chip bus protocols for high-performance, high-frequency master-slave communication, suitable for high-bandwidth low-latency designs as well as coherent multi-master systems with caches.",
-  "confidentiality": "Non-Confidential",
-  "copyright": "Copyright © 2003-2020 Arm Limited",
-  "electrical_specs_present": false,
   "burst_boundary_rule": "A burst must not cross a 4KB address boundary (inherited from AXI).",
-  "package_info_rationale": "Bus protocol specification, not a packaged IC. No package / pinout / electrical info applies.",
+  "electrical_specs_rationale": "Protocol spec defines only logical signal semantics (synchronous, sampled on rising clock edge). Electrical levels are per-implementation.",
   "issuer": "Arm Limited",
-  "package_info_present": false,
-  "vendor": "Arm Limited, Company 02557590 registered in England, 110 Fulbourn Road, Cambridge, England CB1 9NJ",
-  "intended_audience": "Hardware and software engineers familiar with AMBA AXI3/AXI4 who design coherent multi-master systems, processor clusters, accelerators, or IO bridges.",
+  "confidentiality": "Non-Confidential",
+  "document_id": "ARM IHI 0022H (ID040120)",
+  "copyright": "Copyright © 2003-2020 Arm Limited",
   "max_burst_length": {
     "AXI3": 16,
     "AXI4_INCR": 256,
     "AXI4_FIXED_WRAP": 16
   },
+  "package_info_rationale": "Bus protocol specification, not a packaged IC. No package / pinout / electrical info applies.",
+  "purpose": "Defines the AMBA AXI/ACE on-chip bus protocols for high-performance, high-frequency master-slave communication, suitable for high-bandwidth low-latency designs as well as coherent multi-master systems with caches.",
+  "vendor": "Arm Limited, Company 02557590 registered in England, 110 Fulbourn Road, Cambridge, England CB1 9NJ",
   "supported_data_bus_widths_bits": [
     8,
     16,
@@ -3713,8 +3712,9 @@
     512,
     1024
   ],
-  "document_id": "ARM IHI 0022H (ID040120)",
-  "electrical_specs_rationale": "Protocol spec defines only logical signal semantics (synchronous, sampled on rising clock edge). Electrical levels are per-implementation.",
+  "intended_audience": "Hardware and software engineers familiar with AMBA AXI3/AXI4 who design coherent multi-master systems, processor clusters, accelerators, or IO bridges.",
+  "package_info_present": false,
+  "electrical_specs_present": false,
   "five_channels": [
     {
       "name": "AW",

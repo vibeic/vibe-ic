@@ -15,19 +15,11 @@
   "no_synthesis_targets_in_input": true,
   "parameters": [],
   "peripheral_only_emit_skipped_v1_6_376": 7,
-  "wake_pulse_us": 5.0,
-  "wake_pulse_measurement_evidence": "input/docs/PC16550D_uart_with_fifos.pdf",
-  "wake_pulse_extraction_strategy": "doc_wake_pulse_proximity_fallback",
   "extraction_strategy": {
-    "l8_evidence_population_v1_6_395": 1
+    "l8_evidence_population_v1_6_395": 0
   },
   "extraction_evidence": {
-    "input/docs/PC16550D_uart_with_fifos.pdf": [
-      {
-        "literal": "wake_pulse measurement 5.0 us",
-        "label": "wake-pulse LOW width (vendor measurement)"
-      }
-    ]
+    "input/docs/PC16550D_uart_with_fifos.pdf": []
   },
   "auto_discovered_literals": [
     {
