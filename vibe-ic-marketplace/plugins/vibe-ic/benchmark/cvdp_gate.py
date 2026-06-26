@@ -1335,6 +1335,32 @@ def required_module_names_from_prompt(prompt_text):
     return stems
 
 
+_P1304_SKELETON_MODULE_RE = re.compile(
+    r"```(?:system)?verilog\s*\n\s*module\s+([A-Za-z_]\w*)",
+    re.IGNORECASE,
+)
+
+
+def skeleton_module_name_from_prompt(prompt_text):
+    """ORGANIC #1304 -- prompt-skeleton harness-top fallback.
+
+    When the prompt includes a verbatim Verilog code-fence skeleton
+    ``verilog module <X>(...` the CVDP harness TOPLEVEL is almost
+    always exactly <X> (field-measured: 66 of 67 skeleton-bearing
+    problems).  This single name is returned as a string for
+    alias-wrapper emit when the AUTHORITATIVE dataset
+    (harness.files) is absent (local_export prompts JSONL).
+
+    Returns the FIRST skeleton module name found, or None.
+    Strictly advisory: the gate will never hard-block on it,
+    only append a thin alias wrapper if the top is missing."""
+    if not prompt_text:
+        return None
+    m = _P1304_SKELETON_MODULE_RE.search(prompt_text)
+    if m:
+        return m.group(1)
+    return None
+
 def completion_module_names(completion):
     """Module names declared in a completion (comment/string-stripped view,
     reusing the same detection path the synth smoke uses)."""
@@ -1878,6 +1904,16 @@ def main(argv=None) -> int:
     from cvdp_harness_toplevel_alias import (
         load_harness_toplevels, maybe_alias_completion)
     harness_tops = load_harness_toplevels(args.dataset) if args.dataset else {}
+    # ORGANIC #1304 — prompt-skeleton fallback for ids the dataset lacks.
+    # When the authoritative harness.files are absent (local_export prompts
+    # JSONL), the ```verilog module <X>( skeleton is the next-best signal for
+    # the harness TOPLEVEL (field-measured 66/67 accuracy across 302 records).
+    if prompts:
+        for _rid, _prompt in prompts.items():
+            if _rid not in harness_tops:
+                _skel = skeleton_module_name_from_prompt(_prompt)
+                if _skel:
+                    harness_tops[_rid] = _skel
     # ORGANIC #734 — if the operator passed --dataset specifically to re-enable
     # the #715 protection but it yields NO input.context for any id (a wrong file
     # / typo'd path / non-CVDP JSONL), the protection silently stays inactive.
