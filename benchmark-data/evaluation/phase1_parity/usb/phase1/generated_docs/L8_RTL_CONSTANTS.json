@@ -144,7 +144,7 @@
   "extraction_evidence": {
     "input/docs/USB_2.0_specification.pdf": [
       {
-        "literal": "wake_pulse measurement 900.0 us",
+        "literal": "t1 Suspended hub ‘B’ detects the ‘K’ on its downstream facing port and wakes up enough within 900 µs",
         "label": "wake-pulse LOW width (vendor measurement)"
       }
     ]

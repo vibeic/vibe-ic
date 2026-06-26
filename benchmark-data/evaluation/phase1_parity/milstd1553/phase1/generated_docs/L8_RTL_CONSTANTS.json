@@ -34,18 +34,11 @@
   "no_synthesis_targets_in_input": true,
   "parameters": [],
   "peripheral_only_emit_skipped_v1_6_376": 0,
-  "wake_pulse_us": 8.97,
-  "wake_pulse_measurement_evidence": "input/docs/MILSTD1553_Spec.pdf",
-  "wake_pulse_extraction_strategy": "doc_wake_pulse_proximity_fallback",
   "extraction_strategy": {
-    "l8_evidence_population_v1_6_395": 2
+    "l8_evidence_population_v1_6_395": 1
   },
   "extraction_evidence": {
     "input/docs/MILSTD1553_Spec.pdf": [
-      {
-        "literal": "wake_pulse measurement 8.97 us",
-        "label": "wake-pulse LOW width (vendor measurement)"
-      },
       {
         "literal": "1 MHz",
         "label": "clock_domain_doc_prose_fmax_primary"
