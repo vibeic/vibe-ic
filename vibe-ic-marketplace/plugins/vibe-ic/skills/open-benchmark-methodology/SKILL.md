@@ -588,6 +588,39 @@ If a future benchmark doesn't cleanly fit A/B/C/D/E:
    — if the answer is no, fix the harness first, don't dispatch.
 4. **Never publish a number from Shape E**. Blocked is blocked; out-of-scope is out-of-scope.
 
+## § 7.5 — Mandatory Phase-1 entry: every benchmark run must start from the Vibe-IC plugin (BINDING)
+
+> **Owner directive 2026-06-28:** A benchmark number is meaningful ONLY if it measures what the
+> Vibe-IC product — the deterministic runner chain — can produce. Therefore **every benchmark run
+> MUST enter through the Vibe-IC plugin's Phase-1 path**; an agent that authors or patches RTL
+> directly and then invokes the host scorer is measuring "Opus + MCP-EDA", not Vibe-IC.
+
+Concrete enforcement:
+
+1. **Canonical single entry point**: `vibe_ic_one_shot_runner.py <project>` (or, for the
+   Phase-1 layer in isolation, `phase1_one_shot_runner.py <project>`). `vibe_ic_one_shot_runner.py`
+   already integrates `phase1_one_shot_runner.py`; it auto-detects `input/phase1_prompt.md`,
+   `input/docs/`, or `input/phase1_structured.yaml` and produces `phase1/generated_docs/L*.json`.
+2. **No direct-agent authoring**: agents must NOT write benchmark RTL by hand, patch response
+   JSONL completions, or call the host scorer on manually-edited files. The only legitimate
+   AI-authored RTL path is the runner's `fallback_skill=spec-to-rtl` waiver (e.g.
+   `digital_arithmetic_primitive` / `unknown_protocol_class` with `rtl_gen=null`), where the AI
+   writes RTL **into the runner's `phase2/stage1/rtl/` tree** and then the runner's downstream
+   gates (lint, conformance, TB, synth) are re-invoked.
+3. **Shape-C gate-as-sole-emit path still counts**: for atomic micro-problems (VerilogEval),
+   the `gates.py` harness is the authorized entry point because it drives `phase1_engine.cli`,
+   `spec_conformance_check.py`, `rtl_hygiene_lint --fix`, etc. — the Phase-1 fact-graph is still
+   produced; the gate simply wraps the emit. Directly editing `samples/<Prob>_sample01.sv` without
+   running the gate is equally prohibited.
+4. **Score front-door guard**: `benchmark_dispatch.py --score` / `benchmark_clean_room_check.py`
+   MUST reject any run that lacks `reports/phase1_one_shot.json` or `phase1/generated_docs/L*.json`
+   evidence (with a documented exception only for gated datasets where Phase-1 itself is
+   impossible — Shape E, not a loophole for Shape A-D).
+5. **Why this is non-negotiable**: the 2026-06-27 CVDP close-loop demonstrated that manual per-pid
+   RTL patches can move the host scorer by +6 PASS, but those patches do NOT flow back into the
+   deterministic runner. A subsequent clean-room run would lose them instantly. The benchmark
+   number must measure the runner, not the agent's ad-hoc edits.
+
 ## § 8 — Re-run obligations
 
 When re-running a previously-measured benchmark on a new plugin version, the **same shape** must
