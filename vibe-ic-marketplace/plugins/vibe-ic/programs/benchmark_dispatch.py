@@ -393,11 +393,28 @@ def cmd_reattempt_floor(bench: str) -> int:
     return 0
 
 
-def cmd_score(bench: str, run: str, dataset: str | None, allow_ungated: bool = False):
+def cmd_score(bench: str, run: str, dataset: str | None,
+              allow_ungated: bool = False, allow_direct_agent: bool = False):
     e = _entry(bench)
     if e["shape"] not in ("B", "C"):
         raise SystemExit(f"--score only handles Shape B + C here. Shape {e['shape']} → use score_cocotb_mcp.py / benchmark-verify skill.")
     run_p = Path(run).resolve()
+    # Front-door Vibe-IC entry gate (owner directive 2026-06-28): refuse to
+    # score a run that did not enter through the Vibe-IC plugin.  Direct-agent
+    # authoring / patching followed by a host-scorer invocation measures
+    # "Opus + MCP-EDA", not Vibe-IC.
+    entry_guard = Path(__file__).resolve().parent / "vibe_ic_entry_guard.py"
+    if entry_guard.is_file() and not allow_direct_agent:
+        rc = subprocess.call([sys.executable, str(entry_guard), str(run_p),
+                              "--strict"])
+        if rc != 0:
+            raise SystemExit(
+                "Vibe-IC entry guard FAILed — this run lacks evidence of "
+                "passing through vibe_ic_one_shot_runner.py / phase1. "
+                "Run the benchmark through the Vibe-IC plugin; direct-agent "
+                "authoring/patching cannot be scored as canonical. "
+                "Pass --allow-direct-agent only for a disclosed NON-CANONICAL "
+                "exploratory run.")
     # Front-door clean-room gate (ORGANIC-20260604): refuse to score a run that
     # inherited prior samples / scores / memory. The published pass@1 must come
     # from a clean-room run ('一定是重跑', user directive 2026-06-04).
@@ -474,6 +491,10 @@ def cmd_score(bench: str, run: str, dataset: str | None, allow_ungated: bool = F
                 "so the emit gates + port-reorder never fired and this run is NON-CANONICAL. "
                 "Author into a work dir and emit through the gate (the runner does this "
                 "automatically), or pass --allow-ungated for a disclosed exploratory run.")
+    if allow_direct_agent:
+        print("NOTICE: --allow-direct-agent passed — this run is NON-CANONICAL and "
+              "its RESULT.md MUST disclose that it did not enter through the "
+              "Vibe-IC runner.")
     scorer = HARNESS / e.get("scorer", "score_iverilog_tb.py")
     cmd = [sys.executable, str(scorer), "--bench", bench, "--dataset", str(ds_p), "--run", str(run_p)]
     print("$ " + " ".join(cmd))
@@ -503,6 +524,9 @@ def main():
                     help="OPT-IN: score even if some samples lack an emit-path attestation "
                          "(a disclosed exploratory direct-author run, NON-CANONICAL). Default "
                          "HARD-BLOCKs ungated samples so the published number reflects the runner.")
+    ap.add_argument("--allow-direct-agent", action="store_true",
+                    help="OPT-IN: score even if the run lacks Vibe-IC runner entry evidence "
+                         "(NON-CANONICAL). Default HARD-BLOCKs direct-agent authoring/patching.")
     a = ap.parse_args()
 
     if a.list:
@@ -526,7 +550,9 @@ def main():
     if a.score:
         if not a.run:
             raise SystemExit("--score requires --run")
-        cmd_score(a.bench, a.run, a.dataset, allow_ungated=a.allow_ungated)
+        cmd_score(a.bench, a.run, a.dataset,
+                  allow_ungated=a.allow_ungated,
+                  allow_direct_agent=a.allow_direct_agent)
         return
     if a.reattempt_floor:
         sys.exit(cmd_reattempt_floor(a.bench))
