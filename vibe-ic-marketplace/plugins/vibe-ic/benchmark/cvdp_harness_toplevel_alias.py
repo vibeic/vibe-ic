@@ -37,12 +37,23 @@ harness top). The wrapper instantiates with `.*` so it is a no-op unless the
 author top's ports name-match the harness toplevel's expected ports (which they
 do when the author implemented the right interface). chip-AGNOSTIC: pure
 dataset-field + Verilog-grammar parse, no SKU/chip/vendor literal.
+
+v1.2.40 baseline (181-pass no-leak).
+v1.2.47 extension: parameter-port list forwarding — a parameter author's port
+widths reference parameter names so the alias wrapper must re-declare `#(...)`.
+v1.2.48 extension: JSON-completion unwrap — the gate's `cvdp_gate.extract_code`
+recognises `{"code": [{path: content}, …]}` (and the flat
+`{path: content, …}` shape); the v1.2.40/v1.2.47 bare-`module …`-regex
+scanner returned None on those envelopes, so a port-list-compatible rename
+inside a JSON-shape completion was un-aliased and `iverilog -s <top>`
+ELAB_ERRORed.
 """
 from __future__ import annotations
 
+import json as _json
 import re
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Set
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 # ── 1. authoritative toplevel from the dataset's harness files ──────────────
 _ENV_TOP_RE = re.compile(r"(?im)^\s*toplevel\s*[=:]\s*([A-Za-z_]\w*)")
@@ -223,6 +234,121 @@ def alias_wrapper(top_needed: str, author_top: str, ports: List[str],
         f"endmodule\n")
 
 
+# ── 4. JSON-completion unwrap (v1.2.48) ──────────────────────────────────────
+"""
+ORGANIC #528followup — when the agent (or scorer) wraps multi-file RTL in a
+JSON envelope `{"code": [{path: content}, …]}` (or a flat
+`{path: content, …}` shape), the v1.2.40/v1.2.47 bare-`module …`-regex
+scanner returns None on the envelope string (no top-level `module <name>(…);`
+anchor) → the rule SKIPS → a port-list-compatible rename in the JSON goes
+un-aliased → `iverilog -s <harness_top>` ELAB_ERRORs.
+
+Fix: parse the JSON envelope shape first; if a `{path: content}` RTL-suffix
+entry exists, run `author_top_and_ports` on the FIRST such entry's content;
+if the alias wrapper is to be injected, append it INTO that entry's value
+and re-emit the JSON envelope. NO byte-equality goal with the original
+(the official `parse_model_response` only requires `json.loads` to succeed
+on the brace range — `src/model_helpers.py:174-177`).
+
+chip-AGNOSTIC: brace-range `_json.loads` + RTL-suffix key filter. Mirrors
+`cvdp_gate.json_code_files`'s shape recognition but stays in this module to
+avoid the circular-dependency risk of importing cvdp_gate from a helper the
+gate itself depends on (§4.05 — never re-correlate emitter↔checker's own
+helpers).
+
+§4.05 no-misread guard: returns None for:
+  (a) bare Verilog (no leading `{`)
+  (b) `{"response":"..."}` / `{"explanation":"..."}` / non-`code`-key prose
+      envelopes — code-comprehension / doc-only payloads; the scorer handles
+      them as `subjective.txt`; reviving them would falsely BLOCK.
+  (c) JSON whose `code` list holds only empty strings / non-string values.
+"""
+# Chip-AGNOSTIC RTL-FILE SUFFIXES — mirrors `cvdp_gate._RTL_SUFFIXES`. Kept
+# local to avoid that import.
+_RTL_SUFFIXES = (".sv", ".v", ".svh", ".vh")
+
+
+def _try_unwrap_json_code_dict(
+        completion: str) -> Optional[Tuple[str, str]]:
+    """If `completion` is a JSON `{"code": [{path: content}, …]}` envelope
+    where at least one `path` has an RTL suffix AND its `content` is a
+    non-empty string, return the FIRST such `(path, content)` pair. None
+    otherwise (do NOT mis-revive prose envelopes).
+
+    Also recognises the FLAT FILE-MAP fallback
+    `{"rtl/foo.sv":"module foo…"}` (no `code` wrapper key) — i.e. mirrors
+    `cvdp_gate.json_code_files`'s shape recognition at chip-AGNOSTIC
+    `.sv`/`.v`/`.svh`/`.vh` granularity."""
+    s = (completion or "").lstrip()
+    if not s.startswith("{"):
+        return None                                  # (a) bare Verilog
+    try:
+        obj = _json.loads(s)
+    except (ValueError, _json.JSONDecodeError):
+        return None                                  # not parseable JSON
+    if not isinstance(obj, dict):
+        return None
+    code = obj.get("code")
+    if isinstance(code, list):
+        for entry in code:
+            if not isinstance(entry, dict):
+                continue
+            for k, v in entry.items():
+                if (isinstance(k, str) and isinstance(v, str)
+                        and k.lower().endswith(_RTL_SUFFIXES)
+                        and v.strip()):
+                    return k, v
+        return None                                  # (c) all-empty entries
+    if "code" not in obj:
+        # flat file-map fallback (mirrors cvdp_gate.json_code_files line 263)
+        for k, v in obj.items():
+            if (isinstance(k, str) and isinstance(v, str)
+                    and k.lower().endswith(_RTL_SUFFIXES)
+                    and v.strip()):
+                return k, v
+    return None                                      # (b) prose envelope
+
+
+def _reencode_json_first_entry(completion: str, first_path: str,
+                                new_first_content: str) -> str:
+    """After the alias wrapper has been synthesized against the FIRST RTL
+    entry's content, mutate the JSON envelope's first RTL entry in-place
+    and re-emit the envelope. The scorer's `parse_model_response` only
+    requires `json.loads` to succeed on the brace range; byte-equality
+    with the original completion is unnecessary.
+
+    The selection predicate MUST mirror `_try_unwrap_json_code_dict`
+    exactly (RTL-suffix key AND non-empty string value) so the picked
+    target ENTRY is the same one alias unwrap selected for synthesis."""
+    s = (completion or "").lstrip()
+    obj = _json.loads(s)
+    code = obj.get("code")
+    if isinstance(code, list):
+        for entry in code:
+            if not isinstance(entry, dict):
+                continue
+            for k in list(entry.keys()):
+                v = entry[k]
+                if (isinstance(k, str)
+                        and k.lower().endswith(_RTL_SUFFIXES)
+                        and isinstance(v, str)
+                        and v.strip()):
+                    # same predicate as _try_unwrap_json_code_dict — the
+                    # picked entry IS the unwrap entry by construction
+                    entry[k] = new_first_content
+                    break
+            else:
+                continue
+            break
+        obj["code"] = code
+    else:
+        # flat file-map: the only RTL-suffix non-empty key IS first_path
+        # by construction of _try_unwrap_json_code_dict flat-fallback
+        obj[first_path] = new_first_content
+    return _json.dumps(obj, ensure_ascii=False)
+
+
+# ── 5. the dispatch — bare Verilog OR JSON-completion → alias ───────────────
 def maybe_alias_completion(
         completion: str,
         harness_top: Optional[str],
@@ -232,15 +358,44 @@ def maybe_alias_completion(
     append a thin alias wrapper so the harness finds its TOPLEVEL. No-op when
     harness_top is None, already declared, or the author top/ports are not
     parseable (never corrupt a completion). Returns the (possibly extended)
-    completion string."""
+    completion string.
+
+    v1.2.48: when the completion is a JSON envelope `{"code": [...]}` or a
+    flat file-map shape, the alias chain unwraps into the FIRST RTL-suffix
+    entry, emits the wrapper INTO that entry's value, and re-encodes the
+    envelope. Bare-Verilog completions still flow through the v1.2.40/v1.2.47
+    append-to-end path (no JSON path triggered → no re-encode)."""
     if not harness_top:
         return completion
+    json_unwrap = _try_unwrap_json_code_dict(completion or "")
+    if json_unwrap is not None:
+        # ── JSON-dict unwrap path (v1.2.48) ──
+        first_path, first_content = json_unwrap
+        declared = completion_module_names_fn(completion or "")
+        if harness_top in declared:
+            return completion          # already correct — no-op
+        parsed = author_top_and_ports(first_content)
+        if not parsed:
+            return completion          # non-ANSI / unparseable
+        author_top, ports, ansi_decls, param_block = parsed
+        if author_top == harness_top:
+            return completion          # detection mismatch guard
+        wrapper = alias_wrapper(
+            harness_top, author_top, ports, ansi_decls, param_block)
+        try:
+            new_first = first_content + wrapper
+            return _reencode_json_first_entry(
+                completion or "", first_path, new_first)
+        except (ValueError, _json.JSONDecodeError):
+            return completion          # re-encode failed — no-op
+
+    # ── bare-Verilog path (v1.2.40/v1.2.47 unchanged) ──
     declared = completion_module_names_fn(completion or "")
     if harness_top in declared:
-        return completion              # already correct — no-op (the 181 passers)
+        return completion              # already correct — no-op (181 passers)
     parsed = author_top_and_ports(completion or "")
     if not parsed:
-        return completion              # non-ANSI / unparseable — do not risk corruption
+        return completion              # non-ANSI / unparseable — do not corrupt
     author_top, ports, ansi_decls, param_block = parsed
     if author_top == harness_top:
         return completion              # detection mismatch guard
