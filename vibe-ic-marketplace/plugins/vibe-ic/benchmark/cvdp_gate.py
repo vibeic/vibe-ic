@@ -1294,9 +1294,20 @@ def gate_record(rec: Dict, workdir: Path,
     # / forever-in-@* shapes that are LEGITIMATE in a context the heuristic
     # doesn't see). The 6 file-named hang subjects in the run are NOT in this
     # 28 set; they fail on ROOT-CAUSE shapes (wrong-data / timing / w-r-ptr)
-    # that the current heuristic does not catch — the metadata is therefore
-    # an ADVISORY SIGNAL for the next scoring layer to surface in its own
-    # audit, not a BLOCKING input here.
+    # that the v1.2.45 heuristic does not catch.
+    #
+    # ORGANIC v1.2.46 — three additional WEAK signatures (ADVISORY ONLY):
+    #   * gray-code next-cycle comparator  (fifo_async class)
+    #   * handshake-valid one-cycle pulse  (ir_receiver class)
+    #   * module-port-list ↔ expected-port mismatch  (axi_alu class)
+    # These contributions arrive ONLY through `out_rec["hang_signatures"]`
+    # (and `entry["hang_signatures"]) on the audit-trail — NEITHER lifts
+    # `predicted_hang` to True. STRICT §4.05: never BLOCK, never flip
+    # pass verdict, never write into the `completion` string. The bit
+    # `out_rec["hang_predicted"]` remains STRONG-ONLY (combinational
+    # self-loop or forever-in-@*); if the caller wants to access the 3 NEW
+    # WEAK signals for their own audit pipeline, it does so by reading
+    # `out_rec["hang_signatures"]` and filtering by `(WEAK: ...)` tag.
     #
     # STRICT §4.05 discipline: the tag is written TWICE (once on `entry` for
     # the build-side audit trail, once on `out_rec` so the next scoring run
@@ -1305,7 +1316,9 @@ def gate_record(rec: Dict, workdir: Path,
     #   (b) joined to a verdict-flipping clause in this same module
     # Any future layer that wants to use the tag MUST come back with a tighter
     # chip-AGNOSTIC detector and PROVE no-leak on the real benchmark.
-    # See cvdp_hang_detect.py for the heuristic set.
+    # See cvdp_hang_detect.py for the heuristic set (STRONG:
+    # combinational-loop, forever-in-@*; WEAK: dead-signal + 3 v1.2.46
+    # extensions).
     try:
         from cvdp_hang_detect import predict_hang
         _ph, _reason, _sigs = predict_hang(combined)
