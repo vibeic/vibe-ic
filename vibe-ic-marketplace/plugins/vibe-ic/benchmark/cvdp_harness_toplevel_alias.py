@@ -110,8 +110,8 @@ def load_harness_toplevels(dataset_path: str) -> Dict[str, str]:
 # ── 2. parse the author's single top module + its port name list ────────────
 _MODULE_HDR_RE = re.compile(
     r"\bmodule\s+([A-Za-z_]\w*)\s*"          # 1: name
-    r"(?:#\s*\([^;]*?\)\s*)?"                  # optional param block
-    r"\((.*?)\)\s*;",                          # 2: port list (ANSI or names)
+    r"(?P<param>(?:#\s*\((?P<param_body>[^;]*?)\))?\s*)"
+    r"\((?P<ports>.*?)\)\s*;",              # 3: port list (ANSI or names)
     re.S)
 # the trailing identifier of one ANSI port chunk (the port NAME), allowing a
 # leading direction/type/packed-dimension prefix to be carried verbatim.
@@ -130,12 +130,18 @@ def _strip_comments(src: str) -> str:
 
 
 def author_top_and_ports(code: str) -> Optional[tuple]:
-    """Return (top_module_name, [port_names], ansi_or_None) for the module in
-    `code` whose header is ANSI (carries `input/output/inout` directions). The
-    alias wrapper needs the directions, so a non-ANSI header (bare port names,
-    directions in the body) is NOT aliasable here → returns None. `ansi` is the
-    list of full ANSI port-declaration chunks (verbatim, direction+width+name)
-    to re-declare on the wrapper. Pure Verilog-grammar parse."""
+    """Return (top_module_name, [port_names], ansi_decls, param_block) for the
+    module in `code` whose header is ANSI (carries `input/output/inout`
+    directions). The alias wrapper needs the directions, so a non-ANSI header
+    (bare port names, directions in the body) is NOT aliasable here → returns
+    None. `ansi_decls` is the list of full ANSI port-declaration chunks
+    (verbatim, direction+width+name) to re-declare on the wrapper.
+    `param_block` is the verbatim `#(...)` parameter port list (with surrounding
+    `#(...)` and whitespace) when the header carries one, else `None` — a
+    parameter module's port widths reference parameter names (e.g. `[W-1:0]`),
+    so the alias wrapper MUST re-declare those parameters or iverilog ELABs
+    the wrapper with the parameter names unbound (`Unable to bind parameter`).
+    Pure Verilog-grammar parse."""
     clean = _strip_comments(code or "")
     hdrs = list(_MODULE_HDR_RE.finditer(clean))
     if not hdrs:
@@ -144,7 +150,8 @@ def author_top_and_ports(code: str) -> Optional[tuple]:
     # leading non-top helper module never shadows the real top.
     for m in reversed(hdrs):
         name = m.group(1)
-        portblob = m.group(2)
+        portblob = m.group("ports")
+        param_block = m.group("param")     # may be None / empty
         chunks = [c.strip() for c in _split_ports(portblob) if c.strip()]
         if not chunks or not all(_ANSI_DIR_RE.match(c) for c in chunks):
             continue                   # not a clean ANSI header → skip
@@ -154,7 +161,10 @@ def author_top_and_ports(code: str) -> Optional[tuple]:
             if nm and nm.group(1) not in ports:
                 ports.append(nm.group(1))
         if ports and len(ports) == len(chunks):
-            return name, ports, chunks
+            normalized = (param_block or "").strip()
+            if normalized:
+                normalized = normalized + " "     # trailing space before `(` of ports
+            return name, ports, chunks, normalized
     return None
 
 
@@ -179,18 +189,36 @@ def _split_ports(portblob: str) -> List[str]:
 
 # ── 3. synthesize the thin alias wrapper ────────────────────────────────────
 def alias_wrapper(top_needed: str, author_top: str, ports: List[str],
-                  ansi_decls: List[str]) -> str:
+                  ansi_decls: List[str], param_block: str = "") -> str:
     """A pass-through wrapper that gives the harness its TOPLEVEL name while
     leaving the author module intact. Re-declares the FULL ANSI port list
     (direction+width carried verbatim from the author header) and connects by
-    name, so it is robust to port ORDER and compiles under iverilog -g2012."""
+    name, so it is robust to port ORDER and compiles under iverilog -g2012.
+
+    When the author header carries a parameter port list (e.g. `parameter
+    int InWidth_g = 32`), the wrapper MUST re-declare it before the port
+    list — a parameter module's port widths reference parameter names
+    (e.g. `[InWidth_g-1:0]`), so without parameter re-declaration iverilog
+    ELABs the wrapper with the parameter names unbound (`Unable to bind
+    parameter`). The inner module's instance uses implicit defaults (the
+    wrapper parameter defaults are propagated down the hierarchy), so
+    parameter VALUES stay consistent between wrapper and inner module."""
     port_decl = ",\n    ".join(ansi_decls)
     conns = ", ".join(f".{p}({p})" for p in ports)
+    # normalize the wrapper header: `module <top>` then optional ` #(<params>)`
+    # then `(` — keep a single space between `)` and `(` so the format is
+    # uniform whether the author header is parametric or not. (Both iverilog
+    # versions and the corrected v1.2.40 test expect `module <top> (`).
+    if param_block:
+        param_segment = param_block.rstrip() + " "
+    else:
+        param_segment = ""
+    header_open = f"module {top_needed} {param_segment}(".replace("  (", " (")
     return (
         f"\n\n// --- harness-toplevel alias (auto-added by cvdp_gate; the official\n"
         f"// harness compiles `-s {top_needed}`; the author declared `{author_top}`\n"
         f"// with the same interface) ---\n"
-        f"module {top_needed} (\n    {port_decl}\n);\n"
+        f"{header_open}\n    {port_decl}\n);\n"
         f"    {author_top} u_{author_top} ({conns});\n"
         f"endmodule\n")
 
@@ -213,8 +241,8 @@ def maybe_alias_completion(
     parsed = author_top_and_ports(completion or "")
     if not parsed:
         return completion              # non-ANSI / unparseable — do not risk corruption
-    author_top, ports, ansi_decls = parsed
+    author_top, ports, ansi_decls, param_block = parsed
     if author_top == harness_top:
         return completion              # detection mismatch guard
     return (completion or "") + alias_wrapper(
-        harness_top, author_top, ports, ansi_decls)
+        harness_top, author_top, ports, ansi_decls, param_block)
