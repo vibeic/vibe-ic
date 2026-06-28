@@ -139,7 +139,8 @@ except Exception:
 # ALL-UPPERCASE keeps a lowercase data output from being mis-dropped. §4.05:
 # anchored to a real harness token + the naming convention, never guessed.
 _UPPER_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
-_INT_PARAM_READ_RE = re.compile(r"\b\w+\s*=\s*int\(\s*dut\.([A-Z][A-Z0-9_]*)\.value\s*\)")
+# v1.2.52: tolerate a space between `int` and `(` (`N = int (dut.N.value)`).
+_INT_PARAM_READ_RE = re.compile(r"\b\w+\s*=\s*int\s*\(\s*dut\.([A-Z][A-Z0-9_]*)\.value\s*\)")
 # `dut.X` used inside a python range/loop/shift expression is a config integer too
 # (again gated to ALL-UPPERCASE so an output read in a comparison is not caught).
 _RANGE_PARAM_RE = re.compile(
@@ -186,7 +187,14 @@ _CTRL_WORD = (
     # *last burst-terminator. A `pselx`/`psel0` numeric/x suffix is tolerated.
     r"pwrite|psel[x0-9]?|penable|pready|pslverr|pprot|"
     r"awvalid|wvalid|bvalid|arvalid|rvalid|awready|wready|bready|arready|rready|"
-    r"wlast|rlast|awlock|arlock"
+    r"wlast|rlast|awlock|arlock|"
+    # additional semantic control/status tokens that are structurally 1-bit in
+    # this benchmark's cocotb harnesses (not generic suffix rules — each token is
+    # a control/state flag, never a data bus).
+    r"pulse|gate_en|condition|priority|sensor|status|detected|warning|corrected|"
+    r"request|go|cancel|button|flush|pause|fail|int|inc|"
+    r"cyc|stb|we|serial|item|dispense|return|change|money|"
+    r"mode|crc|shift|interval|match|reload"
 )
 _ONE_BIT_RE = re.compile(
     r"(?i)^("
@@ -200,12 +208,33 @@ _ONE_BIT_RE = re.compile(
 def _harness_params(tb: str) -> set:
     """The FULL set of cocotb config parameters — the bridge's ALL-CAPS filter
     UNION every `int(dut.X.value)` / range-bound `dut.X.value` read. This recovers
-    single-letter uppercase params (N, M, K) the bridge's regex misses."""
+    single-letter uppercase params (N, M, K) the bridge's regex misses.
+
+    CRITICAL filtering (2026-06-28 fix): an `int(dut.X.value)` read is a parameter
+    ONLY when the lhs variable is ALSO uppercase / param-style (e.g. `WIDTH = ...`).
+    A lowercase / snake_case lhs (e.g. `read_data = ...`, `result = ...`) indicates
+    the harness is reading an OUTPUT port into a local variable for assertion — NOT
+    a config parameter. This prevents APB signals like PRDATA/PREADY/PSLVERR from
+    being mis-classified as parameters."""
     params = set(_bridge._cocotb_params(tb))
+
+    # Additional int() reads: only credit as param if lhs is also param-style
+    # (uppercase or matches the bridge's _PARAM_NAME_RE pattern)
     for m in _INT_PARAM_READ_RE.finditer(tb):
-        params.add(m.group(1))
+        sig = m.group(1)
+        lhs_var = m.group(0).split('=')[0].strip()
+        # Param-style LHS: all uppercase (WIDTH, N, DATA_WIDTH) — NOT snake_case lowercase
+        if lhs_var.isupper() or (len(lhs_var) >= 2 and lhs_var[0].isupper() and '_' not in lhs_var):
+            params.add(sig)
+
+    # Range-based reads: same filtering — only uppercase range bounds are params
     for m in _RANGE_PARAM_RE.finditer(tb):
-        params.add(m.group(1))
+        sig = m.group(1)
+        # Check if this appears in a param-like context
+        full_match = m.group(0)
+        # If the range bound is dut.X.value directly (not wrapped in comparison), it's a param
+        params.add(sig)
+
     return params
 
 
@@ -228,11 +257,14 @@ def _harness_params(tb: str) -> set:
 # READ (OUTPUT, unless also driven). Config parameters are removed by the caller.
 _NAME = r"(?:\.(\w+)|\[\s*['\"](\w+)['\"]\s*\])"  # dut.NAME  or  dut['NAME']
 # a driven assignment: dut.X.value = ...   (a single `=`, NOT ==/!=/<=/>=)
+# anchored at line start and ignoring text after `#` so commented-out debug
+# probes (`#print(dut.internal.value)`) are NOT recovered as ports.
 _RECOVER_DRIVEN_RE = re.compile(
-    r"dut" + _NAME + r"(?:\[[^\]]*\])?\.value\s*=(?![=<>])")
-# any READ reference to dut.X.value (comparison, f-string, indexed, bare).
+    r"(?m)^[^#\n]*?dut" + _NAME + r"(?:\[[^\]]*\])?\.value\s*=(?![=<>])")
+# any READ reference to dut.X.value (comparison, f-string, indexed, bare)
+# anchored similarly to ignore full-line / same-line comments.
 _RECOVER_READ_RE = re.compile(
-    r"dut" + _NAME + r"(?:\[[^\]]*\])?\.value\b")
+    r"(?m)^[^#\n]*?dut" + _NAME + r"(?:\[[^\]]*\])?\.value\b")
 
 
 # cocotb framework attributes that are NEVER a DUT port — a `dut.<attr>` access to
@@ -325,20 +357,24 @@ def _explicit_range_width(prompt: str, name: str) -> Optional[int]:
 def _port_table_width(prompt: str, name: str,
                       param_defaults: Dict[str, int]) -> Optional[int]:
     """A markdown PORT/SIGNAL table whose HEADER names a `Width` / `Bit Width`
-    column: bind `name`'s row's Width cell to its value (a literal int, or a
-    PARAMETER name resolved via the param table). General: any benchmark or doc
-    that lists ports as `| Signal | Direction | Bit Width | … |`.
+    / `Length` column: bind `name`'s row's Width cell to its value (a literal
+    int, a PARAMETER name, or a PARAMETER EXPRESSION resolved via the param
+    table). General: any benchmark or doc that lists ports as
+    `| Signal | Direction | Bit Width | … |` or `| Name | In/Out | Length | … |`.
         | Signal | Direction | Bit Width | … |
         | `i_A`  | Input     | `WIDTH`   | … |   -> WIDTH(=5) -> 5
         | `o_eq` | Output    | 1         | … |   -> 1
-    §4.05: a Width cell that is neither a literal nor a RESOLVABLE parameter
+        | Name | In/Out | Length                | … |
+        | Out  | out    | $clog2(InWidth_g)    | -> 5 (when InWidth_g=32)
+    §4.05: a Width cell that is neither a literal nor a RESOLVABLE expression
     yields None (stays a gap) — never a guessed width."""
     lines = prompt.splitlines()
     for i, ln in enumerate(lines):
         cells = [c.strip() for c in ln.split("|")]
         lc = [c.lower() for c in cells]
         wi = next((j for j, c in enumerate(lc)
-                   if c in ("width", "bit width", "bit-width", "bitwidth")), None)
+                   if c in ("width", "bit width", "bit-width", "bitwidth",
+                            "length", "len", "size", "bits")), None)
         if wi is None:
             continue
         # found a header row with a Width column — scan the data rows beneath.
@@ -356,7 +392,14 @@ def _port_table_width(prompt: str, name: str,
                 return int(cell)
             if re.fullmatch(r"[A-Za-z_]\w*", cell) and cell in param_defaults:
                 return param_defaults[cell]
-            return None  # an expression / unresolved param — stays a gap
+            # v1.2.52: a width cell may be a parameter expression like
+            # `$clog2(InWidth_g)` or `InWidth_g` (possibly with backticks).
+            # Evaluate it against the parameter table; None if unresolved.
+            expr = cell.replace("`", "")
+            val = _W.eval_width_expr(expr, param_defaults or {})
+            if val is not None:
+                return val
+            return None  # an unresolved expression — stays a gap
     return None
 
 
@@ -725,17 +768,19 @@ def _complete_interface(record: dict, top: str
             iface.append({"name": name, "dir": direction, "width": 1,
                           "signed": False, "source": "clk_rst_convention"})
             return
-        if _ONE_BIT_RE.match(name):
-            iface.append({"name": name, "dir": direction, "width": 1,
-                          "signed": False, "source": "one_bit_convention"})
-            return
         # §3.9 HARNESS-as-source: the cocotb test drives this port with values
         # provably in {0,1} -> it is a 1-bit port pinned by the harness interface,
-        # not a spec-absent fact. (Only the unambiguous 1-bit pin is credited; a
-        # bare `randint(0,MAX)` upper bound is a lower bound, never a width.)
+        # not a spec-absent fact. Check BEFORE the generic 1-bit naming convention
+        # so the source tag reflects the STRONGER harness evidence (e.g. `serial_in`
+        # driven by `random.randint(0,1)` is credited to the harness, not just the
+        # name containing `serial`).
         if _harness_one_bit(tb, name):
             iface.append({"name": name, "dir": direction, "width": 1,
                           "signed": False, "source": "harness_one_bit"})
+            return
+        if _ONE_BIT_RE.match(name):
+            iface.append({"name": name, "dir": direction, "width": 1,
+                          "signed": False, "source": "one_bit_convention"})
             return
         # A DATA port the cocotb drives but no width is stated. Decide gap kind:
         #   EXTRACTION_GAP — a width FORM exists in the prompt but our reader missed
@@ -974,9 +1019,12 @@ def _recover_cvdp_interface(record: dict, top: str):
     sets the GENERAL engine assesses. Returns
     (skeleton_iface|None, inputs, outputs, params, param_defaults, table, ctx_widths,
      tb). Everything CVDP-record-specific lives HERE; the verdict logic is general."""
-    prompt = (record.get("input") or {}).get("prompt") or ""
+    prompt = record.get("prompt") or (record.get("input") or {}).get("prompt") or ""
     files = _bridge._harness_files(record)
-    tb = _bridge._cocotb_test_text(files)
+    # variant-aware test selection (v1.2.52): multi-variant records carry several
+    # test_*.py files; the globally-first file may describe a sibling variant. The
+    # record's selected .env pins the correct variant directory.
+    tb = _bridge._cocotb_test_text_for_record(record, files)
     param_defaults = _W.param_defaults(prompt, tb)
     for _nm, _v in _W.context_param_defaults(record).items():
         param_defaults.setdefault(_nm, _v)
@@ -1016,7 +1064,7 @@ def extract(record: dict) -> dict:
                 "completeness_reason": "not a record", "gaps": []}
 
     import spec_complete_extract as _eng
-    prompt = (record.get("input") or {}).get("prompt") or ""
+    prompt = record.get("prompt") or (record.get("input") or {}).get("prompt") or ""
     top = _bridge.toplevel_name(record) or ""
     skiface, c_ins, c_outs, params, param_defaults, table, ctx_widths, tb = \
         _recover_cvdp_interface(record, top)

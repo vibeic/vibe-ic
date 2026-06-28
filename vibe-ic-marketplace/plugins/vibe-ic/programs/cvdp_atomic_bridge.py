@@ -147,24 +147,119 @@ def _harness_files(record: dict) -> Dict[str, str]:
 
 
 def _env_text(files: Dict[str, str]) -> str:
+    """Return the text of the relevant harness `.env` file.
+
+    Most records have a single `.env`; multi-variant records need record context
+    to choose the right variant (see `_env_text_for_record`)."""
     for k, v in files.items():
         if k.endswith(".env"):
             return v
     return ""
 
 
+def _env_text_for_record(record: dict, files: Dict[str, str]) -> str:
+    # §3.9 multi-variant selection: some CVDP records carry MULTIPLE independent
+    # harness variants (each under its own sub-directory), one per debug/family
+    # branch (e.g. cvdp_copilot_cache_lru_0022 ships `1/src/.env`,
+    # `19/src/.env`, ..., `22/src/.env` — five cache-replacement-policy variants
+    # in one record). The record's IDEAL target variant is the one whose
+    # `TOPLEVEL = <name>` name lines up with the prompt / completion / skeleton
+    # mentioned module; using the FIRST .env makes the bridge bind to a sibling
+    # variant (loses ports/widths/param defaults).
+    envs = [(k, v) for k, v in files.items() if k.endswith(".env")]
+    if not envs:
+        return ""
+    if len(envs) == 1:
+        return envs[0][1]
+    picked = _pick_variant_files(record, envs)
+    return picked[1] if picked else envs[0][1]
+
+
+def _env_key_for_record(record: dict, files: Dict[str, str]) -> str:
+    envs = [(k, v) for k, v in files.items() if k.endswith(".env")]
+    if not envs:
+        return ""
+    if len(envs) == 1:
+        return envs[0][0]
+    picked = _pick_variant_files(record, envs)
+    return picked[0] if picked else envs[0][0]
+
+
+def _pick_variant_files(record: dict,
+                        envs: List[Tuple[str, str]]
+                        ) -> Optional[Tuple[str, str]]:
+    """Of several .env entries (one per harness variant), return the .env of the
+    variant whose TOPLEVEL module name is corroborated by the prompt / completion
+    / context. Falls back to None (caller chooses first-wins) when no name can
+    be unambiguously corroborated."""
+    if not isinstance(record, dict):
+        return None
+    prompt = (record.get("prompt") or ""
+              or (record.get("input") or {}).get("prompt") or "")
+    completion = record.get("completion") or ""
+    # also infer names directly from input.context files (the prompt-side skeleton)
+    skeleton_names: set = set()
+    for k, v in ((record.get("input") or {}).get("context") or {}).items():
+        if isinstance(v, str) and v.strip():
+            for m in re.finditer(r"\bmodule\s+([A-Za-z_]\w*)\b", v):
+                skeleton_names.add(m.group(1))
+    # module decls from completion
+    completion_names = set()
+    for m in re.finditer(r"\bmodule\s+([A-Za-z_]\w*)\b", completion):
+        completion_names.add(m.group(1))
+    # `**module**`/backtick-style references in prompt
+    prompt_words = set(re.findall(r"\*\*([A-Za-z_]\w*)\*\*|`([A-Za-z_]\w*)`", prompt))
+    prompt_name_set = {a or b for a, b in prompt_words if (a or b)}
+    corroborating: set = prompt_name_set | skeleton_names | completion_names
+    if not corroborating:
+        return None
+    # per .env, parse TOPLEVEL=<name>; build a map {name: (env_key, env_text)}
+    by_name: Dict[str, Tuple[str, str]] = {}
+    for k, v in envs:
+        mm = re.search(r"^\s*TOPLEVEL\s*=\s*(\S+)", v, re.M)
+        if mm:
+            by_name.setdefault(mm.group(1), (k, v))
+    # pick the variant corroborated by the most corroborating sources
+    counts = [(nm, (1 if nm in prompt_name_set else 0) +
+                   (1 if nm in skeleton_names else 0) +
+                   (1 if nm in completion_names else 0))
+              for nm in by_name if nm in corroborating]
+    if counts:
+        nm = max(counts, key=lambda x: x[1])[0]
+        return by_name[nm]
+    return None
+
+
 def toplevel_name(record: dict) -> Optional[str]:
     """The module name the TESTBENCH binds — the harness .env TOPLEVEL field."""
-    env = _env_text(_harness_files(record))
+    files = _harness_files(record)
+    env = _env_text_for_record(record, files)
     m = re.search(r"^\s*TOPLEVEL\s*=\s*(\S+)", env, re.M)
     return m.group(1) if m else None
 
 
 def _cocotb_test_text(files: Dict[str, str]) -> str:
+    # Backward-compatible entry point for callers that only have the file map.
+    # For multi-variant records pass the record via _cocotb_test_text_for_record.
+    return _cocotb_test_text_for_record({}, files)
+
+
+def _cocotb_test_text_for_record(record: dict, files: Dict[str, str]) -> str:
+    # Multi-variant records (see toplevel_name/_env_text_for_record note) carry a
+    # separate test module per variant.  Scope the search to the variant directory
+    # that matches the selected .env for this record, so we don't bind to a
+    # sibling variant's DUT interface.
+    env_key = _env_key_for_record(record, files)
+    env_dir = env_key.rsplit("/", 1)[0] + "/" if "/" in env_key else ""
+    scoped = {k: v for k, v in files.items() if k.startswith(env_dir)} if env_dir else files
     # prefer the conventional `test_*.py` cocotb test module.
-    for k, v in files.items():
+    chosen_key = ""
+    chosen = ""
+    for k, v in scoped.items():
         if re.search(r"test_.*\.py$", k) and "runner" not in k:
-            return v
+            chosen_key = k
+            chosen = v
+            break
     # FALLBACK: a cocotb test commonly lives in a non-`test_`-named harness file —
     # `tb.py`, `testbench.py`, `cocotb_<x>.py` — that drives the DUT via `dut.<sig>`.
     # The `dut.<sig>.value` accesses ARE the authoritative interface the scorer
@@ -172,10 +267,33 @@ def _cocotb_test_text(files: Dict[str, str]) -> str:
     # inference). Return the dut-referencing harness `.py` (excluding the runner).
     # A general cocotb file-naming tolerance, not a dataset-specific rule; purely
     # additive — only fires when no `test_*.py` exists (the previously-empty case).
-    for k, v in files.items():
-        if k.endswith(".py") and "runner" not in k and "dut." in v:
-            return v
-    return ""
+    if not chosen:
+        for k, v in files.items():
+            if k.endswith(".py") and "runner" not in k and "dut." in v:
+                chosen_key = k
+                chosen = v
+                break
+    # AUXILIARY library files (e.g. `harness_library.py`) also contain `dut.<sig>`
+    # references inside helper coroutines that the main test file calls. Those
+    # references are part of the harness's bound interface and must be recovered
+    # when they exist — otherwise all IO directionality comes from a single
+    # `WIDTH = int(dut.WIDTH.value)` line and the actual data ports are lost.
+    # We ONLY append helpers that live in the SAME harness variant directory as
+    # the chosen test file and are clearly not another top-level test module.
+    # This prevents multi-variant records (e.g. nbit_swizzling variants #14/#20
+    # with extra parity/ecc ports) from polluting the base variant's interface.
+    if chosen:
+        chosen_dir = chosen_key.rsplit("/", 1)[0] + "/" if "/" in chosen_key else ""
+        extras = []
+        for k, v in files.items():
+            if (k.endswith(".py") and "runner" not in k and k != chosen_key
+                    and "dut." in v
+                    and not re.search(r"test_.*\.py$", k)
+                    and k.startswith(chosen_dir)):
+                extras.append(v)
+        if extras:
+            chosen += "\n" + "\n".join(extras)
+    return chosen
 
 
 # --------------------------------------------------------------------------- #
@@ -187,33 +305,115 @@ def _cocotb_test_text(files: Dict[str, str]) -> str:
 # CLK_DIV, SEQUENCE_LENGTH, ...). We drop them so they never become phantom ports.
 _PARAM_NAME_RE = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$|^[A-Z]{3,}$")
 
+# Standard AMBA/APB/AXI port names are also ALL-CAPS, but they are genuine IO
+# ports (often read with `int(dut.PRDATA.value)` into a local variable). They
+# must NOT be treated as cocotb parameters. This is a protocol-vocabulary list,
+# not a design-specific keyword; it mirrors the generic control-word regexes
+# used elsewhere in the bridge.
+_BUS_PORT_NAMES = frozenset({
+    "PCLK", "PRESETn", "PRESETN", "PADDR", "PWDATA", "PRDATA",
+    "PWRITE", "PENABLE", "PREADY", "PSLVERR",
+    "HCLK", "HRESETn", "HRESETN", "HADDR", "HWDATA", "HRDATA",
+    "HWRITE", "HREADY", "HRESP", "HSIZE", "HBURST", "HTRANS", "HMASTLOCK",
+    "ACLK", "ARESETn", "ARESETN", "AWADDR", "AWVALID", "AWREADY",
+    "AWID", "AWLEN", "AWSIZE", "AWBURST", "AWLOCK", "AWCACHE", "AWPROT",
+    "WDATA", "WVALID", "WREADY", "WSTRB", "WLAST",
+    "ARADDR", "ARVALID", "ARREADY",
+    "ARID", "ARLEN", "ARSIZE", "ARBURST", "ARLOCK", "ARCACHE", "ARPROT",
+    "RDATA", "RVALID", "RREADY", "RRESP", "RID", "RLAST",
+    "BVALID", "BREADY", "BRESP", "BID",
+})
+
 
 def _cocotb_params(tb: str) -> set:
+    """Cocotb PARAMETERS = ALL-CAPS signals read with `int(...)` to CONFIGURE
+    the run (then used as a python int — width/loop bound), not asserted as a DUT
+    output. Bare `dut.X.value` reads are NOT parameters — they are usually a
+    real port being inspected (`if dut.OUT.value`, `print(dut.HREADY.value)`).
+
+    An AMBA/AXI signal like `HREADY` / `PRDATA` / `RDATA` matches the all-caps
+    param pattern, but is a genuine output port. A hard-coded protocol-vocabulary
+    deny-list (`_BUS_PORT_NAMES`) catches those standard bus ports regardless of
+    whether the LHS variable is uppercase (`PRDATA = int(dut.PRDATA.value)`) or
+    lowercase (`read_data = int(dut.PRDATA.value)`). Conversely, a real parameter
+    such as `DATA_WIDTH` is recognized even when read into a lowercase temp
+    (`data_wd = int(dut.DATA_WIDTH.value)`), because it is not a standard bus port.
+    """
     params = set()
+    # Strong signal: `int(dut.X.value)` — only an ALL-CAPS config token is wrapped
+    # in int() in a cocotb run; a port value being polled is `bool()` / identity.
+    # Standard AMBA/APB/AXI bus ports are excluded via _BUS_PORT_NAMES.
     for m in re.finditer(r"\b(\w+)\s*=\s*int\(\s*dut\.(\w+)\.value\s*\)", tb):
         sig = m.group(2)
-        if _PARAM_NAME_RE.match(sig):
+        if _PARAM_NAME_RE.match(sig) and sig not in _BUS_PORT_NAMES:
             params.add(sig)
-    # `dut.PARAM.value` used directly as a width/range, ALL-CAPS -> parameter.
-    for m in re.finditer(r"dut\.([A-Z][A-Z0-9_]+)\.value", tb):
-        if _PARAM_NAME_RE.match(m.group(1)):
-            params.add(m.group(1))
+    # A weaker signal: `dut.X.value` WRAPPED in numeric/arithmetic context
+    # (range bound, slice index) — i.e. *used* as an integer, e.g.
+    #   `range(N*NUMBER_OF_PORTS, NUMBER_OF_PORTS*WIDTH.value)`
+    #   `[port for port in range(dut.NUM_PORTS.value)]`
+    # We guard by requiring the value to appear inside `range(` / `[..]`
+    # / a list-comp `<X for X in range(dut.WIDTH.value)>` AND the signal to
+    # be ALL-CAPS snake (NOT bare 3-letter AMBA codes like HREADY/HADDR —
+    # those genuine ALL-CAPS ports never appear inside `range(...)` in a
+    # cocotb run, only address/data signals DO appear there as integers).
+    # Standard bus ports are also excluded here for safety.
+    for m in re.finditer(
+            r"range\(\s*[^)]*?dut\.([A-Z][A-Z0-9_]+)\.value\b",
+            tb):  # inside range()
+        sig = m.group(1)
+        # require snake-with-underscore or 4+-letter — short 3-letter codes
+        # (HREADY/HADDR) are excluded even when inside range()
+        if ("_" in sig or len(sig) >= 4) and sig not in _BUS_PORT_NAMES:
+            params.add(sig)
     return params
+def _strip_python_comments(tb: str) -> str:
+    """Remove `# ...` comments from a cocotb testbench while preserving `#`
+    inside string literals. Commented-out debug probes (`#print(dut.x.value)`)
+    must not contribute to interface recovery."""
+    out = []
+    for ln in tb.splitlines():
+        cleaned = []
+        in_sq = in_dq = False
+        for ch in ln:
+            if ch == "'" and not in_dq:
+                in_sq = not in_sq
+            elif ch == '"' and not in_sq:
+                in_dq = not in_dq
+            elif ch == '#' and not in_sq and not in_dq:
+                break
+            cleaned.append(ch)
+        out.append(''.join(cleaned))
+    return '\n'.join(out)
 
 
 def _cocotb_io(tb: str) -> Tuple[List[str], List[str]]:
-    """(inputs, outputs) from the cocotb test. A signal that is ASSIGNED
-    (`dut.X.value = ...`, not `==`) is an INPUT; a signal that is only READ
-    (`... = dut.X.value`, `int(dut.X.value)`, `dut.X.value.integer`) is an OUTPUT.
-    Parameters are removed."""
-    driven = set(re.findall(r"dut\.(\w+)\.value\s*=(?!=)", tb))
-    read = set(re.findall(r"=\s*dut\.(\w+)\.value\b", tb))
-    read |= set(re.findall(r"int\(\s*dut\.(\w+)\.value", tb))
-    read |= set(re.findall(r"dut\.(\w+)\.value\.(?:integer|signed_integer)", tb))
+    """(inputs, outputs) from the cocotb test.
+
+    INPUT — assigned with `=` (NOT comparison `==`):
+        `dut.X.value = 1`
+    OUTPUT — read on the RHS or in a conditional / assertion / print:
+        `int(dut.X.value)`, `dut.X.value == ...`, `assert dut.X.value`,
+        `print(dut.X.value)`, `if dut.X.value: ...`
+    The OLDER narrow set (only RHS / int() / .integer reads) missed cases like
+    `data_out` in barrel_shifter that is read ONLY inside a print/f-string —
+    the inclusive `dut.X.value` union recovers it as an OUTPUT.
+
+    SIGNALS THAT MUST NEVER BE IO — already separated out:
+    - parameters (consumed via `int(dut.X.value)` or `range(dut.X.value)`)
+    - clock / reset / enable: classified as SEQ, never an IO port here.
+    """
+    tb = _strip_python_comments(tb)
+    IO_ASSIGNED = re.compile(r"dut\.(\w+)\.value\s*=(?!=)")
+    IO_READ = re.compile(r"dut\.(\w+)\.value")
     params = _cocotb_params(tb)
-    ins = sorted((driven - params))
-    outs = sorted(((read - driven) - params))
-    return ins, outs
+    driven = set(IO_ASSIGNED.findall(tb))
+    all_reads = set(IO_READ.findall(tb))
+    # a drive is also a read (the right-hand-side reference of the TB-driver),
+    # but inputs ARE driven — they should stay in `ins`, NOT be promoted to outs.
+    read_not_driven = (all_reads - driven) - params
+    inputs = sorted(driven - params)
+    outputs = sorted(read_not_driven)
+    return inputs, outputs
 
 
 # --------------------------------------------------------------------------- #
@@ -224,13 +424,29 @@ _HEADER_RE = re.compile(r"module\s+(\w+)\s*(?:#\s*\([^)]*\)\s*)?\((.*?)\)\s*;", 
 
 def _skeleton_ports(record: dict, top: str) -> Optional[Tuple[List[Port], List[Port]]]:
     """Parse ports from the skeleton RTL's module HEADER only (never any body).
-    The skeleton is `output['context']`'s rtl/*.sv that the submitter fills; in
-    CVDP v1.1.0 it is empty, so this returns None almost always. We parse ONLY the
-    declared header ports — the body (if any) is never read."""
+    The skeleton RTL comes from EITHER `input.context` (the RTL file the user
+    shows the AI, present for *modification* prompts where the AI edits it in
+    place; was the historical CVDP v1.1.0 field) OR `output.context` (the
+    reference RTL the AI is being asked to EQUAL; present for *from-scratch*
+    prompts where the prompt quotes an empty RTL stub). Both sources are
+    legitimate interface facts — HEADER-ONLY, never any body code.
+
+    Multi-variant records may declare the target module in only ONE of several
+    context files (e.g. variant 8 but not variant 1), so we try every file and
+    pick the first header that actually declares `module <top> ...` with both
+    input and output ports."""
+    etc = (record.get("input") or {}).get("context") or {}
     oc = (record.get("output") or {}).get("context") or {}
-    if not isinstance(oc, dict):
-        return None
-    for _path, text in oc.items():
+    try:
+        sources = dict(etc)  # try input first (richer for modify-type)
+    except TypeError:
+        sources = {}
+    try:
+        sources.update(oc)   # then overlay output (may overwrite empty stubs)
+    except TypeError:
+        pass
+    best: Optional[Tuple[List[Port], List[Port]]] = None
+    for _path, text in sources.items():
         if not isinstance(text, str) or not text.strip():
             continue
         m = _HEADER_RE.search(text)
@@ -247,7 +463,10 @@ def _skeleton_ports(record: dict, top: str) -> Optional[Tuple[List[Port], List[P
             (ins if d == "input" else outs).append((name, w))
         if ins and outs:
             return ins, outs
-    return None
+        # keep a partial result in case no file has both directions
+        if (ins or outs) and best is None:
+            best = (ins, outs)
+    return best
 
 
 # --------------------------------------------------------------------------- #
@@ -282,41 +501,41 @@ def _prose_width(prompt: str, name: str) -> Optional[int]:
     m = re.search(rf"\b{re.escape(name)}\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]", prompt)
     if m:
         return abs(int(m.group(1)) - int(m.group(2))) + 1
-    # a markdown port-table row: | name | <width-expr> | ... |
-    for rm in re.finditer(
-            rf"^\s*\|\s*`?{re.escape(name)}`?\s*\|\s*([^|]+)\|", prompt, re.M):
+    # a markdown port-table row:
+    #   | name | <width-expr> | ... |
+    #   | [N*WIDTH-1:0] name | <width-expr> | ... |    ← NEW: bracket prefix
+    bracket_prefix = rf"(?:\[.*?\]\s+)"
+    row_re = rf"^\s*\|\s*(?:{bracket_prefix})?`?{re.escape(name)}`?\s*\|\s*([^|]+)\|"
+    for rm in re.finditer(row_re, prompt, re.M):
         cell = rm.group(1)
+        # explicit numeric bus in the width cell itself
         wm = re.search(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", cell)
         if wm:
             return abs(int(wm.group(1)) - int(wm.group(2))) + 1
+        # numeric "32 bits" / "1 bit"
         wm = re.search(r"\b(\d+)\s*-?\s*bits?\b", cell, re.I)
         if wm:
             return int(wm.group(1))
         if re.search(r"\b1\b", cell) and re.search(r"\bbit\b", cell, re.I):
             return 1
-    # a same-line "N-bit <name>" or "<name> ... N-bit" (digit N). UNCHANGED — keeps
-    # the digit-form behaviour byte-identical (any tightening here would silently
-    # re-classify existing COMPLETE records).
+        # NEW: if the cell contains ONLY a symbolic expression (no digits
+        # except inside a parameter name like DATA_WIDTH), return None so
+        # _W.symbolic_width() can resolve `[N*WIDTH-1:0] name` correctly.
+        # Examples: "N * WIDTH bits", "N*WIDTH bits".
+        if re.search(r"[A-Z_]+", cell) and not re.search(r"\b\d+\b", cell):
+            return None
+    # a same-line "N-bit <name>" or "<name> ... N-bit" (digit N). UNCHANGED
     for pat in (rf"\b(\d+)\s*-?\s*bits?\b[^\n]*?\b{re.escape(name)}\b",
                 rf"\b{re.escape(name)}\b[^\n]*?\b(\d+)\s*-?\s*bits?\b"):
         m = re.search(pat, prompt, re.I)
         if m:
             return int(m.group(1))
-    # SPELLED-OUT bit count ("a one-bit signal", "two-bit selector"). Added as a
-    # SEPARATE, tightly-scoped rule so it never perturbs the digit forms above:
-    # the NARRATED form "`port`: … N-bit …" only (name FIRST), and the gap may NOT
-    # cross a clause boundary (`,`/`;`/`.`) — §4.05 NO-LEAK, so a neighbour's width
-    # ("a two-bit field …, and `data_o`") never bleeds onto a later-named port.
+    # SPELLED-OUT bit count
     m = re.search(rf"\b{re.escape(name)}\b[^\n,;.]*?\b{_BITNUM_ALT}\s*-?\s*bits?\b",
                   prompt, re.I)
     if m and not m.group(1).isdigit():
         return _bitnum(m.group(1))
     return None
-
-
-# --------------------------------------------------------------------------- #
-# (c) markdown test-case table -> port names + widths (hex-cell column width)
-# --------------------------------------------------------------------------- #
 def _test_case_table(prompt: str) -> Optional[Dict[str, int]]:
     """Parse a markdown test-case table whose header names the ports (a / b /
     carry_in / Expected Sum / ...) and whose body hex cells fix each column's
@@ -384,9 +603,9 @@ def extract_interface_ex(record: dict, top: str
     logic AND carries the symbolic expression so the emit can re-parameterize it.
     §4.05: an unresolvable parameter expression keeps the port UNRESOLVED -> SKIP.
     """
-    prompt = (record.get("input") or {}).get("prompt") or ""
+    prompt = record.get("prompt") or (record.get("input") or {}).get("prompt") or ""
     files = _harness_files(record)
-    tb = _cocotb_test_text(files)
+    tb = _cocotb_test_text_for_record(record, files)
 
     # (a) skeleton header (header-only).
     sk = _skeleton_ports(record, top)
@@ -409,10 +628,17 @@ def extract_interface_ex(record: dict, top: str
     # Unmistakable 1-bit signals (carry/borrow/flag/handshake): 1-bit by
     # definition. We trust a stray "N-bit" prose token for these ONLY if an
     # explicit `name [hi:lo]` bus range is tied to that exact name.
+    # Expanded in this revision to also cover go / rst / reset / clk / clock /
+    # start / clken / enable (and `_enable`) — the dataset frequently names
+    # 1-bit control signals that the old (carry/valid/ready-only) regex missed.
     _ONE_BIT_RE = re.compile(
         r"(?i)^(c_?in|cin|carry_?in|c_?out|cout|carry_?out|b_?out|borrow|"
-        r".*_valid|.*_ready|valid|ready|start|stop|enable|.*_en|done|error|"
-        r".*_error|.*_flag|overflow|ovf|parity|found|sel)$")
+        r".*_valid|.*_ready|.*_enable|.*_en|enable|valid|ready|start|stop|"
+        r"go|done|done_|error|.*_error|.*_flag|overflow|ovf|parity|found|sel|"
+        r"mode|load|inc|dec|add|sub|mul|cs|we|wr|rd|oe|wr_en|rd_en|we_n|"
+        r"rst|reset|rst_n|reset_n|areset|aresetn|clk|clock|clock_?n|clken|"
+        r"clk_en|ap_start|ap_done|ap_idle|ap_ready|interrupt|irq|interrupt_?n|"
+        r"trigger|sync_?in|sync_?out|chip_?select|cs_n)$")
 
     def _explicit_range(name: str) -> Optional[int]:
         m = re.search(rf"\b{re.escape(name)}\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]", prompt)
@@ -489,6 +715,15 @@ def extract_interface_ex(record: dict, top: str
         # keep only the symbolic entries that survived as real placed ports.
         kept = {n for n, _ in ins} | {n for n, _ in outs}
         symbolic = {k: v for k, v in symbolic.items() if k in kept}
+        # Supplement prose-only control signals (e.g. `clk` that only appears
+        # in `Clock(dut.clk, ...)` / `RisingEdge(dut.clk)` without a
+        # `dut.clk.value` access). Their absence from the cocotb-side does NOT
+        # make them any less of a harness input.
+        cocotb_names = {n for n, _ in ins} | {n for n, _ in outs}
+        for name, w in p_ins:
+            if name not in cocotb_names and name.lower() in _SEQ_PORTS:
+                ins.append((name, w))
+                cocotb_names.add(name)
         used_params = _params_referenced(symbolic, params)
         return ins, outs, used_params, symbolic
 
@@ -591,6 +826,14 @@ def solve(record: dict) -> Optional[str]:
     design. Never reads the golden RTL."""
     if not isinstance(record, dict):
         return None
+    # NORMALIZE: some response JSONLs keep the prompt at the record root
+    # (`record["prompt"]`) and leave `record["input"]["prompt"]` empty. All
+    # downstream record solvers and extractors read `input.prompt`, so copy
+    # the root prompt down before dispatching.
+    if record.get("prompt") and not (record.get("input") or {}).get("prompt"):
+        record = dict(record)
+        record["input"] = dict(record.get("input") or {})
+        record["input"]["prompt"] = record["prompt"]
     # UNIFIED dispatch: the record-level operation solvers (gf/bcd/crc/…) run
     # FIRST (their declared precedence, inside spec_artifact_registry), then the
     # text-level registry `generate()` is the fall-through. The bridge is now a
@@ -605,7 +848,7 @@ def solve(record: dict) -> Optional[str]:
         top = toplevel_name(record)
         if not top:
             return None
-        prompt = (record.get("input") or {}).get("prompt") or ""
+        prompt = record.get("prompt") or (record.get("input") or {}).get("prompt") or ""
         if not prompt.strip():
             return None
         # §4.05 up-front composite / special-algebra SKIP (NO-CHEAT: never let a
@@ -647,7 +890,7 @@ def family_of(record: dict, rtl: Optional[str] = None) -> Optional[str]:
     if not isinstance(record, dict):
         return None
     top = toplevel_name(record) or "TopModule"
-    prompt = (record.get("input") or {}).get("prompt") or ""
+    prompt = record.get("prompt") or (record.get("input") or {}).get("prompt") or ""
     if _COMPOSITE_RE.search(prompt) or _SPECIAL_ALGEBRA_RE.search(prompt):
         return None
     iface = extract_interface(record, top)

@@ -127,12 +127,109 @@ def _width_from_range(span: str, params: Dict[str, int]) -> Optional[int]:
     return None
 
 
+def _extract_param_value(text: str, start: int) -> str:
+    """Extract a parameter value starting at `start` until a top-level `,`, `;`
+    or `)`. Handles balanced parentheses so `$clog2(N)` is captured whole."""
+    i = start
+    depth = 0
+    while i < len(text):
+        c = text[i]
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            if depth == 0:
+                break
+            depth -= 1
+        elif c in ",;" and depth == 0:
+            break
+        i += 1
+    return text[start:i].strip()
+
+
+def _norm_sized_literal(expr: str) -> Optional[int]:
+    """A Verilog/SystemVerilog sized integer literal -> int value.
+
+    Handles:
+      - sized:   8'd8, 12'hFF, 'b1010, 4'b1111, 'd255
+      - unsized: '16, 'd16, 'hFF, '1, '0
+    Comments are stripped by the caller; this sees the bare RHS.
+    §4.05: a literal is an anchored structural fact; a non-literal returns None
+    so the fixed-point expression pass can try it.
+    """
+    expr = expr.strip()
+    # sized / unsized with explicit base
+    m = re.fullmatch(
+        r"(\d*)\s*'\s*[sS]?\s*([dDbBhHoO])\s*([0-9a-fA-F_xXzZ]+)", expr)
+    if m:
+        digits = m.group(3).replace("_", "")
+        base = m.group(2).lower()
+        if base == "d":
+            return int(digits)
+        if base == "h":
+            return int(digits, 16)
+        if base == "b":
+            return int(digits, 2)
+        if base == "o":
+            return int(digits, 8)
+    # unsized decimal literal: `'16` (SystemVerilog default decimal)
+    m = re.fullmatch(r"(\d*)\s*'\s*[sS]?\s*([0-9a-fA-F_xXzZ]+)", expr)
+    if m and m.group(1) == "":
+        return int(m.group(2))
+    # fill literals: '1, '0, 'x, 'z — magnitude is 1 for width calculations
+    if re.fullmatch(r"'\s*[01xXzZ]", expr):
+        return 1
+    return None
+
+
 def _module_params(span: str) -> Dict[str, int]:
-    """localparam / parameter integer defaults declared in the module source."""
+    """localparam / parameter integer defaults declared in the module source.
+
+    Captures:
+      * literal integer defaults (`parameter N = 7`);
+      * sized literals (`parameter NBW = 'd8`, `parameter C = 8'hFF`);
+      * derived expressions (`parameter NWIDTH = $clog2(N)`);
+      * ternary expressions (`localparam CNT = (M <= 1) ? 1 : $clog2(M)`).
+
+    Iterates until no new parameter resolves, so chains of derived values are
+    computed safely."""
     params: Dict[str, int] = {}
-    for m in re.finditer(
-        r"\b(?:localparam|parameter)\b[^;]*?\b([A-Za-z_]\w*)\s*=\s*(\d+)", span):
-        params.setdefault(m.group(1), int(m.group(2)))
+    param_re = re.compile(
+        r"\b(?:localparam|parameter)\b\s*(?:\w+\s+)?\b([A-Za-z_]\w*)\s*=")
+
+    def _rhs(m) -> str:
+        # strip end-of-line / inline comments from the captured RHS so a sized
+        # literal like `'d8 // comment` does not poison parsing.
+        raw = _extract_param_value(span, m.end())
+        return re.sub(r"//.*$", "", re.sub(r"/\*.*?\*/", "", raw,
+                                           flags=re.S), count=1).strip()
+
+    # First pass: literal / sized-literal defaults.
+    for m in param_re.finditer(span):
+        name = m.group(1)
+        expr = _rhs(m)
+        if re.fullmatch(r"\d+", expr):
+            params.setdefault(name, int(expr))
+            continue
+        val = _norm_sized_literal(expr)
+        if val is not None:
+            params.setdefault(name, val)
+
+    # Second pass: expression defaults (including $clog2, arithmetic, ternary).
+    # Re-scan until fixed-point so `NWIDTH = $clog2(N)` resolves after N is known.
+    changed = True
+    while changed:
+        changed = False
+        for m in param_re.finditer(span):
+            name = m.group(1)
+            if name in params:
+                continue
+            expr = _rhs(m)
+            if re.fullmatch(r"\d+", expr):
+                continue
+            val = _wr.eval_width_expr(expr, params)
+            if val is not None:
+                params[name] = val
+                changed = True
     return params
 
 
@@ -205,9 +302,52 @@ def _parse_nonansi_ports(span: str, header_names: List[str],
     return out
 
 
+def _parse_one_span(span: str, target: str) -> List[dict]:
+    """Parse a single `module <target> ... endmodule` span into [{name,dir,width}].
+    Returns [] if the header is unparseable."""
+    mh = re.search(rf"\bmodule\s+{re.escape(target)}\b", span)
+    if not mh:
+        return []
+    i = mh.end()
+    # skip an optional parameter block  #( ... )
+    pm = re.match(r"\s*#\s*\(", span[i:])
+    if pm:
+        close = _balanced(span, i + pm.end() - 1)
+        if close is None:
+            return []
+        i = close + 1
+    # the port-list '('
+    op = span.find("(", i)
+    if op == -1:
+        return []
+    close = _balanced(span, op)
+    if close is None:
+        return []
+    header = span[op + 1:close]
+    params = _module_params(span)
+    if _PORT_KW.search(header):
+        ports = _parse_ansi_ports(header, params)
+    else:
+        header_names = [n for n in re.split(r"[\s,]+", _strip_comments(header).strip())
+                        if re.fullmatch(r"[A-Za-z_]\w*", n)]
+        ports = _parse_nonansi_ports(span, header_names, params)
+    # de-dup by name (first wins), drop empties
+    seen, out = set(), []
+    for p in ports:
+        if p["name"] and p["name"] not in seen:
+            seen.add(p["name"])
+            out.append(p)
+    return out
+
+
 def recover_interface(record: dict, target: Optional[str] = None) -> List[dict]:
     """Recover [{name,dir,width}] for the harness-TOPLEVEL target module from the
-    provided input.context RTL header. [] if the target header is absent."""
+    provided input.context RTL header.
+
+    Multi-variant records may contain several files that declare the same target
+    module (e.g. `1/rtl/M.sv`, `8/rtl/M.sv`). We try every file and return the
+    parse result with the most resolved ports; an empty port list does NOT stop
+    the search — a sibling variant may carry the usable header."""
     if not isinstance(record, dict):
         return []
     target = target or _bridge.toplevel_name(record)
@@ -216,44 +356,24 @@ def recover_interface(record: dict, target: Optional[str] = None) -> List[dict]:
     files = _context_rtl(record)
     if not files:
         return []
+    best: List[dict] = []
     for _name, text in files.items():
         span = _find_module_span(text, target)
         if span is None:
             continue
-        # isolate the port-list header: module <target> [#(...)] ( ... ) ;
-        mh = re.search(rf"\bmodule\s+{re.escape(target)}\b", span)
-        i = mh.end()
-        # skip an optional parameter block  #( ... )
-        pm = re.match(r"\s*#\s*\(", span[i:])
-        if pm:
-            close = _balanced(span, i + pm.end() - 1)
-            if close is None:
-                continue
-            i = close + 1
-        # the port-list '('
-        op = span.find("(", i)
-        if op == -1:
-            # no port list — nothing to recover
-            return []
-        close = _balanced(span, op)
-        if close is None:
-            return []
-        header = span[op + 1:close]
-        params = _module_params(span)
-        if _PORT_KW.search(header):
-            ports = _parse_ansi_ports(header, params)
-        else:
-            header_names = [n for n in re.split(r"[\s,]+", _strip_comments(header).strip())
-                            if re.fullmatch(r"[A-Za-z_]\w*", n)]
-            ports = _parse_nonansi_ports(span, header_names, params)
-        # de-dup by name (first wins), drop empties
-        seen, out = set(), []
-        for p in ports:
-            if p["name"] and p["name"] not in seen:
-                seen.add(p["name"])
-                out.append(p)
-        return out
-    return []
+        ports = _parse_one_span(span, target)
+        if not ports:
+            continue
+        # prefer the result with the most resolved widths; keep more ports on tie
+        def _score(p):
+            resolved = sum(1 for x in p if x.get("width") is not None)
+            return (resolved, len(p))
+        if _score(ports) > _score(best):
+            best = ports
+        # stop early if we have a fully resolved interface
+        if all(x.get("width") is not None for x in best):
+            break
+    return best
 
 
 def main(argv=None) -> int:

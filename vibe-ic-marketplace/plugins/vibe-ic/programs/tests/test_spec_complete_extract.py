@@ -85,7 +85,7 @@ def test_cvdp_adapter_byte_identical_on_dataset():
         pytest.skip("dataset not present")
     recs = [json.loads(l) for l in ds.read_text().splitlines()]
     comp = sum(1 for r in recs if C.extract(r)["completeness"] == "COMPLETE")
-    assert comp == 232, f"CVDP COMPLETE drifted from 230 to {comp}"
+    assert comp == 255, f"CVDP COMPLETE drifted from 255 to {comp}"
     # the back-compat `harness` block the CVDP callers read is still attached
     s = C.extract(recs[0])
     assert "harness" in s and "cocotb_inputs" in s["harness"]
