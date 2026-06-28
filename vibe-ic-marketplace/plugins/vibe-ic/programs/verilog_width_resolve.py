@@ -141,9 +141,12 @@ _PAREN_DEFAULT_PHRASE_RE = re.compile(
 # `p_`-prefixed name (`p_data_width`, `p_max_set_bit_count_width`):
 #   "- **`GPIO_WIDTH`** ..."  /  "8. `INPUT_WIDTH`: ..."  /  "- `p_data_width`: ..."
 # Used to bind a line's prose/paren default to the RIGHT parameter name.
+# The token is anchored with a trailing word boundary so a mixed-case word like
+# "Default" matches only the first capital letter (and is rejected by the caller's
+# fullmatch guard) — it must NOT be accepted as a parameter name.
 _PARAM_TOKEN = r"(?:[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*|p_[a-z0-9]+(?:_[a-z0-9]+)*)"
 _LINE_HEAD_PARAM_RE = re.compile(
-    r"^\s*(?:[-*]|\d+[.)])?\s*(?:\*\*\s*)?`?(" + _PARAM_TOKEN + r")`?")
+    r"^\s*(?:[-*]|\d+[.)])?\s*(?:\*\*\s*)?`?(" + _PARAM_TOKEN + r")\b`?")
 # An inline-code parameter assignment annotated as a default:
 #   "- `GPIO_WIDTH = 8` (default, configurable)."  — a real `NAME = <int>` token
 #   inside backticks (NOT a `parameter`-keyword line) that the prose explicitly
@@ -179,6 +182,13 @@ _DERIV_PHRASE = (r"(?:calculated\s+as|defined\s+as|computed\s+as|equal\s+to|"
 _PROSE_DERIVED_HEAD_RE = re.compile(
     r"^\s*(?:[-*]|\d+[.)])?\s*\|?\s*\*{0,2}`?([A-Z][A-Z0-9_]{2,})`?\*{0,2}\s*[:|]")
 _PROSE_DERIVED_EXPR_RE = re.compile(_DERIV_PHRASE + r"[^`\n]*?`([^`\n]+)`", re.I)
+# lowercase parameter names (`data_width`, `shift_bits_width`) are common in CVDP
+# prompts that describe parameter defaults in prose rather than code. Bind the literal
+# default ONLY when the line explicitly names the parameter in backticks near the word
+# "default" — never a stray nearby word. chip-AGNOSTIC.
+_LOWERCASE_DEFAULT_RE = re.compile(
+    r"\bdefault(?:\s+value)?(?:\s+|\s*[:=]\s*)(?:is\s+|of\s+|=\s*|:\s*)?"
+    r"[^\n]{0,60}?`([a-z][a-z0-9_]*\w*)`[^\n]{0,30}?(\d+)", re.I)
 
 
 def _as_int(tok: str) -> int:
@@ -307,16 +317,48 @@ def param_defaults(prompt: str, tb: str = "") -> Dict[str, int]:
     # parameter token, so the name can never be a stray nearby lowercase word.
     # A line states a default ONLY when it both names a parameter at its head AND
     # carries a "default ... <int>" (or "(Default <int>...)" ) phrase.
-    for line in prompt.splitlines():
+    #
+    # Separated Default sub-bullets: a parameter is introduced on the parent bullet
+    # (`- WIDTH: Specifies ...`) and its default sits on an indented child line
+    # (`  - Default: 32`). The child line's own head is "Default", not a parameter
+    # token. When that happens we walk BACK to the most recent line that named a
+    # parameter and bind the default there. The walk is bounded to the current
+    # bullet block (never crosses a blank line or a de-dented sibling).
+    lines = prompt.splitlines()
+    last_param_line = -1
+    last_param_name = None
+    for i, line in enumerate(lines):
         hm = _LINE_HEAD_PARAM_RE.match(line)
-        if not hm:
-            continue
-        nm = hm.group(1)
-        if nm in out or nm in ("DEFAULT", "NOTE", "BITS", "INPUTS", "OUTPUTS"):
-            continue
+        if hm:
+            nm = hm.group(1)
+            if nm not in ("DEFAULT", "NOTE", "BITS", "INPUTS", "OUTPUTS"):
+                last_param_line = i
+                last_param_name = nm
         pm = _PROSE_DEFAULT_PHRASE_RE.search(line) or _PAREN_DEFAULT_PHRASE_RE.search(line)
-        if pm:
-            _add(nm, pm.group(1))
+        if not pm:
+            continue
+        # Directly-named parameter line: bind normally.
+        if hm and hm.group(1) not in ("DEFAULT", "NOTE", "BITS", "INPUTS", "OUTPUTS"):
+            nm = hm.group(1)
+            if nm not in out:
+                _add(nm, pm.group(1))
+            continue
+        # Indented Default sub-bullet under a preceding parameter line.
+        if last_param_name and last_param_line >= 0:
+            # bound: within the same bullet block (no blank line since the param line)
+            block = lines[last_param_line:i + 1]
+            if all(ln.strip() for ln in block[:-1]):  # no blank line between
+                # require the default line to be MORE indented than the param line
+                param_indent = len(lines[last_param_line]) - len(lines[last_param_line].lstrip())
+                def_indent = len(line) - len(line.lstrip())
+                if def_indent > param_indent:
+                    _add(last_param_name, pm.group(1))
+    # lowercase parameter default phrases such as
+    #   "The default value of the `data_width` is 16".
+    # Only bound when the literal backtick parameter name appears within 60 chars
+    # before the int and the word "default" is present — never fabricated.
+    for m in _LOWERCASE_DEFAULT_RE.finditer(prompt):
+        _add(m.group(1), m.group(2))
     # RESOLVE the derived/prose-derived params now that every literal default is in
     # `out`. Iterate to a fixed point (a chain like NBW_DELTA -> NBW_ERROR -> NBW_PRED
     # settles); only bind when the expression fully resolves to an int from KNOWN
