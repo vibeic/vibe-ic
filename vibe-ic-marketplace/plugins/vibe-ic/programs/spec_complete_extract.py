@@ -106,13 +106,19 @@ def _place_interface(prompt: str, inputs: List[str], outputs: List[str],
             iface.append({"name": name, "dir": direction, "width": 1,
                           "signed": False, "source": "clk_rst_convention"})
             return
-        if _impl._ONE_BIT_RE.match(name):
-            iface.append({"name": name, "dir": direction, "width": 1,
-                          "signed": False, "source": "one_bit_convention"})
-            return
+        # §3.9 HARNESS-as-source: the cocotb test drives this port with values
+        # provably in {0,1} -> it is a 1-bit port pinned by the harness interface,
+        # not a spec-absent fact. Check BEFORE the generic 1-bit naming convention
+        # so the source tag reflects the STRONGER harness evidence (e.g. `serial_in`
+        # driven by `random.randint(0,1)` is credited to the harness, not just the
+        # name containing `serial`).
         if _impl._harness_one_bit(tb, name):
             iface.append({"name": name, "dir": direction, "width": 1,
                           "signed": False, "source": "harness_one_bit"})
+            return
+        if _impl._ONE_BIT_RE.match(name):
+            iface.append({"name": name, "dir": direction, "width": 1,
+                          "signed": False, "source": "one_bit_convention"})
             return
         gkind, gtype = _impl._classify_width_gap(prompt, name, params, param_defaults)
         gaps.append({"kind": gkind, "type": gtype,
