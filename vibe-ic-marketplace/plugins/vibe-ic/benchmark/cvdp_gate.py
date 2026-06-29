@@ -76,6 +76,72 @@ try:
 except Exception:  # pragma: no cover - defensive (program missing)
     _latconf = None
 
+# ORGANIC #729 — DETERMINISTIC area-reduction-threshold gate, reused here as a
+# PRE-EMIT block for cid007 (area-optimization) records (see
+# area_threshold_gate_record). Imported lazily so the gate still runs if the
+# program is absent (the area stage simply advisory-SKIPs). SINGLE SOURCE: the
+# gate NEVER re-implements #729's synth/stat/threshold/near-minimal-escape logic
+# — it only feeds (ORIGINAL baseline, OPTIMIZED completion) through #729's own
+# run_ppa_area_threshold and BLOCKs on its measured BLOCK verdict.
+try:
+    from ppa_area_threshold_check import (  # type: ignore
+        run_ppa_area_threshold as _ppa_area_run)
+except Exception:  # pragma: no cover - defensive (program missing)
+    _ppa_area_run = None
+
+# ORGANIC (GATE-AS-SOLE-EMIT) — SPEC↔RTL contract-conformance, reused here as a
+# PRE-EMIT block that BLOCKs ONLY a CLEAR interface violation against an
+# AUTHORITATIVE prompt-given module header (spec.source == 'verilog'); everything
+# heuristic stays advisory (preserve blindness — the existing #695 stage). Lazy
+# import (advisory-SKIP if absent). SINGLE SOURCE: reuses spec_conformance_check's
+# own check() + the shared _specrtl_common parsers (no re-implemented port parse).
+try:
+    from _specrtl_common import (  # type: ignore
+        extract_spec_contract as _extract_spec_contract,
+        parse_rtl_ports as _parse_rtl_ports,
+        classify_rtl_resets as _classify_rtl_resets,
+        strip_comments as _specrtl_strip_comments)
+    from spec_conformance_check import check as _spec_check  # type: ignore
+except Exception:  # pragma: no cover - defensive (program missing)
+    _extract_spec_contract = None
+    _parse_rtl_ports = None
+    _classify_rtl_resets = None
+    _specrtl_strip_comments = None
+    _spec_check = None
+
+# A1 false-block fix — Rule 17's per-port (width, is_pure_literal, signed) map.
+# parse_verilog_ports collapses ANY non-literal range ([W-1:0], [$clog2(N)-1:0])
+# to width=1, so a CORRECT parameter-width completion against a literal-width
+# header would otherwise emit a spurious port-width-mismatch. SINGLE SOURCE: the
+# literal flag is read straight from rtl_hygiene_lint._decl_width_info.
+try:
+    from rtl_hygiene_lint import _decl_width_info as _rtl_decl_width_info  # type: ignore
+except Exception:  # pragma: no cover - defensive (program missing)
+    _rtl_decl_width_info = None
+
+# GATE-AS-SOLE-EMIT additional PRE-EMIT self-verify hooks (all lazy, advisory-SKIP
+# if absent): B1 prompt example self-test (sequential/table + arithmetic), B2
+# spec example smoke TB (combinational direct-row a=3,b=4->7), B3 FSM transition
+# completeness (#522, zero-FP structural), B4 handshake livelock / result
+# stability (#523, zero-FP structural). Each BLOCKs ONLY on its OWN clear FAIL.
+try:
+    from prompt_example_selftest import run_selftest as _prompt_selftest_run  # type: ignore
+except Exception:  # pragma: no cover - defensive (program missing)
+    _prompt_selftest_run = None
+try:
+    import spec_example_smoke_tb as _spec_smoke  # type: ignore
+except Exception:  # pragma: no cover - defensive (program missing)
+    _spec_smoke = None
+try:
+    from fsm_transition_completeness_check import check_text as _fsm_check_text  # type: ignore
+except Exception:  # pragma: no cover - defensive (program missing)
+    _fsm_check_text = None
+try:
+    from handshake_livelock_result_stability_check import (  # type: ignore
+        check_text as _handshake_check_text)
+except Exception:  # pragma: no cover - defensive (program missing)
+    _handshake_check_text = None
+
 # ANY-info-string fence tokenizer (adversarial-review HIGH): an opener whose
 # tag is not verilog-ish (```text / ```python / untagged prose) must STILL
 # anchor a fence, or pairing skews — the closing ``` of a text block pairs
@@ -1660,6 +1726,52 @@ def _load_context_rtl(path):
     return out
 
 
+def _load_context_waivers(path):
+    """ORGANIC (GATE-AS-SOLE-EMIT) — {id: [vlt_text, ...]} of every `.vlt`
+    verilator lint-waiver the record carries, from BOTH `harness.files` (where the
+    OFFICIAL CVDP lint scorer's `src/lint_config.vlt` actually lives — the scorer
+    runs `verilator --lint-only -Wall -Wno-EOFNEWLINE <lint_config.vlt> $SRCS`) AND
+    `input.context`. The waiver DEFINES the official clean bar — a warning it
+    waives must NOT block (field-reproduced: sigma_delta_audio_0007's converged
+    completion is clean WITH the waiver but had a WIDTHTRUNC false-block WITHOUT
+    it). Empty when absent. chip-AGNOSTIC: pure `.vlt` path-suffix parse."""
+    out: Dict[str, List[str]] = {}
+    p = Path(path)
+    if not p.is_file():
+        return out
+    for ln in p.read_text(errors="replace").splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            d = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        rid = d.get("id")
+        if rid is None:
+            continue
+        texts: List[str] = []
+        # harness.files FIRST (the authoritative location of lint_config.vlt) …
+        h = d.get("harness")
+        hfiles = h.get("files") if isinstance(h, dict) else None
+        if isinstance(hfiles, dict):
+            texts += [v for k, v in hfiles.items()
+                      if isinstance(k, str) and isinstance(v, str)
+                      and k.lower().endswith(".vlt")]
+        # … then any input.context / top-level context .vlt.
+        inp = d.get("input")
+        ctx = inp.get("context") if isinstance(inp, dict) else None
+        if ctx is None:
+            ctx = d.get("context")
+        if isinstance(ctx, dict):
+            texts += [v for k, v in ctx.items()
+                      if isinstance(k, str) and isinstance(v, str)
+                      and k.lower().endswith(".vlt")]
+        if texts:
+            out[str(rid)] = texts
+    return out
+
+
 def _load_context_available(path):
     """ORGANIC #734 — the SET of ids whose record actually CARRIES an
     `input.context` key (a dict or list, even if empty), i.e. ids for which the
@@ -1782,6 +1894,530 @@ def latency_gate_record(rid, completion, spec, workdir):
         return True, f"latency check inconclusive (advisory): {report.get('reason')}"
     # PASS or SKIP (no iverilog) — emit.
     return True, f"latency {verdict}: {report.get('reason')}"
+
+
+# ── ORGANIC (GATE-AS-SOLE-EMIT) — latency contract AUTO-DERIVED from the prompt ──
+# The #705 latency gate above fires only for an id whose canonical event/output/
+# expect literal is SUPPLIED via --latency-specs, because that literal is, in
+# general, NOT derivable from CVDP prose. But ONE phrasing IS unambiguous: a
+# POSITIVE, EXACT "`<output>` <assert-verb> <N|expr> [clock] cycle(s) after …
+# `<event>`" statement where BOTH ports are backtick-quoted signal names and the
+# cycle count is a clean arithmetic literal. On a BLIND authoring run (no curated
+# --latency-specs) this lets #705 still fire on a wrong-latency completion. The
+# regex is deliberately TIGHT (field-measured: 1 of 302 nonagentic prompts fire,
+# the one genuine `valid_out` 1-cycle-after-`valid_in` contract); any ambiguity →
+# None (skip; the gate NEVER guesses a latency literal). chip-AGNOSTIC: pure
+# prose shape, no chip / vendor / SKU literal.
+_LATENCY_CONTRACT_RE = re.compile(
+    r"`(?P<output>[A-Za-z_]\w*)`"                       # backtick-quoted OUTPUT
+    r"[^.\n`]{0,48}?"                                   # short bridge (no '.'/fence)
+    r"\b(?:assert(?:s|ed)?|go(?:es)?\s+high|driven\s+high|"
+    r"becomes?\s+(?:high|valid|asserted|active)|"
+    r"is\s+(?:set|asserted|raised|driven\s+high))\b"    # an ASSERTION verb
+    r"[^.\n`]{0,24}?"                                   # 'exactly'/'high' filler
+    r"(?P<expr>\w+(?:\s*[-+*]\s*\w+)*)\s*"              # cycle expr (N / WIDTH+2)
+    r"(?:clock\s+|clk\s+)?cycles?\s+"
+    r"(?:after|following|from|later\s+than)\b"          # …cycles AFTER…
+    r"[^.\n`]{0,48}?"                                   # 'the rising edge of the'
+    r"`(?P<event>[A-Za-z_]\w*)`",                       # backtick-quoted EVENT
+    re.IGNORECASE)
+# A NEGATION ('not asserted') or a BOUND word ('within N cycles', 'at least',
+# 'every') turns the phrase into a watchdog/range constraint, NOT an EXACT
+# event→output latency — never an enforceable literal. Reject the whole match
+# when either appears in the matched span (Step-2.7 no-leak: drops the
+# `apb_pready_i is NOT asserted WITHIN 15 cycles after entering ACCESS` shape,
+# where `ACCESS` is an FSM state, not an input port).
+_LATENCY_NEGATION_RE = re.compile(r"\b(?:not|never|without|n't)\b", re.IGNORECASE)
+_LATENCY_BOUND_RE = re.compile(
+    r"\b(?:within|up\s+to|at\s+least|at\s+most|no\s+more\s+than|fewer\s+than|"
+    r"less\s+than|more\s+than|every|each)\b", re.IGNORECASE)
+# A2 false-fire fix (adversarial-review MED) — a CONDITIONAL qualifier turns the
+# stated latency into a data-dependent one ("`ack` 3 cycles after `req` … BUT
+# ONLY WHEN ready", "… ASSUMING back-pressure is low"): the canonical TB drives a
+# fixed unconditional stimulus, so a conditional contract is NOT an enforceable
+# fixed literal. The negation/bound guards used to scan only the output→event
+# match span and missed a TRAILING condition; the guards now scan the WHOLE
+# sentence containing the latency clause, and this qualifier set is added so a
+# conditional contract → None (skip; never auto-derive).
+_LATENCY_CONDITIONAL_RE = re.compile(
+    r"\b(?:but\s+only|only\s+(?:when|if|while|during|after|on)|when|if|unless|"
+    r"assuming|provided|except|as\s+long\s+as|depending|in\s+case|"
+    r"contingent|conditional)\b", re.IGNORECASE)
+
+
+def _latency_clause_sentence(text, m):
+    """The latency CLAUSE plus its TRAILING context — from the matched
+    output→event span START to the next sentence boundary (`.`/newline) AFTER the
+    event. This scans the output→event span (a negation between output and verb)
+    AND any TRAILING qualifier ('…3 cycles after `req` BUT ONLY WHEN ready') — the
+    A2 miss — but NOT the text BEFORE the output, so a preceding unrelated clause
+    ('observed as `8'd0` WHEN `valid_out` goes high …') cannot false-drop a
+    genuine UNCONDITIONAL contract. PURE."""
+    ends = [x for x in (text.find(".", m.end()), text.find("\n", m.end()))
+            if x != -1]
+    e = min(ends) if ends else len(text)
+    return text[m.start():e]
+
+
+def _looks_like_cycle_expr(expr: str) -> bool:
+    """True iff `expr` is a CLEAN cycle count — a pure integer, a parameter
+    arithmetic (carries a + - * operator), or a bare UPPER-CASE parameter token
+    (WIDTH, N). Rejects a bare lower-case English word ('several', 'some', 'a
+    few') so the latency contract never fires on vague prose. PURE."""
+    e = (expr or "").strip()
+    if re.fullmatch(r"\d+", e):
+        return True
+    if re.search(r"[-+*]", e):
+        return True
+    return bool(re.fullmatch(r"[A-Z][A-Za-z_0-9]*", e))
+
+
+def latency_contract_from_prompt(prompt_text):
+    """ORGANIC (GATE-AS-SOLE-EMIT) — derive a #705 latency spec
+    ``{event, output, expect}`` from an UNAMBIGUOUS prompt literal, or None when
+    no such literal is present. Conservative by construction (_LATENCY_CONTRACT_RE
+    + the negation/bound guards): BOTH ports must be backtick-quoted signal names
+    and the cycle count a clean arithmetic; anything ambiguous → None (skip, never
+    guess). The returned spec drives latency_gate_record EXACTLY like a
+    curator-supplied --latency-specs entry — only the literal's PROVENANCE differs
+    (prompt-derived vs operator-supplied)."""
+    if not prompt_text:
+        return None
+    m = _LATENCY_CONTRACT_RE.search(prompt_text)
+    if not m:
+        return None
+    # A2 — scan the WHOLE sentence (negation / bound / CONDITIONAL anywhere in it,
+    # including a TRAILING "…but only when ready"), not just the output→event span.
+    span = _latency_clause_sentence(prompt_text, m)
+    if (_LATENCY_NEGATION_RE.search(span) or _LATENCY_BOUND_RE.search(span)
+            or _LATENCY_CONDITIONAL_RE.search(span)):
+        return None
+    out_port = m.group("output")
+    event = m.group("event")
+    expr = (m.group("expr") or "").strip()
+    if not (out_port and event and expr) or out_port == event:
+        return None
+    if not _looks_like_cycle_expr(expr):
+        return None
+    return {"event": event, "output": out_port, "expect": expr}
+
+
+# ── ORGANIC (GATE-AS-SOLE-EMIT) — cid007 AREA-threshold PRE-EMIT block ────────
+# Reuse the #729 ppa_area_threshold gate (synth ORIGINAL vs OPTIMIZED, BLOCK a
+# prompt-bound metric's sub-threshold reduction, HONORING the near-minimal /
+# unreachable-target escape) as a PRE-EMIT block: a blind cid007 (area-opt) draft
+# that does NOT clear its OWN stated reduction target is BLOCKED before it reaches
+# the scoring JSONL — never silently emitted. FAIL-SAFE: it BLOCKs ONLY on #729's
+# own measured BLOCK verdict (rc 1); a missing baseline / absent yosys-in-
+# container / unparseable threshold / ambiguous top ALL resolve to advisory-PASS
+# (#729 returns NOT_APPLICABLE rc 0), never a false block on a missing input.
+_AREA_CONTAINER = "iic-eda"
+
+
+def _area_top(baseline_rtls, completion, harness_top=None):
+    """The single module shared by the ORIGINAL baseline (input.context RTL) and
+    the OPTIMIZED completion — the synth top for the #729 area measurement. A
+    cid007 optimization keeps the SAME module interface, so the shared name is
+    unambiguous for the dominant single-module shape. Returns that name; when
+    several modules are shared, the `harness_top` if it is among them; else None
+    (ambiguous → caller advisory-SKIPs, never guesses a top). PURE structural."""
+    base_mods = set()
+    for t in baseline_rtls or ():
+        base_mods |= set(_MODULE_NAMES_RE.findall(_detection_text(t or "")))
+    comp_mods = completion_module_names(completion)
+    shared = base_mods & comp_mods
+    if len(shared) == 1:
+        return next(iter(shared))
+    if harness_top and harness_top in shared:
+        return harness_top
+    return None
+
+
+def area_threshold_gate_record(rid, completion, baseline_rtls, prompt_text,
+                               top, workdir, container=_AREA_CONTAINER):
+    """ORGANIC (GATE-AS-SOLE-EMIT) — PRE-EMIT area-threshold check for one cid007
+    record. Reuses #729's run_ppa_area_threshold (SINGLE SOURCE — no duplicated
+    measurement logic) on (ORIGINAL baseline, OPTIMIZED completion). Returns
+    (ok, note):
+      * ok=False — #729 measured a real sub-threshold reduction (rc 1 BLOCK).
+      * ok=True  — PASS / NOT-APPLICABLE / SKIP, OR any missing input (no #729
+                   program, no baseline, no resolvable top, no extractable RTL):
+                   advisory-PASS, NEVER a false block on a missing input (§4.05).
+    The OPTIMIZED side carries the completion PLUS any context submodule it did
+    not itself redefine, so a self-contained-or-hierarchical design synths the
+    SAME hierarchy on both sides and the measured delta reflects the top's real
+    optimization (a completion that drops a needed submodule simply fails synth →
+    #729 NOT_APPLICABLE → advisory-PASS, never a false block)."""
+    if _ppa_area_run is None:
+        return True, "area gate unavailable (#729 program missing) — skipped"
+    if not baseline_rtls:
+        return True, "no ORIGINAL baseline (input.context) — area check skipped"
+    if not top:
+        return True, "area top ambiguous (no single shared module) — skipped"
+    code, _kind = extract_code(completion or "")
+    if not (code or "").strip():
+        return True, "no RTL to measure — area check skipped"
+    # ORIGINAL = the full input.context baseline; OPTIMIZED = the completion plus
+    # any context submodule the completion did not redefine (same hierarchy both
+    # sides). _parse_modules slices each context file's `module…endmodule` blocks.
+    comp_mods = set(_MODULE_NAMES_RE.findall(_detection_text(code)))
+    ctx_mods: Dict[str, str] = {}
+    for t in baseline_rtls:
+        for nm, src in _parse_modules(t or "").items():
+            ctx_mods.setdefault(nm, src)
+    extra = [src for nm, src in ctx_mods.items() if nm not in comp_mods]
+    orig_path = workdir / "area_orig.sv"
+    opt_path = workdir / "area_opt.sv"
+    orig_path.write_text("\n\n".join(baseline_rtls))
+    opt_path.write_text(code + ("\n\n" + "\n\n".join(extra) if extra else ""))
+    try:
+        rc, report = _ppa_area_run(
+            original=orig_path, optimized=opt_path, top=top,
+            prompt_text=prompt_text, threshold_override=None,
+            metric_override=None, container=container)
+    except Exception as e:  # pragma: no cover - defensive (never crash the gate)
+        return True, f"area check raised (advisory): {e}"
+    verdict = report.get("verdict")
+    reason = report.get("reason", "")
+    if rc == 1 and verdict == "BLOCK":
+        return False, f"area BLOCK (#729): {reason}"
+    return True, f"area {verdict}: {reason}"
+
+
+# ── ORGANIC (GATE-AS-SOLE-EMIT) — VERILATOR lint-zero block for lint tasks ────
+# A cid007 LINT deliverable's success metric IS a verilator --lint-only -Wall
+# clean run (the prompt asks for "lint-clean RTL" / "zero warnings", or supplies
+# a `.vlt` waiver). The blind author's self-check does not run verilator, so a
+# completion that left a lint warning is silently emitted and the scorer fails
+# it. This block runs the SAME lint and BLOCKs a remaining warning. Detection is
+# TIGHT (field-measured: 6 of 302 prompts — all genuine cid007 lint tasks; a
+# cid002 that merely uses a `lint_off` macro is NOT caught). FAIL-SAFE: verilator
+# absent → advisory-PASS; a verilator %Error (cannot elaborate — e.g. a missing
+# context module the iverilog gate already tolerated) → advisory, never a block
+# (§4.05). chip-AGNOSTIC: pure lint-deliverable prose, no chip/vendor/SKU literal.
+_LINT_CLEAN_TASK_RE = re.compile(
+    r"lint[- ]?clean|--?lint-only|\blint-only\b|zero\s+(?:lint\s+)?warnings|"
+    r"no\s+(?:lint\s+)?warnings|warning[- ]free|free\s+of\s+(?:lint\s+)?warnings|"
+    r"without\s+(?:any\s+)?warnings|lint[- ]?free", re.IGNORECASE)
+
+
+def _is_lint_clean_task(prompt_text, has_waiver=False):
+    """True iff this record is a lint-clean DELIVERABLE — the prompt explicitly
+    asks for lint-clean / zero-warning RTL, OR the harness supplies a `.vlt` lint
+    waiver (the strongest signal). TIGHT by design (the bare word 'verilator' is
+    deliberately NOT a trigger — a record that merely USES a `lint_off` macro is
+    not a lint task). PURE."""
+    if has_waiver:
+        return True
+    return bool(_LINT_CLEAN_TASK_RE.search(prompt_text or ""))
+
+
+def verilator_lint_gate_record(rid, completion, waiver_texts, top, workdir):
+    """ORGANIC (GATE-AS-SOLE-EMIT) — PRE-EMIT verilator lint block for a
+    lint-clean deliverable, MIRRORING the official CVDP lint command
+    `verilator --lint-only -Wall -Wno-EOFNEWLINE <lint_config.vlt> $SRCS` (the
+    `.vlt` waiver — from harness.files — defines the official clean bar).
+    Returns (ok, note):
+      * ok=False — verilator reported a remaining lint `%Warning` (with any
+                   supplied `.vlt` waiver applied) — the lint-clean bar is not met.
+      * ok=True  — lint clean, OR verilator absent, OR verilator could only emit a
+                   `%Error` (cannot fully elaborate — missing context module / a
+                   frontend quirk on code the iverilog gate already accepted):
+                   advisory-PASS, never a false block (§4.05).
+    The completion is written to a `<top>.sv` file (named after the module) and
+    `-Wno-DECLFILENAME` is set so the file-naming style warning — irrelevant to an
+    in-gate temp file — can never manufacture a false block. chip-AGNOSTIC."""
+    if shutil.which("verilator") is None:
+        return True, "verilator unavailable — lint-zero check skipped"
+    code, _kind = extract_code(completion or "")
+    if not (code or "").strip():
+        return True, "no RTL to lint — lint-zero check skipped"
+    # name the file after the top module (or the sole/first declared module) so
+    # the per-module DECLFILENAME style note never fires on the real top.
+    declared = list(_MODULE_NAMES_RE.findall(_detection_text(code)))
+    stem = top if (top and top in declared) else (declared[0] if declared else "top")
+    f = workdir / f"{stem}.sv"
+    f.write_text(code)
+    # MIRROR the OFFICIAL CVDP lint command exactly — `verilator --lint-only
+    # -Wall -Wno-EOFNEWLINE <lint_config.vlt> $SRCS` (src/lint.py asserts the
+    # returncode is 0). `-Wno-DECLFILENAME` is added ONLY to neutralize the
+    # in-gate single-temp-file naming artifact (the official scorer writes each
+    # module to its own rtl/<name>.sv so DECLFILENAME never fires there); it is a
+    # file-naming style note, never a design property, so suppressing it matches
+    # official behaviour and cannot hide a real warning.
+    cmd = ["verilator", "--lint-only", "-Wall", "-Wno-EOFNEWLINE",
+           "-Wno-DECLFILENAME"]
+    for i, w in enumerate(waiver_texts or []):
+        if not (w or "").strip():
+            continue
+        vlt = workdir / f"waiver{i}.vlt"
+        vlt.write_text(w)
+        cmd.append(str(vlt))
+    cmd.append(str(f))
+    rc, out, err = _run(cmd)
+    if rc == 127:
+        return True, "verilator unavailable — lint-zero check skipped"
+    blob = (out or "") + "\n" + (err or "")
+    warns = [ln.strip() for ln in blob.splitlines() if "%Warning" in ln]
+    errs = [ln.strip() for ln in blob.splitlines() if "%Error" in ln]
+    if warns:
+        return False, ("verilator lint warnings remain (lint-clean required): "
+                       + "; ".join(w[:90] for w in warns[:4]))
+    if errs:
+        # verilator could not fully elaborate — the iverilog gate already proved
+        # the payload parses, so this is a context/frontend gap, not a lint
+        # verdict: advisory, never a false block.
+        return True, ("verilator could not fully elaborate (advisory; not a "
+                      "lint verdict): " + errs[0][:120])
+    return True, "verilator lint clean (-Wall)"
+
+
+# ── ORGANIC (GATE-AS-SOLE-EMIT) — SPEC↔RTL contract PRE-EMIT block ───────────
+# Reuse spec_conformance_check.check() (+ the shared _specrtl_common parsers) to
+# BLOCK a CLEAR interface violation — a missing functional port or a wrong
+# declared width — BUT ONLY when the prompt gave an AUTHORITATIVE module HEADER
+# (spec.source == 'verilog') AND the completion declares exactly that top. A
+# heuristic NL/markdown spec stays ADVISORY (preserve blindness — never block on
+# a fuzzy prompt extraction). The intended top is the AUTHORITATIVE harness/
+# skeleton top (NOT spec.module, which the prose extractor can mis-read as a
+# stray word like 'given'/'utilizing' → comparing the top spec against a SUBMODULE
+# → an all-ports-missing false block, field-reproduced on 2 PASSING converged
+# completions); requiring the parsed RTL module name to EQUAL the intended top
+# eliminates that (0 false blocks across 302 converged completions).
+def spec_conformance_gate_record(rid, completion, prompt_text, intended_top):
+    """Return (ok, note). ok=False only on a CLEAR interface violation against an
+    authoritative module header; advisory-PASS (ok=True) on anything heuristic or
+    missing — never a false block on a fuzzy prompt extraction (§4.05)."""
+    if _spec_check is None or _extract_spec_contract is None:
+        return True, "spec-conformance gate unavailable — skipped"
+    if not prompt_text:
+        return True, "no prompt — spec-conformance skipped"
+    code, _kind = extract_code(completion or "")
+    if not (code or "").strip():
+        return True, "no RTL — spec-conformance skipped"
+    try:
+        spec = _extract_spec_contract(prompt_text)
+    except Exception as e:  # pragma: no cover - defensive
+        return True, f"spec extract raised (advisory): {e}"
+    if not spec.ports:
+        return True, "prompt declares no interface — spec-conformance skipped"
+    if not intended_top:
+        return True, "no authoritative top — spec-conformance skipped"
+    src = _specrtl_strip_comments(code)
+    try:
+        name, ports = _parse_rtl_ports(src, intended_top)
+    except Exception as e:  # pragma: no cover - defensive
+        return True, f"rtl port parse raised (advisory): {e}"
+    # Compare ONLY when the parsed module IS the intended top — never a SUBMODULE
+    # (the all-ports-missing false-block class). A completion that implements the
+    # interface under a different name (alias/rename) is left to hook-3 + advisory.
+    if not ports or name != intended_top:
+        return True, (f"top {intended_top!r} not declared as such "
+                      f"(parsed {name!r}) — spec-conformance advisory-skipped")
+    try:
+        resets = _classify_rtl_resets(src)
+        findings = _spec_check(spec, name, ports, resets, None,
+                               "<completion>", src, spec_text=prompt_text)
+    except Exception as e:  # pragma: no cover - defensive
+        return True, f"spec-conformance raised (advisory): {e}"
+    # BLOCK set: the structural zero-output bug ALWAYS (pure RTL, cannot be a
+    # false block); the interface rules ONLY for an authoritative module header.
+    # port-extra is deliberately EXCLUDED (a prompt header may be a partial
+    # skeleton the author legitimately extends → §4.05 keeps it advisory).
+    block_rules = {"zero-output-ports"}
+    if getattr(spec, "source", "") == "verilog":
+        block_rules |= {"port-missing", "port-width-mismatch",
+                        "port-direction-mismatch"}
+    # A1 false-block fix (adversarial-review MED, REPRODUCED) — a
+    # `port-width-mismatch` is a CLEAR violation ONLY when BOTH sides declare a
+    # pure-LITERAL `[H:L]` width. _specrtl_common.parse_verilog_ports collapses
+    # any non-literal range ([W-1:0], [DATA_WIDTH-1:0], [$clog2(N)-1:0]) to
+    # width=1, so a CORRECT parameter-width completion against a literal-width
+    # authoritative header reads as 8-vs-1 and would FALSE-BLOCK. Reuse Rule 17's
+    # _decl_width_info `is_pure_literal` flag (single source): keep the width
+    # block ONLY when the port's width is a pure literal on BOTH the header and
+    # the RTL; a genuine literal↔literal numeric mismatch (e.g. [7:0] vs [3:0])
+    # still blocks. When the literal flags cannot be determined → advisory (§4.05
+    # bias to NOT false-block).
+    _spec_lit = _literal_width_ports(prompt_text)
+    _rtl_lit = _literal_width_ports(src)
+
+    def _width_block_ok(f) -> bool:
+        if f.rule != "port-width-mismatch":
+            return True
+        if _spec_lit is None or _rtl_lit is None:
+            return False        # cannot prove literal↔literal → never block
+        return f.symbol in _spec_lit and f.symbol in _rtl_lit
+
+    errs = [f for f in findings
+            if f.severity == "ERROR" and f.rule in block_rules
+            and _width_block_ok(f)]
+    adv = [f"{f.severity}:{f.rule}:{f.symbol}" for f in findings
+           if f.severity in ("ERROR", "WARN")]
+    if errs:
+        return False, ("spec-conformance BLOCK: "
+                       + "; ".join(f"{f.rule}({f.symbol})" for f in errs[:4]))
+    return True, ("spec-conformance ok"
+                  + (f" (advisory: {', '.join(adv[:4])})" if adv else ""))
+
+
+def _literal_width_ports(region):
+    """The set of signal/port names whose DECLARED width is a pure integer
+    literal `[H:L]` in `region` — read from Rule 17's _decl_width_info (single
+    source). A parameter/expression width ([W-1:0], [$clog2(N)-1:0]) is marked
+    NON-literal and excluded; an unresolvable width is omitted (so also absent →
+    treated as non-literal). Returns None when the detector is unavailable, so
+    the caller treats a width-mismatch as advisory (never false-block). PURE."""
+    if _rtl_decl_width_info is None:
+        return None
+    try:
+        info = _rtl_decl_width_info(region or "")
+    except Exception:  # pragma: no cover - defensive
+        return None
+    return {nm for nm, t in info.items()
+            if isinstance(t, tuple) and len(t) >= 2 and t[1]}
+
+
+# ── ORGANIC (GATE-AS-SOLE-EMIT) — module-identifier → harness TOPLEVEL rename ──
+# When the harness `.env` sets TOPLEVEL=X (load_harness_toplevels / the prompt
+# skeleton) but the completion's SOLE / single-parent module is named Y (X
+# otherwise absent), the official scorer's `iverilog -s X` cannot find its top
+# and ELAB_ERRORs the whole problem. A PURE RENAME `module Y`→`module X` (and a
+# labelled `endmodule : Y`) BEFORE the iverilog gate makes the TB bind the real
+# ports — the #711-style alias with NO logic change. CONSERVATIVE: fires only when
+# there is exactly ONE unambiguous top candidate (the sole module, or the single
+# instantiation-graph root) and X is absent, so it can never collide a real
+# module. Composes with the existing wrapper alias (maybe_alias_completion): once
+# X is present the wrapper no-ops. chip-AGNOSTIC: pure identifier rewrite.
+def maybe_rename_top(completion, harness_top, mod_names_fn=None):
+    """Return `completion` with its sole/parent module renamed to `harness_top`
+    when that is unambiguous and `harness_top` is otherwise absent; otherwise the
+    completion UNCHANGED (a strict no-op — additive). PURE text rewrite."""
+    if not harness_top or not completion:
+        return completion
+    code, kind = extract_code(completion)
+    if kind == "doc_only" or not code:
+        return completion
+    names_fn = mod_names_fn or completion_module_names
+    declared = names_fn(completion)
+    if not declared or harness_top in declared:
+        return completion          # X already present → nothing to rename
+    if len(declared) == 1:
+        y = next(iter(declared))
+    else:
+        # the single instantiation-graph ROOT (declared but never instantiated)
+        roots = declared - instantiated_module_names(code)
+        if len(roots) != 1:
+            return completion      # ambiguous parent → never guess
+        y = next(iter(roots))
+    if not y or y == harness_top:
+        return completion
+    # rename ONLY a real `module Y(<decl>` header + a labelled `endmodule : Y`
+    # (not prose / instantiations / signal names): mirror _MODULE_DECL_RE so a
+    # sentence "the module Y connects…" is never rewritten.
+    decl = re.compile(r"\bmodule\s+" + re.escape(y)
+                      + r"(\s*(?:#\s*\(|\(|;|import\s+[A-Za-z_]\w*\s*::))")
+    new = decl.sub("module " + harness_top + r"\1", completion)
+    endlabel = re.compile(r"(\bendmodule\s*:\s*)" + re.escape(y) + r"\b")
+    new = endlabel.sub(r"\g<1>" + harness_top, new)
+    return new
+
+
+# ── ORGANIC (GATE-AS-SOLE-EMIT) — B1 PROMPT-EXAMPLE self-test PRE-EMIT block ──
+# prompt_example_selftest extracts the prompt's OWN worked examples (sequential /
+# table rows + arithmetic identities) and SIMULATES them against the authored
+# RTL. A blind author's self-TB is untrustworthy, so a completion that
+# contradicts the prompt's own stated examples is silently emitted and the scorer
+# fails it. BLOCK ONLY on a clear verdict=='FAIL' (a measured example-row
+# mismatch); PASS / SKIP (no extractable example, no iverilog) → advisory. The
+# program is STRICT skip-over-false-block by design (low fire is CORRECT).
+# Blindness preserved: prompt + authored RTL only — never output.*.
+def prompt_selftest_gate_record(rid, completion, prompt_text, top):
+    """Return (ok, note). ok=False only on a clear prompt-example FAIL."""
+    if _prompt_selftest_run is None:
+        return True, "prompt-selftest unavailable — skipped"
+    if not prompt_text:
+        return True, "no prompt — prompt-selftest skipped"
+    code, _kind = extract_code(completion or "")
+    if not (code or "").strip():
+        return True, "no RTL — prompt-selftest skipped"
+    try:
+        res = _prompt_selftest_run(prompt_text, code, top)
+    except Exception as e:  # pragma: no cover - defensive
+        return True, f"prompt-selftest raised (advisory): {e}"
+    verdict = getattr(res, "verdict", "SKIP")
+    reason = getattr(res, "reason", "")
+    if verdict == "FAIL":
+        return False, f"prompt-selftest FAIL: {reason}"
+    return True, f"prompt-selftest {verdict}: {reason}"
+
+
+# ── ORGANIC (GATE-AS-SOLE-EMIT) — B2 SPEC-EXAMPLE smoke-TB PRE-EMIT block ─────
+# spec_example_smoke_tb (#728/#738) is the COMBINATIONAL direct-row complement to
+# B1: it extracts an `a=3,b=4 -> sum=7`-style golden row (or a register-map
+# offset-keyed golden), builds a tiny smoke TB, and runs it. BLOCK ONLY on a
+# clear verdict=='BLOCK' (the example TB fails to compile against the stated
+# interface, or a golden row mismatches); PASS / NOT_APPLICABLE (no extractable
+# row, no iverilog) → advisory. Blindness preserved: prompt + authored RTL only.
+def spec_example_smoke_gate_record(rid, completion, prompt_text, top, workdir):
+    """Return (ok, note). ok=False only on a clear spec-example smoke BLOCK."""
+    if _spec_smoke is None:
+        return True, "spec-example-smoke unavailable — skipped"
+    if not prompt_text:
+        return True, "no prompt — spec-example-smoke skipped"
+    code, _kind = extract_code(completion or "")
+    if not (code or "").strip():
+        return True, "no RTL — spec-example-smoke skipped"
+    pp = workdir / "prompt.txt"
+    rp = workdir / "dut.sv"
+    pp.write_text(prompt_text)
+    rp.write_text(code)
+    try:
+        res = _spec_smoke._run(pp, rp, top, warn=False)
+    except Exception as e:  # pragma: no cover - defensive
+        return True, f"spec-example-smoke raised (advisory): {e}"
+    verdict = getattr(res, "verdict", "NOT_APPLICABLE")
+    reason = getattr(res, "reason", "")
+    if verdict == "BLOCK":
+        return False, f"spec-example-smoke BLOCK: {reason}"
+    return True, f"spec-example-smoke {verdict}: {reason}"
+
+
+def _structural_finding_gate(check_text_fn, label, completion):
+    """Shared driver for the two zero-FP STRUCTURAL checks (B3 FSM transition
+    completeness #522 / B4 handshake livelock + result stability #523): run the
+    program's `check_text` on the authored RTL and BLOCK on any ERROR-severity
+    finding; WARN-only / SKIP / no-finding → advisory. Both checks are zero-false-
+    positive by construction, so an ERROR is a clear FAIL. Returns (ok, note)."""
+    if check_text_fn is None:
+        return True, f"{label} unavailable — skipped"
+    code, _kind = extract_code(completion or "")
+    if not (code or "").strip():
+        return True, f"no RTL — {label} skipped"
+    try:
+        findings, status = check_text_fn(code)
+    except Exception as e:  # pragma: no cover - defensive
+        return True, f"{label} raised (advisory): {e}"
+    errs = [f for f in findings if getattr(f, "severity", "") == "ERROR"]
+    if errs:
+        def _sym(f):  # the Finding's identifying field (FSM uses .state)
+            return (getattr(f, "symbol", None) or getattr(f, "state", None)
+                    or getattr(f, "port", None) or "?")
+        return False, (f"{label} FAIL: " + "; ".join(
+            f"{getattr(f, 'rule', '?')}({_sym(f)})" for f in errs[:3]))
+    return True, f"{label} {status} ({len(findings)} finding(s))"
+
+
+def fsm_completeness_gate_record(rid, completion):
+    """B3 — FSM transition-completeness (#522). BLOCK on an ERROR finding."""
+    return _structural_finding_gate(_fsm_check_text, "fsm-completeness",
+                                    completion)
+
+
+def handshake_stability_gate_record(rid, completion):
+    """B4 — handshake livelock / result-stability (#523). BLOCK on an ERROR."""
+    return _structural_finding_gate(_handshake_check_text,
+                                    "handshake-stability", completion)
 
 
 def main(argv=None) -> int:
@@ -1937,6 +2573,10 @@ def main(argv=None) -> int:
     # prompt-named port to its OWNING context/instantiated sub-module exactly the
     # way the STANDALONE gate does with `--context`.
     context_rtl = {}
+    # ORGANIC (GATE-AS-SOLE-EMIT) — per-id `.vlt` verilator lint waivers from
+    # input.context (applied to the lint-zero block so an officially-waived
+    # warning is never blocked).
+    context_waivers = {}
     for _ctx_src in (args.prompts, args.dataset):
         if not _ctx_src:
             continue
@@ -1944,6 +2584,8 @@ def main(argv=None) -> int:
             context_modules.setdefault(_rid, set()).update(_stems)
         for _rid, _texts in _load_context_rtl(_ctx_src).items():
             context_rtl.setdefault(_rid, []).extend(_texts)
+        for _rid, _vlts in _load_context_waivers(_ctx_src).items():
+            context_waivers.setdefault(_rid, []).extend(_vlts)
         context_available |= _load_context_available(_ctx_src)
     # ORGANIC (run_v1239_converge) — AUTHORITATIVE per-id cocotb TOPLEVEL from
     # the ORIGINAL dataset's `harness.files` (`src/.env: toplevel=` /
@@ -2015,6 +2657,20 @@ def main(argv=None) -> int:
     with tempfile.TemporaryDirectory(prefix="cvdp_gate_") as td:
         wd = Path(td)
         for rec in records:
+            # ORGANIC (GATE-AS-SOLE-EMIT) — module-identifier → harness TOPLEVEL
+            # rename BEFORE the gate. When the harness fixes TOPLEVEL=X but the
+            # completion's sole/parent module is named Y (X absent), a pure
+            # `module Y`→`module X` rename lets the scorer's `iverilog -s X` bind
+            # the real ports. Strict no-op (additive) when there is no single
+            # unambiguous top candidate or X is already present. Runs first so the
+            # whole pipeline (extract/hygiene/compile/emit) sees the renamed top
+            # and the existing wrapper alias (maybe_alias_completion) no-ops.
+            _rid0 = str(rec.get("id"))
+            _renamed = maybe_rename_top(rec.get("completion", ""),
+                                        harness_tops.get(_rid0),
+                                        completion_module_names)
+            if _renamed != rec.get("completion", ""):
+                rec = {**rec, "completion": _renamed}
             # ORGANIC #680 — pass this id's prompt so gate_record can mirror
             # determine_schema's single-vs-multi signal when normalizing a
             # JSON code-dict emit (single-file → bare RTL, multi-file → JSON).
@@ -2168,27 +2824,173 @@ def main(argv=None) -> int:
                         for _f in _findings:
                             entry.setdefault("notes", []).append(
                                 "WARN iface-conformance (#695): " + _f.message)
+                # ORGANIC (GATE-AS-SOLE-EMIT) — cid007 AREA-threshold PRE-EMIT
+                # block. For an area-optimization (cid007) record whose ORIGINAL
+                # baseline RTL is available from input.context, reuse #729 to
+                # synth (original, optimized) and BLOCK a real measured
+                # sub-threshold reduction BEFORE emit, HONORING #729's
+                # near-minimal / unreachable-target escape (a design that
+                # genuinely cannot clear the bar is NOT false-blocked). FAIL-SAFE:
+                # a missing baseline / absent yosys-in-container / unparseable
+                # threshold / ambiguous top all advisory-PASS inside
+                # area_threshold_gate_record (never a false block on a missing
+                # input). Gated on the AUTHORITATIVE synth-scored map (#729 single
+                # source) plus the in-rec/prompt detector, so a NON-area record
+                # never even enters this path (purely additive).
+                if (synth_scored_map.get(_rid_s) is True
+                        or _problem_is_synth_scored(
+                            prompts.get(_rid_s, ""), rec)):
+                    _base_rtl = context_rtl.get(_rid_s) or []
+                    _atop = _area_top(_base_rtl, out_rec.get("completion", ""),
+                                      harness_tops.get(_rid_s))
+                    _awd = wd / f"area_{rec.get('id')}"
+                    _awd.mkdir(parents=True, exist_ok=True)
+                    _aok, _anote = area_threshold_gate_record(
+                        _rid_s, out_rec.get("completion", ""), _base_rtl,
+                        prompts.get(_rid_s, ""), _atop, _awd)
+                    entry["area"] = _anote
+                    if not _aok:
+                        ok = False
+                        entry["verdict"] = "BLOCKED"
                 # ORGANIC #705 — DETERMINISTIC latency-conformance PRE-EMIT
                 # gate. UNLIKE the advisory #642/#695 stages above, this one
                 # CAN hard-BLOCK: a measured!=spec latency MISMATCH (or a
                 # TIMEOUT) is a definite off-by-one the scorer's hidden TB
                 # would also fail, so emitting it wastes a scoring slot. It
-                # ONLY fires for an id whose canonical event/output/expect
-                # literal was supplied via --latency-specs (the gate cannot
-                # infer the latency literal from a CVDP record's prose); a
-                # setup/parse error stays advisory inside latency_gate_record
-                # (never a false-BLOCK — §4.05 asymmetry).
-                _lspec = latency_specs.get(str(rec.get("id")))
+                # fires for an id whose canonical event/output/expect literal
+                # was supplied via --latency-specs, OR (GATE-AS-SOLE-EMIT)
+                # AUTO-DERIVED from an UNAMBIGUOUS prompt literal
+                # (latency_contract_from_prompt) so a BLIND run still gates a
+                # wrong-latency completion without a curated spec. A setup/parse
+                # error stays advisory inside latency_gate_record (never a
+                # false-BLOCK — §4.05 asymmetry).
+                _lspec = latency_specs.get(_rid_s)
+                _lat_derived = False
+                if _lspec is None:
+                    # AUTO-DERIVE only on a positive, exact, backtick-anchored
+                    # contract; ambiguous prose → None → behaves exactly as today.
+                    _lspec = latency_contract_from_prompt(
+                        prompts.get(_rid_s, ""))
+                    _lat_derived = _lspec is not None
                 if _lspec is not None:
                     _lwd = wd / f"lat_{rec.get('id')}"
                     _lwd.mkdir(parents=True, exist_ok=True)
                     _lok, _lnote = latency_gate_record(
-                        str(rec.get("id")), out_rec.get("completion", ""),
-                        _lspec, _lwd)
+                        _rid_s, out_rec.get("completion", ""), _lspec, _lwd)
+                    # AUTO-DERIVED contract: only a CONFIDENT measured MISMATCH
+                    # (the canonical TB DID see the output assert, at the wrong
+                    # cycle) blocks; a TIMEOUT (the output never asserted under
+                    # the gate's own stimulus) is ADVISORY here — the gate cannot
+                    # be sure its measurement models this design's handshake when
+                    # it DERIVED the contract itself (§4.05 asymmetry, STRICTLY
+                    # safer than the curator-supplied path). A curator --latency-
+                    # specs entry keeps the original MISMATCH-or-TIMEOUT block.
+                    if (_lat_derived and not _lok
+                            and not _lnote.startswith("latency MISMATCH")):
+                        _lok = True
+                        _lnote += (" (auto-derived from prompt; non-MISMATCH "
+                                   "treated as advisory)")
                     entry["latency"] = _lnote
+                    if _lat_derived:
+                        entry["latency_contract_source"] = "prompt-derived"
                     if not _lok:
                         ok = False
                         entry["verdict"] = "BLOCKED"
+                        # tag the REAL block reason (a demoted-advisory TIMEOUT
+                        # note still reads "latency TIMEOUT", so the stderr
+                        # attribution keys off this flag, not the note prefix).
+                        entry["latency_block"] = _lnote
+                # ORGANIC (GATE-AS-SOLE-EMIT) — VERILATOR lint-zero PRE-EMIT block
+                # for a cid007 LINT deliverable (prompt asks for lint-clean / zero
+                # warnings, or a `.vlt` waiver is provided). The blind author never
+                # runs verilator, so a remaining lint warning is silently emitted
+                # and the scorer fails it. FAIL-SAFE: verilator absent / a
+                # %Error-only (cannot elaborate) run → advisory-PASS, never a false
+                # block. A record that is NOT a lint task never enters this path.
+                if _is_lint_clean_task(prompts.get(_rid_s, ""),
+                                       bool(context_waivers.get(_rid_s))):
+                    _vwd = wd / f"lint_{rec.get('id')}"
+                    _vwd.mkdir(parents=True, exist_ok=True)
+                    _vok, _vnote = verilator_lint_gate_record(
+                        _rid_s, out_rec.get("completion", ""),
+                        context_waivers.get(_rid_s), harness_tops.get(_rid_s),
+                        _vwd)
+                    entry["lint"] = _vnote
+                    if not _vok:
+                        ok = False
+                        entry["verdict"] = "BLOCKED"
+                        entry["lint_block"] = _vnote
+                # ORGANIC (GATE-AS-SOLE-EMIT) — SPEC↔RTL contract PRE-EMIT block.
+                # BLOCKs ONLY a CLEAR interface violation (missing functional port
+                # / wrong declared width / a sink with zero outputs) against an
+                # AUTHORITATIVE prompt module header, and ONLY when the completion
+                # declares exactly the harness/skeleton top (never a submodule —
+                # the all-ports-missing false-block class). Everything heuristic
+                # stays advisory (preserve blindness; #695 is the advisory sibling).
+                _sc_ok, _sc_note = spec_conformance_gate_record(
+                    _rid_s, out_rec.get("completion", ""),
+                    prompts.get(_rid_s, ""), harness_tops.get(_rid_s))
+                # attach the note ONLY when the check actually RAN (a real
+                # "spec-conformance ok/BLOCK" verdict) — a trivial skip leaves a
+                # non-target record's report entry byte-identical to today.
+                if _sc_note.startswith("spec-conformance"):
+                    entry["spec_conformance"] = _sc_note
+                if not _sc_ok:
+                    ok = False
+                    entry["verdict"] = "BLOCKED"
+                    entry["spec_block"] = _sc_note
+                # ORGANIC (GATE-AS-SOLE-EMIT) — B1 prompt-example self-test +
+                # B2 spec-example smoke TB: SIMULATE the prompt's OWN worked
+                # examples against the authored RTL. Both BLOCK only on a clear
+                # measured FAIL; no extractable example / no iverilog → advisory.
+                # They run their OWN sim only when an example is extractable, so a
+                # plain record never pays the sim cost. Blindness preserved
+                # (prompt + RTL only). The note is attached only on a real run.
+                _ex_top = harness_tops.get(_rid_s)
+                _b1_ok, _b1_note = prompt_selftest_gate_record(
+                    _rid_s, out_rec.get("completion", ""),
+                    prompts.get(_rid_s, ""), _ex_top)
+                if _b1_note.startswith(("prompt-selftest PASS",
+                                        "prompt-selftest FAIL")):
+                    entry["prompt_selftest"] = _b1_note
+                if not _b1_ok:
+                    ok = False
+                    entry["verdict"] = "BLOCKED"
+                    entry["selftest_block"] = _b1_note
+                _b2wd = wd / f"smoke_{rec.get('id')}"
+                _b2wd.mkdir(parents=True, exist_ok=True)
+                _b2_ok, _b2_note = spec_example_smoke_gate_record(
+                    _rid_s, out_rec.get("completion", ""),
+                    prompts.get(_rid_s, ""), _ex_top, _b2wd)
+                if _b2_note.startswith(("spec-example-smoke PASS",
+                                        "spec-example-smoke BLOCK")):
+                    entry["spec_example_smoke"] = _b2_note
+                if not _b2_ok:
+                    ok = False
+                    entry["verdict"] = "BLOCKED"
+                    entry["smoke_block"] = _b2_note
+                # ORGANIC (GATE-AS-SOLE-EMIT) — B3 FSM transition-completeness
+                # (#522) + B4 handshake livelock / result-stability (#523): two
+                # zero-FP STRUCTURAL checks (pure parse, no sim). BLOCK on an
+                # ERROR finding; WARN / SKIP / no-finding → advisory note.
+                _b3_ok, _b3_note = fsm_completeness_gate_record(
+                    _rid_s, out_rec.get("completion", ""))
+                if _b3_note.startswith(("fsm-completeness FAIL",
+                                        "fsm-completeness CHECKED")):
+                    entry["fsm_completeness"] = _b3_note
+                if not _b3_ok:
+                    ok = False
+                    entry["verdict"] = "BLOCKED"
+                    entry["fsm_block"] = _b3_note
+                _b4_ok, _b4_note = handshake_stability_gate_record(
+                    _rid_s, out_rec.get("completion", ""))
+                if _b4_note.startswith("handshake-stability FAIL") or \
+                        _b4_note.startswith("handshake-stability CHECKED"):
+                    entry["handshake_stability"] = _b4_note
+                if not _b4_ok:
+                    ok = False
+                    entry["verdict"] = "BLOCKED"
+                    entry["handshake_block"] = _b4_note
             report.append(entry)
             if ok:
                 # ORGANIC (run_v1239_converge) — harness-TOPLEVEL alias repair.
@@ -2210,10 +3012,22 @@ def main(argv=None) -> int:
                 # gate_record returns on the FIRST failing stage, so the
                 # last stage field written carries the real reason (a
                 # synth-stage block used to print "compile clean" here).
-                # #705 — a latency BLOCK names the latency reason.
-                why = (entry.get("latency") if entry.get("verdict") == "BLOCKED"
-                       and "latency" in entry and entry.get("latency", "")
-                       .startswith("latency ") else None)
+                # #705 — a latency BLOCK names the latency reason; the
+                # GATE-AS-SOLE-EMIT area block names its #729 area reason
+                # (else an area-blocked record mis-printed the synth note).
+                why = None
+                _area = entry.get("area", "")
+                if entry.get("verdict") == "BLOCKED":
+                    why = (entry.get("latency_block")
+                           or entry.get("lint_block")
+                           or entry.get("spec_block")
+                           or entry.get("selftest_block")
+                           or entry.get("smoke_block")
+                           or entry.get("fsm_block")
+                           or entry.get("handshake_block"))
+                    if not why and isinstance(_area, str) \
+                            and _area.startswith("area BLOCK"):
+                        why = _area
                 why = why or (entry.get("filename_conformance")
                               or entry.get("synth") or entry.get("compile"))
                 print(f"BLOCKED {entry['id']}: {why}", file=sys.stderr)

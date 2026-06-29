@@ -1,0 +1,525 @@
+#!/usr/bin/env python3
+"""GATE-AS-SOLE-EMIT — the two self-verify gates already PRESENT in cvdp_gate
+(#729 area-threshold + #705 latency-conformance) must BLOCK a bad draft PRE-EMIT
+on the BLIND CVDP authoring path, so a fresh blind run cannot silently emit a
+wrong-latency or sub-threshold-area completion.
+
+Before this wiring both gates only fired with an operator flag (#705 needed
+``--latency-specs``; #729 was used only for the synth-TIMEOUT tolerance, never to
+block sub-threshold area). Now:
+  * cid007 / area-opt records run #729 on (ORIGINAL input.context baseline,
+    OPTIMIZED completion) and BLOCK a real measured sub-threshold reduction,
+    HONORING #729's near-minimal escape (a design that genuinely cannot clear the
+    bar is NOT false-blocked);
+  * a prompt that states an UNAMBIGUOUS "`out` asserts N cycles after `event`"
+    latency literal AUTO-DERIVES the #705 contract so it fires WITHOUT
+    ``--latency-specs``.
+
+Both are PURELY ADDITIVE: a record that is neither cid007 nor latency-stated must
+behave EXACTLY as today.
+
+Tests
+=====
+PURE (no EDA tools) — always run
+  * latency_contract_from_prompt: positives (int / WIDTH+2 / glued ports),
+    negatives (vague word, non-backticked port, period-crossing), and the
+    negation/bound guards ('not asserted', 'within N cycles').
+  * area_threshold_gate_record WIRING via a monkeypatched #729 runner: a BLOCK
+    verdict → ok=False; NOT_APPLICABLE / PASS → ok=True; a missing baseline /
+    ambiguous top / no-RTL completion → advisory ok=True (never a false block).
+
+END-TO-END through main() — iverilog + yosys gated
+  * (a) a cid007 record whose #729 runner reports BLOCK (monkeypatched, so no
+        docker needed) is DROPPED from the emitted JSONL and main() exits 1.
+  * (a') a cid007 record whose #729 runner reports NOT_APPLICABLE (near-minimal
+         escape) is NOT blocked — emitted, exit 0 (no false block).
+  * (b) a record with an explicit "`done` asserts 3 cycles after `start`" prompt
+        + a WRONG-latency (1-cycle) RTL is BLOCKED (#705 MISMATCH) via real
+        iverilog measurement.
+  * (c) a plain functional record (no cid007, no latency literal) is UNAFFECTED:
+        emitted unchanged, exit 0, and neither pre-emit block touches it.
+
+chip-AGNOSTIC: tiny inline RTL fixtures, no benchmark data.
+"""
+from __future__ import annotations
+
+import json
+import shutil
+import sys
+from pathlib import Path
+
+PLUGIN = Path(__file__).resolve().parent.parent.parent
+HARNESS = PLUGIN / "benchmark"
+PROGRAMS = PLUGIN / "programs"
+sys.path.insert(0, str(HARNESS))
+sys.path.insert(0, str(PROGRAMS))
+import cvdp_gate as G  # noqa: E402
+
+import pytest  # noqa: E402
+
+_HAVE_IVERILOG = shutil.which("iverilog") is not None and \
+    shutil.which("vvp") is not None
+_HAVE_YOSYS = shutil.which("yosys") is not None
+_HAVE_EDA = _HAVE_IVERILOG and _HAVE_YOSYS
+
+# ── tiny inline RTL fixtures ─────────────────────────────────────────────────
+# A self-contained combinational module (synthesises instantly).
+_AND2 = ("module and2(input a, input b, output y);\n"
+         "  assign y = a & b;\nendmodule\n")
+
+# WRONG-latency: `done` asserts ONE cycle after `start` (registered passthrough).
+# The prompt will state THREE cycles → a measured MISMATCH (1 != 3) → BLOCK.
+_LAT_WRONG = (
+    "module lat(input clk, input rst_n, input start, output reg done);\n"
+    "  always @(posedge clk or negedge rst_n)\n"
+    "    if (!rst_n) done <= 1'b0; else done <= start;\n"
+    "endmodule\n")
+
+# An ORIGINAL area baseline + a do-nothing OPTIMIZED copy (used only by the
+# monkeypatched-runner wiring tests; the real #729 measurement is unit-tested in
+# its own file).
+_AREA_ORIG = ("module redux(input [7:0] a, input [7:0] b, output [7:0] y);\n"
+              "  assign y = (a & b) | (a & b) | (a | b);\nendmodule\n")
+_AREA_OPT = _AREA_ORIG  # do-nothing
+
+
+# ════════════════════════════ PURE: latency contract ════════════════════════
+def test_latency_contract_positive_int():
+    c = G.latency_contract_from_prompt(
+        "The output `done` asserts 3 cycles after `start` is pulsed.")
+    assert c == {"event": "start", "output": "done", "expect": "3"}
+
+
+def test_latency_contract_positive_param_expr():
+    c = G.latency_contract_from_prompt(
+        "Signal `valid` goes high WIDTH+2 cycles after the rising edge "
+        "of `start`.")
+    assert c == {"event": "start", "output": "valid", "expect": "WIDTH+2"}
+
+
+def test_latency_contract_positive_glued_ports_one_cycle():
+    c = G.latency_contract_from_prompt(
+        "`o_ready` becomes high 1 clock cycle after `i_req`.")
+    assert c == {"event": "i_req", "output": "o_ready", "expect": "1"}
+
+
+def test_latency_contract_negative_vague_word():
+    # 'several' is not a clean cycle count → never fire.
+    assert G.latency_contract_from_prompt(
+        "`done` asserts several cycles after `start`.") is None
+
+
+def test_latency_contract_negative_unquoted_ports():
+    # both ports MUST be backtick-quoted signal names.
+    assert G.latency_contract_from_prompt(
+        "done asserts 3 cycles after start.") is None
+    assert G.latency_contract_from_prompt(
+        "`done` asserts 3 cycles after the start signal.") is None
+
+
+def test_latency_contract_negative_sentence_break():
+    # a '.' between the output and the count breaks the (single-clause) literal.
+    assert G.latency_contract_from_prompt(
+        "`done` asserts. 3 cycles after `start`.") is None
+
+
+def test_latency_contract_guard_negation_and_bound():
+    # 'not asserted' (negation) and 'within N cycles' (a watchdog BOUND, not an
+    # exact latency) must NOT be enforced — the apb_pready_i/ACCESS shape.
+    assert G.latency_contract_from_prompt(
+        "`apb_pready_i` is not asserted within 15 cycles after entering "
+        "`ACCESS`.") is None
+    assert G.latency_contract_from_prompt(
+        "`busy` goes high within 8 cycles after `go`.") is None
+
+
+def test_latency_contract_plain_functional_prompt():
+    assert G.latency_contract_from_prompt(
+        "Implement a 4-bit counter that increments on each clock edge.") is None
+
+
+# ═══════════════════ PURE: area helper wiring (monkeypatched #729) ═══════════
+def _block_runner(**kw):
+    return 1, {"verdict": "BLOCK", "reason": "stub: measured sub-threshold"}
+
+
+def _not_applicable_runner(**kw):
+    return 0, {"verdict": "NOT_APPLICABLE",
+               "reason": "stub: unreachable-target / near-minimal escape"}
+
+
+def _pass_runner(**kw):
+    return 0, {"verdict": "PASS", "reason": "stub: reduction meets threshold"}
+
+
+def test_area_helper_block_wiring(monkeypatch, tmp_path):
+    monkeypatch.setattr(G, "_ppa_area_run", _block_runner)
+    ok, note = G.area_threshold_gate_record(
+        "id1", _AREA_OPT, [_AREA_ORIG], "reduce cells and wires by 20%",
+        "redux", tmp_path)
+    assert ok is False
+    assert "area BLOCK" in note
+
+
+def test_area_helper_advisory_on_not_applicable(monkeypatch, tmp_path):
+    # the near-minimal / unreachable-target escape → NOT a false block.
+    monkeypatch.setattr(G, "_ppa_area_run", _not_applicable_runner)
+    ok, note = G.area_threshold_gate_record(
+        "id1", _AREA_OPT, [_AREA_ORIG], "reduce cells and wires by 20%",
+        "redux", tmp_path)
+    assert ok is True
+    assert "NOT_APPLICABLE" in note
+
+
+def test_area_helper_pass(monkeypatch, tmp_path):
+    monkeypatch.setattr(G, "_ppa_area_run", _pass_runner)
+    ok, _note = G.area_threshold_gate_record(
+        "id1", _AREA_OPT, [_AREA_ORIG], "reduce cells and wires by 20%",
+        "redux", tmp_path)
+    assert ok is True
+
+
+def test_area_helper_advisory_on_missing_baseline(monkeypatch, tmp_path):
+    # no input.context baseline → cannot measure → advisory-PASS (never block).
+    monkeypatch.setattr(G, "_ppa_area_run", _block_runner)  # would block if run
+    ok, note = G.area_threshold_gate_record(
+        "id1", _AREA_OPT, [], "reduce cells and wires by 20%", "redux",
+        tmp_path)
+    assert ok is True
+    assert "baseline" in note
+
+
+def test_area_helper_advisory_on_ambiguous_top(monkeypatch, tmp_path):
+    monkeypatch.setattr(G, "_ppa_area_run", _block_runner)  # would block if run
+    ok, note = G.area_threshold_gate_record(
+        "id1", _AREA_OPT, [_AREA_ORIG], "reduce cells and wires by 20%",
+        None, tmp_path)
+    assert ok is True
+    assert "ambiguous" in note
+
+
+def test_area_top_single_shared_module():
+    assert G._area_top([_AREA_ORIG], _AREA_OPT) == "redux"
+
+
+def test_area_top_ambiguous_returns_none():
+    base = "module a(); endmodule\nmodule b(); endmodule"
+    comp = "module a(); endmodule\nmodule b(); endmodule"
+    assert G._area_top([base], comp) is None
+
+
+# ═══════════════════ END-TO-END through main() (EDA-gated) ═══════════════════
+def _write(p: Path, records):
+    p.write_text("".join(json.dumps(r) + "\n" for r in records))
+
+
+def _run_main(tmp_path, batch, prompts=None, dataset=None):
+    out = tmp_path / "out.jsonl"
+    rep = tmp_path / "rep.json"
+    bf = tmp_path / "batch.jsonl"
+    _write(bf, batch)
+    argv = ["--batch", str(bf), "--out", str(out), "--report", str(rep)]
+    if prompts is not None:
+        pf = tmp_path / "prompts.jsonl"
+        _write(pf, prompts)
+        argv += ["--prompts", str(pf)]
+    if dataset is not None:
+        df = tmp_path / "dataset.jsonl"
+        _write(df, dataset)
+        argv += ["--dataset", str(df)]
+    rc = G.main(argv)
+    emitted = [json.loads(ln) for ln in out.read_text().splitlines() if ln.strip()]
+    report = json.loads(rep.read_text())
+    return rc, emitted, report
+
+
+@pytest.mark.skipif(not _HAVE_EDA, reason="needs iverilog + yosys")
+def test_main_cid007_blocks_subthreshold(monkeypatch, tmp_path):
+    # (a) a cid007 record whose #729 runner reports BLOCK → DROPPED, exit 1.
+    # Monkeypatch the synth runner so the block is deterministic (no docker).
+    monkeypatch.setattr(G, "_ppa_area_run", _block_runner)
+    rid = "cvdp_copilot_redux_0001"
+    batch = [{"id": rid, "completion": _AREA_OPT}]
+    prompts = [{"id": rid, "prompt": "Optimize: reduce cells and wires by 20%."}]
+    dataset = [{"id": rid, "categories": ["cid007"],
+                "input": {"context": {"rtl/redux.sv": _AREA_ORIG}}}]
+    rc, emitted, report = _run_main(tmp_path, batch, prompts, dataset)
+    assert rc == 1
+    assert all(r.get("id") != rid for r in emitted)
+    entry = next(e for e in report["records"] if e["id"] == rid)
+    assert entry["verdict"] == "BLOCKED"
+    assert "area BLOCK" in entry.get("area", "")
+
+
+@pytest.mark.skipif(not _HAVE_EDA, reason="needs iverilog + yosys")
+def test_main_cid007_not_blocked_when_near_minimal(monkeypatch, tmp_path):
+    # (a') the near-minimal escape (NOT_APPLICABLE) must NOT block (no false block).
+    monkeypatch.setattr(G, "_ppa_area_run", _not_applicable_runner)
+    rid = "cvdp_copilot_redux_0002"
+    batch = [{"id": rid, "completion": _AREA_OPT}]
+    prompts = [{"id": rid, "prompt": "Optimize: reduce cells and wires by 20%."}]
+    dataset = [{"id": rid, "categories": ["cid007"],
+                "input": {"context": {"rtl/redux.sv": _AREA_ORIG}}}]
+    rc, emitted, report = _run_main(tmp_path, batch, prompts, dataset)
+    assert rc == 0
+    assert any(r.get("id") == rid for r in emitted)
+    entry = next(e for e in report["records"] if e["id"] == rid)
+    assert entry["verdict"] == "PASS"
+    assert "NOT_APPLICABLE" in entry.get("area", "")
+
+
+@pytest.mark.skipif(not _HAVE_EDA, reason="needs iverilog + yosys")
+def test_main_latency_blocks_wrong_latency(tmp_path):
+    # (b) explicit "`done` asserts 3 cycles after `start`" prompt + 1-cycle RTL
+    # → real #705 MISMATCH → BLOCKED. No --latency-specs supplied.
+    rid = "cvdp_copilot_lat_0001"
+    batch = [{"id": rid, "completion": _LAT_WRONG}]
+    prompts = [{"id": rid,
+                "prompt": "The output `done` asserts 3 cycles after `start`."}]
+    rc, emitted, report = _run_main(tmp_path, batch, prompts)
+    assert rc == 1
+    assert all(r.get("id") != rid for r in emitted)
+    entry = next(e for e in report["records"] if e["id"] == rid)
+    assert entry["verdict"] == "BLOCKED"
+    assert entry.get("latency_contract_source") == "prompt-derived"
+    assert entry.get("latency", "").startswith("latency MISMATCH")
+
+
+@pytest.mark.skipif(not _HAVE_EDA, reason="needs iverilog + yosys")
+def test_main_plain_functional_unaffected(monkeypatch, tmp_path):
+    # (c) a plain record (no cid007, no latency literal) is UNAFFECTED: emitted
+    # unchanged, exit 0, and neither pre-emit block is even invoked.
+    def _boom(**kw):  # if the area runner is reached for a non-area record, fail
+        raise AssertionError("area runner must NOT run for a plain record")
+    monkeypatch.setattr(G, "_ppa_area_run", _boom)
+    rid = "cvdp_copilot_and2_0001"
+    batch = [{"id": rid, "completion": _AND2}]
+    prompts = [{"id": rid, "prompt": "Implement a 2-input AND gate."}]
+    rc, emitted, report = _run_main(tmp_path, batch, prompts)
+    assert rc == 0
+    em = next(r for r in emitted if r.get("id") == rid)
+    assert "endmodule" in em["completion"]
+    entry = next(e for e in report["records"] if e["id"] == rid)
+    assert entry["verdict"] == "PASS"
+    assert "area" not in entry              # area block never entered
+    assert "latency" not in entry          # latency block never entered
+    assert "lint" not in entry             # lint block never entered
+    assert "spec_conformance" not in entry  # spec block skipped (no interface)
+
+
+@pytest.mark.skipif(not _HAVE_EDA, reason="needs iverilog + yosys")
+def test_main_plain_functional_byte_identical_with_and_without_change(tmp_path):
+    # the emitted completion for a plain functional record is byte-identical to
+    # the de-fenced compiled payload (today's behaviour, unchanged).
+    rid = "cvdp_copilot_and2_0002"
+    batch = [{"id": rid, "completion": _AND2}]
+    rc, emitted, _report = _run_main(tmp_path, batch)
+    assert rc == 0
+    em = next(r for r in emitted if r.get("id") == rid)
+    # bare RTL emits the compiled payload unchanged (single-file normalize).
+    assert em["completion"].strip().endswith("endmodule")
+
+
+# ════════════════ HOOK 1: verilator lint-zero (cid007 lint tasks) ════════════
+# width-truncation + unused-bits → 2 verilator -Wall warnings; iverilog accepts.
+_LINT_DIRTY = ("module trunc(input [7:0] a, output [3:0] y);\n"
+               "  assign y = a;\nendmodule\n")
+_LINT_CLEAN = ("module trunc(input [7:0] a, output [7:0] y);\n"
+               "  assign y = a;\nendmodule\n")
+_LINT_PROMPT = "Fix the width issues. Only provide the Lint-clean RTL code."
+
+
+def test_lint_task_detect():
+    assert G._is_lint_clean_task("Only provide the Lint-clean RTL code.", False)
+    assert G._is_lint_clean_task("The design must have zero warnings.", False)
+    assert G._is_lint_clean_task("anything", True)            # a .vlt waiver
+    assert not G._is_lint_clean_task("Implement a counter.", False)
+    # the bare word 'verilator' (a lint_off macro in provided code) is NOT a task
+    assert not G._is_lint_clean_task(
+        "Use `verilator lint_off PINCONNECTEMPTY` in the macro.", False)
+
+
+@pytest.mark.skipif(shutil.which("verilator") is None, reason="needs verilator")
+def test_verilator_lint_block_on_warning(tmp_path):
+    ok, note = G.verilator_lint_gate_record(
+        "id1", _LINT_DIRTY, None, "trunc", tmp_path)
+    assert ok is False
+    assert "lint warnings remain" in note
+
+
+@pytest.mark.skipif(shutil.which("verilator") is None, reason="needs verilator")
+def test_verilator_lint_pass_on_clean(tmp_path):
+    ok, note = G.verilator_lint_gate_record(
+        "id1", _LINT_CLEAN, None, "trunc", tmp_path)
+    assert ok is True
+    assert "lint clean" in note
+
+
+def test_verilator_lint_advisory_when_unavailable(monkeypatch, tmp_path):
+    monkeypatch.setattr(G.shutil, "which", lambda _x: None)
+    ok, note = G.verilator_lint_gate_record(
+        "id1", _LINT_DIRTY, None, "trunc", tmp_path)
+    assert ok is True
+    assert "verilator unavailable" in note
+
+
+@pytest.mark.skipif(not (_HAVE_EDA and shutil.which("verilator")),
+                    reason="needs iverilog + yosys + verilator")
+def test_main_lint_task_blocks_warning(tmp_path):
+    rid = "cvdp_copilot_lint_0001"
+    batch = [{"id": rid, "completion": _LINT_DIRTY}]
+    prompts = [{"id": rid, "prompt": _LINT_PROMPT}]
+    rc, emitted, report = _run_main(tmp_path, batch, prompts)
+    assert rc == 1
+    assert all(r.get("id") != rid for r in emitted)
+    entry = next(e for e in report["records"] if e["id"] == rid)
+    assert entry["verdict"] == "BLOCKED"
+    assert "lint warnings remain" in entry.get("lint_block", "")
+
+
+@pytest.mark.skipif(not (_HAVE_EDA and shutil.which("verilator")),
+                    reason="needs iverilog + yosys + verilator")
+def test_main_lint_task_clean_passes(tmp_path):
+    rid = "cvdp_copilot_lint_0002"
+    batch = [{"id": rid, "completion": _LINT_CLEAN}]
+    prompts = [{"id": rid, "prompt": _LINT_PROMPT}]
+    rc, emitted, report = _run_main(tmp_path, batch, prompts)
+    assert rc == 0
+    assert any(r.get("id") == rid for r in emitted)
+    entry = next(e for e in report["records"] if e["id"] == rid)
+    assert "lint clean" in entry.get("lint", "")
+
+
+# ════════════════ HOOK 2: spec↔RTL contract (authoritative header) ═══════════
+_SPEC_PROMPT = (
+    "Implement the module with this exact interface:\n\n"
+    "```verilog\n"
+    "module widget(input clk, input rst_n, input en, output q);\n"
+    "endmodule\n"
+    "```\n")
+_SPEC_GOOD = ("module widget(input clk, input rst_n, input en, output q);\n"
+              "  reg r;\n  always @(posedge clk) r <= en;\n"
+              "  assign q = r;\nendmodule\n")
+_SPEC_MISSING = ("module widget(input clk, input rst_n, output q);\n"
+                 "  assign q = 1'b0;\nendmodule\n")
+
+
+def test_spec_conformance_block_missing_port():
+    ok, note = G.spec_conformance_gate_record(
+        "id1", _SPEC_MISSING, _SPEC_PROMPT, "widget")
+    assert ok is False
+    assert "port-missing(en)" in note
+
+
+def test_spec_conformance_good_interface_passes():
+    ok, note = G.spec_conformance_gate_record(
+        "id1", _SPEC_GOOD, _SPEC_PROMPT, "widget")
+    assert ok is True
+    assert note.startswith("spec-conformance ok")
+
+
+def test_spec_conformance_advisory_when_nl_source():
+    # NL bullets (source != 'verilog') → never block, even with a missing port.
+    nl = ("Interface:\n- input clk\n- input rst_n\n- input en (1 bit)\n"
+          "- output q\n")
+    ok, _note = G.spec_conformance_gate_record(
+        "id1", _SPEC_MISSING, nl, "widget")
+    assert ok is True
+
+
+def test_spec_conformance_skip_when_top_not_declared():
+    # the all-ports-missing false-block class: intended top absent from the
+    # completion (a submodule would be compared) → advisory-skip, never block.
+    other = ("module helper(input a, output b);\n  assign b = a;\nendmodule\n")
+    ok, note = G.spec_conformance_gate_record(
+        "id1", other, _SPEC_PROMPT, "widget")
+    assert ok is True
+    assert "not declared as such" in note
+
+
+@pytest.mark.skipif(not _HAVE_EDA, reason="needs iverilog + yosys")
+def test_main_spec_conformance_blocks_missing_port(tmp_path):
+    rid = "cvdp_copilot_widget_0001"
+    batch = [{"id": rid, "completion": _SPEC_MISSING}]
+    prompts = [{"id": rid, "prompt": _SPEC_PROMPT}]
+    rc, emitted, report = _run_main(tmp_path, batch, prompts)
+    assert rc == 1
+    assert all(r.get("id") != rid for r in emitted)
+    entry = next(e for e in report["records"] if e["id"] == rid)
+    assert entry["verdict"] == "BLOCKED"
+    assert "port-missing(en)" in entry.get("spec_block", "")
+
+
+@pytest.mark.skipif(not _HAVE_EDA, reason="needs iverilog + yosys")
+def test_main_spec_conformance_good_passes(tmp_path):
+    rid = "cvdp_copilot_widget_0002"
+    batch = [{"id": rid, "completion": _SPEC_GOOD}]
+    prompts = [{"id": rid, "prompt": _SPEC_PROMPT}]
+    rc, emitted, report = _run_main(tmp_path, batch, prompts)
+    assert rc == 0
+    assert any(r.get("id") == rid for r in emitted)
+
+
+# ════════════════ HOOK 3: module-id → harness TOPLEVEL rename ════════════════
+_RENAME_RTL = ("module wrong_name(input a, output y);\n"
+               "  assign y = a;\nendmodule\n")
+
+
+def test_rename_sole_module():
+    out = G.maybe_rename_top(_RENAME_RTL, "real_top")
+    assert "module real_top(" in out and "wrong_name" not in out
+
+
+def test_rename_noop_when_present():
+    rtl = "module real_top(input a, output y); assign y=a; endmodule"
+    assert G.maybe_rename_top(rtl, "real_top") == rtl
+
+
+def test_rename_noop_when_no_harness_top():
+    assert G.maybe_rename_top(_RENAME_RTL, None) == _RENAME_RTL
+
+
+def test_rename_multi_root_single_parent():
+    rtl = ("module top(input a, output y);\n  sub u(.a(a), .y(y));\nendmodule\n"
+           "module sub(input a, output y);\n  assign y = a;\nendmodule\n")
+    out = G.maybe_rename_top(rtl, "X")
+    assert "module X(" in out and "module sub(" in out and out.count("module X(") == 1
+
+
+def test_rename_ambiguous_two_roots_noop():
+    rtl = ("module a(input x, output y); assign y=x; endmodule\n"
+           "module b(input p, output q); assign q=p; endmodule\n")
+    assert G.maybe_rename_top(rtl, "X") == rtl
+
+
+def test_rename_endmodule_label():
+    rtl = "module wrong_name(input a, output y); assign y=a; endmodule : wrong_name"
+    out = G.maybe_rename_top(rtl, "real_top")
+    assert "module real_top(" in out and "endmodule : real_top" in out
+
+
+@pytest.mark.skipif(not _HAVE_EDA, reason="needs iverilog + yosys")
+def test_main_toplevel_rename_makes_wrong_name_elaborate(tmp_path):
+    # harness .env fixes TOPLEVEL=real_top; the completion declares `wrong_name`.
+    # The pre-gate rename rewrites it so the EMITTED completion carries
+    # `module real_top` (the scorer's `iverilog -s real_top` then binds).
+    rid = "cvdp_copilot_rename_0001"
+    batch = [{"id": rid, "completion": _RENAME_RTL}]
+    dataset = [{"id": rid,
+                "harness": {"files": {"src/.env": "TOPLEVEL=real_top\n"}}}]
+    rc, emitted, _report = _run_main(tmp_path, batch, dataset=dataset)
+    assert rc == 0
+    em = next(r for r in emitted if r.get("id") == rid)
+    assert "module real_top" in em["completion"]
+    assert "module wrong_name" not in em["completion"]
+
+
+@pytest.mark.skipif(not _HAVE_EDA, reason="needs iverilog + yosys")
+def test_main_no_harness_top_keeps_original_name(tmp_path):
+    # additive: with NO harness top, the emit keeps the original module name.
+    rid = "cvdp_copilot_rename_0002"
+    batch = [{"id": rid, "completion": _RENAME_RTL}]
+    rc, emitted, _report = _run_main(tmp_path, batch)
+    assert rc == 0
+    em = next(r for r in emitted if r.get("id") == rid)
+    assert "module wrong_name" in em["completion"]
