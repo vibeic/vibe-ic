@@ -19,21 +19,30 @@ import re
 from typing import List, Tuple
 
 
-def _bullet_ports(text: str) -> Tuple[List, List]:
+def _bullet_ports(text: str) -> Tuple[List[Tuple[str, Optional[int]]], List[Tuple[str, Optional[int]]]]:
     """Parse bullet-style port lists (VerilogEval-v2 / CVDP prose).
 
-    Supports two conventions:
-      - classic bullet:  `- input clk` / `- output q (4 bits)`
-      - CVDP markdown:   `- `clk`: ...` under an `### Inputs:` section, and
-                         `- `q` (4-bit) — ...` under an `### Outputs:` section.
+    Supports three conventions:
+      - classic bullet:      `- input clk` / `- output q (4 bits)`
+      - Verilog bullet:      `- output reg [3:0] name`
+      - CVDP markdown:       `- `clk`: ...` under `### Inputs:`, and
+                             `- `q` (4-bit) — ...` under `### Outputs:`.
     The CVDP form infers direction from the containing section header and width
     from the parenthesized `(N-bit)` token."""
     ins, outs = [], []
-    # classic "- input name (W bits)"
+    # classic / Verilog bullet: "- input clk", "- output reg [3:0] name", "- output q (4 bits)"
     for m in re.finditer(
-        r"^\s*-\s*(input|output)\s+(\w+)(\s*\(\s*(\d+)\s*bits?\s*\))?", text, re.M):
-        d, name, _, w = m.groups()
-        (ins if d == "input" else outs).append((name, int(w) if w else 1))
+        r"^\s*-\s*(input|output)\b(?:\s+(?:wire|reg|logic))?"
+        r"\s*(?:(?:\[\s*(\d+)\s*:\s*(\d+)\s*\])|(?:\(\s*(\d+)\s*bits?\s*\)))?"
+        r"\s*(\w+)", text, re.M):
+        d, hi, lo, w_paren, name = m.groups()
+        if hi is not None and lo is not None:
+            w = abs(int(hi) - int(lo)) + 1
+        elif w_paren is not None:
+            w = int(w_paren)
+        else:
+            w = 1
+        (ins if d == "input" else outs).append((name, w))
     if ins or outs:
         return ins, outs
     # CVDP section-bounded form: direction from "### Inputs/Outputs:" section.

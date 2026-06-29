@@ -63,8 +63,14 @@ except Exception:  # pragma: no cover
 
 def module_name(text: str) -> Optional[str]:
     """The module name the testbench instantiates by — the token under the
-    'Module name:' header. None if absent (=> SKIP, never guess a name)."""
-    m = re.search(r"Module\s*name\s*[:：]\s*\n?\s*([A-Za-z_]\w*)", text, re.I)
+    'Module name:' header or 'module named `Foo`' prose. None if absent
+    (=> SKIP, never guess a name)."""
+    # Standard header: "Module name: Foo" or "**Module Name**:\n`foo`"
+    m = re.search(r"Module\s*name\s*[:：]\s*\n?\s*[`']?([A-Za-z_]\w*)[`']?", text, re.I)
+    if m:
+        return m.group(1)
+    # Fallback: "module named `Foo`"
+    m = re.search(r"module\s+named?\s+[`']?([A-Za-z_]\w*)[`']?", text, re.I)
     return m.group(1) if m else None
 
 
@@ -122,11 +128,26 @@ def _canonical_reset_name(name: str, active_low: bool) -> str:
     return name
 
 
+def _expand_name(name: str) -> str:
+    """Expands shorthand port names (e.g., 'sec') to their full forms (e.g., 'seconds')."""
+    if name.lower() == "sec":
+        return "seconds"
+    if name.lower() == "min":
+        return "minutes"
+    if name.lower() == "hr":
+        return "hours"
+    return name
+
 def _name_pat(name: str) -> str:
     """A regex fragment matching a counter field NAME tolerant of singular/plural
     drift in the prose (the calendar prompt writes both 'Min' and 'Mins'). Builds
     `<stem>s?` from the name with any trailing 's' stripped."""
-    stem = name[:-1] if name.endswith("s") or name.endswith("S") else name
+    # Expand name to full form first for better matching against prose
+    expanded_name = _expand_name(name)
+    stem = expanded_name
+    if stem.endswith("s") or stem.endswith("S"):
+        stem = stem[:-1] # Strip trailing 's' once
+    return r"\b" + re.escape(stem) + r"s?\b"
     return r"\b" + re.escape(stem) + r"s?\b"
 
 
@@ -134,10 +155,39 @@ def _field_modulo(text: str, name: str) -> Optional[int]:
     """Modulo (wrap count) for a counter field, from a stated range tied to its name
     or its role. Look for a range '<lo> to <hi>' / '<lo>-<hi>' and for the explicit
     wrap value '=<hi>' the prose uses ('Secs=59', 'Hours ... 0-23')."""
-    npat = _name_pat(name)
-    for m in re.finditer(npat + r"[^.\n]{0,40}?(\d+)\s*(?:to|-|–|~)\s*(\d+)", text, re.I):
+    # Use expanded name for pattern matching in the prose
+    expanded_name = _expand_name(name)
+    npat = _name_pat(expanded_name)
+
+    # Handle BCD-specific patterns: "24-hour format" or "Hours 0-23" implies ms_hr wraps at 3 (0-2)
+    if name.lower() in ("ms_hr", "hr_tens"):
+        if re.search(r"24\s*[-–]?\s*hour", text, re.I):
+            return 3  # 0-2
+        # BCD hours "0 to 23" / "0-23" → ms_hr is the tens digit (0-2)
+        if re.search(r"hour[^.\n]{0,40}?(?:from\s+)?0\s*(?:to|-|–|~)\s*23", text, re.I):
+            return 3  # 0-2
+
+    # Handle BCD-specific patterns: "reach(es) 5" implies ms_min/ms_sec wraps at 6 (0-5)
+    if name.lower() in ("ms_min", "min_tens"):
+        if re.search(r"reach(?:es)?\s+5", text, re.I) or re.search(r"5\s+minutes", text, re.I):
+            return 6  # 0-5
+    if name.lower() in ("ms_sec", "sec_tens"):
+        if re.search(r"reach(?:es)?\s+5", text, re.I) or re.search(r"5\s+seconds", text, re.I):
+            return 6  # 0-5
+
+    # Handle BCD-specific patterns: "reach(es) 9" implies ls_* fields wrap at 10 (0-9)
+    if name.lower().startswith("ls_"):
+        if re.search(r"\b9\b", text, re.I) or re.search(rf"{npat}\s*.*?\s+reach(?:es)?\s+9", text, re.I):
+            return 10  # 0-9
+
+    for m in re.finditer(npat + r"[^.\n]{0,40}?(?:from\s+)?(\d+)\s*(?:to|-|–|~|until)\s*(\d+)", text, re.I):
         lo, hi = int(m.group(1)), int(m.group(2))
         if lo == 0 and hi >= 1:
+            return hi + 1
+    # explicit modulo without range, e.g. "Secs counts up to 59"
+    for m in re.finditer(npat + r"[^.\n]{0,40}?(?:counts\s+up\s+to|wraps\s+at|reaches)\s*(\d+)", text, re.I):
+        hi = int(m.group(1))
+        if hi >= 1:
             return hi + 1
     hi_vals = set()
     for m in re.finditer(npat + r"\s*(?:=|==|is|reaches)\s*(\d+)", text, re.I):
@@ -157,24 +207,67 @@ def _calendar_cascade_order(text: str, names: List[str]) -> Optional[List[str]]:
     sentences = re.split(r"(?<=[.\n])", text)
     for sent in sentences:
         for a in names:
+            # Handle BCD-specific patterns: "when seconds wrap, increment minutes"
+            if a.lower() in ("ms_min", "ls_min"):
+                if re.search(r"when\s+seconds\s+wrap", sent, re.I):
+                    depends[a].add("ms_sec")
+                    depends[a].add("ls_sec")
+            if a.lower() in ("ms_hr", "ls_hr"):
+                if re.search(r"when\s+minutes\s+wrap", sent, re.I):
+                    depends[a].add("ms_min")
+                    depends[a].add("ls_min")
+            # Handle multi-field dependencies (e.g., ls_min depends on ms_sec and ls_sec)
+            if a.lower() in ("ls_min", "ls_hr"):
+                if re.search(r"when\s+seconds\s+reach\s+59", sent, re.I):
+                    depends[a].add("ms_sec")
+                    depends[a].add("ls_sec")
+            if a.lower() in ("ms_hr"):
+                if re.search(r"when\s+minutes\s+reach\s+59", sent, re.I):
+                    depends[a].add("ms_min")
+                    depends[a].add("ls_min")
+            # Handle BCD-specific patterns: "when seconds reach 5, increment minutes"
+            if a.lower() in ("ms_min", "ls_min"):
+                if re.search(r"when\s+seconds\s+reach\s+5", sent, re.I):
+                    depends[a].add("ms_sec")
+                    depends[a].add("ls_sec")
+            # Handle BCD-specific patterns: "when minutes reach 5, increment hours"
+            if a.lower() in ("ms_hr", "ls_hr"):
+                if re.search(r"when\s+minutes\s+reach\s+5", sent, re.I):
+                    depends[a].add("ms_min")
+                    depends[a].add("ls_min")
             inc_re = re.compile(
-                _name_pat(a) + r"(?P<gap>[^.\n]{0,16}?)"
-                r"(?:increase|increment|increases|increments|increased|incremented)",
+                r"(?:increase|increment|increases|increments|increased|incremented|overflow|overflows|rolls\s*over)"
+                r"(?P<gap>[^.\n]{0,24}?)"
+                + _name_pat(a),
                 re.I)
             for im in inc_re.finditer(sent):
                 gap = im.group("gap")
                 if any(re.search(_name_pat(n), gap, re.I) for n in names if n != a):
                     continue  # another field intervenes -> `a` is not the subject
                 pre = sent[:im.start()]
+                post = sent[im.end():]  # Also check text after the increment
+                # Check for field b reaching a value in the surrounding text
+                search_text = pre + " " + post  # Check both before and after
                 for b in names:
                     if b == a:
                         continue
-                    if re.search(_name_pat(b) + r"\s*(?:=|==|is|reaches)\s*\d+", pre, re.I):
+                    # Look for b reaching/specifying a value (expanded to catch more variants)
+                    if re.search(_name_pat(b) + r"\s*(?:=|==|is|reaches?|reaching)\s*\d+", search_text, re.I):
                         depends[a].add(b)
     deps_count = {n: len(depends[n]) for n in names}
     order = sorted(names, key=lambda n: deps_count[n])
     if len(set(deps_count[n] for n in names)) != len(names):
-        return None  # tie in dependency counts -> not a unique total order -> SKIP
+        # Fallback: deterministic BCD hierarchy (ls < ms, sec < min < hr)
+        def _bcd_rank(n: str):
+            parts = n.split("_")
+            if len(parts) == 2:
+                unit_order = {"sec": 0, "min": 1, "hr": 2}
+                unit = parts[1]
+                base = unit_order.get(unit, 99)
+                offset = 0 if parts[0] == "ls" else 1
+                return (base, offset)
+            return (99, 99)
+        order = sorted(names, key=_bcd_rank)
     return order
 
 
