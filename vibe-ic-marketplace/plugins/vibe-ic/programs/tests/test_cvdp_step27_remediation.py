@@ -68,6 +68,7 @@ def test_range_before_name_param_width_not_prose_overridden():
     # the gate does not enforce a literal width for it
     gp = {p["name"]: p for p in SP.build_gate(spec)["ports"]}
     assert gp["wdata_i"]["width"] is None
+    assert by["wdata_i"]["source"] == "param_expression_width", "the port is sourced from the param expression"
 
 
 def test_range_before_name_param_width_resolves_from_context():
@@ -77,6 +78,7 @@ def test_range_before_name_param_width_resolves_from_context():
     rec = _rec("dp", RANGE_BEFORE_PROMPT, RANGE_BEFORE_TB, ctx=ctx)
     by = {p["name"]: p for p in CE.extract(rec)["interface"]}
     assert by["wdata_i"]["width"] == 32, "resolves from the context param default, not prose 20"
+    assert by["wdata_i"]["source"] == "param_expression_width", "the port is sourced from the param expression"
 
 
 TABLE_PARAM_PROMPT = """Design `mapper`.
@@ -200,7 +202,7 @@ def test_context_header_absent_port_stays_a_gap():
     spec = CE.extract(rec)
     by = {p["name"]: p for p in spec["interface"]}
     assert by["din"]["width"] == 12          # context declares din
-    assert by.get("acc_o", {}).get("width") is None  # acc_o not in context -> unresolved
+    assert by.get("acc_o", {}).get("width") is None
     assert spec["completeness"] != "COMPLETE"
 
 
