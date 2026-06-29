@@ -422,7 +422,9 @@ def _cocotb_io(tb: str) -> Tuple[List[str], List[str]]:
 _HEADER_RE = re.compile(r"module\s+(\w+)\s*(?:#\s*\([^)]*\)\s*)?\((.*?)\)\s*;", re.S)
 
 
-def _skeleton_ports(record: dict, top: str) -> Optional[Tuple[List[Port], List[Port]]]:
+def _skeleton_ports(record: dict, top: str,
+                    include_input_context: bool = True
+                    ) -> Optional[Tuple[List[Port], List[Port]]]:
     """Parse ports from the skeleton RTL's module HEADER only (never any body).
     The skeleton RTL comes from EITHER `input.context` (the RTL file the user
     shows the AI, present for *modification* prompts where the AI edits it in
@@ -434,17 +436,23 @@ def _skeleton_ports(record: dict, top: str) -> Optional[Tuple[List[Port], List[P
     Multi-variant records may declare the target module in only ONE of several
     context files (e.g. variant 8 but not variant 1), so we try every file and
     pick the first header that actually declares `module <top> ...` with both
-    input and output ports."""
-    etc = (record.get("input") or {}).get("context") or {}
+    input and output ports.
+
+    When `include_input_context` is False, only `output.context` is searched
+    (used by the completeness extract path, which handles input.context via its
+    own `context_header` mechanism)."""
     oc = (record.get("output") or {}).get("context") or {}
     try:
-        sources = dict(etc)  # try input first (richer for modify-type)
+        sources = dict(oc)
     except TypeError:
         sources = {}
-    try:
-        sources.update(oc)   # then overlay output (may overwrite empty stubs)
-    except TypeError:
-        pass
+    if include_input_context:
+        etc = (record.get("input") or {}).get("context") or {}
+        try:
+            for k, v in etc.items():
+                sources.setdefault(k, v)  # input first, output overrides
+        except TypeError:
+            pass
     best: Optional[Tuple[List[Port], List[Port]]] = None
     for _path, text in sources.items():
         if not isinstance(text, str) or not text.strip():
@@ -452,7 +460,7 @@ def _skeleton_ports(record: dict, top: str) -> Optional[Tuple[List[Port], List[P
         m = _HEADER_RE.search(text)
         if not m or m.group(1) != top:
             continue
-        body = m.group(2)
+        body = _strip_verilog_comments(m.group(2))
         ins: List[Port] = []
         outs: List[Port] = []
         for pm in re.finditer(
@@ -467,6 +475,13 @@ def _skeleton_ports(record: dict, top: str) -> Optional[Tuple[List[Port], List[P
         if (ins or outs) and best is None:
             best = (ins, outs)
     return best
+
+
+def _strip_verilog_comments(s: str) -> str:
+    """Remove `// ...` and `/* ... */` Verilog comments before parsing a header."""
+    s = re.sub(r"/\*.*?\*/", " ", s, flags=re.S)
+    s = re.sub(r"//[^\n]*", " ", s)
+    return s
 
 
 # --------------------------------------------------------------------------- #
@@ -535,6 +550,27 @@ def _prose_width(prompt: str, name: str) -> Optional[int]:
                   prompt, re.I)
     if m and not m.group(1).isdigit():
         return _bitnum(m.group(1))
+    # SHARED-WIDTH conjunct: "a and b are 4-bit", "a, b and c are 4-bit inputs",
+    # "both a and b are 4-bit". The width immediately follows the noun list.
+    for gm in re.finditer(
+            r"(?i)\b(\w+(?:\s*,\s*\w+)*)\s+(?:and|or)\s+(\w+)"
+            r"[^.\n]{0,80}?\b(\d+)\s*-?\s*bits?\b",
+            prompt):
+        group = gm.group(1) + " " + gm.group(3)
+        tokens = {t.strip().lower() for t in re.split(r"\s*,\s*|\s+and\s+|\s+or\s+", group)}
+        if name.lower() in tokens:
+            return int(gm.group(3))
+    # SHARED-WIDTH conjunct with the width BEFORE the noun list:
+    # "two 4-bit BCD inputs (a and b)", "produce a 4-bit BCD result (sum)".
+    for gm in re.finditer(
+            r"(?i)\b(\d+)\s*-?\s*bits?\b[^.\n]{0,80}?"
+            r"\b(\w+(?:\s*,\s*\w+)*)\s+(?:and|or)\s+(\w+)",
+            prompt):
+        width = int(gm.group(1))
+        group = gm.group(2) + " " + gm.group(3)
+        tokens = {t.strip().lower() for t in re.split(r"\s*,\s*|\s+and\s+|\s+or\s+", group)}
+        if name.lower() in tokens:
+            return width
     return None
 def _test_case_table(prompt: str) -> Optional[Dict[str, int]]:
     """Parse a markdown test-case table whose header names the ports (a / b /
@@ -856,6 +892,18 @@ def solve(record: dict) -> Optional[str]:
         # function the registry's plain op would get wrong).
         if _COMPOSITE_RE.search(prompt) or _SPECIAL_ALGEBRA_RE.search(prompt):
             return None
+        # FAST PATH: some text-level registry recognizers (e.g. calendar_counter)
+        # parse the prompt AND the interface themselves; they do not need the bridge
+        # to fabricate a port block. Let them try the raw prompt first — this keeps
+        # their self-contained prose parsers in play for records whose harness does
+        # not yield a clean cocotb-derived interface.
+        try:
+            kind, _rtl = _R.generate(prompt, top)
+        except Exception:
+            _rtl = None
+        if _rtl:
+            _rtl = _rename_module(_rtl, top)
+            return _rtl
         iface = extract_interface_ex(record, top)
         if not iface:
             return None
