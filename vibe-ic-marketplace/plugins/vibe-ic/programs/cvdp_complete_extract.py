@@ -1030,8 +1030,11 @@ def _recover_cvdp_interface(record: dict, top: str):
         param_defaults.setdefault(_nm, _v)
     table = _bridge._test_case_table(prompt) or {}
 
-    # (a) a non-empty skeleton module header is fully self-describing.
-    sk = _bridge._skeleton_ports(record, top)
+    # (a) a non-empty skeleton module header (output.context only) is fully
+    # self-describing. input.context headers are handled via _ctxrec.recover_interface
+    # below (source=context_header) — including them here would short-circuit before
+    # param-expression width resolution and gap detection.
+    sk = _bridge._skeleton_ports(record, top, include_input_context=False)
     if sk:
         skiface = []
         for d, lst in (("input", sk[0]), ("output", sk[1])):
