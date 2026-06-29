@@ -1846,3 +1846,27 @@ _Captured by benchmark-enhancement-capture 2026-06-15 (#716 dual-track convergen
 **Why this is GENERAL**: a debugging discipline, not a design-specific lookup — anchor to an independent reference, drive the real acceptance check, edit minimally. Pairs with the #716 dual-track convergence doctrine. The deterministic halves are already program-gates (run-the-real-check / emit-only-after-pass / minimal-edit) — #688 / #695 / #705; this section records the irreducible reading-judgment recipe (diagnosing the exact discrepancy and choosing the minimal correct edit).
 
 _Captured by benchmark-enhancement-capture 2026-06-15 (#725; reference-anchored RCA + minimal-edit + real-check iteration)._
+
+### Skill: register FSM/Moore outputs that a cycle-stepped reference samples — drive them `out <= f(state)`, never combinationally
+
+**Pattern**: When the acceptance check is a cycle-stepped reference model (it advances the clock one step, then reads `dut.<output>` at the active edge — the cocotb `await RisingEdge(clk)` / single-step Python-model convention), every FSM/Moore output the model reads MUST be REGISTERED — assigned `out <= f(state)` in the clocked block so its value at edge *k* reflects the state entered at edge *k-1*. A combinationally-driven Moore output (`always_comb out = f(state)`) updates the same instant the state does, so the stepped model reads it ONE CYCLE EARLY; and a combinational `valid`/handshake output that the check waits on with `await RisingEdge(valid)` can deadlock or fire a half-cycle off, because there is no clock edge on a purely combinational transition.
+
+**When to apply**: any design whose outputs are state-derived (FSM status/strobe outputs, Moore datapath outputs, a `valid`/`done`/`ready` strobe) AND whose acceptance is cycle-accurate — the check counts cycles or waits on an output edge. The tell in a spec is a stated cycle-by-cycle latency or a "output asserts the cycle after …" relation.
+
+**What to do**: put the state register and its output registers in the SAME clocked block; compute next-state combinationally but LATCH the outputs (`out <= <value-for-next-state>`), so outputs and the cycle count the checker uses stay in lockstep. Keep genuinely-combinational Mealy outputs combinational only when the spec ties them to inputs within the cycle, not to state alone.
+
+**Why this is GENERAL**: lining a design's output timing up with the convention its scorer counts by is a universal sequential-logic discipline, not a hidden-test answer — a one-cycle-early Moore output is a real timing defect against any cycle-accurate consumer. *why_not_bucket_a*: from RTL alone a program cannot distinguish a legitimately-combinational Moore output from one the cycle-stepped reference needs registered — flagging every combinational state-derived output would false-positive on the many designs where it is correct; the registered-vs-combinational choice needs the spec's timing convention, which is a reading judgment.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; recurred across 5 cycle-stepped-output failures). Deterministic half already gated by latency_conformance_check.py (#705); this records the authoring convention._
+
+### Skill: a value the checker samples at the FIRST post-reset edge must be reset-INITIALISED, not set by a same-edge non-blocking assignment
+
+**Pattern**: If the acceptance check reads `dut.<signal>` at the first active clock edge after reset deasserts, that signal must ALREADY hold its intended value DURING reset (set it in the reset branch / as its power-up value). A same-edge non-blocking assignment from sequential logic (`signal <= …` that first evaluates on that same edge) is INVISIBLE to that read — NBA updates take effect after the edge the checker already sampled, so it reads the stale/reset value. The canonical cases are protocol idle levels the spec pins out of reset: a clock-enable that must be HIGH from the first edge, a `ready`/`valid` that must be LOW immediately after reset.
+
+**When to apply**: any signal the spec pins to a specific value "out of reset", "from the first clock", "during idle", or that a reset-relative checker samples before the design's logic has had a full cycle to drive it.
+
+**What to do**: drive the reset-relative value in the RESET branch (or as the registered power-up value), not only via the steady-state next-state logic. Confirm the value is correct at the first edge, not one cycle later.
+
+**Why this is GENERAL**: "a signal observed at the reset boundary must be initialised at the boundary, not one NBA-cycle later" is standard reset-domain discipline — a same-edge NBA read is a real visibility bug against any reset-relative consumer, not a benchmark quirk. *why_not_bucket_a*: whether a given output must hold a SPECIFIC value at the first post-reset edge depends on the protocol convention the checker encodes (CKE high out of reset, ready low out of reset) — that protocol semantics is not derivable from RTL structure, so the choice is a reading judgment, not a regex.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; recurred across 2 reset-boundary sampling failures)._
