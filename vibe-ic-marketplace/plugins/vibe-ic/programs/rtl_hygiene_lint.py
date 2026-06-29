@@ -3531,6 +3531,572 @@ def rule_array_reset_loop_idiom(src: str, path: str) -> List[Finding]:
     return findings
 
 
+# ---------------------------------------------------------------------------
+# Rule 17: Width-expand / width-truncate value-identical cast (verilator
+#          WIDTHEXPAND / WIDTHTRUNC), with a value-PRESERVING `--fix`
+# ---------------------------------------------------------------------------
+# A blind CVDP run is scored by verilator + cocotb. When the scorer runs
+# `verilator -Wall` (CVDP's default) two width diagnostics regularly FAIL an
+# otherwise-correct draft that our gate did NOT pre-empt:
+#
+#   (a) WIDTHEXPAND — a strictly NARROWER operand summed into a strictly WIDER
+#       accumulator/LHS, e.g. `logic [11:0] acc; logic [7:0] x; acc <= acc + x;`
+#       The narrow operand is IMPLICITLY zero-extended; verilator -Wall flags the
+#       silent extension. This is BENIGN (no value change), so the finding is an
+#       advisory (non-blocking) WARN — but `--fix` makes the extension EXPLICIT
+#       with a value-identical size cast `acc <= acc + 12'(x);` so the scorer's
+#       width pass goes quiet without touching behaviour.
+#   (b) WIDTHTRUNC — a `*`/`%` arithmetic result assigned to a strictly NARROWER
+#       reg, e.g. `logic [7:0] p; p <= a * b;` (product is 16 bits). The
+#       assignment ALREADY truncates to the low bits; `--fix` wraps the RHS in a
+#       value-identical size cast `p <= 8'(a * b);` that drops exactly the same
+#       bits, only making the (intended) truncation explicit. (The existing
+#       Rule 15 only covers a BARE-VARREF truncation `lhs <= wider_sig;`; this
+#       adds the arithmetic-RHS case.)
+#
+# CORPUS-CLEAN discipline — the auto-`--fix` only ever inserts a PROVABLY
+# value-identical cast, and it fires ONLY when every guard below holds, so it can
+# never change semantics on a correct design:
+#   * every involved signal is UNSIGNED (a size cast of an unsigned value is a
+#     pure zero-extend / low-bits-truncate — exactly the implicit behaviour; a
+#     `signed` operand brings sign-extension subtleties, so it is skipped);
+#   * every involved width is a PURE INTEGER LITERAL `[H:L]` (NOT a `[W-1:0]`
+#     parameter form) — a numeric cast `N'(x)` baked from a parameter value would
+#     TRUNCATE if the parameter were overridden larger at instantiation, so a
+#     param-derived width is reported (advisory) but NEVER auto-cast;
+#   * the expression is the exact two-operand accumulator (`L <= L + n;`) or
+#     two-operand `*`/`%` shape — anything richer is left untouched.
+# The cast is idempotent (a re-run sees `12'(x)` / `8'(a*b)`, not a bare ref, so
+# it never double-wraps), and the main `--fix` path already reverts any edit that
+# stops the file compiling (the #533 compile-neutrality net). chip-AGNOSTIC:
+# pure structural width arithmetic, no design/vendor literal.
+def _decl_width_info(region: str,
+                     gconsts: Optional[Dict[str, int]] = None
+                     ) -> Dict[str, Tuple[int, bool, bool]]:
+    """Map a signal/port name -> (width, width_is_pure_literal, is_signed) for
+    every wire/reg/logic/port declaration in `region`. Only widths that resolve
+    deterministically are recorded; an unresolvable width is OMITTED (never
+    guessed). `width_is_pure_literal` is True ONLY for a `[H:L]` whose bounds are
+    integer literals (so a numeric cast baked from it is override-immune); a
+    `[NAME-1:0]` parameter form resolves a numeric width (for the advisory
+    finding) but is marked NON-literal so the auto-`--fix` skips it. A plain
+    scalar is width 1 / literal True. chip-AGNOSTIC: structural parse only."""
+    consts: Dict[str, int] = dict(gconsts or {})
+    for pm in re.finditer(
+            r'\b(?:localparam|parameter)\b[^=;]*?\b([A-Za-z_]\w*)\s*=\s*([^,;)]+)',
+            region):
+        v = _eval_const_int(pm.group(2).strip(), consts)
+        if v is not None:
+            consts[pm.group(1)] = v
+    info: Dict[str, Tuple[int, bool, bool]] = {}
+    # Ranged decls: <kind> [signed] [H:L] name1, name2;  (kind covers ports too).
+    # The middle group cannot contain another '[' so it never spans two ranges.
+    decl_re = re.compile(
+        r'\b(?:input|output|inout|wire|reg|logic)\b\s+'
+        r'([^;\[\]=]*?)'
+        r'\[\s*([^:\]]+?)\s*:\s*([^:\]]+?)\s*\]\s*'
+        r'([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*(?=[;,)=])')
+    for m in decl_re.finditer(region):
+        signed = bool(re.search(r'\bsigned\b', m.group(1)))
+        hi, lo = m.group(2).strip(), m.group(3).strip()
+        is_lit = bool(re.fullmatch(r'\d+', hi) and re.fullmatch(r'\d+', lo))
+        if is_lit:
+            w: Optional[int] = abs(int(hi) - int(lo)) + 1
+        else:
+            w = None
+            if lo == '0':
+                pm2 = re.fullmatch(r'([A-Za-z_]\w*)\s*-\s*1', hi)
+                if pm2 and pm2.group(1) in consts:
+                    w = consts[pm2.group(1)]
+            if w is None:
+                continue
+        if w is None or w <= 0:
+            continue
+        for n in m.group(4).split(','):
+            n = n.strip()
+            if n and n not in VERILOG_KEYWORDS and n not in info:
+                info[n] = (w, is_lit, signed)
+    # Scalars (un-ranged) -> width 1; only when not already a vector above.
+    scalar_re = re.compile(
+        r'\b(?:input|output|inout|wire|reg|logic)\b\s+'
+        r'((?:signed|unsigned)\s+)?'
+        r'([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*(?=[;,)=])')
+    for m in scalar_re.finditer(region):
+        if '[' in m.group(0):
+            continue
+        signed = bool((m.group(1) or '').strip() == 'signed')
+        for n in m.group(2).split(','):
+            n = n.strip()
+            if n and n not in VERILOG_KEYWORDS and n not in info:
+                info[n] = (1, True, signed)
+    return info
+
+
+def _width_cast_sites(src: str) -> List[Dict]:
+    """Return the list of width-cast SITES (both the auto-fixable subset and the
+    advisory-only remainder) across every module region. Each site is a dict:
+
+        {kind: 'expand'|'trunc', symbol, line, span: (start, end) in `src`,
+         repl: replacement text, fixable: bool, msg}
+
+    `span` indexes the comment-stripped `src`, whose offsets equal the raw file's
+    (strip_comments is offset-preserving), so the auto-fixer can splice `repl`
+    into the raw text directly. Detection precision does NOT affect safety: the
+    replacement is value-identical to the original behaviour in every case the
+    `fixable` guard admits, so an over-eager match can only ever add a harmless,
+    behaviour-preserving cast."""
+    sites: List[Dict] = []
+    gconsts = _global_param_consts(src)
+    for _mname, mlo, mhi in _module_regions(src):
+        region = src[mlo:mhi]
+        info = _decl_width_info(region, gconsts)
+        if not info:
+            continue
+        # (a) WIDTHEXPAND accumulator:  L <= L + n ;   (or `=`, exactly 2 operands)
+        for m in re.finditer(
+                r'(?<![<>!=.])\b([A-Za-z_]\w*)\s*(?:<=|=)(?!=)\s*'
+                r'([A-Za-z_]\w*)\s*\+\s*([A-Za-z_]\w*)\s*;', region):
+            lhs, o1, o2 = m.group(1), m.group(2), m.group(3)
+            if lhs in VERILOG_KEYWORDS:
+                continue
+            if lhs == o1:
+                add, add_grp = o2, 3
+            elif lhs == o2:
+                add, add_grp = o1, 2
+            else:
+                continue                      # not a self-accumulator
+            if add in VERILOG_KEYWORDS:
+                continue
+            li, ai = info.get(lhs), info.get(add)
+            if not li or not ai:
+                continue
+            (wl, lit_l, sl), (wa, lit_a, sa) = li, ai
+            if sl or sa or wa >= wl:           # need strictly narrower, unsigned
+                continue
+            a0 = mlo + m.start(add_grp)
+            a1 = mlo + m.end(add_grp)
+            fixable = lit_l and lit_a
+            sites.append({
+                'kind': 'expand', 'symbol': add,
+                'line': src.count('\n', 0, a0) + 1,
+                'span': (a0, a1), 'repl': f"{wl}'({add})", 'fixable': fixable,
+                'msg': (f"`{add}` ({wa} bits) is implicitly "
+                        f"zero-extended into `{lhs}` ({wl} bits) (verilator "
+                        f"WIDTHEXPAND). " + (
+                            f"--fix inserts the value-identical cast "
+                            f"`{wl}'({add})`."
+                            if fixable else
+                            "param-derived width — reported only, not "
+                            "auto-cast (override-unsafe)."))})
+        # (b) WIDTHTRUNC arithmetic:  L <= a * b ;  or  L <= a % b ;  (the RHS may
+        #     be parenthesised, e.g. `r <= (a % m);` — the `\(?`/`\)?` are anchored
+        #     by the trailing `;` so a partial-paren expression never matches).
+        for m in re.finditer(
+                r'(?:\bassign\s+)?(?<![<>!=.])\b([A-Za-z_]\w*)\s*(?:<=|=)(?!=)\s*'
+                r'\(?\s*([A-Za-z_]\w*)\s*([*%])\s*([A-Za-z_]\w*)\s*\)?\s*;', region):
+            lhs, a, aop, b = m.group(1), m.group(2), m.group(3), m.group(4)
+            if lhs in VERILOG_KEYWORDS or a in VERILOG_KEYWORDS \
+                    or b in VERILOG_KEYWORDS:
+                continue
+            li, ai, bi = info.get(lhs), info.get(a), info.get(b)
+            if not li or not ai or not bi:
+                continue
+            (wl, lit_l, sl), (wa, lit_a, sa), (wb, lit_b, sb) = li, ai, bi
+            if sl or sa or sb:                 # unsigned only
+                continue
+            # verilator's generated width for BOTH `*` (MUL) and `%` (MODDIV) in
+            # an assignment context is max(Wa, Wb) — empirically calibrated, NOT
+            # Wa+Wb. WIDTHTRUNC fires only when that exceeds the LHS width, so the
+            # common `p8 <= a8 * b8` (same-width operands) correctly does NOT fire.
+            res = max(wa, wb)
+            if res <= wl:                      # need a real truncation
+                continue
+            e0 = mlo + m.start(2)              # start of `a`
+            e1 = mlo + m.end(4)                # end of `b`
+            fixable = lit_l and lit_a and lit_b
+            sites.append({
+                'kind': 'trunc', 'symbol': lhs,
+                'line': src.count('\n', 0, e0) + 1,
+                'span': (e0, e1), 'repl': f"{wl}'({a} {aop} {b})",
+                'fixable': fixable,
+                'msg': (f"`{a} {aop} {b}` ({res} bits) assigned "
+                        f"to `{lhs}` ({wl} bits) drops the upper {res - wl} "
+                        f"bit(s) (verilator WIDTHTRUNC). " + (
+                            f"--fix inserts the value-identical cast "
+                            f"`{wl}'({a} {aop} {b})`."
+                            if fixable else
+                            "param-derived width — reported only, not "
+                            "auto-cast (override-unsafe)."))})
+    return sites
+
+
+def rule_width_expand_trunc(src: str, path: str) -> List[Finding]:
+    """Rule 17 — advisory (non-blocking) WARN for the WIDTHEXPAND / WIDTHTRUNC
+    sites that `--fix` silences with a value-identical size cast. Advisory because
+    the underlying construct is a BENIGN width-style diagnostic (an implicit
+    zero-extend, or an intended low-bits truncation), not a functional bug — it
+    must never hard-block an otherwise-correct draft; the real recovery is the
+    value-preserving cast applied by `autofix_width_cast` under `--fix`."""
+    findings: List[Finding] = []
+    seen: Set[Tuple[int, int]] = set()
+    for s in _width_cast_sites(src):
+        if s['span'] in seen:
+            continue
+        seen.add(s['span'])
+        f = Finding(path, s['line'], 'WARN',
+                    'width-expand' if s['kind'] == 'expand'
+                    else 'width-trunc-arith', s['symbol'], s['msg'])
+        findings.append(_advisory(f, _prov.PROSE_HEURISTIC,
+                                  _prov.NO_CORROBORATION))
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# Rule 18: Unused clock-input port (advisory WARN — likely a wiring bug)
+# ---------------------------------------------------------------------------
+# A declared INPUT port whose name matches a clock idiom (clk / clock / hclk /
+# pclk / aclk / sclk / clk_*) that is referenced in ZERO sensitivity lists AND
+# ZERO expressions anywhere in its module body can be a wiring bug — the wrong
+# clock (or none) actually drives the sequential logic. This surfaces it as an
+# advisory (non-blocking) WARN.
+#
+# CORPUS-CLEAN narrowing (the unqualified form fired on 5 CORRECT drafts in the
+# run_clean_v1252 sweep — a purely-combinational module legitimately needs no
+# clock, e.g. an AXIS mux or a Manchester encoder commented "unused: encode is
+# combinational"; and a MULTI-clock CDC / protocol-bridge module legitimately
+# leaves a secondary clock unused, e.g. a `cdc_synchronizer` clocking only on
+# `clk_dst`, a `wishbone_to_ahb_bridge` with `clk_i`+`hclk`). To avoid flagging
+# any of those legitimate states, the rule fires ONLY on the unambiguous
+# wiring-bug shape:
+#   * the module has EXACTLY ONE clock-idiom input port (multi-clock CDC/bridge
+#     blocks, where an unused secondary clock is normal, are excluded), AND
+#   * the module contains at least one EDGE-TRIGGERED always block (so a purely
+#     combinational module — which correctly needs no clock — is excluded), AND
+#   * that lone clock port is referenced NOWHERE in the body (its flip-flops are
+#     therefore clocked by something that is NOT the declared clock — the bug).
+# Plus the structural guards:
+#   * scoped per MODULE region (a clock used in a sibling module never masks an
+#     unused one here, and vice-versa);
+#   * only SCALAR clock inputs (a clock is 1 bit; a ranged `input [..]` is not a
+#     clock and is skipped);
+#   * FAIL-SAFE toward NOT firing — the reference scan blanks ONLY the module
+#     header port list and pure `input/output/inout` declarations (never a
+#     `wire x = clk & en;` initializer, which is a real use), so if anything is
+#     ambiguous the port reads as USED and the rule stays silent.
+_CLOCK_NAME_RE = re.compile(
+    r'^(?:clk|clock|hclk|pclk|aclk|sclk|bclk|mclk|gclk|clk_\w+|\w+_clk)$', re.I)
+
+
+def _ranged_input_names(region: str) -> Set[str]:
+    """Input port names declared WITH a `[..]` range (i.e. multi-bit) — used to
+    exclude non-scalar 'clk*'-named buses from the unused-clock rule."""
+    out: Set[str] = set()
+    for m in re.finditer(
+            r'\binput\b(?:\s+(?:wire|reg|logic))?(?:\s+signed)?\s*'
+            r'\[[^\]]+\]\s*([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)', region):
+        for n in m.group(1).split(','):
+            n = n.strip()
+            if n:
+                out.add(n)
+    return out
+
+
+def rule_unused_clock_input(src: str, path: str) -> List[Finding]:
+    """Rule 18 — advisory WARN on a clock-idiom INPUT port never referenced in
+    its module body."""
+    findings: List[Finding] = []
+    for _mname, mlo, mhi in _module_regions(src):
+        region = src[mlo:mhi]
+        ports = _collect_input_ports(region)
+        clk_ports = {p for p in ports if _CLOCK_NAME_RE.match(p)}
+        # CORPUS-CLEAN narrowing: exactly ONE clock-idiom port (excludes
+        # multi-clock CDC/bridge blocks) AND the module has sequential logic
+        # (excludes purely-combinational modules that need no clock).
+        if len(clk_ports) != 1:
+            continue
+        if not re.search(r'\balways(?:_ff)?\s*@\s*\(\s*(?:pos|neg)edge\b', region):
+            continue
+        ranged = _ranged_input_names(region)
+        # Blank the module header port list + pure direction declarations, so a
+        # remaining occurrence of the name is a genuine USE (sensitivity list or
+        # expression). Length-preserving so line numbers stay correct.
+        def _blank(m):
+            return ' ' * len(m.group(0))
+        nod = re.sub(
+            r'\bmodule\b\s+\w+\s*(?:#\s*\([\s\S]*?\)\s*)?\([\s\S]*?\)\s*;',
+            _blank, region, count=1)
+        nod = re.sub(r'\b(?:input|output|inout)\b[^;]*;', _blank, nod)
+        for name in sorted(clk_ports):
+            if name in ranged:
+                continue
+            if re.search(r'\b' + re.escape(name) + r'\b', nod):
+                continue                      # referenced somewhere -> used
+            # Genuinely never referenced -> advisory wiring-bug WARN. Report the
+            # line of the port's declaration (its first occurrence in the region).
+            dm = re.search(r'\b' + re.escape(name) + r'\b', region)
+            abs_off = mlo + (dm.start() if dm else 0)
+            f = Finding(
+                path, src.count('\n', 0, abs_off) + 1, 'WARN',
+                'unused-clock-input', name,
+                f"clock-idiom input port `{name}` is declared but referenced in "
+                f"ZERO sensitivity lists and ZERO expressions in this module — "
+                f"almost always a wiring bug (the intended clock does not drive "
+                f"the logic). Connect `{name}` to the sequential process, or "
+                f"remove the unused port.")
+            findings.append(_advisory(f, _prov.PROSE_HEURISTIC,
+                                      _prov.NO_CORROBORATION))
+    return findings
+
+
+def autofix_width_cast(p: Path) -> Tuple[int, List[str]]:
+    """Deterministically REPAIR the auto-fixable width-cast sites (Rule 17) in
+    place: insert a value-IDENTICAL size cast that silences verilator
+    WIDTHEXPAND/WIDTHTRUNC without changing behaviour. Edits are spliced into the
+    RAW text right-to-left (so earlier offsets stay valid) and only the `fixable`
+    subset (unsigned + pure-literal widths) is touched. Returns (count, labels).
+    No-op (0, []) when nothing is fixable. The caller's #533 compile-neutrality
+    net reverts the whole file if any edit stops it compiling."""
+    raw = p.read_text(errors='replace')
+    src = strip_comments(raw)
+    sites = [s for s in _width_cast_sites(src) if s['fixable']]
+    if not sites:
+        return 0, []
+    sites.sort(key=lambda s: s['span'][0], reverse=True)
+    out = raw
+    labels: List[str] = []
+    used_spans: Set[Tuple[int, int]] = set()
+    for s in sites:
+        span = s['span']
+        if span in used_spans:
+            continue
+        used_spans.add(span)
+        a, b = span
+        out = out[:a] + s['repl'] + out[b:]
+        labels.append(f"{s['symbol']}:{s['kind']}")
+    if out != raw:
+        p.write_text(out)
+    return len(labels), labels
+
+
+# ---------------------------------------------------------------------------
+# Rule 19: Bitwise-NOT width-expand in a comparison / wider assignment
+# ---------------------------------------------------------------------------
+# `~v` of an N-bit operand keeps N bits, but when it sits in a WIDER context
+# (compared against a wider signal, or assigned to a wider target) verilator
+# context-expands the complement — `wide == ~narrow` expands `~narrow` to the
+# wide width, so its upper bits become 1 and the equality can NEVER hold. This is
+# the verilator WIDTHEXPAND "Operator NOT expects N bits on the LHS, but ...
+# generates M bits" class. Advisory WARN (NO auto-fix): the value-correct repair
+# depends on intent (mask the complement to its own width, or widen the operand),
+# which a deterministic cast cannot choose without changing semantics. Fires ONLY
+# when BOTH widths are known and the non-complemented side is STRICTLY wider, so
+# a same-width `a == ~b` (the common, correct case) never fires. chip-AGNOSTIC.
+def rule_bitwise_not_width(src: str, path: str) -> List[Finding]:
+    findings: List[Finding] = []
+    gconsts = _global_param_consts(src)
+    seen: Set[Tuple[int, str]] = set()
+
+    def _emit(line: int, operand: str, msg: str):
+        key = (line, operand)
+        if key in seen:
+            return
+        seen.add(key)
+        f = Finding(path, line, 'WARN', 'bitwise-not-width', operand, msg)
+        findings.append(_advisory(f, _prov.PROSE_HEURISTIC,
+                                  _prov.NO_CORROBORATION))
+
+    for _mn, mlo, mhi in _module_regions(src):
+        region = src[mlo:mhi]
+        info = _decl_width_info(region, gconsts)
+        if not info:
+            continue
+        # Comparison forms (only the UNAMBIGUOUS comparison operators — `==`,
+        # `!=`, `<`, `>` — never `<=`/`>=`, which collide with NBA / direction).
+        for m in re.finditer(
+                r'\b([A-Za-z_]\w*)\s*(==|!=|<|>)\s*~\s*([A-Za-z_]\w*)', region):
+            other, comp = m.group(1), m.group(3)
+            oi, ci = info.get(other), info.get(comp)
+            if oi and ci and oi[0] > ci[0]:
+                _emit(src.count('\n', 0, mlo + m.start(3)) + 1, comp,
+                      f"`~{comp}` ({ci[0]} bits) is width-expanded to {oi[0]} "
+                      f"bits by the comparison against `{other}` (verilator "
+                      f"WIDTHEXPAND) — the complement's upper bits become 1 so "
+                      f"the test can never match the intended {ci[0]}-bit value. "
+                      f"Mask to the operand width or widen `{comp}`.")
+        for m in re.finditer(
+                r'~\s*([A-Za-z_]\w*)\s*(==|!=|<|>)\s*([A-Za-z_]\w*)', region):
+            comp, other = m.group(1), m.group(3)
+            ci, oi = info.get(comp), info.get(other)
+            if oi and ci and oi[0] > ci[0]:
+                _emit(src.count('\n', 0, mlo + m.start(1)) + 1, comp,
+                      f"`~{comp}` ({ci[0]} bits) is width-expanded to {oi[0]} "
+                      f"bits by the comparison against `{other}` (verilator "
+                      f"WIDTHEXPAND) — the complement's upper bits become 1 so "
+                      f"the test can never match the intended {ci[0]}-bit value. "
+                      f"Mask to the operand width or widen `{comp}`.")
+        # Assignment to a strictly-wider target: `wideLHS <= ~narrow ;`
+        for m in re.finditer(
+                r'(?:\bassign\s+)?(?<![<>!=.])\b([A-Za-z_]\w*)\s*(?:<=|=)(?!=)\s*'
+                r'~\s*([A-Za-z_]\w*)\s*;', region):
+            lhs, op = m.group(1), m.group(2)
+            li, oi = info.get(lhs), info.get(op)
+            if li and oi and li[0] > oi[0]:
+                _emit(src.count('\n', 0, mlo + m.start(2)) + 1, op,
+                      f"`~{op}` ({oi[0]} bits) is width-expanded to {li[0]} bits "
+                      f"when assigned to `{lhs}` (verilator WIDTHEXPAND) — the "
+                      f"upper {li[0] - oi[0]} bit(s) become 1. Confirm the intended "
+                      f"width (mask `~{op}` or widen `{op}` before complementing).")
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# Rule 21: Enum-ternary base-type assigned to a narrower target
+# ---------------------------------------------------------------------------
+# `cond ? ENUM_A : ENUM_B` yields the enum's BASE type (e.g. `logic [3:0]`).
+# Assigning it to a target narrower than that base silently truncates the enum
+# encoding. Advisory WARN. Conservative & zero-FP biased: fires ONLY for enums
+# declared with an EXPLICIT integral base `enum logic [H:L] {...}` (an implicit
+# `int` base is never guessed), only when BOTH ternary arms are members of that
+# same enum, and only when the target's width is KNOWN and strictly narrower than
+# the base. A ternary assigned to the enum type itself (equal width) never fires.
+def _enum_member_base_widths(src: str) -> Dict[str, int]:
+    """member-name -> enum base width, for every `typedef enum logic[H:L]{..} T;`
+    with an explicit integral base. Implicit-base enums are omitted (not guessed).
+    """
+    out: Dict[str, int] = {}
+    for m in re.finditer(
+            r'\btypedef\s+enum\s+(?:logic|bit|reg)\s*'
+            r'\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*\{([^}]*)\}', src):
+        width = abs(int(m.group(1)) - int(m.group(2))) + 1
+        if width <= 0:
+            continue
+        for seg in m.group(3).split(','):
+            nm = re.match(r'\s*([A-Za-z_]\w*)', seg)
+            if nm and nm.group(1) not in VERILOG_KEYWORDS:
+                out.setdefault(nm.group(1), width)
+    return out
+
+
+def rule_enum_ternary_width(src: str, path: str) -> List[Finding]:
+    findings: List[Finding] = []
+    members = _enum_member_base_widths(src)
+    if not members:
+        return findings
+    gconsts = _global_param_consts(src)
+    seen: Set[int] = set()
+    for _mn, mlo, mhi in _module_regions(src):
+        region = src[mlo:mhi]
+        info = _decl_width_info(region, gconsts)
+        for m in re.finditer(
+                r'(?<![<>!=.])\b([A-Za-z_]\w*)\s*(?:<=|=)(?!=)\s*'
+                r'[^;?]*\?\s*([A-Za-z_]\w*)\s*:\s*([A-Za-z_]\w*)\s*;', region):
+            lhs, a, b = m.group(1), m.group(2), m.group(3)
+            wa, wb = members.get(a), members.get(b)
+            if wa is None or wb is None or wa != wb:
+                continue                       # both arms must be the same enum
+            li = info.get(lhs)
+            if not li or li[0] >= wa:           # target must be strictly narrower
+                continue
+            ln = src.count('\n', 0, mlo + m.start(1)) + 1
+            if ln in seen:
+                continue
+            seen.add(ln)
+            f = Finding(
+                path, ln, 'WARN', 'enum-ternary-width', lhs,
+                f"`{a}`/`{b}` are members of an enum with a {wa}-bit base; the "
+                f"ternary `… ? {a} : {b}` yields {wa} bits but is assigned to "
+                f"`{lhs}` ({li[0]} bits) — the enum encoding is truncated. Widen "
+                f"`{lhs}` to the enum base width or assign the enum type.")
+            findings.append(_advisory(f, _prov.PROSE_HEURISTIC,
+                                      _prov.NO_CORROBORATION))
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# Rule 22: Mixed blocking/non-blocking writes to the SAME reg in a clocked block
+# ---------------------------------------------------------------------------
+# A register written with BOTH a blocking `=` AND a non-blocking `<=` inside ONE
+# edge-triggered always block is an unambiguous mistake (the verilator
+# BLKSEQ/mixed class): the two scheduling regions race and the result is
+# tool-dependent. Advisory WARN. Deliberately NARROW — the ubiquitous LEGITIMATE
+# blocking-temp idiom (`tmp = expr; q <= f(tmp);`, where `tmp` and `q` are
+# DIFFERENT names) does NOT fire, because it requires the SAME name on both a `=`
+# and a `<=` write. No auto-fix: blanket `=`→`<=` is not value-preserving (it
+# changes the in-block read semantics the design may rely on), so this only
+# surfaces the conflict for a human/AI to resolve. chip-AGNOSTIC structural parse.
+#
+# §4.05 zero-FP — ONLY count STATEMENT-LEVEL writes (paren-depth 0). A `<=`/`=`
+# inside a `for (i = 0; i <= N; i = i+1)` header or an `if (x <= LIMIT)` /
+# `for (gl = 1; gl <= LOG; …)` condition is a COMPARISON / loop-control token, not
+# a non-blocking assignment — those live at paren-depth >= 1. Without this filter
+# a genvar loop bound (`gl <= LOG`) or an FSM `next_state` comparison was
+# mis-counted as an NBA write and falsely "mixed" with its blocking temp write
+# (observed on matrix_multiplier `gl` + Attenuator `next_state` in the corpus).
+def _depth0_writes(body: str, op_re: str) -> Set[str]:
+    """Names written by `op_re` (a `<=`/`=` matcher) at paren-depth 0 only —
+    i.e. real statement-level assignments, never a `<=`/`=` buried inside a
+    `for`/`if`/`while` parenthesised condition. String literals are blanked so a
+    paren inside a `$display("(")` never skews the depth count."""
+    scan = _blank_string_literals(body)
+    names: Set[str] = set()
+    for mm in re.finditer(op_re, scan):
+        depth = scan.count('(', 0, mm.start()) - scan.count(')', 0, mm.start())
+        if depth == 0:
+            names.add(mm.group(1))
+    return names
+
+
+def rule_mixed_blocking_same_reg(src: str, path: str) -> List[Finding]:
+    findings: List[Finding] = []
+    for sens, body, pos in _iter_always_blocks(src):
+        if not re.search(r'\b(?:pos|neg)edge\b', sens):
+            continue                            # sequential blocks only
+        nba = _depth0_writes(
+            body, r'(?<![<>!=])\b([A-Za-z_]\w*)(?:\[[^\]]+\])?\s*<=(?!=)')
+        blk = _depth0_writes(
+            body, r'(?<![<>!=])\b([A-Za-z_]\w*)(?:\[[^\]]+\])?\s*=(?!=)')
+        mixed = sorted((nba & blk) - VERILOG_KEYWORDS)
+        for reg in mixed:
+            # Line of the blocking write (the one to convert) for a precise anchor.
+            bw = re.search(r'(?<![<>!=])\b' + re.escape(reg) +
+                           r'(?:\[[^\]]+\])?\s*=(?!=)', body)
+            off = pos + (bw.start() if bw else 0)
+            f = Finding(
+                path, src.count('\n', 0, off) + 1, 'WARN',
+                'mixed-blocking-nonblocking', reg,
+                f"register `{reg}` is written with BOTH a blocking `=` and a "
+                f"non-blocking `<=` inside one edge-triggered block — the two "
+                f"update regions race (verilator BLKSEQ; tool-dependent result). "
+                f"Use `<=` consistently for sequential state.")
+            findings.append(_advisory(f, _prov.PROSE_HEURISTIC,
+                                      _prov.NO_CORROBORATION))
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# Rule 24 (function-automatic variable bit-select write): DROPPED — not zero-FP.
+# The hazard (a function-LOCAL variable-indexed write silently dropped by some
+# simulators) does NOT reproduce on the tools in scope: Icarus Verilog 12.0
+# evaluates `local[i] = …` inside `function automatic` correctly (verified), and
+# verilator never flags it. So the only corpus match (cvdp_copilot_dbi_0008
+# `temp_dat[i]`) is CORRECT code on the modern toolchain — flagging it would be a
+# false-positive on a legitimate, ubiquitous reverse/accumulate idiom. Per the
+# corpus-clean discipline (a rule that fires on legitimate state is a bug, narrow
+# or drop), this rule is intentionally NOT enabled.
+#
+# Rule 23 (non-pow2 dynamic-index OOB): DROPPED — not soundly zero-FP. A dynamic
+# part-select `vec[idx*K +: K]` whose static loop bound exceeds the declared width
+# is only a bug when the select is UNGUARDED; a guarded `if (idx < LIMIT) vec[..]`
+# is correct, and distinguishing the two (plus parsing the loop/counter bound that
+# feeds idx) cannot be done soundly with a structural regex on the 47 corpus files
+# that use part-selects. Left to verilator's own SELRANGE/width pass.
+#
+# Optional CDC dual-flop synchronizer rule: DROPPED — not zero-FP. Detecting a
+# "missing" synchronizer on a real clock-domain crossing requires clock-domain
+# inference that mislabels single-clock and already-synchronized designs; it would
+# fire on legitimate state across the corpus, so it is not added.
+
+
 def lint_file(path: Path) -> List[Finding]:
     raw = path.read_text(errors='replace')
     src = strip_comments(raw)
@@ -3549,6 +4115,11 @@ def lint_file(path: Path) -> List[Finding]:
     results += rule_divmod_by_zero_const(src, str(path))
     results += rule_assign_width_truncate(src, str(path))
     results += rule_array_reset_loop_idiom(src, str(path))
+    results += rule_width_expand_trunc(src, str(path))
+    results += rule_unused_clock_input(src, str(path))
+    results += rule_bitwise_not_width(src, str(path))
+    results += rule_enum_ternary_width(src, str(path))
+    results += rule_mixed_blocking_same_reg(src, str(path))
     # rule_wire_input_read_in_clocked_block: NOT enabled.
     #
     # v0.1.39 honesty correction (audit Finding 2): the v0.1.38 disable
@@ -3851,6 +4422,7 @@ def main():
 
         total = 0
         guarded_total = 0
+        cast_total = 0
         for f in args.files:
             p = Path(f)
             if not p.exists():
@@ -3866,17 +4438,24 @@ def main():
             g, glabels = autofix_guard_sim_only_assert(p)
             if g:
                 print(f"{f}: fenced sim-only assertion(s) in translate_off guard: {glabels}")
-            if _iv and pre_ok and (n or g) and not _compiles(p):
+            # Value-identical width casts (Rule 17): silence verilator
+            # WIDTHEXPAND/WIDTHTRUNC without changing behaviour.
+            w, wlabels = autofix_width_cast(p)
+            if w:
+                print(f"{f}: inserted value-identical width cast(s): {wlabels}")
+            if _iv and pre_ok and (n or g or w) and not _compiles(p):
                 p.write_text(pre_text)
-                n = g = 0
+                n = g = w = 0
                 print(f"WARN fix-reverted-noncompiling: {f} compiled before "
                       f"--fix but not after; ALL fixes reverted (#533 "
                       f"compile-neutrality net — file a backlog with this "
                       f"file as the repro)", file=sys.stderr)
             total += n
             guarded_total += g
+            cast_total += w
         print(f"rtl_hygiene_lint --fix: repaired {total} reset-less registered output(s), "
-              f"fenced {guarded_total} sim-only assertion construct(s)")
+              f"fenced {guarded_total} sim-only assertion construct(s), "
+              f"inserted {cast_total} value-identical width cast(s)")
         return 0
 
     sev_order = {'ERROR': 2, 'WARN': 1, 'INFO': 0}
