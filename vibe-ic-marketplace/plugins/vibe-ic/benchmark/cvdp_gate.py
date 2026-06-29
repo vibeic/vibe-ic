@@ -2323,17 +2323,18 @@ def maybe_rename_top(completion, harness_top, mod_names_fn=None):
     return new
 
 
-# ── ORGANIC (GATE-AS-SOLE-EMIT) — B1 PROMPT-EXAMPLE self-test PRE-EMIT block ──
+# ── ORGANIC (GATE-AS-SOLE-EMIT) — B1 PROMPT-EXAMPLE self-test (ADVISORY) ──────
 # prompt_example_selftest extracts the prompt's OWN worked examples (sequential /
 # table rows + arithmetic identities) and SIMULATES them against the authored
-# RTL. A blind author's self-TB is untrustworthy, so a completion that
-# contradicts the prompt's own stated examples is silently emitted and the scorer
-# fails it. BLOCK ONLY on a clear verdict=='FAIL' (a measured example-row
-# mismatch); PASS / SKIP (no extractable example, no iverilog) → advisory. The
-# program is STRICT skip-over-false-block by design (low fire is CORRECT).
-# Blindness preserved: prompt + authored RTL only — never output.*.
+# RTL. The helper RETURNS ok=False on a verdict=='FAIL' (so a caller CAN block),
+# but the gate uses it ADVISORY-ONLY: on a 302-record converged corpus a blocking
+# B1 false-fired on two officially-PASSING completions (a sequential cycle-table
+# off-by-one; an intermediate `<<1` algorithm step misread as an I/O vector), so
+# §4.05 keeps it a note, never a block. Blindness preserved: prompt + RTL only.
 def prompt_selftest_gate_record(rid, completion, prompt_text, top):
-    """Return (ok, note). ok=False only on a clear prompt-example FAIL."""
+    """Return (ok, note). ok=False on a prompt-example FAIL (the program's
+    verdict); the gate consumes this ADVISORY-only (it never blocks on B1 —
+    see the wiring note for the two false-fire shapes)."""
     if _prompt_selftest_run is None:
         return True, "prompt-selftest unavailable — skipped"
     if not prompt_text:
@@ -2941,22 +2942,29 @@ def main(argv=None) -> int:
                     entry["spec_block"] = _sc_note
                 # ORGANIC (GATE-AS-SOLE-EMIT) — B1 prompt-example self-test +
                 # B2 spec-example smoke TB: SIMULATE the prompt's OWN worked
-                # examples against the authored RTL. Both BLOCK only on a clear
-                # measured FAIL; no extractable example / no iverilog → advisory.
-                # They run their OWN sim only when an example is extractable, so a
-                # plain record never pays the sim cost. Blindness preserved
-                # (prompt + RTL only). The note is attached only on a real run.
+                # examples against the authored RTL. They run their OWN sim only
+                # when an example is extractable, so a plain record never pays the
+                # sim cost. Blindness preserved (prompt + RTL only).
+                #
+                # B1 is ADVISORY-ONLY (it NEVER blocks): on a 302-record converged
+                # corpus its FAIL false-fired on TWO officially-PASSING completions
+                # (cont_adder_0006 — a sequential cycle-table off-by-one alignment;
+                # gf_multiplier_0005 — an INTERMEDIATE `<<1` algorithm step misread
+                # as a top-level I/O vector). A blocking B1 would discard real
+                # passes, so §4.05 (a false-block is irreversible) keeps it
+                # advisory — the FAIL is surfaced as a note for audit, never a
+                # block. B2 (clean direct-row only) had ZERO false-fires and DOES
+                # block.
                 _ex_top = harness_tops.get(_rid_s)
                 _b1_ok, _b1_note = prompt_selftest_gate_record(
                     _rid_s, out_rec.get("completion", ""),
                     prompts.get(_rid_s, ""), _ex_top)
                 if _b1_note.startswith(("prompt-selftest PASS",
                                         "prompt-selftest FAIL")):
-                    entry["prompt_selftest"] = _b1_note
-                if not _b1_ok:
-                    ok = False
-                    entry["verdict"] = "BLOCKED"
-                    entry["selftest_block"] = _b1_note
+                    entry["prompt_selftest"] = (
+                        _b1_note + (" [ADVISORY — never blocks; B1 false-fires "
+                                    "on cycle-table/intermediate-step shapes]"
+                                    if not _b1_ok else ""))
                 _b2wd = wd / f"smoke_{rec.get('id')}"
                 _b2wd.mkdir(parents=True, exist_ok=True)
                 _b2_ok, _b2_note = spec_example_smoke_gate_record(
@@ -3021,7 +3029,6 @@ def main(argv=None) -> int:
                     why = (entry.get("latency_block")
                            or entry.get("lint_block")
                            or entry.get("spec_block")
-                           or entry.get("selftest_block")
                            or entry.get("smoke_block")
                            or entry.get("fsm_block")
                            or entry.get("handshake_block"))
