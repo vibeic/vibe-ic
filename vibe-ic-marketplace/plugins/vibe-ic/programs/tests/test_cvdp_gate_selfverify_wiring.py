@@ -523,3 +523,242 @@ def test_main_no_harness_top_keeps_original_name(tmp_path):
     assert rc == 0
     em = next(r for r in emitted if r.get("id") == rid)
     assert "module wrong_name" in em["completion"]
+
+
+# ════════════ A1 fix — param-width vs literal-width must NOT false-block ══════
+_A1_HEADER_PROMPT = ("Implement:\n```verilog\n"
+                     "module datapath(input clk, input [7:0] din, "
+                     "output [7:0] dout);\nendmodule\n```\n")
+# a CORRECT parameter-width completion (default 8 == identical interface).
+_A1_PARAM_OK = ("```verilog\nmodule datapath #(parameter W=8)"
+                "(input clk, input [W-1:0] din, output reg [W-1:0] dout);\n"
+                "  always @(posedge clk) dout <= din;\nendmodule\n```")
+# a GENUINE literal↔literal width mismatch ([3:0] vs the header's [7:0]).
+_A1_LITERAL_BAD = ("```verilog\nmodule datapath(input clk, input [3:0] din, "
+                   "output reg [3:0] dout);\n"
+                   "  always @(posedge clk) dout <= din;\nendmodule\n```")
+
+
+def test_a1_param_width_not_false_blocked():
+    ok, note = G.spec_conformance_gate_record(
+        "x", _A1_PARAM_OK, _A1_HEADER_PROMPT, "datapath")
+    assert ok is True                       # parameter width → NOT a block
+    # the width-mismatch is still surfaced as an ADVISORY, just not blocking.
+    assert "port-width-mismatch" in note
+
+
+def test_a1_literal_width_mismatch_still_blocks():
+    ok, note = G.spec_conformance_gate_record(
+        "x", _A1_LITERAL_BAD, _A1_HEADER_PROMPT, "datapath")
+    assert ok is False
+    assert "port-width-mismatch" in note
+
+
+def test_a1_literal_width_helper():
+    lit = G._literal_width_ports("module m(input [7:0] a, input [W-1:0] b, "
+                                 "output c); endmodule")
+    assert "a" in lit and "c" in lit       # literal [7:0] and scalar are literal
+    assert "b" not in lit                  # [W-1:0] is parameter → non-literal
+
+
+# ════════════ A2 fix — conditional-latency prose must NOT auto-derive ════════
+def test_a2_conditional_trailing_skipped():
+    for p in (
+        "The output `ack` asserts 3 cycles after `req`, but only when ready.",
+        "`done` goes high 2 cycles after `start`, assuming back-pressure is low.",
+        "`valid` asserts WIDTH+1 cycles after `go` when the buffer is not full.",
+        "`out` is set 3 cycles after `in` unless reset is asserted.",
+    ):
+        assert G.latency_contract_from_prompt(p) is None, p
+
+
+def test_a2_preceding_when_still_fires():
+    # a 'when' in a PRECEDING value-observation clause must NOT drop a genuine
+    # unconditional contract (the sobel_filter_0011 shape).
+    c = G.latency_contract_from_prompt(
+        "Initially observed as `8'd0` when `valid_out` goes high "
+        "(1 clock cycle after first `valid_in`).")
+    assert c == {"event": "valid_in", "output": "valid_out", "expect": "1"}
+
+
+def test_a2_unconditional_still_fires():
+    assert G.latency_contract_from_prompt(
+        "`done` asserts 3 cycles after `start`.") is not None
+
+
+# ════════════ B1 — prompt-example self-test (arithmetic / table) ═════════════
+_MULT_PROMPT = ("Module mult. Example: 6 * 7 = 42. Inputs a[7:0], b[7:0]; "
+                "output [15:0] p.")
+_MULT_OK = "module mult(input [7:0] a,b, output [15:0] p); assign p=a*b; endmodule\n"
+_MULT_BAD = "module mult(input [7:0] a,b, output [15:0] p); assign p=a+b; endmodule\n"
+
+
+def test_b1_prompt_selftest_detects_wrong():
+    # the helper DETECTS a FAIL (ok=False), so a caller COULD block — but the
+    # gate consumes it advisory-only (see test_main_b1_prompt_selftest_advisory).
+    ok, note = G.prompt_selftest_gate_record("x", _MULT_BAD, _MULT_PROMPT, "mult")
+    assert ok is False
+    assert note.startswith("prompt-selftest FAIL")
+
+
+def test_b1_prompt_selftest_pass_on_correct():
+    ok, note = G.prompt_selftest_gate_record("x", _MULT_OK, _MULT_PROMPT, "mult")
+    assert ok is True
+    assert note.startswith("prompt-selftest PASS")
+
+
+def test_b1_advisory_when_no_example():
+    ok, _note = G.prompt_selftest_gate_record(
+        "x", _MULT_OK, "Implement a multiplier.", "mult")
+    assert ok is True                       # no extractable example → advisory
+
+
+@pytest.mark.skipif(not _HAVE_EDA, reason="needs iverilog + yosys")
+def test_main_b1_prompt_selftest_advisory_not_block(tmp_path):
+    # §4.05 — B1 is ADVISORY in the gate (it false-fires on cycle-table /
+    # intermediate-step shapes, so a blocking B1 would discard real passes). A
+    # B1 FAIL is surfaced as an advisory note but the record is STILL EMITTED.
+    rid = "cvdp_copilot_mult_0001"
+    batch = [{"id": rid, "completion": _MULT_BAD}]
+    prompts = [{"id": rid, "prompt": _MULT_PROMPT}]
+    rc, emitted, report = _run_main(tmp_path, batch, prompts)
+    assert rc == 0                                   # NOT blocked
+    assert any(r.get("id") == rid for r in emitted)  # emitted
+    entry = next(e for e in report["records"] if e["id"] == rid)
+    assert "prompt-selftest FAIL" in entry.get("prompt_selftest", "")
+    assert "ADVISORY" in entry.get("prompt_selftest", "")
+    assert "selftest_block" not in entry             # never a block tag
+
+
+# ════════════ B2 — spec-example smoke TB (combinational direct-row) ══════════
+_ADD_PROMPT = "Module add2. Example: a=3,b=4 -> sum=7. Compute sum = a + b."
+_ADD_OK = "module add2(input [7:0] a,b, output [8:0] sum); assign sum=a+b; endmodule\n"
+_ADD_BAD = "module add2(input [7:0] a,b, output [8:0] sum); assign sum=8'd0; endmodule\n"
+
+
+@pytest.mark.skipif(not _HAVE_IVERILOG, reason="needs iverilog + vvp")
+def test_b2_spec_smoke_block_on_wrong(tmp_path):
+    ok, note = G.spec_example_smoke_gate_record(
+        "x", _ADD_BAD, _ADD_PROMPT, "add2", tmp_path)
+    assert ok is False
+    assert note.startswith("spec-example-smoke BLOCK")
+
+
+@pytest.mark.skipif(not _HAVE_IVERILOG, reason="needs iverilog + vvp")
+def test_b2_spec_smoke_pass_on_correct(tmp_path):
+    ok, note = G.spec_example_smoke_gate_record(
+        "x", _ADD_OK, _ADD_PROMPT, "add2", tmp_path)
+    assert ok is True
+    assert note.startswith("spec-example-smoke PASS")
+
+
+def test_b2_advisory_when_no_rows(tmp_path):
+    ok, _note = G.spec_example_smoke_gate_record(
+        "x", _ADD_OK, "Implement an adder.", "add2", tmp_path)
+    assert ok is True                       # no extractable golden row → advisory
+
+
+@pytest.mark.skipif(not _HAVE_EDA, reason="needs iverilog + yosys")
+def test_main_b2_spec_smoke_blocks(tmp_path):
+    rid = "cvdp_copilot_add2_0001"
+    batch = [{"id": rid, "completion": _ADD_BAD}]
+    prompts = [{"id": rid, "prompt": _ADD_PROMPT}]
+    rc, emitted, report = _run_main(tmp_path, batch, prompts)
+    assert rc == 1
+    assert all(r.get("id") != rid for r in emitted)
+    entry = next(e for e in report["records"] if e["id"] == rid)
+    assert "spec-example-smoke BLOCK" in entry.get("smoke_block", "")
+
+
+# ════════════ B3 — FSM transition completeness (#522, zero-FP) ═══════════════
+_FSM_LATCH = (
+    "module m(input clk, input rst, input x, output reg y);\n"
+    " localparam A=2'd0, B=2'd1, C=2'd2;\n"
+    " reg [1:0] state, next_state;\n"
+    " always @(posedge clk) if(rst) state<=A; else state<=next_state;\n"
+    " always @(*) begin\n"
+    "   case(state)\n"
+    "     A: next_state = x ? B : A;\n"
+    "     B: next_state = C;\n"
+    "     C: y = 1'b1;\n"
+    "   endcase\n"
+    " end\nendmodule\n")
+_FSM_CLEAN = (
+    "module m(input clk, input rst, input x, output reg y);\n"
+    " localparam A=2'd0, B=2'd1, C=2'd2;\n"
+    " reg [1:0] state, next_state;\n"
+    " always @(posedge clk) if(rst) state<=A; else state<=next_state;\n"
+    " always @(*) begin\n"
+    "   next_state = state;\n"
+    "   case(state)\n"
+    "     A: next_state = x ? B : A;\n"
+    "     B: next_state = C;\n"
+    "     C: next_state = A;\n"
+    "   endcase\n"
+    " end\n always @(*) y = (state==C);\nendmodule\n")
+
+
+def test_b3_fsm_completeness_block_on_latch():
+    ok, note = G.fsm_completeness_gate_record("x", _FSM_LATCH)
+    assert ok is False
+    assert "fsm-inferred-latch" in note
+
+
+def test_b3_fsm_completeness_clean_passes():
+    ok, _note = G.fsm_completeness_gate_record("x", _FSM_CLEAN)
+    assert ok is True
+
+
+@pytest.mark.skipif(not _HAVE_EDA, reason="needs iverilog + yosys")
+def test_main_b3_fsm_completeness_blocks(tmp_path):
+    rid = "cvdp_copilot_fsm_0001"
+    batch = [{"id": rid, "completion": _FSM_LATCH}]
+    rc, emitted, report = _run_main(tmp_path, batch)
+    assert rc == 1
+    entry = next(e for e in report["records"] if e["id"] == rid)
+    assert "fsm-inferred-latch" in entry.get("fsm_block", "")
+
+
+# ════════════ B4 — handshake livelock / result stability (#523, zero-FP) ═════
+_HS_CORRECT = (
+    "module mcdiv(\n"
+    "  input wire clk, input wire rst,\n"
+    "  input wire [7:0] a, input wire [7:0] b,\n"
+    "  input wire opn_valid, output reg res_valid,\n"
+    "  input wire res_ready, output wire [15:0] result);\n"
+    "  reg [15:0] SR; reg [3:0] cnt; reg start_cnt;\n"
+    "  assign result = SR;\n"
+    "  always @(posedge clk) begin\n"
+    "    if (rst) begin SR<=0; cnt<=0; start_cnt<=1'b0; end\n"
+    "    else if (~start_cnt & opn_valid & ~res_valid) begin\n"
+    "      cnt <= 1; start_cnt <= 1'b1; SR <= {8'b0, a};\n"
+    "    end else if (start_cnt) begin\n"
+    "      if (cnt[3]) begin cnt <= 0; start_cnt <= 1'b0; SR <= SR + b; end\n"
+    "      else begin cnt <= cnt + 1; SR <= {SR[14:0], 1'b0}; end\n"
+    "    end\n  end\n"
+    "  always @(posedge clk) res_valid <= rst ? 1'b0 : cnt[3] ? 1'b1 :\n"
+    "                                   (res_valid & res_ready) ? 1'b0 : res_valid;\n"
+    "endmodule\n")
+_HS_LIVELOCK = _HS_CORRECT.replace("~start_cnt & opn_valid & ~res_valid",
+                                   "opn_valid & ~res_valid")
+
+
+def test_b4_handshake_block_on_livelock():
+    ok, note = G.handshake_stability_gate_record("x", _HS_LIVELOCK)
+    assert ok is False
+    assert "handshake-load-livelock" in note
+
+
+def test_b4_handshake_clean_passes():
+    ok, _note = G.handshake_stability_gate_record("x", _HS_CORRECT)
+    assert ok is True
+
+
+@pytest.mark.skipif(not _HAVE_EDA, reason="needs iverilog + yosys")
+def test_main_b4_handshake_blocks(tmp_path):
+    rid = "cvdp_copilot_mcdiv_0001"
+    batch = [{"id": rid, "completion": _HS_LIVELOCK}]
+    rc, emitted, report = _run_main(tmp_path, batch)
+    assert rc == 1
+    entry = next(e for e in report["records"] if e["id"] == rid)
+    assert "handshake-load-livelock" in entry.get("handshake_block", "")
