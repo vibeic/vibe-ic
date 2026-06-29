@@ -1870,3 +1870,327 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; rec
 **Why this is GENERAL**: "a signal observed at the reset boundary must be initialised at the boundary, not one NBA-cycle later" is standard reset-domain discipline — a same-edge NBA read is a real visibility bug against any reset-relative consumer, not a benchmark quirk. *why_not_bucket_a*: whether a given output must hold a SPECIFIC value at the first post-reset edge depends on the protocol convention the checker encodes (CKE high out of reset, ready low out of reset) — that protocol semantics is not derivable from RTL structure, so the choice is a reading judgment, not a regex.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; recurred across 2 reset-boundary sampling failures)._
+
+### Skill: an enumerated per-step latency budget maps ONE prose step to ONE FSM cycle — never fuse two counted steps
+
+**Pattern**: When a spec gives a closed-form latency formula PLUS a per-step cycle breakdown that enumerates the overhead as distinct phrases ("1 cycle to transition to the terminal state" AND "1 cycle to register the result and assert done"; "Total Latency = WIDTH + 2 cycles" with "1 cycle in the DONE state where valid is asserted"; "the root→current-node load is its own cycle"), each enumerated phrase consumes its OWN clock cycle. The recurring defect is collapsing the last compute iteration with the terminal/done cycle — setting `valid_next=1`/`done` AND `state_next=DONE` in the same cycle the exit condition is detected — which makes the done/valid strobe assert exactly one cycle EARLY and the measured latency one short, even though every data value is numerically correct.
+
+**When to apply**: any FSM whose spec states an exact cycle count or enumerates a step-by-step cycle tail, especially when two of the enumerated steps look like the same event ("detect all sorted" then "output + assert done"; "enter DONE" then "assert valid"). The tell is a cycle-exact harness that measures `latency == N` rather than just checking the output value.
+
+**What to do**: give each enumerated step its own state/cycle — a dedicated terminal state that asserts done/valid AFTER all compute iterations complete, with no compute work folded into it. Do not merge an enumerated "transition" cycle into the enumerated "assert" cycle. Honor any stated early-exit transition as its own counted cycle too.
+
+**Why this is GENERAL**: one-prose-step-equals-one-clock is textbook cycle-accurate FSM discipline — a fused terminal cycle is a real one-cycle-early strobe against any consumer that counts cycles, not a benchmark quirk. *why_not_bucket_a*: a latency-measurement gate can flag the post-hoc cycle mismatch, but it cannot decide FROM PROSE that two enumerated phrases ("transition to DONE" and "assert done") describe SEQUENTIAL cycles rather than one co-incident event — judging whether two enumerated steps are concurrent or back-to-back is a reading judgment of the spec's intent, not a structural check.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; recurred across ~6 enumerated-latency failures). Deterministic measurement half already gated by latency_conformance_check.py (#705); this records the authoring reading-convention._
+
+### Skill: in a MODIFY task, the unchanged path keeps its ORIGINAL semantics — only the explicitly-added mode adopts new behaviour
+
+**Pattern**: A modify/extend task (add a mode, add an `enable`, add a consumer) must leave every pre-existing datapath bit-for-bit equivalent for its original stimulus. Two recurring regressions: (1) **signedness drift** — adding a signed/two's-complement mode and ALSO switching the untouched real/unsigned path to `$signed(...)`, so any operand with its MSB set is misread as negative; the original operand RANGE in prose ("a is 0..255, b is 0..65535") pins it as UNSIGNED and it must not be sign-extended. (2) **gating free-running state** — wrapping a self-accumulating/self-toggling internal register (a parity toggle `x<=~x`, a free counter) inside the newly-added `else if (enable)`, which shifts its phase; the new enable should gate only the VISIBLE output/mux, never internal free-running phase, unless the spec explicitly says to freeze it.
+
+**When to apply**: any cid004-style "modify the existing RTL to add X" task, when the original RTL is supplied as input context. The tell is that the new-mode tests pass while the ORIGINAL-mode (or a phase-sensitive) test regresses.
+
+**What to do**: change the minimum — branch the new behaviour behind the new mode select and leave the original arms (operand signedness, accumulation phase, reset behaviour) untouched; gate outputs, not free-running internal counters/toggles. Diff the unchanged path against the input RTL to confirm it is semantically identical.
+
+**Why this is GENERAL**: "don't regress the part you weren't asked to change" is universal refactoring discipline, and signed-vs-unsigned / phase continuity are real functional properties, not test artifacts. *why_not_bucket_a*: a program cannot tell, from RTL alone, that a given operand must stay unsigned (it reads that from the stated value RANGE in prose) or that a particular register is free-running PHASE that must not be enable-gated rather than data that should be — distinguishing "preserve" from "gate" needs the modify intent + the signal's role, a reading judgment.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; signedness + free-running-gate regressions in modify tasks)._
+
+### Skill: a worked input→output example in the prompt is GROUND TRUTH over contradictory prose — self-validate every generated value against it
+
+**Pattern**: When a prompt contains a concrete worked example (an input→output value table, a reconstruction formula, an example flow) AND descriptive prose that contradicts it, the worked example wins — author to the example and re-derive your RTL's output for that exact input to confirm a match before emitting. The canonical instance is a normalized/floating-point field where the prose says one thing and the example encodes the hidden-leading-bit convention: a mantissa/significand EXCLUDES the implicit leading 1 (take the N bits immediately BELOW the first set bit, not the N bits starting AT it), even if a prose sentence says "includes the first set bit" — the example table and the reconstruction formula both demand the exclusion.
+
+**When to apply**: any combinational/transform block whose prompt embeds a numeric example or reconstruction formula, particularly bit-field extraction, encodings, and custom float/fixed-point normalization where a "leading bit" or "first set bit" is mentioned.
+
+**What to do**: hand-trace your RTL on every embedded example input and require an exact match; when prose and example disagree, implement the example and treat the prose as the misleading source. For hidden-bit normalization, drop the implicit leading 1 and take the next N bits.
+
+**Why this is GENERAL**: cross-checking generated logic against authoritative worked examples is basic verification hygiene, and hidden-bit normalization is a textbook floating-point convention — not a lookup answer. *why_not_bucket_a*: when two statements in the SAME prompt contradict each other, a program cannot decide which is authoritative — judging the worked numeric example as ground truth over a prose sentence is a reading call, and re-deriving the value to break the tie is semantic comprehension a regex cannot perform.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; prose-vs-worked-example conflict, hidden-bit mantissa instance). Deduped vs the IEEE-754-multiply skill — this covers custom-normalization field extraction and the example-over-prose tie-break._
+
+### Skill: a value a later consumer (or a delayed checker) reads must be HELD through the consume window — not pulsed or reset before it
+
+**Pattern**: A signal that another block — or a testbench that samples N cycles after the event — depends on must remain valid until it is consumed. Two recurring forms: (1) a result a MODIFY task newly consumes must survive PAST the terminal/done event the original RTL used to clear it (e.g. trained weights that the old code zeroed on convergence must now stay held at the outputs because a newly-added stage reads them); (2) a status/error strobe a checker samples several cycles later must be HELD asserted across that window, not pulsed for one cycle and cleared on the next state transition.
+
+**When to apply**: whenever a registered value or flag is read by a downstream consumer, by a newly-added unit in a modify task, or by a checker that samples it some cycles after it is produced. The tell is a first assertion that fails because the value already reset to 0 / the flag is already deasserted.
+
+**What to do**: hold the value in its register across the consume window — do not reset it in the old terminal/stop branch if a new consumer needs it afterward, and keep an error/status flag asserted until the consuming event (handshake/ack/sample) rather than for a single cycle.
+
+**Why this is GENERAL**: "a produced value must outlive its consumer's read" is fundamental data-lifetime discipline; a flag cleared before it is sampled is a real liveness bug against any consumer. *why_not_bucket_a*: a program cannot infer that a previously-transient signal must now PERSIST — recognizing that a modify-task added a reader with a later data dependence, and that the value must therefore survive past its old reset event, requires reading the new consumer's relationship to the signal, not its structure.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; held-value-for-new-consumer + delayed-checker status flag)._
+
+### Skill: a sub-word / partial-strobe write completes with the OK response and leaves the register unchanged — error responses are reserved for decode faults
+
+**Pattern**: On a memory-mapped register bus (AXI4-Lite / APB-class), a write with a non-full byte-strobe (some `WSTRB` bits low) is a legal partial write: it must return the SUCCESS response (`BRESP=OKAY` / `pslverr=0`) and update only the strobed bytes (or, if partial updates are unsupported, leave the register unchanged) — it must NEVER raise an error response. The error/slave-error response is reserved for genuine faults: an address that decodes to nothing, or a write to a read-only register. The recurring defect OR-es "strobe not all ones" into the error condition, so every sub-word write wrongly returns slave-error.
+
+**When to apply**: any register-block / memory-map design with a byte-strobe and an error/response output, unless the spec explicitly defines a different strobe policy.
+
+**What to do**: derive the error response ONLY from address-decode-miss and read-only-register-write; never gate it on the byte strobe. Complete partial writes with the OK response. For an in-range memory window, build the actual read/write path for the whole window minus the reserved register block — don't route every non-CSR address to a default error.
+
+**Why this is GENERAL**: the OK-on-partial-write / error-only-on-decode-fault contract is a standard bus-protocol convention, and returning slave-error on a normal sub-word write is a real interop bug. *why_not_bucket_a*: a lint could flag one anti-pattern (error gated on the strobe), but it cannot author the COMPLETE response policy — deciding which addresses decode, which registers are read-only, and that everything else returns OK — from the prompt's register map; mapping the map to the protocol's response semantics is a reading judgment.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; partial-strobe write-response + memory-window decode)._
+
+### Skill: identical sub-blocks fed a common input are a PARALLEL broadcast unless the data path is genuinely serial — let the operative functional line and observed latency decide, not a hierarchy phrase
+
+**Pattern**: When a design has N identical instances and the prose mixes a hierarchy/adjacency phrase ("each feeds into the next", "arranged in sequence") with a functional statement ("every element updates its state from the input data"), the structural choice — serial shift-chain vs parallel broadcast of the module input to all instances — is decided by the OPERATIVE functional line and the observed input→output latency, not by the adjacency phrase. The recurring defect over-weights "sequentially feeds into the next" and builds an N-stage shift chain, so data takes N cycles to reach the output and never arrives inside the checker's window, when the functional line + a latency independent of N both demand that the module input is broadcast directly to every instance.
+
+**When to apply**: any array/replicated-block design whose prose contains both a positional/adjacency description and a per-element functional description, and whose acceptance latency does NOT scale with the instance count.
+
+**What to do**: feed the shared module input to each instance directly (parallel) when the functional statement says each element consumes the input and the latency is N-independent; reserve the serial chain for designs where each stage's INPUT is genuinely the previous stage's OUTPUT. Cross-check by computing the implied input→output latency for each topology against the stated/observed timing.
+
+**Why this is GENERAL**: broadcast-vs-chain is a fundamental dataflow decision with a measurable latency signature; picking the wrong one is a real architectural error. *why_not_bucket_a*: a program cannot resolve two contradictory dataflow sentences — weighing the operative functional clause and the latency implication against an adjacency phrase to choose broadcast over chain is semantic disambiguation, not a structural rule.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; contradictory dataflow prose resolved to parallel broadcast)._
+
+### Skill: every spec-enumerated state-changing event needs its own RTL update branch — implement the miss / saturation / else path, not just the happy path
+
+**Pattern**: When a spec's functionality list enumerates state mutations on MULTIPLE control events (a hit AND a replacement/miss; an output asserted on a transition AND on a max-count saturation; a payload driven in the terminate branch AND cleared in the non-terminate branch), the RTL must give EVERY enumerated event a corresponding update path. The recurring defect implements only the most salient/happy-path event and silently drops the others: a recency bit updated on hit but not on the miss/replacement that the spec also describes; an output register driven on a data transition but left stale on the saturation event; a `data_out` driven alongside `valid` in the terminate branch but left holding stale data (instead of cleared to 0) when `valid` deasserts.
+
+**When to apply**: any spec whose functionality bullets describe more than one event that changes the same register/output, especially completion tasks where the input RTL already handles one of the events. The tell is a functionally-correct happy path with a stale/zero value after a secondary event.
+
+**What to do**: enumerate every event the spec says mutates a given state element and give each its own branch — including the "else"/no-event branch when the reference clears the value there. Match the input RTL's else-branch clear-to-0 in modify tasks.
+
+**Why this is GENERAL**: "cover every described state transition" is basic specification-completeness discipline; an un-handled control event is a real functional hole, not a corner case. *why_not_bucket_a*: a program cannot enumerate, from prose, the full set of events that mutate a given register and verify each has a branch — recognizing that "the replacement path also sets the recency bit" or "the output also asserts on saturation" is a second required event is reading the functionality list as a set of independent obligations, a comprehension task.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; missing miss/saturation/else update branches across 3 designs)._
+
+### Skill: an area-reduction task needs a STRUCTURAL transform that survives synthesis — cosmetic refactors are folded away and never move the number
+
+**Pattern**: An "optimize to reduce cells/wires by N%" task is graded by a real synthesis cell/wire-count gate against the original, not by functional simulation. Edits the synthesizer already performs for free — merging two `always_ff` blocks with equivalent clocking, narrowing control-signal widths, relocating an encoding — are no-ops that barely move the count (a few percent at most). Meeting the threshold requires a genuine micro-architectural transform: eliminate logic that is dead at the default parameters (e.g. saturation comparators that can never fire on the declared width), SHARE duplicated comparators/adders, collapse a register bank or an FSM-state, drop a redundant double-buffer to a combinational assign, or spend a stated extra-latency budget to fold/reuse a wide datapath.
+
+**When to apply**: any task that states a numeric area/utilization reduction floor and names the optimization lever (a function "should be simplified to reduce LUT utilization"; "increase latency by K cycles to allow area savings"). The tell is functional/equivalence tests passing while the area gate falls far short.
+
+**What to do**: identify structure the synthesizer will NOT remove on its own — dead-at-default branches, duplicated arithmetic, register banks the spec lets you fold — transform it, and RE-RUN synthesis to confirm the measured wire/cell reduction meets the floor before emitting. Treat any edit the synthesizer would do anyway as not counting.
+
+**Why this is GENERAL**: knowing which RTL changes actually survive logic synthesis (vs which the tool constant-folds) is core EDA literacy, applicable to any area-optimization work. *why_not_bucket_a*: the threshold-measurement gate can tell you the reduction fell short, but it cannot author the transform nor decide WHICH structure is dead, shareable, or foldable — recognizing that a saturation comparator is unreachable at the default width, or that merging always-blocks is a synth no-op, requires reading the RTL's semantics and the synthesizer's behaviour, not a structural pattern-match.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; cosmetic-vs-structural area optimization across 4 designs). Deterministic threshold half already gated by ppa_area_threshold_check.py (#729); this records the authoring judgment of WHAT to transform._
+
+### Skill: fix a "mixing blocking and non-blocking" lint warning IN PLACE (`=`→`<=`), never by hoisting the assignment into `always_comb`
+
+**Pattern**: When a lint review flags blocking-and-non-blocking assignments mixed inside a sequential `always_ff`/`always @(posedge)`, the correct fix converts the blocking `=` to non-blocking `<=` IN PLACE, keeping the signal a REGISTER. Hoisting the computation into a new `always_comb` instead silences the warning but DELETES a pipeline register — it changes the cycle-accurate latency a functional/reference-model testbench verifies, so the output appears one cycle early and the design fails functionally even though lint now passes.
+
+**When to apply**: any lint-cleanup task whose flagged signal is reset-initialized / clearly registered inside a clocked block and feeds a pipeline whose latency the harness checks. The tell is the lint gate passing while a functional/sanity test regresses after the "fix".
+
+**What to do**: keep the signal in its clocked block and swap `=` for `<=` so it stays a register and preserves its +1 pipeline cycle. Do NOT relocate a registered computation to `always_comb` to resolve the warning.
+
+**Why this is GENERAL**: choosing a lint fix that preserves the design's cycle behaviour (rather than the first edit that silences the warning) is universal — deleting a register to quiet a linter is a real latency regression. *why_not_bucket_a*: the linter flags the mixing but cannot choose between two functionally-DIFFERENT remedies; deciding to keep the signal registered (because it is a latency-bearing pipeline stage the reference model samples) over hoisting it combinational requires understanding the signal's timing role, a reading judgment the lint message does not carry.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; lint-fix that silently dropped a pipeline register). Deduped vs rtl_hygiene_lint width checks — this is a fix-CHOICE judgment, not a width rule._
+
+### Skill: a byte/element ORDER mapping pinned by an explicit prompt table must be transcribed exactly — never substitute a canonical row/column or endianness convention
+
+**Pattern**: When the prompt pins the placement of bytes/words/matrix-elements with an explicit mapping (an index-assignment line `data_in[1][2] = i_data[55:48]`, a numbered table, a stated row-major/column-major or MSB-first/LSB-first order), author to THAT mapping exactly. The recurring defect transposes the stride (row↔column) or reverses sub-word order, so the output is a transposed/byte-swapped version of the golden — correct values in the wrong positions. Note the converse: when the order is NOT pinned anywhere (a wide→narrow split with no stated endianness), it is an unrecoverable floor — only honor an order the prompt actually states.
+
+**When to apply**: any block that packs/unpacks a wide vector into a matrix or sub-words, or maps an input bus onto indexed storage, AND the prompt gives an explicit element-to-bit mapping. The tell is an output that is a permutation/transpose of the expected one.
+
+**What to do**: copy the prompt's index map verbatim into the RTL slicing; if it gives `m[r][c] = bus[hi:lo]`, reproduce that exact stride, don't assume the "natural" row-major or little-endian order. Hand-check one mapped element against the table.
+
+**Why this is GENERAL**: faithfully transcribing a stated bit/byte mapping is basic spec-fidelity, and a transposed stride is a real position error against any reference. *why_not_bucket_a*: a program cannot know which input byte belongs in which storage cell — that mapping lives only in the prompt's prose/table, and detecting that a draft used the transposed stride requires reading the explicit map, not a structural check.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; transposed matrix byte-index against an explicit mapping table)._
+
+### Skill: a debug-and-fix task with multiple injected defects must repair the PROMPT-PINNED defect, not stop at the first plausible one
+
+**Pattern**: A "find and fix the bug(s)" task may contain several co-located defects, and the prompt usually PINS the primary one (an explicit value/mapping, a named signal, a stated expected behaviour). The recurring miss repairs a plausible secondary defect (a textbook arithmetic/protocol slip) that looks like the bug, while leaving the prompt-pinned primary defect unrepaired — so the output still diverges from the reference from the first vector.
+
+**When to apply**: any debug/repair task whose prompt enumerates or pins specific expected facts (an index map, a constant, a named expected output) alongside RTL that has more than one suspicious line. The tell is a fix that "looks right" yet still fails every vector.
+
+**What to do**: enumerate every defect the prompt pins (by an explicit value, table, or named-signal expectation) and repair each; do not stop after the first plausible correction. Re-derive the pinned expected output to confirm the primary defect is actually gone.
+
+**Why this is GENERAL**: closing on ALL specified defects (not the most obvious one) is fundamental debugging discipline. *why_not_bucket_a*: a program cannot decide WHICH of several plausible defects the prompt designates as the one to fix — recognizing that an explicit mapping/value pins the primary bug, distinct from an incidental secondary slip, is a reading judgment of the prompt's intent.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; multi-defect repair that fixed the secondary, missed the pinned primary)._
+
+### Skill: implement the EXACT structural convention the spec states — never drop in a canonical textbook topology whose convention differs
+
+**Pattern**: When a spec pins a structural convention — the clock EDGE a control action takes effect on ("disabled on the first POSITIVE edge"), a shift DIRECTION + insertion point, a tap/bit NUMBERING ("positions counted from the MSB/insertion end") — implement that exact structure. Substituting a canonical textbook block whose convention differs (a glitch-free clock mux whose gating flop is on the NEGEDGE; a conventional LSB-indexed polynomial-tap LFSR) passes only the symmetric subset of cases where the two conventions happen to coincide, and fails the rest. A "standard polynomial/topology" hint in the prompt is often a deliberate trap toward the textbook reading.
+
+**When to apply**: any block where the prompt describes the internal structure precisely (active edge, shift direction, tap positions, insertion point, gating phase) — clock gates/muxes, LFSR/PRBS/scramblers, serial shifters. The tell is a subset of parametrizations passing (the convention-agnostic ones) while the rest fail.
+
+**What to do**: model the stated edge/direction/numbering literally; do not reach for the canonical topology unless the spec's convention matches it. Verify on a case where the two conventions diverge (e.g. a tap position ≠ 1, or a select change right at the "wrong" edge).
+
+**Why this is GENERAL**: honoring a spec's explicit structural convention over a textbook default is core design fidelity; the textbook block is a real functional mismatch when conventions differ. *why_not_bucket_a*: a program cannot tell that a canonical topology's edge/tap convention contradicts the one the prose states — recognizing the mismatch requires reading the stated structure and knowing the textbook block's hidden convention, a comprehension judgment.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; opposite-edge clock-gate + LSB-vs-MSB LFSR tap numbering). Deduped vs the MSB-first-serial-load and barrel-shifter skills — this is the META rule those instantiate._
+
+### Skill: a flag toggled on two events that always co-occur nets to NO change — advance state by a single net event, not two cancelling toggles
+
+**Pattern**: A status/select flag updated with `flag <= ~flag` (or `+1`) in more than one place, where the triggering events always happen together (a fill that completes as a drain completes; a bank-swap toggled in both the write block and the read block), returns to its initial value over the combined event — the two toggles cancel, so the flag never actually advances. The recurring defect is a duplicated toggle across two always-blocks for a bank-select / ping-pong flag.
+
+**When to apply**: any design with a flag toggled in multiple blocks, especially bank-select / double-buffer / ping-pong controls where a fill and a drain occur in the same window.
+
+**What to do**: drive the flag from a SINGLE net event (one toggle, or an explicit set/clear keyed to the one transition that should advance it). Audit every `~flag`/increment site and confirm two of them cannot fire on co-occurring events and cancel.
+
+**Why this is GENERAL**: a self-cancelling toggle is a real state-machine bug independent of any benchmark. *why_not_bucket_a*: a program cannot reason that two toggle sites fire on events that always co-occur and therefore net to zero — that requires behavioural reasoning about WHEN the two events happen relative to each other, not a textual count of toggle statements.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; duplicated bank-select toggle that cancelled over a fill+drain)._
+
+### Skill: combinational memory/register read data must be captured in a flop before it drives a registered output or qualifies a downstream valid
+
+**Pattern**: When read data comes from a combinational path (`assign dout = mem[addr]`, an output packed combinationally from a register that updates on the same edge) and the address/pointer increments via a non-blocking assignment on the SAME edge, the value presented is one slot AHEAD / reflects the post-edge state — so a registered output reads the wrong word, or a downstream `valid` is asserted over data that is still un-captured (X). The recurring defects: a synchronous RAM/FIFO with ≥1-cycle read latency whose strobe and `valid` are raised the same cycle as the read request (capturing the still-undriven X word); a combinational output that snapshots a flop AFTER it has already been written.
+
+**When to apply**: any synchronous memory/FIFO/register-window read feeding a registered output or a handshake `valid`, especially when the producer drives the data only AFTER it sees the read strobe. The tell is data one slot off, or X propagating into the output under an asserted valid.
+
+**What to do**: register the read data on the cycle AFTER the read request (capture flop / snapshot register), and assert the downstream `valid` only once that captured word is valid — never raise `valid` over a combinational/just-presented value.
+
+**Why this is GENERAL**: respecting synchronous read latency and never qualifying un-captured data are universal datapath disciplines; X-under-valid is a real hazard. *why_not_bucket_a*: while the X-under-valid symptom is partly lintable, deciding that a combinational `dout` needs a capture flop (vs being legitimately combinational) requires reading the read-path timing — that the pointer increments the same edge and the consumer reads one cycle later — a behavioural judgment, not a structural match.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; combinational-read-ahead + valid-over-X across 3 designs)._
+
+### Skill: a status/error flag added beside a registered datapath must itself be REGISTERED, to match the sampling window of the data it accompanies
+
+**Pattern**: When a status/error/overflow/underflow flag is added alongside a registered `valid`/`data_out` datapath, the flag must be registered on the same clock edge (sampled on the current full/empty + enable), not a pure combinational `assign`. A combinational flag derived from a level like `full`/`empty` GLITCHES one cycle early: during the full↔empty transition the enable is still asserted, so the flag asserts within the same sampling window the checker uses for the last valid beat, one cycle before it should.
+
+**When to apply**: any error/status flag accompanying a registered FIFO/LIFO/RAM datapath, where the flag is derived from a level that changes on the same edge the datapath registers update. The tell is a flag reading 1 during the last valid transfer when the underflow/overflow is logically the NEXT cycle.
+
+**What to do**: register the flag (`flag <= (write_en && full) || (read_en && empty)`) so it is deferred one cycle and stays consistent with the registered `valid`/`data_out` it accompanies, instead of a combinational `assign`.
+
+**Why this is GENERAL**: matching a flag's registration to the datapath it qualifies is standard synchronous-design discipline; a one-cycle-early combinational glitch is a real timing defect. *why_not_bucket_a*: a program cannot tell that a given flag must be registered to align with a companion datapath's sampling window — that needs reading which datapath the flag accompanies and that the checker samples them together, a behavioural judgment.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; combinational status flag glitching one cycle early)._
+
+### Skill: edge/change detection on a SYNCHRONOUS input compares two REGISTERED samples — so the pulse lands one cycle after the sampled change
+
+**Pattern**: When the data input is itself synchronous (already clocked) and the checker applies the input, advances one clock to SAMPLE it, then reads the change-pulse on the SECOND clock, the detector must compare two REGISTERED samples (`pulse = d_reg1 ^ d_reg2`), so the pulse asserts exactly one cycle after the sampled change. The recurring defect compares the LIVE input against a single registered copy (`pulse = d ^ d_reg`) plus one output flop — at the sampling edge `d_reg` also updates, so the pulse appears at the FIRST edge and is already gone when the checker reads it one cycle later.
+
+**When to apply**: change/edge/transition detection on a synchronous data input whose checker samples the pulse one cycle after applying the change. Contrast with a combinational Mealy edge output, which is correct only when the spec's example shows SAME-cycle assertion on an asynchronous/level input.
+
+**What to do**: register the input into two successive samples and XOR them; do not derive the pulse from live-vs-registered. Confirm the pulse aligns to the cycle the checker reads, not the cycle the input changed.
+
+**Why this is GENERAL**: two-register synchronous edge detection is the textbook form for a clocked input; a live-vs-registered pulse is a real one-cycle-early defect. *why_not_bucket_a*: choosing the two-register form over live-vs-registered depends on whether the input is synchronous and WHEN the checker samples the pulse — a reading judgment of the sampling protocol, not derivable from the detector's structure alone.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; synchronous-input change pulse one cycle early). Deduped vs the combinational-Mealy edge-detector skill — opposite cue (synchronous input + next-cycle sample)._
+
+### Skill: a register read the checker compares against the LIVE register value must be 0-cycle combinational — unless a read latency is stated
+
+**Pattern**: When a register-block / status read is compared by the checker against the concurrently free-running register value (it samples the read port then asserts it equals the live counter/register in the same evaluation), the read must be a 0-cycle combinational mux over the live registers. A registered/handshaked read returns a value latched a cycle or two earlier; if the register is free-running (a counter that reloads/wraps), the stale-but-once-valid read no longer equals the live value and the equality fails. A handshaked read is a legitimate implementation, but it loses the same-cycle equality the checker demands.
+
+**When to apply**: a toy/lite register-map read whose spec says only "read the current value" and gives no read latency, and whose checker compares the read against a value that can change between the request and a registered response. The tell is a read that matches a static register but fails a free-running one.
+
+**What to do**: default such reads to a combinational mux over the live registers (continuous `rdata` reflecting the current value) unless the spec explicitly states a read latency or handshake.
+
+**Why this is GENERAL**: matching read latency to the consumer's timing expectation is standard register-interface design. *why_not_bucket_a*: when the spec omits read latency, a program cannot infer the convention — recognizing that the checker's live-value equality demands a 0-cycle combinational read is a reading judgment of the (unstated) timing the test encodes.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; registered read vs a free-running counter the checker compares live)._
+
+### Skill: a request/interrupt output deasserts in the SAME cycle as its acknowledge — no overlap cycle
+
+**Pattern**: For a request/acknowledge handshake whose invariant is "request is low whenever ack is high", the request/IRQ must drop COMBINATIONALLY in the cycle its acknowledge asserts — not be cleared by a registered branch one clock later, which leaves a one-cycle window where both request and ack are high and violates the invariant. The recurring defect clears the output in a clocked block gated on `(request && ack)`, so it stays asserted through the ack cycle.
+
+**When to apply**: any req/ack or interrupt/ack handshake where the consumer's invariant (or the checker) requires no overlap between an asserted request and its acknowledge. The convention is often unstated in prose, so apply it as the default handshake discipline.
+
+**What to do**: gate the request/IRQ combinationally so it deasserts the instant ack is sampled (e.g. `out = pending && !ack`), rather than registering the clear one cycle late.
+
+**Why this is GENERAL**: no request/ack overlap is a standard handshake convention; an extra overlap cycle is a real protocol violation. *why_not_bucket_a*: the no-overlap timing is usually NOT stated in the prompt — a program cannot derive a cycle-accurate handshake convention from prose that omits it; applying the default req-drops-with-ack rule is a protocol-knowledge judgment.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; request cleared one cycle after ack, recurred across 2 interrupt-controller designs)._
+
+### Skill: when the prompt supplies CONFLICTING interface sources, prefer the SEMANTIC description over an inline code stub whose name contradicts it
+
+**Pattern**: A prompt can carry two interface descriptions that disagree — a descriptive signal-table ("`s_ready` … indicates the slave is ready to accept the transaction") and an inline module stub that names the same port differently (`s_read`), where the stub name contradicts the port's stated semantics. The authoritative choice is the SEMANTIC source (the description, often corroborated by the majority of sources and the hidden TB's usage). The recurring defect preserves the stub's name, so the TB (which follows the description) raises an immediate name error before any functional check.
+
+**When to apply**: any task whose prompt includes BOTH a signal-description table and a code stub, when the two disagree on a port name/width and the stub name conflicts with the described meaning. The tell is a runtime AttributeError on a port name before functional checks run.
+
+**What to do**: adopt the description-table name when it conflicts with a stub, especially when the stub identifier contradicts the port's stated role and most sources agree with the table. Also preserve the full width/direction of a supplied input-context interface — never degenerate a sized port to a bare/1-bit one.
+
+**Why this is GENERAL**: reconciling conflicting interface specs toward the semantically-described name is standard spec-comprehension. *why_not_bucket_a*: a program can DIFF the two sources and flag the mismatch, but it cannot decide WHICH is authoritative — choosing the description over a contradictory stub name requires reading the port's stated meaning, a semantic judgment.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; description-table vs contradictory inline stub port names). Deduped vs the GIVEN-interface-header and TB-port-authority skills — this resolves a conflict BETWEEN two in-prompt sources._
+
+### Skill: a sequence-detector / combination-lock partial-match state resets to start on ANY intervening operation that isn't the exact next step — including reads
+
+**Pattern**: When a spec describes an unlock/match sequence as "concurrent" / "consecutive" / "sequential", a partial-match intermediate state (some steps accepted) must reset to the start/locked state on ANY input that is not the exact next expected step — including read cycles and writes to other addresses, not only a wrong-value write. The recurring defect leaves the partial-match state intact across intervening reads/other-ops, so an interrupted sequence still completes the unlock.
+
+**When to apply**: any combination-lock, secure-register-bank, or sequence-detector whose spec implies the steps must be uninterrupted ("concurrent"/"consecutive"/"back-to-back"). The tell is a sequence that should have been broken by an intervening operation still unlocking/matching.
+
+**What to do**: from every partial-match state, transition back to the start on any input that is not the precise next step of the sequence — treat an intervening read or unrelated write as a reset event, not a no-op that holds the state.
+
+**Why this is GENERAL**: "consecutive means no intervening operations" is a standard sequence-recognition semantics; holding a partial match across unrelated ops is a real security/logic hole. *why_not_bucket_a*: a program cannot infer that "concurrent/consecutive unlock" forbids an intervening READ from holding the partial-match state — that follows from reading the sequence's uninterrupted semantics, not from FSM structure.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; combination-lock partial-match held across intervening reads)._
+
+### Skill: a white-box testbench probes internal signals by their EXACT prompt-given name — declare those identifiers as NETS, never reuse them as instance names
+
+**Pattern**: When the prompt gives explicit identifiers for internal pulses/signals (especially in code/bold formatting — e.g. it names a millisecond-tick strobe and shows the test waiting on it), a white-box CVDP testbench commonly probes them by that exact name (`await RisingEdge(dut.<that_identifier>)`), so the design must declare a scalar NET with that identifier. The recurring defect repurposes a prompt-named signal identifier as a sub-module INSTANCE name (or renames the net), so the probe resolves to a hierarchy object / missing signal and the test errors before any functional check.
+
+**When to apply**: any design whose prompt names internal strobes/pulses/signals with specific identifiers, particularly when the harness is white-box (probes internals rather than only top ports). The tell is a "requires a scalar signal" / missing-signal error on a prompt-named internal identifier.
+
+**What to do**: declare a net (`wire`/`logic`) with each prompt-given internal identifier and drive it; choose DIFFERENT names for instances. Treat a prompt-named "pulse/signal" as an observable net, not an instance label.
+
+**Why this is GENERAL**: a named observable signal should exist as that net — reusing the name for an instance is a real observability defect against any white-box check. *why_not_bucket_a*: a program cannot decide that a prompt identifier names a probeable scalar NET (vs a module instance or an internal of another name) — recognizing the identifier's role as an observable signal is a reading judgment of the prompt's naming intent.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; prompt-named strobes used as instance names, unobservable to a white-box TB)._
+
+### Skill: a disjunctive ("X OR Y") transition clause must implement BOTH arms — a clear/transient state that says "return to idle OR serve another pending request" routes to grant when a request is still pending
+
+**Pattern**: When a spec describes a transition with a disjunction — a clear/cleanup state that "returns to idle OR serves another request if one is pending", an exit that goes "to DONE or back to active depending on a condition" — both arms must be implemented and the condition that selects between them honored. The recurring defect hard-codes only the salient arm (`CLEAR: next_state = IDLE;` unconditional), dropping the conditional second arm, so a still-pending request is re-served one cycle slower than the spec's bound.
+
+**When to apply**: any FSM whose documented transitions include a conditional/disjunctive clause out of a transient or cleanup state. The tell is a functionally-correct design that misses a tight cycle bound only on the back-to-back / still-pending case.
+
+**What to do**: implement every arm of a disjunctive transition with its selecting condition — from a clear/cleanup state, branch directly to the grant/active state when a request is still pending instead of always returning to idle.
+
+**Why this is GENERAL**: honoring every clause of a documented transition is basic FSM-spec fidelity; dropping a conditional arm is a real latency/behaviour defect. *why_not_bucket_a*: a program cannot tell that a transient state's transition has an unimplemented "or serve another request" arm — recognizing the dropped arm requires reading the disjunctive transition clause and comparing it to the coded single-target transition, a comprehension judgment.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; unconditional clear-state transition that dropped a conditional re-grant arm)._
+
+### Skill: a spec cue "must remain unchanged / be maintained / held" maps to CARRYING the prior registered value — never default-zero it in that state's decode branch
+
+**Pattern**: When a spec says an output must "remain unchanged", be "maintained", or be "held" in a particular state, the RTL must carry the prior registered value through that state — not assign it a default (often zero) in that state's decode branch. The recurring defect assigns the held output to all-zero (or a default) in the state where the spec said to maintain it, so a cycle-by-cycle reference that keeps the prior value mismatches every cycle of that state.
+
+**When to apply**: any FSM/registered output whose spec uses "unchanged"/"maintained"/"held"/"retain" language for a specific state or phase. The tell is an all-`0 != N` mismatch confined to one state, with timing otherwise correct.
+
+**What to do**: in the decode branch for that state, omit the default-zero and re-assign the output its prior registered value (or leave the register un-driven so it holds), so it persists exactly as the spec's "maintain" language requires.
+
+**Why this is GENERAL**: mapping "held/maintained" prose to value-retention is direct spec fidelity; default-zeroing a held output is a real functional defect. *why_not_bucket_a*: a program cannot map the prose words "remain unchanged/maintained/held" to "carry the registered value here, don't default it" — that is a reading of the spec's intent for that state, not a structural rule. (Complements the consumer-driven hold skill — this one triggers on the explicit prose cue + the FSM-decode-branch default-zero anti-pattern.)
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; "maintain"-state output default-zeroed, recurred across 2 FSMs)._
+
+### Skill: outputs the spec pins to a reset level — including ready/valid handshake signals — must be reset-aware registers, not continuous-assigns that float in idle
+
+**Pattern**: When a spec states that outputs (or all flops) reset to a defined level, every such output — including ready/valid handshake signals — must honor that reset value. The recurring defect drives a handshake output with a purely combinational continuous assign (`assign s_ready = !m_valid || m_ready;`): being a wire it ignores reset entirely and evaluates high in the idle/reset state, so a checker that asserts the output is low the cycle after reset fails.
+
+**When to apply**: any design whose spec pins outputs to a reset level and whose handshake/ready/valid signals are candidates for a tempting one-line combinational assign. The tell is a handshake output reading the wrong level immediately after reset.
+
+**What to do**: drive reset-pinned outputs from a reset-aware sequential block (or otherwise force the reset value), so they hold the stated idle level out of reset rather than floating to whatever a combinational expression yields.
+
+**Why this is GENERAL**: honoring stated reset values for all outputs, handshakes included, is standard reset-domain discipline. *why_not_bucket_a*: a program cannot tell that a particular ready/valid must reset low (vs being legitimately combinational) — that depends on the spec's reset statement for that output, a reading judgment, not the structural fact that it's a continuous assign.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; combinational ready that ignored reset and floated high in idle). Deduped vs the first-post-reset-edge skill — that is a same-edge NBA visibility bug; this is a continuous-assign ignoring reset entirely._
+
+### Skill: removing a latch / lint warning by going FULLY combinational deletes a clock-synced valid pulse — a RisingEdge(valid_out) wait then never fires
+
+**Pattern**: When a clocked valid/data handshake module (it has `clk`/`rst`, `valid_in`/`valid_out`, and "operates on the rising edge" semantics) is "cleaned up" by converting it to pure combinational logic, `valid_out` tracks `valid_in` with zero delay — it rises and falls combinationally with the input. A directed test that issues `await RisingEdge(valid_out)` AFTER deasserting `valid_in` then sees no edge ever occur and the simulation hangs, even though the computed value is correct.
+
+**When to apply**: any latch-removal / lint cleanup on a module that has a clock and a valid/done handshake the harness waits on with an edge wait. The tell is a hang / empty sim log after a cleanup that otherwise produces the right value.
+
+**What to do**: keep the valid/output path REGISTERED in an `always_ff` so `valid_out` is a clock-synchronized pulse the harness can edge-wait on; remove the latch by registering, not by going fully combinational.
+
+**Why this is GENERAL**: a clocked handshake must keep its registered valid edge — flattening it to combinational is a real loss of the synchronization the protocol provides. *why_not_bucket_a*: a program cannot tell that a given output must stay a clocked valid pulse (vs being legitimately combinational) — that depends on the module's "operates on rising edge" + handshake contract, a reading judgment. (Sibling of the blocking-to-non-blocking in-place fix skill — both: a cleanup must not delete clocked behaviour the checker depends on.)
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; latch fix that made a clocked valid pulse combinational, hanging the edge-wait)._
+
+### Skill: build every described datapath element and its stated default/select source — don't collapse a described mux into a single hardwired path
+
+**Pattern**: When a spec describes a register fed by an input MUX with named sources and a select rule (its select-0/default source is often a primary data input), implement that mux and its default path — don't simplify the architecture by hardwiring the register's load to a single alternate source. The recurring defect collapses a described datapath (drops a mux and loads the register from one path every cycle), so a mode whose value should come from the mux's default source (e.g. a fetch that passes the primary data input through) returns the wrong, stale value.
+
+**When to apply**: any completion/authoring task that describes specific datapath submodules (muxes, staging registers) with named sources and select/enable rules, where it is tempting to author a smaller functionally-"close" equivalent. The tell is one mode/opcode returning a stale or wrong value because its described source path was never built.
+
+**What to do**: build each described datapath element (mux, its select logic, its default/select-0 source, the staging register and its enable) as specified; do not hardwire a register's load to one source when the spec routes it through a mux with a default path.
+
+**Why this is GENERAL**: implementing the specified datapath (rather than a simplified stand-in) is basic architectural fidelity; a dropped default-source path is a real functional gap. *why_not_bucket_a*: a program cannot tell from prose that a register's load must come through a mux whose select-0 source is a particular input — recognizing the described mux + its default path, versus a hardwired single load, is a reading judgment of the architecture.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; described input-mux collapsed to a hardwired register load, dropping the default source)._
+
+### Skill: a stated "inputs are synchronous to clk" / registered-input requirement adds one input pipeline cycle — consuming inputs combinationally fires the FSM one cycle early
+
+**Pattern**: When a spec emphasizes that inputs are "synchronous to clk" (a registered input stage), the design must register the inputs before the FSM consumes them, adding one pipeline cycle. The recurring defect consumes inputs combinationally, so every FSM transition fires one cycle early — e.g. after asserting enable the checker waits two clocks and expects the FSM in its second state, but a non-input-registered FSM is already a state further along.
+
+**When to apply**: any FSM/datapath whose spec calls the inputs synchronous/registered and whose checker measures state/output at exact cycle offsets after applying an input. The tell is a functionally-correct datapath that is uniformly one cycle early.
+
+**What to do**: add the registered input stage the spec calls for (sample inputs into flops before the FSM acts on them), so the FSM's cycle alignment matches the registered-input latency the checker assumes.
+
+**Why this is GENERAL**: honoring a stated registered-input stage is standard pipeline-latency fidelity; skipping it is a real off-by-one. *why_not_bucket_a*: a program measuring latency can flag the mismatch post-hoc, but it cannot know from RTL that the spec REQUIRED a registered input stage — the "inputs synchronous to clk" requirement lives in prose, and adding that stage is a reading judgment.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; combinational input consumption against a stated registered-input requirement)._
