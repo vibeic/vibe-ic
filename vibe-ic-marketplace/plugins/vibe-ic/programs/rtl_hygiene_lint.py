@@ -4074,6 +4074,391 @@ def rule_mixed_blocking_same_reg(src: str, path: str) -> List[Finding]:
 
 
 # ---------------------------------------------------------------------------
+# Rule 22: Narrow bitwise-NOT / binary-XNOR (/ shift) inverted in a WIDER lvalue
+# context (rule name `narrow-bitwise-not-wider-context`, advisory WARN, NO --fix)
+# ---------------------------------------------------------------------------
+# A unary bitwise NOT `~OP`, a binary XNOR `A ~^ B` / `A ^~ B`, or a left /
+# arith-right shift `A << s` / `A >>> s`, sitting in a position that INHERITS a
+# WIDER assignment-context width M than the operand's self-determined width N,
+# computes the inversion/shift AT WIDTH M: the operand zero-extends to M bits
+# first and the operator then flips/moves the upper M-N pad bits. Canonical bug:
+#
+#     reg  [7:0] o_result;       // 8-bit lvalue (M = 8)
+#     wire [3:0] i_operand_a;    // 4-bit operand (N = 4)
+#     o_result <= ~i_operand_a;  // ~4'hC computed at 8 bits = 8'hF3, NOT 8'h03
+#
+# This is sibling to Rule 19 (`bitwise-not-width`, which covers `~narrow` in a
+# COMPARISON and the bare `wideLHS <= ~narrow;`); Rule 22 generalises to binary
+# XNOR, `<<`/`>>>` shifts, and the dangerous op nested in a `?:` arm.
+#
+# WHY WARN-only / NO auto-fix: a deterministic `--fix` cannot know whether the
+# wide inversion is INTENDED (a legitimate full-width complement) or a sub-word
+# bug — auto-wrapping `~op` as `{ {{M-N}{1'b0}}, ~op }` would silently corrupt the
+# legitimate full-width case. So it emits an advisory (non-blocking) WARN proposing
+# the fix; it is intentionally NOT block-eligible (never hard-vetoes an otherwise-
+# correct draft) for the same intent-ambiguity reason.
+#
+# MUST-EXCLUDE (else it false-fires on legitimate code):
+#   * REDUCTION operators (`&x |x ^x ~&x ~|x ~^x`) yield a 1-bit result that is
+#     merely zero-extended — no pad-inversion bug. `~^`/`^~` are treated ONLY as
+#     the *binary* XNOR (two operands); a leading `~^x`/`^~x` (unary reduction) is
+#     never flagged.
+#   * an operand already sized to M (concat-padded `{pad, ~op}` / a sized temp):
+#     the dangerous op then sits at depth>0 inside `{...}` and is never reached.
+#   * plain `& | ^ + -` over a zero-extended operand: the pad bits stay 0, so the
+#     op is NOT flagged. Rule 22 fires ONLY when the dangerous op occupies the
+#     WHOLE context-width position (the top-level RHS, or a `?:` arm); it
+#     deliberately does NOT recurse into the operands of a further binary combiner
+#     — a trailing `& z` can mask the inverted pad bits (`~a & b` is safe), so
+#     flagging a nested invert is not soundly zero-FP. Conservative subset, still
+#     catches the canonical direct-assignment bug.
+# chip-AGNOSTIC: pure structural width arithmetic over the linter's width table.
+
+
+def _sized_literal_width(tok: str) -> Optional[int]:
+    """Declared bit-width of a sized literal (`4'hC` -> 4, `8'd5` -> 8), or None
+    when `tok` is not a clean sized literal. chip-AGNOSTIC."""
+    m = _SIZED_LITERAL_RE.fullmatch(tok.strip())
+    if not m:
+        return None
+    try:
+        w = int(m.group(1))
+    except (TypeError, ValueError):
+        return None
+    return w if w > 0 else None
+
+
+def _strip_outer_parens(e: str) -> str:
+    """Remove fully-enclosing balanced parentheses (and surrounding whitespace)
+    from `e`, repeatedly. `(a~^b)` -> `a~^b`; `(a)+(b)` is left intact (the outer
+    parens do not enclose the whole expression). chip-AGNOSTIC."""
+    e = e.strip()
+    while len(e) >= 2 and e[0] == '(':
+        depth = 0
+        matched = -1
+        for idx, ch in enumerate(e):
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0:
+                    matched = idx
+                    break
+        if matched == len(e) - 1:
+            e = e[1:-1].strip()
+        else:
+            break
+    return e
+
+
+# Binary operators that can appear at the top level of an expression, paired with
+# a precedence rank (LOWER rank binds LOOSER, so the loosest top-level operator is
+# the expression's dominant/root operator). Longest tokens are matched first so
+# `<<<` is never split as `<` + `<<`.
+_BINOP_TABLE = [
+    ('||', 1),
+    ('&&', 2),
+    ('|', 3),
+    ('~^', 4), ('^~', 4), ('^', 4),
+    ('&', 5),
+    ('===', 6), ('!==', 6), ('==', 6), ('!=', 6),
+    ('<=', 7), ('>=', 7), ('<', 7), ('>', 7),
+    ('<<<', 8), ('>>>', 8), ('<<', 8), ('>>', 8),
+    ('+', 9), ('-', 9),
+    ('*', 10), ('/', 10), ('%', 10),
+]
+_BINOP_BY_LEN = sorted(_BINOP_TABLE, key=lambda t: -len(t[0]))
+
+
+def _top_level_split(expr: str):
+    """Split `expr` at its DOMINANT (loosest-precedence) top-level binary operator
+    -> (op, left, right). Returns None when `expr` has no top-level binary operator
+    (a pure atom / unary expression). Operators inside (), [], {} are ignored
+    (depth > 0); a leading operator with no left operand is a UNARY reduction/sign
+    and is never counted as binary. Ties pick the RIGHTMOST occurrence (the root of
+    a left-associative chain). chip-AGNOSTIC."""
+    s = expr
+    n = len(s)
+    depth = 0
+    best = None  # (prec, pos, op)
+    i = 0
+    while i < n:
+        c = s[i]
+        if c in '([{':
+            depth += 1
+            i += 1
+            continue
+        if c in ')]}':
+            depth -= 1
+            i += 1
+            continue
+        if depth != 0:
+            i += 1
+            continue
+        hit = None
+        for op, prec in _BINOP_BY_LEN:
+            if s.startswith(op, i):
+                j = i - 1
+                while j >= 0 and s[j].isspace():
+                    j -= 1
+                # a binary operator needs a LEFT operand: the previous non-space
+                # char must end an operand (identifier/number/literal/`)`/`]`/`}`).
+                if j >= 0 and (s[j].isalnum() or s[j] in "_)]}'"):
+                    hit = (prec, i, op)
+                break
+        if hit is not None:
+            prec, pos, op = hit
+            if (best is None or prec < best[0]
+                    or (prec == best[0] and pos > best[1])):
+                best = hit
+            i += len(op)
+            continue
+        i += 1
+    if best is None:
+        return None
+    _, pos, op = best
+    return (op, s[:pos].strip(), s[pos + len(op):].strip())
+
+
+def _split_ternary(expr: str):
+    """If `expr` has a top-level ternary, return (cond, true_arm, false_arm), else
+    None. Matches the FIRST top-level `?` and its balancing `:` (nested ternaries
+    balanced); `?`/`:` inside (), [], {} are ignored, so a `[a +: b]` part-select
+    `:` never mis-splits. chip-AGNOSTIC."""
+    s = expr
+    depth = 0
+    q = -1
+    for i, c in enumerate(s):
+        if c in '([{':
+            depth += 1
+        elif c in ')]}':
+            depth -= 1
+        elif depth == 0 and c == '?':
+            q = i
+            break
+    if q < 0:
+        return None
+    depth = 0
+    nested = 0
+    for i in range(q + 1, len(s)):
+        c = s[i]
+        if c in '([{':
+            depth += 1
+        elif c in ')]}':
+            depth -= 1
+        elif depth == 0:
+            if c == '?':
+                nested += 1
+            elif c == ':':
+                if nested == 0:
+                    return (s[:q].strip(), s[q + 1:i].strip(), s[i + 1:].strip())
+                nested -= 1
+    return None
+
+
+def _self_width(expr: str, info: Dict[str, Tuple[int, bool, bool]]) -> Optional[int]:
+    """Self-determined bit-width N of a SIMPLE expression over the width table
+    `info` (name -> (width, is_literal, is_signed)), or None when it cannot be
+    proven. Width-combining ops (`& | ^ ~^ ^~ + -`) and ternary arms resolve to
+    the MAX of their operand widths (associative/commutative — no precedence
+    needed); a leading reduction / `!` is 1 bit; shifts / mul / div / relational /
+    equality return None (conservative — caller stays silent). chip-AGNOSTIC."""
+    e = _strip_outer_parens(expr.strip())
+    if not e:
+        return None
+    if re.fullmatch(r'[A-Za-z_]\w*', e):
+        t = info.get(e)
+        return t[0] if t else None
+    w = _sized_literal_width(e)
+    if w is not None:
+        return w
+    tern = _split_ternary(e)
+    if tern:
+        a = _self_width(tern[1], info)
+        b = _self_width(tern[2], info)
+        return max(a, b) if (a is not None and b is not None) else None
+    sp = _top_level_split(e)
+    if sp:
+        op, left, right = sp
+        if op in ('~^', '^~', '^', '&', '|', '+', '-'):
+            a = _self_width(left, info)
+            b = _self_width(right, info)
+            return max(a, b) if (a is not None and b is not None) else None
+        return None  # shift / mul / div / relational / equality -> unknown
+    if e[0] == '~':
+        nxt = e[1:].lstrip()
+        if nxt[:1] in ('&', '|', '^'):
+            return 1  # reduction NAND/NOR/XNOR -> 1 bit
+        return _self_width(nxt, info)
+    if e and e[0] in '&|^!':
+        return 1  # leading reduction / logical-not -> 1 bit
+    return None
+
+
+def _narrow_invert_in_ctx(expr: str, M: int,
+                          info: Dict[str, Tuple[int, bool, bool]]):
+    """Return (kind, expr, N) when the WHOLE context-width position `expr`
+    (assigned to an M-bit lvalue) is a sub-word inversion/shift flipping the upper
+    pad bits — a unary bitwise NOT (`kind='not'`), a binary XNOR (`'xnor'`), or a
+    `<<`/`<<<`/`>>>` shift (`'shift'`) whose operand self-width N < M. Recurses
+    ONLY into ternary arms (which also inherit the M-bit context). Returns None
+    otherwise. chip-AGNOSTIC."""
+    e = _strip_outer_parens(expr.strip())
+    if not e:
+        return None
+    tern = _split_ternary(e)
+    if tern:
+        for arm in (tern[1], tern[2]):
+            r = _narrow_invert_in_ctx(arm, M, info)
+            if r:
+                return r
+        return None
+    sp = _top_level_split(e)
+    if sp:
+        op, left, right = sp
+        if op in ('~^', '^~'):
+            # BINARY XNOR (two operands). A unary reduction `~^x` has no left
+            # operand and is never split here, so it can never reach this arm.
+            if left:
+                n = _self_width(e, info)
+                if n is not None and n < M:
+                    return ('xnor', e, n)
+            return None
+        if op in ('<<', '<<<', '>>>'):
+            n = _self_width(left, info)
+            if n is not None and n < M:
+                return ('shift', e, n)
+            return None
+        # any other dominant binary op (| ^ & + - * / % == < > && || >> …): the
+        # dangerous op, if any, is SUBORDINATE -> conservative skip (zero-FP).
+        return None
+    # no top-level binary op -> a pure unary / atom expression.
+    if e[0] == '~':
+        nxt = e[1:].lstrip()
+        if nxt[:1] in ('&', '|', '^', '~'):
+            return None  # reduction (~& ~| ~^) or double-NOT -> not a sub-word invert
+        n = _self_width(nxt, info)
+        if n is not None and n < M:
+            return ('not', e, n)
+    return None
+
+
+def _ctx_assignments(text: str):
+    """Yield (lhs_name, rhs_text, op_offset) for every STATEMENT-LEVEL (paren/
+    bracket/brace depth 0) `=` / `<=` assignment whose LHS is a BARE identifier
+    (a bit/part-select LHS has a slice-width context this rule does not resolve and
+    is skipped). A `<=`/`==`/`!=`/`>=` used as a COMPARISON inside a parenthesised
+    condition is depth>0 and never mis-read as an assignment. chip-AGNOSTIC."""
+    s = text
+    n = len(s)
+    depth = 0
+    i = 0
+    while i < n:
+        c = s[i]
+        if c in '([{':
+            depth += 1
+            i += 1
+            continue
+        if c in ')]}':
+            depth -= 1
+            i += 1
+            continue
+        if depth == 0 and (c == '=' or (c == '<' and s[i:i + 2] == '<=')):
+            if c == '<':
+                op_end = i + 2
+            else:
+                if s[i:i + 2] == '==':           # equality compare, not assign
+                    i += 2
+                    continue
+                if i > 0 and s[i - 1] in '<>=!':  # tail of <= >= == != ===
+                    i += 1
+                    continue
+                op_end = i + 1
+            j = i - 1
+            while j >= 0 and s[j].isspace():
+                j -= 1
+            if j >= 0 and s[j] == ']':            # subscripted LHS -> skip
+                i = op_end
+                continue
+            k = j
+            while k >= 0 and (s[k].isalnum() or s[k] == '_'):
+                k -= 1
+            name = s[k + 1:j + 1]
+            # statement end = next depth-0 ';'
+            d2 = 0
+            e = op_end
+            while e < n:
+                cc = s[e]
+                if cc in '([{':
+                    d2 += 1
+                elif cc in ')]}':
+                    d2 -= 1
+                elif cc == ';' and d2 == 0:
+                    break
+                e += 1
+            if name and not name[0].isdigit() and name not in VERILOG_KEYWORDS:
+                yield (name, s[op_end:e], i)
+            i = e + 1 if e < n else n
+            continue
+        i += 1
+
+
+def rule_narrow_bitwise_not_wider_context(src: str, path: str) -> List[Finding]:
+    """Rule 22 — advisory WARN on a sub-word bitwise NOT / binary XNOR / `<<`,
+    `>>>` shift inverted (or shifted) in a WIDER assignment context. See the rule
+    header for the precise catch + must-exclude set. Non-block-eligible (advisory):
+    the wide-vs-sub-word INTENT is ambiguous, so it never hard-vetoes a draft."""
+    findings: List[Finding] = []
+    gconsts = _global_param_consts(src)
+    seen: Set[Tuple[int, str]] = set()
+    for _mn, mlo, mhi in _module_regions(src):
+        region = src[mlo:mhi]
+        info = _decl_width_info(region, gconsts)
+        if not info:
+            continue
+        for name, rhs, off in _ctx_assignments(region):
+            li = info.get(name)
+            if not li:
+                continue
+            M, _lit, signed = li
+            # Signed targets sign-extend before complement — the widening is far
+            # more often INTENDED there (a signed full-width `~`); stay zero-FP and
+            # only fire on unsigned lvalues (the canonical pad-zero-extend case).
+            if signed:
+                continue
+            hit = _narrow_invert_in_ctx(rhs, M, info)
+            if not hit:
+                continue
+            kind, _expr, N = hit
+            line = src.count('\n', 0, mlo + off) + 1
+            key = (line, name)
+            if key in seen:
+                continue
+            seen.add(key)
+            opname = {'not': 'bitwise ~', 'xnor': 'binary XNOR (~^/^~)',
+                      'shift': 'shift (<<,>>>)'}[kind]
+            pad = M - N
+            sized_hint = "{ {%d{1'b0}}, <op> }" % pad
+            f = Finding(
+                path, line, 'WARN', 'narrow-bitwise-not-wider-context', name,
+                f"{opname} on a {N}-bit operand assigned to the {M}-bit target "
+                f"`{name}` ({M}>{N}): the operand zero-extends to {M} bits before "
+                f"the inversion/shift, so the upper {pad} pad bit(s) get "
+                f"inverted/shifted too (e.g. `~4'hC` in an 8-bit context = `8'hF3`, "
+                f"not `8'h03`). If only the low {N} bits should be operated on, "
+                f"size the operand (e.g. `{sized_hint}`) or use a sized temp. Advisory WARN "
+                f"— no auto-fix (a blanket widening cast would corrupt a legitimate "
+                f"full-width inversion).")
+            # Advisory: visible at --severity WARN but NOT block-eligible — the
+            # wide-vs-sub-word intent is ambiguous, so it never trips rc=1.
+            f.block_eligible = False
+            f.advisory_note = ("sub-word invert/shift in a wider lvalue context "
+                               "(intent-ambiguous; no safe auto-fix)")
+            findings.append(f)
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Rule 24 (function-automatic variable bit-select write): DROPPED — not zero-FP.
 # The hazard (a function-LOCAL variable-indexed write silently dropped by some
 # simulators) does NOT reproduce on the tools in scope: Icarus Verilog 12.0
@@ -4120,6 +4505,7 @@ def lint_file(path: Path) -> List[Finding]:
     results += rule_bitwise_not_width(src, str(path))
     results += rule_enum_ternary_width(src, str(path))
     results += rule_mixed_blocking_same_reg(src, str(path))
+    results += rule_narrow_bitwise_not_wider_context(src, str(path))
     # rule_wire_input_read_in_clocked_block: NOT enabled.
     #
     # v0.1.39 honesty correction (audit Finding 2): the v0.1.38 disable
