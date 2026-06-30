@@ -2446,3 +2446,27 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 **Why this is GENERAL**: edge-triggered (not level-triggered) re-arm, hold-the-last-result, and re-init-on-restart are standard re-runnable-FSM hygiene for any block a testbench exercises repeatedly. *why_not_bucket_a*: a program cannot tell that the harness re-runs the module, that its start stays high across the run, or which edge the checker samples — that requires reading the TB's multi-pass drive sequence. (Complements "when the golden RTL is stripped, the cocotb checks ARE the spec" and "a value a later consumer reads must be HELD through the consume window".)
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2 — official full-objective)._
+
+### Skill: LFSR tap indices follow the spec's stated shift DIRECTION + insertion end, not textbook x^k polynomial numbering
+
+**Pattern**: When a spec defines an LFSR / PRBS by tap "positions" together with an explicit shift direction and an explicit insertion (shift-in) end — e.g. "shift the register RIGHT and insert the feedback bit at the MSB", with taps named at positions P and L — the actual register bits that get XORed must be read in THAT stated frame. The recurring defect substitutes the textbook Fibonacci `x^k + ... + 1` convention, which numbers bit positions from the opposite (LSB / output) end, so the author XORs the wrong register bits and the generated sequence diverges from the reference even though the tap NUMBERS match. The numeric tap values are parameters, but which END they count from — and which bit the feedback enters — is fixed by the prose shift/insert description, not by polynomial notation.
+
+**When to apply**: any LFSR / PRBS / scrambler / CRC-LFSR generator whose prompt states a shift direction ("shift right/left") and an insertion end ("insert at MSB/LSB", "feedback drives the first/last stage") alongside named tap positions. The tell is a sequence that is plausible-looking but mismatches the reference from the first non-trivial cycle, with the tap indices apparently correct.
+
+**What to do**: build the register exactly as the spec describes its motion — pick the shift direction it states, compute the feedback as the XOR of the bits at the NAMED tap positions counted from the stated reference end, and insert the feedback bit at the stated end. Do not reframe the taps into a canonical `x^k`-from-LSB polynomial; let the prose-stated structure define the bit indexing.
+
+**Why this is GENERAL**: honoring a spec's stated shift direction and insertion end over a remembered textbook convention is direct structural fidelity that applies to every shift-feedback generator, not one design. *why_not_bucket_a*: a program can parse the tap NUMBERS as parameters but cannot decide which END they index from or where the feedback enters — that requires reading the prose shift/insert sentences and mapping them onto register bit indices, a semantic comprehension judgment, and the wrong default (textbook LSB numbering) is the exact recurring trap.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP Tier-3 hard-tier lift)._
+
+### Skill: a multi-clock bridge clocks each side's logic on the clock the spec BINDS to that side — cross-domain signals need synchronization
+
+**Pattern**: When a spec names TWO (or more) clocks and binds each one to a specific protocol side or sub-block — e.g. "clock A: clock for the <side-1> operations", "clock B: clock for the <side-2> operations", often paired with a per-side reset — the registers of each side must be clocked by ITS named clock, and a control/data signal that travels from one named-clock domain into the other must cross with proper synchronization (and, per any "hold attributes during the transaction" cue, be held stable across the crossing). The recurring defect clocks the whole module on a single clock (usually the first-listed one), which mis-times the other side's phase/handshake and breaks any checker that advances that side on its own clock edge.
+
+**When to apply**: any bridge / adapter / dual-port / CDC design whose prompt enumerates more than one clock input and verbally assigns each clock to a side, sub-block, or interface. The tell is logic that functions when both clocks happen to be in lockstep but mis-sequences the second interface, or a testbench that drives the two clocks as independent edges.
+
+**What to do**: partition the RTL into per-clock always blocks, clocking each block on the clock its spec sentence binds to that side (and resetting it with that side's named reset); for a single-cycle event or attribute crossing between the two domains, pass it through a synchronizer / held level rather than letting it be sampled directly on the far clock.
+
+**Why this is GENERAL**: assigning each block to the clock the spec names for it, and synchronizing the crossings, is baseline multi-clock discipline applicable to any bridge with named per-side clocks. *why_not_bucket_a*: a program can count clock inputs but cannot decide WHICH logic belongs to WHICH clock — the binding lives only in the prose description of each clock ("this clock is for that side"), so partitioning the design across the named clocks requires reading and matching those sentences, a semantic judgment, not a structural rule.
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP Tier-3 hard-tier lift)._
