@@ -762,3 +762,106 @@ def test_main_b4_handshake_blocks(tmp_path):
     assert rc == 1
     entry = next(e for e in report["records"] if e["id"] == rid)
     assert "handshake-load-livelock" in entry.get("handshake_block", "")
+
+
+# ════════════ MULTI-FILE emit split — name-aware mapping (ORGANIC) ═══════════
+# A MULTI-FILE problem (output.context lists >1 rtl/*.sv) whose completion is a
+# single bare blob must map EACH module to the expected file whose basename
+# matches it — never leave the NAMED top file empty. The prior positional
+# fallback dumped a single `module ping_pong_buffer` into the alphabetically-
+# first slot `rtl/dual_port_memory.sv`, leaving the real top `ping_pong_buffer.sv`
+# EMPTY → scorer ELAB_ERROR on a correct design.
+_PPB_TOP = (
+    "module ping_pong_buffer(input clk, input rst, input wr, input [7:0] din,\n"
+    "                        output reg [7:0] dout);\n"
+    "  always @(posedge clk) if (wr) dout <= din;\nendmodule\n")
+_DPM = (
+    "module dual_port_memory(input clk, input we, input [3:0] addr,\n"
+    "                        input [7:0] wdata, output reg [7:0] rdata);\n"
+    "  reg [7:0] mem [0:15];\n"
+    "  always @(posedge clk) begin if (we) mem[addr] <= wdata;\n"
+    "    rdata <= mem[addr]; end\nendmodule\n")
+
+
+def _emit_files(blob, expected):
+    """Decode the `{"code":[{path:src},…]}` envelope into {path: src}."""
+    out = json.loads(G._emit_or_split(blob, expected))
+    return {k: v for d in out["code"] for k, v in d.items()}
+
+
+def test_emit_multifile_two_modules_map_each_to_its_file():
+    # the blob defines BOTH expected modules → each lands in its own file once.
+    expected = ["rtl/dual_port_memory.sv", "rtl/ping_pong_buffer.sv"]  # sorted
+    files = _emit_files(_PPB_TOP + "\n\n" + _DPM, expected)
+    assert set(files) == set(expected)
+    assert "module ping_pong_buffer" in files["rtl/ping_pong_buffer.sv"]
+    assert "module dual_port_memory" in files["rtl/dual_port_memory.sv"]
+    # no module duplicated across the set (the duplicate-declaration FAIL shape).
+    assert files["rtl/ping_pong_buffer.sv"].count("module ping_pong_buffer") == 1
+    assert files["rtl/dual_port_memory.sv"].count("module dual_port_memory") == 1
+    assert "module dual_port_memory" not in files["rtl/ping_pong_buffer.sv"]
+    assert "module ping_pong_buffer" not in files["rtl/dual_port_memory.sv"]
+
+
+def test_emit_multifile_single_module_lands_in_named_not_first_slot():
+    # THE BUG: a single `module ping_pong_buffer` for a 2-file problem must land
+    # in ping_pong_buffer.sv (the SECOND sorted slot), NOT the first.
+    expected = ["rtl/dual_port_memory.sv", "rtl/ping_pong_buffer.sv"]  # sorted
+    files = _emit_files(_PPB_TOP, expected)
+    assert "module ping_pong_buffer" in files["rtl/ping_pong_buffer.sv"]
+    assert files["rtl/dual_port_memory.sv"] == ""        # empty placeholder
+    # regression guard: the bug dumped the module into the first sorted slot.
+    assert "module ping_pong_buffer" not in files["rtl/dual_port_memory.sv"]
+
+
+def test_emit_multifile_preamble_and_helper_go_to_named_top():
+    # leading preamble (`timescale) + an unmatched helper module must follow the
+    # named top into ping_pong_buffer.sv, each exactly once; dpm stays empty.
+    blob = ("`timescale 1ns/1ps\n\n" + _PPB_TOP +
+            "\nmodule helper(input a, output y); assign y = a; endmodule\n")
+    expected = ["rtl/dual_port_memory.sv", "rtl/ping_pong_buffer.sv"]
+    files = _emit_files(blob, expected)
+    top = files["rtl/ping_pong_buffer.sv"]
+    assert "`timescale" in top
+    assert top.count("module ping_pong_buffer") == 1
+    assert top.count("module helper") == 1               # unmatched → named top
+    assert files["rtl/dual_port_memory.sv"] == ""
+
+
+def test_emit_multifile_no_name_match_positional_fallback():
+    # no module name-matches any expected file → LOSSLESS positional fallback
+    # (whole blob → first slot, rest empty) — the pre-name-aware behaviour.
+    blob = "module zzz(input a, output y); assign y = a; endmodule\n"
+    expected = ["rtl/aaa.sv", "rtl/bbb.sv"]
+    files = _emit_files(blob, expected)
+    assert "module zzz" in files["rtl/aaa.sv"]
+    assert files["rtl/bbb.sv"] == ""
+
+
+def test_emit_multifile_case_underscore_insensitive_match():
+    # the module/file match is case- and underscore-insensitive.
+    blob = "module PingPongBuffer(input a, output y); assign y=a; endmodule\n"
+    expected = ["rtl/dual_port_memory.sv", "rtl/ping_pong_buffer.sv"]
+    files = _emit_files(blob, expected)
+    assert "module PingPongBuffer" in files["rtl/ping_pong_buffer.sv"]
+    assert files["rtl/dual_port_memory.sv"] == ""
+
+
+def test_emit_single_file_byte_identical_same_object():
+    # the dominant 297/302 single-file shape: emit is the blob UNCHANGED (and the
+    # very same object — proves byte-identity, no envelope wrapping).
+    blob = _AND2
+    assert G._emit_or_split(blob, None) is blob
+    assert G._emit_or_split(blob, []) is blob
+    assert G._emit_or_split(blob, ["rtl/and2.sv"]) is blob   # single expected rtl
+    assert G._emit_or_split(blob, ["docs/notes.md"]) is blob  # 0 expected rtl
+
+
+def test_emit_multifile_clean_partition_unchanged_path():
+    # a clean full partition still routes through _split_blob_to_expected and is
+    # byte-identical to its dict (the name-aware fallback is NOT reached).
+    expected = ["rtl/dual_port_memory.sv", "rtl/ping_pong_buffer.sv"]
+    blob = _PPB_TOP + "\n\n" + _DPM
+    strict = G._split_blob_to_expected(blob, expected)
+    files = _emit_files(blob, expected)
+    assert files == strict
