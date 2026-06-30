@@ -2410,3 +2410,39 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 **Why this is GENERAL**: these are reusable RTL area-reduction transforms (barrel-mux elimination, SIPO shift register, magnitude folding) applicable to any merge/scan/scatter/serial/saturating datapath, plus the general "structural-not-cosmetic + co-sim-guarded + don't-delete-reachable-functionality" methodology. *why_not_bucket_a*: identifying the dominant structural cost term and choosing an exact equivalent rewrite is closed-loop synthesize-measure-restructure reasoning with an equivalence guard, not a regex edit; whether a given budget is even reachable blind requires judgment. (Adds a concrete transform catalog under "an area-reduction task needs a structural transform that survives synthesis".)
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
+
+### Skill: priority arbiter — mask before arbitrating, and clear the PRESENTED (registered) index on ack, not the live winner
+
+**Pattern**: A masking / round-robin priority arbiter must compute its winner over the ALREADY-MASKED request set — `winner = arbitrate(pending & mask)` — not over raw `pending` with the mask applied afterward; masking after selection lets a masked-out request still steal the grant. And when an ack/grant retires a request, clear the REGISTERED index that was PRESENTED to the consumer (e.g. `serviced_idx_q`), never the live combinational `best_idx` — because by the ack cycle the combinational winner can already point at a newly-arrived request, so clearing the live winner drops the wrong one.
+
+**When to apply**: Any multi-requester arbiter with a mask / priority / round-robin policy whose grant is acknowledged a cycle (or more) later, and where requests can arrive simultaneously or while one is already in service. Unless the spec states a purely combinational single-cycle grant with no registered presentation and no ack latency.
+
+**What to do**: Form the candidate set FIRST (`pend_masked = pending & mask`) and arbitrate over THAT; register the granted index when you present it (`serviced_idx_q <= winner`); on ack, clear/update state against `serviced_idx_q` (the index you actually presented), not the current-cycle combinational winner. Verify with simultaneous arrivals plus a 1-cycle ack delay.
+
+**Why this is GENERAL**: mask-then-arbitrate and "retire the request you actually presented, not the one currently winning" are standard arbiter correctness under registered grants and delayed acks — they recur in interrupt controllers, bus arbiters, and credit schedulers. *why_not_bucket_a*: a program cannot tell that the ack is delayed a cycle, that the presented index is registered, or that a fresh request can supplant the live winner before the ack arrives — that requires reading the TB's arrival/ack timing. (Complements "X-safety — procedural priority arbitration over bitwise selects".)
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2 — official full-objective)._
+
+### Skill: a ping-pong / double-buffer is two banks swapped at single-bank capacity, NOT one counted FIFO
+
+**Pattern**: A double-buffer / ping-pong is structurally two banks with an ACTIVE-bank select that toggles each time the filling bank reaches SINGLE-bank capacity (1×) — never at 2× total occupancy. Modeling it as one ring FIFO with a single occupancy count breaks both the bank-swap timing and the quiescent-robustness checks: `empty` must stay asserted until a WHOLE bank has filled (so a stray write-enable pulse in an otherwise-idle test cannot deassert it), and the producer/consumer must switch banks at the per-bank boundary so reads drain the just-completed bank while writes fill the other.
+
+**When to apply**: Any "ping-pong", "double-buffer", "A/B buffer", or "fill one while draining the other" structure verified by async-reset / data-validation tests that never re-drive the enables. Unless the spec explicitly describes a single shared ring buffer with a unified occupancy count.
+
+**What to do**: Instantiate two banks plus a registered active-bank select; toggle the select when the filling bank hits per-bank capacity; gate `empty` on a full bank's worth of valid data (a partial / stray write keeps empty=1); register `empty`/`full` with reset defaults the way the FIFO checklist requires. Do not collapse the two banks into a single shared count.
+
+**Why this is GENERAL**: swap-at-per-bank-capacity and hold-empty-until-a-whole-bank-fills are the defining semantics of every double-buffer, independent of the data it carries. *why_not_bucket_a*: a program cannot tell from prose that the structure is two banks rather than one ring, nor that the quiescent test leaves the enable stuck high — that is a reading of the architecture against the TB's idle behavior. (Builds on "FIFO / double-buffer completion checklist" with the bank-swap-timing facet that checklist does not cover.)
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2 — official full-objective)._
+
+### Skill: a re-runnable / multi-pass test arms its snapshot on the start/done RISING edge only, and re-inits the FSM on restart
+
+**Pattern**: When a self-checking TB runs a module MORE THAN ONCE (re-trains, re-loads, sweeps modes) and samples a result register at a done/converged strobe, the design must: (a) SNAPSHOT the result on the done/converged edge and HOLD it; (b) arm/re-arm that snapshot on the RISING edge of start/done ONLY — ignoring a start/done level that stays high or re-fires mid-run, so a second pass cannot overwrite the previously-held last sample before the checker reads it; and (c) re-SYNC the FSM to its initial state on a start RISING edge OR a mode-select change, so a fresh pass begins clean instead of continuing the prior run's state.
+
+**When to apply**: Modules a TB drives through repeated passes or back-to-back runs (iterative trainers, multi-vector accumulators, mode-swept datapaths) with a level start/enable that may stay high or re-assert. Unless the TB runs the module exactly once with a single-cycle start and never re-drives it.
+
+**What to do**: Detect start/done as a registered edge (`start & ~start_q`); load the result snapshot and reset the run FSM on that rising edge (or on a mode-select change); keep the held snapshot stable while start stays high so a continued / re-pulsed level cannot corrupt it; only re-arm on the next clean rising edge.
+
+**Why this is GENERAL**: edge-triggered (not level-triggered) re-arm, hold-the-last-result, and re-init-on-restart are standard re-runnable-FSM hygiene for any block a testbench exercises repeatedly. *why_not_bucket_a*: a program cannot tell that the harness re-runs the module, that its start stays high across the run, or which edge the checker samples — that requires reading the TB's multi-pass drive sequence. (Complements "when the golden RTL is stripped, the cocotb checks ARE the spec" and "a value a later consumer reads must be HELD through the consume window".)
+
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2 — official full-objective)._
