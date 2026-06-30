@@ -865,3 +865,208 @@ def test_emit_multifile_clean_partition_unchanged_path():
     strict = G._split_blob_to_expected(blob, expected)
     files = _emit_files(blob, expected)
     assert files == strict
+
+
+# ════════════ TB-bound PORT-NAME alignment (interface conformance) ═══════════
+# The hidden cocotb TB binds ports BY NAME (`dut.w_out` / `dut.hours` /
+# `dut.TIMEOUT_LIMIT`); a blind author with CORRECT LOGIC but a synonym port name
+# (`w` / `hour` / `timeout_limit`) AttributeErrors the TB → the whole problem
+# fails on an interface-NAME gap, not logic. Aligning the authored top's port
+# IDENTIFIER to the TB name is interface conformance (same category as the
+# module→TOPLEVEL rename / the #711 renamed-interface relaxation) — it reads only
+# the TB's `dut.<name>` metadata, NEVER the golden RTL. CONSERVATIVE: only an
+# UNAMBIGUOUS 1:1 synonym renames; everything else is a byte-identical no-op.
+_TBALIGN_RTL = ("module adder(input clk, input [7:0] a, input [7:0] b,\n"
+                "             output reg [7:0] w);\n"
+                "  always @(posedge clk) w <= a + b;\nendmodule\n")
+
+
+# ── PURE: decomposition + synonym algebra ────────────────────────────────────
+def test_tbalign_decompose():
+    assert G._decompose_port("w_out") == ("w", "out")
+    assert G._decompose_port("i_data") == ("data", "in")
+    assert G._decompose_port("data_i") == ("data", "in")
+    assert G._decompose_port("o_ready") == ("ready", "out")
+    assert G._decompose_port("hours") == ("hour", None)       # plural fold
+    assert G._decompose_port("TIMEOUT_LIMIT") == ("timeout_limit", None)
+    assert G._decompose_port("address") == ("address", None)  # `…ss` NOT folded
+
+
+def test_tbalign_synonym_positive_and_negative():
+    for a, b in (("w", "w_out"), ("b", "b_out"), ("data", "data_out"),
+                 ("i_data", "data_i"), ("o_ready", "ready"),
+                 ("hour", "hours"), ("minute", "minutes"),
+                 ("timeout_limit", "TIMEOUT_LIMIT")):
+        assert G._ports_synonym(a, b), (a, b)
+    # a DIRECTION FLIP is never a synonym (two distinct real ports).
+    assert not G._ports_synonym("data_in", "data_out")
+    assert not G._ports_synonym("clk", "clock")          # unrelated cores
+    assert not G._ports_synonym("w", "w")                # identical → no rename
+
+
+def test_tbalign_renames_unambiguous():
+    # (a) w/b authored, TB binds w_out/b_out → BOTH rename.
+    assert G.tb_port_alignment_renames(
+        ["clk", "a", "b", "w"], {"clk", "a", "b_out", "w_out"}) == {
+            "b": "b_out", "w": "w_out"}
+
+
+def test_tbalign_no_rename_genuine_missing_port():
+    # (b) a genuinely-extra functional port with NO synonym is NEVER invented.
+    assert G.tb_port_alignment_renames(
+        ["clk", "a", "w_out"], {"clk", "a", "w_out", "enable"}) == {}
+
+
+def test_tbalign_no_rename_when_ambiguous():
+    # (c) two authored synonyms for ONE TB name → ambiguous → no rename.
+    assert G.tb_port_alignment_renames(
+        ["data", "data_o"], {"clk", "data_out"}) == {}
+
+
+def test_tbalign_no_double_claim():
+    # the TB binds BOTH `w` and `w_out`; `w` is consumed as-is → never reused.
+    assert G.tb_port_alignment_renames(
+        ["clk", "w"], {"clk", "w", "w_out"}) == {}
+
+
+# ── PURE: scoped textual application ─────────────────────────────────────────
+def test_tbalign_apply_scoped_to_top_block():
+    out, ren = G.maybe_align_tb_ports(
+        _TBALIGN_RTL, "adder", {"clk", "a", "b_out", "w_out"})
+    assert ren == {"b": "b_out", "w": "w_out"}
+    assert "output reg [7:0] w_out" in out
+    assert "input [7:0] b_out" in out
+    assert "w_out <= a + b_out" in out
+
+
+def test_tbalign_sibling_submodule_untouched():
+    # a same-named net in a SIBLING submodule is NEVER touched (scoped to the
+    # harness-top block the scorer binds).
+    rtl = ("module top(input clk, output w);\n  sub u(.clk(clk), .y(w));\n"
+           "endmodule\n"
+           "module sub(input clk, output w);\n  assign w = clk;\nendmodule\n")
+    out, ren = G.maybe_align_tb_ports(rtl, "top", {"clk", "w_out"})
+    assert ren == {"w": "w_out"}
+    assert "module top(input clk, output w_out)" in out
+    assert "module sub(input clk, output w)" in out      # sub's w untouched
+
+
+def test_tbalign_comment_and_string_not_substituted():
+    rtl = ("module m(input clk, output w);\n  // w is the result net\n"
+           "  assign w = clk;\nendmodule\n")
+    out, ren = G.maybe_align_tb_ports(rtl, "m", {"clk", "w_out"})
+    assert ren == {"w": "w_out"}
+    assert "// w is the result net" in out               # comment word untouched
+    assert "output w_out" in out and "w_out = clk" in out
+
+
+def test_tbalign_collision_guard_blocks_existing_target():
+    # the target name already exists as a local net → renaming would duplicate
+    # the declaration → fail-safe: no rename, byte-identical.
+    rtl = ("module m(input clk, output w);\n  wire w_out;\n"
+           "  assign w_out = clk;\n  assign w = w_out;\nendmodule\n")
+    out, ren = G.maybe_align_tb_ports(rtl, "m", {"clk", "w_out"})
+    assert ren == {} and out == rtl
+
+
+def test_tbalign_noop_when_no_gap():
+    out, ren = G.maybe_align_tb_ports(
+        _TBALIGN_RTL, "adder", {"clk", "a", "b", "w"})
+    assert ren == {} and out == _TBALIGN_RTL             # byte-identical
+
+
+def test_tbalign_noop_when_no_harness_top_or_no_match():
+    assert G.maybe_align_tb_ports(_TBALIGN_RTL, None, {"w_out"}) == (
+        _TBALIGN_RTL, {})
+    assert G.maybe_align_tb_ports(_TBALIGN_RTL, "nope", {"w_out"}) == (
+        _TBALIGN_RTL, {})
+    assert G.maybe_align_tb_ports(_TBALIGN_RTL, "adder", set()) == (
+        _TBALIGN_RTL, {})
+
+
+# ── PURE: harness-TB port loader (dut.<name> scan) ───────────────────────────
+def test_load_harness_tb_ports(tmp_path):
+    p = tmp_path / "ds.jsonl"
+    p.write_text(json.dumps({
+        "id": "x",
+        "harness": {"files": {
+            "src/.env": "TOPLEVEL=adder\n",
+            "src/test_x.py": ("import cocotb\n"
+                              "async def t(dut):\n"
+                              "    dut._log.info('hi')\n"   # cocotb internal
+                              "    dut.w_out.value = int(dut.a.value)\n"
+                              "    dut.b_out.value = 0\n")}}}) + "\n")
+    assert G._load_harness_tb_ports(str(p)) == {"x": {"a", "w_out", "b_out"}}
+    # a record with NO harness files yields nothing (local_export shape).
+    p2 = tmp_path / "ds2.jsonl"
+    p2.write_text(json.dumps({"id": "y", "prompt": "hi"}) + "\n")
+    assert G._load_harness_tb_ports(str(p2)) == {}
+
+
+# ── END-TO-END through main() (EDA-gated) ────────────────────────────────────
+_TBALIGN_PY = ("import cocotb\n"
+               "async def run(dut):\n"
+               "    dut._log.info('x')\n"
+               "    dut.clk.value = 0\n"
+               "    dut.a.value = 1\n"
+               "    _ = int(dut.w_out.value)\n"
+               "    _ = int(dut.b_out.value)\n")
+
+
+@pytest.mark.skipif(not _HAVE_EDA, reason="needs iverilog + yosys")
+def test_main_tbalign_renames_ports_to_tb_names(tmp_path):
+    # (a) end-to-end: authored ports w/b, the dataset's cocotb TB binds
+    # dut.w_out/dut.b_out → the EMITTED completion carries the TB names (so the
+    # scorer's TB binds), and the report records the interface renames.
+    rid = "cvdp_copilot_adder_0001"
+    batch = [{"id": rid, "completion": _TBALIGN_RTL}]
+    dataset = [{"id": rid, "harness": {"files": {
+        "src/.env": "TOPLEVEL=adder\n", "src/test_adder.py": _TBALIGN_PY}}}]
+    rc, emitted, report = _run_main(tmp_path, batch, dataset=dataset)
+    assert rc == 0
+    em = next(r for r in emitted if r.get("id") == rid)
+    assert "w_out" in em["completion"] and "b_out" in em["completion"]
+    assert "output reg [7:0] w_out" in em["completion"]
+    entry = next(e for e in report["records"] if e["id"] == rid)
+    assert entry.get("port_aligned") == {"b": "b_out", "w": "w_out"}
+
+
+@pytest.mark.skipif(not _HAVE_EDA, reason="needs iverilog + yosys")
+def test_main_tbalign_noop_no_synonym(tmp_path):
+    # (b) the TB binds a genuinely-extra port (no synonym) → NO rename; the
+    # completion is emitted unchanged and NOTHING is fabricated.
+    rid = "cvdp_copilot_adder_0002"
+    rtl = ("module adder(input clk, input [7:0] a, input [7:0] b,\n"
+           "             output reg [7:0] w_out);\n"
+           "  always @(posedge clk) w_out <= a + b;\nendmodule\n")
+    py = ("import cocotb\nasync def r(dut):\n    _ = dut.clk\n    _ = dut.a\n"
+          "    _ = dut.b\n    _ = int(dut.w_out.value)\n"
+          "    _ = int(dut.enable.value)\n")
+    batch = [{"id": rid, "completion": rtl}]
+    dataset = [{"id": rid, "harness": {"files": {
+        "src/.env": "TOPLEVEL=adder\n", "src/test_adder.py": py}}}]
+    rc, emitted, report = _run_main(tmp_path, batch, dataset=dataset)
+    assert rc == 0
+    em = next(r for r in emitted if r.get("id") == rid)
+    assert "enable" not in em["completion"]              # never fabricated
+    entry = next(e for e in report["records"] if e["id"] == rid)
+    assert "port_aligned" not in entry
+
+
+@pytest.mark.skipif(not _HAVE_EDA, reason="needs iverilog + yosys")
+def test_main_tbalign_noop_ambiguous(tmp_path):
+    # (c) two authored synonyms for one TB name → no rename; emitted unchanged.
+    rid = "cvdp_copilot_dbus_0001"
+    rtl = ("module dbus(input clk, output data, output data_o);\n"
+           "  assign data = clk;\n  assign data_o = ~clk;\nendmodule\n")
+    py = ("import cocotb\nasync def r(dut):\n    _ = dut.clk\n"
+          "    _ = int(dut.data_out.value)\n")
+    batch = [{"id": rid, "completion": rtl}]
+    dataset = [{"id": rid, "harness": {"files": {
+        "src/.env": "TOPLEVEL=dbus\n", "src/test_dbus.py": py}}}]
+    rc, emitted, report = _run_main(tmp_path, batch, dataset=dataset)
+    assert rc == 0
+    em = next(r for r in emitted if r.get("id") == rid)
+    assert "data_out" not in em["completion"]            # no fabricated rename
+    entry = next(e for e in report["records"] if e["id"] == rid)
+    assert "port_aligned" not in entry
