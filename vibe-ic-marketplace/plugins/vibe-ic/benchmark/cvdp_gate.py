@@ -1885,6 +1885,54 @@ def _load_context_available(path):
     return out
 
 
+# ── ORGANIC (GATE-AS-SOLE-EMIT) — TB-bound PORT NAMES from the harness files ───
+# The CVDP `.env` schema lists only TOPLEVEL / VERILOG_SOURCES / MODULE — it does
+# NOT enumerate the DUT ports. The authoritative SET of port names the hidden
+# cocotb TB binds is the `dut.<name>` accesses in its python testbench(es)
+# (`harness.files`'s `.py`). A leading-underscore attribute (`dut._log`,
+# `dut._id`, `dut._name`, …) is a cocotb internal, never a DUT port, so it is
+# excluded. Empty when the record carries no harness files (e.g. the documented
+# local_export prompts JSONL, which strips them) — so the downstream port
+# alignment is then a byte-for-byte NO-OP. chip-AGNOSTIC: pure `dut.<name>` scan.
+_DUT_ACCESS_RE = re.compile(r"\bdut\s*\.\s*([A-Za-z_]\w*)")
+
+
+def _load_harness_tb_ports(path):
+    """{id: set(port_names)} the hidden cocotb TB binds by name (`dut.<name>`),
+    parsed from each record's `harness.files` python testbench(es). Cocotb
+    internals (any `dut._*` attribute) are excluded. Empty when absent."""
+    out: Dict[str, set] = {}
+    p = Path(path)
+    if not p.is_file():
+        return out
+    for ln in p.read_text(errors="replace").splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            d = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        rid = d.get("id")
+        if rid is None:
+            continue
+        h = d.get("harness")
+        files = h.get("files") if isinstance(h, dict) else None
+        if not isinstance(files, dict):
+            continue
+        names: set = set()
+        for k, v in files.items():
+            if not (isinstance(k, str) and isinstance(v, str)
+                    and k.endswith(".py")):
+                continue
+            for nm in _DUT_ACCESS_RE.findall(v):
+                if not nm.startswith("_"):   # drop cocotb internals (dut._log …)
+                    names.add(nm)
+        if names:
+            out[str(rid)] = names
+    return out
+
+
 def _load_latency_specs(path):
     """ORGANIC #705 — return {id: spec} from a latency-spec JSONL.
 
@@ -2391,6 +2439,167 @@ def maybe_rename_top(completion, harness_top, mod_names_fn=None):
     return new
 
 
+# ── ORGANIC (GATE-AS-SOLE-EMIT) — TB-bound PORT-NAME alignment ────────────────
+# The hidden cocotb TB binds the top's ports BY NAME (`dut.w_out`, `dut.hours`,
+# `dut.TIMEOUT_LIMIT`). A blind author whose LOGIC is correct but who names the
+# SAME port `w` / `hour` / `timeout_limit` makes the TB AttributeError at the
+# first `dut.<name>` access → the whole problem fails on an interface-NAME gap,
+# not a logic gap. Aligning the authored top's port IDENTIFIER to the name the TB
+# binds is interface conformance — the SAME category as the module→TOPLEVEL
+# rename (maybe_rename_top) and the #711 renamed-interface relaxation; it never
+# reads the golden RTL, only the harness's OWN interface metadata (the TB's
+# `dut.<name>` accesses). CONSERVATIVE: a rename fires ONLY for an UNAMBIGUOUS
+# 1:1 synonym under the high-precision transforms below, and is a strict
+# byte-identical no-op for every record without an unambiguous gap.
+#
+# Allowed synonym transforms (high-precision, low-FP): a name decomposes into a
+# (core, direction-marker) pair; two names are synonyms iff their cores are equal
+# (after a case-fold + a conservative singular↔plural fold) AND their direction
+# markers are COMPATIBLE (at least one bare, or identical). This realizes exactly:
+#   • bare ↔ `_out`/`_in` suffix add/drop      (`w`↔`w_out`, `data`↔`data_out`)
+#   • `i_`/`o_` prefix ↔ `_i`/`_o` suffix ↔ bare, SAME direction
+#                                               (`i_data`↔`data_i`↔`data`)
+#   • singular ↔ plural                          (`hour`↔`hours`, `minute`↔…s)
+#   • case-only                                  (`timeout_limit`↔`TIMEOUT_LIMIT`)
+# and FORBIDS a direction FLIP (`data_in`↔`data_out` — two DISTINCT real ports).
+def _decompose_port(name):
+    """Return (core, dirmark) where dirmark ∈ {None,'in','out'} captures a single
+    leading `i_`/`o_` prefix OR a single trailing `_in`/`_out`/`_i`/`_o` suffix
+    (a prefix wins; a suffix is only read when there is no prefix). The core is
+    case-folded with at most one conservative trailing plural `s` removed (only
+    on a ≥5-char core whose final `s` is not part of a `…ss` word)."""
+    s = name
+    dirmark = None
+    low = s.lower()
+    if low.startswith("i_") and len(s) > 2:
+        dirmark, s = "in", s[2:]
+    elif low.startswith("o_") and len(s) > 2:
+        dirmark, s = "out", s[2:]
+    if dirmark is None:
+        for suf, dm in (("_out", "out"), ("_in", "in"), ("_o", "out"),
+                        ("_i", "in")):
+            if s.lower().endswith(suf) and len(s) > len(suf):
+                dirmark, s = dm, s[:-len(suf)]
+                break
+    core = s.lower()
+    if len(core) >= 5 and core.endswith("s") and not core.endswith("ss"):
+        core = core[:-1]
+    return core, dirmark
+
+
+def _ports_synonym(a, b):
+    """True when `a` and `b` are the SAME port under an ALLOWED name transform
+    (different spelling, identical interface meaning). A direction FLIP
+    (`x_in`↔`x_out`) is NOT a synonym — those are two distinct real ports."""
+    if a == b or not a or not b:
+        return False
+    ca, da = _decompose_port(a)
+    cb, db = _decompose_port(b)
+    if not ca or ca != cb:
+        return False
+    if da is not None and db is not None and da != db:
+        return False        # direction flip → distinct ports, never a synonym
+    return True
+
+
+def tb_port_alignment_renames(authored_ports, tb_names):
+    """{authored_name: tb_name} — the UNAMBIGUOUS port-name renames that align the
+    authored top to the names the hidden TB binds. A rename `a→t` is emitted ONLY
+    when ALL hold (the no-FP guards):
+      * `t` is a TB-bound name ABSENT from the authored ports (a real gap);
+      * `a` is an authored port the TB does NOT itself bind (no double-claim —
+        renaming a port the TB already reads would BREAK that binding);
+      * `a` and `t` are synonyms under an allowed transform (same width/direction
+        is implied — the rewrite changes only the identifier, and a direction
+        flip is never a synonym);
+      * `t` has EXACTLY ONE authored synonym candidate AND `a` maps to EXACTLY
+        ONE TB target (both-sides unambiguous — any 2-candidate ambiguity → skip).
+    Empty when there is no such unambiguous gap (the dominant case)."""
+    authored = list(dict.fromkeys(authored_ports))   # order-preserving unique
+    aset = set(authored)
+    tb = set(tb_names or ())
+    missing = [t for t in tb if t not in aset]
+    edges = []                                        # (authored a, tb-target t)
+    for t in missing:
+        for a in authored:
+            if a in tb:                # `a` is itself a TB binding → never reuse
+                continue
+            if _ports_synonym(a, t):
+                edges.append((a, t))
+    by_t: Dict[str, set] = {}
+    by_a: Dict[str, set] = {}
+    for a, t in edges:
+        by_t.setdefault(t, set()).add(a)
+        by_a.setdefault(a, set()).add(t)
+    return {a: t for a, t in edges
+            if len(by_t[t]) == 1 and len(by_a[a]) == 1}
+
+
+def _sub_identifier(text, old, new):
+    """Whole-word identifier substitution `old`→`new` everywhere in `text` that
+    is real code (NOT inside a // /* */ comment or a string literal — located on
+    the length-preserving `_mask_code` view, so mask offsets index the raw
+    bytes)."""
+    pat = re.compile(r"\b" + re.escape(old) + r"\b")
+    spans = [m.span() for m in pat.finditer(_mask_code(text))]
+    if not spans:
+        return text
+    chars = list(text)
+    for s, e in reversed(spans):
+        chars[s:e] = list(new)
+    return "".join(chars)
+
+
+def maybe_align_tb_ports(completion, harness_top, tb_names):
+    """Return (completion', renames). Rename the authored top's ports to the
+    names the hidden cocotb TB binds when an UNAMBIGUOUS synonym gap exists;
+    otherwise the completion UNCHANGED with an empty dict (a strict no-op —
+    additive). The substitution is SCOPED to the `module <harness_top> …
+    endmodule` block (the module the scorer's `iverilog -s <harness_top>` binds),
+    so a same-named net in a sibling submodule is never touched. Pure text
+    rewrite; reads only the TB's interface metadata, never the golden RTL."""
+    if not harness_top or not completion or not tb_names:
+        return completion, {}
+    code, kind = extract_code(completion)
+    if kind == "doc_only" or not code:
+        return completion, {}
+    try:
+        from cvdp_harness_toplevel_alias import author_top_and_ports
+    except Exception:                    # pragma: no cover - defensive
+        return completion, {}
+    # locate the harness-top module block in the (post-rename) completion; on a
+    # JSON-envelope / fenced completion the bare module text is what the mask
+    # exposes (a JSON-stringified blob is masked → no block → no-op, fail-safe).
+    mask = _mask_code(completion)
+    hdr = re.search(r"\bmodule\s+" + re.escape(harness_top) + r"\b", mask)
+    if not hdr:
+        return completion, {}            # top not present as a module → no-op
+    em = re.search(r"\bendmodule\b", mask[hdr.start():])
+    if not em:
+        return completion, {}
+    b0, b1 = hdr.start(), hdr.start() + em.end()
+    block = completion[b0:b1]
+    parsed = author_top_and_ports(block)
+    if not parsed:
+        return completion, {}            # non-ANSI header → cannot align safely
+    _name, ports, _decls, _param = parsed
+    renames = tb_port_alignment_renames(ports, tb_names)
+    if not renames:
+        return completion, {}
+    # collision guard: never rename TO a name already used as an identifier in
+    # the block (a local net / parameter / other port) — that would create a
+    # duplicate declaration; fail-safe = leave that one rename out.
+    blk_mask = _mask_code(block)
+    safe = {a: t for a, t in renames.items()
+            if not re.search(r"\b" + re.escape(t) + r"\b", blk_mask)}
+    if not safe:
+        return completion, {}
+    new_block = block
+    for a, t in safe.items():
+        new_block = _sub_identifier(new_block, a, t)
+    return completion[:b0] + new_block + completion[b1:], safe
+
+
 # ── ORGANIC (GATE-AS-SOLE-EMIT) — B1 PROMPT-EXAMPLE self-test (ADVISORY) ──────
 # prompt_example_selftest extracts the prompt's OWN worked examples (sequential /
 # table rows + arithmetic identities) and SIMULATES them against the authored
@@ -2678,6 +2887,18 @@ def main(argv=None) -> int:
                 _skel = skeleton_module_name_from_prompt(_prompt)
                 if _skel:
                     harness_tops[_rid] = _skel
+    # ORGANIC (GATE-AS-SOLE-EMIT) — per-id SET of port names the hidden cocotb TB
+    # binds (`dut.<name>` in harness.files's python testbench). Used by the
+    # interface-conformance port-name alignment (maybe_align_tb_ports) BELOW: an
+    # authored port whose name differs from the TB binding by an UNAMBIGUOUS
+    # synonym is renamed to the TB name so the TB does not AttributeError on a
+    # logic-correct design. Empty when no record carries harness files (the
+    # alignment is then a byte-for-byte NO-OP). Unioned over both sources.
+    harness_tb_ports: Dict[str, set] = {}
+    for _tb_src in (args.dataset, args.prompts):
+        if _tb_src:
+            for _rid, _names in _load_harness_tb_ports(_tb_src).items():
+                harness_tb_ports.setdefault(_rid, set()).update(_names)
     # ORGANIC #734 — if the operator passed --dataset specifically to re-enable
     # the #715 protection but it yields NO input.context for any id (a wrong file
     # / typo'd path / non-CVDP JSONL), the protection silently stays inactive.
@@ -2740,6 +2961,20 @@ def main(argv=None) -> int:
                                         completion_module_names)
             if _renamed != rec.get("completion", ""):
                 rec = {**rec, "completion": _renamed}
+            # ORGANIC (GATE-AS-SOLE-EMIT) — TB-bound PORT-NAME alignment. After
+            # the module NAME is aligned to the harness TOPLEVEL above, align the
+            # top's PORT names to the names the hidden cocotb TB binds
+            # (`dut.<name>`) when an UNAMBIGUOUS synonym gap exists (`w`→`w_out`,
+            # `hour`→`hours`, `timeout_limit`→`TIMEOUT_LIMIT`). Interface
+            # conformance, NOT a logic change. Strict no-op when there is no
+            # harness top, no TB port set, or no unambiguous synonym for this id.
+            _port_renames: Dict[str, str] = {}
+            if harness_tops.get(_rid0) and harness_tb_ports.get(_rid0):
+                _aligned, _port_renames = maybe_align_tb_ports(
+                    rec.get("completion", ""), harness_tops.get(_rid0),
+                    harness_tb_ports.get(_rid0))
+                if _port_renames:
+                    rec = {**rec, "completion": _aligned}
             # ORGANIC #680 — pass this id's prompt so gate_record can mirror
             # determine_schema's single-vs-multi signal when normalizing a
             # JSON code-dict emit (single-file → bare RTL, multi-file → JSON).
@@ -2747,6 +2982,9 @@ def main(argv=None) -> int:
                 rec, wd, prompt_text=prompts.get(str(rec.get("id"))),
                 synth_scored=synth_scored_map.get(str(rec.get("id"))),
                 expected_files=expected_files_map.get(str(rec.get("id"))))
+            if _port_renames:
+                # record the interface-conformance port renames in the report.
+                entry["port_aligned"] = dict(_port_renames)
             # ORGANIC #559 — filename/module-name conformance (only when a
             # prompt for this id states a required rtl/<name>.sv). The
             # harness builds TOPLEVEL from the file layout, so a completion
