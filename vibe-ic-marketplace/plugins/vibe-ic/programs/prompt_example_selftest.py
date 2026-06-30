@@ -29,9 +29,16 @@ CONSERVATISM (HARD — a false BLOCK on a misparsed example is worse than a SKIP
   * "Observed"/"Actual"/"Got"/"Buggy" table columns carry the WRONG value — they
     are dropped; only "Expected"/"Golden"/"Correct" (or unmarked) output columns
     are asserted.
-  * A table is only run when EVERY module input is driven (a table column, or a
-    clk/reset/enable we handle); if any module input is unlisted the output may
-    depend on it -> SKIP (never mis-drive).
+  * A table is only run when EVERY module input is driven (a table column, a
+    clk/reset/enable we handle, or a prose-stated CONSTANT mapped by exact port
+    name); if any module input is unlisted the output may depend on it -> SKIP.
+  * A column / example value is read in its column's base — bare hex (`A1B2C3D4`)
+    and zero-padded binary (`0011` BCD) are detected so they are NOT misread as
+    decimal; the prompt's STATED value is asserted, never recomputed.
+  * If a mapped port has a PARAMETER-derived width, the example may assume
+    non-default parameters (we instantiate with defaults) -> SKIP, never block.
+  * A clocked arithmetic example with an un-timed start/valid handshake whose
+    pulse we cannot reproduce -> SKIP.
   * A sparse / non-consecutive cycle column (10,20,30) cannot be reproduced cycle
     by cycle -> SKIP.
   * Ambiguous sampling timing / reset polarity -> try the small set of canonical
@@ -71,23 +78,63 @@ except ImportError:  # packaged
 # ---------------------------------------------------------------------------
 # A clock input (drives the sequential TB).
 _CLK_NAMES = re.compile(r"^(?:clk|clock|clki|iclk|clkin|clk_in|sysclk)$", re.I)
-# A reset input (handled by the reset sequence, not a data column).
-_RST_NAMES = re.compile(r"^(?:rst|reset|rstn|resetn|rst_n|reset_n|nrst|clr|"
-                        r"clear|por|arst|arstn|sync_rst)$", re.I)
+# A reset input (handled by the reset sequence, not a data column). General
+# naming: an optional a/n/async/sync prefix, the rst|reset core, an optional
+# async/sync infix, and an optional active-low _n/_b suffix — so rst_async_n,
+# rst_sync_n, async_rst_n, resetb, arst_n, ... all read as the reset (anchored,
+# so a data port like `reset_value`, `first`, or `burst` never matches).
+_RST_NAMES = re.compile(
+    r"^(?:"
+    r"(?:a|n|async_?|sync_?)?(?:rst|reset)(?:_?(?:async|sync))?(?:_?[nb])?"
+    r"|nrst|nreset|arst|arstn"
+    r"|clr|clear|por"
+    r")$", re.I)
 # Enable-type inputs default to ASSERTED (1) when a table does not list them
 # (the universal "the module is enabled" reading). 'start'/'valid' are NOT here:
 # their timing matters, so an unlisted one forces a SKIP.
 _ENABLE_NAMES = re.compile(r"^(?:en|ena|enable|ce|clken|clk_en|clock_enable|"
                            r"i_enable|en_in)$", re.I)
-# Control inputs excluded from the arithmetic "data operand" count (so a 2-input
-# adder maps cleanly; a `mode`/`sel`/`op` input is NOT here -> it stays counted,
-# the operand count != 2, and we SKIP rather than guess the mode).
-_CTRL_INPUT = re.compile(r"^(?:clk|clock|clki|iclk|clkin|clk_in|sysclk|"
-                         r"rst|reset|rstn|resetn|rst_n|reset_n|nrst|clr|clear|"
-                         r"por|arst|arstn|sync_rst|"
-                         r"en|ena|enable|ce|clken|clk_en|clock_enable|i_enable|"
-                         r"en_in|start|i_start|valid|ready|load|go|ack|stb|"
-                         r"strobe)$", re.I)
+# Trigger / handshake inputs whose TIMING matters (a start pulse, a valid beat,
+# a load strobe). When a CLOCKED design exposes one of these and the example is
+# an arithmetic / named line (NOT a per-cycle table), we cannot know when to
+# pulse it -> SKIP rather than mis-drive. In a cycle TABLE these are listed with
+# explicit per-cycle values, so they ARE driven there.
+_TRIGGER_NAMES = re.compile(
+    r"^(?:start|valid|ready|load|go|ack|req|stb|strobe|begin|launch|trigger|"
+    r"kick|fire|wr|rd|write|read|push|pop|sample|capture|shift)$", re.I)
+
+
+def _strip_io_prefix(name: str) -> str:
+    """Drop a conventional i_/o_/in_/out_ direction prefix for role matching."""
+    return re.sub(r"^(?:i|o|in|out)_", "", name, flags=re.I)
+
+
+def _role_match(rx: "re.Pattern", name: str) -> bool:
+    return bool(rx.match(name) or rx.match(_strip_io_prefix(name)))
+
+
+def _is_clk(name: str) -> bool:
+    return _role_match(_CLK_NAMES, name)
+
+
+def _is_rst(name: str) -> bool:
+    return _role_match(_RST_NAMES, name)
+
+
+def _is_enable(name: str) -> bool:
+    return _role_match(_ENABLE_NAMES, name)
+
+
+def _is_trigger(name: str) -> bool:
+    return _role_match(_TRIGGER_NAMES, name)
+
+
+def _is_ctrl_input(name: str) -> bool:
+    """Control inputs excluded from the arithmetic "data operand" count (so a
+    2-input adder maps cleanly; a `mode`/`sel`/`op` input is NOT control -> it
+    stays counted, the operand count != 2, and we SKIP rather than guess)."""
+    return (_is_clk(name) or _is_rst(name) or _is_enable(name)
+            or _is_trigger(name))
 # Status / handshake outputs excluded from the arithmetic "data result" count.
 _STATUS_OUTPUT = re.compile(r"^(?:valid|ready|done|busy|ack|error|err|o_ready|"
                             r"o_valid|o_done|empty|full)$", re.I)
@@ -151,14 +198,28 @@ def _lit_to_int(tok: str) -> Optional[int]:
     return -val if neg else val
 
 
-def _cell_value(cell: str):
+_BARE_HEX_RE = re.compile(r"[0-9a-fA-F][0-9a-fA-F_]*$")
+
+
+def _cell_value(cell: str, base: str = "dec"):
     """A table cell -> int (the single distinct literal), 'DONTCARE', or None.
 
     A cell with prose AND one literal ("Updated (0x02)") yields that literal.
-    A cell with two DIFFERENT literals is ambiguous -> None (drop)."""
+    A cell with two DIFFERENT literals is ambiguous -> None (drop).
+
+    `base` is the COLUMN base inferred by `_column_base`: 'hex' reads a bare
+    all-hex-digit token base-16 (so `FFFFFFFE`/`A1B2C3D4`/`00000000` are
+    consistent); 'bin' reads a bare 0/1 token base-2 (so a `0011`/`1100` BCD
+    column is 3/12, not decimal 11/1100). Cells that already self-declare a base
+    (0x.., 0b.., N'h..) are untouched."""
     s = cell.strip()
     if not s or _DONTCARE.match(s):
         return "DONTCARE"
+    if not re.search(r"0[xXbB]|'", s):
+        if base == "hex" and _BARE_HEX_RE.fullmatch(s):
+            return _lit_to_int("0x" + s.replace("_", ""))
+        if base == "bin" and re.fullmatch(r"[01][01_]*", s):
+            return _lit_to_int("0b" + s.replace("_", ""))
     vals = []
     for m in _LIT_RE.finditer(s):
         v = _lit_to_int(m.group(0))
@@ -168,6 +229,42 @@ def _cell_value(cell: str):
     if len(distinct) == 1:
         return vals[0]
     return None
+
+
+def _column_base(cells: List[str], width: int) -> str:
+    """Infer a table column's numeric base from its cells -> 'hex'|'bin'|'dec'.
+
+    HEX  : a bare token carries an a-f/A-F digit (e.g. `A1B2C3D4`).
+    BIN  : every bare cell is 0/1-only AND looks like fixed-width binary — either
+           each cell has exactly `width` digits, or some cell would OVERFLOW the
+           port read as decimal while ALL fit read as binary (`1000` on a 4-bit
+           port is binary 8, never decimal 1000).
+    DEC  : otherwise (plain decimal).
+    Self-declared (0x../0b../N'h..) and prose cells are ignored for the vote."""
+    bare: List[str] = []
+    has_letter = False
+    for c in cells:
+        s = c.strip()
+        if not s or _DONTCARE.match(s):
+            continue
+        if re.search(r"0[xXbB]|'", s):
+            continue  # self-declared base — parsed directly, no hint needed
+        if not _BARE_HEX_RE.fullmatch(s):
+            continue  # prose / non-numeric — let _LIT_RE handle it
+        bare.append(s.replace("_", ""))
+        if re.search(r"[a-fA-F]", s):
+            has_letter = True
+    if not bare:
+        return "dec"
+    if has_letter:
+        return "hex"
+    if width and width > 1 and all(re.fullmatch(r"[01]+", s) for s in bare):
+        cap = (1 << width) - 1
+        looks_bin = (all(len(s) == width for s in bare)
+                     or any(int(s, 10) > cap for s in bare))
+        if looks_bin and all(int(s, 2) <= cap for s in bare):
+            return "bin"
+    return "dec"
 
 
 # ---------------------------------------------------------------------------
@@ -180,10 +277,20 @@ class PortModel:
     wide_unknown: bool    # range was a non-literal expression (param) -> wide
 
 
+def _strip_comments(t: str) -> str:
+    """Drop // line and /* */ block comments so a phrase like `module name` in a
+    header comment cannot be mis-read as the module declaration (it would make
+    the TB instantiate a non-existent module and SKIP on a compile error)."""
+    t = re.sub(r"/\*.*?\*/", "", t, flags=re.S)
+    t = re.sub(r"//[^\n]*", "", t)
+    return t
+
+
 def _build_port_models(rtl_text: str, top: Optional[str]
                        ) -> Tuple[str, List[PortModel], List[PortModel]]:
     """(module_name, inputs, outputs).  wide_unknown flags a parameterized range
     so the comparison width is not truncated below the value's own bit-length."""
+    rtl_text = _strip_comments(rtl_text)
     name, ports = _SRC.parse_rtl_ports(rtl_text, top)
     ins: List[PortModel] = []
     outs: List[PortModel] = []
@@ -279,6 +386,14 @@ def _map_columns(header: List[str],
         ip = _header_token_port(cell, in_by_norm)
         op = _header_token_port(cell, out_by_norm)
         if ip is not None and op is None:
+            if _is_clk(ip):
+                # A column that maps to the clock port is a clock-EDGE indicator
+                # ("Rising"/"Falling"/"posedge"), not a driven data column — the
+                # TB supplies the clock. Ignore it (and let it serve as the
+                # implicit time index).
+                if cycle_col is None:
+                    cycle_col = i
+                continue
             if ip in in_cols.values():
                 return None  # same input port mapped twice -> ambiguous
             in_cols[i] = ip
@@ -313,17 +428,21 @@ def _map_columns(header: List[str],
 
 def extract_table_vectors(text: str,
                           ins: List[PortModel],
-                          outs: List[PortModel]
+                          outs: List[PortModel],
+                          consts: Optional[Dict[str, int]] = None
                           ) -> Tuple[List[Vector], List[str]]:
     """Extract cycle/Observed-Expected table vectors. Returns (vectors, skips)
     where `skips` records why a candidate table was rejected (for the report).
-    Conservative — see module docstring."""
+    `consts` are prose-stated constant inputs that satisfy an otherwise-unlisted
+    column and are driven (held) on every row. Conservative — see module
+    docstring."""
+    consts = consts or {}
     in_by_norm = {_norm(p.name): p.name for p in ins}
     out_by_norm = {_norm(p.name): p.name for p in outs}
     data_in_names = {p.name for p in ins
-                     if not _CLK_NAMES.match(p.name)
-                     and not _RST_NAMES.match(p.name)
-                     and not _ENABLE_NAMES.match(p.name)}
+                     if not _is_clk(p.name)
+                     and not _is_rst(p.name)
+                     and not _is_enable(p.name)}
     skips: List[str] = []
     for tbl in _find_tables(text):
         rows = [r for r in tbl if not _is_sep_row(r)]
@@ -335,12 +454,14 @@ def extract_table_vectors(text: str,
             continue
         ncol = len(header)
         # GUARD: every data-bearing module input must be a driven table column
-        # (else the listed output may depend on an unlisted input -> mis-drive).
-        listed = set(cmap.in_cols.values())
+        # OR a prose-stated constant (else the listed output may depend on an
+        # unlisted input -> mis-drive).
+        listed = set(cmap.in_cols.values()) | set(consts)
         missing = data_in_names - listed
         if missing:
             skips.append(f"table skipped: module input(s) {sorted(missing)} "
-                         "not in the table (output may depend on them)")
+                         "not in the table and not a stated constant (output may "
+                         "depend on them)")
             continue
         # GUARD: a cycle column, if present, must be consecutive (step 1) so we
         # can reproduce it cycle-by-cycle.
@@ -361,9 +482,22 @@ def extract_table_vectors(text: str,
                                  "consecutive (cannot reproduce intervening "
                                  "cycles)")
                     continue
+        # Per-column base detection (hex / binary / decimal), width-aware so a
+        # bare `0011` BCD column reads binary and a bare `A1B2C3D4` column reads
+        # hex — consistently for every cell in that column.
+        pwidth = {}
+        for ci, pn in cmap.in_cols.items():
+            pwidth[ci] = next((p.width for p in ins if p.name == pn), 1)
+        for ci, pn in cmap.out_cols.items():
+            pwidth[ci] = next((p.width for p in outs if p.name == pn), 1)
+        col_base = {ci: _column_base([r[ci] for r in data if ci < len(r)],
+                                     pwidth.get(ci, 1))
+                    for ci in list(cmap.in_cols) + list(cmap.out_cols)}
         # Build vectors with hold-last input semantics (waveform convention:
-        # only changed signals are re-listed each row).
-        held: Dict[str, int] = {}
+        # only changed signals are re-listed each row). Stated constants are
+        # held on every row (a table column for the same port still overrides).
+        held: Dict[str, int] = {n: v for n, v in consts.items()
+                                if n in data_in_names}
         vectors: List[Vector] = []
         bad = False
         for r in data:
@@ -374,7 +508,7 @@ def extract_table_vectors(text: str,
                     r = r + [""] * (ncol - len(r))
             # update held inputs
             for ci, pname in cmap.in_cols.items():
-                cv = _cell_value(r[ci]) if ci < len(r) else None
+                cv = _cell_value(r[ci], col_base.get(ci, "dec")) if ci < len(r) else None
                 if cv == "DONTCARE":
                     continue  # keep previous held value
                 if cv is None:
@@ -385,7 +519,7 @@ def extract_table_vectors(text: str,
                 break
             exp: Dict[str, int] = {}
             for ci, pname in cmap.out_cols.items():
-                cv = _cell_value(r[ci]) if ci < len(r) else None
+                cv = _cell_value(r[ci], col_base.get(ci, "dec")) if ci < len(r) else None
                 if cv == "DONTCARE" or cv is None:
                     continue  # nothing asserted this row for this output
                 exp[pname] = cv
@@ -450,8 +584,50 @@ _NAMED_ASSIGN = re.compile(
     r"|0[bB][01_]+|\d[\d_]*))")
 
 
+# A single numeric literal (sub-pattern, for embedding in larger regexes).
+_LIT_PAT = (r"[+-]?(?:\d*\s*'\s*[sS]?[bodhBODH][0-9a-fA-FxXzZ_]+"
+            r"|0[xX][0-9a-fA-F_]+|0[bB][01_]+|\d[\d_]*)")
+# Prose verbs that pin a signal to a CONSTANT for the whole example. We require
+# an explicit "fixed/constant/held/tied/set/configured" word so an ordinary
+# example operand assignment ("a = 3") is NOT mistaken for a held constant.
+_CONST_VERB = (r"(?:is|are|was|were|be|=|:)?\s*"
+               r"(?:fixed(?:\s+(?:at|to|as))?|set\s+to|configured\s+(?:to|as)|"
+               r"held\s+(?:at|to)|tied\s+(?:to|high|low)|kept\s+(?:at|constant)|"
+               r"constant(?:\s+(?:at|value\s+of|of))?|hardcoded\s+to|preset\s+to|"
+               r"programmed\s+to|initiali[sz]ed\s+to|driven\s+(?:to|with)|"
+               r"remains?\s+(?:at|fixed\s+at))")
+_STATED_CONST_RE = re.compile(
+    _CONST_VERB + r"\s+(?P<val>" + _LIT_PAT + r")", re.I)
+
+
+def extract_stated_constants(text: str,
+                             ins: List["PortModel"]) -> Dict[str, int]:
+    """Inputs the prose pins to a constant for the WHOLE example
+    ('`i_cfg` is fixed at 3', 'the mode set to 2', 'enable tied high').
+
+    The value is mapped to a port ONLY by an EXACT (normalized) port-name token
+    appearing in the same sentence before the verb. No fuzzy / descriptor match —
+    a wrongly-mapped constant would false-block a correct design, which is worse
+    than a SKIP. Returns {port_name: value}."""
+    consts: Dict[str, int] = {}
+    by_norm = {_norm(p.name): p for p in ins}
+    for sent in re.split(r"(?<=[.\n])", text):
+        for m in _STATED_CONST_RE.finditer(sent):
+            val = _lit_to_int(m.group("val"))
+            if val is None:
+                continue
+            pre = sent[:m.start()]
+            # nearest port-name token to the verb wins (handles "the KEY is ...")
+            for tok in reversed(re.findall(r"[A-Za-z_]\w*", pre)):
+                p = by_norm.get(_norm(tok))
+                if p is not None:
+                    consts.setdefault(p.name, val)
+                    break
+    return consts
+
+
 def _data_ports(ins, outs):
-    di = [p for p in ins if not _CTRL_INPUT.match(p.name)]
+    di = [p for p in ins if not _is_ctrl_input(p.name)]
     do = [p for p in outs if not _STATUS_OUTPUT.match(p.name)]
     return di, do
 
@@ -467,13 +643,21 @@ def _match_named_output(port_names: List[str], *keys: str) -> Optional[str]:
 
 def extract_arith_vectors(text: str,
                           ins: List[PortModel],
-                          outs: List[PortModel]
+                          outs: List[PortModel],
+                          consts: Optional[Dict[str, int]] = None
                           ) -> Tuple[List[Vector], List[str], bool]:
     """Worked-arithmetic + inline named examples -> vectors.
     Returns (vectors, skips, needs_ordering_sweep). The bool requests a try-both-
     operand-orderings sweep for an unnamed, non-commutative op (so a correct
-    `b-a`-ordered design is never false-blocked)."""
+    `b-a`-ordered design is never false-blocked). `consts` are prose-stated
+    constant inputs (e.g. a key / config operand) that are driven alongside the
+    two arithmetic operands and DO NOT count toward the 2-operand shape."""
+    consts = consts or {}
     di, do = _data_ports(ins, outs)
+    # A stated-constant input is a configured operand, not one of the two
+    # arithmetic operands — exclude it from the operand count so a `c = a op b`
+    # design with an extra fixed config/key input still maps cleanly.
+    di = [p for p in di if p.name not in consts]
     skips: List[str] = []
     needs_sweep = False
     out_names = [p.name for p in do]
@@ -503,6 +687,8 @@ def extract_arith_vectors(text: str,
             if p is not None and v is not None:
                 out_vals[p] = v
         if in_vals and out_vals:
+            for k, v in consts.items():
+                in_vals.setdefault(k, v)
             label = (", ".join(f"{k}={in_vals[k]}" for k in sorted(in_vals))
                      + " -> "
                      + ", ".join(f"{k}={out_vals[k]}" for k in sorted(out_vals)))
@@ -526,6 +712,8 @@ def extract_arith_vectors(text: str,
             else:
                 in_vals = {di[0].name: a, di[1].name: b}
                 needs_sweep = True
+            for k, v in consts.items():
+                in_vals.setdefault(k, v)
             label = f"{a} / {b} -> quotient {q}, remainder {r}"
             return ([Vector(in_vals, {qp: q, rp: r}, label)],
                     skips, needs_sweep)
@@ -546,6 +734,8 @@ def extract_arith_vectors(text: str,
                          "output(s), not 2->1 -> skipped (ambiguous mapping)")
             continue
         in_vals = {di[0].name: a, di[1].name: b}
+        for k, v in consts.items():
+            in_vals.setdefault(k, v)
         if op not in _OPS_COMMUTATIVE:
             needs_sweep = True
         label = f"{a} {m.group('op')} {b} -> {do[0].name}={c}"
@@ -632,7 +822,7 @@ def build_comb_tb(top: str, vectors: List[Vector],
         for p in all_inputs:
             if p.name in v.inputs:
                 L.append(f"    {p.name} = {v.inputs[p.name]};")
-            elif _ENABLE_NAMES.match(p.name):
+            elif _is_enable(p.name):
                 L.append(f"    {p.name} = 1;")
             else:
                 L.append(f"    {p.name} = 0;")
@@ -685,7 +875,7 @@ def build_clocked_tb(top: str, vectors: List[Vector],
         if rst is not None and p.name == rst:
             assert_val = 0 if rst_active_low else 1
             L.append(f"    {p.name} = {assert_val};")
-        elif _ENABLE_NAMES.match(p.name):
+        elif _is_enable(p.name):
             L.append(f"    {p.name} = 1;")
         else:
             L.append(f"    {p.name} = 0;")
@@ -699,7 +889,7 @@ def build_clocked_tb(top: str, vectors: List[Vector],
         for nm, val in v.inputs.items():
             L.append(f"    {nm} = {val};")
         for p in all_inputs:
-            if _ENABLE_NAMES.match(p.name) and p.name not in v.inputs:
+            if _is_enable(p.name) and p.name not in v.inputs:
                 L.append(f"    {p.name} = 1;")
         if sample_after_edge:
             L.append(f"    @(posedge {clk}); #1;")
@@ -787,15 +977,16 @@ def run_selftest(prompt_text: str, rtl_source: str,
     out_pm = {p.name: p for p in outs}
 
     # ---- extract ----
+    consts = extract_stated_constants(prompt_text, ins)
     shape = "none"
-    vectors, t_skips = extract_table_vectors(prompt_text, ins, outs)
+    vectors, t_skips = extract_table_vectors(prompt_text, ins, outs, consts)
     a_skips: List[str] = []
     needs_sweep = False
     if vectors:
         shape = "table"
     else:
         vectors, a_skips, needs_sweep = extract_arith_vectors(
-            prompt_text, ins, outs)
+            prompt_text, ins, outs, consts)
         if vectors:
             shape = "arithmetic"
     skips = t_skips + a_skips
@@ -807,6 +998,27 @@ def run_selftest(prompt_text: str, rtl_source: str,
             "vector in the prompt — nothing to execute",
             shape="none", skips=skips)
 
+    # GUARD (PARAMETER MISMATCH): a cycle table / example is authored for a
+    # SPECIFIC parameterization, and the table's stated widths encode it. We
+    # instantiate the module with its DEFAULT parameters, so if any mapped port
+    # has a parameter-derived (non-literal) width the example may have been
+    # generated for different parameters — running with defaults would
+    # false-block a correct design. SKIP (advisory) rather than risk it.
+    mapped = {p for v in vectors for p in v.inputs} | \
+             {p for v in vectors for p in v.expected}
+    param_ports = sorted(
+        n for n in mapped
+        if (in_pm.get(n) or out_pm.get(n)) is not None
+        and (in_pm.get(n) or out_pm.get(n)).wide_unknown)
+    if param_ports:
+        return SelfTestResult(
+            "SKIP",
+            f"example maps to parameter-width port(s) {param_ports} — the "
+            "example may assume non-default parameters; running with defaults "
+            "could false-block, so SKIP (advisory)",
+            shape=shape, vectors=len(vectors), skips=skips,
+            extracted=[v.label for v in vectors])
+
     extracted = [v.label for v in vectors]
 
     if shutil.which("iverilog") is None or shutil.which("vvp") is None:
@@ -815,8 +1027,8 @@ def run_selftest(prompt_text: str, rtl_source: str,
             "extractable)", shape=shape, vectors=len(vectors),
             skips=skips, extracted=extracted)
 
-    clk = next((p.name for p in ins if _CLK_NAMES.match(p.name)), None)
-    rst = next((p.name for p in ins if _RST_NAMES.match(p.name)), None)
+    clk = next((p.name for p in ins if _is_clk(p.name)), None)
+    rst = next((p.name for p in ins if _is_rst(p.name)), None)
     rtl_suffix = ".sv" if re.search(r"\blogic\b|always_ff|always_comb|::",
                                     rtl_source) else ".v"
 
@@ -835,9 +1047,25 @@ def run_selftest(prompt_text: str, rtl_source: str,
             rtl_source, rtl_suffix, shape, len(vectors), extracted, skips, warn)
 
     # clocked
+    # GUARD (UNTIMED TRIGGER): a single arithmetic / named example gives no
+    # per-cycle timing. If the CLOCKED design has a start/valid/load handshake
+    # whose pulse timing we cannot infer, driving it statically would never fire
+    # the operation -> false-block. SKIP. (A cycle TABLE lists the trigger per
+    # cycle, so it is exempt from this guard.)
+    if shape == "arithmetic":
+        trig = next((p.name for p in ins if _is_trigger(p.name)), None)
+        if trig is not None:
+            return SelfTestResult(
+                "SKIP", f"worked-arithmetic example on a CLOCKED design with a "
+                f"handshake input `{trig}` whose pulse timing is not stated — "
+                "cannot reproduce the protocol -> skip", shape=shape,
+                vectors=len(vectors), skips=skips, extracted=extracted)
     if shape == "arithmetic" and latency is None:
-        m = re.search(r"latency\s+of\s+(\d+)|(\d+)[- ]cycle\s+latency|"
-                      r"after\s+(\d+)\s+(?:clock\s+)?cycles", prompt_text, re.I)
+        m = re.search(r"latency\s+(?:of|is|=|:)\s*(\d+)|(\d+)[- ]cycle\s+latency|"
+                      r"after\s+(\d+)\s+(?:clock\s+)?cycles|"
+                      r"(\d+)\s+(?:clock\s+)?cycles?\s+after|"
+                      r"total\s+latency\s*(?:=|is|of|:)\s*(\d+)",
+                      prompt_text, re.I)
         if m:
             latency = int(next(g for g in m.groups() if g))
     if shape == "arithmetic" and latency is None:
