@@ -2470,3 +2470,188 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP Tier-3 hard-tier lif
 **Why this is GENERAL**: assigning each block to the clock the spec names for it, and synchronizing the crossings, is baseline multi-clock discipline applicable to any bridge with named per-side clocks. *why_not_bucket_a*: a program can count clock inputs but cannot decide WHICH logic belongs to WHICH clock — the binding lives only in the prose description of each clock ("this clock is for that side"), so partitioning the design across the named clocks requires reading and matching those sentences, a semantic judgment, not a structural rule.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP Tier-3 hard-tier lift)._
+
+<!-- NEW ic-expert-agent skill sections distilled from the 39 class-A TB-diff clues.
+     12 NEW sections. 9 of 39 clues were DEDUPED against existing sections (see report).
+     Append these to vibe-ic-marketplace/plugins/vibe-ic/agents/ic-expert-agent.md
+     after the last '### Skill:' section. SCRATCH ONLY — not committed here. -->
+
+### Skill: the interface table is NOT exhaustive — harvest every prose-named "should be added" signal as a port, and preserve every declared identifier, enum code, and instance name VERBATIM
+
+**Pattern**: A white-box verification TB binds the design by EXACT name at every level — top ports, internal nets, FSM state codes, sub-instance paths. Two reading obligations follow. (1) The port/interface table is only a STARTING point: when prose enumerates named signals that "should be added" / "additionally expose" / "the following ports are required", every such name is a mandatory port even though it never appears in the table — an interface table stops being exhaustive the moment prose adds to it. (2) Every identifier the prompt SPELLS — a declared internal signal in a code skeleton, a fixed FSM enum encoding (`IDLE=3'b000, ANALYZE=3'b001, …`), a given sub-module instance name, an internal storage array — must be reproduced character-for-character, because the TB probes `dut.<that_name>` / `dut.<inst>.<array>[i]` and may assert the exact enum codes (or full state-coverage of the given encoding). When the prompt lists special registers against an address space without explicit offsets, map them in LISTED order (first-named → lowest address) and fire any side-effect "valid" flag on the specific register write the prose ties it to.
+
+**When to apply**: any task whose prompt (a) names extra signals in prose beyond the port table, (b) supplies a code skeleton with declared internals / a fixed enum, (c) gives a design hierarchy or instance names, or (d) provides a memory/register CONTENTS table — i.e. almost every white-box completion task. Unless the prompt states its table is the complete and final interface.
+
+**What to do**: read ports from the PROSE as well as the table and declare each prose-added signal with the module's naming convention; transcribe declared internal identifiers, enum numeric codes, and instance names verbatim and keep internals as observable NETS (do not repurpose them as instance labels); name an internal storage array with a conventional `ram`/`mem` identifier so a hierarchical white-box peek resolves; map listed special registers in listed order.
+
+**Why this is GENERAL**: binding a verification environment to a design by name is universal — a renamed net, a re-encoded state, or a dropped prose-added port is a real observability/interop defect against any white-box check, not a benchmark quirk. *why_not_bucket_a*: a program can DIFF names but cannot decide that a prose sentence ADDS a required port, that a spelled enum code is load-bearing, or that an internal array will be peeked by hierarchical path — recognizing which identifiers the TB will bind to is a reading judgment of the prompt's intent. (Reinforces and extends the white-box-internal-NETS and TOPLEVEL/port-binding skills to prose-added ports + enum codes + instance names.)
+
+_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
+
+### Skill: when the worked example's OUTPUT ≠ the naive function of its INPUT, an indirection is implied — reverse-engineer it from the numbers
+
+**Pattern**: When a prompt's worked example gives input operands and an expected output that does NOT equal the straightforward function of those operands, the inputs are not feeding the datapath directly — an intermediate transformation is implied (the operands are ADDRESSES/INDICES into a pre-loaded table, a fixed base/offset is added, a lookup sits in the path). A seasoned reader treats the unreconcilable numbers as a clue and solves for the hidden mapping rather than assuming the spec is wrong. A companion tell: a CONTENTS table whose addresses advance by a fixed stride pins the burst/element size — the per-beat address delta IS the element width / address-increment, and the data column gives the pre-load pattern (e.g. `mem[i] = i + base`).
+
+**When to apply**: any block with an embedded numeric example where `expected_out != f(example_in)` under the obvious datapath, especially when the prompt ALSO supplies a memory/register contents table or mentions reading "based on the provided addresses". Unless the example reconciles directly with the named operation.
+
+**What to do**: hand-derive what transformation makes the example's output fall out (table lookup, index→content, base offset), bake that indirection into both the reference model and the RTL, and pin the burst/element stride from consecutive address deltas in the contents table; then re-derive the example to confirm an exact match before emitting.
+
+**Why this is GENERAL**: cross-checking against a worked example and inferring an implied lookup when the arithmetic doesn't close is basic spec-comprehension plus datapath reasoning — not a memorized answer. *why_not_bucket_a*: a program cannot notice that `output != naive(input)` implies a hidden indirection, nor reverse-engineer WHICH table/offset reconciles the numbers — that is numeric detective work and semantic inference over the example, beyond any structural check. (Complements the worked-example-is-ground-truth skill — here the example reveals a missing indirection rather than a field convention.)
+
+_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
+
+### Skill: for every named *_valid / status flag, author BOTH polarities — the =0 idle/reset/ack/spurious cases are checked too
+
+**Pattern**: A flag specified only in the positive ("`x_valid` is asserted when a valid request is ready for servicing") carries an equally-checked negative obligation: the TB verifies it reads 0 in EVERY case the precondition does not hold — during reset, while its acknowledge is high, when nothing is pending, and on a SPURIOUS ack (an ack pulsed with nothing outstanding). A complete design drives the flag two-sidedly; a draft that only raises it on the happy path passes the positive assertions and fails the idle/ack/spurious ones.
+
+**When to apply**: any design with a named `*_valid` / `*_ready` / `*_error` / interrupt / status output whose spec states only the assert condition. Unless the spec explicitly says the flag is don't-care outside the asserted window.
+
+**What to do**: write the flag `=1` exactly when its stated precondition holds AND enumerate and drive `=0` for each idle / reset / acknowledged / nothing-pending / spurious-ack case; author the TB (and the RTL) to cover the negative cases, not only the assertion.
+
+**Why this is GENERAL**: "a flag's positive spec implies its negative" is standard control-signal completeness — a status bit that floats or sticks high in idle is a real defect against any consumer. *why_not_bucket_a*: a program cannot enumerate, from a one-line positive spec, the full set of negative conditions (reset, ack-high, empty, spurious-ack) the flag must read low in — recognizing the implied negative obligations is a reading judgment about the signal's role.
+
+_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
+
+### Skill: an explicit reset/initial OUTPUT value is a MULTI-CYCLE assertion across the whole reset window — drive it on the OUTPUT, and enumerate each status register
+
+**Pattern**: When a spec states a specific value for an OUTPUT (or "all states") during/after reset — registers initialize to all-ones, status reads 0, a sentinel appears — the TB samples that OUTPUT for the ENTIRE reset-assertion window (it loops many cycles with reset held), not just at one edge, and it checks each named output/status register independently. A draft that only initializes the INTERNAL state, or drives the reset value for a single cycle, mismatches across the multi-cycle window.
+
+**When to apply**: any block whose spec pins an output/initial value under reset ("on reset, `data_out` = all-ones"; "resets all states including pending, missed, and status"). Unless the spec ties the value only to a single first edge.
+
+**What to do**: drive the stated value on the OUTPUT itself (not just internal registers) throughout reset, and author one reset assertion per named output/status register asserting it holds its reset value for the whole window; size the reset behavior so it survives the TB's multi-cycle reset loop.
+
+**Why this is GENERAL**: enumerating every reset-pinned output and holding its value for the full reset window is standard reset-domain discipline. *why_not_bucket_a*: a program cannot decide that "resets all states" enumerates a SET of outputs each needing its own multi-cycle assertion, nor that a value must appear on the OUTPUT rather than only internal state — that is reading the reset spec as a set of per-output, full-window obligations. (Deduped vs the reset-aware-register and first-post-reset-edge skills — those govern HOW to drive a reset value; this is the TB-completeness reading that the OUTPUT's value is sampled across the ENTIRE window and per status register.)
+
+_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
+
+### Skill: an optimize/refactor-with-equivalence (or fix/complete) task — the GIVEN RTL is the reference; preserve ports, register-map, latency, and every internal register name
+
+**Pattern**: When a task says "refactor / optimize / reduce area while retaining functional equivalence" or "fix / complete this RTL", the reference behavior IS the supplied RTL: the equivalence harness re-encodes the original's interface, register map, latencies, sequential state, and duty/response rules, and it WHITE-BOX probes internal registers by name. Scope every edit to exactly what the prompt names (e.g. "modify only the combinational logic") and NEVER rename or delete an existing internal register, or the harness throws an attribute error before any value is compared. Any behavior already present in the given RTL that the prompt does not contradict — including incidental error-case SENTINEL constants — is part of the contract and will be checked. For an area-reduction gate, the percentage thresholds are stated in the PROMPT (a relative cut); the absolute baseline lives only in the harness `.env` and you do not need it.
+
+**When to apply**: any "optimize/refactor with equivalence", "reduce cells/wires by N%", or "fix/complete the given RTL" task that supplies the original RTL as input context. Unless the prompt explicitly authorizes interface or register changes.
+
+**What to do**: keep ports/register-map/latency/sequential-state bit-identical; confine edits to the named scope; preserve every internal register/signal name (it is probed); carry forward error-sentinel and corner behaviors the prompt doesn't override; for an area floor, measure the RELATIVE wire/cell reduction against the original and trust the prompt's threshold rather than hunting for the harness baseline.
+
+**Why this is GENERAL**: "the existing design is the golden reference; change only what you were asked to" is universal equivalence/refactor discipline — a renamed internal or a dropped corner behavior is a real regression. *why_not_bucket_a*: a program cannot tell that a particular internal register is white-box-probed (so must not be renamed), or that an undocumented sentinel in the given RTL is part of the contract — distinguishing "preserve" from "free to change" requires reading the equivalence intent and the signal's role. (Deduped vs the MODIFY-task-unchanged-path and area-reduction-structural-transform skills — this adds the white-box internal-name preservation, the given-RTL-as-contract reading, and the prompt-threshold-vs-harness-baseline split.)
+
+_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
+
+### Skill: a loadable counter — widen the output to the loaded RANGE, name it after its paired input, per-field clamp out-of-range loads, and treat "asynchronous/immediate" load as level-sensitive
+
+**Pattern**: When a counter/timer gains a newly-introduced LOAD input with a stated value range, three reading obligations follow. (1) WIDEN the corresponding output to represent that range even if the original port was narrower — "retain the interface" yields to representability — and name the widened output consistently with its paired input (`load_hours → hours`). (2) An explicit "if a field exceeds its range, default to the maximum valid value" rule WITH a worked example is a per-field SATURATION assertion — clamp each loaded field independently to its stated max. (3) A load described as "asynchronous" and taking effect "immediately" is combinational/level-sensitive: the TB asserts the loaded values BEFORE any clock edge, so model it as an async (not clocked) load and verify it pre-edge.
+
+**When to apply**: any counter/timer/register that adds a load path with a stated range and/or an "asynchronous"/"immediate" qualifier. Unless the spec says the load is clocked/registered or gives no range.
+
+**What to do**: size the output to cover the loaded range and name it after the load input; add an independent clamp-to-max on each loaded field; implement an async/level-sensitive load and verify the loaded value pre-edge; honor any stated priority of load over an active count (the TB drives both controls together).
+
+**Why this is GENERAL**: representability of a loaded range, per-field saturation, and async-load semantics are standard datapath conventions a designer applies by reading the load spec. *why_not_bucket_a*: a program cannot decide that "retain interface" yields to a wider output for a newly-loadable range, that an "exceeds range → max" sentence is a per-field clamp, or that "asynchronous + immediate" means sample-before-edge — each is a reading of the load spec's intent, not a structural rule.
+
+_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
+
+### Skill: a parameterized clock-divider / tick generator — the tick period equals exactly the PARAM in clocks (never a real Hz), and a pausable divider retains its partial-interval count
+
+**Pattern**: When a divider's period is parameterized (a "1 Hz pulse from a parameterized frequency", `COUNTER_MAX = CLK_FREQ - 1`), the TB scales the test by setting the parameter to TINY values (3, 50, 63…) and counting exactly PARAM clock edges per tick — so the tick period must be exactly the parameter value in CLOCKS; hardcoding a real-world frequency fails immediately. Separately, when the spec says the internal divider must "retain progress" / "pause and resume seamlessly", the TB pauses mid-interval and verifies that resume consumes only the LEFTOVER ticks (it needs `counter_max − elapsed` more before the next decrement) — so the sub-count state must be preserved across the pause, not restarted.
+
+**When to apply**: any design with a parameterized clock divider / tick counter, and especially one with a pause/resume control over that divider. Unless the spec fixes a literal cycle count or says pause resets the interval.
+
+**What to do**: derive the tick period as exactly the parameter (in clocks) and let the TB shrink it; on pause, freeze and hold the sub-interval counter and resume from the retained value so only the remaining ticks elapse before the next event.
+
+**Why this is GENERAL**: parameter-relative timing and pause-with-retained-phase are standard divider conventions — a hardcoded frequency or an interval-restarting pause are real timing defects. *why_not_bucket_a*: a program cannot infer that a parameterized divider will be exercised at tiny parameter values (so the period must be parameter-relative) or that "retain progress" means preserve the sub-count across a pause — both are readings of the timing spec's intent. (Deduped vs the dual-edge/50%-duty divider skill — that governs duty/odd-ratio structure; this governs parameter-relative period and pause-phase retention.)
+
+_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
+
+### Skill: transcribe an explicitly-spelled bit-level predicate / transform / per-mode datapath LITERALLY — a spelled-out Boolean is the spec, not a hint toward a "standard" function
+
+**Pattern**: When a spec spells out a bit-level operation precisely — "the top-N and bottom-N bits equal zero" (a top-N AND bottom-N zero predicate driving an error flag), "XOR each 2-bit group with `2'b01`" using a pre-declared repeating constant gated on an exact condition, "compare = XOR, any non-zero result = error" — implement EXACTLY that Boolean/datapath; do not abstract it to a similar-looking standard function. A per-MODE datapath is the same discipline: emit each mode's literal operation (a checker mode that XORs the input vs a generator mode that does not) and fully GATE an input the spec "ties to 0" in a given mode out of the active path so it cannot perturb the result.
+
+**When to apply**: any block whose spec gives the literal bit operation, repeating-pattern constant, or per-mode datapath behavior — bit-slice predicates, masks, XOR transforms, mode-gated inputs. Unless the spec only names a function abstractly and leaves the bit detail open.
+
+**What to do**: code the predicate/transform exactly as worded (the literal slice bounds, the exact repeating constant, the exact gating condition, the XOR-and-test-nonzero), drive the error/result directly from it so a test can inject a single-bit flip and observe the non-zero indication, and gate a "tied to 0" input fully out of the active datapath in its mode.
+
+**Why this is GENERAL**: faithfully transcribing a spelled-out Boolean and fully gating mode-inactive inputs are basic spec-fidelity — substituting a "close" standard function is a real functional mismatch. *why_not_bucket_a*: a program cannot tell that a spelled-out bit predicate must be transcribed verbatim rather than generalized, nor that a mode-tied input must be gated out — recognizing the literal operation as the contract is a reading judgment over the prose. (Deduped vs the EXACT-structural-convention and LFSR-tap skills — those cover topology/edge/tap conventions; this covers spelled-out combinational bit predicates, masks, and per-mode gating.)
+
+_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
+
+### Skill: parallel direction/role subsections each get their OWN status output — and any NEW port inherits the module's existing _i/_o suffix convention
+
+**Pattern**: When a prompt splits behavior into parallel, labeled subsections by direction or role (a "Read Transactions" section and a "Write Transactions" section, each ending "the timeout flag is triggered"), emit ONE status output per subsection (`read_timeout_o` + `write_timeout_o`), NOT a single merged flag — even if an earlier sentence says "a timeout flag" in the singular. The per-subsection multiplicity is the real interface. And any new port must inherit the module's established naming convention (every input ends `_i`, every output `_o`; or a fixed prefix style), because the TB references new ports by the convention-consistent name, not the bare prose word.
+
+**When to apply**: any task that describes a behavior in parallel direction/role subsections each producing a status/result, on a module with a consistent port-naming convention. Unless the spec explicitly says the subsections share one merged output.
+
+**What to do**: create one output per parallel subsection and name each by the module's `_i`/`_o` (or prefix) convention; do not collapse two role-specific flags into one because a summary sentence used the singular.
+
+**Why this is GENERAL**: matching output multiplicity to the spec's parallel structure and inheriting a module's naming convention are standard interface-design reading. *why_not_bucket_a*: a program cannot decide that two parallel subsections each demand a distinct output (vs one shared flag) or that a new port must adopt the `_i`/`_o` convention the TB expects — both are readings of the spec's structure and the module's naming intent.
+
+_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
+
+### Skill: an in-flight / serviced selection is latched until its acknowledge — a mid-service re-prioritization does NOT preempt it, but live table LOOKUPS still track updates
+
+**Pattern**: In an arbiter / interrupt-controller / servicing FSM that "services one at a time" until an ack, the SELECTED index is registered/sticky once service begins: a priority-map change, a higher-priority new request, or a per-interrupt priority OVERRIDE applied mid-service does NOT preempt the in-flight selection — it only affects arbitration of the NEXT one. Note the asymmetry a TB exercises: the latched INDEX is frozen, but a combinational table LOOKUP keyed by that index (a vector-table read) DOES reflect a dynamic update to the table even while servicing. An override "replaces" (not adds to) the target's priority while its enable+id match.
+
+**When to apply**: any arbiter / interrupt controller / servicing FSM with an explicit SERVICE/ack handshake and dynamic priority or vector updates. Unless the spec explicitly allows mid-service preemption.
+
+**What to do**: latch the serviced selection in a register that clears only on ack (gate the request/interrupt output low on ack, empty-pending, and reset); let a re-prioritization/override change FUTURE arbitration only; but keep any table/vector lookup keyed by the frozen index combinational so it tracks live table writes; implement an override as a REPLACE of the matched entry's priority.
+
+**Why this is GENERAL**: "an accepted grant runs to completion; re-arbitration applies to the next" is standard arbiter semantics, and the frozen-index / live-lookup split is a real, checkable distinction. *why_not_bucket_a*: a program cannot infer from prose that a once-selected interrupt is immune to mid-service re-prioritization while its vector lookup still tracks table writes — separating the latched selection from the live lookup is a reading of the servicing semantics. (Complements the masked-priority-arbiter + clear-presented-index skill, which covers masking/argmin and clearing the registered winner on ack.)
+
+_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
+
+### Skill: protocol byte-LANE verbs (endian-convert / address-fix using a select) collapse to IDENTITY for an aligned full-width transfer — and honor a STATED reset polarity over the bare name
+
+**Pattern**: Bridge/protocol prose verbs like "perform endian conversion" and "derive / fix the address using the byte-select" are byte-LANE operations: they only reposition bytes for SUB-WORD accesses. For an aligned full-width transfer (all byte-enables set), they collapse to IDENTITY — write data and address pass through unchanged — and that aligned case is typically the only one the TB checks. Applying an UNCONDITIONAL full-word byte-reversal or address-mangle breaks the word case. Separately, honor a STATED reset polarity even when the bare signal name conventionally implies the opposite (a name like `rst_i` declared active-LOW in the prose): an active-high implementation would sit in perpetual reset during a test that holds the line at its released level and fail every check.
+
+**When to apply**: any bus bridge / protocol adapter mentioning endian conversion or select-based address fixing, and any design whose reset polarity is stated explicitly in prose. Unless the TB's expected bytes are actually reversed, or the spec confirms the conventional polarity.
+
+**What to do**: gate any byte-swap / lane-realign on sub-word select patterns so the aligned full-word case stays pass-through on both read and write paths; declare reset to the EXPLICITLY-STATED polarity (active-low when stated), not the polarity the bare name suggests.
+
+**Why this is GENERAL**: lane operations being identity for aligned full-width transfers, and an explicit polarity overriding a naming convention, are standard protocol/bus reading. *why_not_bucket_a*: a program cannot decide that "endian conversion" is a NO-OP for the full-word case (vs a real swap) or that a conventionally-active-high name is declared active-low here — both require reading the lane semantics and the explicit polarity statement. (Complements the don't-over-build / identity-transform skill and extends active-low-naming beyond reset_n/rst_n equivalence to an explicit-polarity-over-bare-name override.)
+
+_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
+
+### Skill: a Gray-coded async FIFO's DEPTH must default to a power of two
+
+**Pattern**: An asynchronous FIFO built from Gray-coded read/write pointers with a one-extra "wrap/overflow" bit only produces a clean full/empty wrap for DEPTH = 2^n. The TB fills exactly DEPTH words then asserts full (and exercises depths up to DEPTH), so a non-power-of-two depth breaks the full flag and the pointer-equality / MSB-differ full/empty rules. When the depth parameter has no stated default, pick a power-of-two value (≥ 2).
+
+**When to apply**: any async FIFO / dual-clock buffer specified with Gray pointers + a wrap/overflow bit and an unstated or free DEPTH default. Unless the spec fixes a specific non-power-of-two depth and a matching full-detection scheme.
+
+**What to do**: choose a power-of-two DEPTH default, and implement full/empty as the prompt's exact pointer-equality (empty) / top-bit(s)-inverted compare (full) rules so a fill-exactly-DEPTH-then-check-full test passes.
+
+**Why this is GENERAL**: power-of-two depth is a hard requirement of the Gray-pointer wrap-bit scheme — a textbook async-FIFO fact, not a hidden answer. *why_not_bucket_a*: a program cannot decide that an unstated depth default must be a power of two BECAUSE the chosen full-detection scheme demands it — that ties the parameter choice to the pointer architecture, a design-experience judgment. (Complements the async-FIFO Gray-pointer-lag / full-compare skill with the depth-default requirement.)
+
+_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
+
+### Skill: a value wider than the data bus is read back as bus-width words, low word at the lower offset — and a read-only result register lands at the first free aligned offset
+
+**Pattern**: When a result is wider than the register/data bus, the verification reads it back as multiple bus-width words at CONSECUTIVE offsets, **low word at the lower offset** (little-endian word order). A read-only result/status register that the prompt adds but doesn't place is conventionally mapped at the first free aligned offset ABOVE the documented config/CSR block — a "Reserved" label in the prompt's map is overridden by the convention when a result must be exposed.
+
+**When to apply**: any register-mapped block whose computed result is wider than the bus, or that adds a read-back register without an explicit address — unless the spec gives an explicit offset/word order.
+
+**What to do**: split the wide value low-word-first across consecutive offsets; place an unplaced read-only result at the first free aligned slot past the config block; drive RESP=OKAY on those reads.
+
+**Why this is GENERAL**: little-endian word-split and "result lands after the config block" are standard memory-mapped-register conventions a seasoned designer applies without being told. *why_not_bucket_a*: choosing the offset + word order from convention (and overriding a "Reserved" label) is a reading/experience judgment, not a regex.
+
+_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
+
+### Skill: a word-mapped register file treats a non-word-aligned address as invalid — no write, read returns 0 — and you must TEST it even when the prompt is silent
+
+**Pattern**: When a register file / memory-mapped block decodes addresses on WORD boundaries (the decode keys only on the word-index bits), a sub-word / non-word-aligned (e.g. odd) address is INVALID: the write is dropped and a subsequent read returns 0 (or the error/default). A seasoned designer both IMPLEMENTS this reject-and-zero and TESTS the alignment case, because the verification exercises out-of-grid addresses even when the prompt never mentions them.
+
+**When to apply**: any word-addressed register/memory map — unless the spec explicitly defines sub-word/byte-addressable behavior.
+
+**What to do**: decode only the word-index bits; on a non-aligned address, perform no write and return 0 on read; include an alignment test in your own TB.
+
+**Why this is GENERAL**: word-granular decode rejecting unaligned access is a universal bus convention. *why_not_bucket_a*: inferring "the map is word-granular so odd addresses are invalid" from the interface is a domain-experience read, not a deterministic rule.
+
+_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
+
+### Skill: naming a standard protocol imports its ENTIRE contract — the full mandatory signal set + defined reset/idle/response defaults — even when the prompt's table lists only a subset
+
+**Pattern**: When a spec names a standard protocol (AXI4 / AXI-Lite / APB / AHB / Wishbone / Avalon / …), it imports the WHOLE protocol contract, not just the signals the prompt's table happens to list: every mandatory channel/handshake signal must exist, and the protocol's defined reset/idle/response behavior holds (e.g. AXI `*READY` low out of reset, `*RESP`=OKAY on success, a valid stays asserted until its ready). The verification drives and checks the full protocol, so a subset interface fails even with correct datapath logic.
+
+**When to apply**: whenever the prompt names a standard bus/protocol — unless it explicitly restricts the interface to a stated subset.
+
+**What to do**: implement the complete mandatory signal set for the named protocol with its standard handshake + reset/idle/response defaults; do not stop at the ports the prompt enumerates.
+
+**Why this is GENERAL**: "name a protocol → owe its full contract" is exactly how an experienced designer reads a spec; the standard defines the rest. *why_not_bucket_a*: knowing which signals + defaults a named protocol mandates is domain knowledge a regex cannot supply.
+
+_Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
