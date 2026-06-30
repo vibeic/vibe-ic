@@ -2874,31 +2874,33 @@ def main(argv=None) -> int:
     # repaired at emit time recovers that interface-naming fail. EMPTY (so the
     # call below is byte-for-byte a NO-OP) when --dataset carries no harness.files
     # — e.g. the documented local_export prompts JSONL, which strips them.
-    from cvdp_harness_toplevel_alias import (
-        load_harness_toplevels, maybe_alias_completion)
-    harness_tops = load_harness_toplevels(args.dataset) if args.dataset else {}
-    # ORGANIC #1304 — prompt-skeleton fallback for ids the dataset lacks.
-    # When the authoritative harness.files are absent (local_export prompts
-    # JSONL), the ```verilog module <X>( skeleton is the next-best signal for
-    # the harness TOPLEVEL (field-measured 66/67 accuracy across 302 records).
+    from cvdp_harness_toplevel_alias import maybe_alias_completion
+    # OFFICIAL-COMPLIANCE (CVDP README_NON_AGENTIC: "The harness — docker-compose,
+    # test files, `.env` — is NOT provided to the model"; paper §2: models "never
+    # see the test harness or reference solution"). The cocotb TOPLEVEL the hidden
+    # harness fixes via its `.env` is therefore OFF-LIMITS as an authoring input —
+    # we no longer call load_harness_toplevels(dataset). The expected top-module
+    # name is derived ONLY from the PROMPT's ```verilog module <X>( skeleton
+    # (input.prompt — a legitimate model input). A blind author names the module
+    # per the prompt; when the prompt under-determines the name (a dataset typo vs
+    # the hidden top) that is an ACCEPTED under-specification floor, NOT something
+    # to repair by reading the harness.
+    harness_tops: Dict[str, str] = {}
     if prompts:
         for _rid, _prompt in prompts.items():
-            if _rid not in harness_tops:
-                _skel = skeleton_module_name_from_prompt(_prompt)
-                if _skel:
-                    harness_tops[_rid] = _skel
-    # ORGANIC (GATE-AS-SOLE-EMIT) — per-id SET of port names the hidden cocotb TB
-    # binds (`dut.<name>` in harness.files's python testbench). Used by the
-    # interface-conformance port-name alignment (maybe_align_tb_ports) BELOW: an
-    # authored port whose name differs from the TB binding by an UNAMBIGUOUS
-    # synonym is renamed to the TB name so the TB does not AttributeError on a
-    # logic-correct design. Empty when no record carries harness files (the
-    # alignment is then a byte-for-byte NO-OP). Unioned over both sources.
+            _skel = skeleton_module_name_from_prompt(_prompt)
+            if _skel:
+                harness_tops[_rid] = _skel
+    # OFFICIAL-COMPLIANCE — the set of port names the hidden cocotb TB binds
+    # (`dut.<name>` in harness.files's python testbench) is HARNESS content, which
+    # CVDP does NOT provide to the model (README_NON_AGENTIC; paper §2). The
+    # TB-port-name alignment that consumed it is therefore DISABLED: a blind author
+    # takes the port names from the prompt's Inputs/Outputs section (input.prompt),
+    # never from the cocotb harness. harness_tb_ports stays EMPTY so the port
+    # alignment below is an unconditional NO-OP. (The pure helpers
+    # _load_harness_tb_ports / tb_port_alignment_renames / maybe_align_tb_ports are
+    # retained but no longer fed harness data from the main flow.)
     harness_tb_ports: Dict[str, set] = {}
-    for _tb_src in (args.dataset, args.prompts):
-        if _tb_src:
-            for _rid, _names in _load_harness_tb_ports(_tb_src).items():
-                harness_tb_ports.setdefault(_rid, set()).update(_names)
     # ORGANIC #734 — if the operator passed --dataset specifically to re-enable
     # the #715 protection but it yields NO input.context for any id (a wrong file
     # / typo'd path / non-CVDP JSONL), the protection silently stays inactive.

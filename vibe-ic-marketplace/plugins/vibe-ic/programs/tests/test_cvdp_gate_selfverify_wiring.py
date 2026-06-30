@@ -499,10 +499,13 @@ def test_rename_endmodule_label():
 
 
 @pytest.mark.skipif(not _HAVE_EDA, reason="needs iverilog + yosys")
-def test_main_toplevel_rename_makes_wrong_name_elaborate(tmp_path):
-    # harness .env fixes TOPLEVEL=real_top; the completion declares `wrong_name`.
-    # The pre-gate rename rewrites it so the EMITTED completion carries
-    # `module real_top` (the scorer's `iverilog -s real_top` then binds).
+def test_main_does_not_rename_from_harness_env(tmp_path):
+    # OFFICIAL-COMPLIANCE (negative no-leak): the harness `.env` is NOT provided
+    # to the model (CVDP README_NON_AGENTIC; paper §2 "never see the test
+    # harness"). So even when the dataset's `.env` fixes TOPLEVEL=real_top and the
+    # completion declares `wrong_name`, the gate MUST NOT read the `.env` and MUST
+    # NOT rename — `wrong_name` is kept (a prompt-under-determined name is an
+    # accepted floor, not a harness-repair target).
     rid = "cvdp_copilot_rename_0001"
     batch = [{"id": rid, "completion": _RENAME_RTL}]
     dataset = [{"id": rid,
@@ -510,7 +513,24 @@ def test_main_toplevel_rename_makes_wrong_name_elaborate(tmp_path):
     rc, emitted, _report = _run_main(tmp_path, batch, dataset=dataset)
     assert rc == 0
     em = next(r for r in emitted if r.get("id") == rid)
-    assert "module real_top" in em["completion"]
+    assert "module wrong_name" in em["completion"]       # .env IGNORED
+    assert "module real_top" not in em["completion"]
+
+
+@pytest.mark.skipif(not _HAVE_EDA, reason="needs iverilog + yosys")
+def test_main_renames_from_prompt_skeleton_only(tmp_path):
+    # OFFICIAL-COMPLIANCE (positive): the COMPLIANT name source is the PROMPT's
+    # ```verilog module <X>( skeleton (input.prompt, a legitimate model input).
+    # A completion declaring `wrong_name` IS renamed to the prompt-stated top.
+    rid = "cvdp_copilot_rename_0003"
+    batch = [{"id": rid, "completion": _RENAME_RTL}]
+    prompts = [{"id": rid,
+                "prompt": "Implement:\n```verilog\nmodule real_top("
+                          "input a, output y);\nendmodule\n```\n"}]
+    rc, emitted, _report = _run_main(tmp_path, batch, prompts=prompts)
+    assert rc == 0
+    em = next(r for r in emitted if r.get("id") == rid)
+    assert "module real_top" in em["completion"]         # prompt-derived rename
     assert "module wrong_name" not in em["completion"]
 
 
@@ -1014,10 +1034,13 @@ _TBALIGN_PY = ("import cocotb\n"
 
 
 @pytest.mark.skipif(not _HAVE_EDA, reason="needs iverilog + yosys")
-def test_main_tbalign_renames_ports_to_tb_names(tmp_path):
-    # (a) end-to-end: authored ports w/b, the dataset's cocotb TB binds
-    # dut.w_out/dut.b_out → the EMITTED completion carries the TB names (so the
-    # scorer's TB binds), and the report records the interface renames.
+def test_main_does_not_align_ports_from_harness(tmp_path):
+    # OFFICIAL-COMPLIANCE (negative no-leak): the cocotb TB's `dut.<name>` port
+    # bindings live in harness.files (the test harness), which CVDP does NOT
+    # provide to the model. So even when the dataset's TB binds dut.w_out/dut.b_out
+    # and the completion declares synonyms w/b, the gate MUST NOT read the cocotb
+    # harness and MUST NOT align — the authored names (from the prompt's
+    # Inputs/Outputs) are emitted unchanged, and NO port_aligned is recorded.
     rid = "cvdp_copilot_adder_0001"
     batch = [{"id": rid, "completion": _TBALIGN_RTL}]
     dataset = [{"id": rid, "harness": {"files": {
@@ -1025,10 +1048,10 @@ def test_main_tbalign_renames_ports_to_tb_names(tmp_path):
     rc, emitted, report = _run_main(tmp_path, batch, dataset=dataset)
     assert rc == 0
     em = next(r for r in emitted if r.get("id") == rid)
-    assert "w_out" in em["completion"] and "b_out" in em["completion"]
-    assert "output reg [7:0] w_out" in em["completion"]
+    assert "output reg [7:0] w);" in em["completion"]     # authored name kept
+    assert "w_out" not in em["completion"]                # cocotb name NOT read
     entry = next(e for e in report["records"] if e["id"] == rid)
-    assert entry.get("port_aligned") == {"b": "b_out", "w": "w_out"}
+    assert "port_aligned" not in entry
 
 
 @pytest.mark.skipif(not _HAVE_EDA, reason="needs iverilog + yosys")
