@@ -4482,6 +4482,245 @@ def rule_narrow_bitwise_not_wider_context(src: str, path: str) -> List[Finding]:
 # fire on legitimate state across the corpus, so it is not added.
 
 
+# ---------------------------------------------------------------------------
+# Rule 25: Use-before-declaration (iverilog-13 / the official cvdp-sim REJECTS;
+# the host iverilog-12 elaboration gate TOLERATES — a FALSE-PASS gap).
+#
+# The host elaboration gate runs Icarus Verilog 12, which ACCEPTS a module-scope
+# net/var REFERENCED in an expression BEFORE its declaration line (a forward
+# reference, rc=0). The OFFICIAL CVDP scorer runs Icarus Verilog 13, which
+# REJECTS use-before-declaration with "Could not find variable X". So the host
+# gate FALSE-PASSES code that fails official scoring. Real case:
+# interrupt_controller_0019 read `any_pending`/`best_idx` inside a clocked block
+# and then declared them as `wire` several lines LATER.
+#
+# Zero-FP discipline (BLOCK-eligible — pure structural SV parse, no design
+# literal). A name is flagged ONLY when ALL of these hold:
+#   * it is a module-scope `wire`/`reg`/`logic` declaration — NOT a port,
+#     parameter/localparam, genvar, or function/task arg-or-local (all of which
+#     are subtracted, function/task + generate bodies are MASKED out first), and
+#     NOT a name that is ALSO a port/param,
+#   * it is REFERENCED inside a CLOCKED/COMBINATIONAL `always @(...)` body OR on
+#     the RHS of a continuous `assign` (the two contexts iverilog-13 rejects),
+#   * that reference's source line is STRICTLY ABOVE the declaration line,
+#   * the reference is a real read — not the member of a hierarchical `a.b`, not
+#     a call `name(...)`; string literals are blanked so a word inside a
+#     `$display("…")` format string is never read as an identifier,
+#   * the analysis is confined to a SINGLE module region, so a sibling module's
+#     same-named net declared later never cross-fires.
+# When unsure, do NOT flag (forward references in instance port connections,
+# decl-initializer RHS, and sensitivity lists are intentionally NOT scanned).
+# ---------------------------------------------------------------------------
+def _mask_function_task_bodies(src: str) -> str:
+    """Replace `function … endfunction` and `task … endtask` BODIES with
+    equal-length whitespace (newlines kept) so function/task ARGUMENTS and
+    LOCALS never enter the module-scope declaration table and a reference inside
+    one is never scanned. Offsets are preserved so line numbers stay correct.
+    chip-AGNOSTIC structural mask (mirrors `_mask_generate_blocks`)."""
+    out = list(src)
+    for opener, closer in (('function', 'endfunction'), ('task', 'endtask')):
+        depth = 0
+        block_start = -1
+        for m in re.finditer(r'\b(' + opener + r'|' + closer + r')\b',
+                             ''.join(out)):
+            if m.group(1) == opener:
+                if depth == 0:
+                    block_start = m.end()
+                depth += 1
+            elif depth > 0:                       # a closer with a live opener
+                depth -= 1
+                if depth == 0 and block_start >= 0:
+                    for i in range(block_start, m.start()):
+                        if out[i] != '\n':
+                            out[i] = ' '
+                    block_start = -1
+    return ''.join(out)
+
+
+def _generate_assigned_names(src: str) -> Set[str]:
+    """Names ASSIGNED (continuous or procedural) inside a `generate … endgenerate`
+    block. A module-scope net driven by a generate block is EXCLUDED from the
+    use-before-declaration scan: generate elaboration/reordering makes the simple
+    source-line heuristic unreliable, so flagging such a net is not provably
+    zero-FP. Collected from the UNMASKED source (the masker blanks generate
+    bodies). chip-AGNOSTIC structural scan."""
+    names: Set[str] = set()
+    depth, block_start = 0, -1
+    spans: List[Tuple[int, int]] = []
+    for m in re.finditer(r'\b(generate|endgenerate)\b', src):
+        if m.group(1) == 'generate':
+            if depth == 0:
+                block_start = m.end()
+            depth += 1
+        elif depth > 0:
+            depth -= 1
+            if depth == 0 and block_start >= 0:
+                spans.append((block_start, m.start()))
+                block_start = -1
+    for lo, hi in spans:
+        body = src[lo:hi]
+        for am in re.finditer(r'\bassign\b\s+([A-Za-z_]\w*)', body):
+            names.add(am.group(1))
+        for am in re.finditer(
+                r'([A-Za-z_]\w*)\s*(?:\[[^\]]*\])?\s*(?:<=|=)(?!=)', body):
+            names.add(am.group(1))
+    return names
+
+
+def _collect_all_port_names(text: str) -> Set[str]:
+    """Every port name (input/output/inout) of the module(s) in `text` —
+    both non-ANSI body decls (`output reg [1:0] q;`) and ANSI header lists
+    (`module m(input clk, rst_n, output q)`). chip-AGNOSTIC structural scan."""
+    ports: Set[str] = set()
+    # Non-ANSI body / ANSI single-keyword decls: `<dir> [wire|reg|logic] [..] NAME`
+    for m in re.finditer(
+            r'\b(?:input|output|inout)\b(?:\s+(?:wire|reg|logic))?(?:\s+signed)?'
+            r'\s*(?:\[[^\]]+\]\s*)?([A-Za-z_]\w*)\s*(?=[,;)=])', text):
+        if m.group(1) not in VERILOG_KEYWORDS:
+            ports.add(m.group(1))
+    # ANSI header: comma-separated names inherit the most recent direction.
+    for hm in re.finditer(r'\bmodule\b\s+\w+\s*(#\s*\([^)]*\)\s*)?\(', text):
+        depth, end = 0, hm.end() - 1
+        while end < len(text):
+            if text[end] == '(':
+                depth += 1
+            elif text[end] == ')':
+                depth -= 1
+                if depth == 0:
+                    break
+            end += 1
+        cur_dir = None
+        for tok in re.finditer(r'\b(input|output|inout)\b|([A-Za-z_]\w*)',
+                               text[hm.end():end]):
+            if tok.group(1):
+                cur_dir = tok.group(1)
+            elif tok.group(2) and cur_dir is not None:
+                nm = tok.group(2)
+                if nm not in VERILOG_KEYWORDS and nm not in (
+                        'wire', 'reg', 'logic', 'signed', 'unsigned'):
+                    ports.add(nm)
+    return ports
+
+
+def rule_use_before_declaration(src: str, path: str) -> List[Finding]:
+    """Rule 25 — flag a module-scope net/var read in an `always`/`assign`
+    expression at a line ABOVE its declaration (iverilog-13 rejects; the host
+    iverilog-12 gate tolerates → false-pass). See the rule header above for the
+    full zero-FP exclusion set. chip-AGNOSTIC, deterministic structural parse."""
+    findings: List[Finding] = []
+    # Mask the contexts a module-scope forward reference can never legally come
+    # from (generate / function / task bodies) and blank string contents, so the
+    # decl table and the reference scan both see only module-scope code.
+    masked = _blank_string_literals(
+        _mask_function_task_bodies(_mask_generate_blocks(src)))
+    gen_assigned = _generate_assigned_names(src)
+
+    # offset -> 1-based line, computed once against the (offset-preserving) src.
+    line_starts = [0]
+    for i, c in enumerate(src):
+        if c == '\n':
+            line_starts.append(i + 1)
+
+    def _line_of(off: int) -> int:
+        lo, hi = 0, len(line_starts)
+        while lo < hi:                            # bisect_right, stdlib-free
+            mid = (lo + hi) // 2
+            if off < line_starts[mid]:
+                hi = mid
+            else:
+                lo = mid + 1
+        return lo
+
+    # A module-scope wire/reg/logic declaration (ranges + optional 2nd array
+    # range), capturing a comma-separated name list. Ports come through here too
+    # (e.g. `output reg q`) but are subtracted below.
+    decl_re = re.compile(
+        r'\b(?:wire|reg|logic)\b\s+(?:(?:signed|unsigned)\s+)?'
+        r'(?:\[[^\]]+\]\s*)?(?:\[[^\]]+\]\s*)?'
+        r'([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)')
+    always_re = re.compile(r'\balways(?:_ff|_comb|_latch)?\s*@\s*\(([^)]*)\)')
+    assign_re = re.compile(r'\bassign\b\s+(.+?);', re.DOTALL)
+    assign_op_re = re.compile(r'(?<![<>=!])=(?!=)')
+
+    for _mname, mlo, mhi in _module_regions(masked):
+        region = masked[mlo:mhi]
+
+        # 1. Declaration table: name -> earliest declaration line (this region).
+        decl_line: Dict[str, int] = {}
+        for m in decl_re.finditer(region):
+            ln = _line_of(mlo + m.start())
+            for n in m.group(1).split(','):
+                n = n.strip()
+                if n and n not in VERILOG_KEYWORDS:
+                    if n not in decl_line or ln < decl_line[n]:
+                        decl_line[n] = ln
+        if not decl_line:
+            continue
+
+        # 2. Subtract everything that is NOT a flaggable module-scope net/var.
+        excluded: Set[str] = set(_collect_all_port_names(region))
+        excluded |= gen_assigned
+        for pm in re.finditer(
+                r'\b(?:parameter|localparam)\b[^=;]*?\b([A-Za-z_]\w*)\s*=', region):
+            excluded.add(pm.group(1))
+        for gm in re.finditer(r'\bgenvar\b\s+([A-Za-z_]\w*)', region):
+            excluded.add(gm.group(1))
+        for gm in re.finditer(r'\bfor\b\s*\(\s*genvar\s+([A-Za-z_]\w*)', region):
+            excluded.add(gm.group(1))
+        candidates = {n: ln for n, ln in decl_line.items() if n not in excluded}
+        if not candidates:
+            continue
+
+        # 3. Collect reads inside always bodies + continuous-assign RHS, and the
+        #    EARLIEST line each candidate is read at.
+        use_line: Dict[str, int] = {}
+
+        def _scan_reads(text: str, base_off: int) -> None:
+            for tm in re.finditer(r'[A-Za-z_]\w*', text):
+                nm = tm.group(0)
+                if nm not in candidates:
+                    continue
+                s, e = tm.start(), tm.end()
+                prev = text[s - 1] if s > 0 else ''
+                nxt = text[e] if e < len(text) else ''
+                if prev == '.' or nxt == '.':     # hierarchical `a.b`
+                    continue
+                if nxt == '(':                     # function/task/macro call
+                    continue
+                ln = _line_of(base_off + s)
+                if nm not in use_line or ln < use_line[nm]:
+                    use_line[nm] = ln
+
+        for bm in always_re.finditer(region):
+            body_start = bm.end()                  # scan the body, NOT the sens list
+            body = _block_body_after(region, body_start)
+            _scan_reads(body, mlo + body_start)
+        for am in assign_re.finditer(region):
+            stmt = am.group(1)
+            op = assign_op_re.search(stmt)
+            if not op:
+                continue
+            _scan_reads(stmt[op.end():], mlo + am.start(1) + op.end())
+
+        # 4. Flag any candidate whose earliest read is strictly above its decl.
+        for nm, dln in sorted(candidates.items(), key=lambda kv: kv[1]):
+            uln = use_line.get(nm)
+            if uln is not None and uln < dln:
+                # ERROR severity (not WARN): an unresolved forward reference is a
+                # hard ELABORATION FAILURE under the official iverilog-13 scorer
+                # ("Could not find variable"), in the same class as undriven-wire
+                # / multidriven-continuous-procedural — so it must survive the
+                # canonical `--severity ERROR` lint gate and trip rc=1, closing
+                # the false-pass. block_eligible stays True (zero-FP on corpus).
+                findings.append(Finding(
+                    path, uln, 'ERROR', 'use-before-declaration', nm,
+                    f"use-before-declaration: '{nm}' is referenced at line "
+                    f"{uln} but declared at line {dln} (>{uln}); iverilog-13 / "
+                    f"the official cvdp-sim REJECTS this (host iverilog-12 "
+                    f"tolerates it). Move the declaration above first use."))
+    return findings
+
+
 def lint_file(path: Path) -> List[Finding]:
     raw = path.read_text(errors='replace')
     src = strip_comments(raw)
@@ -4506,6 +4745,7 @@ def lint_file(path: Path) -> List[Finding]:
     results += rule_enum_ternary_width(src, str(path))
     results += rule_mixed_blocking_same_reg(src, str(path))
     results += rule_narrow_bitwise_not_wider_context(src, str(path))
+    results += rule_use_before_declaration(src, str(path))
     # rule_wire_input_read_in_clocked_block: NOT enabled.
     #
     # v0.1.39 honesty correction (audit Finding 2): the v0.1.38 disable
