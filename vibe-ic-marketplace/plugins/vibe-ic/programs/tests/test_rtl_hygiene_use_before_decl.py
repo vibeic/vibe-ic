@@ -155,6 +155,23 @@ endmodule
     assert hits[0].line == 7, hits[0].line   # the use line inside module b
 
 
+def test_excludes_cross_module_reference():
+    # The check is STRICTLY module-scoped: a reference in module A to an
+    # identifier that is declared ONLY (and later) in a sibling module B is NOT
+    # a forward reference of A — A's decl table is built from A's body alone, so
+    # B's later `wire shared` never charges against A's use. Zero hits.
+    src = """module a(input clk, input d, output reg q);
+  always @(posedge clk) q <= shared;
+endmodule
+
+module b(input clk, input e, output reg r);
+  always @(posedge clk) r <= e;
+  wire shared = e;
+endmodule
+"""
+    assert _hits(src) == []
+
+
 def test_excludes_word_inside_string_literal():
     src = """module s(input clk, output reg done);
   always @(posedge clk) begin
