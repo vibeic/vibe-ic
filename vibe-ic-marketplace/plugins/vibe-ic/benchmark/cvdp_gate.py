@@ -1134,23 +1134,91 @@ def _split_blob_to_expected(combined: str,
     return result
 
 
+def _norm_modname(name: str) -> str:
+    """case/underscore-insensitive key for matching a `module <name>` to an
+    expected basename (rtl/Foo_Bar.sv ↔ module foo_bar / module FooBar)."""
+    return name.replace("_", "").lower()
+
+
+def _positional_split(combined: str, rtl_files: List[str]) -> Dict[str, str]:
+    """LOSSLESS positional fallback (the pre-name-aware behaviour): the WHOLE
+    compiled blob into the first expected slot, the rest EMPTY. Used only when
+    name-matching cannot apply (no parseable module, an ambiguous basename map,
+    or no module name-matches any expected file)."""
+    split = {rtl_files[0]: combined}
+    for f in rtl_files[1:]:
+        split[f] = ""
+    return split
+
+
+def _name_aware_split(combined: str, rtl_files: List[str]) -> Dict[str, str]:
+    """FALLBACK for a MULTI-FILE problem when no clean LOSSLESS full partition
+    exists (`_split_blob_to_expected` → None) — most often a blob that defines
+    FEWER modules than there are expected files (e.g. a single `module
+    ping_pong_buffer` for the 2-file ping_pong_buffer / dual_port_memory
+    problem, where the prior positional fallback dumped the whole module into the
+    alphabetically-first slot `rtl/dual_port_memory.sv` and left the REAL top
+    `rtl/ping_pong_buffer.sv` EMPTY → scorer ELAB_ERROR even on a correct
+    design). Map EACH parsed module to the expected file whose basename matches
+    its name (case/underscore-insensitive); leading preamble + any module with
+    NO name match are appended to the FIRST name-matched (`primary`) slot so a
+    NAMED top file is NEVER left empty when the blob defines its module.
+    Expected files with no assigned module get an empty-but-valid placeholder
+    (the harness writes one .sv per expected key; an empty .sv is legal and is
+    the SAME shape the positional fallback emitted). When NO module name-matches
+    any expected basename — or the basenames collide so the map is ambiguous —
+    preserve the original LOSSLESS positional fallback. Invariant: each module +
+    the preamble appears EXACTLY once across the emitted set (no duplicate
+    declaration)."""
+    bases = [_basename_stem(f) for f in rtl_files]
+    norm_bases = [_norm_modname(b) for b in bases]
+    mods = _parse_modules(combined)
+    if not mods or len(set(norm_bases)) != len(norm_bases):
+        # unparseable, or an ambiguous basename map → original positional split.
+        return _positional_split(combined, rtl_files)
+    norm_to_file = dict(zip(norm_bases, rtl_files))
+    result: Dict[str, str] = {f: "" for f in rtl_files}
+    primary: Optional[str] = None            # first expected file to get a match
+    unmatched: List[str] = []
+    for name, src in mods.items():
+        f = norm_to_file.get(_norm_modname(name))
+        if f is not None and not result[f]:
+            result[f] = src
+            if primary is None:
+                primary = f
+        else:
+            # no name match, or a second module claiming an already-filled file
+            unmatched.append(src)
+    if primary is None:                       # nothing name-matched → positional
+        return _positional_split(combined, rtl_files)
+    # leading preamble (package / import / `timescale) and any unmatched
+    # helper/submodule go into the named top slot so it is self-contained.
+    mask = _mask_code(combined)
+    first = re.search(r"\bmodule\s+[A-Za-z_]\w*", mask)
+    preamble = combined[:first.start()].strip() if first else ""
+    if preamble:
+        result[primary] = preamble + "\n\n" + result[primary]
+    for src in unmatched:
+        result[primary] = result[primary] + "\n\n" + src
+    return result
+
+
 def _emit_or_split(combined: str,
                    expected_files: Optional[List[str]]) -> str:
     """Return the completion bytes to emit. For a MULTI-FILE problem the emit is
     ALWAYS the official `{"code":[{path:src},…]}` envelope (the harness decodes
     it file-by-file) — NEVER a bare blob, which the scorer would write into EACH
     expected slot → duplicate-module FAIL. When a clean per-module split exists
-    it is used; otherwise the whole compiled blob goes into the FIRST expected
-    file with the others left EMPTY — a LOSSLESS, no-duplication fallback whose
-    concatenation equals exactly the bytes the gate compiled. For the dominant
-    single-file (0/1 expected rtl) shape the bare blob is emitted unchanged."""
+    it is used; otherwise a NAME-AWARE split places each module in the expected
+    file whose basename matches it (so the named top file is never empty), with a
+    LOSSLESS positional fallback only when name-matching cannot apply. For the
+    dominant single-file (0/1 expected rtl) shape the bare blob is emitted
+    unchanged."""
     rtl_files = _rtl_only(expected_files) if expected_files else []
     if len(rtl_files) > 1:
         split = _split_blob_to_expected(combined, expected_files)
         if split is None:
-            split = {rtl_files[0]: combined}
-            for f in rtl_files[1:]:
-                split[f] = ""
+            split = _name_aware_split(combined, rtl_files)
         return json.dumps({"code": [{k: v} for k, v in split.items()]},
                           ensure_ascii=False)
     return combined
