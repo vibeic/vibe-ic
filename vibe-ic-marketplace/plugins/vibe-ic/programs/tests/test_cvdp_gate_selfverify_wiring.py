@@ -365,16 +365,22 @@ def test_verilator_lint_advisory_when_unavailable(monkeypatch, tmp_path):
 
 @pytest.mark.skipif(not (_HAVE_EDA and shutil.which("verilator")),
                     reason="needs iverilog + yosys + verilator")
-def test_main_lint_task_blocks_warning(tmp_path):
+def test_main_lint_task_advisory_without_harness_waiver(tmp_path):
+    # OFFICIAL-COMPLIANCE: the official lint bar is the harness `.vlt` waiver,
+    # which the gate no longer reads. Without a model-visible waiver the gate's
+    # bare `-Wall` bar is STRICTER than the official one, so a lint warning is
+    # ADVISORY-only (emitted, never blocked) — a BLOCK here would §4.05-false-block
+    # a completion clean under the hidden waiver. (Providing the waiver via
+    # input.context — a legitimate model input — re-enables the block; see below.)
     rid = "cvdp_copilot_lint_0001"
     batch = [{"id": rid, "completion": _LINT_DIRTY}]
     prompts = [{"id": rid, "prompt": _LINT_PROMPT}]
     rc, emitted, report = _run_main(tmp_path, batch, prompts)
-    assert rc == 1
-    assert all(r.get("id") != rid for r in emitted)
+    assert rc == 0                                   # advisory — not blocked
+    assert any(r.get("id") == rid for r in emitted)  # completion IS emitted
     entry = next(e for e in report["records"] if e["id"] == rid)
-    assert entry["verdict"] == "BLOCKED"
-    assert "lint warnings remain" in entry.get("lint_block", "")
+    assert entry.get("verdict") != "BLOCKED"
+    assert "advisory" in entry.get("lint", "")
 
 
 @pytest.mark.skipif(not (_HAVE_EDA and shutil.which("verilator")),

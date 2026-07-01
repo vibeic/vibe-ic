@@ -75,14 +75,22 @@ def test_emit_or_split_singlefile_is_bare():
 
 
 def test_load_expected_files_map_only_multifile(tmp_path):
+    # OFFICIAL-COMPLIANCE: the expected-file layout is read from `input.context`
+    # (a legitimate model input), NEVER from `output.context` (the reference-
+    # solution field, held back from the model). A multi-file record whose
+    # input.context carries >1 rtl/*.sv yields the split list; a single-file one
+    # is omitted; an output.context-only record is IGNORED (proving the loader no
+    # longer reads the reference-solution field).
     ds = tmp_path / "ds.jsonl"
     ds.write_text("\n".join([
-        json.dumps({"id": "m2", "output": {"context": {
-            "rtl/foo.sv": "", "rtl/bar.sv": "", "docs/x.md": ""}}}),
-        json.dumps({"id": "s1", "output": {"context": {"rtl/only.sv": ""}}}),
+        json.dumps({"id": "m2", "input": {"context": {
+            "rtl/foo.sv": "x", "rtl/bar.sv": "y", "docs/x.md": ""}}}),
+        json.dumps({"id": "s1", "input": {"context": {"rtl/only.sv": "z"}}}),
+        json.dumps({"id": "o1", "output": {"context": {
+            "rtl/a.sv": "", "rtl/b.sv": ""}}}),   # output-only → must be IGNORED
     ]))
     m = G._load_expected_files_map(ds)
-    assert m == {"m2": ["rtl/bar.sv", "rtl/foo.sv"]}   # s1 single-file omitted
+    assert m == {"m2": ["rtl/bar.sv", "rtl/foo.sv"]}   # s1 single, o1 output-only omitted
 
 
 def test_gate_record_splits_bare_multifile_blob(tmp_path):
