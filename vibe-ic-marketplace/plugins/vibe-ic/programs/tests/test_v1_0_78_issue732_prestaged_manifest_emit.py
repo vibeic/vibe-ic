@@ -188,3 +188,45 @@ def test_d_emitted_manifest_makes_relaxations_live(tmp_path):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+# ── ORGANIC (GAP-E2E-8) — EMPTY reconciliation scaffold in the auto-manifest ──
+# The minimal auto-manifest carried no renamed_interfaces / flattened_buses, so a
+# REUSED-IP whose genuine interface differs from the L9 doc abstraction (SERV's
+# split SRAM ports) hit an l9_rtl_pin_consistency completion-audit FAIL with
+# nothing to reconcile against. The auto-manifest now emits the two keys as EMPTY
+# lists + a note. §4.05 NO-LEAK: an EMPTY scaffold reconciles ZERO ports, so the
+# gate verdict is byte-for-byte UNCHANGED (a real mismatch still FAILs).
+def test_gap_e2e8_emits_empty_reconciliation_scaffold(tmp_path):
+    proj = _make_prestaged_project(tmp_path)
+    out = SRM.emit_prestaged_reused_ip_manifest(proj)
+    mf = json.loads(out.read_text())
+    assert mf.get("renamed_interfaces") == []
+    assert mf.get("flattened_buses") == []
+    assert "_reconciliation_scaffold_note" in mf
+
+
+def test_gap_e2e8_empty_scaffold_reconciles_nothing(tmp_path):
+    # §4.05 NO-LEAK: the empty scaffold must reconcile ZERO port groups — the
+    # gate's renamed-group extraction returns [] so the verdict is unchanged.
+    proj = _make_prestaged_project(tmp_path)
+    out = SRM.emit_prestaged_reused_ip_manifest(proj)
+    mf = json.loads(out.read_text())
+    assert G._manifest_renamed_groups(mf) == []
+
+
+def test_gap_e2e8_preserves_hand_authored_pairing(tmp_path):
+    # MERGE-preserving: a populated renamed_interfaces block is NOT clobbered by
+    # the scaffold, and it reconciles the real pairing.
+    proj = _make_prestaged_project(tmp_path)
+    out = SRM.emit_prestaged_reused_ip_manifest(proj)
+    mf = json.loads(out.read_text())
+    mf["renamed_interfaces"] = [
+        {"l9": ["sram_data"], "rtl": ["sram_wdata", "sram_rdata"]}]
+    out.write_text(json.dumps(mf))
+    out2 = SRM.emit_prestaged_reused_ip_manifest(proj)   # re-emit
+    mf2 = json.loads(out2.read_text())
+    assert mf2["renamed_interfaces"] == [
+        {"l9": ["sram_data"], "rtl": ["sram_wdata", "sram_rdata"]}]
+    groups = G._manifest_renamed_groups(mf2)
+    assert groups == [({"sram_data"}, {"sram_wdata", "sram_rdata"})]

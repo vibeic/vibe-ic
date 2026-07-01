@@ -155,6 +155,30 @@ def emit_prestaged_reused_ip_manifest(project: Path) -> Optional[Path]:
             mf["ip_list"] = ip_list
     mf["rtl_strategy"] = "catalog_lookup_plus_ai_glue"
     mf.setdefault("generated_by", "phase2_runner_prestaged")
+    # ORGANIC (GAP-E2E-8) — emit an EMPTY reconciliation SCAFFOLD so the
+    # catalog-glue handoff is EXPLICIT, not a silent minimal manifest. When a
+    # REUSED-IP's genuine interface differs from the L9 doc's abstraction (e.g.
+    # SERV's split o_sram_wdata/i_sram_rdata + separate waddr/raddr/wen/ren vs the
+    # doc's combined SRAM bus), l9_rtl_pin_consistency_check needs a
+    # `renamed_interfaces` / `flattened_buses` pairing; the minimal auto-manifest
+    # provided none, so the completion audit FAILed with nothing to reconcile and
+    # nothing telling the glue-author WHERE to look. This emits the two keys as
+    # EMPTY lists + a one-line note pointing at the skill.
+    #
+    # §4.05 NO-LEAK (load-bearing): the scaffold is EMPTY. `_manifest_renamed_groups`
+    # skips a `renamed_interfaces:[]` (the loop body never runs) so it reconciles
+    # ZERO ports — the gate's verdict is byte-for-byte UNCHANGED (a real
+    # doc-vs-RTL interface mismatch STILL FAILs until the pairing is authored).
+    # setdefault preserves any hand-authored / already-populated block untouched.
+    mf.setdefault("renamed_interfaces", [])
+    mf.setdefault("flattened_buses", [])
+    mf.setdefault(
+        "_reconciliation_scaffold_note",
+        "EMPTY scaffold (GAP-E2E-8). If the vendor RTL's interface differs from "
+        "the L9 doc abstraction, author renamed_interfaces / flattened_buses "
+        "entries ({l9:[...], rtl:[...]}) per catalog-glue-author/SKILL.md; an "
+        "empty scaffold reconciles nothing, so l9_rtl_pin_consistency_check still "
+        "reports the exact L9-only / RTL-only ports to pair.")
     manifest_path.write_text(json.dumps(mf, indent=2))
     return manifest_path
 
