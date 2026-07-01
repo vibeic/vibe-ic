@@ -328,7 +328,19 @@ def main() -> int:
     # phase1 artefacts (L5_ADI_SPEC / analog_block_list), which are produced
     # before this point — phase2 does not emit them — so moving the decision
     # ahead of phase2 is behaviourally identical for analog/mixed-signal.
-    if not halted_at and run_analog:
+    # ORGANIC (GAP-ANALOG-1) — an analog / mixed-signal IC (run_analog==True) has
+    # its silicon flow in this A-track, NOT the digital phase2. Its digital phase2
+    # legitimately has NO synthesizable RTL (class rtl_gen=null), so phase2 FAILs
+    # and sets halted_at="phase2" — but that is the EXPECTED digital outcome, not a
+    # reason to skip the IC's OWN analog track. Previously `if not halted_at`
+    # gated the A-track OUT on that expected digital FAIL, so an analog-only IC
+    # could NEVER reach its analog flow via the one-shot entry. Dispatch the
+    # A-track whenever run_analog AND phase1 did not itself halt (phase1 emits the
+    # L5_ADI_SPEC the A-track needs); a phase2 digital halt does NOT block it. The
+    # A-track stays non-blocking, and phase3's digital PnR remains correctly gated
+    # on halted_at (a pure-analog IC still skips the digital PnR).
+    _analog_dispatch = run_analog and halted_at in ("", "phase2")
+    if _analog_dispatch:
         runner = _phase_runner("analog")
         rc = _run_phase("ANALOG A1..A8", runner,
                          [str(project), "--container", args.container],

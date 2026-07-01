@@ -4017,6 +4017,20 @@ def _stage_readmem_files(tb_path: Path, run_dir: Path) -> List[str]:
     return staged
 
 
+def _is_reused_ip_project(project: Path) -> bool:
+    """True iff phase2/stage1/rtl/SOURCE_MANIFEST.json declares reused_ip:true —
+    i.e. the DUT is upstream-validated vendor RTL staged via the catalog-glue
+    path, NOT authored from scratch. Reuses l9_rtl_pin_consistency_check's
+    manifest loader (single source of truth); best-effort False on any error.
+    chip-AGNOSTIC."""
+    try:
+        import l9_rtl_pin_consistency_check as _l9  # type: ignore
+        mf = _l9.load_source_manifest(project)
+        return bool(isinstance(mf, dict) and mf.get("reused_ip") is True)
+    except Exception:
+        return False
+
+
 def _run_oracle_tb(project: Path, top_name: str, tb_path: Path,
                    track_reason: str, t0: float,
                    container: str) -> Optional[StepResult]:
@@ -4039,6 +4053,41 @@ def _run_oracle_tb(project: Path, top_name: str, tb_path: Path,
     rc, out, err, tb_frontend = _iverilog_compile_with_sv_fallback(
         cmd, rtl_files, tb_path, run_dir, container, top_name)
     if rc != 0:
+        # ORGANIC (GAP-E2E-5) — an SV construct beyond the iverilog/sv2v OSS-sim
+        # SUBSET (e.g. OpenTitan's cross-package `pkg::PARAM` in a param default,
+        # aes_pkg.sv) blocks the reference_tb COMPILE even though yosys+slang
+        # synthesises the SAME RTL clean. For an upstream-validated REUSED-IP DUT
+        # that is a tool-subset limit, NOT a design defect → demote to a DISCLOSED
+        # WAIVE (PASS_WITH_WAIVERS), not a hard phase2 FAIL that strands the whole
+        # flow on vendor RTL the OSS simulator cannot parse. §4.05 NO-LEAK: demote
+        # ONLY when (a) the failure carries an SV-subset PARSE signature (the
+        # iverilog→sv2v ladder genuinely cannot lower it — NOT a missing-module /
+        # port structural defect) AND (b) the project is REUSED-IP (SOURCE_MANIFEST
+        # reused_ip:true — vendor RTL is upstream-validated). An AUTHORED (non-
+        # reused) RTL, or a real structural error, still hard-FAILs below.
+        #
+        # §4.05 TIGHTNESS: key ONLY on the genuine SV-construct/syntax signatures
+        # (IVERILOG_SV_ERROR_SIGNATURES — "syntax error"/"sorry:"/"Unknown
+        # package"/"Unable to bind"/…), NOT decide_iverilog_sv_fallback's broader
+        # "any .sv input failed" arm, which would ALSO waive a real missing-module
+        # / dropped-file defect (iverilog "Unknown module type: <child>" is NOT in
+        # the signature set, so such a defect correctly stays a hard FAIL).
+        _sv_subset = any(s in (out + err)
+                         for s in _sf.IVERILOG_SV_ERROR_SIGNATURES)
+        _sv_reason = "iverilog/sv2v SV-subset parse signature"
+        if _sv_subset and _is_reused_ip_project(project):
+            return StepResult(
+                "reference_tb", "WAIVED", time.time() - t0,
+                (f"per-IC oracle TB ({tb_path.name}) compile blocked by an SV "
+                 f"construct beyond the iverilog/sv2v OSS-sim subset "
+                 f"({_sv_reason}); DUT is upstream-validated REUSED-IP "
+                 f"(SOURCE_MANIFEST reused_ip:true) that synthesises via the "
+                 f"slang frontend — functional verification deferred to synth + "
+                 f"upstream validation (tool-subset limit, not a design defect)."),
+                extras={"verification_track": "oracle_tb",
+                        "tb_frontend": tb_frontend,
+                        "sv_subset_waived": True,
+                        "reused_ip": True})
         return StepResult(
             "reference_tb", "FAIL", time.time() - t0,
             (f"per-IC oracle TB ({tb_path.name}) failed to compile "
