@@ -213,18 +213,27 @@ def harden_command_hint(project_dir: Path, design: str, image: str,
             + " ".join(argv))
 
 
-def find_hardened_gds(project_dir: Path, design: str) -> Optional[Path]:
+def find_hardened_gds(project_dir: Path, design: str,
+                      tag: Optional[str] = None) -> Optional[Path]:
     """Locate the hardened GDS the OpenLane run produced, newest first.
 
     OpenLane-1 layout: openlane/<design>/runs/<tag>/results/final/gds/<design>.gds
-    (older runs used results/magic/<design>.gds). Chip-AGNOSTIC glob."""
+    (older runs used results/magic/<design>.gds). Chip-AGNOSTIC glob.
+
+    §4.05 honesty: when `tag` is given, the search is SCOPED to that run's tag
+    directory ONLY. This is critical -- an untagged (all-runs) search lets a
+    STALE GDS from an earlier, unrelated run mask the CURRENT invocation that
+    produced nothing (e.g. an OpenLane PDK-version-guard abort), which would
+    fabricate a PASS off a GDS this run never made. Passing None keeps the
+    legacy all-runs behaviour for callers that genuinely want the newest."""
     runs = project_dir / "openlane" / design / "runs"
     if not runs.is_dir():
         return None
+    base = f"{tag}" if tag else "*"
     cands: List[Path] = []
-    for pat in (f"*/results/final/gds/{design}.gds",
-                f"*/results/magic/{design}.gds",
-                f"*/results/**/{design}.gds"):
+    for pat in (f"{base}/results/final/gds/{design}.gds",
+                f"{base}/results/magic/{design}.gds",
+                f"{base}/results/**/{design}.gds"):
         cands.extend(runs.glob(pat))
     cands = [c for c in cands if c.is_file()]
     if not cands:
@@ -265,20 +274,42 @@ def run_harden(project_dir: Path, design: str,
             command_hint=hint)
     argv = build_harden_command(project_dir, design, image, pdk_root, tag=tag)
     rc, out, err = runner(argv, timeout=timeout)
-    gds = find_hardened_gds(project_dir, design)
-    if gds is not None:
+    # §4.05: scope the GDS search to THIS run's tag so a stale prior-run GDS can
+    # never mask a current invocation that produced nothing.
+    gds = find_hardened_gds(project_dir, design, tag=tag)
+    if gds is not None and rc == 0:
         return DriverResult(
             "harden", "PASS",
             details={"design": design, "rc": rc,
                      "stdout_tail": out[-2000:], "stderr_tail": err[-2000:]},
             command_hint=hint, artifact=str(gds))
+    if gds is not None and rc != 0:
+        # OpenLane produced a GDS for THIS run but the flow itself exited
+        # non-zero -- e.g. the end-of-flow KLayout XOR signoff tripped
+        # `quit_on_xor_error` (a known blackbox-macro streamout floor), or a
+        # late signoff/STA failure. The place+route may well have converged, but
+        # the flow did NOT sign off, so this is NOT a clean PASS. Record the
+        # produced GDS in details (not as `artifact`, so the merge/XOR chain does
+        # not treat an un-signed-off layout as a deliverable), and FAIL honestly.
+        return DriverResult(
+            "harden", "FAIL",
+            details={"design": design, "rc": rc,
+                     "produced_gds_but_flow_failed": str(gds),
+                     "stdout_tail": out[-4000:], "stderr_tail": err[-4000:],
+                     "note": ("OpenLane produced a hardened GDS for this run but "
+                              "the flow exited non-zero (did NOT sign off) -- "
+                              "e.g. the end-of-flow KLayout XOR signoff hit "
+                              "quit_on_xor_error on a blackbox macro. Not a "
+                              "clean PASS; inspect the run's signoff logs.")},
+            command_hint=hint)
     return DriverResult(
         "harden", "FAIL",
         details={"design": design, "rc": rc,
                  "stdout_tail": out[-4000:], "stderr_tail": err[-4000:],
-                 "note": ("OpenLane finished but no hardened GDS was produced "
+                 "note": ("OpenLane produced no hardened GDS for this run "
                           "-- inspect the run log (e.g. a DRT-0302 multi-bterm "
-                          "power-net routing wall, or a synth/floorplan error)")},
+                          "power-net routing wall, a PDK-version-guard abort, or "
+                          "a synth/floorplan error)")},
         command_hint=hint)
 
 

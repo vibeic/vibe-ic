@@ -153,6 +153,52 @@ class TestRunHarden:
         assert r.artifact is None
         assert "no hardened GDS" in r.details.get("note", "")
 
+    def test_stale_prior_run_gds_does_not_fabricate_pass(self, tmp_path):
+        # §4.05 regression: a PDK-version-guard abort produces NOTHING for this
+        # run (rc!=0, no tagged GDS) but an OLD run left a GDS under a DIFFERENT
+        # tag. The tag-scoped search must NOT pick up that stale GDS -> FAIL,
+        # never a PASS off a layout this invocation never produced.
+        proj = _project(tmp_path)
+        stale = (proj / "openlane" / "user_project_wrapper" / "runs" /
+                 "26_05_29_00_39" / "results" / "final" / "gds")
+        stale.mkdir(parents=True)
+        (stale / "user_project_wrapper.gds").write_bytes(b"STALE_PRIOR_RUN")
+
+        def aborting_runner(cmd, timeout=3600):
+            if isinstance(cmd, list) and "images" in cmd:
+                return (0, mod.OPENLANE_IMAGE_DEFAULT + "\n", "")
+            # simulate flow.tcl aborting at the open_pdks version guard: rc!=0,
+            # writes no GDS under the requested tag.
+            return (255, "", "open_pdks version mismatch; OpenLane will quit")
+
+        r = mod.run_harden(
+            proj, "user_project_wrapper", pdk_root=_pdk(tmp_path), run=True,
+            runner=aborting_runner)
+        assert r.verdict == "FAIL"
+        assert r.artifact is None
+
+    def test_produced_gds_but_nonzero_rc_is_not_a_clean_pass(self, tmp_path):
+        # §4.05 regression: the run's OWN tagged GDS exists but the flow exited
+        # non-zero (e.g. the end-of-flow KLayout XOR signoff quit_on_xor_error on
+        # a blackbox macro). That is NOT a clean PASS.
+        proj = _project(tmp_path)
+
+        def gds_then_fail_runner(cmd, timeout=3600):
+            if isinstance(cmd, list) and "images" in cmd:
+                return (0, mod.OPENLANE_IMAGE_DEFAULT + "\n", "")
+            gdir = (proj / "openlane" / "user_project_wrapper" / "runs" /
+                    "harden" / "results" / "final" / "gds")
+            gdir.mkdir(parents=True, exist_ok=True)
+            (gdir / "user_project_wrapper.gds").write_bytes(b"ROUTED_GDS")
+            return (1, "[ERROR]: There are XOR differences", "quit_on_xor_error")
+
+        r = mod.run_harden(
+            proj, "user_project_wrapper", pdk_root=_pdk(tmp_path), run=True,
+            runner=gds_then_fail_runner)
+        assert r.verdict == "FAIL"
+        assert r.artifact is None
+        assert r.details.get("produced_gds_but_flow_failed")
+
 
 # ---------------------------------------------------------------------------
 # merge — full-chip assembly
