@@ -6981,6 +6981,65 @@ def _classify_corner_from_name(name: str) -> str:
     return "unknown"
 
 
+# ── ORGANIC (GAP-E2E-2, 2026-07-01) — CONTAINER corner-liberty discovery ──────
+# The runner runs on the HOST but the built-in PDK's corner libs live in the
+# CONTAINER filesystem (PdkConfig.liberty = /foss/pdks/… a container path). The
+# #565 fallback globbed that path HOST-SIDE, which cannot see the container fs →
+# 0 corners discovered → a false `single_corner_stance.json` (corner_count=0) on
+# EVERY sky130A run, even though the container ships the full ss/tt/ff set. The
+# 7-IC end-to-end sweep hit this on spm/aes/subservient/caravel/sha256. Fix:
+# enumerate the corner libs from INSIDE the container via `docker exec ls`.
+def _discover_container_corner_libs(container: str,
+                                    lib_dir_c: str) -> List[Tuple[str, str]]:
+    """Enumerate `*.lib` corner files inside the CONTAINER PDK lib dir
+    (`lib_dir_c`, a container path). Returns [(stem, container_path), …].
+    Best-effort: empty list on any docker/exec failure or no container.
+    chip-AGNOSTIC — pure filesystem listing, no chip/vendor literal."""
+    if not container or not lib_dir_c:
+        return []
+    try:
+        rc, out, _err = _docker_exec(
+            container, f"ls {shlex.quote(lib_dir_c)}/*.lib 2>/dev/null",
+            timeout=60)
+    except Exception:
+        return []
+    libs: List[Tuple[str, str]] = []
+    for line in (out or "").splitlines():
+        line = line.strip()
+        if line.endswith(".lib"):
+            libs.append((Path(line).stem, line))
+    return libs
+
+
+# Canonical sky130 sign-off corner name fragments (worst-setup slow-hot SS,
+# nominal TT, worst-hold fast-cold FF); a robust preference, not a hard requirement.
+_SIGNOFF_CORNER_PREFERENCE = {"TT": "tt_025c_1v80",
+                              "SS": "ss_100c_1v40",
+                              "FF": "ff_n40c_1v95"}
+
+
+def _select_signoff_corners(libs: List[Tuple[str, str]]) -> List[Dict[str, str]]:
+    """From (stem, path) corner libs, pick ONE representative per SS/TT/FF label,
+    preferring the canonical sky130 sign-off corner name, else any lib of that
+    label. Returns an ordered [SS, TT, FF] subset of {name,label,liberty} (only
+    the labels actually present). ≥2 labels ⇒ a real multi-corner matrix.
+    chip-AGNOSTIC — label heuristics + canonical-name preference, no design literal."""
+    by_label: Dict[str, List[Tuple[str, str]]] = {"SS": [], "TT": [], "FF": []}
+    for name, path in libs:
+        lbl = _classify_corner_from_name(name)
+        if lbl in by_label:
+            by_label[lbl].append((name, path))
+    corners: List[Dict[str, str]] = []
+    for lbl in ("SS", "TT", "FF"):
+        cands = by_label[lbl]
+        if not cands:
+            continue
+        pref = _SIGNOFF_CORNER_PREFERENCE[lbl]
+        pick = next((c for c in cands if pref in c[0].lower()), cands[0])
+        corners.append({"name": pick[0], "label": lbl, "liberty": pick[1]})
+    return corners
+
+
 def _v1_6_620_append_pv_signoff_provenance(project: Path, top: str) -> List[str]:
     """ORGANIC #620 — idempotently declare the Step-31 Physical-Verification
     sign-off outputs (sign-off DRC report, LVS report, streamout GDS) in
@@ -7123,6 +7182,17 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                         # tree, so kept as-is (not project-relative).
                         "liberty": str(lib),
                     })
+            # ORGANIC (GAP-E2E-2) — the host-side glob above finds NOTHING when
+            # the active PDK is the container's built-in one (pdk.liberty =
+            # /foss/pdks/… lives in the CONTAINER fs, invisible to the host) →
+            # a false single_corner_stance on every sky130A run. When the host
+            # glob is empty, enumerate the corner libs from INSIDE the container
+            # and select canonical ss/tt/ff representatives so multi-corner
+            # sign-off is actually substantiated.
+            if not corners and pdk_lib_dir:
+                _clibs = _discover_container_corner_libs(
+                    container, str(pdk_lib_dir))
+                corners = _select_signoff_corners(_clibs)
         pvt = dict(_PVT_MATRIX_TEMPLATE)
         pvt["corners"] = corners
         pvt["primary_corner"] = "TT"
