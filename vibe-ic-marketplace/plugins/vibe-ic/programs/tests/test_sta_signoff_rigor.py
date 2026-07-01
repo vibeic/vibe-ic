@@ -96,12 +96,59 @@ def test_main_exit_codes(tmp_path):
     assert G.main([str(tmp_path / "nope")]) == 2
 
 
+# ── TAPEOUT-SIGNOFF P1: AOCV vs flat-OCV distinction ─────────────────────────
+
+_AOCV_RIGOR = """\
+Startpoint: reg_a
+Endpoint: reg_b
+   0.42   slack (MET)
+AOCV_TABLE_APPLIED file=/pdk/libs.tech/sky130.aocv
+Recovery/Removal checks:
+   reg_rst recovery  0.31   slack (MET)
+   reg_rst removal   0.12   slack (MET)
+Min Pulse Width checks:
+   clk min_pulse_width  1.80  slack (MET)
+"""
+
+
+def test_aocv_report_passes_and_is_richer_mode():
+    res = G.evaluate(_AOCV_RIGOR)
+    assert res["verdict"] == "PASS"
+    assert res["ocv_mode"] == "aocv"
+    assert res["aocv_applied"] is True
+    assert res["aocv_table"] == "/pdk/libs.tech/sky130.aocv"
+    assert "AOCV" in res["ocv_scope"] or "richer" in res["ocv_scope"]
+
+
+def test_flat_ocv_report_passes_as_flat_mode():
+    res = G.evaluate(_FULL_RIGOR)  # carries OCV_DERATE_APPLIED ... flat-OCV
+    assert res["verdict"] == "PASS"
+    assert res["ocv_mode"] == "flat"
+    assert res["aocv_applied"] is False
+    # honest disclosure: sky130 open PDK ships no AOCV table -> flat is real.
+    assert "flat-OCV" in res["ocv_scope"]
+
+
+def test_no_derate_report_has_null_mode_and_fails():
+    res = G.evaluate(_OPTIMISTIC)
+    assert res["verdict"] == "FAIL"
+    assert res["ocv_mode"] is None
+    assert res["aocv_applied"] is False
+
+
+def test_read_aocv_command_echo_also_counts():
+    txt = _OPTIMISTIC + "read_aocv /pdk/x.aocv\nrecovery removal min_pulse_width\n"
+    res = G.evaluate(txt)
+    assert res["ocv_derate_applied"] is True
+    assert res["ocv_mode"] == "aocv"
+
+
 # ── _emit_spef_sta source-pin ────────────────────────────────────────────────
 
 def test_spef_sta_tcl_emits_ocv_and_check_types():
     src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
     i = src.index("def _emit_spef_sta")
-    window = src[i:i + 5200]
+    window = src[i:i + 6800]
     assert "set_timing_derate -early" in window
     assert "OCV_DERATE_APPLIED" in window
     assert "report_check_types -recovery -removal" in window
@@ -109,3 +156,8 @@ def test_spef_sta_tcl_emits_ocv_and_check_types():
     # the OCV marker is written via a native-Tcl channel append (a bare
     # `puts >> file` would be invalid Tcl).
     assert "open " in window and "puts $_ocvf" in window
+    # AOCV ingest path: read_aocv guarded by catch, with the AOCV_TABLE_APPLIED
+    # marker on success and a flat-OCV fallback on failure.
+    assert "read_aocv" in window
+    assert "AOCV_TABLE_APPLIED" in window
+    assert "_discover_aocv_table" in src

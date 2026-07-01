@@ -113,6 +113,11 @@ TIMING_JSON_SHAPE = {
             "arr_fall_max": "float|null (ns)",
             "slew_rise_max": "float|null (ns)",
             "slew_fall_max": "float|null (ns)",
+            # setup (max-path) slack at this pin, ns. Present when the OpenSTA
+            # build supports report_slack; null otherwise -> the delta-delay
+            # screen degrades to ADVISORY for nets touching that pin (it cannot
+            # prove a path is pushed negative without a slack basis). §4.05.
+            "slack_max": "float|null (ns)",
         }
     },
 }
@@ -376,6 +381,44 @@ def _pin_slew(pin_rec: dict) -> float:
     return max(nums) if nums else 0.0
 
 
+def _pin_slack(pin_rec: dict) -> Optional[float]:
+    """Setup (max-path) slack of a pin in ns; None if the STA run did not
+    supply a slack for it (older OpenSTA build without report_slack, or a pin
+    off any timed path). None is HONEST: the delta-delay screen must not invent
+    a slack it does not have."""
+    v = pin_rec.get("slack_max")
+    return float(v) if isinstance(v, (int, float)) else None
+
+
+def compute_net_slacks(
+    net_load_pins: Dict[str, List[str]],
+    net_driver_pins: Dict[str, List[str]],
+    timing_pins: Dict[str, dict],
+) -> Dict[str, Optional[float]]:
+    """Per net, the WORST (minimum) setup slack among its driver + load pins.
+
+    A coupling delta-delay lands on the arrival at the net's load pins; the
+    path most at risk of being pushed negative is the one with the least slack,
+    so we take the min over the net's pins that HAVE a slack. Returns
+    {net: slack_ns or None}; None means no pin of the net carried a slack (the
+    delta-delay screen then cannot prove a push-negative for that net -> it
+    contributes to an ADVISORY verdict, never a fabricated FAIL/PASS)."""
+    out: Dict[str, Optional[float]] = {}
+    nets = set(net_load_pins) | set(net_driver_pins)
+    for net in nets:
+        best: Optional[float] = None
+        for pin in (net_load_pins.get(net, []) + net_driver_pins.get(net, [])):
+            rec = timing_pins.get(pin)
+            if rec is None:
+                continue
+            s = _pin_slack(rec)
+            if s is None:
+                continue
+            best = s if best is None else min(best, s)
+        out[net] = best
+    return out
+
+
 def compute_net_windows(
     net_driver_pins: Dict[str, List[str]],
     timing_pins: Dict[str, dict],
@@ -625,6 +668,191 @@ def score_si_timing_aware(
 
 
 # ===========================================================================
+# The coupling-based DELTA-DELAY screen  (a GENUINE PASS/FAIL/ADVISORY verdict)
+# ===========================================================================
+# Distinct from the crosstalk-NOISE screen above (a glitch on a quiet victim).
+# Delta-delay is a TIMING effect: when an aggressor switches OPPOSITE to a
+# victim WHILE the victim is transitioning, the coupling cap is Miller-
+# multiplied (up to ~2x), which SLOWS the victim edge -> adds delay to the
+# arrival at the victim's endpoint -> can push that path's setup slack NEGATIVE.
+# Unlike the noise screen (which over-claims on driven nets and is therefore
+# always ADVISORY), delta-delay CAN be PROVEN into a real FAIL when a slack
+# basis is available: a net whose coupled delta-delay exceeds its path slack
+# is a genuine setup finding, not a forced 0.
+DELTA_DELAY_MILLER_FACTOR = 2.0   # worst-case opposite-switching Miller factor
+
+
+def score_delta_delay(
+    spef: Union[str, dict],
+    timing: Union[str, dict, PathLike],
+    *,
+    vdd_v: float = 1.8,
+    miller_factor: float = DELTA_DELAY_MILLER_FACTOR,
+    overlap_guard_ns: float = 0.0,
+) -> dict:
+    """Coupling-based delta-delay screen -> a GENUINE PASS/FAIL/ADVISORY verdict.
+
+    Per coupling PAIR (aggressor a, victim v) whose switching windows OVERLAP:
+
+        ratio_v = Cc / (Cc + Cg_victim)          # coupled fraction of victim load
+        delta_t = (miller_factor - 1) * ratio_v * slew_victim    # ns, >= 0
+
+    Physical basis (lumped, disclosed): the victim edge time ~ R_drv * C_total,
+    captured by its slew. An opposite-switching aggressor raises the effective
+    coupling from ~1x Cc (already in the quiescent arrival) to ~miller_factor x
+    Cc, i.e. an EXTRA (miller_factor-1)*Cc of load, a (miller_factor-1)*ratio_v
+    fractional load increase, which lengthens the transition ~proportionally ->
+    the extra delay is (miller_factor-1)*ratio_v*slew_victim. With the default
+    miller_factor=2.0 the increment is ratio_v*slew_victim (a conservative
+    screen bound).
+
+    A pair is a PROVEN FINDING (setup pushout) iff:
+        windows overlap  AND  the victim net has a known path slack  AND
+        delta_t > slack_victim          (the delta-delay pushes it negative)
+
+    Verdict (delta_delay_verdict):
+      FAIL      >=1 pair pushes a path negative (proven with a real slack basis).
+      PASS      a slack basis WAS available for the coupled/overlapping nets AND
+                every overlapping pair's delta_t stays within slack (the timing
+                margin covers the worst modelled delta-delay). Non-vacuous: PASS
+                requires at least one overlapping pair to have been slack-checked.
+      ADVISORY  no slack basis for the coupled nets (older OpenSTA build, or no
+                overlapping coupled pair had slack) -> cannot PROVE a push-
+                negative; the decoupled-safe pairs are still reported. This is
+                the honest §4.05 outcome, NOT a forced 0 that hides risk.
+
+    §4.05: a forced-0 that hides a real coupling risk is dishonest; here a real
+    over-slack delta-delay always surfaces as FAIL, and inability to prove is
+    ADVISORY (never silently PASS)."""
+    sp = spef if isinstance(spef, dict) else parse_spef(spef)
+    tj = timing if isinstance(timing, dict) else load_timing_json(timing)
+
+    pins = tj.get("pins", {})
+    cg = sp["cg"]
+    pair_cc = sp["pair_cc"]
+    name_map = sp.get("name_map", {})
+    net_windows = compute_net_windows(sp["net_driver_pins"], pins)
+    net_slacks = compute_net_slacks(
+        sp["net_load_pins"], sp["net_driver_pins"], pins)
+
+    def _label(net: str) -> str:
+        return name_map.get(net, net)
+
+    def _win(net: str) -> Optional[Tuple[float, float]]:
+        rec = net_windows.get(net)
+        return rec["win"] if rec else None
+
+    def _slew(net: str) -> float:
+        rec = net_windows.get(net)
+        return float(rec["slew"]) if rec else 0.0
+
+    findings: List[dict] = []          # PROVEN push-negative (FAIL drivers)
+    watch: List[dict] = []             # over-slack-ambiguous / near-margin advisory
+    pairs_overlapping = 0
+    pairs_decoupled = 0
+    pairs_slack_checked = 0
+    max_delta_t_ns = 0.0
+    incr = max(0.0, miller_factor - 1.0)
+
+    for pair, cc_val in pair_cc.items():
+        n1, n2 = tuple(pair)
+        for victim, aggressor in ((n1, n2), (n2, n1)):
+            cg_v = cg.get(victim, 0.0)
+            denom = cc_val + cg_v
+            if denom <= 0:
+                continue
+            win_v = _win(victim)
+            win_a = _win(aggressor)
+            if not _windows_overlap(win_a, win_v, overlap_guard_ns):
+                pairs_decoupled += 1
+                continue
+            pairs_overlapping += 1
+            ratio_v = cc_val / denom
+            slew_v = _slew(victim)
+            delta_t = incr * ratio_v * slew_v
+            max_delta_t_ns = max(max_delta_t_ns, delta_t)
+            slack_v = net_slacks.get(victim)
+            entry = {
+                "victim": _label(victim),
+                "aggressor": _label(aggressor),
+                "victim_spef_id": victim,
+                "aggressor_spef_id": aggressor,
+                "cc": round(cc_val, 6),
+                "cg_victim": round(cg_v, 6),
+                "coupled_ratio": round(ratio_v, 4),
+                "victim_slew_ns": round(slew_v, 4),
+                "delta_delay_ns": round(delta_t, 4),
+                "victim_slack_ns": (round(slack_v, 4)
+                                    if slack_v is not None else None),
+            }
+            if slack_v is None:
+                # cannot prove a push-negative without a slack basis
+                entry["status"] = "unprovable_no_slack"
+                watch.append(entry)
+                continue
+            pairs_slack_checked += 1
+            post_slack = slack_v - delta_t
+            entry["post_coupling_slack_ns"] = round(post_slack, 4)
+            if post_slack < 0.0:
+                entry["status"] = "push_negative"
+                entry["note"] = (
+                    "coupled delta-delay exceeds path slack -> setup pushout "
+                    "(PROVEN with the STA slack basis)")
+                findings.append(entry)
+            elif delta_t > 0 and post_slack < 0.5 * max(slack_v, 1e-9):
+                entry["status"] = "eroded_margin"
+                entry["note"] = ("delta-delay consumes >50% of the path slack "
+                                 "(advisory watch, not a proven failure)")
+                watch.append(entry)
+
+    findings.sort(key=lambda e: e.get("post_coupling_slack_ns", 0.0))
+    watch.sort(key=lambda e: -e["delta_delay_ns"])
+
+    if findings:
+        verdict = "FAIL"
+    elif pairs_slack_checked > 0:
+        verdict = "PASS"
+    else:
+        verdict = "ADVISORY"
+
+    return {
+        "tool": "opensta-spef-coupling-delta-delay-screen",
+        "mode": "signal_integrity_delta_delay",
+        "scope": (
+            "Coupling-based delta-delay screen: a Miller-multiplied coupling "
+            "cap on an overlapping aggressor slows the victim edge and can push "
+            "the victim path's setup slack negative. This is a GENUINE verdict "
+            "-- FAIL when a net's modelled delta-delay exceeds its STA path "
+            "slack (proven push-negative), PASS when a slack basis exists and "
+            "covers the worst modelled delta-delay, ADVISORY when no slack "
+            "basis is available (cannot prove). It is a LUMPED estimate "
+            "(delta_t=(MF-1)*Cc/(Cc+Cg)*slew), NOT a full RLC(K) / CCS-Noise "
+            "commercial SI-timing sign-off, and does not claim commercial "
+            "equivalence. §4.05: a real over-slack coupling risk always "
+            "surfaces (never a forced 0); inability to prove is ADVISORY, "
+            "never a silent PASS."),
+        "method": (
+            "delta_t = (miller_factor-1) * Cc/(Cc+Cg_victim) * slew_victim, "
+            "evaluated only for aggressor/victim pairs whose STA switching "
+            "windows overlap; compared against the victim net's worst path "
+            "slack (min over its driver+load pins). MF=%.2f." % miller_factor),
+        "vdd_v": vdd_v,
+        "miller_factor": miller_factor,
+        "coupling_pairs": len(pair_cc),
+        "pairs_overlapping": pairs_overlapping,
+        "pairs_decoupled_by_window": pairs_decoupled,
+        "pairs_slack_checked": pairs_slack_checked,
+        "max_delta_delay_ns": round(max_delta_t_ns, 4),
+        "violations_count": len(findings),
+        "violations": findings[:200],
+        "watchlist_count": len(watch),
+        "watchlist": watch[:100],
+        "delta_delay_verdict": verdict,
+        "verdict": verdict,
+    }
+
+
+# ===========================================================================
 # The OpenSTA TCL recipe (PRODUCES the timing JSON the scorer consumes)
 # ===========================================================================
 def build_opensta_si_tcl(
@@ -708,10 +936,25 @@ proc _si_emit {{obj out first_var n_var}} {{
   set _si_srmn ""; set _si_srmx ""; set _si_sfmn ""; set _si_sfmx ""
   regexp {{\\^ ([-0-9.eE+]+):([-0-9.eE+]+)}} $_si_slw -> _si_srmn _si_srmx
   regexp {{v ([-0-9.eE+]+):([-0-9.eE+]+)}} $_si_slw -> _si_sfmn _si_sfmx
+  # Per-pin SETUP slack for the delta-delay screen: slack = required - arrival on
+  # the LATE (max) path, worst of rise/fall. required from report_required (same
+  # "r min:max f min:max" shape as report_arrival). null when unavailable (older
+  # OpenSTA build / off-path pin) -> the delta-delay screen degrades to ADVISORY
+  # for nets touching this pin (never a fabricated slack). §4.05.
+  set _si_req [_si_capture report_required $obj]
+  set _si_rrmx ""; set _si_rfmx ""
+  regexp {{r ([-0-9.eE+]+):([-0-9.eE+]+)}} $_si_req -> _si_dummy _si_rrmx
+  regexp {{f ([-0-9.eE+]+):([-0-9.eE+]+)}} $_si_req -> _si_dummy _si_rfmx
+  set _si_slk ""
+  if {{$_si_rrmx ne "" && $_si_armx ne ""}} {{ set _si_slk [expr {{$_si_rrmx - $_si_armx}}] }}
+  if {{$_si_rfmx ne "" && $_si_afmx ne ""}} {{
+    set _si_slkf [expr {{$_si_rfmx - $_si_afmx}}]
+    if {{$_si_slk eq "" || $_si_slkf < $_si_slk}} {{ set _si_slk $_si_slkf }}
+  }}
   if {{!$_si_first}} {{ puts $out "," }}
   set _si_first 0
   incr _si_n
-  puts -nonewline $out "    \\"$_si_pn\\": {{\\"arr_rise_min\\": [_si_jnum $_si_armn], \\"arr_rise_max\\": [_si_jnum $_si_armx], \\"arr_fall_min\\": [_si_jnum $_si_afmn], \\"arr_fall_max\\": [_si_jnum $_si_afmx], \\"slew_rise_max\\": [_si_jnum $_si_srmx], \\"slew_fall_max\\": [_si_jnum $_si_sfmx]}}"
+  puts -nonewline $out "    \\"$_si_pn\\": {{\\"arr_rise_min\\": [_si_jnum $_si_armn], \\"arr_rise_max\\": [_si_jnum $_si_armx], \\"arr_fall_min\\": [_si_jnum $_si_afmn], \\"arr_fall_max\\": [_si_jnum $_si_afmx], \\"slew_rise_max\\": [_si_jnum $_si_srmx], \\"slew_fall_max\\": [_si_jnum $_si_sfmx], \\"slack_max\\": [_si_jnum $_si_slk]}}"
 }}
 foreach _si_p [get_pins -hierarchical *] {{ _si_emit $_si_p $_si_out _si_first _si_n }}
 if {{![catch {{set _si_ports [get_ports *]}}]}} {{
@@ -762,6 +1005,28 @@ def _render_rpt(v: dict, spef_path: str, timing_path: str) -> str:
         f"watchlist_low_count (floating-bound over margin, gating cleared): {v['watchlist_low_count']}",
         f"crosstalk: {v['verdict']}",
     ]
+    dd = v.get("delta_delay")
+    if dd is not None:
+        lines += [
+            "#",
+            "# --- COUPLING DELTA-DELAY screen (GENUINE PASS/FAIL/ADVISORY) ---",
+            "# A Miller-multiplied coupling cap on an OVERLAPPING aggressor slows the",
+            "# victim edge; delta_t=(MF-1)*Cc/(Cc+Cg)*slew is compared to the victim",
+            "# net's STA path slack. FAIL = proven push-negative; PASS = slack basis",
+            "# covers the worst delta-delay; ADVISORY = no slack basis (cannot prove).",
+            f"delta_delay_miller_factor: {dd['miller_factor']}",
+            f"delta_delay_pairs_overlapping: {dd['pairs_overlapping']}",
+            f"delta_delay_pairs_decoupled (SAFE): {dd['pairs_decoupled_by_window']}",
+            f"delta_delay_pairs_slack_checked: {dd['pairs_slack_checked']}",
+            f"delta_delay_max_ns: {dd['max_delta_delay_ns']}",
+            f"delta_delay_violations_count: {dd['violations_count']}",
+            f"delta_delay: {dd['delta_delay_verdict']}",
+        ]
+        for e in dd.get("violations", [])[:20]:
+            lines.append(
+                f"#   VIOLATION victim={e['victim']} aggressor={e['aggressor']} "
+                f"delta={e['delta_delay_ns']}ns slack={e['victim_slack_ns']}ns "
+                f"post_slack={e.get('post_coupling_slack_ns')}ns")
     if high:
         lines.append("#")
         lines.append("# --- HIGH watch-list (overlap AND gated bound > margin; ADVISORY, "
@@ -794,10 +1059,17 @@ def run_si_signoff_timing_aware(
     build_opensta_si_tcl(...) and running it with `sta`; then it calls this."""
     spef_path = Path(spef_path)
     spef_text = spef_path.read_text(errors="replace")
+    sp = parse_spef(spef_text)          # parse once, share both screens
+    tj = load_timing_json(timing_json_path)
     verdict = score_si_timing_aware(
-        spef_text, str(timing_json_path),
+        sp, tj,
         vdd_v=vdd_v, noise_margin_mv=noise_margin_mv,
     )
+    # The GENUINE coupling-based delta-delay verdict (PASS/FAIL/ADVISORY),
+    # distinct from the always-advisory noise screen above.
+    dd = score_delta_delay(sp, tj, vdd_v=vdd_v)
+    verdict["delta_delay"] = dd
+    verdict["delta_delay_verdict"] = dd["delta_delay_verdict"]
     verdict["spef"] = str(spef_path)
     verdict["timing_json"] = str(timing_json_path)
     if out_json is not None:
@@ -832,6 +1104,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="opt-in: exit 1 if the HIGH advisory watch-list is non-empty. "
              "DEFAULT is advisory (always exit 0) -- this screen never fails "
              "a build because the flagged direction is not a proven failure.")
+    sp_s.add_argument(
+        "--strict-delta", action="store_true",
+        help="opt-in: exit 1 if the coupling DELTA-DELAY verdict is FAIL "
+             "(a net whose modelled delta-delay is PROVEN to push a path "
+             "negative against the STA slack basis). This IS a genuine "
+             "failure, unlike the advisory noise watch-list.")
 
     sp_t = sub.add_parser("emit-tcl", help="emit the OpenSTA TCL that produces the timing JSON")
     sp_t.add_argument("out_tcl")
@@ -857,6 +1135,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         except (OSError, ValueError, json.JSONDecodeError) as e:
             print(f"si_signoff: IO/parse error: {e}", file=sys.stderr)
             return 2
+        dd = v.get("delta_delay", {})
         print(json.dumps({
             "verdict": v["verdict"],
             "watchlist_high_count": v["watchlist_high_count"],
@@ -866,11 +1145,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             "pairs_decoupled_by_window": v["pairs_decoupled_by_window"],
             "max_base_noise_mv": v["max_base_noise_mv"],
             "max_gated_noise_mv": v["max_gated_noise_mv"],
+            "delta_delay_verdict": v.get("delta_delay_verdict"),
+            "delta_delay_violations_count": dd.get("violations_count"),
+            "delta_delay_max_ns": dd.get("max_delta_delay_ns"),
+            "delta_delay_pairs_slack_checked": dd.get("pairs_slack_checked"),
         }, indent=2))
-        # ADVISORY screen: DEFAULT exit 0 always (never fails a build). Only the
-        # opt-in --strict gate exits 1 when the HIGH advisory watch-list is
-        # non-empty -- and even then this is a flagged-for-review signal, not a
-        # proven SI failure.
+        # The noise screen is ADVISORY (DEFAULT exit 0). The delta-delay screen
+        # CAN be a genuine failure: opt-in --strict-delta exits 1 on a proven
+        # push-negative. --strict keeps the legacy HIGH-noise-watch gate.
+        if args.strict_delta and v.get("delta_delay_verdict") == "FAIL":
+            return 1
         if args.strict and v["watchlist_high_count"] > 0:
             return 1
         return 0
