@@ -50,6 +50,7 @@ import _path_layout as _pl
 import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
 import lvs_verdict_tokens as _lvt  # #524 — shared netgen terminal-verdict tokens
 import lvs_netgen_setup_emit as _lvs_setup  # GAP-E2E-9 — power-net globalisation
+import lvs_power_aware_netlist_emit as _lvs_pa  # GAP-E2E-9 ROOT — power-aware netlist
 import sdc_constraints as _sdc  # #554 — shared staged-SDC ground-truth helpers
 
 
@@ -7571,6 +7572,85 @@ def _lvs_power_pin_only_mismatch(blob: str) -> bool:
             and _lvt.mismatch_class(blob) == "POWER_PIN_ONLY")
 
 
+def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
+                         container: str, spice_out: Path, sp_c: str,
+                         lay_top: str, netlist: Path, netgen_setup: str,
+                         lvs_rpt: Path, ext_warning: Optional[str],
+                         t0: float) -> Optional[StepResult]:
+    """GAP-E2E-9 ROOT FIX — try netgen with a POWER-AWARE gate netlist.
+
+    Emits a power-aware version of `netlist` (PDK rails as top ports + per-cell
+    PG connectivity, via `lvs_power_aware_netlist_emit` — chip/PDK-AGNOSTIC) and
+    runs netgen against the same extracted layout. Returns a PASS StepResult ONLY
+    when netgen reaches a genuine `Circuits match uniquely` — meaning the power
+    network is actually LVS-VERIFIED (not dropped as the plain netlist forces).
+
+    Returns None in EVERY other case (unrecognised PDK, nothing patched, emit or
+    netgen error, or the power-aware compare did not reach a clean match), so the
+    caller falls through to the UNCHANGED plain-netlist path. This makes the
+    power-aware result STRICTLY MONOTONIC — it can only UPGRADE a power-blind or
+    POWER_PIN_ONLY outcome to a genuine power-verified match, never regress it,
+    and it never converts a SIGNAL_NET_MISMATCH (§4.05)."""
+    ext_dir = _pl.extracted_dir(project)
+    pa_netlist = ext_dir / f"{top}_pnr_pwraware.v"
+    try:
+        stats = _lvs_pa.emit_to_file(netlist, pdk.name, pa_netlist, top=top)
+    except Exception:  # nosec — a bad netlist must never break the plain path
+        return None
+    if stats.get("modules_patched", 0) <= 0 or not pa_netlist.is_file():
+        return None
+    pa_rpt = project / "reports" / "phase3" / "lvs_power_aware.rpt"
+    pa_rpt.parent.mkdir(parents=True, exist_ok=True)
+    pa_nl_c = _to_container_path(str(pa_netlist), container)
+    pa_rpt_c = _to_container_path(str(pa_rpt), container)
+    pa_cmd = (
+        f"export PATH={TOOLS_IN_CONTAINER}/netgen/bin:"
+        f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+        f"netgen -batch lvs \"{sp_c} {lay_top}\" \"{pa_nl_c} {top}\" "
+        f"{shlex.quote(netgen_setup)} {pa_rpt_c}")
+    try:
+        _rc, pa_out, pa_err = _docker_exec(container, pa_cmd, timeout=14400)
+    except Exception:  # nosec — netgen crash on the pre-attempt is non-fatal
+        return None
+    pa_txt = pa_rpt.read_text(errors="replace") if pa_rpt.is_file() else ""
+    pa_blob = (pa_out or "") + "\n" + (pa_err or "") + "\n" + pa_txt
+    if _lvt.classify(pa_blob) != "MATCH":
+        return None                         # no genuine match → fall through
+    rails = ", ".join(stats.get("rails", []))
+    npatch = stats.get("instances_patched", 0)
+    # Genuine POWER-VERIFIED match — copy the power-aware report to the canonical
+    # lvs.rpt so the runner and the Step-31 gate read the same matching report.
+    try:
+        lvs_rpt.write_text(pa_txt)
+    except OSError:
+        pass
+    verdict = _write_lvs_verdict(
+        project, "PASS", "LVS_MATCH_POWER_VERIFIED",
+        f"netgen LVS: circuits match uniquely with a POWER-AWARE gate netlist "
+        f"(PDK rails {rails} as top ports + per-cell PG connectivity on {npatch} "
+        f"instances) — the power network is LVS-VERIFIED, not dropped as a plain "
+        f"power-unaware netlist forces. GAP-E2E-9 ROOT FIX.",
+        extras={"lvs_report": "reports/phase3/lvs.rpt",
+                "power_aware_netlist": str(pa_netlist.relative_to(project)),
+                "power_aware_stats": stats,
+                "ext2spice_warning": ext_warning})
+    detail = (
+        f"netgen LVS: circuits match uniquely under a POWER-AWARE gate netlist "
+        f"(layout {lay_top} vs power-aware {pa_netlist.name}) — power network "
+        f"VERIFIED (rails {rails}); report at reports/phase3/lvs.rpt")
+    if ext_warning:
+        detail += f" [WARN: {ext_warning}]"
+    return StepResult(
+        "lvs", "PASS", time.time() - t0, detail,
+        extras={"finding": "LVS_MATCH_POWER_VERIFIED",
+                "lvs_report": "reports/phase3/lvs.rpt",
+                "lvs_verdict": verdict,
+                "power_aware_signoff": True,
+                "power_aware_stats": stats,
+                "ext2spice_warning": ext_warning,
+                "extracted_netlist": str(spice_out.relative_to(project))})
+
+
 def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
                         container: str, def_file: Path, netlist: Path,
                         magicrc: str, netgen_setup: str,
@@ -7720,6 +7800,25 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     sp_c = _to_container_path(str(spice_out), container)
     nl_c = _to_container_path(str(netlist), container)
     rpt_c = _to_container_path(str(lvs_rpt), container)
+    # ── GAP-E2E-9 ROOT FIX — POWER-AWARE netlist pre-attempt (§4.05-safe). ──
+    # The plain gate netlist carries no power ports, so netgen can only reach a
+    # match by DROPPING every std-cell's power pins (a power-BLIND match) or, on
+    # some sky130 OSS runs, by reporting POWER_PIN_ONLY. Emit a power-aware gate
+    # netlist (PDK rails as top ports + per-cell PG connectivity, derived from
+    # the PDK — chip-AGNOSTIC) and try netgen with THAT first: when it reaches a
+    # genuine `Circuits match uniquely`, the power network is actually
+    # LVS-VERIFIED — the strongest, tapeout-grade result. STRICTLY MONOTONIC: a
+    # power-aware match only UPGRADES the verdict; if it does NOT match (e.g. a
+    # DEF-direct extraction that collapsed the rails onto one node), we fall
+    # straight through to the UNCHANGED plain-netlist path below, so nothing
+    # regresses and the POWER_PIN_ONLY triage waiver stays the fallback. §4.05:
+    # the plain path still FAILs a real SIGNAL_NET_MISMATCH — the power-aware
+    # attempt never waves one through (it can only reach a clean MATCH or defer).
+    _pa_result = _try_power_aware_lvs(
+        project, top, pdk, container, spice_out, sp_c, lay_top, netlist,
+        netgen_setup, lvs_rpt, ext_warning, t0)
+    if _pa_result is not None:
+        return _pa_result
     cmd = (
         # v0.3.11 #508 set MAGIC_EXT_USE_GDS=1 here to activate the PDK
         # setup's gated ignore block — but the field (#508/#509 round-2)
