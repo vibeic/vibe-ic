@@ -2367,14 +2367,21 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     # legacy flow (each clause is "" so its f-string interpolation is a no-op).
     _rf_knobs = _reference_flow_qor_knobs(project)
     _rf_notes: List[str] = []
-    # SWAP_ARITH_OPERATORS → yosys `alumacc` (consolidate arithmetic operators
-    # into $alu/$macc macros so the reference's adder techmap / a faster adder
-    # architecture can remap them before generic mapping — the yosys-native
-    # equivalent of the ORFS SWAP_ARITH_OPERATORS intent).
+    # SWAP_ARITH_OPERATORS → yosys `alumacc` — HONEST SCOPE (live-run fidelity
+    # finding, v1.2.72 measurement): `alumacc` consolidates arithmetic operators
+    # into $alu/$macc macros, which is the STRUCTURAL ENABLER an adder techmap
+    # (ADDER_MAP_FILE) needs to remap the arithmetic to a faster architecture. It
+    # is NOT itself an operand-swap timing-repair: by itself it does not shorten
+    # or restructure the carry chain (abc still maps a ripple chain absent a
+    # techmap). So this knob delivers its timing intent ONLY together with a
+    # staged ADDER_MAP_FILE; alone it is a benign structural pass. Disclosed as
+    # such so the mapping is not over-claimed as reproducing ORFS's timing-repair.
     _swap_arith_clause = ""
     if _rf_knobs.get("SWAP_ARITH_OPERATORS") == "1":
         _swap_arith_clause = "alumacc; "
-        _rf_notes.append("SWAP_ARITH_OPERATORS -> alumacc")
+        _rf_notes.append(
+            "SWAP_ARITH_OPERATORS -> alumacc (structural $alu/$macc enabler for "
+            "an adder techmap; NOT an operand-swap timing-repair on its own)")
     # ADDER_MAP_FILE → stage the design's OWN adder techmap into the synth
     # workdir and `techmap -map <file>` it (the exact ORFS directive). A
     # declared path that is absent / unreadable / an unexpanded flow variable
