@@ -143,6 +143,38 @@ tools can and cannot do.
 **These are data/environment/commercial-tool dependencies, not Vibe-IC capability gaps.** The plugin's
 program-first tapeout-signoff surface is complete and honest end-to-end.
 
+## ── PDK-UNLOCK LIVE RUN (v1.2.82) — the caravel DRT-0302 "floor" is OVERTURNED ──
+Pushed on the biggest external dependency (a full sky130A PDK for the live caravel harden + full
+precheck). Findings (all LIVE, dedicated containers, honest):
+- **A full sky130A PDK was already present** (1.3 GB at the Caravel project's `dependencies/pdks/sky130A`,
+  open_pdks 54435919; a second copy in iic-osic-tools `/foss/pdks`). The `SKY130A: None` seen earlier
+  is a COSMETIC skywater-subversion label — the full PDK was already mounted (the precheck reported the
+  exact open_pdks hash). The real blocker was OpenLane's version guard, cleared with the sanctioned
+  `-ignore_mismatches`.
+- **★ The caravel wrapper HARDEN ROUTES CLEAN — DRT-0302 is GONE.** Real OpenLane on
+  `user_project_wrapper` at the fixed 2.92×3.52 mm outline: **`DRT-0199 violations = 0`, "No DRC
+  violations after detailed routing"**, produced a fresh hardened GDS. The historical DRT-0302
+  multi-bterm power-net wall (long cited as the 2-of-7 floor's cause) was NOT hit — a third campaign
+  "floor" overturned. The flow only exits non-zero at STEP-24 KLayout XOR (blackbox `spm` macro, 4831
+  diffs) — the documented blackbox-macro floor, honestly reported.
+- **The FULL 12-check precheck ran with the real PDK** (the 5 PDK-dependent checks that couldn't run
+  before): **klayout_beol PASS, klayout_offgrid PASS** (2/5 outright); magic_drc 2 + klayout_feol 11 =
+  macro-boundary nwell (blackbox floor); **LVS FAIL only because `verilog/gl/user_project_wrapper.v` is
+  ABSENT** (extraction against the real PDK worked — the harden's own `results/final/verilog/gl/`
+  produces that netlist). So the remaining fails are (a) a project-input gap the harden itself fills,
+  and (b) the blackbox-macro floor (needs the macro's real GDS/taps or explicit chipignite waivers).
+- **§4.05 bug caught + fixed (v1.2.82):** the live run exposed a false-PASS — `run_harden` returned PASS
+  off a STALE GDS from an unrelated prior run when the flow actually aborted (rc=255). Fixed: run-scoped
+  GDS search + rc-aware verdict; proven live (same command now FAILs). This is exactly why live
+  validation is load-bearing.
+- **Still BLOCKED (honest, one input):** the golden full-chip `caravel.gds` is not in the project (only
+  `user_project_wrapper_empty.gds`), so the full-chip XOR-vs-golden needs that reference placed at
+  `<project>/gds/caravel.gds`.
+
+**Net:** with the real PDK wired, the caravel harden CONVERGES and 2/5 PDK-checks PASS outright; every
+remaining fail is now a NAMED, bounded item (the gl-netlist input the harden emits, the blackbox-macro
+floor + its waivers, and the golden caravel.gds for XOR) — not a Vibe-IC capability gap.
+
 ## THE reframing that changes everything (Efabless = no Calibre gap)
 
 The one **real, free** tapeout path for sky130 is the **Efabless / chipIgnite / Google-sky130 open
