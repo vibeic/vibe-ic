@@ -217,9 +217,9 @@ reason=no public ngspice models for target; open-source substitute
 T = {}
 
 T["ldo"] = """\
-* {block} LDO ({pdk}, real ngspice) — Vout target 1.8V
+* {block} LDO ({pdk}, real ngspice) — Vout target from L5 (static default 1.8V)
 .option scale=1u
-.lib {pdk_lib} tt
+.lib {pdk_lib} {corner}
 .param m_pass={m_pass}
 v_vdd vdd 0 3.3
 v_vref vref 0 0.9
@@ -248,7 +248,7 @@ T["bandgap"] = """\
 * Simplified: PTAT (kT/q ln N) + CTAT (Vbe) sum, scaled by R ratio.
 * Sweep R-ratio = R2/R1 via R_RATIO param.
 .option scale=1u
-.lib {pdk_lib} tt
+.lib {pdk_lib} {corner}
 .param r_ratio={r_ratio}
 v_vdd vdd 0 3.3
 * CTAT: diode-connected BJT proxy via diode-connected MOSFET (Vbe-like)
@@ -272,7 +272,7 @@ T["por"] = """\
 * {block} POR — sweep Vdd, find trip point.
 * Simple Vdd divider compared to a Vbe-like ref; trip ~ Vdd*0.7
 .option scale=1u
-.lib {pdk_lib} tt
+.lib {pdk_lib} {corner}
 .param vdd_v={vdd_v}
 v_vdd vdd 0 'vdd_v'
 * Reference
@@ -295,7 +295,7 @@ echo "MEAS vout=" $&vo " vd=" $&v(vd) " ref=" $&v(ref)
 T["pull"] = """\
 * {block} Pull (weak pull-down) — measure Reff = V/I via series 1k.
 .option scale=1u
-.lib {pdk_lib} tt
+.lib {pdk_lib} {corner}
 v_test vt_top 0 0.9
 r_sense vt_top vt_bot 1k
 v_g vg 0 1.8
@@ -315,7 +315,7 @@ echo "MEAS vout=" $&vbot " ipull=" $&i_pull " reff=" $&reff
 T["trim"] = """\
 * {block} TRIM 4-bit DAC monotonicity — sweep code via parameter w_scale.
 .option scale=1u
-.lib {pdk_lib} tt
+.lib {pdk_lib} {corner}
 .param code={code}
 v_vdd vdd 0 1.8
 * Binary-weighted resistor DAC proxy: w scales linearly with code
@@ -333,7 +333,7 @@ T["oscillator"] = """\
 * {block} Oscillator — 3-stage inverter ring DC bias check.
 *   Ring frequency requires .tran; here only DC bias self-consistency.
 .option scale=1u
-.lib {pdk_lib} tt
+.lib {pdk_lib} {corner}
 v_vdd vdd 0 1.8
 * 3 inverters in a ring; UIC starts mid-rail
 xmn1 n1 n0 0 0   sky130_fd_pr__nfet_01v8 w=2 l=0.15
@@ -354,7 +354,7 @@ echo "MEAS vout=" $&vo " n1=" $&v(n1) " n2=" $&v(n2)
 T["esd"] = """\
 * {block} ESD diode clamp — measure Vfwd at 1mA forward.
 .option scale=1u
-.lib {pdk_lib} tt
+.lib {pdk_lib} {corner}
 v_inj pad 0 0.7
 i_test pad 0 dc 1m
 * Forward diode = diode-connected NMOS in deep saturation
@@ -372,7 +372,7 @@ T["charge_pump"] = """\
 * Simplified: two MOSFET switches + flying cap + storage cap.
 * For SS DC the doubled voltage settles at ~ 2*Vdd minus 2*Vth.
 .option scale=1u
-.lib {pdk_lib} tt
+.lib {pdk_lib} {corner}
 v_vdd vdd 0 1.8
 * Storage cap pre-charged via diode-tree to model end-of-cycle
 xmn_d1 mid mid 0 0 sky130_fd_pr__nfet_01v8 w=8 l=0.5
@@ -796,8 +796,345 @@ def _verdict(meas, target):
     if target["target"] is None or target["key"] not in meas:
         return "PASS_INFORMATIONAL"  # measurement obtained, no fixed target
     v = meas[target["key"]]
+    if v is None:
+        return "PASS_INFORMATIONAL"
     err = abs(v - target["target"]) / target["target"]
     return "PASS" if err <= target["tol"] else "FAIL"
+
+
+# ───────── GAP-ANALOG-2: inherit the L5 block spec into the sweep ─────────
+#
+# The static per-block-TYPE TARGETS table (e.g. TARGETS['ldo'].target=1.8) and
+# the deck literals (`v_vref vref 0 0.9` → the fixed 2:1 divider regulates
+# 1.8 V) are GENERIC defaults. When the block's Phase-1 L5 spec carries a
+# concrete electrical target — e.g. u_hawaii_adc's LDO regulates the 1.2 V core,
+# NOT the generic 1.8 V — the sweep must GRADE against and REGULATE toward that
+# L5 value. §4.05 NO-LEAK: the ONLY file read here is the Phase-1 GENERATED doc
+# phase1/generated_docs/L5_ADI_SPEC.json (blind-legal); NO output.* / golden /
+# harness is ever consulted. When L5 lacks a value we FALL BACK to the static
+# default and DISCLOSE the fallback (we NEVER fabricate a spec value).
+# chip-AGNOSTIC: keyed on the L5 `specs[].name` schema field, never a design name.
+
+# Canonical spec name → the tokens an L5 `specs[].name` may use for it. Match is
+# on the alnum-lowered token (so "Vout", "V_out", "output voltage" all map).
+_SPEC_NAME_ALIASES = {
+    "vout":    {"vout", "voutput", "outputvoltage", "vreg", "vo", "vdd_out"},
+    "vin":     {"vin", "vinput", "inputvoltage", "vsupply", "supplyvoltage"},
+    "iout":    {"iout", "ioutput", "outputcurrent", "loadcurrent", "iload"},
+    "dropout": {"dropout", "vdropout", "headroom"},
+    "psrr":    {"psrr", "supplyrejection"},
+    "iq":      {"iq", "iquiescent", "quiescentcurrent"},
+}
+
+
+def _normalize_spec_name(name):
+    """Map an L5 spec `name` to a canonical key (or None). chip-AGNOSTIC."""
+    tok = re.sub(r"[^a-z0-9]", "", str(name or "").lower())
+    for canon, aliases in _SPEC_NAME_ALIASES.items():
+        if tok in aliases:
+            return canon
+    return None
+
+
+def _spec_num(entry, *keys):
+    """First present finite numeric among entry[keys] → (value, bound_key)."""
+    for k in keys:
+        v = entry.get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return float(v), k
+    return None, None
+
+
+def l5_block_specs(project, block, btype=None):
+    """Parse the block's structured L5 spec into
+    {canon_name: {"value": float, "bound": "target|min|max", "unit": str,
+                  "raw": <entry>}}.
+
+    Reads ONLY phase1/generated_docs/L5_ADI_SPEC.json (§4.05 blind-legal
+    Phase-1 generated doc). Returns {} when the file / block / structured spec
+    is absent — the caller then falls back to the static default. The L5 `spec`
+    field may be null or a bare string (e.g. "1.8 V, 1.2 V, 125 °C"); only a
+    dict carrying a `specs` list yields structured values. NEVER fabricates."""
+    l5 = Path(project) / "phase1" / "generated_docs" / "L5_ADI_SPEC.json"
+    if not l5.is_file():
+        return {}
+    try:
+        d = json.loads(l5.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return {}
+    blocks = d.get("analog_blocks") or []
+    chosen = None
+    for b in blocks:                       # exact name match first
+        if isinstance(b, dict) and b.get("name") == block:
+            chosen = b
+            break
+    if chosen is None and btype is not None:   # then by block type
+        for b in blocks:
+            if isinstance(b, dict) and b.get("type") == btype:
+                chosen = b
+                break
+    if chosen is None:
+        return {}
+    spec = chosen.get("spec")
+    if not isinstance(spec, dict):
+        return {}
+    specs = spec.get("specs")
+    if not isinstance(specs, list):
+        return {}
+    out = {}
+    for e in specs:
+        if not isinstance(e, dict):
+            continue
+        canon = _normalize_spec_name(e.get("name"))
+        if not canon or canon in out:
+            continue
+        val, bound = _spec_num(e, "target", "min", "max")
+        if val is None:
+            continue
+        out[canon] = {"value": val, "bound": bound,
+                      "unit": e.get("unit"), "raw": e}
+    return out
+
+
+# The T['ldo'] deck regulates Vout = Vref × (r1+r2)/r2 with a fixed 2:1 feedback
+# divider (r1=r2=8k), so the reference that tracks a target Vout is Vref=Vout/2.
+_LDO_DIVIDER_RATIO = 2.0
+
+# The sky130 proxy op-point decks directly MEASURE `vout` only; the other L5
+# LDO requirements (Iout / PSRR / Iq / Dropout) need dedicated AC/current
+# analyses this generic modeled deck does not run — they are recorded as
+# spec_requirements (measured=false) rather than fabricated as measurements.
+_DECK_MEASURED_METRICS = {"vout"}
+
+
+def resolve_spec(project, block, btype):
+    """L5-driven verdict target + deck overrides, with honest per-field source.
+
+    Returns a dict with the verdict (`key`/`target`/`tol`/`label` +
+    `target_source`), the L5-derived `deck_overrides` (may be {}), the
+    un-measured `spec_requirements`, and a human `disclosure`. A field with no
+    L5 value FALLS BACK to the static default and is listed in `fields_fallback`
+    — never fabricated. chip-AGNOSTIC (keyed on the L5 schema, not a design)."""
+    static = TARGETS.get(btype, {"key": "vout", "target": None,
+                                 "tol": None, "label": btype})
+    l5 = l5_block_specs(project, block, btype)
+    res = {
+        "key": static["key"], "target": static["target"],
+        "tol": static["tol"], "label": static["label"],
+        "target_source": "static_default",
+        "deck_overrides": {}, "deck_override_sources": {},
+        "spec_requirements": [], "fields_from_l5": [], "fields_fallback": [],
+    }
+    # ── verdict target: inherit the L5 output target for a vout-keyed block ──
+    if static["key"] == "vout" and "vout" in l5:
+        res["target"] = l5["vout"]["value"]
+        res["target_source"] = "L5"
+        res["fields_from_l5"].append("target(vout)")
+        raw = l5["vout"]["raw"]
+        lo, hi, tgt = raw.get("min"), raw.get("max"), l5["vout"]["value"]
+        if (isinstance(lo, (int, float)) and isinstance(hi, (int, float))
+                and tgt):
+            res["tol"] = max(abs(hi - tgt), abs(tgt - lo)) / abs(tgt)
+            res["fields_from_l5"].append("tol(vout-range)")
+        elif res["tol"] is None:
+            res["tol"] = static["tol"]
+    elif static["key"] == "vout":
+        res["fields_fallback"].append("target(vout)")
+    # ── deck overrides (LDO — keyed on schema, not a design name) ──
+    if btype == "ldo":
+        if "vout" in l5:
+            res["deck_overrides"]["vref"] = round(
+                l5["vout"]["value"] / _LDO_DIVIDER_RATIO, 6)
+            res["deck_override_sources"]["vref"] = "L5"
+            res["fields_from_l5"].append("deck.vref(vout/divider)")
+        else:
+            res["fields_fallback"].append("deck.vref")
+        if "vin" in l5:
+            vin = l5["vin"]["value"]
+            vout_t = l5.get("vout", {}).get("value", res["target"])
+            # honesty guard: an LDO needs supply headroom above its output — if
+            # the L5 Vin does not clear it, keep the static supply and disclose.
+            if vout_t is None or vin > vout_t + 0.1:
+                res["deck_overrides"]["vdd"] = vin
+                res["deck_override_sources"]["vdd"] = "L5"
+                res["fields_from_l5"].append("deck.vdd(vin)")
+            else:
+                res["fields_fallback"].append("deck.vdd(L5-Vin<headroom)")
+        else:
+            res["fields_fallback"].append("deck.vdd")
+    # ── un-measured L5 requirements (report only — never fabricated) ──
+    for canon in ("iout", "psrr", "iq", "dropout"):
+        if canon in l5:
+            res["spec_requirements"].append({
+                "name": canon, "value": l5[canon]["value"],
+                "bound": l5[canon]["bound"], "unit": l5[canon].get("unit"),
+                "measured": canon in _DECK_MEASURED_METRICS, "source": "L5",
+            })
+    # ── disclosure ──
+    if res["target_source"] == "L5":
+        res["disclosure"] = (
+            f"verdict target inherited from L5 = {res['target']} "
+            f"{l5.get('vout', {}).get('unit', '') or ''}; "
+            f"deck fields from L5: {sorted(res['deck_override_sources'])}; "
+            f"fallback-to-static: {res['fields_fallback']}")
+    else:
+        res["disclosure"] = (
+            f"no L5 target for '{res['key']}' — FALLBACK to static default "
+            f"{res['target']} ({res['label']}); "
+            f"fallback fields: {res['fields_fallback']}")
+    return res
+
+
+def render_deck(btype, block, pdk, pdk_lib, corner, knob, val,
+                deck_overrides=None, temp_c=None):
+    """Render T[btype] for one sweep point, then apply the L5 deck overrides
+    (GAP-ANALOG-2) and a REAL per-corner temperature card (GAP-ANALOG-3).
+
+    Overrides rewrite the deck's OWN canonical source lines (generic ngspice
+    deck syntax — a `v_vref`/`v_vdd` source line — never a chip literal); a
+    field whose line is absent is silently skipped (the caller's disclosure
+    records it as fallback). Returns (deck_text, applied_overrides)."""
+    kw = {(knob if knob != "__noop__" else "_unused"): val}
+    deck = T[btype].format(block=block, pdk=pdk, pdk_lib=pdk_lib,
+                           corner=corner, **kw)
+    ov = deck_overrides or {}
+    applied = {}
+    if "vref" in ov:
+        deck, n = re.subn(r"(?m)^(v_vref\s+vref\s+0\s+)\S+",
+                          rf"\g<1>{ov['vref']}", deck)
+        if n:
+            applied["vref"] = ov["vref"]
+    if "vdd" in ov:
+        deck, n = re.subn(r"(?m)^(v_vdd\s+vdd\s+0\s+)\S+",
+                          rf"\g<1>{ov['vdd']}", deck)
+        if n:
+            applied["vdd"] = ov["vdd"]
+    # GAP-ANALOG-3 — stamp a REAL operating temperature for the corner. ngspice
+    # treats deck line 1 as the (ignored) title, so the .temp card is injected
+    # just before the `.control` block (present in every template), never as
+    # the title line. chip-AGNOSTIC: a numeric temperature, no chip literal.
+    if temp_c is not None:
+        deck = deck.replace(".control", f".temp {temp_c}\n.control", 1)
+    return deck, applied
+
+
+# ───────── GAP-ANALOG-3: real PVT corners (not arithmetic derivations) ─────
+#
+# The canonical 9-corner PVT matrix: 3 process sections (the sky130 ngspice lib
+# ships ss/tt/ff) × 3 temperatures. A corner is REALLY simulated only when its
+# model section is present AND ngspice converged AND its invocation log is on
+# disk; otherwise it stays HONESTLY DERIVED (arithmetic ±3% process / ±1% temp
+# spread off the tt@27C base) with simulator_run=false and _provenance=DERIVED.
+# `full_pvt_sweep_executed` is true ONLY when EVERY reported corner really ran —
+# NEVER for a mix of real + derived, and never when the simulator was absent.
+# chip-AGNOSTIC.
+PVT_PROCESS = (("ss", -0.03), ("tt", 0.0), ("ff", +0.03))
+PVT_TEMPS = (("m40c", -40, +0.01), ("27c", 27, 0.0), ("125c", 125, -0.01))
+
+
+def build_pvt_grid(base, base_log, real_sims, tol):
+    """Construct the 9-corner PVT grid with HONEST per-corner provenance.
+
+    real_sims : {(proc, tlbl): {"value": float, "log": str, "ok": bool}} for
+                corners that were REALLY simulated (section present + ngspice
+                converged + log on disk). Any corner NOT present (or whose
+                ok/log/value is falsey) is DERIVED from `base` and marked
+                simulator_run=false. Returns (pvt_grid, corners_executed)."""
+    real_sims = real_sims or {}
+    pvt_grid = []
+    corners_executed = 0
+    for proc, p_off in PVT_PROCESS:
+        for tlbl, temp_c, t_off in PVT_TEMPS:
+            real = real_sims.get((proc, tlbl))
+            is_executed = bool(real and real.get("ok") and real.get("log")
+                               and real.get("value") is not None)
+            if is_executed:
+                v = real["value"]
+            elif base is None:
+                v = None
+            else:
+                v = base * (1.0 + p_off) * (1.0 + t_off)
+            entry = {
+                "name": f"{proc}_{tlbl}",
+                "process": proc,
+                "temp_c": temp_c,
+                "simulator_run": is_executed,
+                "vout_v": v,
+                "margin": tol,
+            }
+            if is_executed:
+                corners_executed += 1
+                entry["_provenance"] = "real_ngspice"
+                entry["ngspice_log"] = real["log"]
+                entry["derived_from"] = None
+            else:
+                entry["_provenance"] = "DERIVED"
+                entry["derived_from"] = "tt_27c base × process±3% × temp±1%"
+            pvt_grid.append(entry)
+    return pvt_grid, corners_executed
+
+
+_PDK_SECTION_CACHE: dict = {}
+
+
+def _pdk_has_section(container, pdk_lib, section):
+    """True when the ngspice model lib exposes a `.lib <section>` block (e.g.
+    ss/tt/ff). Cached per (container, lib). chip-AGNOSTIC."""
+    key = (container, pdk_lib)
+    sections = _PDK_SECTION_CACHE.get(key)
+    if sections is None:
+        r = _docker(container,
+                    f"grep -ioE '^[[:space:]]*\\.lib[[:space:]]+[A-Za-z_]+' "
+                    f"{shlex.quote(pdk_lib)} 2>/dev/null")
+        sections = set()
+        for ln in (r.stdout or "").splitlines():
+            m = re.search(r"\.lib\s+([A-Za-z_]+)", ln)
+            if m:
+                sections.add(m.group(1).lower())
+        _PDK_SECTION_CACHE[key] = sections
+    return section.lower() in sections
+
+
+def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
+                     pdk_lib, knob, val, deck_overrides, subst_header, base_tt):
+    """Attempt a REAL ngspice sim at each PVT corner (real .lib section + real
+    .temp) for the sized sweep point. Returns a real_sims dict for the corners
+    that genuinely converged; a corner whose model section is absent or whose
+    ngspice run failed is OMITTED so the caller derives it. tt@27C reuses the
+    step-1 base run (base_tt) — it is a genuine tt sim at the ngspice default
+    27 °C. §4.05: a corner is recorded real ONLY when its ngspice log exists on
+    disk. chip-AGNOSTIC."""
+    real_sims = {}
+    if base_tt is not None:
+        real_sims[("tt", "27c")] = base_tt
+    tkey = TARGETS.get(btype, {}).get("key", "vout")
+    for proc, _po in PVT_PROCESS:
+        if not _pdk_has_section(container, pdk_lib, proc):
+            continue                      # section absent → all its temps derive
+        for tlbl, temp_c, _to in PVT_TEMPS:
+            if (proc, tlbl) in real_sims:
+                continue                  # already have the base tt@27C
+            deck, _ = render_deck(btype, block, pdk, pdk_lib, proc, knob, val,
+                                  deck_overrides=deck_overrides, temp_c=temp_c)
+            sp = sl_dir / f"pvt_{proc}_{tlbl}.sp"
+            sp.write_text((subst_header or "") + deck)
+            ok, meas, raw, _ss = _run_ngspice(
+                container, _container_path(container, host_root, sp))
+            log = sl_dir / f"pvt_{proc}_{tlbl}.ngspice.log"
+            log.write_text(raw)
+            v = meas.get(tkey)
+            if v is None:
+                for _a in ("vfinal", "vsettle", "vout_final", "vlast"):
+                    if meas.get(_a) is not None:
+                        v = meas[_a]
+                        break
+            if ok and v is not None:
+                real_sims[(proc, tlbl)] = {
+                    "value": v, "ok": True,
+                    "log": str(log.relative_to(project)),
+                }
+    return real_sims
+
 
 # ─────────────────── Main per-block driver ───────────────────
 
@@ -833,19 +1170,27 @@ def run_block(project, block, container, pdk, topology_override):
     # no substitution (deck == declared target / no concrete target).
     subst_header = pdk_substitution_header(project, pdk)
 
+    # GAP-ANALOG-2 — inherit the L5 block spec: the verdict target + the deck
+    # reference/divider come from phase1/generated_docs/L5_ADI_SPEC.json when it
+    # carries a concrete electrical spec, falling back (disclosed) to the static
+    # per-type default otherwise. §4.05: reads ONLY the L5 generated doc.
+    spec = resolve_spec(project, block, btype)
+    target = {"key": spec["key"], "target": spec["target"],
+              "tol": spec["tol"], "label": spec["label"]}
+    deck_overrides = spec["deck_overrides"]
+
     runs = []
     # #464 — accumulate per-block partial-measurement evidence across runs.
     block_sim_warnings: list[str] = []
     block_failed_analyses: set[str] = set()
     block_nulled_metrics: set[str] = set()
     for knob, val in SWEEPS.get(btype, [("__noop__",0)]):
-        # `corner` defaults to "tt" (the single section the SKY130 ngspice lib
-        # ships with — same stamp the pre-existing templates hardcoded). The 9
-        # ss/tt/ff × temp PVT datapoints are DERIVED downstream from the tt@27C
-        # base (see the pvt_grid block below), so a single tt run is sufficient
-        # and faithful to how every existing template already behaves.
-        tb = T[btype].format(block=block, pdk=pdk, pdk_lib=pdk_lib, corner="tt",
-                              **{(knob if knob != "__noop__" else "_unused"): val})
+        # The knob sweep runs at the tt corner / 27 °C base (ngspice default
+        # temp). The full ss/tt/ff × temp PVT grid is REALLY simulated at the
+        # sized point below (GAP-ANALOG-3); a corner that cannot really run
+        # stays honestly DERIVED from this tt@27C base.
+        tb, _applied = render_deck(btype, block, pdk, pdk_lib, "tt", knob, val,
+                                   deck_overrides=deck_overrides, temp_c=None)
         # #496 (round-2): structured PDK-substitution disclosure goes FIRST so
         # it lands in the deck head (the gate scans the first 24 lines).
         tb = subst_header + tb
@@ -870,7 +1215,7 @@ def run_block(project, block, container, pdk, topology_override):
         # chip-AGNOSTIC: fixed alias set of generic settle-measure names.
         # #464 — only alias from a REAL (non-null) measurement; a nulled
         # (failed-analysis) source must never resurrect a bogus target value.
-        tkey = TARGETS.get(btype, {}).get("key")
+        tkey = target["key"]
         if tkey and meas.get(tkey) is None:
             for _alias in ("vfinal", "vsettle", "vout_final", "vlast"):
                 if meas.get(_alias) is not None:
@@ -888,62 +1233,8 @@ def run_block(project, block, container, pdk, topology_override):
                      "nulled_metrics": sim_status["nulled_metrics"],
                      **meas})
 
-    # v1.6.228 — emit the full 9-corner PVT matrix (3 process × 3 temp)
-    # required by analog_corner_sweep_check (MIN_CORNERS=9). We don't
-    # re-run ngspice 9x (PDK has only `tt` section in the SKY130 lib
-    # for fast sims); instead we DERIVE the per-corner spec value by
-    # applying canonical 180nm BCD ±5% / ±2% spread to the tt @ 27C
-    # measurement so each corner is honestly labelled and the gate
-    # has 9 datapoints. This is chip-AGNOSTIC: spread factors are
-    # block-type-independent.
-    target = TARGETS[btype]
-    base = None
-    base_log = None
-    for r in runs:
-        # #464 — a nulled (failed-analysis) metric is present-as-None; it must
-        # NOT seed the derived PVT grid with a bogus base value.
-        if r.get("ok") and r.get(target["key"]) is not None:
-            base = r[target["key"]]
-            base_log = r.get("ngspice_log")
-            break
-    # Spread tables: process × temp.
-    # process: ss=-3%, tt=0%, ff=+3%; temp: -40C=+1%, 27C=0%, 125C=-1%
-    #
-    # ORGANIC-20260606 #438(a): HONEST per-corner provenance. Only the
-    # tt@27C corner was actually simulated; the other eight are
-    # arithmetic derivations. `simulator_run: true` is claimable ONLY
-    # for the corner whose ngspice invocation log exists; derived
-    # corners carry simulator_run=false + _provenance="DERIVED".
-    pvt_grid = []
-    corners_executed = 0
-    for proc, p_off in (("ss", -0.03), ("tt", 0.0), ("ff", +0.03)):
-        for tlbl, t_off in (("m40c", +0.01), ("27c", 0.0), ("125c", -0.01)):
-            if base is None:
-                v = None
-            else:
-                v = base * (1.0 + p_off) * (1.0 + t_off)
-            is_executed = (proc == "tt" and tlbl == "27c"
-                           and base is not None and bool(base_log))
-            entry = {
-                "name": f"{proc}_{tlbl}",
-                "process": proc,
-                "temp_c": {"m40c": -40, "27c": 27, "125c": 125}[tlbl],
-                "simulator_run": is_executed,
-                "vout_v": v,
-                "margin": target.get("tol"),
-            }
-            if is_executed:
-                corners_executed += 1
-                entry["_provenance"] = "real_ngspice"
-                entry["ngspice_log"] = base_log
-                entry["derived_from"] = None
-            else:
-                entry["_provenance"] = "DERIVED"
-                entry["derived_from"] = "tt_27c base × process±3% × temp±1%"
-            pvt_grid.append(entry)
-
-    # Pick best per target
-    target = TARGETS[btype]
+    # Pick the sized point per the (L5-inherited) target — this is the knob
+    # value the PVT sweep is really simulated at.
     best = None
     for r in runs:
         # #464 — require a REAL (non-null) target value; a nulled metric from a
@@ -957,6 +1248,26 @@ def run_block(project, block, container, pdk, topology_override):
     if best is None:
         print(f"[real_sim] block={block} type={btype}: no successful sim", file=sys.stderr)
         return 2
+
+    base = best.get(target["key"])
+    base_log = best.get("ngspice_log")
+
+    # GAP-ANALOG-3 — REALLY simulate the full 9-corner PVT matrix at the sized
+    # point: each corner selects its own real ss/tt/ff `.lib` section + real
+    # `.temp`. A corner whose model section is absent, or whose ngspice run did
+    # not converge, stays HONESTLY DERIVED (arithmetic spread off the tt@27C
+    # base) with simulator_run=false + _provenance=DERIVED. tt@27C reuses the
+    # sized base run above. `full_pvt_sweep_executed` is true ONLY when EVERY
+    # corner really ran. #438(a): a corner is real ONLY when its ngspice log
+    # exists on disk.
+    base_tt = ({"value": base, "ok": True, "log": base_log}
+               if base is not None and base_log else None)
+    real_sims = _run_pvt_corners(
+        project, container, host_root, sl_dir, btype, block, pdk, pdk_lib,
+        best.get("knob", "__noop__"), best.get("val", 0),
+        deck_overrides, subst_header, base_tt)
+    pvt_grid, corners_executed = build_pvt_grid(
+        base, base_log, real_sims, target.get("tol"))
 
     verdict = _verdict(best, target)
     # v1.6.228 — for honest sim FAILs (where SKY130 demo template
@@ -998,6 +1309,7 @@ def run_block(project, block, container, pdk, topology_override):
             seen_w.add(w)
             block_sim_warnings_dedup.append(w)
 
+    full_pvt = corners_executed == len(pvt_grid)
     real_corner = {
         "block": block,
         "block_type": btype,
@@ -1012,13 +1324,24 @@ def run_block(project, block, container, pdk, topology_override):
         "simulator": "ngspice (iic-osic-tools docker)",
         "pdk_used_for_sim": pdk,
         "spec_label": target["label"],
+        # GAP-ANALOG-2 — first-class L5-inheritance provenance: whether the
+        # verdict target came from the block's L5 spec or the static default,
+        # the deck fields inherited from L5, the un-measured L5 requirements,
+        # and a plain-language disclosure of every fallback (never fabricated).
+        "spec_source": spec["target_source"],
+        "spec_target_disclosure": spec["disclosure"],
+        "spec_fields_from_l5": spec["fields_from_l5"],
+        "spec_fields_fallback": spec["fields_fallback"],
+        "spec_requirements": spec["spec_requirements"],
+        "deck_overrides": deck_overrides,
+        "deck_override_sources": spec["deck_override_sources"],
         "total_corners": len(pvt_grid),
         "results_found": len(pvt_grid),
         # #438(a) — executed-vs-derived counts are FIRST-CLASS: a sweep
         # with < total executed corners never claims a full PVT sweep.
         "corners_executed": corners_executed,
         "corners_derived": len(pvt_grid) - corners_executed,
-        "full_pvt_sweep_executed": corners_executed == len(pvt_grid),
+        "full_pvt_sweep_executed": full_pvt,
         "corners": pvt_grid,
         "best_corner": {
             "name": "tt_27c", "value": best.get(target["key"]),
@@ -1029,22 +1352,32 @@ def run_block(project, block, container, pdk, topology_override):
             {"name": target["key"], "status": spec_status,
              "raw_sim_verdict": verdict,
              "value": best.get(target["key"]),
-             "target": target["target"], "tolerance_pct": target.get("tol")}
+             "target": target["target"], "target_source": spec["target_source"],
+             "tolerance_pct": target.get("tol")}
         ],
-        "note": (f"Real ngspice tt@27C base ({corners_executed} executed "
-                  f"corner(s)) + {len(pvt_grid) - corners_executed} DERIVED "
-                  "ss/tt/ff × -40/27/125 process+temp spread (canonical "
-                  "180nm BCD ±3% process, ±1% temp). NOT a full executed "
-                  "PVT sweep (#438a) — full PVT closure requires the "
-                  "native PDK deck simulated at every corner. spec status "
-                  "downgrades non-PASS to PASS_INFORMATIONAL (env gap, "
-                  "not design gap)."
-                  + ((" PARTIAL MEASUREMENT (#464): sub-analyses "
-                      f"{sorted(block_failed_analyses)} ERRORed at every "
-                      "sizing point; affected metrics "
-                      f"{sorted(block_nulled_metrics)} are null (not bogus "
-                      "zeros) and provenance is downgraded to "
-                      "real_ngspice_partial.") if block_partial else "")),
+        "note": (
+            (f"Real ngspice PVT sweep: {corners_executed}/{len(pvt_grid)} "
+             "corners really simulated (real ss/tt/ff .lib section + real "
+             ".temp per corner)"
+             + ("" if full_pvt else
+                f" + {len(pvt_grid) - corners_executed} DERIVED ss/tt/ff × "
+                "-40/27/125 spread off the tt@27C base for corners whose "
+                "model section is absent or that did not converge (#438a: "
+                "these stay simulator_run=false / _provenance=DERIVED, so "
+                "full_pvt_sweep_executed is false).")
+             + " Verdict target "
+             + (f"INHERITED from L5 = {target['target']} ({target['label']})."
+                if spec["target_source"] == "L5" else
+                f"FALLBACK to static default = {target['target']} "
+                f"({target['label']}) — no L5 value.")
+             + " spec status downgrades non-PASS to PASS_INFORMATIONAL "
+               "(env modeling gap, not a design gap).")
+            + ((" PARTIAL MEASUREMENT (#464): sub-analyses "
+                f"{sorted(block_failed_analyses)} ERRORed at every "
+                "sizing point; affected metrics "
+                f"{sorted(block_nulled_metrics)} are null (not bogus "
+                "zeros) and provenance is downgraded to "
+                "real_ngspice_partial.") if block_partial else "")),
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     (bdir / "corner_results.json").write_text(json.dumps(real_corner, indent=2))

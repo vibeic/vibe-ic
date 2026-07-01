@@ -49,6 +49,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import _path_layout as _pl
 import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
 import lvs_verdict_tokens as _lvt  # #524 — shared netgen terminal-verdict tokens
+import lvs_netgen_setup_emit as _lvs_setup  # GAP-E2E-9 — power-net globalisation
 import sdc_constraints as _sdc  # #554 — shared staged-SDC ground-truth helpers
 
 
@@ -727,6 +728,115 @@ def _v1_6_595_resolve_clock_port_name(project: Path, top: str = "",
     return ("clk", "fallback_literal_clk")
 
 
+def _phase2_emitted_period_ns(project: Path, top: str = "") -> Optional[float]:
+    """GAP-E2E-1 (ORGANIC) — inherit the clock period Phase-2's deterministic
+    ``sdc_gen`` already emitted, for the case where no design-staged
+    ``input/constraints`` / ``input/reference_flow`` SDC exists.
+
+    Root cause this closes: on the clean-project layout an L9 doc may state the
+    period as a ``-period <PERIOD>`` PLACEHOLDER plus a PDK-keyed lookup table
+    (``| sky130_fd_sc_hd | 10 |``) rather than a literal adjacent to a
+    ``-period`` token — so :func:`_resolve_clock_spec`'s L9/L1 prose regex finds
+    no number and falls through to the 20 ns default, even though Phase-2 wrote a
+    concrete 10 ns ``create_clock`` at ``phase2/stage1/fpga/*.sdc`` (and, once
+    sign-off runs, ``phase2/stage2/constraints/*.sdc``). Those Phase-2 SDCs are a
+    numeric realization of the same L9 target and a stronger, less-fragile signal
+    than re-parsing the prose.
+
+    §4.05 NO-LEAK:
+      * We ONLY return a period an upstream Phase-2 SDC LITERALLY states — never
+        a fabricated one. Returns ``None`` (caller falls through to docs / config
+        / default + disclosure) when Phase-2 emitted no SDC period.
+      * We take the SMALLEST (tightest / primary-clock) stated period. A tighter
+        period can only make Phase-3 STA MORE conservative — it can never relax a
+        real setup violation into a false PASS. We therefore never inherit a
+        clock slower than the design's own tightest stated upstream clock.
+      * The Phase-3 self-written canon copy
+        ``phase2/stage2/constraints/<top>.sdc`` is EXCLUDED so a stale
+        prior-run auto-SDC artifact can never feed its own value back in.
+
+    Chip-AGNOSTIC: standard-SDC syntax via the shared ``sdc_constraints`` helper
+    (Tcl ``$var`` substitution included); no chip/vendor/PDK literals.
+    """
+    fpga_dir = _pl.fpga_early_dir(project)
+    stage2_dir = _pl.constraints_dir(project)
+    self_copy = (stage2_dir / f"{top}.sdc") if top else None
+    _p2_roots = (str(fpga_dir), str(stage2_dir))
+    periods: List[float] = []
+    for c in _sdc.collect_create_clocks(project, extra_dirs=[fpga_dir, stage2_dir]):
+        src = c.get("source") or ""
+        # Only Phase-2-emitted dirs. collect_create_clocks also returns the
+        # input/constraints + input/reference_flow ground truth, but that tier
+        # is ranked strictly ABOVE this helper (primary_clock) — filter it out
+        # so this step is purely the Phase-2 fallback.
+        if not any(src == r or src.startswith(r + os.sep) for r in _p2_roots):
+            continue
+        if self_copy is not None and src == str(self_copy):
+            continue  # never inherit from our own prior-run canon copy
+        p = c.get("period_ns")
+        if isinstance(p, (int, float)) and p > 0:
+            periods.append(float(p))
+    return min(periods) if periods else None
+
+
+# GAP-E2E-7 — a timing EXCEPTION carried into the auto-SDC may ONLY be one the
+# design's own reference flow explicitly authored (set_false_path /
+# set_multicycle_path). Auto-deriving exceptions from heuristics is FORBIDDEN
+# (§4.05): a false_path/multicycle exception MASKS a real setup violation.
+_TIMING_EXCEPTION_RE = re.compile(
+    r"^\s*(?:set_false_path|set_multicycle_path)\b")
+
+
+def _staged_timing_exceptions(project: Path) -> List[str]:
+    """GAP-E2E-7 (ORGANIC) — collect the timing EXCEPTIONS
+    (``set_false_path`` / ``set_multicycle_path``) the DESIGN's OWN staged
+    reference flow explicitly authored, so the Phase-3 minimal auto-SDC can
+    honor them instead of showing a spurious setup violation on a long
+    combinational datapath.
+
+    Source is EXACTLY the design-staged reference SDCs — ``input/constraints/*.sdc``
+    and ``input/reference_flow/**/*.sdc`` (the same upstream-verified ground
+    truth as :func:`sdc_constraints.primary_clock`). Phase-2 auto-emitted SDCs
+    (``phase2/stage1/fpga/*.sdc``) are DELIBERATELY NOT read: their exceptions
+    were synthesized by Phase-2's own heuristic ``sdc_gen``, not authored by the
+    design — carrying them would be exactly the heuristic-masking §4.05 forbids.
+
+    §4.05 NO-LEAK (CRITICAL — an exception MASKS a real timing violation):
+      * Returns ``[]`` when the design staged NO exceptions — the caller then
+        emits NOTHING, leaving the honest setup violation intact. We NEVER
+        auto-derive / fabricate an exception.
+      * Only lines that literally begin ``set_false_path`` / ``set_multicycle_path``
+        are carried, VERBATIM (order-preserving, de-duplicated), so the design's
+        authored intent is passed through unchanged. Comment lines are skipped.
+      * Tcl ``$var`` references are resolved and ``\\`` line-continuations joined
+        so real reference SDCs (OpenROAD-flow-scripts style) parse.
+
+    Chip-AGNOSTIC: standard-SDC syntax only; no chip/vendor/PDK literals.
+    """
+    out: List[str] = []
+    seen: set = set()
+    for sdc_file in _sdc.collect_sdc_files(project):  # input/constraints + input/reference_flow ONLY
+        try:
+            text = sdc_file.read_text(errors="replace")
+        except OSError:
+            continue
+        variables = _sdc._collect_tcl_vars(text)
+        if variables:
+            text = _sdc._substitute_vars(text, variables)
+        # join Tcl backslash line-continuations before per-line extraction
+        text = re.sub(r"\\\s*\n", " ", text)
+        for line in text.splitlines():
+            if line.lstrip().startswith("#"):
+                continue
+            if not _TIMING_EXCEPTION_RE.match(line):
+                continue
+            norm = " ".join(line.split())  # collapse whitespace for stable dedup
+            if norm and norm not in seen:
+                seen.add(norm)
+                out.append(line.strip())
+    return out
+
+
 def _resolve_clock_spec(project: Path, top: str = "") -> tuple:
     """v1.6.560 sub-defect B fix. Derive (clock_period_ns, clock_port_name)
     from project sources in priority order — **L9 spec wins over baseline
@@ -821,6 +931,18 @@ def _resolve_clock_spec(project: Path, top: str = "") -> tuple:
     if _sdc_primary is not None:
         return (_sdc_primary["period_ns"], port_name)
 
+    # --- GAP-E2E-1: Phase-2 emitted SDC. When no design-staged SDC exists,
+    # inherit the concrete `create_clock -period` Phase-2's deterministic
+    # sdc_gen already wrote (phase2/stage1/fpga + phase2/stage2/constraints).
+    # Ranked directly below the design's own staged ground truth and ABOVE the
+    # L9/L1 prose regex, because a literal tool-emitted SDC period is a stronger,
+    # less-fragile signal than re-parsing doc text that may carry a `<PERIOD>`
+    # placeholder + a PDK-keyed lookup table. §4.05: only ever an upstream-STATED
+    # (tightest) period; never fabricated, never slower than upstream. ---
+    _p2_period = _phase2_emitted_period_ns(project, top=top)
+    if _p2_period is not None:
+        return (_p2_period, port_name)
+
     # --- Period from L9 / L1 docs (highest priority) ---
     docs_dir = project / "input" / "docs"
     if docs_dir.is_dir():
@@ -852,6 +974,64 @@ def _resolve_clock_spec(project: Path, top: str = "") -> tuple:
         return (config_period, port_name)
 
     return (20.0, port_name)
+
+
+def _build_auto_silicon_sdc(project: Path, top: str = "") -> str:
+    """Build the minimal silicon-top auto-SDC text emitted by ``step_pnr`` when
+    the project stages no ``constraints/*.sdc`` for silicon.
+
+    Pure function (no I/O beyond reading project docs/constraints already in the
+    flow) so the SDC-emission contract is unit-testable without running PnR —
+    same pure-builder doctrine as the tapcell/PDN/decap blocks below.
+
+    Composes two ORGANIC E2E fixes:
+      * GAP-E2E-1 — ``create_clock -period`` inherits the upstream period via
+        :func:`_resolve_clock_spec` (staged SDC → Phase-2 emitted SDC → L9/L1
+        docs → config → 20 ns default + disclosure).
+      * GAP-E2E-7 — appends ONLY the ``set_false_path`` / ``set_multicycle_path``
+        exceptions the design's OWN staged reference flow authored
+        (:func:`_staged_timing_exceptions`). Auto-derived exceptions are
+        DELIBERATELY NOT synthesized (§4.05: they would MASK real setup
+        violations); when none are staged a disclosure comment is emitted and
+        the honest single-cycle SDC is left intact.
+
+    Chip-AGNOSTIC: standard-SDC syntax only; no chip/vendor/PDK literals.
+    """
+    clk_period_ns, clk_port_name = _resolve_clock_spec(project, top=top)
+    sdc_text = (
+        "# Auto-generated minimal SDC for silicon top "
+        f"(no constraints/*.sdc supplied; clk_period_ns={clk_period_ns} "
+        f"clk_port={clk_port_name})\n"
+        f"create_clock -name clk -period {clk_period_ns} "
+        f"[get_ports {clk_port_name}]\n"
+        "set_input_delay  2 -clock clk [all_inputs]\n"
+        "set_output_delay 2 -clock clk [all_outputs]\n"
+    )
+    # GAP-E2E-7 — carry ONLY the timing exceptions the design's own staged
+    # reference flow (input/constraints + input/reference_flow) explicitly
+    # authored. §4.05 CRITICAL: a false_path/multicycle exception MASKS a real
+    # setup violation, so auto-derived exceptions are DELIBERATELY NOT
+    # synthesized — if the design staged none, we emit none and leave the
+    # honest violation.
+    exceptions = _staged_timing_exceptions(project)
+    if exceptions:
+        sdc_text += (
+            "\n# GAP-E2E-7 — timing exceptions carried VERBATIM from the "
+            "design's OWN staged reference flow\n"
+            "# (input/constraints + input/reference_flow). Honored because "
+            "the DESIGN authored them; auto-derived\n"
+            "# false_path/multicycle exceptions are NOT synthesized (they "
+            "would MASK real setup violations).\n"
+            + "".join(f"{e}\n" for e in exceptions)
+        )
+    else:
+        sdc_text += (
+            "# GAP-E2E-7 — no timing exceptions staged in "
+            "input/constraints or input/reference_flow; none auto-derived\n"
+            "# (auto false_path/multicycle would MASK real violations). "
+            "Honest single-cycle SDC.\n"
+        )
+    return sdc_text
 
 
 # ---------------------------------------------------------------------------
@@ -2459,7 +2639,14 @@ def _compute_resized_die(die_w: int, die_h: int,
 _AUTO_DIE_MIN_SIDE_UM = 60           # floor: never smaller than a tiny core
 _AUTO_DIE_AVG_SITES_PER_CELL = 6.0   # sky130-hd-typical std-cell width in sites
 _AUTO_DIE_FALLBACK_CELL_UM2 = 7.5    # avg std-cell area when the LEF site parse fails
-_AUTO_DIE_DEFAULT_UTIL = 0.40        # target core util when --util is unusable
+_AUTO_DIE_DEFAULT_UTIL = 0.40        # internal safety fallback when a util is unusable
+# GAP-E2E-4 FOLLOW-UP — the auto-die geometry target is a ROUTING-HEADROOM
+# utilization, DECOUPLED from the placement `--util`. A placement-dense target
+# (0.40) sizes a die so tight that detailed route PLATEAUS; the empirically-clean
+# campaign value is ~0.25 (sha256 clean at 900x900/0.25; aes converged ~15%).
+# This constant sizes ONLY the `--die-um auto` geometry — the placement `--util`
+# default (0.30, used by global_placement) is UNCHANGED. chip-AGNOSTIC.
+_AUTO_DIE_TARGET_UTIL = 0.25         # routing-headroom target for --die-um auto
 
 
 def _parse_site_area_um2(cell_lef_text: str) -> Optional[float]:
@@ -2500,9 +2687,15 @@ def _auto_die_side_um(cell_count: int, util_frac: float,
 def _resolve_auto_die_um(die_um: str, netlist: Path, util: float,
                          pdk: "PdkConfig") -> Tuple[str, Optional[str]]:
     """If `die_um` is the sentinel 'auto', compute a real 'WxH' from the synth
-    netlist's cell count + the PDK site area + the target util. Otherwise return
-    `die_um` unchanged. Returns (die_um, note). Any failure falls back to a safe
-    fixed die so the flow never breaks on a sizing error. chip-AGNOSTIC."""
+    netlist's cell count + the PDK site area + the ROUTING-HEADROOM target util.
+    Otherwise return `die_um` unchanged. Returns (die_um, note). Any failure
+    falls back to a safe fixed die so the flow never breaks on a sizing error.
+
+    GAP-E2E-4 FOLLOW-UP — the auto-die geometry targets `_AUTO_DIE_TARGET_UTIL`
+    (routing headroom, ~0.25), DECOUPLED from the placement `util` argument: a
+    placement-dense 0.40 die plateaus detailed route. `util` (the placement
+    `--util`, used later by global_placement) is intentionally NOT the sizing
+    target and is left for the caller to pass through unchanged. chip-AGNOSTIC."""
     if str(die_um).lower() != "auto":
         return die_um, None
     try:
@@ -2518,15 +2711,50 @@ def _resolve_auto_die_um(die_um: str, netlist: Path, util: float,
         site_area = None
     avg_cell = ((site_area * _AUTO_DIE_AVG_SITES_PER_CELL) if site_area
                 else _AUTO_DIE_FALLBACK_CELL_UM2)
-    util_frac = util if (0.0 < util <= 1.0) else (
-        util / 100.0 if util > 1.0 else _AUTO_DIE_DEFAULT_UTIL)
+    # Routing-headroom target, NOT the placement util (`util` is deliberately
+    # unused for sizing — see docstring). A sparser die gives detailed route the
+    # channel headroom a placement-dense die denies it.
+    util_frac = _AUTO_DIE_TARGET_UTIL
     if cells <= 0:
         return "1500x1500", ("die-um=auto but the netlist has 0 countable "
                              "cells; falling back to 1500x1500")
     side = _auto_die_side_um(cells, util_frac, avg_cell)
     return (f"{side}x{side}",
             f"die-um=auto → {side}x{side} (cells={cells}, "
-            f"avg_cell={avg_cell:.2f}µm², target_util={util_frac:g})")
+            f"avg_cell={avg_cell:.2f}µm², "
+            f"routing_headroom_util={util_frac:g})")
+
+
+def _compute_downsized_die(die_w: int, die_h: int,
+                           actual_util_pct: float,
+                           target_util_pct: float = _AUTO_DIE_TARGET_UTIL * 100.0,
+                           die_min_um: int = _AUTO_DIE_MIN_SIDE_UM
+                           ) -> Optional[Tuple[int, int]]:
+    """GAP-E2E-4 FOLLOW-UP — OVER-SPARSE downsize MIRROR of `_compute_resized_die`
+    (which is upsize-only). Given a measured over-SPARSE post-place utilization
+    (`actual_util_pct` < `target_util_pct`), tighten the die toward the target:
+    side *= sqrt(actual/target) (< 1 ⇒ shrink). Returns None (leave the die
+    UNCHANGED) when:
+      * the die is NOT over-sparse (`actual >= target` — nothing to tighten), or
+      * either measure is non-positive (no usable signal), or
+      * the tightened die would fall BELOW the safe floor `die_min_um` (§4.05 —
+        never shrink past the floor).
+
+    §4.05: OPT-IN / conservative — the CALLER invokes this ONLY when a real
+    sparse-die signal is present; it is never applied blindly, an over-util die is
+    never shrunk (that is the UPSIZE loop's job, untouched), and the floor is
+    always honored. Downsize only shrinks, so the `_DEFAULT_DIE_MAX_UM` cap can
+    never be breached here. chip-AGNOSTIC: pure math."""
+    if actual_util_pct <= 0 or target_util_pct <= 0:
+        return None
+    if actual_util_pct >= target_util_pct:
+        return None  # not over-sparse → leave unchanged
+    factor = (actual_util_pct / target_util_pct) ** 0.5  # < 1 → shrink
+    new_w = int(die_w * factor + 0.999)
+    new_h = int(die_h * factor + 0.999)
+    if new_w < die_min_um or new_h < die_min_um:
+        return None  # would breach the safe floor → do not downsize
+    return new_w, new_h
 
 
 _V1_6_599_WRAPPER_MODULE_PATTERNS = (
@@ -4285,23 +4513,17 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         # legacy config.json or the literal `clk`. Any IC whose
         # clock port follows Wishbone / AXI / Caravel naming
         # conventions now produces a valid SDC.
-        clk_period_ns, clk_port_name = _resolve_clock_spec(
-            project, top=top)
-        sdc.write_text(
-            "# Auto-generated minimal SDC for silicon top "
-            f"(no constraints/*.sdc supplied; clk_period_ns={clk_period_ns} "
-            f"clk_port={clk_port_name})\n"
-            f"create_clock -name clk -period {clk_period_ns} "
-            f"[get_ports {clk_port_name}]\n"
-            "set_input_delay  2 -clock clk [all_inputs]\n"
-            "set_output_delay 2 -clock clk [all_outputs]\n"
-        )
+        sdc.write_text(_build_auto_silicon_sdc(project, top=top))
 
     # ORGANIC E2E (GAP-E2E-4/10) — resolve `--die-um auto` to a design-sized
     # WxH from the synth netlist cell count + PDK site area + target util, so a
     # small design is not stranded at a route-plateauing ~4% util on a fixed
     # 1500×1500 die (and a large one is not over-dense). An explicit WxH is left
     # unchanged; an under-estimate is grown by the over-util retry loop below.
+    # `_auto_die_requested` is the OPT-IN signal for the over-sparse downsize
+    # retry (GAP-E2E-4 FOLLOW-UP): we only tighten a die whose geometry WE own
+    # (auto), never an explicit WxH the caller pinned.
+    _auto_die_requested = str(die_um).lower() == "auto"
     die_um, _auto_die_note = _resolve_auto_die_um(die_um, netlist, util, pdk)
     if _auto_die_note:
         print(f"[phase3] {_auto_die_note}", file=sys.stderr)
@@ -4519,6 +4741,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # Limit to 3 retries; cap die at 2000×2000µm.
     resize_history: List[Dict[str, Any]] = []
     target_util_pct = util * 100.0 if util <= 1.0 else util
+    _downsized_once = False   # GAP-E2E-4 FOLLOW-UP — single conservative downsize
     # ORGANIC #548 (a): scale PnR timeout with estimated cell count so
     # 29k-cell + 1500×1500µm designs don't hit the old fixed 3600s cap.
     _pnr_to = _pnr_timeout_s(placed_cells_est)
@@ -4526,6 +4749,49 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         rc, out, err = _docker_exec(container, cmd, timeout=_pnr_to)
         actual_util = _extract_overutil_pct(out + err)
         if actual_util is None:
+            # GAP-E2E-4 FOLLOW-UP — OVER-SPARSE downsize retry (opt-in mirror of
+            # the over-util UPSIZE path above, in the OTHER direction). Fires
+            # ONLY when (1) auto-die owns the geometry (`_auto_die_requested` —
+            # an explicit WxH is NEVER touched), (2) a REAL sparse-die signal is
+            # present (the tap/fill SKIP fired with a measured core_util in the
+            # log — never applied blindly), and (3) `_compute_downsized_die`
+            # returns a floor-respecting die. A single attempt (`_downsized_once`)
+            # — no oscillation; the next iteration's over-util UPSIZE path catches
+            # any accidental over-tighten. §4.05: floor-guarded, explicit-die
+            # exempt, upsize path byte-unchanged.
+            if (_auto_die_requested and not _downsized_once and rc == 0
+                    and (out_dir / f"{top}.def").is_file()):
+                _sd = _parse_sparse_die_skip((out or "") + "\n" + (err or ""))
+                _meas = (_sd.get("fill_core_util_pct")
+                         if _sd.get("fill_core_util_pct") is not None
+                         else _sd.get("tapcell_core_util_pct"))
+                _dn = (_compute_downsized_die(die_w, die_h, _meas)
+                       if _meas is not None else None)
+                if _dn is not None:
+                    _new_w, _new_h = _dn
+                    resize_history.append({
+                        "iteration": _retry_i,
+                        "direction": "downsize",
+                        "trigger": "sparse_die_skip",
+                        "from_die_um": f"{die_w}x{die_h}",
+                        "to_die_um": f"{_new_w}x{_new_h}",
+                        "actual_util_pct": _meas,
+                        "target_util_pct": _AUTO_DIE_TARGET_UTIL * 100.0,
+                    })
+                    die_w, die_h = _new_w, _new_h
+                    core_w = die_w - 2 * core_pad
+                    core_h = die_h - 2 * core_pad
+                    _dn_tcl = pnr_tcl.read_text()
+                    _dn_tcl = re.sub(
+                        r'initialize_floorplan -die_area "0 0 \d+ \d+"\s*\\?\s*\n\s*-core_area "\d+ \d+ \d+ \d+"',
+                        (f'initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\\n'
+                         f'                      -core_area "{core_pad} {core_pad} '
+                         f'{core_w} {core_h}"'),
+                        _dn_tcl,
+                    )
+                    pnr_tcl.write_text(_dn_tcl)
+                    _downsized_once = True
+                    continue
             break  # no over-util error → take rc / def_file path
         new_dims = _compute_resized_die(die_w, die_h, actual_util,
                                          target_util_pct)
@@ -6676,11 +6942,45 @@ def _emit_local_netgen_setup(project: Path, pdk: PdkConfig,
             f"# ECO spare-only class (all instances are spares) — #509 r3\n"
             f"catch {{ignore class \"-circuit1 {cls}\"}}\n"
             f"catch {{ignore class \"-circuit2 {cls}\"}}\n")
+    # GAP-E2E-9 DEEP ROOT — POWER-AWARE sign-off. netgen prints `Top level cell
+    # failed pin matching` on EVERY sky130 OSS run because the yosys gate netlist
+    # carries NO power ports while the DEF-extracted layout carries per-cell
+    # VPWR/VGND/VPB/VNB. The OpenLane-standard remediation (option b) is to
+    # GLOBALISE the power/ground rails so netgen connects them by NAME across both
+    # circuits instead of demanding a top-level power PORT correspondence. Reuses
+    # the tested `lvs_netgen_setup_emit` power-net list (single source of truth;
+    # chip/PDK-AGNOSTIC per-PDK rails). This makes the netgen COMPARE power-aware,
+    # so the RAW lvs.rpt becomes a clean MATCH for a power-pin-only design and the
+    # runner + Step-31 gate (both read that report) never disagree.
+    #
+    # §4.05 NO-LEAK: `global <rail>` touches ONLY the named power/ground rails; a
+    # SIGNAL-net mismatch is untouched by globalisation and still FAILs. Emitted
+    # AFTER `source`, so a foundry-declared global is harmlessly re-affirmed.
+    try:
+        body += "\n" + _lvs_setup.build_supplementary_setup_tcl(pdk.name)
+    except Exception:  # nosec — power-net globalisation is best-effort; a bad
+        pass          # PDK name must never break the (already-working) compare
     ext_dir = _pl.extracted_dir(project)
     ext_dir.mkdir(parents=True, exist_ok=True)
     host = ext_dir / "local_netgen_setup.tcl"
     host.write_text(body)
     return host, _to_container_path(str(host), container)
+
+
+def _lvs_power_pin_only_mismatch(blob: str) -> bool:
+    """GAP-E2E-9 DEEP ROOT — §4.05-guarded power-aware sign-off decision.
+
+    True iff `blob` is a netgen MISMATCH whose evidence is EXCLUSIVELY power/tie
+    nets (`lvs_verdict_tokens.mismatch_class(blob) == 'POWER_PIN_ONLY'`) — the
+    universal power-unaware-yosys-netlist vs power-extracted-layout SETUP artifact
+    that a power-aware sign-off LVS clears. Returns False for a MATCH, an
+    INCOMPLETE run, AND — LOAD-BEARING §4.05 — for a SIGNAL_NET_MISMATCH (real
+    signal-net evidence: a `(no pin, node is …)` row, a non-power `(no matching
+    pin)` port, or a device property error), which is NEVER converted to a MATCH.
+    Pure delegation to the shared classifier so runner + Step-31 gate never drift.
+    chip-AGNOSTIC."""
+    return (_lvt.classify(blob) == "MISMATCH"
+            and _lvt.mismatch_class(blob) == "POWER_PIN_ONLY")
 
 
 def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
@@ -6912,6 +7212,53 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
             "lvs", "PASS", time.time() - t0, detail,
             extras={"lvs_report": "reports/phase3/lvs.rpt",
                     "lvs_verdict": verdict,
+                    "ext2spice_warning": ext_warning,
+                    "extracted_netlist": str(
+                        spice_out.relative_to(project))})
+    # GAP-E2E-9 DEEP ROOT — POWER-AWARE sign-off resolution. Even with the power
+    # rails globalised in the local netgen setup (option b above), a residual
+    # power-unaware-netlist run can still print `failed pin matching` whose
+    # evidence is EXCLUSIVELY power/tie nets (POWER_PIN_ONLY). An OpenLane
+    # power-aware sign-off LVS clears exactly that benign SETUP artifact to a
+    # MATCH. Do the same here — DISCLOSED as LVS_MATCH_POWER_AWARE with the
+    # power-pin evidence recorded, never silent.
+    #
+    # §4.05 NO-LEAK (LOAD-BEARING): fires ONLY when the mismatch sub-class is
+    # POWER_PIN_ONLY. A SIGNAL_NET_MISMATCH (real signal-net evidence) is NEVER
+    # converted — it falls straight through to the FAIL branch below. Proven by a
+    # negative fixture in the tests.
+    if mismatched and _lvs_power_pin_only_mismatch(blob):
+        _pin_ev = _lvt.pin_mismatch_evidence(blob)
+        verdict = _write_lvs_verdict(
+            project, "PASS", "LVS_MATCH_POWER_AWARE",
+            f"netgen reported 'failed pin matching' but the mismatch evidence is "
+            f"EXCLUSIVELY power/tie nets (POWER_PIN_ONLY) — the yosys gate netlist "
+            f"carries no power ports while the DEF-extracted layout carries "
+            f"per-cell VPWR/VGND. A power-aware sign-off LVS (OpenLane globalises "
+            f"the power rails) clears this benign SETUP artifact to a MATCH. No "
+            f"signal-net mismatch is present (§4.05 — a SIGNAL_NET_MISMATCH is "
+            f"never converted). GAP-E2E-9.",
+            extras={"lvs_report": "reports/phase3/lvs.rpt",
+                    "mismatch_class": "POWER_PIN_ONLY",
+                    "power_aware_signoff": True,
+                    "pin_mismatch_evidence": _pin_ev,
+                    "ext2spice_warning": ext_warning})
+        detail = (
+            f"netgen LVS: circuits match uniquely under POWER-AWARE sign-off "
+            f"(layout {lay_top} vs gate netlist {netlist.name}) — the only "
+            f"pin-matching delta was the power-unaware-netlist power-pin SETUP "
+            f"artifact (POWER_PIN_ONLY), cleared as OpenLane sign-off LVS does; "
+            f"NO signal-net mismatch (§4.05). Report at reports/phase3/lvs.rpt")
+        if ext_warning:
+            detail += f" [WARN: {ext_warning}]"
+        return StepResult(
+            "lvs", "PASS", time.time() - t0, detail,
+            extras={"finding": "LVS_MATCH_POWER_AWARE",
+                    "lvs_report": "reports/phase3/lvs.rpt",
+                    "lvs_verdict": verdict,
+                    "mismatch_class": "POWER_PIN_ONLY",
+                    "power_aware_signoff": True,
+                    "pin_mismatch_evidence": _pin_ev,
                     "ext2spice_warning": ext_warning,
                     "extracted_netlist": str(
                         spice_out.relative_to(project))})
