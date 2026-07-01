@@ -347,3 +347,49 @@ def verilator_should_retry_synthesis_define(
         f"IDENTICAL closure elaborates under -D{synth_define} (the "
         f"synthesizable `else passthrough — the define the synth path "
         f"already uses) — retrying under -D{synth_define}")
+
+
+# ORGANIC E2E (opentitan_aes GDS blocker, 2026-07-01) — the phase-3 yosys/slang/
+# sv2v synth frontends hardcode -DSIMULATION, so they compile the `ifdef
+# SIMULATION DV-only arm ($urandom / std::randomize / $value$plusargs-in-a-
+# constant-context / a slang "Feature unimplemented" on a sim-only construct) of
+# a vendor primitive library and FAIL — even though the IDENTICAL closure
+# elaborates under -DSYNTHESIS (the synthesizable `else passthrough). This is the
+# phase-3 companion to the phase-2 #668 verilator retry, but the error signatures
+# are the slang / sv2v / yosys forms (a superset that also covers verilator).
+SYNTH_FRONTEND_SIMONLY_CONSTRUCT_SIGNATURES: Tuple[str, ...] = (
+    "$urandom",
+    "std::randomize",
+    "value$plusargs",
+    "$value$plusargs",
+    "Feature unimplemented",
+    "not allowed in a constant context",
+) + VERILATOR_SIMONLY_CONSTRUCT_SIGNATURES
+
+
+def synth_frontend_should_retry_under_synthesis(
+    synth_err: str,
+    sim_define: str = "SIMULATION",
+    synth_define: str = "SYNTHESIS",
+) -> Tuple[bool, str]:
+    """Phase-3 companion to #668 — decide whether a phase-3 yosys/slang/sv2v synth
+    build that FAILED under -D<sim_define> should retry the SAME closure under
+    -D<synth_define>. Retry iff the error carries a sim-only-construct signature
+    (the DV-only `ifdef <sim_define> arm). Honesty preserved: a closure that ALSO
+    fails under -D<synth_define> keeps the honest FAIL at the caller. chip-AGNOSTIC:
+    tool error-token + the standard SIMULATION/SYNTHESIS define names, no chip /
+    vendor / file literal.
+
+    Returns (should_retry, reason)."""
+    err = synth_err or ""
+    hit = any(s in err for s in SYNTH_FRONTEND_SIMONLY_CONSTRUCT_SIGNATURES)
+    if not hit:
+        return False, (
+            f"synth failure carries no sim-only-construct signature — not a "
+            f"-D{sim_define}/-D{synth_define} define-set mismatch; keep the "
+            f"honest FAIL")
+    return True, (
+        f"synth failed under -D{sim_define} on a sim-only construct "
+        f"($urandom/std::randomize in a dead `ifdef {sim_define} arm); the "
+        f"IDENTICAL closure elaborates under -D{synth_define} (the synthesizable "
+        f"`else passthrough) — retrying under -D{synth_define}")
