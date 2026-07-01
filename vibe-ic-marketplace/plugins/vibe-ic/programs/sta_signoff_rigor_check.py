@@ -23,12 +23,23 @@ Verdict:
           an optimistic sign-off, not a foundry-grade one.
   rc=2  — the report path is absent/unreadable (missing-evidence IO error).
 
+AOCV/POCV vs flat-OCV (P1, implemented):
+  The gate now DISTINGUISHES the OCV basis and reports `ocv_mode`:
+    * "aocv" — a distance/depth AOCV/POCV derate table was ingested (the runner
+      emits `AOCV_TABLE_APPLIED file=<name>` after a successful `read_aocv`). The
+      RICHER basis.
+    * "flat" — the generic flat-OCV ±5% margin (`set_timing_derate` /
+      `OCV_DERATE_APPLIED`). The HONEST real basis on the sky130 open PDK, which
+      ships NO AOCV/POCV table (and the open OpenSTA build here has no read_aocv).
+  BOTH pass the rigor gate — either is a valid on-chip-variation derate; AOCV is
+  simply richer. Only the ABSENCE of any derate fails the OCV dimension.
+
 Honest scope (disclosed, not fabricated):
-  * The OCV margin verified is FLAT-OCV (±5%). AOCV/POCV distance/depth tables are
-    the P1 follow-up and, when present, supersede the flat margin — this gate only
-    asserts SOME derate was applied, it does not certify AOCV/POCV.
-  * SI-aware delta-delay is a separate sign-off dimension (its own advisory gate);
-    this gate does not cover crosstalk.
+  * When no AOCV/POCV table exists (sky130 open PDK), flat-OCV stays the real
+    basis and `ocv_mode` says so — the gate never claims AOCV it did not apply.
+  * SI-aware delta-delay is a separate sign-off dimension (si_signoff_timing_aware
+    now emits a genuine PASS/FAIL/ADVISORY delta-delay verdict); this gate does
+    not cover crosstalk.
 
 §4.05 (no vacuous pass): a report that never applied a derate, or that omits the
 recovery/removal / min-pulse-width sections, is NOT a full sign-off — it FAILs
@@ -55,6 +66,14 @@ _OCV_MARKER_RE = re.compile(
 # A raw `set_timing_derate` echo (some OpenSTA builds echo the command) is also
 # accepted as derate evidence.
 _DERATE_CMD_RE = re.compile(r"set_timing_derate\b", re.IGNORECASE)
+# AOCV/POCV table evidence: the runner emits `AOCV_TABLE_APPLIED file=<name>`
+# when a distance/depth-based derate table was successfully ingested
+# (read_aocv), a RICHER on-chip-variation basis than the flat ±5% margin. A raw
+# `read_aocv` echo is also accepted. Its presence upgrades ocv_mode to "aocv"
+# (still PASS — both are valid OCV bases; AOCV is just richer).
+_AOCV_MARKER_RE = re.compile(
+    r"AOCV_TABLE_APPLIED\s+file=(\S+)", re.IGNORECASE)
+_AOCV_CMD_RE = re.compile(r"\bread_aocv\b", re.IGNORECASE)
 # report_check_types section markers. OpenSTA prints per-check-type sections; a
 # recovery/removal report contains the words, and min-pulse-width prints a
 # "min_pulse_width" / "min pulse width" section header or a "Min Pulse Width"
@@ -80,14 +99,20 @@ def _find_report(target: Path) -> Optional[Path]:
 
 def evaluate(report_text: str) -> Dict[str, object]:
     """Pure evaluator over a sign-off STA report body. Returns a verdict dict."""
-    ocv = bool(_OCV_MARKER_RE.search(report_text)
-               or _DERATE_CMD_RE.search(report_text))
+    aocv_m = _AOCV_MARKER_RE.search(report_text)
+    aocv = bool(aocv_m or _AOCV_CMD_RE.search(report_text))
+    flat_ocv = bool(_OCV_MARKER_RE.search(report_text)
+                    or _DERATE_CMD_RE.search(report_text))
+    # SOME on-chip-variation derate must be present. AOCV/POCV (distance/depth
+    # table) is richer than the flat ±5% margin, but either satisfies the gate.
+    ocv = aocv or flat_ocv
     recovery = bool(_RECOVERY_RE.search(report_text))
     removal = bool(_REMOVAL_RE.search(report_text))
     mpw = bool(_MPW_RE.search(report_text))
     missing: List[str] = []
     if not ocv:
-        missing.append("OCV derating (set_timing_derate / OCV_DERATE_APPLIED)")
+        missing.append("OCV derating (set_timing_derate / OCV_DERATE_APPLIED / "
+                       "read_aocv / AOCV_TABLE_APPLIED)")
     if not recovery:
         missing.append("recovery check (report_check_types -recovery)")
     if not removal:
@@ -96,14 +121,29 @@ def evaluate(report_text: str) -> Dict[str, object]:
         missing.append("min-pulse-width check "
                        "(report_check_types -min_pulse_width)")
     passed = not missing
+    if aocv:
+        ocv_mode = "aocv"
+        ocv_scope = ("AOCV/POCV distance/depth derate table applied "
+                     "(richer than flat-OCV)")
+    elif flat_ocv:
+        ocv_mode = "flat"
+        ocv_scope = ("flat-OCV (±5% generic margin; no AOCV/POCV table was "
+                     "supplied — sky130 open PDK ships none, so flat-OCV is "
+                     "the honest real basis. AOCV/POCV supersedes when present)")
+    else:
+        ocv_mode = None
+        ocv_scope = "no OCV derate detected"
     return {
         "verdict": "PASS" if passed else "FAIL",
         "ocv_derate_applied": ocv,
+        "ocv_mode": ocv_mode,               # "aocv" | "flat" | None
+        "aocv_applied": aocv,
+        "aocv_table": (aocv_m.group(1) if aocv_m else None),
         "recovery_checked": recovery,
         "removal_checked": removal,
         "min_pulse_width_checked": mpw,
         "missing": missing,
-        "ocv_scope": "flat-OCV (AOCV/POCV tables supersede when present — P1)",
+        "ocv_scope": ocv_scope,
     }
 
 

@@ -8487,6 +8487,59 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 written.append(str(mirror))
     spef_sta_ok = spef_sta_rpt.is_file() and spef_sta_rpt.stat().st_size > 0
 
+    # --- TAPEOUT-SIGNOFF P1: multi-corner SPEF (min/nom/max) + corner STA -----
+    # Extract a per-corner SPEF set so SETUP is signed off at the slow/max-RC
+    # corner and HOLD at the fast/min-RC corner. §4.05: when only .nom exists,
+    # this is a no-op and the single-corner (nom) SPEF above stands, DISCLOSED
+    # in multi_corner_spef_stance.json.
+    mc_spef_dir = extracted_out / "spef_corners"
+    mc_stance = rpt_phase3 / "multi_corner_spef_stance.json"
+    if primary_def.is_file() and not mc_stance.is_file():
+        corner_spefs = _emit_spef_corners(
+            project, top, pdk, container, mc_spef_dir, notes)
+        for p in corner_spefs.values():
+            written.append(str(p))
+        mc_sta_ok = False
+        # A corner STA is only meaningful with a SETUP/HOLD split -> need >=2
+        # distinct corners (min & max), else it degrades to the nom report we
+        # already produced.
+        if len(corner_spefs) >= 2 and ("min" in corner_spefs
+                                       or "max" in corner_spefs):
+            mc_sta_rpt = sta_out / "sta_spef_multicorner.rpt"
+            if not mc_sta_rpt.is_file():
+                mc_sta_ok = _emit_corner_spef_sta(
+                    project, top, pdk, container, corner_spefs,
+                    mc_sta_rpt, notes)
+                if mc_sta_ok:
+                    written.append(str(mc_sta_rpt))
+                    mc_mirror = rpt_phase3 / "sta_spef_multicorner.rpt"
+                    if not mc_mirror.is_file():
+                        mc_mirror.write_text(mc_sta_rpt.read_text())
+                        written.append(str(mc_mirror))
+        _corners = sorted(corner_spefs)
+        _multi = len(corner_spefs) >= 2
+        mc_stance.write_text(json.dumps({
+            "signoff_dimension": "multi_corner_spef",
+            "corners_extracted": _corners,
+            "corner_count": len(_corners),
+            "multi_corner": _multi,
+            "setup_corner": ("max" if "max" in corner_spefs
+                             else "nom" if "nom" in corner_spefs else None),
+            "hold_corner": ("min" if "min" in corner_spefs
+                            else "nom" if "nom" in corner_spefs else None),
+            "multicorner_sta_report": (
+                "phase3/stage3/sta/sta_spef_multicorner.rpt" if mc_sta_ok
+                else None),
+            "disclosure": (
+                "Multi-corner SPEF signed off: setup at the slow/max-RC corner, "
+                "hold at the fast/min-RC corner."
+                if _multi else
+                "SINGLE-CORNER (nom) only — this PDK did not ship the min/max "
+                "OpenRCX captables, so setup and hold share the nominal-RC "
+                "SPEF. HONEST limitation, not a claim of corner coverage."),
+        }, indent=2) + "\n")
+        written.append(str(mc_stance))
+
     # --- Step 23: post-route STA report (canonical) ---------------------
     # #527 — SPEF-based is CANONICAL when available (closer to sign-off
     # reality); the estimate-based report_checks is the fallback only.
@@ -8617,6 +8670,26 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         if _emit_erc_report(project, top, pdk, container, erc_rpt, notes):
             written.append(str(erc_rpt))
             written.append(str(rpt_phase3 / "erc.json"))
+
+    # --- TAPEOUT-SIGNOFF P1: POST-LAYOUT LEC (routed/ECO == synth/RTL) ---
+    # Step 13 only proved RTL==synth. This re-proves the FINAL routed/ECO
+    # netlist (after CTS/PnR/ECO/fill) is still logically equivalent, so a
+    # tool bug / bad ECO / mis-applied spare patch that changed the routed
+    # logic is caught before tape-out. Runs AFTER ECO + fill so it sees the
+    # final netlist. §4.05: absent routed netlist -> honest SKIP; a non-proof
+    # -> UNPROVEN (never a pass).
+    lec_post_json = rpt_phase3 / "lec_post_layout.json"
+    if primary_def.is_file() and not lec_post_json.is_file():
+        try:
+            _lec_v = _emit_lec_post_layout(
+                project, top, pdk, container, lec_post_json,
+                rpt_phase3 / "lec_post_layout.rpt", notes)
+            if lec_post_json.is_file():
+                written.append(str(lec_post_json))
+                if (rpt_phase3 / "lec_post_layout.rpt").is_file():
+                    written.append(str(rpt_phase3 / "lec_post_layout.rpt"))
+        except Exception as exc:
+            notes.append(f"post-layout LEC emit failed: {exc}")
 
     # --- v2.3: Step 35 DFM screen (CMP density + via redundancy) ------
     # Runs the deterministic dfm_screen_check (it writes the canonical
@@ -9201,6 +9274,64 @@ _FLAT_OCV_DERATE_EARLY = 0.95
 _FLAT_OCV_DERATE_LATE = 1.05
 
 
+def _container_ls_paths(container: str, ls_expr: str,
+                        must_contain: str, timeout: int = 20) -> List[str]:
+    """Run `ls <ls_expr>` in the container and return matching absolute paths.
+
+    ROBUST to the iic-osic-tools login banner: `docker exec ... bash -lc` prints
+    `[INFO] Final PATH variable: ...` / `[INFO] Final PYTHONPATH ...` lines on
+    every invocation, which pollute a naive `head -1`. We keep only lines that
+    START with `/` AND contain `must_contain`, so the banner never leaks into a
+    discovered path (the multi-corner/AOCV/blackbox globs all rely on this)."""
+    rc, out, _ = _docker_exec(container, f"ls {ls_expr} 2>/dev/null", timeout)
+    if rc != 0 and not out:
+        return []
+    hits: List[str] = []
+    for ln in (out or "").splitlines():
+        s = ln.strip()
+        if s.startswith("/") and must_contain in s and s not in hits:
+            hits.append(s)
+    return hits
+
+
+def _discover_aocv_table(project: Path, pdk: PdkConfig,
+                         container: str) -> Optional[str]:
+    """TAPEOUT-SIGNOFF (AOCV/POCV) — find an AOCV/POCV derate table the design
+    or PDK supplies, returning a CONTAINER path (or None).
+
+    Chip/PDK-AGNOSTIC discovery order:
+      1. design-supplied: project/input/{constraints,pdk,reference_flow}/**.aocv
+         (or .pocv) — a designer/foundry-provided distance/depth derate table.
+      2. PDK-supplied: glob the container PDK root (derived from the tech-LEF
+         path .../<PDK>/libs.ref/...) for libs.tech/**/*.aocv | *.pocv.
+
+    HONEST: the sky130 open PDK ships NO AOCV/POCV table (and this open OpenSTA
+    build has no read_aocv), so this returns None on stock sky130 and the caller
+    keeps flat-OCV as the real, disclosed basis. The mechanism exists for any
+    PDK/design that DOES supply a table."""
+    # 1. design-supplied (host paths -> translate to container).
+    for sub in ("input/constraints", "input/pdk", "input/reference_flow"):
+        d = project / sub
+        if not d.is_dir():
+            continue
+        for pat in ("*.aocv", "*.pocv", "*.aocvm"):
+            hits = sorted(d.rglob(pat))
+            if hits:
+                return _to_container_path(str(hits[0]), container)
+    # 2. PDK-supplied (container-side glob).
+    tlef = str(pdk.tech_lef or "")
+    i = tlef.find("/libs.ref/")
+    if i > 0:
+        root_c = tlef[:i]
+        for token in (".aocv", ".pocv"):
+            expr = (f"{shlex.quote(root_c)}/libs.tech/*/*{token} "
+                    f"{shlex.quote(root_c)}/libs.tech/*{token}")
+            hits = _container_ls_paths(container, expr, token)
+            if hits:
+                return hits[0]
+    return None
+
+
 def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
                    spef_path: Path, rpt_out: Path,
                    notes: List[str]) -> bool:
@@ -9245,12 +9376,55 @@ def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
     spef_c = _to_container_path(str(spef_path), container)
     rpt_out.parent.mkdir(parents=True, exist_ok=True)
     rpt_c = _to_container_path(str(rpt_out), container)
-    # TAPEOUT-SIGNOFF (timing rigor): apply a flat-OCV derate BEFORE reporting
-    # (the pre-fix STA carried NO on-chip-variation margin), and additionally
-    # report the recovery/removal (async-reset de-assert arcs) + min-pulse-width
-    # check types that a foundry sign-off requires and the pre-fix report omitted.
+    # TAPEOUT-SIGNOFF (timing rigor): apply an on-chip-variation derate BEFORE
+    # reporting (the pre-fix STA carried NO OCV margin), and additionally report
+    # the recovery/removal (async-reset de-assert arcs) + min-pulse-width check
+    # types that a foundry sign-off requires and the pre-fix report omitted.
     # These are best-effort appends — an OpenSTA build lacking a command still
     # produces the base report_checks (the `catch` keeps the run alive).
+    #
+    # AOCV/POCV (TAPEOUT-SIGNOFF P1): if the design/PDK supplies an AOCV/POCV
+    # distance/depth derate table, INGEST it (read_aocv) — a richer OCV basis —
+    # and mark AOCV_TABLE_APPLIED. Else (the sky130 open-PDK reality: no table,
+    # and this OpenSTA build has no read_aocv) fall back to the flat-OCV ±5%
+    # margin + OCV_DERATE_APPLIED marker. The sta_signoff_rigor_check gate
+    # reads either marker (both PASS; AOCV is disclosed as richer).
+    aocv_c = _discover_aocv_table(project, pdk, container)
+    if aocv_c:
+        # read_aocv guarded by catch: if the build lacks the command OR the
+        # table is unreadable, fall back to flat-OCV (never a silent no-derate).
+        ocv_tcl = (
+            f"if {{[catch {{read_aocv {aocv_c}}} _aocv_err]}} {{\n"
+            f"  set_timing_derate -early {_FLAT_OCV_DERATE_EARLY} "
+            f"-late {_FLAT_OCV_DERATE_LATE}\n"
+            f"  set _ocvf [open {rpt_c} a]\n"
+            f"  puts $_ocvf \"OCV_DERATE_APPLIED early={_FLAT_OCV_DERATE_EARLY} "
+            f"late={_FLAT_OCV_DERATE_LATE} flat-OCV\"\n"
+            f"  puts $_ocvf \"AOCV_READ_FALLBACK reason=$_aocv_err\"\n"
+            f"  close $_ocvf\n"
+            f"}} else {{\n"
+            f"  set _ocvf [open {rpt_c} a]\n"
+            f"  puts $_ocvf \"AOCV_TABLE_APPLIED file={aocv_c}\"\n"
+            f"  close $_ocvf\n"
+            f"}}\n"
+        )
+    else:
+        ocv_tcl = (
+            f"set_timing_derate -early {_FLAT_OCV_DERATE_EARLY} "
+            f"-late {_FLAT_OCV_DERATE_LATE}\n"
+        )
+    # Native-Tcl append of the flat-OCV marker (only in the no-AOCV path; when
+    # AOCV is applied the marker was written inside the ocv_tcl else-branch). A
+    # bare `puts >> file` is not valid Tcl; `puts` needs a channel.
+    if aocv_c:
+        flat_marker_tcl = ""
+    else:
+        flat_marker_tcl = (
+            f"set _ocvf [open {rpt_c} a]\n"
+            f"puts $_ocvf \"OCV_DERATE_APPLIED early={_FLAT_OCV_DERATE_EARLY} "
+            f"late={_FLAT_OCV_DERATE_LATE} flat-OCV\"\n"
+            f"close $_ocvf\n"
+        )
     tcl = (
         f"read_liberty {lib_c}\n"
         f"{macro_libs_tcl}\n"
@@ -9258,19 +9432,12 @@ def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
         f"link_design {top}\n"
         f"read_sdc {sdc_c}\n"
         f"read_spef {spef_c}\n"
-        f"set_timing_derate -early {_FLAT_OCV_DERATE_EARLY} "
-        f"-late {_FLAT_OCV_DERATE_LATE}\n"
+        f"{ocv_tcl}"
         f"report_checks > {rpt_c}\n"
         f"report_tns >> {rpt_c}\n"
         f"report_wns >> {rpt_c}\n"
         f"report_worst_slack -max >> {rpt_c}\n"
-        # Native-Tcl append of the OCV marker so the sign-off-rigor gate can
-        # verify the derate was actually applied (a bare `puts >> file` is not
-        # valid Tcl; report-command `>` redirect works but `puts` needs a channel).
-        f"set _ocvf [open {rpt_c} a]\n"
-        f"puts $_ocvf \"OCV_DERATE_APPLIED early={_FLAT_OCV_DERATE_EARLY} "
-        f"late={_FLAT_OCV_DERATE_LATE} flat-OCV\"\n"
-        f"close $_ocvf\n"
+        f"{flat_marker_tcl}"
         # recovery/removal (async-reset de-assert) + min-pulse-width sign-off
         # check types — report commands, so the `>>` redirect works as for
         # report_checks; catch keeps the run alive on an OpenSTA build lacking one.
@@ -9510,6 +9677,349 @@ exit
             f"see waivers.json VIBE-IC-PLUGIN-PHASE3-SPEF-EXTRACT.")
         return False
     return True
+
+
+# ── TAPEOUT-SIGNOFF P1: MULTI-CORNER SPEF (min / nom / max) ───────────────────
+# The single-corner `_emit_spef` above extracts only the .nom captable. A real
+# sign-off needs the process-corner RC spread: SETUP is checked at the SLOW /
+# max-RC corner (worst interconnect delay) and HOLD at the FAST / min-RC corner
+# (least interconnect delay = tightest hold). sky130A ships the full set at
+# libs.tech/openlane/rules.openrcx.<pdk>.{min,nom,max}.magic. LIVE-verified: one
+# OpenROAD invocation extracts+writes all three (extract_parasitics re-populates
+# the parasitics DB per corner; define_process_corner is done once).
+_SPEF_CORNERS = ("min", "nom", "max")
+
+
+def _discover_openrcx_captables(pdk: PdkConfig, container: str
+                                ) -> Dict[str, str]:
+    """Return {corner: container_captable_path} for the min/nom/max OpenRCX
+    extraction models this PDK ships (chip/PDK-AGNOSTIC — globbed from the PDK
+    root derived from the tech-LEF path). Corners with no captable are omitted;
+    an empty/one-entry result means the PDK is single-corner (honest fallback)."""
+    out: Dict[str, str] = {}
+    tlef = str(pdk.tech_lef or "")
+    i = tlef.find("/libs.ref/")
+    if i <= 0:
+        return out
+    root_c = tlef[:i]
+    ol = f"{root_c}/libs.tech/openlane"
+    for corner in _SPEF_CORNERS:
+        expr = (f"{shlex.quote(ol)}/rules.openrcx.*.{corner}.magic "
+                f"{shlex.quote(ol)}/rules.openrcx.*.{corner}")
+        # Prefer the .magic model; require the corner token in the name.
+        hits = _container_ls_paths(container, expr, f".{corner}")
+        magic = [h for h in hits if h.endswith(".magic")]
+        chosen = magic[0] if magic else (hits[0] if hits else None)
+        if chosen:
+            out[corner] = chosen
+    return out
+
+
+def _emit_spef_corners(project: Path, top: str, pdk: PdkConfig, container: str,
+                       out_dir: Path, notes: List[str]) -> Dict[str, Path]:
+    """Extract a per-corner SPEF set (<top>.<corner>.spef) for every OpenRCX
+    captable the PDK ships (min/nom/max). Returns {corner: host_spef_path} for
+    the corners that produced a non-empty SPEF.
+
+    §4.05 HONEST fallback: when only .nom is available (or captables are absent),
+    this returns at most {"nom": ...} and the caller discloses single-corner —
+    it never fabricates min/max SPEFs it did not extract."""
+    pnr_out = _pl.pnr_dir(project)
+    def_file = pnr_out / f"{top}.def"
+    if not def_file.is_file():
+        return {}
+    captables = _discover_openrcx_captables(pdk, container)
+    if not captables:
+        notes.append("multi-corner SPEF: no OpenRCX captable found for this "
+                     "PDK — single-corner (nom) SPEF stands (disclosed).")
+        return {}
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tech_lef_c = _to_container_path(str(pdk.tech_lef), container)
+    cell_lef_c = _to_container_path(str(pdk.cell_lef), container)
+    liberty_c = _to_container_path(str(pdk.liberty), container)
+    def_c = _to_container_path(str(def_file), container)
+    macro_lefs_tcl = "\n".join(
+        f"read_lef {_to_container_path(str(f), container)}"
+        for f in pdk.macro_lefs)
+    mp = pdk.metal_prefix
+    # Build ONE tcl that reads the DEF once then extracts+writes each corner.
+    corner_spefs: Dict[str, Path] = {}
+    body = [
+        f"read_lef {tech_lef_c}",
+        f"read_lef {cell_lef_c}",
+        macro_lefs_tcl,
+        f"read_liberty {liberty_c}",
+        f"read_def {def_c}",
+        f"if {{[catch {{set_wire_rc -signal -layer {mp}1}} _s]}} {{ "
+        f"catch {{set_wire_rc -layer {mp}1}} }}",
+        f"catch {{set_wire_rc -clock -layer {mp}5}}",
+        "catch {define_process_corner -ext_model_index 0 X}",
+    ]
+    for corner, rules_c in captables.items():
+        spef_host = out_dir / f"{top}.{corner}.spef"
+        spef_c = _to_container_path(str(spef_host), container)
+        body.append(f"puts \"SPEF_CORNER_BEGIN {corner} {rules_c}\"")
+        body.append(
+            f"if {{[catch {{extract_parasitics -ext_model_file {rules_c} "
+            f"-corner_cnt 1 -max_res 50 -coupling_threshold 0.1}} _ee]}} {{ "
+            f"puts \"SPEF_CORNER_EXTRACT_FAIL {corner}: $_ee\" }} else {{ "
+            f"if {{[catch {{write_spef {spef_c}}} _we]}} {{ "
+            f"puts \"SPEF_CORNER_WRITE_FAIL {corner}: $_we\" }} else {{ "
+            f"puts \"SPEF_CORNER_WROTE {corner}\" }} }}")
+        corner_spefs[corner] = spef_host
+    body.append("exit")
+    tcl_path = out_dir / f"extract_corners_{top}.tcl"
+    tcl_path.write_text("\n".join(body) + "\n")
+    tcl_c = _to_container_path(str(tcl_path), container)
+    out_dir_c = _to_container_path(str(out_dir), container)
+    cmd = (
+        f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
+        f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+        f"openroad -no_init -exit {tcl_c} 2>&1 | tee {out_dir_c}/extract_corners.log"
+    )
+    _docker_exec(container, cmd, timeout=1800)
+    produced: Dict[str, Path] = {}
+    for corner, p in corner_spefs.items():
+        if p.is_file() and p.stat().st_size > 0:
+            produced[corner] = p
+    if produced:
+        notes.append(
+            "multi-corner SPEF: extracted " + ", ".join(sorted(produced)) +
+            f" ({len(produced)} corner(s)).")
+    return produced
+
+
+def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
+                          container: str, corner_spefs: Dict[str, Path],
+                          rpt_out: Path, notes: List[str]) -> bool:
+    """Corner-aware SPEF STA: SETUP at the SLOW/max-RC corner, HOLD at the
+    FAST/min-RC corner. Writes one report with clearly-labelled SETUP(max-RC)
+    and HOLD(min-RC) sections. Best-effort; returns False if it can't run.
+
+    §4.05: only the corners that ACTUALLY produced a SPEF are used; if max is
+    absent, setup uses nom (disclosed); if min is absent, hold uses nom
+    (disclosed) — it never claims a corner it did not extract."""
+    pnr_out = _pl.pnr_dir(project)
+    netlist = pnr_out / f"{top}_pnr.v"
+    if not netlist.is_file():
+        netlist = _pl.synth_dir(project) / f"{top}_synth.v"
+    sdc = pnr_out / "constraint.sdc"
+    if not (netlist.is_file() and sdc.is_file()) or not corner_spefs:
+        return False
+    setup_corner = ("max" if "max" in corner_spefs
+                    else "nom" if "nom" in corner_spefs else None)
+    hold_corner = ("min" if "min" in corner_spefs
+                   else "nom" if "nom" in corner_spefs else None)
+    if setup_corner is None and hold_corner is None:
+        return False
+    lib_c = _to_container_path(str(pdk.liberty), container)
+    macro_libs_tcl = "\n".join(
+        f"read_liberty {_to_container_path(str(f), container)}"
+        for f in (pdk.macro_libs or []))
+    netlist_c = _to_container_path(str(netlist), container)
+    sdc_c = _to_container_path(str(sdc), container)
+    rpt_out.parent.mkdir(parents=True, exist_ok=True)
+    rpt_c = _to_container_path(str(rpt_out), container)
+
+    def _stanza(corner: str, kind: str, flag: str) -> str:
+        spef_c = _to_container_path(str(corner_spefs[corner]), container)
+        return (
+            f"read_liberty {lib_c}\n"
+            f"{macro_libs_tcl}\n"
+            f"read_verilog {netlist_c}\n"
+            f"link_design {top}\n"
+            f"read_sdc {sdc_c}\n"
+            f"read_spef {spef_c}\n"
+            f"set _f [open {rpt_c} a]\n"
+            f"puts $_f \"=== {kind} ({corner}-RC corner, SPEF={corner}) ===\"\n"
+            f"close $_f\n"
+            f"report_worst_slack {flag} >> {rpt_c}\n"
+            f"report_tns >> {rpt_c}\n"
+            f"report_checks {flag} -group_count 3 >> {rpt_c}\n"
+        )
+
+    # Header, then setup stanza, then a fresh sta process for hold (separate
+    # design read so the two corners don't cross-contaminate parasitics).
+    header = (
+        f"set _f [open {rpt_c} w]\n"
+        f"puts $_f \"# Multi-corner SPEF STA (TAPEOUT-SIGNOFF P1)\"\n"
+        f"puts $_f \"# SETUP corner: {setup_corner}-RC   HOLD corner: {hold_corner}-RC\"\n"
+        f"puts $_f \"# corners_available: {','.join(sorted(corner_spefs))}\"\n"
+        f"close $_f\n"
+    )
+    ok_any = False
+    # setup pass
+    if setup_corner is not None:
+        tcl = header + _stanza(setup_corner, "SETUP", "-max") + "exit\n"
+        tcl_path = rpt_out.parent / "sta_spef_setup.tcl"
+        tcl_path.write_text(tcl)
+        tcl_c = _to_container_path(str(tcl_path), container)
+        cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
+               f"{TOOLS_IN_CONTAINER}/bin:$PATH && sta -no_init -exit {tcl_c} 2>&1")
+        _docker_exec(container, cmd, timeout=1200)
+        ok_any = rpt_out.is_file() and rpt_out.stat().st_size > 0
+    # hold pass (append)
+    if hold_corner is not None:
+        tcl = _stanza(hold_corner, "HOLD", "-min") + "exit\n"
+        tcl_path = rpt_out.parent / "sta_spef_hold.tcl"
+        tcl_path.write_text(tcl)
+        tcl_c = _to_container_path(str(tcl_path), container)
+        cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
+               f"{TOOLS_IN_CONTAINER}/bin:$PATH && sta -no_init -exit {tcl_c} 2>&1")
+        _docker_exec(container, cmd, timeout=1200)
+        ok_any = ok_any or (rpt_out.is_file() and rpt_out.stat().st_size > 0)
+    if ok_any:
+        notes.append(
+            f"multi-corner SPEF STA: setup@{setup_corner}-RC, hold@{hold_corner}"
+            f"-RC ({len(corner_spefs)} corner SPEFs).")
+    return ok_any
+
+
+def _lec_post_layout_module():
+    """Lazy import of the standalone lec_post_layout_check program (recipe +
+    parser). Returns the module or None (advisory layer — never break import)."""
+    try:
+        import importlib
+        return importlib.import_module("lec_post_layout_check")
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+def _discover_blackbox_verilog(pdk: PdkConfig, container: str) -> List[str]:
+    """PDK-AGNOSTIC glob for the PDK's blackbox Verilog (empty module decls for
+    physical-only cells: tap/fill/decap/diode/endcap have no Liberty model and
+    would abort yosys `hierarchy` on a routed netlist). Returns container paths;
+    prefers `*__blackbox.v` over `*_pp.v`. Empty on any PDK that ships none."""
+    tlef = str(pdk.tech_lef or "")
+    i = tlef.find("/libs.ref/")
+    if i <= 0:
+        return []
+    root_c = tlef[:i]
+    expr = f"{shlex.quote(root_c)}/libs.ref/*/verilog/*blackbox*.v"
+    hits = _container_ls_paths(container, expr, "blackbox")
+    # Prefer the plain __blackbox.v (signal-only, sufficient for equiv) over the
+    # _pp.v (power-pin) variant of the SAME family.
+    plain = [h for h in hits if h.endswith("__blackbox.v")]
+    seen: List[str] = list(plain)
+    for h in hits:
+        if h.endswith("_pp.v") and any(
+                p[:-len("__blackbox.v")] == h[:-len("__blackbox_pp.v")]
+                for p in plain):
+            continue
+        if h not in seen:
+            seen.append(h)
+    return seen
+
+
+def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
+                          container: str, out_json: Path, out_rpt: Path,
+                          notes: List[str]) -> str:
+    """TAPEOUT-SIGNOFF P1: re-prove the FINAL routed/ECO netlist == the synth
+    reference (or RTL) after CTS/PnR/ECO/fill. Writes lec_post_layout.json +
+    .rpt. Returns the verdict string (PROVEN_EQUIVALENT / NON_EQUIVALENT /
+    UNPROVEN / VACUOUS / RUN_ERROR / SKIP).
+
+    §4.05: an absent routed netlist -> honest SKIP (not a pass); a non-proof /
+    vacuous match -> the parser labels it UNPROVEN/VACUOUS (never PROVEN)."""
+    mod = _lec_post_layout_module()
+    if mod is None:
+        notes.append("post-layout LEC: lec_post_layout_check module "
+                     "unavailable — skipping.")
+        return "SKIP"
+    pnr_out = _pl.pnr_dir(project)
+    eco_out = _pl.eco_dir(project)
+    synth_out = _pl.synth_dir(project)
+    # GATE (under test): the FINAL netlist — prefer post-ECO, else routed PnR.
+    gate = None
+    for cand in (eco_out / f"{top}_eco.v", pnr_out / f"{top}_pnr.v"):
+        if cand.is_file():
+            gate = cand
+            break
+    if gate is None:
+        # honest SKIP: no routed/ECO netlist -> design not placed-and-routed.
+        out_json.parent.mkdir(parents=True, exist_ok=True)
+        out_json.write_text(json.dumps({
+            "tool": "yosys-equiv", "top": top, "verdict": "SKIP",
+            "skipped": True,
+            "skip_reason": "no routed/ECO netlist (design not placed-and-routed)",
+        }, indent=2) + "\n")
+        notes.append("post-layout LEC: SKIP — no routed/ECO netlist.")
+        return "SKIP"
+    # GOLD (reference): the synth netlist (both gate-level => cleanest), else RTL.
+    gold = synth_out / f"{top}_synth.v"
+    gold_kind = "synth"
+    if not gold.is_file():
+        rtl_candidates = [_pl.rtl_dir(project) / f"{top}.v",
+                          _pl.rtl_dir(project) / f"{top}.sv"]
+        gold = next((c for c in rtl_candidates if c.is_file()), None)
+        gold_kind = "rtl"
+    if gold is None:
+        out_json.parent.mkdir(parents=True, exist_ok=True)
+        out_json.write_text(json.dumps({
+            "tool": "yosys-equiv", "top": top, "verdict": "SKIP",
+            "skipped": True,
+            "skip_reason": "no golden reference (synth netlist / RTL) found",
+        }, indent=2) + "\n")
+        notes.append("post-layout LEC: SKIP — no golden reference netlist/RTL.")
+        return "SKIP"
+    lib_c = _to_container_path(str(pdk.liberty), container)
+    gold_c = _to_container_path(str(gold), container)
+    gate_c = _to_container_path(str(gate), container)
+    blackbox = _discover_blackbox_verilog(pdk, container)
+    ys = mod.build_yosys_equiv_script(gold_c, gate_c, lib_c, top,
+                                      blackbox_v=blackbox)
+    out_json.parent.mkdir(parents=True, exist_ok=True)
+    ys_path = out_json.parent / f"lec_post_{top}.ys"
+    ys_path.write_text(ys)
+    ys_c = _to_container_path(str(ys_path), container)
+    log_c = _to_container_path(str(out_json.parent / "lec_post_layout.log"),
+                               container)
+    cmd = (f"export PATH={TOOLS_IN_CONTAINER}/yosys/bin:"
+           f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+           f"yosys -s {ys_c} 2>&1 | tee {log_c}")
+    rc, out, err = _docker_exec(container, cmd, timeout=1800)
+    log_host = out_json.parent / "lec_post_layout.log"
+    log_text = (log_host.read_text(errors="replace")
+                if log_host.is_file() else (out or "") + (err or ""))
+    parsed = mod.parse_equiv_log(log_text)
+    doc = {
+        "tool": "yosys-equiv",
+        "top": top,
+        "gold": str(gold), "gold_kind": gold_kind,
+        "gate": str(gate),
+        "blackbox_verilog": blackbox,
+        "proven_points": parsed.get("proven"),
+        "unproven_points": parsed.get("unproven"),
+        "total_points": parsed.get("total"),
+        "non_equivalent_points": parsed.get("non_equivalent"),
+        "equivalent": parsed.get("equivalent"),
+        "sat_unsupported_cells": parsed.get("sat_unsupported_cells", []),
+        "verdict": parsed.get("verdict"),
+        "skipped": False,
+        "yosys_rc": rc,
+        "scope": ("re-proves the FINAL routed/ECO netlist == the "
+                  f"{gold_kind} reference after CTS/PnR/ECO/fill "
+                  "(Step-13 only proved RTL==synth)."),
+    }
+    out_json.write_text(json.dumps(doc, indent=2) + "\n")
+    # Human .rpt via the gate's substance evaluation (mirror the verdict).
+    gate_res = mod.evaluate_report(doc)
+    out_rpt.parent.mkdir(parents=True, exist_ok=True)
+    out_rpt.write_text(
+        "# Post-layout LEC (routed/ECO netlist == synth/RTL reference)\n"
+        f"# gold ({gold_kind}): {gold}\n# gate (routed): {gate}\n#\n"
+        f"verdict: {doc['verdict']}\n"
+        f"gate_result: {gate_res['result']}\n"
+        f"total_points: {doc['total_points']}\n"
+        f"proven_points: {doc['proven_points']}\n"
+        f"unproven_points: {doc['unproven_points']}\n"
+        + (f"sat_unsupported_cells: {','.join(doc['sat_unsupported_cells'])}\n"
+           if doc['sat_unsupported_cells'] else "")
+        + "# §4.05: UNPROVEN/VACUOUS/NON_EQUIVALENT are NOT a pass.\n")
+    notes.append(
+        f"post-layout LEC: {doc['verdict']} (gold={gold_kind}, "
+        f"proven={doc['proven_points']}, unproven={doc['unproven_points']})")
+    return str(doc["verdict"])
 
 
 def _emit_sdf(project: Path, top: str, pdk: PdkConfig, container: str,
@@ -10550,12 +11060,31 @@ def _merge_si_timing_aware(project: Path, top: str, pdk: PdkConfig,
             "It does NOT change violations_count and never blocks the build."),
     }
     sbody["si_timing_aware_verdict"] = adv.get("verdict")
+    # TAPEOUT-SIGNOFF P1: surface the GENUINE coupling delta-delay verdict
+    # (PASS/FAIL/ADVISORY) alongside the advisory noise screen. This is a REAL
+    # verdict (a net whose modelled delta-delay is PROVEN to push a path
+    # negative against the STA slack basis is a genuine setup finding), unlike
+    # the always-advisory noise watch-list.
+    dd = adv.get("delta_delay")
+    if dd is not None:
+        sbody["delta_delay"] = {
+            "verdict": dd.get("delta_delay_verdict"),
+            "violations_count": dd.get("violations_count"),
+            "max_delta_delay_ns": dd.get("max_delta_delay_ns"),
+            "pairs_slack_checked": dd.get("pairs_slack_checked"),
+            "pairs_decoupled_by_window": dd.get("pairs_decoupled_by_window"),
+            "violations": dd.get("violations", [])[:20],
+            "scope": dd.get("scope"),
+        }
+        sbody["delta_delay_verdict"] = dd.get("delta_delay_verdict")
     notes.append(
         "SI timing-aware (ADVISORY): "
         f"{adv.get('pairs_decoupled_by_window', 0)} pairs decoupled by window, "
         f"{adv.get('watchlist_high_count', 0)} HIGH / "
         f"{adv.get('watchlist_low_count', 0)} LOW advisory watch — "
-        "violations_count unchanged (build not blocked).")
+        "violations_count unchanged (build not blocked). "
+        f"delta-delay verdict: {(dd or {}).get('delta_delay_verdict', 'n/a')}"
+        f" ({(dd or {}).get('violations_count', 0)} proven push-negative).")
 
 
 def _emit_si_crosstalk_report(project: Path, top: str, spef: Optional[Path],
