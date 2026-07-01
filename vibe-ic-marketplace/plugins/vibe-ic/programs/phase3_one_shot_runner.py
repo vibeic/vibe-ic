@@ -2101,6 +2101,47 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
                 rc, out, err = rc2, out2, err2
                 synth_frontend = "sv2v_verilog2005"
             # else: keep the (failed) slang rc/out/err for the FAIL path.
+    # ORGANIC E2E (opentitan_aes GDS blocker) — phase-2 #668 -DSYNTHESIS retry,
+    # ported to phase-3 synth. Every read path above hardcodes -DSIMULATION, so a
+    # vendor primitive whose `ifdef SIMULATION arm carries a DV-only construct
+    # ($urandom / std::randomize / $value$plusargs-in-constant-context, or a slang
+    # "Feature unimplemented") makes synth FAIL — even though the IDENTICAL closure
+    # elaborates under -DSYNTHESIS (the synthesizable `else passthrough, the define
+    # the synth path should use). Retry the whole closure under -DSYNTHESIS via the
+    # slang frontend (preserves hierarchy). Fires ONLY on a sim-only-construct
+    # signature (shared with the phase-2 #668 helper — single source of truth); a
+    # closure that ALSO fails under -DSYNTHESIS keeps the honest FAIL below.
+    # chip-AGNOSTIC. Guards: 8 OpenTitan primitives on the AES end-to-end run.
+    if rc != 0 or not netlist.is_file():
+        _retry_syn, _retry_reason = _sf.synth_frontend_should_retry_under_synthesis(
+            out + "\n" + err)
+        if _retry_syn:
+            _syn_files = " ".join(
+                _to_container_path(str(f), container) for f in rtl_files)
+            _syn_cmd = (
+                f"{setup}cd {out_dir_c} && "
+                f"export PATH={TOOLS_IN_CONTAINER}/yosys/bin:"
+                f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+                f"yosys -p '{macro_lib_reads + ('; ' if macro_lib_reads else '')}"
+                f"plugin -i slang; "
+                f"read_slang {_syn_files} --top {top} -DSYNTHESIS; "
+                f"hierarchy -top {top}; proc; flatten; tribuf -logic; "
+                f"synth -top {top} -flatten; "
+                f"dfflibmap -liberty {liberty_c}; "
+                f"{dlatch_clause}"
+                f"abc -liberty {liberty_c}{_abc_timing}; "
+                f"{hilomap_clause}"
+                f"clean; stat -liberty {liberty_c}; "
+                f"write_verilog -noattr {netlist_c}'"
+            )
+            _rcs, _outs, _errs = _docker_exec(container, _syn_cmd)
+            log.write_text(
+                log.read_text() +
+                f"\n\n=== -DSYNTHESIS RETRY (phase2 #668 port — {_retry_reason}) ===\n" +
+                _outs + "\n" + _errs)
+            if _rcs == 0 and netlist.is_file():
+                rc, out, err = _rcs, _outs, _errs
+                synth_frontend = "yosys_slang_dsynthesis"
     if rc != 0 or not netlist.is_file():
         # ORGANIC #551 — surface the ROOT-CAUSE error line ahead of the tail
         # (a `cd: No such file or directory` from a missing container mount

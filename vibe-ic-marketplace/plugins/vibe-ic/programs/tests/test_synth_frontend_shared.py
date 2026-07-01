@@ -341,3 +341,49 @@ endmodule
         # defect is reported honestly.
         assert rc != 0
         assert frontend == "iverilog_g2012"
+
+
+# ── ORGANIC E2E (opentitan_aes GDS blocker) — phase-3 -DSYNTHESIS retry decision ──
+# The phase-3 yosys/slang/sv2v synth frontends hardcode -DSIMULATION; a vendor
+# primitive's `ifdef SIMULATION DV-only arm ($urandom / std::randomize / slang
+# "Feature unimplemented") then FAILs synth even though the identical closure
+# elaborates under -DSYNTHESIS. `synth_frontend_should_retry_under_synthesis`
+# decides the retry; it must fire on a sim-only signature and STAY OFF (keep the
+# honest FAIL) on a genuine design error — the §4.05 no-leak boundary.
+import synth_frontend as _sfmod
+
+
+def test_synth_dsynthesis_retry_fires_on_urandom():
+    ok, reason = _sfmod.synth_frontend_should_retry_under_synthesis(
+        "slang: error: $urandom not allowed in a constant context")
+    assert ok is True
+    assert "-DSYNTHESIS" in reason
+
+
+def test_synth_dsynthesis_retry_fires_on_std_randomize():
+    ok, _ = _sfmod.synth_frontend_should_retry_under_synthesis(
+        "std::randomize used in a synthesis context")
+    assert ok is True
+
+
+def test_synth_dsynthesis_retry_fires_on_slang_feature_unimplemented():
+    ok, _ = _sfmod.synth_frontend_should_retry_under_synthesis(
+        "error: Feature unimplemented: $value$plusargs")
+    assert ok is True
+
+
+def test_synth_dsynthesis_retry_stays_off_on_genuine_design_error():
+    # NEGATIVE no-leak: a real elaboration/syntax error carries NO sim-only
+    # signature → do NOT retry, keep the honest FAIL (a -DSYNTHESIS retry would
+    # mask a genuine bug).
+    ok, reason = _sfmod.synth_frontend_should_retry_under_synthesis(
+        "ERROR: syntax error, unexpected TOK_ID at chip_top.sv:42")
+    assert ok is False
+    assert "honest FAIL" in reason
+
+
+def test_synth_dsynthesis_signatures_superset_of_verilator():
+    # single-source-of-truth: the phase-3 set includes every verilator #668
+    # signature (so the shared retry doctrine is not duplicated/divergent).
+    for s in _sfmod.VERILATOR_SIMONLY_CONSTRUCT_SIGNATURES:
+        assert s in _sfmod.SYNTH_FRONTEND_SIMONLY_CONSTRUCT_SIGNATURES
