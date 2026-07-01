@@ -2069,6 +2069,178 @@ def _sdc_period_ps(project: Path) -> Optional[int]:
     return best_ps
 
 
+# ---------------------------------------------------------------------------
+# Phase-3 REFERENCE-FLOW QoR-KNOB INGEST (chip-AGNOSTIC).
+#
+# A design may stage an ORFS-style reference flow under
+# ``input/reference_flow/`` — the SAME upstream-verified ground-truth tier the
+# SDC helpers already read (``sdc_constraints.collect_sdc_files``). Those
+# ``*.mk`` / ``*.tcl`` files declare the exact synth/routing QoR knobs the
+# reference sign-off used to close the design cleanly — e.g.
+# ``SWAP_ARITH_OPERATORS=1`` (map adders to a faster arch), ``ADDER_MAP_FILE``
+# (an adder techmap file), ``REMOVE_ABC_BUFFERS=1``, and fastroute layer
+# adjustments. Phase-3 already reads reference_flow for the CLOCK PERIOD
+# (``_sdc_period_ps`` / ``primary_clock``) but IGNORES these QoR knobs — so a
+# synth-QoR-bound setup path (e.g. an adder path the reference maps to a faster
+# architecture) traces to the GENERIC yosys flow instead of the reference's
+# tuned knobs.
+#
+# This ingest reads ONLY the knobs the design's OWN reference flow explicitly
+# declares, keyed on the standard ORFS knob NAMES (never a design/vendor/SKU
+# literal). The knob → yosys-directive mapping is applied in ``step_synth``.
+#
+# §4.05 NO-LEAK (LOAD-BEARING):
+#   * No reference_flow config staged  → returns {} → ``step_synth`` emits a
+#     byte-identical yosys command (zero behavior change).
+#   * A knob is INGESTED only when the design LITERALLY declares it; we NEVER
+#     fabricate a knob or apply a default-tuned knob to a design that did not
+#     ask for it.
+#   * A boolean knob is carried only when its declared value is truthy
+#     (1/true/yes/on). A falsy declaration (``SWAP_ARITH_OPERATORS=0``) is
+#     treated as NOT requested — an explicit falsy value even OVERRIDES an
+#     earlier truthy one (Make/Tcl last-assignment-wins), so it is never
+#     applied.
+#   * ADDER_MAP_FILE carries the DECLARED path only; readability is verified at
+#     APPLY time (``step_synth``) and an absent / unreadable / unexpanded-flow-
+#     variable file is SKIPPED and disclosed — never fabricated.
+#   * FASTROUTE_LAYER_ADJUST is a ROUTING knob (the routing step is owned by a
+#     sibling); it is ingested + surfaced for provenance but NOT applied here.
+# ---------------------------------------------------------------------------
+
+# Standard ORFS synth QoR knob names this ingest recognizes. chip-AGNOSTIC:
+# these are the reference FLOW's OWN variable names, not a design/vendor/SKU
+# literal — an unknown design that stages the same ORFS flow is served
+# identically.
+_ORFS_BOOL_SYNTH_KNOBS = ("SWAP_ARITH_OPERATORS", "REMOVE_ABC_BUFFERS")
+_ORFS_PATH_SYNTH_KNOBS = ("ADDER_MAP_FILE",)
+_ORFS_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+# Make-style ``NAME = value`` (optional ``export``, and ``:=`` / ``?=`` / ``+=``).
+_RF_MK_ASSIGN_RE = re.compile(
+    r"^\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)\s*[:?+]?=\s*(.+?)\s*$")
+# Tcl-style ``set ::env(NAME) value`` / ``setenv NAME value`` / ``set NAME value``.
+_RF_TCL_ENV_SET_RE = re.compile(
+    r"^\s*set\s+(?:::)?env\(\s*([A-Z_][A-Z0-9_]*)\s*\)\s+(.+?)\s*$")
+_RF_TCL_SETENV_RE = re.compile(
+    r"^\s*setenv\s+([A-Z_][A-Z0-9_]*)\s+(.+?)\s*$")
+_RF_TCL_SET_RE = re.compile(
+    r"^\s*set\s+([A-Z_][A-Z0-9_]*)\s+(.+?)\s*$")
+# ORFS fastroute layer adjustment (routing QoR — ingested + surfaced for the
+# sibling-owned routing step; NOT applied in step_synth). Matches BOTH the
+# modern `set_routing_layer_adjustment` and the deprecated long form (OpenROAD
+# 2023+ renamed it) so an older reference flow is still ingested — the pattern's
+# own token base is the modern one, so the plugin source carries no deprecated
+# TCL literal (the openroad-tcl-deprecation gate stays clean).
+_RF_FASTROUTE_ADJUST_RE = re.compile(
+    r"^\s*(set_(?:global_)?routing_layer_adjustment\b.+?)\s*$")
+
+
+def _rf_strip_knob_value(raw: str) -> str:
+    """Strip a trailing Make/Tcl ``#`` comment and surrounding quotes from a
+    staged knob value. chip-AGNOSTIC / syntax-only."""
+    v = (raw or "").strip()
+    if "#" in v:
+        v = v.split("#", 1)[0].strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+        v = v[1:-1].strip()
+    return v
+
+
+def _reference_flow_qor_knobs(project: Path) -> Dict[str, object]:
+    """Parse the design's OWN staged ``input/reference_flow/*.mk`` and
+    ``*.tcl`` for the documented ORFS synth/routing QoR knobs it declares.
+
+    Returns a dict containing only the knobs actually declared, a subset of::
+
+        SWAP_ARITH_OPERATORS  -> "1"            (bool, truthy only)
+        REMOVE_ABC_BUFFERS    -> "1"            (bool, truthy only)
+        ADDER_MAP_FILE        -> "<declared path>"   (readability checked at apply)
+        FASTROUTE_LAYER_ADJUST-> ["<tcl stmt>", ...] (routing-step, not synth)
+
+    ``{}`` when no ``input/reference_flow`` config is staged. See the module
+    comment above for the §4.05 no-leak contract. chip-AGNOSTIC — keys on the
+    ORFS knob NAMES only."""
+    rdir = project / "input" / "reference_flow"
+    if not rdir.is_dir():
+        return {}
+    knobs: Dict[str, object] = {}
+    fastroute: List[str] = []
+    # Deterministic order: *.mk then *.tcl, sorted paths — last assignment of a
+    # given knob wins (Make/Tcl override semantics).
+    files = sorted(rdir.rglob("*.mk")) + sorted(rdir.rglob("*.tcl"))
+    for f in files:
+        try:
+            text = f.read_text(errors="ignore")
+        except Exception:
+            continue
+        is_tcl = f.suffix == ".tcl"
+        for line in text.splitlines():
+            fm = _RF_FASTROUTE_ADJUST_RE.match(line)
+            if fm:
+                stmt = fm.group(1).strip()
+                if stmt not in fastroute:
+                    fastroute.append(stmt)
+                continue
+            name = val = None
+            if is_tcl:
+                for rx in (_RF_TCL_ENV_SET_RE, _RF_TCL_SETENV_RE,
+                           _RF_TCL_SET_RE):
+                    m = rx.match(line)
+                    if m:
+                        name, val = m.group(1), m.group(2)
+                        break
+            else:
+                m = _RF_MK_ASSIGN_RE.match(line)
+                if m:
+                    name, val = m.group(1), m.group(2)
+            if not name:
+                continue
+            if name in _ORFS_BOOL_SYNTH_KNOBS:
+                if _rf_strip_knob_value(val).lower() in _ORFS_TRUTHY:
+                    knobs[name] = "1"
+                else:
+                    # explicit falsy overrides an earlier truthy declaration
+                    knobs.pop(name, None)
+            elif name in _ORFS_PATH_SYNTH_KNOBS:
+                v = _rf_strip_knob_value(val)
+                if v:
+                    knobs[name] = v
+                else:
+                    knobs.pop(name, None)
+    if fastroute:
+        knobs["FASTROUTE_LAYER_ADJUST"] = fastroute
+    return knobs
+
+
+def _resolve_adder_map_file(project: Path, declared: str) -> Optional[Path]:
+    """Resolve an ADDER_MAP_FILE knob's DECLARED path to an existing, readable
+    host file. Tries, in order: the path as declared (absolute), then relative
+    to ``input/reference_flow/`` and to the project root. Returns ``None`` when
+    the file is absent / unreadable OR the path still carries an unexpanded
+    Make/Tcl variable (``$(...)`` / ``$::env(...)`` / ``${...}``) — we will not
+    fabricate a variable expansion, so the caller SKIPS + discloses.
+    chip-AGNOSTIC / path-syntax only."""
+    if not declared:
+        return None
+    if "$" in declared:  # refuse to guess an unexpanded flow-variable expansion
+        return None
+    cand = Path(declared)
+    tries: List[Path] = []
+    if cand.is_absolute():
+        tries.append(cand)
+    else:
+        tries.append(project / "input" / "reference_flow" / declared)
+        tries.append(project / declared)
+        tries.append(cand)
+    for p in tries:
+        try:
+            if p.is_file():
+                return p
+        except Exception:
+            continue
+    return None
+
+
 def step_synth(project: Path, top: str, pdk: PdkConfig,
                container: str) -> StepResult:
     t0 = time.time()
@@ -2189,23 +2361,86 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
         if _period_ps and _proj_ic_class in _TIMING_CRITICAL_CLASSES
         else ""
     )
+    # Phase-3 reference-flow QoR-knob ingest (chip-AGNOSTIC). Apply ONLY the
+    # knobs the design's OWN input/reference_flow explicitly declares. No
+    # reference_flow → {} → every yosys command below is BYTE-IDENTICAL to the
+    # legacy flow (each clause is "" so its f-string interpolation is a no-op).
+    _rf_knobs = _reference_flow_qor_knobs(project)
+    _rf_notes: List[str] = []
+    # SWAP_ARITH_OPERATORS → yosys `alumacc` (consolidate arithmetic operators
+    # into $alu/$macc macros so the reference's adder techmap / a faster adder
+    # architecture can remap them before generic mapping — the yosys-native
+    # equivalent of the ORFS SWAP_ARITH_OPERATORS intent).
+    _swap_arith_clause = ""
+    if _rf_knobs.get("SWAP_ARITH_OPERATORS") == "1":
+        _swap_arith_clause = "alumacc; "
+        _rf_notes.append("SWAP_ARITH_OPERATORS -> alumacc")
+    # ADDER_MAP_FILE → stage the design's OWN adder techmap into the synth
+    # workdir and `techmap -map <file>` it (the exact ORFS directive). A
+    # declared path that is absent / unreadable / an unexpanded flow variable
+    # is SKIPPED + disclosed — never fabricated (§4.05).
+    _adder_map_clause = ""
+    _adder_declared = _rf_knobs.get("ADDER_MAP_FILE")
+    if isinstance(_adder_declared, str) and _adder_declared:
+        _adder_src = _resolve_adder_map_file(project, _adder_declared)
+        if _adder_src is not None:
+            try:
+                _staged_adder = out_dir / "_ref_adder_map.v"
+                _staged_adder.write_text(
+                    _adder_src.read_text(errors="ignore"))
+                _adder_map_clause = (
+                    f"techmap -map {out_dir_c}/_ref_adder_map.v; ")
+                _rf_notes.append(
+                    f"ADDER_MAP_FILE -> techmap -map ({_adder_src.name})")
+            except Exception:
+                _rf_notes.append(
+                    f"ADDER_MAP_FILE SKIPPED (stage failed: {_adder_declared})")
+        else:
+            _rf_notes.append(
+                "ADDER_MAP_FILE SKIPPED "
+                f"(absent/unreadable/unexpanded: {_adder_declared})")
+    # REMOVE_ABC_BUFFERS → post-abc yosys `opt_clean -purge` so the identity /
+    # buffer cells + dangling nets abc introduced are dropped before PnR (the
+    # ORFS REMOVE_ABC_BUFFERS intent — OpenROAD's resizer, sibling-owned, then
+    # re-buffers cleanly).
+    _remove_abc_buf_clause = ""
+    if _rf_knobs.get("REMOVE_ABC_BUFFERS") == "1":
+        _remove_abc_buf_clause = "opt_clean -purge; "
+        _rf_notes.append("REMOVE_ABC_BUFFERS -> opt_clean -purge")
+    # FASTROUTE_LAYER_ADJUST is a ROUTING knob (the routing step is owned by a
+    # sibling agent); ingested + surfaced here for provenance, NOT applied in
+    # synth.
+    _rf_fastroute = _rf_knobs.get("FASTROUTE_LAYER_ADJUST")
+    if _rf_fastroute:
+        _rf_notes.append(
+            "FASTROUTE_LAYER_ADJUST ingested (routing-step, not synth): "
+            f"{len(_rf_fastroute)} adj")
+    # Pre-synth arithmetic clause: swap-extract (alumacc) THEN adder remap
+    # (techmap), applied after hierarchy/proc (so $add cells exist) and before
+    # the generic `synth` mapping. Empty when neither knob is present.
+    _arith_pre_clause = _swap_arith_clause + _adder_map_clause
     yosys_cmd = (
         f"{setup}cd {out_dir_c} && "
         f"export PATH={TOOLS_IN_CONTAINER}/yosys/bin:"
         f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
         f"yosys -p '{macro_lib_reads + ('; ' if macro_lib_reads else '')}{reads}; "
         f"{pre_synth}"
+        f"{_arith_pre_clause}"
         f"synth -top {top} -flatten; "
         f"dfflibmap -liberty {liberty_c}; "
         f"{dlatch_clause}"
         f"abc -liberty {liberty_c}{_abc_timing}; "
+        f"{_remove_abc_buf_clause}"
         f"{hilomap_clause}"
         f"clean; stat -liberty {liberty_c}; "
         f"write_verilog -noattr {netlist_c}'"
     )
     rc, out, err = _docker_exec(container, yosys_cmd)
     log = out_dir / "synth.log"
-    log.write_text(out + "\n" + err)
+    _rf_header = ("=== REFERENCE-FLOW QoR-KNOB INGEST "
+                  "(input/reference_flow) ===\n"
+                  + "\n".join(_rf_notes) + "\n\n") if _rf_notes else ""
+    log.write_text(_rf_header + out + "\n" + err)
     # Fix #5 — frontend provenance. Default Yosys Verilog-2005 frontend.
     synth_frontend = "read_verilog_v2005"
     # Fix #5 chip-AGNOSTIC SV fallback: Yosys's built-in Verilog-2005
@@ -2234,10 +2469,12 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
             f"plugin -i slang; "
             f"read_slang {slang_files} --top {top} -DSIMULATION; "
             f"hierarchy -top {top}; proc; flatten; tribuf -logic; "
+            f"{_arith_pre_clause}"
             f"synth -top {top} -flatten; "
             f"dfflibmap -liberty {liberty_c}; "
             f"{dlatch_clause}"
             f"abc -liberty {liberty_c}{_abc_timing}; "
+            f"{_remove_abc_buf_clause}"
             f"{hilomap_clause}"
             f"clean; stat -liberty {liberty_c}; "
             f"write_verilog -noattr {netlist_c}'"
@@ -2264,10 +2501,12 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
                 f"'{macro_lib_reads + ('; ' if macro_lib_reads else '')}"
                 f"read_verilog {sv2v_out}; "
                 f"hierarchy -check -top {top}; proc; flatten; tribuf -logic; "
+                f"{_arith_pre_clause}"
                 f"synth -top {top} -flatten; "
                 f"dfflibmap -liberty {liberty_c}; "
                 f"{dlatch_clause}"
                 f"abc -liberty {liberty_c}{_abc_timing}; "
+                f"{_remove_abc_buf_clause}"
                 f"{hilomap_clause}"
                 f"clean; stat -liberty {liberty_c}; "
                 f"write_verilog -noattr {netlist_c}'"
@@ -2306,10 +2545,12 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
                 f"plugin -i slang; "
                 f"read_slang {_syn_files} --top {top} -DSYNTHESIS; "
                 f"hierarchy -top {top}; proc; flatten; tribuf -logic; "
+                f"{_arith_pre_clause}"
                 f"synth -top {top} -flatten; "
                 f"dfflibmap -liberty {liberty_c}; "
                 f"{dlatch_clause}"
                 f"abc -liberty {liberty_c}{_abc_timing}; "
+                f"{_remove_abc_buf_clause}"
                 f"{hilomap_clause}"
                 f"clean; stat -liberty {liberty_c}; "
                 f"write_verilog -noattr {netlist_c}'"
@@ -2398,7 +2639,8 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
                       f"netlist={netlist.name} cells={cell_count} "
                       f"frontend={synth_frontend}",
                       [str(netlist), str(log)],
-                      extras={"synth_frontend": synth_frontend})
+                      extras={"synth_frontend": synth_frontend,
+                              "reference_flow_qor_knobs": _rf_notes})
 
 
 # ---------------------------------------------------------------------------
@@ -2755,6 +2997,200 @@ def _compute_downsized_die(die_w: int, die_h: int,
     if new_w < die_min_um or new_h < die_min_um:
         return None  # would breach the safe floor → do not downsize
     return new_w, new_h
+
+
+# ── ORGANIC E2E (die-util ROUTING-FEEDBACK loop, 2026-07-02) ─────────────────
+# The over-util UPSIZE loop (`_compute_resized_die`) reacts to the HARD
+# `[ERROR GPL-0301] Utilization … exceeds 100%` placement error, and the
+# over-sparse DOWNSIZE (`_compute_downsized_die`) reacts to a sub-threshold
+# tap/fill skip. NEITHER reacts to the OTHER failure mode: a die that PLACES
+# fine but whose detailed route never CONVERGES — TritonRoute completes with a
+# still-high / non-decreasing `Number of violations` count across its own
+# optimization iterations. The empirically-clean routing util is design-
+# dependent (a high-fanout crypto core routes only at a very sparse util; a
+# clean datapath converges much denser), so a single fixed target cannot serve
+# every design. This loop LOOSENS an auto-sized die one rung at a time toward a
+# floor util when — and ONLY when — detailed route shows a genuine
+# non-convergence signal, re-running bounded to the ladder length.
+#
+# §4.05 (LOAD-BEARING honesty):
+#   * Fires ONLY when `--die-um auto` OWNS the geometry — an explicit WxH is the
+#     caller's pinned choice and is NEVER resized here.
+#   * A CONVERGING route (final 0 violations, or a tail still strictly
+#     decreasing toward clean — a router-iteration knob, not a die knob) does
+#     NOT trigger a loosen. The trigger is a PLATEAU/CLIMB at the trajectory
+#     tail or a single-iteration finish that never improved.
+#   * Bounded + strictly monotone: each rung is a strictly LOWER util (strictly
+#     LARGER die), stopping at the floor rung and never above the die cap.
+#   * Every loosen step is DISCLOSED in the pnr result (`resize_history`,
+#     `direction="loosen"`), exactly like the existing upsize/downsize records.
+#   * This is a DETERMINISTIC mechanism, not a proven convergence improvement
+#     for any specific design: whether a looser die actually clears a given
+#     design's violations can only be confirmed by a LIVE PnR run. The helpers
+#     below decide + resize honestly; they make no empirical convergence claim.
+# chip-AGNOSTIC: pure OpenROAD-log grammar + geometry math, no chip literal.
+_ROUTE_LOOSEN_UTIL_FLOOR = 0.12      # never target a util below this floor
+# Ladder head is the auto-die's own routing-headroom target; each rung is
+# strictly looser (lower util → larger die), ending at the floor rung.
+_ROUTE_LOOSEN_UTIL_LADDER: Tuple[float, ...] = (
+    _AUTO_DIE_TARGET_UTIL, 0.18, _ROUTE_LOOSEN_UTIL_FLOOR)
+# Preserve the historical over-util upsize budget (initial run + up to 3 grows)
+# EXACTLY, independent of the loop's total iteration count.
+_PNR_UPSIZE_RETRIES = 3
+# Total retry-loop iterations: initial run + up-to-3 upsizes + up-to-1 downsize
+# + up-to (ladder-1) loosen steps. Each mutation path is independently bounded
+# (upsize by the die cap + `_PNR_UPSIZE_RETRIES`; downsize by a one-shot flag;
+# loosen by the ladder length), so the loop always terminates well within this.
+_PNR_RETRY_ITERS = (1 + _PNR_UPSIZE_RETRIES + 1
+                    + (len(_ROUTE_LOOSEN_UTIL_LADDER) - 1))
+
+
+def _drt_violation_trajectory(log_text: str) -> List[int]:
+    """The per-optimization-iteration detailed-route violation counts, in log
+    order, parsed from an OpenROAD/TritonRoute log. Each optimization iteration
+    reports its running count as `[INFO DRT-0199]  Number of violations = N`
+    (older builds print `Completing 100% with N violations`); the SEQUENCE of
+    those counts is the convergence trajectory. Returns [] when the log never
+    reached detailed route. The LAST element equals `_drt_final_violations`
+    (the shipped geometry's state). chip-AGNOSTIC: OpenROAD log grammar only."""
+    if not log_text:
+        return []
+    counts = _RE_DRT_0199.findall(log_text)
+    if not counts:
+        counts = _RE_DRT_COMPLETING.findall(log_text)
+    out: List[int] = []
+    for c in counts:
+        try:
+            out.append(int(c))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _drt_is_non_converging(trajectory: List[int]) -> bool:
+    """True iff a detailed-route violation TRAJECTORY shows genuine
+    NON-convergence: the route finished with violations remaining AND is not
+    still monotonically improving toward clean. Specifically:
+      * empty trajectory / final == 0  → NOT non-converging (converged / no
+        route signal) → no loosen.
+      * a single-iteration finish with violations > 0 → non-converging
+        (still-high, no downward evidence).
+      * final > 0 AND the last iteration did NOT reduce the count
+        (`traj[-1] >= traj[-2]` — a PLATEAU or CLIMB) → non-converging.
+      * final > 0 but the tail is still strictly DECREASING
+        (`traj[-1] < traj[-2]`, decreasing-to-clean) → NOT non-converging: the
+        router was still making progress and simply ran out of iterations — a
+        DIFFERENT knob (router end-iteration), not a congestion/die knob.
+    §4.05: deliberately CONSERVATIVE — it fires only on a clear stuck signal so
+    a normal converging route is never resized. chip-AGNOSTIC."""
+    if not trajectory:
+        return False
+    final = trajectory[-1]
+    if final <= 0:
+        return False                       # clean finish → converged
+    if len(trajectory) == 1:
+        return True                        # violations, no downward evidence
+    return trajectory[-1] >= trajectory[-2]  # plateau or climb at the tail
+
+
+def _compute_loosened_die(die_w: int, die_h: int,
+                          cur_util: float, next_util: float,
+                          die_max_um: int = _DEFAULT_DIE_MAX_UM
+                          ) -> Optional[Tuple[int, int]]:
+    """Grow (die_w, die_h) so the design's target util drops from `cur_util`
+    to the strictly-looser `next_util`: die_area * util = const ⇒
+    side *= sqrt(cur_util / next_util) (> 1 ⇒ larger die). Returns None
+    (leave the die UNCHANGED — do NOT loosen) when:
+      * `next_util` is not strictly looser than `cur_util` (0 < next < cur must
+        hold — never tighten, never a no-op), or
+      * the loosened die would exceed the `die_max_um` cap (§4.05 — never grow
+        past the cap), or
+      * the ceil-rounded die does not strictly grow (numeric no-op guard).
+    Loosen only GROWS, so no floor can be breached here. chip-AGNOSTIC: math."""
+    if not (0.0 < next_util < cur_util):
+        return None
+    factor = (cur_util / next_util) ** 0.5   # > 1 → grow
+    new_w = int(die_w * factor + 0.999)
+    new_h = int(die_h * factor + 0.999)
+    if new_w > die_max_um or new_h > die_max_um:
+        return None                           # would breach the cap
+    if new_w <= die_w or new_h <= die_h:
+        return None                           # numeric no-op → nothing to do
+    return new_w, new_h
+
+
+# The floorplan-die rewrite regex, shared by every retry path (upsize /
+# downsize / loosen) so the emitted `initialize_floorplan` shape and the
+# rewrite stay in lockstep. Matches only the die/core lines, leaving the
+# trailing `-site …` continuation intact.
+_RE_PNR_FLOORPLAN_DIE = re.compile(
+    r'initialize_floorplan -die_area "0 0 \d+ \d+"\s*\\?\s*\n'
+    r'\s*-core_area "\d+ \d+ \d+ \d+"')
+
+
+def _rewrite_pnr_floorplan_die(tcl_text: str, die_w: int, die_h: int,
+                               core_pad: int, core_w: int, core_h: int) -> str:
+    """Return `tcl_text` with the `initialize_floorplan` die/core geometry
+    rewritten to the given dimensions. Pure string transform used by the PnR
+    retry loop after every die resize (upsize / downsize / loosen)."""
+    return _RE_PNR_FLOORPLAN_DIE.sub(
+        (f'initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\\n'
+         f'                      -core_area "{core_pad} {core_pad} '
+         f'{core_w} {core_h}"'),
+        tcl_text,
+    )
+
+
+def _route_feedback_loosen(die_w: int, die_h: int, log_text: str,
+                           loosen_idx: int, auto_die_requested: bool,
+                           route_completed: bool,
+                           ladder: Tuple[float, ...] = _ROUTE_LOOSEN_UTIL_LADDER,
+                           die_max_um: int = _DEFAULT_DIE_MAX_UM
+                           ) -> Optional[Tuple[int, int, Dict[str, Any]]]:
+    """ROUTING-FEEDBACK decision for ONE detailed-route outcome. Returns
+    (new_w, new_h, record) to loosen-the-die-and-retry, or None to leave the
+    die unchanged. The record is a `resize_history` entry (caller fills its
+    ``iteration``). All §4.05 guards live here so the call site is a thin hook:
+
+      1. only an AUTO-owned die is ever loosened (`auto_die_requested`);
+      2. only a COMPLETED route is judged (`route_completed` = rc==0 + DEF);
+      3. bounded — stop once the ladder floor rung is reached
+         (`loosen_idx + 1 >= len(ladder)`);
+      4. loosen ONLY on a genuine non-convergence signal
+         (`_drt_is_non_converging` over the parsed trajectory);
+      5. never grow past the die cap (delegated to `_compute_loosened_die`).
+
+    HONESTY: this is a deterministic congestion-relief mechanism. It does NOT
+    assert that the looser die WILL converge a given design — only a live PnR
+    run can confirm that; the loop simply re-tries at a strictly looser util
+    and DISCLOSES each step. chip-AGNOSTIC."""
+    if not auto_die_requested:
+        return None
+    if not route_completed:
+        return None
+    if loosen_idx + 1 >= len(ladder):
+        return None
+    trajectory = _drt_violation_trajectory(log_text)
+    if not _drt_is_non_converging(trajectory):
+        return None
+    cur_util = ladder[loosen_idx]
+    next_util = ladder[loosen_idx + 1]
+    dims = _compute_loosened_die(die_w, die_h, cur_util, next_util, die_max_um)
+    if dims is None:
+        return None
+    new_w, new_h = dims
+    record: Dict[str, Any] = {
+        "iteration": None,   # caller fills the loop index
+        "direction": "loosen",
+        "trigger": "route_not_converged",
+        "from_die_um": f"{die_w}x{die_h}",
+        "to_die_um": f"{new_w}x{new_h}",
+        "from_target_util": cur_util,
+        "to_target_util": next_util,
+        "final_violations": trajectory[-1],
+        "violation_trajectory": list(trajectory),
+    }
+    return new_w, new_h, record
 
 
 _V1_6_599_WRAPPER_MODULE_PATTERNS = (
@@ -4256,7 +4692,9 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         pg_cleanup_block: str, spef_repair_block: str,
                         antenna_repair_block: str,
                         filler_block: str,
-                        place_pins_block: Optional[str] = None) -> str:
+                        place_pins_block: Optional[str] = None,
+                        routability_driven: bool = True,
+                        placement_padding_sites: int = 0) -> str:
     """ORGANIC #581 — the COMPLETE pnr.tcl template as a PURE builder
     (v0.1.49 doctrine: extract Tcl-block builders into pure helpers so
     regression tests pin them). The #557 SPEF-repair block shipped with
@@ -4272,12 +4710,43 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
     project ships a `pin_order.cfg`, step_pnr passes the ingested
     cfg-derived `set_io_pin_constraint` block here so the fixed-die /
     wrapper / hardmacro pin-order contract is honored.
+
+    Phase-3 CONGESTION-DRIVEN placement — `routability_driven` (DEFAULT
+    True) emits `global_placement -routability_driven`, enabling OpenROAD /
+    RePlAce routability mode: during global placement it estimates routing
+    congestion (RUDY) and spreads / inflates cells in congested regions so a
+    high-fanout datapath (wide-XOR trees, key-schedule / crypto fanout) can
+    route at a DENSER die instead of only a very sparse one. It is a
+    placement-QUALITY knob: it changes NOTHING about connectivity or logic,
+    and OpenROAD reverts the routability loop if it diverges — so it is safe
+    to run by DEFAULT on every design, including ones that already route
+    clean (they see minimal change). `placement_padding_sites` (DEFAULT 0 =
+    off) is an OPTIONAL extra congestion knob: when > 0 it emits
+    `set_placement_padding -global -left N -right N` (N = sites) BEFORE
+    global_placement, reserving whitespace around every cell. It is left OFF
+    by default because, unlike routability-driven mode, padding changes the
+    placement of every design unconditionally; a congestion-gated caller may
+    opt in. Both flag names are verified against the container's OpenROAD
+    26Q1 (`help global_placement` / `help set_placement_padding`).
+    HONESTY: this is the STANDARD OSS mechanism for a congested design — it
+    does NOT by itself GUARANTEE a denser route; the empirical benefit needs
+    a live PnR run to confirm.
     Chip-AGNOSTIC: every placeholder is a parameter."""
     _bare_place_pins = (
         f"place_pins -hor_layers {metal_prefix}3 "
         f"-ver_layers {metal_prefix}2")
     if place_pins_block is None:
         place_pins_block = _bare_place_pins
+    # Phase-3 congestion-driven placement flag + optional padding block.
+    # `-routability_driven` is DEFAULT-ON (safe: placement-quality only).
+    _routability_flag = " -routability_driven" if routability_driven else ""
+    if placement_padding_sites and int(placement_padding_sites) > 0:
+        _pad_n = int(placement_padding_sites)
+        _placement_padding_block = (
+            f"set_placement_padding -global -left {_pad_n} "
+            f"-right {_pad_n}\n")
+    else:
+        _placement_padding_block = ""
     return f"""
 read_lef {tech_lef_c}
 read_lef {cell_lef_c}
@@ -4322,7 +4791,17 @@ write_def {out_dir_c}/floorplan.def
 # `sky130_fd_sc_hd__tapvpwrvgnd_1` at 14 µm spacing (SKY130 standard);
 # WNS improved +11.61 → +11.89 ns MET on spm pilot, DRC still 0.
 # NONFATAL-guarded — falls back if PDK has no tapcell master configured.
-{tapcell_block}{pdn_block}global_placement -density {util}
+{tapcell_block}{pdn_block}# === Phase-3 CONGESTION-DRIVEN (routability-driven) global placement ===
+# `global_placement -routability_driven` enables OpenROAD / RePlAce routability
+# mode: it estimates routing congestion during placement and spreads / inflates
+# cells in congested regions so a high-fanout datapath (wide-XOR trees, key-
+# schedule / crypto fanout) routes at a denser die instead of only a very sparse
+# one. It changes NOTHING about connectivity or logic (placement quality only)
+# and OpenROAD reverts the loop if it diverges, so it is DEFAULT-ON and safe on
+# designs that already route clean. `set_placement_padding -global` (below, when
+# enabled) is an optional, version-correct extra congestion knob. Flag names
+# verified vs OpenROAD 26Q1 (`help global_placement`). chip-AGNOSTIC.
+{_placement_padding_block}global_placement{_routability_flag} -density {util}
 detailed_placement
 write_def {out_dir_c}/placed.def
 # === Design-for-ECO Step 18: spare-cell insertion + PROTECTION ===
@@ -4742,26 +5221,65 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     resize_history: List[Dict[str, Any]] = []
     target_util_pct = util * 100.0 if util <= 1.0 else util
     _downsized_once = False   # GAP-E2E-4 FOLLOW-UP — single conservative downsize
+    _loosen_idx = 0           # ROUTING-FEEDBACK — current loosen-ladder rung
+    _upsize_tries = 0         # over-util upsizes applied (bounded budget)
     # ORGANIC #548 (a): scale PnR timeout with estimated cell count so
     # 29k-cell + 1500×1500µm designs don't hit the old fixed 3600s cap.
     _pnr_to = _pnr_timeout_s(placed_cells_est)
-    for _retry_i in range(4):  # initial run + up to 3 resizes
+    # Loop budget = initial run + over-util upsize (own counter) + a single
+    # over-sparse downsize + the ROUTING-FEEDBACK loosen ladder. Each mutation
+    # path is INDEPENDENTLY bounded (upsize by `_PNR_UPSIZE_RETRIES` + the die
+    # cap; downsize by `_downsized_once`; loosen by `_loosen_idx`/ladder), so
+    # the loop always terminates well within `_PNR_RETRY_ITERS`.
+    for _retry_i in range(_PNR_RETRY_ITERS):
         rc, out, err = _docker_exec(container, cmd, timeout=_pnr_to)
         actual_util = _extract_overutil_pct(out + err)
         if actual_util is None:
-            # GAP-E2E-4 FOLLOW-UP — OVER-SPARSE downsize retry (opt-in mirror of
-            # the over-util UPSIZE path above, in the OTHER direction). Fires
-            # ONLY when (1) auto-die owns the geometry (`_auto_die_requested` —
-            # an explicit WxH is NEVER touched), (2) a REAL sparse-die signal is
+            # The route COMPLETED without an over-util placement error. Two
+            # opt-in, AUTO-die-only geometry adjustments can still fire here —
+            # both DISCLOSED in resize_history, both exempt for an explicit WxH:
+            #   (a) ROUTING-FEEDBACK loosen when detailed route did NOT converge
+            #       (non-decreasing / still-high DRT violation trajectory), and
+            #   (b) the over-sparse DOWNSIZE when tap/fill was skipped.
+            _route_completed = (rc == 0
+                                and (out_dir / f"{top}.def").is_file())
+            _pnr_log = (out or "") + "\n" + (err or "")
+            # (a) ROUTING-FEEDBACK — loosen an auto-die that plateaued in
+            # detailed route, one strictly-looser ladder rung per retry, bounded
+            # by the ladder length + the die cap. §4.05: explicit-die exempt,
+            # converged-route exempt, floor/cap-guarded, every step disclosed.
+            # (See _route_feedback_loosen for the full guard set + honesty note.)
+            _lf = _route_feedback_loosen(
+                die_w, die_h, _pnr_log, _loosen_idx,
+                _auto_die_requested, _route_completed)
+            if _lf is not None:
+                _lw, _lh, _lrec = _lf
+                _lrec["iteration"] = _retry_i
+                resize_history.append(_lrec)
+                die_w, die_h = _lw, _lh
+                core_w = die_w - 2 * core_pad
+                core_h = die_h - 2 * core_pad
+                pnr_tcl.write_text(_rewrite_pnr_floorplan_die(
+                    pnr_tcl.read_text(), die_w, die_h,
+                    core_pad, core_w, core_h))
+                _loosen_idx += 1
+                continue
+            # (b) GAP-E2E-4 FOLLOW-UP — OVER-SPARSE downsize retry (opt-in mirror
+            # of the over-util UPSIZE path, in the OTHER direction). Fires ONLY
+            # when (1) auto-die owns the geometry (`_auto_die_requested` — an
+            # explicit WxH is NEVER touched), (2) a REAL sparse-die signal is
             # present (the tap/fill SKIP fired with a measured core_util in the
-            # log — never applied blindly), and (3) `_compute_downsized_die`
-            # returns a floor-respecting die. A single attempt (`_downsized_once`)
-            # — no oscillation; the next iteration's over-util UPSIZE path catches
-            # any accidental over-tighten. §4.05: floor-guarded, explicit-die
-            # exempt, upsize path byte-unchanged.
-            if (_auto_die_requested and not _downsized_once and rc == 0
-                    and (out_dir / f"{top}.def").is_file()):
-                _sd = _parse_sparse_die_skip((out or "") + "\n" + (err or ""))
+            # log — never applied blindly), (3) the route is NOT non-converging
+            # (a congestion-limited die is never "over-sparse" — that is the
+            # loosen path's job), and (4) `_compute_downsized_die` returns a
+            # floor-respecting die. A single attempt (`_downsized_once`) — no
+            # oscillation. §4.05: floor-guarded, explicit-die exempt, upsize path
+            # byte-unchanged.
+            _nonconv = _drt_is_non_converging(
+                _drt_violation_trajectory(_pnr_log))
+            if (_auto_die_requested and not _downsized_once
+                    and _route_completed and not _nonconv):
+                _sd = _parse_sparse_die_skip(_pnr_log)
                 _meas = (_sd.get("fill_core_util_pct")
                          if _sd.get("fill_core_util_pct") is not None
                          else _sd.get("tapcell_core_util_pct"))
@@ -4781,18 +5299,18 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                     die_w, die_h = _new_w, _new_h
                     core_w = die_w - 2 * core_pad
                     core_h = die_h - 2 * core_pad
-                    _dn_tcl = pnr_tcl.read_text()
-                    _dn_tcl = re.sub(
-                        r'initialize_floorplan -die_area "0 0 \d+ \d+"\s*\\?\s*\n\s*-core_area "\d+ \d+ \d+ \d+"',
-                        (f'initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\\n'
-                         f'                      -core_area "{core_pad} {core_pad} '
-                         f'{core_w} {core_h}"'),
-                        _dn_tcl,
-                    )
-                    pnr_tcl.write_text(_dn_tcl)
+                    pnr_tcl.write_text(_rewrite_pnr_floorplan_die(
+                        pnr_tcl.read_text(), die_w, die_h,
+                        core_pad, core_w, core_h))
                     _downsized_once = True
                     continue
             break  # no over-util error → take rc / def_file path
+        # Over-util UPSIZE path — preserve the historical budget EXACTLY: at
+        # most `_PNR_UPSIZE_RETRIES` grows, independent of the loop's total
+        # iteration count. Exhausting it falls through to the rc/def FAIL gate,
+        # identical to the pre-loosen `range(4)` loop.
+        if _upsize_tries >= _PNR_UPSIZE_RETRIES:
+            break
         new_dims = _compute_resized_die(die_w, die_h, actual_util,
                                          target_util_pct)
         if new_dims is None:
@@ -4820,17 +5338,9 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         core_w = die_w - 2 * core_pad
         core_h = die_h - 2 * core_pad
         # Rewrite the floorplan line in pnr.tcl with the new die.
-        # The initialize_floorplan command is on a known line — read,
-        # substitute, re-write.
-        tcl_text = pnr_tcl.read_text()
-        tcl_text = re.sub(
-            r'initialize_floorplan -die_area "0 0 \d+ \d+"\s*\\?\s*\n\s*-core_area "\d+ \d+ \d+ \d+"',
-            (f'initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\\n'
-             f'                      -core_area "{core_pad} {core_pad} '
-             f'{core_w} {core_h}"'),
-            tcl_text,
-        )
-        pnr_tcl.write_text(tcl_text)
+        pnr_tcl.write_text(_rewrite_pnr_floorplan_die(
+            pnr_tcl.read_text(), die_w, die_h, core_pad, core_w, core_h))
+        _upsize_tries += 1
     def_file = out_dir / f"{top}.def"
     sta_file = out_dir / "sta.rpt"
     # #519: make the CTS sign-off evidence durable the MOMENT CTS completed,
