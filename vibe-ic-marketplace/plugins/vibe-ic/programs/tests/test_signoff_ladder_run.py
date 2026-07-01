@@ -325,6 +325,196 @@ class TestRunLadder:
         assert rep.overall_verdict == "FAIL"
 
 
+class TestDynamicIRTier:
+    """Transient (di/dt) IR-drop — distinct from the static ir_drop tier."""
+
+    def test_absent_report_not_run(self, tmp_path):
+        assert mod.check_tier_dynamic_ir(tmp_path).verdict == "NOT_RUN"
+
+    def test_under_budget_pass(self, tmp_path):
+        _write_json(tmp_path / "reports/phase3/dynamic_ir.json",
+                    {"max_dynamic_drop_mv": 90.0, "vdd_v": 1.8})
+        # budget = 10% * 1.8 V * 1000 = 180 mV; 90 < 180.
+        assert mod.check_tier_dynamic_ir(tmp_path).verdict == "PASS"
+
+    def test_over_budget_fail(self, tmp_path):
+        # §4.05 negative: a transient droop over budget FAILs (does not pass).
+        _write_json(tmp_path / "reports/phase3/dynamic_ir.json",
+                    {"max_dynamic_drop_mv": 250.0, "vdd_v": 1.8})
+        assert mod.check_tier_dynamic_ir(tmp_path).verdict == "FAIL"
+
+    def test_static_ir_drop_json_is_not_read_as_dynamic(self, tmp_path):
+        # The STATIC ir_drop.json must NOT masquerade as a dynamic sign-off.
+        _write_json(tmp_path / "reports/phase3/ir_drop.json",
+                    {"worst_ir_uv": 20.0, "budget_uv": 90000.0})
+        assert mod.check_tier_dynamic_ir(tmp_path).verdict == "NOT_RUN"
+
+
+class TestMetalDensityTier:
+    """Per-layer metal density — distinct axis from row/core-util density."""
+
+    def test_absent_report_not_run(self, tmp_path):
+        assert mod.check_tier_metal_density(tmp_path).verdict == "NOT_RUN"
+
+    def test_within_window_pass(self, tmp_path):
+        _write_json(tmp_path / "reports/phase3/metal_density.json",
+                    {"layers": {"met1": 0.42, "met2": 0.55, "met3": 0.48}})
+        assert mod.check_tier_metal_density(tmp_path).verdict == "PASS"
+
+    def test_below_window_fail(self, tmp_path):
+        # §4.05 negative: a layer below the CMP min-density window FAILs.
+        _write_json(tmp_path / "reports/phase3/metal_density.json",
+                    {"layers": {"met1": 0.12, "met2": 0.55}})
+        r = mod.check_tier_metal_density(tmp_path)
+        assert r.verdict == "FAIL"
+        assert "met1" in r.notes
+
+    def test_row_util_density_json_is_not_read(self, tmp_path):
+        # reports/density.json is ROW/core utilization — NOT per-layer metal
+        # density. Reading it here would gate on the wrong axis.
+        _write_json(tmp_path / "reports/density.json",
+                    {"row_utilization_pct": 99.0})
+        assert mod.check_tier_metal_density(tmp_path).verdict == "NOT_RUN"
+
+
+class TestAgingSTATier:
+    def test_absent_report_not_run(self, tmp_path):
+        # The open PDK ships no foundry aging Liberty → honest NOT_RUN.
+        assert mod.check_tier_aging_sta(tmp_path).verdict == "NOT_RUN"
+
+    def test_aged_slack_met_pass(self, tmp_path):
+        _write_json(tmp_path / "reports/phase3/aging_sta.json",
+                    {"worst_slack_ns": 0.15, "is_aging": True,
+                     "aging_corner": "ss_aging_10yr late=1.10"})
+        assert mod.check_tier_aging_sta(tmp_path).verdict == "PASS"
+
+    def test_aged_slack_violated_fail(self, tmp_path):
+        # §4.05 negative: negative slack under the aging corner FAILs.
+        _write_json(tmp_path / "reports/phase3/aging_sta.json",
+                    {"worst_slack_ns": -0.20, "aging_corner": "ss_nbti_eol"})
+        assert mod.check_tier_aging_sta(tmp_path).verdict == "FAIL"
+
+    def test_no_aging_evidence_skips_not_run(self, tmp_path):
+        # A fresh report mislabeled aging has no aging evidence → SKIP (NOT_RUN),
+        # never a false aging pass.
+        _write_json(tmp_path / "reports/phase3/aging_sta.json",
+                    {"worst_slack_ns": 0.15})
+        assert mod.check_tier_aging_sta(tmp_path).verdict == "NOT_RUN"
+
+
+class TestThermalTier:
+    def test_absent_power_not_run(self, tmp_path):
+        assert mod.check_tier_thermal(tmp_path).verdict == "NOT_RUN"
+
+    def test_within_limit_pass(self, tmp_path):
+        _write(tmp_path / "reports/phase3/power.rpt",
+               "Total Power = 0.05 W\nleakage dynamic internal\n")
+        _write_json(tmp_path / "floorplan.json", {"die_area_mm2": 1.0})
+        assert mod.check_tier_thermal(tmp_path).verdict == "PASS"
+
+    def test_over_limit_fail(self, tmp_path):
+        # §4.05 negative: 5 W over 1 mm² = 5 W/mm² >= 1.0 limit → FAIL.
+        _write(tmp_path / "reports/phase3/power.rpt",
+               "Total Power = 5.0 W\nleakage dynamic internal\n")
+        _write_json(tmp_path / "floorplan.json", {"die_area_mm2": 1.0})
+        assert mod.check_tier_thermal(tmp_path).verdict == "FAIL"
+
+    def test_power_present_but_no_die_area_skips_not_run(self, tmp_path):
+        _write(tmp_path / "reports/phase3/power.rpt", "Total Power = 0.05 W\n")
+        assert mod.check_tier_thermal(tmp_path).verdict == "NOT_RUN"
+
+
+class TestDFTSignoffTier:
+    def _pass_coverage(self, tmp_path):
+        _write_json(tmp_path / "reports/phase2/dft/coverage.json",
+                    {"coverage_pct": 99.0, "target_pct": 98.0,
+                     "transition": {"engine_limited": True,
+                                    "reason": "OSS ATPG has no at-speed engine"}})
+        _write_json(tmp_path / "reports/phase2/dft/bsdl_plan.json",
+                    {"verdict": "N_A", "padded": False})
+
+    def test_absent_evidence_not_run(self, tmp_path):
+        assert mod.check_tier_dft_signoff(tmp_path).verdict == "NOT_RUN"
+
+    def test_full_dft_signoff_pass(self, tmp_path):
+        self._pass_coverage(tmp_path)
+        assert mod.check_tier_dft_signoff(tmp_path).verdict == "PASS"
+
+    def test_low_stuck_at_fail(self, tmp_path):
+        # §4.05 negative: stuck-at 50% < 95% foundry floor → FAIL.
+        _write_json(tmp_path / "reports/phase2/dft/coverage.json",
+                    {"coverage_pct": 50.0, "target_pct": 98.0})
+        assert mod.check_tier_dft_signoff(tmp_path).verdict == "FAIL"
+
+
+class TestLECPostTier:
+    def test_absent_not_run(self, tmp_path):
+        assert mod.check_tier_lec_post(tmp_path).verdict == "NOT_RUN"
+
+    def test_proven_equivalent_pass(self, tmp_path):
+        _write_json(tmp_path / "reports/phase3/lec_post_layout.json",
+                    {"verdict": "PROVEN_EQUIVALENT", "total_points": 128,
+                     "proven_points": 128, "unproven_points": 0,
+                     "non_equivalent_points": 0, "equivalent": True})
+        assert mod.check_tier_lec_post(tmp_path).verdict == "PASS"
+
+    def test_unproven_fail(self, tmp_path):
+        # §4.05 negative: a bounded/aborted non-proof is NOT a clean pass.
+        _write_json(tmp_path / "reports/phase3/lec_post_layout.json",
+                    {"verdict": "UNPROVEN", "total_points": 128,
+                     "proven_points": 120, "unproven_points": 8,
+                     "equivalent": False})
+        assert mod.check_tier_lec_post(tmp_path).verdict == "FAIL"
+
+    def test_non_equivalent_fail(self, tmp_path):
+        _write_json(tmp_path / "reports/phase3/lec_post_layout.json",
+                    {"verdict": "NON_EQUIVALENT", "total_points": 128,
+                     "non_equivalent_points": 4, "equivalent": False})
+        assert mod.check_tier_lec_post(tmp_path).verdict == "FAIL"
+
+
+class TestNewSignoffTiersInLadder:
+    def test_tapeout_adds_the_six_new_tiers(self, tmp_path):
+        ids = [t.tier_id for t in mod.run_ladder(tmp_path, mode="tapeout").tiers]
+        for tid in ("T_DYN_IR", "T_METAL_DENSITY", "T_AGING_STA", "T_THERMAL",
+                    "T_DFT_SIGNOFF", "T_LEC_POST"):
+            assert tid in ids
+
+    def test_triage_omits_the_six_new_tiers(self, tmp_path):
+        ids = [t.tier_id for t in mod.run_ladder(tmp_path).tiers]
+        for tid in ("T_DYN_IR", "T_METAL_DENSITY", "T_AGING_STA", "T_THERMAL",
+                    "T_DFT_SIGNOFF", "T_LEC_POST"):
+            assert tid not in ids
+
+    def test_dynamic_ir_over_budget_blocks_release(self, tmp_path):
+        # §4.05 end-to-end: an otherwise-releasing tapeout (genuine LVS match)
+        # is BLOCKED by a dynamic-IR droop over budget.
+        _write(tmp_path / "reports/phase3/lvs.rpt", _LVS_MATCH)
+        _write_json(tmp_path / "reports/phase3/dynamic_ir.json",
+                    {"max_dynamic_drop_mv": 300.0, "vdd_v": 1.8})
+        rep = mod.run_ladder(tmp_path, mode="tapeout")
+        dyn = [t for t in rep.tiers if t.tier_id == "T_DYN_IR"][0]
+        assert dyn.verdict == "FAIL"
+        assert rep.overall_verdict == "FAIL"
+        assert rep.as_dict()["released"] is False
+
+    def test_dynamic_ir_under_budget_releases(self, tmp_path):
+        _write(tmp_path / "reports/phase3/lvs.rpt", _LVS_MATCH)
+        _write_json(tmp_path / "reports/phase3/dynamic_ir.json",
+                    {"max_dynamic_drop_mv": 50.0, "vdd_v": 1.8})
+        rep = mod.run_ladder(tmp_path, mode="tapeout")
+        assert rep.overall_verdict in mod.RELEASING_VERDICTS
+        assert rep.as_dict()["released"] is True
+
+    def test_metal_density_below_window_blocks_release(self, tmp_path):
+        _write(tmp_path / "reports/phase3/lvs.rpt", _LVS_MATCH)
+        _write_json(tmp_path / "reports/phase3/metal_density.json",
+                    {"layers": {"met1": 0.10}})
+        rep = mod.run_ladder(tmp_path, mode="tapeout")
+        assert rep.overall_verdict == "FAIL"
+        assert rep.as_dict()["released"] is False
+
+
 class TestReportToMarkdown:
     def test_includes_overall_verdict(self, tmp_path):
         md = mod.report_to_markdown(mod.run_ladder(tmp_path))
