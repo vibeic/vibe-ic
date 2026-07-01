@@ -188,9 +188,87 @@ def test_analog_decision_precedes_phase2_in_source():
     # Back-compat anchors required by the prior forwarding regression test.
     assert "if args.skip_analog:" in src
     assert 'p2_args.append("--skip-analog")' in src
-    # Analog A-track must dispatch off the SAME single decision.
-    assert "if not halted_at and run_analog:" in src
+    # Analog A-track must dispatch off the SAME single decision. GAP-ANALOG-1
+    # relaxed the halt gate so an analog IC's EXPECTED digital phase2 FAIL
+    # (rtl_gen=null) no longer skips its own A-track; the condition tolerates a
+    # phase2 halt but still excludes a phase1 halt (no L5_ADI_SPEC).
+    assert 'run_analog and halted_at in ("", "phase2")' in src
 
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+# ---------------------------------------------------------------------------
+# ORGANIC (GAP-E2E-9 campaign / GAP-ANALOG-1) — an analog IC's digital phase2
+# legitimately FAILs (class rtl_gen=null → no synthesizable RTL). That EXPECTED
+# digital FAIL (halted_at="phase2") must NOT skip the IC's OWN analog A-track.
+# ---------------------------------------------------------------------------
+def _drive_main_verdicts(monkeypatch, project: Path, argv_extra,
+                         need_analog: bool, verdicts: dict):
+    """Like _drive_main but the per-phase report verdict is controlled by
+    `verdicts` keyed on the runner basename stem ('phase1'/'phase2'/…),
+    defaulting to PASS — so a test can make phase2 FAIL and observe the analog
+    dispatch decision."""
+    captured = {"phase_args": {}, "analog_ran": False, "order": []}
+
+    def fake_run_phase(label, runner, args, env=None):
+        captured["phase_args"][runner.name] = list(args)
+        captured["order"].append(runner.name)
+        if runner.name.startswith("analog"):
+            captured["analog_ran"] = True
+        # rc mirrors the configured verdict so main()'s rc-derived verdict agrees
+        stem = runner.name.split("_")[0]
+        return 0 if verdicts.get(stem, "PASS") != "FAIL" else 1
+
+    def fake_read_report(_p):
+        # main() calls _read_report right after each phase; return the verdict
+        # for whichever phase most recently ran (the last in order).
+        if not captured["order"]:
+            return {"verdict": "PASS"}
+        stem = captured["order"][-1].split("_")[0]
+        return {"verdict": verdicts.get(stem, "PASS")}
+
+    def fake_need_analog(_project, force_skip):
+        return False if force_skip else need_analog
+
+    monkeypatch.setattr(orch, "_run_phase", fake_run_phase)
+    monkeypatch.setattr(orch, "_read_report", fake_read_report)
+    monkeypatch.setattr(orch, "_need_analog", fake_need_analog)
+    monkeypatch.setattr(sys, "argv",
+                        ["vibe_ic_one_shot_runner.py", str(project)]
+                        + list(argv_extra))
+    orch.main()
+    return captured
+
+
+def test_analog_track_runs_despite_phase2_digital_fail(tmp_path, monkeypatch):
+    """GAP-ANALOG-1: analog IC (need_analog=True) whose digital phase2 FAILs
+    (rtl_gen=null → no RTL) MUST still dispatch the analog A-track."""
+    project = _empty_project(tmp_path)
+    cap = _drive_main_verdicts(
+        monkeypatch, project, argv_extra=["--skip-phase1", "--skip-phase3"],
+        need_analog=True, verdicts={"phase2": "FAIL"})
+    assert cap["analog_ran"] is True, (
+        "analog A-track must run even when the digital phase2 halted "
+        "(rtl_gen=null FAIL is the EXPECTED digital outcome for an analog IC)")
+
+
+def test_analog_dispatch_condition_excludes_phase1_halt():
+    """NEGATIVE no-leak (source): the analog-dispatch condition tolerates a
+    phase2 halt but NOT a phase1 halt (a phase1 FAIL means no L5_ADI_SPEC, which
+    the A-track needs) — `halted_at in ("", "phase2")` excludes "phase1"."""
+    src = (Path(__file__).resolve().parents[1]
+           / "vibe_ic_one_shot_runner.py").read_text()
+    assert 'run_analog and halted_at in ("", "phase2")' in src
+    assert '"phase1"' not in 'run_analog and halted_at in ("", "phase2")'
+
+
+def test_pure_digital_phase2_fail_still_skips_analog(tmp_path, monkeypatch):
+    """NEGATIVE: a PURE-DIGITAL project (need_analog=False) whose phase2 FAILs
+    must NOT suddenly run an analog track."""
+    project = _empty_project(tmp_path)
+    cap = _drive_main_verdicts(
+        monkeypatch, project, argv_extra=["--skip-phase1", "--skip-phase3"],
+        need_analog=False, verdicts={"phase2": "FAIL"})
+    assert cap["analog_ran"] is False

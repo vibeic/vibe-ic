@@ -164,6 +164,8 @@ def test_runner_tries_oracle_before_skeleton():
 
 def test_oracle_pass_requires_all_goldens():
     i = _P2_SRC.index("def _run_oracle_tb")
-    window = _P2_SRC[i:i + 4200]
+    # window widened for the GAP-E2E-5 SV-subset WAIVE block added at the
+    # compile-FAIL branch (the pass/all-goldens invariant sits further down).
+    window = _P2_SRC[i:i + 6000]
     assert "ORACLE_TB_DONE pass=" in window
     assert "n_total > 0 and n_pass == n_total" in window
