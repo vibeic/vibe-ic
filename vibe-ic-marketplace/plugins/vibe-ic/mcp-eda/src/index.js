@@ -2199,37 +2199,62 @@ print('STRUCTURAL_DRC_GENERATED=' + out)
       return { content: [{ type: "text", text: JSON.stringify({ success: false, error: "pdk=custom requires custom_drc_script or custom_techlef" }) }] };
     }
 
-    // gf180 / sky130 path (legacy)
-    const drcScript = `
-import pya
-ly = pya.Layout()
-ly.read('${gds_file}')
-top = ly.cell('${top_cell}')
-if top is None:
-    tops = ly.top_cells()
-    top = tops[0] if tops else None
-print('TOP_CELL=' + (top.name if top else 'NONE'))
-print('CELL_COUNT=' + str(ly.cells()))
-if top is None:
-    print('DRC_ABORT: no top cell match')
-else:
-    # Basic geometric DRC checks
-    print('DRC_COMPLETE=YES')
-`;
-
-    const drcCmd = `echo '${drcScript.replace(/'/g, "'\\''")}' > /tmp/drc_kl.py && QT_QPA_PLATFORM=offscreen ${TOOLS}/klayout/klayout -z -r /tmp/drc_kl.py 2>&1`;
-    const t0drc = Date.now();
-    const result = dockerExec(drcCmd);
-    const durationDrcMs = Date.now() - t0drc;
-
-    if (result.output.includes("DRC_COMPLETE=YES")) {
-      const dir = gds_file.substring(0, gds_file.lastIndexOf("/"));
-      writeManifest(dir || "/tmp", {
-        step: "drc",
-        status: "PASS",
-        tool: "KLayout",
-      });
+    // gf180 / sky130 path — REAL PDK sign-off DRC.
+    //
+    // v1.2.75 (TAPEOUT-SIGNOFF P0#1): this branch WAS a vacuous no-op — it read
+    // the GDS, checked a top cell exists, printed `DRC_COMPLETE=YES`, ran ZERO
+    // rules, and returned success. Any caller running `eda_drc_klayout` on a
+    // foundry PDK got a FALSE DRC-clean (the highest-integrity bug found in the
+    // tapeout-signoff survey). It now runs the PDK's OWN KLayout sign-off deck
+    // (`sky130A.lydrc` / `gf180mcuD.lydrc`) — the SAME deck the phase3 runner's
+    // `step_drc` uses — and counts real `<item>` violations. If no deck is found,
+    // or KLayout produces no report, it returns an HONEST FAILURE. It NEVER emits
+    // a vacuous PASS again.
+    const pdkPathDrc = pdk === "sky130" ? `${PDK_ROOT}/sky130A`
+                                        : `${PDK_ROOT}/gf180mcuD`;
+    const deckDir = `${pdkPathDrc}/libs.tech/klayout/drc`;
+    // Discover the sign-off deck: the first `*.lydrc` under the PDK's klayout/drc
+    // dir (canonical: sky130A.lydrc / gf180mcuD.lydrc). Discovery, not a hardcode,
+    // so a PDK whose deck leaf-name differs still resolves.
+    const deckDiscover = dockerExec(
+      `ls ${deckDir}/*.lydrc 2>/dev/null | head -1 || echo NODECK`, 8000);
+    const deckPath = ((deckDiscover.output || "").trim().split("\n").pop() || "").trim();
+    if (!deckPath || deckPath === "NODECK" || !deckPath.endsWith(".lydrc")) {
+      // §4.05: no deck ⇒ HONEST FAIL, never a vacuous PASS.
+      return { content: [{ type: "text", text: JSON.stringify({
+        success: false,
+        error: `no KLayout sign-off DRC deck (*.lydrc) found under ${deckDir}; ` +
+               `eda_drc_klayout will NOT emit a vacuous PASS. Stage the PDK DRC ` +
+               `deck, or run the phase3 runner step_drc (real sky130A.lydrc path).`,
+        deck_searched: deckDir,
+      }) }] };
     }
+    const drcCmd = `QT_QPA_PLATFORM=offscreen ${TOOLS}/klayout/klayout -b -r ${deckPath} ` +
+                   `-rd input=${gds_file} -rd report=${rdbPath} -rd top_cell=${top_cell} 2>&1`;
+    const t0drc = Date.now();
+    const result = dockerExec(drcCmd, 900000);
+    const durationDrcMs = Date.now() - t0drc;
+    // Report-existence is checked SEPARATELY from the count: a crashed KLayout
+    // writes no report, and `grep -c` on a missing file would echo 0 — which must
+    // NOT be read as a clean pass. So: PASS requires klayout ran AND the report
+    // was written AND zero <item> violations.
+    const reportExists = ((dockerExec(`[ -f ${rdbPath} ] && echo YES || echo NO`, 5000)
+      .output || "").trim().includes("YES"));
+    const cntRes = dockerExec(`grep -c '<item>' ${rdbPath} 2>/dev/null || echo 0`, 8000);
+    const viol = parseInt((cntRes.output || "0").trim()) || 0;
+    const passReal = result.success && reportExists && viol === 0;
+    const deckLeaf = deckPath.split("/").pop();
+
+    const dir = gds_file.substring(0, gds_file.lastIndexOf("/"));
+    writeManifest(dir || "/tmp", {
+      step: "drc",
+      status: passReal ? "PASS" : "FAIL",
+      tool: `KLayout sign-off deck (${deckLeaf})`,
+      violations: viol,
+      report_written: reportExists,
+      rdb: rdbPath,
+      deck: deckPath,
+    });
 
     // v0.47.5 auto-provenance
     const projDrc = process.env.EDA_PROJECT_DIR ||
@@ -2237,13 +2262,13 @@ else:
     logProvenance({
       projectDir: projDrc,
       tool: "klayout",
-      version: `klayout DRC (mcp-eda) pdk=${pdk}`,
-      argv: ["klayout", "-z", "-r", "drc_kl.py"],
+      version: `klayout sign-off DRC (mcp-eda) pdk=${pdk} deck=${deckLeaf}`,
+      argv: ["klayout", "-b", "-r", deckPath, "input=" + gds_file],
       inputs: { [gds_file]: sha256File(gds_file.replace("/work/", projDrc + "/")) },
-      outputs: {},
-      exitCode: result.output.includes("DRC_COMPLETE=YES") ? 0 : 1,
+      outputs: reportExists ? { [rdbPath]: sha256File(rdbPath.replace("/work/", projDrc + "/")) } : {},
+      exitCode: passReal ? 0 : 1,
       durationMs: durationDrcMs,
-      stdoutTail: result.output || "",
+      stdoutTail: (result.output || "").slice(-1500),
       stderrTail: result.error || "",
     });
 
@@ -2251,8 +2276,12 @@ else:
       content: [{
         type: "text",
         text: JSON.stringify({
-          success: result.output.includes("DRC_COMPLETE=YES"),
-          output: result.output.slice(-2000),
+          success: passReal,
+          violations: viol,
+          report_written: reportExists,
+          rdb: rdbPath,
+          deck: deckPath,
+          output: (result.output || "").slice(-2000),
         }),
       }],
     };
