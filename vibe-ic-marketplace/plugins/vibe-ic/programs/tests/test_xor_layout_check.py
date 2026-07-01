@@ -232,6 +232,12 @@ class TestEmitScript:
         assert "begin_shapes_rec" in s      # flattened per-layer shapes
         assert "json.dump" in s             # writes a machine-readable report
         assert mod.OUTSIDE_SENTINEL in s    # outside-macro sentinel bucket
+        # Regression (live-validated): the per-macro attribution path must copy
+        # a Region with .dup(), NOT the pya.Region(<region>) copy-constructor,
+        # which this KLayout build rejects on the residual path (the zero-delta
+        # path never hits it, so only a live run with a real delta catches it).
+        assert "xor.dup()" in s
+        assert "pya.Region(xor)" not in s
 
     def test_emit_embeds_top_and_paths(self):
         s = mod.emit_xor_script(

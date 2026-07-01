@@ -86,9 +86,34 @@ class TestStepA4EmitUserDefines:
 
 class TestStepB:
     def test_b1_openlane_is_not_run_plan(self, tmp_path):
+        # run=False (default) keeps plan-only behaviour, now delegated to the
+        # harden driver; the real docker flow.tcl command hint is preserved.
         r = mod.step_b1_openlane_wrapper_pnr(tmp_path)
         assert r.verdict == "NOT_RUN"
         assert "flow.tcl" in r.command_hint
+
+    def test_b1_live_blocked_when_prereqs_missing(self, tmp_path):
+        # run=True with no OpenLane image / PDK / config available -> BLOCKED
+        # (never a fabricated harden). Inject a runner that reports no image.
+        def _no_image_runner(cmd, timeout=60):
+            return (0, "", "")  # `docker images` returns nothing
+        r = mod.step_b1_openlane_wrapper_pnr(
+            tmp_path, run=True, runner=_no_image_runner)
+        assert r.verdict == "BLOCKED"
+        assert r.details["artifact"] is None
+        assert r.details["blocked_reason"]
+
+    def test_b3_merge_blocked_when_gds_absent(self, tmp_path):
+        r = mod.step_b3_fullchip_merge(
+            tmp_path, golden_gds=None, wrapper_gds=None, run=True)
+        assert r.verdict == "BLOCKED"
+        assert r.details["artifact"] is None
+
+    def test_b4_xor_blocked_when_gds_absent(self, tmp_path):
+        r = mod.step_b4_live_xor(
+            tmp_path, assembled_gds=None, golden_gds=None, run=True,
+            allow_macros=["user_proj_example"])
+        assert r.verdict == "BLOCKED"
 
     def test_b2_pass_with_clean_metrics(self, tmp_path):
         m = tmp_path / "reports" / "openlane_wrapper" / "metrics.json"
@@ -160,15 +185,23 @@ class TestOverallVerdict:
                   mod.PhaseStepResult("B1", "B", "y", "NOT_RUN")]
         assert mod.overall_verdict(steps) == "PARTIAL_PLAN_READY"
 
+    def test_blocked_is_honest_non_pass(self):
+        # A BLOCKED live step (missing image / PDK / golden GDS) must never be
+        # promoted to PASS -- it rolls up to BLOCKED (§4.05).
+        steps = [mod.PhaseStepResult("A1", "A", "x", "PASS"),
+                  mod.PhaseStepResult("B1", "B", "y", "BLOCKED")]
+        assert mod.overall_verdict(steps) == "BLOCKED"
+
 
 class TestPlanIntegration:
-    def test_full_plan_emits_10_steps(self, tmp_path):
+    def test_full_plan_emits_12_steps(self, tmp_path):
         gds, lef, v = _make_core_artifacts(tmp_path)
         pm = tmp_path / "pm.json"
         _make_pinmap(pm)
         rep = mod.plan_integration(
             tmp_path, "spm", gds, lef, v, pm)
-        assert len(rep.steps) == 10
+        # 10 legacy steps + B3 (full-chip merge) + B4 (live XOR) = 12
+        assert len(rep.steps) == 12
         # Phase A inline steps should be PASS (we wrote pinmap + artifacts)
         a_steps = [s for s in rep.steps if s.phase == "A"]
         # A1 (clone) and A2 (install) are NOT_RUN; A3/A4 should be PASS
@@ -176,6 +209,21 @@ class TestPlanIntegration:
                    for s in a_steps)
         assert any(s.step_id == "A4" and s.verdict == "PASS"
                    for s in a_steps)
+
+    def test_plan_includes_merge_and_xor_steps(self, tmp_path):
+        gds, lef, v = _make_core_artifacts(tmp_path)
+        pm = tmp_path / "pm.json"
+        _make_pinmap(pm)
+        rep = mod.plan_integration(tmp_path, "spm", gds, lef, v, pm)
+        ids = {s.step_id for s in rep.steps}
+        assert "B3" in ids and "B4" in ids
+        # In plan (non-live) mode with no golden GDS, the live B-steps are
+        # NOT_RUN, so the overall rolls up to a partial plan (never a fake PASS).
+        b3 = next(s for s in rep.steps if s.step_id == "B3")
+        b4 = next(s for s in rep.steps if s.step_id == "B4")
+        assert b3.verdict == "NOT_RUN"
+        assert b4.verdict == "NOT_RUN"
+        assert rep.overall_verdict == "PARTIAL_PLAN_READY"
 
     def test_attribution(self, tmp_path):
         gds, lef, v = _make_core_artifacts(tmp_path)

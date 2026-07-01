@@ -182,9 +182,9 @@ for key in sorted(layer_infos.keys()):
         continue
     name = info.name if info.name else ("%d/%d" % (info.layer, info.datatype))
     by_cell = []
-    remaining = pya.Region(xor)
+    remaining = xor.dup()
     for cn in sorted(macro_boxes.keys()):
-        inside = pya.Region(xor) & macro_boxes[cn]
+        inside = xor.dup() & macro_boxes[cn]
         ic = inside.count()
         if ic:
             by_cell.append({{"cell": cn, "count": ic,
