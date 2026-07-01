@@ -528,3 +528,71 @@ class TestDieAutoSizing:
             cell_lef = "/nonexistent.lef"
         out, note = mod._resolve_auto_die_um("auto", nl, 0.4, _Pdk())
         assert "x" in out and note is not None  # a real WxH + a disclosure note
+
+
+# ---------------------------------------------------------------------------
+# ORGANIC E2E (GAP-E2E-2) — CONTAINER corner-liberty discovery
+# The runner runs on the host but the built-in PDK's ss/tt/ff libs live in the
+# container fs (invisible to a host glob) → a false single_corner_stance on
+# every sky130A run (spm/aes/subservient/caravel/sha256). Discover via docker.
+# ---------------------------------------------------------------------------
+class TestContainerCornerDiscovery:
+    _SKY130_LIBS = [
+        ("sky130_fd_sc_hd__ss_100C_1v40",
+         "/foss/pdks/sky130A/.../lib/sky130_fd_sc_hd__ss_100C_1v40.lib"),
+        ("sky130_fd_sc_hd__ss_n40C_1v28",
+         "/foss/pdks/sky130A/.../lib/sky130_fd_sc_hd__ss_n40C_1v28.lib"),
+        ("sky130_fd_sc_hd__tt_025C_1v80",
+         "/foss/pdks/sky130A/.../lib/sky130_fd_sc_hd__tt_025C_1v80.lib"),
+        ("sky130_fd_sc_hd__ff_n40C_1v95",
+         "/foss/pdks/sky130A/.../lib/sky130_fd_sc_hd__ff_n40C_1v95.lib"),
+        ("sky130_fd_sc_hd__ff_100C_1v65",
+         "/foss/pdks/sky130A/.../lib/sky130_fd_sc_hd__ff_100C_1v65.lib"),
+    ]
+
+    def test_select_one_representative_per_label(self):
+        corners = mod._select_signoff_corners(self._SKY130_LIBS)
+        labels = [c["label"] for c in corners]
+        assert labels == ["SS", "TT", "FF"]          # ordered, one each
+        assert len(corners) == 3                      # ≥2 ⇒ multi-corner
+
+    def test_select_prefers_canonical_signoff_names(self):
+        corners = {c["label"]: c["name"]
+                   for c in mod._select_signoff_corners(self._SKY130_LIBS)}
+        assert corners["TT"] == "sky130_fd_sc_hd__tt_025C_1v80"
+        assert corners["SS"] == "sky130_fd_sc_hd__ss_100C_1v40"   # slow-hot
+        assert corners["FF"] == "sky130_fd_sc_hd__ff_n40C_1v95"   # fast-cold
+
+    def test_select_falls_back_to_any_lib_of_label(self):
+        # only an ss lib whose name is NOT the canonical preference → still picked
+        corners = mod._select_signoff_corners(
+            [("sky130_fd_sc_hd__ss_n40C_1v28",
+              "/x/sky130_fd_sc_hd__ss_n40C_1v28.lib")])
+        assert len(corners) == 1 and corners[0]["label"] == "SS"
+
+    def test_select_empty_on_no_libs(self):
+        assert mod._select_signoff_corners([]) == []
+
+    def test_discover_parses_container_ls(self, monkeypatch):
+        out = ("/foss/pdks/sky130A/.../lib/sky130_fd_sc_hd__ss_100C_1v40.lib\n"
+               "/foss/pdks/sky130A/.../lib/sky130_fd_sc_hd__tt_025C_1v80.lib\n"
+               "/foss/pdks/sky130A/.../lib/sky130_fd_sc_hd__ff_n40C_1v95.lib\n"
+               "some_noise_line\n")
+        monkeypatch.setattr(mod, "_docker_exec",
+                            lambda c, cmd, timeout=60: (0, out, ""))
+        libs = mod._discover_container_corner_libs(
+            "iic-eda", "/foss/pdks/sky130A/.../lib")
+        assert len(libs) == 3                      # only *.lib lines
+        assert all(p.endswith(".lib") for _, p in libs)
+        corners = mod._select_signoff_corners(libs)
+        assert [c["label"] for c in corners] == ["SS", "TT", "FF"]
+
+    def test_discover_empty_on_no_container(self):
+        assert mod._discover_container_corner_libs("", "/x/lib") == []
+        assert mod._discover_container_corner_libs("iic", "") == []
+
+    def test_discover_safe_on_docker_failure(self, monkeypatch):
+        def _boom(c, cmd, timeout=60):
+            raise RuntimeError("docker down")
+        monkeypatch.setattr(mod, "_docker_exec", _boom)
+        assert mod._discover_container_corner_libs("iic", "/x/lib") == []
