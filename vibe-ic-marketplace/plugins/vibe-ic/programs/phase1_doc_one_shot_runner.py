@@ -25415,6 +25415,260 @@ def _v1_0_80_harvest_namecol_register_fields(
     return out
 
 
+# GAP-E2E-6 — register-SUMMARY offset table. A `| Name | Offset | Length |`
+# (or `| Name | Address | … |`) markdown table is the canonical register-map
+# summary: one row per register carrying its byte offset. This is DISTINCT from
+# the #736 Name-column BIT-FIELD table (`| Bits | Type | Reset | Name |`), which
+# has a Bits column and NO Offset/Address column. chip-AGNOSTIC: pure
+# header-token detection + hex/int parsing; NO chip / vendor / SKU literal.
+_GAP_E2E6_OFFSET_HDR = re.compile(
+    r"(?i)^(?:offset|address|addr|base\s*address|base\s*addr|"
+    r"offset\s*\(hex\)|address\s*\(hex\))$")
+_GAP_E2E6_LENGTH_HDR = re.compile(
+    r"(?i)^(?:length|size|bytes|byte\s*size|len)$")
+_GAP_E2E6_HEXINT = re.compile(r"^(?:0[xX][0-9A-Fa-f]+|\d+)$")
+# A leading `<ip>.` dotted prefix on the Name cell (`aes.` in
+# `aes.[`ALERT_TEST`](#alert_test)`). Pure structural: an identifier + dot.
+_GAP_E2E6_DOTTED = re.compile(r"^[A-Za-z][A-Za-z0-9_]*\.(.+)$")
+_GAP_E2E6_BARE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _gap_e2e6_bare_register_name(cell: str) -> str:
+    """GAP-E2E-6 — reduce a register-summary Name cell to the bare register
+    identifier. Strips markdown-link / backtick / bold wrappers (reusing the
+    #736 `_v1_0_80_strip_name_cell`) AND a leading `<ip>.` dotted prefix
+    (`aes.[`KEY_SHARE0_0`](#key_share0)` -> `KEY_SHARE0_0`). Returns '' when the
+    residue is not a bare identifier. chip-AGNOSTIC."""
+    name = _v1_0_80_strip_name_cell(cell or "")
+    dm = _GAP_E2E6_DOTTED.match(name)
+    if dm:
+        name = _v1_0_80_strip_name_cell(dm.group(1))
+    return name if _GAP_E2E6_BARE_NAME.match(name) else ""
+
+
+def _gap_e2e6_parse_register_offset_table(
+        window: str) -> Dict[str, Dict[str, Any]]:
+    """GAP-E2E-6 — parse every register-SUMMARY offset table in `window`.
+
+    A qualifying table's header has a Name column AND an `Offset` (or
+    `Address`) column (Length / Access / Description optional). Returns
+    `{bare_register_name: {"offset": "0x..", "length": <int|None>,
+    "access": <str|None>}}`. The Name cell is reduced to the bare identifier
+    via `_gap_e2e6_bare_register_name` (markdown-link / backtick / `<ip>.`
+    prefix stripped). Offsets are normalised to a `0x..` lower-hex string;
+    a decimal offset is converted to hex. First table wins on a name clash
+    (the top summary is canonical; per-section `### Instances` tables merely
+    confirm it).
+
+    §4.05 NO-LEAK: a table with NO Offset/Address column yields nothing, and a
+    BIT-FIELD table (a `Bits` column present) is skipped outright, so a
+    `| Bits | Type | Reset | Name |` table never contributes an offset. A row
+    whose Offset cell is not a hex/int literal is skipped (never fabricated).
+    Empty `{}` when no register-summary table exists. chip-AGNOSTIC."""
+    out: Dict[str, Dict[str, Any]] = {}
+    if not isinstance(window, str) or "|" not in window:
+        return out
+    lines = window.split("\n")
+    n = len(lines)
+    i = 0
+    while i < n:
+        line = lines[i]
+        if "|" in line and i + 1 < n:
+            hdr = [c.strip() for c in line.strip().strip("|").split("|")]
+            sep = lines[i + 1].strip()
+            is_sep = bool(sep) and set(sep) <= set("|-: ") and "-" in sep
+            col_name = col_offset = col_length = col_access = None
+            has_bits_col = False
+            for ci, h in enumerate(hdr):
+                if _V1_0_80_NAMECOL_BIT.match(h):
+                    has_bits_col = True
+                if col_name is None and _V1_0_80_NAMECOL_NAME.match(h):
+                    col_name = ci
+                elif col_offset is None and _GAP_E2E6_OFFSET_HDR.match(h):
+                    col_offset = ci
+                elif col_length is None and _GAP_E2E6_LENGTH_HDR.match(h):
+                    col_length = ci
+                elif col_access is None and _V1_0_80_NAMECOL_TYPE.match(h):
+                    col_access = ci
+            # A register-SUMMARY table needs Name AND Offset/Address columns
+            # and MUST NOT be a bit-field table (a Bits column present marks
+            # `| Bits | Type | Reset | Name |`). fail-SAFE no-leak: skip.
+            if not (is_sep and not has_bits_col
+                    and col_name is not None and col_offset is not None):
+                i += 1
+                continue
+            j = i + 2
+            while j < n and "|" in lines[j]:
+                body = lines[j].strip()
+                j += 1
+                if set(body) <= set("|-: "):
+                    continue
+                cells = [c.strip() for c in body.strip("|").split("|")]
+                if len(cells) <= max(col_name, col_offset):
+                    continue
+                name = _gap_e2e6_bare_register_name(cells[col_name])
+                if not name:
+                    continue
+                off_raw = cells[col_offset].strip().strip("`").strip()
+                if not _GAP_E2E6_HEXINT.match(off_raw):
+                    continue
+                if off_raw[:2].lower() == "0x":
+                    offset = "0x" + off_raw[2:].lower()
+                else:
+                    try:
+                        offset = hex(int(off_raw))
+                    except ValueError:
+                        continue
+                length_val: Optional[int] = None
+                if col_length is not None and col_length < len(cells):
+                    lraw = cells[col_length].strip().strip("`").strip()
+                    if re.match(r"^\d+$", lraw):
+                        length_val = int(lraw)
+                    elif re.match(r"^0[xX][0-9A-Fa-f]+$", lraw):
+                        length_val = int(lraw, 16)
+                access_val: Optional[str] = None
+                if col_access is not None and col_access < len(cells):
+                    araw = cells[col_access].strip().strip("`").strip()
+                    if araw:
+                        access_val = araw.upper()
+                if name not in out:
+                    out[name] = {
+                        "offset": offset,
+                        "length": length_val,
+                        "access": access_val,
+                    }
+            i = j
+            continue
+        i += 1
+    return out
+
+
+def _gap_e2e6_apply_scalar_offset(
+        reg: Dict[str, Any], info: Dict[str, Any]) -> bool:
+    """GAP-E2E-6 — apply a single register-summary row's offset/length/access
+    onto a scalar register entry `reg` that EXACTLY matched the row name. Only
+    fills empty slots (never overwrites an existing offset/access). Returns
+    True when it changed anything. chip-AGNOSTIC."""
+    changed = False
+    offset = info.get("offset")
+    if offset and not reg.get("offset"):
+        reg["offset"] = offset
+        changed = True
+        if not reg.get("address"):
+            reg["address"] = offset
+            try:
+                reg["address_int"] = int(offset, 16)
+            except (TypeError, ValueError):
+                pass
+    length = info.get("length")
+    if length is not None and not reg.get("length"):
+        reg["length"] = length
+        changed = True
+    access = info.get("access")
+    if access and not (reg.get("access") or "").strip():
+        reg["access"] = access
+        changed = True
+    if changed:
+        reg["offset_source"] = "gap_e2e6_register_offset_table"
+    return changed
+
+
+def _gap_e2e6_apply_family_offset(
+        reg: Dict[str, Any],
+        fam: List[Tuple[int, Dict[str, Any]]]) -> bool:
+    """GAP-E2E-6 — apply a multireg family's per-index offsets onto a collapsed
+    entry `reg` whose name PREFIX matched `PREFIX_<i>` rows in the offset
+    table. `fam` is a list of `(index, row_info)` sorted ascending by index.
+    Carries base_offset (index-0 offset), per-index `element_offsets`, a
+    uniform `stride_bytes`, and `array_size` onto the entry so the same
+    base_addr/stride shape the v1.6.295 collapse helper produces is present.
+    Only fills empty slots. Returns True when >=1 per-index offset was
+    resolved. chip-AGNOSTIC."""
+    offsets: List[Tuple[int, str, int]] = []
+    for idx, info in fam:
+        off = info.get("offset")
+        try:
+            offsets.append((idx, off, int(off, 16)))
+        except (TypeError, ValueError):
+            return False
+    if not offsets:
+        return False
+    base_off = offsets[0][1]
+    if not reg.get("offset"):
+        reg["offset"] = base_off
+    if not reg.get("base_offset"):
+        reg["base_offset"] = base_off
+    if not reg.get("base_addr"):
+        reg["base_addr"] = base_off
+    if not reg.get("address"):
+        reg["address"] = base_off
+        reg["address_int"] = offsets[0][2]
+    reg["element_offsets"] = [
+        {"index": idx, "offset": off} for idx, off, _ in offsets]
+    if len(offsets) >= 2:
+        gaps = [offsets[k + 1][2] - offsets[k][2]
+                for k in range(len(offsets) - 1)]
+        if gaps and all(g == gaps[0] for g in gaps) and gaps[0] > 0:
+            if not reg.get("stride_bytes"):
+                reg["stride_bytes"] = gaps[0]
+    if not reg.get("array_size"):
+        reg["array_size"] = len(offsets)
+    first_info = fam[0][1]
+    length = first_info.get("length")
+    if length is not None and not reg.get("length"):
+        reg["length"] = length
+    access = first_info.get("access")
+    if access and not (reg.get("access") or "").strip():
+        reg["access"] = access
+    reg["offset_source"] = "gap_e2e6_register_offset_table_multireg"
+    return True
+
+
+def _gap_e2e6_apply_register_offsets(
+        registers: List[Dict[str, Any]],
+        offset_map: Dict[str, Dict[str, Any]]) -> int:
+    """GAP-E2E-6 — inherit offsets from a register-summary offset table onto
+    the L4 register entries. For each entry: an EXACT name match applies the
+    row's offset/length/access; otherwise a multireg family (the entry name is
+    the shared PREFIX of `PREFIX_<i>` rows) carries base_offset + per-index
+    offsets + stride. Returns the number of entries changed.
+
+    §4.05 NO-LEAK: an offset is applied ONLY to a register whose NAME MATCHES a
+    row (exact bare-name, or multireg `PREFIX_<i>` where the numeric suffix is
+    bounded by the trailing `_`). A register with no matching row is left
+    untouched — the offset stays absent, never fabricated / guessed. An empty
+    `offset_map` (no register-summary table found) changes nothing.
+    chip-AGNOSTIC."""
+    if (not isinstance(registers, list)
+            or not isinstance(offset_map, dict) or not offset_map):
+        return 0
+    applied = 0
+    for reg in registers:
+        if not isinstance(reg, dict):
+            continue
+        name = reg.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        info = offset_map.get(name)
+        if info is not None:
+            if _gap_e2e6_apply_scalar_offset(reg, info):
+                applied += 1
+            continue
+        prefix = name + "_"
+        fam: List[Tuple[int, Dict[str, Any]]] = []
+        for k, v in offset_map.items():
+            if not k.startswith(prefix):
+                continue
+            suffix = k[len(prefix):]
+            if suffix.isdigit():
+                fam.append((int(suffix), v))
+        if fam:
+            fam.sort(key=lambda t: t[0])
+            if _gap_e2e6_apply_family_offset(reg, fam):
+                applied += 1
+    return applied
+
+
 # v1.6.326 — for #225 ORGANIC P2. Array-style register collapse.
 # Pre-v1.6.326 each `BASE[N]` row went through `_add_register` as a
 # distinct logical entry, but the upstream regex set was
@@ -29842,6 +30096,37 @@ def gen_l4_regmap(project: Path,
     # when they need to. Non-array rows pass through unchanged.
     # Chip-AGNOSTIC: standard CSR-spec bracketed-index syntax.
     registers = _v1_6_295_collapse_register_arrays(registers)
+
+    # GAP-E2E-6 — register-SUMMARY offset table inheritance. The #736
+    # Name-column walker harvests per-register BIT-FIELDS but never the
+    # register-map SUMMARY table (`| Name | Offset | Length |`), so offsets
+    # are lost. Build the `{bare_name: {offset, length, access}}` map from
+    # every register-summary table in the input docs and inherit each
+    # entry's offset (exact-name) or a multireg family's base_offset +
+    # per-index offsets + stride (`PREFIX_<i>` rows). Runs AFTER the
+    # v1.6.295 array collapse so a genuinely-collapsed entry (or a
+    # single-heading family entry) picks up the base/stride shape.
+    # §4.05 NO-LEAK: offset applied ONLY to a name-matched register; a
+    # non-offset / bit-field table yields {} and changes nothing.
+    # Chip-AGNOSTIC.
+    _gap_e2e6_offmap: Dict[str, Dict[str, Any]] = {}
+    for _fname_e2e6, _text_e2e6 in (extracted or {}).items():
+        if not isinstance(_text_e2e6, str) or not _text_e2e6:
+            continue
+        for _k_e2e6, _v_e2e6 in _gap_e2e6_parse_register_offset_table(
+                _text_e2e6).items():
+            _gap_e2e6_offmap.setdefault(_k_e2e6, _v_e2e6)
+    _gap_e2e6_applied = _gap_e2e6_apply_register_offsets(
+        registers, _gap_e2e6_offmap)
+    if _gap_e2e6_applied > 0:
+        _ev_e2e6 = evidence.setdefault("internal/regmap/offset_table", [])
+        if len(_ev_e2e6) < 8:
+            _ev_e2e6.append({
+                "literal": (
+                    f"Register-summary offset-table inheritance "
+                    f"(GAP-E2E-6, count={_gap_e2e6_applied})"),
+                "label": "register_offset_table_gap_e2e6",
+            })
 
     # v1.6.560 — for #380 P3 ORGANIC. Re-evaluate the
     # `no_registers_in_input` flag AFTER the v1.6.470 prose-array
