@@ -266,3 +266,97 @@ def test_real_on_host_pin_fail_report_classifies_mismatch():
     if blob is None:
         pytest.skip("no on-host report currently in the #524 failing shape")
     assert T.classify(blob) == "MISMATCH"
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# ORGANIC (GAP-E2E-9) — mismatch_class() sub-classification.
+# The 7-IC end-to-end sweep hit `Top level cell failed pin matching` (→ MISMATCH)
+# on EVERY sky130 OSS run because the yosys gate netlist has no power ports while
+# the extracted layout carries per-cell VPWR/VGND — a benign power-unaware-netlist
+# SETUP artifact (measured: caravel + subservient LVS carry ONLY power rows).
+# mismatch_class() is TRIAGE metadata; it does NOT change the MATCH/MISMATCH
+# verdict. §4.05 NO-LEAK is the load-bearing half: anything with real signal-net
+# evidence MUST stay SIGNAL_NET_MISMATCH (measured: aes 517 + ibex 256 top-level
+# `(no pin, node is …)` rows must NOT be waved through).
+# ───────────────────────────────────────────────────────────────────────────
+
+# A power-pin-only MISMATCH (the benign OSS setup class) — caravel/subservient shape.
+_POWER_ONLY_RPT = (
+    "Subcircuit pins:\n"
+    "Circuit 1: user_project_wrapper       |Circuit 2: user_project_wrapper\n"
+    "VGND                                       |(no matching pin)\n"
+    "VNB                                        |(no matching pin)\n"
+    "VPB                                        |(no matching pin)\n"
+    "VPWR                                       |(no matching pin)\n"
+    "HI                                         |(no matching pin)\n"
+    "Cell sky130_fd_sc_hd__inv_1 (0) disconnected node: VPWR\n"
+    "Cell sky130_fd_sc_hd__inv_1 (0) disconnected node: VGND\n"
+    "Final result: Top level cell failed pin matching.\n"
+)
+
+# A power-pin-only report that ALSO has benign sub-cell PIN rows (Y/A/B), which
+# are NOT signal evidence — must still classify POWER_PIN_ONLY.
+_POWER_PLUS_CELLPIN_RPT = (
+    "VGND                                       |(no matching pin)\n"
+    "VPWR                                       |(no matching pin)\n"
+    "Y                                          |(no matching pin)\n"
+    "A                                          |(no matching pin)\n"
+    "B                                          |(no matching pin)\n"
+    "Final result: Top level cell failed pin matching.\n"
+)
+
+# NEGATIVE no-leak fixtures — REAL signal-net defects that must STAY real:
+# (1) top-level `(no pin, node is …)` signal rows (aes/ibex shape).
+_SIGNAL_NODE_RPT = (
+    "VGND                                       |(no matching pin)\n"
+    "(no pin, node is _54440_/Y)                |alert_fatal_o\n"
+    "(no pin, node is _54440_/Y)                |data_out[7]\n"
+    "Final result: Top level cell failed pin matching.\n"
+)
+# (2) a device property-error fail (real, even with a topology 'match uniquely').
+_PROPERTY_ERR_RPT = (
+    "VPWR                                       |(no matching pin)\n"
+    "Circuits match uniquely with property errors.\n"
+    "Property errors were found.\n"
+    "Final result: Circuits match uniquely.\n"
+)
+# (3) a MISMATCH with NO recognizable benign power evidence → conservative real.
+_BARE_MISMATCH_RPT = (
+    "Net NET MISMATCH between circuit 1 and circuit 2\n"
+    "Final result: Netlists do not match.\n"
+)
+
+
+def test_mismatch_class_power_pin_only_is_benign():
+    assert T.classify(_POWER_ONLY_RPT) == "MISMATCH"
+    assert T.mismatch_class(_POWER_ONLY_RPT) == "POWER_PIN_ONLY"
+
+
+def test_mismatch_class_ignores_benign_cell_pin_rows():
+    # Y/A/B `(no matching pin)` are sub-cell pins, NOT signal-port evidence.
+    assert T.mismatch_class(_POWER_PLUS_CELLPIN_RPT) == "POWER_PIN_ONLY"
+
+
+def test_mismatch_class_signal_node_rows_stay_real():
+    # §4.05 NO-LEAK: a `(no pin, node is …)` top-level signal row is NEVER benign.
+    assert T.mismatch_class(_SIGNAL_NODE_RPT) == "SIGNAL_NET_MISMATCH"
+
+
+def test_mismatch_class_property_error_stays_real():
+    assert T.mismatch_class(_PROPERTY_ERR_RPT) == "SIGNAL_NET_MISMATCH"
+
+
+def test_mismatch_class_bare_mismatch_stays_real_conservative():
+    # A mismatch with no recognizable power-setup shape must NOT be called benign.
+    assert T.mismatch_class(_BARE_MISMATCH_RPT) == "SIGNAL_NET_MISMATCH"
+
+
+def test_mismatch_class_none_on_match_and_incomplete():
+    assert T.mismatch_class(CLEAN_RPT) == "NONE"       # a clean MATCH
+    assert T.mismatch_class(TRUNCATED_RPT) == "NONE"   # an INCOMPLETE run
+
+
+def test_mismatch_class_verdict_unchanged():
+    # The authoritative verdict is NOT altered by the sub-class (no gate relaxation).
+    assert T.classify(_POWER_ONLY_RPT) == "MISMATCH"
+    assert T.classify(_SIGNAL_NODE_RPT) == "MISMATCH"
