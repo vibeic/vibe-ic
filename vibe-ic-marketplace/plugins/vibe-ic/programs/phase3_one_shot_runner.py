@@ -2926,18 +2926,86 @@ def _auto_die_side_um(cell_count: int, util_frac: float,
     return max(min_side, min(side, max_side))
 
 
-def _resolve_auto_die_um(die_um: str, netlist: Path, util: float,
-                         pdk: "PdkConfig") -> Tuple[str, Optional[str]]:
-    """If `die_um` is the sentinel 'auto', compute a real 'WxH' from the synth
-    netlist's cell count + the PDK site area + the ROUTING-HEADROOM target util.
-    Otherwise return `die_um` unchanged. Returns (die_um, note). Any failure
-    falls back to a safe fixed die so the flow never breaks on a sizing error.
+# ORGANIC (die-util fidelity follow-up) — a DESIGN-DECLARED auto-die target util.
+# The empirical v1.2.72 live runs showed the fixed 0.25 routing-headroom target
+# is right for a CONGESTION-bound design (aes converged dense) but a design may
+# legitimately want more timing/DRC headroom (a SPARSER die). Rather than guess
+# per-design (the ibex "regression" was confounded, and its residual DRC was
+# cell-driven pin-access that a sparser die does NOT fix — so a blind
+# "prefer-sparser" heuristic is unwarranted), HONOR the design's OWN declared
+# density target when its L9 states one — mirroring GAP-E2E-1's clock-period
+# inherit. A design that wants timing/DRC headroom declares a lower FP_CORE_UTIL /
+# PL_TARGET_DENSITY in L9; auto-die then sizes to THAT instead of the 0.25 default.
+# The L9 tables carry either a `PL_TARGET_DENSITY` fraction (0<x<=1) or an
+# `FP_CORE_UTIL` percentage (converted to a fraction). §4.05 TIGHT: match ONLY the
+# UNAMBIGUOUS `| <key> | <value> |` key-value-row form (the value in the cell
+# IMMEDIATELY after the key), e.g. `| `FP_CORE_UTIL` | **20** |`. A header-row /
+# data-row table (`| FP_CORE_UTIL | PL_TARGET_DENSITY |` … `| SKY130 | 45% | … |`)
+# whose value is NOT adjacent to the key token is DELIBERATELY NOT parsed → None →
+# the validated default is kept (missing a declaration is SAFE; mis-parsing a
+# number from the wrong cell would fabricate a wrong die — unsafe). A
+# "不指定 / 工具預設 / plugin decides" cell has no adjacent number → no match.
+_L9_PL_DENSITY_RE = re.compile(
+    r"PL_TARGET_DENSITY`?\s*\|\s*\*{0,2}\s*(0?\.\d+|\d+(?:\.\d+)?)\s*\*{0,2}\s*\|",
+    re.IGNORECASE)
+_L9_FP_CORE_UTIL_RE = re.compile(
+    r"FP_CORE_UTIL`?\s*\|\s*\*{0,2}\s*(\d+(?:\.\d+)?)\s*%?\s*\*{0,2}\s*\|",
+    re.IGNORECASE)
 
-    GAP-E2E-4 FOLLOW-UP — the auto-die geometry targets `_AUTO_DIE_TARGET_UTIL`
-    (routing headroom, ~0.25), DECOUPLED from the placement `util` argument: a
-    placement-dense 0.40 die plateaus detailed route. `util` (the placement
-    `--util`, used later by global_placement) is intentionally NOT the sizing
-    target and is left for the caller to pass through unchanged. chip-AGNOSTIC."""
+
+def _l9_declared_die_util(project: Path) -> Optional[float]:
+    """Return the design's L9-declared core-density target as a fraction (0..1),
+    or None when L9 declares none (or says 'plugin decides'). Prefers an explicit
+    `PL_TARGET_DENSITY` (already a fraction); else derives it from `FP_CORE_UTIL`
+    (a percentage → /100). Reads ONLY the L9 constraints/floorplan doc (input docs
+    or the generated L9) — a blind-legal design input. §4.05 / no-fabricate: only
+    a real numeric declaration counts; an out-of-range / absent value → None →
+    caller keeps the default. chip-AGNOSTIC: pure L9-token parse, no chip literal."""
+    roots = [project / "input" / "docs", _pl.generated_docs_dir(project)]
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for p in (sorted(root.glob("L9*")) + sorted(root.glob("*constraint*"))
+                  + sorted(root.glob("*floorplan*"))):
+            try:
+                txt = p.read_text(errors="ignore")
+            except OSError:
+                continue
+            # Prefer an explicit PL_TARGET_DENSITY fraction.
+            for m in _L9_PL_DENSITY_RE.finditer(txt):
+                try:
+                    v = float(m.group(1))
+                except ValueError:
+                    continue
+                if 0.0 < v <= 1.0:
+                    return v
+            # Else derive from FP_CORE_UTIL (a percentage).
+            for m in _L9_FP_CORE_UTIL_RE.finditer(txt):
+                try:
+                    pct = float(m.group(1))
+                except ValueError:
+                    continue
+                if 0.0 < pct <= 100.0:
+                    return pct / 100.0
+    return None
+
+
+def _resolve_auto_die_um(die_um: str, netlist: Path, util: float,
+                         pdk: "PdkConfig",
+                         project: Optional[Path] = None
+                         ) -> Tuple[str, Optional[str]]:
+    """If `die_um` is the sentinel 'auto', compute a real 'WxH' from the synth
+    netlist's cell count + the PDK site area + a target util. Otherwise return
+    `die_um` unchanged. Returns (die_um, note). Any failure falls back to a safe
+    fixed die so the flow never breaks on a sizing error.
+
+    GAP-E2E-4 FOLLOW-UP — the auto-die geometry targets a ROUTING/HEADROOM util
+    DECOUPLED from the placement `util` argument (a placement-dense 0.40 die
+    plateaus detailed route). die-util FIDELITY FOLLOW-UP — the target is the
+    design's OWN L9-declared core density (`_l9_declared_die_util`) when present
+    (a design wanting timing/DRC headroom declares a sparser FP_CORE_UTIL /
+    PL_TARGET_DENSITY), else the `_AUTO_DIE_TARGET_UTIL` default (~0.25). `util`
+    (the placement `--util`) is intentionally NOT the sizing target. chip-AGNOSTIC."""
     if str(die_um).lower() != "auto":
         return die_um, None
     try:
@@ -2953,10 +3021,12 @@ def _resolve_auto_die_um(die_um: str, netlist: Path, util: float,
         site_area = None
     avg_cell = ((site_area * _AUTO_DIE_AVG_SITES_PER_CELL) if site_area
                 else _AUTO_DIE_FALLBACK_CELL_UM2)
-    # Routing-headroom target, NOT the placement util (`util` is deliberately
-    # unused for sizing — see docstring). A sparser die gives detailed route the
-    # channel headroom a placement-dense die denies it.
-    util_frac = _AUTO_DIE_TARGET_UTIL
+    # die-util FIDELITY: honor the design's own L9-declared core density; else the
+    # routing-headroom default. `util` (placement) is deliberately unused here.
+    _declared = _l9_declared_die_util(project) if project is not None else None
+    util_frac = _declared if _declared is not None else _AUTO_DIE_TARGET_UTIL
+    _util_src = ("L9-declared" if _declared is not None
+                 else "routing-headroom-default")
     if cells <= 0:
         return "1500x1500", ("die-um=auto but the netlist has 0 countable "
                              "cells; falling back to 1500x1500")
@@ -2964,7 +3034,7 @@ def _resolve_auto_die_um(die_um: str, netlist: Path, util: float,
     return (f"{side}x{side}",
             f"die-um=auto → {side}x{side} (cells={cells}, "
             f"avg_cell={avg_cell:.2f}µm², "
-            f"routing_headroom_util={util_frac:g})")
+            f"target_util={util_frac:g} [{_util_src}])")
 
 
 def _compute_downsized_die(die_w: int, die_h: int,
@@ -5003,7 +5073,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # retry (GAP-E2E-4 FOLLOW-UP): we only tighten a die whose geometry WE own
     # (auto), never an explicit WxH the caller pinned.
     _auto_die_requested = str(die_um).lower() == "auto"
-    die_um, _auto_die_note = _resolve_auto_die_um(die_um, netlist, util, pdk)
+    die_um, _auto_die_note = _resolve_auto_die_um(die_um, netlist, util, pdk,
+                                                  project)
     if _auto_die_note:
         print(f"[phase3] {_auto_die_note}", file=sys.stderr)
     try:

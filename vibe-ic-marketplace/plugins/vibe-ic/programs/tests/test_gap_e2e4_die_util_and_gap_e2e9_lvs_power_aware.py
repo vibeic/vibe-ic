@@ -69,7 +69,10 @@ class TestAutoDieRoutingHeadroomTarget:
         # The design lands near the 0.25 routing-headroom target, NOT the 0.40
         # placement util that was passed in.
         assert util == pytest.approx(mod._AUTO_DIE_TARGET_UTIL, rel=0.05)
-        assert note is not None and "routing_headroom_util=0.25" in note
+        # die-util fidelity follow-up reworded the note; with no project the
+        # target is the routing-headroom default.
+        assert note is not None and "target_util=0.25" in note
+        assert "routing-headroom-default" in note
 
     def test_auto_die_is_decoupled_from_placement_util(self, tmp_path):
         # The SAME auto die is produced regardless of the placement --util passed;
