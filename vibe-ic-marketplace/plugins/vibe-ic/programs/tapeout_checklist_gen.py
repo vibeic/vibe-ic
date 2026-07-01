@@ -62,6 +62,27 @@ _CHECKLIST_ITEMS = [
     # MBIST — every writable on-chip RAM needs a March-test wrapper (N/A when
     # the design is RAM-less). mbist_wrapper_gen is the authority.
     ("mbist_wrapper",      "phase3/**/mbist_manifest.json",            "advisory", "mbist_wrapper_gen"),
+    # DYNAMIC (transient) IR-drop — di/dt droop vs a %-of-Vdd budget. Distinct
+    # from the STATIC ir_drop above; dynamic_ir_drop_check is the authority
+    # (absent report → SKIP, never the static report as a dynamic pass).
+    ("dynamic_ir_report",  "reports/phase3/dynamic_ir.json",           "advisory", "dynamic_ir_drop_check"),
+    # PER-LAYER metal density (foundry CMP / Efabless met_min_ca_density) —
+    # distinct axis from the row/core-util density.rpt above. metal_layer_
+    # density_check is the authority.
+    ("metal_layer_density","reports/phase3/metal_density.json",         "advisory", "metal_layer_density_check"),
+    # Aging-corner STA (NBTI/PBTI/HCI Vt-drift over lifetime) — aging_derate_
+    # sta_check is the authority (no foundry aging Liberty → honest SKIP).
+    ("aging_sta_report",   "reports/phase3/aging_sta.json",             "advisory", "aging_derate_sta_check"),
+    # Thermal power-density screen (W/mm² + Tj) — thermal_screen_check is the
+    # authority (power not_computed / no die area → honest SKIP).
+    ("thermal_screen",     "reports/phase3/thermal_screen.json",        "advisory", "thermal_screen_check"),
+    # DFT sign-off (stuck-at + at-speed transition + BSDL) — dft_signoff_check
+    # is the authority (recomputes coverage vs the foundry floor).
+    ("dft_signoff",        "reports/phase2/dft/coverage.json",          "advisory", "dft_signoff_check"),
+    # POST-LAYOUT LEC — the FINAL routed/ECO netlist re-proven == synth/RTL
+    # (Step-13 LEC only proved RTL==synth). lec_post_layout_check is the
+    # authority (a non-proof is a FAIL, not a pass; no routed netlist → SKIP).
+    ("lec_post_layout",    "reports/phase3/lec_post_layout.json",       "advisory", "lec_post_layout_check"),
     ("post_layout_sim",    "phase3/stage3/sim_postlayout/pass.flag",   "advisory", None),
     ("eco_status",         "phase3/stage3/eco/no_eco_needed.flag",     "advisory", None),
     ("foundry_mask_spec",  "phase3/stage4/foundry_handoff/mask_spec.json", "blocker", None),
@@ -94,6 +115,27 @@ _GATE_NOTES = {
     "xor_layout_check":
         "computed GDS-vs-golden XOR with an EXPLICIT blackbox-macro waiver "
         "allow-list — replaces the hardcoded 2/7 floor.",
+    "dynamic_ir_drop_check":
+        "transient (di/dt) IR droop vs a %-of-Vdd budget — distinct from the "
+        "static IR row; absent dynamic report → SKIP, never the static report "
+        "read as a dynamic pass.",
+    "metal_layer_density_check":
+        "PER-LAYER metal density within the foundry CMP window (Efabless "
+        "met_min_ca_density) — the row/core-util density.rpt is a different "
+        "axis and is NOT a substitute.",
+    "aging_derate_sta_check":
+        "aging-derated STA (NBTI/PBTI/HCI Vt-drift) worst slack >= margin — no "
+        "foundry aging Liberty → honest SKIP, never a fabricated aging number.",
+    "thermal_screen_check":
+        "first-order power-density screen (W/mm², + Tj when available) — power "
+        "not_computed / no die area → honest SKIP.",
+    "dft_signoff_check":
+        "aggregate DFT sign-off: stuck-at recomputed vs the foundry floor + a "
+        "real/documented-engine-limited at-speed transition record + a BSDL "
+        "for a padded design.",
+    "lec_post_layout_check":
+        "the FINAL routed/ECO netlist re-proven logically == synth/RTL "
+        "(Step-13 only proved RTL==synth) — a non-proof is a FAIL, not a pass.",
 }
 
 

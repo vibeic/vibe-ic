@@ -61,6 +61,16 @@ if str(_PROGRAMS) not in sys.path:
 # else (FAIL / WARN / NOT_RELEASED) blocks a tapeout release.
 RELEASING_VERDICTS = ("PASS", "PASS_WITH_WAIVERS")
 
+# TAPEOUT-tier gate defaults (this session's sign-off gates). Each is a
+# permissive, DISCLOSED generic default — never a foundry number — so a gate
+# never FAILs a design a stricter house rule would also pass, and a PASS is a
+# real margin. Callers/PDKs override per package/foundry.
+_DYNAMIC_IR_BUDGET_PCT = 10.0        # transient droop budget as % of Vdd
+_METAL_DENSITY_MIN = 0.30            # generic per-layer CMP density window
+_METAL_DENSITY_MAX = 0.70
+_THERMAL_LIMIT_W_PER_MM2 = 1.0       # first-order air-cooled package screen
+_THERMAL_TJ_MAX_C = 125.0            # commercial-grade junction ceiling
+
 
 @dataclass
 class TierResult:
@@ -536,6 +546,266 @@ def check_tier_xor(project_dir: Path,
 
 
 # ---------------------------------------------------------------------------
+# TAPEOUT-tier sign-off gates (this session): dynamic-IR, per-layer metal
+# density, aging-corner STA, thermal screen, DFT sign-off, post-layout LEC.
+# Each wraps a dedicated deterministic gate program and maps its verdict into
+# the ladder vocabulary. §4.05: a real gate FAIL blocks release; an absent
+# artifact / can't-judge is an honest NOT_RUN (SKIP), never a silent pass.
+# ---------------------------------------------------------------------------
+def _find_dynamic_ir_report(project_dir: Path) -> Optional[Path]:
+    """Locate a DYNAMIC/transient IR-drop report. Prefers the canonical
+    reports/phase3/dynamic_ir.json, then any dynamic/transient/DVD-named
+    JSON/.rpt. NEVER falls back to the STATIC reports/phase3/ir_drop.json — a
+    static report must not masquerade as a dynamic sign-off (§4.05)."""
+    for rel in ("reports/phase3/dynamic_ir.json", "reports/dynamic_ir.json"):
+        p = project_dir / rel
+        if p.is_file():
+            return p
+    for pat in ("reports/**/dynamic_ir*.json", "reports/**/*transient*.json",
+                "reports/**/*dvd*.json", "reports/**/dynamic_ir*.rpt",
+                "**/dynamic_ir*.json", "**/*transient*.rpt"):
+        hits = [h for h in project_dir.glob(pat)
+                if h.is_file() and h.name != "ir_drop.json"]
+        if hits:
+            return sorted(hits)[0]
+    return None
+
+
+def check_tier_dynamic_ir(project_dir: Path,
+                          vdd: Optional[float] = None,
+                          budget_pct: float = _DYNAMIC_IR_BUDGET_PCT
+                          ) -> TierResult:
+    """Dynamic (transient) IR-drop — worst di/dt droop must be under budget.
+
+    Delegates to `dynamic_ir_drop_check.check`:
+      PASS     -> PASS
+      FAIL     -> FAIL     (droop at/over budget, OR a report present but with
+                  no extractable transient droop value — missing evidence)
+      IO_ERROR -> NOT_RUN  (no dynamic-IR report → §4.05 SKIP; the static
+                  ir_drop report is never read as a dynamic sign-off)"""
+    import dynamic_ir_drop_check as dic
+    rpt = _find_dynamic_ir_report(project_dir)
+    if rpt is None:
+        return TierResult(
+            "T_DYN_IR", "Dynamic (transient) IR-drop", "NOT_RUN",
+            notes="no dynamic/transient IR report — §4.05: absent → SKIP, "
+                  "never the static ir_drop report as a dynamic sign-off")
+    res = dic.check(rpt, vdd, budget_pct)
+    v = res.get("verdict")
+    ladder = {"PASS": "PASS", "FAIL": "FAIL",
+              "IO_ERROR": "NOT_RUN"}.get(v, "FAIL")
+    notes = ""
+    if ladder == "FAIL":
+        notes = res.get("detail") or (
+            f"worst transient droop {res.get('worst_transient_droop_mv')} mV "
+            f">= budget {res.get('budget_mv')} mV")
+    return TierResult(
+        "T_DYN_IR", "Dynamic (transient) IR-drop", ladder,
+        details=res, artifact_path=str(rpt), notes=notes)
+
+
+def _find_metal_density_report(project_dir: Path) -> Optional[Path]:
+    """Locate the PER-LAYER metal-density report (distinct axis from the
+    row/core-utilization reports/density.json). Prefers reports/phase3/
+    metal_density.json, then any metal-density / per-layer-density artifact.
+    NEVER the plain reports/density.json (that is ROW/core utilization —
+    reading it here would gate on the wrong axis, the very bug this gate
+    closes)."""
+    for rel in ("reports/phase3/metal_density.json",
+                "reports/metal_density.json"):
+        p = project_dir / rel
+        if p.is_file():
+            return p
+    for pat in ("reports/**/metal_density*.json",
+                "reports/**/*metal*density*.json",
+                "reports/**/*density*layer*.json", "**/metal_density*.json"):
+        hits = [h for h in project_dir.glob(pat)
+                if h.is_file() and h.name != "density.json"]
+        if hits:
+            return sorted(hits)[0]
+    return None
+
+
+def check_tier_metal_density(project_dir: Path,
+                             default_min: float = _METAL_DENSITY_MIN,
+                             default_max: float = _METAL_DENSITY_MAX
+                             ) -> TierResult:
+    """Per-layer metal density (foundry CMP / Efabless met_min_ca_density).
+
+    Delegates to `metal_layer_density_check.check`. When the report ships its
+    own per-layer windows those win; else the DISCLOSED generic default window
+    [_METAL_DENSITY_MIN.._METAL_DENSITY_MAX] is applied so a real per-layer
+    density can still be judged (the report carries the generic-default note):
+      PASS     -> PASS
+      FAIL     -> FAIL     (a layer outside its window, or a report with no
+                  per-layer metal-density data)
+      IO_ERROR -> NOT_RUN  (no per-layer metal-density report → §4.05 SKIP;
+                  the row-util density.json is never read here)"""
+    import metal_layer_density_check as mld
+    rpt = _find_metal_density_report(project_dir)
+    if rpt is None:
+        return TierResult(
+            "T_METAL_DENSITY", "Per-layer metal density (CMP)", "NOT_RUN",
+            notes="no per-layer metal-density report — §4.05: absent → SKIP, "
+                  "never the row-util density.json")
+    res = mld.check(rpt, {}, default_min, default_max)
+    v = res.get("verdict")
+    ladder = {"PASS": "PASS", "FAIL": "FAIL",
+              "IO_ERROR": "NOT_RUN"}.get(v, "FAIL")
+    notes = ""
+    if ladder == "FAIL":
+        notes = "; ".join(res.get("failures", [])) or res.get("detail", "")
+        if not notes and res.get("unchecked_layers"):
+            notes = f"unchecked layers (no window): {res['unchecked_layers']}"
+    return TierResult(
+        "T_METAL_DENSITY", "Per-layer metal density (CMP)", ladder,
+        details=res, artifact_path=str(rpt), notes=notes)
+
+
+def check_tier_aging_sta(project_dir: Path,
+                         margin_ns: float = 0.0) -> TierResult:
+    """Aging-corner STA (NBTI / PBTI / HCI Vt-drift over lifetime).
+
+    Delegates to `aging_derate_sta_check.evaluate` (discovering the aging +
+    optional fresh reports the module's own way):
+      PASS -> PASS
+      FAIL -> FAIL    (aging-corner worst slack < margin — VIOLATES aged)
+      SKIP -> NOT_RUN (no aging-derated STA report / no aging evidence — the
+              open PDK ships no foundry aging Liberty; §4.05 honest SKIP,
+              never a pass, never a fabricated aging number)"""
+    import aging_derate_sta_check as ag
+    aging_in = ag._discover_report(project_dir, "aging")
+    if aging_in is None:
+        return TierResult(
+            "T_AGING_STA", "Aging-corner STA (NBTI/PBTI/HCI)", "NOT_RUN",
+            notes="no aging-derated STA report — the open PDK ships no foundry "
+                  "aging Liberty; §4.05: SKIP, never a fabricated aging number")
+    fresh_in = ag._discover_report(project_dir, "fresh")
+    verdict, rep = ag.evaluate(aging_in, fresh_in, margin_ns, False)
+    ladder = {"PASS": "PASS", "FAIL": "FAIL",
+              "SKIP": "NOT_RUN"}.get(verdict, "FAIL")
+    notes = ""
+    if verdict == "SKIP":
+        notes = (f"aging STA not judgeable ({rep.get('skip_reason')}); "
+                 "§4.05: SKIP, never a pass")
+    elif verdict == "FAIL":
+        errs = [f["message"] for f in rep.get("findings", [])
+                if f.get("severity") == "ERROR"]
+        notes = errs[0] if errs else "aging-corner timing violated"
+    return TierResult(
+        "T_AGING_STA", "Aging-corner STA (NBTI/PBTI/HCI)", ladder,
+        details=(rep.get("measured")
+                 or {"skip_reason": rep.get("skip_reason")}),
+        artifact_path=str(aging_in), notes=notes)
+
+
+def check_tier_thermal(project_dir: Path,
+                       limit_w_per_mm2: float = _THERMAL_LIMIT_W_PER_MM2,
+                       tj_max_c: float = _THERMAL_TJ_MAX_C) -> TierResult:
+    """Thermal power-density screen (W/mm², + Tj when available).
+
+    Delegates to `thermal_screen_check.evaluate`, discovering the power report
+    (preferring the canonical reports/phase3/power.rpt) + a DEF/floorplan die
+    area from the project:
+      PASS -> PASS
+      FAIL -> FAIL    (power density over the package limit, or Tj >= Tj_max)
+      SKIP -> NOT_RUN (no power report, power not_computed, or no die area —
+              §4.05 honest SKIP, never a fabricated density)"""
+    import thermal_screen_check as th
+    prefer = project_dir / "reports" / "phase3" / "power.rpt"
+    power_path = prefer if prefer.is_file() else th._discover_power_report(
+        project_dir)
+    if power_path is None:
+        return TierResult(
+            "T_THERMAL", "Thermal power-density screen", "NOT_RUN",
+            notes="no power report found — §4.05: absent → SKIP")
+    die_source = th._discover_die_source(project_dir)
+    verdict, rep = th.evaluate(power_path, die_source, None, None,
+                               limit_w_per_mm2, tj_max_c, None, None)
+    ladder = {"PASS": "PASS", "FAIL": "FAIL",
+              "SKIP": "NOT_RUN"}.get(verdict, "FAIL")
+    notes = ""
+    if verdict == "SKIP":
+        notes = (f"thermal not judgeable ({rep.get('skip_reason')}); "
+                 "§4.05: SKIP, never a pass")
+    elif verdict == "FAIL":
+        errs = [f["message"] for f in rep.get("findings", [])
+                if f.get("severity") == "ERROR"]
+        notes = errs[0] if errs else "power density / Tj over limit"
+    return TierResult(
+        "T_THERMAL", "Thermal power-density screen", ladder,
+        details=(rep.get("measured")
+                 or {"skip_reason": rep.get("skip_reason")}),
+        artifact_path=str(power_path), notes=notes)
+
+
+def check_tier_dft_signoff(project_dir: Path) -> TierResult:
+    """Aggregate DFT sign-off — stuck-at + at-speed transition + BSDL.
+
+    Delegates to `dft_signoff_check.audit`. §4.05: when the project carries NO
+    DFT evidence at all (no coverage.json AND no bsdl_plan.json) the DFT
+    sign-off has not run → honest NOT_RUN (never a silent pass). When DFT
+    evidence IS present the gate's own verdict is authoritative (it recomputes
+    stuck-at coverage vs the foundry floor, requires a real / documented-
+    engine-limited at-speed transition record, and a BSDL for a padded
+    design):
+      PASS -> PASS
+      FAIL -> FAIL"""
+    import dft_signoff_check as dft
+    cov = dft._coverage_json_path(project_dir, None)
+    bsdl = dft._bsdl_plan_path(project_dir, None)
+    if cov is None and bsdl is None:
+        return TierResult(
+            "T_DFT_SIGNOFF", "DFT sign-off (stuck-at+transition+BSDL)",
+            "NOT_RUN",
+            notes="no DFT coverage/BSDL evidence — §4.05: absent → SKIP")
+    rep = dft.audit(project_dir)
+    v = rep.get("verdict")
+    ladder = {"PASS": "PASS", "FAIL": "FAIL"}.get(v, "FAIL")
+    notes = ""
+    if ladder == "FAIL":
+        parts = []
+        for k in ("stuck_at", "transition", "bsdl"):
+            sub = rep.get(k, {}) or {}
+            if sub.get("status") not in ("PASS", "SKIP", "ENGINE_LIMITED"):
+                parts.append(f"{k}={sub.get('status')}")
+        notes = "; ".join(parts) or "DFT sign-off failed"
+    return TierResult(
+        "T_DFT_SIGNOFF", "DFT sign-off (stuck-at+transition+BSDL)", ladder,
+        details={"stuck_at": (rep.get("stuck_at") or {}).get("status"),
+                 "transition": (rep.get("transition") or {}).get("status"),
+                 "bsdl": (rep.get("bsdl") or {}).get("status")},
+        artifact_path=rep.get("coverage_json"), notes=notes)
+
+
+def check_tier_lec_post(project_dir: Path) -> TierResult:
+    """Post-layout LEC — the FINAL routed/ECO netlist re-proven == synth/RTL.
+
+    Delegates to `lec_post_layout_check.check`:
+      PASS -> PASS
+      FAIL -> FAIL    (non-equivalent routed logic, OR an UNPROVEN / VACUOUS /
+              RUN_ERROR non-proof — §4.05: a non-proof is never a pass)
+      SKIP -> NOT_RUN (no routed/ECO netlist yet — honest not-applicable)"""
+    import lec_post_layout_check as lec
+    res = lec.check(project_dir.resolve())
+    r = res.get("result")
+    ladder = {"PASS": "PASS", "FAIL": "FAIL",
+              "SKIP": "NOT_RUN"}.get(r, "FAIL")
+    notes = ""
+    if ladder == "FAIL":
+        notes = ("; ".join(res.get("findings", []))
+                 or "post-layout equivalence not proven")
+    elif ladder == "NOT_RUN":
+        notes = res.get("reason", "")
+    return TierResult(
+        "T_LEC_POST", "Post-layout LEC (routed == synth/RTL)", ladder,
+        details={"verdict": res.get("verdict"),
+                 "total_points": res.get("total_points"),
+                 "unproven_points": res.get("unproven_points")},
+        artifact_path=res.get("report"), notes=notes)
+
+
+# ---------------------------------------------------------------------------
 # Caravel / Open-MPW detection
 # ---------------------------------------------------------------------------
 def _is_caravel_project(project_dir: Path) -> bool:
@@ -641,6 +911,14 @@ def run_ladder(project_dir: Path,
     if is_tapeout:
         tiers.append(check_tier_sta_rigor(project_dir))
         tiers.append(check_tier_mbist(project_dir, sources=sources))
+        # This session's sign-off gates — each blocks a tapeout on a real FAIL
+        # and honestly NOT_RUNs (SKIP) on an absent artifact (§4.05).
+        tiers.append(check_tier_dynamic_ir(project_dir))
+        tiers.append(check_tier_metal_density(project_dir))
+        tiers.append(check_tier_aging_sta(project_dir))
+        tiers.append(check_tier_thermal(project_dir))
+        tiers.append(check_tier_dft_signoff(project_dir))
+        tiers.append(check_tier_lec_post(project_dir))
         if caravel:
             tiers.append(check_tier_mpw_precheck(project_dir))
             tiers.append(check_tier_xor(project_dir,
@@ -662,7 +940,9 @@ def report_to_markdown(rep: LadderReport) -> str:
     out.append(f"_Emitted by `signoff_ladder_run.py`. Doctrine: the sign-off "
                f"ladder discovered by the spm pilot, now a single deterministic "
                f"runner wired to the real tapeout sign-off gates (EM density, "
-               f"LVS genuine-match, STA rigor, MBIST, MPW precheck, XOR)._")
+               f"LVS genuine-match, STA rigor, MBIST, dynamic-IR, per-layer "
+               f"metal density, aging-corner STA, thermal screen, DFT sign-off, "
+               f"post-layout LEC, MPW precheck, XOR)._")
     out.append("")
     out.append(f"**Mode: {rep.mode}"
                + (" · Caravel/Open-MPW" if rep.caravel else "")
