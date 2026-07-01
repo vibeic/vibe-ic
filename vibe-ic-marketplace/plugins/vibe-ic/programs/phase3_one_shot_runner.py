@@ -9045,6 +9045,16 @@ def _worst_slack(text: str) -> Optional[float]:
     return min(vals) if vals else None
 
 
+# TAPEOUT-SIGNOFF (timing rigor) — a conservative GENERIC flat on-chip-variation
+# (OCV) derate applied to the SPEF-based sign-off STA. A real foundry sign-off
+# carries an OCV/AOCV/POCV margin; the pre-fix STA carried NONE (optimistic).
+# ±5% is a defensible generic flat-OCV margin for a mature node; it is DISCLOSED
+# as flat-OCV (not AOCV/POCV distance/depth tables, which are the P1 follow-up and
+# supersede this when the PDK ships them). chip-AGNOSTIC — no PDK-specific number.
+_FLAT_OCV_DERATE_EARLY = 0.95
+_FLAT_OCV_DERATE_LATE = 1.05
+
+
 def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
                    spef_path: Path, rpt_out: Path,
                    notes: List[str]) -> bool:
@@ -9089,6 +9099,12 @@ def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
     spef_c = _to_container_path(str(spef_path), container)
     rpt_out.parent.mkdir(parents=True, exist_ok=True)
     rpt_c = _to_container_path(str(rpt_out), container)
+    # TAPEOUT-SIGNOFF (timing rigor): apply a flat-OCV derate BEFORE reporting
+    # (the pre-fix STA carried NO on-chip-variation margin), and additionally
+    # report the recovery/removal (async-reset de-assert arcs) + min-pulse-width
+    # check types that a foundry sign-off requires and the pre-fix report omitted.
+    # These are best-effort appends — an OpenSTA build lacking a command still
+    # produces the base report_checks (the `catch` keeps the run alive).
     tcl = (
         f"read_liberty {lib_c}\n"
         f"{macro_libs_tcl}\n"
@@ -9096,10 +9112,24 @@ def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
         f"link_design {top}\n"
         f"read_sdc {sdc_c}\n"
         f"read_spef {spef_c}\n"
+        f"set_timing_derate -early {_FLAT_OCV_DERATE_EARLY} "
+        f"-late {_FLAT_OCV_DERATE_LATE}\n"
         f"report_checks > {rpt_c}\n"
         f"report_tns >> {rpt_c}\n"
         f"report_wns >> {rpt_c}\n"
         f"report_worst_slack -max >> {rpt_c}\n"
+        # Native-Tcl append of the OCV marker so the sign-off-rigor gate can
+        # verify the derate was actually applied (a bare `puts >> file` is not
+        # valid Tcl; report-command `>` redirect works but `puts` needs a channel).
+        f"set _ocvf [open {rpt_c} a]\n"
+        f"puts $_ocvf \"OCV_DERATE_APPLIED early={_FLAT_OCV_DERATE_EARLY} "
+        f"late={_FLAT_OCV_DERATE_LATE} flat-OCV\"\n"
+        f"close $_ocvf\n"
+        # recovery/removal (async-reset de-assert) + min-pulse-width sign-off
+        # check types — report commands, so the `>>` redirect works as for
+        # report_checks; catch keeps the run alive on an OpenSTA build lacking one.
+        f"catch {{report_check_types -recovery -removal -max_slew "
+        f"-min_pulse_width >> {rpt_c}}}\n"
         f"exit\n"
     )
     tcl_path = rpt_out.parent / "sta_spef_based.tcl"
