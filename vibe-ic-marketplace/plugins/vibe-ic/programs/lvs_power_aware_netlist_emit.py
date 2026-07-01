@@ -206,6 +206,32 @@ def _find_instance_conn_spans(body: str, cell_re: re.Pattern
     return out
 
 
+def _rail_connection_map(rails: List[str], tie_wells_to_rails: bool
+                         ) -> Tuple[List[Tuple[str, str]], List[str]]:
+    """Return (conn_pairs, decl_rails) for the four PG pins.
+
+    `rails` = model.pg_pins = (power, ground, well-of-power, well-of-ground),
+    e.g. sky130 (VPWR, VGND, VPB, VNB) / gf180 (VDD, VSS, VNW, VPW).
+
+    DEFAULT (`tie_wells_to_rails=False`) — name-for-name: each pin connects to a
+    same-named wire and all four are declared. This is the part-1 model that
+    matches a layout carrying four DISTINCT globalised rails.
+
+    `tie_wells_to_rails=True` — the PHYSICAL sky130/gf180 well-tie: the n-well
+    body pin (VPB/VNW) ties to the POWER rail and the p-substrate body pin
+    (VNB/VPW) ties to the GROUND rail, so only the two real rails are declared.
+    This mirrors a routed DEF whose power SPECIALNET carries the VPB pins and
+    whose ground SPECIALNET carries the VNB pins (the wells are tied to the rails
+    at the PDN), i.e. the layout a physically-correct Magic extraction produces —
+    verified live: without it netgen reports 2 extra schematic-only well nets."""
+    power, ground = rails[0], rails[1]
+    wpow, wgnd = rails[2], rails[3]
+    if tie_wells_to_rails:
+        conn = [(power, power), (ground, ground), (wpow, power), (wgnd, ground)]
+        return conn, [power, ground]
+    return [(p, p) for p in rails], list(rails)
+
+
 def _inject_module_rails(head: str, portlist: Optional[str],
                          rails: List[str], as_ports: bool) -> str:
     """Return the module header carrying the power rails.
@@ -221,7 +247,8 @@ def _inject_module_rails(head: str, portlist: Optional[str],
     `as_ports=True` — the pad-ring / OpenLane convention: the rails are ALSO
     added to the port list and declared `inout`, for flows whose extracted
     layout DOES expose the rails as top-level pins (e.g. a Caravel wrapper). Both
-    are idempotent."""
+    are idempotent. `rails` is the list of rails to DECLARE (two when the wells
+    are tied to the rails, four otherwise)."""
     wire_decl = "\n  wire " + ", ".join(rails) + ";"
     if not as_ports:
         return head + wire_decl
@@ -243,7 +270,8 @@ def _inject_module_rails(head: str, portlist: Optional[str],
 
 def _patch_module(head: str, name: str, portlist: Optional[str], body: str,
                   model: PdkPowerModel, stats: EmitStats,
-                  as_ports: bool) -> Tuple[str, bool]:
+                  as_ports: bool, tie_wells_to_rails: bool = False
+                  ) -> Tuple[str, bool]:
     """Patch one module: thread rails through the header and inject PG pins on
     each std-cell instance. Returns (new_head + new_body, changed)."""
     cell_re = re.compile(model.cell_prefix_re)
@@ -251,8 +279,9 @@ def _patch_module(head: str, name: str, portlist: Optional[str], body: str,
     if not spans:
         return head + body, False           # module has no std-cells → leave it
 
-    rails = list(model.pg_pins)
-    pg_full = ", ".join(f".{p}({p})" for p in rails)
+    pins = list(model.pg_pins)
+    conn_pairs, decl_rails = _rail_connection_map(pins, tie_wells_to_rails)
+    pg_full = ", ".join(f".{pin}({tgt})" for pin, tgt in conn_pairs)
 
     # Collect every insertion as (position, text), then assemble the new body in
     # a SINGLE forward pass (O(N)). Per-instance full-body slicing would be
@@ -281,17 +310,18 @@ def _patch_module(head: str, name: str, portlist: Optional[str], body: str,
     # Idempotency: only thread the rail declarations through the header when they
     # are not already present (a prior pass, or a hand-written power-aware
     # netlist). Keyed on the first rail as a `wire`/`inout` declaration.
-    r0 = re.escape(rails[0])
+    r0 = re.escape(decl_rails[0])
     already_declared = bool(
         re.search(r"\bwire\b[^;]*\b" + r0 + r"\b", body)
         or re.search(r"\binout\s+" + r0 + r"\b", head + body))
     new_head = head if already_declared else \
-        _inject_module_rails(head, portlist, rails, as_ports)
+        _inject_module_rails(head, portlist, decl_rails, as_ports)
     return new_head + new_body, True
 
 
 def emit_power_aware_netlist(text: str, pdk: str, top: Optional[str] = None,
-                             rails_as_ports: bool = False
+                             rails_as_ports: bool = False,
+                             tie_wells_to_rails: bool = False
                              ) -> Tuple[str, Dict[str, object]]:
     """Transform a gate netlist into a POWER-AWARE netlist.
 
@@ -303,6 +333,13 @@ def emit_power_aware_netlist(text: str, pdk: str, top: Optional[str] = None,
              wires globalised by the netgen setup — the correct mode for a
              CORE-ONLY extracted layout (no power top ports). True ALSO adds them
              to the port list as `inout` (the pad-ring / Caravel convention).
+    `tie_wells_to_rails` : False (default) keeps the four PG pins name-for-name
+             (VPB→VPB, VNB→VNB) as four distinct globalised rails. True ties the
+             well body pins to the rails (VPB→VPWR, VNB→VGND / VNW→VDD, VPW→VSS)
+             and declares only the two real rails — the PHYSICAL sky130/gf180
+             well-tie, which is what a routed DEF (power SPECIALNET carrying the
+             VPB pins) extracts to. Use for a DEF-direct extracted layout so
+             netgen reaches a genuine match (else 2 schematic-only well nets).
     Returns (new_text, stats_dict). Idempotent: a netlist that already carries
     the PG pins is returned with instances_patched=0. chip-AGNOSTIC."""
     stats = EmitStats(pdk=_normalize_pdk(pdk))
@@ -325,7 +362,8 @@ def emit_power_aware_netlist(text: str, pdk: str, top: Optional[str] = None,
         do_this = (top is None) or (name == top.lstrip("\\"))
         if do_this:
             patched, changed = _patch_module(head, name, portlist, body,
-                                             model, stats, rails_as_ports)
+                                             model, stats, rails_as_ports,
+                                             tie_wells_to_rails)
             if changed:
                 stats.modules_patched += 1
             pieces.append(patched + end)
@@ -341,11 +379,13 @@ def emit_power_aware_netlist(text: str, pdk: str, top: Optional[str] = None,
 
 def emit_to_file(netlist: Path, pdk: str, out: Path,
                  top: Optional[str] = None,
-                 rails_as_ports: bool = False) -> Dict[str, object]:
+                 rails_as_ports: bool = False,
+                 tie_wells_to_rails: bool = False) -> Dict[str, object]:
     """Read `netlist`, emit the power-aware version to `out`, return stats."""
     text = netlist.read_text(errors="replace")
     new_text, stats = emit_power_aware_netlist(
-        text, pdk, top=top, rails_as_ports=rails_as_ports)
+        text, pdk, top=top, rails_as_ports=rails_as_ports,
+        tie_wells_to_rails=tie_wells_to_rails)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(new_text)
     stats["output"] = str(out)
@@ -367,6 +407,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="also add the rails to the top port list as `inout` "
                          "(pad-ring/Caravel flows whose layout exposes power "
                          "pins); default declares them as globalised wires")
+    ap.add_argument("--tie-wells-to-rails", action="store_true",
+                    help="tie the well body pins to the rails (VPB→VPWR, "
+                         "VNB→VGND) and declare only the two real rails — the "
+                         "physical sky130/gf180 well-tie, for matching a "
+                         "DEF-direct extracted layout")
     ap.add_argument("--out", type=Path, default=None,
                     help="output path (default: <netlist>.pwraware.v)")
     ap.add_argument("--json", dest="json_out", type=Path, default=None,
@@ -378,7 +423,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
     out = ns.out or ns.netlist.with_suffix(".pwraware.v")
     stats = emit_to_file(ns.netlist, ns.pdk, out, top=ns.top,
-                         rails_as_ports=ns.rails_as_ports)
+                         rails_as_ports=ns.rails_as_ports,
+                         tie_wells_to_rails=ns.tie_wells_to_rails)
     txt = json.dumps(stats, indent=2)
     if ns.json_out:
         ns.json_out.parent.mkdir(parents=True, exist_ok=True)
