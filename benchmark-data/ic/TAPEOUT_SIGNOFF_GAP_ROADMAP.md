@@ -77,11 +77,39 @@ emitter). The remaining blockers are **infrastructure + data + one extraction ga
 4. **OR** the chipignite **signoff waivers** for the 2/7 blackbox floor (step_c4 already auto-emits
    these when the fail-set == {Consistency, XOR}).
 
-### Remaining P0 (still deterministic / program-first — not yet built)
-- **Dynamic (transient) IR-drop** (vectorless/VCD DVD engine) + **real per-layer metal-density fill**
-  (KLayout/Magic fill) + a per-layer density check (vs the current row-util metric).
-- **Wire the new gates into `signoff_ladder_run` / `tapeout_checklist_gen` as HARD release gates**
-  (today they are standalone callable programs; the ladder still accepts WAIVED-LVS as a pass).
+### ── "cont" BATCH DONE (v1.2.79) ──
+- ✅ **LVS ROOT FIX COMPLETE — spm has a GENUINE power-verified match, LIVE-proven.** Part 2/2
+  (power-aware EXTRACTION: `set SUB <ground-rail>` + DEF-seeded `label <power-rail>` + well-tie)
+  turned spm's real netgen from power-blind (VSUBS/_438_) to **VGND|VGND, VPWR|VPWR, "Circuits
+  match uniquely"** (real Magic + netgen, 201,441 instances). classify=MATCH,
+  lvs_tapeout_signoff_check=GENUINE_MATCH. The LVS sign-off is now REAL, not a POWER_PIN_ONLY
+  waiver. This closes the single load-bearing LVS gap.
+- ✅ **The 11 gates are now WIRED into the release ladder** (`signoff_ladder_run --mode tapeout`):
+  EM=real J-vs-Jmax (decap proxy gone), LVS=genuine-match-required (POWER_PIN_ONLY non-releasing),
+  +STA-rigor/MBIST/mpw-precheck/XOR tiers, new NOT_RELEASED verdict + `released` flag + `--strict`.
+  §4.05: POWER_PIN_ONLY at tapeout mode no longer releases; triage mode unchanged.
+- ✅ **Dynamic (transient) IR-drop gate** (`dynamic_ir_drop_check.py`) + **per-layer metal-density
+  gate** (`metal_layer_density_check.py`, replaces the row-util axis). Deterministic verdict gates;
+  §4.05 absent→FAIL. (Producing the reports — phase3 emission of a transient-IR run + a real
+  per-layer KLayout metal-fill/density pass — is the remaining emission-side follow-up.)
+
+## ── CAMPAIGN STATE (v1.2.75 → v1.2.79) ──
+**~15 program-first tapeout-signoff deliverables landed**, all chip-AGNOSTIC, §4.05-verified,
+gatekeeper MERGE_OK, pushed; the heavy ones LIVE-run on real Docker/tools. The plugin now: runs the
+real Efabless shuttle precheck (5/7 live), runs the real XOR on real klayout, and reaches a GENUINE
+LVS match on real spm. **The path to a real green sky130 submission is now bounded and mostly
+infrastructure/data, not plugin-logic:**
+1. A full sky130A PDK install (blocks the caravel harden + the full precheck ladder).
+2. Golden full-chip `caravel.gds` + the pre-hardened `user_proj_example` macro (XOR + harden inputs),
+   OR the chipignite 2/7 blackbox waivers (auto-emitted).
+3. Emission-side follow-ups (not gates): a transient-IR PSM/DVD run + a real per-layer KLayout
+   metal-fill/density pass to feed the two new deterministic gates.
+
+### Remaining lower-priority follow-ups
+- Wire dynamic-IR + metal-density gates into the ladder (they exist standalone; the ladder does not
+  call them yet) once the phase3 emission produces their reports.
+- P1 depth: AOCV/POCV timing (flat-OCV is in), SI-aware delta-delay STA, StarRC-grade PEX +
+  multi-corner SPEF, DFT to ≥98% + BSDL, post-layout LEC, aging/thermal, boundary-scan.
 
 ## THE reframing that changes everything (Efabless = no Calibre gap)
 
