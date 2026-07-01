@@ -2447,6 +2447,88 @@ def _compute_resized_die(die_w: int, die_h: int,
     return new_w, new_h
 
 
+# ── ORGANIC E2E (die AUTO-SIZING, 2026-07-01) — GAP-E2E-4/10 unified ──────────
+# The fixed `--die-um 1500x1500` default leaves a design at WHATEVER core
+# utilization it happens to land at: a small design (sha256, ~90k µm²) sits at
+# ~4% util → detailed route PLATEAUS and never converges; a large one (aes) sits
+# over-dense → congestion. Both are the SAME root gap: the die is not sized from
+# the design. `--die-um auto` sizes a square die so the design lands near the
+# target util (side = sqrt(design_cell_area / util)). An UNDER-estimate (too
+# dense) is caught by the existing over-utilization upsize-retry loop, so this
+# only needs the right BALLPARK. chip-AGNOSTIC (PDK site area + cell count).
+_AUTO_DIE_MIN_SIDE_UM = 60           # floor: never smaller than a tiny core
+_AUTO_DIE_AVG_SITES_PER_CELL = 6.0   # sky130-hd-typical std-cell width in sites
+_AUTO_DIE_FALLBACK_CELL_UM2 = 7.5    # avg std-cell area when the LEF site parse fails
+_AUTO_DIE_DEFAULT_UTIL = 0.40        # target core util when --util is unusable
+
+
+def _parse_site_area_um2(cell_lef_text: str) -> Optional[float]:
+    """Parse the placement SITE's area (µm²) from a cell LEF's
+    `SITE <name> ... SIZE w BY h ;`. Returns w*h, or None if absent/malformed.
+    chip-AGNOSTIC: every std-cell LEF declares its row site geometry."""
+    if not isinstance(cell_lef_text, str) or not cell_lef_text:
+        return None
+    m = re.search(r"\bSITE\b.*?\bSIZE\s+([0-9.]+)\s+BY\s+([0-9.]+)\s*;",
+                  cell_lef_text, re.DOTALL | re.IGNORECASE)
+    if not m:
+        return None
+    try:
+        w, h = float(m.group(1)), float(m.group(2))
+    except ValueError:
+        return None
+    return w * h if (w > 0 and h > 0) else None
+
+
+def _auto_die_side_um(cell_count: int, util_frac: float,
+                      avg_cell_area_um2: float,
+                      min_side: int = _AUTO_DIE_MIN_SIDE_UM,
+                      max_side: int = _DEFAULT_DIE_MAX_UM) -> int:
+    """Square-die side (µm) sizing `cell_count` std cells to ~`util_frac` core
+    utilization: die_area * util = cell_count * avg_cell_area ⇒
+    side = sqrt(cell_count * avg_cell_area / util). Clamped to
+    [min_side, max_side]. A too-dense under-estimate is grown by the over-util
+    upsize-retry loop, so a ballpark is sufficient — a fixed 1500×1500 never
+    again strands a small design at a route-plateauing ~4% util. chip-AGNOSTIC."""
+    n = max(int(cell_count), 1)
+    u = util_frac if (0.0 < util_frac <= 1.0) else _AUTO_DIE_DEFAULT_UTIL
+    a = (avg_cell_area_um2 if (avg_cell_area_um2 and avg_cell_area_um2 > 0)
+         else _AUTO_DIE_FALLBACK_CELL_UM2)
+    side = int((n * a / u) ** 0.5 + 0.999)
+    return max(min_side, min(side, max_side))
+
+
+def _resolve_auto_die_um(die_um: str, netlist: Path, util: float,
+                         pdk: "PdkConfig") -> Tuple[str, Optional[str]]:
+    """If `die_um` is the sentinel 'auto', compute a real 'WxH' from the synth
+    netlist's cell count + the PDK site area + the target util. Otherwise return
+    `die_um` unchanged. Returns (die_um, note). Any failure falls back to a safe
+    fixed die so the flow never breaks on a sizing error. chip-AGNOSTIC."""
+    if str(die_um).lower() != "auto":
+        return die_um, None
+    try:
+        nl = netlist.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        nl = ""
+    cells = _count_placed_cells_from_netlist(nl)
+    site_area = None
+    try:
+        site_area = _parse_site_area_um2(
+            Path(pdk.cell_lef).read_text(errors="ignore"))
+    except Exception:
+        site_area = None
+    avg_cell = ((site_area * _AUTO_DIE_AVG_SITES_PER_CELL) if site_area
+                else _AUTO_DIE_FALLBACK_CELL_UM2)
+    util_frac = util if (0.0 < util <= 1.0) else (
+        util / 100.0 if util > 1.0 else _AUTO_DIE_DEFAULT_UTIL)
+    if cells <= 0:
+        return "1500x1500", ("die-um=auto but the netlist has 0 countable "
+                             "cells; falling back to 1500x1500")
+    side = _auto_die_side_um(cells, util_frac, avg_cell)
+    return (f"{side}x{side}",
+            f"die-um=auto → {side}x{side} (cells={cells}, "
+            f"avg_cell={avg_cell:.2f}µm², target_util={util_frac:g})")
+
+
 _V1_6_599_WRAPPER_MODULE_PATTERNS = (
     r"user_proj_example", r"user_project_wrapper", r"user_proj",
     r"caravel_user_project", r"caravel_openframe", r"chipignite_shuttle",
@@ -4215,6 +4297,14 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             "set_output_delay 2 -clock clk [all_outputs]\n"
         )
 
+    # ORGANIC E2E (GAP-E2E-4/10) — resolve `--die-um auto` to a design-sized
+    # WxH from the synth netlist cell count + PDK site area + target util, so a
+    # small design is not stranded at a route-plateauing ~4% util on a fixed
+    # 1500×1500 die (and a large one is not over-dense). An explicit WxH is left
+    # unchanged; an under-estimate is grown by the over-util retry loop below.
+    die_um, _auto_die_note = _resolve_auto_die_um(die_um, netlist, util, pdk)
+    if _auto_die_note:
+        print(f"[phase3] {_auto_die_note}", file=sys.stderr)
     try:
         die_w, die_h = (int(x) for x in die_um.lower().split("x"))
     except Exception:
@@ -10727,8 +10817,10 @@ def main() -> int:
     p.add_argument("project", type=Path)
     p.add_argument("--top-name", default="chip_top")
     p.add_argument("--container", default="iic-eda")
-    p.add_argument("--die-um", default="200x200",
-                   help="Die size W x H in microns")
+    p.add_argument("--die-um", default="auto",
+                   help="Die size W x H in microns, or 'auto' (default) to size "
+                        "the die from the synth cell count + PDK site area + "
+                        "target util (GAP-E2E-4/10)")
     p.add_argument("--util", type=float, default=0.30,
                    help="Global placement density (--density passed to OpenROAD "
                         "global_placement). v0.1.44 spm pilot Tier 1.5 finding: "
