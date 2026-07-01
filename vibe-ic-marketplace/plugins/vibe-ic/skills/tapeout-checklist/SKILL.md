@@ -117,10 +117,20 @@ assertions are NOT re-judged in prose. Run the program; read its JSON.
    - Density rules clean (min/max metal density) — *enforced by* `programs/
      metal_fill_density_check.py`.
    - ERC clean — *enforced by* `programs/erc_density_check.py`.
-5. **Test** (DFT data missing = FAIL, not SKIP — v0.100 K3)
-   - Scan ATPG coverage ≥ target stuck-at; **missing DFT report = FAIL** —
-     *enforced by* `programs/dft_atpg_coverage_check.py` (no SKIP path).
-   - MBIST integrated/simulated + boundary-scan BSDL present.
+5. **Test** (DFT data missing = FAIL, not SKIP — v0.100 K3) — FOUNDRY / ATE bar
+   - Scan ATPG **stuck-at** coverage ≥ **foundry floor (95 %, up to 98 %)**;
+     a lenient written target is clamped UP to the floor; **missing DFT
+     report = FAIL** — *enforced by* `programs/dft_atpg_coverage_check.py`
+     (no SKIP path; recomputed, never a trusted self-asserted boolean).
+   - **Transition (at-speed / launch-off-capture)** coverage ≥ target, OR a
+     DOCUMENTED OSS-engine limitation (Fault is stuck-at-only — never a
+     fabricated at-speed number) — *emitted by* `programs/fault_atpg_run.py`
+     (`transition` block + `transition_atpg_plan.md`).
+   - MBIST integrated/simulated + **boundary-scan BSDL present for a padded
+     design** (bare core → honest N/A) — *emitted + gated by*
+     `programs/bsdl_emit.py` (BSDL + boundary-scan-cell-per-pad plan).
+   - The three roll up into `programs/dft_signoff_check.py` (aggregate DFT
+     sign-off: stuck-at + transition + BSDL; absent evidence FAILs honestly).
 6. **Power intent**
    - UPF consistency across synth / P&R / STA / sim
    - All isolation + level-shifter cells in place
