@@ -282,6 +282,11 @@ class TestStepSynthKnobEmission:
         assert any("SWAP_ARITH_OPERATORS" in n for n in notes)
         assert any("ADDER_MAP_FILE -> techmap" in n for n in notes)
         assert any("REMOVE_ABC_BUFFERS" in n for n in notes)
+        # HONEST-SCOPE (live-run fidelity finding): the SWAP_ARITH note must NOT
+        # over-claim a timing-repair — alumacc is disclosed as a structural
+        # enabler that needs the adder techmap, not an operand-swap on its own.
+        _swap = next(n for n in notes if n.startswith("SWAP_ARITH_OPERATORS"))
+        assert "NOT an operand-swap timing-repair" in _swap
 
     def test_adder_map_missing_file_skipped_disclosed(self, monkeypatch, tmp_path):
         # §4.05: ADDER_MAP_FILE points at a missing file → techmap NOT injected,
