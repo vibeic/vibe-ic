@@ -458,3 +458,73 @@ class TestSiliconCriticalPnrBlocks:
         # falls back to 0.30 on nonnumeric input; pin that.
         u, _ = mod._normalize_util("default")
         assert u == 0.30
+
+
+# ---------------------------------------------------------------------------
+# ORGANIC E2E (GAP-E2E-4/10) — die AUTO-SIZING from synth cell count
+# Validated against the end-to-end campaign's empirical data points:
+#   sha256 (22,786 cells) stranded at 4% util on a fixed 1500x1500 → route
+#   plateau; aes (39,180 cells) converged only at 1400x1400 (~15% util).
+# ---------------------------------------------------------------------------
+class TestDieAutoSizing:
+    _SITE_AREA = 1.2512  # sky130_fd_sc_hd unithd: 0.46 x 2.72
+
+    def test_parse_site_area_from_lef(self):
+        lef = ("SITE unithd\n  SYMMETRY Y ;\n  CLASS CORE ;\n"
+               "  SIZE 0.46 BY 2.72 ;\nEND unithd\n")
+        assert mod._parse_site_area_um2(lef) == pytest.approx(1.2512, rel=1e-3)
+
+    def test_parse_site_area_missing_returns_none(self):
+        assert mod._parse_site_area_um2("no site here") is None
+        assert mod._parse_site_area_um2("") is None
+        assert mod._parse_site_area_um2(None) is None
+
+    def test_auto_die_sizes_to_target_util(self):
+        avg = self._SITE_AREA * mod._AUTO_DIE_AVG_SITES_PER_CELL
+        side = mod._auto_die_side_um(22786, 0.40, avg)
+        # design lands near the requested 40% util (not the fixed-die 4%)
+        util = 22786 * avg / (side * side)
+        assert 0.30 <= util <= 0.50
+        assert 500 <= side <= 800   # NOT 1500 (the stranding fixed default)
+
+    def test_auto_die_matches_aes_empirical_converge(self):
+        # aes converged at 1400x1400 (~15% util); the helper reproduces it.
+        avg = self._SITE_AREA * mod._AUTO_DIE_AVG_SITES_PER_CELL
+        side = mod._auto_die_side_um(39180, 0.15, avg)
+        assert 1350 <= side <= 1450
+
+    def test_auto_die_monotonic_in_cell_count(self):
+        avg = self._SITE_AREA * mod._AUTO_DIE_AVG_SITES_PER_CELL
+        assert (mod._auto_die_side_um(1000, 0.4, avg)
+                < mod._auto_die_side_um(50000, 0.4, avg))
+
+    def test_auto_die_clamps_tiny_to_floor(self):
+        avg = self._SITE_AREA * mod._AUTO_DIE_AVG_SITES_PER_CELL
+        assert mod._auto_die_side_um(1, 0.4, avg) == mod._AUTO_DIE_MIN_SIDE_UM
+
+    def test_auto_die_clamps_huge_to_max(self):
+        avg = self._SITE_AREA * mod._AUTO_DIE_AVG_SITES_PER_CELL
+        assert (mod._auto_die_side_um(10_000_000, 0.4, avg)
+                == mod._DEFAULT_DIE_MAX_UM)
+
+    def test_auto_die_bad_util_falls_back(self):
+        avg = self._SITE_AREA * mod._AUTO_DIE_AVG_SITES_PER_CELL
+        # util 0 / >1 / negative → the default target util, never a crash
+        assert mod._auto_die_side_um(1000, 0.0, avg) > 0
+        assert mod._auto_die_side_um(1000, -1.0, avg) > 0
+
+    def test_resolve_passes_explicit_die_through_unchanged(self):
+        import pathlib
+        out, note = mod._resolve_auto_die_um(
+            "900x900", pathlib.Path("/nonexistent"), 0.4, None)
+        assert out == "900x900" and note is None
+
+    def test_resolve_auto_zero_cells_falls_back_safely(self, tmp_path):
+        # 'auto' with an unreadable/empty netlist must not crash → safe fixed die
+        nl = tmp_path / "empty_synth.v"
+        nl.write_text("// no instances\n")
+
+        class _Pdk:
+            cell_lef = "/nonexistent.lef"
+        out, note = mod._resolve_auto_die_um("auto", nl, 0.4, _Pdk())
+        assert "x" in out and note is not None  # a real WxH + a disclosure note

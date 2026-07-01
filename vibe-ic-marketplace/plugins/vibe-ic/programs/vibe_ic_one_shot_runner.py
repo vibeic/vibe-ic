@@ -202,7 +202,11 @@ def main() -> int:
     p.add_argument("--skip-phase1", action="store_true")
     p.add_argument("--skip-analog", action="store_true")
     p.add_argument("--skip-phase3", action="store_true")
-    p.add_argument("--die-um", default="1500x1500")
+    p.add_argument("--die-um", default="auto",
+                   help="die size WxH in µm, or 'auto' (default) to size the "
+                        "die from the synth cell count + PDK site area + target "
+                        "util so a small design is not stranded at a "
+                        "route-plateauing low utilization on a fixed 1500x1500 die")
     p.add_argument("--util", type=float, default=0.4)
     p.add_argument("--pdk", default="auto")
     p.add_argument("--ic-name", default="UNNAMED_CHIP")
