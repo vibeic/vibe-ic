@@ -555,7 +555,7 @@ steps:
     blocks_on: [9]
 
   - id: 11
-    name: "DFT insertion (scan chain + ATPG)"
+    name: "DFT insertion (scan chain + ATPG + at-speed + BSDL)"
     stage: stage2
     skills: [dft-insert, atpg]
     mcp_tools: [eda_dft]
@@ -563,16 +563,30 @@ steps:
       # Fault (cloudv-io/fault) for open-source stuck-at ATPG.
       # Integrated 2026-04-22 to eliminate the "no commercial ATPG" waiver
       # per LL feedback_plugin_usage_discipline.md.
+      # 2026-07 DFT-depth raise to a foundry / ATE bar:
+      #   * fault_atpg_run now defaults the stuck-at target to 95 % (foundry)
+      #     and emits a transition (at-speed / launch-off-capture) fault-model
+      #     record — a real number if the OSS engine can do it, otherwise an
+      #     honest engine_limited note (never a fabricated transition number).
+      #   * bsdl_emit emits a 1149.1 BSDL + boundary-scan-cell-per-pad plan
+      #     for a padded design (bare core → honest N/A).
+      #   * dft_signoff_check aggregates stuck-at + transition + BSDL.
       - fault_atpg_run
       - dft_atpg_coverage_check
+      - bsdl_emit
+      - dft_signoff_check
     required_outputs:
       - "phase2/stage2/dft/scan_netlist.v"
       - "phase2/stage2/dft/atpg_coverage.rpt"
+      - "phase2/stage2/dft/transition_atpg_plan.md"
       - "reports/phase2/dft/coverage.json"
+      - "reports/phase2/dft/bsdl_plan.json"
     # NOTE on invocation: flow-orchestrate/SKILL.md directs the agent to
     # invoke `fault_atpg_run` with the design's clock name and the
-    # already-synthesised netlist. Target varies by design (open-flow
-    # stuck-at typically 55-75% without real scan chain insertion).
+    # already-synthesised netlist. FOUNDRY BAR: stuck-at must reach the
+    # foundry floor (95 %); an open-flow design that only reaches 55-75 %
+    # (no real scan chain insertion) now FAILs honestly instead of passing
+    # a lenient 80 % — this is the intended DFT-depth raise, not a defect.
     gate:
       all_of:
         - files_exist: ["phase2/stage2/dft/scan_netlist.v", "phase2/stage2/dft/atpg_coverage.rpt"]
@@ -580,12 +594,21 @@ steps:
         # boolean. dft_atpg_coverage_check independently parses the real
         # measured stuck-at coverage % + target from coverage.json (both
         # the fault_atpg_run and runner/skill schemas) — falling back to
-        # atpg_coverage.rpt — and recomputes measured >= target. FAILs on
-        # measured < target (e.g. the sha256 0%-coverage no-scan-chain
-        # DESIGN_DEFICIT), on a fabricated boolean that contradicts the
-        # recomputed number, and on absent/insufficient evidence (honest
-        # FAIL, never a vacuous pass).
+        # atpg_coverage.rpt — and recomputes measured >= max(written_target,
+        # foundry_floor=95%). FAILs on measured < the foundry floor (e.g. the
+        # sha256 0%-coverage no-scan-chain DESIGN_DEFICIT), on a fabricated
+        # boolean that contradicts the recomputed number, and on
+        # absent/insufficient evidence (honest FAIL, never a vacuous pass).
         - program_exit_zero: "dft_atpg_coverage_check . --json reports/phase2/dft/atpg_coverage_gate.json"
+        # BSDL: emit + gate the boundary-scan-cell-per-pad plan. A padded
+        # design (pad ring / inout pads) must ship a BSDL; a bare core is a
+        # honest N/A (exit 0). A padded design that cannot be parsed FAILs.
+        - program_exit_zero: "bsdl_emit . --json reports/phase2/dft/bsdl_plan.json"
+        # Aggregate DFT sign-off (foundry bar): stuck-at >= floor AND
+        # transition >= target (or DOCUMENTED engine-limited) AND BSDL
+        # present for a padded design (bare core SKIP). Absent evidence
+        # FAILs honestly (§4.05) — never a vacuous pass.
+        - program_exit_zero: "dft_signoff_check . --json reports/phase2/dft/dft_signoff.json"
     blocks_on: [10]
 
   - id: 12

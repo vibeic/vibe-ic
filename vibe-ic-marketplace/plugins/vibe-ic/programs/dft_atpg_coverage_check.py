@@ -40,9 +40,25 @@ reaches synthesis. A design with no sequential logic still has a
 combinational stuck-at coverage number; absence of the report is a
 missing-evidence FAIL, not a not-applicable SKIP.
 
+FOUNDRY-GRADE FLOOR (2026-07 DFT-depth raise): the checker no longer
+trusts a lenient written target. It enforces a FOUNDRY floor (default
+95 %, configurable via --foundry-floor / down for legacy) so a producing
+step that writes `target_pct: 50` (or the old 80 %) can no longer pass a
+sub-foundry number. The effective target is:
+
+    effective_target = max(written_target, foundry_floor)
+
+    PASS iff measured_coverage_pct >= effective_target
+
+This closes the loophole where a below-foundry coverage sailed through
+only because the artefact carried a lax self-chosen target. §4.05: the
+floor RAISES the bar (never relaxes it) — a design below the foundry bar
+FAILs honestly instead of shipping untestable silicon.
+
 Usage:
     python3 dft_atpg_coverage_check.py <project_dir> [--json <out>]
     python3 dft_atpg_coverage_check.py <project_dir> [--coverage-json PATH]
+    python3 dft_atpg_coverage_check.py <project_dir> [--foundry-floor 98]
 
 main(argv) -> int : 0 PASS / 1 FAIL / 2 IO-or-arg error.
 
@@ -65,7 +81,11 @@ except Exception:  # pragma: no cover - standalone fallback
 
 
 _PROGRAM = "dft_atpg_coverage_check"
-_VERSION = "1.0.0"
+_VERSION = "1.1.0"
+
+# Foundry / ATE sign-off floor. A written target below this is clamped UP so
+# a lenient self-chosen target cannot pass a sub-foundry coverage number.
+FOUNDRY_FLOOR_DEFAULT = 95.0
 
 # Field names that may hold the REAL measured stuck-at coverage (%) — in
 # priority order. fault_atpg_run writes `coverage_pct`; the runner/skill
@@ -163,10 +183,15 @@ def _parse_rpt(text: str) -> Tuple[Optional[float], Optional[float]]:
 
 
 def evaluate(coverage_json: Optional[dict],
-             rpt_text: Optional[str]) -> dict:
+             rpt_text: Optional[str],
+             foundry_floor: float = FOUNDRY_FLOOR_DEFAULT) -> dict:
     """Pure evaluator. Independently derives measured + target stuck-at
-    coverage from the artefact(s) and recomputes the verdict. NEVER
-    trusts a written boolean. Returns a verdict dict.
+    coverage from the artefact(s) and recomputes the verdict against a
+    FOUNDRY floor. NEVER trusts a written boolean, and NEVER trusts a
+    written target below the foundry floor. Returns a verdict dict.
+
+    effective_target = max(written_target, foundry_floor)
+    PASS iff measured >= effective_target.
 
     chip-AGNOSTIC."""
     reasons: List[str] = []
@@ -205,14 +230,31 @@ def evaluate(coverage_json: Optional[dict],
             "no stuck-at coverage target found in coverage.json "
             f"(looked for {list(_TARGET_FIELDS)}) or atpg_coverage.rpt")
 
+    # FOUNDRY floor: clamp the written target UP so a lenient self-chosen
+    # target cannot pass a sub-foundry number. A missing written target still
+    # FAILs above (insufficient substance) — the floor only ever RAISES the
+    # bar, it never invents a target to make an under-specified run pass.
+    effective_target: Optional[float] = None
+    floor_governs = False
+    if target is not None:
+        effective_target = max(target, foundry_floor)
+        floor_governs = foundry_floor > target
+        if floor_governs:
+            reasons.append(
+                f"written target {target:.2f}% is below the foundry floor "
+                f"{foundry_floor:.2f}% — foundry floor governs "
+                f"(effective target {effective_target:.2f}%)")
+
     recomputed_ge_target: Optional[bool] = None
-    if measured is not None and target is not None:
-        recomputed_ge_target = measured >= target
+    if measured is not None and effective_target is not None:
+        recomputed_ge_target = measured >= effective_target
         if not recomputed_ge_target:
             reasons.append(
                 f"measured stuck-at coverage {measured:.2f}% < "
-                f"target {target:.2f}% — DFT/ATPG coverage below required "
-                f"floor (untestable silicon)")
+                f"effective target {effective_target:.2f}% "
+                f"(written {target:.2f}%, foundry floor {foundry_floor:.2f}%) "
+                f"— DFT/ATPG coverage below required foundry floor "
+                f"(untestable silicon)")
 
     # Cross-check the self-asserted boolean against our recomputation.
     self_assertion_mismatch = (
@@ -224,8 +266,8 @@ def evaluate(coverage_json: Optional[dict],
         reasons.append(
             f"self-asserted stuck_at_ge_target={self_asserted} contradicts "
             f"recomputed {recomputed_ge_target} from measured "
-            f"{measured:.2f}% vs target {target:.2f}% — boolean ignored, "
-            f"recomputed verdict governs")
+            f"{measured:.2f}% vs effective target {effective_target:.2f}% — "
+            f"boolean ignored, recomputed verdict governs")
 
     verdict = "PASS" if recomputed_ge_target is True else "FAIL"
 
@@ -235,6 +277,10 @@ def evaluate(coverage_json: Optional[dict],
         "measured_source": measured_src,
         "target_pct": round(target, 4) if target is not None else None,
         "target_source": target_src,
+        "foundry_floor_pct": round(foundry_floor, 4),
+        "effective_target_pct": (round(effective_target, 4)
+                                 if effective_target is not None else None),
+        "foundry_floor_governs": floor_governs,
         "recomputed_ge_target": recomputed_ge_target,
         "self_asserted_ge_target": self_asserted,
         "self_assertion_mismatch": self_assertion_mismatch,
@@ -283,7 +329,8 @@ def _resolve_paths(project: Path,
 
 
 def audit(project: Path,
-          coverage_json_override: Optional[str] = None) -> dict:
+          coverage_json_override: Optional[str] = None,
+          foundry_floor: float = FOUNDRY_FLOOR_DEFAULT) -> dict:
     cov_candidates, rpt_candidates = _resolve_paths(project, coverage_json_override)
 
     cov_path = next((p for p in cov_candidates if p.is_file()), None)
@@ -303,6 +350,7 @@ def audit(project: Path,
             "measured_coverage_pct": None,
             "target_pct": None,
             "recomputed_ge_target": None,
+            "foundry_floor_pct": round(foundry_floor, 4),
             "verdict": "FAIL",
             "status": "FAIL",
             "reasons": [
@@ -326,7 +374,7 @@ def audit(project: Path,
         except Exception:
             rpt_text = None
 
-    result = evaluate(coverage_json, rpt_text)
+    result = evaluate(coverage_json, rpt_text, foundry_floor=foundry_floor)
     # Surface a JSON-parse note as a leading reason if applicable.
     if base.get("reasons_prefix"):
         result["reasons"] = base.pop("reasons_prefix") + result.get("reasons", [])
@@ -341,6 +389,12 @@ def main(argv: Optional[list] = None) -> int:
     ap.add_argument("project_dir", help="Project root directory")
     ap.add_argument("--coverage-json", default=None,
                     help="Explicit path to coverage.json (overrides auto-resolve)")
+    ap.add_argument("--foundry-floor", type=float, default=FOUNDRY_FLOOR_DEFAULT,
+                    help="Foundry/ATE stuck-at coverage floor %% — the effective "
+                         "target is max(written_target, floor). Default "
+                         f"{FOUNDRY_FLOOR_DEFAULT:.0f}%%. Raising it (e.g. 98) "
+                         "tightens the bar; a lenient written target can never "
+                         "drop below it.")
     ap.add_argument("--json", default=None, help="JSON report output path")
     args = ap.parse_args(argv)
 
@@ -349,7 +403,7 @@ def main(argv: Optional[list] = None) -> int:
         print(f"ERROR: not a directory: {project}", file=sys.stderr)
         return 2
 
-    report = audit(project, args.coverage_json)
+    report = audit(project, args.coverage_json, foundry_floor=args.foundry_floor)
     out = json.dumps(report, indent=2, ensure_ascii=False)
     if args.json:
         try:
@@ -363,8 +417,9 @@ def main(argv: Optional[list] = None) -> int:
     verdict = report.get("verdict")
     meas = report.get("measured_coverage_pct")
     tgt = report.get("target_pct")
-    print(f"{_PROGRAM}: measured={meas} target={tgt} verdict={verdict}",
-          file=sys.stderr)
+    eff = report.get("effective_target_pct")
+    print(f"{_PROGRAM}: measured={meas} written_target={tgt} "
+          f"effective_target={eff} verdict={verdict}", file=sys.stderr)
     return 0 if verdict == "PASS" else 1
 
 

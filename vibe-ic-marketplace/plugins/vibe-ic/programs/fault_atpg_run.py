@@ -6,29 +6,55 @@ Runs Fault's `cut` + `atpg` subcommands on a synthesized netlist to produce
 stuck-at test vectors and a coverage metric, then emits the artefacts
 required by flow Step 11 (DFT insertion):
 
-  <project>/dft/scan_netlist.v        (copy of cut netlist; Fault's cut DFF
-                                       replacement is the moral equivalent
-                                       of scan insertion for open flow)
-  <project>/dft/atpg_coverage.rpt     (human-readable coverage ratio + count)
-  <project>/reports/dft/coverage.json (machine-readable with
-                                       stuck_at_ge_target: bool)
+  <project>/dft/scan_netlist.v          (copy of cut netlist; Fault's cut DFF
+                                         replacement is the moral equivalent
+                                         of scan insertion for open flow)
+  <project>/dft/atpg_coverage.rpt       (human-readable coverage ratio + count)
+  <project>/dft/transition_atpg_plan.md (launch-off-capture / at-speed
+                                         two-pattern mechanism plan +
+                                         engine-capability record)
+  <project>/reports/dft/coverage.json   (machine-readable with
+                                         stuck_at_ge_target: bool and a
+                                         `transition` fault-model block)
 
 Eliminates the "no commercial ATPG" waiver (feedback_plugin_usage_discipline.md,
 2026-04-22).
+
+FOUNDRY-GRADE DEFAULT (2026-07 DFT-depth raise): the stuck-at target now
+defaults to 95 % (foundry / ATE sign-off bar), configurable UP to 98 % via
+`--min-coverage`. The old lenient 80 % pass is gone — a design below the
+target FAILs (exit 1), never a lenient pass.
+
+TWO FAULT MODELS:
+  * stuck-at  — Fault's combinational stuck-at ATPG (real coverage number).
+  * transition (at-speed / launch-off-capture) — a SECOND fault model with
+    its own target (`--transition-target`, default 90 %). The launch-off-
+    capture two-pattern mechanism + plan is always emitted; the coverage
+    NUMBER is only reported if the underlying OSS engine can actually run
+    transition ATPG. Fault (cloudv-io) is a single-pattern combinational
+    stuck-at engine and does NOT support transition/delay ATPG, so the
+    honest outcome is `transition.engine_limited = true` with a documented
+    reason — never a fabricated transition-coverage number.
 
 Usage:
     python3 fault_atpg_run.py <project_dir> \\
         --netlist synth/netlist.v \\
         --top aon_timer \\
         --clock clk_i \\
-        [--pdk gf180] [--min-coverage 80] [--tv-count 100]
+        [--pdk gf180] [--min-coverage 95] [--transition-target 90] \\
+        [--tv-count 100] [--no-transition]
 
 Requires Docker image hpretl/iic-osic-tools:latest (Fault + GF180 cell model).
 Fault ≈ 10-60 s for typical <5k-cell designs.
 
-Exit 0 = coverage >= threshold AND all artefacts produced.
-Exit 1 = coverage below threshold OR Fault failed.
+Exit 0 = stuck-at coverage >= target AND all artefacts produced.
+Exit 1 = stuck-at coverage below target OR Fault failed.
 Exit 2 = usage / IO / Docker error.
+
+Note: a transition ENGINE limitation (Fault cannot do at-speed) is honestly
+recorded but does NOT by itself fail this producer — the DFT sign-off gate
+(dft_signoff_check.py) is where the "transition >= target OR documented
+engine-limited" policy is enforced.
 """
 from __future__ import annotations
 
@@ -43,6 +69,26 @@ import _path_layout as _pl
 
 
 DOCKER_IMAGE = "hpretl/iic-osic-tools:latest"
+
+# Foundry / ATE sign-off bar. Stuck-at coverage at 95 %+ is the widely-quoted
+# minimum foundry acceptance floor; 98 %+ is the common aggressive target.
+# Configurable via --min-coverage (may be set as high as 98/99).
+FOUNDRY_STUCK_AT_DEFAULT = 95.0
+# Transition (at-speed) coverage floors are typically a few points below the
+# stuck-at floor because at-speed test escapes are harder; 90 % is a common
+# foundry transition-fault target.
+FOUNDRY_TRANSITION_DEFAULT = 90.0
+
+# Keywords that, if present in `fault atpg --help`, would indicate the engine
+# advertises a transition / at-speed / delay-fault (two-pattern) capability.
+# Fault (cloudv-io) exposes none of these — its ATPG is single-pattern
+# combinational stuck-at only. Probed at run time; NEVER assumed.
+_TRANSITION_CAPABILITY_KEYWORDS = (
+    "transition", "at-speed", "at speed", "atspeed",
+    "launch-off-capture", "launch off capture", "launch-off-shift",
+    "delay fault", "delay-fault", "delayfault", "two-pattern",
+    "two pattern", "--slow", "--fast",
+)
 
 # Per-PDK defaults: verilog cell-model path (inside Docker) + DFF cell names.
 # pdk=custom reads paths from --cell-model-path and --dff-cells flags.
@@ -127,6 +173,169 @@ def _run_docker(
         return 127, "", "docker binary not found in PATH"
 
 
+# ── Transition (at-speed) fault model ──────────────────────────────────
+# A SECOND fault model alongside stuck-at. The mechanism (launch-off-capture
+# two-pattern at-speed test) is always emitted as a plan; the coverage NUMBER
+# is only reported if the OSS engine can actually run transition ATPG.
+
+_TRANSITION_PLAN_TEMPLATE = """\
+# Transition (at-speed) ATPG plan — launch-off-capture
+
+Design clock : {clock}
+Cut netlist  : {cut_rel}
+Cell model   : {cell_model}
+Target       : stuck-at-independent transition-fault coverage >= {target:.2f}%
+
+## Fault model
+Transition (a.k.a. delay / at-speed) faults model a node that is
+functionally correct but too SLOW: a slow-to-rise (STR) or slow-to-fall
+(STF) fault at each gate terminal. Detecting them requires a TWO-PATTERN
+test (an initialization vector V1 then a launch vector V2) applied so the
+transition is launched and captured at the rated (at-speed) clock period.
+
+## Launch-off-capture (LOC) mechanism
+1. Scan-in the initialization pattern V1 through the scan chain
+   (scan_enable = 1) — the same scan chain inserted for stuck-at.
+2. De-assert scan_enable (functional mode).
+3. Pulse the functional clock at the rated period to LAUNCH the transition
+   (V1 -> V2 combinational evolution) and CAPTURE the response one at-speed
+   cycle later.
+4. Scan-out the captured response and compare against the fault-free
+   expected value.
+(An alternative, launch-off-shift/LOS, launches from the last scan-shift
+edge; LOC is preferred because it needs no at-speed scan-enable.)
+
+## Engine capability
+Engine probed : Fault (cloudv-io/fault) `fault atpg`
+Supported     : {supported}
+{capability_line}
+
+## Honesty note
+{honesty_note}
+"""
+
+
+def _fault_supports_transition(project: Path,
+                               pdk_dir: Path | None = None
+                               ) -> tuple[bool, str]:
+    """Probe whether the Fault ATPG engine advertises a transition / at-speed
+    capability by grepping `fault atpg --help`. Returns (supported, reason).
+
+    Fault is a single-pattern combinational stuck-at engine and exposes no
+    transition flag, so this returns (False, <reason>) in practice. The probe
+    is honest — it never assumes support; it reads the tool's own help text.
+    """
+    ec, out, err = _run_docker(
+        project, ["fault", "atpg", "--help"], timeout=120, pdk_dir=pdk_dir)
+    help_text = (out + "\n" + err).lower()
+    if ec not in (0, 1, 2) or not help_text.strip():
+        # Could not run the probe (no docker / image). Report honestly as
+        # "unknown -> treated as unsupported" rather than faking capability.
+        return False, (
+            "could not probe `fault atpg --help` (engine/docker unavailable, "
+            f"exit={ec}); transition capability UNKNOWN — treated as "
+            "unsupported (no fabricated transition number)")
+    for kw in _TRANSITION_CAPABILITY_KEYWORDS:
+        if kw in help_text:
+            return True, (
+                f"`fault atpg --help` advertises a '{kw}' flag — transition "
+                "ATPG appears supported")
+    return False, (
+        "`fault atpg --help` exposes only single-pattern combinational "
+        "stuck-at ATPG (no transition / at-speed / launch-off-capture / "
+        "delay-fault / two-pattern flag) — the Fault engine cannot generate "
+        "at-speed patterns")
+
+
+def build_transition_report(supported: bool,
+                            reason: str,
+                            transition_target: float,
+                            plan_rel: str,
+                            measured_pct: float | None = None) -> dict:
+    """Pure assembler for the transition fault-model block. NEVER fabricates
+    a coverage number: if the engine is unsupported, coverage_pct stays None
+    and engine_limited=True with a documented reason.
+
+    chip-AGNOSTIC."""
+    if supported and measured_pct is not None:
+        ge = measured_pct >= transition_target
+        return {
+            "fault_model": "transition",
+            "supported": True,
+            "engine_limited": False,
+            "coverage_pct": round(measured_pct, 4),
+            "target_pct": transition_target,
+            "ge_target": ge,
+            "reason": reason,
+            "plan_file": plan_rel,
+        }
+    # Unsupported (or supported-but-no-number): honest engine-limited record.
+    return {
+        "fault_model": "transition",
+        "supported": bool(supported),
+        "engine_limited": True,
+        "coverage_pct": None,
+        "target_pct": transition_target,
+        "ge_target": None,
+        "reason": reason,
+        "plan_file": plan_rel,
+    }
+
+
+def run_transition_atpg(project: Path,
+                        cut_rel: str,
+                        cell_model: str,
+                        clock: str,
+                        transition_target: float,
+                        pdk_dir: Path | None = None,
+                        probe_fn=None) -> dict:
+    """Emit the launch-off-capture at-speed mechanism plan and (if the engine
+    supports it) a real transition-coverage number. Fault does not, so this
+    writes the plan + an honest engine_limited record.
+
+    `probe_fn(project, pdk_dir) -> (supported, reason)` is injectable for
+    testing; defaults to the real `fault atpg --help` probe.
+    """
+    probe = probe_fn or _fault_supports_transition
+    supported, reason = probe(project, pdk_dir)
+
+    plan_rel = "phase2/stage2/dft/transition_atpg_plan.md"
+    if supported:
+        capability_line = f"Capability     : {reason}"
+        honesty_note = (
+            "Engine reports transition capability. Coverage NUMBER below is a "
+            "real measurement from the at-speed ATPG run.")
+    else:
+        capability_line = f"Limitation     : {reason}"
+        honesty_note = (
+            "The at-speed pattern set is NOT generated because the open-source "
+            "Fault engine cannot do transition ATPG. Per DFT-honesty doctrine "
+            "we emit the mechanism/plan and record the engine limitation "
+            "rather than fabricate a transition-coverage number. A commercial "
+            "at-speed ATPG tool (or an OSS engine that gains delay-fault "
+            "support) is required to close this coverage.")
+
+    plan_text = _TRANSITION_PLAN_TEMPLATE.format(
+        clock=clock,
+        cut_rel=cut_rel,
+        cell_model=cell_model,
+        target=transition_target,
+        supported=str(supported),
+        capability_line=capability_line,
+        honesty_note=honesty_note,
+    )
+    try:
+        (project / plan_rel).parent.mkdir(parents=True, exist_ok=True)
+        (project / plan_rel).write_text(plan_text)
+    except OSError:
+        pass
+
+    # Fault has no transition mode, so we never obtain a measured number here.
+    measured = None
+    return build_transition_report(
+        supported, reason, transition_target, plan_rel, measured)
+
+
 def run_fault(
     project: Path,
     netlist_rel: str,
@@ -137,6 +346,9 @@ def run_fault(
     pdk_dir: Path | None = None,
     reset: str | None = None,
     reset_active_low: bool = False,
+    transition_target: float = FOUNDRY_TRANSITION_DEFAULT,
+    run_transition: bool = True,
+    transition_probe_fn=None,
 ) -> tuple[int, dict]:
     """Run Fault cut+atpg in the Docker container. Returns (exit, report_dict)."""
     pdk_cfg = PDK_CONFIG.get(pdk)
@@ -229,6 +441,33 @@ def run_fault(
         if m:
             coverage_ratio = float(m.group(1))
 
+    # ── Transition (at-speed) fault model — SECOND model, own target ──
+    transition = None
+    if run_transition:
+        transition = run_transition_atpg(
+            project,
+            cut_rel=cut_out,
+            cell_model=cell_model,
+            clock=clock,
+            transition_target=transition_target,
+            pdk_dir=pdk_dir,
+            probe_fn=transition_probe_fn,
+        )
+
+    # Human-readable transition summary line for the rpt.
+    if transition is None:
+        trans_line = "Transition     : SKIPPED (--no-transition)\n"
+    elif transition.get("engine_limited"):
+        trans_line = (
+            f"Transition %   : ENGINE-LIMITED (target >= "
+            f"{transition_target:.2f}%; see transition_atpg_plan.md)\n")
+    else:
+        tc = transition.get("coverage_pct")
+        trans_line = (
+            f"Transition %   : {tc:.2f} "
+            f"(target {transition_target:.2f}%, "
+            f"{'PASS' if transition.get('ge_target') else 'FAIL'})\n")
+
     # Write human-readable report
     (project / rpt_out).write_text(
         "Fault ATPG Coverage Report\n"
@@ -240,6 +479,7 @@ def run_fault(
         f"Covered / Total: {faults_covered} / {faults_total}\n"
         f"Target (min)  : {min_coverage:.2f}\n"
         f"Result        : {'PASS' if coverage_ratio >= min_coverage else 'FAIL'}\n"
+        f"{trans_line}"
         "\n"
         f"(coverage metadata: {cov_out})\n"
         f"(test vectors    : {tv_out})\n"
@@ -264,6 +504,15 @@ def run_fault(
         "atpg_exit": ec,
         "log_tail": atpg_log[-500:],
     }
+    if transition is not None:
+        report["transition"] = transition
+        # Flat mirror fields so a simple consumer/gate can read them without
+        # descending into the nested block.
+        report["transition_coverage_pct"] = transition.get("coverage_pct")
+        report["transition_target_pct"] = transition.get("target_pct")
+        report["transition_ge_target"] = transition.get("ge_target")
+        report["transition_supported"] = transition.get("supported")
+        report["transition_engine_limited"] = transition.get("engine_limited")
 
     return (0 if report["stuck_at_ge_target"] else 1), report
 
@@ -279,8 +528,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--pdk", default="m18e80pm180su",
                    help=f"PDK name. Supported: {', '.join(PDK_CONFIG.keys())}")
     p.add_argument("--pdk-dir", help="Path to PDK dir (mounted at /pdk for custom PDKs)")
-    p.add_argument("--min-coverage", type=float, default=80.0,
-                   help="Minimum stuck-at coverage %% required (default 80.0)")
+    p.add_argument("--min-coverage", type=float, default=FOUNDRY_STUCK_AT_DEFAULT,
+                   help="Minimum stuck-at coverage %% required — FOUNDRY-GRADE "
+                        f"default {FOUNDRY_STUCK_AT_DEFAULT:.0f}%% "
+                        "(set 98 for the aggressive target). Below the target "
+                        "the run FAILs (exit 1).")
+    p.add_argument("--transition-target", type=float,
+                   default=FOUNDRY_TRANSITION_DEFAULT,
+                   help="Minimum transition (at-speed) coverage %% target "
+                        f"(default {FOUNDRY_TRANSITION_DEFAULT:.0f}%%). Reported "
+                        "only if the OSS engine supports transition ATPG; "
+                        "otherwise honestly recorded as engine-limited.")
+    p.add_argument("--no-transition", action="store_true",
+                   help="Skip the transition (at-speed) fault-model pass "
+                        "entirely (stuck-at only).")
     p.add_argument("--tv-count", type=int, default=100,
                    help="Initial test-vector batch size (default 100)")
     p.add_argument("--json", help="Write report JSON to this path "
@@ -317,6 +578,8 @@ def main(argv: list[str] | None = None) -> int:
         pdk_dir=pdk_dir,
         reset=args.reset,
         reset_active_low=args.reset_active_low,
+        transition_target=args.transition_target,
+        run_transition=not args.no_transition,
     )
 
     json_path = Path(args.json) if args.json else (_pl.report_path(project, "dft/coverage.json"))
@@ -325,8 +588,17 @@ def main(argv: list[str] | None = None) -> int:
 
     cov = report.get("coverage_pct", 0.0)
     target = report.get("target_pct", 0.0)
-    print(f"fault_atpg_run: coverage={cov:.2f}%  target={target:.2f}%  "
+    print(f"fault_atpg_run: stuck-at coverage={cov:.2f}%  target={target:.2f}%  "
           f"stuck_at_ge_target={report.get('stuck_at_ge_target', False)}")
+    tr = report.get("transition")
+    if tr is not None:
+        if tr.get("engine_limited"):
+            print(f"fault_atpg_run: transition=ENGINE-LIMITED "
+                  f"(target={tr.get('target_pct')}%) — {tr.get('reason')}")
+        else:
+            print(f"fault_atpg_run: transition coverage={tr.get('coverage_pct')}%  "
+                  f"target={tr.get('target_pct')}%  "
+                  f"transition_ge_target={tr.get('ge_target')}")
     if exit_code != 0:
         print(f"  (see: {json_path})", file=sys.stderr)
     return exit_code
