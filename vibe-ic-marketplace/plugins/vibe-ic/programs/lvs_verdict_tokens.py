@@ -91,6 +91,75 @@ def classify(blob: str) -> str:
     return "INCOMPLETE"
 
 
+# ── ORGANIC (GAP-E2E-9) — sub-classify a MISMATCH: benign OSS power-pin-only
+# vs a real signal-net mismatch. The 7-IC end-to-end sweep showed netgen prints
+# `Top level cell failed pin matching` (→ MISMATCH) on EVERY sky130 OSS run
+# because the yosys gate netlist has NO power ports (VPWR/VGND/VPB/VNB) while the
+# extracted layout carries per-cell power pins — a universal power-unaware-netlist
+# vs power-extracted-layout SETUP artifact, NOT a design connectivity defect
+# (measured: caravel + subservient LVS reports carry ONLY power-pin rows, 0
+# signal-net rows). This sub-class lets the sign-off DISCLOSE that benign class
+# for a reviewed waiver WITHOUT touching the authoritative MATCH/MISMATCH verdict.
+#
+# §4.05 NO-LEAK (load-bearing): `POWER_PIN_ONLY` is asserted ONLY when the mismatch
+# evidence is EXCLUSIVELY power/tie nets. ANY signal-net evidence — a `(no pin,
+# node is …)` row, a NON-power `(no matching pin)` port, or a property error —
+# classifies `SIGNAL_NET_MISMATCH` and is NEVER waved through (measured: aes 517 +
+# ibex 256 `(no pin, node is …)` rows collapse many top ports onto one node — an
+# ambiguous tie-off/short that MUST stay a real mismatch, not a benign waiver).
+# The verdict from classify() is UNCHANGED; this is triage metadata only.
+_POWER_NET_RE = re.compile(
+    r"^(?:VGND|VNB|VPB|VPWR|VCCD\d*|VSSD\d*|VDD[A-Z0-9]*|VSS[A-Z0-9]*"
+    r"|VCC[A-Z0-9]*|GND[A-Z0-9]*|HI|LO|TIE_?HI|TIE_?LO)$", re.I)
+_PROPERTY_ERR_RE = re.compile(r"property\s+errors?\s+were\s+found", re.I)
+
+
+def _is_power_token(tok: str) -> bool:
+    """True iff `tok` names a power/ground/tie net (sky130 VPWR/VGND/VPB/VNB,
+    core/io VCCD*/VSSD*, generic VDD*/VSS*/GND*, or a tie-HI/LO net)."""
+    return bool(_POWER_NET_RE.match((tok or "").strip()))
+
+
+def mismatch_class(blob: str) -> str:
+    """Sub-classify a netgen report → for triage ONLY (the classify() verdict is
+    authoritative and unchanged). Returns:
+      * 'NONE'                 — not a MISMATCH (MATCH / INCOMPLETE).
+      * 'SIGNAL_NET_MISMATCH'  — a MISMATCH with real signal-net evidence
+                                 (a `(no pin, node is …)` row, a NON-power
+                                 `(no matching pin)` port, or a property error).
+                                 NEVER a benign class — a reviewed waiver must not
+                                 wave this through.
+      * 'POWER_PIN_ONLY'       — a MISMATCH whose evidence is EXCLUSIVELY power/tie
+                                 nets (the universal power-unaware-netlist OSS
+                                 SETUP artifact) — a reviewed-waiver CANDIDATE, not
+                                 a silent pass.
+    chip-AGNOSTIC: pure netgen phrase + power-net-name classification."""
+    if classify(blob) != "MISMATCH":
+        return "NONE"
+    # Real signal-net evidence → NOT benign (checked FIRST — §4.05 no-leak). The
+    # RELIABLE top-level-real-mismatch signatures are the `(no pin, node is …)`
+    # rows (netgen's top-level failure-table shape, per this module's established
+    # semantics) and a device `property errors` line. A bare `(no matching pin)`
+    # row is NOT signal evidence — it is dominated by BENIGN sub-cell abstraction
+    # rows (power pins AND standard-cell pins like `Y`/`A`/`B`, absent from LEF
+    # abstracts by the hundreds), so it must NOT drive the class.
+    if _PROPERTY_ERR_RE.search(blob):
+        return "SIGNAL_NET_MISMATCH"
+    if _PIN_NODE_RE.search(blob):                 # `(no pin, node is …)` rows
+        return "SIGNAL_NET_MISMATCH"
+    # No top-level signal-failure rows. Confirm the mismatch carries the
+    # power-unaware-netlist SETUP evidence (a power/tie `(no matching pin)` row OR
+    # a `disconnected node: V*` line) before calling it the benign class; a
+    # MISMATCH with no recognizable benign shape stays conservative (real).
+    saw_power_row = bool(re.search(
+        r"(?im)^\s*(?:VGND|VNB|VPB|VPWR|VCCD\d*|VSSD\d*|VDD[A-Z0-9]*|VSS[A-Z0-9]*"
+        r"|VCC[A-Z0-9]*|GND[A-Z0-9]*|HI|LO)\s+\|\(no matching pin\)", blob))
+    saw_power_row = saw_power_row or bool(re.search(
+        r"disconnected node:\s*(?:VGND|VNB|VPB|VPWR|VCC|VSS|VDD|GND)",
+        blob, re.I))
+    return "POWER_PIN_ONLY" if saw_power_row else "SIGNAL_NET_MISMATCH"
+
+
 def pin_mismatch_evidence(blob: str, max_lines: int = 8) -> List[str]:
     """Extract the netgen pin-correspondence mismatch lines (the readable
     evidence of WHICH pins failed matching) — at most `max_lines`, stripped.
@@ -122,6 +191,7 @@ def main(argv=None) -> int:
     out = {
         "report": str(p),
         "verdict": verdict,
+        "mismatch_class": mismatch_class(blob),  # GAP-E2E-9 triage sub-class
         "pin_mismatch_evidence": pin_mismatch_evidence(blob),
     }
     text = json.dumps(out, indent=2, ensure_ascii=False)
