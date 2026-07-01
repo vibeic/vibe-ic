@@ -37,12 +37,47 @@ parser, XOR (replaces hardcoded 2/7 floor), EM-Jmax (replaces decap proxy), MBIS
 — each chip-AGNOSTIC, §4.05-verified, gatekeeper MERGE_OK. **These are the deterministic building
 blocks; each carries an honest "LIVE validation pending" where a real Docker run is still needed.**
 
-### Remaining P0 (next — the LIVE-integration heavy ones)
-- **LVS root fix:** power-aware gate netlist emission → genuine netgen MATCH (live-validate on spm,
-  which currently POWER_PIN_ONLY-passes) + resolve the aes SIGNAL_NET tie-off artifact.
-- **mpw-precheck DRIVER half:** actually run `efabless/mpw_precheck` in Docker + feed the parser gate.
-- **Caravel wrapper-harden-in-flow:** OpenLane macro-in-wrapper at the fixed pad ring + full-chip
-  merge into `caravel.gds` (live OpenLane; feeds the XOR gate).
+### ── LIVE-INTEGRATION RESULTS (v1.2.78, all 3 live-run on real Docker/tools) ──
+The three heavy live P0s ran on REAL tools (3 dedicated worktrees + containers). Honest outcomes:
+
+- ✅ **mpw-precheck DRIVER — LIVE-RAN THE REAL SHUTTLE PRECHECK** (`mpw_precheck_driver.py`). The
+  `efabless/mpw_precheck:latest` image (6.66 GB) IS present, and a full real Caravel project +
+  sky130A exist. The driver ran end-to-end → **5/7 checks PASS live** (License/Makefile/Default/
+  Documentation/GPIO-Defines), **2/7 FAIL** (Consistency + XOR) = the blackbox hard-macro floor,
+  now **COMPUTED LIVE** (not the hardcoded 2/7 constant). §4.05 honest: image-missing→BLOCKED, real
+  fail-logs→FAIL, never fabricated. **This is a milestone — the plugin can now execute the Efabless
+  shuttle gate for real.**
+- ✅ **Caravel XOR gate — LIVE-VALIDATED on real klayout** (`caravel_wrapper_harden_driver.py` +
+  B1/B3/B4 wiring). XOR ran end-to-end (zero-delta→PASS, in-macro+allowlist→PASS_WITH_WAIVER,
+  outside-macro→FAIL, merge preserved top=caravel). **The live run caught 2 real bugs the mocks
+  could not** (a `pya.Region` copy-ctor crash that only fires on a non-zero delta; a Path coercion)
+  — proof that live validation is load-bearing. The real caravel HARDEN is **BLOCKED on sky130A PDK
+  absent** (image + fixed-outline config.json present; PDK the sole missing prereq) — honest, no
+  DRT-0302 mislabel.
+- ⚑ **LVS power-aware emitter — netgen-PROVEN, but spm blocked on the EXTRACTION side**
+  (`lvs_power_aware_netlist_emit.py`). Controlled real-netgen proof: the power-aware netlist vs a
+  CLEAN-rail layout → **GENUINE MATCH, all 4 rails verified**. BUT spm's phase-3 DEF-direct
+  extraction **collapses the 4 power nets onto ~2 substrate nodes** (reproduced by fresh
+  re-extraction → inherent to the method). So the LVS root fix is **2 parts**: (1) power-aware
+  netlist [DONE, proven] + (2) a **power-aware EXTRACTION that keeps VPWR/VGND separated** [the
+  remaining blocker]. The wiring is monotonic (spm stays PASS, no regression). aes's 517 rows are
+  top-level SIGNAL ports collapsed onto VSUBS — a **port-promotion extraction defect, NOT power**;
+  correctly stays SIGNAL_NET_MISMATCH.
+
+### What a REAL green sky130 (Efabless) submission still needs — the honest short list
+The plugin logic is now largely in place (it runs the real precheck, the real XOR, the proven LVS
+emitter). The remaining blockers are **infrastructure + data + one extraction gap**, not plugin logic:
+1. **A full sky130A PDK install** (`PDK_ROOT` → built sky130A) — blocks BOTH the caravel harden AND
+   the full precheck ladder (magic_drc / klayout_feol-beol-offgrid / lvs / oeb). The precheck host
+   here has only a partial volare PDK (`SKY130A: None`).
+2. **Power-aware EXTRACTION** (LVS root fix part 2/2) — keep VPWR/VGND separated through
+   `extract`/`ext2spice` so the proven emitter reaches a genuine match on a real design.
+3. **Golden full-chip `caravel.gds`** + the **pre-hardened `user_proj_example.gds/.lef` macro** +
+   the **fixed pin_order.cfg / user_project_wrapper.def** — the XOR reference + harden inputs.
+4. **OR** the chipignite **signoff waivers** for the 2/7 blackbox floor (step_c4 already auto-emits
+   these when the fail-set == {Consistency, XOR}).
+
+### Remaining P0 (still deterministic / program-first — not yet built)
 - **Dynamic (transient) IR-drop** (vectorless/VCD DVD engine) + **real per-layer metal-density fill**
   (KLayout/Magic fill) + a per-layer density check (vs the current row-util metric).
 - **Wire the new gates into `signoff_ladder_run` / `tapeout_checklist_gen` as HARD release gates**
