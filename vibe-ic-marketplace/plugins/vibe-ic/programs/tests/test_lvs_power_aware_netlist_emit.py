@@ -137,6 +137,49 @@ def test_unknown_pdk_is_skipped_unchanged():
     assert out == _SKY_NETLIST      # text untouched on an unrecognised PDK
 
 
+# ── LVS ROOT FIX (part 2): tie_wells_to_rails (physical well-tie) ────────────
+def test_tie_wells_to_rails_sky130():
+    # The wells tie to the rails and only the two real rails are declared —
+    # the physical model that matches a DEF-direct extraction (VPB→VPWR,
+    # VNB→VGND). Default behaviour (four distinct rails) is unchanged.
+    out, stats = _emit(_SKY_NETLIST, tie_wells_to_rails=True)
+    assert stats["instances_patched"] == 3
+    # only the two real rails are declared as wires.
+    assert re.search(r"\bwire\s+VPWR,\s*VGND\s*;", out)
+    assert not re.search(r"\bwire\s+VPWR,\s*VGND,\s*VPB,\s*VNB\s*;", out)
+    # every std-cell VPB pin ties to VPWR and VNB pin ties to VGND.
+    for cell in ("_222_", "_223_", "spare_inverter_0"):
+        m = re.search(re.escape(cell) + r"\s*\((?P<conn>.*?)\)\s*;", out, re.S)
+        conn = m.group("conn")
+        assert ".VPWR(VPWR)" in conn and ".VGND(VGND)" in conn
+        assert ".VPB(VPWR)" in conn and ".VNB(VGND)" in conn
+        assert ".VPB(VPB)" not in conn and ".VNB(VNB)" not in conn
+
+
+def test_tie_wells_to_rails_gf180():
+    out, stats = _emit(_GF_NETLIST, pdk="gf180mcuD", tie_wells_to_rails=True)
+    assert re.search(r"\bwire\s+VDD,\s*VSS\s*;", out)
+    # gf180: n-well (VNW) → VDD, p-well (VPW) → VSS.
+    assert ".VNW(VDD)" in out and ".VPW(VSS)" in out
+    assert ".VNW(VNW)" not in out and ".VPW(VPW)" not in out
+
+
+def test_tie_wells_default_still_four_distinct_rails():
+    # Regression guard: the DEFAULT (tie_wells_to_rails=False) is byte-identical
+    # to the pre-part-2 behaviour — four distinct name-for-name rails.
+    out, _ = _emit(_SKY_NETLIST, tie_wells_to_rails=False)
+    assert re.search(r"\bwire\s+VPWR,\s*VGND,\s*VPB,\s*VNB\s*;", out)
+    assert ".VPB(VPB)" in out and ".VNB(VNB)" in out
+
+
+def test_tie_wells_signal_pins_preserved_section_4_05():
+    # §4.05: even with wells tied, every ORIGINAL signal connection survives.
+    out, _ = _emit(_SKY_NETLIST, tie_wells_to_rails=True)
+    assert ".A(rst)" in out and ".Y(p))" in out
+    assert ".A1(y)" in out and ".A2(x[0])" in out and ".B1(clk)" in out
+    assert "wire _000_;" in out
+
+
 def test_top_selects_only_named_module():
     two = _SKY_NETLIST + "\nmodule other (a);\n input a;\n" \
         " sky130_fd_sc_hd__buf_1 b0 (.A(a), .X(a));\nendmodule\n"
@@ -272,9 +315,13 @@ def test_wiring_power_aware_match_yields_power_verified(tmp_path, monkeypatch):
     assert res.status == "PASS"
     assert res.extras.get("finding") == "LVS_MATCH_POWER_VERIFIED"
     assert res.extras.get("power_aware_signoff") is True
-    # the power-aware netlist was emitted and carries PG connectivity.
-    pa = R._pl.extracted_dir(project) / f"{top}_pnr_pwraware.v"
-    assert pa.is_file() and ".VPWR(VPWR)" in pa.read_text()
+    # LVS ROOT FIX (part 2): the WELL-TIED power-aware netlist is tried FIRST
+    # (matches a DEF-direct extraction whose wells are tied to the rails) — it
+    # matched, so it is the emitted netlist and carries the physical well-tie.
+    pa = R._pl.extracted_dir(project) / f"{top}_pwraware_welltied.v"
+    txt = pa.read_text()
+    assert pa.is_file() and ".VPWR(VPWR)" in txt
+    assert ".VPB(VPWR)" in txt and ".VNB(VGND)" in txt   # wells tied to rails
 
 
 def test_wiring_power_aware_mismatch_returns_none_falls_through(

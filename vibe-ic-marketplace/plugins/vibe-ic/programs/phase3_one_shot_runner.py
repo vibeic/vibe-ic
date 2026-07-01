@@ -51,6 +51,7 @@ import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
 import lvs_verdict_tokens as _lvt  # #524 — shared netgen terminal-verdict tokens
 import lvs_netgen_setup_emit as _lvs_setup  # GAP-E2E-9 — power-net globalisation
 import lvs_power_aware_netlist_emit as _lvs_pa  # GAP-E2E-9 ROOT — power-aware netlist
+import lvs_power_aware_extract_tcl as _lvs_paext  # LVS ROOT (extract side) — power-aware DEF extraction
 import sdc_constraints as _sdc  # #554 — shared staged-SDC ground-truth helpers
 
 
@@ -7590,32 +7591,55 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
     caller falls through to the UNCHANGED plain-netlist path. This makes the
     power-aware result STRICTLY MONOTONIC — it can only UPGRADE a power-blind or
     POWER_PIN_ONLY outcome to a genuine power-verified match, never regress it,
-    and it never converts a SIGNAL_NET_MISMATCH (§4.05)."""
+    and it never converts a SIGNAL_NET_MISMATCH (§4.05).
+
+    LVS ROOT FIX (part 2) — a routed sky130/gf180 DEF ties the wells to the rails
+    at the PDN (the power SPECIALNET carries the VPB pins, the ground SPECIALNET
+    the VNB pins), so a physically-correct extraction gives TWO power nets (VPWR
+    incl VPB, VGND incl VNB), not four. We therefore try a WELL-TIED power-aware
+    netlist FIRST (`.VPB(VPWR)`, `.VNB(VGND)` — the physical model that matches
+    such a layout), and fall back to the four-distinct-rail netlist for any flow
+    whose extracted layout keeps the wells separate. Both are strictly monotonic
+    (a non-match returns None → plain path)."""
     ext_dir = _pl.extracted_dir(project)
-    pa_netlist = ext_dir / f"{top}_pnr_pwraware.v"
-    try:
-        stats = _lvs_pa.emit_to_file(netlist, pdk.name, pa_netlist, top=top)
-    except Exception:  # nosec — a bad netlist must never break the plain path
-        return None
-    if stats.get("modules_patched", 0) <= 0 or not pa_netlist.is_file():
-        return None
     pa_rpt = project / "reports" / "phase3" / "lvs_power_aware.rpt"
     pa_rpt.parent.mkdir(parents=True, exist_ok=True)
-    pa_nl_c = _to_container_path(str(pa_netlist), container)
     pa_rpt_c = _to_container_path(str(pa_rpt), container)
-    pa_cmd = (
-        f"export PATH={TOOLS_IN_CONTAINER}/netgen/bin:"
-        f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
-        f"netgen -batch lvs \"{sp_c} {lay_top}\" \"{pa_nl_c} {top}\" "
-        f"{shlex.quote(netgen_setup)} {pa_rpt_c}")
-    try:
-        _rc, pa_out, pa_err = _docker_exec(container, pa_cmd, timeout=14400)
-    except Exception:  # nosec — netgen crash on the pre-attempt is non-fatal
-        return None
-    pa_txt = pa_rpt.read_text(errors="replace") if pa_rpt.is_file() else ""
-    pa_blob = (pa_out or "") + "\n" + (pa_err or "") + "\n" + pa_txt
-    if _lvt.classify(pa_blob) != "MATCH":
+
+    def _attempt(tie_wells: bool) -> Optional[Tuple[Path, Dict[str, Any], str]]:
+        """Emit a power-aware netlist (well-tied or 4-rail), run netgen against
+        the extracted layout, return (netlist, stats, report_text) on a genuine
+        MATCH else None. Isolated so the two models can't cross-contaminate."""
+        suffix = "pwraware_welltied" if tie_wells else "pwraware"
+        pa_nl = ext_dir / f"{top}_{suffix}.v"
+        try:
+            st = _lvs_pa.emit_to_file(netlist, pdk.name, pa_nl, top=top,
+                                      tie_wells_to_rails=tie_wells)
+        except Exception:  # nosec — a bad netlist must never break the plain path
+            return None
+        if st.get("modules_patched", 0) <= 0 or not pa_nl.is_file():
+            return None
+        nl_c = _to_container_path(str(pa_nl), container)
+        cmd = (
+            f"export PATH={TOOLS_IN_CONTAINER}/netgen/bin:"
+            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+            f"netgen -batch lvs \"{sp_c} {lay_top}\" \"{nl_c} {top}\" "
+            f"{shlex.quote(netgen_setup)} {pa_rpt_c}")
+        try:
+            _rc, out, err = _docker_exec(container, cmd, timeout=14400)
+        except Exception:  # nosec — netgen crash on the pre-attempt is non-fatal
+            return None
+        txt = pa_rpt.read_text(errors="replace") if pa_rpt.is_file() else ""
+        blob = (out or "") + "\n" + (err or "") + "\n" + txt
+        if _lvt.classify(blob) != "MATCH":
+            return None
+        return pa_nl, st, txt
+
+    # Well-tied model FIRST (matches a DEF-direct extraction), 4-rail as fallback.
+    _res = _attempt(tie_wells=True) or _attempt(tie_wells=False)
+    if _res is None:
         return None                         # no genuine match → fall through
+    pa_netlist, stats, pa_txt = _res
     rails = ", ".join(stats.get("rails", []))
     npatch = stats.get("instances_patched", 0)
     # Genuine POWER-VERIFIED match — copy the power-aware report to the canonical
@@ -7672,7 +7696,30 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     ext_dir.mkdir(parents=True, exist_ok=True)
     spice_out = ext_dir / f"{top}_extracted.sp"
     tcl = ext_dir / f"ext2spice_{top}.tcl"
-    tcl.write_text(_MAGIC_EXT2SPICE_TCL)
+    # ── LVS ROOT FIX (extract side) — POWER-AWARE DEF extraction (§4.05-safe). ──
+    # The plain recipe collapses the four sky130 power nets onto ~2 MIS-named
+    # nodes (the ground rail + its VNB taps → the substrate node `VSUBS`; the
+    # power rail + its VPB n-well → a leaf-port name like `_567_/VPB`), so netgen
+    # — which name-matches `global` nets — can never verify the power network
+    # against a power-aware schematic whose rails are `VGND`/`VPWR`. The emitter
+    # seeds the ground-rail substrate name (`set SUB <ground>`, resolved lazily
+    # at extract time) and paints the power-rail name onto its DEF stripe
+    # geometry (`label <power> c <layer>`), so the extracted rails keep their
+    # true names. It is PDK-GATED and DEF-DERIVED (chip-AGNOSTIC): on an
+    # unrecognised PDK or a DEF with no usable power SPECIALNET geometry it
+    # returns the UNCHANGED recipe — strict fall-through, no regression. §4.05:
+    # it only RENAMES power/ground nets the layout already has; a signal-net
+    # mismatch is untouched and still FAILs downstream.
+    extract_tcl = _MAGIC_EXT2SPICE_TCL
+    try:
+        _def_txt = def_file.read_text(errors="replace")
+        _pa_tcl, _pa_ext_stats = _lvs_paext.build_power_aware_extraction_tcl(
+            _MAGIC_EXT2SPICE_TCL, pdk.name, _def_txt, top=top)
+        if _pa_ext_stats.get("power_aware"):
+            extract_tcl = _pa_tcl
+    except Exception:  # nosec — a bad DEF/PDK must never break the plain path
+        pass
+    tcl.write_text(extract_tcl)
     tlef_c = _to_container_path(str(pdk.tech_lef), container)
     clef_c = _to_container_path(str(pdk.cell_lef), container)
     # `eval`-ed inside the TCL; empty string → no-op when no macro LEFs.
