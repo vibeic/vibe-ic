@@ -815,12 +815,20 @@ def _load_synth_scored_map(path) -> Dict[str, bool]:
 
 
 def _load_expected_files_map(path) -> Dict[str, List[str]]:
-    """{id: [expected rtl/*.sv, …]} from a CVDP dataset JSONL — the
-    AUTHORITATIVE per-id list of files the official harness writes the response
-    into (the record's `output.context` keys; values may be blank in the public
-    set but the KEYS name the deliverable files). Used to split a single-blob
-    completion for a MULTI-FILE problem so the scorer does not duplicate every
-    module into every slot. chip-AGNOSTIC: pure file-path structure."""
+    """{id: [expected rtl/*.sv, …]} from a CVDP dataset JSONL, read ONLY from the
+    record's `input.context` keys (a legitimate model input).
+
+    OFFICIAL-COMPLIANCE: the file layout that the official harness writes into
+    lives in `output.context` (the reference-solution field, values stripped in
+    the public set) and in the harness `.env` VERILOG_SOURCES — BOTH are held back
+    from the model (README_NON_AGENTIC; paper §2). So the gate NO LONGER reads
+    `output.context`. For a MODIFY-style multi-file problem the deliverable layout
+    is carried by `input.context` (the existing rtl/*.sv the author is handed —
+    provided to the model), which is the compliant source used here. A brand-new
+    multi-file design whose file layout is stated nowhere in prompt+context is an
+    ACCEPTED under-specification floor: the gate cannot split it and emits a bare
+    blob (the author should emit a `{"code":[…]}` code-dict when the prompt implies
+    separate files). chip-AGNOSTIC: pure file-path structure."""
     out: Dict[str, List[str]] = {}
     p = Path(path)
     if not p.is_file():
@@ -836,11 +844,11 @@ def _load_expected_files_map(path) -> Dict[str, List[str]]:
         if not isinstance(d, dict):
             continue
         rid = d.get("id")
-        oc = (d.get("output") or {}).get("context") \
-            if isinstance(d.get("output"), dict) else None
-        if rid is None or not isinstance(oc, dict):
+        ic = (d.get("input") or {}).get("context") \
+            if isinstance(d.get("input"), dict) else None
+        if rid is None or not isinstance(ic, dict):
             continue
-        rtl = [k for k in oc
+        rtl = [k for k in ic
                if isinstance(k, str) and k.lower().endswith(_RTL_SUFFIXES)]
         if len(rtl) > 1:                      # only multi-file ids are relevant
             out[str(rid)] = sorted(rtl)
@@ -1819,14 +1827,13 @@ def _load_context_waivers(path):
         if rid is None:
             continue
         texts: List[str] = []
-        # harness.files FIRST (the authoritative location of lint_config.vlt) …
-        h = d.get("harness")
-        hfiles = h.get("files") if isinstance(h, dict) else None
-        if isinstance(hfiles, dict):
-            texts += [v for k, v in hfiles.items()
-                      if isinstance(k, str) and isinstance(v, str)
-                      and k.lower().endswith(".vlt")]
-        # … then any input.context / top-level context .vlt.
+        # OFFICIAL-COMPLIANCE — the OFFICIAL lint waiver (`src/lint_config.vlt`)
+        # lives in `harness.files`, which is NOT provided to the model
+        # (README_NON_AGENTIC; paper §2). The gate NO LONGER reads it. Only a
+        # `.vlt` carried in `input.context` (a legitimate model input) is honored
+        # here; absent that, the gate cannot know the official lint bar, so the
+        # verilator lint check is demoted to ADVISORY at its call site (§4.05 — it
+        # must not false-block a completion clean under the hidden waiver).
         inp = d.get("input")
         ctx = inp.get("context") if isinstance(inp, dict) else None
         if ctx is None:
@@ -3224,8 +3231,18 @@ def main(argv=None) -> int:
                         _rid_s, out_rec.get("completion", ""),
                         context_waivers.get(_rid_s), harness_tops.get(_rid_s),
                         _vwd)
-                    entry["lint"] = _vnote
-                    if not _vok:
+                    # OFFICIAL-COMPLIANCE — the official lint bar is the harness
+                    # `.vlt` waiver, which the gate no longer reads. Without it the
+                    # gate's bare `-Wall` bar is STRICTER than the official one, so
+                    # a BLOCK here would §4.05-false-block a completion that is
+                    # clean under the hidden waiver. The verilator lint check is
+                    # therefore ADVISORY-only (WARN, never BLOCK) unless an
+                    # input.context `.vlt` supplied the authoritative bar.
+                    _have_ctx_waiver = bool(context_waivers.get(_rid_s))
+                    entry["lint"] = _vnote + (
+                        "" if _have_ctx_waiver
+                        else " (advisory — official .vlt waiver withheld from model)")
+                    if not _vok and _have_ctx_waiver:
                         ok = False
                         entry["verdict"] = "BLOCKED"
                         entry["lint_block"] = _vnote
