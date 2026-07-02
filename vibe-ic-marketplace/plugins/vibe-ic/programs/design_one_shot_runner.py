@@ -1846,8 +1846,16 @@ def step_rtl_gen(project: Path, ic_class: str) -> StepResult:
         n_lessons = 0
         try:
             stage1 = _pl.phase2_stage1_dir(project)
-            n_lessons = _lesson_digest.render_lesson_digest(stage1)
-            if n_lessons:
+            # Pass the design's spec prose so the digest ALSO appends the
+            # relevant IC Expert DB design-class knowledge for THIS design
+            # (structured advisory layer; chip-AGNOSTIC; never overrides a gate).
+            # Same general path serves any Phase-1 doc — not benchmark-specific.
+            try:
+                _spec = _gather_spec_text(project)
+            except Exception:
+                _spec = ""
+            n_lessons = _lesson_digest.render_lesson_digest(stage1, prompt_text=_spec)
+            if n_lessons or (stage1 / "lessons.md").is_file():
                 digest_path = str(stage1 / "lessons.md")
         except Exception:
             pass

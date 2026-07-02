@@ -84,37 +84,62 @@ _DIGEST_HEAD = (
     "otherwise.\n\n")
 
 
+def _ic_expert_db_digest(prompt_text: str, k: int = 5) -> str:
+    """Best-effort: append the RELEVANT IC Expert DB design-class knowledge for
+    this design's prompt. The IC Expert DB is the structured, chip-AGNOSTIC
+    knowledge layer distilled from proven-correct designs — it ADVISES the
+    author (never overrides a gate). Returns "" if the DB / query module is
+    absent or nothing matches, so it never blocks the `### Skill:` digest."""
+    if not prompt_text or not prompt_text.strip():
+        return ""
+    try:
+        import ic_expert_db_query as _db  # sibling program (general-core)
+    except Exception:  # noqa: BLE001
+        return ""
+    try:
+        hits = _db.query(prompt_text, k=k)
+        return _db.render(hits)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def render_lesson_digest(run_p: Path,
-                         expert_md: Path = EXPERT_AGENT_MD) -> int:
+                         expert_md: Path = EXPERT_AGENT_MD,
+                         prompt_text: str = "") -> int:
     """Render every ACTIVE `### Skill:` section (retired `### ~~Skill:`
     strikethrough sections excluded) of ``expert_md`` into ``run_p/lessons.md``.
 
-    Deterministic extraction — no LLM. Returns the number of lessons written
-    (0 if the corpus file is missing or has no active lessons; the file is NOT
-    written in that case).
+    When ``prompt_text`` is supplied, ALSO append the relevant IC Expert DB
+    design-class knowledge for this design (structured advisory layer). Both
+    sources are chip-AGNOSTIC and consumed by the SAME general spec-to-rtl path.
+
+    Deterministic extraction — no LLM. Returns the number of `### Skill:`
+    lessons written (0 if the corpus file is missing or has no active lessons
+    AND the DB digest is empty; the file is NOT written in that case).
     """
-    if not expert_md.is_file():
-        return 0
     lessons: list[str] = []
-    cur: list[str] | None = None
-    for line in expert_md.read_text(errors="replace").splitlines():
-        if line.startswith("### "):
-            if cur:
-                lessons.append("\n".join(cur).rstrip())
-            cur = [line] if line.startswith("### Skill:") else None
-            continue
-        if line.startswith("## ") or line.startswith("# "):
-            if cur:
-                lessons.append("\n".join(cur).rstrip())
-            cur = None
-            continue
-        if cur is not None:
-            cur.append(line)
-    if cur:
-        lessons.append("\n".join(cur).rstrip())
-    if not lessons:
+    if expert_md.is_file():
+        cur: list[str] | None = None
+        for line in expert_md.read_text(errors="replace").splitlines():
+            if line.startswith("### "):
+                if cur:
+                    lessons.append("\n".join(cur).rstrip())
+                cur = [line] if line.startswith("### Skill:") else None
+                continue
+            if line.startswith("## ") or line.startswith("# "):
+                if cur:
+                    lessons.append("\n".join(cur).rstrip())
+                cur = None
+                continue
+            if cur is not None:
+                cur.append(line)
+        if cur:
+            lessons.append("\n".join(cur).rstrip())
+    db_digest = _ic_expert_db_digest(prompt_text)
+    if not lessons and not db_digest:
         return 0
-    body = _scrub_design_identifiers("\n\n".join(lessons))
+    body = _scrub_design_identifiers("\n\n".join(lessons)) if lessons else ""
     run_p.mkdir(parents=True, exist_ok=True)
-    (run_p / "lessons.md").write_text(_DIGEST_HEAD + body + "\n")
+    out = _DIGEST_HEAD + body + ("\n\n" if body else "") + db_digest + "\n"
+    (run_p / "lessons.md").write_text(out)
     return len(lessons)
