@@ -2261,7 +2261,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **When to apply**: Any multi-requester arbiter/mux where some requesters may be idle/undriven; any RAM/register read that can occur before the first write. Unless the TB guarantees every input is driven and every location written before read.
 
-**What to do**: Write arbitration as procedural if/else PRIORITY — test the winning requester first with a bare `if (valid)` and make the other the fallback; avoid `!other_valid` terms. Reset or initialize every register/array (and any registered memory-read output) whose value can be sampled before its first write, so X never reaches a value-reading TB.
+**What to do**: Write arbitration as procedural if/else PRIORITY — test the winning requester first with a bare `if (valid)` and make the other the fallback; avoid `!other_valid` terms. Reset or initialize every register/array (and any memory-fed output register) whose value can be sampled before its first write, so X never reaches a value-reading TB. (This is purely an X-initialisation point — the memory read LATENCY itself, combinational vs one-cycle, is orthogonal and follows the spec; do not read this as prescribing either.)
 
 **Why this is GENERAL**: X-pessimism robustness (procedural-if over bitwise, reset-before-first-read) is standard defensive RTL that recurs across arbiters, FIFOs, and memory-fed datapaths. *why_not_bucket_a*: a program cannot tell which inputs the TB leaves undriven or which locations are read-before-write — that requires reading the TB's drive/sequence behavior. (Extends "a value sampled at the first post-reset edge must be reset-initialised" to the X-crash case.)
 
