@@ -235,6 +235,38 @@ routing (upstream flow gap) + 87 congestion DRC; ibex needs a multi-corner re-Pn
 timing; sha256 v1264 route was incomplete; subservient/ibex LVS port-alias/port-short are design or a
 separate (routed-DEF) extraction question; caravel pilot-wrapper isn't caravel-pinout-conformant.
 
+## ── aes + ibex ROOT-CAUSE FIXES (v1.2.86) — both distilled + LIVE-validated ──
+The two residuals above turned out to be a chip-agnostic PLUGIN fix (aes) and a real per-IC floor +
+a general plugin improvement (ibex). Both traced LIVE, not assumed.
+
+**aes — the "write_def drops signal routing" residual was actually an UNROUTABLE-CELL root cause (fixed).**
+Traced live: `_dont_use_tcl` depended ENTIRELY on a PDK exclude file
+(`.../openlane/sky130_fd_sc_hd/drc_exclude.cells`) that iic-osic-tools does NOT ship → ZERO exclusions →
+repair inserted 41 `probe_p_8` characterization cells → TritonRoute can't pin-access a probe cell →
+DRT-0085 ×26 aborts the route BEFORE any net is routed → write_def emits a signal-unrouted DEF. New
+`_dont_use_family_fallback_tcl` excludes the unroutable characterization/low-power FAMILIES
+(`*__probe_*`/`*__probec_*`/`*__lpflow_*`) via OpenROAD `get_lib_cells` over the loaded liberty.
+LIVE: DRT-0085 26→0, probe cells 41→0, signal `+ROUTED` 0→39,003, the v1.2.85 guard fires→does-NOT-fire,
+netgen reaches a real compare. spm unchanged. **Same DRT-0085-on-probe root also explains sha256's
+incomplete route — a cross-IC chip-agnostic cause now fixed for every design.** §4.05: only lets a real
+route complete; never fabricates a match.
+
+**ibex — HONEST FLOOR + a general plugin improvement.** DRV-aware multi-corner ECO recovered +20.3 ns at
+ss (−35.78 → −15.49) but ibex@20ns-ss does NOT close at ANY ss corner even after a full re-repair (the
+slew fix recovered only 2.2 ns; the bulk is real slow-corner path delay). Achievable clock ~28 MHz
+(1v40) / ~42 MHz (1v60) — reported AS a relaxation, never as closing 20 ns. So the 20ns-ss residual is a
+REAL per-IC floor. The multi-corner-aware ECO (`_build_eco_repair_tcl` + `corner_libs`, ss-first) is a
+genuine chip-agnostic plugin improvement (helps other ICs whose ss violation is within recovery range) +
+it fixed 2 latent ECO-TCL bugs (ODB-0251 / DPL-0027) that would have aborted the emitted ECO if run.
+§4.05: ss VIOLATED before+after; DRV limits from real liberty; no fabricated closure.
+
+**Cross-IC latent bugs caught by the live sweep + fixes (v1.2.75→86):** the MCP-DRC vacuous stub; the
+`set_timing_derate` one-command rejection (silently failed the v1.2.76 rigor report); the XOR
+`pya.Region` copy-ctor crash; run_harden's stale-GDS false-PASS; the ECO-TCL ODB-0251/DPL-0027 aborts;
+the `drc_exclude.cells`-missing → unroutable-probe-cell DRT-0085. Every one surfaced only under LIVE
+tool execution — the load-bearing evidence that live validation (not mock/self-report) is what makes the
+tapeout-signoff surface honest.
+
 ## THE reframing that changes everything (Efabless = no Calibre gap)
 
 The one **real, free** tapeout path for sky130 is the **Efabless / chipIgnite / Google-sky130 open
