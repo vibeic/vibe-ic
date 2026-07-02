@@ -260,12 +260,33 @@ genuine chip-agnostic plugin improvement (helps other ICs whose ss violation is 
 it fixed 2 latent ECO-TCL bugs (ODB-0251 / DPL-0027) that would have aborted the emitted ECO if run.
 §4.05: ss VIOLATED before+after; DRV limits from real liberty; no fabricated closure.
 
-**Cross-IC latent bugs caught by the live sweep + fixes (v1.2.75→86):** the MCP-DRC vacuous stub; the
+**Cross-IC latent bugs caught by the live sweep + fixes (v1.2.75→87):** the MCP-DRC vacuous stub; the
 `set_timing_derate` one-command rejection (silently failed the v1.2.76 rigor report); the XOR
 `pya.Region` copy-ctor crash; run_harden's stale-GDS false-PASS; the ECO-TCL ODB-0251/DPL-0027 aborts;
-the `drc_exclude.cells`-missing → unroutable-probe-cell DRT-0085. Every one surfaced only under LIVE
-tool execution — the load-bearing evidence that live validation (not mock/self-report) is what makes the
-tapeout-signoff surface honest.
+the `drc_exclude.cells`-missing → unroutable-probe-cell DRT-0085; the `±5%`-unescaped %-format
+`TypeError` that crashed EVERY sky130A end-to-end run at the final canonicalize step (v1.2.85
+regression, caught on the sha256 re-run). Every one surfaced only under LIVE tool execution — the
+load-bearing evidence that live validation (not mock/self-report) is what makes the tapeout-signoff
+surface honest.
+
+## ── sha256 CROSS-IC FIX CONFIRMED + caravel PORTS gap CLOSED (v1.2.87) ──
+- **sha256 re-run (LIVE, v1.2.86 dont_use fallback):** fallback fired (36 cells), DRT-0085 v1264-abort
+  → 0, detailed_route COMPLETED, signal `+ROUTED` 0 → 9,523, DRC clean, LVS reaches a genuine netgen
+  compare (all signal nets match; POWER_PIN_ONLY correctly WAIVED_PENDING). **The aes probe-cell root
+  cause was genuinely a cross-IC fix — one fix resolved two ICs' routes.** sha256's SCORECARD row
+  upgrades from "route incomplete" to "route CONVERGED (post-v1.2.86)"; it stays NOT_RELEASED honestly
+  (STA ss −8.81ns residual, MBIST/metal-density absent — the same non-route floors as the others).
+- **caravel_wrapper_emit PORTS gap (v1.2.87):** the emitter's golden-port table OMITTED
+  `analog_io[28:0]` + `user_clock2` → mpw_precheck Consistency PORTS could NEVER pass. Added both;
+  a conformant wrapper now clears PORTS + the `user_clock2` CVC error. HONEST residual (disclosed, not
+  falsely waived): a reduced non-macro wrapper's whole-bus constant tie-offs read as LVS "shorted
+  ports" — a real reduced-wrapper property (golden drives each bit from a sub-macro), cured by
+  macro-driven / distinct-per-bit tie-offs, NOT the waiveable spm blackbox floor.
+
+**Net:** every plugin-side gap the 6-IC sweep surfaced is now closed or honestly floored. The Caravel
+path reaches PORTS-PASS + the documented-spm-blackbox waiver + a disclosed reduced-wrapper LVS residual;
+what remains to a real green submission is a macro-driven submission wrapper + a golden caravel.gds — a
+design/data choice, not a Vibe-IC capability gap.
 
 ## THE reframing that changes everything (Efabless = no Calibre gap)
 
