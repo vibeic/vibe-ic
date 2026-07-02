@@ -254,18 +254,50 @@ def _calendar_cascade_order(text: str, names: List[str]) -> Optional[List[str]]:
                     # Look for b reaching/specifying a value (expanded to catch more variants)
                     if re.search(_name_pat(b) + r"\s*(?:=|==|is|reaches?|reaching)\s*\d+", search_text, re.I):
                         depends[a].add(b)
+    # CONDITION-FIRST cascade prose (the canonical calendar/clock form the earlier
+    # verb-first `inc_re` misses): a sentence that BOTH gates field b at a numeric
+    # max AND names field a next to an increase verb (EITHER order — "Min increases"
+    # or "increment ... minutes") makes a depend on b. This reads the stated cascade
+    # directly ("When Secs=59, Min increases"; "when Min=59 && Secs=59, Hours
+    # increases") and generalises to any field-name order in the prose.
+    _INCV = r"(?:increase|increment)(?:s|d|ed)?"
+    for sent in sentences:
+        for a in names:
+            na = _name_pat(a)
+            a_increments = bool(
+                re.search(na + r"[^.\n]{0,20}?\b" + _INCV, sent, re.I)
+                or re.search(r"\b" + _INCV + r"[^.\n]{0,24}?" + na, sent, re.I))
+            if not a_increments:
+                continue
+            for b in names:
+                if b == a:
+                    continue
+                if re.search(_name_pat(b) + r"\s*(?:=|==|is|reaches?|reaching)\s*\d+",
+                             sent, re.I):
+                    depends[a].add(b)
     deps_count = {n: len(depends[n]) for n in names}
     order = sorted(names, key=lambda n: deps_count[n])
     if len(set(deps_count[n] for n in names)) != len(names):
-        # Fallback: deterministic BCD hierarchy (ls < ms, sec < min < hr)
+        # Fallback: deterministic time-unit hierarchy. Handles BOTH the BCD split
+        # names (ls_/ms_ prefix, sec<min<hr) AND plain time-unit names
+        # (Secs<Mins<Hours) — the plain case previously fell to (99,99) for every
+        # field, so `sorted` kept the MSB-first PORT-DECLARATION order (Hours first)
+        # and INVERTED the cascade. chip-AGNOSTIC time-unit rank.
+        _UNIT = (("sec", 0), ("second", 0), ("min", 1), ("minute", 1),
+                 ("hr", 2), ("hour", 2), ("day", 3), ("date", 3),
+                 ("month", 4), ("year", 5))
         def _bcd_rank(n: str):
             parts = n.split("_")
             if len(parts) == 2:
                 unit_order = {"sec": 0, "min": 1, "hr": 2}
-                unit = parts[1]
-                base = unit_order.get(unit, 99)
+                base = unit_order.get(parts[1], 99)
                 offset = 0 if parts[0] == "ls" else 1
                 return (base, offset)
+            # plain time-unit name: rank by the longest unit substring it contains.
+            low = n.lower()
+            for stem, rank in sorted(_UNIT, key=lambda t: -len(t[0])):
+                if stem in low:
+                    return (rank, 0)
             return (99, 99)
         order = sorted(names, key=_bcd_rank)
     return order
