@@ -1,5 +1,8 @@
 """Unit tests for `caravel_wrapper_emit.py`."""
 import importlib
+import re
+import shutil
+import subprocess
 
 import pytest
 
@@ -244,3 +247,218 @@ class TestLoadPinMap:
         assert pm.project_name == "test"
         assert pm.core_module == "test_core"
         assert len(pm.pin_assignments) == 1
+
+    def test_load_json_reads_lvs_short_clean_fields(self, tmp_path):
+        import json
+        p = tmp_path / "pm.json"
+        p.write_text(json.dumps({
+            "project_name": "t",
+            "core_module": "t",
+            "power_domains": ["vccd1", "vssd1"],
+            "pin_assignments": [],
+            "lvs_short_clean": True,
+            "tie_hi_cell": "gf180mcu_fd_sc_mcu7t5v0__tiehi",
+            "tie_lo_cell": "gf180mcu_fd_sc_mcu7t5v0__tielo",
+            "tie_hi_pin": "Y",
+            "tie_lo_pin": "Y",
+        }))
+        pm = mod.load_pin_map(p)
+        assert pm.lvs_short_clean is True
+        assert pm.tie_hi_cell == "gf180mcu_fd_sc_mcu7t5v0__tiehi"
+        assert pm.tie_lo_cell == "gf180mcu_fd_sc_mcu7t5v0__tielo"
+        assert pm.tie_hi_pin == "Y" and pm.tie_lo_pin == "Y"
+
+    def test_default_lvs_short_clean_is_false(self):
+        # Backward compat: the historical default is the whole-bus constant.
+        assert _spm_pin_map().lvs_short_clean is False
+
+
+# ---------------------------------------------------------------------------
+# v1.2.x LVS-short-clean tie-off mode
+# ---------------------------------------------------------------------------
+def _clean_pin_map() -> mod.PinMap:
+    pm = _spm_pin_map()
+    pm.lvs_short_clean = True
+    return pm
+
+
+class TestConstBitHelpers:
+    def test_parse_const_bits_all_zero(self):
+        assert mod._parse_const_bits("32'b0", 32) == [0] * 32
+
+    def test_parse_const_bits_all_ones_hex(self):
+        # 35'h7ffffffff = 35 ones
+        assert mod._parse_const_bits("35'h7ffffffff", 35) == [1] * 35
+
+    def test_parse_const_bits_mixed(self):
+        # 2'h3 -> both bits 1 ; 3'h5 -> LSB-first 1,0,1
+        assert mod._parse_const_bits("2'h3", 2) == [1, 1]
+        assert mod._parse_const_bits("3'h5", 3) == [1, 0, 1]
+
+    def test_parse_const_bits_rejects_non_constant(self):
+        assert mod._parse_const_bits("some_wire", 4) is None
+
+    def test_expand_full_bus_uses_golden_width(self):
+        widths = mod._golden_port_bit_widths()
+        specs = mod._expand_const_tie("wbs_dat_o", "32'b0", widths)
+        assert len(specs) == 32
+        assert all(name == "wbs_dat_o" and val == 0 for name, _, val in specs)
+        assert {idx for _, idx, _ in specs} == set(range(32))
+
+    def test_expand_scalar_bus_has_no_index(self):
+        widths = mod._golden_port_bit_widths()
+        specs = mod._expand_const_tie("wbs_ack_o", "1'b0", widths)
+        assert specs == [("wbs_ack_o", None, 0)]
+
+    def test_expand_range_maps_lsb_to_low_index(self):
+        widths = mod._golden_port_bit_widths()
+        # 2'b10 -> bit0(lo=36)=0, bit1(37)=1
+        specs = mod._expand_const_tie("io_out[37:36]", "2'b10", widths)
+        val_by_idx = {idx: val for _, idx, val in specs}
+        assert val_by_idx == {36: 0, 37: 1}
+
+
+class TestLvsShortCleanEmit:
+    def test_default_mode_keeps_whole_bus_constant(self):
+        # Opt-in only: default emit unchanged (backward compat).
+        w = mod.emit_wrapper(_spm_pin_map())
+        assert "assign wbs_dat_o = 32'b0;" in w
+        assert "sky130_fd_sc_hd__conb_1" not in w
+
+    def test_clean_mode_replaces_whole_bus_constant(self):
+        w = mod.emit_wrapper(_clean_pin_map())
+        # No whole-bus constant tie-offs remain
+        assert "assign wbs_dat_o = 32'b0;" not in w
+        assert "assign la_data_out = 128'b0;" not in w
+        assert "assign io_out[34:0] = 35'b0;" not in w
+        # Distinct tie cells now present
+        assert "sky130_fd_sc_hd__conb_1 _tiecell_wbs_dat_o_0" in w
+
+    def test_clean_mode_note_present(self):
+        w = mod.emit_wrapper(_clean_pin_map())
+        assert "LVS-short-clean tie-offs" in w
+
+    def test_clean_mode_distinct_net_per_output_bit(self):
+        # THE core LVS property: no two output ports share one net.
+        w = mod.emit_wrapper(_clean_pin_map())
+        assigns = re.findall(r"assign\s+(\S+)\s*=\s*(_tie_\S+?);", w)
+        src_wires = [src for _, src in assigns]
+        assert len(src_wires) > 0
+        # Every tie-off assign draws from a UNIQUE wire → distinct net.
+        assert len(src_wires) == len(set(src_wires))
+
+    def test_clean_mode_one_cell_drives_one_wire(self):
+        w = mod.emit_wrapper(_clean_pin_map())
+        conns = re.findall(
+            r"__conb_1\s+(\S+)\s+\(\.\w+\((_tie_\S+?)\)\);", w)
+        inst_names = [inst for inst, _ in conns]
+        driven = [wire for _, wire in conns]
+        assert len(inst_names) == len(set(inst_names))  # distinct instances
+        assert len(driven) == len(set(driven))           # distinct nets
+        # Cell-driven net set == assign source-wire set (no dangling / gaps).
+        assigns = re.findall(r"assign\s+\S+\s*=\s*(_tie_\S+?);", w)
+        assert set(driven) == set(assigns)
+
+    def test_clean_mode_io_oeb_polarity(self):
+        # io_oeb bit for an output pin = LO (0 = output-enable); others = HI (1).
+        w = mod.emit_wrapper(_clean_pin_map())
+        pin_by_bit = dict(
+            (int(b), p) for b, p in re.findall(
+                r"__conb_1\s+_tiecell_io_oeb_(\d+)\s+\(\.(\w+)\(", w))
+        assert pin_by_bit[35] == "LO"   # p is at io_out[35]
+        assert pin_by_bit[10] == "HI"   # input/Z default
+
+    def test_clean_mode_count_matches_unused_output_bits(self):
+        # spm: 37 unused io_out bits + 38 io_oeb + 1+32+128+3 defaults = 239.
+        w = mod.emit_wrapper(_clean_pin_map())
+        cells = re.findall(r"__conb_1\s+_tiecell_", w)
+        assert len(cells) == 37 + 38 + (1 + 32 + 128 + 3)
+
+    def test_clean_mode_honors_custom_pdk_tie_cell(self):
+        pm = _clean_pin_map()
+        pm.tie_hi_cell = "gf180mcu_fd_sc_mcu7t5v0__tiehi"
+        pm.tie_lo_cell = "gf180mcu_fd_sc_mcu7t5v0__tielo"
+        pm.tie_hi_pin = "Y"
+        pm.tie_lo_pin = "Y"
+        w = mod.emit_wrapper(pm)
+        assert "gf180mcu_fd_sc_mcu7t5v0__tielo _tiecell_wbs_dat_o_0 (.Y(" in w
+        assert "gf180mcu_fd_sc_mcu7t5v0__tiehi _tiecell_io_oeb_10 (.Y(" in w
+        assert "sky130_fd_sc_hd__conb_1" not in w
+
+    def test_clean_mode_no_io_out_bit_double_driven(self):
+        # Real output io_out[35] driven by core; tie cells cover the rest —
+        # no io_out bit is driven twice.
+        w = mod.emit_wrapper(_clean_pin_map())
+        tie_bits = set(int(i) for i in re.findall(
+            r"assign io_out\[(\d+)\] = _tie_io_out_\d+;", w))
+        assert 35 not in tie_bits           # 35 is the real core output
+        assert tie_bits == set(range(0, 38)) - {35}
+
+
+class TestLvsShortCleanSynth:
+    """Prove the emitted LVS-clean wrapper is real Verilog: parses/elaborates
+    (iverilog) and its distinct tie cells survive synthesis (yosys)."""
+
+    _CORE_STUB = (
+        "`default_nettype none\n"
+        "module spm(input clk, input rst, input [31:0] x, input y,"
+        " output p);\n"
+        "  assign p = ^x ^ y ^ clk ^ rst;\n"
+        "endmodule\n"
+        "`default_nettype wire\n"
+    )
+    _CONB_BEHAV = (
+        "`default_nettype none\n"
+        "module sky130_fd_sc_hd__conb_1(output HI, output LO);\n"
+        "  assign HI = 1'b1;\n"
+        "  assign LO = 1'b0;\n"
+        "endmodule\n"
+        "`default_nettype wire\n"
+    )
+    _CONB_BBOX = (
+        "`default_nettype none\n"
+        "(* blackbox *)\n"
+        "module sky130_fd_sc_hd__conb_1(output HI, output LO);\n"
+        "endmodule\n"
+        "`default_nettype wire\n"
+    )
+
+    def _write(self, tmp_path):
+        w = tmp_path / "user_project_wrapper.v"
+        w.write_text(mod.emit_wrapper(_clean_pin_map()))
+        (tmp_path / "spm.v").write_text(self._CORE_STUB)
+        return w
+
+    def test_iverilog_elaborates(self, tmp_path):
+        if not shutil.which("iverilog"):
+            pytest.skip("iverilog not installed")
+        w = self._write(tmp_path)
+        conb = tmp_path / "conb.v"
+        conb.write_text(self._CONB_BEHAV)
+        r = subprocess.run(
+            ["iverilog", "-g2012", "-t", "null", str(w),
+             str(tmp_path / "spm.v"), str(conb)],
+            capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+
+    def test_yosys_keeps_distinct_tie_cells(self, tmp_path):
+        if not shutil.which("yosys"):
+            pytest.skip("yosys not installed")
+        w = self._write(tmp_path)
+        conb = tmp_path / "conb_bb.v"
+        conb.write_text(self._CONB_BBOX)
+        cnt = tmp_path / "cnt.txt"
+        script = (
+            f"read_verilog -sv {conb}; "
+            f"read_verilog -sv {tmp_path / 'spm.v'}; "
+            f"read_verilog -sv {w}; "
+            "hierarchy -top user_project_wrapper; proc; flatten; "
+            "opt -purge; check; "
+            f"tee -o {cnt} select -count t:sky130_fd_sc_hd__conb_1"
+        )
+        r = subprocess.run(["yosys", "-q", "-p", script],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        # Every distinct tie cell drives a distinct used output bit, so all
+        # survive opt -purge (a whole-bus constant would collapse to 1 net).
+        assert "239 objects." in cnt.read_text()

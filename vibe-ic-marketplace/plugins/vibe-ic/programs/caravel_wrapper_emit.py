@@ -112,6 +112,24 @@ class PinMap:
     core_uses_power_pins: bool = False
     spdx_year: str = "2026"
     spdx_copyright: str = "user"
+    # ------------------------------------------------------------------
+    # v1.2.x LVS-short-clean tie-off mode (opt-in; default preserves the
+    # historical whole-bus-constant behaviour for backward compat).
+    #
+    # When True, `emit_wrapper` does NOT collapse an unused output bus onto
+    # the single global tie net via `assign <bus> = <constant>;`. Instead it
+    # instantiates a DISTINCT PDK tie cell per unused output BIT, each driving
+    # its own wire → its own port bit, so no two ports share one physical net
+    # (that share is what mpw_precheck LVS reports as "electrically shorted
+    # ports"). The tie-cell name/pins are PDK-derived params — NEVER a chip
+    # literal. Defaults are the sky130 conb dual-output tie cell (HI + LO); for
+    # other PDKs pass the discovered tie_hi/tie_lo cell + pin (same vocabulary
+    # `_v1_6_596_discover_tie_cells` in phase3_one_shot_runner.py yields).
+    lvs_short_clean: bool = False
+    tie_hi_cell: str = "sky130_fd_sc_hd__conb_1"
+    tie_lo_cell: str = "sky130_fd_sc_hd__conb_1"
+    tie_hi_pin: str = "HI"
+    tie_lo_pin: str = "LO"
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +171,11 @@ def _from_dict(data: Dict[str, Any]) -> PinMap:
         core_uses_power_pins=bool(data.get("core_uses_power_pins", False)),
         spdx_year=str(data.get("spdx_year", "2026")),
         spdx_copyright=str(data.get("spdx_copyright", "user")),
+        lvs_short_clean=bool(data.get("lvs_short_clean", False)),
+        tie_hi_cell=str(data.get("tie_hi_cell", "sky130_fd_sc_hd__conb_1")),
+        tie_lo_cell=str(data.get("tie_lo_cell", "sky130_fd_sc_hd__conb_1")),
+        tie_hi_pin=str(data.get("tie_hi_pin", "HI")),
+        tie_lo_pin=str(data.get("tie_lo_pin", "LO")),
     )
 
 
@@ -333,17 +356,59 @@ def emit_wrapper(pm: PinMap) -> str:
     out.append("    // ------------------------------------------------------------")
     for pa, wire_name in out_wire_names:
         out.append(f"    assign {pa.caravel_pin} = {wire_name};")
-    for ce, val in pm.unused_tie_offs.items():
-        out.append(f"    assign {ce} = {val};")
-    out.append("")
 
-    # io_oeb: default all-1 (input mode) except outputs = 0
+    # Compute io_out bits driven by the core (their io_oeb bit = output-enable 0).
     output_io_idx: List[int] = []
     for pa in pm.pin_assignments:
         if pa.port_dir == "output":
             m = re.match(r"^io_out\[(\d+)\]$", pa.caravel_pin)
             if m:
                 output_io_idx.append(int(m.group(1)))
+
+    # The set of caravel ports the user explicitly drives (skip tie-off).
+    explicitly_driven = {pa.caravel_pin for pa in pm.pin_assignments}
+    needed_defaults = {
+        "wbs_ack_o": "1'b0",
+        "wbs_dat_o": "32'b0",
+        "la_data_out": "128'b0",
+        "user_irq": "3'b0",
+    }
+
+    if pm.lvs_short_clean:
+        _emit_lvs_short_clean_ties(
+            out, pm, output_io_idx, explicitly_driven, needed_defaults)
+    else:
+        _emit_whole_bus_constant_ties(
+            out, pm, output_io_idx, explicitly_driven, needed_defaults)
+
+    out.append("endmodule")
+    out.append("")
+    out.append("`default_nettype wire")
+    return "\n".join(out)
+
+
+# ---------------------------------------------------------------------------
+# Tie-off emitters (default whole-bus-constant vs opt-in LVS-short-clean)
+# ---------------------------------------------------------------------------
+def _emit_whole_bus_constant_ties(
+        out: List[str],
+        pm: PinMap,
+        output_io_idx: List[int],
+        explicitly_driven: set,
+        needed_defaults: Dict[str, str]) -> None:
+    """Historical (default) behaviour, preserved VERBATIM for backward compat.
+
+    Ties whole unused output buses to a single constant via
+    `assign <bus> = <constant>;`. Correct RTL, but every bit of the bus lands
+    on the ONE global tie net, which mpw_precheck LVS reports as
+    "electrically shorted ports" on a reduced (non-macro) wrapper. See
+    `_emit_lvs_short_clean_ties` for the opt-in fix and the NOTE below.
+    """
+    for ce, val in pm.unused_tie_offs.items():
+        out.append(f"    assign {ce} = {val};")
+    out.append("")
+
+    # io_oeb: default all-1 (input mode) except outputs = 0
     if output_io_idx:
         out.append("    // io_oeb: 0 = output, 1 = input/Z (default)")
         # Build io_oeb piece-wise assignment.
@@ -373,29 +438,174 @@ def emit_wrapper(pm: PinMap) -> str:
     # RTL for a wrapper that genuinely does not drive those buses, but it is NOT
     # the golden pattern (golden drives every output bit from a real sub-macro).
     # A submission wrapper that must be LVS-short-clean should drive each unused
-    # output bit from a DISTINCT tie cell (or from the user macro). This residual
-    # is a property of the reduced wrapper, not the port set — see
+    # output bit from a DISTINCT tie cell (or from the user macro) — set
+    # `lvs_short_clean: true` in the pin-map (or --lvs-short-clean) to emit that.
+    # This residual is a property of the reduced wrapper, not the port set — see
     # benchmark-data/ic/TAPEOUT_SIGNOFF_GAP_ROADMAP.md.
     out.append("    // NOTE: whole-bus constant tie-offs below read as LVS "
                "'shorted ports' on a reduced wrapper — drive from the macro / "
-               "distinct tie cells for an LVS-short-clean submission.")
+               "distinct tie cells (lvs_short_clean) for an LVS-short-clean "
+               "submission.")
     out.append("    // Unused Caravel slave/LA/IRQ ports tied to safe defaults")
-    needed_defaults = {
-        "wbs_ack_o": "1'b0",
-        "wbs_dat_o": "32'b0",
-        "la_data_out": "128'b0",
-        "user_irq": "3'b0",
-    }
-    explicitly_driven = {pa.caravel_pin for pa in pm.pin_assignments}
     for port, default in needed_defaults.items():
         if port not in explicitly_driven and not any(
-                pa.caravel_pin.startswith(f"{port}[") for pa in pm.pin_assignments):
+                pa.caravel_pin.startswith(f"{port}[")
+                for pa in pm.pin_assignments):
             out.append(f"    assign {port} = {default};")
     out.append("")
-    out.append("endmodule")
+
+
+def _emit_lvs_short_clean_ties(
+        out: List[str],
+        pm: PinMap,
+        output_io_idx: List[int],
+        explicitly_driven: set,
+        needed_defaults: Dict[str, str]) -> None:
+    """Opt-in LVS-short-clean tie-off mode.
+
+    Instead of `assign <bus> = <constant>;` (which puts every bit of the bus on
+    the ONE global tie net → mpw_precheck LVS "electrically shorted ports"),
+    drive EACH unused output BIT from a DISTINCT PDK tie cell into its own wire
+    → its own port bit. Two ports therefore never share one physical net.
+
+    The tie-cell name/pins come from `pm.tie_hi_cell/.tie_lo_cell/.tie_hi_pin/
+    .tie_lo_pin` (PDK-derived params, defaulting to the sky130 conb dual-output
+    tie cell). This is chip-AGNOSTIC — no chip literal.
+    """
+    widths = _golden_port_bit_widths()
+
+    out.append("    // ------------------------------------------------------------")
+    out.append("    // LVS-short-clean tie-offs: each unused output BIT is driven")
+    out.append(f"    // from a DISTINCT PDK tie cell ({pm.tie_lo_cell} LO / "
+               f"{pm.tie_hi_cell} HI) into its")
+    out.append("    // own net, so no two ports share the single tie net (avoids")
+    out.append("    // mpw_precheck LVS 'shorted ports'). Golden drives these from")
+    out.append("    // real sub-macros; this is the reduced-wrapper equivalent.")
+    out.append("    // ------------------------------------------------------------")
+
+    # Collect every constant-driven output bit as (port, bit_idx_or_None, val).
+    bit_specs: List[Tuple[str, Optional[int], int]] = []
+    unparsed: List[Tuple[str, str]] = []
+
+    # (1) user-declared unused_tie_offs
+    for ce, val in pm.unused_tie_offs.items():
+        expanded = _expand_const_tie(ce, val, widths)
+        if expanded is None:
+            unparsed.append((ce, val))
+        else:
+            bit_specs.extend(expanded)
+
+    # (2) io_oeb — every bit: output bit → 0 (output-enable), else → 1 (input/Z)
+    if output_io_idx:
+        out_set = set(output_io_idx)
+        for i in range(0, 38):
+            bit_specs.append(("io_oeb", i, 0 if i in out_set else 1))
+
+    # (3) common Caravel slave/LA/IRQ ports the user did not drive
+    for port, default in needed_defaults.items():
+        if port not in explicitly_driven and not any(
+                pa.caravel_pin.startswith(f"{port}[")
+                for pa in pm.pin_assignments):
+            expanded = _expand_const_tie(port, default, widths)
+            if expanded is None:
+                unparsed.append((port, default))
+            else:
+                bit_specs.extend(expanded)
+
+    # Emit one distinct tie cell + wire per bit.
+    for port, idx, val in bit_specs:
+        suffix = "b" if idx is None else str(idx)
+        wire = f"_tie_{port}_{suffix}"
+        inst = f"_tiecell_{port}_{suffix}"
+        if val:
+            cell, pin = pm.tie_hi_cell, pm.tie_hi_pin
+        else:
+            cell, pin = pm.tie_lo_cell, pm.tie_lo_pin
+        lhs = port if idx is None else f"{port}[{idx}]"
+        out.append(f"    wire {wire};")
+        out.append(f"    {cell} {inst} (.{pin}({wire}));")
+        out.append(f"    assign {lhs} = {wire};")
+
+    # Anything we could not decompose to per-bit constants falls back to the
+    # whole-bus constant (correctness preserved; may still read as a short).
+    for ce, val in unparsed:
+        out.append(f"    // WARN: could not decompose {ce}={val} to per-bit "
+                   f"tie cells — whole-bus constant retained (may LVS-short).")
+        out.append(f"    assign {ce} = {val};")
     out.append("")
-    out.append("`default_nettype wire")
-    return "\n".join(out)
+
+
+def _golden_port_bit_widths() -> Dict[str, int]:
+    """Map golden non-power port name → bit width (scalar = 1)."""
+    widths: Dict[str, int] = {}
+    for p in CARAVEL_GOLDEN_NON_POWER_PORTS:
+        w = p["width"]
+        m = re.match(r"^\[(\d+):(\d+)\]$", w) if w else None
+        if m:
+            hi, lo = int(m.group(1)), int(m.group(2))
+            widths[p["name"]] = abs(hi - lo) + 1
+        else:
+            widths[p["name"]] = 1
+    return widths
+
+
+def _parse_const_bits(literal: str, nbits: int) -> Optional[List[int]]:
+    """Parse a Verilog sized constant (e.g. 32'b0, 3'b0, 2'h3, 35'h7ffffffff)
+    into a list of `nbits` bit values, LSB first. Verilog zero-extends narrow
+    values. Returns None when the literal is not a plain sized constant."""
+    m = re.match(r"^\s*(\d+)'\s*[sS]?\s*([bBhHdDoO])\s*([0-9a-fA-F_]+)\s*$",
+                 literal)
+    if not m:
+        return None
+    base = {"b": 2, "o": 8, "d": 10, "h": 16}[m.group(2).lower()]
+    digits = m.group(3).replace("_", "")
+    try:
+        value = int(digits, base)
+    except ValueError:
+        return None
+    return [(value >> i) & 1 for i in range(nbits)]
+
+
+def _expand_const_tie(
+        expr: str, literal: str,
+        widths: Dict[str, int]) -> Optional[List[Tuple[str, Optional[int], int]]]:
+    """Expand a `<port-or-slice> = <constant>` tie-off into a list of
+    (port_name, bit_index_or_None, bit_value). Returns None when the target or
+    the constant cannot be decomposed to per-bit values (caller falls back)."""
+    expr = expr.strip()
+    m_range = re.match(r"^([A-Za-z_]\w*)\[(\d+):(\d+)\]$", expr)
+    m_bit = re.match(r"^([A-Za-z_]\w*)\[(\d+)\]$", expr)
+    m_full = re.match(r"^([A-Za-z_]\w*)$", expr)
+    if m_range:
+        name = m_range.group(1)
+        a, b = int(m_range.group(2)), int(m_range.group(3))
+        lo, hi = min(a, b), max(a, b)
+        indices = list(range(lo, hi + 1))  # LSB (lo) → MSB (hi)
+        is_scalar = False
+    elif m_bit:
+        name = m_bit.group(1)
+        indices = [int(m_bit.group(2))]
+        is_scalar = False
+    elif m_full:
+        name = m_full.group(1)
+        w = widths.get(name)
+        if w is None:
+            return None
+        if w == 1:
+            indices = []
+            is_scalar = True
+        else:
+            indices = list(range(0, w))
+            is_scalar = False
+    else:
+        return None
+    nbits = 1 if is_scalar else len(indices)
+    bits = _parse_const_bits(literal, nbits)
+    if bits is None:
+        return None
+    if is_scalar:
+        return [(name, None, bits[0])]
+    return [(name, idx, bits[j]) for j, idx in enumerate(indices)]
 
 
 def _identifier(s: str) -> str:
@@ -486,6 +696,26 @@ def emit_user_defines(pm: PinMap, header_prefix: str = "") -> str:
 
 
 # ---------------------------------------------------------------------------
+# PDK tie-cell discovery (reuses the phase3 reference implementation)
+# ---------------------------------------------------------------------------
+def discover_tie_cells(liberty_path: str, container: str = "") -> Dict[str, Any]:
+    """Discover the PDK tie-high / tie-low cell names + output pins from a
+    Liberty file, reusing `phase3_one_shot_runner._v1_6_596_discover_tie_cells`
+    (the same discovery the phase3 spare/tie-off code uses) so the LVS-clean
+    wrapper is genuinely PDK-derived, never a chip literal.
+
+    Returns the discoverer's dict (`hi_cell`/`lo_cell`/`hi_pin`/`lo_pin`).
+    Falls back to an empty-result dict if phase3 cannot be imported (e.g. run
+    standalone without the rest of the plugin on sys.path)."""
+    try:
+        import phase3_one_shot_runner as _p3  # type: ignore
+    except Exception:
+        # Keep this program usable in isolation; caller retains param defaults.
+        return {"hi_cell": None, "lo_cell": None, "hi_pin": "HI", "lo_pin": "LO"}
+    return _p3._v1_6_596_discover_tie_cells(liberty_path, container)
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def _cli() -> int:
@@ -500,12 +730,48 @@ def _cli() -> int:
                    help="Output path for user_defines.v")
     p.add_argument("--strict", action="store_true",
                    help="Exit 1 if pin-map validation fails")
+    p.add_argument("--lvs-short-clean", action="store_true",
+                   help="Drive each unused output BIT from a DISTINCT PDK tie "
+                        "cell (no two ports on one net) instead of tying whole "
+                        "buses to a constant — avoids mpw_precheck LVS "
+                        "'shorted ports' on a reduced wrapper.")
+    p.add_argument("--tie-hi-cell", help="PDK tie-high cell name (LVS-clean).")
+    p.add_argument("--tie-lo-cell", help="PDK tie-low cell name (LVS-clean).")
+    p.add_argument("--tie-hi-pin", help="Tie-high cell output pin (LVS-clean).")
+    p.add_argument("--tie-lo-pin", help="Tie-low cell output pin (LVS-clean).")
+    p.add_argument("--liberty",
+                   help="Optional PDK Liberty (.lib) path — when given, the tie "
+                        "cell names/pins are DISCOVERED from it via the phase3 "
+                        "_v1_6_596_discover_tie_cells reference (PDK-derived).")
+    p.add_argument("--liberty-container", default="",
+                   help="Optional docker container for --liberty discovery "
+                        "(container-only PDK installs, e.g. iic-osic-tools).")
     args = p.parse_args()
 
     if not args.pin_map.exists():
         print(f"pin-map not found: {args.pin_map}", file=sys.stderr)
         return 2
     pm = load_pin_map(args.pin_map)
+    if args.lvs_short_clean:
+        pm.lvs_short_clean = True
+    # PDK-derived tie-cell discovery (reuses the phase3 reference) overrides
+    # defaults; explicit CLI flags override discovery.
+    if args.liberty:
+        tc = discover_tie_cells(args.liberty, args.liberty_container)
+        if tc.get("hi_cell"):
+            pm.tie_hi_cell = tc["hi_cell"]
+            pm.tie_hi_pin = tc.get("hi_pin", pm.tie_hi_pin)
+        if tc.get("lo_cell"):
+            pm.tie_lo_cell = tc["lo_cell"]
+            pm.tie_lo_pin = tc.get("lo_pin", pm.tie_lo_pin)
+    if args.tie_hi_cell:
+        pm.tie_hi_cell = args.tie_hi_cell
+    if args.tie_lo_cell:
+        pm.tie_lo_cell = args.tie_lo_cell
+    if args.tie_hi_pin:
+        pm.tie_hi_pin = args.tie_hi_pin
+    if args.tie_lo_pin:
+        pm.tie_lo_pin = args.tie_lo_pin
     errors = validate_pin_map(pm)
     for e in errors:
         print(f"WARN: {e}", file=sys.stderr)
