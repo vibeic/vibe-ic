@@ -92,6 +92,15 @@ def render_lesson_digest(run_p: Path,
     Deterministic extraction — no LLM. Returns the number of lessons written
     (0 if the corpus file is missing or has no active lessons; the file is NOT
     written in that case).
+
+    NOTE (2026-07-02): the IC Expert DB is DELIBERATELY *not* appended into this
+    same digest. A/B measurement on 94 hard CVDP designs showed that folding the
+    DB knowledge into the ONE author's already-267KB digest LOWERED single-shot
+    recovery (38 → 31) — the extra text diluted attention. The DB's value is
+    COMPLEMENTARY (a DUAL-TRACK second author), not additive to one digest:
+    general-blind ∪ DB-informed = 51 (+13). So the DB is surfaced separately via
+    `render_ic_expert_db_digest` to an INDEPENDENT second-track author whose
+    result cross-checks the first — see design_one_shot_runner's dual-track WAIVE.
     """
     if not expert_md.is_file():
         return 0
@@ -118,3 +127,24 @@ def render_lesson_digest(run_p: Path,
     run_p.mkdir(parents=True, exist_ok=True)
     (run_p / "lessons.md").write_text(_DIGEST_HEAD + body + "\n")
     return len(lessons)
+
+
+def render_ic_expert_db_digest(run_p: Path, prompt_text: str, k: int = 5) -> int:
+    """Render the RELEVANT IC Expert DB design-class knowledge for this design's
+    prompt into ``run_p/ic_expert_db.md`` — a SEPARATE artifact for an
+    INDEPENDENT dual-track (second) author, NOT folded into the main lessons
+    digest (measured to dilute a single author; see render_lesson_digest note).
+    Best-effort: returns 0 (no file written) if the DB / query module is absent
+    or nothing matches. Deterministic — the LLM only consumes the result."""
+    if not prompt_text or not prompt_text.strip():
+        return 0
+    try:
+        import ic_expert_db_query as _db  # sibling program (general-core)
+        hits = _db.query(prompt_text, k=k)
+    except Exception:  # noqa: BLE001
+        return 0
+    if not hits:
+        return 0
+    run_p.mkdir(parents=True, exist_ok=True)
+    (run_p / "ic_expert_db.md").write_text(_db.render(hits))
+    return len(hits)
