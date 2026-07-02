@@ -90,20 +90,27 @@ def test_gate_accepts_clean_advisory_lesson(tmp_path):
 
 # ── general-path integration via _lesson_digest ─────────────────────
 
-def test_lesson_digest_appends_db_knowledge(tmp_path):
-    # with a divider prompt, the rendered digest MUST include DB design knowledge
-    n = _lesson_digest.render_lesson_digest(
-        tmp_path, prompt_text="Design a non-restoring divider (dividend, divisor, "
+def test_db_digest_is_SEPARATE_from_main_digest(tmp_path):
+    # DUAL-TRACK: the DB knowledge is a SEPARATE artifact (ic_expert_db.md), NOT
+    # folded into lessons.md (measured to dilute a single author 38→31).
+    n = _lesson_digest.render_ic_expert_db_digest(
+        tmp_path, "Design a non-restoring divider (dividend, divisor, "
         "quotient, remainder, valid).")
-    md = (tmp_path / "lessons.md")
-    assert md.is_file()
-    txt = md.read_text().lower()
+    assert n >= 1
+    db_md = tmp_path / "ic_expert_db.md"
+    assert db_md.is_file()
+    txt = db_md.read_text().lower()
     assert "ic expert db" in txt and ("divid" in txt or "remainder" in txt)
 
 
-def test_lesson_digest_no_prompt_is_backward_compatible(tmp_path):
-    # no prompt → behaves as before (only ### Skill: sections, no DB section);
-    # must not crash and must not write a DB block.
-    n = _lesson_digest.render_lesson_digest(tmp_path, prompt_text="")
-    # n reflects ### Skill: count from the real expert md; just assert no crash
-    assert isinstance(n, int)
+def test_main_digest_does_NOT_contain_db_block(tmp_path):
+    # the primary lessons digest must stay DB-free (dual-track separation).
+    _lesson_digest.render_lesson_digest(tmp_path)
+    md = tmp_path / "lessons.md"
+    if md.is_file():
+        assert "IC Expert DB — relevant design-class knowledge" not in md.read_text()
+
+
+def test_db_digest_empty_prompt_writes_nothing(tmp_path):
+    assert _lesson_digest.render_ic_expert_db_digest(tmp_path, "") == 0
+    assert not (tmp_path / "ic_expert_db.md").exists()

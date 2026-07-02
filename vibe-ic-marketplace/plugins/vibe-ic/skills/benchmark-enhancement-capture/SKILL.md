@@ -333,10 +333,15 @@ final sign correction"; "AXI-Stream: hold tdata/tlast stable while tvalid &&
 !tready"). These distill into the **IC Expert DB**
 (`agents/ic_expert_db/ic_expert_db.json`), keyed by `ic_class`.
 
-- **Consumed by the GENERAL path**: `_lesson_digest` surfaces the RELEVANT DB
-  lessons (via `ic_expert_db_query.py`) to the spec-to-rtl / ic-expert author for
-  ANY design — a plain Phase-1 doc, not just a benchmark. (GENERAL-CORE, not a
-  benchmark adapter.)
+- **Consumed by the GENERAL path as a DUAL-TRACK second opinion**: the runner
+  writes the RELEVANT DB lessons (via `ic_expert_db_query.py` →
+  `render_ic_expert_db_digest`) to a SEPARATE `ic_expert_db.md`, for an
+  INDEPENDENT second-track author whose result cross-checks the primary author.
+  **Measured (94 hard CVDP designs):** folding the DB into the single main
+  digest LOWERED single-shot recovery (38→31, attention dilution), but as a
+  complementary track the union is 38→**51 (+13)**. So the DB is a second track,
+  NOT extra text in one digest. Serves ANY Phase-1 doc (GENERAL-CORE, not a
+  benchmark adapter).
 - **ADVISORY, never overriding**: a DB lesson ADDS design knowledge; it must NOT
   assert a hard rule a gate/program enforces, and can NEVER contradict a gate.
   The invariant (advisory + blindness-clean: no design-id, no oracle-value, no

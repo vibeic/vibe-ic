@@ -1844,19 +1844,25 @@ def step_rtl_gen(project: Path, ic_class: str) -> StepResult:
         # authoring. Best-effort: a render failure never blocks the WAIVE.
         digest_path = None
         n_lessons = 0
+        db_digest_path = None
+        n_db = 0
         try:
             stage1 = _pl.phase2_stage1_dir(project)
-            # Pass the design's spec prose so the digest ALSO appends the
-            # relevant IC Expert DB design-class knowledge for THIS design
-            # (structured advisory layer; chip-AGNOSTIC; never overrides a gate).
-            # Same general path serves any Phase-1 doc — not benchmark-specific.
+            n_lessons = _lesson_digest.render_lesson_digest(stage1)
+            if n_lessons:
+                digest_path = str(stage1 / "lessons.md")
+            # IC Expert DB is a SEPARATE dual-track artifact — the relevant
+            # design-class knowledge for THIS design, written to its own file for
+            # an INDEPENDENT second-track author (measured: folding it into the
+            # single digest dilutes recovery 38→31; as a complementary track the
+            # union is 38→51). chip-AGNOSTIC advisory; never overrides a gate.
             try:
                 _spec = _gather_spec_text(project)
+                n_db = _lesson_digest.render_ic_expert_db_digest(stage1, _spec)
+                if n_db:
+                    db_digest_path = str(stage1 / "ic_expert_db.md")
             except Exception:
-                _spec = ""
-            n_lessons = _lesson_digest.render_lesson_digest(stage1, prompt_text=_spec)
-            if n_lessons or (stage1 / "lessons.md").is_file():
-                digest_path = str(stage1 / "lessons.md")
+                pass
         except Exception:
             pass
         lessons_hint = (
@@ -1866,6 +1872,15 @@ def step_rtl_gen(project: Path, ic_class: str) -> StepResult:
             f"captured general topology/convention patterns, NOT per-problem "
             f"answers."
             if digest_path else "")
+        db_hint = (
+            f"\nDUAL-TRACK (optional second opinion): `{db_digest_path}` holds "
+            f"{n_db} IC Expert DB design-class lesson(s) matched to THIS design "
+            f"(algorithm/interface/latency craft from proven-correct designs). "
+            f"For a hard design, author an INDEPENDENT second attempt guided by "
+            f"it and keep whichever attempt the gates PASS — measured to recover "
+            f"designs the primary digest misses (union lift)."
+            if db_digest_path else "")
+        lessons_hint += db_hint
         skill = config.get("fallback_skill") or "spec-to-rtl"
         if catalog_matches_summary:
             skill = "catalog-glue-author"
