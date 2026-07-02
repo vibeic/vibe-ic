@@ -81,15 +81,34 @@ _AOCV_CMD_RE = re.compile(r"\bread_aocv\b", re.IGNORECASE)
 _RECOVERY_RE = re.compile(r"\brecovery\b", re.IGNORECASE)
 _REMOVAL_RE = re.compile(r"\bremoval\b", re.IGNORECASE)
 _MPW_RE = re.compile(r"min[_ ]pulse[_ ]width", re.IGNORECASE)
+# AUTHORITATIVE emitter marker. LIVE-VALIDATED: OpenSTA 3.1.0's
+# `report_check_types` output uses "Group Slack" / "Required Width" tables and
+# never prints the literal check-type words — so the plain-word regexes above
+# both MISS a real sign-off (false FAIL) and can FALSE-PASS on an incidental
+# "recovery check against …" path line. The emitter (phase3_one_shot_runner
+# _report_check_types_tcl) writes this marker ONLY when report_check_types
+# actually ran, naming the check types performed. When present it is the trusted
+# signal; the plain-word regexes remain a fallback for other tools / fixtures.
+_CHECK_TYPES_MARKER_RE = re.compile(
+    r"SIGNOFF_CHECK_TYPES_REPORTED\s+(?P<types>.+)", re.IGNORECASE)
 
 
 def _find_report(target: Path) -> Optional[Path]:
-    """Resolve the sign-off STA report. Accepts a file or a directory (searches
-    for the SPEF-based report first, then any post_route/sta report)."""
+    """Resolve the sign-off STA report. Accepts a file or a directory.
+
+    Preference order (most-rigorous sign-off basis first):
+      1. the MULTI-CORNER OCV report (``sta_mcorner_ocv*.rpt``) — SETUP @ ss +
+         HOLD @ ff, flat-OCV + recovery/removal/MPW. When present this is the
+         report the gate evaluates, so a run is judged on its multi-corner
+         sign-off, not the single (nom) corner.
+      2. the single-corner SPEF-based report (``post_route_timing.rpt`` /
+         ``sta_spef_based*.rpt``).
+      3. any remaining post_route/sta report."""
     if target.is_file():
         return target
     if target.is_dir():
-        for pat in ("post_route_timing.rpt", "sta_spef_based*.rpt",
+        for pat in ("sta_mcorner_ocv*.rpt", "*mcorner_ocv*.rpt",
+                    "post_route_timing.rpt", "sta_spef_based*.rpt",
                     "*spef*sta*.rpt", "sta.rpt", "*sta*.rpt"):
             hits = sorted(target.rglob(pat))
             if hits:
@@ -106,9 +125,13 @@ def evaluate(report_text: str) -> Dict[str, object]:
     # SOME on-chip-variation derate must be present. AOCV/POCV (distance/depth
     # table) is richer than the flat ±5% margin, but either satisfies the gate.
     ocv = aocv or flat_ocv
-    recovery = bool(_RECOVERY_RE.search(report_text))
-    removal = bool(_REMOVAL_RE.search(report_text))
-    mpw = bool(_MPW_RE.search(report_text))
+    # AUTHORITATIVE marker first (tool-version-independent), plain words fallback.
+    marker = _CHECK_TYPES_MARKER_RE.search(report_text)
+    marker_types = (marker.group("types").lower() if marker else "")
+    recovery = "recovery" in marker_types or bool(_RECOVERY_RE.search(report_text))
+    removal = "removal" in marker_types or bool(_REMOVAL_RE.search(report_text))
+    mpw = ("min_pulse_width" in marker_types or "min pulse width" in marker_types
+           or bool(_MPW_RE.search(report_text)))
     missing: List[str] = []
     if not ocv:
         missing.append("OCV derating (set_timing_derate / OCV_DERATE_APPLIED / "
