@@ -528,3 +528,280 @@ class TestReportToMarkdown:
     def test_mode_line_present(self, tmp_path):
         md = mod.report_to_markdown(mod.run_ladder(tmp_path, mode="tapeout"))
         assert "Mode: tapeout" in md
+
+
+# ---------------------------------------------------------------------------
+# OLD-tier real-artifact discovery (the dead-legacy-path fix). Each old tier
+# now reads the REAL runner artifact (reports/phase3/...) instead of a dead
+# legacy path no program writes; §4.05: this can only surface a masked FAIL or
+# correct a false-FAIL, NEVER fabricate a pass — an absent artifact still
+# NOT_RUNs.
+# ---------------------------------------------------------------------------
+
+# A KLayout XML sign-off DRC report (the shape the runner re-stages into
+# reports/phase3/drc_signoff.rpt). Empty <items> = clean; N <item> = N viols.
+_DRC_KLAYOUT_CLEAN = """\
+# Sign-off DRC report (ORGANIC-20260531 Step 31 alias).
+# Tool: klayout
+<?xml version="1.0" encoding="utf-8"?>
+<report-database>
+ <categories>
+  <category><name>li.1</name><description>li.1 : min width : violation</description></category>
+ </categories>
+ <items>
+ </items>
+</report-database>
+"""
+
+
+def _drc_klayout_with(n_items):
+    items = "\n".join("  <item><category>'li.1'</category></item>"
+                      for _ in range(n_items))
+    return ("# Tool: klayout\n<?xml version=\"1.0\"?>\n<report-database>\n"
+            " <categories>\n  <category><name>li.1</name>"
+            "<description>violation</description></category>\n </categories>\n"
+            f" <items>\n{items}\n </items>\n</report-database>\n")
+
+
+# A plain-text OpenROAD/Magic DRC projection carrying an explicit count.
+def _drc_text(n):
+    return (f"# Tool: openroad\nopenroad / drt-pass: detailed_route invoked\n"
+            f"violation report: {n}\n"
+            f"DRC clean: {'YES' if n == 0 else 'NO'}\n")
+
+
+# The runner's real reports/phase3/antenna.json shapes.
+_ANTENNA_FAIL = {"tool": "openroad", "net_violations": 14, "pin_violations": 0,
+                 "clean": False, "routing_incomplete": False, "verdict": "FAIL"}
+_ANTENNA_INCOMPLETE = {"tool": "openroad", "net_violations": None,
+                       "pin_violations": None, "clean": True,
+                       "routing_incomplete": True, "verdict": "FAIL"}
+_ANTENNA_CLEAN = {"tool": "openroad", "net_violations": 0, "pin_violations": 0,
+                  "clean": True, "routing_incomplete": False, "verdict": "PASS"}
+
+# The runner's real reports/phase3/ir_drop.json shape (worst 271 µV, own budget
+# 90 mV = 5% of 1.8 V). The OLD 35 µV default false-FAILed this real static IR.
+_IR_REAL = {"tool": "openroad-psm", "worst_ir_uv": 271.0,
+            "budget_uv": 90000.0, "verdict": "PASS"}
+
+_DEF_WITH_SN = """\
+VERSION 5.8 ;
+DESIGN top ;
+SPECIALNETS 2 ;
+    - VDD ( a VPWR ) ( b VPWR )
+    - VSS ( a VGND ) ( b VGND )
+END SPECIALNETS
+END DESIGN
+"""
+
+_DEF_NO_SN = """\
+VERSION 5.8 ;
+DESIGN top ;
+COMPONENTS 3 ;
+END COMPONENTS
+END DESIGN
+"""
+
+
+class TestDRCRealDiscovery:
+    def test_phase3_klayout_clean_pass(self, tmp_path):
+        _write(tmp_path / "reports/phase3/drc_signoff.rpt", _DRC_KLAYOUT_CLEAN)
+        r = mod.check_tier_1_drc(tmp_path)
+        assert r.verdict == "PASS"
+        assert r.details["violations"] == 0
+
+    def test_phase3_klayout_violations_fail(self, tmp_path):
+        _write(tmp_path / "reports/phase3/drc_signoff.rpt",
+               _drc_klayout_with(87))
+        r = mod.check_tier_1_drc(tmp_path)
+        assert r.verdict == "FAIL"
+        assert r.details["violations"] == 87
+
+    def test_phase3_text_report_count_fail(self, tmp_path):
+        _write(tmp_path / "reports/phase3/drc_signoff.rpt", _drc_text(5))
+        assert mod.check_tier_1_drc(tmp_path).verdict == "FAIL"
+
+    def test_phase3_text_report_clean_pass(self, tmp_path):
+        _write(tmp_path / "reports/phase3/drc_signoff.rpt", _drc_text(0))
+        assert mod.check_tier_1_drc(tmp_path).verdict == "PASS"
+
+    def test_legacy_json_still_read(self, tmp_path):
+        # Back-compat: the legacy full_deck.json is still a fallback.
+        _write_json(tmp_path / "reports/drc/full_deck.json", {"violations": 3})
+        assert mod.check_tier_1_drc(tmp_path).verdict == "FAIL"
+
+    def test_absent_not_run(self, tmp_path):
+        # §4.05: genuinely absent → honest NOT_RUN, never a fabricated pass.
+        assert mod.check_tier_1_drc(tmp_path).verdict == "NOT_RUN"
+
+    def test_phase3_preferred_over_legacy(self, tmp_path):
+        # A clean phase3 report wins over a dirty legacy json (the runner's
+        # canonical artifact is authoritative).
+        _write(tmp_path / "reports/phase3/drc_signoff.rpt", _DRC_KLAYOUT_CLEAN)
+        _write_json(tmp_path / "reports/drc/full_deck.json",
+                    {"violations": 999})
+        r = mod.check_tier_1_drc(tmp_path)
+        assert r.verdict == "PASS"
+        assert "phase3" in r.artifact_path
+
+
+class TestAntennaRealDiscovery:
+    def test_real_report_violations_surfaces_masked_fail(self, tmp_path):
+        # THE headline fix: the dead legacy path hid a real antenna FAIL.
+        _write_json(tmp_path / "reports/phase3/antenna.json", _ANTENNA_FAIL)
+        r = mod.check_tier_3_antenna(tmp_path)
+        assert r.verdict == "FAIL"
+        assert r.details["net_violations"] == 14
+
+    def test_routing_incomplete_is_fail(self, tmp_path):
+        # An 'antenna clean' claim on an UNROUTED design is vacuous → FAIL.
+        _write_json(tmp_path / "reports/phase3/antenna.json",
+                    _ANTENNA_INCOMPLETE)
+        r = mod.check_tier_3_antenna(tmp_path)
+        assert r.verdict == "FAIL"
+        assert r.details["routing_incomplete"] is True
+
+    def test_clean_report_pass(self, tmp_path):
+        _write_json(tmp_path / "reports/phase3/antenna.json", _ANTENNA_CLEAN)
+        assert mod.check_tier_3_antenna(tmp_path).verdict == "PASS"
+
+    def test_absent_not_run(self, tmp_path):
+        assert mod.check_tier_3_antenna(tmp_path).verdict == "NOT_RUN"
+
+    def test_legacy_pair_still_read(self, tmp_path):
+        _write_json(tmp_path / "reports/antenna/magic.json", {"violations": 0})
+        _write_json(tmp_path / "reports/antenna/klayout.json",
+                    {"violations": 0})
+        assert mod.check_tier_3_antenna(tmp_path).verdict == "PASS"
+
+    def test_real_fail_blocks_ladder(self, tmp_path):
+        # End-to-end: the surfaced antenna FAIL makes the whole ladder FAIL
+        # (previously the masked NOT_RUN let it release-with-waivers).
+        _write_json(tmp_path / "reports/phase3/antenna.json", _ANTENNA_FAIL)
+        rep = mod.run_ladder(tmp_path)
+        assert rep.overall_verdict == "FAIL"
+        assert rep.as_dict()["released"] is False
+
+
+class TestIRRealBudget:
+    def test_real_report_uses_own_budget_pass(self, tmp_path):
+        # §4.05 no-false-FAIL: 271 µV static IR is FAR under the real 90 mV
+        # budget; the OLD 35 µV default would have wrongly FAILed it.
+        _write_json(tmp_path / "reports/phase3/ir_drop.json", _IR_REAL)
+        r = mod.check_tier_2_ir(tmp_path)
+        assert r.verdict == "PASS"
+        assert r.details["budget_source"] == "report budget_uv"
+        assert r.details["budget_uv"] == 90000.0
+
+    def test_over_report_budget_fail(self, tmp_path):
+        _write_json(tmp_path / "reports/phase3/ir_drop.json",
+                    {"worst_ir_uv": 120000.0, "budget_uv": 90000.0})
+        assert mod.check_tier_2_ir(tmp_path).verdict == "FAIL"
+
+    def test_pct_of_vdd_default_when_no_budget(self, tmp_path):
+        # No budget in report → 5%-of-Vdd default (1.8 V → 90 mV); 271 < 90 mV.
+        _write_json(tmp_path / "reports/phase3/ir_drop.json",
+                    {"worst_ir_uv": 271.0, "vdd_v": 1.8})
+        r = mod.check_tier_2_ir(tmp_path)
+        assert r.verdict == "PASS"
+        assert "default" in r.details["budget_source"]
+
+    def test_absent_not_run(self, tmp_path):
+        assert mod.check_tier_2_ir(tmp_path).verdict == "NOT_RUN"
+
+    def test_explicit_caller_budget_wins(self, tmp_path):
+        _write_json(tmp_path / "reports/phase3/ir_drop.json",
+                    {"worst_ir_uv": 50.0, "budget_uv": 90000.0})
+        # caller's tight 35 µV budget overrides the report budget → FAIL.
+        assert mod.check_tier_2_ir(tmp_path, budget_uv=35.0).verdict == "FAIL"
+
+
+class TestPDNRealDEF:
+    def _pnr(self, tmp_path):
+        return tmp_path / "phase3" / "stage3" / "pnr"
+
+    def test_def_specialnets_pass(self, tmp_path):
+        _write(self._pnr(tmp_path) / "routed.def", _DEF_WITH_SN)
+        r = mod.check_tier_2_pdn(tmp_path)
+        assert r.verdict == "PASS"
+        assert r.details["specialnets"] == 2
+        assert r.details["source"] == "DEF SPECIALNETS"
+
+    def test_no_specialnets_but_pdn_straps_pass(self, tmp_path):
+        # subservient/caravel-class: 0 DEF SPECIALNETS but PDN delivered via
+        # straps/followpins → PASS (never false-FAILed).
+        pnr = self._pnr(tmp_path)
+        _write(pnr / "routed.def", _DEF_NO_SN)
+        _write(pnr / "pnr.tcl", "add_pdn_stripe -layer met1\npdngen\n")
+        r = mod.check_tier_2_pdn(tmp_path)
+        assert r.verdict == "PASS"
+        assert r.details["source"] == "PDN-strap TCL"
+
+    def test_no_specialnets_no_straps_fail(self, tmp_path):
+        # A routed DEF with neither SPECIALNETS nor strap evidence = real
+        # missing-PDN defect (§4.05: never fabricated).
+        _write(self._pnr(tmp_path) / "routed.def", _DEF_NO_SN)
+        assert mod.check_tier_2_pdn(tmp_path).verdict == "FAIL"
+
+    def test_no_def_legacy_json_pass(self, tmp_path):
+        _write_json(tmp_path / "reports/pnr/pdn.json", {"specialnets": 4})
+        r = mod.check_tier_2_pdn(tmp_path)
+        assert r.verdict == "PASS"
+        assert r.details["source"] == "legacy pdn.json"
+
+    def test_no_def_no_legacy_not_run(self, tmp_path):
+        assert mod.check_tier_2_pdn(tmp_path).verdict == "NOT_RUN"
+
+
+class TestEMJmaxPDKFallback:
+    _TLEF = ("LAYER met1 ;\n  TYPE ROUTING ;\n  THICKNESS 0.35 ;\n"
+             "  WIDTH 0.14 ;\n  DCCURRENTDENSITY AVERAGE 2.8 ;\nEND met1\n")
+
+    def _pdk_root(self, tmp_path):
+        tlef = (tmp_path / "pdks" / "sky130A" / "libs.ref" /
+                "sky130_fd_sc_hd" / "techlef" / "sky130_fd_sc_hd__nom.tlef")
+        _write(tlef, self._TLEF)
+        return tmp_path / "pdks"
+
+    def test_pdk_root_resolves_tech_lef(self, tmp_path, monkeypatch):
+        root = self._pdk_root(tmp_path)
+        monkeypatch.setenv("PDK_ROOT", str(root))
+        monkeypatch.setenv("PDK", "sky130A")
+        proj = tmp_path / "proj"
+        # EM segment CSV present, but NO jmax/tech-lef inside the project.
+        _write(proj / "reports/phase3/em_segments.csv", _em_csv(1e-4))
+        j, t = mod._discover_jmax_ref(proj)
+        assert j is None and t is not None
+        assert t.name == "sky130_fd_sc_hd__nom.tlef"
+        # The EM tier now gives a REAL verdict instead of SKIP.
+        r = mod.check_tier_2_em(proj)
+        assert r.verdict == "PASS"
+        assert r.details["em_verdict"] == "PASS"
+
+    def test_no_pdk_root_keeps_honest_skip(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("PDK_ROOT", raising=False)
+        monkeypatch.delenv("PDK", raising=False)
+        proj = tmp_path / "proj"
+        _write(proj / "reports/phase3/em_segments.csv", _em_csv(1e-4))
+        j, t = mod._discover_jmax_ref(proj)
+        assert (j, t) == (None, None)
+        r = mod.check_tier_2_em(proj)
+        assert r.verdict == "NOT_RUN"
+        assert r.details["em_verdict"] == "SKIPPED"
+
+    def test_unresolvable_pdk_root_is_skip(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PDK_ROOT", str(tmp_path / "does_not_exist"))
+        assert mod._resolve_pdk_tech_lef() is None
+
+
+class TestSignoffDiscoveryNoFabrication:
+    """§4.05 blanket negative: on a project with NO artifacts, every OLD tier
+    is NOT_RUN — discovery never fabricates a pass out of thin air."""
+
+    def test_all_old_tiers_not_run_on_empty(self, tmp_path):
+        for fn in (mod.check_tier_1_drc, mod.check_tier_2_pdn,
+                   mod.check_tier_2_ir, mod.check_tier_3_antenna,
+                   mod.check_tier_3_esd, mod.check_tier_4_lvs_device,
+                   mod.check_tier_5_latchup):
+            r = fn(tmp_path)
+            assert r.verdict == "NOT_RUN", f"{fn.__name__} -> {r.verdict}"
