@@ -344,3 +344,31 @@ def test_resolve_signoff_corner_libs_from_staged_input(tmp_path):
     assert set(got) == {"SS", "TT", "FF"}
     assert got["SS"].endswith("ss_100C_1v40.lib")
     assert got["FF"].endswith("ff_n40C_1v95.lib")
+
+
+# ── v1.2.x regression: the multi_process disclosure %-format must not crash ──
+def test_mcorner_ocv_disclosure_escaped_percent_no_typeerror():
+    """v1.2.85 regression (caught live on the sha256 sky130A re-run):
+    step_canonicalize_artefacts built the multi-corner-OCV `disclosure` string with
+    a bare `±5%` inside a `% (setup_lbl, hold_lbl)`-formatted literal, so Python read
+    `% +` (from "5% + recovery") as a THIRD conversion spec → TypeError: not enough
+    arguments for format string — on the multi_process=True branch that EVERY sky130A
+    ss+ff run takes, crashing the runner AFTER all EDA work. The percent must be
+    escaped (`±5%%`). This pins the exact expression + a source guard."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1]
+           / "phase3_one_shot_runner.py").read_text()
+    # source guard: the %-FORMATTED disclosure literal must carry the ESCAPED
+    # percent. (A separate f-string note keeps a bare `±5%` — that is SAFE, an
+    # f-string does no %-substitution — so we assert the escaped form exists, not
+    # a blanket ban on the bare form.)
+    assert "flat-OCV ±5%% + recovery/" in src
+    # behavioural: the exact multi_process=True expression renders without raising.
+    setup_lbl, hold_lbl = "ss_100C_1v40", "ff_n40C_1v95"
+    rendered = ("Multi-corner OCV sign-off: SETUP @ %s process (slow) + max-RC, "
+                "HOLD @ %s process (fast) + min-RC, flat-OCV ±5%% + recovery/"
+                "removal/MPW. Per-corner slack is REAL — a violation is SURFACED, "
+                "not masked; close it with the DRV constraints + a timing ECO."
+                % (setup_lbl, hold_lbl))
+    assert "±5% + recovery" in rendered          # literal percent survives
+    assert setup_lbl in rendered and hold_lbl in rendered
