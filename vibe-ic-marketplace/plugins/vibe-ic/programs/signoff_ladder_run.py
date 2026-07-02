@@ -537,11 +537,19 @@ def check_tier_xor(project_dir: Path,
     elif ladder == "FAIL":
         notes = (f"{len(res.get('failing_residual', []))} real XOR residual "
                  "bucket(s) outside any allow-listed macro")
+    # Surface an inert waiver (allow-macro that matched no residual bucket, e.g.
+    # a macro nested below the XOR --top) so it is visible in the ladder report.
+    if res.get("inert_allow_macros"):
+        inert = ", ".join(res["inert_allow_macros"])
+        notes = (notes + " | " if notes else "") + \
+            f"inert allow-macro(s) matched no residual (check --top): {inert}"
     return TierResult(
         "T_XOR", "Layout XOR (GDS vs golden)", ladder,
         details={"total_residual_count": res.get("total_residual_count"),
                  "waived_residual": res.get("waived_residual"),
-                 "failing_residual": res.get("failing_residual")},
+                 "failing_residual": res.get("failing_residual"),
+                 "inert_allow_macros": res.get("inert_allow_macros"),
+                 "advisories": res.get("advisories")},
         artifact_path=str(rpt), notes=notes)
 
 
