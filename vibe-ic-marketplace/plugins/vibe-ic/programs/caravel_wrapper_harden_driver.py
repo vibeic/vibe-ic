@@ -67,6 +67,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field, asdict
@@ -241,16 +242,117 @@ def find_hardened_gds(project_dir: Path, design: str,
     return max(cands, key=lambda p: p.stat().st_mtime)
 
 
+def find_hardened_gl_netlists(project_dir: Path, design: str,
+                              tag: Optional[str] = None) -> List[Path]:
+    """Locate the gate-level Verilog netlist(s) the OpenLane run produced.
+
+    OpenLane-1 layout: openlane/<design>/runs/<tag>/results/final/verilog/gl/
+    holds the hardened gl netlists -- the primary `<design>.v` (the one the
+    Efabless mpw_precheck reads as `verilog/gl/<design>.v` for its Consistency
+    and LVS checks) plus siblings such as `<design>.nl.v`. Chip-AGNOSTIC glob.
+
+    §4.05 honesty (identical to `find_hardened_gds`): when `tag` is given the
+    search is SCOPED to that run's tag directory ONLY, so a STALE gl netlist from
+    an earlier unrelated run can never mask a CURRENT invocation that produced
+    nothing -- which would let a fabricated netlist be staged into the project and
+    manufacture a Consistency/LVS pass off a harden that did not happen. Passing
+    None keeps the newest-run behaviour for callers that genuinely want it.
+
+    Returns the produced gl netlists ordered with `<design>.v` FIRST (so the
+    primary user netlist leads), then the remaining siblings, all from the single
+    newest gl directory. Empty list when the harden produced no gl netlist."""
+    runs = project_dir / "openlane" / design / "runs"
+    if not runs.is_dir():
+        return []
+    base = f"{tag}" if tag else "*"
+    all_gl = [p for p in runs.glob(f"{base}/results/final/verilog/gl/*.v")
+              if p.is_file()]
+    if not all_gl:
+        return []
+    # Scope to the SINGLE newest gl directory (one run's netlists), so we never
+    # mix netlists from two different runs.
+    newest = max(all_gl, key=lambda p: p.stat().st_mtime)
+    gl_dir = newest.parent
+    files = sorted(p for p in gl_dir.glob("*.v") if p.is_file())
+    primary = gl_dir / f"{design}.v"
+    ordered: List[Path] = []
+    if primary in files:
+        ordered.append(primary)
+    ordered.extend(p for p in files if p != primary)
+    return ordered
+
+
+def run_stage_gl(project_dir: Path, design: str,
+                 tag: Optional[str] = None,
+                 gl_netlists: Optional[List[Path]] = None,
+                 dest_dir: Optional[Path] = None) -> DriverResult:
+    """STAGE the harden's produced gl netlist(s) into the project's `verilog/gl/`.
+
+    This is the missing wire between the OpenLane harden and the Efabless
+    mpw_precheck: the precheck's Consistency + LVS checks read the user netlist at
+    `<project>/verilog/gl/<design>.v` (see mpw_precheck
+    checks/utils/utils.py: `user_netlist = project_path / "verilog/gl/<design>.v"`),
+    but the OpenLane harden writes it under
+    `openlane/<design>/runs/<tag>/results/final/verilog/gl/<design>.v`. Without
+    this copy the Consistency check FAILs with "user_project_wrapper.v file was
+    not found in verilog/gl" and LVS has no user netlist to compare.
+
+    §4.05 honesty invariants (unit-tested):
+      * Stages ONLY gl netlists that ACTUALLY exist on disk from the harden. If
+        the harden produced NONE, returns BLOCKED and writes NOTHING -- never an
+        empty / fabricated netlist -- so the precheck Consistency/LVS still FAIL
+        honestly.
+      * When `tag` is given the source search is tag-scoped (via
+        `find_hardened_gl_netlists`), so a stale prior-run netlist can never be
+        staged in place of a current run that produced nothing."""
+    project_dir = Path(project_dir)
+    dest_dir = Path(dest_dir) if dest_dir else (project_dir / "verilog" / "gl")
+    if gl_netlists is None:
+        gl_netlists = find_hardened_gl_netlists(project_dir, design, tag=tag)
+    else:
+        gl_netlists = [Path(p) for p in gl_netlists if Path(p).is_file()]
+    if not gl_netlists:
+        return DriverResult(
+            "stage_gl", "BLOCKED",
+            details={"design": design, "dest_dir": str(dest_dir),
+                     "staged": [],
+                     "note": ("harden produced no gl netlist under "
+                              "runs/*/results/final/verilog/gl -- nothing staged "
+                              "(§4.05: never fabricate a netlist; the precheck "
+                              "Consistency/LVS still FAIL honestly)")},
+            blocked_reason="no produced gl netlist to stage into verilog/gl")
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    staged: List[str] = []
+    for src in gl_netlists:
+        dst = dest_dir / src.name
+        shutil.copy2(str(src), str(dst))
+        staged.append(str(dst))
+    return DriverResult(
+        "stage_gl", "PASS",
+        details={"design": design, "dest_dir": str(dest_dir),
+                 "staged": staged,
+                 "source_gl_dir": str(gl_netlists[0].parent)},
+        artifact=str(dest_dir / f"{design}.v"))
+
+
 def run_harden(project_dir: Path, design: str,
                image: str = OPENLANE_IMAGE_DEFAULT,
                pdk_root: Optional[str] = None,
                run: bool = False,
                tag: str = "harden",
                runner: Optional[Runner] = None,
-               timeout: int = 7200) -> DriverResult:
+               timeout: int = 7200,
+               stage_gl: bool = False) -> DriverResult:
     """Harden the wrapper. run=False -> NOT_RUN plan (command hint + missing
     prereqs). run=True -> live: BLOCKED if prereqs missing (never a fake GDS),
-    else run OpenLane and PASS iff a hardened GDS lands on disk, else FAIL."""
+    else run OpenLane and PASS iff a hardened GDS lands on disk, else FAIL.
+
+    `stage_gl=True` wires the harden's success path into the precheck input: on a
+    clean PASS the produced gl netlist(s) are staged into `verilog/gl/` (via
+    `run_stage_gl`, tag-scoped) so mpw_precheck's Consistency + LVS checks can
+    read `verilog/gl/<design>.v`. The stage result is recorded under
+    details["gl_staged"] and NEVER upgrades or fabricates the harden verdict -- a
+    non-PASS harden stages nothing (§4.05)."""
     project_dir = Path(project_dir)
     runner = runner or default_runner
     hint = harden_command_hint(project_dir, design, image, pdk_root)
@@ -278,10 +380,17 @@ def run_harden(project_dir: Path, design: str,
     # never mask a current invocation that produced nothing.
     gds = find_hardened_gds(project_dir, design, tag=tag)
     if gds is not None and rc == 0:
+        details: Dict[str, Any] = {"design": design, "rc": rc,
+                                   "stdout_tail": out[-2000:],
+                                   "stderr_tail": err[-2000:]}
+        if stage_gl:
+            # Wire the success path into the precheck input: stage the produced
+            # gl netlist(s) into verilog/gl/ (tag-scoped -> only THIS run's
+            # netlists). This never changes the harden verdict.
+            details["gl_staged"] = run_stage_gl(
+                project_dir, design, tag=tag).as_dict()
         return DriverResult(
-            "harden", "PASS",
-            details={"design": design, "rc": rc,
-                     "stdout_tail": out[-2000:], "stderr_tail": err[-2000:]},
+            "harden", "PASS", details=details,
             command_hint=hint, artifact=str(gds))
     if gds is not None and rc != 0:
         # OpenLane produced a GDS for THIS run but the flow itself exited
@@ -609,6 +718,19 @@ def _cli(argv: Optional[List[str]] = None) -> int:
     ph.add_argument("--image", default=OPENLANE_IMAGE_DEFAULT)
     ph.add_argument("--pdk-root", default=None)
     ph.add_argument("--run", action="store_true")
+    ph.add_argument("--stage-gl", action="store_true", dest="stage_gl",
+                    help="On a clean PASS, stage the produced gl netlist(s) into "
+                         "verilog/gl/ so mpw_precheck Consistency/LVS can read "
+                         "verilog/gl/<design>.v (§4.05: only a produced netlist).")
+
+    ps = sub.add_parser("stage-gl", help="Stage the harden's produced gl "
+                        "netlist(s) into verilog/gl/ for mpw_precheck")
+    ps.add_argument("--project-dir", type=Path, required=True)
+    ps.add_argument("--design", default="user_project_wrapper")
+    ps.add_argument("--tag", default=None,
+                    help="Scope the source search to this OpenLane run tag "
+                         "(§4.05: prevents a stale prior-run netlist masking a "
+                         "current run that produced none). Default: newest run.")
 
     pm = sub.add_parser("merge", help="Merge hardened wrapper into golden base")
     pm.add_argument("--base", type=Path, required=True)
@@ -645,7 +767,12 @@ def _cli(argv: Optional[List[str]] = None) -> int:
 
     if args.cmd == "harden":
         r = run_harden(args.project_dir, args.design, image=args.image,
-                       pdk_root=args.pdk_root, run=args.run)
+                       pdk_root=args.pdk_root, run=args.run,
+                       stage_gl=getattr(args, "stage_gl", False))
+        payload = r.as_dict()
+        verdict = r.verdict
+    elif args.cmd == "stage-gl":
+        r = run_stage_gl(args.project_dir, args.design, tag=args.tag)
         payload = r.as_dict()
         verdict = r.verdict
     elif args.cmd == "merge":
