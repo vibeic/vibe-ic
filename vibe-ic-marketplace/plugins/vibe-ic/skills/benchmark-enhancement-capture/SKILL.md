@@ -354,6 +354,15 @@ final sign correction"; "AXI-Stream: hold tdata/tlast stable while tvalid &&
 
 Route in `CAPTURE_ROUTING.json` → `phase2.rtl_gen.ic_expert_db`.
 
+**The dual-track SELECT is deterministic** — `programs/dual_track_select.py` makes
+the "keep whichever candidate PASSes" decision by a gate/verifier, NEVER by an
+author self-report. FUNCTIONAL tier (a scorer / cocotb TB supplied) picks the
+first candidate that truly PASSes (this is where the +13 union lift is real);
+STRUCTURAL tier (general Phase-1, no functional oracle) falls back to
+iverilog-elaborate + a PRIMARY-first tie-break — it avoids regressing below the
+primary single-track but does NOT claim functional correctness. So dual-track is
+program-first: authors produce two attempts, a PROGRAM keeps the passing one.
+
 ## Procedure
 
 1. **Collect recovery records**. Input: pairs `(<design>, <prior-fail-sample>, <recovered-pass-sample>, <AI-reasoning>)`. Source = the close-loop agents' final reports + git diff between samples/.
