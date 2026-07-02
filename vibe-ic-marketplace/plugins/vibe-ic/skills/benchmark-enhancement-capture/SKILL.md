@@ -322,6 +322,38 @@ two real residuals as Bucket-D "clean-room variance" / "incomplete-closeloop"
 and declared a FALSE convergence. They were in fact real plugin enhancements
 (#517–#520). "variance" is never a discard reason — capture and fix it.
 
+## The 4th distill target — the IC Expert DB (owner directive 2026-07-02)
+
+Some recoveries are neither a deterministic rule (Bucket A) nor a one-paragraph
+convention a fresh author might forget (Bucket B) — they are **generalizable
+design-CLASS CRAFT**: the algorithm-correctness point, interface convention,
+latency/reset discipline, or specific trap that makes a WHOLE class of design
+correct (e.g. "non-restoring division needs a (W+1)-bit partial remainder + a
+final sign correction"; "AXI-Stream: hold tdata/tlast stable while tvalid &&
+!tready"). These distill into the **IC Expert DB**
+(`agents/ic_expert_db/ic_expert_db.json`), keyed by `ic_class`.
+
+- **Consumed by the GENERAL path as a DUAL-TRACK second opinion**: the runner
+  writes the RELEVANT DB lessons (via `ic_expert_db_query.py` →
+  `render_ic_expert_db_digest`) to a SEPARATE `ic_expert_db.md`, for an
+  INDEPENDENT second-track author whose result cross-checks the primary author.
+  **Measured (94 hard CVDP designs):** folding the DB into the single main
+  digest LOWERED single-shot recovery (38→31, attention dilution), but as a
+  complementary track the union is 38→**51 (+13)**. So the DB is a second track,
+  NOT extra text in one digest. Serves ANY Phase-1 doc (GENERAL-CORE, not a
+  benchmark adapter).
+- **ADVISORY, never overriding**: a DB lesson ADDS design knowledge; it must NOT
+  assert a hard rule a gate/program enforces, and can NEVER contradict a gate.
+  The invariant (advisory + blindness-clean: no design-id, no oracle-value, no
+  "disable the gate") is enforced by **`ic_expert_db_consistency_check.py`** —
+  run it CLEAN before shipping any DB change.
+- **Program-first still wins**: prefer Bucket A when a deterministic rule can
+  capture it. Use the IC Expert DB for the residual craft that genuinely needs
+  an LLM author — it is the structured home for Bucket-B-class design knowledge
+  (retrievable by ic_class, not lost in monolithic prose).
+
+Route in `CAPTURE_ROUTING.json` → `phase2.rtl_gen.ic_expert_db`.
+
 ## Procedure
 
 1. **Collect recovery records**. Input: pairs `(<design>, <prior-fail-sample>, <recovered-pass-sample>, <AI-reasoning>)`. Source = the close-loop agents' final reports + git diff between samples/.
