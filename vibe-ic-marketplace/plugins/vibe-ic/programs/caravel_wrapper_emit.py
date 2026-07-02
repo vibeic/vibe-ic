@@ -69,6 +69,14 @@ CARAVEL_GOLDEN_NON_POWER_PORTS: Tuple[Dict[str, Any], ...] = (
     {"name": "io_in", "dir": "input", "width": "[37:0]"},
     {"name": "io_out", "dir": "output", "width": "[37:0]"},
     {"name": "io_oeb", "dir": "output", "width": "[37:0]"},
+    # Analog — the golden template's `inout [MPRJ_IO_PADS-10:0] analog_io`
+    # (MPRJ_IO_PADS=38 → [28:0]). REQUIRED for the mpw_precheck Consistency PORTS
+    # exact-set compare; omitting it hard-FAILs PORTS (+ the CVC power deck's
+    # `user_clock2` net lookup). A digital design leaves analog_io as an
+    # unconnected pad passthrough (it is an inout, so check_port_types exempts it).
+    {"name": "analog_io", "dir": "inout", "width": "[28:0]"},
+    # Independent user clock (second user clock the golden wrapper exposes).
+    {"name": "user_clock2", "dir": "input", "width": ""},
     # IRQ
     {"name": "user_irq", "dir": "output", "width": "[2:0]"},
 )
@@ -359,6 +367,18 @@ def emit_wrapper(pm: PinMap) -> str:
 
     # Unused tied-off outputs that the user didn't enumerate
     # explicitly — best-effort defaults for the common Caravel ports.
+    # HONEST LVS NOTE (reduced non-macro wrapper): tying a whole output bus to a
+    # constant puts every bit of that bus on ONE physical (tie) net, which
+    # mpw_precheck LVS reports as "electrically shorted ports". This is correct
+    # RTL for a wrapper that genuinely does not drive those buses, but it is NOT
+    # the golden pattern (golden drives every output bit from a real sub-macro).
+    # A submission wrapper that must be LVS-short-clean should drive each unused
+    # output bit from a DISTINCT tie cell (or from the user macro). This residual
+    # is a property of the reduced wrapper, not the port set — see
+    # benchmark-data/ic/TAPEOUT_SIGNOFF_GAP_ROADMAP.md.
+    out.append("    // NOTE: whole-bus constant tie-offs below read as LVS "
+               "'shorted ports' on a reduced wrapper — drive from the macro / "
+               "distinct tie cells for an LVS-short-clean submission.")
     out.append("    // Unused Caravel slave/LA/IRQ ports tied to safe defaults")
     needed_defaults = {
         "wbs_ack_o": "1'b0",

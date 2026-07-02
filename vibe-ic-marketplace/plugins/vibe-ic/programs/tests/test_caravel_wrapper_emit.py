@@ -76,6 +76,32 @@ class TestEmitWrapper:
         for p in mod.CARAVEL_GOLDEN_NON_POWER_PORTS:
             assert p["name"] in w
 
+    def test_conformant_pinout_has_analog_io_and_user_clock2(self):
+        # v1.2.x — the mpw_precheck Consistency PORTS check is an EXACT sorted
+        # port-name-set compare vs the golden user_project_wrapper. The emitter
+        # previously OMITTED analog_io[28:0] + user_clock2, hard-FAILing PORTS
+        # (and the CVC power deck's user_clock2 net lookup). They must now be in
+        # both the golden table AND the emitted header.
+        names = {p["name"] for p in mod.CARAVEL_GOLDEN_NON_POWER_PORTS}
+        assert "analog_io" in names and "user_clock2" in names
+        w = mod.emit_wrapper(_spm_pin_map())
+        header = w[:w.index(");")]
+        assert "inout  wire [28:0] analog_io" in header
+        assert "input  wire user_clock2" in header
+
+    def test_analog_io_width_matches_golden(self):
+        # golden: inout [MPRJ_IO_PADS-10:0] analog_io, MPRJ_IO_PADS=38 → [28:0]
+        aio = next(p for p in mod.CARAVEL_GOLDEN_NON_POWER_PORTS
+                   if p["name"] == "analog_io")
+        assert aio["dir"] == "inout" and aio["width"] == "[28:0]"
+
+    def test_reduced_wrapper_lvs_short_note_present(self):
+        # HONEST: the whole-bus constant tie-offs read as LVS 'shorted ports' on
+        # a reduced wrapper — the emitter must DISCLOSE that (not silently emit a
+        # pattern that fails LVS with no explanation).
+        w = mod.emit_wrapper(_spm_pin_map())
+        assert "LVS 'shorted ports'" in w
+
     def test_all_power_ports_present(self):
         w = mod.emit_wrapper(_spm_pin_map())
         for pn in mod.CARAVEL_GOLDEN_POWER_PORTS:
