@@ -149,10 +149,23 @@ def test_spef_sta_tcl_emits_ocv_and_check_types():
     src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
     i = src.index("def _emit_spef_sta")
     window = src[i:i + 6800]
-    assert "set_timing_derate -early" in window
+    # v1.2.x — the derate is emitted via the shared _flat_ocv_derate_tcl() helper
+    # (TWO separate set_timing_derate commands; this OpenSTA build rejects the
+    # combined -early -late form). The emitter must CALL that helper.
+    assert "_flat_ocv_derate_tcl" in window
     assert "OCV_DERATE_APPLIED" in window
-    assert "report_check_types -recovery -removal" in window
-    assert "min_pulse_width" in window
+    # v1.2.x — the recovery/removal/MPW check types are emitted via the shared
+    # _report_check_types_tcl() helper (guarded + marked), which the emitter CALLS.
+    assert "_report_check_types_tcl" in window
+    # the shared helper itself carries the check-type command + the authoritative
+    # marker (OpenSTA 3.1.0's report output omits the literal check-type words).
+    j = src.index("def _report_check_types_tcl")
+    helper = src[j:j + 1200]
+    assert "report_check_types -recovery -removal" in helper
+    assert "min_pulse_width" in helper
+    assert "_SIGNOFF_CHECK_TYPES_MARKER" in helper   # writes the marker
+    # the marker constant names the check types (module-level).
+    assert "SIGNOFF_CHECK_TYPES_REPORTED recovery removal" in src
     # the OCV marker is written via a native-Tcl channel append (a bare
     # `puts >> file` would be invalid Tcl).
     assert "open " in window and "puts $_ocvf" in window
