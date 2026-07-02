@@ -592,7 +592,8 @@ def run_xor(assembled_gds: Path, golden_gds: Path, top: str,
         missing.append(f"golden reference GDS absent: {golden_gds}")
 
     script_text = xlc.emit_xor_script(top, str(assembled_gds),
-                                      str(golden_gds), str(report_out))
+                                      str(golden_gds), str(report_out),
+                                      allow_macros=allow_macros)
     hint = xlc.klayout_command_hint(str(script_out))
 
     if not run:
