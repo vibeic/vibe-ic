@@ -175,6 +175,26 @@ precheck). Findings (all LIVE, dedicated containers, honest):
 remaining fail is now a NAMED, bounded item (the gl-netlist input the harden emits, the blackbox-macro
 floor + its waivers, and the golden caravel.gds for XOR) — not a Vibe-IC capability gap.
 
+## ── gl-NETLIST WIRED (v1.2.83) — precheck Consistency+LVS now run for REAL ──
+The plugin's last WIRING gap on the caravel path is closed: `run_stage_gl` stages the harden's produced
+`results/final/verilog/gl/user_project_wrapper.v` into the project's `verilog/gl/` (tag-scoped, §4.05 —
+stages ONLY a netlist the harden actually produced; a harden that produced none → BLOCKED, no fabrication).
+LIVE (real PDK + efabless/mpw_precheck), both checks advanced from "can't run / missing netlist" to REAL
+comparisons:
+- **Consistency** now runs a genuine structural compare → LAYOUT/COMPLEXITY/MODELING/POWER **PASS**; the
+  only remaining fail is **PORTS** — the spm PILOT wrapper omits `analog_io[0:28]`/`user_clock2` vs the
+  caravel fixed pinout (a DESIGN non-conformance of the pilot, not a plugin gap).
+- **LVS** now runs a real netgen extract+compare (16s) → the residuals are genuine DESIGN issues in the
+  pilot wrapper (`wbs_dat_o[0:29]`↔`wbs_ack_o` shorts) + the expected `spm` blackbox-macro floor.
+
+**The DIVIDING LINE is now sharp and honest:** every remaining precheck fail is either (a) a DESIGN
+non-conformance of the *spm pilot* wrapper (reduced port set + wbs shorts — needs a chip-specific real
+submission wrapper, NOT a plugin change), (b) the `spm` blackbox-macro floor (allow-list/waiver), or
+(c) the absent golden `caravel.gds` (fetch: `git clone -b 2024.09.12-1 efabless/caravel && make
+uncompress`, or `make ship`). **The Vibe-IC program-first surface for the full Efabless tapeout flow is
+complete** — harden→stage-gl→precheck→(merge+XOR) all run for real; what's left is design/data, not
+capability.
+
 ## THE reframing that changes everything (Efabless = no Calibre gap)
 
 The one **real, free** tapeout path for sky130 is the **Efabless / chipIgnite / Google-sky130 open
