@@ -8991,8 +8991,14 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             "violated_corners": _viol,
             "timing_closed_multi_corner": (mc_ocv_ok and not _viol),
             "disclosure": (
+                # NOTE: the literal ±5%% is an ESCAPED percent — this string is
+                # %-formatted with (setup_lbl, hold_lbl); a bare "5%" made Python
+                # read "% +" as a third conversion spec → TypeError on the
+                # multi_process=True branch (which every sky130A ss+ff run takes),
+                # crashing step_canonicalize_artefacts AFTER all EDA work. (v1.2.85
+                # regression, caught live on the sha256 re-run.)
                 ("Multi-corner OCV sign-off: SETUP @ %s process (slow) + max-RC, "
-                 "HOLD @ %s process (fast) + min-RC, flat-OCV ±5% + recovery/"
+                 "HOLD @ %s process (fast) + min-RC, flat-OCV ±5%% + recovery/"
                  "removal/MPW. Per-corner slack is REAL — a violation is SURFACED, "
                  "not masked; close it with the DRV constraints + a timing ECO."
                  % (setup_lbl, hold_lbl)) if multi_process else
