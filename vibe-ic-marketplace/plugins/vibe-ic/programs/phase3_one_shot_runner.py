@@ -53,6 +53,7 @@ import lvs_netgen_setup_emit as _lvs_setup  # GAP-E2E-9 — power-net globalisat
 import lvs_power_aware_netlist_emit as _lvs_pa  # GAP-E2E-9 ROOT — power-aware netlist
 import lvs_power_aware_extract_tcl as _lvs_paext  # LVS ROOT (extract side) — power-aware DEF extraction
 import sdc_constraints as _sdc  # #554 — shared staged-SDC ground-truth helpers
+import eco_trigger_decision as _eco_dec  # ECO auto-trigger multi-corner-OCV gate
 
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
@@ -8964,17 +8965,8 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                     mc_ocv_mirror.write_text(mc_ocv_rpt.read_text())
                     written.append(str(mc_ocv_mirror))
                 # Parse the REAL per-corner worst slack (surface the violation).
-                _body = mc_ocv_rpt.read_text(errors="replace")
-                _parts = re.split(r"^=== (SETUP|HOLD) corner:", _body,
-                                  flags=re.MULTILINE)
-                # _parts = [pre, 'SETUP', body, 'HOLD', body, ...]
-                for _i in range(1, len(_parts) - 1, 2):
-                    _kind, _sec = _parts[_i], _parts[_i + 1]
-                    _ws = _worst_slack(_sec)
-                    if _kind == "SETUP":
-                        setup_wns = _ws
-                    elif _kind == "HOLD":
-                        hold_wns = _ws
+                setup_wns, hold_wns = _parse_mcorner_ocv_slacks(
+                    mc_ocv_rpt.read_text(errors="replace"))
         _viol = [n for n, v in (("setup", setup_wns), ("hold", hold_wns))
                  if v is not None and v < 0]
         mc_ocv_stance.write_text(json.dumps({
@@ -9496,37 +9488,23 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         }, indent=2) + "\n")
         written.append(str(skip_note))
 
-    # --- Step 32: ECO no-op flag ----------------------------------------
-    if tns_zero:
-        flag = eco_out / "no_eco_needed.flag"
-        if not flag.is_file():
-            flag.write_text(
-                "no_eco_needed\n"
-                "# Auto-staged by phase3_one_shot_runner v1.6.36.\n"
-                "# Reason: post-route STA reports TNS=0 (no setup/hold violations).\n"
-                f"# Source: {_sta_for_eco.relative_to(project)}\n"
-            )
-            written.append(str(flag))
-
     # --- Step 32b: ECO timing repair TCL (ORGANIC #561) ----------------
-    # Emit a standalone OpenROAD ECO timing-repair script with the 4
-    # workarounds (RSZ-0074 / Signal-11 / DRT-0305 / DPL-0033) so any
-    # subsequent ECO iteration uses the correct safe sequence.
+    # Emit the standalone multi-corner-aware OpenROAD ECO timing-repair script
+    # with the 4 workarounds (RSZ-0074 / Signal-11 / DRT-0305 / DPL-0033). Emit
+    # it BEFORE the auto-trigger decision so a FIRING trigger has a script to run.
+    # TAPEOUT-SIGNOFF (multi-corner ECO): discover the PDK's ss/tt/ff process-
+    # corner libs so the ECO drives repair_timing -setup against the WORST (ss)
+    # corner — not just tt. Best-effort: an empty dict (single-corner PDK /
+    # discovery failure) leaves the emitted ECO single-corner (byte-identical).
+    try:
+        _eco_corner_libs = _resolve_signoff_corner_libs(project, pdk, container)
+    except Exception:
+        _eco_corner_libs = {}
     eco_tcl_path = eco_out / "eco_timing_repair.tcl"
     if not eco_tcl_path.is_file():
         try:
             _pnr_dir_c = _to_container_path(str(pnr_out), container)
             _eco_dir_c = _to_container_path(str(eco_out), container)
-            # TAPEOUT-SIGNOFF (multi-corner ECO): discover the PDK's ss/tt/ff
-            # process-corner libs so the emitted ECO drives repair_timing -setup
-            # against the WORST (ss) corner — not just tt. Best-effort: an empty
-            # dict (single-corner PDK / discovery failure) leaves the emitted ECO
-            # single-corner (byte-identical to before).
-            try:
-                _eco_corner_libs = _resolve_signoff_corner_libs(
-                    project, pdk, container)
-            except Exception:
-                _eco_corner_libs = {}
             eco_tcl_content = _build_eco_repair_tcl(
                 top,
                 _to_container_path(str(pdk.tech_lef), container),
@@ -9541,6 +9519,120 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             notes.append("emitted eco_timing_repair.tcl (#561)")
         except Exception as _eco_tcl_exc:
             notes.append(f"eco_timing_repair.tcl emit failed: {_eco_tcl_exc}")
+
+    # --- Step 32: ECO auto-trigger (MULTI-CORNER-OCV-gated) -------------
+    # TAPEOUT-SIGNOFF (ibex-surfaced) — the auto-trigger now gates on the
+    # MULTI-CORNER OCV sign-off (ss/ff process corners), NOT just the single-
+    # corner (tt) post-route STA. A design that MEETs tt but VIOLATES ss (ibex:
+    # tt +6.02 ns MET, ss −88 ns VIOLATED) must FIRE the multi-corner-aware ECO;
+    # writing no_eco_needed.flag from tt alone left the multi-corner ECO
+    # emitted-but-dead for exactly the designs that need it. `_eco_dec.decide`
+    # is the ONE decision both no_eco_needed.flag sites (here + eco_status_gen)
+    # consult, so they cannot drift. §4.05: when multi-corner OCV is UNAVAILABLE
+    # (single-corner PDK) we fall back to today's tt behavior (honest, no
+    # regression); we NEVER SKIP an ECO when a real multi-corner violation
+    # exists, and NEVER fabricate closure (a genuine ss floor stays VIOLATED).
+    _eco_decision = _eco_dec.decide(mc_ocv_stance, tns_zero)
+    _eco_flag = eco_out / "no_eco_needed.flag"
+    if not _eco_decision["eco_needed"]:
+        # No violation at the authoritative basis → no ECO needed.
+        if not _eco_flag.is_file():
+            _eco_flag.write_text(
+                "no_eco_needed\n"
+                "# Auto-staged by phase3_one_shot_runner.\n"
+                f"# Basis: {_eco_decision['basis']} "
+                f"(mc_ocv_available={_eco_decision['mc_ocv_available']}).\n"
+                "# Reason: no setup/hold violation at the authoritative timing\n"
+                "# basis (multi-corner OCV when available, else single-corner tt).\n"
+                f"# Single-corner source: {_sta_for_eco.relative_to(project)}\n"
+            )
+            written.append(str(_eco_flag))
+        _eco_decision["action"] = "no_eco_needed_flag"
+    else:
+        # A real violation exists at the authoritative basis → the ECO must FIRE.
+        # §4.05: never let a tt-clean flag mask a real ss violation — clear any
+        # stale optimistic no_eco_needed.flag first.
+        if _eco_flag.is_file():
+            _eco_flag.unlink()
+            notes.append(
+                "cleared stale no_eco_needed.flag — a real "
+                f"{_eco_decision['basis']} violation exists at "
+                f"{','.join(_eco_decision['violated_corners']) or 'tt'}.")
+        _eco_decision["eco_before"] = {
+            "setup_worst_slack_ns": _eco_decision["setup_worst_slack_ns"],
+            "hold_worst_slack_ns": _eco_decision["hold_worst_slack_ns"],
+        }
+        if _eco_decision["mc_ocv_available"] and eco_tcl_path.is_file():
+            # AUTO-TRIGGER FIRES: run the multi-corner-aware ECO.
+            notes.append(
+                "ECO auto-trigger FIRING: multi-corner OCV surfaced a real "
+                f"violation at {','.join(_eco_decision['violated_corners'])} "
+                f"(setup_wns={_eco_decision['setup_worst_slack_ns']} "
+                f"hold_wns={_eco_decision['hold_worst_slack_ns']}) — running the "
+                "multi-corner ECO (NOT writing no_eco_needed.flag).")
+            _ran = _run_eco_repair(project, top, container, eco_tcl_path, notes)
+            _eco_decision["action"] = ("eco_fired_ran" if _ran
+                                       else "eco_fired_no_netlist")
+            _eco_after = {}
+            if _ran:
+                # Re-measure the multi-corner OCV ss/ff WNS on the ECO netlist so
+                # the before→after recovery is surfaced (§4.05: a genuine floor
+                # stays VIOLATED — recover what is recoverable, do not fabricate).
+                _eco_after = _measure_posteco_mcorner_ocv(
+                    project, top, pdk, container, _eco_corner_libs,
+                    mc_spef_dir, spef_out, sta_out, notes)
+                _eco_decision["eco_after"] = _eco_after
+            # Wire the fired ECO into a schema-complete eco_log.json so the ECO
+            # step's audit (eco_loop_audit: changes + re_verified + affected_steps)
+            # reflects the REAL ECO that ran — eco_status_gen preserves it (#564).
+            _eco_residual = bool(_eco_after.get("violated_corners")) if _ran else True
+            _eco_log = eco_out / "eco_log.json"
+            try:
+                _eco_log.write_text(json.dumps({
+                    "program": "phase3_one_shot_runner.eco_auto_trigger",
+                    "verdict": "ECO_APPLIED" if _ran else "ECO_ATTEMPTED",
+                    "trigger_basis": "multi_corner_ocv",
+                    "trigger_violated_corners": _eco_decision["violated_corners"],
+                    "changes": [{
+                        "type": "multi_corner_repair_timing",
+                        "detail": ("multi-corner-aware repair_design + "
+                                   "repair_timing -setup (ss/tt/ff) + reroute via "
+                                   "eco_timing_repair.tcl; ECO netlist "
+                                   f"{top}_eco.v" + (" produced" if _ran
+                                                     else " NOT produced")),
+                        "corners": sorted(_eco_corner_libs),
+                    }],
+                    # re_verified is True ONLY when we genuinely re-ran the OCV
+                    # sign-off on the ECO netlist (§4.05: honest — a failed ECO
+                    # run that produced no netlist is NOT re-verified).
+                    "re_verified": bool(_ran and _eco_after.get("measured")),
+                    "affected_steps": [21, 23, 24, 29, 30],
+                    "eco_before": _eco_decision["eco_before"],
+                    "eco_after": _eco_after,
+                    "residual_violation": _eco_residual,
+                    "residual_note": (
+                        "ECO recovered what is recoverable; a genuine process-"
+                        "corner floor remains VIOLATED (§4.05 — no fabricated "
+                        "closure)." if _eco_residual else
+                        "multi-corner OCV closed after the ECO."),
+                }, indent=2) + "\n")
+                written.append(str(_eco_log))
+            except Exception as _eco_log_exc:  # pragma: no cover — defensive
+                notes.append(f"eco_log.json emit failed: {_eco_log_exc}")
+        else:
+            # Single-corner PDK / OCV unavailable → today's tt behavior (honest):
+            # a tt violation is left for the in-flow PnR repair / a manual ECO; we
+            # do NOT auto-run the standalone ECO (no regression on single-corner).
+            _eco_decision["action"] = "eco_required_single_corner_fallback"
+            notes.append("ECO required at single-corner tt basis (multi-corner "
+                         "OCV unavailable) — honest fallback, not auto-run.")
+    # Durable disclosure of the trigger decision (§4.05 audit trail).
+    try:
+        (eco_out / "eco_trigger_decision.json").write_text(
+            json.dumps(_eco_decision, indent=2) + "\n")
+        written.append(str(eco_out / "eco_trigger_decision.json"))
+    except Exception:  # pragma: no cover — defensive
+        pass
 
     # --- Step 33: power.rpt (OpenSTA report_power best-effort) ---------
     power_rpt = rpt_phase3 / "power.rpt"
@@ -10068,6 +10160,125 @@ def _post_route_tns_zero(sta_rpt: Path) -> bool:
     return False
 
 
+def _run_eco_repair(project: Path, top: str, container: str,
+                    eco_tcl_path: Path, notes: List[str],
+                    timeout: int = 7200) -> bool:
+    """AUTO-TRIGGER — actually RUN the emitted multi-corner-aware ECO
+    timing-repair TCL (``_build_eco_repair_tcl``) via OpenROAD, producing
+    ``eco/{top}_eco.v`` + ``eco/eco_routed.def``.
+
+    This is the piece that was missing: the multi-corner ECO used to be EMITTED
+    (Step 32b) but NEVER RUN, so a design that MET tt but VIOLATED ss (the exact
+    case the multi-corner ECO exists for) got ``no_eco_needed.flag`` and the ECO
+    stayed dead. When the trigger fires, this runs it.
+
+    IDEMPOTENT: if the ECO netlist already exists (a prior run / resume) it is
+    NOT re-run (the ECO reroute is a full, expensive route pass). Best-effort: a
+    tool failure logs a note and returns False — §4.05, no fabricated closure."""
+    eco_out = _pl.eco_dir(project)
+    eco_v = eco_out / f"{top}_eco.v"
+    if eco_v.is_file() and eco_v.stat().st_size > 0:
+        notes.append(f"ECO auto-trigger: {eco_v.name} already present — "
+                     "reusing (no re-run).")
+        return True
+    if not eco_tcl_path.is_file():
+        notes.append("ECO auto-trigger: eco_timing_repair.tcl missing — "
+                     "cannot fire.")
+        return False
+    eco_dir_c = _to_container_path(str(eco_out), container)
+    tcl_c = _to_container_path(str(eco_tcl_path), container)
+    cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
+           f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+           f"openroad -no_init -exit {tcl_c} 2>&1 | "
+           f"tee {eco_dir_c}/eco_repair.log")
+    try:
+        _docker_exec(container, cmd, timeout=timeout)
+    except Exception as exc:  # pragma: no cover — tool/container failure
+        notes.append(f"ECO auto-trigger run failed: {exc}")
+        return False
+    ok = eco_v.is_file() and eco_v.stat().st_size > 0
+    if ok:
+        notes.append(f"ECO auto-trigger FIRED: multi-corner ECO ran → "
+                     f"{eco_v.name} produced (see eco/eco_repair.log).")
+    else:
+        notes.append("ECO auto-trigger FIRED but produced no ECO netlist "
+                     "(see eco/eco_repair.log) — surfaced, not masked.")
+    return ok
+
+
+def _parse_mcorner_ocv_slacks(rpt_text: str) -> Tuple[Optional[float],
+                                                      Optional[float]]:
+    """Parse (setup_wns, hold_wns) from an ``sta_mcorner_ocv*.rpt`` body — the
+    per-corner worst slack under the ``=== SETUP/HOLD corner:`` section headers
+    the OCV emitter writes. None for a section that is absent/unparseable."""
+    parts = re.split(r"^=== (SETUP|HOLD) corner:", rpt_text, flags=re.MULTILINE)
+    setup_wns = hold_wns = None
+    for i in range(1, len(parts) - 1, 2):
+        kind, sec = parts[i], parts[i + 1]
+        ws = _worst_slack(sec)
+        if kind == "SETUP":
+            setup_wns = ws
+        elif kind == "HOLD":
+            hold_wns = ws
+    return setup_wns, hold_wns
+
+
+def _measure_posteco_mcorner_ocv(project: Path, top: str, pdk: PdkConfig,
+                                 container: str, corner_libs: Dict[str, str],
+                                 mc_spef_dir: Path, nom_spef_path: Optional[Path],
+                                 sta_out: Path, notes: List[str]) -> Dict[str, Any]:
+    """Re-measure the multi-corner OCV ss/ff worst slack on the ECO netlist so the
+    before→after recovery of the auto-triggered ECO is surfaced.
+
+    §4.05: a genuine ss floor (ibex@20 ns) STILL shows VIOLATED afterwards — the
+    multi-corner ECO RECOVERS what is recoverable, it does NOT fabricate closure.
+    Returns the post-ECO per-corner worst slack (None values / measured=False on
+    any failure — never a fabricated MET)."""
+    out: Dict[str, Any] = {
+        "setup_worst_slack_ns": None, "hold_worst_slack_ns": None,
+        "violated_corners": [], "report": None, "measured": False,
+    }
+    eco_v = _pl.eco_dir(project) / f"{top}_eco.v"
+    if not (eco_v.is_file() and eco_v.stat().st_size > 0):
+        return out
+    posteco_rpt = Path(sta_out) / "sta_mcorner_ocv_posteco.rpt"
+    if not (posteco_rpt.is_file() and posteco_rpt.stat().st_size > 0):
+        # rediscover the per-corner SPEFs the same way the pre-ECO OCV pass did.
+        ocv_corner_spefs: Dict[str, Path] = {}
+        if mc_spef_dir and Path(mc_spef_dir).is_dir():
+            for _sp in sorted(Path(mc_spef_dir).glob(f"{top}.*.spef")):
+                _c = _sp.name[len(top) + 1:].split(".")[0]
+                if _c in _SPEF_CORNERS and _sp.stat().st_size > 0:
+                    ocv_corner_spefs[_c] = _sp
+        _nom = (nom_spef_path if (nom_spef_path
+                                  and Path(nom_spef_path).is_file()) else None)
+        _emit_mcorner_ocv_sta(
+            project, top, pdk, container, corner_libs, ocv_corner_spefs,
+            _nom, posteco_rpt, notes, netlist_override=eco_v)
+    if not (posteco_rpt.is_file() and posteco_rpt.stat().st_size > 0):
+        return out
+    setup_wns, hold_wns = _parse_mcorner_ocv_slacks(
+        posteco_rpt.read_text(errors="replace"))
+    viol = [n for n, v in (("setup", setup_wns), ("hold", hold_wns))
+            if v is not None and v < 0]
+    out.update({
+        "setup_worst_slack_ns": setup_wns,
+        "hold_worst_slack_ns": hold_wns,
+        "violated_corners": viol,
+        "report": "phase3/stage3/sta/sta_mcorner_ocv_posteco.rpt",
+        "measured": True,
+    })
+    if viol:
+        notes.append(
+            f"post-ECO multi-corner OCV: STILL VIOLATED at {'/'.join(viol)} "
+            f"(setup_wns={setup_wns} hold_wns={hold_wns}) — real timing floor; "
+            "the ECO recovered what is recoverable (§4.05, no fabricated closure).")
+    else:
+        notes.append(f"post-ECO multi-corner OCV: CLOSED "
+                     f"(setup_wns={setup_wns} hold_wns={hold_wns}).")
+    return out
+
+
 def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
                            container: str, libs: List[Path],
                            out_dir: Path, notes: List[str]) -> bool:
@@ -10481,7 +10692,8 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
                           container: str, corner_libs: Dict[str, str],
                           corner_spefs: Dict[str, Path],
                           nom_spef: Optional[Path],
-                          rpt_out: Path, notes: List[str]) -> bool:
+                          rpt_out: Path, notes: List[str],
+                          netlist_override: Optional[Path] = None) -> bool:
     """TAPEOUT-SIGNOFF — multi-corner OCV sign-off STA (internalises the
     ``mcorner_ocv_sta.tcl`` an agent ran by hand).
 
@@ -10508,6 +10720,10 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
     netlist = pnr_out / f"{top}_pnr.v"
     if not netlist.is_file():
         netlist = _pl.synth_dir(project) / f"{top}_synth.v"
+    # ECO auto-trigger post-ECO re-measure passes the ECO netlist here (§4.05:
+    # only when it genuinely exists — else the routed/synth netlist stands).
+    if netlist_override is not None and Path(netlist_override).is_file():
+        netlist = Path(netlist_override)
     sdc = pnr_out / "constraint.sdc"
     if not (netlist.is_file() and sdc.is_file()):
         notes.append("multi-corner OCV STA skipped: routed netlist or SDC missing")
