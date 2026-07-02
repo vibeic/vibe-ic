@@ -368,3 +368,102 @@ class TestOrchestration:
         assert mod.verdict_exit_code("FAIL") == 1
         assert mod.verdict_exit_code("BLOCKED") == 2
         assert mod.verdict_exit_code("NOT_RUN") == 2
+
+
+# ---------------------------------------------------------------------------
+# stage_gl — wire the harden gl netlist into the precheck input (GOAL A)
+# ---------------------------------------------------------------------------
+def _write_gl(proj, design, tag, primary=True, nl=True, text="module m; endmodule\n"):
+    """Drop OpenLane-1 gl netlist(s) at runs/<tag>/results/final/verilog/gl/."""
+    gl = (proj / "openlane" / design / "runs" / tag /
+          "results" / "final" / "verilog" / "gl")
+    gl.mkdir(parents=True, exist_ok=True)
+    if primary:
+        (gl / f"{design}.v").write_text(text)
+    if nl:
+        (gl / f"{design}.nl.v").write_text(text)
+    return gl
+
+
+class TestFindGlNetlists:
+    def test_finds_primary_first_then_siblings(self, tmp_path):
+        proj = _project(tmp_path)
+        _write_gl(proj, "user_project_wrapper", "harden")
+        found = mod.find_hardened_gl_netlists(proj, "user_project_wrapper")
+        assert [p.name for p in found][0] == "user_project_wrapper.v"
+        assert "user_project_wrapper.nl.v" in [p.name for p in found]
+
+    def test_none_when_no_gl(self, tmp_path):
+        proj = _project(tmp_path)
+        assert mod.find_hardened_gl_netlists(proj, "user_project_wrapper") == []
+
+    def test_tag_scoped_ignores_other_runs(self, tmp_path):
+        proj = _project(tmp_path)
+        _write_gl(proj, "user_project_wrapper", "OTHER_RUN")
+        # A tag with no gl netlist must find nothing even though OTHER_RUN has one.
+        assert mod.find_hardened_gl_netlists(
+            proj, "user_project_wrapper", tag="harden") == []
+
+
+class TestStageGl:
+    def test_stages_produced_netlists_into_verilog_gl(self, tmp_path):
+        proj = _project(tmp_path)
+        _write_gl(proj, "user_project_wrapper", "harden")
+        r = mod.run_stage_gl(proj, "user_project_wrapper")
+        assert r.verdict == "PASS"
+        dst = proj / "verilog" / "gl" / "user_project_wrapper.v"
+        assert dst.is_file()                      # the precheck user netlist
+        assert (proj / "verilog" / "gl" / "user_project_wrapper.nl.v").is_file()
+        assert r.artifact == str(dst)
+
+    def test_no_produced_netlist_is_blocked_and_writes_nothing(self, tmp_path):
+        # §4.05: a harden that produced no gl netlist -> BLOCKED, and NOTHING is
+        # written into verilog/gl (never a fabricated/empty netlist), so the
+        # precheck Consistency/LVS still FAIL honestly.
+        proj = _project(tmp_path)
+        r = mod.run_stage_gl(proj, "user_project_wrapper")
+        assert r.verdict == "BLOCKED"
+        assert not (proj / "verilog" / "gl" / "user_project_wrapper.v").exists()
+        assert r.blocked_reason
+
+    def test_tag_scoped_stage_does_not_fabricate_from_stale_run(self, tmp_path):
+        # §4.05 regression: an OLD run left a gl netlist under a DIFFERENT tag;
+        # a tag-scoped stage of the CURRENT (empty) run must stage nothing.
+        proj = _project(tmp_path)
+        _write_gl(proj, "user_project_wrapper", "26_05_29_00_35")
+        r = mod.run_stage_gl(proj, "user_project_wrapper", tag="harden")
+        assert r.verdict == "BLOCKED"
+        assert not (proj / "verilog" / "gl" / "user_project_wrapper.v").exists()
+
+    def test_harden_success_path_auto_stages_when_enabled(self, tmp_path):
+        # run_harden(stage_gl=True) on a clean PASS stages the gl netlist and
+        # records it under details["gl_staged"], without changing the verdict.
+        proj = _project(tmp_path)
+
+        def runner(cmd, timeout=3600):
+            if isinstance(cmd, list) and "images" in cmd:
+                return (0, mod.OPENLANE_IMAGE_DEFAULT + "\n", "")
+            gdir = (proj / "openlane" / "user_project_wrapper" / "runs" /
+                    "harden" / "results" / "final" / "gds")
+            gdir.mkdir(parents=True, exist_ok=True)
+            (gdir / "user_project_wrapper.gds").write_bytes(b"GDS")
+            _write_gl(proj, "user_project_wrapper", "harden")
+            return (0, "flow.tcl completed", "")
+
+        r = mod.run_harden(proj, "user_project_wrapper",
+                           pdk_root=_pdk(tmp_path), run=True, runner=runner,
+                           stage_gl=True)
+        assert r.verdict == "PASS"
+        staged = r.details.get("gl_staged", {})
+        assert staged.get("verdict") == "PASS"
+        assert (proj / "verilog" / "gl" / "user_project_wrapper.v").is_file()
+
+    def test_harden_failure_stages_nothing(self, tmp_path):
+        # A harden that produced NO GDS must not stage a netlist even if
+        # stage_gl=True (the FAIL path never reaches the stage call).
+        proj = _project(tmp_path)
+        r = mod.run_harden(
+            proj, "user_project_wrapper", pdk_root=_pdk(tmp_path), run=True,
+            runner=_harden_runner(proj, produce_gds=False), stage_gl=True)
+        assert r.verdict == "FAIL"
+        assert not (proj / "verilog" / "gl" / "user_project_wrapper.v").exists()
