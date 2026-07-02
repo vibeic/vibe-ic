@@ -153,7 +153,9 @@ def test_emit_mcorner_ocv_sta_source_carries_full_rigor():
     the worst-path slews (so the slew explosion is visible)."""
     src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
     i = src.index("def _emit_mcorner_ocv_sta")
-    win = src[i:i + 5000]
+    # Window covers the function prologue + the two _pass() passes; sized with
+    # headroom for the optional netlist_override arg (ECO post-ECO re-measure).
+    win = src[i:i + 5600]
     assert "_flat_ocv_derate_tcl" in win        # two-command derate helper
     assert "OCV_DERATE_APPLIED" in win
     assert "_report_check_types_tcl" in win     # guarded + marked check types
