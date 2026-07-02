@@ -44,6 +44,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -87,19 +89,137 @@ class TierResult:
 
 
 # ---------------------------------------------------------------------------
+# Report discovery — the SAME flexible discovery the new tapeout tiers use
+# (`_discover_em_report`, `_find_lvs_report`, `_find_dynamic_ir_report`), so the
+# OLD sign-off tiers stop reading DEAD legacy paths that NO runner program
+# writes. Each old tier prefers the canonical `reports/phase3/<name>` the
+# phase3 runner actually emits, then an rglob, then the legacy path — so a
+# GENUINELY absent artifact still NOT_RUNs (§4.05) but a real one is parsed to
+# its real verdict (which can only surface a masked FAIL, never fabricate a
+# pass). chip-AGNOSTIC: matches only on conventional report names.
+# ---------------------------------------------------------------------------
+def _discover_signoff_report(project_dir: Path,
+                             phase3_names: Tuple[str, ...],
+                             rglob_pats: Tuple[str, ...] = (),
+                             legacy_rels: Tuple[str, ...] = ()
+                             ) -> Optional[Path]:
+    """Prefer reports/phase3/<name> (the runner's canonical path), then any
+    rglob match, then the legacy path. None → the artifact is genuinely
+    absent (an honest NOT_RUN, never a silent pass)."""
+    for name in phase3_names:
+        p = project_dir / "reports" / "phase3" / name
+        if p.is_file():
+            return p
+    for pat in rglob_pats:
+        hits = sorted(h for h in project_dir.glob(pat) if h.is_file())
+        if hits:
+            return hits[0]
+    for rel in legacy_rels:
+        p = project_dir / rel
+        if p.is_file():
+            return p
+    return None
+
+
+_DRC_COUNT_RES = (
+    re.compile(r"violation\s+report\s*[:=]?\s*(\d+)", re.I),
+    re.compile(r"(\d+)\s+violation(?:s)?\s+(?:found|detected)", re.I),
+    re.compile(r"(?:number\s+of\s+(?:DRC\s+)?violations|total\s+violations)"
+               r"\s*[:=]?\s*(\d+)", re.I),
+    re.compile(r"total\s+(?:DRC\s+)?(?:errors|violations)\s*[:=]?\s*(\d+)", re.I),
+)
+
+
+def _parse_drc_violations(art: Path) -> Tuple[Optional[int], str]:
+    """Return (violation_count | None, source_note) from a DRC artifact.
+
+    Handles the THREE real runner shapes: (1) a `full_deck`/`drc_signoff`
+    JSON carrying a `violations` count (or `clean`/`verdict`), (2) a KLayout
+    XML sign-off report (`drc_signoff.rpt` re-staged from `phase3/reports/
+    drc.rpt`) where each `<item>` under `<items>` is one violation, and (3) a
+    plain-text OpenROAD/Magic DRC report carrying an explicit
+    `violation report: N` / `N violation(s) found` count. Returns
+    (None, reason) only when the report is present but no count can be
+    extracted — the caller keeps that honest (NOT_RUN), never a fabricated
+    pass. chip-AGNOSTIC."""
+    try:
+        text = art.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return None, f"unreadable ({exc})"
+    # (1) JSON count / clean / verdict.
+    if art.suffix.lower() == ".json":
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            data = None
+        if isinstance(data, dict):
+            for k in ("violations", "total_violations", "violation_count",
+                      "count", "num_violations"):
+                if data.get(k) is not None:
+                    try:
+                        return int(data[k]), k
+                    except (TypeError, ValueError):
+                        pass
+            v = str(data.get("verdict", "")).upper()
+            if v in ("PASS", "CLEAN"):
+                return 0, "verdict=PASS"
+            if v in ("FAIL", "DIRTY"):
+                return None, "verdict=FAIL (no count)"
+            if data.get("clean") is True:
+                return 0, "clean=true"
+            if data.get("clean") is False:
+                return None, "clean=false (no count)"
+    # (2) KLayout XML report — count <item> elements (violations), NOT the
+    # <category> rule descriptions. An empty <items></items> = 0 = clean.
+    if "<report-database" in text or "<items>" in text or "</item>" in text:
+        return len(re.findall(r"<item>", text)), "klayout_items"
+    # (3) plain-text report — explicit count patterns; else "DRC clean: YES".
+    for rx in _DRC_COUNT_RES:
+        hits = rx.findall(text)
+        if hits:
+            try:
+                return max(int(h) for h in hits), "text_count"
+            except ValueError:
+                pass
+    if re.search(r"DRC\s+clean\s*[:=]?\s*YES", text, re.I):
+        return 0, "text_clean_yes"
+    if re.search(r"DRC\s+clean\s*[:=]?\s*NO", text, re.I):
+        return None, "text_clean_no (no count)"
+    return None, "no count pattern"
+
+
+# ---------------------------------------------------------------------------
 # Per-tier checkers — artifact consumers
 # ---------------------------------------------------------------------------
 def check_tier_1_drc(project_dir: Path) -> TierResult:
-    """Tier 1 DRC — read reports/drc/full_deck.json if present."""
-    art = project_dir / "reports" / "drc" / "full_deck.json"
-    if not art.exists():
+    """Tier 1 DRC — the runner writes `reports/phase3/drc_signoff.rpt` (a
+    re-staged KLayout XML sign-off report), NOT the legacy
+    `reports/drc/full_deck.json`. Discover the real report (phase3 → rglob →
+    legacy) and count violations. §4.05: an absent report still NOT_RUNs; a
+    discovered report is parsed to its REAL count so a masked DRC FAIL
+    surfaces, never a fabricated pass."""
+    art = _discover_signoff_report(
+        project_dir,
+        phase3_names=("drc_signoff.rpt", "drc_signoff.json",
+                      "drc.rpt", "drc.json"),
+        rglob_pats=("reports/**/drc_signoff.rpt",
+                    "reports/**/drc_signoff.json"),
+        legacy_rels=("reports/drc/full_deck.json",))
+    if art is None:
         return TierResult("T1", "Full DRC (KLayout/Magic)", "NOT_RUN",
-                            notes="reports/drc/full_deck.json missing")
-    data = json.loads(art.read_text(encoding="utf-8"))
-    n = int(data.get("violations", -1))
+                            notes="no DRC sign-off report "
+                                  "(reports/phase3/drc_signoff.rpt) — "
+                                  "§4.05: absent → SKIP")
+    n, src = _parse_drc_violations(art)
+    if n is None:
+        return TierResult(
+            "T1", "Full DRC (KLayout/Magic)", "NOT_RUN",
+            details={"parse": src}, artifact_path=str(art),
+            notes=f"DRC report present but no count extractable ({src}) — "
+                  "§4.05: not judgeable → SKIP, never a fabricated pass")
     verdict = "PASS" if n == 0 else "FAIL"
     return TierResult("T1", "Full DRC (KLayout/Magic)", verdict,
-                        details={"violations": n},
+                        details={"violations": n, "count_source": src},
                         artifact_path=str(art))
 
 
@@ -113,45 +233,212 @@ def check_tier_1_5_drc_heatmap(project_dir: Path) -> TierResult:
                         artifact_path=str(art))
 
 
+_SPECIALNETS_HDR_RE = re.compile(r"^\s*SPECIALNETS\s+(\d+)\s*;", re.M)
+
+
+def _discover_pnr_dir(project_dir: Path) -> Optional[Path]:
+    """Locate the P&R output dir that holds the routed *.def. Prefers the
+    canonical phase3/stage3/pnr/, then any directory containing a *.def."""
+    canonical = project_dir / "phase3" / "stage3" / "pnr"
+    if canonical.is_dir() and any(canonical.glob("*.def")):
+        return canonical
+    for d in sorted({p.parent for p in project_dir.rglob("*.def")
+                     if p.is_file()}):
+        return d
+    return None
+
+
+def _def_specialnets_count(pnr: Path) -> Optional[int]:
+    """Max SPECIALNETS header count declared across the DEFs in `pnr` (the
+    real PDN signal). None → no DEF at all in the dir. A DEF with no
+    SPECIALNETS section counts as 0 (PDN may still be strap/followpin-
+    delivered — the caller then consults the PDN-strap TCL evidence)."""
+    best: Optional[int] = None
+    for defp in sorted(pnr.glob("*.def")):
+        try:
+            text = defp.read_text(errors="replace")
+        except OSError:
+            continue
+        best = best if best is not None else 0
+        m = _SPECIALNETS_HDR_RE.search(text)
+        if m:
+            best = max(best, int(m.group(1)))
+    return best
+
+
 def check_tier_2_pdn(project_dir: Path,
                        min_specialnets: int = 1) -> TierResult:
-    """Tier 2 PDN — SPECIALNETS in the final DEF must be > 0."""
+    """Tier 2 PDN — the real signal is the routed DEF's SPECIALNETS count, NOT
+    the legacy `reports/pnr/pdn.json` (which no runner program writes). Read
+    the DEF; a design that declares >= min SPECIALNETS PASSes. When the DEF
+    carries NO SPECIALNETS section the PDN may be strap/followpin-delivered, so
+    consult the PDN-strap TCL evidence (add_pdn_stripe / pdngen / add_pdn_ring)
+    the flow's own `floorplan_pdn_check` uses — a design with strap commands
+    PASSes (this is why subservient/caravel, whose routed DEF has 0
+    SPECIALNETS, are not false-FAILed). §4.05: no DEF and no legacy pdn.json →
+    honest NOT_RUN; a routed DEF with neither SPECIALNETS nor strap evidence is
+    a REAL no-PDN FAIL (never fabricated)."""
+    pnr = _discover_pnr_dir(project_dir)
+    if pnr is not None:
+        n = _def_specialnets_count(pnr)
+        if n is not None:  # at least one DEF present
+            if n >= min_specialnets:
+                return TierResult(
+                    "T2_PDN", "Power Distribution Network", "PASS",
+                    details={"specialnets": n, "min_required": min_specialnets,
+                             "source": "DEF SPECIALNETS"},
+                    artifact_path=str(pnr))
+            import floorplan_pdn_check as fpc
+            tcl_found, tcl_name, tcl_tokens = fpc._pdn_tcl_evidence(pnr)
+            if tcl_found:
+                return TierResult(
+                    "T2_PDN", "Power Distribution Network", "PASS",
+                    details={"specialnets": n, "min_required": min_specialnets,
+                             "source": "PDN-strap TCL",
+                             "pdn_evidence": f"{tcl_name}: {tcl_tokens}"},
+                    artifact_path=str(pnr),
+                    notes="no DEF SPECIALNETS section, but PDN strap/ring "
+                          "commands present — PDN delivered via straps/"
+                          "followpins (matches floorplan_pdn_check)")
+            return TierResult(
+                "T2_PDN", "Power Distribution Network", "FAIL",
+                details={"specialnets": n, "min_required": min_specialnets,
+                         "source": "DEF SPECIALNETS"},
+                artifact_path=str(pnr),
+                notes="routed DEF carries no power/ground SPECIALNETS section "
+                      "AND no add_pdn_stripe/pdngen/add_pdn_ring evidence — a "
+                      "real missing-PDN defect (§4.05)")
+    # Legacy fallback — a pre-written pdn.json specialnets count.
     art = project_dir / "reports" / "pnr" / "pdn.json"
-    if not art.exists():
-        return TierResult("T2_PDN", "Power Distribution Network",
-                            "NOT_RUN", notes="reports/pnr/pdn.json missing")
-    data = json.loads(art.read_text(encoding="utf-8"))
-    n = int(data.get("specialnets", 0))
-    verdict = "PASS" if n >= min_specialnets else "FAIL"
-    return TierResult("T2_PDN", "Power Distribution Network", verdict,
-                        details={"specialnets": n,
-                                 "min_required": min_specialnets},
-                        artifact_path=str(art))
+    if art.is_file():
+        data = json.loads(art.read_text(encoding="utf-8"))
+        n = int(data.get("specialnets", 0))
+        verdict = "PASS" if n >= min_specialnets else "FAIL"
+        return TierResult("T2_PDN", "Power Distribution Network", verdict,
+                            details={"specialnets": n,
+                                     "min_required": min_specialnets,
+                                     "source": "legacy pdn.json"},
+                            artifact_path=str(art))
+    return TierResult("T2_PDN", "Power Distribution Network", "NOT_RUN",
+                        notes="no routed DEF and no reports/pnr/pdn.json — "
+                              "§4.05: absent → SKIP")
+
+
+_STATIC_IR_BUDGET_PCT = 5.0    # canonical static-IR sign-off budget (% of Vdd)
+_DEFAULT_VDD_V = 1.8           # generic open-PDK nominal supply, only used
+                               # when the report carries neither budget nor Vdd
 
 
 def check_tier_2_ir(project_dir: Path,
-                     budget_uv: float = 35.0) -> TierResult:
-    """Tier 2 IR-drop — worst IR must be below per-budget threshold."""
-    art = project_dir / "reports" / "pnr" / "ir_drop.json"
-    if not art.exists():
+                     budget_uv: Optional[float] = None) -> TierResult:
+    """Tier 2 IR-drop — worst static IR must be below the sign-off budget.
+
+    The runner writes `reports/phase3/ir_drop.json` (worst_ir_uv + its OWN
+    budget_uv = 5%-of-Vdd) — NOT the legacy `reports/pnr/ir_drop.json`. Budget
+    precedence: (1) an explicit caller budget_uv, else (2) the report's own
+    budget_uv (the runner's %-of-Vdd sign-off budget), else (3) a defensible
+    default = _STATIC_IR_BUDGET_PCT of the report's Vdd (fallback _DEFAULT_VDD_V).
+    The OLD default of 35 µV was FAR too tight — real static IR is hundreds of
+    µV (subservient 271, spm 136, sha256 228) all UNDER the true ~90 mV budget —
+    so the dead-path + tight-default combination both never fired AND would have
+    false-FAILed. §4.05: an absent report still NOT_RUNs; this can only correct
+    a false-FAIL / masked-NOT_RUN into the real verdict, never fabricate a
+    pass (a genuine over-budget IR still FAILs)."""
+    art = _discover_signoff_report(
+        project_dir,
+        phase3_names=("ir_drop.json",),
+        rglob_pats=("reports/**/ir_drop.json",),
+        legacy_rels=("reports/pnr/ir_drop.json",))
+    if art is None:
         return TierResult("T2_IR", "IR-drop", "NOT_RUN",
-                            notes="reports/pnr/ir_drop.json missing")
+                            notes="no reports/phase3/ir_drop.json — "
+                                  "§4.05: absent → SKIP")
     data = json.loads(art.read_text(encoding="utf-8"))
-    worst = float(data.get("worst_ir_uv", 1e9))
-    verdict = "PASS" if worst <= budget_uv else "FAIL"
+    worst = float(data.get("worst_ir_uv", data.get("worst_ir_drop_uv", 1e9)))
+    if budget_uv is not None:
+        budget = float(budget_uv)
+        budget_src = "caller"
+    elif data.get("budget_uv") is not None:
+        budget = float(data["budget_uv"])
+        budget_src = "report budget_uv"
+    else:
+        vdd = float(data.get("vdd_v") or data.get("supply_voltage_v")
+                    or _DEFAULT_VDD_V)
+        budget = (_STATIC_IR_BUDGET_PCT / 100.0) * vdd * 1e6
+        budget_src = f"{_STATIC_IR_BUDGET_PCT}%-of-{vdd}V default"
+    verdict = "PASS" if worst <= budget else "FAIL"
     return TierResult("T2_IR", "IR-drop", verdict,
                         details={"worst_ir_uv": worst,
-                                 "budget_uv": budget_uv},
+                                 "budget_uv": budget,
+                                 "budget_source": budget_src},
                         artifact_path=str(art))
 
 
 # ---------------------------------------------------------------------------
 # Tier 2 EM — REAL J-vs-Jmax (replaces the decap-cell-count proxy).
 # ---------------------------------------------------------------------------
+_REGISTRY_PATH = _PROGRAMS / "pdk_registry.json"
+
+
+def _resolve_pdk_tech_lef() -> Optional[Path]:
+    """Resolve the PDK tech-LEF (the `DCCURRENTDENSITY` Jmax source) from the
+    environment — `$PDK_ROOT` (the parent holding the PDK variant dir) and
+    `$PDK` (the variant name, e.g. sky130A). The tech-LEF is ALWAYS at
+    `$PDK_ROOT/$PDK/...`, NEVER inside the project, so the EM tier's
+    project-only rglob always missed it and the tier SKIPed
+    'jmax_reference_absent' even though `em_current_density_check` gives a real
+    PASS when handed the PDK tech-LEF.
+
+    Uses `pdk_registry.json`'s per-PDK `tech_lef_glob` when the variant is
+    known, else a generic `*.tlef` / `*tech*.lef` glob under the variant dir.
+    §4.05: this is NOT a fabrication — the reference is genuinely resolvable,
+    just outside the project; if `$PDK_ROOT` is unset/unresolvable, returns
+    None so the EM tier keeps its honest SKIP."""
+    pdk_root = os.environ.get("PDK_ROOT")
+    if not pdk_root:
+        return None
+    root = Path(pdk_root)
+    if not root.is_dir():
+        return None
+    pdk = os.environ.get("PDK") or os.environ.get("PDK_VARIANT")
+    # 1) Registry-driven: $PDK_ROOT/<variant>/<tech_lef_glob>.
+    try:
+        reg = json.loads(_REGISTRY_PATH.read_text(errors="replace"))
+        entries = reg.get("pdks", []) if isinstance(reg, dict) else []
+    except (OSError, json.JSONDecodeError):
+        entries = []
+    for entry in entries:
+        name = entry.get("name")
+        glob = entry.get("tech_lef_glob")
+        if not name or not glob:
+            continue
+        if pdk and name != pdk:
+            continue
+        base = root / name
+        if base.is_dir():
+            hits = sorted(h for h in base.glob(glob) if h.is_file())
+            if hits:
+                return hits[0]
+    # 2) Generic glob under $PDK_ROOT/$PDK (variant known but not in registry).
+    if pdk and (root / pdk).is_dir():
+        for pat in ("**/*.tlef", "**/*tech*.lef"):
+            hits = sorted(h for h in (root / pdk).glob(pat) if h.is_file())
+            if hits:
+                return hits[0]
+    # 3) No variant given — a single tech-LEF anywhere under $PDK_ROOT.
+    if not pdk:
+        for pat in ("*/**/*.tlef", "*/**/*tech*.lef"):
+            hits = sorted(h for h in root.glob(pat) if h.is_file())
+            if hits:
+                return hits[0]
+    return None
+
+
 def _discover_jmax_ref(project_dir: Path
                        ) -> Tuple[Optional[Path], Optional[Path]]:
     """Return (jmax_json, tech_lef) — the first per-layer Jmax reference found
-    in the project, or (None, None). A supplied jmax JSON wins over a tech LEF.
+    in the project, or (via the PDK env fallback) the PDK tech-LEF, or
+    (None, None). A supplied jmax JSON wins over a tech LEF.
     chip-AGNOSTIC: matches only on conventional file names, never a PDK literal."""
     for pat in ("reports/**/em_jmax.json", "reports/**/jmax.json"):
         hits = [h for h in project_dir.glob(pat) if h.is_file()]
@@ -166,6 +453,13 @@ def _discover_jmax_ref(project_dir: Path
     thits = [h for h in project_dir.rglob("*tech*.lef") if h.is_file()]
     if thits:
         return None, sorted(thits)[0]
+    # The PDK tech-LEF (Jmax source) lives at $PDK_ROOT/$PDK/..., NEVER in the
+    # project — resolve it from the environment so the EM tier can judge J-vs-
+    # Jmax instead of SKIPping 'jmax_reference_absent'. Honest SKIP is kept
+    # when $PDK_ROOT is genuinely unresolvable.
+    pdk_tlef = _resolve_pdk_tech_lef()
+    if pdk_tlef is not None:
+        return None, pdk_tlef
     return None, None
 
 
@@ -209,12 +503,58 @@ def check_tier_2_em(project_dir: Path,
 
 
 def check_tier_3_antenna(project_dir: Path) -> TierResult:
-    """Tier 3 antenna — Magic + KLayout both report 0."""
+    """Tier 3 antenna — the runner writes `reports/phase3/antenna.json`
+    (net_violations / pin_violations / clean / routing_incomplete / verdict),
+    NOT the legacy `reports/antenna/{magic,klayout}.json`. Read the real
+    report:
+
+      * `routing_incomplete` is a FAIL — an "antenna clean" claim on an
+        UNROUTED design is vacuous (this is the sha256-class masked FAIL the
+        dead legacy path hid).
+      * any net/pin violation > 0 (or verdict==FAIL) is a FAIL.
+      * clean and routed is a PASS.
+
+    §4.05: an absent report NOT_RUNs; a discovered report is parsed to its REAL
+    verdict — surfacing the masked antenna FAIL is the whole point, and this
+    can never fabricate a pass. Falls back to the legacy magic/klayout pair."""
+    art = _discover_signoff_report(
+        project_dir,
+        phase3_names=("antenna.json",),
+        rglob_pats=("reports/**/antenna.json",))
+    if art is not None:
+        data = json.loads(art.read_text(encoding="utf-8"))
+        net = data.get("net_violations")
+        pin = data.get("pin_violations")
+        clean = data.get("clean")
+        routing_incomplete = bool(data.get("routing_incomplete"))
+        vfield = str(data.get("verdict", "")).upper()
+        counts = [int(c) for c in (net, pin) if isinstance(c, (int, float))]
+        if routing_incomplete:
+            verdict, note = ("FAIL",
+                             "routing incomplete — an 'antenna clean' verdict "
+                             "on an unrouted design is vacuous (§4.05); real "
+                             "FAIL")
+        elif any(c > 0 for c in counts) or vfield == "FAIL":
+            verdict, note = ("FAIL", "antenna violations present")
+        elif vfield == "PASS" or clean is True or (counts and
+                                                   all(c == 0 for c in counts)):
+            verdict, note = ("PASS", "")
+        else:
+            verdict, note = ("WARN", "antenna report present but no "
+                                     "violation count / clean flag")
+        return TierResult(
+            "T3_ANTENNA", "Antenna", verdict,
+            details={"net_violations": net, "pin_violations": pin,
+                     "clean": clean, "routing_incomplete": routing_incomplete,
+                     "report_verdict": data.get("verdict")},
+            artifact_path=str(art), notes=note)
+    # Legacy fallback — Magic + KLayout both report 0.
     art_magic = project_dir / "reports" / "antenna" / "magic.json"
     art_klayout = project_dir / "reports" / "antenna" / "klayout.json"
     if not art_magic.exists() and not art_klayout.exists():
         return TierResult("T3_ANTENNA", "Antenna", "NOT_RUN",
-                            notes="no antenna artifacts found")
+                            notes="no antenna artifacts found — §4.05: "
+                                  "absent → SKIP")
     m_viol = (int(json.loads(art_magic.read_text(encoding="utf-8")).get(
         "violations", -1)) if art_magic.exists() else -1)
     k_viol = (int(json.loads(art_klayout.read_text(encoding="utf-8")).get(
@@ -228,21 +568,46 @@ def check_tier_3_antenna(project_dir: Path) -> TierResult:
 
 
 def check_tier_3_esd(project_dir: Path) -> TierResult:
-    """Tier 3 ESD/pad-ring — qualitative artifact present."""
-    art = project_dir / "reports" / "esd" / "esd_padring.json"
-    if not art.exists():
-        return TierResult("T3_ESD", "ESD/pad-ring", "NOT_RUN")
+    """Tier 3 ESD/pad-ring — qualitative artifact present. Discover the real
+    report (phase3 → rglob → legacy) instead of only the dead
+    `reports/esd/esd_padring.json`. §4.05: genuinely absent → honest NOT_RUN
+    (the open flow reports ESD as a MANUAL_REVIEW category in the PERC memo,
+    so a dedicated automated ESD verdict is usually absent); a discovered
+    report is parsed to its real clean/verdict."""
+    art = _discover_signoff_report(
+        project_dir,
+        phase3_names=("esd_padring.json", "esd.json"),
+        rglob_pats=("reports/**/esd_padring.json", "reports/**/esd*.json"),
+        legacy_rels=("reports/esd/esd_padring.json",))
+    if art is None:
+        return TierResult("T3_ESD", "ESD/pad-ring", "NOT_RUN",
+                            notes="no ESD/pad-ring report — §4.05: absent → "
+                                  "SKIP")
     data = json.loads(art.read_text(encoding="utf-8"))
-    verdict = "PASS" if data.get("clean") else "FAIL"
+    vfield = str(data.get("verdict", "")).upper()
+    verdict = ("PASS" if (data.get("clean") or vfield == "PASS")
+               else "FAIL")
     return TierResult("T3_ESD", "ESD/pad-ring", verdict,
                         details=data, artifact_path=str(art))
 
 
 def check_tier_4_lvs_device(project_dir: Path) -> TierResult:
-    """Tier 4 LVS device class — Netgen 261=261 style match."""
-    art = project_dir / "reports" / "lvs" / "device_class.json"
-    if not art.exists():
-        return TierResult("T4_LVS_DEV", "LVS device class", "NOT_RUN")
+    """Tier 4 LVS device class — Netgen 261=261 style match. Discover the real
+    report (phase3 → rglob → legacy) instead of only the dead
+    `reports/lvs/device_class.json`. §4.05: genuinely absent → honest NOT_RUN
+    (the runner's LVS verdict lives in `lvs_verdict.json`/`lvs.rpt`, consumed
+    by the net-level + tapeout LVS tiers, not a separate device_class.json);
+    a discovered device-class report is parsed to its real match verdict."""
+    art = _discover_signoff_report(
+        project_dir,
+        phase3_names=("device_class.json", "lvs_device_class.json"),
+        rglob_pats=("reports/**/device_class.json",
+                    "reports/**/lvs_device_class.json"),
+        legacy_rels=("reports/lvs/device_class.json",))
+    if art is None:
+        return TierResult("T4_LVS_DEV", "LVS device class", "NOT_RUN",
+                            notes="no LVS device-class report — §4.05: absent "
+                                  "→ SKIP")
     data = json.loads(art.read_text(encoding="utf-8"))
     verdict = "PASS" if data.get("device_class_match") else "FAIL"
     return TierResult("T4_LVS_DEV", "LVS device class", verdict,
@@ -328,10 +693,20 @@ def check_tier_lvs_tapeout(project_dir: Path) -> TierResult:
 
 def check_tier_5_latchup(project_dir: Path,
                           min_tapcells_per_mm2: int = 100) -> TierResult:
-    """Tier 5 latch-up — tap cell density above PDK threshold."""
-    art = project_dir / "reports" / "pnr" / "tapcell_density.json"
-    if not art.exists():
-        return TierResult("T5_LATCHUP", "Latch-up tap cells", "NOT_RUN")
+    """Tier 5 latch-up — tap cell density above PDK threshold. Discover the
+    real report (phase3 → rglob → legacy) instead of only the dead
+    `reports/pnr/tapcell_density.json`. §4.05: genuinely absent → honest
+    NOT_RUN; a discovered tap-cell density report is parsed to its real
+    density verdict, never a fabricated pass."""
+    art = _discover_signoff_report(
+        project_dir,
+        phase3_names=("tapcell_density.json",),
+        rglob_pats=("reports/**/tapcell_density.json",),
+        legacy_rels=("reports/pnr/tapcell_density.json",))
+    if art is None:
+        return TierResult("T5_LATCHUP", "Latch-up tap cells", "NOT_RUN",
+                            notes="no tap-cell density report — §4.05: absent "
+                                  "→ SKIP")
     data = json.loads(art.read_text(encoding="utf-8"))
     density = float(data.get("tapcells_per_mm2", 0))
     verdict = "PASS" if density >= min_tapcells_per_mm2 else "FAIL"
