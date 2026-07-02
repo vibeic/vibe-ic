@@ -16,7 +16,7 @@ Returns (ins, outs) as lists of (name, width:int). chip-AGNOSTIC, pure regex.
 """
 from __future__ import annotations
 import re
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 
 def _bullet_ports(text: str) -> Tuple[List[Tuple[str, Optional[int]]], List[Tuple[str, Optional[int]]]]:
@@ -30,16 +30,26 @@ def _bullet_ports(text: str) -> Tuple[List[Tuple[str, Optional[int]]], List[Tupl
     The CVDP form infers direction from the containing section header and width
     from the parenthesized `(N-bit)` token."""
     ins, outs = [], []
-    # classic / Verilog bullet: "- input clk", "- output reg [3:0] name", "- output q (4 bits)"
+    # classic / Verilog bullet, width EITHER before the name (Verilog `[hi:lo]`
+    # or a leading `(N bits)`) OR — the classic VerilogEval-v2 form — AFTER the
+    # name (`- output q (4 bits)`). The v1.2.51 rewrite added the before-name
+    # forms but DROPPED the after-name `(N bits)`, silently defaulting every
+    # `- input predict_pc (7 bits)` to width 1 and making the width-sensitive
+    # solvers (gshare/vector-ops/conway/moore/…) return None. Both widths are
+    # parsed; the first that matched wins. The trailing group uses `[ \t]*` so it
+    # cannot cross a newline and steal the next port's `(N bits)`.
     for m in re.finditer(
         r"^\s*-\s*(input|output)\b(?:\s+(?:wire|reg|logic))?"
         r"\s*(?:(?:\[\s*(\d+)\s*:\s*(\d+)\s*\])|(?:\(\s*(\d+)\s*bits?\s*\)))?"
-        r"\s*(\w+)", text, re.M):
-        d, hi, lo, w_paren, name = m.groups()
+        r"\s*(\w+)"
+        r"(?:[ \t]*\(\s*(\d+)\s*bits?\s*\))?", text, re.M):
+        d, hi, lo, w_pre, name, w_post = m.groups()
         if hi is not None and lo is not None:
             w = abs(int(hi) - int(lo)) + 1
-        elif w_paren is not None:
-            w = int(w_paren)
+        elif w_pre is not None:
+            w = int(w_pre)
+        elif w_post is not None:
+            w = int(w_post)
         else:
             w = 1
         (ins if d == "input" else outs).append((name, w))
