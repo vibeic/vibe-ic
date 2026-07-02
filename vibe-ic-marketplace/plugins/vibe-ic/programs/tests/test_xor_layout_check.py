@@ -351,3 +351,114 @@ class TestCli:
         rc = mod._cli(["--report", str(tmp_path / "nope.json")])
         assert rc == 2
         assert json.loads(capsys.readouterr().out)["verdict"] == "INCOMPLETE"
+
+
+# ---------------------------------------------------------------------------
+# Nested-macro waiver — the emit script threads the allow-list in and discovers
+# an allow-listed macro RECURSIVELY (any depth below --top), so `--allow-macro
+# spm` at `--top caravel` is effective even though spm is nested (caravel ->
+# caravel_core -> user_project_wrapper -> spm), NOT a silent no-op. §4.05 is
+# preserved: residual OUTSIDE the nested macro still FAILs.
+# ---------------------------------------------------------------------------
+class TestEmitNestedAllowMacro:
+    def test_emit_threads_allow_macros_into_script(self):
+        s = mod.emit_xor_script(
+            "caravel", "chip.gds", "golden_caravel.gds", "rep.json",
+            allow_macros=["spm"])
+        # The waiver allow-list is embedded so the script can act on it.
+        assert "ALLOW_MACROS = " in s
+        assert "'spm'" in s
+        compile(s, "<emit-nested>", "exec")   # still valid Python
+
+    def test_emit_has_recursive_nested_bbox_discovery(self):
+        s = mod.emit_xor_script(
+            "caravel", "chip.gds", "golden_caravel.gds", "rep.json",
+            allow_macros=["spm"])
+        # A recursive walk of the hierarchy that transforms each nested macro
+        # placement's bbox into TOP coordinates (this is what reaches `spm`).
+        assert "_macro_region_in_top" in s
+        assert "each_inst()" in s
+        assert "cell_index" in s
+        assert "transformed(" in s          # bbox -> top coordinates
+        assert "each_cplx_trans" in s       # array-aware placement transforms
+
+    def test_emit_partitions_with_allowlisted_macros_first(self):
+        s = mod.emit_xor_script(
+            "caravel", "chip.gds", "golden_caravel.gds", "rep.json",
+            allow_macros=["spm"])
+        # §4.05 in the emitter: allow-listed macros are ordered FIRST and each
+        # claimed region is carved out of `remaining` (a true partition). The
+        # intersection is with the macro bbox ONLY, so a waiver can never claim
+        # residual outside its own macro.
+        assert "allow_first" in s
+        assert "ordered_cells" in s
+        assert "remaining.dup() &" in s        # intersect residual w/ macro bbox
+        assert "remaining - macro_boxes" in s  # carve the claimed region out
+
+    def test_emit_empty_allowlist_is_valid_and_inert(self):
+        s = mod.emit_xor_script("t", "a.gds", "b.gds", "r.json")
+        assert "ALLOW_MACROS = []" in s
+        compile(s, "<emit-empty>", "exec")
+
+
+class TestNestedMacroWaiver:
+    def _nested_report(self, by_cell, layer="met1", count=3, area=1.25):
+        rep = _residual_report(by_cell, layer=layer, count=count, area=area)
+        rep["top"] = "caravel"       # full-chip top, spm is nested below it
+        return rep
+
+    def test_nested_macro_residual_is_waived_at_fullchip_top(self, tmp_path):
+        # Residual genuinely INSIDE the nested `spm` macro (attributed to `spm`
+        # by the recursive emit script) -> WAIVED at --top caravel.
+        rp = _write(tmp_path, self._nested_report(
+            [{"cell": "spm", "count": 3, "area_um2": 1.25}]))
+        res = mod.evaluate(rp, allow_macros=["spm"])
+        assert res["verdict"] == "PASS_WITH_WAIVER"
+        assert res["waived_residual"][0]["cell"] == "spm"
+        assert res["failing_residual"] == []
+        assert res["inert_allow_macros"] == []   # spm matched -> not inert
+        assert res["advisories"] == []
+        assert mod.verdict_exit_code(res["verdict"]) == 0
+
+    def test_out_of_nested_macro_delta_still_fails_at_fullchip_top(self, tmp_path):
+        # §4.05 NEGATIVE (load-bearing): a residual OUTSIDE the nested spm macro
+        # at --top caravel must STILL FAIL even with --allow-macro spm. A nested
+        # waiver can NEVER launder an out-of-macro delta.
+        rp = _write(tmp_path, self._nested_report(
+            [{"cell": mod.OUTSIDE_SENTINEL, "count": 4, "area_um2": 2.0}],
+            layer="met2", count=4, area=2.0))
+        res = mod.evaluate(rp, allow_macros=["spm"])
+        assert res["verdict"] == "FAIL", (
+            "an out-of-nested-macro delta at --top caravel must not be laundered "
+            "by --allow-macro spm (§4.05)")
+        assert res["waived_residual"] == []
+        assert res["failing_residual"][0]["cell"] == mod.OUTSIDE_SENTINEL
+        assert mod.verdict_exit_code(res["verdict"]) == 1
+
+    def test_straddling_nested_macro_outside_part_fails(self, tmp_path):
+        # A straddling residual: part inside the nested spm (waivable) + part
+        # outside (a real delta). Overall FAILs; the spm part is recorded waived,
+        # the outside part fails — the outside part is never laundered (§4.05).
+        rp = _write(tmp_path, self._nested_report(
+            [{"cell": "spm", "count": 2, "area_um2": 0.5},
+             {"cell": mod.OUTSIDE_SENTINEL, "count": 1, "area_um2": 0.3}],
+            layer="met1", count=3, area=0.8))
+        res = mod.evaluate(rp, allow_macros=["spm"])
+        assert res["verdict"] == "FAIL"
+        assert len(res["waived_residual"]) == 1
+        assert res["waived_residual"][0]["cell"] == "spm"
+        assert len(res["failing_residual"]) == 1
+        assert res["failing_residual"][0]["cell"] == mod.OUTSIDE_SENTINEL
+
+    def test_residual_on_nonallowlisted_sibling_still_fails(self, tmp_path):
+        # Residual attributed to a non-allow-listed DIRECT child (caravel_core),
+        # spm allow-listed but got no bucket -> FAIL + inert advisory for spm.
+        rp = _write(tmp_path, self._nested_report(
+            [{"cell": "caravel_core", "count": 5, "area_um2": 3.0}],
+            layer="met3", count=5, area=3.0))
+        res = mod.evaluate(rp, allow_macros=["spm"])
+        assert res["verdict"] == "FAIL"
+        assert res["failing_residual"][0]["cell"] == "caravel_core"
+        assert res["inert_allow_macros"] == ["spm"]   # spm matched nothing
+        assert res["advisories"]                       # surfaced as inert
+        assert "spm" in res["advisories"][0]
