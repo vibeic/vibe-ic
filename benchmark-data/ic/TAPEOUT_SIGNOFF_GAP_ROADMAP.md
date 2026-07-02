@@ -195,6 +195,46 @@ uncompress`, or `make ship`). **The Vibe-IC program-first surface for the full E
 complete** — harden→stage-gl→precheck→(merge+XOR) all run for real; what's left is design/data, not
 capability.
 
+## ── CROSS-IC TAPEOUT-SIGNOFF SWEEP (6 ICs) + DISTILLATION (v1.2.85) ──
+Applied the complete `signoff_ladder_run --mode tapeout` + every individual gate to all 6 digital
+benchmark ICs (each in a dedicated container, read-only on the plugin). ALL honestly NOT_RELEASED; the
+scorecard + the chip-agnostic gaps it surfaced:
+
+| IC | route | LVS (power-aware) | STA | genuine per-IC finding |
+|---|---|---|---|---|
+| spm | ✅ converged | ✅ **GENUINE_MATCH** | MET | (small, few ports — the only genuine LVS match) |
+| sha256 | ⚠️ v1264 route incomplete (DRT-0085) | FAIL | rigor-absent | that run shouldn't have entered signoff |
+| subservient | ✅ converged | FAIL (routed; wbs port-alias) | rigor-absent | back-end clean; masked antenna FAIL surfaced |
+| ibex | ✅ converged | FAIL (routed; 16 port-shorts) | **ss −88.30ns** (single-corner+no DRV) | timing NOT closed multi-corner |
+| opentitan_aes | ✅ converged (GDS) | FAIL — **signal-UNROUTED DEF** | rigor-absent | 87 real congestion DRC; write_def dropped signal routing |
+| caravel | ✅ harden converged | — | — | golden XOR ran on real geometry; pilot-wrapper design non-conformance |
+
+**Distilled (v1.2.85), all §4.05-verified + LIVE-validated:**
+1. **Ladder honesty + EM Jmax** (4-IC): old tiers read DEAD legacy paths → masked real FAILs; now
+   discover `reports/phase3/*` + parse real artifacts (surfaces subservient's masked antenna FAIL);
+   EM tier resolves the PDK tech-LEF from `$PDK_ROOT`.
+2. **STA multi-corner OCV + DRV** (ibex): auto-SDC gains set_max_transition/max_cap from real liberty
+   (LIVE: slew 423→0); multi-corner OCV signoff STA surfaces the real ss −88.30ns (was hidden by
+   typical-only). **+ 2 OpenSTA-3.1.0 latent bugs fixed** (`set_timing_derate` one-command rejection —
+   which had been silently failing the v1.2.76 rigor report — + the report_check_types marker).
+3. **LVS signal-unrouted-DEF guard** — the "signal-port label seeding" hypothesis (I was confident it
+   was 4-IC-converged) was **REFUTED by live validation**: Magic already labels DEF PINS; the real aes
+   root cause is a signal-UNROUTED DEF (write_def dropped routing). Shipped the honest guard
+   (`LVS_INPUT_DEF_SIGNAL_UNROUTED`) instead of the no-op.
+
+**METHODOLOGY LESSON (load-bearing):** even a hypothesis that "converges" across 3 independent IC runs
+can be a SHARED mis-diagnosis — 3 agents all assumed label-seeding without checking whether the DEF was
+routed. Only live validation refuted it. This is exactly why the doctrine is *program + independent
+AI-solve + converge on disagreement*, and why a "floor"/"root-cause" label is never accepted until
+live-proven. Two false conclusions were caught this sweep: subservient's "genuine-match needs
+device-level = floor" (refuted by spm's real match) and the cross-IC "label-seeding" root cause
+(refuted by the unrouted-DEF evidence).
+
+**Honest per-IC residuals that are NOT plugin gaps** (design/data/upstream): aes write_def drops signal
+routing (upstream flow gap) + 87 congestion DRC; ibex needs a multi-corner re-PnR/ECO to close ss
+timing; sha256 v1264 route was incomplete; subservient/ibex LVS port-alias/port-short are design or a
+separate (routed-DEF) extraction question; caravel pilot-wrapper isn't caravel-pinout-conformant.
+
 ## THE reframing that changes everything (Efabless = no Calibre gap)
 
 The one **real, free** tapeout path for sky130 is the **Efabless / chipIgnite / Google-sky130 open
