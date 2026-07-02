@@ -180,6 +180,66 @@ class TestForbiddenWaiverSwallow:
 
 
 # ---------------------------------------------------------------------------
+# Inert allow-list advisory (live-driven, from the real caravel full-chip run):
+# `--allow-macro spm` at `--top caravel` is a silent no-op because `spm` is
+# nested (caravel -> caravel_core -> user_project_wrapper -> spm) and the
+# macro-bbox attribution keys only on the DIRECT children of the XOR top, so the
+# residual is attributed to `caravel_core`/`chip_io` and `spm` never appears.
+# The advisory surfaces that inert waiver (never changes the verdict, §4.05).
+# ---------------------------------------------------------------------------
+class TestInertAllowMacroAdvisory:
+    def test_nested_macro_allowlist_is_flagged_inert_at_wrong_top(self, tmp_path):
+        # Mirrors the live caravel run: residual attributed to `caravel_core`
+        # while the submitter allow-lists `spm` (nested one+ level deeper).
+        rep = _residual_report(
+            by_cell=[{"cell": "caravel_core", "count": 33227, "area_um2": 960.26}],
+            layer="66/44", count=33227, area=960.26)
+        rep["top"] = "caravel"
+        rp = _write(tmp_path, rep)
+        res = mod.evaluate(rp, allow_macros=["spm"])
+        # Verdict is unchanged (still a real out-of-macro delta -> FAIL).
+        assert res["verdict"] == "FAIL"
+        assert res["waived_residual"] == []
+        # The advisory names the inert allow-list entry.
+        assert res["inert_allow_macros"] == ["spm"]
+        assert res["advisories"], "an inert waiver with residual must be surfaced"
+        assert "spm" in res["advisories"][0]
+        assert "caravel" in res["advisories"][0]
+
+    def test_matched_allowlist_is_not_flagged_inert(self, tmp_path):
+        # The allow-listed macro DID get residual attributed -> not inert.
+        rep = _residual_report(
+            by_cell=[{"cell": "spm", "count": 3, "area_um2": 1.25}], layer="met1")
+        rp = _write(tmp_path, rep)
+        res = mod.evaluate(rp, allow_macros=["spm"])
+        assert res["verdict"] == "PASS_WITH_WAIVER"
+        assert res["inert_allow_macros"] == []
+        assert res["advisories"] == []
+
+    def test_zero_delta_pass_does_not_warn_on_unused_allowlist(self, tmp_path):
+        # A clean PASS with an unused allow-list is benign: no residual exists,
+        # so an unmatched allow-macro must NOT raise a (spurious) advisory.
+        rp = _write(tmp_path, _zero_delta_report())
+        res = mod.evaluate(rp, allow_macros=["spm"])
+        assert res["verdict"] == "PASS"
+        assert res["inert_allow_macros"] == ["spm"]   # factual: matched nothing
+        assert res["advisories"] == []                # but no residual -> no warn
+
+    def test_advisory_never_upgrades_or_downgrades_verdict(self, tmp_path):
+        # A mixed report: allow-listed macro matched (waived) AND an inert entry.
+        rep = _residual_report(
+            by_cell=[
+                {"cell": "spm", "count": 2, "area_um2": 0.5},
+                {"cell": mod.OUTSIDE_SENTINEL, "count": 1, "area_um2": 0.3},
+            ], layer="met1", count=3, area=0.8)
+        rp = _write(tmp_path, rep)
+        res = mod.evaluate(rp, allow_macros=["spm", "not_present_macro"])
+        assert res["verdict"] == "FAIL"                      # unchanged
+        assert res["inert_allow_macros"] == ["not_present_macro"]
+        assert any("not_present_macro" in a for a in res["advisories"])
+
+
+# ---------------------------------------------------------------------------
 # (e) absent report / GDS -> INCOMPLETE, never PASS
 # ---------------------------------------------------------------------------
 class TestIncompleteNeverPass:

@@ -318,6 +318,27 @@ def classify_report(report: Dict[str, Any],
     return verdict, waived, failing
 
 
+def _attributed_cells(report: Dict[str, Any]) -> set:
+    """The set of macro CELL names the report attributed any residual to.
+
+    Used to detect an INERT allow-list entry -- a macro the submitter put on the
+    waiver allow-list that the report never attributed residual to (so the waiver
+    matched nothing). The most common cause is running the XOR at a `--top` above
+    the macro: the emit-script macro-bbox attribution keys on the DIRECT child
+    instances of the XOR top cell, so an allow-listed macro that is nested deeper
+    (e.g. `spm` inside `user_project_wrapper` inside `caravel_core` when the XOR
+    top is `caravel`) never appears in any `by_cell` bucket and the `--allow-macro`
+    is silently a no-op. Surfacing this keeps a submitter from believing a waiver
+    applied when it did not (§4.05: never let an inert waiver look effective)."""
+    seen: set = set()
+    for layer in report.get("layers") or []:
+        for bucket in layer.get("by_cell") or []:
+            cell = bucket.get("cell")
+            if cell and cell != OUTSIDE_SENTINEL:
+                seen.add(cell)
+    return seen
+
+
 def _incomplete(top: Optional[str], layout: Optional[str],
                 golden: Optional[str], allow_macros: List[str],
                 reason: str) -> Dict[str, Any]:
@@ -371,12 +392,36 @@ def evaluate(report_path: Optional[Path],
                            f"XOR script reported error: {data.get('error')}")
 
     verdict, waived, failing = classify_report(data, allow_macros)
+
+    # Advisory (never changes the verdict, §4.05): flag any allow-list entry the
+    # report attributed NO residual to. When there IS residual, an inert entry is
+    # almost always a --top-level mismatch -- the allow-listed macro is nested
+    # below the XOR top cell, so the macro-bbox attribution (which keys on the
+    # DIRECT children of --top) never produced a `by_cell` bucket for it and the
+    # waiver silently matched nothing. Surfacing it stops a submitter believing a
+    # waiver applied when it did not.
+    attributed = _attributed_cells(data)
+    inert_allow_macros = [m for m in allow_macros if m not in attributed]
+    has_residual = int(data.get("total_residual_count") or 0) > 0 or bool(failing) \
+        or bool(waived)
+    advisories: List[str] = []
+    if inert_allow_macros and has_residual:
+        advisories.append(
+            "allow-macro(s) matched no residual bucket: "
+            + ", ".join(inert_allow_macros)
+            + f" -- the XOR top cell is '{data.get('top', top)}' and macro-bbox "
+            "attribution only sees its DIRECT child instances, so a macro nested "
+            "deeper is never attributable/waivable at this --top (re-run the XOR "
+            "with --top set to the cell that DIRECTLY instantiates the macro).")
+
     return {
         "verdict": verdict,
         "top": data.get("top", top),
         "layout_under_test": data.get("layout_under_test", lut_s),
         "golden_reference": data.get("golden_reference", gold_s),
         "allow_macros": allow_macros,
+        "inert_allow_macros": inert_allow_macros,
+        "advisories": advisories,
         "total_residual_count": data.get("total_residual_count"),
         "total_residual_area_um2": data.get("total_residual_area_um2"),
         "waived_residual": waived,
