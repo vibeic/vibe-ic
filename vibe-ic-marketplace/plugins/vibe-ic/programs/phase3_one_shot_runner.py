@@ -4544,9 +4544,30 @@ def _post_buffered_repair_tcl(marker_prefix: str, marker_suffix: str = "",
 
 def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
                           liberty_c: str, pnr_dir_c: str, eco_dir_c: str,
-                          metal_prefix: str) -> str:
+                          metal_prefix: str,
+                          corner_libs: Optional[Dict[str, str]] = None) -> str:
     """ORGANIC #561 — generate a self-contained OpenROAD ECO timing-repair TCL
     that embeds the 4 proven workarounds discovered during the ibex pilot:
+
+    TAPEOUT-SIGNOFF (multi-corner ECO): when ``corner_libs`` supplies ≥2 distinct
+    process corners (SS/TT/FF discovered from THIS PDK — see
+    :func:`_resolve_signoff_corner_libs`) the ECO reads them ALL as OpenROAD
+    timing corners (``define_corners`` + ``read_liberty -corner``) so
+    ``repair_timing -setup`` optimizes the WORST (ss) process corner — not just
+    the typical (tt) corner. This closes the other half of the single-corner-
+    closure confounder: the v1.2.85 DRV constraints let ``repair_design`` fix the
+    slew explosion, but a SINGLE-CORNER (tt) ECO then runs ``repair_timing -setup``
+    against tt (which a large design can already MEET) and never touches the ss
+    setup violation, leaving it on the floor. Driving the repair MULTI-CORNER makes
+    the resizer size/buffer/clone against the ss path delay (proven live on ibex:
+    ss setup −35.78 ns → −15.49 ns, a 20.3 ns recovery a tt-only ECO cannot make).
+    §4.05: a genuine ss floor still shows VIOLATED afterwards — the multi-corner ECO
+    RECOVERS what is recoverable, it does NOT fabricate closure. With <2 corners
+    available it degrades to the single-corner ``read_liberty`` (byte-identical to
+    the pre-multi-corner emission). chip/PDK-AGNOSTIC: corner libs come from the
+    active PDK, never a chip/vendor literal.
+
+    The 4 proven workarounds (all retained under multi-corner):
 
       (a) RSZ-0074: read post_hold.def (pre-route, no stale GR guides), NOT
           routed.def. Reading routed.def carries global-route guides that
@@ -4565,6 +4586,37 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
     Returns a ready-to-run TCL string (not an f-string template — real {/}).
     Chip-AGNOSTIC: no design-specific magic; only standard OpenROAD APIs."""
     pg_cleanup = _pg_net_cleanup_tcl()
+    # TAPEOUT-SIGNOFF (multi-corner ECO): read every process corner the PDK
+    # provides as an OpenROAD timing corner so repair_timing -setup targets the
+    # WORST (ss) corner. Deterministic ss→tt→ff order (worst-setup first); any
+    # non-canonical extra label is appended sorted. <2 corners ⇒ single-corner
+    # read (byte-identical to the pre-multi-corner emission). §4.05: corner libs
+    # come from the active PDK (never a chip/vendor literal).
+    _corners = corner_libs or {}
+    _canon = [lbl for lbl in ("SS", "TT", "FF") if _corners.get(lbl)]
+    _extra = sorted(lbl for lbl in _corners if lbl not in ("SS", "TT", "FF")
+                    and _corners.get(lbl))
+    _labels = _canon + _extra
+    if len(_labels) >= 2:
+        _corner_names = " ".join(lbl.lower() for lbl in _labels)
+        liberty_block = (
+            "# TAPEOUT-SIGNOFF (multi-corner ECO): ss/tt/ff read as timing\n"
+            "# corners so repair_timing -setup optimizes the WORST (ss) process\n"
+            "# corner, not just tt (the single-corner-closure confounder).\n"
+            f"define_corners {_corner_names}\n"
+            + "".join(f"read_liberty -corner {lbl.lower()} {_corners[lbl]}\n"
+                      for lbl in _labels)
+        )
+    else:
+        liberty_block = f"read_liberty {liberty_c}\n"
+    # write_sdf needs an explicit -corner under multi-scene (multi-corner)
+    # analysis (else STA-0103 '-scene keyword required'); emit the SDF at the
+    # nominal (tt) corner — the conventional back-annotation corner — else the
+    # first available corner. Single-corner ⇒ no flag (byte-identical to before).
+    _sdf_corner_flag = ""
+    if len(_labels) >= 2:
+        _sdf_corner = "tt" if "TT" in _labels else _labels[0].lower()
+        _sdf_corner_flag = f" -corner {_sdf_corner}"
     return (
         "# === ORGANIC #561: ECO timing repair TCL ===\n"
         "# 4 OpenROAD workarounds for safe stand-alone ECO iteration:\n"
@@ -4577,9 +4629,21 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "\n"
         f"read_lef {tech_lef_c}\n"
         f"read_lef {cell_lef_c}\n"
-        f"read_liberty {liberty_c}\n"
-        f"read_verilog {pnr_dir_c}/{top}_pnr.v\n"
-        f"link_design {top}\n"
+        f"{liberty_block}"
+        "# ORGANIC #561 (a): RSZ-0074 — read post_hold.def as the ECO start-point,\n"
+        "# as the PRIMARY design source: the netlist, placement, ROWS and TRACKS\n"
+        "# all come from the DEF. post_hold.def is the last pre-route, hold-fixed\n"
+        "# DEF; routed.def would carry stale GR guides that trigger RSZ-0074 abort.\n"
+        "# Reading it as PRIMARY — NOT read_verilog+link_design followed by a second\n"
+        "# read_def — is what makes this ECO runnable end-to-end: link_design from\n"
+        "# the netlist leaves the block with no floorplan, so a later plain read_def\n"
+        "# aborts ODB-0251 ('Chip already has a block'), and forcing it -incremental\n"
+        "# then leaves detailed_placement/global_route aborting DPL-0027/GRT-0701\n"
+        "# ('no rows' / 'missing track structure') because -incremental does not\n"
+        "# carry the DEF's rows+tracks. The primary read carries them, so the\n"
+        "# repair + reroute complete; write_verilog recovers the ECO netlist from\n"
+        "# odb. (verified live on ibex: full repair+reroute completes.)\n"
+        f"read_def {pnr_dir_c}/post_hold.def\n"
         f"read_sdc {pnr_dir_c}/constraint.sdc\n"
         "\n"
         f"if {{[catch {{set_wire_rc -signal -layer {metal_prefix}1}} _swr_sig]}} {{\n"
@@ -4590,11 +4654,6 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         f"if {{[catch {{set_wire_rc -clock -layer {metal_prefix}5}} _swr_clk]}} {{\n"
         "  puts \"ECO_SET_WIRE_RC_CLOCK_NONFATAL: $_swr_clk\"\n"
         "}\n"
-        "\n"
-        "# ORGANIC #561 (a): RSZ-0074 — read post_hold.def as ECO start-point.\n"
-        "# post_hold.def is the last pre-route, hold-fixed DEF; reading\n"
-        "# routed.def carries stale GR guides that trigger RSZ-0074 abort.\n"
-        f"read_def {pnr_dir_c}/post_hold.def\n"
         "\n"
         "# === ECO pass 1: placement-based repair ===\n"
         "if {[catch {estimate_parasitics -placement} _pe_pl]} {\n"
@@ -4640,7 +4699,8 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "}\n"
         f"write_def {eco_dir_c}/eco_routed.def\n"
         f"write_verilog {eco_dir_c}/{top}_eco.v\n"
-        f"if {{[catch {{write_sdf {eco_dir_c}/{top}_eco.sdf}} _sdf_err]}} {{\n"
+        f"if {{[catch {{write_sdf{_sdf_corner_flag} {eco_dir_c}/{top}_eco.sdf}} "
+        "_sdf_err]} {\n"
         "  puts \"ECO_WRITE_SDF_NONFATAL: $_sdf_err\"\n"
         "}\n"
     )
@@ -9451,6 +9511,16 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         try:
             _pnr_dir_c = _to_container_path(str(pnr_out), container)
             _eco_dir_c = _to_container_path(str(eco_out), container)
+            # TAPEOUT-SIGNOFF (multi-corner ECO): discover the PDK's ss/tt/ff
+            # process-corner libs so the emitted ECO drives repair_timing -setup
+            # against the WORST (ss) corner — not just tt. Best-effort: an empty
+            # dict (single-corner PDK / discovery failure) leaves the emitted ECO
+            # single-corner (byte-identical to before).
+            try:
+                _eco_corner_libs = _resolve_signoff_corner_libs(
+                    project, pdk, container)
+            except Exception:
+                _eco_corner_libs = {}
             eco_tcl_content = _build_eco_repair_tcl(
                 top,
                 _to_container_path(str(pdk.tech_lef), container),
@@ -9458,6 +9528,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 _to_container_path(str(pdk.liberty), container),
                 _pnr_dir_c, _eco_dir_c,
                 pdk.metal_prefix,
+                corner_libs=_eco_corner_libs,
             )
             eco_tcl_path.write_text(eco_tcl_content)
             written.append(str(eco_tcl_path))
