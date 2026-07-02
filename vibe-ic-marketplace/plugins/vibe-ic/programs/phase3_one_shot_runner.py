@@ -7083,6 +7083,55 @@ def _def_has_routing(def_path: Path) -> bool:
     return False
 
 
+# A DEF must carry this many SIGNAL nets before the signal-routing guard fires.
+# Below it, a design is too trivial to reliably distinguish "unrouted" from
+# "everything abuts", so we never block it (it extracts fast anyway).
+_LVS_MIN_SIGNAL_NETS_FOR_ROUTING_CHECK = 16
+
+
+def _def_signal_routing_stats(def_path: Path) -> Tuple[bool, int]:
+    """Return (has_signal_routing, signal_net_count) for the DEF's NETS section.
+
+    `_def_has_routing` conflates POWER routing (SPECIALNETS straps) with SIGNAL
+    routing: a DEF that carries only power SPECIALNETS + placed cells (its signal
+    interconnect never written — e.g. `write_def` ran before/without
+    `detailed_route`, or the routing was streamed ONLY to the GDS/ODB) passes
+    `_def_has_routing` yet has ZERO signal wiring. Magic ext2spice on such a DEF
+    yields an interconnect-less netlist whose EVERY signal net is disconnected,
+    so netgen reports a flood of net/pin mismatches that MASQUERADE as a design
+    SIGNAL_NET_MISMATCH but are really a routing / DEF-writing gap.
+
+    This scans ONLY the `NETS ... END NETS` (signal) section — never SPECIALNETS
+    — counting `- <net>` entries and stopping EARLY on the first `+ ROUTED`/
+    `+ NEW` wiring marker (so a genuinely-routed DEF is classified in O(1) lines).
+    A signal-unrouted DEF is scanned to `END NETS` to confirm zero. chip-AGNOSTIC:
+    pure DEF-grammar counting, no chip literal. Fail-safe: on any read error, or
+    when no NETS header is found, returns (True, 0) so the guard never blocks a
+    DEF it could not classify."""
+    in_nets = False
+    nets = 0
+    try:
+        with def_path.open("r", errors="ignore") as fh:
+            for line in fh:
+                s = line.lstrip()
+                if not in_nets:
+                    # `NETS <n> ;` — NOT `SPECIALNETS <n> ;` (that starts with S).
+                    if re.match(r"NETS\s+\d+", s):
+                        in_nets = True
+                    continue
+                if s.startswith("END NETS"):
+                    break
+                if s.startswith("- "):
+                    nets += 1
+                if "+ ROUTED" in line or "+ NEW" in line:
+                    return True, nets            # signal routing present → routed
+    except OSError:
+        return True, 0                            # unknown → do not block
+    if not in_nets:
+        return True, 0                            # no NETS header seen → do not block
+    return False, nets
+
+
 def step_lvs(project: Path, top: str, pdk: PdkConfig,
              container: str,
              upstream_pnr: Optional[StepResult] = None) -> StepResult:
@@ -7237,6 +7286,47 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
             f"detailed_route first (#571).",
             extras={"finding": "LVS_INPUT_DEF_NOT_ROUTED",
                     "def": str(def_file)})
+    # SIGNAL-ROUTING honesty guard — a DEF can pass the check above on power
+    # SPECIALNETS alone yet carry ZERO signal-net routing (interconnect never
+    # written to THIS DEF: write_def ran before/without detailed_route, or the
+    # routing went only to the GDS/ODB). Magic ext2spice then yields an
+    # interconnect-less netlist whose every signal net is disconnected, and the
+    # DEF-direct netgen compare reports a flood of pin/net mismatches that LOOK
+    # like a design SIGNAL_NET_MISMATCH but are really a ROUTING / DEF-writing
+    # gap. Detect it (a routed DEF has thousands of `+ ROUTED`/`+ NEW` signal-net
+    # markers; a signal-unrouted DEF has zero) and attribute HONESTLY instead of
+    # burning hours in ext2spice and mis-blaming the design. Applies to the
+    # NAMED DEF too (not only the fallback), because the runner's own
+    # `write_def` can emit a signal-unrouted "routed" DEF. §4.05: this NEVER
+    # fakes a match — it reclassifies an already-failing case to its true root
+    # cause; a genuinely-routed DEF (>=1 signal-routing marker) is unaffected and
+    # proceeds to the real netgen compare, so a real signal short still FAILs.
+    _sig_routed, _sig_nets = _def_signal_routing_stats(def_file)
+    if not _sig_routed and _sig_nets >= _LVS_MIN_SIGNAL_NETS_FOR_ROUTING_CHECK:
+        verdict = _write_lvs_verdict(
+            project, "FAIL", "LVS_INPUT_DEF_SIGNAL_UNROUTED",
+            f"routed DEF {def_file.name} declares {_sig_nets} signal net(s) but "
+            f"carries ZERO signal-net routing (only power SPECIALNETS are "
+            f"routed) — the signal interconnect is ABSENT from this DEF "
+            f"(write_def likely ran before/without detailed_route, or the "
+            f"routing was streamed only to the GDS/ODB). Extracting it yields an "
+            f"interconnect-less netlist whose every signal net is disconnected; "
+            f"the resulting netgen mismatch is a ROUTING / DEF-writing gap, NOT a "
+            f"design SIGNAL_NET_MISMATCH. Re-run write_def AFTER detailed_route "
+            f"(or run LVS against the routed GDS).",
+            extras={"def": str(def_file), "signal_nets": _sig_nets,
+                    "signal_routing_markers": 0})
+        return StepResult(
+            "lvs", "FAIL", time.time() - t0,
+            f"LVS aborted: DEF {def_file.name} declares {_sig_nets} signal nets "
+            f"but has NO signal routing — interconnect absent from this DEF "
+            f"(routing / DEF-writing gap, not a design defect; re-run write_def "
+            f"after detailed_route). Named in lvs_verdict.json; NOT a clean "
+            f"compare.",
+            extras={"finding": "LVS_INPUT_DEF_SIGNAL_UNROUTED",
+                    "def": str(def_file),
+                    "signal_nets": _sig_nets,
+                    "lvs_verdict": verdict})
     # v0.3.13 — emit the project-local netgen setup (unconditional
     # fill/tap/decap/fakediode ignore) and use it instead of the bare PDK
     # setup, so the cell-level compare is not flooded by physical-only
