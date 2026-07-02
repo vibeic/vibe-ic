@@ -405,6 +405,69 @@ class TestDontUseTcl:
         assert "{dont_use_block}# === v0.1.26 wire-RC model ===" in tmpl
 
 
+class TestDontUseFamilyFallback:
+    """v1.2.86 — the file-based set_dont_use above SILENTLY degraded to zero
+    exclusions on iic-osic-tools (which ships no drc_exclude.cells ANYWHERE):
+    repair_design then inserted sky130_fd_sc_hd__probe_p_8 as slew/load buffers,
+    detailed_route aborted with [ERROR DRT-0085], and write_def emitted a
+    signal-UNROUTED DEF (root cause of the LVS_INPUT_DEF_SIGNAL_UNROUTED guard
+    on opentitan_aes). The GENERAL fallback excludes the unroutable
+    __probe/__probec/__lpflow_ cell FAMILIES via OpenROAD's own get_lib_cells,
+    so the resizer never picks a probe cell even with no PDK exclude file."""
+
+    def test_fallback_excludes_the_three_unroutable_families(self):
+        tcl = runner._dont_use_family_fallback_tcl()
+        # the exact patterns that matched OpenLane's DONT_USE_CELLS (probe/probec/lpflow)
+        assert "*__probe_*" in tcl
+        assert "*__probec_*" in tcl
+        assert "*__lpflow_*" in tcl
+
+    def test_fallback_uses_get_lib_cells_over_loaded_liberty(self):
+        # GENERAL + authoritative: only excludes cells that actually exist in the
+        # loaded liberty (empty-match patterns are skipped), no baked cell literal.
+        tcl = runner._dont_use_family_fallback_tcl()
+        assert "get_lib_cells -quiet" in tcl
+        assert "set_dont_use $_du_cells" in tcl
+        assert "DONT_USE_FALLBACK_APPLIED" in tcl
+
+    def test_fallback_is_nonfatal_guarded(self):
+        # A bad pattern must never abort PnR.
+        tcl = runner._dont_use_family_fallback_tcl()
+        assert "catch {set_dont_use" in tcl
+        assert "DONT_USE_FALLBACK_NONFATAL" in tcl
+
+    def test_fallback_never_touches_cts_or_physical_masters(self):
+        # CTS needs plain clkbuf; tap/decap/fill/diode have dedicated placers.
+        tcl = runner._dont_use_family_fallback_tcl()
+        assert "clkbuf_" not in tcl
+        assert "tapvpwrvgnd" not in tcl
+        assert "__fill_" not in tcl
+        assert "diode" not in tcl
+
+    def test_fallback_carries_no_design_literal(self):
+        # chip-AGNOSTIC / §4.05: family suffixes only, no chip/benchmark name.
+        tcl = runner._dont_use_family_fallback_tcl()
+        for bad in ("aes", "chip_top", "opentitan", "spm", "ibex"):
+            assert bad not in tcl.lower()
+
+    def test_dont_use_tcl_always_includes_fallback(self):
+        # With a PDK exclude file AND without one, the fallback is always present
+        # (the file is the authoritative superset; the fallback is the floor).
+        with_file = runner._dont_use_tcl(_fake_pdk_with_exclude())
+        no_file = runner._dont_use_tcl(_fake_pdk())
+        assert "DONT_USE_FALLBACK_APPLIED" in with_file
+        assert "DONT_USE_FALLBACK_APPLIED" in no_file
+        # honest skip message for the file part is still emitted when absent
+        assert "DONT_USE_SKIPPED" in no_file
+
+    def test_fallback_precedes_the_file_block(self):
+        # The get_lib_cells fallback runs BEFORE the file read so a resizer that
+        # runs immediately still sees the family exclusions.
+        tcl = runner._dont_use_tcl(_fake_pdk_with_exclude())
+        assert (tcl.index("DONT_USE_FALLBACK_APPLIED")
+                < tcl.index("DONT_USE_APPLIED"))
+
+
 class TestPgNetCleanupTcl:
     """Pin the DRT-0305 PG-net cleanup that MUST precede routing (v0.1.49 doctrine).
     A non-special POWER/GROUND net in regular NETS aborts ALL detailed routing;

@@ -4375,6 +4375,54 @@ def _build_spare_postfix_tcl(plan: Dict[str, Any],
     return "\n".join(lines) + "\n"
 
 
+def _dont_use_family_fallback_tcl() -> str:
+    """v1.2.86 — GENERAL, PDK-family fallback that excludes the physically
+    unroutable characterization / low-power cell FAMILIES from the resizer/CTS/
+    repair pool, returned as a pure string (v0.1.49 doctrine, regression-pinned).
+
+    Root cause (opentitan_aes_e2e LVS-input signal-unrouted DEF): the file-based
+    `set_dont_use` below reads the PDK's `drc_exclude.cells`, but the iic-osic-tools
+    sky130A install ships NO such file (nor any dont_use list) ANYWHERE — so the
+    file block printed `DONT_USE_SKIPPED` and applied ZERO exclusions. The TT
+    liberty the flow reads DOES contain `sky130_fd_sc_hd__probe_p_8` (a probe
+    characterization cell) + 34 `lpflow` cells, so `repair_design`/`repair_timing`
+    were free to insert `probe_p_8` as `load_slew*` / `wire*` slew/load buffers.
+    TritonRoute cannot generate a valid pin-access pattern for a probe cell, so
+    `detailed_route` aborted with `[ERROR DRT-0085] Valid access pattern combination
+    not found`; the abort was swallowed as NONFATAL and `write_def` then emitted a
+    DEF (and GDS) carrying net connectivity but ZERO `+ ROUTED` signal geometry.
+    step_lvs extracted that DEF → every signal net disconnected → a FALSE
+    SIGNAL_NET_MISMATCH (the v1.2.85 guard's trigger).
+
+    Fix: never depend solely on a PDK-shipped file. This block uses OpenROAD's own
+    `get_lib_cells` over whatever liberty was actually read and excludes the cells
+    whose names carry the std-cell-library FAMILY suffixes `__probe`, `__probec`,
+    `__lpflow_` — physical/characterization/low-power cells that are NEVER valid
+    synthesis buffers and that the canonical OpenLane `DONT_USE_CELLS` list also
+    excludes. This is PDK-family-GENERAL (any library using the `<lib>__<fn>`
+    convention — sky130*, gf180mcu*, …), matches only cells that ACTUALLY exist
+    (empty-match patterns are skipped), and carries NO design/benchmark literal.
+    It deliberately does NOT touch plain `clkbuf_*` (CTS needs them) nor tap/decap/
+    fill/diode masters (dedicated steps place those). NONFATAL-guarded."""
+    return (
+        "# === v1.2.86 — GENERAL characterization/lpflow do-not-use fallback ===\n"
+        "# Works even when the PDK ships no drc_exclude.cells (iic-osic-tools):\n"
+        "# excludes __probe/__probec/__lpflow_ cell families (unroutable → DRT-0085)\n"
+        "# via OpenROAD's own get_lib_cells over the loaded liberty. PDK-family-\n"
+        "# GENERAL (matches the <lib>__<fn> naming, no design literal).\n"
+        "set _duf 0\n"
+        "foreach _du_pat {*__probe_* *__probec_* *__lpflow_*} {\n"
+        "  set _du_cells [get_lib_cells -quiet $_du_pat]\n"
+        "  if {[llength $_du_cells] > 0} {\n"
+        "    if {[catch {set_dont_use $_du_cells} _duf_e]} {\n"
+        "      puts \"DONT_USE_FALLBACK_NONFATAL: $_du_pat -- $_duf_e\"\n"
+        "    } else { incr _duf [llength $_du_cells] }\n"
+        "  }\n"
+        "}\n"
+        "puts \"DONT_USE_FALLBACK_APPLIED: $_duf characterization/lpflow cell(s) "
+        "excluded by family-name fallback\"\n")
+
+
 def _dont_use_tcl(pdk: "PdkConfig") -> str:
     """v0.2.14 — emit OpenROAD Tcl that excludes the PDK's PnR-forbidden cells from
     the resizer/CTS/repair cell pool, returned as a pure string so the
@@ -4393,13 +4441,22 @@ def _dont_use_tcl(pdk: "PdkConfig") -> str:
     list to drift) and AUTHORITATIVE (byte-identical to the reference flow).
     `set_dont_use` only narrows the optimizer's choices; synthesis-mapped logic and
     the explicit master lists used by tapcell/decap/fill/antenna steps are untouched.
-    NONFATAL-guarded; SKIPPED when the PDK declares no exclusion file."""
+    NONFATAL-guarded; SKIPPED when the PDK declares no exclusion file.
+
+    v1.2.86 — the file read is now ALWAYS preceded by `_dont_use_family_fallback_tcl`,
+    a get_lib_cells-based exclusion of the __probe/__probec/__lpflow_ families, so the
+    resizer never inserts an unroutable probe cell even on installs (iic-osic-tools)
+    that ship no exclude file. When the PDK DOES ship the file it is still read as the
+    authoritative superset (set_dont_use is idempotent, so the overlap is harmless)."""
+    fallback = _dont_use_family_fallback_tcl()
     if not pdk.pnr_exclude_cell_file:
-        return ("puts \"DONT_USE_SKIPPED: no PNR cell-exclusion file for this PDK; "
-                "optimizer cell pool unrestricted\"\n")
+        return (fallback
+                + "puts \"DONT_USE_SKIPPED: no PNR cell-exclusion file for this PDK; "
+                "relied on the family-name fallback above\"\n")
     f = pdk.pnr_exclude_cell_file
     return (
-        f"if {{[file exists {f}]}} {{\n"
+        fallback
+        + f"if {{[file exists {f}]}} {{\n"
         f"  set _du_f [open {f} r]\n"
         "  set _du_n 0\n"
         "  while {[gets $_du_f _du_cell] >= 0} {\n"
