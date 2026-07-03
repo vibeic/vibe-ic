@@ -162,6 +162,92 @@ def _iverilog_available():
     return which("iverilog") is not None
 
 
+# ── v1.3.1 (#98 follow-up) — wrapper port-decl NORMALIZATION regression ──────
+# The sigma-class regression: an author ANSI header may declare
+# `output reg <p>=<init>` (legal INSIDE the author module — procedurally
+# assigned + initialized). Copied VERBATIM onto the pass-through wrapper the
+# port becomes a variable with an initializer that is ALSO structurally driven
+# by the inner instance's output → iverilog `Unable to assign to unresolved
+# wires` → the gate's own #535 roundtrip-reparse BLOCKs the (correct) draft.
+# The wrapper must NORMALIZE each copied decl: strip `reg`/`logic`/`var` +
+# `= <init>`, keep direction/signedness/range.
+_REG_INIT_DRAFT = """\
+module pulse_pair (
+    input   clk,
+    input   en,
+    input  [14:0] load_sum,
+    output  reg left_o=0,
+    output  reg right_o=0
+);
+    always @(posedge clk) begin
+        if (en) begin
+            left_o  <= load_sum[0];
+            right_o <= ~load_sum[0];
+        end
+    end
+endmodule
+"""
+
+
+def test_normalize_wrapper_port_decl_strips_kind_and_init():
+    n = A._normalize_wrapper_port_decl
+    # the regression shape: kind + initializer stripped, name kept
+    assert n("output  reg left_o=0") == "output left_o"
+    assert n("output reg right_o = 1'b0") == "output right_o"
+    # signedness + range are KEPT (the port contract), kind/init stripped
+    assert n("output reg signed [W-1:0] q = '0") == "output signed [W-1:0] q"
+    assert n("input logic [7:0] d") == "input [7:0] d"
+    # a net-kind decl without init is untouched (modulo whitespace collapse)
+    assert n("input  wire [14:0] load_sum") == "input wire [14:0] load_sum"
+    # an `=` INSIDE a packed-range expression is NOT an initializer
+    assert n("input [A==1 ? 4 : 2-1:0] z") == "input [A==1 ? 4 : 2-1:0] z"
+
+
+def test_reg_init_header_wrapper_is_net_and_initfree():
+    cands = G.candidate_tops_from_id("cvdp_copilot_pulse_pair_0001")
+    out = A.maybe_alias_completion_multi(
+        _REG_INIT_DRAFT, cands, G.completion_module_names)
+    assert out != _REG_INIT_DRAFT, "expected alias wrappers to be appended"
+    wrapper_section = out[len(_REG_INIT_DRAFT):]
+    assert "cvdp_copilot_pulse_pair" in wrapper_section
+    # the wrapper's re-declared ports carry NO variable kind and NO initializer
+    assert "reg" not in wrapper_section.replace("u_pulse_pair", ""), \
+        "wrapper port decls must be plain nets (no `reg`)"
+    assert "=" not in wrapper_section, \
+        "wrapper port decls must carry no `= <initializer>`"
+    # the AUTHOR module is byte-intact (initializers untouched inside it)
+    assert out.startswith(_REG_INIT_DRAFT)
+
+
+def test_reg_init_header_wrapper_compiles_and_elaborates():
+    """The measured sigma-class fix: draft+wrapper must compile rc=0 under
+    iverilog -g2012 AND `-s <id-prefix top>` must elaborate. Before the fix
+    this failed with `Unable to assign to unresolved wires`."""
+    if not _iverilog_available():
+        import pytest
+        pytest.skip("iverilog not on PATH")
+    cands = G.candidate_tops_from_id("cvdp_copilot_pulse_pair_0001")
+    out = A.maybe_alias_completion_multi(
+        _REG_INIT_DRAFT, cands, G.completion_module_names)
+    with tempfile.TemporaryDirectory() as td:
+        sv = os.path.join(td, "reg_init_alias.sv")
+        with open(sv, "w") as f:
+            f.write(out)
+        comp = subprocess.run(
+            ["iverilog", "-g2012", "-o", os.devnull, sv],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        assert comp.returncode == 0, (
+            "draft+wrapper failed to compile:\n"
+            + comp.stdout.decode("utf-8", "replace"))
+        elab = subprocess.run(
+            ["iverilog", "-g2012", "-t", "null",
+             "-s", "cvdp_copilot_pulse_pair", sv],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        assert elab.returncode == 0, (
+            "harness top did not elaborate:\n"
+            + elab.stdout.decode("utf-8", "replace"))
+
+
 def test_gate_end_to_end_binds_harness_top_via_iverilog():
     """The measured recovery: gate the no-skeleton draft, extract the emitted
     completion the scorer way, and confirm `iverilog -s cvdp_copilot_bus_arbiter`

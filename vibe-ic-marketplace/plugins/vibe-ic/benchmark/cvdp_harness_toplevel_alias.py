@@ -60,6 +60,14 @@ recognises `{"code": [{path: content}, …]}` (and the flat
 scanner returned None on those envelopes, so a port-list-compatible rename
 inside a JSON-shape completion was un-aliased and `iverilog -s <top>`
 ELAB_ERRORed.
+v1.3.1 fix (#98 follow-up): wrapper port-decl NORMALIZATION — the wrapper used
+to copy the author's ANSI decls VERBATIM, so an `output reg <p>=<init>` header
+(legal in the author module) became a wrapper port that is simultaneously a
+variable with an initializer AND structurally driven by the inner instance →
+iverilog `Unable to assign to unresolved wires` → the gate's own #535
+roundtrip-reparse BLOCKED the whole (correct) draft. The wrapper now strips
+the `reg`/`logic`/`var` kind and any `= <initializer>` from each copied decl,
+keeping direction/signedness/range (see `_normalize_wrapper_port_decl`).
 """
 from __future__ import annotations
 
@@ -148,12 +156,53 @@ def _split_ports(portblob: str) -> List[str]:
 
 
 # ── 2. synthesize the thin alias wrapper ────────────────────────────────────
+# v1.3.1 (#98 follow-up) — the variable KIND keyword to strip from a wrapper
+# port decl. ONLY the width-neutral variable kinds (`reg`/`logic`/`var`):
+# stripping them never changes the port width (the `[msb:lsb]` range is kept
+# verbatim), whereas a width-carrying type (`int`, `integer`, `bit`, `byte`,
+# a typedef, …) must stay untouched or the wrapper port width would change.
+_VAR_KIND_STRIP_RE = re.compile(r"\b(?:reg|logic|var)\b")
+
+
+def _normalize_wrapper_port_decl(chunk: str) -> str:
+    """Normalize ONE author ANSI port-decl chunk for re-declaration on the
+    pass-through alias wrapper (#98 follow-up — the sigma-class regression):
+
+      * strip any `= <initializer>` (top-level `=`, bracket-depth aware) —
+        a wrapper port is driven STRUCTURALLY by the inner instance's output,
+        and a variable initializer is a second driver → iverilog
+        `Unable to assign to unresolved wires`;
+      * strip the `reg`/`logic`/`var` variable kind — a pass-through wrapper
+        port must be a plain net (`output reg p` cannot legally be driven by
+        an instance output port connection in -g2005 Verilog, and with an
+        initializer it hard-fails even under -g2012);
+      * KEEP direction (`input`/`output`/`inout`), `signed`ness, and the
+        `[msb:lsb]` packed range(s) — the tokens that define the port's
+        contract — verbatim (whitespace runs collapsed to one space).
+
+    So `output  reg left_sig=0` → `output left_sig`, and
+    `output reg signed [W-1:0] q = '0` → `output signed [W-1:0] q`."""
+    out: List[str] = []
+    depth = 0
+    for ch in chunk:
+        if ch in "[({":
+            depth += 1
+        elif ch in "])}":
+            depth = max(0, depth - 1)
+        if ch == "=" and depth == 0:
+            break                       # start of the initializer — drop rest
+        out.append(ch)
+    s = _VAR_KIND_STRIP_RE.sub(" ", "".join(out))
+    return re.sub(r"\s+", " ", s).strip()
+
+
 def alias_wrapper(top_needed: str, author_top: str, ports: List[str],
                   ansi_decls: List[str], param_block: str = "") -> str:
     """A pass-through wrapper that gives the harness its TOPLEVEL name while
     leaving the author module intact. Re-declares the FULL ANSI port list
-    (direction+width carried verbatim from the author header) and connects by
-    name, so it is robust to port ORDER and compiles under iverilog -g2012.
+    (direction+width carried from the author header, NORMALIZED to a plain
+    net — see `_normalize_wrapper_port_decl`) and connects by name, so it is
+    robust to port ORDER and compiles under iverilog -g2012.
 
     When the author header carries a parameter port list (e.g. `parameter
     int InWidth_g = 32`), the wrapper MUST re-declare it before the port
@@ -163,7 +212,8 @@ def alias_wrapper(top_needed: str, author_top: str, ports: List[str],
     parameter`). The inner module's instance uses implicit defaults (the
     wrapper parameter defaults are propagated down the hierarchy), so
     parameter VALUES stay consistent between wrapper and inner module."""
-    port_decl = ",\n    ".join(ansi_decls)
+    port_decl = ",\n    ".join(
+        _normalize_wrapper_port_decl(d) for d in ansi_decls)
     conns = ", ".join(f".{p}({p})" for p in ports)
     # normalize the wrapper header: `module <top>` then optional ` #(<params>)`
     # then `(` — keep a single space between `)` and `(` so the format is
