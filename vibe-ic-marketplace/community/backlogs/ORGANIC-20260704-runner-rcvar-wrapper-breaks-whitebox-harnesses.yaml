@@ -1,0 +1,43 @@
+type: bug
+severity: P1
+component: program:reset_clock_variant_alias
+
+title: >-
+  The reset_clock_variant_aliases transform hides ALL internal signals inside
+  `<top>__rcvar_inner`, breaking any whitebox harness that reads internals
+  hierarchically (dut.<internal>) — 14 CVDP hard-94 fails implicated; 3 problems
+  recovered by MECHANICAL wrapper-flattening alone
+
+plugin_version: "1.3.3"
+
+pattern: |
+  The runner renames the authored module to `<top>__rcvar_inner` and emits a thin
+  `<top>` alias wrapper. Blackbox harnesses are unaffected, but CVDP-class hidden
+  cocotb harnesses commonly WHITEBOX internal state (e.g. `dut.parity_out`,
+  `dut.pwm_counter`): with the wrapper, those signals live one level down and the
+  harness aborts (AttributeError) or reads X. MEASURED on the hard-94 converge
+  round (v1.3.2): 20 failing drafts carried the wrapper; 14 triage records
+  explicitly implicated it; flattening the wrapper MECHANICALLY (no logic change)
+  flipped 3 problems to PASS at the official scorer (axi_stream_upscale_0001,
+  cache_lru_0001, cont_adder_0042). A 4th mechanism also observed
+  (axi_stream_downscale_0001): the wrapper's extra reset-variant pin is unknown to
+  the harness, floats/held at 0, freezing the whole design.
+
+suggested_fix: |
+  Options in preference order (chip-AGNOSTIC):
+  1. In the CVDP/benchmark emit path, FLATTEN before emit: the completion handed
+     to the gate must be the original flat module under its real name (the rcvar
+     alias is a runner-internal artifact for its own TB, never a deliverable).
+  2. Or make the transform opt-out for flows whose verification track declares
+     whitebox visibility (CVDP-class harnesses), keeping it for the runner's own
+     blackbox full-stack TB only.
+  3. At minimum, cvdp_gate should detect `__rcvar_inner` in a completion and
+     un-wrap it (rename inner back to top, drop the wrapper) — mirroring the
+     mechanical recovery that already proved +3 at the oracle.
+  Regression fixtures: Serial_Line_Converter_0011 (AttributeError on
+  dut.parity_out), axi_stream_downscale_0001 (extra reset pin freezes design).
+
+evidence:
+  run: benchmark_external/cvdp/run_hard94_unified_20260703 (converge2a/, drafts_converge2/)
+  mechanical_recovery: 3 problems flipped PASS with zero logic changes
+  filed_by: benchmark-agent (hard-94 converge round 2 on v1.3.2/v1.3.3)
