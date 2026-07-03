@@ -2401,10 +2401,11 @@ def _literal_width_ports(region):
             if isinstance(t, tuple) and len(t) >= 2 and t[1]}
 
 
-# ── ORGANIC (GATE-AS-SOLE-EMIT) — module-identifier → harness TOPLEVEL rename ──
-# When the harness `.env` sets TOPLEVEL=X (load_harness_toplevels / the prompt
-# skeleton) but the completion's SOLE / single-parent module is named Y (X
-# otherwise absent), the official scorer's `iverilog -s X` cannot find its top
+# ── ORGANIC (GATE-AS-SOLE-EMIT) — module-identifier → prompt TOPLEVEL rename ──
+# When the PROMPT skeleton names the expected top X (skeleton_module_name_from_
+# prompt — a legitimate input.prompt fact; the hidden harness .env is OFF-LIMITS
+# and NEVER read here) but the completion's SOLE / single-parent module is named Y
+# (X otherwise absent), the official scorer's `iverilog -s X` cannot find its top
 # and ELAB_ERRORs the whole problem. A PURE RENAME `module Y`→`module X` (and a
 # labelled `endmodule : Y`) BEFORE the iverilog gate makes the TB bind the real
 # ports — the #711-style alias with NO logic change. CONSERVATIVE: fires only when

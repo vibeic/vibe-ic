@@ -169,18 +169,14 @@ def test_cvdp_gate_records_metadata_without_altering_completion():
     verdict-flipping signal.
     """
     H, _G, A = _load()
-    # 1) The harness-top alias sidecar correctly reads a hidden `.env` from
-    #    a temp dataset JSONL, proving the round-trip with v1.2.44's
-    #    prompt-skeleton fallback is wired. We feed `m` and assert it
-    #    resolves.
-    with tempfile.TemporaryDirectory() as tmp:
-        ds = pathlib.Path(tmp) / 'cvdp.jsonl'
-        ds.write_text(
-            '{ "id": "xyz", "harness": { "files": { "src/.env": "toplevel = m\\n" } } }\n',
-            encoding='utf-8')
-        tops = A.load_harness_toplevels(str(ds))
-        assert tops.get("xyz") == "m", (
-            f'harness-top alias sidecar failed: tops={tops!r}')
+    # 1) The alias top is resolved from the PROMPT skeleton (the COMPLIANT
+    #    source — the hidden harness `.env` is OFF-LIMITS oracle and is never
+    #    read for the scored completion). We feed a prompt whose ```verilog
+    #    module m( skeleton names `m` and assert the real gate function
+    #    resolves it.
+    prompt = "Design a flop.\n\n```verilog\nmodule m(\n    input clk,\n    output a\n);\n"
+    assert _G.skeleton_module_name_from_prompt(prompt) == "m", (
+        'prompt-skeleton alias top failed to resolve to m')
     # 2) Detector invariant on unwrapped .sv body:
     code_clean = (
         "```sv\n"

@@ -1,30 +1,43 @@
 #!/usr/bin/env python3
-"""Tests for the candidate cvdp_harness_toplevel_alias absorption.
+"""Tests for cvdp_harness_toplevel_alias — the prompt-driven alias wrapper.
 
 Run:  python3 -m pytest test_v1_2_harness_toplevel_alias.py -q
 (or)  python3 test_v1_2_harness_toplevel_alias.py   # plain asserts
 
+COMPLIANCE NOTE (CVDP official — arXiv:2506.14074 §2 + README_NON_AGENTIC):
+the alias TARGET (the top the wrapper exposes) comes from the PROMPT skeleton
+(`cvdp_gate.skeleton_module_name_from_prompt`), NEVER from the hidden harness
+`.env`. `harness_toplevel_from_dataset` / `load_harness_toplevels` are
+OFF-LIMITS-LEGACY dead code retained only for the parser regressions below and
+are NOT wired into the gate emit path (asserted here + by the dedicated
+`test_cvdp_gate_alias_compliance.py` structural guard). The wrapper-correctness
+tests feed a literal top name — that literal stands in for the prompt-derived
+name the compliant gate supplies.
+
 Verifies, with NO benchmark-keyword/SKU overfit (pure structural fixtures):
- 1. authoritative toplevel parsed from .env and test_runner.py;
- 2. NO-OP when the completion already declares the harness toplevel
+ 1. the OFF-LIMITS-LEGACY .env/test_runner.py parser still parses (retained code)
+    AND is not called by the gate flow;
+ 2. NO-OP when the completion already declares the (prompt) toplevel
     (the §4.05 no-leak property: never touch a correct completion);
- 3. alias wrapper added when the harness toplevel is absent, and the result
+ 3. alias wrapper added when the toplevel is absent, and the result
     COMPILES under iverilog -g2012 -s <toplevel> (when iverilog is present);
  4. non-ANSI / unparseable headers are left untouched (never corrupt);
  5. a case-only / id-prefix / sub-module-name mismatch all get a valid alias.
 """
+import ast
 import os
 import re
 import subprocess
 import sys
 import tempfile
 
-# the candidate module lives in the plugin's benchmark/ dir (../../benchmark
-# relative to programs/tests/) — mirror the existing cvdp_gate test convention.
+# the module lives in the plugin's benchmark/ dir (../../benchmark relative to
+# programs/tests/) — mirror the existing cvdp_gate test convention.
 sys.path.insert(
     0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                     "..", "..", "benchmark"))
 import cvdp_harness_toplevel_alias as A  # noqa: E402
+import cvdp_gate as G  # noqa: E402
 
 
 def _mods(src):
@@ -34,20 +47,45 @@ def _mods(src):
     return set(re.findall(r"\bmodule\s+([A-Za-z_]\w*)", clean))
 
 
-def test_toplevel_from_env():
+# ── 0. the OFF-LIMITS-LEGACY .env reader still parses (retained code) but is
+#       NEVER called by the gate emit flow (compliance) ─────────────────────────
+def test_legacy_env_reader_still_parses():
+    """The retained OFF-LIMITS-LEGACY parser still works (so its historical
+    fixtures don't rot) — but see test_offlimits_readers_not_wired_into_gate:
+    it must NOT be reachable from the scored-completion path."""
     rec = {"harness": {"files": {"src/.env": "toplevel=cvdp_copilot_foo\nsim=icarus\n"}}}
     assert A.harness_toplevel_from_dataset(rec) == "cvdp_copilot_foo"
 
 
-def test_toplevel_from_test_runner_literal():
+def test_legacy_test_runner_literal_still_parses():
     rec = {"harness": {"files": {"src/test_runner.py": 'toplevel = "gf_mac"\n'}}}
     assert A.harness_toplevel_from_dataset(rec) == "gf_mac"
 
 
-def test_toplevel_from_getenv_default():
+def test_legacy_getenv_default_still_parses():
     rec = {"harness": {"files": {
         "src/test_runner.py": 'toplevel = os.getenv("TOPLEVEL", "sprite_controller_fsm")\n'}}}
     assert A.harness_toplevel_from_dataset(rec) == "sprite_controller_fsm"
+
+
+def test_offlimits_readers_not_wired_into_gate():
+    """COMPLIANCE: the gate flow calls NEITHER OFF-LIMITS hidden-.env reader —
+    the alias top must come from the PROMPT skeleton. (AST-based so comment/
+    docstring mentions of the names are ignored; only a real Call trips it.)"""
+    with open(G.__file__, "r", encoding="utf-8") as f:
+        src = f.read()
+    calls = set()
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Call):
+            fn = node.func
+            if isinstance(fn, ast.Name):
+                calls.add(fn.id)
+            elif isinstance(fn, ast.Attribute):
+                calls.add(fn.attr)
+    assert "harness_toplevel_from_dataset" not in calls
+    assert "load_harness_toplevels" not in calls
+    # positive: the compliant PROMPT-derived source IS wired
+    assert "skeleton_module_name_from_prompt" in calls
 
 
 def test_noop_when_top_already_declared():

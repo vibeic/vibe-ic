@@ -1,42 +1,54 @@
 #!/usr/bin/env python3
-"""cvdp_harness_toplevel_alias.py — candidate absorption (version-less bundle).
+"""cvdp_harness_toplevel_alias.py — prompt-driven harness-TOPLEVEL alias.
 
-ORGANIC (campaign run_v1239_converge): the CVDP nonagentic harness fixes its
-cocotb TOPLEVEL from the HIDDEN harness files (`src/.env: toplevel=<name>` or
-`src/test_runner.py: toplevel=...`), which is the GOLDEN file stem — NOT
-reliably the prompt's prose module name. When a blind author implements the
-CORRECT interface+logic but DECLARES it under a different module name (a pure
+CURRENT COMPLIANT DESIGN (CVDP official — arXiv:2506.14074 §2 +
+README_NON_AGENTIC): the model / emit path sees ONLY `input.prompt` +
+`input.context`. The cocotb TOPLEVEL the HIDDEN harness fixes via its `.env`
+(and the golden `output.*`) are OFF-LIMITS oracle. So the alias target — the
+module name the completion must expose so the scorer's `iverilog -s <top>`
+binds — is taken from the PROMPT skeleton (`cvdp_gate`'s
+`skeleton_module_name_from_prompt(prompt)`, which reads the verbatim
+```verilog module <X>( code fence, a legitimate `input.prompt` fact), NEVER
+from the hidden harness `.env`.
+
+WHY the alias exists: when a blind author implements the CORRECT interface+logic
+but DECLARES it under a name that differs from the prompt-skeleton name (a pure
 case difference `FindFasterClock` vs `findfasterclock`, a spelling/expansion
-`cont_adder` vs `continuous_adder`, an id-prefixed harness name
-`cvdp_copilot_bus_arbiter`, or a prompt-named sub-unit `GP` / `gf_mac` /
-`field_extract`), the official scorer ELAB_ERRORs: `iverilog -s <toplevel>` can
-not find its top, so EVERY test fails — a 100%-recoverable interface-naming
-fail, not a logic fail.
+`cont_adder` vs `continuous_adder`, an id-prefixed name `cvdp_copilot_bus_arbiter`,
+or a prompt-named sub-unit `GP` / `gf_mac` / `field_extract`), the official scorer
+ELAB_ERRORs: `iverilog -s <top>` cannot find its top, so EVERY test fails — a
+100%-recoverable interface-naming fail, not a logic fail. The fix is a thin
+pass-through wrapper that gives the scorer its `<top>` while leaving the author's
+RTL byte-for-byte intact.
 
-The emit-side gate already receives the ORIGINAL dataset via `--dataset` (for
-#734 context protection + category metadata). That dataset's `harness.files`
-carries the AUTHORITATIVE toplevel. This module:
+The LIVE emit path (`cvdp_gate.main`) wires only:
 
-  1. `harness_toplevel_from_dataset(rec)` — parse the authoritative cocotb
-     toplevel from a CVDP record's `harness.files` (`.env`/`test_runner.py`).
-  2. `alias_wrapper(top_needed, author_top, author_port_decls)` — synthesize a
-     thin pass-through wrapper `module <top_needed>(<ports>); <author_top>
-     <inst>(.*); endmodule` that gives the harness its TOPLEVEL while leaving
-     the author's RTL byte-for-byte intact.
-  3. `maybe_alias_completion(completion, harness_top, mod_names_fn, port_fn)` —
-     when `harness_top` is set AND absent from the completion's declared
-     modules AND the completion has a single unambiguous top candidate whose
-     port list is parseable, APPEND the alias wrapper to the completion and
-     return it; otherwise return the completion unchanged.
+  * `alias_wrapper(top_needed, author_top, ports, ansi_decls, param_block)` —
+     synthesize the thin pass-through wrapper `module <top_needed>(<ports>);
+     <author_top> <inst>(.name(name)…); endmodule`.
+  * `maybe_alias_completion(completion, harness_top, mod_names_fn)` — when
+     `harness_top` (the PROMPT-skeleton top) is set AND absent from the
+     completion's declared modules AND the completion has a single unambiguous
+     ANSI top whose port list is parseable, APPEND the alias wrapper (or, for a
+     JSON-envelope completion, inject it into the first RTL entry); otherwise
+     return the completion unchanged.
+
+OFF-LIMITS-LEGACY (dead code — retained for historical unit tests ONLY):
+  * `harness_toplevel_from_dataset(rec)` / `load_harness_toplevels(path)` parse
+     the toplevel from the HIDDEN harness `.env` / `test_runner.py`. That is an
+     OFF-LIMITS oracle read; these functions MUST NOT feed the emit / scoring
+     path and `cvdp_gate.py` no longer calls them (enforced by
+     `programs/tests/test_cvdp_gate_alias_compliance.py`'s structural guard).
+     The alias top comes from the PROMPT — see above.
 
 §4.05 (this TIGHTENS the emit, so the leak risk is a FALSE alias that breaks a
-correct completion): the wrapper is appended ONLY when the harness toplevel is
-genuinely absent, so it never touches a completion that already declares the
-toplevel — zero effect on the 181 passing problems (each already declares its
-harness top). The wrapper instantiates with `.*` so it is a no-op unless the
-author top's ports name-match the harness toplevel's expected ports (which they
-do when the author implemented the right interface). chip-AGNOSTIC: pure
-dataset-field + Verilog-grammar parse, no SKU/chip/vendor literal.
+correct completion): the wrapper is appended ONLY when the top is genuinely
+absent, so it never touches a completion that already declares the top — zero
+effect on completions that already name their top per the prompt. The wrapper
+connects by name so it is a no-op unless the author top's ports name-match the
+expected ports (which they do when the author implemented the right interface).
+chip-AGNOSTIC: pure prompt-fact + Verilog-grammar parse, no SKU/chip/vendor
+literal.
 
 v1.2.40 baseline (181-pass no-leak).
 v1.2.47 extension: parameter-port list forwarding — a parameter author's port
@@ -55,7 +67,15 @@ import re
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
-# ── 1. authoritative toplevel from the dataset's harness files ──────────────
+# ── 1. OFF-LIMITS-LEGACY: toplevel from the HIDDEN harness files ─────────────
+# ⚠ OFF-LIMITS ORACLE — the functions in this section parse the cocotb TOPLEVEL
+# from the HIDDEN harness `.env` / `test_runner.py`. Per CVDP official
+# (arXiv:2506.14074 §2 + README_NON_AGENTIC) the harness is NOT a model input, so
+# these MUST NOT feed the emit / scoring path. They are DEAD legacy code retained
+# only for the historical unit tests; the compliant alias top comes from the
+# PROMPT skeleton (`cvdp_gate.skeleton_module_name_from_prompt`). Re-wiring either
+# into `cvdp_gate.main` is a compliance leak caught by
+# `programs/tests/test_cvdp_gate_alias_compliance.py`'s structural guard.
 _ENV_TOP_RE = re.compile(r"(?im)^\s*toplevel\s*[=:]\s*([A-Za-z_]\w*)")
 _PY_TOP_LIT_RE = re.compile(r"toplevel\s*=\s*[\"']([A-Za-z_]\w*)[\"']")
 _PY_TOP_ENV_RE = re.compile(
@@ -63,12 +83,17 @@ _PY_TOP_ENV_RE = re.compile(
 
 
 def harness_toplevel_from_dataset(rec: dict) -> Optional[str]:
-    """Return the AUTHORITATIVE cocotb TOPLEVEL the official harness compiles
-    (`iverilog -s <top>`), parsed from this CVDP record's `harness.files`.
-    Sources, in priority order: a `.env` `toplevel=<name>` line, then a
-    `test_runner.py` `toplevel="<name>"` / `os.getenv(..., "<name>")`. None
-    when the record carries no harness files (e.g. the documented local_export
-    prompts JSONL, which strips them — the gate then stays advisory-only)."""
+    """⚠ OFF-LIMITS-LEGACY — DO NOT feed the emit/scoring path.
+
+    Parse the cocotb TOPLEVEL the official harness compiles (`iverilog -s <top>`)
+    from this CVDP record's HIDDEN `harness.files` (`.env` `toplevel=<name>`, then
+    `test_runner.py` `toplevel="<name>"` / `os.getenv(..., "<name>")`). The hidden
+    harness is an OFF-LIMITS oracle under CVDP official rules (arXiv:2506.14074
+    §2 + README_NON_AGENTIC), so this reader MUST NOT be used to choose the alias
+    target — the compliant top comes from the PROMPT skeleton
+    (`cvdp_gate.skeleton_module_name_from_prompt`). This function is DEAD legacy
+    retained only for historical unit tests; `cvdp_gate.py` no longer calls it.
+    None when the record carries no harness files."""
     h = rec.get("harness")
     files = h.get("files") if isinstance(h, dict) else None
     if not isinstance(files, dict):
@@ -95,8 +120,14 @@ def harness_toplevel_from_dataset(rec: dict) -> Optional[str]:
 
 
 def load_harness_toplevels(dataset_path: str) -> Dict[str, str]:
-    """{id: authoritative_toplevel} for every record in a CVDP dataset JSONL
-    that carries harness files. Empty when the file is absent."""
+    """⚠ OFF-LIMITS-LEGACY — DO NOT feed the emit/scoring path.
+
+    {id: harness_toplevel} for every record in a CVDP dataset JSONL that carries
+    HIDDEN harness files, via `harness_toplevel_from_dataset`. Same OFF-LIMITS
+    caveat: the harness is an oracle, so this loader MUST NOT choose the alias
+    target — `cvdp_gate.py` derives that from the PROMPT skeleton and no longer
+    calls this. DEAD legacy retained for historical unit tests. Empty when the
+    file is absent."""
     out: Dict[str, str] = {}
     p = Path(dataset_path)
     if not p.is_file():

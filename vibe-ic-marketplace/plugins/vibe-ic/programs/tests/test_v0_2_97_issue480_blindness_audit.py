@@ -223,6 +223,15 @@ def _stage_run(tmp_path, transcript_body: str):
     run = tmp_path / "run"
     (run / "samples").mkdir(parents=True)
     (run / "work").mkdir()
+    # Vibe-IC entry-guard evidence (vibe_ic_entry_guard.py, owner directive
+    # 2026-06-28): --score refuses a run that never entered through the runner
+    # BEFORE it reaches the blindness audit. These dispatch tests exercise the
+    # blindness-audit stage, so stage one runner-entry evidence file (the
+    # phase1-engine L1 output) to satisfy that upstream gate; the blindness
+    # audit still runs and remains the behaviour under test.
+    ev = run / "phase1" / "generated_docs"
+    ev.mkdir(parents=True)
+    (ev / "L1_DATASHEET.json").write_text("{}\n")
     (run / ".bench_config.json").write_text(json.dumps({
         "bench": "verilogeval-v2", "dataset": str(ds), "shape": "C",
         "problems": 1, "batches": 1, "clean_room": True,
