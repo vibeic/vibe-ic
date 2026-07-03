@@ -298,6 +298,75 @@ def _reencode_json_first_entry(completion: str, first_path: str,
 
 
 # ── 4. the dispatch — bare Verilog OR JSON-completion → alias ───────────────
+def _wrappers_for(candidates, declared, author_top, ports, ansi_decls,
+                  param_block) -> str:
+    """Concatenated pass-through wrappers for each candidate top that is not
+    already declared and not the author top itself, order-preserving + deduped.
+    Empty string when every candidate is already satisfied."""
+    seen: Set[str] = set()
+    out: List[str] = []
+    for top in candidates:
+        if (not top) or top in seen or top in declared or top == author_top:
+            continue
+        seen.add(top)
+        out.append(alias_wrapper(top, author_top, ports, ansi_decls,
+                                 param_block))
+    return "".join(out)
+
+
+def maybe_alias_completion_multi(
+        completion: str,
+        harness_tops,
+        completion_module_names_fn: Callable[[str], Set[str]],
+) -> str:
+    """ORGANIC-20260703 — multi-candidate harness-TOPLEVEL alias.
+
+    Given an ORDERED iterable of candidate top-module names (e.g. the prompt
+    skeleton top plus the id-convention candidates from
+    `cvdp_gate.candidate_tops_from_id` — a no-context problem whose module name
+    lives ONLY in the hidden harness `.env` cannot be aliased from the prompt),
+    parse the author's single ANSI top + ports ONCE and append a thin
+    pass-through wrapper for EVERY candidate that is genuinely absent and != the
+    author top. Unused wrappers are dead code the scorer's `-s <top>` never
+    elaborates (harmless); the ONE wrapper matching the hidden harness top gives
+    the scorer its root. No-op (byte-for-byte) when the list is empty, the author
+    top/ports are not ANSI-parseable, or every candidate is already declared —
+    never corrupts a completion. Handles both bare-Verilog and the v1.2.48
+    JSON-envelope shape (wrappers injected into the FIRST RTL entry)."""
+    candidates = [t for t in (harness_tops or []) if t]
+    if not candidates:
+        return completion
+    declared = completion_module_names_fn(completion or "")
+    json_unwrap = _try_unwrap_json_code_dict(completion or "")
+    if json_unwrap is not None:
+        # ── JSON-dict unwrap path (v1.2.48) ──
+        first_path, first_content = json_unwrap
+        parsed = author_top_and_ports(first_content)
+        if not parsed:
+            return completion          # non-ANSI / unparseable
+        author_top, ports, ansi_decls, param_block = parsed
+        wrappers = _wrappers_for(candidates, declared, author_top, ports,
+                                 ansi_decls, param_block)
+        if not wrappers:
+            return completion          # every candidate already satisfied
+        try:
+            return _reencode_json_first_entry(
+                completion or "", first_path, first_content + wrappers)
+        except (ValueError, _json.JSONDecodeError):
+            return completion          # re-encode failed — no-op
+
+    # ── bare-Verilog path ──
+    parsed = author_top_and_ports(completion or "")
+    if not parsed:
+        return completion              # non-ANSI / unparseable — do not corrupt
+    author_top, ports, ansi_decls, param_block = parsed
+    wrappers = _wrappers_for(candidates, declared, author_top, ports,
+                             ansi_decls, param_block)
+    if not wrappers:
+        return completion              # already correct — no-op (181 passers)
+    return (completion or "") + wrappers
+
+
 def maybe_alias_completion(
         completion: str,
         harness_top: Optional[str],
@@ -313,40 +382,10 @@ def maybe_alias_completion(
     flat file-map shape, the alias chain unwraps into the FIRST RTL-suffix
     entry, emits the wrapper INTO that entry's value, and re-encodes the
     envelope. Bare-Verilog completions still flow through the v1.2.40/v1.2.47
-    append-to-end path (no JSON path triggered → no re-encode)."""
-    if not harness_top:
-        return completion
-    json_unwrap = _try_unwrap_json_code_dict(completion or "")
-    if json_unwrap is not None:
-        # ── JSON-dict unwrap path (v1.2.48) ──
-        first_path, first_content = json_unwrap
-        declared = completion_module_names_fn(completion or "")
-        if harness_top in declared:
-            return completion          # already correct — no-op
-        parsed = author_top_and_ports(first_content)
-        if not parsed:
-            return completion          # non-ANSI / unparseable
-        author_top, ports, ansi_decls, param_block = parsed
-        if author_top == harness_top:
-            return completion          # detection mismatch guard
-        wrapper = alias_wrapper(
-            harness_top, author_top, ports, ansi_decls, param_block)
-        try:
-            new_first = first_content + wrapper
-            return _reencode_json_first_entry(
-                completion or "", first_path, new_first)
-        except (ValueError, _json.JSONDecodeError):
-            return completion          # re-encode failed — no-op
+    append-to-end path (no JSON path triggered → no re-encode).
 
-    # ── bare-Verilog path (v1.2.40/v1.2.47 unchanged) ──
-    declared = completion_module_names_fn(completion or "")
-    if harness_top in declared:
-        return completion              # already correct — no-op (181 passers)
-    parsed = author_top_and_ports(completion or "")
-    if not parsed:
-        return completion              # non-ANSI / unparseable — do not corrupt
-    author_top, ports, ansi_decls, param_block = parsed
-    if author_top == harness_top:
-        return completion              # detection mismatch guard
-    return (completion or "") + alias_wrapper(
-        harness_top, author_top, ports, ansi_decls, param_block)
+    Thin wrapper over `maybe_alias_completion_multi` with a single candidate —
+    byte-for-byte identical behavior for the single-name skeleton path."""
+    return maybe_alias_completion_multi(
+        completion, [harness_top] if harness_top else [],
+        completion_module_names_fn)
