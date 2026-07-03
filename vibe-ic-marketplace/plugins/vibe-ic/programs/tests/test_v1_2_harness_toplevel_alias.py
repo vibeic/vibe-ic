@@ -7,16 +7,16 @@ Run:  python3 -m pytest test_v1_2_harness_toplevel_alias.py -q
 COMPLIANCE NOTE (CVDP official — arXiv:2506.14074 §2 + README_NON_AGENTIC):
 the alias TARGET (the top the wrapper exposes) comes from the PROMPT skeleton
 (`cvdp_gate.skeleton_module_name_from_prompt`), NEVER from the hidden harness
-`.env`. `harness_toplevel_from_dataset` / `load_harness_toplevels` are
-OFF-LIMITS-LEGACY dead code retained only for the parser regressions below and
-are NOT wired into the gate emit path (asserted here + by the dedicated
+`.env`. The former harness-`.env` readers `harness_toplevel_from_dataset` /
+`load_harness_toplevels` have been DELETED — the module now carries ZERO harness
+`.env` / cocotb readers (asserted here + by the dedicated
 `test_cvdp_gate_alias_compliance.py` structural guard). The wrapper-correctness
 tests feed a literal top name — that literal stands in for the prompt-derived
 name the compliant gate supplies.
 
 Verifies, with NO benchmark-keyword/SKU overfit (pure structural fixtures):
- 1. the OFF-LIMITS-LEGACY .env/test_runner.py parser still parses (retained code)
-    AND is not called by the gate flow;
+ 1. the harness-`.env`/test_runner.py readers are GONE (deleted) AND the gate
+    flow never calls them;
  2. NO-OP when the completion already declares the (prompt) toplevel
     (the §4.05 no-leak property: never touch a correct completion);
  3. alias wrapper added when the toplevel is absent, and the result
@@ -47,25 +47,14 @@ def _mods(src):
     return set(re.findall(r"\bmodule\s+([A-Za-z_]\w*)", clean))
 
 
-# ── 0. the OFF-LIMITS-LEGACY .env reader still parses (retained code) but is
-#       NEVER called by the gate emit flow (compliance) ─────────────────────────
-def test_legacy_env_reader_still_parses():
-    """The retained OFF-LIMITS-LEGACY parser still works (so its historical
-    fixtures don't rot) — but see test_offlimits_readers_not_wired_into_gate:
-    it must NOT be reachable from the scored-completion path."""
-    rec = {"harness": {"files": {"src/.env": "toplevel=cvdp_copilot_foo\nsim=icarus\n"}}}
-    assert A.harness_toplevel_from_dataset(rec) == "cvdp_copilot_foo"
-
-
-def test_legacy_test_runner_literal_still_parses():
-    rec = {"harness": {"files": {"src/test_runner.py": 'toplevel = "gf_mac"\n'}}}
-    assert A.harness_toplevel_from_dataset(rec) == "gf_mac"
-
-
-def test_legacy_getenv_default_still_parses():
-    rec = {"harness": {"files": {
-        "src/test_runner.py": 'toplevel = os.getenv("TOPLEVEL", "sprite_controller_fsm")\n'}}}
-    assert A.harness_toplevel_from_dataset(rec) == "sprite_controller_fsm"
+# ── 0. the harness-`.env`/test_runner.py readers are DELETED (zero harness
+#       readers) AND the gate emit flow never calls them (compliance) ───────────
+def test_offlimits_harness_readers_are_deleted():
+    """The former OFF-LIMITS harness-`.env` readers have been DELETED — the
+    alias module exposes ZERO harness `.env` / cocotb readers, so there is
+    nothing left to mis-wire into the scored-completion path."""
+    assert not hasattr(A, "harness_toplevel_from_dataset")
+    assert not hasattr(A, "load_harness_toplevels")
 
 
 def test_offlimits_readers_not_wired_into_gate():

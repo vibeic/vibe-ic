@@ -88,8 +88,13 @@ def test_dataset_record_emits_when_present():
         pytest.skip("record not present")
     rtl = S.solve(r)
     assert rtl is not None
-    # module named per the harness TOPLEVEL (cvdp_copilot_decode_firstbit)
-    assert "module cvdp_copilot_decode_firstbit" in rtl
+    # The harness `.env` TOPLEVEL (cvdp_copilot_decode_firstbit) is an OFF-LIMITS
+    # oracle and this record's prompt does not state the module name in a
+    # bridge-extractable form, so the solver emits under its prompt-derived default
+    # name. What this solver proves is the FUNCTION (lowest-set-bit decoder), not the
+    # harness-bound name.
+    assert "module decode_firstbit" in rtl
+    assert "for (i = InWidth_g-1; i >= 0; i = i - 1)" in rtl  # lowest-set-bit scan
     # MSHR records must still SKIP
     for mid in ("MSHR_0001", "MSHR_0008"):
         rr = recs.get(f"cvdp_copilot_{mid}")

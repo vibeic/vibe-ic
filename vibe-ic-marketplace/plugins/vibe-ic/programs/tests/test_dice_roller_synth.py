@@ -2,9 +2,11 @@
 
 Promotes the single-die button-gated dice roller (digital_dice_roller_0001, a 0/5
 problem) to a deterministic Tier-1 emit. GENERAL: DICE_MAX parsed from prose; the
-IDLE/ROLLING FSM + 1..MAX wrap are the dice invariant. The reset port name is
-recovered from the hidden cocotb TB (which drives `dut.reset`) when the prose
-spells it `reset_n`. Verified PASS on the design's own cocotb harness.
+IDLE/ROLLING FSM + 1..MAX wrap are the dice invariant. The reset port NAME and
+polarity come ONLY from the prompt prose (`reset_n`, active LOW) — the hidden
+cocotb TB is an OFF-LIMITS oracle and is never read. These tests pin the emit, the
+prompt-only reset sourcing (harness ignored even when it disagrees), and the §4.05
+SKIPs.
 """
 from __future__ import annotations
 
@@ -58,11 +60,14 @@ def test_emit_shape_and_dicemax():
     assert "counter == DICE_MAX[2:0]" in rtl
 
 
-def test_tb_reset_name_overrides_prose():
-    """Prose says `reset_n`; the TB drives `dut.reset` -> emit binds `reset`."""
+def test_reset_name_from_prose_not_harness():
+    """Prose names the reset `reset_n`; even though the hidden cocotb TB drives a
+    DIFFERENT net (`dut.reset`), the compliant solver reads ONLY the prompt, so the
+    emit binds `reset_n` (harness ignored) with active-low polarity from the prose."""
     rtl = S.solve(_rec("digital_dice_roller", _PROMPT, tb_reset="reset"))
-    assert "input reset," in rtl
-    assert "negedge reset)" in rtl and "if (!reset)" in rtl  # active-low from prose
+    assert "input reset_n," in rtl
+    assert "negedge reset_n)" in rtl and "if (!reset_n)" in rtl  # active-low from prose
+    assert "input reset," not in rtl  # the off-limits harness net name is NOT used
 
 
 def test_general_not_overfit_dicemax():
@@ -100,4 +105,4 @@ def test_dataset_record_emits_when_present():
         pytest.skip("record not present")
     rtl = S.solve(r)
     assert rtl is not None and "module digital_dice_roller" in rtl
-    assert "input reset," in rtl  # TB-recovered reset name
+    assert "input reset_n," in rtl  # reset name from the PROMPT prose (harness TB off-limits)

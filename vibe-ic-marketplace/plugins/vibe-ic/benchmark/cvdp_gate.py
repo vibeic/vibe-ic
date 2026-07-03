@@ -1892,54 +1892,6 @@ def _load_context_available(path):
     return out
 
 
-# ── ORGANIC (GATE-AS-SOLE-EMIT) — TB-bound PORT NAMES from the harness files ───
-# The CVDP `.env` schema lists only TOPLEVEL / VERILOG_SOURCES / MODULE — it does
-# NOT enumerate the DUT ports. The authoritative SET of port names the hidden
-# cocotb TB binds is the `dut.<name>` accesses in its python testbench(es)
-# (`harness.files`'s `.py`). A leading-underscore attribute (`dut._log`,
-# `dut._id`, `dut._name`, …) is a cocotb internal, never a DUT port, so it is
-# excluded. Empty when the record carries no harness files (e.g. the documented
-# local_export prompts JSONL, which strips them) — so the downstream port
-# alignment is then a byte-for-byte NO-OP. chip-AGNOSTIC: pure `dut.<name>` scan.
-_DUT_ACCESS_RE = re.compile(r"\bdut\s*\.\s*([A-Za-z_]\w*)")
-
-
-def _load_harness_tb_ports(path):
-    """{id: set(port_names)} the hidden cocotb TB binds by name (`dut.<name>`),
-    parsed from each record's `harness.files` python testbench(es). Cocotb
-    internals (any `dut._*` attribute) are excluded. Empty when absent."""
-    out: Dict[str, set] = {}
-    p = Path(path)
-    if not p.is_file():
-        return out
-    for ln in p.read_text(errors="replace").splitlines():
-        ln = ln.strip()
-        if not ln:
-            continue
-        try:
-            d = json.loads(ln)
-        except json.JSONDecodeError:
-            continue
-        rid = d.get("id")
-        if rid is None:
-            continue
-        h = d.get("harness")
-        files = h.get("files") if isinstance(h, dict) else None
-        if not isinstance(files, dict):
-            continue
-        names: set = set()
-        for k, v in files.items():
-            if not (isinstance(k, str) and isinstance(v, str)
-                    and k.endswith(".py")):
-                continue
-            for nm in _DUT_ACCESS_RE.findall(v):
-                if not nm.startswith("_"):   # drop cocotb internals (dut._log …)
-                    names.add(nm)
-        if names:
-            out[str(rid)] = names
-    return out
-
-
 def _load_latency_specs(path):
     """ORGANIC #705 — return {id: spec} from a latency-spec JSONL.
 
@@ -2905,9 +2857,10 @@ def main(argv=None) -> int:
     # TB-port-name alignment that consumed it is therefore DISABLED: a blind author
     # takes the port names from the prompt's Inputs/Outputs section (input.prompt),
     # never from the cocotb harness. harness_tb_ports stays EMPTY so the port
-    # alignment below is an unconditional NO-OP. (The pure helpers
-    # _load_harness_tb_ports / tb_port_alignment_renames / maybe_align_tb_ports are
-    # retained but no longer fed harness data from the main flow.)
+    # alignment below is an unconditional NO-OP. (The harness-reading loader that
+    # once populated it has been DELETED — this module has ZERO cocotb/`.env`
+    # readers; the pure helpers tb_port_alignment_renames / maybe_align_tb_ports
+    # remain but are never fed harness data.)
     harness_tb_ports: Dict[str, set] = {}
     # ORGANIC #734 — if the operator passed --dataset specifically to re-enable
     # the #715 protection but it yields NO input.context for any id (a wrong file

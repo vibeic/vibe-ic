@@ -8,18 +8,25 @@ that makes the AI's CVDP solve STABLE by enforcing the program-extracted spec:
 
 Tier model (owner's 5-tier):
   Tier1  the atomic bridge program-SOLVES it (deterministic, rtl returned).
-  Tier3  the spec is COMPLETE-or-near -> the AI authors and the conformance GATE
+  Tier2  a PROGRAM extracted a COMPLETE spec -> the AI authors from the complete
+         structured spec + gate (the most stable AI tier).
+  Tier3  the spec is near-COMPLETE -> the AI authors and the conformance GATE
          constrains it; gate_check REJECTS a drifting output (the stabilizer).
   Tier4  too-incomplete to gate (no module name / no ports / no convention).
-  Tier5  genuine FLOOR (self-contradictory spec / broken harness), cited.
+  Tier5  genuine FLOOR (self-contradictory PROMPT spec), cited.
+
+§4.05 CVDP COMPLIANCE: tier classification + the gate spec come ONLY from the
+prompt + input.context (both submitter-visible). The hidden cocotb `dut.<sig>`
+test, the `.env` TOPLEVEL, and the golden `output` are OFF-LIMITS oracle — never
+read. There is no "broken harness" floor (a blind solver cannot observe one).
 
 This suite proves:
   (1) TIER CLASSIFICATION — a bridge-solvable record is Tier1; a complete-spec
-      record the bridge skips is Tier3; an interface-less record is Tier4; a
-      conflicting-width record is Tier5 (floor).
+      record the bridge skips is Tier2; an interface-less record is Tier4; a
+      conflicting-width PROMPT is Tier5 (floor).
   (2) GATE REJECTS — gate_check rejects an interface violation (wrong port width /
-      missing port / wrong dir), a missing stated parameter, and a missing stated
-      structure (enum mode), and ACCEPTS a conformant RTL.
+      missing port / wrong dir) and a missing stated structure (enum mode), and
+      ACCEPTS a conformant RTL.
   (3) §4.05 NO FALSE-REJECT — gate_check does NOT reject a correct RTL for an
       UNSTATED fact: an extra port the spec never carried, a width the spec left
       as a parameter expression, and a structure the extractor never recovered are
@@ -43,8 +50,9 @@ import cvdp_solve_pipeline as SP  # noqa: E402
 
 # --------------------------------------------------------------------------- #
 # Real-shaped record builder (faithful to CVDP v1.1.0): input.prompt +
-# input.context{} + output.context{<rtl>:""} (EMPTY skeleton, never read) +
-# harness.files with a src/.env carrying TOPLEVEL + a cocotb test_*.py.
+# input.context{} + output.context{<rtl>:""} + a DECOY harness with a src/.env
+# TOPLEVEL + a cocotb test_*.py. The harness + golden output are OFF-LIMITS
+# oracle and are NEVER read by solve()/gate_check().
 # --------------------------------------------------------------------------- #
 def _make_record(top, prompt, cocotb_test, rid=None, rtl_path=None):
     rtl_path = rtl_path or f"rtl/{top}.sv"
@@ -68,18 +76,17 @@ def _make_record(top, prompt, cocotb_test, rid=None, rtl_path=None):
 # A fully-specified combinational adder — the module NAME + INTERFACE are stated in
 # the PROMPT (module named `adder8`, a `### Inputs:`/`### Outputs:` port block with an
 # explicit `[hi:lo]` range per data port and the stated `adder`/`+` operation), so the
-# bridge program-SOLVES it from prompt+context ALONE (the harness is stripped). The
-# cocotb test drives a/b/carry_in and reads sum/carry_out.
+# bridge program-SOLVES it from prompt+context ALONE.
 ADDER_PROMPT = """Design a combinational adder module named `adder8` that adds two operands.
 
 ### Inputs:
 - a [7:0]: First operand.
 - b [7:0]: Second operand.
-- carry_in: Carry input.
+- carry_in: a 1-bit carry input.
 
 ### Outputs:
 - sum [7:0]: The 8-bit sum.
-- carry_out: Carry output.
+- carry_out: a 1-bit carry output.
 
 The module performs `sum = a + b + carry_in`, with `carry_out` the overflow bit.
 """
@@ -104,7 +111,7 @@ async def test_adder8(dut):
 # --------------------------------------------------------------------------- #
 def test_tier1_bridge_solvable_returns_rtl():
     """A fully-specified atomic adder is program-SOLVED by the bridge -> Tier1
-    with the deterministic RTL returned (module named per TOPLEVEL)."""
+    with the deterministic RTL returned (module named per the PROMPT designation)."""
     rec = _make_record("adder8", ADDER_PROMPT, ADDER_TB)
     res = SP.solve(rec)
     assert res["tier"] == SP.TIER_PROGRAM
@@ -116,14 +123,16 @@ def test_tier1_bridge_solvable_returns_rtl():
 
 # A complete-spec record the bridge SKIPS (a stated FSM controller — not a single
 # registry-emittable atomic function), so the AI must author it. Interface is
-# fully placed -> the gate is meaningful -> Tier3.
+# fully placed -> the gate is meaningful -> Tier2.
 FSM_PROMPT = """Design a finite state machine module named `traffic_ctl`.
 
-## Inputs and Outputs
-- `clk` - clock.
-- `rst_n` - active-low asynchronous reset.
-- `sensor` - 1-bit vehicle sensor input.
-- `light [1:0]` - 2-bit light output.
+### Inputs:
+- clk: clock.
+- rst_n: active-low asynchronous reset.
+- sensor: 1-bit vehicle sensor input.
+
+### Outputs:
+- light [1:0]: 2-bit light output.
 
 The FSM has states `S_RED`, `S_GREEN`, `S_YELLOW`. On reset it enters `S_RED`.
 From `S_RED` it transitions to `S_GREEN` when `sensor` is high.
@@ -160,9 +169,9 @@ def test_complete_spec_fsm_is_tier2():
     assert {"sensor", "light"} <= names
 
 
-# A record whose harness binds NO cocotb interface and whose prompt has no port
-# table -> nothing to place -> the gate has no ports -> Tier4 (un-gateable).
-NO_IFACE_PROMPT = """Implement a module `mystery_block` that does something useful.
+# A record whose prompt has no port block -> nothing to place -> the gate has no
+# ports -> Tier4 (un-gateable).
+NO_IFACE_PROMPT = """Implement a module named `mystery_block` that does something useful.
 
 It should process the incoming stream and produce a result. The exact widths
 depend on the configuration.
@@ -187,8 +196,8 @@ def test_tier4_no_interface_is_ungateable():
 
 
 # A GENUINE floor: the same port is DECLARED twice in real HDL declaration
-# syntax (`input ... [hi:lo] name`) with two different widths -> the AI cannot
-# satisfy both. This is the ONLY shape that may be called a floor; prose
+# syntax (`input ... [hi:lo] name`) in the PROMPT with two different widths -> the
+# AI cannot satisfy both. This is the ONLY shape that may be called a floor; prose
 # mentions / bit-selects / worked examples may NOT manufacture one.
 CONTRADICT_TB = """import cocotb
 from cocotb.triggers import Timer
@@ -200,7 +209,13 @@ async def test_widget(dut):
     r = int(dut.result.value)
 """
 
-GENUINE_FLOOR_PROMPT = """Design a module `widget` with a data path.
+GENUINE_FLOOR_PROMPT = """Design a module named `widget` with a data path.
+
+### Inputs:
+- data_in: the data input.
+
+### Outputs:
+- result [7:0]: the result.
 
 In the first variant the interface is:
     input  logic [7:0]  data_in,
@@ -233,12 +248,18 @@ def test_tier5_genuine_two_decl_contradiction_is_floor():
 def test_no_false_floor_on_bit_slices_of_one_port():
     # decoder_data_in is one 66-bit port; `[65:64]` (sync header) and `[63:0]`
     # (payload) are SLICES — must NOT read as conflicting widths [2, 64].
-    prompt = """Implement `dec`. The decoder processes a 66-bit word.
-    input  logic [65:0] decoder_data_in,
-    output logic [63:0] decoder_data_out
+    prompt = """Implement the module named `dec`. The decoder processes a 66-bit word.
+
+### Inputs:
+- decoder_data_in [65:0]: the 66-bit input word.
+
+### Outputs:
+- decoder_data_out [63:0]: the payload.
 
 The sync header is `decoder_data_in[65:64]` and the payload is
 `decoder_data_in[63:0]`. Example: decoder_data_in = {2'b01, 64'hA5A5A5A5A5A5A5A5}.
+    input  logic [65:0] decoder_data_in,
+    output logic [63:0] decoder_data_out
 """
     tb = CONTRADICT_TB.replace("data_in", "decoder_data_in").replace("test_widget", "test_dec")
     rec = _make_record("dec", prompt, tb)
@@ -249,14 +270,18 @@ The sync header is `decoder_data_in[65:64]` and the payload is
 def test_no_false_floor_on_multimode_valid_bits():
     # data_in is a 64-bit port; the 8/16/32/64 are MODE-selected valid-bit counts
     # in prose, not conflicting declarations.
-    prompt = """Implement `ser`. Transmitter with selectable width.
+    prompt = """Implement the module named `ser`. Transmitter with selectable width.
+
+### Inputs:
+- data_in [63:0]: the data word.
+
+### Outputs:
+- tx: the serial output.
+
+When sel is 3'h1, data_in[7:0] is the valid data; 3'h2 uses data_in[15:0]; 3'h3
+uses data_in[31:0]; 3'h4 uses data_in[63:0].
     input  logic [63:0] data_in,
     output logic        tx
-
-- `3'h1`: 8 bits. `data_in [7:0]` is the valid data.
-- `3'h2`: 16 bits. `data_in [15:0]` is the valid data.
-- `3'h3`: 32 bits. `data_in [31:0]` is the valid data.
-- `3'h4`: 64 bits. `data_in [63:0]` is the valid data.
 """
     rec = _make_record("ser", prompt, CONTRADICT_TB.replace("test_widget", "test_ser"))
     res = SP.solve(rec)
@@ -265,13 +290,18 @@ def test_no_false_floor_on_multimode_valid_bits():
 
 def test_no_false_floor_on_rgb_subfield_slices():
     # color_in is one 8-bit RRRGGGBB port; `[7:5]`/`[4:2]`/`[1:0]` are subfields.
-    prompt = """Implement `vga`. Pixel color in RRRGGGBB format.
+    prompt = """Implement the module named `vga`. Pixel color in RRRGGGBB format.
+
+### Inputs:
+- color_in [7:0]: the pixel color.
+
+### Outputs:
+- red [7:0]: the red channel.
+
+The channels are red = {color_in[7:5], 5'd0}, green = {color_in[4:2], 5'd0}, and
+blue = {color_in[1:0], 6'd0}.
     input  logic [7:0] color_in,
     output logic [7:0] red
-
-- `red`   = {color_in[7:5], 5'd0};
-- `green` = {color_in[4:2], 5'd0};
-- `blue`  = {color_in[1:0], 6'd0};
 """
     tb = CONTRADICT_TB.replace("data_in", "color_in").replace("test_widget", "test_vga")
     rec = _make_record("vga", prompt, tb)
@@ -282,11 +312,16 @@ def test_no_false_floor_on_rgb_subfield_slices():
 def test_prose_double_width_is_ambiguous_not_floor():
     # Two PROSE mentions of different widths (no real HDL declaration) are
     # AMBIGUOUS, not provably contradictory -> NOT a floor (let the AI attempt).
-    # This is the exact fixture the old false-floor test used.
-    prompt = """Design a module `widget` with a data path.
+    prompt = """Design a module named `widget` with a data path.
 
-In one section the spec says `data_in [7:0]` is an 8-bit input.
-In another section the spec says `data_in [15:0]` is a 16-bit input.
+### Inputs:
+- data_in [7:0]: the data input.
+
+### Outputs:
+- result [7:0]: the result.
+
+In one section the spec says `data_in [7:0]` is an 8-bit value.
+In another section the spec says `data_in [15:0]` is a 16-bit value.
 The output `result [7:0]` is 8 bits.
 """
     rec = _make_record("widget", prompt, CONTRADICT_TB)
@@ -295,7 +330,7 @@ The output `result [7:0]` is 8 bits.
 
 
 # --------------------------------------------------------------------------- #
-# (2) GATE REJECTS interface / param / structure violations + ACCEPTS conformant
+# (2) GATE REJECTS interface / structure violations + ACCEPTS conformant
 # --------------------------------------------------------------------------- #
 ADDER_GOOD = """module adder8 (
     input  [7:0] a,
@@ -377,20 +412,21 @@ def test_gate_rejects_wrong_port_direction():
                for v in res["violations"])
 
 
-# A stated PARAMETER the AI must declare. The cocotb test reads WIDTH via
-# int(dut.WIDTH.value) (a config parameter), and the prompt's parameter table
-# states it -> the gate requires it be declared.
-PARAM_PROMPT = """Design a parameterized register `preg`.
+# A stated PARAMETER the AI must declare. The prompt's parameter table states
+# WIDTH=8 (a PROMPT-declared parameter; the cocotb config-param set is off-limits).
+PARAM_PROMPT = """Design a parameterized register module named `preg`.
 
 ## Parameters
-| Parameter | Default | Description        |
-|-----------|---------|--------------------|
-| `WIDTH`   | 8       | data path width    |
+| Parameter | Description     | Default |
+|-----------|-----------------|---------|
+| `WIDTH`   | data path width | 8       |
 
-## Inputs and Outputs
-- `clk` - clock.
-- `d [7:0]` - 8-bit data input.
-- `q [7:0]` - 8-bit registered output.
+### Inputs:
+- clk: clock.
+- d [7:0]: 8-bit data input.
+
+### Outputs:
+- q [7:0]: 8-bit registered output.
 """
 
 PARAM_TB = """import cocotb
@@ -416,14 +452,15 @@ endmodule
 
 def test_missing_param_is_not_a_violation():
     """§4.05 (Step-2.7): parameter PRESENCE is NOT a hard gate. The extracted
-    `params` list mixes genuine harness-driven parameters with prose nouns that are
-    not module parameters (`latency` = a cycle count, `poly` = a CRC value) and even
-    bus PORTS — and even a real parameter may legitimately be a localparam,
-    hardcoded, or renamed. So a candidate that does NOT declare a stated parameter
-    is NOT rejected for it (a correct answer was being false-rejected). The
-    interface (ports) + structures are the load-bearing gate."""
+    `params` list mixes genuine parameters with prose nouns that are not module
+    parameters (`latency` = a cycle count, `poly` = a CRC value) — and even a real
+    parameter may legitimately be a localparam, hardcoded, or renamed. So a
+    candidate that does NOT declare a stated parameter is NOT rejected for it (a
+    correct answer was being false-rejected). The interface (ports) + structures
+    are the load-bearing gate. `params` here is PROMPT-declared (never the hidden
+    cocotb config-param set)."""
     rec = _make_record("preg", PARAM_PROMPT, PARAM_TB)
-    # WIDTH is still carried in the gate for DIAGNOSIS ...
+    # WIDTH is still carried in the gate for DIAGNOSIS (from the prompt param table) ...
     assert "WIDTH" in SP.solve(rec)["gate"]["params"]
     # ... but dropping the `#(parameter WIDTH=8)` produces NO missing_param violation.
     bad = PARAM_GOOD.replace("#(parameter WIDTH = 8) ", "")
@@ -447,7 +484,6 @@ def test_gate_rejects_missing_enum_mode():
             {"name": "y", "dir": "output", "width": 8, "source": "prose"},
         ],
         "params": {},
-        "harness": {"params": []},
         "structures": {
             "register_map": [], "enum_modes": [{"name": "MODE_ADD"},
                                                {"name": "MODE_SUB"},
@@ -534,7 +570,7 @@ def _rename(text, mapping):
 def test_chip_agnostic_tier_and_gate_invariant_under_rename():
     """The pipeline keys on STRUCTURE, never a design-name literal: renaming the
     module + ports yields the SAME tier and an isomorphic gate (same port count /
-    widths / dirs). Tested on a Tier-3 record (the gate is the deliverable there)."""
+    widths / dirs). Tested on a Tier-2/3 record (the gate is the deliverable there)."""
     mapping = {
         "traffic_ctl": "zylo3", "sensor": "trig", "light": "lamp",
         "S_RED": "P0", "S_GREEN": "P1", "S_YELLOW": "P2",

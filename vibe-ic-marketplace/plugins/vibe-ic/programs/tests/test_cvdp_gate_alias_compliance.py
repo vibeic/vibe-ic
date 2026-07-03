@@ -12,9 +12,10 @@ scorer's `iverilog -s <top>` finds its top when a blind author declared the righ
 interface under a different module name. The COMPLIANT design is that the `<top>`
 the wrapper targets comes from the PROMPT skeleton
 (`skeleton_module_name_from_prompt(prompt)`) — a legitimate `input.prompt` fact —
-NOT from the hidden harness `.env` (`_offlimits`-legacy readers
-`harness_toplevel_from_dataset` / `load_harness_toplevels`, retained only for
-historical unit tests and NEVER wired into the live emit path).
+NOT from the hidden harness `.env`. The former harness-`.env` readers
+(`harness_toplevel_from_dataset` / `load_harness_toplevels`) have been DELETED,
+so the alias module now carries ZERO harness `.env` / cocotb readers and there is
+nothing left to mis-wire into the emit path.
 
 This guard LOCKS that in with two independent proofs:
 
@@ -139,18 +140,23 @@ def _emit_alias(rec: dict) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# (0) The decoy is genuinely a decoy: the PROMPT skeleton and the OFF-LIMITS
-#     `.env` reader return DIFFERENT names. Without this, the invariant below
-#     would be vacuous.
+# (0) The decoy is genuinely a decoy: its hidden `.env` names a DIFFERENT top
+#     than the PROMPT skeleton, so the invariance proof below is non-vacuous.
+#     The former OFF-LIMITS `.env` reader has been DELETED, so this is proven
+#     DIRECTLY from the fixture (never via a harness reader) — and we assert the
+#     readers are truly gone.
 # --------------------------------------------------------------------------- #
-def test_prompt_and_offlimits_reader_disagree():
+def test_prompt_and_offlimits_env_disagree():
     prompt_top = G.skeleton_module_name_from_prompt(_PROMPT)
-    env_top = A.harness_toplevel_from_dataset(_DECOY_RECORD)
     assert prompt_top == "foo", f"prompt skeleton top must be 'foo', got {prompt_top!r}"
-    assert env_top == "DECOY_HARNESS_NAME", (
-        f"the OFF-LIMITS .env reader must return the decoy name (so the guard is "
-        f"non-vacuous), got {env_top!r}")
-    assert prompt_top != env_top
+    # the decoy harness `.env` literally names a DIFFERENT top ('DECOY_HARNESS_NAME')
+    # so the invariance proof below is non-vacuous — read straight from the fixture
+    # string, NOT through any harness reader (those are deleted).
+    env_blob = _DECOY_RECORD["harness"]["files"]["src/.env"]
+    assert "DECOY_HARNESS_NAME" in env_blob and prompt_top not in env_blob, env_blob
+    # the OFF-LIMITS harness-`.env` readers have been DELETED — nothing to mis-wire.
+    assert not hasattr(A, "harness_toplevel_from_dataset")
+    assert not hasattr(A, "load_harness_toplevels")
 
 
 # --------------------------------------------------------------------------- #

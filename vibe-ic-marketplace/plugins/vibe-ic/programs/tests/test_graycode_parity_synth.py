@@ -1,9 +1,11 @@
 """test_graycode_parity_synth.py — the DETERMINISTIC gray-code / parity solver.
 
-graycode_parity_synth.solve(record) reuses cvdp_atomic_bridge for the module
-NAME (harness .env TOPLEVEL) and the cocotb-derived port NAMES+direction, then
-recognizes the gray-conversion / parity OPERATION from the PROMPT PROSE and emits
-correct deterministic combinational RTL with parameter-width buses.
+graycode_parity_synth.solve(record) reuses cvdp_atomic_bridge for the module NAME
+(from the prompt) and the port NAMES via extract_interface (prompt+context ONLY —
+`### Inputs:`/`### Outputs:` block / skeleton header / test table; NEVER the hidden
+harness or golden), then recognizes the gray-conversion / parity OPERATION from the
+PROMPT PROSE and emits correct deterministic combinational RTL with parameter-width
+buses.
 
 POSITIVES (functionally host-verified via iverilog when available):
   * binary -> gray : gray_out = binary_in ^ (binary_in >> 1), exhaustive for the
@@ -82,6 +84,12 @@ code is the same as the MSB of the binary input; each subsequent Gray code bit i
 the XOR of the current and the previous binary bits.
 
 parameter WIDTH = 6
+
+### Inputs:
+- `binary_in` [WIDTH-1:0]
+
+### Outputs:
+- `gray_out` [WIDTH-1:0]
 """
 B2G_COCOTB = """import cocotb
 from cocotb.triggers import Timer
@@ -107,6 +115,14 @@ subsequent bit, cascade XOR the previous binary bit with the current gray bit.
 When DEBUG_MODE = 1, generate a debug mask by inverting the `binary_out`; when
 DEBUG_MODE = 0 set the debug mask to zero. Compute the even parity of binary_out:
 parity = `^binary_out`.
+
+### Inputs:
+- `gray_in` [WIDTH-1:0]
+
+### Outputs:
+- `binary_out` [WIDTH-1:0]
+- `debug_mask` [WIDTH-1:0]
+- `parity`
 """
 G2B_COCOTB = """import cocotb
 from cocotb.triggers import Timer
@@ -130,6 +146,12 @@ async def test_gray_to_binary(dut):
 PGEN_EVEN_PROMPT = """The module `widget_parity` is an even parity generator. It computes the EVEN
 parity of an N-bit data input. parameter WIDTH = 8.
 Output `par` is the even parity bit = XOR of all data bits.
+
+### Inputs:
+- `data_in` [WIDTH-1:0]
+
+### Outputs:
+- `par`
 """
 PGEN_EVEN_COCOTB = """import cocotb
 from cocotb.triggers import Timer
@@ -194,6 +216,12 @@ def test_parity_generator_even_emits_xor_reduction():
 # ---- positive 4: parity GENERATOR, odd ------------------------------------ #
 PGEN_ODD_PROMPT = """The module `op` is an ODD parity generator over the N-bit input.
 parameter WIDTH = 8. Output `par` is the odd parity bit.
+
+### Inputs:
+- `data_in` [WIDTH-1:0]
+
+### Outputs:
+- `par`
 """
 PGEN_ODD_COCOTB = PGEN_EVEN_COCOTB.replace("widget_parity", "op").replace(
     "count('1') % 2", "(count('1') + 1) % 2")
@@ -209,6 +237,13 @@ def test_parity_generator_odd_emits_xnor_reduction():
 PCHK_EVEN_PROMPT = """The module `pc` is an even parity checker. It takes an N-bit data input and a
 received parity_bit and asserts `error` when the EVEN parity is violated.
 parameter WIDTH = 8.
+
+### Inputs:
+- `data_in` [WIDTH-1:0]
+- `parity_bit`
+
+### Outputs:
+- `error`
 """
 PCHK_EVEN_COCOTB = """import cocotb
 from cocotb.triggers import Timer
@@ -298,6 +333,12 @@ $display("RESULT %0d",err); $finish; end endmodule"""
 # --------------------------------------------------------------------------- #
 UNSTATED_DIR_PROMPT = """The module `code_thing` deals with Gray code values. It processes an N-bit
 input and produces an N-bit output. parameter WIDTH = 8.
+
+### Inputs:
+- `data_in` [WIDTH-1:0]
+
+### Outputs:
+- `data_out` [WIDTH-1:0]
 """  # mentions gray, NEVER states binary->gray vs gray->binary
 DIR_COCOTB = """import cocotb
 from cocotb.triggers import Timer
@@ -317,6 +358,12 @@ def test_skip_unstated_gray_direction():
 AMBIG_DIR_PROMPT = """The bidirectional codec `gray_codec` performs binary to gray conversion AND
 gray to binary conversion depending on a mode. parameter WIDTH = 8. It converts
 binary into gray and also converts gray code into binary.
+
+### Inputs:
+- `data_in` [WIDTH-1:0]
+
+### Outputs:
+- `data_out` [WIDTH-1:0]
 """
 
 
@@ -326,6 +373,12 @@ def test_skip_ambiguous_gray_direction():
 
 PGEN_NOSENSE_PROMPT = """The module `p_gen` is a parity generator. It computes a parity bit over the
 N-bit data input. parameter WIDTH = 8.
+
+### Inputs:
+- `data_in` [WIDTH-1:0]
+
+### Outputs:
+- `par`
 """  # parity generator but NO even/odd word and NO explicit ^/~^ expression
 PGEN_NOSENSE_COCOTB = """import cocotb
 from cocotb.triggers import Timer
@@ -345,6 +398,12 @@ def test_skip_unstated_parity_convention():
 PGEN_AMBIG_PROMPT = """The module `p_sel` is a parity generator that can produce either even parity
 or odd parity. It supports both even parity and odd parity conventions over the
 N-bit input. parameter WIDTH = 8.
+
+### Inputs:
+- `data_in` [WIDTH-1:0]
+
+### Outputs:
+- `par`
 """
 
 
@@ -354,14 +413,22 @@ def test_skip_ambiguous_parity_convention():
 
 B2G_NOWIDTH_PROMPT = """The module `bg_lint` converts a binary input into its gray code output. Perform
 a LINT code review addressing multi-driven signals and unused signals.
-"""  # gray b->g but NO width parameter / literal stated
+
+### Inputs:
+- `binary_in`
+
+### Outputs:
+- `gray_out`
+"""  # gray b->g, port NAMES stated but NO width parameter / literal anywhere
 
 
 def test_skip_unstated_width():
+    # the direction (b->g) and port names ARE prompt-derivable, but NO WIDTH/N
+    # parameter (and no literal) is stated, so the parameter-width guard SKIPs —
+    # the solver never guesses a data-path width. (The cocotb harness is OFF-LIMITS
+    # oracle the solver never reads, so its content is irrelevant here.)
     rec = _make_record("bg_lint", B2G_NOWIDTH_PROMPT, B2G_COCOTB.replace(
-        "test_binary_to_gray", "test_bg_lint").replace(
-        "2 ** WIDTH", "16").replace("WIDTH = int(dut.WIDTH.value)", "WIDTH = 4"))
-    # remove the dut.WIDTH read so no width can be inferred
+        "test_binary_to_gray", "test_bg_lint"))
     assert G.solve(rec) is None
 
 
@@ -406,23 +473,50 @@ def test_chip_agnostic_parity_even_arbitrary_name():
 
 
 # --------------------------------------------------------------------------- #
-# REAL dataset records (gated): the two clean converters solve + functionally
-# pass; everything else in the gray/parity-mention set SKIPs.
+# REAL dataset records (gated) — COMPLIANCE invariant (prompt+context ONLY).
+#
+# The solver now sources the interface EXCLUSIVELY from the model-visible surface
+# (`input.prompt` + `input.context`) via the frozen `cvdp_atomic_bridge.extract_interface`;
+# it NEVER reads the hidden harness (cocotb `dut.<sig>`, `.env`) or golden — those
+# are OFF-LIMITS oracle.
+#
+# In this dataset the two clean converters (`binary_to_gray_0001` /
+# `gray_to_binary_0001`) declare their port interface ONLY as an in-prompt
+# `module ...(...)` CODE SKELETON inside `input.prompt`, with an EMPTY
+# `input.context`. The frozen `extract_interface` parses `input.context` skeletons,
+# prose `### Inputs:`/`### Outputs:` blocks, and test-case tables — but NOT an
+# in-prompt code skeleton — so those two now HONESTLY SKIP rather than fall back to
+# the harness. (This is NOT a runtime regression: `cvdp_atomic_bridge.solve` strips
+# the harness BEFORE dispatch, so the old cocotb read already returned nothing and
+# these records already skipped at runtime; only the non-production direct-call with
+# a full record ever "emitted" — via the now-removed OFF-LIMITS harness read.)
+#
+# The load-bearing NO-CHEAT invariant this pins: sourcing prompt+context ONLY, the
+# solver emits for ZERO records across the whole dataset whose interface it can only
+# have learned from the harness — i.e. no emit depends on the hidden oracle.
 # --------------------------------------------------------------------------- #
 DATASET = Path("/home/reyerchu/AI_IC_design/_extbench/cvdp_open_v110/"
                "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
 
 
 @pytest.mark.skipif(not DATASET.exists(), reason="CVDP dataset not present")
-def test_real_dataset_only_clean_converters_emit():
+def test_real_dataset_compliant_no_harness_sourced_emit():
     import json
     import re
     recs = [json.loads(l) for l in DATASET.open()]
+    # prompt+context ONLY: no gray/parity record whose interface lives solely in the
+    # hidden harness may emit — the two clean converters (interface only in an
+    # in-prompt code skeleton the frozen extractor doesn't parse) HONESTLY SKIP.
     emitted = {r["id"] for r in recs if G.solve(r)}
-    assert emitted == {"cvdp_copilot_binary_to_gray_0001",
-                       "cvdp_copilot_gray_to_binary_0001"}, emitted
-    # no false emit anywhere in the gray/parity-mention set
+    assert emitted == set(), f"compliant sourcing must emit for no harness-only record: {emitted}"
+    # the two clean converters specifically SKIP (their interface is prompt-visible
+    # but only as an in-prompt code skeleton `extract_interface` does not parse).
+    by_id = {r["id"]: r for r in recs}
+    for tid in ("cvdp_copilot_binary_to_gray_0001", "cvdp_copilot_gray_to_binary_0001"):
+        if tid in by_id:
+            assert G.solve(by_id[tid]) is None
+    # and NO false emit anywhere in the gray/parity-mention set.
     for r in recs:
         p = (r.get("input") or {}).get("prompt") or ""
-        if re.search(r"(?i)\bgray\b|\bparity\b", p) and r["id"] not in emitted:
+        if re.search(r"(?i)\bgray\b|\bparity\b", p):
             assert G.solve(r) is None

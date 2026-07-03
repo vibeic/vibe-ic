@@ -143,11 +143,11 @@ def build_gate(spec: dict) -> dict:
     fsm_trans = fsm.get("transitions") or []
     worked = structures.get("worked_examples") or []
 
-    # parameter NAMES the AI must declare (presence only — the value is the AI's,
-    # the harness drives the override). Both the prompt-parameter table and the
-    # harness config-param set are presence facts the extractor recovered.
-    param_names = sorted(set(spec.get("params", {}).keys())
-                         | set((spec.get("harness") or {}).get("params") or []))
+    # parameter NAMES the AI must declare (presence only — the value is the AI's).
+    # PROMPT-declared parameters ONLY (§4.05 compliance): the hidden cocotb config-
+    # param set is OFF-LIMITS oracle and is never unioned in. (params is carried for
+    # DIAGNOSIS only — gate_check_spec never produces a param violation.)
+    param_names = sorted(set(spec.get("params", {}).keys()))
 
     return {
         "module_name": spec.get("module_name"),
@@ -183,22 +183,18 @@ def _struct_key(item) -> Optional[str]:
 # (2) tier classification
 # --------------------------------------------------------------------------- #
 def _floor_evidence(record: dict, spec: dict) -> Optional[str]:
-    """Return a cited reason iff the record is a GENUINE floor — the spec is
-    self-contradictory OR the harness is broken — else None. Conservative: a
-    floor is asserted ONLY on a STRUCTURAL contradiction we can point at, never
-    on mere incompleteness (that is Tier 4)."""
-    files = _bridge._harness_files(record)
-    tb = _bridge._cocotb_test_text(files)
-    env = _bridge._env_text(files)
-    # (a) harness broken: a .env that names a MODULE/TOPLEVEL but ships NO cocotb
-    #     test for the scorer to run — nothing can ever score.
-    if env.strip() and not tb.strip():
-        # only a floor if there is genuinely no test file at all in the harness.
-        if not any(re.search(r"test_.*\.py$", k) for k in files):
-            return "harness broken: .env present but no cocotb test_*.py to score against"
-    # (b) self-contradictory interface: the SAME signal is declared with two
-    #     DIFFERENT non-control widths in the prompt prose (the AI cannot satisfy
-    #     both; the spec contradicts itself).
+    """Return a cited reason iff the record is a GENUINE floor — the PROMPT spec is
+    self-contradictory — else None. Conservative: a floor is asserted ONLY on a
+    STRUCTURAL contradiction in the PROMPT we can point at, never on mere
+    incompleteness (that is Tier 4).
+
+    §4.05 compliance: a blind solver reads ONLY `input.prompt` (+ input.context) —
+    it CANNOT observe a "broken harness" (the cocotb test / `.env` are OFF-LIMITS
+    oracle), so the old "harness broken" floor is gone. The only floor evidence is
+    a self-contradictory PROMPT."""
+    # self-contradictory interface: the SAME signal is declared with two DIFFERENT
+    # non-control widths in the prompt prose (the AI cannot satisfy both; the spec
+    # contradicts itself).
     prompt = (record.get("input") or {}).get("prompt") or ""
     for name in {p.get("name") for p in ((spec or {}).get("interface") or [])}:
         if not name:
@@ -429,9 +425,11 @@ def tier1_cocotb_verify(record: dict, rtl: str, *,
       (None,  ...)  could not run (no docker / no benchmark repo / no harness) →
                     Tier-1 stays conformance-only, NOT behaviourally verified.
 
-    chip-AGNOSTIC: keys only on record['id'] + the record's own harness; emits a
-    one-record dataset + a {id, completion} responses file and scores them. Never
-    raises (any failure → (None, reason))."""
+    chip-AGNOSTIC: keys only on the record id + its own cocotb test; emits a
+    one-record dataset + a {id, completion} responses file and scores them through
+    the OFFICIAL external scorer (docker) — this is the real oracle a caller opts
+    into, NOT a classification-time hidden read. Never raises (any failure →
+    (None, reason))."""
     import os, shutil, subprocess, tempfile  # noqa: E401 — local to the optional path
     try:
         rid = record.get("id") if isinstance(record, dict) else None

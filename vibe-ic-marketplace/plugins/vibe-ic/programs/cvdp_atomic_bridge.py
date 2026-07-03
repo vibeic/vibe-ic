@@ -148,97 +148,14 @@ _SPECIAL_ALGEBRA_RE = re.compile(
 )
 
 
-# --------------------------------------------------------------------------- #
-# Harness (.env + cocotb test) access
-# --------------------------------------------------------------------------- #
-def _harness_files(record: dict) -> Dict[str, str]:
-    h = record.get("harness") or {}
-    files = h.get("files") or {}
-    return {k: v for k, v in files.items() if isinstance(v, str)}
 
 
-def _env_text(files: Dict[str, str]) -> str:
-    """Return the text of the relevant harness `.env` file.
-
-    Most records have a single `.env`; multi-variant records need record context
-    to choose the right variant (see `_env_text_for_record`)."""
-    for k, v in files.items():
-        if k.endswith(".env"):
-            return v
-    return ""
 
 
-def _env_text_for_record(record: dict, files: Dict[str, str]) -> str:
-    # §3.9 multi-variant selection: some CVDP records carry MULTIPLE independent
-    # harness variants (each under its own sub-directory), one per debug/family
-    # branch (e.g. cvdp_copilot_cache_lru_0022 ships `1/src/.env`,
-    # `19/src/.env`, ..., `22/src/.env` — five cache-replacement-policy variants
-    # in one record). The record's IDEAL target variant is the one whose
-    # `TOPLEVEL = <name>` name lines up with the prompt / completion / skeleton
-    # mentioned module; using the FIRST .env makes the bridge bind to a sibling
-    # variant (loses ports/widths/param defaults).
-    envs = [(k, v) for k, v in files.items() if k.endswith(".env")]
-    if not envs:
-        return ""
-    if len(envs) == 1:
-        return envs[0][1]
-    picked = _pick_variant_files(record, envs)
-    return picked[1] if picked else envs[0][1]
 
 
-def _env_key_for_record(record: dict, files: Dict[str, str]) -> str:
-    envs = [(k, v) for k, v in files.items() if k.endswith(".env")]
-    if not envs:
-        return ""
-    if len(envs) == 1:
-        return envs[0][0]
-    picked = _pick_variant_files(record, envs)
-    return picked[0] if picked else envs[0][0]
 
 
-def _pick_variant_files(record: dict,
-                        envs: List[Tuple[str, str]]
-                        ) -> Optional[Tuple[str, str]]:
-    """Of several .env entries (one per harness variant), return the .env of the
-    variant whose TOPLEVEL module name is corroborated by the prompt / completion
-    / context. Falls back to None (caller chooses first-wins) when no name can
-    be unambiguously corroborated."""
-    if not isinstance(record, dict):
-        return None
-    prompt = (record.get("prompt") or ""
-              or (record.get("input") or {}).get("prompt") or "")
-    completion = record.get("completion") or ""
-    # also infer names directly from input.context files (the prompt-side skeleton)
-    skeleton_names: set = set()
-    for k, v in ((record.get("input") or {}).get("context") or {}).items():
-        if isinstance(v, str) and v.strip():
-            for m in re.finditer(r"\bmodule\s+([A-Za-z_]\w*)\b", v):
-                skeleton_names.add(m.group(1))
-    # module decls from completion
-    completion_names = set()
-    for m in re.finditer(r"\bmodule\s+([A-Za-z_]\w*)\b", completion):
-        completion_names.add(m.group(1))
-    # `**module**`/backtick-style references in prompt
-    prompt_words = set(re.findall(r"\*\*([A-Za-z_]\w*)\*\*|`([A-Za-z_]\w*)`", prompt))
-    prompt_name_set = {a or b for a, b in prompt_words if (a or b)}
-    corroborating: set = prompt_name_set | skeleton_names | completion_names
-    if not corroborating:
-        return None
-    # per .env, parse TOPLEVEL=<name>; build a map {name: (env_key, env_text)}
-    by_name: Dict[str, Tuple[str, str]] = {}
-    for k, v in envs:
-        mm = re.search(r"^\s*TOPLEVEL\s*=\s*(\S+)", v, re.M)
-        if mm:
-            by_name.setdefault(mm.group(1), (k, v))
-    # pick the variant corroborated by the most corroborating sources
-    counts = [(nm, (1 if nm in prompt_name_set else 0) +
-                   (1 if nm in skeleton_names else 0) +
-                   (1 if nm in completion_names else 0))
-              for nm in by_name if nm in corroborating]
-    if counts:
-        nm = max(counts, key=lambda x: x[1])[0]
-        return by_name[nm]
-    return None
 
 
 # english words / verilog keywords that can follow "module" in prose but are not
@@ -291,10 +208,13 @@ def toplevel_name(record: dict) -> Optional[str]:
     strong_named: Optional[str] = None
     for pat in (
         r"\bmodule\s+(?:must\s+be\s+)?(?:named|called)\s+[`*\"]([A-Za-z_]\w*)[`*\"]",
+        # "module name `X`" / "Module Name: `X`" / "**Module Name:** `X`" — a labelled
+        # designation (the name is backtick/quote-delimited right after "module name").
+        r"\bmodule\s+name\b[\s:*]*[`\"]([A-Za-z_]\w*)[`\"]",
         r"\b(?:named|called)\s+[`*\"]([A-Za-z_]\w*)[`*\"]",
         r"\bmodule\s+([A-Za-z_]\w*)\s*(?:#\s*\(|\()",
     ):
-        m = re.search(pat, prompt)
+        m = re.search(pat, prompt, re.I)  # prose often capitalises "Module"
         if m and m.group(1).lower() not in _NAME_STOP:
             strong_named = m.group(1)
             break
@@ -321,73 +241,16 @@ def toplevel_name(record: dict) -> Optional[str]:
         r"\(([A-Za-z_]\w*)\)\s+module\b",                               # (ABBR) module
         r"[`*\"]([A-Za-z_]\w*)[`*\"]\s+module\b",                        # `X` module
     ):
-        m = re.search(pat, prompt)
+        m = re.search(pat, prompt, re.I)  # prose often capitalises "Module"
         if m and m.group(1).lower() not in _NAME_STOP:
             return m.group(1)
     return None
 
 
-def _cocotb_test_text(files: Dict[str, str]) -> str:
-    # Backward-compatible entry point for callers that only have the file map.
-    # For multi-variant records pass the record via _cocotb_test_text_for_record.
-    return _cocotb_test_text_for_record({}, files)
 
 
-def _cocotb_test_text_for_record(record: dict, files: Dict[str, str]) -> str:
-    # Multi-variant records (see toplevel_name/_env_text_for_record note) carry a
-    # separate test module per variant.  Scope the search to the variant directory
-    # that matches the selected .env for this record, so we don't bind to a
-    # sibling variant's DUT interface.
-    env_key = _env_key_for_record(record, files)
-    env_dir = env_key.rsplit("/", 1)[0] + "/" if "/" in env_key else ""
-    scoped = {k: v for k, v in files.items() if k.startswith(env_dir)} if env_dir else files
-    # prefer the conventional `test_*.py` cocotb test module.
-    chosen_key = ""
-    chosen = ""
-    for k, v in scoped.items():
-        if re.search(r"test_.*\.py$", k) and "runner" not in k:
-            chosen_key = k
-            chosen = v
-            break
-    # FALLBACK: a cocotb test commonly lives in a non-`test_`-named harness file —
-    # `tb.py`, `testbench.py`, `cocotb_<x>.py` — that drives the DUT via `dut.<sig>`.
-    # The `dut.<sig>.value` accesses ARE the authoritative interface the scorer
-    # binds, so recovering them is the most faithful interface source (no prose
-    # inference). Return the dut-referencing harness `.py` (excluding the runner).
-    # A general cocotb file-naming tolerance, not a dataset-specific rule; purely
-    # additive — only fires when no `test_*.py` exists (the previously-empty case).
-    if not chosen:
-        for k, v in files.items():
-            if k.endswith(".py") and "runner" not in k and "dut." in v:
-                chosen_key = k
-                chosen = v
-                break
-    # AUXILIARY library files (e.g. `harness_library.py`) also contain `dut.<sig>`
-    # references inside helper coroutines that the main test file calls. Those
-    # references are part of the harness's bound interface and must be recovered
-    # when they exist — otherwise all IO directionality comes from a single
-    # `WIDTH = int(dut.WIDTH.value)` line and the actual data ports are lost.
-    # We ONLY append helpers that live in the SAME harness variant directory as
-    # the chosen test file and are clearly not another top-level test module.
-    # This prevents multi-variant records (e.g. nbit_swizzling variants #14/#20
-    # with extra parity/ecc ports) from polluting the base variant's interface.
-    if chosen:
-        chosen_dir = chosen_key.rsplit("/", 1)[0] + "/" if "/" in chosen_key else ""
-        extras = []
-        for k, v in files.items():
-            if (k.endswith(".py") and "runner" not in k and k != chosen_key
-                    and "dut." in v
-                    and not re.search(r"test_.*\.py$", k)
-                    and k.startswith(chosen_dir)):
-                extras.append(v)
-        if extras:
-            chosen += "\n" + "\n".join(extras)
-    return chosen
 
 
-# --------------------------------------------------------------------------- #
-# (b) cocotb dut.<signal> direction inference + PARAMETER filtering
-# --------------------------------------------------------------------------- #
 # A cocotb PARAMETER is read with `NAME = int(dut.NAME.value)` to CONFIGURE the
 # run (then used as a python int — width/loop bound), not asserted as a DUT output.
 # Convention across this dataset: parameters are ALL-CAPS snake (DATA_WIDTH, MSHR_SIZE,
@@ -414,95 +277,8 @@ _BUS_PORT_NAMES = frozenset({
 })
 
 
-def _cocotb_params(tb: str) -> set:
-    """Cocotb PARAMETERS = ALL-CAPS signals read with `int(...)` to CONFIGURE
-    the run (then used as a python int — width/loop bound), not asserted as a DUT
-    output. Bare `dut.X.value` reads are NOT parameters — they are usually a
-    real port being inspected (`if dut.OUT.value`, `print(dut.HREADY.value)`).
-
-    An AMBA/AXI signal like `HREADY` / `PRDATA` / `RDATA` matches the all-caps
-    param pattern, but is a genuine output port. A hard-coded protocol-vocabulary
-    deny-list (`_BUS_PORT_NAMES`) catches those standard bus ports regardless of
-    whether the LHS variable is uppercase (`PRDATA = int(dut.PRDATA.value)`) or
-    lowercase (`read_data = int(dut.PRDATA.value)`). Conversely, a real parameter
-    such as `DATA_WIDTH` is recognized even when read into a lowercase temp
-    (`data_wd = int(dut.DATA_WIDTH.value)`), because it is not a standard bus port.
-    """
-    params = set()
-    # Strong signal: `int(dut.X.value)` — only an ALL-CAPS config token is wrapped
-    # in int() in a cocotb run; a port value being polled is `bool()` / identity.
-    # Standard AMBA/APB/AXI bus ports are excluded via _BUS_PORT_NAMES.
-    for m in re.finditer(r"\b(\w+)\s*=\s*int\(\s*dut\.(\w+)\.value\s*\)", tb):
-        sig = m.group(2)
-        if _PARAM_NAME_RE.match(sig) and sig not in _BUS_PORT_NAMES:
-            params.add(sig)
-    # A weaker signal: `dut.X.value` WRAPPED in numeric/arithmetic context
-    # (range bound, slice index) — i.e. *used* as an integer, e.g.
-    #   `range(N*NUMBER_OF_PORTS, NUMBER_OF_PORTS*WIDTH.value)`
-    #   `[port for port in range(dut.NUM_PORTS.value)]`
-    # We guard by requiring the value to appear inside `range(` / `[..]`
-    # / a list-comp `<X for X in range(dut.WIDTH.value)>` AND the signal to
-    # be ALL-CAPS snake (NOT bare 3-letter AMBA codes like HREADY/HADDR —
-    # those genuine ALL-CAPS ports never appear inside `range(...)` in a
-    # cocotb run, only address/data signals DO appear there as integers).
-    # Standard bus ports are also excluded here for safety.
-    for m in re.finditer(
-            r"range\(\s*[^)]*?dut\.([A-Z][A-Z0-9_]+)\.value\b",
-            tb):  # inside range()
-        sig = m.group(1)
-        # require snake-with-underscore or 4+-letter — short 3-letter codes
-        # (HREADY/HADDR) are excluded even when inside range()
-        if ("_" in sig or len(sig) >= 4) and sig not in _BUS_PORT_NAMES:
-            params.add(sig)
-    return params
-def _strip_python_comments(tb: str) -> str:
-    """Remove `# ...` comments from a cocotb testbench while preserving `#`
-    inside string literals. Commented-out debug probes (`#print(dut.x.value)`)
-    must not contribute to interface recovery."""
-    out = []
-    for ln in tb.splitlines():
-        cleaned = []
-        in_sq = in_dq = False
-        for ch in ln:
-            if ch == "'" and not in_dq:
-                in_sq = not in_sq
-            elif ch == '"' and not in_sq:
-                in_dq = not in_dq
-            elif ch == '#' and not in_sq and not in_dq:
-                break
-            cleaned.append(ch)
-        out.append(''.join(cleaned))
-    return '\n'.join(out)
 
 
-def _cocotb_io(tb: str) -> Tuple[List[str], List[str]]:
-    """(inputs, outputs) from the cocotb test.
-
-    INPUT — assigned with `=` (NOT comparison `==`):
-        `dut.X.value = 1`
-    OUTPUT — read on the RHS or in a conditional / assertion / print:
-        `int(dut.X.value)`, `dut.X.value == ...`, `assert dut.X.value`,
-        `print(dut.X.value)`, `if dut.X.value: ...`
-    The OLDER narrow set (only RHS / int() / .integer reads) missed cases like
-    `data_out` in barrel_shifter that is read ONLY inside a print/f-string —
-    the inclusive `dut.X.value` union recovers it as an OUTPUT.
-
-    SIGNALS THAT MUST NEVER BE IO — already separated out:
-    - parameters (consumed via `int(dut.X.value)` or `range(dut.X.value)`)
-    - clock / reset / enable: classified as SEQ, never an IO port here.
-    """
-    tb = _strip_python_comments(tb)
-    IO_ASSIGNED = re.compile(r"dut\.(\w+)\.value\s*=(?!=)")
-    IO_READ = re.compile(r"dut\.(\w+)\.value")
-    params = _cocotb_params(tb)
-    driven = set(IO_ASSIGNED.findall(tb))
-    all_reads = set(IO_READ.findall(tb))
-    # a drive is also a read (the right-hand-side reference of the TB-driver),
-    # but inputs ARE driven — they should stay in `ins`, NOT be promoted to outs.
-    read_not_driven = (all_reads - driven) - params
-    inputs = sorted(driven - params)
-    outputs = sorted(read_not_driven)
-    return inputs, outputs
 
 
 # --------------------------------------------------------------------------- #
@@ -744,6 +520,83 @@ def _prose_ports(prompt: str) -> Tuple[List[Port], List[Port]]:
         return [], []
 
 
+def _signal_direction_table(prompt: str, params: Optional[Dict[str, int]] = None
+                            ) -> Tuple[List[str], List[str], Dict[str, int], Dict[str, str]]:
+    """(input_names, output_names, widths, symbolic) from a markdown INTERFACE table
+    whose header carries a Signal/Port/Name column AND a Direction column — the
+    common CVDP `| Signal | Direction | Bit Width | ... |` shape. A PROMPT-sourced
+    interface (legal). Names classified by the Direction cell (Input/inout ->
+    input, Output -> output); `widths` maps a name to its resolved width from the
+    `Bit Width` cell (a literal int, an `[hi:lo]` range, or a parameter name whose
+    default is in `params`); `symbolic` records `name -> "PARAM-1:0"` when the width
+    cell is a parameter, so the emit re-parameterizes the port. Absent when the
+    cell is unresolvable."""
+    params = params or {}
+
+    def _width_cell(cell: str) -> Tuple[Optional[int], Optional[str]]:
+        cell = cell.strip().strip("`")
+        m = re.search(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", cell)
+        if m:
+            return abs(int(m.group(1)) - int(m.group(2))) + 1, None
+        m = re.fullmatch(r"(\d+)", cell) or re.search(r"\b(\d+)\s*-?\s*bits?\b", cell, re.I)
+        if m:
+            return int(m.group(1)), None
+        for pnm, pv in params.items():          # a parameter name (WIDTH/DATA_WIDTH)
+            if re.search(rf"\b{re.escape(pnm)}\b", cell):
+                return pv, f"{pnm}-1:0"
+        return None, None
+
+    lines = prompt.splitlines()
+    for i, ln in enumerate(lines):
+        low = ln.lower()
+        if "|" not in ln or "direction" not in low:
+            continue
+        if not any(k in low for k in ("signal", "port", "name")):
+            continue
+        if i + 1 >= len(lines) or not re.match(r"^\s*\|?[\s:|-]+\|?\s*$", lines[i + 1]):
+            continue
+        headers = [h.strip().strip("`").lower() for h in ln.strip().strip("|").split("|")]
+        nci = next((j for j, h in enumerate(headers)
+                    if h in ("signal", "port", "name", "signal name", "port name")), None)
+        dci = next((j for j, h in enumerate(headers) if "direction" in h), None)
+        wci = next((j for j, h in enumerate(headers)
+                    if "width" in h or "bit" in h), None)
+        if nci is None or dci is None:
+            continue
+        ins: List[str] = []
+        outs: List[str] = []
+        widths: Dict[str, int] = {}
+        symbolic: Dict[str, str] = {}
+        for body in lines[i + 2:]:
+            if "|" not in body or not body.strip().startswith("|"):
+                break
+            cells = [c.strip().strip("`") for c in body.strip().strip("|").split("|")]
+            if len(cells) != len(headers):
+                continue
+            nm = re.match(r"([A-Za-z_]\w*)", cells[nci].strip())
+            if not nm:
+                continue
+            name = nm.group(1)
+            d = cells[dci].lower()
+            if "out" in d:
+                outs.append(name)
+            elif "in" in d:                 # input / inout -> input
+                ins.append(name)
+            else:
+                continue
+            if wci is not None:
+                w, sym = _width_cell(cells[wci])
+                if w is not None:
+                    widths[name] = w
+                if sym is not None:
+                    symbolic[name] = sym
+        ins = list(dict.fromkeys(ins))
+        outs = list(dict.fromkeys(outs))
+        if ins and outs:
+            return ins, outs, widths, symbolic
+    return [], [], {}, {}
+
+
 # --------------------------------------------------------------------------- #
 # interface resolution (priority a -> b -> c/d), with width cross-check
 # --------------------------------------------------------------------------- #
@@ -780,16 +633,28 @@ def extract_interface_ex(record: dict, top: str
     # and resolve their widths through the SAME `_w` path (the prose declares
     # the names, but `A ([3:0], 4-bit)` widths only resolve via the width logic
     # below — the cocotb source did the same before it was removed as oracle).
+    # parameter-default table (needed to resolve a `Bit Width` column that names a
+    # parameter, e.g. `WIDTH`) + a place to record per-port symbolic widths so the
+    # emit can produce a `module M #(parameter N=<default>, ...)` header.
+    params = _W.param_defaults(prompt, "")
+    symbolic: Dict[str, str] = {}
+
     c_ins, c_outs = _table_interface(prompt)
+    sig_widths: Dict[str, int] = {}
+    if not (c_ins and c_outs):
+        # a `| Signal | Direction | Bit Width |` interface table (names + explicit
+        # directions + widths) — a common CVDP shape the test-case table does not
+        # cover. Its Bit-Width column feeds `_w` (via sig_widths) below; a
+        # parameter-width cell (`WIDTH`) also records its symbolic form so the emit
+        # re-parameterizes.
+        s_ins, s_outs, sig_widths, sig_symbolic = _signal_direction_table(prompt, params)
+        if s_ins and s_outs:
+            c_ins, c_outs = s_ins, s_outs
+            symbolic.update(sig_symbolic)
     if not (c_ins and c_outs) and p_ins and p_outs:
         c_ins = [n for n, _ in p_ins]
         c_outs = [n for n, _ in p_outs]
     table = _test_case_table(prompt) or {}
-
-    # parameter-default table + a place to record per-port symbolic widths so the
-    # emit can produce a `module M #(parameter N=<default>, ...)` header.
-    params = _W.param_defaults(prompt, "")
-    symbolic: Dict[str, str] = {}
 
     # Unmistakable 1-bit signals (carry/borrow/flag/handshake): 1-bit by
     # definition. We trust a stray "N-bit" prose token for these ONLY if an
@@ -814,6 +679,8 @@ def extract_interface_ex(record: dict, top: str
         er = _explicit_range(name)
         if er is not None:
             return er
+        if name in sig_widths:          # authoritative Signal/Direction/Bit-Width cell
+            return sig_widths[name]
         if _ONE_BIT_RE.match(name):
             return 1
         pw = _prose_width(prompt, name)

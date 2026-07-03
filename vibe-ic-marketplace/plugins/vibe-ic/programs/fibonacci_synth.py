@@ -33,12 +33,8 @@ def _toplevel(record: dict) -> Optional[str]:
             return t
     except Exception:
         pass
-    h = (record.get("harness") or {}).get("files") or {}
-    for k, v in h.items():
-        if isinstance(v, str) and k.endswith(".env"):
-            m = re.search(r"^\s*TOPLEVEL\s*=\s*(\S+)", v, re.M)
-            if m:
-                return m.group(1)
+    # The harness `.env` TOPLEVEL is an OFF-LIMITS oracle; the module name comes
+    # ONLY from input.prompt + input.context (via the bridge). None -> honest SKIP.
     return None
 
 

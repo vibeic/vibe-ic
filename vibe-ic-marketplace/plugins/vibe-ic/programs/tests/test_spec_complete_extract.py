@@ -76,16 +76,23 @@ def test_skeleton_iface_passthrough():
     assert spec["interface"] == sk and spec["completeness"] == "COMPLETE"
 
 
-def test_cvdp_adapter_byte_identical_on_dataset():
-    """The CVDP adapter (now delegating to the general engine) keeps its exact
-    per-record verdict — the refactor is behavior-preserving."""
+def test_cvdp_adapter_complete_count_is_prompt_context_only():
+    """The CVDP adapter reads ONLY input.prompt + input.context (§4.05 compliance:
+    the model sees only the submitter-visible spec; the hidden cocotb `dut.<sig>`
+    test, the `.env` TOPLEVEL and the golden output are OFF-LIMITS oracle). Over the
+    real 302-record dataset the COMPLETE count therefore reflects PROMPT+CONTEXT
+    interface recovery — the compliant clean-room baseline (215), NOT the old
+    harness-inflated 255 (which counted records whose interface was recoverable only
+    from the cocotb harness)."""
     ds = Path("/home/reyerchu/AI_IC_design/_extbench/cvdp_open_v110/"
               "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
     if not ds.exists():
         pytest.skip("dataset not present")
     recs = [json.loads(l) for l in ds.read_text().splitlines()]
     comp = sum(1 for r in recs if C.extract(r)["completeness"] == "COMPLETE")
-    assert comp == 255, f"CVDP COMPLETE drifted from 255 to {comp}"
-    # the back-compat `harness` block the CVDP callers read is still attached
+    assert comp == 215, f"CVDP COMPLETE (prompt+context only) drifted to {comp}"
+    # §4.05: the cocotb harness signal-set block is NO LONGER re-attached; the
+    # supplied (prompt+context) interface is echoed in `interface_source` instead.
     s = C.extract(recs[0])
-    assert "harness" in s and "cocotb_inputs" in s["harness"]
+    assert "harness" not in s, "the OFF-LIMITS cocotb harness block must not be re-attached"
+    assert "interface_source" in s
