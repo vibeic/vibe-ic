@@ -57,3 +57,10 @@ evidence:
   confirmations: 4 independent blind authors (decoder_0001, encoder_0005,
     encoder_0009, decoder_0011) reported and overrode the malformed spec
   filed_by: benchmark-agent (clean-room CVDP canary on v1.2.96)
+
+resolution:
+  status: fix-landed
+  landed_by: repo-gatekeeper
+  commits:
+    - "b6cb0be6 — fix(cvdp): complete-extract phantom-port + header-authoritative widths (PR #99)"
+  annotated_at_merge: "2026-07-03 (PR #97, gatekeeper annotation)"

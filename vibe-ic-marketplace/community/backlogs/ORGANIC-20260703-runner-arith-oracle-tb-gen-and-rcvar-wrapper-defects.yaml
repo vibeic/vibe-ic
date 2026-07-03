@@ -54,3 +54,10 @@ evidence:
   confirmations: arith-oracle misfire ~5 authors; rcvar wrapper defect 1 (pipeline_mac,
     blocked the gate until the inner module was emitted directly)
   filed_by: benchmark-agent (unified-entry CVDP hard-94 on v1.2.96, RULE 0 path)
+
+resolution:
+  status: fix-landed
+  landed_by: repo-gatekeeper
+  commits:
+    - "b396f801 — fix(runner): arith-oracle sequential gate + rcvar wrapper localparam hoist (PR #100)"
+  annotated_at_merge: "2026-07-03 (PR #97, gatekeeper annotation)"

@@ -34,3 +34,10 @@ evidence:
   run: benchmark_external/cvdp/run_hard94_v1296_20260703
   fixed_in_run: both drafts repaired (input reg -> input) and re-gated 94/94
   filed_by: benchmark-agent (clean-room CVDP hard-94 on v1.2.96)
+
+resolution:
+  status: fix-landed
+  landed_by: repo-gatekeeper
+  commits:
+    - "b6cb0be6 — input-reg authoring lesson landed with PR #99"
+  annotated_at_merge: "2026-07-03 (PR #97, gatekeeper annotation)"

@@ -63,3 +63,7 @@ evidence:
   run: benchmark_external/cvdp/run_hard94_unified_20260703
   confirmations: ~15-20 independent spec-to-rtl authors reported the mis-extraction
   filed_by: benchmark-agent (unified-entry CVDP hard-94 on v1.2.96, RULE 0 path)
+
+resolution:
+  status: open
+  note: "No fix landed as of PR #97 merge (2026-07-03) — remains open work."

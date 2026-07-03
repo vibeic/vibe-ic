@@ -66,3 +66,12 @@ evidence:
   baseline_score: 6/10 (60%)
   recoverable_with_fix: 7/10 (encoder_0001 FAIL->PASS verified)
   filed_by: benchmark-agent (clean-room CVDP canary on v1.2.96)
+
+resolution:
+  status: fix-landed
+  landed_by: repo-gatekeeper
+  commits:
+    - "09cee80b — fix(cvdp): id-convention harness-TOPLEVEL alias for no-skeleton problems (PR #98)"
+    - "8031e170 — v1.3.1 follow-up: normalize alias-wrapper port decls (strip reg/logic/var kind + initializer)"
+    - "b8e62b10 — v1.3.2 round-2: SCOPE id-derived alias wrappers to BARE problems only"
+  annotated_at_merge: "2026-07-03 (PR #97, gatekeeper annotation)"

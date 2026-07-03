@@ -39,3 +39,7 @@ evidence:
   run: benchmark_external/cvdp/run_unified_canary_20260703
   confirmations: 2 (64b66b_encoder_0001, 64b66b_encoder_0009 spec-to-rtl authors)
   filed_by: benchmark-agent (unified-entry CVDP canary on v1.2.96, RULE 0 path)
+
+resolution:
+  status: open
+  note: "No fix landed as of PR #97 merge (2026-07-03) — remains open work."
