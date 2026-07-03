@@ -2655,3 +2655,15 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 **Why this is GENERAL**: "name a protocol → owe its full contract" is exactly how an experienced designer reads a spec; the standard defines the rest. *why_not_bucket_a*: knowing which signals + defaults a named protocol mandates is domain knowledge a regex cannot supply.
 
 _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
+
+### Skill: an `input` / `inout` port is a NET — never declare it `reg`; only `output` ports may be `reg`
+
+**Pattern**: Port direction fixes the object kind. An `input` or `inout` port is a net (it is DRIVEN from outside the module), so it can never be a `reg` — `reg` is a procedurally-assigned variable. `input reg [W-1:0] p` / `inout reg p` is illegal in strict SystemVerilog and ELAB_ERRORs on the official CVDP icarus-13 scorer (`error: Port <p> of module <m> is declared as input and as a reg type`) even though some lax host simulators (iverilog-11) tolerate it — so a design that simulates locally can still score 0/N on every test. Only an `output` port may be `reg` (a driven variable).
+
+**When to apply**: every port declaration — inputs and inouts are always nets; reach for `reg`/`logic`-variable only on `output` ports the module drives procedurally.
+
+**What to do**: write `input [W-1:0] x;` (implicit wire) and `inout [W-1:0] z;`; use `output reg [W-1:0] y;` only when the output is assigned in an `always` block. The deterministic guard `rtl_hygiene_lint --fix` rewrites `input reg`/`inout reg` -> `input`/`inout` (the `reg` on a net is always removable without semantic change).
+
+**Why this is GENERAL**: direction-implies-object-kind is a universal Verilog/SystemVerilog rule — no chip / vendor / protocol specific. *why_not_bucket_a*: the classic "compiles on my host, fails on the grader" trap; the strict-elaboration rule is a fixed language fact, not a design judgement.
+
+_Captured by benchmark-enhancement-capture 2026-07-03 (CVDP hard-94 clean-run: two blind authors emitted `input reg`; icarus-13 ELAB_ERROR)._
