@@ -4,12 +4,14 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Awesome](https://awesome.re/badge.svg)](https://github.com/vibeic/awesome-open-ic)
-[![Plugin v1.0.0](https://img.shields.io/badge/plugin-v1.0.0-brightgreen.svg)](vibe-ic-marketplace/README.md)
+[![Plugin v1.2.96](https://img.shields.io/badge/plugin-v1.2.96-brightgreen.svg)](vibe-ic-marketplace/README.md)
 [![MCP-EDA v1.0.0](https://img.shields.io/badge/mcp--eda-v1.0.0-brightgreen.svg)](vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/README.md)
 
-> **Status: v1.0 — first stable release.** The `vibe-ic` plugin is the
+> **Status: v1.2 — mature, benchmark-hardened.** The `vibe-ic` plugin is the
 > product: one install bundles and auto-registers the MCP server, the IP
 > catalog, and the benchmark harness. Install once, design in natural language.
+> Every capability is gated by a deterministic checker and continuously
+> hardened against open IC-design benchmarks (see **Benchmark results** below).
 
 Vibe-IC is a Claude Code plugin + Model Context Protocol (MCP) server
 that bridges large language models to real open-source EDA tools so that
@@ -146,13 +148,40 @@ public source tree.
 
 ---
 
+## Benchmark results
+
+Vibe-IC is continuously hardened against open IC-design benchmarks. The
+number we publish measures **what the deterministic runner chain can do**
+(program-first — `vibe_ic_one_shot_runner.py` → phase1/2/3 + plugin programs
++ MCP-EDA), not what a raw LLM can do with the same tools. Every run
+discloses any open↔commercial tool substitution and follows the
+[open-benchmark methodology](vibe-ic-marketplace/plugins/vibe-ic/skills/open-benchmark-methodology/SKILL.md).
+
+| Benchmark | Result | Notes |
+|---|---|---|
+| **NVIDIA CVDP** (nonagentic code-generation, no-commercial) | **243/302 = 80.46%** official-compliant blind pass@1 | **prompt+context-only** — the deterministic solver reads ONLY `input.prompt` + `input.context`; the hidden test harness (`.env`, cocotb testbench) and the golden solution are OFF-LIMITS oracle, enforced by a regression guard that proves the emit is byte-identical with vs without them. Scored on the official `run_benchmark.py` in the pinned `cvdp-sim` image. |
+| **VerilogEval-v2** | **155/156** | spec-to-RTL, iverilog-scored |
+| **VerilogEval-Human** | **153/156** | spec-to-RTL, iverilog-scored |
+
+> **Honesty over score.** Compliance is a structural invariant of the plugin,
+> not a runtime convenience — no benchmark run reads the hidden harness or the
+> golden reference to inflate a number, and a fresh clean-room re-run reproduces
+> the published figure. Tool substitutions (Synopsys VCS → Icarus, Design
+> Compiler → Yosys+OpenROAD, …) are disclosed in every `RESULT.md`.
+
+---
+
 ## Agent roles & check-in governance
 
-Vibe-IC is operated by **five agent roles**, separated by scenario and — most
-importantly — by **what each may check in (git commit)**. The governing rule:
-**only the Core Agent edits the plugin or the MCP server.** Any other role that
-finds a problem files it on the backlog and lets the Core Agent resolve it into
-the plugin/MCP.
+Vibe-IC is operated by a small set of agent roles, separated by scenario and —
+most importantly — by **what each may check in (git commit)**. The governing rule:
+**only the maintainer role (the repo-gatekeeper) edits the plugin or the MCP
+server.** Any other role that finds a problem files it on the backlog and lets the
+gatekeeper resolve it into the plugin/MCP. The **repo-gatekeeper** both authors
+deterministic chip-AGNOSTIC fixes and gates every change (machine checks +
+adversarial §4.05 no-leak review + a monotonic version bump), then lands it on
+`main` by direct push — quality is guaranteed by the **gates**, not by an
+author≠approver split.
 
 | Agent | Scenario | May check in to | Plugin | MCP | On finding a problem |
 |---|---|---|---|---|---|
@@ -197,8 +226,10 @@ the plugin/MCP.
 - **Plugin install & skills** — `vibe-ic-marketplace/plugins/vibe-ic/README.md`
 - **MCP-EDA server & EDA tools** — `vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/README.md`
   and `.../mcp-eda/INSTALL_GUIDE.md`
-- **Architecture, design & tutorials** — being curated for v1.0 (the prior
-  `docs/` tree is kept in the project's external docs archive).
+- **Benchmark methodology** — `vibe-ic-marketplace/plugins/vibe-ic/skills/open-benchmark-methodology/SKILL.md`
+- **Agent roles & governance** — `vibe-ic-marketplace/AGENT_USAGE_GUIDE.md`
+- **Contributing a new IC class / PDK / gate / skill / device** —
+  `vibe-ic-marketplace/docs/CONTRIBUTING_*.md`
 
 ---
 
