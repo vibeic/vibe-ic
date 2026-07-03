@@ -65,5 +65,25 @@ evidence:
   filed_by: benchmark-agent (unified-entry CVDP hard-94 on v1.2.96, RULE 0 path)
 
 resolution:
-  status: open
-  note: "No fix landed as of PR #97 merge (2026-07-03) — remains open work."
+  status: fix-landed
+  landed_by: repo-gatekeeper (core-agent role)
+  fix: |
+    phase1_doc_one_shot_runner:
+      * NEW `_doc_real_module_decl_name` + `_RE_DOC_TOP_MODULE_REAL_DECL` — an
+        actual `module <name> ( <ports> );` declaration ANYWHERE in the docs
+        (fenced OR unfenced), accepted only when the port body is a real port
+        list (a direction keyword / `#(param)` form / clean identifier list, never
+        a prose parenthetical), is AUTHORITATIVE and OUTRANKS every prose
+        heuristic. Wired as top priority in `_extract_top_module_from_docs`.
+      * `_is_valid_top_module_candidate` hardened to reject: SCREAMING_SNAKE
+        parameter names (`DATA_WIDTH`/`CLOCK_HZ`/`POLY_LENGTH`), `Step_N` step
+        headers, and Title_Case_Snake section headings (`Data_Latency`/
+        `Interface_Signals`/`Register_Map`) — so with NO real declaration the
+        extractor degrades to the `chip_top` sentinel, never a garbage name.
+    Reproduced on v1.3.4 before the fix (prose-only doc returned `Data_Latency`;
+    the filter passed `DATA_WIDTH`/`Step_9`). After: real header (fenced+unfenced)
+    wins; param/step/section tokens rejected; prose-only -> None -> sentinel; real
+    RTL names (coffee_machine/aes_core/microcode_sequencer/...) still accepted.
+    Regression: programs/tests/test_organic_20260703_l9_topmodule_misextraction.py
+    (8 tests). No regression across the phase1_doc/L9/chip_top family (622 green).
+  annotated_at: "2026-07-04 (core-agent fix, post-#97)"
