@@ -81,16 +81,28 @@ def test_cvdp_adapter_complete_count_is_prompt_context_only():
     the model sees only the submitter-visible spec; the hidden cocotb `dut.<sig>`
     test, the `.env` TOPLEVEL and the golden output are OFF-LIMITS oracle). Over the
     real 302-record dataset the COMPLETE count therefore reflects PROMPT+CONTEXT
-    interface recovery — the compliant clean-room baseline (215), NOT the old
+    interface recovery — the compliant clean-room baseline, NOT the old
     harness-inflated 255 (which counted records whose interface was recoverable only
-    from the cocotb harness)."""
+    from the cocotb harness).
+
+    ORGANIC-20260703 (cvdp_complete_extract phantom-port + skeleton fix) raised the
+    clean-room baseline 215 -> 223, ALL prompt+context-only:
+      * +9 — the adapter now parses the PROMPT's own ```verilog module <top>( ANSI
+        skeleton (a legitimate input.prompt fact, previously ignored) so a record
+        whose full interface is declared in the prompt header resolves COMPLETE
+        instead of being mis-read by the prose parser (verified: each of the 9 has a
+        2-18 port prompt skeleton — flop/crossbar/image_rotate/…);
+      * -1 — `binary_to_gray_0001` was COMPLETE only on PHANTOM ports `wire`/`output`
+        (Verilog keywords mis-parsed as port names); the reserved-word guard drops
+        them, so its honest verdict is now INCOMPLETE_SPEC_ABSENT.
+    Both moves are pure prompt+context correctness — no harness read."""
     ds = Path("/home/reyerchu/AI_IC_design/_extbench/cvdp_open_v110/"
               "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
     if not ds.exists():
         pytest.skip("dataset not present")
     recs = [json.loads(l) for l in ds.read_text().splitlines()]
     comp = sum(1 for r in recs if C.extract(r)["completeness"] == "COMPLETE")
-    assert comp == 215, f"CVDP COMPLETE (prompt+context only) drifted to {comp}"
+    assert comp == 223, f"CVDP COMPLETE (prompt+context only) drifted to {comp}"
     # §4.05: the cocotb harness signal-set block is NO LONGER re-attached; the
     # supplied (prompt+context) interface is echoed in `interface_source` instead.
     s = C.extract(recs[0])
