@@ -39307,6 +39307,57 @@ _RE_DOC_TOP_MODULE_INTRO_PHRASE = re.compile(
     r"\b(?P<name>[A-Z][A-Za-z0-9_]{2,39})\s+is\s+a(?:n)?\s+"
     r"(?:CPU|core|module|processor|IP\b|micro[\s-]?(?:processor|controller))"
 )
+# ORGANIC-20260703 (runner-l9-topmodule-misextraction, P1) — a REAL Verilog
+# module DECLARATION anywhere in the doc/context text (fenced OR unfenced). This
+# is the authoritative top-module signal: `module <name> [#(...)] ( <ports> );`.
+# The CVDP unified-entry path stages the design's own RTL header into the docs
+# (input.context), but it is not always inside a ```verilog fence the fenced
+# regex recognises, so the low-quality heading / intro-phrase patterns used to
+# win with garbage (a PARAMETER name `DATA_WIDTH`, a step header `Step_9`). A
+# genuine declaration — name, an optional `#(param)` block, a port paren that
+# CLOSES with `);` — is matched here and (via `_doc_real_module_decl_name`) only
+# accepted when the port body is a real port list (a direction keyword, or a
+# clean identifier/bracket list, or the `#(` param form was present), never a
+# prose parenthetical. Chip-AGNOSTIC: pure Verilog grammar, no chip literal.
+_RE_DOC_TOP_MODULE_REAL_DECL = re.compile(
+    r"(?ms)\bmodule\s+(?P<name>[A-Za-z_][A-Za-z0-9_]{1,39})\s*"
+    r"(?P<params>#\s*\([^;]*?\)\s*)?"
+    r"\((?P<body>[^;]*?)\)\s*;"
+)
+
+
+def _doc_real_module_decl_name(extracted: Dict[str, str]) -> Optional[str]:
+    """The name of a REAL `module <name> ( <ports> );` declaration found anywhere
+    in the extracted docs, or None. Accepts a match only when the port body is a
+    genuine port list — an ANSI direction keyword (`input`/`output`/`inout`), a
+    `#(...)` parameter form, an empty `()`, or a clean non-ANSI identifier list
+    (`a, b, c` / `a[7:0], b`) — so a prose parenthetical never counts. Picks the
+    most-frequently-declared name (tie-break alphabetical) for determinism.
+    Chip-AGNOSTIC."""
+    if not extracted:
+        return None
+    _DIR = re.compile(r"\b(?:input|output|inout)\b")
+    _CLEAN_PORTLIST = re.compile(r"^[\s\w,\[\]:$*+/()\-]*$")
+    counts: Dict[str, int] = {}
+    for _src, text in extracted.items():
+        if not text:
+            continue
+        for m in _RE_DOC_TOP_MODULE_REAL_DECL.finditer(text):
+            nm = (m.group("name") or "").strip()
+            if nm.lower() in ("endmodule",) or not _is_valid_top_module_candidate(nm):
+                continue
+            body = m.group("body") or ""
+            has_params = bool(m.group("params"))
+            # a real port body: a direction keyword, OR the #(param) form, OR
+            # an empty/clean identifier list (non-ANSI). Prose parens carry
+            # sentence punctuation (`.`, `;`, `which`, ...) and fail _CLEAN.
+            if not (has_params or _DIR.search(body)
+                    or _CLEAN_PORTLIST.match(body.strip())):
+                continue
+            counts[nm] = counts.get(nm, 0) + 1
+    if not counts:
+        return None
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
 
 
 # v1.6.274 — for #139 ORGANIC. English stop-list of common heading
@@ -39545,6 +39596,32 @@ def _is_valid_top_module_candidate(nm: str) -> bool:
     low = s.lower()
     if low in _DOC_TOP_MODULE_STOP_TOKENS:
         return False
+    # ORGANIC-20260703 (runner-l9-topmodule-misextraction, P1) — reject a
+    # SCREAMING_SNAKE_CASE / all-caps constant-style identifier
+    # (`DATA_WIDTH`, `CLOCK_HZ`, `POLY_LENGTH`): that is the universal Verilog
+    # convention for a `parameter` / `localparam` / `` `define `` name, NEVER a
+    # module name. Matches only when the token is entirely upper-case letters +
+    # digits + underscores AND carries an underscore or a digit (so a bare
+    # acronym like `JTAG`/`SPI` module wrapper is still allowed). Chip-AGNOSTIC.
+    if (re.fullmatch(r"[A-Z][A-Z0-9_]*", s)
+            and ("_" in s or any(c.isdigit() for c in s))):
+        return False
+    # ORGANIC-20260703 — reject a prose ALGORITHM-STEP header token
+    # (`Step_9`, `Step9`, `Step_2`): a spec's numbered step heading, never a
+    # module name. Chip-AGNOSTIC: pure English-doc structural shape.
+    if re.fullmatch(r"(?i)step[_\-]?\d+", s):
+        return False
+    # ORGANIC-20260703 — reject a Title_Case_Snake prose SECTION-HEADING token
+    # (`Data_Latency`, `Interface_Signals`, `Register_Map`): 2+ underscore
+    # segments EACH starting with an upper-case letter is the shape of a
+    # documentation section title (grabbed by the `(?i)` heading pattern), never
+    # a synthesizable RTL identifier — real module names are conventionally
+    # lower_snake (`coffee_machine`) or CamelCase-without-underscore (`FooCore`).
+    # A real `module <name>(...)` declaration outranks this fallback anyway.
+    # Chip-AGNOSTIC: pure naming-convention shape, no chip literal.
+    _segs = s.split("_")
+    if len(_segs) >= 2 and all(seg[:1].isupper() for seg in _segs if seg):
+        return False
     # v1.6.568 — for #387 P3 ORGANIC. Build-tool / language / OS /
     # crypto deny-list. Segment-aware (catches `JAVA_JDK_8`).
     if _v1_6_568_is_build_tool_token(s):
@@ -39621,6 +39698,17 @@ def _extract_top_module_from_docs(extracted: Dict[str, str]) -> Optional[str]:
     """
     if not extracted:
         return None
+
+    # ORGANIC-20260703 (runner-l9-topmodule-misextraction, P1) — an actual
+    # `module <name> ( <ports> );` DECLARATION in the docs/context is the
+    # authoritative signal and OUTRANKS every prose heuristic below. This closes
+    # the class where the design's real RTL header is staged into the docs but
+    # not inside a ```verilog fence, so a step header / parameter name used to
+    # win. When present it wins; when absent we fall through to the (now
+    # param/step-hardened) prose patterns, else the chip_top sentinel.
+    _real = _doc_real_module_decl_name(extracted)
+    if _real:
+        return _normalize_top_module_case(_real, extracted)
 
     def _walk(pattern: "re.Pattern[str]") -> Optional[str]:
         counts: Dict[str, int] = {}
