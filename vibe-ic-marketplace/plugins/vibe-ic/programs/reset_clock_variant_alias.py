@@ -624,6 +624,40 @@ def parse_module_params(rtl_text: str, module: str
     return (hdr[0], re.findall(r"(\w+)\s*=", hdr[0]))
 
 
+_LOCALPARAM_STMT_RE = re.compile(r"\blocalparam\b(?P<decl>[^;]*);",
+                                 re.IGNORECASE)
+
+
+def parse_module_localparams(rtl_text: str, module: str
+                             ) -> List[Tuple[str, str]]:
+    """ORGANIC-20260703 — return [(name, rhs_expr), ...] for every `localparam`
+    declared in `module <module>`'s body, in SOURCE order.
+
+    A localparam-derived PORT WIDTH — `output [DWIDTH_ACCUMULATOR-1:0] result`
+    where `DWIDTH_ACCUMULATOR = 2*DWIDTH + $clog2(N)` is a body localparam —
+    cannot be re-emitted verbatim on the ANSI-header alias wrapper: the wrapper's
+    port list would reference an unbound identifier and iverilog ELABs
+    `Unable to bind parameter DWIDTH_ACCUMULATOR`. The wrapper HOISTS the
+    referenced localparam(s) into its `#(...)` parameter-port list; this parser
+    supplies the (name, rhs) pairs for that hoist. chip-AGNOSTIC: pure SV
+    localparam grammar; no chip / vendor literal."""
+    body = _module_body(rtl_text, module)
+    if not body:
+        return []
+    out: List[Tuple[str, str]] = []
+    for m in _LOCALPARAM_STMT_RE.finditer(body):
+        for piece in _split_top_level_commas(m.group("decl")):
+            piece = piece.strip()
+            eq = piece.find("=")
+            if eq < 0:
+                continue
+            lhs, rhs = piece[:eq].strip(), piece[eq + 1:].strip()
+            names = re.findall(r"[A-Za-z_]\w*", lhs)   # last ident = the name
+            if names and rhs:
+                out.append((names[-1], rhs))
+    return out
+
+
 def parse_module_imports(rtl_text: str, module: str) -> List[str]:
     """Return the verbatim `import pkg::*;` clauses (in source order) sitting
     between `module <module>` and its param/port regions; [] when there are
@@ -864,6 +898,8 @@ def emit_variant_alias_wrapper(core_module: str,
                                param_names: Optional[List[str]] = None,
                                import_block: Optional[List[str]] = None,
                                additive_reset_map: "Optional[Dict[str, str]]"
+                               = None,
+                               localparam_defs: "Optional[List[Tuple[str, str]]]"
                                = None) -> str:
     """Render a wrapper that exposes each renamed reset/clock port under its
     TB-facing variant name and wires it 1:1 to the core's original port; all
@@ -933,10 +969,54 @@ def emit_variant_alias_wrapper(core_module: str,
         raise ValueError(
             f"refusing reset/clock alias that produces duplicate wrapper "
             f"port name(s) {dupes}: a rename collapsed two ports onto one name.")
+    # ORGANIC-20260703 — hoist inner LOCALPARAMS referenced by a port width into
+    # the wrapper's parameter-port list. An ANSI-header wrapper re-emits each
+    # port width verbatim; when a width is a FUNCTION of the inner module's
+    # localparam (`output [DWIDTH_ACCUMULATOR-1:0] result`,
+    # DWIDTH_ACCUMULATOR = 2*DWIDTH + $clog2(N)), the wrapper header references
+    # an unbound identifier and iverilog ELABs `Unable to bind parameter
+    # DWIDTH_ACCUMULATOR`. Re-declare the needed localparam(s) in the wrapper's
+    # `#(...)` — AFTER the forwarded parameters they depend on, as `localparam`
+    # (not overridable, and NOT forwarded to the inner, which keeps its own) —
+    # so the width resolves on the wrapper too. Transitive over localparam refs.
+    hoist_lines: List[str] = []
+    if localparam_defs:
+        lp_map: Dict[str, str] = {}
+        lp_order: List[str] = []
+        for _n, _rhs in localparam_defs:
+            if _n not in lp_map:
+                lp_order.append(_n)
+            lp_map[_n] = _rhs
+        param_set = set(param_names or [])
+        width_ids: set = set()
+        for _d, _w, _nm in ports:
+            width_ids.update(re.findall(r"[A-Za-z_]\w*", _w or ""))
+        needed: set = set()
+        stack = [i for i in width_ids if i in lp_map and i not in param_set]
+        while stack:
+            nm = stack.pop()
+            if nm in needed:
+                continue
+            needed.add(nm)
+            for ref in re.findall(r"[A-Za-z_]\w*", lp_map[nm]):
+                if ref in lp_map and ref not in param_set and ref not in needed:
+                    stack.append(ref)
+        hoist_lines = [f"localparam {nm} = {lp_map[nm]}"
+                       for nm in lp_order if nm in needed]
+
     param_hdr = ""
     inst_params = ""
-    if param_block:
-        param_hdr = f" #(\n    {param_block}\n)"
+    if param_block and not hoist_lines:
+        param_hdr = f" #(\n    {param_block}\n)"           # unchanged path
+        if param_names:
+            inst_params = " #(" + ", ".join(
+                f".{p}({p})" for p in param_names) + ")"
+    elif param_block or hoist_lines:
+        _items: List[str] = []
+        if param_block:
+            _items.append(re.sub(r",\s*$", "", param_block.strip()))
+        _items.extend(hoist_lines)
+        param_hdr = " #(\n    " + ",\n    ".join(_items) + "\n)"
         if param_names:
             inst_params = " #(" + ", ".join(
                 f".{p}({p})" for p in param_names) + ")"
