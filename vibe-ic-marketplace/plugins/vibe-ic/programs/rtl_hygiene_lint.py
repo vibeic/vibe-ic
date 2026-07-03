@@ -4721,10 +4721,64 @@ def rule_use_before_declaration(src: str, path: str) -> List[Finding]:
     return findings
 
 
+# ---------------------------------------------------------------------------
+# Rule: an input / inout PORT declared `reg` (ORGANIC-20260703)
+# ---------------------------------------------------------------------------
+# A Verilog `input` / `inout` port is a NET; it can never be a `reg` (a driven
+# variable). `input reg <p>` / `inout reg <p>` is illegal in strict
+# SystemVerilog and ELAB_ERRORs on the official CVDP icarus-13 scorer
+#   error: Port <p> of module <m> is declared as input and as a reg type.
+# even though some lax host simulators (iverilog-11) tolerate it. Only an
+# `output` port may be `reg`. The `reg` keyword on an input/inout is ALWAYS
+# removable without semantic change, so `--fix` rewrites `input reg`/`inout reg`
+# -> `input`/`inout`. chip-AGNOSTIC: pure Verilog port-direction grammar.
+_INPUT_REG_RE = re.compile(r"\b(input|inout)\b[ \t]+reg\b")
+
+
+def rule_input_port_reg(src: str, path: str) -> List[Finding]:
+    findings: List[Finding] = []
+    for m in _INPUT_REG_RE.finditer(src):
+        lineno = src[:m.start()].count("\n") + 1
+        direction = m.group(1)
+        findings.append(Finding(
+            path, lineno, 'WARN', 'input-port-reg', direction,
+            f"an `{direction}` port must never be declared `reg` — a net cannot "
+            f"be a driven variable; `{direction} reg` ELAB_ERRORs on icarus-13 "
+            f"(the official CVDP scorer). Only `output` ports may be `reg`. "
+            f"Write `{direction} [W-1:0] x;` (implicit wire). "
+            f"rtl_hygiene_lint --fix removes the redundant `reg`."))
+    return findings
+
+
+def autofix_input_reg_port(path: Path) -> Tuple[int, List[str]]:
+    """ORGANIC-20260703 — rewrite `input reg`/`inout reg` -> `input`/`inout`
+    in-place. The `reg` keyword on an input/inout port is illegal on icarus-13
+    (the CVDP scorer) and ALWAYS removable without semantic change (the port is a
+    net either way). Returns (count_fixed, [directions]); no-op (0, []) when
+    nothing matches. Only the code before an inline `//` comment is rewritten."""
+    raw = path.read_text(errors="replace")
+    count = 0
+    dirs: List[str] = []
+    out_parts: List[str] = []
+    for line in raw.splitlines(keepends=True):
+        cpos = line.find("//")
+        code = line if cpos < 0 else line[:cpos]
+        rest = "" if cpos < 0 else line[cpos:]
+        for m in _INPUT_REG_RE.finditer(code):
+            dirs.append(m.group(1))
+        new_code, n = _INPUT_REG_RE.subn(lambda m: m.group(1), code)
+        count += n
+        out_parts.append(new_code + rest)
+    if count:
+        path.write_text("".join(out_parts))
+    return count, dirs
+
+
 def lint_file(path: Path) -> List[Finding]:
     raw = path.read_text(errors='replace')
     src = strip_comments(raw)
     results = []
+    results += rule_input_port_reg(src, str(path))
     results += rule_undriven_and_unread(src, str(path))
     results += rule_case_coverage(src, str(path))
     results += rule_pulse_swallow(src, str(path))
@@ -5049,6 +5103,7 @@ def main():
         total = 0
         guarded_total = 0
         cast_total = 0
+        inreg_total = 0
         for f in args.files:
             p = Path(f)
             if not p.exists():
@@ -5056,6 +5111,13 @@ def main():
                 continue
             pre_text = p.read_text(errors="replace")
             pre_ok = _compiles(p) if _iv else False
+            # ORGANIC-20260703 — repair an input/inout port illegally declared
+            # `reg` (uncompilable on the icarus-13 CVDP scorer) BEFORE the other
+            # fixers; the `reg` on a net is always removable without semantics.
+            ir, irdirs = autofix_input_reg_port(p)
+            if ir:
+                print(f"{f}: removed illegal `reg` from {ir} input/inout "
+                      f"port(s): {irdirs}")
             n, names = autofix_uninit_registered_output(p)
             if n:
                 print(f"{f}: inserted `initial` power-up 0 for {names}")
@@ -5069,9 +5131,9 @@ def main():
             w, wlabels = autofix_width_cast(p)
             if w:
                 print(f"{f}: inserted value-identical width cast(s): {wlabels}")
-            if _iv and pre_ok and (n or g or w) and not _compiles(p):
+            if _iv and pre_ok and (ir or n or g or w) and not _compiles(p):
                 p.write_text(pre_text)
-                n = g = w = 0
+                ir = n = g = w = 0
                 print(f"WARN fix-reverted-noncompiling: {f} compiled before "
                       f"--fix but not after; ALL fixes reverted (#533 "
                       f"compile-neutrality net — file a backlog with this "
@@ -5079,9 +5141,11 @@ def main():
             total += n
             guarded_total += g
             cast_total += w
+            inreg_total += ir
         print(f"rtl_hygiene_lint --fix: repaired {total} reset-less registered output(s), "
               f"fenced {guarded_total} sim-only assertion construct(s), "
-              f"inserted {cast_total} value-identical width cast(s)")
+              f"inserted {cast_total} value-identical width cast(s), "
+              f"removed illegal `reg` from {inreg_total} input/inout port(s)")
         return 0
 
     sev_order = {'ERROR': 2, 'WARN': 1, 'INFO': 0}

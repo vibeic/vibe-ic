@@ -648,22 +648,58 @@ def _timing(prompt: str) -> Dict[str, object]:
 # --------------------------------------------------------------------------- #
 # public API
 # --------------------------------------------------------------------------- #
+# ORGANIC-20260703 — Verilog reserved words a port NAME can never legitimately
+# be. The prose port parser (`_bridge._prose_ports`) occasionally latches a bare
+# direction/type keyword as a port name (`output`, `bit`, `wire`, `reg`, …),
+# inventing a PHANTOM port that would false-reject a correct emit at the Tier-2/3
+# conformance gate. Any parsed port whose name is one of these is dropped.
+# chip-AGNOSTIC: pure Verilog-keyword set, no chip / vendor / SKU literal.
+_RESERVED_PORT_WORDS = frozenset({
+    "input", "output", "inout", "wire", "reg", "logic", "bit", "byte", "int",
+    "integer", "logic", "signed", "unsigned", "tri", "wand", "wor", "supply0",
+    "supply1", "var", "genvar", "parameter", "localparam", "module", "endmodule",
+    "begin", "end", "always", "assign", "posedge", "negedge", "real", "time",
+    "shortint", "longint",
+})
+
+
+def _prompt_skeleton_header_ports(prompt: str, top: str) -> List[dict]:
+    """Parse the PROMPT's own ```verilog module <top>( ... ) ANSI skeleton header
+    into [{name,dir,width}]. Complete / bug-fix problems carry this verbatim
+    header (a legitimate `input.prompt` fact) — its declared port list + widths
+    are AUTHORITATIVE and outrank prose keyword matching. Reuses the general
+    Verilog-span port parser. Returns [] when the prompt has no such header."""
+    if not top:
+        return []
+    try:
+        return _ctxrec._parse_one_span(prompt, top) or []
+    except Exception:
+        return []
+
+
 def _recover_cvdp_interface(record: dict, top: str):
     """CVDP-ADAPTER interface recovery — PROMPT + input.context ONLY (§4.05
     compliance: the CVDP model sees ONLY `input.prompt` + `input.context`; the
     hidden cocotb `dut.<sig>` test, the `.env` TOPLEVEL / VERILOG_SOURCES and the
-    golden `output` are OFF-LIMITS oracle and are NEVER read here). The ENFORCED
-    interface is composed from three submitter-visible sources:
-      * the input.context module HEADER (`_ctxrec.recover_interface`, header-only)
-        — names + dirs + (param-resolved) widths of the target module's ports;
-      * the prompt test-case table HEADER (`_bridge._table_interface`);
-      * the prompt prose Input/Output port block (`_bridge._prose_ports`).
+    golden `output` are OFF-LIMITS oracle and are NEVER read here).
+
+    ORGANIC-20260703 — the ENFORCED interface now PREFERS the design's own module
+    HEADER when the prompt/context supplies one, since a real port declaration
+    outranks prose keyword matching (which mis-parsed direction/type keywords as
+    phantom ports and read widths from an adjacent token). Two submitter-visible
+    header sources, CONTEXT winning on conflict:
+      * the input.context module HEADER (`_ctxrec.recover_interface`) — the
+        compiled header the harness itself uses;
+      * the PROMPT's ```verilog module <top>( ... ) ANSI skeleton.
+    Only when NEITHER header is present does it fall back to the prompt test-case
+    table HEADER / prose Input/Output block (reserved-word filtered so a mis-parsed
+    keyword never becomes a phantom port).
+
     Returns (skeleton_iface|None, inputs, outputs, params, param_defaults, table,
-    ctx_widths, tb) with the CVDP-adapter contract preserved but NO harness:
-    params=set() (no cocotb config-param set) and tb="" (no cocotb harness text),
-    so the general engine's placement + §3.9 gap classification reduces to a pure
-    PROMPT-COMPLETENESS assessment (is every prompt/context-declared port fully
-    width-resolved from prompt+context?)."""
+    ctx_widths, tb). ctx_widths carries the AUTHORITATIVE header width per port so
+    `extract()` can override any prose-guessed width with it. params=set() and
+    tb="" (no cocotb harness), so the general engine reduces to a pure
+    PROMPT-COMPLETENESS assessment."""
     prompt = record.get("prompt") or (record.get("input") or {}).get("prompt") or ""
     # parameter-DEFAULT table from the PROMPT + input.context ONLY (no tb).
     param_defaults = _W.param_defaults(prompt)
@@ -671,33 +707,64 @@ def _recover_cvdp_interface(record: dict, top: str):
         param_defaults.setdefault(_nm, _v)
     table = _bridge._test_case_table(prompt) or {}
 
-    # (a) the prompt's declared interface NAMES: a test-case table HEADER, else the
-    # prose Input/Output port block. NAMES only — widths are resolved by the engine
-    # from prompt prose / param-expr / the input.context header (ctx_widths) below.
-    i_names, o_names = _bridge._table_interface(prompt)
-    if not (i_names and o_names):
-        p_ins, p_outs = _bridge._prose_ports(prompt)
-        if not i_names:
-            i_names = [n for n, _ in p_ins]
-        if not o_names:
-            o_names = [n for n, _ in p_outs]
+    # (A) AUTHORITATIVE module-header ports — the PROMPT ```verilog module <top>(
+    # ANSI skeleton UNION the input.context module header, context winning on
+    # conflict, reserved-word names dropped. A real port declaration's name + dir
+    # + width outranks the prose parser (which mis-parses direction/type keywords
+    # as phantom ports and reads widths from an adjacent token).
+    header_order: List[str] = []
+    header_ports: Dict[str, dict] = {}
 
-    # (b) the PROVIDED input.context module HEADER (header-only, §3.9 interface
-    # fact): its declared ports JOIN the interface (names + dirs) and supply widths
-    # keyed by name. A port the prompt already named is not duplicated; a port only
-    # the context declares is still a legitimate prompt+context interface fact.
-    ctx_widths: Dict[str, int] = {}
+    def _absorb(p: dict, override: bool):
+        nm = p.get("name")
+        if not nm or nm.lower() in _RESERVED_PORT_WORDS:
+            return
+        if nm not in header_ports:
+            header_order.append(nm)
+            header_ports[nm] = p
+        elif override:
+            header_ports[nm] = p
+
     try:
-        for p in _ctxrec.recover_interface(record, top):
-            nm, d, w = p.get("name"), p.get("dir"), p.get("width")
-            if not nm:
-                continue
-            if w is not None:
-                ctx_widths[nm] = w
-            if nm not in i_names and nm not in o_names:
-                (o_names if d == "output" else i_names).append(nm)
+        for p in _prompt_skeleton_header_ports(prompt, top):
+            _absorb(p, override=False)          # prompt skeleton fills first
     except Exception:
         pass
+    try:
+        for p in _ctxrec.recover_interface(record, top):
+            _absorb(p, override=True)           # context header WINS on conflict
+    except Exception:
+        pass
+
+    ctx_widths: Dict[str, int] = {}
+    i_names: List[str] = []
+    o_names: List[str] = []
+    for nm in header_order:
+        p = header_ports[nm]
+        (o_names if p.get("dir") == "output" else i_names).append(nm)
+        if p.get("width") is not None:
+            ctx_widths[nm] = p["width"]
+
+    # (B) prompt test-case table HEADER / prose Input/Output block — MERGE the
+    # names the authoritative header does NOT already declare (a partial context
+    # header may omit a prompt-declared port; §4.05: a prose-only port is still a
+    # legitimate prompt fact and must not be dropped — but a reserved-word phantom
+    # never survives, and a header-declared port keeps its authoritative width).
+    t_ins, t_outs = _bridge._table_interface(prompt)
+    if not (t_ins and t_outs):
+        p_ins, p_outs = _bridge._prose_ports(prompt)
+        if not t_ins:
+            t_ins = [n for n, _ in p_ins]
+        if not t_outs:
+            t_outs = [n for n, _ in p_outs]
+    for nm in t_ins:
+        if nm and nm.lower() not in _RESERVED_PORT_WORDS \
+                and nm not in header_ports and nm not in i_names:
+            i_names.append(nm)
+    for nm in t_outs:
+        if nm and nm.lower() not in _RESERVED_PORT_WORDS \
+                and nm not in header_ports and nm not in o_names:
+            o_names.append(nm)
 
     return None, i_names, o_names, set(), param_defaults, table, ctx_widths, ""
 
@@ -720,10 +787,36 @@ def extract(record: dict) -> dict:
     skiface, c_ins, c_outs, params, param_defaults, table, ctx_widths, tb = \
         _recover_cvdp_interface(record, top)
 
-    return _eng.assess_spec(
+    spec = _eng.assess_spec(
         prompt, c_ins, c_outs, module_name=top, skeleton_iface=skiface,
         param_defaults=param_defaults, table=table, tb=tb, params=params,
         ctx_widths=ctx_widths, record_id=record.get("id"))
+
+    # ORGANIC-20260703 — CVDP-adapter conformance-spec hardening. The general
+    # placement engine resolves a port width from PROSE first and only falls back
+    # to ctx_widths, so a mis-read prose width (e.g. a `2-bit sync header` sentence
+    # sizing a 66-bit `decoder_data_in` to 2) can override the AUTHORITATIVE module
+    # header. Post-process the assessed interface so the gate spec is header-true:
+    #   (1) drop any port whose NAME is a Verilog reserved word (a keyword
+    #       mis-parsed as a port — `output`, `bit`, …);
+    #   (2) override a port's width with its AUTHORITATIVE header width (ctx_widths,
+    #       from the input.context header or the prompt ANSI skeleton) — a real
+    #       declaration outranks a prose keyword match. Param-expression ports
+    #       (width intentionally None → gate skips the literal check) are left as-is.
+    if isinstance(spec, dict) and spec.get("interface"):
+        _clean: List[dict] = []
+        for p in spec["interface"]:
+            nm = p.get("name")
+            if not nm or nm.lower() in _RESERVED_PORT_WORDS:
+                continue
+            if (nm in ctx_widths and p.get("width") is not None
+                    and p.get("source") not in ("param_expression_width",
+                                                 "param_override_width")
+                    and p.get("width") != ctx_widths[nm]):
+                p = {**p, "width": ctx_widths[nm], "source": "context_header_width"}
+            _clean.append(p)
+        spec["interface"] = _clean
+    return spec
 
 
 # --------------------------------------------------------------------------- #
