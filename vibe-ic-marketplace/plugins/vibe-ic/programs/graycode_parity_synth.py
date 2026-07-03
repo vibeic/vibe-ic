@@ -10,12 +10,14 @@ literal in the prose), so the bridge's numeric width-resolver leaves the bus
 UNRESOLVED and SKIPs. This module supplies exactly that missing deterministic
 emitter — GENERAL, §4.05 parse-or-SKIP, NO-CHEAT.
 
-REUSE of `cvdp_atomic_bridge`:
-  * `toplevel_name(record)`  — the module NAME the harness .env TOPLEVEL binds.
-  * `_cocotb_io(tb)`         — port NAMES + direction (driven=input / read=output),
-                               with cocotb PARAMETERS (ALL-CAPS) already filtered.
+REUSE of `cvdp_atomic_bridge` (all from the model-visible surface `input.prompt` +
+`input.context` — NEVER the hidden harness or golden, which are OFF-LIMITS oracle):
+  * `toplevel_name(record)`     — the module NAME stated in the prompt.
+  * `extract_interface(record, top)` — the port NAMES + directions from the prompt
+                                  skeleton header / prose port block / test-case
+                                  table (parameters ALL-CAPS already filtered).
   * composite / special-algebra SKIP guards (defence in depth).
-We do NOT re-implement name/direction extraction. We ADD the gray/parity OPERATION
+We do NOT re-implement name/interface extraction. We ADD the gray/parity OPERATION
 recognition, the PARAMETER-width interface model (buses are `[WIDTH-1:0]`), and the
 correct deterministic RTL emit.
 
@@ -42,8 +44,9 @@ WHAT THIS SOLVES
 §4.05 / NO-CHEAT (binding):
   * parse-or-SKIP: unstated direction / unstated-or-ambiguous parity sense /
     unexplained side-output / non-unique data bus => return None.
-  * NEVER read the golden RTL. Operation comes from the PROMPT PROSE; the interface
-    comes from the harness cocotb test (names+direction) + the prose (param decls).
+  * NEVER read the golden RTL or the hidden harness. Operation comes from the PROMPT
+    PROSE; the interface comes from the prompt+context (names via extract_interface)
+    + the prose (param decls). The hidden harness (cocotb/.env) is OFF-LIMITS oracle.
   * chip-AGNOSTIC: keyed on operation/interface vocabulary, never on a design name.
 
 API: solve(record: dict) -> Optional[str]   # emitted RTL (module == TOPLEVEL) | None
@@ -172,17 +175,24 @@ def _bus_width_param(prompt: str) -> Optional[Tuple[str, int]]:
 
 
 # --------------------------------------------------------------------------- #
-# interface (names + direction from cocotb; widths from the bus param)
+# interface (port names from the PROMPT+CONTEXT interface; widths from the bus param)
 # --------------------------------------------------------------------------- #
-def _io_names(record: dict) -> Optional[Tuple[List[str], List[str]]]:
-    files = _bridge._harness_files(record)
-    tb = _bridge._cocotb_test_text(files)
-    if not tb:
+def _io_names(record: dict, top: str) -> Optional[Tuple[List[str], List[str]]]:
+    """Input / output port NAMES sourced ONLY from `input.prompt` + `input.context`
+    via `cvdp_atomic_bridge.extract_interface` — never the hidden harness (cocotb
+    `dut.<sig>`, `.env`) or golden, which are OFF-LIMITS oracle. Returns
+    (input_names, output_names), or None when the interface is not prompt-derivable
+    (an honest §4.05 SKIP). The bus WIDTHS are NOT taken from here — they come from
+    the prose width parameter (`_bus_width_param`); this only supplies the names."""
+    iface = _bridge.extract_interface(record, top)
+    if not iface:
         return None
-    ins, outs = _bridge._cocotb_io(tb)
-    if not ins or not outs:
+    ins, outs = iface
+    in_names = [n for n, _ in ins]
+    out_names = [n for n, _ in outs]
+    if not in_names or not out_names:
         return None
-    return ins, outs
+    return in_names, out_names
 
 
 _SCALAR_NAME_RE = re.compile(
@@ -315,7 +325,7 @@ def solve(record: dict) -> Optional[str]:
     if _GRAY_COUNTER_RE.search(prompt):
         return None
 
-    names = _io_names(record)
+    names = _io_names(record, top)
     if names is None:
         return None
     in_names, out_names = names

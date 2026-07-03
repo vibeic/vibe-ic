@@ -3,25 +3,32 @@
 cvdp_complete_extract.extract(record) composes the shipped cvdp_atomic_bridge
 interface helpers + the v1.1.82 structural extractors into ONE complete spec
 dict, and assigns a per-record COMPLETENESS verdict:
-  COMPLETE                  — every harness-checked port placed + stated
+  COMPLETE                  — every PROMPT/CONTEXT-declared port placed + stated
                               structures captured;
-  INCOMPLETE_EXTRACTION_GAP — a fact IS in the prompt/harness but we missed it
+  INCOMPLETE_EXTRACTION_GAP — a fact IS in the prompt/context but we missed it
                               (ACTIONABLE; carries a recurring gap TYPE);
   INCOMPLETE_SPEC_ABSENT    — the fact is genuinely NOT in the prompt (the AI's
                               irreducible §3.9 domain).
+
+§4.05 CVDP COMPLIANCE (the load-bearing rule): the model sees ONLY
+`input.prompt` + `input.context`. The interface is recovered from the PROMPT's
+declared Input/Output ports (+ the input.context module header), NEVER from the
+hidden cocotb `dut.<sig>` test / `.env` TOPLEVEL / golden `output`. The
+EXTRACTION_GAP-vs-SPEC_ABSENT split is a pure PROMPT-COMPLETENESS assessment: is
+every port the PROMPT itself declares fully width-resolved from prompt+context?
 
 POSITIVE: a real-shaped record extracts a complete spec JSON with the expected
 fields (module_name, interface with resolved widths, structures, reset, ...) and
 is classified COMPLETE.
 
 CLASSIFIER: the EXTRACTION_GAP vs SPEC_ABSENT split is correct on hand-checked
-records — a port whose width is stated as a PARAMETER EXPRESSION (`[N-1:0]`) is an
-EXTRACTION_GAP; a port the cocotb drives but whose width the prompt never states
-is SPEC_ABSENT.
+records — a port whose width is stated as a PARAMETER EXPRESSION (`[N-1:0]`) with
+no derivable default is an EXTRACTION_GAP; a port the prompt declares but whose
+width the prompt never states is SPEC_ABSENT.
 
 §4.05: a field is emitted ONLY when structurally present — the interface comes
-from the cocotb dut.<sig> set + prose widths, never invented; a data port with no
-stated width is recorded as a GAP, never forced to a guessed width.
+from the prompt/context, never invented; a data port with no stated width is
+recorded as a GAP, never forced to a guessed width.
 
 CHIP-AGNOSTIC: renaming every identifier in a prompt yields the SAME verdict and
 the SAME number of interface ports / gaps.
@@ -42,9 +49,9 @@ import cvdp_complete_extract as CE  # noqa: E402
 
 # --------------------------------------------------------------------------- #
 # Real-shaped record builder (faithful to CVDP v1.1.0: input.prompt +
-# input.context{} + output.context{<rtl>:""} (EMPTY skeleton) + harness.files
-# with a .env carrying TOPLEVEL + a cocotb test_*.py). output.context is never
-# read for logic.
+# input.context{} + output.context{<rtl>:""} + a DECOY harness with a .env
+# TOPLEVEL + a cocotb test_*.py). The harness + output are OFF-LIMITS oracle and
+# are NEVER read by extract() — they are present only to prove that presence.
 # --------------------------------------------------------------------------- #
 def _make_record(top, prompt, cocotb_test, rid=None, rtl_path=None):
     rtl_path = rtl_path or f"rtl/{top}.sv"
@@ -66,25 +73,25 @@ def _make_record(top, prompt, cocotb_test, rid=None, rtl_path=None):
 
 
 # --------------------------------------------------------------------------- #
-# (1) POSITIVE — a fully-specified combinational adder: prose states each port's
-# width with an explicit `[hi:lo]` range; the cocotb test drives a/b/carry_in and
-# reads sum/carry_out. Every harness-checked port is placed -> COMPLETE.
+# (1) POSITIVE — a fully-specified combinational adder: the PROMPT declares each
+# port (### Inputs/Outputs) with an explicit `[hi:lo]` range on the data ports.
+# Every prompt-declared port is placed with a resolved width -> COMPLETE.
 # --------------------------------------------------------------------------- #
-ADDER_PROMPT = """Design a combinational module `adder8` that adds two operands.
+ADDER_PROMPT = """Design a combinational module named `adder8` that adds two operands.
 
-## Inputs and Outputs
+### Inputs:
+- a [7:0]: First operand.
+- b [7:0]: Second operand.
+- carry_in: a 1-bit carry input.
 
-| Name       | Width   | Description                       |
-|------------|---------|-----------------------------------|
-| `a [7:0]`  | 8 bits  | First operand.                    |
-| `b [7:0]`  | 8 bits  | Second operand.                   |
-| `carry_in` | 1 bit   | Carry input.                      |
-| `sum [7:0]`| 8 bits  | The 8-bit sum.                    |
-| `carry_out`| 1 bit   | Carry output.                     |
+### Outputs:
+- sum [7:0]: The 8-bit sum.
+- carry_out: a 1-bit carry output.
 
 The module performs `sum = a + b + carry_in` with `carry_out` the overflow bit.
 """
 
+# A DECOY cocotb test — extract() must IGNORE it (it is the OFF-LIMITS harness).
 ADDER_TB = """import cocotb
 from cocotb.triggers import Timer
 
@@ -103,13 +110,15 @@ async def test_adder8(dut):
 def test_positive_complete_spec_has_expected_fields():
     rec = _make_record("adder8", ADDER_PROMPT, ADDER_TB)
     spec = CE.extract(rec)
-    # the spec dict carries every promised structural key
+    # the spec dict carries every promised structural key (harness block is GONE —
+    # the cocotb signal sets are OFF-LIMITS oracle and are never re-attached).
     for key in ("id", "module_name", "interface", "operation_family", "params",
                 "structures", "reset", "timing", "byte_order", "completeness",
-                "gaps", "harness"):
+                "gaps"):
         assert key in spec, f"missing top-level key {key}"
+    assert "harness" not in spec, "the cocotb harness block must NOT be re-attached"
     assert spec["module_name"] == "adder8"
-    # interface placed every cocotb-driven port with a RESOLVED width
+    # interface placed every PROMPT-declared port with a RESOLVED width
     names = {p["name"]: p for p in spec["interface"]}
     assert {"a", "b", "carry_in", "sum", "carry_out"} <= set(names)
     assert names["a"]["width"] == 8 and names["a"]["dir"] == "input"
@@ -124,18 +133,23 @@ def test_positive_complete_spec_has_expected_fields():
 
 
 # --------------------------------------------------------------------------- #
-# (2) CLASSIFIER — EXTRACTION_GAP: the width IS in the prompt but as a PARAMETER
-# EXPRESSION (`[N-1:0]`) our literal reader does not resolve. The cocotb test
-# reads N via int(dut.N.value) (so N is a parameter, NOT a port). The driven data
-# port `in_vec` has a parameter-expression width -> EXTRACTION_GAP, type
-# param_expression_width. This is the dominant actionable bucket.
+# (2) CLASSIFIER — a width IS in the prompt as a PARAMETER EXPRESSION (`[N-1:0]`)
+# over PROMPT-declared config parameters (`parameter N`, `parameter M`). Those
+# ports are placed with width=None and the width is FULLY specified as
+# PARAMETERISED (the AI writes `[N-1:0]`, correct under every override) -> the
+# record is COMPLETE, NOT a gap. A single-token config parameter is never a port.
 # --------------------------------------------------------------------------- #
-PARAM_WIDTH_PROMPT = """Design a parameterized priority encoder `penc`.
+PARAM_WIDTH_PROMPT = """Design a parameterized priority encoder named `penc`.
 
-## Inputs and Outputs
-- **Inputs**: `in_vec [N-1:0]` - the `N`-bit input vector to encode.
-- **Outputs**: `idx [M-1:0]` - the index of the highest set bit.
-- `valid` - 1 when any input bit is set.
+    parameter N,
+    parameter M,
+
+### Inputs:
+- in_vec [N-1:0]: the N-bit input vector to encode.
+
+### Outputs:
+- idx [M-1:0]: the index of the highest set bit.
+- valid: 1 when any input bit is set.
 """
 
 PARAM_WIDTH_TB = """import cocotb
@@ -155,12 +169,10 @@ async def test_penc(dut):
 def test_param_expression_over_config_params_is_parameterized_complete():
     rec = _make_record("penc", PARAM_WIDTH_PROMPT, PARAM_WIDTH_TB)
     spec = CE.extract(rec)
-    # N and M are config parameters (read via int(dut.X.value)), NOT ports
-    assert "N" in spec["harness"]["params"]
-    assert "M" in spec["harness"]["params"]
     by = {p["name"]: p for p in spec["interface"]}
+    # N and M are PROMPT-declared config parameters, NOT ports
     assert "N" not in by and "M" not in by, \
-        "single-letter int(dut.X.value) parameter must not become a port"
+        "a declared `parameter N` must not become a port"
     # valid is a 1-bit control by convention
     assert by.get("valid", {}).get("width") == 1
     # in_vec / idx have a param-expression width over ONLY config params (N, M) ->
@@ -176,9 +188,9 @@ def test_param_expression_over_config_params_is_parameterized_complete():
 
 def test_param_expression_over_unknown_symbol_stays_a_gap():
     # the SAME shape but the width parameter is NOT a recognised config param
-    # (never declared, never harness-driven) -> we genuinely do not know the width,
-    # so it stays an honest EXTRACTION_GAP (NOT falsely COMPLETE, NOT fabricated).
-    prompt = "Design `m`.\n- `dout [MYSTERY-1:0]`: the output bus.\n"
+    # (never declared) -> we genuinely do not know the width, so it stays an honest
+    # EXTRACTION_GAP (NOT falsely COMPLETE, NOT fabricated).
+    prompt = "Design the module named `m`.\n\n### Outputs:\n- dout [MYSTERY-1:0]: the output bus.\n"
     tb = ("import cocotb\n@cocotb.test()\nasync def test_m(dut):\n"
           "    _ = dut.dout.value\n")
     spec = CE.extract(_make_record("m", prompt, tb))
@@ -189,13 +201,20 @@ def test_param_expression_over_unknown_symbol_stays_a_gap():
 
 
 # --------------------------------------------------------------------------- #
-# (3) CLASSIFIER — SPEC_ABSENT: the cocotb test drives a DATA port the prompt
-# never states a width for (no `[hi:lo]`, no `N-bit`, no table column, no param
-# expression). That width is the AI's irreducible domain -> SPEC_ABSENT.
+# (3) CLASSIFIER — SPEC_ABSENT: the prompt DECLARES a DATA port but states no
+# width for it (no `[hi:lo]`, no `N-bit`, no table column, no param expression).
+# That width is the AI's irreducible domain -> SPEC_ABSENT.
 # --------------------------------------------------------------------------- #
-ABSENT_PROMPT = """Design a module `passthru` that registers its data input to its
-data output on each clock. The reset clears the output. The data signals carry an
-opaque payload between two endpoints.
+ABSENT_PROMPT = """Design a module named `passthru` that registers its data input to its
+data output on each clock. The reset clears the output.
+
+### Inputs:
+- clk: the clock.
+- rst: reset clears the output.
+- data_in: an opaque payload input of unstated width.
+
+### Outputs:
+- data_out: the opaque payload output.
 """
 
 ABSENT_TB = """import cocotb
@@ -213,8 +232,8 @@ async def test_passthru(dut):
 def test_classifier_width_not_stated_is_spec_absent():
     rec = _make_record("passthru", ABSENT_PROMPT, ABSENT_TB)
     spec = CE.extract(rec)
-    # rst is driven (dut.rst.value=...) so it IS a cocotb signal; it is placed
-    # 1-bit by the reset convention. The DATA ports are width-unresolved -> gaps.
+    # rst is a declared control -> placed 1-bit by the reset convention. The DATA
+    # ports are width-unresolved -> gaps (never forced to a guessed width).
     iface = {p["name"]: p for p in spec["interface"]}
     assert iface.get("rst", {}).get("width") == 1
     assert iface["rst"]["source"] == "clk_rst_convention"
@@ -226,20 +245,25 @@ def test_classifier_width_not_stated_is_spec_absent():
 
 
 # --------------------------------------------------------------------------- #
-# (4) §4.05 — a field is emitted ONLY when structurally present. The interface is
-# never fabricated: a port the cocotb does not reference is never invented, and a
-# data port with no stated width is a GAP, not a phantom width.
+# (4) §4.05 — a field is emitted ONLY when structurally present. Every placed
+# port is a PROMPT/CONTEXT-declared signal (echoed in interface_source), never a
+# harness peek; a data port with no stated width is a GAP, not a phantom width.
 # --------------------------------------------------------------------------- #
-def test_no_fabrication_only_cocotb_signals_become_ports():
+def test_no_fabrication_only_prompt_signals_become_ports():
     rec = _make_record("adder8", ADDER_PROMPT, ADDER_TB)
     spec = CE.extract(rec)
-    cocotb_sigs = set(spec["harness"]["cocotb_inputs"]) | set(spec["harness"]["cocotb_outputs"])
+    # the enforced interface comes ONLY from prompt+context (interface_source echoes
+    # exactly the names the adapter supplied to the general engine).
+    src = spec["interface_source"]
+    declared = set(src["inputs"]) | set(src["outputs"])
     for p in spec["interface"]:
-        assert p["name"] in cocotb_sigs, \
-            f"port {p['name']} is not referenced by the cocotb harness — fabricated"
+        assert p["name"] in declared, \
+            f"port {p['name']} is not a prompt/context-declared signal — fabricated"
         # every placed port carries a structural SOURCE tag (no source == guess)
         assert p["source"] in (
-            "skeleton_header", "explicit_range", "prose_width", "test_case_table",
+            "skeleton_header", "context_header", "explicit_range", "prose_width",
+            "test_case_table", "range_before_name", "param_expression_width",
+            "param_override_width", "grouped_bullet_width", "scalar_declared",
             "clk_rst_convention", "one_bit_convention"), p["source"]
 
 
@@ -292,14 +316,20 @@ def test_chip_agnostic_rename_invariant():
 
 # --------------------------------------------------------------------------- #
 # (6) range-before-name RESOLUTION: a `[1:0] name` declaration (range PRECEDES the
-# identifier) is now RESOLVED to its literal width and PLACED (source
+# identifier) is RESOLVED to its literal width and PLACED (source
 # range_before_name) — it is no longer a gap. The record stays SPEC_ABSENT here
 # ONLY because a DIFFERENT port (`data_o`) is explicitly width-unspecified.
 # --------------------------------------------------------------------------- #
-RANGE_BEFORE_PROMPT = """Design `respmod`. The response port is declared as
-**`[1:0] resp_o`**: a two-bit field indicating success or error, and `data_o`
-carries the response payload (width unspecified). The `valid_o` strobe is 1 when
-the response is ready.
+RANGE_BEFORE_PROMPT = """Design the module named `respmod`. The response port is declared
+`[1:0] resp_o`: a two-bit field indicating success or error.
+
+### Inputs:
+- req_i: request input.
+
+### Outputs:
+- resp_o: the status field, declared `[1:0] resp_o`.
+- data_o: carries the response payload (width unspecified).
+- valid_o: 1 when the response is ready.
 """
 
 RANGE_BEFORE_TB = """import cocotb
@@ -334,8 +364,14 @@ def test_range_before_name_now_resolves_and_is_placed():
 # (7) STRUCTURE COMPOSITION — an enum-mode prompt surfaces enum_modes in the spec
 # (the layer really does compose the v1.1.82 extractors, not just the interface).
 # --------------------------------------------------------------------------- #
-ENUM_PROMPT = """Design `opsel`, a 3-bit operation selector `op [2:0]` driving a
-`result [7:0]` output from operand `a [7:0]`.
+ENUM_PROMPT = """Design the module named `opsel`, a 3-bit operation selector.
+
+### Inputs:
+- op [2:0]: operation select.
+- a [7:0]: operand.
+
+### Outputs:
+- result [7:0]: the result.
 
 | op     | Operation  |
 |--------|------------|
@@ -373,21 +409,25 @@ def test_structures_compose_enum_extractor():
 
 
 # =========================================================================== #
-# EXTRACTION_GAP CLOSURE (v1.1.92) — the remaining in-prompt facts the layer
-# missed BEYOND widths. Each test closes one recurring gap-TYPE against a real
-# structural source, and the §4.05 pair proves a GENUINELY-absent fact STAYS a gap.
+# EXTRACTION_GAP CLOSURE (v1.1.92) — the in-prompt facts the layer must recover
+# BEYOND a plain literal width. Each test closes one recurring gap-TYPE against a
+# real PROMPT structural source, and the §4.05 pair proves a GENUINELY-absent
+# fact STAYS a gap.
 # =========================================================================== #
 
 # --------------------------------------------------------------------------- #
-# (8) COCOTB-IO RECOVERY — an output the harness reads ONLY through an
-# assert-comparison (`dut.X.value == k`), an f-string (`{dut.X.value}`), a
-# bracket access (`dut['in'].value`), or an indexed read leaves the bridge's
-# `_cocotb_io` empty. The recovery reader binds these so the interface is no
-# longer empty. The bracket form is REQUIRED for a Python-keyword port (`in`).
+# (8) PROMPT-DECLARED INTERFACE — a prompt with an explicit ### Inputs/Outputs
+# port block yields the full interface with resolved widths. (The `in`/`out`
+# names are Python keywords in a cocotb TB — irrelevant now that the interface
+# comes from the PROMPT, not the harness.)
 # --------------------------------------------------------------------------- #
-IO_RECOVER_PROMPT = """Design `encoder8` — an 8-to-3 priority encoder.
-The 8-bit input `in [7:0]` carries the request bits; the 3-bit output `out [2:0]`
-is the index of the highest set bit.
+IO_RECOVER_PROMPT = """Design the module named `encoder8` — an 8-to-3 priority encoder.
+
+### Inputs:
+- in [7:0]: the request bits.
+
+### Outputs:
+- out [2:0]: the index of the highest set bit.
 """
 
 IO_RECOVER_TB = """import cocotb
@@ -395,33 +435,39 @@ from cocotb.triggers import Timer
 
 @cocotb.test()
 async def test_encoder8(dut):
-    dut['in'].value = 0b00010000          # bracket-driven (in is a py keyword)
+    dut['in'].value = 0b00010000
     await Timer(1, unit='ns')
-    dut._log.info(f"out = {dut.out.value}")   # f-string READ (+ a non-port attr)
-    assert dut.out.value == 4              # assert-comparison READ
+    dut._log.info(f"out = {dut.out.value}")
+    assert dut.out.value == 4
 """
 
 
-def test_cocotb_io_recovery_assert_fstring_bracket_forms():
+def test_prompt_declared_interface_resolves():
     rec = _make_record("encoder8", IO_RECOVER_PROMPT, IO_RECOVER_TB)
     spec = CE.extract(rec)
     names = {p["name"]: p for p in spec["interface"]}
-    # the bracket-driven `in` is an INPUT; the assert/f-string-read `out` an OUTPUT
     assert "in" in names and names["in"]["dir"] == "input"
     assert "out" in names and names["out"]["dir"] == "output"
     assert names["in"]["width"] == 8 and names["out"]["width"] == 3
-    # the cocotb framework attribute `_log` is NEVER promoted to a port
+    # the cocotb framework attribute `_log` (harness-only) is never a port
     assert "_log" not in names
     assert spec["completeness"] == "COMPLETE", spec["completeness_reason"]
 
 
 # --------------------------------------------------------------------------- #
-# (9) §4.05 — a recovered `dut.reg.value == k` READ that the prompt NEVER cites as
-# an interface signal is an INTERNAL white-box register, NOT a port. It must NOT be
-# promoted to the interface (no fabricated port).
+# (9) §4.05 — an INTERNAL register the prompt NEVER declares as a port is never
+# promoted to the interface (it only ever appeared as a white-box cocotb probe,
+# which is OFF-LIMITS). Only the PROMPT-declared ports are placed.
 # --------------------------------------------------------------------------- #
-WHITEBOX_PROMPT = """Design `divider` that produces a divided clock `clk_out` from
-the input clock. Reset `rst_n` clears the output.
+WHITEBOX_PROMPT = """Design the module named `divider` that produces a divided clock
+`clk_out` from the input clock. Reset `rst_n` clears the output.
+
+### Inputs:
+- clk: the input clock.
+- rst_n: active-low reset.
+
+### Outputs:
+- clk_out: the divided clock.
 """
 
 WHITEBOX_TB = """import cocotb
@@ -441,10 +487,10 @@ def test_internal_register_probe_is_not_promoted_to_a_port():
     rec = _make_record("divider", WHITEBOX_PROMPT, WHITEBOX_TB)
     spec = CE.extract(rec)
     names = {p["name"] for p in spec["interface"]}
-    # the internal counter (no prompt mention, no width, no convention) is dropped
+    # the internal counter appears ONLY in the (off-limits) cocotb probe, never the
+    # prompt -> it is not a port (§4.05: the harness is never read at all).
     assert "internal_div_counter" not in names, \
         "a white-box internal register must NOT become an interface port (§4.05)"
-    # clk_out IS a corroborated port — a clock output is 1-bit by convention
     iface = {p["name"]: p for p in spec["interface"]}
     assert iface.get("clk_out", {}).get("width") == 1
     assert iface["clk_out"]["source"] == "clk_rst_convention"
@@ -454,7 +500,12 @@ def test_internal_register_probe_is_not_promoted_to_a_port():
 # (10) GROUPED-BULLET WIDTH — a width stated ONCE in a `(N-bit each)` group header
 # applies to the bulleted port names beneath it. The members inherit the width.
 # --------------------------------------------------------------------------- #
-GROUP_WIDTH_PROMPT = """Design `ctrl` from a 6-bit feedback `i_fb [5:0]`.
+GROUP_WIDTH_PROMPT = """Design the module named `ctrl` from a 6-bit feedback.
+
+### Inputs:
+- i_fb [5:0]: 6-bit feedback.
+
+### Outputs:
 
 **Heating Control (1-bit each)**
 - `o_heat_hi`
@@ -490,23 +541,22 @@ def test_grouped_bullet_width_binds_header_to_members():
 
 # --------------------------------------------------------------------------- #
 # (11) PROSE / PAREN PARAMETER DEFAULTS — a width param stated as
-# "(Default 4, must be > 0)" / "Default value 4" / "`P = 8` (default ...)" /
-# "default is **8 bits**" was missed (the old readers required `)` right after the
-# int, "is/of" connectors, the `parameter` keyword, or no markdown decoration). The
-# port's `[P-1:0]` width now resolves to the stated default.
+# "(Default 4, must be > 0)" / "`P = 8` (default ...)" / "default is **8 bits**"
+# resolves the port's `[P-1:0]` width to the stated default.
 # --------------------------------------------------------------------------- #
-PROSE_DEFAULT_PROMPT = """Design `widthed`.
+PROSE_DEFAULT_PROMPT = """Design the module named `widthed`.
 
 ## Parameters
 - `WID` (Default 4, must be greater than 0): bit-width of the data.
 - `GPIO_WIDTH = 8` (default, configurable): number of pins.
-- `DEPTHP`: depth of the buffer. Default value 16.
 - `p_data_width`: configurable data width, default is **8 bits**.
 
-## Ports
-- `data [WID-1:0]`: the data word.
-- `gpio [GPIO_WIDTH-1:0]`: the gpio pins.
-- `bus` (`p_data_width` bit): the bus payload.
+### Inputs:
+- data [WID-1:0]: the data word.
+- gpio [GPIO_WIDTH-1:0]: the gpio pins.
+
+### Outputs:
+- bus [p_data_width-1:0]: the bus payload.
 """
 
 PROSE_DEFAULT_TB = """import cocotb
@@ -529,7 +579,7 @@ def test_prose_and_paren_parameter_defaults_resolve_widths():
     assert iface["data"]["width"] == 4
     # "`GPIO_WIDTH = 8` (default ...)" -> GPIO_WIDTH=8 -> gpio is 8-bit
     assert iface["gpio"]["width"] == 8
-    # "(`p_data_width` bit)" + "default is **8 bits**" -> bus is 8-bit
+    # "default is **8 bits**" -> p_data_width=8 -> bus is 8-bit
     assert iface["bus"]["width"] == 8
     # every resolved width is anchored to a parameter expression, not invented
     for n in ("data", "gpio", "bus"):
@@ -538,12 +588,11 @@ def test_prose_and_paren_parameter_defaults_resolve_widths():
 
 
 # --------------------------------------------------------------------------- #
-# (12) DERIVED-localparam + spec-notation-`x` multiply + backtick-in-bracket — a
-# port sized by a derived `localparam` (the `localparam` keyword was silently
-# dropped), by a spec `A x B x C` multiply, or by a backtick-decorated bracket
-# expression now resolves to the computed default.
+# (12) DERIVED-localparam + spec-notation-`x` multiply + bracket expression — a
+# port sized by a derived `localparam`, by a spec `A x B x C` multiply, or by a
+# bracket expression now resolves to the computed default.
 # --------------------------------------------------------------------------- #
-DERIVED_PROMPT = """Design `crossbar`.
+DERIVED_PROMPT = """Design the module named `crossbar`.
 
 ```
 parameter DATA_W = 8,
@@ -555,10 +604,12 @@ localparam DATA_W_IN = (DATA_W + $clog2(NPORTS))
 - `RW` (default = 16): row width.
 - `NS` (default = 4): element count.
 
-## Ports
-- `in0 [DATA_W_IN-1:0]`: input data (sized by the DERIVED localparam).
-- `flat [ (RW x NS) - 1 : 0]`: a flattened vector using a spec `x` multiply.
-- `o_sum [(`RW` + $clog2(`NS`)) - 1 : 0]`: backtick-decorated bracket expression.
+### Inputs:
+- in0 [DATA_W_IN-1:0]: input data (sized by the DERIVED localparam).
+- flat [ (RW x NS) - 1 : 0]: a flattened vector using a spec `x` multiply.
+
+### Outputs:
+- o_sum [(RW + $clog2(NS)) - 1 : 0]: a summed bracket expression.
 """
 
 DERIVED_TB = """import cocotb
@@ -573,7 +624,7 @@ async def test_crossbar(dut):
 """
 
 
-def test_derived_localparam_x_multiply_and_backtick_bracket_resolve():
+def test_derived_localparam_x_multiply_and_bracket_resolve():
     rec = _make_record("crossbar", DERIVED_PROMPT, DERIVED_TB)
     spec = CE.extract(rec)
     iface = {p["name"]: p for p in spec["interface"]}
@@ -581,7 +632,7 @@ def test_derived_localparam_x_multiply_and_backtick_bracket_resolve():
     assert iface["in0"]["width"] == 10
     # spec `x` multiply: RW x NS = 16 x 4 = 64 -> flat is 64-bit
     assert iface["flat"]["width"] == 64
-    # backtick-in-bracket: (RW + clog2(NS)) = 16 + 2 = 18 -> o_sum is 18-bit
+    # bracket expr: (RW + clog2(NS)) = 16 + 2 = 18 -> o_sum is 18-bit
     assert iface["o_sum"]["width"] == 18
     assert spec["completeness"] == "COMPLETE", spec["completeness_reason"]
 
@@ -591,8 +642,10 @@ def test_derived_localparam_x_multiply_and_backtick_bracket_resolve():
 # stated default STAYS a gap (the width form is present but unresolvable; never a
 # fabricated default). The record is EXTRACTION_GAP, not silently COMPLETE.
 # --------------------------------------------------------------------------- #
-ABSENT_DEFAULT_PROMPT = """Design `gpio2` (a modification of an earlier gpio).
-- `gpio [GPIO_WIDTH-1:0]`: bidirectional GPIO pins.
+ABSENT_DEFAULT_PROMPT = """Design the module named `gpio2` (a modification of an earlier gpio).
+
+### Inputs:
+- gpio [GPIO_WIDTH-1:0]: bidirectional GPIO pins.
 
 The GPIO_WIDTH parameter is unchanged from the base design (no default restated).
 """
@@ -611,14 +664,14 @@ async def test_gpio2(dut):
 def test_param_expression_with_no_stated_default_is_placed_width_unknown():
     rec = _make_record("gpio2", ABSENT_DEFAULT_PROMPT, ABSENT_DEFAULT_TB)
     spec = CE.extract(rec)
-    # GPIO_WIDTH has no derivable default. The PORT is real (harness-driven), so it
-    # is PLACED — but with width=None (UNKNOWN), never a fabricated/guessed literal
+    # GPIO_WIDTH has no derivable default. The PORT is prompt-declared, so it is
+    # PLACED — but with width=None (UNKNOWN), never a fabricated/guessed literal
     # and never a coincidental same-line prose number. The width stays an honest
     # gap. (Step-2.7 §4.05 fix: dropping the port emptied the interface and dropped
     # the record to an un-gateable tier; grabbing a prose literal over-claimed a
     # wrong width. Placing it width=None lets the gate enforce presence+dir only.)
     by = {p["name"]: p for p in spec["interface"]}
-    assert "gpio" in by, "a real harness port must be placed even when its width is unknown"
+    assert "gpio" in by, "a real prompt-declared port must be placed even when its width is unknown"
     assert by["gpio"]["width"] is None, \
         "a param-expression width with no stated default must NOT be fabricated"
     assert spec["completeness"] == "INCOMPLETE_EXTRACTION_GAP"
@@ -628,13 +681,19 @@ def test_param_expression_with_no_stated_default_is_placed_width_unknown():
 
 
 # --------------------------------------------------------------------------- #
-# (14) §4.05 ADVERSARIAL — a recovered output port whose width the prompt genuinely
-# never states (only example VALUES, no `[hi:lo]` / `N-bit` / param) STAYS a
-# SPEC_ABSENT gap. The port is surfaced (real harness signal) but its width is the
-# AI's irreducible domain — never a guessed width.
+# (14) §4.05 ADVERSARIAL — a prompt-declared output whose width the prompt
+# genuinely never states (only example VALUES, no `[hi:lo]` / `N-bit` / param)
+# STAYS a SPEC_ABSENT gap. The width is the AI's irreducible domain — never a
+# guessed width.
 # --------------------------------------------------------------------------- #
-ABSENT_WIDTH_PROMPT = """Design `ascii_gen` that converts a character to its ASCII
-code. The output `ascii_out` carries the code. Example outputs: 65, 49, 98.
+ABSENT_WIDTH_PROMPT = """Design the module named `ascii_gen` that converts a character to
+its ASCII code.
+
+### Inputs:
+- char_in [7:0]: the input character.
+
+### Outputs:
+- ascii_out: carries the code. Example outputs: 65, 49, 98.
 """
 
 ABSENT_WIDTH_TB = """import cocotb
@@ -651,9 +710,10 @@ async def test_ascii_gen(dut):
 def test_recovered_output_with_unstated_width_stays_spec_absent():
     rec = _make_record("ascii_gen", ABSENT_WIDTH_PROMPT, ABSENT_WIDTH_TB)
     spec = CE.extract(rec)
-    # ascii_out is a real harness-read output, surfaced by the recovery, BUT its
-    # width is never stated (only example values) -> a SPEC_ABSENT gap, not a guess.
-    assert "ascii_out" in (set(spec["harness"]["cocotb_outputs"]))
+    # ascii_out is a prompt-DECLARED output, BUT its width is never stated (only
+    # example values) -> a SPEC_ABSENT gap, not a guess. It is surfaced in the
+    # supplied interface (interface_source) but NOT placed with a fabricated width.
+    assert "ascii_out" in set(spec["interface_source"]["outputs"])
     iface = {p["name"] for p in spec["interface"]}
     assert "ascii_out" not in iface, "an unstated width must not be fabricated"
     assert spec["completeness"] == "INCOMPLETE_SPEC_ABSENT", spec["completeness_reason"]
@@ -661,7 +721,7 @@ def test_recovered_output_with_unstated_width_stays_spec_absent():
 
 
 # --------------------------------------------------------------------------- #
-# (15) CHIP-AGNOSTIC — the new gap-closures key on STRUCTURE, never a design name.
+# (15) CHIP-AGNOSTIC — the gap-closures key on STRUCTURE, never a design name.
 # Renaming the module + every identifier in the grouped-bullet-width record yields
 # the SAME widths and the SAME COMPLETE verdict.
 # --------------------------------------------------------------------------- #

@@ -8,22 +8,20 @@ oracle. So the alias TARGET is derived from the PROMPT: the literal
 ``\`\`\`verilog module <X>(`` code fence that 98.5% (66/67) of skeleton-bearing
 CVDP prompts carry (`cvdp_gate.skeleton_module_name_from_prompt`). It is a
 legitimate `input.prompt` fact and is the ONLY source the compliant gate uses;
-`load_harness_toplevels` / `harness_toplevel_from_dataset` are OFF-LIMITS-LEGACY
-dead code, NOT wired into the gate flow.
+the former harness-`.env` readers `load_harness_toplevels` /
+`harness_toplevel_from_dataset` have been DELETED (zero harness readers remain).
 
 This test pins the COMPLIANT behaviour: the alias top comes from the prompt
 skeleton (asserted against the real `cvdp_gate.skeleton_module_name_from_prompt`),
-the OFF-LIMITS loader stays empty/unwired, and the alias wrapper's own port-name
-guard rejects false-positives (the wrapper connects `.name(...)`, so a wrong top
-with mismatched ports silently no-ops under iverilog at -s time).
+the deleted harness loaders are confirmed gone, and the alias wrapper's own
+port-name guard rejects false-positives (the wrapper connects `.name(...)`, so a
+wrong top with mismatched ports silently no-ops under iverilog at -s time).
 
 Run:  python3 -m py_compile programs/tests/test_v1_2_44_prompt_skeleton_fallback.py
 -or-  python3 -m pytest -q programs/tests/test_v1_2_44_prompt_skeleton_fallback.py
 """
-import json
 import os
 import sys
-import tempfile
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 PROGRAMS = os.path.dirname(THIS_DIR)
@@ -54,9 +52,10 @@ def test_skeleton_rejects_padded_fences_no_newline():
     assert rx.search("```verilog module x(...);\n```") is None
 
 
-# ── 2. OFF-LIMITS-LEGACY loader: empty dataset → empty dict (retained regression)
-def test_offlimits_loader_returns_empty_when_dataset_path_missing():
-    assert A.load_harness_toplevels("/nonexistent/path/cvdp.jsonl") == {}
+# ── 2. the OFF-LIMITS harness loaders are DELETED (zero harness readers) ───────
+def test_offlimits_harness_loaders_are_deleted():
+    assert not hasattr(A, "load_harness_toplevels")
+    assert not hasattr(A, "harness_toplevel_from_dataset")
 
 
 # ── 3. COMPLIANT PRIMARY source: the alias top is the PROMPT skeleton ──────────
@@ -81,15 +80,10 @@ def test_alias_top_is_prompt_skeleton_primary():
     assert tops.get("p1") == "ripple4", tops
     assert "p2" not in tops
     assert "p3" not in tops
-    # and the OFF-LIMITS harness loader is NOT what supplies the top: a prompts
-    # JSONL carrying no harness.files yields an empty legacy map, so the skeleton
-    # is the sole contributor.
-    with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, "prompts.jsonl")
-        with open(path, "w") as f:
-            for rid, text in prompts.items():
-                f.write(json.dumps({"id": rid, "prompt": text}) + "\n")
-        assert A.load_harness_toplevels(path) == {}
+    # and NO harness loader can supply the top: the OFF-LIMITS harness-`.env`
+    # readers have been DELETED, so the prompt skeleton is the SOLE contributor.
+    assert not hasattr(A, "load_harness_toplevels")
+    assert not hasattr(A, "harness_toplevel_from_dataset")
 
 
 # ── 4. alias wrapper — the lowered surface the helper feeds in v1.2.44 ─────────

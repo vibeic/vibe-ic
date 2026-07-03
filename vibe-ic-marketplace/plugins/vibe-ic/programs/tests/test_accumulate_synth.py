@@ -1,12 +1,13 @@
 """test_accumulate_synth.py — the CVDP sequential ACCUMULATOR / running-op
 deterministic solver.
 
-accumulate_synth.solve(record) reads the module name from the harness
-TOPLEVEL, reads the interface from the PROMPT's own `### Inputs/Outputs` markdown
-list (never the golden RTL), PARSES the reset polarity/sync + the data width + the
+accumulate_synth.solve(record) reads the module name from input.prompt +
+input.context ONLY (via the bridge — the harness `.env` TOPLEVEL is an OFF-LIMITS
+oracle), reads the interface from the PROMPT's own `### Inputs/Outputs` markdown list
+(never the golden RTL), PARSES the reset polarity/sync + the data width + the
 operation + (for a moving average) the window/divisor, and emits deterministic
-SEQUENTIAL RTL named per TOPLEVEL — else SKIP (None) on ANY unstated/ambiguous
-governing fact.
+SEQUENTIAL RTL named per the prompt — else SKIP (None) on ANY unstated/ambiguous
+governing fact (including a module name absent from the prompt/context).
 
 POSITIVES (each SOLVES + is FUNCTIONALLY correct against an iverilog clocked TB
 driven by a sequence GENERATED HERE — not copied from any prompt table — so the
@@ -29,8 +30,8 @@ check proves FUNCTION, not table memorization; gated on the iverilog binary):
   * a "modify / complete the existing RTL" DELTA task.
 
 CHIP-AGNOSTIC: the solver keys only on operation/structure words + role-conventional
-port names, never on a design name or a record id. The SAME prompt under any
-TOPLEVEL solves identically and the emitted module is named per TOPLEVEL.
+port names, never on a design name or a record id. The SAME prompt with any module
+name solves identically and the emitted module is named per the prompt/context.
 """
 from __future__ import annotations
 
@@ -61,9 +62,13 @@ _DATASET = Path(
 # --------------------------------------------------------------------------- #
 def _rec(top, prompt, *, input_context=None, rtl_path=None):
     rtl_path = rtl_path or f"rtl/{top}.sv"
+    # The module name is a PROMPT fact (compliant source). The harness `.env`
+    # TOPLEVEL is kept in the fixture but is an OFF-LIMITS oracle the solver must
+    # never read — the name comes ONLY from input.prompt (via the bridge).
+    named = f"Design the module `{top}`.\n\n{prompt}"
     return {
         "id": f"test_{top}",
-        "input": {"prompt": prompt, "context": input_context or {}},
+        "input": {"prompt": named, "context": input_context or {}},
         "output": {"response": "", "context": {rtl_path: ""}},
         "harness": {"files": {"src/.env": (
             "SIM             = icarus\n"
@@ -80,6 +85,19 @@ def _dataset_record(rid):
         if r.get("id") == rid:
             return r
     return None
+
+
+def _with_prompt_name(rec, top):
+    """Clone `rec` and state the module name in input.prompt in a bridge-extractable
+    form. The CVDP moving_average prompt already says 'the Module `moving_average`',
+    but the bridge's name regex is case-sensitive; restating it as 'module `X`' keeps
+    the name a PROMPT fact — NEVER the OFF-LIMITS harness `.env` TOPLEVEL — and lets
+    the same record be re-bound to any name to prove prompt-name rename-invariance."""
+    rec = json.loads(json.dumps(rec))
+    rec.setdefault("input", {})
+    rec["input"]["prompt"] = (
+        f"Design the module `{top}`.\n\n{rec['input'].get('prompt', '')}")
+    return rec
 
 
 def _run_iverilog(rtl, tb, name):
@@ -265,6 +283,7 @@ def test_moving_average_solves():
     rec = _dataset_record("cvdp_copilot_moving_average_0001")
     if rec is None:
         pytest.skip("moving_average dataset record not present on this host")
+    rec = _with_prompt_name(rec, "moving_average")   # name from PROMPT, not harness
     rtl = S.solve(rec)
     assert rtl is not None
     assert "module moving_average" in rtl
@@ -295,6 +314,7 @@ def test_moving_average_functionally_correct_self_generated_sequence():
     rec = _dataset_record("cvdp_copilot_moving_average_0001")
     if rec is None:
         pytest.skip("moving_average dataset record not present on this host")
+    rec = _with_prompt_name(rec, "moving_average")   # name from PROMPT, not harness
     rtl = S.solve(rec)
     # a sequence GENERATED HERE (partial-fill phase, mid values, max, repeats) — NOT
     # copied from the prompt; proves the FUNCTION, not memorization of a table.
@@ -319,6 +339,7 @@ def test_moving_average_reset_clears_mid_stream():
     rec = _dataset_record("cvdp_copilot_moving_average_0001")
     if rec is None:
         pytest.skip("moving_average dataset record not present on this host")
+    rec = _with_prompt_name(rec, "moving_average")   # name from PROMPT, not harness
     rtl = S.solve(rec)
     # drive, reset mid-stream, prove it restarts fresh (output back to 0 then rebuilds).
     tb = ["module tb; reg clk,reset; reg [11:0] data_in; wire [11:0] data_out;",
@@ -344,7 +365,10 @@ def test_dataset_emit_count_is_one_and_is_moving_average():
     if not _DATASET.exists():
         pytest.skip("CVDP dataset not present on this host")
     recs = [json.loads(l) for l in _DATASET.read_text().splitlines()]
-    solved = [r["id"] for r in recs if S.solve(r)]
+    # Give EVERY record a bridge-extractable prompt name (so the precision is gated
+    # by the FAMILY recognizer, not by which prompts happen to state the name in a
+    # case the bridge parses) — still, exactly ONE record solves under accumulate.
+    solved = [r["id"] for r in recs if S.solve(_with_prompt_name(r, "target_mod"))]
     assert solved == ["cvdp_copilot_moving_average_0001"], solved
 
 
@@ -360,7 +384,7 @@ def test_skip_unstated_reset_polarity():
 ### Outputs:
 - **`acc`** (16-bits, [15:0]): running sum.
 It accumulates acc <= acc + data_in each cycle. On reset acc clears."""
-    assert S.solve(_rec("a", p)) is None   # polarity/sync not stated
+    assert S.solve(_rec("acc_nopol", p)) is None   # polarity/sync not stated
 
 
 def test_skip_unstated_width():
@@ -372,7 +396,7 @@ def test_skip_unstated_width():
 ### Outputs:
 - **acc**: the running sum.
 It accumulates acc <= acc + data_in. On reset acc resets to 0."""
-    assert S.solve(_rec("a", p)) is None   # data/acc width not stated
+    assert S.solve(_rec("acc_nowidth", p)) is None   # data/acc width not stated
 
 
 def test_skip_non_power_of_2_moving_average():
@@ -515,18 +539,14 @@ def test_chip_agnostic_rename_invariant():
     assert a.replace("alpha", "X") == b.replace("omega_block", "X")
 
 
-def test_real_moving_average_solves_under_any_toplevel():
-    """The REAL prompt re-bound to an unrelated TOPLEVEL still solves identically
-    (proves recognition is on semantics, not on the 'moving_average' name)."""
+def test_real_moving_average_solves_under_any_prompt_name():
+    """The REAL prompt re-bound (via input.prompt) to an unrelated module name still
+    solves identically — proving recognition is on semantics (not the 'moving_average'
+    name) AND that the emitted name comes from the PROMPT, never the harness TOPLEVEL."""
     rec = _dataset_record("cvdp_copilot_moving_average_0001")
     if rec is None:
         pytest.skip("moving_average dataset record not present on this host")
-    rec2 = json.loads(json.dumps(rec))
-    rec2["harness"]["files"] = {
-        k.replace("moving_average", "zz_block"):
-        v.replace("TOPLEVEL        = moving_average", "TOPLEVEL        = zz_block")
-        for k, v in rec["harness"]["files"].items()}
-    rec2["output"]["context"] = {"rtl/zz_block.v": ""}
+    rec2 = _with_prompt_name(rec, "zz_block")
     rtl = S.solve(rec2)
     assert rtl is not None
     assert "module zz_block" in rtl

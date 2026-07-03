@@ -30,12 +30,8 @@ def _toplevel(record: dict) -> Optional[str]:
             return t
     except Exception:
         pass
-    h = (record.get("harness") or {}).get("files") or {}
-    for k, v in h.items():
-        if isinstance(v, str) and k.endswith(".env"):
-            m = re.search(r"^\s*TOPLEVEL\s*=\s*(\S+)", v, re.M)
-            if m:
-                return m.group(1)
+    # The harness `.env` TOPLEVEL is an OFF-LIMITS oracle; the module name comes
+    # ONLY from input.prompt + input.context (via the bridge). None -> honest SKIP.
     return None
 
 
@@ -44,21 +40,6 @@ def _find_port(prompt: str, *names) -> Optional[str]:
         if re.search(rf"`?{n}`?\b", prompt):
             return n
     return None
-
-
-def _tb_reset_name(record: dict) -> Optional[str]:
-    """The reset net the hidden cocotb test actually DRIVES (dut.<sig>.value = ...).
-    The prose may spell it `reset_n` while the TB binds `dut.reset`; the TB is
-    authoritative for the port name. Returns the first reset-ish driven net, or None."""
-    h = (record.get("harness") or {}).get("files") or {}
-    driven = []
-    for k, v in h.items():
-        if not (isinstance(v, str) and k.endswith(".py")):
-            continue
-        for m in re.finditer(r"\bdut\.(\w*(?:reset|rst)\w*)\.value\s*=", v):
-            if m.group(1) not in driven:
-                driven.append(m.group(1))
-    return driven[0] if driven else None
 
 
 def _dice_max(prompt: str) -> Optional[int]:
@@ -104,10 +85,10 @@ def solve(record: dict) -> Optional[str]:
 
     top = _toplevel(record) or "digital_dice_roller"
     clk = _find_port(prompt, "clk", "clock") or "clk"
-    # Reset-port binding: the hidden cocotb TB drives `dut.reset`, so prefer the
-    # actual driven net over the prose spelling (`reset_n`). The polarity is read
-    # from the prose ("active LOW"), independent of the chosen name.
-    rst = _tb_reset_name(record) or _find_port(prompt, "reset", "rst") or "reset"
+    # Reset-port binding: the name and polarity come ONLY from the prompt prose
+    # (the hidden cocotb TB is an OFF-LIMITS oracle). Prefer an explicit `reset_n`
+    # spelling, then `reset`/`rst`; polarity is read from the prose ("active LOW").
+    rst = _find_port(prompt, "reset_n", "reset", "rst") or "reset"
     button = _find_port(prompt, "button", "btn", "roll") or "button"
     dval = _find_port(prompt, "dice_value", "dice", "value", "result") or "dice_value"
     active_low = "active low" in low or "active-low" in low

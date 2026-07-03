@@ -21,10 +21,10 @@ WHY a dedicated CVDP solver (and not the registry / the other family solvers):
     four deterministic SEQUENTIAL emitters, each PARSE-or-SKIP.
 
 §4.05 NO-LEAK / NO-CHEAT (binding):
-  * NEVER read the golden/reference RTL. Ports come from the PROMPT's own interface
-    section (and the harness TOPLEVEL for the module name) — never from
-    output['context'] bodies (which are empty in CVDP v1.1.0 anyway, but the guard
-    holds regardless).
+  * NEVER read the hidden harness (cocotb TB, .env TOPLEVEL) or the golden/reference
+    RTL. Ports AND the module name come ONLY from input.prompt + input.context (the
+    latter via the bridge) — never from the harness and never from output['context']
+    bodies (which are empty in CVDP v1.1.0 anyway, but the guard holds regardless).
   * NEVER guess a width, a reset polarity/sync, an operation, a divisor, or a
     window. ANY unstated / ambiguous governing fact -> return None (SKIP). A wrong
     accumulate silently passes lint+synth and only a clocked testbench catches it,
@@ -36,8 +36,8 @@ WHY a dedicated CVDP solver (and not the registry / the other family solvers):
 
 GENERAL + CHIP-AGNOSTIC: recognition keys on the OPERATION / STRUCTURE semantics
 and role-conventional port names ONLY — never a design name or a record id. The
-SAME prompt under any TOPLEVEL solves identically; the emitted module is named per
-the harness TOPLEVEL (rename-invariant).
+SAME prompt solves identically; the emitted module is named per the prompt/context
+module designation (rename-invariant), never per the hidden harness TOPLEVEL.
 
 API: solve(record: dict) -> Optional[str]   # emitted RTL (module == TOPLEVEL) | None
 deterministic, pure-function.
@@ -63,8 +63,11 @@ _NOT_A_PORT_NAME = {
 
 
 # --------------------------------------------------------------------------- #
-# harness TOPLEVEL (the module name the testbench binds) — reuse the bridge if
-# present, else read TOPLEVEL straight from the .env harness file.
+# module NAME — from `input.prompt` + `input.context` ONLY (via the bridge).
+# The harness `.env` TOPLEVEL and the cocotb testbench are the hidden test
+# HARNESS = OFF-LIMITS oracle; when the name is stated in NEITHER the prompt nor
+# the provided context the bridge returns None and this solver SKIPs (honest
+# floor, never a harness peek).
 # --------------------------------------------------------------------------- #
 def _toplevel(record: dict) -> Optional[str]:
     try:
@@ -74,12 +77,6 @@ def _toplevel(record: dict) -> Optional[str]:
             return t
     except Exception:
         pass
-    h = (record.get("harness") or {}).get("files") or {}
-    for k, v in h.items():
-        if isinstance(v, str) and k.endswith(".env"):
-            m = re.search(r"^\s*TOPLEVEL\s*=\s*(\S+)", v, re.M)
-            if m:
-                return m.group(1)
     return None
 
 

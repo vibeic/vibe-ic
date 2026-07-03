@@ -156,11 +156,19 @@ def _bin2bcd_record(top="binary_to_bcd"):
 
 
 # Lint-review variant (real cvdp_copilot_binary_to_BCD_0036): NO skeleton header
-# and NO table — only prose ("8-bit binary input into a 12-bit BCD output") + the
-# cocotb dut.<sig>. The §4.05 domain-aware fallback must pin the widths from prose.
+# and NO table — the interface is declared in a prompt-side `### Inputs:`/`### Outputs:`
+# block (the ONLY model-visible surface), with explicit bit ranges. extract_interface
+# resolves the names+widths from the prompt; the cocotb harness is OFF-LIMITS oracle
+# the solver never reads.
 BIN2BCD_LINT_PROMPT = """The `binary_to_bcd` module converts an 8-bit binary input into a 12-bit BCD
 (Binary-Coded Decimal) output using the Double Dabble algorithm. Perform a LINT
 code review and provide clean RTL without Lint errors.
+
+### Inputs:
+- `binary_in` [7:0]
+
+### Outputs:
+- `bcd_out` [11:0]
 """
 
 BIN2BCD_LINT_COCOTB = """import cocotb

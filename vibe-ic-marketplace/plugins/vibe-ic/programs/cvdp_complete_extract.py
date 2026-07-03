@@ -2,59 +2,59 @@
 """cvdp_complete_extract.py — a UNIFIED CVDP complete-extraction layer.
 
 GOAL (owner directive 2026-06-23): for EVERY CVDP "code generation" problem,
-extract the MOST COMPLETE structured spec JSON the prompt + harness support, so a
-SKIP is honest ONLY when a fact is GENUINELY ABSENT from the prompt (§3.9
+extract the MOST COMPLETE structured spec JSON the PROMPT + input.context support,
+so a SKIP is honest ONLY when a fact is GENUINELY ABSENT from the prompt (§3.9
 spec-absent) — NEVER because we failed to extract a fact that IS in the prompt.
+
+§4.05 CVDP COMPLIANCE (binding): the CVDP model sees ONLY `input.prompt` +
+`input.context`. The hidden test HARNESS — the cocotb `dut.<sig>` test, the `.env`
+TOPLEVEL / VERILOG_SOURCES — and the golden `output` are OFF-LIMITS oracle and are
+NEVER read by this module. The ENFORCED interface is composed from prompt+context
+ONLY: the input.context module HEADER (`_ctxrec.recover_interface`, header-only),
+the prompt test-case table (`_bridge._table_interface`), and the prompt prose
+Input/Output port block (`_bridge._prose_ports`).
 
 This module does NOT author RTL and does NOT replace the bridge's conservative
 emit gate. It is the MEASUREMENT + STRUCTURED-SPEC layer: it COMPOSES the already
 shipped pieces —
 
-  * `cvdp_atomic_bridge`  — interface (cocotb dut.<sig> + skeleton header +
-    test-case table + prose), module name (.env TOPLEVEL), composite/special-
-    algebra cues, prose width resolution; and
+  * `cvdp_atomic_bridge`  — the prompt+context interface helpers (skeleton header
+    + test-case table + prose ports), the module name (`toplevel_name`, from the
+    prompt/context, NEVER `.env`), composite/special-algebra cues, prose width
+    resolution; and
   * the v1.1.82 structural extractors
       spec_regmap_extract / spec_enumset_extract / spec_fsm_extract /
       spec_numeric_pack_extract / spec_worked_example_extract
 
-— into ONE complete spec dict per record, PLUS a per-record COMPLETENESS verdict.
+via the GENERAL `spec_complete_extract.assess_spec` engine — into ONE complete
+spec dict per record, PLUS a per-record COMPLETENESS verdict.
 
-§4.05 NO-LEAK / NO-CHEAT (binding, the load-bearing rule):
-  * EVERY emitted field is anchored to a REAL structural source in the prompt or
-    the harness — a `module(...)` header (header only), a cocotb `dut.<sig>.value`
-    reference, a markdown table row, an `0xNN` offset line, an explicit `N-bit`
-    token, a stated transition. A fact is NEVER invented to make a record look
-    COMPLETE.
-  * The golden/reference RTL body in `output['context']` is NEVER read. The
-    skeleton is parsed for its `module(...)` HEADER only (and in CVDP v1.1.0 every
-    skeleton is empty anyway). The interface ground-truth is the cocotb test +
-    the prompt prose tables — both submitter-visible.
+§4.05 NO-LEAK / NO-CHEAT (the load-bearing rule):
+  * EVERY emitted field is anchored to a REAL structural source in the PROMPT or
+    input.context — a `module(...)` header (header only), a markdown table row, an
+    `0xNN` offset line, an explicit `N-bit` token, a stated transition. A fact is
+    NEVER invented to inflate a COMPLETE verdict, and the hidden test harness /
+    golden output is never consulted.
 
-COMPLETENESS verdict (the deliverable classification):
+COMPLETENESS verdict (the deliverable classification) — a pure PROMPT-COMPLETENESS
+assessment (is every port the PROMPT/CONTEXT itself declares fully width-resolved
+from prompt+context?):
   COMPLETE
-      every testable fact the harness checks is captured — i.e. every port the
-      cocotb test drives/reads is in our interface with a resolved width (or is a
-      1-bit control / a config parameter we correctly filtered out), AND every
-      structure the prompt states (register map / enum / FSM / numeric / worked
-      example) was recovered by its extractor. The record is then either
-      program-solvable (the bridge emits) or fully AI-gated on a captured spec.
+      every PROMPT/CONTEXT-declared port is in our interface with a resolved width
+      (or a parameterised width over recognised config params, or is a 1-bit
+      control / a config parameter we correctly filtered out), AND every structure
+      the prompt states (register map / enum / FSM / numeric / worked example) was
+      recovered by its extractor. The record is then either program-solvable (the
+      bridge emits) or fully AI-gated on a captured spec.
   INCOMPLETE_EXTRACTION_GAP
-      a fact IS in the prompt / harness but our extractor MISSED it — ACTIONABLE.
-      Detected by cross-checking the harness signals: a port the cocotb test
-      drives that our interface dropped (and is NOT a parameter), or a width that
-      a prose `[hi:lo]` / `N-bit` / table column states but we failed to resolve.
-      Each gap carries a TYPE label (the recurring, fixable category).
+      a fact IS in the prompt / context but our extractor MISSED it — ACTIONABLE:
+      a width that a prose `[hi:lo]` / `N-bit` / table column / param expression
+      states but we failed to resolve. Each gap carries a TYPE label (the
+      recurring, fixable category).
   INCOMPLETE_SPEC_ABSENT
-      the fact the harness checks is genuinely NOT in the prompt — the AI's
-      irreducible domain (e.g. a data-path width the prompt never states for a
-      port the cocotb still drives; a behaviour the harness asserts that no prose
-      describes). Honest §3.9 SKIP, NOT an extractor bug.
-
-To separate EXTRACTION_GAP from SPEC_ABSENT we use the harness as the oracle of
-"what is testable": the cocotb `dut.<sig>` set is the interface the scorer binds,
-so a driven signal our interface missed is an extraction gap IF the prompt/harness
-carries the evidence to place it (a parameter read, a reset synonym, a prose
-width), and a SPEC_ABSENT only when the prompt is truly silent on it.
+      the fact is genuinely NOT in the prompt / context — the AI's irreducible
+      domain (e.g. a data-path width the prompt never states for a port it
+      declares; a behaviour no prose describes). Honest §3.9 SKIP, not a bug.
 
 Public API
     extract(record: dict) -> dict
@@ -65,11 +65,11 @@ Public API
                       truth_table[],worked_examples[],test_vectors[]},
           reset:{polarity,sync}, timing:{latency,pipeline}, byte_order,
           completeness, completeness_reason, gaps:[{type,detail,evidence}],
-          harness:{toplevel, cocotb_inputs, cocotb_outputs, params},
+          interface_source:{module_name, inputs, outputs, params},
         }
 
-chip-AGNOSTIC: every decision keys on STRUCTURE (table/offset/cocotb/header
-shape + generic vocabulary), never on a design name, problem id, or SKU literal.
+chip-AGNOSTIC: every decision keys on STRUCTURE (table/offset/header shape +
+generic vocabulary), never on a design name, problem id, or SKU literal.
 
 CLI
     python3 cvdp_complete_extract.py --jsonl FILE [--id ID] [--dist] [--gaps]
@@ -126,25 +126,8 @@ except Exception:
 
 
 # --------------------------------------------------------------------------- #
-# parameter / reset / clock structural classification (harness-anchored)
+# reset / clock / 1-bit-control structural classification (prompt+context only)
 # --------------------------------------------------------------------------- #
-# A cocotb PARAMETER is read with `X = int(dut.X.value)` to CONFIGURE the run (a
-# width / loop bound), not asserted as a DUT port. The bridge's filter requires an
-# ALL-CAPS snake or >=3 caps token, so a SINGLE-letter uppercase config integer
-# (N, M, K, ...) read via `int(dut.N.value)` leaks through as a phantom port. We
-# recover such config reads here — but ONLY when the signal name is ALL-UPPERCASE
-# (the dataset's universal parameter-naming convention: DATA_WIDTH / N / M / K).
-# A lowercase `int(dut.sum.value)` is an OUTPUT-VALUE read (the scorer reads an
-# output port as an int to compare it), NOT a parameter — restricting to
-# ALL-UPPERCASE keeps a lowercase data output from being mis-dropped. §4.05:
-# anchored to a real harness token + the naming convention, never guessed.
-_UPPER_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
-# v1.2.52: tolerate a space between `int` and `(` (`N = int (dut.N.value)`).
-_INT_PARAM_READ_RE = re.compile(r"\b\w+\s*=\s*int\s*\(\s*dut\.([A-Z][A-Z0-9_]*)\.value\s*\)")
-# `dut.X` used inside a python range/loop/shift expression is a config integer too
-# (again gated to ALL-UPPERCASE so an output read in a comparison is not caught).
-_RANGE_PARAM_RE = re.compile(
-    r"(?:range|<<|>>|\*\*)\s*\(?\s*[^)]*dut\.([A-Z][A-Z0-9_]*)\.value")
 
 # Reset / clock synonyms, broader than the bridge's _SEQ_PORTS so a `rst_in`,
 # `reset_i`, `arst_n`, `sync_rst` etc. resolves to a 1-bit control rather than an
@@ -203,135 +186,6 @@ _ONE_BIT_RE = re.compile(
     r"ack|req|sel|mode|flag|overflow|ovf|underflow|parity|found|hit|miss|"
     rf"(?:\w+_)?(?:{_CTRL_WORD})(?:_\w+)?"
     r")$")
-
-
-def _harness_params(tb: str) -> set:
-    """The FULL set of cocotb config parameters — the bridge's ALL-CAPS filter
-    UNION every `int(dut.X.value)` / range-bound `dut.X.value` read. This recovers
-    single-letter uppercase params (N, M, K) the bridge's regex misses.
-
-    CRITICAL filtering (2026-06-28 fix): an `int(dut.X.value)` read is a parameter
-    ONLY when the lhs variable is ALSO uppercase / param-style (e.g. `WIDTH = ...`).
-    A lowercase / snake_case lhs (e.g. `read_data = ...`, `result = ...`) indicates
-    the harness is reading an OUTPUT port into a local variable for assertion — NOT
-    a config parameter. This prevents APB signals like PRDATA/PREADY/PSLVERR from
-    being mis-classified as parameters."""
-    params = set(_bridge._cocotb_params(tb))
-
-    # Additional int() reads: only credit as param if lhs is also param-style
-    # (uppercase or matches the bridge's _PARAM_NAME_RE pattern)
-    for m in _INT_PARAM_READ_RE.finditer(tb):
-        sig = m.group(1)
-        lhs_var = m.group(0).split('=')[0].strip()
-        # Param-style LHS: all uppercase (WIDTH, N, DATA_WIDTH) — NOT snake_case lowercase
-        if lhs_var.isupper() or (len(lhs_var) >= 2 and lhs_var[0].isupper() and '_' not in lhs_var):
-            params.add(sig)
-
-    # Range-based reads: same filtering — only uppercase range bounds are params
-    for m in _RANGE_PARAM_RE.finditer(tb):
-        sig = m.group(1)
-        # Check if this appears in a param-like context
-        full_match = m.group(0)
-        # If the range bound is dut.X.value directly (not wrapped in comparison), it's a param
-        params.add(sig)
-
-    return params
-
-
-# --------------------------------------------------------------------------- #
-# cocotb interface RECOVERY — additional driven/read access forms the bridge's
-# `_cocotb_io` does not recognise. The bridge reads only `dut.X.value = ` (driven)
-# and `= dut.X.value` / `int(dut.X.value)` / `.value.integer` (read). Real CVDP
-# cocotb tests bind harness signals through MORE forms; missing them left the WHOLE
-# interface empty (the `cocotb test present but no dut.<sig> interface recovered`
-# EXTRACTION_GAP). Each form below is a genuine harness binding of a DUT port:
-#   * `dut.X.value == ` / `!= ` / `< ` ...  — an ASSERT comparison READ of an output
-#   * `{dut.X.value}` / `{dut.X.value:..}`  — an f-string interpolation READ
-#   * `dut['name'].value = `                — a BRACKET-driven input (Python-keyword
-#                                             port names such as `in` must use this)
-#   * `dut['name'].value` (read)            — a bracket-accessed read
-#   * `dut.X[i].value` / `dut['x'][i].value`— an INDEXED (packed-array) port read
-# §4.05: every name here is a literal `dut.<name>` / `dut['<name>']` reference in the
-# submitter-visible cocotb test — never invented. Direction mirrors the bridge:
-# an `=` (not `==`/`!=`/`<=`/`>=`) assignment is an INPUT; any other reference is a
-# READ (OUTPUT, unless also driven). Config parameters are removed by the caller.
-_NAME = r"(?:\.(\w+)|\[\s*['\"](\w+)['\"]\s*\])"  # dut.NAME  or  dut['NAME']
-# a driven assignment: dut.X.value = ...   (a single `=`, NOT ==/!=/<=/>=)
-# anchored at line start and ignoring text after `#` so commented-out debug
-# probes (`#print(dut.internal.value)`) are NOT recovered as ports.
-_RECOVER_DRIVEN_RE = re.compile(
-    r"(?m)^[^#\n]*?dut" + _NAME + r"(?:\[[^\]]*\])?\.value\s*=(?![=<>])")
-# any READ reference to dut.X.value (comparison, f-string, indexed, bare)
-# anchored similarly to ignore full-line / same-line comments.
-_RECOVER_READ_RE = re.compile(
-    r"(?m)^[^#\n]*?dut" + _NAME + r"(?:\[[^\]]*\])?\.value\b")
-
-
-# cocotb framework attributes that are NEVER a DUT port — a `dut.<attr>` access to
-# the cocotb handle's own API, not to a signal. Excluded from recovered I/O.
-_COCOTB_NONPORT = {"_log", "_id", "_name", "_path", "_handle", "_range",
-                   "_discover_all", "_sub_handles", "log"}
-
-
-def _recover_cocotb_io(tb: str) -> Tuple[List[str], List[str]]:
-    """Augmented (driven, read) signal-name lists covering the additional access
-    forms above. Names are returned RAW (params/dedup handled by the caller)."""
-    def _names(rx) -> set:
-        out = set()
-        for m in rx.finditer(tb):
-            out.add(m.group(1) or m.group(2))
-        out.discard(None)
-        return out - _COCOTB_NONPORT
-    return sorted(_names(_RECOVER_DRIVEN_RE)), sorted(_names(_RECOVER_READ_RE))
-
-
-def _port_corroborated(name: str, prompt: str, table: Dict[str, int],
-                       param_defaults: Optional[Dict[str, int]]) -> bool:
-    """True iff a recovered READ-ONLY signal is corroborated as a real INTERFACE
-    port (vs an INTERNAL register a white-box `assert dut.reg.value == k` probes).
-
-    A `dut.X.value == k` / f-string read is direction-ambiguous: it can read an
-    OUTPUT port OR an internal state register. We credit it as a port ONLY with
-    interface evidence — a resolvable stated width, a clk/rst/1-bit naming
-    convention, or a backtick-wrapped prose reference (the prompt's port list cites
-    it as `` `name` ``). An internal counter the prompt never names as a signal
-    (e.g. `refresh_counter`, `clk_counter`) has NONE of these and is dropped.
-    §4.05: this never invents a port — it only KEEPS a recovered read that the
-    prompt itself corroborates as part of the interface."""
-    if _is_clk(name) or _is_rst(name) or _ONE_BIT_RE.match(name):
-        return True
-    w, _src = _resolve_width(prompt, table, name, param_defaults)
-    if w is not None:
-        return True
-    # a backtick-wrapped prose reference `name` / `name[..]` — the port list cites it.
-    return bool(re.search(r"`\s*" + re.escape(name) + r"\s*[`\[]", prompt))
-
-
-def _cocotb_io_full(tb: str, prompt: str = "", table: Optional[Dict[str, int]] = None,
-                    param_defaults: Optional[Dict[str, int]] = None
-                    ) -> Tuple[List[str], List[str]]:
-    """The bridge's `_cocotb_io` UNION the recovered access forms. A signal driven
-    by EITHER reader is an INPUT; a signal only read is an OUTPUT. Config parameters
-    (ALL-CAPS / int(dut.X.value) / range-bound) are removed so a width/loop-bound
-    read never becomes a phantom port. §4.05: this only ADDS signals the harness
-    really references — it never drops a signal the bridge already found, and a
-    recovered READ-ONLY signal is kept only when the prompt corroborates it as a
-    port (so a white-box internal-register probe is not promoted to an interface)."""
-    table = table or {}
-    b_ins, b_outs = _bridge._cocotb_io(tb)
-    r_driven, r_read = _recover_cocotb_io(tb)
-    params = _harness_params(tb)
-    driven = (set(b_ins) | set(r_driven)) - params
-    # a recovered DRIVEN signal is an input by construction (the harness writes it).
-    # a recovered READ-ONLY signal (not in the bridge's set, not driven) must be
-    # corroborated as a port before it joins the interface.
-    bridge_read = set(b_outs)
-    recovered_read_only = (set(r_read) - bridge_read - driven - params)
-    kept_recovered = {n for n in recovered_read_only
-                      if _port_corroborated(n, prompt, table, param_defaults)}
-    read = (bridge_read | kept_recovered) - params
-    outs = read - driven                 # a driven-and-read signal stays an INPUT
-    return sorted(driven), sorted(outs)
 
 
 def _is_clk(name: str) -> bool:
@@ -644,171 +498,6 @@ def _byte_order(prompt: str) -> Optional[str]:
     return None
 
 
-# --------------------------------------------------------------------------- #
-# the complete interface (the harness-checked contract)
-# --------------------------------------------------------------------------- #
-def _complete_interface(record: dict, top: str
-                        ) -> Tuple[List[dict], List[str], List[str], set, List[dict]]:
-    """Build the MOST COMPLETE interface the prompt+harness support.
-
-    Returns (interface, cocotb_inputs, cocotb_outputs, params, gaps):
-      * interface  — [{name,dir,width,signed,source}] for every PLACED port;
-      * cocotb_*   — the raw driven/read signal lists (the harness contract);
-      * params     — the recovered config-parameter set (NOT ports);
-      * gaps       — EXTRACTION_GAP / SPEC_ABSENT records for unplaced signals.
-
-    A cocotb-driven signal becomes a PORT unless it is a recovered parameter.
-    Width is resolved from prose/table/explicit-range; a clk/rst/1-bit-control
-    signal defaults to width 1 by the universal naming convention; a DATA port
-    with no stated width is recorded as a gap (EXTRACTION_GAP if the prompt has a
-    width form we structurally failed to read, else SPEC_ABSENT)."""
-    prompt = (record.get("input") or {}).get("prompt") or ""
-    files = _bridge._harness_files(record)
-    tb = _bridge._cocotb_test_text(files)
-    # parameter-DEFAULT table (NAME -> int) harvested from the prompt's partial
-    # module header / prose defaults / parameter table — the values that resolve a
-    # `[N-1:0]` / `[DATA_WIDTH-1:0]` width to its integer default. Computed up front
-    # so the recovered-read corroboration can use the width resolver.
-    param_defaults = _W.param_defaults(prompt, tb)
-    # merge parameter defaults declared in the PROVIDED input.context RTL, BELOW the
-    # prompt/testbench defaults (a prompt-stated value is never overridden). Closes
-    # `param_expression_width` gaps whose default lives only in the context file —
-    # §3.9: the value IS in the spec chain (interface/config, header-level, never
-    # the body); §4.05: only fills a width the prose/tb left unresolved.
-    for _nm, _v in _W.context_param_defaults(record).items():
-        param_defaults.setdefault(_nm, _v)
-    table = _bridge._test_case_table(prompt) or {}
-
-    # (a) prefer a non-empty skeleton header (header only) — fully self-describing.
-    sk = _bridge._skeleton_ports(record, top)
-    if sk:
-        iface = []
-        for d, lst in (("input", sk[0]), ("output", sk[1])):
-            for n, w in _bridge._clean_ports(lst):
-                iface.append({"name": n, "dir": d, "width": w,
-                              "signed": False, "source": "skeleton_header"})
-        c_ins, c_outs = _cocotb_io_full(tb, prompt, table, param_defaults)
-        return iface, c_ins, c_outs, set(), []
-
-    # (b) cocotb dut.<sig> set — the harness's bound interface.
-    c_ins, c_outs = _cocotb_io_full(tb, prompt, table, param_defaults)
-    params = _harness_params(tb)
-    signed = bool(re.search(r"(?i)\bsigned\b|two'?s?\s+complement|2'?s?\s+complement", prompt))
-
-    iface: List[dict] = []
-    gaps: List[dict] = []
-
-    # §3.9 interface source: the PROVIDED input.context module HEADER. When the
-    # prose never states a port's width, the context file's `module <top>(...)`
-    # declaration resolves it (header-only — never the body; only the harness
-    # TOPLEVEL target). This closes `width_not_stated` gaps with the authoritative
-    # declared width (Tier3 -> Tier2), not a guess.
-    try:
-        ctx_widths = {p["name"]: p["width"] for p in _ctxrec.recover_interface(record, top)
-                      if p.get("width") is not None}
-    except Exception:
-        ctx_widths = {}
-
-    # the set of RECOGNISED config parameters: harness-driven params + every param
-    # with a default (prompt or context) + module `#(parameter NAME ...)` decls. A
-    # port whose width is a param expression over ONLY these is COMPLETELY specified
-    # as PARAMETERISED (the AI writes `[PARAM-1:0]`, correct under every harness
-    # override) — not an extraction gap.
-    config_params = set(params) | set(param_defaults) | set(
-        re.findall(r"\bparameter\b\s+(?:\w+\s+)?([A-Za-z_]\w*)", prompt))
-
-    def _place(name: str, direction: str):
-        if name in params:
-            return  # a config parameter — not a port (correctly filtered)
-        # a name DECLARED as a `parameter`/`localparam` (it resolved to a default in
-        # `param_defaults`) is a CONFIG PARAMETER, never a port — even if the cocotb
-        # harness reads it as a top-level signal. `strobe_divider` declares
-        # `#(parameter MaxRatio_g = 10, parameter Latency_g = 1)`; without this guard
-        # the `_g`-suffixed params were emitted as output ports and reported a false
-        # `width_not_stated` gap. (`params` above is only the HARNESS-driven set; this
-        # adds the prompt/context-declared parameter defaults.)
-        if name in param_defaults:
-            return
-        w, src = _resolve_width(prompt, table, name, param_defaults)
-        if w is not None:
-            iface.append({"name": name, "dir": direction, "width": w,
-                          "signed": signed, "source": src})
-            return
-        # the PROVIDED input.context module header DECLARES this port's width — an
-        # authoritative interface fact (§3.9), used when the prose was silent.
-        if name in ctx_widths:
-            iface.append({"name": name, "dir": direction, "width": ctx_widths[name],
-                          "signed": signed, "source": "context_header"})
-            return
-        # a port whose width is a PARAMETER EXPRESSION with no resolvable default
-        # (`bits [N*IN_WIDTH-1:0]`): the PORT is known and must be PLACED (with an
-        # unknown width=None so the gate enforces presence + direction but not a
-        # literal), while the WIDTH is recorded as an honest extraction gap. Do NOT
-        # drop the port (that emptied the interface and dropped the record to an
-        # un-gateable Tier4) and do NOT let a coincidental prose literal stand in
-        # (the §4.05 false-COMPLETE the Step-2.7 review flagged).
-        if src == "param_expression_width":
-            iface.append({"name": name, "dir": direction, "width": None,
-                          "signed": signed, "source": "param_expression_width"})
-            # PARAMETERISED-COMPLETE: when every identifier in the width expression
-            # is a RECOGNISED config parameter, the width is FULLY specified (the AI
-            # writes `[PARAM-1:0]`, correct under every override) — NOT a gap. Only a
-            # width expression carrying an UNKNOWN symbol (no default, not harness-
-            # driven, not a module param) is a genuine extraction gap.
-            idents = _W.param_expr_idents(prompt, name)
-            if idents and idents <= config_params:
-                return
-            gaps.append({"kind": "INCOMPLETE_EXTRACTION_GAP",
-                         "type": "param_expression_width",
-                         "detail": f"{direction} port `{name}` width is a parameter "
-                                   f"expression with no resolvable default",
-                         "evidence": _evidence_line(prompt, name)})
-            return
-        if _is_clk(name) or _is_rst(name):
-            iface.append({"name": name, "dir": direction, "width": 1,
-                          "signed": False, "source": "clk_rst_convention"})
-            return
-        # §3.9 HARNESS-as-source: the cocotb test drives this port with values
-        # provably in {0,1} -> it is a 1-bit port pinned by the harness interface,
-        # not a spec-absent fact. Check BEFORE the generic 1-bit naming convention
-        # so the source tag reflects the STRONGER harness evidence (e.g. `serial_in`
-        # driven by `random.randint(0,1)` is credited to the harness, not just the
-        # name containing `serial`).
-        if _harness_one_bit(tb, name):
-            iface.append({"name": name, "dir": direction, "width": 1,
-                          "signed": False, "source": "harness_one_bit"})
-            return
-        if _ONE_BIT_RE.match(name):
-            iface.append({"name": name, "dir": direction, "width": 1,
-                          "signed": False, "source": "one_bit_convention"})
-            return
-        # A DATA port the cocotb drives but no width is stated. Decide gap kind:
-        #   EXTRACTION_GAP — a width FORM exists in the prompt but our reader missed
-        #     it (e.g. a `#(...)`-override default, an `N*WIDTH` expression, a width
-        #     stated against a synonym of this name);
-        #   SPEC_ABSENT    — the prompt is truly silent on this port's width AND the
-        #     harness does not pin it.
-        gkind, gtype = _classify_width_gap(prompt, name, params, param_defaults)
-        gaps.append({"kind": gkind, "type": gtype,
-                     "detail": f"{direction} port `{name}` width unresolved",
-                     "evidence": _evidence_line(prompt, name)})
-
-    for n in c_ins:
-        _place(n, "input")
-    for n in c_outs:
-        _place(n, "output")
-
-    # de-dup the interface by name (a signal read AND written keeps first dir)
-    seen = set()
-    dedup = []
-    for p in iface:
-        if p["name"] in seen:
-            continue
-        seen.add(p["name"])
-        dedup.append(p)
-    return dedup, c_ins, c_outs, params, gaps
-
-
 # A parameterized-width FORM the prompt states but tied to a parameter expression
 # (e.g. `bits [N*IN_WIDTH-1:0]`, `out [M-1:0]`, `lower [M-2:0]`, `[WIDTH-1:0]`)
 # rather than a literal integer. The width IS in the prompt (so it's an
@@ -957,111 +646,70 @@ def _timing(prompt: str) -> Dict[str, object]:
 
 
 # --------------------------------------------------------------------------- #
-# completeness verdict
-# --------------------------------------------------------------------------- #
-def _completeness(record: dict, iface: List[dict], c_ins: List[str],
-                  c_outs: List[str], params: set, gaps: List[dict],
-                  structures: Dict[str, object]) -> Tuple[str, str]:
-    """Roll the per-signal gaps + the prompt-vs-extractor structure check up into
-    ONE completeness verdict.
-
-    COMPLETE                    — no extraction gap AND no spec-absent gap AND the
-                                  harness interface is fully placed.
-    INCOMPLETE_EXTRACTION_GAP   — at least one EXTRACTION_GAP (actionable — the
-                                  fact is in the prompt/harness, we missed it).
-                                  Takes precedence over SPEC_ABSENT (it is the
-                                  fixable bucket the deliverable is about).
-    INCOMPLETE_SPEC_ABSENT      — only SPEC_ABSENT gaps remain (the AI's domain).
-    """
-    prompt = (record.get("input") or {}).get("prompt") or ""
-
-    # A composite / special-algebra design is intentionally NOT a single
-    # extractable atomic function. Its interface may still be fully placed; we
-    # only ever mark EXTRACTION_GAP for a missed structural fact, never penalize
-    # it for being protocol-shaped. (The bridge SKIPs it for EMIT; the spec dict
-    # is still as complete as the prompt allows.)
-    has_extraction_gap = any(g["kind"] == "INCOMPLETE_EXTRACTION_GAP" for g in gaps)
-    has_spec_absent = any(g["kind"] == "INCOMPLETE_SPEC_ABSENT" for g in gaps)
-
-    # If the cocotb test gives no interface at all AND we have no skeleton header,
-    # we cannot bind the harness contract — but only call it a GAP if the prompt
-    # actually has a port description we failed to read; else it is SPEC_ABSENT
-    # (a non-cocotb harness shape — out of this layer's structural reach).
-    if not c_ins and not c_outs and not iface:
-        files = _bridge._harness_files(record)
-        tb = _bridge._cocotb_test_text(files)
-        if not tb:
-            return "INCOMPLETE_SPEC_ABSENT", "no cocotb harness to bind the interface"
-        return "INCOMPLETE_EXTRACTION_GAP", "cocotb test present but no dut.<sig> interface recovered"
-
-    if has_extraction_gap:
-        types = sorted({g["type"] for g in gaps if g["kind"] == "INCOMPLETE_EXTRACTION_GAP"})
-        return "INCOMPLETE_EXTRACTION_GAP", "missed fact(s): " + ", ".join(types)
-    if has_spec_absent:
-        types = sorted({g["type"] for g in gaps if g["kind"] == "INCOMPLETE_SPEC_ABSENT"})
-        # §3.9 HIGH bar: name the sources searched so a SPEC_ABSENT is auditable —
-        # the fact is absent from the prose width forms (explicit range / N-bit /
-        # table / parameter expression), AND the harness does not pin it (no 1-bit
-        # drive, no parameter default), AND no clear genre convention applies.
-        return ("INCOMPLETE_SPEC_ABSENT",
-                "fact(s) absent from prompt prose + harness interface + convention: "
-                + ", ".join(types))
-
-    return "COMPLETE", "every harness-checked port placed (prose/param-expr/harness); stated structures captured"
-
-
-# --------------------------------------------------------------------------- #
 # public API
 # --------------------------------------------------------------------------- #
 def _recover_cvdp_interface(record: dict, top: str):
-    """CVDP-ADAPTER interface recovery: read the record's cocotb `dut.<sig>` harness
-    (+ a skeleton module header, + a provided input.context header) into the signal
-    sets the GENERAL engine assesses. Returns
-    (skeleton_iface|None, inputs, outputs, params, param_defaults, table, ctx_widths,
-     tb). Everything CVDP-record-specific lives HERE; the verdict logic is general."""
+    """CVDP-ADAPTER interface recovery — PROMPT + input.context ONLY (§4.05
+    compliance: the CVDP model sees ONLY `input.prompt` + `input.context`; the
+    hidden cocotb `dut.<sig>` test, the `.env` TOPLEVEL / VERILOG_SOURCES and the
+    golden `output` are OFF-LIMITS oracle and are NEVER read here). The ENFORCED
+    interface is composed from three submitter-visible sources:
+      * the input.context module HEADER (`_ctxrec.recover_interface`, header-only)
+        — names + dirs + (param-resolved) widths of the target module's ports;
+      * the prompt test-case table HEADER (`_bridge._table_interface`);
+      * the prompt prose Input/Output port block (`_bridge._prose_ports`).
+    Returns (skeleton_iface|None, inputs, outputs, params, param_defaults, table,
+    ctx_widths, tb) with the CVDP-adapter contract preserved but NO harness:
+    params=set() (no cocotb config-param set) and tb="" (no cocotb harness text),
+    so the general engine's placement + §3.9 gap classification reduces to a pure
+    PROMPT-COMPLETENESS assessment (is every prompt/context-declared port fully
+    width-resolved from prompt+context?)."""
     prompt = record.get("prompt") or (record.get("input") or {}).get("prompt") or ""
-    files = _bridge._harness_files(record)
-    # variant-aware test selection (v1.2.52): multi-variant records carry several
-    # test_*.py files; the globally-first file may describe a sibling variant. The
-    # record's selected .env pins the correct variant directory.
-    tb = _bridge._cocotb_test_text_for_record(record, files)
-    param_defaults = _W.param_defaults(prompt, tb)
+    # parameter-DEFAULT table from the PROMPT + input.context ONLY (no tb).
+    param_defaults = _W.param_defaults(prompt)
     for _nm, _v in _W.context_param_defaults(record).items():
         param_defaults.setdefault(_nm, _v)
     table = _bridge._test_case_table(prompt) or {}
 
-    # (a) a non-empty skeleton module header (output.context only) is fully
-    # self-describing. input.context headers are handled via _ctxrec.recover_interface
-    # below (source=context_header) — including them here would short-circuit before
-    # param-expression width resolution and gap detection.
-    sk = _bridge._skeleton_ports(record, top, include_input_context=False)
-    if sk:
-        skiface = []
-        for d, lst in (("input", sk[0]), ("output", sk[1])):
-            for n, w in _bridge._clean_ports(lst):
-                skiface.append({"name": n, "dir": d, "width": w,
-                                "signed": False, "source": "skeleton_header"})
-        c_ins, c_outs = _cocotb_io_full(tb, prompt, table, param_defaults)
-        return skiface, c_ins, c_outs, set(), param_defaults, table, {}, tb
+    # (a) the prompt's declared interface NAMES: a test-case table HEADER, else the
+    # prose Input/Output port block. NAMES only — widths are resolved by the engine
+    # from prompt prose / param-expr / the input.context header (ctx_widths) below.
+    i_names, o_names = _bridge._table_interface(prompt)
+    if not (i_names and o_names):
+        p_ins, p_outs = _bridge._prose_ports(prompt)
+        if not i_names:
+            i_names = [n for n, _ in p_ins]
+        if not o_names:
+            o_names = [n for n, _ in p_outs]
 
-    # (b) the cocotb dut.<sig> set is the harness's bound interface.
-    c_ins, c_outs = _cocotb_io_full(tb, prompt, table, param_defaults)
-    params = _harness_params(tb)
+    # (b) the PROVIDED input.context module HEADER (header-only, §3.9 interface
+    # fact): its declared ports JOIN the interface (names + dirs) and supply widths
+    # keyed by name. A port the prompt already named is not duplicated; a port only
+    # the context declares is still a legitimate prompt+context interface fact.
+    ctx_widths: Dict[str, int] = {}
     try:
-        ctx_widths = {p["name"]: p["width"]
-                      for p in _ctxrec.recover_interface(record, top)
-                      if p.get("width") is not None}
+        for p in _ctxrec.recover_interface(record, top):
+            nm, d, w = p.get("name"), p.get("dir"), p.get("width")
+            if not nm:
+                continue
+            if w is not None:
+                ctx_widths[nm] = w
+            if nm not in i_names and nm not in o_names:
+                (o_names if d == "output" else i_names).append(nm)
     except Exception:
-        ctx_widths = {}
-    return None, c_ins, c_outs, params, param_defaults, table, ctx_widths, tb
+        pass
+
+    return None, i_names, o_names, set(), param_defaults, table, ctx_widths, ""
 
 
 def extract(record: dict) -> dict:
     """CVDP ADAPTER over the GENERAL `spec_complete_extract.assess_spec` engine:
-    recover the interface from the CVDP record's cocotb harness / skeleton header,
-    then delegate the completeness assessment. The general-spec engine is what
-    actually scores COMPLETE / EXTRACTION_GAP / SPEC_ABSENT, so the same machinery
-    serves any benchmark or a Phase-1 design doc. §4.05: every field anchored."""
+    recover the interface from the CVDP record's PROMPT + input.context (never the
+    hidden cocotb harness / `.env` / golden output), then delegate the completeness
+    assessment. The general-spec engine scores COMPLETE / EXTRACTION_GAP /
+    SPEC_ABSENT over the SUPPLIED prompt+context interface, so the §3.9 distinction
+    is a pure PROMPT-COMPLETENESS check. §4.05: every field anchored to prompt or
+    input.context; no harness/oracle read."""
     if not isinstance(record, dict):
         return {"completeness": "INCOMPLETE_SPEC_ABSENT",
                 "completeness_reason": "not a record", "gaps": []}
@@ -1072,19 +720,10 @@ def extract(record: dict) -> dict:
     skiface, c_ins, c_outs, params, param_defaults, table, ctx_widths, tb = \
         _recover_cvdp_interface(record, top)
 
-    spec = _eng.assess_spec(
+    return _eng.assess_spec(
         prompt, c_ins, c_outs, module_name=top, skeleton_iface=skiface,
         param_defaults=param_defaults, table=table, tb=tb, params=params,
         ctx_widths=ctx_widths, record_id=record.get("id"))
-    # back-compat: the CVDP callers (cvdp_solve_pipeline, tests) read a `harness`
-    # block with the cocotb signal sets. Re-attach it from the recovered interface.
-    spec["harness"] = {
-        "toplevel": top or None,
-        "cocotb_inputs": c_ins,
-        "cocotb_outputs": c_outs,
-        "params": sorted(params),
-    }
-    return spec
 
 
 # --------------------------------------------------------------------------- #

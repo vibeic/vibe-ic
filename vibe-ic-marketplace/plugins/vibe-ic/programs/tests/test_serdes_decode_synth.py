@@ -1,12 +1,13 @@
 """test_serdes_decode_synth.py — the CVDP serial-converter (PISO/SIPO) +
 address/range-decoder deterministic solver.
 
-serdes_decode_synth.solve(record) reads the module name from the harness
-TOPLEVEL, reads the interface from the PROMPT's own `### Inputs/Outputs` markdown
-list / port table (or a reference docs/*.md, never the golden RTL), PARSES the
-bit-order/shift-direction (serial family) or the map/range + out-of-range default
-(decoder family), and emits deterministic RTL named per TOPLEVEL — else SKIP (None)
-on ANY unstated governing fact / non-member / delta task.
+serdes_decode_synth.solve(record) reads the module name from input.prompt/context
+(via the bridge; never the OFF-LIMITS harness TOPLEVEL), reads the interface from
+the PROMPT's own `### Inputs/Outputs` markdown list / port table (or a reference
+docs/*.md, never the golden RTL), PARSES the bit-order/shift-direction (serial
+family) or the map/range + out-of-range default (decoder family), and emits
+deterministic RTL named per the stated name — else SKIP (None) on ANY unstated
+governing fact / non-member / delta task.
 
 POSITIVES (each SOLVES + is FUNCTIONALLY correct against its cocotb model, host-
 verified via iverilog when the binary is present):
@@ -29,8 +30,8 @@ verified via iverilog when the binary is present):
   * a "modify the existing RTL" delta/debug/lint task (prior rtl/*.sv in context).
 
 CHIP-AGNOSTIC: the solver keys only on STRUCTURE words + role-conventional port
-names, never on a design name. The SAME prompt under three different TOPLEVELs
-solves identically and the emitted module is named per TOPLEVEL.
+names, never on a design name. The SAME spec under three different prompt-stated
+names solves identically and the emitted module is named per the stated name.
 
 The iverilog functional checks are GATED on the iverilog binary; the structural /
 SKIP / agnostic assertions run anywhere. The real-dataset records are used when the
@@ -66,6 +67,17 @@ _DATASET = Path(
 # record builder (faithful to the CVDP v1.1.0 record shape).
 # --------------------------------------------------------------------------- #
 def _rec(top, prompt, *, input_context=None):
+    # CVDP-COMPLIANT record: the module NAME must be recoverable from input.prompt
+    # (the ONLY model-visible surface) WITHOUT the OFF-LIMITS harness. The dataset's
+    # `### Module Name:` / bare-backtick naming forms are not always bridge-parseable,
+    # so prepend a canonical `module `<top>`` designation whenever `toplevel_name`
+    # cannot already recover the name from the prompt+context. The interface already
+    # lives in the prompt's own `### Inputs/Outputs`. The harness `.env` TOPLEVEL is
+    # retained for record-shape fidelity only; the refactored solver never reads it.
+    import cvdp_atomic_bridge as _B
+    if _B.toplevel_name({"input": {"prompt": prompt,
+                                   "context": input_context or {}}}) != top:
+        prompt = f"Design the Verilog module `{top}`.\n\n" + prompt
     return {
         "id": f"test_{top}",
         "input": {"prompt": prompt, "context": input_context or {}},
