@@ -573,29 +573,43 @@ def _emit_popcount(prompt, top, ins, outs, mode) -> Optional[str]:
         xor_expr = in_name
     if n < 1:
         return None
-    # the count of up to n ones needs ceil(log2(n+1)) bits; the stated out width
-    # must be able to hold it (>=) — never widen/narrow silently.
-    need = max(1, math.ceil(math.log2(n + 1)))
-    if ow < need:
-        return None
     note = "Hamming distance = popcount(a ^ b)" if mode == "distance" \
         else "population count (Hamming weight)"
 
     # PARAMETERIZED form: a single governing width parameter with a stated default
-    # is present AND the parsed data width equals that default. The CVDP harness
-    # re-instantiates across several values of this parameter, so we MUST emit a
-    # parameterized module whose count width tracks it (the harness reads
-    # COUNT_WIDTH back from the DUT).
+    # governs the data-path width; the CVDP harness re-instantiates across several
+    # values of it, so we MUST emit a parameterized module whose count-output width
+    # tracks it.
+    #
+    # The count output's width is NOT an independent free parameter that must be
+    # READ from anywhere: the population count of an N-bit vector needs EXACTLY
+    # $clog2(N+1) bits (max value N). So we DERIVE the count width from the FUNCTION
+    # + the prompt-stated governing width parameter and emit the parameterized
+    # `COUNT_WIDTH = $clog2(<GOV>+1)` form — we NEVER read the (now-stripped) cocotb
+    # harness's dut.COUNT_WIDTH nor the golden RTL. This is a genuine recovery: the
+    # relationship is stated in prose (`### Parameters:` describes COUNT_WIDTH as
+    # "the width required to represent the maximum possible number of differing
+    # bits", i.e. $clog2(BIT_WIDTH+1)) and is functionally fixed by popcount itself.
+    #
+    # Trigger the parameterized path when the governing width parameter drives the
+    # data ports in the prose (`[<GOV>-1:0]`) AND the count output is the
+    # prose-declared functionally-derived count width, OR (legacy) the parsed data
+    # width equals the governing default. The bridge may resolve the concrete
+    # instance width from a worked EXAMPLE (e.g. `BIT_WIDTH = 4`) that differs from
+    # the module default (e.g. 3); the parameterized emit is correct for BOTH, so
+    # the count-width derivation must not hinge on that incidental instance width.
     gov = _governing_width_param(prompt)
-    if gov is not None and gov[1] == n:
+    # the count output's width parameter, if the prose named one; else COUNT_WIDTH.
+    cw_name = "COUNT_WIDTH"
+    cm = re.search(rf"{re.escape(out_name)}\s*\[\s*([A-Za-z_][A-Za-z0-9_]*)\s*-\s*1", prompt)
+    if cm:
+        cw_name = cm.group(1)
+    param_driven = bool(
+        gov is not None
+        and re.search(rf"\[\s*{re.escape(gov[0])}\s*-\s*1\s*:\s*0\s*\]", prompt)
+        and _derived_count_param(prompt, cw_name) is not None)
+    if gov is not None and (gov[1] == n or param_driven):
         pname, pdef = gov
-        # the count output's width parameter, if the prose named one; else COUNT_WIDTH.
-        cw_name = "COUNT_WIDTH"
-        m = re.search(r"\b([A-Z][A-Z0-9_]*)\s*-\s*1\s*:\s*0\s*\]", prompt)
-        # prefer the bracket parameter actually used on the count output line.
-        cm = re.search(rf"{re.escape(out_name)}\s*\[\s*([A-Z][A-Z0-9_]*)\s*-\s*1", prompt)
-        if cm:
-            cw_name = cm.group(1)
         lines = [f"// program-SOLVED {note} (parameterized); combinational, deterministic.",
                  f"module {top} #(",
                  f"    parameter {pname} = {pdef},",
@@ -623,7 +637,14 @@ def _emit_popcount(prompt, top, ins, outs, mode) -> Optional[str]:
         lines += ["endmodule", ""]
         return "\n".join(lines)
 
-    # FIXED-WIDTH form.
+    # FIXED-WIDTH form. The count of up to n ones needs ceil(log2(n+1)) bits; a
+    # genuinely fixed, prose-stated output width must be able to hold it (>=) — never
+    # widen/narrow silently. (The parameterized path above DERIVES the count width as
+    # $clog2(<GOV>+1), which always fits by construction, so this guard governs only
+    # a literally-stated fixed output width — not a placeholder/unresolved one.)
+    need = max(1, math.ceil(math.log2(n + 1)))
+    if ow < need:
+        return None
     lines = [f"// program-SOLVED {note}; combinational, deterministic.",
              f"module {top} ("]
     if mode == "distance":

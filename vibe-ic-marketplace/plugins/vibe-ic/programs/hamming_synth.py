@@ -570,54 +570,21 @@ def emit_decoder_rtl(spec: HammingSpec, top: str, in_port: str, out_port: str,
 _ALLCAPS_PARAM_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
-def _cocotb_signals(record: dict) -> Optional[Tuple[List[str], List[str]]]:
-    """(inputs, outputs) port names from the cocotb test. None if no test."""
-    files = _bridge._harness_files(record)
-    tb = ""
-    for k, v in files.items():
-        if k.endswith(".py") and "runner" not in k and "docker" not in k:
-            tb += "\n" + v
-    if not tb.strip():
+def _pick_io_pair(record: dict, top: str) -> Optional[Tuple[str, str]]:
+    """The single (data-in, data-out) port pair from the PROMPT+CONTEXT interface
+    (`cvdp_atomic_bridge.extract_interface`) — NOT the cocotb harness (OFF-LIMITS
+    oracle). A clean Hamming encoder/decoder is exactly 1 non-sequential input and
+    1 non-sequential output; anything else SKIPs. Mirrors the compliant
+    `crc_synth.solve` interface-source pattern (prompt+context only)."""
+    iface = _bridge.extract_interface(record, top)
+    if not iface:
         return None
-    driven = set(re.findall(r"dut\.(\w+)\.value\s*=(?!=)", tb))
-    read = set(re.findall(r"=\s*int\(\s*dut\.(\w+)\.value", tb))
-    read |= set(re.findall(r"int\(\s*dut\.(\w+)\.value", tb))
-    read |= set(re.findall(r"=\s*dut\.(\w+)\.value\b", tb))
-    # drop ALL-CAPS cocotb parameters (DATA_WIDTH / PARITY_BIT / ENCODED_DATA).
-    driven = {s for s in driven if not _ALLCAPS_PARAM_RE.match(s)}
-    read = {s for s in read if not _ALLCAPS_PARAM_RE.match(s)}
-    ins = sorted(driven)
-    outs = sorted(read - driven)
-    if not ins or not outs:
-        return None
-    return ins, outs
-
-
-def _pick_encoder_ports(record: dict, spec: HammingSpec
-                        ) -> Optional[Tuple[str, str]]:
-    sig = _cocotb_signals(record)
-    if sig is None:
-        return None
-    ins, outs = sig
+    ins, outs = iface
     seq = _bridge._SEQ_PORTS
-    ins = [n for n in ins if n.lower() not in seq]
-    outs = [n for n in outs if n.lower() not in seq]
+    ins = [n for n, _ in ins if n.lower() not in seq]
+    outs = [n for n, _ in outs if n.lower() not in seq]
     if len(ins) != 1 or len(outs) != 1:
-        return None                     # a clean encoder is exactly 1-in / 1-out
-    return ins[0], outs[0]
-
-
-def _pick_decoder_ports(record: dict, spec: HammingSpec
-                        ) -> Optional[Tuple[str, str]]:
-    sig = _cocotb_signals(record)
-    if sig is None:
-        return None
-    ins, outs = sig
-    seq = _bridge._SEQ_PORTS
-    ins = [n for n in ins if n.lower() not in seq]
-    outs = [n for n in outs if n.lower() not in seq]
-    if len(ins) != 1 or len(outs) != 1:
-        return None
+        return None                     # a clean encoder/decoder is exactly 1-in/1-out
     return ins[0], outs[0]
 
 
@@ -625,9 +592,9 @@ def _pick_decoder_ports(record: dict, spec: HammingSpec
 # solve()
 # --------------------------------------------------------------------------- #
 def solve(record: dict) -> Optional[str]:
-    """Emit a deterministic Hamming encoder or decoder (module named per harness
-    TOPLEVEL) for a stand-alone Hamming design whose geometry is fully stated,
-    else None (SKIP). Never reads the golden RTL."""
+    """Emit a deterministic Hamming encoder or decoder (module named per the PROMPT)
+    for a stand-alone Hamming design whose geometry is fully stated, else None
+    (SKIP). Reads ONLY input.prompt + input.context — never the harness or golden."""
     if not isinstance(record, dict):
         return None
     prompt = (record.get("input") or {}).get("prompt") or ""
@@ -642,18 +609,13 @@ def solve(record: dict) -> Optional[str]:
     if spec is None:
         return None
 
+    picked = _pick_io_pair(record, top)
+    if picked is None:
+        return None
+    in_port, out_port = picked
     if spec.role == "encoder":
-        picked = _pick_encoder_ports(record, spec)
-        if picked is None:
-            return None
-        data_port, out_port = picked
-        return emit_encoder_rtl(spec, top, data_port, out_port, spec.parameterized)
-    else:
-        picked = _pick_decoder_ports(record, spec)
-        if picked is None:
-            return None
-        in_port, out_port = picked
-        return emit_decoder_rtl(spec, top, in_port, out_port, spec.parameterized)
+        return emit_encoder_rtl(spec, top, in_port, out_port, spec.parameterized)
+    return emit_decoder_rtl(spec, top, in_port, out_port, spec.parameterized)
 
 
 # --------------------------------------------------------------------------- #

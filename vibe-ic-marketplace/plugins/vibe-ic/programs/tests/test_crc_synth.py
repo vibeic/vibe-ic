@@ -44,12 +44,39 @@ import crc_synth as C  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #
-# fixtures — CVDP-shaped records (prompt + harness .env TOPLEVEL + cocotb test)
+# fixtures — CVDP-COMPLIANT records (name + interface in input.prompt; harness
+# .env + cocotb retained as OFF-LIMITS oracle the solver never reads)
 # --------------------------------------------------------------------------- #
 def _record(prompt: str, top: str = "crc_generator",
             in_sig: str = "data_in", out_sig: str = "crc_out") -> dict:
-    """A minimal CVDP-shaped record: prose prompt + harness .env TOPLEVEL + a
-    cocotb test whose dut.<sig> references give the bridge the interface."""
+    """A CVDP-COMPLIANT record: the module NAME and the port INTERFACE both live in
+    `input.prompt` — the ONLY model-visible surface. The harness `.env` TOPLEVEL and
+    the cocotb testbench are RETAINED for shape fidelity but are OFF-LIMITS oracle the
+    refactored `cvdp_atomic_bridge` never reads (name from prompt/context only,
+    interface from a prompt `### Inputs:`/`### Outputs:` block, prose, or a
+    test-case table — never from `dut.<sig>` or `.env`).
+
+    (1) Guarantee the module name is STATED in the prompt so `toplevel_name` can
+        recover it without the harness — prepend a `module `<top>`` designation when
+        the prompt does not already name it (the CRC prompts already say
+        "`crc_generator` module", so no prepend fires there).
+    (2) Relocate the cocotb `dut.<in_sig>` / `dut.<out_sig>` port NAMES into a legal
+        prompt-side `### Inputs:`/`### Outputs:` block. NAMES only — the port WIDTHS
+        stay wherever the prompt prose already states them (e.g. `data_in [15:0]`,
+        `crc_out [7:0]`), so no width is invented, merely a legal fact relocated.
+    """
+    if f"`{top}`" not in prompt:
+        prompt = f"Design the Verilog module `{top}`.\n\n" + prompt
+    if "### Inputs:" not in prompt:
+        prompt = prompt + textwrap.dedent(f"""
+
+            ### Inputs:
+            - `{in_sig}`
+
+            ### Outputs:
+            - `{out_sig}`
+        """)
+    # OFF-LIMITS oracle harness (retained for record-shape fidelity; solver ignores).
     tb_py = textwrap.dedent(f"""\
         import cocotb
         @cocotb.test()

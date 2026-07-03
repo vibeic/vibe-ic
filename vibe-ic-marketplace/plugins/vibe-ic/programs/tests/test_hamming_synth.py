@@ -5,8 +5,10 @@ hamming_synth.solve(record) recognizes a stand-alone Hamming encoder
 (k data bits / p parity bits / n encoded width, even-parity convention, the
 power-of-two-positional layout with a redundant LSB), DERIVES the standard
 Hamming parity coverage from k/p (never reading a golden body), and emits the
-XOR-tree encoder or the syndrome single-error-correcting decoder (module named
-per the harness TOPLEVEL, ports from the cocotb dut signals).
+XOR-tree encoder or the syndrome single-error-correcting decoder. It is
+CVDP-COMPLIANT: the module NAME and the port INTERFACE both come from
+`input.prompt`/`input.context` via `cvdp_atomic_bridge` (exactly like `crc_synth`),
+NEVER from the OFF-LIMITS cocotb harness / `.env` TOPLEVEL.
 
 POSITIVE: the real-shaped (7,4) encoder and decoder records PARSE, EMIT, and the
 emit is FUNCTIONALLY correct — the encoder matches the golden codeword for all
@@ -47,18 +49,47 @@ if str(PROG) not in sys.path:
     sys.path.insert(0, str(PROG))
 
 import hamming_synth as H  # noqa: E402
+import cvdp_atomic_bridge as CB  # noqa: E402  compliant name+interface source
 
 _HAS_IVERILOG = shutil.which("iverilog") is not None and shutil.which("vvp") is not None
 
 
 # --------------------------------------------------------------------------- #
-# fixtures — CVDP-shaped records (prose prompt + harness .env TOPLEVEL + cocotb)
+# fixtures — CVDP-COMPLIANT records (name + interface in input.prompt; harness
+# .env + cocotb retained as OFF-LIMITS oracle the solver never reads)
 # --------------------------------------------------------------------------- #
 def _record(prompt: str, top: str, in_sig: str = "data_in",
-            out_sig: str = "data_out", params=None, tb_name: str = "tx_test") -> dict:
-    """A minimal CVDP-shaped record. The cocotb `dut.<sig>` references give the
-    solver the interface (driven=input, read=output); ALL-CAPS params are read as
-    config and filtered out."""
+            out_sig: str = "data_out", in_w: int = 4, out_w: int = 8,
+            params=None, tb_name: str = "tx_test") -> dict:
+    """A CVDP-COMPLIANT record: the module NAME and the port INTERFACE both live in
+    `input.prompt` — the ONLY model-visible surface. `hamming_synth.solve` recovers
+    the name via `cvdp_atomic_bridge.toplevel_name` (prompt/context) and the ports via
+    `cvdp_atomic_bridge.extract_interface` (a prompt `### Inputs:`/`### Outputs:`
+    block, prose, or a test-case table) — NEVER the cocotb `dut.<sig>` harness or the
+    `.env` TOPLEVEL, which are the hidden test HARNESS = OFF-LIMITS oracle. Mirrors
+    the compliant `crc_synth.solve` interface-source pattern.
+
+    (1) Guarantee the module name is STATED in the prompt so `toplevel_name` can
+        recover it without the harness — prepend a `module `<top>`` designation when
+        the prompt does not already name it.
+    (2) Relocate the port NAMES + WIDTHS into a legal prompt-side
+        `### Inputs:`/`### Outputs:` block. The widths are the Hamming shape the
+        design already implies (encoder: k-bit data in / n-bit codeword out; decoder:
+        n-bit codeword in / k-bit data out) — the SAME single-in/single-out interface
+        the removed cocotb `dut.<sig>` harness bound, merely stated on a legal surface.
+    """
+    if f"`{top}`" not in prompt:
+        prompt = f"Design the Verilog module `{top}`.\n\n" + prompt
+    if "### Inputs:" not in prompt:
+        prompt = prompt + textwrap.dedent(f"""
+
+            ### Inputs:
+            - `{in_sig}` ([{in_w-1}:0], {in_w}-bit): the single data/codeword input.
+
+            ### Outputs:
+            - `{out_sig}` ([{out_w-1}:0], {out_w}-bit): the single data/codeword output.
+        """)
+    # OFF-LIMITS oracle harness (retained for record-shape fidelity; solver ignores).
     extra = ""
     if params:
         extra = "\n".join(f"    _{p} = int(dut.{p}.value)" for p in params) + "\n"
@@ -277,7 +308,7 @@ def test_solve_emits_encoder():
 
 
 def test_solve_emits_decoder():
-    rtl = H.solve(_record(_DEC_PROMPT, "hamming_code_receiver"))
+    rtl = H.solve(_record(_DEC_PROMPT, "hamming_code_receiver", in_w=8, out_w=4))
     assert rtl is not None
     assert "module hamming_code_receiver" in rtl
     assert "err_pos" in rtl
@@ -286,7 +317,7 @@ def test_solve_emits_decoder():
 def test_solve_emits_parameterized_forms():
     enc = H.solve(_record(_PARAM_ENC_PROMPT, "hamming_tx",
                           params=["DATA_WIDTH", "PARITY_BIT"]))
-    dec = H.solve(_record(_PARAM_DEC_PROMPT, "hamming_rx",
+    dec = H.solve(_record(_PARAM_DEC_PROMPT, "hamming_rx", in_w=8, out_w=4,
                           params=["DATA_WIDTH", "PARITY_BIT", "ENCODED_DATA"],
                           tb_name="rx_test"))
     assert enc is not None and "parameter DATA_WIDTH" in enc
@@ -413,7 +444,7 @@ def test_iverilog_encoder_matches_golden():
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog/vvp not installed")
 def test_iverilog_decoder_corrects_every_single_bit_error():
-    rtl = H.solve(_record(_DEC_PROMPT, "hamming_code_receiver"))
+    rtl = H.solve(_record(_DEC_PROMPT, "hamming_code_receiver", in_w=8, out_w=4))
     enc = H.HammingSpec(4, 3, 8, True, True, "encoder", False, False)
     lines = []
     for d in range(16):
@@ -456,28 +487,92 @@ def test_iverilog_parameterized_decoder_second_geometry():
 
 
 # --------------------------------------------------------------------------- #
-# real-dataset smoke (GATED on the dataset being present) — the 4 solvable
-# Hamming records EMIT; the composite one SKIPs.
+# real-dataset compliance floor (GATED on the dataset being present).
+#
+# Under CVDP compliance the model sees ONLY `input.prompt` + `input.context` — the
+# cocotb harness / `.env` TOPLEVEL are OFF-LIMITS oracle. So a real record solves
+# iff its module NAME and its port INTERFACE are BOTH recoverable from the prompt:
+#   * hamming_code_tx_and_rx_0003 — a (7,4) receiver that STATES its name
+#     (`hamming_code_receiver`) and a bracketed `data_in[7:0]` / `data_out[3:0]`
+#     interface in the prompt -> SOLVES, and the emitted decoder is FUNCTIONALLY
+#     correct (corrects every single-bit error).
+#   * hamming_code_tx_and_rx_0013 — a COMPOSITE split-and-concatenate tx/rx top
+#     -> §4.05 SKIP (None).
+#   * the remaining hamming records DO NOT state their module name and/or port
+#     interface in the prompt (only in the harness), so under compliance they are
+#     HONEST None — an interface-extraction floor, NOT a solver bug, and NEVER
+#     recovered by peeking at the OFF-LIMITS harness.
+# The test asserts the SOLVABLE record emits correct RTL and every other record is
+# None FOR A DEMONSTRATED, PROMPT-VISIBLE REASON (missing name/interface, or the
+# §4.05 composite guard) — never a count the compliant extractor cannot meet.
 # --------------------------------------------------------------------------- #
 _DATASET = Path("/home/reyerchu/AI_IC_design/_extbench/cvdp_open_v110/"
                 "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
+
+_RID_SOLVABLE = "cvdp_copilot_hamming_code_tx_and_rx_0003"
+_RID_COMPOSITE = "cvdp_copilot_hamming_code_tx_and_rx_0013"
+_RID_FLOOR = (
+    "cvdp_copilot_hamming_code_tx_and_rx_0001",
+    "cvdp_copilot_hamming_code_tx_and_rx_0009",
+    "cvdp_copilot_hamming_code_tx_and_rx_0011",
+)
 
 
 @pytest.mark.skipif(not _DATASET.exists(), reason="CVDP dataset not present")
 def test_real_dataset_hamming_records():
     import json
     recs = {r["id"]: r for r in (json.loads(l) for l in _DATASET.open())}
-    emit = {rid: (H.solve(recs[rid]) is not None) for rid in (
-        "cvdp_copilot_hamming_code_tx_and_rx_0001",
-        "cvdp_copilot_hamming_code_tx_and_rx_0003",
-        "cvdp_copilot_hamming_code_tx_and_rx_0009",
-        "cvdp_copilot_hamming_code_tx_and_rx_0011",
-        "cvdp_copilot_hamming_code_tx_and_rx_0013",
-    ) if rid in recs}
-    if "cvdp_copilot_hamming_code_tx_and_rx_0001" in emit:
-        assert emit["cvdp_copilot_hamming_code_tx_and_rx_0001"] is True
-        assert emit["cvdp_copilot_hamming_code_tx_and_rx_0003"] is True
-        assert emit["cvdp_copilot_hamming_code_tx_and_rx_0009"] is True
-        assert emit["cvdp_copilot_hamming_code_tx_and_rx_0011"] is True
-        # composite split-and-concatenate top -> §4.05 SKIP
-        assert emit["cvdp_copilot_hamming_code_tx_and_rx_0013"] is False
+
+    # POSITIVE — the prompt-derivable (7,4) receiver solves AND emits a correct
+    # single-error-correcting decoder (never a harness/golden peek).
+    if _RID_SOLVABLE in recs:
+        rec = recs[_RID_SOLVABLE]
+        rtl = H.solve(rec)
+        assert rtl is not None, (
+            f"{_RID_SOLVABLE} states its name + a bracketed interface in the prompt "
+            f"-> must solve compliantly")
+        assert "module hamming_code_receiver" in rtl
+        assert "err_pos" in rtl
+        # functional proof (gated on iverilog): the emitted (7,4) decoder corrects
+        # EVERY single-bit error in EVERY codeword.
+        if _HAS_IVERILOG:
+            enc = H.HammingSpec(4, 3, 8, True, True, "encoder", False, False)
+            lines = []
+            for d in range(16):
+                cw = H.encode(enc, d)
+                for b in range(8):
+                    inj = cw ^ (1 << b)
+                    lines.append(f'    data_in=8\'d{inj}; #1; if(data_out!==4\'d{d}) '
+                                 f'begin errs=errs+1; end')
+                lines.append(f'    data_in=8\'d{cw}; #1; if(data_out!==4\'d{d}) '
+                             f'begin errs=errs+1; end')
+            checks = "\n".join(lines)
+            tb = (f"module tb; reg [7:0] data_in; wire [3:0] data_out; integer errs=0;\n"
+                  f"hamming_code_receiver dut(.data_in(data_in),.data_out(data_out));\n"
+                  f"initial begin\n{checks}\n"
+                  f'  if(errs==0) $display("DEC_ALL_PASS"); else $display("DEC_ERRS=%0d",errs);\n'
+                  f"  $finish; end endmodule")
+            assert "DEC_ALL_PASS" in _iverilog_run(rtl, tb)
+
+    # §4.05 SKIP — the composite split-and-concatenate top is None.
+    if _RID_COMPOSITE in recs:
+        assert H.solve(recs[_RID_COMPOSITE]) is None
+
+    # HONEST COMPLIANCE FLOOR — each remaining record is None BECAUSE its module
+    # name and/or its port interface is not stated in the prompt/context (only in
+    # the OFF-LIMITS harness). We PROVE the reason, then require the honest None.
+    for rid in _RID_FLOOR:
+        if rid not in recs:
+            continue
+        rec = recs[rid]
+        top = CB.toplevel_name(rec)
+        prompt = (rec.get("input") or {}).get("prompt") or ""
+        spec = H.parse_hamming_spec(prompt, top)
+        iface = CB.extract_interface(rec, top) if top else None
+        # the record is genuinely NOT prompt-solvable: either the name is not
+        # recoverable, the geometry does not pin, or the interface does not parse.
+        assert top is None or spec is None or iface is None, (
+            f"{rid} appears prompt-solvable ({top=}, spec={spec is not None}, "
+            f"iface={iface is not None}) but the test expects a floor — re-check "
+            f"whether the compliant solver should now emit for it")
+        assert H.solve(rec) is None

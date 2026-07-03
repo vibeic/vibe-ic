@@ -50,6 +50,19 @@ _DATASET = Path(
 _GP_ID = "cvdp_copilot_Carry_Lookahead_Adder_0001"
 
 
+def _strip_oracle(record: dict) -> dict:
+    """Mirror `cvdp_atomic_bridge._strip_oracle`: a COPY of the record with the
+    OFF-LIMITS oracle removed — the hidden test harness (`record["harness"]`:
+    cocotb TB, `.env`) and the golden solution (`record["output"]`). The dispatch
+    (`B.solve`) strips these up front so the deterministic solvers see ONLY
+    `input.prompt` + `input.context` (CVDP official rule). Tests that compare a
+    solver's STANDALONE firing against the dispatch must feed the SAME stripped
+    record, or the comparison is not apples-to-apples (a standalone call handed a
+    FULL record could read the harness and fire while the stripped dispatch does
+    not — a false "routing bug")."""
+    return {k: v for k, v in record.items() if k not in ("harness", "output")}
+
+
 def _load_dataset():
     if not _DATASET.exists():
         pytest.skip("real CVDP dataset not on host")
@@ -175,7 +188,15 @@ def test_bridge_never_mutates_the_caller_record_over_dataset():
 def test_standalone_fires_implies_dispatch_solves_for_every_solver():
     """THE CORE INVARIANT. For each declared record solver, count records where the
     solver FIRES standalone but the dispatch returns None. That count MUST be 0 — a
-    nonzero count is a routing bug (the solver is unreachable through the dispatch)."""
+    nonzero count is a routing bug (the solver is unreachable through the dispatch).
+
+    APPLES-TO-APPLES: the dispatch (`B.solve`) strips the OFF-LIMITS oracle (harness
+    + output) up front, so the solvers it dispatches to see ONLY prompt+context. We
+    therefore call each solver STANDALONE on the SAME oracle-stripped record (via
+    `_strip_oracle`). Comparing a standalone call on a FULL record — which could read
+    the stripped harness and fire — against the stripped dispatch would flag a false
+    routing bug. The invariant (standalone-fires ⟹ dispatch-solves) is still
+    genuinely enforced, now on matched prompt+context-only records."""
     recs = _load_dataset()
     solvers = {m.__name__: m for m in R._load_record_solvers()}
     # bridge verdict per record (cached).
@@ -186,8 +207,10 @@ def test_standalone_fires_implies_dispatch_solves_for_every_solver():
         S = solvers[name]
         bug_ids = []
         for r in recs:
+            # Feed the solver the SAME oracle-stripped record the dispatch sees.
+            stripped = _strip_oracle(copy.deepcopy(r))
             try:
-                fired = bool(S.solve(copy.deepcopy(r)))
+                fired = bool(S.solve(stripped))
             except Exception:
                 fired = False
             if fired and not bridge_hit[r["id"]]:
@@ -203,11 +226,20 @@ def test_standalone_fires_implies_dispatch_solves_for_every_solver():
 
 def test_bridge_solved_count_at_or_above_floor():
     """The dispatch must program-solve at least the known floor. Guards against a silent
-    dispatch regression that drops solved records."""
+    dispatch regression that drops solved records.
+
+    The floor reflects the PROMPT+CONTEXT-ONLY compliant solve set: `B.solve` strips the
+    OFF-LIMITS oracle (harness `.env` / cocotb `dut.<sig>` + `output` golden) BEFORE
+    dispatching, so only records whose module name + interface are stated in
+    `input.prompt` / `input.context` are program-solvable (records whose interface lived
+    only in the harness now correctly SKIP — the intended compliant behavior, NOT a
+    regression). Measured compliant solved count on the real 302-record CVDP dataset = 22
+    (as of the oracle-strip cutover); the floor is set at that measured value."""
     recs = _load_dataset()
     solved = [r["id"] for r in recs if B.solve(copy.deepcopy(r))]
-    assert len(solved) >= 29, (
-        f"dispatch-solved count regressed to {len(solved)} (floor 29). solved={solved}"
+    assert len(solved) >= 22, (
+        f"dispatch-solved count regressed to {len(solved)} (floor 22, the measured "
+        f"prompt+context-only compliant solve count). solved={solved}"
     )
     assert _GP_ID in solved, "the GP table_lut record is no longer solved by the dispatch"
 
