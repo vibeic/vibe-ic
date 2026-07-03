@@ -21,6 +21,32 @@ sweep (see `benchmark_external/RESULT_MCP_EDA_v0125_FRESH.md`, `benchmark_clean/
 ⛔ **Do not pick the run-shape by feel.** Read § 1 (taxonomy) and § 2 (decision matrix) below
 before invoking any benchmark agent or runner.
 
+## 🔒 RULE 0 (BINDING, owner directive 2026-07-03): benchmark ENTRY ≡ general-IC-design ENTRY
+
+> **A benchmark problem MUST be solved through the SAME entry point a general IC design task uses
+> — the real product runner (`vibe_ic_one_shot_runner.py <project>` → phase1 doc→L1-L24 → phase2
+> spec-to-rtl WAIVE → runner gates).** There is exactly ONE solve entry; the benchmark does not get
+> its own authoring path.
+
+- **NEVER** author a benchmark answer through a bespoke benchmark-only harness (a hand-rolled
+  `AUTHOR_INSTRUCTIONS.md` + a flat "prompt → drafts/ → gate" subagent loop). That measures
+  "an AI agent with a tuned prompt", NOT "what the Vibe-IC runner can do" — the exact anti-pattern
+  the program-first doctrine above forbids.
+- The **only** benchmark-specific glue permitted is the thin IO shell: (in) stage each record as a
+  project — `input.prompt` → `<project>/input/docs/design_description.md`, `input.context` files →
+  `<project>/input/docs/` — and (out) the gate/scorer (`cvdp_gate.py` → official `run_benchmark.py`).
+  Everything between IN and OUT is the general runner, unchanged.
+- The **program-first → AI-backup dual path lives INSIDE the runner**: `design_one_shot_runner.
+  step_rtl_gen` tries the deterministic RTL dispatch first (program), and on `rtl_gen=null` WAIVEs to
+  the **`spec-to-rtl`** skill (AI-backup) which authors into `phase2/stage1/rtl/` — reading the
+  runner's emitted **L1-L24 docs**, not the raw prompt — after which the runner's own gates
+  (rtl_hygiene_lint, spec_conformance_check, reference_tb, yosys_synth) fire. Do not reimplement this
+  outside the runner.
+- **Consequence for scoring:** a number produced by any path other than this shared entry is NOT a
+  Vibe-IC product number and must not be published as one (see § 7.5). If the general entry cannot yet
+  solve a class, that is a real FLOOR/gap to CAPTURE (per `benchmark-enhancement-capture`), never
+  something to paper over with a benchmark-only authoring prompt.
+
 > ⭐ **The Benchmark Agent's #1 mandate is not the score — it is the LOOP** (owner directive
 > 2026-06-22): **continuously converge → capture every fail into a solvable case → distill every
 > generalizable fix into the deterministic PROGRAM layer**, so the next BLIND run auto-recovers it.
