@@ -484,7 +484,12 @@ def test_dataset_hamming_distance_emits_and_simulates():
     r = _find_dataset_record("cvdp_copilot_word_reducer_0008")
     rtl = B.solve(r)
     assert rtl is not None and "module Bit_Difference_Counter" in rtl
-    assert "COUNT_WIDTH = $clog2(BIT_WIDTH+1)" in rtl  # harness reads dut.COUNT_WIDTH
+    # COUNT_WIDTH is DERIVED from the function (popcount needs $clog2(N+1) bits) +
+    # the prompt-stated BIT_WIDTH param — NOT read from the (now-stripped) cocotb
+    # harness's dut.COUNT_WIDTH nor the golden RTL. The prose states the relationship
+    # ("the width required to represent the maximum possible number of differing
+    # bits"), so this is a compliant recovery, not a harness read.
+    assert "COUNT_WIDTH = $clog2(BIT_WIDTH+1)" in rtl
     if HAVE_IVERILOG:
         for W in (4, 10, 3, 20):  # the runner's BIT_WIDTH set
             tb = f"""module tb; localparam BW={W};

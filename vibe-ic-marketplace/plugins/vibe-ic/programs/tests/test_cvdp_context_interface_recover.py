@@ -104,24 +104,31 @@ def test_nonansi_body_declarations():
 # --------------------------------------------------------------------------- #
 def test_target_absent_from_context_returns_empty():
     # The provided context declares a DIFFERENT module — recover nothing rather
-    # than fabricate an interface (SKIP).
+    # than fabricate an interface (SKIP). We pass the target EXPLICITLY (the
+    # compliant regime: toplevel_name derives from prompt+context, never the
+    # off-limits .env TOPLEVEL) so this test controls the target-matching axis
+    # directly: target `the_target` is absent from the context -> [].
     ctx = {"rtl/other.sv": "module other (input a, output b);\nendmodule\n"}
-    assert R.recover_interface(_rec("the_target", ctx)) == []
+    assert R.recover_interface(_rec("the_target", ctx), target="the_target") == []
 
 
 def test_helper_submodule_not_pulled_as_target():
     # The target is `top`, which INSTANTIATES helper `leaf`. Only `leaf`'s header
     # is in context (top is what the AI must write). We must NOT pass off leaf's
-    # ports as the target interface.
+    # ports as the target interface. Target passed EXPLICITLY so the assertion
+    # pins recover_interface's own helper-exclusion: only `top` may be recovered,
+    # and `top` is not declared in context -> [] (leaf's ports are never pulled).
     ctx = {"rtl/leaf.sv": (
         "module leaf (input [2:0] in_l, output [1:0] out_l);\nendmodule\n")}
-    assert R.recover_interface(_rec("top", ctx)) == []
+    assert R.recover_interface(_rec("top", ctx), target="top") == []
 
 
 def test_word_boundary_no_prefix_match():
-    # `module adder` must not be matched by target `add`.
+    # `module adder` must not be matched by target `add`. Target passed EXPLICITLY
+    # so the assertion pins recover_interface's word-boundary match directly:
+    # `add` is a strict prefix of `adder`, so it must NOT resolve -> [].
     ctx = {"rtl/a.sv": "module adder (input [7:0] a, output [7:0] s);\nendmodule\n"}
-    assert R.recover_interface(_rec("add", ctx)) == []
+    assert R.recover_interface(_rec("add", ctx), target="add") == []
 
 
 def test_body_signals_never_recovered_as_ports():

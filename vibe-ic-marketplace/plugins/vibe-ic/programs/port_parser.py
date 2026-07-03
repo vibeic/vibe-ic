@@ -18,6 +18,58 @@ from __future__ import annotations
 import re
 from typing import List, Optional, Tuple
 
+# Verilog direction / net-type keywords that are NEVER a port name — when a bullet
+# quotes a full declaration (`- \`input [31:0] num_in\``) the name is the
+# identifier AFTER these, not the leading keyword. Kept DELIBERATELY MINIMAL to the
+# unambiguous HDL keywords: English words / generic type nouns ("a", "the", "bit",
+# "signal", …) are EXCLUDED because a port may legitimately be named `a` / `b` /
+# `bit` (adders, GF multipliers, …) and must never be dropped as a stopword.
+_DIR_TYPE_KW = frozenset({
+    "input", "output", "inout", "wire", "reg", "logic", "signed", "unsigned",
+})
+
+
+def _bullet_port_name(line: str) -> Optional[str]:
+    """The port NAME from a single CVDP Inputs/Outputs bullet (the text after the
+    -/* marker). Handles every observed CVDP form:
+
+      clk                                  -> clk
+      `data_in([DATA_WIDTH-1:0])`: ...     -> data_in   (first ident, paren width)
+      `input [31:0] num_in`: ...           -> num_in    (skip the `input` keyword)
+      **input_A [BIT_WIDTH-1:0]**: ...      -> input_A
+      **i_A** : 1-bit input signal         -> i_A       (bold, no backtick)
+      **generate** signal (`o_generate`)   -> o_generate (backticked HDL name)
+
+    Only the DECLARATION part (before the first top-level ':') is considered, so a
+    trailing prose reference (`... of size DATA_WIDTH`) never wins over the real
+    port. A ':' INSIDE a packed width `[hi:lo]` is NOT the description separator."""
+    depth = 0
+    cut = len(line)
+    for i, ch in enumerate(line):
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth = max(0, depth - 1)
+        elif ch == ":" and depth == 0:
+            cut = i
+            break
+    decl = line[:cut]
+    # (1) a CLEAN single-identifier backtick — `X` or (`X`) — that is not a
+    #     direction/type keyword. This is the canonical HDL name after a bold
+    #     descriptor (the GP `(\`o_generate\`)` form). A backtick span that holds
+    #     a FULL declaration (`\`input [31:0] num_in\``) is NOT clean (it has
+    #     spaces/brackets) and is skipped here, falling to (2).
+    for m in re.finditer(r"`\s*([A-Za-z_]\w*)\s*`", decl):
+        if m.group(1).lower() not in _DIR_TYPE_KW:
+            return m.group(1)
+    # (2) strip markdown (** and `) and skip leading direction/type keywords; the
+    #     port name is the first remaining identifier (num_in / data_in / input_A).
+    flat = decl.replace("**", " ").replace("`", " ")
+    for tok in re.findall(r"[A-Za-z_]\w*", flat):
+        if tok.lower() not in _DIR_TYPE_KW:
+            return tok
+    return None
+
 
 def _bullet_ports(text: str) -> Tuple[List[Tuple[str, Optional[int]]], List[Tuple[str, Optional[int]]]]:
     """Parse bullet-style port lists (VerilogEval-v2 / CVDP prose).
@@ -55,17 +107,33 @@ def _bullet_ports(text: str) -> Tuple[List[Tuple[str, Optional[int]]], List[Tupl
         (ins if d == "input" else outs).append((name, w))
     if ins or outs:
         return ins, outs
-    # CVDP section-bounded form: direction from "### Inputs/Outputs:" section.
-    section_re = re.compile(r"^\s*###?\s*(Inputs?|Outputs?)\s*:.*?\n(?=^\s*###|\Z)",
-                            re.M | re.S)
+    # CVDP section-bounded form: direction from a "### Inputs/Outputs:" heading.
+    # Tolerate any markdown heading level 2-6 (`##`..`######`), an optional section
+    # NUMBER (`### 1. Inputs`), and an optional trailing colon — CVDP prompts use
+    # `#### Inputs:`, `### 1. Inputs`, `## Outputs`, etc., which a fixed `###?...:`
+    # missed. The heading must END at the port word (`\s*$` after an optional colon)
+    # so a prose heading like "### Inputs and clocking notes" is not swallowed.
+    section_re = re.compile(
+        r"^\s*#{2,6}\s*(?:\d+\.\s*)?(Inputs?|Outputs?)\s*:?\s*$.*?\n(?=^\s*#{2,6}|\Z)",
+        re.M | re.S)
     for sec in section_re.finditer(text):
         section_kind = "input" if sec.group(1).lower().startswith("input") else "output"
-        for bm in re.finditer(
-            r"^\s*-\s*`?(\w+)`?(?:\s*\(\s*(\d+)\s*-?\s*bits?\s*\))?",
-            sec.group(0), re.M):
-            name, w = bm.groups()
-            (ins if section_kind == "input" else outs).append(
-                (name, int(w) if w else 1))
+        for bm in re.finditer(r"^\s*[-*]\s+(.+)$", sec.group(0), re.M):
+            line = bm.group(1)
+            name = _bullet_port_name(line)
+            if not name:
+                continue
+            # width: an explicit `(N-bit)` / `[hi:lo]` / a same-line "N-bit".
+            wm = re.search(r"\(\s*(\d+)\s*-?\s*bits?\s*\)", line, re.I) \
+                or re.search(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", line) \
+                or re.search(r"\b(\d+)\s*-?\s*bits?\b", line, re.I)
+            if wm and wm.lastindex == 2:
+                w = abs(int(wm.group(1)) - int(wm.group(2))) + 1
+            elif wm:
+                w = int(wm.group(1))
+            else:
+                w = 1
+            (ins if section_kind == "input" else outs).append((name, w))
     return ins, outs
 
 

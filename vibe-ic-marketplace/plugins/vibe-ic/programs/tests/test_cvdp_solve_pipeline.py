@@ -65,19 +65,21 @@ def _make_record(top, prompt, cocotb_test, rid=None, rtl_path=None):
     }
 
 
-# A fully-specified combinational adder — every port width stated with an explicit
-# `[hi:lo]` range; the cocotb test drives a/b/carry_in and reads sum/carry_out.
-ADDER_PROMPT = """Design a combinational module `adder8` that adds two operands.
+# A fully-specified combinational adder — the module NAME + INTERFACE are stated in
+# the PROMPT (module named `adder8`, a `### Inputs:`/`### Outputs:` port block with an
+# explicit `[hi:lo]` range per data port and the stated `adder`/`+` operation), so the
+# bridge program-SOLVES it from prompt+context ALONE (the harness is stripped). The
+# cocotb test drives a/b/carry_in and reads sum/carry_out.
+ADDER_PROMPT = """Design a combinational adder module named `adder8` that adds two operands.
 
-## Inputs and Outputs
+### Inputs:
+- a [7:0]: First operand.
+- b [7:0]: Second operand.
+- carry_in: Carry input.
 
-| Name        | Width  | Description       |
-|-------------|--------|-------------------|
-| `a [7:0]`   | 8 bits | First operand.    |
-| `b [7:0]`   | 8 bits | Second operand.   |
-| `carry_in`  | 1 bit  | Carry input.      |
-| `sum [7:0]` | 8 bits | The 8-bit sum.    |
-| `carry_out` | 1 bit  | Carry output.     |
+### Outputs:
+- sum [7:0]: The 8-bit sum.
+- carry_out: Carry output.
 
 The module performs `sum = a + b + carry_in`, with `carry_out` the overflow bit.
 """
@@ -115,7 +117,7 @@ def test_tier1_bridge_solvable_returns_rtl():
 # A complete-spec record the bridge SKIPS (a stated FSM controller — not a single
 # registry-emittable atomic function), so the AI must author it. Interface is
 # fully placed -> the gate is meaningful -> Tier3.
-FSM_PROMPT = """Design a finite state machine `traffic_ctl`.
+FSM_PROMPT = """Design a finite state machine module named `traffic_ctl`.
 
 ## Inputs and Outputs
 - `clk` - clock.

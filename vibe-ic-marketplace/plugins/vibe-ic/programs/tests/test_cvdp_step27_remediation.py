@@ -118,7 +118,7 @@ def test_param_expr_port_gate_accepts_resolved_literal_candidate():
 # --------------------------------------------------------------------------- #
 # (tb) cocotb-in-tb.py fallback recovers the authoritative interface
 # --------------------------------------------------------------------------- #
-FIFO_PROMPT = """Design `af`. An asynchronous FIFO.
+FIFO_PROMPT = """Design a module named `af`, an asynchronous FIFO.
 - `w_clk`: write clock
 - `w_data` (8 bits): input data
 - `r_data` (8 bits): output data
