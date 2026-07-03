@@ -69,6 +69,15 @@ _CLK_NAMES = {"clk", "clock", "clk_i", "i_clk", "sysclk"}
 _RST_NAMES = {"rst", "reset", "rst_n", "reset_n", "rstn", "i_rst",
               "rst_ni", "arst_n"}
 
+# ORGANIC-20260703 — a start/valid/enable HANDSHAKE input or a control/STATUS
+# output marks a SEQUENTIAL / protocol-driven datapath for which the closed-form
+# combinational oracle is unsound. chip-AGNOSTIC: pure handshake vocabulary.
+_HANDSHAKE_NAMES = {"start", "valid", "valid_in", "valid_i", "i_valid",
+                    "in_valid", "din_valid", "en", "enable", "ena", "ready",
+                    "req", "load", "go", "kick", "strobe"}
+_STATUS_OUT_NAMES = {"valid_out", "valid_o", "o_valid", "out_valid", "done",
+                     "busy", "ready", "finish", "finished", "ack", "req_out"}
+
 # ── recognised CLOSED-FORM operators ─────────────────────────────────────────
 # Each entry: token → (python golden, verilog op symbol). The python golden is
 # the UNTRUNCATED integer result; truncation + signedness are applied uniformly
@@ -499,6 +508,41 @@ def extract_arith_spec(project: Path,
             f"while another operand/result is a wide/parametric bus — bit-serial "
             f"delivery with Plugin-chosen latency/bit-order is NOT closed-form-"
             f"derivable; defer to #654 (testbench-author)")
+
+    # ORGANIC-20260703 — SEQUENTIAL / HANDSHAKE / STATUS-OUTPUT DEFER. The oracle
+    # emitted here is COMBINATIONAL: it drives operands and compares
+    # `result == a OP b` with NO clock driven and no start/valid asserted. That is
+    # sound ONLY for a purely-combinational arithmetic primitive (a single data
+    # output that is a pure function of the data inputs). A design with a CLOCK
+    # input (registered / pipelined / FSM datapath), a start/valid/enable
+    # HANDSHAKE, or a control/STATUS output (valid_out/done/busy/…) needs a
+    # latency- and protocol-aware oracle — the combinational golden would
+    # false-FAIL a correct sequential DUT (measured misfires: dot_product FSM,
+    # modified_booth_mul, cont_adder). DEFER (the runner then WAIVEs reference_tb)
+    # rather than ship a bogus oracle. Runs AFTER the serial guards so a serial
+    # datapath keeps its more-specific reason. chip-AGNOSTIC: clock/handshake/
+    # status port-name grammar.
+    _names_lc = {str(p.get("name", "")).lower() for p in ports}
+    if _names_lc & _CLK_NAMES:
+        return None, (
+            "sequential/clocked datapath (a clock input is present): the "
+            "closed-form COMBINATIONAL oracle drives no clock and asserts no "
+            "start/valid, so it cannot soundly check a registered/pipelined/FSM "
+            "arithmetic datapath — defer (WAIVE reference_tb) to #654")
+    if _names_lc & _HANDSHAKE_NAMES:
+        return None, (
+            "handshake-driven datapath (a start/valid/enable input is present): "
+            "the closed-form combinational oracle asserts no handshake, so it "
+            "cannot drive this protocol — defer (WAIVE reference_tb) to #654")
+    _status_outs = sorted(
+        str(p.get("name")) for p in ports
+        if p.get("dir") == "output"
+        and str(p.get("name", "")).lower() in _STATUS_OUT_NAMES)
+    if _status_outs:
+        return None, (
+            f"control/status output(s) present ({', '.join(_status_outs)}): a "
+            f"closed-form combinational oracle checks only the single data "
+            f"result and cannot model a status/handshake output — defer to #654")
 
     # Per-port resolved widths (folds FACET-2 #643): a parametric port whose
     # numeric width is unknown is bound to the datapath width N so the operand

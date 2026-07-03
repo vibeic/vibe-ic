@@ -1615,10 +1615,16 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
         # the wrapper header so package-scoped port-width params resolve on the
         # outer wrapper (else: deterministic SV undeclared-identifier FAIL).
         iblock = _rcv.parse_module_imports(target_txt, tgt)
+        # ORGANIC-20260703 — carry the inner module's LOCALPARAMS so the wrapper
+        # can hoist any that a port width depends on (`[DWIDTH_ACCUMULATOR-1:0]`
+        # where DWIDTH_ACCUMULATOR is a body localparam); else the wrapper's ANSI
+        # port list references an unbound identifier and iverilog ELABs
+        # `Unable to bind parameter`.
+        lpdefs = _rcv.parse_module_localparams(target_txt, tgt)
         wrapper = _rcv.emit_variant_alias_wrapper(
             inner, ports, plan, wrapper_name=tgt,
             param_block=pblock, param_names=pnames, import_block=iblock,
-            additive_reset_map=additive_reset_map)
+            additive_reset_map=additive_reset_map, localparam_defs=lpdefs)
     except ValueError as e:  # cross-polarity guard — never alias unsafely
         return StepResult("reset_clock_variant_aliases", "SKIP",
                           time.time() - t0, f"polarity-guard declined: {e}")
