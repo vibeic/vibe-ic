@@ -56,6 +56,14 @@ import table_lut_synth as S  # noqa: E402
 # Real-shaped CVDP v1.1.0 record fixture builder.
 # --------------------------------------------------------------------------- #
 def _make_record(top, rtl_path, prompt, cocotb_test=""):
+    # COMPLIANCE: cvdp_atomic_bridge.toplevel_name derives the module name from
+    # `input.prompt` + `input.context` ONLY (the harness `.env` TOPLEVEL is an
+    # OFF-LIMITS oracle). Some fixture prompts (e.g. GP_PROMPT) describe the block
+    # in prose ("Generate/Propagate (GP) module") without a canonical `module `X``
+    # designation, so the name must be stated in the prompt itself. Prepend one
+    # clean sentence naming the module iff the prompt does not already reference it.
+    if f"`{top}`" not in prompt:
+        prompt = f"Design the Verilog module `{top}`.\n\n" + prompt
     return {
         "id": f"test_{top}",
         "input": {"prompt": prompt, "context": {}},
@@ -268,11 +276,45 @@ def test_section_4_05_skips(top, prompt):
     assert S.variant_of(rec) is None
 
 
+# A COMPLETE truth table whose prompt states NO module name anywhere (no `module X`,
+# no "named/called `X`", no "(ABBR) module", no backtick `X` module reference). The
+# table itself is fully determined, so the ONLY reason to SKIP is the genuinely-absent
+# module name: cvdp_atomic_bridge.toplevel_name -> None (name derives from
+# input.prompt + input.context ONLY, and neither states one) -> no emit. (GP_PROMPT
+# can NOT be reused here: its prose "Generate/Propagate (GP) module" legitimately
+# names the module `GP` via the compliant "(ABBR) module" designation.)
+NONAME_TABLE_PROMPT = """Design a combinational Generate/Propagate function for a carry lookahead adder.
+
+## Interface
+### Inputs:
+- i_A : 1-bit input signal.
+- i_B : 1-bit input signal.
+- i_Cin : 1-bit carry-in signal.
+### Outputs:
+- o_generate : 1-bit signal.
+- o_propagate : 1-bit signal.
+- o_Cout : 1-bit carry-out signal.
+
+## Truth Table:
+| i_A | i_B | i_Cin | o_generate | o_propagate | o_Cout |
+| --- | --- | --- | --- | --- | --- |
+| 0 | 0 | 0 | 0 | 0 | 0 |
+| 0 | 0 | 1 | 0 | 0 | 0 |
+| 0 | 1 | 0 | 0 | 1 | 0 |
+| 0 | 1 | 1 | 0 | 1 | 1 |
+| 1 | 0 | 0 | 0 | 1 | 0 |
+| 1 | 0 | 1 | 0 | 1 | 1 |
+| 1 | 1 | 0 | 1 | 1 | 1 |
+| 1 | 1 | 1 | 1 | 1 | 1 |
+"""
+
+
 def test_no_record_no_emit():
     assert S.solve(None) is None
     assert S.solve({}) is None
-    # a record with no harness TOPLEVEL cannot be named -> SKIP.
-    assert S.solve({"input": {"prompt": GP_PROMPT}}) is None
+    # a record whose module name is genuinely absent from prompt+context cannot be
+    # named -> SKIP (even though its table is complete and would otherwise emit).
+    assert S.solve({"input": {"prompt": NONAME_TABLE_PROMPT}}) is None
 
 
 # --------------------------------------------------------------------------- #

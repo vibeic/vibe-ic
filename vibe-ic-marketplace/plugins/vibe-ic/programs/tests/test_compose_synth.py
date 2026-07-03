@@ -151,6 +151,21 @@ def _novel_record():
                         _AXI_PROMPT, _CASCADE_COCOTB)
 
 
+# NEGATIVE 4 — NO RESOLVABLE TOPLEVEL: the SAME clean sum composite, but the prose
+# never NAMES a module (the `module named \`cascaded_adder\`` designation is stripped)
+# and input.context is empty — so the target module name is absent from the ONLY two
+# compliant sources (input.prompt + input.context). The harness `.env` TOPLEVEL is the
+# OFF-LIMITS oracle and is NOT consulted, so with no name to emit under, solve SKIPs.
+# This is the compliant expression of the original "no emit without a toplevel" intent
+# under the prompt+context-only name-resolution rule (previously the fixture blanked
+# the harness `.env`, which the refactored bridge no longer reads).
+def _no_named_toplevel_record():
+    prompt = _CASCADE_PROMPT.replace(
+        "module named `cascaded_adder` that performs", "design that performs")
+    # input.context stays empty; harness `.env` keeps its (ignored) TOPLEVEL.
+    return _make_record("cascaded_adder", "rtl/cascaded_adder.sv", prompt, _CASCADE_COCOTB)
+
+
 # =========================================================================== #
 # STRUCTURAL — decomposition + SKIP behavior (run anywhere)
 # =========================================================================== #
@@ -184,8 +199,11 @@ def test_skip_novel_logic():
 
 
 def test_no_emit_without_toplevel():
-    rec = _cascade_record()
-    rec["harness"]["files"]["src/.env"] = "SIM = icarus\n"  # no TOPLEVEL
+    # No module name in input.prompt OR input.context -> name unresolvable from the
+    # only two compliant sources -> nothing to emit under -> SKIP. The harness .env
+    # TOPLEVEL (OFF-LIMITS oracle) is deliberately NOT the source of the skip.
+    rec = _no_named_toplevel_record()
+    assert C._toplevel(rec) is None, "sanity: module name absent from prompt+context"
     assert C.solve(rec) is None
 
 

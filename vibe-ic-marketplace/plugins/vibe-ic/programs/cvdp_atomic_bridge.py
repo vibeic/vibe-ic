@@ -12,10 +12,10 @@ atomic-noun CVDP problems IF the INTERFACE + the OPERATION can be extracted from
 the CVDP prose. But the registry's `generate()` fires on 0/302 CVDP prompts,
 because CVDP states the interface NOT as bullet ports but as a markdown test-case
 table / prose / harness signal list. This bridge supplies exactly the missing
-piece: it reads the interface from the BEST available CVDP source and re-emits it
-as the bullet/prose port block the registry already parses, PREPENDED to the
-ORIGINAL prompt prose. The registry then recognizes the operation from the real
-prompt and emits the RTL (named per the harness TOPLEVEL the testbench binds).
+piece: it reads the interface from the BEST available PROMPT+CONTEXT source and
+re-emits it as the bullet/prose port block the registry already parses, PREPENDED
+to the ORIGINAL prompt prose. The registry then recognizes the operation from the
+real prompt and emits the RTL (named per the module name STATED IN THE PROMPT).
 
 DESIGN — the bridge NEVER paraphrases the operation. It supplies a parseable port
 block; the operation is recognized by the registry FROM THE ORIGINAL PROMPT. That
@@ -23,29 +23,40 @@ keeps every emitted fact grounded in the dataset prose (no fabrication), and the
 registry's own §4.05 conservatism is the SKIP enforcement: a composite SoC / a
 protocol controller / anything whose function no canonical can emit returns None.
 
-§4.05 NO-LEAK / NO-CHEAT (binding):
-  * Never read the golden/reference RTL. `output['context']`'s value (the rtl/*.sv
-    the submitter must fill) is treated as a HINT FOR PORTS/INTERFACE ONLY — and
-    only when it is a non-empty module header; its logic is NEVER copied. In CVDP
-    v1.1.0 every reference is in fact EMPTY, so this is moot in practice, but the
-    guard is enforced regardless (we parse ONLY the `module ... ( ... );` header,
-    never any body).
+§4.05 NO-LEAK / NO-CHEAT — PROMPT+CONTEXT ONLY (binding, CVDP official rule
+arXiv:2506.14074 §2 + README_NON_AGENTIC): the model sees ONLY `input.prompt` +
+`input.context`. The ENTIRE hidden harness (the cocotb `dut.<sig>` test, the
+`.env` TOPLEVEL / VERILOG_SOURCES, `harness_library.py`) AND `output.*` (the
+golden/reference RTL) are OFF-LIMITS oracle and are NEVER read to name the module
+or to derive the emitted interface.
   * SKIP (return None) when the design is not a single recognizable atomic function
-    OR the interface cannot be unambiguously extracted. Never guess a width, never
-    guess a port direction, never invent a port.
+    OR the module name / interface cannot be extracted from prompt+context. Never
+    guess a width, never guess a port direction, never invent a port, and never
+    peek at the harness for a name/port the prompt is silent on (that is an honest
+    floor, not a recoverable case).
   * Protocol / bus / memory / composite cues (AXI/APB/AHB/Wishbone/FIFO/cache/...)
     short-circuit to SKIP up front — they are not atomic functions.
 
-Interface-extraction priority (best source first):
-  (a) output['context'] RTL skeleton's `module <top> ( ... );` HEADER, if present
-      and non-empty (HEADER ONLY — never the body);
-  (b) the harness cocotb test's `dut.<signal>` references (driven => input,
-      read-only => output) + the .env, with cocotb PARAMETERS filtered out;
-  (c) a markdown test-case table header (columns a/b/carry_in/Sum/carry_out -> ports),
-      which also fixes widths from the hex-cell column width;
-  (d) the prose "Input/Output ports" description.
-Width resolution cross-checks: prose `[hi:lo]`, a "N-bit" description token, a
-test-case-table hex-column width, and cocotb format/mask cues (`:08X`, `& 0xFF`).
+Module NAME source (prompt+context ONLY — see `toplevel_name`): an input.context
+RTL file that DECLARES the module, or a prompt `module <name>` / `<name> module` /
+"named/called `<name>`" designation.
+
+Interface-extraction priority (prompt+context ONLY, best source first):
+  (a) an input.context RTL skeleton's `module <top> ( ... );` HEADER (HEADER ONLY —
+      never the body; input.context is the file the prompt SHOWS the author);
+  (b) a markdown test-case table header (columns a/b/carry_in/Sum/carry_out ->
+      ports; an `Expected/Actual`-prefixed column is an OUTPUT), which also fixes
+      widths from the hex-cell column width;
+  (c) the prose "Input/Output ports" description.
+Width resolution cross-checks: prose `[hi:lo]`, a "N-bit" description token, and a
+test-case-table hex-column width. (The removed harness-derived cocotb source and
+`output.context` golden header are the oracle and no longer participate.)
+
+The harness-reading helpers below (`_harness_files` / `_cocotb_*` / `_env_*`) are
+retained ONLY for the §3.9 EXTRACTION_GAP DIAGNOSTIC consumed by
+`cvdp_complete_extract` (post-hoc: compare our prompt-extraction against what the
+hidden TB drives, to find OUR extractor gaps) — they are NEVER called on the
+solve/emit path.
 
 API: solve(record: dict) -> Optional[str]   # emitted RTL (module == TOPLEVEL) | None
 chip-AGNOSTIC (no design-name keys), pure-function, deterministic.
@@ -230,12 +241,90 @@ def _pick_variant_files(record: dict,
     return None
 
 
+# english words / verilog keywords that can follow "module" in prose but are not
+# a real module name (the code-delimiter requirement already filters most).
+_NAME_STOP = frozenset({
+    "the", "a", "an", "is", "named", "called", "name", "this", "that", "which",
+    "top", "design", "block", "performs", "implements", "should", "must", "with",
+    "module", "instantiates", "contains", "has", "and", "or",
+})
+
+
 def toplevel_name(record: dict) -> Optional[str]:
-    """The module name the TESTBENCH binds — the harness .env TOPLEVEL field."""
-    files = _harness_files(record)
-    env = _env_text_for_record(record, files)
-    m = re.search(r"^\s*TOPLEVEL\s*=\s*(\S+)", env, re.M)
-    return m.group(1) if m else None
+    """The target module name — derived from `input.prompt` + `input.context` ONLY.
+
+    The harness `.env` TOPLEVEL and the cocotb testbench are the hidden test
+    HARNESS = OFF-LIMITS oracle (CVDP official rule, arXiv:2506.14074 §2 +
+    README_NON_AGENTIC: the model sees only `input.prompt` + `input.context`).
+    When the module name is stated in NEITHER the prompt nor the provided
+    context, return None — the bridge then SKIPs (an honest floor, never a
+    harness peek)."""
+    if not isinstance(record, dict):
+        return None
+    inp = record.get("input") or {}
+    prompt = record.get("prompt") or inp.get("prompt") or ""
+    ctx = inp.get("context") or {}
+
+    # Collect the modules DECLARED in input.context, plus the one whose name
+    # matches its file leaf (`rtl/<name>.sv`) — the conventional MODIFY target.
+    leaf_match: Optional[str] = None
+    declared: List[str] = []
+    if isinstance(ctx, dict):
+        for path, text in ctx.items():
+            if not isinstance(text, str) or not text.strip():
+                continue
+            leaf = re.sub(r"\.\w+$", "", str(path).rsplit("/", 1)[-1])
+            for mm in re.finditer(r"\bmodule\s+([A-Za-z_]\w*)", text):
+                nm = mm.group(1)
+                declared.append(nm)
+                if nm == leaf and leaf_match is None:
+                    leaf_match = nm
+    declared_set = set(declared)
+
+    # (1) STRONG prompt designation — an imperative "module (must be) named/called
+    #     `X`", a bare "named/called `X`", or a `module X (` code header. This is
+    #     the DELIVERABLE the prompt asks you to build. It OUTRANKS a context
+    #     leaf-match when `X` is a NEW module the context does NOT already declare:
+    #     a "design a module named `X` that leverages the provided `Y`/`Z`
+    #     sub-modules" prompt ships Y/Z in input.context as DEPENDENCIES, not as the
+    #     target, so the context leaf (Y) must not shadow the stated deliverable X.
+    strong_named: Optional[str] = None
+    for pat in (
+        r"\bmodule\s+(?:must\s+be\s+)?(?:named|called)\s+[`*\"]([A-Za-z_]\w*)[`*\"]",
+        r"\b(?:named|called)\s+[`*\"]([A-Za-z_]\w*)[`*\"]",
+        r"\bmodule\s+([A-Za-z_]\w*)\s*(?:#\s*\(|\()",
+    ):
+        m = re.search(pat, prompt)
+        if m and m.group(1).lower() not in _NAME_STOP:
+            strong_named = m.group(1)
+            break
+    if strong_named and strong_named not in declared_set:
+        return strong_named
+
+    # (2) input.context RTL file (a MODIFY prompt shows the module to edit).
+    #     Prefer the declared module whose name matches its file leaf
+    #     (`rtl/<name>.sv`); else the single module declared across context.
+    if leaf_match:
+        return leaf_match
+    if len(declared_set) == 1:
+        return declared[0]
+
+    # (3) prompt prose: any remaining explicit `module <name>` designation. A code
+    #     delimiter (backtick / ** / quote) or a `(` header is REQUIRED so a
+    #     bare English "module performs ..." is never captured. The weak
+    #     descriptive "`X` module" form is tried LAST so a narrative reference to a
+    #     helper sub-module never wins over a genuine context module.
+    for pat in (
+        r"\bmodule\s+(?:named\s+|called\s+)?[`*\"]([A-Za-z_]\w*)[`*\"]",  # module `X`
+        r"\bmodule\s+([A-Za-z_]\w*)\s*(?:#\s*\(|\()",                    # module X (
+        r"\b(?:named|called)\s+[`*\"]([A-Za-z_]\w*)[`*\"]",              # named `X`
+        r"\(([A-Za-z_]\w*)\)\s+module\b",                               # (ABBR) module
+        r"[`*\"]([A-Za-z_]\w*)[`*\"]\s+module\b",                        # `X` module
+    ):
+        m = re.search(pat, prompt)
+        if m and m.group(1).lower() not in _NAME_STOP:
+            return m.group(1)
+    return None
 
 
 def _cocotb_test_text(files: Dict[str, str]) -> str:
@@ -426,31 +515,24 @@ def _skeleton_ports(record: dict, top: str,
                     include_input_context: bool = True
                     ) -> Optional[Tuple[List[Port], List[Port]]]:
     """Parse ports from the skeleton RTL's module HEADER only (never any body).
-    The skeleton RTL comes from EITHER `input.context` (the RTL file the user
-    shows the AI, present for *modification* prompts where the AI edits it in
-    place; was the historical CVDP v1.1.0 field) OR `output.context` (the
-    reference RTL the AI is being asked to EQUAL; present for *from-scratch*
-    prompts where the prompt quotes an empty RTL stub). Both sources are
-    legitimate interface facts — HEADER-ONLY, never any body code.
+    The skeleton RTL comes from `input.context` (the RTL file the prompt shows
+    the author — present for *modification* prompts where the author edits it in
+    place). A HEADER-ONLY read, never any body code.
+
+    The reference RTL in `output.context` is the GOLDEN solution = OFF-LIMITS
+    oracle and is NEVER read (the CVDP model sees only input.prompt +
+    input.context). `include_input_context` is retained for signature
+    compatibility but no longer toggles an output.context source (there is none).
 
     Multi-variant records may declare the target module in only ONE of several
-    context files (e.g. variant 8 but not variant 1), so we try every file and
-    pick the first header that actually declares `module <top> ...` with both
-    input and output ports.
-
-    When `include_input_context` is False, only `output.context` is searched
-    (used by the completeness extract path, which handles input.context via its
-    own `context_header` mechanism)."""
-    oc = (record.get("output") or {}).get("context") or {}
-    try:
-        sources = dict(oc)
-    except TypeError:
-        sources = {}
+    context files, so we try every file and pick the first header that actually
+    declares `module <top> ...` with both input and output ports."""
+    sources: Dict[str, str] = {}
     if include_input_context:
         etc = (record.get("input") or {}).get("context") or {}
         try:
             for k, v in etc.items():
-                sources.setdefault(k, v)  # input first, output overrides
+                sources.setdefault(k, v)
         except TypeError:
             pass
     best: Optional[Tuple[List[Port], List[Port]]] = None
@@ -610,6 +692,45 @@ def _test_case_table(prompt: str) -> Optional[Dict[str, int]]:
     return None
 
 
+# columns of a test-case table that are an index / time / annotation axis, never
+# a DUT port.
+_TABLE_NONPORT = frozenset({
+    "test", "test_case", "testcase", "case", "case_no", "no", "num", "number",
+    "index", "idx", "cycle", "cycles", "time", "step", "row", "clk", "clock",
+    "description", "comment", "comments", "notes", "note", "scenario",
+})
+
+
+def _table_interface(prompt: str) -> Tuple[List[str], List[str]]:
+    """(input_names, output_names) from a CVDP test-case table's HEADER row —
+    a PROMPT-sourced interface (legal), replacing the OFF-LIMITS cocotb harness
+    as the port-name source. A header column prefixed `Expected`/`Actual`/
+    `Output`/`Result` is an OUTPUT; the remaining value columns are INPUTS.
+    Index/time/annotation columns are dropped. NAMES ONLY — widths are resolved
+    by the caller (table hex cells / prose / the 1-bit rule)."""
+    lines = prompt.splitlines()
+    for i, ln in enumerate(lines):
+        if "|" not in ln or not re.search(r"expected", ln, re.I):
+            continue
+        if i + 1 >= len(lines) or not re.match(r"^\s*\|?[\s:|-]+\|?\s*$", lines[i + 1]):
+            continue
+        headers = [h.strip().strip("`") for h in ln.strip().strip("|").split("|")]
+        ins: List[str] = []
+        outs: List[str] = []
+        for h in headers:
+            is_out = bool(re.match(r"(?i)^(expected|actual|output|result)\b", h))
+            key = re.sub(r"(?i)^(expected|actual|output|result)\s+", "", h).strip()
+            key = re.sub(r"\s+", "_", key).lower()
+            if not re.match(r"^[a-z_]\w*$", key) or key in _TABLE_NONPORT:
+                continue
+            (outs if is_out else ins).append(key)
+        ins = list(dict.fromkeys(ins))
+        outs = list(dict.fromkeys(outs))
+        if ins and outs:
+            return ins, outs
+    return [], []
+
+
 # --------------------------------------------------------------------------- #
 # (d) prose "Input/Output ports" block — reuse the registry's own prose reader
 # --------------------------------------------------------------------------- #
@@ -640,10 +761,11 @@ def extract_interface_ex(record: dict, top: str
     §4.05: an unresolvable parameter expression keeps the port UNRESOLVED -> SKIP.
     """
     prompt = record.get("prompt") or (record.get("input") or {}).get("prompt") or ""
-    files = _harness_files(record)
-    tb = _cocotb_test_text_for_record(record, files)
+    # HARNESS (cocotb TB, .env) + output.context(golden) are OFF-LIMITS oracle.
+    # The interface comes ONLY from input.context (skeleton header) + the prompt
+    # (test-case table / prose).
 
-    # (a) skeleton header (header-only).
+    # (a) skeleton header from input.context (header-only).
     sk = _skeleton_ports(record, top)
     if sk:
         ins, outs = _clean_ports(sk[0]), _clean_ports(sk[1])
@@ -652,13 +774,21 @@ def extract_interface_ex(record: dict, top: str
     # (d-first for completeness) prose port block, if the prompt has one.
     p_ins, p_outs = _prose_ports(prompt)
 
-    # (b) cocotb-derived names; widths from prose / table.
-    c_ins, c_outs = _cocotb_io(tb)
+    # (c) test-case-table-derived port names (Expected/Actual columns => outputs);
+    # widths from the table hex cells / prose / the 1-bit rule below. When the
+    # prompt has NO test-case table, fall back to the prose-declared port NAMES
+    # and resolve their widths through the SAME `_w` path (the prose declares
+    # the names, but `A ([3:0], 4-bit)` widths only resolve via the width logic
+    # below — the cocotb source did the same before it was removed as oracle).
+    c_ins, c_outs = _table_interface(prompt)
+    if not (c_ins and c_outs) and p_ins and p_outs:
+        c_ins = [n for n, _ in p_ins]
+        c_outs = [n for n, _ in p_outs]
     table = _test_case_table(prompt) or {}
 
     # parameter-default table + a place to record per-port symbolic widths so the
     # emit can produce a `module M #(parameter N=<default>, ...)` header.
-    params = _W.param_defaults(prompt, tb)
+    params = _W.param_defaults(prompt, "")
     symbolic: Dict[str, str] = {}
 
     # Unmistakable 1-bit signals (carry/borrow/flag/handshake): 1-bit by
@@ -856,12 +986,28 @@ def _parameterize_rtl(rtl: str, top: str, params: Dict[str, int],
 # --------------------------------------------------------------------------- #
 # the bridge entry point
 # --------------------------------------------------------------------------- #
+def _strip_oracle(record: dict) -> dict:
+    """A COPY of the record with the OFF-LIMITS oracle removed — the hidden test
+    harness (`record["harness"]`: cocotb TB, `.env`) and the golden solution
+    (`record["output"]`). The deterministic solvers dispatched below must see ONLY
+    `input.prompt` + `input.context` (CVDP official rule). Stripping the oracle at
+    this single dispatch chokepoint makes the prompt+context-only invariant hold
+    BY CONSTRUCTION: no downstream solver — even one that still calls
+    `record["harness"]` — can read what is no longer there. (The §3.9 EXTRACTION_GAP
+    diagnostic in cvdp_complete_extract deliberately keeps the harness and is not on
+    this path.)"""
+    return {k: v for k, v in record.items() if k not in ("harness", "output")}
+
+
 def solve(record: dict) -> Optional[str]:
-    """Emit registry-solved RTL (module named per harness TOPLEVEL) for an
-    atomic-shaped CVDP problem, or None (SKIP) on any ambiguity / non-atomic
-    design. Never reads the golden RTL."""
+    """Emit registry-solved RTL (module named per the PROMPT) for an atomic-shaped
+    CVDP problem, or None (SKIP) on any ambiguity / non-atomic design. Reads ONLY
+    `input.prompt` + `input.context`; the harness + golden are stripped up front."""
     if not isinstance(record, dict):
         return None
+    # COMPLIANCE: strip the oracle (harness + output) before ANY downstream solver
+    # sees the record — prompt+context-only holds by construction (see _strip_oracle).
+    record = _strip_oracle(record)
     # NORMALIZE: some response JSONLs keep the prompt at the record root
     # (`record["prompt"]`) and leave `record["input"]["prompt"]` empty. All
     # downstream record solvers and extractors read `input.prompt`, so copy
@@ -937,6 +1083,7 @@ def family_of(record: dict, rtl: Optional[str] = None) -> Optional[str]:
     (for reporting). None if unsolved."""
     if not isinstance(record, dict):
         return None
+    record = _strip_oracle(record)  # COMPLIANCE: prompt+context only (see solve()).
     top = toplevel_name(record) or "TopModule"
     prompt = record.get("prompt") or (record.get("input") or {}).get("prompt") or ""
     if _COMPOSITE_RE.search(prompt) or _SPECIAL_ALGEBRA_RE.search(prompt):
