@@ -143,6 +143,12 @@ def _stage_run(tmp_path, with_violation: bool):
     body = (f"read {ds}/Prob001_prompt.txt\n" +
             (f"cat {ds}/Prob001_ref.sv\n" if with_violation else ""))
     (t / "batch00.log").write_text(body)
+    # vibe_ic_entry_guard (added in e492d69e) runs BEFORE the blindness audit and
+    # refuses a run lacking Vibe-IC runner-entry evidence; stage the minimal L1
+    # datasheet (the guard only checks is_file()) so execution reaches the
+    # blindness audit these tests actually exercise.
+    gd = run / "phase1" / "generated_docs"; gd.mkdir(parents=True)
+    (gd / "L1_DATASHEET.json").write_text("{}")
     return ds, run
 
 
