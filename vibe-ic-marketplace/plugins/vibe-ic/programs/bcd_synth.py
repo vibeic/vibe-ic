@@ -12,10 +12,12 @@ BCD `sum=8, cout=1`). So this solver emits the CORRECT decimal-arithmetic RTL
 deterministically, recognizing the variant + the digit-count/bit-width from the
 prompt prose or the embedded test-case table.
 
-REUSE: the shipped `cvdp_atomic_bridge` supplies the INTERFACE — `toplevel_name`
-(the harness `.env` TOPLEVEL the testbench binds), the port set (skeleton header /
-cocotb dut.<sig> / prose / test-case table), and the test-case-table width parser.
-We import + reuse it; we never re-derive the interface plumbing.
+REUSE: the shipped `cvdp_atomic_bridge` supplies the INTERFACE, sourced ONLY from
+the model-visible surface (`input.prompt` + `input.context`) — `toplevel_name` (the
+module name stated in the prompt) and `extract_interface` (the port set from the
+skeleton header in `input.context` / a prose port block / a test-case table). We
+import + reuse it; we never re-derive the interface plumbing, and we NEVER read the
+hidden harness (cocotb `dut.<sig>`, `.env`) or golden — those are OFF-LIMITS oracle.
 
 §4.05 PARSE-OR-SKIP / NO-CHEAT (binding):
   * Recognize EXACTLY one of: BCD adder (per-digit add + +6 correction),
@@ -71,14 +73,6 @@ _EXTRA_FEATURE_RE = re.compile(
 )
 
 
-def _harness(record: dict) -> Dict[str, str]:
-    return _bridge._harness_files(record)
-
-
-def _cocotb_tb(record: dict) -> str:
-    return _bridge._cocotb_test_text(_harness(record))
-
-
 # --------------------------------------------------------------------------- #
 # variant recognition (mutually-exclusive; positive-signature wins)
 # --------------------------------------------------------------------------- #
@@ -118,67 +112,7 @@ def _classify(prompt: str) -> Optional[str]:
 
 
 # --------------------------------------------------------------------------- #
-# width / digit-count parsing
-# --------------------------------------------------------------------------- #
-def _port_width(ports: List[Port], *names: str) -> Optional[int]:
-    low = {n.lower(): w for n, w in ports}
-    for nm in names:
-        if nm.lower() in low:
-            return low[nm.lower()]
-    return None
-
-
-def _parse_nbit(prompt: str, *near: str) -> Optional[int]:
-    """The bit-width of the 'N-bit <kw>' (or '<kw> ... N-bit') phrase whose 'N-bit'
-    token is the one IMMEDIATELY adjacent to <kw> — i.e. no other 'bit' token sits
-    between the width and the keyword. This avoids grabbing '8-bit' from
-    '8-bit binary input into a 12-bit BCD' when looking up the BCD width."""
-    # `(?:(?!bit).)*?` = lazily skip chars but never cross another 'bit' token, so
-    # the captured N-bit is the one closest to <kw>.
-    gap = r"(?:(?!\bbit)[^\n])*?"
-    for kw in near:
-        for pat in (rf"\b(\d+)\s*-?\s*bit[s]?\b{gap}\b{re.escape(kw)}\b",
-                    rf"\b{re.escape(kw)}\b{gap}\b(\d+)\s*-?\s*bit[s]?\b"):
-            m = re.search(pat, prompt, re.I)
-            if m:
-                return int(m.group(1))
-    return None
-
-
-def _conversion_interface(record: dict, top: str, variant: str
-                          ) -> Optional[Tuple[List[Port], List[Port]]]:
-    """§4.05 domain-aware fallback for the converter variants when the generic
-    bridge cannot pin a width: take the (single data-in, single data-out) port
-    NAMES from the cocotb test, and pin their widths from EXPLICIT prose tokens
-    ('N-bit binary', 'M-bit BCD'). Returns None unless BOTH widths are pinned and
-    the BCD-side width is a multiple of 4. This NEVER guesses — it only reads a
-    stated bit-width from the prose, then attaches it to the harness-bound port."""
-    prompt = (record.get("input") or {}).get("prompt") or ""
-    tb = _cocotb_tb(record)
-    c_ins, c_outs = _bridge._cocotb_io(tb)
-    # exactly one data-in and one data-out (clk/rst/enable already excluded below)
-    ins = [n for n in c_ins
-           if not re.fullmatch(r"(?i)clk|clock|rst|reset|rst_n|resetn|enable|en", n)]
-    outs = list(c_outs)
-    if len(ins) != 1 or len(outs) != 1:
-        return None
-    iname, oname = ins[0], outs[0]
-
-    # explicit prose widths for the binary side and the BCD side.
-    w_bin = _parse_nbit(prompt, "binary")
-    w_bcd = _parse_nbit(prompt, "bcd", "binary-coded-decimal", "binary coded decimal")
-    if w_bin is None or w_bcd is None or w_bcd % 4 != 0:
-        return None
-
-    if variant == "bin2bcd":
-        return [(iname, w_bin)], [(oname, w_bcd)]
-    if variant == "bcd2bin":
-        return [(iname, w_bcd)], [(oname, w_bin)]
-    return None
-
-
-# --------------------------------------------------------------------------- #
-# deterministic RTL emitters (module named per harness TOPLEVEL)
+# deterministic RTL emitters (module named per the prompt TOPLEVEL)
 # --------------------------------------------------------------------------- #
 def _emit_bcd_adder(top: str, ins: List[Port], outs: List[Port]) -> Optional[str]:
     """Per-digit BCD add: out_sum = (a+b)%10, carry = (a+b) >= 10.
@@ -339,10 +273,10 @@ def solve(record: dict) -> Optional[str]:
     if variant == "bcd_counter":
         return None
 
+    # Interface (port names + widths) from input.prompt + input.context ONLY —
+    # never the hidden harness (cocotb dut.<sig> / .env) or golden (OFF-LIMITS
+    # oracle). If the interface is not prompt-derivable -> honest §4.05 SKIP.
     iface = _bridge.extract_interface(record, top)
-    if not iface and variant in ("bin2bcd", "bcd2bin"):
-        # §4.05 domain-aware fallback: pin converter widths from explicit prose.
-        iface = _conversion_interface(record, top, variant)
     if not iface:
         return None
     ins, outs = iface

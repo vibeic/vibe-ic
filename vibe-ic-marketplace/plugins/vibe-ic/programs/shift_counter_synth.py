@@ -35,8 +35,8 @@ reader (the `### Inputs/Outputs` markdown list) plus two deterministic emitters 
 
 §4.05 NO-LEAK / NO-CHEAT (binding):
   * NEVER read the golden/reference RTL. Ports come from the PROMPT's own interface
-    section (and the harness TOPLEVEL for the module name) — never from
-    output['context'] bodies.
+    section (and the module name from input.prompt/context via the bridge) — never
+    from the OFF-LIMITS harness (.env TOPLEVEL, cocotb TB) or output bodies.
   * NEVER guess a direction, a mode, a width, a bound, or saturate-vs-wrap. ANY
     unstated governing fact -> return None (SKIP). A wrong shift/rotate/counter
     silently passes lint+synth and only a testbench catches it, so a skip is always
@@ -65,24 +65,17 @@ _NOT_A_PORT_NAME = {
 
 
 # --------------------------------------------------------------------------- #
-# harness TOPLEVEL (the module name the testbench binds) — reuse the bridge.
+# module name — from input.prompt + input.context ONLY (via the bridge). The
+# harness `.env` TOPLEVEL is OFF-LIMITS oracle, so there is NO harness fallback:
+# when the name is stated in neither the prompt nor the context, return None
+# (honest SKIP), never a peek at the hidden testbench.
 # --------------------------------------------------------------------------- #
 def _toplevel(record: dict) -> Optional[str]:
     try:
         import cvdp_atomic_bridge as _bridge
-        t = _bridge.toplevel_name(record)
-        if t:
-            return t
+        return _bridge.toplevel_name(record)
     except Exception:
-        pass
-    # standalone fallback: read TOPLEVEL straight from the .env harness file.
-    h = (record.get("harness") or {}).get("files") or {}
-    for k, v in h.items():
-        if isinstance(v, str) and k.endswith(".env"):
-            m = re.search(r"^\s*TOPLEVEL\s*=\s*(\S+)", v, re.M)
-            if m:
-                return m.group(1)
-    return None
+        return None
 
 
 # --------------------------------------------------------------------------- #
@@ -607,7 +600,7 @@ _BUILDERS = (_try_barrel_rotate, _try_saturating_counter, _try_bcd_clock)
 
 
 def solve(record: dict) -> Optional[str]:
-    """Emit deterministic RTL (module named per the harness TOPLEVEL) for a CVDP
+    """Emit deterministic RTL (module named per the prompt/context) for a CVDP
     barrel-shift / rotate or saturating / specialized-counter design, or None
     (SKIP) on ANY ambiguity / unstated governing fact / non-member design."""
     if not isinstance(record, dict):

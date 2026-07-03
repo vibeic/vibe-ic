@@ -8,12 +8,12 @@ and WIDTH are PARSED from the prompt; the comparison schedule and latency are th
 bubble-sort invariant, so the emit is GENERAL across any (N, WIDTH) instance.
 
 GENERAL (§9): N/WIDTH read from the stated defaults; the sort direction (ascending
-/ descending) read from prose; the module name from the harness TOPLEVEL. No size,
-no element, no test vector hardcoded.
+/ descending) read from prose; the module name from input.prompt/context (via the
+bridge), never the OFF-LIMITS harness. No size, no element, no test vector hardcoded.
 
 §4.05 PARSE-OR-SKIP: emit ONLY when ALL of these hold, else SKIP (return None):
   * the prompt names the bubble-sort algorithm with NO early termination (the
-    fixed N*(N-1) schedule the harness pins);
+    fixed N*(N-1) schedule the bubble-sort invariant pins);
   * a flattened `[N*WIDTH-1:0]` in_data + out_data bus, a start pulse, a done pulse;
   * N and WIDTH parameter defaults are stated;
   * it is NOT a modify/complete-the-partial-code task (input.context present, or
@@ -34,20 +34,15 @@ if _HERE not in sys.path:
 
 
 def _toplevel(record: dict) -> Optional[str]:
+    # module name — from input.prompt + input.context ONLY (via the bridge). The
+    # harness `.env` TOPLEVEL is OFF-LIMITS oracle, so there is NO harness
+    # fallback: when the name is stated in neither the prompt nor the context,
+    # return None (never a peek at the hidden testbench).
     try:
         import cvdp_atomic_bridge as _bridge
-        t = _bridge.toplevel_name(record)
-        if t:
-            return t
+        return _bridge.toplevel_name(record)
     except Exception:
-        pass
-    h = (record.get("harness") or {}).get("files") or {}
-    for k, v in h.items():
-        if isinstance(v, str) and k.endswith(".env"):
-            m = re.search(r"^\s*TOPLEVEL\s*=\s*(\S+)", v, re.M)
-            if m:
-                return m.group(1)
-    return None
+        return None
 
 
 def _param_default(prompt: str, name: str) -> Optional[int]:

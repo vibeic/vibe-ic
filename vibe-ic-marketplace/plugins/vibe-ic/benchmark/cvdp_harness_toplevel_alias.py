@@ -33,13 +33,14 @@ The LIVE emit path (`cvdp_gate.main`) wires only:
      JSON-envelope completion, inject it into the first RTL entry); otherwise
      return the completion unchanged.
 
-OFF-LIMITS-LEGACY (dead code — retained for historical unit tests ONLY):
-  * `harness_toplevel_from_dataset(rec)` / `load_harness_toplevels(path)` parse
-     the toplevel from the HIDDEN harness `.env` / `test_runner.py`. That is an
-     OFF-LIMITS oracle read; these functions MUST NOT feed the emit / scoring
-     path and `cvdp_gate.py` no longer calls them (enforced by
-     `programs/tests/test_cvdp_gate_alias_compliance.py`'s structural guard).
-     The alias top comes from the PROMPT — see above.
+OFF-LIMITS (DELETED): the former `harness_toplevel_from_dataset(rec)` /
+`load_harness_toplevels(path)` readers parsed the toplevel from the HIDDEN
+harness `.env` / `test_runner.py` — an OFF-LIMITS oracle read. They have been
+DELETED, so this module now contains ZERO harness `.env` / cocotb readers; the
+alias target is derived SOLELY from the PROMPT skeleton (`cvdp_gate`'s
+`skeleton_module_name_from_prompt`, a legitimate `input.prompt` fact).
+`programs/tests/test_cvdp_gate_alias_compliance.py`'s structural guard enforces
+that `cvdp_gate.py` never calls a harness-toplevel reader.
 
 §4.05 (this TIGHTENS the emit, so the leak risk is a FALSE alias that breaks a
 correct completion): the wrapper is appended ONLY when the top is genuinely
@@ -64,92 +65,9 @@ from __future__ import annotations
 
 import json as _json
 import re
-from pathlib import Path
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Callable, List, Optional, Set, Tuple
 
-# ── 1. OFF-LIMITS-LEGACY: toplevel from the HIDDEN harness files ─────────────
-# ⚠ OFF-LIMITS ORACLE — the functions in this section parse the cocotb TOPLEVEL
-# from the HIDDEN harness `.env` / `test_runner.py`. Per CVDP official
-# (arXiv:2506.14074 §2 + README_NON_AGENTIC) the harness is NOT a model input, so
-# these MUST NOT feed the emit / scoring path. They are DEAD legacy code retained
-# only for the historical unit tests; the compliant alias top comes from the
-# PROMPT skeleton (`cvdp_gate.skeleton_module_name_from_prompt`). Re-wiring either
-# into `cvdp_gate.main` is a compliance leak caught by
-# `programs/tests/test_cvdp_gate_alias_compliance.py`'s structural guard.
-_ENV_TOP_RE = re.compile(r"(?im)^\s*toplevel\s*[=:]\s*([A-Za-z_]\w*)")
-_PY_TOP_LIT_RE = re.compile(r"toplevel\s*=\s*[\"']([A-Za-z_]\w*)[\"']")
-_PY_TOP_ENV_RE = re.compile(
-    r"toplevel\s*=\s*os\.getenv\([^,]+,\s*[\"']([A-Za-z_]\w*)[\"']")
-
-
-def harness_toplevel_from_dataset(rec: dict) -> Optional[str]:
-    """⚠ OFF-LIMITS-LEGACY — DO NOT feed the emit/scoring path.
-
-    Parse the cocotb TOPLEVEL the official harness compiles (`iverilog -s <top>`)
-    from this CVDP record's HIDDEN `harness.files` (`.env` `toplevel=<name>`, then
-    `test_runner.py` `toplevel="<name>"` / `os.getenv(..., "<name>")`). The hidden
-    harness is an OFF-LIMITS oracle under CVDP official rules (arXiv:2506.14074
-    §2 + README_NON_AGENTIC), so this reader MUST NOT be used to choose the alias
-    target — the compliant top comes from the PROMPT skeleton
-    (`cvdp_gate.skeleton_module_name_from_prompt`). This function is DEAD legacy
-    retained only for historical unit tests; `cvdp_gate.py` no longer calls it.
-    None when the record carries no harness files."""
-    h = rec.get("harness")
-    files = h.get("files") if isinstance(h, dict) else None
-    if not isinstance(files, dict):
-        return None
-    # 1) .env toplevel= (the dominant, authoritative form)
-    for k, v in files.items():
-        if isinstance(k, str) and Path(k).name == ".env":
-            m = _ENV_TOP_RE.search(str(v))
-            if m:
-                return m.group(1)
-    # 2) any .env-suffixed path
-    for k, v in files.items():
-        if isinstance(k, str) and k.endswith(".env"):
-            m = _ENV_TOP_RE.search(str(v))
-            if m:
-                return m.group(1)
-    # 3) test_runner.py literal / getenv default
-    for k, v in files.items():
-        if isinstance(k, str) and k.endswith(".py"):
-            m = _PY_TOP_LIT_RE.search(str(v)) or _PY_TOP_ENV_RE.search(str(v))
-            if m:
-                return m.group(1)
-    return None
-
-
-def load_harness_toplevels(dataset_path: str) -> Dict[str, str]:
-    """⚠ OFF-LIMITS-LEGACY — DO NOT feed the emit/scoring path.
-
-    {id: harness_toplevel} for every record in a CVDP dataset JSONL that carries
-    HIDDEN harness files, via `harness_toplevel_from_dataset`. Same OFF-LIMITS
-    caveat: the harness is an oracle, so this loader MUST NOT choose the alias
-    target — `cvdp_gate.py` derives that from the PROMPT skeleton and no longer
-    calls this. DEAD legacy retained for historical unit tests. Empty when the
-    file is absent."""
-    out: Dict[str, str] = {}
-    p = Path(dataset_path)
-    if not p.is_file():
-        return out
-    for ln in p.read_text(errors="replace").splitlines():
-        ln = ln.strip()
-        if not ln:
-            continue
-        try:
-            rec = __import__("json").loads(ln)
-        except ValueError:
-            continue
-        rid = rec.get("id")
-        if rid is None:
-            continue
-        top = harness_toplevel_from_dataset(rec)
-        if top:
-            out[str(rid)] = top
-    return out
-
-
-# ── 2. parse the author's single top module + its port name list ────────────
+# ── 1. parse the author's single top module + its port name list ────────────
 _MODULE_HDR_RE = re.compile(
     r"\bmodule\s+([A-Za-z_]\w*)\s*"          # 1: name
     r"(?P<param>(?:#\s*\((?P<param_body>[^;]*?)\))?\s*)"
@@ -229,7 +147,7 @@ def _split_ports(portblob: str) -> List[str]:
     return out
 
 
-# ── 3. synthesize the thin alias wrapper ────────────────────────────────────
+# ── 2. synthesize the thin alias wrapper ────────────────────────────────────
 def alias_wrapper(top_needed: str, author_top: str, ports: List[str],
                   ansi_decls: List[str], param_block: str = "") -> str:
     """A pass-through wrapper that gives the harness its TOPLEVEL name while
@@ -265,7 +183,7 @@ def alias_wrapper(top_needed: str, author_top: str, ports: List[str],
         f"endmodule\n")
 
 
-# ── 4. JSON-completion unwrap (v1.2.48) ──────────────────────────────────────
+# ── 3. JSON-completion unwrap (v1.2.48) ──────────────────────────────────────
 """
 ORGANIC #528followup — when the agent (or scorer) wraps multi-file RTL in a
 JSON envelope `{"code": [{path: content}, …]}` (or a flat
@@ -379,7 +297,7 @@ def _reencode_json_first_entry(completion: str, first_path: str,
     return _json.dumps(obj, ensure_ascii=False)
 
 
-# ── 5. the dispatch — bare Verilog OR JSON-completion → alias ───────────────
+# ── 4. the dispatch — bare Verilog OR JSON-completion → alias ───────────────
 def maybe_alias_completion(
         completion: str,
         harness_top: Optional[str],

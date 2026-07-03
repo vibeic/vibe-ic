@@ -9,21 +9,24 @@ test-case table / cocotb harness signal list / a non-empty module HEADER, not as
 clean bullet-port block. This synth fills that gap for the SELECT/COMPARE family:
 it PARSES the stated operation (N:1 mux select map, 1:N demux routing, a>b/a==b/a<b
 comparator with the signed-ness PARSED, min/max of N inputs) and the stated widths,
-then emits a combinational datapath named per the harness TOPLEVEL. It REUSES the
-shipped `cvdp_atomic_bridge` for TOPLEVEL + interface when that module is present,
-and otherwise falls back to an equivalent SELF-CONTAINED interface reader (the same
-priority: skeleton HEADER → cocotb dut.<sig> → markdown test-case table → prose),
-so the solver works standalone on origin/main too.
+then emits a combinational datapath named per the PROMPT-stated module name. The
+module NAME and the port INTERFACE both come from the shipped `cvdp_atomic_bridge`
+(`toplevel_name` / `extract_interface`), whose sole sources are `input.prompt` +
+`input.context`. When the bridge cannot resolve the name or the interface from that
+model-visible surface, this solver SKIPs (returns None) — never a harness peek.
 
 GENERAL — keyed on the stated SELECT / COMPARE / MIN-MAX SEMANTICS, never on a
 design name. The parsed select width / source count / comparison op / signed-ness
 drive the emit; nothing is hard-coded to a benchmark id.
 
-NO-CHEAT / §4.05 (binding):
+NO-CHEAT / §4.05 (binding) — the CVDP official rule (arXiv:2506.14074 §2 +
+README_NON_AGENTIC): the model sees ONLY `input.prompt` + `input.context`. The
+hidden test HARNESS (the cocotb `dut.<sig>` test and the `.env` TOPLEVEL /
+VERILOG_SOURCES) and the GOLDEN reference RTL are OFF-LIMITS oracle and are NEVER
+read here — not the module name, not the ports, not one bit of logic.
   * The select width, source count, comparison operation and signed-ness are PARSED
-    from the PROMPT PROSE only. The golden / reference RTL is NEVER read — only the
-    module HEADER (the declared ports) of `output['context']` is ever inspected, and
-    only when it is a non-empty header; no body / logic is ever copied.
+    from the PROMPT PROSE only; the module name + interface come from the bridge's
+    prompt+context-only readers.
   * SKIP (return None) when:
       - the select->source MAPPING is not the natural ascending order, or is
         unstated, or the out-of-range select default is needed but unstated;
@@ -45,7 +48,7 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
@@ -53,306 +56,36 @@ if str(_HERE) not in sys.path:
 
 Port = Tuple[str, int]  # (name, width)
 
-# Reuse the shipped bridge's TOPLEVEL + interface helpers when present; otherwise
-# fall back to the SELF-CONTAINED readers below (same extraction priority). This
-# keeps the solver to ONE new program file while still working on a base where the
-# bridge is not yet merged.
-try:  # pragma: no cover - exercised whichever branch the host provides
-    import cvdp_atomic_bridge as _bridge  # type: ignore
-except Exception:  # bridge not on this base — use the local equivalents
-    _bridge = None
+# The module NAME and the port INTERFACE come ONLY from the shipped bridge's
+# prompt+context readers (`toplevel_name` / `extract_interface`). The bridge reads
+# `input.prompt` + `input.context` exclusively — the hidden harness (cocotb
+# `dut.<sig>`, `.env`) and the golden (`record["output"]`) are OFF-LIMITS oracle and
+# are never touched here. (The bridge's own `solve()` additionally strips the oracle
+# up front, so by the time a design reaches this family solver the harness/output
+# are already gone.)
+import cvdp_atomic_bridge as _bridge  # noqa: E402  NAME + INTERFACE source
 
-
-# =========================================================================== #
-# Harness / interface access  (used only when the bridge is absent)
-# =========================================================================== #
-_NOT_A_PORT_NAME = {
-    "signed", "unsigned", "wire", "reg", "logic", "input", "output", "inout",
-    "for", "if", "begin", "end", "module", "endmodule", "parameter", "localparam",
-    "integer", "genvar", "assign", "always", "posedge", "negedge",
-}
+# Clock / reset / async-control port names the datapath classifiers must ignore
+# (a purely COMBINATIONAL select/compare has no such ports). A plain constant set,
+# NOT a harness read.
 _SEQ_PORTS = {"clk", "clock", "rst", "reset", "rstn", "rst_n", "resetn",
               "reset_n", "areset", "aresetn", "clk_en", "clken", "srst",
               "nrst", "n_rst", "rst_ni", "clk_i"}
 
 
-def _harness_files(record: dict) -> Dict[str, str]:
-    h = record.get("harness") or {}
-    files = h.get("files") or {}
-    return {k: v for k, v in files.items() if isinstance(v, str)}
-
-
-def _env_text(files: Dict[str, str]) -> str:
-    for k, v in files.items():
-        if k.endswith(".env"):
-            return v
-    return ""
-
-
-def _local_toplevel_name(record: dict) -> Optional[str]:
-    env = _env_text(_harness_files(record))
-    m = re.search(r"^\s*TOPLEVEL\s*=\s*(\S+)", env, re.M)
-    return m.group(1) if m else None
-
-
-def _cocotb_test_text(files: Dict[str, str]) -> str:
-    for k, v in files.items():
-        if re.search(r"test_.*\.py$", k) and "runner" not in k:
-            return v
-    return ""
-
-
-_PARAM_NAME_RE = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$|^[A-Z]{3,}$")
-
-
-def _cocotb_params(tb: str) -> set:
-    params = set()
-    for m in re.finditer(r"\b(\w+)\s*=\s*int\(\s*dut\.(\w+)\.value\s*\)", tb):
-        if _PARAM_NAME_RE.match(m.group(2)):
-            params.add(m.group(2))
-    for m in re.finditer(r"dut\.([A-Z][A-Z0-9_]+)\.value", tb):
-        if _PARAM_NAME_RE.match(m.group(1)):
-            params.add(m.group(1))
-    return params
-
-
-def _cocotb_io(tb: str) -> Tuple[List[str], List[str]]:
-    driven = set(re.findall(r"dut\.(\w+)\.value\s*=(?!=)", tb))
-    read = set(re.findall(r"=\s*dut\.(\w+)\.value\b", tb))
-    read |= set(re.findall(r"int\(\s*dut\.(\w+)\.value", tb))
-    read |= set(re.findall(r"dut\.(\w+)\.value\.(?:integer|signed_integer)", tb))
-    params = _cocotb_params(tb)
-    ins = sorted(driven - params)
-    outs = sorted((read - driven) - params)
-    return ins, outs
-
-
-_HEADER_RE = re.compile(r"module\s+(\w+)\s*(?:#\s*\([^)]*\)\s*)?\((.*?)\)\s*;", re.S)
-
-
-def _skeleton_ports(record: dict, top: str) -> Optional[Tuple[List[Port], List[Port]]]:
-    oc = (record.get("output") or {}).get("context") or {}
-    if not isinstance(oc, dict):
-        return None
-    for _path, text in oc.items():
-        if not isinstance(text, str) or not text.strip():
-            continue
-        m = _HEADER_RE.search(text)
-        if not m or m.group(1) != top:
-            continue
-        body = m.group(2)
-        ins: List[Port] = []
-        outs: List[Port] = []
-        for pm in re.finditer(
-            r"\b(input|output)\b\s+(?:wire|reg|logic)?\s*(?:signed\s*)?"
-            r"(?:\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*)?(\w+)", body):
-            d, hi, lo, name = pm.groups()
-            w = abs(int(hi) - int(lo)) + 1 if hi is not None and lo is not None else 1
-            (ins if d == "input" else outs).append((name, w))
-        ins = _clean_ports(ins)
-        outs = _clean_ports(outs)
-        if ins and outs:
-            return ins, outs
-    return None
-
-
-def _clean_ports(ports: List[Port]) -> List[Port]:
-    seen = set()
-    out: List[Port] = []
-    for n, w in ports:
-        if n.lower() in _NOT_A_PORT_NAME or n in seen:
-            continue
-        seen.add(n)
-        out.append((n, w))
-    return out
-
-
-def _prose_width(prompt: str, name: str) -> Optional[int]:
-    m = re.search(rf"\b{re.escape(name)}\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]", prompt)
-    if m:
-        return abs(int(m.group(1)) - int(m.group(2))) + 1
-    for rm in re.finditer(
-            rf"^\s*\|\s*`?{re.escape(name)}`?\s*\|\s*([^|]+)\|", prompt, re.M):
-        cell = rm.group(1)
-        wm = re.search(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", cell)
-        if wm:
-            return abs(int(wm.group(1)) - int(wm.group(2))) + 1
-        wm = re.search(r"\b(\d+)\s*-?\s*bits?\b", cell, re.I)
-        if wm:
-            return int(wm.group(1))
-        if re.search(r"\b1\b", cell) and re.search(r"\bbit\b", cell, re.I):
-            return 1
-    for pat in (rf"\b(\d+)\s*-?\s*bits?\b[^\n]*?\b{re.escape(name)}\b",
-                rf"\b{re.escape(name)}\b[^\n]*?\b(\d+)\s*-?\s*bits?\b"):
-        m = re.search(pat, prompt, re.I)
-        if m:
-            return int(m.group(1))
-    return None
-
-
-def _signal_direction_table(prompt: str) -> Optional[Tuple[List[Port], List[Port]]]:
-    """Parse a markdown interface table with a Signal + Direction column (the CVDP
-    'Inputs and Outputs' shape). Width comes from the Bit Width column (`WIDTH`,
-    `[hi:lo]`, an integer, or `1`). Returns (ins, outs) or None. GENERAL — keyed on
-    the column roles, never a port name."""
-    lines = prompt.splitlines()
-    for i, ln in enumerate(lines):
-        if "|" not in ln or not re.search(r"direction", ln, re.I):
-            continue
-        if i + 1 >= len(lines) or not re.match(r"^\s*\|?[\s:|-]+\|?\s*$", lines[i + 1]):
-            continue
-        headers = [h.strip().strip("`").lower() for h in ln.strip().strip("|").split("|")]
-        try:
-            ci_sig = next(j for j, h in enumerate(headers)
-                          if re.search(r"signal|port|name", h))
-            ci_dir = next(j for j, h in enumerate(headers) if "direction" in h)
-        except StopIteration:
-            continue
-        ci_w = next((j for j, h in enumerate(headers)
-                     if re.search(r"width|bits?\b", h)), None)
-        ins: List[Port] = []
-        outs: List[Port] = []
-        for body in lines[i + 2:]:
-            if "|" not in body or not body.strip().startswith("|"):
-                break
-            cells = [c.strip().strip("`") for c in body.strip().strip("|").split("|")]
-            if len(cells) != len(headers):
-                continue
-            name = cells[ci_sig].strip().strip("`")
-            if not re.fullmatch(r"\w+", name):
-                continue
-            d = cells[ci_dir].strip().lower()
-            wcell = cells[ci_w] if (ci_w is not None and ci_w < len(cells)) else ""
-            w = _table_width(wcell)
-            if w is None:
-                continue
-            if d.startswith("in"):
-                ins.append((name, w))
-            elif d.startswith("out"):
-                outs.append((name, w))
-        ins, outs = _clean_ports(ins), _clean_ports(outs)
-        if ins and outs:
-            return ins, outs
-    return None
-
-
-def _table_width(cell: str) -> Optional[int]:
-    """Width from a Bit-Width table cell: `[hi:lo]`, a `WIDTH`/param token (treated
-    as a >1-bit parameterized bus -> represented as the param's default elsewhere;
-    here we mark it as a sentinel resolved by the caller), an integer, or 1."""
-    c = cell.strip().strip("`")
-    m = re.search(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", c)
-    if m:
-        return abs(int(m.group(1)) - int(m.group(2))) + 1
-    if re.fullmatch(r"1", c) or re.search(r"\b1\s*-?\s*bit\b", c, re.I):
-        return 1
-    m = re.fullmatch(r"(\d+)", c)
-    if m:
-        return int(m.group(1))
-    m = re.search(r"\b(\d+)\s*-?\s*bits?\b", c, re.I)
-    if m:
-        return int(m.group(1))
-    # a parameter name (e.g. `WIDTH`) names a multi-bit bus whose exact width is the
-    # parameter default; we return a sentinel >1 so the operand is treated as a data
-    # bus (the comparator emit re-declares it parameterized when the prose says so).
-    if re.fullmatch(r"[A-Z][A-Z0-9_]*", c):
-        return _PARAM_BUS_SENTINEL
-    return None
-
-
-# A multi-bit data bus whose width is a parameter (e.g. `WIDTH`). Treated as ">1"
-# everywhere (a data operand, not a control bit); the comparator/min-max emit re-
-# declares it as `[WIDTH-1:0]` when the prose marks the design parameterized.
-_PARAM_BUS_SENTINEL = 32
-
-
-def _local_extract_interface(record: dict, top: str) -> Optional[Tuple[List[Port], List[Port]]]:
-    """SELF-CONTAINED interface reader (skeleton HEADER -> Signal/Direction table ->
-    cocotb -> prose width). Mirrors the bridge's priority; used only when the bridge
-    is absent or returns nothing."""
-    prompt = (record.get("input") or {}).get("prompt") or ""
-    files = _harness_files(record)
-    tb = _cocotb_test_text(files)
-
-    sk = _skeleton_ports(record, top)
-    if sk:
-        return sk
-
-    # (a2) a Signal + Direction markdown interface table (CVDP's common shape).
-    st = _signal_direction_table(prompt)
-    if st:
-        return st
-
-    c_ins, c_outs = _cocotb_io(tb)
-    if not (c_ins and c_outs):
-        return None
-
-    _ONE_BIT_RE = re.compile(
-        r"(?i)^(c_?in|cin|carry_?in|c_?out|cout|carry_?out|b_?out|borrow|"
-        r".*_valid|.*_ready|start|stop|enable|.*_en|done|error|"
-        r".*_error|.*_flag|overflow|ovf|parity|found|sel|i_enable|i_mode|"
-        r"o_greater|o_less|o_equal|gt|lt|eq|greater|less|equal)$")
-
-    def _w(name: str) -> Optional[int]:
-        m = re.search(rf"\b{re.escape(name)}\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]", prompt)
-        if m:
-            return abs(int(m.group(1)) - int(m.group(2))) + 1
-        if _ONE_BIT_RE.match(name):
-            return 1
-        return _prose_width(prompt, name)
-
-    ins: List[Port] = []
-    outs: List[Port] = []
-    unresolved: List[str] = []
-    for name in c_ins:
-        w = _w(name)
-        if w is None:
-            if name.lower() in _SEQ_PORTS or re.search(
-                    r"(?i)(_en|enable|valid|ready|start|stop|mode|sel|load|done)$", name):
-                w = 1
-            else:
-                unresolved.append(name)
-                continue
-        ins.append((name, w))
-    for name in c_outs:
-        w = _w(name)
-        if w is None:
-            if re.search(r"(?i)(valid|done|error|flag|parity|found|overflow|"
-                         r"greater|less|equal|gt|lt|eq)$", name):
-                w = 1
-            else:
-                unresolved.append(name)
-                continue
-        outs.append((name, w))
-    ins, outs = _clean_ports(ins), _clean_ports(outs)
-    if unresolved or not ins or not outs:
-        return None
-    return ins, outs
-
-
 def _toplevel_name(record: dict) -> Optional[str]:
-    if _bridge is not None:
-        try:
-            t = _bridge.toplevel_name(record)
-            if t:
-                return t
-        except Exception:
-            pass
-    return _local_toplevel_name(record)
+    """The target module name — from `input.prompt` + `input.context` ONLY (via the
+    bridge). None when the prompt/context does not name the module (an honest SKIP,
+    never a harness `.env` peek)."""
+    return _bridge.toplevel_name(record)
 
 
 def _extract_interface(record: dict, top: str) -> Optional[Tuple[List[Port], List[Port]]]:
-    # Prefer the bridge's reader when it resolves the interface; fall back to the
-    # self-contained reader (which adds the Signal/Direction table source the bridge
-    # lacks) whenever the bridge is absent OR returns nothing.
-    if _bridge is not None:
-        try:
-            iface = _bridge.extract_interface(record, top)
-            if iface:
-                return iface
-        except Exception:
-            pass
-    return _local_extract_interface(record, top)
+    """The (inputs, outputs) port interface — from `input.prompt` + `input.context`
+    ONLY (via the bridge: skeleton header / prose `### Inputs:`/`### Outputs:` block /
+    test-case table). None when the interface is not stated on that model-visible
+    surface. The cocotb `dut.<sig>` harness and the golden are NEVER read."""
+    return _bridge.extract_interface(record, top)
 
 
 # =========================================================================== #
@@ -761,13 +494,13 @@ def solve(record: dict) -> Optional[str]:
         a, b, w, enable, mode, gt, lt, eq = cp
         if signedness == "mode" and not mode:
             return None
+        # `w` is the CONCRETE operand width the bridge resolved from the prompt
+        # (a `WIDTH` parameter is already resolved to its stated default). When the
+        # prose marks the design parameterized, re-declare with a `WIDTH` parameter
+        # whose default is the stated value (falling back to the resolved width).
         param = _is_parameterized(prompt)
         if param:
-            w = _width_default(prompt, w if w != _PARAM_BUS_SENTINEL else 8)
-        elif w == _PARAM_BUS_SENTINEL:
-            # operand width came from a parameter token but the design is not marked
-            # parameterized -> we cannot pin the concrete width -> SKIP.
-            return None
+            w = _width_default(prompt, w)
         return _emit_comparator(top, a, b, w, enable, mode, gt, lt, eq,
                                 signedness, param)
 

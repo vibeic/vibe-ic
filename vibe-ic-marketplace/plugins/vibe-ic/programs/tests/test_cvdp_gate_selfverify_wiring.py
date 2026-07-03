@@ -1010,23 +1010,14 @@ def test_tbalign_noop_when_no_harness_top_or_no_match():
         _TBALIGN_RTL, {})
 
 
-# ── PURE: harness-TB port loader (dut.<name> scan) ───────────────────────────
-def test_load_harness_tb_ports(tmp_path):
-    p = tmp_path / "ds.jsonl"
-    p.write_text(json.dumps({
-        "id": "x",
-        "harness": {"files": {
-            "src/.env": "TOPLEVEL=adder\n",
-            "src/test_x.py": ("import cocotb\n"
-                              "async def t(dut):\n"
-                              "    dut._log.info('hi')\n"   # cocotb internal
-                              "    dut.w_out.value = int(dut.a.value)\n"
-                              "    dut.b_out.value = 0\n")}}}) + "\n")
-    assert G._load_harness_tb_ports(str(p)) == {"x": {"a", "w_out", "b_out"}}
-    # a record with NO harness files yields nothing (local_export shape).
-    p2 = tmp_path / "ds2.jsonl"
-    p2.write_text(json.dumps({"id": "y", "prompt": "hi"}) + "\n")
-    assert G._load_harness_tb_ports(str(p2)) == {}
+# ── PURE: the harness-TB port loader (dut.<name> cocotb scan) is DELETED ──────
+def test_harness_tb_port_loader_is_deleted():
+    """The `_load_harness_tb_ports` cocotb-`.py` reader has been DELETED — the
+    gate now carries ZERO harness `.env` / cocotb readers, so there is nothing
+    left to mis-wire. (The live no-leak behaviour is still proven end-to-end by
+    test_main_does_not_align_ports_from_harness below, which feeds a harness via
+    --dataset and asserts main() never aligns from it.)"""
+    assert not hasattr(G, "_load_harness_tb_ports")
 
 
 # ── END-TO-END through main() (EDA-gated) ────────────────────────────────────

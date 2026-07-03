@@ -29,16 +29,16 @@ WHY a dedicated CVDP solver (and not the existing ones):
     sequential decoder's registered output and reset confuse the registry op
     recognizer). So both families fall through to SKIP today.
 
-This solver reuses the shipped `cvdp_atomic_bridge` ONLY for the harness plumbing
-(`toplevel_name` — the `.env` TOPLEVEL the testbench binds). It does NOT edit the
-bridge; it is a standalone family solver exposing the same
+This solver reuses the shipped `cvdp_atomic_bridge` ONLY for the module-name
+resolver (`toplevel_name` — from input.prompt + input.context, never the hidden
+harness). It does NOT edit the bridge; it is a standalone family solver exposing the same
 `solve(record)->Optional[str]` contract as the other `cvdp_*_synth` modules (the
 owner registers it in spec_artifact_registry._RECORD_SOLVER_NAMES separately).
 
 §4.05 PARSE-OR-SKIP / NO-CHEAT (binding):
   * NEVER read the golden/reference RTL. Ports come from the PROMPT's own interface
-    section (+ a worked-example / the harness TOPLEVEL) — never from
-    output['context'] / output['response'] bodies.
+    section (+ a worked-example; the module name from input.prompt/context via the
+    bridge) — never from the OFF-LIMITS harness or output['context']/['response'].
   * NEVER guess a bit-order, a shift direction, a width, a map entry, a range bound,
     or an out-of-range default. ANY unstated governing fact -> return None (SKIP).
   * SKIP a full protocol FSM (UART framing / SPI mode / RS-232 / sync-serial
@@ -89,23 +89,17 @@ _SKIP_RE = re.compile(
 
 
 # --------------------------------------------------------------------------- #
-# harness TOPLEVEL (the module name the testbench binds) — reuse the bridge.
+# module name — from input.prompt + input.context ONLY (via the bridge). The
+# harness `.env` TOPLEVEL is OFF-LIMITS oracle, so there is NO harness fallback:
+# when the name is stated in neither the prompt nor the context, return None
+# (honest SKIP), never a peek at the hidden testbench.
 # --------------------------------------------------------------------------- #
 def _toplevel(record: dict) -> Optional[str]:
     try:
         import cvdp_atomic_bridge as _bridge
-        t = _bridge.toplevel_name(record)
-        if t:
-            return t
+        return _bridge.toplevel_name(record)
     except Exception:
-        pass
-    h = (record.get("harness") or {}).get("files") or {}
-    for k, v in h.items():
-        if isinstance(v, str) and k.endswith(".env"):
-            m = re.search(r"^\s*TOPLEVEL\s*=\s*(\S+)", v, re.M)
-            if m:
-                return m.group(1)
-    return None
+        return None
 
 
 # --------------------------------------------------------------------------- #
@@ -850,7 +844,7 @@ def _delta_task(record: dict) -> bool:
 
 
 def solve(record: dict) -> Optional[str]:
-    """Emit deterministic RTL (module named per the harness TOPLEVEL) for a CVDP
+    """Emit deterministic RTL (module named per the prompt/context) for a CVDP
     serial-converter (PISO/SIPO) or address/range-decoder design, or None (SKIP) on
     ANY ambiguity / unstated governing fact / non-member design / delta task."""
     if not isinstance(record, dict):

@@ -21,20 +21,24 @@ WHY a dedicated CVDP solver (and not the bridge / arithmetic_synth / compose):
     * arithmetic_synth's prose dialect keys on the RTLLM "Module name:/Input
       ports:" phrasing, which these CVDP "fix-the-bug" prompts do not use.
 
-  This solver fills exactly that gap: it reads the interface from the CVDP harness
-  (the cocotb test's `dut.<sig>` signals + the .env TOPLEVEL + prose/table widths),
-  recognizes the FUNCTION (add / sub / add-sub-by-mode / multiply / multi-operand
-  sum / saturating add-sub), and emits a functionally-correct datapath — wrapping
-  it in the STATED handshake ONLY when the testbench tolerates ANY latency.
+  This solver fills exactly that gap: it reads the module name + interface ONLY
+  from `input.prompt` + `input.context` (via cvdp_atomic_bridge.toplevel_name /
+  extract_interface — the hidden cocotb harness, .env TOPLEVEL, and golden output
+  are OFF-LIMITS oracle and are NEVER read), recognizes the FUNCTION (add / sub /
+  add-sub-by-mode / multiply / multi-operand sum / saturating add-sub), and emits a
+  functionally-correct datapath — wrapping it in the STATED start/done handshake
+  ONLY when the interface exposes a completion output AND the prompt does not
+  declare a cycle-pinned (pipelined / multi-stage) or FSM-state-encoded protocol.
 
 §4.05 NO-LEAK / NO-CHEAT (binding) — the architecture-name⇒`a+b`/`a*b` premise is
 DEFEATED, and the design MUST be SKIPped (return None), whenever:
-  * the cocotb test asserts an EXACT latency (`assert latency == N`) or an exact
-    pipeline-stage count the prose does not pin — a functional wrapper cannot match
-    a cycle-pinned protocol (e.g. cascaded_adder_0025, the pipelined CLA, the
-    sequential/pipelined Booth multipliers);
-  * the cocotb test asserts an EXACT FSM STATE code (`assert dut.o_status == k`) —
-    a functional wrapper cannot reproduce a pinned state encoding (signed_adder);
+  * the PROMPT declares a pipelined / multi-stage / cycle-counted latency — a
+    functional wrapper cannot match a cycle-pinned protocol (e.g. the pipelined CLA,
+    the sequential/pipelined Booth multipliers). Detected PROSE-only via
+    _prose_pins_protocol; the hidden cocotb `assert latency == N` is OFF-LIMITS;
+  * the PROMPT declares an FSM whose exact state encoding is exposed on a status /
+    state output — a functional wrapper cannot reproduce a pinned state encoding.
+    Detected PROSE-only; the hidden cocotb `assert dut.o_status == k` is OFF-LIMITS;
   * the FUNCTION itself is not plain integer `a+b`/`a*b`: Galois-field / carry-less
     multiply, BCD / decimal, fixed-point or floating-point with rounding, modular /
     Montgomery, complex, matrix, MAC-accumulate, threshold-accumulate;
@@ -62,6 +66,9 @@ from typing import Dict, List, Optional, Tuple
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
+
+import cvdp_atomic_bridge as _bridge  # noqa: E402  INTERFACE + module-name source
+#   (prompt+context ONLY — the hidden cocotb harness / .env / golden are OFF-LIMITS).
 
 Port = Tuple[str, int]  # (name, width)
 
@@ -107,126 +114,51 @@ _COMPOSITE_RE = re.compile(
 
 
 # --------------------------------------------------------------------------- #
-# Harness access (.env TOPLEVEL + cocotb test text)
-# --------------------------------------------------------------------------- #
-def _harness_files(record: dict) -> Dict[str, str]:
-    h = record.get("harness") or {}
-    files = h.get("files") or {}
-    return {k: v for k, v in files.items() if isinstance(v, str)}
-
-
-def _toplevel(record: dict) -> Optional[str]:
-    files = _harness_files(record)
-    for k, v in files.items():
-        if k.endswith(".env"):
-            m = re.search(r"^\s*TOPLEVEL\s*=\s*(\S+)", v, re.M)
-            if m:
-                return m.group(1)
-    return None
-
-
-def _cocotb_test_text(record: dict) -> str:
-    for k, v in _harness_files(record).items():
-        if re.search(r"test_.*\.py$", k) and "runner" not in k:
-            return v
-    return ""
-
-
-# --------------------------------------------------------------------------- #
-# Latency / FSM-state PROTOCOL-PIN detection — the §4.05 gate.
+# §4.05 PROSE protocol-pin detection — the harness-free re-expression of the
+# former cocotb `_has_protocol_pin` gate.
 #
-# The architecture-name⇒`a+b` premise holds ONLY when the cocotb test checks the
-# FUNCTION and tolerates ANY latency. It is DEFEATED when the test additionally
-# asserts an exact latency or an exact FSM-state code: a functional wrapper cannot
-# match a cycle-pinned protocol or a pinned state encoding. Those force SKIP.
+# The architecture-name⇒`a+b`/`a*b` premise (and the single-cycle any-latency
+# start/done wrapper) holds ONLY for a design that checks the FUNCTION and
+# tolerates ANY completion latency. It is DEFEATED — and the design MUST be
+# SKIPped — whenever the PROMPT itself declares a protocol a single-cycle
+# functional wrapper cannot match: a pipelined / multi-stage / cycle-counted
+# latency, or an FSM whose exact state encoding is exposed on a status/state
+# output. The cocotb harness (`assert latency == N`, `assert dut.o_status == k`)
+# is OFF-LIMITS oracle and is NEVER read; these cues are sourced ONLY from
+# `input.prompt`.
 # --------------------------------------------------------------------------- #
-_LATENCY_PIN_RE = re.compile(
+_PIPELINE_PROSE_RE = re.compile(
     r"""(?xi)
-      assert\s+\w*latency\w*\s*==          |   # assert latency == N / LATENCY
-      \blatency\s*==\s*\w+
+      \bpipelined?\b | \bpipeline\s+stages?\b | \bmulti[-\s]?stage\b |
+      \bnumber\s+of\s+(?:pipeline\s+)?stages\b | \bstage\s+count\b |
+      \blatency\s+of\s+\w+\s+(?:clock\s+)?cycles?\b |
+      \bover\s+\w+\s+(?:pipeline\s+)?(?:clock\s+)?(?:stages?|cycles?)\b
     """,
 )
-_FSM_STATE_PIN_RE = re.compile(
-    r"(?i)assert\s+dut\.\w*(?:status|state)\w*\.value\s*==")
+_FSM_PROSE_RE = re.compile(
+    r"(?xi)"
+    r"\bstate\s+machine\b | \bfinite[-\s]?state\b | \bFSM\b |"
+    r" \bstate\s+(?:code|encoding)\b | reports?\s+the\s+current\s+state\b |"
+    r" current\s+state\s+of\s+the\s+(?:fsm|machine)\b")
+_STATE_OUT_RE = re.compile(r"(?i)(?:^|_)(?:status|state)(?:$|_)")
 
 
-def _has_protocol_pin(tb: str) -> bool:
-    """True if the testbench pins an exact latency or an exact FSM state code."""
-    return bool(_LATENCY_PIN_RE.search(tb) or _FSM_STATE_PIN_RE.search(tb))
-
-
-def _tolerates_any_latency(tb: str) -> bool:
-    """True if the test reads the result only after a `while <done/valid> == 0`
-    busy-wait — i.e. it tolerates ANY completion latency. A registered
-    single-cycle-done/valid functional wrapper then passes."""
-    return bool(re.search(
-        r"while\s+(?:\(\s*)?dut\.\w+\.value\s*(?:!=\s*1|==\s*0)", tb))
-
-
-# --------------------------------------------------------------------------- #
-# cocotb dut.<signal> direction inference + PARAMETER filtering.
-# A cocotb PARAMETER is read with `int(dut.NAME.value)` to CONFIGURE the run (a
-# python int used as a width / loop bound), not asserted as a DUT output. They are
-# ALL-CAPS snake (DATA_WIDTH, IN_DATA_NS, LATENCY, …); we drop them so they never
-# become phantom ports.
-# --------------------------------------------------------------------------- #
-_PARAM_NAME_RE = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$|^[A-Z]{3,}$")
-
-
-def _cocotb_params(tb: str) -> set:
-    params = set()
-    for m in re.finditer(r"\b\w+\s*=\s*int\(\s*dut\.(\w+)\.value\s*\)", tb):
-        if _PARAM_NAME_RE.match(m.group(1)):
-            params.add(m.group(1))
-    for m in re.finditer(r"dut\.([A-Z][A-Z0-9_]+)\.value", tb):
-        if _PARAM_NAME_RE.match(m.group(1)):
-            params.add(m.group(1))
-    return params
-
-
-def _cocotb_clocks(tb: str) -> List[str]:
-    """Clock signals: a `Clock(dut.X, ...)` driver and/or a `RisingEdge(dut.X)`
-    that is never .value-assigned. cocotb drives the clock internally, so the
-    clock never appears as `dut.X.value = ...`; we recover it here so the emitted
-    module declares its clock port."""
-    clks = list(dict.fromkeys(re.findall(r"Clock\(\s*dut\.(\w+)\b", tb)))
-    if not clks:
-        # fall back to the RisingEdge/FallingEdge target if there is exactly one.
-        edges = list(dict.fromkeys(re.findall(r"(?:Rising|Falling)Edge\(\s*dut\.(\w+)", tb)))
-        # keep only those never directly value-driven and named like a clock.
-        driven = set(re.findall(r"dut\.(\w+)\.value\s*=(?!=)", tb))
-        edges = [e for e in edges if e not in driven and re.search(r"(?i)cl(?:k|ock)", e)]
-        clks = edges
-    return clks
-
-
-def _cocotb_io(tb: str) -> Tuple[List[str], List[str]]:
-    """(inputs, outputs) from the cocotb test. A signal ASSIGNED
-    (`dut.X.value = ...`, not `==`) is an INPUT; a signal only READ
-    (`= dut.X.value`, `int(dut.X.value)`, `dut.X.value.<attr>`, a compared
-    `dut.X.value ==/!=`, or a `while dut.X.value ...` busy-wait) is an OUTPUT.
-    A `Clock(dut.X)` / clock-named RisingEdge target is added as an INPUT.
-    Parameters are removed. Order is by first appearance for determinism."""
-    driven = list(dict.fromkeys(re.findall(r"dut\.(\w+)\.value\s*=(?!=)", tb)))
-    read = list(dict.fromkeys(
-        re.findall(r"=\s*dut\.(\w+)\.value\b", tb)
-        + re.findall(r"int\(\s*dut\.(\w+)\.value", tb)
-        + re.findall(r"dut\.(\w+)\.value\.(?:integer|signed_integer)", tb)
-        + re.findall(r"dut\.(\w+)\.value\s*[=!]=", tb)          # compared output
-        + re.findall(r"while\s+(?:\(\s*)?dut\.(\w+)\.value", tb)))  # busy-wait output
-    params = _cocotb_params(tb)
-    clks = _cocotb_clocks(tb)
-    driven_set = set(driven)
-    # clocks lead the input list (they are real ports cocotb drives internally).
-    ins = [c for c in clks if c not in params]
-    ins += [s for s in driven if s not in params and s not in ins]
-    outs = [s for s in read if s not in driven_set and s not in params
-            and s not in clks]
-    return ins, outs
+def _prose_pins_protocol(prompt: str, outs: List[Port]) -> bool:
+    """True if the PROMPT declares a protocol a single-cycle functional wrapper
+    cannot match: a pipelined / multi-stage / cycle-counted latency, or an FSM
+    whose state encoding is exposed on a status/state output. Harness-free
+    (prompt-sourced) replacement for the removed cocotb `_has_protocol_pin`."""
+    if _PIPELINE_PROSE_RE.search(prompt):
+        return True
+    if _FSM_PROSE_RE.search(prompt) and any(
+            _STATE_OUT_RE.search(n) for n, _ in outs):
+        return True
+    return False
 
 
 # --------------------------------------------------------------------------- #
-# CVDP-native `### Inputs/Outputs` markdown port reader (when the prompt has one).
+# CVDP-native parameter-default reader (prompt prose) — used by the multi-operand
+# emit to pull IN_DATA_WIDTH / IN_DATA_NS defaults. PROMPT-sourced only.
 # --------------------------------------------------------------------------- #
 def _param_defaults(prompt: str) -> Dict[str, int]:
     out: Dict[str, int] = {}
@@ -236,119 +168,6 @@ def _param_defaults(prompt: str) -> Dict[str, int]:
         out.setdefault(m.group(1), int(m.group(2)))
     for m in re.finditer(r"parameter\s+(?:int\s+)?([A-Z][A-Z0-9_]+)\s*=\s*(\d+)", prompt):
         out.setdefault(m.group(1), int(m.group(2)))
-    return out
-
-
-def _width_from_cell(cell: str, params: Dict[str, int]) -> Optional[int]:
-    m = re.search(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", cell)
-    if m:
-        return abs(int(m.group(1)) - int(m.group(2))) + 1
-    m = re.search(r"\[\s*`?([A-Za-z_]\w*)`?\s*-\s*1\s*:\s*0\s*\]", cell)
-    if m and m.group(1) in params:
-        return params[m.group(1)]
-    m = re.search(r"\b(\d+)\s*-?\s*bits?\b", cell, re.I)
-    if m:
-        return int(m.group(1))
-    if re.search(r"\b1\s*-?\s*bit\b", cell, re.I) or re.search(r"\(\s*1\s*\)", cell):
-        return 1
-    return None
-
-
-_PORT_LINE_RE = re.compile(
-    r"""^\s*[-*]?\s*\*{0,2}`?([A-Za-z_]\w*)`?\*{0,2}\s*\(([^)]*)\)""", re.X)
-
-
-def _section_ports(prompt: str, header_words, params) -> List[Port]:
-    lines = prompt.splitlines()
-    ports: List[Port] = []
-    in_sec = False
-    for ln in lines:
-        h = re.match(r"^\s*#{1,6}\s*(.+?)\s*$", ln) or re.match(
-            r"^\s*\*\*(.+?)\*\*\s*:?\s*$", ln)
-        if h:
-            label = h.group(1).strip().lower().rstrip(":")
-            in_sec = any(w == label or label.startswith(w) or label.endswith(w)
-                         for w in header_words)
-            continue
-        if not in_sec:
-            continue
-        m = _PORT_LINE_RE.match(ln)
-        if not m:
-            continue
-        name, cell = m.group(1), m.group(2)
-        if name.lower() in _NOT_A_PORT_NAME:
-            continue
-        w = _width_from_cell(cell, params)
-        if w is None:
-            if re.search(r"(?i)(clk|clock|rst|reset|_n$|en$|enable|valid|ready|"
-                         r"mode|sel|start|stop|load|done|carry|cin|cout|flag|"
-                         r"overflow|zero|negative|borrow)", name):
-                w = 1
-            else:
-                continue
-        ports.append((name, w))
-    return ports
-
-
-# --------------------------------------------------------------------------- #
-# Width resolution from PROSE / test-case table (used for cocotb-derived names).
-# --------------------------------------------------------------------------- #
-def _prose_width(prompt: str, name: str) -> Optional[int]:
-    m = re.search(rf"\b{re.escape(name)}\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]", prompt)
-    if m:
-        return abs(int(m.group(1)) - int(m.group(2))) + 1
-    for pat in (rf"\b(\d+)\s*-?\s*bits?\b[^\n]*?\b{re.escape(name)}\b",
-                rf"\b{re.escape(name)}\b[^\n]*?\b(\d+)\s*-?\s*bits?\b"):
-        m = re.search(pat, prompt, re.I)
-        if m:
-            return int(m.group(1))
-    return None
-
-
-def _operand_width_from_prose(prompt: str) -> Optional[int]:
-    """A single STATED operand width shared by both addends, e.g.
-    'two 16-bit operands' / '16-bit operands (A, B)'. None if not stated."""
-    m = re.search(r"\b(\d+)[-\s]?bits?\s+operands?\b", prompt, re.I)
-    if m:
-        return int(m.group(1))
-    m = re.search(r"\btwo\s+(\d+)[-\s]?bits?\b", prompt, re.I)
-    if m:
-        return int(m.group(1))
-    return None
-
-
-def _result_width_from_prose(prompt: str) -> Optional[int]:
-    """A STATED result width, e.g. '17-bit result' / 'produces a 17-bit Sum'."""
-    m = re.search(r"\b(\d+)[-\s]?bits?\s+(?:result|sum|output|product)\b",
-                  prompt, re.I)
-    return int(m.group(1)) if m else None
-
-
-# --------------------------------------------------------------------------- #
-# cocotb result-mask width — `(A + B) & 0x1FFFF` => 17-bit; `& 0xFF` => 8-bit.
-# This is the test's OWN width declaration, so it is authoritative for the result.
-# --------------------------------------------------------------------------- #
-def _mask_width(tb: str) -> Optional[int]:
-    best = None
-    for m in re.finditer(r"&\s*0x([0-9A-Fa-f]+)\b", tb):
-        v = int(m.group(1), 16)
-        if v == 0:
-            continue
-        # a contiguous all-ones mask gives the bit width
-        if (v & (v + 1)) == 0:
-            w = v.bit_length()
-            best = max(best or 0, w)
-    return best
-
-
-def _dedup(ports: List[Port]) -> List[Port]:
-    seen = set()
-    out: List[Port] = []
-    for n, w in ports:
-        if n in seen or n.lower() in _NOT_A_PORT_NAME:
-            continue
-        seen.add(n)
-        out.append((n, w))
     return out
 
 
@@ -391,75 +210,6 @@ def _rst_port(ports):
 
 
 # --------------------------------------------------------------------------- #
-# interface resolution: prefer the cocotb test signals (CVDP's real interface),
-# fall back to the markdown `### Inputs/Outputs` section. Widths cross-checked
-# from prose / mask / table.
-# --------------------------------------------------------------------------- #
-def _resolve_interface(record: dict, prompt: str, tb: str
-                       ) -> Optional[Tuple[List[Port], List[Port]]]:
-    params = _param_defaults(prompt)
-    op_w = _operand_width_from_prose(prompt)
-    res_w = _result_width_from_prose(prompt) or _mask_width(tb)
-
-    sec_in = _dedup(_section_ports(prompt, ("inputs", "input ports", "input"), params))
-    sec_out = _dedup(_section_ports(prompt, ("outputs", "output ports", "output"), params))
-
-    c_ins, c_outs = _cocotb_io(tb)
-
-    def _width_for(name: str, is_out: bool) -> Optional[int]:
-        low = name.lower()
-        # control / flag / handshake single-bit signals come FIRST (a stray
-        # "N-bit" prose token near a flag name must not widen it).
-        if low in _SEQ_PORTS or low in _START_NAMES or low in _DONE_NAMES \
-                or low in _CIN_NAMES or low in _COUT_NAMES or low in _OVF_NAMES \
-                or low in _ZERO_NAMES or low in _NEG_NAMES or low in _BORROW_NAMES \
-                or re.search(r"(?i)(_n$|^en$|enable|valid|ready|start|stop|mode|"
-                             r"sel|load|done|clear|carry|cin|cout|flag|overflow|"
-                             r"zero|borrow)$", name):
-            return 1
-        # a result / sum / product output -> the STATED result width (or mask),
-        # checked BEFORE the per-name prose scan so an adjacent operand "N-bit"
-        # token cannot mis-size the wider result.
-        if is_out and (low in _SUM_NAMES or low in _PROD_NAMES):
-            ew = _prose_width(prompt, name)
-            return res_w or ew or op_w
-        # an operand data port -> the stated operand width.
-        if low in _A_NAMES or low in _B_NAMES:
-            return op_w or _prose_width(prompt, name)
-        # otherwise an explicit per-name prose range / token.
-        return _prose_width(prompt, name)
-
-    ins: List[Port] = []
-    outs: List[Port] = []
-    unresolved = False
-    for name in c_ins:
-        w = _width_for(name, False)
-        if w is None:
-            sec = _find(sec_in, (name.lower(),))
-            w = sec[1] if sec else None
-        if w is None:
-            unresolved = True
-            continue
-        ins.append((name, w))
-    for name in c_outs:
-        w = _width_for(name, True)
-        if w is None:
-            sec = _find(sec_out, (name.lower(),))
-            w = sec[1] if sec else None
-        if w is None:
-            unresolved = True
-            continue
-        outs.append((name, w))
-    ins, outs = _dedup(ins), _dedup(outs)
-    if ins and outs and not unresolved:
-        return ins, outs
-
-    if sec_in and sec_out:
-        return sec_in, sec_out
-    return None
-
-
-# --------------------------------------------------------------------------- #
 # RTL emit helpers
 # --------------------------------------------------------------------------- #
 def _decl(direction: str, name: str, w: int, reg: bool = False) -> str:
@@ -482,12 +232,12 @@ def _signed(name: str, signed: bool) -> str:
 # =========================================================================== #
 # FUNCTION recognition + emit
 # =========================================================================== #
-def _recognize_and_emit(record: dict, top: str, prompt: str, tb: str,
+def _recognize_and_emit(record: dict, top: str, prompt: str,
                         ins: List[Port], outs: List[Port]) -> Optional[str]:
     low = prompt.lower()
 
     # ---- multi-operand sum (flattened vector of N elements) FIRST ------------#
-    mo = _try_multi_operand(record, top, prompt, tb, ins, outs)
+    mo = _try_multi_operand(record, top, prompt, ins, outs)
     if mo is not None:
         return mo
 
@@ -503,10 +253,9 @@ def _recognize_and_emit(record: dict, top: str, prompt: str, tb: str,
     done = _find(outs, _DONE_NAMES)
     seq = clk is not None
 
-    # signed-ness: STATED, or implied by a signed-only architecture (Booth) /
-    # `.signed_integer` reads in the test.
-    signed = bool(re.search(r"\bsigned\b|two'?s\s+complement|\bbooth\b", low)) \
-        or ".signed_integer" in tb
+    # signed-ness: STATED in the prompt, or implied by a signed-only architecture
+    # (Booth). PROMPT-sourced only — the cocotb `.signed_integer` read is OFF-LIMITS.
+    signed = bool(re.search(r"\bsigned\b|two'?s\s+complement|\bbooth\b", low))
     if re.search(r"\bunsigned\b", low) and not re.search(
             r"two'?s\s+complement|\bbooth\b", low) \
             and not re.search(r"(?<!un)\bsigned\b", low):
@@ -569,7 +318,7 @@ def _recognize_and_emit(record: dict, top: str, prompt: str, tb: str,
         if not (m0 and m1):
             return None
         return _emit_addsub_mode(top, ins, outs, a, b, res, mode, signed,
-                                 zero, seq, clk, rst, start, done, tb)
+                                 zero, seq, clk, rst, start, done)
 
     if is_mul:
         if rw < aw:
@@ -600,8 +349,12 @@ def _recognize_and_emit(record: dict, top: str, prompt: str, tb: str,
                        f"// program-SOLVED combinational {fn_label}; "
                        f"architecture-agnostic; deterministic.")
 
-    # SEQUENTIAL: only when the test tolerates ANY latency.
-    if not (_tolerates_any_latency(tb) and not _has_protocol_pin(tb)):
+    # SEQUENTIAL: emit an any-latency start/done wrapper ONLY when the interface
+    # exposes a completion output (done / valid_out) — that is the observable the
+    # any-latency test busy-waits on; without it we cannot assume the protocol
+    # tolerates any latency, so SKIP. (solve() has already applied the pipelined /
+    # FSM PROSE protocol-pin gate that excludes cycle-pinned / state-encoded shapes.)
+    if not done:
         return None
     return _emit_seq_wrapper(top, ins, outs, rname, core, flag_assigns,
                              clk, rst, start, done, fn_label)
@@ -697,7 +450,7 @@ def _emit_seq_wrapper(top, ins, outs, rname, core, flag_assigns,
 
 
 def _emit_addsub_mode(top, ins, outs, a, b, res, mode, signed, zero,
-                      seq, clk, rst, start, done, tb) -> Optional[str]:
+                      seq, clk, rst, start, done) -> Optional[str]:
     rname = res[0]
     sa, sb = _signed(a[0], signed), _signed(b[0], signed)
     add_expr = f"{sa} + {sb}"
@@ -717,7 +470,10 @@ def _emit_addsub_mode(top, ins, outs, a, b, res, mode, signed, zero,
         return _module(top, in_decls, out_decls, body,
                        "// program-SOLVED combinational add/subtract by stated mode "
                        "bit; deterministic.")
-    if not (_tolerates_any_latency(tb) and not _has_protocol_pin(tb)):
+    # SEQUENTIAL add/sub: emit the any-latency wrapper ONLY with a completion
+    # output (done / valid_out) to busy-wait on; else SKIP. (The pipelined / FSM
+    # PROSE protocol-pin gate in solve() already excluded state-encoded shapes.)
+    if not done:
         return None
     core = f"({mode[0]} ? {sub_expr} : {add_expr})"
     flags = []
@@ -730,18 +486,17 @@ def _emit_addsub_mode(top, ins, outs, a, b, res, mode, signed, zero,
 # --------------------------------------------------------------------------- #
 # multi-operand: sum of N slices of a flattened input vector.
 # --------------------------------------------------------------------------- #
-def _try_multi_operand(record, top, prompt, tb, ins, outs) -> Optional[str]:
+def _try_multi_operand(record, top, prompt, ins, outs) -> Optional[str]:
     low = prompt.lower()
     if not re.search(r"flattened\s+1-?d?\s+vector|sum\s+of\s+(?:all|multiple|the)\s+"
                      r"(?:input\s+)?(?:data\s+)?elements|cumulative\s+sum|adder\s+tree|"
                      r"multi[-\s]?operand", low):
         return None
-    # §4.05: a multi-operand TREE whose latency the test pins exactly is a cycle-
-    # accurate pipeline, not a functional wrapper -> SKIP.
-    if _has_protocol_pin(tb):
-        return None
-    if not _tolerates_any_latency(tb):
-        return None
+    # §4.05: a multi-operand TREE whose latency the prompt pins exactly is a cycle-
+    # accurate pipeline, not a functional wrapper -> SKIP. That PROSE gate is applied
+    # up front in solve() (_prose_pins_protocol); here the any-latency assumption is
+    # carried by the REQUIRED valid_in / valid_out handshake below (the observable
+    # the busy-wait keys on). No harness read.
     clk = _clk_port(ins)
     rst = _rst_port(ins)
     vin = _find(ins, ("i_valid", "valid_in", "in_valid"))
@@ -862,34 +617,39 @@ def _try_saturating(top, prompt, ins, outs, a, b, res, signed, is_sub,
 # entry point
 # --------------------------------------------------------------------------- #
 def solve(record: dict) -> Optional[str]:
+    """Emit a functionally-correct integer adder/subtractor/multiplier variant
+    (module named per the PROMPT), or None (SKIP). Reads ONLY input.prompt +
+    input.context (module name via _bridge.toplevel_name, interface via
+    _bridge.extract_interface); the hidden cocotb harness / .env / golden are
+    OFF-LIMITS oracle and are NEVER read."""
     if not isinstance(record, dict):
-        return None
-    top = _toplevel(record)
-    if not top:
         return None
     prompt = (record.get("input") or {}).get("prompt") or ""
     if not prompt.strip():
         return None
-    tb = _cocotb_test_text(record)
 
     # §4.05 up-front SKIPs (function-changing / composite).
     if _NON_PLAIN_FN_RE.search(prompt) or _COMPOSITE_RE.search(prompt):
         return None
 
-    iface = _resolve_interface(record, prompt, tb)
+    # module name + interface come ONLY from input.prompt + input.context.
+    top = _bridge.toplevel_name(record)
+    if not top:
+        return None
+    iface = _bridge.extract_interface(record, top)
     if not iface:
         return None
     ins, outs = iface
 
-    # §4.05 protocol-pin global gate: if the test asserts an EXACT latency or an
-    # exact FSM state code, a functional emit (combinational OR single-cycle
-    # wrapper) cannot match the pinned protocol — SKIP unconditionally. (Every
-    # solvable shape below requires the test to tolerate ANY latency; a pinned
-    # latency / state encoding is, by definition, NOT any-latency.)
-    if _has_protocol_pin(tb):
+    # §4.05 protocol-pin global gate (PROSE-sourced): if the PROMPT declares a
+    # pipelined / multi-stage / cycle-counted latency, or an FSM whose exact state
+    # encoding is exposed on a status/state output, a functional emit (combinational
+    # OR single-cycle wrapper) cannot match the pinned protocol — SKIP. (Replaces
+    # the removed cocotb-harness `_has_protocol_pin`; the harness is never read.)
+    if _prose_pins_protocol(prompt, outs):
         return None
     try:
-        return _recognize_and_emit(record, top, prompt, tb, ins, outs)
+        return _recognize_and_emit(record, top, prompt, ins, outs)
     except Exception:
         return None
 
