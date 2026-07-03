@@ -41,5 +41,26 @@ evidence:
   filed_by: benchmark-agent (unified-entry CVDP canary on v1.2.96, RULE 0 path)
 
 resolution:
-  status: open
-  note: "No fix landed as of PR #97 merge (2026-07-03) — remains open work."
+  status: fix-landed
+  landed_by: repo-gatekeeper (core-agent role)
+  fix: |
+    Resolved on current main by the combination of two mechanisms — verified by
+    end-to-end reproduction on v1.3.4:
+      * design_one_shot_runner._autoemit_chip_top_if_needed (v0.1.62, already
+        shipped) — when L9's synth_top (`chip_top` sentinel) names no file and a
+        single differently-named authored module exists in rtl/, it AUTO-EMITs
+        `module chip_top(<real ports>); <authored_top> u_dut(<connects>);
+        endmodule`. Confirmed it PRESERVES the DUT's real multi-bit port widths
+        (`[63:0] data_in`, `[65:0] data_out`) — NOT 1-bit-flattened, the v1.2.96
+        symptom — and iverilog `-s chip_top` elaborates cleanly.
+      * the sibling ORGANIC-20260703 L9 fix (this batch) — a real `module
+        <name>(...)` header in the prompt/context is now authoritative, so
+        L9.top_module resolves the real authored name (e.g. `encoder_64b66b`) and
+        in the common case synth + full-stack TB target the real module directly,
+        no wrapper needed.
+    Regression pinning BOTH paths:
+    programs/tests/test_organic_20260703_chip_top_autoemit_authored_top_differs.py
+    (3 tests: wrapper preserves widths + iverilog elaborates + L9 resolves real
+    name). No new runner code required — the auto-emit + real-width extraction was
+    already present; the L9 fix removes the remaining trigger.
+  annotated_at: "2026-07-04 (core-agent fix, post-#97)"
