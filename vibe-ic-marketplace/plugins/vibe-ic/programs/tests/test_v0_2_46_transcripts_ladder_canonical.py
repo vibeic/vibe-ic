@@ -42,6 +42,13 @@ def _setup_run(tmp_path):
         [sys.executable, str(DISPATCH), "verilogeval-v2", "--setup",
          "--dataset", str(ds), "--run", str(run)],
         capture_output=True, text=True, timeout=120)
+    # The 2026-06-28 vibe_ic_entry_guard gates scoring on Vibe-IC Phase-1 evidence
+    # (a canonical run carries reports/phase1_one_shot.json). Stamp the marker so
+    # this test exercises its actual SUBJECT — the DOWNSTREAM transcripts /
+    # blindness-audit NOTICE ladder — rather than being refused at the upstream
+    # entry gate. (§4.05: an existence marker only; no oracle content.)
+    (run / "reports").mkdir(parents=True, exist_ok=True)
+    (run / "reports" / "phase1_one_shot.json").write_text('{"phase1": "ok"}')
     return ds, run, r
 
 
