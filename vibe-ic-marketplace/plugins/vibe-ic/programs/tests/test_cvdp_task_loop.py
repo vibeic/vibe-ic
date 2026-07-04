@@ -112,13 +112,52 @@ def test_recover_interface_from_text_helper():
     assert L._IR.recover_interface_from_text(txt, "nope") == []
 
 
+# Part C — optimization's deterministic-first is a hygiene/lint BASELINE over the
+# context RTL (no interface/solve step for cid007).
+_OPTIMIZE_REC = {
+    "id": "cvdp_copilot_demo_optimize_0001",
+    "categories": ["cid007", "medium"],
+    "input": {
+        "prompt": "Reduce the area of `widget` without changing behaviour.",
+        "context": {"rtl/widget.sv": (
+            "module widget (input clk, input [7:0] a, output reg [7:0] y);\n"
+            "  always @(posedge clk) y <= a;\nendmodule\n")},
+    },
+    "output": {"response": "SECRET"},
+}
+
+
+def test_optimization_runs_deterministic_lint_baseline(tmp_path):
+    res = L.run_loop_case(_OPTIMIZE_REC, tmp_path)
+    assert res["nature"] == "optimization"
+    assert res["plugin_entry"] == "optimize_loop"
+    assert res["lint_baseline"]["ran"] is True
+    # optimization has no interface/solve step
+    assert res["iface_ports"] == 0
+    assert res["det_rtl"] is False
+
+
+# Part D — the interface contract emitted from recovered ports.
+def test_iface_to_contract_v_emits_valid_header():
+    iface = [{"name": "clk", "dir": "input", "width": 1},
+             {"name": "d", "dir": "input", "width": 8},
+             {"name": "q", "dir": "output", "width": 8}]
+    v = L._iface_to_contract_v(iface, "foo")
+    assert "module foo (" in v
+    assert "input clk" in v
+    assert "input [7:0] d" in v
+    assert "output [7:0] q" in v
+    assert v.rstrip().endswith("endmodule")
+
+
 @pytest.mark.skipif(not _DATASET.is_file(), reason="CVDP dataset not present")
 @pytest.mark.skipif(not shutil.which("iverilog"), reason="iverilog not installed")
-@pytest.mark.parametrize("rid,nature", [
-    ("cvdp_copilot_convolutional_encoder_0010", "completion"),
-    ("cvdp_copilot_moving_average_0005", "functional_modification"),
+@pytest.mark.parametrize("rid,nature,conf_gated", [
+    ("cvdp_copilot_convolutional_encoder_0010", "completion", True),
+    ("cvdp_copilot_moving_average_0005", "functional_modification", False),
 ])
-def test_standard_algorithm_records_solve_and_compile(tmp_path, rid, nature):
+def test_standard_algorithm_records_solve_and_compile(tmp_path, rid, nature,
+                                                      conf_gated):
     rec = None
     with _DATASET.open() as f:
         for line in f:
@@ -132,6 +171,14 @@ def test_standard_algorithm_records_solve_and_compile(tmp_path, rid, nature):
     assert res["det_rtl"] is True, "deterministic solver should emit RTL"
     assert res["iverilog_ok"] is True, "emitted RTL must compile"
     assert res["emit_path"] == "deterministic"
+    # Part D: completion's verify chain gates the body on the recovered interface
+    # contract; the conv-encoder body must conform. modify's verify uses
+    # equivalence-check (not spec_conformance), so no conformance record.
+    if conf_gated:
+        assert res["conformance"]["ran"] is True
+        assert res["conformance"]["conforms"] is True
+    else:
+        assert res.get("conformance") is None
 
 
 if __name__ == "__main__":
