@@ -72,6 +72,20 @@ def test_driver_reads_only_input_not_oracle(tmp_path):
     assert "SECRET" not in blob
 
 
+def test_needs_ai_backup_gets_ic_expert_agent_pack(tmp_path):
+    # a novel debug body has no deterministic solver → the loop must hand it to
+    # the AI acting AS the IC Expert Agent, with expert-skills + expert-DB.
+    res = L.run_loop_case(_DEBUG_REC, tmp_path)
+    assert res["emit_path"] == "needs_ai_backup"
+    ab = res["ai_backup"]
+    assert ab["subagent_type"] == "vibe-ic:ic-expert-agent"
+    assert ab["expert_skills"]                 # the debug_loop AI-backup skills
+    assert ab["n_skills"] > 0                   # expert-SKILLS digest rendered
+    handoff = tmp_path / "cases" / _DEBUG_REC["id"] / "ai_backup" \
+        / "ic_expert_agent_handoff.json"
+    assert handoff.is_file()
+
+
 # cid002 completion: the partial RTL (interface) is embedded in the PROMPT, not
 # in input.context — the loop recovers it from the in-prompt real module header.
 _COMPLETION_IN_PROMPT = {
