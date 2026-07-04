@@ -68,12 +68,20 @@ def test_pselxyz_not_matched():
 
 
 # ── dataset outcome ──
-def test_dataset_gfcm_complete():
+def test_dataset_gfcm_spec_absent_under_405():
     r = _records().get("cvdp_copilot_GFCM_0001")
     if r is None:
         pytest.skip("record absent")
-    # clk1/clk2 are the only width gaps; both are 1-bit clocks -> COMPLETE.
-    assert E.extract(r).get("completeness") == "COMPLETE"
+    # ORGANIC-20260705 §4.05 honesty: GFCM (`glitch_free_mux`) states its ports
+    # ONLY in NARRATIVE prose + WaveDrom ("switches between two input clock signals
+    # (`clk1` and `clk2`) … output clock (`clkout`) … the `sel` signal") — there is
+    # no port HEADER, Signal/Direction table, or `(input, … )` prose-bullet list for
+    # the deterministic extractor to bind. In the harness-reading era this record
+    # was COMPLETE only because the extractor read the cocotb `dut.<sig>` set (the
+    # OFF-LIMITS oracle). Input-only, its honest verdict is SPEC_ABSENT — narrative
+    # interface recovery is the AI-backup IC-Expert-Agent track's job, not the
+    # deterministic §4.05 gate. (See ic_expert_backup_pack.py.)
+    assert E.extract(r).get("completeness") == "INCOMPLETE_SPEC_ABSENT"
 
 
 def test_dataset_axi_register_complete():
@@ -87,4 +95,4 @@ def test_completeness_floor_and_no_regression():
     recs = _records()
     comp = sum(1 for r in recs.values()
                if E.extract(r).get("completeness") == "COMPLETE")
-    assert comp >= 229, f"COMPLETE regressed: {comp}"
+    assert comp >= 226, f"COMPLETE regressed: {comp}"
