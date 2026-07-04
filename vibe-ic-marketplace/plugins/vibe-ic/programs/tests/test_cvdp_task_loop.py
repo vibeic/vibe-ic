@@ -72,6 +72,46 @@ def test_driver_reads_only_input_not_oracle(tmp_path):
     assert "SECRET" not in blob
 
 
+# cid002 completion: the partial RTL (interface) is embedded in the PROMPT, not
+# in input.context — the loop recovers it from the in-prompt real module header.
+_COMPLETION_IN_PROMPT = {
+    "id": "cvdp_copilot_demo_completion_0001",
+    "categories": ["cid002", "easy"],
+    "input": {
+        "prompt": (
+            "Complete the following module so it registers `a` into `y`.\n\n"
+            "```verilog\n"
+            "module widget (\n"
+            "  input  wire        clk,\n"
+            "  input  wire [7:0]  a,\n"
+            "  output reg  [7:0]  y\n"
+            ");\n"
+            "  // TODO: implement\n"
+            "endmodule\n"
+            "```\n"),
+        "context": None,
+    },
+    "output": {"response": "SECRET"},
+}
+
+
+def test_completion_recovers_interface_from_in_prompt_header(tmp_path):
+    res = L.run_loop_case(_COMPLETION_IN_PROMPT, tmp_path)
+    assert res["nature"] == "completion"
+    assert res["iface_ports"] == 3          # clk, a[8], y[8]
+    assert res["iface_source"] == "in_prompt_header"
+
+
+def test_recover_interface_from_text_helper():
+    txt = ("blah\n```verilog\nmodule foo (input clk, input [3:0] d, "
+           "output reg q);\n endmodule\n```")
+    ports = L._IR.recover_interface_from_text(txt, "foo")
+    names = sorted(p["name"] for p in ports)
+    assert names == ["clk", "d", "q"]
+    # absent target → []
+    assert L._IR.recover_interface_from_text(txt, "nope") == []
+
+
 @pytest.mark.skipif(not _DATASET.is_file(), reason="CVDP dataset not present")
 @pytest.mark.skipif(not shutil.which("iverilog"), reason="iverilog not installed")
 @pytest.mark.parametrize("rid,nature", [
