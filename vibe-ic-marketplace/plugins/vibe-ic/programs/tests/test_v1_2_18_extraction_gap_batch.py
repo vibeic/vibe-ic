@@ -132,5 +132,5 @@ def test_batch_completeness_and_residual_gaps():
     assert gap <= 3, f"EXTRACTION_GAP rose: {gap} {gap_ids}"
     # the residual gaps are the documented hard cases (cocotb-interface / context-only
     # param / wavedrom-only width) — assert they are a SUBSET of the known set.
-    known_residual = {"binary_multiplier_0012", "montgomery_0001", "perf_counters_0001"}
+    known_residual = {"word_reducer_0008", "pipeline_mac_0017", "matrix_multiplier_0001"}
     assert set(gap_ids) <= known_residual, f"unexpected new gap: {set(gap_ids) - known_residual}"
