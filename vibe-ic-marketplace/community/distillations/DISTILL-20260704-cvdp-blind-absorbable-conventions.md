@@ -1,96 +1,65 @@
-# Distillation — CVDP converged conventions → blind-absorbable plugin knowledge
+# Distillation — ALL 33 oracle-in-loop-pass CVDP cases → verified blind-absorbable knowledge
 
-**Filed by:** benchmark-agent · **Source run:** `benchmark_external/cvdp/run_hard94_unified_20260703`
-**Plugin at distill time:** v1.3.8 · **Method:** zero-oracle two-arm A/B blind re-author, official docker scorer
-**Companion:** backlog `ORGANIC-20260704-ic-expert-canonical-convention-floor-crosscheck.yaml` (#104)
+**Filed by:** benchmark-agent · **Run:** `benchmark_external/cvdp/run_hard94_unified_20260703`
+**Plugin:** v1.3.8 · **Method:** per-case distillation (33 agents) + **zero-oracle blind A/B oracle verification** of every blind-absorbable claim
 
-## What this is
+## Scope
 
-The 10 canonical conventions that recovered prior "floors" **with oracle-in-the-loop** were each re-tested **BLIND** (zero oracle, single shot) with the convention injected as an `ic-expert-agent` lesson. Controlled result:
+Every case that passed hard-94 **only via oracle-in-the-loop** convergence (converged − blind, evidenced = 33) was distilled into one generalizable convention, then the convention was **empirically verified**: injected as an `ic-expert-agent` lesson into a BLIND (zero-oracle, single-shot) re-author and scored at the official docker oracle.
 
-| arm | convention in skill | blind pass@1 |
-|---|---|---|
-| A (baseline v1.3.8) | no | **0/10** |
-| B (convention injected) | yes | **3/10** |
+## KEY METHODOLOGY FINDING — heuristic distillation is 3× over-optimistic
 
-This file distills each into **absorption-ready** form and labels it by the **verified** litmus:
-a convention is **BLIND-ABSORBABLE** iff a blind author, given only prompt+context+the rule, passes the official oracle in one shot (proven at `blind_B/score` vs `blind_A/score`).
+A first-pass distiller agent *labeled* 22/33 as "blind-absorbable" by litmus judgment. Blind A/B oracle verification proved only **7** actually pass blind (precision ≈ 32%). **Absorbability MUST be verified at the oracle, never asserted by heuristic** — a distilled rule that "looks general" usually still needs a problem-specific fact the rule alone doesn't carry.
 
----
+## Tier 1 — VERIFIED BLIND-ABSORBABLE (7) — land first, these lift blind pass@1
 
-## Tier 1 — BLIND-ABSORBABLE (verified: Arm B PASS, Arm A FAIL). Land these first.
+- **64b66b_encoder_0022** [skill:ic-expert-agent]
+  > When a spec demands a hard area (cell AND wire) reduction on a register-boundary pipeline, stack the full area-reduction playbook rather than one transform: (1) retime the flop boundary backward — register the RAW inputs and let combinational logic follow, since reg(f(x))≡f(reg(x)) turns wide formed-payload flops into a few narrow input flops; (2) collapse mutually-exclusive priority-if/case chains into a one-hot AND-OR select network so constant-zero legs vanish; (3) factor every wide comparator into shared per-byte equalities and shared prefix/suffix AND-run products computed exactly once; (4) replace families of related mux legs (e.g. terminate/thermometer codes) with a single suffix-OR mask. A single transform typically under-shoots the target; apply all four to clear an aggressive stated percentage.
+- **apb_dsp_op_0002** [skill:ic-expert-agent]
+  > When a protocol spec declares a handshake/status response output (PREADY, PSLVERR, valid/ack/error flag, etc.) "undefined" after the transaction strobe deasserts, implement it as a registered signal that LATCHES its value during the active/access phase and HOLDS that last value afterward — never drive it combinationally back to a default (0), because "undefined to the protocol" means "don't-care but must stay stable," and verification checkers routinely sample such outputs one or more cycles after the strobe window and expect the last valid value.
+- **binary_search_tree_sorting_0001** [skill:ic-expert-agent]
+  > When a spec supplies an explicit closed-form cycle-latency formula or per-operation cycle budget, treat it as a hard cycle-exact contract: enumerate each FSM path's cycle count and reconcile it against the formula before finalizing, folding one-time setup/detect cycles into a single shared state instead of re-spending them on every loop iteration, and never adding a per-iteration state the budget doesn't grant.
+- **hebbian_rule_0017** [skill:ic-expert-agent]
+  > In a Moore FSM where the spec assigns a contiguous state range to selecting among N mutually-exclusive alternatives with a 1:1 selector-to-state mapping (e.g. one state per gate/mode, gate_select=00/01/10/11), model the range's first state as a combinational dispatch that branches to exactly ONE alternative state per pass — never a sequential walk through all of them — so each iteration costs a fixed minimal number of clocks and stays aligned with the spec's one-iteration-per-input-vector cadence.
+- **manchester_enc_0005** [skill:ic-expert-agent]
+  > When fixing a 'latch inference' bug, if the module exposes clock and reset ports and the spec/context describes rising-edge behavior or a per-clock-cycle output table with a reset-to-zero row, remove the latch by REGISTERING the outputs in always_ff @(posedge clk) with reset (drive every output on every branch: reset->0, valid->result, idle->0), not by merely adding a combinational default — a combinational patch is latch-free yet violates the specified sequential/reset semantics; unused clk/reset ports on the buggy RTL are themselves the tell that the design must be clocked.
+- **cache_lru_0019** [floor]
+  > 該題無通用慣例：tree-PLRU 節點位元的「絕對極性」(bit=1 代表往被存取/MRU 分支 vs 往 victim/LRU 分支) 規格未釘死，兩種自洽慣例的外部替換序列完全相同、只差在內部 recency 暫存器的編碼；白箱 TB 直接取樣該暫存器，pass 僅因收斂時對到 golden 任意選定的內部編碼(且它取的是非教科書預設的那一種)，寫入 DB 等同背答案。可提煉的唯一真規則「update 與 select 必須互為補數(complementary pair)」失敗草稿已滿足，救不了本題。
+- **image_rotate_0001** [floor]
+  > 該題無通用慣例：規格明確指示把 image_in 填入方陣的「右下角」(top rows/left columns 補零)，盲測 draft 忠實照做即正確工程行為；通過的 draft 改成「左上角」index-preserving 純粹是為對上與規格文字相矛盾的隱藏 reference model，且此差異只在非方陣輸入下顯現。把「一律左上補零」寫入 DB=違反唯一合法輸入的明確敘述去背 reference 的特定選擇，會反噬真正要右下補零的題目。
 
-These lift blind pass@1 immediately and generalize to their whole family. Program-first where a
-deterministic template exists; skill-lesson otherwise.
+## Tier 2 — VERIFIED CONVERGE-AID (21) — rule necessary, NOT single-shot-blind-sufficient
 
-### 1. Tree-PLRU victim policy  → `agents/ic-expert-agent.md` (+ program: `rtl_dispatch` PLRU template)
-> **### Skill: tree-PLRU victim decode (complement walk).** In a textbook tree-PLRU, each
-> internal-node recency bit records the branch toward the MOST-recently-used child; the victim
-> way is decoded by walking the COMPLEMENT of each stored bit from root to leaf. All-zeros reset
-> therefore selects way `NWAYS-1` as the first victim. (Do not read the bit as "points at victim".)
+Each failed a blind convention-injected re-author at the oracle: the rule is correct but the pass also needs a problem-specific fact (exact port name / cycle-exact timing / hidden constant). Land as lessons to cut close-loop iterations; do **NOT** claim blind lift.
 
-### 2. Rectangular zero-pad embedding  → `agents/ic-expert-agent.md`
-> **### Skill: block zero-pad embedding.** Embedding an m×n array into an N×N square is the
-> textbook block form `[[A,0],[0,0]]`: data stays at the top-left origin; zeros fill the trailing
-> rows/columns (numpy/DSP trailing pad). A "no-rotation / pass-through" mode must reproduce this
-> exact placement, not a centered or bottom-right placement.
+- **apb_history_shift_register_0001** — When a spec guarantees the clock-gate enable is aligned to the clock's inactive/negedge edge (hence glitch-free), gate the clock with a single combinational AND…
+- **axi_alu_0001** — For an AXI (or any VALID/READY) slave response channel, drive the response VALID output from a registered flop that asserts one clock AFTER the request handshak…
+- **axis_border_gen_0014** — When a design description declares multiple modules (separate code blocks / an explicit submodule list) and the deliverable is a multi-file RTL set, emit each d…
+- **clock_jitter_detection_module_0003** — When detecting an edge of a monitored/asynchronously-related input via a previous-sample register that resets to the inactive level, qualify the edge so it is r…
+- **configurable_digital_low_pass_filter_0004** — For a flattened packed multi-element bus declared [WIDTH*N-1:0], use the canonical lane-0-at-LSB slot order — element i occupies bits [i*WIDTH +: WIDTH] for bot…
+- **data_bus_controller_0001** — When a ready-valid arbiter spec grants first-come-first-served across DIFFERENT cycles but breaks a SAME-cycle tie via a fixed-priority parameter whose loser is…
+- **dot_product_0005** — Model a terminal error/exception status flag as a sticky LEVEL: latch it HIGH the moment the fault is detected and hold it until an explicit clear (reset or the…
+- **elevator_control_0009** — A transient, recoverable safety halt that interrupts an in-progress operation (overload/hold/pause) must latch the pre-halt state on entry and restore it on rel…
+- **fifo_async_0001** — When a spec declares a data-bus / word-width parameter as "configurable" but gives no explicit default, default it to the 32-bit industry-standard word (AMBA/RI…
+- **fifo_to_axis_0001** — In a bridge/adapter spanning two independent handshake interfaces (e.g. FIFO read side <-> stream/AXI sink side), de-assert an upstream source's activity/enable…
+- **gaussian_rounding_div_0003** — A spec clause of the form "output X remains asserted until input Y is deasserted" is a HOLD rule, not an assertion precondition: the done/valid flag must rise U…
+- **hmac_register_0001** — skill:ic-expert-agent…
+- **load_store_unit_0009** — On a word-granular memory bus that carries byte-enables alongside a full-width address, drive EVERY bus transaction's address word-aligned ({addr[MSB:2],2'b00})…
+- **ping_pong_buffer_0001** — When a buffer/FIFO spec says full/empty are "managed using pointer comparisons," implement the textbook pointer-comparison FIFO — buffer_empty := (read_ptr == w…
+- **scrambler_0018** — A lint / code-review fix must be minimal and behavior-preserving: fix only the named issues and keep every signal's storage class — resolve blocking/non-blockin…
+- **sync_serial_communication_0052** — For an RTL area-reduction task, attack the structural area hogs, not the syntax: a variable-indexed register access (reg[var] <= x) synthesizes to a full addres…
+- **vending_machine_0001** — When a spec declares an error/status output "active high for one clock cycle," implement it as a single-cycle pulse from a dedicated state and then emit the man…
+- **configurable_digital_low_pass_filter_0011** — Keep every spec-named datapath/state signal at the top module's own scope — implement the datapath flat in the top module, never in a nested helper — and when a…
+- **interrupt_controller_0017** — In an FSM-based priority arbiter / interrupt controller, latch the arbitration winner into a dedicated grant register at the decision→service state transition a…
+- **perceptron_0006** — In a microcoded/sequenced test-or-replay phase, hold each vector's inputs/expected/actual outputs stable for its ENTIRE multi-cycle observation slot and advance…
+- **perceptron_0013** — In a microcode/FSM spec, resolve behavioral ambiguities from the port-level semantic definition and the abstract algorithm rather than the literal per-state pro…
 
-### 3. One-hot SOP area rewrite  → `agents/ic-expert-agent.md` (+ program: synth-area helper)
-> **### Skill: one-hot sum-of-products area rewrite.** A set of mutually-exclusive equality
-> decodes (each an N-bit compare to a distinct constant) is one-hot, so a deep priority-mux
-> payload network legally flattens to a one-hot AND-OR (SOP) net — with a thermometer mask for
-> run/terminate families and shared comparator products. Functionally identical, far fewer
-> logic levels/cells; use it when an area/cell threshold must be met.
+## Untested (5)
 
----
+Distiller marked converge-aid/not-distillable, not blind-A/B'd: axi_stream_downscale_0001, interrupt_controller_0019, simple_spi_0001, sync_serial_communication_0001, apb_gpio_0005. Treat as converge-aid pending verification.
 
-## Tier 2 — CONVERGE-AID (necessary but NOT single-shot-blind-sufficient on this set).
+## Absorption + verification obligation
 
-Each of these recovered its problem **only** in combination with a second fact the rule alone
-does not supply (exact port name / cycle-exact timing / multi-parameter default), so injecting the
-rule blind did **not** reproduce the pass in one shot. Still worth landing as lessons — they cut
-close-loop iterations and may combine to lift blind on other problems — but label them honestly as
-converge-aids, not blind-lifts.
+Land Tier 1 (7 lessons + program templates where stable) into `agents/ic-expert-agent.md`; after landing, a fresh **blind** full-302 must show the **blind** number rise — the only proof of compounding. Tier 2 lands as honest converge-aids. Core-agent/gatekeeper owns landing + versioning; benchmark-agent re-measures at the oracle.
 
-- **Packed-array LSB packing** (`config_lpf_0004`): slot i = bits `[i*W +: W]`, slot 0 at LSB.
-  → also a candidate deterministic packing helper. *Blind gap: needs the exact slot→source map.*
-- **cocotb top-scope observability** (`config_lpf_0011`): `dut.<name>` resolves any top-scope
-  reg, not only ports; expose an existing state reg under the `_in/_out` suffix convention.
-  *Blind gap: which internal signal is the intended observable.*
-- **AMBA default width** (`fifo_async_0001`): unstated bus width ⇒ 32; a 0xDEADBEEF-class sentinel
-  in the prompt pins 32. *Blind gap: combined with reset/flag timing.*
-- **Microcode cadence inheritance** (`perceptron_0006`): a unit extending a microcode ROM inherits
-  the base sequencer's rate (1 µinstr / 2 clk with a double-registered address path).
-  *Blind gap: per-vector micro-step count.*
-- **Fausett stop criterion** (`perceptron_0013`): stop iff weight-update deltas are ZERO (not
-  "two consecutive EQUAL deltas"). *Blind gap: surrounding training-FSM structure.*
-- **Moore-FSM timing derivation** (`interrupt_ctrl_0017`): output asserts on state ENTRY (fixed
-  FSM-depth latency), level-held to ack, deasserts registered with ≥1 dwell before re-arm.
-  *Blind gap: exact per-state cycle counts.*
-- **Ring-counter SIPO rewrite** (`sync_serial_0052`): replace random-access indexed bit write with
-  a one-hot ring-counter write pointer + lap counter. → candidate `rtl_dispatch` template.
-  *Blind gap: exact mod-N drop/done semantics.*
-
----
-
-## Tier 3 — NOT DISTILLABLE (would be memorization = cheating; keep as FLOOR).
-
-Excluded on purpose — no general rule; the pass would require encoding this problem's hidden-TB
-value, which overfits and pollutes the DB:
-- `hebbian_0012` — TB pins internal `w1/w2/bias` that contradict the GIVEN `gate_target`.
-- `rounding_0001` — expected output oscillates 0↔255 between two contradictory worked examples.
-- `axi_tap_0009` — prompt explicitly mandates a single named threshold; no convention to infer.
-
----
-
-## Absorption plan (core-agent / gatekeeper owns landing + versioning)
-
-1. Land Tier 1 (3 lessons) into `agents/ic-expert-agent.md`; add the 2 program templates
-   (PLRU decode, one-hot SOP) where a deterministic form is stable — **measure blind pass@1
-   lift on a fresh full run** to confirm compounding.
-2. Land Tier 2 (7 lessons) with the honest "converge-aid" label; do NOT claim blind lift.
-3. Tier 3 stays FLOOR — do not absorb.
-
-**Verification obligation:** after landing, a fresh BLIND full-302 run must show the blind number
-rise (not just the converged number) — that is the only proof the knowledge compounded. The
-benchmark-agent will re-measure at the oracle once landed.
+_Full convention text + routing per case: `DISTILL_VERIFIED_LIBRARY.json` in the run dir._
