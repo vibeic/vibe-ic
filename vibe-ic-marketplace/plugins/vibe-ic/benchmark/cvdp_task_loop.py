@@ -65,6 +65,7 @@ def _load(mod_path: Path, name: str):
 _IR = _load(_PROGRAMS / "cvdp_context_interface_recover.py",
             "cvdp_context_interface_recover")
 _MS = _load(_PROGRAMS / "modify_complete_synth.py", "modify_complete_synth")
+_PACK = _load(_PROGRAMS / "ic_expert_backup_pack.py", "ic_expert_backup_pack")
 
 _MODULE_RE = re.compile(r"\bmodule\s+([A-Za-z_]\w*)")
 
@@ -106,19 +107,8 @@ def _stage_context_rtl(record: Dict[str, Any], dest: Path) -> List[Path]:
 
 
 def _iface_to_contract_v(iface: List[Dict[str, Any]], target: str) -> str:
-    """Emit a header-only `module <target> ( … ); endmodule` from the recovered
-    interface — the CONTRACT the AI-backup body must conform to. §4.05: ports
-    only, no behaviour."""
-    lines = [f"module {target} ("]
-    body = []
-    for p in iface:
-        d = p.get("dir") or "input"
-        w = p.get("width")
-        rng = f" [{int(w) - 1}:0]" if isinstance(w, int) and w and w > 1 else ""
-        body.append(f"  {d}{rng} {p.get('name')}")
-    lines.append(",\n".join(body))
-    lines.append(");\nendmodule\n")
-    return "\n".join(lines)
+    """Header-only interface CONTRACT — delegates to the general core."""
+    return _PACK.iface_to_contract_v(iface, target)
 
 
 def _run_json(cmd: List[str], json_path: Path) -> Optional[dict]:
@@ -263,6 +253,32 @@ def run_loop_case(record: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
         staged = _stage_context_rtl(record, cidir / "ctx")
         res["lint_baseline"] = _lint_baseline(staged, cidir / "lint")
 
+    # STEP 4 (AI-BACKUP) — the deterministic track did not author the body, so let
+    # the AI act AS the IC Expert Agent, USING its two expert assets: the
+    # expert-SKILLS digest (lessons.md) and the class-matched expert-DB
+    # (ic_expert_db.md), plus the recovered interface CONTRACT. Assemble the
+    # dual-track hand-off pack (deterministic); the LLM authoring is the
+    # vibe-ic:ic-expert-agent subagent invocation the hand-off names. Input-only.
+    if res["emit_path"] == "needs_ai_backup":
+        pe = route.get("plugin_entry") or {}
+        prompt = (record.get("input") or {}).get("prompt") or ""
+        try:
+            handoff = _PACK.assemble(
+                prompt, iface, tgt,
+                pe.get("ai_backup", []), pe.get("verify", []),
+                cidir / "ai_backup")
+        except Exception:
+            handoff = None
+        if handoff:
+            res["ai_backup"] = {
+                "subagent_type": handoff["subagent_type"],
+                "expert_skills": handoff["expert_skills"],
+                "db_classes": [c["ic_class"] for c in handoff["db_classes"]],
+                "n_skills": handoff["dual_track"]["track1_general_blind"]["n_skills"],
+                "n_db_lessons": handoff["dual_track"]["track2_db_informed"]["n_db_lessons"],
+                "handoff": "ai_backup/ic_expert_agent_handoff.json",
+            }
+
     return res
 
 
@@ -318,7 +334,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     by_nat: Dict[str, Dict[str, int]] = {}
     for r in results:
         b = by_nat.setdefault(
-            r["nature"], {"n": 0, "det": 0, "iface": 0, "conf": 0, "lint": 0})
+            r["nature"],
+            {"n": 0, "det": 0, "iface": 0, "conf": 0, "lint": 0, "aibk": 0})
         b["n"] += 1
         b["det"] += 1 if r["iverilog_ok"] else 0
         b["iface"] += 1 if r["iface_ports"] > 0 else 0
@@ -326,6 +343,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             b["conf"] += 1
         if (r.get("lint_baseline") or {}).get("ran"):
             b["lint"] += 1
+        if r.get("ai_backup"):
+            b["aibk"] += 1
     report = {"dataset": str(ds), "n": len(results),
               "by_nature": by_nat, "cases": results}
     out = Path(a.report) if a.report else (run_dir / "task_loop_report.json")
@@ -334,11 +353,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     print(f"cvdp_task_loop: {len(results)} plugin_loop record(s)")
     print(f"  {'nature':26} {'n':>4} {'iface✓':>7} {'det-RTL✓':>9}"
-          f" {'conform✓':>9} {'lint-base':>9}")
+          f" {'conform✓':>9} {'lint-base':>9} {'ai-backup':>9}")
     for nat in sorted(by_nat):
         b = by_nat[nat]
         print(f"  {nat:26} {b['n']:>4} {b['iface']:>7} {b['det']:>9}"
-              f" {b['conf']:>9} {b['lint']:>9}")
+              f" {b['conf']:>9} {b['lint']:>9} {b['aibk']:>9}")
     print(f"  report: {out}")
     return 0
 
