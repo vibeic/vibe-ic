@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 808
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 808)
+- **Total programs (excluding helpers / shims):** 832
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 832)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 799 |
+| `any` | 823 |
 
 ## Alphabetical listing
 
@@ -34,6 +34,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `agent_report_presence_check` | any | — | verify the project ships a structured |
 | `agent_report_sha256_attestation_check` | any | — | verify the project's |
 | `agentic_jsonl_to_shape_d` | any | v0.1.59 | generic agentic-JSONL → Shape-D project-dir extractor. |
+| `aging_derate_sta_check` | any | — | aging-corner STA sign-off gate for tapeout. |
 | `ahb_apb_protocol_synth` | any | v0.1.84 | AHB + APB-class protocol synth helper. |
 | `aid_class_qsf_gen` | any | Wave 73 | to be removed in v0.130. |
 | `aid_class_rtl_gen` | aid_class_half_duplex, aid_class_half_duplex_single_wire, mixed_signal_otp, digital_cmd_driven | Wave 56 | Vibe-IC plugin Phase 2 RTL generator for AID-class half-duplex protocol. |
@@ -130,6 +131,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `break_framing_vs_l3_check` | any | v0.108 | Verify RX command parser uses break-to-break |
 | `break_handler_safety_check` | any | v0.108 | Verify that FSM break/reset handlers do NOT |
 | `bringup_plan_gen` | any | — | emit bring-up plan from L13_LAB_CALIBRATION. |
+| `bsdl_emit` | any | — | IEEE 1149.1 BSDL + boundary-scan-cell-per-pad plan emitter. |
 | `bus_turnaround_consumes_spec_constant_check` | any | v0.106 | R1 deterministic gate |
 | `byte_assembler_explicit_9bit_reject_check` | aid_class_half_duplex | Wave 37 | Wave 37 (v0.119.69). |
 | `calendar_counter_synth` | any | — | deterministic, chip-AGNOSTIC SOLVER for the CASCADED |
@@ -139,6 +141,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `canopen_protocol_synth` | any | — | CANopen (CiA 301) protocol synth helper (protocol #70). |
 | `caravel_integration_runner` | any | v0.1.51 | Caravel chipignite integration runner (B2 from spm pilot). |
 | `caravel_wrapper_emit` | any | v0.1.51 | Caravel user_project_wrapper emitter (B3 from spm pilot). |
+| `caravel_wrapper_harden_driver` | any | — | Caravel user_project_wrapper HARDEN + full-chip MERGE + live XOR driver. |
 | `catalog_glue_closure_resolver` | any | — | REUSED-IP / catalog-glue staging |
 | `cdc_async_input_check` | any | — | deterministic compliance check derived from <chip-class> v040 debug. |
 | `cdc_crossing_check` | any | — | cdc_crossing_check.py -- Deterministic CDC report checker. |
@@ -227,6 +230,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `dff_primitive_synth` | any | — | DETERMINISTIC emitter for the canonical single-bit |
 | `dfm_screen_check` | any | — | Step 35 DFM screen (v2.3). |
 | `dft_atpg_coverage_check` | any | — | REAL stuck-at coverage gate (Step 11 DFT/ATPG). |
+| `dft_signoff_check` | any | — | aggregate DFT sign-off gate (foundry / ATE bar). |
 | `dice_roller_synth` | any | — | DETERMINISTIC solver for the CVDP digital dice-roller. |
 | `diff_verify_harness` | any | — | independent DIFFERENTIAL self-verification |
 | `dispatch_fetch_loop_population_check` | any | — | Stub multi-frame fetch loop detector. |
@@ -243,11 +247,15 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `drc_rule_layer_classify` | any | v0.3.16 | ORGANIC #513. Classify DRC violations by RULE-LAYER into |
 | `drc_vacuous_pass_check` | any | — | drc_vacuous_pass_check.py -- Reject a "0 DRC violations" verdict when the |
 | `ds_quality_check` | any | — | Datasheet (L1) quality scorer, 0-100. |
+| `dual_track_select` | any | — | deterministic DUAL-TRACK convergence selector. |
+| `dynamic_ir_drop_check` | any | — | transient (dynamic) IR-drop budget gate for tapeout. |
 | `eco_loop_audit` | any | — | Audit ECO (Engineering Change Order) log for completeness. |
 | `eco_status_gen` | any | — | emit Step 30 ECO status flag (no_eco_needed.flag or eco_log.json). |
+| `eco_trigger_decision` | any | — | the SHARED ECO auto-trigger decision. |
 | `eda_log_check` | any | — | Deterministic EDA tool log/report checker. |
 | `eda_report_audit` | any | — | eda_report_audit.py -- Multi-mode EDA report checker for backend skills. |
 | `edp_protocol_synth` | any | v0.1.95 | VESA Embedded DisplayPort (eDP) protocol synth helper. |
+| `em_current_density_check` | any | — | REAL electromigration current-density sign-off. |
 | `em_report_check` | any | — | wrapper for eda_report_audit --mode em. |
 | `emit_attestation` | any | — | GATE-AS-SOLE-EMIT-PATH enforcement (shared helper). |
 | `emit_attestation_check` | any | — | score-time GATE-AS-SOLE-EMIT-PATH enforcement. |
@@ -367,6 +375,9 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `i3c_protocol_synth` | any | v0.1.84 | I3C-class protocol synth helper. |
 | `ic_class_consistency_check` | any | Wave 42 | gate (Wave 42, v0.119.70 / SF6). |
 | `ic_class_profile` | any | Wave 36 | IC class detection helper (Wave 36, v0.119.68). |
+| `ic_expert_backup_pack` | any | — | assemble the IC-Expert-Agent AI-backup context pack. |
+| `ic_expert_db_consistency_check` | any | — | gate: the IC Expert DB stays an ADVISORY |
+| `ic_expert_db_query` | any | — | GENERAL-CORE retrieval over the IC Expert DB. |
 | `iface_conformance_v2` | any | — | prompt→interface conformance gate (ORGANIC #695). |
 | `infiniband_protocol_synth` | any | — | InfiniBand Architecture (IBTA) protocol synth helper. |
 | `input_docs_coverage_check` | any | v0.50 | v0.50 plugin gate |
@@ -428,6 +439,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `layer_extension_presence_check` | any | v0.50 | v0.50 plugin gate |
 | `leaf_typo_alias_emit` | any | v0.3.18 | v0.3.18 (ORGANIC #517). |
 | `lec_equivalence_check` | any | — | Step 13 deterministic LEC substance gate. |
+| `lec_post_layout_check` | any | — | POST-LAYOUT logic-equivalence gate. |
 | `lessons_corpus_consistency_check` | any | — | ORGANIC #741 |
 | `level_shifter_required_check` | any | — | M2 gate (substance-verifying). |
 | `lfsr_synth` | any | — | deterministic SOLVER for the LINEAR-FEEDBACK-SHIFT-REGISTER |
@@ -440,8 +452,11 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `lpddr5_protocol_synth` | any | v0.1.89 | LPDDR5 SDRAM (JEDEC JESD209-5)-class protocol synth helper. |
 | `lvs_def_port_seed` | any | v0.1.114 | DEF-pin port-seed generator for top-level netgen LVS pin matching. |
 | `lvs_netgen_setup_emit` | any | v0.1.49 | Netgen supplementary LVS setup-file generator. |
+| `lvs_power_aware_extract_tcl` | any | — | the LVS ROOT FIX (extraction side). |
+| `lvs_power_aware_netlist_emit` | any | — | the LVS ROOT FIX: power-aware gate netlist. |
 | `lvs_report_check` | any | — | wrapper for eda_report_audit --mode lvs. |
 | `lvs_signoff_guard` | any | v0.2.1 | defensive check against a SILENT FALSE-POSITIVE LVS match. |
+| `lvs_tapeout_signoff_check` | any | — | the TAPEOUT-tier LVS gate. |
 | `lvs_triage_classify` | any | v0.1.50 | LVS triage classifier (Pattern-B → program). |
 | `lvs_verdict_tokens` | any | — | single source of truth for netgen LVS terminal- |
 | `magic_extract_spice_emit` | any | — | Magic parasitic-RC extraction TCL emitter + validator. |
@@ -450,6 +465,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `manufacturing_fab_intake_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered |
 | `marketplace_version_sync_check` | any | — | marketplace_version_sync_check.py |
 | `mask_application_check` | any | — | Verify any AND-mask rule the spec declares |
+| `mbist_wrapper_gen` | any | — | Memory-BIST (MBIST) March C- wrapper GENERATOR + GATE. |
 | `mcp_execution_verify` | any | — | Deterministic MCP tool execution verifier. |
 | `mdio_protocol_synth` | any | — | IEEE 802.3 Management Data Input/Output (MDIO) protocol synth helper. |
 | `mealy_sequence_synth` | any | — | deterministic SOLVER for the MEALY FSM table / |
@@ -458,6 +474,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `memory_synth` | any | — | a DETERMINISTIC solver for the CVDP parameterized MEMORY |
 | `metadata_content_substance_check` | any | — | guard against empty / near-empty |
 | `metal_fill_density_check` | any | — | Verify metal fill was inserted and density is within bounds. |
+| `metal_layer_density_check` | any | — | PER-LAYER metal-density sign-off gate for tapeout. |
 | `migrate_to_canonical_taxonomy` | any | — | one-shot migration tool that moves |
 | `migrate_to_layout_p` | any | — | pre-v2 → Layout P project migration. |
 | `milstd1553_protocol_synth` | any | v0.1.83 | MIL-STD-1553B protocol synth helper. |
@@ -476,6 +493,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `moore_arrow_fsm_synth` | any | — | DETERMINISTIC Moore-FSM emitter for the ARROW |
 | `moore_fsm_table_emit` | any | — | the PROGRAM half of the AI-extracts / program-emits |
 | `mpw_precheck_cleanup` | any | v0.1.51 | mpw_precheck cleanup automator (B4 from spm pilot). |
+| `mpw_precheck_driver` | any | — | mpw_precheck LIVE DRIVER (TAPEOUT-SIGNOFF P0#2, driver half). |
+| `mpw_precheck_result_gate` | any | — | mpw_precheck RESULT parser gate (TAPEOUT-SIGNOFF P0#2, parser half). |
 | `mux_compare_synth` | any | — | a DETERMINISTIC solver for the CVDP |
 | `mux_synth` | any | — | deterministic SOLVER for the MULTIPLEXER family (spec -> RTL). |
 | `nba_addr_read_race_check` | any | — | FSM consuming addressed data without pipelining. |
@@ -584,6 +603,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `profibus_protocol_synth` | any | — | PROFIBUS (Process Field Bus) protocol synth helper. |
 | `profinet_protocol_synth` | any | — | PROFINET IO (IEC 61158 Type 10 / IEC 61784-2 CPF 3) protocol synth helper. |
 | `project_outputs_in_tree_check` | any | — | project_outputs_in_tree_check.py |
+| `prompt_example_selftest` | any | — | RUN the prompt's own worked examples as a blind, |
 | `protocol_delimiter_consistency_check` | any | v0.99 | Verify the RTL FSM that validates |
 | `protocol_detector_lib` | any | v0.1.95 | Canonical helpers for Phase-1 protocol-class detectors (captured v0.1.95). |
 | `protocol_detector_no_misfire_matrix` | any | v0.2.13 | Bidirectional protocol-detector no-misfire + gold cross-contamination matrix. |
@@ -693,7 +713,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `signaltap_stp_completeness_check` | any | — | Validate that a generated Quartus |
 | `signoff_audit` | any | v0.52 | signoff_audit.py -- Multi-mode signoff evidence checker (LEGACY gate). |
 | `signoff_gate_self_skip_consistency_check` | any | — | META-audit for ORGANIC #721. |
-| `signoff_ladder_run` | any | v0.1.51 | Chip-level 5-tier sign-off ladder runner (B1 from spm pilot). |
+| `signoff_ladder_run` | any | — | REAL-gate wired. |
 | `signoff_waiver_emit` | any | v0.1.49 | Chipignite/foundry signoff-waiver scaffold emitter. |
 | `signoff_waiver_md_emit` | any | v0.1.49 | Submitter-facing waiver Markdown emitter. |
 | `single_bus_driver_check` | any | Wave 10 | structural-RTL gate that catches the |
@@ -737,6 +757,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `spi_protocol_synth` | any | v0.1.77 | SPI-class protocol synth helper. |
 | `spice_correlation_check` | any | — | deterministic gate for post-layout SPICE verification |
 | `sta_report_check` | any | — | wrapper for eda_report_audit --mode sta. |
+| `sta_signoff_rigor_check` | any | — | sign-off STA rigor gate for tapeout sign-off. |
 | `sta_triage_classify` | any | v0.1.50 | STA endpoint triage (Pattern-B → program). |
 | `stage1_compliance` | any | — | Stage 1 (RTL + Verification) interim gate. |
 | `stage2_compliance` | any | — | Stage 2 (Synthesis + DFT) interim gate. |
@@ -766,6 +787,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `testbench_gen` | any | — | emit unit + integration testbench from L10 test_cases. |
 | `tester_oracle_health_check` | any | v0.45 | Prove the tester works before iterating RTL. |
 | `tester_verdict_frame_decode` | any | — | T1 composability fix |
+| `thermal_screen_check` | any | — | power-density / junction-temperature screen. |
 | `threshold_range_contiguity_check` | any | — | Discrete classification ranges must be contiguous. |
 | `tier_d_interconnect_detect` | any | v0.1.90 | Tier-D advanced-interconnect detection predicates (v0.1.90). |
 | `tilelink_protocol_synth` | any | v0.1.84 | TileLink-class protocol synth helper. |
@@ -807,6 +829,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `verilogeval_human_tier_pipeline` | any | — | the VerilogEval-HUMAN (code-complete, |
 | `verilogeval_tier_pipeline` | any | — | the VerilogEval-v2 (spec-to-rtl) TIER-1→5 |
 | `version_bump_monotonic_check` | any | — | strict version-bump gate for the |
+| `vibe_ic_entry_guard` | any | — | enforce single entry point for benchmark + IC runs. |
 | `vibe_ic_one_shot_runner` | any | — | full Vibe-IC flow orchestrator. |
 | `wafer_map_pattern_classify` | any | — | D3 program-first extraction of the |
 | `wafer_sort_yield_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered |
@@ -828,6 +851,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `wishbone_protocol_synth` | any | v0.1.85 | Wishbone B4 protocol synth helper. |
 | `worked_example_sequence_oracle_check` | any | — | deterministic emit gate that turns a |
 | `xlsx_extract` | any | — | Extract tables from .xlsx spec documents into JSON. |
+| `xor_layout_check` | any | — | computed GDS-vs-golden XOR, not a hardcoded floor. |
 | `yield_fix_cost_rank` | any | — | D3 program-first extraction of the |
 | `yosys_hilomap_required_check` | any | — | Assert a Yosys .ys script's commands occur |
 | `yosys_script_template_check` | any | — | Audit a Yosys .ys script for the three |
@@ -880,7 +904,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (799 programs)
+### `any` (823 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -891,6 +915,7 @@ _(no programs in this group)_
 - `agent_report_presence_check` — verify the project ships a structured
 - `agent_report_sha256_attestation_check` — verify the project's
 - `agentic_jsonl_to_shape_d` — generic agentic-JSONL → Shape-D project-dir extractor.  _[v0.1.59]_
+- `aging_derate_sta_check` — aging-corner STA sign-off gate for tapeout.
 - `ahb_apb_protocol_synth` — AHB + APB-class protocol synth helper.  _[v0.1.84]_
 - `aid_class_qsf_gen` — to be removed in v0.130.  _[Wave 73]_
 - `aid_class_sdc_gen` — to be removed in v0.130.  _[Wave 73]_
@@ -986,6 +1011,7 @@ _(no programs in this group)_
 - `break_framing_vs_l3_check` — Verify RX command parser uses break-to-break  _[v0.108]_
 - `break_handler_safety_check` — Verify that FSM break/reset handlers do NOT  _[v0.108]_
 - `bringup_plan_gen` — emit bring-up plan from L13_LAB_CALIBRATION.
+- `bsdl_emit` — IEEE 1149.1 BSDL + boundary-scan-cell-per-pad plan emitter.
 - `bus_turnaround_consumes_spec_constant_check` — R1 deterministic gate  _[v0.106]_
 - `calendar_counter_synth` — deterministic, chip-AGNOSTIC SOLVER for the CASCADED
 - `can_protocol_synth` — CAN-class protocol synth helper.  _[v0.1.81]_
@@ -994,6 +1020,7 @@ _(no programs in this group)_
 - `canopen_protocol_synth` — CANopen (CiA 301) protocol synth helper (protocol #70).
 - `caravel_integration_runner` — Caravel chipignite integration runner (B2 from spm pilot).  _[v0.1.51]_
 - `caravel_wrapper_emit` — Caravel user_project_wrapper emitter (B3 from spm pilot).  _[v0.1.51]_
+- `caravel_wrapper_harden_driver` — Caravel user_project_wrapper HARDEN + full-chip MERGE + live XOR driver.
 - `catalog_glue_closure_resolver` — REUSED-IP / catalog-glue staging
 - `cdc_async_input_check` — deterministic compliance check derived from <chip-class> v040 debug.
 - `cdc_crossing_check` — cdc_crossing_check.py -- Deterministic CDC report checker.
@@ -1080,6 +1107,7 @@ _(no programs in this group)_
 - `dff_primitive_synth` — DETERMINISTIC emitter for the canonical single-bit
 - `dfm_screen_check` — Step 35 DFM screen (v2.3).
 - `dft_atpg_coverage_check` — REAL stuck-at coverage gate (Step 11 DFT/ATPG).
+- `dft_signoff_check` — aggregate DFT sign-off gate (foundry / ATE bar).
 - `dice_roller_synth` — DETERMINISTIC solver for the CVDP digital dice-roller.
 - `diff_verify_harness` — independent DIFFERENTIAL self-verification
 - `dispatch_fetch_loop_population_check` — Stub multi-frame fetch loop detector.
@@ -1095,11 +1123,15 @@ _(no programs in this group)_
 - `drc_rule_layer_classify` — ORGANIC #513. Classify DRC violations by RULE-LAYER into  _[v0.3.16]_
 - `drc_vacuous_pass_check` — drc_vacuous_pass_check.py -- Reject a "0 DRC violations" verdict when the
 - `ds_quality_check` — Datasheet (L1) quality scorer, 0-100.
+- `dual_track_select` — deterministic DUAL-TRACK convergence selector.
+- `dynamic_ir_drop_check` — transient (dynamic) IR-drop budget gate for tapeout.
 - `eco_loop_audit` — Audit ECO (Engineering Change Order) log for completeness.
 - `eco_status_gen` — emit Step 30 ECO status flag (no_eco_needed.flag or eco_log.json).
+- `eco_trigger_decision` — the SHARED ECO auto-trigger decision.
 - `eda_log_check` — Deterministic EDA tool log/report checker.
 - `eda_report_audit` — eda_report_audit.py -- Multi-mode EDA report checker for backend skills.
 - `edp_protocol_synth` — VESA Embedded DisplayPort (eDP) protocol synth helper.  _[v0.1.95]_
+- `em_current_density_check` — REAL electromigration current-density sign-off.
 - `em_report_check` — wrapper for eda_report_audit --mode em.
 - `emit_attestation` — GATE-AS-SOLE-EMIT-PATH enforcement (shared helper).
 - `emit_attestation_check` — score-time GATE-AS-SOLE-EMIT-PATH enforcement.
@@ -1219,6 +1251,9 @@ _(no programs in this group)_
 - `i3c_protocol_synth` — I3C-class protocol synth helper.  _[v0.1.84]_
 - `ic_class_consistency_check` — gate (Wave 42, v0.119.70 / SF6).  _[Wave 42]_
 - `ic_class_profile` — IC class detection helper (Wave 36, v0.119.68).  _[Wave 36]_
+- `ic_expert_backup_pack` — assemble the IC-Expert-Agent AI-backup context pack.
+- `ic_expert_db_consistency_check` — gate: the IC Expert DB stays an ADVISORY
+- `ic_expert_db_query` — GENERAL-CORE retrieval over the IC Expert DB.
 - `iface_conformance_v2` — prompt→interface conformance gate (ORGANIC #695).
 - `infiniband_protocol_synth` — InfiniBand Architecture (IBTA) protocol synth helper.
 - `input_docs_coverage_check` — v0.50 plugin gate  _[v0.50]_
@@ -1279,6 +1314,7 @@ _(no programs in this group)_
 - `layer_extension_presence_check` — v0.50 plugin gate  _[v0.50]_
 - `leaf_typo_alias_emit` — v0.3.18 (ORGANIC #517).  _[v0.3.18]_
 - `lec_equivalence_check` — Step 13 deterministic LEC substance gate.
+- `lec_post_layout_check` — POST-LAYOUT logic-equivalence gate.
 - `lessons_corpus_consistency_check` — ORGANIC #741
 - `level_shifter_required_check` — M2 gate (substance-verifying).
 - `lfsr_synth` — deterministic SOLVER for the LINEAR-FEEDBACK-SHIFT-REGISTER
@@ -1291,8 +1327,11 @@ _(no programs in this group)_
 - `lpddr5_protocol_synth` — LPDDR5 SDRAM (JEDEC JESD209-5)-class protocol synth helper.  _[v0.1.89]_
 - `lvs_def_port_seed` — DEF-pin port-seed generator for top-level netgen LVS pin matching.  _[v0.1.114]_
 - `lvs_netgen_setup_emit` — Netgen supplementary LVS setup-file generator.  _[v0.1.49]_
+- `lvs_power_aware_extract_tcl` — the LVS ROOT FIX (extraction side).
+- `lvs_power_aware_netlist_emit` — the LVS ROOT FIX: power-aware gate netlist.
 - `lvs_report_check` — wrapper for eda_report_audit --mode lvs.
 - `lvs_signoff_guard` — defensive check against a SILENT FALSE-POSITIVE LVS match.  _[v0.2.1]_
+- `lvs_tapeout_signoff_check` — the TAPEOUT-tier LVS gate.
 - `lvs_triage_classify` — LVS triage classifier (Pattern-B → program).  _[v0.1.50]_
 - `lvs_verdict_tokens` — single source of truth for netgen LVS terminal-
 - `magic_extract_spice_emit` — Magic parasitic-RC extraction TCL emitter + validator.
@@ -1301,6 +1340,7 @@ _(no programs in this group)_
 - `manufacturing_fab_intake_check` — gate (v1.6.13 Wave 88, renumbered  _[Wave 88]_
 - `marketplace_version_sync_check` — marketplace_version_sync_check.py
 - `mask_application_check` — Verify any AND-mask rule the spec declares
+- `mbist_wrapper_gen` — Memory-BIST (MBIST) March C- wrapper GENERATOR + GATE.
 - `mcp_execution_verify` — Deterministic MCP tool execution verifier.
 - `mdio_protocol_synth` — IEEE 802.3 Management Data Input/Output (MDIO) protocol synth helper.
 - `mealy_sequence_synth` — deterministic SOLVER for the MEALY FSM table /
@@ -1309,6 +1349,7 @@ _(no programs in this group)_
 - `memory_synth` — a DETERMINISTIC solver for the CVDP parameterized MEMORY
 - `metadata_content_substance_check` — guard against empty / near-empty
 - `metal_fill_density_check` — Verify metal fill was inserted and density is within bounds.
+- `metal_layer_density_check` — PER-LAYER metal-density sign-off gate for tapeout.
 - `migrate_to_canonical_taxonomy` — one-shot migration tool that moves
 - `migrate_to_layout_p` — pre-v2 → Layout P project migration.
 - `milstd1553_protocol_synth` — MIL-STD-1553B protocol synth helper.  _[v0.1.83]_
@@ -1327,6 +1368,8 @@ _(no programs in this group)_
 - `moore_arrow_fsm_synth` — DETERMINISTIC Moore-FSM emitter for the ARROW
 - `moore_fsm_table_emit` — the PROGRAM half of the AI-extracts / program-emits
 - `mpw_precheck_cleanup` — mpw_precheck cleanup automator (B4 from spm pilot).  _[v0.1.51]_
+- `mpw_precheck_driver` — mpw_precheck LIVE DRIVER (TAPEOUT-SIGNOFF P0#2, driver half).
+- `mpw_precheck_result_gate` — mpw_precheck RESULT parser gate (TAPEOUT-SIGNOFF P0#2, parser half).
 - `mux_compare_synth` — a DETERMINISTIC solver for the CVDP
 - `mux_synth` — deterministic SOLVER for the MULTIPLEXER family (spec -> RTL).
 - `nba_addr_read_race_check` — FSM consuming addressed data without pipelining.
@@ -1435,6 +1478,7 @@ _(no programs in this group)_
 - `profibus_protocol_synth` — PROFIBUS (Process Field Bus) protocol synth helper.
 - `profinet_protocol_synth` — PROFINET IO (IEC 61158 Type 10 / IEC 61784-2 CPF 3) protocol synth helper.
 - `project_outputs_in_tree_check` — project_outputs_in_tree_check.py
+- `prompt_example_selftest` — RUN the prompt's own worked examples as a blind,
 - `protocol_delimiter_consistency_check` — Verify the RTL FSM that validates  _[v0.99]_
 - `protocol_detector_lib` — Canonical helpers for Phase-1 protocol-class detectors (captured v0.1.95).  _[v0.1.95]_
 - `protocol_detector_no_misfire_matrix` — Bidirectional protocol-detector no-misfire + gold cross-contamination matrix.  _[v0.2.13]_
@@ -1542,7 +1586,7 @@ _(no programs in this group)_
 - `signaltap_stp_completeness_check` — Validate that a generated Quartus
 - `signoff_audit` — signoff_audit.py -- Multi-mode signoff evidence checker (LEGACY gate).  _[v0.52]_
 - `signoff_gate_self_skip_consistency_check` — META-audit for ORGANIC #721.
-- `signoff_ladder_run` — Chip-level 5-tier sign-off ladder runner (B1 from spm pilot).  _[v0.1.51]_
+- `signoff_ladder_run` — REAL-gate wired.
 - `signoff_waiver_emit` — Chipignite/foundry signoff-waiver scaffold emitter.  _[v0.1.49]_
 - `signoff_waiver_md_emit` — Submitter-facing waiver Markdown emitter.  _[v0.1.49]_
 - `single_bus_driver_check` — structural-RTL gate that catches the  _[Wave 10]_
@@ -1586,6 +1630,7 @@ _(no programs in this group)_
 - `spi_protocol_synth` — SPI-class protocol synth helper.  _[v0.1.77]_
 - `spice_correlation_check` — deterministic gate for post-layout SPICE verification
 - `sta_report_check` — wrapper for eda_report_audit --mode sta.
+- `sta_signoff_rigor_check` — sign-off STA rigor gate for tapeout sign-off.
 - `sta_triage_classify` — STA endpoint triage (Pattern-B → program).  _[v0.1.50]_
 - `stage1_compliance` — Stage 1 (RTL + Verification) interim gate.
 - `stage2_compliance` — Stage 2 (Synthesis + DFT) interim gate.
@@ -1615,6 +1660,7 @@ _(no programs in this group)_
 - `testbench_gen` — emit unit + integration testbench from L10 test_cases.
 - `tester_oracle_health_check` — Prove the tester works before iterating RTL.  _[v0.45]_
 - `tester_verdict_frame_decode` — T1 composability fix
+- `thermal_screen_check` — power-density / junction-temperature screen.
 - `threshold_range_contiguity_check` — Discrete classification ranges must be contiguous.
 - `tier_d_interconnect_detect` — Tier-D advanced-interconnect detection predicates (v0.1.90).  _[v0.1.90]_
 - `tilelink_protocol_synth` — TileLink-class protocol synth helper.  _[v0.1.84]_
@@ -1656,6 +1702,7 @@ _(no programs in this group)_
 - `verilogeval_human_tier_pipeline` — the VerilogEval-HUMAN (code-complete,
 - `verilogeval_tier_pipeline` — the VerilogEval-v2 (spec-to-rtl) TIER-1→5
 - `version_bump_monotonic_check` — strict version-bump gate for the
+- `vibe_ic_entry_guard` — enforce single entry point for benchmark + IC runs.
 - `vibe_ic_one_shot_runner` — full Vibe-IC flow orchestrator.
 - `wafer_map_pattern_classify` — D3 program-first extraction of the
 - `wafer_sort_yield_check` — gate (v1.6.13 Wave 88, renumbered  _[Wave 88]_
@@ -1676,6 +1723,7 @@ _(no programs in this group)_
 - `wishbone_protocol_synth` — Wishbone B4 protocol synth helper.  _[v0.1.85]_
 - `worked_example_sequence_oracle_check` — deterministic emit gate that turns a
 - `xlsx_extract` — Extract tables from .xlsx spec documents into JSON.
+- `xor_layout_check` — computed GDS-vs-golden XOR, not a hardcoded floor.
 - `yield_fix_cost_rank` — D3 program-first extraction of the
 - `yosys_hilomap_required_check` — Assert a Yosys .ys script's commands occur
 - `yosys_script_template_check` — Audit a Yosys .ys script for the three
