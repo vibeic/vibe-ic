@@ -259,12 +259,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             res["task_nature"] = route.get("nature")
             results.append(res)
         else:
-            # AI-led: recorded, NOT driven through Phase-1.
+            # NOT a spec→RTL task: it enters a DIFFERENT plugin loop (completion
+            # / modify / optimize / debug), not Phase-1. Record which one; the
+            # loop itself is executed by its own entry, not this driver.
+            pe = route.get("plugin_entry") or {}
             results.append({
                 "id": rec.get("id"),
                 "route": route.get("route"),
                 "task_nature": route.get("nature"),
-                "emit_path": "ai_led_out_of_phase1_scope",
+                "plugin_entry": pe.get("name"),
+                "emit_path": f"plugin_loop:{pe.get('name')}",
             })
 
     # Deterministic summary.
