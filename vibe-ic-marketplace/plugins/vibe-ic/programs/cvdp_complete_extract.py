@@ -745,6 +745,53 @@ def _recover_cvdp_interface(record: dict, top: str):
         if p.get("width") is not None:
             ctx_widths[nm] = p["width"]
 
+    # (B0) prompt SIGNAL-DIRECTION interface table (`| Signal | Direction | Bit
+    # Width | … |`) — a PROMPT-sourced interface (§4.05-legal), the richest input
+    # form (names + directions + authoritative widths). ORGANIC-20260705: the
+    # v1.2.96 harness-read removal replaced the oracle path with `_table_interface`
+    # (test-case tables) + `_prose_ports` only, silently DROPPING this common
+    # markdown interface-table form — so records that state their ports in a
+    # Signal/Direction/Width table (e.g. a parameterized comparator) regressed to
+    # INCOMPLETE_SPEC_ABSENT. Bind them here from the INPUT table, never the harness.
+    try:
+        sd_ins, sd_outs, sd_widths, _sd_sym = \
+            _bridge._signal_direction_table(prompt, param_defaults)
+    except Exception:
+        sd_ins, sd_outs, sd_widths = [], [], {}
+    for nm in sd_ins:
+        if nm and nm.lower() not in _RESERVED_PORT_WORDS \
+                and nm not in header_ports and nm not in i_names:
+            i_names.append(nm)
+    for nm in sd_outs:
+        if nm and nm.lower() not in _RESERVED_PORT_WORDS \
+                and nm not in header_ports and nm not in o_names:
+            o_names.append(nm)
+    for nm, w in (sd_widths or {}).items():
+        # authoritative table width, but never override a real header declaration.
+        if nm not in header_ports and nm not in ctx_widths and w is not None:
+            ctx_widths[nm] = w
+
+    # (B0.5) PROSE BULLET port list (`- `name` (input, N bits): …`) — a standard
+    # IC-spec port declaration form the v1.2.96 rewrite also dropped. §4.05: the
+    # bullets are PROMPT text. Strictly gated (≥2 annotated bullets) so a stray
+    # bullet never becomes a phantom port.
+    try:
+        pb_ins, pb_outs, pb_widths = \
+            _bridge._prose_bullet_ports(prompt, param_defaults)
+    except Exception:
+        pb_ins, pb_outs, pb_widths = [], [], {}
+    for nm in pb_ins:
+        if nm and nm.lower() not in _RESERVED_PORT_WORDS \
+                and nm not in header_ports and nm not in i_names:
+            i_names.append(nm)
+    for nm in pb_outs:
+        if nm and nm.lower() not in _RESERVED_PORT_WORDS \
+                and nm not in header_ports and nm not in o_names:
+            o_names.append(nm)
+    for nm, w in (pb_widths or {}).items():
+        if nm not in header_ports and nm not in ctx_widths and w is not None:
+            ctx_widths[nm] = w
+
     # (B) prompt test-case table HEADER / prose Input/Output block — MERGE the
     # names the authoritative header does NOT already declare (a partial context
     # header may omit a prompt-declared port; §4.05: a prose-only port is still a

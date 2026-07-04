@@ -520,6 +520,64 @@ def _prose_ports(prompt: str) -> Tuple[List[Port], List[Port]]:
         return [], []
 
 
+_PROSE_BULLET_RE = re.compile(
+    r"^\s*[-*]\s*`(\w+)`\s*(?:\(([^)]*)\))?\s*:", re.MULTILINE)
+_BULLET_WIDTH_RE = re.compile(r"(\d+)\s*bit", re.IGNORECASE)
+
+
+def _prose_bullet_ports(prompt: str, params: Optional[Dict[str, int]] = None
+                        ) -> Tuple[List[str], List[str], Dict[str, int]]:
+    """(input_names, output_names, widths) from a PROSE BULLET port list of the
+    form ``- `name` (input, N bits): description`` — a standard IC-spec port
+    declaration convention (§4.05: PROMPT-sourced, never the harness). Direction
+    comes from the parenthesised annotation, or — for a clock/reset bullet with no
+    annotation — from the IC-domain reading of its description (```pclk`: APB clock
+    input`` is an input clock; ```presetn`: … reset signal`` is an input reset).
+
+    Strictly GATED to avoid false ports: activates ONLY when ≥2 bullets carry an
+    explicit ``(input|output|inout …)`` annotation (a genuine port-list section);
+    all-digit names (enum values like ``- `0`: disabled``) are dropped."""
+    ins: List[str] = []
+    outs: List[str] = []
+    widths: Dict[str, int] = {}
+    annotated: List[Tuple[str, str, str]] = []  # (name, dirword, paren)
+    loose: List[Tuple[str, str]] = []           # (name, line) with no annotation
+    for m in _PROSE_BULLET_RE.finditer(prompt):
+        name, paren = m.group(1), (m.group(2) or "")
+        if name.isdigit():
+            continue
+        line = prompt[m.start():prompt.find("\n", m.start()) if
+                      prompt.find("\n", m.start()) >= 0 else len(prompt)]
+        dm = re.search(r"\b(inout|input|output)\b", paren, re.IGNORECASE)
+        if dm:
+            annotated.append((name, dm.group(1).lower(), paren))
+        else:
+            loose.append((name, line))
+    if len(annotated) < 2:
+        return [], [], {}   # not a genuine port-list section
+
+    def _add(name: str, direction: str, wsrc: str):
+        (outs if direction == "output" else ins).append(name)
+        wm = _BULLET_WIDTH_RE.search(wsrc)
+        if wm:
+            widths[name] = int(wm.group(1))
+    for name, dirword, paren in annotated:
+        _add(name, "output" if dirword == "output" else "input", paren)
+    # loose clock/reset bullets in the SAME list are input ports (IC-domain read).
+    for name, line in loose:
+        low = line.lower()
+        is_clk = re.search(r"\bclk|\bclock\b", name.lower() + " " + low)
+        is_rst = re.search(r"reset|\brst|resetn|presetn", name.lower() + " " + low)
+        if (is_clk and "input" in low) or is_rst or re.search(
+                r"\binput\b", low):
+            if name not in ins and name not in outs:
+                ins.append(name)
+                widths.setdefault(name, 1)  # clock/reset are 1-bit
+    ins = list(dict.fromkeys(ins))
+    outs = list(dict.fromkeys(outs))
+    return ins, outs, widths
+
+
 def _signal_direction_table(prompt: str, params: Optional[Dict[str, int]] = None
                             ) -> Tuple[List[str], List[str], Dict[str, int], Dict[str, str]]:
     """(input_names, output_names, widths, symbolic) from a markdown INTERFACE table

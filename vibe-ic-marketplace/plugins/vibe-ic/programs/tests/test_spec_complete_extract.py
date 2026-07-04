@@ -102,7 +102,15 @@ def test_cvdp_adapter_complete_count_is_prompt_context_only():
         pytest.skip("dataset not present")
     recs = [json.loads(l) for l in ds.read_text().splitlines()]
     comp = sum(1 for r in recs if C.extract(r)["completeness"] == "COMPLETE")
-    assert comp == 223, f"CVDP COMPLETE (prompt+context only) drifted to {comp}"
+    # ORGANIC-20260705: the v1.2.96 harness-read removal replaced the oracle
+    # interface path with `_table_interface` (test-case tables) + `_prose_ports`
+    # ONLY, silently dropping two common PROMPT interface forms — the markdown
+    # Signal/Direction/Width table and the `- `name` (input, N bits):` prose bullet
+    # list. Restoring both input-only parsers recovered 223 -> 226 (comparator via
+    # the signal-direction table; apb_dsp_unit + sorter via the prose-bullet list),
+    # all prompt-sourced, ZERO harness reads, and a strict superset of the 223 set
+    # (no COMPLETE lost). This is the §4.05-compliant clean-room baseline.
+    assert comp == 226, f"CVDP COMPLETE (prompt+context only) drifted to {comp}"
     # §4.05: the cocotb harness signal-set block is NO LONGER re-attached; the
     # supplied (prompt+context) interface is echoed in `interface_source` instead.
     s = C.extract(recs[0])
