@@ -43,9 +43,9 @@ def test_cid003_spec_generation_routes_to_phase1():
     ("cid007", "optimization"),
     ("cid016", "debug"),
 ])
-def test_non_spec_gen_cids_route_to_ai_led(cid, nature):
+def test_non_spec_gen_cids_route_to_plugin_loop(cid, nature):
     v = R.classify_task_nature("...", has_context=True, cid=cid)
-    assert v["route"] == "ai_led", cid
+    assert v["route"] == "plugin_loop", cid
     assert v["nature"] == nature
     assert v["needs_ai_parse"] is False
 
@@ -70,9 +70,9 @@ def test_general_prompt_no_context_falls_to_phase1_but_flags_ai_parse():
     assert v["source"] == "no_context_heuristic"
 
 
-def test_general_prompt_with_context_falls_to_ai_led_and_flags_ai_parse():
+def test_general_prompt_with_context_falls_to_plugin_loop_and_flags_ai_parse():
     v = R.classify_task_nature("Fix this.", has_context=True, cid=None)
-    assert v["route"] == "ai_led"
+    assert v["route"] == "plugin_loop"
     assert v["nature"] == "transform_existing_rtl"
     assert v["needs_ai_parse"] is True
 
@@ -80,6 +80,49 @@ def test_general_prompt_with_context_falls_to_ai_led_and_flags_ai_parse():
 # --------------------------------------------------------------------------- #
 # route_record end-to-end on record shapes.
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# Every nature maps to a CONCRETE plugin entry (step or loop-of-steps), and
+# every program/skill it names must actually EXIST (no fabricated entries).
+# --------------------------------------------------------------------------- #
+_PLUGIN = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.parametrize("cid,entry", [
+    ("cid003", "phase1_spec_to_rtl"),
+    ("cid002", "completion_loop"),
+    ("cid004", "modify_loop"),
+    ("cid007", "optimize_loop"),
+    ("cid016", "debug_loop"),
+])
+def test_each_cid_has_a_named_plugin_entry(cid, entry):
+    v = R.classify_task_nature("x", has_context=True, cid=cid)
+    pe = v["plugin_entry"]
+    assert pe["name"] == entry
+    assert pe["deterministic_first"] and pe["ai_backup"] and pe["verify"]
+
+
+def test_every_referenced_program_and_skill_exists():
+    """The router must point ONLY at real plugin capabilities — a `.py` token
+    resolves under programs/, any other token resolves under skills/<name>/."""
+    for cid, t in R._CID_TASK.items():
+        pe = t["plugin_entry"]
+        for token in (pe["deterministic_first"] + pe["ai_backup"]
+                      + pe["verify"]):
+            if token.endswith(".py"):
+                assert (_PLUGIN / "programs" / token).is_file(), \
+                    f"{cid}: missing program {token}"
+            else:
+                assert (_PLUGIN / "skills" / token / "SKILL.md").is_file(), \
+                    f"{cid}: missing skill {token}"
+
+
+def test_no_nature_is_out_of_scope():
+    # every route is either phase1_entry or plugin_loop — never a dead "ai_led".
+    for cid in ("cid002", "cid003", "cid004", "cid007", "cid016"):
+        v = R.classify_task_nature("x", has_context=True, cid=cid)
+        assert v["route"] in ("phase1_entry", "plugin_loop")
+
+
 def test_route_record_reads_cid_and_context():
     rec = {"id": "cvdp_copilot_x_0001", "categories": ["cid003", "easy"],
            "input": {"prompt": "Design.", "context": None}}
@@ -91,8 +134,9 @@ def test_route_record_reads_cid_and_context():
     rec2 = {"id": "cvdp_copilot_y_0002", "categories": ["cid016", "medium"],
             "input": {"prompt": "Debug.", "context": {"rtl/y.sv": "module y; endmodule"}}}
     out2 = R.route_record(rec2)
-    assert out2["route"] == "ai_led"
+    assert out2["route"] == "plugin_loop"
     assert out2["nature"] == "debug"
+    assert out2["plugin_entry"]["name"] == "debug_loop"
     assert out2["has_context"] is True
 
 

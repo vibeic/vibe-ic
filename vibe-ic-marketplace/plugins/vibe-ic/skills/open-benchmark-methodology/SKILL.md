@@ -631,26 +631,31 @@ prompts genuinely name no module → correct `chip_top` degrade).
    Phase-1 (spec→design-doc→RTL) domain. `benchmark/cvdp_task_router.py` decides
    the route DETERMINISTICALLY from the dataset's own `cidNNN` label:
 
-   | cid | nature | count | route |
-   |---|---|---|---|
-   | cid003 | spec generation (pure text → new RTL) | 78 | **phase1_entry** |
-   | cid002 | completion (partial RTL/interface → complete) | 94 | ai_led |
-   | cid004 | functional modification (given RTL → change behaviour) | 55 | ai_led |
-   | cid007 | optimization (area/lint thresholds) | 40 | ai_led |
-   | cid016 | debug (buggy RTL → fix to spec) | 35 | ai_led |
+   **NONE of the five natures is out of scope — each enters a concrete plugin
+   step or loop-of-steps** (`plugin_entry`, every program/skill below verified to
+   exist by `test_cvdp_task_router.py`):
 
-   → **78 route to Phase-1; 224 are AI-led** transforms of existing RTL that must
-   NOT be forced through Phase-1's doc extraction (wrong tool). Composition of the
-   302 no_commercial slice: difficulty easy 162 / medium 140 (no hard); 133/302
-   ship `input.context` RTL (cid004/007/016 always; cid002 mostly in-prompt).
-   `cvdp_phase1_entry.py` consumes the router and drives ONLY the 78
-   spec_generation records through Phase-1; the 224 AI-led ids are recorded
-   out-of-Phase-1-scope. For a GENERAL (unlabelled) prompt the first layer is a
-   real AI parse — `classify_task_nature()` gives the deterministic fallback
-   (context RTL ⇒ ai_led; else ⇒ phase1_entry) and sets `needs_ai_parse=True` so
-   the caller confirms the nature. **A published Phase-1-entry CVDP number is
-   therefore over the 78 spec_generation records — the metric the plugin's
-   spec→RTL pipeline actually owns.**
+   | cid | nature | count | plugin entry (deterministic-first → AI-backup → verify) |
+   |---|---|---|---|
+   | cid003 | spec generation | 78 | **phase1_spec_to_rtl**: `phase1_one_shot_runner`+`deterministic_rtl_dispatcher` → `spec-to-rtl` → `rtl_hygiene_lint`+`spec_conformance_check`+`phase2-rtl-verify` |
+   | cid002 | completion | 94 | **completion_loop**: `cvdp_context_interface_recover`+`modify_complete_synth` → `spec-to-rtl` → `rtl_hygiene_lint`+`spec_conformance_check`+`phase2-rtl-verify` |
+   | cid004 | functional modification | 55 | **modify_loop**: `cvdp_context_interface_recover`+`modify_complete_synth` → `rtl-repair`+`eco-plan` → `equivalence-check`+`phase2-rtl-verify` |
+   | cid007 | optimization | 40 | **optimize_loop**: `rtl_hygiene_lint` → `rtl-review`+`synth-doctor`+`ppa-predict` → `equivalence-check`+`phase2-rtl-verify` |
+   | cid016 | debug | 35 | **debug_loop**: `cvdp_context_interface_recover`+`debug_first_pass` → `rtl-repair` → `phase2-rtl-verify`+`equivalence-check`+`formal-verify` |
+
+   → **78 route to Phase-1 (spec→RTL); 224 route to their own plugin loop.** The
+   interface for every context-bearing transform is recovered header-only from
+   `input.context` by `cvdp_context_interface_recover` (the port header is the
+   spec, never the golden body — §3.9 / §4.05). Composition of the 302
+   no_commercial slice: difficulty easy 162 / medium 140 (no hard); 133/302 ship
+   `input.context` RTL (cid004/007/016 always; cid002 mostly in-prompt).
+   `cvdp_phase1_entry.py` drives ONLY the 78 spec_generation records through
+   Phase-1; the 224 record their plugin-loop entry. For a GENERAL (unlabelled)
+   prompt the first layer is a real AI parse — `classify_task_nature()` gives the
+   deterministic fallback (context RTL ⇒ modify_loop; else ⇒ phase1) + sets
+   `needs_ai_parse=True`. **A published Phase-1-entry number is over the 78
+   spec_generation records; the other four natures are scored through their own
+   plugin loops, not Phase-1.**
 4. **Meta-lesson:** a benchmark can be "passing" on one entry while an entirely
    different entry has never been exercised. When the owner designates a
    canonical entry (here: Phase-1), re-establish the number THROUGH that entry
