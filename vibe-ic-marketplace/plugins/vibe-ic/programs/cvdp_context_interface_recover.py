@@ -376,6 +376,22 @@ def recover_interface(record: dict, target: Optional[str] = None) -> List[dict]:
     return best
 
 
+def recover_interface_from_text(text: str, target: str) -> List[dict]:
+    """Recover [{name,dir,width}] for `target` from an ARBITRARY source text — the
+    same header-only parse as `recover_interface`, but applied to a module header
+    embedded anywhere (e.g. the partial RTL a cid002 completion ships INSIDE the
+    prompt rather than in input.context). §4.05: this is still the INTERFACE the
+    author is given (a real `module <target> ( … );` declaration in the input),
+    never the golden body — we STOP at the port list. Returns [] when the target
+    header is absent/unparseable. Chip-AGNOSTIC."""
+    if not isinstance(text, str) or not text or not target:
+        return []
+    span = _find_module_span(text, target)
+    if span is None:
+        return []
+    return _parse_one_span(span, target)
+
+
 def main(argv=None) -> int:
     import argparse, json
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])

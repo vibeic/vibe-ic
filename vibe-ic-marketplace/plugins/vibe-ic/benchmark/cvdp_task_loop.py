@@ -117,6 +117,29 @@ def run_loop_case(record: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
                 else _IR.recover_interface(record)
         except Exception:
             iface = []
+        res["iface_source"] = "context" if iface else None
+        # FALLBACK — a cid002 completion usually ships the partial RTL (the real
+        # `module (...)` header = the interface) INSIDE the prompt, not in
+        # input.context. Recover it from the prompt's own real declaration
+        # (header-only, §4.05 — the interface the author is given, not the body).
+        if not iface:
+            prompt = (record.get("input") or {}).get("prompt") or ""
+            # try EVERY `module <name> (` header declared in the prompt; keep the
+            # recovery with the most ports (the target is the richest header, a
+            # helper stub has few/none). Header-only, §4.05 — the interface the
+            # author is given, never the golden body.
+            best_top = None
+            for m in _MODULE_RE.finditer(prompt):
+                nm = m.group(1)
+                try:
+                    cand = _IR.recover_interface_from_text(prompt, nm)
+                except Exception:
+                    cand = []
+                if len(cand) > len(iface):
+                    iface, best_top = cand, nm
+            if iface:
+                res["iface_source"] = "in_prompt_header"
+                tgt = tgt or best_top
         res["iface_ports"] = len(iface or [])
         res["target_module"] = tgt
 
