@@ -1855,7 +1855,7 @@ _Captured by benchmark-enhancement-capture 2026-06-15 (#725; reference-anchored 
 
 **What to do**: put the state register and its output registers in the SAME clocked block; compute next-state combinationally but LATCH the outputs (`out <= <value-for-next-state>`), so outputs and the cycle count the checker uses stay in lockstep. Keep genuinely-combinational Mealy outputs combinational only when the spec ties them to inputs within the cycle, not to state alone.
 
-**Why this is GENERAL**: lining a design's output timing up with the convention its scorer counts by is a universal sequential-logic discipline, not a hidden-test answer — a one-cycle-early Moore output is a real timing defect against any cycle-accurate consumer. *why_not_bucket_a*: from RTL alone a program cannot distinguish a legitimately-combinational Moore output from one the cycle-stepped reference needs registered — flagging every combinational state-derived output would false-positive on the many designs where it is correct; the registered-vs-combinational choice needs the spec's timing convention, which is a reading judgment.
+**Why this is GENERAL**: lining a design's output timing up with the convention its scorer counts by is a universal sequential-logic discipline, not a hidden-test answer — a one-cycle-early Moore output is a real timing defect against any cycle-accurate consumer. *`why_not_bucket_a`*: from RTL alone a program cannot distinguish a legitimately-combinational Moore output from one the cycle-stepped reference needs registered — flagging every combinational state-derived output would false-positive on the many designs where it is correct; the registered-vs-combinational choice needs the spec's timing convention, which is a reading judgment.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; recurred across 5 cycle-stepped-output failures). Deterministic half already gated by latency_conformance_check.py (#705); this records the authoring convention._
 
@@ -1867,7 +1867,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; rec
 
 **What to do**: drive the reset-relative value in the RESET branch (or as the registered power-up value), not only via the steady-state next-state logic. Confirm the value is correct at the first edge, not one cycle later.
 
-**Why this is GENERAL**: "a signal observed at the reset boundary must be initialised at the boundary, not one NBA-cycle later" is standard reset-domain discipline — a same-edge NBA read is a real visibility bug against any reset-relative consumer, not a benchmark quirk. *why_not_bucket_a*: whether a given output must hold a SPECIFIC value at the first post-reset edge depends on the protocol convention the checker encodes (CKE high out of reset, ready low out of reset) — that protocol semantics is not derivable from RTL structure, so the choice is a reading judgment, not a regex.
+**Why this is GENERAL**: "a signal observed at the reset boundary must be initialised at the boundary, not one NBA-cycle later" is standard reset-domain discipline — a same-edge NBA read is a real visibility bug against any reset-relative consumer, not a benchmark quirk. *`why_not_bucket_a`*: whether a given output must hold a SPECIFIC value at the first post-reset edge depends on the protocol convention the checker encodes (CKE high out of reset, ready low out of reset) — that protocol semantics is not derivable from RTL structure, so the choice is a reading judgment, not a regex.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; recurred across 2 reset-boundary sampling failures)._
 
@@ -1879,7 +1879,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; rec
 
 **What to do**: give each enumerated step its own state/cycle — a dedicated terminal state that asserts done/valid AFTER all compute iterations complete, with no compute work folded into it. Do not merge an enumerated "transition" cycle into the enumerated "assert" cycle. Honor any stated early-exit transition as its own counted cycle too.
 
-**Why this is GENERAL**: one-prose-step-equals-one-clock is textbook cycle-accurate FSM discipline — a fused terminal cycle is a real one-cycle-early strobe against any consumer that counts cycles, not a benchmark quirk. *why_not_bucket_a*: a latency-measurement gate can flag the post-hoc cycle mismatch, but it cannot decide FROM PROSE that two enumerated phrases ("transition to DONE" and "assert done") describe SEQUENTIAL cycles rather than one co-incident event — judging whether two enumerated steps are concurrent or back-to-back is a reading judgment of the spec's intent, not a structural check.
+**Why this is GENERAL**: one-prose-step-equals-one-clock is textbook cycle-accurate FSM discipline — a fused terminal cycle is a real one-cycle-early strobe against any consumer that counts cycles, not a benchmark quirk. *`why_not_bucket_a`*: a latency-measurement gate can flag the post-hoc cycle mismatch, but it cannot decide FROM PROSE that two enumerated phrases ("transition to DONE" and "assert done") describe SEQUENTIAL cycles rather than one co-incident event — judging whether two enumerated steps are concurrent or back-to-back is a reading judgment of the spec's intent, not a structural check.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; recurred across ~6 enumerated-latency failures). Deterministic measurement half already gated by latency_conformance_check.py (#705); this records the authoring reading-convention._
 
@@ -1887,11 +1887,11 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; rec
 
 **Pattern**: A modify/extend task (add a mode, add an `enable`, add a consumer) must leave every pre-existing datapath bit-for-bit equivalent for its original stimulus. Two recurring regressions: (1) **signedness drift** — adding a signed/two's-complement mode and ALSO switching the untouched real/unsigned path to `$signed(...)`, so any operand with its MSB set is misread as negative; the original operand RANGE in prose ("a is 0..255, b is 0..65535") pins it as UNSIGNED and it must not be sign-extended. (2) **gating free-running state** — wrapping a self-accumulating/self-toggling internal register (a parity toggle `x<=~x`, a free counter) inside the newly-added `else if (enable)`, which shifts its phase; the new enable should gate only the VISIBLE output/mux, never internal free-running phase, unless the spec explicitly says to freeze it.
 
-**When to apply**: any cid004-style "modify the existing RTL to add X" task, when the original RTL is supplied as input context. The tell is that the new-mode tests pass while the ORIGINAL-mode (or a phase-sensitive) test regresses.
+**When to apply**: any functional-modification ("modify the existing RTL to add X") task, when the original RTL is supplied as input context. The tell is that the new-mode tests pass while the ORIGINAL-mode (or a phase-sensitive) test regresses.
 
 **What to do**: change the minimum — branch the new behaviour behind the new mode select and leave the original arms (operand signedness, accumulation phase, reset behaviour) untouched; gate outputs, not free-running internal counters/toggles. Diff the unchanged path against the input RTL to confirm it is semantically identical.
 
-**Why this is GENERAL**: "don't regress the part you weren't asked to change" is universal refactoring discipline, and signed-vs-unsigned / phase continuity are real functional properties, not test artifacts. *why_not_bucket_a*: a program cannot tell, from RTL alone, that a given operand must stay unsigned (it reads that from the stated value RANGE in prose) or that a particular register is free-running PHASE that must not be enable-gated rather than data that should be — distinguishing "preserve" from "gate" needs the modify intent + the signal's role, a reading judgment.
+**Why this is GENERAL**: "don't regress the part you weren't asked to change" is universal refactoring discipline, and signed-vs-unsigned / phase continuity are real functional properties, not test artifacts. *`why_not_bucket_a`*: a program cannot tell, from RTL alone, that a given operand must stay unsigned (it reads that from the stated value RANGE in prose) or that a particular register is free-running PHASE that must not be enable-gated rather than data that should be — distinguishing "preserve" from "gate" needs the modify intent + the signal's role, a reading judgment.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; signedness + free-running-gate regressions in modify tasks)._
 
@@ -1903,7 +1903,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; sig
 
 **What to do**: hand-trace your RTL on every embedded example input and require an exact match; when prose and example disagree, implement the example and treat the prose as the misleading source. For hidden-bit normalization, drop the implicit leading 1 and take the next N bits.
 
-**Why this is GENERAL**: cross-checking generated logic against authoritative worked examples is basic verification hygiene, and hidden-bit normalization is a textbook floating-point convention — not a lookup answer. *why_not_bucket_a*: when two statements in the SAME prompt contradict each other, a program cannot decide which is authoritative — judging the worked numeric example as ground truth over a prose sentence is a reading call, and re-deriving the value to break the tie is semantic comprehension a regex cannot perform.
+**Why this is GENERAL**: cross-checking generated logic against authoritative worked examples is basic verification hygiene, and hidden-bit normalization is a textbook floating-point convention — not a lookup answer. *`why_not_bucket_a`*: when two statements in the SAME prompt contradict each other, a program cannot decide which is authoritative — judging the worked numeric example as ground truth over a prose sentence is a reading call, and re-deriving the value to break the tie is semantic comprehension a regex cannot perform.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; prose-vs-worked-example conflict, hidden-bit mantissa instance). Deduped vs the IEEE-754-multiply skill — this covers custom-normalization field extraction and the example-over-prose tie-break._
 
@@ -1915,7 +1915,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; pro
 
 **What to do**: hold the value in its register across the consume window — do not reset it in the old terminal/stop branch if a new consumer needs it afterward, and keep an error/status flag asserted until the consuming event (handshake/ack/sample) rather than for a single cycle.
 
-**Why this is GENERAL**: "a produced value must outlive its consumer's read" is fundamental data-lifetime discipline; a flag cleared before it is sampled is a real liveness bug against any consumer. *why_not_bucket_a*: a program cannot infer that a previously-transient signal must now PERSIST — recognizing that a modify-task added a reader with a later data dependence, and that the value must therefore survive past its old reset event, requires reading the new consumer's relationship to the signal, not its structure.
+**Why this is GENERAL**: "a produced value must outlive its consumer's read" is fundamental data-lifetime discipline; a flag cleared before it is sampled is a real liveness bug against any consumer. *`why_not_bucket_a`*: a program cannot infer that a previously-transient signal must now PERSIST — recognizing that a modify-task added a reader with a later data dependence, and that the value must therefore survive past its old reset event, requires reading the new consumer's relationship to the signal, not its structure.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; held-value-for-new-consumer + delayed-checker status flag)._
 
@@ -1927,7 +1927,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; hel
 
 **What to do**: derive the error response ONLY from address-decode-miss and read-only-register-write; never gate it on the byte strobe. Complete partial writes with the OK response. For an in-range memory window, build the actual read/write path for the whole window minus the reserved register block — don't route every non-CSR address to a default error.
 
-**Why this is GENERAL**: the OK-on-partial-write / error-only-on-decode-fault contract is a standard bus-protocol convention, and returning slave-error on a normal sub-word write is a real interop bug. *why_not_bucket_a*: a lint could flag one anti-pattern (error gated on the strobe), but it cannot author the COMPLETE response policy — deciding which addresses decode, which registers are read-only, and that everything else returns OK — from the prompt's register map; mapping the map to the protocol's response semantics is a reading judgment.
+**Why this is GENERAL**: the OK-on-partial-write / error-only-on-decode-fault contract is a standard bus-protocol convention, and returning slave-error on a normal sub-word write is a real interop bug. *`why_not_bucket_a`*: a lint could flag one anti-pattern (error gated on the strobe), but it cannot author the COMPLETE response policy — deciding which addresses decode, which registers are read-only, and that everything else returns OK — from the prompt's register map; mapping the map to the protocol's response semantics is a reading judgment.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; partial-strobe write-response + memory-window decode)._
 
@@ -1939,7 +1939,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; par
 
 **What to do**: feed the shared module input to each instance directly (parallel) when the functional statement says each element consumes the input and the latency is N-independent; reserve the serial chain for designs where each stage's INPUT is genuinely the previous stage's OUTPUT. Cross-check by computing the implied input→output latency for each topology against the stated/observed timing.
 
-**Why this is GENERAL**: broadcast-vs-chain is a fundamental dataflow decision with a measurable latency signature; picking the wrong one is a real architectural error. *why_not_bucket_a*: a program cannot resolve two contradictory dataflow sentences — weighing the operative functional clause and the latency implication against an adjacency phrase to choose broadcast over chain is semantic disambiguation, not a structural rule.
+**Why this is GENERAL**: broadcast-vs-chain is a fundamental dataflow decision with a measurable latency signature; picking the wrong one is a real architectural error. *`why_not_bucket_a`*: a program cannot resolve two contradictory dataflow sentences — weighing the operative functional clause and the latency implication against an adjacency phrase to choose broadcast over chain is semantic disambiguation, not a structural rule.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; contradictory dataflow prose resolved to parallel broadcast)._
 
@@ -1951,7 +1951,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; con
 
 **What to do**: enumerate every event the spec says mutates a given state element and give each its own branch — including the "else"/no-event branch when the reference clears the value there. Match the input RTL's else-branch clear-to-0 in modify tasks.
 
-**Why this is GENERAL**: "cover every described state transition" is basic specification-completeness discipline; an un-handled control event is a real functional hole, not a corner case. *why_not_bucket_a*: a program cannot enumerate, from prose, the full set of events that mutate a given register and verify each has a branch — recognizing that "the replacement path also sets the recency bit" or "the output also asserts on saturation" is a second required event is reading the functionality list as a set of independent obligations, a comprehension task.
+**Why this is GENERAL**: "cover every described state transition" is basic specification-completeness discipline; an un-handled control event is a real functional hole, not a corner case. *`why_not_bucket_a`*: a program cannot enumerate, from prose, the full set of events that mutate a given register and verify each has a branch — recognizing that "the replacement path also sets the recency bit" or "the output also asserts on saturation" is a second required event is reading the functionality list as a set of independent obligations, a comprehension task.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; missing miss/saturation/else update branches across 3 designs)._
 
@@ -1963,7 +1963,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; mis
 
 **What to do**: identify structure the synthesizer will NOT remove on its own — dead-at-default branches, duplicated arithmetic, register banks the spec lets you fold — transform it, and RE-RUN synthesis to confirm the measured wire/cell reduction meets the floor before emitting. Treat any edit the synthesizer would do anyway as not counting.
 
-**Why this is GENERAL**: knowing which RTL changes actually survive logic synthesis (vs which the tool constant-folds) is core EDA literacy, applicable to any area-optimization work. *why_not_bucket_a*: the threshold-measurement gate can tell you the reduction fell short, but it cannot author the transform nor decide WHICH structure is dead, shareable, or foldable — recognizing that a saturation comparator is unreachable at the default width, or that merging always-blocks is a synth no-op, requires reading the RTL's semantics and the synthesizer's behaviour, not a structural pattern-match.
+**Why this is GENERAL**: knowing which RTL changes actually survive logic synthesis (vs which the tool constant-folds) is core EDA literacy, applicable to any area-optimization work. *`why_not_bucket_a`*: the threshold-measurement gate can tell you the reduction fell short, but it cannot author the transform nor decide WHICH structure is dead, shareable, or foldable — recognizing that a saturation comparator is unreachable at the default width, or that merging always-blocks is a synth no-op, requires reading the RTL's semantics and the synthesizer's behaviour, not a structural pattern-match.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; cosmetic-vs-structural area optimization across 4 designs). Deterministic threshold half already gated by ppa_area_threshold_check.py (#729); this records the authoring judgment of WHAT to transform._
 
@@ -1975,7 +1975,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; cos
 
 **What to do**: keep the signal in its clocked block and swap `=` for `<=` so it stays a register and preserves its +1 pipeline cycle. Do NOT relocate a registered computation to `always_comb` to resolve the warning.
 
-**Why this is GENERAL**: choosing a lint fix that preserves the design's cycle behaviour (rather than the first edit that silences the warning) is universal — deleting a register to quiet a linter is a real latency regression. *why_not_bucket_a*: the linter flags the mixing but cannot choose between two functionally-DIFFERENT remedies; deciding to keep the signal registered (because it is a latency-bearing pipeline stage the reference model samples) over hoisting it combinational requires understanding the signal's timing role, a reading judgment the lint message does not carry.
+**Why this is GENERAL**: choosing a lint fix that preserves the design's cycle behaviour (rather than the first edit that silences the warning) is universal — deleting a register to quiet a linter is a real latency regression. *`why_not_bucket_a`*: the linter flags the mixing but cannot choose between two functionally-DIFFERENT remedies; deciding to keep the signal registered (because it is a latency-bearing pipeline stage the reference model samples) over hoisting it combinational requires understanding the signal's timing role, a reading judgment the lint message does not carry.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; lint-fix that silently dropped a pipeline register). Deduped vs rtl_hygiene_lint width checks — this is a fix-CHOICE judgment, not a width rule._
 
@@ -1987,7 +1987,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; lin
 
 **What to do**: copy the prompt's index map verbatim into the RTL slicing; if it gives `m[r][c] = bus[hi:lo]`, reproduce that exact stride, don't assume the "natural" row-major or little-endian order. Hand-check one mapped element against the table.
 
-**Why this is GENERAL**: faithfully transcribing a stated bit/byte mapping is basic spec-fidelity, and a transposed stride is a real position error against any reference. *why_not_bucket_a*: a program cannot know which input byte belongs in which storage cell — that mapping lives only in the prompt's prose/table, and detecting that a draft used the transposed stride requires reading the explicit map, not a structural check.
+**Why this is GENERAL**: faithfully transcribing a stated bit/byte mapping is basic spec-fidelity, and a transposed stride is a real position error against any reference. *`why_not_bucket_a`*: a program cannot know which input byte belongs in which storage cell — that mapping lives only in the prompt's prose/table, and detecting that a draft used the transposed stride requires reading the explicit map, not a structural check.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; transposed matrix byte-index against an explicit mapping table)._
 
@@ -1999,7 +1999,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; tra
 
 **What to do**: enumerate every defect the prompt pins (by an explicit value, table, or named-signal expectation) and repair each; do not stop after the first plausible correction. Re-derive the pinned expected output to confirm the primary defect is actually gone.
 
-**Why this is GENERAL**: closing on ALL specified defects (not the most obvious one) is fundamental debugging discipline. *why_not_bucket_a*: a program cannot decide WHICH of several plausible defects the prompt designates as the one to fix — recognizing that an explicit mapping/value pins the primary bug, distinct from an incidental secondary slip, is a reading judgment of the prompt's intent.
+**Why this is GENERAL**: closing on ALL specified defects (not the most obvious one) is fundamental debugging discipline. *`why_not_bucket_a`*: a program cannot decide WHICH of several plausible defects the prompt designates as the one to fix — recognizing that an explicit mapping/value pins the primary bug, distinct from an incidental secondary slip, is a reading judgment of the prompt's intent.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; multi-defect repair that fixed the secondary, missed the pinned primary)._
 
@@ -2011,7 +2011,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; mul
 
 **What to do**: model the stated edge/direction/numbering literally; do not reach for the canonical topology unless the spec's convention matches it. Verify on a case where the two conventions diverge (e.g. a tap position ≠ 1, or a select change right at the "wrong" edge).
 
-**Why this is GENERAL**: honoring a spec's explicit structural convention over a textbook default is core design fidelity; the textbook block is a real functional mismatch when conventions differ. *why_not_bucket_a*: a program cannot tell that a canonical topology's edge/tap convention contradicts the one the prose states — recognizing the mismatch requires reading the stated structure and knowing the textbook block's hidden convention, a comprehension judgment.
+**Why this is GENERAL**: honoring a spec's explicit structural convention over a textbook default is core design fidelity; the textbook block is a real functional mismatch when conventions differ. *`why_not_bucket_a`*: a program cannot tell that a canonical topology's edge/tap convention contradicts the one the prose states — recognizing the mismatch requires reading the stated structure and knowing the textbook block's hidden convention, a comprehension judgment.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; opposite-edge clock-gate + LSB-vs-MSB LFSR tap numbering). Deduped vs the MSB-first-serial-load and barrel-shifter skills — this is the META rule those instantiate._
 
@@ -2023,7 +2023,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; opp
 
 **What to do**: drive the flag from a SINGLE net event (one toggle, or an explicit set/clear keyed to the one transition that should advance it). Audit every `~flag`/increment site and confirm two of them cannot fire on co-occurring events and cancel.
 
-**Why this is GENERAL**: a self-cancelling toggle is a real state-machine bug independent of any benchmark. *why_not_bucket_a*: a program cannot reason that two toggle sites fire on events that always co-occur and therefore net to zero — that requires behavioural reasoning about WHEN the two events happen relative to each other, not a textual count of toggle statements.
+**Why this is GENERAL**: a self-cancelling toggle is a real state-machine bug independent of any benchmark. *`why_not_bucket_a`*: a program cannot reason that two toggle sites fire on events that always co-occur and therefore net to zero — that requires behavioural reasoning about WHEN the two events happen relative to each other, not a textual count of toggle statements.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; duplicated bank-select toggle that cancelled over a fill+drain)._
 
@@ -2035,7 +2035,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; dup
 
 **What to do**: register the read data on the cycle AFTER the read request (capture flop / snapshot register), and assert the downstream `valid` only once that captured word is valid — never raise `valid` over a combinational/just-presented value.
 
-**Why this is GENERAL**: respecting synchronous read latency and never qualifying un-captured data are universal datapath disciplines; X-under-valid is a real hazard. *why_not_bucket_a*: while the X-under-valid symptom is partly lintable, deciding that a combinational `dout` needs a capture flop (vs being legitimately combinational) requires reading the read-path timing — that the pointer increments the same edge and the consumer reads one cycle later — a behavioural judgment, not a structural match.
+**Why this is GENERAL**: respecting synchronous read latency and never qualifying un-captured data are universal datapath disciplines; X-under-valid is a real hazard. *`why_not_bucket_a`*: while the X-under-valid symptom is partly lintable, deciding that a combinational `dout` needs a capture flop (vs being legitimately combinational) requires reading the read-path timing — that the pointer increments the same edge and the consumer reads one cycle later — a behavioural judgment, not a structural match.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; combinational-read-ahead + valid-over-X across 3 designs)._
 
@@ -2047,7 +2047,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; com
 
 **What to do**: register the flag (`flag <= (write_en && full) || (read_en && empty)`) so it is deferred one cycle and stays consistent with the registered `valid`/`data_out` it accompanies, instead of a combinational `assign`.
 
-**Why this is GENERAL**: matching a flag's registration to the datapath it qualifies is standard synchronous-design discipline; a one-cycle-early combinational glitch is a real timing defect. *why_not_bucket_a*: a program cannot tell that a given flag must be registered to align with a companion datapath's sampling window — that needs reading which datapath the flag accompanies and that the checker samples them together, a behavioural judgment.
+**Why this is GENERAL**: matching a flag's registration to the datapath it qualifies is standard synchronous-design discipline; a one-cycle-early combinational glitch is a real timing defect. *`why_not_bucket_a`*: a program cannot tell that a given flag must be registered to align with a companion datapath's sampling window — that needs reading which datapath the flag accompanies and that the checker samples them together, a behavioural judgment.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; combinational status flag glitching one cycle early)._
 
@@ -2059,7 +2059,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; com
 
 **What to do**: register the input into two successive samples and XOR them; do not derive the pulse from live-vs-registered. Confirm the pulse aligns to the cycle the checker reads, not the cycle the input changed.
 
-**Why this is GENERAL**: two-register synchronous edge detection is the textbook form for a clocked input; a live-vs-registered pulse is a real one-cycle-early defect. *why_not_bucket_a*: choosing the two-register form over live-vs-registered depends on whether the input is synchronous and WHEN the checker samples the pulse — a reading judgment of the sampling protocol, not derivable from the detector's structure alone.
+**Why this is GENERAL**: two-register synchronous edge detection is the textbook form for a clocked input; a live-vs-registered pulse is a real one-cycle-early defect. *`why_not_bucket_a`*: choosing the two-register form over live-vs-registered depends on whether the input is synchronous and WHEN the checker samples the pulse — a reading judgment of the sampling protocol, not derivable from the detector's structure alone.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; synchronous-input change pulse one cycle early). Deduped vs the combinational-Mealy edge-detector skill — opposite cue (synchronous input + next-cycle sample)._
 
@@ -2071,7 +2071,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; syn
 
 **What to do**: default such reads to a combinational mux over the live registers (continuous `rdata` reflecting the current value) unless the spec explicitly states a read latency or handshake.
 
-**Why this is GENERAL**: matching read latency to the consumer's timing expectation is standard register-interface design. *why_not_bucket_a*: when the spec omits read latency, a program cannot infer the convention — recognizing that the checker's live-value equality demands a 0-cycle combinational read is a reading judgment of the (unstated) timing the test encodes.
+**Why this is GENERAL**: matching read latency to the consumer's timing expectation is standard register-interface design. *`why_not_bucket_a`*: when the spec omits read latency, a program cannot infer the convention — recognizing that the checker's live-value equality demands a 0-cycle combinational read is a reading judgment of the (unstated) timing the test encodes.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; registered read vs a free-running counter the checker compares live)._
 
@@ -2083,7 +2083,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; reg
 
 **What to do**: gate the request/IRQ combinationally so it deasserts the instant ack is sampled (e.g. `out = pending && !ack`), rather than registering the clear one cycle late.
 
-**Why this is GENERAL**: no request/ack overlap is a standard handshake convention; an extra overlap cycle is a real protocol violation. *why_not_bucket_a*: the no-overlap timing is usually NOT stated in the prompt — a program cannot derive a cycle-accurate handshake convention from prose that omits it; applying the default req-drops-with-ack rule is a protocol-knowledge judgment.
+**Why this is GENERAL**: no request/ack overlap is a standard handshake convention; an extra overlap cycle is a real protocol violation. *`why_not_bucket_a`*: the no-overlap timing is usually NOT stated in the prompt — a program cannot derive a cycle-accurate handshake convention from prose that omits it; applying the default req-drops-with-ack rule is a protocol-knowledge judgment.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; request cleared one cycle after ack, recurred across 2 interrupt-controller designs)._
 
@@ -2091,11 +2091,11 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; req
 
 **Pattern**: A prompt can carry two interface descriptions that disagree — a descriptive signal-table ("`s_ready` … indicates the slave is ready to accept the transaction") and an inline module stub that names the same port differently (`s_read`), where the stub name contradicts the port's stated semantics. The authoritative choice is the SEMANTIC source (the description, often corroborated by the majority of sources and the hidden TB's usage). The recurring defect preserves the stub's name, so the TB (which follows the description) raises an immediate name error before any functional check.
 
-**When to apply**: any task whose prompt includes BOTH a signal-description table and a code stub, when the two disagree on a port name/width and the stub name conflicts with the described meaning. The tell is a runtime AttributeError on a port name before functional checks run.
+**When to apply**: any task whose prompt includes BOTH a signal-description table and a code stub, when the two disagree on a port name/width and the stub name conflicts with the described meaning. The tell is a runtime `AttributeError` on a port name before functional checks run.
 
 **What to do**: adopt the description-table name when it conflicts with a stub, especially when the stub identifier contradicts the port's stated role and most sources agree with the table. Also preserve the full width/direction of a supplied input-context interface — never degenerate a sized port to a bare/1-bit one.
 
-**Why this is GENERAL**: reconciling conflicting interface specs toward the semantically-described name is standard spec-comprehension. *why_not_bucket_a*: a program can DIFF the two sources and flag the mismatch, but it cannot decide WHICH is authoritative — choosing the description over a contradictory stub name requires reading the port's stated meaning, a semantic judgment.
+**Why this is GENERAL**: reconciling conflicting interface specs toward the semantically-described name is standard spec-comprehension. *`why_not_bucket_a`*: a program can DIFF the two sources and flag the mismatch, but it cannot decide WHICH is authoritative — choosing the description over a contradictory stub name requires reading the port's stated meaning, a semantic judgment.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; description-table vs contradictory inline stub port names). Deduped vs the GIVEN-interface-header and TB-port-authority skills — this resolves a conflict BETWEEN two in-prompt sources._
 
@@ -2107,19 +2107,19 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; des
 
 **What to do**: from every partial-match state, transition back to the start on any input that is not the precise next step of the sequence — treat an intervening read or unrelated write as a reset event, not a no-op that holds the state.
 
-**Why this is GENERAL**: "consecutive means no intervening operations" is a standard sequence-recognition semantics; holding a partial match across unrelated ops is a real security/logic hole. *why_not_bucket_a*: a program cannot infer that "concurrent/consecutive unlock" forbids an intervening READ from holding the partial-match state — that follows from reading the sequence's uninterrupted semantics, not from FSM structure.
+**Why this is GENERAL**: "consecutive means no intervening operations" is a standard sequence-recognition semantics; holding a partial match across unrelated ops is a real security/logic hole. *`why_not_bucket_a`*: a program cannot infer that "concurrent/consecutive unlock" forbids an intervening READ from holding the partial-match state — that follows from reading the sequence's uninterrupted semantics, not from FSM structure.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; combination-lock partial-match held across intervening reads)._
 
 ### Skill: a white-box testbench probes internal signals by their EXACT prompt-given name — declare those identifiers as NETS, never reuse them as instance names
 
-**Pattern**: When the prompt gives explicit identifiers for internal pulses/signals (especially in code/bold formatting — e.g. it names a millisecond-tick strobe and shows the test waiting on it), a white-box CVDP testbench commonly probes them by that exact name (`await RisingEdge(dut.<that_identifier>)`), so the design must declare a scalar NET with that identifier. The recurring defect repurposes a prompt-named signal identifier as a sub-module INSTANCE name (or renames the net), so the probe resolves to a hierarchy object / missing signal and the test errors before any functional check.
+**Pattern**: When the prompt gives explicit identifiers for internal pulses/signals (especially in code/bold formatting — e.g. it names a millisecond-tick strobe and shows the test waiting on it), a white-box scoring testbench commonly probes them by that exact name (`await RisingEdge(dut.<that_identifier>)`), so the design must declare a scalar NET with that identifier. The recurring defect repurposes a prompt-named signal identifier as a sub-module INSTANCE name (or renames the net), so the probe resolves to a hierarchy object / missing signal and the test errors before any functional check.
 
 **When to apply**: any design whose prompt names internal strobes/pulses/signals with specific identifiers, particularly when the harness is white-box (probes internals rather than only top ports). The tell is a "requires a scalar signal" / missing-signal error on a prompt-named internal identifier.
 
 **What to do**: declare a net (`wire`/`logic`) with each prompt-given internal identifier and drive it; choose DIFFERENT names for instances. Treat a prompt-named "pulse/signal" as an observable net, not an instance label.
 
-**Why this is GENERAL**: a named observable signal should exist as that net — reusing the name for an instance is a real observability defect against any white-box check. *why_not_bucket_a*: a program cannot decide that a prompt identifier names a probeable scalar NET (vs a module instance or an internal of another name) — recognizing the identifier's role as an observable signal is a reading judgment of the prompt's naming intent.
+**Why this is GENERAL**: a named observable signal should exist as that net — reusing the name for an instance is a real observability defect against any white-box check. *`why_not_bucket_a`*: a program cannot decide that a prompt identifier names a probeable scalar NET (vs a module instance or an internal of another name) — recognizing the identifier's role as an observable signal is a reading judgment of the prompt's naming intent.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; prompt-named strobes used as instance names, unobservable to a white-box TB)._
 
@@ -2131,7 +2131,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; pro
 
 **What to do**: implement every arm of a disjunctive transition with its selecting condition — from a clear/cleanup state, branch directly to the grant/active state when a request is still pending instead of always returning to idle.
 
-**Why this is GENERAL**: honoring every clause of a documented transition is basic FSM-spec fidelity; dropping a conditional arm is a real latency/behaviour defect. *why_not_bucket_a*: a program cannot tell that a transient state's transition has an unimplemented "or serve another request" arm — recognizing the dropped arm requires reading the disjunctive transition clause and comparing it to the coded single-target transition, a comprehension judgment.
+**Why this is GENERAL**: honoring every clause of a documented transition is basic FSM-spec fidelity; dropping a conditional arm is a real latency/behaviour defect. *`why_not_bucket_a`*: a program cannot tell that a transient state's transition has an unimplemented "or serve another request" arm — recognizing the dropped arm requires reading the disjunctive transition clause and comparing it to the coded single-target transition, a comprehension judgment.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; unconditional clear-state transition that dropped a conditional re-grant arm)._
 
@@ -2143,7 +2143,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; unc
 
 **What to do**: in the decode branch for that state, omit the default-zero and re-assign the output its prior registered value (or leave the register un-driven so it holds), so it persists exactly as the spec's "maintain" language requires.
 
-**Why this is GENERAL**: mapping "held/maintained" prose to value-retention is direct spec fidelity; default-zeroing a held output is a real functional defect. *why_not_bucket_a*: a program cannot map the prose words "remain unchanged/maintained/held" to "carry the registered value here, don't default it" — that is a reading of the spec's intent for that state, not a structural rule. (Complements the consumer-driven hold skill — this one triggers on the explicit prose cue + the FSM-decode-branch default-zero anti-pattern.)
+**Why this is GENERAL**: mapping "held/maintained" prose to value-retention is direct spec fidelity; default-zeroing a held output is a real functional defect. *`why_not_bucket_a`*: a program cannot map the prose words "remain unchanged/maintained/held" to "carry the registered value here, don't default it" — that is a reading of the spec's intent for that state, not a structural rule. (Complements the consumer-driven hold skill — this one triggers on the explicit prose cue + the FSM-decode-branch default-zero anti-pattern.)
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; "maintain"-state output default-zeroed, recurred across 2 FSMs)._
 
@@ -2155,11 +2155,11 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; "ma
 
 **What to do**: drive reset-pinned outputs from a reset-aware sequential block (or otherwise force the reset value), so they hold the stated idle level out of reset rather than floating to whatever a combinational expression yields.
 
-**Why this is GENERAL**: honoring stated reset values for all outputs, handshakes included, is standard reset-domain discipline. *why_not_bucket_a*: a program cannot tell that a particular ready/valid must reset low (vs being legitimately combinational) — that depends on the spec's reset statement for that output, a reading judgment, not the structural fact that it's a continuous assign.
+**Why this is GENERAL**: honoring stated reset values for all outputs, handshakes included, is standard reset-domain discipline. *`why_not_bucket_a`*: a program cannot tell that a particular ready/valid must reset low (vs being legitimately combinational) — that depends on the spec's reset statement for that output, a reading judgment, not the structural fact that it's a continuous assign.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; combinational ready that ignored reset and floated high in idle). Deduped vs the first-post-reset-edge skill — that is a same-edge NBA visibility bug; this is a continuous-assign ignoring reset entirely._
 
-### Skill: removing a latch / lint warning by going FULLY combinational deletes a clock-synced valid pulse — a RisingEdge(valid_out) wait then never fires
+### Skill: removing a latch / lint warning by going FULLY combinational deletes a clock-synced valid pulse — a `RisingEdge(valid_out)` wait then never fires
 
 **Pattern**: When a clocked valid/data handshake module (it has `clk`/`rst`, `valid_in`/`valid_out`, and "operates on the rising edge" semantics) is "cleaned up" by converting it to pure combinational logic, `valid_out` tracks `valid_in` with zero delay — it rises and falls combinationally with the input. A directed test that issues `await RisingEdge(valid_out)` AFTER deasserting `valid_in` then sees no edge ever occur and the simulation hangs, even though the computed value is correct.
 
@@ -2167,7 +2167,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; com
 
 **What to do**: keep the valid/output path REGISTERED in an `always_ff` so `valid_out` is a clock-synchronized pulse the harness can edge-wait on; remove the latch by registering, not by going fully combinational.
 
-**Why this is GENERAL**: a clocked handshake must keep its registered valid edge — flattening it to combinational is a real loss of the synchronization the protocol provides. *why_not_bucket_a*: a program cannot tell that a given output must stay a clocked valid pulse (vs being legitimately combinational) — that depends on the module's "operates on rising edge" + handshake contract, a reading judgment. (Sibling of the blocking-to-non-blocking in-place fix skill — both: a cleanup must not delete clocked behaviour the checker depends on.)
+**Why this is GENERAL**: a clocked handshake must keep its registered valid edge — flattening it to combinational is a real loss of the synchronization the protocol provides. *`why_not_bucket_a`*: a program cannot tell that a given output must stay a clocked valid pulse (vs being legitimately combinational) — that depends on the module's "operates on rising edge" + handshake contract, a reading judgment. (Sibling of the blocking-to-non-blocking in-place fix skill — both: a cleanup must not delete clocked behaviour the checker depends on.)
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; latch fix that made a clocked valid pulse combinational, hanging the edge-wait)._
 
@@ -2179,7 +2179,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; lat
 
 **What to do**: build each described datapath element (mux, its select logic, its default/select-0 source, the staging register and its enable) as specified; do not hardwire a register's load to one source when the spec routes it through a mux with a default path.
 
-**Why this is GENERAL**: implementing the specified datapath (rather than a simplified stand-in) is basic architectural fidelity; a dropped default-source path is a real functional gap. *why_not_bucket_a*: a program cannot tell from prose that a register's load must come through a mux whose select-0 source is a particular input — recognizing the described mux + its default path, versus a hardwired single load, is a reading judgment of the architecture.
+**Why this is GENERAL**: implementing the specified datapath (rather than a simplified stand-in) is basic architectural fidelity; a dropped default-source path is a real functional gap. *`why_not_bucket_a`*: a program cannot tell from prose that a register's load must come through a mux whose select-0 source is a particular input — recognizing the described mux + its default path, versus a hardwired single load, is a reading judgment of the architecture.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; described input-mux collapsed to a hardwired register load, dropping the default source)._
 
@@ -2191,7 +2191,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; des
 
 **What to do**: add the registered input stage the spec calls for (sample inputs into flops before the FSM acts on them), so the FSM's cycle alignment matches the registered-input latency the checker assumes.
 
-**Why this is GENERAL**: honoring a stated registered-input stage is standard pipeline-latency fidelity; skipping it is a real off-by-one. *why_not_bucket_a*: a program measuring latency can flag the mismatch post-hoc, but it cannot know from RTL that the spec REQUIRED a registered input stage — the "inputs synchronous to clk" requirement lives in prose, and adding that stage is a reading judgment.
+**Why this is GENERAL**: honoring a stated registered-input stage is standard pipeline-latency fidelity; skipping it is a real off-by-one. *`why_not_bucket_a`*: a program measuring latency can flag the mismatch post-hoc, but it cannot know from RTL that the spec REQUIRED a registered input stage — the "inputs synchronous to clk" requirement lives in prose, and adding that stage is a reading judgment.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; combinational input consumption against a stated registered-input requirement)._
 
@@ -2203,7 +2203,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence; com
 
 **What to do**: Read the reference model and derive: (1) array/list index→register-bit mapping (an MSB-first list index `k` maps to reg bit `LEN-1-k`, so `list[tap-1]^list[len-1]` becomes `reg[LEN-TAP]^reg[0]`, NOT the conventional `x^L+x^TAP+1`); (2) enable/mask polarity from how the TB DRIVES it plus the expected behavior (a mask the TB leaves at reset 0 yet still expects to operate means 0 = enabled); (3) the exact priority expression and tie-break (e.g. base = `CAP-index`, starvation boost = `min(cap, base+index)`, ties to the higher index); (4) counter cadence (advance aging/starvation counters per servicing EVENT, not per clock, if the model does); (5) for an asymmetric encoded structure (e.g. a tree-PLRU where each node bit points toward the MRU subtree), keep the WRITER and READER complementary end-to-end and verify the round-trip invariant — after marking element X, the same-direction traversal must return X; (6) replicate the model's EXACT set of states in which each output register is updated (don't add convenience reassignments, don't omit). Validate every generated value against the model for EVERY parameter/tap/index, not just the one that coincides with the textbook reading.
 
-**Why this is GENERAL**: "match the executable oracle over ambiguous prose" is core verification practice whenever the two disagree; LFSR-index, polarity, priority, cadence, and complementary-encoding round-trips are recurring traps across many designs. *why_not_bucket_a*: a program cannot read a Python reference model's indexing/polarity/priority/cadence semantics and re-derive the equivalent RTL convention — it requires understanding the model's algorithm, not a regex over the prompt text.
+**Why this is GENERAL**: "match the executable oracle over ambiguous prose" is core verification practice whenever the two disagree; LFSR-index, polarity, priority, cadence, and complementary-encoding round-trips are recurring traps across many designs. *`why_not_bucket_a`*: a program cannot read a Python reference model's indexing/polarity/priority/cadence semantics and re-derive the equivalent RTL convention — it requires understanding the model's algorithm, not a regex over the prompt text.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
@@ -2213,9 +2213,9 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **When to apply**: Whenever a value-/counter-/index-reading TB samples right after an edge trigger; whenever a "first valid after N cycles" or exact-cycle assertion is off by exactly one; whenever a side-channel clock (e.g. a generated serial clock) gates the TB's sample. Treat any consistent ±1-cycle latency miss as a candidate read-region effect before reshaping the datapath. Unless the TB uses a settle delay (`Timer`/`ReadOnly`) that moves the sample past the NBA region.
 
-**What to do**: Update per-bit outputs (data, bits-left, index) one cycle BEFORE the edge the TB samples them on, so they are settled when that edge fires. Account for the +1: a done flag asserted on edge E is first observed by the TB on edge E+1, so internal latency should target `(expected_measured − 1)` edges-to-done. When choosing single vs double input/start registering, pick the depth that lands the result on the EXACT edge the TB reads — a stage too few fires valid_out one edge early, a stage too many one edge late.
+**What to do**: Update per-bit outputs (data, bits-left, index) one cycle BEFORE the edge the TB samples them on, so they are settled when that edge fires. Account for the +1: a done flag asserted on edge E is first observed by the TB on edge E+1, so internal latency should target `(expected_measured − 1)` edges-to-done. When choosing single vs double input/start registering, pick the depth that lands the result on the EXACT edge the TB reads — a stage too few fires `valid_out` one edge early, a stage too many one edge late.
 
-**Why this is GENERAL**: cocotb's edge-trigger read-region semantics are a fixed, documented property of the simulator interface; aligning observable timing to it is general TB-aware authoring (cf. the NBA-vs-blocking clock-toggle rule). *why_not_bucket_a*: a program cannot infer, from the prompt, which exact edge a Python TB samples a given signal on, or how many pipeline stages land the value there — it needs reasoning about the TB's await/read sequence.
+**Why this is GENERAL**: cocotb's edge-trigger read-region semantics are a fixed, documented property of the simulator interface; aligning observable timing to it is general TB-aware authoring (cf. the NBA-vs-blocking clock-toggle rule). *`why_not_bucket_a`*: a program cannot infer, from the prompt, which exact edge a Python TB samples a given signal on, or how many pipeline stages land the value there — it needs reasoning about the TB's await/read sequence.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
@@ -2227,7 +2227,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **What to do**: Drive the flag from a clock-edge sample (e.g. registered `write_en & full` / `read_en & empty`), assert it before the strobe the TB watches, and clear it only when a new transaction BEGINS or on reset — never pulse-then-clear in the immediately-following FSM state. Note "valid dropped mid-computation" means ANY in-flight cycle lacking the full handshake (not just a valid-mismatch), so latch the error on the first such cycle and hold it.
 
-**Why this is GENERAL**: matching a status output's stability window to the consumer's sampling instant is standard registered-handshake discipline. *why_not_bucket_a*: a program cannot know which cycle (relative to a strobe) the TB samples the flag, so it cannot decide combinational-vs-registered-and-held — that is a timing judgment against the TB. (Refines the "status flag must be REGISTERED" and "held through the consume window" rules with the exact strobe-edge timing.)
+**Why this is GENERAL**: matching a status output's stability window to the consumer's sampling instant is standard registered-handshake discipline. *`why_not_bucket_a`*: a program cannot know which cycle (relative to a strobe) the TB samples the flag, so it cannot decide combinational-vs-registered-and-held — that is a timing judgment against the TB. (Refines the "status flag must be REGISTERED" and "held through the consume window" rules with the exact strobe-edge timing.)
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
@@ -2239,7 +2239,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **What to do**: Implement the literal iterative algorithm (one node visit / one shift / one compare per clock, stack-based re-traversal where the model has one) rather than an O(1) combinational fold. Then route the final productive step DIRECTLY to the output/DONE state instead of inserting an empty transition cycle. Cross-check the exact per-input cycle count against the worked examples (remembering the cocotb +1 read-region offset).
 
-**Why this is GENERAL**: cycle count is part of the timing contract whenever the TB checks it; "real schedule, no idle bubbles, no instant folds" is general FSM discipline. *why_not_bucket_a*: distinguishing a no-op transition state from a counted work-state, and deciding when a combinational fold violates a data-dependent schedule, requires reading the latency model and the FSM's per-state semantics — not a liftable value. (Complements the "enumerated per-step latency budget — never fuse two counted steps" rule, which governs the opposite over-folding direction.)
+**Why this is GENERAL**: cycle count is part of the timing contract whenever the TB checks it; "real schedule, no idle bubbles, no instant folds" is general FSM discipline. *`why_not_bucket_a`*: distinguishing a no-op transition state from a counted work-state, and deciding when a combinational fold violates a data-dependent schedule, requires reading the latency model and the FSM's per-state semantics — not a liftable value. (Complements the "enumerated per-step latency budget — never fuse two counted steps" rule, which governs the opposite over-folding direction.)
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
@@ -2251,7 +2251,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **What to do**: Keep row and col strides distinct and verified; compute each axis's boundary index separately and combine for the corner; and when the model produces the output before a same-cycle write and holds it under a deasserted update-enable, register the output (`enable = update`) from the pre-insertion buffer.
 
-**Why this is GENERAL**: independent per-axis boundary handling and read-then-write output registering are standard image/stencil datapath rules. *why_not_bucket_a*: a program cannot read the reference model's window-selection ordering or its per-axis boundary semantics and re-derive the registered-vs-combinational, transpose-free RTL — it is structural design reasoning.
+**Why this is GENERAL**: independent per-axis boundary handling and read-then-write output registering are standard image/stencil datapath rules. *`why_not_bucket_a`*: a program cannot read the reference model's window-selection ordering or its per-axis boundary semantics and re-derive the registered-vs-combinational, transpose-free RTL — it is structural design reasoning.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
@@ -2263,7 +2263,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **What to do**: Write arbitration as procedural if/else PRIORITY — test the winning requester first with a bare `if (valid)` and make the other the fallback; avoid `!other_valid` terms. Reset or initialize every register/array (and any memory-fed output register) whose value can be sampled before its first write, so X never reaches a value-reading TB. (This is purely an X-initialisation point — the memory read LATENCY itself, combinational vs one-cycle, is orthogonal and follows the spec; do not read this as prescribing either.)
 
-**Why this is GENERAL**: X-pessimism robustness (procedural-if over bitwise, reset-before-first-read) is standard defensive RTL that recurs across arbiters, FIFOs, and memory-fed datapaths. *why_not_bucket_a*: a program cannot tell which inputs the TB leaves undriven or which locations are read-before-write — that requires reading the TB's drive/sequence behavior. (Extends "a value sampled at the first post-reset edge must be reset-initialised" to the X-crash case.)
+**Why this is GENERAL**: X-pessimism robustness (procedural-if over bitwise, reset-before-first-read) is standard defensive RTL that recurs across arbiters, FIFOs, and memory-fed datapaths. *`why_not_bucket_a`*: a program cannot tell which inputs the TB leaves undriven or which locations are read-before-write — that requires reading the TB's drive/sequence behavior. (Extends "a value sampled at the first post-reset edge must be reset-initialised" to the X-crash case.)
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
@@ -2275,7 +2275,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **What to do**: Code the miss branch explicitly (mark victim used; apply the saturate rule so a replacement candidate always exists); mux the backing-store value out on miss; latch the missing address/data at detection and use the registered copy for the deferred fill; use `reg <= mem[sel]` (combinational read) so a same-cycle-selected operand is captured skew-free; verify with a back-to-back distinct-key prime-then-hit sequence.
 
-**Why this is GENERAL**: miss-path completeness, combinational miss-passthrough, capture-at-event, and read-port-latency matching are standard memory-datapath semantics. *why_not_bucket_a*: a program cannot infer the implied miss semantics, the combinational passthrough, or the capture timing from prose — these are design judgments against the access protocol. (Complements "implement every spec-enumerated branch" and "capture combinational reads in a flop".)
+**Why this is GENERAL**: miss-path completeness, combinational miss-passthrough, capture-at-event, and read-port-latency matching are standard memory-datapath semantics. *`why_not_bucket_a`*: a program cannot infer the implied miss semantics, the combinational passthrough, or the capture timing from prose — these are design judgments against the access protocol. (Complements "implement every spec-enumerated branch" and "capture combinational reads in a flop".)
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
@@ -2287,7 +2287,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **What to do**: Compute a `naturally_aligned = (addr % trans_size == 0)` flag SEPARATELY from any boundary-crossing/multi-transaction flag, and gate extract-vs-raw-forward on the ALIGNMENT flag, not on the transaction-count states.
 
-**Why this is GENERAL**: the alignment-vs-transaction-count distinction is a standard memory-subsystem rule, not specific to any block. *why_not_bucket_a*: deciding that raw-forwarding follows natural-alignment (not transaction count) is a datapath judgment against the memory model's `expected_rdata`, not a regex.
+**Why this is GENERAL**: the alignment-vs-transaction-count distinction is a standard memory-subsystem rule, not specific to any block. *`why_not_bucket_a`*: deciding that raw-forwarding follows natural-alignment (not transaction count) is a datapath judgment against the memory model's `expected_rdata`, not a regex.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
@@ -2299,7 +2299,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **What to do**: `s_ready = m_ready` and unconditional latch for a transparent stage; combinational same-cycle translation for a single-transfer bridge; only add a skid buffer / byte-swap / pipeline when the spec or the TB's expected bytes demand it.
 
-**Why this is GENERAL**: "implement exactly the described mechanism, no speculative machinery" is core spec-fidelity discipline — over-engineering a skid buffer or byte-swap is as wrong as under-building. *why_not_bucket_a*: recognizing that "single register stage / endian conversion" means passthrough/identity HERE — versus a buffered/byte-swapping design — requires reading the handshake intent and the TB's expected bytes, not a keyword. (Complements "implement the EXACT structural convention the spec states".)
+**Why this is GENERAL**: "implement exactly the described mechanism, no speculative machinery" is core spec-fidelity discipline — over-engineering a skid buffer or byte-swap is as wrong as under-building. *`why_not_bucket_a`*: recognizing that "single register stage / endian conversion" means passthrough/identity HERE — versus a buffered/byte-swapping design — requires reading the handshake intent and the TB's expected bytes, not a keyword. (Complements "implement the EXACT structural convention the spec states".)
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
@@ -2311,7 +2311,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **What to do**: Keep the literal stage count (N registers = N clocks/step); strobe each microcode/step action exactly once on step ENTRY (e.g. `microcode_addr != registered microcode_addr`); honor any ROM next-field branch overrides verbatim. Validate cadence on the real TB, not on paper.
 
-**Why this is GENERAL**: faithfully preserving a provided pipeline's latency is standard "complete, don't redesign" discipline for template tasks. *why_not_bucket_a*: a program cannot decide that a template's two-stage address pipeline is load-bearing for the TB's `Timer`-tuned windows — that is timing reasoning about the provided structure.
+**Why this is GENERAL**: faithfully preserving a provided pipeline's latency is standard "complete, don't redesign" discipline for template tasks. *`why_not_bucket_a`*: a program cannot decide that a template's two-stage address pipeline is load-bearing for the TB's `Timer`-tuned windows — that is timing reasoning about the provided structure.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
@@ -2323,7 +2323,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **What to do**: Apply exactly ONE update per DISTINCT input-sample change (one accumulate per input-pair change), and reset accumulators on the run-boundary control change (mode/select). Confirm by running the actual cocotb TB, not by cycle-counting on paper.
 
-**Why this is GENERAL**: making a datapath robust to a TB's exact (and possibly irregular) window widths via change-detection is standard timing-robust design. *why_not_bucket_a*: a program cannot tell that the TB's windows are non-uniform and result-only-checked (so a fixed-cadence FSM will drift) — that requires reading the TB's stimulus timing.
+**Why this is GENERAL**: making a datapath robust to a TB's exact (and possibly irregular) window widths via change-detection is standard timing-robust design. *`why_not_bucket_a`*: a program cannot tell that the TB's windows are non-uniform and result-only-checked (so a fixed-cadence FSM will drift) — that requires reading the TB's stimulus timing.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
@@ -2335,7 +2335,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **What to do**: Use `@(posedge X)` for the edge-triggered action; for serial RX / strobed capture, sample the single system clock under an active-high ENABLE rather than generating a gated clock edge; declare every module-scope signal before its first use.
 
-**Why this is GENERAL**: avoiding gated-clock sampling edges and modeling true edge events explicitly are standard CDC / clocking-discipline rules. *why_not_bucket_a*: deciding that "on the positive edge of X" needs an explicit edge process (vs a synchronized detector), and that a gated clock should be refactored to an enable, are structural clocking judgments, not regex fixes. (See the gated-clock single-cycle-pulse-drop hygiene WARN.)
+**Why this is GENERAL**: avoiding gated-clock sampling edges and modeling true edge events explicitly are standard CDC / clocking-discipline rules. *`why_not_bucket_a`*: deciding that "on the positive edge of X" needs an explicit edge process (vs a synchronized detector), and that a gated clock should be refactored to an enable, are structural clocking judgments, not regex fixes. (See the gated-clock single-cycle-pulse-drop hygiene WARN.)
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
@@ -2347,7 +2347,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **What to do**: Drive a HELD level on the event, synchronize that level across the domain (2-FF), and clear/re-arm only when the originating request is withdrawn; do NOT edge-detect the crossing back into a 1-cycle pulse if the consumer reads a level.
 
-**Why this is GENERAL**: level/toggle synchronization for single-cycle events is textbook CDC. *why_not_bucket_a*: recognizing that the consumer samples a level (so a pulse must become a held level across the crossing) requires reading the receiving-domain sampling semantics, not a regex.
+**Why this is GENERAL**: level/toggle synchronization for single-cycle events is textbook CDC. *`why_not_bucket_a`*: recognizing that the consumer samples a level (so a pulse must become a held level across the crossing) requires reading the receiving-domain sampling semantics, not a regex.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
@@ -2359,19 +2359,19 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **What to do**: Register `data_out` and both status flags with reset defaults; gate readability on a full-bank write; set fill/drain thresholds at N−1; keep the completed top self-contained the way the scored skeleton was.
 
-**Why this is GENERAL**: reserve-one-slot capacity, registered known-out-of-reset status flags, and registered read data are canonical FIFO design. *why_not_bucket_a*: matching the threshold and registering choices to the TB's held-input, loop-phase, and read-timing behavior is design judgment against the TB, not a value liftable from prose.
+**Why this is GENERAL**: reserve-one-slot capacity, registered known-out-of-reset status flags, and registered read data are canonical FIFO design. *`why_not_bucket_a`*: matching the threshold and registering choices to the TB's held-input, loop-phase, and read-timing behavior is design judgment against the TB, not a value liftable from prose.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
 ### Skill: the harness .env TOPLEVEL and the TB's dut.<sig> binds fix the top module name, file set, and signal names/structure
 
-**Pattern**: The scoring harness's `.env` (TOPLEVEL, VERILOG_SOURCES) and the TB's `dut.<sig>` accesses are the binding CONTRACT, overriding the prompt's prose/file names. The top MODULE name must equal `.env TOPLEVEL` (not the prose or file name); signal names AND their STRUCTURE must match what the TB references (`i_data` not `data_i`; `w_out` not `w`; a single inout `gpio` rather than split `gpio_in`/`gpio_out`/`gpio_en`).
+**Pattern**: The scoring harness's `.env` (TOPLEVEL, `VERILOG_SOURCES`) and the TB's `dut.<sig>` accesses are the binding CONTRACT, overriding the prompt's prose/file names. The top MODULE name must equal `.env TOPLEVEL` (not the prose or file name); signal names AND their STRUCTURE must match what the TB references (`i_data` not `data_i`; `w_out` not `w`; a single inout `gpio` rather than split `gpio_in`/`gpio_out`/`gpio_en`).
 
 **When to apply**: Whenever the prompt's module/port names disagree with the harness `.env` or the TB's `dut.` accesses. Unless the prompt names already match the TB binds exactly.
 
 **What to do**: Name the top module to `.env TOPLEVEL`; enumerate the TB's `dut.<sig>` accesses and declare exactly those nets with that direction/structure; for a multi-file `.env VERILOG_SOURCES`, ensure EVERY enumerated module elaborates.
 
-**Why this is GENERAL**: binding to the harness/TB interface (not the prose) is the universal rule for any externally-scored module. *why_not_bucket_a*: reconciling a single inout `gpio` against split prose ports, or the top-module name against `.env`, requires reading the TB's actual binds and structure — beyond the port-name spelling a program can normalize. (Extends "port-name authority is the TESTBENCH" to module name + port structure.)
+**Why this is GENERAL**: binding to the harness/TB interface (not the prose) is the universal rule for any externally-scored module. *`why_not_bucket_a`*: reconciling a single inout `gpio` against split prose ports, or the top-module name against `.env`, requires reading the TB's actual binds and structure — beyond the port-name spelling a program can normalize. (Extends "port-name authority is the TESTBENCH" to module name + port structure.)
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
@@ -2383,7 +2383,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **What to do**: For each opcode, cross-check its asserted control set against the FULL list of datapath controls that operation requires (operand mux selects AND carry/borrow/shift/sign enables); for a CSR-plus-memory map, make the decode default read/write the backing memory rather than returning 0/error.
 
-**Why this is GENERAL**: complete control assertion and a correct decode default are standard datapath/decoder completeness. *why_not_bucket_a*: knowing that a given opcode's semantics REQUIRE the carry-enable (vs a routing-only op), and that the address default means "backing memory" not "error", is a reading of the operation's intent, not a regex. (Complements "implement every spec-enumerated branch" with control-signal completeness WITHIN a branch.)
+**Why this is GENERAL**: complete control assertion and a correct decode default are standard datapath/decoder completeness. *`why_not_bucket_a`*: knowing that a given opcode's semantics REQUIRE the carry-enable (vs a routing-only op), and that the address default means "backing memory" not "error", is a reading of the operation's intent, not a regex. (Complements "implement every spec-enumerated branch" with control-signal completeness WITHIN a branch.)
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
@@ -2395,7 +2395,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **What to do**: Build with the SAME (strict) simulator/version the harness uses; declare every module-scope signal before its first use and avoid version-sensitive constructs; under `-Wall`, give a legitimately-unused interface port a scoped `/* verilator lint_off UNUSEDSIGNAL */ ... /* verilator lint_on UNUSEDSIGNAL */` waiver rather than leaving it bare or deleting the port.
 
-**Why this is GENERAL**: matching the scoring toolchain and waiving (not hiding) unused interface ports are standard portability/lint hygiene. *why_not_bucket_a*: the build/lint gate itself is deterministic (a program), but deciding WHICH unused port is legitimate-to-waive versus a real wiring bug is a reading judgment. (Complements "declare every port the interface lists".)
+**Why this is GENERAL**: matching the scoring toolchain and waiving (not hiding) unused interface ports are standard portability/lint hygiene. *`why_not_bucket_a`*: the build/lint gate itself is deterministic (a program), but deciding WHICH unused port is legitimate-to-waive versus a real wiring bug is a reading judgment. (Complements "declare every port the interface lists".)
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
@@ -2407,7 +2407,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **What to do**: Apply the reusable catalog — (1) a variable-OFFSET indexed write `mem[base+k]<=tmp[k]` → store at ABSOLUTE position with a shadow buffer pre-synced to the main array, so the write-back becomes a straight `mem[k]<=tmp[k]` copy and the O(N²) base-offset barrel-mux network disappears; (2) a serial-receive indexed bit write `data_reg[count]<=bit` → a plain SHIFT register `data_reg<={bit,data_reg[N-1:1]}` (fixed wiring, no per-bit demux); (3) drive a wide output port as a fixed CONCATENATION wire rather than a registered copy; (4) signed saturation to the full ±2^(W−1) range == overflow clamp via one `(W+1)`-bit add + clamp on `sum[W]!=sum[W−1]` (avoid compare-to-2^(W−1) constants → large comparators); (5) `(s>=T)||(s<=−T)` for T>0 == `|s|>=T` via a one's-complement magnitude fold `m=s^{W{s[W−1]}}` compared to `(s<0?T−1:T)`; (6) an OR of `|x|>=Ti` collapses to `|x|>=min(Ti)`. NEVER delete config-inactive-but-reachable functionality (e.g. saturation whose bounds equal the full datatype range still clamps on overflow) to hit the number — re-encode it cheaply instead (that deletion is overfitting). Measure with local yosys, gate cycle-accuracy with an event-driven (await-done) replica TB across ALL parameter modes, and aim WELL PAST threshold to absorb tool-version count skew.
 
-**Why this is GENERAL**: these are reusable RTL area-reduction transforms (barrel-mux elimination, SIPO shift register, magnitude folding) applicable to any merge/scan/scatter/serial/saturating datapath, plus the general "structural-not-cosmetic + co-sim-guarded + don't-delete-reachable-functionality" methodology. *why_not_bucket_a*: identifying the dominant structural cost term and choosing an exact equivalent rewrite is closed-loop synthesize-measure-restructure reasoning with an equivalence guard, not a regex edit; whether a given budget is even reachable blind requires judgment. (Adds a concrete transform catalog under "an area-reduction task needs a structural transform that survives synthesis".)
+**Why this is GENERAL**: these are reusable RTL area-reduction transforms (barrel-mux elimination, SIPO shift register, magnitude folding) applicable to any merge/scan/scatter/serial/saturating datapath, plus the general "structural-not-cosmetic + co-sim-guarded + don't-delete-reachable-functionality" methodology. *`why_not_bucket_a`*: identifying the dominant structural cost term and choosing an exact equivalent rewrite is closed-loop synthesize-measure-restructure reasoning with an equivalence guard, not a regex edit; whether a given budget is even reachable blind requires judgment. (Adds a concrete transform catalog under "an area-reduction task needs a structural transform that survives synthesis".)
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
@@ -2419,7 +2419,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **What to do**: Form the candidate set FIRST (`pend_masked = pending & mask`) and arbitrate over THAT; register the granted index when you present it (`serviced_idx_q <= winner`); on ack, clear/update state against `serviced_idx_q` (the index you actually presented), not the current-cycle combinational winner. Verify with simultaneous arrivals plus a 1-cycle ack delay.
 
-**Why this is GENERAL**: mask-then-arbitrate and "retire the request you actually presented, not the one currently winning" are standard arbiter correctness under registered grants and delayed acks — they recur in interrupt controllers, bus arbiters, and credit schedulers. *why_not_bucket_a*: a program cannot tell that the ack is delayed a cycle, that the presented index is registered, or that a fresh request can supplant the live winner before the ack arrives — that requires reading the TB's arrival/ack timing. (Complements "X-safety — procedural priority arbitration over bitwise selects".)
+**Why this is GENERAL**: mask-then-arbitrate and "retire the request you actually presented, not the one currently winning" are standard arbiter correctness under registered grants and delayed acks — they recur in interrupt controllers, bus arbiters, and credit schedulers. *`why_not_bucket_a`*: a program cannot tell that the ack is delayed a cycle, that the presented index is registered, or that a fresh request can supplant the live winner before the ack arrives — that requires reading the TB's arrival/ack timing. (Complements "X-safety — procedural priority arbitration over bitwise selects".)
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2 — official full-objective)._
 
@@ -2431,7 +2431,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **What to do**: Instantiate two banks plus a registered active-bank select; toggle the select when the filling bank hits per-bank capacity; gate `empty` on a full bank's worth of valid data (a partial / stray write keeps empty=1); register `empty`/`full` with reset defaults the way the FIFO checklist requires. Do not collapse the two banks into a single shared count.
 
-**Why this is GENERAL**: swap-at-per-bank-capacity and hold-empty-until-a-whole-bank-fills are the defining semantics of every double-buffer, independent of the data it carries. *why_not_bucket_a*: a program cannot tell from prose that the structure is two banks rather than one ring, nor that the quiescent test leaves the enable stuck high — that is a reading of the architecture against the TB's idle behavior. (Builds on "FIFO / double-buffer completion checklist" with the bank-swap-timing facet that checklist does not cover.)
+**Why this is GENERAL**: swap-at-per-bank-capacity and hold-empty-until-a-whole-bank-fills are the defining semantics of every double-buffer, independent of the data it carries. *`why_not_bucket_a`*: a program cannot tell from prose that the structure is two banks rather than one ring, nor that the quiescent test leaves the enable stuck high — that is a reading of the architecture against the TB's idle behavior. (Builds on "FIFO / double-buffer completion checklist" with the bank-swap-timing facet that checklist does not cover.)
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2 — official full-objective)._
 
@@ -2443,7 +2443,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **What to do**: Detect start/done as a registered edge (`start & ~start_q`); load the result snapshot and reset the run FSM on that rising edge (or on a mode-select change); keep the held snapshot stable while start stays high so a continued / re-pulsed level cannot corrupt it; only re-arm on the next clean rising edge.
 
-**Why this is GENERAL**: edge-triggered (not level-triggered) re-arm, hold-the-last-result, and re-init-on-restart are standard re-runnable-FSM hygiene for any block a testbench exercises repeatedly. *why_not_bucket_a*: a program cannot tell that the harness re-runs the module, that its start stays high across the run, or which edge the checker samples — that requires reading the TB's multi-pass drive sequence. (Complements "when the golden RTL is stripped, the cocotb checks ARE the spec" and "a value a later consumer reads must be HELD through the consume window".)
+**Why this is GENERAL**: edge-triggered (not level-triggered) re-arm, hold-the-last-result, and re-init-on-restart are standard re-runnable-FSM hygiene for any block a testbench exercises repeatedly. *`why_not_bucket_a`*: a program cannot tell that the harness re-runs the module, that its start stays high across the run, or which edge the checker samples — that requires reading the TB's multi-pass drive sequence. (Complements "when the golden RTL is stripped, the cocotb checks ARE the spec" and "a value a later consumer reads must be HELD through the consume window".)
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2 — official full-objective)._
 
@@ -2455,7 +2455,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 **What to do**: build the register exactly as the spec describes its motion — pick the shift direction it states, compute the feedback as the XOR of the bits at the NAMED tap positions counted from the stated reference end, and insert the feedback bit at the stated end. Do not reframe the taps into a canonical `x^k`-from-LSB polynomial; let the prose-stated structure define the bit indexing.
 
-**Why this is GENERAL**: honoring a spec's stated shift direction and insertion end over a remembered textbook convention is direct structural fidelity that applies to every shift-feedback generator, not one design. *why_not_bucket_a*: a program can parse the tap NUMBERS as parameters but cannot decide which END they index from or where the feedback enters — that requires reading the prose shift/insert sentences and mapping them onto register bit indices, a semantic comprehension judgment, and the wrong default (textbook LSB numbering) is the exact recurring trap.
+**Why this is GENERAL**: honoring a spec's stated shift direction and insertion end over a remembered textbook convention is direct structural fidelity that applies to every shift-feedback generator, not one design. *`why_not_bucket_a`*: a program can parse the tap NUMBERS as parameters but cannot decide which END they index from or where the feedback enters — that requires reading the prose shift/insert sentences and mapping them onto register bit indices, a semantic comprehension judgment, and the wrong default (textbook LSB numbering) is the exact recurring trap.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP Tier-3 hard-tier lift)._
 
@@ -2467,7 +2467,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP Tier-3 hard-tier lif
 
 **What to do**: partition the RTL into per-clock always blocks, clocking each block on the clock its spec sentence binds to that side (and resetting it with that side's named reset); for a single-cycle event or attribute crossing between the two domains, pass it through a synchronizer / held level rather than letting it be sampled directly on the far clock.
 
-**Why this is GENERAL**: assigning each block to the clock the spec names for it, and synchronizing the crossings, is baseline multi-clock discipline applicable to any bridge with named per-side clocks. *why_not_bucket_a*: a program can count clock inputs but cannot decide WHICH logic belongs to WHICH clock — the binding lives only in the prose description of each clock ("this clock is for that side"), so partitioning the design across the named clocks requires reading and matching those sentences, a semantic judgment, not a structural rule.
+**Why this is GENERAL**: assigning each block to the clock the spec names for it, and synchronizing the crossings, is baseline multi-clock discipline applicable to any bridge with named per-side clocks. *`why_not_bucket_a`*: a program can count clock inputs but cannot decide WHICH logic belongs to WHICH clock — the binding lives only in the prose description of each clock ("this clock is for that side"), so partitioning the design across the named clocks requires reading and matching those sentences, a semantic judgment, not a structural rule.
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP Tier-3 hard-tier lift)._
 
@@ -2484,7 +2484,7 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP Tier-3 hard-tier lif
 
 **What to do**: read ports from the PROSE as well as the table and declare each prose-added signal with the module's naming convention; transcribe declared internal identifiers, enum numeric codes, and instance names verbatim and keep internals as observable NETS (do not repurpose them as instance labels); name an internal storage array with a conventional `ram`/`mem` identifier so a hierarchical white-box peek resolves; map listed special registers in listed order.
 
-**Why this is GENERAL**: binding a verification environment to a design by name is universal — a renamed net, a re-encoded state, or a dropped prose-added port is a real observability/interop defect against any white-box check, not a benchmark quirk. *why_not_bucket_a*: a program can DIFF names but cannot decide that a prose sentence ADDS a required port, that a spelled enum code is load-bearing, or that an internal array will be peeked by hierarchical path — recognizing which identifiers the TB will bind to is a reading judgment of the prompt's intent. (Reinforces and extends the white-box-internal-NETS and TOPLEVEL/port-binding skills to prose-added ports + enum codes + instance names.)
+**Why this is GENERAL**: binding a verification environment to a design by name is universal — a renamed net, a re-encoded state, or a dropped prose-added port is a real observability/interop defect against any white-box check, not a benchmark quirk. *`why_not_bucket_a`*: a program can DIFF names but cannot decide that a prose sentence ADDS a required port, that a spelled enum code is load-bearing, or that an internal array will be peeked by hierarchical path — recognizing which identifiers the TB will bind to is a reading judgment of the prompt's intent. (Reinforces and extends the white-box-internal-NETS and TOPLEVEL/port-binding skills to prose-added ports + enum codes + instance names.)
 
 _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
 
@@ -2496,7 +2496,7 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 
 **What to do**: hand-derive what transformation makes the example's output fall out (table lookup, index→content, base offset), bake that indirection into both the reference model and the RTL, and pin the burst/element stride from consecutive address deltas in the contents table; then re-derive the example to confirm an exact match before emitting.
 
-**Why this is GENERAL**: cross-checking against a worked example and inferring an implied lookup when the arithmetic doesn't close is basic spec-comprehension plus datapath reasoning — not a memorized answer. *why_not_bucket_a*: a program cannot notice that `output != naive(input)` implies a hidden indirection, nor reverse-engineer WHICH table/offset reconciles the numbers — that is numeric detective work and semantic inference over the example, beyond any structural check. (Complements the worked-example-is-ground-truth skill — here the example reveals a missing indirection rather than a field convention.)
+**Why this is GENERAL**: cross-checking against a worked example and inferring an implied lookup when the arithmetic doesn't close is basic spec-comprehension plus datapath reasoning — not a memorized answer. *`why_not_bucket_a`*: a program cannot notice that `output != naive(input)` implies a hidden indirection, nor reverse-engineer WHICH table/offset reconciles the numbers — that is numeric detective work and semantic inference over the example, beyond any structural check. (Complements the worked-example-is-ground-truth skill — here the example reveals a missing indirection rather than a field convention.)
 
 _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
 
@@ -2508,7 +2508,7 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 
 **What to do**: write the flag `=1` exactly when its stated precondition holds AND enumerate and drive `=0` for each idle / reset / acknowledged / nothing-pending / spurious-ack case; author the TB (and the RTL) to cover the negative cases, not only the assertion.
 
-**Why this is GENERAL**: "a flag's positive spec implies its negative" is standard control-signal completeness — a status bit that floats or sticks high in idle is a real defect against any consumer. *why_not_bucket_a*: a program cannot enumerate, from a one-line positive spec, the full set of negative conditions (reset, ack-high, empty, spurious-ack) the flag must read low in — recognizing the implied negative obligations is a reading judgment about the signal's role.
+**Why this is GENERAL**: "a flag's positive spec implies its negative" is standard control-signal completeness — a status bit that floats or sticks high in idle is a real defect against any consumer. *`why_not_bucket_a`*: a program cannot enumerate, from a one-line positive spec, the full set of negative conditions (reset, ack-high, empty, spurious-ack) the flag must read low in — recognizing the implied negative obligations is a reading judgment about the signal's role.
 
 _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
 
@@ -2520,7 +2520,7 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 
 **What to do**: drive the stated value on the OUTPUT itself (not just internal registers) throughout reset, and author one reset assertion per named output/status register asserting it holds its reset value for the whole window; size the reset behavior so it survives the TB's multi-cycle reset loop.
 
-**Why this is GENERAL**: enumerating every reset-pinned output and holding its value for the full reset window is standard reset-domain discipline. *why_not_bucket_a*: a program cannot decide that "resets all states" enumerates a SET of outputs each needing its own multi-cycle assertion, nor that a value must appear on the OUTPUT rather than only internal state — that is reading the reset spec as a set of per-output, full-window obligations. (Deduped vs the reset-aware-register and first-post-reset-edge skills — those govern HOW to drive a reset value; this is the TB-completeness reading that the OUTPUT's value is sampled across the ENTIRE window and per status register.)
+**Why this is GENERAL**: enumerating every reset-pinned output and holding its value for the full reset window is standard reset-domain discipline. *`why_not_bucket_a`*: a program cannot decide that "resets all states" enumerates a SET of outputs each needing its own multi-cycle assertion, nor that a value must appear on the OUTPUT rather than only internal state — that is reading the reset spec as a set of per-output, full-window obligations. (Deduped vs the reset-aware-register and first-post-reset-edge skills — those govern HOW to drive a reset value; this is the TB-completeness reading that the OUTPUT's value is sampled across the ENTIRE window and per status register.)
 
 _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
 
@@ -2532,7 +2532,7 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 
 **What to do**: keep ports/register-map/latency/sequential-state bit-identical; confine edits to the named scope; preserve every internal register/signal name (it is probed); carry forward error-sentinel and corner behaviors the prompt doesn't override; for an area floor, measure the RELATIVE wire/cell reduction against the original and trust the prompt's threshold rather than hunting for the harness baseline.
 
-**Why this is GENERAL**: "the existing design is the golden reference; change only what you were asked to" is universal equivalence/refactor discipline — a renamed internal or a dropped corner behavior is a real regression. *why_not_bucket_a*: a program cannot tell that a particular internal register is white-box-probed (so must not be renamed), or that an undocumented sentinel in the given RTL is part of the contract — distinguishing "preserve" from "free to change" requires reading the equivalence intent and the signal's role. (Deduped vs the MODIFY-task-unchanged-path and area-reduction-structural-transform skills — this adds the white-box internal-name preservation, the given-RTL-as-contract reading, and the prompt-threshold-vs-harness-baseline split.)
+**Why this is GENERAL**: "the existing design is the golden reference; change only what you were asked to" is universal equivalence/refactor discipline — a renamed internal or a dropped corner behavior is a real regression. *`why_not_bucket_a`*: a program cannot tell that a particular internal register is white-box-probed (so must not be renamed), or that an undocumented sentinel in the given RTL is part of the contract — distinguishing "preserve" from "free to change" requires reading the equivalence intent and the signal's role. (Deduped vs the MODIFY-task-unchanged-path and area-reduction-structural-transform skills — this adds the white-box internal-name preservation, the given-RTL-as-contract reading, and the prompt-threshold-vs-harness-baseline split.)
 
 _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
 
@@ -2544,7 +2544,7 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 
 **What to do**: size the output to cover the loaded range and name it after the load input; add an independent clamp-to-max on each loaded field; implement an async/level-sensitive load and verify the loaded value pre-edge; honor any stated priority of load over an active count (the TB drives both controls together).
 
-**Why this is GENERAL**: representability of a loaded range, per-field saturation, and async-load semantics are standard datapath conventions a designer applies by reading the load spec. *why_not_bucket_a*: a program cannot decide that "retain interface" yields to a wider output for a newly-loadable range, that an "exceeds range → max" sentence is a per-field clamp, or that "asynchronous + immediate" means sample-before-edge — each is a reading of the load spec's intent, not a structural rule.
+**Why this is GENERAL**: representability of a loaded range, per-field saturation, and async-load semantics are standard datapath conventions a designer applies by reading the load spec. *`why_not_bucket_a`*: a program cannot decide that "retain interface" yields to a wider output for a newly-loadable range, that an "exceeds range → max" sentence is a per-field clamp, or that "asynchronous + immediate" means sample-before-edge — each is a reading of the load spec's intent, not a structural rule.
 
 _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
 
@@ -2556,7 +2556,7 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 
 **What to do**: derive the tick period as exactly the parameter (in clocks) and let the TB shrink it; on pause, freeze and hold the sub-interval counter and resume from the retained value so only the remaining ticks elapse before the next event.
 
-**Why this is GENERAL**: parameter-relative timing and pause-with-retained-phase are standard divider conventions — a hardcoded frequency or an interval-restarting pause are real timing defects. *why_not_bucket_a*: a program cannot infer that a parameterized divider will be exercised at tiny parameter values (so the period must be parameter-relative) or that "retain progress" means preserve the sub-count across a pause — both are readings of the timing spec's intent. (Deduped vs the dual-edge/50%-duty divider skill — that governs duty/odd-ratio structure; this governs parameter-relative period and pause-phase retention.)
+**Why this is GENERAL**: parameter-relative timing and pause-with-retained-phase are standard divider conventions — a hardcoded frequency or an interval-restarting pause are real timing defects. *`why_not_bucket_a`*: a program cannot infer that a parameterized divider will be exercised at tiny parameter values (so the period must be parameter-relative) or that "retain progress" means preserve the sub-count across a pause — both are readings of the timing spec's intent. (Deduped vs the dual-edge/50%-duty divider skill — that governs duty/odd-ratio structure; this governs parameter-relative period and pause-phase retention.)
 
 _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
 
@@ -2568,7 +2568,7 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 
 **What to do**: code the predicate/transform exactly as worded (the literal slice bounds, the exact repeating constant, the exact gating condition, the XOR-and-test-nonzero), drive the error/result directly from it so a test can inject a single-bit flip and observe the non-zero indication, and gate a "tied to 0" input fully out of the active datapath in its mode.
 
-**Why this is GENERAL**: faithfully transcribing a spelled-out Boolean and fully gating mode-inactive inputs are basic spec-fidelity — substituting a "close" standard function is a real functional mismatch. *why_not_bucket_a*: a program cannot tell that a spelled-out bit predicate must be transcribed verbatim rather than generalized, nor that a mode-tied input must be gated out — recognizing the literal operation as the contract is a reading judgment over the prose. (Deduped vs the EXACT-structural-convention and LFSR-tap skills — those cover topology/edge/tap conventions; this covers spelled-out combinational bit predicates, masks, and per-mode gating.)
+**Why this is GENERAL**: faithfully transcribing a spelled-out Boolean and fully gating mode-inactive inputs are basic spec-fidelity — substituting a "close" standard function is a real functional mismatch. *`why_not_bucket_a`*: a program cannot tell that a spelled-out bit predicate must be transcribed verbatim rather than generalized, nor that a mode-tied input must be gated out — recognizing the literal operation as the contract is a reading judgment over the prose. (Deduped vs the EXACT-structural-convention and LFSR-tap skills — those cover topology/edge/tap conventions; this covers spelled-out combinational bit predicates, masks, and per-mode gating.)
 
 _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
 
@@ -2580,7 +2580,7 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 
 **What to do**: create one output per parallel subsection and name each by the module's `_i`/`_o` (or prefix) convention; do not collapse two role-specific flags into one because a summary sentence used the singular.
 
-**Why this is GENERAL**: matching output multiplicity to the spec's parallel structure and inheriting a module's naming convention are standard interface-design reading. *why_not_bucket_a*: a program cannot decide that two parallel subsections each demand a distinct output (vs one shared flag) or that a new port must adopt the `_i`/`_o` convention the TB expects — both are readings of the spec's structure and the module's naming intent.
+**Why this is GENERAL**: matching output multiplicity to the spec's parallel structure and inheriting a module's naming convention are standard interface-design reading. *`why_not_bucket_a`*: a program cannot decide that two parallel subsections each demand a distinct output (vs one shared flag) or that a new port must adopt the `_i`/`_o` convention the TB expects — both are readings of the spec's structure and the module's naming intent.
 
 _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
 
@@ -2592,7 +2592,7 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 
 **What to do**: latch the serviced selection in a register that clears only on ack (gate the request/interrupt output low on ack, empty-pending, and reset); let a re-prioritization/override change FUTURE arbitration only; but keep any table/vector lookup keyed by the frozen index combinational so it tracks live table writes; implement an override as a REPLACE of the matched entry's priority.
 
-**Why this is GENERAL**: "an accepted grant runs to completion; re-arbitration applies to the next" is standard arbiter semantics, and the frozen-index / live-lookup split is a real, checkable distinction. *why_not_bucket_a*: a program cannot infer from prose that a once-selected interrupt is immune to mid-service re-prioritization while its vector lookup still tracks table writes — separating the latched selection from the live lookup is a reading of the servicing semantics. (Complements the masked-priority-arbiter + clear-presented-index skill, which covers masking/argmin and clearing the registered winner on ack.)
+**Why this is GENERAL**: "an accepted grant runs to completion; re-arbitration applies to the next" is standard arbiter semantics, and the frozen-index / live-lookup split is a real, checkable distinction. *`why_not_bucket_a`*: a program cannot infer from prose that a once-selected interrupt is immune to mid-service re-prioritization while its vector lookup still tracks table writes — separating the latched selection from the live lookup is a reading of the servicing semantics. (Complements the masked-priority-arbiter + clear-presented-index skill, which covers masking/argmin and clearing the registered winner on ack.)
 
 _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
 
@@ -2604,7 +2604,7 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 
 **What to do**: gate any byte-swap / lane-realign on sub-word select patterns so the aligned full-word case stays pass-through on both read and write paths; declare reset to the EXPLICITLY-STATED polarity (active-low when stated), not the polarity the bare name suggests.
 
-**Why this is GENERAL**: lane operations being identity for aligned full-width transfers, and an explicit polarity overriding a naming convention, are standard protocol/bus reading. *why_not_bucket_a*: a program cannot decide that "endian conversion" is a NO-OP for the full-word case (vs a real swap) or that a conventionally-active-high name is declared active-low here — both require reading the lane semantics and the explicit polarity statement. (Complements the don't-over-build / identity-transform skill and extends active-low-naming beyond reset_n/rst_n equivalence to an explicit-polarity-over-bare-name override.)
+**Why this is GENERAL**: lane operations being identity for aligned full-width transfers, and an explicit polarity overriding a naming convention, are standard protocol/bus reading. *`why_not_bucket_a`*: a program cannot decide that "endian conversion" is a NO-OP for the full-word case (vs a real swap) or that a conventionally-active-high name is declared active-low here — both require reading the lane semantics and the explicit polarity statement. (Complements the don't-over-build / identity-transform skill and extends active-low-naming beyond reset_n/rst_n equivalence to an explicit-polarity-over-bare-name override.)
 
 _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
 
@@ -2616,7 +2616,7 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 
 **What to do**: choose a power-of-two DEPTH default, and implement full/empty as the prompt's exact pointer-equality (empty) / top-bit(s)-inverted compare (full) rules so a fill-exactly-DEPTH-then-check-full test passes.
 
-**Why this is GENERAL**: power-of-two depth is a hard requirement of the Gray-pointer wrap-bit scheme — a textbook async-FIFO fact, not a hidden answer. *why_not_bucket_a*: a program cannot decide that an unstated depth default must be a power of two BECAUSE the chosen full-detection scheme demands it — that ties the parameter choice to the pointer architecture, a design-experience judgment. (Complements the async-FIFO Gray-pointer-lag / full-compare skill with the depth-default requirement.)
+**Why this is GENERAL**: power-of-two depth is a hard requirement of the Gray-pointer wrap-bit scheme — a textbook async-FIFO fact, not a hidden answer. *`why_not_bucket_a`*: a program cannot decide that an unstated depth default must be a power of two BECAUSE the chosen full-detection scheme demands it — that ties the parameter choice to the pointer architecture, a design-experience judgment. (Complements the async-FIFO Gray-pointer-lag / full-compare skill with the depth-default requirement.)
 
 _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
 
@@ -2628,7 +2628,7 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 
 **What to do**: split the wide value low-word-first across consecutive offsets; place an unplaced read-only result at the first free aligned slot past the config block; drive RESP=OKAY on those reads.
 
-**Why this is GENERAL**: little-endian word-split and "result lands after the config block" are standard memory-mapped-register conventions a seasoned designer applies without being told. *why_not_bucket_a*: choosing the offset + word order from convention (and overriding a "Reserved" label) is a reading/experience judgment, not a regex.
+**Why this is GENERAL**: little-endian word-split and "result lands after the config block" are standard memory-mapped-register conventions a seasoned designer applies without being told. *`why_not_bucket_a`*: choosing the offset + word order from convention (and overriding a "Reserved" label) is a reading/experience judgment, not a regex.
 
 _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
 
@@ -2640,7 +2640,7 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 
 **What to do**: decode only the word-index bits; on a non-aligned address, perform no write and return 0 on read; include an alignment test in your own TB.
 
-**Why this is GENERAL**: word-granular decode rejecting unaligned access is a universal bus convention. *why_not_bucket_a*: inferring "the map is word-granular so odd addresses are invalid" from the interface is a domain-experience read, not a deterministic rule.
+**Why this is GENERAL**: word-granular decode rejecting unaligned access is a universal bus convention. *`why_not_bucket_a`*: inferring "the map is word-granular so odd addresses are invalid" from the interface is a domain-experience read, not a deterministic rule.
 
 _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
 
@@ -2652,19 +2652,19 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 
 **What to do**: implement the complete mandatory signal set for the named protocol with its standard handshake + reset/idle/response defaults; do not stop at the ports the prompt enumerates.
 
-**Why this is GENERAL**: "name a protocol → owe its full contract" is exactly how an experienced designer reads a spec; the standard defines the rest. *why_not_bucket_a*: knowing which signals + defaults a named protocol mandates is domain knowledge a regex cannot supply.
+**Why this is GENERAL**: "name a protocol → owe its full contract" is exactly how an experienced designer reads a spec; the standard defines the rest. *`why_not_bucket_a`*: knowing which signals + defaults a named protocol mandates is domain knowledge a regex cannot supply.
 
 _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-input TB vs oracle TB — IC-expert experience)._
 
 ### Skill: an `input` / `inout` port is a NET — never declare it `reg`; only `output` ports may be `reg`
 
-**Pattern**: Port direction fixes the object kind. An `input` or `inout` port is a net (it is DRIVEN from outside the module), so it can never be a `reg` — `reg` is a procedurally-assigned variable. `input reg [W-1:0] p` / `inout reg p` is illegal in strict SystemVerilog and ELAB_ERRORs on the official CVDP icarus-13 scorer (`error: Port <p> of module <m> is declared as input and as a reg type`) even though some lax host simulators (iverilog-11) tolerate it — so a design that simulates locally can still score 0/N on every test. Only an `output` port may be `reg` (a driven variable).
+**Pattern**: Port direction fixes the object kind. An `input` or `inout` port is a net (it is DRIVEN from outside the module), so it can never be a `reg` — `reg` is a procedurally-assigned variable. `input reg [W-1:0] p` / `inout reg p` is illegal in strict `SystemVerilog` and raises an elaboration error on the official icarus-13 scorer (`error: Port <p> of module <m> is declared as input and as a reg type`) even though some lax host simulators (iverilog-11) tolerate it — so a design that simulates locally can still score 0/N on every test. Only an `output` port may be `reg` (a driven variable).
 
 **When to apply**: every port declaration — inputs and inouts are always nets; reach for `reg`/`logic`-variable only on `output` ports the module drives procedurally.
 
 **What to do**: write `input [W-1:0] x;` (implicit wire) and `inout [W-1:0] z;`; use `output reg [W-1:0] y;` only when the output is assigned in an `always` block. The deterministic guard `rtl_hygiene_lint --fix` rewrites `input reg`/`inout reg` -> `input`/`inout` (the `reg` on a net is always removable without semantic change).
 
-**Why this is GENERAL**: direction-implies-object-kind is a universal Verilog/SystemVerilog rule — no chip / vendor / protocol specific. *why_not_bucket_a*: the classic "compiles on my host, fails on the grader" trap; the strict-elaboration rule is a fixed language fact, not a design judgement.
+**Why this is GENERAL**: direction-implies-object-kind is a universal Verilog/`SystemVerilog` rule — no chip / vendor / protocol specific. *`why_not_bucket_a`*: the classic "compiles on my host, fails on the grader" trap; the strict-elaboration rule is a fixed language fact, not a design judgement.
 
 _Captured by benchmark-enhancement-capture 2026-07-03 (CVDP hard-94 clean-run: two blind authors emitted `input reg`; icarus-13 ELAB_ERROR)._
 
@@ -2674,9 +2674,9 @@ _Captured by benchmark-enhancement-capture 2026-07-03 (CVDP hard-94 clean-run: t
 
 **When to apply**: Authoring any decoder for a framed/coded line protocol where the spec defines both a framing/sync check and a separate content/type legality check.
 
-**What to do**: Structure the decode as: (1) header/sync check first, short-circuiting to sync_error + zeroed outputs on failure; (2) only if sync passes, check the type/control field against the spec's exact legal-code table, raising decode_error for anything outside it. Build each output word by concatenating fixed control-character constants and sliced input byte-lanes in the exact MSB-to-LSB order the spec's table lists, matching the per-lane control mask bit-for-bit. Register all outputs behind the valid strobe (hold prior output when invalid, async-reset to zero) to honor any stated one-cycle latency.
+**What to do**: Structure the decode as: (1) header/sync check first, short-circuiting to `sync_error` + zeroed outputs on failure; (2) only if sync passes, check the type/control field against the spec's exact legal-code table, raising `decode_error` for anything outside it. Build each output word by concatenating fixed control-character constants and sliced input byte-lanes in the exact MSB-to-LSB order the spec's table lists, matching the per-lane control mask bit-for-bit. Register all outputs behind the valid strobe (hold prior output when invalid, async-reset to zero) to honor any stated one-cycle latency.
 
-**Worked pattern** (anonymized): A line-code decoder receiving a synced header but an out-of-table type field must raise decode_error (not sync_error); an unsynced header must raise sync_error with zeroed data/control regardless of the type field's contents.
+**Worked pattern** (anonymized): A line-code decoder receiving a synced header but an out-of-table type field must raise `decode_error` (not `sync_error`); an unsynced header must raise `sync_error` with zeroed data/control regardless of the type field's contents.
 
 **Why this is GENERAL**: Any coded-line-protocol decoder (framing + content legality) separates "is this a valid frame" from "is this a valid frame's content" as independent failure axes — conflating them causes the checker to see the wrong flag asserted even when the decoder's overall reject/accept decision is correct.
 
@@ -2716,7 +2716,7 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **When to apply**: Authoring any lane-parallelized stateful per-element encoder, or any single-lane run-length/counter encoder with a maximum-run-length boundary.
 
-**What to do**: Use `genvar`/generate-for to instantiate per-lane state registers (counter, previous-value) as arrays; index every read/write by the loop variable so no lane's logic references another lane's register. Size the per-lane field width as $clog2(max_value)+1 (or equivalent) and slice the flattened output bus with a fixed stride per lane. For run termination, check `(input_changed || counter == MAX)` to emit, and restart the counter at 1 (crediting the current sample to the new run) rather than 0.
+**What to do**: Use `genvar`/generate-for to instantiate per-lane state registers (counter, previous-value) as arrays; index every read/write by the loop variable so no lane's logic references another lane's register. Size the per-lane field width as $clog2(`max_value`)+1 (or equivalent) and slice the flattened output bus with a fixed stride per lane. For run termination, check `(input_changed || counter == MAX)` to emit, and restart the counter at 1 (crediting the current sample to the new run) rather than 0.
 
 **Worked pattern** (anonymized): A lane-parallel run-length encoder that accidentally shared one "previous value" register across all lanes corrupted every lane after the first; separately, a single-lane encoder that reset its counter to 0 instead of 1 at the max-length boundary under-counted the first sample of every subsequent run by one.
 
@@ -2732,7 +2732,7 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **What to do**: In the sequential always-block, unconditionally clear every strobe output first, then conditionally set the relevant one(s) based on current state. Insert a dedicated intermediate state between two pulses that must not coincide. Register a `_prev` copy of every level input and gate action on `cur & ~prev` (or the inverse) for edge detection. Latch selection/price/config inputs into a register the cycle the transaction is accepted, and drive all subsequent states from that captured register.
 
-**Worked pattern** (anonymized): A vending-machine-style transaction controller that combinationally asserted "dispense" and "return_change" in the same state produced overlapping pulses; splitting them into consecutive states with default-cleared strobes gave the expected one-cycle-apart pulses matching the checker's edge-based sampling.
+**Worked pattern** (anonymized): A vending-machine-style transaction controller that combinationally asserted "dispense" and "`return_change`" in the same state produced overlapping pulses; splitting them into consecutive states with default-cleared strobes gave the expected one-cycle-apart pulses matching the checker's edge-based sampling.
 
 **Why this is GENERAL**: Default-clear-then-set strobe generation, state-sequenced multi-pulse outputs, and edge-detected level inputs are universal patterns for any registered-output controller FSM producing discrete transaction events, regardless of the specific transaction domain.
 
@@ -2868,7 +2868,7 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 ### Skill: streaming MAC accumulator — exact width sizing, valid-gapped stage freeze, and in-flight reload at window boundaries
 
-**Pattern**: For a multi-stage streaming MAC/accumulator, the accumulator must be sized to exactly `2*operand_width + clog2(N)` bits (the product width plus the carry growth from summing N terms) and every pipeline register must be gated on a valid signal delayed to match its OWN stage's latency, so counting, accumulation, and valid_out all track the true datapath depth (first result appearing at N+1 cycles for an N-tap accumulation, or the design's equivalent). The critical correctness trap is at window boundaries: a gap in the input-valid signal must freeze ALL stages (hold state, advance nothing) rather than inserting a bubble; and at the boundary between accumulation windows, the accumulator must restart by LOADING the in-flight product (the first product of the new window), not by zeroing — zeroing drops the first term of every subsequent window.
+**Pattern**: For a multi-stage streaming MAC/accumulator, the accumulator must be sized to exactly `2*operand_width + clog2(N)` bits (the product width plus the carry growth from summing N terms) and every pipeline register must be gated on a valid signal delayed to match its OWN stage's latency, so counting, accumulation, and `valid_out` all track the true datapath depth (first result appearing at N+1 cycles for an N-tap accumulation, or the design's equivalent). The critical correctness trap is at window boundaries: a gap in the input-valid signal must freeze ALL stages (hold state, advance nothing) rather than inserting a bubble; and at the boundary between accumulation windows, the accumulator must restart by LOADING the in-flight product (the first product of the new window), not by zeroing — zeroing drops the first term of every subsequent window.
 
 **When to apply**: Authoring any multi-stage streaming/pipelined MAC, FIR, or windowed-accumulation datapath where accumulation windows repeat back-to-back and the input stream may have gaps.
 
@@ -2990,7 +2990,7 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Worked pattern** (anonymized): a CRC/RS encoder with parity registers `p[0..k-1]`; each clock: `feedback = data_in ^ p[k-1];` (blocking) then `p[0] <= feedback & g[0]; p[i] <= p[i-1] ^ (feedback & g[i]);` (all non-blocking) for i=1..k-1.
 
-**Why this is GENERAL**: The blocking-feedback/non-blocking-taps mixed idiom is the standard, well-known correct construction for any LFSR-based polynomial encoder in Verilog/SystemVerilog, independent of the specific generator polynomial or width.
+**Why this is GENERAL**: The blocking-feedback/non-blocking-taps mixed idiom is the standard, well-known correct construction for any LFSR-based polynomial encoder in Verilog/`SystemVerilog`, independent of the specific generator polynomial or width.
 
 _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
@@ -3290,13 +3290,13 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 **Verification tier**: Tier 2 — VERIFIED converge-aid (zero-oracle blind A/B: lesson injection produced a directionally-correct improvement — closer latency, progressed past an earlier failure stage — but did not reach a full PASS alone). See `DISTILL-20260704-ic-expert-agent-46-skills-FULL-46-verified.md`.
 
-**Pattern**: For a pipelined GF(2^8)-arithmetic cipher stage (e.g. a MixColumns-style transform) with a fixed "N-cycle from input-valid to output-valid" latency contract, the valid flag and the data must flow through EXACTLY the same number of register stages so output-valid and output-data assert on the same cycle. A naive implementation under-pipelines the valid signal (or samples data one stage off from where valid asserts), producing the classic one-cycle-early/late valid or stale/held data bug. Two algorithm-specific invariants also commonly get inverted: the GF(2^8) `xtime` operation XORs the reduction polynomial (0x1B) only when the top bit is set; and in an encrypt/decrypt pair, encrypt XORs the round key AFTER the forward transform while decrypt XORs the key BEFORE the inverse transform (the order is not symmetric).
+**Pattern**: For a pipelined GF(2^8)-arithmetic cipher stage (e.g. a `MixColumns`-style transform) with a fixed "N-cycle from input-valid to output-valid" latency contract, the valid flag and the data must flow through EXACTLY the same number of register stages so output-valid and output-data assert on the same cycle. A naive implementation under-pipelines the valid signal (or samples data one stage off from where valid asserts), producing the classic one-cycle-early/late valid or stale/held data bug. Two algorithm-specific invariants also commonly get inverted: the GF(2^8) `xtime` operation XORs the reduction polynomial (0x1B) only when the top bit is set; and in an encrypt/decrypt pair, encrypt XORs the round key AFTER the forward transform while decrypt XORs the key BEFORE the inverse transform (the order is not symmetric).
 
 **When to apply**: Authoring any fixed-latency pipelined datapath (cipher round, DSP pipeline, arithmetic unit) where valid must track data exactly, especially one built from GF(2^n) arithmetic with an encrypt/decrypt pair.
 
 **What to do**: Do the combinational per-stage math once on a registered copy of the inputs, and pipe a PARALLEL valid chain (`s1_valid → s2_valid → ... → o_valid`) with the exact same number of stages as the data path, gating the output data with the matching valid bit so it reads zero when not valid. Double-check the `xtime`/reduction conditional-XOR direction and the key-XOR-before-vs-after-transform ordering against the spec's encrypt and decrypt definitions separately.
 
-**Worked pattern** (anonymized): a pipelined GF(2^8) transform stage where the data path was 2 registers deep but the valid signal was only 1 register deep, so o_valid asserted a cycle before o_data was actually ready — and the decrypt path XORed the key after the inverse transform instead of before. Adding the missing valid pipeline stage and swapping the decrypt key-XOR position to before the inverse transform fixed both.
+**Worked pattern** (anonymized): a pipelined GF(2^8) transform stage where the data path was 2 registers deep but the valid signal was only 1 register deep, so `o_valid` asserted a cycle before `o_data` was actually ready — and the decrypt path XORed the key after the inverse transform instead of before. Adding the missing valid pipeline stage and swapping the decrypt key-XOR position to before the inverse transform fixed both.
 
 **Why this is GENERAL**: Valid/data pipeline-depth mismatch is a universal bug class in any fixed-latency pipelined datapath; the GF(2^8) xtime-and-key-order asymmetry between encrypt/decrypt is a standard invariant across any block-cipher-style linear-transform stage.
 
