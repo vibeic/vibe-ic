@@ -39307,6 +39307,67 @@ _RE_DOC_TOP_MODULE_INTRO_PHRASE = re.compile(
     r"\b(?P<name>[A-Z][A-Za-z0-9_]{2,39})\s+is\s+a(?:n)?\s+"
     r"(?:CPU|core|module|processor|IP\b|micro[\s-]?(?:processor|controller))"
 )
+# ORGANIC-20260705 (cvdp-phase1-module-name-prose) — the two CANONICAL
+# spec/copilot module-naming prose forms that the four legacy patterns above
+# all miss, leaving L9.top_module=`chip_top` (or a mis-picked parameter) on the
+# large family of prompt-only specs (CVDP nonagentic, VerilogEval-style):
+#   (1) a "Module Name:" label — a Markdown/AsciiDoc heading or a bold/plain
+#       line — whose value is the identifier, either on the SAME line
+#       (`Module Name: foo`) or, when it sits on the NEXT line, wrapped in
+#       backticks/quotes (the idiomatic way authors write the exact RTL name):
+#           ### Module Name:
+#           `qam16_mapper_interpolated`
+#   (2) an inline ``module `<name>` `` reference in running prose:
+#           **Specifications for module `priority_encoder_8x3` :**
+#           implement the module `spi_master` ...
+# Both are HIGH-confidence explicit-naming intent, so they rank just BELOW a
+# real `module (...) ;` declaration and ABOVE the low-confidence heading /
+# intro-phrase heuristics. Every hit still passes
+# `_is_valid_top_module_candidate` (rejects params/steps/section headings).
+# Chip-AGNOSTIC: pure documentation-convention anchors; no chip literal.
+_RE_DOC_TOP_MODULE_NAME_LABEL = re.compile(
+    r"(?im)^\s*#{0,6}\s*\**\s*(?:top[-_\s]+)?module\s+name\s*\**\s*"
+    r"(?:"
+    # same-line value — a colon/equals is REQUIRED (so running prose like
+    # "Module Name is chosen by ..." never matches). Value optionally quoted.
+    r"[:=][ \t]*[`'\"*]{0,2}(?P<n1>[A-Za-z_][A-Za-z0-9_]{1,39})[`'\"*]{0,2}[ \t]*$"
+    # next-line value — the colon is OPTIONAL (covers a bare `## Module Name`
+    # heading whose value is a backtick-wrapped identifier on the line below);
+    # the backtick wrapping is the disambiguator so a prose paragraph is safe.
+    r"|[:=]?[ \t]*\n\s*[`'\"](?P<n2>[A-Za-z_][A-Za-z0-9_]{1,39})\s*[`'\"]"
+    r")"
+)
+_RE_DOC_TOP_MODULE_INLINE_BACKTICK = re.compile(
+    r"(?i)\bmodule\s+[`'\"](?P<name>[A-Za-z_][A-Za-z0-9_]{1,39})\s*[`'\"]"
+)
+
+
+def _doc_module_name_label_or_inline(extracted: Dict[str, str]) -> Optional[str]:
+    """The module identifier named by an explicit "Module Name:" label or an
+    inline ``module `<name>` `` prose reference — the two canonical spec-prose
+    naming forms (ORGANIC-20260705). Returns the most-frequent valid candidate
+    (Module-Name label wins over inline reference on a tie), or None.
+    Chip-AGNOSTIC."""
+    if not extracted:
+        return None
+    label_counts: Dict[str, int] = {}
+    inline_counts: Dict[str, int] = {}
+    for _src, text in extracted.items():
+        if not text:
+            continue
+        for m in _RE_DOC_TOP_MODULE_NAME_LABEL.finditer(text):
+            nm = (m.group("n1") or m.group("n2") or "").strip()
+            if nm and _is_valid_top_module_candidate(nm):
+                label_counts[nm] = label_counts.get(nm, 0) + 1
+        for m in _RE_DOC_TOP_MODULE_INLINE_BACKTICK.finditer(text):
+            nm = (m.group("name") or "").strip()
+            if nm and _is_valid_top_module_candidate(nm):
+                inline_counts[nm] = inline_counts.get(nm, 0) + 1
+    # The explicit "Module Name:" label is the stronger intent; prefer it.
+    for counts in (label_counts, inline_counts):
+        if counts:
+            return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+    return None
 # ORGANIC-20260703 (runner-l9-topmodule-misextraction, P1) — a REAL Verilog
 # module DECLARATION anywhere in the doc/context text (fenced OR unfenced). This
 # is the authoritative top-module signal: `module <name> [#(...)] ( <ports> );`.
@@ -39709,6 +39770,15 @@ def _extract_top_module_from_docs(extracted: Dict[str, str]) -> Optional[str]:
     _real = _doc_real_module_decl_name(extracted)
     if _real:
         return _normalize_top_module_case(_real, extracted)
+
+    # ORGANIC-20260705 — no real declaration: an explicit "Module Name:" label
+    # or an inline ``module `<name>` `` prose reference is the next-strongest
+    # signal (author states the exact RTL identifier to implement). This wins
+    # over the low-confidence heading / intro-phrase heuristics below, which
+    # otherwise left prompt-only specs on the `chip_top` sentinel.
+    _named = _doc_module_name_label_or_inline(extracted)
+    if _named:
+        return _normalize_top_module_case(_named, extracted)
 
     def _walk(pattern: "re.Pattern[str]") -> Optional[str]:
         counts: Dict[str, int] = {}
@@ -52205,6 +52275,59 @@ def _v1_6_555_crosswalk_l9_ports_to_l1_pin_table(
     return True
 
 
+def _promote_l1_pins_to_l9_ports(
+        l1_pins: List[Dict[str, Any]],
+        ic_name_l1: Optional[str]) -> List[Dict[str, Any]]:
+    """ORGANIC-20260705 — reverse of the L9→L1 crosswalk. Promote L1.pin_table
+    rows to L9 top-port records using the SAME guard chain gen_l9 applies
+    (`_is_real_port_token` + `_pin_has_port_like_evidence` + valid mode +
+    redundant-bit-scalar drop), so a prose-only design whose ports land in L1
+    only AFTER L9 was emitted still gets its L9.top_ports populated. Returns the
+    promoted list ([] when nothing qualifies). Chip-AGNOSTIC."""
+    if not isinstance(l1_pins, list) or not l1_pins:
+        return []
+    pins = _v647_drop_redundant_bit_scalars(l1_pins)
+    _VALID_PORT_MODES = {"input", "output", "inout"}
+    out: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for p in pins[:64]:
+        if not isinstance(p, dict):
+            continue
+        raw = p.get("name")
+        if not raw:
+            continue
+        if not _is_real_port_token(str(raw), ic_name_l1, pin=p):
+            continue
+        if not _pin_has_port_like_evidence(p):
+            continue
+        mode = str(p.get("mode", "inout")).strip().lower()
+        if mode not in _VALID_PORT_MODES:
+            continue
+        cname = _canon_port_name(raw)
+        # dedup on (canonical name, mode) — a port declared twice is a bug,
+        # never a real second port (fixes the directional-prose double-harvest).
+        key = f"{cname}\x00{mode}"
+        if key in seen:
+            continue
+        seen.add(key)
+        entry = {
+            "name": cname,
+            "mode": mode,
+            "direction": mode,
+            "io": p.get("io_standard", "see datasheet"),
+            "evidence": (p.get("evidence") or "promoted from L1.pin_table"),
+        }
+        es = p.get("extraction_strategy")
+        if es:
+            entry["extraction_strategy"] = es
+        for _k in ("width", "msb", "lsb", "width_symbolic", "optional"):
+            _v = p.get(_k)
+            if _v is not None:
+                entry[_k] = _v
+        out.append(entry)
+    return out
+
+
 def _post_emit_crosswalk_l9_ports_to_l1_pin_table_v1_6_555(
         project: Path) -> None:
     """v1.6.555 — for #377 P3 ORGANIC. Post-emit hook that runs
@@ -52212,7 +52335,14 @@ def _post_emit_crosswalk_l9_ports_to_l1_pin_table_v1_6_555(
     L1.pin_table slot is empty but L9.ports already carries port
     names, synthesise L1.pin_table rows via the helper.
 
-    Chip-AGNOSTIC: pure L9 → L1 mirror.
+    ORGANIC-20260705 — ALSO runs the REVERSE mirror: when the directional-prose
+    fallback (or any late harvest) is the ONLY port source, the ports land in
+    L1 but L9.top_ports/ports/top_module_pins stay empty because gen_l9 already
+    ran on an empty L1. Promote L1.pin_table → L9 here so prompt-only specs get
+    a populated L9 (the doc every downstream Phase-2 emitter reads for the TB /
+    wrapper port list).
+
+    Chip-AGNOSTIC: pure L9 ↔ L1 mirror.
     """
     try:
         l1 = _try_load_l_doc(project, "L1_DATASHEET")
@@ -52243,25 +52373,59 @@ def _post_emit_crosswalk_l9_ports_to_l1_pin_table_v1_6_555(
         prose_text = _v1_6_collect_input_docs_text(project)
         prose = _l1_directional_prose_port_extract(prose_text or "")
         if prose:
-            l1["pin_table"] = [{
-                "name": e["name"],
-                "mode": e.get("mode"),
-                "width": e.get("width"),
-                "io_standard": None,
-                "function": e.get("description"),
-                "evidence": "directional-prose Inputs/Outputs bullet",
-                "extraction_strategy": "directional_prose_port",
-            } for e in prose]
+            # ORGANIC-20260705 — dedup on (name, mode); the directional-prose
+            # walker can emit the same port twice (once per restatement) and a
+            # duplicated pin_table row is always a bug, never a real 2nd port.
+            _seen_pk: Set[str] = set()
+            _rows: List[Dict[str, Any]] = []
+            for e in prose:
+                _pk = f"{str(e.get('name','')).strip().lower()}\x00" \
+                      f"{str(e.get('mode','')).strip().lower()}"
+                if _pk in _seen_pk:
+                    continue
+                _seen_pk.add(_pk)
+                _rows.append({
+                    "name": e["name"],
+                    "mode": e.get("mode"),
+                    "width": e.get("width"),
+                    "io_standard": None,
+                    "function": e.get("description"),
+                    "evidence": "directional-prose Inputs/Outputs bullet",
+                    "extraction_strategy": "directional_prose_port",
+                })
+            l1["pin_table"] = _rows
             l1["no_pin_table_in_input"] = False
             changed = True
-    if not changed:
-        return
-    _ensure_bool_flags(l1)
-    out = (_pl.generated_docs_dir(project)
-           / "L1_DATASHEET.json")
-    out.write_text(
-        json.dumps(l1, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8")
+    if changed:
+        _ensure_bool_flags(l1)
+        (_pl.generated_docs_dir(project) / "L1_DATASHEET.json").write_text(
+            json.dumps(l1, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8")
+    # (3) REVERSE mirror L1 → L9 (ORGANIC-20260705). When L9's port slots are
+    # ALL empty but L1 now carries real ports, promote them into L9 so the
+    # prompt-only design's L9.top_ports is no longer empty. Zero-regression: it
+    # fires ONLY when L9 has no ports of its own.
+    if isinstance(l9, dict):
+        l9_has_ports = bool(
+            (l9.get("top_ports") or l9.get("ports")
+             or l9.get("top_module_pins") or []))
+        l1_pins_now = l1.get("pin_table") or []
+        if (not l9_has_ports) and l1_pins_now:
+            promoted = _promote_l1_pins_to_l9_ports(
+                l1_pins_now, l1.get("ic_name"))
+            if promoted:
+                l9["top_ports"] = promoted
+                l9["ports"] = promoted
+                l9["top_module_pins"] = promoted
+                if "no_integration_in_input" in l9:
+                    l9["no_integration_in_input"] = False
+                _es = l9.setdefault("extraction_strategy", {})
+                if isinstance(_es, dict):
+                    _es["top_ports"] = "reverse_promote_from_l1_organic_20260705"
+                (_pl.generated_docs_dir(project)
+                 / "L9_INTEGRATION_SPEC.json").write_text(
+                    json.dumps(l9, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8")
 
 
 def _v1_6_collect_input_docs_text(project: Path) -> str:
