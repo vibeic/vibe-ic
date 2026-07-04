@@ -2667,3 +2667,647 @@ _Captured by benchmark-enhancement-capture 2026-07-01 (CVDP TB-diff: AI-from-inp
 **Why this is GENERAL**: direction-implies-object-kind is a universal Verilog/SystemVerilog rule — no chip / vendor / protocol specific. *why_not_bucket_a*: the classic "compiles on my host, fails on the grader" trap; the strict-elaboration rule is a fixed language fact, not a design judgement.
 
 _Captured by benchmark-enhancement-capture 2026-07-03 (CVDP hard-94 clean-run: two blind authors emitted `input reg`; icarus-13 ELAB_ERROR)._
+
+### Skill: line-code decoder — two-level dispatch with separate sync-error vs decode-error flags
+
+**Pattern**: For block/line-code decoders (e.g. 64b/66b style), decoding is a two-level dispatch: first branch on the sync/framing header — an invalid header must raise ONLY a sync-error flag and force data/control outputs to zero, never the decode-error flag. Second, within a valid control frame, branch on the type field against an exact whitelist of legal codes, raising decode-error (not sync-error) for any unlisted type. These two error causes must live on separate flags, never merged or aliased.
+
+**When to apply**: Authoring any decoder for a framed/coded line protocol where the spec defines both a framing/sync check and a separate content/type legality check.
+
+**What to do**: Structure the decode as: (1) header/sync check first, short-circuiting to sync_error + zeroed outputs on failure; (2) only if sync passes, check the type/control field against the spec's exact legal-code table, raising decode_error for anything outside it. Build each output word by concatenating fixed control-character constants and sliced input byte-lanes in the exact MSB-to-LSB order the spec's table lists, matching the per-lane control mask bit-for-bit. Register all outputs behind the valid strobe (hold prior output when invalid, async-reset to zero) to honor any stated one-cycle latency.
+
+**Worked pattern** (anonymized): A line-code decoder receiving a synced header but an out-of-table type field must raise decode_error (not sync_error); an unsynced header must raise sync_error with zeroed data/control regardless of the type field's contents.
+
+**Why this is GENERAL**: Any coded-line-protocol decoder (framing + content legality) separates "is this a valid frame" from "is this a valid frame's content" as independent failure axes — conflating them causes the checker to see the wrong flag asserted even when the decoder's overall reject/accept decision is correct.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: AXI4 MMIO-to-datapath bridge — decouple burst addressing, per-signal CDC synchronization, and gated readback
+
+**Pattern**: An AXI4 memory-mapped control block driving a datapath in a second clock domain must hold three separations simultaneously: (1) the write address phase must be decoupled from the write data phase — latch AWADDR into a write pointer once, then advance that pointer per beat for INCR bursts (by the data width) rather than reusing the static AWADDR for every beat; (2) every signal crossing a clock boundary needs its own synchronizer, and a MULTI-BIT bus crossing back must be captured as a whole (not split into independently-synchronized single bits, which lets bits skew); (3) address decode must gate on both alignment and region (memory vs CSR) so the same write channel can route to either target correctly.
+
+**When to apply**: Authoring any AXI-family (or similar memory-mapped bus) bridge that connects a register/CSR interface in one clock domain to a datapath or RAM in a different clock domain, especially when bursts are supported.
+
+**What to do**: Latch the burst base address into a pointer register at the address phase and increment it by the transfer size on each accepted data beat. For every CDC crossing, instantiate an explicit multi-flop synchronizer; for multi-bit results, synchronize the value as a coherent unit (e.g. via a toggle/handshake or gray-coded pointer) rather than per-bit, and make sure any CPU-visible readback register samples the SYNCHRONIZED value, never the raw far-domain signal. Decode addresses against both an alignment mask and a region range before selecting the destination.
+
+**Worked pattern** (anonymized): A control bridge that reused the latched AWADDR unchanged across every beat of an INCR burst wrote every beat to the same address; synchronizing only single control bits let a multi-bit status bus tear across sample points; and a readback path that read the raw datapath register (bypassing its synchronizer) returned stale/metastable-adjacent data to the CPU.
+
+**Why this is GENERAL**: Burst-pointer advancement, whole-bus CDC synchronization, and gated address decode are structural requirements of any multi-clock-domain bus bridge, independent of the specific protocol or datapath behind it.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: phase-checkpoint DUT must key its own phase advance off the same event the testbench uses to sequence stimulus
+
+**Pattern**: When a design has distinct sequential phases (e.g. train-then-test) driven by a testbench that samples outputs at fixed checkpoints rather than via an explicit handshake, the DUT must advance its internal phase using the SAME signal/event the testbench uses to pace stimulus (e.g. input-change detection via registered comparators plus a fixed-length tick counter) — not an independently-derived timing source. Otherwise phase-N results can land on the wrong checkpoint depending on how long each stimulus vector is held.
+
+**When to apply**: Authoring a multi-phase sequential datapath (training/inference, calibrate/run, load/execute, etc.) whose testbench has no explicit ready/valid handshake and instead samples at implied fixed intervals.
+
+**What to do**: Derive the phase-boundary condition from input-change detection (registered comparators against the previous sample) combined with a fixed slot/tick counter matching the testbench's stimulus-hold convention, so that any hold duration still produces phase-N output at checkpoint-N. Separately, keep signed arithmetic honest across the datapath: sign-extend narrow signed operands to the full accumulator width before any comparison, and size products/accumulators wide enough to avoid truncation.
+
+**Worked pattern** (anonymized): A two-phase (train/test) numeric datapath whose internal phase counter free-ran independent of stimulus timing produced correct results only when stimulus happened to be held for exactly the assumed duration; tying phase advance to registered input-change detection plus the testbench's known slot length made results checkpoint-accurate regardless of hold duration.
+
+**Why this is GENERAL**: Any DUT tested via fixed-checkpoint sampling (rather than handshake) must track the testbench's implicit timing model explicitly in its own state machine; this applies across any multi-phase pipeline/datapath class, not one specific circuit.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: parallelized per-lane stateful encoders — independent replicated state, and emit-and-restart-at-1 termination
+
+**Pattern**: When parallelizing a per-element stateful encoder (run-length encoding, counters, accumulators) into N independent lanes, all state must be replicated as arrays inside a genvar-driven for-loop, with each lane driven purely from its own index — never sharing a counter or "previous value" register across lanes. Lane outputs are then packed into a flattened bus using a consistent per-lane stride sized to cover the maximum representable value inclusively. Separately, correct run-length-style termination is a two-condition emit-and-restart: assert output when EITHER the input value changes OR the counter reaches its maximum, and on that same cycle reset the counter to 1 (not 0), since the current sample already belongs to the new run.
+
+**When to apply**: Authoring any lane-parallelized stateful per-element encoder, or any single-lane run-length/counter encoder with a maximum-run-length boundary.
+
+**What to do**: Use `genvar`/generate-for to instantiate per-lane state registers (counter, previous-value) as arrays; index every read/write by the loop variable so no lane's logic references another lane's register. Size the per-lane field width as $clog2(max_value)+1 (or equivalent) and slice the flattened output bus with a fixed stride per lane. For run termination, check `(input_changed || counter == MAX)` to emit, and restart the counter at 1 (crediting the current sample to the new run) rather than 0.
+
+**Worked pattern** (anonymized): A lane-parallel run-length encoder that accidentally shared one "previous value" register across all lanes corrupted every lane after the first; separately, a single-lane encoder that reset its counter to 0 instead of 1 at the max-length boundary under-counted the first sample of every subsequent run by one.
+
+**Why this is GENERAL**: Per-lane state isolation and the emit-then-restart-at-1 rule are structural correctness requirements for any parallelized or max-length-bounded run/counter encoder, independent of data width or lane count.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: Moore transaction FSM — default-clear one-cycle strobes, sequence multi-pulse outputs across states, latch decisions on entry
+
+**Pattern**: For a Moore/registered-output transaction FSM (e.g. dispense, return-change, error, cancel signals), every one-cycle output strobe must be driven by a per-cycle default-clear at the top of the sequential block, then set only in the state that owns that event — this guarantees exactly-one-cycle pulses with no stale/stuck outputs. When a transaction produces multiple distinct pulses, sequence them across separate states (e.g. a dedicated wait state) so they never overlap and are cleanly one edge apart. Level-based inputs (buttons, cancel) must be edge-detected via a registered "previous" sample so only the rising edge triggers action, and decision inputs (selection, price) should be latched into registers on entry rather than re-read combinationally later.
+
+**When to apply**: Authoring any Moore-style controller FSM that produces discrete one-cycle event strobes and must react to user/level inputs on their transition, not their level.
+
+**What to do**: In the sequential always-block, unconditionally clear every strobe output first, then conditionally set the relevant one(s) based on current state. Insert a dedicated intermediate state between two pulses that must not coincide. Register a `_prev` copy of every level input and gate action on `cur & ~prev` (or the inverse) for edge detection. Latch selection/price/config inputs into a register the cycle the transaction is accepted, and drive all subsequent states from that captured register.
+
+**Worked pattern** (anonymized): A vending-machine-style transaction controller that combinationally asserted "dispense" and "return_change" in the same state produced overlapping pulses; splitting them into consecutive states with default-cleared strobes gave the expected one-cycle-apart pulses matching the checker's edge-based sampling.
+
+**Why this is GENERAL**: Default-clear-then-set strobe generation, state-sequenced multi-pulse outputs, and edge-detected level inputs are universal patterns for any registered-output controller FSM producing discrete transaction events, regardless of the specific transaction domain.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: counting-sort FSM — cumulative-sum placement direction determines stability, shadow next-state arrays avoid latches
+
+**Pattern**: For a multi-cycle counting-sort FSM, correctness hinges on two coupled details: build the cumulative/prefix sum so `count[v]` holds the count of elements `<= v`, then scan the INPUT array from LAST element to FIRST, placing `out[count[val]-1] = val` and decrementing `count[val]` — this last-to-first scan direction is what makes the sort stable; scanning first-to-last silently corrupts the relative order of equal keys. Additionally, every register/array updated in the combinational next-state logic needs a shadow "next_*" copy with a default assignment (to avoid inferred latches), committed to the real registers in a single clocked block.
+
+**When to apply**: Authoring any multi-cycle counting-sort (or similar histogram-then-placement) datapath where stability (preserving the relative order of equal-key elements) matters, or any FSM using combinational next-state arrays.
+
+**What to do**: Compute the histogram, convert to a cumulative sum (`count[v] += count[v-1]`), then iterate the input index from N-1 down to 0, placing each element at `out[count[val]-1]` and decrementing `count[val]`. In the combinational block, always assign a default for every `next_*` signal before any conditional override. Register the done pulse so `out_data` is stable the cycle before (or exactly when) done asserts, matching a checker that samples on the done pulse.
+
+**Worked pattern** (anonymized): A counting-sort FSM that scanned the input first-to-last during placement produced a numerically-sorted but not stably-ordered output for duplicate keys; reversing the scan direction to last-to-first fixed stability without changing the histogram/cumulative-sum logic.
+
+**Why this is GENERAL**: The last-to-first placement rule for stability is a textbook counting-sort property applicable to any such algorithm regardless of data width or element count; the shadow-next-state-with-default pattern is a general latch-avoidance technique for any FSM with array-valued state.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: glitch-free clock mux — cross-coupled break-before-make enables, never a combinational sel decode
+
+**Pattern**: A glitch-free clock multiplexer must NOT combinationally decode the select signal directly onto the output clock. Instead, cross-couple two per-clock enable registers so each clock's enable depends on the OTHER clock's enable being deasserted (`clk1_en <= f(sel) & ~clk2_en`, `clk2_en <= f(sel) & ~clk1_en`). This break-before-make handshake guarantees the two enables are never simultaneously high, and because each enable is retimed in its own clock domain, the AND-gated output (`clk & clk_en`) only toggles while its own clock is at the safe/idle level — preventing runt or glitch pulses during a switch.
+
+**When to apply**: Authoring any clock-domain multiplexer/switch that must produce a glitch-free output clock from two (or more) asynchronous clock sources.
+
+**What to do**: Implement two enable registers, each clocked by its OWN source clock, with next-state logic gated by the select and the OTHER enable's current (already-safe) value. AND each source clock with its own retimed enable to form the muxed output, and route the async reset to force the output clock low. Match the spec's exact sampling edge convention (e.g. posedge vs the textbook negedge second stage) since a checker samples at specific edges.
+
+**Worked pattern** (anonymized): A clock mux that combinationally gated `sel ? clk_a : clk_b` produced runt pulses at the switch boundary whenever the switch occurred near a clock edge; replacing it with cross-coupled, same-domain-retimed enable registers eliminated all glitches at any switch timing.
+
+**Why this is GENERAL**: The cross-coupled break-before-make enable structure is the canonical glitch-free clock-mux topology, applicable to any two (or more, cascaded) asynchronous clock sources regardless of frequency or use case.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: stream width downsizer — capture-then-drain FSM emitting from a held register, not the live input
+
+**Pattern**: A width downsizer (wide word → several narrower beats) must be a phase-counting state machine that captures the wide input word into a holding register on the accepting cycle, then emits the sub-words across subsequent beats in a fixed, spec-defined order (e.g. high sub-word first), deasserting the upstream ready signal during the multi-beat drain so the source cannot overwrite the word mid-split. Each emitted sub-word must come from the CAPTURED register, never the live input port (which may have already changed), and the valid output must remain asserted for every beat of the split.
+
+**When to apply**: Authoring any stream (AXI-Stream or similar) width-downsizing adapter that splits one wide beat into multiple narrower beats.
+
+**What to do**: On the cycle the wide word is accepted (both valid and ready asserted), latch it into a holding register and set a beat counter. Deassert upstream ready until all sub-words have been emitted. Each cycle, drive the output word by slicing the HELD register at the position given by the beat counter, in the byte/word order the spec states, and keep the output valid asserted throughout. Register all of this off the specified reset polarity.
+
+**Worked pattern** (anonymized): A downsizer that combinationally passed through slices of the live input word lost the second beat whenever the upstream advanced its data before the split finished; capturing the wide word once and emitting from the captured register across the beat count fixed the data corruption.
+
+**Why this is GENERAL**: Capture-then-drain from a held register, with upstream backpressure during the drain, is the general structural requirement for any stream width-downsizing adapter regardless of the specific width ratio or byte order.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: cross-clock interval monitor — sampled-edge detection, complete-interval-only comparison, warm-up suppression
+
+**Pattern**: A cross-clock edge-interval monitor (measuring the time between edges of a signal in a different clock domain) must do three things: (1) detect the far-clock edge by sampling it into the local clock domain and comparing against a registered previous sample (`edge = cur & ~prev`); (2) measure the interval by counting local-clock cycles, but only latch/compare the COMPLETED interval at each detected edge — compare the accumulated count against the threshold at the edge, then restart the counter (to 1, crediting the current cycle) that same cycle; and (3) suppress false positives during warm-up, before a first complete interval exists, by gating the comparison behind a free-running cycle counter that rejects the uninitialized/zero interval.
+
+**When to apply**: Authoring any monitor that measures the time between events on a signal from a different (or asynchronous) clock domain and must flag intervals crossing a threshold.
+
+**What to do**: Two-flop (or more) synchronize the monitored signal into the local domain, then edge-detect via a registered previous-sample comparison. Maintain a free-running interval counter that increments each local-clock cycle; on each detected edge, compare the counter's current value against the threshold BEFORE resetting it, then reset it to 1. Gate the comparison output behind a "warm" flag that only asserts after the first complete interval has been measured, so power-on/reset transients don't produce spurious threshold flags. Produce the output flag as a default-low, self-clearing pulse.
+
+**Worked pattern** (anonymized): An interval monitor that compared the counter against the threshold immediately after reset (before any real edge had occurred) raised a false threshold-exceeded flag at power-on; adding a warm-up gate that requires at least one completed interval before comparisons begin eliminated the false positive.
+
+**Why this is GENERAL**: Sampled edge-detection, compare-then-restart-at-1 interval measurement, and warm-up suppression are structural requirements for any cross-clock-domain interval/frequency monitor, independent of the specific signal being measured.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: command-strobe FSM — default-deassert registered strobes, decode polarity literally from the spec's truth table
+
+**Pattern**: For a command-driven controller FSM producing multiple protocol strobe outputs (e.g. chip-select, address-strobe, write-enable style signals), drive them as registered outputs with an explicit default-deassert at the top of the clocked block each cycle, letting only the currently active state override specific bits. This guarantees each command is asserted for exactly one cycle and auto-clears without needing explicit clear logic in every state. Critically, decode the strobe polarity LITERALLY from the spec's per-command truth table rather than assuming a conventional (e.g. standard-protocol active-low) polarity, since a checker compares exact bit patterns per state against the spec, not against convention.
+
+**When to apply**: Authoring any FSM whose spec includes an explicit truth table mapping states/commands to output-signal polarities (common in memory-controller-style or protocol-adapter FSMs).
+
+**What to do**: At the top of the sequential block, default every strobe output to its spec-defined idle/inactive polarity. In the state-dependent logic, override only the bits the active command's row in the truth table specifies, using the EXACT polarity given (do not assume industry-standard active-low/active-high conventions unless the spec states them). Latch request type and address into registers in the idle/accepting state, so downstream states act on stable captured values rather than the transient input.
+
+**Worked pattern** (anonymized): A memory-controller-style FSM that assumed standard active-low strobe conventions produced strobes with inverted polarity relative to the spec's stated truth table, causing every command to read as its logical opposite to the checker; reading the polarity bit-for-bit from the spec's table (rather than assuming convention) fixed all commands simultaneously.
+
+**Why this is GENERAL**: Default-deassert registered strobe generation is a universal technique for any one-cycle command-pulse FSM; literal truth-table polarity decoding (rather than assumed convention) applies to any spec that defines its own bit-level command encoding.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: single-transfer bus-protocol bridge — combinational address-phase passthrough with double byte-enable decode
+
+**Pattern**: In a bus-protocol bridge handling SINGLE transfers, the destination's address-phase attributes (transfer type, size, direction, address, write data) must be driven COMBINATIONALLY from the source request so they are valid in the same cycle the request is presented — a registered (one-cycle-delayed) version arrives too late for a checker sampling mid-transfer. The source's byte-enable/select vector must be decoded TWICE: once into a size encoding (word/half-word/byte), and once to patch the low address bits so they point at the active byte lane within the word. Completion/acknowledge must be gated on the destination's own ready signal, firing only when the downstream transfer actually finishes, not merely when the bridge issues the request.
+
+**When to apply**: Authoring any protocol-to-protocol bus bridge (e.g. a lightweight bus to a more full-featured one) that forwards single (non-burst) transfers.
+
+**What to do**: Wire the destination's address-phase signals directly (combinationally) from the source's request fields — no register stage on the address phase. Decode the byte-enable vector into both a transfer-size field and an adjustment to the low address bits identifying the specific byte/half-word lane. Register or gate the bridge's own completion signal on the downstream ready/ack, not on the request being issued.
+
+**Worked pattern** (anonymized): A bridge that registered the address-phase signals before presenting them to the destination missed the destination's sampling window on single-cycle transfers; switching to a purely combinational address-phase passthrough, combined with decoding the byte-enable vector into both size and low-address-bit patches, resolved both the timing and the misaligned-byte-lane failures.
+
+**Why this is GENERAL**: Combinational address-phase forwarding and dual byte-enable decoding (size + address-bit patch) are structural requirements of any bus-protocol bridge handling single transfers with sub-word granularity, independent of the specific source/destination protocols.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: stream width upsizer with format/sign-extension — single register stage, carry bit replaces original MSB
+
+**Pattern**: For a stream (AXI-Stream style) width upsizer that also performs format conversion or sign-extension, the widening logic itself should be purely combinational, with exactly ONE register stage placed on the payload+valid path so the output valid/data appear the cycle AFTER the input valid (a clean one-cycle latency). The input-ready signal should pass straight through combinationally from the output-ready, so an input transfer is accepted only in cycles the downstream can absorb the pipelined result. The subtle correctness trap is bit assembly when the format/sign option is enabled: a carried/sign bit REPLACES the original most-significant bit of the source word and drives the upper fill, giving an output layout of `{fill, carry_bit, data[MSB-1:0]}` — NOT a blind zero-extend or straight concatenation of the full source word onto the wider field.
+
+**When to apply**: Authoring any stream width-upsizing adapter that includes a configurable sign-extension or format-conversion mode alongside plain zero-extension.
+
+**What to do**: Build the widened word combinationally, register only the final payload+valid (single stage), and pass ready through combinationally. When the format/sign-extend option is enabled, replace the source word's original MSB with a dedicated carry/sign bit fed to the upper fill, rather than concatenating the source word unchanged. Gate this special bit-assembly behind the enable so the disabled path is a plain zero-extend of the full source word.
+
+**Worked pattern** (anonymized): A width upsizer with an optional sign-extend mode that simply zero-extended the source word (ignoring the sign-fill requirement) produced numerically wrong widened values whenever the mode was enabled and the source's top bit was set; replacing the top bit with the dedicated carry/sign bit and filling above it fixed the output for all signed test vectors.
+
+**Why this is GENERAL**: The single-register-stage pipeline structure and the "carry/sign bit replaces original MSB" bit-assembly rule apply to any width-upsizing stream adapter offering a signed/format-aware mode, independent of the specific width ratio.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: command-sequencer FSM — snapshot configuration on accept, exempt only a continuously-monitored abort input
+
+**Pattern**: For a command-driven sequencer FSM (multi-state timed operation with configurable parameters), ALL configuration inputs (operation select, per-state delays, mode selects) must be latched into registers on the single qualified accept/start edge, and the entire run driven from those snapshots — mid-operation changes to these inputs must be ignored. The sole exception is a continuously-monitored abort/error input, which must be able to pre-empt the FSM back to idle from ANY state regardless of the snapshot. Outputs should be decoded as Moore (combinationally from registered state), "start" should only be honored from the idle state and only when no blocking error is asserted, and timed states use a counter compared against (delay−1), with careful attention to how fixed vs. parameterized delays plus the accept-to-first-state launch latency combine to produce the exact expected cycle counts.
+
+**When to apply**: Authoring any FSM that runs a multi-step timed sequence from a configuration snapshot taken at start, with an asynchronous abort capability.
+
+**What to do**: On the accept/start edge, register every configuration input into dedicated snapshot registers; all subsequent state logic reads only the snapshots, never the live input ports. Continuously monitor the abort/error input in every state (not just at accept) and force a transition to idle whenever it asserts. Gate the "start" qualifier to only be honored in idle and only absent a blocking error. For timed states, count up (or down) and compare against `delay - 1`, verifying the exact cycle count including the accept-to-first-state transition latency against the spec's stated timing.
+
+**Worked pattern** (anonymized): A sequencer that re-read a live "mode select" input mid-run changed behavior partway through an operation whenever the input changed during execution; snapshotting all configuration on the accept edge (while still honoring a live abort input) fixed the mid-run instability without blocking legitimate aborts.
+
+**Why this is GENERAL**: Configuration-snapshot-on-accept with a continuously-live abort exception is a general pattern for any timed, parameter-driven sequencer FSM, independent of the specific operation being sequenced.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: mode-configurable MAC/dot-product — per-mode operand signedness, not a global signed/unsigned assumption
+
+**Pattern**: In a mode-configurable MAC or dot-product unit that supports multiple data interpretations (e.g. complex vs real-only operation), operand signedness is PER-MODE, not global. One mode's fields may be genuinely signed (requiring `signed` extraction/sign-extension), while another mode's operands may span the FULL unsigned range and must be treated as unsigned — zero-extending and multiplying as unsigned, since treating them as signed silently negates values at or above the sign-bit boundary. Accumulators and products must be sized to avoid overflow across the maximum accumulation count, and output packing (which fields occupy which bits) differs by mode and must follow the spec exactly for each mode separately.
+
+**When to apply**: Authoring any MAC/accumulator/dot-product datapath with multiple selectable operating modes (real/complex, signed/unsigned, narrow/wide) where each mode may have a DIFFERENT operand interpretation.
+
+**What to do**: For each mode, extract operands using the signedness that mode's spec section specifies — `signed` extraction/sign-extension for genuinely signed fields, plain zero-extension for fields stated to span the full unsigned range. Size the accumulator as at least the product width plus enough guard bits for the maximum number of accumulations. Pack the output per-mode exactly as the spec states (the field order/widths may differ between modes). Treat a mid-computation drop of any input-valid as an error condition rather than silently accumulating stale/garbage data.
+
+**Worked pattern** (anonymized): A dot-product unit that treated all operands as signed regardless of mode produced negative results for a real-only mode's full-range unsigned inputs whenever the top bit was set; switching that mode's extraction to unsigned (while keeping the complex mode's extraction signed) fixed the discrepancy without touching shared accumulation logic.
+
+**Why this is GENERAL**: Per-mode signedness (rather than a single global assumption) is a structural requirement for any multi-mode arithmetic datapath where different modes interpret the same bit-width fields differently.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: streaming MAC accumulator — exact width sizing, valid-gapped stage freeze, and in-flight reload at window boundaries
+
+**Pattern**: For a multi-stage streaming MAC/accumulator, the accumulator must be sized to exactly `2*operand_width + clog2(N)` bits (the product width plus the carry growth from summing N terms) and every pipeline register must be gated on a valid signal delayed to match its OWN stage's latency, so counting, accumulation, and valid_out all track the true datapath depth (first result appearing at N+1 cycles for an N-tap accumulation, or the design's equivalent). The critical correctness trap is at window boundaries: a gap in the input-valid signal must freeze ALL stages (hold state, advance nothing) rather than inserting a bubble; and at the boundary between accumulation windows, the accumulator must restart by LOADING the in-flight product (the first product of the new window), not by zeroing — zeroing drops the first term of every subsequent window.
+
+**When to apply**: Authoring any multi-stage streaming/pipelined MAC, FIR, or windowed-accumulation datapath where accumulation windows repeat back-to-back and the input stream may have gaps.
+
+**What to do**: Size the accumulator register as `2*DWIDTH + $clog2(N)` bits. Create a per-stage valid signal delayed by that stage's pipeline depth, and gate every register (counter, accumulator, output valid) on its own matching valid. On a valid-low cycle, hold every stage's register unchanged. At the start of a new accumulation window, instead of resetting the accumulator to zero, load it directly with the just-computed product for the new window's first term.
+
+**Worked pattern** (anonymized): A streaming accumulator that zeroed on each new window's first cycle (rather than loading the in-flight product) silently dropped the first multiply-add term of every window after the first, producing sums consistently short by one term; loading the accumulator with the in-flight product at the boundary instead of zeroing fixed all subsequent windows.
+
+**Why this is GENERAL**: Exact accumulator width sizing, per-stage valid gating for gap-tolerant pipelines, and load-not-zero at window boundaries are structural requirements for any streaming multi-tap accumulation datapath, independent of the specific operand width or window length.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: time-base generators — derive strobe enables from a down-counter, never gate the clock
+
+**Pattern**: A clock-domain time-based generator (millisecond/microsecond tickers, delay/duration blocks) must derive its slow time bases as single-cycle strobe pulses from a down-counter loaded with `(CLOCK_HZ / 1_000_000) * PERIOD_US` cycles, and use those strobes purely as clock-ENABLES gating register updates on the one system clock. The clock itself must never be divided or gated.
+
+**When to apply**: Authoring any timer, tone generator, delay counter, or nested-duration block that must produce sub-rates (ms ticks, us ticks) from a single fast system clock.
+
+**What to do**: Build one free-running down-counter per rate that reloads and pulses `strobe=1` for exactly one cycle when it reaches zero. Any nested timer (e.g. a duration counter that decrements once per ms) must only advance when its parent strobe is high — never on every clock edge. Size every counter/localparam with `$clog2(N+1)` to avoid width truncation on the reload value. Derive "busy" combinationally from `counter != 0` and generate a one-cycle "done" pulse by registering busy and detecting its falling edge (`busy_d & ~busy`), so completion lands on the exact cycle activity stops.
+
+**Worked pattern** (anonymized): a tone/timer block needed a 1ms tick and, nested inside it, a slower square-wave toggle. The us-tick down-counter strobes every N cycles; the ms duration counter only decrements on the us strobe; the square wave only toggles on the ms strobe. `busy` is `duration_cnt != 0`; `done` is the registered-busy falling edge, giving a clean one-cycle pulse at the exact stop cycle.
+
+**Why this is GENERAL**: Every multi-rate synchronous design (timers, baud generators, PWM, sequencers) needs this same strobe-as-enable idiom to stay single-clock-domain and glitch-free; it is not specific to one peripheral.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: change/edge detectors — compare against a registered previous sample, count flop stages for stated latency
+
+**Pattern**: A change or edge detector must compare the current input against a REGISTERED previous sample (delayed by one clock edge) — the pulse is the XOR of the input and its own one-cycle-delayed flop, never a combinational compare against the live input's earlier value in the same cycle. When the spec states an exact pulse latency ("pulse one cycle AFTER the change"), the number of flop stages in the sequential path must match that count literally, because the checker samples the output at a specific cycle.
+
+**When to apply**: Authoring any detector whose output must pulse in response to an input transition, especially when the spec states a numeric cycle latency for when the pulse appears relative to the change.
+
+**What to do**: Register the previous sample every cycle. Compute the per-bit (or per-signal) XOR against that registered value. If the spec calls for extra latency, add exactly that many additional pipeline registers between the raw XOR and the final output — capture the per-bit pulse into a register, then OR-reduce into the output register on the next edge, rather than trying to shortcut the latency combinationally. Apply any enable/mask BEFORE the reduction step, and give every stored state proper async-reset initialization so disabled/reset cycles emit clean zero pulses instead of stale carry-over.
+
+**Worked pattern** (anonymized): a change detector must output a 1-cycle pulse exactly one cycle after any bit of a wide input changes. Structure: `prev <= cur` (register), `raw_pulse = cur ^ prev` (combinational), `pulse_reg <= |raw_pulse` masked by enable (register), `out <= pulse_reg` (register) — two flop stages between the raw XOR and the final output, matching the stated one-cycle-after latency.
+
+**Why this is GENERAL**: The registered-compare idiom is the only correct way to build any edge/change detector in synchronous logic; counting flop stages to match a stated latency generalizes to any spec that gives an exact cycle offset for an output.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: mode-selected multi-variant encoders — keep every variant always-running, mux combinationally at the output
+
+**Pattern**: In a mode-selected block where several stateful variants (e.g. different line-code encodings, each with running state like an alternating-invert toggle or running parity) share one output, every variant's internal state must be computed and registered EVERY cycle regardless of which mode is currently selected. The mode selector is a purely combinational mux applied AFTER all variants update, never a gate on the variants' own update logic.
+
+**When to apply**: Authoring any design with a runtime-selectable set of stateful sub-algorithms (encoders, filters, protocol variants) sharing one output port, especially when some variants carry history (toggle bits, running parity, edge detectors) that must stay correct even while unselected.
+
+**What to do**: Give every variant its own always-updating register(s), driven unconditionally by the clock (not gated by `mode==this_variant`). Select the final output with a combinational mux keyed on the mode signal. Put any enable/output-disable behavior in that final mux stage (e.g. force output to 0 when disabled) rather than freezing the internal state registers — freezing them corrupts the variant's history for when it's re-selected later. When checking for invalid/unknown input levels (X or Z), use 4-state case-equality (`===`) rather than `==`, since `==` against X/Z evaluates to X and can never flag the error condition.
+
+**Worked pattern** (anonymized): a serial line encoder supports several line codes selected by a mode input; one code needs a running invert-toggle, another a running parity bit. Both toggle/parity registers update every clock regardless of the selected mode; a combinational case-mux on `mode` picks which encoder's bit drives `serial_out`, with `serial_out` forced to 0 when disabled. Input validity is checked with `if (serial_in === 1'bx || serial_in === 1'bz)`.
+
+**Why this is GENERAL**: Any hardware multiplexed among multiple stateful algorithms needs "always update, mux at output" to avoid losing history on temporary deselection; the X/Z case-equality trap applies to any validity check on external inputs.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: interruptible-halt FSMs — checkpoint the pre-interrupt state exactly once, guard against overwrite
+
+**Pattern**: A highest-priority interruptible-halt state (an overload/emergency condition that can preempt any other state and later resume) must checkpoint the pre-interrupt state into a saved-state register exactly once — only on the cycle the halt condition first asserts AND the FSM is not already in the halt state. Without that guard, the checkpoint register gets overwritten with the halt state itself on every subsequent cycle the interrupt condition persists, destroying the state to resume to.
+
+**When to apply**: Authoring any FSM with a top-priority interrupt/halt/fault state that must later resume normal operation at the state it was interrupted from.
+
+**What to do**: Give the interrupt condition an outer `if` before the main state `case`, so it can preempt from any state. On entry, save `saved_state <= present_state` only when `halt_condition && present_state != HALT`. On exit from halt, set `next_state = saved_state`. Drive any associated status/warning output combinationally from the current state (e.g. `warning = (present_state == HALT)`) rather than from a separately-registered flag, so the output never lags the FSM state by a cycle.
+
+**Worked pattern** (anonymized): a controller FSM has states A/B/C and a top-priority HALT state entered on an overload signal. `if (overload) begin if (present_state != HALT) saved_state <= present_state; next_state = HALT; end else if (present_state == HALT && !overload) next_state = saved_state; else <normal case logic>`. `warning = (present_state == HALT)` is purely combinational.
+
+**Why this is GENERAL**: Any preemptive/interrupt-and-resume FSM pattern (fault handling, pause/resume, emergency stop) needs the same "checkpoint once, guarded" idiom regardless of the specific states involved.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: event-triggered accumulators — detect distinct events with registered-previous comparators, not every clock
+
+**Pattern**: An accumulator that must update "once per distinct input event" (not once per clock) has to detect the event by comparing each relevant input against its own registered previous value (`a != a_prev`, `sel != sel_prev`). Accumulating on every clock edge regardless of whether the input actually changed causes identical held inputs to be counted repeatedly, which is the dominant bug in this class.
+
+**When to apply**: Authoring any accumulator, counter, or running-statistic block whose update should fire only on a change in a control or data input, especially when a separate "control changed" condition should re-seed/re-initialize rather than accumulate.
+
+**What to do**: Register a `_prev` copy of every input that gates the update, and compute the change condition from `input != input_prev` every cycle (update the `_prev` registers unconditionally each cycle so the comparison is always a true one-cycle edge, not a stale multi-cycle window). Give the control-change branch (re-seed with the current sample) strictly higher priority than the plain data-change branch, so a newly-started run begins fresh instead of adding onto stale accumulated state. When the accumulation is bipolar (e.g. {-1,+1} style updates), use signed registers and let natural signed overflow/wrap at the declared width be the intended behavior rather than adding saturation logic not called for by the spec.
+
+**Worked pattern** (anonymized): an accumulator sums a signed step value only when a `data` input changes, but resets and reseeds when a `select`/`control` input changes first. `sel_prev <= sel; data_prev <= data;` every cycle; `if (sel != sel_prev) acc <= seed_from(data); else if (data != data_prev) acc <= acc + step;`.
+
+**Why this is GENERAL**: The "registered-previous, unconditional update, priority-ordered event branches" pattern is the standard idiom for any edge-triggered-by-value-change accumulator, independent of what is being accumulated.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: microcoded datapath sequencers — follow the spec's literal polarity and enable-combination table
+
+**Pattern**: In a spec-driven microcoded datapath (bit-slice ALU + program counter + stack + decoder), the dominant correctness risk is signal-polarity and enable-combination discipline, not the arithmetic itself. Active-low control ports must be inverted before use, and composite enables must follow the exact boolean combination the spec states (which is frequently NOT a uniform pattern across similar-looking control signals).
+
+**When to apply**: Authoring any microcoded or bit-sliced datapath controller where the spec defines multiple control signals with stated polarities and a table of which muxes/registers they enable, especially when several muxes look similar but have distinct select-to-input mappings.
+
+**What to do**: Implement every enable exactly as stated — e.g. register-write-enable = `rce OR ~r_en`, mux-select = `rsel AND ~r_en`, output-drive = `oe AND ~oen` — do not "simplify" or assume symmetry between similarly-named signals. Encode each mux's select-to-input mapping from the literal table given per-mux; do not reuse one mux's mapping for another. Keep purely combinational blocks (adders, muxes) feeding the clocked registers (PC, aux, result) so that multi-cycle latencies for registered operations fall out naturally from the register chain depth, while unregistered fetch paths appear same-cycle. Guard any stack pointer increment/decrement with full/empty flags to prevent silent overflow/underflow.
+
+**Worked pattern** (anonymized): a bit-slice sequencer has a push operation that takes 2 cycles (result register then stack-pointer register) and a pop operation that takes 3 (address decode, memory read register, result register) purely because of how many clocked stages sit between input and output — no explicit latency counter is coded, it falls out of the register chain topology.
+
+**Why this is GENERAL**: Any microcoded/bit-sliced control datapath built from a spec's control table has this same failure mode of "look-alike but distinct" enable equations; the discipline of transcribing the literal table (not inferring uniformity) generalizes across all such designs.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: word-wide LFSR/PRBS generators — unroll the bit recurrence combinationally, use an independent reference LFSR for checking
+
+**Pattern**: A word-wide (multiple bits per clock) LFSR must be built by UNROLLING the single-bit shift/feedback recurrence WIDTH times inside a combinational block using a temporary copy of the register, then clocking only the FINAL unrolled state into the real register once per cycle. Clocking the register WIDTH times per cycle is wrong and produces only one output bit per clock instead of WIDTH bits. For a matching PRBS checker, the correct structure is an INDEPENDENT local LFSR that free-runs with the same seed/tap evolution as the transmitter, XORed against the received data to detect errors — loading the received data into the shift register itself corrupts the reference sequence and creates a startup transient.
+
+**When to apply**: Authoring any parallel/word-wide LFSR-based PRBS generator or checker, or any block that must emit or verify N bits of a maximal-length sequence per clock cycle.
+
+**What to do**: In a combinational always block, copy the register to a temp variable; loop WIDTH times computing `feedback = temp[tap] ^ temp[0]` (or whatever the spec's tap positions are), emit each feedback bit into the output word, and shift `temp` by one position per iteration. After the loop, clock the final `temp` into the register once. For the checker side, run a second, independent instance of the same LFSR recurrence (same seed, evolving on its own) and XOR its output against the incoming data stream to flag mismatches — never feed the incoming data back into the reference LFSR's own state. Match the exact bit-order/tap convention (feedback into MSB vs LSB, which tap indices) stated in the spec exactly, since a different convention produces a different (still maximal-length, but non-matching) sequence.
+
+**Worked pattern** (anonymized): a WIDTH-bit-per-clock PRBS generator loops WIDTH times per cycle over a temp copy of an LFSR register to produce WIDTH new bits, then commits once; the matching checker keeps its own free-running reference LFSR and XORs it against `data_in` for the error flag, never loading `data_in` into the reference state.
+
+**Why this is GENERAL**: The unroll-then-commit-once idiom is required for any parallelized LFSR regardless of width or polynomial; the independent-reference-LFSR-for-checking idiom is the standard architecture for any PRBS checker.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: LFSR-style CRC/RS shift encoders — GF(2) feedback via blocking assign, taps via non-blocking
+
+**Pattern**: An RS/CRC-style shift-register (LFSR) encoder is a GF(2) feedback structure: the feedback term is `data_in XOR the TOP (last) parity register`, and each parity stage shifts from its lower neighbor while injecting `feedback * generator_coefficient` via XOR — this is bitwise XOR arithmetic, not a normal add-with-carry. The correct idiom inside the clocked always block mixes assignment types deliberately: the feedback term uses a BLOCKING assign (computed first, so the SAME cycle's shift can use it), while all the parity stage updates use NON-BLOCKING assigns (so they all read the OLD stage values in parallel, as true shift-register semantics require). Making everything blocking corrupts the shift because later stages would read already-updated earlier stages within the same cycle.
+
+**When to apply**: Authoring any CRC or Reed-Solomon-style LFSR encoder/generator described as a shift register with generator-polynomial-coefficient taps.
+
+**What to do**: Inside the clocked block, first compute `feedback = data_in ^ parity[TOP]` with a blocking assign. Then update every parity stage with non-blocking assigns of the form `parity[i] <= parity[i-1] ^ (feedback & gen_coeff[i])` (or the polynomial's specific tap wiring), so all stages advance from their pre-update values simultaneously. Clear every parity register and `valid_out` on reset. Drive `valid_out` from the qualified `enable & valid_in` of the currently-accepted symbol.
+
+**Worked pattern** (anonymized): a CRC/RS encoder with parity registers `p[0..k-1]`; each clock: `feedback = data_in ^ p[k-1];` (blocking) then `p[0] <= feedback & g[0]; p[i] <= p[i-1] ^ (feedback & g[i]);` (all non-blocking) for i=1..k-1.
+
+**Why this is GENERAL**: The blocking-feedback/non-blocking-taps mixed idiom is the standard, well-known correct construction for any LFSR-based polynomial encoder in Verilog/SystemVerilog, independent of the specific generator polynomial or width.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: chained registered pipeline stages — align data latency to the downstream consumer's own register depth
+
+**Pattern**: When a registered producer stage (e.g. a serial-to-parallel shift register that signals completion via a "done" pulse) feeds a registered consumer stage (e.g. a CRC/checksum generator with its own internal register latency), the producer's output must be delayed by exactly the consumer's own latency before being presented to the consumer, so the consumer's output validity coincides with the producer's "done" signal. Wiring the live/unregistered producer output straight into the consumer makes the downstream checker sample a stale or partial word, because the consumer's own pipeline adds extra delta cycles the producer's "done" timing doesn't account for.
+
+**When to apply**: Chaining any two register-based stages (shift register → CRC/ECC/checksum block, FIFO → downstream combiner, etc.) where each stage has its own internal register latency and a shared "valid"/"done" signal is expected to line up with both.
+
+**What to do**: Insert exactly as many delay registers on the producer's output path as the consumer's internal register depth (e.g. if the consumer registers its result twice before presenting `valid`, delay the producer's parallel output by two cycles before feeding it in), so the delayed data and the consumer's output become valid on the same cycle as the shared "done"/"valid" flag. Separately, match reset polarity and synchronicity PER PORT when stages come from different sub-blocks (e.g. one stage may use async active-low reset while another uses synchronous active-low reset) — do not assume uniform reset semantics across sub-blocks. Keep purely combinational encode/syndrome logic fed from unregistered nets where the spec calls for zero added latency, so only the intended pipeline stages add delay.
+
+**Worked pattern** (anonymized): a shift register completes a parallel word and asserts `done`; a CRC generator downstream needs 2 cycles of internal latency before its checksum is valid. The parallel word is piped through two extra delay registers (`parallel_out_q1`, `parallel_out_q2`) before being fed to the CRC generator, so the CRC's valid output lines up with `done` rather than lagging or leading it.
+
+**Why this is GENERAL**: Any multi-stage registered datapath composed of independently-designed sub-blocks needs this pipeline-alignment discipline; it is a general consequence of composing register-latency stages, not specific to shift-registers or CRC.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: APB-attached peripherals — drive PREADY/PSLVERR only in the ACCESS phase, cross clock domains with a glitch-free mux
+
+**Pattern**: For an APB-attached peripheral register block, PREADY and PSLVERR must be driven only during the ACCESS phase (`PSEL && PENABLE`), and deasserted (or held low) whenever the peripheral is not selected. A zero-wait-state slave asserts `PREADY=1` in that same cycle while computing `PSLVERR` combinationally from address/access validity in the same phase (invalid address decode, or an out-of-bounds resource access) — an access to an undecoded address must set `PSLVERR` and must NOT perform any register write. When such a peripheral straddles two clock domains (e.g. the APB clock vs. a faster internal functional clock), a bare combinational clock-select mux is unsafe and must be replaced with a glitch-free dual-flop cross-disabled clock selector so exactly one source is ever gated onto the output at a time.
+
+**When to apply**: Authoring any APB (or similar simple synchronous bus protocol) peripheral register interface, especially one with address-decode-dependent errors or a shared internal clock domain running faster than the bus clock.
+
+**What to do**: Gate `PREADY`/`PSLVERR` generation entirely behind `PSEL && PENABLE`; for zero-wait-state, `PREADY` is simply `PSEL && PENABLE`. Decode the address combinationally in the same phase to derive `PSLVERR = PSEL && PENABLE && (invalid_addr || oob_access)`. Suppress the register write when `PSLVERR` would be set. If the peripheral must select between two clock sources, use a standard glitch-free selector (two flops per candidate clock, cross-disabling each other) rather than `assign clk_out = sel ? clk_a : clk_b`. Give any shared memory a combinational read port so operand capture reflects fresh data without an extra registered-read cycle of skew relative to back-to-back control writes.
+
+**Worked pattern** (anonymized): an APB peripheral decodes a 4-register address map; on `PSEL && PENABLE` with an address outside the map, `PSLVERR` is asserted that cycle and the internal register file is not written, while `PREADY` still completes the transfer in one cycle. A secondary functional clock is brought in through a glitch-free dual-flop clock mux rather than a raw ternary mux on clock nets.
+
+**Why this is GENERAL**: PREADY/PSLVERR access-phase timing is a fixed requirement of the AMBA APB protocol for any compliant peripheral; the glitch-free clock-mux requirement applies to any multi-clock-domain hardware selecting between live clock sources, not just APB peripherals.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: cardinality-changing streaming stages — decouple with a full-frame buffer and separate receive/emit FSM phases
+
+**Pattern**: When a streaming (e.g. AXI-Stream) processing stage changes the number of elements between input and output (a resize that drops samples, a border/padding operation that adds a ring so the frame grows), the stage must NOT attempt to pass data through combinationally in lockstep. Instead it must decouple input and output with a full buffer (RAM sized for the larger of the two frames) and two separate FSM phases: a RECEIVE phase that accepts and stores the whole input frame, and a separate EMIT phase that reads the buffer and produces the output frame at its own pace.
+
+**When to apply**: Authoring any streaming pixel/sample processing block where the output element count per frame differs from the input element count (resampling, cropping, padding/bordering, format conversion with different tiling).
+
+**What to do**: In the RECEIVE phase, assert the input-side ready signal only while actively filling the buffer (e.g. `tready = resetn && receiving`), and write into the buffer whenever `tvalid && tready`. In the EMIT phase, advance the output coordinate counters ONLY on `m_axis_tvalid && m_axis_tready` (true output handshake, not a free-running counter), and compute the buffer read index explicitly from the output coordinates using the exact index-mapping formula implied by the transform (e.g. downsampling: `src = (row/NY)*SY*W_IN + (col/NX)*SX`; bordering: interior pixels read `buffer[(oy-1)*W + (ox-1)]` while edge coordinates are forced to a constant border color). This store-and-forward decoupling is what correctly handles rate mismatch, backpressure stalls, and end-of-row/start-of-frame side-signal alignment; attempting a naive same-cycle streaming pass-through produces off-by-one indexing and incorrect stalls precisely because the input and output element counts differ.
+
+**Worked pattern** (anonymized): a frame stage adds a 1-pixel border, growing a WxH frame to (W+2)x(H+2). It buffers the full incoming frame during a RECEIVE phase (ready only while filling), then in an EMIT phase walks output coordinates (ox, oy) from 0 to W+1/H+1, advancing only on downstream handshake; interior coordinates index the stored buffer at `(oy-1, ox-1)` while border coordinates emit a fixed border color, with row/frame boundary side-signals derived from the output coordinate counters.
+
+**Why this is GENERAL**: Any element-count-changing streaming transform (resize, crop, pad, reshape) requires this buffer-plus-two-phase decoupling; it is a structural consequence of input and output frame sizes differing, independent of the specific transform.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: register files with BIST — one synchronous write driver muxing BIST and normal writes on the primary clock
+
+**Pattern**: A multiport register file's memory array must have exactly ONE synchronous driver: BIST-generated writes and normal-mode writes must be muxed together inside a single `always_ff` clocked on the primary system clock (write BIST data when `test_mode` is active, normal data otherwise), never implemented as two separately-clocked or gated-clock write paths. A gated or separately-derived "test clock" lags the primary clock by a delta and can drop single-cycle write-enable pulses.
+
+**When to apply**: Authoring any register file, memory array, or multiport storage block that includes a built-in self-test (BIST) mode alongside normal read/write operation.
+
+**What to do**: Inside one clocked always block on the main clock, select the write address/data/enable source with a mux keyed on `test_mode` (BIST controller drives them in test mode, normal write port drives them otherwise) — do not create a second write path with its own enable/clock gating. Keep reads zero-latency combinational, so a value written on a prior edge is visible to a read on the very next cycle without extra registered-read latency. Implement BIST itself as a full march sequence — a WRITE-ALL pass over every address followed by a separate READ-ALL pass comparing each address against a deterministic address-derived pattern — before asserting `bist_done`. Force off normal read/write/collision-detection logic while `test_mode` is active.
+
+**Worked pattern** (anonymized): a register file's write port is `always_ff @(posedge clk) if (test_mode) mem[bist_addr] <= bist_wdata; else if (wen) mem[waddr] <= wdata;` — one clock, one driver, muxed source. BIST sweeps every address writing an address-derived pattern, then sweeps again reading and comparing, asserting `bist_done` only after both passes complete cleanly.
+
+**Why this is GENERAL**: The single-synchronous-driver-with-muxed-source rule is a basic requirement for any memory array with more than one write source (BIST, redundancy repair, multiple write ports), independent of array size or BIST algorithm details.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: LIFO stacks — one shared top-of-stack pointer, read from ptr-1 not ptr, register status flags
+
+**Pattern**: A LIFO/stack uses a SINGLE shared top-of-stack pointer, unlike a FIFO's separate head/tail pointers. A write stores at `memory[ptr]` and then increments `ptr`; a read must fetch from `memory[ptr-1]` and then decrement `ptr` — the top element to read is always one below the current write pointer, not at the pointer itself. Every mutation must be guarded by full/empty flags so an overflow or underflow attempt leaves both memory and pointer completely untouched.
+
+**When to apply**: Authoring any LIFO/stack (as opposed to FIFO/queue) storage structure, especially ones exposing status flags (error, valid) alongside data.
+
+**What to do**: Maintain one pointer register. On a legal push: `memory[ptr] <= data_in; ptr <= ptr + 1;` guarded by `!full`. On a legal pop: `data_out <= memory[ptr-1]; ptr <= ptr - 1;` guarded by `!empty`. Register the `error` status flag so it is sampled at the clock edge only when an enable signal hits an already-full (on push) or already-empty (on pop) stack — a legal push/pop must never glitch the error flag. Register `valid` so it is asserted exactly the cycle the corresponding registered `data_out` actually becomes available (one-cycle delayed to match the registered read data), not the same cycle the pop is requested — otherwise the checker samples stale data against an asserted valid.
+
+**Worked pattern** (anonymized): a stack's read logic is `data_out <= memory[ptr-1]; valid <= (pop_req && !empty);` while `error <= (push_req && full) || (pop_req && empty);`, and `ptr` updates by +1 on a guarded push or -1 on a guarded pop, never both in the same cycle.
+
+**Why this is GENERAL**: The single-shared-pointer, read-at-ptr-minus-one structure is the defining property of any LIFO regardless of width or depth; the registered-flag timing discipline applies to any stack exposing status/valid signals to a checker.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: iterative pointer-tree traversal in hardware — explicit stack, one-bit-wider null encoding, fixed per-node cycle cost
+
+**Pattern**: Implementing an iterative in-order (or similar) traversal of a pointer-based tree in hardware requires an EXPLICIT LIFO stack (there is no call stack) plus a null-pointer encoding that is one bit WIDER than the plain node-index width, so that node index 0 remains distinguishable from "no child exists." A plain `$clog2(N)`-bit pointer cannot represent both index 0 and null. The traversal FSM must also visit every node at a FIXED, deterministic number of cycles rather than a data-dependent variable descent, because spec-stated latency formulas (of the form `k*N + c`) assume constant per-node cost.
+
+**When to apply**: Authoring any FSM that iteratively walks a pointer/index-based tree or linked structure in hardware (in-order traversal, tree sort, tree search) where the spec gives an exact total-latency formula in terms of the number of nodes.
+
+**What to do**: Size the pointer register as `$clog2(N) + 1` bits and reserve the all-ones (or another out-of-range) encoding as NULL, distinct from any valid 0..N-1 index. Implement an explicit push/pop stack of these pointers for tracking ancestors to return to. Structure the FSM states so each node visited costs the same fixed number of cycles regardless of whether it has 0, 1, or 2 children (e.g. a store/pop state, a right-child-assignment state, and a re-check/push state, always taken in the same sequence per node) — pad or route through no-op equivalents rather than skipping states for simpler nodes. Latch data/key inputs at the start of an operation so mid-operation input changes don't corrupt an in-flight traversal.
+
+**Worked pattern** (anonymized): a tree-sort/traversal FSM over N nodes uses a `$clog2(N)+1`-bit pointer with all-ones as NULL, an explicit push-down stack for traversal state, and visits every node through the same fixed 3-state sequence, giving a total latency of exactly `4*N + 3` cycles as required by the spec's stated formula.
+
+**Why this is GENERAL**: The one-bit-wider-null-encoding requirement is a basic hardware-pointer necessity for any structure needing a "no such node" sentinel; the fixed-per-node-cost FSM discipline applies whenever a spec gives a closed-form total-latency formula for a data-structure traversal.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: packed-bus DSP reduction blocks — exact sub-sample indexing, signed extremum, and registered-input latency discipline
+
+**Pattern**: Packed-bus DSP blocks that reduce N sub-samples per cycle (decimation, peak/min detection, downsampling) fail in three specific, recurring ways: (1) wrong sub-sample indexing — slot `s` of a packed bus lives at bits `[DATA_WIDTH*s +: DATA_WIDTH]` with slot 0 at the LSB end, so a decimated output slot `q` must map to input slot `q*DEC_FACTOR`, and the exact packing convention must match the checker/reference model rather than a possibly-ambiguous prose description; (2) unsigned comparison of signed data — peak/min extremum logic must apply `$signed()` to each extracted slice and use a signed accumulator, or negative samples compare as spuriously-large unsigned values; (3) latency mismatch — a stated "1 cycle latency" means the input bus AND its `valid` must be registered TOGETHER (with async reset clearing both), with all decimation/peak/packing computed purely combinationally from that registered data, so the data and any derived value become valid on the exact same cycle `valid_out` asserts.
+
+**When to apply**: Authoring any DSP block that reduces or samples across a packed multi-sample bus per clock (decimators, peak/min detectors, downsamplers) with a stated fixed pipeline latency.
+
+**What to do**: Derive the sub-sample bit-slice formula from the packing convention exactly as intended (slot 0 = LSB unless stated otherwise), and pick the input slot for each output slot as `output_slot * DEC_FACTOR` (or whatever the stated decimation relationship is) — verify against how the reference/checker model actually indexes, not just the prose. Wrap every extracted slice destined for a magnitude comparison in `$signed(...)` and accumulate/compare in a signed register. Register the entire input bus and `valid_in` together on the clock (with async reset clearing both), then compute all derived outputs (decimated samples, peak value, any repacking) combinationally from those registered signals so everything lines up with the registered `valid_out` on the same cycle.
+
+**Worked pattern** (anonymized): a peak-detector-with-decimation block over N packed signed samples per cycle: `reg_in <= data_in; reg_valid <= valid_in;` (registered, async-reset cleared) each cycle; combinationally, `peak = $signed(reg_in[...]) > $signed(peak) ? reg_in_slice : peak` across all N slots, and `dec_out[q] = reg_in[(q*DEC):(q*DEC+W-1)]`; `valid_out <= reg_valid` matching the same registered-and-then-combinational structure.
+
+**Why this is GENERAL**: Sub-sample bit-slice indexing conventions, signed-vs-unsigned comparison bugs, and register-then-combine latency discipline are recurring, class-wide failure modes for any packed-bus DSP reduction block, independent of the specific reduction function (decimate, peak, min, sum).
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: iterative fixed-point accumulators — wide intermediate math, implicit narrow-target truncation on store
+
+**Pattern**: In iterative fixed-point update datapaths (accumulator-style update loops such as gradient-descent or DSP integrators), each intermediate computation (product, error term, delta) should be carried in a full-width SIGNED register wide enough to never overflow per the spec's derived bit-width analysis, but the FINAL assignment into the persistent state register should be allowed to IMPLICITLY TRUNCATE the wider sum down to the state register's declared width — i.e. `state_reg <= state_reg + delta` where the right-hand side is computed wider than `state_reg` itself, letting the assignment's natural truncation to the narrower target do the wrapping.
+
+**When to apply**: Authoring any iterative fixed-point accumulator/update loop where the spec derives explicit intermediate bit-widths for products/deltas that exceed the final state register's width, and the reference behavior expects modulo/wraparound truncation rather than saturation.
+
+**What to do**: Declare intermediate signals (products, error terms, deltas) at their full derived width, all signed, so multiplies and additions are exact and don't lose precision mid-computation. Declare every operand and localparam signed so multiplication uses signed semantics. When storing the result back into the narrower persistent state register, do NOT pre-truncate or saturate — simply assign the wider value to the narrower register and let the language's natural bit-truncation (taking the low bits, i.e. implicit mod-2^W) perform the wrap, since that matches a reference model computed as wrap/mod-2^W arithmetic. Avoid the two common traps: truncating too early (losing precision inside the computation) or adding saturation/sign-extension logic on the final store when the spec actually wants a wrap.
+
+**Worked pattern** (anonymized): an iterative fixed-point update computes `delta = signed_error * signed_rate` in a register wider than the state width, then does `w_reg <= w_reg + delta;` where `w_reg` is DATA_WIDTH bits and the right-hand sum is computed at a wider intermediate width — the assignment's implicit truncation to DATA_WIDTH bits is the intended mod-2^W wraparound, not a bug to "fix" with saturation.
+
+**Why this is GENERAL**: The wide-intermediate/narrow-implicit-truncate-on-store pattern is the standard way fixed-point iterative accumulators match a wrap-style reference model in any language with natural narrowing assignment semantics; it generalizes across any datapath computing intermediate products/deltas wider than its persistent state register.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: streaming-source-to-AXI-Stream bridge — latch after fixed read latency, hold on stall
+
+**Pattern**: A bridge from a strobed source buffer (read-enable pulse → data valid N cycles later) into an AXI-Stream-style interface must be a single FSM that (1) never samples the source word in the same cycle it pulses the read strobe — it must wait the source's fixed read latency before latching, and (2) once the output valid is asserted, must hold data/tlast/tuser and valid stable, advancing only on the downstream handshake (valid && ready). If the sink is not ready, the bridge stalls in place rather than dropping or re-fetching a beat.
+
+**When to apply**: Authoring any adapter from a strobe/enable + delayed-data source protocol into a valid/ready streaming interface.
+
+**What to do**: Model the source read latency as an explicit wait count in the FSM before latching into the output register. Drive one read-strobe pulse per beat, default-low every cycle (never held). Compute the "last beat" flag from BOTH a per-word last-marker coming from the source AND a running beat counter reaching the advertised block size, since either alone can undercount edge cases. Do not touch the output register or advance state except on the accepted handshake.
+
+**Worked pattern** (anonymized): a source memory/FIFO with a one-pulse read-enable and a fixed N-cycle read latency feeding a downstream valid/ready consumer. Naive code latched data on the same cycle as the strobe (reading stale/undefined data) or let valid drop mid-beat under backpressure (dropping data). Adding an explicit wait-state counter for the latency, and gating all state advance on `valid && ready`, produced bit-exact streaming behavior under both idle and back-pressured downstream.
+
+**Why this is GENERAL**: Any bridge between a latency-delayed strobe-style memory/peripheral interface and a modern streaming handshake interface has this exact two-part hazard (early sampling, and back-pressure data loss); the fix pattern (explicit latency wait + handshake-gated hold) is protocol-agnostic.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: FSM-gated register file — key side effects off registered current state, one-hot status pulses
+
+**Pattern**: In an FSM-controlled register file (or similar datapath), side effects that must land on a specific cycle (register writes, valid pulses, transform operations like key-XOR) should be keyed off the CURRENT registered state, not the combinational next_state — otherwise the effect either lands one cycle early or spans an extra cycle, breaking a tester's expected cycle-latency count. Status pulses tied to a specific state should be driven as one-hot combinational functions of the current state (asserted only in that state, cleared otherwise), not latched or held across states.
+
+**When to apply**: Authoring any FSM-driven datapath (register file, crypto core, protocol engine) where a downstream checker counts exact cycles from command to effect, and where read and write can be requested in overlapping cycles.
+
+**What to do**: Keep next-state logic purely combinational with a self-holding default (`next_state = state`), and update the state register in a separate sequential block with async/sync reset. Gate every side-effect (write enable, valid flag, one-time pulse) on `state == TARGET_STATE` (the current, already-registered value), never on `next_state`. Arbitrate read against write by making read valid only when `state != WRITE` (or the equivalent busy state), so a read and write never target the same register in the same cycle.
+
+**Worked pattern** (anonymized): a command-driven register file where "valid" and a XOR-transform were originally computed from next_state, causing effects to appear one cycle before the tester expected them. Re-deriving effects from the registered current state (and making the valid flag one-hot per state) aligned the timing exactly and resolved the read/write collision.
+
+**Why this is GENERAL**: The next_state-vs-state timing-off-by-one is one of the most common FSM authoring bugs across any command/register-driven digital block; the one-hot-status-pulse-on-current-state fix generalizes to any design with tester-checked cycle latency.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: serial-shift FSM — override priority ladder, self-clearing pulses, same-cycle shift+drive
+
+**Pattern**: A serial-shift-out FSM (e.g. SPI-like bit-banger) needs three disciplines to be correct: (1) inside the clocked block, override conditions must be checked in strict priority order — a global clear/reset-to-idle must beat a fault/error-entry condition, which must beat the normal per-state case, regardless of what state the FSM is currently in; (2) single-cycle status pulses (like a "done" flag) must be made self-clearing by defaulting to 0 at the top of the relevant branch and setting 1 only on the exact completing transition — never driven as a combinational level that could stay high; (3) the shift register and its bit-counter must update in the SAME cycle the FSM drives the current output bit, so an external sampling edge always latches an already-stable bit rather than one lagging by a cycle.
+
+**When to apply**: Authoring any bit-serial transmit/receive FSM with an external clock-toggle or byte-boundary "done" signal.
+
+**What to do**: Structure the clocked always block as `if (clear) ... else if (fault) ... else case(state) ...` so overrides strictly dominate. Assign the done/status pulse a default 0 at branch entry, and set it 1 only in the exact clause that represents completion. Update shift-register-and-bit-counter together with the bit being driven, not on a delayed/next cycle.
+
+**Worked pattern** (anonymized): a serial transmitter FSM where the done flag was asserted combinationally from a state comparison (stayed high one extra cycle) and the bit counter decremented a cycle after the bit was driven (causing the external sampler to see stale data). Restructuring to priority-ordered override checks, a self-clearing done pulse, and same-cycle shift+drive fixed both defects.
+
+**Why this is GENERAL**: Priority-ordered overrides, self-clearing pulses, and same-cycle datapath-and-control updates are universal FSM-authoring disciplines that apply to any serial protocol engine, not just one interface.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: serial link parity check — sticky error flag, continuously-held TX parity, count-gated validation
+
+**Pattern**: In a serial TX/RX link with a parity-integrity check, the receiver must recompute parity over the fully-reassembled data word and compare it against the transmitted parity bit as a STICKY (latching) error flag that settles at least one cycle before the sampling edge of the "done"/frame-complete signal — a bare single-cycle pulse aligned exactly with "done" risks being sampled while the comparison is still resolving. The transmitted parity bit must be driven on a continuously-held (combinational, never clocked-overwritten) path so it stays valid through the entire frame for the receiver to compare against. Reception/validation must be gated on the RX-side bit counter reaching the expected frame width, not a fixed delay count, so the check only fires once all bits have genuinely arrived.
+
+**When to apply**: Authoring any serial link (UART-like or custom) with an integrity/parity check and a frame-complete signal.
+
+**What to do**: Make the parity-error output a latched (sticky) register set combinationally from the recomputed-vs-received parity comparison, updated a cycle ahead of "done" being sampled. Drive the transmit-side parity bit from a continuously combinational expression across the frame, not a value that gets clocked and could go stale. Gate the comparison/validation logic on `bit_count == expected_width`, not a hardcoded delay.
+
+**Worked pattern** (anonymized): a serial link where parity-error was computed as a same-cycle pulse aligned with "done" (a race the checker sometimes sampled mid-resolution) and gated on a fixed cycle count rather than the actual bit counter. Making the error flag sticky and settle a cycle ahead of "done", and gating validation on the bit counter reaching full width, removed the race.
+
+**Why this is GENERAL**: Any serial protocol with an end-of-frame integrity check faces this same settle-before-sample race and delay-vs-counter gating choice; the fix (sticky flag + counter-gated validation) is protocol-agnostic.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: APB-style register-file peripheral — phase-qualified write strobe, ungated control/disable register, synchronized inout
+
+**Pattern**: For APB and similar memory-mapped register-file peripherals, the write strobe must be qualified with the correct bus phase — write should fire on `psel & pwrite` gated to a single phase (the SETUP edge, i.e. `~penable`) so each register updates exactly once per transaction, not every cycle penable happens to be held. `prdata` must be driven only during an actual read (else it should read 0 when idle). A subtle gating trap: when a global power-down/soft-disable bit masks normal register writes and interrupts, the control register that OWNS that disable bit (and any related interrupt-status bit) must itself remain ungated by the disable — otherwise the block latches permanently off with no software path to re-enable it. Bidirectional inout pins need per-bit tri-state control (`dir ? dout : 1'bz`) with the pin read back through a 2-flop synchronizer before it feeds any edge/level interrupt logic, and read data should pass through one register stage to match a stated single-cycle read latency.
+
+**When to apply**: Authoring any APB/AHB-lite/similar memory-mapped register-file peripheral, especially one with a global enable/disable bit and/or bidirectional GPIO-style pins.
+
+**What to do**: Qualify all write-enables with the correct single-phase bus signal (not just psel/pwrite alone). Route the enable/disable register and its interrupt-status logic OUTSIDE the disable gate itself. Synchronize any external bidirectional pin read-back through 2 flops before using it for interrupt edge detection. Register read data by one stage if the protocol states single-cycle read latency.
+
+**Worked pattern** (anonymized): an MMIO peripheral with a global soft-disable bit gating all register writes, where the disable bit's own control register was accidentally included in the gated set — once disabled, software had no path to re-enable it. Moving the disable-owning register outside the gate, and phase-qualifying the write strobe to the SETUP edge, fixed both the deadlock and a double-write bug.
+
+**Why this is GENERAL**: The phase-qualified-write and self-locking-disable-register traps recur in every APB/memory-mapped peripheral design with a global enable bit; the GPIO synchronizer requirement is universal to any peripheral exposing bidirectional pins.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: BST in-order-rank search — count left-subtree sizes on right turns via explicit sub-traversal
+
+**Pattern**: To report a found key's in-order (sorted) rank from a binary-search-tree search FSM, simple descent-depth counting is wrong — the rank equals the number of nodes preceding it in-order. Correctly computing this requires, at every RIGHT turn during descent, adding 1 (for the passed node) PLUS the full size of that node's left subtree — which, since subtree size is not stored, requires an explicit stack-driven sub-traversal to count it. The final matched node's own left-subtree size must also be added before completing.
+
+**When to apply**: Authoring any hardware BST/tree search FSM that must report a node's sorted position/rank, not just find/not-find.
+
+**What to do**: Use a pointer width of `ceil(log2(N))+1` so an all-ones value is a distinct NULL sentinel distinguishable from valid indices. Drive the datapath from stable combinational views of the packed child/key arrays indexed by the current pointer. On each right-turn during descent, push a sub-traversal to count the passed node's left subtree, adding 1 + that count to the running rank accumulator. Latch the final rank output in the SAME cycle the found/invalid completion flag asserts, so a checker never samples a stale value.
+
+**Worked pattern** (anonymized): a BST rank-search FSM that just counted descent depth as the rank, which is only correct for right-leaning paths; adding an explicit left-subtree-size sub-traversal at each right turn (plus the final node's own left subtree) produced the correct in-order rank for arbitrary tree shapes.
+
+**Why this is GENERAL**: In-order rank computation from raw child-pointer arrays is a standard BST/order-statistics problem whenever subtree size is not maintained as auxiliary state; the sub-traversal-on-right-turn technique applies to any tree shape or size.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: parameterized generate-loop array — named begin block, no accidental else on hold-state flop
+
+**Pattern**: A parameterized array of identical submodules should be instantiated with a `genvar`-driven `generate for` loop, instantiating the child inside a named `begin:label` block and indexing an unpacked wire/reg array for per-instance outputs; the top-level output should be wired from the CORRECT boundary index (e.g. the last element), not index 0 or an arbitrary one. A distinct register-update trap lives inside the leaf cell: a "hold previous value unless enabled" flop must have NO `else` clause after its `else if (enable)` branch — adding one (even to explicitly hold or clear) silently breaks the "retain state when disabled" semantics that an implicit latch-hold relies on.
+
+**When to apply**: Authoring any parameterized array of repeated submodules (neuron arrays, shift-register chains, lane arrays) via generate-for, especially when a leaf cell has an enable-gated register.
+
+**What to do**: Always name the generate block (`begin: label`) and index the shared array with the genvar. Wire the top-level output from the array index that actually represents the architectural boundary (verify against the spec, e.g. last stage). In the leaf cell's sequential always block, write `if (reset) ... else if (enable) <update>;` with NO trailing else — letting the flop implicitly retain its value when neither branch fires. Keep reset in the correct async branch.
+
+**Worked pattern** (anonymized): a generate-for array of identical processing elements where the leaf enable-gated register had an added else-clear branch, which silently zeroed the register every disabled cycle instead of holding state — breaking the intended pipeline/accumulator behavior. Removing the else branch restored correct hold-on-disable behavior.
+
+**Why this is GENERAL**: Generate-for arrays of repeated leaf cells are ubiquitous (systolic arrays, neuron arrays, lane-replicated datapaths); the implicit-latch-via-omitted-else pattern for hold-on-disable registers is a fundamental Verilog idiom independent of what the leaf cell computes.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: directed rounding unit — round-up decision purely from guard/sticky/sign/LSB, never remainder magnitude
+
+**Pattern**: A directed-rounding unit's per-mode round-up decision must be computed purely from the guard bit, sticky bit, sign, and current LSB — never by inspecting the fractional remainder's magnitude. Round-to-nearest-even (RNE) ties must break to even: `round_up = guard & (sticky | lsb)` — a bare tie (guard set, sticky clear) only rounds up when the current LSB is odd. Round-up-magnitude (RUP) and round-down-magnitude (RDN) modes are sign-gated: RUP rounds up only for positive inexact values, RDN only for negative ones. Since incrementing is just `in_data + 1` within the same width, carry-out/overflow is exactly the "all-ones input AND round-up decided" case, while "inexact" is simply `guard | sticky`, independent of whether a round-up actually occurred.
+
+**When to apply**: Authoring any floating-point or fixed-point rounding unit that supports multiple IEEE-754-style rounding modes.
+
+**What to do**: Compute `round_up` combinationally as a boolean function of `(guard, sticky, sign, lsb, mode)` per the formulas above for each supported mode. Compute the rounded result as `in_data + round_up` at the target width. Derive carry-out as `(&in_data) & round_up`. Derive inexact as `guard | sticky` unconditionally. Default (unsupported mode) should truncate. Keep the whole unit combinational.
+
+**Worked pattern** (anonymized): a multi-mode rounding unit where round-up was computed by comparing the actual remainder value against half of the LSB weight, which broke ties-to-even and mis-handled directed modes for negative operands. Replacing it with the guard/sticky/sign/lsb boolean formulas per mode fixed all rounding-mode vectors including ties and sign-gated directed rounding.
+
+**Why this is GENERAL**: Guard-sticky-round decision logic is the standard IEEE-754-style rounding formulation used across any FP/fixed-point unit; deriving it from bit flags rather than remainder magnitude is the textbook-correct, synthesizable approach.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: skid buffer — combinational pass-through ready, registered stall-only capture
+
+**Pattern**: A skid buffer must decouple the combinational ready/valid pass-through path from the registered stall path: `o_ready = ~buffer_full` (a pure function of the buffer's own occupancy, never of downstream ready), and `o_data`/`o_valid` are a mux — held beat when the skid buffer is full, else the input passed through combinationally. The skid register is captured ONLY on a stall event (input valid and not ready while the pass-through was otherwise empty) and released once downstream becomes ready. The naive trap is either registering the entire datapath (adding unwanted latency) or making upstream-ready depend combinationally on downstream-ready (creating a ready→valid→ready combinational loop across pipeline stages).
+
+**When to apply**: Authoring any single-beat pipeline decoupling buffer meant to absorb one cycle of back-pressure without adding steady-state latency.
+
+**What to do**: Drive `o_ready` purely from the skid buffer's own full/empty state. Mux `o_data`/`o_valid` between the held skid-register content (when full) and the live combinational input (when empty). Only write the skid register on the specific stall-entry event; only clear it once the downstream handshake completes. Never let downstream `ready` feed back combinationally into this stage's own `ready`.
+
+**Worked pattern** (anonymized): a pipeline decoupling stage where `ready` was computed as a function of the downstream stage's `ready` signal, creating a combinational loop across two chained stages that timing tools flagged. Rewriting `ready` to depend only on local buffer occupancy, with a genuinely-single-register skid path, broke the loop while preserving zero-bubble throughput.
+
+**Why this is GENERAL**: The skid-buffer pattern (one register absorbing exactly one beat of back-pressure with purely local ready generation) is the canonical solution for combinational-loop-free valid/ready pipelining, applicable to any streaming or bus protocol.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: parallel-prefix adder — half-sum propagate, carry vector one bit wider than operands
+
+**Pattern**: A parallel-prefix (Brent-Kung/Kogge-Stone-style) adder must compute `sum[i] = p[i] ^ c[i]` where `p = a ^ b` is the HALF-sum propagate signal (XOR only — NOT `a^b^cin` folded together), and `c[i]` is the carry INTO bit i, with `c[0] = carry_in` and the prefix recurrence `c[i+1] = g[i] | (p[i] & c[i])`. Two class-level traps: (1) `carry_out` is `c[W]` — the carry out of the MSB from the recurrence — NOT `g[W-1]` or a truncated bit, so the carry vector must be sized W+1 bits wide; (2) index alignment — `sum` uses `c[W-1:0]` (the carry INTO each bit), never a `c[W:1]` shifted view.
+
+**When to apply**: Authoring any parallel-prefix adder (Kogge-Stone, Brent-Kung, Sklansky, etc.) regardless of the specific prefix-tree topology used to reduce logic depth.
+
+**What to do**: Size the internal carry vector `[W:0]` (W+1 bits). Compute generate/propagate per bit as `g=a&b`, `p=a^b`. Build the prefix tree to produce all `c[i]` from the recurrence. Assign `sum = p ^ c[W-1:0]` and `carry_out = c[W]`. Verify the hierarchical/tree implementation produces bit-identical carries to this flat ripple recurrence — the tree only reduces depth, not the carry values.
+
+**Worked pattern** (anonymized): a prefix adder where `carry_out` was assigned from the top-level generate signal `g[W-1]` instead of the full recurrence's `c[W]`, and where sum used a carry vector shifted by one index — both produced wrong results only on operand patterns generating a carry through the entire width. Correcting the carry-vector width to W+1 and re-aligning the sum indexing fixed all vectors.
+
+**Why this is GENERAL**: Every parallel-prefix adder topology reduces to the same flat carry recurrence for correctness verification; the width/off-by-one traps recur regardless of which specific prefix tree (Kogge-Stone, Brent-Kung, etc.) is chosen.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: AXI4-Lite register slave — independent self-clearing per-channel handshake FSMs, decode on latched address
+
+**Pattern**: An AXI4-Lite slave register file must implement each channel (write-address, write-data, write-response, read-address, read-data) as an INDEPENDENT, self-clearing handshake FSM: assert the channel's `*ready` only until the corresponding `*valid` fires (one-shot, then de-assert), latch the address into a holding register at accept time, and hold `bvalid`/`rvalid` asserted until the master's `bready`/`rready` acknowledges before dropping it — dropping early loses the response or causes the bus to double-fire. Register-file decode must use the LATCHED address, never the live bus signal (which may have already changed). Write-strobe semantics must be honored: a full write-strobe updates the register, a partial or missing strobe should acknowledge without modifying data. Writes to read-only or undefined offsets must always return an error response (SLVERR), never silently complete OKAY.
+
+**When to apply**: Authoring any AXI4-Lite (or similarly two-phase valid/ready bus) slave register file.
+
+**What to do**: Give each of the 5 channels its own one-shot ready/valid handshake FSM. Latch address and data at the accept cycle. Hold response-channel valids until the corresponding ready is observed. Decode register offsets from the latched (not live) address register. Check write-strobe bits before applying data; check the decoded offset against the valid register map before returning OKAY vs SLVERR.
+
+**Worked pattern** (anonymized): an AXI4-Lite register slave that decoded the write address combinationally from the live bus (which changed as soon as awready deasserted) and dropped bvalid the same cycle it was asserted rather than waiting for bready — causing writes to occasionally land in the wrong register and responses to be missed by the master. Latching the address at accept time and holding bvalid until bready fixed both defects.
+
+**Why this is GENERAL**: The five-channel independent-handshake structure, latched-address decode, and mandatory SLVERR-on-illegal-access are universal AXI4-Lite slave requirements independent of what registers the particular slave implements.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: APB master FSM — stable signals across SETUP+ACCESS, PENABLE only in ACCESS, timeout on stuck slave
+
+**Pattern**: An APB (or similar two-phase request/enable) master must implement the mandated IDLE→SETUP→ACCESS sequence: PSEL/PWRITE/PADDR/PWDATA are driven and held stable across BOTH the SETUP and ACCESS phases, while PENABLE is asserted ONLY during ACCESS (never during SETUP). The transfer completes exactly when PREADY is sampled high during ACCESS. Address/data must be latched at capture time (in IDLE) and held stable until completion — not re-sampled from a possibly-changing source. A bounded timeout counter should force a clean return to IDLE (with all outputs deasserted) if a slave never asserts PREADY, so a stuck slave cannot hang the master indefinitely. If multiple request sources can fire simultaneously, resolve them with a fixed-priority if-else chain so exactly one request is captured deterministically each cycle.
+
+**When to apply**: Authoring any APB (or structurally similar two-phase enable) bus master.
+
+**What to do**: Implement IDLE/SETUP/ACCESS as explicit FSM states. Latch address/write-data/write-flag in IDLE when a request is accepted. Assert PSEL from SETUP through ACCESS; assert PENABLE only in ACCESS. Transition back to IDLE (or SETUP for a back-to-back transfer) only when PREADY is sampled high in ACCESS, or when a timeout counter expires. Arbitrate simultaneous request sources with a fixed priority chain.
+
+**Worked pattern** (anonymized): an APB master where PENABLE was asserted starting in the SETUP state (violating protocol timing) and there was no timeout, so a slave that never drove PREADY hung the master forever. Restructuring PENABLE to assert only in ACCESS and adding a bounded timeout with clean recovery to IDLE fixed both issues.
+
+**Why this is GENERAL**: The IDLE/SETUP/ACCESS timing and PENABLE-only-in-ACCESS rule are protocol-mandated for every APB master regardless of the peripheral behind it; the timeout-recovery and fixed-priority-arbitration patterns generalize to any master facing an unreliable or multi-source request environment.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: pipelined GF-matrix cipher stage — match valid pipeline depth to data pipeline depth exactly
+
+**Pattern**: For a pipelined GF(2^8)-arithmetic cipher stage (e.g. a MixColumns-style transform) with a fixed "N-cycle from input-valid to output-valid" latency contract, the valid flag and the data must flow through EXACTLY the same number of register stages so output-valid and output-data assert on the same cycle. A naive implementation under-pipelines the valid signal (or samples data one stage off from where valid asserts), producing the classic one-cycle-early/late valid or stale/held data bug. Two algorithm-specific invariants also commonly get inverted: the GF(2^8) `xtime` operation XORs the reduction polynomial (0x1B) only when the top bit is set; and in an encrypt/decrypt pair, encrypt XORs the round key AFTER the forward transform while decrypt XORs the key BEFORE the inverse transform (the order is not symmetric).
+
+**When to apply**: Authoring any fixed-latency pipelined datapath (cipher round, DSP pipeline, arithmetic unit) where valid must track data exactly, especially one built from GF(2^n) arithmetic with an encrypt/decrypt pair.
+
+**What to do**: Do the combinational per-stage math once on a registered copy of the inputs, and pipe a PARALLEL valid chain (`s1_valid → s2_valid → ... → o_valid`) with the exact same number of stages as the data path, gating the output data with the matching valid bit so it reads zero when not valid. Double-check the `xtime`/reduction conditional-XOR direction and the key-XOR-before-vs-after-transform ordering against the spec's encrypt and decrypt definitions separately.
+
+**Worked pattern** (anonymized): a pipelined GF(2^8) transform stage where the data path was 2 registers deep but the valid signal was only 1 register deep, so o_valid asserted a cycle before o_data was actually ready — and the decrypt path XORed the key after the inverse transform instead of before. Adding the missing valid pipeline stage and swapping the decrypt key-XOR position to before the inverse transform fixed both.
+
+**Why this is GENERAL**: Valid/data pipeline-depth mismatch is a universal bug class in any fixed-latency pipelined datapath; the GF(2^8) xtime-and-key-order asymmetry between encrypt/decrypt is a standard invariant across any block-cipher-style linear-transform stage.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: run-length encoder — emit-on-event only, restart run count at 1, phase-align via registered prev-sample
+
+**Pattern**: A streaming run-length counter must emit `valid` for exactly one cycle on either of two distinct events — a value transition (current sample differs from the previous registered sample) OR the run counter saturating at its configured maximum — and must hold `valid` low otherwise (never emit continuously while a run continues). On either triggering event, the just-completed run length must be latched into the output register while the counter restarts at 1 (not 0), since the current sample already belongs to the start of the next run. All of valid/run-value/data-out must be phase-aligned to the same clock edge, which is achieved by using a single registered "previous sample" value for both the edge-detection comparison and the emitted data-out.
+
+**When to apply**: Authoring any run-length encoding or similar "emit summary on transition or overflow" streaming counter.
+
+**What to do**: Size the counter width as `$clog2(max_run)+1` so the maximum representable run length doesn't silently wrap. Compare the registered previous sample against the current sample for the transition event; compare the counter against the max-run parameter for the saturation event. On either event, latch the counter's pre-event value into the run-length output, and reset the counter to 1. Drive data-out from the same registered previous-sample value used for edge detection.
+
+**Worked pattern** (anonymized): a run-length encoder that emitted `valid` continuously while a run was in progress (rather than only on transition/saturation) and restarted its counter at 0 after a run completed, undercounting the next run by one. Restricting valid to the two trigger events and restarting the counter at 1 fixed both defects.
+
+**Why this is GENERAL**: Emit-on-event-not-continuously and restart-count-at-1-not-0 are universal correctness rules for any streaming run-length / delta encoder, independent of the specific data width or maximum run length parameter.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: MMIO timer with level interrupt — edge-detect the match with a sticky flag, write-clear wins ties
+
+**Pattern**: For an MMIO timer/counter that raises a level interrupt on a count-match, the interrupt must be EDGE-detected — pulsed/set only on a NEW match transition (tracked via a sticky "already-matched" flag) — rather than asserted continuously for as long as `count == match` holds; otherwise a held match condition perpetually re-triggers the interrupt. A software write to the status/clear register must take PRIORITY over the match-set path in the same cycle, so that a clear issued the same cycle a new match would otherwise set the flag correctly wins — otherwise the write-to-clear can never actually clear a persistently-matching timer.
+
+**When to apply**: Authoring any MMIO timer/counter/watchdog peripheral with a level-style interrupt status bit and a software write-to-clear mechanism, especially over a wider bus than the register's native width.
+
+**What to do**: Maintain a sticky "matched-already" bit that gates the interrupt-set logic so it only fires on the transition into match, not while held. In the same always block, give the status-clear write path priority over the interrupt-set path so a same-cycle clear always wins. For register accesses over a wider bus, take/zero-extend the low bits appropriately on read/write (`{16'd0, field}` pattern). Use synchronous reset and combinational reads with a default-0 case for undecoded addresses.
+
+**Worked pattern** (anonymized): an MMIO timer where the interrupt-status bit was set combinationally whenever `count == match`, so it stayed asserted (and immediately re-asserted after any clear) for the entire duration the counter held at the match value. Adding a sticky "already matched" flag to edge-detect the transition, and giving the clear-write path same-cycle priority over the set path, made the interrupt correctly pulse once and stay clearable.
+
+**Why this is GENERAL**: Level-vs-edge interrupt confusion and write-clear-priority races are a universal MMIO peripheral bug class, applicable to any counter, timer, or status-flag register with a software-clear path.
+
+_Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
