@@ -613,6 +613,18 @@ prompts genuinely name no module → correct `chip_top` degrade).
    synthesis correctly routes to the spec-to-rtl **AI-backup** (with dual-track
    convergence), NOT a fabricated deterministic prose→RTL bridge. Do not build
    one — it would be the § 4 over-fit the doctrine forbids.
+   **The deterministic driver for this entry is
+   `benchmark/cvdp_phase1_entry.py`** (v1.3.14): it stages each record's
+   `input.prompt` + `input.context` ONLY (never `output`/`harness`), forces it
+   through `vibe_ic_one_shot_runner.py`, and classifies each case's emit path as
+   `deterministic` (json-to-rtl fired, no LLM) vs `needs_ai_backup` (prose body
+   → spec-to-rtl). Same dataset → byte-identical per-case verdicts. It
+   establishes the DETERMINISTIC half and the exact AI-backup work-list; the
+   AI-backup completions + deterministic RTL are then gated by `cvdp_gate.py`
+   (SOLE EMIT) → official `run_benchmark.py`. A context-bearing record (133/302)
+   has a real `module (...)` header in `input.context`, so its top_module +
+   ports are recovered deterministically; a prompt-only record uses the
+   module-name prose extraction (v1.3.12) and hands the body to the AI-backup.
 4. **Meta-lesson:** a benchmark can be "passing" on one entry while an entirely
    different entry has never been exercised. When the owner designates a
    canonical entry (here: Phase-1), re-establish the number THROUGH that entry
