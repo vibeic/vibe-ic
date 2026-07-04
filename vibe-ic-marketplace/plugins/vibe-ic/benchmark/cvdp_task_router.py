@@ -48,13 +48,70 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# CVDP category-id → (task nature, route). The ONLY spec→RTL nature is cid003.
-_CID_TASK: Dict[str, Dict[str, str]] = {
-    "cid003": {"nature": "spec_generation", "route": "phase1_entry"},
-    "cid002": {"nature": "completion", "route": "ai_led"},
-    "cid004": {"nature": "functional_modification", "route": "ai_led"},
-    "cid007": {"nature": "optimization", "route": "ai_led"},
-    "cid016": {"nature": "debug", "route": "ai_led"},
+# CVDP category-id → task nature + the PLUGIN ENTRY (a step or loop-of-steps)
+# that nature enters. NONE of these is "out of scope": every nature maps to a
+# concrete plugin capability. Each entry names its deterministic-first program(s)
+# (program-first), the AI skill that leads the novel-case body, and the verify
+# gates that close the loop. All programs/skills referenced here exist in the
+# plugin (programs/*.py, skills/*/SKILL.md).
+#
+# `route` is coarse: `phase1_entry` (Phase-1 owns spec→RTL) vs `plugin_loop`
+# (a different plugin loop owns the transform). `plugin_entry` carries the
+# concrete step list for the caller to execute.
+_CID_TASK: Dict[str, Dict[str, Any]] = {
+    # Pure text spec → brand-new RTL: the Phase-1 (spec→design-doc→RTL) domain.
+    "cid003": {
+        "nature": "spec_generation", "route": "phase1_entry",
+        "plugin_entry": {
+            "name": "phase1_spec_to_rtl",
+            "deterministic_first": ["phase1_one_shot_runner.py",
+                                    "deterministic_rtl_dispatcher.py"],
+            "ai_backup": ["spec-to-rtl"],
+            "verify": ["rtl_hygiene_lint.py", "spec_conformance_check.py",
+                       "phase2-rtl-verify"],
+        }},
+    # Given a partial interface/RTL → complete the design.
+    "cid002": {
+        "nature": "completion", "route": "plugin_loop",
+        "plugin_entry": {
+            "name": "completion_loop",
+            "deterministic_first": ["cvdp_context_interface_recover.py",
+                                    "modify_complete_synth.py"],
+            "ai_backup": ["spec-to-rtl"],
+            "verify": ["rtl_hygiene_lint.py", "spec_conformance_check.py",
+                       "phase2-rtl-verify"],
+        }},
+    # Given RTL → change its behaviour per a spec delta (functional ECO).
+    "cid004": {
+        "nature": "functional_modification", "route": "plugin_loop",
+        "plugin_entry": {
+            "name": "modify_loop",
+            "deterministic_first": ["cvdp_context_interface_recover.py",
+                                    "modify_complete_synth.py"],
+            "ai_backup": ["rtl-repair", "eco-plan"],
+            "verify": ["equivalence-check", "phase2-rtl-verify",
+                       "rtl_hygiene_lint.py"],
+        }},
+    # Reduce area / pass lint thresholds (yosys cell/wire, verilator -Wall).
+    "cid007": {
+        "nature": "optimization", "route": "plugin_loop",
+        "plugin_entry": {
+            "name": "optimize_loop",
+            "deterministic_first": ["rtl_hygiene_lint.py"],
+            "ai_backup": ["rtl-review", "synth-doctor", "ppa-predict"],
+            "verify": ["equivalence-check", "phase2-rtl-verify"],
+        }},
+    # Given buggy RTL → fix until it matches the spec.
+    "cid016": {
+        "nature": "debug", "route": "plugin_loop",
+        "plugin_entry": {
+            "name": "debug_loop",
+            "deterministic_first": ["cvdp_context_interface_recover.py",
+                                    "debug_first_pass.py"],
+            "ai_backup": ["rtl-repair"],
+            "verify": ["phase2-rtl-verify", "equivalence-check",
+                       "formal-verify", "rtl_hygiene_lint.py"],
+        }},
 }
 
 _CID_RE = re.compile(r"^cid0*\d+$", re.IGNORECASE)
@@ -85,12 +142,17 @@ def classify_task_nature(prompt: str,
     if cid and cid in _CID_TASK:
         t = _CID_TASK[cid]
         return {"nature": t["nature"], "route": t["route"],
+                "plugin_entry": t["plugin_entry"],
                 "source": "cid_label", "needs_ai_parse": False}
-    # Unlabelled: deterministic fallback + AI-parse flag.
+    # Unlabelled general prompt: deterministic fallback + AI-parse flag. Existing
+    # RTL context ⇒ a transform → the modify_loop entry (the closest general
+    # plugin loop); no context ⇒ Phase-1 spec→RTL.
     if has_context:
-        return {"nature": "transform_existing_rtl", "route": "ai_led",
+        return {"nature": "transform_existing_rtl", "route": "plugin_loop",
+                "plugin_entry": _CID_TASK["cid004"]["plugin_entry"],
                 "source": "context_heuristic", "needs_ai_parse": True}
     return {"nature": "spec_generation", "route": "phase1_entry",
+            "plugin_entry": _CID_TASK["cid003"]["plugin_entry"],
             "source": "no_context_heuristic", "needs_ai_parse": True}
 
 
@@ -130,15 +192,18 @@ def main(argv: Optional[List[str]] = None) -> int:
                 continue
 
     phase1 = [r for r in routed if r["route"] == "phase1_entry"]
-    ai_led = [r for r in routed if r["route"] == "ai_led"]
+    plugin_loop = [r for r in routed if r["route"] == "plugin_loop"]
     by_nature: Dict[str, int] = {}
+    entry_of: Dict[str, str] = {}
     for r in routed:
         by_nature[r["nature"]] = by_nature.get(r["nature"], 0) + 1
+        pe = r.get("plugin_entry") or {}
+        entry_of[r["nature"]] = pe.get("name", "?")
     report = {
         "dataset": str(ds),
         "n": len(routed),
         "phase1_entry": len(phase1),
-        "ai_led": len(ai_led),
+        "plugin_loop": len(plugin_loop),
         "by_nature": by_nature,
         "records": routed,
     }
@@ -146,12 +211,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         Path(a.report).write_text(
             json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    print(f"cvdp_task_router: {len(routed)} record(s)")
-    print(f"  route → phase1_entry : {len(phase1)}  (spec_generation only)")
-    print(f"  route → ai_led       : {len(ai_led)}  (completion/modify/optimize/debug)")
-    print("  by nature:")
+    print(f"cvdp_task_router: {len(routed)} record(s) — every nature enters a plugin step/loop")
+    print(f"  route → phase1_entry : {len(phase1)}  (spec_generation)")
+    print(f"  route → plugin_loop  : {len(plugin_loop)}  (completion/modify/optimize/debug)")
+    print("  by nature → plugin entry:")
     for nat in sorted(by_nature):
-        print(f"    {nat:26} {by_nature[nat]}")
+        print(f"    {nat:26} {by_nature[nat]:>4}  → {entry_of.get(nat)}")
     return 0
 
 
