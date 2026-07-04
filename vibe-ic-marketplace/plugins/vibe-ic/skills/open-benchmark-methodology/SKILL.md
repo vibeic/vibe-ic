@@ -560,7 +560,7 @@ This rule overrides any "skip, it's a known FLOOR" or "just re-run the fails" in
 | VerilogEval-Human (156) | **C** | `gates.py` + LLM | host iverilog + `<Prob>_test.sv` | Done 153/156 = 98.08% | Floor: 062/093/149 |
 | RTLLM v2 (50) | **B** (CORRECT) — was done **C** in 2026-05-28 by mistake, target a re-run | `vibe_ic_one_shot_runner.py --skip-phase3 --skip-analog --skip-hardware` | host iverilog + `testbench.v` (cwd=design) | 37/50 = 74% under wrong-shape; target re-run to measure runner | Iverilog-tool-gap floor: `ring_counter`, `asyn_fifo` (VCS-only TB constructs) |
 | CVDP (N=1 example) | **D** (CORRECT) — was done as direct-agent in 2026-05-28, target re-run | `vibe_ic_one_shot_runner.py` | MCP `eda_cocotb` against hidden harness | SUPERSEDED by cvdp-open | spec/harness reset-polarity inconsistency → async-reset resolution |
-| **cvdp-open (749, HF v1.1.0)** | **C/D** | nonagentic: local_export → blind author → `cvdp_gate.py` (sole emit); agentic: official docker agent | official `run_benchmark.py` + OSS sim image (run `cvdp_env_preflight.py` FIRST, #536) | RUNNABLE — 302-problem no_commercial track scored 210/302 = 69.5% single-shot | HF v1.1.0 dataset `nvidia/cvdp-benchmark-dataset`; sim image fully OSS (icarus 13 / yosys 0.40 / cocotb 2.0.1) — NO tool substitution; triage via `cvdp_fail_triage.py` (#534) |
+| **cvdp-open (749, HF v1.1.0)** | **C/D** | nonagentic: local_export → blind author → `cvdp_gate.py` (sole emit); agentic: official docker agent. ⚠️ **This is DIRECT-AI-AUTHOR gated by `cvdp_gate.py`, NOT the Phase-1 runner chain — see § 5.1.** | official `run_benchmark.py` + OSS sim image (run `cvdp_env_preflight.py` FIRST, #536) | RUNNABLE — 302-problem no_commercial track scored 210/302 = 69.5% single-shot **(blind-author number; a Phase-1-entry number is NOT yet established — TARGET RE-RUN, see § 5.1)** | HF v1.1.0 dataset `nvidia/cvdp-benchmark-dataset`; sim image fully OSS (icarus 13 / yosys 0.40 / cocotb 2.0.1) — NO tool substitution; triage via `cvdp_fail_triage.py` (#534) |
 | PyHDL-Eval (168 Verilog track) | **E** (BLOCKED) | n/a | n/a | Documented blocked — 168 RefModule golden removed from public repo | Self-built-oracle subset is possible but not official pass@1 |
 | RTL-Repo (~4000) | **E** (OUT OF SCOPE) | n/a | n/a | Documented out-of-scope — Edit-Similarity / Exact-Match string metric, not functional generation | |
 | CVDP full (1500+) | **D** if access granted | runner | cocotb | SUPERSEDED by cvdp-open (749 open via HF v1.1.0); remainder stays gated | |
@@ -568,6 +568,55 @@ This rule overrides any "skip, it's a known FLOOR" or "just re-run the fails" in
 | MetRex (25,868) | Not pursued | n/a | n/a | Metric *reasoning* (predict area/delay/power), not generation | |
 | ResBench | Not pursued | n/a | n/a | FPGA resource metrics; different toolchain | |
 | ChipAgentsBench | Not yet public | n/a | n/a | Plan to re-evaluate when subset releases | |
+
+### § 5.1 — LESSON (2026-07-05): CVDP has TWO entries; every published CVDP number so far is the BLIND-AUTHOR entry, not the Phase-1 runner
+
+**Root cause found by driving CVDP through the Phase-1 entry for the first time
+(user directive "clean-run CVDP from the single Phase-1 entry").** Every CVDP
+number ever published by this repo — single-shot 210/302, converged 215/245,
+FAIR 234 — was produced by the **blind-author Shape-C flow**: an AI author reads
+`input.prompt` (+ `input.context`) and writes the RTL completion `rtl/<name>.sv`
+**directly**, `cvdp_gate.py` is the sole emit gate (hygiene `--fix` + iverilog
+parse + yosys smoke + round-trip), and the official cocotb/iverilog harness
+scores it. **Evidence:** `rerun_v1254b / rerun_v1258_blind / rerun_v1293_hard94 /
+run_clean_v1252` contain `responses*.jsonl` + `drafts/` + `batches/` and **zero
+`phase1/generated_docs/L9`** — Phase 1 is never invoked on that path. A blind
+response record is literally a hand/AI-authored `module <name> ( … )` string.
+
+**Why the "L9 empty / json-to-rtl never fires" problem never appeared before:**
+that flow never produces L1/L9 at all — the AI author lifts the module name and
+ports straight from the prompt, so there is no extraction step to fail.
+
+**Why it appeared now:** the Phase-1 doc-extraction track (L1 pin_table, L9
+top_module/top_ports) was tuned on vendor **DATASHEET** docs — rich structured
+inputs with real `module ( … );` headers and pin tables. CVDP nonagentic records
+are terse **PROMPTS** using idioms the doc-track had never been exercised on:
+`Module Name:` labels / `## Module Name` headings, inline ``module `name` ``
+references, and directional-prose `Inputs:`/`Outputs:` bullets. So L9 came back
+empty (`top_module=chip_top`, `top_ports=[]`). Fixed program-first in **v1.3.12**
+(ORGANIC-20260705): module-name prose extraction + reverse L1→L9 port backfill +
+pin dedup (top_module recovered 0→6 of the first 10; the 4 residual encoder
+prompts genuinely name no module → correct `chip_top` degrade).
+
+**The governance consequence (BINDING for anyone quoting a CVDP number):**
+1. **Always label WHICH entry a CVDP number came from.** "245/302" is a
+   **blind-author** number; it does NOT measure the Phase-1 runner chain that
+   § 1 says our published number must measure. Quoting it as "the plugin's
+   Phase-1 score" is wrong.
+2. The blind-author path is legitimately Shape-C (AI authors, plugin gate is the
+   sole emit path) — but it is closer to "Opus + `cvdp_gate.py`" than to
+   "Phase-1 → json-to-rtl". Disclose that in the RESULT.md (§ 3 already requires
+   the substitution disclosure; add an ENTRY disclosure too).
+3. **A Phase-1-entry CVDP number is a TARGET RE-RUN and does not exist yet.** On
+   that path the deterministic boundary is: Phase-1 carries the module NAME +
+   PORT LIST (structural facts — now fixed); the behavioral-prose → RTL BODY
+   synthesis correctly routes to the spec-to-rtl **AI-backup** (with dual-track
+   convergence), NOT a fabricated deterministic prose→RTL bridge. Do not build
+   one — it would be the § 4 over-fit the doctrine forbids.
+4. **Meta-lesson:** a benchmark can be "passing" on one entry while an entirely
+   different entry has never been exercised. When the owner designates a
+   canonical entry (here: Phase-1), re-establish the number THROUGH that entry
+   before claiming it — do not inherit a number earned by a different flow.
 
 ## § 6 — The benchmark RESULT.md must include
 
