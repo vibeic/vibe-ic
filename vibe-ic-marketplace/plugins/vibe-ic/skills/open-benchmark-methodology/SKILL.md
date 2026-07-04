@@ -625,6 +625,32 @@ prompts genuinely name no module → correct `chip_top` degrade).
    has a real `module (...)` header in `input.context`, so its top_module +
    ports are recovered deterministically; a prompt-only record uses the
    module-name prose extraction (v1.3.12) and hands the body to the AI-backup.
+5. **A FIRST-LAYER task-nature ROUTER runs BEFORE Phase-1** — CVDP is NOT a
+   uniform spec→RTL benchmark (owner architecture 2026-07-05). Its 302
+   nonagentic records span FIVE task natures, and only ONE is the plugin's
+   Phase-1 (spec→design-doc→RTL) domain. `benchmark/cvdp_task_router.py` decides
+   the route DETERMINISTICALLY from the dataset's own `cidNNN` label:
+
+   | cid | nature | count | route |
+   |---|---|---|---|
+   | cid003 | spec generation (pure text → new RTL) | 78 | **phase1_entry** |
+   | cid002 | completion (partial RTL/interface → complete) | 94 | ai_led |
+   | cid004 | functional modification (given RTL → change behaviour) | 55 | ai_led |
+   | cid007 | optimization (area/lint thresholds) | 40 | ai_led |
+   | cid016 | debug (buggy RTL → fix to spec) | 35 | ai_led |
+
+   → **78 route to Phase-1; 224 are AI-led** transforms of existing RTL that must
+   NOT be forced through Phase-1's doc extraction (wrong tool). Composition of the
+   302 no_commercial slice: difficulty easy 162 / medium 140 (no hard); 133/302
+   ship `input.context` RTL (cid004/007/016 always; cid002 mostly in-prompt).
+   `cvdp_phase1_entry.py` consumes the router and drives ONLY the 78
+   spec_generation records through Phase-1; the 224 AI-led ids are recorded
+   out-of-Phase-1-scope. For a GENERAL (unlabelled) prompt the first layer is a
+   real AI parse — `classify_task_nature()` gives the deterministic fallback
+   (context RTL ⇒ ai_led; else ⇒ phase1_entry) and sets `needs_ai_parse=True` so
+   the caller confirms the nature. **A published Phase-1-entry CVDP number is
+   therefore over the 78 spec_generation records — the metric the plugin's
+   spec→RTL pipeline actually owns.**
 4. **Meta-lesson:** a benchmark can be "passing" on one entry while an entirely
    different entry has never been exercised. When the owner designates a
    canonical entry (here: Phase-1), re-establish the number THROUGH that entry

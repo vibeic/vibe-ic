@@ -59,6 +59,9 @@ _HERE = Path(__file__).resolve()
 _PLUGIN_ROOT = _HERE.parents[1]
 _RUNNER = _PLUGIN_ROOT / "programs" / "vibe_ic_one_shot_runner.py"
 
+sys.path.insert(0, str(_HERE.parent))
+from cvdp_task_router import route_record  # noqa: E402  (sibling adapter)
+
 # The record keys the Phase-1 entry is allowed to read. output.* / harness are
 # the scoring oracle and MUST NOT participate in authoring/extraction (§ 4.05).
 _ALLOWED_INPUT_KEYS = frozenset({"prompt", "context"})
@@ -209,6 +212,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="comma-separated id allow-list (overrides --limit)")
     ap.add_argument("--timeout", type=int, default=300,
                     help="per-case runner timeout (s)")
+    ap.add_argument("--route-all", action="store_true",
+                    help="drive EVERY record through Phase-1 regardless of task "
+                         "nature (debug only; default routes only "
+                         "spec_generation via cvdp_task_router)")
     ap.add_argument("--report", default="",
                     help="report JSON path (default <run>/phase1_entry_report.json)")
     a = ap.parse_args(argv)
@@ -239,33 +246,62 @@ def main(argv: Optional[List[str]] = None) -> int:
             if a.limit and not id_allow and len(records) >= a.limit:
                 break
 
-    results = [run_case(r, run_dir, a.timeout) for r in records]
+    # FIRST-LAYER ROUTING (owner architecture 2026-07-05): only a pure-text
+    # SPEC-GENERATION task is the plugin's Phase-1 domain. completion / modify /
+    # optimize / debug are AI-led transforms of existing RTL — NOT forced through
+    # Phase-1's doc-extraction. `--route-all` overrides for debugging.
+    results: List[Dict[str, Any]] = []
+    for rec in records:
+        route = route_record(rec)
+        if a.route_all or route.get("route") == "phase1_entry":
+            res = run_case(rec, run_dir, a.timeout)
+            res["route"] = route.get("route")
+            res["task_nature"] = route.get("nature")
+            results.append(res)
+        else:
+            # AI-led: recorded, NOT driven through Phase-1.
+            results.append({
+                "id": rec.get("id"),
+                "route": route.get("route"),
+                "task_nature": route.get("nature"),
+                "emit_path": "ai_led_out_of_phase1_scope",
+            })
 
     # Deterministic summary.
     n = len(results)
-    tm_ok = sum(1 for r in results
+    driven = [r for r in results if r.get("route") == "phase1_entry"
+              or a.route_all]
+    n_driven = len(driven)
+    n_ai_led = n - n_driven
+    tm_ok = sum(1 for r in driven
                 if r.get("top_module") not in (None, "chip_top"))
-    det = sum(1 for r in results if r.get("emit_path") == "deterministic")
-    ai = sum(1 for r in results if r.get("emit_path") == "needs_ai_backup")
-    p1_pass = sum(1 for r in results if r.get("phase1") == "PASS")
+    det = sum(1 for r in driven if r.get("emit_path") == "deterministic")
+    ai_backup = sum(1 for r in driven
+                    if r.get("emit_path") == "needs_ai_backup")
+    p1_pass = sum(1 for r in driven if r.get("phase1") == "PASS")
     report = {
         "dataset": str(ds),
         "n": n,
+        "routed_phase1_entry": n_driven,
+        "routed_ai_led": n_ai_led,
         "phase1_pass": p1_pass,
         "top_module_recovered": tm_ok,
         "emit_deterministic": det,
-        "emit_needs_ai_backup": ai,
+        "emit_needs_ai_backup": ai_backup,
         "cases": results,
     }
     out = Path(a.report) if a.report else (run_dir / "phase1_entry_report.json")
     out.write_text(json.dumps(report, indent=2, ensure_ascii=False),
                    encoding="utf-8")
 
-    print(f"cvdp_phase1_entry: {n} record(s) driven THROUGH Phase-1 entry")
-    print(f"  phase1 PASS            : {p1_pass}/{n}")
-    print(f"  top_module recovered   : {tm_ok}/{n}")
-    print(f"  emit deterministic     : {det}/{n} (json-to-rtl, no LLM)")
-    print(f"  emit needs AI-backup   : {ai}/{n} (prose body → spec-to-rtl)")
+    print(f"cvdp_phase1_entry: {n} record(s)")
+    print(f"  routed → Phase-1 entry : {n_driven} (spec_generation)")
+    print(f"  routed → AI-led        : {n_ai_led} (completion/modify/optimize/debug — out of Phase-1 scope)")
+    print(f"  --- of the Phase-1 subset ---")
+    print(f"  phase1 PASS            : {p1_pass}/{n_driven}")
+    print(f"  top_module recovered   : {tm_ok}/{n_driven}")
+    print(f"  emit deterministic     : {det}/{n_driven} (json-to-rtl, no LLM)")
+    print(f"  emit needs AI-backup   : {ai_backup}/{n_driven} (prose body → spec-to-rtl)")
     print(f"  report                 : {out}")
     return 0
 
