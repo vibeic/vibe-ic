@@ -2754,6 +2754,8 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 ### Skill: glitch-free clock mux — cross-coupled break-before-make enables, never a combinational sel decode
 
+**Verification tier**: Tier 1 — VERIFIED blind-absorbable (zero-oracle blind A/B at the real CVDP oracle: baseline FAILED, lesson-injected flipped to full PASS). See `DISTILL-20260704-ic-expert-agent-46-skills-FULL-46-verified.md`.
+
 **Pattern**: A glitch-free clock multiplexer must NOT combinationally decode the select signal directly onto the output clock. Instead, cross-couple two per-clock enable registers so each clock's enable depends on the OTHER clock's enable being deasserted (`clk1_en <= f(sel) & ~clk2_en`, `clk2_en <= f(sel) & ~clk1_en`). This break-before-make handshake guarantees the two enables are never simultaneously high, and because each enable is retimed in its own clock domain, the AND-gated output (`clk & clk_en`) only toggles while its own clock is at the safe/idle level — preventing runt or glitch pulses during a switch.
 
 **When to apply**: Authoring any clock-domain multiplexer/switch that must produce a glitch-free output clock from two (or more) asynchronous clock sources.
@@ -2894,6 +2896,8 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 ### Skill: change/edge detectors — compare against a registered previous sample, count flop stages for stated latency
 
+**Verification tier**: Tier 1 — VERIFIED blind-absorbable (zero-oracle blind A/B at the real CVDP oracle: baseline FAILED, lesson-injected flipped to full PASS). See `DISTILL-20260704-ic-expert-agent-46-skills-FULL-46-verified.md`.
+
 **Pattern**: A change or edge detector must compare the current input against a REGISTERED previous sample (delayed by one clock edge) — the pulse is the XOR of the input and its own one-cycle-delayed flop, never a combinational compare against the live input's earlier value in the same cycle. When the spec states an exact pulse latency ("pulse one cycle AFTER the change"), the number of flop stages in the sequential path must match that count literally, because the checker samples the output at a specific cycle.
 
 **When to apply**: Authoring any detector whose output must pulse in response to an input transition, especially when the spec states a numeric cycle latency for when the pulse appears relative to the change.
@@ -3006,6 +3010,8 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 ### Skill: APB-attached peripherals — drive PREADY/PSLVERR only in the ACCESS phase, cross clock domains with a glitch-free mux
 
+**Verification tier**: Tier 2 — VERIFIED converge-aid (zero-oracle blind A/B: lesson injection produced a directionally-correct improvement — closer latency, progressed past an earlier failure stage — but did not reach a full PASS alone). See `DISTILL-20260704-ic-expert-agent-46-skills-FULL-46-verified.md`.
+
 **Pattern**: For an APB-attached peripheral register block, PREADY and PSLVERR must be driven only during the ACCESS phase (`PSEL && PENABLE`), and deasserted (or held low) whenever the peripheral is not selected. A zero-wait-state slave asserts `PREADY=1` in that same cycle while computing `PSLVERR` combinationally from address/access validity in the same phase (invalid address decode, or an out-of-bounds resource access) — an access to an undecoded address must set `PSLVERR` and must NOT perform any register write. When such a peripheral straddles two clock domains (e.g. the APB clock vs. a faster internal functional clock), a bare combinational clock-select mux is unsafe and must be replaced with a glitch-free dual-flop cross-disabled clock selector so exactly one source is ever gated onto the output at a time.
 
 **When to apply**: Authoring any APB (or similar simple synchronous bus protocol) peripheral register interface, especially one with address-decode-dependent errors or a shared internal clock domain running faster than the bus clock.
@@ -3061,6 +3067,8 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: iterative pointer-tree traversal in hardware — explicit stack, one-bit-wider null encoding, fixed per-node cycle cost
+
+**Verification tier**: Tier 2 — VERIFIED converge-aid (zero-oracle blind A/B: lesson injection produced a directionally-correct improvement — closer latency, progressed past an earlier failure stage — but did not reach a full PASS alone). See `DISTILL-20260704-ic-expert-agent-46-skills-FULL-46-verified.md`.
 
 **Pattern**: Implementing an iterative in-order (or similar) traversal of a pointer-based tree in hardware requires an EXPLICIT LIFO stack (there is no call stack) plus a null-pointer encoding that is one bit WIDER than the plain node-index width, so that node index 0 remains distinguishable from "no child exists." A plain `$clog2(N)`-bit pointer cannot represent both index 0 and null. The traversal FSM must also visit every node at a FIXED, deterministic number of cycles rather than a data-dependent variable descent, because spec-stated latency formulas (of the form `k*N + c`) assume constant per-node cost.
 
@@ -3118,6 +3126,8 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 ### Skill: FSM-gated register file — key side effects off registered current state, one-hot status pulses
 
+**Verification tier**: Inconclusive (confounded) — the sampled zero-oracle blind A/B run showed condition B failing at an earlier stage (SystemVerilog elaboration: implicit-cast errors on unrelated signal assignments), but root-cause analysis found this was an unrelated authoring slip by that specific blind-author sample, not something the lesson's content (current-state-gating, one-hot pulses) asks for or implies. Not evidence the lesson is harmful; also not yet evidence it helps — re-sample before citing either way. See `DISTILL-20260704-ic-expert-agent-46-skills-FULL-46-verified.md`.
+
 **Pattern**: In an FSM-controlled register file (or similar datapath), side effects that must land on a specific cycle (register writes, valid pulses, transform operations like key-XOR) should be keyed off the CURRENT registered state, not the combinational next_state — otherwise the effect either lands one cycle early or spans an extra cycle, breaking a tester's expected cycle-latency count. Status pulses tied to a specific state should be driven as one-hot combinational functions of the current state (asserted only in that state, cleared otherwise), not latched or held across states.
 
 **When to apply**: Authoring any FSM-driven datapath (register file, crypto core, protocol engine) where a downstream checker counts exact cycles from command to effect, and where read and write can be requested in overlapping cycles.
@@ -3146,6 +3156,8 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 ### Skill: serial link parity check — sticky error flag, continuously-held TX parity, count-gated validation
 
+**Verification tier**: Tier 2 — VERIFIED converge-aid (zero-oracle blind A/B: lesson injection produced a directionally-correct improvement — closer latency, progressed past an earlier failure stage — but did not reach a full PASS alone). See `DISTILL-20260704-ic-expert-agent-46-skills-FULL-46-verified.md`.
+
 **Pattern**: In a serial TX/RX link with a parity-integrity check, the receiver must recompute parity over the fully-reassembled data word and compare it against the transmitted parity bit as a STICKY (latching) error flag that settles at least one cycle before the sampling edge of the "done"/frame-complete signal — a bare single-cycle pulse aligned exactly with "done" risks being sampled while the comparison is still resolving. The transmitted parity bit must be driven on a continuously-held (combinational, never clocked-overwritten) path so it stays valid through the entire frame for the receiver to compare against. Reception/validation must be gated on the RX-side bit counter reaching the expected frame width, not a fixed delay count, so the check only fires once all bits have genuinely arrived.
 
 **When to apply**: Authoring any serial link (UART-like or custom) with an integrity/parity check and a frame-complete signal.
@@ -3173,6 +3185,8 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: BST in-order-rank search — count left-subtree sizes on right turns via explicit sub-traversal
+
+**Verification tier**: Tier 2 — VERIFIED converge-aid (zero-oracle blind A/B: lesson injection produced a directionally-correct improvement — closer latency, progressed past an earlier failure stage — but did not reach a full PASS alone). See `DISTILL-20260704-ic-expert-agent-46-skills-FULL-46-verified.md`.
 
 **Pattern**: To report a found key's in-order (sorted) rank from a binary-search-tree search FSM, simple descent-depth counting is wrong — the rank equals the number of nodes preceding it in-order. Correctly computing this requires, at every RIGHT turn during descent, adding 1 (for the passed node) PLUS the full size of that node's left subtree — which, since subtree size is not stored, requires an explicit stack-driven sub-traversal to count it. The final matched node's own left-subtree size must also be added before completing.
 
@@ -3258,6 +3272,8 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 
 ### Skill: APB master FSM — stable signals across SETUP+ACCESS, PENABLE only in ACCESS, timeout on stuck slave
 
+**Verification tier**: Tier 1 — VERIFIED blind-absorbable (zero-oracle blind A/B at the real CVDP oracle: baseline FAILED, lesson-injected flipped to full PASS). See `DISTILL-20260704-ic-expert-agent-46-skills-FULL-46-verified.md`.
+
 **Pattern**: An APB (or similar two-phase request/enable) master must implement the mandated IDLE→SETUP→ACCESS sequence: PSEL/PWRITE/PADDR/PWDATA are driven and held stable across BOTH the SETUP and ACCESS phases, while PENABLE is asserted ONLY during ACCESS (never during SETUP). The transfer completes exactly when PREADY is sampled high during ACCESS. Address/data must be latched at capture time (in IDLE) and held stable until completion — not re-sampled from a possibly-changing source. A bounded timeout counter should force a clean return to IDLE (with all outputs deasserted) if a slave never asserts PREADY, so a stuck slave cannot hang the master indefinitely. If multiple request sources can fire simultaneously, resolve them with a fixed-priority if-else chain so exactly one request is captured deterministically each cycle.
 
 **When to apply**: Authoring any APB (or structurally similar two-phase enable) bus master.
@@ -3271,6 +3287,8 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
 
 ### Skill: pipelined GF-matrix cipher stage — match valid pipeline depth to data pipeline depth exactly
+
+**Verification tier**: Tier 2 — VERIFIED converge-aid (zero-oracle blind A/B: lesson injection produced a directionally-correct improvement — closer latency, progressed past an earlier failure stage — but did not reach a full PASS alone). See `DISTILL-20260704-ic-expert-agent-46-skills-FULL-46-verified.md`.
 
 **Pattern**: For a pipelined GF(2^8)-arithmetic cipher stage (e.g. a MixColumns-style transform) with a fixed "N-cycle from input-valid to output-valid" latency contract, the valid flag and the data must flow through EXACTLY the same number of register stages so output-valid and output-data assert on the same cycle. A naive implementation under-pipelines the valid signal (or samples data one stage off from where valid asserts), producing the classic one-cycle-early/late valid or stale/held data bug. Two algorithm-specific invariants also commonly get inverted: the GF(2^8) `xtime` operation XORs the reduction polynomial (0x1B) only when the top bit is set; and in an encrypt/decrypt pair, encrypt XORs the round key AFTER the forward transform while decrypt XORs the key BEFORE the inverse transform (the order is not symmetric).
 
