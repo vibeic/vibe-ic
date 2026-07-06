@@ -3,8 +3,8 @@
   "_schema": "entries[].{ic_class, lesson_count, lessons[]}",
   "_source": "distilled from proven-correct (officially-scored PASS) reference designs; benchmark identifiers scrubbed at build time (blindness).",
   "_consistency": "lessons are DESIGN-CRAFT ADVICE for the AI author; they add knowledge, they do NOT assert hard rules that a gate/program checks. No lesson may contradict a deterministic gate.",
-  "classes": 84,
-  "total_lessons": 94,
+  "classes": 86,
+  "total_lessons": 98,
   "entries": [
     {
       "ic_class": "accumulator-datapath",
@@ -78,9 +78,10 @@
     },
     {
       "ic_class": "async-fifo-cdc",
-      "lesson_count": 1,
+      "lesson_count": 2,
       "lessons": [
-        "A dual-clock FIFO must use (ADDR_WIDTH+1)-bit Gray-coded pointers passed through 2-flop synchronizers, and the full/empty tests must operate on the GRAY (not binary) values so a single-bit transit through the CDC never mis-decodes. Empty is asserted when the local read Gray pointer equals the synchronized write Gray pointer; full is asserted when the write Gray pointer equals the synchronized read Gray pointer with its TOP TWO bits inverted (the Gray-domain equivalent of \"MSB differs, all lower bits equal\") — inverting only the MSB is the classic trap that breaks the full flag. Increment enables must be gated (w_inc & ~w_full, r_inc & ~r_empty) and each pointer/synchronizer pair reset in its own clock domain's async-reset block."
+        "A dual-clock FIFO must use (ADDR_WIDTH+1)-bit Gray-coded pointers passed through 2-flop synchronizers, and the full/empty tests must operate on the GRAY (not binary) values so a single-bit transit through the CDC never mis-decodes. Empty is asserted when the local read Gray pointer equals the synchronized write Gray pointer; full is asserted when the write Gray pointer equals the synchronized read Gray pointer with its TOP TWO bits inverted (the Gray-domain equivalent of \"MSB differs, all lower bits equal\") — inverting only the MSB is the classic trap that breaks the full flag. Increment enables must be gated (w_inc & ~w_full, r_inc & ~r_empty) and each pointer/synchronizer pair reset in its own clock domain's async-reset block.",
+        "Cummings-style async FIFO: the binary->Gray conversion is pure combinational, but the Gray-coded pointer itself must be REGISTERED in a sequential block SEPARATE from the one that increments the binary pointer, so the registered Gray pointer reflects the pre-increment binary value and therefore lags the binary pointer by exactly one clock. Computing next-binary and next-Gray together and latching both in one block (though it looks equivalent) makes the full/empty flags take effect one cycle early relative to the data, misaligning them against a cycle-accurate reference."
       ]
     },
     {
@@ -218,9 +219,10 @@
     },
     {
       "ic_class": "edge-change-detector",
-      "lesson_count": 1,
+      "lesson_count": 2,
       "lessons": [
-        "A change/edge detector must compare the current input against a REGISTERED previous sample (delayed by one clock) — the combinational XOR of input vs its own flop is the pulse. When the spec dictates a specific pulse LATENCY (\"pulse one cycle AFTER the change\"), count the flop stages literally: the sequential path must add exactly that many registers (here the per-bit XOR pulse is captured into a register, then OR-reduced into the output register on the next edge), because the checker samples the output at an exact cycle. Also apply the enable/mask BEFORE the reduction and honor async-reset init on every stored state, so disabled/reset cycles produce clean zero pulses rather than stale carry-over."
+        "A change/edge detector must compare the current input against a REGISTERED previous sample (delayed by one clock) — the combinational XOR of input vs its own flop is the pulse. When the spec dictates a specific pulse LATENCY (\"pulse one cycle AFTER the change\"), count the flop stages literally: the sequential path must add exactly that many registers (here the per-bit XOR pulse is captured into a register, then OR-reduced into the output register on the next edge), because the checker samples the output at an exact cycle. Also apply the enable/mask BEFORE the reduction and honor async-reset init on every stored state, so disabled/reset cycles produce clean zero pulses rather than stale carry-over.",
+        "Pattern/pulse detectors: when the spec's worked example shows the output asserting in the SAME cycle the pattern completes (e.g. an input stream and its output response line up with no extra cycle of delay), make the detect output MEALY — a combinational function of the already-registered state and the current input — even if the prose says to set the output 'inside the clocked always block'. Registering the output (Moore) inserts one extra cycle and shifts the asserted cycle late by one; trace the worked example bit-for-bit to decide Mealy vs Moore rather than following the prose's block-placement hint."
       ]
     },
     {
@@ -602,6 +604,20 @@
       "lesson_count": 1,
       "lessons": [
         "In a cache/TLB with a combinational associative lookup but a registered (synchronous) fill, you must pipeline-latch the request that missed: capture the looked-up virtual_address AND its fetched entry into registers, then install them one cycle later at the replacement slot — because by the time the fill's write-enable asserts, the live input address has already advanced, so writing `virtual_address` directly caches the wrong tag. Also drive hit/miss combinationally from the valid-bit + tag compare with a safe default of miss=1/hit=0 (overridden inside the match loop), invalidate all valid bits on both reset and flush, and advance a round-robin replacement index only on an actual write."
+      ]
+    },
+    {
+      "ic_class": "integer-clock-divider",
+      "lesson_count": 1,
+      "lessons": [
+        "Integer clock divider: divided-clock outputs described as 'toggled'/'reset-initialized' are REGISTERS, not a combinational decode of the current count. The CANONICAL odd-divisor 50%-duty divider is the OR of a posedge half-rate LEVEL and a negedge half-rate LEVEL: use one counter cnt1 on posedge and cnt2 on negedge, each counting 0..NUM_DIV-1, and register each level as `clk_div_k <= (cnt_k < NUM_DIV/2)` (a LEVEL that is high for the first floor(NUM_DIV/2) counts, NOT a single toggle-at-a-point — a lone toggle every NUM_DIV counts would divide by 2*NUM_DIV, not NUM_DIV). The reset value of each clk_div_k is DERIVED, not guessed: cnt resets to 0 and 0 < NUM_DIV/2, so the level is 1 at reset — reset clk_div_k to 1'b1 to match its own cnt==0 level. Combine with `clk_div = clk_div1 | clk_div2`. A combinational `assign clk_div=(cnt<LIMIT)` or a toggle-on-limit form shifts the phase and fails a cycle-accurate check even when the average ratio is right."
+      ]
+    },
+    {
+      "ic_class": "serial-to-parallel-deserializer",
+      "lesson_count": 1,
+      "lessons": [
+        "Serial-to-parallel deserializer collecting N bits into a word with a REGISTERED valid output: shift the incoming bit in at the LSB while the register shifts left (`data <= {data[W-2:0], din}`) so the first-received bit lands in the MSB (MSB-first). For the completion strobe, size the bit counter to N+1 terminal states (count 0..N, not 0..N-1): shift on counts 0..N-1, and assert the REGISTERED dout_valid on the dedicated terminal count N — i.e. ONE cycle AFTER the Nth bit is shifted in, when the full word is stable — as a one-cycle pulse, then return to 0. A registered output inherently lags one cycle, so asserting valid the SAME cycle as the Nth shift races the consumer; the extra terminal state also cleanly re-synchronizes the counter when the upstream valid strobe deasserts irregularly around the last bit. Gate the counter/shift on the input valid and clear the counter when it deasserts so each frame starts aligned."
       ]
     }
   ]

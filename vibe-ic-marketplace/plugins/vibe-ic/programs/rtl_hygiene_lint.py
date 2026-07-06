@@ -1666,6 +1666,75 @@ def rule_incomplete_sensitivity(src: str, path: str) -> List[Finding]:
     return findings
 
 
+def _incomplete_sens_sites(src: str):
+    """Yield (paren_open_idx, paren_close_idx, sens_text) for every LEVEL-sensitive
+    `always @(<explicit list>)` whose body READS a signal not in the list — i.e. the
+    exact firing condition of rule_incomplete_sensitivity. Shared by the WARN rule's
+    autofix so detection and repair can never drift. Read-only; returns spans into src."""
+    for m in re.finditer(r'\balways\b\s*@\s*(\()([^)]*)(\))', src):
+        open_i, sens, close_i = m.start(1), m.group(2), m.start(3)
+        if '*' in sens or re.search(r'\b(pos|neg)edge\b', sens):
+            continue                                   # @(*) or clocked — exempt
+        listed = set(re.findall(r'[A-Za-z_]\w*', sens))
+        if not listed:
+            continue
+        rest = src[m.end():]
+        bm = re.match(r'\s*begin\b', rest)
+        if bm:
+            depth, start = 0, None
+            tok = re.compile(r'\b(begin|end)\b')
+            body = None
+            for t in tok.finditer(rest):
+                if t.group(1) == 'begin':
+                    if depth == 0:
+                        start = t.end()
+                    depth += 1
+                else:
+                    depth -= 1
+                    if depth == 0:
+                        body = rest[start:t.start()]
+                        break
+            if body is None:
+                continue
+        else:
+            semi = rest.find(';')
+            if semi == -1:
+                continue
+            body = rest[:semi + 1]
+        body = re.sub(r"\b\d*'[sS]?[bBoOdDhH][0-9a-fA-FxXzZ_]+", " ", body)
+        lhs = set(re.findall(r'(\w+)(?:\s*\[[^\]]*\])?\s*(?:<=|=)(?!=)', body))
+        reads = {t for t in re.findall(r'[A-Za-z_]\w*', body)
+                 if t not in VERILOG_KEYWORDS and t not in lhs
+                 and not re.match(r"^\d", t)}
+        if reads - listed:
+            yield (open_i, close_i, sens)
+
+
+def autofix_incomplete_sensitivity(path: Path) -> Tuple[int, List[str]]:
+    """`--fix` for rule_incomplete_sensitivity: rewrite a combinational
+    `always @(<explicit list>)` whose body reads an unlisted signal to `always @(*)`.
+
+    Safe & value-preserving: for a LEVEL-sensitive (non-edge) block, `@(*)` is the
+    universally-correct sensitivity list — synthesis already ignores the sim
+    sensitivity list, so the netlist is unchanged, while simulation stops missing
+    updates on the omitted signals (the classic incomplete-sensitivity RACE). Learned
+    from a combinational multi-block divider whose second `always @(A or B)` read
+    intermediate regs written by the first block → order-dependent stale reads; the
+    reference uses `always @(*)`. chip-AGNOSTIC. The #533 compile-neutrality net in
+    the caller reverts this (with the other fixers) if it ever breaks compilation."""
+    src = path.read_text(errors="replace")
+    sites = list(_incomplete_sens_sites(src))
+    if not sites:
+        return 0, []
+    labels: List[str] = []
+    # Splice from the END so earlier offsets stay valid.
+    for open_i, close_i, sens in sorted(sites, key=lambda s: s[0], reverse=True):
+        src = src[:open_i] + "(*)" + src[close_i + 1:]
+        labels.append(f"@({sens.strip()})")
+    path.write_text(src)
+    return len(labels), labels
+
+
 # ---------------------------------------------------------------------------
 # Rule 7: vector self-shift fold (boundary bit re-introduced by an unshifted op)
 # ---------------------------------------------------------------------------
@@ -5104,6 +5173,7 @@ def main():
         guarded_total = 0
         cast_total = 0
         inreg_total = 0
+        sens_total = 0
         for f in args.files:
             p = Path(f)
             if not p.exists():
@@ -5131,9 +5201,14 @@ def main():
             w, wlabels = autofix_width_cast(p)
             if w:
                 print(f"{f}: inserted value-identical width cast(s): {wlabels}")
-            if _iv and pre_ok and (ir or n or g or w) and not _compiles(p):
+            # Incomplete-sensitivity race: rewrite a combinational `always @(<list>)`
+            # that reads an unlisted signal to `always @(*)` (value-preserving).
+            s, slabels = autofix_incomplete_sensitivity(p)
+            if s:
+                print(f"{f}: rewrote incomplete sensitivity list(s) to @(*): {slabels}")
+            if _iv and pre_ok and (ir or n or g or w or s) and not _compiles(p):
                 p.write_text(pre_text)
-                ir = n = g = w = 0
+                ir = n = g = w = s = 0
                 print(f"WARN fix-reverted-noncompiling: {f} compiled before "
                       f"--fix but not after; ALL fixes reverted (#533 "
                       f"compile-neutrality net — file a backlog with this "
@@ -5142,10 +5217,12 @@ def main():
             guarded_total += g
             cast_total += w
             inreg_total += ir
+            sens_total += s
         print(f"rtl_hygiene_lint --fix: repaired {total} reset-less registered output(s), "
               f"fenced {guarded_total} sim-only assertion construct(s), "
               f"inserted {cast_total} value-identical width cast(s), "
-              f"removed illegal `reg` from {inreg_total} input/inout port(s)")
+              f"removed illegal `reg` from {inreg_total} input/inout port(s), "
+              f"rewrote {sens_total} incomplete sensitivity list(s) to @(*)")
         return 0
 
     sev_order = {'ERROR': 2, 'WARN': 1, 'INFO': 0}
