@@ -43,6 +43,30 @@ DEFAULT_SIM_IMAGE = os.environ.get("OSS_SIM_IMAGE", "cvdp-sim-oss:v110")
 _PASS_RESULTS = (0, "0")
 
 
+def extract_one_record(dataset: Path, design_id: str) -> Optional[str]:
+    """Return the raw JSONL line for `design_id` from a CVDP dataset, or None if
+    absent. Used to build a SINGLE-PROBLEM dataset so the official scorer only
+    assembles this one design's harness (see score_one). A cheap substring
+    pre-filter avoids json-parsing every large line; the id is confirmed by an
+    exact JSON `id` match so a substring collision (e.g. `..._0001` vs
+    `..._00010`) never selects the wrong record."""
+    needle = f'"{design_id}"'
+    try:
+        with dataset.open(errors="replace") as fh:
+            for ln in fh:
+                if needle not in ln:
+                    continue
+                s = ln.strip()
+                try:
+                    if json.loads(s).get("id") == design_id:
+                        return s
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return None
+    return None
+
+
 def parse_result(raw_result_path: Path, design_id: str) -> Tuple[str, List[str]]:
     """Read the official run_benchmark raw_result.json and return
     (verdict, fail_logs). verdict ∈ {'PASS','FAIL','NO_RESULT'}.
@@ -108,12 +132,27 @@ def score_one(design_id: str, draft: Path, dataset: Path, bench: Path,
         if not resp.is_file() or not resp.read_text().strip():
             tail = (g.stdout + g.stderr).strip().splitlines()[-3:]
             return "GATE_BLOCKED", [], " | ".join(tail)
-        # official scorer on just this one response
+        # official scorer on just this one response. CRITICAL: pass a
+        # SINGLE-PROBLEM dataset subset to `run_benchmark.py -f`, NOT the full
+        # 302-problem dataset. `-f <full dataset>` makes the official harness
+        # iterate/assemble EVERY problem in the file (building unrelated designs'
+        # cocotb harnesses), turning a one-design score into a ~7-min full-suite
+        # pass that trips convergence-loop timeouts (observed: 420s TIMEOUT =
+        # false FAIL). Subsetting to the single `design_id` record keeps the
+        # verdict identical (each problem scores independently) while dropping the
+        # wall-clock to a few seconds. Fall back to the full dataset only if the
+        # id can't be found (never silently mis-score).
+        one_line = extract_one_record(dataset, design_id)
+        if one_line is not None:
+            score_dataset = wd / "dataset_one.jsonl"
+            score_dataset.write_text(one_line + "\n")
+        else:
+            score_dataset = dataset
         score_prefix = wd / "score"
         env = dict(os.environ)
         env["OSS_SIM_IMAGE"] = sim_image
         subprocess.run(
-            [sys.executable, "run_benchmark.py", "-f", str(dataset),
+            [sys.executable, "run_benchmark.py", "-f", str(score_dataset),
              "--model", "local_import", "--prompts-responses-file", str(resp),
              "--llm", "-t", "2", "--prefix", str(score_prefix)],
             cwd=str(bench), env=env, capture_output=True, text=True)
