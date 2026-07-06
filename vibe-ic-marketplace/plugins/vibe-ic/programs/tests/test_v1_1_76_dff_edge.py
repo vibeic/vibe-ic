@@ -45,6 +45,28 @@ def test_plain_dff8_fires_with_initial_zero():
     assert "q <= d;" in rtl
 
 
+def test_unstated_edge_plain_dff_defaults_posedge():
+    # A plain clocked D-FF whose prompt does NOT name the edge is posedge by
+    # universal HDL convention (VE-Human Prob031 "Create a single D flip-flop.";
+    # Prob048 "a simple D flip flop with active high synchronous reset" — neither
+    # states the edge). This is the corrected policy: unstated edge SOLVES as
+    # posedge (was over-conservatively SKIP, which regressed Prob031/048).
+    rtl = M.synth(
+        " - input clk\n - input d\n - output q\n"
+        "The module should implement a D flip-flop.")
+    assert rtl is not None, "unstated-edge plain DFF must solve as posedge"
+    assert "always @(posedge clk)" in rtl
+    assert "q <= d;" in rtl
+
+
+def test_contradictory_edge_still_skips():
+    # BOTH positive and negative edge named -> genuinely ambiguous -> MUST SKIP.
+    rtl = M.synth(
+        " - input clk\n - input d\n - output q\n"
+        "A D flip-flop triggered on the positive edge and the negative edge of clk.")
+    assert rtl is None, "contradictory edge must SKIP (§4.05 no-leak)"
+
+
 def test_dff8_sync_reset_zero():
     rtl = M.synth(_prompt("Prob041_dff8r"))
     assert rtl is not None
@@ -145,13 +167,6 @@ def test_dual_edge_flip_flop():
 # §4.05 NEGATIVES — MUST return None (no-leak boundary)
 # --------------------------------------------------------------------------- #
 NEG_FIXTURES = {
-    # 1. clock edge polarity not stated -> SKIP
-    "no_edge_stated": """
- - input clk
- - input d
- - output q
-The module should implement a D flip-flop.""",
-
     # 2. contradictory edge (both posedge & negedge prose, NOT the dual-edge form)
     "contradictory_edge": """
  - input clk
