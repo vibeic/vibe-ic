@@ -28,3 +28,10 @@ suggested_fix: |
 evidence:
   source: repo-gatekeeper Step-2.7 report while landing PR #97 (merge 2858fb23)
   filed_by: benchmark-agent (relaying gatekeeper process finding)
+
+resolution:
+  status: resolved
+  date: "2026-07-06"
+  by: repo-gatekeeper triage sweep
+  note: >-
+    benchmark-enhancement-capture SKILL.md Bucket C check-in handoff clause added (benchmark-agent drafts, core-agent/gatekeeper commits) — aligned with scope-guard v1.3.30

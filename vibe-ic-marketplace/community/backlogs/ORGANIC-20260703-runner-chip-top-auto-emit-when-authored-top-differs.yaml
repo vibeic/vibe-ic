@@ -64,3 +64,4 @@ resolution:
     name). No new runner code required — the auto-emit + real-width extraction was
     already present; the L9 fix removes the remaining trigger.
   annotated_at: "2026-07-04 (core-agent fix, post-#97)"
+  triage_2026_07_06: verified — _autoemit_chip_top_if_needed + 20260703 L9 fix; test_organic_20260703_chip_top_autoemit green

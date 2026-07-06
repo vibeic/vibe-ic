@@ -300,6 +300,15 @@ properly (corpus sweep, new program, new test fixtures). Examples:
 schema (type / severity / component / pattern / suggested_fix / id /
 submitted_at / session_context).
 
+> **Check-in handoff (scope-guard alignment):** if the role invoking this skill is
+> the **benchmark-agent**, it may DRAFT the YAML but must NOT check it into
+> `community/backlogs/` itself — `agent_checkin_scope_guard.py` denies benchmark-agent
+> that zone (2026-06-21 owner directive: benchmark-agent MEASURES + fixes plugin/MCP,
+> it does not file backlog). Hand the draft to the **core-agent / repo-gatekeeper**
+> (or **field-agent**, whose zone IS `community/backlogs/`) to create and commit the
+> file. This keeps the "who may write where" guard and this skill's Emit step
+> consistent rather than contradictory.
+
 ### Bucket D — DISCARD (overfit / one-off) — the NARROWEST bucket
 The fix only works for that specific design's quirks or peeks at hidden TB
 conventions. This is the ONLY honest discard reason: a **genuinely

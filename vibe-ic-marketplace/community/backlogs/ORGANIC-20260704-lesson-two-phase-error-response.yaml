@@ -31,3 +31,10 @@ suggested_fix: |
 evidence:
   run: benchmark_external/cvdp/run_hard94_unified_20260703 (converge9 — vending PASS)
   filed_by: benchmark-agent (round-9 distillation)
+
+resolution:
+  status: resolved
+  date: "2026-07-06"
+  by: repo-gatekeeper triage sweep
+  note: >-
+    covered by the more-general Moore two-phase-strobe skill (dedicated intermediate state) already in ic-expert-agent.md

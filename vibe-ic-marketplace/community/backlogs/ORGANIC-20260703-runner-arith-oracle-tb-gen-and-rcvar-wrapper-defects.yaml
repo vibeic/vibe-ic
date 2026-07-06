@@ -61,3 +61,4 @@ resolution:
   commits:
     - "b396f801 — fix(runner): arith-oracle sequential gate + rcvar wrapper localparam hoist (PR #100)"
   annotated_at_merge: "2026-07-03 (PR #97, gatekeeper annotation)"
+  triage_2026_07_06: verified — fix-landed (b396f801/ac7755cc); test_organic_20260703_runner_arith_oracle_and_rcvar_wrapper green

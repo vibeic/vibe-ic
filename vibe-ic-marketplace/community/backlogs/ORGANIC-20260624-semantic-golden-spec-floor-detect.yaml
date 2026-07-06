@@ -86,3 +86,10 @@ session_context: >-
   golden. The existing floor_evidence (golden-vs-its-own-test) returned
   "not a floor", so they were mislabeled AI-gated tiers and counted as
   solver failures rather than dataset-defect floors.
+
+resolution:
+  status: resolved
+  date: "2026-07-06"
+  by: repo-gatekeeper triage sweep
+  note: >-
+    semantic_spec_floor_check.py wired into both verilogeval tier pipelines; test present
