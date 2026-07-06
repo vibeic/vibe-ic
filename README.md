@@ -7,7 +7,7 @@
 [![Plugin v1.2.96](https://img.shields.io/badge/plugin-v1.2.96-brightgreen.svg)](vibe-ic-marketplace/README.md)
 [![MCP-EDA v1.0.0](https://img.shields.io/badge/mcp--eda-v1.0.0-brightgreen.svg)](vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/README.md)
 
-> **Status: v1.2 — mature, benchmark-hardened.** The `vibe-ic` plugin is the
+> **Status: v1.3 — mature, benchmark-hardened.** The `vibe-ic` plugin is the
 > product: one install bundles and auto-registers the MCP server, the IP
 > catalog, and the benchmark harness. Install once, design in natural language.
 > Every capability is gated by a deterministic checker and continuously
@@ -160,8 +160,9 @@ discloses any open↔commercial tool substitution and follows the
 | Benchmark | Result | Notes |
 |---|---|---|
 | **NVIDIA CVDP** (nonagentic code-generation, no-commercial) | **243/302 = 80.46%** official-compliant blind pass@1 | **prompt+context-only** — the deterministic solver reads ONLY `input.prompt` + `input.context`; the hidden test harness (`.env`, cocotb testbench) and the golden solution are OFF-LIMITS oracle, enforced by a regression guard that proves the emit is byte-identical with vs without them. Scored on the official `run_benchmark.py` in the pinned `cvdp-sim` image. |
-| **VerilogEval-v2** | **155/156** | spec-to-RTL, iverilog-scored |
-| **VerilogEval-Human** | **153/156** | spec-to-RTL, iverilog-scored |
+| **RTLLM v2.0** | **44/50 = 88%** blind pass@1 (**44/44 = 100%** excluding 4 upstream dataset defects + 2 iverilog tool-gaps) | spec-to-RTL, §4.05-blind, iverilog-scored; each exclusion is a per-design RESULT entry (`score_rtllm.py` KNOWN_DATASET_DEFECTS / KNOWN_TOOL_GAPS), not a silent drop. |
+| **VerilogEval-v2** | **153/156** blind pass@1 (convergence 155/156) | spec-to-RTL, §4.05-blind, iverilog-scored. The published figure is the *blind* pass@1 the clean-room gate reproduces; 155/156 is the oracle-for-RCA convergence number, not the headline. |
+| **VerilogEval-Human** | **153/156** blind pass@1 | spec-to-RTL, §4.05-blind, iverilog-scored |
 
 > **Honesty over score.** Compliance is a structural invariant of the plugin,
 > not a runtime convenience — no benchmark run reads the hidden harness or the
