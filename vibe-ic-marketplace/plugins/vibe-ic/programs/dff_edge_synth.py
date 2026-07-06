@@ -402,10 +402,27 @@ def _synth_dff(prompt_text, top, ins, outs, clk) -> Optional[str]:
         return None
     oname, ow = outs[0]
 
-    # ---- clock edge (mandatory & unambiguous) ---- #
+    # ---- clock edge ---- #
+    # A plain clocked D-flip-flop / register whose prompt does not NAME the edge
+    # is positive-edge by universal HDL convention (every VE reference register
+    # uses posedge; "Create a single D flip-flop." / "a simple D flip flop with
+    # active high synchronous reset" state no edge). This mirrors the identical
+    # unstated-edge -> posedge default already applied in the edge-detect/capture
+    # branch (_synth_edge). An EXPLICIT negedge is still honored below (the emit
+    # uses `edge`), so a prompt that DOES name the polarity is never overridden.
+    #
+    # `_clock_edge` returns None for TWO distinct reasons: (a) the edge is UNSTATED
+    # (safe to default posedge) and (b) the prose is CONTRADICTORY — names BOTH
+    # positive and negative edge (genuinely ambiguous -> MUST SKIP, never guess).
+    # Only case (a) may default; case (b) still returns None here.
     edge = _clock_edge(prompt_text)
     if edge is None:
-        return None
+        _low = prompt_text.lower()
+        _pos = bool(re.search(r"positive\s+edge|posedge", _low))
+        _neg = bool(re.search(r"negative\s+edge|negedge", _low))
+        if _pos and _neg:
+            return None        # contradictory edge -> §4.05 no-leak SKIP
+        edge = "posedge"       # unstated edge on a clocked register -> posedge
 
     # ---- reset ---- #
     r = _detect_reset(prompt_text, ins)
