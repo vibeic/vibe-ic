@@ -98,10 +98,11 @@
    4 階段：host 工具 preflight → plugin 結構 → plugin 自檢（flow map / DB consistency / chip-agnostic / MCP import）
    → benchmark 重現（re-score committed samples，斷言＝驗證值：RTLLM 44/50、VE-v2 153/156、VE-Human 153/156）。
    本機實測 **18 PASS / 0 FAIL → READY**。**仍待補**：(i) 真正全新機器實跑；(ii) live Benchmark-Agent 一輪 blind 重現路徑（需 live agent，非 shell 可涵蓋，腳本已註明）。
-2. **🟡 頂層 INSTALL / README（single source of truth）**（1b/1c/2b）
-   Docker 前置 + MCP 自動接線 + 兩種輸入用法，收斂成一份入口文件。
-3. **🟡 一頁「入口決策表 + 收斂 loop 清單 + 預期結果表」**（5b/5c/總結）
-   讓 AI 與使用者一眼掌握能力範疇、入口、預期產物/分數。
+2. **✅ 頂層 INSTALL / README（single source of truth）**（1b/1c/2b）— **`docs/INSTALL.md`**
+   Docker 前置（`iic-eda` 容器）+ MCP 自動接線（`.mcp.json`）+ 兩種輸入用法 + 一鍵驗證，收斂成一份入口文件。
+3. **✅ 一頁「入口決策表 + 收斂 loop 清單 + 預期結果表」**（5b/5c/總結）— **`docs/GUIDE_MAP.md`**
+   5 條入口路徑（E1–E5）、6 個收斂 loop（含 spec-to-rtl dual-track / eco / analog-sizing / PVT / ADI）、
+   per-phase 產物 + 已驗證 benchmark 分數表，讓 AI 與使用者一眼掌握能力範疇/入口/預期結果。
 
 > 三個缺口都**不是能力缺失**，而是**上線打包**：能力已驗證、已上線 origin/main；剩下的是讓一個
 > 陌生使用者在乾淨環境「零摩擦重現」。
