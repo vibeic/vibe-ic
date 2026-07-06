@@ -4,6 +4,11 @@
   "total": 50,
   "passed": 44,
   "pass_at_1_pct": 88.0,
+  "known_dataset_defects": 4,
+  "known_tool_gaps": 2,
+  "passed_excluding_defects_and_toolgaps": 44,
+  "denominator_excluding_defects_and_toolgaps": 44,
+  "pass_at_1_excl_pct": 100.0,
   "results": [
     {
       "design": "Arithmetic/Accumulator/accu",
@@ -29,7 +34,8 @@
       "design": "Arithmetic/Adder/adder_pipe_64bit",
       "verdict": "FAIL",
       "reason": "compile_error",
-      "log": "/home/reyerchu/AI_IC_design/_extbench/RTLLM/Arithmetic/Adder/adder_pipe_64bit/testbench.v:66: error: parameter `DATA_WIDTH` not found in `tb_adder64.u_pip_add64`.\n/home/reyerchu/AI_IC_design/_extbench/RTLLM/Arithmetic/Adder/adder_pipe_64bit/testbench.v:67: error: parameter `STG_WIDTH` not found in `tb_adder64.u_pip_add64`.\n3 error(s) during elaboration.\n"
+      "log": "/home/reyerchu/AI_IC_design/_extbench/RTLLM/Arithmetic/Adder/adder_pipe_64bit/testbench.v:66: error: parameter `DATA_WIDTH` not found in `tb_adder64.u_pip_add64`.\n/home/reyerchu/AI_IC_design/_extbench/RTLLM/Arithmetic/Adder/adder_pipe_64bit/testbench.v:67: error: parameter `STG_WIDTH` not found in `tb_adder64.u_pip_add64`.\n3 error(s) during elaboration.\n",
+      "known_dataset_defect": "TB overrides #(DATA_WIDTH, STG_WIDTH); desc names no parameters"
     },
     {
       "design": "Arithmetic/Comparator/comparator_3bit",
@@ -47,7 +53,8 @@
       "design": "Arithmetic/Divider/radix2_div",
       "verdict": "FAIL",
       "reason": "compile_error",
-      "log": "/home/reyerchu/AI_IC_design/_extbench/RTLLM/Arithmetic/Divider/radix2_div/testbench.v:14: error: port ``res_ready'' is not a port of uut.\n1 error(s) during elaboration.\n"
+      "log": "/home/reyerchu/AI_IC_design/_extbench/RTLLM/Arithmetic/Divider/radix2_div/testbench.v:14: error: port ``res_ready'' is not a port of uut.\n1 error(s) during elaboration.\n",
+      "known_dataset_defect": "desc omits the res_ready handshake INPUT the TB drives"
     },
     {
       "design": "Arithmetic/Multiplier/multi_16bit",
@@ -97,7 +104,8 @@
       "design": "Control/Counter/ring_counter",
       "verdict": "FAIL",
       "reason": "compile_error",
-      "log": "/home/reyerchu/AI_IC_design/_extbench/RTLLM/Control/Counter/ring_counter/testbench.v:20: sorry: Assignment to an entire array or to an array slice is not yet supported.\nElaboration failed\n"
+      "log": "/home/reyerchu/AI_IC_design/_extbench/RTLLM/Control/Counter/ring_counter/testbench.v:20: sorry: Assignment to an entire array or to an array slice is not yet supported.\nElaboration failed\n",
+      "known_tool_gap": "TB uses whole-array/array-slice assignment (Verilator PASS)"
     },
     {
       "design": "Control/Counter/up_down_counter",
@@ -111,13 +119,15 @@
       "design": "Control/Finite State Machine/sequence_detector",
       "verdict": "FAIL",
       "reason": "compile_error",
-      "log": "/home/reyerchu/AI_IC_design/_extbench/RTLLM/Control/Finite State Machine/sequence_detector/testbench.v:8: error: port ``rst_n'' is not a port of dut.\n1 error(s) during elaboration.\n"
+      "log": "/home/reyerchu/AI_IC_design/_extbench/RTLLM/Control/Finite State Machine/sequence_detector/testbench.v:8: error: port ``rst_n'' is not a port of dut.\n1 error(s) during elaboration.\n",
+      "known_dataset_defect": "desc names reset `reset_n`; TB instantiates `.rst_n`"
     },
     {
       "design": "Memory/FIFO/asyn_fifo",
       "verdict": "FAIL",
       "reason": "compile_error",
-      "log": "/home/reyerchu/AI_IC_design/_extbench/RTLLM/Memory/FIFO/asyn_fifo/testbench.v:102: sorry: break statements not supported.\n"
+      "log": "/home/reyerchu/AI_IC_design/_extbench/RTLLM/Memory/FIFO/asyn_fifo/testbench.v:102: sorry: break statements not supported.\n",
+      "known_tool_gap": "TB uses `break` (Verilator PASS)"
     },
     {
       "design": "Memory/LIFO/LIFObuffer",
@@ -127,7 +137,8 @@
       "design": "Memory/Shifter/LFSR",
       "verdict": "FAIL",
       "reason": "compile_error",
-      "log": "I_IC_design/_extbench/RTLLM/Memory/Shifter/LFSR/testbench.v:6:        : Padding 3 high bits of the port.\n/home/reyerchu/AI_IC_design/_extbench/RTLLM/Memory/Shifter/LFSR/testbench.v:11: error: rst_tb Unable to assign to unresolved wires.\n/home/reyerchu/AI_IC_design/_extbench/RTLLM/Memory/Shifter/LFSR/testbench.v:14: error: rst_tb Unable to assign to unresolved wires.\n2 error(s) during elaboration.\n"
+      "log": "I_IC_design/_extbench/RTLLM/Memory/Shifter/LFSR/testbench.v:6:        : Padding 3 high bits of the port.\n/home/reyerchu/AI_IC_design/_extbench/RTLLM/Memory/Shifter/LFSR/testbench.v:11: error: rst_tb Unable to assign to unresolved wires.\n/home/reyerchu/AI_IC_design/_extbench/RTLLM/Memory/Shifter/LFSR/testbench.v:14: error: rst_tb Unable to assign to unresolved wires.\n2 error(s) during elaboration.\n",
+      "known_dataset_defect": "TB positional output-first `LFSR DUT(out,clk,rst)`; desc doesn't fix header order"
     },
     {
       "design": "Memory/Shifter/barrel_shifter",
@@ -143,7 +154,8 @@
     },
     {
       "design": "Miscellaneous/Frequency divider/freq_divbyeven",
-      "verdict": "PASS"
+      "verdict": "PASS",
+      "known_dataset_defect": "TB relies on the module default NUM_DIV=6; desc states no default value"
     },
     {
       "design": "Miscellaneous/Frequency divider/freq_divbyfrac",
