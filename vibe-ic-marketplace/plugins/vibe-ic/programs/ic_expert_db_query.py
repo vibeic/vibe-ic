@@ -36,7 +36,11 @@ _FN_STEMS = ["divid","divis","multipl","booth","adder","subtract","alu","mac","a
     "arbiter","interrupt","sequencer","microcode","vending","elevator","stopwatch",
     "counter","timer","sort","merge","priority","encoder","decoder","mux","shift",
     "gcd","fibonacci","booth","sprite","rotate","grayscale","border","line","vga",
-    "clock","glitch","cdc","synchron","edge","perceptron","neuro","matrix","transform"]
+    "clock","glitch","cdc","synchron","edge","perceptron","neuro","matrix","transform",
+    # cache replacement-policy family discriminators — separate the recency-bit /
+    # counter-age / frequency / tree representations so each design retrieves its
+    # OWN craft (all appear ONLY in cache-replacement prompts, so no foreign match)
+    "recency","nmru","mru","lfu"]
 
 def _fn(text: str) -> set:
     t = text.lower()

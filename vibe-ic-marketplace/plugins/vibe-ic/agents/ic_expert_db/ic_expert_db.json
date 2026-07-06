@@ -3,8 +3,8 @@
   "_schema": "entries[].{ic_class, lesson_count, lessons[]}",
   "_source": "distilled from proven-correct (officially-scored PASS) reference designs; benchmark identifiers scrubbed at build time (blindness).",
   "_consistency": "lessons are DESIGN-CRAFT ADVICE for the AI author; they add knowledge, they do NOT assert hard rules that a gate/program checks. No lesson may contradict a deterministic gate.",
-  "classes": 93,
-  "total_lessons": 106,
+  "classes": 96,
+  "total_lessons": 109,
   "entries": [
     {
       "ic_class": "accumulator-datapath",
@@ -668,6 +668,27 @@
       "lesson_count": 1,
       "lessons": [
         "A random-access indexed write into a register array where the index advances by exactly one each accepted item is equivalent to a ring-counter-addressed serial-in-parallel-out (SIPO) shift collector; the SIPO form removes the index decoder and is the canonical compact implementation when writes are strictly sequential."
+      ]
+    },
+    {
+      "ic_class": "cache-replacement-counter-policy",
+      "lesson_count": 1,
+      "lessons": [
+        "Counter/age-based set-associative cache replacement (a recency COUNTER per way, packed as recency[index][(way*W)+:W], W=$clog2(NWAYS)): reset the counters to a UNIQUE ASCENDING PERMUTATION 0..NWAYS-1 (never all-zero — they must remain a permutation of distinct ranks). On EVERY access promote the touched way's counter to the MAXIMUM NWAYS-1 and DECREMENT every other counter whose old value was STRICTLY GREATER than the touched way's PREVIOUS value (read all old values via nonblocking <= so the comparison uses pre-update state) — this permutation-preserving shift is the step authors get wrong. The touched way is way_select on a hit but the current way_replace victim on a miss (way_select is meaningless on a miss). Select way_replace COMBINATIONALLY: strict-LRU picks the MINIMUM counter (0), strict-MRU picks the MAXIMUM counter (NWAYS-1); the lowest way index breaks ties."
+      ]
+    },
+    {
+      "ic_class": "cache-replacement-lfu-policy",
+      "lesson_count": 1,
+      "lessons": [
+        "Frequency-based LFU set-associative cache replacement (a saturating FREQUENCY counter per way, COUNTERW bits, MAX=2**COUNTERW-1, all reset to 0): on a hit INCREMENT the accessed way's frequency but SATURATE at MAX; when the accessed way is ALREADY at MAX, instead DECREMENT the other ways that sit above a small floor so one hot line cannot starve the set. On a miss set the freshly-replaced (way_replace) way's frequency to 1, not 0. Choose way_replace COMBINATIONALLY as the way with the MINIMUM frequency, lowest index on ties. Updates are single-cycle synchronous; reset is async active-high."
+      ]
+    },
+    {
+      "ic_class": "cache-replacement-fifo-policy",
+      "lesson_count": 1,
+      "lessons": [
+        "Cache replacement-pointer timing invariant: the eviction pointer / way_replace advances ONLY on a miss/eviction, NEVER on a plain hit — a hit updates recency/frequency state but must leave the eviction victim unchanged. A round-robin/FIFO policy is the pure case: increment the per-index victim pointer strictly on (access && ~hit); gating it on access alone is the classic bug that rotates the victim during hits. way_replace is a direct combinational read of the per-index pointer/state."
       ]
     }
   ]
