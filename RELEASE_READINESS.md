@@ -13,7 +13,7 @@
 
 | # | 可驗收條件 | 狀態 | 依據 / 缺口 |
 |---|---|---|---|
-| 1a | vibe-ic 是 plugin，可直接掛到 Claude 使用 | ✅ | `vibe-ic-marketplace/.claude-plugin/marketplace.json` + `plugins/vibe-ic/.claude-plugin/plugin.json`（v1.3.29） |
+| 1a | vibe-ic 是 plugin，可直接掛到 Claude 使用 | ✅ | `vibe-ic-marketplace/.claude-plugin/marketplace.json` + `plugins/vibe-ic/.claude-plugin/plugin.json`（v1.3.34） |
 | 1b | 安裝前提：先安裝 EDA open-source 工具的 Docker（IIC-OSIC-TOOLS） | 🟡 | 依賴已存在（`mcp-eda/` 工具跑在 IIC-OSIC-TOOLS 容器）；**缺**：頂層一頁前置安裝說明（現只在 `mcp-eda/INSTALL_GUIDE.md`） |
 | 1c | 裝完 Docker 再裝 plugin，MCP **自動**把兩者接起來（Docker 工具經 MCP 被 plugin 調用） | 🟡 | `.mcp.json` + `mcp-eda/src/index.js`（工具在容器內執行）；**待驗**：全新機器 zero-config 自動接上、健康檢查（`mcp_server_health_check`） |
 
@@ -38,7 +38,7 @@
 | # | 可驗收條件 | 狀態 | 依據 |
 |---|---|---|---|
 | 3a | plugin 啟動即讓 Claude 變成 IC Expert Agent | ✅ | binding identity（每回合 system-reminder 注入）；embody `agents/ic_expert_db/` + `agents/lessons/` + `skills/` |
-| 3b | 透過對話得到詳細 Spec，並**自動補足**設計所需資訊 | ✅ | expert-DB（**86 classes / 98 lessons**）+ program-vs-AI 收斂 + sufficiency gate |
+| 3b | 透過對話得到詳細 Spec，並**自動補足**設計所需資訊 | ✅ | expert-DB（**93 classes / 106 lessons**）+ program-vs-AI 收斂 + sufficiency gate |
 | 3c | 另一路徑：從 **Design Documents 直接匯入** | ✅ | Phase 1 DOC → L1–L23 JSON |
 
 **發布條件 3**：expert-DB + lessons 打包在 plugin 內、consistency gate 綠燈（已 PASS），對話與匯入兩路徑皆可觸發補全。
@@ -50,19 +50,19 @@
 | # | 可驗收條件 | 狀態 | 依據 / 缺口 |
 |---|---|---|---|
 | 4a | 支援 **VE-v2 / VE-Human / RTLLM / CVDP** | ✅ | `benchmark/BENCHMARK_REGISTRY.json`：verilogeval-v2(C)、verilogeval-human(C)、rtllm(B)、cvdp-open(C/D, RUNNABLE) |
-| 4b | Local 分數 = 我們驗證分數（Opus 4.8 一輪高分） | 🟡 | **最難的保證**。已驗證基準：RTLLM 排除 defect+tool-gap **43/43=100%**（全 blind-proven）、VE-v2 & VE-Human **153/156**、cvdp-open single-shot **210/302**。**缺**：clean-run 一致性實測 + 容差/隨機性說明 |
+| 4b | Local 分數 = 我們驗證分數（Opus 4.8 一輪高分） | 🟡 | **最難的保證**。已驗證基準：RTLLM 排除 defect+tool-gap **44/44=100%**（44/50 blind，全 blind-proven）、VE-v2 & VE-Human **153/156**、cvdp-open **243/302 = 80.46%**（official-compliant blind pass@1）。**缺**：clean-run 一致性實測 + 容差/隨機性說明 |
 | 4c | Debug 題（CVDP 類）路徑已配置：一般走 Phase 1；debug 走「RTL 產生後」的收斂路徑，且 plugin **自動判定** | ✅ | dual-track：正常 Phase 1 入口；`rtl_gen=null` → WAIVE `spec-to-rtl` → runner gates 收斂 |
 
 **發布條件 4**：至少一個 benchmark 在乾淨機器一鍵跑出的分數落在驗證值容差內；4 個 benchmark 的預期分數表隨附。
 
-**已驗證分數（本 session, plugin v1.3.27–29, iverilog）**：
+**已驗證分數（plugin v1.3.34, iverilog / cvdp-sim-pinned；`verify_clean_platform.sh` 可重現）**：
 
 | Benchmark | Shape | Blind 分數 | 排除 defect/floor |
 |---|---|---|---|
-| VerilogEval-v2 | C | 153/156 | 100% |
-| VerilogEval-Human | C | 153/156 | 100% |
-| RTLLM v2.0 | B | 43/50 | **43/43 = 100%** |
-| cvdp-open (302 nonagentic) | C/D | 210/302 (single-shot) | — |
+| VerilogEval-v2 | C | 153/156 = 98.08% | 100% |
+| VerilogEval-Human | C | 153/156 = 98.08% | 100% |
+| RTLLM v2.0 | B | 44/50 = 88% | **44/44 = 100%** |
+| cvdp-open (302 nonagentic) | C/D | 243/302 = 80.46%（official-compliant blind pass@1） | — |
 
 ---
 
