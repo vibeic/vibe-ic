@@ -117,3 +117,16 @@ progress:
   by: repo-gatekeeper triage sweep
   note: >-
     AI-lesson layer CONFIRMED COMPLETE — all 6 arithmetic-datapath lessons already in expert-DB (non-restoring-divider, gcd-lcm-arithmetic, bcd-time-counter, sequential-multiplier, leading-one-normalizer, radix4-booth-multiplier). REMAINING: the deterministic rtl_hygiene_lint.py rule layer (6 rule_* fns) is a Bucket-C task requiring a mandatory zero-false-positive sweep over the 94 solved designs before shipping (in progress). Kept OPEN until the corpus-clean rules land.
+
+resolution:
+  status: resolved
+  date: "2026-07-06"
+  by: repo-gatekeeper (worktree-implemented, main-tree re-verified)
+  note: >-
+    Deterministic layer landed v1.3.31 — 6 advisory INFO rules in rtl_hygiene_lint.py
+    (divider-missing-final-correction, multiop-arith-width-consistency,
+    cascaded-decrement-priority-order, seq-multiplier-width,
+    variable-partselect-illegal-range, booth-shift-before-signext). Independently
+    re-verified in main tree: ZERO false positives across all 94 solved_design_db
+    designs; 18 positive/negative fixtures + full rtl_hygiene suite (112 cases) green;
+    advisory-only (non-blocking, no --fix) so a false fire can never break a build.
