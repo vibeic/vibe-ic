@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -125,8 +126,16 @@ def _run_runner(case_dir: Path, timeout: int) -> Dict[str, Any]:
     cmd = [sys.executable, str(_RUNNER), str(case_dir),
            "--pdk", "sky130A",
            "--skip-phase3", "--skip-analog", "--skip-hardware"]
+    # ORGANIC-20260704 — CVDP hidden cocotb harnesses commonly WHITEBOX internal
+    # state (dut.<internal>). Opt the reset/clock-variant alias step into its FLAT
+    # transform (rename in the module's own header + internal wire alias, no
+    # `<top>__rcvar_inner` submodule) so those internals stay hierarchically
+    # accessible. Falls back to the wrapper automatically for the additive /
+    # internal-caller cases it cannot flatten safely.
+    env = {**os.environ, "VIBE_IC_RCVAR_WHITEBOX_FLAT": "1"}
     try:
-        subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                       env=env)
     except subprocess.TimeoutExpired:
         return {"runner_status": "TIMEOUT"}
     except Exception as e:  # pragma: no cover - defensive
