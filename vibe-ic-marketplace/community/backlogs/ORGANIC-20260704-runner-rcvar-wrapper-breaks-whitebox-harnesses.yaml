@@ -74,3 +74,25 @@ resolution:
     wrapper path (flat does not handle additive), relying on the wrapper's
     polarity-safe tri0/tri1 inactive-default pull. Narrower, rarer sub-case;
     tracked as a note here, not a blocker.
+
+resolution_addendum:
+  status: resolved
+  date: "2026-07-06"
+  by: repo-gatekeeper (benchmark-agent found + authored; gatekeeper verified + landed)
+  note: >-
+    The "4th mechanism" additive residual noted above was NOT benign — the
+    benchmark-agent's v1.3.32 delta campaign PROVED (controlled experiment on
+    cvdp_copilot_axi_stream_upscale_0001 at the official Icarus-13 scorer: flat
+    PASS / additive-wrapper FAIL / synonym-removed PASS) that under the whitebox
+    opt-in the additive dual-spelling wrapper REGRESSES the design: the AND-combined
+    canonical synonym's tri1/tri0 inactive-pull is not honored by Icarus-13, so the
+    hidden harness (driving the design's own reset) leaves the synonym undriven → x
+    → design frozen. Fixed v1.3.33: under the whitebox opt-in, suppress
+    additive_reset_map (pure-additive → deliver flat original; mixed → flat
+    rename-only). Opt-in gated, default OFF → general silicon flow + #518/#689/#792
+    additive guards unchanged (rcvar suite 98 green). Also corrected the campaign's
+    honest finding: the "+3 rcvar" recovery does NOT reproduce clean-blind (axi &
+    cont_adder pass the blind-author flow directly; cache_lru fails on authoring
+    logic) — net rcvar delta on the comparable baseline = +0, projected full-302
+    v1.3.32 ~= 243/302. The v1.3.33 fix's value is PROTECTING the 243 baseline
+    against the canonical-entry additive regression, not adding passes.
