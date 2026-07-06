@@ -383,6 +383,7 @@ making a meaning judgment; no regex does that.
 | Category | Description | Action |
 |---|---|---|
 | **A. Benchmark description ↔ TB inconsistency** | Spec says one port name; TB wires a different one | **FLOOR** — unsatisfiable blind without cheating. Document with TB-line evidence. |
+| **A2. Harness contradicts the GIVEN context itself** | The GIVEN input (prose + any given/gate-target RTL) is *directly functionally contradicted* by the TB oracle — provable with NO external info (e.g. TB pins opcode 2'b10=NAND/2'b11=NOR, but the only given mapping is the opposite and NAND/NOR are never mentioned) | **FLOOR** — stop converging immediately. Prove it with the floor-proof protocol below (cross-round expected-vs-got + replay under the design's OWN TB); the given context alone is the evidence. |
 | **B. Benchmark under-specification** | TB needs a port/param/parameterization the prose never states | **FLOOR** — same |
 | **C. Positional-instantiation convention** | TB uses positional with an undocumented port order | **FLOOR** |
 | **D. Tool-substitution gap** | TB uses VCS-only / Xcelium-only constructs iverilog can't run | **FLOOR** (under our substitution) |
@@ -813,6 +814,15 @@ three-step **FLOOR-proof**, in order:
    that fails AND (b) the exact prompt line mandating two **mutually-exclusive**
    values for identical stimulus, AND you have shown (step 2) the original RTL
    also fails.
+
+**Category-A2 variant (harness contradicts the GIVEN context itself):** when the
+contradiction is provable from the given input alone (prose + any given/gate-target
+RTL vs the TB oracle), the floor-proof is: (a) a **cross-round expected-vs-got table**
+— the TB's asserted value for a stimulus vs what the given mapping mandates, shown
+stable across ≥2 independent authoring rounds so it is not a one-off; and (b) a
+**replay under the design's OWN testbench** confirming the given behavior is
+internally consistent while only the hidden oracle disagrees. This makes the defect
+provable with NO external information — the given context is the evidence.
 
 This is the spec-faithful companion to the **#716 dual-track convergence**
 doctrine (program verdict + independent AI solve + converge): the "original-RTL-

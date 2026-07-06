@@ -71,3 +71,10 @@ session_context: >-
   and DISTILL-20260704-ic-expert-agent-46-skills-FULL-46-verified.md.
 submitted_at: "2026-07-04T22:20:00+08:00"
 id: ORGANIC-20260704-cvdp-skid-buffer-prompt-oracle-port-name-contradiction
+
+resolution:
+  status: resolved
+  date: "2026-07-06"
+  by: repo-gatekeeper triage sweep
+  note: >-
+    CVDP known-dataset-defect registry added: benchmark-data/evaluation/cvdp/known_dataset_defects.py (mirrors RTLLM waiver)

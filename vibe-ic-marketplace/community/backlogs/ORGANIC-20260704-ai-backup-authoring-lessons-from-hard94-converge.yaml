@@ -36,3 +36,10 @@ suggested_fix: |
 evidence:
   run: benchmark_external/cvdp/run_hard94_unified_20260703 (RESULT.md trajectory 22→75)
   filed_by: benchmark-agent (converge rounds 3-8 distillation)
+
+resolution:
+  status: resolved
+  date: "2026-07-06"
+  by: repo-gatekeeper triage sweep
+  note: >-
+    3 missing lessons added to expert-DB v1.3.30: whitebox-harness-delivery, handshake-valid-ready (ack holdoff), async-fifo-cdc (release-at-capture)

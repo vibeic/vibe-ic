@@ -64,3 +64,4 @@ resolution:
   commits:
     - "b6cb0be6 — fix(cvdp): complete-extract phantom-port + header-authoritative widths (PR #99)"
   annotated_at_merge: "2026-07-03 (PR #97, gatekeeper annotation)"
+  triage_2026_07_06: verified — cvdp_complete_extract.py _RESERVED_PORT_WORDS filter live; independent repro shows no phantom port + correct 66-bit width

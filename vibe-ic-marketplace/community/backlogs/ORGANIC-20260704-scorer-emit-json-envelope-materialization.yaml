@@ -34,3 +34,10 @@ evidence:
   run: benchmark_external/cvdp/run_hard94_unified_20260703 (score_v132 vs score_c2final)
   recovery: all 3 pass after plain re-emit of identical RTL
   filed_by: benchmark-agent (hard-94 converge round 2)
+
+resolution:
+  status: resolved
+  date: "2026-07-06"
+  by: repo-gatekeeper triage sweep
+  note: >-
+    same root cause as completion-packaging; single-file json_dict normalize-to-bare (#680) live

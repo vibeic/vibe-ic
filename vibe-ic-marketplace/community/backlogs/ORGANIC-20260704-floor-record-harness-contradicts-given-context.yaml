@@ -35,3 +35,10 @@ suggested_fix: |
 evidence:
   run: benchmark_external/cvdp/run_hard94_unified_20260703 (RESULT.md TERMINAL section)
   filed_by: benchmark-agent (terminal floor-proof round)
+
+resolution:
+  status: resolved
+  date: "2026-07-06"
+  by: repo-gatekeeper triage sweep
+  note: >-
+    open-benchmark SKILL.md triage row A2 (harness-contradicts-given-context) + floor-proof cross-round/own-TB-replay protocol added v1.3.30

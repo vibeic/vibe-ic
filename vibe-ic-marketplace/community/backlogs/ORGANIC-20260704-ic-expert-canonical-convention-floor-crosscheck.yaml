@@ -86,3 +86,10 @@ evidence:
     log's expected-vs-got numeric channel (allowed converge measurement) — no
     test_*.py / harness src / .env / golden was read.
   filed_by: benchmark-agent (IC-Expert canonical-convention cross-check, v1.3.7)
+
+resolution:
+  status: resolved
+  date: "2026-07-06"
+  by: repo-gatekeeper triage sweep
+  note: >-
+    dual-track floor rule already in open-benchmark §4.2; 5 convention lessons added to expert-DB v1.3.30 (bus-interface-defaults, matrix-block-processor, iterative-training-datapath, onehot-control-decode, serial-in-parallel-out); #3 cocotb-scope is a harness-reading methodology fact

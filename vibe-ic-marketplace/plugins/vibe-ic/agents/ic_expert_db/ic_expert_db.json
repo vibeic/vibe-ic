@@ -3,8 +3,8 @@
   "_schema": "entries[].{ic_class, lesson_count, lessons[]}",
   "_source": "distilled from proven-correct (officially-scored PASS) reference designs; benchmark identifiers scrubbed at build time (blindness).",
   "_consistency": "lessons are DESIGN-CRAFT ADVICE for the AI author; they add knowledge, they do NOT assert hard rules that a gate/program checks. No lesson may contradict a deterministic gate.",
-  "classes": 86,
-  "total_lessons": 98,
+  "classes": 93,
+  "total_lessons": 106,
   "entries": [
     {
       "ic_class": "accumulator-datapath",
@@ -78,10 +78,11 @@
     },
     {
       "ic_class": "async-fifo-cdc",
-      "lesson_count": 2,
+      "lesson_count": 3,
       "lessons": [
         "A dual-clock FIFO must use (ADDR_WIDTH+1)-bit Gray-coded pointers passed through 2-flop synchronizers, and the full/empty tests must operate on the GRAY (not binary) values so a single-bit transit through the CDC never mis-decodes. Empty is asserted when the local read Gray pointer equals the synchronized write Gray pointer; full is asserted when the write Gray pointer equals the synchronized read Gray pointer with its TOP TWO bits inverted (the Gray-domain equivalent of \"MSB differs, all lower bits equal\") — inverting only the MSB is the classic trap that breaks the full flag. Increment enables must be gated (w_inc & ~w_full, r_inc & ~r_empty) and each pointer/synchronizer pair reset in its own clock domain's async-reset block.",
-        "Cummings-style async FIFO: the binary->Gray conversion is pure combinational, but the Gray-coded pointer itself must be REGISTERED in a sequential block SEPARATE from the one that increments the binary pointer, so the registered Gray pointer reflects the pre-increment binary value and therefore lags the binary pointer by exactly one clock. Computing next-binary and next-Gray together and latching both in one block (though it looks equivalent) makes the full/empty flags take effect one cycle early relative to the data, misaligning them against a cycle-accurate reference."
+        "Cummings-style async FIFO: the binary->Gray conversion is pure combinational, but the Gray-coded pointer itself must be REGISTERED in a sequential block SEPARATE from the one that increments the binary pointer, so the registered Gray pointer reflects the pre-increment binary value and therefore lags the binary pointer by exactly one clock. Computing next-binary and next-Gray together and latching both in one block (though it looks equivalent) makes the full/empty flags take effect one cycle early relative to the data, misaligning them against a cycle-accurate reference.",
+        "A block/active/full flag that gates admission of new items must drop the cycle the LAST item is CAPTURED (written) into the storage element — NOT after a downstream consumer finishes draining it. Coupling the admission flag to consumer-side drain completion instead of producer-side capture is a common off-by-N-cycles defect in FIFO/queue datapaths."
       ]
     },
     {
@@ -618,6 +619,55 @@
       "lesson_count": 1,
       "lessons": [
         "Serial-to-parallel deserializer collecting N bits into a word with a REGISTERED valid output: shift the incoming bit in at the LSB while the register shifts left (`data <= {data[W-2:0], din}`) so the first-received bit lands in the MSB (MSB-first). For the completion strobe, size the bit counter to N+1 terminal states (count 0..N, not 0..N-1): shift on counts 0..N-1, and assert the REGISTERED dout_valid on the dedicated terminal count N — i.e. ONE cycle AFTER the Nth bit is shifted in, when the full word is stable — as a one-cycle pulse, then return to 0. A registered output inherently lags one cycle, so asserting valid the SAME cycle as the Nth shift races the consumer; the extra terminal state also cleanly re-synchronizes the counter when the upstream valid strobe deasserts irregularly around the last bit. Gate the counter/shift on the input valid and clear the counter when it deasserts so each frame starts aligned."
+      ]
+    },
+    {
+      "ic_class": "whitebox-harness-delivery",
+      "lesson_count": 1,
+      "lessons": [
+        "A hidden/whitebox harness commonly binds hierarchically by the design's OWN internal signal names under the top-level instance. Deliver the design as ONE FLAT module under the stated top name — never wrap the logic inside an inner sub-module the harness cannot see, and keep the internal signal names intact rather than renaming or re-hierarchizing them."
+      ]
+    },
+    {
+      "ic_class": "handshake-valid-ready",
+      "lesson_count": 1,
+      "lessons": [
+        "After a request/valid output's handshake completes (its ack/ready was sampled), hold that output DEASSERTED for at least one full clock before re-asserting it for the next item. A zero-gap combinational re-assert in the very next cycle reads as a single unbroken pulse to an edge-based checker."
+      ]
+    },
+    {
+      "ic_class": "bus-interface-defaults",
+      "lesson_count": 1,
+      "lessons": [
+        "When a spec names a bus/word interface (AMBA-style, a processor data word, a register file) but does not state the data width, the conventional default is 32-bit; parameterize (`parameter DATA_WIDTH=32`) rather than hardcoding, so a TB that overrides the width still elaborates."
+      ]
+    },
+    {
+      "ic_class": "matrix-block-processor",
+      "lesson_count": 1,
+      "lessons": [
+        "To embed an m×n operation inside a fixed N×N datapath (m,n ≤ N), zero-pad into a block-diagonal placement: put the active m×n block in the top-left and drive all out-of-range rows/columns to 0, so the unused lanes contribute nothing to the result rather than injecting X/garbage."
+      ]
+    },
+    {
+      "ic_class": "iterative-training-datapath",
+      "lesson_count": 1,
+      "lessons": [
+        "For iterative weight-update trainers (Hebbian / perceptron / Fausett-style), the convergence/stop criterion is that the weight DELTAS are all zero on a pass — not that two consecutive weight snapshots happen to be equal. Test the update magnitude, not snapshot equality, or a coincidental repeat halts training early."
+      ]
+    },
+    {
+      "ic_class": "onehot-control-decode",
+      "lesson_count": 1,
+      "lessons": [
+        "A mutually-exclusive one-hot control decode can be safely rewritten as a flat one-hot AND-OR sum-of-products (each output = OR of the AND-terms whose select bit is hot) for area optimization — this is logically equivalent to a priority/case decode ONLY because the selects are guaranteed one-hot; do not apply it when more than one select can be high."
+      ]
+    },
+    {
+      "ic_class": "serial-in-parallel-out",
+      "lesson_count": 1,
+      "lessons": [
+        "A random-access indexed write into a register array where the index advances by exactly one each accepted item is equivalent to a ring-counter-addressed serial-in-parallel-out (SIPO) shift collector; the SIPO form removes the index decoder and is the canonical compact implementation when writes are strictly sequential."
       ]
     }
   ]

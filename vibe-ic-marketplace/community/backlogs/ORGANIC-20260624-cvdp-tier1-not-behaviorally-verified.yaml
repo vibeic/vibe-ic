@@ -79,3 +79,10 @@ session_context: >-
   4 of 33 failed their own harness, exposing that CVDP Tier-1 — unlike VE/RTLLM —
   carries no behavioral or conformance verification. The v1.2.4/v1.2.5 GATE-PARITY
   fixes addressed VE/VE-Human but not the CVDP pipeline.
+
+resolution:
+  status: resolved
+  date: "2026-07-06"
+  by: repo-gatekeeper triage sweep
+  note: >-
+    cvdp_solve_pipeline.py verify_behavioral gate + emit-only honesty marker live; test_cvdp_solve_pipeline.py green
