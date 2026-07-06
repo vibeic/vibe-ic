@@ -1071,6 +1071,112 @@ def emit_variant_alias_wrapper(core_module: str,
     return "\n".join(lines)
 
 
+def _module_port_list_span(text: str, module_name: str):
+    """Return (open_idx, close_idx) of the ANSI port-list parens of `module
+    <module_name>` — the `(` after the (optional) `#(...)` param header through
+    its balanced `)`. Returns None if the header is not a plain ANSI form we can
+    edit safely (non-ANSI / port list in the body / unbalanced)."""
+    m = re.search(rf"\bmodule\s+{re.escape(module_name)}\b", text)
+    if not m:
+        return None
+    i = m.end()
+    n = len(text)
+    # skip a leading `import ...;` and a `#( ... )` param header (balanced)
+    while i < n:
+        while i < n and text[i] in " \t\r\n":
+            i += 1
+        if text.startswith("import", i):                # import pkg::*;
+            semi = text.find(";", i)
+            if semi == -1:
+                return None
+            i = semi + 1
+            continue
+        if i < n and text[i] == "#":
+            i += 1
+            while i < n and text[i] in " \t\r\n":
+                i += 1
+            if i >= n or text[i] != "(":
+                return None
+            depth = 0
+            while i < n:
+                if text[i] == "(":
+                    depth += 1
+                elif text[i] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        i += 1
+                        break
+                i += 1
+            continue
+        break
+    while i < n and text[i] in " \t\r\n":
+        i += 1
+    if i >= n or text[i] != "(":                        # non-ANSI (no port parens)
+        return None
+    open_idx = i
+    depth = 0
+    while i < n:
+        if text[i] == "(":
+            depth += 1
+        elif text[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return (open_idx, i)
+        i += 1
+    return None
+
+
+def emit_variant_alias_flat(text: str, module_name: str,
+                            rename_map: Dict[str, str]) -> Optional[str]:
+    """FLAT alternative to `emit_variant_alias_wrapper`: instead of renaming the
+    core to `<name>__rcvar_inner` and adding a wrapper that instantiates it, edit
+    the module IN PLACE — rename each reset/clock port to its canonical spelling
+    in the module's OWN ANSI header and add a 1-bit internal alias
+    `wire <orig> = <canon>;` so the unchanged body still resolves. The result is a
+    SINGLE FLAT module under the original name, so a whitebox testbench that binds
+    the design's own internal signals hierarchically (`dut.<internal>`) still sees
+    them — the two-level wrapper hid them one instance down (ORGANIC-20260704).
+
+    Only the PURE-RENAME case is handled (reset/clock ports are 1-bit inputs and
+    the rename is ALWAYS same-polarity — cross-polarity RAISES, exactly like the
+    wrapper). Returns the transformed text, or None if it cannot apply safely
+    (non-ANSI header, a port name not found uniquely in the header, additive
+    dual-spelling) — the caller then falls back to the wrapper path. §4.05-safe:
+    operates only on the design's own RTL text."""
+    if not rename_map:
+        return None
+    for orig, new in rename_map.items():
+        if not _same_class(orig, new):
+            raise ValueError(
+                f"refusing cross-polarity/role reset-clock alias {orig!r} -> {new!r}")
+    span = _module_port_list_span(text, module_name)
+    if span is None:
+        return None
+    open_idx, close_idx = span
+    header = text[open_idx:close_idx + 1]
+    new_header = header
+    for orig, canon in rename_map.items():
+        # The port NAME must appear exactly once as a declared identifier in the
+        # ANSI port list. Rename that single whole-word occurrence to canonical;
+        # bail (→ wrapper fallback) on 0 or >1 matches so we never mis-edit.
+        pat = re.compile(rf"(?<![\w.]){re.escape(orig)}(?![\w])")
+        hits = pat.findall(new_header)
+        if len(hits) != 1:
+            return None
+        new_header = pat.sub(canon, new_header)
+    # Inject the 1-bit internal aliases right after the port-list `)` (and any
+    # trailing `;`). Body references to <orig> now resolve to `wire <orig>=<canon>`.
+    after = close_idx + 1
+    tail = text[after:]
+    msemi = re.match(r"\s*;", tail)
+    insert_at = after + msemi.end() if msemi else after
+    aliases = "".join(
+        f"\n  wire {orig} = {canon};  // rcvar flat alias (#rcvar-whitebox)"
+        for orig, canon in rename_map.items())
+    return (text[:open_idx] + new_header + text[after:insert_at]
+            + aliases + text[insert_at:])
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="Emit a reset/clock name-variant alias wrapper (canonical "
