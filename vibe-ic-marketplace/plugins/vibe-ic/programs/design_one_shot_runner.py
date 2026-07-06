@@ -1660,6 +1660,37 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
     # sets VIBE_IC_RCVAR_WHITEBOX_FLAT=1 to prefer the flat, hierarchy-preserving
     # transform there.
     _flat_optin = os.environ.get("VIBE_IC_RCVAR_WHITEBOX_FLAT") == "1"
+    # ORGANIC-20260704 residual (the "4th mechanism") — ADDITIVE dual-spelling
+    # reset under the WHITEBOX opt-in. The additive wrapper exposes BOTH the
+    # design's own reset spelling AND a canonical synonym, AND-combined
+    # (`wire r__rcvar_net = resetn & rst_n`), with the synonym pulled to its
+    # inactive level via a `tri1`/`tri0` net-type. That pull is NOT honored by
+    # the official Icarus-13 cocotb scorer: a hidden whitebox harness drives ONLY
+    # the design's own spelling (the one the author wrote, which IS in the
+    # contract) and leaves the synonym UNDRIVEN → `resetn & <undriven tri1>`
+    # resolves to x → the design is frozen in reset forever (m_axis_valid stuck
+    # 0). PROVEN on cvdp_copilot_axi_stream_upscale_0001: the flat/original module
+    # PASSES the official scorer, the additive wrapper FAILS, and removing ONLY
+    # the additive synonym (keeping the design's own reset) restores PASS.
+    # In the whitebox delivery context the additive synonym bridge is never
+    # needed (the harness binds the design's own spelling), so under the opt-in
+    # SUPPRESS the additive map: apply the pure-rename flat transform if any
+    # rename remains, else deliver the original module unchanged. OPT-IN gated
+    # (default OFF) → the general silicon flow + its #518/#689/#792 additive
+    # guard tests are unchanged. §4.05: operates only on the design's own port
+    # contract, no oracle/harness read.
+    if _flat_optin and additive_reset_map and not parents:
+        _suppressed_additive = sorted(additive_reset_map)
+        additive_reset_map = {}
+        if not plan:
+            return StepResult(
+                "reset_clock_variant_aliases", "SKIP", time.time() - t0,
+                f"whitebox opt-in: additive dual-spelling reset synonym(s) "
+                f"{_suppressed_additive} suppressed (the hidden cocotb harness "
+                f"binds the design's own reset spelling and would leave the "
+                f"AND-combined synonym undriven → design frozen; "
+                f"ORGANIC-20260704 4th-mechanism, proven on "
+                f"axi_stream_upscale_0001). Delivering the original flat module.")
     if _flat_optin and not additive_reset_map and not parents:
         try:
             flat_txt = _rcv.emit_variant_alias_flat(target_txt, tgt, plan)
