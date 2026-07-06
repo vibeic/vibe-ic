@@ -4793,6 +4793,452 @@ def rule_use_before_declaration(src: str, path: str) -> List[Finding]:
 # ---------------------------------------------------------------------------
 # Rule: an input / inout PORT declared `reg` (ORGANIC-20260703)
 # ---------------------------------------------------------------------------
+# Rules 26-31 (ORGANIC-20260704) — six arithmetic-datapath structural traps
+# distilled from the 94 proven-correct CVDP solved_design_db designs. Every
+# rule below is ADVISORY ONLY (severity INFO, block_eligible=False, no --fix,
+# no emit-block): each is a NEW heuristic pattern-class that has only been
+# corpus-swept against those 94 designs, not the full plugin reference corpus,
+# so it never hard-blocks a gate — it is reported for human/AI review. Each
+# rule fails SAFE (returns no finding) whenever it cannot symbolically relate
+# the widths/structure involved, rather than guessing. chip-AGNOSTIC: every
+# check is pure RTL-text structure, no design/vendor/SKU literal.
+# ---------------------------------------------------------------------------
+_ADVISORY_NOTE_20260704 = (
+    "new structural heuristic (ORGANIC-20260704) — advisory pending broader "
+    "corpus validation beyond the 94-design zero-FP sweep")
+
+
+def _param_names(src: str) -> Set[str]:
+    """Collect every `parameter`/`localparam` NAME declared in the source
+    (single or comma-separated lists). Used so a symbolic width bound like
+    `WIDTH-1` or `ADDR_WIDTH` is recognized as constant-like, never as a
+    runtime signal."""
+    names: Set[str] = set()
+    for m in re.finditer(r'\b(?:parameter|localparam)\b([^;]*);', src, re.S):
+        for nm in re.finditer(r'([A-Za-z_]\w*)\s*=', m.group(1)):
+            names.add(nm.group(1))
+    return names
+
+
+def _width_info(bracket_expr: str):
+    """Parse a declaration's bracket content into a comparable width triple:
+      ('sym', k, NAME)  for `k*NAME-1:0` or `NAME-1:0` (k=1)   -- symbolic
+      ('abs', bits, None) for a literal `HI:0` range            -- absolute
+      None if the expression doesn't match either recognizable shape (fails
+      safe -- callers must skip rather than guess).
+    """
+    expr = bracket_expr.strip()
+    m = re.match(r'^(\d+)\s*\*\s*([A-Za-z_]\w*)\s*-\s*1\s*:\s*0$', expr)
+    if m:
+        return ('sym', int(m.group(1)), m.group(2))
+    m = re.match(r'^([A-Za-z_]\w*)\s*-\s*1\s*:\s*0$', expr)
+    if m:
+        return ('sym', 1, m.group(1))
+    m = re.match(r'^(\d+)\s*:\s*0$', expr)
+    if m:
+        return ('abs', int(m.group(1)) + 1, None)
+    return None
+
+
+def _same_base(a, b) -> bool:
+    """True if two `_width_info` triples are on a directly comparable scale:
+    both symbolic against the SAME named parameter, or both absolute (bit
+    counts are always mutually comparable)."""
+    if a is None or b is None:
+        return False
+    if a[0] != b[0]:
+        return False
+    if a[0] == 'sym':
+        return a[2] == b[2]
+    return True
+
+
+def _decl_width_map(src: str) -> Dict[str, Tuple]:
+    """name -> `_width_info` triple, for every wire/reg/logic declaration
+    (ports included) whose FIRST packed dimension resolves to a recognizable
+    `k*NAME-1:0` / `NAME-1:0` / `HI:0` shape. Unrecognizable shapes (a second
+    packed/unpacked dimension, an expression using `$clog2`, etc.) are simply
+    absent from the map, so every consuming rule below fails safe on them."""
+    out: Dict[str, Tuple] = {}
+    # A port's net-type keyword (`wire`/`reg`/`logic`) is OPTIONAL in Verilog
+    # (`input [7:0] a` is implicitly `wire`), and each port typically repeats
+    # its own `input`/`output`/`inout` keyword rather than sharing a comma
+    # list (the `finditer` position must NOT swallow a sibling port's leading
+    # keyword, so this is a single-name match, not a comma list).
+    port_decl_re = re.compile(
+        r'\b(?:input|output|inout)\s+(?:(?:wire|reg|logic)\s+)?'
+        r'(?:signed\s+)?\[\s*([^\]]+?)\s*\]\s*([A-Za-z_]\w*)')
+    # An internal signal decl always carries its net-type keyword and MAY
+    # comma-list several names under one declaration.
+    internal_decl_re = re.compile(
+        r'\b(?:wire|reg|logic)\s+(?:signed\s+)?\[\s*([^\]]+?)\s*\]\s*'
+        r'([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)')
+    for m in port_decl_re.finditer(src):
+        info = _width_info(m.group(1))
+        if info:
+            out.setdefault(m.group(2), info)
+    for m in internal_decl_re.finditer(src):
+        info = _width_info(m.group(1))
+        if not info:
+            continue
+        for nm in m.group(2).split(','):
+            nm = nm.strip()
+            if nm and nm not in VERILOG_KEYWORDS:
+                out.setdefault(nm, info)
+    return out
+
+
+def _func_return_width_map(src: str) -> Dict[str, Tuple]:
+    """name -> `_width_info` triple for a `function [signed] [<range>] name(`
+    declaration's OWN return type (e.g. a Booth partial-product recoder that
+    already returns the full product width)."""
+    out: Dict[str, Tuple] = {}
+    for m in re.finditer(
+            r'\bfunction\s+(?:signed\s+)?\[\s*([^\]]+?)\s*\]\s*'
+            r'([A-Za-z_]\w*)\s*\(',
+            src):
+        info = _width_info(m.group(1))
+        if info:
+            out[m.group(2)] = info
+    return out
+
+
+def _mk_advisory(path: str, line: int, rule: str, symbol: str, message: str) -> Finding:
+    return Finding(file=path, line=line, severity='INFO', rule=rule,
+                    symbol=symbol, message=message, block_eligible=False,
+                    advisory_note=_ADVISORY_NOTE_20260704)
+
+
+def rule_divider_missing_final_correction(src: str, path: str) -> List[Finding]:
+    """Rule 26 (ORGANIC-20260704) — non-restoring-divider final correction.
+
+    In a non-restoring division algorithm, the running remainder can go
+    negative mid-computation; after the LAST of exactly W iterations, a
+    negative remainder MUST receive a mandatory `<rem> <= <rem> + <divisor>;`
+    final correction before being read out, or the emitted remainder is off
+    by one divisor on specific sign combinations.
+
+    Conservative gate (zero-FP by construction against the reference
+    restoring-division style): only fires on a register that is EXPLICITLY
+    declared `reg signed [...]` with a name containing "rem"/"remainder" --
+    the textbook non-restoring signature. A RESTORING divider's remainder is
+    unsigned and corrected every cycle (not just at the end), so it is never
+    matched by this gate. Fails safe (no finding) when the terminal-iteration
+    branch or the emit statement isn't recognizable."""
+    findings: List[Finding] = []
+    signed_rem_re = re.compile(
+        r'\breg\s+signed\s+\[[^\]]+\]\s*(\w*rem\w*)\b',
+        re.IGNORECASE)
+    term_re = re.compile(
+        r'\b\w*(?:cnt|count|idx|iter)\w*\s*==\s*[\w$\'\s+-]*?-\s*1\b'
+        r'\s*\)\s*(?:begin)?([\s\S]{0,400}?)(?:\bend\b|\bendcase\b|$)')
+    for rm in signed_rem_re.finditer(src):
+        reg_name = rm.group(1)
+        for tm in term_re.finditer(src):
+            block = tm.group(1)
+            if not re.search(r'<=\s*' + re.escape(reg_name) + r'\b', block):
+                continue
+            has_correction = re.search(
+                r'\bif\s*\(\s*' + re.escape(reg_name) + r'\s*<\s*0\s*\)'
+                r'[\s\S]{0,160}?' + re.escape(reg_name) + r'\s*<=\s*'
+                + re.escape(reg_name) + r'\s*\+', block)
+            if has_correction:
+                continue
+            lineno = src[:tm.start()].count('\n') + 1
+            findings.append(_mk_advisory(
+                path, lineno, 'divider-missing-final-correction', reg_name,
+                f"signed running-remainder '{reg_name}' is emitted at the "
+                f"terminal iteration without a preceding "
+                f"`if ({reg_name} < 0) {reg_name} <= {reg_name} + "
+                f"<divisor>;` final correction — a non-restoring divider's "
+                f"negative remainder must be corrected before readout."))
+    return findings
+
+
+def rule_multiop_arith_width_consistency(src: str, path: str) -> List[Finding]:
+    """Rule 27 (ORGANIC-20260704) — multi-operand GCD/LCM width consistency.
+
+    (a) A >=3-operand multiply chain (`X <= A*B*C[...];`) whose LHS is
+        declared at the SAME width as a single operand rather than the
+        algorithmic max width the product needs.
+    (b) A wide dividend divided by a BARE narrower divisor identifier with no
+        value-preserving zero-extend (the golden CVDP `gcd_0040` pattern
+        `product / {{WIDTH{1'b0}}, gcd_result}` wraps the divisor in a
+        zero-extend concat, so the bare-identifier regex never matches it).
+
+    Fails safe whenever any operand's width can't be symbolically related to
+    the others (unresolvable decl shape, or different named bases)."""
+    findings: List[Finding] = []
+    dwmap = _decl_width_map(src)
+
+    mulchain_re = re.compile(
+        r'\b([A-Za-z_]\w*)\s*(?:<=|=)\s*'
+        r'((?:[A-Za-z_]\w*\s*\*\s*){2,}[A-Za-z_]\w*)\s*;')
+    for m in mulchain_re.finditer(src):
+        lhs = m.group(1)
+        operands = [o.strip() for o in m.group(2).split('*')]
+        lhs_info = dwmap.get(lhs)
+        operand_infos = [dwmap.get(o) for o in operands]
+        if lhs_info is None or any(oi is None for oi in operand_infos):
+            continue
+        if not all(_same_base(lhs_info, oi) for oi in operand_infos):
+            continue
+        operand_values = {oi[1] for oi in operand_infos}
+        if len(operand_values) != 1:
+            continue  # operands aren't all the same width -> not this idiom
+        shared_val = next(iter(operand_values))
+        if lhs_info[1] == shared_val:
+            lineno = src[:m.start()].count('\n') + 1
+            base_desc = lhs_info[2] if lhs_info[0] == 'sym' else f"{lhs_info[1]}-bit"
+            findings.append(_mk_advisory(
+                path, lineno, 'multiop-arith-width-consistency', lhs,
+                f"'{lhs}' accumulates a {len(operands)}-operand product "
+                f"({'*'.join(operands)}) but is declared at a single "
+                f"operand's width ({base_desc}) rather than the algorithmic "
+                f"max width the product chain requires — high-order bits "
+                f"silently truncate."))
+
+    div_re = re.compile(r'\b([A-Za-z_]\w*)\s*/\s*([A-Za-z_]\w*)\s*[;)]')
+    for m in div_re.finditer(src):
+        num, den = m.groups()
+        num_info = dwmap.get(num)
+        den_info = dwmap.get(den)
+        if not _same_base(num_info, den_info):
+            continue
+        if num_info[1] > den_info[1]:
+            lineno = src[:m.start()].count('\n') + 1
+            findings.append(_mk_advisory(
+                path, lineno, 'multiop-arith-width-consistency', den,
+                f"'{num}' is divided by bare '{den}' without a "
+                f"value-preserving zero-extend to match widths — the "
+                f"divisor should be widened via an explicit zero-extend "
+                f"concat (e.g. `{{{{N{{1'b0}}}}, {den}}}`) before the "
+                f"divide."))
+    return findings
+
+
+def rule_cascaded_decrement_priority_order(src: str, path: str) -> List[Finding]:
+    """Rule 28 (ORGANIC-20260704) — cascaded down-counter borrow chain order.
+
+    A BCD/HH:MM:SS-style cascaded decrement must evaluate its if/else-if
+    chain in strict priority order: each subsequent branch, on top of
+    decrementing the NEXT unit, must reload EVERY previously-decremented unit
+    to its wraparound constant. If a later branch's reload set is not a
+    superset of the earlier branches' decrement targets, the chain is
+    evaluated out of priority order and silently produces wrong wraparound.
+
+    Structural (not keyword-based): a branch's "decrement" target is any
+    `X <= X - <const>;` self-decrement; its "reload" targets are any other
+    `Y <= <const>;` in the same branch body. Requires >=3 branches (an `if`
+    plus >=2 cascading `else if`) to have an order to judge; fails safe
+    otherwise. chip-AGNOSTIC: no domain-specific unit name is ever matched."""
+    findings: List[Finding] = []
+    lines = src.split('\n')
+    n = len(lines)
+    decr_re = re.compile(r'\b([A-Za-z_]\w*)\s*<=\s*\1\s*-\s*[\w\'$]+\s*;')
+    reload_re = re.compile(r'\b([A-Za-z_]\w*)\s*<=\s*([\w\'$]+)\s*;')
+    if_start_re = re.compile(r'^\s*if\s*\(')
+    elseif_re = re.compile(r'^\s*(?:end\s+)?else\s+if\s*\(')
+    plain_else_re = re.compile(r'^\s*(?:end\s+)?else\b(?!\s+if)')
+
+    i = 0
+    while i < n:
+        if not if_start_re.match(lines[i]):
+            i += 1
+            continue
+        # Walk the chain tracking `begin`/`end` nesting depth RELATIVE to
+        # this `if`. Each line's `end` count is applied BEFORE checking for
+        # a branch boundary (an `end else if (...) begin` line closes the
+        # PRIOR branch and opens the NEXT one on the same line), and its
+        # `begin` count is applied AFTER, so depth==0 means "back at the
+        # chain's own nesting level" at the moment of the boundary check.
+        chain_start = i
+        branch_starts = [i]
+        depth = 0
+        j = i
+        chain_end = None
+        while j < n:
+            depth -= lines[j].count('end')
+            if j > i and depth <= 0:
+                if elseif_re.match(lines[j]) or plain_else_re.match(lines[j]):
+                    branch_starts.append(j)
+                    depth = 0
+                else:
+                    # a genuine chain-terminal `end` (no trailing else) —
+                    # the chain is over; this line is NOT part of any branch.
+                    chain_end = j
+                    break
+            depth += lines[j].count('begin')
+            j += 1
+        if chain_end is None:
+            chain_end = j
+        if len(branch_starts) < 3:
+            i = chain_start + 1
+            continue
+        branch_bodies = []
+        for k in range(len(branch_starts)):
+            b0 = branch_starts[k]
+            b1 = branch_starts[k + 1] if k + 1 < len(branch_starts) else chain_end
+            branch_bodies.append('\n'.join(lines[b0:b1]))
+        decrements = []
+        reload_sets = []
+        for body in branch_bodies:
+            dset = {dm.group(1) for dm in decr_re.finditer(body)}
+            rset = {rm.group(1) for rm in reload_re.finditer(body)
+                    if rm.group(1) not in dset and rm.group(2) != rm.group(1)}
+            decrements.append(dset)
+            reload_sets.append(rset)
+        # Only judge chains where EVERY branch decrements some unit -- the
+        # genuine cascaded-borrow idiom (each priority level owns exactly one
+        # decrement). A branch with NO decrement at all (a distinct
+        # catch-all/hold/idle condition unrelated to the counter, e.g. a
+        # trailing `else` that just clears an unrelated `valid` flag) is not
+        # part of a cascade and must not be judged against the reload-set
+        # invariant -- ORGANIC-20260704 zero-FP fix: this excludes the CVDP
+        # `sync_lifo_0010` up/down counter (`if(reset)... else if(!full)
+        # counter<=counter+1; else if(!empty) counter<=counter-1;`), whose
+        # last branch is a plain single-unit decrement with NO cascade
+        # semantics at all, not a chain with a missing reload.
+        if decrements and all(decrements):
+            cumulative: Set[str] = set()
+            bad = False
+            for k in range(1, len(branch_bodies)):
+                cumulative |= decrements[k - 1]
+                if cumulative and not cumulative.issubset(reload_sets[k]):
+                    bad = True
+                    break
+            if bad:
+                findings.append(_mk_advisory(
+                    path, chain_start + 1,
+                    'cascaded-decrement-priority-order', '',
+                    "cascaded down-counter borrow chain: a later else-if "
+                    "branch decrements a new unit without reloading all "
+                    "previously-decremented units to their wraparound "
+                    "constant first — verify the if/else-if priority order "
+                    "(lowest unit first, cascading the borrow upward)."))
+        i = max(chain_end, chain_start + 1)
+    return findings
+
+
+def rule_seq_multiplier_width(src: str, path: str) -> List[Finding]:
+    """Rule 29 (ORGANIC-20260704) — sequential shift-and-add multiplier width.
+
+    `acc <= acc + (operand << <variable-shift>);` inside a counted
+    shift-and-add loop: if `operand`'s OWN declared width is narrower than
+    `acc`'s, the shift happens in the NARROW width before the add promotes
+    it, so high-order partial products truncate silently for large operands.
+    A constant shift amount is excluded (not the iterative idiom). Fails
+    safe when either width can't be resolved or the two aren't on a
+    comparable scale."""
+    findings: List[Finding] = []
+    dwmap = _decl_width_map(src)
+    acc_re = re.compile(
+        r'\b([A-Za-z_]\w*)\s*<=\s*\1\s*\+\s*\(?\s*'
+        r'([A-Za-z_]\w*)\s*<<\s*([A-Za-z_]\w*)\s*\)?\s*;')
+    for m in acc_re.finditer(src):
+        acc, operand, shiftvar = m.groups()
+        if shiftvar.isdigit():
+            continue
+        acc_info = dwmap.get(acc)
+        op_info = dwmap.get(operand)
+        if not _same_base(acc_info, op_info):
+            continue
+        if acc_info[1] > op_info[1]:
+            lineno = src[:m.start()].count('\n') + 1
+            findings.append(_mk_advisory(
+                path, lineno, 'seq-multiplier-width', acc,
+                f"'{operand}' is shifted by a variable amount before being "
+                f"added into '{acc}', but '{operand}' is declared narrower "
+                f"than '{acc}' — the shifted operand must be pre-sized to "
+                f"the accumulator's width BEFORE the shift, or high-order "
+                f"partial products truncate silently for large operands."))
+    return findings
+
+
+def rule_variable_partselect_illegal_range(src: str, path: str) -> List[Finding]:
+    """Rule 30 (ORGANIC-20260704) — variable data-dependent bit-window
+    extraction using an illegal `[hi:lo]` part-select.
+
+    A `[hi:lo]` part-select where BOTH bounds resolve to a declared signal
+    (not a parameter/localparam, not a literal) is almost certainly meant to
+    be an indexed part-select (`<base> +: <CONST_WIDTH>` / `-: `) — a
+    variable-bounded `[hi:lo]` is illegal Verilog. Fails safe whenever either
+    bound is purely numeric/parameter-derived (the overwhelmingly common,
+    legal case: `[WIDTH-1:0]`, `[ADDR_WIDTH:ADDR_WIDTH-1]`, etc.)."""
+    findings: List[Finding] = []
+    param_names = _param_names(src)
+    signal_names = {nm for _, nm, _ in find_declarations(src)}
+    signal_names |= set(re.findall(
+        r'\b(?:input|output|inout)\s+(?:wire|reg|logic)?\s*(?:signed\s+)?'
+        r'(?:\[[^\]]+\]\s*)?([A-Za-z_]\w*)', src))
+
+    def _is_const_like(tok: str) -> bool:
+        tok = tok.strip()
+        if re.match(r"^\d+\s*'[sS]?[bBdDhHoO][0-9a-fA-Fx_XZ]*$", tok):
+            return True
+        if re.match(r'^\d+$', tok):
+            return True
+        return tok in param_names
+
+    for m in re.finditer(r'\[([^\[\]:]+):([^\[\]:]+)\]', src):
+        hi, lo = m.group(1), m.group(2)
+        hi_toks = re.findall(r'[A-Za-z_]\w*', hi)
+        lo_toks = re.findall(r'[A-Za-z_]\w*', lo)
+        if not hi_toks or not lo_toks:
+            continue
+        hi_signal = any(t in signal_names and t not in param_names for t in hi_toks)
+        lo_signal = any(t in signal_names and t not in param_names for t in lo_toks)
+        hi_const = all(_is_const_like(t) for t in hi_toks)
+        lo_const = all(_is_const_like(t) for t in lo_toks)
+        if hi_signal and lo_signal and not hi_const and not lo_const:
+            lineno = src[:m.start()].count('\n') + 1
+            findings.append(_mk_advisory(
+                path, lineno, 'variable-partselect-illegal-range', '',
+                f"part-select [{hi.strip()}:{lo.strip()}] has non-constant "
+                f"bounds that resolve to declared signals, not parameters "
+                f"— a variable-bounded `[hi:lo]` slice is illegal Verilog; "
+                f"use an indexed part-select `<base> +: <CONST_WIDTH>` / "
+                f"`<base> -: <CONST_WIDTH>` (runtime base, CONSTANT width) "
+                f"instead."))
+    return findings
+
+
+def rule_booth_shift_before_signext(src: str, path: str) -> List[Finding]:
+    """Rule 31 (ORGANIC-20260704) — Booth-recoded term shifted before it is
+    sign-extended to the full product width.
+
+    `target <= term <<< <shift>;` (an arithmetic left-shift, the Booth
+    radix-4 recode-and-shift idiom): if `term`'s own declared width (or, when
+    `term` is a function call, the function's own RETURN width) is narrower
+    than `target`'s, the sign/overflow bits are lost during the shift before
+    the result is ever widened. The golden CVDP `modified_booth_mul` design's
+    recoder function already returns the FULL product width, so this never
+    fires on it. Fails safe when either width is unresolvable."""
+    findings: List[Finding] = []
+    dwmap = _decl_width_map(src)
+    func_widths = _func_return_width_map(src)
+    shift_re = re.compile(
+        r'\b([A-Za-z_]\w*)\s*<=\s*'
+        r'([A-Za-z_]\w*)\s*(\([^;]*?\))?\s*<<<\s*[\w\'$]+\s*;')
+    for m in shift_re.finditer(src):
+        target, term, call_args = m.groups()
+        tgt_info = dwmap.get(target)
+        term_info = func_widths.get(term) if call_args is not None else dwmap.get(term)
+        if not _same_base(tgt_info, term_info):
+            continue
+        if term_info[1] < tgt_info[1]:
+            lineno = src[:m.start()].count('\n') + 1
+            findings.append(_mk_advisory(
+                path, lineno, 'booth-shift-before-signext', target,
+                f"'{term}' is arithmetically shifted (`<<<`) into "
+                f"'{target}' without first being sign-extended to the full "
+                f"product width — a Booth-recoded partial-product term "
+                f"must be sign-extended to the FULL product width BEFORE "
+                f"the shift, or the sign/overflow bits truncate."))
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # A Verilog `input` / `inout` port is a NET; it can never be a `reg` (a driven
 # variable). `input reg <p>` / `inout reg <p>` is illegal in strict
 # SystemVerilog and ELAB_ERRORs on the official CVDP icarus-13 scorer
@@ -4869,6 +5315,15 @@ def lint_file(path: Path) -> List[Finding]:
     results += rule_mixed_blocking_same_reg(src, str(path))
     results += rule_narrow_bitwise_not_wider_context(src, str(path))
     results += rule_use_before_declaration(src, str(path))
+    # Rules 26-31 (ORGANIC-20260704) — advisory-only arithmetic-datapath
+    # structural rules; every finding is severity INFO / block_eligible=False
+    # (see _mk_advisory), so enabling them cannot change any gate's rc.
+    results += rule_divider_missing_final_correction(src, str(path))
+    results += rule_multiop_arith_width_consistency(src, str(path))
+    results += rule_cascaded_decrement_priority_order(src, str(path))
+    results += rule_seq_multiplier_width(src, str(path))
+    results += rule_variable_partselect_illegal_range(src, str(path))
+    results += rule_booth_shift_before_signext(src, str(path))
     # rule_wire_input_read_in_clocked_block: NOT enabled.
     #
     # v0.1.39 honesty correction (audit Finding 2): the v0.1.38 disable
