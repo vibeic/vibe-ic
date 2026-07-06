@@ -47,3 +47,30 @@ progress:
   by: repo-gatekeeper triage sweep
   note: >-
     Authoring-side mitigation SHIPPED: expert-DB lesson `whitebox-harness-delivery` (deliver ONE FLAT module, keep internal signal names, never nest in an inner submodule the harness can't see) added v1.3.30. REMAINING (kept OPEN): the runner-side flatten of `<top>__rcvar_inner`. emit_variant_alias_wrapper is a polarity-safety-critical program (RAISES on cross-polarity; #689/#618/#792 guards) — a flat-emitter rewrite is a scoped higher-risk follow-up that must be proven not to regress those guards before landing; not rushed into this sweep.
+
+resolution:
+  status: resolved
+  date: "2026-07-06"
+  by: repo-gatekeeper
+  note: >-
+    Runner-side FLAT transform landed v1.3.32 (suggested_fix option 2 —
+    opt-out/in for whitebox flows). New emit_variant_alias_flat renames the
+    reset/clock port to canonical IN the module's OWN ANSI header + adds a 1-bit
+    internal `wire <orig> = <canon>;` alias, producing ONE flat module under the
+    real top name — NO `<top>__rcvar_inner` submodule — so a hidden cocotb harness
+    that binds internals hierarchically (dut.<internal>) still sees them. This is
+    the mechanism behind all 3 proven mechanical recoveries (axi_stream_upscale_0001,
+    cache_lru_0001, cont_adder_0042 — pure reset/clock rename). Wired into the CVDP
+    whitebox entry (cvdp_phase1_entry.py sets VIBE_IC_RCVAR_WHITEBOX_FLAT=1). SAFE
+    by construction — flat is used ONLY for the same-polarity rename case with no
+    additive dual-spelling and no internal caller; it RAISES on cross-polarity
+    exactly like the wrapper, and falls back to the untouched wrapper otherwise, so
+    the #518/#689/#792 guard tests are unchanged (93 green) and the transform is
+    iverilog compile-checked before it is written. Default OFF → zero change to the
+    general silicon flow.
+  residual: >-
+    The 4th observed mechanism (axi_stream_downscale_0001 — an ADDITIVE #792
+    dual-spelling extra reset pin the harness leaves undriven) still takes the
+    wrapper path (flat does not handle additive), relying on the wrapper's
+    polarity-safe tri0/tri1 inactive-default pull. Narrower, rarer sub-case;
+    tracked as a note here, not a blocker.
