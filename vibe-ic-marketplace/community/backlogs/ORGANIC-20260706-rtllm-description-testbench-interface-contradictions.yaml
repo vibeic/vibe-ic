@@ -89,3 +89,10 @@ session_context: >-
   benchmark-data/evaluation/rtllm/run_v1.3.26/RESULT_v1.3.27_blind.md § "§4 triage".
 submitted_at: "2026-07-06T12:00:00+08:00"
 id: ORGANIC-20260706-rtllm-description-testbench-interface-contradictions
+
+resolution:
+  status: resolved
+  date: "2026-07-06"
+  by: repo-gatekeeper triage sweep
+  note: >-
+    DURABLE_RECORD resolved: score_rtllm.py KNOWN_DATASET_DEFECTS waiver + GitHub #106 closed

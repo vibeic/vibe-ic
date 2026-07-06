@@ -90,3 +90,10 @@ session_context: >-
   sensitive subsystem that needs its own corpus-swept PR rather than a change
   bundled into the architecture PR. Documented as the honest program-first /
   AI-backup residual in the campaign RESULT.
+
+resolution:
+  status: resolved
+  date: "2026-07-06"
+  by: repo-gatekeeper triage sweep
+  note: >-
+    _l1_directional_prose_port_extract handles [msb:lsb] prefix + bold names, merge-site dedup; 31 regression tests green

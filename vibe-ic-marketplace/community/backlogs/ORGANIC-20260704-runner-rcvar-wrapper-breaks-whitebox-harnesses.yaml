@@ -41,3 +41,9 @@ evidence:
   run: benchmark_external/cvdp/run_hard94_unified_20260703 (converge2a/, drafts_converge2/)
   mechanical_recovery: 3 problems flipped PASS with zero logic changes
   filed_by: benchmark-agent (hard-94 converge round 2 on v1.3.2/v1.3.3)
+
+progress:
+  status: partial-2026-07-06
+  by: repo-gatekeeper triage sweep
+  note: >-
+    Authoring-side mitigation SHIPPED: expert-DB lesson `whitebox-harness-delivery` (deliver ONE FLAT module, keep internal signal names, never nest in an inner submodule the harness can't see) added v1.3.30. REMAINING (kept OPEN): the runner-side flatten of `<top>__rcvar_inner`. emit_variant_alias_wrapper is a polarity-safety-critical program (RAISES on cross-polarity; #689/#618/#792 guards) — a flat-emitter rewrite is a scoped higher-risk follow-up that must be proven not to regress those guards before landing; not rushed into this sweep.

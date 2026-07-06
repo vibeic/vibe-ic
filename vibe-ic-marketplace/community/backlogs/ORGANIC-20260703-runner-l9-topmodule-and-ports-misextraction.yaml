@@ -87,3 +87,4 @@ resolution:
     Regression: programs/tests/test_organic_20260703_l9_topmodule_misextraction.py
     (8 tests). No regression across the phase1_doc/L9/chip_top family (622 green).
   annotated_at: "2026-07-04 (core-agent fix, post-#97)"
+  triage_2026_07_06: verified — _doc_real_module_decl_name + hardened _is_valid_top_module_candidate; test_organic_20260703_l9_topmodule green

@@ -38,3 +38,10 @@ evidence:
   run: benchmark_external/cvdp/run_hard94_unified_20260703 (converge3/5/7)
   recovered: elevator+manchester+scrambler+ping_pong PASS after packaging alone/with fixes
   filed_by: benchmark-agent (converge rounds 3-7)
+
+resolution:
+  status: resolved
+  date: "2026-07-06"
+  by: repo-gatekeeper triage sweep
+  note: >-
+    cvdp_gate.py _emit_or_split shape-aware packaging live; test_cvdp_gate_multifile_split + flat_filemap_unwrap green

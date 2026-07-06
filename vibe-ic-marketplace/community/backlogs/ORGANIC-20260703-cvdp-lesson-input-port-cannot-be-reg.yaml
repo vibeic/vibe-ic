@@ -41,3 +41,4 @@ resolution:
   commits:
     - "b6cb0be6 — input-reg authoring lesson landed with PR #99"
   annotated_at_merge: "2026-07-03 (PR #97, gatekeeper annotation)"
+  triage_2026_07_06: verified — fix-landed (b6cb0be6); autofix_input_reg_port live in rtl_hygiene_lint.py

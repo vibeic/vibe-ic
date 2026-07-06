@@ -75,3 +75,4 @@ resolution:
     - "8031e170 — v1.3.1 follow-up: normalize alias-wrapper port decls (strip reg/logic/var kind + initializer)"
     - "b8e62b10 — v1.3.2 round-2: SCOPE id-derived alias wrappers to BARE problems only"
   annotated_at_merge: "2026-07-03 (PR #97, gatekeeper annotation)"
+  triage_2026_07_06: verified — cvdp_gate.py id-convention candidate-top derivation live (v1.3.1/1.3.2)
