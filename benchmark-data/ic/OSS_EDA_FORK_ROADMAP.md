@@ -255,3 +255,26 @@ Correction to the note above: the `#581` segfault IS real — it was masked beca
 `estimate_parasitics -detailed_routing` → `repair_design` (real RC, no crash) →
 `detailed_placement` → incremental reroute → re-extract sign-off SPEF. Unblocks sha256 (-62) /
 subservient (-98) SS-corner slew DRV.
+
+## P0 — DELIVERED vs DEFERRED (2026-07-08, honest close)
+
+**DELIVERED + PROVEN (shipped in vibeic-eda:0.1.0):**
+- vibeic/OpenROAD crash fix: repair_design no longer segfaults (Signal-11) on real
+  detailed-route parasitics. Stock OpenROAD segfaults; vibeic-eda does not.
+- `estimate_parasitics -detailed_routing` exposed → repair uses the REAL OpenRCX/SPEF
+  parasitics instead of the silent wire-load fallback (EST-0027).
+- Proven on sky130 sha256 (routed, ss corner): `repair_design` runs to completion
+  (8 resized, 4 buffers) and takes max-slew violators **289 → 0**, placement legal, exit 0.
+
+**DEFERRED (algorithm-hard, honest):** the automated IN-FLOW reroute that REALIZES the
+inserted buffers. Confirmed this session that TritonRoute cannot cleanly re-route an
+already-routed design — a plain `global_route`+`detailed_route` over a routed design fails
+(DRT-0626 / DRT-1010 non-orthogonal-wire), with OR without repair. This is the incremental
+ECO reroute the roadmap flagged as P0 stage (c): "invalidate/refresh only affected nets'
+route guides on buffer insertion instead of aborting" — a real `src/drt` incremental-ECO
+feature, not a config change. Until it exists, the plugin's `_post_route_spef_repair_tcl`
+stays MEASURE-ONLY (safe): the repair CAPABILITY is proven and available in vibeic-eda for
+manual/interactive ECO, but is NOT wired into the automated flow (it would leave unrouted
+buffers → broken GDS). No flow change shipped. Next step for full closure: implement
+bounded incremental detailed-route ECO in vibeic/OpenROAD `src/drt` (rip-up + reroute only
+the repaired nets' guides).
