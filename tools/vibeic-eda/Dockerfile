@@ -92,8 +92,10 @@ RUN git clone https://github.com/vibeic/iverilog.git /iverilog \
 FROM ubuntu:24.04 AS klayout-builder
 ARG KLAYOUT_REF=vibeic/streamout-fixes
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      build-essential git python3-dev zlib1g-dev libexpat1-dev libcurl4-openssl-dev libpng-dev ca-certificates \
+      build-essential git python3-dev zlib1g-dev libexpat1-dev libcurl4-openssl-dev libpng-dev \
+      qtbase5-dev qttools5-dev-tools ca-certificates \
  && rm -rf /var/lib/apt/lists/*
+# build.sh needs qmake in PATH to drive the build system even with -without-qt.
 RUN git clone https://github.com/vibeic/klayout.git /klayout \
  && cd /klayout && git checkout ${KLAYOUT_REF} \
  && ./build.sh -without-qt -noruby -nolibgit2 -j"$(nproc)" -bin /foss/tools/klayout-vibeic -build /klayout/bld
