@@ -7,12 +7,12 @@ The full 1,500+ problem set is gated by NVIDIA + Turing — request access there
 # 1. Clone
 git clone https://github.com/NVlabs/cvdp_benchmark ~/datasets/cvdp_benchmark
 
-# 2. Plan + env check (verify iic-eda container is running)
+# 2. Plan + env check (verify vibeic-eda container is running)
 python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py cvdp
 
-# 3. Stage the project under the iic-eda mount root
+# 3. Stage the project under the vibeic-eda mount root
 #    (the container can only see paths under the mount; symlinks aren't followed)
-MOUNT=~/AI_IC_design              # whatever your iic-eda /foss/designs mount maps to
+MOUNT=~/AI_IC_design              # whatever your vibeic-eda /foss/designs mount maps to
 rsync -a ~/datasets/cvdp_benchmark/example_dataset/<problem>/ $MOUNT/<problem>/
 
 # 4. Drive the runner per blind_instructions_shape_d.md

@@ -34,7 +34,7 @@ Pipeline (chip-AGNOSTIC, but skip-on-mismatch when class detection fails):
     4b. qsf_gen.py / sdc_gen.py (Wave 72; Wave 73 rename) — auto-emit
        fpga/<top>.qsf + fpga/<top>.sdc when absent. SKIP if present.
        chip-AGNOSTIC: pin map driven by L9 ports + board manual.
-    5. quartus FPGA compile via Docker (when iic-eda container is up)
+    5. quartus FPGA compile via Docker (when vibeic-eda container is up)
        outputs <project>/fpga/output_files/<top>.sof
     6. device burn via terasic-de10lite driver (if SOF + USB-Blaster present)
     7. <half-duplex-tester> connect_test via vendor-<half-duplex-tester> driver (if HID present)
@@ -57,7 +57,7 @@ Usage:
                   [--skip-phase3]      # stop after byte[6] verify
                   [--max-eco 3]        # ECO loop cap
                   [--top-name chip_top]
-                  [--container iic-eda]
+                  [--container vibeic-eda]
                   [--dry-run]          # plan only, don't execute
 
 Exit codes:
@@ -68,7 +68,7 @@ Exit codes:
 Limitations (intentional, will be relaxed in future waves):
     - AID-class branch only; non-AID classes SKIP RTL gen step
     - mcp-eda Docker tools wrap shell commands — Quartus / KLayout / Magic /
-      Netgen must be in the iic-eda container. (They are, in
+      Netgen must be in the vibeic-eda container. (They are, in
       hpretl/iic-osic-tools:latest.)
     - Hardware steps require:
         - DE10-Lite plugged in (USB-Blaster detected by quartus_pgm)
@@ -4282,7 +4282,7 @@ def _run_oracle_tb(project: Path, top_name: str, tb_path: Path,
 def _reference_tb_generic_full_stack(project: Path, top_name: str,
                                      track_reason: str,
                                      t0: float,
-                                     container: str = "iic-eda",
+                                     container: str = "vibeic-eda",
                                      ic_class: Optional[str] = None
                                      ) -> StepResult:
     """v1.6.523 — functional gate for generic_full_stack classes.
@@ -5138,7 +5138,7 @@ def _class_uses_aid_reference_tb(ic_class: Optional[str]) -> Tuple[bool, str]:
 
 def step_reference_tb(project: Path, top_name: str = "chip_top",
                       ic_class: Optional[str] = None,
-                      container: str = "iic-eda") -> StepResult:
+                      container: str = "vibeic-eda") -> StepResult:
     t0 = time.time()
     rtl_dir = _pl.rtl_dir(project)
     if not rtl_dir.is_dir():
@@ -5958,7 +5958,7 @@ def _prune_tail_advisory(cg_report: dict, synth_top: str):
 
 
 def step_yosys_synth(project: Path, top_name: str = "chip_top",
-                     container: str = "iic-eda",
+                     container: str = "vibeic-eda",
                      ic_class: Optional[str] = None) -> StepResult:
     t0 = time.time()
     rtl_dir = _pl.rtl_dir(project)
@@ -7428,7 +7428,7 @@ def step_usb_hid_tester_verify(project: Path, runs: int = 5,
 def step_phase3(project: Path, top_name: str,
                 container: str) -> StepResult:
     """v0.144: chain phase3_one_shot_runner — full backend (synth → PnR →
-    GDS → DRC → LVS) inside iic-eda Docker container. Auto-detects PDK
+    GDS → DRC → LVS) inside vibeic-eda Docker container. Auto-detects PDK
     from project/input/pdk/ (custom) or falls back to sky130A.
     chip-AGNOSTIC.
     """
@@ -8419,7 +8419,7 @@ def main() -> int:
                         "Captured from v0.1.53 CVDP run.")
     p.add_argument("--max-eco", type=int, default=3)
     p.add_argument("--top-name", default="chip_top")
-    p.add_argument("--container", default="iic-eda")
+    p.add_argument("--container", default="vibeic-eda")
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args()
 

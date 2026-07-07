@@ -493,7 +493,7 @@ def test_476_oracle_run_loads_firmware_via_staged_hex(tmp_path):
 
     res = p2._run_oracle_tb(project, "synthtop", tb,
                             track_reason="test", t0=p2.time.time(),
-                            container="iic-eda")
+                            container="vibeic-eda")
     assert res is not None, "oracle run returned None (no simulator?)"
 
     run_dir = sim_fs / "oracle_run"

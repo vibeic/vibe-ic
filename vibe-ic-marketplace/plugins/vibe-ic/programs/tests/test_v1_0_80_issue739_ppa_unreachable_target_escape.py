@@ -34,7 +34,7 @@ PURE-FUNCTION END-STATE (no yosys needed)
 generic/mapped stat pairs WITHOUT a container. The marker-split is proven robust
 against yosys ECHOING the whole command line (both markers appear mid-line in
 that echo and must NOT be mistaken for the real `log` output). The live yosys
-path is guarded behind a docker/iic-eda skip.
+path is guarded behind a docker/vibeic-eda skip.
 
 chip-AGNOSTIC: pure measurement + arithmetic; no chip/SKU literal (enforced by
 source_chip_agnostic_check).
@@ -65,7 +65,7 @@ def _load(modname, filename):
 ppa = _load("ppa_area_threshold_check", "ppa_area_threshold_check.py")
 
 
-def _container_up(container="iic-eda") -> bool:
+def _container_up(container="vibeic-eda") -> bool:
     if shutil.which("docker") is None:
         return False
     try:
@@ -335,7 +335,7 @@ def test_decide_generic_meets_target_passes_post_remediation():
 
 # ── orchestration: a near-minimal equivalent pair downgrades (no false block) ─
 @pytest.mark.skipif(not _HAVE_CONTAINER,
-                    reason="iic-eda container not running — live yosys path")
+                    reason="vibeic-eda container not running — live yosys path")
 def test_live_near_minimal_equivalent_is_not_applicable(tmp_path):
     """LIVE END-STATE: two functionally-equivalent near-minimal RTLs (a 3-input
     XOR spelled two ways) — synthesis shares the redundancy so NEITHER the
@@ -362,7 +362,7 @@ def test_live_near_minimal_equivalent_is_not_applicable(tmp_path):
         "  assign y = a ^ (b ^ c);\nendmodule\n")
     rc, report = ppa.run_ppa_area_threshold(
         original=orig, optimized=equiv, top="m", prompt_text=None,
-        threshold_override=20.0, metric_override="both", container="iic-eda",
+        threshold_override=20.0, metric_override="both", container="vibeic-eda",
         reference=ref)
     if report["verdict"] == "NOT_APPLICABLE" and "unmeasurable" in report.get(
             "reason", "").lower():
@@ -380,7 +380,7 @@ def test_live_near_minimal_equivalent_is_not_applicable(tmp_path):
 
 
 @pytest.mark.skipif(not _HAVE_CONTAINER,
-                    reason="iic-eda container not running — live yosys path")
+                    reason="vibeic-eda container not running — live yosys path")
 def test_live_no_reference_noop_copy_blocks_via_floor(tmp_path):
     """LIVE §4.05 NO-LEAK (ORGANIC #768): a do-nothing copy (the optimized file
     is byte-identical to the original → 0% generic) WITHOUT a reference trips the
@@ -396,7 +396,7 @@ def test_live_no_reference_noop_copy_blocks_via_floor(tmp_path):
         "  assign y = (a ^ b) ^ c;\nendmodule\n")
     rc, report = ppa.run_ppa_area_threshold(
         original=orig, optimized=copy, top="m", prompt_text=None,
-        threshold_override=20.0, metric_override="both", container="iic-eda")
+        threshold_override=20.0, metric_override="both", container="vibeic-eda")
     if report["verdict"] == "NOT_APPLICABLE" and "unmeasurable" in report.get(
             "reason", "").lower():
         pytest.skip("synth could not measure both stats in this container")
@@ -406,7 +406,7 @@ def test_live_no_reference_noop_copy_blocks_via_floor(tmp_path):
 
 
 @pytest.mark.skipif(not _HAVE_CONTAINER,
-                    reason="iic-eda container not running — live yosys path")
+                    reason="vibeic-eda container not running — live yosys path")
 def test_live_generic_meets_target_passes(tmp_path):
     """LIVE END-STATE (ORGANIC #769): an 8x8 multiplier reduced to a 7x7 one;
     its GENERIC reduction outpaces its MAPPED reduction. At a threshold pinned
@@ -425,7 +425,7 @@ def test_live_generic_meets_target_passes(tmp_path):
     # first measure to find a threshold strictly between mapped and generic.
     rc0, rep0 = ppa.run_ppa_area_threshold(
         original=big, optimized=small, top="m", prompt_text=None,
-        threshold_override=1.0, metric_override="cells", container="iic-eda")
+        threshold_override=1.0, metric_override="cells", container="vibeic-eda")
     mapped = rep0.get("cells_reduction_pct")
     generic = rep0.get("cells_reduction_pct_generic")
     if mapped is None or generic is None or not (generic > mapped + 1.0):
@@ -433,7 +433,7 @@ def test_live_generic_meets_target_passes(tmp_path):
     thr = (mapped + generic) / 2.0   # strictly between → mapped misses, generic MEETS
     rc, report = ppa.run_ppa_area_threshold(
         original=big, optimized=small, top="m", prompt_text=None,
-        threshold_override=thr, metric_override="cells", container="iic-eda")
+        threshold_override=thr, metric_override="cells", container="vibeic-eda")
     assert rc == 0, (report.get("verdict"), report.get("reason"))
     assert report["verdict"] == "PASS", report.get("reason")
     assert "generic meets" in report["reason"].lower()
@@ -445,7 +445,7 @@ def test_live_generic_meets_target_passes(tmp_path):
 #   python3 programs/ppa_area_threshold_check.py --original <orig>.sv \
 #       --optimized <equiv_near_minimal>.sv --top m --threshold-pct 20 --metric both
 @pytest.mark.skipif(not _HAVE_CONTAINER,
-                    reason="iic-eda container not running — live yosys path")
+                    reason="vibeic-eda container not running — live yosys path")
 def test_acceptance_near_minimal_endstate_via_program_main(tmp_path):
     """END-STATE via the real program's main() on a tmp_path-shaped defect
     artifact: two functionally-equivalent near-minimal RTLs (a 3-input XOR spelled

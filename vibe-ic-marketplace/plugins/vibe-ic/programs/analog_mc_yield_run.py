@@ -30,7 +30,7 @@ honestly.
 
 Usage:
     python3 analog_mc_yield_run.py <project> --block <name>
-        [--n 100] [--container iic-eda] [--pdk sky130]
+        [--n 100] [--container vibeic-eda] [--pdk sky130]
 """
 from __future__ import annotations
 
@@ -208,7 +208,7 @@ def main(argv=None) -> int:
     ap.add_argument("project", type=Path)
     ap.add_argument("--block", required=True)
     ap.add_argument("--n", type=int, default=100)
-    ap.add_argument("--container", default="iic-eda")
+    ap.add_argument("--container", default="vibeic-eda")
     ap.add_argument("--pdk", default="sky130",
                     choices=sorted(_ars.PDK_LIB.keys()))
     ap.add_argument("--json", default=None)

@@ -12,7 +12,7 @@ PDK auto-detection (chip-AGNOSTIC):
   - <project>/input/pdk/liberty/*.lib + <project>/input/pdk/lef/*    → custom PDK
   - else /foss/pdks/sky130A/                                          → sky130A fallback (IIC-OSIC-TOOLS default)
 
-All tool invocations run inside the iic-eda Docker container (caller may
+All tool invocations run inside the vibeic-eda Docker container (caller may
 override with --container). The runner writes:
   <project>/phase3/synth/<top>_synth.v
   <project>/phase3/pnr/<top>.def
@@ -25,7 +25,7 @@ override with --container). The runner writes:
 Usage:
     python3 phase3_one_shot_runner.py <project_dir>
                   [--top-name chip_top]
-                  [--container iic-eda]
+                  [--container vibeic-eda]
                   [--die-um 200x200]
                   [--util 0.45]
                   [--pdk auto|sky130A|<custom>]
@@ -13775,7 +13775,7 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
     p.add_argument("--top-name", default="chip_top")
-    p.add_argument("--container", default="iic-eda")
+    p.add_argument("--container", default="vibeic-eda")
     p.add_argument("--die-um", default="auto",
                    help="Die size W x H in microns, or 'auto' (default) to size "
                         "the die from the synth cell count + PDK site area + "

@@ -24,7 +24,7 @@ on presence again); a real netgen mismatch → FAIL rc 1.
 
 Usage:
     python3 mixed_signal_top_lvs_run.py <project> --top chip_top
-        [--container iic-eda] [--pdk sky130A]
+        [--container vibeic-eda] [--pdk sky130A]
 """
 from __future__ import annotations
 
@@ -236,7 +236,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("project", type=Path)
     ap.add_argument("--top", default="chip_top")
-    ap.add_argument("--container", default="iic-eda")
+    ap.add_argument("--container", default="vibeic-eda")
     ap.add_argument("--pdk", default="sky130A")
     ap.add_argument("--json", default=None)
     args = ap.parse_args(argv)

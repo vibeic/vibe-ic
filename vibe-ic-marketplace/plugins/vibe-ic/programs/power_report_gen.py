@@ -47,7 +47,7 @@ def _detect_top(project: Path) -> str:
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     p.add_argument("project", type=Path)
-    p.add_argument("--container", default="iic-eda")
+    p.add_argument("--container", default="vibeic-eda")
     p.add_argument("--top", default=None,
                    help="Override the top-module name (default: auto-detect)")
     args = p.parse_args(argv)

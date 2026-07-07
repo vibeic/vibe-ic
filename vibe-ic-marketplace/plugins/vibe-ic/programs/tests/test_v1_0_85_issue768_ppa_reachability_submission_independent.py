@@ -70,7 +70,7 @@ def _load(modname, filename):
 ppa = _load("ppa_area_threshold_check", "ppa_area_threshold_check.py")
 
 
-def _container_up(container="iic-eda") -> bool:
+def _container_up(container="vibeic-eda") -> bool:
     if shutil.which("docker") is None:
         return False
     try:
@@ -235,7 +235,7 @@ def test_noleak_grown_submission_blocks_even_with_subbar_reference():
 #     program's main() and assert the returncode.
 # ════════════════════════════════════════════════════════════════════════════
 @pytest.mark.skipif(not _HAVE_CONTAINER,
-                    reason="iic-eda container not running — live yosys path")
+                    reason="vibeic-eda container not running — live yosys path")
 def test_endstate_reference_proves_reachable_blocks_via_main(tmp_path):
     """END-STATE via the real program's main(): a do-nothing copy submission
     (optimized == original → 0% reduction) WITH a reference golden whose generic

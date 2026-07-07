@@ -160,7 +160,7 @@ def _resolve_sample_b(design: str, samples: Path, dataset: Path,
 # while asyn_fifo FAILs under Verilator (a real functional bug, NOT a TB-side gap).
 # So: iverilog "sorry"/"internal error" → escalate to Verilator, whose verdict is
 # authoritative; only a Verilator *build* failure stays a hard tool-gap → SKIP.
-_IV13_CONTAINER = os.environ.get("VIBEIC_IVERILOG13_CONTAINER", "iic-eda")
+_IV13_CONTAINER = os.environ.get("VIBEIC_IVERILOG13_CONTAINER", "vibeic-eda")
 _HOST_DESIGNS_ROOT = os.environ.get("VIBEIC_DESIGNS_HOST_ROOT", "/home/reyerchu/AI_IC_design")
 _CONT_DESIGNS_ROOT = os.environ.get("VIBEIC_DESIGNS_CONT_ROOT", "/foss/designs")
 

@@ -2131,7 +2131,7 @@ def latency_contract_from_prompt(prompt_text):
 # own measured BLOCK verdict (rc 1); a missing baseline / absent yosys-in-
 # container / unparseable threshold / ambiguous top ALL resolve to advisory-PASS
 # (#729 returns NOT_APPLICABLE rc 0), never a false block on a missing input.
-_AREA_CONTAINER = "iic-eda"
+_AREA_CONTAINER = "vibeic-eda"
 
 
 def _area_top(baseline_rtls, completion, harness_top=None):

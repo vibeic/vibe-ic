@@ -61,7 +61,7 @@ def _load(modname, filename):
 ppa = _load("ppa_area_threshold_check", "ppa_area_threshold_check.py")
 
 
-def _container_up(container="iic-eda") -> bool:
+def _container_up(container="vibeic-eda") -> bool:
     if shutil.which("docker") is None:
         return False
     try:
@@ -210,7 +210,7 @@ def test_noleak_decide_clauses_grown_metric_blocks_and():
 #     generic ~31% >= 25%, mapped ~22% (sub-threshold) → PASS (rc 0).
 # ════════════════════════════════════════════════════════════════════════════
 @pytest.mark.skipif(not _HAVE_CONTAINER,
-                    reason="iic-eda container not running — live yosys path")
+                    reason="vibeic-eda container not running — live yosys path")
 def test_endstate_generic_meets_target_passes_via_main(tmp_path):
     """END-STATE via the real program's main(): an 8x8 multiplier reduced to a
     7x7 one (the GENERIC reduction outpaces the MAPPED reduction). At a threshold
@@ -229,7 +229,7 @@ def test_endstate_generic_meets_target_passes_via_main(tmp_path):
     # measure to find a threshold strictly between mapped and generic.
     rc0, rep0 = ppa.run_ppa_area_threshold(
         original=orig, optimized=opt, top="m", prompt_text=None,
-        threshold_override=1.0, metric_override="cells", container="iic-eda")
+        threshold_override=1.0, metric_override="cells", container="vibeic-eda")
     mapped = rep0.get("cells_reduction_pct")
     generic = rep0.get("cells_reduction_pct_generic")
     if mapped is None or generic is None or not (generic > mapped + 1.0):

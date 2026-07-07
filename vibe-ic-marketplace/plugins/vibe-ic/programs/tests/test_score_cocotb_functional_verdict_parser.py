@@ -21,7 +21,7 @@ and the coverage classifier scans ONLY the scorer stdout/stderr — never
 score/src/harness_library.py or test_runner.py. The blind rule holds.
 
 PART 1/2 (parser + classifier unit tests) are pure-python and ALWAYS run.
-PART 3 (end-to-end) requires the iic-eda container and skips cleanly otherwise.
+PART 3 (end-to-end) requires the vibeic-eda container and skips cleanly otherwise.
 """
 import importlib.util
 import shutil
@@ -216,16 +216,16 @@ def test_float_coercion_short_circuits_when_tests_gt_zero():
 
 # ---------------------------------------------------------------------------
 # PART 3 — end-to-end: coverage-gate crash must NOT mask a functional PASS
-#          (requires the iic-eda container; skips cleanly otherwise)
+#          (requires the vibeic-eda container; skips cleanly otherwise)
 # ---------------------------------------------------------------------------
 
 def _need_iic_eda():
     if not shutil.which("docker"):
         pytest.skip("docker not installed")
-    r = subprocess.run(["docker", "inspect", "iic-eda"],
+    r = subprocess.run(["docker", "inspect", "vibeic-eda"],
                        capture_output=True, text=True)
     if r.returncode != 0:
-        pytest.skip("iic-eda container not available")
+        pytest.skip("vibeic-eda container not available")
 
 
 def _find_encoder_project():

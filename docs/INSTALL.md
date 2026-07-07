@@ -16,13 +16,24 @@
 
 ## Step 1 — EDA open-source Docker (prerequisite)
 
-The plugin's EDA tools run **inside the IIC-OSIC-TOOLS container** (OpenROAD, yosys,
-klayout, ngspice, iverilog, …). Pull/start it and name it `iic-eda` (the name the MCP
-server expects via `EDA_CONTAINER`):
+The plugin's EDA tools run **inside a Docker container named `vibeic-eda`** (the name the
+MCP server expects via `EDA_CONTAINER`). Provide it either way:
+
+**Recommended — the enhanced `vibeic-eda` toolchain** (forked OpenROAD / yosys / ngspice /
+magic / netgen / iverilog / klayout with gatekeeper-verified FAIL→PASS fixes; scoreboard in
+`tools/vibeic-eda/FIX_STATUS.md`). Build the reproducible image once, then run it:
+
+```bash
+docker build -t vibeic-eda:0.2.0 tools/vibeic-eda
+docker run -d --name vibeic-eda vibeic-eda:0.2.0 --skip sleep infinity
+```
+
+**Or — the stock base** (standard tools, no fork enhancements): pull IIC-OSIC-TOOLS and give
+the container the same name:
 
 ```bash
 docker pull hpretl/iic-osic-tools           # or the pinned tag in mcp-eda/INSTALL_GUIDE.md
-docker run -d --name iic-eda hpretl/iic-osic-tools sleep infinity
+docker run -d --name vibeic-eda hpretl/iic-osic-tools --skip sleep infinity
 ```
 
 ## Step 2 — Install the plugin
@@ -42,10 +53,10 @@ No manual wiring. The plugin ships `.mcp.json`:
 { "mcpServers": { "eda-tools": {
     "type": "stdio", "command": "node",
     "args": ["${CLAUDE_PLUGIN_ROOT}/mcp-eda/src/bootstrap.mjs"],
-    "env": { "EDA_CONTAINER": "iic-eda" } } } }
+    "env": { "EDA_CONTAINER": "vibeic-eda" } } } }
 ```
 
-Claude Code starts the `eda-tools` MCP server, which drives the `iic-eda` container.
+Claude Code starts the `eda-tools` MCP server, which drives the `vibeic-eda` container.
 Every `eda_*` tool (`eda_synth`, `eda_pnr`, `eda_drc_klayout`, `eda_lvs`, …) then runs
 inside the container. Health-check: ask the agent to run `eda_doctor` /
 `mcp_server_health_check`.

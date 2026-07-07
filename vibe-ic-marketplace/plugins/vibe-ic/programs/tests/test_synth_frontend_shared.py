@@ -26,7 +26,7 @@ sf = importlib.import_module("synth_frontend")
 p2 = importlib.import_module("design_one_shot_runner")
 p3 = importlib.import_module("phase3_one_shot_runner")
 
-_CONTAINER = "iic-eda"
+_CONTAINER = "vibeic-eda"
 
 # A genuine modern-SystemVerilog repro that BOTH default frontends
 # (`read_verilog -sv`, `iverilog -g2012`) reject — a package-scoped

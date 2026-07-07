@@ -99,7 +99,7 @@ to anchor (flat layout nets ≠ schematic nets, disjoint naming). Two general pr
   (1) `export PDK=<pdk>` and `PDK_ROOT` in the SHELL **before** magic launches (the system
   `.magicrc` reads `$env(PDK)` at startup — an in-script `set env(PDK)` is too late; the
   `eda_run_tcl engine=magic` wrapper currently does NOT export it → see
-  ORGANIC-20260531-magic-extraction-no-toplevel-ports; drive via `docker exec iic-eda` with the
+  ORGANIC-20260531-magic-extraction-no-toplevel-ports; drive via `docker exec vibeic-eda` with the
   export preamble). (2) `port makeall` only promotes labels on the PDK **port-purpose** layer
   (sky130 `MET3PIN` = GDS 70/16); an OpenROAD GDS-streamout step that put pin text on a drawing
   layer (sky130 10/1) yields nothing — relabel 10/1→70/16 (klayout) first. Result on HDLC: a real
