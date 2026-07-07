@@ -38,5 +38,18 @@ Legend: ✅ DONE-proven · 🟢 ADOPTED-proven · 🔷 DEFERRED(algorithm-hard) 
 | PATH packaging | bug-fix-easy | ⚪→build | belongs in vibeic-eda Dockerfile, not ngspice source |
 | Build: MAKE_EXIT=0, `make check` 57/58 (1 fail = env graphics, identical on stock → 0 regressions) |||| 
 
-## Tools 3–5 — fork agents still running (klayout · magic+netgen[resumed] · iverilog+Verilator)
+## Tool 4 — magic + netgen  (fork: vibeic/{magic,netgen} @ vibeic/lvs-fidelity)
+netgen commits 29852b6+b7d4138 · magic commit 82d8fb33 · both pushed
+| Fix | Tool | Class | Status | Proof (gatekeeper-verified) |
+|---|---|---|---|---|
+| `Final result:` reflects transistor-property errors | netgen | bug-fix-easy | ✅ | **re-run by gatekeeper**: R=1k vs 2k → stock `Circuits match uniquely` (silent LVS false-pass!) → patched `do NOT match uniquely (property errors present)` |
+| portless top-cell guard (non-proxy port count) | netgen | bug-fix-easy | ✅ | portless `.subckt`: stock `match uniquely` → patched `do NOT match (no ports to anchor)` |
+| `-auto-global` (derive globals from `.global`) | netgen | feature-add-medium | ✅ | `.global` one-side: stock `failed pin matching` → patched `match uniquely` |
+| `-nopower="…"` PG-as-global | netgen | feature-add-medium | ✅ | caller-named PG nets: baseline mismatch → patched `match uniquely` |
+| black-box leaf positional pin match (+`&&`→`&` typo) | netgen | feature-add-medium | ✅ | defined-vs-stub leaf: stock `failed pin matching` → patched `match`; 3-pin stub still fails (negative control) |
+| `ext2spice` label→port promotion (`port makeall` default on) | magic | feature-add-medium | ✅ | scmos NMOS: stock `.subckt top` (empty) → patched `.subckt top DRN SRC Gnd GATE` — feeds netgen portless guard |
+| `def/gds read` RECT-null crash | magic | bug-fix-easy | 🟢 | already fixed upstream in 8.3.671 (proven: RECT-before-LAYER reads RC=0, no segfault) |
+| unknown-layer→retain · NDR-via `def read` · SPECIALNET power-name propagation | magic | easy/medium | 🔷 | honest DEFERRED — fix-sites located (`defRead.c ~478/530`, ext2spice substrate node); need heavy OpenROAD DEF+LEF repro, not shipped unproven |
+
+## Tools 3, 5 — fork agents still running (klayout · iverilog+Verilator)
 _updated as each lands + proof re-verified._
