@@ -122,7 +122,8 @@ COPY --from=lvs-builder /foss/tools/netgen /foss/tools/netgen
 # --- vibeic/iverilog ---
 COPY --from=iverilog-builder /foss/tools/iverilog /foss/tools/iverilog
 # --- vibeic/klayout (parallel streamout install; base klayout untouched) ---
-COPY --from=klayout-builder /foss/tools/klayout-vibeic /foss/tools/klayout-vibeic
+# build.sh emits the Qt-less db-lib + pymod + db_plugins/liblefdef.so into its -build dir.
+COPY --from=klayout-builder /klayout/bld /foss/tools/klayout-vibeic
 # Re-point the /foss/tools/bin symlinks the base created to our installs.
 RUN for t in yosys yosys-abc; do ln -sf /foss/tools/yosys/bin/$t /foss/tools/bin/$t 2>/dev/null || true; done \
  && ln -sf /foss/tools/ngspice/bin/ngspice /foss/tools/bin/ngspice 2>/dev/null || true \
