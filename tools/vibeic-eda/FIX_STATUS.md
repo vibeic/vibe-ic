@@ -51,5 +51,16 @@ netgen commits 29852b6+b7d4138 · magic commit 82d8fb33 · both pushed
 | `def/gds read` RECT-null crash | magic | bug-fix-easy | 🟢 | already fixed upstream in 8.3.671 (proven: RECT-before-LAYER reads RC=0, no segfault) |
 | unknown-layer→retain · NDR-via `def read` · SPECIALNET power-name propagation | magic | easy/medium | 🔷 | honest DEFERRED — fix-sites located (`defRead.c ~478/530`, ext2spice substrate node); need heavy OpenROAD DEF+LEF repro, not shipped unproven |
 
-## Tools 3, 5 — fork agents still running (klayout · iverilog+Verilator)
-_updated as each lands + proof re-verified._
+## Tool 5 — iverilog + Verilator  (fork: vibeic/iverilog @ vibeic/sv-tb-coverage)
+iverilog commits e1e12f6+110cadd · pushed · verilator forked, no commit (no honest fix — reported)
+| Fix | Tool | Class | Status | Proof (gatekeeper-verified) |
+|---|---|---|---|---|
+| `->>` nonblocking-event: `-t null` elaborates but vvp codegen segfaults | iverilog | bug-fix-easy | ✅ | **re-run by gatekeeper**: event referenced only by `->>` → stock **SEGFAULT rc=139** → patched compiles rc=0 + `hits=2 PASS` (3 root bugs: nodangle nb-trig, stale `sorry`, schedule_propagate); full suite SV 902/908 + Verilog 1765/1768 **0 regressions** |
+| comp-unit package-before-import ordering (driver hoists pkg-declaring files) | iverilog | feature-add-medium | ✅ | use-before-decl: stock `syntax error/Invalid module item` rc=2 → patched `WIDTH=16 PASS`; comment/string-skip negative control holds |
+| full-array assignment-pattern `'{...}` | iverilog | feature-add-medium | 🟢 | already upstream in v14.0-devel (proven on stock: decl-init + procedural PASS) |
+| `break;`/`continue;` in loops | iverilog | feature-add-medium | 🟢 | already upstream (proven: `sum=4 PASS`) |
+| downgrade BLKLOOPINIT/WIDTH/LATCH/COMBDLY | Verilator | bug-fix-easy | ⚪ | **obsolete on v5.051** (honest): each already `-Wno`-suppressible; BLKLOOPINIT's only trigger is also rejected by iverilog → downgrading would emit silently-wrong sims. No honest fix → no patch |
+| event-driven `--timing` scheduler · Verilator CDC/NBA region parity | both | algorithm-hard | 🔷 | research ports, deferred |
+
+## Tool 3 — klayout  (fork agent still running — big C++ build)
+_updated when it lands + proof re-verified._
