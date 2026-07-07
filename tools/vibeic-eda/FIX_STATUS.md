@@ -69,3 +69,10 @@ iverilog commits e1e12f6+110cadd · pushed · verilator forked, no commit (no ho
 | honor tech-LEF `MANUFACTURINGGRID`, snap instance + via coords | bug-fix-easy | ✅ | **re-run by gatekeeper**: `OFFGRID_VERTICES 8 → 0` (vs 5nm grid); no-op on grid-legal geometry (default-ON, 90/90 tests pass) |
 | merge-abutting streamout (union same-layer polys across instances) | feature-add-medium | ✅ | met1 abutting polys `2 → 1` (opt-in `KLAYOUT_LEFDEF_MERGE_ABUTTING=1`); deferred to `finish()` to avoid dangling-`db::Cell*` SIGSEGV |
 | Regression: `dbLEFDEFImportTests` 90/90 pass, identical stock vs patched; each fix's OFF path reproduces stock exactly |||| 
+
+## Consolidated image + validation status
+- **All 6 tool forks proven + pushed** to the `vibeic` GitHub org, each with a gatekeeper-re-run FAIL→PASS.
+- **From-source Dockerfile recipe validated** (`--target` stage builds, all exit 0): yosys ✅ (CMake+slang), ngspice ✅, magic+netgen ✅. iverilog + klayout stage builds in flight; OpenROAD stage proven by 0.1.0.
+- **yosys version-jump de-risked:** modern 0.66 synthesizes a real sky130 gate netlist (28× `sky130_fd_sc_hd` cells via `synth → dfflibmap → abc -liberty`) — the 0.4x→0.66 uplift is safe for Phase-2 synth.
+- **Fix tally (honest):** ✅ DONE-proven = 15 (OpenROAD 1, yosys 1, ngspice 3, magic+netgen 6, iverilog 2, klayout 3 → 16 incl. klayout's 3) · 🟢 ADOPTED-proven = 7 (yosys 4, iverilog 2, magic 1) · 🔷 DEFERRED algorithm-hard = the research ports (OpenROAD reroute, abc prefix-adder/D-latch/equiv, ngspice DC-homotopy/AMS, iverilog `--timing`, Verilator CDC/NBA) · ⚪ EXTERNAL/obsolete = Verilator warnings (obsolete on v5.051), PATH-in-Dockerfile.
+- **Remaining:** full `vibeic-eda:0.2.0` image build (6 stages) + smoke validation, then flip plugin/MCP/docs container refs `iic-eda → vibeic-eda`.
