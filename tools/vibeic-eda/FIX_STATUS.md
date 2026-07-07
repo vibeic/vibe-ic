@@ -27,5 +27,16 @@ Legend: ✅ DONE-proven · 🟢 ADOPTED-proven · 🔷 DEFERRED(algorithm-hard) 
 | cross-file `import pkg::*` / StateEnumT | feature-add-medium | 🟢 | `read_slang` builds FSM across files (even reverse order); legacy path syntax-errors |
 | abc D-latch mapping · carry-chain/prefix-adder · equiv SEC closure | algorithm-hard | 🔷 | research ports, deferred |
 
-## Tools 3–7 — fork agents running (klayout · magic+netgen · iverilog+Verilator · ngspice)
+## Tool 6 — ngspice  (fork: vibeic/ngspice @ vibeic/batch-honesty, commit c89de02)
+| Fix | Class | Status | Proof (gatekeeper-verified) |
+|---|---|---|---|
+| `-b` batch honesty: nonzero rc + per-`.measure` PASS/FAIL marker | feature-add-medium | ✅ | failed `.meas`: stock→`failed!` **RC=0** (silent CI pass); patched→`;;MEAS vbogus FAIL` **RC=1** — re-run by gatekeeper on stock vs patched binary |
+| `$&<measvar>` scalar → length-1 vector | bug-fix-easy | ✅ | `$&vpk`: stock `no such variable`/empty → patched `0.999952` |
+| control-mode `.param` expansion (`tran`/`meas at=`) | feature-add-medium | ✅ | `tran … tend`: stock `TSTOP invalid` RC=1 → patched runs RC=0 |
+| native Monte-Carlo (`mc N var:lo:hi`) | feature-add-medium | ✅◐ | stock `mc: no such command` → patched 20-run mean/σ/min/max/yield; **PARTIAL**: control-mode command not `.mc` dot-card, plain MC (no LHS/Sobol) — honestly flagged |
+| DC homotopy for floating SC nodes · AMS co-sim bridge | algorithm-hard | 🔷 | research ports, deferred |
+| PATH packaging | bug-fix-easy | ⚪→build | belongs in vibeic-eda Dockerfile, not ngspice source |
+| Build: MAKE_EXIT=0, `make check` 57/58 (1 fail = env graphics, identical on stock → 0 regressions) |||| 
+
+## Tools 3–5 — fork agents still running (klayout · magic+netgen[resumed] · iverilog+Verilator)
 _updated as each lands + proof re-verified._
