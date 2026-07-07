@@ -24,7 +24,7 @@ WHAT IT DOES
   1. Parse the threshold + which metric(s) it binds (cells / wires / both) from
      the prompt text (``--prompt`` file or ``--threshold-pct`` + ``--metric``).
   2. Run yosys ``stat`` on the ORIGINAL and the OPTIMIZED RTL with the SAME
-     synth recipe inside the iic-eda container. The recipe emits the `stat`
+     synth recipe inside the vibeic-eda container. The recipe emits the `stat`
      TWICE: once on the technology-INDEPENDENT GENERIC netlist (after
      ``synth -flatten; opt`` but BEFORE ``techmap``/``abc -g cmos2`` — the
      coarse-grain ``$add``/``$mul``/``$dff`` cells), and once on the
@@ -108,7 +108,7 @@ is unit-tested against CANNED yosys ``stat`` text WITHOUT needing the container.
 This gate only ever BLOCKs on a REAL measured under-threshold reduction. EVERY
 other outcome is a non-blocking exit-0 NOT-APPLICABLE / SKIP, never a false
 block:
-  * yosys / the iic-eda container is unavailable     → NOT-APPLICABLE rc 0.
+  * yosys / the vibeic-eda container is unavailable     → NOT-APPLICABLE rc 0.
   * yosys synth fails / `stat` yields no cell|wire #  → NOT-APPLICABLE rc 0.
   * the threshold cannot be parsed from the prompt    → NOT-APPLICABLE rc 0.
   * the ORIGINAL has 0 cells (degenerate, can't form  → NOT-APPLICABLE rc 0.
@@ -128,7 +128,7 @@ Usage:
     python3 ppa_area_threshold_check.py \\
         --original <orig>.v --optimized <opt>.v --top <module> \\
         ( --prompt <prompt.txt> | --threshold-pct 20 [--metric both] ) \\
-        [--container iic-eda] [--json OUT]
+        [--container vibeic-eda] [--json OUT]
 
 Exit codes:
     0  PASS (reduction >= threshold)  OR  NOT-APPLICABLE / SKIP (no yosys, no
@@ -977,7 +977,7 @@ def decide(cells_red: Optional[float], wires_red: Optional[float],
 
 
 # ─── yosys-in-container synth + stat ─────────────────────────────────────────
-# Path inside the iic-osic-tools / iic-eda container where the EDA tools live.
+# Path inside the iic-osic-tools / vibeic-eda container where the EDA tools live.
 _TOOLS_IN_CONTAINER = "/foss/tools"
 
 # The SAME lowering recipe the phase-2 synth path uses (synth -flatten; techmap;
@@ -1298,8 +1298,8 @@ def main(argv=None) -> int:
     ap.add_argument("--metric", default=None, choices=_VALID_METRICS,
                     help="which metric the threshold binds (default: parsed "
                          "from the prompt, else 'both')")
-    ap.add_argument("--container", default="iic-eda",
-                    help="docker container with yosys (default iic-eda)")
+    ap.add_argument("--container", default="vibeic-eda",
+                    help="docker container with yosys (default vibeic-eda)")
     ap.add_argument("--json", default=None, help="optional JSON report path")
     args = ap.parse_args(argv)
 

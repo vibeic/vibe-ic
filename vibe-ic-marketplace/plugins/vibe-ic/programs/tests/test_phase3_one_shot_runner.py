@@ -3,7 +3,7 @@
 
 Wave 83 — coverage for previously untested orchestrator.
 
-The runner shells out to Yosys / OpenROAD / KLayout inside an iic-eda
+The runner shells out to Yosys / OpenROAD / KLayout inside an vibeic-eda
 Docker container. The test environment has no Docker, so we exercise
 the orchestrator's control-flow paths only:
 

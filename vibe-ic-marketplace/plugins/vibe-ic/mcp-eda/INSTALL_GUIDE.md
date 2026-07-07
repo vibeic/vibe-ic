@@ -64,17 +64,34 @@ npm install -g @anthropic-ai/claude-code
 
 ---
 
-## Step 1: Install IIC-OSIC-Tools Docker Image
+## Step 1: Install the EDA Docker Image
 
-The IIC-OSIC-Tools image is a single Docker image (~22 GB) that contains
-**all** open-source EDA tools needed for the full RTL-to-GDS flow. No
-individual tool installation required.
+Every EDA tool runs inside one Docker container (the full RTL-to-GDS toolchain — no
+individual tool installs). There are two image options; **the plugin looks for a container
+named `vibeic-eda` either way** (`EDA_CONTAINER`).
+
+### Option A (recommended): the enhanced `vibeic-eda` image
+
+A forked + enhanced toolchain (OpenROAD / yosys / ngspice / magic / netgen / iverilog /
+klayout) carrying **gatekeeper-verified FAIL→PASS fixes** over the stock base — e.g. yosys
+uplifted to 0.66 + slang SV frontend, ngspice `-b` batch-honesty nonzero-rc, netgen
+property-error LVS verdict (kills silent false-pass), klayout MANUFACTURINGGRID streamout
+snap. Full scoreboard: `tools/vibeic-eda/FIX_STATUS.md`. Build the reproducible image once:
+
+```bash
+docker build -t vibeic-eda:0.2.0 /path/to/repo/tools/vibeic-eda
+```
+
+### Option B: the stock IIC-OSIC-Tools base
+
+The upstream image (~22 GB) with the standard tool versions listed below (no fork fixes):
 
 ```bash
 docker pull hpretl/iic-osic-tools:latest
 ```
 
-This may take 10-30 minutes depending on your internet connection.
+This may take 10-30 minutes depending on your internet connection. The table below lists the
+**stock** baseline versions; Option A uplifts several (yosys → 0.66-fork, etc.).
 
 ### Tools Included in the Image
 
@@ -114,11 +131,12 @@ Both PDKs are pre-installed at `/foss/pdks/` inside the container:
 Launch the container with your designs directory mounted:
 
 ```bash
-docker run -d --name iic-eda \
+# Option A image: vibeic-eda:0.2.0   |   Option B image: hpretl/iic-osic-tools:latest
+docker run -d --name vibeic-eda \
   -v "$HOME/AI_IC_design:/foss/designs:rw" \
   -p 8888:80 \
   -p 5901:5901 \
-  hpretl/iic-osic-tools:latest
+  vibeic-eda:0.2.0 --skip sleep infinity
 ```
 
 ### Mount Point Explanation
@@ -134,7 +152,7 @@ The MCP EDA Server executes all EDA tools inside this container via
 ### Verify the Container is Running
 
 ```bash
-docker ps --filter name=iic-eda
+docker ps --filter name=vibeic-eda
 ```
 
 You should see the container in `Up` status.
@@ -179,7 +197,7 @@ The file should contain:
       "command": "node",
       "args": ["/home/<your-user>/AI_IC_design/mcp-eda/src/index.js"],
       "env": {
-        "EDA_CONTAINER": "iic-eda"
+        "EDA_CONTAINER": "vibeic-eda"
       }
     }
   }
@@ -416,22 +434,22 @@ accessible:
 ```bash
 echo "=== Verifying EDA Tools in Docker Container ==="
 
-echo -n "Yosys:         "; docker exec iic-eda yosys --version 2>&1 | head -1
-echo -n "OpenROAD:      "; docker exec iic-eda openroad -version 2>&1 | head -1
-echo -n "OpenSTA:       "; docker exec iic-eda sta -version 2>&1 | head -1
-echo -n "Verilator:     "; docker exec iic-eda verilator --version 2>&1 | head -1
-echo -n "Icarus:        "; docker exec iic-eda iverilog -V 2>&1 | head -1
-echo -n "KLayout:       "; docker exec iic-eda klayout -v 2>&1 | head -1
-echo -n "Magic:         "; docker exec iic-eda magic --version 2>&1 | head -1
-echo -n "Netgen:        "; docker exec iic-eda netgen --version 2>&1 | head -1
-echo -n "ngspice:       "; docker exec iic-eda ngspice --version 2>&1 | head -1
-echo -n "cocotb:        "; docker exec iic-eda pip3 show cocotb 2>&1 | grep Version
-echo -n "SymbiYosys:    "; docker exec iic-eda sby --help 2>&1 | head -1
+echo -n "Yosys:         "; docker exec vibeic-eda yosys --version 2>&1 | head -1
+echo -n "OpenROAD:      "; docker exec vibeic-eda openroad -version 2>&1 | head -1
+echo -n "OpenSTA:       "; docker exec vibeic-eda sta -version 2>&1 | head -1
+echo -n "Verilator:     "; docker exec vibeic-eda verilator --version 2>&1 | head -1
+echo -n "Icarus:        "; docker exec vibeic-eda iverilog -V 2>&1 | head -1
+echo -n "KLayout:       "; docker exec vibeic-eda klayout -v 2>&1 | head -1
+echo -n "Magic:         "; docker exec vibeic-eda magic --version 2>&1 | head -1
+echo -n "Netgen:        "; docker exec vibeic-eda netgen --version 2>&1 | head -1
+echo -n "ngspice:       "; docker exec vibeic-eda ngspice --version 2>&1 | head -1
+echo -n "cocotb:        "; docker exec vibeic-eda pip3 show cocotb 2>&1 | grep Version
+echo -n "SymbiYosys:    "; docker exec vibeic-eda sby --help 2>&1 | head -1
 
 echo ""
 echo "=== Verifying PDKs ==="
-docker exec iic-eda ls /foss/pdks/gf180mcuD/ > /dev/null 2>&1 && echo "GF180MCU: OK" || echo "GF180MCU: MISSING"
-docker exec iic-eda ls /foss/pdks/sky130A/ > /dev/null 2>&1 && echo "SKY130:   OK" || echo "SKY130:   MISSING"
+docker exec vibeic-eda ls /foss/pdks/gf180mcuD/ > /dev/null 2>&1 && echo "GF180MCU: OK" || echo "GF180MCU: MISSING"
+docker exec vibeic-eda ls /foss/pdks/sky130A/ > /dev/null 2>&1 && echo "SKY130:   OK" || echo "SKY130:   MISSING"
 
 echo ""
 echo "=== Verifying MCP Server ==="
@@ -484,7 +502,7 @@ Claude will:
 |  eda_sta_mcorner | eda_rtl_audit                   |
 +---------------------+-----------------------------+
                       |
-                      | docker exec iic-eda ...
+                      | docker exec vibeic-eda ...
                       v
 +---------------------------------------------------+
 |       IIC-OSIC-Tools Docker Container              |
@@ -718,9 +736,9 @@ you can fabricate a real chip:
 
 ```bash
 # 1. Start Docker container
-docker start iic-eda || docker run -d --name iic-eda \
+docker start vibeic-eda || docker run -d --name vibeic-eda \
   -v "$HOME/AI_IC_design:/foss/designs:rw" \
-  hpretl/iic-osic-tools:latest
+  vibeic-eda:0.2.0 --skip sleep infinity   # or: hpretl/iic-osic-tools:latest (stock)
 
 # 2. Launch Claude Code with MCP
 claude
@@ -729,16 +747,16 @@ claude
 ### Stop Everything
 
 ```bash
-docker stop iic-eda
+docker stop vibeic-eda
 ```
 
 ### Reset Container
 
 ```bash
-docker rm -f iic-eda
-docker run -d --name iic-eda \
+docker rm -f vibeic-eda
+docker run -d --name vibeic-eda \
   -v "$HOME/AI_IC_design:/foss/designs:rw" \
-  hpretl/iic-osic-tools:latest
+  vibeic-eda:0.2.0 --skip sleep infinity   # or: hpretl/iic-osic-tools:latest (stock)
 ```
 
 ---

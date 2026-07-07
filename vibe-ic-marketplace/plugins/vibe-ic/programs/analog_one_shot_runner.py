@@ -26,7 +26,7 @@ yet, this runner returns WAIVED with the skill name the caller should
 invoke. chip-AGNOSTIC.
 
 Usage:
-    python3 analog_one_shot_runner.py <project> [--container iic-eda]
+    python3 analog_one_shot_runner.py <project> [--container vibeic-eda]
                                                  [--blocks <comma-list>]
 """
 from __future__ import annotations
@@ -407,7 +407,7 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
             # v1.6.214 (ORGANIC-20260512) — BEFORE the stub fallback,
             # try a REAL ngspice sweep via analog_real_corner_sweep.py.
             # chip-AGNOSTIC: only kicks in when (a) docker container
-            # `iic-eda` has ngspice, (b) PDK lib is reachable, and
+            # `vibeic-eda` has ngspice, (b) PDK lib is reachable, and
             # (c) block has a template (ldo / bandgap / por / pull /
             # trim / oscillator / esd / charge_pump). Without this
             # bypass, the runner ALWAYS fell back to a fabricated
@@ -420,7 +420,7 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                               "--block", bname,
                               "--container",
                               os.environ.get("VIBEIC_ANALOG_CONTAINER",
-                                              "iic-eda"),
+                                              "vibeic-eda"),
                               "--pdk",
                               os.environ.get("VIBEIC_ANALOG_PDK",
                                               "sky130")]
@@ -509,7 +509,7 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
-    p.add_argument("--container", default="iic-eda")
+    p.add_argument("--container", default="vibeic-eda")
     p.add_argument("--allow-deterministic-stubs",
                    action="store_true",
                    dest="allow_deterministic_stubs",

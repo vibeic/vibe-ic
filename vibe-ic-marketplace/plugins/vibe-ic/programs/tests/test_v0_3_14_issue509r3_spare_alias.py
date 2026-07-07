@@ -16,7 +16,7 @@ hardcoded):
     the .subckt port list + a 0-ohm resistor join (netgen auto-removes →
     0 added devices), faithful to the schematic node-merge.
 
-Validated in the iic-eda container (real subservient): the runner-
+Validated in the vibeic-eda container (real subservient): the runner-
 generated extract + these two patches reach
 `Final result: Circuits match uniquely.` (the benign symmetric
 disconnected notes — e.g. i_gpio[0] optional-unused — do not block).
@@ -69,7 +69,7 @@ def test_no_spares_returns_empty():
 def test_local_setup_emits_spare_ignores(tmp_path):
     pdk = R._detect_pdk(Path("/nonexistent"), override="sky130A")
     host, _ = R._emit_local_netgen_setup(
-        tmp_path, pdk, "iic-eda",
+        tmp_path, pdk, "vibeic-eda",
         spare_only_classes=["sky130_fd_sc_hd__dfrtp_1"])
     body = host.read_text()
     assert 'ignore class "-circuit1 sky130_fd_sc_hd__dfrtp_1"' in body

@@ -115,7 +115,7 @@ def test_synth_adopts_graph_root_no_chip_top_fail(tmp_path):
         {"core.sv": _ROOT_WRAPPING.format(root="core", child="sub"),
          "sub.sv": _LEAF.format(n="sub")},
         {"top_module": "the_top", "synth_top": None})
-    res = R.step_yosys_synth(proj, "chip_top", container="iic-eda")
+    res = R.step_yosys_synth(proj, "chip_top", container="vibeic-eda")
     assert res.status == "PASS", res.detail
     assert _synth_top_in(res.detail) == "core", res.detail
     # NO 'chip_top is not a valid top-level module' FAIL.
@@ -137,7 +137,7 @@ def test_noleak_real_chip_top_not_overridden(tmp_path):
         {"chip_top.sv": _ROOT_WRAPPING.format(root="chip_top", child="sub"),
          "sub.sv": _LEAF.format(n="sub")},
         {"top_module": "chip_top", "synth_top": None})
-    res = R.step_yosys_synth(proj, "chip_top", container="iic-eda")
+    res = R.step_yosys_synth(proj, "chip_top", container="vibeic-eda")
     assert res.status == "PASS", res.detail
     assert _synth_top_in(res.detail) == "chip_top", res.detail
 
@@ -151,7 +151,7 @@ def test_noleak_real_l9_synth_top_preserved(tmp_path):
         {"mytop.sv": _ROOT_WRAPPING.format(root="mytop", child="sub"),
          "sub.sv": _LEAF.format(n="sub")},
         {"top_module": "the_top", "synth_top": "mytop"})
-    res = R.step_yosys_synth(proj, "chip_top", container="iic-eda")
+    res = R.step_yosys_synth(proj, "chip_top", container="vibeic-eda")
     assert res.status == "PASS", res.detail
     assert _synth_top_in(res.detail) == "mytop", res.detail
 
@@ -168,7 +168,7 @@ def test_noleak_real_waiver_synth_top_preserved(tmp_path):
          "sub2.sv": _LEAF.format(n="sub2")},
         {"top_module": "the_top", "synth_top": None},
         waivers={"phase2_synth_top": "waivedtop"})
-    res = R.step_yosys_synth(proj, "chip_top", container="iic-eda")
+    res = R.step_yosys_synth(proj, "chip_top", container="vibeic-eda")
     assert res.status == "PASS", res.detail
     assert _synth_top_in(res.detail) == "waivedtop", res.detail
 
@@ -196,7 +196,7 @@ def test_noleak_ambiguous_multi_root_honestly_fails(tmp_path):
         {"rootA.sv": _LEAF.format(n="rootA"),
          "rootB.sv": _LEAF.format(n="rootB")},
         {"top_module": "the_top", "synth_top": None})
-    res = R.step_yosys_synth(proj, "chip_top", container="iic-eda")
+    res = R.step_yosys_synth(proj, "chip_top", container="vibeic-eda")
     # honest FAIL — neither rootA nor rootB was silently chosen.
     assert res.status == "FAIL", res.detail
     assert _synth_top_in(res.detail) != "rootA"

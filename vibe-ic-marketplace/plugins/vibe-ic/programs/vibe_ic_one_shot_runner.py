@@ -28,7 +28,7 @@ Per-phase reports: phase1/phase2/phase1/phase2/phase3/analog _one_shot.json
 Usage:
     python3 vibe_ic_one_shot_runner.py <project>
             [--top-name chip_top]
-            [--container iic-eda]
+            [--container vibeic-eda]
             [--max-eco 3]
             [--skip-hardware]
             [--skip-phase1]
@@ -196,7 +196,7 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
     p.add_argument("--top-name", default="chip_top")
-    p.add_argument("--container", default="iic-eda")
+    p.add_argument("--container", default="vibeic-eda")
     p.add_argument("--max-eco", type=int, default=3)
     p.add_argument("--skip-hardware", action="store_true")
     p.add_argument("--skip-phase1", action="store_true")

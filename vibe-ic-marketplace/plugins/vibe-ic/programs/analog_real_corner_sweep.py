@@ -684,7 +684,7 @@ def _ngspice_available(container):
 
 # v1.6.220 (#95 follow-up 2) — container path resolution must probe
 # the actual mount, not assume the canonical `/foss/designs/`
-# layout. Field-agent's iic-eda has the host bind-mounted at the
+# layout. Field-agent's vibeic-eda has the host bind-mounted at the
 # SAME absolute path (`/home/user` → `/home/user`), so the legacy
 # `/foss/designs/` rewrite handed ngspice a non-existent path.
 #
@@ -1395,7 +1395,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
     p.add_argument("--block", required=True)
-    p.add_argument("--container", default="iic-eda")
+    p.add_argument("--container", default="vibeic-eda")
     p.add_argument("--pdk", default="sky130", choices=list(PDK_LIB.keys()))
     p.add_argument("--topology", default="auto")
     args = p.parse_args()

@@ -60,7 +60,7 @@ def _drive_oracle_with_compile(monkeypatch, tmp_path, reused_ip, compile_err):
     monkeypatch.setattr(
         D, "_iverilog_compile_with_sv_fallback",
         lambda *a, **k: (2, "", compile_err, "iverilog_g2012"))
-    return D._run_oracle_tb(project, "dut", tb, "test", 0.0, "iic-eda")
+    return D._run_oracle_tb(project, "dut", tb, "test", 0.0, "vibeic-eda")
 
 
 _SV_SUBSET_ERR = "aes_pkg.sv:19: sorry: constant selects not supported"

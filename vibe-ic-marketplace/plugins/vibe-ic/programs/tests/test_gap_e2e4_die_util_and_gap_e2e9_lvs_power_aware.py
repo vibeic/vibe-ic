@@ -224,7 +224,7 @@ class TestPowerAwareDecision:
 class TestLocalNetgenSetupGlobalisesPower:
     def _emit(self, tmp_path: Path):
         pdk = mod._detect_pdk(Path("/nonexistent"), override="sky130A")
-        host, _ = mod._emit_local_netgen_setup(tmp_path, pdk, "iic-eda")
+        host, _ = mod._emit_local_netgen_setup(tmp_path, pdk, "vibeic-eda")
         return host.read_text()
 
     def test_power_rails_globalised(self, tmp_path):
@@ -297,7 +297,7 @@ class TestRunExtractionLvsPowerAwareWiring:
 
         monkeypatch.setattr(mod, "_docker_exec", fake_docker_exec)
         res = mod._run_extraction_lvs(
-            project, top, pdk, "iic-eda", def_file, netlist,
+            project, top, pdk, "vibeic-eda", def_file, netlist,
             "/nonexistent.magicrc", "/setup.tcl", 0.0)
         verdict = json.loads(
             (project / "reports" / "phase3" / "lvs_verdict.json").read_text())

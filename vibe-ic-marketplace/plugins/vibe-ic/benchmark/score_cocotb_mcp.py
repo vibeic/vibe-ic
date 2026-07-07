@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""score_cocotb_mcp.py — Shape D scorer wrapping the iic-eda container's icarus + cocotb.
+"""score_cocotb_mcp.py — Shape D scorer wrapping the vibeic-eda container's icarus + cocotb.
 
 This is a CLI fallback: a host-side runner that does the same thing the MCP
 `eda_cocotb` tool does (Icarus + cocotb), but invocable directly via docker exec
@@ -7,7 +7,7 @@ so a new plugin user can score Shape-D benchmarks (CVDP-style) without writing
 their own subprocess plumbing.
 
 Substitution disclosure: official CVDP harness uses `nvidia/cvdp-sim:v1.0.0`
-(gated). We substitute the `iic-eda` (hpretl/iic-osic-tools) container which
+(gated). We substitute the `vibeic-eda` (hpretl/iic-osic-tools) container which
 ships iverilog 13 + cocotb 2.0.1 + cocotb_tools. Per the methodology skill § 3.
 
 Input layout (Shape D per BENCHMARK_REGISTRY.layout):
@@ -19,7 +19,7 @@ Input layout (Shape D per BENCHMARK_REGISTRY.layout):
     <project>/score/src/test_runner.py                (HIDDEN runner)
 
 The candidate RTL + the hidden testbench Python need to be co-located inside
-the iic-eda container's mount (typically /foss/designs). This script stages
+the vibeic-eda container's mount (typically /foss/designs). This script stages
 both into a temp work_dir under the mount, sets PYTHONPATH, and runs
 test_runner.py via `docker exec`.
 
@@ -27,7 +27,7 @@ Usage:
     python3 score_cocotb_mcp.py --project /path/to/cvdp_fixed_priority_arbiter \\
         --top fixed_priority_arbiter --rtl work/rtl/fixed_priority_arbiter.sv \\
         --mount-root /home/<user>/AI_IC_design \\
-        --container iic-eda
+        --container vibeic-eda
 
 Outputs <project>/reports/cocotb_score.json with the TESTS / PASS / FAIL counts.
 """
@@ -99,7 +99,7 @@ def main():
                          "Pass --rtl explicitly to score a non-canonical RTL file.")
     ap.add_argument("--mount-root", required=True, help="host path mounted into the container as /foss/designs (e.g. /home/<user>/AI_IC_design)")
     ap.add_argument("--mount-container", default="/foss/designs")
-    ap.add_argument("--container", default="iic-eda")
+    ap.add_argument("--container", default="vibeic-eda")
     ap.add_argument("--simulator", default="icarus")
     ap.add_argument("--waves", type=int, default=0,
                     help="WAVES env for the cocotb runner (0=off default, 1=dump FST/VCD). "
@@ -163,7 +163,7 @@ def main():
     work_c = _docker_path(work_dir, mount_host, a.mount_container)
     test_module = test_py.stem
 
-    # iic-eda container ships iverilog under /foss/tools/bin and libvvp.so under
+    # vibeic-eda container ships iverilog under /foss/tools/bin and libvvp.so under
     # /foss/tools/iverilog/lib — those paths are only injected by the container's
     # login profile (`bash -lc`), NOT by plain `docker exec`. Use bash -lc so the
     # session inherits the full toolchain PATH + LD_LIBRARY_PATH.

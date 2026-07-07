@@ -33,7 +33,7 @@ Usage:
         --pdk-shim <m18e80pm180su_synth_shim.v> \\
         --top chip_top_asic \\
         --output <chip_top_asic_flat.v> \\
-        [--container iic-eda]
+        [--container vibeic-eda]
 """
 from __future__ import annotations
 import argparse, json, os, subprocess, sys, tempfile, shutil
@@ -59,7 +59,7 @@ def main():
     p.add_argument("--pdk-shim",      type=Path, required=True)
     p.add_argument("--top",           required=True)
     p.add_argument("--output",        type=Path, required=True)
-    p.add_argument("--container",     default="iic-eda",
+    p.add_argument("--container",     default="vibeic-eda",
                     help="docker container that has yosys 0.62+")
     p.add_argument("--keep-tmp",      action="store_true")
     args = p.parse_args()

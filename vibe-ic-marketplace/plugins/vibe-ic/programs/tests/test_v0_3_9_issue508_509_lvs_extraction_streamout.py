@@ -84,7 +84,7 @@ def test_local_netgen_setup_ignores_physical_cells(tmp_path):
     # the project-local netgen setup sources the PDK setup and
     # UNCONDITIONALLY ignores fill/tap/decap/fakediode on BOTH circuits.
     pdk = R._detect_pdk(Path("/nonexistent"), override="sky130A")
-    host, cpath = R._emit_local_netgen_setup(tmp_path, pdk, "iic-eda")
+    host, cpath = R._emit_local_netgen_setup(tmp_path, pdk, "vibeic-eda")
     body = host.read_text()
     assert "sky130A_setup.tcl" in body          # sources PDK setup
     for cls in ("fill_", "tapvpwrvgnd_", "decap_", "fakediode_"):

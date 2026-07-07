@@ -309,7 +309,7 @@ def test_wiring_power_aware_match_yields_power_verified(tmp_path, monkeypatch):
 
     monkeypatch.setattr(R, "_docker_exec", fake_exec)
     res = R._try_power_aware_lvs(
-        project, top, pdk, "iic-eda", spice_out,
+        project, top, pdk, "vibeic-eda", spice_out,
         "/c/top_extracted.sp", top, netlist, "/setup.tcl", lvs_rpt, None, 0.0)
     assert res is not None
     assert res.status == "PASS"
@@ -339,7 +339,7 @@ def test_wiring_power_aware_mismatch_returns_none_falls_through(
 
     monkeypatch.setattr(R, "_docker_exec", fake_exec)
     res = R._try_power_aware_lvs(
-        project, top, pdk, "iic-eda", spice_out,
+        project, top, pdk, "vibeic-eda", spice_out,
         "/c/top_extracted.sp", top, netlist, "/setup.tcl", lvs_rpt, None, 0.0)
     assert res is None
     # canonical lvs.rpt is NOT overwritten by a non-matching power-aware attempt.
@@ -360,7 +360,7 @@ def test_wiring_no_stdcells_returns_none(tmp_path, monkeypatch):
 
     monkeypatch.setattr(R, "_docker_exec", fake_exec)
     res = R._try_power_aware_lvs(
-        project, top, pdk, "iic-eda", spice_out,
+        project, top, pdk, "vibeic-eda", spice_out,
         "/c/top_extracted.sp", top, netlist, "/setup.tcl", lvs_rpt, None, 0.0)
     assert res is None
     assert called["netgen"] is False            # never even ran netgen
