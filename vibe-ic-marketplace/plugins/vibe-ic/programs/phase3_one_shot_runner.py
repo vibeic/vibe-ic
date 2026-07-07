@@ -5179,6 +5179,19 @@ write_def {out_dir_c}/placed.def
 # max-cap / max-slew (repair_design) and setup paths (repair_timing).
 # Spares are set_dont_touch above so they are preserved. All best-effort:
 # a NONFATAL note keeps the flow moving if a PDK lacks RC characterization.
+# === v1.3.36 — buffer I/O ports BEFORE repair_design (high-fanout PORT nets) ===
+# repair_design SKIPS nets connected to primary I/O ports, so a reset_n / async
+# enable input driving 1000s of flop pins stays on the bare port with no buffer
+# tree -> tens-of-ns slew + max_capacitance DRV violations. Those DRV fails make
+# the SS-corner signoff STA report a deeply-negative worst slack even when the
+# SETUP path group is empty ("No paths found" = datapath MEETS) — a FALSE timing
+# FAIL. buffer_ports inserts a buffer just inside each port, turning the port net
+# into an INTERNAL net that repair_design then fans out into a proper buffer tree.
+# PROVEN (sha256, 9731-flop reset_n): 7893 max_slew/max_cap violators -> 0 after
+# buffer_ports+repair_design. chip-AGNOSTIC (no design/port literal). Best-effort.
+if {{[catch {{buffer_ports -inputs}} _bp_err]}} {{
+  puts "BUFFER_PORTS_NONFATAL: $_bp_err"
+}}
 if {{[catch {{estimate_parasitics -placement}} _pe_pl]}} {{
   puts "EST_PARASITICS_PLACEMENT_NONFATAL: $_pe_pl"
 }}
