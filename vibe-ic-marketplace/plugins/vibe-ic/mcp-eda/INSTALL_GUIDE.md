@@ -79,7 +79,7 @@ property-error LVS verdict (kills silent false-pass), klayout MANUFACTURINGGRID 
 snap. Full scoreboard: `tools/vibeic-eda/FIX_STATUS.md`. Build the reproducible image once:
 
 ```bash
-docker build -t vibeic-eda:0.2.0 /path/to/repo/tools/vibeic-eda
+docker build -t vibeic-eda:0.2.1 /path/to/repo/tools/vibeic-eda
 ```
 
 ### Option B: the stock IIC-OSIC-Tools base
@@ -131,12 +131,12 @@ Both PDKs are pre-installed at `/foss/pdks/` inside the container:
 Launch the container with your designs directory mounted:
 
 ```bash
-# Option A image: vibeic-eda:0.2.0   |   Option B image: hpretl/iic-osic-tools:latest
+# Option A image: vibeic-eda:0.2.1   |   Option B image: hpretl/iic-osic-tools:latest
 docker run -d --name vibeic-eda \
   -v "$HOME/AI_IC_design:/foss/designs:rw" \
   -p 8888:80 \
   -p 5901:5901 \
-  vibeic-eda:0.2.0 --skip sleep infinity
+  vibeic-eda:0.2.1 --skip sleep infinity
 ```
 
 ### Mount Point Explanation
@@ -738,7 +738,7 @@ you can fabricate a real chip:
 # 1. Start Docker container
 docker start vibeic-eda || docker run -d --name vibeic-eda \
   -v "$HOME/AI_IC_design:/foss/designs:rw" \
-  vibeic-eda:0.2.0 --skip sleep infinity   # or: hpretl/iic-osic-tools:latest (stock)
+  vibeic-eda:0.2.1 --skip sleep infinity   # or: hpretl/iic-osic-tools:latest (stock)
 
 # 2. Launch Claude Code with MCP
 claude
@@ -756,7 +756,7 @@ docker stop vibeic-eda
 docker rm -f vibeic-eda
 docker run -d --name vibeic-eda \
   -v "$HOME/AI_IC_design:/foss/designs:rw" \
-  vibeic-eda:0.2.0 --skip sleep infinity   # or: hpretl/iic-osic-tools:latest (stock)
+  vibeic-eda:0.2.1 --skip sleep infinity   # or: hpretl/iic-osic-tools:latest (stock)
 ```
 
 ---
