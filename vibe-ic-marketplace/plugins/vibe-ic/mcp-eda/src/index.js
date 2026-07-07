@@ -80,7 +80,7 @@ function _shellSingleQuotedHeredoc(content, sentinel) {
     .replace(/`/g, "\\`");
 }
 
-const CONTAINER = process.env.EDA_CONTAINER || "iic-eda";
+const CONTAINER = process.env.EDA_CONTAINER || "vibeic-eda";
 const PDK_ROOT = "/foss/pdks";
 const TOOLS = "/foss/tools";
 
@@ -264,7 +264,7 @@ function _classifyDockerErr(stderr) {
   } else if (stderr.includes("Cannot connect")) {
     return "Docker daemon not running. Fix: `sudo systemctl start docker`.";
   } else if (stderr.includes("No such container") || stderr.includes("is not running")) {
-    return `Container '${CONTAINER}' not running. Fix: see INSTALL_GUIDE.md to start IIC-OSIC-TOOLS.`;
+    return `Container '${CONTAINER}' not running. Fix: see INSTALL_GUIDE.md to start the vibeic-eda EDA container.`;
   } else if (stderr.includes("command not found")) {
     return "`docker` not installed or not in PATH. Fix: install Docker Desktop / Docker Engine.";
   } else {
@@ -300,7 +300,7 @@ function _probeDocker(force = false) {
           _dockerReachable = {
             ok: false,
             stderr: `no container named ${CONTAINER}`,
-            hint: `Container '${CONTAINER}' does not exist. Fix: see INSTALL_GUIDE.md to create IIC-OSIC-TOOLS.`,
+            hint: `Container '${CONTAINER}' does not exist. Fix: see INSTALL_GUIDE.md to create the vibeic-eda EDA container.`,
           };
         }
       } catch (startErr) {
@@ -4406,7 +4406,7 @@ quit
 // ─── Tool: eda_doc_extract (v2.6.0) ───
 server.tool(
   "eda_doc_extract",
-  "Extract plain text + structured JSON from vendor docs (.doc / .docx / .pdf / .ppt / .pptx / .xls / .xlsx / .txt / .html) for downstream Phase 1 / spec-derivation skills. v2.6.4: doc_extract.py now emits per-file coverage_score (text_chars / file_size_bytes) into INDEX.json, so the plugin gate binary_doc_low_extraction_warn (LL-36) can flag figure-heavy PDFs whose pdftotext output is essentially empty (<2%) and recommend installing pdfplumber/PyMuPDF for fallback extraction. v2.6.3: tighten success gate (re-add execSync r.success guard so a crashed run can't be misreported as success based on stale stdout) + align stdio capture style with eda_doctor doc-probes. v2.6.2: runs on HOST (not docker) since pdftotext / libreoffice / openpyxl are typically host-side tools and the iic-eda container omits them. Same execution-on-host pattern as eda_fpga_compile / eda_fpga_program.",
+  "Extract plain text + structured JSON from vendor docs (.doc / .docx / .pdf / .ppt / .pptx / .xls / .xlsx / .txt / .html) for downstream Phase 1 / spec-derivation skills. v2.6.4: doc_extract.py now emits per-file coverage_score (text_chars / file_size_bytes) into INDEX.json, so the plugin gate binary_doc_low_extraction_warn (LL-36) can flag figure-heavy PDFs whose pdftotext output is essentially empty (<2%) and recommend installing pdfplumber/PyMuPDF for fallback extraction. v2.6.3: tighten success gate (re-add execSync r.success guard so a crashed run can't be misreported as success based on stale stdout) + align stdio capture style with eda_doctor doc-probes. v2.6.2: runs on HOST (not docker) since pdftotext / libreoffice / openpyxl are typically host-side tools and the vibeic-eda container omits them. Same execution-on-host pattern as eda_fpga_compile / eda_fpga_program.",
   {
     in_dir: z.string().optional().describe("Directory of input docs (recurses)"),
     in_file: z.string().optional().describe("Single input file (alternative to in_dir)"),
@@ -4535,7 +4535,7 @@ server.tool(
 
     // 5. v2.6.2: doc-extraction toolchain probed on HOST (where pdftotext /
     //    libreoffice / openpyxl typically live). v2.6.0 probed in container
-    //    and always reported FAIL because the iic-eda image doesn't ship
+    //    and always reported FAIL because the vibeic-eda image doesn't ship
     //    these — but eda_doc_extract now runs on host (v2.6.2), so the
     //    probes must align with where the work actually happens.
     if (!skip_versions) {
@@ -6191,7 +6191,7 @@ server.tool(
 // ~/.ivy2 / coursier. Everything runs in-container; no host FS writes.
 server.tool(
   "eda_spinalhdl_gen",
-  "Elaborate a SpinalHDL/sbt project to Verilog by running `sbt runMain <main_class>` inside the iic-eda container (OpenJDK 17 + sbt present; SpinalHDL pulled from Maven Central, cached). Unblocks Scala-source-only cores like VexRiscv/Murax. Returns success, generated .v files (sha256 + line counts) and a log tail.",
+  "Elaborate a SpinalHDL/sbt project to Verilog by running `sbt runMain <main_class>` inside the vibeic-eda container (OpenJDK 17 + sbt present; SpinalHDL pulled from Maven Central, cached). Unblocks Scala-source-only cores like VexRiscv/Murax. Returns success, generated .v files (sha256 + line counts) and a log tail.",
   {
     project_dir: z.string().describe("sbt project root INSIDE the container (contains build.sbt), e.g. /foss/designs/_vexriscv_gen"),
     main_class: z.string().describe("Fully-qualified runMain target, e.g. vexriscv.demo.GenSmallest"),

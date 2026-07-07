@@ -18,17 +18,18 @@ GDS file (tapeout-ready)
 ## Quick Start
 
 ```bash
-# 1. Pull the EDA tools Docker image (22GB, contains ALL tools)
-docker pull hpretl/iic-osic-tools:latest
-docker run -d --name iic-eda -v $HOME/designs:/design \
-  hpretl/iic-osic-tools:latest --wait
+# 1. Provide the EDA container (named vibeic-eda). Recommended: the enhanced fork image.
+docker build -t vibeic-eda:0.2.0 /path/to/repo/tools/vibeic-eda   # forked toolchain, FAIL→PASS fixes
+docker run -d --name vibeic-eda -v $HOME/designs:/design \
+  vibeic-eda:0.2.0 --skip sleep infinity
+# stock fallback: docker pull hpretl/iic-osic-tools:latest  (then run it named vibeic-eda)
 
 # 2. Install MCP server
 git clone https://github.com/anthropics/mcp-eda.git
 cd mcp-eda && npm install
 
 # 3. Connect to Claude Code
-claude mcp add eda node $(pwd)/src/index.js -e EDA_CONTAINER=iic-eda
+claude mcp add eda node $(pwd)/src/index.js -e EDA_CONTAINER=vibeic-eda
 
 # 4. Start designing ICs
 claude "Design a 4-bit counter IC using GF180 180nm PDK"

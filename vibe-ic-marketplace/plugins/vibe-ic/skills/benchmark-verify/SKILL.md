@@ -148,7 +148,7 @@ restore any spare a prior optimization dropped) until coverage PASS + preservati
 ## Procedure (run for each benchmark IC)
 1. Confirm the IC reached the flow end (RTL generated + phase3 attempted). Read `SOURCE_MANIFEST.md`.
 2. **Pillar 2:** dispatch the per-step cross-check (split phase1/2 and phase3 to keep tool
-   runs bounded), writing `cross_check/<half>/step_*.md`. Run REAL tools in `iic-eda`; close gaps.
+   runs bounded), writing `cross_check/<half>/step_*.md`. Run REAL tools in `vibeic-eda`; close gaps.
 3. **Pillar 1:** build `reports/functional_coverage.json` from the L-doc requirements; close-loop to 100%.
 4. **Pillar 3:** author tests, measure coverage → `reports/code_coverage.json`; close-loop to >= 90%.
 5. **Pillar 4:** test patterns + FPGA/BFM run → `reports/hw_test.json`.

@@ -7,7 +7,7 @@
         "/home/<your-user>/AI_IC_design/mcp-eda/src/index.js"
       ],
       "env": {
-        "EDA_CONTAINER": "iic-eda"
+        "EDA_CONTAINER": "vibeic-eda"
       }
     }
   }

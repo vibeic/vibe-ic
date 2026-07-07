@@ -2,7 +2,7 @@
 """Tests for the container-visibility pre-flight (v0.1.11).
 
 Files staged onto the host bind mount via a restricted/sandboxed shell do
-not always propagate into the `iic-eda` container; the raw EDA tool then
+not always propagate into the `vibeic-eda` container; the raw EDA tool then
 emits an opaque "cannot find file" and the caller cannot distinguish a
 staging miss from a real RTL error. `missingInContainer()` checks existence
 INSIDE the container and tool wrappers return an actionable `stagingHint()`.

@@ -12,7 +12,7 @@ phase23 is just the chain.
 Usage:
     python3 phase23_one_shot_runner.py <project_dir>
                   [--top-name chip_top]
-                  [--container iic-eda]
+                  [--container vibeic-eda]
                   [--max-eco 3]
                   [--skip-hardware]                 # forwarded to phase 2
                   [--skip-phase3]                   # stop after Phase 2
@@ -63,7 +63,7 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
     p.add_argument("--top-name", default="chip_top")
-    p.add_argument("--container", default="iic-eda")
+    p.add_argument("--container", default="vibeic-eda")
     p.add_argument("--max-eco", type=int, default=3)
     p.add_argument("--skip-hardware", action="store_true")
     p.add_argument("--skip-phase2", action="store_true",

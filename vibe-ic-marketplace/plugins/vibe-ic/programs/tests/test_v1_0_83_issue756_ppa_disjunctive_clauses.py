@@ -33,7 +33,7 @@ PURE-FUNCTION END-STATE (no yosys needed)
 `parse_threshold_clauses_from_prompt` + `_nearest_metric_for_pct` +
 `decide_clauses` are PURE; the disjunctive PASS, the AND conjunction, the
 grown-design / neither-bar-headroom BLOCKs and the unparseable NOT-APPLICABLE are
-all proven WITHOUT a container. The live `main` end-to-end is docker/iic-eda
+all proven WITHOUT a container. The live `main` end-to-end is docker/vibeic-eda
 guarded.
 
 chip-AGNOSTIC: pure measurement + arithmetic + ordinary-English clause tokens;
@@ -65,7 +65,7 @@ def _load(modname, filename):
 ppa = _load("ppa_area_threshold_check", "ppa_area_threshold_check.py")
 
 
-def _container_up(container="iic-eda") -> bool:
+def _container_up(container="vibeic-eda") -> bool:
     if shutil.which("docker") is None:
         return False
     try:
@@ -272,10 +272,10 @@ def test_unmeasurable_clause_or_is_not_applicable():
 # ════════════════════════════════════════════════════════════════════════════
 # 7. (container-guarded) end-to-end main — a real synth measurement path. Pure
 #    logic above is the gate's verdict; this just proves the wiring runs and
-#    surfaces `clauses` + `combinator` in the report. Skipped without iic-eda.
+#    surfaces `clauses` + `combinator` in the report. Skipped without vibeic-eda.
 # ════════════════════════════════════════════════════════════════════════════
 @pytest.mark.skipif(not _HAVE_CONTAINER,
-                    reason="iic-eda container not running")
+                    reason="vibeic-eda container not running")
 def test_end_to_end_main_reports_clauses(tmp_path):
     orig = tmp_path / "orig.v"
     opt = tmp_path / "opt.v"
@@ -292,7 +292,7 @@ def test_end_to_end_main_reports_clauses(tmp_path):
     out = tmp_path / "rep.json"
     rc = ppa.main([
         "--original", str(orig), "--optimized", str(opt), "--top", "m",
-        "--prompt", str(prompt), "--container", "iic-eda",
+        "--prompt", str(prompt), "--container", "vibeic-eda",
         "--json", str(out)])
     assert rc in (0, 1)   # PASS / NOT-APPLICABLE / BLOCK — never a setup error
     import json

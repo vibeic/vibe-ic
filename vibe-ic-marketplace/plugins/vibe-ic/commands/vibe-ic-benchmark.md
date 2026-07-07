@@ -51,7 +51,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py <bench> --score --r
 | **E** | n/a — blocked / out-of-scope, document only | n/a | PyHDL-Eval (golden gated), RTL-Repo (wrong metric), MetRex / ResBench (different task / toolchain), CVDP-full (gated) |
 
 ## Honesty (mandatory in any RESULT.md)
-- Disclose every tool substitution (VCS → iverilog, DC → yosys+OpenROAD, nvidia/cvdp-sim → iic-eda).
+- Disclose every tool substitution (VCS → iverilog, DC → yosys+OpenROAD, nvidia/cvdp-sim → vibeic-eda).
 - Run the scorer with `cwd=design_dir` so `$readmemh` relative paths resolve.
 - Classify every residual fail into rubric category A-H (skill § 4); FLOOR ≠ "I gave up".
 - Never publish a number from Shape E.

@@ -581,7 +581,7 @@ class TestContainerCornerDiscovery:
         monkeypatch.setattr(mod, "_docker_exec",
                             lambda c, cmd, timeout=60: (0, out, ""))
         libs = mod._discover_container_corner_libs(
-            "iic-eda", "/foss/pdks/sky130A/.../lib")
+            "vibeic-eda", "/foss/pdks/sky130A/.../lib")
         assert len(libs) == 3                      # only *.lib lines
         assert all(p.endswith(".lib") for _, p in libs)
         corners = mod._select_signoff_corners(libs)

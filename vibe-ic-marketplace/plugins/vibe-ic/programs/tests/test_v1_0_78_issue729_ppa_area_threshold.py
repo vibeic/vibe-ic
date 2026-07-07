@@ -15,7 +15,7 @@ below the prompt-stated threshold.
 
 The %-computation + threshold-parse + verdict are PURE functions, unit-tested
 against CANNED yosys `stat` text — NO container needed. The live-yosys path is
-gated behind a skip when docker / the iic-eda container is unavailable.
+gated behind a skip when docker / the vibeic-eda container is unavailable.
 
   * parse_threshold_from_prompt: pull the threshold + bound metric (cells /
     wires / both) out of a prompt's prose.
@@ -76,7 +76,7 @@ _HAVE_IVERILOG = (shutil.which("iverilog") is not None
                   and shutil.which("vvp") is not None)
 
 
-def _container_up(container="iic-eda") -> bool:
+def _container_up(container="vibeic-eda") -> bool:
     if shutil.which("docker") is None:
         return False
     try:
@@ -127,7 +127,7 @@ _STAT_OPT_BAD = """\
 
 # the NEW yosys 0.40+ / 0.62 `stat` spelling (count FIRST, with decoy
 # "wire bits" / "public wires" / "port bits" lines that must NOT be mistaken
-# for the wire/cell count). This is exactly the real iic-eda container format.
+# for the wire/cell count). This is exactly the real vibeic-eda container format.
 _STAT_NEW_FORM = """\
 10. Printing statistics.
 
@@ -276,7 +276,7 @@ def test_run_not_applicable_when_no_threshold(tmp_path):
     p.write_text("module m(); endmodule\n")
     rc, report = ppa.run_ppa_area_threshold(
         original=o, optimized=p, top="m", prompt_text=None,
-        threshold_override=None, metric_override=None, container="iic-eda")
+        threshold_override=None, metric_override=None, container="vibeic-eda")
     assert rc == 0
     assert report["verdict"] == "NOT_APPLICABLE"
 
@@ -290,7 +290,7 @@ def test_run_not_applicable_when_prompt_unparseable(tmp_path):
     rc, report = ppa.run_ppa_area_threshold(
         original=o, optimized=p, top="m",
         prompt_text="Build a UART. No area target.",
-        threshold_override=None, metric_override=None, container="iic-eda")
+        threshold_override=None, metric_override=None, container="vibeic-eda")
     assert rc == 0
     assert report["verdict"] == "NOT_APPLICABLE"
 
@@ -306,7 +306,7 @@ def test_run_not_applicable_when_container_absent(tmp_path):
     rc, report = ppa.run_ppa_area_threshold(
         original=o, optimized=p, top="m", prompt_text=None,
         threshold_override=20.0, metric_override="both",
-        container="iic-eda-definitely-not-running-xyz")
+        container="vibeic-eda-definitely-not-running-xyz")
     assert rc == 0
     assert report["verdict"] == "NOT_APPLICABLE"
     assert report.get("tool_available") is False
@@ -322,7 +322,7 @@ def test_run_missing_file_is_setup_error(tmp_path):
     assert rc == 2
 
 
-# ── LIVE yosys path (skipped unless the iic-eda container is up) ──────────────
+# ── LIVE yosys path (skipped unless the vibeic-eda container is up) ──────────────
 # These are NOT a redundant-vs-folded pair (yosys `opt` would fold both to the
 # same size). They are a genuinely LARGE datapath (an 8x8 multiplier) vs a
 # genuinely SMALL one (a bitwise AND): the cell/wire reduction SURVIVES opt, so
@@ -341,7 +341,7 @@ endmodule
 
 
 @pytest.mark.skipif(not _HAVE_CONTAINER,
-                    reason="iic-eda container not running — live yosys path")
+                    reason="vibeic-eda container not running — live yosys path")
 def test_live_yosys_above_threshold_passes(tmp_path):
     o = tmp_path / "orig.v"
     o.write_text(_RTL_ORIG_LIVE)
@@ -349,7 +349,7 @@ def test_live_yosys_above_threshold_passes(tmp_path):
     p.write_text(_RTL_OPT_LIVE)
     rc, report = ppa.run_ppa_area_threshold(
         original=o, optimized=p, top="opt_demo", prompt_text=None,
-        threshold_override=5.0, metric_override="cells", container="iic-eda")
+        threshold_override=5.0, metric_override="cells", container="vibeic-eda")
     # a real shrink should clear a low bar; if synth could not measure it
     # returns NOT-APPLICABLE (still rc 0, never a false block).
     assert rc == 0
@@ -357,7 +357,7 @@ def test_live_yosys_above_threshold_passes(tmp_path):
 
 
 @pytest.mark.skipif(not _HAVE_CONTAINER,
-                    reason="iic-eda container not running — live yosys path")
+                    reason="vibeic-eda container not running — live yosys path")
 def test_live_yosys_below_threshold_blocks(tmp_path):
     # original-vs-itself: 0% reduction → a 20% bar must BLOCK (rc 1).
     o = tmp_path / "orig.v"
@@ -366,7 +366,7 @@ def test_live_yosys_below_threshold_blocks(tmp_path):
     p.write_text(_RTL_ORIG_LIVE)
     rc, report = ppa.run_ppa_area_threshold(
         original=o, optimized=p, top="opt_demo", prompt_text=None,
-        threshold_override=20.0, metric_override="both", container="iic-eda")
+        threshold_override=20.0, metric_override="both", container="vibeic-eda")
     # 0% reduction vs a 20% bar — BLOCK, unless synth was unmeasurable.
     if report["verdict"] == "NOT_APPLICABLE":
         pytest.skip("synth unmeasurable in this container")

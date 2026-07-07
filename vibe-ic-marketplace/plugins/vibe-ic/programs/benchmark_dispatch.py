@@ -54,12 +54,12 @@ def _entry(name: str) -> dict:
 
 
 def _env_check():
-    """Detect environment requirements (iverilog, iic-eda container, MCP)."""
+    """Detect environment requirements (iverilog, vibeic-eda container, MCP)."""
     have_iverilog = subprocess.run(["which", "iverilog"], capture_output=True).returncode == 0
     try:
         docker_ps = subprocess.run(["docker", "ps", "--format", "{{.Names}}"],
                                    capture_output=True, text=True, timeout=5).stdout
-        have_iiceda = "iic-eda" in docker_ps
+        have_iiceda = "vibeic-eda" in docker_ps
     except (FileNotFoundError, subprocess.TimeoutExpired):
         have_iiceda = False
     return {"iverilog": have_iverilog, "iic_eda_running": have_iiceda}
@@ -560,7 +560,7 @@ def main():
     # default: show plan + env status
     env = _env_check()
     print(f"# Environment: iverilog={'OK' if env['iverilog'] else 'MISSING'}, "
-          f"iic-eda container={'RUNNING' if env['iic_eda_running'] else 'NOT RUNNING'}")
+          f"vibeic-eda container={'RUNNING' if env['iic_eda_running'] else 'NOT RUNNING'}")
     print()
     cmd_show(a.bench)
 
