@@ -62,5 +62,10 @@ iverilog commits e1e12f6+110cadd · pushed · verilator forked, no commit (no ho
 | downgrade BLKLOOPINIT/WIDTH/LATCH/COMBDLY | Verilator | bug-fix-easy | ⚪ | **obsolete on v5.051** (honest): each already `-Wno`-suppressible; BLKLOOPINIT's only trigger is also rejected by iverilog → downgrading would emit silently-wrong sims. No honest fix → no patch |
 | event-driven `--timing` scheduler · Verilator CDC/NBA region parity | both | algorithm-hard | 🔷 | research ports, deferred |
 
-## Tool 3 — klayout  (fork agent still running — big C++ build)
-_updated when it lands + proof re-verified._
+## Tool 3 — klayout  (fork: vibeic/klayout @ vibeic/streamout-fixes, commit b82b6e9)
+| Fix | Class | Status | Proof (gatekeeper-verified) |
+|---|---|---|---|
+| foundry layer-map instead of compact 1..N fallback | feature-add-medium | ✅ | **re-run by gatekeeper**: stock `met1.PIN=1/2` (Magic-unreadable, breaks LVS) → patched+map `met1.PIN=68/16`, `via1=67/44`, `met1.NET=68/20` (real sky130 layer/datatypes) |
+| honor tech-LEF `MANUFACTURINGGRID`, snap instance + via coords | bug-fix-easy | ✅ | **re-run by gatekeeper**: `OFFGRID_VERTICES 8 → 0` (vs 5nm grid); no-op on grid-legal geometry (default-ON, 90/90 tests pass) |
+| merge-abutting streamout (union same-layer polys across instances) | feature-add-medium | ✅ | met1 abutting polys `2 → 1` (opt-in `KLAYOUT_LEFDEF_MERGE_ABUTTING=1`); deferred to `finish()` to avoid dangling-`db::Cell*` SIGSEGV |
+| Regression: `dbLEFDEFImportTests` 90/90 pass, identical stock vs patched; each fix's OFF path reproduces stock exactly |||| 
