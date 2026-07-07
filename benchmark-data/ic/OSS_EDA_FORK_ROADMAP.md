@@ -215,3 +215,43 @@ repair finally sees the real long wires → buffers/upsizes them → sha256 (-62
 subservient (-98) SS-corner slew DRV clears → timing signoff PASS. Build tools
 (cmake 3.28 / ninja / g++) confirmed present in the iic-osic-tools container.
 Remaining work: implement + build OpenROAD (~1 h) + wire into flow + re-run to prove.
+
+## P0 — COMPLETE root cause + fix (2026-07, with reproduced Signal-11 stack)
+
+Correction to the note above: the `#581` segfault IS real — it was masked because
+`repair_design` was silently ignoring the real parasitics. Full chain, proven end-to-end:
+
+1. `read_spef` / `extract_parasitics` (OpenRCX, 45187 real rc segments) annotate detailed-route
+   parasitics into STA, but **never set `est::parasitics_src_`** → `have_estimated_parasitics()`
+   stays false → `repair_design` prints `EST-0027 … Using wire load models` and repairs against a
+   crude wire-load estimate that cannot see the long detailed-route wires. (This is why the flow's
+   post-route repair "worked" — it wasn't using the real RC at all.)
+2. The C++ `ParasiticsSrc::kDetailedRouting` case already does the right thing (just sets
+   `parasitics_src_`, trusting the OpenRCX/SPEF annotation) — but the Tcl `estimate_parasitics`
+   wrapper never exposes a `-detailed_routing` flag to reach it.
+3. The moment you DO reach it (parasitics_src_ = kDetailedRouting, `have_estimated_parasitics()`
+   true, repair uses the real RC), `repair_design` **segfaults (Signal 11)**. Reproduced stack:
+   ```
+   grt::GlobalRouter::getPinGridPositions(odb::dbNet*)
+   rsz::Resizer::makeBufferedNetGroute(...)
+   rsz::Resizer::makeBufferedNet(...)          <- switch on parasitics_src_
+   rsz::RepairDesign::repairNet / repairDriver / repairDesign
+   ```
+   `makeBufferedNet` sends BOTH kGlobalRouting AND kDetailedRouting to `makeBufferedNetGroute`,
+   which hard-requires the in-session GlobalRouter grid (`getPinGridPositions` / `getRoutes`).
+   With detailed-route parasitics annotated from OpenRCX/SPEF and no live `global_route`, that grid
+   is empty → null deref → crash.
+
+### vibeic/OpenROAD fork — the fix (two edits, both landed on the fork)
+- `src/rsz/src/BufferedNet.cc` `makeBufferedNet`: guard the Groute builder behind
+  `global_router_->haveRoutes()`; when routes are absent (detailed-route parasitics only) fall
+  back to `makeBufferedNetSteiner` — a valid placement-based buffer-tree topology. RC evaluation
+  still uses the real annotated detailed-route parasitics. **Kills the Signal-11.**
+- `src/est/src/EstimateParasitics.tcl`: expose `estimate_parasitics -detailed_routing` →
+  `est::estimate_parasitics_cmd "detailed_routing"` (trusts OpenRCX/SPEF annotation, no re-estimate).
+
+### Flow wiring (vibe-ic plugin, after the patched binary lands)
+`_post_route_spef_repair_tcl` becomes repair-capable: extract_parasitics →
+`estimate_parasitics -detailed_routing` → `repair_design` (real RC, no crash) →
+`detailed_placement` → incremental reroute → re-extract sign-off SPEF. Unblocks sha256 (-62) /
+subservient (-98) SS-corner slew DRV.
