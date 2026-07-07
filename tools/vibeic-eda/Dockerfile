@@ -109,9 +109,14 @@ LABEL org.opencontainers.image.title="vibeic-eda"
 LABEL org.opencontainers.image.description="Forked+enhanced OSS EDA toolchain (vibeic): iic-osic-tools base + vibeic/* patched EDA-tool forks with gatekeeper-verified FAIL->PASS proofs (see FIX_STATUS.md)."
 LABEL org.opencontainers.image.source="https://github.com/vibeic"
 
+# /foss/tools is root-owned and the base runs as user 1000 — become root to mutate it.
+USER root
 # --- vibeic/OpenROAD (native 24.04 build → RUNPATH /opt/or-tools, no lib bundling) ---
 COPY --from=openroad-builder /opt/or-tools /opt/or-tools
 COPY --from=openroad-builder /src/build/bin/openroad /foss/tools/openroad/bin/openroad
+# Clean-replace the base tool dirs FIRST so no stale base files survive the COPY merge —
+# e.g. the base's ghdl.so yosys plugin is built against the old ABI and would crash yosys 0.66.
+RUN rm -rf /foss/tools/yosys /foss/tools/ngspice /foss/tools/magic /foss/tools/netgen /foss/tools/iverilog
 # --- vibeic/yosys (replaces base yosys install; bin symlinked into /foss/tools/bin) ---
 COPY --from=yosys-builder /foss/tools/yosys /foss/tools/yosys
 # --- vibeic/ngspice ---
@@ -130,3 +135,5 @@ RUN for t in yosys yosys-abc; do ln -sf /foss/tools/yosys/bin/$t /foss/tools/bin
  && ln -sf /foss/tools/magic/bin/magic /foss/tools/bin/magic 2>/dev/null || true \
  && ln -sf /foss/tools/netgen/bin/netgen /foss/tools/bin/netgen 2>/dev/null || true \
  && for t in iverilog vvp iverilog-vpi vvp; do ln -sf /foss/tools/iverilog/bin/$t /foss/tools/bin/$t 2>/dev/null || true; done
+# restore the base's non-root runtime user
+USER 1000
