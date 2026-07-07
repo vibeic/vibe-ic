@@ -178,3 +178,40 @@ All `bug-fix-easy` (14), `feature-add-medium` (22), and `algorithm-hard` (12) fi
 - **Full SV-2017 elaboration as a native yosys frontend** (`phase3:2181-2188`) — classed `fundamental-or-external` not because it's unsolvable but because the honest path is *adopting the external slang project* (yosys-slang) as the default frontend and upstreaming it, not re-implementing an SV-2017 elaborator inside `read_verilog`. This one is external-by-integration, and correctly subsumes the cross-file-import and StateEnumT findings.
 
 **Bottom line:** 48/51 gaps are inside our reach as a fork; the 3 external ones bottom out at licensed foundry data (PDK models, encrypted RC decks) and golden GDS — none of which a tool fork can manufacture. The roadmap above commits only to the 48.
+---
+
+## P0 — PRECISE ROOT CAUSE (2026-07, from live OpenROAD source dive)
+
+**The `#581` "post-route RSZ segfault" did NOT reproduce** on the current OpenROAD
+(standalone `read_def routed + read_spef + repair_design` ran to completion, exit 0).
+The measure-only workaround is likely obsolete. The REAL gap is narrower and exact:
+
+1. **`repair_design` never uses detailed-route parasitics.** After `read_spef`, the
+   resizer prints `[WARNING EST-0027] no estimated parasitics. Using wire load models`
+   — it ignores the SPEF and the real routed wire lengths. So the 24.7 ns SS-corner
+   slew on `sha256 _03068_` (a long detailed-route wire off a weak `o311ai_0`) is
+   invisible to repair; only the signoff STA (which uses the SPEF) sees it.
+2. **`ParasiticsSrc::kDetailedRouting` is a TODO STUB.** `src/est/src/EstimateParasitics.cpp`
+   line ~463: the `kDetailedRouting` case falls through to `estimateGlobalRouteRC()` with
+   `// TODO: update detailed route for modified nets`. It uses the *global-route steiner*
+   estimate, NOT the actual routed `dbWire` geometry — so it underestimates exactly the
+   long detailed-route wires that bust slew.
+3. **The Tcl wrapper hides it anyway.** `src/est/src/EstimateParasitics.tcl` only exposes
+   `-placement` and `-global_routing` (`flags {-placement -global_routing}`); the C++
+   SWIG typemap accepts `"detailed_routing"` but no Tcl flag reaches it.
+
+### The fix (well-scoped OpenROAD feature-add)
+- **C++:** implement `estimateDetailedRouteRC(dbNet*)` that walks the net's routed
+  `dbWire` shapes (via `odb::dbShape`/`dbWireGraph`) to sum true per-layer routed length,
+  then `makeWireParasitic(...)` from that (mirror `estimateGlobalRouteRC` but source length
+  from the DB route, not the GR steiner tree). Replace the `kDetailedRouting` fall-through.
+- **Tcl:** add `-detailed_routing` to `estimate_parasitics` → `est::estimate_parasitics_cmd
+  "detailed_routing" $filename`.
+- **vibe-ic flow:** after `detailed_route`, run `estimate_parasitics -detailed_routing`
+  + `repair_design` + `repair_timing -setup` + `detailed_placement` + incremental reroute.
+
+### Expected payoff
+repair finally sees the real long wires → buffers/upsizes them → sha256 (-62) and
+subservient (-98) SS-corner slew DRV clears → timing signoff PASS. Build tools
+(cmake 3.28 / ninja / g++) confirmed present in the iic-osic-tools container.
+Remaining work: implement + build OpenROAD (~1 h) + wire into flow + re-run to prove.
