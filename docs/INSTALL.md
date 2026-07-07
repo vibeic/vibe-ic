@@ -24,8 +24,8 @@ magic / netgen / iverilog / klayout with gatekeeper-verified FAIL→PASS fixes; 
 `tools/vibeic-eda/FIX_STATUS.md`). Build the reproducible image once, then run it:
 
 ```bash
-docker build -t vibeic-eda:0.2.1 tools/vibeic-eda
-docker run -d --name vibeic-eda vibeic-eda:0.2.1 --skip sleep infinity
+docker build -t vibeic-eda:0.2.2 tools/vibeic-eda
+docker run -d --name vibeic-eda vibeic-eda:0.2.2 --skip sleep infinity
 ```
 
 **Or — the stock base** (standard tools, no fork enhancements): pull IIC-OSIC-TOOLS and give
