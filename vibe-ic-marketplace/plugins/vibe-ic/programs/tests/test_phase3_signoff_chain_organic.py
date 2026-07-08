@@ -405,11 +405,17 @@ class TestDontUseTcl:
         assert "clkbuf_" not in tcl
         assert "tapvpwrvgnd" not in tcl and "__fill_" not in tcl
 
-    def test_sky130a_pdk_points_at_drc_exclude(self):
+    def test_sky130a_pdk_points_at_librelane_pnr_excluded(self):
+        # R8 (v1.3.50) — the fork's newer image MOVED+RENAMED the exclusion file
+        # to libs.tech/librelane/<lib>/pnr_excluded.cells; the sky130A config now
+        # points its PRIMARY hint there. `_dont_use_tcl` globs BOTH dirs + BOTH
+        # filenames inside the container so the old-image openlane/drc_exclude.cells
+        # is still resolved as a fallback (see test_v1_3_50_forkadapt_batch.py).
         pdk = runner._detect_pdk(__import__("pathlib").Path("/nonexistent"), "sky130A")
         assert pdk.pnr_exclude_cell_file is not None
+        assert "/libs.tech/librelane/" in pdk.pnr_exclude_cell_file
         assert pdk.pnr_exclude_cell_file.endswith(
-            "sky130_fd_sc_hd/drc_exclude.cells")
+            "sky130_fd_sc_hd/pnr_excluded.cells")
 
     def test_wired_after_link_design_before_opt(self):
         import inspect

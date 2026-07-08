@@ -132,3 +132,156 @@ def test_usage_error():
     r = subprocess.run([sys.executable, str(PROG)], capture_output=True,
                        text=True)
     assert r.returncode == 2
+
+
+# ── R7 (v1.3.50) — a PINNED plugin worktree is a legit plugin source ─────────
+
+def test_r7_pinned_plugin_wt_prefix_passes(tmp_path):
+    """A `/tmp/.../wt-*/vibe-ic-marketplace/plugins/vibe-ic/...` reference (real
+    plugin.json) is a legit plugin SOURCE — disclosed, NON-blocking (PASS).
+
+    Uses a real volatile prefix (/tmp) because that is what triggered the
+    original false positive."""
+    import shutil
+    import tempfile
+    volbase = Path(tempfile.mkdtemp(dir="/tmp", prefix="wt-v1350-"))
+    try:
+        root = volbase / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
+        (root / ".claude-plugin").mkdir(parents=True)
+        (root / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"name": "vibe-ic", "version": "1.3.50"}))
+        (root / "programs").mkdir()
+        src = root / "programs" / "flow_compliance_check.py"
+        src.write_text("# pinned plugin program\n")
+        (tmp_path / "RESULT.md").write_text(f"Ran gate at: {src}\n")
+        r = _run(tmp_path)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "[PASS]" in r.stdout
+        assert "pinned plugin-source" in r.stdout
+    finally:
+        shutil.rmtree(volbase, ignore_errors=True)
+
+
+def test_r7_pinned_plugin_claude_worktrees_passes(tmp_path):
+    """The `.claude/worktrees/<wt>/vibe-ic-marketplace/plugins/vibe-ic/...`
+    pinning marker variant is also recognised as plugin source (PASS)."""
+    import tempfile
+    volbase = Path(tempfile.mkdtemp(dir="/tmp", prefix="run-"))
+    try:
+        root = (volbase / ".claude" / "worktrees" / "agent-xyz"
+                / "vibe-ic-marketplace" / "plugins" / "vibe-ic")
+        (root / ".claude-plugin").mkdir(parents=True)
+        (root / ".claude-plugin" / "plugin.json").write_text("{}")
+        (root / "phase1_phase2_phase3.yaml").write_text("steps: []\n")
+        src = root / "phase1_phase2_phase3.yaml"
+        (tmp_path / "RESULT.md").write_text(f"config: {src}\n")
+        r = _run(tmp_path)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "[PASS]" in r.stdout
+        assert "pinned plugin-source" in r.stdout
+    finally:
+        import shutil
+        shutil.rmtree(volbase, ignore_errors=True)
+
+
+def test_r7_genuine_volatile_output_still_fails(tmp_path):
+    """A genuine volatile project OUTPUT (real /tmp GDS, NOT a plugin root) must
+    STILL FAIL — the R7 exemption must not create a false-negative."""
+    import tempfile
+    outdir = Path(tempfile.mkdtemp(dir="/tmp", prefix="realrun-"))
+    sentinel = outdir / "design.gds"
+    sentinel.write_text("# fake GDS\n")
+    try:
+        (tmp_path / "RESULT.md").write_text(f"GDS produced at: {sentinel}\n")
+        r = _run(tmp_path)
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "[FAIL]" in r.stdout
+    finally:
+        import shutil
+        shutil.rmtree(outdir, ignore_errors=True)
+
+
+def test_r7_anchor_substring_without_plugin_json_fails(tmp_path):
+    """A /tmp path that merely CONTAINS the plugin anchor substring but has NO
+    `.claude-plugin/plugin.json` is NOT a real plugin root → must FAIL (the hard
+    marker gate blocks the false-negative)."""
+    import tempfile
+    outdir = Path(tempfile.mkdtemp(dir="/tmp", prefix="wt-fake-"))
+    fake = (outdir / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "out.gds")
+    fake.parent.mkdir(parents=True)
+    fake.write_text("# not a plugin\n")
+    try:
+        (tmp_path / "RESULT.md").write_text(f"Output: {fake}\n")
+        r = _run(tmp_path)
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "[FAIL]" in r.stdout
+    finally:
+        import shutil
+        shutil.rmtree(outdir, ignore_errors=True)
+
+
+def test_r7_dotdot_escape_out_of_plugin_still_fails(tmp_path):
+    """§4.05 false-negative guard — a `..`-escape that starts inside a pinned
+    plugin worktree but climbs OUT to a genuine volatile output
+    (`.../vibe-ic/../../../design.gds`) must NOT be exempted: normalization
+    destroys the plugin anchor, so it is (correctly) FLAGGED."""
+    import shutil
+    import tempfile
+    volbase = Path(tempfile.mkdtemp(dir="/tmp", prefix="wt-v1350-"))
+    try:
+        root = volbase / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
+        (root / ".claude-plugin").mkdir(parents=True)
+        (root / ".claude-plugin" / "plugin.json").write_text("{}")
+        # a real output ABOVE the plugin, reached via .. from inside it
+        escaped = volbase / "design.gds"
+        escaped.write_text("# real volatile output\n")
+        cited = root / ".." / ".." / ".." / "design.gds"   # escapes to volbase
+        (tmp_path / "RESULT.md").write_text(f"GDS at: {cited}\n")
+        r = _run(tmp_path)
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "[FAIL]" in r.stdout
+    finally:
+        shutil.rmtree(volbase, ignore_errors=True)
+
+
+def test_r7_intree_dotdot_still_recognised(tmp_path):
+    """An IN-TREE `..` that stays under the plugin root
+    (`.../vibe-ic/programs/../plugin.json`) is still recognised as plugin
+    source (PASS) — the guard only rejects escapes, not in-tree normalization."""
+    import shutil
+    import tempfile
+    volbase = Path(tempfile.mkdtemp(dir="/tmp", prefix="wt-v1350-"))
+    try:
+        root = volbase / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
+        (root / ".claude-plugin").mkdir(parents=True)
+        (root / ".claude-plugin" / "plugin.json").write_text("{}")
+        (root / "programs").mkdir()
+        (root / "phase3_one_shot_runner.py").write_text("# src\n")
+        cited = root / "programs" / ".." / "phase3_one_shot_runner.py"
+        (tmp_path / "RESULT.md").write_text(f"ran: {cited}\n")
+        r = _run(tmp_path)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "[PASS]" in r.stdout
+        assert "pinned plugin-source" in r.stdout
+    finally:
+        shutil.rmtree(volbase, ignore_errors=True)
+
+
+def test_r7_plugin_root_without_pin_marker_fails(tmp_path):
+    """A real plugin root (has plugin.json) but with NO worktree/scratch pin
+    marker above the anchor is NOT exempted → FAIL. Keeps the exemption narrow."""
+    import tempfile
+    outdir = Path(tempfile.mkdtemp(dir="/tmp", prefix="plainroot-"))
+    root = outdir / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text("{}")
+    src = root / "x.py"
+    src.write_text("# x\n")
+    try:
+        (tmp_path / "RESULT.md").write_text(f"ref: {src}\n")
+        r = _run(tmp_path)
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "[FAIL]" in r.stdout
+    finally:
+        import shutil
+        shutil.rmtree(outdir, ignore_errors=True)

@@ -1762,8 +1762,13 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 metal_prefix="met",
                 tapcell_master="sky130_fd_sc_hd__tapvpwrvgnd_1",
                 antenna_diode_cell="sky130_fd_sc_hd__diode_2",
+                # R8 (v1.3.50) — librelane-first PRIMARY hint (the fork's newer
+                # image path). `_dont_use_tcl` derives the PDK root from this and
+                # globs BOTH libs.tech/{librelane,openlane} × {pnr_excluded,
+                # drc_exclude}.cells inside the container, so the older-image
+                # openlane/drc_exclude.cells is still found as a fallback.
                 pnr_exclude_cell_file=f"{PDKS_IN_CONTAINER}/sky130A/libs.tech/"
-                "openlane/sky130_fd_sc_hd/drc_exclude.cells",
+                "librelane/sky130_fd_sc_hd/pnr_excluded.cells",
                 tapcell_distance_um=14.0,
                 # v0.3.12 #509 r2 — foundry LEF/DEF layer-map (validated).
                 lefdef_layermap=f"{PDKS_IN_CONTAINER}/sky130A/libs.tech/"
@@ -1919,6 +1924,10 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 site=site_name,
                 drc_deck=klayout_drc,  # v1.6.53: discovered, may be None
                 metal_prefix=metal_prefix,
+                # R8 (v1.3.50) — a project-local PDK is HOST-accessible, so
+                # resolve its PnR cell-exclusion file directly (librelane-first,
+                # both filenames). None → get_lib_cells family fallback (NONFATAL).
+                pnr_exclude_cell_file=_resolve_pnr_exclude_cell_file(pdk_dir),
                 macro_libs=macro_libs,
                 macro_lefs=macro_lefs,
                 macro_gds=macro_gds,
@@ -3358,6 +3367,97 @@ def _l9_declared_die_util(project: Path) -> Optional[float]:
     return None
 
 
+# ── R5 (v1.3.50 fork-adapt / caravel) — HONOR an L9-MANDATED FIXED DIE_AREA ──────
+# A design whose L9 (floorplan) spec MANDATES a fixed die — e.g. a padframe/macro
+# harness whose IO ring + macro slots are drawn for an EXACT WxH (caravel needs
+# 2920×3520) — must NOT be auto-sized over. The auto-sizer computes a die from the
+# cell count; if it ignores the mandated die the macro harness breaks and the run
+# has to pass `--die-um` by hand. FIX: when no explicit `--die-um` flag is given,
+# read an EXPLICIT fixed DIE_AREA from L9 and use it verbatim. Precedence (enforced
+# at the call site): explicit `--die-um WxH` flag > L9 fixed DIE_AREA > auto-size.
+#
+# §4.05-TIGHT / no-fabricate: only the CANONICAL DEF/OpenLane `DIE_AREA` rect
+# ("llx lly urx ury" — 4 numbers; width=urx-llx, height=ury-lly) or an UNAMBIGUOUS
+# `DIE_WIDTH` + `DIE_HEIGHT` key-value pair counts. Anything ambiguous (a bare key
+# with no adjacent numbers, a "plugin decides" cell) → None → auto-size (missing a
+# declaration is SAFE; mis-parsing a wrong die is UNSAFE). chip-AGNOSTIC token parse.
+_L9_DIE_AREA_RECT_RE = re.compile(
+    r"DIE_AREA\b[)\s:=|({}'\"`]{0,8}"
+    r"(-?\d+(?:\.\d+)?)[\s,]+(-?\d+(?:\.\d+)?)[\s,]+"
+    r"(-?\d+(?:\.\d+)?)[\s,]+(-?\d+(?:\.\d+)?)",
+    re.IGNORECASE)
+_L9_DIE_WIDTH_RE = re.compile(
+    r"DIE_WIDTH`?\s*[:=|]\s*\*{0,2}\s*(\d+(?:\.\d+)?)\s*(?:um|µm)?",
+    re.IGNORECASE)
+_L9_DIE_HEIGHT_RE = re.compile(
+    r"DIE_HEIGHT`?\s*[:=|]\s*\*{0,2}\s*(\d+(?:\.\d+)?)\s*(?:um|µm)?",
+    re.IGNORECASE)
+
+
+def _l9_declared_die_area(project: Optional[Path]) -> Optional[str]:
+    """Return an L9-MANDATED fixed die as a 'WxH' string (integer µm), or None
+    when L9 declares no explicit fixed DIE_AREA. Reads ONLY the L9 constraints/
+    floorplan doc (input docs or the generated L9) — a blind-legal design input.
+
+    Prefers the canonical `DIE_AREA` rect (llx lly urx ury → W=urx-llx,
+    H=ury-lly); else an unambiguous `DIE_WIDTH` + `DIE_HEIGHT` pair. Only a real,
+    positive numeric declaration counts (§4.05 / no-fabricate). chip-AGNOSTIC."""
+    if project is None:
+        return None
+    roots = [project / "input" / "docs", _pl.generated_docs_dir(project)]
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for p in (sorted(root.glob("L9*")) + sorted(root.glob("*constraint*"))
+                  + sorted(root.glob("*floorplan*"))):
+            try:
+                txt = p.read_text(errors="ignore")
+            except OSError:
+                continue
+            # Prefer the canonical DIE_AREA rect (llx lly urx ury).
+            for m in _L9_DIE_AREA_RECT_RE.finditer(txt):
+                try:
+                    llx, lly, urx, ury = (float(m.group(i)) for i in (1, 2, 3, 4))
+                except ValueError:
+                    continue
+                w, h = urx - llx, ury - lly
+                if w > 0 and h > 0:
+                    return f"{int(round(w))}x{int(round(h))}"
+            # Else an explicit DIE_WIDTH + DIE_HEIGHT pair (both required).
+            mw = _L9_DIE_WIDTH_RE.search(txt)
+            mh = _L9_DIE_HEIGHT_RE.search(txt)
+            if mw and mh:
+                try:
+                    w, h = float(mw.group(1)), float(mh.group(1))
+                except ValueError:
+                    w = h = 0.0
+                if w > 0 and h > 0:
+                    return f"{int(round(w))}x{int(round(h))}"
+    return None
+
+
+def _effective_die_um(die_um_flag: str,
+                      project: Optional[Path]
+                      ) -> Tuple[str, Optional[str]]:
+    """R5 precedence resolver (pure, deterministic): resolve the die-sizing SOURCE
+    before the netlist-based auto-sizer runs.
+
+        explicit `--die-um WxH` flag  >  L9-mandated fixed DIE_AREA  >  'auto'
+
+    Returns (die_um, note). An explicit WxH flag ALWAYS wins (returned verbatim,
+    no L9 read). Only when the flag is the 'auto' default is L9 consulted; a fixed
+    L9 DIE_AREA is then returned so it behaves EXACTLY like an explicit flag
+    (pinned — never auto-sized over). No L9 declaration → 'auto' passes through to
+    the netlist-based auto-sizer unchanged. chip-AGNOSTIC."""
+    if str(die_um_flag).lower() != "auto":
+        return die_um_flag, None
+    l9 = _l9_declared_die_area(project)
+    if l9 is not None:
+        return l9, (f"die-um=auto but the L9 floorplan spec mandates a FIXED "
+                    f"DIE_AREA {l9}µm — honoring it verbatim (no auto-size)")
+    return die_um_flag, None
+
+
 def _resolve_auto_die_um(die_um: str, netlist: Path, util: float,
                          pdk: "PdkConfig",
                          project: Optional[Path] = None
@@ -4621,6 +4721,41 @@ def _dont_use_family_fallback_tcl() -> str:
         "excluded by family-name fallback\"\n")
 
 
+# ── R8 (v1.3.50 fork-adapt) — librelane-first PnR cell-exclusion resolution ──────
+# The 3rd stale LibreLane path (same class as the v1.3.46 SPEF captable fix): the
+# fork's newer image MOVED + RENAMED the PnR exclusion superset from
+#   libs.tech/openlane/<cell-lib>/drc_exclude.cells   (older image)
+# to
+#   libs.tech/librelane/<cell-lib>/pnr_excluded.cells (newer image).
+# A single hardcoded path goes stale; resolve librelane-FIRST, openlane fallback,
+# tolerating BOTH filenames. Preference order (dir-first, then filename):
+#   librelane/pnr_excluded → librelane/drc_exclude → openlane/pnr_excluded →
+#   openlane/drc_exclude. In practice each dir ships exactly one of the two, so
+#   this reduces to "prefer librelane". chip/PDK/image-AGNOSTIC (pure glob).
+_PNR_EXCLUDE_DIRS = ("librelane", "openlane")            # librelane first
+_PNR_EXCLUDE_NAMES = ("pnr_excluded.cells", "drc_exclude.cells")
+
+
+def _resolve_pnr_exclude_cell_file(pdk_root) -> Optional[str]:
+    """Deterministically resolve the PnR cell-exclusion superset under
+    `<pdk_root>/libs.tech/{librelane,openlane}/*/{pnr_excluded,drc_exclude}.cells`,
+    preferring librelane then the pnr_excluded filename. Returns the path string
+    of the first hit, or None when neither image's file is present (the caller
+    then keeps its prior NONFATAL get_lib_cells family fallback). HOST-side glob —
+    used for a project-local `input/pdk/` PDK (the container path is resolved
+    Tcl-side inside `_dont_use_tcl`). chip-AGNOSTIC."""
+    root = Path(pdk_root)
+    for d in _PNR_EXCLUDE_DIRS:              # librelane before openlane
+        base = root / "libs.tech" / d
+        if not base.is_dir():
+            continue
+        for name in _PNR_EXCLUDE_NAMES:      # pnr_excluded before drc_exclude
+            hits = sorted(base.glob(f"**/{name}"))
+            if hits:
+                return str(hits[0])
+    return None
+
+
 def _dont_use_tcl(pdk: "PdkConfig") -> str:
     """v0.2.14 — emit OpenROAD Tcl that excludes the PDK's PnR-forbidden cells from
     the resizer/CTS/repair cell pool, returned as a pure string so the
@@ -4652,10 +4787,38 @@ def _dont_use_tcl(pdk: "PdkConfig") -> str:
                 + "puts \"DONT_USE_SKIPPED: no PNR cell-exclusion file for this PDK; "
                 "relied on the family-name fallback above\"\n")
     f = pdk.pnr_exclude_cell_file
+    # R8 (v1.3.50) — do NOT trust a single hardcoded exclude-file path: the fork's
+    # newer image MOVED+RENAMED it (libs.tech/openlane/*/drc_exclude.cells →
+    # libs.tech/librelane/*/pnr_excluded.cells). Derive the PDK root from the
+    # configured path (everything before /libs.tech/) and GLOB both dirs + both
+    # filenames INSIDE the container, preferring librelane then pnr_excluded. Falls
+    # back to the configured path verbatim if the root cannot be derived. The
+    # get_lib_cells family fallback above still runs first, so a total miss is
+    # still NONFATAL (PnR routes). chip/PDK/image-AGNOSTIC glob (mirrors v1.3.46).
+    _i = f.find("/libs.tech/")
+    _root = f[:_i] if _i > 0 else None
+    if _root:
+        _dirs = " ".join(_PNR_EXCLUDE_DIRS)          # "librelane openlane"
+        _names = " ".join(_PNR_EXCLUDE_NAMES)        # "pnr_excluded.cells drc_exclude.cells"
+        resolve = (
+            f"set _du_root {_root}\n"
+            f"set _du_file \"\"\n"
+            f"foreach _du_d {{{_dirs}}} {{\n"
+            f"  foreach _du_nm {{{_names}}} {{\n"
+            "    if {$_du_file ne \"\"} { continue }\n"
+            "    set _du_c [lsort [glob -nocomplain "
+            "$_du_root/libs.tech/$_du_d/*/$_du_nm]]\n"
+            "    if {[llength $_du_c] > 0} { set _du_file [lindex $_du_c 0] }\n"
+            "  }\n"
+            "}\n"
+            f"if {{$_du_file eq \"\" && [file exists {f}]}} {{ set _du_file {f} }}\n")
+    else:
+        resolve = f"set _du_file {f}\n"
     return (
         fallback
-        + f"if {{[file exists {f}]}} {{\n"
-        f"  set _du_f [open {f} r]\n"
+        + resolve
+        + "if {$_du_file ne \"\" && [file exists $_du_file]} {\n"
+        "  set _du_f [open $_du_file r]\n"
         "  set _du_n 0\n"
         "  while {[gets $_du_f _du_cell] >= 0} {\n"
         "    set _du_cell [string trim $_du_cell]\n"
@@ -4666,10 +4829,10 @@ def _dont_use_tcl(pdk: "PdkConfig") -> str:
         "  }\n"
         "  close $_du_f\n"
         "  catch {report_dont_use}\n"
-        "  puts \"DONT_USE_APPLIED: $_du_n cells from "
-        f"{f}\"\n"
+        "  puts \"DONT_USE_APPLIED: $_du_n cells from $_du_file\"\n"
         "} else {\n"
-        f"  puts \"DONT_USE_SKIPPED: PNR exclude file not found ({f})\"\n"
+        "  puts \"DONT_USE_SKIPPED: PNR exclude file not found "
+        "(librelane/openlane × pnr_excluded/drc_exclude all absent)\"\n"
         "}\n")
 
 
@@ -5618,6 +5781,15 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # `_auto_die_requested` is the OPT-IN signal for the over-sparse downsize
     # retry (GAP-E2E-4 FOLLOW-UP): we only tighten a die whose geometry WE own
     # (auto), never an explicit WxH the caller pinned.
+    #
+    # R5 (v1.3.50) — HONOR an L9-mandated FIXED DIE_AREA. Precedence: explicit
+    # `--die-um WxH` flag > L9 fixed DIE_AREA > auto-size (`_effective_die_um`).
+    # Resolve it BEFORE computing `_auto_die_requested` so an L9-pinned die
+    # behaves EXACTLY like an explicit `--die-um` (pinned — never auto-sized
+    # over, in either direction).
+    die_um, _l9_die_note = _effective_die_um(die_um, project)
+    if _l9_die_note:
+        print(f"[phase3] {_l9_die_note}", file=sys.stderr)
     _auto_die_requested = str(die_um).lower() == "auto"
     die_um, _auto_die_note = _resolve_auto_die_um(die_um, netlist, util, pdk,
                                                   project)
