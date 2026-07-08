@@ -19,9 +19,9 @@ GDS file (tapeout-ready)
 
 ```bash
 # 1. Provide the EDA container (named vibeic-eda). Recommended: the enhanced fork image.
-docker build -t vibeic-eda:0.2.2 /path/to/repo/tools/vibeic-eda   # forked toolchain, FAIL→PASS fixes
+docker build -t vibeic-eda:0.2.3 /path/to/repo/tools/vibeic-eda   # forked toolchain, FAIL→PASS fixes
 docker run -d --name vibeic-eda -v $HOME/designs:/design \
-  vibeic-eda:0.2.2 --skip sleep infinity
+  vibeic-eda:0.2.3 --skip sleep infinity
 # stock fallback: docker pull hpretl/iic-osic-tools:latest  (then run it named vibeic-eda)
 
 # 2. Install MCP server
