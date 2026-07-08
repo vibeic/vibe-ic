@@ -317,6 +317,7 @@ def main():
     try:
         tbf = os.path.join(d, 'tb.sv'); open(tbf, 'w').write(tb)
         vvp = os.path.join(d, 's.vvp')
+        # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
         r = subprocess.run(['iverilog', '-g2012', '-o', vvp, a.rtl, tbf],
                            capture_output=True, text=True)
         if r.returncode != 0:

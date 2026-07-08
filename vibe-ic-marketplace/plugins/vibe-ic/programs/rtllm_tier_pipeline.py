@@ -158,6 +158,7 @@ def required_module_name(design_dir: str) -> Optional[str]:
     if not os.path.exists(tb):
         return None
     try:
+        # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
         c = subprocess.run(["iverilog", "-g2012", "-o", os.devnull, tb],
                            capture_output=True, text=True, timeout=60)
     except Exception:
@@ -209,6 +210,7 @@ def iverilog_score(design_dir: str, rtl_text: str, top: str,
             return False, False, f"write-exc {e}"
         sim = os.path.join(td, "sim")
         try:
+            # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
             c = subprocess.run(["iverilog", "-g2012", "-o", sim, cand,
                                 os.path.join(td, "testbench.v")],
                                capture_output=True, text=True, timeout=60, cwd=td)

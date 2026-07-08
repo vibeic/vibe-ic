@@ -10,6 +10,10 @@ a single verdict. The existing programs it COMPOSES (import or subprocess —
 never re-implemented):
 
   * source_chip_agnostic_check.py      — chip-AGNOSTIC plugin source guard
+  * loop_watchdog_compliance_check.py  — every long sub-process is watchdog-
+                                         supervised + every risky loop is
+                                         bounded (no fixed-timeout kill of a
+                                         live job; no loop can spin forever)
   * git_prohibition_guard.py           — forbidden destructive git ops in the
                                          PR's commit command strings
   * version_bump_monotonic_check.py    — strict monotonic version bump
@@ -291,6 +295,25 @@ def chip_agnostic_gate(plugin_root: Path) -> GateResult:
 
 
 # --------------------------------------------------------------------------
+# loop_watchdog_compliance_check — subprocess against the plugin root. FAILs
+# when any programs/*.py launches a long EDA tool without the watchdog or has
+# an unbounded risky loop. rc 0 clean / 1 offender(s) / 2 usage error.
+# --------------------------------------------------------------------------
+def loop_watchdog_gate(plugin_root: Path) -> GateResult:
+    prog = _PROGRAMS_DIR / "loop_watchdog_compliance_check.py"
+    rc, out, err = _run_program(prog, [str(plugin_root)])
+    if rc == 0:
+        summary = (out.strip().splitlines() or [""])[0][:240]
+    else:
+        # the offender list is on stderr; surface the header + first offenders
+        errlines = [ln for ln in err.splitlines() if ln.strip()
+                    and "SyntaxWarning" not in ln and "invalid escape" not in ln]
+        summary = " | ".join(errlines[:4])[:240]
+    return GateResult("loop_watchdog_compliance_check", rc,
+                      summary or "(no output)")
+
+
+# --------------------------------------------------------------------------
 # plugin_full_audit (D1 + D2) — subprocess against the plugin root.
 # --------------------------------------------------------------------------
 def plugin_audit_gate(plugin_root: Path) -> GateResult:
@@ -461,6 +484,7 @@ def review(base: str, head: str, *,
 
     gates.append(marketplace_sync_gate(plugin_root))
     gates.append(chip_agnostic_gate(plugin_root))
+    gates.append(loop_watchdog_gate(plugin_root))
     gates.append(plugin_audit_gate(plugin_root))
     gates.append(git_prohibition_gate(commit_cmds or []))
     gates.append(test_cadence_gate(pytest_cmd, cadence))

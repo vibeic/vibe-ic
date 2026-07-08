@@ -68,8 +68,10 @@ quit -noprompt
 """
 
 
-def _docker_exec(container, cmd, timeout=600):
-    """Shell out to the EDA container (monkeypatch surface for tests)."""
+def _docker_exec_raw(container, cmd, timeout=600):
+    """Simple bounded wall-clock exec (monkeypatch surface for tests) — for
+    short probes. Long tool runs use `_docker_exec(..., marker=...)` → the
+    progress-stall watchdog."""
     import subprocess
     full = (["docker", "exec", container, "bash", "-lc", cmd]
             if container not in ("", "host") else ["bash", "-lc", cmd])
@@ -79,6 +81,21 @@ def _docker_exec(container, cmd, timeout=600):
         return r.returncode, r.stdout, r.stderr
     except Exception as exc:  # noqa: BLE001 — surfaced to the caller
         return 1, "", str(exc)
+
+
+def _docker_exec(container, cmd, timeout=600, *, marker=None, log_path=None):
+    """marker=None → `_docker_exec_raw` (short probes). marker set → the shared
+    progress-stall watchdog (`_docker_watchdog.run_docker_supervised`): a long,
+    open-ended run (KLayout merge, Magic ext2spice, netgen LVS — hours on a big
+    merged GDS) is killed ONLY on NO forward progress, never on a fixed
+    estimate. `marker` is a token already in the tool's argv. chip/tool-AGNOSTIC.
+    Still a monkeypatch surface for tests (fakes absorb marker via **_)."""
+    if marker is None:
+        return _docker_exec_raw(container, cmd, timeout)
+    import _docker_watchdog as _dw
+    return _dw.run_docker_supervised(
+        container, cmd, marker, docker_exec_raw=_docker_exec_raw,
+        log_path=log_path)
 
 
 def _to_container_path(p, container):
@@ -151,7 +168,8 @@ def run(project: Path, top: str, container: str, pdk: str) -> dict:
         cmd = (env + f"klayout -b -r "
                f"{_to_container_path(merge_py, container)} 2>&1 | "
                f"tee {_to_container_path(ms_dir, container)}/merge.log")
-        rc, out, err = _docker_exec(container, cmd, timeout=1800)
+        rc, out, err = _docker_exec(
+            container, cmd, marker=_to_container_path(merge_py, container))
         if not merged.is_file() or merged.stat().st_size == 0:
             return {"verdict": "FAIL", "rc": 1,
                     "reason": (f"KLayout merge produced no top_merged.gds "
@@ -168,7 +186,8 @@ def run(project: Path, top: str, container: str, pdk: str) -> dict:
            f"magic -dnull -noconsole -rcfile {shlex.quote(magicrc)} "
            f"{_to_container_path(tcl, container)} 2>&1 | "
            f"tee {_to_container_path(ms_dir, container)}/ext2spice_merged.log")
-    rc, out, err = _docker_exec(container, cmd, timeout=14400)
+    rc, out, err = _docker_exec(
+        container, cmd, marker=_to_container_path(tcl, container))
     if not spice_out.is_file() or spice_out.stat().st_size == 0:
         return {"verdict": "FAIL", "rc": 1,
                 "reason": (f"Magic ext2spice on the MERGED GDS produced no "
@@ -190,7 +209,8 @@ def run(project: Path, top: str, container: str, pdk: str) -> dict:
            f"\"{_to_container_path(spice_out, container)} {lay_top}\" "
            f"\"{sch_files} {top}\" {shlex.quote(netgen_setup)} "
            f"{_to_container_path(lvs_rpt, container)}")
-    rc, out, err = _docker_exec(container, cmd, timeout=14400)
+    rc, out, err = _docker_exec(
+        container, cmd, marker=_to_container_path(spice_out, container))
     blob = (out or "") + "\n" + (err or "") + "\n" + (
         lvs_rpt.read_text(errors="replace") if lvs_rpt.is_file() else "")
     # #524 — shared verdict classifier (adds 'failed pin matching', the netgen

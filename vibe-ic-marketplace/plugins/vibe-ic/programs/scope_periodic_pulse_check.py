@@ -248,6 +248,9 @@ def _scope_configure(
 def _scope_arm_and_wait(inst, timeout_s: float) -> bool:
     inst.write(":SINGLE")
     deadline = time.time() + timeout_s
+    # watchdog-exempt: bounded hardware-scope trigger poll — the wall-clock
+    # `deadline` (time.time()+timeout_s) hard-bounds it; it cannot spin forever
+    # and launches no sub-process (a pyvisa instrument query, not an EDA tool).
     while time.time() < deadline:
         time.sleep(0.2)
         try:

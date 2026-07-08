@@ -319,6 +319,7 @@ def guard_export(sample: Path, prompt_text: str = "") -> Tuple[bool, List[str]]:
     if _iverilog_available():
         with tempfile.TemporaryDirectory() as td:
             binp = Path(td) / "syn.bin"
+            # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
             r = subprocess.run(
                 ["iverilog", "-g2012", "-o", str(binp), str(sample)],
                 capture_output=True, text=True, timeout=120)
@@ -1096,6 +1097,7 @@ def _compiles_with_tb(sample: Path, tb: Path) -> Optional[bool]:
     try:
         with tempfile.TemporaryDirectory() as td:
             binp = Path(td) / "tb.bin"
+            # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
             r = subprocess.run(
                 ["iverilog", "-g2012", "-o", str(binp), str(sample), str(tb)],
                 capture_output=True, text=True, timeout=120,
