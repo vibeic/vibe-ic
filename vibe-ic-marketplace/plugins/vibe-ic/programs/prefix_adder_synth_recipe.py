@@ -24,19 +24,33 @@ call with the choice map FIRST — otherwise `$alu` never lowers to `$lcu` and i
 silently falls through to the default Brent-Kung (so you would think you selected
 Kogge-Stone but got Brent-Kung).
 
+GATE-LEVEL INPUT (the `gate_level=True` mode)
+=============================================
+A netlist that is ALREADY a gate-level ripple (bit-level XOR/AND/OR, no RTL
+`$add`) has no `$alu` for the prefix techmap to match. The vibeic yosys fork's
+`lift_adder` pass (added 2026-07-08, fork commit 023a117e + hardening ec38cf771; shipped in
+vibeic-eda:0.2.5+) closes that: `extract_fa -fa -ha` recognises the full-adders,
+`opt_clean` sweeps extract_fa's redundant duplicate `$fa`, and `lift_adder`
+groups the width-1 `$fa` ripple (X[i]->C[i+1]) back to ONE word-level `$add`
+(only for a pure unsigned A+B ripple with private carries — conservative, never
+mis-lifts), after which the same prefix techmap restructures it. Verified: a
+32-bit gate-level ripple went AIG-AND depth 128 -> 73 (Kogge-Stone) with CEC
+"Equivalence successfully proven!" vs the original gate-level ripple; soundness
+battery (subtractor / a+b+cin / RTL-add / non-arith logic) all lifted 0 and
+stayed CEC-equal.
+
 SCOPE / HONESTY
 ===============
 - This is a QoR RECIPE emitter, not a correctness gate. Its correctness guarantee
   is the emitted CEC step, which IS gate-strength: a `verdict != EQUIVALENT` is a
   hard FAIL (the caller must not ship the restructured netlist).
-- It only helps designs that carry an RTL `$add`/`$alu`/`$lcu` (any width). A
-  netlist that is ALREADY a gate-level ripple (bit-level XOR/AND/OR) has no
-  `$alu` to match — lifting that back to `$add` for restructuring is a separate,
-  genuinely-missing arithmetic-recognition pass (honestly out of scope here).
+- The RTL path helps any design carrying an RTL `$add`/`$alu`/`$lcu`; the
+  `gate_level=True` path additionally handles an already-gate-level ripple via
+  `lift_adder` (requires the vibeic yosys fork, vibeic-eda:0.2.5+).
 
 CLI:
     python3 prefix_adder_synth_recipe.py --emit <rtl.v> --top <mod> \\
-            [--topology kogge-stone] [--no-cec]
+            [--topology kogge-stone] [--gate-level] [--no-cec]
       -> prints the yosys .ys recipe to stdout, exit 0.
     python3 prefix_adder_synth_recipe.py --list      -> print known topologies.
     main(argv) -> int : 0 ok / 2 arg error.
@@ -82,21 +96,65 @@ def build_techmap_step(topology: str) -> str:
     return f"techmap -map {choice} -map +/techmap.v"
 
 
+# Recover an already-gate-level ripple back to a word-level $add so the prefix
+# techmap can restructure it (vibeic yosys fork `lift_adder`, vibeic-eda:0.2.5+).
+# opt_clean between extract_fa and lift_adder is REQUIRED: extract_fa emits
+# redundant duplicate $fa (94 for a 32-bit ripple) whose shared nets inflate
+# carry fanout and defeat lift_adder's private-carry check; opt_clean sweeps the
+# dead duplicates to a clean n-cell chain (94 -> 32) first.
+_GATE_LEVEL_RECOVER = "extract_fa -fa -ha\nopt_clean\nlift_adder\n"
+# Lower RTL to a bit-level gate netlist (what a gate-level ripple input already is).
+_SYNTH_TO_GATE = "proc; opt; techmap; opt"
+
+
 def build_prefix_adder_recipe(rtl_v: str, top: str,
                               topology: str = DEFAULT_TOPOLOGY,
-                              cec: bool = True) -> str:
+                              cec: bool = True,
+                              gate_level: bool = False) -> str:
     """Emit the yosys .ys that structures `top`'s adders into `topology` and
-    (when cec) proves the result equals the plain-add reference.
+    (when cec) proves the result equals the reference.
 
-    rtl_v : the RTL carrying the `a + b` (any width).
+    rtl_v : the RTL/netlist carrying the adder (any width).
     top   : top module name.
     topology : one of known_topologies(); default kogge-stone (shallowest).
     cec   : emit the combinational-equivalence proof vs the un-restructured
-            (default-lowered) adder — a mismatch is a hard FAIL. Strongly
-            recommended: QoR must never trade correctness.
+            reference — a mismatch is a hard FAIL. Strongly recommended: QoR
+            must never trade correctness.
+    gate_level : the input is (or synthesises to) an ALREADY-gate-level ripple
+            with no RTL $add. Prepend extract_fa/opt_clean/lift_adder to recover
+            a word-level $add before restructuring (needs the vibeic yosys fork,
+            vibeic-eda:0.2.5+). The CEC reference is then the SAME input at gate
+            level WITHOUT the lift (the plain ripple), so the proof is
+            'lifted+prefix == original gate-level ripple'.
 
     Paths are used verbatim (caller translates host->container)."""
     techmap = build_techmap_step(topology)
+    if gate_level:
+        prefix = f"""# Vibe-IC gate-level-ripple -> prefix-adder ({topology}) — recover ($fa lift) + restructure.
+read_verilog -sv {rtl_v}
+hierarchy -top {top}
+{_SYNTH_TO_GATE}
+{_GATE_LEVEL_RECOVER}alumacc
+{techmap}
+opt
+"""
+        if not cec:
+            return prefix + "stat\n"
+        # CEC gold = the same input at gate level WITHOUT the lift (plain ripple).
+        return prefix + f"""# --- gate-strength CEC: lifted+prefix == original gate-level ripple ---
+design -stash gate
+read_verilog -sv {rtl_v}
+hierarchy -top {top}
+{_SYNTH_TO_GATE}
+design -stash gold
+design -copy-from gold -as gold {top}
+design -copy-from gate -as gate {top}
+equiv_make gold gate equiv
+hierarchy -top equiv
+equiv_simple
+equiv_induct
+equiv_status
+"""
     prefix = f"""# Vibe-IC prefix-adder structuring ({topology}) — QoR: cut carry depth O(n)->O(log n).
 read_verilog -sv {rtl_v}
 hierarchy -top {top}
@@ -161,6 +219,10 @@ def main(argv=None) -> int:
                     choices=known_topologies())
     ap.add_argument("--no-cec", action="store_true",
                     help="omit the equivalence proof (NOT recommended)")
+    ap.add_argument("--gate-level", action="store_true",
+                    help="input is an already-gate-level ripple with no RTL $add; "
+                         "recover it via extract_fa/opt_clean/lift_adder before "
+                         "restructuring (needs the vibeic yosys fork, 0.2.5+)")
     ap.add_argument("--list", action="store_true",
                     help="print known prefix-adder topologies")
     a = ap.parse_args(argv)
@@ -174,7 +236,8 @@ def main(argv=None) -> int:
         ap.error("--top is required with --emit")
     try:
         print(build_prefix_adder_recipe(
-            a.emit, a.top, topology=a.topology, cec=not a.no_cec))
+            a.emit, a.top, topology=a.topology, cec=not a.no_cec,
+            gate_level=a.gate_level))
     except ValueError as e:
         print(f"[{TOOL}] {e}", file=sys.stderr)
         return 2

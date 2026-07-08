@@ -76,6 +76,42 @@ def test_recipe_no_cec_omits_proof():
     assert "equiv_make" not in ys
 
 
+# ---- gate-level ripple recovery (lift_adder) ------------------------------
+def test_gate_level_recovers_before_alumacc():
+    # gate_level must run extract_fa -> opt_clean -> lift_adder BEFORE alumacc,
+    # in that order, so a gate-level ripple is lifted to $add first.
+    ys = P.build_prefix_adder_recipe("ripple32.v", "dut",
+                                     topology="kogge-stone", gate_level=True)
+    for step in ("extract_fa -fa -ha", "opt_clean", "lift_adder", "alumacc"):
+        assert step in ys, step
+    assert ys.index("extract_fa -fa -ha") < ys.index("opt_clean") \
+        < ys.index("lift_adder") < ys.index("alumacc")
+    # the prefix choice map still fires after the lift
+    assert "techmap -map +/choices/kogge-stone.v -map +/techmap.v" in ys
+
+
+def test_gate_level_cec_gold_is_plain_ripple_not_lifted():
+    # The CEC reference for a gate-level input is the SAME netlist at gate level
+    # WITHOUT the lift; the lift/prefix must appear only ONCE (the gate track),
+    # never in the gold track.
+    ys = P.build_prefix_adder_recipe("ripple32.v", "dut",
+                                     topology="kogge-stone", gate_level=True)
+    assert "equiv_make gold gate equiv" in ys
+    assert ys.count("lift_adder") == 1          # only the gate track lifts
+    assert ys.count("extract_fa -fa -ha") == 1
+
+
+def test_gate_level_default_rtl_path_has_no_lift():
+    # The ordinary RTL path must NOT emit lift_adder (no gate-level recovery).
+    ys = P.build_prefix_adder_recipe("add32.v", "dut", topology="kogge-stone")
+    assert "lift_adder" not in ys and "extract_fa" not in ys
+
+
+def test_cli_gate_level_ok():
+    assert P.main(["--emit", "ripple32.v", "--top", "dut",
+                   "--topology", "kogge-stone", "--gate-level"]) == 0
+
+
 # ---- CEC verdict ----------------------------------------------------------
 def test_cec_verdict_equivalent():
     assert P.parse_cec_verdict(
