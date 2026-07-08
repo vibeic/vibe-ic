@@ -127,7 +127,7 @@ def _proj(tmp_path):
 def _fake_docker(netgen_transcript, lvs_rpt_body):
     import re as _re
 
-    def fake(container, cmd, timeout=0):
+    def fake(container, cmd, timeout=0, **_):
         if cmd.startswith("command -v") or cmd.startswith("test -f"):
             return (0, "", "")
         if "magic" in cmd and "SPICE_OUT=" in cmd:

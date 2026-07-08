@@ -86,7 +86,7 @@ def test_merge_success_swaps_in_merged_gds(tmp_path, monkeypatch):
     monkeypatch.setattr(R._pl, "pnr_dir", lambda p: pnr)
     monkeypatch.setattr(R, "_to_container_path", lambda h, c: h)
 
-    def _fake_exec(container, cmd, timeout=600):
+    def _fake_exec(container, cmd, timeout=600, **_):
         (pnr / "top.merged.gds").write_text("MERGED")
         return 0, "GDS_LAYER_MERGE_DONE layers=12", ""
     monkeypatch.setattr(R, "_docker_exec", _fake_exec)
@@ -107,7 +107,7 @@ def test_merge_nonfatal_when_exec_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(R._pl, "pnr_dir", lambda p: pnr)
     monkeypatch.setattr(R, "_to_container_path", lambda h, c: h)
     monkeypatch.setattr(R, "_docker_exec",
-                        lambda c, cmd, timeout=600: (1, "", "klayout boom"))
+                        lambda c, cmd, timeout=600, **_: (1, "", "klayout boom"))
 
     class _Pdk:
         tech_lef = "/nonexistent/sky130.tlef"

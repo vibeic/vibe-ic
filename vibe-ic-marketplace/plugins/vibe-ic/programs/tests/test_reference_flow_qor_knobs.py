@@ -233,7 +233,7 @@ def _capture_synth(monkeypatch, project: Path, pdk) -> "tuple[object, str]":
     netlist = _pl.synth_dir(project) / "top_synth.v"
     cmds: list = []
 
-    def _fake_docker_exec(cont, cmd, timeout=1800):
+    def _fake_docker_exec(cont, cmd, timeout=1800, **_):
         cmds.append(cmd)
         netlist.parent.mkdir(parents=True, exist_ok=True)
         netlist.write_text("module top(); INV i(); endmodule\n")

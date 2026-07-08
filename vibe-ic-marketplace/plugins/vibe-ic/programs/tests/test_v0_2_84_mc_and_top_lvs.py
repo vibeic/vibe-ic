@@ -160,7 +160,7 @@ def _ms_project(tmp_path):
 
 
 def _fake_ms_docker(lvs_text):
-    def fake(container, cmd, timeout=600):
+    def fake(container, cmd, timeout=600, **_):
         if cmd.startswith("command -v") or cmd.startswith("test -f"):
             return 0, "", ""
         if "klayout" in cmd:
