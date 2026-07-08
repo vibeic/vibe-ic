@@ -174,21 +174,36 @@ discloses any open↔commercial tool substitution and follows the
 
 ## Agent roles & check-in governance
 
-Vibe-IC is operated by a small set of agent roles, separated by scenario and —
-most importantly — by **what each may check in (git commit)**. The governing rule:
-**only the maintainer role (the repo-gatekeeper) edits the plugin or the MCP
-server.** Any other role that finds a problem files it on the backlog and lets the
-gatekeeper resolve it into the plugin/MCP. The **repo-gatekeeper** both authors
-deterministic chip-AGNOSTIC fixes and gates every change (machine checks +
-adversarial §4.05 no-leak review + a monotonic version bump), then lands it on
-`main` by direct push — quality is guaranteed by the **gates**, not by an
-author≠approver split.
+Vibe-IC has **two contribution layers** — keep them distinct:
+
+- **Layer 1 — the public contribution model (what external contributors follow).**
+  If you find a bug you either **file a backlog** (a report, no code) **or open a
+  PR** (a proposed fix, with code). Both paths are valid and serve different cases
+  (report-only vs report-with-fix); one did not replace the other. The
+  **repo-gatekeeper** — the single maintainer identity — triages backlogs and
+  reviews + **lands PRs into the next version**. External contributors do **not**
+  hold the maintainer role and do **not** push to `main`; see
+  [CONTRIBUTING.md](CONTRIBUTING.md).
+- **Layer 2 — the maintainer-internal improvement-phase shortcut.** While the
+  maintainer builds the plugin out, it direct-fixes and **direct-pushes** to
+  `main` with every quality **gate retained** (`gatekeeper_review` MERGE_OK +
+  adversarial §4.05 no-leak review + a monotonic version bump); only the PR
+  *ceremony* is dropped. This is an internal convergence shortcut, **not** the
+  public model.
+
+Roles are separated by scenario and — most importantly — by **what each may check
+in (git commit)**. The governing rule: **only the maintainer role (the
+repo-gatekeeper) edits the plugin or the MCP server.** Any other role that finds a
+problem hands it upstream — a **backlog** report, or a **version-less PR** carrying
+a fix — and the gatekeeper resolves it into the plugin/MCP. The **repo-gatekeeper**
+both authors deterministic chip-AGNOSTIC fixes and gates every change; quality is
+guaranteed by the **gates**, not by an author≠approver split.
 
 | Agent | Scenario | May check in to | Plugin | MCP | On finding a problem |
 |---|---|---|---|---|---|
-| **Field Agent** | General usage / audit | `community/backlogs/` only | ❌ | ❌ | → backlog → Core Agent |
-| **Benchmark Agent** | Maintainer official runs + end-user local runs | `benchmark-data/` + backlog | ❌ | ❌ | → backlog → Core Agent |
-| **Core Agent** | Maintainer | everything (owns plugin + MCP) | ✅ only role | ✅ only role | resolves backlog → fixes plugin/MCP |
+| **Field Agent** | General usage / audit | `community/backlogs/` only | ❌ | ❌ | → backlog → gatekeeper lands |
+| **Benchmark Agent** | Maintainer official runs + end-user local runs | `benchmark-data/` (plugin/MCP fixes via version-less PR, NO-MIX) | ❌ | ❌ | → version-less PR → gatekeeper lands |
+| **Core Agent** (= repo-gatekeeper) | Maintainer | everything (owns plugin + MCP) | ✅ only role | ✅ only role | resolves backlog + lands PRs → fixes plugin/MCP |
 | **IC Expert Agent** | Phase 1 — technical review | design-time, no repo check-in | — | — | — |
 
 - The **MCP server lives under the plugin tree** (`plugins/vibe-ic/mcp-eda/`),

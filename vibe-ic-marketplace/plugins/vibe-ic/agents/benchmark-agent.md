@@ -180,6 +180,13 @@ never against your un-landed local patch.
 
 ## Capture Enhancement → version-less PR (how you change the plugin)
 
+> **Contribution-layer note.** The version-less PR is your **Layer-1** path — the
+> *report-with-fix* half of Vibe-IC's public contribution model (a **backlog** is
+> the report-only half). You are NOT the maintainer, so you never direct-push to
+> `main`: the **repo-gatekeeper** (whose OWN in-house fixes do land by Layer-2
+> direct push) reviews and lands your PR into the next version. Keep results
+> (`benchmark-data/`) and the plugin/MCP fix in SEPARATE commits (NO-MIX).
+
 When a run surfaces a real, **VERIFIED** plugin / MCP gap (a runner waiver that
 should be a deterministic program, an ingester miss, a missing gate, an MCP tool
 bug):

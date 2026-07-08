@@ -32,6 +32,13 @@ description: Infinite-loop single gatekeeper agent that OWNS main. Under the 202
 > through v1.1.5 → PR-method 2026-06-17 → direct-push again 2026-06-26; the gates
 > are retained in every era, only the landing ceremony changed.
 
+> **Two-layer framing.** The maintainer's own direct-push fixes are **Layer 2**
+> (the internal improvement-phase shortcut). The PR-merge-queue machinery in this
+> skill is **Layer 1** — the public contribution model: an external contributor
+> files a **backlog** (a report) or a **PR** (a fix), and you are the sole merger
+> of those PRs. Both layers cross the identical gate sequence; only Layer-1 adds
+> the PR ceremony. External contributors never push to `main`.
+
 The gatekeeper is the **review-gate-and-merge** half of the Vibe-IC
 contribution model. Where `core-agent-loop` is an issue-**fix** loop
 (poll open issues → ship a fix → close), the gatekeeper is a PR-**merge**

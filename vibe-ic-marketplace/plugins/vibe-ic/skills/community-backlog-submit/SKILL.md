@@ -19,6 +19,14 @@ This skill records that **enhancement opportunity** — not the bug
 itself — as a structured, IC-agnostic backlog item that can be
 contributed back to the Vibe-IC community.
 
+> **Where this fits — the public contribution model (Layer 1).** A **backlog** is
+> the *report-only* half of Vibe-IC's public contribution model: you found a gap
+> but are not carrying a fix. The other half is a **PR** (report-with-fix). Both
+> are valid; the merged **repo-gatekeeper / maintainer** triages backlogs and
+> reviews + lands PRs into the next plugin version. (The maintainer's own in-house
+> fixes land by direct push — that internal shortcut is not the contributor path;
+> as a contributor you file a **backlog** or a **PR**, you do not push to `main`.)
+
 ## The fix-all-into-the-plugin principle
 
 > When you report a backlog / find an issue, the expectation is **NOT** to triage it into a
