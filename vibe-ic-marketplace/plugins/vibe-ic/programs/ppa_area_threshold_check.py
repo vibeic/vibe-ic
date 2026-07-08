@@ -1051,8 +1051,10 @@ def _to_container_path(host_path: str, mounts: List[Tuple[str, str]]) -> str:
     return p
 
 
-def _docker_exec(container: str, cmd: str, timeout: int = 600
-                 ) -> Tuple[int, str, str]:
+def _docker_exec_raw(container: str, cmd: str, timeout: int = 600
+                     ) -> Tuple[int, str, str]:
+    """Simple bounded wall-clock docker exec — for short probes. Long tool runs
+    use `_docker_exec(..., marker=...)` → the progress-stall watchdog."""
     full = ["docker", "exec", container, "bash", "-lc", cmd]
     try:
         cp = subprocess.run(full, capture_output=True, text=True,
@@ -1065,6 +1067,20 @@ def _docker_exec(container: str, cmd: str, timeout: int = 600
         return 124, partial or "", f"TIMEOUT after {timeout}s"
     except FileNotFoundError as e:
         return 127, "", str(e)
+
+
+def _docker_exec(container: str, cmd: str, timeout: int = 600, *,
+                 marker=None, log_path=None) -> Tuple[int, str, str]:
+    """marker=None → `_docker_exec_raw` (short probes). marker set → the shared
+    progress-stall watchdog (`_docker_watchdog.run_docker_supervised`) so a long
+    synth run is killed ONLY on NO forward progress, never on a fixed estimate.
+    `marker` is a token already in the tool's argv. chip/tool-AGNOSTIC."""
+    if marker is None:
+        return _docker_exec_raw(container, cmd, timeout)
+    import _docker_watchdog as _dw
+    return _dw.run_docker_supervised(
+        container, cmd, marker, docker_exec_raw=_docker_exec_raw,
+        log_path=log_path)
 
 
 def synth_stat_in_container(rtl_path: Path, top: str, container: str
@@ -1092,7 +1108,7 @@ def synth_stat_in_container(rtl_path: Path, top: str, container: str
     recipe = _SYNTH_TAIL.format(top=top)
     cmd = (f"cd {stage} && {yosys_path} && "
            f"yosys -p 'read_verilog -sv {base}; {recipe}' 2>&1")
-    rc, out, err = _docker_exec(container, cmd, timeout=600)
+    rc, out, err = _docker_exec(container, cmd, marker=base)
     # best-effort cleanup
     _docker_exec(container, f"rm -rf {stage}", timeout=20)
     blob = (out or "") + "\n" + (err or "")

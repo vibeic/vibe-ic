@@ -369,6 +369,7 @@ def simulate(rtl_path: str, top: str, in_specs, out_name, table):
         tbp = Path(td) / "tb.sv"
         tbp.write_text("\n".join(tb) + "\n")
         binp = Path(td) / "a.out"
+        # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
         cp = subprocess.run(
             ["iverilog", "-g2012", "-o", str(binp), str(rtl_path), str(tbp)],
             capture_output=True, text=True,

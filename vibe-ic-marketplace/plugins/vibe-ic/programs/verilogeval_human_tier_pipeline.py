@@ -294,6 +294,7 @@ def _run_iverilog(top_sv_text: Optional[str], ref_path: str, test_path: str,
         (tdp / "test.sv").write_text(Path(test_path).read_text(errors="replace"))
         sim = tdp / "sim.vvp"
         try:
+            # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
             cp = subprocess.run(
                 ["iverilog", "-g2012", "-o", str(sim),
                  str(tdp / "top.sv"), str(tdp / "ref.sv"), str(tdp / "test.sv")],

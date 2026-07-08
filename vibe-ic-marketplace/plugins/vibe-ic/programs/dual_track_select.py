@@ -42,6 +42,7 @@ _IVERILOG = "iverilog"
 def _elaborates(rtl: Path) -> bool:
     """Structural floor: does it elaborate under iverilog -g2012?"""
     try:
+        # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
         cp = subprocess.run([_IVERILOG, "-g2012", "-o", os.devnull, str(rtl)],
                             capture_output=True, text=True, timeout=120)
         return cp.returncode == 0

@@ -381,9 +381,12 @@ def _path_in_container(host_path: str, container: str) -> bool:
     return False
 
 
-def _docker_exec(container: str, cmd: str, timeout: int = 600
-                 ) -> Tuple[int, str, str]:
-    """Run a shell command inside a Docker container."""
+def _docker_exec_raw(container: str, cmd: str, timeout: int = 600
+                     ) -> Tuple[int, str, str]:
+    """Run a shell command inside a Docker container under a SIMPLE bounded
+    wall-clock `timeout` — correct for short probes. Long tool runs use
+    `_docker_exec(..., marker=...)` which routes through the progress-stall
+    watchdog instead."""
     full = ["docker", "exec", container, "bash", "-lc", cmd]
     try:
         cp = subprocess.run(full, capture_output=True, text=True,
@@ -398,6 +401,24 @@ def _docker_exec(container: str, cmd: str, timeout: int = 600
         return 124, partial or "", f"TIMEOUT after {timeout}s: {e}"
     except FileNotFoundError as e:
         return 127, "", f"COMMAND_NOT_FOUND: {e}"
+
+
+def _docker_exec(container: str, cmd: str, timeout: int = 600, *,
+                 marker=None, log_path=None) -> Tuple[int, str, str]:
+    """Run a shell command inside a Docker container.
+
+    marker=None → `_docker_exec_raw` (simple bounded wall-clock, short probes).
+    marker set  → the shared PROGRESS-STALL WATCHDOG (`_docker_watchdog.
+    run_docker_supervised`): a long, open-ended tool run killed ONLY on NO
+    forward progress (output grew OR in-container CPU advanced) for the grace
+    window — a still-progressing tool runs to completion. `marker` is a token
+    already in the tool's argv (its script/output path). chip/tool-AGNOSTIC."""
+    if marker is None:
+        return _docker_exec_raw(container, cmd, timeout)
+    import _docker_watchdog as _dw
+    return _dw.run_docker_supervised(
+        container, cmd, marker, docker_exec_raw=_docker_exec_raw,
+        log_path=log_path)
 
 
 def _tool_in_container(container: str, tool: str) -> bool:
@@ -5804,7 +5825,7 @@ def _phase2_sv_synth_fallback(project: Path, container: str,
             f"read_slang {reads_join} --top {synth_top} "
             f"-DSYNTHESIS {inc_flag}; "
             f"hierarchy -top {synth_top}; proc; flatten; {synth_tail}'")
-        rc, out, err = _docker_exec(container, slang_cmd, timeout=600)
+        rc, out, err = _docker_exec(container, slang_cmd, marker=netlist_c)
         _append_log(log, f"SLANG FALLBACK FRONTEND ({fe_reason})", out, err)
         if rc == 0 and _phase2_retrieve_netlist(
                 container, netlist_c, out_v, needs_staging):
@@ -5850,7 +5871,8 @@ def _phase2_sv_synth_fallback(project: Path, container: str,
                 f"yosys -p 'read_verilog {sv2v_out}; "
                 f"hierarchy -check -top {synth_top}; proc; flatten; "
                 f"{synth_tail}'")
-            rc2, out2, err2 = _docker_exec(container, yosys_cmd, timeout=600)
+            rc2, out2, err2 = _docker_exec(container, yosys_cmd,
+                                           marker=netlist_c)
             _append_log(log, "SV2V PRE-PASS FALLBACK FRONTEND", out2, err2)
             if rc2 == 0 and _phase2_retrieve_netlist(
                     container, netlist_c, out_v, needs_staging):

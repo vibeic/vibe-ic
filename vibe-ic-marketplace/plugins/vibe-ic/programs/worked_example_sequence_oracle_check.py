@@ -236,6 +236,7 @@ def analyze(rtl: str, spec: str) -> dict:
         (td / "dut.v").write_text(rtl)
         (td / "tb.v").write_text(tb)
         try:  # build hang / tool error → fail-safe SKIP, never BLOCK
+            # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
             c = subprocess.run(["iverilog", "-g2012", "-o", str(td / "sim"),
                                 str(td / "dut.v"), str(td / "tb.v")],
                                capture_output=True, text=True, timeout=60)

@@ -329,6 +329,7 @@ def iverilog_score(prob: Problem, candidate_rtl: str,
         cand.write_text(candidate_rtl)
         sim = tdp / "sim.out"
         try:
+            # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
             comp = subprocess.run(
                 ["iverilog", "-g2012", "-o", str(sim),
                  str(cand), str(prob.ref_path), str(prob.test_path)],

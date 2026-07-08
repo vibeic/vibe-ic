@@ -403,6 +403,9 @@ def run_iverilog(rtl_files: list[Path], plugin_tb: Path,
     cmd.append(str(plugin_tb))
 
     try:
+        # watchdog-exempt: bounded single-file iverilog compile (reference-TB +
+        # RTL build); fixed timeout_compile budget adequate — not an open-ended
+        # EDA generator.
         compile_proc = subprocess.run(
             cmd,
             capture_output=True, text=True,

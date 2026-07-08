@@ -922,6 +922,7 @@ def _compile_run(tb_text: str, rtl_text: str, rtl_suffix: str
         out = tdp / "sim.vvp"
         tb.write_text(tb_text)
         dut.write_text(rtl_text)
+        # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
         comp = subprocess.run(["iverilog", "-g2012", "-o", str(out),
                                str(tb), str(dut)],
                               capture_output=True, text=True)
