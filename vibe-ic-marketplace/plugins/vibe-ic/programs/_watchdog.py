@@ -1,0 +1,309 @@
+#!/usr/bin/env python3
+"""_watchdog.py — the plugin-wide PROGRESS-STALL supervision primitive.
+
+Owner directive (v1.3.47): "timeout estimation is not professional; have a
+general way to let a sub-process ALWAYS finish its job." A fixed wall-clock /
+size-ESTIMATE kill is fundamentally wrong — it murders a healthy, still-
+progressing process because the guess was too small (proven on ibex: a ~60 min
+detailed_route was killed at a 4395s estimate while actively routing). This
+module supervises a sub-process by FORWARD PROGRESS, not by a runtime guess:
+
+    Kill ONLY a process that has made NO forward progress for a grace window;
+    NEVER kill one that is still progressing → any progressing sub-process
+    runs to completion, however long that legitimately takes.
+
+Forward progress = OR of generic, transport-AGNOSTIC signals:
+  • captured stdout/stderr grew (bytes advanced) — universal, every tool emits,
+  • an optional external log file grew (size or mtime advanced),
+  • an optional CPU probe advanced (utime+stime of the job's processes).
+ANY signal advancing resets the grace clock. So a CPU-bound-but-quiet phase is
+kept alive by the CPU signal, and a chatty phase by the output signal; a genuine
+deadlock (flat everything) trips the grace and dies. `stall_grace_s` is the ONE
+tunable — "how long may the job be SILENT *and* idle before we call it hung" —
+NOT a runtime estimate. `hard_ceiling_s` (default 24h) is a pathological-
+infinite-loop backstop ONLY (a CPU-burning loop that never goes idle), NOT the
+primary control.
+
+DESIGN — this module knows NOTHING about docker or EDA. The caller INJECTS:
+  • `cpu_probe(proc) -> Optional[float]` — HOW to read the job's CPU (docker
+    exec ps in-container, host /proc, …). Return None when unavailable.
+  • `kill(proc, reason)` — HOW to terminate the job tree (pkill -f marker in a
+    container, proc.kill() on the host, …).
+  • `log_path` — an external tee'd log to also watch for growth.
+  • `popen_factory(cmd, **kw) -> proc` — HOW to launch (default: host
+    subprocess.Popen). `proc` must expose `.wait(timeout)` and `.kill()`.
+The SUPERVISION LOGIC (the meter + the grace/ceiling loop) is fully general
+here, so a docker-exec'd in-container tool, a host subprocess, or any future
+caller reuse it unchanged. A sibling `loop_guard(...)` (while/poll/retry-loop
+face) will live here too — `ProgressMeter` + `supervise` are its shared core.
+
+Public API (stable — an enforcement gate may build against it):
+  RC_STALLED, RC_CEILING            — distinct return codes for the two kills
+  SupervisedResult(rc,out,err,outcome,elapsed_s)
+  ProgressMeter(size_fn, log_fn, cpu_fn)      — signal fusion → monotonic score
+  supervise(proc, progress_probe, kill_fn, *, poll_s, stall_grace_s,
+            hard_ceiling_s, wait_fn=None, clock=time.monotonic) -> (outcome, rc)
+  run_supervised(cmd, *, log_path=None, stall_grace_s=1800, poll_s=30,
+                 hard_ceiling_s=86400, cpu_probe=None, kill=None,
+                 popen_factory=None, env=None) -> SupervisedResult
+
+chip-AGNOSTIC + tool-AGNOSTIC + pure: generic file/CPU counters only.
+"""
+from __future__ import annotations
+
+import os
+import subprocess
+import tempfile
+import time
+from dataclasses import dataclass
+from typing import Callable, Optional, Tuple
+
+# Distinct return codes: STALLED (no forward progress) is NOT the natural rc and
+# NOT the old rc=124 estimate-timeout; the CEILING backstop keeps the historical
+# rc=124 "wall-clock" code so existing downstream diagnostics still read it.
+RC_STALLED = 199
+RC_CEILING = 124
+
+DEFAULT_POLL_S = 30              # cheap probe cadence (negligible overhead)
+DEFAULT_STALL_GRACE_S = 1800     # 30 min of ZERO forward progress ⇒ hung
+DEFAULT_HARD_CEILING_S = 86_400  # 24 h absolute backstop (pathological loop)
+
+
+@dataclass
+class SupervisedResult:
+    """Outcome of a supervised sub-process. `.rc` is the return code
+    (RC_STALLED on a stall kill, RC_CEILING on the backstop kill, else the
+    process's natural rc). `.out`/`.err` are decoded str (never bytes)."""
+    rc: int
+    out: str
+    err: str
+    outcome: str          # 'natural' | 'stalled' | 'ceiling' | 'launch_error'
+    elapsed_s: float = 0.0
+
+    @property
+    def stalled(self) -> bool:
+        return self.outcome in ("stalled", "ceiling")
+
+
+class ProgressMeter:
+    """Fuse forward-progress signals into a MONOTONIC non-decreasing score so
+    the supervisor sees "progress" iff a signal genuinely ADVANCED.
+
+    Sources, all individually non-decreasing:
+      • captured-output bytes  (a temp file the child appends to — only grows),
+      • external tee'd-log advances  (size or mtime change → +1 event),
+      • CPU seconds  (carried forward; counted only on a strict increase).
+    A signal that is momentarily UNAVAILABLE (probe returned None) CARRIES
+    FORWARD its last value — a signal *disappearing* is never mistaken for
+    progress. This closes the None-flap where an intermittently-failing CPU
+    probe (None ↔ frozen value) would otherwise reset the grace clock every
+    poll and let a genuinely hung job squat until the ceiling. pure + generic."""
+
+    def __init__(self,
+                 size_fn: Optional[Callable[[], float]] = None,
+                 log_fn: Optional[Callable[[], object]] = None,
+                 cpu_fn: Optional[Callable[[], Optional[float]]] = None):
+        self._size_fn = size_fn
+        self._log_fn = log_fn
+        self._cpu_fn = cpu_fn
+        self._log_events = 0.0
+        self._last_log = None
+        self._last_cpu = 0.0
+
+    def sample(self) -> float:
+        score = 0.0
+        if self._size_fn is not None:
+            try:
+                score += float(self._size_fn() or 0)
+            except Exception:  # nosec — a probe error is just "no reading"
+                pass
+        if self._log_fn is not None:
+            try:
+                sig = self._log_fn()
+            except Exception:  # nosec
+                sig = None
+            if sig is not None:
+                if self._last_log is not None and sig != self._last_log:
+                    self._log_events += 1.0
+                self._last_log = sig
+        score += self._log_events
+        if self._cpu_fn is not None:
+            try:
+                cpu = self._cpu_fn()
+            except Exception:  # nosec
+                cpu = None
+            if cpu is not None and cpu > self._last_cpu:
+                self._last_cpu = cpu
+        score += self._last_cpu
+        return score
+
+
+def _default_wait(proc, timeout: float) -> Optional[int]:
+    """Block up to `timeout`s for the process to exit. Returns its rc if it
+    exited, else None. Uses proc.wait so a FAST process returns IMMEDIATELY on
+    exit (never idles a full poll window) — this is what makes short calls
+    prompt while long calls poll cheaply."""
+    try:
+        return proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None
+    except Exception:  # nosec — fall back to a non-blocking poll
+        try:
+            return proc.poll()
+        except Exception:  # nosec
+            return None
+
+
+def _default_kill(proc, reason: str) -> None:
+    try:
+        proc.kill()
+    except Exception:  # nosec
+        pass
+
+
+def supervise(proc, progress_probe: Callable[[], object],
+              kill_fn: Callable[[object, str], None], *,
+              poll_s: float, stall_grace_s: float, hard_ceiling_s: float,
+              wait_fn: Optional[Callable[[object, float], Optional[int]]] = None,
+              clock: Callable[[], float] = time.monotonic
+              ) -> Tuple[str, Optional[int]]:
+    """Generic progress-stall control loop over an already-launched process.
+
+    `progress_probe()` returns a comparable token; forward progress is signalled
+    by the token CHANGING between polls (use a ProgressMeter for the robust
+    monotonic score). `kill_fn(proc, reason)` terminates the job tree. Returns
+    ``(outcome, exit_code)`` with outcome ∈ {'natural','stalled','ceiling'}.
+    Kills ONLY after NO progress for `stall_grace_s`; `hard_ceiling_s` is a
+    pathological backstop only. `wait_fn`/`clock` are injectable for tests."""
+    wait_fn = wait_fn or _default_wait
+    start = clock()
+    last_progress = start
+    try:
+        last_token = progress_probe()
+    except Exception:  # nosec — probe error ⇒ no signal this poll
+        last_token = None
+    while True:
+        rc = wait_fn(proc, poll_s)
+        if rc is not None:
+            return "natural", rc
+        now = clock()
+        try:
+            token = progress_probe()
+        except Exception:  # nosec
+            token = None
+        if token is not None and token != last_token:
+            last_progress = now
+        if token is not None:
+            last_token = token
+        if now - last_progress > stall_grace_s:
+            kill_fn(proc, "stalled")
+            return "stalled", None
+        if now - start > hard_ceiling_s:
+            kill_fn(proc, "ceiling")
+            return "ceiling", None
+
+
+def _as_text(v) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, (bytes, bytearray)):
+        return bytes(v).decode("utf-8", errors="replace")
+    return v
+
+
+def run_supervised(cmd, *, log_path=None,
+                   stall_grace_s: float = DEFAULT_STALL_GRACE_S,
+                   poll_s: float = DEFAULT_POLL_S,
+                   hard_ceiling_s: float = DEFAULT_HARD_CEILING_S,
+                   cpu_probe: Optional[Callable[[object], Optional[float]]] = None,
+                   kill: Optional[Callable[[object, str], None]] = None,
+                   popen_factory: Optional[Callable[..., object]] = None,
+                   env=None,
+                   wait_fn=None,
+                   clock: Callable[[], float] = time.monotonic
+                   ) -> SupervisedResult:
+    """Launch `cmd` and supervise it by FORWARD PROGRESS (see module docstring).
+
+    Captures stdout/stderr to OS temp files (universal output-growth signal, no
+    pipe-buffer deadlock, decoded to str on return). Progress = output grew OR
+    `log_path` grew OR `cpu_probe(proc)` advanced. A still-progressing job is
+    NEVER killed; a job idle+silent for `stall_grace_s` is killed via
+    `kill(proc, 'stalled')` → rc=RC_STALLED; the `hard_ceiling_s` backstop kills
+    → rc=RC_CEILING. `cpu_probe`/`kill`/`popen_factory` inject the transport
+    (docker/host/…); the default launches a host subprocess and kills it with
+    proc.kill(). Returns a SupervisedResult."""
+    popen_factory = popen_factory or (
+        lambda c, **kw: subprocess.Popen(c, **kw))
+    kill = kill or _default_kill
+
+    out_f = tempfile.TemporaryFile()
+    err_f = tempfile.TemporaryFile()
+
+    def _size():
+        try:
+            return (os.fstat(out_f.fileno()).st_size
+                    + os.fstat(err_f.fileno()).st_size)
+        except OSError:
+            return 0
+
+    def _log():
+        if log_path is None:
+            return None
+        try:
+            st = os.stat(os.fspath(log_path))
+            return (st.st_size, st.st_mtime)
+        except OSError:
+            return None
+
+    t0 = time.monotonic()
+    try:
+        proc = popen_factory(cmd, stdout=out_f, stderr=err_f, env=env)
+    except FileNotFoundError as e:
+        out_f.close()
+        err_f.close()
+        return SupervisedResult(127, "", f"COMMAND_NOT_FOUND: {e}",
+                                "launch_error", 0.0)
+
+    meter = ProgressMeter(
+        size_fn=_size,
+        log_fn=(_log if log_path is not None else None),
+        cpu_fn=((lambda: cpu_probe(proc)) if cpu_probe is not None else None))
+
+    outcome, rc = supervise(
+        proc, meter.sample, kill,
+        poll_s=poll_s, stall_grace_s=stall_grace_s,
+        hard_ceiling_s=hard_ceiling_s, wait_fn=wait_fn, clock=clock)
+
+    # Reap and collect whatever partial output exists.
+    try:
+        proc.wait(timeout=60)
+    except Exception:  # nosec — already killed; don't hang the caller
+        pass
+
+    def _read(f):
+        try:
+            f.seek(0)
+            return _as_text(f.read())
+        except OSError:
+            return ""
+
+    out = _read(out_f)
+    err = _read(err_f)
+    out_f.close()
+    err_f.close()
+    elapsed = time.monotonic() - t0
+
+    if outcome == "stalled":
+        return SupervisedResult(
+            RC_STALLED, out,
+            err + (f"\nWATCHDOG_STALLED: no forward progress (output+CPU idle) "
+                   f"for > {stall_grace_s:g}s — killed as hung, not slow."),
+            "stalled", elapsed)
+    if outcome == "ceiling":
+        return SupervisedResult(
+            RC_CEILING, out,
+            err + (f"\nWATCHDOG_CEILING: hard backstop {hard_ceiling_s:g}s "
+                   f"exceeded (pathological non-idle loop) — killed."),
+            "ceiling", elapsed)
+    return SupervisedResult(rc if rc is not None else 0, out, err,
+                            "natural", elapsed)

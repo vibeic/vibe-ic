@@ -302,7 +302,7 @@ _PA_POWER_MISMATCH = ("Top level cell failed pin matching.\n"
 def test_wiring_power_aware_match_yields_power_verified(tmp_path, monkeypatch):
     project, top, pdk, spice_out, lvs_rpt, netlist = _prep_project(tmp_path)
 
-    def fake_exec(container, cmd, timeout=None):
+    def fake_exec(container, cmd, timeout=None, **_):
         if "netgen -batch lvs" in cmd:
             return (0, _PA_MATCH, "")           # power-aware compare → MATCH
         return (0, "", "")
@@ -332,7 +332,7 @@ def test_wiring_power_aware_mismatch_returns_none_falls_through(
     # fallback).
     project, top, pdk, spice_out, lvs_rpt, netlist = _prep_project(tmp_path)
 
-    def fake_exec(container, cmd, timeout=None):
+    def fake_exec(container, cmd, timeout=None, **_):
         if "netgen -batch lvs" in cmd:
             return (1, _PA_POWER_MISMATCH, "")
         return (0, "", "")
@@ -353,7 +353,7 @@ def test_wiring_no_stdcells_returns_none(tmp_path, monkeypatch):
                        " assign y = a; endmodule\n")
     called = {"netgen": False}
 
-    def fake_exec(container, cmd, timeout=None):
+    def fake_exec(container, cmd, timeout=None, **_):
         if "netgen" in cmd:
             called["netgen"] = True
         return (0, "", "")

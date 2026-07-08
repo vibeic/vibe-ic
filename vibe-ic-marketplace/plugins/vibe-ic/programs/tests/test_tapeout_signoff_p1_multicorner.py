@@ -42,7 +42,7 @@ def _mk_pdk(tmp_path):
 def test_container_ls_paths_filters_login_banner(monkeypatch):
     # The banner lines start with '[INFO]' not '/', and must be dropped; only
     # the real path line (containing must_contain) survives.
-    def fake_exec(container, cmd, timeout=20):
+    def fake_exec(container, cmd, timeout=20, **_):
         return (0, _BANNER +
                 "/foss/pdks/sky130A/libs.tech/openlane/rules.openrcx.sky130A.nom.magic\n",
                 "")
@@ -55,7 +55,7 @@ def test_container_ls_paths_filters_login_banner(monkeypatch):
 
 
 def test_discover_captables_picks_magic_per_corner(monkeypatch):
-    def fake_exec(container, cmd, timeout=20):
+    def fake_exec(container, cmd, timeout=20, **_):
         # emulate `ls` for whichever corner is embedded in the expr
         for corner in ("min", "nom", "max"):
             if f".{corner}.magic" in cmd or f".{corner} " in cmd or cmd.endswith(f".{corner}"):
@@ -73,13 +73,13 @@ def test_discover_captables_picks_magic_per_corner(monkeypatch):
 
 
 def test_discover_captables_empty_when_none(monkeypatch):
-    monkeypatch.setattr(P, "_docker_exec", lambda c, cmd, timeout=20: (0, _BANNER, ""))
+    monkeypatch.setattr(P, "_docker_exec", lambda c, cmd, timeout=20, **_: (0, _BANNER, ""))
     assert P._discover_openrcx_captables(_mk_pdk(Path("/tmp")), "c") == {}
 
 
 def test_aocv_discovery_none_when_pdk_ships_none(monkeypatch, tmp_path):
     # no design-supplied .aocv, container ls returns only the banner => None.
-    monkeypatch.setattr(P, "_docker_exec", lambda c, cmd, timeout=20: (0, _BANNER, ""))
+    monkeypatch.setattr(P, "_docker_exec", lambda c, cmd, timeout=20, **_: (0, _BANNER, ""))
     assert P._discover_aocv_table(tmp_path, _mk_pdk(tmp_path), "c") is None
 
 
@@ -89,14 +89,14 @@ def test_aocv_discovery_finds_design_supplied(monkeypatch, tmp_path):
     (d / "corners.aocv").write_text("* aocv table *\n")
     # design-supplied is found WITHOUT touching the container.
     monkeypatch.setattr(P, "_docker_exec",
-                        lambda c, cmd, timeout=20: (_ for _ in ()).throw(
+                        lambda c, cmd, timeout=20, **_: (_ for _ in ()).throw(
                             AssertionError("should not hit container")))
     got = P._discover_aocv_table(tmp_path, _mk_pdk(tmp_path), "c")
     assert got is not None and got.endswith("corners.aocv")
 
 
 def test_blackbox_discovery_prefers_plain(monkeypatch):
-    def fake_exec(container, cmd, timeout=20):
+    def fake_exec(container, cmd, timeout=20, **_):
         return (0, _BANNER +
                 "/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/verilog/sky130_fd_sc_hd__blackbox.v\n"
                 "/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/verilog/sky130_fd_sc_hd__blackbox_pp.v\n",

@@ -287,7 +287,7 @@ def _drive_step_pnr(tmp_path, monkeypatch, die_um, responses,
     project = _build_project(tmp_path, top, n_cells)
     calls = {"n": 0, "dies": []}
 
-    def fake_docker_exec(container, cmd, timeout=None):
+    def fake_docker_exec(container, cmd, timeout=None, **_):
         if "openroad -no_init" in cmd:
             i = calls["n"]
             calls["n"] += 1

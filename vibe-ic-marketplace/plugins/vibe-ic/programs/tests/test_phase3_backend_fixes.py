@@ -579,7 +579,7 @@ class TestContainerCornerDiscovery:
                "/foss/pdks/sky130A/.../lib/sky130_fd_sc_hd__ff_n40C_1v95.lib\n"
                "some_noise_line\n")
         monkeypatch.setattr(mod, "_docker_exec",
-                            lambda c, cmd, timeout=60: (0, out, ""))
+                            lambda c, cmd, timeout=60, **_: (0, out, ""))
         libs = mod._discover_container_corner_libs(
             "vibeic-eda", "/foss/pdks/sky130A/.../lib")
         assert len(libs) == 3                      # only *.lib lines
@@ -592,7 +592,7 @@ class TestContainerCornerDiscovery:
         assert mod._discover_container_corner_libs("iic", "") == []
 
     def test_discover_safe_on_docker_failure(self, monkeypatch):
-        def _boom(c, cmd, timeout=60):
+        def _boom(c, cmd, timeout=60, **_):
             raise RuntimeError("docker down")
         monkeypatch.setattr(mod, "_docker_exec", _boom)
         assert mod._discover_container_corner_libs("iic", "/x/lib") == []

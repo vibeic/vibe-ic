@@ -284,7 +284,7 @@ class TestRunExtractionLvsPowerAwareWiring:
         (project, top, pdk, def_file, netlist,
          spice_out, lvs_rpt) = self._prep(tmp_path)
 
-        def fake_docker_exec(container, cmd, timeout=None):
+        def fake_docker_exec(container, cmd, timeout=None, **_):
             if "magic -dnull" in cmd:
                 spice_out.write_text(
                     ".subckt top a\nX0 a sky130_fd_sc_hd__inv_1\n.ends\n")

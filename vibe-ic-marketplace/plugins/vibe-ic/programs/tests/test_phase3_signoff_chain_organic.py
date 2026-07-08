@@ -170,7 +170,7 @@ class TestSpefTclCaptable:
         spef = ex / "chip_top.spef"
         monkeypatch.setattr(runner, "_to_container_path", lambda p, c: p)
         monkeypatch.setattr(runner, "_docker_exec",
-                            lambda c, cmd, timeout=0: (0, "", ""))
+                            lambda c, cmd, timeout=0, **_: (0, "", ""))
         runner._emit_spef(project, "chip_top", _fake_pdk(), "x", spef, [])
         tcl_files = list(ex.glob("extract_*.tcl"))
         assert tcl_files, "extract TCL was not written"
@@ -219,7 +219,7 @@ class TestIrEmReports:
         rpt3.mkdir(parents=True, exist_ok=True)
         monkeypatch.setattr(runner, "_to_container_path", lambda p, c: p)
 
-        def fake_exec(container, cmd, timeout=0):
+        def fake_exec(container, cmd, timeout=0, **_):
             # Emit an EM segment CSV where the emitter expects it.
             for tok in cmd.split():
                 if tok.endswith("em_segments.csv"):
@@ -261,7 +261,7 @@ class TestIrEmReports:
         rpt3.mkdir(parents=True, exist_ok=True)
         monkeypatch.setattr(runner, "_to_container_path", lambda p, c: p)
         monkeypatch.setattr(runner, "_docker_exec",
-                            lambda c, cmd, timeout=0: (0, "", ""))
+                            lambda c, cmd, timeout=0, **_: (0, "", ""))
         notes = []
         ir_ok, em_ok = runner._emit_ir_em_reports(
             project, "chip_top", _fake_pdk(), "x",
@@ -285,7 +285,7 @@ class TestAntennaReport:
         rpt3.mkdir(parents=True, exist_ok=True)
         monkeypatch.setattr(runner, "_to_container_path", lambda p, c: p)
         monkeypatch.setattr(runner, "_docker_exec",
-                            lambda c, cmd, timeout=0: (0, _ANT_STDOUT, ""))
+                            lambda c, cmd, timeout=0, **_: (0, _ANT_STDOUT, ""))
         ant = rpt3 / "antenna.rpt"
         ok = runner._emit_antenna_report(
             project, "chip_top", _fake_pdk(), "x", ant, [])
@@ -653,7 +653,7 @@ class TestAntennaInSessionPreference:
         # re-global_route measurement (container) is used instead.
         calls = {"n": 0}
 
-        def _fake_exec(c, cmd, timeout=0):
+        def _fake_exec(c, cmd, timeout=0, **_):
             calls["n"] += 1
             return (0, "[INFO ANT-0002] Found 7 net violations.\n"
                        "[INFO ANT-0001] Found 0 pin violations.\n", "")
@@ -780,7 +780,7 @@ class TestMetalFill:
 
         filled = pnr / "filled.def"
 
-        def fake_exec(container, cmd, timeout=0):
+        def fake_exec(container, cmd, timeout=0, **_):
             # The write_def target lives inside the TCL, not the command;
             # emit filled.def directly (larger than routed) as OpenROAD would.
             filled.write_text(_DEF_WITH_PDN + "\n# fill\n" * 50)
@@ -804,7 +804,7 @@ class TestMetalFill:
         filled = pnr / "filled.def"
         monkeypatch.setattr(runner, "_to_container_path", lambda p, c: p)
 
-        def fake_exec(container, cmd, timeout=0):
+        def fake_exec(container, cmd, timeout=0, **_):
             filled.write_text(_DEF_WITH_PDN + "\n# fill\n" * 50)
             return (0, _FILL_STDOUT, "")
 
@@ -844,7 +844,7 @@ class TestErcReport:
         rpt3.mkdir(parents=True, exist_ok=True)
         monkeypatch.setattr(runner, "_to_container_path", lambda p, c: p)
         monkeypatch.setattr(runner, "_docker_exec",
-                            lambda c, cmd, timeout=0: (0, _ERC_STDOUT, ""))
+                            lambda c, cmd, timeout=0, **_: (0, _ERC_STDOUT, ""))
         erc = rpt3 / "erc.rpt"
         ok = runner._emit_erc_report(
             project, "chip_top", _fake_pdk(), "x", erc, [])
