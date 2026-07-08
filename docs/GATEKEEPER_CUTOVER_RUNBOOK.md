@@ -5,6 +5,18 @@ shipped in plugin **v1.1.0** (commit `b7eccb61`). It takes the repo from
 *everyone direct-pushes `main`* to *only the gatekeeper bot lands `main`, via PR +
 required checks + a serialized merge queue*.
 
+> **Two-layer status (where this runbook fits).** This runbook is the **Layer-1**
+> machinery — the *PR + single-gatekeeper merge queue* that lands **externally-filed
+> PRs** (the public contribution model: a **backlog** report or a **PR** fix →
+> maintainer lands). It is **documented but NOT currently activated**: under the
+> 2026-06-26 owner directive the maintainer is in the **Layer-2** internal
+> improvement phase and lands its **own** fixes by **direct push** to `main` with
+> every gate retained (see `vibe-ic:core-agent-loop` §Step 3). Do **not** delete
+> this machinery — it is the standing mechanism for external PRs and the target
+> state for a future PR-only cutover; run the phases below only when the repo
+> moves off the direct-push improvement phase. Until then, direct-push is the
+> active landing method.
+
 > ⚠️ **The cutover BREAKS the current direct-push loop.** Running
 > `tools/setup_branch_protection.sh --confirm` before the gatekeeper-loop is live
 > **freezes the repo** — no merges land. Follow the phases IN ORDER. Phase 4 (the

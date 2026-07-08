@@ -40,6 +40,16 @@ recognises canonical pattern); no fix references `IC-A`,
 `BENCH-A`, `Vendor`, `usb_hid_tester`, `aid`, or any vendor IC name as
 detection logic.
 
+> **Contribution-layer framing (so Step 3 is not misread as the public model).**
+> The DIRECT PUSH in §Step 3 is the **Layer-2** *maintainer-internal* landing
+> method, used while the plugin is built out — it is NOT what external users do.
+> The **Layer-1** public contribution model is unchanged and retained: an external
+> contributor files a **backlog** (a report, no code) **or** a **PR** (a fix, with
+> code). This loop serves both — it polls open **backlog** items (Step 1) AND
+> auto-lands any externally-filed **PR** through the gatekeeper flow (§per-tick
+> scope). You are the maintainer, so you ship your OWN fixes by direct push; a
+> non-maintainer contributor never pushes to `main`.
+
 ## Issue repo + per-tick scope (BINDING)
 
 **ALL vibe-ic issues are filed to, polled from, and closed on

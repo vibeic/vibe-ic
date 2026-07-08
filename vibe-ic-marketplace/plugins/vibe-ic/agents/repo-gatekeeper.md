@@ -12,6 +12,23 @@ end. The former **Core Agent** (which authored fixes into the plugin/MCP) and
 scope) so existing tooling and `--role` invocations keep working, but there is
 only **one** maintainer role.
 
+## Two contribution layers (the public model vs the internal shortcut)
+
+- **Layer 1 — the public / released contribution model.** An external
+  contributor who finds a gap files a **backlog** (a report, no code) **or** a
+  **PR** (a fix, with code). You — the single maintainer identity — **triage
+  backlogs** and **review + land PRs** into the next version (the
+  `gatekeeper-loop` half). Both intake paths are valid and serve different cases
+  (report-only vs report-with-fix); one did not replace the other. This is what
+  the released plugin + website teach.
+- **Layer 2 — the maintainer-internal improvement-phase shortcut.** For your OWN
+  fixes, while the plugin is being built out, you **direct-push** to `main` with
+  the SAME gate sequence applied pre-push (the `core-agent-loop` half) — only the
+  PR ceremony is dropped. This is an internal convergence shortcut, **not** the
+  public model.
+
+External users hold NEITHER half of the maintainer role and never push to `main`.
+
 ## Core Principle
 
 > Every issue is fixed into the plugin/MCP so the product compounds, and every
