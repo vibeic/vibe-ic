@@ -25,7 +25,10 @@ magic / netgen / iverilog / klayout with gatekeeper-verified FAIL→PASS fixes; 
 
 ```bash
 docker build -t vibeic-eda:0.2.2 tools/vibeic-eda
-docker run -d --name vibeic-eda vibeic-eda:0.2.2 --skip sleep infinity
+docker run -d --name vibeic-eda \
+  -v "$HOME/AI_IC_design:$HOME/AI_IC_design:rw" \
+  -v "$HOME/AI_IC_design:/foss/designs:rw" \
+  vibeic-eda:0.2.2 --skip sleep infinity
 ```
 
 **Or — the stock base** (standard tools, no fork enhancements): pull IIC-OSIC-TOOLS and give
@@ -33,8 +36,23 @@ the container the same name:
 
 ```bash
 docker pull hpretl/iic-osic-tools           # or the pinned tag in mcp-eda/INSTALL_GUIDE.md
-docker run -d --name vibeic-eda hpretl/iic-osic-tools --skip sleep infinity
+docker run -d --name vibeic-eda \
+  -v "$HOME/AI_IC_design:$HOME/AI_IC_design:rw" \
+  -v "$HOME/AI_IC_design:/foss/designs:rw" \
+  hpretl/iic-osic-tools --skip sleep infinity
 ```
+
+> **The bind-mounts are REQUIRED, not optional — a clean install with a bare `sleep
+> infinity` container will fail Phase 3.** The MCP-EDA tools address designs under
+> `/foss/designs` (second mount), but Phase 3's backend and the RTLLM Verilator-escalation
+> scorer also run in-container commands like `cd {host_path}` using the *host absolute*
+> path — that resolves ONLY if the SAME path exists inside the container, which is what the
+> first **identity mount** (`$HOME/AI_IC_design` → same path) provides. Without it the
+> in-container `cd` reports `No such file or directory` and Phase 3 aborts. `phase3_one_shot_runner`
+> auto-detects the mount table (`docker inspect … .Mounts`) and translates host→container
+> paths, so an unmounted container leaves it nothing to translate to. Keep your design tree
+> under `$HOME/AI_IC_design` (the workspace the mcp-eda `INSTALL_GUIDE.md` assumes); mount a
+> different workspace root at its OWN identity path if you use one.
 
 ## Step 2 — Install the plugin
 

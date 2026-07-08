@@ -1076,13 +1076,58 @@ _Captured by benchmark-enhancement-capture 2026-05-28; reactive-ungated detail 2
 
 **Pattern**: Triangle-pattern outputs (increment to MAX, then decrement to MIN) HOLD the peak (and trough) for one extra cycle while the direction-state flips. Decrementing on the same cycle the direction flips produces a wrong (sharp-corner) waveform.
 
-**When to apply**: Triangle/sawtooth/sine-approximation waveform generators.
+**When to apply**: Triangle/sawtooth/sine-approximation waveform generators. This
+hold is a GENRE CONVENTION (a default), NOT a hard contract — it applies only when
+the prose is SILENT about the extreme's dwell, or merely CONSISTENT-with-hold (see
+below). An EXPLICIT spec statement always OVERRIDES the convention.
 
 **What to do**: On reaching MAX, flip direction WITHOUT updating the wave; next cycle decrement. Symmetric at MIN.
 
 **Worked pattern** (anonymized): a triangle-pattern signal generator that decremented on the direction-flip cycle exhibited an off-by-one peak vs the TB's expected waveform; restructuring to hold-then-decrement (flip direction this cycle, decrement next) matched.
 
-**ANTI-PATTERN (§4-E, ORGANIC #776)**: do NOT drop this hold-the-peak lesson by citing §4-E on AMBIGUOUS prose. A spec saying "incremented by 1 / if it reaches 31, transition/reverse" is CONSISTENT with hold-the-peak — it does NOT explicitly say "increment EVERY cycle with NO hold". Overriding the lesson on that inferred reading is the weaponized escape hatch (it caused a real r12 PASS → r13 FAIL regression: 0/100 → 67/100). Deviate ONLY if the spec EXPLICITLY forbids the hold (e.g. literally "no peak hold" / "advances every single cycle including the turn"); otherwise KEEP the hold.
+**DOCTRINE — explicit spec OVERRIDES genre convention (§4-E, ORGANIC #776 + v1.3.43)**:
+the hold-the-peak lesson is a fallback for SILENT prose; a spec that EXPLICITLY pins
+the extreme's behaviour wins over it, in BOTH directions:
+
+- *Consistent-with-hold (KEEP the hold — do NOT drop it) — the §4-E **ANTI-PATTERN**
+  (ORGANIC #776):* a spec saying "incremented by 1 / if it reaches 31, transition to
+  the decrement state" is CONSISTENT with hold-the-peak — read LITERALLY, the
+  mutually-exclusive `if (at_extreme) transition; else step;` naturally holds the
+  extreme for one cycle. That IS the spec, not a convention added on top. Dropping
+  the hold here by CITING §4-E on the inferred "it doesn't say EVERY cycle" reading
+  is the weaponized escape hatch (real r12 PASS → r13 FAIL regression: 0/100 →
+  67/100). The canonical RTLLM `signal_generator` golden holds BOTH the peak
+  (`1f 1f`) and the trough (`00 00`) for two cycles — verified against its
+  `tri_gen.txt` reference.
+- *Explicitly plain-triangle / no-dwell (DROP the hold — the convention must NOT
+  fire), ONLY when there is no hold-require:* when the spec EXPLICITLY forbids the
+  dwell — "advances/steps every single cycle INCLUDING the turn", "at the peak it
+  immediately decrements/reverses", "the peak appears for exactly one cycle", "the
+  maximum is one cycle wide/only", "no peak hold / without dwelling" — author the
+  plain single-cycle-peak triangle; do NOT add a dwell the spec ruled out.
+
+**STRONG vs WEAK precedence (Step-2.7 §4.05 hardening, v1.3.43)** — a bare MOTION
+phrase or an EXTREME-SPECIFIC no-dwell phrase is NOT strong enough to override an
+EXPLICIT hold-require. "The ramp advances every clock cycle **and is held at the top
+for two cycles**" is a HOLD spec: the "advances every cycle" describes the RAMP, and
+"held at the top for two cycles" is the authoritative dwell statement — KEEP the
+hold. Likewise "hold the peak for two cycles, **then immediately reverse**" keeps the
+hold. And on an **asymmetric-dwell** triangle, a no-dwell about the OPPOSITE extreme
+must not kill the required hold: "**hold the peak for two cycles**; the trough appears
+for exactly one cycle" KEEPS the peak hold. Only a GENERIC/DIRECT no-hold statement
+("no peak hold", "without any dwell", "hold forbidden") overrides an explicit
+hold-require — the extreme-specific "peak appears for exactly one cycle" / "one cycle
+wide" phrasings, and every motion phrase, disarm the convention ONLY when the spec
+states NO hold at all (a genuine plain triangle).
+
+This decision is MECHANIZED and single-sourced in
+`programs/spec_conformance_check.py::{_HOLD_FORBID_STRONG_RE, _HOLD_FORBID_WEAK_RE,
+_spec_requires_peak_hold}` (the explicit-forbid vocabulary above lives THERE — keep
+the two in lock-step; the v1.3.43 regression test carries the §4.05 LEAK/EFFECT
+battery — incl. the Step-2.7 "hold-require alongside a ramp/motion clause" cases —
+proving the convention still fires on silent/consistent-with-hold prose, does NOT
+fire on an explicit plain-triangle spec, and is NOT disarmed by a bare motion phrase,
+with the RTLLM golden unaffected).
 
 **Why this is GENERAL**: Universal waveform-generator construct.
 
