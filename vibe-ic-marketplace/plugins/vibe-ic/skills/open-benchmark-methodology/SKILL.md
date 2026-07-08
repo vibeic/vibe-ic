@@ -386,7 +386,7 @@ making a meaning judgment; no regex does that.
 | **A2. Harness contradicts the GIVEN context itself** | The GIVEN input (prose + any given/gate-target RTL) is *directly functionally contradicted* by the TB oracle — provable with NO external info (e.g. TB pins opcode 2'b10=NAND/2'b11=NOR, but the only given mapping is the opposite and NAND/NOR are never mentioned) | **FLOOR** — stop converging immediately. Prove it with the floor-proof protocol below (cross-round expected-vs-got + replay under the design's OWN TB); the given context alone is the evidence. |
 | **B. Benchmark under-specification** | TB needs a port/param/parameterization the prose never states | **FLOOR** — same |
 | **C. Positional-instantiation convention** | TB uses positional with an undocumented port order | **FLOOR** |
-| **D. Tool-substitution gap** | TB uses VCS-only / Xcelium-only constructs iverilog can't run | **FLOOR** (under our substitution) |
+| **D. Tool-substitution gap** | TB uses VCS-only / Xcelium-only constructs, or a language feature our OSS substitute (iverilog / Verilator / yosys / OpenROAD / ngspice / magic / netgen) can't yet run or crashes on | **FORK-FIXABLE — NOT a terminal floor.** We FORK the EDA tools (`vibeic/{OpenROAD,yosys,iverilog,verilator,magic,netgen,ngspice}`, shipped as `vibeic-eda`), so a "our tool can't do X" fail is an ENGINEERING BACKLOG ITEM against the fork, routed to `tools/vibeic-eda/FIX_STATUS.md`. **MANDATORY before you may even LABEL it Category-D** (the asyn_fifo lesson): run the § 4.1 floor-proof — build+run the GOLDEN under a tool that DOES support the missing feature (e.g. Verilator `--timing` for a `break;`/`#delay` TB, or the forked iverilog). If the golden PASSES there → confirmed genuine tool-gap → open/track the FIX_STATUS row (add the feature to the fork; a real language feature / algorithmic gap ONLY — NEVER patch a tool to "pass benchmark X": that is the § 4 / § 9 over-fit prohibition — the fork dissolves the CAPABILITY floor, not the honesty boundary). A genuine algorithm-hard port honestly DEFERRED (`FIX_STATUS` 🔷) is a KNOWN-DEFERRED engineering item, still NOT an unfixable floor. **If the golden ALSO fails under the supporting tool → it was NEVER a pure tool-gap; re-triage as A/A2/B/E (dataset/RTL), NOT D.** (Worked example: the RTLLM `asyn_fifo` official TB uses `break;` which stock iverilog 12 rejects; the golden compiles+PASSES under Verilator 5.020 `--timing` AND the forked iverilog 14-devel in `vibeic-eda:0.2.5` → confirmed genuine tool-gap → already fork-closed, `FIX_STATUS.md` Tool 5 iverilog `break;`/`continue;` 🟢.) |
 | **E. Spec-ambiguity functional mismatch** | DUT compiles + runs; spec admits ≥ 2 valid readings (e.g. shift vs rotate, registered vs comb output, phase convention); TB picks one | **FLOOR** — leave spec-faithful, do NOT over-fit to the hidden oracle. Close-loop's job is to confirm own-TB-passes, not to converge on the hidden TB. |
 | **F. Description had it, agent missed it** | The clue WAS in the prose (e.g. "whether the result has been consumed" implies a downstream-ready input); agent overlooked it | **AGENT-FIXABLE** — close-loop after closer re-reading |
 | **G. Conventional shape inference** | A canonical pattern (e.g. parameterized pipelined adder uses DATA_WIDTH/STG_WIDTH) the agent should have inferred from genre, not from explicit prose | **AGENT-FIXABLE** with a "convention sweep" close-loop pass |
@@ -851,16 +851,23 @@ a floor-prover / an iverilog Tier-1 verifier + a `--dist` CLI).
 | **T2** | program-extract COMPLETE spec + gate | a program extracts every testable fact (COMPLETE); the AI authors from that complete spec and a conformance gate verifies it. |
 | **T3** | gate-able | a meaningful interface/structure gate constrains the AI author; the extracted spec is not fully COMPLETE. |
 | **T4** | ungated | too-incomplete to build a meaningful gate. |
-| **T5** | real floor | the GOLDEN reference fails its OWN testbench (proven per § 4.1) — a dataset/oracle/tool defect, never "AI can't". |
+| **T5** | real floor | ONE of exactly two: **(a) dataset/oracle defect** — the GOLDEN reference fails its OWN testbench (proven per § 4.1); OR **(b) an honestly-DEFERRED algorithm-hard FORK gap** — an OSS-tool capability gap that is a genuine research port, cited by a specific `tools/vibeic-eda/FIX_STATUS.md` 🔷 DEFERRED row. **A plain tool-substitution gap is NO LONGER T5 by default** — since we fork the EDA tools it is Category-D FORK-FIXABLE (route to FIX_STATUS), and it may be recorded as T5 ONLY once it carries the 🔷 entry AND has passed the § 4.1 floor-proof (golden PASSES under a tool that supports the feature; if the golden ALSO fails, it is a dataset/RTL floor (a), not a tool floor). Never "AI can't". |
 
 GOAL: T1+T2+T3 stably solved every run (they all carry a program gate or a
-deterministic emit); only T5 is a true floor.
+deterministic emit); only T5 is a true floor — and T5(b) is a KNOWN-DEFERRED
+engineering item on the fork backlog, not a permanent ceiling.
 
 ### The converge levers (run STEP-BY-STEP, bottom tier first, verify after each)
 
 1. **T5→lower** — for every candidate floor run § 4.1's golden-vs-its-own-testbench
    proof; reclassify every golden-PASSES problem. A benign `$display("TIMEOUT")`
-   watchdog print is NOT a failure — grade strictly on the `Mismatches:` line.
+   watchdog print is NOT a failure — grade strictly on the `Mismatches:` line. **If
+   the only reason the golden "fails" is our OSS tool rejecting/crashing on a
+   language feature, that is Category-D FORK-FIXABLE, not T5:** re-run the golden
+   under a tool that supports the feature (Verilator `--timing`, forked iverilog);
+   on a PASS, route it to `tools/vibeic-eda/FIX_STATUS.md` (fork the capability)
+   instead of shelving it as a floor. It stays T5 ONLY as a 🔷 honestly-deferred
+   algorithm-hard port.
 2. **T4→T3** — recover the interface (prompt header / `_ifc.txt` / provided
    `input.context` RTL header / cocotb `dut.<sig>` set, incl. a `tb.py`/non-`test_`
    harness file) so a gate can bind. Interface = spec (§ 3.9).
@@ -897,11 +904,20 @@ deterministic emit); only T5 is a true floor.
 | VerilogEval-Human | 156 | 130 | 26 | 0 | 0 | 156/156 |
 | RTLLM | 50 | 26 | 20 | 0 | 4 | 46/50 |
 
-The 5 T5 are all proven defects/tool-gaps (golden fails its own testbench).
+The 5 T5 above were snapshotted before the fork-fixable reclassification. Per the
+tightened T5 rule they split into two kinds: **dataset/oracle defects** (golden
+fails its OWN testbench even under a supporting tool — genuine T5(a)) and
+**tool-substitution gaps** (golden PASSES under a supporting tool — Category-D
+**FORK-FIXABLE**, route to `tools/vibeic-eda/FIX_STATUS.md`; T5 only if 🔷
+honestly-deferred). Concretely, the RTLLM `asyn_fifo` counted here is NOT a floor:
+its golden compiles+PASSES under Verilator `--timing` and the forked iverilog
+14-devel — the `break;` gap is already fork-closed (`FIX_STATUS.md` Tool 5). Re-run
+the § 4.1 floor-proof on each snapshot T5 before treating it as a permanent ceiling.
 
 **Summary**: classify into 5 tiers, push each up step-by-step, accept a Tier-1
 only on an iverilog pass by a GENERAL (not overfit) solver, and label a floor only
-after the § 4.1 golden-also-fails proof.
+after the § 4.1 golden-also-fails proof — and remember a plain tool-substitution
+gap is FORK-FIXABLE (route to FIX_STATUS), not a floor.
 
 Next: run `python3 programs/<suite>_tier_pipeline.py --dist` to measure, then drive
 the lever for the lowest non-empty promotable tier.

@@ -5792,9 +5792,15 @@ def _phase2_sv_synth_fallback(project: Path, container: str,
     # synth-bound conversion (so the assertion-macro `elsif SYNTHESIS arm
     # takes the synthesisable dummy-macros header, not the sim `else arm).
     if _tool_in_container(container, "yosys"):
+        # v1.3.43 — skip `plugin -i slang` when the fork's yosys ships slang
+        # COMPILED-IN (built-in read_slang, no slang.so): emitting the load
+        # would ERROR "Can't load module ./slang" and ABORT the whole -p
+        # script. Shared probe (single source of truth for all 3 SV synth
+        # call-sites): synth_frontend.resolve_slang_load_prefix.
+        _slang_prefix = _sf.resolve_slang_load_prefix(container, _docker_exec)
         slang_cmd = (
             f"cd {workdir} && {yosys_path} && "
-            f"yosys -p 'plugin -i slang; "
+            f"yosys -p '{_slang_prefix}"
             f"read_slang {reads_join} --top {synth_top} "
             f"-DSYNTHESIS {inc_flag}; "
             f"hierarchy -top {synth_top}; proc; flatten; {synth_tail}'")

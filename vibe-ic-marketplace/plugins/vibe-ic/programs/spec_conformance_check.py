@@ -1220,27 +1220,90 @@ _HOLD_REQUIRE_RE = __import__('re').compile(
     r'|\b(?:peak|trough|maximum|minimum|max|min|top|bottom|extreme|apex)\b'
     r'[^.!?]{0,40}?\b(?:hold(?:s|ing)?|held|dwell\w*|paused?)\b',
     __import__('re').IGNORECASE)
-_HOLD_FORBID_RE = __import__('re').compile(
+# §4-E "explicit spec OVERRIDES genre convention": the peak/trough HOLD is a
+# GENRE DEFAULT that fires only when the prose is silent (or merely
+# consistent-with-hold, e.g. the FSM "increment; on reaching MAX transition to
+# the decrement state" whose literal mutually-exclusive if/else naturally holds
+# the extreme). An EXPLICIT plain-triangle / no-dwell spec must DISARM the
+# convention. The explicit-forbid vocabulary is split into TWO strengths — this
+# split is load-bearing (Step-2.7 §4.05 review, v1.3.43): a bare motion phrase
+# ("advances every cycle", "then immediately reverse") is NOT strong enough to
+# override an EXPLICIT hold-require, because it usually just describes the RAMP
+# phase / a post-dwell reversal ("advances every clock cycle AND is held at the
+# top for two cycles" is a HOLD spec, not a no-dwell one). Only a DIRECT no-hold
+# statement overrides a hold-require.
+#
+# STRONG — a GENERIC/DIRECT no-hold statement that applies to the design's hold
+# behaviour as a whole; overrides even an explicit hold-require (a direct
+# contradiction the author resolved to no-hold):
+#   (1) "no/without/never … hold/dwell/pause"
+#   (4) "hold … forbidden/disallowed/prohibited"
+# NB: the EXTREME-SPECIFIC one-cycle branches ("peak … one cycle wide/only",
+# "peak … appears exactly one cycle") were MOVED to the WEAK tier (Step-2.7 §4.05
+# MED review, v1.3.43): keyed on a SINGLE extreme, with STRONG "anywhere"
+# precedence they let a no-dwell statement about the OPPOSITE extreme (e.g. "the
+# trough appears for exactly one cycle") wrongly disarm a required PEAK hold on
+# an ASYMMETRIC-dwell triangle. As WEAK they disarm only when NO hold-require is
+# present, which stays correct for a genuine plain triangle.
+_HOLD_FORBID_STRONG_RE = __import__('re').compile(
     r'\b(?:no|without|not|never|don.?t|do\s+not)\b[^.!?]{0,30}?'
     r'\b(?:hold(?:s|ing)?|dwell\w*|pause\w*)\b'
-    r'|\bimmediately\s+revers\w*'
     r'|\b(?:hold(?:s|ing)?|dwell\w*|pause\w*)[^.!?]{0,20}?'
     r'\b(?:forbidden|disallowed|prohibited)\b',
     __import__('re').IGNORECASE)
 
+# WEAK — no-dwell signals that describe MOTION or ONE extreme and can legitimately
+# coexist with an explicit hold at the OTHER extreme / in a different phase, so
+# they disarm the convention ONLY when NO sentence explicitly requires a hold:
+#   (2) "immediately reverse/decrement/…"
+#   (3) "advances/steps every cycle INCLUDING/EVEN/THROUGH/DURING the turn/peak"
+#       (bare preposition "at" is intentionally NOT a connective — "held AT the
+#        top" is a HOLD, not a no-dwell)
+#   (D) "peak … one/single cycle WIDE/ONLY/LONG"        (extreme-specific)
+#   (E) "peak … appears/stays/output EXACTLY/ONLY/JUST one/single cycle"
+#       (bare "for one cycle" is DELIBERATELY excluded — ambiguous with a 1-cyc hold)
+_HOLD_FORBID_WEAK_RE = __import__('re').compile(
+    r'\bimmediately\b[^.!?]{0,15}?'
+    r'\b(?:revers\w*|decrement\w*|increment\w*|turn\w*|chang\w*|switch\w*|drop\w*|step\w*)\b'
+    r'|\b(?:advanc\w*|increment\w*|decrement\w*|step\w*|chang\w*|updat\w*|count\w*|move\w*)\w*\b'
+    r'[^.!?]{0,30}?\bevery\b[^.!?]{0,15}?cycle[^.!?]{0,30}?'
+    r'\b(?:includ\w*|even|through|during)\b[^.!?]{0,15}?'
+    r'\b(?:turn|peak|revers\w*|extreme|maximum|minimum|top|bottom|apex|trough)\b'
+    r'|\b(?:peak|trough|maximum|minimum|extreme|apex|top|bottom)\b[^.!?]{0,25}?'
+    r'\b(?:one|single|1)\b[\s-]*cycle\b[^.!?]{0,15}?\b(?:wide|only|long)\b'
+    r'|\b(?:peak|trough|maximum|minimum|extreme|apex|top|bottom)\b[^.!?]{0,30}?'
+    r'\b(?:appear\w*|last\w*|present\w*|shown|output|stays?|remain\w*)\b[^.!?]{0,20}?'
+    r'\b(?:exactly|only|just)\b[^.!?]{0,10}?\b(?:one|single|a\s+single)\b[\s-]*cycle\b',
+    __import__('re').IGNORECASE)
+
+# union — "is there ANY explicit no-hold signal" (kept for callers/tests that
+# just want the predicate; the STRONG/WEAK precedence lives in the function).
+_HOLD_FORBID_RE = __import__('re').compile(
+    _HOLD_FORBID_STRONG_RE.pattern + "|" + _HOLD_FORBID_WEAK_RE.pattern,
+    __import__('re').IGNORECASE)
+
 
 def _spec_requires_peak_hold(spec_text: str) -> bool:
-    """True iff the prose describes a triangle/ramp/sawtooth generator AND
-    explicitly requires the peak/trough to be HELD, AND does not explicitly
-    forbid the hold. Sentence-scoped so a forbid clause elsewhere disarms it."""
+    """True iff the prose describes a triangle/ramp/sawtooth generator whose
+    peak/trough must be HELD. §4-E precedence (v1.3.43, Step-2.7-hardened):
+      1. a STRONG explicit no-hold statement overrides the convention outright;
+      2. else an EXPLICIT hold-require (any sentence) fires the convention — a
+         WEAK motion phrase does NOT disarm it (it usually just describes the
+         ramp / a post-dwell reversal; disarming there re-opened the #776 leak);
+      3. else a WEAK motion no-dwell phrase disarms (plain-triangle spec);
+      4. else silent → the authoring default (peak-hold) still applies, but this
+         GATE stays silent (returns False: it only ERRORs an EXPLICIT-require
+         spec whose RTL drops the hold)."""
     from _specrtl_common import _soft_unwrap_sentences
     if not _WAVEFORM_GEN_RE.search(spec_text):
         return False
-    if _HOLD_FORBID_RE.search(spec_text):
-        return False                          # §4.05: explicit no-hold spec
-    for sent in _soft_unwrap_sentences(spec_text):
-        if _HOLD_REQUIRE_RE.search(sent):
-            return True
+    if _HOLD_FORBID_STRONG_RE.search(spec_text):
+        return False                          # §4.05: direct no-hold statement
+    if any(_HOLD_REQUIRE_RE.search(s)
+           for s in _soft_unwrap_sentences(spec_text)):
+        return True                           # explicit hold-require is authoritative
+    if _HOLD_FORBID_WEAK_RE.search(spec_text):
+        return False                          # plain-triangle (no hold-require)
     return False
 
 
