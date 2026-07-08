@@ -4721,16 +4721,23 @@ def _antenna_repair_tcl(pdk: "PdkConfig") -> str:
 
     The corpus sweep (prince/chacha/poly1305/aes/sha3) showed real designs
     (>~10k cells) systematically FAIL the Step-29 antenna check because the PnR
-    never repaired antennas. PROVEN fix, validated on chacha (50k-cell sky130A):
-    85 net / 112 pin antenna violations -> 0/0. Two non-obvious facts drive the
-    exact sequence:
-      (1) `repair_antennas` fixes violations chiefly by JUMPER insertion (layer
-          hopping), which needs a FRESH global-route graph. After the prior
-          detailed_route that graph is consumed, so repair degrades to diode-only
-          insertion (a handful of diodes, ~no improvement). We rebuild it:
-          global_route -> repair_antennas -> detailed_route, which realizes the
-          jumpers (104 jumpers cleared all 84 nets on chacha).
-      (2) `check_antennas` cannot read routing from a re-`read_def` (ANT-0008 "No
+    never repaired antennas. Three non-obvious facts drive the exact sequence:
+      (1) `repair_antennas` (the `grt` module command) CANNOT itself call
+          detailed_route to realize its jumpers/diodes. Asking it to iterate
+          (`-iterations N` with N>1, the pre-v1.3.46 emission) trips GRT-0121
+          ("repair_antennas can only be run once; you must re-route detailed and
+          repeat"). So a single repair pass (`-iterations 1`) is driven per
+          outer-loop turn and WE re-route between passes.
+      (2) A FULL `global_route` before that reroute rebuilds the entire route
+          graph and forces the following detailed_route to re-route EVERY net
+          (~1900 nets on ibex -> timeout). It is therefore DROPPED. A bare
+          `repair_antennas -iterations 1` marks ONLY the nets it touched (diode /
+          jumper nets) dirty, so `detailed_route` (which sees the realized
+          routing, hasInitialRouting) then re-routes ONLY those dirty nets —
+          incremental. The OUTER loop (repair -> incr-reroute -> re-check) both
+          converges the residual (sha256 3 nets / caravel 1 net) and never
+          full-reroutes (fixing the ibex timeout).
+      (3) `check_antennas` cannot read routing from a re-`read_def` (ANT-0008 "No
           detailed or global routing found"); a separate measurement pass is
           forced to re-global_route, which DISCARDS the antenna-fixing jumpers and
           mis-reports the design as still-violating. The only faithful measurement
@@ -4745,19 +4752,19 @@ def _antenna_repair_tcl(pdk: "PdkConfig") -> str:
     antenna diode cell the step is SKIPPED (the design is left for a manual diode
     ECO rather than silently passing).
 
-    SKIP-WHEN-CLEAN (v0.2.14, performance): the repair's `detailed_route` is a FULL
-    route pass that ~doubles wall-clock on a large congested design. It is only
-    needed when the realized main route actually HAS antenna violations. So we first
-    run a cheap READ-ONLY `check_antennas` directly on the main detailed_route
-    (verified: check_antennas reads the detailed routing directly — no global_route
-    needed — when signal routing exists). If it reports 0 net violations the design
-    is already antenna-clean and we SKIP the global_route+repair+detailed_route
-    entirely (the precheck's own ANT-0002/ANT-0001 0/0 are the shippable result).
+    SKIP-WHEN-CLEAN (v0.2.14, performance): the repair loop's `detailed_route` is
+    an incremental route pass on the touched nets. It is only needed when the
+    realized main route actually HAS antenna violations. So we first run a cheap
+    READ-ONLY `check_antennas` directly on the main detailed_route (verified:
+    check_antennas reads the detailed routing directly — no global_route needed —
+    when signal routing exists). If it reports 0 net violations the design is
+    already antenna-clean and we SKIP the repair+incremental-reroute loop entirely
+    (the precheck's own ANT-0002/ANT-0001 0/0 are the shippable result).
     Net-violation count of 0 implies pin-violation count 0 (a net violation IS a net
     with a violating pin), so the net-count return value is a sufficient gate. The
-    skip path runs NO global_route, so it cannot disturb the main route's wires.
+    skip path runs NO reroute, so it cannot disturb the main route's wires.
     Only when violations remain (or the precheck cannot measure) do we pay the
-    proven repair sequence above."""
+    proven incremental repair loop above."""
     if not pdk.antenna_diode_cell:
         return ("puts \"ANTENNA_REPAIR_SKIPPED: no diode cell for this PDK; "
                 "antenna violations need manual diode ECO\"\n")
@@ -4772,19 +4779,45 @@ def _antenna_repair_tcl(pdk: "PdkConfig") -> str:
         "  # shippable result; no global_route ran, so the main route is untouched.\n"
         "  puts \"ANTENNA_ALREADY_CLEAN: 0 net violations, skipping repair+reroute\"\n"
         "} else {\n"
-        "  # Violations remain (or precheck could not measure) — pay the proven\n"
-        "  # sequence: fresh global_route (jumper insertion needs it) ->\n"
-        "  # repair_antennas -> detailed_route (realize) -> in-session check.\n"
-        "  if {[catch {global_route} _ra_gr]} { puts "
-        "\"REPAIR_ANTENNA_GR_NONFATAL: $_ra_gr\" }\n"
-        "  if {[catch {repair_antennas "
+        "  # Violations remain (or precheck could not measure). v1.3.46 —\n"
+        "  # INCREMENTAL repair->reroute->repair OUTER loop, with NO full\n"
+        "  # global_route. Two facts drive the exact shape:\n"
+        "  #   (a) repair_antennas in the `grt` module CANNOT itself call\n"
+        "  #       detailed_route; asking it to (`-iterations N>1`) trips\n"
+        "  #       GRT-0121 (\"repair_antennas can only be run once; re-route\n"
+        "  #       and repeat\"). So we drive ONE repair pass at a time\n"
+        "  #       (-iterations 1) and re-route between passes OURSELVES.\n"
+        "  #   (b) a FULL global_route here rebuilds the whole route graph and\n"
+        "  #       forces the following detailed_route to re-route EVERY net\n"
+        "  #       (~1900 nets on ibex -> timeout). We DROP it: repair_antennas\n"
+        "  #       marks ONLY the diode/jumper nets dirty, and detailed_route\n"
+        "  #       (hasInitialRouting) then re-routes ONLY those dirty nets\n"
+        "  #       (incremental). The loop converges the sha256/caravel\n"
+        "  #       residual and never full-reroutes.\n"
+        "  set _ant_cap 6\n"
+        "  for {set _i 0} {$_i < $_ant_cap} {incr _i} {\n"
+        "    set _nv -1\n"
+        "    if {[catch {set _nv [check_antennas]} _ac]} {\n"
+        "      puts \"ANTENNA_LOOP_CHECK_NONFATAL: $_ac\"\n"
+        "      break\n"
+        "    }\n"
+        "    if {$_nv == 0} {\n"
+        "      puts \"ANTENNA_LOOP_CONVERGED: iter=$_i\"\n"
+        "      break\n"
+        "    }\n"
+        "    # -iterations 1: ONE repair pass (no GRT-0121); diode nets marked dirty.\n"
+        "    if {[catch {repair_antennas "
         f"{pdk.antenna_diode_cell}"
-        " -iterations 5} _ra_err]} {\n"
-        "    puts \"REPAIR_ANTENNA_NONFATAL: $_ra_err\"\n"
-        "  } else {\n"
-        f"    puts \"REPAIR_ANTENNA_DONE: diode={pdk.antenna_diode_cell}\"\n"
-        "    if {[catch {detailed_route -verbose 0} _ra_dr]} { puts "
-        "\"REPAIR_ANTENNA_REROUTE_NONFATAL: $_ra_dr\" }\n"
+        " -iterations 1} _ra_err]} {\n"
+        "      puts \"REPAIR_ANTENNA_NONFATAL: $_ra_err\"\n"
+        "      break\n"
+        "    }\n"
+        f"    puts \"REPAIR_ANTENNA_DONE: diode={pdk.antenna_diode_cell} iter=$_i\"\n"
+        "    # INCREMENTAL reroute — re-routes ONLY the dirty nets, not the whole design.\n"
+        "    if {[catch {detailed_route -verbose 0} _ra_dr]} {\n"
+        "      puts \"REPAIR_ANTENNA_REROUTE_NONFATAL: $_ra_dr\"\n"
+        "      break\n"
+        "    }\n"
         "  }\n"
         "  # Authoritative in-session post-repair antenna check.\n"
         "  if {[catch {check_antennas} _ra_chk]} { puts "
@@ -4837,11 +4870,15 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str) -> str:
         "set _prs_rules \"\"\n"
         "if {$_prs_i > 0} {\n"
         "  set _prs_root [string range $_prs_tlef 0 [expr {$_prs_i - 1}]]\n"
+        "  # v1.3.46: the fork's newer image ships the captable under\n"
+        "  # libs.tech/librelane; the older image used libs.tech/openlane. Glob\n"
+        "  # BOTH (brace expansion) — lsort orders librelane before openlane so\n"
+        "  # [lindex $_prs_c 0] prefers librelane, falling back to openlane.\n"
         "  set _prs_c [lsort [glob -nocomplain "
-        "$_prs_root/libs.tech/openlane/rules.openrcx.*.nom.magic]]\n"
+        "$_prs_root/libs.tech/{librelane,openlane}/rules.openrcx.*.nom.magic]]\n"
         "  if {[llength $_prs_c] == 0} {\n"
         "    set _prs_c [lsort [glob -nocomplain "
-        "$_prs_root/libs.tech/openlane/rules.openrcx.*.nom]]\n"
+        "$_prs_root/libs.tech/{librelane,openlane}/rules.openrcx.*.nom]]\n"
         "  }\n"
         "  if {[llength $_prs_c] > 0} { set _prs_rules [lindex $_prs_c 0] }\n"
         "}\n"
@@ -10410,8 +10447,9 @@ def _emit_spef(project: Path, top: str, pdk: PdkConfig, container: str,
     # OpenRCX with "no extraction data" → RCX-0134 → empty SPEF). The prior code called
     # estimate_parasitics then write_spef, which is why it never produced a SPEF.
     #
-    # The captable is NOT missing: sky130A ships it at
-    #   <PDK>/libs.tech/openlane/rules.openrcx.sky130A.{min,nom,max}.magic
+    # The captable is NOT missing: sky130A ships it at (librelane-first, v1.3.46)
+    #   <PDK>/libs.tech/librelane/rules.openrcx.sky130A.{min,nom,max}.magic
+    #   (older image: <PDK>/libs.tech/openlane/rules.openrcx.sky130A.{min,nom,max}.magic)
     # (gf180 ships rules.openrcx.gf180mcuD.nom). The earlier "ENV-BLOCKED / no captable"
     # finding was a false negative — it was tested on a routing-less DEF (0 rc segments).
     # Verified working: spm routed DEF → 1370 rc segments, 330 nets, 1700 caps extracted.
@@ -10438,15 +10476,18 @@ if {{[catch {{set_wire_rc -signal -layer {mp}1}} _swr_sig]}} {{
 catch {{set_wire_rc -clock -layer {mp}5}}
 # --- Step 22.2: discover the OpenRCX captable for THIS PDK (chip/PDK-AGNOSTIC) ---
 # Derive the PDK root from the tech-LEF path (.../<PDK>/libs.ref/...), then glob the
-# OpenLane OpenRCX extraction-model file (rules.openrcx.<pdk>.nom.magic | .nom).
+# OpenRCX extraction-model file (rules.openrcx.<pdk>.nom.magic | .nom). v1.3.46: the
+# fork's newer image ships it under libs.tech/librelane, the older image under
+# libs.tech/openlane — glob BOTH (brace expansion); lsort orders librelane first so
+# [lindex $_c 0] prefers librelane, falling back to openlane (backward-compat).
 set _tlef {tech_lef_c}
 set _i [string first "/libs.ref/" $_tlef]
 set _rules ""
 if {{$_i > 0}} {{
   set _root [string range $_tlef 0 [expr {{$_i - 1}}]]
-  set _c [lsort [glob -nocomplain $_root/libs.tech/openlane/rules.openrcx.*.nom.magic]]
+  set _c [lsort [glob -nocomplain $_root/libs.tech/{{librelane,openlane}}/rules.openrcx.*.nom.magic]]
   if {{[llength $_c] == 0}} {{
-    set _c [lsort [glob -nocomplain $_root/libs.tech/openlane/rules.openrcx.*.nom]]
+    set _c [lsort [glob -nocomplain $_root/libs.tech/{{librelane,openlane}}/rules.openrcx.*.nom]]
   }}
   if {{[llength $_c] > 0}} {{ set _rules [lindex $_c 0] }}
 }}
@@ -10493,7 +10534,8 @@ exit
 # sign-off needs the process-corner RC spread: SETUP is checked at the SLOW /
 # max-RC corner (worst interconnect delay) and HOLD at the FAST / min-RC corner
 # (least interconnect delay = tightest hold). sky130A ships the full set at
-# libs.tech/openlane/rules.openrcx.<pdk>.{min,nom,max}.magic. LIVE-verified: one
+# libs.tech/librelane/rules.openrcx.<pdk>.{min,nom,max}.magic (v1.3.46; older image:
+# libs.tech/openlane/...). LIVE-verified: one
 # OpenROAD invocation extracts+writes all three (extract_parasitics re-populates
 # the parasitics DB per corner; define_process_corner is done once).
 _SPEF_CORNERS = ("min", "nom", "max")
@@ -10502,23 +10544,33 @@ _SPEF_CORNERS = ("min", "nom", "max")
 def _discover_openrcx_captables(pdk: PdkConfig, container: str
                                 ) -> Dict[str, str]:
     """Return {corner: container_captable_path} for the min/nom/max OpenRCX
-    extraction models this PDK ships (chip/PDK-AGNOSTIC — globbed from the PDK
-    root derived from the tech-LEF path). Corners with no captable are omitted;
-    an empty/one-entry result means the PDK is single-corner (honest fallback)."""
+    extraction models this PDK ships (chip/PDK/image-AGNOSTIC — globbed from the
+    PDK root derived from the tech-LEF path). Corners with no captable are omitted;
+    an empty/one-entry result means the PDK is single-corner (honest fallback).
+
+    v1.3.46 — the fork's newer image ships the captable under libs.tech/librelane;
+    the older image used libs.tech/openlane. We PREFER librelane and fall back to
+    openlane (backward-compat) — the first dir that yields a hit for a corner wins."""
     out: Dict[str, str] = {}
     tlef = str(pdk.tech_lef or "")
     i = tlef.find("/libs.ref/")
     if i <= 0:
         return out
     root_c = tlef[:i]
-    ol = f"{root_c}/libs.tech/openlane"
+    # librelane FIRST (newer image), openlane fallback (older image).
+    cap_dirs = (f"{root_c}/libs.tech/librelane",
+                f"{root_c}/libs.tech/openlane")
     for corner in _SPEF_CORNERS:
-        expr = (f"{shlex.quote(ol)}/rules.openrcx.*.{corner}.magic "
-                f"{shlex.quote(ol)}/rules.openrcx.*.{corner}")
-        # Prefer the .magic model; require the corner token in the name.
-        hits = _container_ls_paths(container, expr, f".{corner}")
-        magic = [h for h in hits if h.endswith(".magic")]
-        chosen = magic[0] if magic else (hits[0] if hits else None)
+        chosen: Optional[str] = None
+        for d in cap_dirs:
+            expr = (f"{shlex.quote(d)}/rules.openrcx.*.{corner}.magic "
+                    f"{shlex.quote(d)}/rules.openrcx.*.{corner}")
+            # Prefer the .magic model; require the corner token in the name.
+            hits = _container_ls_paths(container, expr, f".{corner}")
+            magic = [h for h in hits if h.endswith(".magic")]
+            chosen = magic[0] if magic else (hits[0] if hits else None)
+            if chosen:
+                break
         if chosen:
             out[corner] = chosen
     return out
@@ -11644,8 +11696,9 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
     if not def_file.is_file():
         return False
     # v0.2.14 — PREFER the in-session post-repair antenna check from the PnR run.
-    # The PnR session runs global_route -> repair_antennas (jumpers) ->
-    # detailed_route -> check_antennas; that in-session check is the ONLY faithful
+    # The PnR session runs an incremental repair loop (v1.3.46): repair_antennas
+    # -iterations 1 -> incremental detailed_route -> check_antennas, repeated until
+    # 0 net violations; that in-session check is the ONLY faithful
     # measurement, because a fresh read_def here cannot see the realized routing
     # (ANT-0008 forces a re-global_route that discards the antenna-fixing jumpers
     # and would mis-report the repaired design as still-violating). When the PnR log
@@ -11706,8 +11759,9 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
                     if routing_incomplete else "")
                 antenna_rpt.write_text(
                     "# OpenROAD antenna check (gate-oxide protection) — IN-SESSION\n"
-                    "# post-repair result captured during PnR (global_route ->\n"
-                    "# repair_antennas -> detailed_route -> check_antennas). This is\n"
+                    "# post-repair result captured during PnR (incremental loop:\n"
+                    "# repair_antennas -iterations 1 -> incremental detailed_route ->\n"
+                    "# check_antennas, until 0). This is\n"
                     "# the faithful measurement of the realized, antenna-repaired\n"
                     "# routing; a separate re-read cannot credit the jumpers\n"
                     "# (ANT-0008). Source: phase3/stage3/pnr/openroad.log.\n"
