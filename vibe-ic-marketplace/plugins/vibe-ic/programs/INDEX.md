@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 832
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 832)
+- **Total programs (excluding helpers / shims):** 833
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 833)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 823 |
+| `any` | 824 |
 
 ## Alphabetical listing
 
@@ -600,6 +600,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ppa_predict_aggregate` | any | v0.1.50 | PPA predict aggregator (Pattern-B → program). |
 | `practical_notes_specificity_check` | any | — | meta-gate for plugin docs. |
 | `pre_awake_silence_check` | any | — | M1: Verify that any protocol with a wake/sleep |
+| `prefix_adder_synth_recipe` | any | — | parallel-prefix adder structuring (QoR recipe). |
 | `profibus_protocol_synth` | any | — | PROFIBUS (Process Field Bus) protocol synth helper. |
 | `profinet_protocol_synth` | any | — | PROFINET IO (IEC 61158 Type 10 / IEC 61784-2 CPF 3) protocol synth helper. |
 | `project_outputs_in_tree_check` | any | — | project_outputs_in_tree_check.py |
@@ -904,7 +905,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (823 programs)
+### `any` (824 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1475,6 +1476,7 @@ _(no programs in this group)_
 - `ppa_predict_aggregate` — PPA predict aggregator (Pattern-B → program).  _[v0.1.50]_
 - `practical_notes_specificity_check` — meta-gate for plugin docs.
 - `pre_awake_silence_check` — M1: Verify that any protocol with a wake/sleep
+- `prefix_adder_synth_recipe` — parallel-prefix adder structuring (QoR recipe).
 - `profibus_protocol_synth` — PROFIBUS (Process Field Bus) protocol synth helper.
 - `profinet_protocol_synth` — PROFINET IO (IEC 61158 Type 10 / IEC 61784-2 CPF 3) protocol synth helper.
 - `project_outputs_in_tree_check` — project_outputs_in_tree_check.py

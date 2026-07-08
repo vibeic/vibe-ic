@@ -1662,9 +1662,19 @@ design -copy-from gate -as gate ${top_module}
 equiv_make gold gate equiv
 hierarchy -top equiv
 equiv_simple
-equiv_induct
+equiv_induct -seq 4
+equiv_induct -seq 16
+equiv_induct -seq 64
 equiv_status
 `;
+      // since v1.3.41: escalate equiv_induct -seq (4->16->64) instead of the
+      // yosys default -seq 4. Sequential equivalence between a design and a
+      // RETIMED / pipeline-rebalanced version needs induction depth >= the
+      // pipeline latency; at the shallow default those output $equiv cells stay
+      // UNPROVEN and the compare falsely FAILs. Escalation is sound (deeper
+      // k-induction proves only more genuinely-equivalent cells, never an
+      // inequivalent pair) and cheap (each pass only re-works still-unproven
+      // cells, so a shallow-closing compare pays ~nothing for the deeper passes).
       const ysFile = `/tmp/lvs_equiv_${Date.now()}.ys`;
       const writeR = dockerExec(`cat > ${ysFile} <<'__YS_EOF__'\n${ys}\n__YS_EOF__\n`, 10000);
       if (!writeR.success) {
