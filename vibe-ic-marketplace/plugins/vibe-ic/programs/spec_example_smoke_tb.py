@@ -882,6 +882,7 @@ def _run_indirection(prompt_text: str, rtl_text: str, top: str,
             out_vvp = tdp / "smoke.vvp"
             tb_path.write_text(tb_text)
             rtl_copy.write_text(rtl_text)
+            # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
             comp = subprocess.run(
                 ["iverilog", "-g2012", "-o", str(out_vvp),
                  str(tb_path), str(rtl_copy)],
@@ -991,6 +992,7 @@ def _run(prompt: Path, rtl: Path, top: Optional[str],
         out_vvp = tdp / "smoke.vvp"
         tb_path.write_text(tb_text)
         rtl_copy.write_text(rtl_text)
+        # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
         comp = subprocess.run(
             ["iverilog", "-g2012", "-o", str(out_vvp),
              str(tb_path), str(rtl_copy)],

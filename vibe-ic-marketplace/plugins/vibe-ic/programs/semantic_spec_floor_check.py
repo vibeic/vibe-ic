@@ -172,6 +172,7 @@ endmodule
         f.write_text(tb)
         binp = Path(td) / "g.out"
         try:
+            # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
             c = subprocess.run(["iverilog", "-g2012", "-o", str(binp), str(f)],
                                capture_output=True, text=True, timeout=timeout)
             if c.returncode != 0:
@@ -354,6 +355,7 @@ endmodule
         f = Path(td) / "m.sv"; f.write_text(tb)
         binp = Path(td) / "m.out"
         try:
+            # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
             c = subprocess.run(["iverilog", "-g2012", "-o", str(binp), str(f)],
                                capture_output=True, text=True, timeout=timeout)
             if c.returncode != 0:

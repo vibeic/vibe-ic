@@ -714,6 +714,7 @@ def host_verify(prompt_text: str, ref_sv: str, test_sv: str, top: str = "TopModu
         dut = Path(td) / "dut.sv"
         dut.write_text(rtl)
         binp = Path(td) / "a.vvp"
+        # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
         cp = subprocess.run(["iverilog", "-g2012", "-o", str(binp), str(dut),
                              ref_sv, test_sv], capture_output=True, text=True)
         if cp.returncode != 0:

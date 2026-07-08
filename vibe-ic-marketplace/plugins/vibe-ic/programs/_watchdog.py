@@ -34,10 +34,13 @@ DESIGN — this module knows NOTHING about docker or EDA. The caller INJECTS:
     subprocess.Popen). `proc` must expose `.wait(timeout)` and `.kill()`.
 The SUPERVISION LOGIC (the meter + the grace/ceiling loop) is fully general
 here, so a docker-exec'd in-container tool, a host subprocess, or any future
-caller reuse it unchanged. A sibling `loop_guard(...)` (while/poll/retry-loop
-face) will live here too — `ProgressMeter` + `supervise` are its shared core.
+caller reuse it unchanged. The sibling `loop_guard(...)` (while/poll/retry/
+convergence-loop face) lives here too and REUSES `ProgressMeter`: it is the
+SECOND face of the primitive — for IN-PROCESS loops (NOT sub-processes) it
+gives the same guarantee (a loop can NEVER spin forever) via a bounded
+`max_iter` hard cap plus a no-progress break.
 
-Public API (stable — an enforcement gate may build against it):
+Public API (stable — an enforcement gate builds against it):
   RC_STALLED, RC_CEILING            — distinct return codes for the two kills
   SupervisedResult(rc,out,err,outcome,elapsed_s)
   ProgressMeter(size_fn, log_fn, cpu_fn)      — signal fusion → monotonic score
@@ -46,6 +49,9 @@ Public API (stable — an enforcement gate may build against it):
   run_supervised(cmd, *, log_path=None, stall_grace_s=1800, poll_s=30,
                  hard_ceiling_s=86400, cpu_probe=None, kill=None,
                  popen_factory=None, env=None) -> SupervisedResult
+  loop_guard(name, *, max_iter, stall_iters=None, progress_fn=None,
+             clock=time.monotonic) -> LoopGuard   # in-process convergence loops
+  LoopGuard(...).reason ∈ {'converged','max_iter','stalled'}; .iterations
 
 chip-AGNOSTIC + tool-AGNOSTIC + pure: generic file/CPU counters only.
 """
@@ -307,3 +313,107 @@ def run_supervised(cmd, *, log_path=None,
             "ceiling", elapsed)
     return SupervisedResult(rc if rc is not None else 0, out, err,
                             "natural", elapsed)
+
+
+# ===========================================================================
+# loop_guard — the SECOND face of the primitive: for IN-PROCESS convergence /
+# poll / retry loops (NOT sub-processes). Same guarantee as `supervise`: the
+# loop can NEVER spin forever. Two independent stop conditions:
+#   • `max_iter`   — a HARD cap on iteration count (always present).
+#   • no-progress  — if the caller-supplied `progress_fn` value fails to IMPROVE
+#     for `stall_iters` consecutive iterations, stop (analogous to the stall
+#     grace of `supervise`, counted in ITERATIONS instead of seconds).
+# The caller `break`ing out early is recorded as 'converged'. `ProgressMeter`
+# (cpu_fn face → running MAX, strict-increase = improvement, None carried
+# forward) is REUSED as the monotonic progress tracker, so the same robust
+# fusion semantics apply. Pure + injectable-clock (only for `.elapsed_s`
+# observability) so tests run in milliseconds. chip/tool-AGNOSTIC.
+# ===========================================================================
+
+class LoopGuard:
+    """Bounded, no-progress-aware driver for an in-process loop.
+
+    Use as the loop's iterable:
+
+        g = loop_guard("eco_repair", max_iter=20, stall_iters=3,
+                       progress_fn=lambda: resolved_count)
+        for i in g:
+            ... one iteration of work ...
+            if all_done:
+                break                     # → g.reason == 'converged'
+        # else g.reason is 'max_iter' (hit the cap) or 'stalled' (no progress)
+
+    Guarantees the loop terminates: it yields at most `max_iter` times, and if
+    `progress_fn`/`stall_iters` are given it stops early once progress plateaus.
+    `progress_fn()` returns a number that should INCREASE as the loop makes
+    headway (e.g. #resolved, -error, iteration score); return None when a
+    reading is momentarily unavailable (carried forward, never mistaken for
+    progress). `reason` and `iterations` are readable after the loop."""
+
+    def __init__(self, name: str, *, max_iter: int,
+                 stall_iters: Optional[int] = None,
+                 progress_fn: Optional[Callable[[], Optional[float]]] = None,
+                 clock: Callable[[], float] = time.monotonic):
+        if max_iter is None or int(max_iter) < 1:
+            raise ValueError("loop_guard requires max_iter >= 1 (a hard cap)")
+        if stall_iters is not None and int(stall_iters) < 1:
+            raise ValueError("stall_iters must be >= 1 when given")
+        self.name = name
+        self.max_iter = int(max_iter)
+        self.stall_iters = None if stall_iters is None else int(stall_iters)
+        self._progress_fn = progress_fn
+        self._clock = clock
+        self.reason: Optional[str] = None      # 'converged'|'max_iter'|'stalled'
+        self.iterations = 0
+        self.elapsed_s = 0.0
+
+    def __iter__(self):
+        start = self._clock()
+        meter = (ProgressMeter(cpu_fn=self._progress_fn)
+                 if (self._progress_fn is not None and self.stall_iters)
+                 else None)
+        # Prime the baseline BEFORE the first iteration so improvement is
+        # measured against the loop's initial state.
+        last = meter.sample() if meter is not None else None
+        no_improve = 0
+        i = 0
+        try:
+            while i < self.max_iter:
+                self.iterations = i + 1
+                yield i
+                i += 1
+                if meter is not None:
+                    cur = meter.sample()
+                    if cur > last:               # strict increase = progress
+                        last = cur
+                        no_improve = 0
+                    else:
+                        no_improve += 1
+                        if no_improve >= self.stall_iters:
+                            self.reason = "stalled"
+                            return
+            self.reason = "max_iter"
+        except GeneratorExit:
+            # The caller broke out (or was GC'd) before hitting a stop
+            # condition → it decided the loop was satisfied.
+            if self.reason is None:
+                self.reason = "converged"
+            raise
+        finally:
+            self.elapsed_s = self._clock() - start
+
+    @property
+    def stopped_early(self) -> bool:
+        """True when the guard itself stopped the loop (cap or stall) rather
+        than the caller converging out."""
+        return self.reason in ("max_iter", "stalled")
+
+
+def loop_guard(name: str, *, max_iter: int,
+               stall_iters: Optional[int] = None,
+               progress_fn: Optional[Callable[[], Optional[float]]] = None,
+               clock: Callable[[], float] = time.monotonic) -> "LoopGuard":
+    """Factory for a :class:`LoopGuard` — see its docstring. Iterate it to drive
+    a bounded, no-progress-aware in-process loop; read ``.reason`` afterward."""
+    return LoopGuard(name, max_iter=max_iter, stall_iters=stall_iters,
+                     progress_fn=progress_fn, clock=clock)
