@@ -433,6 +433,55 @@ negative requires understanding what the exemption *intends* to wave through —
 the legitimate case are structurally identical except for the semantic property the reviewer
 must reason about; no regex derives it from the exemption code itself.)
 
+### § 4.06 — CONFIRMED-SYSTEMATIC tool blocker: fix the fork ROOT CAUSE after ≥ 2 designs, THEN a single clean re-run — do NOT grind every design into a known wall (BINDING)
+
+When a clean-room evaluation of a **NEW or FORKED tool distribution** surfaces a
+**SYSTEMATIC, root-cause-identified TOOL regression** — a tool / image bug, **NOT** a
+design / RTL issue (Category-D territory, § 4 row D) — that is confirmed on **≥ 2
+independent designs**, **STOP running additional designs into the same known blocker.**
+Characterize just enough to confirm it is systematic (≥ 2 designs) + capture the root
+cause + the per-design manifestation, then **FIX the tool root cause** (fork patch /
+image fix, routed to `tools/vibeic-eda/FIX_STATUS.md`), THEN do a **single clean re-run**
+of the affected designs. Do **NOT** exhaustively grind every remaining design into a
+known wall — that only manufactures predictable tool-induced FAILs and burns compute for
+zero new signal.
+
+> **Refines the standing cadence, does not replace it.** The general rule stays
+> "characterize fully → fix once → re-run once". This section narrows one word: for a
+> **CONFIRMED-SYSTEMATIC** Category-D / fork-fixable tool blocker, **"characterize fully"
+> means "≥ 2 independent designs confirming it is systematic", NOT "all designs".**
+
+Guard-rails so this never becomes an excuse to under-characterize or to over-fit:
+
+1. **The § 4.1 floor-proof still gates the Category-D label itself.** Before you may call
+   the blocker a tool-gap at all, the GOLDEN must PASS under a tool that supports the
+   missing feature; if the golden ALSO fails it was never a pure tool-gap — re-triage as
+   A/A2/B/E (dataset/RTL), and this section does NOT apply. This section governs only
+   *how many designs you drive into a blocker you have ALREADY confirmed is a systematic
+   tool root cause*.
+2. **The § 4 row-D / § 9 over-fit prohibition still binds.** You fix the tool
+   **CAPABILITY** (a real feature / real regression), never patch a tool to "pass
+   benchmark X". The fork dissolves the capability floor, not the honesty boundary.
+3. **"Systematic" needs a named root cause, not just two coincident FAILs.** Two designs
+   confirm systematic only when the SAME identified tool root cause (same warning / same
+   code path) produces both — otherwise keep characterizing.
+
+**Illustrative example (general — any tool, any systematic blocker; no chip / benchmark
+literal gates this):** a post-route antenna-repair residual first appears as a single
+deferred candidate on one design; the **IDENTICAL** tool warning — e.g. an antenna
+`repair_design` that performs only one repair iteration in a newer OpenROAD build —
+then re-hits on two further designs, a 3-design confirmation. The correct move is to
+**pause after the 2nd confirmation**, fix the fork tool root cause, then re-run the
+affected designs once — **not** to push the 4th, 5th, … design through the same warning
+just to "complete the sweep".
+
+**Disclosure (enforced by `compliance.yaml` → cross-check `X_known_blocker_needs_issue_ref`):**
+once a tool blocker is captured / backlogged as known-systematic, a RESULT.md that hits
+it MUST disclose it as a *known-systematic tool blocker* citing its tracking issue —
+e.g. `known-systematic tool blocker (#NNN) — full flow deferred pending tool fix` —
+**NOT** report it as a fresh design FAIL. Claiming "known-systematic" without an
+issue / backlog citation is an unsupported claim and FAILs the check.
+
 ### § 4.2 — program-first + AI-backup: the AI must TRY, and a general no-cheat recovery MUST be absorbed (user directive 2026-06-18, BINDING)
 
 > **Binding rule:** every benchmark fail case must be **DUAL-verified** — by a
