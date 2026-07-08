@@ -30,12 +30,24 @@ tools/                    Repo dev / CI utilities
 
 ## How to contribute
 
-### 1. File an issue first
+Vibe-IC's **public contribution model has two intake paths**, and both are
+valid — pick by whether you are carrying a fix. Either way the merged
+**repo-gatekeeper / maintainer** role reviews and **lands the change into the
+next version**; external contributors do **not** push to `main` themselves. (The
+maintainer's own in-house fixes land by direct push with every gate retained —
+that internal shortcut is *not* part of the external contribution path.)
 
-For anything more than a typo fix, please open an issue describing
-**what** is broken or missing and **why**. Use the issue templates
-under `.github/ISSUE_TEMPLATE/`. Wait for a maintainer to triage before
-sinking time into a PR — we'll save you rework.
+### 1. File a backlog first (report-only) — or open a PR (report-with-fix)
+
+- **Backlog (a report, no code).** Found a bug or a gap but not a fix? File a
+  **backlog item** describing **what** is broken or missing and **why**. It is
+  filed as a GitHub issue using the templates under `.github/ISSUE_TEMPLATE/`
+  (the plugin's `community-backlog-submit` skill can draft a chip-AGNOSTIC one
+  for you). A maintainer triages it into the plugin.
+- **PR (a proposed fix, with code).** Carrying a fix? Open a PR directly
+  (steps 2-7 below). For anything more than a typo, filing a linked backlog
+  first still saves you rework — wait for a maintainer to triage before sinking
+  time into a large PR.
 
 ### 2. Fork + branch
 

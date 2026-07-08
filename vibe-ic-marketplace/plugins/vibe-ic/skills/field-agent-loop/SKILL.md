@@ -27,6 +27,13 @@ harness: re-run the plugin at HEAD, ask a fresh LLM to compare
 source docs against generated output, and convert every
 systematic gap it finds into a structured backlog issue.
 
+> **Contribution-layer note.** The field-agent is a **Layer-1** intake role: it
+> **files a backlog** (a report — or hands the gatekeeper a candidate-patch
+> bundle) and audits landed fixes. It never edits the plugin/MCP and never pushes
+> to `main`. Direct-push is the maintainer-internal (**Layer-2**) landing method
+> for the gatekeeper's own fixes — not the field-agent's path. The maintainer
+> resolves every backlog into the next plugin version.
+
 The core-agent now **self-verifies and CLOSES** each issue it
 fixes (adding the `core-closed` label). The default terminal
 state is therefore **CLOSED**. The field-agent is the

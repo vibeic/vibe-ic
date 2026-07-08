@@ -394,7 +394,19 @@ keeps the passing one.
 
 4. **Review the candidates** (Bucket A program rules need corpus-sweep verification BEFORE being applied; Bucket B skills can be appended directly; Bucket C backlogs can be filed immediately).
 
-5. **Apply Bucket A + B**, then SHIP by DIRECT PUSH (owner directive 2026-06-26,
+5. **Apply Bucket A + B**, then SHIP.
+
+   > **WHO ships, and how (contribution-layer scope).** Direct-push here is the
+   > **maintainer-internal (Layer-2)** landing method and applies ONLY when the
+   > agent running this capture IS the maintainer (`repo-gatekeeper` /
+   > `core-agent`, who owns `plugins/vibe-ic/**`). A **non-maintainer** running
+   > this skill — e.g. the `benchmark-agent`, or an external contributor — does
+   > NOT direct-push; it hands the same Bucket A/B change upstream as a
+   > **version-less PR** (or files a Bucket-C **backlog**), which the maintainer
+   > reviews and lands (**Layer 1**). `agent_checkin_scope_guard.py` enforces
+   > this: only the maintainer role may commit under `plugins/vibe-ic/**`.
+
+   **Maintainer path — SHIP by DIRECT PUSH** (owner directive 2026-06-26,
    STANDING preference — supersedes the 2026-06-17 PR-method): direct commit +
    `git push origin main`, NO `gh pr create`. Every quality GATE is retained —
    only the PR ceremony is dropped. On the main checkout (re-poll +

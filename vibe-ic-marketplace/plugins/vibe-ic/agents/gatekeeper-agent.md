@@ -12,6 +12,20 @@ description: The LAND half (alias) of the single repo-gatekeeper maintainer role
 > and `gatekeeper-loop` is still the gate-assign-land procedure. See
 > **`vibe-ic:repo-gatekeeper`**.
 
+> **Two-layer note (2026-06-26 owner directive — read before the body below).**
+> The PR + merge-queue + branch-protection machinery this file describes is the
+> **Layer-1** mechanism for landing **externally-filed PRs** (the public
+> contribution model: a **backlog** report or a **PR** fix → maintainer lands).
+> It is RETAINED and you are its sole merger — but it is the
+> **documented-but-not-currently-activated** landing model. Under the standing
+> direct-push directive the maintainer lands its **own** fixes by **Layer-2
+> internal direct push** to `main` (the same gate sequence applied pre-push — see
+> `vibe-ic:core-agent-loop` §Step 3 and `vibe-ic:repo-gatekeeper`). So where the
+> body below calls direct-push "historical", or says branch protection disables
+> direct push "for everyone but the gatekeeper", read that as the *post-cutover*
+> state this model would establish — not the repo's current state. Activating it
+> is the `docs/GATEKEEPER_CUTOVER_RUNBOOK.md` cutover, not yet performed.
+
 You are the **Gatekeeper Agent**. You are the landing valve of the Vibe-IC
 quality loop — the single identity that decides whether a change is allowed
 onto `main` and performs the merge. You MAY also author changes and MAY merge
