@@ -41,10 +41,11 @@ Exit codes:
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
-from typing import List, Set, Tuple
+from typing import List, Optional, Set, Tuple
 
 
 WAIVER_KEY = "project_artifacts_external_storage_intentional"
@@ -76,6 +77,75 @@ _PATH_RE = re.compile(
 )
 
 
+# ── R7 (v1.3.50 fork-adapt) — a PINNED plugin worktree is a legit plugin source ──
+# When the whole flow runs with the vibe-ic plugin PINNED under a scratch/worktree
+# location (e.g. `/tmp/.../.claude/worktrees/<wt>/vibe-ic-marketplace/plugins/
+# vibe-ic/...` or `/tmp/.../wt-<ver>-*/vibe-ic-marketplace/plugins/vibe-ic/...`),
+# RESULT.md / reports/ legitimately cite the plugin's OWN program/config files by
+# their pinned absolute path. Because that path begins with a volatile prefix
+# (/tmp, /run, …), the raw scanner used to flag the plugin's own source as a
+# "live external-storage artifact" and HALT the flow — a FALSE POSITIVE that is
+# purely an artifact of WHERE the plugin was pinned, not a lost project OUTPUT.
+#
+# A path is a pinned-plugin SOURCE (not a volatile project output) iff ALL hold:
+#   (1) it contains the plugin-root anchor  .../vibe-ic-marketplace/plugins/vibe-ic/…
+#   (2) an ancestor above that anchor is a worktree/scratch dir — either the
+#       consecutive `.claude/worktrees` pair OR a `wt-*` dir (the pinning markers)
+#   (3) the resolved plugin root actually carries `.claude-plugin/plugin.json`
+#       (i.e. it REALLY is a plugin checkout, not just a coincidental substring).
+# All three together make it impossible for a genuine volatile project artifact
+# (a stray /tmp/<run>/design.gds) to be mis-exempted: (3) is the hard gate — no
+# plugin.json → not a plugin root → still FLAGGED. chip-AGNOSTIC (pure path/marker).
+_PLUGIN_ANCHOR = ("vibe-ic-marketplace", "plugins", "vibe-ic")
+
+
+def _pinned_plugin_root(path_str: str) -> Optional[Path]:
+    """If `path_str` resolves INTO a pinned plugin worktree, return the plugin
+    root Path (…/vibe-ic-marketplace/plugins/vibe-ic); else None.
+
+    Deterministic path-pattern + plugin-root marker check (R7). Returns None
+    unless the path both matches the pinned-worktree layout AND the resolved
+    plugin root carries `.claude-plugin/plugin.json` on disk.
+
+    §4.05 false-negative guard: the path is LEXICALLY normalized first
+    (os.path.normpath), so a `..`-escape such as
+    `.../vibe-ic/../../../out.gds` collapses to `/…/out.gds` — the plugin anchor
+    is destroyed and the genuine escaped output is (correctly) NOT exempted. An
+    in-tree `..` (`.../vibe-ic/programs/../x.py`) stays under the plugin root and
+    is still recognised. A belt-and-suspenders containment check re-confirms the
+    file lives under the resolved plugin root."""
+    parts = Path(os.path.normpath(path_str)).parts
+    # (1) locate the plugin-root anchor within the path.
+    anchor_idx = None
+    for i in range(len(parts) - 2):
+        if (parts[i], parts[i + 1], parts[i + 2]) == _PLUGIN_ANCHOR:
+            anchor_idx = i
+            break
+    if anchor_idx is None:
+        return None
+    ancestors = parts[:anchor_idx]
+    # (2) a worktree/scratch pinning marker must sit above the anchor.
+    pinned = any(a.startswith("wt-") for a in ancestors)
+    if not pinned:
+        for j, a in enumerate(ancestors):
+            if a == "worktrees" and j > 0 and ancestors[j - 1] == ".claude":
+                pinned = True
+                break
+    if not pinned:
+        return None
+    # (3) hard gate — the resolved root must be a REAL plugin checkout AND the
+    # normalized file must live UNDER it (containment; blocks any `..` escape).
+    root = Path(*parts[: anchor_idx + 3])
+    norm = Path(os.path.normpath(path_str))
+    try:
+        norm.relative_to(root)
+    except ValueError:
+        return None
+    if (root / ".claude-plugin" / "plugin.json").is_file():
+        return root
+    return None
+
+
 def _waiver_count(project: Path) -> int:
     p = project / "waivers.json"
     if not p.exists():
@@ -105,6 +175,8 @@ def main() -> int:
 
     # (file, path, exists_on_disk, from_log)
     findings: List[Tuple[str, str, bool, bool]] = []
+    # R7 — pinned plugin-source references (disclosed, non-blocking).
+    plugin_src: List[Tuple[str, str]] = []
     seen: Set[str] = set()
     for pat in _SCAN_GLOBS:
         for f in project.glob(pat):
@@ -120,6 +192,11 @@ def main() -> int:
                 if p in seen:
                     continue
                 seen.add(p)
+                # R7 — a pinned plugin worktree path is a legitimate plugin
+                # SOURCE, not a volatile project output. Disclose, never FAIL.
+                if _pinned_plugin_root(p) is not None:
+                    plugin_src.append((str(f.relative_to(project)), p))
+                    continue
                 exists = Path(p).exists()
                 findings.append(
                     (str(f.relative_to(project)), p, exists, from_log))
@@ -134,6 +211,21 @@ def main() -> int:
     # — where a real deliverable's location is declared — can FAIL this gate.
     ephemeral = [(f, p, e) for (f, p, e, lg) in findings if lg]
     nonlog = [(f, p, e) for (f, p, e, lg) in findings if not lg]
+
+    # R7 — a pinned plugin worktree path (…/vibe-ic-marketplace/plugins/vibe-ic/
+    # … under a `.claude/worktrees` or `wt-*` dir, with a real plugin.json) is a
+    # legitimate plugin SOURCE, not a volatile project OUTPUT. Disclosed, never
+    # FAILs — it is only cited because the plugin itself was pinned there.
+    if plugin_src:
+        print(f"[INFO] project_outputs_in_tree_check: "
+              f"{len(plugin_src)} pinned plugin-source reference(s) "
+              f"(vibe-ic plugin pinned under a worktree/scratch dir; a "
+              f"legitimate plugin source, NOT a volatile project output — "
+              f"non-blocking):")
+        for f, p in plugin_src[:5]:
+            print(f"  - {f} → {p}")
+        if len(plugin_src) > 5:
+            print(f"  ... +{len(plugin_src)-5} more")
 
     if ephemeral:
         print(f"[INFO] project_outputs_in_tree_check: "
