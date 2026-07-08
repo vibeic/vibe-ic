@@ -303,35 +303,53 @@ class TestAntennaReport:
 class TestAntennaRepairTcl:
     """Pin the silicon-critical antenna-repair sequence (v0.1.49 doctrine: the
     Tcl-block builder is a pure helper so a regression cannot silently revert it).
-    The chacha verification (85/112 -> 0/0) depended on every one of these."""
+
+    v1.3.46 — the sequence is now an INCREMENTAL repair->reroute->repair OUTER
+    loop with NO full `global_route`: `repair_antennas -iterations 1` (which does
+    not trip GRT-0121 the way -iterations N>1 does) marks only the diode nets
+    dirty, then `detailed_route` re-routes ONLY those dirty nets (incremental).
+    The loop re-checks and breaks on 0 net violations. Dropping the full
+    global_route both fixes the ibex ~1900-net reroute timeout and converges the
+    sha256/caravel residuals (proven in-session on sha256 at v1.3.46)."""
 
     def test_proven_sequence_present(self):
         tcl = runner._antenna_repair_tcl(_fake_pdk_with_diode())
-        # Inside the repair branch: global_route BEFORE repair_antennas (jumper
-        # insertion needs a fresh GRT graph) -> repair_antennas -> detailed_route
-        # (realize) -> the FINAL check_antennas (last occurrence).
-        # anchor on COMMAND forms (bare keywords also appear in comments)
-        i_gr = tcl.index("catch {global_route}")
+        # Repair branch: an OUTER loop of check -> repair_antennas -iterations 1 ->
+        # incremental detailed_route, then a FINAL authoritative check_antennas.
+        # anchor on COMMAND forms (bare keywords also appear in comments).
+        i_loop = tcl.index("for {set _i 0}")
         i_ra = tcl.index("repair_antennas sky130")
         i_dr = tcl.index("catch {detailed_route")
         i_ck_last = tcl.index("catch {check_antennas}")   # final post-repair check
-        assert i_gr < i_ra < i_dr < i_ck_last, "antenna repair sequence out of order"
+        assert i_loop < i_ra < i_dr < i_ck_last, "antenna repair sequence out of order"
+        assert "-iterations 1" in tcl          # ONE repair pass/turn (no GRT-0121)
+        assert "-iterations 5" not in tcl      # the pre-v1.3.46 GRT-0121 form is gone
         assert "ANTENNA_POSTROUTE_DONE" in tcl   # sentinel for the in-session read
+
+    def test_no_full_global_route_command(self):
+        # v1.3.46: a full global_route before the reroute forces a full re-route of
+        # EVERY net (ibex timeout). It is DROPPED — no `global_route` COMMAND (the
+        # comments may still explain why it is gone, hence command-line-only scan).
+        tcl = runner._antenna_repair_tcl(_fake_pdk_with_diode())
+        cmds = "\n".join(ln for ln in tcl.splitlines()
+                         if not ln.lstrip().startswith("#"))
+        assert "global_route" not in cmds
 
     def test_skip_when_clean_precheck(self):
         # SKIP-WHEN-CLEAN (perf): a cheap read-only check_antennas runs on the main
-        # route FIRST (before the repair global_route); if 0 net violations, the
-        # expensive repair+reroute is skipped, and that skip branch runs NO
-        # global_route (so it cannot disturb the main route's wires).
+        # route FIRST (before the repair loop); if 0 net violations, the expensive
+        # repair+incremental-reroute loop is skipped, and that skip branch runs NO
+        # reroute (so it cannot disturb the main route's wires).
         tcl = runner._antenna_repair_tcl(_fake_pdk_with_diode())
         i_precheck = tcl.index("set _ant_pre [check_antennas]")   # read-only precheck
-        i_gr = tcl.index("catch {global_route}")                  # repair-branch GR
-        assert i_precheck < i_gr, "precheck must run before the repair global_route"
+        i_loop = tcl.index("for {set _i 0}")                      # repair-branch loop
+        assert i_precheck < i_loop, "precheck must run before the repair loop"
         assert "ANTENNA_ALREADY_CLEAN" in tcl          # the skip marker
         assert "$_ant_pre == 0" in tcl                 # gate on 0 net violations
-        # the skip branch (if-body, before `} else {`) emits NO global_route command
+        # the skip branch (if-body, before `} else {`) emits NO repair/reroute command
         skip_seg = tcl[tcl.index("$_ant_pre == 0"):tcl.index("} else {")]
-        assert "catch {global_route}" not in skip_seg
+        assert "repair_antennas" not in skip_seg
+        assert "detailed_route" not in skip_seg
 
     def test_diode_cell_is_positional_not_flag(self):
         # The v0.2.14 bug: `repair_antenna -diode_cell <c>` (singular + flag) errors
@@ -348,9 +366,9 @@ class TestAntennaRepairTcl:
 
     def test_all_steps_nonfatal_guarded(self):
         # Antenna repair must never abort the PnR — every step is catch-guarded.
+        # (v1.3.46: global_route is dropped, so it is no longer in the set.)
         tcl = runner._antenna_repair_tcl(_fake_pdk_with_diode())
-        for cmd in ("global_route", "repair_antennas", "detailed_route",
-                    "check_antennas"):
+        for cmd in ("repair_antennas", "detailed_route", "check_antennas"):
             assert ("catch {" + cmd) in tcl, f"{cmd} not NONFATAL-guarded"
 
 
