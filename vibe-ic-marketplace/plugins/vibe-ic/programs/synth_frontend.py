@@ -393,3 +393,80 @@ def synth_frontend_should_retry_under_synthesis(
         f"($urandom/std::randomize in a dead `ifdef {sim_define} arm); the "
         f"IDENTICAL closure elaborates under -D{synth_define} (the synthesizable "
         f"`else passthrough) — retrying under -D{synth_define}")
+
+
+# ---------------------------------------------------------------------------
+# slang frontend load-prefix — probe built-in `read_slang` vs a loadable .so.
+#
+# THE BUG this centralises (v1.3.43): every SV synth recipe hardcoded
+# `yosys -p 'plugin -i slang; read_slang …'`. The vibeic-eda fork's yosys
+# (0.66+232) ships slang COMPILED-IN (built-in `read_slang`; there is NO
+# `slang.so`), so `plugin -i slang` ERRORs "Can't load module ./slang" and
+# ABORTS the ENTIRE `-p` script → synth silently falls back to `read_verilog`,
+# which can't prune a masked generate branch (OpenTitan AES: "aes_sbox_dom not
+# part of the design"). The fix: skip `plugin -i slang` when `read_slang` is
+# built-in, keep it for images that ship slang as a separate loadable module.
+# Single source of truth for all 3 call-sites (design_one_shot_runner +
+# phase3_one_shot_runner ×2). chip-AGNOSTIC: tool probe only, no chip literal.
+#
+# Probe = `yosys -p 'read_slang'` (NO plugin load, NO file). A BUILT-IN command
+# begins executing the SLANG frontend then errors on "no input files"; an
+# ABSENT command (image where slang is an unloaded .so, or genuinely missing)
+# yields "No such command: read_slang".
+SLANG_PROBE_CMD: str = (
+    "export PATH=/foss/tools/yosys/bin:/foss/tools/bin:$PATH && "
+    "yosys -p 'read_slang'"
+)
+
+
+def read_slang_is_builtin(probe_output: str) -> bool:
+    """True iff `read_slang` is available WITHOUT `plugin -i slang`.
+
+    Decided from the output of :data:`SLANG_PROBE_CMD`. The ONLY case that
+    REQUIRES the plugin load is an unloaded loadable module — which ALWAYS
+    prints the definitive "No such command: read_slang". So we key the load
+    on exactly that signal and DEFAULT TO BUILT-IN otherwise (fork-safe: the
+    shipped `vibeic-eda` image is built-in and produces positive evidence
+    like "Executing SLANG frontend" / "no input files"; an inconclusive or
+    empty probe must NOT emit a load that would abort the fork's -p script).
+    A `.so` image correctly shows "No such command" until the module is
+    loaded, so it still gets the load prefix."""
+    return "No such command: read_slang" not in (probe_output or "")
+
+
+def slang_load_prefix(probe_output: str) -> str:
+    """Return the `yosys -p` prefix that makes `read_slang` available.
+
+    ``""``               — `read_slang` is COMPILED-IN → emit NO plugin load
+                            (emitting one would ABORT the whole `-p` script on
+                            the fork image, the bug this fixes).
+    ``"plugin -i slang; "`` — `read_slang` is NOT built-in → load the module
+                            (image ships slang as a `.so`; if it is genuinely
+                            absent the load fails loudly and the caller's
+                            sv2v / read_verilog fallback engages, exactly as
+                            before this fix)."""
+    return "" if read_slang_is_builtin(probe_output) else "plugin -i slang; "
+
+
+# per-container memo so the probe runs once, not on every synth call.
+_SLANG_PREFIX_CACHE: dict = {}
+
+
+def resolve_slang_load_prefix(container: str, exec_fn) -> str:
+    """Probe `container` ONCE (memoised) and return the slang load-prefix.
+
+    ``exec_fn(container, cmd) -> (rc, out, err)`` is the caller's docker-exec
+    (both runners' ``_docker_exec`` match this signature). On any probe error
+    the fork-safe default is ``""`` (the shipped `vibeic-eda` image ships
+    slang built-in; skipping the load is correct there, and on a `.so` image a
+    wrongly-skipped load merely triggers the sv2v fallback — recoverable —
+    whereas a wrongly-emitted load ABORTS the script, the bug we are fixing)."""
+    if container in _SLANG_PREFIX_CACHE:
+        return _SLANG_PREFIX_CACHE[container]
+    try:
+        rc, out, err = exec_fn(container, SLANG_PROBE_CMD)
+        pref = slang_load_prefix((out or "") + "\n" + (err or ""))
+    except Exception:
+        pref = ""
+    _SLANG_PREFIX_CACHE[container] = pref
+    return pref

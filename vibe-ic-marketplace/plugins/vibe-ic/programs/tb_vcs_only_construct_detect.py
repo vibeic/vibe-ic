@@ -6,11 +6,24 @@ Extracted from open-benchmark-methodology § 4 Category D
 (tool-substitution gap). When a benchmark mandates Synopsys VCS or
 Cadence Xcelium and we substitute iverilog, a failing TB may be
 failing purely because it uses a commercial-only construct iverilog
-rejects — that is a FLOOR-D fail (tool-gap), not an agent-fixable
-RTL bug. This program scans the TB for the known iverilog-rejecting
+rejects — that is a Category-D tool-gap, not an agent-fixable RTL
+bug. This program scans the TB for the known iverilog-rejecting
 constructs and reports the offending line(s) as evidence, so the
-triage can auto-classify FLOOR-D instead of burning close-loop
-compute on an unwinnable case.
+triage can auto-classify Category-D instead of burning close-loop
+compute on it.
+
+FORK-FIXABLE, NOT a terminal FLOOR (v1.3.43 doctrine update): because
+we FORK the EDA tools (`vibeic/{iverilog,verilator,yosys,OpenROAD,…}`,
+shipped as `vibeic-eda`), a Category-D hit is an ENGINEERING BACKLOG
+ITEM against the fork — route it to `tools/vibeic-eda/FIX_STATUS.md`,
+NOT a permanent ceiling. Detecting the construct does NOT by itself
+prove the case is unwinnable: run the § 4.1 floor-proof (build+run the
+GOLDEN under a tool that supports the feature — Verilator `--timing`,
+forked iverilog). If the golden PASSES → confirmed genuine tool-gap →
+fork the capability (many are already closed, e.g. `break;`/`continue;`
+in the forked iverilog 14-devel). If the golden ALSO fails there → it
+was NEVER a pure tool-gap; re-triage as a dataset/RTL floor. NEVER
+patch a tool to "pass benchmark X" — fix the CAPABILITY, not the case.
 
 Detected constructs (the ones observed to reject under iverilog 12
 in the 2026-05-28 RTLLM sweep, e.g. ring_counter / asyn_fifo):
@@ -29,12 +42,14 @@ Usage
 Honest failure / semantics
 ==========================
   * FAIL (rc 1) means "VCS-only construct(s) FOUND" → the TB is a
-    Category-D tool-gap floor; the report lists the construct + line.
-    (FAIL here is the *detector firing*, i.e. evidence the case is
-    unwinnable blind under our substitution.)
+    Category-D tool-gap; the report lists the construct + line and
+    marks `disposition = FORK-FIXABLE` with a `fork_route` to
+    FIX_STATUS.md. (FAIL here is the *detector firing*, i.e. evidence
+    the case fails under our current substitution — the next step is
+    the § 4.1 floor-proof + fork the capability, NOT shelve a floor.)
   * PASS (rc 0) means "no known VCS-only construct found" → the TB
-    is NOT excused as FLOOR-D; a failing run must be triaged elsewhere
-    (real RTL bug / spec-ambiguity / etc.).
+    is NOT a Category-D tool-gap; a failing run must be triaged
+    elsewhere (real RTL bug / spec-ambiguity / etc.).
   * Missing / unreadable TB → rc 2 (usage error): cannot scan a file
     that isn't there; never a vacuous PASS.
 
@@ -128,9 +143,19 @@ def main(argv: list[str] | None = None) -> int:
         report["verdict"] = "FAIL"
         report["category"] = "D"
         report["reason"] = "vcs_only_construct_detected"
+        # v1.3.43: Category-D is FORK-FIXABLE (route to the vibeic-eda fork
+        # backlog), NOT a terminal floor. Detection is evidence for the § 4.1
+        # floor-proof, not a verdict of unwinnable.
+        report["disposition"] = "FORK-FIXABLE"
+        report["fork_route"] = "tools/vibeic-eda/FIX_STATUS.md"
+        report["floor_proof_required"] = (
+            "run the GOLDEN under a tool that supports the feature "
+            "(Verilator --timing / forked iverilog); PASS => genuine tool-gap "
+            "=> fork the capability; golden ALSO fails => re-triage dataset/RTL")
         _emit(a, report)
         for h in hits:
-            print(f"FLOOR-D: {h['label']} at line {h['line']}: {h['snippet']}",
+            print(f"CATEGORY-D (FORK-FIXABLE, route to FIX_STATUS.md): "
+                  f"{h['label']} at line {h['line']}: {h['snippet']}",
                   file=sys.stderr)
         return 1
     report["verdict"] = "PASS"

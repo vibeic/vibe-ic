@@ -2632,12 +2632,16 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
         # first so import resolution and the ANSI port-list types bind.
         slang_files = " ".join(
             _to_container_path(str(f), container) for f in rtl_files)
+        # v1.3.43 — skip `plugin -i slang` when read_slang is compiled-in
+        # (fork yosys has no slang.so; the load would ABORT the -p script).
+        # Shared single-source probe across all 3 SV synth call-sites.
+        _slang_prefix = _sf.resolve_slang_load_prefix(container, _docker_exec)
         slang_cmd = (
             f"{setup}cd {out_dir_c} && "
             f"export PATH={TOOLS_IN_CONTAINER}/yosys/bin:"
             f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
             f"yosys -p '{macro_lib_reads + ('; ' if macro_lib_reads else '')}"
-            f"plugin -i slang; "
+            f"{_slang_prefix}"
             f"read_slang {slang_files} --top {top} -DSIMULATION; "
             f"hierarchy -top {top}; proc; flatten; tribuf -logic; "
             f"{_arith_pre_clause}"
@@ -2708,12 +2712,15 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
         if _retry_syn:
             _syn_files = " ".join(
                 _to_container_path(str(f), container) for f in rtl_files)
+            # v1.3.43 — skip `plugin -i slang` when read_slang is compiled-in
+            # (shared single-source probe; the -DSYNTHESIS retry path).
+            _slang_prefix = _sf.resolve_slang_load_prefix(container, _docker_exec)
             _syn_cmd = (
                 f"{setup}cd {out_dir_c} && "
                 f"export PATH={TOOLS_IN_CONTAINER}/yosys/bin:"
                 f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
                 f"yosys -p '{macro_lib_reads + ('; ' if macro_lib_reads else '')}"
-                f"plugin -i slang; "
+                f"{_slang_prefix}"
                 f"read_slang {_syn_files} --top {top} -DSYNTHESIS; "
                 f"hierarchy -top {top}; proc; flatten; tribuf -logic; "
                 f"{_arith_pre_clause}"
