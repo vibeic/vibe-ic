@@ -77,8 +77,26 @@ V_RUN_ERROR = "RUN_ERROR"
 # ---------------------------------------------------------------------------
 # (1a) The Yosys equivalence recipe (PRODUCES the log the parser consumes)
 # ---------------------------------------------------------------------------
+# Auto-escalating sequential-induction depths for equiv_induct.
+#
+# Yosys `equiv_induct` defaults to `-seq 4` (4 induction frames). That is fine
+# for a same-topology netlist-vs-netlist compare, but it FALSELY reports UNPROVEN
+# when gold and gate are sequentially equivalent yet hold DIFFERENT internal state
+# — the classic retiming / pipeline-rebalancing case (e.g. "multiply then delay 8"
+# vs "delay 4, multiply, delay 4"): pure k-induction must span the full pipeline
+# latency, so depth 4 leaves every output $equiv cell unproven. Escalating the
+# depth is STRICTLY SAFE: k-induction is sound, so a deeper frame count proves
+# only MORE genuinely-equivalent cells and NEVER stamps an inequivalent pair
+# (empirically confirmed — a latency-7 vs latency-8 buggy pair stays fully
+# unproven at -seq 8). Each successive equiv_induct only re-attempts the cells
+# still unproven, so a design that closes at depth 4 pays ~nothing for the deeper
+# passes; only genuinely deep pipelines run the expensive frames.
+DEFAULT_SEQ_DEPTHS = (4, 16, 64)
+
+
 def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
-                             blackbox_v: Optional[List[str]] = None) -> str:
+                             blackbox_v: Optional[List[str]] = None,
+                             seq_depths: Optional[List[int]] = None) -> str:
     """Emit the Yosys .ys that structurally proves gold_v == gate_v.
 
     gold_v : golden reference netlist/RTL (e.g. <top>_synth.v or the RTL).
@@ -87,11 +105,21 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
     blackbox_v : PDK blackbox Verilog files (physical-only cells: tap/fill/
                  decap/diode/endcap have no Liberty model and would abort
                  hierarchy). Read as -lib so they become inert blackboxes.
+    seq_depths : ascending equiv_induct `-seq` depths to try in one script
+                 (default DEFAULT_SEQ_DEPTHS = (4, 16, 64)). The escalation makes
+                 the proof depth-adaptive so a retiming/pipeline-equivalent pair
+                 proves at the depth matching its latency instead of falsely
+                 failing at the shallow default. Sound: deeper only proves more.
 
     All paths are used verbatim (caller translates host->container). Same
     engine shape as `eda_lvs mode=yosys_equiv`."""
     bb = "\n".join(f"read_verilog -lib {q}" for q in (blackbox_v or []))
     bb_block = (bb + "\n") if bb else ""
+    depths = list(seq_depths) if seq_depths else list(DEFAULT_SEQ_DEPTHS)
+    # Ascending, de-duplicated, positive; each pass only works the still-unproven
+    # cells, so the shallow-first order keeps the common case cheap.
+    depths = sorted({int(d) for d in depths if int(d) > 0})
+    induct = "\n".join(f"equiv_induct -seq {d}" for d in depths) or "equiv_induct"
     return f"""# Vibe-IC post-layout LEC — gold(reference) vs gate(routed) structural equiv.
 read_liberty -lib {lib}
 {bb_block}read_verilog -sv {gold_v}
@@ -110,7 +138,7 @@ design -copy-from gate -as gate {top}
 equiv_make gold gate equiv
 hierarchy -top equiv
 equiv_simple
-equiv_induct
+{induct}
 equiv_status
 """
 

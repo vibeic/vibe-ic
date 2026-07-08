@@ -46,6 +46,32 @@ def test_recipe_no_blackbox_ok():
     assert "read_verilog -lib" not in ys  # none supplied
 
 
+# ---- auto-escalating sequential-induction depth ---------------------------
+def test_recipe_default_escalates_seq_depth():
+    # Default must emit escalating equiv_induct -seq passes (retiming/pipeline
+    # equivalence needs induction depth >= latency; the shallow yosys default
+    # -seq 4 falsely reports UNPROVEN). Escalation is sound: deeper only proves
+    # more genuinely-equivalent cells, never an inequivalent pair.
+    ys = L.build_yosys_equiv_script("gold.v", "gate.v", "lib.lib", "top")
+    for d in L.DEFAULT_SEQ_DEPTHS:
+        assert f"equiv_induct -seq {d}" in ys, d
+    # ascending order (shallow first keeps the common case cheap)
+    idxs = [ys.index(f"equiv_induct -seq {d}") for d in (4, 16, 64)]
+    assert idxs == sorted(idxs)
+    # deepest induct comes before the final status readout
+    assert ys.index("equiv_induct -seq 64") < ys.index("equiv_status")
+
+
+def test_recipe_custom_seq_depths_sorted_deduped():
+    ys = L.build_yosys_equiv_script(
+        "gold.v", "gate.v", "lib.lib", "top", seq_depths=[32, 8, 8, 0, -1])
+    # positives only, de-duplicated, ascending
+    assert "equiv_induct -seq 8" in ys and "equiv_induct -seq 32" in ys
+    assert "equiv_induct -seq 0" not in ys and "equiv_induct -seq -1" not in ys
+    assert ys.index("equiv_induct -seq 8") < ys.index("equiv_induct -seq 32")
+    assert ys.count("equiv_induct -seq 8") == 1  # de-duplicated
+
+
 # ---- parser ---------------------------------------------------------------
 def test_parse_clean_pass():
     log = ("Found 128 $equiv cells in equiv:\n"
