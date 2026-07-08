@@ -115,7 +115,7 @@ def test_grid_snap_success_swaps_in_snapped_gds(tmp_path, monkeypatch):
     monkeypatch.setattr(R._pl, "pnr_dir", lambda p: pnr)
     monkeypatch.setattr(R, "_to_container_path", lambda h, c: h)
 
-    def _fake_exec(container, cmd, timeout=600):
+    def _fake_exec(container, cmd, timeout=600, **_):
         # simulate klayout writing the snapped GDS
         (pnr / "top.snapped.gds").write_text("SNAPPED-ON-GRID")
         return 0, "GDS_GRID_SNAP_DONE grid_dbu=5 layers=12", ""
@@ -140,7 +140,7 @@ def test_grid_snap_nonfatal_when_exec_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(R._pl, "pnr_dir", lambda p: pnr)
     monkeypatch.setattr(R, "_to_container_path", lambda h, c: h)
     monkeypatch.setattr(R, "_docker_exec",
-                        lambda c, cmd, timeout=600: (1, "", "klayout boom"))
+                        lambda c, cmd, timeout=600, **_: (1, "", "klayout boom"))
 
     class _Pdk:
         tech_lef = "/nonexistent/sky130.tlef"

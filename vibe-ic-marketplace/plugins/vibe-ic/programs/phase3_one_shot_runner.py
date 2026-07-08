@@ -42,11 +42,13 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import _path_layout as _pl
+import _watchdog as _wd  # v1.3.47 — plugin-wide progress-stall supervision
 import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
 import lvs_verdict_tokens as _lvt  # #524 — shared netgen terminal-verdict tokens
 import lvs_netgen_setup_emit as _lvs_setup  # GAP-E2E-9 — power-net globalisation
@@ -275,18 +277,19 @@ class StepResult:
 _VERDICT_TIERS = ("PASS", "FAIL", "SKIP", "WAIVED", "ENV_UNAVAILABLE")
 
 
-def _docker_exec(container: str, cmd: str, timeout: int = 1800
-                 ) -> Tuple[int, str, str]:
-    """Run shell cmd inside a Docker container.
+def _docker_exec_raw(container: str, cmd: str, timeout: int = 1800
+                     ) -> Tuple[int, str, str]:
+    """Run shell cmd inside a Docker container with a SIMPLE container-side
+    wall-clock `timeout` (the pre-v1.3.47 behaviour). Used for SHORT, bounded
+    probes (`command -v`, `ls`, `ps`, `pkill`) where a fixed budget is correct
+    and for the internal watchdog kill/CPU probes (must not recurse through the
+    supervisor). Long, open-ended tool runs use `_docker_exec(..., marker=...)`
+    which routes through the progress-stall watchdog instead.
 
-    ORGANIC #570 — wraps cmd with a container-side `timeout` so long-running
-    processes (OpenROAD, Yosys) self-terminate when the step budget expires.
-    The container-side kill fires (timeout-5)s before the host
-    subprocess.TimeoutExpired, so orphan processes stop writing to partial
-    DEF/GDS files before the caller returns rc=124. Falls back gracefully if
-    the container has no `timeout` binary (exec path unchanged). Chip-AGNOSTIC.
-    """
-    # ORGANIC #570: container-side timeout kills orphan long-running tools.
+    ORGANIC #570 — the container-side kill fires (timeout-5)s before the host
+    subprocess.TimeoutExpired so orphan processes stop writing partial files
+    before the caller returns rc=124. Falls back gracefully if the container
+    has no `timeout` binary. Chip-AGNOSTIC."""
     _inner = max(1, timeout - 5)
     _wrapped = (
         f"if command -v timeout >/dev/null 2>&1; then "
@@ -297,12 +300,8 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800
 
     # v0.2.36 — on TimeoutExpired, subprocess may hand back partial
     # `stdout`/`stderr` as BYTES even though `text=True` was requested
-    # (the streams are killed mid-decode). A bytes partial then poisons
-    # every downstream `out + err` string concat (e.g. step_pnr's
-    # `_extract_overutil_pct(out + err)` → `TypeError: can't concat str
-    # to bytes`, which crashed the runner AFTER OpenROAD had already
-    # launched a long route). Normalize any bytes → str so all callers
-    # always receive `str`. Chip-AGNOSTIC: pure I/O-type hygiene.
+    # (the streams are killed mid-decode). Normalize any bytes → str so all
+    # callers always receive `str`. Chip-AGNOSTIC: pure I/O-type hygiene.
     def _as_text(v) -> str:
         if v is None:
             return ""
@@ -321,11 +320,74 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800
         return 127, "", f"COMMAND_NOT_FOUND: {e}"
 
 
+def _docker_exec(container: str, cmd: str, timeout: int = 1800, *,
+                 marker: Optional[str] = None,
+                 log_path: Optional[Path] = None,
+                 stall_grace_s: Optional[float] = None,
+                 hard_ceiling_s: Optional[float] = None,
+                 poll_s: Optional[float] = None) -> Tuple[int, str, str]:
+    """Run shell cmd inside a Docker container.
+
+    DISPATCH (v1.3.47):
+      • marker=None  → `_docker_exec_raw`: the simple bounded wall-clock
+        `timeout` — correct for short probes (unchanged behaviour, so the ~40
+        short call sites and their tests are untouched).
+      • marker set   → the PROGRESS-STALL WATCHDOG (`_watchdog.run_supervised`):
+        a long, open-ended tool run (PnR/route/CTS, klayout DRC, magic
+        ext2spice, netgen LVS). Killed ONLY when it makes NO forward progress
+        (captured output grew OR `log_path` grew OR in-container CPU advanced)
+        for `stall_grace_s` (default 30 min) — a still-progressing tool runs to
+        completion. `marker` is a token already present in the tool's argv (its
+        script/deck path): used BOTH to sum the tool's in-container CPU AND to
+        `pkill` the job tree. rc=_wd.RC_STALLED on a stall kill, 124 on the
+        24h+ pathological ceiling. chip/tool-AGNOSTIC.
+    """
+    if marker is None:
+        return _docker_exec_raw(container, cmd, timeout)
+
+    grace = _WATCHDOG_STALL_GRACE_S if stall_grace_s is None else stall_grace_s
+    ceiling = (_WATCHDOG_HARD_CEILING_S if hard_ceiling_s is None
+               else hard_ceiling_s)
+    poll = _WATCHDOG_POLL_S if poll_s is None else poll_s
+
+    # OUTER backstop only: wrap with a container-side `timeout` at the CEILING so
+    # the in-container tool self-terminates even if the host watchdog dies.
+    _ceil_inner = max(1, int(ceiling) - 5)
+    _wrapped = (
+        f"if command -v timeout >/dev/null 2>&1; then "
+        f"exec timeout --kill-after=5 {_ceil_inner} bash -lc {shlex.quote(cmd)}; "
+        f"else exec bash -lc {shlex.quote(cmd)}; fi"
+    )
+    full = ["docker", "exec", container, "bash", "-lc", _wrapped]
+
+    def _cpu_probe(_proc):
+        return _container_cpu_seconds(container, marker)
+
+    def _kill(_proc, reason):
+        q = shlex.quote(marker)
+        try:
+            _docker_exec_raw(container, f"pkill -TERM -f {q}", timeout=15)
+            time.sleep(min(_WATCHDOG_TERM_GRACE_S, 30))
+            _docker_exec_raw(container, f"pkill -KILL -f {q}", timeout=15)
+        except Exception:  # nosec — best-effort in-container kill
+            pass
+        try:
+            _proc.kill()
+        except Exception:  # nosec — release the host docker exec client
+            pass
+
+    res = _wd.run_supervised(
+        full, log_path=log_path, cpu_probe=_cpu_probe, kill=_kill,
+        stall_grace_s=grace, poll_s=poll, hard_ceiling_s=ceiling)
+    return res.rc, res.out, res.err
+
+
 def _docker_timeout_isolate(outputs: List[Path]) -> None:
-    """ORGANIC #570 — on step timeout (rc=124), rename partial output files
-    away from canonical paths so downstream steps do not read half-written
-    artifacts (DEF, GDS, netlist). Silently skips files that don't exist.
-    Chip-AGNOSTIC: pure filesystem rename, no tool or class specifics."""
+    """ORGANIC #570 — on a stall/ceiling kill (rc=_RC_STALLED / 124), rename
+    partial output files away from canonical paths so downstream steps do not
+    read half-written artifacts (DEF, GDS, netlist). Silently skips files that
+    don't exist. Chip-AGNOSTIC: pure filesystem rename, no tool or class
+    specifics. Wired into the stall-watchdog kill path (v1.3.47)."""
     for p in outputs:
         if p.is_file():
             partial = p.with_suffix(p.suffix + ".timeout.partial")
@@ -333,6 +395,117 @@ def _docker_timeout_isolate(outputs: List[Path]) -> None:
                 p.rename(partial)
             except OSError:
                 pass
+
+
+# ===========================================================================
+# v1.3.47 — PROGRESS-STALL WATCHDOG glue (owner directive: "timeout estimation
+# is not professional; have a general way to let a sub-process ALWAYS finish
+# its job"). The GENERAL supervision primitive lives in the shared, importable
+# `_watchdog.py` (ProgressMeter + supervise + run_supervised); this file keeps
+# ONLY the docker/EDA-specific glue injected into it: the in-container CPU probe
+# (`_container_cpu_seconds`, via `docker exec ps`) and the marker `pkill` kill
+# path (see `_docker_exec`). Long tool runs (`_docker_exec(..., marker=...)`)
+# are killed ONLY on NO forward progress for the grace window — a still-
+# progressing tool runs to completion; short probes keep the simple wall-clock
+# `_docker_exec_raw`.
+#
+# RECONCILE with run_status.py (#599): both use the SAME progress family
+# (output-growth + CPU-advance) → "STUCK" means the same thing to the passive
+# status probe and to this in-line killer. run_status is a passive OBSERVER
+# (shorter default silence window); the watchdog actively KILLS (longer, more
+# conservative grace). Neither uses a per-design duration budget.
+# ===========================================================================
+_WATCHDOG_POLL_S = _wd.DEFAULT_POLL_S              # 30s cheap probe cadence
+_WATCHDOG_STALL_GRACE_S = _wd.DEFAULT_STALL_GRACE_S  # 30 min no-progress ⇒ hung
+_WATCHDOG_HARD_CEILING_S = _wd.DEFAULT_HARD_CEILING_S  # 24h pathological backstop
+_WATCHDOG_TERM_GRACE_S = 10        # SIGTERM → SIGKILL escalation window
+# Distinct stall return code (from the shared module) — NOT the natural rc and
+# NOT the old rc=124 estimate-timeout, so downstream diagnostics /
+# _docker_timeout_isolate can tell a "hung, no forward progress" kill apart from
+# a real tool failure or the ceiling backstop (which keeps rc=124).
+_RC_STALLED = _wd.RC_STALLED
+# Multiplier turning the (retired) size-estimate into a HIGH ceiling FLOOR for
+# very large designs — the ceiling only ever rises above the 24h floor, never
+# below it, so it can never wall-clock-kill a live job.
+_WATCHDOG_CEILING_MULT = 6
+
+
+def _container_cpu_seconds(container: str, marker: Optional[str],
+                           timeout: int = 15) -> Optional[float]:
+    """Sum the CPU-seconds (utime+stime) of in-container processes whose argv
+    contains `marker`. Returns float seconds, or None when the signal is
+    unavailable (no marker, ps missing, nothing matched). tool-AGNOSTIC +
+    chip-AGNOSTIC: `marker` is a caller-supplied token already present in the
+    tool's command line (e.g. its script/deck path); no tool or chip literal.
+
+    `cputimes` (procps) reports cumulative CPU seconds as an integer; a busy
+    tool's total climbs monotonically, so a rising sum is unambiguous forward
+    progress even when the tool emits no output. Falls back to the portable
+    `cputime` (``[[DD-]HH:]MM:SS``) format when `cputimes` is unsupported."""
+    if not marker:
+        return None
+    # NB: use the RAW exec (never the supervised path) — this is a short bounded
+    # probe called BY the supervisor; routing it back through run_supervised
+    # would be heavyweight and self-referential.
+    rc, out, _ = _docker_exec_raw(container,
+                                  "ps -eo cputimes=,args= 2>/dev/null",
+                                  timeout=timeout)
+    if rc == 0 and out.strip():
+        total, found = 0.0, False
+        for line in out.splitlines():
+            parts = line.strip().split(None, 1)
+            if len(parts) < 2 or marker not in parts[1]:
+                continue
+            try:
+                total += float(parts[0])
+                found = True
+            except ValueError:
+                continue
+        if found:
+            return total
+    # Portable fallback: cputime = [[DD-]HH:]MM:SS
+    rc, out, _ = _docker_exec_raw(container,
+                                  "ps -eo cputime=,args= 2>/dev/null",
+                                  timeout=timeout)
+    if rc != 0 or not out.strip():
+        return None
+    total, found = 0.0, False
+    for line in out.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) < 2 or marker not in parts[1]:
+            continue
+        secs = _parse_cputime_hms(parts[0])
+        if secs is not None:
+            total += secs
+            found = True
+    return total if found else None
+
+
+def _parse_cputime_hms(tok: str) -> Optional[float]:
+    """Parse a ps `cputime` token ``[[DD-]HH:]MM:SS`` → total seconds."""
+    try:
+        days = 0
+        if "-" in tok:
+            d, tok = tok.split("-", 1)
+            days = int(d)
+        bits = [int(x) for x in tok.split(":")]
+        while len(bits) < 3:
+            bits.insert(0, 0)
+        h, m, s = bits[-3], bits[-2], bits[-1]
+        return days * 86400 + h * 3600 + m * 60 + s
+    except (ValueError, IndexError):
+        return None
+
+
+def _pnr_hard_ceiling_s(cells: int) -> int:
+    """v1.3.47 — derive the HIGH absolute backstop ceiling for the watchdog on
+    the PnR route call. The (now retired-as-kill-budget) size estimate
+    `_pnr_timeout_s(cells)` is repurposed ONLY as an input here: the ceiling is
+    the 24 h floor raised for pathologically large designs, and NEVER lowered
+    below it — so it can never wall-clock-kill a live job (the stall watchdog
+    is the kill decision). chip-AGNOSTIC: pure arithmetic."""
+    return max(_WATCHDOG_HARD_CEILING_S,
+               _pnr_timeout_s(cells) * _WATCHDOG_CEILING_MULT)
 
 
 def _tool_in_path(container: str, tool: str) -> bool:
@@ -2606,7 +2779,12 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
         f"clean; stat -liberty {liberty_c}; "
         f"write_verilog -noattr {netlist_c}'"
     )
-    rc, out, err = _docker_exec(container, yosys_cmd)
+    # v1.3.47 — yosys synth/ABC is a long, open-ended, CPU-bound run (ABC can
+    # exceed 30 min on a large design while progressing). Route it through the
+    # progress-stall watchdog: marker = the output netlist path (present in the
+    # `write_verilog {netlist_c}` arg of the yosys `-p` script), so a still-
+    # progressing synth is never killed; only a hang dies.
+    rc, out, err = _docker_exec(container, yosys_cmd, marker=netlist_c)
     log = out_dir / "synth.log"
     _rf_header = ("=== REFERENCE-FLOW QoR-KNOB INGEST "
                   "(input/reference_flow) ===\n"
@@ -2733,7 +2911,10 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
                 f"clean; stat -liberty {liberty_c}; "
                 f"write_verilog -noattr {netlist_c}'"
             )
-            _rcs, _outs, _errs = _docker_exec(container, _syn_cmd)
+            # v1.3.47 — watchdog (see the primary synth call): marker = the
+            # output netlist path in the yosys argv.
+            _rcs, _outs, _errs = _docker_exec(container, _syn_cmd,
+                                              marker=netlist_c)
             log.write_text(
                 log.read_text() +
                 f"\n\n=== -DSYNTHESIS RETRY (phase2 #668 port — {_retry_reason}) ===\n" +
@@ -2842,12 +3023,19 @@ _RE_GPL_UTILIZATION = re.compile(
 )
 _DEFAULT_TARGET_UTIL_PCT = 70.0
 _DEFAULT_DIE_MAX_UM = 2000
-# ORGANIC #548 (a) — size-adaptive PnR timeout.
-# Small designs (< _PNR_TIMEOUT_CELLS_THRESHOLD) stay at the default 3600s.
-# Above the threshold, add _PNR_TIMEOUT_S_PER_KCELLS seconds per thousand
-# additional cells, capped at _PNR_TIMEOUT_CAP_S (8h).  For reference,
-# a ~29k-cell RV32IMC core + 1500×1500µm die was timing out at the old
-# fixed 3600s; this formula gives 29k cells → ~7500s (2h).
+# ORGANIC #548 (a) — size-adaptive PnR timeout ESTIMATE.
+# RETIRED (v1.3.47) as the KILL decision: a size ESTIMATE that wall-clock-kills
+# a job is fundamentally wrong — it murders a healthy, still-progressing process
+# because the guess was too small (proven on ibex: the estimate gave 4395s but
+# detailed_route alone was actively routing for ~60 min → openroad killed
+# mid-antenna-loop while making CPU-bound progress). The kill decision is now
+# the PROGRESS-STALL WATCHDOG (_docker_exec marker path → _watchdog.run_
+# supervised): a still-progressing job is never killed. This estimate survives
+# ONLY as an input to
+# `_pnr_hard_ceiling_s`, which turns it into a HIGH backstop ceiling (never a
+# kill budget). Small designs (< _PNR_TIMEOUT_CELLS_THRESHOLD) → 3600s; above
+# the threshold +_PNR_TIMEOUT_S_PER_KCELLS per k cells, capped at
+# _PNR_TIMEOUT_CAP_S (8h). Chip-AGNOSTIC.
 _PNR_TIMEOUT_DEFAULT_S = 3600
 _PNR_TIMEOUT_CELLS_THRESHOLD = 10_000
 _PNR_TIMEOUT_S_PER_KCELLS = 200   # +200 s per 1 k cells above threshold
@@ -2867,7 +3055,9 @@ _PNR_CHECKPOINT_STAGES = [
 
 
 def _pnr_timeout_s(cells: int) -> int:
-    """ORGANIC #548 (a) — resolve the per-run PnR timeout from cell count.
+    """ORGANIC #548 (a) — size ESTIMATE from cell count. RETIRED (v1.3.47) as
+    the PnR kill budget; retained ONLY as an input to `_pnr_hard_ceiling_s`
+    (the watchdog's HIGH backstop ceiling). NEVER wall-clock-kills a live job.
 
     Returns _PNR_TIMEOUT_DEFAULT_S for small designs; scales linearly for
     larger ones, capped at _PNR_TIMEOUT_CAP_S.  Chip-AGNOSTIC: pure
@@ -5650,16 +5840,32 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     _downsized_once = False   # GAP-E2E-4 FOLLOW-UP — single conservative downsize
     _loosen_idx = 0           # ROUTING-FEEDBACK — current loosen-ladder rung
     _upsize_tries = 0         # over-util upsizes applied (bounded budget)
-    # ORGANIC #548 (a): scale PnR timeout with estimated cell count so
-    # 29k-cell + 1500×1500µm designs don't hit the old fixed 3600s cap.
-    _pnr_to = _pnr_timeout_s(placed_cells_est)
+    # v1.3.47 — the PnR route runs under the PROGRESS-STALL WATCHDOG, not a
+    # size ESTIMATE. A still-progressing OpenROAD (continuous CPU + periodic
+    # DRT/antenna iteration logs) is NEVER killed → it runs to completion,
+    # however long detailed_route legitimately takes (ibex: ~60 min route the
+    # old 4395s estimate murdered mid-antenna-loop). Only a genuinely hung run
+    # (no output + flat CPU for the stall grace) is killed (rc=_RC_STALLED);
+    # `_pnr_hard_ceiling_s` is a 24h+ pathological backstop, not a kill budget.
+    _pnr_ceiling = _pnr_hard_ceiling_s(placed_cells_est)
+    _pnr_logp = out_dir / "openroad.log"
     # Loop budget = initial run + over-util upsize (own counter) + a single
     # over-sparse downsize + the ROUTING-FEEDBACK loosen ladder. Each mutation
     # path is INDEPENDENTLY bounded (upsize by `_PNR_UPSIZE_RETRIES` + the die
     # cap; downsize by `_downsized_once`; loosen by `_loosen_idx`/ladder), so
     # the loop always terminates well within `_PNR_RETRY_ITERS`.
     for _retry_i in range(_PNR_RETRY_ITERS):
-        rc, out, err = _docker_exec(container, cmd, timeout=_pnr_to)
+        rc, out, err = _docker_exec(
+            container, cmd, marker=pnr_tcl_c, log_path=_pnr_logp,
+            hard_ceiling_s=_pnr_ceiling)
+        if rc in (_RC_STALLED, 124):
+            # Genuinely hung route (stall) or the 24h+ pathological ceiling —
+            # isolate the half-written final DEF so a downstream step never
+            # reads it (#570); per-stage checkpoint DEFs are preserved (only
+            # the final {top}.def is isolated). No resize retry is attempted on
+            # a hang → fall through to the rc!=0 FAIL gate.
+            _docker_timeout_isolate([out_dir / f"{top}.def"])
+            break
         actual_util = _extract_overutil_pct(out + err)
         if actual_util is None:
             # The route COMPLETED without an over-util placement error. Two
@@ -7002,7 +7208,16 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
         f"klayout -b -r {pdk.drc_deck} "
         f"-rd input={gds_c} -rd report={rpt_c} -rd top_cell={top}"
     )
-    rc, out, err = _docker_exec(container, cmd, timeout=3600)
+    # v1.3.47 — progress-stall watchdog (not a fixed 3600s kill). A large-GDS
+    # DRC that is still burning CPU / emitting progress is never killed; only a
+    # genuinely hung run dies. marker = the input GDS path (in klayout's argv).
+    rc, out, err = _docker_exec(container, cmd, marker=gds_c)
+    # v1.3.47 — a stall/ceiling kill must NOT be scored from a partial or stale
+    # report (a half-written RDB could parse as 0 violations = false DRC-clean).
+    if rc in (_RC_STALLED, 124):
+        return StepResult("drc", "FAIL", time.time() - t0,
+                          f"DRC killed as hung/ceiling (rc={rc}) — no sign-off "
+                          f"from a partial report; log_tail={(out+err)[-800:]}")
     if not rpt.is_file():
         return StepResult("drc", "FAIL", time.time() - t0,
                           f"rc={rc} log_tail={(out+err)[-1000:]}")
@@ -8063,7 +8278,10 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
             f"netgen -batch lvs \"{sp_c} {lay_top}\" \"{nl_c} {top}\" "
             f"{shlex.quote(netgen_setup)} {pa_rpt_c}")
         try:
-            _rc, out, err = _docker_exec(container, cmd, timeout=14400)
+            # v1.3.47 — progress-stall watchdog (not a fixed 14400s kill); a
+            # still-progressing netgen extraction/compare is never killed.
+            # marker = the layout netlist path (in netgen's argv).
+            _rc, out, err = _docker_exec(container, cmd, marker=nl_c)
         except Exception:  # nosec — netgen crash on the pre-attempt is non-fatal
             return None
         txt = pa_rpt.read_text(errors="replace") if pa_rpt.is_file() else ""
@@ -8171,14 +8389,36 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
         f"TOP={top} "
         f"SPICE_OUT={_to_container_path(str(spice_out), container)} && "
         f"cd {_to_container_path(str(ext_dir), container)} && ")
+    _magic_tcl_c = _to_container_path(str(tcl), container)
     cmd = (env_prefix +
            f"magic -dnull -noconsole -rcfile {shlex.quote(magicrc)} "
-           f"{_to_container_path(str(tcl), container)} 2>&1 | "
+           f"{_magic_tcl_c} 2>&1 | "
            f"tee {_to_container_path(str(ext_dir), container)}/ext2spice.log")
-    # #443 field observation (2026-06-06): a 599-cell design took ~40 min
-    # in ext2spice and longer in netgen — 30 min would kill legitimate
-    # runs on anything non-trivial. 4 h ceiling for both phases.
-    rc, out, err = _docker_exec(container, cmd, timeout=14400)
+    # #443 field observation (2026-06-06): a 599-cell design took ~40 min in
+    # ext2spice and longer in netgen. v1.3.47 — progress-stall watchdog (not a
+    # fixed 14400s kill): magic ext2spice on a big extraction that keeps
+    # writing ext2spice.log / burning CPU is never killed; only a hang dies.
+    # marker = the tcl path (in magic's argv); log_path = the tee'd log.
+    rc, out, err = _docker_exec(
+        container, cmd, marker=_magic_tcl_c,
+        log_path=ext_dir / "ext2spice.log")
+    # v1.3.47 — a stall/ceiling kill must NOT be scored from a PARTIAL extracted
+    # netlist (a half-written .spice would drive a false LVS verdict). Isolate
+    # the partial output and FAIL as extraction-incomplete.
+    if rc in (_RC_STALLED, 124):
+        _docker_timeout_isolate([spice_out])
+        verdict = _write_lvs_verdict(
+            project, "FAIL", "LVS_EXTRACTION_INCOMPLETE",
+            f"Magic ext2spice killed as hung/ceiling (rc={rc}); the partial "
+            f"extracted netlist was isolated (#443/#570).",
+            extras={"transcript_tail": (out + err)[-600:]})
+        return StepResult(
+            "lvs", "FAIL", time.time() - t0,
+            f"Magic ext2spice killed as hung/ceiling (rc={rc}) — no LVS from a "
+            f"partial extracted netlist; see extracted/ext2spice.log",
+            extras={"finding": "LVS_EXTRACTION_INCOMPLETE",
+                    "lvs_verdict": verdict,
+                    "transcript_tail": (out + err)[-600:]})
     if not spice_out.is_file() or spice_out.stat().st_size == 0:
         verdict = _write_lvs_verdict(
             project, "FAIL", "LVS_EXTRACTION_NO_NETLIST",
@@ -8317,7 +8557,10 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
         f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
         f"netgen -batch lvs \"{sp_c} {lay_top}\" \"{nl_c} {top}\" "
         f"{shlex.quote(netgen_setup)} {rpt_c}")
-    rc, out, err = _docker_exec(container, cmd, timeout=14400)  # see #443 note
+    # v1.3.47 — progress-stall watchdog (not a fixed 14400s kill; see #443
+    # note): a still-progressing netgen compare is never killed, only a hang.
+    # marker = the layout netlist path (in netgen's argv).
+    rc, out, err = _docker_exec(container, cmd, marker=nl_c)
     transcript = (out or "") + "\n" + (err or "")
     rpt_txt = lvs_rpt.read_text(errors="replace") if lvs_rpt.is_file() else ""
     blob = transcript + "\n" + rpt_txt
