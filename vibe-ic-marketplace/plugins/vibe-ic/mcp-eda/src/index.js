@@ -62,6 +62,11 @@ import {
 import {
   classifyNetgenVerdict, stdcellSpicePath, buildNetgenLvsTcl, resolveLayoutTop,
 } from "./lib/netgen_verdict.mjs";
+// v1.3.53 R9 — MCP-side port of phase3_one_shot_runner.py `_antenna_repair_tcl`
+// (the v1.3.46 incremental antenna repair->reroute loop). The MCP `eda_pnr`
+// SECONDARY PnR path emits its own OpenROAD Tcl and previously lacked this loop;
+// this closes that parity gap so both PnR paths behave identically.
+import { antennaRepairTcl } from "./lib/pnr_antenna.mjs";
 
 function _shellSingleQuotedHeredoc(content, sentinel) {
   // Run `<content>` through a `cat << 'SENTINEL' > target` block. The
@@ -410,6 +415,10 @@ function pdkConfig(pdk, customOpts) {
       metal_prefix: "Metal",
       vdd_pin: "VDD",
       vss_pin: "VSS",
+      // v1.3.53 R9 — antenna diode master from the PDK's own std-cell library
+      // (data, NOT logic): consumed by antennaRepairTcl for the incremental
+      // repair->reroute loop. Chip-AGNOSTIC — the Tcl-gen never hardcodes it.
+      antenna_diode_cell: "gf180mcu_fd_sc_mcu7t5v0__antenna",
     },
     sky130: {
       pdk_path: `${PDK_ROOT}/sky130A`,
@@ -420,6 +429,10 @@ function pdkConfig(pdk, customOpts) {
       metal_prefix: "met",
       vdd_pin: "VPWR",
       vss_pin: "VGND",
+      // v1.3.53 R9 — same sky130 diode master the phase3 runner uses
+      // (phase3_one_shot_runner.py PdkConfig.antenna_diode_cell), so both PnR
+      // paths repair antennas identically.
+      antenna_diode_cell: "sky130_fd_sc_hd__diode_2",
     },
   };
   if (pdk === "custom" && customOpts) {
@@ -437,6 +450,10 @@ function pdkConfig(pdk, customOpts) {
       metal_prefix: customOpts.custom_metal_prefix || "met",
       vdd_pin: customOpts.custom_vdd || "VDD",
       vss_pin: customOpts.custom_vss || "VSS",
+      // v1.3.53 R9 — a custom PDK has no known diode master; the caller may
+      // supply one (custom_antenna_diode). Absent -> null -> antennaRepairTcl
+      // SKIPS the repair loop (manual diode ECO) rather than inventing a cell.
+      antenna_diode_cell: customOpts.custom_antenna_diode || null,
       // Direct paths for custom PDK
       custom_lib: customOpts.custom_lib,
       custom_techlef: customOpts.custom_techlef,
@@ -1193,8 +1210,9 @@ server.tool(
     custom_vdd: z.string().optional().describe("VDD pin name (custom PDK)"),
     custom_vss: z.string().optional().describe("VSS pin name (custom PDK)"),
     custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for KeyFoundry MET1-6). Default 'met'."),
+    custom_antenna_diode: z.string().optional().describe("Antenna diode master cell for a custom PDK (v1.3.53). Enables the incremental antenna repair->reroute loop (enable_detailed_route only). gf180/sky130 supply their own; absent for a custom PDK -> antenna repair is SKIPPED (manual diode ECO)."),
   },
-  async ({ netlist, top_module, output_def, pdk, clock_port, clock_period_ns, utilization, density, enable_cts, enable_detailed_route, cts_buf_list, cts_root_buf, min_routing_layer, max_routing_layer, sdc_file, output_routed_v, pdn_stripe_layer, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix }) => {
+  async ({ netlist, top_module, output_def, pdk, clock_port, clock_period_ns, utilization, density, enable_cts, enable_detailed_route, cts_buf_list, cts_root_buf, min_routing_layer, max_routing_layer, sdc_file, output_routed_v, pdn_stripe_layer, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix, custom_antenna_diode }) => {
     try {
       assertSafePath(netlist, "netlist"); assertSafePath(output_def, "output_def");
       assertSafeIdent(top_module, "top_module"); optIdent(clock_port, "clock_port");
@@ -1206,8 +1224,9 @@ server.tool(
       optPath(custom_celllef, "custom_celllef"); optPath(custom_cellgds, "custom_cellgds");
       optToken(custom_site, "custom_site"); optIdent(custom_vdd, "custom_vdd");
       optIdent(custom_vss, "custom_vss"); optToken(custom_metal_prefix, "custom_metal_prefix");
+      optToken(custom_antenna_diode, "custom_antenna_diode");
     } catch (e) { return guardError(e); }
-    const cfg = pdkConfig(pdk, { custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix });
+    const cfg = pdkConfig(pdk, { custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix, custom_antenna_diode });
     const mp = cfg.metal_prefix;
 
     // v0.76: build optional snippets
@@ -1228,8 +1247,14 @@ estimate_parasitics -placement
 repair_design
 detailed_placement`
       : "";
+    // v1.3.53 R9 — after the main detailed_route, run the SAME incremental
+    // antenna repair->reroute->repair loop the phase3 runner ships (v1.3.46),
+    // BEFORE write_def so the routed DEF/netlist include the inserted diodes +
+    // dirty-net reroute. Diode master comes from the PDK config (cfg); a PDK
+    // with none SKIPS the loop (antennaRepairTcl emits ANTENNA_REPAIR_SKIPPED).
     const drSnippet = enable_detailed_route
       ? `detailed_route -output_drc ${output_def.replace(/\.def$/, "_drc.rpt")} -min_access_points 1 -droute_end_iter 5 -verbose 1
+${antennaRepairTcl(cfg.antenna_diode_cell)}
 write_def ${output_def.replace(/\.def$/, ".routed.def")}
 ${output_routed_v ? `write_verilog ${output_routed_v}` : ""}`
       : "";
