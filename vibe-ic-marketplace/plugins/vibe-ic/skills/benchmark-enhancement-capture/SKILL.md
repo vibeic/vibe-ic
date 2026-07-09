@@ -149,6 +149,26 @@ recovery in the right place.
 - **STRONGLY ENCOURAGED** at the end of any session where multiple
   AI-judgment fixes accumulated, even if individual fixes were small.
 
+## Prerequisite — a run with NO deliverable cannot be captured (v1.3.51)
+
+Capture presupposes a completed run with a written RESULT/deliverable. The
+launch-and-idle abandon bug defeats this: an agent that delegates a long run
+as a DETACHED background process and lets its turn END never gets re-invoked
+to write the deliverable — the runner's own outputs exist (final_summary /
+orchestrator verdict / GDS) but the synthesis RESULT is never written, so
+there is nothing to capture from and the whole convergence evaporates. Two
+binding rules make the run captureable:
+
+- **Keep your turn alive to completion.** Run the long tool through the
+  BLOCKING `_watchdog.run_supervised` (returns only on exit/stall; kills only
+  a non-progressing job), never a raw detached `timeout &` fire-and-forget.
+- **Self-verify the deliverable as your FINAL act**: run
+  `python3 programs/run_output_completeness_check.py <run_dir>` on your own
+  run_dir; only `COMPLETE` (exit 0) counts as done. **NO RESULT / empty
+  output = the run FAILED** — and the gate emits a Bucket-C capture candidate
+  on FAIL (`component=orchestration/deliverable-completeness`) so even the
+  *absence* of a deliverable is itself absorbed here, never silent.
+
 ## Program-First — the binding priority order (read BEFORE classifying)
 
 > **User directive (binding): "benchmark-enhancement-capture 一定要強調 Program-First."**

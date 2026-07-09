@@ -125,6 +125,7 @@ def _load_module(name: str):
 _vbm = _load_module("version_bump_monotonic_check")
 _gpg = _load_module("git_prohibition_guard")
 _acs = _load_module("agent_checkin_scope_guard")
+_roc = _load_module("run_output_completeness_check")
 
 
 # --------------------------------------------------------------------------
@@ -413,6 +414,47 @@ def blindness_gate(transcripts: Optional[str],
 
 
 # --------------------------------------------------------------------------
+# run_output_completeness — a benchmark/IC run under review whose RESULT.md is
+# EMPTY / MISSING / STUB must NOT land (v1.3.51). When the PR's change-set adds
+# or edits a run deliverable (a RESULT.md), self-check that run_dir's deliverable
+# is genuinely complete. A legitimately in-progress run (live process/lock) is
+# NON-blocking (distinct RUN_STILL_IN_PROGRESS state) so this never false-flags a
+# run that simply hasn't reached its write step. Imports the pure classifier —
+# no re-implementation.
+# --------------------------------------------------------------------------
+def run_deliverable_gate(repo: Path, files: List[str]) -> GateResult:
+    results = [f for f in files if Path(f).name == "RESULT.md"]
+    if not results:
+        return GateResult("run_output_completeness_check", -1,
+                          "skipped — no run deliverable (RESULT.md) in change-set")
+    checked = 0
+    failures: List[str] = []
+    in_progress = 0
+    for rel in results:
+        run_dir = (repo / rel).parent
+        if not run_dir.is_dir():
+            continue          # deleted in the PR — nothing to judge
+        checked += 1
+        rep = _roc.check(run_dir)
+        if rep.verdict == "FAIL":
+            failures.append(f"{rel}: {rep.state}")
+        elif rep.verdict == "IN_PROGRESS":
+            in_progress += 1
+    if checked == 0:
+        return GateResult("run_output_completeness_check", -1,
+                          "skipped — RESULT.md path(s) not present on disk")
+    if failures:
+        return GateResult("run_output_completeness_check", 1,
+                          f"{len(failures)} empty/missing/stub deliverable(s): "
+                          + "; ".join(failures[:6])
+                          + (" …" if len(failures) > 6 else ""))
+    note = f"{checked} run deliverable(s) complete"
+    if in_progress:
+        note += f" ({in_progress} in-progress — non-blocking)"
+    return GateResult("run_output_completeness_check", 0, note)
+
+
+# --------------------------------------------------------------------------
 # subprocess runner for the file-walking gates.
 # --------------------------------------------------------------------------
 def _run_program(prog: Path, args: List[str]) -> Tuple[int, str, str]:
@@ -488,6 +530,7 @@ def review(base: str, head: str, *,
     gates.append(plugin_audit_gate(plugin_root))
     gates.append(git_prohibition_gate(commit_cmds or []))
     gates.append(test_cadence_gate(pytest_cmd, cadence))
+    gates.append(run_deliverable_gate(repo, files))
     gates.append(blindness_gate(transcripts, dataset))
 
     # 5. verdict.

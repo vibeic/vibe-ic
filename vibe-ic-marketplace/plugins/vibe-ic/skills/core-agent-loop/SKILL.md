@@ -343,6 +343,29 @@ not after the field agent reopens.
    > the gate's NAME-identifier grounding + the smoke-test's stay-clean /
    > stay-effective assertions — is what's pinned here.
 
+#### Step 2.8 — keep your turn ALIVE to completion; self-verify the deliverable (v1.3.51)
+
+When any step of this loop delegates LONG work (a multi-minute/hour
+sub-process — the full test suite, a reproduce run, a benchmark/IC flow),
+**never launch it as a detached fire-and-forget and let your turn end.**
+The launch-and-idle abandon bug: a detached background process finishes,
+NOTHING re-invokes you, and your "then write the result" step never runs —
+the tool's own outputs exist but your deliverable is never written
+(observed 3× in one session). Two binding rules:
+
+- **Run it through the BLOCKING `_watchdog.run_supervised`** (returns ONLY
+  on process exit or stall; kills only a non-progressing job, never a live
+  one) — NOT a raw detached host `timeout &`. Your turn then stays alive
+  until the work genuinely completes, so your write step actually runs.
+- **Your FINAL act before reporting done is to WRITE + SELF-VERIFY the
+  deliverable** by running `python3 programs/run_output_completeness_check.py
+  <run_dir>` on your own run_dir. Exit 0 (`COMPLETE`) is the only "done";
+  exit 3 (`RUN_STILL_IN_PROGRESS`) means it isn't finished; any FAIL
+  (`COMPUTE_DONE_DELIVERABLE_MISSING` / `DELIVERABLE_STUB` /
+  `RUN_DIED_EARLY`) means you have not delivered. **NO RESULT / empty
+  output = the run FAILED** — never report an abandoned run as complete.
+  (The self-verify is the program-first gate; this line is the discipline.)
+
 ### Step 3 — ship by DIRECT PUSH (gatekeeper-gated)
 
 **BINDING (2026-06-26, owner directive — STANDING preference; supersedes the
