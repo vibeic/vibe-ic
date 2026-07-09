@@ -713,6 +713,20 @@ prompts genuinely name no module → correct `chip_top` degrade).
 
 ## § 6 — The benchmark RESULT.md must include
 
+> **The RESULT.md must EXIST and be NON-EMPTY / NON-STUB before anything else —
+> enforced by `programs/run_output_completeness_check.py <run_dir>`** (v1.3.51).
+> A benchmark run's FINAL act is to WRITE + SELF-VERIFY this deliverable: run the
+> gate on the run_dir; only `COMPLETE` (exit 0) is "done". The load-bearing
+> failure it catches is `COMPUTE_DONE_DELIVERABLE_MISSING` — the launch-and-idle
+> abandon bug where the scorer/runner finished (a `final_summary` / orchestrator
+> verdict / artifacts exist) but no RESULT.md was ever written because the agent
+> detached the run and its turn ended. **NO RESULT / empty output = the run
+> FAILED** — never publish a number without the RESULT that backs it. To keep
+> your turn alive to completion, drive the long run through the BLOCKING
+> `_watchdog.run_supervised` (returns only on exit/stall), not a detached
+> fire-and-forget. On FAIL the gate emits a capture candidate — feed it to
+> `enhancement_emit.py`.
+
 > **Section-presence enforced by `programs/benchmark_result_md_lint.py <RESULT.md>`** — fails the
 > run if any of the seven mandatory sections below is missing. (It checks *presence* of each
 > concept; the *quality* of the residual-triage content is still the § 4 LLM judgment.)

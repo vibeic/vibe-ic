@@ -55,6 +55,37 @@ import _runner_lock
 PROGRAMS_DIR = Path(__file__).resolve().parent
 
 
+def _deliverable_self_check(project: Path) -> Dict[str, Any]:
+    """v1.3.51 FINALIZE self-check: run run_output_completeness_check on this
+    run_dir so the run self-verifies its own deliverable before claiming done.
+
+    The runner writes the COMPUTE half (reports/final_summary.md + the
+    orchestrator verdict); the agent that DELEGATED this run owes the SYNTHESIS
+    half (RESULT.md) as its final act. At finalize the RESULT is normally not
+    written yet, so this is NON-GATING (it never changes the runner's exit code)
+    — but it records the completeness state in the summary JSON and prints a
+    STANDING reminder so a run that produces NO RESULT can never go silent: the
+    launch-and-idle abandon bug (COMPUTE_DONE_DELIVERABLE_MISSING) is visible in
+    the runner's own banner, and the agent's self-verify command is spelled out.
+    Best-effort: any import/probe error degrades to a skipped note, never crashes
+    the runner. chip-AGNOSTIC."""
+    try:
+        import run_output_completeness_check as _roc
+        rep = _roc.check(project)
+        return {
+            "state": rep.state,
+            "verdict": rep.verdict,
+            "deliverable": rep.deliverable,
+            "reason": rep.reason,
+            "self_verify_cmd": (
+                f"python3 {PROGRAMS_DIR / 'run_output_completeness_check.py'} "
+                f"{project}"),
+        }
+    except Exception as exc:  # nosec — a self-check hiccup must not fail the run
+        return {"state": "SELF_CHECK_UNAVAILABLE", "verdict": "SKIP",
+                "reason": f"deliverable self-check skipped: {exc}"}
+
+
 def _phase_runner(name: str) -> Path:
     return PROGRAMS_DIR / f"{name}_one_shot_runner.py"
 
@@ -388,15 +419,20 @@ def main() -> int:
         "advisories": advisories,   # v0.3.7 #505 — non-gating notes
         "verdict": overall,
     }
-    out = _pl.report_path(project, "vibe_ic_one_shot.json")
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
-
     # v1.6.32: emit canonical final_summary.md (best-effort). Note that
     # phase23_one_shot_runner ALSO calls this; vibe_ic delegates to
     # phase23 today, so the final summary will be regenerated here on
     # the chained-end. Idempotent — generator overwrites.
     fs_ok = _pl.emit_final_summary(project, PROGRAMS_DIR)
+
+    # v1.3.51: FINALIZE deliverable self-check — record the completeness state
+    # (non-gating) so a run that produces NO RESULT.md can never go silent.
+    dsc = _deliverable_self_check(project)
+    summary["deliverable_self_check"] = dsc
+
+    out = _pl.report_path(project, "vibe_ic_one_shot.json")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
 
     print(f"\n{'='*72}")
     print(f"=== vibe_ic_one_shot_runner DONE — {out}")
@@ -409,6 +445,13 @@ def main() -> int:
         print(f"  advisory          : {adv}")
     print(f"  duration          : {summary['duration_s']:.1f}s")
     print(f"  final summary     : {'reports/final_summary.md' if fs_ok else 'NOT generated'}")
+    if dsc.get("state") == "COMPLETE":
+        print("  deliverable       : RESULT.md present + non-empty (self-check PASS)")
+    elif dsc.get("state") not in ("SELF_CHECK_UNAVAILABLE",):
+        print(f"  deliverable       : NOT DELIVERED YET — {dsc.get('state')}. "
+              f"This run is NOT complete until RESULT.md is authored. "
+              f"NO RESULT / empty output = the run FAILED.")
+        print(f"  self-verify       : {dsc.get('self_verify_cmd')}")
     print(f"{'='*72}")
     lock.release()  # explicit; atexit/signal handlers are the backstop
     return 0 if overall in ("PASS", "PASS_WITH_WAIVERS") else 1
