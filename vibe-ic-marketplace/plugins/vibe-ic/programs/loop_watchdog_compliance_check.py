@@ -38,6 +38,31 @@ OFFENSE CLASSES
     and is NEVER flagged (the spec: "a bounded for over a fixed list stays a
     plain loop"); any long sub-process inside it is judged by class (a).
 
+(c) An OPAQUE SHELL-RUNNER that the gate cannot AST-inspect (v1.3.53 — SURFACES
+    the v1.3.48 documented boundary instead of missing it silently):
+      * a ``subprocess.{run,Popen,call,check_output,check_call}`` (or a
+        ``_docker_exec``) whose argv is ``bash``/``sh <script>.{sh,bash}`` — a
+        shell script the gate cannot read. The script may launch a long EDA
+        tool that then escapes supervision, so the shell-runner is FLAGGED
+        (the author must supervise it OR justify it).
+      * a ``bash -c "<inline>"`` one-liner is judged by CONTENT, not shape: it
+        is flagged ONLY when the inline command names a long tool (a
+        ``bash -c "openroad …"`` launches long work unsupervised); a plain
+        ``bash -c "echo …"`` with no long-tool token stays EXEMPT.
+    Compliant forms: route through ``_watchdog.run_supervised`` /
+    ``_docker_exec(..., marker=...)``, or add ``# watchdog-exempt: <reason>``
+    (used to justify a genuinely bounded existing shell-runner — the boundary
+    is now surfaced, not unbounded).
+
+    KNOWN RESIDUAL BOUNDARY (stated, not silent): an argv whose FIRST element is
+    built by a runtime string-concat under ``shell=True``
+    (``cmd = "bash " + script; subprocess.run(cmd, shell=True)``) cannot have its
+    argv[0] statically resolved, so neither class (a) (long tool) nor class (c)
+    (shell-runner) can inspect it — the same inherent limit for any dynamically
+    assembled command. This is an acknowledged edge, not a covered case; the
+    common shapes (a ``bash``/``sh`` LIST argv, or a single-literal string) ARE
+    covered.
+
 EXEMPTIONS (precise — the gate errs toward an allowlist, never toward flagging
 every loop):
   * ``argv[0]`` that is a benign short host command (docker, which, git, cat,
@@ -90,6 +115,34 @@ BENIGN_ARGV0 = frozenset({
 INFINITE_ITERS = frozenset({"count", "cycle", "repeat"})
 EXEMPT_TAG = "# watchdog-exempt:"
 
+# v1.3.53 — OFFENSE CLASS (c): opaque shell-runners. `bash`/`sh` as argv[0]
+# is a BENIGN short launcher, but `bash <script>.sh` runs an OPAQUE script the
+# gate cannot AST-inspect; a long EDA tool launched from inside the script
+# escapes classes (a)/(b) silently. We SURFACE that boundary.
+SHELL_RUNNERS = frozenset({"bash", "sh"})
+
+# In a shell STRING (a _docker_exec blob or a bare-string argv): a `bash|sh`
+# invocation, then any run of START-UP flags — LONG (`--norc`, `--noprofile`,
+# `--rcfile`, `--login`) or SHORT non-command (`-x`, `-l`) but NEVER a short
+# `-c` command bundle — then a `.sh`/`.bash` SCRIPT FILE token. Precise: a
+# `bash -c "echo …"` one-liner has no script-file token, so it does NOT match;
+# and a common CI wrapper like `bash --norc run.sh` IS caught (the long
+# start-up flag no longer masks the trailing script). NOTE: an option that
+# takes a SEPARATE argument in a shell string (`--rcfile r run.sh`) can still
+# leave a residual in the string form — the argv-LIST form (the common shape)
+# handles it robustly by scanning every token for a `.sh`/`.bash` literal.
+_SHELL_SCRIPT_RUNNER_RE = re.compile(
+    r'(?:^|[\s;&|/(=])(?:bash|sh)\s+'
+    r'(?:(?:--[A-Za-z][\w-]*|-(?![A-Za-z]*c\b)[A-Za-z]+)\s+)*'   # long OR short-non-c flags
+    r'(?P<script>[^\s;&|"\'`]+\.(?:sh|bash))(?=[\s;&|"\'`]|$)')
+
+# A SHORT `-c` command bundle in a shell string (single dash, letters include
+# c: `-c`/`-lc`/`-ic`). A LONG flag like `--norc`/`--rcfile` is NOT this (the
+# anchored `bash\s+-…c` requires the c-bundle to be the FIRST short flag). The
+# token after it is an inline command, which then gets the ordinary long-tool
+# scan — so `bash -c "openroad …"` is caught while `bash -c "echo …"` is not.
+_SHELL_DASHC_RE = re.compile(r'(?:^|[\s;&|/(=])(?:bash|sh)\s+-[A-Za-z]*c\b')
+
 # A long tool invoked as a COMMAND inside a shell string: the tool name
 # preceded by a start/separator and followed by whitespace / a flag / quote /
 # end. Precise enough that "install"/"status"/"sta_report"/"/magic/foo" do not
@@ -110,7 +163,7 @@ _SKIP_FILES = frozenset({"_watchdog.py", "loop_watchdog_compliance_check.py"})
 class Offense:
     file: str
     line: int
-    kind: str      # 'subprocess' | 'docker_exec' | 'while' | 'for'
+    kind: str      # 'subprocess'|'docker_exec'|'while'|'for'|'shell_runner'
     detail: str
 
 
@@ -283,6 +336,108 @@ def _has_marker(call: ast.Call) -> bool:
     return any(k.arg == "marker" for k in call.keywords)
 
 
+# ── class (c): opaque shell-runner detection (v1.3.53) ─────────────────────
+def _inline_longtool(cmd: Optional[str]) -> Optional[str]:
+    """If an inline `-c` command string names a long tool, return the tool
+    name; else None. (`bash -c "openroad …"` launches long work; `bash -c
+    "echo …"` does not.)"""
+    if not cmd:
+        return None
+    m = _CMD_TOOL_RE.search(_PRESENCE_PROBE_RE.sub(" ", cmd))
+    return m.group(1) if m else None
+
+
+def _shell_runner_offense(call: ast.Call, names: Dict[str, str],
+                          list_vars: Dict[str, List[Tuple[int, ast.AST]]],
+                          ) -> Optional[str]:
+    """Return an offense-detail string if a `bash`/`sh` launcher is an OPAQUE
+    script-runner (`bash <script>.sh|.bash`, literal OR a dynamic script path)
+    OR a `bash -c` inline that names a long tool; else None.
+
+    argv[0] must already be a bash/sh basename (checked by the caller). PRECISE:
+    a `bash -c "echo …"` one-liner with no long-tool token returns None."""
+    if not call.args:
+        return None
+    a0 = call.args[0]
+
+    # Resolve a LIST/TUPLE argv (literal, or a Name bound to one) → walk tokens.
+    elts: Optional[List[ast.AST]] = None
+    if isinstance(a0, (ast.List, ast.Tuple)) and a0.elts:
+        elts = list(a0.elts)
+    elif isinstance(a0, ast.Name) and a0.id in list_vars:
+        before = [n for (ln, n) in list_vars[a0.id] if ln <= call.lineno]
+        lst = before[-1] if before else list_vars[a0.id][0][1]
+        if isinstance(lst, (ast.List, ast.Tuple)) and lst.elts:
+            elts = list(lst.elts)
+
+    if elts is not None:
+        rest = elts[1:]                      # everything after argv[0] (bash/sh)
+        # step 1 — a SHORT `-c` command bundle (single dash, letters include c:
+        # `-c`/`-lc`/`-ic`) means the NEXT token is an INLINE command, not a
+        # script. A LONG flag (`--norc`/`--rcfile`/`--noprofile`) is NEVER the
+        # command flag (that is the FN-1 fix: `"c" in flag` used to mis-treat
+        # `--norc` as `-c`). Judge the inline by long-tool CONTENT.
+        for idx, e in enumerate(rest):
+            s = _const_str(e, names)
+            if (s is not None and s.startswith("-") and not s.startswith("--")
+                    and "c" in s[1:]):
+                nxt = rest[idx + 1] if idx + 1 < len(rest) else None
+                tool = _inline_longtool(
+                    _const_str(nxt, names) if nxt is not None else None)
+                if tool:
+                    return (f"bash -c inline launches long tool '{tool}' "
+                            f"unsupervised (route via run_supervised / "
+                            f"_docker_exec marker= or annotate)")
+                return None                  # benign inline one-liner → exempt
+        # step 2a — no `-c` inline: ANY literal `.sh`/`.bash` token is the
+        # opaque script (works past start-up flags AND option-args like
+        # `--rcfile r run.sh` that the string-regex form cannot skip).
+        for e in rest:
+            s = _const_str(e, names)
+            if s is not None and (s.endswith(".sh") or s.endswith(".bash")):
+                return (f"opaque shell-runner 'bash {s}' — the script the "
+                        f"gate cannot AST-inspect may launch a long tool "
+                        f"that escapes supervision")
+        # step 2b — a DYNAMIC positional token (non-const, e.g. str(runner)
+        # where runner=…/run.sh) is a script path the gate cannot read → flag.
+        for e in rest:
+            if _const_str(e, names) is None:
+                return ("opaque shell-runner 'bash <script>' (dynamic script "
+                        "path) — the script the gate cannot AST-inspect may "
+                        "launch a long tool that escapes supervision")
+        return None
+
+    # Bare-string / f-string command form.
+    full = _const_str(a0, names)
+    if full:
+        if _SHELL_DASHC_RE.search(full):
+            tool = _inline_longtool(full)
+            if tool:
+                return (f"bash -c inline launches long tool '{tool}' "
+                        f"unsupervised")
+            return None
+        m = _SHELL_SCRIPT_RUNNER_RE.search(full)
+        if m:
+            return (f"opaque shell-runner 'bash {m.group('script')}' — the "
+                    f"script the gate cannot AST-inspect may launch a long "
+                    f"tool that escapes supervision")
+    return None
+
+
+def _blob_shell_runner_offense(blob: str) -> Optional[str]:
+    """Return an offense-detail if a _docker_exec shell blob invokes a
+    `bash|sh <script>.sh|.bash` runner (the long tool hidden inside the script
+    escapes the ordinary blob long-tool scan). A `bash -c "<inline>"` is NOT
+    handled here — the blob's inline text is already covered by the caller's
+    direct long-tool scan of the same blob."""
+    m = _SHELL_SCRIPT_RUNNER_RE.search(blob)
+    if m:
+        return (f"opaque shell-runner 'bash {m.group('script')}' inside "
+                f"_docker_exec — the script's contents escape the long-tool "
+                f"scan; supervise it (marker=) or annotate")
+    return None
+
+
 # ── annotation lookup ──────────────────────────────────────────────────────
 def _has_tag(line: str) -> bool:
     if EXEMPT_TAG not in line:
@@ -424,6 +579,13 @@ def scan_file(path: Path) -> List[Offense]:
                             path.name, node.lineno, "subprocess",
                             f"direct host launch of long tool '{a0}' not under "
                             f"run_supervised (subprocess.*)"))
+                elif a0 in SHELL_RUNNERS:
+                    # class (c): opaque `bash <script>` runner / long-tool -c.
+                    detail = _shell_runner_offense(
+                        node, names, list_vars_for(fn))
+                    if detail and not _annotated(lines, node):
+                        offenses.append(Offense(
+                            path.name, node.lineno, "shell_runner", detail))
             elif _is_docker_exec(node):
                 if not _has_marker(node):
                     fn = enclosing(node.lineno)
@@ -446,6 +608,13 @@ def scan_file(path: Path) -> List[Offense]:
                             path.name, node.lineno, "docker_exec",
                             f"_docker_exec of long tool '{m.group(1)}' without "
                             f"marker= (not routed through the watchdog)"))
+                    elif not m:
+                        # class (c): a `bash <script>.sh` runner whose long tool
+                        # is HIDDEN inside the script escapes the blob scan.
+                        sr = _blob_shell_runner_offense(blob)
+                        if sr and not _annotated(lines, node):
+                            offenses.append(Offense(
+                                path.name, node.lineno, "shell_runner", sr))
 
         # ── class (b): loops ─────────────────────────────────────────────
         elif isinstance(node, ast.While):

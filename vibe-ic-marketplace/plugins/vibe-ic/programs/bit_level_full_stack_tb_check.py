@@ -270,6 +270,11 @@ def _maybe_run(sim_dir: Path) -> tuple[bool, str]:
     if not runner.exists():
         return False, f"--run requested but {runner} not found"
     try:
+        # watchdog-exempt: run.sh is a bounded functional-TB compile+sim
+        # (iverilog/vvp) capped by the explicit timeout=900 below, launched by
+        # the offline `--run` path of this gate, NOT an unbounded EDA-closure
+        # loop; the shell-runner boundary is surfaced (loop_watchdog class c)
+        # and justified here rather than left silent.
         r = subprocess.run(["bash", str(runner)], cwd=str(sim_dir),
                            capture_output=True, text=True, timeout=900)
     except Exception as e:
