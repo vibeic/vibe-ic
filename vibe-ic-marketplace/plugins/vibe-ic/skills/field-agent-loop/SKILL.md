@@ -627,6 +627,33 @@ host lessons for keeping that hand-off clean:
   background runner you spawn — wait or kill — before relinquishing a
   project.
 
+- **Keep your turn ALIVE to completion — never detach-and-idle (v1.3.51,
+  the launch-and-idle abandon bug).** The failure that motivated this
+  rule: an agent that delegates a multi-hour run launches the runner as a
+  DETACHED background process, then its turn ENDS (idle); when the
+  detached process later finishes, NOTHING re-invokes the agent, so its
+  "then write RESULT.md" step never runs. The runner's OWN outputs
+  (`reports/final_summary.md` / orchestrator `*_one_shot.json` verdict /
+  GDS/SPEF artifacts) exist, but the synthesis deliverable is never
+  written — observed 3× in one session (two idled pre-write; one flow
+  finished but RESULT.md had to be hand-authored from artifacts). Rules:
+  1. **Run the long tool through the BLOCKING `_watchdog.run_supervised`**
+     (returns ONLY on process exit or stall, killing only a
+     non-progressing job — never a live one), NOT a raw detached host
+     `timeout &`. That keeps your turn alive until the run genuinely
+     completes, so your write step actually runs.
+  2. **Your FINAL act before reporting done is to WRITE + SELF-VERIFY the
+     deliverable**: author `RESULT.md`, then run
+     `python3 programs/run_output_completeness_check.py <run_dir>` on your
+     OWN run_dir. Exit 0 (COMPLETE) is the only "done"; exit 3
+     (RUN_STILL_IN_PROGRESS) means the run isn't finished yet; any FAIL
+     (`COMPUTE_DONE_DELIVERABLE_MISSING` / `DELIVERABLE_STUB` /
+     `RUN_DIED_EARLY`) means you have not delivered.
+  3. **NO RESULT / empty output = the run FAILED.** A run that produced no
+     RESULT is not "mostly done" — it is a failed run; do not report it as
+     complete. The gate emits a capture candidate on FAIL — feed it to
+     `enhancement_emit.py` so the gap is absorbed, never silent.
+
 ## Cron-invocation template
 
 ```
