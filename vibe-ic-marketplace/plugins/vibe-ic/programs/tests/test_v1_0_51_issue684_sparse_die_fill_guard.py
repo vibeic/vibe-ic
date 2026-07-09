@@ -11,9 +11,16 @@ that tile EVERY empty placement row of the FIXED caravel die (2920×3520 µm
 wrapper (pad-frame / SoC harness) hit the same explosion.
 
 Fix: a RUNTIME sparse-die guard measures post-place CORE utilization from
-odb and SKIPs the full-die decap/fill (and floorplan-time tapcell) tiling
-when util < threshold (default 5%). OpenROAD 26Q1 `filler_placement` has
-no -area/region/density arg, so the runtime util gate is the portable bound.
+odb and SKIPs the full-die decap/fill tiling when util < threshold
+(default 5%). OpenROAD 26Q1 `filler_placement` has no -area/region/density
+arg, so the runtime util gate is the portable bound.
+
+R6 (v1.3.52) refinement — the well-tie `tapcell` is a CORRECTNESS op (it
+ties placed std-cell VPB/VNB body pins), NOT an optional density filler, so
+on a sparse die it is no longer skipped: the runner inserts taps then PRUNES
+the ones that fell over empty silicon (keeps the occupied bbox + a
+2x-distance latch-up margin). Placed-cell wells stay tied (power-aware LVS
+matches) with no empty-silicon flood. Only decap/fill remains skip-bounded.
 
 §4.05 negative (no-leak): a DENSE / normal-util design must STILL get the
 full fill + tapcell (util ≥ threshold → the unconditional call runs). The
@@ -21,7 +28,9 @@ full fill + tapcell (util ≥ threshold → the unconditional call runs). The
 in the ELSE branch — covered by test_dense_branch_still_fills /
 test_dense_branch_still_taps. (Live OpenROAD cross-check, recorded in the
 issue close comment: sparse placed.def → SKIPPED at 1.69%; a 75%-util
-synthetic design → FILLER_INSERTED.)
+synthetic design → FILLER_INSERTED. R6 live cross-check: caravel-scale
+2920x3520 die → 135239 taps inserted, 65 kept / 135174 pruned, u0/u3
+VPB→VPWR VNB→VGND tied.)
 """
 from __future__ import annotations
 
@@ -110,13 +119,21 @@ class _Pdk:
 
 
 def test_tapcell_guard_gates_full_die_tapcell_on_sparse():
+    # R6 (v1.3.52) — the sparse-die tapcell no longer SKIPS the well-tie; it
+    # inserts taps then bounds them to the occupied region (prune over empty
+    # silicon). The full-die-flood must still be gated by the util check
+    # (getCoreArea), and the 0-placed-cell edge case still emits a SKIP.
     block = r._build_tapcell_tcl(_Pdk())
-    assert "SPARSE_DIE_TAPCELL_SKIPPED" in block
     assert "getCoreArea" in block
-    # the tapcell call must be guarded (after the skip conditional).
-    skip_idx = block.index("SPARSE_DIE_TAPCELL_SKIPPED")
-    tap_idx = block.index("tapcell -distance")
-    assert skip_idx < tap_idx
+    # the sparse branch is entered on util < threshold and RUNS tapcell,
+    # then PRUNES the taps that fell over empty silicon.
+    assert "SPARSE_DIE_TAPCELL_BOUNDED" in block
+    assert "odb::dbInst_destroy" in block
+    # empty silicon is still not flooded: the prune keeps only the taps in
+    # the occupied bbox (+ latch-up margin).
+    assert "_tap_margin" in block
+    # the 0-placed-cell edge case still skips (nothing to tie).
+    assert "SPARSE_DIE_TAPCELL_SKIPPED" in block
 
 
 def test_dense_branch_still_taps():

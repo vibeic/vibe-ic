@@ -1391,18 +1391,39 @@ def _build_tapcell_tcl(pdk: "PdkConfig") -> str:
 
     #684 — sparse-die guard: `tapcell -distance` tiles well-tie cells
     across EVERY row of the die, so a large FIXED wrapper holding a tiny
-    design gets ~134K tap cells over empty silicon (latch-up ties are only
-    physically required where active wells/devices exist). The guard runs
-    at floorplan time (insts already exist in odb after link_design, even
-    before placement) and SKIPs the full-die tapcell tiling when CORE
-    utilization is below the sparse threshold; a dense / normal-util design
-    (§4.05 negative) inserts taps exactly as before. chip-AGNOSTIC.
+    design gets ~134K tap cells over empty silicon (measured live: a
+    500x500 um fixed die -> 3167 taps = 13.3k taps/mm^2 -> a 2920x3520 um
+    caravel die = ~136K taps over empty silicon). Tiling empty silicon that
+    carries no active wells adds no design value while inflating GDS /
+    extraction / LVS runtime+memory.
+
+    R6 (v1.3.52) — the ORIGINAL #684 guard SKIPPED the full-die tapcell
+    entirely on a sparse die. That was too aggressive: it also dropped the
+    well-tie for the std cells that ARE placed, leaving their VPB (nwell tie)
+    / VNB (psub tie) body pins physically disconnected. The power-aware LVS
+    (Step-31) then reports "disconnected node: VPB/VNB" on every placed cell
+    (`sky130_fd_sc_hd__conb_1`, `nor2_1`, `dfxtp_1`, ...) -> LVS_NETLISTS_DO_
+    NOT_MATCH, even though MAIN LVS matches uniquely and DRC=0. Those cells'
+    wells ARE tieable by the OSS flow (ordinary std cells, not a structural
+    macro-power floor), so the honest fix is to TIE them, not waive them.
+
+    The fix keeps #684's anti-flood intent but no longer sacrifices the
+    well-tie: on a sparse die we still run `tapcell` (which ties the placed
+    cells) and then PRUNE the taps that landed over empty silicon, keeping
+    only those within the occupied-instance bounding box (+ a 2x-distance
+    latch-up margin). Placed-cell VPB/VNB get tied (power-LVS matches) AND
+    the empty die is not flooded (live-validated: 3167 taps -> 9 kept). A
+    dense / normal-util design (§4.05 negative) inserts taps full-die exactly
+    as before. The 0-placed-cell edge case still emits SPARSE_DIE_TAPCELL_
+    SKIPPED (no wells to tie). chip-AGNOSTIC: no chip / SKU / IC literals,
+    only odb geometry + the PDK's own tapcell master.
     """
     if not pdk.tapcell_master:
         return ("puts \"TAPCELL_SKIPPED: no tapcell_master configured "
                 "for this PDK; latch-up risk if not handled "
                 "out-of-band\"\n")
     thr = _sparse_die_fill_threshold_pct()
+    tm = pdk.tapcell_master
     _tap_run = (
         f"if {{[catch {{tapcell -distance {pdk.tapcell_distance_um} "
         f"-tapcell_master {pdk.tapcell_master}}} _tap_err]}} {{\n"
@@ -1412,8 +1433,10 @@ def _build_tapcell_tcl(pdk: "PdkConfig") -> str:
         f"distance={pdk.tapcell_distance_um}um\"\n"
         f"}}\n")
     return (
-        "# === #684 sparse-die guard for tapcell (see helper rationale) ===\n"
+        "# === #684 sparse-die guard for tapcell + R6 bounded well-tie ===\n"
         "set _tap_util NA\n"
+        "set _tap_minx 0; set _tap_miny 0; set _tap_maxx 0; set _tap_maxy 0\n"
+        "set _tap_ncore 0\n"
         "if {[catch {\n"
         "  set _tblk [ord::get_db_block]\n"
         "  set _tcb [$_tblk getCoreArea]\n"
@@ -1421,22 +1444,78 @@ def _build_tapcell_tcl(pdk: "PdkConfig") -> str:
         "  if {[catch {set _tch [$_tcb dy]}]} { set _tch [$_tcb getDY] }\n"
         "  set _tcoreA [expr {double($_tcw) * double($_tch)}]\n"
         "  set _tocc 0.0\n"
+        "  set _bminx 1000000000000; set _bminy 1000000000000\n"
+        "  set _bmaxx -1000000000000; set _bmaxy -1000000000000\n"
         "  foreach _ti [$_tblk getInsts] {\n"
         "    set _tm [$_ti getMaster]\n"
         "    if {[string match \"CORE*\" [$_tm getType]]} {\n"
         "      set _tocc [expr {$_tocc + double([$_tm getWidth]) * "
         "double([$_tm getHeight])}]\n"
+        "      incr _tap_ncore\n"
+        "      set _tbb [$_ti getBBox]\n"
+        "      if {[$_tbb xMin] < $_bminx} { set _bminx [$_tbb xMin] }\n"
+        "      if {[$_tbb yMin] < $_bminy} { set _bminy [$_tbb yMin] }\n"
+        "      if {[$_tbb xMax] > $_bmaxx} { set _bmaxx [$_tbb xMax] }\n"
+        "      if {[$_tbb yMax] > $_bmaxy} { set _bmaxy [$_tbb yMax] }\n"
         "    }\n"
         "  }\n"
         "  if {$_tcoreA > 0} { set _tap_util [expr {100.0 * $_tocc / "
         "$_tcoreA}] }\n"
+        "  if {$_tap_ncore > 0} { set _tap_minx $_bminx; set _tap_miny "
+        "$_bminy; set _tap_maxx $_bmaxx; set _tap_maxy $_bmaxy }\n"
         "} _tap_m_err]} {\n"
         "  puts \"TAPCELL_MEASURE_NONFATAL: $_tap_m_err\"\n"
         "}\n"
         f"if {{$_tap_util ne \"NA\" && $_tap_util < {thr}}} {{\n"
-        "  puts \"SPARSE_DIE_TAPCELL_SKIPPED: core_util=$_tap_util% < "
-        f"{thr}% — full-die tapcell tiling bounded on an empty fixed "
-        "wrapper (latch-up ties only required where active wells exist).\"\n"
+        "  # R6 — sparse die: still tie the PLACED cells' wells, but bound\n"
+        "  # the taps to the occupied region so empty silicon is not flooded\n"
+        "  # (#684 intent). Insert taps, then prune the ones that landed over\n"
+        "  # empty silicon (keep occupied bbox + 2x-distance latch-up margin).\n"
+        "  if {$_tap_ncore > 0 && $_tap_maxx >= $_tap_minx} {\n"
+        "    set _tblk [ord::get_db_block]\n"
+        f"{_tap_run}"
+        "    # prune the empty-silicon taps; FAIL-SAFE: if the odb prune\n"
+        "    # errors (API drift), RETAIN the full-die well-tie taps (wells\n"
+        "    # stay tied — the correct direction — only the bloat-reduction\n"
+        "    # is lost) rather than aborting the PnR.\n"
+        "    if {[catch {\n"
+        "      set _tap_margin [expr {int(2.0 * "
+        + f"{pdk.tapcell_distance_um}"
+        + " * [[ord::get_db_tech] getDbUnitsPerMicron])}]\n"
+        "      set _tap_kill {}\n"
+        "      foreach _ti [$_tblk getInsts] {\n"
+        "        if {[[$_ti getMaster] getName] ne \"" + tm
+        + "\"} { continue }\n"
+        "        set _tbb [$_ti getBBox]\n"
+        "        set _tcx [expr {([$_tbb xMin] + [$_tbb xMax]) / 2}]\n"
+        "        set _tcy [expr {([$_tbb yMin] + [$_tbb yMax]) / 2}]\n"
+        "        if {$_tcx < ($_tap_minx - $_tap_margin) || $_tcx > "
+        "($_tap_maxx + $_tap_margin) || $_tcy < ($_tap_miny - $_tap_margin) "
+        "|| $_tcy > ($_tap_maxy + $_tap_margin)} {\n"
+        "          lappend _tap_kill $_ti\n"
+        "        }\n"
+        "      }\n"
+        "      set _tap_pruned 0\n"
+        "      foreach _ti $_tap_kill { odb::dbInst_destroy $_ti; incr "
+        "_tap_pruned }\n"
+        "      set _tap_kept 0\n"
+        "      foreach _ti [$_tblk getInsts] { if {[[$_ti getMaster] getName] "
+        "eq \"" + tm + "\"} { incr _tap_kept } }\n"
+        "      puts \"SPARSE_DIE_TAPCELL_BOUNDED: core_util=$_tap_util% < "
+        + f"{thr}"
+        + "% — well-tie taps kept in occupied region (kept=$_tap_kept) and "
+        "pruned over empty silicon (pruned=$_tap_pruned); placed-cell "
+        "VPB/VNB tied (R6).\"\n"
+        "    } _tap_prune_err]} {\n"
+        "      puts \"TAPCELL_PRUNE_NONFATAL: $_tap_prune_err — full-die "
+        "well-tie taps retained (placed-cell VPB/VNB tied; empty-silicon "
+        "prune skipped).\"\n"
+        "    }\n"
+        "  } else {\n"
+        "    puts \"SPARSE_DIE_TAPCELL_SKIPPED: core_util=$_tap_util% < "
+        + f"{thr}"
+        + "% — no placed core cells on a sparse die; no wells to tie.\"\n"
+        "  }\n"
         "} else {\n"
         f"{_tap_run}"
         "}\n")
@@ -1551,27 +1630,48 @@ def _sparse_die_fill_threshold_pct() -> float:
 # metal-fill substance) can VACUOUS-PASS the very operation the runner
 # correctly skipped — instead of FAILing ZERO_TAPS / FILL_NO_SUBSTANCE.
 _SPARSE_TAP_MARK = "SPARSE_DIE_TAPCELL_SKIPPED"
+_SPARSE_TAP_BOUNDED_MARK = "SPARSE_DIE_TAPCELL_BOUNDED"
 _SPARSE_FILL_MARK = "SPARSE_DIE_FILL_SKIPPED"
 _SPARSE_UTIL_RE = re.compile(r"core_util=([0-9.]+)%")
+_SPARSE_KEPT_RE = re.compile(r"kept=([0-9]+)")
+_SPARSE_PRUNED_RE = re.compile(r"pruned=([0-9]+)")
 
 
 def _parse_sparse_die_skip(log_text: str) -> Dict[str, Any]:
     """Return the sparse-die-skip attestation parsed from an OpenROAD log.
     Keys: tapcell_skipped/fill_skipped (bool) + their measured core_util.
-    Empty/no-skip → {tapcell_skipped:False, fill_skipped:False}. Pure,
-    chip-AGNOSTIC."""
+    R6 (v1.3.52) also records tapcell_bounded (the sparse die still got its
+    PLACED cells' wells tied — taps kept in the occupied bbox, pruned over
+    empty silicon) with tap_kept / tap_pruned counts. Empty/no-skip →
+    {tapcell_skipped:False, fill_skipped:False, tapcell_bounded:False}.
+    Pure, chip-AGNOSTIC."""
     out: Dict[str, Any] = {
         "tapcell_skipped": False, "fill_skipped": False,
+        "tapcell_bounded": False,
         "tapcell_core_util_pct": None, "fill_core_util_pct": None,
+        "tap_kept": None, "tap_pruned": None,
         "threshold_pct": _sparse_die_fill_threshold_pct(),
     }
     for line in (log_text or "").splitlines():
-        if _SPARSE_TAP_MARK in line and "puts " not in line:
+        if "puts " in line:
+            continue  # the Tcl template line, not a runtime-emitted marker
+        if _SPARSE_TAP_BOUNDED_MARK in line:
+            out["tapcell_bounded"] = True
+            m = _SPARSE_UTIL_RE.search(line)
+            if m:
+                out["tapcell_core_util_pct"] = float(m.group(1))
+            mk = _SPARSE_KEPT_RE.search(line)
+            if mk:
+                out["tap_kept"] = int(mk.group(1))
+            mp = _SPARSE_PRUNED_RE.search(line)
+            if mp:
+                out["tap_pruned"] = int(mp.group(1))
+        elif _SPARSE_TAP_MARK in line:
             out["tapcell_skipped"] = True
             m = _SPARSE_UTIL_RE.search(line)
             if m:
                 out["tapcell_core_util_pct"] = float(m.group(1))
-        elif _SPARSE_FILL_MARK in line and "puts " not in line:
+        elif _SPARSE_FILL_MARK in line:
             out["fill_skipped"] = True
             m = _SPARSE_UTIL_RE.search(line)
             if m:
@@ -1589,14 +1689,18 @@ def _write_sparse_die_skip_attestation(project: Path,
     fired; never raises. chip-AGNOSTIC."""
     merged = "\n".join(t for t in log_texts if t)
     att = _parse_sparse_die_skip(merged)
-    if not (att["tapcell_skipped"] or att["fill_skipped"]):
-        return  # no skip → no attestation (gates run their normal path).
+    if not (att["tapcell_skipped"] or att["fill_skipped"]
+            or att["tapcell_bounded"]):
+        return  # no skip/bound → no attestation (gates run their normal path).
     att["program"] = "sparse_die_skip_attestation"
     att["reason"] = (
         "post-place CORE utilization below the sparse-die threshold on a "
-        "fixed-area wrapper; full-die tapcell/decap/fill tiling was bounded "
-        "to avoid flooding empty silicon (see #684). The skip is an "
-        "attested engineering decision, not a flow break.")
+        "fixed-area wrapper; full-die decap/fill tiling was bounded to avoid "
+        "flooding empty silicon (see #684). R6 (v1.3.52): well-tie tapcells "
+        "are STILL inserted for the placed cells and bounded to the occupied "
+        "region (tapcell_bounded) — placed-cell VPB/VNB stay tied so the "
+        "power-aware LVS matches; only when there are no placed cells is the "
+        "tapcell skipped. An attested engineering decision, not a flow break.")
     try:
         out = _pl.reports_phase3_dir(project) if hasattr(
             _pl, "reports_phase3_dir") else (
