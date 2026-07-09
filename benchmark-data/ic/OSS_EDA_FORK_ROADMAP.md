@@ -303,7 +303,26 @@ scheduled** (a C++/Docker/GHCR rebuild is not justified by an optional convenien
 | F-A1 | **OpenROAD `repair_antennas` is single-pass** — it fixes antenna violations for the *current* routing but cannot itself call `detailed_route`, so it (correctly) emits `GRT-0121` "do one repair pass, then YOU re-route, then repeat". The repair→reroute→repair loop lives outside the tool. | `phase3_one_shot_runner._antenna_repair_tcl` runs the **incremental repair→reroute→repair loop** (`repair_antennas -iterations 1`, drop the full `global_route`, outer bounded loop) — **converged iter=3 on ibex, GDS written** (v1.3.46). | Add a tool-native `repair_antennas -iterations N -reroute` that runs the detailed-route-aware multi-pass *inside* `grt`/`drt` (invalidate + reroute only the modified nets between passes), so no external loop is needed. | feature-add-medium (rides the same `src/drt` incremental-ECO machinery as the P0 DEFERRED item above) | **No** — plugin loop already converges to GDS. |
 | F-A2 | **OpenROAD `tapcell` inserts well-ties across the whole die** — on a **sparse (~0% util) macro die** (caravel) it paints VPB/VNB body-tie taps into empty area that never gets a power-aware LVS anchor, contributing to the Step-31 power-LVS mismatch. | `phase3_one_shot_runner._build_tapcell_tcl` does a **bounded sparse-die tapcell insertion + prune** (tie only the occupied/placed region, prune stray taps) → power-aware well-tie closes (v1.3.52, R6 — the honest body-tie fix, not a waiver). | Add a `tapcell` option to bound insertion to the **occupied/placed region** natively (skip empty sparse-die area), so the plugin's prune pass is unnecessary. | feature-add-medium (`src/tap` region-gating) | **No** — plugin bounded tapcell already ties + passes. |
 
-**Fork-build decision: DEFER (recommended).** Both candidates are optional convenience ports that
-the plugin already covers end-to-end; neither unblocks a FAIL, and a fork rebuild + Docker/GHCR push
-is a heavy, outward-facing action. They join the standing fork backlog (§3 P0-DEFERRED incremental
-`src/drt` ECO, §2 the 48 catalogued gaps) for a future dedicated fork pass, not this campaign.
+### Fork-build outcome (updated 2026-07-09)
+
+**F-A1 — SHIPPED in `vibeic-eda:0.2.6`.** The owner opted to build it. Implemented as a tool-native
+`repair_antennas -reroute` flag on the `grt` command (`src/grt/src/GlobalRouter.tcl`) that internalizes
+the check → `repair_antennas -iterations 1` → incremental `detailed_route` loop until the antenna check
+is clean or the `-iterations` cap (default 10) is reached; **backward-compatible** (without `-reroute`
+the command is byte-identical). The build surfaced a genuine **stock correctness bug** the flag also
+fixes: on a detailed-routed design, stock `repair_antennas -iterations 1` reports a false `0` because it
+removes the diode-dirty nets' detailed wire (updates only global guides) without rerouting — leaving
+those nets unrouted; `check_antennas` then reads `0` only because there is no wire left to measure.
+Proven on a real detailed-routed gcd (standard sky130hs, 9 antenna net violations): stock leaves the 9
+nets unrouted (`+ROUTED` 413→404, false 0); `repair_antennas -reroute` converges to a genuine 0 in one
+reroute pass with routing intact (413→413). Landed: `vibeic/OpenROAD` commit `bae9b0d543` (branch
+`vibeic/post-route-detailed-routing-repair`) + new regression `grt/repair_antennas_reroute` (all 12
+pre-existing repair_antennas tests still pass); image `ghcr.io/vibeic/vibeic-eda:0.2.6` + `:latest`
+(openroad `-version` = `bae9b0d543`, F-A1 reroute verified in-image, anonymously pullable). Dockerfile
+`OPENROAD_REF` pinned to the SHA. NOTE: this does not close a FAIL the plugin's external loop did not
+already close — it makes the tool do internally what the plugin orchestrated externally, and removes the
+stock false-clean footgun for all OpenROAD users.
+
+**F-A2 — still DEFERRED.** Optional convenience port (`src/tap` region-gating); the plugin's bounded
+tapcell + prune already ties + passes, so it unblocks no FAIL. Joins the standing fork backlog (§3
+P0-DEFERRED incremental `src/drt` ECO, §2 the 48 catalogued gaps) for a future dedicated fork pass.
