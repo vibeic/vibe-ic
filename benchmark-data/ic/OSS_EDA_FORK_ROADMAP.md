@@ -278,3 +278,32 @@ manual/interactive ECO, but is NOT wired into the automated flow (it would leave
 buffers → broken GDS). No flow change shipped. Next step for full closure: implement
 bounded incremental detailed-route ECO in vibeic/OpenROAD `src/drt` (rip-up + reroute only
 the repaired nets' guides).
+
+---
+
+## Campaign close — v1.3.42→55 on vibeic-eda:0.2.5 (2026-07-09): ZERO REQUIRED fork changes; 2 OPTIONAL upstream candidates
+
+The 7-IC + fork-adaptation close-loop that drove caravel (FAIL 5→3) and ibex (timeout→GDS
+167 MB) to closure on the shipped **vibeic-eda:0.2.5** image produced **no new REQUIRED fork
+change** — every residual root-caused to a *stale plugin harness* (a phase3 recipe/path written
+for old iic-osic-tools that did not adapt to the fork's newer-but-correct OpenROAD behavior +
+LibreLane PDK layout), and each was closed by a PLUGIN edit (v1.3.46→55, all landed). This
+reaffirms the memo above: **the fork carries ZERO tool regression; closing this campaign needed
+NO fork build.** (RCA lesson, recorded to fork memory: *after a tool fork/upgrade, a stale harness
+LOOKS like a tool regression — always RCA before blaming the tool.*)
+
+Two OPTIONAL upstream candidates surfaced. **Both are already fully closed in the plugin** (the
+tool does the primitive; the plugin wraps the loop/bound around it), so **neither closes a FAIL
+the plugin does not already close** — they are "make the tool do internally what the plugin now
+orchestrates externally" niceties, not blockers. Recorded here for a future fork pass; **not
+scheduled** (a C++/Docker/GHCR rebuild is not justified by an optional convenience).
+
+| # | Candidate | What the plugin does today (closes it) | Optional fork action | Feasibility | Blocks a FAIL? |
+|---|---|---|---|---|---|
+| F-A1 | **OpenROAD `repair_antennas` is single-pass** — it fixes antenna violations for the *current* routing but cannot itself call `detailed_route`, so it (correctly) emits `GRT-0121` "do one repair pass, then YOU re-route, then repeat". The repair→reroute→repair loop lives outside the tool. | `phase3_one_shot_runner._antenna_repair_tcl` runs the **incremental repair→reroute→repair loop** (`repair_antennas -iterations 1`, drop the full `global_route`, outer bounded loop) — **converged iter=3 on ibex, GDS written** (v1.3.46). | Add a tool-native `repair_antennas -iterations N -reroute` that runs the detailed-route-aware multi-pass *inside* `grt`/`drt` (invalidate + reroute only the modified nets between passes), so no external loop is needed. | feature-add-medium (rides the same `src/drt` incremental-ECO machinery as the P0 DEFERRED item above) | **No** — plugin loop already converges to GDS. |
+| F-A2 | **OpenROAD `tapcell` inserts well-ties across the whole die** — on a **sparse (~0% util) macro die** (caravel) it paints VPB/VNB body-tie taps into empty area that never gets a power-aware LVS anchor, contributing to the Step-31 power-LVS mismatch. | `phase3_one_shot_runner._build_tapcell_tcl` does a **bounded sparse-die tapcell insertion + prune** (tie only the occupied/placed region, prune stray taps) → power-aware well-tie closes (v1.3.52, R6 — the honest body-tie fix, not a waiver). | Add a `tapcell` option to bound insertion to the **occupied/placed region** natively (skip empty sparse-die area), so the plugin's prune pass is unnecessary. | feature-add-medium (`src/tap` region-gating) | **No** — plugin bounded tapcell already ties + passes. |
+
+**Fork-build decision: DEFER (recommended).** Both candidates are optional convenience ports that
+the plugin already covers end-to-end; neither unblocks a FAIL, and a fork rebuild + Docker/GHCR push
+is a heavy, outward-facing action. They join the standing fork backlog (§3 P0-DEFERRED incremental
+`src/drt` ECO, §2 the 48 catalogued gaps) for a future dedicated fork pass, not this campaign.
