@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 833
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 833)
+- **Total programs (excluding helpers / shims):** 839
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 839)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 824 |
+| `any` | 830 |
 
 ## Alphabetical listing
 
@@ -52,11 +52,13 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_a8_before_floorplan_check` | any | — | analog/digital ordering gate. |
 | `analog_a8_hardmacro_gen_check` | any | — | A8 deterministic gate. |
 | `analog_a9_hw_verify_check` | any | — | A9 deterministic gate (Co-Sim / HW Verify). |
+| `analog_adc_enob_corner_check` | any | — | R12 system-ENOB per-corner gate (A4). |
 | `analog_artefact_substance_check` | any | — | catch substance-less analog |
 | `analog_block_coverage_check` | any | — | deterministic gate for analog block design coverage |
 | `analog_block_list_emit_check` | any | — | master block-list schema gate. |
 | `analog_block_type_classify` | any | — | deterministic name→type taxonomy lookup. |
 | `analog_content_detected_must_emit_l5_check` | any | Wave 47 | Wave 47 / v0.120.1 |
+| `analog_corner_lib_realism_lint` | any | — | R15 stale-corner-lib doc-lint (A4). |
 | `analog_corner_margin_check` | any | — | A4 strict PVT-margin gate. |
 | `analog_corner_sweep_check` | any | — | deterministic gate for PVT corner coverage |
 | `analog_digital_interface_check` | any | — | deterministic gate for digital-analog interface validation |
@@ -83,6 +85,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_per_block_pv_completeness_check` | any | Wave 93 | strict per-block deliverable |
 | `analog_pre_vs_post_layout_check` | any | — | deterministic gate for pre/post-layout comparison |
 | `analog_real_corner_sweep` | any | — | v1.6.207 (ORGANIC-20260512). |
+| `analog_sigma_delta_gain_floor_check` | any | — | R14 integrator-gain floor gate (A4). |
 | `analog_tb_supply_pdk_check` | any | — | deterministic testbench supply-vs-PDK |
 | `antenna_report_check` | any | — | wrapper for eda_report_audit --mode antenna. |
 | `arbiter_starvation_check` | any | v0.116 | BACKLOG-v11 P0.6. |
@@ -447,6 +450,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `literal_verdict_keyword_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `llm_semantic_confirm` | any | — | LLM double-confirm for program-extracted SEMANTIC fields. |
 | `loop_admission_guard` | any | — | loop_admission_guard.py -- Admission guard for Vibe-IC closed-loop skills. |
+| `loop_watchdog_compliance_check` | any | — | FORCE the watchdog primitive. |
 | `lora_protocol_synth` | any | — | LoRa / LoRaWAN protocol synth helper (low-power wide-area network, LPWAN). |
 | `lpc_protocol_synth` | any | — | Low Pin Count (LPC) Interface protocol synth helper. |
 | `lpddr5_protocol_synth` | any | v0.1.89 | LPDDR5 SDRAM (JEDEC JESD209-5)-class protocol synth helper. |
@@ -537,6 +541,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pcie_protocol_synth` | any | v0.1.84 | PCI Express-class protocol synth helper. |
 | `pdk_analog_completeness_check` | any | — | pdk_analog_completeness_check.py |
 | `pdk_consistency_check` | any | — | Deterministic PDK-netlist consistency checker. |
+| `pdk_device_map` | any | — | PDK-AGNOSTIC generic->foundry device-map accessor (R13). |
 | `pdk_fpga_gds_reverify_runner` | any | — | v1.6.232 (merged v229+v231). |
 | `pdk_otp_altsyncram_inject` | any | — | v1.6.224 (ORGANIC-20260512-followup-3). |
 | `pdk_udp_synth_shim_gen` | any | — | v1.6.218 (ORGANIC-20260512-followup). |
@@ -666,6 +671,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `rtllm_iface_recover` | any | — | a GENERAL interface recoverer for the RTLLM prose |
 | `rtllm_port_bridge` | any | — | a GENERAL prose-port-block reader for the RTLLM benchmark |
 | `rtllm_tier_pipeline` | any | — | the RTLLM TIER-1->5 CONVERGE / AUTHORING-GATE PIPELINE. |
+| `run_output_completeness_check` | any | — | the EMPTY / MISSING / STUB deliverable gate. |
 | `run_status` | any | — | ORGANIC #599. Universal runner watchdog. |
 | `rx_byte_assembler_ibt_flush_recovery_check` | any | Wave 15 | Wave 15 silent-bug gate. |
 | `rx_byte_valid_requires_ibt_gate_check` | any | Wave 26 | Wave 26 (v0.119.58) gate. |
@@ -905,7 +911,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (824 programs)
+### `any` (830 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -933,11 +939,13 @@ _(no programs in this group)_
 - `analog_a8_before_floorplan_check` — analog/digital ordering gate.
 - `analog_a8_hardmacro_gen_check` — A8 deterministic gate.
 - `analog_a9_hw_verify_check` — A9 deterministic gate (Co-Sim / HW Verify).
+- `analog_adc_enob_corner_check` — R12 system-ENOB per-corner gate (A4).
 - `analog_artefact_substance_check` — catch substance-less analog
 - `analog_block_coverage_check` — deterministic gate for analog block design coverage
 - `analog_block_list_emit_check` — master block-list schema gate.
 - `analog_block_type_classify` — deterministic name→type taxonomy lookup.
 - `analog_content_detected_must_emit_l5_check` — Wave 47 / v0.120.1  _[Wave 47]_
+- `analog_corner_lib_realism_lint` — R15 stale-corner-lib doc-lint (A4).
 - `analog_corner_margin_check` — A4 strict PVT-margin gate.
 - `analog_corner_sweep_check` — deterministic gate for PVT corner coverage
 - `analog_digital_interface_check` — deterministic gate for digital-analog interface validation
@@ -964,6 +972,7 @@ _(no programs in this group)_
 - `analog_per_block_pv_completeness_check` — strict per-block deliverable  _[Wave 93]_
 - `analog_pre_vs_post_layout_check` — deterministic gate for pre/post-layout comparison
 - `analog_real_corner_sweep` — v1.6.207 (ORGANIC-20260512).
+- `analog_sigma_delta_gain_floor_check` — R14 integrator-gain floor gate (A4).
 - `analog_tb_supply_pdk_check` — deterministic testbench supply-vs-PDK
 - `antenna_report_check` — wrapper for eda_report_audit --mode antenna.
 - `arbiter_starvation_check` — BACKLOG-v11 P0.6.  _[v0.116]_
@@ -1323,6 +1332,7 @@ _(no programs in this group)_
 - `literal_verdict_keyword_check` — anti-fabrication gate (v1.6.38).
 - `llm_semantic_confirm` — LLM double-confirm for program-extracted SEMANTIC fields.
 - `loop_admission_guard` — loop_admission_guard.py -- Admission guard for Vibe-IC closed-loop skills.
+- `loop_watchdog_compliance_check` — FORCE the watchdog primitive.
 - `lora_protocol_synth` — LoRa / LoRaWAN protocol synth helper (low-power wide-area network, LPWAN).
 - `lpc_protocol_synth` — Low Pin Count (LPC) Interface protocol synth helper.
 - `lpddr5_protocol_synth` — LPDDR5 SDRAM (JEDEC JESD209-5)-class protocol synth helper.  _[v0.1.89]_
@@ -1413,6 +1423,7 @@ _(no programs in this group)_
 - `pcie_protocol_synth` — PCI Express-class protocol synth helper.  _[v0.1.84]_
 - `pdk_analog_completeness_check` — pdk_analog_completeness_check.py
 - `pdk_consistency_check` — Deterministic PDK-netlist consistency checker.
+- `pdk_device_map` — PDK-AGNOSTIC generic->foundry device-map accessor (R13).
 - `pdk_fpga_gds_reverify_runner` — v1.6.232 (merged v229+v231).
 - `pdk_otp_altsyncram_inject` — v1.6.224 (ORGANIC-20260512-followup-3).
 - `pdk_udp_synth_shim_gen` — v1.6.218 (ORGANIC-20260512-followup).
@@ -1541,6 +1552,7 @@ _(no programs in this group)_
 - `rtllm_iface_recover` — a GENERAL interface recoverer for the RTLLM prose
 - `rtllm_port_bridge` — a GENERAL prose-port-block reader for the RTLLM benchmark
 - `rtllm_tier_pipeline` — the RTLLM TIER-1->5 CONVERGE / AUTHORING-GATE PIPELINE.
+- `run_output_completeness_check` — the EMPTY / MISSING / STUB deliverable gate.
 - `run_status` — ORGANIC #599. Universal runner watchdog.
 - `rx_byte_assembler_ibt_flush_recovery_check` — Wave 15 silent-bug gate.  _[Wave 15]_
 - `rx_byte_valid_requires_ibt_gate_check` — Wave 26 (v0.119.58) gate.  _[Wave 26]_
