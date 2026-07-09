@@ -15,9 +15,10 @@
 # Stage 1 — vibeic/OpenROAD (post-detailed-route repair on real parasitics; Signal-11 fix)
 # ---------------------------------------------------------------------------
 FROM openroad/ubuntu24.04-dev:latest AS openroad-builder
-# Pinned to the F-A1 commit (repair_antennas -reroute) shipped in vibeic-eda:0.2.6.
+# Pinned to the F-A2 commit (tapcell -bound_to_placement) shipped in vibeic-eda:0.2.7,
+# a fast-forward over the F-A1 repair_antennas -reroute commit (0.2.6).
 # HEAD of branch vibeic/post-route-detailed-routing-repair as of 2026-07-09.
-ARG OPENROAD_REF=bae9b0d54375c9dbdb1d7bfd38402cdfe64b2a01
+ARG OPENROAD_REF=3efb695851045c200b95d9bf243884e3810656a6
 RUN git clone https://github.com/vibeic/OpenROAD.git /src \
  && cd /src && git checkout ${OPENROAD_REF} \
  && git submodule update --init --recursive --depth 1 \

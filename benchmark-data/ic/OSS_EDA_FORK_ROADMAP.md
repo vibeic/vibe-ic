@@ -323,6 +323,27 @@ pre-existing repair_antennas tests still pass); image `ghcr.io/vibeic/vibeic-eda
 already close — it makes the tool do internally what the plugin orchestrated externally, and removes the
 stock false-clean footgun for all OpenROAD users.
 
-**F-A2 — still DEFERRED.** Optional convenience port (`src/tap` region-gating); the plugin's bounded
-tapcell + prune already ties + passes, so it unblocks no FAIL. Joins the standing fork backlog (§3
-P0-DEFERRED incremental `src/drt` ECO, §2 the 48 catalogued gaps) for a future dedicated fork pass.
+**F-A2 — SHIPPED in `vibeic-eda:0.2.7`.** Tracked as vibeic/vibe-ic issue **#113**. Implemented as a
+tool-native `tapcell -bound_to_placement [-placement_halo µm]` on the `tap` command
+(`src/tap/src/tapcell.{cpp,i,tcl}` + `include/tap/tapcell.h`): `computePlacementBounds()` merges the
+bbox of the placed CORE instances, expands it by a latch-up halo (default 2·distance), and the tapcell
+loop skips any tap whose center falls outside that region — so a sparse (~0% util) macro die is tied only
+where cells are, not carpeted end to end over bare silicon that carries no power-aware LVS anchor.
+**Backward-compatible** (the skip is gated on the optional bound; no `-bound_to_placement` = byte-identical;
+no placed core cells → bound unset → unchanged). New **PASSFAIL** regression `tap/bound_to_placement`
+(synthetic 88×84µm sparse die, cluster in a 20×22µm corner): stock floods 354 taps → bounded 56, all
+within bbox+halo, asserting stock>bounded>0 (PASSFAIL avoids a brittle exact-count golden). **All 51 tap
+integration tests pass** (zero regression). Landed: `vibeic/OpenROAD` commit `3efb695851` (fast-forward
+over F-A1's `bae9b0d543` on branch `vibeic/post-route-detailed-routing-repair`); Dockerfile `OPENROAD_REF`
+pinned to the SHA; image `ghcr.io/vibeic/vibeic-eda:0.2.7` + `:latest`. Like F-A1 this closes no FAIL the
+plugin's `_build_tapcell_tcl` bounded-insert+prune did not already close — it makes the tool do internally
+what the plugin orchestrated externally.
+
+**Fork roadmap status after F-A2: the tractable set is fully closed.** Every catalogued fork gap that is
+`bug-fix-easy` / `feature-add-medium` / `algorithm-hard` is either DONE-proven and shipped or ADOPTED
+(capability-already-present, verified reachable) — **0 open `algorithm-hard` residual** (see
+`tools/vibeic-eda/FIX_STATUS.md`: 30 DONE-proven fixes + 10 ADOPTED across all 6 tool forks; the last
+residual, the gate-level-ripple→word-`$add` recognizer, was BUILT as yosys `lift_adder` in 0.2.5). F-A1
+and F-A2 were the two OPTIONAL upstream convenience ports beyond that program; both are now shipped. What
+remains is only genuinely `fundamental-or-external` (foundry PDK RC/QRC decks, signoff-grade transient
+IR/DVD à la RedHawk, commercial-LEC full closure) — not fork targets.
