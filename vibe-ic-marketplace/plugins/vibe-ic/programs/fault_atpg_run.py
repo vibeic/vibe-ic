@@ -62,13 +62,46 @@ import argparse
 import json
 import os
 import re
+import os
 import subprocess
 import sys
 from pathlib import Path
 import _path_layout as _pl
 
 
-DOCKER_IMAGE = "hpretl/iic-osic-tools:latest"
+def _resolve_docker_image() -> str:
+    """Resolve the EDA docker image, preferring the forked vibeic-eda
+    distribution (the iic-osic-tools fork this plugin actually ships and that
+    carries Fault + iverilog + yosys) over the upstream image, which may not be
+    pulled locally. Order: explicit env override → first locally-present
+    vibeic-eda tag → legacy upstream name (last resort).
+
+    Historically this was hardcoded to ``hpretl/iic-osic-tools:latest``; on a
+    machine that only has the fork pulled, ``docker run`` failed with
+    image-not-found and the whole DFT step silently died. chip-AGNOSTIC."""
+    env = os.environ.get("VIBEIC_EDA_IMAGE") or os.environ.get("IIC_EDA_IMAGE")
+    if env:
+        return env
+    candidates = (
+        "ghcr.io/vibeic/vibeic-eda:latest",
+        "vibeic-eda:latest",
+        "vibeic/vibeic-eda:latest",
+        "hpretl/iic-osic-tools:latest",
+    )
+    for img in candidates:
+        try:
+            r = subprocess.run(["docker", "image", "inspect", img],
+                               capture_output=True, timeout=15)
+            if r.returncode == 0:
+                return img
+        except Exception:
+            pass
+    # nothing found locally — return the fork's canonical name; the caller's
+    # `docker run` will surface a clear pull error rather than a stale image.
+    return "ghcr.io/vibeic/vibeic-eda:latest"
+
+
+DOCKER_IMAGE = _resolve_docker_image()
 
 # Foundry / ATE sign-off bar. Stuck-at coverage at 95 %+ is the widely-quoted
 # minimum foundry acceptance floor; 98 %+ is the common aggressive target.
