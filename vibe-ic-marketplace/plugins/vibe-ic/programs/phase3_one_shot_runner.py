@@ -9582,6 +9582,31 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 "ss/ff)."),
         }, indent=2) + "\n")
         written.append(str(mc_ocv_stance))
+        # When the sign-off STA SURFACED a real SETUP violation, ALSO emit the
+        # honest achievable-Fmax datapoint so a Category-H spec-vs-technology
+        # residual (a full CPU/crypto block at a slow OSS PDK — e.g. ibex@sky130,
+        # sha256 single-cycle round) SELF-REPORTS the frequency it actually MEETs
+        # instead of a bare FAIL. §4.05 HONESTY: this is a MEASUREMENT, never a
+        # clock relaxation — `timing_closed_multi_corner` above stays as-is and the
+        # sign-off verdict is unchanged; achievable_fmax.json travels ALONGSIDE the
+        # FAIL, `relaxation_applied` is always False.
+        if mc_ocv_ok and setup_wns is not None and setup_wns < 0:
+            try:
+                from sta_achievable_fmax_report import achievable_from_slack
+                _spec_period_ns, _ = _resolve_clock_spec(project, top=top)
+                _fmax_rep = achievable_from_slack(
+                    float(_spec_period_ns), float(setup_wns))
+                (rpt_phase3 / "achievable_fmax.json").write_text(
+                    json.dumps(_fmax_rep, indent=2) + "\n")
+                written.append(str(rpt_phase3 / "achievable_fmax.json"))
+                notes.append(
+                    "achievable-Fmax reported (honest measurement, sign-off "
+                    f"verdict UNCHANGED): spec {_fmax_rep['spec_period_ns']} ns "
+                    f"({_fmax_rep['spec_fmax_mhz']} MHz) setup FAIL -> achievable "
+                    f"{_fmax_rep['achievable_period_ns']} ns "
+                    f"({_fmax_rep['achievable_fmax_mhz']} MHz) setup MET.")
+            except Exception as _fmax_err:  # never break the flow on a report
+                notes.append(f"achievable-Fmax emit non-fatal: {_fmax_err}")
         if mc_ocv_ok and _viol:
             notes.append(
                 "multi-corner OCV STA SURFACED a real violation at "
