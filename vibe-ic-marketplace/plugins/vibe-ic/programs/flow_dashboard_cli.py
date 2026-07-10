@@ -47,8 +47,12 @@ import time
 # tests (which feed render_frame a hand-built dict and never call collect).
 try:  # pragma: no cover - import wiring, exercised at runtime not in tests
     from flow_dashboard_data import collect as _collect
+    from flow_dashboard_data import collect_auto as _collect_auto
+    from flow_dashboard_data import collect_fleet as _collect_fleet
 except Exception:  # pragma: no cover
     _collect = None
+    _collect_auto = None
+    _collect_fleet = None
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +90,7 @@ def _c(text: str, *codes: str, color: bool = True) -> str:
 # NOTE: icons are single display-cells (emoji-free) so column alignment holds
 # in a fixed-width terminal.
 _STATUS_STYLE = {
-    "done": ("✔", ("green",)),        # ✔
+    "pass": ("✔", ("green",)),        # ✔ done · verdict PASS
     "skipped": ("⏭", ("cyan", "dim")),  # ⏭
     "waived": ("⚑", ("yellow",)),     # ⚑
     "fail": ("✗", ("red", "bold")),   # ✗
@@ -173,9 +177,9 @@ def _g(d, key, default=None):
     return default
 
 
-# Order + display metadata for the summary counts line.
+# Order + display metadata for the summary counts line (outcome breakdown).
 _SUMMARY_ORDER = [
-    ("done", "done", ("green",)),
+    ("pass", "pass", ("green",)),
     ("running", "running", ("blue",)),
     ("partial", "partial", ("magenta",)),
     ("pending", "pending", ("grey",)),
@@ -269,15 +273,16 @@ def render_frame(
     # ---- HEADER ----------------------------------------------------------
     name = _g(data, "project_name") or os.path.basename(str(_g(data, "project", ""))) or "(project)"
     mode = _g(data, "mode", "") or ""
-    fver = _g(data, "flow_version", "") or ""
+    pver = _g(data, "plugin_version", "") or ""
     now = time.strftime("%H:%M:%S")
 
     title = f"Vibe-IC Flow Dashboard  —  {name}"
     meta_bits = []
+    # The shipped vibe-ic plugin version (what the user runs) leads the meta line.
+    if pver:
+        meta_bits.append(f"vibe-ic v{pver}")
     if mode:
         meta_bits.append(f"mode={mode}")
-    if fver:
-        meta_bits.append(f"flow={fver}")
     meta_bits.append(now)
     meta = "   ".join(meta_bits)
 
@@ -289,15 +294,18 @@ def render_frame(
     # ---- OVERALL progress + summary counts -------------------------------
     summary = _g(data, "summary", {}) or {}
     total = int(_g(summary, "total", 0) or 0)
-    done = int(_g(summary, "done", 0) or 0)
+    # DONE = reached & judged (any verdict) = resolved. NOT just the PASS subset.
+    done = int(_g(summary, "resolved", _g(summary, "done", 0)) or 0)
 
     bar_inner = max(10, min(30, width - 30))
     bar = progress_bar(done, total, bar_inner)
-    overall_plain = f"{bar} {done}/{total}"
-    overall_col = _c(bar, "green", color=color) + f" {_c(f'{done}/{total}', 'bold', color=color)}"
+    overall_plain = f"{bar} Done {done}/{total}"
+    overall_col = (_c(bar, "green", color=color)
+                   + f" {_c('Done', 'dim', color=color)} "
+                   + _c(f'{done}/{total}', 'bold', color=color))
     add(overall_plain, overall_col)
 
-    # counts line, e.g. "done 40  running 1  pending 12  skipped 3 ..."
+    # outcome breakdown, e.g. "pass 33  fail 0  skipped 8  na 13  external 5 ..."
     count_parts_plain = []
     count_parts_col = []
     for key, label, codes in _SUMMARY_ORDER:
@@ -318,7 +326,7 @@ def render_frame(
     for ph in _ordered_phases(_g(data, "phases", []) or []):
         icon = _g(ph, "icon", "") or ""
         label = _g(ph, "label", _g(ph, "key", "phase")) or "phase"
-        p_done = int(_g(ph, "done", 0) or 0)
+        p_done = int(_g(ph, "resolved", _g(ph, "done", 0)) or 0)
         p_total = int(_g(ph, "total", 0) or 0)
 
         head_plain = f"{icon} {label}  ({p_done}/{p_total})"
@@ -398,11 +406,13 @@ def render_frame(
 
     # ---- FOOTER ----------------------------------------------------------
     legend_pairs = [
-        ("✔", "done"),
+        ("✔", "pass"),
         ("⏭", "skip"),
         ("⚑", "waive"),
+        ("○", "n/a"),
+        ("⊗", "extern"),
+        ("◐", "partial"),
         ("✗", "fail"),
-        ("∅", "missing"),
         ("▸", "run"),
         ("·", "pend"),
     ]
@@ -415,6 +425,152 @@ def render_frame(
     if interval is not None:
         foot_bits.append(f"refreshing every {interval:g}s")
     foot_bits.append("Ctrl-C to quit")
+    footer = "  ·  ".join(foot_bits)
+    add(footer, _c(footer, "dim", color=color))
+
+    return "\n".join(lines)
+
+
+def render_fleet(
+    data: dict,
+    *,
+    width: int = 100,
+    color: bool = True,
+    spinner_frame: int = 0,
+    updated_ago: float | None = None,
+    interval: float | None = None,
+) -> str:
+    """Render the FLEET overview — one compact block per IC (multi-IC / multi-
+    subagent view) — as a single string (no I/O).
+
+    *data* conforms to flow_dashboard_data.collect_fleet(): {kind:"fleet",
+    agg:{...}, fleet:[<ic card>, ...]}. Missing keys are defaulted so this
+    never raises on partial/empty input.
+    """
+    width = max(20, int(width))
+    lines: list[str] = []
+
+    def add(visible: str, colored: str | None = None):
+        vis = _clip_line(visible, width)
+        if colored is None or not color:
+            lines.append(vis)
+        else:
+            lines.append(colored if len(visible) <= width else vis)
+
+    agg = _g(data, "agg", {}) or {}
+    fleet = _g(data, "fleet", []) or []
+    if not isinstance(fleet, list):
+        fleet = []
+    pver = _g(data, "plugin_version", "") or ""
+    now = time.strftime("%H:%M:%S")
+
+    ic_count = int(_g(agg, "ic_count", len(fleet)) or 0)
+    ic_running = int(_g(agg, "ic_running", 0) or 0)
+    ic_done = int(_g(agg, "ic_done", 0) or 0)
+
+    # ---- HEADER ----------------------------------------------------------
+    title = f"Vibe-IC Fleet Dashboard  —  {ic_count} IC{'s' if ic_count != 1 else ''}"
+    add(title, _c(title, "bold", "white", color=color))
+    meta_bits = []
+    if pver:
+        meta_bits.append(f"vibe-ic v{pver}")
+    meta_bits.append(f"{ic_running} running")
+    meta_bits.append(f"{ic_done} done")
+    meta_bits.append(now)
+    meta = "   ".join(meta_bits)
+    add(_clip_line(meta, width), _c(_clip_line(meta, width), "dim", color=color))
+
+    # ---- AGGREGATE progress ---------------------------------------------
+    a_total = int(_g(agg, "total", 0) or 0)
+    a_done = int(_g(agg, "resolved", _g(agg, "done", 0)) or 0)
+    bar_inner = max(10, min(30, width - 34))
+    bar = progress_bar(a_done, a_total, bar_inner)
+    overall_plain = f"{bar} Done {a_done}/{a_total} steps"
+    overall_col = (_c(bar, "green", color=color)
+                   + f" {_c('Done', 'dim', color=color)} "
+                   + _c(f'{a_done}/{a_total}', 'bold', color=color)
+                   + _c(' steps', 'dim', color=color))
+    add(overall_plain, overall_col)
+    add("")
+
+    # ---- PER-IC blocks ---------------------------------------------------
+    # name column so the bars line up across ICs.
+    name_w = max(10, min(24, width - 46))
+    ic_bar_w = max(8, min(20, width - name_w - 26))
+
+    for card in fleet:
+        pname = str(_g(card, "project_name", "") or _g(card, "project", "") or "(ic)")
+        mode = str(_g(card, "mode", "") or "")
+        err = _g(card, "error")
+        s = _g(card, "summary", {}) or {}
+        total = int(_g(s, "total", 0) or 0)
+        done = int(_g(s, "resolved", _g(s, "done", 0)) or 0)
+        running = int(_g(s, "running", 0) or 0)
+
+        name_txt = _truncate(pname, name_w).ljust(name_w)
+
+        if err:
+            row_plain = f"  ✗ {name_txt}  {_truncate(str(err), max(6, width - name_w - 8))}"
+            add(row_plain, "  " + _c("✗", "red", "bold", color=color)
+                + f" {name_txt}  " + _c(_truncate(str(err), max(6, width - name_w - 8)), "red", color=color))
+            continue
+
+        # live marker: spinner while running, else a done/idle dot.
+        if running > 0 and _SPINNER:
+            mk = _SPINNER[spinner_frame % len(_SPINNER)]
+            mk_codes = ("blue",)
+        elif total and done >= total:
+            mk, mk_codes = "✔", ("green",)
+        else:
+            mk, mk_codes = "•", ("grey",)
+
+        ic_bar = progress_bar(done, total, ic_bar_w)
+        count_txt = f"{done:>2}/{total:<2}"
+        run_txt = f"  ▸{running}" if running > 0 else ""
+        row_plain = f"  {mk} {name_txt} {ic_bar} {count_txt}{run_txt}"
+        row_col = (
+            "  " + _c(mk, *mk_codes, color=color)
+            + f" {name_txt} "
+            + _c(ic_bar, "green", color=color)
+            + " " + _c(count_txt, "bold", color=color)
+            + (("  " + _c(f"▸{running}", "blue", color=color)) if running > 0 else "")
+        )
+        add(row_plain, row_col)
+
+        # outcome breakdown for this IC — only the non-zero, non-pass buckets
+        # that carry signal, kept to one dim line.
+        seg_plain = []
+        seg_col = []
+        for key, label, codes in _SUMMARY_ORDER:
+            val = int(_g(s, key, 0) or 0)
+            if not val:
+                continue
+            seg_plain.append(f"{label} {val}")
+            seg_col.append(_c(f"{label} {val}", *codes, color=color))
+        if seg_plain:
+            body = "      " + "  ".join(seg_plain)
+            body_col = "      " + "  ".join(seg_col)
+            add(body, body_col)
+
+        # currently-running step names (what each subagent is doing right now).
+        rsteps = _g(card, "running_steps", []) or []
+        if isinstance(rsteps, list) and rsteps:
+            names = ", ".join(
+                f"#{_g(r, 'id', '')} {_g(r, 'name', '')}".strip() for r in rsteps[:3]
+            )
+            more = f" +{len(rsteps) - 3}" if len(rsteps) > 3 else ""
+            body = "      ▸ " + _truncate(names + more, max(6, width - 8))
+            add(body, "      " + _c("▸ " + _truncate(names + more, max(6, width - 8)),
+                                     "blue", color=color))
+        add("")
+
+    # ---- FOOTER ----------------------------------------------------------
+    foot_bits = []
+    if updated_ago is not None:
+        foot_bits.append(f"updated {int(round(updated_ago))}s ago")
+    if interval is not None:
+        foot_bits.append(f"refreshing every {interval:g}s")
+    foot_bits.append("one row per IC · ▸N = N steps running · Ctrl-C to quit")
     footer = "  ·  ".join(foot_bits)
     add(footer, _c(footer, "dim", color=color))
 
@@ -460,10 +616,20 @@ def run(argv=None) -> int:
         "--full", action="store_true",
         help="Authoritative gate verdicts (slower); passed to collect()",
     )
+    parser.add_argument(
+        "--fleet", action="store_true",
+        help="Treat PROJECT as a parent dir; show ALL child projects (fleet view)",
+    )
+    parser.add_argument(
+        "--auto", action="store_true",
+        help="Adaptive: lightweight while live, authoritative (full) once idle",
+    )
     parser.add_argument("--no-color", action="store_true", help="Disable ANSI colors")
     args = parser.parse_args(argv)
 
-    if _collect is None:
+    if _collect is None or (args.fleet and _collect_fleet is None) or (
+        args.auto and _collect_auto is None
+    ):
         sys.stderr.write(
             "flow_dashboard_cli: provider module 'flow_dashboard_data' not "
             "importable; cannot collect flow state.\n"
@@ -476,9 +642,19 @@ def run(argv=None) -> int:
 
     def snapshot(spinner_frame: int, last_collect_ts: float | None) -> str:
         now = time.time()
-        data = _collect(args.project, args.full)
         width = _term_width()
         ago = 0.0 if last_collect_ts is None else max(0.0, now - last_collect_ts)
+        if args.fleet:
+            data = _collect_fleet([], full=args.full, root=args.project, auto=args.auto)
+            return render_fleet(
+                data,
+                width=width,
+                color=color,
+                spinner_frame=spinner_frame,
+                updated_ago=ago if not args.once else None,
+                interval=None if args.once else interval,
+            )
+        data = _collect_auto(args.project) if args.auto else _collect(args.project, args.full)
         return render_frame(
             data,
             width=width,
