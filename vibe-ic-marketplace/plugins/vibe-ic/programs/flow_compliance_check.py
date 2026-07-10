@@ -5680,6 +5680,34 @@ def main(argv: Optional[List[str]] = None) -> int:
         # legacy Wave-11 behaviour (any structural FAIL forces verdict).
         forced_fail = True
 
+    # ── step-execution ordering guard (flow_step_execution_coverage_check) ──
+    # compute_cascade only cascades FAIL/WAIVED ancestors and NEVER demotes an
+    # already-PASS terminal step, so a hand-off step (GDSII / Foundry Handoff /
+    # Tapeout) can be marked done while a step it transitively `blocks_on`
+    # (Physical Verification / DRC / LVS / STA / extraction / antenna) is still
+    # MISSING or FAIL — i.e. a GDS emitted before DRC ever ran. Enforce the
+    # invariant here as a NON-promotable hard fail (set before the verdict and
+    # the open-source-constraints promotion so it cannot be softened away).
+    ordering_fail_lines: List[str] = []
+    try:
+        import flow_step_execution_coverage_check as _cov
+        _cov_graph = {
+            str(st.get("id")): [str(e) for e in (st.get("blocks_on") or [])]
+            for st in steps if st.get("id") is not None}
+        _cov_report = {"steps": [
+            {"id": r.id, "name": r.name, "status": r.status,
+             "stage": getattr(r, "stage", "")} for r in results]}
+        for v in _cov.analyze(_cov_report, _cov_graph).get(
+                "ordering_violations", []):
+            ordering_fail_lines.append(
+                f"[{v['terminal_id']}] {v['terminal']} = "
+                f"{v['terminal_status']} marked done while dependency "
+                f"[{v['signoff_id']}] {v['signoff']} = {v['signoff_status']}")
+        if ordering_fail_lines:
+            forced_fail = True
+    except Exception:  # nosec — additive enforcement must never crash the audit
+        ordering_fail_lines = []
+
     if not ok or forced_fail:
         overall = "FAIL"
     elif counts["WAIVED"] > 0:
@@ -5836,6 +5864,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         for line in step_artifact_fail_lines:
             print(f"  {line}")
 
+    if ordering_fail_lines:
+        print(f"\nStep-execution ordering violations "
+              f"({len(ordering_fail_lines)}) — a hand-off step was marked done "
+              f"before a step it depends on completed:")
+        for line in ordering_fail_lines:
+            print(f"  ✗ {line}")
+
     if advisories:
         print("\nAdvisories:")
         for adv in advisories:
@@ -5868,6 +5903,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "thin_input_waivers": structural_waivers,
             "allow_thin_input": bool(getattr(args, "allow_thin_input", False)),
             "input_doc_count": _count_input_docs(project),
+            "ordering_violations": ordering_fail_lines,
             "steps": [asdict(r) for r in results],
         }
         Path(args.json).write_text(json.dumps(out, indent=2))

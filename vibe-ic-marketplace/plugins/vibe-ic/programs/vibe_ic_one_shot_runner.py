@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
@@ -88,6 +89,34 @@ def _deliverable_self_check(project: Path) -> Dict[str, Any]:
 
 def _phase_runner(name: str) -> Path:
     return PROGRAMS_DIR / f"{name}_one_shot_runner.py"
+
+
+def _launch_dashboard(project: Path, host: str, port: int,
+                      full: bool = False) -> Optional[int]:
+    """Best-effort: spawn the live web dashboard as a DETACHED, read-only
+    observer of `project` so the user can watch each step light up while this
+    orchestrator runs. Returns the child PID (or None on failure). Never raises
+    — a dashboard hiccup must not touch the flow. The child survives this
+    process (start_new_session) so the FINAL state stays viewable after the run;
+    the caller prints the PID so the user can stop it."""
+    dash = PROGRAMS_DIR / "flow_dashboard.py"
+    if not dash.is_file():
+        return None
+    log = project / "reports" / ".dashboard_server.log"
+    try:
+        log.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(log, "ab")
+        cmd = [sys.executable, str(dash), str(project), "--web",
+               "--port", str(port), "--host", host]
+        if full:
+            cmd.append("--full")
+        proc = subprocess.Popen(
+            cmd, stdout=fh, stderr=fh, stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return proc.pid
+    except Exception:
+        return None
 
 
 def _phase1_decision(project: Path, force_skip: bool) -> Tuple[bool, str]:
@@ -223,10 +252,85 @@ def _phase1_failure_is_coverage_only(project: Path) -> Tuple[bool, dict]:
     return bool(d.get("coverage_only_failure")), d
 
 
+_TOP_NAME_DEFAULT = "chip_top"
+_MODULE_DECL_RE = re.compile(r"(?m)^\s*module\s+([A-Za-z_]\w*)")
+_VERILOG_KW = {
+    "module", "endmodule", "begin", "end", "if", "else", "case", "endcase",
+    "for", "while", "assign", "always", "initial", "wire", "reg", "logic",
+    "input", "output", "inout", "parameter", "localparam", "generate",
+    "endgenerate", "function", "endfunction", "task", "endtask", "posedge",
+    "negedge", "genvar", "integer", "real", "signed", "unsigned",
+}
+
+
+def _sanitize_module(name: str) -> str:
+    """A design/ic name -> a legal Verilog module identifier (best effort)."""
+    s = re.sub(r"\W", "_", str(name or "").strip())
+    return s if re.match(r"^[A-Za-z_]\w*$", s or "") else ""
+
+
+def _scan_rtl_modules(rtl_dir: Path) -> Tuple[set, set]:
+    """Return (declared_modules, instantiated_module_names) for the source RTL.
+
+    Instantiation detection is conservative: a declared module name D is 'used'
+    if the corpus contains `D [#(...)] <instname> (` somewhere — which the
+    module's own `module D (` declaration never matches (D there is followed by
+    `(` or the port list, not by an instance identifier). Deterministic; no LLM."""
+    decls: set = set()
+    text_parts: List[str] = []
+    if not rtl_dir.is_dir():
+        return decls, set()
+    for pat in ("*.v", "*.sv"):
+        for f in sorted(rtl_dir.glob(pat)):
+            try:
+                t = f.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            text_parts.append(t)
+            decls.update(_MODULE_DECL_RE.findall(t))
+    corpus = "\n".join(text_parts)
+    insts: set = set()
+    for d in decls:
+        inst_re = re.compile(
+            r"(?<![\w.])" + re.escape(d) + r"\s+(?:#\s*\([\s\S]*?\)\s*)?[A-Za-z_]\w*\s*\(")
+        if inst_re.search(corpus):
+            insts.add(d)
+    return decls, insts
+
+
+def _resolve_top_name(project: Path, ic_name: str, top_name: str,
+                      explicit: bool) -> Tuple[str, str]:
+    """Deterministically pick the phase-3 top module.
+
+    The historical default `--top-name chip_top` is wrong for a standalone
+    block whose sole top is the design itself (e.g. spm), and forwarding it
+    verbatim made phase-3 synth fail with "'chip_top' is not a valid top-level
+    module". When --top-name was NOT given, derive it from the (now-existing)
+    source RTL: keep chip_top if a chip_top module actually exists (real
+    full-chip wrapper); else prefer the --ic-name module; else the sole root
+    module (declared, never instantiated). Returns (top, note)."""
+    if explicit:
+        return top_name, ""
+    rtl_dir = project / "phase2" / "stage1" / "rtl"
+    decls, insts = _scan_rtl_modules(rtl_dir)
+    if not decls:
+        return top_name, ""  # nothing to derive from; keep the default
+    if _TOP_NAME_DEFAULT in decls:
+        return _TOP_NAME_DEFAULT, ""  # a genuine wrapper exists → honor it
+    roots = sorted(m for m in decls if m not in insts)
+    ic = _sanitize_module(ic_name)
+    if ic and ic in decls:
+        return ic, f"auto-derived top='{ic}' from --ic-name (no chip_top module)"
+    if len(roots) == 1:
+        return roots[0], (f"auto-derived top='{roots[0]}' (sole RTL root; no "
+                          f"chip_top module)")
+    return top_name, ""  # ambiguous multi-root → preserve current behavior
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
-    p.add_argument("--top-name", default="chip_top")
+    p.add_argument("--top-name", default=_TOP_NAME_DEFAULT)
     p.add_argument("--container", default="vibeic-eda")
     p.add_argument("--max-eco", type=int, default=3)
     p.add_argument("--skip-hardware", action="store_true")
@@ -241,7 +345,30 @@ def main() -> int:
     p.add_argument("--util", type=float, default=0.4)
     p.add_argument("--pdk", default="auto")
     p.add_argument("--ic-name", default="UNNAMED_CHIP")
+    p.add_argument("--dashboard", action="store_true",
+                   help="Auto-launch the live web execution dashboard for this "
+                        "project (a background, read-only observer) so every "
+                        "Phase 1/2/3 + Analog/Mixed/Mfg step lights up as it "
+                        "runs. Prints the URL; survives the run so you can view "
+                        "the final state; stop it with the printed PID.")
+    p.add_argument("--dashboard-port", type=int, default=8787,
+                   help="Port for --dashboard (default 8787).")
+    p.add_argument("--dashboard-host", default="127.0.0.1",
+                   help="Bind host for --dashboard (default 127.0.0.1; use "
+                        "0.0.0.0 to reach it from another machine on the LAN).")
+    p.add_argument("--dashboard-full", action="store_true",
+                   help="Run --dashboard in AUTHORITATIVE mode (each refresh "
+                        "runs the flow_compliance gate matrix for true "
+                        "PASS/SKIP/WAIVED verdicts; TTL-cached ~15s). Slower "
+                        "than the default fast file-stat view.")
     args = p.parse_args()
+
+    # Was --top-name given on the command line, or is it the historical default?
+    # (argparse cannot tell a default from an explicit same-value pass; inspect
+    # argv so we only AUTO-derive when the user OMITTED the flag.)
+    top_name_explicit = any(
+        a == "--top-name" or a.startswith("--top-name=") for a in sys.argv[1:]
+    )
 
     project = args.project.resolve()
     if not project.is_dir():
@@ -259,6 +386,26 @@ def main() -> int:
     # #588 — env passed to every delegated standalone phase runner so it
     # re-enters this orchestrator's lock instead of being refused by it.
     _phase_env = _runner_lock.child_env(project, held_lock=lock)
+
+    # ---------------- Live dashboard (opt-in) ----------------
+    dash_pid = None
+    if args.dashboard:
+        dash_pid = _launch_dashboard(project, args.dashboard_host,
+                                     args.dashboard_port,
+                                     full=args.dashboard_full)
+        if dash_pid:
+            _reachable = ("127.0.0.1" if args.dashboard_host in
+                          ("127.0.0.1", "localhost") else args.dashboard_host)
+            _mode = "authoritative/--full" if args.dashboard_full else "live/fast"
+            print("─" * 60)
+            print(f"📊 Live dashboard → http://{_reachable}:"
+                  f"{args.dashboard_port}   (watch every step light up)")
+            print(f"   {_mode} · read-only · pid {dash_pid} · "
+                  f"stop with: kill {dash_pid}")
+            print("─" * 60)
+        else:
+            print("⚠ --dashboard: could not launch the web dashboard "
+                  "(continuing the run without it)")
 
     t0 = time.time()
     plan: List[Tuple[str, str, int]] = []   # (phase, verdict, rc)
@@ -319,15 +466,35 @@ def main() -> int:
     # halted at phase2. The two decision points now agree.
     run_analog = _need_analog(project, args.skip_analog)
 
+    # ---------------- Top-module resolution (once, for BOTH phase 2 & 3) ------
+    # The historical default '--top-name chip_top' is wrong for a standalone
+    # block whose sole top is the design itself (e.g. spm). It must be resolved
+    # BEFORE phase 2, not just phase 3: phase 2's equivalence check (step 13,
+    # RTL≡netlist) uses it as the GOLD top, so a literal 'chip_top' makes LEC
+    # compare 0 points → FAIL even though synth/PnR/GDS/DRC/LVS all pass. Derive
+    # once from the (seeded or phase-1-produced) RTL and forward the SAME top to
+    # both phases so their tops never disagree. Honors an explicit --top-name.
+    flow_top, flow_top_note = _resolve_top_name(
+        project, args.ic_name, args.top_name, top_name_explicit)
+    if flow_top_note:
+        print(f"[flow] {flow_top_note}", flush=True)
+        advisories.append(f"flow {flow_top_note}")
+
     # ---------------- Phase 2 ----------------
     if not halted_at:
         runner = _phase_runner("phase2")
         p2_args = [str(project),
-                   "--top-name", args.top_name,
+                   "--top-name", flow_top,
                    "--container", args.container,
                    "--max-eco", str(args.max_eco)]
         if args.skip_hardware:
             p2_args.append("--skip-hardware")
+        # Forward --skip-phase3 so phase2's DFT/LEC chain (steps 11-13) gates the
+        # heavy Fault ATPG OFF on a lightweight/RTL-only run (no silicon target),
+        # while still running the fast LEC. On a full-chip flow (no --skip-phase3)
+        # the full DFT insertion + ATPG runs.
+        if args.skip_phase3:
+            p2_args.append("--skip-phase3")
         # v0.1.54 capture: forward --skip-analog so phase2 final_audit doesn't
         # FAIL a digital-only project on missing phase1/analog/analog_block_list.json.
         # (1) User explicitly asked to skip the analog track.
@@ -389,8 +556,19 @@ def main() -> int:
     # ---------------- Phase 3 ----------------
     if not halted_at and not args.skip_phase3:
         runner = _phase_runner("phase3")
+        # Reuse the flow-level resolved top. If phase 2 GENERATED the RTL (the
+        # from-docs path, where no RTL existed at the flow-resolution point
+        # above), re-resolve now that phase-2 output exists so phase-3 still
+        # gets the real top rather than the default 'chip_top'.
+        phase3_top = flow_top
+        if phase3_top == _TOP_NAME_DEFAULT and not top_name_explicit:
+            phase3_top, top_note = _resolve_top_name(
+                project, args.ic_name, args.top_name, top_name_explicit)
+            if top_note:
+                print(f"[phase3] {top_note}", flush=True)
+                advisories.append(f"phase3 {top_note}")
         p3_args = [str(project),
-                   "--top-name", args.top_name,
+                   "--top-name", phase3_top,
                    "--container", args.container,
                    "--die-um", args.die_um,
                    "--util", str(args.util),
@@ -452,6 +630,12 @@ def main() -> int:
               f"This run is NOT complete until RESULT.md is authored. "
               f"NO RESULT / empty output = the run FAILED.")
         print(f"  self-verify       : {dsc.get('self_verify_cmd')}")
+    if dash_pid:
+        _reachable = ("127.0.0.1" if args.dashboard_host in
+                      ("127.0.0.1", "localhost") else args.dashboard_host)
+        print(f"  dashboard         : http://{_reachable}:"
+              f"{args.dashboard_port} still live (final state viewable) — "
+              f"stop with: kill {dash_pid}")
     print(f"{'='*72}")
     lock.release()  # explicit; atexit/signal handlers are the backstop
     return 0 if overall in ("PASS", "PASS_WITH_WAIVERS") else 1
