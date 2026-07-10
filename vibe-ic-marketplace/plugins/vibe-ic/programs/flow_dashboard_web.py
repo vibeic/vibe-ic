@@ -28,6 +28,7 @@ import json
 import os
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -47,8 +48,9 @@ _FULL_TTL = 15.0
 _status_cache: dict = {}  # (project, full) -> (monotonic_ts, bytes)
 
 
-def status_json(project: str, full: bool) -> bytes:
-    """Return collect(project, full) as JSON bytes.
+def status_json(project: str, full: bool, auto: bool = False) -> bytes:
+    """Return collect(project, full) — or collect_auto(project) when *auto* — as
+    JSON bytes.
 
     Never raises: on ANY failure (including collect not being importable yet
     because the sibling provider is still landing) it returns a JSON object
@@ -56,22 +58,26 @@ def status_json(project: str, full: bool) -> bytes:
     a 200-able body, never a 500 stacktrace to the browser.
 
     Full mode is TTL-cached (_FULL_TTL) so repeated fast polls don't re-run the
-    authoritative gate matrix on every request.
+    authoritative gate matrix on every request. AUTO manages its own settled-
+    state cache inside collect_auto(), so it is not TTL-cached here.
     """
     import time as _time
 
     key = (str(project), bool(full))
-    if full:
+    if full and not auto:
         hit = _status_cache.get(key)
         if hit is not None and (_time.monotonic() - hit[0]) < _FULL_TTL:
             return hit[1]
     try:
-        from flow_dashboard_data import collect  # local import: fresh per call
+        if auto:
+            from flow_dashboard_data import collect_auto  # local import: fresh per call
+        else:
+            from flow_dashboard_data import collect  # local import: fresh per call
     except Exception as exc:  # pragma: no cover - only when provider missing
         payload = {"error": f"flow_dashboard_data.collect unavailable: {exc}"}
         return json.dumps(payload).encode("utf-8")
     try:
-        data = collect(project, full)
+        data = collect_auto(project) if auto else collect(project, full)
     except Exception as exc:
         payload = {"error": f"collect() failed: {exc}"}
         return json.dumps(payload).encode("utf-8")
@@ -79,9 +85,53 @@ def status_json(project: str, full: bool) -> bytes:
         body = json.dumps(data, default=str).encode("utf-8")
     except Exception as exc:  # pragma: no cover - collect returns JSON-able dicts
         return json.dumps({"error": f"serialization failed: {exc}"}).encode("utf-8")
-    if full:
+    if full and not auto:
         _status_cache[key] = (_time.monotonic(), body)
     return body
+
+
+def fleet_json(root: str, full: bool, auto: bool = False) -> bytes:
+    """Return collect_fleet([], full, root=<root>, auto=<auto>) as JSON bytes.
+
+    Same safety contract as status_json(): never raises, always returns a
+    200-able JSON body (an ``error`` key on failure). Not TTL-cached — the
+    per-IC collect is the same fast file-stat as single mode (and AUTO manages
+    its own settled-state cache); a live campaign wants fresh numbers.
+    """
+    try:
+        from flow_dashboard_data import collect_fleet  # local import: fresh per call
+    except Exception as exc:  # pragma: no cover - only when provider missing
+        payload = {"error": f"flow_dashboard_data.collect_fleet unavailable: {exc}"}
+        return json.dumps(payload).encode("utf-8")
+    try:
+        data = collect_fleet([], full=full, root=root, auto=auto)
+    except Exception as exc:  # pragma: no cover - collect_fleet is contractually safe
+        payload = {"error": f"collect_fleet() failed: {exc}"}
+        return json.dumps(payload).encode("utf-8")
+    try:
+        return json.dumps(data, default=str).encode("utf-8")
+    except Exception as exc:  # pragma: no cover
+        return json.dumps({"error": f"serialization failed: {exc}"}).encode("utf-8")
+
+
+def _is_allowed_project(root: str, project: str) -> bool:
+    """True iff *project* is one of the fleet children discovered under *root*.
+
+    Guards the fleet server's per-IC drill-down (/ic?project=…, /api/status?
+    project=…): a browser can only open a project that actually belongs to this
+    fleet, never an arbitrary filesystem path. realpath-compared so symlinks /
+    trailing slashes cannot slip past. Never raises."""
+    if not project:
+        return False
+    try:
+        from flow_dashboard_data import discover_projects
+    except Exception:  # pragma: no cover - only when provider missing
+        return False
+    try:
+        allowed = {os.path.realpath(p) for p in discover_projects(root)}
+        return os.path.realpath(os.path.expanduser(project)) in allowed
+    except Exception:  # pragma: no cover - defensive
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +244,7 @@ header.bar{
 }
 .chip .dot{width:.55rem; height:.55rem; border-radius:50%}
 .chip .n{font-variant-numeric:tabular-nums}
-.chip[data-k="done"]{background:var(--done-bg)} .chip[data-k="done"] .dot{background:var(--done)}
+.chip[data-k="pass"]{background:var(--done-bg)} .chip[data-k="pass"] .dot{background:var(--done)}
 .chip[data-k="skipped"]{background:var(--skipped-bg)} .chip[data-k="skipped"] .dot{background:var(--skipped)}
 .chip[data-k="waived"]{background:var(--waived-bg)} .chip[data-k="waived"] .dot{background:var(--waived)}
 .chip[data-k="fail"]{background:var(--fail-bg)} .chip[data-k="fail"] .dot{background:var(--fail)}
@@ -236,7 +286,7 @@ section.phase{
   background:var(--panel2);
 }
 .step:hover{background:var(--chip-bg)}
-.step[data-s="done"]{border-left-color:var(--done)}
+.step[data-s="pass"]{border-left-color:var(--done)}
 .step[data-s="skipped"]{border-left-color:var(--skipped)}
 .step[data-s="waived"]{border-left-color:var(--waived)}
 .step[data-s="fail"]{border-left-color:var(--fail)}
@@ -246,7 +296,7 @@ section.phase{
 .step[data-s="external"]{border-left-color:var(--external)}
 .step[data-s="running"]{border-left-color:var(--running)}
 .sq{width:.62rem; height:.62rem; border-radius:3px; flex:0 0 auto; background:var(--pending)}
-.step[data-s="done"] .sq{background:var(--done)}
+.step[data-s="pass"] .sq{background:var(--done)}
 .step[data-s="skipped"] .sq{background:var(--skipped)}
 .step[data-s="waived"] .sq{background:var(--waived)}
 .step[data-s="fail"] .sq{background:var(--fail)}
@@ -274,6 +324,7 @@ section.phase{
       <span class="title"><span class="logo">🔬</span> <span id="pname">Vibe-IC Flow</span></span>
       <span class="badge" id="modebadge">…</span>
       <span class="badge" id="verbadge" hidden></span>
+      <a class="tbtn" id="fleetlink" href="/" title="Back to the fleet overview" hidden>← Fleet</a>
       <span class="spacer"></span>
       <span class="updated" id="updated">connecting…</span>
       <button class="tbtn" id="themebtn" title="Toggle light / dark" aria-label="Toggle theme">◐ Theme</button>
@@ -288,7 +339,7 @@ section.phase{
   <div id="err" class="errbox" hidden></div>
   <main id="phases"><div class="loading">Loading flow status…</div></main>
 
-  <div class="foot">Vibe-IC flow dashboard · whole flow on one page · hover any step for its outputs &amp; location · auto-refreshes every 2s</div>
+  <div class="foot">Vibe-IC flow dashboard · whole flow on one page · Done = reached &amp; judged (pass/fail/skip/n-a/external) · hover any step for its outputs · auto-refresh 2s live / 30s idle</div>
 </div>
 
 <script>
@@ -316,8 +367,8 @@ section.phase{
   if(tb){ tb.addEventListener("click", toggleTheme); }
 
   // ---- helpers ----
-  var STATUSES = ["done","skipped","waived","fail","missing","running","partial","na","external","pending"];
-  var CHIP_ORDER = ["done","running","partial","pending","na","external","skipped","waived","fail","missing"];
+  var STATUSES = ["pass","skipped","waived","fail","missing","running","partial","na","external","pending"];
+  var CHIP_ORDER = ["pass","running","partial","pending","na","external","skipped","waived","fail","missing"];
   function fmtSize(n){
     if(n === null || n === undefined || isNaN(n)) return "";
     if(n < 1024) return n + " B";
@@ -330,11 +381,13 @@ section.phase{
 
   // ---- render ----
   var lastServerTs = 0;      // seconds since epoch of last successful fetch
+  var pollMs = 2000;         // current adaptive poll cadence
   function updateAgo(){
     var u = document.getElementById("updated");
     if(!lastServerTs){ return; }
     var secs = Math.max(0, Math.round(Date.now()/1000 - lastServerTs));
-    u.textContent = "updated " + secs + "s ago";
+    var cadence = pollMs >= 30000 ? "idle · 30s poll" : "live · 2s poll";
+    u.textContent = "updated " + secs + "s ago · " + cadence;
   }
 
   function renderSummary(d){
@@ -343,12 +396,16 @@ section.phase{
     var mb = document.getElementById("modebadge");
     setText(mb, d.mode || "");
     var vb = document.getElementById("verbadge");
-    if(d.flow_version){ setText(vb, "v" + d.flow_version); vb.hidden = false; }
+    // Show the shipped vibe-ic PLUGIN version (what the user runs), not the
+    // internal flow-schema version. Fall back to flow_version only if absent.
+    if(d.plugin_version){ setText(vb, "vibe-ic v" + d.plugin_version); vb.hidden = false; }
+    else if(d.flow_version){ setText(vb, "flow v" + d.flow_version); vb.hidden = false; }
     else { vb.hidden = true; }
 
     var total = s.total || 0;
-    var done = s.done || 0;
-    setText(document.getElementById("progtxt"), done + " / " + total);
+    // DONE = reached & judged (any verdict) = resolved, NOT just the PASS subset.
+    var done = (s.resolved != null ? s.resolved : (s.done || 0));
+    setText(document.getElementById("progtxt"), "Done " + done + " / " + total);
     var pct = total ? Math.round(100*done/total) : 0;
     document.getElementById("progfill").style.width = pct + "%";
 
@@ -419,7 +476,7 @@ section.phase{
     var ic = el("span","picon"); setText(ic, ph.icon || "•"); head.appendChild(ic);
     var lab = el("span","plabel"); setText(lab, ph.label || ph.key || ""); head.appendChild(lab);
     var total = ph.total || (ph.steps ? ph.steps.length : 0);
-    var done = ph.done || 0;
+    var done = (ph.resolved != null ? ph.resolved : (ph.done || 0));
     var cnt = el("span","pcount"); setText(cnt, done + "/" + total); head.appendChild(cnt);
     var mini = el("div","pmini"); var fill = el("i");
     fill.style.width = (total ? Math.round(100*done/total) : 0) + "%";
@@ -453,23 +510,50 @@ section.phase{
     window.scrollTo(0, y);
   }
 
-  // ---- poll loop ----
+  // ---- adaptive poll loop ----
+  // Fast (2s) while ANY step is RUNNING so a live build ticks in real time;
+  // back off to 30s when the flow is quiescent/finished so a completed
+  // dashboard does not hammer the server (and the "updated Ns ago" counter
+  // reflects the real cadence).
   var inflight = false;
+  var FAST_MS = 2000, IDLE_MS = 30000;
+  var pollTimer = null;
+  function scheduleNext(ms){
+    if(pollTimer) clearTimeout(pollTimer);
+    pollTimer = setTimeout(tick, ms);
+  }
+  // When this page is opened from the fleet (/ic?project=…) the project rides
+  // in the query string; forward it to the status endpoint and reveal the
+  // "← Fleet" back link. In stand-alone single-IC mode the search is empty and
+  // the server serves its fixed project, so this is a harmless no-op.
+  var SEARCH = window.location.search || "";
+  (function(){
+    try{
+      if(new URLSearchParams(SEARCH).get("project")){
+        var fl = document.getElementById("fleetlink");
+        if(fl) fl.hidden = false;
+      }
+    }catch(e){}
+  })();
+
   function tick(){
-    if(inflight) return;
+    if(inflight){ scheduleNext(FAST_MS); return; }
     inflight = true;
-    fetch("/api/status", {cache:"no-store"}).then(function(r){ return r.json(); }).then(function(d){
+    fetch("/api/status" + SEARCH, {cache:"no-store"}).then(function(r){ return r.json(); }).then(function(d){
       lastServerTs = Date.now()/1000;
-      updateAgo();
       render(d);
+      var running = (d.summary && d.summary.running) || 0;
+      pollMs = running > 0 ? FAST_MS : IDLE_MS;
+      updateAgo();
+      scheduleNext(pollMs);
     }).catch(function(e){
       var errEl = document.getElementById("err");
       errEl.hidden = false;
       setText(errEl, "⚠ fetch failed: " + e);
+      scheduleNext(FAST_MS);
     }).finally(function(){ inflight = false; });
   }
   tick();
-  setInterval(tick, 2000);
   setInterval(updateAgo, 1000);
 })();
 </script>
@@ -500,11 +584,387 @@ def build_page() -> str:
 
 
 # ---------------------------------------------------------------------------
+# FLEET page — many ICs at a glance (multi-IC / multi-subagent overview)
+# ---------------------------------------------------------------------------
+# Self-contained, theme-aware, one card per IC. The status colour palette is
+# the SAME CSS-variable set as the single-IC page (kept in sync deliberately);
+# a fleet card is a compact roll-up (summary chips + per-phase mini bars +
+# running-step line), NOT the full 59-step grid — that lives on the single-IC
+# dashboard for a chosen project.
+_FLEET_PAGE = r"""<!-- Vibe-IC FLEET dashboard — self-contained, theme-aware, auto-refreshing -->
+<style>
+:root{
+  --bg:#f4f6fa; --panel:#ffffff; --panel2:#f0f3f8; --border:#dde3ec;
+  --fg:#1c2430; --muted:#68748a; --track:#e3e8f0;
+  --accent:#3d6bff; --accent-fg:#ffffff;
+  --done:#1a9e57; --done-bg:#e3f6ec;
+  --skipped:#0d9aa8; --skipped-bg:#def4f6;
+  --waived:#c78a12; --waived-bg:#fbf1d8;
+  --fail:#d8382f; --fail-bg:#fbe6e5;
+  --running:#2f6bff; --running-bg:#e5edff;
+  --partial:#9b51e0; --partial-bg:#f0e6fb;
+  --na:#7c869a; --na-bg:#eceef2;
+  --external:#9a7d55; --external-bg:#f4eede;
+  --pending:#8a94a6; --pending-bg:#eceff4;
+  --chip-bg:#eef1f7; --chip-fg:#38445a; --shadow:0 1px 3px rgba(20,30,50,.08);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#0e1420; --panel:#161e2c; --panel2:#1b2536; --border:#28344a;
+    --fg:#e6ecf5; --muted:#8a97ad; --track:#232f45;
+    --accent:#5b82ff; --accent-fg:#ffffff;
+    --done:#3ddb8a; --done-bg:#12321f;
+    --skipped:#39d3e3; --skipped-bg:#0c2b30;
+    --waived:#f0b843; --waived-bg:#332612;
+    --fail:#ff6a5f; --fail-bg:#331715;
+    --running:#6f9bff; --running-bg:#152645;
+    --partial:#b989f2; --partial-bg:#2a1a3d;
+    --na:#8b96ab; --na-bg:#1b2231;
+    --external:#bb9a68; --external-bg:#2b2416;
+    --pending:#9aa5ba; --pending-bg:#1c2536;
+    --chip-bg:#1e2839; --chip-fg:#b7c2d6; --shadow:0 1px 3px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="light"]{
+  --bg:#f4f6fa; --panel:#ffffff; --panel2:#f0f3f8; --border:#dde3ec;
+  --fg:#1c2430; --muted:#68748a; --track:#e3e8f0;
+  --accent:#3d6bff; --accent-fg:#ffffff;
+  --done:#1a9e57; --done-bg:#e3f6ec;
+  --skipped:#0d9aa8; --skipped-bg:#def4f6;
+  --waived:#c78a12; --waived-bg:#fbf1d8;
+  --fail:#d8382f; --fail-bg:#fbe6e5;
+  --running:#2f6bff; --running-bg:#e5edff;
+  --partial:#9b51e0; --partial-bg:#f0e6fb;
+  --na:#7c869a; --na-bg:#eceef2;
+  --external:#9a7d55; --external-bg:#f4eede;
+  --pending:#8a94a6; --pending-bg:#eceff4;
+  --chip-bg:#eef1f7; --chip-fg:#38445a; --shadow:0 1px 3px rgba(20,30,50,.08);
+}
+:root[data-theme="dark"]{
+  --bg:#0e1420; --panel:#161e2c; --panel2:#1b2536; --border:#28344a;
+  --fg:#e6ecf5; --muted:#8a97ad; --track:#232f45;
+  --accent:#5b82ff; --accent-fg:#ffffff;
+  --done:#3ddb8a; --done-bg:#12321f;
+  --skipped:#39d3e3; --skipped-bg:#0c2b30;
+  --waived:#f0b843; --waived-bg:#332612;
+  --fail:#ff6a5f; --fail-bg:#331715;
+  --running:#6f9bff; --running-bg:#152645;
+  --partial:#b989f2; --partial-bg:#2a1a3d;
+  --na:#8b96ab; --na-bg:#1b2231;
+  --external:#bb9a68; --external-bg:#2b2416;
+  --pending:#9aa5ba; --pending-bg:#1c2536;
+  --chip-bg:#1e2839; --chip-fg:#b7c2d6; --shadow:0 1px 3px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;overflow-x:hidden;max-width:100%}
+body{
+  background:var(--bg); color:var(--fg);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,"PingFang TC","Microsoft JhengHei",sans-serif;
+  font-size:14px; line-height:1.45;
+}
+a{color:var(--accent)}
+.wrap{max-width:1720px; margin:0 auto; padding:1rem 1.1rem 2rem}
+header.bar{
+  position:sticky; top:0; z-index:20; background:var(--panel);
+  border:1px solid var(--border); border-radius:14px; box-shadow:var(--shadow);
+  padding:.85rem 1.1rem; margin-bottom:1.1rem;
+}
+.hrow{display:flex; align-items:center; gap:.7rem; flex-wrap:wrap}
+.title{font-size:1.15rem; font-weight:700; letter-spacing:.2px}
+.title .logo{opacity:.9}
+.badge{
+  font-size:.72rem; font-weight:700; text-transform:uppercase; letter-spacing:.5px;
+  padding:.16rem .5rem; border-radius:999px; background:var(--chip-bg); color:var(--chip-fg);
+  border:1px solid var(--border);
+}
+.spacer{flex:1 1 auto}
+.updated{font-size:.74rem; color:var(--muted); white-space:nowrap}
+.tbtn{
+  cursor:pointer; border:1px solid var(--border); background:var(--panel2); color:var(--fg);
+  border-radius:9px; padding:.32rem .6rem; font-size:.8rem; font-weight:600; line-height:1;
+}
+.tbtn:hover{border-color:var(--accent)}
+.progline{display:flex; align-items:center; gap:.7rem; margin-top:.7rem; flex-wrap:wrap}
+.progtxt{font-variant-numeric:tabular-nums; font-weight:700; font-size:.95rem; white-space:nowrap}
+.bar-track{flex:1 1 240px; height:12px; background:var(--track); border-radius:999px; overflow:hidden; min-width:160px}
+.bar-fill{height:100%; width:0%; background:var(--accent); border-radius:999px; transition:width .5s ease}
+.chips{display:flex; gap:.4rem; flex-wrap:wrap; margin-top:.65rem}
+.chip{display:inline-flex; align-items:center; gap:.35rem; font-size:.74rem; font-weight:700;
+  padding:.2rem .55rem; border-radius:999px; border:1px solid var(--border); white-space:nowrap}
+.chip .dot{width:.55rem; height:.55rem; border-radius:50%}
+.chip .n{font-variant-numeric:tabular-nums}
+.chip[data-k="pass"]{background:var(--done-bg)} .chip[data-k="pass"] .dot{background:var(--done)}
+.chip[data-k="skipped"]{background:var(--skipped-bg)} .chip[data-k="skipped"] .dot{background:var(--skipped)}
+.chip[data-k="waived"]{background:var(--waived-bg)} .chip[data-k="waived"] .dot{background:var(--waived)}
+.chip[data-k="fail"]{background:var(--fail-bg)} .chip[data-k="fail"] .dot{background:var(--fail)}
+.chip[data-k="missing"]{background:var(--fail-bg)} .chip[data-k="missing"] .dot{background:var(--fail)}
+.chip[data-k="running"]{background:var(--running-bg)} .chip[data-k="running"] .dot{background:var(--running)}
+.chip[data-k="partial"]{background:var(--partial-bg)} .chip[data-k="partial"] .dot{background:var(--partial)}
+.chip[data-k="na"]{background:var(--na-bg)} .chip[data-k="na"] .dot{background:var(--na)}
+.chip[data-k="external"]{background:var(--external-bg)} .chip[data-k="external"] .dot{background:var(--external)}
+.chip[data-k="pending"]{background:var(--pending-bg)} .chip[data-k="pending"] .dot{background:var(--pending)}
+.errbox{border:1px solid var(--fail); background:var(--fail-bg); color:var(--fail);
+  border-radius:10px; padding:.7rem .9rem; margin-bottom:1rem; font-weight:600}
+
+/* One card per IC; the whole fleet fits on one page. Each card is a LINK to
+   that IC's full 59-step page (/ic?project=…). */
+main#fleet{display:grid; gap:.8rem; align-items:start;
+  grid-template-columns:repeat(auto-fill, minmax(340px, 1fr))}
+.ic{display:block; text-decoration:none; color:inherit; cursor:pointer;
+  background:var(--panel); border:1px solid var(--border); border-radius:12px;
+  box-shadow:var(--shadow); padding:.7rem .8rem .75rem; break-inside:avoid;
+  border-left:4px solid var(--pending); transition:border-color .15s ease, transform .1s ease}
+.ic:hover{border-color:var(--accent)}
+.ic:active{transform:translateY(1px)}
+.ic[data-run="1"]{border-left-color:var(--running)}
+.ic[data-done="1"]{border-left-color:var(--done)}
+.ic .opencue{font-size:.7rem; color:var(--accent); white-space:nowrap; opacity:0; transition:opacity .15s ease}
+.ic:hover .opencue{opacity:1}
+.ichead{display:flex; align-items:center; gap:.5rem; flex-wrap:wrap}
+.icname{font-weight:800; font-size:.95rem; flex:1 1 auto; min-width:0;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.icrun{display:inline-flex; align-items:center; gap:.3rem; font-size:.72rem; font-weight:700;
+  color:var(--running); background:var(--running-bg); border:1px solid var(--border);
+  padding:.1rem .45rem; border-radius:999px}
+.icrun .rdot{width:.5rem; height:.5rem; border-radius:50%; background:var(--running);
+  animation:pulse 1.1s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1} 50%{opacity:.3}}
+.icprog{display:flex; align-items:center; gap:.55rem; margin-top:.55rem}
+.icprog .t{font-variant-numeric:tabular-nums; font-weight:700; font-size:.8rem; white-space:nowrap}
+.icbar{flex:1 1 auto; height:9px; background:var(--track); border-radius:999px; overflow:hidden; min-width:80px}
+.icbar > i{display:block; height:100%; width:0%; background:var(--accent); border-radius:999px; transition:width .5s ease}
+.icchips{display:flex; gap:.3rem; flex-wrap:wrap; margin-top:.5rem}
+.icchips .chip{font-size:.68rem; padding:.12rem .42rem}
+/* per-phase mini bars: 6 tiny segments, icon-labelled, so you see WHERE each IC is */
+.phmini{display:flex; gap:.3rem; margin-top:.55rem; flex-wrap:wrap}
+.phseg{display:flex; align-items:center; gap:.25rem; font-size:.66rem; color:var(--muted)}
+.phseg .pi{font-size:.8rem; line-height:1}
+.phseg .pb{width:34px; height:5px; background:var(--track); border-radius:999px; overflow:hidden}
+.phseg .pb > i{display:block; height:100%; width:0%; background:var(--accent); border-radius:999px}
+.phseg .pn{font-variant-numeric:tabular-nums}
+.icsteps{margin-top:.5rem; font-size:.72rem; color:var(--running); display:flex; align-items:flex-start; gap:.35rem}
+.icsteps .m{flex:0 0 auto} .icsteps .s{min-width:0}
+.foot{margin-top:1rem; text-align:center; color:var(--muted); font-size:.72rem}
+.loading{color:var(--muted); padding:2rem 0; text-align:center}
+</style>
+
+<div class="wrap">
+  <header class="bar">
+    <div class="hrow">
+      <span class="title"><span class="logo">🔬</span> Vibe-IC Fleet</span>
+      <span class="badge" id="cntbadge">…</span>
+      <span class="badge" id="verbadge" hidden></span>
+      <span class="spacer"></span>
+      <span class="updated" id="updated">connecting…</span>
+      <button class="tbtn" id="themebtn" title="Toggle light / dark" aria-label="Toggle theme">◐ Theme</button>
+    </div>
+    <div class="progline">
+      <span class="progtxt" id="progtxt">0 / 0</span>
+      <div class="bar-track"><div class="bar-fill" id="progfill"></div></div>
+    </div>
+    <div class="chips" id="chips"></div>
+  </header>
+
+  <div id="err" class="errbox" hidden></div>
+  <main id="fleet"><div class="loading">Loading fleet status…</div></main>
+
+  <div class="foot">Vibe-IC fleet · click any card → its full 59-step view · Done = reached &amp; judged (pass/fail/skip/n-a/external) · ▸ = steps running now · auto-refresh 2s live / 30s idle</div>
+</div>
+
+<script>
+"use strict";
+(function(){
+  var LS = "vibeic_flow_theme";
+  var root = document.documentElement;
+  try{
+    var saved = localStorage.getItem(LS);
+    if(saved === "light" || saved === "dark"){ root.setAttribute("data-theme", saved); }
+  }catch(e){}
+  function toggleTheme(){
+    var cur = root.getAttribute("data-theme");
+    if(!cur){
+      var dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      cur = dark ? "dark" : "light";
+    }
+    var next = (cur === "dark") ? "light" : "dark";
+    root.setAttribute("data-theme", next);
+    try{ localStorage.setItem(LS, next); }catch(e){}
+  }
+  var tb = document.getElementById("themebtn");
+  if(tb){ tb.addEventListener("click", toggleTheme); }
+
+  var CHIP_ORDER = ["pass","running","partial","pending","na","external","skipped","waived","fail","missing"];
+  function el(tag, cls){ var e = document.createElement(tag); if(cls) e.className = cls; return e; }
+  function setText(e, t){ e.textContent = (t === null || t === undefined) ? "" : String(t); }
+  function num(v){ return (v === null || v === undefined || isNaN(v)) ? 0 : v; }
+  function resolvedOf(s){ return (s && s.resolved != null) ? s.resolved : ((s && s.done) || 0); }
+
+  var lastServerTs = 0;
+  var pollMs = 2000;
+  function updateAgo(){
+    var u = document.getElementById("updated");
+    if(!lastServerTs){ return; }
+    var secs = Math.max(0, Math.round(Date.now()/1000 - lastServerTs));
+    var cadence = pollMs >= 30000 ? "idle · 30s poll" : "live · 2s poll";
+    u.textContent = "updated " + secs + "s ago · " + cadence;
+  }
+
+  function chip(k, n){
+    var c = el("span","chip"); c.setAttribute("data-k", k);
+    c.appendChild(el("span","dot"));
+    var lab = el("span"); setText(lab, k); c.appendChild(lab);
+    var nn = el("span","n"); setText(nn, n); c.appendChild(nn);
+    return c;
+  }
+
+  function renderAgg(d){
+    var a = d.agg || {};
+    var cnt = num(a.ic_count), run = num(a.ic_running), done = num(a.ic_done);
+    setText(document.getElementById("cntbadge"),
+      cnt + " IC" + (cnt===1?"":"s") + " · " + run + " running · " + done + " done");
+    var vb = document.getElementById("verbadge");
+    if(d.plugin_version){ setText(vb, "vibe-ic v" + d.plugin_version); vb.hidden = false; }
+    else { vb.hidden = true; }
+
+    var total = num(a.total), rdone = num(a.resolved);
+    setText(document.getElementById("progtxt"), "Done " + rdone + " / " + total + " steps");
+    document.getElementById("progfill").style.width = (total ? Math.round(100*rdone/total) : 0) + "%";
+
+    var chips = document.getElementById("chips");
+    chips.textContent = "";
+    CHIP_ORDER.forEach(function(k){ var n = num(a[k]); if(n) chips.appendChild(chip(k, n)); });
+  }
+
+  function renderCard(c){
+    var s = c.summary || {};
+    var total = num(s.total), done = resolvedOf(s), running = num(s.running);
+    // The whole card is a link into that IC's full 59-step page.
+    var sec = el("a","ic");
+    sec.href = "/ic?project=" + encodeURIComponent(c.project || "");
+    if(running > 0) sec.setAttribute("data-run","1");
+    else if(total && done >= total) sec.setAttribute("data-done","1");
+
+    var head = el("div","ichead");
+    var nm = el("span","icname"); setText(nm, c.project_name || c.project || "(ic)"); head.appendChild(nm);
+    var cue = el("span","opencue"); setText(cue, "open 59 steps →"); head.appendChild(cue);
+    if(running > 0){
+      var r = el("span","icrun"); r.appendChild(el("span","rdot"));
+      var rt = el("span"); setText(rt, running + " running"); r.appendChild(rt); head.appendChild(r);
+    }
+    var mb = el("span","badge"); setText(mb, c.mode || ""); head.appendChild(mb);
+    sec.appendChild(head);
+
+    if(c.error){
+      var eb = el("div","icsteps"); eb.style.color = "var(--fail)";
+      setText(eb, "⚠ " + c.error); sec.appendChild(eb); return sec;
+    }
+
+    var prog = el("div","icprog");
+    var pt = el("span","t"); setText(pt, "Done " + done + "/" + total); prog.appendChild(pt);
+    var bar = el("div","icbar"); var fill = el("i");
+    fill.style.width = (total ? Math.round(100*done/total) : 0) + "%";
+    bar.appendChild(fill); prog.appendChild(bar);
+    sec.appendChild(prog);
+
+    var chips = el("div","icchips");
+    CHIP_ORDER.forEach(function(k){ var n = num(s[k]); if(n) chips.appendChild(chip(k, n)); });
+    sec.appendChild(chips);
+
+    var pm = el("div","phmini");
+    (c.phases_mini || []).forEach(function(ph){
+      var seg = el("span","phseg");
+      var pi = el("span","pi"); setText(pi, ph.icon || "•"); seg.appendChild(pi);
+      var pb = el("span","pb"); var pf = el("i");
+      var pt2 = num(ph.total), pr = num(ph.resolved);
+      pf.style.width = (pt2 ? Math.round(100*pr/pt2) : 0) + "%";
+      pb.appendChild(pf); seg.appendChild(pb);
+      var pn = el("span","pn"); setText(pn, pr + "/" + pt2); seg.appendChild(pn);
+      seg.title = (ph.label || ph.key || "") + ": " + pr + "/" + pt2;
+      pm.appendChild(seg);
+    });
+    sec.appendChild(pm);
+
+    var rs = c.running_steps || [];
+    if(rs.length){
+      var line = el("div","icsteps");
+      var mk = el("span","m"); setText(mk, "▸"); line.appendChild(mk);
+      var names = rs.slice(0,3).map(function(x){ return "#" + x.id + " " + (x.name||""); }).join(", ");
+      if(rs.length > 3) names += " +" + (rs.length - 3);
+      var sp = el("span","s"); setText(sp, names); line.appendChild(sp);
+      sec.appendChild(line);
+    }
+    return sec;
+  }
+
+  function render(d){
+    var errEl = document.getElementById("err");
+    if(d.error){ errEl.hidden = false; setText(errEl, "⚠ " + d.error); return; }
+    errEl.hidden = true;
+    renderAgg(d);
+    var y = window.scrollY;
+    var host = document.getElementById("fleet");
+    var frag = document.createDocumentFragment();
+    var fleet = d.fleet || [];
+    if(!fleet.length){
+      var empty = el("div","loading");
+      setText(empty, "No Vibe-IC projects found under this directory.");
+      frag.appendChild(empty);
+    } else {
+      fleet.forEach(function(c){ frag.appendChild(renderCard(c)); });
+    }
+    host.textContent = "";
+    host.appendChild(frag);
+    window.scrollTo(0, y);
+  }
+
+  var inflight = false;
+  var FAST_MS = 2000, IDLE_MS = 30000;
+  var pollTimer = null;
+  function scheduleNext(ms){ if(pollTimer) clearTimeout(pollTimer); pollTimer = setTimeout(tick, ms); }
+  function tick(){
+    if(inflight){ scheduleNext(FAST_MS); return; }
+    inflight = true;
+    fetch("/api/fleet", {cache:"no-store"}).then(function(r){ return r.json(); }).then(function(d){
+      lastServerTs = Date.now()/1000;
+      render(d);
+      var running = (d.agg && d.agg.ic_running) || 0;
+      pollMs = running > 0 ? FAST_MS : IDLE_MS;
+      updateAgo();
+      scheduleNext(pollMs);
+    }).catch(function(e){
+      var errEl = document.getElementById("err");
+      errEl.hidden = false; setText(errEl, "⚠ fetch failed: " + e);
+      scheduleNext(FAST_MS);
+    }).finally(function(){ inflight = false; });
+  }
+  tick();
+  setInterval(updateAgo, 1000);
+})();
+</script>
+"""
+
+
+def build_fleet_page() -> str:
+    """Return the full self-contained FLEET HTML document (pure)."""
+    return _HEAD + _FLEET_PAGE + _TAIL
+
+
+# ---------------------------------------------------------------------------
 # HTTP handler + server
 # ---------------------------------------------------------------------------
-def make_handler(project: str, full: bool):
-    """Return a BaseHTTPRequestHandler subclass bound to (project, full)."""
-    page_bytes = build_page().encode("utf-8")
+def make_handler(project: str, full: bool, fleet: str = "", auto: bool = False):
+    """Return a BaseHTTPRequestHandler subclass.
+
+    Single-IC mode (fleet=="") serves the single-project page at "/" and
+    collect(project) JSON at /api/status. FLEET mode (fleet=<root dir>) serves
+    the fleet page at "/" and collect_fleet(root) JSON at /api/fleet — *project*
+    is ignored in that mode. With *auto*, status/fleet use the adaptive
+    collector (lightweight while live, authoritative once idle).
+    """
+    is_fleet = bool(fleet)
+    page_bytes = (build_fleet_page() if is_fleet else build_page()).encode("utf-8")
+    # In fleet mode the SAME server also serves the single-IC drill-down page.
+    ic_page_bytes = build_page().encode("utf-8") if is_fleet else page_bytes
 
     class _Handler(BaseHTTPRequestHandler):
         server_version = "VibeICFlowDash/1.0"
@@ -520,14 +980,36 @@ def make_handler(project: str, full: bool):
                 self.wfile.write(body)
 
         def do_GET(self):  # noqa: N802 (stdlib naming)
-            path = self.path.split("?", 1)[0]
+            parsed = urlparse(self.path)
+            path = parsed.path
             if path == "/" or path == "/index.html":
                 self._send(200, page_bytes, "text/html; charset=utf-8")
                 return
-            if path == "/api/status":
-                body = status_json(project, full)
-                self._send(200, body, "application/json; charset=utf-8")
-                return
+            if is_fleet:
+                if path == "/api/fleet":
+                    self._send(200, fleet_json(fleet, full, auto),
+                               "application/json; charset=utf-8")
+                    return
+                # drill-down: /ic?project=<abs> serves the single-IC page; its
+                # /api/status?project=<abs> is validated against the fleet set.
+                if path == "/ic":
+                    self._send(200, ic_page_bytes, "text/html; charset=utf-8")
+                    return
+                if path == "/api/status":
+                    proj = (parse_qs(parsed.query).get("project") or [""])[0]
+                    if _is_allowed_project(fleet, proj):
+                        self._send(200, status_json(proj, full, auto),
+                                   "application/json; charset=utf-8")
+                    else:
+                        self._send(404,
+                                   json.dumps({"error": "unknown or unlisted project"}).encode("utf-8"),
+                                   "application/json; charset=utf-8")
+                    return
+            else:
+                if path == "/api/status":
+                    self._send(200, status_json(project, full, auto),
+                               "application/json; charset=utf-8")
+                    return
             if path == "/favicon.ico":
                 self.send_response(204)
                 self.send_header("Content-Length", "0")
@@ -541,18 +1023,26 @@ def make_handler(project: str, full: bool):
     return _Handler
 
 
-def serve(project: str, port: int = 8787, full: bool = False, host: str = "127.0.0.1") -> None:
-    """Run the ThreadingHTTPServer on host:port until Ctrl-C."""
+def serve(project: str, port: int = 8787, full: bool = False, host: str = "127.0.0.1",
+          fleet: bool = False, auto: bool = False) -> None:
+    """Run the ThreadingHTTPServer on host:port until Ctrl-C.
+
+    When *fleet* is True, *project* is treated as a PARENT directory and every
+    child Vibe-IC project is shown on one page (the fleet overview). When *auto*
+    is True, status is adaptive (lightweight while live, authoritative once
+    idle)."""
     project = os.path.abspath(project)
     name = os.path.basename(project.rstrip("/")) or project
-    mode = "full" if full else "lightweight"
-    handler = make_handler(project, full)
+    mode = "auto" if auto else ("full" if full else "lightweight")
+    handler = make_handler(project, full, fleet=project if fleet else "", auto=auto)
     httpd = ThreadingHTTPServer((host, port), handler)
     # Show 127.0.0.1 in the clickable line even when bound to 0.0.0.0.
     shown = "127.0.0.1" if host in ("0.0.0.0", "", "::") else host
+    label = "fleet root" if fleet else "project"
+    kind = "fleet dashboard" if fleet else "flow dashboard"
     print(
-        "Vibe-IC flow dashboard → http://%s:%d  (project: %s, mode: %s)  Ctrl-C to stop"
-        % (shown, port, name, mode),
+        "Vibe-IC %s → http://%s:%d  (%s: %s, mode: %s)  Ctrl-C to stop"
+        % (kind, shown, port, label, name, mode),
         flush=True,
     )
     try:
@@ -569,16 +1059,21 @@ def _parse_args(argv=None):
         prog="flow_dashboard_web.py",
         description="Localhost web dashboard for the Vibe-IC Phase 1/2/3 (+Analog/Mixed/Mfg) flow.",
     )
-    p.add_argument("project", help="path to the project directory")
+    p.add_argument("project", help="path to the project directory (or, with --fleet, a parent dir)")
     p.add_argument("--port", type=int, default=8787, help="port to serve on (default 8787)")
     p.add_argument("--full", action="store_true", help="use the full (not lightweight) collect")
     p.add_argument("--host", default="127.0.0.1", help="host/interface to bind (default 127.0.0.1)")
+    p.add_argument("--fleet", action="store_true",
+                   help="treat PROJECT as a parent dir; show ALL child projects on one page")
+    p.add_argument("--auto", action="store_true",
+                   help="adaptive: lightweight while live, authoritative (full) once idle")
     return p.parse_args(argv)
 
 
 def main(argv=None) -> int:
     args = _parse_args(argv)
-    serve(args.project, port=args.port, full=args.full, host=args.host)
+    serve(args.project, port=args.port, full=args.full, host=args.host,
+          fleet=args.fleet, auto=args.auto)
     return 0
 
 

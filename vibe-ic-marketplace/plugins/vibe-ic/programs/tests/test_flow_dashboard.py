@@ -40,6 +40,35 @@ def test_web_flag_routes_to_web_and_strips_cli_only(monkeypatch):
     assert "/proj" in seen["argv"] and "--port" in seen["argv"] and "9999" in seen["argv"]
 
 
+def test_fleet_flag_passes_through_to_web(monkeypatch):
+    seen = {}
+
+    def fake_web_main(argv):
+        seen["argv"] = argv
+        return 0
+
+    import flow_dashboard_web as web
+    monkeypatch.setattr(web, "main", fake_web_main)
+    rc = fd.main(["/root", "--web", "--fleet"])
+    assert rc == 0
+    # --fleet is a shared flag; it must survive the web dispatch untouched.
+    assert "--fleet" in seen["argv"] and "/root" in seen["argv"]
+
+
+def test_fleet_flag_passes_through_to_cli(monkeypatch):
+    seen = {}
+
+    def fake_cli_main():
+        seen["argv"] = list(sys.argv)
+        return 0
+
+    import flow_dashboard_cli as cli
+    monkeypatch.setattr(cli, "main", fake_cli_main)
+    rc = fd.main(["/root", "--fleet", "--once"])
+    assert rc == 0
+    assert "--fleet" in seen["argv"] and "/root" in seen["argv"]
+
+
 def test_default_routes_to_cli_and_strips_web_only(monkeypatch):
     seen = {}
 

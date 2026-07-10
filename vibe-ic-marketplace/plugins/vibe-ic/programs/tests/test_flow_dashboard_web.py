@@ -20,6 +20,7 @@ import json
 import re
 import sys
 import threading
+import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 
@@ -39,7 +40,15 @@ def test_build_page_has_required_hooks():
     # theme-aware: media query default + manual data-theme toggle
     assert "prefers-color-scheme" in html
     assert "data-theme" in html
-    assert "setInterval" in html  # the 2s auto-refresh loop
+    assert "setInterval" in html   # updateAgo ticker
+    assert "setTimeout" in html     # adaptive poll (2s live / 30s idle)
+
+
+def test_build_page_shows_plugin_version_badge():
+    html = fdw.build_page()
+    # the version badge is wired to the SHIPPED plugin version, not flow schema
+    assert "plugin_version" in html
+    assert "vibe-ic v" in html
 
 
 def test_build_page_is_self_contained_no_external_urls():
@@ -74,15 +83,18 @@ _SAMPLE = {
     "project": "/abs/proj",
     "project_name": "proj",
     "mode": "lightweight",
-    "flow_version": "",
-    "summary": {"total": 2, "done": 1, "skipped": 0, "waived": 0,
-                "fail": 0, "missing": 0, "running": 1, "pending": 0},
+    "flow_version": "2",
+    "plugin_version": "1.3.58",
+    "summary": {"total": 2, "pass": 1, "skipped": 0, "waived": 0,
+                "fail": 0, "missing": 0, "running": 1, "partial": 0,
+                "na": 0, "external": 0, "pending": 0,
+                "resolved": 1, "passed": 1},
     "phases": [
         {"key": "phase1", "label": "Phase 1 · Spec → Design Docs", "icon": "📝",
-         "done": 1, "total": 1,
+         "resolved": 1, "passed": 1, "done": 1, "total": 1,
          "steps": [
              {"id": "11", "name": "DFT insertion", "stage": "stage2",
-              "status": "done", "status_label": "DONE", "blocks_on": [10],
+              "status": "pass", "status_label": "PASS", "blocks_on": [10],
               "gate": "", "detail": "",
               "outputs": [{"rel": "phase2/stage2/dft/scan_netlist.v",
                            "abs": "/abs/x", "exists": True, "size": 62719,
@@ -132,6 +144,23 @@ def test_status_json_passes_full_flag(monkeypatch):
     assert seen == {"project": "/p", "full": True}
 
 
+def test_status_json_auto_uses_collect_auto(monkeypatch):
+    import types
+    seen = {}
+    mod = types.ModuleType("flow_dashboard_data")
+    mod.collect = lambda project, full: {"mode": "lightweight", "summary": {}, "phases": []}
+
+    def fake_auto(project):
+        seen["project"] = project
+        return {"mode": "auto:full", "summary": {"total": 1, "running": 0}, "phases": []}
+
+    mod.collect_auto = fake_auto
+    monkeypatch.setitem(sys.modules, "flow_dashboard_data", mod)
+    data = json.loads(fdw.status_json("/p", False, auto=True).decode("utf-8"))
+    assert data["mode"] == "auto:full"
+    assert seen["project"] == "/p"
+
+
 def test_status_json_never_raises_on_collect_error(monkeypatch):
     def boom(project, full):
         raise RuntimeError("kaboom")
@@ -158,6 +187,197 @@ def test_make_handler_returns_subclass():
     from http.server import BaseHTTPRequestHandler
     H = fdw.make_handler("/abs/proj", False)
     assert issubclass(H, BaseHTTPRequestHandler)
+
+
+def test_make_handler_fleet_mode_returns_subclass():
+    from http.server import BaseHTTPRequestHandler
+    H = fdw.make_handler("", False, fleet="/abs/root")
+    assert issubclass(H, BaseHTTPRequestHandler)
+
+
+# ---------------------------------------------------------------------------
+# FLEET page + fleet_json (multi-IC overview)
+# ---------------------------------------------------------------------------
+_FLEET_SAMPLE = {
+    "kind": "fleet",
+    "plugin_version": "1.3.58",
+    "root": "/abs/root",
+    "count": 2,
+    "agg": {"total": 118, "resolved": 92, "passed": 40, "pass": 40,
+            "skipped": 4, "waived": 0, "fail": 0, "missing": 0, "running": 1,
+            "partial": 12, "na": 26, "external": 10, "pending": 26,
+            "ic_count": 2, "ic_running": 1, "ic_done": 0},
+    "fleet": [
+        {"project": "/abs/root/spm", "project_name": "spm", "mode": "lightweight",
+         "flow_version": "2",
+         "summary": {"total": 59, "pass": 25, "skipped": 2, "waived": 0,
+                     "fail": 0, "missing": 0, "running": 0, "partial": 6,
+                     "na": 13, "external": 5, "pending": 8,
+                     "resolved": 51, "passed": 25},
+         "phases_mini": [{"key": "phase1", "label": "Phase 1", "icon": "📝",
+                          "resolved": 2, "total": 2}],
+         "running_steps": []},
+        {"project": "/abs/root/sha256", "project_name": "sha256",
+         "mode": "lightweight", "flow_version": "2",
+         "summary": {"total": 59, "pass": 15, "skipped": 2, "waived": 0,
+                     "fail": 0, "missing": 0, "running": 1, "partial": 6,
+                     "na": 13, "external": 5, "pending": 17,
+                     "resolved": 41, "passed": 15},
+         "phases_mini": [{"key": "phase3", "label": "Phase 3", "icon": "🏗",
+                          "resolved": 3, "total": 20}],
+         "running_steps": [{"id": "31", "name": "Synthesis", "phase": "phase3"}]},
+    ],
+}
+
+
+def test_build_fleet_page_has_required_hooks():
+    html = fdw.build_fleet_page()
+    assert isinstance(html, str)
+    assert "<style" in html and "<script" in html
+    assert "/api/fleet" in html          # fleet endpoint
+    assert "prefers-color-scheme" in html and "data-theme" in html
+    assert "setInterval" in html and "setTimeout" in html
+    assert "vibe-ic v" in html           # plugin-version badge
+
+
+def test_fleet_cards_link_to_single_ic_page():
+    # each card is a link into that IC's full 59-step page
+    html = fdw.build_fleet_page()
+    assert "/ic?project=" in html
+    assert "encodeURIComponent" in html
+
+
+def test_single_page_forwards_project_query_and_has_back_link():
+    # opened from the fleet, the single page forwards ?project=… to the status
+    # endpoint and reveals a "← Fleet" back link.
+    html = fdw.build_page()
+    assert 'id="fleetlink"' in html
+    assert 'href="/"' in html
+    assert '/api/status" + SEARCH' in html
+
+
+def test_build_fleet_page_is_self_contained_no_external_urls():
+    html = fdw.build_fleet_page()
+    assert "http://" not in html and "https://" not in html
+    assert not re.search(r'src\s*=\s*["\']https?:', html)
+    assert not re.search(r'href\s*=\s*["\']https?:', html.lower())
+    assert "cdn" not in html.lower()
+
+
+def _install_fake_fleet(monkeypatch, fn):
+    import types
+    mod = types.ModuleType("flow_dashboard_data")
+    mod.collect_fleet = fn
+    monkeypatch.setitem(sys.modules, "flow_dashboard_data", mod)
+
+
+def test_fleet_json_returns_valid_json_with_contract_keys(monkeypatch):
+    _install_fake_fleet(monkeypatch, lambda projects, full, root, auto=False: _FLEET_SAMPLE)
+    raw = fdw.fleet_json("/abs/root", False)
+    assert isinstance(raw, (bytes, bytearray))
+    data = json.loads(raw.decode("utf-8"))
+    assert data["kind"] == "fleet"
+    assert data["count"] == 2
+    assert data["agg"]["ic_running"] == 1
+    assert [c["project_name"] for c in data["fleet"]] == ["spm", "sha256"]
+
+
+def test_fleet_json_passes_root_and_full(monkeypatch):
+    seen = {}
+
+    def fake(projects, full, root, auto=False):
+        seen["projects"] = projects
+        seen["full"] = full
+        seen["root"] = root
+        return {"kind": "fleet", "count": 0, "agg": {}, "fleet": []}
+
+    _install_fake_fleet(monkeypatch, fake)
+    fdw.fleet_json("/abs/root", True)
+    assert seen == {"projects": [], "full": True, "root": "/abs/root"}
+
+
+def test_fleet_json_passes_auto_flag(monkeypatch):
+    seen = {}
+
+    def fake(projects, full, root, auto=False):
+        seen["auto"] = auto
+        return {"kind": "fleet", "count": 0, "agg": {}, "fleet": []}
+
+    _install_fake_fleet(monkeypatch, fake)
+    fdw.fleet_json("/abs/root", False, auto=True)
+    assert seen["auto"] is True
+
+
+def test_fleet_json_never_raises_on_error(monkeypatch):
+    def boom(projects, full, root, auto=False):
+        raise RuntimeError("kaboom")
+
+    _install_fake_fleet(monkeypatch, boom)
+    data = json.loads(fdw.fleet_json("/abs/root", False).decode("utf-8"))
+    assert "error" in data and "kaboom" in data["error"]
+
+
+def test_fleet_json_never_raises_when_provider_missing(monkeypatch):
+    monkeypatch.setitem(sys.modules, "flow_dashboard_data", None)
+    data = json.loads(fdw.fleet_json("/abs/root", False).decode("utf-8"))
+    assert "error" in data
+
+
+def test_is_allowed_project_only_accepts_fleet_members(tmp_path):
+    (tmp_path / "chipA" / "phase1").mkdir(parents=True)
+    (tmp_path / "chipB" / "phase1").mkdir(parents=True)
+    root = str(tmp_path)
+    assert fdw._is_allowed_project(root, str(tmp_path / "chipA")) is True
+    # realpath-normalized: a traversal that lands back inside is still fine
+    assert fdw._is_allowed_project(root, str(tmp_path / "chipA" / "." )) is True
+    # anything not a discovered child is rejected — no arbitrary path disclosure
+    assert fdw._is_allowed_project(root, "/etc") is False
+    assert fdw._is_allowed_project(root, str(tmp_path / "chipC")) is False
+    assert fdw._is_allowed_project(root, "") is False
+
+
+def test_live_fleet_server_drilldown(tmp_path):
+    # Real, hermetic fleet: a tmp root with two project dirs. No monkeypatch —
+    # exercises make_handler's fleet routes against the real provider.
+    (tmp_path / "chipA" / "phase1").mkdir(parents=True)
+    (tmp_path / "chipB" / "phase1").mkdir(parents=True)
+    root = str(tmp_path)
+    try:
+        handler = fdw.make_handler("", False, fleet=root)
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    except OSError:
+        import pytest
+        pytest.skip("cannot bind a localhost socket in this environment")
+    port = httpd.server_address[1]
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    try:
+        base = "http://127.0.0.1:%d" % port
+        # fleet page + api
+        with urllib.request.urlopen(base + "/", timeout=5) as r:
+            assert r.status == 200 and "text/html" in r.headers.get("Content-Type", "")
+        with urllib.request.urlopen(base + "/api/fleet", timeout=5) as r:
+            d = json.loads(r.read().decode("utf-8"))
+            assert d["kind"] == "fleet" and d["count"] == 2
+        # drill-down page for a real member
+        from urllib.parse import quote
+        with urllib.request.urlopen(base + "/ic?project=" + quote(str(tmp_path / "chipA")), timeout=5) as r:
+            assert r.status == 200 and "text/html" in r.headers.get("Content-Type", "")
+        # per-IC status for a real member
+        with urllib.request.urlopen(base + "/api/status?project=" + quote(str(tmp_path / "chipA")), timeout=5) as r:
+            d = json.loads(r.read().decode("utf-8"))
+            assert d["project_name"] == "chipA"
+            assert len(d["phases"]) == 6
+        # a non-member project is refused (404), never disclosed
+        try:
+            urllib.request.urlopen(base + "/api/status?project=/etc", timeout=5)
+            raised = False
+        except urllib.error.HTTPError as e:
+            raised = (e.code == 404)
+        assert raised, "non-member project must be 404"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
 
 
 # ---------------------------------------------------------------------------
