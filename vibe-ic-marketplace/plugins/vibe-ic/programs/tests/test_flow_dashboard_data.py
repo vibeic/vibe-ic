@@ -48,7 +48,12 @@ def test_real_flow_empty_project_has_six_phases_and_never_raises(tmp_path):
         assert p["label"] and p["icon"]
         assert isinstance(p["steps"], list)
         assert p["total"] == len(p["steps"])
-        assert p["done"] == sum(1 for s in p["steps"] if s["status"] == "done")
+        # DONE (resolved) = every judged verdict, not just the PASS subset.
+        assert p["resolved"] == sum(
+            1 for s in p["steps"] if s["status"] in D._RESOLVED)
+        assert p["done"] == p["resolved"]  # back-compat alias
+        assert p["passed"] == sum(
+            1 for s in p["steps"] if s["status"] == "pass")
     total = sum(p["total"] for p in data["phases"])
     assert total > 40, f"expected >40 canonical steps, got {total}"
     assert data["summary"]["total"] == total
@@ -75,8 +80,13 @@ def test_real_flow_key_steps_land_in_expected_lanes(tmp_path):
 def test_summary_counts_are_internally_consistent(tmp_path):
     data = D.collect(tmp_path)
     s = data["summary"]
-    assert set(s.keys()) == {"total", *(_STATUSES)}
+    # per-status counts + the two roll-ups (resolved = DONE, passed = the PASS
+    # subset) + total.
+    assert set(s.keys()) == {"total", "resolved", "passed", *(_STATUSES)}
     assert sum(s[k] for k in _STATUSES) == s["total"]
+    # DONE (resolved) = total minus the two unresolved states.
+    assert s["resolved"] == s["total"] - s["running"] - s["pending"]
+    assert s["passed"] == s["pass"]
     # every status is one of the canonical values
     for p in data["phases"]:
         for st in p["steps"]:
@@ -123,7 +133,7 @@ def test_p0_done_once_synth_netlist_exists(tmp_path):
     (synth / "netlist.v").write_text("module m(); endmodule\n", encoding="utf-8")
     data = D.collect(tmp_path)
     st, _ = _find_step(data, "P0")
-    assert st["status"] == "done"
+    assert st["status"] == "pass"
 
 
 def test_every_output_entry_has_required_keys(tmp_path):
@@ -163,8 +173,8 @@ def test_step_with_all_outputs_present_is_done(tmp_path):
     data = D.collect(tmp_path)
     st, ph = _find_step(data, "1")
     assert ph["key"] == "phase2"
-    assert st["status"] == "done"
-    assert st["status_label"] == "DONE"
+    assert st["status"] == "pass"
+    assert st["status_label"] == "PASS"
     # the RTL glob resolved to a real existing file
     rtl = [o for o in st["outputs"] if o["exists"] and o["rel"].endswith(".sv")]
     assert rtl and rtl[0]["size"] > 0 and rtl[0]["mtime"] > 0
@@ -259,20 +269,20 @@ def test_full_mode_structural_mapping(tmp_path, monkeypatch):
     data = D.collect(tmp_path, full=True)
     assert data["mode"] == "full"
     assert data["note"] == ""
-    assert _find_step(data, "1")[0]["status"] == "done"
+    assert _find_step(data, "1")[0]["status"] == "pass"
     assert _find_step(data, "2")[0]["status"] == "fail"
     assert _find_step(data, "2")[0]["detail"] == "lint error over threshold"
     assert _find_step(data, "3")[0]["status"] == "skipped"
     assert _find_step(data, "A1")[0]["status"] == "waived"
     assert _find_step(data, "15")[0]["status"] == "missing"
-    assert _find_step(data, "D1")[0]["status"] == "done"  # VACUOUS_PASS
+    assert _find_step(data, "D1")[0]["status"] == "pass"  # VACUOUS_PASS
 
 
 def test_status_mapping_helper_covers_documented_verdicts():
     m = D._map_compliance_status
-    assert m("PASS") == "done"
-    assert m("VACUOUS_PASS") == "done"
-    assert m("VACUOUS-PASS") == "done"
+    assert m("PASS") == "pass"
+    assert m("VACUOUS_PASS") == "pass"
+    assert m("VACUOUS-PASS") == "pass"
     assert m("SKIPPED-CONDITION") == "skipped"
     assert m("DEFERRED-BY-UPSTREAM") == "skipped"
     assert m("WAIVED") == "waived"
@@ -289,6 +299,245 @@ def test_json_cli_roundtrip(tmp_path):
     data = json.loads(out.read_text())
     assert [p["key"] for p in data["phases"]] == _PHASE_ORDER
     assert data["mode"] == "lightweight"
+
+
+# --------------------------------------------------------------------------- #
+# Plugin version — the dashboard badge shows the SHIPPED plugin version
+# --------------------------------------------------------------------------- #
+def test_plugin_version_resolves_from_manifest():
+    # The real plugin manifest sits at ../.claude-plugin/plugin.json — a
+    # dotted semver string. Never raises.
+    v = D._plugin_version()
+    assert isinstance(v, str)
+    # in the shipped tree it is a non-empty dotted version
+    assert v == "" or v.count(".") >= 1
+
+
+def test_collect_emits_plugin_version(tmp_path):
+    data = D.collect(tmp_path)
+    assert "plugin_version" in data
+    assert data["plugin_version"] == D._plugin_version()
+
+
+# --------------------------------------------------------------------------- #
+# FLEET — discover_projects + collect_fleet (multi-IC overview)
+# --------------------------------------------------------------------------- #
+def _make_project(root: Path, name: str) -> Path:
+    p = root / name
+    (p / "phase1").mkdir(parents=True)
+    return p
+
+
+def test_discover_projects_finds_children(tmp_path):
+    _make_project(tmp_path, "chipA")
+    _make_project(tmp_path, "chipB")
+    # a non-project sibling (no flow marker) must be ignored
+    (tmp_path / "logs").mkdir()
+    # a hidden dir must be ignored
+    (tmp_path / ".cache" / "phase1").mkdir(parents=True)
+    found = D.discover_projects(str(tmp_path))
+    names = sorted(Path(p).name for p in found)
+    assert names == ["chipA", "chipB"]
+
+
+def test_discover_projects_single_project_root(tmp_path):
+    # A root that is ITSELF a project (and has no project children) resolves to
+    # just itself, so `--fleet <one-project>` still works.
+    (tmp_path / "phase2").mkdir(parents=True)
+    found = D.discover_projects(str(tmp_path))
+    assert found == [str(tmp_path.resolve())]
+
+
+def test_discover_projects_unreadable_root_is_empty(tmp_path):
+    missing = tmp_path / "nope"
+    assert D.discover_projects(str(missing)) == []
+
+
+def test_collect_fleet_shape_and_aggregate(tmp_path):
+    _make_project(tmp_path, "chipA")
+    _make_project(tmp_path, "chipB")
+    fl = D.collect_fleet([], root=str(tmp_path))
+    assert fl["kind"] == "fleet"
+    assert fl["count"] == 2
+    assert fl["plugin_version"] == D._plugin_version()
+    # cards carry a compact, contractual shape (NO heavy per-step outputs)
+    for c in fl["fleet"]:
+        assert set(c.keys()) >= {
+            "project", "project_name", "mode", "summary",
+            "phases_mini", "running_steps",
+        }
+        assert isinstance(c["phases_mini"], list) and c["phases_mini"]
+        for pm in c["phases_mini"]:
+            assert set(pm.keys()) == {"key", "label", "icon", "resolved", "total"}
+    # aggregate = element-wise sum of the per-IC summaries
+    agg = fl["agg"]
+    assert agg["ic_count"] == 2
+    assert agg["total"] == sum(c["summary"]["total"] for c in fl["fleet"])
+    assert agg["resolved"] == sum(c["summary"]["resolved"] for c in fl["fleet"])
+    for k in _STATUSES:
+        assert agg[k] == sum(c["summary"][k] for c in fl["fleet"])
+
+
+def test_collect_fleet_explicit_project_list(tmp_path):
+    a = _make_project(tmp_path, "chipA")
+    b = _make_project(tmp_path, "chipB")
+    fl = D.collect_fleet([str(a), str(b)])
+    assert fl["count"] == 2
+    assert {c["project_name"] for c in fl["fleet"]} == {"chipA", "chipB"}
+
+
+def test_collect_fleet_empty_is_safe(tmp_path):
+    fl = D.collect_fleet([], root=str(tmp_path / "no_projects_here"))
+    assert fl["kind"] == "fleet"
+    assert fl["count"] == 0
+    assert fl["agg"]["ic_count"] == 0
+    assert fl["fleet"] == []
+
+
+def test_collect_fleet_running_and_done_rollup(tmp_path):
+    # chipA: a genuinely running (partial multi-output) step -> counts as running IC.
+    a = _make_project(tmp_path, "chipA")
+    _doc, steps = D._load_flow()
+    step3 = next(s for s in steps if str(s.get("id")) == "3")
+    first_alt = D._split_alts(step3.get("required_outputs", [])[0])[0]
+    _write(a / first_alt, json.dumps({"ok": True}))
+    # chipB: nothing running.
+    _make_project(tmp_path, "chipB")
+    fl = D.collect_fleet([], root=str(tmp_path))
+    # at least chipA reports a running step
+    running_cards = [c for c in fl["fleet"] if c["summary"]["running"] > 0]
+    assert running_cards, "chipA should have a running step"
+    assert fl["agg"]["ic_running"] == len(running_cards)
+    # running_steps list on chipA carries the step id/name
+    a_card = next(c for c in fl["fleet"] if c["project_name"] == "chipA")
+    assert any(rs["id"] == "3" for rs in a_card["running_steps"])
+
+
+def test_collect_fleet_cli_smoke(tmp_path, capsys):
+    _make_project(tmp_path, "chipA")
+    rc = D.main([str(tmp_path), "--fleet"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    data = json.loads(out)
+    assert data["kind"] == "fleet"
+    assert data["count"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# AUTO — cheap while live, authoritative once idle
+# --------------------------------------------------------------------------- #
+def _light(running, paths=("a.v",)):
+    # one step whose existing outputs are the given rel-paths (mtime is
+    # deliberately varied to prove the fingerprint IGNORES it).
+    steps = [{"id": "1", "status": "pass",
+              "outputs": [{"exists": True, "rel": p, "mtime": 100.0} for p in paths]}]
+    return {"summary": {"running": running}, "phases": [{"steps": steps}],
+            "mode": "lightweight"}
+
+
+def test_collect_auto_stays_lightweight_while_running(monkeypatch):
+    D._AUTO_FULL_CACHE.clear()
+    calls = []
+
+    def fake(project, full=False):
+        calls.append(full)
+        if full:
+            raise AssertionError("must NOT escalate to full while a step is running")
+        return _light(running=1)
+
+    monkeypatch.setattr(D, "collect", fake)
+    d = D.collect_auto("/p")
+    assert d["mode"] == "auto:live"
+    assert calls == [False]           # only the cheap pass ran
+
+
+def test_collect_auto_escalates_when_idle_then_caches(monkeypatch):
+    D._AUTO_FULL_CACHE.clear()
+    calls = []
+
+    def fake(project, full=False):
+        calls.append(full)
+        if full:
+            return {"summary": {"running": 0}, "phases": [], "mode": "full"}
+        return _light(running=0)
+
+    monkeypatch.setattr(D, "collect", fake)
+    d1 = D.collect_auto("/p2")
+    assert d1["mode"] == "auto:full"
+    assert calls == [False, True]     # cheap pass then ONE full run
+    # second poll, tree unchanged → cache hit, NO second full run
+    d2 = D.collect_auto("/p2")
+    assert d2["mode"] == "auto:full"
+    assert calls == [False, True, False]
+
+
+def test_collect_auto_ignores_mtime_only_changes(monkeypatch):
+    # A full run rewrites its own report files in place (mtime bumps, same set
+    # of outputs) — that must NOT bust the cache, or the expensive full run
+    # would repeat every poll.
+    D._AUTO_FULL_CACHE.clear()
+    state = {"mtime": 100.0}
+    calls = []
+
+    def fake(project, full=False):
+        calls.append(full)
+        if full:
+            return {"summary": {"running": 0}, "phases": [], "mode": "full"}
+        s = [{"id": "1", "status": "pass",
+              "outputs": [{"exists": True, "rel": "a.v", "mtime": state["mtime"]}]}]
+        return {"summary": {"running": 0}, "phases": [{"steps": s}], "mode": "lightweight"}
+
+    monkeypatch.setattr(D, "collect", fake)
+    D.collect_auto("/p3")
+    assert calls == [False, True]
+    state["mtime"] = 999999.0            # mtime moved, structure identical
+    D.collect_auto("/p3")
+    assert calls == [False, True, False]  # cache HIT — no second full run
+
+
+def test_collect_auto_reescalates_when_output_set_changes(monkeypatch):
+    D._AUTO_FULL_CACHE.clear()
+    state = {"paths": ("a.v",)}
+    calls = []
+
+    def fake(project, full=False):
+        calls.append(full)
+        if full:
+            return {"summary": {"running": 0}, "phases": [], "mode": "full"}
+        return _light(running=0, paths=state["paths"])
+
+    monkeypatch.setattr(D, "collect", fake)
+    D.collect_auto("/p3b")
+    assert calls == [False, True]
+    # a new flow output appeared (build progressed) → fingerprint busts → re-run
+    state["paths"] = ("a.v", "b.v")
+    D.collect_auto("/p3b")
+    assert calls == [False, True, False, True]
+
+
+def test_collect_auto_does_not_cache_a_fallback(monkeypatch):
+    D._AUTO_FULL_CACHE.clear()
+
+    def fake(project, full=False):
+        # full mode "fell back" to lightweight (compliance checker missing)
+        return {"summary": {"running": 0}, "phases": [], "mode": "lightweight"}
+
+    monkeypatch.setattr(D, "collect", fake)
+    d = D.collect_auto("/p4")
+    assert d["mode"] == "auto:lightweight"      # surfaced, not mislabeled full
+    key = str(Path("/p4").resolve())
+    assert key not in D._AUTO_FULL_CACHE         # a non-authoritative result is never cached
+
+
+def test_collect_fleet_auto_uses_adaptive_collector(tmp_path):
+    # Integration: a real tmp fleet in auto mode — every card resolves through
+    # collect_auto (mode prefixed "auto:") and never raises.
+    _make_project(tmp_path, "chipA")
+    _make_project(tmp_path, "chipB")
+    fl = D.collect_fleet([], root=str(tmp_path), auto=True)
+    assert fl["count"] == 2
+    for c in fl["fleet"]:
+        assert str(c["mode"]).startswith("auto:")
 
 
 if __name__ == "__main__":

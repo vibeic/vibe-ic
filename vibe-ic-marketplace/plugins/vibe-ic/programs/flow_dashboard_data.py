@@ -45,6 +45,20 @@ from typing import Any, Dict, List, Optional, Tuple
 # in, so the flow yaml is found regardless of the caller's cwd.
 PROGRAMS_DIR = Path(__file__).resolve().parent
 FLOW_YAML = PROGRAMS_DIR.parent / "flow" / "phase1_phase2_phase3.yaml"
+# The vibe-ic plugin manifest — the header badge shows THIS version (the shipped
+# plugin), not the flow-schema version. Parent of programs/ is the plugin root.
+PLUGIN_JSON = PROGRAMS_DIR.parent / ".claude-plugin" / "plugin.json"
+
+
+def _plugin_version() -> str:
+    """Return the vibe-ic plugin `version` from .claude-plugin/plugin.json, or ""
+    if unreadable. Never raises — the dashboard degrades to no badge."""
+    try:
+        doc = json.loads(PLUGIN_JSON.read_text(encoding="utf-8"))
+        v = doc.get("version")
+        return "" if v is None else str(v)
+    except Exception:
+        return ""
 
 # Splitting a `required_outputs` entry into acceptable ALTERNATIVES
 # (e.g. 'phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v').
@@ -63,9 +77,22 @@ _OR_RE = re.compile(r"\s+OR\s+")
 #              fab / wafer-sort / packaging / final-test / qual). Also never run
 #              by us, but for a different reason than `na`.
 _STATUSES = (
-    "done", "skipped", "waived", "fail", "missing",
+    "pass", "skipped", "waived", "fail", "missing",
     "running", "partial", "na", "external", "pending",
 )
+
+# Two orthogonal axes:
+#   completion (DONE) — was the step reached AND judged? Everything EXCEPT
+#                       running/pending is DONE ("resolved"): the flow got there
+#                       and produced a verdict, whatever that verdict is.
+#   outcome           — WHAT the verdict was: pass / fail / skipped / waived /
+#                       na / external / partial.
+# So a fail, a disclosed skip, an n/a and an external step are ALL "done" — they
+# were evaluated. Only running (in progress) and pending (not reached) are not.
+_RESOLVED = frozenset(
+    {"pass", "skipped", "waived", "fail", "missing", "partial", "na", "external"}
+)
+_UNRESOLVED = frozenset({"running", "pending"})
 
 # A present output touched within this many seconds is taken as evidence a
 # writer is ACTIVELY producing this step right now -> "running". Older than
@@ -417,13 +444,13 @@ def _lightweight_status(
     if n_total == 0:
         # umbrella / container-ish step with no outputs to judge cheaply
         if _umbrella_reports_exist(project, step):
-            return "done", ""
+            return "pass", ""
         return "pending", ""
     dskip, dreason = _disclosed_skip(project, step.get("required_outputs"))
     if dskip and not primary_present and n_present < n_total:
         return "skipped", dreason
     if n_present == n_total:
-        return "done", ""
+        return "pass", ""
     if n_present > 0:
         # Some outputs present, not all. Only call it "running" if a writer
         # touched an output very recently; otherwise it RAN and a secondary
@@ -440,7 +467,7 @@ def _map_compliance_status(raw_status: str) -> str:
     """Map a flow_compliance_check verdict to a dashboard status."""
     raw = str(raw_status or "").upper().replace("_", "-")
     if raw in ("PASS", "VACUOUS-PASS"):
-        return "done"
+        return "pass"
     if raw in (
         "SKIPPED-CONDITION",
         "SKIPPED",
@@ -459,7 +486,7 @@ def _map_compliance_status(raw_status: str) -> str:
     # robustness beyond the enumerated set: obvious pass/waiver tiers
     # (PASS_WITH_WAIVERS, WAIVED-*) still resolve to a valid status.
     if raw.startswith("PASS"):
-        return "done"
+        return "pass"
     if raw.startswith("WAIVED"):
         return "waived"
     return "pending"
@@ -602,7 +629,7 @@ def collect(project, full: bool = False) -> dict:
             if status == "pending":
                 pk = _phase_key_for(step)
                 if sid == "P0" and _p0_preflight_passed(project_path):
-                    status, detail = "done", (
+                    status, detail = "pass", (
                         "structural pre-flight passed (flow reached synthesis)")
                 elif pk in ("analog", "mixed") and not analog_applicable:
                     status, detail = "na", (
@@ -631,23 +658,32 @@ def collect(project, full: bool = False) -> dict:
         phase_steps[_phase_key_for(step)].append(step_obj)
 
     # Assemble phases + summary.
+    #   resolved (DONE) = reached AND judged = every status except running/pending.
+    #   passed          = the subset whose verdict was a clean PASS.
     summary = {"total": 0}
     for s in _STATUSES:
         summary[s] = 0
+    summary["resolved"] = 0
+    summary["passed"] = 0
 
     phases_out: List[dict] = []
     for p in _PHASES:
         plist = phase_steps[p["key"]]
-        done = sum(1 for st in plist if st["status"] == "done")
+        resolved = sum(1 for st in plist if st["status"] in _RESOLVED)
+        passed = sum(1 for st in plist if st["status"] == "pass")
         for st in plist:
             summary["total"] += 1
             summary[st["status"]] += 1
+        summary["resolved"] += resolved
+        summary["passed"] += passed
         phases_out.append(
             {
                 "key": p["key"],
                 "label": p["label"],
                 "icon": p["icon"],
-                "done": done,
+                "resolved": resolved,   # DONE = judged (any verdict)
+                "passed": passed,       # the PASS subset
+                "done": resolved,       # back-compat alias (= resolved)
                 "total": len(plist),
                 "steps": plist,
             }
@@ -658,9 +694,225 @@ def collect(project, full: bool = False) -> dict:
         "project_name": project_path.name,
         "mode": mode,
         "flow_version": flow_version,
+        "plugin_version": _plugin_version(),
         "note": note,
         "summary": summary,
         "phases": phases_out,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# AUTO — cheap while live, authoritative once idle (the "no lightweight" ask)
+# --------------------------------------------------------------------------- #
+# The tension: authoritative (full) status re-runs the whole gate matrix
+# (~seconds per IC), which is far too heavy to poll while a build is actively
+# writing files. AUTO resolves it: it ALWAYS does the cheap lightweight pass
+# first; if any step is RUNNING it returns that (a live build stays real-time);
+# only once the tree is QUIESCENT does it escalate to the authoritative full
+# verdicts. A tree-fingerprint cache means the expensive full run happens ONCE
+# per settled state — subsequent idle polls reuse it until an output actually
+# changes, so idle polling is free regardless of cadence.
+_AUTO_FULL_CACHE: Dict[str, tuple] = {}  # project -> (fingerprint, full_result)
+
+
+def _fingerprint_from(data: dict) -> tuple:
+    """A cheap change-signature of a project tree, derived from an ALREADY
+    collected lightweight dict (no extra disk walk).
+
+    It is deliberately MTIME-FREE: the set of existing output paths plus each
+    step's lightweight status. Rationale — full mode (flow_compliance_check)
+    REWRITES its own tracked report files in place on every run, which bumps
+    mtimes without the build having progressed; an mtime fingerprint would then
+    never match and the expensive full run would repeat every poll. Existence +
+    status changes only when the flow genuinely advances (a new output appears
+    or a step's verdict flips), which is exactly when a re-escalation is due."""
+    paths: List[str] = []
+    statuses: List[tuple] = []
+    for ph in data.get("phases", []):
+        for st in ph.get("steps", []):
+            statuses.append((str(st.get("id", "")), str(st.get("status", ""))))
+            for o in st.get("outputs", []):
+                if o.get("exists"):
+                    paths.append(str(o.get("rel") or o.get("abs") or ""))
+    return (tuple(sorted(paths)), tuple(statuses))
+
+
+def collect_auto(project) -> dict:
+    """Adaptive status: lightweight while a build is live, authoritative (full)
+    once the tree is quiescent — cached per settled state. Never raises."""
+    light = collect(project, full=False)
+    # A live build (any running step) stays cheap + real-time.
+    if int(light.get("summary", {}).get("running", 0) or 0) > 0:
+        light["mode"] = "auto:live"
+        return light
+    # Quiescent → authoritative. Reuse the cached full run while the tree is
+    # unchanged so idle polls don't re-run the gate matrix.
+    key = str(Path(project).expanduser().resolve())
+    fp = _fingerprint_from(light)
+    cached = _AUTO_FULL_CACHE.get(key)
+    if cached is not None and cached[0] == fp:
+        return cached[1]
+    full = collect(project, full=True)
+    if full.get("mode") == "full":  # only cache a genuinely authoritative result
+        full["mode"] = "auto:full"
+        _AUTO_FULL_CACHE[key] = (fp, full)
+    else:
+        # full fell back to lightweight (checker missing/errored) — surface it,
+        # don't poison the cache with a non-authoritative result.
+        full["mode"] = "auto:lightweight"
+    return full
+
+
+# --------------------------------------------------------------------------- #
+# FLEET — many projects at a glance (multi-IC / multi-subagent overview)
+# --------------------------------------------------------------------------- #
+# A directory is treated as a Vibe-IC project when it carries at least one of
+# these flow markers — enough to have a dashboard, without misfiring on random
+# sibling dirs (e.g. a shared `logs/` or `pdk/`).
+_PROJECT_MARKERS = (
+    "phase1",
+    "phase2",
+    "phase3",
+    "input/docs",
+    "reports/orchestrator",
+)
+
+
+def _looks_like_project(path: Path) -> bool:
+    try:
+        if not path.is_dir():
+            return False
+    except OSError:
+        return False
+    for m in _PROJECT_MARKERS:
+        if (path / m).exists():
+            return True
+    return False
+
+
+def discover_projects(root: str) -> List[str]:
+    """Return the immediate child directories of *root* that look like Vibe-IC
+    projects, sorted by name. If *root* itself is a project (and has no project
+    children), return just [root] so `--fleet <single-project>` still works.
+    Never raises: an unreadable root yields []."""
+    root_path = Path(root).expanduser().resolve()
+    found: List[str] = []
+    try:
+        children = sorted(
+            (c for c in root_path.iterdir() if not c.name.startswith(".")),
+            key=lambda c: c.name.lower(),
+        )
+    except OSError:
+        children = []
+    for c in children:
+        if _looks_like_project(c):
+            found.append(str(c))
+    if not found and _looks_like_project(root_path):
+        found.append(str(root_path))
+    return found
+
+
+def _ic_card(project: str, full: bool, auto: bool = False) -> dict:
+    """Collect ONE project into a compact fleet card: the full summary plus a
+    per-phase mini progress and the list of currently-running steps. The heavy
+    per-step `outputs` payload is dropped so a fleet of N ICs stays light.
+    Never raises: a project that fails to collect becomes an error card."""
+    try:
+        d = collect_auto(project) if auto else collect(project, full=full)
+    except Exception as exc:  # pragma: no cover - collect() is contractually safe
+        name = Path(project).name or project
+        return {
+            "project": str(project),
+            "project_name": name,
+            "mode": "",
+            "flow_version": "",
+            "error": f"collect() failed: {exc}",
+            "summary": {},
+            "phases_mini": [],
+            "running_steps": [],
+        }
+    phases_mini = []
+    running_steps = []
+    for ph in d.get("phases", []):
+        phases_mini.append(
+            {
+                "key": ph.get("key", ""),
+                "label": ph.get("label", ""),
+                "icon": ph.get("icon", ""),
+                "resolved": int(ph.get("resolved", ph.get("done", 0)) or 0),
+                "total": int(ph.get("total", 0) or 0),
+            }
+        )
+        for st in ph.get("steps", []):
+            if str(st.get("status", "")).lower() == "running":
+                running_steps.append(
+                    {
+                        "id": st.get("id", ""),
+                        "name": st.get("name", ""),
+                        "phase": ph.get("key", ""),
+                    }
+                )
+    return {
+        "project": d.get("project", str(project)),
+        "project_name": d.get("project_name", Path(project).name),
+        "mode": d.get("mode", ""),
+        "flow_version": d.get("flow_version", ""),
+        "summary": d.get("summary", {}),
+        "phases_mini": phases_mini,
+        "running_steps": running_steps,
+    }
+
+
+def collect_fleet(projects, full: bool = False, root: str = "", auto: bool = False) -> dict:
+    """Collect MANY projects for the fleet overview.
+
+    *projects* is an explicit iterable of project paths. When empty and *root*
+    is given, the root is scanned via discover_projects(). With *auto*, each IC
+    uses collect_auto() (cheap while live, authoritative once idle). Returns a
+    stable JSON contract mirroring collect() at the aggregate level:
+
+        {kind:"fleet", plugin_version, root, count,
+         agg: {<same summary keys, summed>, ic_count, ic_running, ic_done},
+         fleet: [ <_ic_card>, ... ]}
+
+    Never raises."""
+    plist = [str(p) for p in (projects or [])]
+    if not plist and root:
+        plist = discover_projects(root)
+
+    cards = [_ic_card(p, full, auto=auto) for p in plist]
+
+    # Aggregate the per-IC summaries into one fleet-wide roll-up.
+    agg: Dict[str, int] = {k: 0 for k in _STATUSES}
+    agg["total"] = 0
+    agg["resolved"] = 0
+    agg["passed"] = 0
+    ic_running = 0
+    ic_done = 0
+    for c in cards:
+        s = c.get("summary") or {}
+        for k in _STATUSES:
+            agg[k] += int(s.get(k, 0) or 0)
+        agg["total"] += int(s.get("total", 0) or 0)
+        agg["resolved"] += int(s.get("resolved", s.get("done", 0)) or 0)
+        agg["passed"] += int(s.get("passed", 0) or 0)
+        run = int(s.get("running", 0) or 0)
+        if run > 0:
+            ic_running += 1
+        tot = int(s.get("total", 0) or 0)
+        if tot and int(s.get("resolved", s.get("done", 0)) or 0) >= tot:
+            ic_done += 1
+    agg["ic_count"] = len(cards)
+    agg["ic_running"] = ic_running
+    agg["ic_done"] = ic_done
+
+    return {
+        "kind": "fleet",
+        "plugin_version": _plugin_version(),
+        "root": str(Path(root).expanduser().resolve()) if root else "",
+        "count": len(cards),
+        "agg": agg,
+        "fleet": cards,
     }
 
 
@@ -675,10 +927,36 @@ def main(argv=None) -> int:
         action="store_true",
         help="authoritative mode: run flow_compliance_check.py (slow)",
     )
+    ap.add_argument(
+        "--fleet",
+        action="store_true",
+        help="treat PROJECT as a parent dir; collect ALL child projects (fleet view)",
+    )
+    ap.add_argument(
+        "--auto",
+        action="store_true",
+        help="adaptive: lightweight while live, authoritative (full) once idle",
+    )
     ap.add_argument("--json", help="write the collected dict to this file")
     args = ap.parse_args(argv)
 
-    data = collect(args.project, full=args.full)
+    if args.fleet:
+        data = collect_fleet([], full=args.full, root=args.project, auto=args.auto)
+        payload = json.dumps(data, indent=2, ensure_ascii=False)
+        if args.json:
+            Path(args.json).write_text(payload + "\n", encoding="utf-8")
+        else:
+            print(payload)
+        a = data["agg"]
+        print(
+            f"[flow_dashboard_data] FLEET {data['count']} IC(s) "
+            f"({a['ic_running']} running, {a['ic_done']} done) "
+            f"total={a['total']} done={a['resolved']} running={a['running']}",
+            file=sys.stderr,
+        )
+        return 0
+
+    data = collect_auto(args.project) if args.auto else collect(args.project, full=args.full)
     payload = json.dumps(data, indent=2, ensure_ascii=False)
 
     if args.json:
@@ -689,9 +967,10 @@ def main(argv=None) -> int:
     s = data["summary"]
     print(
         f"[flow_dashboard_data] {data['project_name']} mode={data['mode']} "
-        f"total={s['total']} done={s['done']} skipped={s['skipped']} "
-        f"running={s['running']} pending={s['pending']} fail={s['fail']} "
-        f"missing={s['missing']} waived={s['waived']}",
+        f"total={s['total']} done={s['resolved']} (pass={s['passed']} "
+        f"fail={s['fail']} skipped={s['skipped']} waived={s['waived']} "
+        f"na={s['na']} external={s['external']} partial={s['partial']}) "
+        f"running={s['running']} pending={s['pending']}",
         file=sys.stderr,
     )
     if data["note"]:
