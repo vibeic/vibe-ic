@@ -104,6 +104,18 @@ RUN git clone https://github.com/vibeic/klayout.git /klayout \
  && ./build.sh -without-qt -noruby -nolibgit2 -j"$(nproc)" -bin /foss/tools/klayout-vibeic -build /klayout/bld
 # verilator: forked, no honest fix warranted on v5.051 (see FIX_STATUS.md) — nothing to layer.
 
+# ---------------------------------------------------------------------------
+# Stage 7 — vibeic/klayout svrf-drc (SVRF-native DRC interpreter, pure-Python KLayout
+#   macro). Runs ON the base klayout's pya engine (no C++ rebuild): KLayout reads a
+#   Calibre/SVRF .rule deck and executes it via pya.Region.*_check + LayoutToNetlist.
+#   Sparse-checkout just the svrf-drc/ tree from the fork branch. Proof: svrf-drc/proof.py.
+# ---------------------------------------------------------------------------
+FROM alpine/git AS svrf-src
+ARG SVRF_REF=vibeic/svrf-native-drc
+RUN git clone --depth 1 --filter=blob:none --sparse --branch ${SVRF_REF} \
+      https://github.com/vibeic/klayout.git /k \
+ && cd /k && git sparse-checkout set svrf-drc
+
 # ===========================================================================
 # Runtime: layer the patched tools onto the iic-osic-tools base.
 # ===========================================================================
@@ -138,5 +150,13 @@ RUN for t in yosys yosys-abc; do ln -sf /foss/tools/yosys/bin/$t /foss/tools/bin
  && ln -sf /foss/tools/magic/bin/magic /foss/tools/bin/magic 2>/dev/null || true \
  && ln -sf /foss/tools/netgen/bin/netgen /foss/tools/bin/netgen 2>/dev/null || true \
  && for t in iverilog vvp iverilog-vpi vvp; do ln -sf /foss/tools/iverilog/bin/$t /foss/tools/bin/$t 2>/dev/null || true; done
+# --- vibeic/klayout svrf-drc (SVRF-native DRC, runs on the base klayout pya engine) ---
+COPY --from=svrf-src /k/svrf-drc /foss/tools/svrf-drc
+# autoload the KLayout GUI macro (Tools -> "SVRF-native DRC…") + a batch wrapper `klayout-svrf`
+RUN mkdir -p /headless/.klayout/pymacros \
+ && ln -sf /foss/tools/svrf-drc/pymacros/svrf_drc.lym /headless/.klayout/pymacros/svrf_drc.lym \
+ && printf '#!/bin/bash\nexec klayout -b -r /foss/tools/svrf-drc/svrf_klayout/run_svrf_drc.py -rd root=/foss/tools/svrf-drc "$@"\n' > /foss/tools/bin/klayout-svrf \
+ && chmod +x /foss/tools/bin/klayout-svrf \
+ && chmod -R a+rX /foss/tools/svrf-drc
 # restore the base's non-root runtime user
 USER 1000
