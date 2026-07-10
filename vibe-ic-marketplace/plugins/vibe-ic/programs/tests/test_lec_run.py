@@ -1,0 +1,218 @@
+"""Unit tests for lec_run.py — the Step 13 LEC PRODUCER.
+
+SYNTHETIC-only: every test drives the pure parser `parse_equiv_output` and
+the report shaper `build_report` with captured Yosys text. NO test requires
+Docker / a container.
+
+The two fixture blobs are REAL Yosys 0.66 output captured from spm:
+  - CLEAN PASS  : generic $_-primitive netlist   -> 71/71 proven
+  - SAT-LIMITED : sky130_fd_sc_hd-mapped netlist -> equiv_induct aborts on a
+                  cell with no SAT model -> honest SKIPPED-CONDITION
+"""
+import json
+import sys
+from pathlib import Path
+
+SCRIPT = Path(__file__).parent.parent / "lec_run.py"
+assert SCRIPT.exists(), f"Script not found: {SCRIPT}"
+
+sys.path.insert(0, str(SCRIPT.parent))
+import lec_run  # noqa: E402
+import lec_equivalence_check as gate  # noqa: E402  (downstream consumer)
+
+
+# ---------------------------------------------------------------------------
+# Captured real Yosys 0.66 output (tails; the parser only needs these lines).
+# ---------------------------------------------------------------------------
+PASS_OUTPUT = """\
+equiv_simple: Starting.
+Found 71 unproven $equiv cells (71 groups) in equiv:
+Proved 67 previously unproven $equiv cells.
+equiv_induct: Proving $equiv cells in module equiv.
+Found 4 unproven $equiv cells in module equiv:
+  Proof for induction step holds. Entire workset of 4 cells proven!
+Proved 4 previously unproven $equiv cells.
+No selected unproven $equiv cells found in equiv.
+Proved 0 previously unproven $equiv cells.
+equiv_status: Found 71 $equiv cells in equiv:
+  Of those cells 71 are proven and 0 are unproven.
+  Equivalence successfully proven!
+"""
+
+SAT_LIMITED_OUTPUT = """\
+equiv_simple: Starting.
+Found 70 unproven $equiv cells (70 groups) in equiv:
+Proved 35 previously unproven $equiv cells.
+equiv_induct: Proving $equiv cells in module equiv.
+Found 35 unproven $equiv cells in module equiv:
+ERROR: No SAT model available for cell _204__gate (sky130_fd_sc_hd__lpflow_isobufsrc_1).
+"""
+
+MISMATCH_OUTPUT = """\
+equiv_simple: Starting.
+Found 40 unproven $equiv cells (40 groups) in equiv:
+Proved 33 previously unproven $equiv cells.
+equiv_induct: Proving $equiv cells in module equiv.
+Found 7 unproven $equiv cells in module equiv:
+equiv_status: Found 40 $equiv cells in equiv:
+  Of those cells 33 are proven and 7 are unproven.
+  Unproven $equiv cells: \\p[3] \\p[4]
+"""
+
+GARBAGE_OUTPUT = "ERROR: syntax error in read_verilog\n"
+
+
+# ---------------------------------------------------------------------------
+# parse_equiv_output — clean PASS
+# ---------------------------------------------------------------------------
+def test_parse_clean_pass_counts():
+    p = lec_run.parse_equiv_output(PASS_OUTPUT)
+    assert p["proven"] == 71
+    assert p["unproven"] == 0
+    assert p["total"] == 71
+    assert p["sat_model_unsupported_cells"] == []
+    assert p["parse_error"] is False
+
+
+def test_parse_clean_pass_verdict():
+    p = lec_run.parse_equiv_output(PASS_OUTPUT)
+    assert p["equivalent"] is True
+    assert p["verdict"] == "PASS"
+    assert p["success_line"] is True
+
+
+# ---------------------------------------------------------------------------
+# parse_equiv_output — SAT-model-limited -> SKIPPED-CONDITION (NOT a fake pass)
+# ---------------------------------------------------------------------------
+def test_parse_sat_limited_is_skipped_condition_not_pass():
+    p = lec_run.parse_equiv_output(SAT_LIMITED_OUTPUT)
+    assert p["verdict"] == "SKIPPED-CONDITION"
+    assert p["equivalent"] is False, "MUST NOT fake a pass on a SAT-model gap"
+    assert p["parse_error"] is False
+
+
+def test_parse_sat_limited_captures_unsupported_cells():
+    p = lec_run.parse_equiv_output(SAT_LIMITED_OUTPUT)
+    cells = p["sat_model_unsupported_cells"]
+    assert len(cells) == 1
+    assert cells[0]["cell"] == "_204__gate"
+    assert cells[0]["cell_type"] == "sky130_fd_sc_hd__lpflow_isobufsrc_1"
+    # proven/unproven reconstructed from the pass-internal counters.
+    assert p["proven"] == 35
+    assert p["unproven"] == 35
+    assert p["total"] == 70
+    assert "lpflow_isobufsrc_1" in p["verdict_explanation"]
+
+
+# ---------------------------------------------------------------------------
+# parse_equiv_output — genuine mismatch (unproven>0, no SAT abort) -> FAIL
+# ---------------------------------------------------------------------------
+def test_parse_genuine_mismatch_is_fail():
+    p = lec_run.parse_equiv_output(MISMATCH_OUTPUT)
+    assert p["verdict"] == "FAIL"
+    assert p["equivalent"] is False
+    assert p["proven"] == 33
+    assert p["unproven"] == 7
+    assert p["parse_error"] is False
+
+
+# ---------------------------------------------------------------------------
+# parse_equiv_output — unparseable -> parse_error, never a -1 sentinel
+# ---------------------------------------------------------------------------
+def test_parse_garbage_is_parse_error_not_fake():
+    p = lec_run.parse_equiv_output(GARBAGE_OUTPUT)
+    assert p["parse_error"] is True
+    assert p["equivalent"] is False
+    assert p["proven"] is None and p["unproven"] is None
+    # never the ambiguous -1 sentinel the pre-fix MCP used
+    assert p["proven"] != -1 and p["unproven"] != -1
+
+
+def test_parse_empty_is_parse_error():
+    p = lec_run.parse_equiv_output("")
+    assert p["parse_error"] is True
+    assert p["verdict"] == "FAIL"
+
+
+# ---------------------------------------------------------------------------
+# build_report — JSON schema keys the downstream gate reads
+# ---------------------------------------------------------------------------
+def test_build_report_schema_keys():
+    p = lec_run.parse_equiv_output(PASS_OUTPUT)
+    r = lec_run.build_report(p, "chip_top",
+                             "phase2/stage2/synth/netlist.v", lec_run.DEFAULT_LIBERTY)
+    for k in ("equivalent", "compared_points", "non_equivalent_points",
+              "unproven_points", "gold", "gate", "tool", "verdict",
+              "sat_model_unsupported_cells", "verdict_explanation"):
+        assert k in r, f"missing schema key: {k}"
+    assert r["equivalent"] is True
+    assert r["compared_points"] == 71
+    assert r["non_equivalent_points"] == 0
+    assert r["unproven_points"] == 0
+    assert r["gold"] == "chip_top (RTL)"
+    assert r["gate"] == "netlist.v (synth)"
+    assert r["verdict"] == "PASS"
+    assert r["tool"].startswith("yosys equiv")
+
+
+def test_build_report_skip_has_unsupported_cells_and_false_equiv():
+    p = lec_run.parse_equiv_output(SAT_LIMITED_OUTPUT)
+    r = lec_run.build_report(p, "chip_top", "chip_top_synth.v", None)
+    assert r["equivalent"] is False
+    assert r["verdict"] == "SKIPPED-CONDITION"
+    assert len(r["sat_model_unsupported_cells"]) == 1
+    # compared_points reflects what WAS proven — never a fabricated count.
+    assert r["compared_points"] == 35
+
+
+# ---------------------------------------------------------------------------
+# End-to-end schema contract: our PASS report must PASS the real gate,
+# and our SKIPPED-CONDITION report must be an honest gate FAIL (not vacuous).
+# ---------------------------------------------------------------------------
+def test_pass_report_is_accepted_by_the_real_gate(tmp_path):
+    p = lec_run.parse_equiv_output(PASS_OUTPUT)
+    r = lec_run.build_report(p, "chip_top", "netlist.v", None)
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "lec.json").write_text(json.dumps(r))
+    (tmp_path / "reports" / "lec.rpt").write_text(PASS_OUTPUT)
+    res = gate.audit(tmp_path)
+    assert res.passed is True, [f.rule for f in res.findings]
+
+
+def test_skip_report_is_honest_gate_fail_not_vacuous_pass(tmp_path):
+    p = lec_run.parse_equiv_output(SAT_LIMITED_OUTPUT)
+    r = lec_run.build_report(p, "chip_top", "chip_top_synth.v", None)
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "lec.json").write_text(json.dumps(r))
+    (tmp_path / "reports" / "lec.rpt").write_text(SAT_LIMITED_OUTPUT)
+    res = gate.audit(tmp_path)
+    # SKIPPED-CONDITION is equivalent:false -> the gate must NOT pass it, and
+    # must not pass it vacuously either.
+    assert res.passed is False
+    rules = {f.rule for f in res.findings}
+    assert "LEC_NOT_EQUIVALENT" in rules
+
+
+# ---------------------------------------------------------------------------
+# build_equiv_script — the proven recipe shape (deterministic, no container)
+# ---------------------------------------------------------------------------
+def test_build_equiv_script_has_recipe_steps():
+    s = lec_run.build_equiv_script(
+        ["/p/rtl/a.v", "/p/rtl/b.v"], "/p/synth/netlist.v", "chip_top",
+        lec_run.DEFAULT_LIBERTY)
+    assert "read_verilog -icells -sv /p/rtl/a.v /p/rtl/b.v" in s
+    assert "equiv_make gold gate equiv" in s
+    assert "equiv_simple" in s
+    assert "equiv_induct -seq 4" in s
+    assert "equiv_induct -seq 16" in s
+    assert "equiv_induct -seq 64" in s
+    assert "equiv_status" in s
+    assert "flatten" in s
+    assert lec_run.DEFAULT_LIBERTY in s
+
+
+def test_build_equiv_script_omits_liberty_when_none():
+    s = lec_run.build_equiv_script(
+        ["/p/rtl/a.v"], "/p/synth/netlist.v", "top", None)
+    assert "read_liberty" not in s
+    assert "read_verilog -icells -sv /p/rtl/a.v" in s

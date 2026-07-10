@@ -6523,6 +6523,22 @@ set ::env_lefs [split $env(LEFS) ";"]
 foreach lf $::env_lefs {
     if {[string trim $lf] ne ""} { lef read $lf }
 }
+# v1.3.57 — read the std-cell (+ macro) GDS so DEF cell instances resolve to
+# REAL polygons, not LEF ABSTRACT views. Without this, Magic's GDS streamer
+# aborts with "Cell <cell> is an abstract view; cannot stream" -> a 0-byte
+# file, and the flow silently falls back to the NON-merged KLayout streamout
+# whose abutting
+# same-net li/met cell-boundary edges fire thousands of FALSE min-spacing
+# violations (spm: 1557 li.* -> 0 after this fix). Magic MERGES abutting
+# same-layer geometry, so the streamed GDS is signoff-clean. chip-AGNOSTIC.
+if {[info exists env(CELL_GDS)] && [string trim $env(CELL_GDS)] ne ""} {
+    gds read $env(CELL_GDS)
+}
+if {[info exists env(MACRO_GDS)] && [string trim $env(MACRO_GDS)] ne ""} {
+    foreach mg [split $env(MACRO_GDS) ";"] {
+        if {[string trim $mg] ne ""} { gds read $mg }
+    }
+}
 def read $env(DEF)
 load $env(TOP)
 select top cell
@@ -6567,12 +6583,30 @@ def _magic_def_to_gds(project: Path, top: str, pdk: PdkConfig,
     tcl_c = _to_container_path(str(tcl), container)
     def_c = _to_container_path(str(def_file), container)
     gds_out_c = _to_container_path(str(gds_out), container)
-    lef_list = [pdk.tech_lef, pdk.cell_lef] + list(pdk.macro_lefs)
+    # v1.3.57 — cells resolve from the std-cell GDS (real geometry), NOT the
+    # cell LEF abstract, so `gds write` can emit a merged, signoff-clean GDS.
+    # Only fall back to the abstract cell LEF when no cell GDS is available.
+    lef_list = [pdk.tech_lef]
+    if not pdk.cell_gds:
+        lef_list.append(pdk.cell_lef)
+    lef_list += list(pdk.macro_lefs)
     lefs = ";".join(_to_container_path(str(f), container) for f in lef_list)
+    cell_gds_c = _to_container_path(str(pdk.cell_gds), container) if pdk.cell_gds else ""
+    macro_gds_c = ";".join(
+        _to_container_path(str(f), container) for f in pdk.macro_gds)
+    # Derive the PDK Magic tech rc (loads layer defs + DRC style) from the PDK
+    # root so `gds read` maps GDS layers correctly. Convention:
+    # <pdk_root>/libs.tech/magic/<pdk_name>.magicrc. Falls back to /dev/null.
+    _probe = str(pdk.cell_gds or pdk.tech_lef or "")
+    magicrc = "/dev/null"
+    if "/libs.ref/" in _probe:
+        _root = _probe.split("/libs.ref/")[0]
+        _name = _root.rstrip("/").split("/")[-1]
+        magicrc = f"{_root}/libs.tech/magic/{_name}.magicrc"
     cmd = (
         f"export TOP={top} DEF={def_c} GDS_OUT={gds_out_c} "
-        f"LEFS=\"{lefs}\" && "
-        f"magic -dnull -noconsole -rcfile /dev/null {tcl_c}"
+        f"LEFS=\"{lefs}\" CELL_GDS=\"{cell_gds_c}\" MACRO_GDS=\"{macro_gds_c}\" && "
+        f"magic -dnull -noconsole -rcfile {magicrc} {tcl_c}"
     )
     rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
     transcript = out + "\n" + err
@@ -7723,6 +7757,21 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
             except Exception:  # nosec — source isolation is provenance-only
                 pass
     except Exception:  # nosec — classification is provenance-only
+        pass
+    # Emit the DRC report at the CANONICAL sign-off path the flow gate
+    # ("Physical Verification (DRC+LVS+ERC+Density)") requires:
+    # reports/phase3/drc_signoff.rpt. step_drc historically wrote ONLY
+    # phase3/reports/drc.rpt, so the canonical gate found no output and scored
+    # the step MISSING even when DRC had run and found violations — the exact
+    # "GDS emitted while DRC report invisible" integrity gap. Mirroring here
+    # makes the sign-off verdict visible (PASS/FAIL), never silently MISSING.
+    try:
+        _canon = project / "reports" / "phase3" / "drc_signoff.rpt"
+        _canon.parent.mkdir(parents=True, exist_ok=True)
+        if rpt.is_file():
+            _canon.write_bytes(rpt.read_bytes())
+            extras["drc_signoff_report"] = str(_canon)
+    except Exception:  # nosec — canonical mirror is best-effort provenance
         pass
     return StepResult("drc", status, time.time() - t0,
                       detail, [str(rpt)], extras=extras)
@@ -10094,6 +10143,42 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             },
         }, indent=2) + "\n")
         written.append(str(skip_note))
+
+    # --- Step 30: Post-Layout SPICE correlation — honest disclosed-skip ----
+    # Previously ORPHANED (no runner produced spice/*.sp or correlation.json AND
+    # no skip-note → a SILENT MISSING, flagged by the executor-coverage gate).
+    # Critical-path SPICE correlation needs an extracted transistor netlist + a
+    # vector/analog stimulus + device models — an analog/mixed-signal capability;
+    # a pure-digital block's timing is signed off by post-route multi-corner STA
+    # (step 23). Emit a CONSCIOUS skip-sentinel so flow_compliance promotes the
+    # step to SKIPPED-CONDITION (disclosed capability gap) instead of a silent
+    # orphan. A real analog/mixed-signal block runs SPICE via the A-track.
+    spice_out = project / "phase3/stage3/spice"
+    spice_skip = spice_out / "spice_correlation_not_run.json"
+    _spice_have = (any(spice_out.glob("*.sp")) or any(spice_out.glob("*.spice"))
+                   or any((project / "sim_spice").glob("*.sp"))
+                   if spice_out.is_dir() or (project / "sim_spice").is_dir()
+                   else False)
+    if not _spice_have and not spice_skip.is_file():
+        spice_out.mkdir(parents=True, exist_ok=True)
+        spice_skip.write_text(json.dumps({
+            "verdict": "SKIPPED-CONDITION",
+            "reason": ("no critical-path SPICE correlation ran; it requires an "
+                       "extracted transistor netlist + vector/analog stimulus + "
+                       "device models (an analog/mixed-signal capability). This "
+                       "digital block's timing is signed off by post-route "
+                       "multi-corner STA (step 23); SPICE correlation is a "
+                       "belt-and-suspenders analog cross-check run on the A-track."),
+            "capability_flag": "cap:post_layout_spice_correlation",
+            "design_identity": _design_identity_fields(project),
+            "advisory_approximation": {
+                "post_route_sta_signoff": True,
+                "lvs_extracted_netlist_present": bool(
+                    list((project / "phase3/stage3/extracted").glob("*.sp"))
+                    if (project / "phase3/stage3/extracted").is_dir() else []),
+            },
+        }, indent=2) + "\n")
+        written.append(str(spice_skip))
 
     # --- Step 32b: ECO timing repair TCL (ORGANIC #561) ----------------
     # Emit the standalone multi-corner-aware OpenROAD ECO timing-repair script

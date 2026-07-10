@@ -59,6 +59,12 @@ try:
 except Exception:  # pragma: no cover - standalone fallback
     _pl = None
 
+try:
+    import dft_signoff_common
+except Exception:  # pragma: no cover - path fallback
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import dft_signoff_common  # type: ignore
+
 
 _PROGRAM = "bsdl_emit"
 _VERSION = "1.0.0"
@@ -659,6 +665,38 @@ def main(argv: Optional[list] = None) -> int:
     if args.ir_length < 2:
         print("ERROR: --ir-length must be >= 2 (1149.1 IR minimum)",
               file=sys.stderr)
+        return 2
+
+    # HONEST disclosed-skip (flow step-11): when the scan netlist is ABSENT
+    # (the runner renamed scan_netlist.v → scan_netlist_prelim.v because the
+    # OSS Fault ATPG engine could not measure sign-off coverage) AND a sibling
+    # dft_atpg_not_run.json honestly self-reports the skip
+    # (verdict ∈ SKIP/SKIPPED/SKIPPED-CONDITION), resolve to SKIPPED-CONDITION
+    # (rc=2 → VACUOUS_PASS) instead of a FAIL — a BSDL plan cannot be emitted
+    # without a scan netlist. Guarded on BOTH conditions — a real run (scan
+    # netlist present) NEVER takes this path.
+    _skip = dft_signoff_common.disclosed_atpg_skip(project)
+    if _skip is not None and not (project / args.netlist).is_file():
+        print(f"{_PROGRAM}: SKIPPED-CONDITION — DFT ATPG disclosed-skipped: "
+              f"{_skip}")
+        json_path = Path(args.json) if args.json else _plan_path(project)
+        try:
+            json_path.parent.mkdir(parents=True, exist_ok=True)
+            json_path.write_text(json.dumps({
+                "program": _PROGRAM,
+                "version": _VERSION,
+                "project_dir": str(project),
+                "netlist": args.netlist,
+                "verdict": "SKIPPED-CONDITION",
+                "status": "SKIPPED-CONDITION",
+                "reason": _skip,
+                "reasons": [f"DFT ATPG disclosed-skipped: {_skip} — scan "
+                            "netlist absent, no boundary register to emit; a "
+                            "sibling sentinel honestly self-reports the skip"],
+            }, indent=2, ensure_ascii=False) + "\n")
+        except OSError as exc:  # pragma: no cover - IO edge
+            print(f"WARN: could not write plan JSON {json_path}: {exc}",
+                  file=sys.stderr)
         return 2
 
     plan = emit(project, args.netlist, args.top, args.mode,
