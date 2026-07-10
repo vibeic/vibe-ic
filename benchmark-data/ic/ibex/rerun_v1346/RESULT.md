@@ -96,3 +96,28 @@ sign-off verdict stays FAIL). Wired into `phase3_one_shot_runner` at the multi-c
 when setup is SURFACED as violated it now emits `reports/phase3/achievable_fmax.json` ALONGSIDE the
 FAIL, so every future CPU-class Category-H residual self-reports its Fmax instead of a bare FAIL
 (sha256 got this by hand; ibex did not — now automatic). 20 unit tests + real-artifact validation.
+
+### §6.1 Wiring verification — `achievable_fmax.json` emits on a FRESH runner path (2026-07-10)
+
+The v1.3.56 wiring was verified end-to-end through the ACTUAL runner code (not a mock): a fresh
+copy of this run with `mcorner_ocv_stance.json` / `sta_mcorner_ocv.rpt` cleared (the fresh-run
+condition — the emit is gated on `mc_ocv_ok`, which is True only when `_emit_mcorner_ocv_sta` runs
+the STA fresh) was driven through `step_canonicalize_artefacts(project, "ibex_top", pdk,
+container)` inside a `vibeic/vibeic-eda:0.2.7` container (openroad `26Q3-111-g3efb695851`). The step
+ran the REAL multi-corner OCV STA and the wiring fired:
+
+- step `STATUS: PASS`; `reports/phase3/achievable_fmax.json` **written**.
+- real STA `setup_worst_slack_ns = −99.47 ns` (SS process + max-RC + flat-OCV — the sign-off
+  corner) → emitted `{spec_period_ns: 10.0, spec_fmax_mhz: 100.0, worst_setup_slack_ns: −99.47,
+  spec_met: false, achievable_period_ns: 109.47, achievable_fmax_mhz: 9.14, relaxation_applied:
+  false}`.
+- HONESTY invariants confirmed on the live path: `spec_met=false`, `relaxation_applied=false`, and
+  `mcorner_ocv_stance.json.timing_closed_multi_corner` stayed **False** — the sign-off verdict is
+  untouched; the Fmax datapoint travels alongside the FAIL, it is not a waiver.
+
+Corner note (so the number is not misread): the auto-emitted **9.14 MHz** is the **SS + OCV
+sign-off corner on the as-routed design** (it carries the un-repaired DRV slew blow-up at the slow
+corner) — deliberately the most conservative, which is the correct corner for a sign-off Fmax
+claim. The §6 close-loop sweep's ~47 MHz (real-SPEF, TT, post-repair) / ~77 MHz (placement, TT) are
+faster-corner explorations; both are honest, they just measure different corners. Verify scratch +
+container were removed after the check (no repo residue).
