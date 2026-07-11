@@ -17,20 +17,23 @@ Take a DRC report and a layout, and produce a targeted fix plan — which rules 
 > deck `Calibre_HP18E80_DRC_D4.20.rule`: **224 layers, 4533 rules executed** natively
 > in one run.
 
-- **What it is:** an in-KLayout SVRF interpreter (`svrf_klayout/run_svrf_drc.py`
-  + `svrf_parse.py`) that parses the foundry's Calibre/SVRF deck and executes each
-  statement DIRECTLY on KLayout's native DRC engine via `pya.Region.*` /
-  `pya.LayoutToNetlist` — one unified layer namespace, top-to-bottom, `NAME { COPY
-  errlayer }` = a rule's violation report. Edge/DENSITY/ANTENNA classes with no
-  polygon-DRC equivalent are honestly SKIPPED, never falsely PASSed.
-- **Where (productized — clean-install-safe):** it is **BAKED INTO the vibeic-eda
-  image at `/foss/tools/svrf-drc`**, so a fresh install needs NO host checkout.
-  `phase3_one_shot_runner._try_svrf_native_drc()` resolves the engine via
-  `_svrf_drc_root_container()` (image path first; probes `test -f` in the
-  container) and only falls back to a host `$VIBE_IC_SVRF_DRC_ROOT` /
-  `~/vibe-ic-forks/klayout/svrf-drc` checkout. It runs
-  `klayout -b -r <root>/svrf_klayout/run_svrf_drc.py` against the GDS + the deck
-  at `input/pdk/calibre/`. `step_drc` PREFERS this native path (whether or not a
+- **What it is:** a **native C++ KLayout buddy** (`svrfdrc`, compiled from
+  `db::SVRFDeck` + `db::SVRFEngine` in the vibeic/klayout fork) that parses the
+  foundry's Calibre/SVRF deck and executes each statement DIRECTLY on KLayout's
+  `db::Region` / `db::Edges` / `db::LayoutToNetlist` engine — one unified layer
+  namespace, top-to-bottom, `NAME { COPY errlayer }` = a rule's violation report.
+  Edge/DENSITY/ANTENNA classes with no polygon-DRC equivalent are honestly SKIPPED,
+  never falsely PASSed. **NO Python interpreter, NO `-r` script, NO `.drc` file.**
+  (It replaces the retired pure-Python `run_svrf_drc.py`; the report format is
+  byte-identical, proven on the real HP18E80 deck, so downstream parsing/classifying
+  is unchanged.)
+- **Where (productized — clean-install-safe):** the `svrfdrc` binary is **BAKED INTO
+  the vibeic-eda image on PATH** (built into `klayout-vibeic`), so a fresh install
+  needs no host checkout. `phase3_one_shot_runner._try_svrf_native_drc()` resolves it
+  via `_svrfdrc_bin_container()` (`command -v svrfdrc` in the container; env
+  `VIBE_IC_SVRFDRC_BIN` overrides the command name) and runs
+  `svrfdrc <deck> <layout> <report> --cell=<top>` against the GDS + the deck at
+  `input/pdk/calibre/`. `step_drc` PREFERS this native path (whether or not a
   `calibre` binary exists) — it is the real sign-off verdict, not a waiver.
 - **This is categorically stronger than an OSS-proxy deck** (e.g. a sky130 `.lydrc`
   approximation): it is the foundry's actual rule set. It is NOT a golden-Calibre
