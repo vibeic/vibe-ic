@@ -91,12 +91,16 @@ RUN git clone https://github.com/vibeic/iverilog.git /iverilog \
  && make -j"$(nproc)" && make install
 
 # ---------------------------------------------------------------------------
-# Stage 6 — vibeic/klayout (streamout: MANUFACTURINGGRID snap + merge-abutting + foundry layer-map)
-#   Qt-less db-lib + pymod (the streamout path); shipped parallel as klayout-vibeic so the
-#   base 0.30.6 GUI/DRC stays intact. Phase-3 streamout points here + sets the env shims.
+# Stage 6 — vibeic/klayout (streamout MANUFACTURINGGRID snap + merge-abutting + foundry
+#   layer-map, AND the native SVRF/Calibre DRC engine + `svrfdrc` buddy). Qt-less db-lib
+#   + pymod + buddies; shipped parallel as klayout-vibeic so the base 0.30.6 GUI/DRC stays
+#   intact. Phase-3 streamout AND commercial sign-off DRC both point here.
+#   The svrf-native-drc branch = streamout-fixes + db::SVRFDeck/db::SVRFEngine + the
+#   `svrfdrc <deck> <layout> <report>` buddy (native C++, NO Python interpreter). Byte-
+#   parity vs the old run_svrf_drc.py proven on the real commercial_pdk deck.
 # ---------------------------------------------------------------------------
 FROM ubuntu:24.04 AS klayout-builder
-ARG KLAYOUT_REF=vibeic/streamout-fixes
+ARG KLAYOUT_REF=vibeic/svrf-native-drc
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       build-essential git python3-dev zlib1g-dev libexpat1-dev libcurl4-openssl-dev libpng-dev \
       qtbase5-dev qttools5-dev-tools ca-certificates \
@@ -108,16 +112,11 @@ RUN git clone https://github.com/vibeic/klayout.git /klayout \
 # verilator: forked, no honest fix warranted on v5.051 (see FIX_STATUS.md) — nothing to layer.
 
 # ---------------------------------------------------------------------------
-# Stage 7 — vibeic/klayout svrf-drc (SVRF-native DRC interpreter, pure-Python KLayout
-#   macro). Runs ON the base klayout's pya engine (no C++ rebuild): KLayout reads a
-#   Calibre/SVRF .rule deck and executes it via pya.Region.*_check + LayoutToNetlist.
-#   Sparse-checkout just the svrf-drc/ tree from the fork branch. Proof: svrf-drc/proof.py.
+# Stage 7 — RETIRED. The SVRF/Calibre DRC deck is now executed by the NATIVE C++
+#   `svrfdrc` buddy compiled in Stage 6 (part of the svrf-native-drc branch), NOT by
+#   the old pure-Python `run_svrf_drc.py` interpreter. No separate source stage: the
+#   buddy ships inside /klayout/bld and is surfaced on PATH in the runtime stage.
 # ---------------------------------------------------------------------------
-FROM alpine/git AS svrf-src
-ARG SVRF_REF=vibeic/svrf-native-drc
-RUN git clone --depth 1 --filter=blob:none --sparse --branch ${SVRF_REF} \
-      https://github.com/vibeic/klayout.git /k \
- && cd /k && git sparse-checkout set svrf-drc
 
 # ---------------------------------------------------------------------------
 # Stage 8 — vibeic verification toolchain (cocotb / cocotb-coverage / pyuvm / sby)
@@ -182,14 +181,24 @@ RUN for t in yosys yosys-abc; do ln -sf /foss/tools/yosys/bin/$t /foss/tools/bin
 # (PATH) and eda_doctor probes bare `fault`, so both work with or without this
 # symlink; it's a path-consistency convenience, not a functional requirement.
 RUN command -v fault >/dev/null 2>&1 && ln -sf "$(command -v fault)" /foss/tools/bin/fault 2>/dev/null || true
-# --- vibeic/klayout svrf-drc (SVRF-native DRC, runs on the base klayout pya engine) ---
-COPY --from=svrf-src /k/svrf-drc /foss/tools/svrf-drc
-# autoload the KLayout GUI macro (Tools -> "SVRF-native DRC…") + a batch wrapper `klayout-svrf`
-RUN mkdir -p /headless/.klayout/pymacros \
- && ln -sf /foss/tools/svrf-drc/pymacros/svrf_drc.lym /headless/.klayout/pymacros/svrf_drc.lym \
- && printf '#!/bin/bash\nexec klayout -b -r /foss/tools/svrf-drc/svrf_klayout/run_svrf_drc.py -rd root=/foss/tools/svrf-drc "$@"\n' > /foss/tools/bin/klayout-svrf \
- && chmod +x /foss/tools/bin/klayout-svrf \
- && chmod -R a+rX /foss/tools/svrf-drc
+# --- vibeic/klayout svrfdrc (NATIVE C++ SVRF/Calibre DRC buddy) ---
+# The `svrfdrc <deck> <layout> <report> [--cell=TOP]` binary was compiled in Stage 6
+# (svrf-native-drc branch) and shipped inside /klayout/bld -> already copied to
+# /foss/tools/klayout-vibeic above. The `svrfdrc()` entry + the whole native SVRF
+# engine (dbSVRFDeck/dbSVRFEngine) are baked into the FORK's libklayout_bd.so there.
+# NO Python interpreter, NO `-r` script, NO GUI macro — byte-parity with the retired
+# run_svrf_drc.py proven on the real commercial_pdk deck.
+#
+# WRAPPER (not a bare symlink): the buddy's ELF carries DT_RUNPATH=/foss/tools/klayout-vibeic,
+# but the runtime env sets LD_LIBRARY_PATH=/foss/tools/klayout:... and DT_RUNPATH is
+# searched AFTER LD_LIBRARY_PATH. A bare symlink therefore loads the STOCK
+# /foss/tools/klayout/libklayout_bd.so (which lacks the svrfdrc symbol + engine) →
+# `undefined symbol: svrfdrc(int, char**)`. The wrapper prepends the fork lib dir to
+# LD_LIBRARY_PATH so ALL klayout libs resolve consistently from the fork build.
+RUN printf '#!/bin/sh\nexec env LD_LIBRARY_PATH=/foss/tools/klayout-vibeic:${LD_LIBRARY_PATH} /foss/tools/klayout-vibeic/svrfdrc "$@"\n' > /foss/tools/bin/svrfdrc \
+ && chmod +x /foss/tools/bin/svrfdrc \
+ && LD_LIBRARY_PATH=/foss/tools/klayout /foss/tools/bin/svrfdrc --help >/dev/null 2>&1 \
+      && echo "svrfdrc buddy OK" || echo "WARN: svrfdrc buddy self-test failed"
 # --- vibeic verification toolchain (cocotb / cocotb-coverage / pyuvm / sby) ---
 # Editable-installed from the vibeic forks so an in-image Python patch is live; this
 # overrides the base's stock cocotb with our fork. sby installs its driver + libs into

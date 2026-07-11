@@ -7640,51 +7640,28 @@ def _magic_run_drc(gds: Path, top: str, container: str
 # NO commercial license — categorically stronger than an OSS-proxy deck (sky130
 # lydrc). §4.05-honest: this is a native execution of the real deck, NOT a
 # golden-Calibre numerical cross-run — the verdict/detail says so explicitly.
-# chip-AGNOSTIC: no chip / vendor / SKU literal; discovers the engine via env
-# VIBE_IC_SVRF_DRC_ROOT or a home-relative default.
-# The svrf-drc engine (our in-KLayout SVRF interpreter — reads+runs a real
-# foundry Calibre/Assura `.rule` deck on KLayout's native DRC engine via `pya`,
-# NO Calibre binary) ships BAKED INTO the vibeic-eda image at this path. This is
-# the clean-install location — no host `~/vibe-ic-forks` checkout required.
-_SVRF_DRC_CONTAINER_ROOT = "/foss/tools/svrf-drc"
+# chip-AGNOSTIC: no chip / vendor / SKU literal; discovers the engine on PATH.
+# The engine is the NATIVE C++ `svrfdrc` buddy (`svrfdrc <deck> <layout> <report>
+# [--cell=TOP]`) compiled into the vibeic KLayout fork — it reads+runs the real
+# foundry Calibre/SVRF `.rule` deck directly on KLayout's db:: geometry engine
+# (NO Python interpreter, NO `-r` script, NO Calibre binary). It ships BAKED INTO
+# the vibeic-eda image on PATH as `svrfdrc` — no host checkout required. Byte-parity
+# with the retired run_svrf_drc.py proven on the real commercial_pdk deck.
+_SVRFDRC_BIN = "svrfdrc"
 
 
-def _svrf_drc_root() -> Optional[Path]:
-    """Locate the svrf-drc engine (`svrf_klayout/run_svrf_drc.py`) ON THE HOST —
-    the dev-box fallback only. env VIBE_IC_SVRF_DRC_ROOT wins; else
-    `~/vibe-ic-forks/klayout/svrf-drc`. None → not on the host (the caller first
-    tries the container-baked copy at _SVRF_DRC_CONTAINER_ROOT, so a None here is
-    NOT 'engine unavailable')."""
-    cands: List[Path] = []
-    ev = os.environ.get("VIBE_IC_SVRF_DRC_ROOT")
-    if ev:
-        cands.append(Path(ev))
-    cands.append(Path(os.path.expanduser("~")) / "vibe-ic-forks"
-                 / "klayout" / "svrf-drc")
-    for c in cands:
-        try:
-            if (c / "svrf_klayout" / "run_svrf_drc.py").is_file():
-                return c
-        except OSError:
-            continue
-    return None
-
-
-def _svrf_drc_root_container(container: str) -> Optional[str]:
-    """Return the CONTAINER path of the svrf-drc engine when it is baked into
-    the image (vibeic-eda ships it at `/foss/tools/svrf-drc`). Probed via a
-    `test -f` inside the container so a clean install — with no host
-    `~/vibe-ic-forks` checkout — still runs commercial sign-off DRC. Returns the
-    container root string, or None when the image does not carry it. chip- and
-    host-AGNOSTIC: no design/vendor literal; overridable via env
-    VIBE_IC_SVRF_DRC_CONTAINER_ROOT."""
-    root = os.environ.get("VIBE_IC_SVRF_DRC_CONTAINER_ROOT",
-                          _SVRF_DRC_CONTAINER_ROOT)
-    probe = f"{root}/svrf_klayout/run_svrf_drc.py"
+def _svrfdrc_bin_container(container: str) -> Optional[str]:
+    """Return the CONTAINER command for the NATIVE `svrfdrc` buddy when the image
+    carries it (vibeic-eda bakes it on PATH from the klayout-vibeic build). Probed
+    with `command -v` inside the container so a clean install — no host checkout —
+    runs commercial sign-off DRC. Returns the resolved command/path, or None when
+    the image lacks it. chip- and host-AGNOSTIC: no design/vendor literal;
+    overridable via env VIBE_IC_SVRFDRC_BIN."""
+    binname = os.environ.get("VIBE_IC_SVRFDRC_BIN", _SVRFDRC_BIN)
     try:
-        rc, _out, _err = _docker_exec(container, f"test -f '{probe}'",
-                                      timeout=30)
-        return root if rc == 0 else None
+        rc, out, _err = _docker_exec(container, f"command -v {binname}",
+                                     timeout=30)
+        return (out.strip() or binname) if rc == 0 else None
     except Exception:
         return None
 
@@ -7795,23 +7772,18 @@ def _classify_svrf_fails(rpt: Path) -> Dict[str, Any]:
 def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
                          container: str) -> Optional[StepResult]:
     """Run the commercial Calibre/SVRF `.rule` DRC deck NATIVELY via the vibeic
-    KLayout fork (svrf-drc) — the license-free sign-off path when the `calibre`
-    binary is absent. Returns a StepResult (PASS iff 0 rules fire) on a real
-    run, or None when the svrf-drc engine / klayout / GDS is unavailable (caller
-    then emits ENV_UNAVAILABLE). §4.05: native execution of the real deck, NOT a
-    golden-Calibre numerical cross-run — disclosed in the detail."""
+    KLayout fork's `svrfdrc` buddy (native C++, no Python) — the license-free
+    sign-off path when the `calibre` binary is absent. Returns a StepResult (PASS
+    iff 0 rules fire) on a real run, or None when the svrfdrc engine / GDS is
+    unavailable (caller then emits ENV_UNAVAILABLE). §4.05: native execution of the
+    real deck, NOT a golden-Calibre numerical cross-run — disclosed in the detail."""
     t0 = time.time()
-    if not _tool_in_path(container, "klayout"):
+    # Resolve the native buddy on PATH in the image (`svrfdrc`). No host-checkout
+    # fallback: unlike the retired portable Python script, a compiled binary can't
+    # be mounted in from the host, so the engine must be baked into the image.
+    bin_c = _svrfdrc_bin_container(container)
+    if bin_c is None:
         return None
-    # Resolve the engine's CONTAINER path. Prefer the copy BAKED INTO the image
-    # (`/foss/tools/svrf-drc` — the clean-install path, no host checkout needed);
-    # fall back to a host `~/vibe-ic-forks` checkout translated into the mount.
-    root_c = _svrf_drc_root_container(container)
-    if root_c is None:
-        host_root = _svrf_drc_root()
-        if host_root is None:
-            return None
-        root_c = _to_container_path(str(host_root), container)
     gds = _pl.pnr_dir(project) / f"{top}.gds"
     if not gds.is_file():
         return None
@@ -7820,12 +7792,9 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
     deck_c = _to_container_path(str(pdk.calibre_drc), container)
     gds_c = _to_container_path(str(gds), container)
     rpt_c = _to_container_path(str(rpt), container)
-    cmd = (
-        f"export QT_QPA_PLATFORM=offscreen && "
-        f"klayout -b -r {root_c}/svrf_klayout/run_svrf_drc.py "
-        f"-rd root={root_c} -rd deck={deck_c} -rd layout={gds_c} "
-        f"-rd report={rpt_c} -rd cell={top}"
-    )
+    # svrfdrc <deck> <layout> <report> [--cell=TOP] — byte-identical report to the
+    # retired run_svrf_drc.py, so _parse_svrf_tally / _classify_svrf_fails are unchanged.
+    cmd = f"{bin_c} {deck_c} {gds_c} {rpt_c} --cell={top}"
     rc, out, err = _docker_exec(container, cmd, marker=gds_c)
     if rc in (_RC_STALLED, 124):
         return StepResult("drc", "FAIL", time.time() - t0,
@@ -7893,8 +7862,8 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
         if pdk.calibre_drc:
             calibre_present = _tool_in_path(container, "calibre")
             if not calibre_present:
-                # No commercial Calibre binary — but the vibeic KLayout fork
-                # (svrf-drc) runs the SAME Calibre `.rule` deck NATIVELY, so we
+                # No commercial Calibre binary — but the vibeic KLayout fork's
+                # native `svrfdrc` buddy runs the SAME Calibre `.rule` deck, so we
                 # can produce a real, license-free sign-off DRC verdict on the
                 # foundry's own deck. Only when that engine is ALSO unavailable
                 # do we fall back to the honest ENV_UNAVAILABLE.
@@ -7904,17 +7873,15 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
                 return StepResult(
                     "drc", "ENV_UNAVAILABLE", time.time() - t0,
                     f"Calibre DRC deck present at {pdk.calibre_drc} but the "
-                    f"svrf-drc engine was not found — neither baked into the "
-                    f"image ({_SVRF_DRC_CONTAINER_ROOT}, the vibeic-eda default) "
-                    f"nor on the host (env VIBE_IC_SVRF_DRC_ROOT / "
-                    f"~/vibe-ic-forks/klayout/svrf-drc) — and `klayout` may be "
-                    f"absent in container {container!r}. Sign-off DRC runs the "
-                    f"foundry deck NATIVELY via KLayout+svrf-drc (no Calibre "
-                    f"license); use the vibeic-eda image (ships it) to run it. "
-                    f"ENV gap, not a design defect.",
+                    f"native `svrfdrc` buddy was not found on PATH in container "
+                    f"{container!r} (env VIBE_IC_SVRFDRC_BIN overrides the "
+                    f"command name). Sign-off DRC runs the foundry deck NATIVELY "
+                    f"via KLayout's `svrfdrc` engine (no Calibre license, no "
+                    f"Python); use the vibeic-eda image (bakes it on PATH) to run "
+                    f"it. ENV gap, not a design defect.",
                     extras={"calibre_drc_deck": pdk.calibre_drc,
                             "gds": str(_pl.pnr_dir(project) / f"{top}.gds"),
-                            "missing_tool": "calibre|svrf-drc"})
+                            "missing_tool": "calibre|svrfdrc"})
             return StepResult(
                 "drc", "WAIVED", time.time() - t0,
                 f"Calibre DRC deck present at {pdk.calibre_drc} and "
