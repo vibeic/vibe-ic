@@ -141,15 +141,25 @@ function _run(file, args, opts = {}) {
 }
 
 // v2.5.2: derive plugin programs dir from this file's location instead of
-// hardcoding /home/user/. Order: $VIBE_IC_PROGRAMS_DIR -> sibling
-// vibe-ic-marketplace/plugins/vibe-ic-d/programs/ -> legacy hardcode.
+// hardcoding /home/user/. Order: $VIBE_IC_PROGRAMS_DIR -> first existing of a
+// candidate list -> legacy hardcode.
+// v2.5.3: this file lives at <plugin>/mcp-eda/src/index.js, so the plugin's own
+// programs/ is two levels up (../../programs). Prior logic only probed a nested
+// vibe-ic-marketplace/plugins/vibe-ic-d/programs sibling, which does not exist
+// on installs where the plugin is named `vibe-ic` (programs/ lives directly
+// under the plugin root) — that made eda_doctor's plugin_programs_dir FAIL and
+// silently fell back to the /home/user hardcode.
 const __dirname_eda = dirname(fileURLToPath(import.meta.url));
-const _autoProgramsDir = resolve(
-  __dirname_eda, "..", "..",
-  "vibe-ic-marketplace", "plugins", "vibe-ic-d", "programs",
-);
+const _programsCandidates = [
+  // plugin's own programs/ (plugin root = ../.. from mcp-eda/src)
+  resolve(__dirname_eda, "..", "..", "programs"),
+  // legacy sibling layout: marketplace/plugins/vibe-ic-d/programs
+  resolve(__dirname_eda, "..", "..", "..", "vibe-ic-d", "programs"),
+  resolve(__dirname_eda, "..", "..", "vibe-ic-marketplace", "plugins", "vibe-ic-d", "programs"),
+];
 const VIBE_IC_PROGRAMS_DIR = process.env.VIBE_IC_PROGRAMS_DIR
-  || (existsSync(_autoProgramsDir) ? _autoProgramsDir : "/home/user/AI_IC_design/vibe-ic-marketplace/plugins/vibe-ic-d/programs");
+  || _programsCandidates.find(existsSync)
+  || "/home/user/AI_IC_design/vibe-ic-marketplace/plugins/vibe-ic-d/programs";
 
 // v0.99.1: load embedded Python helpers once at startup. Inlining them via
 // shell heredoc hit escape-hell at v0.99.0 (sh: 66: Syntax error: "("
