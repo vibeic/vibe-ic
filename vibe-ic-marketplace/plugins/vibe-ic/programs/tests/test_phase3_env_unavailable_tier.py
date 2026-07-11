@@ -123,14 +123,25 @@ def test_step_drc_env_unavailable_when_calibre_deck_present_but_binary_absent(
     assert "ENV gap" in res.detail
 
 
-def test_step_drc_waived_when_calibre_deck_and_binary_both_present(
+def test_step_drc_waived_when_calibre_binary_present_but_svrf_engine_absent(
         tmp_path: Path) -> None:
+    # 2026-07-12: sign-off DRC PREFERS the native svrf-drc engine (runs the real
+    # Calibre deck license-free). WAIVED (defer to offline `calibre`) now happens
+    # ONLY when that engine is unavailable — both the image-baked copy AND the
+    # host checkout — while the `calibre` binary IS present. Mock both svrf roots
+    # absent so the probe is deterministic (no real docker exec).
     pdk = _FakePdkConfig(
         drc_deck=None,
         calibre_drc="/path/to/calibre_drc.rule")
     with patch(
         "programs.phase3_one_shot_runner._tool_in_path",
         return_value=True,
+    ), patch(
+        "programs.phase3_one_shot_runner._svrf_drc_root_container",
+        return_value=None,
+    ), patch(
+        "programs.phase3_one_shot_runner._svrf_drc_root",
+        return_value=None,
     ):
         res = step_drc(tmp_path, "top", pdk, "test-container")
     assert res.status == "WAIVED"
