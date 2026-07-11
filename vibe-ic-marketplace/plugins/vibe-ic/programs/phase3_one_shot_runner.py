@@ -5007,6 +5007,28 @@ def _post_buffered_repair_tcl(marker_prefix: str, marker_suffix: str = "",
     )
 
 
+# ORGANIC (spm clean-run 2026-07-11) — BOUND the ECO reroute's detailed_route.
+# The base route (Step 21) runs an UNBOUNDED detailed_route that CONVERGES to 0
+# DRC because a routable design terminates when it hits 0. The ECO reroute is
+# different: repair_timing -setup can insert dozens of buffers / upsizes chasing
+# an architecturally-UNCLOSABLE setup gap (e.g. a full-width combinational add
+# per cycle whose SS-corner critical path is >2x the clock period, WNS worse than
+# -period). On a small / low-util die that over-buffering blows up congestion and
+# the follow-on detailed_route NEVER reaches 0 — it plateaus at thousands of
+# Shorts and grinds its full optimization-iteration budget (~1 min/iter x 64 ~ 1 h).
+# The progress-stall watchdog does NOT kill it (it makes tiny forward progress
+# each iteration), so it burns ~1 h of wasted compute. Bounding the ECO reroute's
+# OPTIMIZATION iterations lets it recover what is recoverable in the front-loaded
+# early iterations (buffers get routed → SPEF/timing measurable, LEC provable)
+# without the futile tail. SAFE because eco_routed.def / <top>_eco.v is NOT the
+# signoff route — the final GDS/DRC/LVS run on the base route (steps pnr→gds→drc→
+# lvs) BEFORE the Step-32 ECO; the ECO netlist feeds only post-ECO timing
+# measurement + post-layout LEC, both of which tolerate a DRC-dirty-but-routed
+# design. The initial route still completes (all nets routed); only the
+# violation-reduction optimization tail is capped. chip-AGNOSTIC.
+_ECO_REROUTE_MAX_DROUTE_ITERS = 8
+
+
 def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
                           liberty_c: str, pnr_dir_c: str, eco_dir_c: str,
                           metal_prefix: str,
@@ -5159,7 +5181,13 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         # #581 r2 — the post-buffered command set comes from the ONE shared
         # builder so this site and the SPEF-repair block cannot drift.
         + _post_buffered_repair_tcl("ECO", "_GR", "2") +
-        "if {[catch {detailed_route} _dr_err]} {\n"
+        # Bounded reroute: -droute_end_iter caps the DRC-optimization iterations
+        # so a non-converging ECO reroute (unclosable setup gap over-buffering a
+        # small/low-util die) cannot grind its full ~64-iteration budget. The
+        # initial route still completes; only the futile violation-reduction tail
+        # is capped. The base signoff route (Step 21) stays UNBOUNDED/converging.
+        f"if {{[catch {{detailed_route -droute_end_iter "
+        f"{_ECO_REROUTE_MAX_DROUTE_ITERS}}} _dr_err]}} {{\n"
         "  puts \"ECO_DETAILED_ROUTE_NONFATAL: $_dr_err\"\n"
         "}\n"
         f"write_def {eco_dir_c}/eco_routed.def\n"

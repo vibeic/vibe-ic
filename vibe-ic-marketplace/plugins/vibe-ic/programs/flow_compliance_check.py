@@ -5978,17 +5978,30 @@ def main(argv: Optional[List[str]] = None) -> int:
         # Detect missing required artifacts that drove FAILs (best-
         # effort, chip-AGNOSTIC). Mostly a hint for humans; the
         # canonical signal is `verdict` + `failed_gates`.
+        # spm clean-run (2026-07-11) — resolve each artifact at BOTH the canonical
+        # phase1/ (reports/phase1/) layout AND the legacy root layout, so this
+        # human hint does not falsely list an artifact as "missing" when Phase 1
+        # emitted it under phase1/. (Phase 1 canonically writes generated_docs →
+        # phase1/generated_docs, extraction_patterns.json → phase1/, and the
+        # coverage reports → reports/phase1/.) The label is kept stable for the
+        # schema; only the existence probe is location-aware. This stays a hint —
+        # the canonical FAIL signal is `verdict` + `failed_gates`.
         missing_required: List[str] = []
-        for cand in (
-            "reports/extraction_coverage_report.md",
-            "reports/extraction_coverage_report.json",
-            "waivers.json",
-            "generated_docs",
-            "extraction_patterns.json",
-        ):
-            p = project / cand
-            if not p.exists():
-                missing_required.append(cand)
+        _required_artifact_candidates = {
+            "reports/extraction_coverage_report.md": (
+                "reports/extraction_coverage_report.md",
+                "reports/phase1/extraction_coverage_report.md"),
+            "reports/extraction_coverage_report.json": (
+                "reports/extraction_coverage_report.json",
+                "reports/phase1/extraction_coverage_report.json"),
+            "waivers.json": ("waivers.json",),
+            "generated_docs": ("generated_docs", "phase1/generated_docs"),
+            "extraction_patterns.json": (
+                "extraction_patterns.json", "phase1/extraction_patterns.json"),
+        }
+        for label, cands in _required_artifact_candidates.items():
+            if not any((project / c).exists() for c in cands):
+                missing_required.append(label)
 
         from datetime import datetime, timezone
         audit = {
