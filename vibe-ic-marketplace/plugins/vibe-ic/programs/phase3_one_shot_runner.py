@@ -1989,9 +1989,25 @@ def _detect_pdk(project: Path, override: Optional[str] = None
             tech_lef = (tech_candidates[0] if tech_candidates
                         else cell_candidates[0])
             cell_lef = cell_candidates[0]
-            gds_dir = _pl.gds_dir(pdk_dir)
-            cell_gds = next(iter(sorted(gds_dir.glob("*.gds"))), None) \
-                       if gds_dir.is_dir() else None
+            # The PDK's std-cell GDS LIBRARY dir is input/pdk/gds (parallel to
+            # input/pdk/{lef,liberty}). NOT _pl.gds_dir() — that returns the
+            # project's phase3/stage4/gds OUTPUT dir, so calling it on pdk_dir
+            # yielded input/pdk/phase3/stage4/gds (nonexistent) -> cell_gds=None.
+            gds_dir = pdk_dir / "gds"
+            # rglob (not glob): a commercial PDK ships its std-cell GDS in a
+            # NESTED subdir (e.g. gds/<lib>_gds_<date>/<lib>.gds), so a
+            # one-level glob silently MISSES it -> cell_gds=None -> the DEF->GDS
+            # streamout falls back to a LEF-ABSTRACT GDS with no std-cell metal
+            # -> the sign-off DRC then MISREADS pin-connected via pads as
+            # ISOLATED min-area violations (commercial_pdk spm: 993 phantom M1.A.1;
+            # under the real-cell GDS the same route is M1.A.1=0). Pick the
+            # LARGEST match (the std-cell library GDS; macro GDS is discovered
+            # separately as pdk.macro_gds). Mirrors the LEF discovery above,
+            # which already uses rglob. chip-AGNOSTIC.
+            _gds_cands = (sorted(gds_dir.rglob("*.gds"),
+                                 key=lambda p: p.stat().st_size, reverse=True)
+                          if gds_dir.is_dir() else [])
+            cell_gds = _gds_cands[0] if _gds_cands else None
             # Auto-detect SITE name from cell LEF (chip-AGNOSTIC: any
             # PDK exposes its row site via `SITE <name>` declaration).
             site_name = "unit"
@@ -5349,22 +5365,28 @@ def _antenna_repair_tcl(pdk: "PdkConfig") -> str:
         "  # shippable result; no global_route ran, so the main route is untouched.\n"
         "  puts \"ANTENNA_ALREADY_CLEAN: 0 net violations, skipping repair+reroute\"\n"
         "} else {\n"
-        "  # Violations remain (or precheck could not measure). v1.3.46 —\n"
-        "  # INCREMENTAL repair->reroute->repair OUTER loop, with NO full\n"
-        "  # global_route. Two facts drive the exact shape:\n"
-        "  #   (a) repair_antennas in the `grt` module CANNOT itself call\n"
-        "  #       detailed_route; asking it to (`-iterations N>1`) trips\n"
-        "  #       GRT-0121 (\"repair_antennas can only be run once; re-route\n"
-        "  #       and repeat\"). So we drive ONE repair pass at a time\n"
-        "  #       (-iterations 1) and re-route between passes OURSELVES.\n"
-        "  #   (b) a FULL global_route here rebuilds the whole route graph and\n"
-        "  #       forces the following detailed_route to re-route EVERY net\n"
-        "  #       (~1900 nets on ibex -> timeout). We DROP it: repair_antennas\n"
-        "  #       marks ONLY the diode/jumper nets dirty, and detailed_route\n"
-        "  #       (hasInitialRouting) then re-routes ONLY those dirty nets\n"
-        "  #       (incremental). The loop converges the sha256/caravel\n"
-        "  #       residual and never full-reroutes.\n"
+        "  # Violations remain (or precheck could not measure). v1.3.47 —\n"
+        "  # INCREMENTAL repair->reroute->repair OUTER loop, NO full global_route,\n"
+        "  # driving the fork's TOOL-NATIVE `repair_antennas -reroute` with an\n"
+        "  # ESCALATING `-ratio_margin`. Four facts drive the exact shape:\n"
+        "  #   (a) `-reroute` does ONE repair pass + an incremental detailed_route\n"
+        "  #       of ONLY the diode-dirty nets in a single call (hasInitialRouting).\n"
+        "  #       A single-pass repair WITHOUT a reroute silently deletes the\n"
+        "  #       diode-dirty net's wire, so a follow-up check_antennas reads a\n"
+        "  #       FALSE 0 (no wire left to measure).\n"
+        "  #   (b) the realizing reroute can RE-INTRODUCE a small residual (a met1\n"
+        "  #       side-area antenna the global-route repair did not foresee on a\n"
+        "  #       large/dense design — sha256 #110: 3 net/4 pin). ESCALATING\n"
+        "  #       `-ratio_margin` (0->40) over-fixes to give that reroute\n"
+        "  #       progressively more head-room until check_antennas == 0.\n"
+        "  #   (c) `-iterations 1` = ONE repair pass per OUTER turn (the outer loop\n"
+        "  #       provides the iteration; keeps GRT-0121 quiet).\n"
+        "  #   (d) a build WITHOUT `-reroute` (stock OpenROAD) trips the catch and\n"
+        "  #       DEGRADES to the external repair->detailed_route pass\n"
+        "  #       (byte-compatible with the pre-v1.3.47 loop) — never aborts.\n"
+        "  #   A FULL global_route is still DROPPED (ibex ~1900-net timeout).\n"
         "  set _ant_cap 6\n"
+        "  set _ant_margin 0\n"
         "  for {set _i 0} {$_i < $_ant_cap} {incr _i} {\n"
         "    set _nv -1\n"
         "    if {[catch {set _nv [check_antennas]} _ac]} {\n"
@@ -5375,19 +5397,29 @@ def _antenna_repair_tcl(pdk: "PdkConfig") -> str:
         "      puts \"ANTENNA_LOOP_CONVERGED: iter=$_i\"\n"
         "      break\n"
         "    }\n"
-        "    # -iterations 1: ONE repair pass (no GRT-0121); diode nets marked dirty.\n"
+        "    # PRIMARY: tool-native repair + incremental reroute in ONE call,\n"
+        "    # escalating -ratio_margin. -iterations 1 = one pass per outer turn.\n"
         "    if {[catch {repair_antennas "
         f"{pdk.antenna_diode_cell}"
-        " -iterations 1} _ra_err]} {\n"
-        "      puts \"REPAIR_ANTENNA_NONFATAL: $_ra_err\"\n"
-        "      break\n"
+        " -iterations 1 -ratio_margin $_ant_margin -reroute} _ra_native]} {\n"
+        "      # FALLBACK (build without -reroute): external repair then an\n"
+        "      # incremental detailed_route of the diode-dirty nets.\n"
+        "      puts \"ANTENNA_NATIVE_REROUTE_NONFATAL: $_ra_native\"\n"
+        "      if {[catch {repair_antennas "
+        f"{pdk.antenna_diode_cell}"
+        " -iterations 1 -ratio_margin $_ant_margin} _ra_err]} {\n"
+        "        puts \"REPAIR_ANTENNA_NONFATAL: $_ra_err\"\n"
+        "        break\n"
+        "      }\n"
+        "      # INCREMENTAL reroute — re-routes ONLY the dirty nets.\n"
+        "      if {[catch {detailed_route -verbose 0} _ra_dr]} {\n"
+        "        puts \"REPAIR_ANTENNA_REROUTE_NONFATAL: $_ra_dr\"\n"
+        "        break\n"
+        "      }\n"
         "    }\n"
-        f"    puts \"REPAIR_ANTENNA_DONE: diode={pdk.antenna_diode_cell} iter=$_i\"\n"
-        "    # INCREMENTAL reroute — re-routes ONLY the dirty nets, not the whole design.\n"
-        "    if {[catch {detailed_route -verbose 0} _ra_dr]} {\n"
-        "      puts \"REPAIR_ANTENNA_REROUTE_NONFATAL: $_ra_dr\"\n"
-        "      break\n"
-        "    }\n"
+        f"    puts \"REPAIR_ANTENNA_DONE: diode={pdk.antenna_diode_cell} iter=$_i margin=$_ant_margin\"\n"
+        "    # Escalate head-room each turn (cap 40) vs reroute re-introduction.\n"
+        "    if {$_ant_margin < 40} { set _ant_margin [expr {$_ant_margin + 10}] }\n"
         "  }\n"
         "  # Authoritative in-session post-repair antenna check.\n"
         "  if {[catch {check_antennas} _ra_chk]} { puts "
@@ -6562,6 +6594,7 @@ for lp in lefs:
 # DEF references resolve. Empty/missing map → legacy numbering preserved.
 _lefdef_map = os.environ.get('LEFDEF_MAP', '').strip()
 _def_opts = pya.LoadLayoutOptions()
+_macro_resolved = False
 try:
     _cfg = _def_opts.lefdef_config
     if lefs and any(p.strip() for p in lefs):
@@ -6571,14 +6604,33 @@ try:
         print(f"LEFDEF_MAP applied: {_lefdef_map}")
     else:
         print("LEFDEF_MAP not applied (none/missing) — legacy numbering")
+    # Resolve DEF cell instances to the std-cell GDS's REAL geometry via the
+    # LEF/DEF reader's macro-layout resolution. A plain post-DEF
+    # `ly.read(cell_gds)` does NOT merge: KLayout renames the same-named GDS
+    # cells to avoid colliding with the LEF-ABSTRACT cells the DEF reader just
+    # created, so the DEF instances keep pointing at the EMPTY abstracts and
+    # the sign-off DRC misreads pin-connected via pads as ISOLATED min-area
+    # violations (commercial_pdk spm: 993 phantom M1.A.1 -> 0 with this). Resolving
+    # here makes the instances point at the real cells DURING the read, keeps
+    # hierarchy (LVS-friendly), and avoids Magic's flatten artefacts (Magic
+    # also SEGFAULTs streaming this PDK). chip-AGNOSTIC; no-op without cell_gds.
+    if cell_gds_path and os.path.exists(cell_gds_path):
+        try:
+            _cfg.macro_layout_files = [cell_gds_path]
+            _macro_resolved = True
+            print(f"CELL_GDS macro-resolved: {cell_gds_path}")
+        except Exception as e:
+            print(f"warn macro_layout_files (fallback to post-read): {e}")
 except Exception as e:
     print(f"warn lefdef_config: {e}")
 ly.read(def_path, _def_opts)
-# v1.6.560 sub-defect C: also read std-cell GDS so DEF cell instances
-# resolve into proper physical hierarchy under the design top — without
-# this, klayout writes the LEF abstracts as siblings at GDS top level
-# (causing "multiple top cells" when DRC deck does `source($input)`).
-if cell_gds_path:
+# v1.6.560 sub-defect C: read the std-cell GDS so DEF cell instances resolve
+# into proper physical hierarchy under the design top. Only needed as a
+# FALLBACK when the macro-layout resolution above was unavailable (older
+# KLayout) — a plain read may not merge on every PDK, but it is better than
+# dropping the cell geometry (which yields "multiple top cells" for the DRC
+# deck's `source($input)`).
+if cell_gds_path and not _macro_resolved:
     try:
         ly.read(cell_gds_path)
     except Exception as e:
