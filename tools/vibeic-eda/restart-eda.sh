@@ -24,6 +24,7 @@
 # Env overrides:
 #   NAME=vibeic-eda            container name to manage
 #   IMAGE_REPO=vibeic/vibeic-eda   repo prepended to a bare tag argument
+#   DESIGNS_DIR=~/AI_IC_design designs dir mounted at /foss/designs (fresh-container fallback only)
 #   RESTART_EDA_PRINT_IMAGE=1  print the resolved image ref and exit (no docker)
 #
 # After a successful recreate, confirm the toolchain from Claude Code with the
@@ -100,8 +101,17 @@ if docker container inspect "$NAME" >/dev/null 2>&1; then
     < <(docker inspect "$NAME" --format '{{range .Config.Cmd}}{{println .}}{{end}}')
 else
   echo "== no existing container '${NAME}' — using canonical vibeic-eda defaults"
-  BINDS=( -v /home/reyerchu/AI_IC_design:/foss/designs -v /home/reyerchu:/home/reyerchu )
-  USER_SPEC="1000"
+  # Generic defaults (no host-specific paths): designs dir from $DESIGNS_DIR
+  # (created if missing so docker doesn't create it root-owned), $HOME mounted
+  # through so in-container paths match the host's.
+  [[ -n "${HOME:-}" ]] || die \
+    "HOME is not set — run as your normal user (the fallback mounts need it)"
+  DESIGNS_DIR="${DESIGNS_DIR:-${HOME}/AI_IC_design}"
+  [[ "$DESIGNS_DIR" == /* ]] || die \
+    "DESIGNS_DIR must be an absolute path (got '${DESIGNS_DIR}') — a relative path would become a docker named volume, not a bind mount"
+  mkdir -p "$DESIGNS_DIR"
+  BINDS=( -v "${DESIGNS_DIR}:/foss/designs" -v "${HOME}:${HOME}" )
+  USER_SPEC="$(id -u)"
   WORKDIR="/foss/designs"
   CMD=( --skip sleep infinity )
 fi
