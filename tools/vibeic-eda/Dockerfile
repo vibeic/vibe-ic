@@ -127,19 +127,20 @@ RUN git clone --depth 1 --filter=blob:none --sparse --branch ${SVRF_REF} \
 #   so we can enhance it, never a "the tool can't do it" excuse). Pure-source fetch
 #   here; editable-installed in the runtime so an in-image Python patch is live.
 #   sby (SymbiYosys) drives our vibeic/yosys for the SVA-bind / formal path.
-#   NOTE: pinned to upstream SHAs for now — migrate each URL to
-#   github.com/vibeic/<tool> once those forks are pushed. Keep COCOTB_REF on the
-#   stable 2.0.x line the base ships until a real vibeic patch lands.
+#   Cloned from the vibeic org forks (github.com/vibeic/{cocotb,cocotb-coverage,
+#   pyuvm,sby}); the pinned SHAs live in those forks (shared upstream history) so
+#   a vibeic patch is a branch/commit on top. Keep COCOTB_REF on the stable 2.0.x
+#   line the base ships until a real vibeic patch lands.
 # ---------------------------------------------------------------------------
 FROM alpine/git AS tb-src
 ARG COCOTB_REF=606fb1f5e552fd12e20780dfb3826cfa150a3a85
 ARG COCOTB_COVERAGE_REF=201c6e19761528eb9c03f876666c485027abb7fb
 ARG PYUVM_REF=dfcd1ffb6b7141c6c654e970a0447e36615d5ae9
 ARG SBY_REF=8f8833c6176be263907dea5b50da7759632aaff6
-RUN git clone https://github.com/cocotb/cocotb.git            /tb/cocotb          && git -C /tb/cocotb          checkout ${COCOTB_REF} \
- && git clone https://github.com/mciepluc/cocotb-coverage.git /tb/cocotb-coverage && git -C /tb/cocotb-coverage checkout ${COCOTB_COVERAGE_REF} \
- && git clone https://github.com/pyuvm/pyuvm.git              /tb/pyuvm           && git -C /tb/pyuvm           checkout ${PYUVM_REF} \
- && git clone https://github.com/YosysHQ/sby.git              /tb/sby             && git -C /tb/sby             checkout ${SBY_REF}
+RUN git clone https://github.com/vibeic/cocotb.git           /tb/cocotb          && git -C /tb/cocotb          checkout ${COCOTB_REF} \
+ && git clone https://github.com/vibeic/cocotb-coverage.git  /tb/cocotb-coverage && git -C /tb/cocotb-coverage checkout ${COCOTB_COVERAGE_REF} \
+ && git clone https://github.com/vibeic/pyuvm.git            /tb/pyuvm           && git -C /tb/pyuvm           checkout ${PYUVM_REF} \
+ && git clone https://github.com/vibeic/sby.git              /tb/sby             && git -C /tb/sby             checkout ${SBY_REF}
 
 # ===========================================================================
 # Runtime: layer the patched tools onto the iic-osic-tools base.
