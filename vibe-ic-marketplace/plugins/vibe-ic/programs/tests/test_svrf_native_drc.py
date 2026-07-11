@@ -79,9 +79,62 @@ def test_svrf_drc_root_absent(tmp_path, monkeypatch):
 
 def test_try_svrf_native_drc_returns_none_when_engine_absent(
         tmp_path, monkeypatch):
-    # When the engine is absent, the helper returns None so step_drc falls
-    # through to the honest ENV_UNAVAILABLE (never a fabricated PASS).
+    # When the engine is absent from BOTH the image and the host, the helper
+    # returns None so step_drc falls through to the honest ENV_UNAVAILABLE
+    # (never a fabricated PASS). klayout present so we get past the pre-flight.
+    monkeypatch.setattr(R, "_tool_in_path", lambda c, t: True)
+    monkeypatch.setattr(R, "_svrf_drc_root_container", lambda c: None)
     monkeypatch.setattr(R, "_svrf_drc_root", lambda: None)
+    res = R._try_svrf_native_drc(
+        tmp_path, "spm",
+        R.PdkConfig(name="custom:hp18e80", liberty="x", tech_lef="x",
+                    cell_lef="x", cell_gds=None, site="unit", drc_deck=None,
+                    calibre_drc="/x/DRC.rule"),
+        "vibeic-eda")
+    assert res is None
+
+
+def test_svrf_drc_root_container_found_via_probe(monkeypatch):
+    # The engine is baked into the vibeic-eda image at /foss/tools/svrf-drc;
+    # a `test -f` probe returning rc=0 resolves that CONTAINER path — so a
+    # clean install needs NO host ~/vibe-ic-forks checkout.
+    monkeypatch.setattr(R, "_docker_exec",
+                        lambda c, cmd, **k: (0, "", ""))
+    assert R._svrf_drc_root_container("vibeic-eda") == "/foss/tools/svrf-drc"
+
+
+def test_svrf_drc_root_container_none_when_absent(monkeypatch):
+    # rc!=0 (file not in image) → None (caller then tries the host fallback).
+    monkeypatch.setattr(R, "_docker_exec",
+                        lambda c, cmd, **k: (1, "", ""))
+    assert R._svrf_drc_root_container("vibeic-eda") is None
+
+
+def test_svrf_drc_root_container_env_override(monkeypatch):
+    # The baked path is overridable for a differently-laid-out image.
+    monkeypatch.setenv("VIBE_IC_SVRF_DRC_CONTAINER_ROOT", "/opt/svrf")
+    seen = {}
+
+    def _fake_exec(c, cmd, **k):
+        seen["cmd"] = cmd
+        return (0, "", "")
+    monkeypatch.setattr(R, "_docker_exec", _fake_exec)
+    assert R._svrf_drc_root_container("vibeic-eda") == "/opt/svrf"
+    assert "/opt/svrf/svrf_klayout/run_svrf_drc.py" in seen["cmd"]
+
+
+def test_svrf_drc_root_container_prefers_image_over_host(tmp_path, monkeypatch):
+    # When the image HAS the engine, _try_svrf_native_drc must use the container
+    # path and NOT depend on a host checkout (host root not even consulted).
+    monkeypatch.setattr(R, "_tool_in_path", lambda c, t: True)
+    monkeypatch.setattr(R, "_svrf_drc_root_container",
+                        lambda c: "/foss/tools/svrf-drc")
+
+    def _host_must_not_be_called():
+        raise AssertionError("host _svrf_drc_root consulted despite image copy")
+    monkeypatch.setattr(R, "_svrf_drc_root", _host_must_not_be_called)
+    # No GDS on disk → returns None AFTER resolving the container root (proves
+    # the container branch ran without touching the host resolver).
     res = R._try_svrf_native_drc(
         tmp_path, "spm",
         R.PdkConfig(name="custom:hp18e80", liberty="x", tech_lef="x",
