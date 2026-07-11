@@ -44,7 +44,8 @@ Usage:
         [--pdk gf180] [--min-coverage 95] [--transition-target 90] \\
         [--tv-count 100] [--no-transition]
 
-Requires Docker image hpretl/iic-osic-tools:latest (Fault + GF180 cell model).
+Requires the pinned vibeic-eda Docker image (Fault + GF180 cell model); see
+_resolve_docker_image() for the pin + fallback order.
 Fault ≈ 10-60 s for typical <5k-cell designs.
 
 Exit 0 = stuck-at coverage >= target AND all artefacts produced.
@@ -74,7 +75,15 @@ def _resolve_docker_image() -> str:
     distribution (the iic-osic-tools fork this plugin actually ships and that
     carries Fault + iverilog + yosys) over the upstream image, which may not be
     pulled locally. Order: explicit env override → first locally-present
-    vibeic-eda tag → legacy upstream name (last resort).
+    PINNED vibeic-eda tag → legacy upstream name (last resort).
+
+    The fork tags below are pinned, never ``:latest``: a floating tag can
+    silently resolve to a stale local image whose tool behavior no longer
+    matches what the plugin was verified against. Every ``vibeic-eda:X.Y.Z``
+    literal here is a LIVE POINTER tracked by
+    ``tools/vibeic-eda/sync_image_version.py`` (this file is registered in its
+    INSTALL_DOC_CANDIDATES), so ``--set``/``--bump`` rewrites it mechanically
+    and ``--check`` fails the suite on drift — do not hand-edit out of step.
 
     Historically this was hardcoded to ``hpretl/iic-osic-tools:latest``; on a
     machine that only has the fork pulled, ``docker run`` failed with
@@ -83,9 +92,9 @@ def _resolve_docker_image() -> str:
     if env:
         return env
     candidates = (
-        "ghcr.io/vibeic/vibeic-eda:latest",
-        "vibeic-eda:latest",
-        "vibeic/vibeic-eda:latest",
+        "ghcr.io/vibeic/vibeic-eda:0.2.12",
+        "vibeic-eda:0.2.12",
+        "vibeic/vibeic-eda:0.2.12",
         "hpretl/iic-osic-tools:latest",
     )
     for img in candidates:
@@ -96,9 +105,10 @@ def _resolve_docker_image() -> str:
                 return img
         except Exception:
             pass
-    # nothing found locally — return the fork's canonical name; the caller's
-    # `docker run` will surface a clear pull error rather than a stale image.
-    return "ghcr.io/vibeic/vibeic-eda:latest"
+    # nothing found locally — return the fork's pinned canonical name; the
+    # caller's `docker run` then pulls exactly the verified image (or surfaces
+    # a clear pull error) rather than running a stale floating tag.
+    return "ghcr.io/vibeic/vibeic-eda:0.2.12"
 
 
 DOCKER_IMAGE = _resolve_docker_image()
