@@ -47,11 +47,9 @@ import time
 # tests (which feed render_frame a hand-built dict and never call collect).
 try:  # pragma: no cover - import wiring, exercised at runtime not in tests
     from flow_dashboard_data import collect as _collect
-    from flow_dashboard_data import collect_auto as _collect_auto
     from flow_dashboard_data import collect_fleet as _collect_fleet
 except Exception:  # pragma: no cover
     _collect = None
-    _collect_auto = None
     _collect_fleet = None
 
 
@@ -620,16 +618,10 @@ def run(argv=None) -> int:
         "--fleet", action="store_true",
         help="Treat PROJECT as a parent dir; show ALL child projects (fleet view)",
     )
-    parser.add_argument(
-        "--auto", action="store_true",
-        help="Adaptive: lightweight while live, authoritative (full) once idle",
-    )
     parser.add_argument("--no-color", action="store_true", help="Disable ANSI colors")
     args = parser.parse_args(argv)
 
-    if _collect is None or (args.fleet and _collect_fleet is None) or (
-        args.auto and _collect_auto is None
-    ):
+    if _collect is None or (args.fleet and _collect_fleet is None):
         sys.stderr.write(
             "flow_dashboard_cli: provider module 'flow_dashboard_data' not "
             "importable; cannot collect flow state.\n"
@@ -645,7 +637,7 @@ def run(argv=None) -> int:
         width = _term_width()
         ago = 0.0 if last_collect_ts is None else max(0.0, now - last_collect_ts)
         if args.fleet:
-            data = _collect_fleet([], full=args.full, root=args.project, auto=args.auto)
+            data = _collect_fleet([], full=args.full, root=args.project)
             return render_fleet(
                 data,
                 width=width,
@@ -654,7 +646,7 @@ def run(argv=None) -> int:
                 updated_ago=ago if not args.once else None,
                 interval=None if args.once else interval,
             )
-        data = _collect_auto(args.project) if args.auto else _collect(args.project, args.full)
+        data = _collect(args.project, args.full)
         return render_frame(
             data,
             width=width,
