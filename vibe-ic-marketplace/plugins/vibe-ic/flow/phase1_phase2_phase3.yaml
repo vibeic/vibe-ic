@@ -322,14 +322,19 @@ steps:
       fallback_to: 1
       trigger: "Test fail traceable to RTL"
     skills: [testbench-gen]
-    mcp_tools: [eda_simulate]
+    mcp_tools: [eda_simulate, eda_professional_tb]
     programs:
-      # Wave 82 — testbench scaffolder + coverage-closure analyser.
-      # `testbench_gen` emits the unit/integration tb skeleton from
-      # L10 test_cases (run BEFORE the agent fills in stimulus);
-      # `coverage_closure` consumes the post-sim coverage report and
-      # identifies remaining gaps. Both invoked via the agent before
-      # the verilator measurement gate.
+      # 2026-07-11 — PROFESSIONAL testbench generator (deterministic, combines
+      # cocotb + cocotb-coverage + Verilator/Icarus + an SVA bind). Derives a
+      # complete, high-coverage TB directly from the L-docs: interface (L1/L9),
+      # clock/reset (L8/L9), a reference model (closed-form for arithmetic
+      # primitives; a bounded-latency + bit-order STREAMING scoreboard that
+      # closes the serial-datapath DEFER, e.g. the spm bit-serial multiplier —
+      # 208/208 vs (x*y) mod 2^N), functional coverage (L28 covergroups), and
+      # SVA (L29). Emits under phase2/stage1/sim_professional/<top>/. Runs
+      # BEFORE the L10 scaffolder so a class with a derivable reference gets a
+      # real functional TB, not just a skeleton.
+      - professional_tb_gen          # deterministic professional cocotb TB + coverage + SVA
       - testbench_gen                # scaffolds phase2/stage1/sim/tb/*.v from L10
       - coverage_closure              # gap analysis from coverage_actual.json
       # v0.53/v0.54 byte-level coverage gates (replace agent self-reports
