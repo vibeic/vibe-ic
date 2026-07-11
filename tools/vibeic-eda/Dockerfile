@@ -5,11 +5,14 @@
 # the binary matches the iic-osic-tools runtime (python3.12 / glibc2.39). An
 # ubuntu22.04 build fails in the runtime (wants libpython3.10).
 #
-# Every fork branch below has a gatekeeper-verified FAIL->PASS proof recorded in
-# FIX_STATUS.md. Version-jump note: yosys is a deliberate uplift (0.4x -> 0.66+slang,
-# the roadmap's prescribed "make slang the default SV path"); magic/netgen/ngspice
-# track the same rolling releases the base ships. A full plugin-flow validation pass
-# gates promotion of 0.2.0 over 0.1.0 (see FIX_STATUS.md).
+# Every PATCHED fork branch below (Stages 1-7) has a gatekeeper-verified FAIL->PASS
+# proof recorded in FIX_STATUS.md. Version-jump note: yosys is a deliberate uplift
+# (0.4x -> 0.66+slang, the roadmap's prescribed "make slang the default SV path");
+# magic/netgen/ngspice track the same rolling releases the base ships. The Stage-8
+# verification toolchain (cocotb/cocotb-coverage/pyuvm/sby) is baked as
+# ENHANCEMENT-READY forks (editable install, no FAIL->PASS patch yet) so the
+# professional TB generator runs on tools we own and can patch. A full plugin-flow
+# validation pass gates promotion of 0.2.0 over 0.1.0 (see FIX_STATUS.md).
 
 # ---------------------------------------------------------------------------
 # Stage 1 — vibeic/OpenROAD (post-detailed-route repair on real parasitics; Signal-11 fix)
@@ -116,6 +119,28 @@ RUN git clone --depth 1 --filter=blob:none --sparse --branch ${SVRF_REF} \
       https://github.com/vibeic/klayout.git /k \
  && cd /k && git sparse-checkout set svrf-drc
 
+# ---------------------------------------------------------------------------
+# Stage 8 — vibeic verification toolchain (cocotb / cocotb-coverage / pyuvm / sby)
+#   The professional testbench generator (plugin `professional_tb_gen`, MCP
+#   `eda_professional_tb`) emits cocotb TBs + cocotb-coverage covergroups + an SVA
+#   bind that RUN on this toolchain — so we OWN it (Bucket-T: fork every OSS EDA tool
+#   so we can enhance it, never a "the tool can't do it" excuse). Pure-source fetch
+#   here; editable-installed in the runtime so an in-image Python patch is live.
+#   sby (SymbiYosys) drives our vibeic/yosys for the SVA-bind / formal path.
+#   NOTE: pinned to upstream SHAs for now — migrate each URL to
+#   github.com/vibeic/<tool> once those forks are pushed. Keep COCOTB_REF on the
+#   stable 2.0.x line the base ships until a real vibeic patch lands.
+# ---------------------------------------------------------------------------
+FROM alpine/git AS tb-src
+ARG COCOTB_REF=606fb1f5e552fd12e20780dfb3826cfa150a3a85
+ARG COCOTB_COVERAGE_REF=201c6e19761528eb9c03f876666c485027abb7fb
+ARG PYUVM_REF=dfcd1ffb6b7141c6c654e970a0447e36615d5ae9
+ARG SBY_REF=8f8833c6176be263907dea5b50da7759632aaff6
+RUN git clone https://github.com/cocotb/cocotb.git            /tb/cocotb          && git -C /tb/cocotb          checkout ${COCOTB_REF} \
+ && git clone https://github.com/mciepluc/cocotb-coverage.git /tb/cocotb-coverage && git -C /tb/cocotb-coverage checkout ${COCOTB_COVERAGE_REF} \
+ && git clone https://github.com/pyuvm/pyuvm.git              /tb/pyuvm           && git -C /tb/pyuvm           checkout ${PYUVM_REF} \
+ && git clone https://github.com/YosysHQ/sby.git              /tb/sby             && git -C /tb/sby             checkout ${SBY_REF}
+
 # ===========================================================================
 # Runtime: layer the patched tools onto the iic-osic-tools base.
 # ===========================================================================
@@ -158,5 +183,17 @@ RUN mkdir -p /headless/.klayout/pymacros \
  && printf '#!/bin/bash\nexec klayout -b -r /foss/tools/svrf-drc/svrf_klayout/run_svrf_drc.py -rd root=/foss/tools/svrf-drc "$@"\n' > /foss/tools/bin/klayout-svrf \
  && chmod +x /foss/tools/bin/klayout-svrf \
  && chmod -R a+rX /foss/tools/svrf-drc
+# --- vibeic verification toolchain (cocotb / cocotb-coverage / pyuvm / sby) ---
+# Editable-installed from the vibeic forks so an in-image Python patch is live; this
+# overrides the base's stock cocotb with our fork. sby installs its driver + libs into
+# /usr/local (it drives vibeic/yosys for the SVA-bind / formal path). Build isolation
+# stays ON so cocotb's C-extension build pulls its own build deps.
+COPY --from=tb-src /tb /opt/vibeic-forks
+RUN python3 -m pip install --break-system-packages \
+      -e /opt/vibeic-forks/cocotb \
+      -e /opt/vibeic-forks/cocotb-coverage \
+      -e /opt/vibeic-forks/pyuvm \
+ && make -C /opt/vibeic-forks/sby install PREFIX=/usr/local \
+ && chmod -R a+rX /opt/vibeic-forks
 # restore the base's non-root runtime user
 USER 1000
