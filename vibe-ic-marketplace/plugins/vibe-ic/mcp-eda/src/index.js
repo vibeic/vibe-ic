@@ -2245,14 +2245,33 @@ print('STRUCTURAL_DRC_GENERATED=' + out)
     // `step_drc` uses — and counts real `<item>` violations. If no deck is found,
     // or KLayout produces no report, it returns an HONEST FAILURE. It NEVER emits
     // a vacuous PASS again.
+    // Pre-flight: the GDS must be visible INSIDE the container, else KLayout's
+    // `source` emits an opaque `errno=2 Unable to open file` (and, worse, a
+    // partially-run deck can look like a clean pass). Fail fast with the
+    // actionable staging hint (which names the bind-mount) instead.
+    const drcMissing = missingInContainer([gds_file]);
+    if (drcMissing.length) {
+      return { content: [{ type: "text", text: JSON.stringify({
+        success: false, report_written: false, violations: 0,
+        error: stagingHint(drcMissing), gds_file,
+      }) }] };
+    }
     const pdkPathDrc = pdk === "sky130" ? `${PDK_ROOT}/sky130A`
                                         : `${PDK_ROOT}/gf180mcuD`;
     const deckDir = `${pdkPathDrc}/libs.tech/klayout/drc`;
-    // Discover the sign-off deck: the first `*.lydrc` under the PDK's klayout/drc
-    // dir (canonical: sky130A.lydrc / gf180mcuD.lydrc). Discovery, not a hardcode,
-    // so a PDK whose deck leaf-name differs still resolves.
+    // Select the FULL sign-off deck for this PDK. The canonical leaf is
+    // sky130A.lydrc / gf180mcuD.lydrc. A naive `ls *.lydrc | head -1` is WRONG:
+    // the PDK dir also ships auxiliary single-purpose decks (e.g.
+    // `gf180mcu_density.lydrc`, `met_min_ca_density.lydrc`) that sort BEFORE the
+    // real deck alphabetically — so `head -1` picks `gf180mcu_density.lydrc`
+    // under sky130A and runs a gf180 density deck against a sky130 GDS. Prefer
+    // the canonical named deck; fall back to the first *.lydrc that is NOT an
+    // auxiliary density/min deck, so a PDK whose leaf-name differs still resolves.
+    const deckLeafPref = pdk === "sky130" ? "sky130A.lydrc" : "gf180mcuD.lydrc";
     const deckDiscover = dockerExec(
-      `ls ${deckDir}/*.lydrc 2>/dev/null | head -1 || echo NODECK`, 8000);
+      `if [ -f ${deckDir}/${deckLeafPref} ]; then echo ${deckDir}/${deckLeafPref}; ` +
+      `else ls ${deckDir}/*.lydrc 2>/dev/null | grep -viE 'density|_min_|_min\\.' | head -1; fi ` +
+      `|| echo NODECK`, 8000);
     const deckPath = ((deckDiscover.output || "").trim().split("\n").pop() || "").trim();
     if (!deckPath || deckPath === "NODECK" || !deckPath.endsWith(".lydrc")) {
       // §4.05: no deck ⇒ HONEST FAIL, never a vacuous PASS.
@@ -3683,6 +3702,45 @@ server.tool(
         }),
       }],
     };
+  }
+);
+
+// ─── Tool: eda_professional_tb ───
+// Deterministic PROFESSIONAL testbench generation from the Phase-1 L-docs.
+// Combines cocotb + cocotb-coverage + Verilator/Icarus + an SVA bind; derives a
+// reference model (closed-form for arithmetic; a bounded-latency + bit-order
+// STREAMING scoreboard that closes the serial-datapath DEFER — e.g. the spm
+// bit-serial multiplier, 208/208 vs (x*y) mod 2^N), functional coverage (L28
+// covergroups) and SVA (L29). Emits under phase2/stage1/sim_professional/<top>/.
+server.tool(
+  "eda_professional_tb",
+  "Generate a PROFESSIONAL, high-coverage cocotb testbench deterministically from a project's Phase-1 L-docs: interface (L1/L9), clock/reset (L8/L9), a reference model (closed-form for arithmetic primitives; a bounded-latency + bit-order STREAMING scoreboard that closes the serial-datapath functional-verification gap), functional coverage (covergroups) + SVA assertions. Emits tb_<top>.py + coverage model + assertions + Makefile + verification plan.",
+  {
+    project: z.string().describe("Project dir (contains phase1/generated_docs/L*.json + phase2/stage1/rtl/)"),
+    out_dir: z.string().optional().describe("Output dir (default phase2/stage1/sim_professional/<top>/)"),
+    programs_dir: z.string().default(VIBE_IC_PROGRAMS_DIR.endsWith("/") ? VIBE_IC_PROGRAMS_DIR : VIBE_IC_PROGRAMS_DIR + "/").describe("Directory containing professional_tb_gen.py (auto-detected)"),
+  },
+  async ({ project, out_dir, programs_dir }) => {
+    try {
+      assertSafePath(project, "project");
+      if (out_dir) assertSafePath(out_dir, "out_dir");
+      optPath(programs_dir, "programs_dir");
+    } catch (e) { return guardError(e); }
+    const scriptPath = `${programs_dir}professional_tb_gen.py`;
+    const argv = [scriptPath, project];
+    if (out_dir) argv.push("--out-dir", out_dir);
+    let output = "", status = "ERROR", result = {};
+    try {
+      const _r = _spawnSync("python3", argv, { timeout: 120000, maxBuffer: 5 * 1024 * 1024, encoding: "utf-8" });
+      if (_r.error) throw _r.error;
+      output = (_r.stdout || "") + (_r.stderr || "");
+      status = (_r.status === 0) ? "PASS" : "FAIL";
+      const m = (_r.stdout || "").match(/\{[\s\S]*\}\s*$/);
+      if (m) { try { result = JSON.parse(m[0]); } catch { /* keep raw */ } }
+    } catch (err) {
+      output = (err.stdout || err.stderr || err.message || "").slice(-4000); status = "ERROR";
+    }
+    return { content: [{ type: "text", text: JSON.stringify({ success: status === "PASS", status, ...result, log: output.slice(-2000) }) }] };
   }
 );
 
