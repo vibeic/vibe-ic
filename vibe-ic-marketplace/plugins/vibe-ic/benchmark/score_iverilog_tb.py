@@ -169,6 +169,85 @@ def _to_container(p: str) -> str:
     return p.replace(_HOST_DESIGNS_ROOT, _CONT_DESIGNS_ROOT)
 
 
+def _strip_waveform_dumps(text: str) -> str:
+    """Remove $dumpfile(...) / $dumpvars(...) statements — waveform-only output
+    that never affects the Mismatches verdict. Some forked iverilog builds reject
+    a $dumpvars that forward-references a module-scope wire declared textually
+    later (a stricter elaboration order); stripping it lets the fork build run the
+    TB WITHOUT changing what is verified. §4.05: a wrong DUT still mismatches."""
+    return "\n".join(
+        ln for ln in text.splitlines()
+        if not ln.lstrip().startswith(("$dumpfile", "$dumpvars"))
+    ) + "\n"
+
+
+_FORK_IV_COUNTER = [0]
+
+
+def _fork_iverilog_compile_run(sources, top: str):
+    """SV-2012 escalation rung ABOVE host iverilog: compile+run under the FORKED
+    iverilog (Icarus 14-devel) in the EDA container ($VIBEIC_IVERILOG13_CONTAINER,
+    default vibeic-eda). The fork build handles SV enum type-casts (States'(...))
+    that stock host iverilog 11/12 reject with "sorry: This cast operation is not
+    yet supported" — a genuine tool-substitution gap (VCS/Xcelium handle it), NOT a
+    candidate-RTL bug. Non-functional $dumpfile/$dumpvars are stripped (see
+    _strip_waveform_dumps). Returns the vvp output string on a successful BUILD, or
+    None if even the fork build fails (a genuine tool-gap / real error stays a
+    compile_error at the call site). §4.05 no-leak: only waveform dumps are stripped
+    and the real forked simulator runs, so a wrong DUT still reports Mismatches>0 —
+    the verdict is never inflated (proven: an all-zero stub on VerilogEval Prob151
+    reports Mismatches 4152/5069 through this exact path)."""
+    container = _IV13_CONTAINER
+    _FORK_IV_COUNTER[0] += 1
+    tagdir = f"/tmp/vibeic_forkiv_{os.getpid()}_{_FORK_IV_COUNTER[0]}"
+    host_tmps = []
+    try:
+        if subprocess.run(["docker", "exec", container, "bash", "-lc",
+                           f"rm -rf {tagdir} && mkdir -p {tagdir}"],
+                          capture_output=True, timeout=60).returncode != 0:
+            return None
+        cont_srcs = []
+        for i, s in enumerate(sources):
+            txt = _strip_waveform_dumps(Path(s).read_text(errors="ignore"))
+            tf = tempfile.NamedTemporaryFile("w", suffix=".sv", delete=False)
+            tf.write(txt); tf.close(); host_tmps.append(tf.name)
+            base = f"src{i}.sv"
+            if subprocess.run(["docker", "cp", tf.name, f"{container}:{tagdir}/{base}"],
+                              capture_output=True, timeout=60).returncode != 0:
+                return None
+            cont_srcs.append(f"{tagdir}/{base}")
+        srcs = " ".join(f"'{x}'" for x in cont_srcs)
+        build = (f"cd {tagdir} && (iverilog -g2012 -s {top} -o bin {srcs} 2>err "
+                 f"|| iverilog -g2012 -o bin {srcs} 2>err) && echo __FBUILT__ "
+                 f"&& timeout 120 vvp bin 2>&1")
+        r = subprocess.run(["docker", "exec", container, "bash", "-lc", build],
+                           capture_output=True, text=True, timeout=300)
+        out = r.stdout + r.stderr
+        if "__FBUILT__" not in out:
+            return None
+        return out.split("__FBUILT__", 1)[1]
+    except Exception:
+        return None
+    finally:
+        for t in host_tmps:
+            try:
+                os.unlink(t)
+            except OSError:
+                pass
+        subprocess.run(["docker", "exec", container, "bash", "-lc", f"rm -rf {tagdir}"],
+                       capture_output=True, timeout=30)
+
+
+def _iverilog_toolgap_signature(text: str) -> bool:
+    """True when a host-iverilog compile failure looks like an SV-2012 tool-gap the
+    forked iverilog 14 may handle (enum cast / stricter elaboration), NOT a plain
+    RTL syntax error. Keeps the fork escalation from masking a real candidate bug."""
+    low = text.lower()
+    return ("sorry:" in low or "internal error" in low
+            or "unable to bind" in low
+            or "i don't know how to elaborate" in low)
+
+
 def _build_zero_stub(sample_text: str) -> Optional[str]:
     """From an ANSI-header module, synthesize a trivially-WRONG stub with the same
     name + ports but every output driven to constant 0 (reg stripped so `assign`
@@ -1355,6 +1434,23 @@ def _score_shape_c_impl(prob: str, samples: Path, dataset: Path,
             c = subprocess.run(["iverilog", "-g2012", "-o", binp] + sources,
                                capture_output=True, text=True, timeout=120)
             if c.returncode != 0:
+                # SV-2012 tool-gap escalation: the FORKED iverilog 14 in the EDA
+                # container handles SV enum type-casts (States'(...)) that stock
+                # host iverilog 11/12 reject ("sorry: cast not supported"). Escalate
+                # ONLY on that tool-gap signature so a genuine RTL compile bug still
+                # FAILs as compile_error. §4.05 no-leak: the fork runs the REAL
+                # simulator, so a wrong DUT still mismatches (verdict never inflated).
+                if _iverilog_toolgap_signature(c.stdout + c.stderr):
+                    fout = _fork_iverilog_compile_run(sources, "tb")
+                    if fout is not None:
+                        if re.search(args["pass_regex"], fout):
+                            return {"problem": prob, "verdict": "PASS",
+                                    "tool": "fork-iverilog-14"}
+                        m = re.search(r"Mismatches:\s*(\d+)\s+in\s+(\d+)", fout)
+                        return {"problem": prob, "verdict": "FAIL",
+                                "reason": (f"functional_mismatch "
+                                           f"({m.group(0) if m else 'no summary'})"),
+                                "tool": "fork-iverilog-14"}
                 return {"problem": prob, "verdict": "FAIL", "reason": "compile_error",
                         "log": c.stderr[-400:]}
         try:
