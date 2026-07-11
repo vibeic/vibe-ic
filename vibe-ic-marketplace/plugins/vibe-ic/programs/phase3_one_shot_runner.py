@@ -1573,15 +1573,51 @@ _SKY130_FILLER_MASTERS = [
 ]
 
 
+# Commercial/custom PDKs name their fill + decoupling cells by a short family
+# prefix (FILL / DECAP / DCAP / FILLCAP / FILLER) + a size suffix (FILL64,
+# DECAP8, ...). Discover them from the cell LEF so density-fill runs on ANY PDK,
+# not just sky130 (commercial foundry commercial_pdk: FILL1..64 + DECAP4..64). chip-AGNOSTIC.
+_FILLER_MACRO_RE = re.compile(
+    r'^\s*MACRO\s+((?:DECAP|DCAP|FILLCAP|FILLER|FILL)(\d*)\w*)\s*$',
+    re.IGNORECASE | re.MULTILINE)
+
+
+def _discover_filler_masters_from_lef(cell_lef: Optional[str]) -> List[str]:
+    """Discover decap+fill filler-cell masters from a cell LEF, ordered
+    OpenROAD-style (decaps largest→smallest first, then fills largest→smallest
+    — greedy tiling packs the big cells first). Returns [] on no LEF / no
+    fillers. Name-pattern based (no vendor literal)."""
+    if not cell_lef:
+        return []
+    try:
+        text = Path(cell_lef).read_text(errors="ignore")
+    except OSError:
+        return []
+    decaps: List[tuple] = []
+    fills: List[tuple] = []
+    for m in _FILLER_MACRO_RE.finditer(text):
+        name = m.group(1)
+        size = int(m.group(2)) if m.group(2) else 0
+        if name.upper().startswith(("DECAP", "DCAP", "FILLCAP")):
+            decaps.append((size, name))
+        else:
+            fills.append((size, name))
+    decaps.sort(reverse=True)
+    fills.sort(reverse=True)
+    return [n for _, n in decaps] + [n for _, n in fills]
+
+
 def _filler_masters_for_pdk(pdk: "PdkConfig") -> List[str]:
     """v0.1.48 — return the decap+fill cell-master set for this PDK.
 
     sky130-style cell library (probed by tapcell_master) → SKY130 set.
-    Unknown PDK → empty list (caller emits a SKIPPED line).
+    Custom / commercial PDK → discover FILL*/DECAP* masters from the cell LEF
+    (so density-fill runs for e.g. commercial foundry commercial_pdk). Genuinely unknown /
+    filler-less PDK → empty list (caller emits a SKIPPED line).
     """
     if pdk.tapcell_master and "sky130_fd_sc_hd" in pdk.tapcell_master:
         return list(_SKY130_FILLER_MASTERS)
-    return []
+    return _discover_filler_masters_from_lef(pdk.cell_lef)
 
 
 # ── #684 — sparse-die fill guard ──────────────────────────────────────
