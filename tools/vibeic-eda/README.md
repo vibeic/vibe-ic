@@ -32,3 +32,21 @@ patched `openroad` + its `/opt/or-tools` runtime over the iic-osic-tools base.
 Run it exactly like `iic-osic-tools`; the patched `openroad` is at the same path
 (`/foss/tools/openroad/bin/openroad`) so the Vibe-IC phase-3 flow uses it
 transparently once the MCP/`iic-eda` container reference points at `vibeic-eda`.
+
+## Versioning (fool-proof, automatic)
+
+The image tag bumps whenever any fork is upgraded. The single source of truth is
+[`VERSION`](./VERSION); every live `vibeic-eda:X.Y.Z` pointer in the install docs is
+propagated from it and gated against drift by
+[`sync_image_version.py`](./sync_image_version.py):
+
+```bash
+python3 tools/vibeic-eda/sync_image_version.py --check          # gate: docs == VERSION (CI + pytest run this)
+python3 tools/vibeic-eda/sync_image_version.py --bump patch     # new version → rewrite every live pointer
+```
+
+`--check` also runs a repo-wide net over `ghcr.io/vibeic/vibeic-eda:X.Y.Z` so a
+stale pull pointer in any new file is a hard failure; historical mentions (FIX_STATUS,
+`*ROADMAP*.md`, "shipped in vibeic-eda:0.2.x" prose) are left untouched. The gate is
+wired into the plugin suite (`mcp-eda/test/test_image_version_sync.py`). The public
+distribution repo `github.com/vibeic/vibeic-eda` carries the same tool + a CI check.
