@@ -176,6 +176,12 @@ RUN for t in yosys yosys-abc; do ln -sf /foss/tools/yosys/bin/$t /foss/tools/bin
  && ln -sf /foss/tools/magic/bin/magic /foss/tools/bin/magic 2>/dev/null || true \
  && ln -sf /foss/tools/netgen/bin/netgen /foss/tools/bin/netgen 2>/dev/null || true \
  && for t in iverilog vvp iverilog-vpi vvp; do ln -sf /foss/tools/iverilog/bin/$t /foss/tools/bin/$t 2>/dev/null || true; done
+# fault (AUCOHL DFT toolchain) ships from the iic-osic-tools base at
+# /usr/local/bin/fault (already on PATH). Surface it under /foss/tools/bin too so
+# its path is consistent with every other EDA tool — eda_dft invokes bare `fault`
+# (PATH) and eda_doctor probes bare `fault`, so both work with or without this
+# symlink; it's a path-consistency convenience, not a functional requirement.
+RUN command -v fault >/dev/null 2>&1 && ln -sf "$(command -v fault)" /foss/tools/bin/fault 2>/dev/null || true
 # --- vibeic/klayout svrf-drc (SVRF-native DRC, runs on the base klayout pya engine) ---
 COPY --from=svrf-src /k/svrf-drc /foss/tools/svrf-drc
 # autoload the KLayout GUI macro (Tools -> "SVRF-native DRC…") + a batch wrapper `klayout-svrf`
