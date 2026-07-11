@@ -27,8 +27,10 @@ import argparse
 import json
 import os
 import sys
+import html
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from pathlib import Path
+from urllib.parse import parse_qs, quote, urlparse
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -531,6 +533,19 @@ section.phase{
       var rel = firstEx.rel || firstEx.abs || "";
       var base = rel.split("/").pop();
       var so = el("span","sout"); setText(so, base); box.appendChild(so);
+      // 📂 open this step's output subfolder (steps/<id>_<slug>/)
+      var pq = new URLSearchParams(location.search).get("project");
+      var a = el("a","sfolder");
+      a.href = "/step?id=" + encodeURIComponent(step.id)
+             + (pq ? "&project=" + encodeURIComponent(pq) : "");
+      a.target = "_blank";
+      a.title = "open this step's output folder (steps/" + step.id + "_…/)";
+      a.style.marginLeft = "6px";
+      a.style.textDecoration = "none";
+      a.style.cursor = "pointer";
+      setText(a, "📂");
+      a.addEventListener("click", function(e){ e.stopPropagation(); });
+      box.appendChild(a);
     }
     return box;
   }
@@ -1072,6 +1087,109 @@ def build_fleet_page() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Per-step output subfolder browsing (the "📂 open" link on every step)
+# ---------------------------------------------------------------------------
+# The canonical phaseN/… tree stays authoritative; step_output_collector
+# materializes <project>/steps/<id>_<slug>/ as SYMLINK views. These routes
+# list + serve those folders read-only, guarded against path traversal.
+_STEP_TEXT_SUFFIXES = {
+    ".v", ".sv", ".vh", ".json", ".rpt", ".log", ".md", ".txt", ".tcl", ".sdc",
+    ".def", ".spef", ".lef", ".lib", ".cfg", ".yaml", ".yml", ".sva", ".sdf",
+    ".map", ".sp", ".cir", ".flag", ".done", ".csv", ".xml",
+}
+_STEP_FILE_MAX_INLINE = 5 * 1024 * 1024   # >5 MB → force download, never inline
+
+
+def _steps_root(project: str) -> Path:
+    return Path(project).expanduser().resolve() / "steps"
+
+
+def _ensure_steps(project: str) -> dict:
+    """Materialize the per-step folders (idempotent) + return steps/index.json."""
+    try:
+        import step_output_collector as _soc
+        _soc.materialize(Path(project))
+    except Exception:
+        pass
+    try:
+        return json.loads((_steps_root(project) / "index.json").read_text())
+    except Exception:
+        return {"steps": []}
+
+
+def _step_listing_html(project: str, sid: str, proj_q: str = "") -> bytes:
+    """HTML directory listing of one step's output subfolder."""
+    data = _ensure_steps(project)
+    rec = next((s for s in data.get("steps", [])
+                if str(s.get("id")) == str(sid)), None)
+    pq = ("&project=" + quote(proj_q)) if proj_q else ""
+    if rec is None:
+        return (f"<!doctype html><meta charset=utf-8><title>step {html.escape(sid)}"
+                f"</title><body style='font-family:system-ui;padding:2rem'>"
+                f"<p>Unknown step id: <b>{html.escape(sid)}</b></p>").encode("utf-8")
+    folder = str(rec.get("folder", ""))
+    sdir = _steps_root(project) / folder
+    rows = []
+    if sdir.is_dir():
+        for f in sorted(sdir.iterdir()):
+            if f.name == "outputs.json":
+                continue
+            try:
+                real = f.resolve()
+                size = real.stat().st_size if real.exists() else 0
+                tgt = str(real)
+            except OSError:
+                size, tgt = 0, ""
+            href = (f"/stepfile?folder={quote(folder)}&name={quote(f.name)}{pq}")
+            rows.append(
+                f"<li><a href='{href}' target='_blank'>{html.escape(f.name)}</a>"
+                f" <span style='color:#888'>{size:,} B</span>"
+                f"<div style='color:#aaa;font-size:.8em'>&larr; {html.escape(tgt)}</div>"
+                f"</li>")
+    body = (
+        f"<!doctype html><meta charset=utf-8>"
+        f"<title>step {html.escape(sid)} — {html.escape(str(rec.get('name','')))}</title>"
+        f"<body style='font-family:system-ui;max-width:60rem;margin:2rem auto;padding:0 1rem'>"
+        f"<h2>Step {html.escape(sid)} · {html.escape(str(rec.get('name','')))}</h2>"
+        f"<p>status: <b>{html.escape(str(rec.get('status','')))}</b> · "
+        f"phase: {html.escape(str(rec.get('phase','')))} · "
+        f"folder: <code>steps/{html.escape(folder)}/</code></p>"
+        f"<ul>{''.join(rows) or '<li><i>no outputs produced for this step</i></li>'}</ul>"
+        f"</body>")
+    return body.encode("utf-8")
+
+
+def _step_file_response(project: str, folder: str, name: str):
+    """Return (bytes, ctype) for a file inside <project>/steps/<folder>/, or
+    None on a bad/traversing/oversized path. Path-traversal guarded."""
+    if not folder or not name or "/" in folder or "\\" in folder \
+            or "/" in name or "\\" in name or ".." in folder or ".." in name:
+        return None
+    root = _steps_root(project)
+    target = (root / folder / name)
+    try:
+        real = target.resolve()
+        # the symlink target may live outside steps/, but the LINK itself must
+        # be directly inside steps/<folder>/ (guards traversal via the request).
+        link_parent = (root / folder).resolve()
+        if link_parent != target.parent.resolve() or not real.exists() \
+                or real.is_dir():
+            return None
+        size = real.stat().st_size
+        if size > _STEP_FILE_MAX_INLINE:
+            return None
+        raw = real.read_bytes()
+    except OSError:
+        return None
+    suffix = real.suffix.lower()
+    if suffix in _STEP_TEXT_SUFFIXES:
+        ctype = "text/plain; charset=utf-8"
+    else:
+        ctype = "application/octet-stream"
+    return raw, ctype
+
+
+# ---------------------------------------------------------------------------
 # HTTP handler + server
 # ---------------------------------------------------------------------------
 def make_handler(project: str, full: bool, fleet: str = ""):
@@ -1146,6 +1264,35 @@ def make_handler(project: str, full: bool, fleet: str = ""):
                     self._send(200, status_json(project, full),
                                "application/json; charset=utf-8")
                     return
+            # Per-step output subfolder: listing + read-only file serving.
+            if path in ("/step", "/stepfile"):
+                q = parse_qs(parsed.query)
+                proj_q = (q.get("project") or [""])[0]
+                if is_fleet:
+                    if not _is_allowed_project(fleet, proj_q):
+                        self._send(404, b"unknown or unlisted project",
+                                   "text/plain; charset=utf-8")
+                        return
+                    proj = proj_q
+                else:
+                    proj = project
+                if path == "/step":
+                    sid = (q.get("id") or [""])[0]
+                    self._send(200,
+                               _step_listing_html(proj, sid,
+                                                  proj_q if is_fleet else ""),
+                               "text/html; charset=utf-8")
+                    return
+                # /stepfile
+                resp = _step_file_response(proj,
+                                           (q.get("folder") or [""])[0],
+                                           (q.get("name") or [""])[0])
+                if resp is None:
+                    self._send(404, b"not found", "text/plain; charset=utf-8")
+                    return
+                raw, ctype = resp
+                self._send(200, raw, ctype)
+                return
             if path == "/favicon.ico":
                 self.send_response(204)
                 self.send_header("Content-Length", "0")
