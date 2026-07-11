@@ -154,3 +154,44 @@ def test_discover_lefdef_layermap_prefers_encounter_over_virtuoso(tmp_path):
 def test_discover_lefdef_layermap_none_when_absent(tmp_path):
     (tmp_path / "input").mkdir()
     assert R._discover_lefdef_layermap(tmp_path) is None
+
+
+# --------------------------------------------------------------------------
+# Filler/decap master discovery for commercial PDKs (density fill enablement).
+# --------------------------------------------------------------------------
+def _pdk_with_lef(lef_path):
+    return R.PdkConfig(name="custom:kf", liberty="x", tech_lef="x",
+                       cell_lef=str(lef_path), cell_gds=None, site="unit",
+                       drc_deck=None)
+
+
+def test_discover_filler_masters_orders_decap_then_fill_largest_first(tmp_path):
+    lef = tmp_path / "cells.lef"
+    lef.write_text(
+        "MACRO FILL1\nMACRO FILL64\nMACRO FILL8\n"
+        "MACRO DECAP4\nMACRO DECAP64\n"
+        "MACRO INV_1\nMACRO NAND2_2\n")   # non-filler cells ignored
+    got = R._discover_filler_masters_from_lef(str(lef))
+    # decaps largest-first, then fills largest-first
+    assert got == ["DECAP64", "DECAP4", "FILL64", "FILL8", "FILL1"]
+
+
+def test_filler_masters_for_custom_pdk_uses_lef_discovery(tmp_path):
+    lef = tmp_path / "cells.lef"
+    lef.write_text("MACRO FILL2\nMACRO FILL16\nMACRO DECAP8\n")
+    pdk = _pdk_with_lef(lef)          # tapcell_master=None → not sky130
+    assert R._filler_masters_for_pdk(pdk) == ["DECAP8", "FILL16", "FILL2"]
+
+
+def test_filler_masters_empty_when_no_fillers(tmp_path):
+    lef = tmp_path / "cells.lef"
+    lef.write_text("MACRO INV_1\nMACRO NAND2_2\nMACRO DFF_1\n")
+    assert R._filler_masters_for_pdk(_pdk_with_lef(lef)) == []
+
+
+def test_filler_masters_sky130_unchanged():
+    pdk = R.PdkConfig(name="sky130A", liberty="x", tech_lef="x", cell_lef="x",
+                      cell_gds=None, site="unit", drc_deck=None,
+                      tapcell_master="sky130_fd_sc_hd__tapvpwrvgnd_1")
+    got = R._filler_masters_for_pdk(pdk)
+    assert got and all("sky130_fd_sc_hd" in m for m in got)
