@@ -773,7 +773,32 @@ const _ERR_PATTERNS = [
   /^(?:bash|sh): /m,
   /Permission denied/,
 ];
+// v2.6.5: the version cache is process-lived and was NEVER invalidated, so once a
+// tool was probed getToolVersion() returned that string forever. But the image
+// bumps often (any fork upgrade → a new vibeic-eda tag → `docker rm/run` the
+// container under the SAME name), and after such a swap eda_doctor — whose whole
+// job is a FRESH preflight — kept reporting the PRE-swap toolchain (observed:
+// yosys still shown at the old fork commit after the container was recreated on a
+// new image). Key the cache on the container's current image id: before serving a
+// cached version, cheaply confirm the image is unchanged; if it moved, drop the
+// cache so every tool re-probes. The `docker inspect` is throttled (2s) so a
+// 14-tool doctor burst costs at most one inspect.
+let _versionCacheImageId = null;
+let _versionCacheCheckedAt = 0;
+function _ensureVersionCacheFresh() {
+  const now = Date.now();
+  if (_versionCacheImageId !== null && now - _versionCacheCheckedAt < 2000) return;
+  _versionCacheCheckedAt = now;
+  const r = _spawnSync("docker", ["inspect", CONTAINER, "--format", "{{.Image}}"],
+    { encoding: "utf-8", timeout: 3000 });
+  const img = (r && r.status === 0 && r.stdout) ? r.stdout.trim() : null;
+  if (img && img !== _versionCacheImageId) {
+    _versionCache.clear();          // container was recreated on a new image → re-probe all
+    _versionCacheImageId = img;
+  }
+}
 function getToolVersion(name) {
+  _ensureVersionCacheFresh();
   if (_versionCache.has(name)) return _versionCache.get(name);
   const probes = {
     yosys: `${TOOLS}/yosys/bin/yosys -V 2>&1 | head -1`,
