@@ -7688,6 +7688,82 @@ def _parse_svrf_tally(rpt: Path) -> Tuple[int, int, int, List[str]]:
     return fails, passes, skips, failing
 
 
+# ── Commercial SVRF-DRC FAIL classifier (ORGANIC 2026-07-11) ─────────────────
+# A raw "N rules firing" tally is not actionable: on a REAL foundry deck some
+# firing rules are provable ARTIFACTS of a missing INPUT marker (not our
+# geometry), some are density-fill gaps (test-chip sparsity), and the rest are
+# genuine routing geometry. This classifier splits them PROVABLY + CONSERVATIVELY
+# so the DRC verdict/detail can disclose exactly what is real vs. artifact —
+# WITHOUT ever downgrading a genuine geometry violation (no-cheat: unknown →
+# GEOMETRY → keeps the gate FAIL).
+#
+# Class taxonomy (each provable from the report text alone, chip-AGNOSTIC):
+#   MARKER_ABSENT — a rule whose derived layer references `_not_<marker>` (a
+#     foundry std-cell / IP EXCLUSION marker, e.g. `_not_artisan`) while that
+#     `__<marker>__` layer is PROVEN EMPTY by its own `COPY __<marker>__ … -> 0`
+#     line. The deck was DESIGNED to exclude foundry-qualified std-cell interiors
+#     from this check; with no marker layer in the input GDS the check over-fires
+#     on pre-characterised cell geometry. Signature-confirmed here: only met1
+#     (std-cell-internal) min-area fires; met2/3/4 (routing) all pass.
+#   DENSITY_FILL — a DENSITY rule (CMP metal/active density window). On a small
+#     test chip the design is too sparse to hit the floor; resolved by foundry
+#     metal fill or a formal density waiver.
+#   GEOMETRY — everything else (real, or not-provably-artifact). NEVER auto-waived.
+_SVRF_EMPTY_MARKER_RE = re.compile(
+    r"\bCOPY\s+__(\w+)__\b.*->\s*0\s*$")
+_SVRF_RESULT_RE = re.compile(
+    r"^(FAIL|PASS|SKIP)\s+(\S+)\s+(\S+)\s+(.*?)\s*->\s*(\d+)\s*$")
+_SVRF_NOT_MARKER_RE = re.compile(r"_not_(\w+)")
+
+
+def _classify_svrf_fails(rpt: Path) -> Dict[str, Any]:
+    """Classify each FAILing rule of a run_svrf_drc.py report into
+    {MARKER_ABSENT, DENSITY_FILL, GEOMETRY}. Returns a dict with per-class
+    rule lists + counts + the set of proven-empty exclusion markers. Pure
+    text analysis of the report; no chip/vendor literal. Conservative: any
+    rule not PROVABLY an artifact/density stays GEOMETRY (gate-FAILing)."""
+    out: Dict[str, Any] = {
+        "empty_markers": [], "marker_absent": [], "density_fill": [],
+        "geometry": [], "n_marker_absent": 0, "n_density_fill": 0,
+        "n_geometry": 0}
+    try:
+        text = rpt.read_text(errors="replace")
+    except OSError:
+        return out
+    empty: set = set()
+    for line in text.splitlines():
+        m = _SVRF_EMPTY_MARKER_RE.search(line.strip())
+        if m:
+            empty.add(m.group(1).lower())
+    out["empty_markers"] = sorted(empty)
+    for line in text.splitlines():
+        s = line.strip()
+        if not s.startswith("FAIL"):
+            continue
+        m = _SVRF_RESULT_RE.match(s)
+        if not m:
+            # Fall back to a looser split so a format drift never drops a FAIL
+            parts = s.split()
+            rule = parts[1] if len(parts) > 1 else "?"
+            op = parts[2] if len(parts) > 2 else ""
+            expr = " ".join(parts[3:])
+        else:
+            _, rule, op, expr, _cnt = m.groups()
+        op_u = (op or "").upper()
+        # MARKER_ABSENT: expr references `_not_<marker>` for a proven-empty marker
+        markers = {mm.lower() for mm in _SVRF_NOT_MARKER_RE.findall(expr)}
+        if markers & empty:
+            out["marker_absent"].append(rule)
+        elif op_u == "DENSITY":
+            out["density_fill"].append(rule)
+        else:
+            out["geometry"].append(rule)
+    out["n_marker_absent"] = len(out["marker_absent"])
+    out["n_density_fill"] = len(out["density_fill"])
+    out["n_geometry"] = len(out["geometry"])
+    return out
+
+
 def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
                          container: str) -> Optional[StepResult]:
     """Run the commercial Calibre/SVRF `.rule` DRC deck NATIVELY via the vibeic
@@ -7726,6 +7802,26 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
                           f"rc={rc} tail={(out + err)[-800:]}")
     fails, passes, skips, failing = _parse_svrf_tally(rpt)
     verdict = "PASS" if fails == 0 else "FAIL"
+    # Classify the firing rules so the verdict is ACTIONABLE, not opaque. This
+    # NEVER changes the PASS/FAIL boundary (no-cheat: any real-or-unproven
+    # GEOMETRY rule keeps the gate FAILing); it only DISCLOSES which firing
+    # rules are provable input-marker artifacts vs. density-fill gaps vs. real.
+    cls = _classify_svrf_fails(rpt)
+    n_geo = cls["n_geometry"]
+    n_mrk = cls["n_marker_absent"]
+    n_den = cls["n_density_fill"]
+    breakdown = ""
+    if fails:
+        breakdown = (
+            f" BREAKDOWN of {fails} firing: {n_geo} real/unproven GEOMETRY "
+            f"{cls['geometry'][:8]} [must-fix — keep gate FAIL]; "
+            f"{n_mrk} std-cell MARKER-ABSENT artifact(s) {cls['marker_absent']} "
+            f"(exclusion marker(s) {cls['empty_markers']} EMPTY in input GDS → "
+            f"deck over-fires on foundry-qualified std-cell interiors; needs the "
+            f"std-cell marker layer or Calibre proper — NOT our routing "
+            f"geometry); {n_den} DENSITY-fill gap(s) {cls['density_fill']} "
+            f"(test-chip sparsity → foundry metal fill or formal density "
+            f"waiver).")
     detail = (
         f"SVRF-NATIVE commercial DRC — the foundry's OWN Calibre `.rule` deck "
         f"executed on the vibeic KLayout engine (NO Calibre license): "
@@ -7734,13 +7830,21 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
         f"checkers, never silently passed). deck={pdk.calibre_drc}. §4.05: this "
         f"runs the real foundry deck natively (categorically stronger than an "
         f"OSS-proxy deck); it is NOT a golden-Calibre numerical cross-run."
+        + breakdown
         + (f" firing rules (first 10): {failing[:10]}" if failing else ""))
     return StepResult(
         "drc", verdict, time.time() - t0, detail, [str(rpt)],
         extras={"method": "svrf_native_calibre",
                 "calibre_drc_deck": str(pdk.calibre_drc),
                 "rules_fail": fails, "rules_pass": passes, "rules_skip": skips,
-                "failing_rules": failing[:50], "gds": str(gds)})
+                "failing_rules": failing[:50], "gds": str(gds),
+                "fail_classes": {
+                    "geometry": cls["geometry"],
+                    "marker_absent": cls["marker_absent"],
+                    "density_fill": cls["density_fill"],
+                    "empty_markers": cls["empty_markers"],
+                    "n_geometry": n_geo, "n_marker_absent": n_mrk,
+                    "n_density_fill": n_den}})
 
 
 def step_drc(project: Path, top: str, pdk: PdkConfig,
@@ -10644,10 +10748,21 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     log_path = pnr_out / "openroad.log"
     if log_path.is_file():
         log_text = log_path.read_text(errors="ignore")
-        # Count violations from drt output
+        # Keep the raw "violation"/DRT log lines for the reviewer-context block.
         viol_lines = [ln for ln in log_text.splitlines()
                       if "violation" in ln.lower() or "DRT" in ln]
-        violations = sum(1 for ln in viol_lines if "violation" in ln.lower())
+        # ORGANIC #585 fix — the authoritative post-route DRC count is the LAST
+        # `[INFO DRT-0199] Number of violations = N` (detailed_route's final
+        # CONVERGED state), NOT the number of log LINES mentioning "violation".
+        # The old line-count summed every "Completing X% with N violations"
+        # progress line + every "Number of violations = N" iteration line, so a
+        # route that CONVERGED to 0 was mis-reported as dozens ("DRC clean: NO"),
+        # directly contradicting the pnr-step verdict (which already reads the
+        # final DRT-0199 via _drt_final_violations). Reuse that same canonical
+        # parser so this projection agrees with the authoritative verdict.
+        _drt_final = _drt_final_violations(log_text)
+        violations = _drt_final if _drt_final is not None else 0
+        _drt_count_known = _drt_final is not None
         # Include the route-summary block so the report carries
         # tool-signature anchors + ≥ 2048 B substance for the
         # eda_report_audit:drc anti-stub heuristic.
@@ -10688,7 +10803,10 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             f"openroad / drt-pass: detailed_route invoked\n"
             f"violation report: {violations}\n"
             f"violation count summary: {violations} violation(s) found\n"
-            f"DRC clean: {'NO' if violations > 0 else 'YES'}\n"
+            f"drc source: final [INFO DRT-0199] count"
+            f"{'' if _drt_count_known else ' (ABSENT — no detailed_route count in log)'}\n"
+            f"DRC clean: "
+            f"{'YES' if (_drt_count_known and violations == 0) else 'NO'}\n"
             f"tool: openroad\n"
             f"\n"
             f"# === detailed_route + global_route summary lines from openroad.log ===\n"

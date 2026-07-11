@@ -119,6 +119,48 @@ def _launch_dashboard(project: Path, host: str, port: int,
         return None
 
 
+def _reachable_host(host: str) -> str:
+    """Turn a BIND address into a URL host a browser can actually open. A
+    wildcard bind (`0.0.0.0` / `::` / empty) is NOT routable, so advertise the
+    machine's primary LAN IP instead (discovered via the routing table — a UDP
+    `connect` picks the source IP without sending a packet). Loopback stays
+    loopback; a specific interface IP the user chose is preserved. Never raises."""
+    h = (host or "").strip()
+    if h in ("127.0.0.1", "localhost"):
+        return "127.0.0.1"
+    if h not in ("0.0.0.0", "::", "", "*"):
+        return h
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))          # no packet sent for UDP connect
+            ip = s.getsockname()[0]
+        finally:
+            s.close()
+        if ip and not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+    return "127.0.0.1"
+
+
+def _cli_snapshot(project: Path) -> str:
+    """Best-effort ONE-SHOT CLI dashboard snapshot (`flow_dashboard.py --once`)
+    — the glanceable step-map table rendered inline. Returns the text, or '' on
+    any failure. Never raises — the dashboard must not touch the flow."""
+    dash = PROGRAMS_DIR / "flow_dashboard.py"
+    if not dash.is_file():
+        return ""
+    try:
+        cp = subprocess.run(
+            [sys.executable, str(dash), str(project), "--once", "--no-color"],
+            capture_output=True, text=True, timeout=45)
+        return cp.stdout or ""
+    except Exception:
+        return ""
+
+
 def _phase1_decision(project: Path, force_skip: bool) -> Tuple[bool, str]:
     """Decide whether to run Phase 1 and in which mode.
 
@@ -345,12 +387,17 @@ def main() -> int:
     p.add_argument("--util", type=float, default=0.4)
     p.add_argument("--pdk", default="auto")
     p.add_argument("--ic-name", default="UNNAMED_CHIP")
-    p.add_argument("--dashboard", action="store_true",
-                   help="Auto-launch the live web execution dashboard for this "
-                        "project (a background, read-only observer) so every "
+    p.add_argument("--dashboard", dest="dashboard", action="store_true",
+                   default=True,
+                   help="(DEFAULT ON) Auto-launch the execution dashboard for "
+                        "this project — BOTH front-ends: a background read-only "
+                        "WEB observer (open in a browser) plus an inline CLI "
+                        "step-map snapshot + the live-attach command. Every "
                         "Phase 1/2/3 + Analog/Mixed/Mfg step lights up as it "
-                        "runs. Prints the URL; survives the run so you can view "
-                        "the final state; stop it with the printed PID.")
+                        "runs; the web daemon survives the run so the final "
+                        "state stays viewable. Disable with --no-dashboard.")
+    p.add_argument("--no-dashboard", dest="dashboard", action="store_false",
+                   help="Disable the auto-launched CLI + web dashboard entirely.")
     p.add_argument("--dashboard-port", type=int, default=8787,
                    help="Port for --dashboard (default 8787).")
     p.add_argument("--dashboard-host", default="127.0.0.1",
@@ -387,25 +434,34 @@ def main() -> int:
     # re-enters this orchestrator's lock instead of being refused by it.
     _phase_env = _runner_lock.child_env(project, held_lock=lock)
 
-    # ---------------- Live dashboard (opt-in) ----------------
+    # ---------------- Live dashboard (CLI + web, DEFAULT ON) ----------------
+    # Every run gets BOTH dashboard front-ends by default (opt out with
+    # --no-dashboard): a detached read-only WEB daemon (browser) and a CLI view
+    # (an inline step-map snapshot now + the live-attach command for a
+    # full-screen CLI dashboard in a second terminal). Same read-only data
+    # source; neither ever mutates the flow.
     dash_pid = None
     if args.dashboard:
+        _reachable = _reachable_host(args.dashboard_host)
+        _mode = "authoritative/--full" if args.dashboard_full else "live/fast"
         dash_pid = _launch_dashboard(project, args.dashboard_host,
                                      args.dashboard_port,
                                      full=args.dashboard_full)
+        _dash = PROGRAMS_DIR / "flow_dashboard.py"
+        print("─" * 64)
         if dash_pid:
-            _reachable = ("127.0.0.1" if args.dashboard_host in
-                          ("127.0.0.1", "localhost") else args.dashboard_host)
-            _mode = "authoritative/--full" if args.dashboard_full else "live/fast"
-            print("─" * 60)
-            print(f"📊 Live dashboard → http://{_reachable}:"
-                  f"{args.dashboard_port}   (watch every step light up)")
-            print(f"   {_mode} · read-only · pid {dash_pid} · "
-                  f"stop with: kill {dash_pid}")
-            print("─" * 60)
+            print(f"📊 WEB dashboard → http://{_reachable}:"
+                  f"{args.dashboard_port}   ({_mode} · read-only · pid {dash_pid})")
+            print(f"                   stop with: kill {dash_pid}")
         else:
-            print("⚠ --dashboard: could not launch the web dashboard "
-                  "(continuing the run without it)")
+            print("⚠ web dashboard could not launch (continuing without it)")
+        print(f"🖥  CLI dashboard → python3 {_dash} {project}"
+              f"   (live; run in a 2nd terminal)")
+        _snap = _cli_snapshot(project)
+        if _snap.strip():
+            print(_snap.rstrip())
+        print("   (disable both front-ends with --no-dashboard)")
+        print("─" * 64)
 
     t0 = time.time()
     plan: List[Tuple[str, str, int]] = []   # (phase, verdict, rc)
@@ -603,6 +659,16 @@ def main() -> int:
     # the chained-end. Idempotent — generator overwrites.
     fs_ok = _pl.emit_final_summary(project, PROGRAMS_DIR)
 
+    # Per-step output subfolders: materialize <project>/steps/<id>_<slug>/
+    # (SYMLINK views + per-step outputs.json + steps/index.json) so EVERY
+    # clean-run has a browsable per-step folder and the web dashboard's per-step
+    # "📂 open" link resolves. Best-effort — a view builder must never fail a run.
+    try:
+        import step_output_collector as _soc
+        _soc.materialize(project)
+    except Exception:
+        pass
+
     # v1.3.51: FINALIZE deliverable self-check — record the completeness state
     # (non-gating) so a run that produces NO RESULT.md can never go silent.
     dsc = _deliverable_self_check(project)
@@ -630,10 +696,15 @@ def main() -> int:
               f"This run is NOT complete until RESULT.md is authored. "
               f"NO RESULT / empty output = the run FAILED.")
         print(f"  self-verify       : {dsc.get('self_verify_cmd')}")
+    if args.dashboard:
+        # Final CLI dashboard snapshot — the completed step map inline.
+        _final_snap = _cli_snapshot(project)
+        if _final_snap.strip():
+            print(f"\n  CLI dashboard (final step map):")
+            print(_final_snap.rstrip())
     if dash_pid:
-        _reachable = ("127.0.0.1" if args.dashboard_host in
-                      ("127.0.0.1", "localhost") else args.dashboard_host)
-        print(f"  dashboard         : http://{_reachable}:"
+        _reachable = _reachable_host(args.dashboard_host)
+        print(f"  web dashboard     : http://{_reachable}:"
               f"{args.dashboard_port} still live (final state viewable) — "
               f"stop with: kill {dash_pid}")
     print(f"{'='*72}")
