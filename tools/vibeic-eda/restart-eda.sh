@@ -16,14 +16,15 @@
 # same-named container automatically.
 #
 # Usage:
-#   ./restart-eda.sh                      # recreate on vibeic/vibeic-eda:latest
+#   ./restart-eda.sh                      # recreate on the PINNED vibeic/vibeic-eda:$(cat VERSION)
 #   ./restart-eda.sh 0.2.11               # bare tag  -> vibeic/vibeic-eda:0.2.11
-#   ./restart-eda.sh vibeic/vibeic-eda:latest   # full ref honored as-is
+#   ./restart-eda.sh vibeic/vibeic-eda:latest   # full ref honored as-is (explicit floating opt-in)
 #   FORCE=1 ./restart-eda.sh              # recreate even if an EDA job is running
 #
 # Env overrides:
 #   NAME=vibeic-eda            container name to manage
 #   IMAGE_REPO=vibeic/vibeic-eda   repo prepended to a bare tag argument
+#   RESTART_EDA_PRINT_IMAGE=1  print the resolved image ref and exit (no docker)
 #
 # After a successful recreate, confirm the toolchain from Claude Code with the
 # MCP tool `eda_doctor` (skip_versions=false) — expect "14/14 checks passed".
@@ -38,16 +39,31 @@ EDA_PROCS='openroad|yosys|magic|netgen|klayout|iverilog|verilator|ngspice|fault|
 
 die() { echo "restart-eda: $*" >&2; exit "${2:-1}"; }
 
-command -v docker >/dev/null 2>&1 || die "docker CLI not found on PATH"
-
 # --- resolve requested image ref -------------------------------------------
-arg="${1:-latest}"
+# The no-arg default is the PINNED version from the VERSION file next to this
+# script (the image's single source of truth), never a floating `latest`: a
+# stale local `latest` would silently recreate the container on an outdated
+# toolchain. Floating tags stay available by passing them explicitly.
+if [[ $# -ge 1 && -n "${1:-}" ]]; then
+  arg="$1"
+else
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  [[ -f "${SCRIPT_DIR}/VERSION" ]] || die \
+    "no tag argument and no VERSION file at ${SCRIPT_DIR}/VERSION — pass a tag explicitly"
+  arg="$(tr -d '[:space:]' < "${SCRIPT_DIR}/VERSION")"
+  [[ -n "$arg" ]] || die "VERSION file ${SCRIPT_DIR}/VERSION is empty — pass a tag explicitly"
+fi
 if [[ "$arg" == *:* || "$arg" == */* ]]; then
   IMAGE="$arg"                    # a full ref (repo[:tag] or repo/path) — honor as-is
 else
   IMAGE="${IMAGE_REPO}:${arg}"    # a bare tag — prepend the repo
 fi
+if [[ "${RESTART_EDA_PRINT_IMAGE:-0}" == "1" ]]; then
+  echo "$IMAGE"; exit 0           # resolution-only mode (used by the regression tests)
+fi
 echo "== target image : ${IMAGE}"
+
+command -v docker >/dev/null 2>&1 || die "docker CLI not found on PATH"
 
 # --- the image must exist locally (never silently pull) --------------------
 docker image inspect "$IMAGE" >/dev/null 2>&1 || die \
