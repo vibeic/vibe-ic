@@ -1841,6 +1841,51 @@ class PdkConfig:
     lefdef_layermap: Optional[str] = None
 
 
+def _discover_lefdef_layermap(pdk_dir: Path) -> Optional[str]:
+    """Discover a commercial PDK's Encounter/SoC LEF->GDS streamout layermap.
+
+    A sign-off-grade PDK ships a `<lefname> <purpose> <gdslayer> <gdsdatatype>`
+    map (e.g. `*_common_layermap_for_SOC_encounter.txt`) so GDS streamout
+    assigns the FOUNDRY's official GDS layer numbers. Without it the streamout
+    falls back to legacy/default numbering, and routing layers land on GDS
+    numbers a sign-off DRC deck misreads (spm HP18E80 clean-run: routing shapes
+    read as thick-gate-oxide → 1394 spurious TG2 width violations).
+
+    Discovered by FORMAT, not by vendor name (chip-AGNOSTIC): a `*layermap*`
+    file at least one of whose first data lines is exactly
+    `<name> <purpose> <int> <int>`. Encounter/SoC maps are preferred over other
+    `*layermap*` files (a Virtuoso `.layermap` has a different, non-streamout
+    shape and is skipped by the format probe)."""
+    cands: List[Path] = []
+    seen: set = set()
+    for pat in ("**/*layermap*for*ncounter*", "**/*ayermap*SOC*",
+                "**/*layermap*.txt", "**/*.layermap", "**/*layermap*"):
+        try:
+            for f in sorted(pdk_dir.glob(pat)):
+                if f.is_file() and f not in seen:
+                    seen.add(f)
+                    cands.append(f)
+        except OSError:
+            continue
+    for f in cands:
+        try:
+            probed = 0
+            for line in f.read_text(errors="ignore").splitlines():
+                s = line.strip()
+                if not s or s[0] in "#/*;":
+                    continue
+                toks = s.split()
+                if (len(toks) >= 4 and toks[2].lstrip("-").isdigit()
+                        and toks[3].lstrip("-").isdigit()):
+                    return str(f)          # format-validated streamout map
+                probed += 1
+                if probed >= 20:
+                    break                  # not the streamout format → next file
+        except OSError:
+            continue
+    return None
+
+
 def _detect_pdk(project: Path, override: Optional[str] = None
                 ) -> Optional[PdkConfig]:
     """Detect which PDK to use. chip-AGNOSTIC: looks at project's input/pdk/
@@ -2040,6 +2085,10 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 calibre_lvs=str(calibre_lvs) if calibre_lvs else None,
                 calibre_lvs_device=(str(calibre_lvs_dev)
                                     if calibre_lvs_dev else None),
+                # Encounter/SoC LEF->GDS streamout map so GDS gets the foundry's
+                # official layer numbers (else a sign-off deck misreads routing
+                # layers — spm HP18E80: 1394 spurious TG2 violations without it).
+                lefdef_layermap=_discover_lefdef_layermap(pdk_dir),
             )
     # fallback: sky130A in container
     return _detect_pdk(project, override="sky130A")
@@ -7492,6 +7541,120 @@ def _magic_run_drc(gds: Path, top: str, container: str
     return raw_count, transcript
 
 
+# ---------------------------------------------------------------------------
+# SVRF-native commercial DRC (Calibre .rule deck run on the vibeic KLayout fork)
+# ---------------------------------------------------------------------------
+# A commercial PDK (e.g. Key Foundry HP18E80) ships its sign-off DRC as a
+# Calibre/SVRF `.rule` deck. The classic path needs the licensed `calibre`
+# binary. The vibeic KLayout fork's `svrf-drc` engine ingests that SAME `.rule`
+# deck NATIVELY (every SVRF measurement modifier maps 1:1 onto a KLayout
+# `Region.*_check`), so we can run the FOUNDRY'S OWN rule deck on a layout with
+# NO commercial license — categorically stronger than an OSS-proxy deck (sky130
+# lydrc). §4.05-honest: this is a native execution of the real deck, NOT a
+# golden-Calibre numerical cross-run — the verdict/detail says so explicitly.
+# chip-AGNOSTIC: no chip / vendor / SKU literal; discovers the engine via env
+# VIBE_IC_SVRF_DRC_ROOT or a home-relative default.
+def _svrf_drc_root() -> Optional[Path]:
+    """Locate the svrf-drc engine (`svrf_klayout/run_svrf_drc.py`).
+    env VIBE_IC_SVRF_DRC_ROOT wins; else `~/vibe-ic-forks/klayout/svrf-drc`.
+    None → engine not installed (caller emits honest ENV_UNAVAILABLE)."""
+    cands: List[Path] = []
+    ev = os.environ.get("VIBE_IC_SVRF_DRC_ROOT")
+    if ev:
+        cands.append(Path(ev))
+    cands.append(Path(os.path.expanduser("~")) / "vibe-ic-forks"
+                 / "klayout" / "svrf-drc")
+    for c in cands:
+        try:
+            if (c / "svrf_klayout" / "run_svrf_drc.py").is_file():
+                return c
+        except OSError:
+            continue
+    return None
+
+
+def _parse_svrf_tally(rpt: Path) -> Tuple[int, int, int, List[str]]:
+    """Parse a run_svrf_drc.py report → (fails, passes, skips, failing_rules).
+    Counts the per-rule result lines (`FAIL <rule> …` / `PASS …` / `SKIP …`),
+    ignoring the `#`-prefixed header/tally lines."""
+    fails = passes = skips = 0
+    failing: List[str] = []
+    try:
+        text = rpt.read_text(errors="replace")
+    except OSError:
+        return 0, 0, 0, []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        parts = s.split()
+        v = parts[0]
+        if v == "FAIL":
+            fails += 1
+            if len(parts) > 1:
+                failing.append(parts[1])
+        elif v == "PASS":
+            passes += 1
+        elif v == "SKIP":
+            skips += 1
+    return fails, passes, skips, failing
+
+
+def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
+                         container: str) -> Optional[StepResult]:
+    """Run the commercial Calibre/SVRF `.rule` DRC deck NATIVELY via the vibeic
+    KLayout fork (svrf-drc) — the license-free sign-off path when the `calibre`
+    binary is absent. Returns a StepResult (PASS iff 0 rules fire) on a real
+    run, or None when the svrf-drc engine / klayout / GDS is unavailable (caller
+    then emits ENV_UNAVAILABLE). §4.05: native execution of the real deck, NOT a
+    golden-Calibre numerical cross-run — disclosed in the detail."""
+    t0 = time.time()
+    root = _svrf_drc_root()
+    if root is None or not _tool_in_path(container, "klayout"):
+        return None
+    gds = _pl.pnr_dir(project) / f"{top}.gds"
+    if not gds.is_file():
+        return None
+    rpt = project / "phase3" / "reports" / "drc_svrf_calibre.rpt"
+    rpt.parent.mkdir(parents=True, exist_ok=True)
+    root_c = _to_container_path(str(root), container)
+    deck_c = _to_container_path(str(pdk.calibre_drc), container)
+    gds_c = _to_container_path(str(gds), container)
+    rpt_c = _to_container_path(str(rpt), container)
+    cmd = (
+        f"export QT_QPA_PLATFORM=offscreen && "
+        f"klayout -b -r {root_c}/svrf_klayout/run_svrf_drc.py "
+        f"-rd root={root_c} -rd deck={deck_c} -rd layout={gds_c} "
+        f"-rd report={rpt_c} -rd cell={top}"
+    )
+    rc, out, err = _docker_exec(container, cmd, marker=gds_c)
+    if rc in (_RC_STALLED, 124):
+        return StepResult("drc", "FAIL", time.time() - t0,
+                          f"svrf-native commercial DRC killed as hung/ceiling "
+                          f"(rc={rc}) — no sign-off from a partial report.")
+    if not rpt.is_file():
+        return StepResult("drc", "FAIL", time.time() - t0,
+                          f"svrf-native commercial DRC produced no report; "
+                          f"rc={rc} tail={(out + err)[-800:]}")
+    fails, passes, skips, failing = _parse_svrf_tally(rpt)
+    verdict = "PASS" if fails == 0 else "FAIL"
+    detail = (
+        f"SVRF-NATIVE commercial DRC — the foundry's OWN Calibre `.rule` deck "
+        f"executed on the vibeic KLayout engine (NO Calibre license): "
+        f"{passes} rule(s) clean, {fails} firing, {skips} honestly-SKIPPED "
+        f"(unmodeled classes — antenna / net-ratio — routed to their own "
+        f"checkers, never silently passed). deck={pdk.calibre_drc}. §4.05: this "
+        f"runs the real foundry deck natively (categorically stronger than an "
+        f"OSS-proxy deck); it is NOT a golden-Calibre numerical cross-run."
+        + (f" firing rules (first 10): {failing[:10]}" if failing else ""))
+    return StepResult(
+        "drc", verdict, time.time() - t0, detail, [str(rpt)],
+        extras={"method": "svrf_native_calibre",
+                "calibre_drc_deck": str(pdk.calibre_drc),
+                "rules_fail": fails, "rules_pass": passes, "rules_skip": skips,
+                "failing_rules": failing[:50], "gds": str(gds)})
+
+
 def step_drc(project: Path, top: str, pdk: PdkConfig,
              container: str) -> StepResult:
     t0 = time.time()
@@ -7503,16 +7666,25 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
         if pdk.calibre_drc:
             calibre_present = _tool_in_path(container, "calibre")
             if not calibre_present:
+                # No commercial Calibre binary — but the vibeic KLayout fork
+                # (svrf-drc) runs the SAME Calibre `.rule` deck NATIVELY, so we
+                # can produce a real, license-free sign-off DRC verdict on the
+                # foundry's own deck. Only when that engine is ALSO unavailable
+                # do we fall back to the honest ENV_UNAVAILABLE.
+                svrf = _try_svrf_native_drc(project, top, pdk, container)
+                if svrf is not None:
+                    return svrf
                 return StepResult(
                     "drc", "ENV_UNAVAILABLE", time.time() - t0,
-                    f"Calibre DRC deck present at {pdk.calibre_drc} but "
-                    f"`calibre` binary not available in container "
-                    f"{container!r}; install Calibre (commercial) to run "
-                    f"sign-off DRC. This is an ENV gap, not a design "
-                    f"defect — re-run on a host with Calibre installed.",
+                    f"Calibre DRC deck present at {pdk.calibre_drc} but neither "
+                    f"the `calibre` binary NOR the svrf-drc engine (env "
+                    f"VIBE_IC_SVRF_DRC_ROOT / ~/vibe-ic-forks/klayout/svrf-drc) "
+                    f"is available in container {container!r}. Install Calibre "
+                    f"or the svrf-drc engine to run sign-off DRC. ENV gap, not "
+                    f"a design defect.",
                     extras={"calibre_drc_deck": pdk.calibre_drc,
                             "gds": str(_pl.pnr_dir(project) / f"{top}.gds"),
-                            "missing_tool": "calibre"})
+                            "missing_tool": "calibre|svrf-drc"})
             return StepResult(
                 "drc", "WAIVED", time.time() - t0,
                 f"Calibre DRC deck present at {pdk.calibre_drc} and "
