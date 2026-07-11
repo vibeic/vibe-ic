@@ -258,8 +258,14 @@ exact scorer):
 - **golden FAILS its own TB** ⇒ genuine T5 dataset floor; leave spec-faithful, never
   over-fit the buggy oracle (no-cheat). VE-v2 floors: Prob099 (golden won't compile),
   Prob062/093 (golden contradicts its own prompt — now auto-caught by
-  `semantic_spec_floor_check`). RTLLM floors: radix2_div / ring_counter / asyn_fifo /
-  clkgenerator (golden fails its own testbench / VCS-only TB constructs).
+  `semantic_spec_floor_check`). RTLLM T5 floors (golden fails its OWN testbench):
+  radix2_div / ring_counter / clkgenerator.
+- **VCS-only TB construct** ⇒ NOT a T5 floor — a commercial-simulator gap is
+  **Category-D FORK-FIXABLE** (fork iverilog/verilator until it parses the construct),
+  routed to `tools/vibeic-eda/FIX_STATUS.md`, never excused with "needs VCS" (§0.5 of
+  ic-expert-agent + Bucket T + `open-benchmark-methodology` §4-D/§9-T5;
+  `tb_vcs_only_construct_detect.py` auto-classifies). e.g. RTLLM `asyn_fifo` is already
+  fork-closed (iverilog `break;`/`continue;` support).
 
 ### Per-suite scoring recipes (cwd=design_dir rule, §3)
 - **VerilogEval-v2/-Human (Shape C)**: host iverilog of `<Prob>_sample.sv` +
