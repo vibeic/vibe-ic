@@ -68,6 +68,43 @@ the runner so its gates fire on your output — that IS the runner's design, not
 bypass. For a benchmark, this same map runs behind `/vibe-ic-benchmark`
 (program-first; see `open-benchmark-methodology`).
 
+## § 0.5 — STRONG RULE: NO COMMERCIAL-EDA-TOOL EXCUSE (BINDING, fires everywhere)
+
+> **Owner directive (2026-07-12):** "no more EDA tool limitation! no more excuse
+> about 'need a commercial EDA tool'! because we have FORKED open-source EDA tools
+> and can ENHANCE our code to reach commercial-EDA-tool capability."
+
+**"This needs a commercial / licensed EDA tool" is a FORBIDDEN phrase.** So is any
+equivalent that treats an EDA-tool capability gap as a hard limitation — "requires
+Calibre / VCS / Design Compiler / PrimeTime / Spectre / Xcelium / HSPICE / Formality",
+"only a commercial signer can do this", "the open-source tool can't". We ship a
+**forked + enhanced** open-source toolchain — `vibeic/{OpenROAD, yosys, ngspice,
+magic, netgen, iverilog, klayout, verilator}`, shipped as the **`vibeic-eda`** image
+(scoreboard: `tools/vibeic-eda/FIX_STATUS.md`) — and **the commercial tool is also
+just software**: we own the fork's source and enhance it until it reaches parity.
+
+Therefore a capability an agent cannot yet discharge with the OSS fork is a
+**fork-and-enhance BACKLOG item (Bucket T)** — an engineering task against our fork —
+**never** a terminal floor, a WAIVE excuse, or a reason to stop. This rule fires on
+EVERY surface (P1/P2/P3, analog A1-A9, FPGA, tapeout, benchmark), not just benchmark
+triage.
+
+- **The exemplar:** foundry sign-off DRC on a Calibre/SVRF `.rule` deck was an
+  admitted "needs a Calibre license" gap — CLOSED by forking KLayout and building the
+  native `svrfdrc` C++ buddy (`db::SVRFEngine`), byte-identical to the reference on a
+  real 87k-line foundry deck, license-free. That is the pattern for every remaining
+  gap.
+- **How to discharge (do NOT restate here — follow the mechanism):** classify + file
+  the gap via **Bucket T** in `benchmark-enhancement-capture` (step→forked-tool
+  ownership map + mandatory identification fields, enforced by `enhancement_emit.py`);
+  for a benchmark, a plain tool-substitution gap is **Category-D FORK-FIXABLE**, not a
+  §9-T5 floor (`open-benchmark-methodology` § 4 row D / § 9 T5).
+- **Honesty is preserved, not weakened:** if the fork genuinely cannot do it *yet*, an
+  honest `ENV_UNAVAILABLE` / deferred verdict is still correct — but it must be FRAMED
+  as a fork-and-enhance backlog item (with the Bucket-T fields), never as "impossible
+  without a commercial tool". Never fabricate a result to avoid the excuse; the fix is
+  to enhance the fork, not to fake the output.
+
 ## Dual-register user-facing dialogue
 
 You own the natural-language **user-facing register**. You face the user directly, but you
@@ -135,6 +172,7 @@ tracks — never accept a lone track:
 - Never skip cross-layer consistency checks. An L3 CRC polynomial that disagrees with L8 bit timing is a bug you must catch *before* L9.
 - Never leave `TBD`, `???`, or placeholder values in a finalized layer JSON. Either fill with an `auto_decided` default (documented) or halt the layer.
 - Never produce a layer that fails its JSON schema. `json_schema_check.py` is a hard gate.
+- Never excuse a capability gap with "needs a commercial / licensed EDA tool" (Calibre / VCS / DC / PrimeTime / Spectre / Xcelium / HSPICE) or "the OSS tool can't do it" — we fork + enhance the OSS toolchain, so that gap is a fork-and-enhance BACKLOG item (Bucket T), never a hard limitation (see § 0.5).
 
 ## Reset-value default thinking (gshare lesson, 2026-06-23)
 

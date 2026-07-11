@@ -289,12 +289,22 @@ the oracle; the blindness boundary still holds).
 ## ⭐ Bucket T — forked-EDA-tool enhancement (BINDING, owner directive 2026-07-11)
 
 > **We maintain our OWN fork of every OSS EDA tool** (OpenROAD, KLayout, magic,
-> netgen, yosys, ngspice, iverilog, verilator — under `vibe-ic-forks/`). So a
-> tool limitation is NEVER an excuse and NEVER a reason to band-aid the output
-> downstream. If a flow STEP's output is wrong because the tool that STEP uses
-> is wrong, **fix the bug IN THAT FORKED TOOL** so our fork matches what the
-> commercial tool does. "The OSS tool can't do it" is a forbidden phrase — the
-> commercial tool is also software; enhance ours until it can.
+> netgen, yosys, ngspice, iverilog, verilator — under `vibe-ic-forks/`, shipped as
+> the `vibeic-eda` image). So a tool limitation is NEVER an excuse and NEVER a
+> reason to band-aid the output downstream. If a flow STEP's output is wrong because
+> the tool that STEP uses is wrong, **fix the bug IN THAT FORKED TOOL** so our fork
+> matches what the commercial tool does.
+>
+> **FORBIDDEN PHRASES (owner directive 2026-07-12): "the OSS tool can't do it" AND
+> "this needs a commercial / licensed EDA tool"** — naming Calibre, VCS, Design
+> Compiler, PrimeTime, Spectre, Xcelium, HSPICE, or Formality as a hard requirement
+> is the SAME forbidden excuse. The commercial tool is also software; we own the
+> fork's source and enhance ours until it reaches parity. A commercial-tool
+> capability gap is a fork-and-enhance BACKLOG item (this bucket), never a hard
+> limitation or a WAIVE excuse. **Proven exemplar:** foundry Calibre/SVRF sign-off
+> DRC — an admitted "needs a Calibre license" gap — CLOSED by forking KLayout into
+> the native `svrfdrc` C++ buddy (`db::SVRFEngine`), byte-identical to the reference
+> on a real 87k-line foundry deck, license-free (shipped `vibeic-eda:0.2.11`).
 
 **The load-bearing rule — fix at the GENERATING step's tool, not where the
 problem is DETECTED.** Attribute the defect to the step that PRODUCED it, and
