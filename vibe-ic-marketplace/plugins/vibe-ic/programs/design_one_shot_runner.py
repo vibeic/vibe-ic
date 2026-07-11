@@ -68,8 +68,9 @@ Exit codes:
 Limitations (intentional, will be relaxed in future waves):
     - AID-class branch only; non-AID classes SKIP RTL gen step
     - mcp-eda Docker tools wrap shell commands — Quartus / KLayout / Magic /
-      Netgen must be in the vibeic-eda container. (They are, in
-      hpretl/iic-osic-tools:latest.)
+      Netgen must be in the vibeic-eda container. (They are, in the pinned
+      vibeic-eda image — our forked iic-osic-tools distribution; see
+      tools/vibeic-eda/.)
     - Hardware steps require:
         - DE10-Lite plugged in (USB-Blaster detected by quartus_pgm)
         - <half-duplex-tester> vendor-<half-duplex-tester> USB HID at /dev/hidraw*
