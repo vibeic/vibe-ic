@@ -2,13 +2,16 @@
 """svrf-native commercial DRC wiring (spm commercial_pdk clean-run, 2026-07-11).
 
 A commercial PDK ships its sign-off DRC as a Calibre/SVRF `.rule` deck. The
-vibeic KLayout fork (`svrf-drc`) runs that deck NATIVELY, so `step_drc` can
-produce a real, license-free sign-off verdict on the FOUNDRY'S OWN deck when the
-`calibre` binary is absent — instead of returning ENV_UNAVAILABLE.
+vibeic KLayout fork's native `svrfdrc` buddy (C++, no Python interpreter) runs
+that deck NATIVELY, so `step_drc` can produce a real, license-free sign-off
+verdict on the FOUNDRY'S OWN deck when the `calibre` binary is absent — instead
+of returning ENV_UNAVAILABLE.
 
-These tests pin the deterministic pieces (report tally parsing, engine
-discovery, the ENV_UNAVAILABLE fallback when the engine is genuinely absent).
-The full container run is exercised by the commercial_pdk chip runs.
+These tests pin the deterministic pieces (report tally parsing, buddy discovery
+via `command -v svrfdrc`, the native-buddy invocation, and the ENV_UNAVAILABLE
+fallback when the buddy is genuinely absent). The full container run is exercised
+by the commercial_pdk chip runs. Report format is byte-identical to the retired
+run_svrf_drc.py, so the tally/classifier tests are unchanged.
 """
 from __future__ import annotations
 
@@ -61,30 +64,39 @@ def test_parse_svrf_tally_missing_file(tmp_path):
     assert (fails, passes, skips, failing) == (0, 0, 0, [])
 
 
-def test_svrf_drc_root_env_discovery(tmp_path, monkeypatch):
-    # A dir with svrf_klayout/run_svrf_drc.py is discovered via env.
-    eng = tmp_path / "svrf-drc"
-    (eng / "svrf_klayout").mkdir(parents=True)
-    (eng / "svrf_klayout" / "run_svrf_drc.py").write_text("# engine\n")
-    monkeypatch.setenv("VIBE_IC_SVRF_DRC_ROOT", str(eng))
-    assert R._svrf_drc_root() == eng
+def test_svrfdrc_bin_container_found_via_command_v(monkeypatch):
+    # The native `svrfdrc` buddy is baked on PATH in the vibeic-eda image; a
+    # `command -v` returning rc=0 resolves its command/path — a clean install
+    # needs NO host checkout (a compiled binary can't be mounted in anyway).
+    monkeypatch.setattr(R, "_docker_exec",
+                        lambda c, cmd, **k: (0, "/foss/tools/bin/svrfdrc\n", ""))
+    assert R._svrfdrc_bin_container("vibeic-eda") == "/foss/tools/bin/svrfdrc"
 
 
-def test_svrf_drc_root_absent(tmp_path, monkeypatch):
-    # Env points at a dir with NO engine file, and home has none → None.
-    monkeypatch.setenv("VIBE_IC_SVRF_DRC_ROOT", str(tmp_path / "empty"))
-    monkeypatch.setenv("HOME", str(tmp_path / "nohome"))
-    assert R._svrf_drc_root() is None
+def test_svrfdrc_bin_container_none_when_absent(monkeypatch):
+    # rc!=0 (buddy not in image) → None → step_drc emits honest ENV_UNAVAILABLE.
+    monkeypatch.setattr(R, "_docker_exec", lambda c, cmd, **k: (1, "", ""))
+    assert R._svrfdrc_bin_container("vibeic-eda") is None
 
 
-def test_try_svrf_native_drc_returns_none_when_engine_absent(
+def test_svrfdrc_bin_container_env_override(monkeypatch):
+    # The command name is overridable for a differently-laid-out image.
+    monkeypatch.setenv("VIBE_IC_SVRFDRC_BIN", "/opt/svrfdrc")
+    seen = {}
+
+    def _fake_exec(c, cmd, **k):
+        seen["cmd"] = cmd
+        return (0, "/opt/svrfdrc\n", "")
+    monkeypatch.setattr(R, "_docker_exec", _fake_exec)
+    assert R._svrfdrc_bin_container("vibeic-eda") == "/opt/svrfdrc"
+    assert "command -v /opt/svrfdrc" in seen["cmd"]
+
+
+def test_try_svrf_native_drc_returns_none_when_buddy_absent(
         tmp_path, monkeypatch):
-    # When the engine is absent from BOTH the image and the host, the helper
-    # returns None so step_drc falls through to the honest ENV_UNAVAILABLE
-    # (never a fabricated PASS). klayout present so we get past the pre-flight.
-    monkeypatch.setattr(R, "_tool_in_path", lambda c, t: True)
-    monkeypatch.setattr(R, "_svrf_drc_root_container", lambda c: None)
-    monkeypatch.setattr(R, "_svrf_drc_root", lambda: None)
+    # When the buddy is absent from the image, the helper returns None so step_drc
+    # falls through to the honest ENV_UNAVAILABLE (never a fabricated PASS).
+    monkeypatch.setattr(R, "_svrfdrc_bin_container", lambda c: None)
     res = R._try_svrf_native_drc(
         tmp_path, "spm",
         R.PdkConfig(name="custom:commercial_pdk", liberty="x", tech_lef="x",
@@ -94,66 +106,43 @@ def test_try_svrf_native_drc_returns_none_when_engine_absent(
     assert res is None
 
 
-def test_svrf_drc_root_container_found_via_probe(monkeypatch):
-    # The engine is baked into the vibeic-eda image at /foss/tools/svrf-drc;
-    # a `test -f` probe returning rc=0 resolves that CONTAINER path — so a
-    # clean install needs NO host ~/vibe-ic-forks checkout.
-    monkeypatch.setattr(R, "_docker_exec",
-                        lambda c, cmd, **k: (0, "", ""))
-    assert R._svrf_drc_root_container("vibeic-eda") == "/foss/tools/svrf-drc"
-
-
-def test_svrf_drc_root_container_none_when_absent(monkeypatch):
-    # rc!=0 (file not in image) → None (caller then tries the host fallback).
-    monkeypatch.setattr(R, "_docker_exec",
-                        lambda c, cmd, **k: (1, "", ""))
-    assert R._svrf_drc_root_container("vibeic-eda") is None
-
-
-def test_svrf_drc_root_container_env_override(monkeypatch):
-    # The baked path is overridable for a differently-laid-out image.
-    monkeypatch.setenv("VIBE_IC_SVRF_DRC_CONTAINER_ROOT", "/opt/svrf")
+def test_try_svrf_native_drc_invokes_native_buddy(tmp_path, monkeypatch):
+    # When the buddy IS present, the command is the NATIVE
+    # `svrfdrc <deck> <layout> <report> --cell=TOP` — NOT `klayout -b -r
+    # run_svrf_drc.py`. Proves the interpreter path is fully retired.
+    monkeypatch.setattr(R, "_svrfdrc_bin_container", lambda c: "svrfdrc")
+    monkeypatch.setattr(R, "_to_container_path", lambda p, c: p)
     seen = {}
 
     def _fake_exec(c, cmd, **k):
         seen["cmd"] = cmd
         return (0, "", "")
     monkeypatch.setattr(R, "_docker_exec", _fake_exec)
-    assert R._svrf_drc_root_container("vibeic-eda") == "/opt/svrf"
-    assert "/opt/svrf/svrf_klayout/run_svrf_drc.py" in seen["cmd"]
-
-
-def test_svrf_drc_root_container_prefers_image_over_host(tmp_path, monkeypatch):
-    # When the image HAS the engine, _try_svrf_native_drc must use the container
-    # path and NOT depend on a host checkout (host root not even consulted).
-    monkeypatch.setattr(R, "_tool_in_path", lambda c, t: True)
-    monkeypatch.setattr(R, "_svrf_drc_root_container",
-                        lambda c: "/foss/tools/svrf-drc")
-
-    def _host_must_not_be_called():
-        raise AssertionError("host _svrf_drc_root consulted despite image copy")
-    monkeypatch.setattr(R, "_svrf_drc_root", _host_must_not_be_called)
-    # No GDS on disk → returns None AFTER resolving the container root (proves
-    # the container branch ran without touching the host resolver).
-    res = R._try_svrf_native_drc(
+    gds = R._pl.pnr_dir(tmp_path) / "spm.gds"
+    gds.parent.mkdir(parents=True, exist_ok=True)
+    gds.write_text("gds")
+    R._try_svrf_native_drc(
         tmp_path, "spm",
         R.PdkConfig(name="custom:commercial_pdk", liberty="x", tech_lef="x",
                     cell_lef="x", cell_gds=None, site="unit", drc_deck=None,
                     calibre_drc="/x/DRC.rule"),
         "vibeic-eda")
-    assert res is None
+    assert seen["cmd"].startswith("svrfdrc ")
+    assert "--cell=spm" in seen["cmd"]
+    assert "run_svrf_drc.py" not in seen["cmd"]
+    assert " -r " not in seen["cmd"]
 
 
-def test_step_drc_env_unavailable_names_both_tools(tmp_path, monkeypatch):
-    # calibre absent + svrf engine absent → ENV_UNAVAILABLE mentioning BOTH.
+def test_step_drc_env_unavailable_names_buddy(tmp_path, monkeypatch):
+    # calibre absent + svrfdrc buddy absent → ENV_UNAVAILABLE mentioning svrfdrc.
     monkeypatch.setattr(R, "_tool_in_path", lambda c, t: False)
-    monkeypatch.setattr(R, "_svrf_drc_root", lambda: None)
+    monkeypatch.setattr(R, "_svrfdrc_bin_container", lambda c: None)
     pdk = R.PdkConfig(name="custom:commercial_pdk", liberty="x", tech_lef="x",
                       cell_lef="x", cell_gds=None, site="unit", drc_deck=None,
                       calibre_drc="/x/DRC.rule")
     res = R.step_drc(tmp_path, "spm", pdk, "vibeic-eda")
     assert res.status == "ENV_UNAVAILABLE"
-    assert "svrf-drc" in res.detail
+    assert "svrfdrc" in res.detail
 
 
 # --------------------------------------------------------------------------

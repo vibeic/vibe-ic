@@ -103,9 +103,9 @@ class _FakePdkConfig:
 
 def test_step_drc_env_unavailable_when_calibre_deck_present_but_binary_absent(
         tmp_path: Path) -> None:
-    # 2026-07-11: step_drc now first tries the svrf-native engine (runs the
+    # 2026-07-12: step_drc first tries the native `svrfdrc` buddy (runs the
     # Calibre .rule deck license-free). Only when BOTH `calibre` AND the
-    # svrf-drc engine are absent does it emit ENV_UNAVAILABLE — and the
+    # svrfdrc buddy are absent does it emit ENV_UNAVAILABLE — and the
     # missing_tool names both.
     pdk = _FakePdkConfig(
         drc_deck=None,
@@ -114,22 +114,21 @@ def test_step_drc_env_unavailable_when_calibre_deck_present_but_binary_absent(
         "programs.phase3_one_shot_runner._tool_in_path",
         return_value=False,
     ), patch(
-        "programs.phase3_one_shot_runner._svrf_drc_root",
+        "programs.phase3_one_shot_runner._svrfdrc_bin_container",
         return_value=None,
     ):
         res = step_drc(tmp_path, "top", pdk, "test-container")
     assert res.status == "ENV_UNAVAILABLE"
-    assert res.extras.get("missing_tool") == "calibre|svrf-drc"
+    assert res.extras.get("missing_tool") == "calibre|svrfdrc"
     assert "ENV gap" in res.detail
 
 
 def test_step_drc_waived_when_calibre_binary_present_but_svrf_engine_absent(
         tmp_path: Path) -> None:
-    # 2026-07-12: sign-off DRC PREFERS the native svrf-drc engine (runs the real
+    # 2026-07-12: sign-off DRC PREFERS the native `svrfdrc` buddy (runs the real
     # Calibre deck license-free). WAIVED (defer to offline `calibre`) now happens
-    # ONLY when that engine is unavailable — both the image-baked copy AND the
-    # host checkout — while the `calibre` binary IS present. Mock both svrf roots
-    # absent so the probe is deterministic (no real docker exec).
+    # ONLY when the buddy is unavailable while the `calibre` binary IS present.
+    # Mock the buddy absent so the probe is deterministic (no real docker exec).
     pdk = _FakePdkConfig(
         drc_deck=None,
         calibre_drc="/path/to/calibre_drc.rule")
@@ -137,10 +136,7 @@ def test_step_drc_waived_when_calibre_binary_present_but_svrf_engine_absent(
         "programs.phase3_one_shot_runner._tool_in_path",
         return_value=True,
     ), patch(
-        "programs.phase3_one_shot_runner._svrf_drc_root_container",
-        return_value=None,
-    ), patch(
-        "programs.phase3_one_shot_runner._svrf_drc_root",
+        "programs.phase3_one_shot_runner._svrfdrc_bin_container",
         return_value=None,
     ):
         res = step_drc(tmp_path, "top", pdk, "test-container")
