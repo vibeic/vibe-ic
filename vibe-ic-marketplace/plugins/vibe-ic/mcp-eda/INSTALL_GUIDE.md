@@ -108,6 +108,8 @@ This may take 10-30 minutes depending on your internet connection. The table bel
 | **ngspice** | latest | SPICE simulation (analog/mixed-signal) |
 | **Xyce** | 7.10 | Advanced parallel SPICE simulation |
 | **cocotb** | 2.0.1 | Python-based testbench framework |
+| **cocotb-coverage** | 2.0 | Functional coverage + constrained-random (`pip install cocotb-coverage`) — required by the `eda_professional_tb` generated testbenches |
+| **pyuvm** | 4.0.1 | Python UVM (structure without a commercial simulator) |
 | **SymbiYosys** | latest | Formal verification (with Yices solver) |
 | **GTKWave** | latest | Waveform viewer |
 | **Xschem** | latest | Schematic editor |
