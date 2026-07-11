@@ -75,6 +75,11 @@ iverilog commits e1e12f6+110cadd · pushed · verilator forked, no commit (no ho
 | merge-abutting streamout (union same-layer polys across instances) | feature-add-medium | ✅ | met1 abutting polys `2 → 1` (opt-in `KLAYOUT_LEFDEF_MERGE_ABUTTING=1`); deferred to `finish()` to avoid dangling-`db::Cell*` SIGSEGV |
 | Regression: `dbLEFDEFImportTests` 90/90 pass, identical stock vs patched; each fix's OFF path reproduces stock exactly |||| 
 
+## Tool 7 — verification toolchain  (forks: cocotb / cocotb-coverage / pyuvm / sby — Dockerfile Stage 8)
+| Item | Class | Status | Note (honest) |
+|---|---|---|---|
+| cocotb + cocotb-coverage + pyuvm + sby baked into the image, editable-installed (`-e /opt/vibeic-forks/*`) | fork-own, enhancement-ready | 🟡 | **Owned, no FAIL→PASS patch yet.** The professional TB generator (`professional_tb_gen` / MCP `eda_professional_tb`) emits cocotb TBs + cocotb-coverage covergroups + an SVA bind that run on THIS toolchain — so we fork it (Bucket-T: never a "the tool can't do it" excuse) and can patch it in-image. cocotb overrides the base's stock 2.0.1; keep `COCOTB_REF` on the stable 2.0.x line until a real vibeic patch lands. sby drives vibeic/yosys for the SVA-bind/formal path. Pinned to upstream SHAs; migrate URLs to github.com/vibeic/<tool> once pushed |
+
 ## Consolidated image + validation status
 - **All 6 tool forks proven + pushed** to the `vibeic` GitHub org, each with a gatekeeper-re-run FAIL→PASS.
 - **Full `vibeic-eda:0.2.0` image BUILT + smoke-validated** (all 6 builder stages exit 0): OpenROAD, yosys (CMake+slang), ngspice, magic+netgen, iverilog, klayout. Smoke = **7/7 tools present + runnable** in a container off the image. One build-time fix was needed: the base runs as user 1000 and `/foss/tools` is root-owned, so the stale-ABI cleanup (`rm -rf` of the base tool dirs) aborted with permission-denied — wrapped the runtime-stage mutations in `USER root` → restore `USER 1000`. The base's old-ABI `ghdl.so` yosys plugin is now removed before the fork COPY, so yosys 0.66 no longer symbol-lookup-crashes on synth (verified: `read_verilog → synth → abc` emits a mapped netlist, exit 0).
