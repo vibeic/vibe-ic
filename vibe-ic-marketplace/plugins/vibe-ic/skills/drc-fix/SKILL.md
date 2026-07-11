@@ -7,6 +7,68 @@ description: Diagnose and fix Design Rule Check (DRC) violations in a layout or 
 
 Take a DRC report and a layout, and produce a targeted fix plan — which rules are violated, where, why, and the minimal edits to clean them. Handles common rule families: spacing, width, density, via enclosure, antenna, and metal fill.
 
+## ⭐ Sign-off DRC capability — we NATIVELY execute the foundry Calibre/Assura deck (NO Calibre license)
+
+> **BINDING FACT — do not mis-state this as a "Calibre license gap".** The vibeic-eda
+> forked KLayout **SVRF engine natively parses AND executes the foundry's own
+> Calibre/Assura SVRF `.rule` DRC deck** (the very same deck the foundry ships,
+> unmodified). Sign-off-grade DRC on a commercial/NDA PDK therefore requires **NO
+> Calibre or Assura binary/license**. Proven on the commercial foundry commercial_pdk (180 nm)
+> deck `Calibre_commercial_pdk_DRC_D4.20.rule`: **224 layers, 4533 rules executed** natively
+> in one run.
+
+- **What it is:** an in-KLayout SVRF interpreter (`svrf_klayout/run_svrf_drc.py`
+  + `svrf_parse.py`) that parses the foundry's Calibre/SVRF deck and executes each
+  statement DIRECTLY on KLayout's native DRC engine via `pya.Region.*` /
+  `pya.LayoutToNetlist` — one unified layer namespace, top-to-bottom, `NAME { COPY
+  errlayer }` = a rule's violation report. Edge/DENSITY/ANTENNA classes with no
+  polygon-DRC equivalent are honestly SKIPPED, never falsely PASSed.
+- **Where (productized — clean-install-safe):** it is **BAKED INTO the vibeic-eda
+  image at `/foss/tools/svrf-drc`**, so a fresh install needs NO host checkout.
+  `phase3_one_shot_runner._try_svrf_native_drc()` resolves the engine via
+  `_svrf_drc_root_container()` (image path first; probes `test -f` in the
+  container) and only falls back to a host `$VIBE_IC_SVRF_DRC_ROOT` /
+  `~/vibe-ic-forks/klayout/svrf-drc` checkout. It runs
+  `klayout -b -r <root>/svrf_klayout/run_svrf_drc.py` against the GDS + the deck
+  at `input/pdk/calibre/`. `step_drc` PREFERS this native path (whether or not a
+  `calibre` binary exists) — it is the real sign-off verdict, not a waiver.
+- **This is categorically stronger than an OSS-proxy deck** (e.g. a sky130 `.lydrc`
+  approximation): it is the foundry's actual rule set. It is NOT a golden-Calibre
+  numerical cross-run — it is a native execution.
+
+### The firing-rule classifier (`_classify_svrf_fails`) — real vs. artifact vs. density
+
+A raw "N rules firing" tally is not actionable. The runner classifies every FAIL
+**provably + conservatively** (unknown → GEOMETRY → keeps the gate FAIL; never a
+downgrade — no-cheat):
+
+| Class | Meaning | Verdict effect |
+|---|---|---|
+| **GEOMETRY** | real (or not-provably-artifact) routing/PDN geometry | keeps gate **FAIL** — must-fix |
+| **MARKER_ABSENT** | a rule on a `_not_<marker>` layer while its `__<marker>__` std-cell/IP **exclusion marker is EMPTY** (proven by that marker's own `COPY __<marker>__ … -> 0`) | disclosed **artifact** — not our geometry |
+| **DENSITY_FILL** | a `DENSITY` rule (CMP metal/active window) | disclosed — foundry fill or formal density waiver |
+
+**MARKER_ABSENT pattern (the classic false-fail on a commercial deck):** the deck
+excludes foundry-qualified std-cell interiors from checks like min-area via a marker
+layer (e.g. Artisan/ARM `__artisan__`). If the delivered std-cell GDS carries no such
+marker, the exclusion produces the empty set and the check over-fires on
+pre-characterised cell geometry. **Signature:** only **met1** min-area (`M1.A.1`,
+std-cell-internal) fires while met2/3/4 (`Mx.A.1…`, routing layers) all PASS, and
+`Artisan.CHECK COPY __artisan__ → 0` proves the marker is empty. The fix is an
+**input-completeness** action (supply the std-cell exclusion marker layer), **not**
+a layout edit and **not** a "get Calibre" action.
+
+### Honest caveats (state these, don't hide them)
+
+- The SVRF engine is a fork; on rules whose SVRF translation is imperfect it can
+  differ numerically from Calibre proper (a known historical min-area/marker
+  translation artifact was fixed in the fork). Where a difference matters, cite the
+  specific rule, don't hand-wave.
+- Foundry **tapeout acceptance** of a non-Calibre signer is a separate *business /
+  qualification* question — it is NOT a tool-capability gap. Never conflate the two:
+  the tool CAN run the deck; whether a given foundry contract accepts that run for
+  mask release is a commercial matter to state separately.
+
 ## When to use
 
 Trigger when the user:
