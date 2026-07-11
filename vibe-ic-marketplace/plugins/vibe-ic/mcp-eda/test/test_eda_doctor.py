@@ -84,3 +84,59 @@ def test_summary_format_x_of_y():
     so log scrapers / dashboards can extract a score."""
     w = _slice()
     assert "checks passed" in w
+
+
+def test_magic_probe_uses_version_flag_not_broken_tcl_global():
+    """Regression (2026-07-11): the magic probe must use `magic --version`,
+    which prints the bare `<maj>.<min>.<rev>` to stdout on the vibeic/magic
+    build. The old `-dnull -noconsole <<< 'puts $::magic_version'` tcl probe
+    returned EMPTY (the global isn't set at that point) and false-FAILed an
+    otherwise healthy magic (present at /foss/tools/bin/magic, v8.3.671)."""
+    src = INDEX_JS.read_text()
+    assert "${TOOLS}/bin/magic --version" in src, "magic probe must use --version"
+    # The old broken probe's distinctive executable signature (tech-file /dev/null
+    # + heredoc into the tcl interpreter). Only live probe code had this exact
+    # token; the fix comment does not.
+    assert "-noconsole -T /dev/null 2>&1 <<<" not in src, (
+        "the broken tcl-global magic probe must not return; it false-FAILs "
+        "a present magic"
+    )
+
+
+def test_fault_probe_uses_deterministic_foss_bin_path():
+    """Regression (2026-07-11): the vibeic-eda image is self-contained — every
+    tool must resolve at a deterministic /foss/tools/bin path, never via ambient
+    PATH (the docker-exec PATH we don't control). fault ships from the base at
+    /usr/local/bin/fault; the Dockerfile symlinks it into ${TOOLS}/bin/fault, so
+    the probe must hit ${TOOLS}/bin/fault like every other tool."""
+    src = INDEX_JS.read_text()
+    assert "fault: `${TOOLS}/bin/fault --version" in src, (
+        "fault probe must use the deterministic ${TOOLS}/bin/fault path"
+    )
+    # Must NOT fall back to bare-PATH `fault` (ambient PATH is uncontrolled).
+    assert "fault: `fault --version" not in src, (
+        "fault probe must not rely on ambient PATH — use ${TOOLS}/bin/fault"
+    )
+
+
+def test_fault_symlinked_into_foss_bin_by_dockerfile():
+    """The deterministic ${TOOLS}/bin/fault path the probe relies on is created
+    by the Dockerfile (base ships fault only at /usr/local/bin). Pin the symlink
+    so the probe and the image stay in lockstep."""
+    # The Dockerfile lives at repo-root/tools/vibeic-eda/ (outside the shipped
+    # plugin package), so walk up looking for it; skip in cache/marketplace-only
+    # layouts where tools/ isn't present.
+    dockerfile = None
+    for p in Path(__file__).resolve().parents:
+        cand = p / "tools" / "vibeic-eda" / "Dockerfile"
+        if cand.exists():
+            dockerfile = cand
+            break
+    if dockerfile is None:
+        import pytest
+        pytest.skip("Dockerfile not in this checkout layout")
+    d = dockerfile.read_text()
+    assert "/foss/tools/bin/fault" in d, (
+        "Dockerfile must symlink fault into /foss/tools/bin for the "
+        "deterministic-path probe to resolve"
+    )
