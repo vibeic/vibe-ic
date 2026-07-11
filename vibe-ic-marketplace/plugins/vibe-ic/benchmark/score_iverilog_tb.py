@@ -169,6 +169,121 @@ def _to_container(p: str) -> str:
     return p.replace(_HOST_DESIGNS_ROOT, _CONT_DESIGNS_ROOT)
 
 
+def _strip_waveform_dumps(text: str) -> str:
+    """Remove $dumpfile(...) / $dumpvars(...) statements — waveform-only output
+    that never affects the Mismatches verdict. Some forked iverilog builds reject
+    a $dumpvars that forward-references a module-scope wire declared textually
+    later (a stricter elaboration order); stripping it lets the fork build run the
+    TB WITHOUT changing what is verified. §4.05: a wrong DUT still mismatches."""
+    return "\n".join(
+        ln for ln in text.splitlines()
+        if not ln.lstrip().startswith(("$dumpfile", "$dumpvars"))
+    ) + "\n"
+
+
+_FORK_IV_COUNTER = [0]
+
+# Fork-rung vvp wall-clock cap (seconds). Module-level so tests can shrink it.
+_FORK_VVP_TIMEOUT = 120
+# Sentinel returned when the fork BUILD succeeded but the simulation hit the
+# wall-clock cap. MUST stay distinct from any vvp output: a SIGTERM'd vvp still
+# executes `final` blocks, and a hung VerilogEval TB then prints
+# "Mismatches: 0 in 0 samples" — which MATCHES the pass regex. Returning the
+# raw output would convert a hang into a false PASS (Step-2.7 reproduced
+# finding), so the call site must see the timeout, not the output.
+FORK_SIM_TIMEOUT = "__FORK_SIM_TIMEOUT__"
+
+
+def _fork_iverilog_compile_run(sources, top: str, preserve=()):
+    """SV-2012 escalation rung ABOVE host iverilog: compile+run under the FORKED
+    iverilog (Icarus 14-devel) in the EDA container ($VIBEIC_IVERILOG13_CONTAINER,
+    default vibeic-eda). The fork build handles SV enum type-casts (States'(...))
+    that stock host iverilog 11 rejects with "sorry: This cast operation is not
+    yet supported" — a genuine tool-substitution gap (VCS/Xcelium handle it), NOT a
+    candidate-RTL bug. Non-functional $dumpfile/$dumpvars are stripped (see
+    _strip_waveform_dumps) from the benchmark's OWN files (TB / golden ref) only —
+    any path listed in `preserve` (the CANDIDATE sample) is copied VERBATIM, so a
+    candidate whose own dump line is illegal still fails its deserved
+    compile_error (Step-2.7 reproduced finding: stripping the candidate would
+    repair a non-compiling submission into a PASS). Returns the vvp output string
+    on a successful BUILD, FORK_SIM_TIMEOUT if the build succeeded but the
+    simulation hit the wall-clock cap (a SIGTERM'd TB's `final` block can print a
+    pass-shaped summary — never expose it), or None if even the fork build fails
+    (a genuine tool-gap / real error stays a compile_error at the call site).
+    §4.05 no-leak: the real forked simulator runs, so a wrong DUT still reports
+    Mismatches>0 — the verdict is never inflated (proven: an all-zero stub on
+    VerilogEval Prob151 reports Mismatches 4152/5069 through this exact path)."""
+    container = _IV13_CONTAINER
+    _FORK_IV_COUNTER[0] += 1
+    tagdir = f"/tmp/vibeic_forkiv_{os.getpid()}_{_FORK_IV_COUNTER[0]}"
+    preserve = {str(Path(p)) for p in preserve}
+    host_tmps = []
+    try:
+        # opportunistic sweep of stale sibling dirs (a SIGKILLed scorer never
+        # reaches its finally) before creating this invocation's dir
+        if subprocess.run(["docker", "exec", container, "bash", "-lc",
+                           f"find /tmp -maxdepth 1 -name 'vibeic_forkiv_*' "
+                           f"-mmin +240 -exec rm -rf {{}} + 2>/dev/null; "
+                           f"rm -rf {tagdir} && mkdir -p {tagdir}"],
+                          capture_output=True, timeout=60).returncode != 0:
+            return None
+        cont_srcs = []
+        for i, s in enumerate(sources):
+            txt = Path(s).read_text(errors="ignore")
+            if str(Path(s)) not in preserve:
+                txt = _strip_waveform_dumps(txt)
+            tf = tempfile.NamedTemporaryFile("w", suffix=".sv", delete=False)
+            tf.write(txt); tf.close(); host_tmps.append(tf.name)
+            base = f"src{i}.sv"
+            if subprocess.run(["docker", "cp", tf.name, f"{container}:{tagdir}/{base}"],
+                              capture_output=True, timeout=60).returncode != 0:
+                return None
+            cont_srcs.append(f"{tagdir}/{base}")
+        srcs = " ".join(f"'{x}'" for x in cont_srcs)
+        build = (f"cd {tagdir} && (iverilog -g2012 -s {top} -o bin {srcs} 2>err "
+                 f"|| iverilog -g2012 -o bin {srcs} 2>err) && echo __FBUILT__ "
+                 f"&& {{ timeout {int(_FORK_VVP_TIMEOUT)} vvp bin 2>&1; "
+                 f"echo __FORKRC=$?; }}")
+        r = subprocess.run(["docker", "exec", container, "bash", "-lc", build],
+                           capture_output=True, text=True,
+                           timeout=int(_FORK_VVP_TIMEOUT) + 180)
+        out = r.stdout + r.stderr
+        if "__FBUILT__" not in out:
+            return None
+        out = out.split("__FBUILT__", 1)[1]
+        rc = re.search(r"__FORKRC=(\d+)", out)
+        if rc and rc.group(1) == "124":     # GNU timeout: the sim hit the cap
+            return FORK_SIM_TIMEOUT
+        return out
+    except Exception:
+        return None
+    finally:
+        for t in host_tmps:
+            try:
+                os.unlink(t)
+            except OSError:
+                pass
+        try:
+            # cleanup must never raise past the verdict (a docker-less host would
+            # otherwise crash the WHOLE scoring run with FileNotFoundError here —
+            # Step-2.7 reproduced finding)
+            subprocess.run(["docker", "exec", container, "bash", "-lc",
+                            f"rm -rf {tagdir}"],
+                           capture_output=True, timeout=30)
+        except Exception:
+            pass
+
+
+def _iverilog_toolgap_signature(text: str) -> bool:
+    """True when a host-iverilog compile failure looks like an SV-2012 tool-gap the
+    forked iverilog 14 may handle (enum cast / stricter elaboration), NOT a plain
+    RTL syntax error. Keeps the fork escalation from masking a real candidate bug."""
+    low = text.lower()
+    return ("sorry:" in low or "internal error" in low
+            or "unable to bind" in low
+            or "i don't know how to elaborate" in low)
+
+
 def _build_zero_stub(sample_text: str) -> Optional[str]:
     """From an ANSI-header module, synthesize a trivially-WRONG stub with the same
     name + ports but every output driven to constant 0 (reg stripped so `assign`
@@ -1245,6 +1360,7 @@ def _golden_ref_self_compiles(prob: str, dataset: Path, layout: dict):
         with open(alias_f, "w") as fh:
             fh.write(alias_text)
         srcs = [str(ref), alias_f, str(test)]
+        last_err = ""
         for cmd in (["iverilog", "-g2012", "-s", "tb", "-o", binp] + srcs,
                     ["iverilog", "-g2012", "-o", binp] + srcs):
             try:
@@ -1252,6 +1368,17 @@ def _golden_ref_self_compiles(prob: str, dataset: Path, layout: dict):
             except subprocess.TimeoutExpired:
                 return None
             if c.returncode == 0:
+                return True
+            last_err = c.stdout + c.stderr
+        # Same SV-2012 tool-gap escalation as the sample-scoring path: a golden
+        # whose only host-compile failure is an iverilog tool-gap (e.g. the enum
+        # type-cast States'(...) that stock iverilog 11 rejects with "sorry:")
+        # is NOT an irreducible dataset defect — the fork rung that scores the
+        # samples can satisfy it, so "unsatisfiable by anyone" would be false and
+        # a genuinely-failing candidate would be wrongly removed from the
+        # dataset-defect-excluding denominator. Escalate before concluding False.
+        if _iverilog_toolgap_signature(last_err):
+            if _fork_iverilog_compile_run(srcs, "tb") is not None:
                 return True
         return False
 
@@ -1355,6 +1482,30 @@ def _score_shape_c_impl(prob: str, samples: Path, dataset: Path,
             c = subprocess.run(["iverilog", "-g2012", "-o", binp] + sources,
                                capture_output=True, text=True, timeout=120)
             if c.returncode != 0:
+                # SV-2012 tool-gap escalation: the FORKED iverilog 14 in the EDA
+                # container handles SV enum type-casts (States'(...)) that stock
+                # host iverilog 11 rejects ("sorry: cast not supported"). Escalate
+                # ONLY on that tool-gap signature so a genuine RTL compile bug still
+                # FAILs as compile_error. §4.05 no-leak: the fork runs the REAL
+                # simulator, so a wrong DUT still mismatches (verdict never inflated).
+                if _iverilog_toolgap_signature(c.stdout + c.stderr):
+                    # preserve the CANDIDATE (sources[0]) verbatim — only the
+                    # benchmark's own TB/ref get the dump-strip (see helper)
+                    fout = _fork_iverilog_compile_run(sources, "tb",
+                                                      preserve=(sources[0],))
+                    if fout == FORK_SIM_TIMEOUT:
+                        return {"problem": prob, "verdict": "FAIL",
+                                "reason": "sim_timeout",
+                                "tool": "fork-iverilog-14"}
+                    if fout is not None:
+                        if re.search(args["pass_regex"], fout):
+                            return {"problem": prob, "verdict": "PASS",
+                                    "tool": "fork-iverilog-14"}
+                        m = re.search(r"Mismatches:\s*(\d+)\s+in\s+(\d+)", fout)
+                        return {"problem": prob, "verdict": "FAIL",
+                                "reason": (f"functional_mismatch "
+                                           f"({m.group(0) if m else 'no summary'})"),
+                                "tool": "fork-iverilog-14"}
                 return {"problem": prob, "verdict": "FAIL", "reason": "compile_error",
                         "log": c.stderr[-400:]}
         try:
