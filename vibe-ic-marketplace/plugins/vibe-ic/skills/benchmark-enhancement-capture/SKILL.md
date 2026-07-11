@@ -179,6 +179,17 @@ binding rules make the run captureable:
 
 For EVERY recovery, answer these in order and stop at the first YES:
 
+0. **Is the ROOT CAUSE inside a forked EDA TOOL — i.e. a flow STEP's own tool
+   (OpenROAD / KLayout / magic / netgen / yosys / ngspice / iverilog / verilator)
+   produced a WRONG or incomplete output that a plugin-side Python rule could
+   only paper over?** → **Bucket T (forked-tool enhancement).** Fix the BUG IN
+   THE FORKED TOOL THE STEP USES — never a downstream band-aid in a different
+   tool/step. (Owner directive 2026-07-11: "bug fix 要修在產生那個 output 的
+   那個 step 所使用的 fork 工具裡，不要修錯地方.") See **Bucket T** below for the
+   MANDATORY identification fields. Only when the root cause is genuinely in the
+   plugin's own orchestration/extraction logic (not the tool) do you continue to
+   step 1.
+
 1. **Can a deterministic Python rule (regex / width / structural pattern /
    table lookup) detect-and-fix this without any LLM judgment?** → **Bucket A.**
    This is the default. A "judgment call" that is really just an unwritten
@@ -274,6 +285,76 @@ deterministic gate ships with (a) evidence emission and (b) a named AI cross-che
 carries its independent cross-check whose disagreements are converged, never an "AI only on
 failure" afterthought. The cross-check is itself subject to the honesty rules below (no peeking at
 the oracle; the blindness boundary still holds).
+
+## ⭐ Bucket T — forked-EDA-tool enhancement (BINDING, owner directive 2026-07-11)
+
+> **We maintain our OWN fork of every OSS EDA tool** (OpenROAD, KLayout, magic,
+> netgen, yosys, ngspice, iverilog, verilator — under `vibe-ic-forks/`). So a
+> tool limitation is NEVER an excuse and NEVER a reason to band-aid the output
+> downstream. If a flow STEP's output is wrong because the tool that STEP uses
+> is wrong, **fix the bug IN THAT FORKED TOOL** so our fork matches what the
+> commercial tool does. "The OSS tool can't do it" is a forbidden phrase — the
+> commercial tool is also software; enhance ours until it can.
+
+**The load-bearing rule — fix at the GENERATING step's tool, not where the
+problem is DETECTED.** Attribute the defect to the step that PRODUCED it, and
+fix the forked tool THAT step uses — do not patch a later step's tool. Worked
+example (commercial_pdk spm, 2026-07-11): 993 MET1 min-area DRC violations were
+*detected* by the DRC step (KLayout/svrf) but *generated* by the routing step
+(OpenROAD `detailed_route`, which silently dropped min-area on via-access pads
+touching fixed pin edges). The fix belongs in **forked OpenROAD's `drt`**
+(`checkMetalShape_minArea`), NOT a KLayout post-process — a KLayout "repair"
+would have been the WRONG place (fixing the detector, not the generator).
+
+**MANDATORY identification fields for EVERY Bucket-T item** (in the recoveries
+record AND the community backlog / PR — enforced by `enhancement_emit.py`):
+
+1. **`step`** — which canonical flow step produced the bad output (e.g.
+   `phase3.detailed_route`, `phase3.gds_streamout`, `phase2.synth`). This
+   determines which forked tool owns the fix (see the step→tool map below).
+2. **`problem`** — what went wrong: the tool's actual vs expected behaviour, in
+   one precise sentence (e.g. "detailed_route leaves via-access pads below the
+   layer min-area and reports 0 violations — a false-clean").
+3. **`golden_sample` + `bad_sample`** — when available, BOTH artifacts: the
+   good/expected output (a commercial-tool result, a hand-fixed layout, or the
+   correct reference) AND the current bad output, as file paths, so the fix is
+   verifiable against a concrete diff. If no golden exists, say so explicitly
+   (`golden_sample: none — <why>`) — never silently omit.
+4. **`tool` + `tool_enhancement`** — the forked tool (`OpenROAD` / `KLayout` /
+   `magic` / `netgen` / `yosys` / `ngspice` / `iverilog` / `verilator`) and the
+   concrete enhancement / guideline to make it do what the commercial tool does
+   (the exact function / file / behaviour to change, and how it should behave).
+
+**Step → forked tool (who owns the fix):**
+
+| Flow step (generator) | Forked tool | Typical Bucket-T fixes |
+|---|---|---|
+| synth / techmap | **yosys** | cell mapping, tri-state, `$readmemh`, unpacked ports |
+| floorplan / place / CTS / **detailed_route** / PDN | **OpenROAD** | min-area enforcement, wide-metal spacing, via enclosure, resizer segfault, PDN spacing |
+| GDS streamout / merge / grid-snap / metal-density fill | **KLayout** | abutting-shape union, off-grid snap, per-layer density fill |
+| DRC / LVS geometry decks | **KLayout** (svrf-native) / **netgen** | SVRF preprocessor, deck fidelity, portless-extraction guard |
+| DRC (magic) / PEX (ext2spice) | **magic** | tech-derived extraction, layer retain |
+| analog sim / Monte-Carlo | **ngspice** | native `.mc`, param-expand |
+| RTL sim / lint | **iverilog** / **verilator** | array-pattern, break, package support |
+
+**How to ship a Bucket-T fix (the proven loop):** (a) reproduce; (b) locate the
+exact function/behaviour in the forked tool source; (c) make the MINIMAL,
+low-regression change (prefer additive; keep the reported-DRC/marker path
+byte-identical so existing PDKs don't regress); (d) rebuild the tool (the fork's
+build tree is configured — incremental builds are fast); (e) re-run the step and
+verify against the golden/DRC ground truth (svrf-native DRC gives a free,
+license-less oracle); (f) commit to the forked-tool repo (`vibe-ic-forks/<tool>`)
+with the step/problem/golden/enhancement recorded; (g) file the community
+backlog / PR carrying fields 1–4. The forked-tool roadmap of known gaps lives in
+`benchmark-data/ic/OSS_EDA_FORK_ROADMAP.md` — add every new Bucket-T item there.
+
+**Bucket T vs the plugin buckets:** Bucket T is the ROOT-CAUSE-LAYER answer (the
+defect is in a forked tool). Buckets A/B/C/D are for defects in the plugin's own
+orchestration/extraction. A plugin-side wiring change may ACCOMPANY a Bucket-T
+fix (e.g. discovering a PDK's layermap so streamout feeds the tool correctly is
+Bucket A; making the router enforce min-area is Bucket T) — but you must not
+substitute a plugin band-aid FOR the forked-tool fix when the tool is the
+generator.
 
 ## The three buckets — every recovery goes into ONE
 
