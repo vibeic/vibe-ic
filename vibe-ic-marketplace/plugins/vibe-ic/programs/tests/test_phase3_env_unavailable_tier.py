@@ -103,16 +103,23 @@ class _FakePdkConfig:
 
 def test_step_drc_env_unavailable_when_calibre_deck_present_but_binary_absent(
         tmp_path: Path) -> None:
+    # 2026-07-11: step_drc now first tries the svrf-native engine (runs the
+    # Calibre .rule deck license-free). Only when BOTH `calibre` AND the
+    # svrf-drc engine are absent does it emit ENV_UNAVAILABLE — and the
+    # missing_tool names both.
     pdk = _FakePdkConfig(
         drc_deck=None,
         calibre_drc="/path/to/calibre_drc.rule")
     with patch(
         "programs.phase3_one_shot_runner._tool_in_path",
         return_value=False,
+    ), patch(
+        "programs.phase3_one_shot_runner._svrf_drc_root",
+        return_value=None,
     ):
         res = step_drc(tmp_path, "top", pdk, "test-container")
     assert res.status == "ENV_UNAVAILABLE"
-    assert res.extras.get("missing_tool") == "calibre"
+    assert res.extras.get("missing_tool") == "calibre|svrf-drc"
     assert "ENV gap" in res.detail
 
 
