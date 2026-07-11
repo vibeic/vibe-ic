@@ -54,6 +54,10 @@ INSTALL_DOC_CANDIDATES = [
     "vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/README.md",
     "vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/INSTALL_GUIDE.md",
     "tools/vibeic-eda/README.md",
+    # Not a doc, but a code file whose image-fallback tags are pinned live
+    # pointers (never :latest) — registered so --set/--bump rewrites them and
+    # --check catches drift the same way as the install docs.
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/fault_atpg_run.py",
 ]
 
 # Files that legitimately carry OLD versions — never checked, never rewritten.
