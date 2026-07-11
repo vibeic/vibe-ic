@@ -220,3 +220,14 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
  && chmod -R a+rX /opt/vibeic-forks
 # restore the base's non-root runtime user
 USER 1000
+
+# --- bare `docker exec` PATH (vibeic enhancement over stock iic-osic-tools) ---
+# The stock base only puts /foss/tools/* on PATH via /etc/profile.d/iic-osic-tools-setup.sh,
+# which runs for LOGIN shells only. A non-login `docker exec <c> bash -c '<tool>'` — the
+# exact idiom used by the eda-tools MCP AND by every `docker exec vibeic-eda <tool>` in the
+# INSTALL_GUIDE / README — therefore could not resolve yosys/openroad/sta/... ("executable
+# file not found in $PATH"). The MCP works around this by prefixing each command with
+# `export PATH=${TOOLS}/...:$PATH`, but a human running the documented probe cannot. Bake the
+# tool dirs into a global ENV PATH so tools resolve WITHOUT a login shell or per-command
+# export. Additive only (login shells still re-prepend via profile.d — harmless duplicate).
+ENV PATH=/headless/.local/bin:/foss/tools/bin:/foss/tools/sak:/foss/tools/kactus2:/foss/tools/klayout:/foss/tools/osic-multitool:${PATH}
