@@ -68,9 +68,13 @@ def test_792_wrapper_keeps_tri_off_the_iverilog_port_faces():
 
 
 def test_additive_reset_wrapper_accepts_reg_driven_original_port(tmp_path):
-    """The load-bearing reproduction (xfail REMOVED — fixed): a TB that
-    procedurally drives the ORIGINAL reset port (as RTLLM/VerilogEval TBs do)
-    elaborates against the wrapper."""
+    """Behavioral check (xfail REMOVED — fixed): a TB that procedurally drives
+    the ORIGINAL reset port (as RTLLM/VerilogEval TBs do) elaborates against
+    the wrapper. NOTE: iverilog >= 12 tolerates even the OLD port-tri emission,
+    so on such hosts this runtime test alone does NOT discriminate old vs new —
+    the version-agnostic defect pin is the emission-SHAPE test above
+    (test_792_wrapper_keeps_tri_off_the_iverilog_port_faces), which fails on
+    the old emitter regardless of the host simulator."""
     if not shutil.which("iverilog"):
         pytest.skip("iverilog not on PATH")
     R = _load()
