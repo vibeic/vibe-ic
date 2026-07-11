@@ -65,6 +65,26 @@ def test_561_eco_output_paths_use_correct_dir():
     assert "/container/project/phase3/stage3/eco/chip_top_eco.v" in tcl
 
 
+def test_eco_reroute_is_bounded_droute_end_iter():
+    # spm clean-run (2026-07-11) — the ECO reroute's detailed_route must be
+    # BOUNDED with -droute_end_iter so a NON-CONVERGING ECO reroute (an
+    # architecturally-unclosable setup gap over-buffering a small / low-util die)
+    # cannot grind its full ~64-iteration optimization budget (~1 min/iter ~ 1 h
+    # of wasted compute the progress-stall watchdog will not kill). The base
+    # signoff route (Step 21) stays UNBOUNDED/converging; only the ECO reroute is
+    # capped, and eco_routed.def is not the signoff route.
+    tcl = _build()
+    assert "detailed_route -droute_end_iter" in tcl, \
+        "ECO reroute must cap detailed_route optimization iterations"
+    assert f"-droute_end_iter {R._ECO_REROUTE_MAX_DROUTE_ITERS}" in tcl
+    # exactly ONE detailed_route in the ECO reroute, and it is the bounded one —
+    # the ECO tcl must NOT leave an unbounded bare `{detailed_route}` that grinds.
+    assert tcl.count("detailed_route") == 1
+    assert "{detailed_route}" not in tcl
+    # the cap is a small positive bound (front-loads recovery, drops the futile tail)
+    assert 1 <= R._ECO_REROUTE_MAX_DROUTE_ITERS <= 20
+
+
 def test_561_canonicalize_emits_eco_tcl(tmp_path):
     # step_canonicalize_artefacts must write eco_timing_repair.tcl when pnr_out exists
     # Set up a minimal project tree so the function can run far enough

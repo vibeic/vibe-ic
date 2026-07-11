@@ -274,3 +274,46 @@ def test_flow_compliance_yosys_gate_help_lists_flag():
                        capture_output=True, text=True)
     assert r.returncode == 0
     assert "--skip-yosys-gates" in r.stdout
+
+
+def test_missing_required_hint_resolves_phase1_layout(tmp_path):
+    """spm clean-run (2026-07-11) — the completion-audit's
+    `missing_required_artifacts` HINT must resolve Phase-1 artifacts at their
+    canonical phase1/ (reports/phase1/) locations, not only the legacy root
+    layout. Before the fix, a from-scratch run whose Phase 1 wrote
+    generated_docs → phase1/generated_docs, extraction_patterns.json → phase1/,
+    and the coverage reports → reports/phase1/ was FALSELY told those 3 were
+    'missing'. Only the genuinely-absent optional waivers.json should remain."""
+    (tmp_path / "phase1" / "generated_docs").mkdir(parents=True)
+    (tmp_path / "reports" / "phase1").mkdir(parents=True)
+    (tmp_path / "phase1" / "generated_docs" / "L1_DATASHEET.json").write_text("{}")
+    (tmp_path / "phase1" / "extraction_patterns.json").write_text("{}")
+    (tmp_path / "reports" / "phase1"
+     / "extraction_coverage_report.md").write_text("# coverage\n")
+    (tmp_path / "reports" / "phase1"
+     / "extraction_coverage_report.json").write_text("{}")
+
+    _run(tmp_path, ("--strict",))  # verdict is FAIL (sparse project) — irrelevant
+    audit = tmp_path / "reports" / "audit" / "phase23_completion_audit.json"
+    assert audit.is_file(), "completion audit JSON must be emitted"
+    missing = json.loads(audit.read_text())["missing_required_artifacts"]
+    # The 3 artifacts that DO exist under phase1/ must NOT be flagged missing.
+    assert "generated_docs" not in missing
+    assert "extraction_patterns.json" not in missing
+    assert "reports/extraction_coverage_report.md" not in missing
+    assert "reports/extraction_coverage_report.json" not in missing
+    # waivers.json is genuinely absent (root-only, optional) → still listed.
+    assert "waivers.json" in missing
+
+
+def test_missing_required_hint_flags_genuinely_absent(tmp_path):
+    """Complement: when a Phase-1 artifact exists at NEITHER the phase1/ nor the
+    root layout, the hint MUST still flag it (the fix widens WHERE we look, it
+    does not suppress a genuine absence)."""
+    _run(tmp_path, ("--strict",))  # empty project — nothing present
+    audit = tmp_path / "reports" / "audit" / "phase23_completion_audit.json"
+    assert audit.is_file()
+    missing = json.loads(audit.read_text())["missing_required_artifacts"]
+    for label in ("generated_docs", "extraction_patterns.json", "waivers.json",
+                  "reports/extraction_coverage_report.md"):
+        assert label in missing
