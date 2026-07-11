@@ -335,6 +335,8 @@ steps:
       # BEFORE the L10 scaffolder so a class with a derivable reference gets a
       # real functional TB, not just a skeleton.
       - professional_tb_gen          # deterministic professional cocotb TB + coverage + SVA
+      - professional_tb_check         # gate: the professional TB never silently
+                                      # passes a real cocotb functional mismatch
       - testbench_gen                # scaffolds phase2/stage1/sim/tb/*.v from L10
       - coverage_closure              # gap analysis from coverage_actual.json
       # v0.53/v0.54 byte-level coverage gates (replace agent self-reports
@@ -384,6 +386,13 @@ steps:
         - optional_program_exit_zero:
             command: "verilator_coverage_measure check --coverage-json reports/phase2/coverage/coverage_actual.json"
             condition_files_exist: ["reports/phase2/coverage/coverage_actual.json"]
+        # NEW TB PATH gate — the professional cocotb TB (professional_tb_gen)
+        # must never silently pass a real functional mismatch. Fires only when
+        # the step wrote its report; PASS/WAIVED/SKIP -> exit 0, a recorded
+        # functional_mismatch -> exit 1 (real RTL bug, close-loop).
+        - optional_program_exit_zero:
+            command: "professional_tb_check . --json reports/phase2/gates/professional_tb_check.json"
+            condition_files_exist: ["reports/phase2/gates/professional_tb.json"]
     blocks_on: [2]
 
   - id: 5

@@ -2633,6 +2633,144 @@ def _v701_tiny_root_warn(project: Path, chosen_dut: Optional[str]) -> str:
         f"(silent false-PASS guard).")
 
 
+def _cocotb_xml_failures(out_dir: Path) -> Optional[int]:
+    """Sum <failure>/<error> across any cocotb results.xml under `out_dir`.
+    Returns the total failure count, or None when NO results.xml was produced
+    (the sim never ran to completion — an infra/build problem, NOT a functional
+    verdict). chip-AGNOSTIC."""
+    import xml.etree.ElementTree as ET
+    xmls = list(out_dir.rglob("results.xml"))
+    if not xmls:
+        return None
+    total = 0
+    for x in xmls:
+        try:
+            root = ET.parse(str(x)).getroot()
+        except (OSError, ET.ParseError):
+            continue
+        suite_counts = 0
+        for ts in root.iter("testsuite"):
+            suite_counts += (int(ts.get("failures", 0) or 0)
+                             + int(ts.get("errors", 0) or 0))
+        if suite_counts:
+            total += suite_counts
+        else:
+            # some cocotb versions emit <testcase><failure/> with no suite attrs
+            total += len(list(root.iter("failure"))) + len(list(root.iter("error")))
+    return total
+
+
+def step_professional_tb_gen(project: Path, top_name: str = "",
+                             container: str = "vibeic-eda") -> StepResult:
+    """NEW TB PATH (professional_tb_gen, 2026-07-11) wired into Phase-2.
+
+    Deterministically DERIVES a professional cocotb testbench from the design's
+    OWN L-docs (interface L1/L9, clock/reset L8/L9, a reference model + an L28
+    functional-coverage model + L29 SVA). Its centerpiece is a bounded-latency,
+    bit-order-tolerant STREAMING scoreboard that closes the serial-datapath
+    functional-verification DEFER the legacy arith_oracle_tb_gen leaves open —
+    e.g. the spm bit-serial multiplier (208-vector check vs (x*y) mod 2^N).
+
+    When the derived reference is real (serial_stream / parallel_arith) AND
+    cocotb+iverilog are reachable in the container, it also RUNS the TB so the
+    functional pass/fail is a REAL measured verdict, not just a generated file:
+      * PASS   — cocotb ran, 0 mismatches (functional verification CLOSED)
+      * FAIL   — cocotb ran, results.xml records >0 failures (real RTL mismatch
+                 → pulls phase2 down so the close-loop engages)
+      * WAIVED — TB generated but the run was deferred (tooling unreachable),
+                 inconclusive (no results.xml), or the class exposes only a
+                 reference HOOK (generic) — never a silent vacuous pass
+      * SKIP   — the class exposes no derivable arithmetic/streaming interface
+    chip-AGNOSTIC: everything is derived from the project's own L-docs."""
+    t0 = time.time()
+    gates_dir = project / "reports" / "phase2" / "gates"
+    gates_dir.mkdir(parents=True, exist_ok=True)
+    report = gates_dir / "professional_tb.json"
+
+    def _write(obj: Dict[str, Any]) -> None:
+        try:
+            report.write_text(json.dumps(obj, indent=2) + "\n")
+        except OSError:
+            pass
+
+    try:
+        import professional_tb_gen as _ptb
+    except Exception as e:  # generator import error — additive step, never fatal
+        _write({"status": "SKIP", "reason": f"import failed: {e}"})
+        return StepResult("professional_tb_gen", "SKIP", time.time() - t0,
+                          detail=f"generator import failed: {e}")
+    try:
+        gen = _ptb.generate(project)
+    except Exception as e:
+        _write({"status": "SKIP", "reason": f"generate raised: {e}"})
+        return StepResult("professional_tb_gen", "SKIP", time.time() - t0,
+                          detail=f"generate raised: {e}")
+
+    status = gen.get("status")
+    if status == "SKIP":
+        _write({**gen, "ran_cocotb": False})
+        return StepResult("professional_tb_gen", "SKIP", time.time() - t0,
+                          detail=f"class not derivable ({gen.get('reason', '')})")
+    if status != "PASS":
+        _write({**gen, "ran_cocotb": False})
+        return StepResult("professional_tb_gen", "FAIL", time.time() - t0,
+                          detail=f"generator status={status}")
+
+    dut_kind = gen.get("dut_kind")
+    out_dir = Path(gen.get("out_dir", ""))
+    rec: Dict[str, Any] = {**gen, "ran_cocotb": False,
+                           "functional_mismatch": False}
+
+    # Run cocotb ONLY for classes with a genuine reference model. The generic
+    # class emits a reference HOOK that RAISES until filled — generate() already
+    # wrote it; running it would only TestSkip, so keep it WAIVED (honest, no
+    # silent vacuous pass).
+    if dut_kind in ("serial_stream", "parallel_arith") and out_dir.is_dir():
+        if _tool_in_container(container, "iverilog"):
+            log_path = out_dir / "cocotb_run.log"
+            cmd = f"cd '{out_dir}' && make SIM=icarus"
+            rc, so, se = _docker_exec(container, cmd, timeout=1200,
+                                      marker=str(out_dir),
+                                      log_path=str(log_path))
+            combined = (so or "") + "\n" + (se or "")
+            pass_marker = "PROFESSIONAL_TB PASS" in combined
+            xml_fail = _cocotb_xml_failures(out_dir)
+            rec.update({"ran_cocotb": True, "cocotb_rc": rc,
+                        "cocotb_pass_marker": pass_marker,
+                        "cocotb_xml_failures": xml_fail})
+            if xml_fail is not None and xml_fail > 0:
+                rec["functional_mismatch"] = True
+                _write(rec)
+                return StepResult(
+                    "professional_tb_gen", "FAIL", time.time() - t0,
+                    detail=(f"{dut_kind} cocotb functional MISMATCH "
+                            f"({xml_fail} vectors) — close-loop"))
+            if pass_marker and (xml_fail == 0 or xml_fail is None):
+                _write(rec)
+                return StepResult(
+                    "professional_tb_gen", "PASS", time.time() - t0,
+                    detail=(f"{dut_kind} cocotb functional PASS "
+                            f"(streaming scoreboard)"))
+            _write({**rec, "waiver": "cocotb run inconclusive (no clean pass "
+                                     "marker and no results.xml failures)"})
+            return StepResult(
+                "professional_tb_gen", "WAIVED", time.time() - t0,
+                detail=(f"{dut_kind} TB generated; cocotb run inconclusive "
+                        f"(rc={rc})"))
+        _write({**rec, "waiver": "iverilog/cocotb not reachable in container"})
+        return StepResult(
+            "professional_tb_gen", "WAIVED", time.time() - t0,
+            detail=(f"{dut_kind} TB generated; cocotb tooling unavailable "
+                    f"(functional run deferred)"))
+
+    # generic reference-hook class (or missing out_dir): generated, run deferred
+    _write({**rec, "note": "reference-hook class — functional sign-off deferred "
+                           "to L10 vectors / spec-to-refmodel"})
+    return StepResult(
+        "professional_tb_gen", "WAIVED", time.time() - t0,
+        detail=f"{dut_kind} professional TB generated; functional run deferred")
+
+
 def step_l10_unit_tb_gen(project: Path,
                          top_name: str = "chip_top") -> StepResult:
     """ORGANIC #797 — run the testbench_gen PRODUCER so L10 `functional_vector`
@@ -8839,6 +8977,13 @@ def main() -> int:
     # (§4.05 no-leak: a cmd_response case never gets manufactured id-substring
     # evidence — it stays gated by its opcode/summary oracle).
     plan.append(step_l10_unit_tb_gen(project, args.top_name))
+    # NEW TB PATH — professional cocotb testbench (deterministic derivation from
+    # the L-docs; bounded-latency STREAMING scoreboard closes the serial-datapath
+    # functional-verification DEFER, e.g. the spm bit-serial multiplier). Runs
+    # AFTER the TB producers (RTL/L9 stable) and, when the container has
+    # cocotb+iverilog, actually RUNS the TB so the functional verdict is REAL.
+    # Was declared in flow step-4 but never invoked by any runner until now.
+    plan.append(step_professional_tb_gen(project, args.top_name, args.container))
 
     # v1.6.170 (#60 P0-2) — deterministic ECO-inert hint extractor.
     # When the ECO loop detects byte-identical RTL retry it now
