@@ -67,6 +67,25 @@ def test_792_wrapper_keeps_tri_off_the_iverilog_port_faces():
     assert "`ifndef YOSYS\n    tri" not in w
 
 
+def test_792_width_carrying_face_orders_tri_before_range():
+    """Step-2.7 reproduced LOW: the net-type must precede the range —
+    `input tri0 [0:0] r` is legal, `input [0:0] tri0 r` is a syntax error
+    (an ordering bug inherited from the old emission, verilator-facing)."""
+    R = _load()
+    w = R.emit_variant_alias_wrapper(
+        "dut__rcvar_inner",
+        [("input", "", "clk"), ("input", "[0:0]", "reset"),
+         ("output", "[7:0]", "count")],
+        {}, wrapper_name="dut", additive_reset_map={"reset": "rst"})
+    header = w.split(");", 1)[0]
+    lines = [ln.strip() for ln in header.splitlines()]
+    for i, ln in enumerate(lines):
+        if ln.startswith(("tri0", "tri1")):
+            assert lines[i + 2].startswith("[0:0]"), (
+                f"range must FOLLOW the tri qualifier, got: {lines[i:i+3]}")
+    assert "[0:0] tri0" not in header and "[0:0]\ntri0" not in header
+
+
 def test_additive_reset_wrapper_accepts_reg_driven_original_port(tmp_path):
     """Behavioral check (xfail REMOVED — fixed): a TB that procedurally drives
     the ORIGINAL reset port (as RTLLM/VerilogEval TBs do) elaborates against

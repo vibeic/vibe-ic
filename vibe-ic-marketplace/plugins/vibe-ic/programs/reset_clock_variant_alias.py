@@ -941,6 +941,11 @@ def emit_variant_alias_wrapper(core_module: str,
     combine. The `_NET_QUAL_RE` port parser skips the net-type, and the port
     NAME appears only once per declaration (the directive wraps only the
     qualifier token) so a take-every-arm parse never doubles the port.
+    Disclosed limitation: under event-driven simulators an UNDRIVEN face now
+    reads `z` when observed directly (hierarchically / in a VCD) — the pulled
+    INACTIVE value lives on the internal `__rcvar_pull` net; the whitebox
+    delivery context suppresses the additive map entirely (see
+    design_one_shot_runner), so no hidden whitebox harness observes the face.
     Disjoint from `rename_map`."""
     additive = dict(additive_reset_map or {})
     for orig, new in list(rename_map.items()) + list(additive.items()):
@@ -1063,9 +1068,14 @@ def emit_variant_alias_wrapper(core_module: str,
             # (unchanged). The port NAME still appears ONCE per decl (the
             # directive wraps only the tri token) so a take-every-arm parse
             # never doubles the port.
+            # net-type BEFORE the range (`input tri0 [0:0] r` is the legal
+            # order; `input [0:0] tri0 r` is a syntax error — an inherited
+            # ordering bug from the old emission, now fixed)
             for face in (name, canon):
                 decls.append(
-                    f"    {direction}{w}\n`ifdef VERILATOR\n    {tri}\n`endif\n"
+                    f"    {direction}\n`ifdef VERILATOR\n    {tri}\n`endif\n"
+                    f"   {w} {face}" if w else
+                    f"    {direction}\n`ifdef VERILATOR\n    {tri}\n`endif\n"
                     f"    {face}")
             combine_wires.append(
                 f"`ifdef VERILATOR\n"
