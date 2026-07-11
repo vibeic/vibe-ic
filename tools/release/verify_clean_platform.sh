@@ -39,8 +39,9 @@ done
 if command -v iverilog >/dev/null 2>&1; then ok "iverilog present ($(iverilog -V 2>&1 | head -1))"
 else bad "iverilog MISSING (required for functional pass@1)"; fi
 if command -v docker >/dev/null 2>&1; then
-  if docker image ls 2>/dev/null | grep -qiE 'iic-osic|osic-tools'; then ok "IIC-OSIC-TOOLS docker image present"
-  else skip "docker present but IIC-OSIC-TOOLS image not found (pull it for Phase 3 PnR/analog)"; fi
+  if docker image ls 2>/dev/null | grep -qiE 'vibeic-eda'; then ok "vibeic-eda docker image present (forked+enhanced EDA toolchain)"
+  elif docker image ls 2>/dev/null | grep -qiE 'iic-osic|osic-tools'; then ok "IIC-OSIC-TOOLS docker image present (stock base fallback — build vibeic-eda for the fork enhancements)"
+  else skip "docker present but no EDA image found (build tools/vibeic-eda/Dockerfile → vibeic-eda, or pull IIC-OSIC-TOOLS, for Phase 3 PnR/analog)"; fi
 else skip "docker not found (only functional pass@1 via iverilog is verified here)"; fi
 
 # ── Phase 1 — plugin structure ──────────────────────────────────────────────

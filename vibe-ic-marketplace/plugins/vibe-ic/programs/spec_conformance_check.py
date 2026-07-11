@@ -1218,7 +1218,8 @@ _HOLD_REQUIRE_RE = __import__('re').compile(
     r'remain(?:s|ed)?)\b[^.!?]{0,40}?'
     r'\b(?:peak|trough|maximum|minimum|max|min|top|bottom|extreme|apex)\b'
     r'|\b(?:peak|trough|maximum|minimum|max|min|top|bottom|extreme|apex)\b'
-    r'[^.!?]{0,40}?\b(?:hold(?:s|ing)?|held|dwell\w*|paused?)\b',
+    r'[^.!?]{0,40}?\b(?:hold(?:s|ing)?|held|dwell(?:s|ing)?|pause(?:s|d)?|'
+    r'stay(?:s|ed)?|remain(?:s|ed)?)\b',
     __import__('re').IGNORECASE)
 # §4-E "explicit spec OVERRIDES genre convention": the peak/trough HOLD is a
 # GENRE DEFAULT that fires only when the prose is silent (or merely
