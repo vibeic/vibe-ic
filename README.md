@@ -50,12 +50,25 @@ checkers (no fabrication, no hallucinated PASS).
 
 ### 1. EDA toolchain (Docker)
 
-All open-source EDA tools (Yosys, OpenROAD, KLayout, Magic, ngspice, …)
-run inside the `hpretl/iic-osic-tools` image:
+All open-source EDA tools (Yosys, OpenROAD, KLayout, Magic, ngspice, …) run
+inside a Docker container named `vibeic-eda` (the name the MCP server expects
+via `EDA_CONTAINER`). **Recommended — the enhanced fork image** (patched
+OpenROAD / yosys / ngspice / magic / netgen / iverilog / klayout with
+gatekeeper-verified FAIL→PASS fixes; scoreboard in `tools/vibeic-eda/FIX_STATUS.md`):
 
 ```bash
-docker pull hpretl/iic-osic-tools:latest
+docker pull ghcr.io/vibeic/vibeic-eda:0.2.12   # or build: docker build -t vibeic-eda:0.2.12 tools/vibeic-eda
+docker rm -f vibeic-eda 2>/dev/null || true    # "name already in use"? drop the old container first
+docker run -d --name vibeic-eda \
+  -v "$HOME/AI_IC_design:$HOME/AI_IC_design:rw" \
+  -v "$HOME/AI_IC_design:/foss/designs:rw" \
+  ghcr.io/vibeic/vibeic-eda:0.2.12 --skip sleep infinity
+docker exec vibeic-eda yosys --version         # sanity check — should print a version
 ```
+
+Stock fallback: `docker pull hpretl/iic-osic-tools:latest` (run it named `vibeic-eda`).
+Already running an older tag? Swap without retyping mounts: `tools/vibeic-eda/restart-eda.sh 0.2.12`.
+See **[docs/INSTALL.md](docs/INSTALL.md)** for the required bind-mounts (Phase 3 needs the identity mount).
 
 ### 2. Install the `vibe-ic` plugin (one step)
 
