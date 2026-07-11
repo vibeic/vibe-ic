@@ -189,8 +189,15 @@ RUN mkdir -p /headless/.klayout/pymacros \
 # overrides the base's stock cocotb with our fork. sby installs its driver + libs into
 # /usr/local (it drives vibeic/yosys for the SVA-bind / formal path). Build isolation
 # stays ON so cocotb's C-extension build pulls its own build deps.
+# cocotb 2.x's `cocotb/simulator` extension #include's <Python.h>; the base ships the
+# python3.12 runtime but NOT the dev headers, so install python3-dev first (g++/gcc/make
+# are already in the base). Otherwise the editable build dies with
+# "fatal error: Python.h: No such file or directory".
 COPY --from=tb-src /tb /opt/vibeic-forks
-RUN python3 -m pip install --break-system-packages \
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      python3-dev \
+ && rm -rf /var/lib/apt/lists/* \
+ && python3 -m pip install --break-system-packages \
       -e /opt/vibeic-forks/cocotb \
       -e /opt/vibeic-forks/cocotb-coverage \
       -e /opt/vibeic-forks/pyuvm \
