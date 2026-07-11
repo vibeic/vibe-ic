@@ -144,23 +144,6 @@ def test_status_json_passes_full_flag(monkeypatch):
     assert seen == {"project": "/p", "full": True}
 
 
-def test_status_json_auto_uses_collect_auto(monkeypatch):
-    import types
-    seen = {}
-    mod = types.ModuleType("flow_dashboard_data")
-    mod.collect = lambda project, full: {"mode": "lightweight", "summary": {}, "phases": []}
-
-    def fake_auto(project):
-        seen["project"] = project
-        return {"mode": "auto:full", "summary": {"total": 1, "running": 0}, "phases": []}
-
-    mod.collect_auto = fake_auto
-    monkeypatch.setitem(sys.modules, "flow_dashboard_data", mod)
-    data = json.loads(fdw.status_json("/p", False, auto=True).decode("utf-8"))
-    assert data["mode"] == "auto:full"
-    assert seen["project"] == "/p"
-
-
 def test_status_json_never_raises_on_collect_error(monkeypatch):
     def boom(project, full):
         raise RuntimeError("kaboom")
@@ -272,7 +255,7 @@ def _install_fake_fleet(monkeypatch, fn):
 
 
 def test_fleet_json_returns_valid_json_with_contract_keys(monkeypatch):
-    _install_fake_fleet(monkeypatch, lambda projects, full, root, auto=False: _FLEET_SAMPLE)
+    _install_fake_fleet(monkeypatch, lambda projects, full, root: _FLEET_SAMPLE)
     raw = fdw.fleet_json("/abs/root", False)
     assert isinstance(raw, (bytes, bytearray))
     data = json.loads(raw.decode("utf-8"))
@@ -285,7 +268,7 @@ def test_fleet_json_returns_valid_json_with_contract_keys(monkeypatch):
 def test_fleet_json_passes_root_and_full(monkeypatch):
     seen = {}
 
-    def fake(projects, full, root, auto=False):
+    def fake(projects, full, root):
         seen["projects"] = projects
         seen["full"] = full
         seen["root"] = root
@@ -296,20 +279,8 @@ def test_fleet_json_passes_root_and_full(monkeypatch):
     assert seen == {"projects": [], "full": True, "root": "/abs/root"}
 
 
-def test_fleet_json_passes_auto_flag(monkeypatch):
-    seen = {}
-
-    def fake(projects, full, root, auto=False):
-        seen["auto"] = auto
-        return {"kind": "fleet", "count": 0, "agg": {}, "fleet": []}
-
-    _install_fake_fleet(monkeypatch, fake)
-    fdw.fleet_json("/abs/root", False, auto=True)
-    assert seen["auto"] is True
-
-
 def test_fleet_json_never_raises_on_error(monkeypatch):
-    def boom(projects, full, root, auto=False):
+    def boom(projects, full, root):
         raise RuntimeError("kaboom")
 
     _install_fake_fleet(monkeypatch, boom)
@@ -321,6 +292,167 @@ def test_fleet_json_never_raises_when_provider_missing(monkeypatch):
     monkeypatch.setitem(sys.modules, "flow_dashboard_data", None)
     data = json.loads(fdw.fleet_json("/abs/root", False).decode("utf-8"))
     assert "error" in data
+
+
+# ---------------------------------------------------------------------------
+# Per-IC "Run full" button model (replaces the removed auto mode)
+# ---------------------------------------------------------------------------
+def test_fleet_page_has_run_full_button():
+    html = fdw.build_fleet_page()
+    assert "Run full" in html
+    assert "/api/card?project=" in html
+    assert "runFull" in html and "pendingFull" in html
+    # a plain lightweight card shows NO "lightweight" mode text
+    assert "setText(mb, c.mode" not in html
+
+
+def _install_provider(monkeypatch, **members):
+    import types
+    mod = types.ModuleType("flow_dashboard_data")
+    for k, v in members.items():
+        setattr(mod, k, v)
+    monkeypatch.setitem(sys.modules, "flow_dashboard_data", mod)
+
+
+def _fake_card_and_detail(full_ok, project="/abs/root/spm", fp=(["a.v"], [["1", "pass"]])):
+    fp = [list(fp[0]), [list(x) for x in fp[1]]]
+    card = {"project": project, "project_name": "spm", "full": bool(full_ok),
+            "fingerprint": fp, "summary": {"total": 1}, "phases_mini": [], "running_steps": []}
+    detail = {"project": project, "project_name": "spm",
+              "mode": "full" if full_ok else "lightweight",
+              "summary": {"total": 1, "resolved": 1}, "phases": []}
+    return lambda p, full=True: (dict(card), dict(detail), fp)
+
+
+def test_card_json_runs_full_and_pins_card_and_detail(monkeypatch):
+    fdw._CARD_FULL_CACHE.clear()
+    _install_provider(monkeypatch, collect_card_and_detail=_fake_card_and_detail(True))
+    data = json.loads(fdw.card_json("/abs/root", "/abs/root/spm").decode("utf-8"))
+    assert data["full"] is True
+    pinned = fdw._CARD_FULL_CACHE.get("/abs/root/spm")
+    assert pinned is not None and len(pinned) == 3   # (fp, card, detail)
+    assert pinned[2]["mode"] == "full"               # detail cached too
+    fdw._CARD_FULL_CACHE.clear()
+
+
+def test_card_json_does_not_pin_a_fallback(monkeypatch):
+    fdw._CARD_FULL_CACHE.clear()
+    _install_provider(monkeypatch, collect_card_and_detail=_fake_card_and_detail(False))
+    json.loads(fdw.card_json("/abs/root", "/abs/root/spm").decode("utf-8"))
+    assert "/abs/root/spm" not in fdw._CARD_FULL_CACHE  # non-authoritative never pinned
+
+
+def test_detail_status_json_serves_pinned_full(monkeypatch):
+    fdw._CARD_FULL_CACHE.clear()
+    fp = [["a.v"], [["1", "pass"]]]
+    detail_full = {"project": "/abs/root/spm", "mode": "full",
+                   "summary": {"total": 1, "resolved": 1}, "phases": []}
+    fdw._CARD_FULL_CACHE["/abs/root/spm"] = (fdw._fp_key(fp), {"full": True}, detail_full)
+
+    # provider returns a lightweight collect whose fingerprint MATCHES the pin
+    def collect(project, full):
+        return {"phases": [{"steps": [{"id": "1", "status": "pass",
+                "outputs": [{"exists": True, "rel": "a.v"}]}]}]}
+    import flow_dashboard_data as real
+    _install_provider(monkeypatch, collect=collect,
+                      _fingerprint_from=real._fingerprint_from)
+    data = json.loads(fdw.detail_status_json("/abs/root/spm").decode("utf-8"))
+    assert data["mode"] == "full" and data["summary"]["resolved"] == 1  # pinned detail
+    fdw._CARD_FULL_CACHE.clear()
+
+
+def test_detail_status_json_lightweight_when_unpinned(monkeypatch):
+    fdw._CARD_FULL_CACHE.clear()
+
+    def collect(project, full):
+        return {"mode": "lightweight", "summary": {"total": 1, "resolved": 0}, "phases": []}
+
+    _install_provider(monkeypatch, collect=collect)
+    data = json.loads(fdw.detail_status_json("/abs/root/spm").decode("utf-8"))
+    assert data["mode"] == "lightweight"
+
+
+def test_fleet_json_pins_a_ran_card(monkeypatch):
+    fdw._CARD_FULL_CACHE.clear()
+    fp = [["a.v"], [["1", "pass"]]]
+    light = {"project": "/abs/root/spm", "project_name": "spm", "full": False,
+             "fingerprint": fp, "summary": {"total": 1}, "phases_mini": [], "running_steps": []}
+    other = {"project": "/abs/root/x", "project_name": "x", "full": False,
+             "fingerprint": [["b.v"], []], "summary": {"total": 1}, "phases_mini": [], "running_steps": []}
+    _install_provider(monkeypatch, collect_fleet=lambda projects, full, root: {
+        "kind": "fleet", "count": 2, "agg": {}, "fleet": [dict(light), dict(other)]})
+    pinned = dict(light); pinned["full"] = True; pinned["summary"] = {"total": 1, "resolved": 1}
+    fdw._CARD_FULL_CACHE["/abs/root/spm"] = (fdw._fp_key(fp), pinned)
+    data = json.loads(fdw.fleet_json("/abs/root", False).decode("utf-8"))
+    got = {c["project_name"]: c["full"] for c in data["fleet"]}
+    assert got == {"spm": True, "x": False}
+    fdw._CARD_FULL_CACHE.clear()
+
+
+def test_fleet_json_expires_pin_when_tree_moves(monkeypatch):
+    fdw._CARD_FULL_CACHE.clear()
+    # server card fingerprint DIFFERS from the pinned one → the build moved,
+    # so the card reverts to lightweight + button (not the stale full result).
+    server = {"project": "/abs/root/spm", "project_name": "spm", "full": False,
+              "fingerprint": [["a.v", "c.v"], [["1", "pass"]]],
+              "summary": {"total": 1}, "phases_mini": [], "running_steps": []}
+    _install_provider(monkeypatch, collect_fleet=lambda projects, full, root: {
+        "kind": "fleet", "count": 1, "agg": {}, "fleet": [dict(server)]})
+    stale = dict(server); stale["full"] = True
+    fdw._CARD_FULL_CACHE["/abs/root/spm"] = (fdw._fp_key([["a.v"], [["1", "pass"]]]), stale)
+    data = json.loads(fdw.fleet_json("/abs/root", False).decode("utf-8"))
+    assert data["fleet"][0]["full"] is False  # reverted
+    fdw._CARD_FULL_CACHE.clear()
+
+
+def test_live_fleet_card_route(monkeypatch, tmp_path):
+    fdw._CARD_FULL_CACHE.clear()
+    root = str(tmp_path)
+    projA = str(tmp_path / "chipA")
+    def fake_card_and_detail(p, full=True):
+        card = {"project": p, "project_name": "chipA", "full": bool(full),
+                "fingerprint": [[], []], "summary": {"total": 1},
+                "phases_mini": [], "running_steps": []}
+        detail = {"project": p, "project_name": "chipA", "mode": "full",
+                  "summary": {"total": 1, "resolved": 1}, "phases": []}
+        return card, detail, [[], []]
+
+    _install_provider(
+        monkeypatch,
+        discover_projects=lambda r: [projA],
+        collect_card_and_detail=fake_card_and_detail,
+        collect_fleet=lambda projects, full, root: {
+            "kind": "fleet", "count": 1, "agg": {"ic_count": 1}, "fleet": [{
+                "project": projA, "project_name": "chipA", "full": False,
+                "fingerprint": [[], []], "summary": {"total": 1},
+                "phases_mini": [], "running_steps": []}]},
+    )
+    try:
+        handler = fdw.make_handler("", False, fleet=root)
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    except OSError:
+        import pytest
+        pytest.skip("cannot bind a localhost socket in this environment")
+    port = httpd.server_address[1]
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    try:
+        from urllib.parse import quote
+        base = "http://127.0.0.1:%d" % port
+        with urllib.request.urlopen(base + "/api/card?project=" + quote(projA), timeout=5) as r:
+            card = json.loads(r.read().decode("utf-8"))
+            assert card["project_name"] == "chipA" and card["full"] is True
+        # non-member project refused
+        try:
+            urllib.request.urlopen(base + "/api/card?project=/etc", timeout=5)
+            raised = False
+        except urllib.error.HTTPError as e:
+            raised = (e.code == 404)
+        assert raised, "non-member /api/card must be 404"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        fdw._CARD_FULL_CACHE.clear()
 
 
 def test_is_allowed_project_only_accepts_fleet_members(tmp_path):

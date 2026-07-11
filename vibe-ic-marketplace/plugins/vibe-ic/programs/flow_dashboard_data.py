@@ -82,17 +82,22 @@ _STATUSES = (
 )
 
 # Two orthogonal axes:
-#   completion (DONE) — was the step reached AND judged? Everything EXCEPT
-#                       running/pending is DONE ("resolved"): the flow got there
-#                       and produced a verdict, whatever that verdict is.
-#   outcome           — WHAT the verdict was: pass / fail / skipped / waived /
-#                       na / external / partial.
-# So a fail, a disclosed skip, an n/a and an external step are ALL "done" — they
-# were evaluated. Only running (in progress) and pending (not reached) are not.
+#   completion (DONE) — did the step reach a TERMINAL, JUDGED disposition? A
+#                       step is DONE ("resolved") only if it ran to a verdict OR
+#                       was decided not to run: pass / fail / skipped / waived /
+#                       na / external. A *fail* is Done (it ran and was judged).
+#   outcome           — WHAT that disposition was.
+# NOT done ("unresolved"): running (in progress), pending (not reached), partial
+# (started but outputs incomplete) and missing (the expected deliverable is
+# absent — the step did not complete). `missing`/`partial` are deliberately NOT
+# Done: a step whose output never materialized has not been "done", even though
+# a --full compliance pass renders a definite MISSING verdict for it. (This is
+# why running --full must not inflate Done: a MISSING gate verdict is a gap, not
+# a completion.)
 _RESOLVED = frozenset(
-    {"pass", "skipped", "waived", "fail", "missing", "partial", "na", "external"}
+    {"pass", "skipped", "waived", "fail", "na", "external"}
 )
-_UNRESOLVED = frozenset({"running", "pending"})
+_UNRESOLVED = frozenset({"running", "pending", "partial", "missing"})
 
 # A present output touched within this many seconds is taken as evidence a
 # writer is ACTIVELY producing this step right now -> "running". Older than
@@ -565,6 +570,34 @@ def _p0_preflight_passed(project: Path) -> bool:
     return synth.is_dir() and any(synth.glob("*.v"))
 
 
+def _reclassify_inapplicable_lane(sid, step, status, detail, project_path,
+                                  analog_applicable, silicon_received):
+    """Reclassify a "no real work" status for a lane that does NOT apply to THIS
+    design. Lane applicability is a property of the design, NOT of which mode
+    observed it — so this MUST run in both lightweight and --full mode, and the
+    two modes must AGREE. Without it, --full marks the analog A1-A9 / mixed
+    M1-M4 lanes of a pure-digital chip as MISSING (a false gap) and the
+    off-machine manufacturing 40-44 lanes as SKIPPED, where lightweight
+    correctly calls them `na` / `external`. A real pass/fail/waive stands."""
+    pk = _phase_key_for(step)
+    # P0 (structural pre-flight umbrella) has no artifact of its own: a produced
+    # synth netlist proves it ran and passed.
+    if sid == "P0" and status == "pending" and _p0_preflight_passed(project_path):
+        return "pass", "structural pre-flight passed (flow reached synthesis)"
+    # For a non-applicable lane, ANY "nothing meaningful happened" verdict
+    # (pending / missing / a disclosed skip) is more honestly named na/external.
+    _NO_WORK = ("pending", "missing", "skipped")
+    if status not in _NO_WORK:
+        return status, detail
+    if pk in ("analog", "mixed") and not analog_applicable:
+        return "na", ("not applicable — design declares no analog / "
+                      "mixed-signal content")
+    if pk == "manufacturing" and not silicon_received:
+        return "external", ("external — off-machine (fab / wafer-sort / "
+                            "packaging / final-test / qual)")
+    return status, detail
+
+
 def collect(project, full: bool = False) -> dict:
     """Collect the live dashboard data for `project`.
 
@@ -623,22 +656,13 @@ def collect(project, full: bool = False) -> dict:
                 project_path, step, n_present, n_total, primary_present,
                 newest_mtime,
             )
-            # Honesty refinement: a bare `pending` is misleading for lanes that
-            # will NEVER run for THIS design. Reclassify (matches --full's
-            # SKIPPED-CONDITION but names the reason at a glance).
-            if status == "pending":
-                pk = _phase_key_for(step)
-                if sid == "P0" and _p0_preflight_passed(project_path):
-                    status, detail = "pass", (
-                        "structural pre-flight passed (flow reached synthesis)")
-                elif pk in ("analog", "mixed") and not analog_applicable:
-                    status, detail = "na", (
-                        "not applicable — design declares no analog / "
-                        "mixed-signal content")
-                elif pk == "manufacturing" and not silicon_received:
-                    status, detail = "external", (
-                        "external — off-machine (fab / wafer-sort / packaging / "
-                        "final-test / qual)")
+        # Honesty refinement (BOTH modes): a `pending`/`missing` for a lane that
+        # will NEVER run for THIS design is misleading — name the reason at a
+        # glance (na / external) instead of a false gap.
+        status, detail = _reclassify_inapplicable_lane(
+            sid, step, status, detail, project_path,
+            analog_applicable, silicon_received,
+        )
 
         blocks_on = step.get("blocks_on")
         if not isinstance(blocks_on, list):
@@ -702,30 +726,30 @@ def collect(project, full: bool = False) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# AUTO — cheap while live, authoritative once idle (the "no lightweight" ask)
+# CARD FINGERPRINT — an on-demand full run stays pinned until the tree changes
 # --------------------------------------------------------------------------- #
-# The tension: authoritative (full) status re-runs the whole gate matrix
-# (~seconds per IC), which is far too heavy to poll while a build is actively
-# writing files. AUTO resolves it: it ALWAYS does the cheap lightweight pass
-# first; if any step is RUNNING it returns that (a live build stays real-time);
-# only once the tree is QUIESCENT does it escalate to the authoritative full
-# verdicts. A tree-fingerprint cache means the expensive full run happens ONCE
-# per settled state — subsequent idle polls reuse it until an output actually
-# changes, so idle polling is free regardless of cadence.
-_AUTO_FULL_CACHE: Dict[str, tuple] = {}  # project -> (fingerprint, full_result)
+# The dashboard loads every IC LIGHTWEIGHT (fast file-stat) and offers a per-IC
+# "Run full" button. When pressed, that ONE IC is re-collected in full
+# (authoritative gate matrix, ~seconds) and the result is pinned by the web
+# layer's per-project cache so subsequent polls keep showing the authoritative
+# card (no button) WITHOUT re-running the gate matrix. This fingerprint is the
+# cache key: it changes only when the flow genuinely advances, at which point
+# the card falls back to lightweight + button (inviting a fresh full run).
 
 
 def _fingerprint_from(data: dict) -> tuple:
     """A cheap change-signature of a project tree, derived from an ALREADY
-    collected lightweight dict (no extra disk walk).
+    collected LIGHTWEIGHT dict (no extra disk walk).
 
-    It is deliberately MTIME-FREE: the set of existing output paths plus each
-    step's lightweight status. Rationale — full mode (flow_compliance_check)
-    REWRITES its own tracked report files in place on every run, which bumps
-    mtimes without the build having progressed; an mtime fingerprint would then
-    never match and the expensive full run would repeat every poll. Existence +
-    status changes only when the flow genuinely advances (a new output appears
-    or a step's verdict flips), which is exactly when a re-escalation is due."""
+    It is deliberately MTIME-FREE and computed from LIGHTWEIGHT statuses: the
+    set of existing output paths plus each step's lightweight status. Rationale
+    — full mode (flow_compliance_check) REWRITES its own tracked report files in
+    place on every run, which bumps mtimes without the build having progressed;
+    an mtime fingerprint would then never match. Existence + lightweight status
+    change only when the flow genuinely advances (a new output appears or a step
+    completes), which is exactly when a pinned full result should be dropped.
+    Always fingerprint a LIGHTWEIGHT collect on both store and validate so the
+    two sides compare the same status vocabulary."""
     paths: List[str] = []
     statuses: List[tuple] = []
     for ph in data.get("phases", []):
@@ -735,32 +759,6 @@ def _fingerprint_from(data: dict) -> tuple:
                 if o.get("exists"):
                     paths.append(str(o.get("rel") or o.get("abs") or ""))
     return (tuple(sorted(paths)), tuple(statuses))
-
-
-def collect_auto(project) -> dict:
-    """Adaptive status: lightweight while a build is live, authoritative (full)
-    once the tree is quiescent — cached per settled state. Never raises."""
-    light = collect(project, full=False)
-    # A live build (any running step) stays cheap + real-time.
-    if int(light.get("summary", {}).get("running", 0) or 0) > 0:
-        light["mode"] = "auto:live"
-        return light
-    # Quiescent → authoritative. Reuse the cached full run while the tree is
-    # unchanged so idle polls don't re-run the gate matrix.
-    key = str(Path(project).expanduser().resolve())
-    fp = _fingerprint_from(light)
-    cached = _AUTO_FULL_CACHE.get(key)
-    if cached is not None and cached[0] == fp:
-        return cached[1]
-    full = collect(project, full=True)
-    if full.get("mode") == "full":  # only cache a genuinely authoritative result
-        full["mode"] = "auto:full"
-        _AUTO_FULL_CACHE[key] = (fp, full)
-    else:
-        # full fell back to lightweight (checker missing/errored) — surface it,
-        # don't poison the cache with a non-authoritative result.
-        full["mode"] = "auto:lightweight"
-    return full
 
 
 # --------------------------------------------------------------------------- #
@@ -812,28 +810,22 @@ def discover_projects(root: str) -> List[str]:
     return found
 
 
-def _ic_card(project: str, full: bool, auto: bool = False) -> dict:
-    """Collect ONE project into a compact fleet card: the full summary plus a
-    per-phase mini progress and the list of currently-running steps. The heavy
-    per-step `outputs` payload is dropped so a fleet of N ICs stays light.
-    Never raises: a project that fails to collect becomes an error card."""
-    try:
-        d = collect_auto(project) if auto else collect(project, full=full)
-    except Exception as exc:  # pragma: no cover - collect() is contractually safe
-        name = Path(project).name or project
-        return {
-            "project": str(project),
-            "project_name": name,
-            "mode": "",
-            "flow_version": "",
-            "error": f"collect() failed: {exc}",
-            "summary": {},
-            "phases_mini": [],
-            "running_steps": [],
-        }
+def card_from_detail(detail: dict, full_flag: bool, fingerprint) -> dict:
+    """Build a compact fleet card from an ALREADY-collected detail dict (a
+    collect() result). The heavy per-step `outputs` payload is dropped so a
+    fleet of N ICs stays light. Pure — no I/O — so the caller can build a card
+    from a detail it already has (and cache both together).
+
+    The card carries two fields the UI keys on:
+      * ``full``        — True iff this card holds AUTHORITATIVE (gate-verdict)
+                          numbers; a lightweight card is False and gets a
+                          "Run full" button.
+      * ``fingerprint`` — a mtime-free change-signature (always from a
+                          LIGHTWEIGHT collect) that lets the web layer pin a
+                          full result until the tree actually changes."""
     phases_mini = []
     running_steps = []
-    for ph in d.get("phases", []):
+    for ph in detail.get("phases", []):
         phases_mini.append(
             {
                 "key": ph.get("key", ""),
@@ -853,23 +845,80 @@ def _ic_card(project: str, full: bool, auto: bool = False) -> dict:
                     }
                 )
     return {
-        "project": d.get("project", str(project)),
-        "project_name": d.get("project_name", Path(project).name),
-        "mode": d.get("mode", ""),
-        "flow_version": d.get("flow_version", ""),
-        "summary": d.get("summary", {}),
+        "project": detail.get("project", ""),
+        "project_name": detail.get("project_name", ""),
+        "mode": detail.get("mode", ""),
+        "flow_version": detail.get("flow_version", ""),
+        "full": bool(full_flag),
+        "fingerprint": list(fingerprint) if fingerprint is not None else None,
+        "summary": detail.get("summary", {}),
         "phases_mini": phases_mini,
         "running_steps": running_steps,
     }
 
 
-def collect_fleet(projects, full: bool = False, root: str = "", auto: bool = False) -> dict:
+def _ic_card(project: str, full: bool = False) -> dict:
+    """Collect ONE project and return its compact fleet card. Never raises: a
+    project that fails to collect becomes an error card."""
+    try:
+        d = collect(project, full=full)
+        # Fingerprint ALWAYS from a lightweight collect so store/validate match.
+        light = d if not full else collect(project, full=False)
+        fingerprint = _fingerprint_from(light)
+    except Exception as exc:  # pragma: no cover - collect() is contractually safe
+        name = Path(project).name or project
+        return {
+            "project": str(project),
+            "project_name": name,
+            "mode": "",
+            "flow_version": "",
+            "full": False,
+            "fingerprint": None,
+            "error": f"collect() failed: {exc}",
+            "summary": {},
+            "phases_mini": [],
+            "running_steps": [],
+        }
+    # authoritative only when full mode genuinely ran (not a silent fallback)
+    return card_from_detail(d, bool(full and d.get("mode") == "full"), fingerprint)
+
+
+def collect_card(project, full: bool = False) -> dict:
+    """Public single-IC fleet card (used by the web layer's per-card 'Run full'
+    button). full=True runs the authoritative gate matrix for this ONE IC."""
+    return _ic_card(str(project), full=full)
+
+
+def collect_card_and_detail(project, full: bool = True):
+    """Return (card, detail, fingerprint) in a single pass so the web layer can
+    pin BOTH the compact card (fleet view) AND the full detail (drill-down page)
+    from one gate run — keeping the two views consistent. Never raises."""
+    try:
+        detail = collect(project, full=full)
+        light = detail if not full else collect(project, full=False)
+        fingerprint = _fingerprint_from(light)
+    except Exception as exc:  # pragma: no cover - collect() is contractually safe
+        name = Path(project).name or str(project)
+        err_card = {
+            "project": str(project), "project_name": name, "mode": "",
+            "flow_version": "", "full": False, "fingerprint": None,
+            "error": f"collect() failed: {exc}", "summary": {},
+            "phases_mini": [], "running_steps": [],
+        }
+        return err_card, {"error": f"collect() failed: {exc}"}, None
+    full_ok = bool(full and detail.get("mode") == "full")
+    card = card_from_detail(detail, full_ok, fingerprint)
+    return card, detail, fingerprint
+
+
+def collect_fleet(projects, full: bool = False, root: str = "") -> dict:
     """Collect MANY projects for the fleet overview.
 
     *projects* is an explicit iterable of project paths. When empty and *root*
-    is given, the root is scanned via discover_projects(). With *auto*, each IC
-    uses collect_auto() (cheap while live, authoritative once idle). Returns a
-    stable JSON contract mirroring collect() at the aggregate level:
+    is given, the root is scanned via discover_projects(). Cards are LIGHTWEIGHT
+    by default (fast — the page loads instantly and each card offers a per-IC
+    "Run full" button); full=True collects the whole fleet authoritatively.
+    Returns a stable JSON contract mirroring collect() at the aggregate level:
 
         {kind:"fleet", plugin_version, root, count,
          agg: {<same summary keys, summed>, ic_count, ic_running, ic_done},
@@ -880,7 +929,7 @@ def collect_fleet(projects, full: bool = False, root: str = "", auto: bool = Fal
     if not plist and root:
         plist = discover_projects(root)
 
-    cards = [_ic_card(p, full, auto=auto) for p in plist]
+    cards = [_ic_card(p, full=full) for p in plist]
 
     # Aggregate the per-IC summaries into one fleet-wide roll-up.
     agg: Dict[str, int] = {k: 0 for k in _STATUSES}
@@ -932,16 +981,11 @@ def main(argv=None) -> int:
         action="store_true",
         help="treat PROJECT as a parent dir; collect ALL child projects (fleet view)",
     )
-    ap.add_argument(
-        "--auto",
-        action="store_true",
-        help="adaptive: lightweight while live, authoritative (full) once idle",
-    )
     ap.add_argument("--json", help="write the collected dict to this file")
     args = ap.parse_args(argv)
 
     if args.fleet:
-        data = collect_fleet([], full=args.full, root=args.project, auto=args.auto)
+        data = collect_fleet([], full=args.full, root=args.project)
         payload = json.dumps(data, indent=2, ensure_ascii=False)
         if args.json:
             Path(args.json).write_text(payload + "\n", encoding="utf-8")
@@ -956,7 +1000,7 @@ def main(argv=None) -> int:
         )
         return 0
 
-    data = collect_auto(args.project) if args.auto else collect(args.project, full=args.full)
+    data = collect(args.project, full=args.full)
     payload = json.dumps(data, indent=2, ensure_ascii=False)
 
     if args.json:

@@ -48,9 +48,8 @@ _FULL_TTL = 15.0
 _status_cache: dict = {}  # (project, full) -> (monotonic_ts, bytes)
 
 
-def status_json(project: str, full: bool, auto: bool = False) -> bytes:
-    """Return collect(project, full) — or collect_auto(project) when *auto* — as
-    JSON bytes.
+def status_json(project: str, full: bool) -> bytes:
+    """Return collect(project, full) as JSON bytes.
 
     Never raises: on ANY failure (including collect not being importable yet
     because the sibling provider is still landing) it returns a JSON object
@@ -58,26 +57,22 @@ def status_json(project: str, full: bool, auto: bool = False) -> bytes:
     a 200-able body, never a 500 stacktrace to the browser.
 
     Full mode is TTL-cached (_FULL_TTL) so repeated fast polls don't re-run the
-    authoritative gate matrix on every request. AUTO manages its own settled-
-    state cache inside collect_auto(), so it is not TTL-cached here.
+    authoritative gate matrix on every request.
     """
     import time as _time
 
     key = (str(project), bool(full))
-    if full and not auto:
+    if full:
         hit = _status_cache.get(key)
         if hit is not None and (_time.monotonic() - hit[0]) < _FULL_TTL:
             return hit[1]
     try:
-        if auto:
-            from flow_dashboard_data import collect_auto  # local import: fresh per call
-        else:
-            from flow_dashboard_data import collect  # local import: fresh per call
+        from flow_dashboard_data import collect  # local import: fresh per call
     except Exception as exc:  # pragma: no cover - only when provider missing
         payload = {"error": f"flow_dashboard_data.collect unavailable: {exc}"}
         return json.dumps(payload).encode("utf-8")
     try:
-        data = collect_auto(project) if auto else collect(project, full)
+        data = collect(project, full)
     except Exception as exc:
         payload = {"error": f"collect() failed: {exc}"}
         return json.dumps(payload).encode("utf-8")
@@ -85,18 +80,37 @@ def status_json(project: str, full: bool, auto: bool = False) -> bytes:
         body = json.dumps(data, default=str).encode("utf-8")
     except Exception as exc:  # pragma: no cover - collect returns JSON-able dicts
         return json.dumps({"error": f"serialization failed: {exc}"}).encode("utf-8")
-    if full and not auto:
+    if full:
         _status_cache[key] = (_time.monotonic(), body)
     return body
 
 
-def fleet_json(root: str, full: bool, auto: bool = False) -> bytes:
-    """Return collect_fleet([], full, root=<root>, auto=<auto>) as JSON bytes.
+# Per-IC on-demand full result, pinned until that IC's tree changes. Keyed by
+# resolved project path -> (fingerprint_tuple, full_card_dict, full_detail_dict).
+# Populated ONLY by the "Run full" button (card_json); read by fleet_json (card)
+# AND the drill-down /api/status (detail) so BOTH views stay consistent without
+# re-running the gate matrix.
+_CARD_FULL_CACHE: dict = {}
+
+
+def _fp_key(fp):
+    """Normalize a card fingerprint (list-of-lists over the wire) to a hashable
+    tuple for stable equality across JSON round-trips."""
+    try:
+        paths, statuses = fp
+        return (tuple(paths), tuple(tuple(s) for s in statuses))
+    except Exception:
+        return None
+
+
+def fleet_json(root: str, full: bool) -> bytes:
+    """Return collect_fleet([], full, root=<root>) as JSON bytes, with any IC
+    the user has pinned via "Run full" swapped in from _CARD_FULL_CACHE (while
+    that IC's tree is unchanged).
 
     Same safety contract as status_json(): never raises, always returns a
-    200-able JSON body (an ``error`` key on failure). Not TTL-cached — the
-    per-IC collect is the same fast file-stat as single mode (and AUTO manages
-    its own settled-state cache); a live campaign wants fresh numbers.
+    200-able JSON body (an ``error`` key on failure). Cards are LIGHTWEIGHT by
+    default so the page loads instantly.
     """
     try:
         from flow_dashboard_data import collect_fleet  # local import: fresh per call
@@ -104,14 +118,62 @@ def fleet_json(root: str, full: bool, auto: bool = False) -> bytes:
         payload = {"error": f"flow_dashboard_data.collect_fleet unavailable: {exc}"}
         return json.dumps(payload).encode("utf-8")
     try:
-        data = collect_fleet([], full=full, root=root, auto=auto)
+        data = collect_fleet([], full=full, root=root)
     except Exception as exc:  # pragma: no cover - collect_fleet is contractually safe
         payload = {"error": f"collect_fleet() failed: {exc}"}
         return json.dumps(payload).encode("utf-8")
+    # Pin any card the user ran full for, as long as its (lightweight)
+    # fingerprint still matches — otherwise the build moved and the card falls
+    # back to lightweight + button (inviting a fresh full run).
+    if not full and _CARD_FULL_CACHE:
+        for i, card in enumerate(data.get("fleet", [])):
+            pinned = _CARD_FULL_CACHE.get(card.get("project"))
+            if pinned is not None and pinned[0] == _fp_key(card.get("fingerprint")):
+                data["fleet"][i] = pinned[1]
     try:
         return json.dumps(data, default=str).encode("utf-8")
     except Exception as exc:  # pragma: no cover
         return json.dumps({"error": f"serialization failed: {exc}"}).encode("utf-8")
+
+
+def card_json(root: str, project: str) -> bytes:
+    """Run the AUTHORITATIVE full collect for ONE fleet IC (the "Run full"
+    button) and pin BOTH its compact card AND its full detail in
+    _CARD_FULL_CACHE (so the fleet card and the drill-down page agree). Returns
+    the full card JSON. The caller must already have validated *project* against
+    the fleet set. Never raises."""
+    try:
+        from flow_dashboard_data import collect_card_and_detail  # local import
+    except Exception as exc:  # pragma: no cover - only when provider missing
+        return json.dumps({"error": f"provider unavailable: {exc}"}).encode("utf-8")
+    try:
+        card, detail, _fp = collect_card_and_detail(project, full=True)
+    except Exception as exc:  # pragma: no cover - contractually safe
+        return json.dumps({"error": f"collect_card() failed: {exc}"}).encode("utf-8")
+    # Pin only if genuinely authoritative (full ran, no silent fallback).
+    if card.get("full") and card.get("fingerprint") is not None:
+        _CARD_FULL_CACHE[card.get("project")] = (
+            _fp_key(card.get("fingerprint")), card, detail)
+    try:
+        return json.dumps(card, default=str).encode("utf-8")
+    except Exception as exc:  # pragma: no cover
+        return json.dumps({"error": f"serialization failed: {exc}"}).encode("utf-8")
+
+
+def detail_status_json(project: str) -> bytes:
+    """Drill-down /api/status for a fleet IC: if the user ran full for it and the
+    tree is unchanged, serve the PINNED full detail (so the page matches the
+    card); otherwise the fast lightweight status. Never raises."""
+    pinned = _CARD_FULL_CACHE.get(str(project))
+    if pinned is not None and len(pinned) == 3:
+        try:
+            from flow_dashboard_data import collect, _fingerprint_from
+            light = collect(project, False)
+            if pinned[0] == _fp_key(_fingerprint_from(light)):
+                return json.dumps(pinned[2], default=str).encode("utf-8")
+        except Exception:  # pragma: no cover - fall through to lightweight
+            pass
+    return status_json(project, False)
 
 
 def _is_allowed_project(root: str, project: str) -> bool:
@@ -322,7 +384,7 @@ section.phase{
   <header class="bar">
     <div class="hrow">
       <span class="title"><span class="logo">🔬</span> <span id="pname">Vibe-IC Flow</span></span>
-      <span class="badge" id="modebadge">…</span>
+      <span class="badge" id="modebadge" hidden></span>
       <span class="badge" id="verbadge" hidden></span>
       <a class="tbtn" id="fleetlink" href="/" title="Back to the fleet overview" hidden>← Fleet</a>
       <span class="spacer"></span>
@@ -394,7 +456,10 @@ section.phase{
     var s = d.summary || {};
     setText(document.getElementById("pname"), d.project_name || d.project || "Vibe-IC Flow");
     var mb = document.getElementById("modebadge");
-    setText(mb, d.mode || "");
+    // Only surface the AUTHORITATIVE mode; a plain lightweight view shows no
+    // "lightweight" label (it is the default, unremarkable state).
+    if(String(d.mode || "").indexOf("full") >= 0){ setText(mb, "full"); mb.hidden = false; }
+    else { mb.hidden = true; }
     var vb = document.getElementById("verbadge");
     // Show the shipped vibe-ic PLUGIN version (what the user runs), not the
     // internal flow-schema version. Fall back to flow_version only if absent.
@@ -744,6 +809,16 @@ main#fleet{display:grid; gap:.8rem; align-items:start;
 .phseg .pn{font-variant-numeric:tabular-nums}
 .icsteps{margin-top:.5rem; font-size:.72rem; color:var(--running); display:flex; align-items:flex-start; gap:.35rem}
 .icsteps .m{flex:0 0 auto} .icsteps .s{min-width:0}
+/* per-IC "Run full" trigger + authoritative / busy indicators */
+.ic .runbtn{cursor:pointer; border:1px solid var(--accent); background:var(--accent); color:var(--accent-fg);
+  border-radius:8px; padding:.16rem .5rem; font-size:.68rem; font-weight:800; line-height:1.25; white-space:nowrap}
+.ic .runbtn:hover{filter:brightness(1.08)}
+.ic .fulltag{font-size:.66rem; font-weight:800; color:var(--done); background:var(--done-bg);
+  border:1px solid var(--border); border-radius:999px; padding:.1rem .48rem; white-space:nowrap}
+.ic .busytag{display:inline-flex; align-items:center; gap:.32rem; font-size:.68rem; font-weight:700; color:var(--running);
+  background:var(--running-bg); border:1px solid var(--border); border-radius:999px; padding:.1rem .48rem; white-space:nowrap}
+.ic .busytag .rdot{width:.5rem; height:.5rem; border-radius:50%; background:var(--running); animation:pulse 1.1s ease-in-out infinite}
+.ic.busy{opacity:.9}
 .foot{margin-top:1rem; text-align:center; color:var(--muted); font-size:.72rem}
 .loading{color:var(--muted); padding:2rem 0; text-align:center}
 </style>
@@ -768,7 +843,7 @@ main#fleet{display:grid; gap:.8rem; align-items:start;
   <div id="err" class="errbox" hidden></div>
   <main id="fleet"><div class="loading">Loading fleet status…</div></main>
 
-  <div class="foot">Vibe-IC fleet · click any card → its full 59-step view · Done = reached &amp; judged (pass/fail/skip/n-a/external) · ▸ = steps running now · auto-refresh 2s live / 30s idle</div>
+  <div class="foot">Vibe-IC fleet · loads instantly · <b>Run full</b> on any card for authoritative gate verdicts · click a card → its full 59-step view · Done = reached &amp; judged (pass/fail/skip/n-a/external)</div>
 </div>
 
 <script>
@@ -801,12 +876,39 @@ main#fleet{display:grid; gap:.8rem; align-items:start;
 
   var lastServerTs = 0;
   var pollMs = 2000;
+  var lastData = null;                 // last fleet dict, for re-render on button
+  var pendingFull = new Set();         // projects whose full run is in flight
   function updateAgo(){
     var u = document.getElementById("updated");
     if(!lastServerTs){ return; }
     var secs = Math.max(0, Math.round(Date.now()/1000 - lastServerTs));
     var cadence = pollMs >= 30000 ? "idle · 30s poll" : "live · 2s poll";
     u.textContent = "updated " + secs + "s ago · " + cadence;
+  }
+
+  // Per-IC "Run full": kick the authoritative gate run for ONE IC. The card
+  // shows a "running full…" spinner meanwhile; the server pins the result so
+  // the next poll shows it authoritative (button gone).
+  function runFull(project){
+    if(!project || pendingFull.has(project)) return;
+    pendingFull.add(project);
+    if(lastData) render(lastData);     // flip that card to busy immediately
+    fetch("/api/card?project=" + encodeURIComponent(project), {cache:"no-store"})
+      .then(function(r){ return r.json(); })
+      .then(function(card){
+        pendingFull.delete(project);
+        if(card && card.error){
+          var errEl = document.getElementById("err");
+          errEl.hidden = false; setText(errEl, "⚠ Run full: " + card.error);
+        }
+        tick();                        // refresh now — server has pinned it full
+      })
+      .catch(function(e){
+        pendingFull.delete(project);
+        var errEl = document.getElementById("err");
+        errEl.hidden = false; setText(errEl, "⚠ Run full failed: " + e);
+        if(lastData) render(lastData);
+      });
   }
 
   function chip(k, n){
@@ -835,14 +937,18 @@ main#fleet{display:grid; gap:.8rem; align-items:start;
     CHIP_ORDER.forEach(function(k){ var n = num(a[k]); if(n) chips.appendChild(chip(k, n)); });
   }
 
+  function cardNav(c){ return "/ic?project=" + encodeURIComponent(c.project || ""); }
+
   function renderCard(c){
     var s = c.summary || {};
     var total = num(s.total), done = resolvedOf(s), running = num(s.running);
-    // The whole card is a link into that IC's full 59-step page.
-    var sec = el("a","ic");
-    sec.href = "/ic?project=" + encodeURIComponent(c.project || "");
+    var busy = pendingFull.has(c.project);
+    // The card is a container; clicking it (except the Run-full button) opens
+    // that IC's full 59-step page.
+    var sec = el("section", busy ? "ic busy" : "ic");
     if(running > 0) sec.setAttribute("data-run","1");
     else if(total && done >= total) sec.setAttribute("data-done","1");
+    sec.addEventListener("click", function(){ window.location = cardNav(c); });
 
     var head = el("div","ichead");
     var nm = el("span","icname"); setText(nm, c.project_name || c.project || "(ic)"); head.appendChild(nm);
@@ -851,7 +957,22 @@ main#fleet{display:grid; gap:.8rem; align-items:start;
       var r = el("span","icrun"); r.appendChild(el("span","rdot"));
       var rt = el("span"); setText(rt, running + " running"); r.appendChild(rt); head.appendChild(r);
     }
-    var mb = el("span","badge"); setText(mb, c.mode || ""); head.appendChild(mb);
+    // authoritative indicator (ran full) · busy (running full now) · or the
+    // per-IC "Run full" trigger. NOTE: a plain lightweight card shows NO mode
+    // text — just the button.
+    if(busy){
+      var bt = el("span","busytag"); bt.appendChild(el("span","rdot"));
+      var btx = el("span"); setText(btx, "running full…"); bt.appendChild(btx); head.appendChild(bt);
+    } else if(c.full){
+      var ft = el("span","fulltag"); setText(ft, "✓ full"); head.appendChild(ft);
+    } else if(!c.error){
+      var rb = el("button","runbtn"); setText(rb, "Run full");
+      rb.title = "Run the authoritative gate verdicts for this IC (~seconds)";
+      rb.addEventListener("click", function(ev){
+        ev.stopPropagation(); ev.preventDefault(); runFull(c.project);
+      });
+      head.appendChild(rb);
+    }
     sec.appendChild(head);
 
     if(c.error){
@@ -926,6 +1047,7 @@ main#fleet{display:grid; gap:.8rem; align-items:start;
     inflight = true;
     fetch("/api/fleet", {cache:"no-store"}).then(function(r){ return r.json(); }).then(function(d){
       lastServerTs = Date.now()/1000;
+      lastData = d;
       render(d);
       var running = (d.agg && d.agg.ic_running) || 0;
       pollMs = running > 0 ? FAST_MS : IDLE_MS;
@@ -952,14 +1074,14 @@ def build_fleet_page() -> str:
 # ---------------------------------------------------------------------------
 # HTTP handler + server
 # ---------------------------------------------------------------------------
-def make_handler(project: str, full: bool, fleet: str = "", auto: bool = False):
+def make_handler(project: str, full: bool, fleet: str = ""):
     """Return a BaseHTTPRequestHandler subclass.
 
     Single-IC mode (fleet=="") serves the single-project page at "/" and
     collect(project) JSON at /api/status. FLEET mode (fleet=<root dir>) serves
     the fleet page at "/" and collect_fleet(root) JSON at /api/fleet — *project*
-    is ignored in that mode. With *auto*, status/fleet use the adaptive
-    collector (lightweight while live, authoritative once idle).
+    is ignored in that mode — plus /api/card?project=<abs> for the per-IC
+    "Run full" button and /ic?project=<abs> for the drill-down page.
     """
     is_fleet = bool(fleet)
     page_bytes = (build_fleet_page() if is_fleet else build_page()).encode("utf-8")
@@ -987,8 +1109,20 @@ def make_handler(project: str, full: bool, fleet: str = "", auto: bool = False):
                 return
             if is_fleet:
                 if path == "/api/fleet":
-                    self._send(200, fleet_json(fleet, full, auto),
+                    self._send(200, fleet_json(fleet, full),
                                "application/json; charset=utf-8")
+                    return
+                # per-card "Run full": authoritative full run for ONE IC,
+                # validated against the fleet set + pinned server-side.
+                if path == "/api/card":
+                    proj = (parse_qs(parsed.query).get("project") or [""])[0]
+                    if _is_allowed_project(fleet, proj):
+                        self._send(200, card_json(fleet, proj),
+                                   "application/json; charset=utf-8")
+                    else:
+                        self._send(404,
+                                   json.dumps({"error": "unknown or unlisted project"}).encode("utf-8"),
+                                   "application/json; charset=utf-8")
                     return
                 # drill-down: /ic?project=<abs> serves the single-IC page; its
                 # /api/status?project=<abs> is validated against the fleet set.
@@ -998,7 +1132,9 @@ def make_handler(project: str, full: bool, fleet: str = "", auto: bool = False):
                 if path == "/api/status":
                     proj = (parse_qs(parsed.query).get("project") or [""])[0]
                     if _is_allowed_project(fleet, proj):
-                        self._send(200, status_json(proj, full, auto),
+                        # serve the PINNED full detail when the user ran full for
+                        # this IC (keeps the drill-down consistent with the card)
+                        self._send(200, detail_status_json(proj),
                                    "application/json; charset=utf-8")
                     else:
                         self._send(404,
@@ -1007,7 +1143,7 @@ def make_handler(project: str, full: bool, fleet: str = "", auto: bool = False):
                     return
             else:
                 if path == "/api/status":
-                    self._send(200, status_json(project, full, auto),
+                    self._send(200, status_json(project, full),
                                "application/json; charset=utf-8")
                     return
             if path == "/favicon.ico":
@@ -1024,17 +1160,16 @@ def make_handler(project: str, full: bool, fleet: str = "", auto: bool = False):
 
 
 def serve(project: str, port: int = 8787, full: bool = False, host: str = "127.0.0.1",
-          fleet: bool = False, auto: bool = False) -> None:
+          fleet: bool = False) -> None:
     """Run the ThreadingHTTPServer on host:port until Ctrl-C.
 
     When *fleet* is True, *project* is treated as a PARENT directory and every
-    child Vibe-IC project is shown on one page (the fleet overview). When *auto*
-    is True, status is adaptive (lightweight while live, authoritative once
-    idle)."""
+    child Vibe-IC project is shown on one page (the fleet overview); each card
+    loads lightweight and offers a per-IC "Run full" button."""
     project = os.path.abspath(project)
     name = os.path.basename(project.rstrip("/")) or project
-    mode = "auto" if auto else ("full" if full else "lightweight")
-    handler = make_handler(project, full, fleet=project if fleet else "", auto=auto)
+    mode = "full" if full else "lightweight"
+    handler = make_handler(project, full, fleet=project if fleet else "")
     httpd = ThreadingHTTPServer((host, port), handler)
     # Show 127.0.0.1 in the clickable line even when bound to 0.0.0.0.
     shown = "127.0.0.1" if host in ("0.0.0.0", "", "::") else host
@@ -1065,15 +1200,13 @@ def _parse_args(argv=None):
     p.add_argument("--host", default="127.0.0.1", help="host/interface to bind (default 127.0.0.1)")
     p.add_argument("--fleet", action="store_true",
                    help="treat PROJECT as a parent dir; show ALL child projects on one page")
-    p.add_argument("--auto", action="store_true",
-                   help="adaptive: lightweight while live, authoritative (full) once idle")
     return p.parse_args(argv)
 
 
 def main(argv=None) -> int:
     args = _parse_args(argv)
     serve(args.project, port=args.port, full=args.full, host=args.host,
-          fleet=args.fleet, auto=args.auto)
+          fleet=args.fleet)
     return 0
 
 

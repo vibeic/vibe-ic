@@ -84,8 +84,14 @@ def test_summary_counts_are_internally_consistent(tmp_path):
     # subset) + total.
     assert set(s.keys()) == {"total", "resolved", "passed", *(_STATUSES)}
     assert sum(s[k] for k in _STATUSES) == s["total"]
-    # DONE (resolved) = total minus the two unresolved states.
-    assert s["resolved"] == s["total"] - s["running"] - s["pending"]
+    # DONE (resolved) = every status on the resolved axis; the not-done axis is
+    # running / pending / partial / missing.
+    assert s["resolved"] == sum(s[k] for k in D._RESOLVED)
+    assert s["resolved"] == s["total"] - sum(s[k] for k in D._UNRESOLVED)
+    # missing + partial are NOT done (a deliverable that never materialized has
+    # not been completed, even if --full renders a definite MISSING verdict).
+    assert "missing" in D._UNRESOLVED and "partial" in D._UNRESOLVED
+    assert "fail" in D._RESOLVED          # a fail DID run and get judged
     assert s["passed"] == s["pass"]
     # every status is one of the canonical values
     for p in data["phases"]:
@@ -278,6 +284,31 @@ def test_full_mode_structural_mapping(tmp_path, monkeypatch):
     assert _find_step(data, "D1")[0]["status"] == "pass"  # VACUOUS_PASS
 
 
+def test_full_mode_reclassifies_inapplicable_lanes(tmp_path, monkeypatch):
+    # THE BUG: --full's compliance verdicts marked the analog A1-A9 / mixed
+    # M1-M4 lanes of a pure-digital design as MISSING, and off-machine
+    # manufacturing as SKIPPED — where lightweight correctly says na / external.
+    # Lane applicability is a property of the DESIGN, so --full must reclassify
+    # exactly as lightweight does. tmp_path declares no analog + no silicon.
+    fake = [
+        {"id": "A1", "status": "MISSING", "reasons": []},      # analog -> na
+        {"id": "M1", "status": "MISSING", "reasons": []},      # mixed  -> na
+        {"id": "40", "status": "SKIPPED-CONDITION", "reasons": ["off-machine"]},  # mfg -> external
+        {"id": "15", "status": "MISSING", "reasons": []},      # phase3 -> stays missing (real gap)
+    ]
+    monkeypatch.setattr(D, "_run_compliance", lambda project: fake)
+    data = D.collect(tmp_path, full=True)
+    assert data["mode"] == "full"
+    assert _find_step(data, "A1")[0]["status"] == "na"
+    assert _find_step(data, "M1")[0]["status"] == "na"
+    assert _find_step(data, "40")[0]["status"] == "external"
+    # a genuine phase3 MISSING is NOT reclassified (it is a real gap) and is
+    # NOT counted as done.
+    assert _find_step(data, "15")[0]["status"] == "missing"
+    s = data["summary"]
+    assert s["resolved"] == s["total"] - sum(s[k] for k in D._UNRESOLVED)
+
+
 def test_status_mapping_helper_covers_documented_verdicts():
     m = D._map_compliance_status
     assert m("PASS") == "pass"
@@ -424,120 +455,80 @@ def test_collect_fleet_cli_smoke(tmp_path, capsys):
 
 
 # --------------------------------------------------------------------------- #
-# AUTO — cheap while live, authoritative once idle
+# CARD MODEL — lightweight by default + per-IC on-demand full ("Run full")
 # --------------------------------------------------------------------------- #
-def _light(running, paths=("a.v",)):
-    # one step whose existing outputs are the given rel-paths (mtime is
-    # deliberately varied to prove the fingerprint IGNORES it).
-    steps = [{"id": "1", "status": "pass",
-              "outputs": [{"exists": True, "rel": p, "mtime": 100.0} for p in paths]}]
-    return {"summary": {"running": running}, "phases": [{"steps": steps}],
-            "mode": "lightweight"}
+def test_fleet_cards_are_lightweight_with_fingerprint(tmp_path):
+    _make_project(tmp_path, "chipA")
+    fl = D.collect_fleet([], root=str(tmp_path))
+    for c in fl["fleet"]:
+        # a fresh fleet card is NON-authoritative and carries the change-sig the
+        # web layer needs to pin/expire a later full run.
+        assert c["full"] is False
+        assert c["fingerprint"] is not None
+        assert isinstance(c["fingerprint"], list)
 
 
-def test_collect_auto_stays_lightweight_while_running(monkeypatch):
-    D._AUTO_FULL_CACHE.clear()
+def test_collect_card_lightweight_vs_full_flags(monkeypatch):
     calls = []
 
     def fake(project, full=False):
         calls.append(full)
-        if full:
-            raise AssertionError("must NOT escalate to full while a step is running")
-        return _light(running=1)
+        return {"project": project, "project_name": "x",
+                "mode": "full" if full else "lightweight",
+                "summary": {"total": 1, "running": 0},
+                "phases": [{"key": "phase1", "label": "P1", "icon": "1",
+                            "steps": [{"id": "1", "status": "pass",
+                                       "outputs": [{"exists": True, "rel": "a.v"}]}]}]}
 
     monkeypatch.setattr(D, "collect", fake)
-    d = D.collect_auto("/p")
-    assert d["mode"] == "auto:live"
-    assert calls == [False]           # only the cheap pass ran
-
-
-def test_collect_auto_escalates_when_idle_then_caches(monkeypatch):
-    D._AUTO_FULL_CACHE.clear()
-    calls = []
-
-    def fake(project, full=False):
-        calls.append(full)
-        if full:
-            return {"summary": {"running": 0}, "phases": [], "mode": "full"}
-        return _light(running=0)
-
-    monkeypatch.setattr(D, "collect", fake)
-    d1 = D.collect_auto("/p2")
-    assert d1["mode"] == "auto:full"
-    assert calls == [False, True]     # cheap pass then ONE full run
-    # second poll, tree unchanged → cache hit, NO second full run
-    d2 = D.collect_auto("/p2")
-    assert d2["mode"] == "auto:full"
+    light = D.collect_card("/p", full=False)
+    assert light["full"] is False
+    full = D.collect_card("/p", full=True)
+    assert full["full"] is True
+    # a full card fingerprints a LIGHTWEIGHT collect (so store/validate match):
+    # the full call triggers an extra lightweight collect for the fingerprint.
     assert calls == [False, True, False]
 
 
-def test_collect_auto_ignores_mtime_only_changes(monkeypatch):
-    # A full run rewrites its own report files in place (mtime bumps, same set
-    # of outputs) — that must NOT bust the cache, or the expensive full run
-    # would repeat every poll.
-    D._AUTO_FULL_CACHE.clear()
-    state = {"mtime": 100.0}
-    calls = []
-
+def test_collect_card_full_fallback_is_not_authoritative(monkeypatch):
     def fake(project, full=False):
-        calls.append(full)
-        if full:
-            return {"summary": {"running": 0}, "phases": [], "mode": "full"}
-        s = [{"id": "1", "status": "pass",
-              "outputs": [{"exists": True, "rel": "a.v", "mtime": state["mtime"]}]}]
-        return {"summary": {"running": 0}, "phases": [{"steps": s}], "mode": "lightweight"}
+        # full mode silently fell back to lightweight (checker missing)
+        return {"project": project, "mode": "lightweight",
+                "summary": {}, "phases": []}
 
     monkeypatch.setattr(D, "collect", fake)
-    D.collect_auto("/p3")
-    assert calls == [False, True]
-    state["mtime"] = 999999.0            # mtime moved, structure identical
-    D.collect_auto("/p3")
-    assert calls == [False, True, False]  # cache HIT — no second full run
+    card = D.collect_card("/p", full=True)
+    assert card["full"] is False     # never claim authoritative on a fallback
 
 
-def test_collect_auto_reescalates_when_output_set_changes(monkeypatch):
-    D._AUTO_FULL_CACHE.clear()
-    state = {"paths": ("a.v",)}
-    calls = []
+def test_collect_card_error_is_safe(monkeypatch):
+    def boom(project, full=False):
+        raise RuntimeError("nope")
 
-    def fake(project, full=False):
-        calls.append(full)
-        if full:
-            return {"summary": {"running": 0}, "phases": [], "mode": "full"}
-        return _light(running=0, paths=state["paths"])
-
-    monkeypatch.setattr(D, "collect", fake)
-    D.collect_auto("/p3b")
-    assert calls == [False, True]
-    # a new flow output appeared (build progressed) → fingerprint busts → re-run
-    state["paths"] = ("a.v", "b.v")
-    D.collect_auto("/p3b")
-    assert calls == [False, True, False, True]
+    monkeypatch.setattr(D, "collect", boom)
+    card = D.collect_card("/p", full=True)
+    assert card["full"] is False
+    assert "error" in card and card["fingerprint"] is None
 
 
-def test_collect_auto_does_not_cache_a_fallback(monkeypatch):
-    D._AUTO_FULL_CACHE.clear()
+def test_fingerprint_is_mtime_free(tmp_path):
+    # the same structure with different mtimes yields the SAME fingerprint
+    a = {"phases": [{"steps": [{"id": "1", "status": "pass",
+          "outputs": [{"exists": True, "rel": "a.v", "mtime": 1.0}]}]}]}
+    b = {"phases": [{"steps": [{"id": "1", "status": "pass",
+          "outputs": [{"exists": True, "rel": "a.v", "mtime": 9e9}]}]}]}
+    assert D._fingerprint_from(a) == D._fingerprint_from(b)
+    # a new output path DOES change it
+    c = {"phases": [{"steps": [{"id": "1", "status": "pass",
+          "outputs": [{"exists": True, "rel": "a.v", "mtime": 1.0},
+                      {"exists": True, "rel": "b.v", "mtime": 1.0}]}]}]}
+    assert D._fingerprint_from(a) != D._fingerprint_from(c)
 
-    def fake(project, full=False):
-        # full mode "fell back" to lightweight (compliance checker missing)
-        return {"summary": {"running": 0}, "phases": [], "mode": "lightweight"}
 
-    monkeypatch.setattr(D, "collect", fake)
-    d = D.collect_auto("/p4")
-    assert d["mode"] == "auto:lightweight"      # surfaced, not mislabeled full
-    key = str(Path("/p4").resolve())
-    assert key not in D._AUTO_FULL_CACHE         # a non-authoritative result is never cached
-
-
-def test_collect_fleet_auto_uses_adaptive_collector(tmp_path):
-    # Integration: a real tmp fleet in auto mode — every card resolves through
-    # collect_auto (mode prefixed "auto:") and never raises.
-    _make_project(tmp_path, "chipA")
-    _make_project(tmp_path, "chipB")
-    fl = D.collect_fleet([], root=str(tmp_path), auto=True)
-    assert fl["count"] == 2
-    for c in fl["fleet"]:
-        assert str(c["mode"]).startswith("auto:")
+def test_auto_mode_is_gone():
+    # the auto/idle-escalation model was replaced by the per-card button
+    assert not hasattr(D, "collect_auto")
+    assert not hasattr(D, "_AUTO_FULL_CACHE")
 
 
 if __name__ == "__main__":
