@@ -444,14 +444,35 @@ def main() -> int:
     if args.dashboard:
         _reachable = _reachable_host(args.dashboard_host)
         _mode = "authoritative/--full" if args.dashboard_full else "live/fast"
+        # v1.3.83 — the daemon retries ports when a stale daemon holds the
+        # default and RECORDS its actually-bound URL under reports/; drop any
+        # stale record, then print the recorded truth, never the request
+        # (before this, a stale daemon on the default port made the printed
+        # URL silently serve a PREVIOUS run's dashboard).
+        _dash_url_f = project / "reports" / "dashboard_web.url"
+        try:
+            _dash_url_f.unlink()
+        except Exception:
+            pass
         dash_pid = _launch_dashboard(project, args.dashboard_host,
                                      args.dashboard_port,
                                      full=args.dashboard_full)
         _dash = PROGRAMS_DIR / "flow_dashboard.py"
         print("─" * 64)
         if dash_pid:
+            _dash_port = str(args.dashboard_port)
+            for _ in range(30):          # ≤3 s for the daemon to bind+record
+                if _dash_url_f.is_file():
+                    _rec = _dash_url_f.read_text().strip()
+                    if _rec.rsplit(":", 1)[-1].isdigit():
+                        _dash_port = _rec.rsplit(":", 1)[-1]
+                    break
+                time.sleep(0.1)
+            _busy_note = ("" if _dash_port == str(args.dashboard_port) else
+                          f"; port {args.dashboard_port} busy → {_dash_port}")
             print(f"📊 WEB dashboard → http://{_reachable}:"
-                  f"{args.dashboard_port}   ({_mode} · read-only · pid {dash_pid})")
+                  f"{_dash_port}   ({_mode} · read-only · pid {dash_pid}"
+                  f"{_busy_note})")
             print(f"                   stop with: kill {dash_pid}")
         else:
             print("⚠ web dashboard could not launch (continuing without it)")

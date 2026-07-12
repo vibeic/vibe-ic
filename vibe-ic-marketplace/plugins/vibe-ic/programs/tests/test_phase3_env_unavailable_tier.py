@@ -91,7 +91,8 @@ class _FakePdkConfig:
     """Minimal stand-in for PdkConfig to bypass _detect_pdk."""
     def __init__(self, drc_deck=None, calibre_drc=None,
                  calibre_lvs=None, calibre_lvs_device=None,
-                 macro_gds=None, macro_v=None, name="test"):
+                 macro_gds=None, macro_v=None, name="test",
+                 bridge_magicrc=None, bridge_netgen_setup=None):
         self.drc_deck = drc_deck
         self.calibre_drc = calibre_drc
         self.calibre_lvs = calibre_lvs
@@ -99,6 +100,11 @@ class _FakePdkConfig:
         self.macro_gds = macro_gds
         self.macro_v = macro_v
         self.name = name
+        # v1.3.83 step_lvs consults the PDK-bridge OSS-LVS tech before
+        # dead-ending on a missing calibre binary; the fake must carry these
+        # (default None = no bridge) or the attribute access raises.
+        self.bridge_magicrc = bridge_magicrc
+        self.bridge_netgen_setup = bridge_netgen_setup
 
 
 def test_step_drc_env_unavailable_when_calibre_deck_present_but_binary_absent(
