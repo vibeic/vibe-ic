@@ -5784,6 +5784,62 @@ _CHIP_TOP_SV_PARAM_SIGNATURES = (
 )
 
 
+_CHIP_TOP_VL_TRI_RE = re.compile(
+    r"\n`ifdef VERILATOR[ \t]*\n[ \t]*(?:tri0|tri1)[ \t]*\n`endif")
+
+
+def _chip_top_neutralize_inner_vl_port_tri(text: str, module_name: str):
+    """#115 follow-up — Verilator dead-reset through the auto-emitted chip_top.
+
+    The reset-alias additive wrapper carries `ifdef VERILATOR tri0/tri1
+    qualifiers on its port faces (the pull Verilator honors for an unbound
+    face). When `_autoemit_chip_top_if_needed` COPIES that port block into
+    chip_top, BOTH hierarchy levels carry the port pull — and Verilator
+    (5.020 and 5.048, verified) never transfers a driven value through a
+    tri-port -> tri-port two-level chain: the design can never be reset
+    (RESET_DEAD both spellings). Simply NOT copying the pull is equally
+    wrong: a plain unbound chip_top input ties to 0 under Verilator and
+    freezes an active-low design permanently IN reset. The verified-green
+    shape keeps the pull on the OUTERMOST face only: chip_top keeps the
+    copied qualifiers, and THIS helper neutralizes the INNER wrapper's
+    port-face tri qualifiers to plain inputs (the wrapper is the runner's
+    own generated artifact, so the rewrite is deterministic). The wrapper
+    body's `ifdef VERILATOR combine arm and the `else-arm internal pull
+    nets live OUTSIDE the port list and are untouched — the iverilog path
+    (plain ports everywhere + internal z-pull) is unaffected.
+
+    Returns the rewritten text, or None when the module's ANSI port list
+    cannot be safely located or carries no VERILATOR tri qualifier (caller
+    leaves the file unchanged). Known latent fragility (no reachable flow
+    path — step_rtl_gen wipes rtl/ before regenerating and autoemit
+    early-returns when chip_top exists): a SECOND autoemit against an
+    already-neutralized inner would emit a pull-less chip_top (frozen in
+    reset under Verilator); if a new flow path ever re-emits chip_top
+    without regenerating the wrapper, detect the additive wrapper via its
+    body `__rcvar_pull` nets instead. chip-AGNOSTIC: keys only on the
+    emitted directive shape, no design/vendor literal."""
+    try:
+        import reset_clock_variant_alias as _rcv
+        # Locate the span on a COMMENT-MASKED copy (offset-preserving): the
+        # span locator anchors on the FIRST `module <name>` occurrence in raw
+        # text, and a plain banner comment (`// module counter — 8-bit ...`)
+        # before the declaration would silently defeat the neutralize — the
+        # double-tri dead-reset would return with no error (Step-2.7
+        # reproduced MEDIUM). The DELETE still runs on the raw slice.
+        masked = _chip_top_mask_comments(text)
+        span = _rcv._module_port_list_span(masked, module_name)
+    except Exception:
+        return None
+    if not span:
+        return None
+    open_idx, close_idx = span
+    seg = text[open_idx:close_idx + 1]
+    new_seg, n = _CHIP_TOP_VL_TRI_RE.subn("", seg)
+    if n == 0:
+        return None
+    return text[:open_idx] + new_seg + text[close_idx + 1:]
+
+
 def _chip_top_param_block_needs_sv(param_block: str) -> bool:
     """True iff the captured DUT `#(parameter …)` block carries SV-2017-only
     syntax that `iverilog -g2012` cannot parse, so the auto-emitted wrapper
@@ -6432,6 +6488,23 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         # `output reg p` on an instance-driven wrapper output is lint-fatal
         # in strict SV.
         wrapper_port_block = _chip_top_strip_output_storage(port_block)
+        # #115 follow-up — the copied block may carry the reset-alias
+        # wrapper's `ifdef VERILATOR tri port pulls. chip_top KEEPS them
+        # (outermost face owns the pull) and the INNER wrapper's port-face
+        # tri is neutralized to plain inputs — Verilator never transfers a
+        # driven value through a two-level tri-port chain (dead reset),
+        # while a plain unbound chip_top input would tie to 0 and freeze
+        # the design in reset. See _chip_top_neutralize_inner_vl_port_tri.
+        if "`ifdef VERILATOR" in port_block and _re.search(
+                r"\btri[01]\b", port_block):
+            try:
+                _inner_txt = src_file.read_text(errors="ignore")
+                _rew = _chip_top_neutralize_inner_vl_port_tri(
+                    _inner_txt, mod_name)
+                if _rew is not None:
+                    src_file.write_text(_rew)
+            except Exception:
+                pass
         # ORGANIC #582 — sv2v output is ALWAYS non-ANSI (header lists bare
         # names; directions/widths live in body declarations). Copying that
         # header verbatim produced a wrapper with ZERO I/O declarations →
