@@ -6671,10 +6671,73 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
     rc, out, err = _run(["yosys", "-p", script], cwd=synth_dir,
                         timeout=300)
     if rc == 127:
-        rc, out, err = _run(
-            ["docker", "exec", "-w", str(synth_dir), container,
-             "bash", "-lc", f"yosys -p '{script}'"],
-            timeout=300)
+        # #118 — the docker fallback must not assume the host synth_dir is
+        # bind-mounted inside the container at the same path. Mounted ->
+        # unchanged in-place exec (zero behavior change); unmounted -> the
+        # same mount-aware staging the SV fallback uses (docker-cp the
+        # sources + $readmemh aux files in, rewrite the script's host paths
+        # to the ephemeral in-container dir, run there, copy the netlist
+        # back). A mount-less container previously died rc=127 with an
+        # opaque OCI "chdir to cwd ... no such file or directory".
+        if _path_in_container(str(synth_dir), container):
+            rc, out, err = _run(
+                ["docker", "exec", "-w", str(synth_dir), container,
+                 "bash", "-lc", f"yosys -p '{script}'"],
+                timeout=300)
+        else:
+            cont_wd, _needs = _phase2_container_workdir(
+                container, project, synth_dir)
+            if cont_wd is None:
+                rc, out, err = 127, "", (
+                    "yosys docker fallback: no bind-mount covers "
+                    f"{synth_dir} and an in-container staging dir could "
+                    "not be created (container down?)")
+            else:
+                stage_map = {}
+                cp_err = ""
+                for i, f in enumerate(rtl_files):
+                    base = f"{i:02d}_{Path(str(f)).name}"
+                    rcc, _o, _ce = _run(
+                        ["docker", "cp", str(f),
+                         f"{container}:{cont_wd}/{base}"], timeout=60)
+                    if rcc != 0:
+                        cp_err = _ce
+                        break
+                    stage_map[str(f)] = f"{cont_wd}/{base}"
+                else:
+                    # aux files the script resolves relative to cwd
+                    # ($readmemh hex stubs staged into synth_dir above)
+                    for aux in sorted(synth_dir.glob("*.hex")):
+                        rcc, _o, _ce = _run(
+                            ["docker", "cp", str(aux),
+                             f"{container}:{cont_wd}/{aux.name}"],
+                            timeout=60)
+                        if rcc != 0:
+                            cp_err = _ce
+                            break
+                if cp_err:
+                    rc, out, err = 127, "", (
+                        f"yosys docker fallback: staging docker cp "
+                        f"failed: {cp_err}")
+                else:
+                    netlist_c = f"{cont_wd}/netlist_yosys.v"
+                    script_c = script
+                    # longest-first so no path is a prefix casualty
+                    for hp in sorted(stage_map, key=len, reverse=True):
+                        script_c = script_c.replace(hp, stage_map[hp])
+                    script_c = script_c.replace(str(out_v), netlist_c)
+                    rc, out, err = _run(
+                        ["docker", "exec", "-w", cont_wd, container,
+                         "bash", "-lc", f"yosys -p '{script_c}'"],
+                        timeout=300)
+                    if rc == 0:
+                        if not _phase2_retrieve_netlist(
+                                container, netlist_c, out_v, True):
+                            rc = 1
+                            err += ("\nyosys docker fallback: netlist "
+                                    "retrieval from staging failed")
+                    _run(["docker", "exec", container, "bash", "-lc",
+                          f"rm -rf {cont_wd}"], timeout=30)
     log = synth_dir / "yosys.log"
     log.write_text(out + "\n" + err)
 
