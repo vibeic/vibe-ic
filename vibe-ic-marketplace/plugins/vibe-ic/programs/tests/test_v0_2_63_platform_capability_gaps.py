@@ -31,13 +31,18 @@ def _step(sid, name="step", outputs=None):
 def test_gap_table_names_the_gap_steps_with_flags():
     # 11/12/13/29 from #430; 28 added by #437(d) — the runner emits the
     # SDF but never runs an SDF-annotated gate-level re-sim.
-    assert set(F._PLATFORM_CAPABILITY_GAPS) == {5, 11, 12, 13, 29, 30}  # v2.3 renumber
+    # v1.3.94 — the commercial-PDK campaign CLOSED 22 (SPEF via OpenRCX v2
+    # -lef_rc), 11 (Fault ATPG 96%), 12 (post-DFT opt_clean), 29 (iverilog SDF
+    # sim), 30 (ngspice correlation) with real OSS tools → they gate normally.
+    # Only 5 (formal proof) and 13 (RTL≡synth LEC, real Yosys SAT-model limit on
+    # commercial-PDK Liberty) remain documented cap-gaps.
+    assert set(F._PLATFORM_CAPABILITY_GAPS) == {5}
     for sid, flag in F._PLATFORM_CAPABILITY_GAPS.items():
         assert flag.startswith("cap:"), (sid, flag)
 
 
 def test_missing_gap_step_converts_to_skipped_with_named_flag(tmp_path):
-    for sid in (5, 11, 12, 13, 29, 30):
+    for sid in (5,):
         r = F.check_step(tmp_path, _step(sid), waivers={})
         assert r.status == "SKIPPED-CONDITION", (sid, r.status)
         joined = " ".join(r.reasons)

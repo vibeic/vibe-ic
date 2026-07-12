@@ -51,6 +51,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import _path_layout as _pl  # noqa: E402
+import _sim_results_bridge as _srb  # noqa: E402
 
 # The capability-gap token the runner stamps on a connectivity-PASS waiver.
 # A chip-AGNOSTIC capability identifier, NOT a chip/vendor/SKU literal.
@@ -148,6 +149,30 @@ def _evaluate(project: Path) -> "tuple[int, str]":
         return 1, ("FAIL: connectivity-PASS waiver evidence transcript did "
                    "not reach FULL_STACK_TB_DONE — connectivity binding to "
                    "rtl/ was NOT actually demonstrated.")
+
+    # 2026-07-13 — real-functional-PASS SUPERSEDES the connectivity DEFERRAL.
+    # The connectivity bridge above is an HONEST waiver: it says functional
+    # verification was DEFERRED because the AID reference TB cannot bind this
+    # interface family. But for a class whose oracle IS derivable, the NEW TB
+    # path (professional_tb_gen) may have ALREADY closed functional
+    # verification — a real cocotb streaming-scoreboard against the real rtl/
+    # with failures=0 (phase2/stage1/sim_professional/<top>/results.xml). When
+    # that real PASS is present, functional verification was ACHIEVED, not
+    # deferred: step aside (rc=0) so Step 4 is credited as a genuine functional
+    # PASS instead of WAIVED-DEFERRED. chip-AGNOSTIC (keys on the JUnit result
+    # structure, not any chip name) and anti-fabrication-safe (a missing /
+    # failing / vacuous professional result returns None → the honest waiver
+    # below is issued exactly as before).
+    pro = _srb.find_professional_tb_pass(project)
+    if pro:
+        return 0, (
+            "PASS: functional verification ACHIEVED by the professional cocotb "
+            f"testbench (professional_tb_gen) — {pro['rel_path']}: tests="
+            f"{pro['tests']} passed={pro['passed']} failures={pro['failures']} "
+            f"errors={pro['errors']}. The connectivity-PASS / functional-"
+            f"DEFERRED capability-gap waiver ({CAP_CPU_FUNCTIONAL_ORACLE}) is "
+            "SUPERSEDED by this real functional PASS; Step 4 is a genuine "
+            "functional simulation PASS, not WAIVED-DEFERRED.")
 
     return 3, (
         f"PASS_WITH_WAIVERS: {_waiver_track_class_label(xml)} — "

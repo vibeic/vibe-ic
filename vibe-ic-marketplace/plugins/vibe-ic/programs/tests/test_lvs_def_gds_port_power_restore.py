@@ -116,23 +116,25 @@ class TestParsePowerRails:
 
     def test_first_vdd_segment_exact_with_width(self):
         # ( 100 200 ) ( 900 * ) : x2=900, y2 wildcard -> resolves to y1=200.
+        # v1.3.93 — the 6th tuple element is the metal layer (MET1 here).
         rails = mod.parse_power_rails(FULL_DEF)
-        assert rails["VDD"][0] == (100, 200, 900, 200, 480)
+        assert rails["VDD"][0] == (100, 200, 900, 200, 480, "MET1")
 
     def test_y_wildcard_resolves_to_start_y(self):
         rails = mod.parse_power_rails(FULL_DEF)
-        x1, y1, x2, y2, w = rails["VDD"][0]
+        x1, y1, x2, y2, w, metal = rails["VDD"][0]
         assert y2 == y1 == 200
+        assert metal == "MET1"
 
     def test_x_wildcard_resolves_to_start_x(self):
         # ( 100 700 ) ( * 1500 ) : x2 wildcard -> resolves to x1=100.
         rails = mod.parse_power_rails(FULL_DEF)
-        assert rails["VDD"][1] == (100, 700, 100, 1500, 480)
+        assert rails["VDD"][1] == (100, 700, 100, 1500, 480, "MET1")
         assert rails["VDD"][1][2] == rails["VDD"][1][0] == 100
 
     def test_vss_single_segment(self):
         rails = mod.parse_power_rails(FULL_DEF)
-        assert rails["VSS"] == [(100, 0, 900, 0, 480)]
+        assert rails["VSS"] == [(100, 0, 900, 0, 480, "MET1")]
 
     def test_no_specialnets_returns_empty(self):
         assert mod.parse_power_rails(NO_SECTIONS_DEF) == {}

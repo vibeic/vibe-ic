@@ -18,6 +18,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -129,6 +130,84 @@ def test_allowed_input_keys_exclude_oracle():
     assert "context" in E._ALLOWED_INPUT_KEYS
     assert "output" not in E._ALLOWED_INPUT_KEYS
     assert "harness" not in E._ALLOWED_INPUT_KEYS
+
+
+# ---------------------------------------------------------------------------
+# issue #121 — parallel-shard STARTUP RACE on shared run-dir initialisation.
+# N shards over the SAME --run dir (disjoint --ids) must never strand a first
+# case with an empty cases/<id>/ dir. These lock in the race-safe scaffold init.
+# ---------------------------------------------------------------------------
+
+def _rec(cid: str) -> dict:
+    return {"id": cid, "input": {"prompt": f"spec for {cid}",
+                                 "context": {f"rtl/{cid}.sv": _CTX_RTL}}}
+
+
+def test_ensure_run_scaffold_idempotent(tmp_path):
+    run = tmp_path / "run"
+    # repeated + already-populated calls never raise and never wipe existing work
+    E._ensure_run_scaffold(run)
+    (run / "cases" / "sentinel").mkdir(parents=True)
+    E._ensure_run_scaffold(run)
+    E._ensure_run_scaffold(run)
+    assert (run / "cases").is_dir()
+    assert (run / "cases" / "sentinel").is_dir()  # peer work untouched
+
+
+def test_concurrent_shards_first_case_not_stranded(tmp_path):
+    # Reproduce the reported topology: several shards, ONE shared run dir whose
+    # cases/ parent does not exist yet, each staging its own first case. All hit
+    # the shared-scaffold init simultaneously (Barrier). No first case may end up
+    # empty (issue #121) and no shard may raise.
+    run = tmp_path / "run"
+    n = 8
+    ids = [f"cvdp_shard_{i}_first" for i in range(n)]
+    barrier = threading.Barrier(n)
+    errors: list = []
+
+    def shard(cid: str) -> None:
+        try:
+            E._ensure_run_scaffold(run)   # what main() does at startup
+            barrier.wait()                # all shards race the first-case stage
+            case_dir = run / "cases" / cid
+            E._stage_case(_rec(cid), case_dir)
+        except Exception as e:            # noqa: BLE001 - surface any race crash
+            errors.append(f"{cid}: {type(e).__name__}: {e}")
+
+    threads = [threading.Thread(target=shard, args=(c,)) for c in ids]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors, errors
+    for cid in ids:
+        case_dir = run / "cases" / cid
+        staged = list(case_dir.rglob("*"))
+        assert staged, f"{cid}: case dir stranded EMPTY (issue #121)"
+        prompt = case_dir / "input" / "phase1_prompt.md"
+        assert prompt.is_file() and prompt.read_text().startswith("spec for")
+
+
+def test_stage_case_does_not_wipe_peer(tmp_path):
+    # A shard staging its own case must only ever touch its OWN case dir — never
+    # a peer shard's already-staged dir sharing the same cases/ parent.
+    run = tmp_path / "run"
+    E._ensure_run_scaffold(run)
+    E._stage_case(_rec("peer_a"), run / "cases" / "peer_a")
+    E._stage_case(_rec("peer_b"), run / "cases" / "peer_b")
+    assert (run / "cases" / "peer_a" / "input" / "phase1_prompt.md").is_file()
+    assert (run / "cases" / "peer_b" / "input" / "phase1_prompt.md").is_file()
+
+
+def test_atomic_write_text_is_complete_and_leaves_no_temp(tmp_path):
+    # The shared report is written atomically — a reader/peer never sees an empty
+    # or half-written file, and no .tmp residue is left behind.
+    target = tmp_path / "phase1_entry_report.json"
+    payload = json.dumps({"cases": list(range(500))})
+    E._atomic_write_text(target, payload)
+    assert json.loads(target.read_text()) == {"cases": list(range(500))}
+    assert not list(tmp_path.glob(".*.tmp"))
 
 
 if __name__ == "__main__":

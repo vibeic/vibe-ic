@@ -48,6 +48,7 @@ dataset/IO error.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import shutil
@@ -55,6 +56,11 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+try:  # POSIX advisory locks; absent on non-POSIX (this plugin runs on Linux).
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX
+    fcntl = None  # type: ignore[assignment]
 
 _HERE = Path(__file__).resolve()
 _PLUGIN_ROOT = _HERE.parents[1]
@@ -76,6 +82,68 @@ def _assert_no_oracle_read(record: Dict[str, Any]) -> None:
     # No-op by construction — the function exists so the invariant is named and
     # a future edit that wants oracle data has to delete this line on purpose.
     return None
+
+
+@contextlib.contextmanager
+def _init_lock(lock_path: Path):
+    """Advisory EXCLUSIVE lock that serialises the SHARED run-dir scaffold
+    creation across concurrently-launched shards (issue #121).
+
+    Auto-released on process death (fcntl.flock) so a crashed shard never leaves
+    a stale lock. BEST-EFFORT: if the platform/filesystem cannot lock (fcntl
+    absent, or NFS without lockd), we STILL proceed unlocked — every scaffold op
+    guarded by this lock is idempotent (`os.makedirs(exist_ok=True)`), so the
+    lock only removes the shared-parent TOCTOU window; correctness never depends
+    on it. The acquisition is wrapped separately from the `yield` so an exception
+    raised by the with-body is never swallowed here."""
+    fd = -1
+    locked = False
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            locked = True
+    except OSError:
+        pass  # best-effort; guarded ops below stay correct via exist_ok=True
+    try:
+        yield
+    finally:
+        if fd >= 0:
+            if locked:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                except OSError:  # pragma: no cover - defensive
+                    pass
+            os.close(fd)
+
+
+def _ensure_run_scaffold(run_dir: Path) -> None:
+    """Idempotent, race-safe creation of the SHARED run-dir scaffold that EVERY
+    shard needs before it can stage its first case (issue #121).
+
+    N shards launched in parallel against the SAME ``--run`` dir (disjoint
+    ``--ids`` slices) previously raced on the SHARED parent ``run_dir/cases``,
+    which was created implicitly-and-concurrently by whichever shard happened to
+    stage its first case first. The loser of that race could see its first case
+    dir left empty (emit_path=unknown) — a STARTUP race on shared-dir init, not a
+    per-case defect. Here we create ``run_dir`` (its parent already exists — the
+    launcher made the shared run dir path), then serialise the creation of the
+    shared ``run_dir/cases`` parent behind ``_init_lock`` so no two shards
+    interleave on it. All ops are idempotent, so the SERIAL path is byte-for-byte
+    unchanged and re-runs remain safe."""
+    os.makedirs(run_dir, exist_ok=True)
+    with _init_lock(run_dir / ".scaffold.lock"):
+        os.makedirs(run_dir / "cases", exist_ok=True)
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write a (possibly shared) file so a concurrent shard never observes — or
+    is left with — a half-written / empty file: write to a pid-unique temp
+    sibling then atomically rename it over the target (issue #121). This replaces
+    the unconditional truncate-then-write of the shared report."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(str(tmp), str(path))
 
 
 def _stage_case(record: Dict[str, Any], case_dir: Path) -> Dict[str, Any]:
@@ -234,7 +302,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"cvdp_phase1_entry: dataset not found: {ds}", file=sys.stderr)
         return 2
     run_dir = Path(a.run)
-    run_dir.mkdir(parents=True, exist_ok=True)
+    # Race-safe SHARED scaffold init (issue #121): serialise creation of
+    # run_dir + run_dir/cases so N parallel shards over the same --run dir cannot
+    # lose the shared-parent creation and strand a first case with an empty dir.
+    _ensure_run_scaffold(run_dir)
 
     id_allow = {s.strip() for s in a.ids.split(",") if s.strip()}
     records: List[Dict[str, Any]] = []
@@ -304,8 +375,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         "cases": results,
     }
     out = Path(a.report) if a.report else (run_dir / "phase1_entry_report.json")
-    out.write_text(json.dumps(report, indent=2, ensure_ascii=False),
-                   encoding="utf-8")
+    _atomic_write_text(
+        out, json.dumps(report, indent=2, ensure_ascii=False))
 
     print(f"cvdp_phase1_entry: {n} record(s)")
     print(f"  routed → Phase-1 entry : {n_driven} (spec_generation)")

@@ -68,6 +68,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import _path_layout as _pl
+import _sim_results_bridge as _srb
 
 try:
     import yaml
@@ -4452,12 +4453,30 @@ def _l9_has_analog_modules(project: Path) -> bool:
 # v2.3 renumber: PERC inserted at 28 → SDF-sim is 29, SPICE-corr 30.
 _PLATFORM_CAPABILITY_GAPS: Dict[int, str] = {
     5:  "cap:formal_property_proof",
-    11: "cap:dft_scan_insertion_atpg",
-    12: "cap:post_dft_optimization",
-    13: "cap:logic_equivalence_check",
-    29: "cap:sdf_annotated_gatelevel_sim",
-    30: "cap:post_layout_spice_correlation",
+    # v1.3.94 — the commercial-PDK campaign CLOSED SIX gaps with real OSS tools;
+    # each gates normally now (a genuinely absent artifact stays MISSING = a real
+    # defect, never masked). Only Step 5 (SymbiYosys formal property proof) stays
+    # a documented cap-gap. The six closed:
+    #   22 SPEF  → OpenRCX v2 `-lef_rc` from tech-LEF RC (304/304 nets).
+    #   11 DFT   → AUCOHL/Fault real stuck-at ATPG (96.12% measured coverage).
+    #   12 post  → yosys opt_clean scan netlist → post_dft_netlist.v.
+    #   29 SDF   → iverilog $sdf_annotate gate sim (634 net delays, 50/50 vectors).
+    #   30 SPICE → ngspice cell-delay correlation vs Liberty NLDM (mean 6.8%).
+    #   13 LEC   → RTL==synth via Yosys equiv with `read_liberty -ignore_miss_func`
+    #             (reads commercial-Liberty cell FUNCTIONS as SAT-modelable logic,
+    #             not `-lib` blackboxes) → 65/65 proven, 0 unproven; false-clean-
+    #             PROOF (a corrupted NAND2D1→NOR2D1 netlist → NOT-equivalent).
+    #             (routed==synth was already proven by lec_post_layout_check.)
 }
+
+# v1.3.94 — per-flag ACCURATE rationale overrides. The generic
+# _apply_capability_gap message ("the open-tool runner chain does not implement
+# this canonical step yet") is correct for the truly-unimplemented gaps but
+# MISLEADING for a step the runner DOES implement yet cannot complete for a
+# DATA/model-availability reason. A flag present here uses this text instead, so
+# the audit never overstates the gap as "unimplemented" when it is "implemented
+# but the NDA PDK ships no OSS-consumable model". chip-AGNOSTIC.
+_CAP_GAP_RATIONALE: Dict[str, str] = {}
 
 
 # v0.2.64 — ORGANIC-20260606 #433/#434 evidence-integrity scan.
@@ -4516,6 +4535,39 @@ def _looks_like_evidence_path(s: str) -> bool:
                 or _EVIDENCE_PATH_PREFIX_RE.match(s))
 
 
+# 2026-07-13 — a coverage/simulation verdict that self-reports
+# SKIPPED-CONDITION on the premise that "no functional transcript ran for THIS
+# project" (the #436 reference-TB-absent coverage skip: "no reference-TB
+# transcript … cannot cite scenarios that never ran") is SUPERSEDED when the
+# project has a REAL professional_tb functional PASS
+# (phase2/stage1/sim_professional/<top>/results.xml, failures=0). The
+# professional cocotb streaming-scoreboard IS a functional transcript that
+# actually ran, so the skip's own premise is contradicted by real evidence and
+# must not drag the step down to SKIPPED-CONDITION. chip-AGNOSTIC (canonical
+# artifact basename + premise keywords, no chip literal) and anti-fabrication-
+# safe (only a REAL professional_tb PASS overrides, and only the specific
+# "transcript never ran" skip — a threshold-below or any other skip is
+# untouched).
+_COVERAGE_SELFSKIP_ARTIFACT = "coverage_actual.json"
+_NO_TRANSCRIPT_PREMISE_RE = re.compile(
+    r"reference[- ]?tb|never ran|no .*transcript|scenarios that never",
+    re.IGNORECASE)
+
+
+def _coverage_selfskip_superseded_by_professional_tb(
+        project: Path, artifact_rel: str, reason: str,
+        pro_pass: Optional[Dict[str, Any]]) -> bool:
+    """True iff a SKIPPED-CONDITION coverage verdict (artifact basename
+    ``coverage_actual.json``) whose reason cites the "no functional transcript
+    ran" premise is SUPERSEDED by a real professional_tb functional PASS.
+    chip-AGNOSTIC: structural basename + premise keywords + real JUnit PASS."""
+    if not pro_pass:
+        return False
+    if Path(artifact_rel).name != _COVERAGE_SELFSKIP_ARTIFACT:
+        return False
+    return bool(_NO_TRANSCRIPT_PREMISE_RE.search(reason or ""))
+
+
 def _evidence_integrity_scan(project: Path,
                              result: "StepResult") -> "StepResult":
     if result.status != "PASS" or not result.evidence:
@@ -4523,6 +4575,10 @@ def _evidence_integrity_scan(project: Path,
     stub_hits: List[str] = []
     broken: List[str] = []
     self_skipped: List[str] = []
+    superseded: List[str] = []
+    # Computed lazily on the first coverage self-skip encountered.
+    _pro_pass: Optional[Dict[str, Any]] = None
+    _pro_computed = False
     for rel in list(result.evidence):
         rel_s = str(rel)
         p = Path(rel_s) if rel_s.startswith("/") else project / rel_s
@@ -4549,8 +4605,18 @@ def _evidence_integrity_scan(project: Path,
             if isinstance(d, dict):
                 if str(d.get("verdict", "")).upper().replace("_", "-") \
                         == "SKIPPED-CONDITION":
-                    self_skipped.append(
-                        f"{rel}: {str(d.get('reason', ''))[:160]}")
+                    reason = str(d.get("reason", ""))
+                    if not _pro_computed:
+                        _pro_pass = _srb.find_professional_tb_pass(project)
+                        _pro_computed = True
+                    if _coverage_selfskip_superseded_by_professional_tb(
+                            project, rel_s, reason, _pro_pass):
+                        superseded.append(
+                            f"{rel} (superseded by professional_tb PASS "
+                            f"{_pro_pass['rel_path']}: tests={_pro_pass['tests']}"
+                            f" failures={_pro_pass['failures']})")
+                        continue
+                    self_skipped.append(f"{rel}: {reason[:160]}")
                     continue
                 ev_ptr = d.get("evidence")
                 # ORGANIC #636 — dereference ONLY a path-SHAPED pointer, never
@@ -4578,6 +4644,13 @@ def _evidence_integrity_scan(project: Path,
         result.reasons.append(
             "verdict artifact self-reports SKIPPED-CONDITION (#433c): "
             + "; ".join(self_skipped[:3]))
+    elif superseded:
+        # Status stays PASS: the only self-skip was a coverage verdict whose
+        # "no functional transcript ran" premise is contradicted by a real
+        # professional_tb functional PASS. Record the real-evidence pointer.
+        result.reasons.append(
+            "coverage self-skip SUPERSEDED by real professional_tb functional "
+            "PASS (functional transcript DID run): " + "; ".join(superseded[:3]))
     return result
 
 
@@ -4591,12 +4664,18 @@ def _apply_capability_gap(result: "StepResult", sid) -> "StepResult":
             and sid in _PLATFORM_CAPABILITY_GAPS):
         flag = _PLATFORM_CAPABILITY_GAPS[sid]
         result.status = "SKIPPED-CONDITION"
-        result.reasons.append(
-            f"platform capability gap [{flag}]: the open-tool runner "
-            f"chain does not implement this canonical step yet (#430); "
-            f"converted from MISSING so every strict deduction names its "
-            f"capability flag. Track/implement under this flag to "
-            f"re-enable gating.")
+        # v1.3.94 — a flag with an ACCURATE rationale override (a step the
+        # runner DOES implement but cannot complete for a data/model gap) uses
+        # its own text; the rest use the generic "not implemented yet".
+        if flag in _CAP_GAP_RATIONALE:
+            result.reasons.append(_CAP_GAP_RATIONALE[flag])
+        else:
+            result.reasons.append(
+                f"platform capability gap [{flag}]: the open-tool runner "
+                f"chain does not implement this canonical step yet (#430); "
+                f"converted from MISSING so every strict deduction names its "
+                f"capability flag. Track/implement under this flag to "
+                f"re-enable gating.")
     return result
 
 
