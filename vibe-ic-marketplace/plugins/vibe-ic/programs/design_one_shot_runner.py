@@ -5962,7 +5962,7 @@ def _phase2_sv_synth_fallback(project: Path, container: str,
             f"cd {workdir} && {yosys_path} && "
             f"yosys -p '{_slang_prefix}"
             f"read_slang {reads_join} --top {synth_top} "
-            f"-DSYNTHESIS {inc_flag}; "
+            f"-DSYNTHESIS -DYOSYS {inc_flag}; "
             f"hierarchy -top {synth_top}; proc; flatten; {synth_tail}'")
         rc, out, err = _docker_exec(container, slang_cmd, marker=netlist_c)
         _append_log(log, f"SLANG FALLBACK FRONTEND ({fe_reason})", out, err)
@@ -5979,7 +5979,7 @@ def _phase2_sv_synth_fallback(project: Path, container: str,
         sv2v_out = f"{workdir}/{synth_top}_sv2v.v"
         sv2v_cmd = (
             f"cd {workdir} && export PATH={TOOLS_IN_CONTAINER}/bin:$PATH && "
-            f"sv2v -DSYNTHESIS {inc_flag} {reads_join} "
+            f"sv2v -DSYNTHESIS -DYOSYS {inc_flag} {reads_join} "
             f"> {sv2v_out} 2>sv2v.err")
         rc_conv, out_conv, err_conv = _docker_exec(
             container, sv2v_cmd, timeout=600)
