@@ -65,6 +65,40 @@ def test_strip_waveform_dumps_keeps_display_and_finish():
     assert "$dumpvars" not in out
 
 
+# ---- call-scoped strip (adversarial-verify finding on v1.3.83) -------------
+def test_strip_is_call_scoped_code_sharing_dump_line_survives():
+    """Reproduced verdict-flipping defect: the line-based strip deleted a TB's
+    mismatch-checker forever-loop because it SHARED the $dumpvars line, so the TB
+    printed 'Mismatches: 0 in 0 samples' and a WRONG DUT scored PASS through the
+    fork rung. The strip must remove only the dump CALL; the checker survives."""
+    m = _load()
+    src = ("module tb;\n"
+           "  initial begin\n"
+           "    $dumpvars(0, tb); forever @(posedge clk) "
+           "if (y !== in) mismatch_count = mismatch_count + 1;\n"
+           "  end\n"
+           "endmodule\n")
+    out = m._strip_waveform_dumps(src)
+    assert "$dumpvars" not in out
+    # the load-bearing half: the checker sharing the line MUST survive
+    assert "forever @(posedge clk)" in out
+    assert "mismatch_count = mismatch_count + 1;" in out
+
+
+def test_strip_multiline_dump_call_removed_whole():
+    """A dump call spanning lines is removed WHOLE (no dangling fragment): [^;]
+    spans newlines, so the sub eats through the closing ');'."""
+    m = _load()
+    src = ("  $dumpvars(0,\n"
+           "            tb.clk,\n"
+           "            tb.q);\n"
+           "  q_ref = 1'b0;\n")
+    out = m._strip_waveform_dumps(src)
+    assert "$dumpvars" not in out
+    assert "tb.q);" not in out          # no dangling tail of the call
+    assert "q_ref = 1'b0;" in out       # following statement intact
+
+
 # ---- _iverilog_toolgap_signature: fires on tool-gap, not plain syntax -----
 @pytest.mark.parametrize("text", [
     "prob_ref.sv:29: sorry: This cast operation is not yet supported.",
@@ -141,6 +175,49 @@ def test_fork_iverilog_runs_sv_enum_cast_and_no_leak(tmp_path):
     assert out_bad is not None
     # §4.05 no-leak: a wrong DUT still mismatches (verdict never inflated)
     assert "Mismatches: 0 in" not in out_bad
+
+
+def test_fork_strip_never_deletes_checker_sharing_dump_line(tmp_path):
+    """Verdict-level regression of the adversarial-verify finding: a TB whose
+    mismatch-checker forever-loop SHARES the $dumpvars line. Under the line-based
+    strip the checker was deleted with the line, mismatch_count stayed 0, and a
+    genuinely-WRONG DUT printed the pass-shaped 'Mismatches: 0 in 20 samples'.
+    With the call-scoped strip the checker survives: wrong DUT mismatches, correct
+    DUT still passes."""
+    m = _need_container()
+    tb = tmp_path / "t.sv"
+    tb.write_text(
+        "module tb;\n"
+        "  reg clk = 0, in = 0; wire y; integer mismatch_count = 0; integer i;\n"
+        "  TopModule dut(.in(in), .y(y));\n"
+        "  always #1 clk = ~clk;\n"
+        "  initial begin\n"
+        # the attack line: dump call + the ONLY mismatch-checker share one line
+        "    $dumpvars(0, tb); forever @(posedge clk) "
+        "if (y !== in) mismatch_count = mismatch_count + 1;\n"
+        "  end\n"
+        "  initial begin\n"
+        "    for (i = 0; i < 20; i = i + 1) begin @(negedge clk); in = i[0]; end\n"
+        "    @(negedge clk);\n"
+        "    $display(\"Mismatches: %0d in 20 samples\", mismatch_count);\n"
+        "    $finish;\n"
+        "  end\n"
+        "endmodule\n")
+    good = tmp_path / "good.sv"
+    good.write_text("module TopModule(input in, output y);\n"
+                    "  assign y = in;\nendmodule\n")
+    bad = tmp_path / "bad.sv"
+    bad.write_text("module TopModule(input in, output y);\n"
+                   "  assign y = ~in;\nendmodule\n")
+
+    out_bad = m._fork_iverilog_compile_run([str(bad), str(tb)], "tb")
+    assert out_bad is not None and out_bad != m.FORK_SIM_TIMEOUT
+    # the checker must have survived the strip: a wrong DUT reports mismatches
+    assert "Mismatches: 0 in" not in out_bad, (
+        "checker was deleted with the $dumpvars line — wrong DUT scored clean")
+    out_good = m._fork_iverilog_compile_run([str(good), str(tb)], "tb")
+    assert out_good is not None and out_good != m.FORK_SIM_TIMEOUT
+    assert "Mismatches: 0 in 20 samples" in out_good
 
 
 # ---- gatekeeper remediation (#114 landing): _golden_ref_self_compiles gets the
@@ -283,3 +360,64 @@ def test_dockerless_host_returns_none_instead_of_crashing(tmp_path, monkeypatch)
     monkeypatch.setenv("PATH", str(tmp_path))   # no docker anywhere
     out = m._fork_iverilog_compile_run([str(src)], "tb")
     assert out is None
+
+
+def test_strip_replaces_call_with_empty_statement_prefix_safe():
+    """Gatekeeper remediation on the call-scoped strip: the dump call is
+    replaced by an empty statement `;` so (a) an if/else-prefixed dump keeps a
+    legal, semantics-preserving arm (bare deletion left `if (dbg) else` — a
+    syntax error that deflated a recoverable TB) and (b) an event-control
+    prefix cannot silently attach to the following statement."""
+    m = _load()
+    src = ("  initial begin\n"
+           "    if (dbg) $dumpvars(0, tb); else err = err + 1;\n"
+           "    @(posedge clk) $dumpfile(\"w.vcd\");\n"
+           "    checker_tick = checker_tick + 1;\n"
+           "  end\n")
+    out = m._strip_waveform_dumps(src)
+    assert "$dump" not in out
+    assert "if (dbg) ; else err = err + 1;" in out
+    assert "@(posedge clk) ;" in out
+    assert "checker_tick = checker_tick + 1;" in out
+
+
+# ---- Step-2.7 reproduced INFLATION on the naive call-scoped form ------------
+def test_strip_never_matches_dump_token_in_comment():
+    """Reproduced INFLATION vector 1a: '// enable $dumpvars for waves' above an
+    unbraced checker — the naive [^;]*; match ate across the newline and
+    deleted the TB's sole checker while staying COMPILABLE (wrong DUT printed
+    'Mismatches: 0' — false PASS). A commented token must never match."""
+    m = _load()
+    src = ("module tb;\n"
+           "  // enable $dumpvars for waves\n"
+           "  always @(posedge clk) if (y !== in) errors = errors + 1;\n"
+           "endmodule\n")
+    out = m._strip_waveform_dumps(src)
+    assert "errors = errors + 1;" in out, "checker must survive a commented token"
+    assert "// enable $dumpvars for waves" in out, "comment itself untouched"
+
+
+def test_strip_never_matches_semicolonless_macro_body():
+    """Reproduced INFLATION vector 1b: `define WAVES $dumpvars(0, tb)  (no
+    trailing ';' — the idiomatic `WAVES; split). The naive match ate the
+    newline + the following checker into the macro body. A call with no
+    IMMEDIATE ';' must not match — the macro survives verbatim (worst case its
+    expansion later fails the fork build: deflation-only, never inflation)."""
+    m = _load()
+    src = ("`define WAVES $dumpvars(0, tb)\n"
+           "always @(posedge clk) if (y !== in) err = err + 1;\n")
+    out = m._strip_waveform_dumps(src)
+    assert "`define WAVES $dumpvars(0, tb)" in out, "macro body left verbatim"
+    assert "err = err + 1;" in out, "checker must survive"
+
+
+def test_strip_removes_call_with_semicolon_inside_string_arg():
+    """String args are masked before matching, so a ';' INSIDE a $dumpfile
+    string no longer stops the match — the call is removed WHOLE (upgrades the
+    previously-disclosed dangling-fragment deflation)."""
+    m = _load()
+    src = '  $dumpfile("a;b.vcd");\n  q_ref = 1\'b0;\n'
+    out = m._strip_waveform_dumps(src)
+    assert "$dumpfile" not in out
+    assert 'b.vcd");' not in out, "no dangling fragment"
+    assert "q_ref = 1'b0;" in out
