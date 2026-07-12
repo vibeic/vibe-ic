@@ -379,3 +379,45 @@ def test_strip_replaces_call_with_empty_statement_prefix_safe():
     assert "if (dbg) ; else err = err + 1;" in out
     assert "@(posedge clk) ;" in out
     assert "checker_tick = checker_tick + 1;" in out
+
+
+# ---- Step-2.7 reproduced INFLATION on the naive call-scoped form ------------
+def test_strip_never_matches_dump_token_in_comment():
+    """Reproduced INFLATION vector 1a: '// enable $dumpvars for waves' above an
+    unbraced checker — the naive [^;]*; match ate across the newline and
+    deleted the TB's sole checker while staying COMPILABLE (wrong DUT printed
+    'Mismatches: 0' — false PASS). A commented token must never match."""
+    m = _load()
+    src = ("module tb;\n"
+           "  // enable $dumpvars for waves\n"
+           "  always @(posedge clk) if (y !== in) errors = errors + 1;\n"
+           "endmodule\n")
+    out = m._strip_waveform_dumps(src)
+    assert "errors = errors + 1;" in out, "checker must survive a commented token"
+    assert "// enable $dumpvars for waves" in out, "comment itself untouched"
+
+
+def test_strip_never_matches_semicolonless_macro_body():
+    """Reproduced INFLATION vector 1b: `define WAVES $dumpvars(0, tb)  (no
+    trailing ';' — the idiomatic `WAVES; split). The naive match ate the
+    newline + the following checker into the macro body. A call with no
+    IMMEDIATE ';' must not match — the macro survives verbatim (worst case its
+    expansion later fails the fork build: deflation-only, never inflation)."""
+    m = _load()
+    src = ("`define WAVES $dumpvars(0, tb)\n"
+           "always @(posedge clk) if (y !== in) err = err + 1;\n")
+    out = m._strip_waveform_dumps(src)
+    assert "`define WAVES $dumpvars(0, tb)" in out, "macro body left verbatim"
+    assert "err = err + 1;" in out, "checker must survive"
+
+
+def test_strip_removes_call_with_semicolon_inside_string_arg():
+    """String args are masked before matching, so a ';' INSIDE a $dumpfile
+    string no longer stops the match — the call is removed WHOLE (upgrades the
+    previously-disclosed dangling-fragment deflation)."""
+    m = _load()
+    src = '  $dumpfile("a;b.vcd");\n  q_ref = 1\'b0;\n'
+    out = m._strip_waveform_dumps(src)
+    assert "$dumpfile" not in out
+    assert 'b.vcd");' not in out, "no dangling fragment"
+    assert "q_ref = 1'b0;" in out
