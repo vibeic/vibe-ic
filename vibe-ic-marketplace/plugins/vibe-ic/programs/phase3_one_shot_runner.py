@@ -1994,6 +1994,26 @@ class PdkConfig:
     #   max_bridge_um MUST stay below that layer's min-space so the close can
     #   only bridge same-net gaps (see _klayout_same_net_heal). None → no heal.
     same_net_heal: Optional[Dict[str, Any]] = None
+    # v1.3.91 — KLayout streamout drops top-level PORT text labels and a
+    # FOLLOWPIN-only power grid is physically-disjoint rails: both make the
+    # streamed GDS un-LVS-able (anonymous top nets + one net per rail). When the
+    # bridge signoff config carries `port_label_restore` (truthy, optionally a
+    # dict overriding text_layer / vdd_marker / vss_marker), step_gds runs a
+    # post-streamout pass (def_gds_port_power_restore.py) that injects the DEF
+    # PINS as text labels and paints a VDD/VSS rail MARKER per SPECIALNET
+    # FOLLOWPIN segment — so the KLayout LVS extractor can name ports and unite
+    # the rails by geometry. None → no-op (OSS PDKs keep native streamout).
+    port_label_restore: Optional[Dict[str, Any]] = None
+    # v1.3.91 — LVS engine selector. "magic" (default) = the #443 Magic
+    # ext2spice + netgen route. "klayout" = geometric transistor extraction
+    # (klayout_pdk_lvs.py) + netgen — the route that stays net-correct where a
+    # commercial-PDK LEF-abstract collapses Magic's top extraction (commercial_pdk).
+    # Config-gated so the general flow is unchanged; requires port_label_restore.
+    lvs_engine: str = "magic"
+    # v1.3.91 — optional PDK layer-map JSON (container/host path) for the KLayout
+    # LVS engine's geometric device recognition (klayout_pdk_lvs --layermap). None
+    # → the program's built-in commercial_pdk map. Chip-AGNOSTIC: any PDK supplies its own.
+    lvs_layermap: Optional[str] = None
 
 
 def _discover_lefdef_layermap(pdk_dir: Path) -> Optional[str]:
@@ -2285,6 +2305,10 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 bridge_netgen_setup=str(_b_netgen) if _b_netgen else None,
                 dummy_fill=_signoff_cfg.get("dummy_fill"),
                 same_net_heal=_signoff_cfg.get("same_net_heal"),
+                port_label_restore=_signoff_cfg.get("port_label_restore"),
+                lvs_engine=_signoff_cfg.get("lvs_engine", "magic"),
+                lvs_layermap=(str(pdk_dir / _signoff_cfg["lvs_layermap"])
+                              if _signoff_cfg.get("lvs_layermap") else None),
             )
     # fallback: sky130A in container
     return _detect_pdk(project, override="sky130A")
@@ -7570,6 +7594,63 @@ def _klayout_dummy_fill(project: Path, top: str, pdk: PdkConfig,
     return False, f"dummy-fill NONFATAL: rc={rc} {(out + err)[-300:]}"
 
 
+def _ship_program(name: str, dest_dir: Path) -> Path:
+    """Copy a plugin program (a sibling of this runner) into the mounted project
+    dir so it is reachable at a container path and runnable with in-container
+    `python3` (KLayout's `pya` is on the container PYTHONPATH). ONE source of
+    truth — the program file itself; no logic is duplicated into an embedded
+    script constant."""
+    src = Path(__file__).resolve().parent / name
+    dst = dest_dir / name
+    dst.write_text(src.read_text())
+    return dst
+
+
+def _klayout_restore_port_labels(project: Path, top: str, pdk: PdkConfig,
+                                 container: str, gds_path: Path,
+                                 def_file: Path) -> Tuple[bool, str]:
+    """v1.3.91 — restore top-level PORT text labels + VDD/VSS rail markers into
+    the KLayout-streamed sign-off GDS.
+
+    KLayout DEF→GDS streamout writes NO port text and a FOLLOWPIN-only power grid
+    is physically-disjoint rails: both leave the GDS un-LVS-able (anonymous top
+    nets + one net per rail). This runs `def_gds_port_power_restore.py` (the
+    deterministic DEF PINS/SPECIALNETS parser + pya label/marker injector) so the
+    geometric LVS (klayout_pdk_lvs.py) can name ports and unite the rails by
+    geometry. NONFATAL: any failure leaves the GDS untouched, reported in the
+    note. §4.05: reads only the routed DEF (design INPUT), never oracle/golden."""
+    if not pdk.port_label_restore:
+        return False, "no port_label_restore config"
+    if not gds_path.is_file():
+        return False, "no GDS to label"
+    if not def_file.is_file():
+        return False, "no DEF for port labels"
+    if not _tool_in_path(container, "klayout"):
+        return False, "klayout not in container PATH — port-label restore skipped"
+    pnr_dir = _pl.pnr_dir(project)
+    prog = _ship_program("def_gds_port_power_restore.py", pnr_dir)
+    labeled = pnr_dir / f"{top}.labeled.gds"
+    cmd = (
+        f"export QT_QPA_PLATFORM=offscreen && "
+        f"python3 {_to_container_path(str(prog), container)} "
+        f"--gds-in {_to_container_path(str(gds_path), container)} "
+        f"--def-file {_to_container_path(str(def_file), container)} "
+        f"--gds-out {_to_container_path(str(labeled), container)}"
+    )
+    rc, out, err = _docker_exec(container, cmd,
+                                marker=_to_container_path(str(prog), container))
+    if (rc == 0 and labeled.is_file() and labeled.stat().st_size > 0
+            and "restored:" in (out or "")):
+        try:
+            labeled.replace(gds_path)
+        except Exception as exc:
+            return False, f"restore wrote {labeled.name} but swap failed: {exc}"
+        tail = "; ".join(l for l in (out or "").splitlines()
+                         if l.startswith("restored:"))
+        return True, f"port labels + rail markers restored ({tail})"
+    return False, f"port-label restore NONFATAL: rc={rc} {(out + err)[-300:]}"
+
+
 def step_gds(project: Path, top: str, pdk: PdkConfig,
              container: str) -> StepResult:
     t0 = time.time()
@@ -7592,10 +7673,12 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     # Magic's native union merges only abutting/overlapping geometry, NOT
     # the sub-min-space same-net gaps the OSS router leaves, so the heal is
     # genuinely needed and MUST NOT be bypassed by a successful Magic stream.)
-    if pdk.stdcell_marker_layer or pdk.dummy_fill or pdk.same_net_heal:
+    if (pdk.stdcell_marker_layer or pdk.dummy_fill or pdk.same_net_heal
+            or pdk.port_label_restore):
         magic_ok, magic_transcript = False, (
             "magic streamout skipped: klayout-native sign-off features "
-            "configured (stdcell marker / dummy fill / same-net heal)")
+            "configured (stdcell marker / dummy fill / same-net heal / "
+            "port-label restore)")
     else:
         magic_ok, magic_transcript = _magic_def_to_gds(
             project, top, pdk, container, gds_out)
@@ -7685,13 +7768,20 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
                                                gds_out))
                           if pdk.dummy_fill else
                           (False, "no dummy_fill config"))
+    # v1.3.91 — restore top PORT text labels + VDD/VSS rail markers LAST (after
+    # merge/heal/fill so the labels/markers land on the final geometry): makes
+    # the KLayout-streamed GDS LVS-able by the geometric extractor. Config-gated
+    # (no-op for OSS PDKs).
+    label_ok, label_note = _klayout_restore_port_labels(
+        project, top, pdk, container, gds_out, def_file)
     return StepResult("gds", "PASS", time.time() - t0,
                       f"gds={gds_out.name} size={gds_out.stat().st_size} "
                       f"(streamout=klayout"
                       f"{'; ' + snap_note if snap_ok else ''}"
                       f"{'; ' + merge_note if merge_ok else ''}"
                       f"{'; ' + heal_note if heal_ok else ''}"
-                      f"{'; ' + fill_note if fill_ok else ''})",
+                      f"{'; ' + fill_note if fill_ok else ''}"
+                      f"{'; ' + label_note if label_ok else ''})",
                       [str(gds_out)],
                       extras={"streamout_engine": "klayout",
                               "grid_snap": snap_ok,
@@ -7702,6 +7792,8 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
                               "same_net_heal_note": heal_note,
                               "dummy_fill": fill_ok,
                               "dummy_fill_note": fill_note,
+                              "port_label_restore": label_ok,
+                              "port_label_restore_note": label_note,
                               "cell_gds": pdk.cell_gds,
                               "stdcell_marker_layer": marker_arg or None,
                               "stream_log": str(stream_log),
@@ -9056,6 +9148,12 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
             netlist.read_text(errors="replace"))
     except OSError:
         _spare_classes = []
+    # v1.3.91 — config-selected LVS engine. "klayout" = geometric transistor
+    # extraction (net-correct where a commercial-PDK LEF-abstract collapses
+    # Magic's top extraction). Default "magic" = the #443 ext2spice route → the
+    # general flow is byte-for-byte unchanged.
+    if pdk.lvs_engine == "klayout":
+        return _run_klayout_lvs(project, top, pdk, container, netlist, t0)
     _local_setup_host, local_setup_c = _emit_local_netgen_setup(
         project, pdk, container, spare_only_classes=_spare_classes)
     return _run_extraction_lvs(project, top, pdk, container, def_file,
@@ -9656,6 +9754,196 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
                 "power_aware_stats": stats,
                 "ext2spice_warning": ext_warning,
                 "extracted_netlist": str(spice_out.relative_to(project))})
+
+
+def _run_klayout_lvs(project: Path, top: str, pdk: PdkConfig,
+                     container: str, netlist: Path, t0: float) -> StepResult:
+    """v1.3.91 — geometric transistor-level LVS (KLayout `LayoutToNetlist`).
+
+    The route that stays net-correct where a commercial-PDK LEF-abstract collapses
+    Magic's top-level extraction (commercial_foundry commercial_pdk): `klayout_pdk_lvs.py` extracts
+    real transistors from the (label-restored) flat sign-off GDS + the cell-library
+    GDS, `gate_verilog_to_spice.py` converts the gate netlist to a SPICE reference,
+    and netgen compares spice-vs-spice. Deterministic + multithreaded (no LLM in the
+    compute loop). Config-gated (`pdk.lvs_engine == 'klayout'`); the verdict comes
+    from the SHARED `_lvt.classify` so it can never drift from the Step-31 gate.
+    A power short or a device/net-count MISMATCH is reported as an HONEST FAIL —
+    never a false-clean. §4.05: reads only the routed GDS + the gate netlist (design
+    INPUT), never any oracle/golden."""
+    ext_dir = _pl.extracted_dir(project)
+    ext_dir.mkdir(parents=True, exist_ok=True)
+    gds_path = _pl.pnr_dir(project) / f"{top}.gds"
+    if not gds_path.is_file():
+        verdict = _write_lvs_verdict(
+            project, "FAIL", "LVS_NO_SIGNOFF_GDS",
+            f"KLayout LVS needs the sign-off GDS {gds_path.name}; step_gds did "
+            f"not produce it.")
+        return StepResult("lvs", "FAIL", time.time() - t0,
+                          f"KLayout LVS: sign-off GDS {gds_path.name} missing",
+                          extras={"finding": "LVS_NO_SIGNOFF_GDS",
+                                  "lvs_verdict": verdict})
+    if not (pdk.cell_gds and Path(pdk.cell_gds).is_file()):
+        verdict = _write_lvs_verdict(
+            project, "ENV_UNAVAILABLE", "LVS_NO_CELL_GDS",
+            "KLayout LVS needs the standard-cell library GDS (pdk.cell_gds); "
+            "none configured.")
+        return StepResult("lvs", "ENV_UNAVAILABLE", time.time() - t0,
+                          "KLayout LVS: no cell-library GDS (pdk.cell_gds)",
+                          extras={"finding": "LVS_NO_CELL_GDS",
+                                  "lvs_verdict": verdict})
+    for tool in ("klayout", "netgen"):
+        if not _tool_in_path(container, tool):
+            return StepResult("lvs", "ENV_UNAVAILABLE", time.time() - t0,
+                              f"KLayout LVS needs {tool} in container PATH",
+                              extras={"missing_tool": tool})
+
+    klvs_c = _to_container_path(str(_ship_program("klayout_pdk_lvs.py", ext_dir)),
+                               container)
+    v2s_c = _to_container_path(
+        str(_ship_program("gate_verilog_to_spice.py", ext_dir)), container)
+    layout_sp = ext_dir / f"{top}_klayout_layout.spice"
+    cells_sp = ext_dir / "cells.spice"
+    source_sp = ext_dir / f"{top}_klayout_source.spice"
+    threads = os.cpu_count() or 8
+    lm_arg = (f" --layermap {_to_container_path(pdk.lvs_layermap, container)}"
+              if pdk.lvs_layermap else "")
+    base = "export QT_QPA_PLATFORM=offscreen && "
+
+    # 1. cell library -> per-cell SPICE (learns each cell's pin order)
+    rc_l, out_l, err_l = _docker_exec(
+        container, base
+        + f"python3 {klvs_c} lib {_to_container_path(str(pdk.cell_gds), container)} "
+        f"--out {_to_container_path(str(cells_sp), container)} "
+        f"--threads {threads}{lm_arg}", marker=klvs_c)
+    # 2. flat sign-off GDS -> transistor SPICE (power_shorts REPORTED, never hidden)
+    rc_e, out_e, err_e = _docker_exec(
+        container, base
+        + f"python3 {klvs_c} extract {_to_container_path(str(gds_path), container)} "
+        f"--out {_to_container_path(str(layout_sp), container)} "
+        f"--threads {threads}{lm_arg}", marker=klvs_c)
+    power_shorts = None
+    power_short_locs = []
+    _m = re.search(r"power_shorts=(-?\d+)", out_e or "")
+    if _m:
+        power_shorts = int(_m.group(1))
+    _ml = re.search(r"power_short_locations=(\[.*\])", out_e or "")
+    if _ml:
+        try:
+            power_short_locs = json.loads(_ml.group(1))
+        except (ValueError, TypeError):
+            power_short_locs = []
+    if not layout_sp.is_file() or layout_sp.stat().st_size == 0:
+        verdict = _write_lvs_verdict(
+            project, "FAIL", "LVS_EXTRACTION_NO_NETLIST",
+            f"KLayout extraction produced no layout SPICE (rc={rc_e}).",
+            extras={"transcript_tail": (out_e + err_e)[-600:]})
+        return StepResult(
+            "lvs", "FAIL", time.time() - t0,
+            f"KLayout extraction produced no layout netlist (rc={rc_e})",
+            extras={"finding": "LVS_EXTRACTION_NO_NETLIST",
+                    "lvs_verdict": verdict,
+                    "transcript_tail": (out_e + err_e)[-600:]})
+    if not cells_sp.is_file() or cells_sp.stat().st_size == 0:
+        verdict = _write_lvs_verdict(
+            project, "FAIL", "LVS_NO_CELL_NETLIST",
+            f"KLayout cell-library extraction produced no SPICE (rc={rc_l}).",
+            extras={"transcript_tail": (out_l + err_l)[-600:]})
+        return StepResult(
+            "lvs", "FAIL", time.time() - t0,
+            f"KLayout cell-library extraction produced no SPICE (rc={rc_l})",
+            extras={"finding": "LVS_NO_CELL_NETLIST",
+                    "lvs_verdict": verdict,
+                    "transcript_tail": (out_l + err_l)[-600:]})
+    # 3. gate netlist -> SPICE reference (pin order from the cell SPICE)
+    rc_v, out_v, err_v = _docker_exec(
+        container, base
+        + f"python3 {v2s_c} --verilog {_to_container_path(str(netlist), container)} "
+        f"--cells {_to_container_path(str(cells_sp), container)} "
+        f"--out {_to_container_path(str(source_sp), container)}", marker=v2s_c)
+    if not source_sp.is_file() or source_sp.stat().st_size == 0:
+        verdict = _write_lvs_verdict(
+            project, "FAIL", "LVS_NO_SOURCE_NETLIST",
+            f"gate_verilog_to_spice produced no reference SPICE (rc={rc_v}).",
+            extras={"transcript_tail": (out_v + err_v)[-600:]})
+        return StepResult(
+            "lvs", "FAIL", time.time() - t0,
+            f"gate->spice conversion produced no reference netlist (rc={rc_v})",
+            extras={"finding": "LVS_NO_SOURCE_NETLIST",
+                    "lvs_verdict": verdict,
+                    "transcript_tail": (out_v + err_v)[-600:]})
+    # 4. netgen spice-vs-spice compare — verdict via the SHARED classifier.
+    setup = ext_dir / "klayout_lvs_setup.tcl"
+    setup.write_text("# KLayout MOS3 extraction has only nmos/pmos device classes; "
+                     "no physical-only fill/tap/decap classes to ignore.\n")
+    lvs_rpt = _pl.reports_phase3_dir(project) / "lvs.rpt"
+    lvs_rpt.parent.mkdir(parents=True, exist_ok=True)
+    run_tcl = ext_dir / "klayout_lvs_run.tcl"
+    run_tcl.write_text(
+        f'set lay [readnet spice {_to_container_path(str(layout_sp), container)}]\n'
+        f'set src [readnet spice {_to_container_path(str(source_sp), container)}]\n'
+        f'lvs "$lay {top}" "$src {top}" '
+        f'{_to_container_path(str(setup), container)} '
+        f'{_to_container_path(str(lvs_rpt), container)}\n')
+    rc_n, out_n, err_n = _docker_exec(
+        container,
+        f"export PATH={TOOLS_IN_CONTAINER}/bin:$PATH && "
+        f"netgen -batch source {_to_container_path(str(run_tcl), container)}",
+        marker=_to_container_path(str(run_tcl), container))
+    transcript = (out_n or "") + "\n" + (err_n or "")
+    rpt_txt = lvs_rpt.read_text(errors="replace") if lvs_rpt.is_file() else ""
+    blob = transcript + "\n" + rpt_txt
+    cls = _lvt.classify(blob)
+    ps = power_shorts not in (None, 0, -1)
+    ps_note = f"; power_shorts={power_shorts}" if ps else ""
+    if ps and power_short_locs:
+        _l0 = power_short_locs[0]
+        ps_note += (f" (net {_l0.get('net')} bridges VDD@{_l0.get('vdd_at')}um "
+                    f"<-> VSS@{_l0.get('vss_at')}um)")
+    common = {"lvs_report": "reports/phase3/lvs.rpt", "lvs_engine": "klayout",
+              "power_shorts": power_shorts,
+              "power_short_locations": power_short_locs,
+              "extracted_netlist": str(layout_sp.relative_to(project))}
+    if cls == "MATCH" and not ps:
+        verdict = _write_lvs_verdict(
+            project, "PASS", "LVS_MATCH",
+            f"netgen LVS: circuits match uniquely (KLayout geometric extraction "
+            f"of {gds_path.name} vs gate netlist {netlist.name}).", extras=common)
+        return StepResult(
+            "lvs", "PASS", time.time() - t0,
+            f"netgen LVS: circuits match uniquely (KLayout geometric extraction "
+            f"vs {netlist.name}); report at reports/phase3/lvs.rpt",
+            extras={**common, "lvs_verdict": verdict, "finding": "LVS_MATCH"})
+    if cls not in ("MATCH", "MISMATCH"):
+        verdict = _write_lvs_verdict(
+            project, "INCOMPLETE", "LVS_NO_TERMINAL_VERDICT",
+            f"netgen LVS carries no terminal verdict token (rc={rc_n}); the "
+            f"compare did not run to completion.",
+            extras={**common, "transcript_tail": transcript[-600:]})
+        return StepResult(
+            "lvs", "FAIL", time.time() - t0,
+            f"KLayout LVS INCOMPLETE: no netgen terminal verdict (rc={rc_n})",
+            extras={**common, "lvs_verdict": verdict,
+                    "finding": "LVS_NO_TERMINAL_VERDICT",
+                    "transcript_tail": transcript[-600:]})
+    # MISMATCH, or MATCH-with-a-power-short: an HONEST FAIL. A power short is a
+    # real VDD<->VSS bridge; a device/net-count delta is a real mismatch. The
+    # "false-clean is worse than false-fail" rule forbids passing either.
+    _ev = _lvt.pin_mismatch_evidence(blob)
+    ev_note = (f"; evidence: {'; '.join(_ev[:3])}" if _ev else "")
+    finding = "LVS_POWER_SHORT" if (cls == "MATCH" and ps) else "LVS_MISMATCH"
+    verdict = _write_lvs_verdict(
+        project, "FAIL", finding,
+        f"netgen LVS did NOT cleanly match (class={cls}{ps_note}) — KLayout "
+        f"geometric extraction of {gds_path.name} vs gate netlist {netlist.name}. "
+        f"NOT a clean compare.",
+        extras={**common, "mismatch_class": cls,
+                "transcript_tail": transcript[-600:]})
+    return StepResult(
+        "lvs", "FAIL", time.time() - t0,
+        f"netgen LVS did NOT cleanly match (class={cls}{ps_note}{ev_note}); "
+        f"named in lvs_verdict.json — NOT a clean compare",
+        extras={**common, "lvs_verdict": verdict, "finding": finding,
+                "mismatch_class": cls, "transcript_tail": transcript[-600:]})
 
 
 def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
