@@ -169,16 +169,30 @@ def _to_container(p: str) -> str:
     return p.replace(_HOST_DESIGNS_ROOT, _CONT_DESIGNS_ROOT)
 
 
+# CALL-scoped, not LINE-scoped (adversarial-verify finding on v1.3.83): the
+# line-based predecessor deleted ANY line starting with $dumpfile/$dumpvars —
+# including functional code SHARING that line. Reproduced verdict flip: a TB whose
+# mismatch-checker forever-loop shared the $dumpvars line ("$dumpvars(0, tb);
+# forever @(posedge clk) ... mismatch_count = mismatch_count + 1;") lost its whole
+# checker, printed "Mismatches: 0 in 0 samples", and a genuinely-WRONG DUT scored
+# PASS through the fork rung. Not exploitable by a candidate (the sample is
+# preserved verbatim) and zero such lines exist in the real VerilogEval dataset
+# (471 files scanned) — but the hazard is latent for any future Shape-C TB, so the
+# strip now removes ONLY the dump call itself. [^;] spans newlines, so a multi-line
+# call is removed whole; a pathological ';' inside a $dumpfile string arg leaves a
+# dangling fragment -> fork build fails -> None -> compile_error fallback
+# (deflation-only, never a false PASS).
+_DUMP_CALL_RE = re.compile(r"\$dump(?:file|vars)\b[^;]*;")
+
+
 def _strip_waveform_dumps(text: str) -> str:
-    """Remove $dumpfile(...) / $dumpvars(...) statements — waveform-only output
-    that never affects the Mismatches verdict. Some forked iverilog builds reject
-    a $dumpvars that forward-references a module-scope wire declared textually
+    """Remove $dumpfile(...) / $dumpvars(...) CALLS — waveform-only output that
+    never affects the Mismatches verdict. Some forked iverilog builds reject a
+    $dumpvars that forward-references a module-scope wire declared textually
     later (a stricter elaboration order); stripping it lets the fork build run the
-    TB WITHOUT changing what is verified. §4.05: a wrong DUT still mismatches."""
-    return "\n".join(
-        ln for ln in text.splitlines()
-        if not ln.lstrip().startswith(("$dumpfile", "$dumpvars"))
-    ) + "\n"
+    TB WITHOUT changing what is verified. Only the call itself is removed — any
+    code sharing its line survives. §4.05: a wrong DUT still mismatches."""
+    return _DUMP_CALL_RE.sub("", text)
 
 
 _FORK_IV_COUNTER = [0]
