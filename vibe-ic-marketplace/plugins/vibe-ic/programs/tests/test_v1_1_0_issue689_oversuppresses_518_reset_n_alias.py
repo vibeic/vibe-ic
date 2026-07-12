@@ -22,8 +22,11 @@ THE FIX (#792 — additive dual-spelling reset wrapper): expose BOTH the contrac
 spelling AND the canonical, polarity-safely combined so the UNDRIVEN alias
 defaults INACTIVE (active-low → `tri1` pull, AND-combine; active-high → `tri0`
 pull, OR-combine). Whichever spelling the TB binds drives the reset; the other
-never floats to `x`. The `tri0`/`tri1` net types are hidden from yosys (which
-rejects them) behind `` `ifndef YOSYS `` so synthesis sees a plain input. This
+never floats to `x`. REVISED per #115: the port faces are PLAIN inputs (a
+port-level tri coerces to inout under stock iverilog 11 and rejects reg-driven
+TBs); the inactive-default pull lives on INTERNAL `tri0`/`tri1` nets, with the
+pull kept on the port only under `` `ifdef VERILATOR `` and yosys seeing the
+plain port-direct combine. This
 RESCUES `sequence_detector` AND keeps the three spec-binding cases green — every
 in-edge proven by REAL iverilog elaboration of BOTH bindings.
 
@@ -225,7 +228,7 @@ def test_792_clock_is_never_additive(tmp_path):
 
 
 # ════════════════════════════════════════════════════════════════════════
-# yosys tolerates the wrapper (the tri net types are hidden behind `ifndef YOSYS)
+# yosys tolerates the wrapper (tri nets live outside the `elsif YOSYS arm — #115)
 # ════════════════════════════════════════════════════════════════════════
 @pytest.mark.skipif(not _YOSYS, reason="yosys unavailable")
 def test_792_additive_wrapper_synth_reads_under_yosys(tmp_path):
@@ -251,14 +254,23 @@ def test_792_emitter_dual_port_polarity_safe_combine():
     w = V.emit_variant_alias_wrapper(
         "core__rcvar_inner", ports, {}, wrapper_name="core",
         additive_reset_map={"reset_n": "rst_n"})
-    assert "`ifndef YOSYS" in w and "tri1" in w           # active-low → tri1
+    # REVISED shape (#115): the tri1 pull is verilator-only on the PORT faces
+    # (iverilog 11 rejects reg-driven tri ports) and lives on INTERNAL nets for
+    # event-driven simulators; the AND-combine exists in both arms.
+    assert "`ifdef VERILATOR" in w and "tri1" in w        # active-low → tri1
     assert "wire reset_n__rcvar_net = reset_n & rst_n;" in w   # AND-combine
+    assert "tri1 reset_n__rcvar_pull;" in w               # internal pull nets
+    assert "tri1 rst_n__rcvar_pull;" in w
+    assert ("wire reset_n__rcvar_net = reset_n__rcvar_pull & rst_n__rcvar_pull;"
+            in w)
     # active-high → tri0 / OR-combine
     w2 = V.emit_variant_alias_wrapper(
         "core__rcvar_inner",
         [("input", "", "clk"), ("input", "", "reset"), ("output", "", "q")],
         {}, wrapper_name="core", additive_reset_map={"reset": "rst"})
     assert "tri0" in w2 and "wire reset__rcvar_net = reset | rst;" in w2
+    assert ("wire reset__rcvar_net = reset__rcvar_pull | rst__rcvar_pull;"
+            in w2)
 
 
 def test_792_emitter_rejects_additive_on_nonreset():

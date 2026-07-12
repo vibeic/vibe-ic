@@ -928,12 +928,25 @@ def emit_variant_alias_wrapper(core_module: str,
       * active-low : `tri1` pull (undriven alias → 1 = deasserted), AND-combine
       * active-high: `tri0` pull (undriven alias → 0 = deasserted), OR-combine
     so whichever spelling the TB binds drives the reset and the OTHER (undriven)
-    alias defaults INACTIVE — never floating to `x`. The `tri0`/`tri1` net types
-    are hidden from yosys (which rejects them) behind `` `ifndef YOSYS `` so
-    synthesis sees a plain `input` while iverilog/verilator get the pull. The
-    `_NET_QUAL_RE` port parser skips the net-type, and the port NAME appears only
-    once per declaration (the directive wraps only the qualifier token) so a
-    take-every-arm parse never doubles the port. Disjoint from `rename_map`."""
+    alias defaults INACTIVE — never floating to `x`. REVISED per #115: the
+    `tri0`/`tri1` pull no longer sits on the PORT faces — stock iverilog 11
+    coerces a tri-typed input port to inout and rejects a reg-driven TB
+    ("Unable to assign to unresolved wires"), breaking the DRIVEN spelling.
+    Both faces are PLAIN inputs; the pull lives on INTERNAL `tri0`/`tri1` nets
+    (an undriven face floats `z`, the continuous assign transfers it, the pull
+    resolves it INACTIVE — IEEE 1364, honored by iverilog 11/12/14). Only
+    VERILATOR keeps the pull on the port (`` `ifdef VERILATOR ``): it ties an
+    unbound plain input to 0, never `z`, so an internal pull cannot fire there,
+    while it accepts reg-driven tri ports. Yosys sees plain inputs + the plain
+    combine. The `_NET_QUAL_RE` port parser skips the net-type, and the port
+    NAME appears only once per declaration (the directive wraps only the
+    qualifier token) so a take-every-arm parse never doubles the port.
+    Disclosed limitation: under event-driven simulators an UNDRIVEN face now
+    reads `z` when observed directly (hierarchically / in a VCD) — the pulled
+    INACTIVE value lives on the internal `__rcvar_pull` net; the whitebox
+    delivery context suppresses the additive map entirely (see
+    design_one_shot_runner), so no hidden whitebox harness observes the face.
+    Disjoint from `rename_map`."""
     additive = dict(additive_reset_map or {})
     for orig, new in list(rename_map.items()) + list(additive.items()):
         if not _same_class(orig, new):
@@ -1036,16 +1049,46 @@ def emit_variant_alias_wrapper(core_module: str,
             tri = "tri1" if pol == "active_low" else "tri0"
             op = "&" if pol == "active_low" else "|"
             net = f"{name}__rcvar_net"
-            # Dual-spelling additive reset: expose BOTH spellings; the net-type
-            # qualifier is hidden from yosys via `` `ifndef YOSYS `` (synthesis
-            # sees a plain input) while simulators get the inactive-default pull.
-            # The port name appears ONCE per decl (directive wraps only the tri
-            # token) so a take-every-arm parse never doubles the port.
+            # Dual-spelling additive reset (#792), REVISED (#115): the tri0/tri1
+            # net-type must NOT sit on the port faces for event-driven
+            # simulators — stock iverilog 11 coerces a tri-typed input port to
+            # inout and then rejects any TB that procedurally drives it with a
+            # reg ("Unable to assign to unresolved wires"), which broke the
+            # DRIVEN spelling outright (RTLLM up_down_counter /
+            # sequence_detector / synchronizer under iverilog 11). Both faces
+            # are therefore PLAIN inputs; the inactive-default pull moves to
+            # INTERNAL tri0/tri1 nets: an undriven face floats z, the
+            # continuous assign transfers the z, and the pull resolves it
+            # INACTIVE (IEEE 1364 net resolution — verified on iverilog
+            # 11/12/14). VERILATOR alone keeps the pull on the PORT (`ifdef
+            # VERILATOR`): it ties an unbound plain input to 0 (never z) so an
+            # internal pull cannot fire there, while it accepts reg-driven tri
+            # ports without iverilog's coercion error; its combine stays
+            # port-direct. Yosys sees plain inputs + the plain combine
+            # (unchanged). The port NAME still appears ONCE per decl (the
+            # directive wraps only the tri token) so a take-every-arm parse
+            # never doubles the port.
+            # net-type BEFORE the range (`input tri0 [0:0] r` is the legal
+            # order; `input [0:0] tri0 r` is a syntax error — an inherited
+            # ordering bug from the old emission, now fixed)
             for face in (name, canon):
                 decls.append(
-                    f"    {direction}{w}\n`ifndef YOSYS\n    {tri}\n`endif\n"
+                    f"    {direction}\n`ifdef VERILATOR\n    {tri}\n`endif\n"
+                    f"   {w} {face}" if w else
+                    f"    {direction}\n`ifdef VERILATOR\n    {tri}\n`endif\n"
                     f"    {face}")
-            combine_wires.append(f"    wire {net} = {name} {op} {canon};")
+            combine_wires.append(
+                f"`ifdef VERILATOR\n"
+                f"    wire {net} = {name} {op} {canon};\n"
+                f"`elsif YOSYS\n"
+                f"    wire {net} = {name} {op} {canon};\n"
+                f"`else\n"
+                f"    {tri}{w} {name}__rcvar_pull;\n"
+                f"    {tri}{w} {canon}__rcvar_pull;\n"
+                f"    assign {name}__rcvar_pull = {name};\n"
+                f"    assign {canon}__rcvar_pull = {canon};\n"
+                f"    wire {net} = {name}__rcvar_pull {op} {canon}__rcvar_pull;\n"
+                f"`endif")
             conns.append(f"        .{name}({net})")
         else:
             face = rename_map.get(name, name)

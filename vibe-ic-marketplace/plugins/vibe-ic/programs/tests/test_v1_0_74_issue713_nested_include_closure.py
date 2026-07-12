@@ -129,8 +129,8 @@ def test_synth_fallback_wires_helper():
     assert "_v713_includable_sv_closure" in src
     assert "inc_flag" in src
     # both -I sites use the multi-dir flag, not the old single inc_dir
-    assert "-DSYNTHESIS {inc_flag}" in src
-    assert "sv2v -DSYNTHESIS {inc_flag}" in src
+    assert "-DSYNTHESIS -DYOSYS {inc_flag}" in src  # #115: synth-bound frontends define YOSYS
+    assert "sv2v -DSYNTHESIS -DYOSYS {inc_flag}" in src  # #115
 
 
 if __name__ == "__main__":
