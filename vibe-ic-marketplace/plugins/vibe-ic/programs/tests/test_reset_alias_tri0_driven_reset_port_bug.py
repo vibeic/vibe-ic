@@ -170,3 +170,75 @@ def test_additive_wrapper_reset_matrix_behaves(tmp_path, bind_face, pol):
     assert c.returncode == 0, c.stderr
     r = subprocess.run(["vvp", binp], capture_output=True, text=True, timeout=60)
     assert "OKAY" in r.stdout, (bind_face, pol, r.stdout, r.stderr)
+
+
+# ---- Step-2.7 remediation: synth-bound SV frontends must define YOSYS ------
+# Reproduced MEDIUM: the sv2v / read_slang fallback frontends (which feed
+# yosys) defined neither VERILATOR nor YOSYS, so the wrapper's `else arm's
+# internal tri0/tri1 pull nets reached yosys and hard-killed the synth
+# (pre-existing parity: the OLD port-face tri died identically). The fix
+# passes -DYOSYS at every synth-bound frontend call site so the `elsif YOSYS
+# plain-combine arm fires.
+def test_synth_bound_frontends_define_yosys():
+    """Source pin: every synth-bound read_slang / sv2v invocation in both
+    runners carries -DYOSYS (the TB/sim sv2v pre-pass must NOT — iverilog
+    wants the tri pull)."""
+    prog = Path(__file__).resolve().parents[1]
+    p3 = (prog / "phase3_one_shot_runner.py").read_text()
+    p2 = (prog / "design_one_shot_runner.py").read_text()
+    for src, snippets in (
+            (p3, ["read_slang {slang_files} --top {top} -DSIMULATION -DYOSYS",
+                  "sv2v -DSIMULATION -DYOSYS {sv2v_in}",
+                  "read_slang {_syn_files} --top {top} -DSYNTHESIS -DYOSYS"]),
+            (p2, ["-DSYNTHESIS -DYOSYS {inc_flag}; ",
+                  "sv2v -DSYNTHESIS -DYOSYS {inc_flag} {reads_join}"])):
+        for s in snippets:
+            assert s in src, f"synth-bound frontend lost -DYOSYS: {s}"
+    # the TB/sim sv2v pre-pass stays define-driven (SIMULATION/SYNTHESIS pick),
+    # WITHOUT a hardcoded -DYOSYS
+    assert 'sv2v -D{sv2v_define} -I {stage}' in p2
+
+
+def test_sv2v_with_dyosys_strips_tri_from_wrapper(tmp_path):
+    """Docker-gated behavior pin: sv2v resolving the wrapper WITH -DYOSYS
+    emits NO tri0/tri1 token (yosys-safe); WITHOUT it the tri survives
+    (the defect shape) — stay-effective both ways."""
+    if not shutil.which("docker"):
+        pytest.skip("docker not available")
+    import os
+    container = os.environ.get("VIBEIC_IVERILOG13_CONTAINER", "vibeic-eda")
+    probe = subprocess.run(["docker", "exec", container, "sh", "-c",
+                            "PATH=/foss/tools/bin:$PATH sv2v --version"],
+                           capture_output=True, text=True)
+    if probe.returncode != 0:
+        pytest.skip(f"container {container!r} with sv2v not running")
+    R = _load()
+    w = R.emit_variant_alias_wrapper(
+        "core", [("input", "", "clk"), ("input", "", "reset"),
+                 ("output", "[15:0]", "q")],
+        {}, wrapper_name="dut", additive_reset_map={"reset": "rst"})
+    (tmp_path / "w.v").write_text(w)
+    tag = f"/tmp/vibeic_t115_{os.getpid()}"
+    try:
+        subprocess.run(["docker", "exec", container, "sh", "-c",
+                        f"rm -rf {tag} && mkdir -p {tag}"], check=True,
+                       capture_output=True)
+        subprocess.run(["docker", "cp", str(tmp_path / "w.v"),
+                        f"{container}:{tag}/w.v"], check=True,
+                       capture_output=True)
+        r = subprocess.run(["docker", "exec", container, "sh", "-c",
+                            f"PATH=/foss/tools/bin:$PATH "
+                            f"sv2v -DSIMULATION -DYOSYS {tag}/w.v"],
+                           capture_output=True, text=True, timeout=120)
+        assert r.returncode == 0, r.stderr
+        assert "tri0" not in r.stdout and "tri1" not in r.stdout, (
+            "-DYOSYS must select the plain-combine arm (yosys-safe)")
+        r2 = subprocess.run(["docker", "exec", container, "sh", "-c",
+                             f"PATH=/foss/tools/bin:$PATH "
+                             f"sv2v -DSIMULATION {tag}/w.v"],
+                            capture_output=True, text=True, timeout=120)
+        assert "tri0" in r2.stdout, (
+            "without -DYOSYS the sim arm keeps the tri pull (iverilog path)")
+    finally:
+        subprocess.run(["docker", "exec", container, "sh", "-c",
+                        f"rm -rf {tag}"], capture_output=True)
