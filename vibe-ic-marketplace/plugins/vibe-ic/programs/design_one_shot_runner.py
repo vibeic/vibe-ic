@@ -5840,6 +5840,45 @@ def _chip_top_neutralize_inner_vl_port_tri(text: str, module_name: str):
     return text[:open_idx] + new_seg + text[close_idx + 1:]
 
 
+_CHIP_TOP_PULL_DECL_RE = re.compile(
+    r"\b(tri[01])\b[^;\n]*?\b([A-Za-z_]\w*)__rcvar_pull\s*;")
+
+
+def _chip_top_restore_vl_port_tri(port_block: str, inner_text: str):
+    """#119 — re-emit path of the #115 follow-up. When chip_top is re-emitted
+    AFTER the inner reset-alias wrapper was already neutralized (its port
+    faces are plain; the additive intent survives only as the body's
+    `__rcvar_pull` tri nets), copying the plain block verbatim would produce
+    a PULL-LESS chip_top: under Verilator an unbound plain input ties to 0,
+    which for an active-low reset is PERMANENTLY ASSERTED — the design is
+    frozen in reset. Restore the outermost-face pull: for every face named by
+    a `tri0/tri1 <face>__rcvar_pull;` body decl that is also a port of the
+    copied block, wrap its declaration with the `ifdef VERILATOR tri
+    qualifier (the same canonical order the alias emitter uses: direction,
+    guarded net type, range, name). Returns the rewritten block, or None when
+    there is nothing to restore. chip-AGNOSTIC: keys only on the runner's own
+    `__rcvar_pull` emission signature."""
+    faces = {}
+    for m in _CHIP_TOP_PULL_DECL_RE.finditer(inner_text):
+        faces[m.group(2)] = m.group(1)
+    if not faces:
+        return None
+    out = port_block
+    changed = False
+    for face, tri in faces.items():
+        pat = re.compile(
+            rf"\b(input)\s+((?:\[[^\]]+\]\s*)?){re.escape(face)}\b")
+        new, n = pat.subn(
+            lambda mm: (f"{mm.group(1)}\n`ifdef VERILATOR\n    {tri}\n"
+                        f"`endif\n   {(' ' + mm.group(2).strip()) if mm.group(2).strip() else ''} "
+                        f"{face}").replace("    ", "    "),
+            out, count=1)
+        if n:
+            out = new
+            changed = True
+    return out if changed else None
+
+
 def _chip_top_param_block_needs_sv(param_block: str) -> bool:
     """True iff the captured DUT `#(parameter …)` block carries SV-2017-only
     syntax that `iverilog -g2012` cannot parse, so the auto-emitted wrapper
@@ -6503,6 +6542,22 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                     _inner_txt, mod_name)
                 if _rew is not None:
                     src_file.write_text(_rew)
+            except Exception:
+                pass
+        else:
+            # #119 — re-emit path: the inner wrapper is ALREADY neutralized
+            # (plain faces; the additive intent survives only as the body's
+            # __rcvar_pull nets). A verbatim copy would emit a PULL-LESS
+            # chip_top (Verilator ties an unbound plain input to 0 —
+            # active-low reset permanently asserted). Restore the pull on
+            # chip_top's outermost faces from the body signature.
+            try:
+                _inner_txt = src_file.read_text(errors="ignore")
+                if "__rcvar_pull" in _inner_txt:
+                    _res = _chip_top_restore_vl_port_tri(
+                        wrapper_port_block, _inner_txt)
+                    if _res is not None:
+                        wrapper_port_block = _res
             except Exception:
                 pass
         # ORGANIC #582 — sv2v output is ALWAYS non-ANSI (header lists bare
