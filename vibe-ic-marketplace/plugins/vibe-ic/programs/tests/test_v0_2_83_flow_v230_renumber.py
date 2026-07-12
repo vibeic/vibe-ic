@@ -92,9 +92,13 @@ def test_file_order_is_numeric():
 
 
 def test_capability_gaps_follow_renumber():
-    assert F._PLATFORM_CAPABILITY_GAPS[29] == "cap:sdf_annotated_gatelevel_sim"
-    assert F._PLATFORM_CAPABILITY_GAPS[30] == "cap:post_layout_spice_correlation"
+    # v1.3.94 — Steps 29 (SDF sim) + 30 (SPICE corr) were CLOSED this campaign
+    # with real OSS tools (iverilog $sdf_annotate; ngspice NLDM correlation), so
+    # they gate normally now and are no longer cap-gaps. 28 (PERC) is enforced.
+    assert 29 not in F._PLATFORM_CAPABILITY_GAPS
+    assert 30 not in F._PLATFORM_CAPABILITY_GAPS
     assert 28 not in F._PLATFORM_CAPABILITY_GAPS  # PERC is enforced, not a gap
+    assert set(F._PLATFORM_CAPABILITY_GAPS) == {5}
 
 
 def test_env_map_matches_yaml():

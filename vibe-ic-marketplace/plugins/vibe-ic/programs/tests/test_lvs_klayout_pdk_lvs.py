@@ -115,3 +115,119 @@ class TestRequirePyaGate:
         with pytest.raises(SystemExit) as ei:
             mod._require_pya()
         assert ei.value.code == 3
+
+
+# ── v1.3.93 — `compare` command (KLayout NetlistComparer pin-matched LVS) ────
+class _FakeTermDef:
+    def __init__(self, name, tid): self.name = name; self._id = tid
+    def id(self): return self._id
+
+
+class _FakeDevClass:
+    def __init__(self, name, terms): self.name = name; self._terms = terms
+    def terminal_definitions(self): return self._terms
+
+
+class _FakeDevice:
+    def __init__(self, dc, term_nets): self._dc = dc; self._tn = term_nets
+    def device_class(self): return self._dc
+    def net_for_terminal(self, tid):
+        n = self._tn.get(tid)
+        return _FakeNet(name=n) if n is not None else None
+
+
+class _FakeCircuitDrop:
+    def __init__(self, devices): self._devs = list(devices); self.removed = []
+    def each_device(self): return list(self._devs)
+    def remove_device(self, d): self._devs.remove(d); self.removed.append(d)
+
+
+def test_drop_power_only_removes_only_all_power_devices():
+    dc = _FakeDevClass("NMOS", [_FakeTermDef("S", 0), _FakeTermDef("D", 1),
+                               _FakeTermDef("G", 2), _FakeTermDef("B", 3)])
+    filler = _FakeDevice(dc, {0: "VSS", 1: "VDD", 2: "VSS", 3: "VSS"})   # decap: all power
+    logic = _FakeDevice(dc, {0: "n$5", 1: "VDD", 2: "clk", 3: "VSS"})    # has signal terminals
+    c = _FakeCircuitDrop([filler, logic])
+    n = mod._lvs_drop_power_only(c, {"VDD", "VSS"})
+    assert n == 1
+    assert filler in c.removed and logic not in c.removed   # signal device NEVER dropped
+
+
+class _FakeCircuitStray:
+    def __init__(self, name, parents): self.name = name; self._parents = parents
+    def each_parent(self): return list(self._parents)
+
+
+class _FakeNetlist:
+    def __init__(self, circuits): self._c = list(circuits)
+    def each_circuit(self): return list(self._c)
+    def remove(self, c): self._c.remove(c)
+
+
+def test_strip_strays_drops_parentless_non_top_only():
+    top = _FakeCircuitStray("spm", [])                 # the design top (parentless, kept)
+    child = _FakeCircuitStray("NAND2D1", ["spm"])       # instantiated cell (has parent, kept)
+    stray = _FakeCircuitStray("CELLLIB_WRAP", [])       # parentless non-top (dropped)
+    nl = _FakeNetlist([top, child, stray])
+    mod._lvs_strip_strays(nl, "spm")
+    names = {c.name for c in nl.each_circuit()}
+    assert names == {"spm", "NAND2D1"}                  # only the stray wrapper removed
+
+
+def test_compare_is_a_cli_subcommand():
+    import argparse
+    # the compare subcommand + its options must parse without pya present
+    # (pya is only required at execution time via _require_pya()).
+    ap = argparse.ArgumentParser()
+    ap.add_argument("cmd", choices=["extract", "lib", "cell", "compare"])
+    ap.add_argument("gds")
+    ap.add_argument("--source"); ap.add_argument("--top")
+    ap.add_argument("--power"); ap.add_argument("--ground")
+    ap.add_argument("--tol-abs", type=float, default=0.05, dest="tol_abs")
+    ap.add_argument("--tol-rel", type=float, default=0.02, dest="tol_rel")
+    ns = ap.parse_args(["compare", "lay.spice", "--source", "src.spice",
+                        "--top", "spm"])
+    assert ns.cmd == "compare" and ns.source == "src.spice"
+    assert ns.tol_abs == 0.05 and ns.tol_rel == 0.02
+    assert hasattr(mod, "cmd_compare")
+
+
+# --- v1.3.93 .include resolution (KLayout's reader mangles absolute paths) ---
+def test_inline_includes_splices_content(tmp_path):
+    # KLayout's NetlistSpiceReader truncates absolute `.include` paths that
+    # contain '-' (e.g. /home/u/vibe-ic/... -> /home/u//vibe) and does not link
+    # a `.subckt` read in a SEPARATE read() call. `_inline_includes` splices the
+    # included file's content in-line so a SINGLE reader parse links everything.
+    cells = tmp_path / "cells.spice"
+    cells.write_text(".SUBCKT INV a y VDD VSS\n"
+                     "M1 y a VSS VSS nmos L=0.18U W=0.44U\n.ENDS\n")
+    src = tmp_path / "src.spice"
+    src.write_text("* top\n.GLOBAL VDD VSS\n"
+                   f".include {cells}\n"
+                   ".SUBCKT top a y\nX1 a y VDD VSS INV\n.ENDS\n")
+    out = mod._inline_includes(str(src))
+    # the include directive is replaced by the cells' actual content
+    assert ".include" not in out
+    assert ".SUBCKT INV" in out                 # spliced in
+    assert "M1 y a VSS VSS nmos" in out
+    assert ".SUBCKT top" in out                 # main body preserved
+
+
+def test_inline_includes_relative_path(tmp_path):
+    sub = tmp_path / "lib"
+    sub.mkdir()
+    (sub / "cells.spice").write_text(".SUBCKT C a VDD VSS\n.ENDS\n")
+    src = tmp_path / "src.spice"
+    src.write_text(".include lib/cells.spice\n.SUBCKT top a\nX1 a VDD VSS C\n.ENDS\n")
+    out = mod._inline_includes(str(src))
+    assert ".SUBCKT C a VDD VSS" in out         # relative include resolved vs src dir
+
+
+def test_inline_includes_cycle_guard(tmp_path):
+    a = tmp_path / "a.spice"
+    b = tmp_path / "b.spice"
+    a.write_text(f".include {b}\n* a-body\n")
+    b.write_text(f".include {a}\n* b-body\n")
+    # a<->b mutually include: must terminate (cycle guard), not infinite-loop
+    out = mod._inline_includes(str(a))
+    assert "a-body" in out and "b-body" in out

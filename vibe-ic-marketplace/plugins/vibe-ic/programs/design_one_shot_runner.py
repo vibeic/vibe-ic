@@ -5879,6 +5879,105 @@ def _chip_top_restore_vl_port_tri(port_block: str, inner_text: str):
     return out if changed else None
 
 
+def _alias_wrapper_neutralized_reset_faces(text: str, wrapper_name: str):
+    """#120 — detect a NEUTRALIZED reset/clock additive alias wrapper.
+
+    The #115 neutralize strips the `ifdef VERILATOR tri0/tri1 pull from the
+    wrapper's PORT faces (so chip_top — the OUTERMOST face — owns the sole pull
+    and the two-level tri-port dead-reset can never form). The additive intent
+    then survives ONLY as the body's `tri0/tri1 <face>__rcvar_pull;` nets plus
+    the port-direct `ifdef VERILATOR combine arm — both live OUTSIDE the port
+    list. Such a wrapper is 'neutralized' and therefore UNSAFE as a *direct*
+    Verilator sim-bind top: its VERILATOR arm is a port-direct combine, so an
+    UNBOUND reset face ties to 0 and freezes an active-low design permanently
+    in reset. A wrapper is neutralized iff it (a) carries `__rcvar_pull body
+    nets AND (b) its ANSI port-list span carries NO `ifdef VERILATOR (every
+    port-face pull was stripped). Returns the sorted list of reset face names
+    carrying the additive pull when neutralized, else None (safe / not an
+    additive alias wrapper / port list not locatable). chip-AGNOSTIC: keys only
+    on the runner's own `__rcvar_pull emission signature + the port-span
+    directive shape — no chip/vendor literal."""
+    if "__rcvar_pull" not in text:
+        return None
+    faces = sorted({m.group(2)
+                    for m in _CHIP_TOP_PULL_DECL_RE.finditer(text)})
+    if not faces:
+        return None
+    try:
+        import reset_clock_variant_alias as _rcv
+        # Locate the span on a comment-masked copy (offset-preserving) so a
+        # banner comment carrying a stray `(` can never mislocate the port
+        # list; the DIRECTIVE check runs on the RAW slice (masking touches
+        # only comments, never `ifdef).
+        masked = _chip_top_mask_comments(text)
+        span = _rcv._module_port_list_span(masked, wrapper_name)
+    except Exception:
+        return None
+    if not span:
+        return None
+    open_idx, close_idx = span
+    port_span = text[open_idx:close_idx + 1]
+    if "`ifdef VERILATOR" in port_span:
+        # A port face still carries its VERILATOR tri pull -> NOT neutralized
+        # (still safe as a direct bind target). Leave the caller alone.
+        return None
+    return faces
+
+
+def _alias_wrapper_vl_bind_guard_finding(text: str, wrapper_name: str,
+                                         chip_top_name: str = ""):
+    """#120 — build the DISCLOSED guard finding for a neutralized alias wrapper.
+
+    Returns a machine-readable dict stating that `wrapper_name is NOT a valid
+    direct Verilator bind top (its reset faces have no `ifdef VERILATOR tri
+    pull -> an unbound face ties 0 -> stuck-in-reset), naming the chip_top as
+    the safe bind top; or None when the wrapper is not neutralized. This is the
+    'clear disclosed finding' that makes it impossible to SILENTLY ship a
+    stuck-in-reset wrapper: any Verilator bind-top selection can consult it (or
+    the persisted sidecar the runner emits) and refuse / re-target."""
+    faces = _alias_wrapper_neutralized_reset_faces(text, wrapper_name)
+    if not faces:
+        return None
+    msg = (
+        f"neutralized reset-alias wrapper '{wrapper_name}' is NOT a valid "
+        f"direct Verilator sim-bind top: reset face(s) {faces} carry no "
+        f"`ifdef VERILATOR tri pull (the #115 neutralize moved the pull to the "
+        f"outermost chip_top face), so an UNBOUND face ties to 0 under "
+        f"Verilator and freezes an active-low design in reset. Bind the "
+        f"chip_top wrapper"
+        + (f" '{chip_top_name}'" if chip_top_name else "")
+        + " under Verilator, not this wrapper (iverilog is unaffected — the "
+        "wrapper's else-arm carries internal z-pulls).")
+    return {
+        "kind": "neutralized_alias_wrapper_unsafe_as_vl_bind_top",
+        "issue": "#120",
+        "wrapper": wrapper_name,
+        "reset_faces": faces,
+        "safe_vl_bind_top": chip_top_name or None,
+        "sim_bind_safe": {"iverilog": True, "verilator": False},
+        "message": msg,
+    }
+
+
+def _alias_wrapper_unsafe_as_vl_bind_top(text: str, wrapper_name: str,
+                                         vl_bind_top: str,
+                                         chip_top_name: str = ""):
+    """#120 — reusable GUARD for ANY Verilator direct-bind-top selection.
+
+    Returns the #120 disclosure finding IFF the chosen direct Verilator bind
+    top IS the neutralized alias wrapper `wrapper_name (the stuck-in-reset
+    case); None when the bind top is anything else (e.g. chip_top) or the
+    wrapper is not neutralized. A bind-top selector — today the in-flow default
+    is chip_top (safe, returns None); the out-of-flow risk is a future
+    reference_tb / eco-loop restage picking the wrapper — consults this so a
+    neutralized wrapper can never SILENTLY become the stuck-in-reset Verilator
+    top."""
+    if not vl_bind_top or vl_bind_top != wrapper_name:
+        return None
+    return _alias_wrapper_vl_bind_guard_finding(text, wrapper_name,
+                                                chip_top_name)
+
+
 def _chip_top_param_block_needs_sv(param_block: str) -> bool:
     """True iff the captured DUT `#(parameter …)` block carries SV-2017-only
     syntax that `iverilog -g2012` cannot parse, so the auto-emitted wrapper
@@ -6560,6 +6659,32 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                         wrapper_port_block = _res
             except Exception:
                 pass
+        # ISSUE #120 — reset-alias residual DISCLOSURE guard.
+        # After the if/else above, the on-disk inner alias wrapper (`mod_name`)
+        # is NEUTRALIZED (plain reset port faces; the additive pull survives
+        # only as body `__rcvar_pull nets + the port-direct `ifdef VERILATOR
+        # combine). chip_top is the outermost face and owns the pull, so a TB
+        # that binds chip_top (the in-flow default) is safe. But a Verilator TB
+        # that DIRECT-binds the neutralized wrapper itself (out-of-flow today;
+        # candidate: an eco-loop reference_tb restaging original rtl) would tie
+        # an unbound reset face to 0 -> active-low reset permanently asserted ->
+        # stuck in reset. We cannot re-pull the inner wrapper here (that would
+        # recreate the #115 two-level tri-port dead-reset for the primary
+        # chip_top bind — the wrapper is a single on-disk artifact with one
+        # state), so we DISCLOSE the trade-off: persist a machine-readable guard
+        # sidecar marking the wrapper as NOT a valid direct Verilator bind top.
+        # A dotfile so it never matches the rtl `*.v/*.sv globs. Any bind-top
+        # selection can read it (or call `_alias_wrapper_unsafe_as_vl_bind_top`)
+        # so a neutralized wrapper can never SILENTLY ship stuck-in-reset.
+        try:
+            _wtxt = src_file.read_text(errors="ignore")
+            _disc = _alias_wrapper_vl_bind_guard_finding(
+                _wtxt, mod_name, synth_top)
+            if _disc is not None:
+                (rtl_dir / f".{mod_name}__vl_bind_guard.json").write_text(
+                    json.dumps(_disc, indent=2))
+        except Exception:
+            pass
         # ORGANIC #582 — sv2v output is ALWAYS non-ANSI (header lists bare
         # names; directions/widths live in body declarations). Copying that
         # header verbatim produced a wrapper with ZERO I/O declarations →
@@ -8234,6 +8359,8 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
             pdk = "sky130"
         elif "gf180mcu" in head:
             pdk = "gf180"
+        elif re.search(r"\bDFFHQD\d|\bAOI211D1\b", head):
+            pdk = "m18e80pm180su"   # v1.3.94 — Key Foundry HP18E80 commercial PDK
         else:
             pdk = ""   # generic / unmapped netlist
         cov_json = reports_dir / "phase2/dft/coverage.json"
@@ -8243,6 +8370,13 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                "--clock", clk, "--json", str(cov_json)]
         if pdk:
             cmd += ["--pdk", pdk]
+        # v1.3.94 — the commercial HP18E80 PDK ships only Liberty in-tree; Fault
+        # needs a Verilog cell model. It is provisioned at input/pdk/verilog/
+        # m18e80pm180su_neg.v and reaches the container via the separate --pdk-dir
+        # (/pdk) mount because input/pdk is a symlink OUTSIDE /work.
+        if pdk == "m18e80pm180su":
+            cmd += ["--pdk-dir", str((project / "input" / "pdk").resolve()),
+                    "--cell-model-path", "/pdk/verilog/m18e80pm180su_neg.v"]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
             scan_nl = dft_dir / "scan_netlist.v"

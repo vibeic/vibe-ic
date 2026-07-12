@@ -54,12 +54,27 @@ import lvs_verdict_tokens as _lvt  # noqa: E402
 def _find_report(target: Path) -> Optional[Path]:
     if target.is_file():
         return target
-    if target.is_dir():
-        for pat in ("*lvs*.rpt", "*lvs*.out", "*netgen*.rpt", "*.lvs.report",
-                    "comp.out", "*.rpt"):
-            hits = sorted(target.rglob(pat))
-            if hits:
-                return hits[0]
+    if not target.is_dir():
+        return None
+    # v1.3.94 — PREFER the canonical sign-off report. A bare recursive glob
+    # sorts an in-tree backup ('_known_good_snapshot_*/reports_phase3/lvs.rpt')
+    # BEFORE the live 'reports/phase3/lvs.rpt' (underscore < 'r'), so hits[0]
+    # picked the STALE snapshot's netgen mismatch and FALSE-FAILed a clean
+    # sign-off. Take the canonical path first, then glob with backup/snapshot
+    # dirs excluded (same #525/v1.3.94 doctrine as eda_report_audit).
+    canonical = target / "reports" / "phase3" / "lvs.rpt"
+    if canonical.is_file():
+        return canonical
+    try:
+        from eda_report_audit import _is_backup_path as _isbak
+    except Exception:
+        def _isbak(p, r):  # fail-open: no exclusion if the helper is unavailable
+            return False
+    for pat in ("*lvs*.rpt", "*lvs*.out", "*netgen*.rpt", "*.lvs.report",
+                "comp.out", "*.rpt"):
+        hits = sorted(p for p in target.rglob(pat) if not _isbak(p, target))
+        if hits:
+            return hits[0]
     return None
 
 

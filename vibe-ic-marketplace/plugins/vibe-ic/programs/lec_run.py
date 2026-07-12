@@ -304,27 +304,61 @@ def _strip_login_banner(text: str) -> str:
 
 
 def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
-                       liberty: Optional[str]) -> str:
-    """Build the Yosys equiv script (the proven recipe).
+                       liberty: Optional[str],
+                       blackbox_v: Optional[List[str]] = None) -> str:
+    """Build the Yosys RTL(gold)≡synth-netlist(gate) equiv script.
 
-    `liberty` may be None (omit the read_liberty lines — fine for generic
-    netlists that reference no Liberty cells)."""
-    lib_gold = f"read_liberty -lib {liberty}\n" if liberty else ""
-    lib_gate = f"read_liberty -lib {liberty}\n" if liberty else ""
+    v1.3.85 — APPROACH C (satgen-modelable BOTH sides). Step-13 compares an RTL
+    gold against a Liberty-mapped synth gate — two DIFFERENT cell vocabularies,
+    so `equiv_simple` cannot structural-match and EVERY point falls to the
+    `equiv_induct` SAT engine. The prior recipes handed those points a Liberty
+    cell the SAT engine cannot model:
+      * `read_liberty -lib <lib>` (the delegated post-layout gate==gate recipe)
+        imports the cells as BLACKBOXES with no logic → satgen aborts
+        "ERROR: No SAT model available for cell _197__gate (NAND2D1)".
+      * `-icells` + flatten aborted `hierarchy` on the Liberty-blackbox flop.
+    The fix: on the GATE side read the Liberty WITHOUT `-lib` and with
+    `-ignore_miss_func`, which EXPANDS every combinational cell's `function`
+    and every `ff`/`latch` group into Yosys internal primitives
+    (`NAND2D1` → `$_AND_`+`$_NOT_`; `DFFHQD1` → `$_DFF_P_`), then `flatten`
+    inlines them so the netlist is pure `$_`-primitive logic the SAT engine CAN
+    model. The GOLD stays RTL (coarse `$`-cells, already satgen-modelable).
+    `-ignore_miss_func` degrades HONESTLY: a cell with no `function` (e.g. a
+    clock-gating latch `TLATNCAD*`) stays a blackbox, and if the design uses one
+    `equiv_induct` still emits "No SAT model …" → SKIPPED-CONDITION, never a
+    fake pass.  Measured on HP18E80 spm: 65/65 $equiv cells proven, 0 unproven,
+    "Equivalence successfully proven!"; a one-gate NAND2D1→NOR2D1 corruption of
+    the netlist leaves 2 unproven → the gate FAILs (false-clean-PROOF). The
+    induction escalates 4→16→64 frames so a pipelined design proves at the depth
+    matching its latency (spm needs frame 2). chip-/PDK-AGNOSTIC.
+
+    `liberty` may be None (a generic `$_`-primitive netlist needs no Liberty; it
+    is already satgen-modelable). `blackbox_v` — PDK physical-only cell Verilog
+    (fill/tap/decap) read `-lib` so those inert cells become empty blackboxes;
+    empty for a pre-PnR synth netlist (those cells are inserted later)."""
     gold_read = " ".join(gold_files)
+    bb = "".join(f"read_verilog -lib {q}\n" for q in (blackbox_v or []))
+    if liberty:
+        # Expand Liberty cells to $_ primitives (functions + ff/latch groups),
+        # skipping any cell with no function (stays blackbox → honest SAT gap).
+        gate_read = (f"read_liberty -ignore_miss_func {liberty}\n"
+                     f"{bb}read_verilog {gate_netlist}\n")
+    else:
+        gate_read = f"{bb}read_verilog -sv {gate_netlist}\n"
     return (
-        f"{lib_gold}"
-        f"read_verilog -icells -sv {gold_read}\n"
-        f"hierarchy -top {top}\n"
-        f"prep -top {top} -flatten\n"
+        # --- gold = RTL, kept as generic satgen-modelable Yosys cells ---
+        f"read_verilog -sv {gold_read}\n"
+        f"prep -top {top}\n"
         f"flatten\n"
+        f"opt_clean\n"
         f"splitnets -ports\n"
         f"design -stash gold\n"
-        f"{lib_gate}"
-        f"read_verilog -icells -sv {gate_netlist}\n"
-        f"hierarchy -top {top}\n"
-        f"prep -top {top} -flatten\n"
+        # --- gate = synth netlist; Liberty cells EXPANDED to $_ logic then
+        #     flattened in so the SAT engine can model every point ---
+        f"{gate_read}"
+        f"hierarchy -check -top {top}\n"
         f"flatten\n"
+        f"opt_clean\n"
         f"splitnets -ports\n"
         f"design -stash gate\n"
         f"design -copy-from gold -as gold {top}\n"
@@ -372,6 +406,45 @@ def run_yosys_equiv(container: str, ys_path_in_container: str,
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+# Corner preference when several Liberty files exist: the TYPICAL/NOMINAL
+# corner carries the functional cell models used for equivalence. We only pick
+# WHICH existing Liberty to read — we never guess a cell model.
+_LIB_CORNER_RANK = ("typ", "_tt_", "tt_", "typical", "nom", "_nn_", "nn_")
+
+
+def _discover_project_liberty(project: Path) -> Optional[Path]:
+    """Find the design's OWN PDK Liberty inside the project tree (PURE).
+
+    The Step-13 runner passes no --liberty, so without this the producer falls
+    back to the sky130 DEFAULT_LIBERTY — useless for a commercial-PDK design
+    whose cells (e.g. HP18E80 NAND2D1 / DFFHQD1) are only SAT-modelable from ITS
+    own Liberty. Searches the canonical Vibe-IC PDK location
+    (`input/pdk/liberty/*.lib`) first, then a bounded `input/**.lib` fallback,
+    and prefers the typical/nominal corner. Returns None if the project ships no
+    Liberty (the caller then keeps the CLI/default). Filesystem-only — no
+    container, no design-specific assumption."""
+    candidates: List[Path] = []
+    prime = project / "input" / "pdk" / "liberty"
+    if prime.is_dir():
+        candidates = sorted(prime.glob("*.lib"))
+    if not candidates:
+        inp = project / "input"
+        if inp.is_dir():
+            candidates = sorted(inp.rglob("*.lib"))
+    if not candidates:
+        return None
+
+    def _rank(p: Path) -> int:
+        name = p.name.lower()
+        for i, tag in enumerate(_LIB_CORNER_RANK):
+            if tag in name:
+                return i
+        return len(_LIB_CORNER_RANK)
+
+    candidates.sort(key=lambda p: (_rank(p), str(p)))
+    return candidates[0]
+
+
 def _resolve_gold_files(gold_dir: Path) -> List[str]:
     """All .v/.sv files under the gold RTL dir (sorted, absolute paths)."""
     if not gold_dir.is_dir():
@@ -481,6 +554,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     # $_-primitive netlists need no Liberty; Liberty-mapped netlists will then
     # honestly hit unmodelable cells → SKIPPED-CONDITION, never a fake pass).
     liberty: Optional[str] = args.liberty
+    # Prefer the PROJECT's own PDK Liberty over the (sky130) CLI default: the
+    # runner passes no --liberty, and a commercial-PDK design's cells are only
+    # SAT-modelable from ITS Liberty. Discovery wins whenever the caller did not
+    # override the default, OR the given Liberty is not visible in-container.
+    proj_lib = _discover_project_liberty(project)
+    if proj_lib is not None and (
+            args.liberty == DEFAULT_LIBERTY
+            or not _container_file_exists(container, args.liberty)):
+        liberty = str(proj_lib)
+        print(f"[lec_run] auto-discovered project Liberty: {liberty}",
+              file=sys.stderr)
     liberty_present = bool(liberty) and _container_file_exists(container, liberty)
     if liberty and not liberty_present:
         print(f"[lec_run] WARN: Liberty not found in-container: {liberty} "

@@ -99,8 +99,16 @@ def _waived_for_pdk(project_dir, mode: str) -> str:
 # flipped the verdict). Exclude path components that are hidden (dot-dirs)
 # or carry an explicit backup token. Token matching is boundary-aware so
 # legitimate names ("golden", "bakery") never match.
+# v1.3.94 (spm commercial-PDK sign-off) — added `snapshot`/`snap` and
+# `prebuild`: an in-tree `_known_good_snapshot_v1393/` copy of a design's
+# reports (a common human backup pattern) carried a STALE netgen lvs.rpt
+# (mismatch) + a pre-repair antenna stub, and the recursive report scan
+# ingested BOTH alongside the clean live sign-off — the snapshot's mismatch
+# then flipped the LVS/antenna verdict. A canonical report tree never uses a
+# "snapshot" component, so it is unambiguously a backup-flavored aside.
 _BACKUP_TOKEN_RE = re.compile(
-    r"(?:^|[._\-])(bak|backup|backups|stale|old|trash|movedaside|aside)"
+    r"(?:^|[._\-])(bak|backup|backups|stale|old|trash|movedaside|aside"
+    r"|snapshots?|snap|prebuild)"
     r"(?:$|[._\-])", re.IGNORECASE)
 
 
@@ -256,6 +264,19 @@ STRONG_SIGNATURE_GROUPS = {
         # A real OpenSTA report_checks path table.
         ["data arrival time", "data required time", "slack"],
         ["startpoint", "endpoint", "slack"],
+    ],
+    # v1.3.94 — a real KLayout NetlistComparer authoritative LVS report is
+    # legitimately COMPACT (the comparer emits a verdict + device/net/pin
+    # tallies, not a netgen-style multi-KB device-by-device transcript), so a
+    # genuinely-clean small design (e.g. an spm on a commercial PDK) fell under
+    # the 1536 B netgen-tuned floor and false-rejected as a "hand-typed stub".
+    # The four-marker fingerprint below (engine name + comparer class + the
+    # comparer-specific "power-only devices dropped" phrase + the terminal
+    # verdict) is content a stub could not carry without reproducing the real
+    # comparer's structured output. chip-AGNOSTIC.
+    "lvs": [
+        ["klayout", "netlistcomparer", "power-only devices dropped",
+         "circuits match uniquely"],
     ],
 }
 

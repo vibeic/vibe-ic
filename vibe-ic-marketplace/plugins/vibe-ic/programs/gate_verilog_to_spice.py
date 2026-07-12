@@ -19,6 +19,19 @@ Pure Python; no external deps.
 """
 import sys, re, argparse
 
+# Supply-net names that are GLOBAL (`.GLOBAL VDD VSS`) and must NOT be emitted as
+# subckt ports (the layout extraction treats power as global-only). Exact set +
+# clear prefixes; a real functional signal effectively never starts with these.
+_SUPPLY_EXACT = frozenset(("VDD", "VSS", "VPWR", "VGND", "VCC", "VEE", "GND",
+                           "VBB", "VNB", "VPB", "AVDD", "AVSS", "DVDD", "DVSS"))
+_SUPPLY_PREFIXES = ("VDD", "VSS", "VPWR", "VGND", "VCC", "VEE",
+                    "AVDD", "AVSS", "DVDD", "DVSS")
+
+
+def _is_supply_port(name):
+    n = (name or "").upper()
+    return n in _SUPPLY_EXACT or n.startswith(_SUPPLY_PREFIXES)
+
 
 def parse_cell_pins(spice_text):
     """cell name -> ordered pin list (from .SUBCKT lines)."""
@@ -64,6 +77,13 @@ def parse_verilog(vtext):
             else:
                 ports.append(nm)
     ports = [resolve(p) for p in ports]
+    # v1.3.93 — VDD/VSS are GLOBAL (`.GLOBAL VDD VSS`); a global net must NOT also
+    # be a subckt PORT. The routed gate netlist carries PDN-added VDD/VSS module
+    # ports, but the KLayout layout extraction treats power as global-only (no
+    # power ports), so leaving them here gives the netgen SOURCE side 2 extra
+    # ports -> "Top level cell failed pin matching". Drop supply-named ports (they
+    # stay connected via .GLOBAL). Chip-AGNOSTIC name match.
+    ports = [p for p in ports if not _is_supply_port(p)]
 
     insts = []
     for m in re.finditer(r"\b([A-Z]\w+)\s+(\S+)\s*\(([^;]*?)\)\s*;", body, re.S):

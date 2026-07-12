@@ -96,7 +96,8 @@ DEFAULT_SEQ_DEPTHS = (4, 16, 64)
 
 def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
                              blackbox_v: Optional[List[str]] = None,
-                             seq_depths: Optional[List[int]] = None) -> str:
+                             seq_depths: Optional[List[int]] = None,
+                             strip_gate_ports: Optional[List[str]] = None) -> str:
     """Emit the Yosys .ys that structurally proves gold_v == gate_v.
 
     gold_v : golden reference netlist/RTL (e.g. <top>_synth.v or the RTL).
@@ -115,6 +116,14 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
     engine shape as `eda_lvs mode=yosys_equiv`."""
     bb = "\n".join(f"read_verilog -lib {q}" for q in (blackbox_v or []))
     bb_block = (bb + "\n") if bb else ""
+    # v1.3.93 — the routed gate netlist carries top-level SUPPLY ports (VDD/VSS…
+    # added by PDN insertion) that the pre-PnR synth GOLD reference does not, so
+    # `equiv_make` aborts "Can't match gate port VDD_gate". Delete ONLY those
+    # supply ports from the gate design (they carry no logic; the Liberty cells
+    # are functional models without power pins). NEVER strip a non-supply port —
+    # a functional gate/gold port mismatch is a real defect that must surface.
+    strip = "".join(f"delete {top}/w:{p}\n" for p in (strip_gate_ports or []))
+    strip_block = (strip + "opt_clean\n") if strip else ""
     depths = list(seq_depths) if seq_depths else list(DEFAULT_SEQ_DEPTHS)
     # Ascending, de-duplicated, positive; each pass only works the still-unproven
     # cells, so the shallow-first order keeps the common case cheap.
@@ -130,7 +139,7 @@ design -stash gold
 read_liberty -lib {lib}
 {bb_block}read_verilog -sv {gate_v}
 prep -top {top}
-splitnets -ports
+{strip_block}splitnets -ports
 design -stash gate
 
 design -copy-from gold -as gold {top}

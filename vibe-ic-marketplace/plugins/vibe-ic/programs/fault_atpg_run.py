@@ -145,12 +145,21 @@ PDK_CONFIG = {
         ),
         "dff_cells": "gf180mcu_fd_sc_mcu7t5v0__dffq_1,gf180mcu_fd_sc_mcu7t5v0__dffrq_1",
     },
-    # m18e80pm180su custom PDK — used in the v046 aon_timer pilot
+    # m18e80pm180su / HP18E80 KeyFoundry commercial PDK — used in the v046
+    # aon_timer pilot and the spm HP18E80 flow. This proprietary PDK ships a
+    # Verilog simulation model (m18e80pm180su_neg.v) but the run-dir PDK often
+    # carries only the liberty; point --cell-model-path at the model copied
+    # into the run dir's input/pdk/verilog/. The dff_cells list below is a
+    # SEED only — the real set is auto-detected from the netlist by
+    # detect_dff_cells() (unioned in), so a design that uses DFFHQD1 (not the
+    # seeded DFFRQD1/DFFSQD1) is still cut correctly. Common HP18E80 DFF
+    # families: DFFHQD*/DFFSQD*/DFFRQD*/DFFSRQD*/SDFFHQD* (scan variants).
     "m18e80pm180su": {
         # Inside the container this path is /pdk/verilog/... if the host
         # mounts shared_pdk at /pdk; fault_atpg_run mounts it that way below.
+        # Overridable via --cell-model-path (project-relative → /work/...).
         "cell_model": "/pdk/verilog/m18e80pm180su_verilog_210524/m18e80pm180su_neg.v",
-        "dff_cells": "DFFRQD1,DFFSQD1",
+        "dff_cells": "DFFHQD1,DFFHQD2,DFFHQD4,DFFSQD1,DFFRQD1,DFFSRQD1",
     },
     # sky130A high-density stdcell library (default OpenLane PDK).
     # Added 2026-05-24 for v2 e2e benchmark spm_e2e — covers the broad
@@ -172,6 +181,64 @@ PDK_CONFIG = {
         ),
     },
 }
+
+# Matches a flip-flop cell INSTANTIATION line: `CELLNAME instname (` where the
+# cell name follows the near-universal DFF / SDFF (scan-DFF) naming convention.
+# Anchored to line start + requires an instance name and an opening paren so a
+# `wire dff_x;` declaration can never match. Case-insensitive to cover both
+# UPPER (KeyFoundry DFFHQD1) and lower (sky130 dfxtp) conventions — but note
+# sky130/gf180 lowercase cells are `dfxtp`/`dffq`, not `dff*`, so those PDKs
+# still rely on their explicit PDK_CONFIG dff_cells (the auto-detect is a
+# no-cost SUPERSET, never a replacement).
+_DFF_INST_RE = re.compile(
+    r'^\s*(S?DFF[A-Za-z0-9_]*)\s+\\?[^\s()]+\s*\(', re.MULTILINE | re.IGNORECASE)
+
+
+def detect_dff_cells(netlist_text: str) -> str:
+    """Scan a gate-level netlist for instantiated flip-flop cells whose module
+    name begins DFF / SDFF and return them sorted, comma-separated, de-duped —
+    suitable for `fault cut --dff`. Chip- and PDK-AGNOSTIC. Returns "" when
+    none are found (caller keeps the PDK-config seed).
+
+    This closes the failure mode where a PDK config seeds the WRONG flop cell
+    (e.g. seed DFFRQD1,DFFSQD1 but the netlist actually uses DFFHQD1): the
+    detected set is UNIONED with the seed so cut always sees the real flop
+    cell and does not leave 64 un-cut sequential elements (which would tank
+    the measured stuck-at coverage or make ATPG meaningless)."""
+    found = {m.group(1) for m in _DFF_INST_RE.finditer(netlist_text)}
+    return ",".join(sorted(found))
+
+
+def merge_dff_cells(seed: str | None, detected: str) -> str:
+    """Union a PDK-config seed dff-cell list with the auto-detected set,
+    preserving a stable sorted order. Pure — unit-tested. An empty/None seed
+    yields just the detected set and vice-versa."""
+    parts = set()
+    for chunk in (seed or "", detected or ""):
+        for tok in chunk.split(","):
+            tok = tok.strip()
+            if tok:
+                parts.add(tok)
+    return ",".join(sorted(parts))
+
+
+def resolve_cell_model(cell_model_override: str | None,
+                       pdk_cfg: dict | None) -> str | None:
+    """Resolve the Verilog cell-model path as seen INSIDE the container.
+
+    Priority: explicit --cell-model-path > PDK config. A container-absolute
+    override (starts with '/', e.g. /pdk/... or /foss/...) is used as-is; a
+    relative override is a project-relative path resolved under the /work mount
+    (so the model can live inside the run dir → single mount, reproducible).
+    Returns None when neither is available."""
+    if cell_model_override:
+        if cell_model_override.startswith("/"):
+            return cell_model_override
+        return "/work/" + cell_model_override.lstrip("./")
+    if pdk_cfg is not None:
+        return pdk_cfg.get("cell_model")
+    return None
+
 
 # Iverilog lives in iic-osic-tools but isn't in default PATH; set the env var
 # Fault expects, and also prepend to PATH and LD_LIBRARY_PATH so sub-tools
@@ -392,14 +459,41 @@ def run_fault(
     transition_target: float = FOUNDRY_TRANSITION_DEFAULT,
     run_transition: bool = True,
     transition_probe_fn=None,
+    cell_model_override: str | None = None,
+    dff_cells_override: str | None = None,
 ) -> tuple[int, dict]:
-    """Run Fault cut+atpg in the Docker container. Returns (exit, report_dict)."""
+    """Run Fault cut+atpg in the Docker container. Returns (exit, report_dict).
+
+    cell_model_override : explicit Verilog cell-model path (container-absolute
+        or project-relative → /work/...). Wins over the PDK config; lets the
+        commercial HP18E80 model live inside the run dir for reproducibility.
+    dff_cells_override  : explicit `fault cut --dff` list. When None, the flop
+        cells are auto-detected from the netlist and unioned with the PDK-config
+        seed (detect_dff_cells + merge_dff_cells)."""
     pdk_cfg = PDK_CONFIG.get(pdk)
-    if pdk_cfg is None:
+    if pdk_cfg is None and not cell_model_override:
         return 2, {"error": f"unsupported pdk: {pdk}. "
-                            f"Supported: {list(PDK_CONFIG.keys())}"}
-    cell_model = pdk_cfg["cell_model"]
-    dff_cells = pdk_cfg["dff_cells"]
+                            f"Supported: {list(PDK_CONFIG.keys())} "
+                            f"(or pass --cell-model-path for a custom library)"}
+    cell_model = resolve_cell_model(cell_model_override, pdk_cfg)
+    if not cell_model:
+        return 2, {"error": "no Verilog cell model resolved: pass "
+                            "--cell-model-path or use a PDK with a configured "
+                            "cell_model"}
+    # Flop-cell resolution: explicit override wins; else auto-detect from the
+    # netlist and union with the PDK-config seed so cut never misses the real
+    # flop cell (fixes seed/netlist mismatch, e.g. DFFHQD1 vs seed DFFRQD1).
+    if dff_cells_override:
+        dff_cells = dff_cells_override
+    else:
+        try:
+            netlist_text = (project / netlist_rel).read_text(
+                encoding="utf-8", errors="replace")
+        except OSError:
+            netlist_text = ""
+        detected = detect_dff_cells(netlist_text)
+        seed = pdk_cfg.get("dff_cells") if pdk_cfg else None
+        dff_cells = merge_dff_cells(seed, detected) or (seed or "DFF")
 
     # Prepare output paths (relative to project / /work)
     dft_dir = _pl.dft_dir(project)
@@ -542,6 +636,8 @@ def run_fault(
         "coverage_pct": coverage_ratio,
         "faults_covered": faults_covered,
         "faults_total": faults_total,
+        "cell_model": cell_model,
+        "dff_cells": dff_cells,
         "target_pct": min_coverage,
         "stuck_at_ge_target": coverage_ratio >= min_coverage,
         "atpg_exit": ec,
@@ -571,6 +667,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--pdk", default="m18e80pm180su",
                    help=f"PDK name. Supported: {', '.join(PDK_CONFIG.keys())}")
     p.add_argument("--pdk-dir", help="Path to PDK dir (mounted at /pdk for custom PDKs)")
+    p.add_argument("--cell-model-path", default=None,
+                   help="Explicit Verilog cell-model path for the std-cell "
+                        "library. Container-absolute (/pdk/..., /foss/...) is "
+                        "used as-is; a relative path is project-relative "
+                        "(resolved under the /work mount) so a commercial PDK "
+                        "model copied into the run dir is fully reproducible. "
+                        "Wins over the PDK config's cell_model.")
+    p.add_argument("--dff-cells", default=None,
+                   help="Explicit comma-separated flip-flop cell names for "
+                        "`fault cut --dff`. When omitted, the flop cells are "
+                        "auto-detected from the netlist (DFF/SDFF families) and "
+                        "unioned with the PDK-config seed.")
     p.add_argument("--min-coverage", type=float, default=FOUNDRY_STUCK_AT_DEFAULT,
                    help="Minimum stuck-at coverage %% required — FOUNDRY-GRADE "
                         f"default {FOUNDRY_STUCK_AT_DEFAULT:.0f}%% "
@@ -623,6 +731,8 @@ def main(argv: list[str] | None = None) -> int:
         reset_active_low=args.reset_active_low,
         transition_target=args.transition_target,
         run_transition=not args.no_transition,
+        cell_model_override=args.cell_model_path,
+        dff_cells_override=args.dff_cells,
     )
 
     json_path = Path(args.json) if args.json else (_pl.report_path(project, "dft/coverage.json"))
