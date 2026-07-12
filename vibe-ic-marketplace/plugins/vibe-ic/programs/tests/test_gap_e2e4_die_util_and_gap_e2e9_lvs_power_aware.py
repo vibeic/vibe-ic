@@ -329,3 +329,44 @@ class TestRunExtractionLvsPowerAwareWiring:
         res, verdict = self._run(tmp_path, monkeypatch, _CLEAN_MATCH_BLOB, 0)
         assert res.status == "PASS"
         assert verdict["finding"] == "LVS_MATCH"
+
+    def test_magic_extraction_cmd_exports_cad_root(
+            self, tmp_path, monkeypatch):
+        # REGRESSION (magic batch startup-tech): `magic -dnull -noconsole`
+        # execs magicdnull, whose C init resolves its startup-tech search path
+        # from getenv("CAD_ROOT"). With CAD_ROOT unset it collapses to
+        # "/magic/sys", minimum.tech is not found, and magic aborts init BEFORE
+        # reading the -rcfile — extracting NOTHING (rc=0, "produced no extracted
+        # netlist"). The env_prefix MUST export CAD_ROOT (derived from magic's
+        # own install prefix) so the batch extraction can start.
+        (project, top, pdk, def_file, netlist,
+         spice_out, lvs_rpt) = self._prep(tmp_path)
+        captured = {}
+
+        def fake_docker_exec(container, cmd, timeout=None, **_):
+            if "magic -dnull" in cmd:
+                captured["magic"] = cmd
+                spice_out.write_text(
+                    ".subckt top a\nX0 a sky130_fd_sc_hd__inv_1\n.ends\n")
+                return (0, "0 errors\nMAGIC_EXT2SPICE_DONE", "")
+            if "netgen -batch lvs" in cmd:
+                lvs_rpt.parent.mkdir(parents=True, exist_ok=True)
+                lvs_rpt.write_text(_CLEAN_MATCH_BLOB)
+                return (0, _CLEAN_MATCH_BLOB, "")
+            return (0, "", "")
+
+        monkeypatch.setattr(mod, "_docker_exec", fake_docker_exec)
+        mod._run_extraction_lvs(
+            project, top, pdk, "vibeic-eda", def_file, netlist,
+            "/nonexistent.magicrc", "/setup.tcl", 0.0)
+        magic_cmd = captured.get("magic", "")
+        assert magic_cmd, "magic extraction command was never issued"
+        # CAD_ROOT must be exported BEFORE the `magic -dnull` invocation, and it
+        # must be derived (not depend on the ambient env being pre-seeded).
+        assert "CAD_ROOT" in magic_cmd, (
+            "magic batch extraction must export CAD_ROOT or it aborts at "
+            "startup-tech load and extracts nothing")
+        assert magic_cmd.index("CAD_ROOT") < magic_cmd.index("magic -dnull"), (
+            "CAD_ROOT must be exported before the magic invocation")
+        # honors a pre-set CAD_ROOT (`:-` default) rather than clobbering it.
+        assert "CAD_ROOT:-" in magic_cmd
