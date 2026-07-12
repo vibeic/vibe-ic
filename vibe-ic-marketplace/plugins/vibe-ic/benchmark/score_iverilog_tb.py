@@ -169,16 +169,57 @@ def _to_container(p: str) -> str:
     return p.replace(_HOST_DESIGNS_ROOT, _CONT_DESIGNS_ROOT)
 
 
+# CALL-scoped, not LINE-scoped (adversarial-verify finding on v1.3.83): the
+# line-based predecessor deleted ANY line starting with $dumpfile/$dumpvars —
+# including functional code SHARING that line. Reproduced verdict flip: a TB whose
+# mismatch-checker forever-loop shared the $dumpvars line ("$dumpvars(0, tb);
+# forever @(posedge clk) ... mismatch_count = mismatch_count + 1;") lost its whole
+# checker, printed "Mismatches: 0 in 0 samples", and a genuinely-WRONG DUT scored
+# PASS through the fork rung. Not exploitable by a candidate (the sample is
+# preserved verbatim) and zero such lines exist in the real VerilogEval dataset —
+# but the hazard is latent for any future Shape-C TB, so the strip removes ONLY
+# the dump call itself.
+#
+# SYNTAX-ANCHORED (Step-2.7 reproduced INFLATION on the naive [^;]*; form): a bare
+# "$dump…[^;]*;" match fires on the token ANYWHERE — a "// … $dumpvars …" comment
+# or a `define body with no trailing ';' let [^;] eat ACROSS the newline into the
+# next real statement, deleting a TB's sole checker while staying COMPILABLE (a
+# wrong DUT then printed "Mismatches: 0" — false PASS, a regression vs the
+# line-based form's structural comment immunity). The match is therefore anchored
+# to a complete CALL STATEMENT — token, optional (args), then ';' immediately
+# (whitespace only) — found on a COMMENT- AND STRING-MASKED copy (offset-
+# preserving blanks) and spliced out of the RAW text:
+#   * a $dump token inside a comment / string literal never matches (masked);
+#   * a `define body with no ';' never matches (no immediate ';') — the macro
+#     survives verbatim; if its expansion later trips the fork's forward-ref
+#     quirk the build fails -> compile_error (deflation-only, never inflation);
+#   * a ';' inside a $dumpfile string arg is masked, so the call is removed
+#     WHOLE (upgrades the previously-disclosed dangling-fragment deflation);
+#   * [^()] spans newlines, so a legit multi-line call is still removed whole.
+_DUMP_CALL_RE = re.compile(r"\$dump(?:file|vars)\b\s*(?:\([^()]*\))?\s*;")
+_DUMP_MASK_RE = re.compile(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"', re.S)
+
+
 def _strip_waveform_dumps(text: str) -> str:
-    """Remove $dumpfile(...) / $dumpvars(...) statements — waveform-only output
-    that never affects the Mismatches verdict. Some forked iverilog builds reject
-    a $dumpvars that forward-references a module-scope wire declared textually
+    """Remove $dumpfile(...) / $dumpvars(...) CALLS — waveform-only output that
+    never affects the Mismatches verdict. Some forked iverilog builds reject a
+    $dumpvars that forward-references a module-scope wire declared textually
     later (a stricter elaboration order); stripping it lets the fork build run the
-    TB WITHOUT changing what is verified. §4.05: a wrong DUT still mismatches."""
-    return "\n".join(
-        ln for ln in text.splitlines()
-        if not ln.lstrip().startswith(("$dumpfile", "$dumpvars"))
-    ) + "\n"
+    TB WITHOUT changing what is verified. Only a complete call STATEMENT is
+    removed (matched on a comment/string-masked copy — see _DUMP_CALL_RE), and
+    it is replaced by an EMPTY STATEMENT `;` (not deleted outright) so a
+    statement-prefix construct keeps its own statement: `if (dbg)
+    $dumpvars(...); else err=err+1;` stays legal with unchanged semantics, and
+    an event-control prefix `@(posedge clk) $dumpvars(...);` cannot silently
+    ATTACH to the following statement. §4.05: a wrong DUT still mismatches."""
+    masked = _DUMP_MASK_RE.sub(lambda m: " " * len(m.group(0)), text)
+    out, last = [], 0
+    for m in _DUMP_CALL_RE.finditer(masked):
+        out.append(text[last:m.start()])
+        out.append(";")
+        last = m.end()
+    out.append(text[last:])
+    return "".join(out)
 
 
 _FORK_IV_COUNTER = [0]
