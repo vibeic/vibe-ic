@@ -1,5 +1,5 @@
 {
-  "benchmark": "VerilogEval-v2 (spec-to-RTL)",
+  "benchmark": "VerilogEval-Human (iccad2023 code-complete)",
   "shape": "C",
   "tool": "iverilog 12 (host) substituting for Synopsys VCS / Cadence Xcelium",
   "tool_substitution_note": "Functional pass@1 only. PPA stage (DC) not scored \u2014 would not be apples-to-apples vs the upstream methodology. See open-benchmark-methodology skill \u00a7 3.",
@@ -12,11 +12,9 @@
   "non_discriminating_tb_designs": [],
   "passed_discriminating": 153,
   "pass_at_1_discriminating_pct": 98.08,
-  "dataset_defect_count": 1,
-  "dataset_defect_problems": [
-    "Prob099_m2014_q6c"
-  ],
-  "pass_at_1_excluding_dataset_defects_pct": 98.71,
+  "dataset_defect_count": 0,
+  "dataset_defect_problems": [],
+  "pass_at_1_excluding_dataset_defects_pct": 98.08,
   "suspected_defective_golden_count": 1,
   "suspected_defective_golden_problems": [
     {
@@ -24,7 +22,7 @@
       "evidence": "vetted canonical sample mismatches the hidden golden: 111/114 samples"
     }
   ],
-  "pass_at_1_excluding_suspected_defects_pct": 99.35,
+  "pass_at_1_excluding_suspected_defects_pct": 98.71,
   "results": [
     {
       "problem": "Prob001_zero",
@@ -425,11 +423,7 @@
     },
     {
       "problem": "Prob099_m2014_q6c",
-      "verdict": "FAIL",
-      "reason": "compile_error",
-      "log": "099_m2014_q6c_test.sv:71: error: port ``Y4'' is not a port of good1.\n/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl/Prob099_m2014_q6c_test.sv:77: error: port ``Y2'' is not a port of top_module1.\n/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl/Prob099_m2014_q6c_test.sv:77: error: port ``Y4'' is not a port of top_module1.\n4 error(s) during elaboration.\n",
-      "dataset_defect": true,
-      "dataset_defect_reason": "golden_ref_fails_own_tb"
+      "verdict": "PASS"
     },
     {
       "problem": "Prob100_fsm3comb",
@@ -629,7 +623,8 @@
     },
     {
       "problem": "Prob149_ece241_2013_q4",
-      "verdict": "PASS"
+      "verdict": "FAIL",
+      "reason": "functional_mismatch (Mismatches: 1171 in 2040)"
     },
     {
       "problem": "Prob150_review2015_fsmonehot",
