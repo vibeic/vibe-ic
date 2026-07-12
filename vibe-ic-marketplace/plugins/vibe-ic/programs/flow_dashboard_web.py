@@ -1317,14 +1317,37 @@ def serve(project: str, port: int = 8787, full: bool = False, host: str = "127.0
     name = os.path.basename(project.rstrip("/")) or project
     mode = "full" if full else "lightweight"
     handler = make_handler(project, full, fleet=project if fleet else "")
-    httpd = ThreadingHTTPServer((host, port), handler)
+    # v1.3.83 — port-conflict resilience. A stale daemon from a PREVIOUS
+    # run/project commonly still holds the default port: the new daemon then
+    # dies on bind while the launcher prints the requested URL — which
+    # silently serves the OLD project's dashboard. Retry the next ports and
+    # RECORD the actually-bound URL under <project>/reports/ so launchers
+    # print the truth, never the request.
+    httpd = None
+    bound_port = port
+    last_exc = None
+    for cand in range(port, port + 21):
+        try:
+            httpd = ThreadingHTTPServer((host, cand), handler)
+            bound_port = cand
+            break
+        except OSError as exc:
+            last_exc = exc
+    if httpd is None:
+        raise last_exc  # every candidate port busy — surface the real error
     # Show 127.0.0.1 in the clickable line even when bound to 0.0.0.0.
     shown = "127.0.0.1" if host in ("0.0.0.0", "", "::") else host
+    try:
+        _url_f = Path(project) / "reports" / "dashboard_web.url"
+        _url_f.parent.mkdir(parents=True, exist_ok=True)
+        _url_f.write_text("http://%s:%d\n" % (shown, bound_port))
+    except Exception:
+        pass
     label = "fleet root" if fleet else "project"
     kind = "fleet dashboard" if fleet else "flow dashboard"
     print(
         "Vibe-IC %s → http://%s:%d  (%s: %s, mode: %s)  Ctrl-C to stop"
-        % (kind, shown, port, label, name, mode),
+        % (kind, shown, bound_port, label, name, mode),
         flush=True,
     )
     try:

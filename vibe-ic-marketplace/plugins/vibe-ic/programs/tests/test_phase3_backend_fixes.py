@@ -400,6 +400,57 @@ class TestSiliconCriticalPnrBlocks:
         assert "define_pdn_grid" not in tcl
         assert "pdngen" not in tcl
 
+    # ---- PDK-adaptive PDN (commercial VDD/VSS) -------------------------
+    _COMMERCIAL_LEF = (
+        "MACRO INVD1\n"
+        "  SIZE 1.32 BY 5.04 ;\n"
+        "  PIN VDD\n    USE POWER ;\n    PORT\n      LAYER MET1 ;\n"
+        "        RECT 0 4.64 1.32 5.44 ;\n    END\n  END VDD\n"
+        "  PIN VSS\n    USE GROUND ;\n    PORT\n      LAYER MET1 ;\n"
+        "        RECT 0 -0.4 1.32 0.4 ;\n    END\n  END VSS\n"
+        "  PIN A\n    DIRECTION INPUT ;\n    PORT\n      LAYER MET1 ;\n"
+        "        RECT 0.2 1.0 0.4 1.4 ;\n    END\n  END A\n"
+        "END INVD1\n")
+
+    def _commercial_pdk(self, lef_path):
+        # A non-sky130 PDK (VDD/VSS rails, no tapcell_master) — the HP18E80
+        # shape. tapcell_master None → adaptive PDN path.
+        return mod.PdkConfig(
+            name="custom:hp18e80", liberty="/p/l.lib",
+            tech_lef="/p/tech.lef", cell_lef=str(lef_path), cell_gds=None,
+            site="unit", drc_deck=None, metal_prefix="met",
+            tapcell_master=None)
+
+    def test_discover_pg_from_lef_commercial_vdd_vss(self, tmp_path):
+        lef = tmp_path / "cells.lef"
+        lef.write_text(self._COMMERCIAL_LEF)
+        pg = mod._discover_pg_from_lef(str(lef))
+        assert pg == ("VDD", "VSS", "MET1", 0.8), pg
+
+    def test_discover_pg_from_lef_none_without_pg_pins(self, tmp_path):
+        lef = tmp_path / "nopg.lef"
+        lef.write_text("MACRO X\n  SIZE 1 BY 1 ;\n  PIN A\n    DIRECTION "
+                       "INPUT ;\n  END A\nEND X\n")
+        assert mod._discover_pg_from_lef(str(lef)) is None
+
+    def test_pdn_adaptive_on_commercial_pdk(self, tmp_path):
+        # The commercial PDK must get a REAL met1 follow-pins PDN using the
+        # DISCOVERED rail names (VDD/VSS) — not the sky130 VPWR/VGND hardcode,
+        # which matches nothing → no PDN → TritonRoute ignores the bare power
+        # rails → signal routes land <min-space (HP18E80 M1.S.1). Follow-pins
+        # turns each rail into routed PG geometry the router keeps clear of.
+        lef = tmp_path / "cells.lef"
+        lef.write_text(self._COMMERCIAL_LEF)
+        tcl = mod._build_pdn_tcl(self._commercial_pdk(lef))
+        assert "PDN_INSERTED_ADAPTIVE" in tcl
+        assert 'add_global_connection -net VDD -pin_pattern "^VDD$" -power' in tcl
+        assert 'add_global_connection -net VSS -pin_pattern "^VSS$" -ground' in tcl
+        assert "add_pdn_stripe -grid grid -layer MET1 -width 0.8 -followpins" in tcl
+        assert "pdngen" in tcl
+        assert "PDN_NONFATAL" in tcl
+        # Must NOT emit the sky130-only pin names (they match no HP18E80 pin).
+        assert "VPWR" not in tcl and "VGND" not in tcl
+
     def test_pdn_block_pins_VPB_and_VNB_for_sky130(self):
         # SKY130 std cells expose well-tap pins as VPB / VNB (not VPWR/VGND).
         # If global_connect misses these, every cell's bulk floats →
