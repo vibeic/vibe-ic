@@ -2014,6 +2014,19 @@ class PdkConfig:
     # LVS engine's geometric device recognition (klayout_pdk_lvs --layermap). None
     # → the program's built-in commercial_pdk map. Chip-AGNOSTIC: any PDK supplies its own.
     lvs_layermap: Optional[str] = None
+    # v1.3.92 — post-route decap-under-signal-route SHORT guard. A decoupling-cap
+    # filler (DECAP/DCAP/FILLCAP) whose LEF abstract omits a MET1 OBS over its
+    # capacitor plate lets the router lay a signal MET1 wire across where the decap
+    # later lands (filler_placement runs AFTER detailed_route); the streamed GDS
+    # then SHORTS that signal to a power rail — and rail-to-rail. When truthy
+    # (optionally a dict: {"rail_margin_um": 0.8, "lefs": [<override paths>]}),
+    # step_pnr runs decap_route_short_guard.py on the final {top}.def, swapping each
+    # conflicting decap for the same-width plain FILL cell (verified purely
+    # subtractive: FILL.M1 ⊆ DECAP.M1 — drops only the plate, adds no metal). None →
+    # no-op (a well-formed OSS decap LEF declares its MET1 OBS, so the router never
+    # routes over it → zero conflicts anyway; gated only to keep the general flow
+    # byte-for-byte unchanged). Chip-AGNOSTIC: LEF-size + DEF-routing driven.
+    decap_route_short_guard: Optional[Dict[str, Any]] = None
 
 
 def _discover_lefdef_layermap(pdk_dir: Path) -> Optional[str]:
@@ -2309,6 +2322,8 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 lvs_engine=_signoff_cfg.get("lvs_engine", "magic"),
                 lvs_layermap=(str(pdk_dir / _signoff_cfg["lvs_layermap"])
                               if _signoff_cfg.get("lvs_layermap") else None),
+                decap_route_short_guard=_signoff_cfg.get(
+                    "decap_route_short_guard"),
             )
     # fallback: sky130A in container
     return _detect_pdk(project, override="sky130A")
@@ -6629,6 +6644,18 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                     "util": util,
                     "non_signoff_outputs": [str(def_file)],
                     "resize_history": resize_history})
+    # v1.3.92 — post-route decap-under-signal-route SHORT guard (config-gated;
+    # no-op on OSS PDKs). Runs on the final {top}.def, BEFORE streamout, so the
+    # DEF leaving PnR is already short-free and both streamout paths inherit the
+    # fix. Best-effort: a guard failure never masks a real converged-route PASS.
+    decap_guard_note = ""
+    try:
+        _dg_ran, _dg_note = _decap_route_short_guard(project, top, pdk)
+        if _dg_ran and _dg_note:
+            decap_guard_note = _dg_note
+    except Exception as _dg_exc:  # nosec — guard is best-effort, never fatal
+        decap_guard_note = f"decap_guard: skipped ({_dg_exc})"
+
     # copy STA report up to reports/
     rpt_dir = project / "phase3" / "reports"
     rpt_dir.mkdir(parents=True, exist_ok=True)
@@ -6707,6 +6734,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                             effective_die_um=f"{die_w}x{die_h}")
 
     detail = f"def={def_file.name} sta={sta_file.name}" + spare_note
+    if decap_guard_note:
+        detail += f" | {decap_guard_note}"
     if routing_audit_note:
         detail += f" | via_audit: {routing_audit_note}"
     if pin_order_note:
@@ -6733,6 +6762,70 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                       detail,
                       pnr_outputs,
                       extras=spare_extras)
+
+
+def _decap_route_short_guard(project: Path, top: str,
+                             pdk: PdkConfig) -> Tuple[bool, str]:
+    """Post-route repair: swap every decap filler that a signal MET1 wire crosses
+    for the same-width plain FILL cell, so the streamed GDS carries no
+    decap-under-route VDD<->VSS short. Rewrites {top}.def IN PLACE (originals kept
+    at {top}.pre_decap_guard.def) so BOTH streamout paths (Magic + KLayout) and any
+    downstream DEF consumer see the corrected placement. Config-gated
+    (pdk.decap_route_short_guard truthy); a no-op on a well-formed OSS decap LEF
+    (zero conflicts). Returns (ran, note). Best-effort: never raises into PnR."""
+    cfg = pdk.decap_route_short_guard
+    if not cfg:
+        return False, ""
+    cfg = cfg if isinstance(cfg, dict) else {}
+    out_dir = _pl.pnr_dir(project)
+    def_file = out_dir / f"{top}.def"
+    if not def_file.is_file():
+        return False, "decap_guard: {top}.def missing".format(top=top)
+    # LEF set: explicit override, else the PDK's own tech + cell + macro LEFs
+    # (the guard reads MACRO...SIZE from every LEF to size DECAPn <-> FILLn).
+    lefs = cfg.get("lefs") or [
+        str(p) for p in ([pdk.tech_lef, pdk.cell_lef] + list(pdk.macro_lefs))
+        if p and Path(str(p)).is_file()]
+    if not lefs:
+        return False, "decap_guard: no LEF with cell sizes available"
+    fixed = out_dir / f"{top}.decap_guard.def"
+    report = out_dir / "decap_route_short_guard.json"
+    cmd = [sys.executable, str(PROGRAMS_DIR / "decap_route_short_guard.py"),
+           "--def", str(def_file), "--lef", ",".join(lefs),
+           "--out", str(fixed), "--report", str(report)]
+    rm = cfg.get("rail_margin_um")
+    if rm is not None:
+        cmd += ["--rail-margin-um", str(rm)]
+    try:
+        cp = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except Exception as exc:  # nosec — guard is best-effort, never fatal to PnR
+        return False, f"decap_guard: run failed ({exc})"
+    if cp.returncode != 0 or not fixed.is_file():
+        return False, (f"decap_guard: rc={cp.returncode} "
+                       f"{(cp.stdout + cp.stderr)[-300:]}")
+    n_swap = n_rm = 0
+    try:
+        rj = json.loads(report.read_text())
+        n_swap = len(rj.get("replaced", []))
+        n_rm = len(rj.get("removed", []))
+    except Exception:
+        pass
+    if n_swap == 0 and n_rm == 0:
+        # no conflict — leave {top}.def untouched, drop the identical rewrite
+        try:
+            fixed.unlink()
+        except Exception:
+            pass
+        return True, "decap_guard: 0 decap-under-route shorts (no swap)"
+    # commit: back up the pre-guard DEF, promote the corrected one to {top}.def
+    try:
+        def_file.replace(out_dir / f"{top}.pre_decap_guard.def")
+        fixed.replace(def_file)
+    except Exception as exc:  # nosec — if the swap can't be committed, keep the
+        return False, f"decap_guard: commit failed ({exc})"  # original DEF
+    return True, (f"decap_guard: {n_swap} decap->FILL swap(s)"
+                  + (f" + {n_rm} removal(s)" if n_rm else "")
+                  + " to clear decap-under-route short(s)")
 
 
 # ---------------------------------------------------------------------------
