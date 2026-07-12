@@ -360,7 +360,7 @@ has 0 cells, so downstream parsers cannot distinguish "legitimate wiring-only mo
 tool=yosys; tool_enhancement: in the columnar stat printer (`passes/cmds/stat.cc`), always
 emit the cells count row (including 0); keep per-type rows omitted when empty. Interim
 plugin tolerance shipped in vibe-ic PR #122 (header+wires ⇒ 0-cell wiring, note-tolerated)
-— DISSOLVES when this lands. Tracking: vibe-ic issue (see below).
+— DISSOLVES when this lands. Tracking: vibe-ic#124; fix PR OPEN: vibeic/yosys#1 (built+verified, byte-identical normal-module stat).
 
 **F-B2 — iverilog: 14-devel rejects `$dumpvars` forward references iverilog 11 accepts.**
 step=benchmark scoring sim escalation rung (generator: forked iverilog 14 elaboration).
@@ -371,4 +371,4 @@ Icarus 11.0 elaborates the affected TB as-is. bad: fork Icarus 14.0-devel (s2026
 errors on the same file. tool=iverilog; tool_enhancement: defer `$dumpvars` argument
 binding until the module's full scope symbol table is built (elaborate-after-scope-
 complete), matching v11 semantics. The scorer's masked call-scoped dump-strip (v1.3.86)
-is the disclosed plugin-side workaround this fix dissolves. Tracking: vibe-ic issue.
+is the disclosed plugin-side workaround this fix dissolves. Tracking: vibe-ic#125; fix PR OPEN: vibeic/iverilog#1 (built+verified, ivtest added, 1766/1769 regress).
