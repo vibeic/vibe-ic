@@ -170,12 +170,16 @@ number we publish measures **what the deterministic runner chain can do**
 discloses any open↔commercial tool substitution and follows the
 [open-benchmark methodology](vibe-ic-marketplace/plugins/vibe-ic/skills/open-benchmark-methodology/SKILL.md).
 
+Latest clean-room runs (2026-07-12): **Claude Fable 5** driving plugin
+**v1.3.88** + forked `vibeic-eda:0.2.12`. The CVDP figure is from an earlier
+campaign with Claude Opus 4.8 (v1.2.96); each score names its model.
+
 | Benchmark | Result | Notes |
 |---|---|---|
-| **NVIDIA CVDP** (nonagentic code-generation, no-commercial) | **243/302 = 80.46%** official-compliant blind pass@1 | **prompt+context-only** — the deterministic solver reads ONLY `input.prompt` + `input.context`; the hidden test harness (`.env`, cocotb testbench) and the golden solution are OFF-LIMITS oracle, enforced by a regression guard that proves the emit is byte-identical with vs without them. Scored on the official `run_benchmark.py` in the pinned `cvdp-sim` image. |
-| **RTLLM v2.0** | **44/50 = 88%** blind pass@1 (**44/44 = 100%** excluding 4 upstream dataset defects + 2 iverilog tool-gaps) | spec-to-RTL, §4.05-blind, iverilog-scored; each exclusion is a per-design RESULT entry (`score_rtllm.py` KNOWN_DATASET_DEFECTS / KNOWN_TOOL_GAPS), not a silent drop. |
-| **VerilogEval-v2** | **153/156** blind pass@1 (convergence 155/156) | spec-to-RTL, §4.05-blind, iverilog-scored. The published figure is the *blind* pass@1 the clean-room gate reproduces; 155/156 is the oracle-for-RCA convergence number, not the headline. |
-| **VerilogEval-Human** | **153/156** blind pass@1 | spec-to-RTL, §4.05-blind, iverilog-scored |
+| **NVIDIA CVDP** (nonagentic code-generation, no-commercial) | **243/302 = 80.46%** official-compliant blind pass@1 *(Opus 4.8, v1.2.96)* | **prompt+context-only** — the deterministic solver reads ONLY `input.prompt` + `input.context`; the hidden test harness (`.env`, cocotb testbench) and the golden solution are OFF-LIMITS oracle, enforced by a regression guard that proves the emit is byte-identical with vs without them. Scored on the official `run_benchmark.py` in the pinned `cvdp-sim` image. |
+| **RTLLM v2.0** | **49/50 = 98%** blind pass@1 (**49/49 = 100%** excluding the 1 proven upstream dataset defect) *(Fable 5, v1.3.88)* | spec-to-RTL, runner-driven (Shape B), §4.05-blind, iverilog-scored; single-shot 47/50 = 94%, converged after ONE blind close-loop round. The sole residual (`ring_counter`) is a golden that fails its own testbench — a per-design RESULT entry, not a silent drop. |
+| **VerilogEval-v2** | **153/156 = 98.08%** blind pass@1, **single-shot** *(Fable 5, v1.3.88)* | spec-to-RTL, §4.05-blind, iverilog-scored; 130/156 problems emitted by deterministic solvers. All 3 residuals are documented dataset defects / spec ambiguities — the score sits at the defect floor with no close-loop round. |
+| **VerilogEval-Human** | **153/156 = 98.08%** blind pass@1, **single-shot** *(Fable 5, v1.3.88)* | code-complete (iccad2023), §4.05-blind, iverilog-scored; 129/156 deterministic emits. |
 
 > **Honesty over score.** Compliance is a structural invariant of the plugin,
 > not a runtime convenience — no benchmark run reads the hidden harness or the
