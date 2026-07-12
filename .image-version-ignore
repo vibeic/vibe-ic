@@ -1,0 +1,10 @@
+# .image-version-ignore — files whose `ghcr.io/vibeic/vibeic-eda:X.Y.Z` mentions
+# are HISTORY, not live install pointers, so the drift-net must not flag them
+# when VERSION advances. One glob per line (matched against basename AND repo-rel
+# path; see sync_image_version.py::_matches). HISTORY_GLOBS already covers
+# FIX_STATUS / CHANGELOG / *ROADMAP* / *_STATUS.md.
+#
+# Benchmark RESULT.md files record WHICH image a PAST clean-room run used (its
+# tool-substitution disclosure). That tag is an immutable record of that run —
+# never a live pointer that should track VERSION — so ignore them.
+RESULT.md

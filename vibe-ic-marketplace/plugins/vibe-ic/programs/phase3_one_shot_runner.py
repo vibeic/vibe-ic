@@ -9710,6 +9710,19 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
         f"lef read {_to_container_path(str(f), container)}"
         for f in pdk.macro_lefs)
     env_prefix = (
+        # CAD_ROOT for magic's BATCH path. `magic -dnull -noconsole` execs
+        # magicdnull, which (unlike the interactive path) does NOT source
+        # magic.tcl and so never applies magic.tcl's computed CAD_ROOT_DEFAULT.
+        # With CAD_ROOT unset magic resolves its startup tech search path to
+        # `/magic/sys` (compiled template is `$CAD_ROOT/magic/sys`), fails to
+        # load `minimum.tech`, aborts initialisation BEFORE reading the -rcfile,
+        # and exits rc=0 having extracted NOTHING ("produced no extracted
+        # netlist"). Derive CAD_ROOT from magic's own install prefix
+        # ($prefix/bin/magic -> $prefix/lib) so the batch extraction can start.
+        # Chip-AGNOSTIC + install-location-derived (no hardcoded path); a
+        # CAD_ROOT the image already exports wins via `:-`.
+        f'export CAD_ROOT="${{CAD_ROOT:-$(dirname "$(dirname '
+        f'"$(readlink -f "$(command -v magic)")")")/lib}}" && '
         f"export TLEF={shlex.quote(tlef_c)} "
         f"CLEF={shlex.quote(clef_c)} "
         f"MACRO_LEF_READS={shlex.quote(macro_lef_reads)} "
