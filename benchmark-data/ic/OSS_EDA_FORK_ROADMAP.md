@@ -347,3 +347,28 @@ residual, the gate-level-ripple→word-`$add` recognizer, was BUILT as yosys `li
 and F-A2 were the two OPTIONAL upstream convenience ports beyond that program; both are now shipped. What
 remains is only genuinely `fundamental-or-external` (foundry PDK RC/QRC decks, signoff-grade transient
 IR/DVD à la RedHawk, commercial-LEC full closure) — not fork targets.
+
+## Bucket-T candidates from the CVDP canonical-entry campaign (2026-07-13, plugin v1.3.88)
+
+**F-B1 — yosys: columnar `stat` omits the cells row for a 0-cell module.**
+step=`phase2.synth` / benchmark-gate synthesizability smoke (generator: yosys `stat`).
+problem: yosys 0.66 columnar `stat` prints wires/ports rows but NO cells row when a module
+has 0 cells, so downstream parsers cannot distinguish "legitimate wiring-only module" from
+"no stat emitted"; the ≤0.4x format always printed `Number of cells: 0`. golden_sample:
+≤0.4x behavior (always-present cells count). bad_sample: fork Yosys 0.66+229 (c5c8f65d8)
+`stat` on a const-prop-wiped or pure-permutation module — header + wires rows, no cells row.
+tool=yosys; tool_enhancement: in the columnar stat printer (`passes/cmds/stat.cc`), always
+emit the cells count row (including 0); keep per-type rows omitted when empty. Interim
+plugin tolerance shipped in vibe-ic PR #122 (header+wires ⇒ 0-cell wiring, note-tolerated)
+— DISSOLVES when this lands. Tracking: vibe-ic issue (see below).
+
+**F-B2 — iverilog: 14-devel rejects `$dumpvars` forward references iverilog 11 accepts.**
+step=benchmark scoring sim escalation rung (generator: forked iverilog 14 elaboration).
+problem: `$dumpvars(1, <wire>, ...)` naming a module-scope wire declared textually LATER
+fails elaboration (`Unable to bind wire/reg/memory`), while stock iverilog 11 accepts the
+same testbench — a fork regression hit by real upstream benchmark testbenches. golden:
+Icarus 11.0 elaborates the affected TB as-is. bad: fork Icarus 14.0-devel (s20260301-265)
+errors on the same file. tool=iverilog; tool_enhancement: defer `$dumpvars` argument
+binding until the module's full scope symbol table is built (elaborate-after-scope-
+complete), matching v11 semantics. The scorer's masked call-scoped dump-strip (v1.3.86)
+is the disclosed plugin-side workaround this fix dissolves. Tracking: vibe-ic issue.
