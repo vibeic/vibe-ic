@@ -360,3 +360,22 @@ def test_dockerless_host_returns_none_instead_of_crashing(tmp_path, monkeypatch)
     monkeypatch.setenv("PATH", str(tmp_path))   # no docker anywhere
     out = m._fork_iverilog_compile_run([str(src)], "tb")
     assert out is None
+
+
+def test_strip_replaces_call_with_empty_statement_prefix_safe():
+    """Gatekeeper remediation on the call-scoped strip: the dump call is
+    replaced by an empty statement `;` so (a) an if/else-prefixed dump keeps a
+    legal, semantics-preserving arm (bare deletion left `if (dbg) else` — a
+    syntax error that deflated a recoverable TB) and (b) an event-control
+    prefix cannot silently attach to the following statement."""
+    m = _load()
+    src = ("  initial begin\n"
+           "    if (dbg) $dumpvars(0, tb); else err = err + 1;\n"
+           "    @(posedge clk) $dumpfile(\"w.vcd\");\n"
+           "    checker_tick = checker_tick + 1;\n"
+           "  end\n")
+    out = m._strip_waveform_dumps(src)
+    assert "$dump" not in out
+    assert "if (dbg) ; else err = err + 1;" in out
+    assert "@(posedge clk) ;" in out
+    assert "checker_tick = checker_tick + 1;" in out

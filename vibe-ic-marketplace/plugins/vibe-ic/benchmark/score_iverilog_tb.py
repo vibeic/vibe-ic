@@ -191,8 +191,14 @@ def _strip_waveform_dumps(text: str) -> str:
     $dumpvars that forward-references a module-scope wire declared textually
     later (a stricter elaboration order); stripping it lets the fork build run the
     TB WITHOUT changing what is verified. Only the call itself is removed — any
-    code sharing its line survives. §4.05: a wrong DUT still mismatches."""
-    return _DUMP_CALL_RE.sub("", text)
+    code sharing its line survives, and the call is replaced by an EMPTY
+    STATEMENT `;` (not deleted outright) so a statement-prefix construct keeps
+    its own statement: `if (dbg) $dumpvars(...); else err=err+1;` stays legal
+    with unchanged semantics (bare deletion left `if (dbg) else` — a syntax
+    error that deflated a recoverable TB), and an event-control prefix
+    `@(posedge clk) $dumpvars(...);` cannot silently ATTACH to the following
+    statement. §4.05: a wrong DUT still mismatches."""
+    return _DUMP_CALL_RE.sub(";", text)
 
 
 _FORK_IV_COUNTER = [0]
