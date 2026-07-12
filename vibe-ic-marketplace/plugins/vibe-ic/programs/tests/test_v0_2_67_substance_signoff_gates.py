@@ -145,9 +145,13 @@ def test_sta_no_per_corner_dir_is_no_claim(tmp_path):
 
 def test_runner_emits_skip_selfreport_not_pass_flag():
     i = _P3_SRC.index("Step 29: SDF emit")  # v2.3 renumber
-    window = _P3_SRC[i:i + 2600]
+    # v1.3.94 — widened: the REAL SDF-annotated gate sim (sdf_gate_sim.run) now
+    # runs FIRST; the honest skip self-report is the FALLBACK when no results.log
+    # is produced (never a fabricated pass.flag).
+    window = _P3_SRC[i:i + 4200]
+    assert "sdf_gate_sim" in window          # the real SDF sim runs
     assert 'sim_pl_out / "pass.flag"' not in window
-    assert "sdf_sim_skipped.json" in window
+    assert "sdf_sim_skipped.json" in window  # fallback skip note still present
     assert "SKIPPED-CONDITION" in window
     assert "#437" in window
 
@@ -161,7 +165,12 @@ def test_runner_no_single_corner_standin_in_multicorner_sta():
 
 
 def test_capability_gap_covers_step_28():
-    assert F._PLATFORM_CAPABILITY_GAPS[29] == "cap:sdf_annotated_gatelevel_sim"  # v2.3 renumber
+    # v1.3.94 — Step 29 (SDF-annotated gate sim) was CLOSED this campaign
+    # (iverilog $sdf_annotate real sim), so it is no longer a cap-gap; Step 28
+    # (PERC) is enforced, never a gap. Only 5 (formal property proof) remains — 13 LEC was CLOSED (Yosys equiv, ignore-miss-func).
+    assert 29 not in F._PLATFORM_CAPABILITY_GAPS
+    assert 28 not in F._PLATFORM_CAPABILITY_GAPS
+    assert set(F._PLATFORM_CAPABILITY_GAPS) == {5}
 
 
 # ── (e) waiver parser honours the `rationale` field ────────────────────────

@@ -197,22 +197,67 @@ def test_skip_report_is_honest_gate_fail_not_vacuous_pass(tmp_path):
 # build_equiv_script — the proven recipe shape (deterministic, no container)
 # ---------------------------------------------------------------------------
 def test_build_equiv_script_has_recipe_steps():
+    # APPROACH C — with a Liberty, the GATE side reads the Liberty WITHOUT -lib
+    # and with -ignore_miss_func (functions/ff groups EXPAND to $_-primitives the
+    # SAT engine can model), then flattens them in; the GOLD stays RTL. This is
+    # what makes RTL≡synth provable where the -lib blackbox recipe aborted
+    # "No SAT model available for cell … (NAND2D1)".
     s = lec_run.build_equiv_script(
         ["/p/rtl/a.v", "/p/rtl/b.v"], "/p/synth/netlist.v", "chip_top",
         lec_run.DEFAULT_LIBERTY)
-    assert "read_verilog -icells -sv /p/rtl/a.v /p/rtl/b.v" in s
+    assert "read_verilog -sv /p/rtl/a.v /p/rtl/b.v" in s
+    assert "-icells" not in s          # the flatten-breaking flag is gone
+    # the SAT-modelable expansion (NOT a -lib blackbox) on the gate side:
+    assert f"read_liberty -ignore_miss_func {lec_run.DEFAULT_LIBERTY}" in s
+    assert "read_liberty -lib" not in s
+    assert "flatten" in s              # inline the expanded cell logic
     assert "equiv_make gold gate equiv" in s
     assert "equiv_simple" in s
     assert "equiv_induct -seq 4" in s
-    assert "equiv_induct -seq 16" in s
     assert "equiv_induct -seq 64" in s
     assert "equiv_status" in s
-    assert "flatten" in s
+    assert "prep -top chip_top" in s   # gold prep
     assert lec_run.DEFAULT_LIBERTY in s
 
 
 def test_build_equiv_script_omits_liberty_when_none():
+    # No Liberty → a generic $_-primitive netlist is already satgen-modelable, so
+    # no read_liberty at all (gold + gate both plain read_verilog).
     s = lec_run.build_equiv_script(
         ["/p/rtl/a.v"], "/p/synth/netlist.v", "top", None)
     assert "read_liberty" not in s
-    assert "read_verilog -icells -sv /p/rtl/a.v" in s
+    assert "read_verilog -sv /p/rtl/a.v" in s
+    assert "-icells" not in s
+    assert "equiv_make gold gate equiv" in s
+
+
+# ---------------------------------------------------------------------------
+# _discover_project_liberty — the auto-discovery pure helper (no container).
+# The Step-13 runner passes no --liberty, so the producer must find the
+# design's OWN PDK Liberty or it falls back to the sky130 default (useless for
+# a commercial-PDK design whose cells are only modelable from its Liberty).
+# ---------------------------------------------------------------------------
+def test_discover_liberty_prefers_canonical_pdk_dir_and_typ_corner(tmp_path):
+    libdir = tmp_path / "input" / "pdk" / "liberty"
+    libdir.mkdir(parents=True)
+    # Three corners present; the typ/nominal one must win.
+    (libdir / "foo_wci.lib").write_text("/* worst corner */")
+    (libdir / "foo_typ.lib").write_text("/* typical corner */")
+    (libdir / "foo_bci.lib").write_text("/* best corner */")
+    got = lec_run._discover_project_liberty(tmp_path)
+    assert got is not None
+    assert got.name == "foo_typ.lib", got
+
+
+def test_discover_liberty_bounded_fallback_under_input(tmp_path):
+    # No canonical input/pdk/liberty dir, but a .lib elsewhere under input/.
+    alt = tmp_path / "input" / "libs" / "ref"
+    alt.mkdir(parents=True)
+    (alt / "cells_tt.lib").write_text("/* tt corner */")
+    got = lec_run._discover_project_liberty(tmp_path)
+    assert got is not None and got.name == "cells_tt.lib"
+
+
+def test_discover_liberty_none_when_project_ships_no_lib(tmp_path):
+    (tmp_path / "input").mkdir()
+    assert lec_run._discover_project_liberty(tmp_path) is None

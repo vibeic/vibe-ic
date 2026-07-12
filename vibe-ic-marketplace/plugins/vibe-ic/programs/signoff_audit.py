@@ -302,6 +302,23 @@ def _check_tapeout(project_dir: Path) -> AuditResult:
             return None
         if "<report-database>" in txt[:2000]:
             return txt.count("<item>")
+        # SVRF-native sign-off DRC (the vibeic KLayout `svrfdrc` buddy running the
+        # foundry's OWN Calibre `.rule` deck — the AUTHORITATIVE commercial-PDK
+        # sign-off report). Its per-rule result lines are `FAIL|PASS|SKIP <rule>
+        # <op> … -> <n>`; the design-level violation count is the number of FAIL
+        # rules (NOT the generic "total violations:" text, which this report never
+        # emits — so without this branch a genuinely 0-FAIL sign-off DRC would be
+        # mis-read as UNPARSED and hard-FAIL the tapeout slot). Detected by the
+        # svrfdrc header OR the presence of the deck's PASS/FAIL result grammar.
+        # Chip-AGNOSTIC: keys off report FORMAT, never a design/PDK name.
+        head = txt[:4000]
+        _svrf_line = re.compile(r"(?m)^(FAIL|PASS|SKIP)\s+\S+\s+\S+.*->\s*\d+\s*$")
+        if ("SVRF-native DRC" in head or "svrfdrc" in head.lower()
+                or _svrf_line.search(txt)):
+            fails = len(re.findall(r"(?m)^FAIL\s+\S+", txt))
+            passes = len(re.findall(r"(?m)^PASS\s+\S+", txt))
+            if fails or passes:            # a real per-rule tally was present
+                return fails
         m = (re.search(r"(?i)\btotal\s+(?:errors|violations)\s*[:=]?\s*(\d+)", txt)
              or re.search(r"(?i)\bviolations?\s*[:=]\s*(\d+)", txt))
         return int(m.group(1)) if m else None

@@ -19,6 +19,9 @@ import pytest
 SCRIPT = Path(__file__).parent.parent / "fault_atpg_run.py"
 assert SCRIPT.exists()
 
+sys.path.insert(0, str(SCRIPT.parent))
+import fault_atpg_run as far  # noqa: E402
+
 
 def _run(*args) -> subprocess.CompletedProcess:
     return subprocess.run(
@@ -90,6 +93,65 @@ def test_pinned_tag_matches_version_source_of_truth():
         f"pinned tags {sorted(set(tags))} drifted from VERSION={version}; "
         "run tools/vibeic-eda/sync_image_version.py --set/--bump"
     )
+
+
+# --- pure helpers: dff-cell detection / merge / cell-model resolution -------
+# These back the commercial_pdk fix where the PDK-config seed (DFFRQD1,DFFSQD1) did
+# NOT match the netlist's real flop cell (DFFHQD1); auto-detect + union fixes
+# it chip-AGNOSTICally, and the cell-model resolver lets the commercial Verilog
+# sim model be supplied explicitly (the proprietary PDK ships only a liberty in
+# the run dir).
+
+def test_detect_dff_cells_commercial_pdk_dffhqd1():
+    # 64 DFFHQD1 instances as emitted by yosys for the spm commercial_pdk netlist.
+    nl = "\n".join(f"  DFFHQD1 _{n}_ ( .CK(clk), .D(d{n}), .Q(q{n}) );"
+                   for n in range(3))
+    assert far.detect_dff_cells(nl) == "DFFHQD1"
+
+
+def test_detect_dff_cells_sorted_unique_union():
+    nl = ("  DFFSQD1 a ( .Q(x) );\n"
+          "  DFFHQD1 b ( .Q(y) );\n"
+          "  SDFFHQD1 c ( .Q(z) );\n"
+          "  DFFHQD1 d ( .Q(w) );\n")
+    assert far.detect_dff_cells(nl) == "DFFHQD1,DFFSQD1,SDFFHQD1"
+
+
+def test_detect_dff_cells_ignores_wire_decls():
+    # A wire/reg named dff_* must NOT be picked up as a cell instantiation.
+    nl = ("  wire dff_out;\n"
+          "  reg  dffstate;\n"
+          "  NAND2D1 g0 ( .A(a), .B(b), .Y(y) );\n")
+    assert far.detect_dff_cells(nl) == ""
+
+
+def test_merge_dff_cells_unions_seed_and_detected():
+    # seed misses the real cell (DFFHQD1); union must still include it.
+    assert far.merge_dff_cells("DFFRQD1,DFFSQD1", "DFFHQD1") == \
+        "DFFHQD1,DFFRQD1,DFFSQD1"
+    assert far.merge_dff_cells(None, "DFFHQD1") == "DFFHQD1"
+    assert far.merge_dff_cells("DFFRQD1", "") == "DFFRQD1"
+    assert far.merge_dff_cells("", "") == ""
+    # de-dups overlapping tokens with surrounding whitespace
+    assert far.merge_dff_cells(" DFFHQD1 , DFFRQD1 ", "DFFHQD1") == \
+        "DFFHQD1,DFFRQD1"
+
+
+def test_resolve_cell_model_container_absolute_passthrough():
+    assert far.resolve_cell_model("/pdk/verilog/x.v", None) == "/pdk/verilog/x.v"
+    assert far.resolve_cell_model("/foss/pdks/y.v",
+                                  {"cell_model": "/z.v"}) == "/foss/pdks/y.v"
+
+
+def test_resolve_cell_model_project_relative_under_work():
+    assert far.resolve_cell_model("input/pdk/verilog/m.v", None) == \
+        "/work/input/pdk/verilog/m.v"
+    assert far.resolve_cell_model("./a/b.v", None) == "/work/a/b.v"
+
+
+def test_resolve_cell_model_falls_back_to_pdk_config_then_none():
+    assert far.resolve_cell_model(None, {"cell_model": "/pdk/c.v"}) == "/pdk/c.v"
+    assert far.resolve_cell_model(None, None) is None
 
 
 def test_env_override_wins_over_pinned_candidates():

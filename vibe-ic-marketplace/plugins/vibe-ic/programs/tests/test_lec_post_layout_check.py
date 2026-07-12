@@ -46,6 +46,25 @@ def test_recipe_no_blackbox_ok():
     assert "read_verilog -lib" not in ys  # none supplied
 
 
+# ---- v1.3.93 gate-only supply-port strip ----------------------------------
+def test_recipe_strips_gate_supply_ports_before_equiv():
+    # The routed gate netlist carries PDN-added VDD/VSS top ports the synth gold
+    # lacks; equiv_make can't match the port lists. The recipe must delete those
+    # supply ports from the GATE design (after prep, before equiv_make).
+    ys = L.build_yosys_equiv_script(
+        "gold.v", "gate.v", "lib.lib", "top",
+        strip_gate_ports=["VDD", "VSS"])
+    assert "delete top/w:VDD" in ys and "delete top/w:VSS" in ys
+    # the strip must sit AFTER the gate prep and BEFORE equiv_make
+    assert ys.index("delete top/w:VDD") < ys.index("equiv_make gold gate equiv")
+    assert "opt_clean" in ys
+
+
+def test_recipe_no_strip_when_none():
+    ys = L.build_yosys_equiv_script("gold.v", "gate.v", "lib.lib", "top")
+    assert "delete top/w:" not in ys  # nothing stripped by default
+
+
 # ---- auto-escalating sequential-induction depth ---------------------------
 def test_recipe_default_escalates_seq_depth():
     # Default must emit escalating equiv_induct -seq passes (retiming/pipeline
