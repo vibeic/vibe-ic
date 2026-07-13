@@ -4,7 +4,7 @@
  "_source": "distilled from proven-correct (officially-scored PASS) reference designs; benchmark identifiers scrubbed at build time (blindness).",
  "_consistency": "lessons are DESIGN-CRAFT ADVICE for the AI author; they add knowledge, they do NOT assert hard rules that a gate/program checks. No lesson may contradict a deterministic gate.",
  "classes": 94,
- "total_lessons": 148,
+ "total_lessons": 149,
  "entries": [
   {
    "ic_class": "accumulator-datapath",
@@ -781,9 +781,10 @@
   },
   {
    "ic_class": "serial-parity-link",
-   "lesson_count": 1,
+   "lesson_count": 2,
    "lessons": [
-    "In a serial TX/RX link with a parity-integrity check, the receiver must recompute parity over the fully-reassembled data word (^data_reg) and compare it against the transmitted parity bit as a STICKY/latching error flag that settles a cycle before the sampling edge of `done` — a single-cycle pulse aligned exactly with `done` risks being read while still resolving. The transmitted parity must also be carried on a continuously-held (combinational, no clocked overwrite) path so it stays valid through the whole frame and propagates straight into the comparison; and reception/validation should be gated on the RX-side bit counter reaching the expected width, not on a fixed delay, so the check fires only after all bits arrive."
+    "In a serial TX/RX link with a parity-integrity check, the receiver must recompute parity over the fully-reassembled data word (^data_reg) and compare it against the transmitted parity bit as a STICKY/latching error flag that settles a cycle before the sampling edge of `done` — a single-cycle pulse aligned exactly with `done` risks being read while still resolving. The transmitted parity must also be carried on a continuously-held (combinational, no clocked overwrite) path so it stays valid through the whole frame and propagates straight into the comparison; and reception/validation should be gated on the RX-side bit counter reaching the expected width, not on a fixed delay, so the check fires only after all bits arrive.",
+    "Width-parametric parity: compute parity across the FULL parametric data width (a reduction XOR over the whole word) and capture it at the correct pipeline stage. Computing parity from a shifting register at the wrong cycle mis-times the capture, and hard-coding the default (e.g. byte) width makes parity and parity_error wrong for larger widths — parametrize the parity datapath by the data-width parameter and verify it at each supported width."
    ]
   },
   {
