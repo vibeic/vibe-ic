@@ -855,9 +855,76 @@ def _load_expected_files_map(path) -> Dict[str, List[str]]:
     return out
 
 
+def _context_rtl_for_smoke(ctx_texts, code: str) -> str:
+    """ORGANIC (2026-07-13 canonical-entry campaign) — the record's OWN
+    `input.context` RTL modules, prepared as SMOKE-ONLY material.
+
+    WHY: `_stub_for` derives context-module stubs from the instantiation
+    site alone, where port DIRECTIONS are unknowable — a derived stub
+    declared an instance's OUTPUT connection as `input`, every downstream
+    net went undriven, const-prop wiped the whole module, and yosys 0.66
+    prints NO `cells` row for a 0-cell module → the smoke mis-BLOCKED a
+    correct completion as "synthesized to nothing" (7/14 blocks of the
+    2026-07-12 clean-run were this). The official harness compiles the
+    completion TOGETHER with the record's input.context files, so the
+    faithful smoke does the same: feed the REAL context modules; stubs
+    remain only for modules the context does not provide. §4.05-safe:
+    input.context is GIVEN INPUT (never output.*/harness), and this text
+    is smoke-only — never written into the emitted completion.
+
+    Modules already defined in the completion are EXCLUDED (a modify-task
+    completion REPLACES a context file; including both would be a
+    duplicate definition)."""
+    if not ctx_texts:
+        return ""
+    own = set(_MODULE_NAMES_RE.findall(_detection_text(code)))
+    parts: List[str] = []
+    for v in ctx_texts:
+        if not isinstance(v, str):
+            continue
+        # FILE-level filter on the comment-stripped view (a comment saying
+        # "module <x>" must not create a phantom slice): if this context
+        # file defines ANY module the completion also defines, skip the
+        # WHOLE file — that is the file the completion replaces (harness
+        # semantics), and including it would duplicate the definition.
+        names = set(_MODULE_NAMES_RE.findall(_detection_text(v)))
+        if not names or (names & own):
+            continue
+        # §4.05 no-leak (adversarial-verify LEAK #2 on the first PR round):
+        # ctx text is appended to smoke.sv UNVALIDATED, but the frontend-gap
+        # tolerance's justification is "iverilog already accepted" — which
+        # only ever covered the COMPLETION. One ctx file the host yosys
+        # frontend rejects (e.g. a legal SV `class` the fork frontend
+        # trails on) kills read_verilog before SYNTH runs and silently
+        # degrades the ENTIRE smoke to a frontend-gap tolerate — masking a
+        # genuine synth-stage fatal in the completion itself. PRE-PARSE
+        # each ctx file solo; a file the frontend rejects is DROPPED (the
+        # module falls back to the derived-stub path, i.e. pre-PR
+        # behavior — fail toward the OLD verdict, never a new tolerance).
+        import os as _os
+        import tempfile as _tf
+        with _tf.NamedTemporaryFile("w", suffix=".sv", delete=False) as _fp:
+            _fp.write(v)
+        try:
+            _rc, _o, _e = _run(["yosys", "-p",
+                                f"read_verilog -sv {_fp.name}"], timeout=60)
+        finally:
+            try:
+                _os.unlink(_fp.name)
+            except OSError:
+                pass
+        if _rc not in (0, 127):   # 127 = yosys absent: handled downstream
+            continue              # unparseable ctx file → stub path
+        parts.append(v)
+        own |= names
+    return ("\n\n// gate: record's own input.context modules (smoke-only)\n"
+            + "\n\n".join(parts)) if parts else ""
+
+
 def yosys_smoke(code: str, workdir: Path,
                 stubs_text: str = "",
-                synth_scored: Optional[bool] = None) -> Tuple[bool, str]:
+                synth_scored: Optional[bool] = None,
+                context_rtl: str = "") -> Tuple[bool, str]:
     """ORGANIC #531 — synthesizability smoke. 13/92 first-round CVDP fails
     were harness synth-gate failures the emit gate never caught.
 
@@ -875,10 +942,27 @@ def yosys_smoke(code: str, workdir: Path,
     robust (`Number of cells:` and the 0.6x columnar `N cells` — the #536
     format-drift lesson). Context stubs from the iverilog gate are appended
     so unknown context modules don't abort hierarchy elaboration."""
-    full = code + (stubs_text or "")
+    # Context-first (2026-07-13): the record's own input.context modules are
+    # the REAL environment the official harness compiles — prefer them over
+    # derived stubs, whose unknowable port directions caused the
+    # "synthesized to nothing" false-BLOCK class. A stub is kept only for a
+    # module the context does not provide.
+    ctx_names = set(_MODULE_NAMES_RE.findall(
+        _detection_text(context_rtl or "")))
+    kept_stubs = stubs_text or ""
+    if ctx_names and kept_stubs:
+        kept = [blk for name, blk in _parse_modules(kept_stubs).items()
+                if name not in ctx_names]
+        kept_stubs = ("\n\n// gate-synthesized context stubs\n"
+                      + "\n\n".join(kept)) if kept else ""
+    full = code + kept_stubs + (context_rtl or "")
     f = workdir / "smoke.sv"
     f.write_text(full)
-    stub_names = set(_MODULE_NAMES_RE.findall(stubs_text or ""))
+    # NOTE: ctx/stub names are excluded from the per-module synth loop via
+    # stub_names, but the completion's OWN modules always stay in the loop —
+    # a ctx name colliding with an own module must never empty the loop.
+    stub_names = (set(_MODULE_NAMES_RE.findall(kept_stubs or "")) | ctx_names) \
+        - set(_MODULE_NAMES_RE.findall(_detection_text(code)))
     # #531 round-3: detect module names on the comment/string-stripped VIEW —
     # prose inside comments must never become a phantom synth -top target.
     own_modules = [m for m in _MODULE_NAMES_RE.findall(_detection_text(code))
@@ -1045,6 +1129,46 @@ def yosys_smoke(code: str, workdir: Path,
                            + "; ".join(tail))
         matches = list(_YOSYS_CELLS_RE.finditer(blob))
         if not matches:
+            # INTERIM tolerance pending the fork-yosys fix (Bucket-T
+            # ORGANIC-20260713-fork-yosys-stat-zero-cells-row-omitted): yosys
+            # 0.6x columnar `stat` omits the cells row ENTIRELY for a 0-cell
+            # module, so "no cells row" is ambiguous between (a) a legitimate
+            # wiring-only module (pure permutation / feed-through — 0 cells is
+            # correct) and (b) no stat at all. Tolerate ONLY the provably-(a)
+            # shape: the module's own stat header printed AND a wires row
+            # printed. Anything else stays the hard BLOCK.
+            hdr = re.search(rf"^\s*===\s*{re.escape(top)}\s*===",
+                            blob, re.MULTILINE)
+            wires = re.search(r"^\s*\d+\s+wires\b|Number of wires:\s+\d+",
+                              blob, re.MULTILINE)
+            # §4.05 no-leak (adversarial-verify LEAK #1): the stat SHAPE
+            # (header + wires rows, no cells row) is byte-identical between a
+            # legit feed-through and a module with an UNDRIVEN OUTPUT, so the
+            # shape alone proves nothing. Narrow the tolerance: the module's
+            # comment-stripped BODY must additionally contain at least one
+            # `assign`, an `always` block, or a submodule instantiation —
+            # a dead-wire/undriven shell has none and stays the hard BLOCK.
+            # (`always` counts: with the module's stat header present the
+            # downstream harness cannot KeyError, and an all-optimized-away
+            # always module is a legit FUNCTIONAL fail for later stages/the
+            # official sim — matching the old-format yosys parity where
+            # 'Number of cells: 0' always passed this smoke.) The note is
+            # truthful (INCONCLUSIVE shape), never a "provably wiring-only"
+            # claim.
+            body_m = _parse_modules(_detection_text(full)).get(top, "")
+            has_wiring = bool(re.search(
+                r"\bassign\b|\balways\b"
+                r"|^(?!\s*(?:module|function|task|input|output|inout|wire"
+                r"|reg|logic|parameter|localparam|genvar|generate|endmodule)"
+                r"\b)\s*\w+\s+(?:#\s*\()?\s*\w+\s*\(",
+                body_m, re.MULTILINE))
+            if hdr and wires and has_wiring:
+                details.append(
+                    f"{top}: 0 cells (INCONCLUSIVE wiring-shape stat — header"
+                    f" + wires rows, no cells row, body has assign/instance;"
+                    f" tolerated pending the fork-yosys always-print-cells-"
+                    f"row fix)")
+                continue
             return False, (f"yosys-smoke: module {top!r} synthesized to "
                            f"nothing — stat reported no module (the silent "
                            f"downstream harness KeyError trap)")
@@ -1235,7 +1359,8 @@ def _emit_or_split(combined: str,
 def gate_record(rec: Dict, workdir: Path,
                 prompt_text: Optional[str] = None,
                 synth_scored: Optional[bool] = None,
-                expected_files: Optional[List[str]] = None) -> Tuple[bool, Dict, Dict]:
+                expected_files: Optional[List[str]] = None,
+                ctx_rtl_texts: Optional[List[str]] = None) -> Tuple[bool, Dict, Dict]:
     """Gate one {id, completion} record → (ok, out_record, report_entry).
 
     Hygiene runs PER CODE FENCE (each fence body is fixed separately — a
@@ -1305,7 +1430,8 @@ def gate_record(rec: Dict, workdir: Path,
         if not ok:
             entry["verdict"] = "BLOCKED"
             return False, rec, entry
-        ok2, why2 = yosys_smoke(combined, workdir, stubs, synth_scored=synth_scored)
+        ok2, why2 = yosys_smoke(combined, workdir, stubs, synth_scored=synth_scored,
+                        context_rtl=_context_rtl_for_smoke(ctx_rtl_texts, combined))
         entry["synth"] = why2
         if not ok2:
             entry["verdict"] = "BLOCKED"
@@ -1375,7 +1501,8 @@ def gate_record(rec: Dict, workdir: Path,
         if not ok:
             entry["verdict"] = "BLOCKED"
             return False, rec, entry
-        ok2, why2 = yosys_smoke(fixed, workdir, stubs, synth_scored=synth_scored)
+        ok2, why2 = yosys_smoke(fixed, workdir, stubs, synth_scored=synth_scored,
+                        context_rtl=_context_rtl_for_smoke(ctx_rtl_texts, fixed))
         entry["synth"] = why2
         if not ok2:
             entry["verdict"] = "BLOCKED"
@@ -1403,7 +1530,8 @@ def gate_record(rec: Dict, workdir: Path,
     if not ok:
         entry["verdict"] = "BLOCKED"
         return False, rec, entry
-    ok2, why2 = yosys_smoke(combined, workdir, stubs, synth_scored=synth_scored)
+    ok2, why2 = yosys_smoke(combined, workdir, stubs, synth_scored=synth_scored,
+                        context_rtl=_context_rtl_for_smoke(ctx_rtl_texts, combined))
     entry["synth"] = why2
     if not ok2:
         entry["verdict"] = "BLOCKED"
@@ -2990,7 +3118,8 @@ def main(argv=None) -> int:
             ok, out_rec, entry = gate_record(
                 rec, wd, prompt_text=prompts.get(str(rec.get("id"))),
                 synth_scored=synth_scored_map.get(str(rec.get("id"))),
-                expected_files=expected_files_map.get(str(rec.get("id"))))
+                expected_files=expected_files_map.get(str(rec.get("id"))),
+                ctx_rtl_texts=context_rtl.get(str(rec.get("id"))))
             if _port_renames:
                 # record the interface-conformance port renames in the report.
                 entry["port_aligned"] = dict(_port_renames)
