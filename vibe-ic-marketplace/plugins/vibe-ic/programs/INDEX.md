@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 873
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 873)
+- **Total programs (excluding helpers / shims):** 876
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 876)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 864 |
+| `any` | 867 |
 
 ## Alphabetical listing
 
@@ -779,6 +779,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `spec_enumset_extract` | any | — | PROGRAM-FIRST structural extractor for CVDP |
 | `spec_example_smoke_tb` | any | — | ORGANIC #728 [P1, chip-AGNOSTIC] |
 | `spec_fsm_extract` | any | — | PROGRAM-FIRST structural extractor for stated FSMs. |
+| `spec_lint_review_detect` | any | — | PROGRAM-FIRST lint-review-task detector. |
+| `spec_memory_region_detect` | any | — | PROGRAM-FIRST addressable-memory detector. |
 | `spec_numeric_pack_extract` | any | — | PROGRAM-FIRST numeric-semantics + packing |
 | `spec_otp_extract` | any | — | PROGRAM-FIRST structural extractor for stated OTP content. |
 | `spec_regmap_extract` | any | — | PROGRAM-FIRST structural register-map extractor. |
@@ -865,6 +867,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `verdict_token_propagation_check` | any | — | META-audit: producer -> consumer |
 | `verilator_coverage_measure` | any | v0.53 | v0.53 plugin gate |
 | `verilator_timing_fallback_check` | any | — | golden-self-test-guarded Verilator fallback |
+| `verilog_selfcheck_lint` | any | — | PROGRAM-FIRST verilator -Wall self-lint gate. |
 | `verilog_width_resolve` | any | — | SHARED parameterized-width reader (Verilog/SystemVerilog spec prose). chip-AGNOSTIC: any benchmark (CVDP/VerilogEval/RTLLM) or Phase-1 de... |
 | `verilogeval_human_tier1_solvers` | any | — | supplemental DETERMINISTIC Tier-1 emitters |
 | `verilogeval_human_tier_pipeline` | any | — | the VerilogEval-HUMAN (code-complete, |
@@ -945,7 +948,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (864 programs)
+### `any` (867 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1693,6 +1696,8 @@ _(no programs in this group)_
 - `spec_enumset_extract` — PROGRAM-FIRST structural extractor for CVDP
 - `spec_example_smoke_tb` — ORGANIC #728 [P1, chip-AGNOSTIC]
 - `spec_fsm_extract` — PROGRAM-FIRST structural extractor for stated FSMs.
+- `spec_lint_review_detect` — PROGRAM-FIRST lint-review-task detector.
+- `spec_memory_region_detect` — PROGRAM-FIRST addressable-memory detector.
 - `spec_numeric_pack_extract` — PROGRAM-FIRST numeric-semantics + packing
 - `spec_otp_extract` — PROGRAM-FIRST structural extractor for stated OTP content.
 - `spec_regmap_extract` — PROGRAM-FIRST structural register-map extractor.
@@ -1779,6 +1784,7 @@ _(no programs in this group)_
 - `verdict_token_propagation_check` — META-audit: producer -> consumer
 - `verilator_coverage_measure` — v0.53 plugin gate  _[v0.53]_
 - `verilator_timing_fallback_check` — golden-self-test-guarded Verilator fallback
+- `verilog_selfcheck_lint` — PROGRAM-FIRST verilator -Wall self-lint gate.
 - `verilog_width_resolve` — SHARED parameterized-width reader (Verilog/SystemVerilog spec prose). chip-AGNOSTIC: any benchmark (CVDP/VerilogEval/RTLLM) or Phase-1 de...
 - `verilogeval_human_tier1_solvers` — supplemental DETERMINISTIC Tier-1 emitters
 - `verilogeval_human_tier_pipeline` — the VerilogEval-HUMAN (code-complete,
