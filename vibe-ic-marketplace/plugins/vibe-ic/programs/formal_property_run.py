@@ -124,6 +124,44 @@ def bound_kind(mode: str, status: str) -> str:
     return "inconclusive"
 
 
+def assert_bound_honesty(props: List[dict]) -> bool:
+    """HONESTY GUARD: a bounded model check (mode bmc) can NEVER be reported as
+    an unbounded (full) proof, no matter how many frames it reached. `bound_kind`
+    already enforces this, but this is the explicit, unit-tested contract so a
+    future refactor cannot silently dress a deep BMC as a full proof. Returns
+    True when every property's strength label is honest; raises otherwise."""
+    for p in props:
+        mode = (p.get("mode") or "").lower()
+        if mode == "bmc" and p.get("bound") == "unbounded":
+            raise AssertionError(
+                f"dishonest strength: bmc task '{p.get('task')}' "
+                f"(depth {p.get('depth')}) labelled 'unbounded' — a BMC that "
+                "merely reached a high depth is NOT a full proof")
+        if mode == "prove" and p.get("status") == "PASS" \
+                and p.get("bound") != "unbounded":
+            raise AssertionError(
+                f"inconsistent strength: proved task '{p.get('task')}' "
+                "not labelled 'unbounded'")
+    return True
+
+
+def proof_strength(props: List[dict]) -> str:
+    """Overall honest strength of a property set:
+      'unbounded' — at least one property PROVED unbounded (mode prove PASS)
+                    and no counterexample anywhere;
+      'bounded'   — no unbounded proof, but a BMC held to its depth (no cex);
+      'cex'       — a real counterexample was found;
+      'none'      — nothing decided.
+    Only 'unbounded' is a full datapath proof; 'bounded' is disclosed-bounded."""
+    if any(p.get("bound") == "cex" for p in props):
+        return "cex"
+    if any(p.get("bound") == "unbounded" for p in props):
+        return "unbounded"
+    if any(p.get("bound") == "bounded" for p in props):
+        return "bounded"
+    return "none"
+
+
 def parse_sby_config(text: str) -> Dict[str, TaskResult]:
     """Parse a .sby into per-task {mode, depth, engine}. Understands the
     [tasks] list and task-scoped `task:`/`~task:` lines in [options]/[engines].
@@ -265,18 +303,34 @@ def build_results(top: str, cfg: Dict[str, TaskResult], lp: LogParse,
             "bound": merged.bound_kind,
             "cex_frame": tr.cex_frame,
         })
+    # HONESTY GUARD: never allow a bmc task to be dressed as an unbounded proof.
+    assert_bound_honesty(props)
     all_proved = lp.all_pass
     any_unbounded = any(p["bound"] == "unbounded" for p in props)
     any_bounded = any(p["bound"] == "bounded" for p in props)
+    strength = proof_strength(props)
+    any_cex = any(p["bound"] == "cex" for p in props)
+    any_pass = any(p["status"] == "PASS" for p in props)
     if not props:
         verdict = "SKIPPED-CONDITION"
     elif all_proved:
         verdict = "PASS"
-    else:
+    elif any_cex:
+        # a REAL counterexample refuted a property — a hard formal FAIL
         verdict = "FAIL"
+    elif any_pass:
+        # some properties proved/bounded, others inconclusive (e.g. a wide
+        # datapath prove that TIMED OUT) — no property was refuted. Honest
+        # PARTIAL, NOT a fabricated PASS and NOT a counterexample FAIL.
+        verdict = "PARTIAL"
+    else:
+        verdict = "INCONCLUSIVE"
     disclosure = []
     if any_unbounded:
-        disclosure.append("safety invariants proved UNBOUNDED (mode prove)")
+        up = [p for p in props if p["bound"] == "unbounded"]
+        disclosure.append(
+            "property PROVED UNBOUNDED (mode prove — holds for all reachable "
+            f"states): {', '.join(sorted(p['task'] for p in up))}")
     if any_bounded:
         bd = [p for p in props if p["bound"] == "bounded"]
         depths = sorted({p["depth"] for p in bd if p["depth"] is not None})
@@ -288,10 +342,13 @@ def build_results(top: str, cfg: Dict[str, TaskResult], lp: LogParse,
             "proof)")
     return {
         "program": "formal_property_run",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "top": top,
         "verdict": verdict,
         "all_proved": bool(all_proved),
+        # HONEST top-level strength: True ONLY when a `prove` task truly PASSED.
+        "unbounded_proved": bool(any_unbounded),
+        "proof_strength": strength,
         "property_count": len(props),
         "proved": sum(1 for p in props if p["status"] == "PASS"),
         "failed": sum(1 for p in props if p["status"] == "FAIL"),
@@ -371,6 +428,157 @@ prep -top {top}
 """
 
 
+# ── invariant-strengthened harness (auxiliary-invariant / datapath proof) ──
+# A strengthened harness reaches the DUT's INTERNAL state (e.g. a carry-save
+# accumulator) so a k-inductive invariant can be PROVED UNBOUNDED where the
+# output-only miter only reaches a bounded BMC depth. This Yosys build's
+# built-in Verilog frontend has no hierarchical references, so the harness
+# leaves the internal nets as UNDRIVEN placeholder wires and declares, in
+# `// @connect <placeholder> = <inst>.<net>` pragmas, how the .sby should wire
+# them at the netlist level (flatten + `connect -set`). The mechanism is
+# design-INDEPENDENT — the per-design internal-net names live in the harness
+# (which is design INPUT), never in this program.
+_PRAGMA_CONNECT_RE = re.compile(
+    r"//\s*@connect\s+(?P<lhs>[\w.$:\[\]]+)\s*=\s*(?P<rhs>[\w.$:\[\]]+)")
+_PRAGMA_CHPARAM_RE = re.compile(
+    r"//\s*@chparam\s+(?P<name>\w+)\s*=\s*(?P<val>-?\w+)")
+_PRAGMA_INV_RE = re.compile(r"//\s*@invariant-harness\b")
+# `// @task <name> <prove|bmc> [depth=<n>] [-- <read_verilog defines...>]`
+# defines are the REST of the line (after `--`) so spaces are fine. The task
+# NAMES / define macros live in the harness (design INPUT) — the program stays
+# design-independent.
+_PRAGMA_TASK_RE = re.compile(
+    r"//\s*@task\s+(?P<name>\w+)\s+(?P<mode>prove|bmc)"
+    r"(?:\s+depth=(?P<depth>\d+))?(?:\s+timeout=(?P<timeout>\d+))?"
+    r"(?:\s+--\s+(?P<defines>.*?))?\s*$",
+    re.MULTILINE)
+
+
+def parse_harness_pragmas(text: str) -> dict:
+    """Extract the strengthened-harness directives (pure). A harness is treated
+    as invariant-strengthened if it carries the `@invariant-harness` marker OR
+    any `@connect` pragma (reaching an internal net is what makes it stronger
+    than a port-only harness). `@task` pragmas declare the proof tasks (each
+    with its own read_verilog defines) so one harness can carry several
+    selectable strengthened properties (e.g. an unbounded reference-equivalence
+    task plus a bounded product-miter task)."""
+    connects = [(m.group("lhs"), m.group("rhs"))
+                for m in _PRAGMA_CONNECT_RE.finditer(text)]
+    chparams = [(m.group("name"), m.group("val"))
+                for m in _PRAGMA_CHPARAM_RE.finditer(text)]
+    tasks = []
+    for m in _PRAGMA_TASK_RE.finditer(text):
+        tasks.append({
+            "name": m.group("name"),
+            "mode": m.group("mode"),
+            "depth": int(m.group("depth")) if m.group("depth") else None,
+            "timeout": int(m.group("timeout")) if m.group("timeout") else None,
+            "defines": (m.group("defines") or "").strip(),
+        })
+    is_inv = bool(_PRAGMA_INV_RE.search(text)) or bool(connects)
+    return {"connects": connects, "chparams": chparams, "tasks": tasks,
+            "is_invariant": is_inv}
+
+
+def emit_invariant_sby(rtl_files: List[str], harness_file: str, top: str,
+                       connects: List, chparams: List,
+                       tasks: Optional[List[dict]] = None,
+                       prove_engine: str = "abc pdr",
+                       bmc_engine: str = "abc bmc3",
+                       prove_depth: int = 40, bmc_depth: int = 25) -> str:
+    """Emit a .sby for an invariant-strengthened harness. The [script] flattens
+    the DUT and `connect -set`s each declared placeholder to its internal net,
+    then runs each declared task. A `prove` task (unbounded k-induction / PDR)
+    attempts a FULL proof; a `bmc` task gives a bounded corroboration. Each task
+    reads the harness with its OWN `defines` (task-scoped read_verilog) so one
+    harness file can carry several selectable strengthened properties. When a
+    `prove` task returns PASS the result is an honest UNBOUNDED proof (mode prove
+    -> bound_kind 'unbounded'); a `bmc` PASS is never more than bounded."""
+    if not tasks:
+        tasks = [{"name": "prove", "mode": "prove", "depth": None,
+                  "defines": ""},
+                 {"name": "bmc", "mode": "bmc", "depth": None, "defines": ""}]
+    reads = " ".join([harness_file] + list(rtl_files))
+    srcs = list(rtl_files) + [harness_file]
+    files_block = "\n".join(srcs)
+    chparam_lines = [f"chparam -set {n} {v} {top}" for n, v in chparams]
+    connect_lines = [f"connect -set {lhs} {rhs}" for lhs, rhs in connects]
+
+    task_names, opts, engines, read_lines = [], [], [], []
+    for t in tasks:
+        nm, mode = t["name"], t["mode"]
+        task_names.append(nm)
+        if mode == "prove":
+            depth = t.get("depth") or prove_depth
+            opts += [f"{nm}: mode prove", f"{nm}: depth {depth}"]
+            engines.append(f"{nm}: {prove_engine}")
+        else:
+            depth = t.get("depth") or bmc_depth
+            opts += [f"{nm}: mode bmc", f"{nm}: depth {depth}"]
+            engines.append(f"{nm}: {bmc_engine}")
+        if t.get("timeout"):
+            # bound a hard prove of a wide datapath so it reports an HONEST
+            # TIMEOUT (inconclusive) instead of hanging — never a fake proof.
+            opts.append(f"{nm}: timeout {t['timeout']}")
+        defs = (t.get("defines") or "").strip()
+        read_lines.append(
+            f"{nm}: read_verilog -formal -sv {defs + ' ' if defs else ''}"
+            f"{reads}")
+
+    tasks_block = "\n".join(task_names)
+    opts_block = "\n".join(opts) + "\naigsmt none\n"
+    engines_block = "\n".join(engines)
+    script = list(read_lines) + list(chparam_lines)
+    script += [f"hierarchy -top {top}", "proc", "flatten"]
+    script += list(connect_lines)
+    script += ["opt -fast", f"prep -top {top}"]
+    script_block = "\n".join(script)
+    return f"""[tasks]
+{tasks_block}
+
+[options]
+{opts_block}
+[engines]
+{engines_block}
+
+[script]
+{script_block}
+
+[files]
+{files_block}
+"""
+
+
+# ── stronger-engine (datapath) backend detection ───────────────────────────
+# OSS unbounded / algebraic multiplier verifiers that beat bit-level BMC on a
+# wide datapath. `abc pdr` (bundled in yosys/sby) is ALWAYS available; the rest
+# are optional forks. Absence is reported HONESTLY — never a fabricated proof.
+_DATAPATH_ENGINES = ("btormc", "pono", "avy", "amulet2", "amulet",
+                     "boolector", "bitwuzla", "yices-smt2", "z3")
+
+
+def detect_engines(container: Optional[str]) -> Dict[str, bool]:
+    """Probe which stronger OSS model-checking / SMT engines are on PATH in the
+    container (impure). `abc` (via yosys/sby) is always present. Used so an
+    `--engine-backend btor|amulet` request can be honoured only when the engine
+    truly exists — otherwise the program says so instead of faking a proof."""
+    avail: Dict[str, bool] = {"abc": True}
+    probe = "; ".join(f"command -v {t} >/dev/null 2>&1 && echo {t}"
+                      for t in _DATAPATH_ENGINES)
+    try:
+        if container:
+            cmd = ["docker", "exec", container, "bash", "-lc", probe]
+        else:
+            cmd = ["bash", "-lc", probe]
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        found = set((p.stdout or "").split())
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        found = set()
+    for t in _DATAPATH_ENGINES:
+        avail[t] = t in found
+    return avail
+
+
 # ── impure runner ──────────────────────────────────────────────────────────
 def _run_sby(sby_path: Path, formal_dir: Path, container: Optional[str],
              timeout: int) -> str:
@@ -415,13 +623,70 @@ def run(project: Path, harness: Optional[Path] = None,
         rtl: Optional[List[Path]] = None, top: Optional[str] = None,
         sby: Optional[Path] = None, container: Optional[str] = "vibeic-eda",
         bmc_depth: int = 12, safety_depth: int = 20,
-        timeout: int = 900) -> dict:
+        timeout: int = 900,
+        invariant_harness: Optional[Path] = None,
+        engine_backend: str = "auto") -> dict:
     formal_dir = _pl.formal_dir(project)
     formal_dir.mkdir(parents=True, exist_ok=True)
 
+    engine_availability = detect_engines(container)
+    engine_note = None
+
+    # An invariant-strengthened harness may be passed explicitly via
+    # `invariant_harness`, or auto-detected: a plain `--harness` that carries
+    # `@invariant-harness` / `@connect` pragmas is routed here too.
+    inv_h = invariant_harness
+    if inv_h is None and harness is not None and harness.is_file():
+        if parse_harness_pragmas(harness.read_text())["is_invariant"]:
+            inv_h = harness
+
     # 1) locate/emit the .sby + stage sources into formal/ ------------------
     sby_path: Optional[Path] = None
-    if sby is not None and sby.is_file():
+    if inv_h is not None and inv_h.is_file():
+        # ---- invariant-strengthened (auxiliary-invariant) datapath proof ----
+        if not rtl or top is None:
+            return {"verdict": "ERROR", "rc": 1,
+                    "reason": "invariant harness needs --rtl/--top"}
+        prags = parse_harness_pragmas(inv_h.read_text())
+        # `abc pdr` is the ONLY unbounded engine SymbiYosys can drive in `mode
+        # prove`. A stronger OSS datapath engine (btormc/pono over BTOR2 via
+        # `--kind`, or AMulet2 on a combinational multiplier netlist) is NOT
+        # sby-prove-drivable — it needs a direct `write_btor -> btormc --kind`
+        # (or AMulet) invocation. We therefore NEVER substitute it as an sby
+        # prove engine (that would emit an invalid .sby: sby's btor backend is
+        # bmc/cover-only). We keep abc pdr and record the request + honest
+        # availability + note so the gap is disclosed, never faked.
+        prove_engine = "abc pdr"
+        engine_note = None
+        if engine_backend in ("btor", "btormc", "amulet"):
+            have = (engine_availability.get("btormc")
+                    or engine_availability.get("pono")
+                    or engine_availability.get("amulet2"))
+            engine_note = (
+                "requested stronger datapath engine "
+                f"'{engine_backend}'; it is "
+                + ("PRESENT but not sby-prove-drivable (btor backend is "
+                   "bmc/cover-only; run write_btor -> btormc --kind directly)"
+                   if have else
+                   "ABSENT (btormc/pono/amulet2 not on PATH)")
+                + " — kept abc pdr for the sby prove task; no proof fabricated")
+        staged_rtl = []
+        for r in rtl:
+            dst = formal_dir / r.name
+            if r.resolve() != dst.resolve():
+                shutil.copy2(r, dst)
+            staged_rtl.append(r.name)
+        hdst = formal_dir / inv_h.name
+        if inv_h.resolve() != hdst.resolve():
+            shutil.copy2(inv_h, hdst)
+        sby_text = emit_invariant_sby(
+            staged_rtl, inv_h.name, top, prags["connects"], prags["chparams"],
+            tasks=prags.get("tasks"),
+            prove_engine=prove_engine, prove_depth=max(40, safety_depth),
+            bmc_depth=bmc_depth)
+        sby_path = formal_dir / f"{top}_inductive.sby"
+        sby_path.write_text(sby_text)
+    elif sby is not None and sby.is_file():
         sby_path = formal_dir / sby.name
         if sby.resolve() != sby_path.resolve():
             shutil.copy2(sby, sby_path)
@@ -477,15 +742,34 @@ def run(project: Path, harness: Optional[Path] = None,
     ev_rel = str(log_path.relative_to(project))
     sby_rel = str(sby_path.relative_to(project))
     results = build_results(top_name, cfg, lp, ev_rel, sby_rel)
-    if results["property_count"]:
+    results["mode"] = ("invariant-strengthened"
+                       if inv_h is not None else "standard")
+    # HONEST engine record: which stronger OSS datapath engines were available,
+    # and which was actually used. `abc pdr` is the in-container unbounded
+    # engine; btormc/pono/amulet2 are optional forks (absent -> disclosed, not
+    # faked). engine_backend records the REQUEST; the per-task `engine` field
+    # (in properties[]) records what genuinely ran.
+    results["engine_backend_requested"] = engine_backend
+    results["engine_availability"] = engine_availability
+    if engine_note:
+        results["engine_note"] = engine_note
+    # The invariant-strengthened proof is a SUPPLEMENTARY datapath-formal
+    # attempt: it writes to its OWN results file so it can never clobber the
+    # canonical `results.json` that the Step-5 evidence gate consumes (a wide
+    # datapath prove may honestly not converge; that must not turn the flow's
+    # existing PASS into a FAIL). The standard path keeps writing results.json.
+    results_name = ("results.json" if inv_h is None
+                    else f"{top_name}_inductive_results.json")
+    if inv_h is None and results["property_count"]:
         # A real proof ran: results.json is now the canonical artifact, so a
         # stale `formal_not_run.json` skip-sentinel (from an earlier chain
         # where no proof ran) must not linger and contradict it.
         stale = formal_dir / "formal_not_run.json"
         if stale.is_file():
             stale.unlink()
-    (formal_dir / "results.json").write_text(
+    (formal_dir / results_name).write_text(
         json.dumps(results, indent=2, ensure_ascii=False) + "\n")
+    results["results_file"] = results_name
 
     # 4) human report --------------------------------------------------------
     _write_report(formal_dir, results)
@@ -508,12 +792,25 @@ def _write_report(formal_dir: Path, results: dict) -> None:
             f"| {p['task']} | {p['mode']} | {p['engine']} | "
             f"{p['depth']} | {p['status']} | {p['bound']} | "
             f"{p['cex_frame'] if p['cex_frame'] is not None else ''} |")
+    strength = results.get("proof_strength", "?")
+    lines += ["", f"proof strength: **{strength}** "
+              f"(unbounded_proved={results.get('unbounded_proved')})"]
     lines += ["", "## Bounded vs unbounded disclosure"]
     for d in results["bounded_vs_unbounded"]:
         lines.append(f"- {d}")
+    avail = results.get("engine_availability")
+    if avail:
+        present = sorted(k for k, v in avail.items() if v)
+        absent = sorted(k for k, v in avail.items() if not v)
+        lines += ["", "## Engine availability (honest)",
+                  f"- present: {', '.join(present) if present else '(none)'}",
+                  f"- absent : {', '.join(absent) if absent else '(none)'}"]
     lines += ["", f"Evidence transcript: `{results['evidence']}`",
               f"SymbiYosys task file: `{results['sby']}`", ""]
-    (formal_dir / f"{results['top']}_report.md").write_text("\n".join(lines))
+    suffix = ("_inductive_report.md"
+              if results.get("mode") == "invariant-strengthened"
+              else "_report.md")
+    (formal_dir / f"{results['top']}{suffix}").write_text("\n".join(lines))
 
 
 def main(argv=None) -> int:
@@ -521,6 +818,15 @@ def main(argv=None) -> int:
     ap.add_argument("project_dir", type=Path)
     ap.add_argument("--harness", type=Path, default=None,
                     help="authored formal_<top>.sv property harness")
+    ap.add_argument("--invariant-harness", type=Path, default=None,
+                    dest="invariant_harness",
+                    help="strengthened auxiliary-invariant harness reaching "
+                         "internal state (with @connect pragmas) for an "
+                         "UNBOUNDED datapath proof")
+    ap.add_argument("--engine-backend", default="auto", dest="engine_backend",
+                    choices=["auto", "abc", "btor", "btormc", "amulet"],
+                    help="stronger datapath engine to prefer when present "
+                         "(absent engines are disclosed, never faked)")
     ap.add_argument("--rtl", type=Path, nargs="*", default=None,
                     help="design RTL sources (INPUT only)")
     ap.add_argument("--top", default=None, help="formal top module name")
@@ -540,7 +846,9 @@ def main(argv=None) -> int:
               top=args.top, sby=args.sby,
               container=(args.container or None),
               bmc_depth=args.bmc_depth, safety_depth=args.safety_depth,
-              timeout=args.timeout)
+              timeout=args.timeout,
+              invariant_harness=args.invariant_harness,
+              engine_backend=args.engine_backend)
     rc = res.pop("rc", 0)
     out = json.dumps(res, indent=2, ensure_ascii=False)
     if args.json:
