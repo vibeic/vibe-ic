@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 876
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 876)
+- **Total programs (excluding helpers / shims):** 877
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 877)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 867 |
+| `any` | 868 |
 
 ## Alphabetical listing
 
@@ -774,6 +774,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `spec_calibration_extract` | any | — | PROGRAM-FIRST structural extractor for the |
 | `spec_complete_extract` | any | — | the GENERAL (benchmark-agnostic) complete-spec |
 | `spec_conformance_check` | any | — | Spec↔RTL contract-conformance gate. |
+| `spec_context_sibling_detect` | any | — | PROGRAM-FIRST context-sibling collision advisory. |
 | `spec_coverage_check` | any | — | ORGANIC #697 [P1, chip-AGNOSTIC] |
 | `spec_electrical_extract` | any | — | PROGRAM-FIRST structural extractor for stated |
 | `spec_enumset_extract` | any | — | PROGRAM-FIRST structural extractor for CVDP |
@@ -948,7 +949,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (867 programs)
+### `any` (868 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1691,6 +1692,7 @@ _(no programs in this group)_
 - `spec_calibration_extract` — PROGRAM-FIRST structural extractor for the
 - `spec_complete_extract` — the GENERAL (benchmark-agnostic) complete-spec
 - `spec_conformance_check` — Spec↔RTL contract-conformance gate.
+- `spec_context_sibling_detect` — PROGRAM-FIRST context-sibling collision advisory.
 - `spec_coverage_check` — ORGANIC #697 [P1, chip-AGNOSTIC]
 - `spec_electrical_extract` — PROGRAM-FIRST structural extractor for stated
 - `spec_enumset_extract` — PROGRAM-FIRST structural extractor for CVDP
