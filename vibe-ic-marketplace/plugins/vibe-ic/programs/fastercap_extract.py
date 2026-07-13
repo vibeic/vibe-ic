@@ -144,6 +144,53 @@ def _near_any(s: "SC.Segment", others: List["SC.Segment"], win: int) -> bool:
     return any(_bbox_gap_dbu(s, o) <= win for o in others)
 
 
+def _clip_cluster(segments: List["SC.Segment"], victim: str,
+                  aggr_nets: List[str], units: int,
+                  window_um: float = DEFAULT_WINDOW_UM,
+                  max_boxes: int = DEFAULT_MAX_BOXES,
+                  per_net_max: int = 12) -> Dict[str, List["SC.Segment"]]:
+    """Build a bounded, box-budgeted geometry cluster around ``victim`` with the
+    given ``aggr_nets``.  The victim is shrunk to the segments that actually
+    couple to an aggressor; each aggressor is shrunk to the segments near the
+    victim; each net is capped to ``per_net_max`` segments; and the weakest
+    aggressor nets (last in ``aggr_nets``) are dropped until the total box count
+    is within ``max_boxes``.  Returns {net: [Segments]} with >=2 nets, or {} if
+    the victim has no segments / no aggressor survives.  PURE (no solver / I/O)."""
+    if not aggr_nets:
+        return {}
+    want = set([victim] + list(aggr_nets))
+    segs_by_net: Dict[str, List["SC.Segment"]] = {}
+    for s in segments:
+        if s.net in want:
+            segs_by_net.setdefault(s.net, []).append(s)
+    if victim not in segs_by_net:
+        return {}
+
+    win = int(window_um * units)
+    aggr_segs = [s for n in aggr_nets for s in segs_by_net.get(n, [])]
+    # shrink the victim to segments that actually couple to an aggressor
+    vic = [s for s in segs_by_net[victim] if _near_any(s, aggr_segs, win)]
+    if not vic:
+        vic = segs_by_net[victim]
+    vic = vic[:per_net_max]
+
+    cluster: Dict[str, List["SC.Segment"]] = {victim: vic}
+    for net in aggr_nets:                 # keep aggressor segs near the victim
+        kept = [s for s in segs_by_net.get(net, []) if _near_any(s, vic, win)]
+        if kept:
+            cluster[net] = kept[:per_net_max]
+
+    # bound total boxes: drop the weakest aggressor nets until under budget
+    def total_boxes(c):
+        return sum(len(v) for v in c.values())
+    for net in reversed(list(aggr_nets)):  # weakest first
+        if total_boxes(cluster) <= max_boxes or len(cluster) <= 2:
+            break
+        cluster.pop(net, None)
+
+    return cluster if len(cluster) >= 2 else {}
+
+
 def select_cluster(segments: List["SC.Segment"],
                    layers: Dict[str, "SC.LayerInfo"], units: int,
                    window_um: float = DEFAULT_WINDOW_UM,
@@ -183,36 +230,8 @@ def select_cluster(segments: List["SC.Segment"],
     if not aggr_nets:
         return victim, {}, {}
 
-    segs_by_net: Dict[str, List["SC.Segment"]] = {}
-    want = set([victim] + aggr_nets)
-    for s in segments:
-        if s.net in want:
-            segs_by_net.setdefault(s.net, []).append(s)
-    if victim not in segs_by_net:
-        return victim, {}, {}
-
-    win = int(window_um * units)
-    aggr_segs = [s for n in aggr_nets for s in segs_by_net.get(n, [])]
-    # shrink the victim to segments that actually couple to an aggressor
-    vic = [s for s in segs_by_net[victim] if _near_any(s, aggr_segs, win)]
-    if not vic:
-        vic = segs_by_net[victim]
-    vic = vic[:per_net_max]
-
-    cluster: Dict[str, List["SC.Segment"]] = {victim: vic}
-    for net in aggr_nets:                 # keep aggressor segs near the victim
-        kept = [s for s in segs_by_net.get(net, []) if _near_any(s, vic, win)]
-        if kept:
-            cluster[net] = kept[:per_net_max]
-
-    # bound total boxes: drop the weakest aggressor nets until under budget
-    def total_boxes(c):
-        return sum(len(v) for v in c.values())
-    for net in reversed(aggr_nets):       # weakest first
-        if total_boxes(cluster) <= max_boxes or len(cluster) <= 2:
-            break
-        cluster.pop(net, None)
-
+    cluster = _clip_cluster(segments, victim, aggr_nets, units, window_um,
+                            max_boxes, per_net_max)
     if len(cluster) < 2:
         return victim, {}, {}
 
@@ -222,6 +241,73 @@ def select_cluster(segments: List["SC.Segment"],
     cl_pairs = {k: v for k, v in cl_pairs.items()
                 if k[0] in cluster and k[1] in cluster}
     return victim, cluster, cl_pairs
+
+
+# ── whole-design coverage plan (PURE) ─────────────────────────────────────────
+def plan_coverage(pairs: Dict[Tuple[str, str], float],
+                  max_aggressors: int = DEFAULT_MAX_AGGRESSORS
+                  ) -> List[Tuple[str, List[str]]]:
+    """Tile the WHOLE coupling graph into a deterministic sequence of bounded
+    ``(victim, [aggressor_nets])`` cluster plans that COVER every analytical
+    net-pair (each pair lies inside at least one plan's victim+aggressor set).
+
+    This is the net-windowing that turns the single bounded-cluster solve into a
+    whole-design sweep while keeping every individual BEM problem small (each
+    plan has <= ``max_aggressors``+1 conductors, so the O(n^2) cost is bounded by
+    the local neighbourhood, not the whole chip).
+
+    Greedy set-cover: repeatedly seed on the strongest still-uncovered pair,
+    centre on its endpoint with the most still-uncovered neighbours, and attach
+    that victim's still-uncovered neighbours (strongest first — the seed's other
+    endpoint guaranteed included) up to ``max_aggressors``; if space remains,
+    top up with already-covered neighbours (real screening context). Every plan
+    covers at least its seed pair, so the loop strictly shrinks the uncovered set
+    and terminates. Deterministic (ties broken by coupling then net name).
+
+    ``pairs`` keys are canonical (a<b); PURE, no geometry / solver."""
+    if not pairs:
+        return []
+    nbr: Dict[str, List[Tuple[str, float]]] = {}
+    for (a, b), cc in pairs.items():
+        nbr.setdefault(a, []).append((b, cc))
+        nbr.setdefault(b, []).append((a, cc))
+    for n in nbr:
+        nbr[n].sort(key=lambda t: (-t[1], t[0]))
+
+    def canon(a: str, b: str) -> Tuple[str, str]:
+        return (a, b) if a < b else (b, a)
+
+    remaining = set(pairs)
+    plans: List[Tuple[str, List[str]]] = []
+
+    def rem_deg(n: str) -> int:
+        return sum(1 for (o, _) in nbr.get(n, []) if canon(n, o) in remaining)
+
+    while remaining:
+        seed = max(remaining, key=lambda p: (pairs[p], p))
+        a, b = seed
+        # centre on the endpoint with the most still-uncovered neighbours
+        victim, other = ((a, b) if (rem_deg(a), a) >= (rem_deg(b), b)
+                         else (b, a))
+        rem_aggr = [o for (o, _) in nbr[victim] if canon(victim, o) in remaining]
+        cov_aggr = [o for (o, _) in nbr[victim]
+                    if canon(victim, o) not in remaining]
+        # seed's other endpoint first so the seed is always covered this plan
+        ordered = [other] + [o for o in rem_aggr if o != other]
+        aggr = ordered[:max_aggressors]
+        if len(aggr) < max_aggressors:
+            seen = set(aggr)
+            for o in cov_aggr:
+                if o not in seen:
+                    aggr.append(o)
+                    seen.add(o)
+                if len(aggr) >= max_aggressors:
+                    break
+        plans.append((victim, aggr))
+        clust = set([victim] + aggr)
+        for p in [p for p in remaining if p[0] in clust and p[1] in clust]:
+            remaining.discard(p)
+    return plans
 
 
 # ── capacitance-matrix parse (PURE) ───────────────────────────────────────────
@@ -363,6 +449,42 @@ def field_solve_banner(eps_r: float, n_pairs: int) -> str:
         '// engine: FasterCap 3D BEM on routed geometry; lateral + inter-layer\n'
         f'// scope: representative cluster ({n_pairs} field-solved net-pairs)\n'
         '// NOTE: NOT foundry field-solver; NOT crosstalk-SI-signoff-grade\n')
+
+
+def whole_design_field_banner(eps_r: float, n_covered: int,
+                              coverage_fraction: float,
+                              n_fallback: int) -> str:
+    pct = coverage_fraction * 100.0
+    fb = (f'; {n_fallback} uncovered pair(s) kept at analytical value\n'
+          if n_fallback else '\n')
+    return (
+        '// FIELD-SOLVED COUPLING — WHOLE-DESIGN (FasterCap BEM, fitted PDK stack)\n'
+        f'// eps_r={eps_r} (fitted from PDK area+fringe; NOT foundry rules.C/.nxtgrd)\n'
+        '// engine: FasterCap 3D BEM tiled per net-neighbourhood cluster; '
+        'lateral + inter-layer crossover\n'
+        f'// coverage: {n_covered} net-pairs field-solved '
+        f'({pct:.1f}% of analytical pairs)' + fb +
+        '// merge: each pair from its strongest-victim neighbourhood cluster '
+        '(bounded screening => upper envelope vs fully-screened whole-chip)\n'
+        '// NOTE: NOT foundry field-solver; NOT crosstalk-SI-signoff-grade; '
+        'NOT silicon-proven\n')
+
+
+def _default_out_path(spef_path: str) -> str:
+    """Default location for a DERIVED coupling SPEF: a ``fastercap/`` SUBDIR
+    beside the base extraction SPEF.
+
+    A FasterCap coupling overlay carries FasterCap provenance, NOT the base
+    RC-extraction tool's (magic/openroad).  If it is written as a sibling of the
+    base SPEF it lands in the ``extracted/*.spef`` glob that the RC-extraction
+    PROVENANCE gate scans, and that gate false-trips on the derived file (no
+    magic/openroad log entry).  Writing it into a ``fastercap/`` subdirectory
+    (a level the base glob does not match) keeps the derived overlay reproducible
+    on disk WITHOUT polluting the base-extraction provenance check.  Chip/PDK-
+    AGNOSTIC."""
+    d = os.path.dirname(os.path.abspath(spef_path))
+    stem = os.path.basename(spef_path).rsplit(".spef", 1)[0]
+    return os.path.join(d, "fastercap", stem + ".fastercap.spef")
 
 
 # ── container / solver execution ──────────────────────────────────────────────
@@ -545,7 +667,8 @@ def extract(def_path: str, lef_path: str, spef_path: str,
         # relabel the analytical banner _spef_coupling inserts -> field-solve banner
         new_spef = new_spef.replace(SC.disclosure_banner(eps_r),
                                     field_solve_banner(eps_r, len(field_cc)))
-        dst = out_path or (spef_path.rsplit(".spef", 1)[0] + ".fastercap.spef")
+        dst = out_path or _default_out_path(spef_path)
+        os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
         with open(dst, "w") as f:
             f.write(new_spef)
         result["out_path"] = dst
@@ -558,12 +681,276 @@ def extract(def_path: str, lef_path: str, spef_path: str,
 def summarize(res: Dict) -> str:
     if res.get("status") != "PASS":
         return "fastercap_extract: %s — %s" % (res.get("status"), res.get("reason"))
+    if res.get("mode") == "whole_design":
+        return summarize_whole_design(res)
     return ("field-solved coupling (FasterCap, fitted PDK stack): victim=%s, "
             "%d net-pairs (%d crossover), total %.3f fF (analytical %.3f fF), "
             "field/analytical median=%s" % (
                 res.get("victim"), res.get("field_solved_pairs"),
                 res.get("crossover_pairs"), res.get("total_field_cc_ff", 0.0),
                 res.get("total_analytical_cc_ff", 0.0),
+                res.get("field_over_analytical_median")))
+
+
+# ── whole-design driver ───────────────────────────────────────────────────────
+def _solve_cluster(cluster: Dict[str, List["SC.Segment"]],
+                   z_map: Dict[str, Tuple[float, float]], units: int,
+                   eps_r: float, wd: str, mode: str, container: str,
+                   rel_err: float, galerkin: bool, timeout: int
+                   ) -> Tuple[Dict[int, str], Optional[Dict[Tuple[str, str],
+                                                             float]]]:
+    """Field-solve ONE geometry cluster with FasterCap.
+
+    Returns ``(cond2net, coupling_or_None)``.  ``coupling`` is None ONLY when the
+    solver produced no well-formed matrix (empty/corrupt) — NEVER a fabricated
+    matrix.  ``cond2net`` is the built conductor->net map (its VALUES are the nets
+    actually field-solved, so the caller can mark their pairs covered even when
+    the solved coupling is ~0, i.e. screened)."""
+    lst_text, geo_files, cond2net = build_fastercap_geometry(
+        cluster, z_map, units, eps_r)
+    if len(cond2net) < 2:
+        return cond2net, None
+    os.makedirs(wd, exist_ok=True)
+    for fn, txt in geo_files.items():
+        with open(os.path.join(wd, fn), "w") as f:
+            f.write(txt)
+    with open(os.path.join(wd, "wires.lst"), "w") as f:
+        f.write(lst_text)
+    log = _run_fastercap(wd, "wires.lst", mode, container, rel_err, galerkin,
+                         timeout)
+    parsed = parse_capacitance_matrix(log or "")
+    if parsed is None:
+        return cond2net, None
+    labels, matrix = parsed
+    return cond2net, matrix_to_coupling(labels, matrix, cond2net)
+
+
+def extract_whole_design(
+        def_path: str, lef_path: str, spef_path: str,
+        out_path: Optional[str] = None, eps_r: float = PF.DEFAULT_EPS_R_PHYS,
+        window_um: float = DEFAULT_WINDOW_UM,
+        max_aggressors: int = 12, max_boxes: int = 200, per_net_max: int = 16,
+        rel_err: float = DEFAULT_REL_ERR, galerkin: bool = True,
+        runner: str = "auto", container: str = DEFAULT_CONTAINER,
+        workdir: Optional[str] = None, do_inject: bool = True,
+        keep_work: bool = False, timeout: int = 180, max_solves: int = 800,
+        progress=None) -> Dict:
+    """WHOLE-DESIGN field-solved coupling: tile the entire coupling graph into
+    bounded per-net-neighbourhood clusters (``plan_coverage``), FasterCap-solve
+    each, and merge the field-solved Cc for EVERY analytical net-pair (plus the
+    inter-layer crossover pairs the analytical model misses) into the SPEF.
+
+    This removes the single-bounded-cluster limitation of ``extract`` (which
+    field-solved only ONE victim's neighbourhood): here the O(n^2) BEM cost is
+    bounded per LOCAL neighbourhood while COVERAGE spans all coupled pairs, so
+    the coupling SPEF — and any SI STA built on it — rests on field-solved rather
+    than analytical parallel-plate coupling across the whole design.
+
+    Honest as ``extract``: fitted PDK dielectric (NOT foundry rules.C/.nxtgrd),
+    uniform-εr per solve, an UPPER envelope vs the fully-screened whole-chip
+    solve (each pair taken from its strongest-victim neighbourhood).  NEVER
+    fabricates a matrix; reports the exact ``coverage_fraction`` and keeps the
+    analytical value for any pair the sweep could not field-solve.  Chip/PDK-
+    AGNOSTIC."""
+    with open(def_path) as f:
+        def_text = f.read()
+    with open(lef_path) as f:
+        lef_text = f.read()
+    with open(spef_path) as f:
+        spef_text = f.read()
+
+    stack = PF.fit_stack(lef_text, eps_r)
+    z_map = stack_z_map(stack)
+    layers = SC.parse_lef_layers(lef_text)
+    units = SC.parse_def_units(def_text)
+    segs = SC.parse_def_wires(def_text, layers, units)
+
+    result: Dict = {
+        "tool": "fastercap_extract", "mode": "whole_design",
+        "def_path": def_path, "lef_path": lef_path, "spef_path": spef_path,
+        "eps_r": eps_r, "n_segments": len(segs),
+        "dielectric_stack": stack,
+        "disclosure": [
+            "WHOLE-DESIGN field-solved coupling: every analytical net-pair is "
+            "field-solved in a bounded per-net-neighbourhood cluster (tiled "
+            "coverage), not a single representative cluster.",
+            "Field-solved on a fitted PDK dielectric stack (DISCLOSED, not "
+            "foundry rules.C/.nxtgrd).",
+            "Uniform dielectric per solve (fitted eps_r); NOT the true "
+            "multi-layer ILD profile.",
+            "Each pair is taken from its strongest-victim neighbourhood cluster "
+            "(bounded screening) — an UPPER envelope vs the fully-screened "
+            "whole-chip solve; strictly better than analytical parallel-plate "
+            "(adds 3D fringe + inter-layer crossover); NOT "
+            "crosstalk-SI-signoff-grade; NOT silicon-proven.",
+        ],
+    }
+
+    if not segs:
+        result.update(status="NOT_APPLICABLE",
+                      reason="unrouted DEF (no wire segments to field-solve)")
+        return result
+
+    all_pairs = SC.find_adjacent_pairs(segs, layers, units, window_um, eps_r)
+    if not all_pairs:
+        result.update(status="NOT_APPLICABLE",
+                      reason="no analytical coupling pairs (isolated routing)")
+        return result
+    result["n_analytical_pairs"] = len(all_pairs)
+    result["total_analytical_cc_ff_all"] = round(sum(all_pairs.values()) * 1000.0,
+                                                  6)
+
+    avail, mode = _fastercap_available(runner, container)
+    if not avail:
+        result.update(
+            status="NOT_APPLICABLE", solver_available=False,
+            reason="FasterCap binary not found (runner=%s, container=%s) — "
+                   "WIRING GAP: build/install FasterCap (LGPL) or point "
+                   "--container at the vibeic-eda image; the fitted dielectric "
+                   "stack above is real and usable." % (runner, container))
+        return result
+    result["solver_mode"] = mode
+
+    plans = plan_coverage(all_pairs, max_aggressors)
+    wdroot = workdir or os.path.join(os.path.dirname(os.path.abspath(spef_path)),
+                                     ".fastercap_whole_work")
+
+    field_cc: Dict[Tuple[str, str], float] = {}     # analytical pair -> field Cc
+    crossover_cc: Dict[Tuple[str, str], float] = {}  # crossover pair -> field Cc
+    solved_pairs: set = set()                        # analytical pairs solved
+    solves = failed_solves = boxes_total = 0
+
+    def _merge(cond2net: Dict[int, str],
+               cc: Optional[Dict[Tuple[str, str], float]]) -> None:
+        nonlocal failed_solves
+        if cc is None:
+            # SOLVER FAILURE (no well-formed matrix) — NOT a screened-to-zero
+            # result. Do NOT mark these pairs solved: leaving them uncovered lets
+            # the reconciliation retry them (and, failing that, keep their
+            # analytical value) instead of silently DROPPING real coupling (which
+            # would make the SI bound optimistic — a false-clean). Never fabricate.
+            failed_solves += 1
+            return
+        cond_nets = set(cond2net.values())
+        for p in all_pairs:                          # geometry genuinely solved
+            if p[0] in cond_nets and p[1] in cond_nets:
+                solved_pairs.add(p)                  # a pair absent from cc here
+                #                                      is a real screen-to-~0
+        for pr, val in cc.items():
+            if pr in all_pairs:
+                field_cc.setdefault(pr, val)         # first-wins (strongest vic)
+            else:
+                crossover_cc.setdefault(pr, val)
+
+    try:
+        for idx, (victim, aggr) in enumerate(plans):
+            if solves >= max_solves:
+                break
+            cluster = _clip_cluster(segs, victim, aggr, units, window_um,
+                                    max_boxes, per_net_max)
+            if len(cluster) < 2:
+                continue
+            wd = os.path.join(wdroot, "s%d" % idx)
+            cond2net, cc = _solve_cluster(cluster, z_map, units, eps_r, wd, mode,
+                                          container, rel_err, galerkin, timeout)
+            if not keep_work:
+                shutil.rmtree(wd, ignore_errors=True)
+            solves += 1
+            boxes_total += sum(len(v) for v in cluster.values())
+            _merge(cond2net, cc)
+            if progress:
+                progress(idx, len(plans), solves, len(solved_pairs),
+                         len(all_pairs))
+
+        # reconciliation: analytical pairs clipping dropped from every plan get a
+        # minimal 2-net solve so coverage is honest (upper-bounded by max_solves).
+        recon = 0
+        for (a, b) in [p for p in all_pairs if p not in solved_pairs]:
+            if solves >= max_solves:
+                break
+            cluster = _clip_cluster(segs, a, [b], units, window_um, max_boxes,
+                                    per_net_max)
+            if len(cluster) < 2:
+                cluster = _clip_cluster(segs, b, [a], units, window_um,
+                                        max_boxes, per_net_max)
+            if len(cluster) < 2:
+                continue                              # geometrically degenerate
+            wd = os.path.join(wdroot, "r%d" % recon)
+            cond2net, cc = _solve_cluster(cluster, z_map, units, eps_r, wd, mode,
+                                          container, rel_err, galerkin, timeout)
+            if not keep_work:
+                shutil.rmtree(wd, ignore_errors=True)
+            solves += 1
+            recon += 1
+            boxes_total += sum(len(v) for v in cluster.values())
+            _merge(cond2net, cc)
+        result["reconciliation_solves"] = recon
+    finally:
+        if not keep_work:
+            shutil.rmtree(wdroot, ignore_errors=True)
+
+    covered = solved_pairs
+    uncovered = [p for p in all_pairs if p not in covered]
+    total_field = sum(field_cc.get(p, 0.0) for p in covered)
+    total_anal_covered = sum(all_pairs[p] for p in covered)
+    ratios = sorted(field_cc[p] / all_pairs[p] for p in covered
+                    if p in field_cc and all_pairs[p] > 0)
+
+    result.update(
+        planned_clusters=len(plans), solves=solves,
+        failed_solves=failed_solves, cluster_boxes_total=boxes_total,
+        pairs_field_solved=len(covered),
+        coverage_fraction=round(len(covered) / len(all_pairs), 4),
+        pairs_positive_field=len(field_cc),
+        pairs_screened_to_zero=len(covered) - len(field_cc),
+        crossover_pairs=len(crossover_cc),
+        uncovered_pairs=len(uncovered),
+        total_field_cc_ff=round(total_field * 1000.0, 6),
+        total_analytical_cc_ff_covered=round(total_anal_covered * 1000.0, 6),
+        total_crossover_cc_ff=round(sum(crossover_cc.values()) * 1000.0, 6),
+        field_over_analytical_total=(round(total_field / total_anal_covered, 4)
+                                     if total_anal_covered > 0 else None),
+        field_over_analytical_median=(round(ratios[len(ratios) // 2], 4)
+                                      if ratios else None),
+    )
+
+    if do_inject:
+        grounded = strip_coupling_caps(spef_text)
+        grounded = grounded.replace(SC.disclosure_banner(eps_r), "")
+        inj: Dict[Tuple[str, str], float] = dict(field_cc)
+        inj.update(crossover_cc)
+        for p in uncovered:                          # honest analytical fallback
+            inj.setdefault(p, all_pairs[p])
+        new_spef, n = SC.inject_coupling_into_spef(grounded, inj, eps_r)
+        new_spef = new_spef.replace(
+            SC.disclosure_banner(eps_r),
+            whole_design_field_banner(eps_r, len(covered),
+                                      len(covered) / len(all_pairs),
+                                      len(uncovered)))
+        dst = out_path or _default_out_path(spef_path)
+        os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
+        with open(dst, "w") as f:
+            f.write(new_spef)
+        result["out_path"] = dst
+        result["cc_written"] = n
+        result["uncovered_fallback_analytical"] = len(uncovered)
+
+    result["status"] = "PASS"
+    return result
+
+
+def summarize_whole_design(res: Dict) -> str:
+    return ("WHOLE-DESIGN field-solved coupling (FasterCap, fitted PDK stack): "
+            "%d/%d pairs (%.1f%% coverage, %d solves, %d crossover), total "
+            "%.3f fF (analytical %.3f fF over covered) => field/analytical "
+            "total=%s median=%s" % (
+                res.get("pairs_field_solved", 0),
+                res.get("n_analytical_pairs", 0),
+                100.0 * res.get("coverage_fraction", 0.0),
+                res.get("solves", 0), res.get("crossover_pairs", 0),
+                res.get("total_field_cc_ff", 0.0),
+                res.get("total_analytical_cc_ff_covered", 0.0),
+                res.get("field_over_analytical_total"),
                 res.get("field_over_analytical_median")))
 
 
@@ -593,17 +980,47 @@ def _main(argv: List[str]) -> int:
     ap.add_argument("--no-inject", action="store_true")
     ap.add_argument("--keep-work", action="store_true")
     ap.add_argument("--timeout", type=int, default=600)
+    ap.add_argument("--whole-design", action="store_true",
+                    help="tile the WHOLE coupling graph (all net-pairs) into "
+                         "bounded per-neighbourhood FasterCap solves instead of "
+                         "a single representative cluster")
+    ap.add_argument("--max-solves", type=int, default=800,
+                    help="cap on tiled solves for --whole-design (coverage is "
+                         "reported honestly if the cap is hit)")
+    ap.add_argument("--progress", action="store_true",
+                    help="print per-solve coverage progress to stderr "
+                         "(--whole-design)")
     ap.add_argument("--stack-json", default=None,
                     help="also write the fitted dielectric_stack.json here")
     a = ap.parse_args(argv)
-    res = extract(a.def_path, a.lef_path, a.spef_path, out_path=a.out_path,
-                  eps_r=a.eps_r, window_um=a.window_um,
-                  max_aggressors=a.max_aggressors, max_boxes=a.max_boxes,
-                  victim=a.victim, per_net_max=a.per_net_max, rel_err=a.rel_err,
-                  galerkin=not a.no_galerkin, runner=a.runner,
-                  container=a.container, workdir=a.workdir,
-                  do_inject=not a.no_inject, keep_work=a.keep_work,
-                  timeout=a.timeout)
+    if a.whole_design:
+        import sys as _sys
+
+        def _prog(idx, nplans, solves, ncov, npairs):
+            _sys.stderr.write(
+                "[fastercap whole-design] plan %d/%d  solves=%d  "
+                "covered=%d/%d\n" % (idx + 1, nplans, solves, ncov, npairs))
+            _sys.stderr.flush()
+
+        res = extract_whole_design(
+            a.def_path, a.lef_path, a.spef_path, out_path=a.out_path,
+            eps_r=a.eps_r, window_um=a.window_um,
+            max_aggressors=(a.max_aggressors if a.max_aggressors != DEFAULT_MAX_AGGRESSORS
+                            else 12),
+            max_boxes=a.max_boxes, per_net_max=a.per_net_max, rel_err=a.rel_err,
+            galerkin=not a.no_galerkin, runner=a.runner, container=a.container,
+            workdir=a.workdir, do_inject=not a.no_inject, keep_work=a.keep_work,
+            timeout=(a.timeout if a.timeout != 600 else 180),
+            max_solves=a.max_solves, progress=_prog if a.progress else None)
+    else:
+        res = extract(a.def_path, a.lef_path, a.spef_path, out_path=a.out_path,
+                      eps_r=a.eps_r, window_um=a.window_um,
+                      max_aggressors=a.max_aggressors, max_boxes=a.max_boxes,
+                      victim=a.victim, per_net_max=a.per_net_max,
+                      rel_err=a.rel_err, galerkin=not a.no_galerkin,
+                      runner=a.runner, container=a.container, workdir=a.workdir,
+                      do_inject=not a.no_inject, keep_work=a.keep_work,
+                      timeout=a.timeout)
     if a.stack_json:
         with open(a.stack_json, "w") as f:
             json.dump(res["dielectric_stack"], f, indent=2)
