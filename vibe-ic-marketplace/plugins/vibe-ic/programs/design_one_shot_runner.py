@@ -8463,6 +8463,33 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
             results.append(StepResult("dft_insertion", "SKIP", time.time() - t0,
                            f"Fault ATPG errored ({exc}) → disclosed-skip"))
 
+    # ============ Step DT1 — Transition-delay-fault (LOC) ATPG =========
+    # v1.3.97 — PRODUCE the TDF coverage from the Step-11 cut netlist, reusing
+    # the discovered `clk`. Best-effort: the flow's DT1 gate only VALIDATES the
+    # produced reports/phase2/dft/transition_coverage.json (via
+    # transition_coverage_check), mirroring the Step-11 produce/validate split.
+    # A combinational / no-flop / no-cut design self-returns NOT_APPLICABLE.
+    if clk and (dft_dir / "cut_netlist.v").is_file():
+        tdf_json = reports_dir / "phase2" / "dft" / "transition_coverage.json"
+        tdf_json.parent.mkdir(parents=True, exist_ok=True)
+        tdf_cmd = [sys.executable,
+                   str(PROGRAMS_DIR / "transition_fault_atpg_run.py"),
+                   str(project), "--clock", clk, "--max-faults", "400",
+                   "--json", str(tdf_json)]
+        _tdf_lib = sorted((project / "input" / "pdk" / "liberty").glob("*typ*.lib")) \
+            if (project / "input" / "pdk" / "liberty").is_dir() else []
+        if _tdf_lib:
+            tdf_cmd += ["--liberty", str(_tdf_lib[0])]
+        if pdk == "m18e80pm180su":
+            tdf_cmd += ["--pdk-dir", str((project / "input" / "pdk").resolve())]
+        try:
+            subprocess.run(tdf_cmd, capture_output=True, text=True, timeout=1800)
+        except Exception as exc:
+            _dft_disclose_skip(
+                dft_dir / "transition_atpg_not_run.json",
+                f"transition ATPG execution error: {exc}",
+                {"capability_flag": "cap:at_speed_timing_graded_atpg"})
+
     # ================= Step 12 — Post-DFT optimization =================
     t0 = time.time()
     scan_nl = dft_dir / "scan_netlist.v"

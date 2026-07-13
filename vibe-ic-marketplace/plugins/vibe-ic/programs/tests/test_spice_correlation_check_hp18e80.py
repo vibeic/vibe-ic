@@ -181,3 +181,243 @@ def test_finders_and_driver_skip_gracefully(tmp_path):
     # No PDK shim present → driver honestly skips (returns None), never raises.
     assert m._find_bridge_shim(tmp_path) is None
     assert m.run_hp18e80_cell_correlation(tmp_path) is None
+    # The full-PATH driver skips the same way with no inputs present.
+    assert m.run_hp18e80_path_correlation(tmp_path) is None
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  Full-PATH correlation pure-helper tests (deck stitch + STA/netlist/SPEF
+#  parse + correlation math). Real ngspice + NDA PDK verified out of band.
+# ══════════════════════════════════════════════════════════════════════════
+
+# A synthetic post-route report_checks max-delay path: primary-input x[31]
+# through two ANDs into a capture flop's D pin (mirrors the spm crit path).
+_STA_RPT = """Startpoint: x[31] (input port clocked by clk)
+Endpoint: _455_ (rising edge-triggered flip-flop clocked by clk)
+Path Group: clk
+Path Type: max
+
+  Delay    Time   Description
+---------------------------------------------------------
+   0.00    0.00   clock clk (rise edge)
+   2.00    2.00 v input external delay
+   0.00    2.00 v x[31] (in)
+   0.26    2.26 v _365_/Y (AND3D1)
+   0.17    2.43 v _373_/Y (AND2D1)
+   0.00    2.43 v _455_/D (DFFHQD1)
+           2.43   data arrival time
+"""
+
+# A degenerate flop→output path (no stitchable combinational stage → score 0).
+_STA_RPT_FLOP = """Startpoint: _392_ (rising edge-triggered flip-flop clocked by clk)
+Endpoint: p (output port clocked by clk)
+
+  Delay    Time   Description
+---------------------------------------------------------
+   0.21    0.21 ^ _392_/CK (DFFHQD1)
+   0.22    0.44 ^ _392_/Q (DFFHQD1)
+   0.00    0.44 ^ p (out)
+"""
+
+_NETLIST = """module spm (clk, rst, x, p);
+ input clk, rst;
+ AND3D1 _365_ (.A(y),
+    .C(c[31]),
+    .B(x[31]),
+    .Y(_180_));
+ AND2D1 _373_ (.A(_064_),
+    .B(_180_),
+    .Y(_055_));
+ DFFHQD1 _455_ (.D(_055_),
+    .CK(clk),
+    .Q(c[31]));
+endmodule
+"""
+
+_SPEF = """*SPEF "IEEE 1481-1998"
+*T_UNIT 1 NS
+*C_UNIT 1 PF
+*NAME_MAP
+*94 _055_
+*219 _180_
+*D_NET *219 0.000445744
+*D_NET *94 0.000135308
+"""
+
+_CELLS_PATH = """.SUBCKT AND3D1 VSS VDD C B A Y
+M$1 n$9 A n$1 n$1 nmos L=0.18U W=0.38U
+M$2 n$8 B n$9 n$9 nmos L=0.18U W=0.38U
+M$3 n$8 C VSS VSS nmos L=0.18U W=0.38U
+M$4 Y n$1 VSS VSS nmos L=0.18U W=0.56U
+M$5 VDD C n$1 n$1 pmos L=0.18U W=0.36U
+M$6 VDD B n$1 n$1 pmos L=0.18U W=0.255U
+M$7 n$1 A VDD VDD pmos L=0.18U W=0.36U
+M$8 Y n$1 VDD VDD pmos L=0.18U W=0.9U
+.ENDS
+.SUBCKT AND2D1 VSS VDD B A Y
+M$1 n$7 A n$1 n$1 nmos L=0.18U W=0.32U
+M$2 n$7 B VSS VSS nmos L=0.18U W=0.32U
+M$3 Y n$1 VSS VSS nmos L=0.18U W=0.6U
+M$4 VDD B n$1 n$1 pmos L=0.18U W=0.36U
+M$5 Y n$1 VDD VDD pmos L=0.18U W=0.902U
+M$6 VDD A n$1 n$1 pmos L=0.18U W=0.36U
+.ENDS
+.SUBCKT DFFHQD1 VSS VDD Q CK D
+M$1 Q n$8 VSS VSS nmos L=0.18U W=0.445U
+.ENDS
+"""
+
+_LIB_DFF = """
+library (toy) { time_unit : "1ns";
+    cell (DFFHQD1) {
+        pin (D) { direction : input; capacitance : 0.002200; }
+        pin (CK) { direction : input; capacitance : 0.003210; }
+        pin (Q) { direction : output; }
+    }
+}
+"""
+
+
+def test_normalize_mos_bulk():
+    body = (".SUBCKT AND2D1 VSS VDD B A Y\n"
+            "M$1 n$7 A n$1 n$1 nch_tn L=0.18U W=0.32U\n"
+            "M$5 Y n$1 VDD VDD pch_tn L=0.18U W=0.9U\n.ENDS")
+    out = m.normalize_mos_bulk(body, "VSS", "VDD")
+    # nmos bulk (4th node) rebound to VSS; W/L + other nodes preserved
+    assert "M$1 n$7 A n$1 VSS nch_tn L=0.18U W=0.32U" in out
+    # pmos bulk already VDD stays VDD
+    assert "M$5 Y n$1 VDD VDD pch_tn" in out
+    # header/footer untouched
+    assert ".SUBCKT AND2D1 VSS VDD B A Y" in out and ".ENDS" in out
+
+
+def test_cell_family_classifiers():
+    assert m.is_sequential_cell("DFFHQD1") and not m.is_sequential_cell("AND2D1")
+    assert m.cell_inverts("INVD1") and m.cell_inverts("NAND2D1")
+    assert not m.cell_inverts("AND2D1") and not m.cell_inverts("XOR2D1")
+    assert m.tie_value_for_cell("AND2D1") == "vdd"
+    assert m.tie_value_for_cell("NAND2D1") == "vdd"
+    assert m.tie_value_for_cell("NOR2D1") == "0"
+    assert m.tie_value_for_cell("OR2D1") == "0"
+    assert m.tie_value_for_cell("XNOR2D1") == "0"
+
+
+def test_parse_sta_path():
+    p = m.parse_sta_path(_STA_RPT)
+    assert p["startpoint"] == "x[31]" and p["endpoint"] == "_455_"
+    assert p["start_time_ns"] == 2.00 and p["end_time_ns"] == 2.43
+    assert abs(p["path_delay_ns"] - 0.43) < 1e-9
+    assert p["endpoint_transition"] == "fall"
+    # the "input external delay" row (no `(CELL)`) is not captured
+    cells = [r["cell"] for r in p["rows"]]
+    assert cells == ["in", "AND3D1", "AND2D1", "DFFHQD1"]
+
+
+def test_sta_path_stitch_score():
+    names = {"AND3D1", "AND2D1", "DFFHQD1", "INVD1"}
+    assert m.sta_path_stitch_score(_STA_RPT, names) == 2      # two ANDs
+    assert m.sta_path_stitch_score(_STA_RPT_FLOP, names) == 0  # flop→port only
+
+
+def test_parse_verilog_instances():
+    im = m.parse_verilog_instances(_NETLIST)
+    assert im["_365_"]["cell"] == "AND3D1"
+    assert im["_365_"]["conns"]["B"] == "x[31]"
+    assert im["_365_"]["conns"]["Y"] == "_180_"
+    assert im["_373_"]["conns"]["B"] == "_180_"
+    assert im["_455_"]["conns"]["D"] == "_055_"
+
+
+def test_parse_spef_caps():
+    caps = m.parse_spef_caps(_SPEF)
+    assert abs(caps["_180_"] - 0.000445744) < 1e-12
+    assert abs(caps["_055_"] - 0.000135308) < 1e-12
+    # unit / section keywords must NOT be picked up as nets
+    assert "T_UNIT" not in caps and "NAME_MAP" not in caps
+
+
+def test_liberty_pin_cap():
+    block = m.extract_cell_block(_LIB_DFF, "DFFHQD1")
+    assert abs(m.liberty_pin_cap(block, "D") - 0.002200) < 1e-9
+    assert abs(m.liberty_pin_cap(block, "CK") - 0.003210) < 1e-9
+    assert m.liberty_pin_cap(block, "NOPE") is None
+
+
+def test_resolve_path_stages_faithful_toggle_pins():
+    p = m.parse_sta_path(_STA_RPT)
+    im = m.parse_verilog_instances(_NETLIST)
+    caps = m.parse_spef_caps(_SPEF)
+    names = {"AND3D1", "AND2D1", "DFFHQD1"}
+    r = m.resolve_path_stages(p, im, caps, names, _LIB_DFF)
+    assert r["covered"] == 2 and r["total_comb"] == 2
+    s0, s1 = r["stages"]
+    # stage 0 toggling pin = the AND3D1 pin on the startpoint net x[31] → B
+    assert s0["inst"] == "_365_" and s0["toggle_pin"] == "B"
+    assert s0["out_net"] == "_180_"
+    assert abs(s0["wire_cap_pf"] - 0.000445744) < 1e-12
+    # stage 1 toggling pin = the AND2D1 pin on stage-0's out net _180_ → B
+    assert s1["inst"] == "_373_" and s1["toggle_pin"] == "B"
+    assert s1["out_net"] == "_055_"
+    # endpoint load = last-net wire cap + DFF D-pin cap (0.1353fF + 2.2fF)
+    assert abs(r["endpoint_load_pf"] - (0.000135308 + 0.002200)) < 1e-9
+
+
+def test_build_path_deck_stitch_structure():
+    subckts = {
+        "AND3D1": m.extract_subckt(_CELLS_PATH, "AND3D1"),
+        "AND2D1": m.extract_subckt(_CELLS_PATH, "AND2D1"),
+    }
+    stages = [
+        {"inst": "_365_", "cell": "AND3D1", "toggle_pin": "B", "out_pin": "Y",
+         "out_net": "_180_", "wire_cap_pf": 0.000445744},
+        {"inst": "_373_", "cell": "AND2D1", "toggle_pin": "B", "out_pin": "Y",
+         "out_net": "_055_", "wire_cap_pf": 0.000135308},
+    ]
+    deck = m.build_path_deck("/abs/shim.lib", "ttt_lv", stages, subckts,
+                             1.8, 0.5, 25.0, 0.9,
+                             endpoint_load_pf=0.000135308 + 0.002200)
+    assert ".lib '/abs/shim.lib' ttt_lv" in deck
+    # stage-0 output is intermediate node n0; stage-1 output is pout
+    # AND3D1 pins VSS VDD C B A Y ; toggle B→a(in), tie A,C→vdd, out Y→n0
+    assert "0 vdd vdd a vdd n0 AND3D1" in deck
+    # AND2D1 pins VSS VDD B A Y ; toggle B→n0, tie A→vdd, out Y→pout
+    assert "0 vdd n0 vdd pout AND2D1" in deck
+    # bulk normalised inside the emitted subckts (no source-tied bulk artefact)
+    assert "M$1 n$9 A n$1 VSS nch_tn" in deck
+    # each net carries a cap; final node carries the endpoint receiver cap too
+    assert "cpout pout 0" in deck
+    # non-inverting chain → output-fall reached by a falling input edge
+    assert "TRIG v(a) VAL='0.9' FALL=1 TARG v(pout) VAL='0.9' FALL=1" in deck
+    assert "TRIG v(a) VAL='0.9' RISE=1 TARG v(pout) VAL='0.9' RISE=1" in deck
+
+
+def test_build_path_deck_inverting_parity():
+    # A single inverting stage flips the input edge needed for an output fall.
+    subckts = {"INVD1": (["VSS", "VDD", "A", "Y"],
+                         ".SUBCKT INVD1 VSS VDD A Y\n"
+                         "M$1 Y A VSS VSS nch_tn L=0.18U W=0.6U\n.ENDS")}
+    stages = [{"inst": "_1_", "cell": "INVD1", "toggle_pin": "A",
+               "out_pin": "Y", "out_net": "n", "wire_cap_pf": 0.0}]
+    deck = m.build_path_deck("/s.lib", "ttt_lv", stages, subckts,
+                             1.8, 0.5, 25.0, 0.9, endpoint_load_pf=0.001)
+    # odd inversion parity → output FALL needs a RISING input edge
+    assert "TRIG v(a) VAL='0.9' RISE=1 TARG v(pout) VAL='0.9' FALL=1" in deck
+
+
+def test_parse_path_meas():
+    txt = ("banner\n"
+           "tpd_fall            =  3.91272e-10 targ=  1.5e-08 trig=  1.4e-08\n"
+           "tpd_rise            =  2.28738e-10 targ=  2.4e-09 trig=  2.2e-09\n"
+           "vpout_max           =  1.84339e+00 at=  1.5e-08\n"
+           "vpout_min           = -3.21948e-02 at=  2.4e-09\n")
+    d = m.parse_path_meas(txt)
+    assert abs(d["tpd_fall"] - 3.91272e-10) < 1e-16
+    assert abs(d["tpd_rise"] - 2.28738e-10) < 1e-16
+    assert abs(d["vpout_max"] - 1.84339) < 1e-6
+    assert abs(d["vpout_min"] - (-0.0321948)) < 1e-9
+
+
+def test_path_correlation_pct_reuses_cell_math():
+    # SPICE 0.391 ns vs STA 0.43 ns → ~ -9 %
+    p = m.correlation_pct(0.391323e-9, 0.43)
+    assert p is not None and -9.5 < p < -8.5

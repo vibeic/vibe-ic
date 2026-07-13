@@ -651,6 +651,38 @@ steps:
       verdict. Full FMEDA SPFM/LFM/PMHF roll-up needs a FIT/lambda reliability
       database (commercial/methodology input) -> ADVANCED_NODE_EXTENSION.md.
 
+  # v1.3.97 — DT1: transition-delay-fault (at-speed LOC) ATPG. A LETTERED step
+  # (keeps 1..44 contiguity) that CLOSES the "OSS has no delay-fault ATPG" gap:
+  # a transition fault = a stuck-at on a 2-time-frame launch-on-capture unroll,
+  # solved by vibeic/yosys `sat -prove` (real launch-capture 2-patterns). Self-
+  # skips (NOT_APPLICABLE, rc 0) on a combinational / no-flop / no-scan-cut
+  # design. HONEST scope: this is TDF LOGIC coverage (the transition is launched
+  # + observed via SAT); true at-speed TIMING grading (path-delay-fault via
+  # OpenSTA K-longest-path sensitization) is the deferred harder tier.
+  - id: DT1
+    name: "Transition-delay-fault (at-speed LOC) ATPG"
+    stage: stage2
+    condition:
+      files_exist: ["phase2/stage2/dft/cut_netlist.v"]
+    programs:
+      - transition_fault_atpg_run
+      - transition_coverage_check
+    gate:
+      # produce/validate split (mirrors Step 11): the RUNNER produces
+      # transition_coverage.json (design_one_shot_runner, with the discovered
+      # clock); the flow GATE only VALIDATES it (independent recompute).
+      program_exit_zero: "transition_coverage_check . --json reports/phase2/dft/transition_coverage_gate.json"
+    blocks_on: [11]
+    notes: |
+      Full-scan LOC transition ATPG: cut netlist (Step-11 `fault cut`) ->
+      gate-levelise (`read_liberty -ignore_miss_func`) -> enumerate STR/STF
+      faults -> explicit 3-instance 2-frame LOC miter -> Yosys `sat -prove`
+      generates the launch-capture 2-pattern (UNSAT = redundant, not counted).
+      The gate RE-COUNTS detected/redundant/aborted from the per-fault list so a
+      redundant/aborted fault can never inflate coverage. Primary metric = ATPG
+      test coverage = detected/(sampled - redundant); fault coverage also
+      reported. At-speed timing grading -> ADVANCED_NODE_EXTENSION.md.
+
   - id: 12
     name: "Post-DFT optimization (resynth / buffering)"
     stage: stage2

@@ -1,0 +1,459 @@
+<style>
+  :root{
+    --bg:#0d0f16; --bg2:#131722; --card:#181d2b; --card2:#1e2434;
+    --ink:#e7eaf3; --ink2:#9aa4bd; --ink3:#6b7590; --line:#262d3f; --line2:#333c52;
+    --p1:#8b7cf0; --p2:#2dd4bf; --p3:#f0a340; --ana:#57c98a; --mix:#e070b0;
+    --good:#43b95f; --warn:#d6a028; --crit:#f0603f;
+    --accent:var(--p2);
+    --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,"Helvetica Neue",Arial,sans-serif;
+    --maxw:1140px; --r:10px;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#f4f6fb; --bg2:#ffffff; --card:#ffffff; --card2:#f2f5fb;
+      --ink:#161a26; --ink2:#4c556c; --ink3:#7b849b; --line:#e2e7f1; --line2:#d2d9e8;
+      --p1:#6a54e0; --p2:#0d9488; --p3:#c9791a; --ana:#2f9d63; --mix:#c14c93;
+      --good:#1f9d47; --warn:#b5820f; --crit:#d24425;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0d0f16; --bg2:#131722; --card:#181d2b; --card2:#1e2434;
+    --ink:#e7eaf3; --ink2:#9aa4bd; --ink3:#6b7590; --line:#262d3f; --line2:#333c52;
+    --p1:#8b7cf0; --p2:#2dd4bf; --p3:#f0a340; --ana:#57c98a; --mix:#e070b0;
+    --good:#43b95f; --warn:#d6a028; --crit:#f0603f;
+  }
+  :root[data-theme="light"]{
+    --bg:#f4f6fb; --bg2:#ffffff; --card:#ffffff; --card2:#f2f5fb;
+    --ink:#161a26; --ink2:#4c556c; --ink3:#7b849b; --line:#e2e7f1; --line2:#d2d9e8;
+    --p1:#6a54e0; --p2:#0d9488; --p3:#c9791a; --ana:#2f9d63; --mix:#c14c93;
+    --good:#1f9d47; --warn:#b5820f; --crit:#d24425;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    line-height:1.55;-webkit-font-smoothing:antialiased;}
+  a{color:inherit}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 22px}
+  h1,h2,h3{text-wrap:balance;margin:0}
+  .mono{font-family:var(--mono)}
+
+  /* ---- top nav ---- */
+  header.nav{position:sticky;top:0;z-index:50;background:color-mix(in srgb,var(--bg) 88%,transparent);
+    backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+  .nav .wrap{display:flex;align-items:center;gap:18px;height:56px}
+  .brand{display:flex;align-items:baseline;gap:9px;font-weight:700;letter-spacing:-.01em}
+  .brand .dot{width:10px;height:10px;border-radius:50%;background:var(--p2);
+    box-shadow:0 0 0 3px color-mix(in srgb,var(--p2) 25%,transparent);align-self:center}
+  .brand small{font:500 11px/1 var(--mono);color:var(--ink3);letter-spacing:.02em}
+  .nav nav{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap}
+  .nav nav a{font:600 12.5px/1 var(--sans);color:var(--ink2);text-decoration:none;
+    padding:7px 11px;border-radius:7px}
+  .nav nav a:hover{color:var(--ink);background:var(--card)}
+  #themeBtn{border:1px solid var(--line2);background:var(--card);color:var(--ink2);
+    width:34px;height:32px;border-radius:8px;cursor:pointer;font-size:15px}
+  #themeBtn:hover{color:var(--ink)}
+
+  /* ---- hero ---- */
+  .hero{padding:60px 0 34px;border-bottom:1px solid var(--line);position:relative;overflow:hidden}
+  .hero canvas{position:absolute;inset:0;width:100%;height:100%;opacity:.5;pointer-events:none}
+  .hero .wrap{position:relative}
+  .eyebrow{font:600 12px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--p2)}
+  .hero h1{font-size:clamp(30px,5.4vw,52px);font-weight:800;letter-spacing:-.025em;margin:16px 0 0}
+  .hero h1 em{font-style:normal;color:var(--ink3)}
+  .hero p.lede{max-width:64ch;color:var(--ink2);font-size:clamp(15px,2vw,18px);margin:16px 0 0}
+  .stats{display:flex;flex-wrap:wrap;gap:10px;margin-top:26px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px 16px;min-width:104px}
+  .stat b{display:block;font:700 22px/1.1 var(--mono);letter-spacing:-.01em}
+  .stat span{font-size:12px;color:var(--ink3)}
+  .flowline{display:flex;align-items:stretch;gap:6px;margin-top:26px;flex-wrap:wrap}
+  .flowline .seg{flex:1;min-width:150px;border-radius:8px;padding:11px 13px;border:1px solid var(--line);
+    background:linear-gradient(180deg,color-mix(in srgb,var(--hue) 12%,var(--card)),var(--card))}
+  .flowline .seg b{font-size:13px;display:flex;align-items:center;gap:7px}
+  .flowline .seg b::before{content:"";width:8px;height:8px;border-radius:2px;background:var(--hue)}
+  .flowline .seg span{font:500 11.5px/1.4 var(--mono);color:var(--ink3);display:block;margin-top:3px}
+
+  /* ---- legend ---- */
+  .legend{display:flex;flex-wrap:wrap;gap:8px 18px;padding:16px 0;color:var(--ink2);font-size:12.5px;
+    border-bottom:1px solid var(--line)}
+  .legend .k{display:inline-flex;align-items:center;gap:7px}
+  .legend .sw{width:12px;height:12px;border-radius:3px}
+  .legend .loop{font-family:var(--mono);color:var(--p2);font-weight:700}
+
+  /* ---- phase band ---- */
+  .band{padding:44px 0 8px;scroll-margin-top:64px}
+  .band-head{display:flex;align-items:flex-start;gap:14px;margin-bottom:6px}
+  .band-head .tag{font:700 12px/1 var(--mono);letter-spacing:.04em;color:var(--bg);
+    background:var(--hue);padding:6px 10px;border-radius:6px;white-space:nowrap;margin-top:3px}
+  .band-head h2{font-size:clamp(21px,3vw,27px);font-weight:750;letter-spacing:-.02em}
+  .band-head p{color:var(--ink2);font-size:14px;margin:5px 0 0;max-width:70ch}
+
+  /* ---- stage ---- */
+  .stage{margin-top:22px;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--bg2)}
+  .stage.parallel{border-style:dashed;border-color:color-mix(in srgb,var(--hue) 45%,var(--line))}
+  .stage-head{display:flex;align-items:center;gap:11px;padding:13px 16px;
+    border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--hue) 8%,var(--bg2))}
+  .stage-head .id{font:700 11px/1 var(--mono);color:var(--hue);border:1px solid color-mix(in srgb,var(--hue) 40%,var(--line));
+    padding:5px 8px;border-radius:6px}
+  .stage-head h3{font-size:15px;font-weight:700}
+  .stage-head .gate{margin-left:auto;font:600 11px/1 var(--mono);color:var(--ink3);
+    display:inline-flex;align-items:center;gap:6px}
+  .stage-head .gate::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--good)}
+  .steps{display:grid;grid-template-columns:repeat(auto-fill,minmax(248px,1fr));gap:1px;background:var(--line)}
+  .step{background:var(--card);padding:13px 14px;display:flex;flex-direction:column;gap:8px;min-height:104px}
+  .step:hover{background:var(--card2)}
+  .step .top{display:flex;align-items:center;gap:9px}
+  .step .num{font:700 12px/1 var(--mono);color:var(--hue);min-width:26px}
+  .step .loop{font-size:11px;color:var(--p2)}
+  .step .nm{font-size:13.5px;font-weight:650;letter-spacing:-.01em;line-height:1.3}
+  .step .tools{display:flex;flex-wrap:wrap;gap:5px;margin-top:auto}
+  .chip{font:600 10.5px/1 var(--mono);padding:4px 7px;border-radius:5px;white-space:nowrap;
+    border:1px solid var(--line2);color:var(--ink2);background:var(--bg2)}
+  .chip.tool{color:var(--hue);border-color:color-mix(in srgb,var(--hue) 35%,var(--line2));
+    background:color-mix(in srgb,var(--hue) 9%,var(--bg2))}
+  .chip.sk{color:var(--ink3)}
+  .step .out{font:500 11px/1.35 var(--mono);color:var(--ink3);word-break:break-word}
+  .step .out b{color:var(--ink2);font-weight:600}
+
+  /* ---- resources ---- */
+  .res{padding:48px 0 20px;border-top:1px solid var(--line);margin-top:44px}
+  .res-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin-top:20px}
+  .rc{border:1px solid var(--line);border-radius:12px;padding:18px;background:var(--bg2);display:flex;flex-direction:column;gap:9px}
+  .rc .ic{font-size:20px}
+  .rc h4{font-size:15px;font-weight:700;margin:0}
+  .rc p{margin:0;font-size:13px;color:var(--ink2)}
+  .rc .st{margin-top:auto;font:600 11px/1 var(--mono);color:var(--ink3);display:inline-flex;align-items:center;gap:6px;padding-top:6px}
+  .rc .st.soon::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--warn)}
+  .rc .st.live::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--good)}
+  .rc.dual{grid-column:span 1}
+  .langs{display:flex;gap:8px}
+  .langs a{flex:1;text-align:center;border:1px solid var(--line2);border-radius:7px;padding:8px;
+    font:600 12px/1 var(--sans);color:var(--ink2);text-decoration:none}
+  .langs a:hover{color:var(--ink);border-color:var(--accent)}
+
+  /* ---- videos ---- */
+  .eps{margin-top:20px;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .ep{display:flex;align-items:center;gap:14px;padding:12px 16px;border-bottom:1px solid var(--line)}
+  .ep:last-child{border-bottom:0}
+  .ep .n{font:700 13px/1 var(--mono);color:var(--p3);min-width:30px}
+  .ep .body{flex:1}
+  .ep .t{font-size:13.5px;font-weight:650}
+  .ep .d{font:500 11.5px/1.3 var(--mono);color:var(--ink3);margin-top:2px}
+  .ep .cov{font:600 11px/1 var(--mono);color:var(--ink2);white-space:nowrap;border:1px solid var(--line2);
+    padding:5px 8px;border-radius:6px}
+  .ep .soon{font:600 10px/1 var(--mono);color:var(--warn);white-space:nowrap}
+
+  footer{border-top:1px solid var(--line);margin-top:40px;padding:26px 0 60px;color:var(--ink3);font-size:12.5px}
+  footer .wrap{display:flex;flex-wrap:wrap;gap:14px;justify-content:space-between;align-items:center}
+  .forks{display:flex;flex-wrap:wrap;gap:6px}
+  .forks .chip{color:var(--ink2)}
+
+  @media (max-width:620px){
+    .nav nav{display:none}
+    .steps{grid-template-columns:1fr}
+    .band-head{flex-direction:column;gap:8px}
+  }
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<header class="nav">
+  <div class="wrap">
+    <span class="brand"><span class="dot"></span>Vibe-IC <small>spec → silicon</small></span>
+    <nav>
+      <a href="#p1">Phase 1</a><a href="#p2">Phase 2</a><a href="#analog">Analog</a>
+      <a href="#p3">Phase 3</a><a href="#mixed">Mixed-signal</a><a href="#res">資源</a>
+    </nav>
+    <button id="themeBtn" aria-label="切換深淺主題">◐</button>
+  </div>
+</header>
+
+<section class="hero">
+  <canvas id="trace" aria-hidden="true"></canvas>
+  <div class="wrap">
+    <span class="eyebrow">The complete flow · 全流程</span>
+    <h1>從一句需求，到一顆晶片。<br><em>Vibe-IC 完整設計流程</em></h1>
+    <p class="lede">一條走完 <b>3 個 Phase · 5 個 Stage · 59 個 Step</b> 的自動化流程：從自然語言規格
+      → 23 層結構化文件 → RTL → 合成 → 實體設計 → 簽核 → GDSII → 量產測試。每一步都由確定性程式
+      (program-first) 驅動、由 AI 專家做對照驗證，並以 compliance gate 把關。以下是每一步在做什麼、
+      吃什麼、吐什麼、用哪個 EDA 工具。</p>
+    <div class="stats">
+      <div class="stat"><b>3</b><span>Phase 階段</span></div>
+      <div class="stat"><b>5</b><span>Stage 主線</span></div>
+      <div class="stat"><b>59</b><span>Step 步驟</span></div>
+      <div class="stat"><b>2</b><span>並行支線</span></div>
+      <div class="stat"><b>L1–L23</b><span>設計文件層</span></div>
+    </div>
+    <div class="flowline">
+      <div class="seg" style="--hue:var(--p1)"><b>Phase 1</b><span>規格 → L1–L23 文件</span></div>
+      <div class="seg" style="--hue:var(--p2)"><b>Phase 2</b><span>RTL → 合成 → DFT</span></div>
+      <div class="seg" style="--hue:var(--p3)"><b>Phase 3</b><span>實體 → 簽核 → GDSII → 量產</span></div>
+    </div>
+  </div>
+</section>
+
+<div class="wrap">
+  <div class="legend">
+    <span class="k"><span class="sw" style="background:var(--p1)"></span>Phase 1 規格/文件</span>
+    <span class="k"><span class="sw" style="background:var(--p2)"></span>Phase 2 RTL/合成</span>
+    <span class="k"><span class="sw" style="background:var(--p3)"></span>Phase 3 實體/量產</span>
+    <span class="k"><span class="sw" style="background:var(--ana)"></span>Analog 並行支線</span>
+    <span class="k"><span class="sw" style="background:var(--mix)"></span>Mixed-signal 並行支線</span>
+    <span class="k"><span class="loop">🔁</span> 閉環步驟（失敗自動修復再驗）</span>
+    <span class="k mono" style="color:var(--ink3)">chip = EDA 工具 / skill · ● = stage compliance gate</span>
+  </div>
+</div>
+
+<main id="flow" class="wrap"></main>
+
+<section class="res wrap" id="res">
+  <span class="eyebrow" style="color:var(--p3)">Resources · 附掛資源</span>
+  <h2 style="font-size:24px;font-weight:750;letter-spacing:-.02em;margin-top:10px">手冊、步驟說明與教學影片</h2>
+  <p style="color:var(--ink2);font-size:14px;max-width:66ch;margin-top:8px">這個頁面是入口。以下三份資源會陸續附掛上來——完整使用者手冊（中／英）、逐步規格說明（每步的 Input／Output／EDA 工具），以及一套 10 段的教學影片。</p>
+  <div class="res-grid">
+    <div class="rc dual">
+      <span class="ic">📖</span>
+      <h4>User Manual 使用者手冊</h4>
+      <p>資料完整的詳細操作文件，涵蓋安裝、每個指令、gate 判讀與疑難排解。</p>
+      <div class="langs"><a href="#">繁體中文</a><a href="#">English</a></div>
+      <span class="st soon">籌備中 · in preparation</span>
+    </div>
+    <div class="rc">
+      <span class="ic">🗂️</span>
+      <h4>步驟說明文件</h4>
+      <p>先給 Overview，再逐步詳列 (a) Input (b) Output (c) 使用的 EDA 工具。本頁的資料即取自同一份真實來源（flow runner）。</p>
+      <span class="st soon">籌備中 · in preparation</span>
+    </div>
+    <div class="rc">
+      <span class="ic">🎬</span>
+      <h4>教學影片系列</h4>
+      <p>共 10 段，每段對應幾個步驟，用淺顯的例子說明它在做什麼。</p>
+      <span class="st soon">即將推出 · coming soon</span>
+    </div>
+  </div>
+
+  <h3 style="font-size:16px;font-weight:700;margin-top:32px">🎬 10 段教學影片 — 步驟對應</h3>
+  <div class="eps" id="eps"></div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>
+      <div style="color:var(--ink2);font-weight:600">Vibe-IC — program-first, AI-backup 的晶片設計流程</div>
+      <div style="margin-top:4px">真實來源：<span class="mono">flow/phase1_phase2_phase3.yaml</span> · 由 <span class="mono">flow_compliance_check.py</span> 強制</div>
+    </div>
+    <div class="forks">
+      <span style="color:var(--ink3);font-size:11px;align-self:center;margin-right:2px">enhanced OSS EDA（vibeic-eda）:</span>
+      <span class="chip">OpenROAD</span><span class="chip">yosys</span><span class="chip">ngspice</span>
+      <span class="chip">magic</span><span class="chip">netgen</span><span class="chip">iverilog</span><span class="chip">klayout</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+const F = {
+  phases: [
+    { id:"p1", hue:"p1", tag:"Phase 1", title:"規格與文件 — Spec → L1–L23",
+      blurb:"把想法或既有文件轉成 23 層結構化設計文件。兩條入口最終匯流成同一批 L 文件，餵給 Phase 2。",
+      stages:[
+        { id:"路徑 A", name:"Agent 路徑 — 自由文字 (input_prompt/)", gate:"phase1_compliance", parallel:false,
+          steps:[
+            {num:"·", nm:"PM Agent — 自然語言前門", sk:["pm-agent"], out:"NL-ingest → 缺口對話（一次一題，用你的語言）→ fact graph → L1–L9 事實", face:"使用者" },
+            {num:"·", nm:"IC Expert Agent — 矽智財審查者", sk:["ic-expert-agent"], out:"逐層技術完整性審查、填自動預設值、跨層一致性檢查（plugin 的 IC 知識庫）", face:"僅透過 PM" },
+          ]},
+        { id:"路徑 B", name:"決定性 doc-gen 路徑 — 既有文件 (input_doc/)", gate:"phase1_compliance", parallel:false,
+          steps:[
+            {num:"D1", nm:"文件萃取 → 17 個 doc-gen skills", tools:[], sk:["datasheet-gen","regmap-gen","cmd-protocol-gen","timing-waveform-gen","…17"], out:"L1_DATASHEET … L13_OTP（+ overlay L14–L23）", loop:false },
+            {num:"D4", nm:"協定類別合成 dispatch（81 類）", sk:["is_<proto>","<proto>_synth"], out:"依偵測到的協定自動補齊 L 文件", loop:false },
+            {num:"D5", nm:"Coverage / parity 報告", sk:["phase1-parity"], out:"extraction_coverage_report", loop:false },
+          ]},
+      ]},
+    { id:"p2", hue:"p2", tag:"Phase 2", title:"RTL → 合成",
+      blurb:"從 L 文件寫出 RTL、驗證、合成成映射網表，並插入可測性 (DFT)。",
+      stages:[
+        { id:"Stage 1", name:"RTL 產生與驗證", gate:"stage1_compliance", parallel:false,
+          steps:[
+            {num:1, nm:"Spec-to-RTL", sk:["spec-to-rtl"], out:"phase2/stage1/rtl/*.sv" },
+            {num:2, nm:"Lint（RTL 衛生 + Quartus-unsafe）", loop:true, sk:["rtl-review"], out:"rtl_hygiene.json（+11 條件式 gate）" },
+            {num:3, nm:"CDC / RDC 檢查", loop:true, sk:["cdc-check","rdc-check"], out:"crossing / async_input / reset_dep.json" },
+            {num:4, nm:"Simulation（testbench + coverage）", loop:true, tools:["eda_simulate"], sk:["testbench-gen"], out:"sim results.xml + coverage_actual.json" },
+            {num:5, nm:"Formal 驗證（assertions）", loop:true, tools:["eda_formal"], sk:["assertion-gen","formal-verify"], out:"formal/results.json" },
+            {num:6, nm:"FPGA 早期原型 + 稽核", tools:["eda_synth"], sk:["fpga-test-harness"], out:"*.sof + quartus_map_audit.json" },
+            {num:"P0", nm:"結構化 RTL 預檢（77 個 chip-AGNOSTIC gate）", out:"結構化把關，不看 oracle" },
+          ]},
+        { id:"Stage 2", name:"合成與 DFT", gate:"stage2_compliance", parallel:false,
+          steps:[
+            {num:7, nm:"Constraint setup（SDC + PVT）", sk:["constraint-gen"], out:"*.sdc + pvt_matrix.json" },
+            {num:8, nm:"SDC 驗證", loop:true, sk:["sdc-validator"], out:"sdc_check.json" },
+            {num:9, nm:"Synthesis（Yosys → 映射網表）", tools:["eda_synth"], sk:["synth-doctor"], out:"synth/netlist.v + area.rpt" },
+            {num:10, nm:"Pre-layout STA（多角）", loop:true, tools:["eda_sta"], sk:["sta-review"], out:"pre_pnr_timing.rpt" },
+            {num:11, nm:"DFT 插入（scan + ATPG + BSDL）", tools:["eda_dft"], sk:["dft-insert","atpg"], out:"scan_netlist.v + atpg_coverage.rpt" },
+            {num:12, nm:"Post-DFT 最佳化", sk:["synth-doctor"], out:"post_dft_netlist.v" },
+            {num:"FS1", nm:"ISO-26262 FMEDA 診斷覆蓋率（僅安全設計）", tools:["eda_simulate"], sk:["fmeda"], out:"fmeda_coverage.json（真 iverilog 注入式 DC vs ASIL；獨立 gate 重算防造假）" },
+            {num:"DT1", nm:"轉態延遲故障（at-speed LOC）ATPG（僅掃描設計）", tools:["eda_dft"], sk:["atpg"], out:"transition_coverage.json（Yosys sat 2-frame LOC launch-capture 雙圖樣）" },
+            {num:13, nm:"等效性檢查 LEC（RTL ≡ 網表）", loop:true, sk:["equivalence-check"], out:"lec.rpt" },
+            {num:14, nm:"合成交接 gate（Yosys script 稽核）", out:"netlist.v（open-source flow）" },
+          ]},
+      ]},
+    { id:"analog", hue:"ana", tag:"Analog", title:"類比支線 A1–A9（與 Stage 1–2 並行）",
+      blurb:"類比區塊獨立跑：規格 → 拓樸 → 網表 → 角點掃描 → 佈局 → 實體驗證 → 打包成 hardmacro 餵回數位 Stage 3。",
+      stages:[
+        { id:"Analog", name:"analog_one_shot_runner.py", gate:"analog_compliance", parallel:true,
+          steps:[
+            {num:"A1", nm:"類比規格萃取", sk:["analog-spec-extract"], out:"analog/*/spec.json" },
+            {num:"A2", nm:"拓樸選擇", sk:["analog-topology-select"], out:"topology.md" },
+            {num:"A3", nm:"網表產生", tools:["eda_xschem_netlist"], sk:["analog-netlist-gen"], out:"*.sp" },
+            {num:"A4", nm:"角點掃描（PVT）", tools:["eda_spice_corner"], sk:["analog-sizing-loop"], out:"corner_results.json" },
+            {num:"A5", nm:"佈局（Magic）", tools:["eda_analog_layout"], sk:["analog-layout"], out:"layout.mag / *.gds" },
+            {num:"A6", nm:"逐區塊實體驗證（DRC+LVS）", sk:["drc-fix","lvs-triage"], out:"drc_clean.flag + lvs_match.flag" },
+            {num:"A7", nm:"佈局後重模擬", loop:true, tools:["eda_spice_corner"], sk:["analog-extraction-resim"], out:"pre_vs_post.json" },
+            {num:"A8", nm:"Hardmacro 產生（LEF+Lib+GDS+V）", sk:["analog-hardmacro-gen"], out:"*.lef / *.lib / *.gds / *.v" },
+            {num:"A9", nm:"共模擬 / HW 驗證", loop:true, tools:["eda_spice","eda_simulate"], sk:["analog-hw-tuning-loop"], out:"cosim_results.json" },
+          ]},
+      ]},
+    { id:"p3", hue:"p3", tag:"Phase 3", title:"實體設計 → Tapeout → 量產",
+      blurb:"把網表變成可製造的版圖：佈局規劃、時脈樹、繞線、寄生萃取、全套簽核分析、DRC/LVS、輸出 GDSII，最後量產測試。",
+      stages:[
+        { id:"Stage 3", name:"實體設計與簽核", gate:"stage3_compliance", parallel:false,
+          steps:[
+            {num:15, nm:"Floorplan + PDN（供電網）", tools:["eda_pnr"], out:"floorplan.def + pdn" },
+            {num:16, nm:"時脈規劃", sk:["cts-plan"], out:"clock_plan.json" },
+            {num:17, nm:"擺放 Placement（global+detailed）", tools:["eda_pnr"], sk:["placement-optimize"], out:"placed.def" },
+            {num:18, nm:"Spare-cell + ECO 預備插入", tools:["eda_pnr"], out:"spare_cells.json" },
+            {num:19, nm:"CTS 時脈樹合成", tools:["eda_pnr"], out:"post_cts.def + clock_tree.rpt" },
+            {num:20, nm:"Post-CTS hold 修復", loop:true, sk:["hold-fix"], out:"post_hold.def" },
+            {num:21, nm:"繞線 Routing（global+detailed）", tools:["eda_pnr"], out:"routed.def + drc.rpt" },
+            {num:22, nm:"寄生萃取（RC → SPEF）", tools:["eda_extraction"], out:"parasitic.spef" },
+            {num:23, nm:"Post-route STA（MMMC 簽核）", loop:true, tools:["eda_sta"], sk:["sta-review"], out:"post_route_timing.rpt" },
+            {num:24, nm:"IR Drop（靜態 + VCD 向量化動態）", loop:true, sk:["ir-drop-triage"], out:"ir_drop.rpt + dynamic_ir.json" },
+            {num:25, nm:"EM 電遷移壽命", loop:true, sk:["em-check"], out:"em.rpt" },
+            {num:26, nm:"Antenna 天線檢查", loop:true, out:"antenna.rpt" },
+            {num:27, nm:"訊號完整性（串擾/雜訊）", loop:true, out:"si_crosstalk.rpt" },
+            {num:28, nm:"PERC / 可靠度簽核（ESD+latch-up）", loop:true, out:"perc_equivalent.json" },
+            {num:29, nm:"佈局後閘級模擬（+SDF）", tools:["eda_simulate"], out:"sim_postlayout results" },
+            {num:30, nm:"佈局後 SPICE 驗證（關鍵路徑相關性）", tools:["eda_spice"], sk:["ams-sim"], out:"correlation.json" },
+            {num:31, nm:"實體驗證（DRC+LVS+ERC+密度）", loop:true, tools:["eda_drc_klayout","eda_lvs"], sk:["drc-fix","lvs-triage","perc-check"], out:"drc_signoff.rpt + lvs.rpt + erc.rpt" },
+            {num:32, nm:"ECO 修復迴圈", loop:true, sk:["eco-plan"], out:"eco_log.json / no_eco_needed.flag" },
+          ]},
+        { id:"Stage 4", name:"輸出與 Tapeout", gate:"stage4_compliance", parallel:false,
+          steps:[
+            {num:33, nm:"功耗分析（pre/post-layout）", sk:["power-analysis"], out:"power.rpt" },
+            {num:34, nm:"Metal Fill（ECO-aware 密度填充）", tools:["eda_pnr"], out:"filled.def" },
+            {num:35, nm:"DFM 篩檢（CMP 密度 + 冗餘 via）", out:"dfm_screen.json" },
+            {num:36, nm:"Tapeout checklist（最終簽核確認）", sk:["tapeout-checklist"], out:"tapeout_checklist.json" },
+            {num:37, nm:"GDSII 輸出（僅在 PV 全清後）", tools:["eda_gds"], out:"phase3/stage4/gds/*.gds" },
+            {num:38, nm:"Foundry 交接（mask spec + WAT + scribe）", sk:["tapeout-checklist"], out:"mask_spec + wat_plan + scribe.gds" },
+            {num:39, nm:"FPGA 最終簽核（重編 + 上板測試）", sk:["fpga-test-harness"], out:"final/*.sof + on_board_pass.json" },
+          ]},
+        { id:"Stage 5", name:"量產與測試（fab → wafer-sort → 封裝 → ATE）", gate:"manufacturing_compliance", parallel:false,
+          steps:[
+            {num:40, nm:"晶圓製造（foundry mask-set + fab · 外部）", out:"mask_set / wafer_lot received" },
+            {num:41, nm:"晶圓分選 / 探針測試（ATE + probe card）", out:"wafer_sort_yield.json + wafer_map.csv" },
+            {num:42, nm:"封裝（wirebond / FC-CSP / WLCSP）", out:"packaging_log.json" },
+            {num:43, nm:"最終測試（功能 + 參數 + burn-in）", out:"final_test_yield.json" },
+            {num:44, nm:"可靠度驗證（HTOL / FIT）", out:"htol_results.json" },
+          ]},
+      ]},
+    { id:"mixed", hue:"mix", tag:"Mixed", title:"混合訊號支線 M1–M4（Stage 3 與 4 之間）",
+      blurb:"當設計同時有類比與數位：頂層合併、功率域/電位轉換驗證、AMS 共模擬，最後頂層簽核。",
+      stages:[
+        { id:"Mixed", name:"mixed-signal-cosim（無專屬 runner）", gate:"mixed_signal_compliance", parallel:true,
+          steps:[
+            {num:"M1", nm:"頂層整合（A+D GDS 合併 + macro 擺放）", sk:["flow-orchestrate"], out:"top_merged.gds" },
+            {num:"M2", nm:"功率域 + 電位轉換 / 隔離 + 跨域訊號驗證", sk:["ir-drop-triage"], out:"power_domain / level_shifter / isolation / signal_crossing.json" },
+            {num:"M3", nm:"混訊驗證（AMS 共模擬 + RNM + 介面 SI）", sk:["mixed-signal-cosim","ams-sim"], out:"mixed_signal_results.json" },
+            {num:"M4", nm:"混訊簽核（頂層 PV + 最終判定）", sk:["tapeout-checklist"], out:"signoff.json" },
+          ]},
+      ]},
+  ],
+  episodes:[
+    {n:1, t:"總覽：一句話到一顆晶片", d:"whole flow · 3 phase / 5 stage", cov:"全流程"},
+    {n:2, t:"Phase 1：把想法變規格", d:"2 paths · PM+IC Expert Agent · L1–L23", cov:"D1–D5"},
+    {n:3, t:"Phase 2 Stage 1：寫 RTL 並驗證", d:"spec-to-rtl → lint → sim → formal", cov:"1–6"},
+    {n:4, t:"Phase 2 Stage 2：合成與可測性", d:"SDC → yosys synth → STA → DFT → LEC", cov:"7–14"},
+    {n:5, t:"Phase 3 前段：擺放到繞線", d:"floorplan → placement → CTS → route", cov:"15–21"},
+    {n:6, t:"Phase 3 簽核分析群", d:"SPEF → STA/IR/EM/antenna/SI/PERC", cov:"22–32"},
+    {n:7, t:"輸出與 Tapeout", d:"fill → DFM → checklist → GDSII → handoff", cov:"33–39"},
+    {n:8, t:"類比設計支線", d:"spec → topology → sizing → layout → hardmacro", cov:"A1–A9"},
+    {n:9, t:"混合訊號整合", d:"merge → power-domain → AMS co-sim → signoff", cov:"M1–M4"},
+    {n:10, t:"量產與測試", d:"fab → wafer-sort → package → ATE → HTOL", cov:"40–44"},
+  ]
+};
+
+function chipsFor(s){
+  let h="";
+  (s.tools||[]).forEach(t=>h+=`<span class="chip tool">${t}</span>`);
+  (s.sk||[]).forEach(t=>h+=`<span class="chip sk">${t}</span>`);
+  if(s.face) h+=`<span class="chip sk">面對：${s.face}</span>`;
+  return h;
+}
+function render(){
+  const root=document.getElementById("flow");
+  F.phases.forEach(p=>{
+    const band=document.createElement("section");
+    band.className="band"; band.id=p.id; band.style.setProperty("--hue",`var(--${p.hue})`);
+    band.innerHTML=`<div class="band-head"><span class="tag">${p.tag}</span>
+      <div><h2>${p.title}</h2><p>${p.blurb}</p></div></div>`;
+    p.stages.forEach(st=>{
+      const stEl=document.createElement("div");
+      stEl.className="stage"+(st.parallel?" parallel":"");
+      let steps="";
+      st.steps.forEach(s=>{
+        steps+=`<div class="step"><div class="top"><span class="num">${s.num}</span>
+          ${s.loop?'<span class="loop">🔁</span>':''}<span class="nm">${s.nm}</span></div>
+          <div class="tools">${chipsFor(s)}</div>
+          ${s.out?`<div class="out"><b>out ▸</b> ${s.out}</div>`:''}</div>`;
+      });
+      stEl.innerHTML=`<div class="stage-head"><span class="id">${st.id}</span>
+        <h3>${st.name}</h3><span class="gate">gate ${st.gate}</span></div>
+        <div class="steps">${steps}</div>`;
+      band.appendChild(stEl);
+    });
+    root.appendChild(band);
+  });
+  const eps=document.getElementById("eps");
+  F.episodes.forEach(e=>{
+    const el=document.createElement("div"); el.className="ep";
+    el.innerHTML=`<span class="n">EP${e.n}</span><div class="body">
+      <div class="t">${e.t}</div><div class="d">${e.d}</div></div>
+      <span class="cov">Step ${e.cov}</span><span class="soon">籌製中</span>`;
+    eps.appendChild(el);
+  });
+}
+render();
+
+// theme toggle
+const btn=document.getElementById("themeBtn");
+btn.addEventListener("click",()=>{
+  const cur=document.documentElement.getAttribute("data-theme");
+  const now=cur==="dark"?"light":cur==="light"?"dark":
+    (matchMedia("(prefers-color-scheme: dark)").matches?"light":"dark");
+  document.documentElement.setAttribute("data-theme",now);
+});
+
+// hero circuit-trace canvas (subtle, respects reduced-motion)
+(function(){
+  const c=document.getElementById("trace"); if(!c) return;
+  const ctx=c.getContext("2d"); let w,h,dpr;
+  const reduce=matchMedia("(prefers-reduced-motion: reduce)").matches;
+  function size(){dpr=Math.min(2,devicePixelRatio||1);w=c.clientWidth;h=c.clientHeight;c.width=w*dpr;c.height=h*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);}
+  size(); addEventListener("resize",size);
+  const cs=getComputedStyle(document.documentElement);
+  function col(){return cs.getPropertyValue("--p2").trim()||"#2dd4bf";}
+  const nodes=[]; const N=Math.max(10,Math.floor(w/70));
+  for(let i=0;i<N;i++)nodes.push({x:Math.random()*w,y:Math.random()*h,vx:(Math.random()-.5)*.15,vy:(Math.random()-.5)*.15});
+  function step(){
+    ctx.clearRect(0,0,w,h);
+    ctx.strokeStyle=col(); ctx.globalAlpha=.16; ctx.lineWidth=1;
+    for(let i=0;i<nodes.length;i++){const a=nodes[i];
+      for(let j=i+1;j<nodes.length;j++){const b=nodes[j];
+        const dx=a.x-b.x,dy=a.y-b.y,d=Math.hypot(dx,dy);
+        if(d<130){ctx.beginPath();ctx.moveTo(a.x,a.y);
+          // manhattan routing feel
+          ctx.lineTo(b.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}}}
+    ctx.globalAlpha=.6;ctx.fillStyle=col();
+    nodes.forEach(n=>{ctx.fillRect(n.x-1.3,n.y-1.3,2.6,2.6);
+      if(!reduce){n.x+=n.vx;n.y+=n.vy;if(n.x<0||n.x>w)n.vx*=-1;if(n.y<0||n.y>h)n.vy*=-1;}});
+    if(!reduce)requestAnimationFrame(step);
+  }
+  step();
+})();
+</script>

@@ -513,7 +513,24 @@ def run(project, top: str = "spm", container: str = DEFAULT_CONTAINER,
     tb_path.write_text(tb)
 
     # compile + run inside the container.  -ginterconnect enables SDF net-delay
-    # back-annotation; -gspecify is deliberately omitted (see module docstring).
+    # back-annotation.
+    #
+    # CELL-ARC (IOPATH) status — v1.3.97, HONEST (corrects the earlier
+    # "iverilog can't do cell-arc" claim): iverilog CAN back-annotate SDF IOPATH
+    # cell-arc delays with `-gspecify` — PROVEN on real PDK cells (a DFFHQD1
+    # posedge-CK->Q SDF arc of 2ns lands exactly: posedge@5ns -> Q@7ns; an INVD1
+    # A->Y arc of 5ns lands exactly). The OpenSTA-written spm.sdf already carries
+    # 979 IOPATH cell-arc entries. BUT enabling `-gspecify` on the WHOLE-DESIGN
+    # gate-sim breaks the CALIBRATED streaming-scoreboard TB: the added per-stage
+    # cell-arc delays shift transitions past the TB's fixed sample edges ->
+    # CALIBRATION_FAIL. Making the functional TB cell-delay-aware (sample on the
+    # SDF-annotated valid window instead of a fixed latency) is a tracked
+    # residual (NOT a commercial gap, NOT an iverilog limit). Until then the
+    # gate-sim validates FUNCTION under real net-RC delays (the 50/50 result) and
+    # at-speed CELL timing is signed off by STA (Step 23/28), which uses the same
+    # Liberty arcs the SDF is derived from. So `-gspecify` is intentionally NOT
+    # enabled here to keep the functional sim sound. See docs/ADVANCED_NODE_
+    # EXTENSION.md "cell-arc gate-sim".
     vvp = sim_dir / f"{top}_gatesim.vvp"
     compile_flags = "-g2012 -ginterconnect"
     runtime_flags = "-sdf-info"

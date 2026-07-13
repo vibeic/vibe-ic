@@ -856,6 +856,606 @@ def run_hp18e80_cell_correlation(
     return report
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#  HP18E80 REAL ngspice FULL-PATH correlation driver (Step-30, additive)
+# ══════════════════════════════════════════════════════════════════════════
+#
+# Extends the single-cell driver to the FULL STA critical PATH: it parses the
+# post-route STA report's critical-path cell sequence, STITCHES the design's
+# LVS-extracted transistor subckts of those cells into one ngspice deck wired
+# to match the real path connectivity (stage-i output net → stage-(i+1)
+# toggling input pin, resolved from the gate-level netlist), loads every net
+# with its REAL parasitic capacitance (SPEF *D_NET total + the downstream cell
+# gate cap supplied physically by the stitched next stage), drives the path
+# input at the plugin's nominal characterisation slew, runs REAL ngspice, and
+# MEASURES the end-to-end propagation delay — then correlates it against the
+# STA-reported path delay (same >10 % ERROR / >25 % CRITICAL thresholds).
+#
+# The stitch is physically faithful in a way a per-stage liberty sum is not:
+# SPICE propagates each stage's OUTPUT slew into the next stage, so mid-path
+# slews (which STA computes internally but never reports) fall out for free.
+#
+# §4.05 NO-LEAK: reads only design input (extracted netlist + SPEF + gate
+# netlist + STA report) + the PDK bridge shim/liberty. Never any oracle /
+# golden / output.*. NDA: PDK model/liberty content is read only to compute
+# numbers; it is never copied into any emitted file.
+#
+# Honesty backstops (NEVER fabricate a number):
+#   * no shim / no ngspice / no extracted subckts / no stitchable combinational
+#     stage on the path  → return None (honest skip).
+#   * the stitched deck's endpoint node fails to swing ≥ 50 % VDD (wrong
+#     sensitisation for an unsupported gate family) → return None, no delay.
+
+# Sequential / non-combinational cell-name families (endpoint or launch flop;
+# never stitched as a combinational stage).
+_SEQ_CELL_RE = re.compile(r"^(?:S?DF|DFF|DLA|DLH|DLL|LAT|SDFF|LSR)", re.IGNORECASE)
+# Inverting combinational families (odd inversion → flips the arc polarity).
+_INVERTING_RE = re.compile(r"^(?:INV|NAND|NOR|XNOR|AOI|OAI|IMUX|MXI|IND)",
+                           re.IGNORECASE)
+
+
+def normalize_mos_bulk(body: str, vss: str = "VSS", vdd: str = "VDD") -> str:
+    """Rebind every MOSFET bulk (4th node) to the cell rails: nmos→VSS, pmos→
+    VDD (pure). The LVS-extracted netlist ties each device bulk to its LOCAL
+    source/internal node (an LVS artefact); left as-is the series pull-down /
+    pull-up stacks of MULTI-transistor cells never fully switch in SPICE
+    (a single inverter happens to already have bulk on the rails, which is why
+    the cell driver worked without this). Keyed on the post-rename model token
+    (nch_tn = nmos-derived, pch_tn = pmos-derived) or the raw nmos/pmos."""
+    out = []
+    line_re = re.compile(r"(\s*M\S+\s+\S+\s+\S+\s+\S+\s+)(\S+)(\s+)(\S+)(.*)")
+    for ln in body.splitlines():
+        m = line_re.match(ln)
+        if m:
+            pre, _bulk, sp, model, rest = m.groups()
+            ml = model.lower()
+            if ml in ("nch_tn", "nmos"):
+                ln = pre + vss + sp + model + rest
+            elif ml in ("pch_tn", "pmos"):
+                ln = pre + vdd + sp + model + rest
+        out.append(ln)
+    return "\n".join(out)
+
+
+def _subckt_rails(pins: List[str]) -> Tuple[str, str]:
+    """(vss_pin, vdd_pin) names from a subckt pin list (pure)."""
+    vss = vdd = None
+    for p in pins:
+        u = p.upper()
+        if vss is None and u in ("VSS", "GND", "VGND", "VNW"):
+            vss = p
+        if vdd is None and u in ("VDD", "VCC", "VPWR"):
+            vdd = p
+    return vss or "VSS", vdd or "VDD"
+
+
+def _subckt_device_lines(body: str) -> str:
+    """Just the MOSFET instance lines of a normalised subckt body (pure)."""
+    return "\n".join(l for l in body.splitlines()
+                     if l.strip()[:1].upper() == "M")
+
+
+def cell_inverts(cell: str) -> bool:
+    """True if the cell inverts its combinational arc polarity (pure)."""
+    return bool(_INVERTING_RE.match(cell or ""))
+
+
+def is_sequential_cell(cell: str) -> bool:
+    """True for flops/latches — never stitched as a combinational stage (pure)."""
+    return bool(_SEQ_CELL_RE.match(cell or ""))
+
+
+def tie_value_for_cell(cell: str) -> str:
+    """Non-controlling tie node for a gate's NON-toggling inputs so the toggling
+    input propagates (pure). AND/NAND → tie high (vdd); OR/NOR → tie low (0);
+    XOR/XNOR → tie low (passes/inverts the other input). Complex families
+    (AOI/OAI/MUX) default high; a wrong guess is caught by the swing backstop,
+    never fabricated."""
+    u = (cell or "").upper()
+    if u.startswith(("XOR", "XNOR", "NOR", "OR")):
+        return "0"
+    return "vdd"
+
+
+# ─────────────────────────── STA path parsing (pure) ───────────────────────────
+
+_STA_ROW_RE = re.compile(
+    r"^\s*([\d.]+)\s+([\d.]+)\s+([v^])\s+(\S+)\s+\(([\w\[\]]+)\)\s*$",
+    re.MULTILINE)
+
+
+def parse_sta_path(text: str) -> Optional[dict]:
+    """Parse an OpenSTA/OpenROAD report_checks max-delay path into a structured
+    path (pure). Returns {startpoint, endpoint, start_time_ns, end_time_ns,
+    path_delay_ns, endpoint_transition, rows:[{incr,time,tr,pin,inst,cell}]}.
+    rows are the DATA rows that carry a `(CELL)`/`(in)`/`(out)` tag, in order."""
+    sp = re.search(r"^Startpoint:\s+(\S+)", text, re.MULTILINE)
+    ep = re.search(r"^Endpoint:\s+(\S+)", text, re.MULTILINE)
+    rows: List[dict] = []
+    for m in _STA_ROW_RE.finditer(text):
+        incr, time_, tr, pin, cell = m.groups()
+        inst = pin.split("/")[0] if "/" in pin else pin
+        rows.append({
+            "incr": float(incr), "time": float(time_), "tr": tr,
+            "pin": pin, "inst": inst, "cell": cell,
+        })
+    if not rows:
+        return None
+    start_tok = sp.group(1) if sp else rows[0]["inst"]
+    end_tok = ep.group(1) if ep else rows[-1]["inst"]
+    # data launch = first row that is a port `(in)` or the startpoint instance
+    start_time = None
+    for r in rows:
+        if r["cell"].lower() == "in" or r["inst"] == start_tok:
+            start_time = r["time"]
+            break
+    if start_time is None:
+        start_time = rows[0]["time"]
+    end_time = rows[-1]["time"]
+    return {
+        "startpoint": start_tok,
+        "endpoint": end_tok,
+        "start_time_ns": start_time,
+        "end_time_ns": end_time,
+        "path_delay_ns": round(end_time - start_time, 6),
+        "endpoint_transition": "fall" if rows[-1]["tr"] == "v" else "rise",
+        "rows": rows,
+    }
+
+
+def sta_path_stitch_score(text: str, subckt_names: set) -> int:
+    """How many stitchable COMBINATIONAL stages a report's critical path yields
+    (pure) — used to pick, among candidate STA reports, the one that exposes the
+    richest combinational path (a bare flop→port path scores 0)."""
+    p = parse_sta_path(text)
+    if not p:
+        return 0
+    n = 0
+    for r in p["rows"]:
+        c = r["cell"]
+        if c in subckt_names and not is_sequential_cell(c) \
+                and c.lower() not in ("in", "out"):
+            n += 1
+    return n
+
+
+# ─────────────────────── gate-netlist + SPEF parsing (pure) ──────────────────
+
+_INST_RE = re.compile(
+    r"(\w+)\s+(\S+)\s*\(\s*((?:\.\w+\s*\([^)]*\)\s*,?\s*)+)\)\s*;", re.DOTALL)
+_CONN_RE = re.compile(r"\.(\w+)\s*\(\s*([^)]*?)\s*\)")
+
+
+def parse_verilog_instances(vtext: str) -> dict:
+    """Map {instance_name: {pin: net}} from a structural gate-level netlist
+    (pure). Only named-connection instances are captured; the top module port
+    header (positional) is ignored."""
+    inst_map: dict = {}
+    for m in _INST_RE.finditer(vtext):
+        cell, inst, blob = m.group(1), m.group(2), m.group(3)
+        conns = {p: n.strip() for p, n in _CONN_RE.findall(blob)}
+        if conns:
+            inst_map[inst] = {"cell": cell, "conns": conns}
+    return inst_map
+
+
+def parse_spef_caps(spef_text: str) -> dict:
+    """Map {net_name: total_cap_pf} from a SPEF (*NAME_MAP + *D_NET) (pure).
+    Assumes *C_UNIT PF (the HP18E80 extraction unit); callers needing another
+    unit should scale. Returns {} when the SPEF has no D_NET records."""
+    id2name = {}
+    for m in re.finditer(r"^\*(\d+)\s+([A-Za-z_]\S*)\s*$", spef_text, re.MULTILINE):
+        id2name[m.group(1)] = m.group(2)
+    caps = {}
+    for m in re.finditer(r"^\*D_NET\s+\*(\d+)\s+([\d.eE+\-]+)", spef_text,
+                         re.MULTILINE):
+        name = id2name.get(m.group(1))
+        if name:
+            try:
+                caps[name] = float(m.group(2))
+            except ValueError:
+                pass
+    return caps
+
+
+def liberty_pin_cap(block: str, pin: str) -> Optional[float]:
+    """Input-pin `capacitance` (in the liberty cap unit, typ pF) from a cell
+    block (pure)."""
+    m = re.search(r"pin\s*\(\s*" + re.escape(pin) + r"\s*\)\s*\{", block)
+    if not m:
+        return None
+    pb = _match_brace_block(block, m.start())
+    cm = re.search(r"\bcapacitance\s*:\s*([\d.]+)", pb)
+    return float(cm.group(1)) if cm else None
+
+
+def _find_pin_for_net(conns: dict, net: str) -> Optional[str]:
+    """Which pin of an instance connects to `net` (pure)."""
+    for pin, n in conns.items():
+        if n == net:
+            return pin
+    return None
+
+
+def resolve_path_stages(sta_path: dict, inst_map: dict, spef_caps: dict,
+                        subckt_names: set, liberty_text: str,
+                        max_stages: int = 12) -> Optional[dict]:
+    """Resolve the STA path into an ordered list of stitchable combinational
+    stages with the FAITHFUL toggling input pin, output net, and net parasitic
+    load (pure). Returns {stages:[...], endpoint_load_pf, covered, total_comb}
+    or None when nothing combinational is stitchable.
+
+    Each stage: {inst, cell, toggle_pin, out_pin, out_net, wire_cap_pf}.
+    The toggling pin of stage 0 is the first cell's pin on the startpoint net;
+    of stage i>0 the pin on stage-(i-1)'s output net (real fanin chaining)."""
+    comb_rows = [r for r in sta_path["rows"]
+                 if r["cell"] in subckt_names
+                 and not is_sequential_cell(r["cell"])
+                 and r["cell"].lower() not in ("in", "out")]
+    total_comb = len(comb_rows)
+    if total_comb == 0:
+        return None
+    comb_rows = comb_rows[:max_stages]
+
+    # startpoint net feeding the first stage's toggling input
+    sp_tok = sta_path["startpoint"]
+    if sp_tok in inst_map:  # DFF/cell launch → its first output net
+        outs = [n for p, n in inst_map[sp_tok]["conns"].items()
+                if p.upper() in ("Q", "QN", "Y", "Z")]
+        prev_net = outs[0] if outs else None
+    else:
+        prev_net = sp_tok  # primary input port net (e.g. x[31])
+
+    stages = []
+    for r in comb_rows:
+        inst = r["inst"]
+        entry = inst_map.get(inst)
+        if not entry:
+            return None
+        conns = entry["conns"]
+        out_pin = r["pin"].split("/")[-1] if "/" in r["pin"] else "Y"
+        out_net = conns.get(out_pin)
+        if out_net is None:  # fall back to the sole output-looking pin
+            outs = [p for p in conns if p.upper() in ("Y", "Z", "Q")]
+            out_pin = outs[0] if outs else out_pin
+            out_net = conns.get(out_pin)
+        toggle_pin = _find_pin_for_net(conns, prev_net) if prev_net else None
+        if toggle_pin is None:  # can't chain faithfully → representative pin
+            ins = [p for p in conns
+                   if p.upper() not in ("Y", "Z", "Q", "QN", "VDD", "VSS",
+                                        "VPWR", "VGND", "VNW", "VPB", "VNB")]
+            toggle_pin = ins[0] if ins else None
+        if toggle_pin is None or out_net is None:
+            return None
+        stages.append({
+            "inst": inst, "cell": r["cell"], "toggle_pin": toggle_pin,
+            "out_pin": out_pin, "out_net": out_net,
+            "wire_cap_pf": spef_caps.get(out_net, 0.0),
+        })
+        prev_net = out_net
+
+    # endpoint receiver cap: the pin the last stage's out net drives (DFF D /
+    # output-port external). Added lumped on the final node (its downstream
+    # gate is NOT stitched). Pulled from the liberty pin cap when the endpoint
+    # is a real cell instance.
+    endpoint_load_pf = stages[-1]["wire_cap_pf"]
+    ep_tok = sta_path["endpoint"]
+    ep_entry = inst_map.get(ep_tok)
+    if ep_entry:
+        ep_pin = _find_pin_for_net(ep_entry["conns"], stages[-1]["out_net"])
+        cblock = extract_cell_block(liberty_text, ep_entry["cell"]) \
+            if ep_pin else None
+        pc = liberty_pin_cap(cblock, ep_pin) if cblock else None
+        if pc:
+            endpoint_load_pf += pc
+    return {
+        "stages": stages,
+        "endpoint_load_pf": endpoint_load_pf,
+        "covered": len(stages),
+        "total_comb": total_comb,
+    }
+
+
+# ───────────────────────── path deck build + meas (pure) ─────────────────────
+
+def build_path_deck(shim_abs: str, corner: str, stages: List[dict],
+                    subckts: dict, vdd: float, tr_ns: float, temp_c: float,
+                    vth: float, endpoint_load_pf: float) -> str:
+    """Assemble a self-contained ngspice deck stitching the resolved path
+    stages (pure). Node convention: input `a`; stage i output `n{i}`, last
+    output `pout`. Non-toggling inputs of each gate are tied to the family
+    non-controlling rail; each output net carries its SPEF wire cap; the final
+    node also carries the endpoint receiver cap. Measures both output arcs
+    (rise/fall) end-to-end at the delay threshold; the input edge is chosen per
+    the cumulative inversion parity so the requested output edge is reached."""
+    n = len(stages)
+    def out_node(i):
+        return "pout" if i == n - 1 else f"n{i}"
+    def in_node(i):
+        return "a" if i == 0 else out_node(i - 1)
+
+    body_lines, subckt_defs, cap_lines = [], [], []
+    emitted = set()
+    invert_parity = False
+    for i, st in enumerate(stages):
+        cell = st["cell"]
+        pins, raw = subckts[cell]
+        vss_p, vdd_p = _subckt_rails(pins)
+        norm = normalize_mos_bulk(raw, vss_p, vdd_p)
+        tie = tie_value_for_cell(cell)
+        node_of = {}
+        for p in pins:
+            u = p.upper()
+            if p == st["toggle_pin"]:
+                node_of[p] = in_node(i)
+            elif p == st["out_pin"]:
+                node_of[p] = out_node(i)
+            elif u in ("VSS", "GND", "VGND", "VNW"):
+                node_of[p] = "0"
+            elif u in ("VDD", "VCC", "VPWR"):
+                node_of[p] = "vdd"
+            else:
+                node_of[p] = tie  # non-toggling input → non-controlling
+        body_lines.append(
+            f"x{i}_{st['inst'].strip('_') or i} "
+            + " ".join(node_of[p] for p in pins) + f" {cell}")
+        if cell not in emitted:
+            subckt_defs.append(
+                f".SUBCKT {cell} {' '.join(pins)}\n"
+                f"{_subckt_device_lines(norm)}\n.ENDS")
+            emitted.add(cell)
+        wc = st["wire_cap_pf"]
+        node = out_node(i)
+        extra = wc + (endpoint_load_pf - wc if i == n - 1 else 0.0)
+        if extra > 0:
+            cap_lines.append(f"c{node} {node} 0 {extra*1e3:g}f")
+        if cell_inverts(cell):
+            invert_parity = not invert_parity
+
+    td = 2.0
+    pw = max(8.0, 24.0 * tr_ns)
+    per = 2.0 * (td + tr_ns + pw)
+    stop = per * 1.2
+    step = max(0.001, tr_ns / 100.0)
+    # output-fall arc: for even parity a falling INPUT yields a falling output;
+    # for odd parity a rising input does. Same logic mirrored for output-rise.
+    in_edge_for_fall = "RISE" if invert_parity else "FALL"
+    in_edge_for_rise = "FALL" if invert_parity else "RISE"
+    deck = [
+        f"* spm critical-PATH stitch ({n} stages, HP18E80 {corner}, {temp_c:g}C)",
+        f".lib '{shim_abs}' {corner}",
+        f".temp {temp_c:g}",
+        f"vdd vdd 0 {vdd:g}",
+        f"vin a 0 pulse(0 {vdd:g} {td:g}n {tr_ns:g}n {tr_ns:g}n {pw:g}n {per:g}n)",
+    ]
+    deck += body_lines + cap_lines + subckt_defs
+    deck += [
+        f".tran {step:g}n {stop:g}n",
+        f".meas tran tpd_fall TRIG v(a) VAL='{vth:g}' {in_edge_for_fall}=1 "
+        f"TARG v(pout) VAL='{vth:g}' FALL=1",
+        f".meas tran tpd_rise TRIG v(a) VAL='{vth:g}' {in_edge_for_rise}=1 "
+        f"TARG v(pout) VAL='{vth:g}' RISE=1",
+        f".meas tran vpout_max MAX v(pout)",
+        f".meas tran vpout_min MIN v(pout)",
+        ".end\n",
+    ]
+    return "\n".join(deck)
+
+
+_PATH_MEAS_RE = re.compile(
+    r"^\s*(tpd_fall|tpd_rise|vpout_max|vpout_min)\s*=\s*"
+    r"([\-+]?[0-9.]+(?:[eE][\-+]?\d+)?)", re.MULTILINE | re.IGNORECASE)
+
+
+def parse_path_meas(stdout: str) -> dict:
+    """Extract tpd_fall/tpd_rise (s) + vpout_max/min (V) from a transcript."""
+    out = {}
+    for m in _PATH_MEAS_RE.finditer(stdout or ""):
+        try:
+            out[m.group(1).lower()] = float(m.group(2))
+        except ValueError:
+            pass
+    return out
+
+
+def _pick_sta_report(project: Path, subckt_names: set) -> Optional[Path]:
+    """Pick the STA report whose critical path exposes the most stitchable
+    combinational stages (SPEF-based post-route report preferred; a bare
+    flop→port estimate path scores 0)."""
+    cands: List[Path] = []
+    sta_dir = _pl.sta_dir(project)
+    if sta_dir.is_dir():
+        cands += sorted(sta_dir.glob("*.rpt"))
+    pnr_rpt = project / "phase3" / "stage3" / "pnr" / "sta.rpt"
+    if pnr_rpt.is_file():
+        cands.append(pnr_rpt)
+    best, best_score = None, 0
+    for c in cands:
+        try:
+            score = sta_path_stitch_score(c.read_text(errors="replace"),
+                                          subckt_names)
+        except OSError:
+            continue
+        if score > best_score:
+            best, best_score = c, score
+    return best
+
+
+def _find_gate_netlist(project: Path) -> Optional[Path]:
+    """Locate the routed gate-level Verilog netlist."""
+    for rel in ("phase3/stage3/pnr/spm_pnr.v",):
+        p = project / rel
+        if p.is_file():
+            return p
+    pnr = project / "phase3" / "stage3" / "pnr"
+    if pnr.is_dir():
+        vs = sorted(pnr.glob("*_pnr.v")) or sorted(pnr.glob("*.v"))
+        return vs[0] if vs else None
+    return None
+
+
+def run_hp18e80_path_correlation(
+    project: Path,
+    container: str = _DEFAULT_CONTAINER,
+    corner: str = "ttt_lv",
+    slew_ns: float = 0.4,
+    max_stages: int = 12,
+) -> Optional[dict]:
+    """Run REAL ngspice on the STITCHED STA critical path and correlate the
+    end-to-end SPICE path delay against the STA-reported path delay. Writes
+    reports/phase3/spice_path_correlation.json. Returns the report dict, or
+    None on an honest skip (missing shim/liberty/netlist/SPEF/ngspice, no
+    stitchable stage, or a non-swinging deck).
+
+    §4.05: only design-input + PDK read. NDA: PDK content never emitted."""
+    shim = _find_bridge_shim(project)
+    if not shim:
+        return None
+    liberty = _find_liberty_typ(project)
+    cells_spice = _pl.extracted_dir(project) / "cells.spice"
+    spef = next(iter(sorted(_pl.extracted_dir(project).glob("*.spef"))), None)
+    netlist = _find_gate_netlist(project)
+    hspice_dir = _find_hspice_dir(project)
+    if not (liberty and cells_spice.is_file() and spef and netlist
+            and hspice_dir):
+        return None
+    if _resolve_ngspice(container) is None:
+        return None
+
+    cells_text = cells_spice.read_text(errors="replace")
+    subckt_names = set(re.findall(r"(?im)^\.SUBCKT\s+(\S+)", cells_text))
+    sta_rpt = _pick_sta_report(project, subckt_names)
+    if not sta_rpt:
+        return None
+    sta_path = parse_sta_path(sta_rpt.read_text(errors="replace"))
+    if not sta_path or sta_path["path_delay_ns"] <= 0:
+        return None
+
+    inst_map = parse_verilog_instances(netlist.read_text(errors="replace"))
+    spef_caps = parse_spef_caps(spef.read_text(errors="replace"))
+    lib_text = liberty.read_text(errors="replace")
+    resolved = resolve_path_stages(sta_path, inst_map, spef_caps,
+                                   subckt_names, lib_text, max_stages)
+    if not resolved:
+        return None
+
+    # extract + cache each stage's subckt (renamed nmos→nch_tn / pmos→pch_tn)
+    subckts: dict = {}
+    for st in resolved["stages"]:
+        if st["cell"] not in subckts:
+            sub = extract_subckt(cells_text, st["cell"])
+            if not sub:
+                return None
+            subckts[st["cell"]] = sub
+
+    hdr = parse_liberty_header(lib_text)
+    vdd = hdr["nom_voltage"] or 1.8
+    vth = vdd * (hdr["output_threshold_fall"] / 100.0)
+    temp_c = hdr["nom_temperature"]
+    tr_ns = pulse_tr_for_slew(slew_ns, hdr["slew_lower_fall"],
+                              hdr["slew_upper_fall"], hdr["slew_derate"])
+
+    deck = build_path_deck(str(shim.resolve()), corner, resolved["stages"],
+                           subckts, vdd, tr_ns, temp_c, vth,
+                           resolved["endpoint_load_pf"])
+    out_dir = _pl.spice_dir(project)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    deck_path = out_dir / "corr_path_critical.spice"
+    deck_path.write_text(deck)
+    ok, txt = _run_ngspice_in(container, str(hspice_dir.resolve()),
+                              str(deck_path.resolve()))
+    (out_dir / "corr_path_critical.log").write_text(txt)
+    meas = parse_path_meas(txt)
+
+    # honesty backstop: the endpoint node must actually swing ≥ 50 % VDD, else
+    # the sensitisation was wrong for this gate family — skip, never fabricate.
+    swing = meas.get("vpout_max", 0.0) - meas.get("vpout_min", 0.0)
+    if swing < 0.5 * vdd:
+        return None
+
+    sta_delay_ns = sta_path["path_delay_ns"]
+    direction = sta_path["endpoint_transition"]  # STA-reported endpoint edge
+    primary_key = "tpd_fall" if direction == "fall" else "tpd_rise"
+    spice_s = meas.get(primary_key)
+    if spice_s is None or spice_s <= 0:
+        return None
+    pct = correlation_pct(spice_s, sta_delay_ns)
+    verdict = ("CRITICAL_MISMATCH" if abs(pct) > 25 else
+               "MISMATCH" if abs(pct) > 10 else "CORRELATED")
+
+    arcs = []
+    for key, arc in (("tpd_fall", "fall"), ("tpd_rise", "rise")):
+        v = meas.get(key)
+        if v is not None and v > 0:
+            arcs.append({"arc": arc, "spice_delay_ns": round(v * 1e9, 6),
+                         "is_sta_direction": arc == direction})
+
+    report = {
+        "program": "spice_correlation_check.hp18e80_path_driver",
+        "version": "1.2.0",
+        "provenance": "real_ngspice",
+        "simulator": "ngspice (vibeic-eda container)",
+        "reference": f"sta_report ({sta_rpt.name})",
+        "pdk_bridge": f"{shim.name} :: {corner}",
+        "corner": f"{corner} / {vdd:g}V / {temp_c:g}C",
+        "netlist_source": "phase3/stage3/extracted/cells.spice "
+                          "(LVS-extracted; nmos→nch_tn / pmos→pch_tn; "
+                          "bulk normalised to rails)",
+        "path": {
+            "startpoint": sta_path["startpoint"],
+            "endpoint": sta_path["endpoint"],
+            "sta_endpoint_transition": direction,
+            "stages": [
+                {"stage": i, "inst": s["inst"], "cell": s["cell"],
+                 "toggle_pin": s["toggle_pin"], "out_pin": s["out_pin"],
+                 "out_net": s["out_net"],
+                 "net_wire_cap_ff": round(s["wire_cap_pf"] * 1e3, 4)}
+                for i, s in enumerate(resolved["stages"])
+            ],
+            "endpoint_load_ff": round(resolved["endpoint_load_pf"] * 1e3, 4),
+        },
+        "operating_point": {
+            "input_slew_ns": slew_ns,
+            "input_pulse_tr_ns": round(tr_ns, 6),
+            "delay_threshold_v": round(vth, 4),
+            "note": ("path input driven at the plugin nominal characterisation "
+                     "slew; mid-path slews propagate physically through the "
+                     "stitched stages (not assumed)."),
+        },
+        "correlation": {
+            "spice_path_delay_ns": round(spice_s * 1e9, 6),
+            "sta_path_delay_ns": round(sta_delay_ns, 6),
+            "pct_error": round(pct, 3),
+            "stages_correlated": resolved["covered"],
+            "stages_total_combinational": resolved["total_comb"],
+            "tolerance_pct": 10.0,
+            "verdict": verdict,
+        },
+        "arcs": arcs,
+        "logs": ["corr_path_critical.log"],
+        "design_identity": {"design": project.name},
+        "nda_note": "PDK model/liberty content read at runtime only; not emitted.",
+    }
+    # Sibling of the single-cell spice_correlation.json under reports/phase3/
+    # (kept next to it explicitly, so both Step-30 correlation artifacts live
+    # in the phase-3 report folder rather than the audit fallback bucket).
+    out_path = _path_correlation_json_path(project)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(report, indent=2, ensure_ascii=False))
+    return report
+
+
+def _path_correlation_json_path(project: Path) -> Path:
+    """Canonical location of the full-path correlation report (reports/phase3/,
+    beside the single-cell spice_correlation.json)."""
+    return _pl.reports_dir(project) / "phase3" / "spice_path_correlation.json"
+
+
+def _check_path_correlation_json(project: Path) -> Optional[dict]:
+    """Load spice_path_correlation.json if already produced."""
+    return _load_json(_path_correlation_json_path(project))
+
+
 def run_audit(project: Path, run_spice: bool = True,
               container: str = _DEFAULT_CONTAINER) -> AuditResult:
     result = AuditResult()
@@ -909,6 +1509,42 @@ def run_audit(project: Path, run_spice: bool = True,
                     f"{c.get('samples')} arcs, max |Δ|={c.get('max_abs_pct')}% "
                     f"vs liberty NLDM → {c.get('verdict')}"),
             ))
+
+    # ── Step-30 (additive): REAL ngspice FULL critical-PATH correlation ──
+    # Stitch the STA critical-path cells' extracted transistor subckts into one
+    # ngspice deck and correlate the end-to-end SPICE path delay against the
+    # STA-reported path delay. Honest skip (no numbers) when inputs/simulator
+    # are unavailable or the stitched deck fails to swing.
+    path_report = None
+    if run_spice and _check_path_correlation_json(project) is None \
+            and _find_bridge_shim(project) is not None:
+        try:
+            path_report = run_hp18e80_path_correlation(
+                project, container=container)
+        except Exception as e:  # never let the driver crash the gate
+            result.findings.append(Finding(
+                rule="SPICE_PATH_DRIVER_ERROR",
+                severity="INFO",
+                message=f"HP18E80 ngspice path-correlation driver could not run: {e}",
+            ))
+    else:
+        path_report = _check_path_correlation_json(project)
+    if path_report is not None:
+        pc = path_report.get("correlation", {})
+        sev = "ERROR" if pc.get("verdict") in (
+            "MISMATCH", "CRITICAL_MISMATCH") else "INFO"
+        result.findings.append(Finding(
+            rule=("SPICE_PATH_" + ("MISMATCH" if sev == "ERROR"
+                                   else "CORRELATED")),
+            severity=sev,
+            message=(
+                f"Real ngspice path correlation "
+                f"({pc.get('stages_correlated')}/"
+                f"{pc.get('stages_total_combinational')} combinational stages): "
+                f"SPICE={pc.get('spice_path_delay_ns')}ns vs "
+                f"STA={pc.get('sta_path_delay_ns')}ns "
+                f"({pc.get('pct_error')}%) → {pc.get('verdict')}"),
+        ))
 
     spice_results = _find_spice_results(project)
     spice_decks = _find_spice_decks(project)
