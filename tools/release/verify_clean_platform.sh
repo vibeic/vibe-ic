@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # verify_clean_platform.sh — vibe-ic release reproducibility gate.
 #
-# Goal (RELEASE_READINESS.md gap #1): on a fresh platform, prove the install is
+# Goal: on a fresh platform, prove the install is
 # whole and REPRODUCES our verified benchmark scores — deterministically, no
 # reference answers touched.
 #
@@ -97,8 +97,8 @@ reproduce "VerilogEval-Human (blind samples)" \
 # NOTE: the numbers above are a DETERMINISTIC re-score of committed samples — it
 # proves the tools+samples+scorer reproduce the published number bit-for-bit. The
 # stronger claim (a fresh §4.05 Benchmark-Agent blind run on Opus 4.8 reaches the
-# same score in one round) requires live agents and is the agent-driven path in
-# RELEASE_READINESS.md §4b — it cannot run inside this shell gate.
+# same score in one round) requires live agents (the agent-driven path) — it
+# cannot run inside this shell gate.
 
 # ── Summary ─────────────────────────────────────────────────────────────────
 hdr "Summary"

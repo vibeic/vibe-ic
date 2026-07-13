@@ -36,7 +36,9 @@ checkers (no fabrication, no hallucinated PASS).
 │       └── benchmark/            benchmark harness + registry
 ├── IP/                         open-core git submodules (serv · ibex · sha256 · opentitan)
 ├── benchmark-data/             benchmark inputs + results (ic/<6 ICs> + evaluation/)
-├── tools/                      repo dev / CI utilities
+├── benchmark_external/         external-benchmark harness notes (CVDP legal-input definition)
+├── tools/                      repo dev / CI utilities (second pytest tree)
+├── docs/                       repo-level guides — INSTALL.md · governance runbook
 ├── LICENSE                     Apache-2.0
 ├── NOTICE                      Third-party attributions
 ├── CONTRIBUTING.md             How to contribute
@@ -266,12 +268,35 @@ guaranteed by the **gates**, not by an author≠approver split.
 
 ---
 
-## Companion project
+## Related repos (the `vibeic` org)
 
-**[Awesome Open IC](https://github.com/vibeic/awesome-open-ic)** — a
-curated, MCP-aware map of every open-source IC design tool, IP core,
-PDK, benchmark, standard, and community we have evaluated. Each entry
-notes whether the bundled MCP-EDA server already wraps it.
+Vibe-IC is deliberately split into purpose-scoped repos under
+[github.com/vibeic](https://github.com/vibeic), wired together by explicit
+version contracts (this plugin pins the `vibeic-eda` image tag; `vibeic-eda`
+pins each fork's SHA). This repo — the **plugin** — is the one you install.
+
+```
+11 forked EDA tools ──▶ vibeic-eda ──▶ vibe-ic ──▶ you
+(OpenROAD·klayout·      (Docker image)  (this repo:   (Claude Code)
+ magic·netgen·yosys·                     the plugin)
+ iverilog·verilator·                        │
+ ngspice·cocotb·sby·                        ▼
+ pyuvm — each a real                    vibe-ic-studio
+ fork, upstream-tracked)               (web control surface)
+```
+
+- **[vibeic-eda](https://github.com/vibeic/vibeic-eda)** — the forked +
+  bug-fixed open-source EDA toolchain, shipped as a Docker image. Rebuilds when
+  a fork changes, not when this plugin changes.
+- **The EDA forks** (OpenROAD, KLayout, Magic, Netgen, Yosys, Icarus, Verilator,
+  ngspice, cocotb, sby, pyuvm) — each stays its **own** fork repo so upstream
+  fixes can be pulled and our fixes contributed back. They are never vendored
+  into this plugin.
+- **[vibe-ic-studio](https://github.com/vibeic/vibe-ic-studio)** — the web
+  control surface (Platform + Project layers), deployed independently.
+- **[Awesome Open IC](https://github.com/vibeic/awesome-open-ic)** — a curated,
+  MCP-aware map of every open-source IC tool, IP core, PDK, benchmark, and
+  standard we have evaluated (notes whether MCP-EDA already wraps each).
 
 ---
 
