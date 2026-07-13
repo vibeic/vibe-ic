@@ -92,8 +92,6 @@ python3 vibe-ic-marketplace/plugins/vibe-ic/programs/vibe_ic_one_shot_runner.py 
 **Mode B — dialogue:** open Claude with the plugin and describe your chip in plain
 language. Claude (as IC Expert Agent) elicits the spec, fills gaps, and runs the flow.
 
-See `docs/GUIDE_MAP.md` for all entry paths, convergence loops, and expected results.
-
 ## Step 5 — Verify the install reproduces our numbers
 
 ```bash
