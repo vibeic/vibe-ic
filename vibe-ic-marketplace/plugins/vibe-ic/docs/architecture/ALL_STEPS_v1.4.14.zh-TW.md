@@ -24,10 +24,9 @@
 
 | Agent | 做什麼 |
 |---|---|
-| **PM Agent** | 面對使用者：把自然語言需求轉成設計事實，缺什麼就用白話一次問一題，確認後交棒。 |
-| **IC Expert Agent** | 在 PM 後方：以矽智財專業審查每一層、補上合理預設值、做跨層一致性檢查。不直接面對使用者。 |
+| **IC Expert Agent** | Phase-1 的唯一入口：以白話直接面對使用者、把自然語言需求轉成設計事實（缺什麼就白話一次問一題），再以矽智財專業審查每一層、補上合理預設值、做跨層一致性檢查。 |
 
-流程：使用者自由文字 → PM Agent → IC Expert Agent → 定稿 L 系列文件。
+流程：使用者自由文字 → IC Expert Agent → 定稿 L 系列文件。
 
 ### doc-gen 路徑 D1–D5（輸入是既有文件時）
 
@@ -167,7 +166,7 @@
 
 | Phase | Stages | Steps |
 |---|---|---|
-| Phase 1 — 規格與文件 | 兩條入口（Agent・doc-gen）＋架構探索前端 | D1–D5 + PM Agent・IC Expert Agent |
+| Phase 1 — 規格與文件 | 兩條入口（Agent・doc-gen）＋架構探索前端 | D1–D5 + IC Expert Agent |
 | Phase 2 — RTL → 合成 | Stage 1・Stage 2 | 1–14 |
 | Phase 3 — 實體 → Tapeout | Stage 3・Stage 4・Stage 5 | 15–44 |
 | 並行 | Analog・Mixed-signal | A1–A9・M1–M4 |
@@ -205,4 +204,4 @@ MBIST/LBIST/EDT 壓縮（開源無引擎）、BSR/BSDL、自動 clock-gating
 
 授權與 IP：全流程僅依賴開源工具（Apache-2.0 專案；商用工具防火牆與產出物歸屬見 repo 根目錄 `README.md` §IP ownership 與 `CONTRIBUTING.md` 的 DCO/專利承諾）。
 
-英文正本：`ALL_STEPS.md`。
+英文正本：`ALL_STEPS_v1.4.14.md`。
