@@ -1,6 +1,6 @@
 {
  "_doc": "IC Expert DB — structured, chip-AGNOSTIC design-class knowledge (algorithm correctness / interface convention / latency-reset discipline / common traps). Consumed by the GENERAL Vibe-IC path (design_one_shot_runner spec-to-rtl / ic-expert authoring) via _lesson_digest-style retrieval. ADVISORY layer: never overrides a gate/program verdict — consistency enforced by ic_expert_db_consistency_check.py.",
- "_schema": "entries[].{ic_class, lesson_count, lessons[]}",
+ "_schema": "entries[].{ic_class, lesson_count, lessons[], related?[] (optional cross-links to sibling ic_class names sharing a core craft)}",
  "_source": "distilled from proven-correct (officially-scored PASS) reference designs; benchmark identifiers scrubbed at build time (blindness).",
  "_consistency": "lessons are DESIGN-CRAFT ADVICE for the AI author; they add knowledge, they do NOT assert hard rules that a gate/program checks. No lesson may contradict a deterministic gate.",
  "classes": 93,
@@ -11,6 +11,11 @@
    "lesson_count": 1,
    "lessons": [
     "In accumulator/weighted-sum datapaths, resolve width lint by making every operation full-width at its source rather than letting the tool truncate: size the accumulator with explicit guard bits (ACC_WIDTH = DATA_WIDTH + N), cast BOTH operands of a product/add to that width before the operator (e.g. ACC_WIDTH'(data_in) * ACC_WIDTH'(WEIGHT)) so the product is never implicitly widened/truncated, and take an explicit slice ([DATA_WIDTH-1:0]) only when writing back to a narrower output. Also honor signed-ness parameters (sign- vs zero-extend per SIGNED_INPUTS) and reference every declared parameter so no port/param is flagged unused — all while preserving the original functional behavior."
+   ],
+   "related": [
+    "iterative-datapath-accumulator",
+    "mac-accumulator",
+    "sequential-multiplier"
    ]
   },
   {
@@ -25,6 +30,11 @@
    "lesson_count": 1,
    "lessons": [
     "When a spec says a register \"updates on the rising edge of <signal>\", model that signal as an actual clock (`always @(posedge signal or negedge presetn)`) rather than sampling it in the main clock domain — the checker drives that signal as a clock edge, so a synchronizer/edge-detector approach would miss updates. Correspondingly, implement glitch-free clock gating by latching the enable on the OPPOSITE (negedge) clock edge before ANDing with the clock (`gated_clk = pclk & enable_latched_on_negedge`), and give misprediction-restore strict priority over the normal LSB shift-in. For the APB CSR wrapper: register-map reads must zero-extend reserved bits, read-only registers must silently ignore writes, and pslverr must assert only on invalid addresses during a qualified (pselx && penable) access with zero wait states (pready held high)."
+   ],
+   "related": [
+    "apb-master-fsm",
+    "apb-peripheral-mmio",
+    "apb-register-peripheral-pwm"
    ]
   },
   {
@@ -32,6 +42,11 @@
    "lesson_count": 1,
    "lessons": [
     "An APB (or any request/enable two-phase) master must implement the mandated IDLE->SETUP->ACCESS sequence where PSEL/PWRITE/PADDR/PWDATA are driven and held stable across BOTH the SETUP and ACCESS phases while PENABLE is asserted ONLY in ACCESS (never in SETUP), and the transfer completes exactly when PREADY is sampled high in ACCESS. Latch the address/data at capture time (in IDLE), keep them stable until completion, and add a bounded timeout counter so a stuck slave (PREADY never high) forces a clean return to IDLE with all outputs deasserted rather than hanging. When multiple event sources can fire, resolve them with a fixed priority if-else chain so exactly one request is captured deterministically."
+   ],
+   "related": [
+    "apb-csr-shift-register",
+    "apb-peripheral-mmio",
+    "apb-register-peripheral-pwm"
    ]
   },
   {
@@ -53,6 +68,11 @@
    "lesson_count": 1,
    "lessons": [
     "For an APB-attached peripheral, drive PREADY and PSLVERR only in the ACCESS phase (PSEL & PENABLE) and, for a zero-wait-state slave, assert PREADY=1 that same cycle while qualifying PSLVERR combinationally in the same phase (invalid-address decode OR out-of-bounds resource access) — then deassert both when not selected; a write to an undecoded address must set PSLVERR and perform NO register write. When such a peripheral spans two clock domains (e.g. APB PCLK vs a faster DSP clock) never use a bare combinational clock MUX — use a glitch-free dual-flop cross-disabled selector so only one clock source is gated in at a time, and give shared memory a combinational read port so operand capture sees fresh data with no registered-read latency skew on back-to-back control writes."
+   ],
+   "related": [
+    "apb-csr-shift-register",
+    "apb-master-fsm",
+    "apb-register-peripheral-pwm"
    ]
   },
   {
@@ -60,6 +80,11 @@
    "lesson_count": 1,
    "lessons": [
     "An APB-mapped peripheral must implement the two-phase protocol as a small state bit: SETUP is psel & ~penable, ACCESS is psel & penable, and pready/pslverr/prdata are registered to assert exactly in the ACCESS cycle (pslverr = \"address not decoded\"); writes commit and reads mux only during ACCESS. When the task is area optimization under a functional-equivalence constraint, restructure only the combinational cloud (e.g. collapse the temperature-to-duty thresholds into one priority ternary, share address-decode terms) while leaving the registered interface timing, reset defaults, and the free-running PWM comparator (fan_pwm_out = counter < duty) bit-identical — changing any cycle of the handshake or a reset value breaks equivalence even if the datapath logic is smaller."
+   ],
+   "related": [
+    "apb-csr-shift-register",
+    "apb-master-fsm",
+    "apb-peripheral-mmio"
    ]
   },
   {
@@ -67,6 +92,11 @@
    "lesson_count": 1,
    "lessons": [
     "For an area/logic-optimization pass whose scoring gate is strict functional equivalence plus a fixed area-reduction threshold, the win comes from computing each wide input pattern-match ONCE as a shared named combinational term and reusing it across every consumer (type field, encoded words, output mux) — eliminating the duplicated comparator/mux network the naive version builds by re-evaluating the same conditions in multiple functions. The equivalence-preserving traps: keep the ORIGINAL priority order of the if/else-if chain identical (overlapping patterns resolve by first-match, so reordering changes results), keep the exact register set and clock/reset discipline (same async active-high reset, same one-cycle latency — registered outputs must appear the same cycle), and drive the final output framing mux from the CURRENT-cycle control bus exactly as before so no combinational/sequential boundary shifts."
+   ],
+   "related": [
+    "area-optimization-refactor",
+    "merge-sort-engine-fsm",
+    "signed-saturating-accumulator-fsm"
    ]
   },
   {
@@ -74,6 +104,11 @@
    "lesson_count": 1,
    "lessons": [
     "For area/timing-optimization tasks the ONLY invariant is cycle-accurate functional equivalence at the sampled interface, so refactor freely but preserve every observable timing edge: merge multiple always blocks into one clocked process by keeping each assignment's original pre-edge (RHS) operands (nonblocking semantics guarantee the merged block reproduces the same cycle-by-cycle values), and you may drop a whole output register + its load mux only if you can drive the same value combinationally from a surviving register at the exact sample point (here the RX word is shifted into the MSBs and re-aligned to the LSBs per width-select via a >> mux, avoiding an indexed demux write). Any latency change the spec permits must be explicit and uniform; do not silently alter the done/valid handshake cadence the checker keys on."
+   ],
+   "related": [
+    "area-optimization-equivalence",
+    "merge-sort-engine-fsm",
+    "signed-saturating-accumulator-fsm"
    ]
   },
   {
@@ -83,6 +118,11 @@
     "A dual-clock FIFO must use (ADDR_WIDTH+1)-bit Gray-coded pointers passed through 2-flop synchronizers, and the full/empty tests must operate on the GRAY (not binary) values so a single-bit transit through the CDC never mis-decodes. Empty is asserted when the local read Gray pointer equals the synchronized write Gray pointer; full is asserted when the write Gray pointer equals the synchronized read Gray pointer with its TOP TWO bits inverted (the Gray-domain equivalent of \"MSB differs, all lower bits equal\") — inverting only the MSB is the classic trap that breaks the full flag. Increment enables must be gated (w_inc & ~w_full, r_inc & ~r_empty) and each pointer/synchronizer pair reset in its own clock domain's async-reset block.",
     "Cummings-style async FIFO: the binary->Gray conversion is pure combinational, but the Gray-coded pointer itself must be REGISTERED in a sequential block SEPARATE from the one that increments the binary pointer, so the registered Gray pointer reflects the pre-increment binary value and therefore lags the binary pointer by exactly one clock. Computing next-binary and next-Gray together and latching both in one block (though it looks equivalent) makes the full/empty flags take effect one cycle early relative to the data, misaligning them against a cycle-accurate reference.",
     "A block/active/full flag that gates admission of new items must drop the cycle the LAST item is CAPTURED (written) into the storage element — NOT after a downstream consumer finishes draining it. Coupling the admission flag to consumer-side drain completion instead of producer-side capture is a common off-by-N-cycles defect in FIFO/queue datapaths."
+   ],
+   "related": [
+    "cdc-mux-synchronizer",
+    "edge-interval-monitor",
+    "glitch-free-clock-mux"
    ]
   },
   {
@@ -104,6 +144,11 @@
    "lesson_count": 1,
    "lessons": [
     "A source-buffer-to-AXI-Stream bridge must be a single FSM that (1) honors the upstream read latency — a strobe/read-enable pulse produces data N cycles later, so latch the word only after the fixed wait, never in the same cycle as the strobe; and (2) once o_axi_valid is asserted, holds tdata/tlast/tuser and valid stable and advances (accepts the next word or deasserts valid) ONLY on the handshake o_axi_valid && i_axi_ready — stalling in place when the sink is not ready so no beat is dropped. Compute tlast from BOTH the per-word last-marker and the running beat count reaching the advertised block size, and drive one read-strobe pulse per beat (default-low each cycle)."
+   ],
+   "related": [
+    "axi-stream image-frame processor",
+    "axi-stream-datawidth-upsizer",
+    "axi-stream-width-downsizer"
    ]
   },
   {
@@ -111,6 +156,11 @@
    "lesson_count": 1,
    "lessons": [
     "When an AXI-Stream stage changes pixel cardinality (resize drops pixels, border adds a 1-pixel ring so the frame grows to (W+2)x(H+2)), do NOT try to pass-through the stream combinationally — decouple input and output with a full-frame buffer RAM and two separate FSM phases: a RECEIVE phase that asserts s_axis_tready only while filling (tready = resetn & receiving) and writes on tvalid&&tready, then an EMIT phase that advances output x/y counters ONLY on (m_axis_tvalid && m_axis_tready) and reads the buffer with an explicit computed index (downsample: src=(i/NX)*SY*W_IN+(i%NX)*SX; border: inner=(oy-1)*W+(ox-1), forcing BORDER_COLOR when ox/oy hit the 0 or W+1/H+1 edges). This store-and-forward decoupling is what keeps rate mismatch, backpressure stalls, and tlast/tuser (end-of-row / start-of-frame) alignment correct — a naive streaming author gets index off-by-one and stalls wrong because in/out counts differ."
+   ],
+   "related": [
+    "axi-stream",
+    "axi-stream-datawidth-upsizer",
+    "axi-stream-width-downsizer"
    ]
   },
   {
@@ -118,6 +168,11 @@
    "lesson_count": 1,
    "lessons": [
     "For an AXI-Stream width upsizer with format/sign-extension, keep the widen logic purely combinational and place exactly ONE register stage on the payload+valid path so m_axis_valid/m_axis_data appear the cycle AFTER s_axis_valid (1-cycle latency); pass s_axis_ready straight through from m_axis_ready combinationally so a slave transfer is accepted only in cycles the downstream can absorb the pipelined result. The subtle trap is bit assembly when format-enabled: the carried/sign bit REPLACES the original MSB and drives the upper fill, so the output is {fill[N], carry_bit, data[MSB-1:0]} — do NOT blindly zero-extend or concatenate the full source word, and gate the type/sign options behind the enable so disabled mode is a plain zero-extend."
+   ],
+   "related": [
+    "axi-stream",
+    "axi-stream image-frame processor",
+    "axi-stream-width-downsizer"
    ]
   },
   {
@@ -125,6 +180,11 @@
    "lesson_count": 1,
    "lessons": [
     "A width downsizer (N-wide word -> k narrower beats) must be a phase-counting state machine that captures the wide word into a holding register on the accepting cycle, then emits the sub-words in a fixed, agreed byte order (here high byte first) across the following beats, deasserting s_ready during the multi-beat drain so the slave word is not overwritten mid-split. Emit each sub-word from the captured register (not the live input, which may change), keep m_valid high for every beat of the split, and register outputs synchronously off the active-low sync reset — a naive combinational passthrough loses the second beat and corrupts data."
+   ],
+   "related": [
+    "axi-stream",
+    "axi-stream image-frame processor",
+    "axi-stream-datawidth-upsizer"
    ]
   },
   {
@@ -153,6 +213,9 @@
    "lesson_count": 1,
    "lessons": [
     "Iterative in-order traversal of a pointer-based tree in hardware needs an EXPLICIT LIFO stack plus a null-pointer encoding one bit wider than the index (PW=clog2(N)+1, NULL=all-ones) so node index 0 is distinguishable from \"no child\" — a plain clog2(N)-bit pointer cannot represent null. Structure the FSM so every visited node costs a FIXED, deterministic number of cycles (here 3: store-key/pop, assign-right-child, re-check via the left/push state) rather than a variable descent, because spec latency formulas (e.g. 4*ARRAY_SIZE+3) assume constant per-node cost; and latch data_in at start so mid-operation input changes are ignored."
+   ],
+   "related": [
+    "lifo-stack"
    ]
   },
   {
@@ -195,6 +258,11 @@
    "lesson_count": 1,
    "lessons": [
     "When a control/handshake signal crosses into a SLOWER clock domain through a 2-flop synchronizer, it must be driven as a LEVEL held until acknowledged — never a single-cycle pulse. A one-cycle pulse in the source domain can fall entirely between two active edges of the slower capture clock and be missed. Correct pattern: set the level when the event fires, hold it, and clear it only after the far-domain response (re-synchronized request/ack) confirms the transfer, forming a full four-phase handshake robust to any clock-frequency ratio."
+   ],
+   "related": [
+    "async-fifo-cdc",
+    "edge-interval-monitor",
+    "glitch-free-clock-mux"
    ]
   },
   {
@@ -231,6 +299,9 @@
    "lessons": [
     "A change/edge detector must compare the current input against a REGISTERED previous sample (delayed by one clock) — the combinational XOR of input vs its own flop is the pulse. When the spec dictates a specific pulse LATENCY (\"pulse one cycle AFTER the change\"), count the flop stages literally: the sequential path must add exactly that many registers (here the per-bit XOR pulse is captured into a register, then OR-reduced into the output register on the next edge), because the checker samples the output at an exact cycle. Also apply the enable/mask BEFORE the reduction and honor async-reset init on every stored state, so disabled/reset cycles produce clean zero pulses rather than stale carry-over.",
     "Pattern/pulse detectors: when the spec's worked example shows the output asserting in the SAME cycle the pattern completes (e.g. an input stream and its output response line up with no extra cycle of delay), make the detect output MEALY — a combinational function of the already-registered state and the current input — even if the prose says to set the output 'inside the clocked always block'. Registering the output (Moore) inserts one extra cycle and shifts the asserted cycle late by one; trace the worked example bit-for-bit to decide Mealy vs Moore rather than following the prose's block-placement hint."
+   ],
+   "related": [
+    "event-triggered-accumulator"
    ]
   },
   {
@@ -238,6 +309,11 @@
    "lesson_count": 1,
    "lessons": [
     "A cross-clock edge-interval monitor must (1) detect the far-clock edge by sampling it into the local clk domain and comparing against a registered previous sample (edge = cur & ~prev), (2) measure the interval by counting local clk cycles and only latch/compare the COMPLETED interval on each detected edge (compare edge_count against threshold at the edge, then restart the counter at 1 that same cycle), and (3) suppress false positives during warm-up before the first valid interval exists (gate the comparison with a free-running cycle counter and reject the zero/uninitialized interval). The single-cycle flag must be produced as a default-low pulse so it self-clears the next cycle unless re-triggered."
+   ],
+   "related": [
+    "async-fifo-cdc",
+    "cdc-mux-synchronizer",
+    "glitch-free-clock-mux"
    ]
   },
   {
@@ -245,6 +321,9 @@
    "lesson_count": 1,
    "lessons": [
     "For \"one update per distinct input event\" accumulators, you must detect the event with registered previous-value comparators (a!=a_prev / sel!=sel_prev), not accumulate every clock — otherwise identical held inputs get counted repeatedly. Prioritize the control-change branch (re-init/seed with the current sample) over the data-change branch so a new run starts fresh instead of adding to stale state, and update the *_prev registers unconditionally every cycle so change detection stays a true one-cycle edge. Encode bipolar {-1,+1} math on signed regs and let natural signed overflow/wrap be the intended behavior at the declared width."
+   ],
+   "related": [
+    "edge-change-detector"
    ]
   },
   {
@@ -286,6 +365,11 @@
    "lesson_count": 1,
    "lessons": [
     "A glitch-free clock mux must NOT combinationally decode `sel` onto the output. Instead cross-couple two per-clock enable registers so each clock's enable depends on the OTHER clock's enable being deasserted (clk1_en <= f(sel) & ~clk2_en, clk2_en <= f(sel) & ~clk1_en). This break-before-make handshake guarantees the two enables are never high at once, and each enable is retimed into its own clock domain so the AND-gate mask (clk & clk_en) only ever toggles while its clock is at the safe (idle) level — preventing runt/glitch pulses on clkout during the switch. Also route the async reset to force clkout low, and honor the spec's chosen sampling edge (posedge here vs the textbook negedge second stage) since the checker samples at exact edges."
+   ],
+   "related": [
+    "async-fifo-cdc",
+    "cdc-mux-synchronizer",
+    "edge-interval-monitor"
    ]
   },
   {
@@ -314,6 +398,11 @@
    "lesson_count": 1,
    "lessons": [
     "For iterative fixed-point update datapaths (SGD/DSP accumulators), compute each intermediate (product, error, delta) in a full-width signed register wide enough to never overflow (per the spec's derived widths), but let the final state register assignment IMPLICITLY TRUNCATE the wide sum to its DATA_WIDTH low bits — i.e. w_reg <= w_reg + delta_w where the RHS is wider than DATA_WIDTH. The trap: forcing everything to DATA_WIDTH early (losing precision mid-computation) or, conversely, saturating/sign-extending the final store instead of taking LSBs. The reference model's bit-limit is a wrap/mod-2^W truncation, matched by SystemVerilog's natural narrow-target assignment, and every operand/localparam must be declared signed so the multiplies are signed."
+   ],
+   "related": [
+    "accumulator-datapath",
+    "mac-accumulator",
+    "sequential-multiplier"
    ]
   },
   {
@@ -321,6 +410,9 @@
    "lesson_count": 1,
    "lessons": [
     "A bit-serial restoring divider needs a (WIDTH+1)-bit partial-remainder register: each iteration shift-left-brings-in-the-next-dividend-MSB then trial-subtract the zero-extended divisor, and use the extra MSB (sign/borrow bit) of the subtraction to decide — if 0 the divisor fits so keep the difference and set quotient bit 1, if 1 restore the pre-subtract value and set quotient bit 0. The quotient is built by shifting in that fit-bit each cycle. Two traps to avoid: (1) doing the width comparison on only WIDTH bits loses the borrow-out that signals \"does not fit\"; (2) the datapath is combinational but the result register/valid strobe are updated on the SAME final iteration (cnt==WIDTH-1) using the combinational rem_next/quot_next, so the checker sampling on valid sees fresh data rather than a stale registered copy one cycle late."
+   ],
+   "related": [
+    "non-restoring-divider"
    ]
   },
   {
@@ -356,6 +448,9 @@
    "lesson_count": 1,
    "lessons": [
     "A LIFO/stack uses ONE shared top-of-stack pointer (not the separate head/tail of a FIFO): write stores at memory[ptr] then ptr++, read must fetch from memory[ptr-1] then ptr-- (the top element is one below the write pointer). Guard every mutation with the full/empty flags so overflow/underflow leaves memory and pointer untouched, and register the status side-flags: error must be sampled at the clock edge only when an enable hits an already-full/empty stack (so a legal fill/drain doesn't glitch it), and valid must be one-cycle-delayed to match the registered data_out (asserted the cycle the read result actually appears, else the checker samples stale data)."
+   ],
+   "related": [
+    "bst-sort-fsm"
    ]
   },
   {
@@ -377,6 +472,10 @@
    "lesson_count": 1,
    "lessons": [
     "A \"fix the latch inference\" task means every conditional path must assign every output: the true fix is an explicit else branch (or default assignment) that drives the spec-mandated idle value (here all-zero) when the enable is deasserted — not merely holding the previous value. Naive authors leave the else implicit, which infers a latch/holds stale data and corrupts downstream; register the output in a clocked block where reset, active, and idle branches each assign a defined value."
+   ],
+   "related": [
+    "lint-cleanup-iir-filter",
+    "lint-code-review"
    ]
   },
   {
@@ -384,6 +483,10 @@
    "lesson_count": 1,
    "lessons": [
     "A lint-cleanup task must fix each named class of warning WITHOUT altering the design's functional behavior: remove unused/undriven signals, give every register a reset value, move purely-combinational math into always_comb so the clocked block infers no latch, and resolve width-mismatch by an EXPLICIT sized cast (e.g. 16'(wide_sum >>> shift)) rather than silent truncation. Critically, preserve every original arithmetic detail — the accumulation, the fixed-point >>>N scaling that brings the wide multiply-accumulate back to output width, and any saturation branch — exactly as written; a lint pass that \"cleans up\" by changing the transfer function or dropping the shift is a functional regression, not a fix."
+   ],
+   "related": [
+    "line-encoder",
+    "lint-code-review"
    ]
   },
   {
@@ -392,6 +495,10 @@
    "lessons": [
     "For a LINT clean-up of clocked RTL, enforce assignment-type consistency by intent: every state/output update inside an always_ff must use non-blocking (<=); blocking (=) is legal ONLY for local loop indices/temporaries (e.g. `int i` in for-loops), and the two must never be mixed on the same sequential storage — mixing causes simulation-vs-synthesis race/mismatch. Separately, prune every declared-but-unassigned/unread signal and unused parameter (dead nets, extra localparams, unused array ports), since dangling drivers are the other canonical lint class. The trap: leaving a genuinely-used loop iterator blocking looks like a violation but is correct, so classify by whether the LHS is persistent state, not by the operator alone.",
     "For a LINT-cleanup review task, the deliverable is functionally-identical RTL with only the flagged violations removed — never a rewrite. Two recurring traps: (1) never mix blocking (=) and non-blocking (<=) assignments to the same variable across a design's sequential logic — use <= consistently in every clocked always block (blocking only in initial/combinational); (2) delete every truly-unused parameter/package/typedef the linter flags, but preserve parameters that are used indirectly (e.g. to size localparams or derive other params) since removing those breaks elaboration. Change nothing that alters behavior or port/parameter interface visible to the testbench."
+   ],
+   "related": [
+    "line-encoder",
+    "lint-cleanup-iir-filter"
    ]
   },
   {
@@ -406,6 +513,11 @@
    "lesson_count": 1,
    "lessons": [
     "For a multi-stage streaming MAC/accumulator, size the accumulator to exactly 2*DWIDTH + $clog2(N) bits (product width plus carry growth for summing N terms) and gate every pipeline register on a valid signal that has been delayed to match its own stage, so counting, accumulation, and valid_out all track the true datapath latency (first result at N+1 cycles). The critical trap: gapped valid_i must freeze all stages (hold state, advance nothing), and at the window boundary the accumulator must restart by loading the in-flight product rather than zeroing — otherwise the first sample of the next window is dropped and back-to-back windows lose one term."
+   ],
+   "related": [
+    "accumulator-datapath",
+    "iterative-datapath-accumulator",
+    "sequential-multiplier"
    ]
   },
   {
@@ -427,6 +539,11 @@
    "lesson_count": 1,
    "lessons": [
     "For an area/latency PPA-optimization task on an FSM datapath, functional equivalence is the hard gate — so bound every index/counter register by its true algorithmic maximum (here merge-sort indices never exceed 2*N, so ADDR_WIDTH=clog2(2*N)+1 replaces 32-bit `integer` comparators) and drop dead states to shrink the state register (removing a terminal DONE state cuts 3 state bits to 2 AND saves exactly the required 1 cycle). The latency cut must come from folding the terminal state's work into the prior state so `done` and the result appear the SAME cycle a checker expects; and outputs should be driven combinationally as a fixed concatenation of the memory array rather than through a copied output register + mux network, eliminating cells/wires without changing done/state timing."
+   ],
+   "related": [
+    "area-optimization-equivalence",
+    "area-optimization-refactor",
+    "signed-saturating-accumulator-fsm"
    ]
   },
   {
@@ -469,6 +586,9 @@
    "lesson_count": 1,
    "lessons": [
     "For sum-of-products modular arithmetic (matrix multiply mod N), size every intermediate accumulator to the full un-truncated worst case (each W-bit product needs 2W bits; a sum of k products needs 2W+ceil(log2 k) bits) BEFORE taking the modulo, then make the final narrowing back to the field width an EXPLICIT cast on the mod result (which is provably 0..N-1). This avoids silent bit-truncation on the products/sums and eliminates width-mismatch lint warnings, while keeping the modulo operand widths matched so the % never truncates."
+   ],
+   "related": [
+    "modular-matrix-arithmetic-fsm"
    ]
   },
   {
@@ -476,6 +596,9 @@
    "lesson_count": 1,
    "lessons": [
     "For a multi-cycle modular linear-transform (matrix-vector mod-N) datapath, size the dot-product accumulator to the pre-reduction worst case (here max element 25*25*3=1875 needs 11-12 bits, not 5) and defer the mod-N reduction until AFTER the full sum is accumulated; reducing per-term or truncating to the output width mid-sum gives wrong residues. Latch all operands at start into registers so the datapath is stable across the FSM stages, and align the registered-output latency exactly to the documented cycle count with 'done' asserting the same cycle the result becomes valid (checker samples on done), holding done until the module is re-armed."
+   ],
+   "related": [
+    "modular-matrix-arithmetic"
    ]
   },
   {
@@ -490,6 +613,9 @@
    "lesson_count": 1,
    "lessons": [
     "Non-restoring division needs a partial-remainder register one bit wider than the operands (W+1) so the accumulator's MSB acts as a true sign bit; each iteration shifts A:Q left, then adds M when A<0 or subtracts M when A>=0 (not the restoring \"always subtract, restore on fail\"), sets Q[0]=~sign(A_new), and after the last of exactly W iterations applies the mandatory final correction A += M when A is still negative before A yields the remainder. Skipping the +1 width or the final sign-correction is the classic bug that produces an off-by-divisor remainder."
+   ],
+   "related": [
+    "iterative-restoring-divider"
    ]
   },
   {
@@ -577,6 +703,11 @@
    "lesson_count": 1,
    "lessons": [
     "For a shift-and-add sequential multiplier, the accumulator and the shifted multiplicand must both be the full 2*WIDTH product width before shifting (zero-extend B to 2*WIDTH, then `b_ext << cnt`), otherwise high-order partial products get truncated and the product is wrong for large operands. Equally load-bearing is honoring the exact stated latency contract: the design commits to a fixed cycle count (here WIDTH+2 = 1 latch + WIDTH accumulate + 1 register/pulse), so the step counter must be wide enough ($clog2 of the max count, not WIDTH), Product must be registered on the SAME cycle valid_out pulses (else the checker samples stale data), valid_out is a 1-cycle default-low pulse, and a `start` busy flag must gate new valid_in so mid-computation inputs cannot corrupt the run."
+   ],
+   "related": [
+    "accumulator-datapath",
+    "iterative-datapath-accumulator",
+    "mac-accumulator"
    ]
   },
   {
@@ -633,6 +764,11 @@
    "lesson_count": 1,
    "lessons": [
     "For an area-reduction/logic-restructure task the golden constraint is bit-exact functional AND latency equivalence to the reference, so every algebraic rewrite must be provably identity, not approximate: signed saturating add is done with ONE (W+1)-bit sign-extended sum and clamp when bit[W]!=bit[W-1] (never a separate MAX/MIN comparator chain), and a two-sided magnitude threshold |s|>=T is folded to one comparison via m = s ^ {W{s[W-1]}} with the off-by-one correction (compare against T-1 when s<0, T when s>=0) instead of computing s>=T OR s<=-T with a real negation. Redundant thresholds also collapse: OR of several |s|>=Ti reduces to |s|>=min(Ti). Keep FSM states, register count, and the exact cycle on which sum_ready/outputs assert unchanged."
+   ],
+   "related": [
+    "area-optimization-equivalence",
+    "area-optimization-refactor",
+    "merge-sort-engine-fsm"
    ]
   },
   {

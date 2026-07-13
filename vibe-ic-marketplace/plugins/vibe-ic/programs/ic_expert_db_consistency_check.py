@@ -13,7 +13,11 @@ knowledge. It must NOT:
      the check", "skip lint", "ignore the conformance gate", etc.).
 
 Structural invariants also checked: the DB parses, every entry has ic_class +
-non-empty lessons, and lesson_count matches.
+non-empty lessons, and lesson_count matches. The OPTIONAL `related[]` cross-link
+field (sibling ic_class names sharing a core craft — the lightweight concept
+graph) must, when present, be a list of strings that each name an EXISTING
+ic_class, with no self-reference and no duplicates (a dangling link would point
+the author at knowledge that isn't there).
 
 Run CLEAN on the shipped DB before merge (exit 0). chip-AGNOSTIC.
 
@@ -53,6 +57,7 @@ def check(db_path: Path):
     entries = db.get("entries")
     if not isinstance(entries, list) or not entries:
         return {"pass": False, "findings": ["DB has no entries[]"]}
+    all_classes = {e.get("ic_class") for e in entries if e.get("ic_class")}
     total = 0
     for e in entries:
         cls = e.get("ic_class")
@@ -62,6 +67,18 @@ def check(db_path: Path):
             continue
         if e.get("lesson_count") != len(lessons):
             findings.append(f"[{cls}] lesson_count {e.get('lesson_count')} != {len(lessons)}")
+        rel = e.get("related")
+        if rel is not None:
+            if not isinstance(rel, list) or not all(isinstance(r, str) for r in rel):
+                findings.append(f"[{cls}] related must be a list[str]")
+            else:
+                if cls in rel:
+                    findings.append(f"[{cls}] related self-references its own ic_class")
+                if len(set(rel)) != len(rel):
+                    findings.append(f"[{cls}] related has duplicate links")
+                for r in rel:
+                    if r not in all_classes:
+                        findings.append(f"[{cls}] related link '{r}' names no existing ic_class (dangling)")
         for les in lessons:
             total += 1
             for rx in _ID_RES:
