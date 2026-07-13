@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
   "_comment": "AUTHORITATIVE AI-skill inventory \u2014 generated from the skills/ folders by programs/gen_skill_inventory.py. Do NOT hand-edit; the website skill count must read `total` from here.",
-  "total": 59,
+  "total": 60,
   "by_tier": {
     "debug": 13,
     "judgment": 6,
     "nl_primary": 32,
+    "unclassified": 1,
     "verification": 8
   },
   "skills": [
@@ -67,6 +68,7 @@
     "sta-review",
     "synth-doctor",
     "tapeout-checklist",
+    "testbench-gen",
     "yield-diagnostic"
   ],
   "detail": [
@@ -359,6 +361,11 @@
       "name": "tapeout-checklist",
       "frontmatter_name": "tapeout-checklist",
       "tier": "judgment"
+    },
+    {
+      "name": "testbench-gen",
+      "frontmatter_name": "testbench-gen",
+      "tier": "unclassified"
     },
     {
       "name": "yield-diagnostic",
