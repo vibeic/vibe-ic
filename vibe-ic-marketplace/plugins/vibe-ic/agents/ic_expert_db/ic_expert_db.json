@@ -3,8 +3,8 @@
  "_schema": "entries[].{ic_class, lesson_count, lessons[], related?[] (optional cross-links to sibling ic_class names sharing a core craft)}",
  "_source": "distilled from proven-correct (officially-scored PASS) reference designs; benchmark identifiers scrubbed at build time (blindness).",
  "_consistency": "lessons are DESIGN-CRAFT ADVICE for the AI author; they add knowledge, they do NOT assert hard rules that a gate/program checks. No lesson may contradict a deterministic gate.",
- "classes": 93,
- "total_lessons": 107,
+ "classes": 94,
+ "total_lessons": 148,
  "entries": [
   {
    "ic_class": "accumulator-datapath",
@@ -20,9 +20,10 @@
   },
   {
    "ic_class": "alu-datapath",
-   "lesson_count": 1,
+   "lesson_count": 2,
    "lessons": [
-    "When narrow-width bitwise complements (NOT/XNOR of a W-bit operand) feed a wider (2W-bit) output, compute the invert at the operand's self-determined width inside a zero-extending concatenation ({W'b0, ~operand}) — assigning ~operand directly to the wider LHS extends the operand FIRST and then inverts the padded upper bits, producing wrong high-nibble values. Arithmetic ops (add/sub/mul) instead correctly rely on the wide LHS context to zero-extend/carry-out."
+    "When narrow-width bitwise complements (NOT/XNOR of a W-bit operand) feed a wider (2W-bit) output, compute the invert at the operand's self-determined width inside a zero-extending concatenation ({W'b0, ~operand}) — assigning ~operand directly to the wider LHS extends the operand FIRST and then inverts the padded upper bits, producing wrong high-nibble values. Arithmetic ops (add/sub/mul) instead correctly rely on the wide LHS context to zero-extend/carry-out.",
+    "A unary NOT or complement ('~x','~(a^b)') on a W-bit operand assigned to a wider LHS is CONTEXT-width-extended to the LHS width, so phantom high bits invert to 1 (~4'b1100 in 8-bit context = 8'hF3, not 8'h03). Size the complement to the operand width — compute in a W-bit temp or wrap as {(N-W)'b0, ~x[W-1:0]}."
    ]
   },
   {
@@ -51,9 +52,13 @@
   },
   {
    "ic_class": "apb-mmio-register-file",
-   "lesson_count": 1,
+   "lesson_count": 5,
    "lessons": [
-    "For an APB/MMIO register-file slave, split the address space so low CSR addresses (0x0-0x5 here) decode to named registers and any address outside that reserved band falls through to the backing memory/SRAM rather than raising an error — only genuinely unmapped writes assert pslverr. Reads must be registered exactly like the spec's 2-cycle no-wait-state contract (pready held high, prdata updated in the same access), and a read-only computed/result address (0x5) is served combinationally from the ALU output, never from a writable register. Do not blanket-error every address above the CSR range, since the same paddr bus is deliberately overloaded for both CSR and memory access."
+    "For an APB/MMIO register-file slave, split the address space so low CSR addresses (0x0-0x5 here) decode to named registers and any address outside that reserved band falls through to the backing memory/SRAM rather than raising an error — only genuinely unmapped writes assert pslverr. Reads must be registered exactly like the spec's 2-cycle no-wait-state contract (pready held high, prdata updated in the same access), and a read-only computed/result address (0x5) is served combinationally from the ALU output, never from a writable register. Do not blanket-error every address above the CSR range, since the same paddr bus is deliberately overloaded for both CSR and memory access.",
+    "Register-slave error-response flags (pslverr) and their derived error_flag/interrupt status must be LEVEL-LATCHED on a detected fault and held until an explicit clear (next valid access / reset); never gate the assertion on select being high (pslverr <= ~addr_valid only while pselx) or the error vanishes when the initiating transfer ends and any post-transaction/interrupt sample reads 0. Draft latched error_flag_r but left pslverr per-transfer — apply the same latch to the primary error output.",
+    "(1) In a 'fix the buggy RTL' task, do not rewrite interface constants the checker relies on — when the prompt's register-bank Address column (0x00..0x06) conflicts with the provided RTL's byte-spaced decode (0x00,0x04,..0x18), preserve the RTL's existing decode since that is what the TB exercises. (2) For a no-wait-state APB slave whose SRAM/DSP result crosses from a faster clock domain, the read datapath must deliver settled data within the access phase; a dual-flop resync that adds cycles or a clock-switch that starves the SRAM clock during handover yields stale/off-by-one reads.",
+    "When the spec says the address bus 'accesses internal CSR registers AND Memory' (reserving only 0x00-0x05 for CSRs with a 1 KB SRAM behind the same APB), emit a full memory read/write datapath for the non-register range: the APB read mux must return mem[paddr] for paddr outside the enumerated CSRs and treat those addresses as valid (not pslverr/zero). Do not model only the enumerated CSRs and default every other address to 0.",
+    "For a 'modify/enhance existing RTL' prompt that provides an explicit 'Updated Input/Output Interfaces' port list, take the top-level port set from that table, not the starting context RTL. When the updated interface lists a single 'Bidirectional ... pins' port (gpio[GPIO_WIDTH-1:0]) and drops the legacy _in/_out/_enable trio, emit one tri-state inout driven as `assign gpio[i] = dir[i] ? out[i] : 1'bz;` and read the input from the same net."
    ]
   },
   {
@@ -113,11 +118,12 @@
   },
   {
    "ic_class": "async-fifo-cdc",
-   "lesson_count": 3,
+   "lesson_count": 4,
    "lessons": [
     "A dual-clock FIFO must use (ADDR_WIDTH+1)-bit Gray-coded pointers passed through 2-flop synchronizers, and the full/empty tests must operate on the GRAY (not binary) values so a single-bit transit through the CDC never mis-decodes. Empty is asserted when the local read Gray pointer equals the synchronized write Gray pointer; full is asserted when the write Gray pointer equals the synchronized read Gray pointer with its TOP TWO bits inverted (the Gray-domain equivalent of \"MSB differs, all lower bits equal\") — inverting only the MSB is the classic trap that breaks the full flag. Increment enables must be gated (w_inc & ~w_full, r_inc & ~r_empty) and each pointer/synchronizer pair reset in its own clock domain's async-reset block.",
     "Cummings-style async FIFO: the binary->Gray conversion is pure combinational, but the Gray-coded pointer itself must be REGISTERED in a sequential block SEPARATE from the one that increments the binary pointer, so the registered Gray pointer reflects the pre-increment binary value and therefore lags the binary pointer by exactly one clock. Computing next-binary and next-Gray together and latching both in one block (though it looks equivalent) makes the full/empty flags take effect one cycle early relative to the data, misaligning them against a cycle-accurate reference.",
-    "A block/active/full flag that gates admission of new items must drop the cycle the LAST item is CAPTURED (written) into the storage element — NOT after a downstream consumer finishes draining it. Coupling the admission flag to consumer-side drain completion instead of producer-side capture is a common off-by-N-cycles defect in FIFO/queue datapaths."
+    "A block/active/full flag that gates admission of new items must drop the cycle the LAST item is CAPTURED (written) into the storage element — NOT after a downstream consumer finishes draining it. Coupling the admission flag to consumer-side drain completion instead of producer-side capture is a common off-by-N-cycles defect in FIFO/queue datapaths.",
+    "In a producer that fetches from an upstream request/strobe interface (FIFO read strobe), never assert the downstream *_valid on the SAME cycle you issue the fetch/strobe; register the captured word and qualify *_valid on captured-settled data so a consumer never samples X. Load-and-validate must lag the strobe by one cycle."
    ],
    "related": [
     "cdc-mux-synchronizer",
@@ -189,9 +195,10 @@
   },
   {
    "ic_class": "axi4lite-register-slave",
-   "lesson_count": 1,
+   "lesson_count": 2,
    "lessons": [
-    "An AXI4-Lite slave register file must implement each channel as an independent, self-clearing handshake FSM: assert *ready only until the corresponding *valid fires (one-shot, then de-assert), latch the address into a holding register at accept time, and hold bvalid/rvalid asserted until the master's bready/rready acknowledges before dropping it — otherwise responses are lost or the bus double-fires. Decode on the LATCHED address (not the live bus), honor write-strobe semantics (full-strobe = update, partial = ack-without-modify), and always return an error response (SLVERR) for writes to read-only or undefined offsets rather than silently completing OKAY."
+    "An AXI4-Lite slave register file must implement each channel as an independent, self-clearing handshake FSM: assert *ready only until the corresponding *valid fires (one-shot, then de-assert), latch the address into a holding register at accept time, and hold bvalid/rvalid asserted until the master's bready/rready acknowledges before dropping it — otherwise responses are lost or the bus double-fires. Decode on the LATCHED address (not the live bus), honor write-strobe semantics (full-strobe = update, partial = ack-without-modify), and always return an error response (SLVERR) for writes to read-only or undefined offsets rather than silently completing OKAY.",
+    "Self-TB for an AXI4-Lite register peripheral must drive real handshaked read-after-write transactions AND advance sim time to assert dynamic behavior (running counter has decremented by read-back time, elapsed increments after zero, IRQ edge at threshold), not just static write/read-back. Static-only self-verification passes a DUT whose time-dependent counter/IRQ semantics are wrong. (Note: fail_log truncation prevented naming the precise failing assertion.)"
    ]
   },
   {
@@ -220,23 +227,26 @@
   },
   {
    "ic_class": "bus-arbiter",
-   "lesson_count": 1,
+   "lesson_count": 2,
    "lessons": [
-    "For a multi-master ready/valid arbiter with a fixed one-cycle latency, register only the slave-side beat (s_valid/s_data) and drive each master's ready COMBINATIONALLY as (selected & s_ready) — never register the ready. Compute selection with procedural priority if/else (preferred master's valid tested first, other as fallback) so a lone requester is always served and undriven/X valids act as \"not requesting\" rather than poisoning the mux; a parameter tie-break decides only same-cycle collisions."
+    "For a multi-master ready/valid arbiter with a fixed one-cycle latency, register only the slave-side beat (s_valid/s_data) and drive each master's ready COMBINATIONALLY as (selected & s_ready) — never register the ready. Compute selection with procedural priority if/else (preferred master's valid tested first, other as fallback) so a lone requester is always served and undriven/X valids act as \"not requesting\" rather than poisoning the mux; a parameter tie-break decides only same-cycle collisions.",
+    "In an FSM with an intermediate cleanup/drain state, that state's next-state must re-evaluate still-asserted inputs and go directly to the matching active state, not unconditionally return to IDLE, whenever the spec says the cleanup precedes 'idle OR serving another request'. The draft hardcoded CLEAR->IDLE, adding a dead cycle that fails cycle-budgeted, no-reset-between-cases handshake checks."
    ]
   },
   {
    "ic_class": "bus-interface-defaults",
-   "lesson_count": 1,
+   "lesson_count": 2,
    "lessons": [
-    "When a spec names a bus/word interface (AMBA-style, a processor data word, a register file) but does not state the data width, the conventional default is 32-bit; parameterize (`parameter DATA_WIDTH=32`) rather than hardcoding, so a TB that overrides the width still elaborates."
+    "When a spec names a bus/word interface (AMBA-style, a processor data word, a register file) but does not state the data width, the conventional default is 32-bit; parameterize (`parameter DATA_WIDTH=32`) rather than hardcoding, so a TB that overrides the width still elaborates.",
+    "When the signal-description table and the module-definition skeleton disagree on a port name (tables s_ready/m0_ready/m1_ready vs skeleton's truncated s_read/m0_read/m1_read), emit BOTH spellings as aliased ports (extend the reset/clock name-variant alias generator to read<->ready typo pairs) or prefer the table's fuller name."
    ]
   },
   {
    "ic_class": "bus-protocol-bridge",
-   "lesson_count": 1,
+   "lesson_count": 2,
    "lessons": [
-    "In a bus-protocol bridge for SINGLE transfers, drive the destination address-phase attributes (htrans/hsize/hwrite/haddr/hwdata) combinationally from the source request so they are valid in the same cycle the request is presented and the checker samples them mid-transfer; do NOT wait a register cycle. Crucially, the byte-enable/select vector must be decoded TWICE: once to hsize (word/half/byte) and once to patch the low address bits (haddr[1:0]) to point at the active byte lane, and completion/ack must be gated on the destination's ready (hready) so it fires only when the downstream transfer finishes."
+    "In a bus-protocol bridge for SINGLE transfers, drive the destination address-phase attributes (htrans/hsize/hwrite/haddr/hwdata) combinationally from the source request so they are valid in the same cycle the request is presented and the checker samples them mid-transfer; do NOT wait a register cycle. Crucially, the byte-enable/select vector must be decoded TWICE: once to hsize (word/half/byte) and once to patch the low address bits (haddr[1:0]) to point at the active byte lane, and completion/ack must be gated on the destination's ready (hready) so it fires only when the downstream transfer finishes.",
+    "Protocol-bridge craft: (1) apply endian/byte-lane conversion ONLY per the byte-select — identity for an aligned full word (sel=1111) — instead of an unconditional full-width byte reversal (the draft's endian_swap corrupts hwdata and data_o; making it passthrough fixes the write, verified). (2) In a two-clock bridge, drive the destination-bus (AHB) address/data-phase outputs and capture read data in the destination (hclk) domain, held valid throughout the transfer gated by hready, so outputs are deterministic and stable when the checker samples on hclk — the draft clocks everything on clk_i, making hwrite phase-sensitive (reads 0 under the harness) and leaving data_o unpopulated at the read sample point."
    ]
   },
   {
@@ -248,9 +258,10 @@
   },
   {
    "ic_class": "cache-replacement-policy",
-   "lesson_count": 1,
+   "lesson_count": 2,
    "lessons": [
-    "For recency/PLRU-style replacement tracked by per-way \"used\" bits, the invariant \"at least one bit is 0 so a replacement candidate always exists\" must be actively enforced: when marking a way as used would set ALL bits to 1 (the last-free-slot corner), you must clear the other bits and leave only the just-used way's bit set, rather than saturating. Also decouple the recency-update source from the candidate select — MRU is set from way_select on a hit but from the chosen way_replace on a miss (way_select is meaningless on a miss) — and derive the candidate by scanning for a zero bit with a deterministic tie-break (loop high-to-low so the smallest zero index wins)."
+    "For recency/PLRU-style replacement tracked by per-way \"used\" bits, the invariant \"at least one bit is 0 so a replacement candidate always exists\" must be actively enforced: when marking a way as used would set ALL bits to 1 (the last-free-slot corner), you must clear the other bits and leave only the just-used way's bit set, rather than saturating. Also decouple the recency-update source from the candidate select — MRU is set from way_select on a hit but from the chosen way_replace on a miss (way_select is meaningless on a miss) — and derive the candidate by scanning for a zero bit with a deterministic tie-break (loop high-to-low so the smallest zero index wins).",
+    "Interface extraction must union signal names from EVERY spec artifact — wavedrom `signal` names (the prompt waveform lists register_addr_i) and target-address formulas (JALR '+ rs1') — not only the enumerated Interface bullet list, which omitted register_addr_i. A signal named in a waveform or a formula but missing from the port list is a required port. (Secondary in-chain bug: JALR must use I-type imm instr[31:20], not the J-type imm the draft reused.)"
    ]
   },
   {
@@ -274,9 +285,10 @@
   },
   {
    "ic_class": "complex-real-mac-dot-product",
-   "lesson_count": 1,
+   "lesson_count": 2,
    "lessons": [
-    "In a mode-configurable MAC/dot-product, operand signedness is per-mode, not global: complex fields are signed 16-bit (extract with `wire signed`), but a real-only spec whose operands span the full 0..0xFFFF range must treat them as UNSIGNED — zero-extend and multiply unsigned, else products silently negate for values ≥0x8000. Size accumulators and products to avoid overflow across up to N accumulations, keep the FSM's per-element result in a registered accumulator, and remember the output packing differs by mode (full-width real vs `{acc_im[15:0],acc_re[15:0]}` for complex). Guard against handshake corruption by treating a mid-computation drop of either input-valid as an error state rather than accumulating stale data."
+    "In a mode-configurable MAC/dot-product, operand signedness is per-mode, not global: complex fields are signed 16-bit (extract with `wire signed`), but a real-only spec whose operands span the full 0..0xFFFF range must treat them as UNSIGNED — zero-extend and multiply unsigned, else products silently negate for values ≥0x8000. Size accumulators and products to avoid overflow across up to N accumulations, keep the FSM's per-element result in a registered accumulator, and remember the output packing differs by mode (full-width real vs `{acc_im[15:0],acc_re[15:0]}` for complex). Guard against handshake corruption by treating a mid-computation drop of either input-valid as an error state rather than accumulating stale data.",
+    "register-interface valid-strobe lesson: a data-valid output must be a REGISTERED flag gated to the specific data-register write it certifies (hmac_data at addr 1), not a combinational `assign hmac_valid=(state==WRITE)` firing for all addresses. Register all read/valid outputs so they compare one cycle delayed like a real MMIO slave; the draft mismatches both the addr gating and the registered phase."
    ]
   },
   {
@@ -288,9 +300,11 @@
   },
   {
    "ic_class": "decimator-peak-detect",
-   "lesson_count": 1,
+   "lesson_count": 3,
    "lessons": [
-    "For packed-bus DSP blocks (decimation/reduction over N sub-samples), nail three things a naive author gets wrong: (1) sub-sample indexing — slot s lives at bits [DATA_WIDTH*s +: DATA_WIDTH] with slot 0 = LSB, so decimated output slot q must map to input slot q*DEC_FACTOR, and the packing must match the checker's convention exactly (spec concat prose can be misleading; follow the reference model). (2) Signed extremum — peak/min comparisons must use $signed() on each slice and a $signed accumulator, else negative samples compare as large unsigned values. (3) Latency discipline — 'latency = 1 cycle' means register the input bus AND valid together (async reset clears both), then do decimation/peak/packing purely combinationally from the registered data, so data_out and peak_value are valid the same cycle valid_out asserts."
+    "For packed-bus DSP blocks (decimation/reduction over N sub-samples), nail three things a naive author gets wrong: (1) sub-sample indexing — slot s lives at bits [DATA_WIDTH*s +: DATA_WIDTH] with slot 0 = LSB, so decimated output slot q must map to input slot q*DEC_FACTOR, and the packing must match the checker's convention exactly (spec concat prose can be misleading; follow the reference model). (2) Signed extremum — peak/min comparisons must use $signed() on each slice and a $signed accumulator, else negative samples compare as large unsigned values. (3) Latency discipline — 'latency = 1 cycle' means register the input bus AND valid together (async reset clears both), then do decimation/peak/packing purely combinationally from the registered data, so data_out and peak_value are valid the same cycle valid_out asserts.",
+    "Normative equations override worked-example numbers: prompt states delta_b = LEARNING_RATE*error, but its example prints b=10 (should be 20) which the draft over-fit via an unstated shift. When formula conflicts with an example figure, implement the formula and treat the example number as suspect.",
+    "For any LINT-review-class task (prompt asks for 'lint-clean RTL'), add a deterministic self-gate running `verilator --lint-only -Wall` and close-loop to zero warnings. Specifically catch UNUSEDSIGNAL from over-wide intermediates: after fixing a width-truncation by slicing (temp_y[15:0]), the still-32-bit temp_y leaves bits[31:16] unread; size the reg to the used width so a width fix does not create a new unused-bits warning."
    ]
   },
   {
@@ -328,7 +342,7 @@
   },
   {
    "ic_class": "fsm-controller",
-   "lesson_count": 7,
+   "lesson_count": 22,
    "lessons": [
     "For a priority-arbiter FSM with registered outputs, derive the grant outputs from next_state (grant1 <= (next_state==GRANT_1)) inside the SAME clocked block as the state register, not from the current state — this makes grants align with the state they represent on the same edge and avoids a one-cycle skew where a checker samples stale grants. Encode priority strictly in the combinational next-state case (test the higher-priority request first in every state, including preemption while a lower grant is active), always assign a default next_state = state to prevent latches, and keep a full default case arm. Async active-high reset must clear both state and output registers.",
     "For a Moore/registered-output transaction FSM, drive every one-cycle strobe (dispense, return_change, error, return_money) from a per-cycle default-clear in the sequential block, then set it only in the state that owns the event — this guarantees exactly-one-cycle pulses and avoids stale/stuck outputs. Sequence multi-pulse results across distinct states (e.g. a dedicated wait state so the dispense pulse and the change pulse never overlap and are one edge apart), and detect level toggles like buttons/cancel via a registered _prev to fire on the rising edge only. Latch decision inputs (selected item, price) into registers on entry rather than re-reading combinational inputs later, and remember registered outputs appear one clock edge before the checker samples them.",
@@ -336,21 +350,40 @@
     "When a training-then-test pipeline chains two FSMs, the test phase must SNAPSHOT the trained state (latch w1/w2/bias into local regs on the training-done rising edge) before it starts consuming them, and trigger on a done edge (done & ~done_d), not the done level — otherwise the tester re-fires or samples weights that are still mutating. Also, the perceptron/Hebbian decision must be computed on the FULL-WIDTH signed accumulator (here signed [7:0] test_calc = w1*x1+w2*x2+bias) with a strict >0 threshold mapping to bipolar {+1,-1}; truncating the product to the 4-bit input width before summing corrupts the sign and breaks the match count.",
     "A highest-priority interruptible-halt state (overload/emergency-resume) must checkpoint the pre-interrupt state exactly once on entry — capture present_state in a saved_state register only when the halt condition first asserts AND present_state != HALT (the guard prevents the checkpoint from being overwritten by HALT itself every cycle the interrupt persists) — then restore next_state=saved_state on exit. Give the interrupt override top priority as an outer if before the case so it fires from any state, and drive the warning output combinationally from the state (present_state==HALT) rather than a separate flag so it never lags the FSM by a cycle.",
     "For a registered-output (Moore) FSM whose datapath actions live in the same clocked block that does current_state<=next_state, key the output/counter case on current_state (not next_state): the effect of \"state X's action\" then lands the cycle AFTER the FSM entered X, and the checker must expect this one-cycle latency. Keep the combinational next_state block pure (default next_state=current_state, hold on non-terminal counts) and reset every output plus every counter in the async-reset branch so no output is inferred as a latch or starts X. Also, when a spec gives x=addr%W, y=addr/W with power-of-two W, these are exactly the low bits and next bits of the counter (mod/div synthesize to bit-slices), so width the coordinate outputs to log2(W) and let truncation do the masking.",
-    "In a fully-registered Moore FSM whose outputs must be valid the SAME cycle a status flag asserts, compute the datapath result using the PRESENT state and latch it into the output register during the state that PRECEDES the \"valid\" state (here: capture the concat result while in PROCESS so it is stable when o_ready/READY assert one cycle later). Drive the registered status/valid flags from next_state (not state) so they align with the registered outputs, gate fault as the highest-priority override in next-state logic, and force outputs to default in IDLE/FAULT — otherwise a checker sampling on the valid flag reads stale or one-cycle-late data."
+    "In a fully-registered Moore FSM whose outputs must be valid the SAME cycle a status flag asserts, compute the datapath result using the PRESENT state and latch it into the output register during the state that PRECEDES the \"valid\" state (here: capture the concat result while in PROCESS so it is stable when o_ready/READY assert one cycle later). Drive the registered status/valid flags from next_state (not state) so they align with the registered outputs, gate fault as the highest-priority override in next-state logic, and force outputs to default in IDLE/FAULT — otherwise a checker sampling on the valid flag reads stale or one-cycle-late data.",
+    "When a spec states inputs are 'synchronous to the clock', model an explicit registered-input stage so FSM/control latency includes that extra cycle; never feed raw combinational inputs into next-state logic the same cycle they arrive.",
+    "On enhance/modify-existing-RTL tasks, carry over EVERY case/branch of the provided base RTL unchanged unless the task explicitly modifies it; the provided source is authoritative for untouched behavior. A prose example that contradicts the base RTL for an unmentioned mode (here Scenario-2 calling 0b110 'reserved' while base RTL implements it as modulo) does NOT override the base RTL, and do not add new guard conditions (out-of-range checks) to branches the base RTL lacked them on.",
+    "For 'complete the partial FSM/algorithm' tasks, the self-TB MUST exercise the primary NON-degenerate path with real structured stimulus (a populated BST) and assert both the data result (key_position) and any prose-stated exact cycle latencies — not just the empty/degenerate case. A self-TB covering only the trivial path lets an incorrect core-traversal FSM pass our gate.",
+    "For multi-module deliverables, emit exactly ONE definition per required module partitioned into the harness's expected filenames; never hedge with several alias/duplicate top-wrapper modules in one blob (this draft defined 6 modules incl. 4 near-duplicate top wrappers). When a single-file draft is materialized into a multi-file layout, duplicates become 'module already declared' errors under strict simulators (Icarus 13+); the runner's local Icarus 11 silently keeps the first declaration and masks the defect.",
+    "Multi-module emission fidelity: when the task names >1 module (or VERILOG_SOURCES lists multiple <module>.sv paths), write EACH named module to its own <module>.sv so every source path resolves; do not drop a required helper module. Draft content compiles fine as a single blob - only the file layout is wrong.",
+    "Emission-serialization guard: JSON-deserialize the AI-backup {code:[{path:content},...]} response BEFORE writing and route each content to its path; never dump the JSON wrapper into a .sv nor leave a listed source empty. A pre-compile check (first non-comment char must not be '{') catches this class.",
+    "Same class as 0006: prompt names elevator_control_system, floor_to_seven_segment AND Binary2BCD - emit each to its own <module>.sv; do not merge a distinct named module (Binary2BCD) into another file.",
+    "multi-file-emission partition rule: when harness VERILOG_SOURCES lists files whose basenames match module names, fan each generated module body into its eponymous file only, and dedupe against harness-provided support files — never let a module appear in two enumerated sources. The prompt gave both modules; the runner must split, not dump all modules into the top file.",
+    "When input.context supplies N separate RTL files (one module per file), preserve that partition on emit: write only the task-target module into its original file, pass the other context files through unchanged, and never inline context-provided modules into the target file -- the harness's multi-file VERILOG_SOURCES recompiles them and elaboration fails with duplicate-module errors.",
+    "When the prompt-declared top name contains a likely misspelling of a common word ('sequencial'->'sequential') or differs in word order from the design id, emit the top module (or a thin alias wrapper) under every normalized-spelling and id-derived name variant, so a prompt/id typo does not cause an 'unable to find root module' elaboration failure. (Both prompt and design id misspell it; oracle silently uses the corrected spelling.)",
+    "Self-verification of request/ready FSMs must exercise back-to-back transactions where the next start pulse is asserted on the SAME cycle the previous one signals ready/done. Design lesson: a terminal OUTPUT/DONE state that unconditionally returns to IDLE silently drops a 1-cycle i_start pulse landing on that return cycle and hangs on back-to-back use — completion states must still sample the start input (OUTPUT: if i_enable&i_start -> LOAD).",
+    "Deterministic rule: for a spec-only problem with NO module skeleton, bind the emitted TOP module name to the design<problem-slug> (derivable from the visible input.json id) so it matches the harness TOPLEVEL -- draft used the functional name and failed elaboration. Secondary read-and-clear craft: clear branch must not mask the concurrent increment via else-if priority: next=(sw_req?0:count)+cpu_trig, and present the read value via a registered latch even after sw_req deasserts.",
+    "Pulse-width protocol decoders must classify bits by the RATIO of the HIGH phase to the measured reference LOW phase (self-calibrate from the always-present 0.6ms low; ~1x=>0, ~2x=>1, start ~4x), NOT by absolute clock-cycle windows from a nominal clock -- the verification clock often differs from the stated nominal (TB=1MHz vs prose 100KHz/1.67KHz).",
+    "When 'fixing latch inference', honor the module's clocked spec and sibling modules: if the spec says the output is produced 'on the rising edge of clk' (or a sibling like the decoder registers the analogous output), convert the offending always_comb to a registered always_ff rather than merely adding always_comb default assignments -- a clocked-output TB (await RisingEdge on the valid) hangs on a combinational valid/data.",
+    "Self-TBs for handshake FSMs must sample outputs the way an external checker does — drive stimulus, DEASSERT it, then check the output pulse on the FOLLOWING clock — and hold data-valid outputs (item id, change amount) across the consumer's sampling window, not only during the single producing state. The draft's combinational look-ahead (coin_sum>=price on the just-inserted coin) advances the DISPENSING pulse one cycle early; a canonical register-then-compare FSM (accumulate into a register, compare the registered total next cycle) aligns with the oracle. Verified: the register-then-compare edit moves dispense_item to the expected cycle (first assert then passes)."
    ]
   },
   {
    "ic_class": "fsm-register-interface",
-   "lesson_count": 1,
+   "lesson_count": 4,
    "lessons": [
-    "For an FSM-gated register file, all datapath side-effects (write, valid pulse, key-XOR) must key off the CURRENT registered state, not the combinational next_state, so effects land exactly on the intended cycle and the tester's cycle-latency count matches; drive status pulses like hmac_valid as one-hot on their state (assert only in WRITE, else clear) rather than latching. Keep next-state logic purely combinational with a self-holding default (next_state=current_state) and a separate posedge/negedge-async-reset state register, and make read a distinct sequential path arbitrated against writes (read only when state!=WRITE) so read/write never collide on the same register in one cycle."
+    "For an FSM-gated register file, all datapath side-effects (write, valid pulse, key-XOR) must key off the CURRENT registered state, not the combinational next_state, so effects land exactly on the intended cycle and the tester's cycle-latency count matches; drive status pulses like hmac_valid as one-hot on their state (assert only in WRITE, else clear) rather than latching. Keep next-state logic purely combinational with a self-holding default (next_state=current_state) and a separate posedge/negedge-async-reset state register, and make read a distinct sequential path arbitrated against writes (read only when state!=WRITE) so read/write never collide on the same register in one cycle.",
+    "self-verification must add an interrupt-controller handshake-latency slice: multi-IRQ ack->next-IRQ re-assert latency, cpu_interrupt deassert-during-ack, and request-sync latency bounds. The draft is faithful to the fully-in-chain spec and passes compile+basic sim, but extra ack-recovery/sync cycles break the cycle-accurate handshake the oracle enforces — a slice our self-TB never exercised.",
+    "interrupt-controller default-priority convention lesson: absent an explicit priority map, default to lower-index = higher-priority (IRQ0 wins) and make the starvation boost additive to the static level, not a separate high-order bit. The 10-index formula isn't in prose but 'IRQ0 highest' is standard; the draft's index-as-priority inverts arbitration. Not a floor — recoverable by encoding conventional priority polarity.",
+    "Priority-interrupt-controller arbitration must present the highest-priority pending & unmasked interrupt combinationally EVERY cycle (preemptive) so a newly-pending higher-priority request takes over the one in service; do not latch the serviced index and hold until cpu_ack (non-preemptive) unless non-preemption is explicitly specified."
    ]
   },
   {
    "ic_class": "gcd-lcm-arithmetic",
-   "lesson_count": 1,
+   "lesson_count": 2,
    "lessons": [
-    "In multi-operand GCD/LCM datapaths built from a subtractive-GCD FSM, every intermediate must be widened to hold the full-precision product, never truncated to the input width: LCM(A,B,C) of W-bit inputs needs a 3*W-bit result (product A*B*C), and when that product is divided by a narrower GCD result you must value-preservingly zero-extend the divisor to the dividend's width so both DIV operands share one width and no implicit expansion/truncation corrupts the quotient. Also, a computation-complete 'done' pulse from a sub-block must be latched (per-parallel-branch) before the results of parallel GCD branches are combined, otherwise the downstream stage samples operands that are not yet valid."
+    "In multi-operand GCD/LCM datapaths built from a subtractive-GCD FSM, every intermediate must be widened to hold the full-precision product, never truncated to the input width: LCM(A,B,C) of W-bit inputs needs a 3*W-bit result (product A*B*C), and when that product is divided by a narrower GCD result you must value-preservingly zero-extend the divisor to the dividend's width so both DIV operands share one width and no implicit expansion/truncation corrupts the quotient. Also, a computation-complete 'done' pulse from a sub-block must be latched (per-parallel-branch) before the results of parallel GCD branches are combined, otherwise the downstream stage samples operands that are not yet valid.",
+    "When an FSM's DONE state is reachable directly from IDLE (equal-on-arrival), still register the done pulse so best-case latency matches the stated cycle count; do not collapse IDLE->DONE into a same-edge done. A TB counting latency from the cycle after 'go' and polling a self-clearing 1-cycle done will miss a pulse emitted on the transition edge and hang. (Draft done<=(next_state==S1) fires at latency 1 vs spec 2 for A==B.)"
    ]
   },
   {
@@ -381,16 +414,19 @@
   },
   {
    "ic_class": "handshake-valid-ready",
-   "lesson_count": 1,
+   "lesson_count": 3,
    "lessons": [
-    "After a request/valid output's handshake completes (its ack/ready was sampled), hold that output DEASSERTED for at least one full clock before re-asserting it for the next item. A zero-gap combinational re-assert in the very next cycle reads as a single unbroken pulse to an edge-based checker."
+    "After a request/valid output's handshake completes (its ack/ready was sampled), hold that output DEASSERTED for at least one full clock before re-asserting it for the next item. A zero-gap combinational re-assert in the very next cycle reads as a single unbroken pulse to an edge-based checker.",
+    "When a spec places 'toggle the protocol clock to latch data AND decrement the counter' in the SAME state, the counter OUTPUT must present the post-decrement value during that state (aligned with the latching edge). The draft registers the decrement one cycle late, so o_bits_left reads the pre-decrement value while o_spi_clk is high. Emit remaining-count so it equals bits-not-yet-latched at every protocol edge.",
+    "Preserve spec-introduced signal identifiers VERBATIM on top-level connecting nets — never append _w/_sig/_wire to a net whose name the prose introduces (here `parity`: 'Add parity as an output signal', 'parity is transmitted from tx_block to rx_block'). White-box modify-task TBs force/peek intermediate nets by the exact spec identifier, so a rename crashes every test with an AttributeError. SECONDARY (revealed after rename: 13/20 still fail): parity_error is functionally wrong for >8-bit widths and the force-injection path (tx `assign parity=^data_reg` on a shifting register mis-times the capture) — a follow-on ic_expert_db lesson on width-parametric parity."
    ]
   },
   {
    "ic_class": "integer-clock-divider",
-   "lesson_count": 1,
+   "lesson_count": 2,
    "lessons": [
-    "Integer clock divider: divided-clock outputs described as 'toggled'/'reset-initialized' are REGISTERS, not a combinational decode of the current count. The CANONICAL odd-divisor 50%-duty divider is the OR of a posedge half-rate LEVEL and a negedge half-rate LEVEL: use one counter cnt1 on posedge and cnt2 on negedge, each counting 0..NUM_DIV-1, and register each level as `clk_div_k <= (cnt_k < NUM_DIV/2)` (a LEVEL that is high for the first floor(NUM_DIV/2) counts, NOT a single toggle-at-a-point — a lone toggle every NUM_DIV counts would divide by 2*NUM_DIV, not NUM_DIV). The reset value of each clk_div_k is DERIVED, not guessed: cnt resets to 0 and 0 < NUM_DIV/2, so the level is 1 at reset — reset clk_div_k to 1'b1 to match its own cnt==0 level. Combine with `clk_div = clk_div1 | clk_div2`. A combinational `assign clk_div=(cnt<LIMIT)` or a toggle-on-limit form shifts the phase and fails a cycle-accurate check even when the average ratio is right."
+    "Integer clock divider: divided-clock outputs described as 'toggled'/'reset-initialized' are REGISTERS, not a combinational decode of the current count. The CANONICAL odd-divisor 50%-duty divider is the OR of a posedge half-rate LEVEL and a negedge half-rate LEVEL: use one counter cnt1 on posedge and cnt2 on negedge, each counting 0..NUM_DIV-1, and register each level as `clk_div_k <= (cnt_k < NUM_DIV/2)` (a LEVEL that is high for the first floor(NUM_DIV/2) counts, NOT a single toggle-at-a-point — a lone toggle every NUM_DIV counts would divide by 2*NUM_DIV, not NUM_DIV). The reset value of each clk_div_k is DERIVED, not guessed: cnt resets to 0 and 0 < NUM_DIV/2, so the level is 1 at reset — reset clk_div_k to 1'b1 to match its own cnt==0 level. Combine with `clk_div = clk_div1 | clk_div2`. A combinational `assign clk_div=(cnt<LIMIT)` or a toggle-on-limit form shifts the phase and fails a cycle-accurate check even when the average ratio is right.",
+    "For memory-mapped / AXI-Lite register reads, make the read-data mux COMBINATIONAL (zero-latency, keyed on the address) so a read reflects the live register value in the same cycle it is addressed. A registered/pipelined axi_rdata adds one cycle of latency and returns STALE data, failing read-after-write and live-counter read-back checks. Verified: replacing the draft's `always@(posedge clk)` read block with a combinational `always@(*)` mux makes the case PASS."
    ]
   },
   {
@@ -424,9 +460,12 @@
   },
   {
    "ic_class": "iterative-training-datapath",
-   "lesson_count": 1,
+   "lesson_count": 4,
    "lessons": [
-    "For iterative weight-update trainers (Hebbian / perceptron / Fausett-style), the convergence/stop criterion is that the weight DELTAS are all zero on a pass — not that two consecutive weight snapshots happen to be equal. Test the update magnitude, not snapshot equality, or a coincidental repeat halts training early."
+    "For iterative weight-update trainers (Hebbian / perceptron / Fausett-style), the convergence/stop criterion is that the weight DELTAS are all zero on a pass — not that two consecutive weight snapshots happen to be equal. Test the update magnitude, not snapshot equality, or a coincidental repeat halts training early.",
+    "harness-toplevel-alias rule: at harness integration, reconcile the generated top-module identifier (and file basename) to the harness TOPLEVEL/VERILOG_SOURCES from .env when they differ from the prompt name — rename or emit a thin alias wrapper. Deterministic and chip-agnostic; the runner already knows the path (wrote hebb_gates.sv) so it has TOPLEVEL. Not a floor — recoverable from harness metadata the pipeline consumes.",
+    "Microcode/FSM lesson: a microinstruction spec'd as 'signal stop and branch, no change to other signals' must NOT clobber accumulated datapath regs (draft's action-4 zeroes weights on stop; spec says retain), and accumulator state must live in sequential regs, not an always_comb block that reads/writes its own outputs (combinational feedback = no cross-cycle retention). Honor each action's explicit 'other signals unchanged' contract.",
+    "When a spec says to EXTEND an existing microcode-ROM state machine with a new phase (e.g. a post-training test loop), implement it as additional ROM states advanced one-microinstruction-per-clock so per-step outputs stay observable at the same cadence as the existing phase; do NOT collapse it into a single-cycle combinational sweep that races to 'done' and only leaves the final result visible."
    ]
   },
   {
@@ -438,16 +477,18 @@
   },
   {
    "ic_class": "lfsr-rs-encoder",
-   "lesson_count": 1,
+   "lesson_count": 2,
    "lessons": [
-    "An RS/CRC-style shift-register (LFSR) encoder is a feedback structure: compute feedback = data_in XOR the TOP (last) parity register, then shift each parity stage from its lower neighbor while injecting feedback*generator_coeff via GF(2) XOR — not a normal add/carry. The feedback term must be a blocking assign (computed first) inside the clocked block so the SAME cycle's shift uses it, while all parity stages use non-blocking assigns so they update from the OLD stage values in parallel (mixing blocking feedback with non-blocking taps is the correct idiom; making everything blocking corrupts the shift). Reset must clear every parity register and valid_out, and valid_out should track the qualified enable&valid_in of the accepted symbol."
+    "An RS/CRC-style shift-register (LFSR) encoder is a feedback structure: compute feedback = data_in XOR the TOP (last) parity register, then shift each parity stage from its lower neighbor while injecting feedback*generator_coeff via GF(2) XOR — not a normal add/carry. The feedback term must be a blocking assign (computed first) inside the clocked block so the SAME cycle's shift uses it, while all parity stages use non-blocking assigns so they update from the OLD stage values in parallel (mixing blocking feedback with non-blocking taps is the correct idiom; making everything blocking corrupts the shift). Reset must clear every parity register and valid_out, and valid_out should track the qualified enable&valid_in of the accepted symbol.",
+    "For a single-module edit/lint task whose context supplies other modules as SEPARATE files compiled alongside the edited file, emit ONLY the edited module; never inline a copy of a sibling context module — a duplicate module definition triggers an iverilog 'already declared' elaboration error (exit 2). Prompt hint here: intra_block 'should be excluded from the review' i.e. it stays its own untouched file."
    ]
   },
   {
    "ic_class": "lifo-stack",
-   "lesson_count": 1,
+   "lesson_count": 2,
    "lessons": [
-    "A LIFO/stack uses ONE shared top-of-stack pointer (not the separate head/tail of a FIFO): write stores at memory[ptr] then ptr++, read must fetch from memory[ptr-1] then ptr-- (the top element is one below the write pointer). Guard every mutation with the full/empty flags so overflow/underflow leaves memory and pointer untouched, and register the status side-flags: error must be sampled at the clock edge only when an enable hits an already-full/empty stack (so a legal fill/drain doesn't glitch it), and valid must be one-cycle-delayed to match the registered data_out (asserted the cycle the read result actually appears, else the checker samples stale data)."
+    "A LIFO/stack uses ONE shared top-of-stack pointer (not the separate head/tail of a FIFO): write stores at memory[ptr] then ptr++, read must fetch from memory[ptr-1] then ptr-- (the top element is one below the write pointer). Guard every mutation with the full/empty flags so overflow/underflow leaves memory and pointer untouched, and register the status side-flags: error must be sampled at the clock edge only when an enable hits an already-full/empty stack (so a legal fill/drain doesn't glitch it), and valid must be one-cycle-delayed to match the registered data_out (asserted the cycle the read result actually appears, else the checker samples stale data).",
+    "FIFO/ping-pong lesson: registered next-pointer comparison ((ptr+1)%D==other_ptr) makes full/empty assert one clock LATE and conflates full vs empty (pointers start equal). Draft's full asserts one cycle late, pushing the TB into its extra-cycle compensation path and de-aligning the exact-DEPTH drain so empty lands one cycle past the window. Rule: track occupancy with a count register or an extra pointer wrap/MSB bit so full/empty are unambiguous and asserted on the exact fill/drain cycle."
    ],
    "related": [
     "bst-sort-fsm"
