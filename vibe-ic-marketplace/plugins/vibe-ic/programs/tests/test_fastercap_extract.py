@@ -10,9 +10,21 @@ fabricated matrix), and a NOT_APPLICABLE status when the solver is absent.
 from __future__ import annotations
 
 import math
+import os
 
 import _spef_coupling as SC
 import fastercap_extract as FE
+
+
+# ── derived-SPEF default location (must NOT pollute extracted/*.spef glob) ─────
+def test_default_out_path_is_fastercap_subdir():
+    p = FE._default_out_path("/proj/phase3/stage3/extracted/spm.spef")
+    # a `fastercap/` subdir beside the base SPEF, not a sibling of it (a sibling
+    # would land in the base extracted/*.spef provenance glob and false-trip it)
+    assert os.path.dirname(p).endswith(os.path.join("extracted", "fastercap"))
+    assert os.path.basename(p) == "spm.fastercap.spef"
+    # NOT directly in the extracted/ dir
+    assert os.path.basename(os.path.dirname(p)) == "fastercap"
 
 
 # ── box geometry ──────────────────────────────────────────────────────────────
@@ -264,3 +276,141 @@ def test_extract_unrouted_def_is_not_applicable(tmp_path):
     res = FE.extract(dp, lp, sp, do_inject=False)
     assert res["status"] == "NOT_APPLICABLE"
     assert "unrouted" in res["reason"]
+
+
+# ── _clip_cluster (extracted from select_cluster; whole-design reuses it) ──────
+def test_clip_cluster_builds_bounded_cluster():
+    layers = SC.parse_lef_layers(_LEF)
+    units = SC.parse_def_units(_DEF)
+    segs = SC.parse_def_wires(_DEF, layers, units)
+    # victim na, aggressors nb+nc -> all three lie within 2um -> >=2 nets clipped
+    cluster = FE._clip_cluster(segs, "na", ["nb", "nc"], units, window_um=2.0)
+    assert len(cluster) >= 2
+    assert "na" in cluster
+    assert all(len(v) >= 1 for v in cluster.values())
+
+
+def test_clip_cluster_no_aggressors_is_empty():
+    layers = SC.parse_lef_layers(_LEF)
+    segs = SC.parse_def_wires(_DEF, layers, 1000)
+    assert FE._clip_cluster(segs, "na", [], 1000) == {}
+
+
+def test_clip_cluster_absent_victim_is_empty():
+    layers = SC.parse_lef_layers(_LEF)
+    segs = SC.parse_def_wires(_DEF, layers, 1000)
+    assert FE._clip_cluster(segs, "no_such_net", ["nb"], 1000) == {}
+
+
+def test_select_cluster_still_matches_after_refactor():
+    # select_cluster now delegates the clip to _clip_cluster; its contract is
+    # unchanged: victim from strongest pair, >=2 nets, restricted analytical pairs
+    layers = SC.parse_lef_layers(_LEF)
+    units = SC.parse_def_units(_DEF)
+    segs = SC.parse_def_wires(_DEF, layers, units)
+    victim, cluster, pairs = FE.select_cluster(segs, layers, units,
+                                               window_um=2.0, max_aggressors=6)
+    assert victim in cluster and len(cluster) >= 2
+    assert all(k[0] in cluster and k[1] in cluster for k in pairs)
+
+
+# ── plan_coverage (whole-design tiling; PURE) ─────────────────────────────────
+def _covers_all(pairs, plans):
+    """Every analytical pair must lie inside at least one plan's net set."""
+    for (a, b) in pairs:
+        ok = any(a in set([v] + ag) and b in set([v] + ag) for v, ag in plans)
+        if not ok:
+            return False
+    return True
+
+
+def test_plan_coverage_empty():
+    assert FE.plan_coverage({}) == []
+
+
+def test_plan_coverage_covers_every_pair_small():
+    pairs = {("a", "b"): 3.0, ("b", "c"): 2.0, ("a", "c"): 1.0,
+             ("c", "d"): 0.5}
+    plans = FE.plan_coverage(pairs, max_aggressors=6)
+    assert plans, "must emit at least one plan"
+    assert _covers_all(pairs, plans)
+
+
+def test_plan_coverage_star_needs_multiple_plans_but_covers_all():
+    # a hub 'h' coupled to 20 spokes; max_aggressors=4 forces several plans,
+    # yet EVERY hub-spoke pair must still be covered (no pair silently dropped)
+    pairs = {(("h", "s%02d" % k) if "h" < "s%02d" % k
+              else ("s%02d" % k, "h")): float(20 - k) for k in range(20)}
+    plans = FE.plan_coverage(pairs, max_aggressors=4)
+    assert _covers_all(pairs, plans)
+    # each plan is bounded to <= max_aggressors+1 conductors
+    assert all(len([v] + ag) <= 5 for v, ag in plans)
+    # a 20-edge star at 4 aggressors/plan needs several plans
+    assert len(plans) >= 5
+
+
+def test_plan_coverage_deterministic():
+    pairs = {("a", "b"): 3.0, ("b", "c"): 2.0, ("a", "c"): 1.0,
+             ("c", "d"): 0.5, ("d", "e"): 0.9}
+    assert FE.plan_coverage(pairs, 3) == FE.plan_coverage(pairs, 3)
+
+
+def test_plan_coverage_dense_clique_covers_all():
+    nets = ["n%d" % k for k in range(8)]
+    pairs = {}
+    for i in range(len(nets)):
+        for j in range(i + 1, len(nets)):
+            pairs[(nets[i], nets[j])] = 1.0 / (i + j + 1)
+    plans = FE.plan_coverage(pairs, max_aggressors=4)
+    assert _covers_all(pairs, plans)
+
+
+# ── whole-design driver false-clean guards (no container) ─────────────────────
+def test_whole_design_solver_absent_is_not_applicable(tmp_path):
+    dp = _write(tmp_path, "d.def", _DEF)
+    lp = _write(tmp_path, "t.lef", _LEF)
+    sp = _write(tmp_path, "s.spef", _SPEF)
+    res = FE.extract_whole_design(
+        dp, lp, sp, runner="docker",
+        container="definitely-no-such-container-xyz", do_inject=False)
+    assert res["status"] == "NOT_APPLICABLE"
+    assert res["solver_available"] is False
+    assert res["mode"] == "whole_design"
+    # the analytical pair universe + fitted stack are real even with no solver
+    assert res["n_analytical_pairs"] >= 1
+    assert res["dielectric_stack"]["n_layers"] >= 1
+
+
+def test_whole_design_unrouted_is_not_applicable(tmp_path):
+    empty_def = "VERSION 5.8 ;\nUNITS DISTANCE MICRONS 1000 ;\nNETS 0 ;\nEND NETS\n"
+    dp = _write(tmp_path, "d.def", empty_def)
+    lp = _write(tmp_path, "t.lef", _LEF)
+    sp = _write(tmp_path, "s.spef", _SPEF)
+    res = FE.extract_whole_design(dp, lp, sp, do_inject=False)
+    assert res["status"] == "NOT_APPLICABLE"
+    assert "unrouted" in res["reason"]
+
+
+def test_whole_design_solver_failure_does_not_drop_coupling(tmp_path,
+                                                            monkeypatch):
+    # A per-cluster SOLVER FAILURE (no well-formed matrix) must NOT be recorded
+    # as a screened-to-zero coverage: doing so would SILENTLY DROP real coupling
+    # (making the downstream SI bound optimistic — a false-clean). It must leave
+    # the pair uncovered so it keeps its analytical value.
+    dp = _write(tmp_path, "d.def", _DEF)
+    lp = _write(tmp_path, "t.lef", _LEF)
+    sp = _write(tmp_path, "s.spef", _SPEF)
+    monkeypatch.setattr(FE, "_fastercap_available",
+                        lambda runner, container: (True, "native"))
+    # solver "runs" but never emits a capacitance matrix
+    monkeypatch.setattr(FE, "_run_fastercap",
+                        lambda *a, **k: "Computing links...\n(no matrix)\n")
+    res = FE.extract_whole_design(dp, lp, sp, do_inject=False, runner="native")
+    assert res["status"] == "PASS"          # the pass ran; it just found nothing
+    assert res["n_analytical_pairs"] >= 1
+    assert res["failed_solves"] > 0
+    # NOTHING is marked field-solved on a failed matrix (no fabricated coverage)
+    assert res["pairs_field_solved"] == 0
+    assert res["coverage_fraction"] == 0.0
+    # every analytical pair stays uncovered -> injection keeps its analytical Cc
+    assert res["uncovered_pairs"] == res["n_analytical_pairs"]
