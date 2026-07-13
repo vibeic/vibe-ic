@@ -653,16 +653,19 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[1] if __doc__ else "")
     p.add_argument("project_dir")
     p.add_argument("--clock", required=True, help="Functional clock name (e.g. clk)")
-    p.add_argument("--netlist", default="phase2/stage2/synth/spm_synth.v",
-                   help="Mapped netlist (used only if a cut netlist is absent)")
+    p.add_argument("--netlist", default=None,
+                   help="Mapped netlist (used only if a cut netlist is absent; "
+                        "auto-discovered: phase2/stage2/synth/*_synth.v)")
     p.add_argument("--cut-netlist", default="phase2/stage2/dft/cut_netlist.v",
                    help="Combinational full-scan cut netlist (reused if present;"
                         " else produced by `fault cut`)")
-    p.add_argument("--liberty",
-                   default="input/pdk/liberty/commercial_pdk_typ.lib",
+    p.add_argument("--liberty", default=None,
                    help="Std-cell liberty (read AS LOGIC to gate-levelise; "
-                        "container-absolute /pdk|/foss or project-relative)")
-    p.add_argument("--top", default="spm", help="Top module name")
+                        "container-absolute /pdk|/foss or project-relative; "
+                        "auto-discovered: input/pdk/liberty/*typ*.lib)")
+    p.add_argument("--top", default=None,
+                   help="Top module name (auto-derived from the mapped "
+                        "netlist's name/first module when omitted)")
     p.add_argument("--dff-cells", default=None,
                    help="Flop cell names for `fault cut` (auto-detected + "
                         "unioned when omitted)")
@@ -687,6 +690,33 @@ def main(argv: list[str] | None = None) -> int:
     if not project.is_dir():
         print(f"{_PROGRAM}: not a directory: {project}", file=sys.stderr)
         return 2
+
+    # Chip-AGNOSTIC auto-discovery for omitted inputs (never a chip-named
+    # default): first glob hit under the flow's canonical emit locations.
+    def _first_rel(pat: str, fallback: str) -> str:
+        hits = sorted(project.glob(pat))
+        return str(hits[0].relative_to(project)) if hits else fallback
+
+    if args.netlist is None:
+        args.netlist = _first_rel("phase2/stage2/synth/*_synth.v",
+                                  "phase2/stage2/synth/synth.v")
+    if args.liberty is None:
+        args.liberty = _first_rel("input/pdk/liberty/*typ*.lib",
+                                  "input/pdk/liberty/typ.lib")
+    if args.top is None:
+        stem = Path(args.netlist).stem
+        if stem.endswith("_synth"):
+            args.top = stem[: -len("_synth")]
+        else:
+            _nl = project / args.netlist
+            _m = re.search(r"(?m)^\s*module\s+([A-Za-z_]\w*)",
+                           _nl.read_text(errors="replace")) \
+                if _nl.is_file() else None
+            if not _m:
+                print(f"{_PROGRAM}: cannot derive --top (no mapped netlist "
+                      f"at {args.netlist})", file=sys.stderr)
+                return 2
+            args.top = _m.group(1)
 
     pdk_dir = None
     if args.pdk_dir:

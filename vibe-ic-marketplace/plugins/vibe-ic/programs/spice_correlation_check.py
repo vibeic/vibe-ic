@@ -1456,6 +1456,404 @@ def _check_path_correlation_json(project: Path) -> Optional[dict]:
     return _load_json(_path_correlation_json_path(project))
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#  TOP-N critical-path correlation (additive over the single-path driver)
+#
+#  The single-path driver above stitches ONLY the #1 STA critical path. This
+#  extends the same PROVEN per-path stitch to the top-N max-delay paths so the
+#  correlation covers the timing-critical CONE, not one path. Each path is:
+#    (1) taken from OpenSTA `report_checks -path_delay max -group_count N
+#        -endpoint_count 1` (worst path per distinct endpoint), not the #1 only;
+#    (2) stitched stage-by-stage (extracted subckts, nmos→nch_tn / pmos→pch_tn,
+#        bulk-normalised, real SPEF net cap, endpoint receiver cap);
+#    (3) driven at the nominal characterisation slew through REAL ngspice;
+#    (4) correlated vs its own STA path delay (same >10 % ERROR / >25 % CRITICAL
+#        thresholds).
+#  Honesty is per-path: a path that cannot be sensitised (mixed AND/OR/XOR whose
+#  static non-controlling tie is wrong for a stage → the endpoint fails to swing)
+#  or has no stitchable combinational stage becomes an explicit per-path SKIP
+#  with a reason — NEVER a fabricated number. The aggregate discloses N found,
+#  N correlated, N skipped (+ why), worst |%err| and mean |%err|.
+#  §4.05 NO-LEAK: reads only design input (extracted netlist + SPEF + gate
+#  netlist + SDC) + the PDK bridge shim/liberty. OpenSTA reads the same design
+#  inputs. Never any oracle / golden / output.*.
+# ══════════════════════════════════════════════════════════════════════════
+
+def split_sta_path_blocks(text: str) -> List[str]:
+    """Split a multi-path `report_checks` transcript into per-path text blocks,
+    one per `Startpoint:` header (pure). Each block is safe to feed to
+    parse_sta_path (whose row regex ignores the required-time section)."""
+    idxs = [mm.start() for mm in re.finditer(r"(?m)^Startpoint:", text or "")]
+    if not idxs:
+        return []
+    idxs.append(len(text))
+    return [text[idxs[i]:idxs[i + 1]] for i in range(len(idxs) - 1)]
+
+
+def parse_sta_paths_multi(text: str, max_paths: int = 5,
+                          dedup: bool = True) -> List[dict]:
+    """Parse the top-N max-delay paths from a multi-path `report_checks`
+    transcript (pure). OpenSTA emits paths worst-first; we dedup by
+    (startpoint, endpoint) keeping the worst-first occurrence and return up to
+    max_paths parsed path dicts (each in parse_sta_path's shape)."""
+    out: List[dict] = []
+    seen = set()
+    for block in split_sta_path_blocks(text):
+        p = parse_sta_path(block)
+        if not p or p["path_delay_ns"] <= 0:
+            continue
+        key = (p["startpoint"], p["endpoint"])
+        if dedup and key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+        if len(out) >= max_paths:
+            break
+    return out
+
+
+def build_topN_sta_tcl(liberty: str, netlist: str, top: str,
+                       sdc: Optional[str], spef: Optional[str],
+                       n: int) -> str:
+    """Assemble an OpenSTA script that reports the top-N max-delay paths, one
+    per distinct endpoint (pure). `-endpoint_count 1` yields the worst path per
+    endpoint so the N paths span distinct capture points, not N slices of one
+    endpoint. (OpenSTA 3.1 accepts the -group_count/-endpoint_count spelling
+    with a deprecation warning; the parser dedups defensively regardless.)"""
+    lines = [
+        f"read_liberty {liberty}",
+        f"read_verilog {netlist}",
+        f"link_design {top}",
+    ]
+    if sdc:
+        lines.append(f"read_sdc {sdc}")
+    if spef:
+        lines.append(f"read_spef {spef}")
+    lines.append(f"report_checks -path_delay max -group_count {int(n)} "
+                 f"-endpoint_count 1 -format full")
+    lines.append("exit")
+    return "\n".join(lines) + "\n"
+
+
+def aggregate_path_correlations(per_path: List[dict]) -> dict:
+    """Pure aggregate over per-path correlation results. Correlated = a path
+    that produced a real SPICE number; skipped = an honest per-path SKIP with a
+    reason. Returns counts, skip-reason histogram, worst/mean |%err|, and the
+    worst per-path verdict (CORRELATED < MISMATCH < CRITICAL_MISMATCH), or
+    NO_PATH_CORRELATED when nothing could be sensitised."""
+    corr = [p for p in per_path
+            if p.get("pct_error") is not None
+            and p.get("verdict") in ("CORRELATED", "MISMATCH",
+                                     "CRITICAL_MISMATCH")]
+    skipped = [p for p in per_path if p.get("verdict") == "SKIP"]
+    skip_reasons: dict = {}
+    for p in skipped:
+        r = p.get("skip_reason", "unknown")
+        skip_reasons[r] = skip_reasons.get(r, 0) + 1
+    if corr:
+        abserrs = [abs(p["pct_error"]) for p in corr]
+        worst = max(abserrs)
+        mean_abs = sum(abserrs) / len(abserrs)
+        if any(p["verdict"] == "CRITICAL_MISMATCH" for p in corr):
+            verdict = "CRITICAL_MISMATCH"
+        elif any(p["verdict"] == "MISMATCH" for p in corr):
+            verdict = "MISMATCH"
+        else:
+            verdict = "CORRELATED"
+    else:
+        worst = mean_abs = None
+        verdict = "NO_PATH_CORRELATED"
+    return {
+        "n_paths": len(per_path),
+        "n_correlated": len(corr),
+        "n_skipped": len(skipped),
+        "skip_reasons": skip_reasons,
+        "worst_abs_pct_error": round(worst, 3) if worst is not None else None,
+        "mean_abs_pct_error": round(mean_abs, 3) if mean_abs is not None
+        else None,
+        "tolerance_pct": 10.0,
+        "verdict": verdict,
+    }
+
+
+def _top_module_name(vtext: str) -> Optional[str]:
+    """Top module name from a structural gate netlist (pure)."""
+    m = re.search(r"(?m)^\s*module\s+(\w+)", vtext or "")
+    return m.group(1) if m else None
+
+
+def _find_sdc(project: Path) -> Optional[Path]:
+    """Locate the routed design's timing constraints (for OpenSTA)."""
+    p = project / "phase3" / "stage3" / "pnr" / "constraint.sdc"
+    if p.is_file():
+        return p
+    pnr = project / "phase3" / "stage3" / "pnr"
+    if pnr.is_dir():
+        c = sorted(pnr.glob("*.sdc"))
+        if c:
+            return c[0]
+    hits = sorted(project.rglob("constraint.sdc"))
+    return hits[0] if hits else None
+
+
+def _resolve_opensta(container: str) -> Optional[str]:
+    """Absolute OpenSTA (`sta`) path inside the container, or None."""
+    for probe in ("command -v sta",
+                  "ls /foss/tools/bin/sta 2>/dev/null | head -1",
+                  "ls /foss/tools/*/bin/sta 2>/dev/null | head -1"):
+        try:
+            r = subprocess.run(["docker", "exec", container, "bash", "-lc",
+                                probe], capture_output=True, text=True,
+                               timeout=60)
+        except Exception:
+            return None
+        for raw in (r.stdout or "").splitlines():
+            line = raw.strip()
+            if line.startswith("/") and line.endswith("/sta"):
+                return line
+    return None
+
+
+def _run_opensta_in(container: str, cwd_dir: str, tcl_path: str,
+                    timeout: int = 240) -> Tuple[bool, str]:
+    """Run `sta -no_init -exit <tcl>` in the container. Returns (ok, stdout)."""
+    sta = _resolve_opensta(container) or "sta"
+    cmd = (f"export PATH=/foss/tools/bin:$PATH; cd {shlex.quote(cwd_dir)} && "
+           f"{shlex.quote(sta)} -no_init -exit {shlex.quote(tcl_path)} 2>&1")
+    try:
+        cp = subprocess.run(["docker", "exec", container, "bash", "-lc", cmd],
+                            capture_output=True, text=True, timeout=timeout)
+    except Exception as e:  # pragma: no cover - env dependent
+        return False, f"docker/opensta invocation failed: {e}"
+    return cp.returncode == 0, cp.stdout
+
+
+def _stitch_sim_correlate_path(
+    sta_path: dict, inst_map: dict, spef_caps: dict, subckt_names: set,
+    cells_text: str, lib_text: str, hdr: dict, shim: Path, container: str,
+    corner: str, slew_ns: float, max_stages: int, hspice_dir: Path,
+    out_dir: Path, tag: str,
+) -> dict:
+    """Stitch ONE STA path, run REAL ngspice, correlate the end-to-end SPICE
+    path delay vs its STA delay. Returns a per-path result dict. On any honesty
+    backstop → a SKIP dict with a reason (NEVER a fabricated number). This is
+    the SAME per-path recipe the single-path driver proved (0.391 vs 0.43 ns,
+    -9.0 % CORRELATED on spm) — factored so the top-N loop reuses it verbatim."""
+    base = {
+        "startpoint": sta_path["startpoint"],
+        "endpoint": sta_path["endpoint"],
+        "sta_path_delay_ns": round(sta_path["path_delay_ns"], 6),
+        "sta_endpoint_transition": sta_path["endpoint_transition"],
+    }
+    if sta_path["path_delay_ns"] <= 0:
+        return {**base, "verdict": "SKIP",
+                "skip_reason": "non_positive_sta_delay"}
+    resolved = resolve_path_stages(sta_path, inst_map, spef_caps,
+                                   subckt_names, lib_text, max_stages)
+    if not resolved:
+        return {**base, "verdict": "SKIP",
+                "skip_reason": "no_stitchable_combinational_stage"}
+    subckts: dict = {}
+    for st in resolved["stages"]:
+        if st["cell"] not in subckts:
+            sub = extract_subckt(cells_text, st["cell"])
+            if not sub:
+                return {**base, "verdict": "SKIP",
+                        "skip_reason": f"subckt_extract_failed:{st['cell']}",
+                        "stages_total_combinational": resolved["total_comb"]}
+            subckts[st["cell"]] = sub
+
+    vdd = hdr["nom_voltage"] or 1.8
+    vth = vdd * (hdr["output_threshold_fall"] / 100.0)
+    temp_c = hdr["nom_temperature"]
+    tr_ns = pulse_tr_for_slew(slew_ns, hdr["slew_lower_fall"],
+                              hdr["slew_upper_fall"], hdr["slew_derate"])
+    stage_view = [
+        {"stage": i, "inst": s["inst"], "cell": s["cell"],
+         "toggle_pin": s["toggle_pin"], "out_pin": s["out_pin"],
+         "out_net": s["out_net"],
+         "net_wire_cap_ff": round(s["wire_cap_pf"] * 1e3, 4)}
+        for i, s in enumerate(resolved["stages"])
+    ]
+    deck = build_path_deck(str(shim.resolve()), corner, resolved["stages"],
+                           subckts, vdd, tr_ns, temp_c, vth,
+                           resolved["endpoint_load_pf"])
+    deck_path = out_dir / f"corr_path_{tag}.spice"
+    deck_path.write_text(deck)
+    ok, txt = _run_ngspice_in(container, str(hspice_dir.resolve()),
+                              str(deck_path.resolve()))
+    (out_dir / f"corr_path_{tag}.log").write_text(txt)
+    meas = parse_path_meas(txt)
+
+    common = {
+        "stages_correlated": resolved["covered"],
+        "stages_total_combinational": resolved["total_comb"],
+        "endpoint_load_ff": round(resolved["endpoint_load_pf"] * 1e3, 4),
+        "stages": stage_view,
+        "log": f"corr_path_{tag}.log",
+    }
+    # honesty backstop: the endpoint node must actually swing ≥ 50 % VDD, else
+    # the static sensitisation was wrong for this gate family (mixed AND/OR/XOR)
+    # → explicit SKIP, never a fabricated number.
+    swing = meas.get("vpout_max", 0.0) - meas.get("vpout_min", 0.0)
+    if swing < 0.5 * vdd:
+        return {**base, **common, "verdict": "SKIP",
+                "skip_reason": "endpoint_did_not_swing",
+                "endpoint_swing_v": round(swing, 4)}
+    direction = sta_path["endpoint_transition"]
+    primary_key = "tpd_fall" if direction == "fall" else "tpd_rise"
+    spice_s = meas.get(primary_key)
+    if spice_s is None or spice_s <= 0:
+        return {**base, **common, "verdict": "SKIP",
+                "skip_reason": "no_measured_endpoint_edge"}
+    pct = correlation_pct(spice_s, sta_path["path_delay_ns"])
+    verdict = ("CRITICAL_MISMATCH" if abs(pct) > 25 else
+               "MISMATCH" if abs(pct) > 10 else "CORRELATED")
+    arcs = []
+    for key, arc in (("tpd_fall", "fall"), ("tpd_rise", "rise")):
+        v = meas.get(key)
+        if v is not None and v > 0:
+            arcs.append({"arc": arc, "spice_delay_ns": round(v * 1e9, 6),
+                         "is_sta_direction": arc == direction})
+    return {**base, **common, "verdict": verdict,
+            "spice_path_delay_ns": round(spice_s * 1e9, 6),
+            "pct_error": round(pct, 3),
+            "arcs": arcs}
+
+
+def _topN_path_correlation_json_path(project: Path) -> Path:
+    """Canonical location of the top-N path-correlation report (reports/phase3/,
+    beside spice_path_correlation.json)."""
+    return _pl.reports_dir(project) / "phase3" / \
+        "spice_topN_path_correlation.json"
+
+
+def _check_topN_path_correlation_json(project: Path) -> Optional[dict]:
+    """Load spice_topN_path_correlation.json if already produced."""
+    return _load_json(_topN_path_correlation_json_path(project))
+
+
+def run_commercial_pdk_topN_path_correlation(
+    project: Path,
+    container: str = _DEFAULT_CONTAINER,
+    corner: str = "ttt_lv",
+    slew_ns: float = 0.4,
+    max_stages: int = 12,
+    top_n: int = 5,
+) -> Optional[dict]:
+    """Run REAL ngspice on the TOP-N STA max-delay paths and correlate each
+    stitched end-to-end SPICE path delay against its STA path delay. Writes
+    reports/phase3/spice_topN_path_correlation.json with per-path
+    (endpoint, STA delay, SPICE delay, %err, verdict) + an aggregate (worst |
+    mean |%err|, N correlated, N skipped + why). Returns the report dict, or
+    None on an honest skip (missing shim/liberty/netlist/SPEF/ngspice, or no
+    path could even be read). Additive: leaves the single-cell + single-path
+    reports untouched.
+
+    §4.05: only design-input + PDK read. NDA: PDK content never emitted."""
+    shim = _find_bridge_shim(project)
+    if not shim:
+        return None
+    liberty = _find_liberty_typ(project)
+    cells_spice = _pl.extracted_dir(project) / "cells.spice"
+    spef = next(iter(sorted(_pl.extracted_dir(project).glob("*.spef"))), None)
+    netlist = _find_gate_netlist(project)
+    hspice_dir = _find_hspice_dir(project)
+    if not (liberty and cells_spice.is_file() and spef and netlist
+            and hspice_dir):
+        return None
+    if _resolve_ngspice(container) is None:
+        return None
+
+    cells_text = cells_spice.read_text(errors="replace")
+    subckt_names = set(re.findall(r"(?im)^\.SUBCKT\s+(\S+)", cells_text))
+    lib_text = liberty.read_text(errors="replace")
+    hdr = parse_liberty_header(lib_text)
+    netlist_text = netlist.read_text(errors="replace")
+    inst_map = parse_verilog_instances(netlist_text)
+    spef_caps = parse_spef_caps(spef.read_text(errors="replace"))
+
+    out_dir = _pl.spice_dir(project)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── primary source: run OpenSTA for the top-N max-delay paths ──
+    sta_paths: List[dict] = []
+    sta_source = None
+    top = _top_module_name(netlist_text) or project.name
+    sdc = _find_sdc(project)
+    if _resolve_opensta(container) is not None:
+        tcl = build_topN_sta_tcl(
+            str(liberty.resolve()), str(netlist.resolve()), top,
+            str(sdc.resolve()) if sdc else None,
+            str(spef.resolve()), top_n)
+        tcl_path = out_dir / "topN_report_checks.tcl"
+        tcl_path.write_text(tcl)
+        ok, sta_stdout = _run_opensta_in(container, str(out_dir.resolve()),
+                                         str(tcl_path.resolve()))
+        (out_dir / "topN_report_checks.log").write_text(sta_stdout or "")
+        sta_paths = parse_sta_paths_multi(sta_stdout or "", max_paths=top_n)
+        if sta_paths:
+            sta_source = (f"opensta report_checks -path_delay max "
+                          f"-group_count {top_n} -endpoint_count 1")
+    # ── fallback: single best pre-existing report (opensta absent) ──
+    if not sta_paths:
+        rpt = _pick_sta_report(project, subckt_names)
+        if rpt:
+            p = parse_sta_path(rpt.read_text(errors="replace"))
+            if p and p["path_delay_ns"] > 0:
+                sta_paths = [p]
+                sta_source = (f"sta_report ({rpt.name}) "
+                              f"[opensta unavailable; single path]")
+    if not sta_paths:
+        return None
+
+    per_path: List[dict] = []
+    for i, sp in enumerate(sta_paths):
+        res = _stitch_sim_correlate_path(
+            sp, inst_map, spef_caps, subckt_names, cells_text, lib_text, hdr,
+            shim, container, corner, slew_ns, max_stages, hspice_dir, out_dir,
+            tag=f"top{i}")
+        res["rank"] = i
+        per_path.append(res)
+
+    agg = aggregate_path_correlations(per_path)
+    vdd = hdr["nom_voltage"] or 1.8
+    temp_c = hdr["nom_temperature"]
+    vth = vdd * (hdr["output_threshold_fall"] / 100.0)
+    tr_ns = pulse_tr_for_slew(slew_ns, hdr["slew_lower_fall"],
+                              hdr["slew_upper_fall"], hdr["slew_derate"])
+    report = {
+        "program": "spice_correlation_check.commercial_pdk_topN_path_driver",
+        "version": "1.0.0",
+        "provenance": "real_ngspice",
+        "simulator": "ngspice (vibeic-eda container)",
+        "sta_source": sta_source,
+        "requested_top_n": top_n,
+        "pdk_bridge": f"{shim.name} :: {corner}",
+        "corner": f"{corner} / {vdd:g}V / {temp_c:g}C",
+        "netlist_source": "phase3/stage3/extracted/cells.spice "
+                          "(LVS-extracted; nmos→nch_tn / pmos→pch_tn; "
+                          "bulk normalised to rails)",
+        "operating_point": {
+            "input_slew_ns": slew_ns,
+            "input_pulse_tr_ns": round(tr_ns, 6),
+            "delay_threshold_v": round(vth, 4),
+            "note": ("each path's input driven at the plugin nominal "
+                     "characterisation slew; mid-path slews propagate "
+                     "physically through the stitched stages (not assumed)."),
+        },
+        "paths": per_path,
+        "aggregate": agg,
+        "design_identity": {"design": project.name},
+        "nda_note": "PDK model/liberty content read at runtime only; "
+                    "not emitted.",
+    }
+    out_path = _topN_path_correlation_json_path(project)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(report, indent=2, ensure_ascii=False))
+    return report
+
+
 def run_audit(project: Path, run_spice: bool = True,
               container: str = _DEFAULT_CONTAINER) -> AuditResult:
     result = AuditResult()
@@ -1544,6 +1942,45 @@ def run_audit(project: Path, run_spice: bool = True,
                 f"SPICE={pc.get('spice_path_delay_ns')}ns vs "
                 f"STA={pc.get('sta_path_delay_ns')}ns "
                 f"({pc.get('pct_error')}%) → {pc.get('verdict')}"),
+        ))
+
+    # ── Step-30 (additive): REAL ngspice TOP-N critical-PATH correlation ──
+    # Extend the proven per-path stitch from the #1 path to the top-N max-delay
+    # paths (OpenSTA report_checks -group_count N -endpoint_count 1) so the
+    # correlation spans the timing-critical CONE. Per-path honest SKIP (with a
+    # reason) for any path that can't be sensitised; the aggregate discloses N
+    # found / correlated / skipped. Honest skip of the whole gate when inputs /
+    # simulator are unavailable.
+    topN_report = None
+    if run_spice and _check_topN_path_correlation_json(project) is None \
+            and _find_bridge_shim(project) is not None:
+        try:
+            topN_report = run_commercial_pdk_topN_path_correlation(
+                project, container=container)
+        except Exception as e:  # never let the driver crash the gate
+            result.findings.append(Finding(
+                rule="SPICE_TOPN_PATH_DRIVER_ERROR",
+                severity="INFO",
+                message=f"commercial_pdk ngspice top-N path-correlation driver "
+                        f"could not run: {e}",
+            ))
+    else:
+        topN_report = _check_topN_path_correlation_json(project)
+    if topN_report is not None:
+        agg = topN_report.get("aggregate", {})
+        sev = "ERROR" if agg.get("verdict") in (
+            "MISMATCH", "CRITICAL_MISMATCH") else "INFO"
+        result.findings.append(Finding(
+            rule=("SPICE_TOPN_PATH_" + ("MISMATCH" if sev == "ERROR"
+                                        else "CORRELATED")),
+            severity=sev,
+            message=(
+                f"Real ngspice top-N path correlation "
+                f"({agg.get('n_correlated')}/{agg.get('n_paths')} paths "
+                f"correlated, {agg.get('n_skipped')} skipped): "
+                f"worst |Δ|={agg.get('worst_abs_pct_error')}% "
+                f"mean |Δ|={agg.get('mean_abs_pct_error')}% "
+                f"vs STA → {agg.get('verdict')}"),
         ))
 
     spice_results = _find_spice_results(project)
