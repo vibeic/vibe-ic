@@ -77,6 +77,7 @@
 | FS1 | ISO-26262 FMEDA 診斷覆蓋率（僅安全設計） | 對已宣告的安全機制（ECC/parity）做故障注入：在受保護路徑注入 stuck-at 故障，量測診斷覆蓋率對 ASIL 門檻。非安全設計不適用。 | RTL・已宣告安全機制・ASIL | fmeda_coverage 報告（量測 DC） | iverilog 故障注入 | `fmeda_fault_injection_coverage`・`fmeda_coverage_check` |
 | DT1 | 轉態延遲故障（at-speed LOC）ATPG | 在 scan-cut 網表的 2-time-frame launch-on-capture 展開上，為轉態故障產生 launch-capture 雙圖樣，並評定轉態測試覆蓋率。組合／無掃描設計不適用。 | scan-cut 網表・時脈 | 轉態覆蓋率報告 | Yosys SAT（`sat -prove`） | `transition_fault_atpg_run`・`transition_coverage_check` |
 | DT2 | 路徑延遲故障（at-speed 時序評級）ATPG | 以真實佈局後時序從繞線後網表列出最長的 K 條 launch-on-capture 路徑，逐路徑產生並評級 launch-capture 雙圖樣（robust 與 non-robust）；證明無圖樣可產的路徑排除不計。繞線後網表與寄生尚未存在時不適用。 | 繞線後網表・SPEF・SDC・scan cut | 路徑延遲覆蓋率報告 | OpenSTA + Yosys SAT（`sat -prove`） | `path_delay_fault_atpg_run`・`path_delay_coverage_check` |
+| DT3 | 小延遲缺陷（SDD）at-speed 分級 | 以每條時序關鍵路徑的真實佈局後 slack 為缺陷分級：只有偵測路徑餘裕很緊時，small delay 才會在 at-speed 被抓到——經低 slack 路徑偵測為強抓、經寬鬆路徑為弱抓。餘裕充裕的設計誠實得低分（其餘裕遮掉小延遲）。描述性分級、無 floor。路徑延遲與轉態覆蓋率尚未存在時不適用。 | 路徑延遲覆蓋率・轉態覆蓋率・SDC | SDD 覆蓋率報告 | OpenSTA + Yosys SAT（`sat -prove`） | `sdd_atpg_run`・`sdd_coverage_check` |
 | 13 | 🔁 Equivalence check | 形式化證明閘級網表與 RTL 功能等價（LEC）。 | RTL・post-DFT 網表 | LEC 報告 | Yosys equiv | `lec_equivalence_check`<br>skills：`equivalence-check` |
 | 14 | 🔁 Synthesis handoff gate | 合成→PnR 交接 QA：合成腳本與網表審核（**開源 Yosys 專用**；合成階段收尾閘）。 | synth 腳本・網表 | handoff 審核報告 | Yosys 腳本/網表審核 | `yosys_hilomap_required_check`・`yosys_script_template_check` |
 
@@ -174,7 +175,7 @@
 **44 個循序步驟**（Stage 1：1–6・Stage 2：7–14・Stage 3：15–32・Stage 4：33–39・
 Stage 5：40–44），外加 Phase 1（Agent 路徑與 doc-gen 路徑 D1–D5）與兩條並行支線
 （Analog A1–A9・Mixed-signal M1–M4）。預檢：P0（環境健檢）。條件式字母步驟：FS1（ISO-26262 FMEDA 診斷覆蓋率，僅安全設計）·
-DT1（轉態延遲故障 ATPG，僅掃描設計）· DT2（路徑延遲故障 at-speed ATPG，掃描設計且繞線完成後）。
+DT1（轉態延遲故障 ATPG，僅掃描設計）· DT2（路徑延遲故障 at-speed ATPG，掃描設計且繞線完成後）· DT3（小延遲缺陷 at-speed 分級，接 DT2 後）。
 編排器 `vibe_ic_one_shot_runner.py` 依序執行 Phase 1 → Phase 2 → Analog → Phase 3。
 
 範圍外（婉拒並記錄理由）：OPC/RET 之「設計者執行」（mask 合成屬 foundry 端——已在 Step 35 以 FOUNDRY_SIDE 具名揭露＋Step 40 註記）、商用硬體仿真器（FPGA 路徑涵蓋）、

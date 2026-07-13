@@ -82,6 +82,7 @@ Front-end precedence (**artifact-driven**): existing RTL > C/SystemC model (hls-
 | FS1 | ISO-26262 FMEDA diagnostic-coverage (safety designs only) | Fault-injection on a declared safety mechanism (ECC/parity): inject stuck-at faults on the protected path and measure diagnostic coverage against the ASIL floor. Not applicable for non-safety designs. | RTL · declared safety mechanism · ASIL | fmeda_coverage report (measured DC) | iverilog fault-injection | `fmeda_fault_injection_coverage`・`fmeda_coverage_check` |
 | DT1 | Transition-delay-fault (at-speed LOC) ATPG | Generate launch-capture 2-patterns for transition faults on a 2-time-frame launch-on-capture unroll of the scan-cut netlist, and grade the transition test coverage. Not applicable for combinational / no-scan designs. | scan-cut netlist · clock | transition coverage report | Yosys SAT (`sat -prove`) | `transition_fault_atpg_run`・`transition_coverage_check` |
 | DT2 | Path-delay-fault (at-speed, timing-graded) ATPG | Report the K longest launch-on-capture paths from the routed netlist with real post-layout timing, then generate and grade a launch-capture 2-pattern per path (robust and non-robust); a path with no possible pattern is excluded, never counted. Not applicable before the routed netlist and parasitics exist. | routed netlist · SPEF · SDC · scan cut | path-delay coverage report | OpenSTA + Yosys SAT (`sat -prove`) | `path_delay_fault_atpg_run`・`path_delay_coverage_check` |
+| DT3 | Small-delay-defect (SDD) at-speed grade | Grade each timing-critical path fault by its real post-layout slack: a defect is caught at-speed only when the detecting path's margin is tight, so detection through a low-slack path is a strong catch and through a slacky path is weak. A slack-rich design honestly scores low (its margin masks small delays). Descriptive grade, no floor. Not applicable before the path-delay and transition coverage exist. | path-delay coverage · transition coverage · SDC | SDD coverage report | OpenSTA + Yosys SAT (`sat -prove`) | `sdd_atpg_run`・`sdd_coverage_check` |
 | 13 | 🔁 Equivalence check (RTL ≡ netlist) | Formally prove gate-level netlist ≡ RTL (LEC). | RTL · post-DFT netlist | LEC report | Yosys equiv | `lec_equivalence_check`<br>skills: `equivalence-check` |
 | 14 | 🔁 Synthesis handoff gate (pre-PnR Yosys audit) | Synthesis→PnR handoff QA: synth script + netlist audit (**open-source-Yosys specific**; the synthesis stage's closing gate). | synth script · netlist | handoff audit reports | Yosys script/netlist audit | `yosys_hilomap_required_check`・`yosys_script_template_check` |
 
@@ -184,7 +185,7 @@ Stage 4: 33–39 · Stage 5: 40–44), plus Phase 1 (Agent path & doc-gen path
 D1–D5) and the two parallel tracks (Analog A1–A9 · Mixed-signal M1–M4).
 Preflight: P0 (environment health check). Conditional lettered steps: FS1 (ISO-26262 FMEDA diagnostic-coverage,
 safety designs only) · DT1 (transition-delay-fault ATPG, scan designs only) · DT2 (path-delay-fault at-speed
-ATPG, scan designs after routing).
+ATPG, scan designs after routing) · DT3 (small-delay-defect at-speed grade, after DT2).
 Orchestrator `vibe_ic_one_shot_runner.py` runs Phase 1 → Phase 2 → Analog → Phase 3.
 
 Out of scope (declined with reasons): designer-EXECUTED OPC/RET (mask synthesis is foundry-side — surfaced as FOUNDRY_SIDE items in Step 35 + noted at Step 40), commercial

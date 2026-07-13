@@ -290,6 +290,7 @@ const F = {
             {num:"FS1", nm:"ISO-26262 FMEDA 診斷覆蓋率（僅安全設計）", tools:["eda_simulate"], sk:["fmeda"], out:"fmeda_coverage.json（真 iverilog 注入式 DC vs ASIL；獨立 gate 重算防造假）" },
             {num:"DT1", nm:"轉態延遲故障（at-speed LOC）ATPG（僅掃描設計）", tools:["eda_dft"], sk:["atpg"], out:"transition_coverage.json（Yosys sat 2-frame LOC launch-capture 雙圖樣）" },
             {num:"DT2", nm:"路徑延遲故障（at-speed 時序評級）ATPG（掃描設計且繞線後）", tools:["eda_dft","eda_sta"], sk:["atpg"], out:"path_delay_coverage.json（OpenSTA K-longest + 逐路徑 LOC SAT，robust/non-robust 評級）" },
+            {num:"DT3", nm:"小延遲缺陷（SDD）at-speed 分級（接 DT2 後）", tools:["eda_dft","eda_sta"], sk:["atpg"], out:"sdd_coverage.json（逐路徑 slack 分級 strong/weak/undetected，描述性無 floor；餘裕充裕即誠實低分）" },
             {num:13, nm:"等效性檢查 LEC（RTL ≡ 網表）", loop:true, sk:["equivalence-check"], out:"lec.rpt" },
             {num:14, nm:"合成交接 gate（Yosys script 稽核）", out:"netlist.v（open-source flow）" },
           ]},
