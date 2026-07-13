@@ -30,6 +30,37 @@ as ground truth.** When a property is FAILED, narrate the CEX trace;
 when UNDETERMINED at the bound, recommend deeper BMC. Never claim a
 property "obviously holds" without the tool's PROVEN verdict.
 
+## The Step-5 in-flow path (`formal_property_run`) — author the harness, the program proves
+
+The canonical flow Step 5 is closed by the PROGRAM `formal_property_run.py`:
+you author the formal harness at `phase2/stage1/formal/formal_<top>.sv`, then
+the program emits the `.sby`, runs `sby` in the container, parses the
+transcript, and writes `formal/results.json` + `<top>_report.md` that the
+`formal_proof_evidence_check` gate verifies (`all_proved:true` ONLY when every
+task shows `DONE (PASS)`; rc 2 = honest NOT_APPLICABLE, never a fake). Without
+a harness the runner's `formal_not_run.json` sentinel stays the honest SKIP.
+
+**Engine recipe (no external SMT solver needed).** The container ships NO
+z3/yices/boolector — do NOT dead-end on that: SBY's built-in **ABC engines**
+need none (`aigsmt none`): `abc pdr` proves safety properties UNBOUNDED;
+`abc bmc3` runs functional BMC to a DISCLOSED depth. Split the harness into a
+`[safety]` prove task and a `[bmc]` task so each engine does what it is good at.
+
+**Harness-authoring craft (blind, §4.05-clean) — distilled from the spm proof:**
+- Golden reference = the OPERATOR SEMANTICS (`assert (p_acc == x * y_low)`),
+  never a TB/oracle/harness read. Universally quantify inputs with
+  `(* anyseq *)` wires; pin the contract's stability assumptions explicitly
+  (e.g. `assume (x == $past(x))` when the datasheet says x is held).
+- Model reset honestly: a one-shot init assumption (`assume (rst)` at t0,
+  `assume (!rst)` after) beats leaving reset free — a free-running reset makes
+  every property vacuously provable or spuriously refutable.
+- Disclose bounded-vs-unbounded in the result: a wide datapath's full-latency
+  functional proof may be solver-hard (SAT size grows exponentially with
+  frame count); the achievable HONEST tier is safety-UNBOUNDED +
+  functional-BMC-to-depth-k with k stated. Corroborate the miter at reduced
+  widths (e.g. full-latency proof at size=8/16) — same properties, full
+  coverage where the solver can reach.
+
 ## When to use
 
 - Control-dominated logic (arbiters, FIFOs, protocol adapters, CDC samplers)

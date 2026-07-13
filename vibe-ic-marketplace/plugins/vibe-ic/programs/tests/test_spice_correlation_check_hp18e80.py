@@ -183,6 +183,8 @@ def test_finders_and_driver_skip_gracefully(tmp_path):
     assert m.run_hp18e80_cell_correlation(tmp_path) is None
     # The full-PATH driver skips the same way with no inputs present.
     assert m.run_hp18e80_path_correlation(tmp_path) is None
+    # The TOP-N path driver skips the same way with no inputs present.
+    assert m.run_hp18e80_topN_path_correlation(tmp_path) is None
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -421,3 +423,145 @@ def test_path_correlation_pct_reuses_cell_math():
     # SPICE 0.391 ns vs STA 0.43 ns → ~ -9 %
     p = m.correlation_pct(0.391323e-9, 0.43)
     assert p is not None and -9.5 < p < -8.5
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  TOP-N path correlation pure-helper tests (multi-path parse + dedup +
+#  aggregate math + skip-reason handling + OpenSTA tcl build). Real ngspice +
+#  OpenSTA verified out of band on the spm run dir.
+# ══════════════════════════════════════════════════════════════════════════
+
+# A 3-path report_checks transcript: two distinct endpoints (_455_, _404_) and
+# a DUPLICATE of _404_ (OpenSTA emits repeat paths to the same endpoint).
+_STA_MULTI = """Startpoint: x[31] (input port clocked by clk)
+Endpoint: _455_ (rising edge-triggered flip-flop clocked by clk)
+
+  Delay    Time   Description
+---------------------------------------------------------
+   0.00    2.00 v x[31] (in)
+   0.25    2.25 v _365_/Y (AND3D1)
+   0.16    2.41 v _373_/Y (AND2D1)
+   0.00    2.41 v _455_/D (DFFHQD1)
+           2.41   data arrival time
+          10.00 ^ _455_/CK (DFFHQD1)
+
+Startpoint: y (input port clocked by clk)
+Endpoint: _404_ (rising edge-triggered flip-flop clocked by clk)
+
+  Delay    Time   Description
+---------------------------------------------------------
+   0.00    2.00 ^ y (in)
+   0.06    2.06 v _262_/Y (NAND2D1)
+   0.19    2.25 ^ _265_/Y (XOR3D2)
+   0.05    2.30 v _266_/Y (NOR2D1)
+   0.00    2.30 v _404_/D (DFFHQD1)
+           2.30   data arrival time
+
+Startpoint: y (input port clocked by clk)
+Endpoint: _404_ (rising edge-triggered flip-flop clocked by clk)
+
+  Delay    Time   Description
+---------------------------------------------------------
+   0.00    2.00 ^ y (in)
+   0.06    2.06 v _262_/Y (NAND2D1)
+   0.19    2.25 ^ _265_/Y (XOR3D2)
+   0.05    2.30 v _266_/Y (NOR2D1)
+   0.00    2.30 v _404_/D (DFFHQD1)
+           2.30   data arrival time
+"""
+
+
+def test_split_sta_path_blocks():
+    blocks = m.split_sta_path_blocks(_STA_MULTI)
+    assert len(blocks) == 3
+    assert blocks[0].startswith("Startpoint: x[31]")
+    assert m.split_sta_path_blocks("no startpoint here") == []
+
+
+def test_parse_sta_paths_multi_dedups_distinct_endpoints():
+    paths = m.parse_sta_paths_multi(_STA_MULTI, max_paths=5)
+    # the duplicate y→_404_ collapses to ONE distinct-endpoint path
+    assert [(p["startpoint"], p["endpoint"]) for p in paths] == [
+        ("x[31]", "_455_"), ("y", "_404_")]
+    assert abs(paths[0]["path_delay_ns"] - 0.41) < 1e-9   # 2.41-2.00
+    assert abs(paths[1]["path_delay_ns"] - 0.30) < 1e-9   # 2.30-2.00
+    # max_paths caps the count
+    assert len(m.parse_sta_paths_multi(_STA_MULTI, max_paths=1)) == 1
+    # no-dedup keeps the repeat
+    assert len(m.parse_sta_paths_multi(_STA_MULTI, max_paths=5,
+                                       dedup=False)) == 3
+
+
+def test_aggregate_path_correlations_mixed():
+    per = [
+        {"verdict": "CORRELATED", "pct_error": -4.6},
+        {"verdict": "MISMATCH", "pct_error": 14.0},
+        {"verdict": "SKIP", "skip_reason": "endpoint_did_not_swing"},
+        {"verdict": "SKIP", "skip_reason": "no_stitchable_combinational_stage"},
+    ]
+    agg = m.aggregate_path_correlations(per)
+    assert agg["n_paths"] == 4 and agg["n_correlated"] == 2
+    assert agg["n_skipped"] == 2
+    assert agg["worst_abs_pct_error"] == 14.0
+    assert abs(agg["mean_abs_pct_error"] - 9.3) < 1e-9   # (4.6+14.0)/2
+    assert agg["verdict"] == "MISMATCH"
+    assert agg["skip_reasons"] == {"endpoint_did_not_swing": 1,
+                                   "no_stitchable_combinational_stage": 1}
+
+
+def test_aggregate_path_correlations_verdict_ladder():
+    # any CRITICAL dominates
+    agg = m.aggregate_path_correlations([
+        {"verdict": "CRITICAL_MISMATCH", "pct_error": -30.0},
+        {"verdict": "CORRELATED", "pct_error": 2.0}])
+    assert agg["verdict"] == "CRITICAL_MISMATCH"
+    assert agg["worst_abs_pct_error"] == 30.0
+    # all correlated within tol → CORRELATED
+    agg2 = m.aggregate_path_correlations([
+        {"verdict": "CORRELATED", "pct_error": 1.0},
+        {"verdict": "CORRELATED", "pct_error": -3.0}])
+    assert agg2["verdict"] == "CORRELATED"
+
+
+def test_aggregate_path_correlations_none_correlated():
+    agg = m.aggregate_path_correlations([
+        {"verdict": "SKIP", "skip_reason": "endpoint_did_not_swing"}])
+    assert agg["verdict"] == "NO_PATH_CORRELATED"
+    assert agg["worst_abs_pct_error"] is None
+    assert agg["mean_abs_pct_error"] is None
+    assert agg["n_correlated"] == 0 and agg["n_skipped"] == 1
+
+
+def test_build_topN_sta_tcl():
+    tcl = m.build_topN_sta_tcl("/l.lib", "/n.v", "spm", "/c.sdc", "/s.spef", 5)
+    assert "read_liberty /l.lib" in tcl
+    assert "read_verilog /n.v" in tcl and "link_design spm" in tcl
+    assert "read_sdc /c.sdc" in tcl and "read_spef /s.spef" in tcl
+    assert ("report_checks -path_delay max -group_count 5 "
+            "-endpoint_count 1 -format full") in tcl
+    assert tcl.rstrip().endswith("exit")
+    # sdc/spef omitted when absent
+    tcl2 = m.build_topN_sta_tcl("/l.lib", "/n.v", "spm", None, None, 3)
+    assert "read_sdc" not in tcl2 and "read_spef" not in tcl2
+    assert "-group_count 3 " in tcl2
+
+
+def test_top_module_name():
+    assert m._top_module_name("module spm (clk,\n  input x);") == "spm"
+    assert m._top_module_name("// no module\nwire a;") is None
+
+
+def test_stitch_skip_no_combinational_stage():
+    # A flop→port path has 0 stitchable combinational stages → honest SKIP with
+    # a reason, and the ngspice/shim path is never touched (dummy paths safe).
+    p = m.parse_sta_path(_STA_RPT_FLOP)
+    im = m.parse_verilog_instances(_NETLIST)
+    caps = m.parse_spef_caps(_SPEF)
+    hdr = m.parse_liberty_header(_LIB)
+    res = m._stitch_sim_correlate_path(
+        p, im, caps, {"DFFHQD1"}, _CELLS_PATH, _LIB_DFF, hdr,
+        Path("/nonexistent/shim.lib"), "vibeic-eda", "ttt_lv", 0.4, 12,
+        Path("/nonexistent/hspice"), Path("/tmp"), "t")
+    assert res["verdict"] == "SKIP"
+    assert res["skip_reason"] == "no_stitchable_combinational_stage"
+    assert res["endpoint"] == "p" and "pct_error" not in res

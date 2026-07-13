@@ -4452,21 +4452,28 @@ def _l9_has_analog_modules(project: Path) -> bool:
 # gates normally.
 # v2.3 renumber: PERC inserted at 28 → SDF-sim is 29, SPICE-corr 30.
 _PLATFORM_CAPABILITY_GAPS: Dict[int, str] = {
-    5:  "cap:formal_property_proof",
-    # v1.3.94 — the commercial-PDK campaign CLOSED SIX gaps with real OSS tools;
-    # each gates normally now (a genuinely absent artifact stays MISSING = a real
-    # defect, never masked). Only Step 5 (SymbiYosys formal property proof) stays
-    # a documented cap-gap. The six closed:
-    #   22 SPEF  → OpenRCX v2 `-lef_rc` from tech-LEF RC (304/304 nets).
+    # EMPTY since the last gap closed — every canonical step now gates on a real
+    # OSS engine (a genuinely absent artifact stays MISSING = a real defect,
+    # never masked). History of the closures (all real tools, no stubs):
+    #   22 SPEF  → OpenRCX v2 `-lef_rc` from tech-LEF RC (304/304 nets)
+    #             + analytical lateral-coupling augment (_spef_coupling,
+    #             disclosed generic-dielectric, NOT foundry-calibrated).
     #   11 DFT   → AUCOHL/Fault real stuck-at ATPG (96.12% measured coverage).
     #   12 post  → yosys opt_clean scan netlist → post_dft_netlist.v.
     #   29 SDF   → iverilog $sdf_annotate gate sim (634 net delays, 50/50 vectors).
-    #   30 SPICE → ngspice cell-delay correlation vs Liberty NLDM (mean 6.8%).
+    #   30 SPICE → ngspice cell-delay + critical-path (top-N via OpenSTA)
+    #             correlation vs Liberty NLDM / STA.
     #   13 LEC   → RTL==synth via Yosys equiv with `read_liberty -ignore_miss_func`
     #             (reads commercial-Liberty cell FUNCTIONS as SAT-modelable logic,
     #             not `-lib` blackboxes) → 65/65 proven, 0 unproven; false-clean-
     #             PROOF (a corrupted NAND2D1→NOR2D1 netlist → NOT-equivalent).
     #             (routed==synth was already proven by lec_post_layout_check.)
+    #   5  FORMAL → formal_property_run: real SymbiYosys proof with the built-in
+    #             ABC engines (abc pdr = UNBOUNDED safety prove; abc bmc3 =
+    #             disclosed BOUNDED functional BMC) — no external SMT solver
+    #             needed. The runner's formal_not_run.json sentinel stays the
+    #             honest SKIP when no formal harness was authored; a real proof
+    #             gates normally via formal_proof_evidence_check.
 }
 
 # v1.3.94 — per-flag ACCURATE rationale overrides. The generic

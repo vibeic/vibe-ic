@@ -61,7 +61,7 @@
 | 2 | 🔁 Lint | 靜態檢查 RTL 風格與常見錯誤，可自動修復的先修。 | RTL | lint 報告（hygiene / ROM-init） | Verilator lint | `rtl_hygiene_lint`・`rom_init_lint`・`rtl_bug_report_schema_check`・`internal_vs_external_timing_check`…<br>skills：`rtl-review` |
 | 3 | 🔁 CDC / RDC check | 檢查跨時脈域 / 跨重置域的訊號交握是否安全。 | RTL | CDC/RDC 報告（crossing / async / reset-dep） | 自研 CDC/RDC 掃描 | `cdc_crossing_check`・`cdc_async_input_check`・`reset_dependency_check`<br>skills：`cdc-check`・`rdc-check` |
 | 4 | 🔁 Simulation | 產生 per-IC oracle testbench 跑功能模擬（golden 比對）並量測覆蓋率；L21 申告 power domain 時，TB 建議涵蓋 power-state 切換情境（開源無 UPF-aware sim，結構驗證歸 M2）。 | RTL・L10 測項 | sim log・results.xml・coverage 報告 | iverilog/vvp・Verilator coverage<br>`eda_simulate` | `testbench_gen`・`coverage_closure`・`l10_tb_conformance_check`・`l12_tb_coverage_check`…<br>skills：`testbench-gen` |
-| 5 | 🔁 Formal verification | 以形式化方法證明關鍵性質恆成立（`all_proved` 需 .sby + SymbiYosys 證據鏈）。 | RTL・L3 約束 | `.sby`・formal results・full-stack TB 結果 | SymbiYosys + smtbmc<br>`eda_formal` | `assertion_property_check`・`bit_level_full_stack_tb_check`・`formal_proof_evidence_check`<br>skills：`assertion-gen`・`formal-verify` |
+| 5 | 🔁 Formal verification | 以形式化方法證明關鍵性質恆成立：安全不變量做無界證明、功能性質做有界模型檢查並揭露界深（`all_proved` 需 .sby + SymbiYosys 證據鏈）。 | RTL・L3 約束 | `.sby`・formal results・full-stack TB 結果 | SymbiYosys（ABC pdr / bmc3）<br>`eda_formal` | `formal_property_run`・`assertion_property_check`・`bit_level_full_stack_tb_check`・`formal_proof_evidence_check`<br>skills：`assertion-gen`・`formal-verify` |
 | 6 | FPGA early prototype | 合成前期把設計放上 FPGA 驗證真實行為（早期行為原型）。 | RTL・板卡約束 | `.sof`・map 報告・FPGA 驗證 audit | Quartus<br>`eda_synth` | `fpga_test_harness_gen`・`debug_first_pass`・`quartus_map_audit`・`fpga_verification_audit`<br>skills：`fpga-test-harness` |
 
 ### Stage 2 — 約束、合成、DFT 與交接閘
@@ -76,6 +76,7 @@
 | 12 | Post-DFT optimization | 插入 DFT 後重新最佳化時序與面積。 | scan 網表 | `post_dft_netlist.v` | Yosys resynth | skills：`synth-doctor` |
 | FS1 | ISO-26262 FMEDA 診斷覆蓋率（僅安全設計） | 對已宣告的安全機制（ECC/parity）做故障注入：在受保護路徑注入 stuck-at 故障，量測診斷覆蓋率對 ASIL 門檻。非安全設計不適用。 | RTL・已宣告安全機制・ASIL | fmeda_coverage 報告（量測 DC） | iverilog 故障注入 | `fmeda_fault_injection_coverage`・`fmeda_coverage_check` |
 | DT1 | 轉態延遲故障（at-speed LOC）ATPG | 在 scan-cut 網表的 2-time-frame launch-on-capture 展開上，為轉態故障產生 launch-capture 雙圖樣，並評定轉態測試覆蓋率。組合／無掃描設計不適用。 | scan-cut 網表・時脈 | 轉態覆蓋率報告 | Yosys SAT（`sat -prove`） | `transition_fault_atpg_run`・`transition_coverage_check` |
+| DT2 | 路徑延遲故障（at-speed 時序評級）ATPG | 以真實佈局後時序從繞線後網表列出最長的 K 條 launch-on-capture 路徑，逐路徑產生並評級 launch-capture 雙圖樣（robust 與 non-robust）；證明無圖樣可產的路徑排除不計。繞線後網表與寄生尚未存在時不適用。 | 繞線後網表・SPEF・SDC・scan cut | 路徑延遲覆蓋率報告 | OpenSTA + Yosys SAT（`sat -prove`） | `path_delay_fault_atpg_run`・`path_delay_coverage_check` |
 | 13 | 🔁 Equivalence check | 形式化證明閘級網表與 RTL 功能等價（LEC）。 | RTL・post-DFT 網表 | LEC 報告 | Yosys equiv | `lec_equivalence_check`<br>skills：`equivalence-check` |
 | 14 | 🔁 Synthesis handoff gate | 合成→PnR 交接 QA：合成腳本與網表審核（**開源 Yosys 專用**；合成階段收尾閘）。 | synth 腳本・網表 | handoff 審核報告 | Yosys 腳本/網表審核 | `yosys_hilomap_required_check`・`yosys_script_template_check` |
 
@@ -94,7 +95,7 @@
 | 19 | CTS | 建構時脈樹、平衡時脈偏移。 | placed.def・clock plan | `post_cts.def`・時脈樹報告 | OpenROAD CTS<br>`eda_pnr` | `cts_quality_check` |
 | 20 | 🔁 Post-CTS hold fixing | 修復時脈樹建好後出現的 hold 違規（繞線後 runner 會再跑一次 hold 修復）。 | post_cts.def | `post_hold.def` | OpenROAD repair_timing -hold | `hold_closure_check`<br>skills：`hold-fix` |
 | 21 | Routing | 完成所有訊號繞線（全域 + 細部）。 | post_hold.def | `routed.def`・router DRC 報告 | OpenROAD TritonRoute<br>`eda_pnr` | `drc_report_check`・`def_stage_progression_check`・`provenance_check` |
-| 22 | Parasitic extraction | 萃取繞線後的寄生 RC（SPEF）。 | routed.def・tech LEF | SPEF | OpenRCX<br>`eda_extraction` | `spef_extraction_check`・`provenance_check` |
+| 22 | Parasitic extraction | 萃取繞線後的寄生 RC（SPEF）；當 PDK 未附 coupling captable 時，依繞線幾何以解析式補上側向耦合電容，介電係數為已揭露的通用假設。 | routed.def・tech LEF | SPEF（含耦合電容） | OpenRCX<br>`eda_extraction` | `spef_extraction_check`・`provenance_check` |
 | 23 | 🔁 Post-route STA | 真實寄生參數簽核級時序分析（MMMC＝per-corner 迴圈，每角獨立報告）。 | 網表・SPEF・SDC・多角 liberty | post-route 時序報告・`per_corner/` | OpenSTA（per-corner 迴圈）<br>`eda_sta` | `sta_report_check`<br>skills：`sta-review` |
 | 24 | 🔁 IR drop（靜態 + 動態） | 電源網路壓降分析：靜態，外加 VCD 向量化動態 IR（依真實切換 VCD 加權的壓降）。 | routed.def（PSM）・VCD | 靜態 + 動態 IR 報告 | OpenROAD PSM（`read_vcd`） | `ir_drop_report_check`・`dynamic_ir_drop_check`<br>skills：`ir-drop-triage` |
 | 25 | 🔁 EM check | 檢查電流密度、確保金屬線壽命。 | routed.def（PSM -enable_em） | EM 報告 + 分段電流 | OpenROAD PSM -enable_em | `em_report_check`<br>skills：`em-check` |
@@ -102,7 +103,7 @@
 | 27 | 🔁 Signal integrity | 串擾 / 雜訊影響分析（SPEF 耦合電容篩查，advisory tier 明示）。 | SPEF | SI 報告（含 >0.9 耦合 watch-list） | 自研 SPEF 耦合篩查（OpenSTA 視窗 advisory） | `si_crosstalk_check` |
 | 28 | 🔁 PERC / Reliability sign-off | ESD 焊環＋放電拓樸、latch-up well-tap、跨電壓域保護的強制簽核；對應 PERC 四類——netlist 檢查＋netlist 驅動的 layout 檢查（自動化）、電流密度＋P2P 電阻（具名 manual-review）。manual-review 由資深實體設計／可靠度工程師簽核，準則記入 `perc_equivalent.json`（categories[].status=MANUAL_REVIEW＋`review_criteria`：PDK Jmax 表、ESD 放電路徑 P2P 上限、Vhold>Vdd、L21 跨域契約等具名限值），結果回填 checklist[].confirmed。 | 閘級網表・routed.def・L21 power intent・L3 ESD 規格・24–27 報告 | `perc_equivalent.json`・PERC memo・gate 判定 | 自研 PERC-equivalent（DEF 驅動） | `perc_signoff_check` |
 | 29 | Post-layout gate-level sim | 帶 SDF 延遲的閘級模擬，確認佈局後功能正確（無 SDF 重模擬即誠實 SKIP）。 | 閘級網表・SDF・TB | post-sim 結果 | iverilog + SDF<br>`eda_simulate` | `post_layout_sim_check` |
-| 30 | Post-layout SPICE verification | 電晶體級 ngspice 對 Liberty 時序的比對：單一代表性 cell 與整條 STA 關鍵路徑（抽出的 subckt 逐級串接、帶真實 net cap；SPICE vs STA 路徑延遲）。 | SPICE deck・SPEF・STA path | cell + path SPICE 比對報告 | ngspice<br>`eda_spice` | `spice_correlation_check`<br>skills：`ams-sim` |
+| 30 | Post-layout SPICE verification | 電晶體級 ngspice 對 Liberty 時序的比對：單一代表性 cell 加上前 N 條 STA 關鍵路徑（每個相異終點取最差一條；抽出的 subckt 逐級串接、帶真實 net cap；逐路徑 SPICE vs STA 延遲並彙總）。 | SPICE deck・SPEF・STA paths | cell + top-N path SPICE 比對報告 | ngspice + OpenSTA<br>`eda_spice` | `spice_correlation_check`<br>skills：`ams-sim` |
 | 31 | 🔁 Physical verification | DRC / LVS / ERC / 密度實體規則簽核；密度在此屬**規則符合性**（KLayout deck 逐層 CMP 窗；執行驗證歸 Step 34、優化建議歸 Step 35）；LVS 走 Magic 抽取 + netgen 真比對（含 macro 的設計——如 Caravel 類 harness——可對 macro blackbox：Magic 以 `lef write -hide` 將 macro 遮為介面殼、netgen 補充 setup 以同名 blackbox 比對；waiver 依據＝device-level match＋KLayout 交叉驗證，由 `signoff_waiver_emit` 寫入專案 `waivers.json`，Step 36 checklist 以 open_waivers 交叉引用為 reviewer to-do）。 | GDS・閘級網表・PDK deck | 簽核 DRC・LVS・ERC 報告 | KLayout DRC・Magic ext2spice + netgen LVS・OpenROAD ERC<br>`eda_drc_klayout`・`eda_lvs` | `erc_density_check`<br>skills：`drc-fix`・`lvs-triage`・`perc-check` |
 | 32 | 🔁 ECO | 簽核發現問題時的工程變更修復迴圈（優先取用 Step 18 預置的 spare cells，達成 metal-only 修復）。 | 簽核報告 | ECO log 或 no-ECO flag | OpenROAD ECO | `eco_loop_audit`<br>skills：`eco-plan` |
 
@@ -173,7 +174,7 @@
 **44 個循序步驟**（Stage 1：1–6・Stage 2：7–14・Stage 3：15–32・Stage 4：33–39・
 Stage 5：40–44），外加 Phase 1（Agent 路徑與 doc-gen 路徑 D1–D5）與兩條並行支線
 （Analog A1–A9・Mixed-signal M1–M4）。預檢：P0（環境健檢）。條件式字母步驟：FS1（ISO-26262 FMEDA 診斷覆蓋率，僅安全設計）·
-DT1（轉態延遲故障 ATPG，僅掃描設計）。
+DT1（轉態延遲故障 ATPG，僅掃描設計）· DT2（路徑延遲故障 at-speed ATPG，掃描設計且繞線完成後）。
 編排器 `vibe_ic_one_shot_runner.py` 依序執行 Phase 1 → Phase 2 → Analog → Phase 3。
 
 範圍外（婉拒並記錄理由）：OPC/RET 之「設計者執行」（mask 合成屬 foundry 端——已在 Step 35 以 FOUNDRY_SIDE 具名揭露＋Step 40 註記）、商用硬體仿真器（FPGA 路徑涵蓋）、

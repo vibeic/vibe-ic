@@ -132,6 +132,30 @@ SUBSTITUTIONS = [
                   "OSS Fault does logic stuck-at ATPG only",
         "match": ["mbist", "lbist", "memory bist", "tessent"],
     },
+    # v1.3.99 — two former "none" areas now have a REAL disclosed OSS tier
+    # (they moved from ADVANCED_NODE_EXTENSION gaps to flow steps 22/DT2):
+    {
+        "mandated": "Calibre xRC / StarRC-XT / QRC field-solved coupling extraction",
+        "substitute": "OpenRCX v2 -lef_rc grounded RC + analytical lateral "
+                      "coupling augment (_spef_coupling, step 22)",
+        "caveat": "NOT foundry-calibrated: no rules.C/.nxtgrd field solve; "
+                  "lateral same-layer only (no inter-layer crossover, no "
+                  "fringe/3D correction), DISCLOSED generic dielectric; "
+                  "aggressor-victim crosstalk (SI) sign-off remains commercial",
+        "match": ["xrc", "starrc", "nxtgrd", "rules.c", "qrc",
+                  "field solver extraction", "coupling extraction"],
+    },
+    {
+        "mandated": "Commercial at-speed (path-delay) ATPG",
+        "substitute": "path_delay_fault_atpg_run (step DT2: OpenSTA K-longest "
+                      "on routed netlist+SPEF -> per-path LOC miter SAT, "
+                      "robust/non-robust graded)",
+        "caveat": "Top-K longest paths only (exhaustive PDF is exponential; K "
+                  "disclosed); PI-launched paths are not LOC-testable and are "
+                  "excluded, never counted",
+        "match": ["at-speed atpg", "at speed atpg", "path delay atpg",
+                  "path-delay atpg", "tetramax"],
+    },
     {
         "mandated": "Side-channel leakage sim (DPA/CPA/EM)",
         "substitute": "none (commercial-only)",

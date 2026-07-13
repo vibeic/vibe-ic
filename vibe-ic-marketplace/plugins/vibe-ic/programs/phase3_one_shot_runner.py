@@ -11217,6 +11217,10 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         corner_spefs = _emit_spef_corners(
             project, top, pdk, container, mc_spef_dir, notes)
         for p in corner_spefs.values():
+            # Same analytical lateral-coupling augment as the nom SPEF —
+            # self-gated: a real-captable corner SPEF already carries
+            # coupling (`-coupling_threshold`), so this no-ops there.
+            _emit_spef_coupling_augment(primary_def, pdk.tech_lef, p, notes)
             written.append(str(p))
         mc_sta_ok = False
         # A corner STA is only meaningful with a SETUP/HOLD split -> need >=2
@@ -11855,6 +11859,43 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 written.append(str(sim_pl_out / "results.log"))
         except Exception as _sdfsim_exc:
             notes.append(f"sdf_gate_sim non-fatal: {_sdfsim_exc}")
+
+    # --- Step DT2 — path-delay-fault (at-speed, timing-graded) ATPG ------
+    # The post-route timing model (routed netlist + SPEF) is born HERE, so
+    # the DT2 PRODUCER fires from phase3 (the scan cut + flat core come from
+    # phase2 DT1). Best-effort + NONFATAL: the flow's DT2 gate only VALIDATES
+    # reports/phase2/dft/path_delay_coverage.json (independent per-path
+    # recount — false/held/aborted can never count as sensitised).
+    _dt2_json = project / "reports/phase2/dft/path_delay_coverage.json"
+    _dt2_cut = project / "phase2/stage2/dft/cut_netlist.v"
+    if not _dt2_json.is_file() and _dt2_cut.is_file():
+        _dt2_clk = None
+        _dt2_sdc = project / "phase3/stage3/pnr/constraint.sdc"
+        if _dt2_sdc.is_file():
+            _m_clk = re.search(
+                r"create_clock[^\n]*?(?:-name\s+(\w+)|get_ports\s*\{?\s*(\w+))",
+                _dt2_sdc.read_text(errors="replace"))
+            if _m_clk:
+                _dt2_clk = _m_clk.group(1) or _m_clk.group(2)
+        if _dt2_clk:
+            try:
+                _dt2_cmd = [sys.executable,
+                            str(PROGRAMS_DIR / "path_delay_fault_atpg_run.py"),
+                            str(project), "--clock", _dt2_clk,
+                            "--json", str(_dt2_json)]
+                _dt2_pdk_in = project / "input" / "pdk"
+                if _dt2_pdk_in.is_dir():
+                    _dt2_cmd += ["--pdk-dir", str(_dt2_pdk_in.resolve())]
+                _dt2_json.parent.mkdir(parents=True, exist_ok=True)
+                subprocess.run(_dt2_cmd, capture_output=True, text=True,
+                               timeout=2400)
+                if _dt2_json.is_file():
+                    written.append(str(_dt2_json))
+            except Exception as _dt2_exc:
+                notes.append(f"path_delay_fault_atpg non-fatal: {_dt2_exc}")
+        else:
+            notes.append("path_delay_fault_atpg skipped: no create_clock "
+                         "name found in the routed SDC")
     # #437(d): the runner does NOT run an SDF-annotated gate-level re-sim
     # — "RTL TB PASS + post-route TNS=0" is an RTL-sim approximation, and
     # an approximation must not wear the gate's pass.flag. Emit an honest
@@ -12974,7 +13015,74 @@ exit
             f"This is a known limitation when the PDK lacks RC files; "
             f"see waivers.json VIBE-IC-PLUGIN-PHASE3-SPEF-EXTRACT.")
         return False
+    # --- Step 22.5: coupling-aware augmentation (v1.3.95) --------------------
+    # The OpenRCX `-lef_rc` path (used when the PDK ships no foundry captable —
+    # e.g. HP18E80, which lacks the Calibre-XRC rules.C / StarRC .nxtgrd
+    # coupling+3D-dielectric deliverable) produces GROUNDED caps only.  We add
+    # the LATERAL (same-layer, side-to-side) coupling cap ANALYTICALLY from the
+    # routed geometry: spacing/overlap measured from the DEF, thickness from the
+    # tech LEF, and a DISCLOSED generic-180nm SiO2 dielectric (eps_r):
+    #     C_couple = eps_r * eps0 * T * L / S      (parallel-plate lateral)
+    # This is strictly better than grounded-only for RC/SI-aware STA, and is
+    # HONESTLY DISCLOSED (banner in the SPEF + note here) as "analytical,
+    # generic-dielectric, NOT foundry-calibrated" — NOT a field-solver run.
+    # GATED: only runs when the SPEF is grounded-ONLY (no captable coupling to
+    # double-count) and the geometry actually yields coupling; NONFATAL — any
+    # error leaves the valid grounded SPEF intact.  Disable: VIBEIC_SPEF_COUPLING=0.
+    _emit_spef_coupling_augment(def_file, pdk.tech_lef, spef_out, notes)
     return True
+
+
+def _spef_has_coupling(spef_text: str) -> bool:
+    """True if the SPEF already carries coupling caps (a 3-field *CAP entry
+    ``id nodeA nodeB value``) — i.e. a real OpenRCX-captable extraction ran, so
+    the analytical augmentation must NOT double-count."""
+    in_cap = False
+    for line in spef_text.splitlines():
+        s = line.strip()
+        if s.startswith("*CAP"):
+            in_cap = True
+            continue
+        if s.startswith("*RES") or s.startswith("*END") or s.startswith("*D_NET"):
+            in_cap = False
+            continue
+        if in_cap and s and s[0].isdigit():
+            # grounded: "id node val" (3 tok); coupling: "id nodeA nodeB val" (4)
+            if len(s.split()) >= 4:
+                return True
+    return False
+
+
+def _emit_spef_coupling_augment(def_file: Path, tech_lef: Path, spef_out: Path,
+                                notes: List[str]) -> bool:
+    """Post-pass: add analytical lateral coupling caps to a grounded SPEF.
+
+    chip/PDK-AGNOSTIC + NONFATAL.  No-ops (leaving the grounded SPEF intact)
+    when disabled, when the SPEF already has coupling, or when the geometry
+    yields none.  Returns True iff coupling caps were written."""
+    if os.environ.get("VIBEIC_SPEF_COUPLING", "1") == "0":
+        return False
+    try:
+        import _spef_coupling as _cc
+        if not (def_file and def_file.is_file()
+                and tech_lef and Path(tech_lef).is_file()):
+            return False
+        spef_text = spef_out.read_text()
+        if _spef_has_coupling(spef_text):
+            notes.append("SPEF already carries coupling caps (foundry-captable "
+                         "extraction or a prior augmentation) — analytical "
+                         "augmentation skipped to avoid double-counting.")
+            return False
+        res = _cc.augment_spef_file(str(def_file), str(tech_lef), str(spef_out))
+        if res["n_cc_written"] > 0:
+            notes.append(_cc.summarize(res["stats"]))
+            return True
+        notes.append("coupling-aware SPEF: routed geometry yielded no adjacent "
+                     "same-layer wire pairs — grounded-cap SPEF stands.")
+        return False
+    except Exception as _e:  # NONFATAL — never break SPEF emit on augmentation
+        notes.append(f"SPEF coupling augmentation skipped (nonfatal): {_e}")
+        return False
 
 
 # ── TAPEOUT-SIGNOFF P1: MULTI-CORNER SPEF (min / nom / max) ───────────────────
