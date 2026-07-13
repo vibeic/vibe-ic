@@ -262,11 +262,14 @@ def run_loop_case(record: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
     if res["emit_path"] == "needs_ai_backup":
         pe = route.get("plugin_entry") or {}
         prompt = (record.get("input") or {}).get("prompt") or ""
+        # input.context file keys — for the context-sibling collision advisory
+        # (never inline a verbatim copy of a separately-compiled context module).
+        ctx_keys = list(((record.get("input") or {}).get("context") or {}).keys())
         try:
             handoff = _PACK.assemble(
                 prompt, iface, tgt,
                 pe.get("ai_backup", []), pe.get("verify", []),
-                cidir / "ai_backup")
+                cidir / "ai_backup", context_keys=ctx_keys)
         except Exception:
             handoff = None
         if handoff:
