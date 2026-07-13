@@ -440,8 +440,7 @@ def _emit_whole_bus_constant_ties(
     # A submission wrapper that must be LVS-short-clean should drive each unused
     # output bit from a DISTINCT tie cell (or from the user macro) — set
     # `lvs_short_clean: true` in the pin-map (or --lvs-short-clean) to emit that.
-    # This residual is a property of the reduced wrapper, not the port set — see
-    # benchmark-data/ic/TAPEOUT_SIGNOFF_GAP_ROADMAP.md.
+    # This residual is a property of the reduced wrapper, not the port set.
     out.append("    // NOTE: whole-bus constant tie-offs below read as LVS "
                "'shorted ports' on a reduced wrapper — drive from the macro / "
                "distinct tie cells (lvs_short_clean) for an LVS-short-clean "
