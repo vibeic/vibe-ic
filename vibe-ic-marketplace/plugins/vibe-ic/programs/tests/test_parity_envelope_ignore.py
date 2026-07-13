@@ -1,7 +1,7 @@
 """Tests for v0.1.64 R18 capture: l_doc_parity_diff envelope-ignore.
 
-Captured from the recurring 'parity tool over-counts' theme that surfaced
-in GAP_v0157, _v0160, _v0162, _v0163. The diff treats every top-level
+Captured from the recurring 'parity tool over-counts' theme in parity
+review. The diff treats every top-level
 key in the agent that isn't in the program as ABSENT — including wrapper
 metadata (doc_id, fields, evidence, extraction_source on Claude's side;
 extraction_evidence, extraction_strategy, schema_version on the program

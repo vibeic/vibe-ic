@@ -145,7 +145,7 @@ def _is_empty(v: Any) -> bool:
 # (extraction_evidence, extraction_strategy). Counting these as
 # ABSENT_IN_PROGRAM (when Claude uses 'doc_id'/'fields'/'evidence' but the
 # program uses 'extraction_strategy'/'class_path') vastly over-counts the real
-# extraction gap. The user identified this in GAP_v0157: 'absent 其實高估了
+# extraction gap. The user identified this: 'absent 其實高估了
 # 差距 — 兩邊 schema 不相容'. Excluding them from the counting buckets
 # reflects the SUBSTANTIVE content delta, not wrapper-schema choices.
 #

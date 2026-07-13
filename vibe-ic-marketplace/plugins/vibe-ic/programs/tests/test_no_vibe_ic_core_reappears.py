@@ -3,7 +3,6 @@ reappear in the live plugin surface (skills / programs / agents /
 hooks / README / AGENT_USAGE_GUIDE).
 
 Allowed exceptions (historical record only):
-  - MIGRATION_LOG.md (audit trail of the rename)
   - plugins/.gitignore (text context comment)
 
 Per user 2026-05-29: 'vibe-ic-core is a phase-out keyword'.
@@ -26,7 +25,6 @@ PHASED_OUT = "vibe-ic-core"
 # Files / paths to exempt from the scan. Anything under these survives
 # the rename for documented reasons.
 ALLOWED_PATHS = {
-    PLUGIN_ROOT / "MIGRATION_LOG.md",       # historical audit
     Path(__file__).resolve(),               # this test names the phased-out
                                              # term as a string literal
 }
@@ -82,11 +80,6 @@ class TestVibeIcCoreScrubbed:
 class TestExemptionsStillExist:
     """The exemptions themselves must remain pointing at real files,
     otherwise the scan loses meaning."""
-
-    def test_migration_log_exists(self):
-        # historical audit; if removed, doctrine is to also remove the
-        # exemption AND retest the scan as empty
-        assert (PLUGIN_ROOT / "MIGRATION_LOG.md").exists()
 
     def test_gitignore_exists(self):
         if MARKETPLACE_ROOT is None:
