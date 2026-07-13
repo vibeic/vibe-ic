@@ -53,8 +53,30 @@ except Exception:  # pragma: no cover - yaml is a plugin dependency
 _PLUGIN_ROOT = Path(__file__).resolve().parent.parent.parent
 _FLOW = _PLUGIN_ROOT / "flow" / "phase1_phase2_phase3.yaml"
 
-_EN_NAME = "ALL_STEPS.md"
-_ZH_NAME = "ALL_STEPS.zh-TW.md"
+def _verkey(p: Path) -> tuple:
+    m = re.search(r"v(\d+)\.(\d+)\.(\d+)", p.name)
+    return tuple(int(x) for x in m.groups()) if m else (0, 0, 0)
+
+
+def _discover_docs():
+    """docs/architecture + the CURRENT (highest-version) ALL_STEPS docs.
+
+    Filenames carry the flow-doc version (e.g. ALL_STEPS_v2.3.2.md); globbing
+    keeps this guard working across doc-version bumps with no per-version edit.
+    """
+    for ancestor in [_PLUGIN_ROOT, *_PLUGIN_ROOT.parents]:
+        cand = ancestor / "docs" / "architecture"
+        if not cand.is_dir():
+            continue
+        ens = sorted((p for p in cand.glob("ALL_STEPS*.md")
+                      if not p.name.endswith(".zh-TW.md")), key=_verkey)
+        zhs = sorted(cand.glob("ALL_STEPS*.zh-TW.md"), key=_verkey)
+        if ens and zhs:
+            return cand, ens[-1].name, zhs[-1].name
+    return None, "ALL_STEPS*.md", "ALL_STEPS*.zh-TW.md"
+
+
+_DOCS_DIR, _EN_NAME, _ZH_NAME = _discover_docs()
 
 # Salient-token tokenizer (Layer 2). Generic English stopwords + flow-generic
 # words that carry no step identity. We keep tokens of length >= 3 so short
@@ -124,11 +146,7 @@ def _doc_row_text(text: str, step_id: int) -> str | None:
 
 
 def _find_docs_dir() -> Path | None:
-    for ancestor in [_PLUGIN_ROOT, *_PLUGIN_ROOT.parents]:
-        cand = ancestor / "docs" / "architecture"
-        if (cand / _EN_NAME).exists() and (cand / _ZH_NAME).exists():
-            return cand
-    return None
+    return _DOCS_DIR
 
 
 def _load_flow():
