@@ -19,10 +19,10 @@ GDS file (tapeout-ready)
 
 ```bash
 # 1. Provide the EDA container (named vibeic-eda). Recommended: the enhanced fork image.
-docker build -t vibeic-eda:0.2.13 /path/to/repo/tools/vibeic-eda   # forked toolchain, FAIL→PASS fixes
+docker build -t vibeic-eda:0.2.16 /path/to/repo/tools/vibeic-eda   # forked toolchain, FAIL→PASS fixes
 docker rm -f vibeic-eda 2>/dev/null || true                        # drop any old container of this name
 docker run -d --name vibeic-eda -v $HOME/designs:/design \
-  vibeic-eda:0.2.13 --skip sleep infinity
+  vibeic-eda:0.2.16 --skip sleep infinity
 # already running an older tag? recreate config-preserving: tools/vibeic-eda/restart-eda.sh 0.2.12
 # stock fallback: docker pull hpretl/iic-osic-tools:latest  (then run it named vibeic-eda)
 
