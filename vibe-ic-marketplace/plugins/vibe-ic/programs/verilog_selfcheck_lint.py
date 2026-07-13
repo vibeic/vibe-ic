@@ -49,6 +49,19 @@ def _resolve_verilator(override: Optional[str]) -> Optional[str]:
     return cand if (Path(cand).is_file() or shutil.which(cand)) else None
 
 
+def _looks_like_path(rtl: str) -> bool:
+    """True only when `rtl` names an existing file. The ONLY correct discriminator
+    between a file path and raw SV text — a multi-line SV string is never a real
+    file, and real RTL almost always contains '/' (a `//` comment or a division),
+    so the old `os.path.sep in rtl` heuristic misrouted raw text as a filename.
+    An over-long raw source makes stat() raise ENAMETOOLONG (OSError) / ValueError
+    — treat that as "not a path" (raw text)."""
+    try:
+        return Path(rtl).is_file()
+    except (OSError, ValueError):
+        return False
+
+
 def _parse_diags(text: str) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for line in text.splitlines():
@@ -104,7 +117,7 @@ def selfcheck_lint(rtl: str, top: Optional[str] = None,
     tmp: Optional[tempfile.TemporaryDirectory] = None
     files: List[str] = []
     try:
-        if os.path.sep in rtl or rtl.endswith((".v", ".sv")) and Path(rtl).is_file():
+        if _looks_like_path(rtl):
             files.append(str(Path(rtl)))
         else:
             tmp = tempfile.TemporaryDirectory()
