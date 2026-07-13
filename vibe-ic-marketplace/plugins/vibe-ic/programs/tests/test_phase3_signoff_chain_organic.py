@@ -186,11 +186,26 @@ class TestSpefTclCaptable:
 
     def test_estimate_is_fallback_only(self, tmp_path, monkeypatch):
         tcl = self._emit(tmp_path, monkeypatch)
-        # estimate_parasitics may remain ONLY inside the no-captable fallback branch
-        assert "SPEF_NO_CAPTABLE_FALLBACK_ESTIMATE" in tcl
-        # write_spef still present + last
+        # v1.3.94: the no-captable fallback is a REAL OpenRCX v2 `-lef_rc`
+        # grounded-cap extraction (SPEF_LEF_RC_V2_EXTRACT), which SUPERSEDED the
+        # old estimate_parasitics fallback (the retired marker
+        # SPEF_NO_CAPTABLE_FALLBACK_ESTIMATE). estimate_parasitics only populates
+        # lumped STA RC → RCX-0134 → an EMPTY SPEF, so write_spef can never depend
+        # on it: the fallback must ITSELF be a real extraction. Intent preserved
+        # (real extraction is primary; estimate never feeds write_spef) — in fact
+        # strengthened: estimate_parasitics is not invoked by the SPEF emit at all
+        # (it survives only in the explanatory comments).
+        assert "SPEF_LEF_RC_V2_EXTRACT" in tcl, (
+            "no-captable fallback must be the real OpenRCX v2 LEF-RC extraction")
         lines = [l.strip() for l in tcl.splitlines()
                  if l.strip() and not l.strip().startswith("#")]
+        assert any("extract_parasitics -lef_rc" in l for l in lines), (
+            "no-captable fallback must call OpenRCX -lef_rc (real grounded-cap "
+            "extraction), not estimate_parasitics")
+        assert not any("estimate_parasitics" in l for l in lines), (
+            "estimate_parasitics must NOT feed write_spef — it produces no OpenRCX "
+            "extraction data (RCX-0134 → empty SPEF); the fallback is real extraction")
+        # write_spef still present + last; a real extract_parasitics precedes it
         i_ext = next(i for i, l in enumerate(lines)
                      if "extract_parasitics -ext_model_file" in l)
         i_ws = next(i for i, l in enumerate(lines) if "write_spef" in l)
