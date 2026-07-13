@@ -685,6 +685,7 @@ def _run_sta_slack(container: str, work: Path, tag: str, liberty_c: str,
     tcl_c = _to_container_path(str(tcl), container)
     rpt_c = _to_container_path(str(rpt), container)
     cmd = f"{_STA_PATH} sta -no_init -exit {tcl_c} > {rpt_c} 2>&1"
+    # watchdog-exempt: bounded OpenSTA report_checks on a fixed routed design (explicit subprocess timeout is the hard ceiling); deterministic, not an open-ended EDA generator
     rc, _out, _err = _docker_exec(container, cmd, timeout=timeout)
     body = rpt.read_text(errors="replace") if rpt.exists() else ""
     setup, hold = worst_setup_hold(body)
@@ -758,6 +759,7 @@ def _run_windows(container: str, work: Path, liberty_c: str, netlist_c: str,
     tcl_path.write_text(tcl)
     tcl_c = _to_container_path(str(tcl_path), container)
     cmd = f"{_STA_PATH} sta -no_init -exit {tcl_c} > {tcl_c}.log 2>&1"
+    # watchdog-exempt: bounded OpenSTA timing-window report on a fixed routed design (explicit subprocess timeout is the hard ceiling); deterministic, not an open-ended EDA generator
     rc, _o, _e = _docker_exec(container, cmd, timeout=timeout)
     if out_json_host.exists():
         try:
