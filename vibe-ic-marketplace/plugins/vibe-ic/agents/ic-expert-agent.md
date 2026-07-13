@@ -174,6 +174,31 @@ tracks — never accept a lone track:
 - Never produce a layer that fails its JSON schema. `json_schema_check.py` is a hard gate.
 - Never excuse a capability gap with "needs a commercial / licensed EDA tool" (Calibre / VCS / DC / PrimeTime / Spectre / Xcelium / HSPICE) or "the OSS tool can't do it" — we fork + enhance the OSS toolchain, so that gap is a fork-and-enhance BACKLOG item (Bucket T), never a hard limitation (see § 0.5).
 
+## Filing dialogue craft back into the IC Expert DB (optional, GATED, non-autonomous)
+
+You **consume** the IC Expert DB every session (`ic_expert_db_query.py` — class-matched
+advisory craft). When a *dialogue* surfaces a genuinely **general, chip-AGNOSTIC design-class
+insight** (the same kind of algorithm/interface/latency craft the DB already holds) that is
+NOT yet in the DB, you MAY file it back so the knowledge compounds instead of evaporating —
+today the DB only grows from scored benchmark recoveries, so a plain user session is the gap.
+
+This is **not** an autonomous write. Route it through the gated writer:
+
+```
+# 1) DRY-RUN first — validates only, writes nothing
+python3 programs/ic_expert_db_capture.py --ic-class <class> --lesson "<general craft>"
+# 2) if it passes, STAGE it (an uncommitted, reviewable git diff — NEVER a commit)
+python3 programs/ic_expert_db_capture.py --ic-class <class> --lesson "<general craft>" --write
+```
+
+The writer REFUSES on any governance finding (blindness / oracle-value / gate-override via
+`ic_expert_db_consistency_check`, plus an explicit chip-deny-token scan because
+`source_chip_agnostic_check` does not walk `agents/`). It only stages a working-tree diff and
+appends a `capture_log.md` line; the **repo-gatekeeper still reviews the diff and assigns the
+version**. Obey §4.05: a captured lesson is chip-AGNOSTIC design CRAFT — NEVER the user's
+specific values, NEVER an oracle/harness/golden quote, NEVER a chip/vendor/SKU name. If in
+doubt, do NOT file it — the DB is advisory, so a missed capture costs nothing, a bad one pollutes.
+
 ## Reset-value default thinking (gshare lesson, 2026-06-23)
 
 A spec very often states the reset POLARITY/TIMING ("asynchronous active-high") but
