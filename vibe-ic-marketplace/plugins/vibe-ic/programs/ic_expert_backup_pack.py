@@ -69,6 +69,40 @@ def _db_hits(prompt: str, k: int) -> List[Dict[str, Any]]:
     return out
 
 
+def _spec_requirements(prompt: str) -> List[Dict[str, Any]]:
+    """Run the deterministic spec detectors on the prompt and return the concrete,
+    chip-agnostic requirements an author would otherwise silently drop. These are
+    the distilled RCA rules (issue #126): an addressable memory region behind the
+    same bus as the CSRs (extraction-gap) and a lint-review deliverable whose
+    graded axis is `verilator -Wall` cleanliness (coverage-gap). Input-only."""
+    reqs: List[Dict[str, Any]] = []
+    try:
+        import spec_memory_region_detect as _mem
+        r = _mem.detect_memory_region(prompt)
+        if r.get("has_memory_region") and r.get("requirement"):
+            reqs.append({
+                "kind": "memory_map_completeness",
+                "confidence": r.get("confidence"),
+                "requirement": r["requirement"],
+                "evidence": r.get("evidence", [])[:3],
+            })
+    except Exception:
+        pass
+    try:
+        import spec_lint_review_detect as _lint
+        r = _lint.detect_lint_review(prompt)
+        if r.get("is_lint_review") and r.get("requirement"):
+            reqs.append({
+                "kind": "lint_review_selfgate",
+                "requirement": r["requirement"],
+                "self_gate": "verilog_selfcheck_lint.py (verilator --lint-only -Wall)",
+                "issues_requested": r.get("issues_requested", []),
+            })
+    except Exception:
+        pass
+    return reqs
+
+
 def assemble(prompt: str, iface: Optional[List[Dict[str, Any]]], target: Optional[str],
              expert_skills: List[str], verify_gates: List[str],
              out_dir: Path, k: int = 5) -> Dict[str, Any]:
@@ -99,6 +133,7 @@ def assemble(prompt: str, iface: Optional[List[Dict[str, Any]]], target: Optiona
         "prompt_is_input_only": True,
         "target_module": target,
         "interface_contract": contract_rel,
+        "spec_requirements": _spec_requirements(prompt),
         "expert_skills": expert_skills,
         "verify_gates": verify_gates,
         "db_classes": db_classes,
