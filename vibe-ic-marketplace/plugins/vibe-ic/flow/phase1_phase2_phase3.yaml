@@ -625,6 +625,32 @@ steps:
         - program_exit_zero: "dft_signoff_check . --json reports/phase2/dft/dft_signoff.json"
     blocks_on: [10]
 
+  # v1.3.96 — FS1: ISO-26262 FMEDA diagnostic-coverage. A LETTERED step (not an
+  # integer id — keeps the 1..44 contiguity intact) that is CONDITIONAL by
+  # construction: the producer returns NOT_APPLICABLE (rc 0) for any design with
+  # no declared safety mechanism, so it is inert on the non-safety majority and
+  # only bites on ECC/parity/lockstep safety designs.
+  - id: FS1
+    name: "ISO-26262 FMEDA diagnostic-coverage (fault-injection; safety designs only)"
+    stage: stage2
+    condition:
+      files_exist: ["phase2/stage1/rtl"]
+    programs:
+      - fmeda_fault_injection_coverage
+      - fmeda_coverage_check
+    gate:
+      all_of:
+        - program_exit_zero: "fmeda_fault_injection_coverage . --rtl-dir phase2/stage1/rtl --asil D --json reports/phase2/safety/fmeda_coverage.json"
+        - program_exit_zero: "fmeda_coverage_check . --json reports/phase2/safety/fmeda_coverage_gate.json"
+    blocks_on: [11]
+    notes: |
+      Real iverilog fault-injection: inject single stuck-at bit-flips on a
+      declared safety mechanism's (ECC/parity) protected data path; measure
+      diagnostic coverage DC = detected/injected vs the ASIL floor (default D).
+      An independent gate RE-COMPUTES DC from raw counts to catch a fabricated
+      verdict. Full FMEDA SPFM/LFM/PMHF roll-up needs a FIT/lambda reliability
+      database (commercial/methodology input) -> ADVANCED_NODE_EXTENSION.md.
+
   - id: 12
     name: "Post-DFT optimization (resynth / buffering)"
     stage: stage2
@@ -1065,7 +1091,14 @@ steps:
       - "reports/phase3/ir_drop.rpt"
       - "reports/phase3/ir_drop.json"
     gate:
-      program_exit_zero: "ir_drop_report_check . --mode ir_drop --json reports/phase3/ir_drop.json"
+      all_of:
+        - program_exit_zero: "ir_drop_report_check . --mode ir_drop --json reports/phase3/ir_drop.json"
+        # v1.3.96 — VCD-vectored DYNAMIC IR (OpenROAD PSM read_vcd + activity-
+        # weighted analyze_power_grid). Blocks on a real budget when a design
+        # VCD exists; a genuinely-absent VCD → SKIPPED_CONDITION rc 0 (never
+        # blocks the pure-digital majority). Full di/dt transient stays a
+        # documented commercial gap (ADVANCED_NODE_EXTENSION.md).
+        - program_exit_zero: "dynamic_ir_drop_check reports/phase3/dynamic_ir.json --budget-pct 10"
     blocks_on: [22]
 
   - id: 25
@@ -1468,6 +1501,7 @@ steps:
       - power_domain_crossing_check
       - level_shifter_required_check
       - isolation_cell_required_check
+      - power_domain_signal_crossing_check
     required_outputs:
       - "reports/analog/mixed_signal/power_domain.json"
       - "reports/analog/mixed_signal/level_shifter.json"
@@ -1477,6 +1511,12 @@ steps:
         - program_exit_zero: "power_domain_crossing_check . --json reports/analog/mixed_signal/power_domain_crossing_audit.json"
         - program_exit_zero: "level_shifter_required_check . --json reports/analog/mixed_signal/level_shifter_audit.json"
         - program_exit_zero: "isolation_cell_required_check . --json reports/analog/mixed_signal/isolation_audit.json"
+        # v1.3.96 — cross-power-domain SIGNAL crossing: derives the isolation/
+        # level-shifter REQUIREMENT from the UPF power-domain definitions +
+        # power states (which the three sibling gates do not parse) and audits
+        # the UPF STRATEGY covers it. Self-guards: single/zero-domain →
+        # NOT_APPLICABLE, no power intent → SKIP rc 0.
+        - program_exit_zero: "power_domain_signal_crossing_check . --json reports/phase2/gates/power_domain_signal_crossing.json"
     blocks_on: [M1]
     notes: |
       For each net crossing analog/digital power domain boundary:
