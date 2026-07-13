@@ -154,3 +154,71 @@ def test_no_context_files_returns_empty():
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ── prompt "Updated Interfaces" priority (ORGANIC 2026-07-13, CVDP oracle-RCA) ──
+def _load_cir():
+    import importlib.util
+    from pathlib import Path
+    p = Path(__file__).resolve().parents[1] / "cvdp_context_interface_recover.py"
+    spec = importlib.util.spec_from_file_location("cir", p)
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    return m
+
+
+_MODIFY_PROMPT = """Modify the `foo` module to add features.
+
+### **Updated Input/Output Interfaces**
+- **Inputs**:
+  1. `pclk`: Clock signal.
+  2. `preset_n`: Active-low reset.
+  3. `pwdata[31:0]`: Write data bus.
+  4. `gpio[GPIO_WIDTH-1:0]`: Bidirectional GPIO pins.
+- **Outputs**:
+  1. `prdata[31:0]`: Read data bus.
+  2. `irq`: Interrupt.
+"""
+
+
+def test_prompt_iface_recovers_bidirectional_as_inout():
+    m = _load_cir()
+    ports = m.recover_interface_from_prompt(_MODIFY_PROMPT)
+    by = {p["name"]: p for p in ports}
+    assert by["gpio"]["dir"] == "inout"          # under Inputs, but 'Bidirectional' -> inout
+    assert by["pclk"]["dir"] == "input"
+    assert by["prdata"]["dir"] == "output"
+    assert by["pwdata"]["width"] == 32           # [31:0] resolved
+    # the legacy trio must NOT appear (it was replaced by the single gpio port)
+    assert not any(n in by for n in ("gpio_in", "gpio_out", "gpio_enable"))
+
+
+def test_prompt_iface_takes_priority_over_stale_context_header():
+    """A modify-task record: the context RTL still has the OLD interface (legacy
+    trio); the prompt's Updated Interfaces re-declares a single gpio inout. The
+    prompt table must win (the hidden TB binds the new interface)."""
+    m = _load_cir()
+    stale_ctx = ("module foo(input pclk, input preset_n, input [31:0] pwdata,\n"
+                 "  input [7:0] gpio_in, output [7:0] gpio_out, output [7:0] gpio_enable,\n"
+                 "  output [31:0] prdata, output irq); endmodule\n")
+    rec = {"id": "x", "input": {"prompt": _MODIFY_PROMPT, "context": {"rtl/foo.sv": stale_ctx}},
+           "harness": {"files": {}}}
+    # force target=foo (bypass the toplevel bridge for the unit test)
+    ports = m.recover_interface(rec, target="foo")
+    names = {p["name"]: p["dir"] for p in ports}
+    assert names.get("gpio") == "inout"
+    assert "gpio_in" not in names and "gpio_out" not in names
+    # a context-resolved width backfills onto a symbolic prompt range
+    by = {p["name"]: p for p in ports}
+    assert by["pwdata"]["width"] == 32
+
+
+def test_no_iface_section_falls_back_to_context():
+    """A prompt with NO 'Updated Interfaces' section must not disturb the
+    existing context-RTL parse (no regression on the 224 non-modify records)."""
+    m = _load_cir()
+    ctx = "module bar(input clk, input rst_n, output [3:0] q); endmodule\n"
+    rec = {"id": "y", "input": {"prompt": "Complete the bar counter.", "context": {"rtl/bar.sv": ctx}},
+           "harness": {"files": {}}}
+    ports = m.recover_interface(rec, target="bar")
+    assert {p["name"] for p in ports} == {"clk", "rst_n", "q"}
+    assert next(p for p in ports if p["name"] == "q")["width"] == 4
