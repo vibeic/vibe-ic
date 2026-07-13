@@ -1179,14 +1179,30 @@ server.tool(
     top_module: z.string().describe("Top module name"),
     work_dir: z.string().describe("Working directory"),
     depth: z.number().default(20).describe("Proof depth"),
+    inductive_project: z.string().optional().describe("Opt-in datapath UNBOUNDED proof via a strengthened INDUCTIVE INVARIANT: pass a PROJECT dir to run programs/formal_property_run.py --invariant-harness (abc pdr proves an internal-state invariant unbounded where the output-stream property alone is not inductive). Writes a SEPARATE formal_<top>_inductive_results.json (never clobbers the canonical results.json); an honesty guard forbids a BMC dressed as unbounded, and a wide datapath that does not converge is reported PARTIAL/bounded with the depth DISCLOSED. When set, this runs instead of the inline SymbiYosys prove."),
+    inductive_harness: z.string().optional().describe("Explicit inductive harness .sv (with @invariant-harness/@connect pragmas). Auto-detected as formal_<top>_inductive.sv when omitted. Only used with inductive_project."),
   },
-  async ({ design_files, assertion_file, top_module, work_dir, depth }) => {
+  async ({ design_files, assertion_file, top_module, work_dir, depth, inductive_project, inductive_harness }) => {
     try {
-      assertSafePaths(design_files, "design_files");
-      assertSafePath(assertion_file, "assertion_file");
-      assertSafeIdent(top_module, "top_module");
+      if (inductive_project === undefined) { assertSafePaths(design_files, "design_files"); assertSafePath(assertion_file, "assertion_file"); assertSafeIdent(top_module, "top_module"); }
       optPath(work_dir, "work_dir");
+      optPath(inductive_project, "inductive_project"); optPath(inductive_harness, "inductive_harness");
     } catch (e) { return guardError(e); }
+    // Opt-in inductive-invariant unbounded datapath proof (shells to program).
+    if (inductive_project !== undefined) {
+      const t0s = Date.now();
+      const args = [`${VIBE_IC_PROGRAMS_DIR}/formal_property_run.py`, inductive_project];
+      if (inductive_harness !== undefined) args.push("--invariant-harness", inductive_harness);
+      const o = _spawnSync("python3", args, { timeout: 1800000, maxBuffer: 10 * 1024 * 1024, encoding: "utf-8" });
+      const merged = (o.stdout || "") + (o.stderr || "");
+      return wrapResult({
+        success: !o.error && o.status === 0,
+        t0: t0s,
+        toolVersion: `formal_property_run @ mcp-eda@${SERVER_VERSION}`,
+        error: o.error ? (o.error.message || String(o.error)) : (o.status === 0 ? undefined : `exited ${o.status}`),
+        output: merged,
+      });
+    }
     const reads = design_files.map((f) => `read -formal ${f}`).join("\\n");
     const sbyContent = `[tasks]\\nprove\\n[options]\\nprove: mode prove\\nprove: depth ${depth}\\n[engines]\\nsmtbmc yices\\n[script]\\n${reads}\\nread -sv ${assertion_file}\\nhierarchy -top ${top_module}\\nprep -top ${top_module}\\n[files]\\n${[...design_files, assertion_file].join("\\n")}`;
 
@@ -1563,16 +1579,33 @@ server.tool(
     custom_vdd: z.string().optional().describe("VDD pin name (custom PDK)"),
     custom_vss: z.string().optional().describe("VSS pin name (custom PDK)"),
     custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for commercial_foundry MET1-6). Default 'met'."),
+    si_mcf_project: z.string().optional().describe("Opt-in SI-aware crosstalk-DELAY STA (Miller Coupling Factor bound): pass a routed PROJECT dir (with a coupling-aware SPEF + SDC) to re-run OpenSTA on an MCF-bounded SPEF (Cc*MCF folded per aggressor/victim timing-window overlap; setup MCF=2 / hold MCF=0) via programs/si_mcf_sta.py, writing reports/phase3/si_mcf_sta.json. A conservative BOUND (advisory), not PrimeTime-SI's iterative coupled-waveform calc. When set, this runs instead of the single-netlist STA."),
+    container: z.string().default("vibeic-eda").describe("Docker container for OpenSTA (si_mcf_project mode)"),
   },
-  async ({ netlist, top_module, pdk, clock_port, clock_period_ns, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix }) => {
+  async ({ netlist, top_module, pdk, clock_port, clock_period_ns, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix, si_mcf_project, container }) => {
     try {
-      assertSafePath(netlist, "netlist"); assertSafeIdent(top_module, "top_module");
+      if (si_mcf_project === undefined) { assertSafePath(netlist, "netlist"); assertSafeIdent(top_module, "top_module"); }
       optIdent(clock_port, "clock_port");
       optPath(custom_lib, "custom_lib"); optPath(custom_techlef, "custom_techlef");
       optPath(custom_celllef, "custom_celllef"); optPath(custom_cellgds, "custom_cellgds");
       optToken(custom_site, "custom_site"); optIdent(custom_vdd, "custom_vdd");
       optIdent(custom_vss, "custom_vss"); optToken(custom_metal_prefix, "custom_metal_prefix");
+      optPath(si_mcf_project, "si_mcf_project"); assertSafeIdent(container, "container");
     } catch (e) { return guardError(e); }
+    // Opt-in MCF SI-aware crosstalk-delay STA (project-level; shells to program).
+    if (si_mcf_project !== undefined) {
+      const t0s = Date.now();
+      const args = [`${VIBE_IC_PROGRAMS_DIR}/si_mcf_sta.py`, "run", si_mcf_project, "--container", container];
+      const o = _spawnSync("python3", args, { timeout: 1800000, maxBuffer: 10 * 1024 * 1024, encoding: "utf-8" });
+      const merged = (o.stdout || "") + (o.stderr || "");
+      return wrapResult({
+        success: !o.error && o.status === 0,
+        t0: t0s,
+        toolVersion: `si_mcf_sta @ mcp-eda@${SERVER_VERSION}`,
+        error: o.error ? (o.error.message || String(o.error)) : (o.status === 0 ? undefined : `exited ${o.status}`),
+        output: merged,
+      });
+    }
     const cfg = pdkConfig(pdk, { custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix });
 
     // v0.100 H1: auto-flatten Yosys $paramod references that OpenSTA cannot resolve
@@ -2952,16 +2985,33 @@ server.tool(
     custom_dff_names: z.string().optional().describe("Comma-separated DFF cell names for scan chain (custom PDK; e.g. 'DFFRQD1,DFFSQD1')"),
     custom_cell_verilog: z.string().optional().describe("Path to behavioral .v library file (custom PDK; concat'd into cell-model)"),
     custom_primitives_verilog: z.string().optional().describe("Path to primitives .v file (custom PDK)"),
+    sdd_project: z.string().optional().describe("Opt-in Small-Delay-Defect (SDD) at-speed grade: pass a routed PROJECT dir (with DT1 transition + DT2 path-delay coverage) to fuse OpenSTA per-path slack with the LOC-SAT sensitisation via programs/sdd_atpg_run.py, writing reports/phase2/dft/sdd_coverage.json (DESCRIPTIVE, no floor — a slack-rich design honestly scores low). When set, this runs instead of the Fault scan/ATPG flow."),
   },
-  async ({ netlist, clock, reset, reset_active_low, pdk, tv_count, add_jtag, output_dir, custom_lib, custom_dff_names, custom_cell_verilog, custom_primitives_verilog }) => {
+  async ({ netlist, clock, reset, reset_active_low, pdk, tv_count, add_jtag, output_dir, custom_lib, custom_dff_names, custom_cell_verilog, custom_primitives_verilog, sdd_project }) => {
     try {
-      assertSafePath(netlist, "netlist");
+      if (sdd_project === undefined) assertSafePath(netlist, "netlist");
       assertSafeIdent(clock, "clock"); assertSafeIdent(reset, "reset");
       optPath(output_dir, "output_dir"); optPath(custom_lib, "custom_lib");
       optNoShellMeta(custom_dff_names, "custom_dff_names");
       optPath(custom_cell_verilog, "custom_cell_verilog");
       optPath(custom_primitives_verilog, "custom_primitives_verilog");
+      optPath(sdd_project, "sdd_project");
     } catch (e) { return guardError(e); }
+    // Opt-in SDD grade (project-level; shells to the plugin program).
+    if (sdd_project !== undefined) {
+      const t0s = Date.now();
+      const args = [`${VIBE_IC_PROGRAMS_DIR}/sdd_atpg_run.py`, sdd_project,
+        "--clock", clock];
+      const o = _spawnSync("python3", args, { timeout: 1800000, maxBuffer: 10 * 1024 * 1024, encoding: "utf-8" });
+      const merged = (o.stdout || "") + (o.stderr || "");
+      return wrapResult({
+        success: !o.error && o.status === 0,
+        t0: t0s,
+        toolVersion: `sdd_atpg_run @ mcp-eda@${SERVER_VERSION}`,
+        error: o.error ? (o.error.message || String(o.error)) : (o.status === 0 ? undefined : `exited ${o.status}`),
+        output: merged,
+      });
+    }
     const cfg = pdkConfig(pdk, { custom_lib });
     const lib = pdk === "custom" ? (custom_lib || "") : libPath(cfg);
     if (pdk === "custom" && (!lib || !custom_dff_names)) {
@@ -4397,8 +4447,10 @@ server.tool(
     custom_vdd: z.string().optional().describe("VDD pin name (custom PDK)"),
     custom_vss: z.string().optional().describe("VSS pin name (custom PDK)"),
     custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for commercial_foundry MET1-6). Default 'met'."),
+    field_solve_spef: z.string().optional().describe("Opt-in FIELD-SOLVED coupling upgrade: pass an existing grounded/analytical SPEF to UPGRADE it with real 3D BEM coupling. Inverts the PDK's own area+fringe cap to a fitted dielectric stack (programs/pdk_dielectric_fit.py) then runs the OSS solver FasterCap on the routed geometry (programs/fastercap_extract.py) — lateral + inter-layer crossover the analytical parallel-plate model misses. Requires def_file + custom_techlef. Self-reports NOT_APPLICABLE if FasterCap is absent (never a fabricated matrix). DISCLOSED: fitted stack, generic dielectric — NOT foundry rules.C, NOT crosstalk-SI sign-off. When set, this runs instead of Magic extraction."),
+    field_solve_container: z.string().default("vibeic-eda").describe("Docker container for FasterCap (field_solve_spef mode)"),
   },
-  async ({ def_file, gds_file, top_cell, pdk, output_format, output_dir, promote_ports, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix }) => {
+  async ({ def_file, gds_file, top_cell, pdk, output_format, output_dir, promote_ports, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix, field_solve_spef, field_solve_container }) => {
     try {
       optPath(def_file, "def_file"); optPath(gds_file, "gds_file");
       assertSafeIdent(top_cell, "top_cell"); optPath(output_dir, "output_dir");
@@ -4406,7 +4458,27 @@ server.tool(
       optPath(custom_celllef, "custom_celllef"); optPath(custom_cellgds, "custom_cellgds");
       optToken(custom_site, "custom_site"); optIdent(custom_vdd, "custom_vdd");
       optIdent(custom_vss, "custom_vss"); optToken(custom_metal_prefix, "custom_metal_prefix");
+      optPath(field_solve_spef, "field_solve_spef"); assertSafeIdent(field_solve_container, "field_solve_container");
     } catch (e) { return guardError(e); }
+    // Opt-in field-solved coupling upgrade (shells to the plugin program).
+    if (field_solve_spef !== undefined) {
+      if (!def_file || !custom_techlef) {
+        return { content: [{ type: "text", text: JSON.stringify({ success: false, error: "field_solve_spef requires def_file + custom_techlef" }) }] };
+      }
+      const t0s = Date.now();
+      const args = [`${VIBE_IC_PROGRAMS_DIR}/fastercap_extract.py`,
+        "--def", def_file, "--lef", custom_techlef, "--spef", field_solve_spef,
+        "--container", field_solve_container];
+      const o = _spawnSync("python3", args, { timeout: 1800000, maxBuffer: 10 * 1024 * 1024, encoding: "utf-8" });
+      const merged = (o.stdout || "") + (o.stderr || "");
+      return wrapResult({
+        success: !o.error && o.status === 0,
+        t0: t0s,
+        toolVersion: `fastercap_extract @ mcp-eda@${SERVER_VERSION}`,
+        error: o.error ? (o.error.message || String(o.error)) : (o.status === 0 ? undefined : `exited ${o.status}`),
+        output: merged,
+      });
+    }
     if (!def_file && !gds_file) {
       return { content: [{ type: "text", text: JSON.stringify({ success: false, error: "Either def_file or gds_file is required" }) }] };
     }

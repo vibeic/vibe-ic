@@ -55,6 +55,7 @@ TESTED_TOOLS = {
 # meaningfully). Each entry MUST include a one-line rationale. Anything
 # not listed here and not in TESTED_TOOLS will FAIL the inventory.
 DEFERRED_TOOLS = {
+    "eda_professional_tb": "requires Icarus Verilog to compile/run the generated TB; covered by Phase-2 full-stack-tb integration",
     "eda_synth": "requires Yosys + PDK liberty; covered by integration runs",
     "eda_simulate": "requires Icarus Verilog; covered by Phase-2b benchmark",
     "eda_formal": "requires SymbiYosys + yices",
