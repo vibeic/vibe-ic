@@ -890,6 +890,31 @@ def _context_rtl_for_smoke(ctx_texts, code: str) -> str:
         names = set(_MODULE_NAMES_RE.findall(_detection_text(v)))
         if not names or (names & own):
             continue
+        # §4.05 no-leak (adversarial-verify LEAK #2 on the first PR round):
+        # ctx text is appended to smoke.sv UNVALIDATED, but the frontend-gap
+        # tolerance's justification is "iverilog already accepted" — which
+        # only ever covered the COMPLETION. One ctx file the host yosys
+        # frontend rejects (e.g. a legal SV `class` the fork frontend
+        # trails on) kills read_verilog before SYNTH runs and silently
+        # degrades the ENTIRE smoke to a frontend-gap tolerate — masking a
+        # genuine synth-stage fatal in the completion itself. PRE-PARSE
+        # each ctx file solo; a file the frontend rejects is DROPPED (the
+        # module falls back to the derived-stub path, i.e. pre-PR
+        # behavior — fail toward the OLD verdict, never a new tolerance).
+        import os as _os
+        import tempfile as _tf
+        with _tf.NamedTemporaryFile("w", suffix=".sv", delete=False) as _fp:
+            _fp.write(v)
+        try:
+            _rc, _o, _e = _run(["yosys", "-p",
+                                f"read_verilog -sv {_fp.name}"], timeout=60)
+        finally:
+            try:
+                _os.unlink(_fp.name)
+            except OSError:
+                pass
+        if _rc not in (0, 127):   # 127 = yosys absent: handled downstream
+            continue              # unparseable ctx file → stub path
         parts.append(v)
         own |= names
     return ("\n\n// gate: record's own input.context modules (smoke-only)\n"
@@ -922,7 +947,8 @@ def yosys_smoke(code: str, workdir: Path,
     # derived stubs, whose unknowable port directions caused the
     # "synthesized to nothing" false-BLOCK class. A stub is kept only for a
     # module the context does not provide.
-    ctx_names = set(_MODULE_NAMES_RE.findall(context_rtl or ""))
+    ctx_names = set(_MODULE_NAMES_RE.findall(
+        _detection_text(context_rtl or "")))
     kept_stubs = stubs_text or ""
     if ctx_names and kept_stubs:
         kept = [blk for name, blk in _parse_modules(kept_stubs).items()
@@ -1115,11 +1141,33 @@ def yosys_smoke(code: str, workdir: Path,
                             blob, re.MULTILINE)
             wires = re.search(r"^\s*\d+\s+wires\b|Number of wires:\s+\d+",
                               blob, re.MULTILINE)
-            if hdr and wires:
+            # §4.05 no-leak (adversarial-verify LEAK #1): the stat SHAPE
+            # (header + wires rows, no cells row) is byte-identical between a
+            # legit feed-through and a module with an UNDRIVEN OUTPUT, so the
+            # shape alone proves nothing. Narrow the tolerance: the module's
+            # comment-stripped BODY must additionally contain at least one
+            # `assign`, an `always` block, or a submodule instantiation —
+            # a dead-wire/undriven shell has none and stays the hard BLOCK.
+            # (`always` counts: with the module's stat header present the
+            # downstream harness cannot KeyError, and an all-optimized-away
+            # always module is a legit FUNCTIONAL fail for later stages/the
+            # official sim — matching the old-format yosys parity where
+            # 'Number of cells: 0' always passed this smoke.) The note is
+            # truthful (INCONCLUSIVE shape), never a "provably wiring-only"
+            # claim.
+            body_m = _parse_modules(_detection_text(full)).get(top, "")
+            has_wiring = bool(re.search(
+                r"\bassign\b|\balways\b"
+                r"|^(?!\s*(?:module|function|task|input|output|inout|wire"
+                r"|reg|logic|parameter|localparam|genvar|generate|endmodule)"
+                r"\b)\s*\w+\s+(?:#\s*\()?\s*\w+\s*\(",
+                body_m, re.MULTILINE))
+            if hdr and wires and has_wiring:
                 details.append(
-                    f"{top}: 0 cells (wiring-only module — stat header + "
-                    f"wires row present, no cells row; tolerated pending the "
-                    f"fork-yosys always-print-cells-row fix)")
+                    f"{top}: 0 cells (INCONCLUSIVE wiring-shape stat — header"
+                    f" + wires rows, no cells row, body has assign/instance;"
+                    f" tolerated pending the fork-yosys always-print-cells-"
+                    f"row fix)")
                 continue
             return False, (f"yosys-smoke: module {top!r} synthesized to "
                            f"nothing — stat reported no module (the silent "

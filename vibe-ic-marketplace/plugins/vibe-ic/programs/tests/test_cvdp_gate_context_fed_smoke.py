@@ -136,7 +136,7 @@ def test_zero_cell_wiring_module_tolerated_with_note(tmp_path, monkeypatch):
     monkeypatch.setattr(m, "_run", _fake_run_factory({"inter_top": wiring_blob}))
     ok, why = m.yosys_smoke(COMPLETION, tmp_path, "", context_rtl=CTX_HELPER)
     assert ok, why
-    assert "wiring-only" in why and "0 cells" in why
+    assert "INCONCLUSIVE wiring-shape" in why and "0 cells" in why
 
 
 def test_no_stat_header_still_blocks(tmp_path, monkeypatch):
@@ -156,3 +156,77 @@ def test_e2e_context_fed_smoke_real_yosys(tmp_path):
         pytest.skip("yosys not on PATH")
     ok, why = m.yosys_smoke(COMPLETION, tmp_path, "", context_rtl=CTX_HELPER)
     assert ok, why
+
+
+# ---- §4.05 no-leak regressions from the adversarial PR-round verification ----
+def test_leak1_undriven_output_shell_still_blocks(tmp_path, monkeypatch):
+    """LEAK #1 fixture: `module m2(input a, output b); wire dummy; endmodule`
+    (undriven output, zero logic) produces the SAME header+wires/no-cells stat
+    shape as a legit feed-through — the narrowed tolerance must NOT wave it
+    through (no assign / no instantiation in the body)."""
+    m = _load()
+    shell = "module m2(input a, output b);\n  wire dummy;\nendmodule\n"
+    wiring_blob = "=== m2 ===\n   3 wires\n    2 ports\n"   # no cells row
+    monkeypatch.setattr(m, "_run", _fake_run_factory({"m2": wiring_blob}))
+    ok, why = m.yosys_smoke(shell, tmp_path, "", context_rtl="")
+    assert not ok
+    assert "synthesized to nothing" in why
+
+
+def test_leak1_true_feedthrough_still_tolerated(tmp_path, monkeypatch):
+    """The legit half of the boundary: a real feed-through (has assign) with
+    the same no-cells stat shape stays tolerated, with the TRUTHFUL note."""
+    m = _load()
+    ft = ("module ftw(input [3:0] a, output [3:0] y);\n"
+          "  assign y = {a[0],a[1],a[2],a[3]};\nendmodule\n")
+    wiring_blob = "=== ftw ===\n   3 wires\n    2 ports\n"
+    monkeypatch.setattr(m, "_run", _fake_run_factory({"ftw": wiring_blob}))
+    ok, why = m.yosys_smoke(ft, tmp_path, "", context_rtl="")
+    assert ok, why
+    assert "INCONCLUSIVE wiring-shape" in why
+    assert "provably" not in why
+
+
+def test_leak2_unparseable_ctx_file_dropped(monkeypatch):
+    """LEAK #2 fixture: a ctx file the host yosys frontend rejects (SV class)
+    must be DROPPED by the per-file pre-parse — never appended to smoke.sv
+    where it would kill read_verilog and degrade the whole smoke to a
+    frontend-gap tolerate."""
+    m = _load()
+    bad_ctx = ("class cfg_c;\n  int unsigned depth;\nendclass\n"
+               "module ctx_ok(input a, output b);\n  assign b = a;\n"
+               "endmodule\n")
+    good_ctx = "module helper2(input a, output b);\n  assign b = ~a;\nendmodule\n"
+    calls = []
+
+    def fake_run(cmd, timeout=120):
+        calls.append(cmd)
+        # solo pre-parse probe: reject the file containing the class
+        f = cmd[-1].split("read_verilog -sv ", 1)[-1]
+        try:
+            txt = open(f.strip()).read()
+        except OSError:
+            txt = ""
+        return (1, "", "syntax error") if "class " in txt else (0, "", "")
+    monkeypatch.setattr(m, "_run", fake_run)
+    comp = "module topz(input a, output b);\n  helper2 u(.a(a), .b(b));\nendmodule\n"
+    out = m._context_rtl_for_smoke([bad_ctx, good_ctx], comp)
+    assert "helper2" in out            # parseable ctx kept
+    assert "cfg_c" not in out          # unparseable ctx dropped whole
+    assert "ctx_ok" not in out
+
+
+def test_minor_ctx_comment_module_name_no_phantom_stub_drop(tmp_path, monkeypatch):
+    """ctx_names must come from the comment-stripped view: a ctx COMMENT
+    saying 'module helper_blk' must not drop helper_blk's derived stub."""
+    m = _load()
+    ok_blob = "=== inter_top ===\n   12 wires\n   34 cells\n"
+    monkeypatch.setattr(m, "_run", _fake_run_factory({"inter_top": ok_blob}))
+    ctx_comment_only = "// wiring notes: module helper_blk is instantiated here\n"
+    stub = ("\n\n// gate-synthesized context stubs\n"
+            "module helper_blk(input in_data, input out_data);\nendmodule\n")
+    ok, why = m.yosys_smoke(COMPLETION, tmp_path, stub,
+                            context_rtl=ctx_comment_only)
+    assert ok, why
+    smoke = (tmp_path / "smoke.sv").read_text()
+    assert smoke.count("module helper_blk(") == 1  # stub KEPT (no phantom drop)
