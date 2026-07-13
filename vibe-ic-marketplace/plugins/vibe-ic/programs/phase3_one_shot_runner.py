@@ -11548,18 +11548,36 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                     written.append(str(aging_sta_rpt))
         except Exception as exc:
             notes.append(f"aging STA emit failed: {exc}")
-    # (c) Dynamic (transient) IR — HONEST BLOCKED: OSS PSM is static-only, so
-    #     NO dynamic_ir.json is fabricated; a disclosure stance is written and
-    #     the ladder's dynamic-IR tier SKIPs honestly.
-    dyn_ir_stance = rpt_phase3 / "dynamic_ir_stance.json"
-    if primary_def.is_file() and not dyn_ir_stance.is_file():
+    # (c) Dynamic IR — v1.3.96: VCD-VECTORED PSM (real OSS engine). OpenROAD
+    #     `read_vcd` + activity-weighted `analyze_power_grid` gives an IR-drop
+    #     under REAL switching that the vectorless-static default (Step 24)
+    #     cannot capture (verified on spm: a peak-switching VCD -> 4.4x static).
+    #     Emits reports/phase3/dynamic_ir.json with the real worst-IR when a
+    #     design VCD exists, else an HONEST skip JSON (no fabricated number) —
+    #     the Step-24 dynamic_ir_drop_check gate SKIPs on the marker. Full di/dt
+    #     transient solve stays a documented commercial gap
+    #     (ADVANCED_NODE_EXTENSION.md).
+    dyn_ir_json = rpt_phase3 / "dynamic_ir.json"
+    if primary_def.is_file() and not dyn_ir_json.is_file():
         try:
-            _emit_dynamic_ir_stance(project, top, pdk, container,
-                                    dyn_ir_stance, notes)
-            if dyn_ir_stance.is_file():
-                written.append(str(dyn_ir_stance))
+            # Pass the design's ACTUAL tech/cell LEF (the runner knows them) so
+            # the emitter's LEF auto-discovery can't pick a wrong sibling variant
+            # (e.g. a 3lm tech LEF for a 6lm design → undefined-layer DEF error).
+            _dyn_lef_args = []
+            if getattr(pdk, "tech_lef", None):
+                _dyn_lef_args += ["--tech-lef", str(pdk.tech_lef)]
+            if getattr(pdk, "cell_lef", None):
+                _dyn_lef_args += ["--cell-lef", str(pdk.cell_lef)]
+            subprocess.run(
+                [sys.executable, str(PROGRAMS_DIR / "dynamic_ir_vectored_emit.py"),
+                 "--project", str(project), "--out", str(dyn_ir_json),
+                 "--static-json", str(rpt_phase3 / "ir_drop.json"),
+                 "--container", container] + _dyn_lef_args,
+                timeout=600, check=False, capture_output=True, text=True)
+            if dyn_ir_json.is_file():
+                written.append(str(dyn_ir_json))
         except Exception as exc:
-            notes.append(f"dynamic IR stance emit failed: {exc}")
+            notes.append(f"dynamic IR (VCD-vectored) emit failed: {exc}")
     # (d) Thermal power-density screen — mostly WIRING (power report already
     #     exists) → reports/phase3/thermal_screen.json.
     thermal_json = rpt_phase3 / "thermal_screen.json"

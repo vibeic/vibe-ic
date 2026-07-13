@@ -98,6 +98,46 @@ SUBSTITUTIONS = [
         "match": ["vcs-only tb construct", "tb construct rewrite",
                   "semantics-preserving iverilog rewrite"],
     },
+    # v1.3.96 — ADVANCED-NODE / COMMERCIAL-ONLY gaps (docs/ADVANCED_NODE_EXTENSION.md).
+    # NO OSS engine at any node → substitute is "none". These are NEVER numbered
+    # OSS steps and never counted in the PASS; disclosed here so a report that
+    # touches the area names the gap honestly. (Where an OSS FLOOR exists it was
+    # added as a real step: VCD-vectored dynamic-IR, FMEDA-DC, power-domain CDC.)
+    {
+        "mandated": "PrimeTime-POCV / statistical STA (POCV/SSTA)",
+        "substitute": "none (commercial-only) — flat-OCV + AOCV is the OSS floor",
+        "caveat": "Needs LVF / POCV coefficient data absent from OSS PDKs; ≤7nm "
+                  "within-die variation data is foundry-NDA",
+        "match": ["pocv", "ssta", "statistical sta", "primetime-pocv", "lvf"],
+    },
+    {
+        "mandated": "RedHawk-SC / Voltus transient dynamic-IR (di/dt)",
+        "substitute": "none (commercial-only) — VCD-vectored PSM is the OSS floor",
+        "caveat": "OSS PSM is resistive/vectored only; no L·di/dt time-domain "
+                  "inductive-droop solve",
+        "match": ["redhawk", "voltus", "transient ir", "di/dt", "dynamic ir transient"],
+    },
+    {
+        "mandated": "2.5D/3D advanced packaging / chiplet assembly (CoWoS/EMIB/TSV)",
+        "substitute": "none (commercial-only) — D2D protocol layer only in OSS",
+        "caveat": "Multi-die assembly rules / interposer / hybrid-bond PDK absent "
+                  "in OSS; UCIe/CXL/HBM3 PROTOCOL RTL is synthesized",
+        "match": ["cowos", "emib", "chiplet", "2.5d", "3d ic", "tsv", "hybrid bond",
+                  "3dblox"],
+    },
+    {
+        "mandated": "MBIST / LBIST + memory ATPG",
+        "substitute": "none (commercial-only)",
+        "caveat": "Memory BIST insertion + memory fault models are commercial; "
+                  "OSS Fault does logic stuck-at ATPG only",
+        "match": ["mbist", "lbist", "memory bist", "tessent"],
+    },
+    {
+        "mandated": "Side-channel leakage sim (DPA/CPA/EM)",
+        "substitute": "none (commercial-only)",
+        "caveat": "Leakage-model simulation needs a specialized engine (PROLEAD/…)",
+        "match": ["side-channel", "side channel", "dpa", "cpa leakage", "proleaD"],
+    },
 ]
 
 

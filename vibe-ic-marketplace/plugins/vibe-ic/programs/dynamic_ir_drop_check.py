@@ -33,11 +33,15 @@ operator's mental model):
   * measured droop >= budget                            → FAIL (rc 1)
   * measured droop  <  budget                           → PASS (rc 0)
   * path not found at all                               → rc 2 (IO/arg)
+  * EXPLICIT honest-skip marker + no droop value        → SKIPPED_CONDITION (rc 0)
 
-There is NO skip path: any design that reaches dynamic-IR sign-off has a power grid
-and a switching profile, so a missing report is a missing-evidence FAIL — never a
-not-applicable SKIP. (A design that has not YET produced a dynamic-IR report is not
-"N/A"; it is "not signed off for dynamic IR".)
+Skip is recognised ONLY by an explicit marker (a `status` in _SKIP_STATUS_VALUES,
+or `dynamic_ir_report_emitted:false`) that the VCD-vectored emitter
+(dynamic_ir_vectored_emit.py) writes when there is genuinely no switching profile
+to analyze (no VCD / no PDN / missing inputs). A design with NO switching VCD is
+legitimately not in scope for VCD-vectored dynamic IR — the static IR sign-off
+(ir_drop.json) still stands. This is NOT a vacuous pass on absence: a garbage
+report, or one merely missing its droop value with no skip marker, still FAILs.
 
 chip-AGNOSTIC: generic report schemas only; no design knowledge.
 
@@ -67,6 +71,31 @@ _JSON_DROP_PCT_KEYS = (
     "max_transient_droop_pct", "worst_dvd_pct",
 )
 _JSON_VDD_KEYS = ("vdd", "vdd_v", "supply_voltage_v", "nominal_vdd_v")
+
+# An EXPLICIT honest-skip marker written by the VCD-vectored emitter
+# (dynamic_ir_vectored_emit.py) when there is genuinely no switching profile to
+# analyze (no VCD / no PDN / missing inputs). This is a SKIPPED-CONDITION, NOT a
+# FAIL — a design that has not yet produced a switching VCD is legitimately not
+# in scope for VCD-vectored dynamic IR (the static IR sign-off still stands). A
+# skip is recognised ONLY by an explicit marker so that garbage / a report merely
+# missing its droop value still FAILs (§4.05: no vacuous pass on absence).
+_SKIP_STATUS_VALUES = frozenset({
+    "SKIPPED_NO_VCD", "SKIPPED_NO_PDN", "SKIPPED_MISSING_INPUTS",
+    "SKIPPED", "NOT_APPLICABLE", "N/A",
+})
+
+
+def _is_honest_skip(d: Dict[str, Any]) -> Optional[str]:
+    """Return the skip reason if `d` carries an EXPLICIT honest-skip marker AND no
+    dynamic-IR number, else None. Only an explicit marker qualifies."""
+    status = d.get("status")
+    if isinstance(status, str) and status.strip().upper() in _SKIP_STATUS_VALUES:
+        return str(d.get("reason") or status)
+    # `dynamic_ir_report_emitted: false` is the emitter's structural skip flag.
+    if d.get("dynamic_ir_report_emitted") is False:
+        return str(d.get("reason") or d.get("status") or
+                   "dynamic_ir_report_emitted=false (no vectored droop produced)")
+    return None
 
 # A .rpt section is "dynamic" only if its context mentions one of these.
 _DYNAMIC_CONTEXT_RE = re.compile(
@@ -137,12 +166,24 @@ def check(report: Path, vdd: Optional[float],
 
     droop_mv: Optional[float] = None
     rpt_vdd: Optional[float] = None
+    parsed: Optional[Dict[str, Any]] = None
     try:
         d = json.loads(raw)
         if isinstance(d, dict):
+            parsed = d
             droop_mv, rpt_vdd = _extract_from_json(d)
     except (json.JSONDecodeError, ValueError):
         droop_mv = _extract_from_rpt(raw)
+
+    # Honest SKIP: an explicit skip marker with no droop value is a
+    # SKIPPED-CONDITION (rc 0), never a FAIL. (A marker that ALSO carries a real
+    # droop number falls through to the normal budget check below.)
+    if droop_mv is None and parsed is not None:
+        skip_reason = _is_honest_skip(parsed)
+        if skip_reason is not None:
+            return {"verdict": "SKIPPED_CONDITION",
+                    "detail": skip_reason,
+                    "report": str(report)}
 
     if droop_mv is None:
         return {"verdict": "FAIL",
@@ -182,7 +223,9 @@ def main(argv: List[str]) -> int:
     print(out)
     if res["verdict"] == "IO_ERROR":
         return 2
-    return 0 if res["verdict"] == "PASS" else 1
+    # PASS and an explicit honest SKIPPED-CONDITION are both rc 0 (the tier is
+    # not a blocker); only a real over-budget / missing-evidence result is rc 1.
+    return 0 if res["verdict"] in ("PASS", "SKIPPED_CONDITION") else 1
 
 
 if __name__ == "__main__":
