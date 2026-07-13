@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 865
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 865)
+- **Total programs (excluding helpers / shims):** 871
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 871)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 856 |
+| `any` | 862 |
 
 ## Alphabetical listing
 
@@ -280,6 +280,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `extraction_coverage_check` | any | Wave 23 | gate (LL-38) verifies input/docs/ |
 | `extraction_coverage_denominator_audit` | any | Wave 31 | gate (Wave 31, v0.119.63). |
 | `extraction_evidence_schema_check` | any | Wave 23 | gate (LL-40, v0.119.39). |
+| `fastercap_extract` | any | — | Real 3D field-solved coupling extraction via FasterCap on the routed geometry. |
 | `fault_atpg_run` | any | — | Open-source ATPG via Fault (cloudv-io/fault). |
 | `fetch_round_trip_sentinel_check` | any | — | P0.1 deterministic gate |
 | `ff_truth_table_synth` | any | — | deterministic SOLVER for a flip-flop truth table. |
@@ -560,6 +561,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pdk_analog_completeness_check` | any | — | pdk_analog_completeness_check.py |
 | `pdk_consistency_check` | any | — | Deterministic PDK-netlist consistency checker. |
 | `pdk_device_map` | any | — | PDK-AGNOSTIC generic->foundry device-map accessor (R13). |
+| `pdk_dielectric_fit` | any | — | Fit a self-consistent dielectric stack from a PDK's OWN shipped cap numbers. |
 | `pdk_fpga_gds_reverify_runner` | any | — | v1.6.232 (merged v229+v231). |
 | `pdk_otp_altsyncram_inject` | any | — | v1.6.224 (ORGANIC-20260512-followup-3). |
 | `pdk_udp_synth_shim_gen` | any | — | v1.6.218 (ORGANIC-20260512-followup). |
@@ -719,6 +721,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `sdc_gen` | any | Wave 72 | auto-generate Synopsys Design Constraints (SDC). |
 | `sdc_syntax_check` | any | — | Deterministic compliance check for constraint-gen. |
 | `sdc_validator_check` | any | — | validate SDC against L8 timing constraints. |
+| `sdd_atpg_run` | any | — | REAL Small-Delay-Defect (SDD) ATPG grade. FUSES OpenSTA |
+| `sdd_coverage_check` | any | — | REAL small-delay-defect (SDD) coverage GATE for the |
 | `sdf_gate_sim` | any | — | REAL SDF-annotated gate-level simulation (canonical Step 29). |
 | `sdmmc_protocol_synth` | any | v0.1.84 | SD/MMC storage-protocol synth helper. |
 | `self_audit_doc_claim_consistency_check` | any | — | anti-fabrication gate. |
@@ -736,6 +740,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `shift_counter_synth` | any | — | deterministic SOLVER for the CVDP barrel-shift / |
 | `shift_register_synth` | any | — | deterministic SOLVER for the shift-register / rotate / |
 | `si_crosstalk_check` | any | — | Verify signal integrity / crosstalk analysis was performed. |
+| `si_mcf_sta` | any | — | SI-aware STA via Miller Coupling Factor (MCF) bounding. |
+| `si_mcf_sta_check` | any | — | GATE for the MCF-bounded SI-aware STA (si_mcf_sta.py). |
 | `si_signoff_timing_aware` | any | — | OPEN-SOURCE timing-window-aware SI ADVISORY screen. |
 | `signal_gen_synth` | any | — | deterministic SOLVER for the waveform/clock GENERATOR and |
 | `signaltap_recompile_sequence_check` | any | — | Validate that the Quartus |
@@ -937,7 +943,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (856 programs)
+### `any` (862 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1189,6 +1195,7 @@ _(no programs in this group)_
 - `extraction_coverage_check` — gate (LL-38) verifies input/docs/  _[Wave 23]_
 - `extraction_coverage_denominator_audit` — gate (Wave 31, v0.119.63).  _[Wave 31]_
 - `extraction_evidence_schema_check` — gate (LL-40, v0.119.39).  _[Wave 23]_
+- `fastercap_extract` — Real 3D field-solved coupling extraction via FasterCap on the routed geometry.
 - `fault_atpg_run` — Open-source ATPG via Fault (cloudv-io/fault).
 - `fetch_round_trip_sentinel_check` — P0.1 deterministic gate
 - `ff_truth_table_synth` — deterministic SOLVER for a flip-flop truth table.
@@ -1468,6 +1475,7 @@ _(no programs in this group)_
 - `pdk_analog_completeness_check` — pdk_analog_completeness_check.py
 - `pdk_consistency_check` — Deterministic PDK-netlist consistency checker.
 - `pdk_device_map` — PDK-AGNOSTIC generic->foundry device-map accessor (R13).
+- `pdk_dielectric_fit` — Fit a self-consistent dielectric stack from a PDK's OWN shipped cap numbers.
 - `pdk_fpga_gds_reverify_runner` — v1.6.232 (merged v229+v231).
 - `pdk_otp_altsyncram_inject` — v1.6.224 (ORGANIC-20260512-followup-3).
 - `pdk_udp_synth_shim_gen` — v1.6.218 (ORGANIC-20260512-followup).
@@ -1625,6 +1633,8 @@ _(no programs in this group)_
 - `sdc_gen` — auto-generate Synopsys Design Constraints (SDC).  _[Wave 72]_
 - `sdc_syntax_check` — Deterministic compliance check for constraint-gen.
 - `sdc_validator_check` — validate SDC against L8 timing constraints.
+- `sdd_atpg_run` — REAL Small-Delay-Defect (SDD) ATPG grade. FUSES OpenSTA
+- `sdd_coverage_check` — REAL small-delay-defect (SDD) coverage GATE for the
 - `sdf_gate_sim` — REAL SDF-annotated gate-level simulation (canonical Step 29).
 - `sdmmc_protocol_synth` — SD/MMC storage-protocol synth helper.  _[v0.1.84]_
 - `self_audit_doc_claim_consistency_check` — anti-fabrication gate.
@@ -1642,6 +1652,8 @@ _(no programs in this group)_
 - `shift_counter_synth` — deterministic SOLVER for the CVDP barrel-shift /
 - `shift_register_synth` — deterministic SOLVER for the shift-register / rotate /
 - `si_crosstalk_check` — Verify signal integrity / crosstalk analysis was performed.
+- `si_mcf_sta` — SI-aware STA via Miller Coupling Factor (MCF) bounding.
+- `si_mcf_sta_check` — GATE for the MCF-bounded SI-aware STA (si_mcf_sta.py).
 - `si_signoff_timing_aware` — OPEN-SOURCE timing-window-aware SI ADVISORY screen.
 - `signal_gen_synth` — deterministic SOLVER for the waveform/clock GENERATOR and
 - `signaltap_recompile_sequence_check` — Validate that the Quartus
