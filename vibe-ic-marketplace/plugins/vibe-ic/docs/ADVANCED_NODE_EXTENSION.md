@@ -13,9 +13,11 @@ so any report that touches the area must disclose the substitution.
 > real gating step instead — see the campaign that closed ALL SEVEN sign-off
 > cap-gaps (SPEF/DFT/post-DFT/SDF/SPICE/LEC/FORMAL — the last via `formal_property_run`:
 > real SymbiYosys with the built-in ABC engines, unbounded safety + disclosed-bound
-> functional BMC) and added 4 program-first advanced steps (VCD-vectored dynamic-IR,
+> functional BMC) and added program-first advanced steps (VCD-vectored dynamic-IR,
 > ISO-26262 FMEDA fault-injection DC, power-domain signal-crossing CDC, at-speed
-> path-delay-fault ATPG DT2). Those are NOT here — they are real steps.
+> path-delay-fault ATPG DT2, small-delay-defect grade DT3, MCF SI-aware
+> crosstalk-delay STA, whole-design FasterCap 3D field-solved coupling). Those are
+> NOT here — they are real steps.
 
 ## What the OSS flow already does (do NOT confuse with a gap)
 | Area | OSS coverage in the flow |
@@ -40,7 +42,7 @@ so any report that touches the area must disclose the substitution.
 | **Full di/dt transient dynamic-IR** | OSS PSM is resistive/vectored only — no L·di/dt inductive-droop time-domain solve | RedHawk-SC, Voltus | VCD-vectored PSM is the OSS floor; transient = cap-gap |
 | **2.5D/3D advanced packaging / chiplet** | CoWoS/EMIB/TSV/hybrid-bond assembly, multi-die STA & thermal need a packaging PDK + assembly rules absent in OSS (the D2D *protocol* layer — UCIe/CXL/HBM3 — IS synthesized) | 3Dblox, Innovus-3D, Calibre-3DSTACK | Extension-only (no numbered step) |
 | **Full 3D self-heating thermal + thermal-aware STA** | field thermal solve + per-temperature timing needs a thermal solver | Celsius, RedHawk-SC-ET | thermal *screen* is the OSS floor; full solve = cap-gap |
-| **Foundry-calibrated coupling / 3D parasitic extraction** | the flow NOW adds analytical lateral same-layer coupling (spacing/overlap from the routed DEF, thickness from the tech LEF, DISCLOSED generic dielectric — step 22 `_spef_coupling`), but the foundry-calibrated field-solve data (inter-metal ILD/IMD thickness, metal elevation, per-dielectric k, pattern-solved Cc tables) lives only in the un-shipped Calibre-XRC `rules.C`/StarRC `.nxtgrd`; inter-layer crossover coupling, fringe/3D corrections, and aggressor-victim crosstalk (SI) sign-off remain beyond the analytical model | Calibre xRC, StarRC-XT, QRC + PrimeTime-SI | analytical lateral coupling (disclosed, NOT foundry-calibrated) is the OSS tier; field-solved coupling + crosstalk SI sign-off = foundry-data gap |
+| **Foundry-calibrated coupling / crosstalk-SI sign-off** | the flow now does a REAL 3D field solve, not just the analytical model: step 22 offers three tiers — (1) grounded-cap OpenRCX v2 `-lef_rc`, (2) analytical lateral coupling (`_spef_coupling`), and (3) **whole-design FasterCap 3D BEM field-solve** (`pdk_dielectric_fit` inverts the PDK's own area+fringe cap to a fitted dielectric stack, then `fastercap_extract --whole-design` tiles the entire coupling graph — spm: 100 % coverage, 136 solves, inter-layer crossover INCLUDED, field 2.5× the analytical total). The MCF SI-aware crosstalk-delay STA (step 27) runs on that field-solved SPEF. What REMAINS genuinely external: (a) the foundry-CALIBRATED field-solve profile (the exact inter-metal ILD/IMD thickness, metal elevation, per-dielectric k, pattern-solved Cc tables) lives only in the un-shipped Calibre-XRC `rules.C`/StarRC `.nxtgrd` — our fitted stack is DISCLOSED as generic-εr, not foundry-calibrated; and (b) full aggressor-victim crosstalk-SI *sign-off* (iterative coupled-waveform, glitch/noise-margin) vs our conservative MCF bound | Calibre xRC, StarRC-XT, QRC + PrimeTime-SI | field-solved coupling (fitted dielectric) is DONE via FasterCap; only the foundry-CALIBRATED profile + iterative crosstalk-SI sign-off remain a foundry-data / commercial gap |
 | **MBIST / LBIST + memory ATPG** | memory BIST insertion + memory fault models are commercial | Tessent MBIST, TetraMAX | Extension-only |
 | **Side-channel security (DPA/CPA/EM leakage)** | leakage-model simulation needs a specialized engine | PROLEAD, commercial DPA tools | Extension-only |
 | **Full FMEDA (SPFM/LFM/PMHF)** | the measured-DC half IS in FS1; the roll-up needs FIT/λ base-failure-rate apportionment from a reliability DB (IEC 62380 / SN 29500 / foundry) | commercial safety flows | FS1 delivers DC; roll-up = methodology/commercial gap |
