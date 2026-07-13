@@ -2,8 +2,8 @@
 
 **IC**: `spm` — 32-bit carry-save bit-serial multiplier
 **PDK**: Key Foundry HP18E80 180 nm (commercial / NDA — this report carries NUMBERS ONLY, never PDK content)
-**Flow**: Vibe-IC `phase3_one_shot_runner` end-to-end (synth → PnR → GDS → DRC → LVS → sign-off), OSS toolchain in `vibeic/vibeic-eda:0.2.13`
-**Verdict**: **PASS_WITH_WAIVERS** — all executable sign-off steps PASS; the only non-PASS are documented capability-gap deferrals (OSS-flow / foundry-data limitations, not design defects).
+**Flow**: Vibe-IC `phase3_one_shot_runner` end-to-end (synth → PnR → GDS → DRC → LVS → sign-off), OSS toolchain in `vibeic/vibeic-eda:0.2.16`
+**Verdict**: **PASS_WITH_WAIVERS** — all executable sign-off steps PASS with **ZERO platform capability gaps** (every canonical step gates on a real OSS engine); the only non-PASS are named ENV waivers (FPGA board / doc-gen path), not-applicable parallel tracks (analog/mixed on a pure-digital chip), and awaiting-silicon manufacturing steps — not design defects.
 
 > **Reproducibility**: this verdict was produced by a **from-scratch clean rebuild** (derived tree + provenance ledger deleted, rebuilt from RTL) — it is not the residue of manual patching. `flow_compliance_check --strict` → `Overall: PASS_WITH_WAIVERS` (PASS=29 / FAIL=0 / MISSING=0).
 >
@@ -35,13 +35,18 @@ The earlier waivers were re-examined under the "fork+enhance the OSS tool" doctr
 | **30 Post-layout SPICE correlation** | ✅ **ngspice** on the extracted transistor cell vs Liberty NLDM → correlated, **mean 6.8% / max 8.8%** (< 10%) |
 | **13 RTL≡synth LEC** | ✅ Yosys equiv with **`read_liberty -ignore_miss_func`** (reads commercial-Liberty cell FUNCTIONS as SAT-modelable logic, not `-lib` blackboxes) → **65/65 proven, 0 unproven**; **false-clean-PROOF** (a corrupted NAND2D1→NOR2D1 netlist → NOT-equivalent). routed==synth was already proven (261/0). |
 
-**ALL 6 targeted cap-gaps CLOSED. Only ONE documented gap remains:**
-- `cap:formal_property_proof` (Step 5): SymbiYosys formal property proof not run this campaign (no OSS engine invoked — genuinely deferred, not fakeable).
-- At-speed/transition ATPG (Fault is stuck-at only) + SDF cell-arc IOPATH delays (Icarus applies net delays only) — cell timing stays STA's job (positive slack +7.56 ns). FPGA board-prototype: no board contract.
+## Final precision-tier closures (the LAST cap-gap + 3 precision upgrades)
 
-Manufacturing-stage steps (mask → wafer → WAT → silicon bring-up) are SKIPPED-CONDITION awaiting silicon, by design.
+| Enhancement | REAL OSS tool + measured result |
+|---|---|
+| **5 Formal property proof** (the LAST cap-gap) | ✅ **SymbiYosys** with the built-in **ABC engines** (no external SMT solver needed): `abc pdr` proves the safety invariants **UNBOUNDED** (reset→p==0; all-zero-y-stream⇒p stays 0); `abc bmc3` proves the x·y product miter (golden = the `*` operator, §4.05-clean; ∀x ∀y-stream via anyseq) **BOUNDED to depth 12**, corroborated full-latency at reduced widths (size=8 depth 14, size=16 depth 12) — the bound is DISCLOSED, never presented as a full unbounded proof. `formal_proof_evidence_check` → PROOF_CHAIN_OK. **The platform capability-gap table is now EMPTY.** |
+| **22 Coupling-aware SPEF** | ✅ Analytical lateral coupling on the routed geometry (spacing/overlap measured from the DEF, thickness from the tech LEF, **DISCLOSED generic εr=4.0** — NOT foundry-calibrated): **973 coupling caps 0.0003–3.54 fF** injected into the canonical SPEF by the production `_emit_spef` auto-augment (idempotent; self-skips on real-captable SPEFs); `read_spef` clean; STA absorbs it (arrival +2.75 ps — the correct physical direction). Residual: lateral same-layer only; field-solved coupling (`rules.C`/`.nxtgrd`) + aggressor-victim crosstalk SI sign-off remain foundry-data gaps. |
+| **DT2 At-speed timing-graded PDF ATPG** | ✅ OpenSTA K-longest paths on the ROUTED netlist + SPEF (K=16, disclosed) → per-path 2-frame LOC miter via yosys `sat -prove`: **16/16 sensitised, 16 robust (SIC), 0 false/held**; critical path `_419_→_418_` arrival 0.654 ns (slack +9.13 ns); false-clean-proof (an independent non-path pair returns RED and is excluded). PI-launched paths are not LOC-testable — excluded and disclosed, never counted. The gate independently RECOUNTS the per-path list. |
+| **30 Top-N critical-path SPICE** | ✅ ngspice + OpenSTA top-N (one worst max-delay path per distinct endpoint): **5/5 paths CORRELATED against the coupling-aware SPEF, worst \|Δ\|=6.0 %, mean 3.3 %** (< 10 % tolerance); mixed NAND/XOR/NOR stages genuinely sensitised (the swing backstop yields a per-path SKIP, never a fabricated number). |
 
-**flow_compliance_check --strict: `PASS_WITH_WAIVERS`, PASS=36 / FAIL=0 / MISSING=0** (up from PASS=29 before the closures).
+Residual named waivers: FPGA board-prototype (no board contract; ENV_UNAVAILABLE). SDF cell-arc IOPATH in the Icarus gate-sim is a tracked integration residual (cell timing signs off in STA, positive slack). Manufacturing-stage steps (mask → wafer → WAT → silicon bring-up) are SKIPPED-CONDITION awaiting silicon, by design.
+
+**flow_compliance_check --strict: `PASS_WITH_WAIVERS`, PASS=39 / FAIL=0 / MISSING=0 / capability-gaps=0** (PASS=29 before the closures → 36 after the six OSS-tool closures → 39 with formal + DT2 + the refreshed coupling-SPEF chain).
 
 ## Chip-agnostic plugin fixes this closure required (all unit-tested)
 
