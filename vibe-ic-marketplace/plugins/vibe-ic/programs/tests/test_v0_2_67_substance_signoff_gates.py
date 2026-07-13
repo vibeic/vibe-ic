@@ -150,7 +150,9 @@ def test_runner_emits_skip_selfreport_not_pass_flag():
     # is produced (never a fabricated pass.flag).
     # v1.3.99 — widened again: the DT2 path-delay-fault producer now sits
     # between the SDF sim and the #437 fallback note.
-    window = _P3_SRC[i:i + 7000]
+    # v1.4.5 — widened again: the DT3 (SDD) + Step-27 (MCF) producers land in
+    # the same span (the marker is now ~7.85k chars from the Step-29 anchor).
+    window = _P3_SRC[i:i + 9500]
     assert "sdf_gate_sim" in window          # the real SDF sim runs
     assert 'sim_pl_out / "pass.flag"' not in window
     assert "sdf_sim_skipped.json" in window  # fallback skip note still present

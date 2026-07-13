@@ -57,6 +57,8 @@ def test_both_recommended_and_stock_blocks_mounted():
     """BOTH docker-run recipes (fork image + stock IIC-OSIC-TOOLS) carry the
     mounts — a user picking either path must not hit the Phase-3 cd failure."""
     txt = _install_text()
-    assert "vibeic-eda:0.2.2" in txt and "hpretl/iic-osic-tools" in txt
+    # version-agnostic: the fork image tag bumps over time (was 0.2.2, now
+    # 0.2.16+) — assert the image NAME + the stock image, not a pinned tag.
+    assert "vibeic-eda:" in txt and "hpretl/iic-osic-tools" in txt
     # two identity mounts (one per docker run block)
     assert txt.count('-v "$HOME/AI_IC_design:$HOME/AI_IC_design:rw"') >= 2

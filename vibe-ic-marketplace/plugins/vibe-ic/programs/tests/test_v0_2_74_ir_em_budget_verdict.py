@@ -60,9 +60,14 @@ def test_ir_within_budget_passes(tmp_path):
 
 
 def test_runner_ir_emitter_writes_budget_verdict():
-    # budget = canonical 5%-of-VDD rule, VDD parsed from the PSM log
-    i = _P3_SRC.index('_ir_budget_uv = 0.05 * _vdd_v * 1e6')
-    window = _P3_SRC[i - 1100:i + 900]
+    # budget = configurable pct-of-VDD (v1.3.93: reconciled to the plugin's own
+    # ir_drop_budget_check._DEFAULT_BUDGET_PCT, was a hardwired 5%), VDD parsed
+    # from the PSM log.
+    i = _P3_SRC.index('_ir_budget_uv = (_budget_pct / 100.0) * _vdd_v * 1e6')
+    # v1.4.6 — widened both bounds: the configurable-budget refactor spread the
+    # #444 comment (-1449), the verdict (+1117) and MEASURED (+3995) apart; the
+    # window must span #444..verdict while still EXCLUDING the MEASURED emitter.
+    window = _P3_SRC[i - 1700:i + 2500]
     assert "Supply voltage" in window
     assert '"worst_ir_uv": _worst_ir_uv' in window
     assert '"verdict": "PASS" if _worst_ir_uv <= _ir_budget_uv else "FAIL"' \
