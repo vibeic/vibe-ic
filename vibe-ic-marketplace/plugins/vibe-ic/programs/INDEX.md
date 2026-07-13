@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 878
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 878)
+- **Total programs (excluding helpers / shims):** 879
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 879)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 869 |
+| `any` | 870 |
 
 ## Alphabetical listing
 
@@ -782,6 +782,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `spec_fsm_extract` | any | — | PROGRAM-FIRST structural extractor for stated FSMs. |
 | `spec_lint_review_detect` | any | — | PROGRAM-FIRST lint-review-task detector. |
 | `spec_memory_region_detect` | any | — | PROGRAM-FIRST addressable-memory detector. |
+| `spec_named_signal_detect` | any | — | PROGRAM-FIRST named-signal-preservation advisory. |
 | `spec_numeric_pack_extract` | any | — | PROGRAM-FIRST numeric-semantics + packing |
 | `spec_otp_extract` | any | — | PROGRAM-FIRST structural extractor for stated OTP content. |
 | `spec_regmap_extract` | any | — | PROGRAM-FIRST structural register-map extractor. |
@@ -950,7 +951,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (869 programs)
+### `any` (870 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1701,6 +1702,7 @@ _(no programs in this group)_
 - `spec_fsm_extract` — PROGRAM-FIRST structural extractor for stated FSMs.
 - `spec_lint_review_detect` — PROGRAM-FIRST lint-review-task detector.
 - `spec_memory_region_detect` — PROGRAM-FIRST addressable-memory detector.
+- `spec_named_signal_detect` — PROGRAM-FIRST named-signal-preservation advisory.
 - `spec_numeric_pack_extract` — PROGRAM-FIRST numeric-semantics + packing
 - `spec_otp_extract` — PROGRAM-FIRST structural extractor for stated OTP content.
 - `spec_regmap_extract` — PROGRAM-FIRST structural register-map extractor.
