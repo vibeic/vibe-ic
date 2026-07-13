@@ -413,6 +413,16 @@ steps:
       # (phase2/stage1/formal/formal_<top>.sv, authored via assertion-gen /
       # formal-verify) exists; without one the runner's formal_not_run.json
       # sentinel stays the honest SKIPPED-CONDITION (#608), never a fake PASS.
+      # SUPPLEMENTARY datapath tier (--invariant-harness / a formal_<top>_
+      # inductive.sv beside the standard one): a strengthened INDUCTIVE
+      # INVARIANT over the internal datapath state lets `abc pdr` prove
+      # product-correctness UNBOUNDED (the output-stream property alone is not
+      # inductive). Written to a SEPARATE formal_<top>_inductive_results.json —
+      # never clobbers the canonical results.json. An honesty guard forbids a
+      # BMC being dressed as unbounded; a wide datapath that does not converge
+      # is reported PARTIAL/bounded with the depth DISCLOSED (a genuine OSS
+      # solver-reach limit — btormc/AMulet2 do not cross it for sequential
+      # multipliers), never a fake full proof.
       - formal_property_run
       # v0.52 Rule D: a synth-able full-stack tb must drive the chip top
       # bit-by-bit through the single-wire pad before FPGA compile, so
@@ -722,6 +732,38 @@ steps:
       DISCLOSED residuals: top-K only (exhaustive PDF is exponential);
       PI-launched paths are not LOC-testable (held PIs) and are excluded,
       never counted; SIC reconvergent-fanout is the known robustness residual.
+
+  - id: DT3
+    name: "Small-delay-defect (SDD) at-speed grade"
+    stage: stage2
+    condition:
+      # Fuses DT1 transition faults + DT2 per-path slack — self-skips
+      # (NOT_APPLICABLE) whenever DT2 has not produced its coverage.
+      files_exist: ["reports/phase2/dft/path_delay_coverage.json",
+                    "reports/phase2/dft/transition_coverage.json"]
+    programs:
+      - sdd_atpg_run
+      - sdd_coverage_check
+    gate:
+      # produce/validate split (mirrors DT1/DT2): the RUNNER produces
+      # sdd_coverage.json (phase3_one_shot_runner, after DT2); the flow GATE
+      # only VALIDATES it. DESCRIPTIVE grade with NO floor — a slack-rich
+      # design honestly scores low (small delays masked by margin); the gate
+      # independently RE-DERIVES margin=period*fraction and the strong/weak
+      # buckets so a doctored margin or a strong-with-high-slack fabrication
+      # FAILs. It never fails on a low coverage number.
+      program_exit_zero: "sdd_coverage_check . --json reports/phase2/dft/sdd_coverage_gate.json"
+    blocks_on: [DT2]
+    notes: |
+      Small-delay-defect grade: each DT2 top-K sensitisable path is one
+      at-speed transition fault graded by its REAL OpenSTA post-layout SLACK
+      (strong = detected through a path whose slack <= a DISCLOSED margin =
+      margin_fraction*clock_period, default 0.10; weak = detected but
+      slack > margin; undetected-at-speed = not sensitisable). Slack-weighted
+      coverage = mean sdd_weight. Anchored at the scan-flop endpoint (the only
+      namespace common to the routed-STA and gate-SAT worlds). DISCLOSED
+      residual: STA-slack-graded, NOT a per-defect-size SPICE credit like a
+      full commercial SDD flow.
 
   - id: 12
     name: "Post-DFT optimization (resynth / buffering)"
@@ -1134,6 +1176,18 @@ steps:
         - program_exit_zero: "spef_extraction_check . --json reports/phase2/gates/spef_extraction.json"
         - program_exit_zero: "provenance_check . --output phase3/stage3/extracted/*.spef --tool magic,openroad"
     blocks_on: [21]
+    notes: |
+      Coupling tiers (increasing accuracy, all DISCLOSED, none foundry-calibrated):
+      (1) grounded-cap — OpenRCX v2 `-lef_rc` from tech-LEF R + area + fringe.
+      (2) analytical lateral coupling — `_spef_coupling` parallel-plate Cc from
+          routed DEF geometry + generic 180nm dielectric (the default augment).
+      (3) FIELD-SOLVED coupling — `pdk_dielectric_fit` inverts the PDK's own
+          area+fringe cap to a fitted dielectric stack, then `fastercap_extract`
+          runs the OSS 3D BEM solver FasterCap on the routed geometry (lateral
+          + inter-layer crossover the analytical model misses). Opt-in
+          (eda_extraction field_solve); self-reports NOT_APPLICABLE if the
+          solver is absent — never a fabricated matrix. Foundry field-solve
+          (`rules.C`/`.nxtgrd`) + crosstalk-SI sign-off remain a foundry-data gap.
 
   - id: 23
     name: "🔁 Post-route STA (multi-corner multi-mode sign-off)"
@@ -1207,11 +1261,14 @@ steps:
   # coupling capacitance between adjacent nets causes functional
   # failures or timing degradation.
   - id: 27
-    name: "🔁 Signal Integrity (Crosstalk / Noise / Glitch)"
+    name: "🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay)"
     stage: stage3
     closed_loop:
       fallback_to: 21
       trigger: "Crosstalk/noise above limit; shielding/spacing"
+    skills: [sta-review]
+    programs:
+      - si_mcf_sta_check
     required_outputs:
       - "reports/phase3/si_crosstalk.rpt OR reports/phase3/si_crosstalk.json"
     gate:
@@ -1221,6 +1278,18 @@ steps:
         - optional_program_exit_zero:
             command: "si_crosstalk_check . --json reports/phase2/gates/si_crosstalk.json"
             condition_files_exist: ["reports/phase3/si_crosstalk.rpt"]
+        # MCF crosstalk-DELAY axis (complements the noise/glitch axis above):
+        # the runner re-runs OpenSTA on an MCF-bounded SPEF (Cc*MCF folded per
+        # the aggressor/victim timing-window overlap; setup MCF=2 / hold MCF=0)
+        # and the gate independently RE-COUNTS the window-justified fold so a
+        # silently-dropped or inflated Cc*MCF FAILs. It is a conservative BOUND
+        # (not PrimeTime-SI's iterative coupled-waveform calc), so it VALIDATES
+        # the emitted report (advisory) rather than hard-failing a negative
+        # bounded slack — a negative bound is a WARNING watch-item for a
+        # commercial SI tool. Self-skips when no MCF report was produced.
+        - optional_program_exit_zero:
+            command: "si_mcf_sta_check . --json reports/phase3/si_mcf_sta_check.json"
+            condition_files_exist: ["reports/phase3/si_mcf_sta.json"]
     blocks_on: [22]
 
   # ── Step 28: PERC / Reliability Sign-off ─────────────────
