@@ -11896,6 +11896,66 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         else:
             notes.append("path_delay_fault_atpg skipped: no create_clock "
                          "name found in the routed SDC")
+
+    # --- Step DT3 — small-delay-defect (SDD) at-speed grade --------------
+    # Fuses DT1 transition faults + DT2 per-path slack. Best-effort +
+    # NONFATAL; the flow's DT3 gate only VALIDATES sdd_coverage.json (the
+    # gate RE-DERIVES margin + strong/weak buckets — a doctored margin or a
+    # strong-with-high-slack fabrication FAILs). DESCRIPTIVE, no floor.
+    _dt3_json = project / "reports/phase2/dft/sdd_coverage.json"
+    if (not _dt3_json.is_file() and _dt2_json.is_file()
+            and (project / "reports/phase2/dft/transition_coverage.json").is_file()):
+        # independent clock discovery (DT2's _dt2_clk is only bound when DT2
+        # actually produced this run — re-derive to avoid a NameError).
+        _dt3_clk = None
+        _dt3_sdc = project / "phase3/stage3/pnr/constraint.sdc"
+        if _dt3_sdc.is_file():
+            _m3 = re.search(
+                r"create_clock[^\n]*?(?:-name\s+(\w+)|get_ports\s*\{?\s*(\w+))",
+                _dt3_sdc.read_text(errors="replace"))
+            if _m3:
+                _dt3_clk = _m3.group(1) or _m3.group(2)
+        if _dt3_clk:
+            try:
+                _dt3_cmd = [sys.executable,
+                            str(PROGRAMS_DIR / "sdd_atpg_run.py"),
+                            str(project), "--clock", _dt3_clk,
+                            "--json", str(_dt3_json)]
+                _dt3_pdk_in = project / "input" / "pdk"
+                if _dt3_pdk_in.is_dir():
+                    _dt3_cmd += ["--pdk-dir", str(_dt3_pdk_in.resolve())]
+                _dt3_json.parent.mkdir(parents=True, exist_ok=True)
+                subprocess.run(_dt3_cmd, capture_output=True, text=True,
+                               timeout=1800)
+                if _dt3_json.is_file():
+                    written.append(str(_dt3_json))
+            except Exception as _dt3_exc:
+                notes.append(f"sdd_atpg non-fatal: {_dt3_exc}")
+        else:
+            notes.append("sdd_atpg skipped: no create_clock name in routed SDC")
+
+    # --- Step 27 (MCF axis) — SI-aware crosstalk-DELAY STA ---------------
+    # After the coupling-aware SPEF + post-route STA exist, re-run OpenSTA on
+    # an MCF-bounded SPEF (Cc*MCF folded per aggressor/victim window overlap).
+    # Best-effort + NONFATAL; the Step-27 gate VALIDATES si_mcf_sta.json (a
+    # conservative BOUND → advisory, independent window-justified recount).
+    _mcf_json = project / "reports/phase3/si_mcf_sta.json"
+    _mcf_spef = sorted((project / "phase3/stage3/extracted").glob("*.spef")) \
+        if (project / "phase3/stage3/extracted").is_dir() else []
+    if (not _mcf_json.is_file() and _mcf_spef
+            and (project / "phase3/stage3/pnr/constraint.sdc").is_file()):
+        try:
+            _mcf_cmd = [sys.executable,
+                        str(PROGRAMS_DIR / "si_mcf_sta.py"), "run",
+                        str(project), "--container", container]
+            _mcf_json.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(_mcf_cmd, capture_output=True, text=True,
+                           timeout=1800)
+            if _mcf_json.is_file():
+                written.append(str(_mcf_json))
+        except Exception as _mcf_exc:
+            notes.append(f"si_mcf_sta non-fatal: {_mcf_exc}")
+
     # #437(d): the runner does NOT run an SDF-annotated gate-level re-sim
     # — "RTL TB PASS + post-route TNS=0" is an RTL-sim approximation, and
     # an approximation must not wear the gate's pass.flag. Emit an honest
