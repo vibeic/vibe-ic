@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 877
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 877)
+- **Total programs (excluding helpers / shims):** 878
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 878)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 868 |
+| `any` | 869 |
 
 ## Alphabetical listing
 
@@ -789,6 +789,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `spec_review_lint` | any | v0.2.14 | deterministic structural presence lint for a NL spec. |
 | `spec_rtl_port_fidelity_check` | any | — | spec↔RTL port-fidelity + garbled-port lint. |
 | `spec_self_consistency_check` | any | v0.1.5 | pre-RTL spec self-consistency lint. |
+| `spec_selftb_coverage_detect` | any | — | PROGRAM-FIRST self-TB coverage advisory. |
 | `spec_signedness_extract` | any | — | PROGRAM-FIRST per-SIGNAL signedness extractor |
 | `spec_test_debug_extract` | any | — | PROGRAM-FIRST structural extractor for the L7 |
 | `spec_validator` | any | — | DS<->AN(<->Spec) cross-consistency checker. |
@@ -949,7 +950,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (868 programs)
+### `any` (869 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1707,6 +1708,7 @@ _(no programs in this group)_
 - `spec_review_lint` — deterministic structural presence lint for a NL spec.  _[v0.2.14]_
 - `spec_rtl_port_fidelity_check` — spec↔RTL port-fidelity + garbled-port lint.
 - `spec_self_consistency_check` — pre-RTL spec self-consistency lint.  _[v0.1.5]_
+- `spec_selftb_coverage_detect` — PROGRAM-FIRST self-TB coverage advisory.
 - `spec_signedness_extract` — PROGRAM-FIRST per-SIGNAL signedness extractor
 - `spec_test_debug_extract` — PROGRAM-FIRST structural extractor for the L7
 - `spec_validator` — DS<->AN(<->Spec) cross-consistency checker.
