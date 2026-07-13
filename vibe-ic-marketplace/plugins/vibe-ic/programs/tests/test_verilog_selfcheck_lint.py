@@ -70,5 +70,35 @@ def test_status_is_one_of_the_three():
     assert r["status"] in ("PASS", "FAIL", "SKIP")
 
 
+def test_raw_text_with_slash_not_misrouted_as_path(tmp_path):
+    # regression: raw SV text containing '/' (a // comment or division) must NOT
+    # be treated as a file path. The old `os.path.sep in rtl` heuristic misrouted
+    # it as a filename → verilator "Cannot find file containing module" → false FAIL.
+    looks = _M._looks_like_path
+    raw = ("module m(input wire clk, output reg q);\n"
+           "  // divide a/b toggle\n"
+           "  always @(posedge clk) q <= ~q;\nendmodule\n")
+    assert "/" in raw
+    assert looks(raw) is False              # raw text is never a path
+    # a genuine file IS recognized as a path
+    f = tmp_path / "real.sv"
+    f.write_text("module real_dut; endmodule\n")
+    assert looks(str(f)) is True
+    # an over-long raw source (would blow ENAMETOOLONG) is still "not a path"
+    assert looks("x" * 9000) is False
+
+
+@pytest.mark.skipif(not _HAVE_VERILATOR, reason="verilator not installed")
+def test_raw_text_with_slash_lints_clean(tmp_path):
+    # end-to-end: with real verilator, the same slash-bearing raw text now lints
+    # (routes to a temp file) instead of the old spurious "cannot find file" FAIL.
+    raw = ("module m(input wire clk, output reg q);\n"
+           "  // divide a/b toggle\n"
+           "  always @(posedge clk) q <= ~q;\nendmodule\n")
+    r = selfcheck(raw, top="m")
+    assert r["status"] == "PASS", r["raw"]
+    assert not any("Cannot find file" in (w.get("message") or "") for w in r["warnings"])
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
