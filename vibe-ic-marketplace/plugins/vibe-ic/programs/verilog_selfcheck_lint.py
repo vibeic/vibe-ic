@@ -134,7 +134,12 @@ def selfcheck_lint(rtl: str, top: Optional[str] = None,
         # cosmetic filesystem lint (fires on temp files / any path whose leaf !=
         # module name) irrelevant to the self-lint's purpose (UNUSEDSIGNAL,
         # WIDTH, etc.); suppressing it never weakens real-defect coverage.
-        cmd = [binpath, "--lint-only", "-Wall", "-Wno-DECLFILENAME"]
+        # match the CVDP harness lint deck as closely as blind-safely possible:
+        # it runs `verilator --lint-only -Wall -Wno-EOFNEWLINE <config.vlt> $SRC`.
+        # -Wno-EOFNEWLINE (a trailing-newline cosmetic) + -Wno-DECLFILENAME (a
+        # temp-file-naming self-gate artifact) are suppressed; every real defect
+        # class (-Wall) still fires, so parity with the scorer is preserved.
+        cmd = [binpath, "--lint-only", "-Wall", "-Wno-DECLFILENAME", "-Wno-EOFNEWLINE"]
         if top:
             cmd += ["--top-module", top]
         cmd += (extra_args or [])
