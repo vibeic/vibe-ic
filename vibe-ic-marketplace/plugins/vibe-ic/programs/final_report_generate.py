@@ -583,7 +583,16 @@ def _step_sort_key(s: Dict[str, Any]) -> Tuple[int, str, int]:
         m = re.match(r"([AMP])(\d+|0)", sid)
         if m:
             return (0 if m.group(1) == "P" else 1, m.group(1), int(m.group(2)))
-    return (0, "", int(sid))
+        # other lettered ids (FS1, DT1/DT2/DT3, E1-E3, ...) - sort after the
+        # numeric steps, grouped by the alpha prefix then its trailing number.
+        # NEVER int()-cast the whole lettered id (the 'FS1'/'DT1' crash class).
+        m2 = re.match(r"([A-Za-z]+)(\d+)$", sid)
+        if m2:
+            return (2, m2.group(1), int(m2.group(2)))
+    try:
+        return (0, "", int(sid))
+    except (TypeError, ValueError):
+        return (2, str(sid), 0)
 
 
 def _render_step_tables(flow: Dict[str, Any], verdicts: Dict[str, str]) -> str:
