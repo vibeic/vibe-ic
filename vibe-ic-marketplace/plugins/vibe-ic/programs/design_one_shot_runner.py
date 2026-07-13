@@ -3012,7 +3012,18 @@ def step_full_stack_tb_gen(project: Path,
         # the dominant uncompilable-TB defect on SoC wrappers.
         w = _v643_width_decl(p)
         if nm in ("clk", "reset_n"):
-            inst_args.append(f"    .{nm}({nm})")
+            if direction == "input":
+                inst_args.append(f"    .{nm}({nm})")
+                continue
+            # ORGANIC (v1.3.79 follow-up) — a DUT OUTPUT/INOUT named `clk` /
+            # `reset_n` (e.g. a display controller passing its pixel clock
+            # through to the connector) must NOT bind to the TB's internal
+            # stimulus reg of the same name: that drives a reg from a DUT
+            # output → iverilog "Unable to assign to unresolved wires" →
+            # reference_tb FAIL on a correct RTL. Observe it on a fresh
+            # renamed wire instead. chip-AGNOSTIC (keyed on direction only).
+            decl_lines.append(f"  wire{w} {nm}__dut_out;")
+            inst_args.append(f"    .{nm}({nm}__dut_out)")
             continue
         # ORGANIC #643 — a POWER / ground inout is TIED (left undriven for
         # USE_POWER_PINS), never driven as connectivity stimulus.
