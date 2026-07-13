@@ -113,7 +113,12 @@ def detect_lint_review(prompt: str) -> Dict[str, Any]:
             "verilog_selfcheck_lint) on your RTL and drive EVERY warning to zero "
             "before emit (size intermediate regs to their used width to kill "
             "UNUSEDSIGNAL; no inferred latches; no unused params; fully drive every "
-            "declared signal)." + checklist)
+            "declared signal). The harness lint gate fails on ANY non-zero return "
+            "(`verilator --lint-only -Wall -Wno-EOFNEWLINE`), so a SINGLE residual "
+            "warning fails the task — do NOT leave a WIDTHTRUNC/WIDTHEXPAND or any "
+            "warning as 'pre-existing' or 'out of scope'; every warning on the "
+            "reviewed module must be resolved (width-cast the operand, don't just "
+            "note it)." + checklist)
 
     return {
         "is_lint_review": is_lint,

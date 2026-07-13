@@ -67,11 +67,40 @@ _PLUGIN_ROOT = _HERE.parents[1]
 _RUNNER = _PLUGIN_ROOT / "programs" / "vibe_ic_one_shot_runner.py"
 
 sys.path.insert(0, str(_HERE.parent))
+sys.path.insert(0, str(_PLUGIN_ROOT / "programs"))
 from cvdp_task_router import route_record  # noqa: E402  (sibling adapter)
 
 # The record keys the Phase-1 entry is allowed to read. output.* / harness are
 # the scoring oracle and MUST NOT participate in authoring/extraction (§ 4.05).
 _ALLOWED_INPUT_KEYS = frozenset({"prompt", "context"})
+
+
+def _render_spec_requirements(prompt: str, context_keys) -> Optional[str]:
+    """Run the distilled spec-requirement detectors (memory-map, lint self-gate,
+    context-sibling, self-TB coverage, named-signal preservation) on the prompt
+    and render them as a markdown brief the Phase-1 spec-to-rtl author reads.
+
+    This closes the Phase-1 wiring gap: the detectors were previously reached only
+    via the task_loop hand-off (`ic_expert_backup_pack.assemble`), so a residual
+    routed through Phase-1 (spec_generation) never saw its distilled requirement.
+    Input-only (§4.05)."""
+    try:
+        import ic_expert_backup_pack as _pack
+        reqs = _pack._spec_requirements(prompt, context_keys)
+    except Exception:
+        return None
+    if not reqs:
+        return None
+    lines = ["# Distilled spec requirements (program-first, from the prompt)",
+             "",
+             "The plugin's deterministic detectors flagged these load-bearing "
+             "requirements for this design. Honor EACH one in the RTL you author:",
+             ""]
+    for r in reqs:
+        lines.append(f"## {r.get('kind')}")
+        lines.append(r.get("requirement", ""))
+        lines.append("")
+    return "\n".join(lines)
 
 
 def _assert_no_oracle_read(record: Dict[str, Any]) -> None:
@@ -184,8 +213,19 @@ def _stage_case(record: Dict[str, Any], case_dir: Path) -> Dict[str, Any]:
             src_p.parent.mkdir(parents=True, exist_ok=True)
             src_p.write_text(source, encoding="utf-8")
             staged_context.append(rel)
+
+    # Distilled spec-requirement brief (Phase-1 wiring): render the detectors'
+    # requirements into input/docs/ so the spec-to-rtl author sees them, exactly
+    # as the task_loop hand-off carries them for completion/modify tasks.
+    ctx_keys = list(ctx.keys()) if isinstance(ctx, dict) else []
+    brief = _render_spec_requirements(str(prompt), ctx_keys)
+    if brief:
+        (case_dir / "input" / "docs" / "spec_requirements.md").write_text(
+            brief, encoding="utf-8")
+
     return {"prompt_chars": len(str(prompt)),
-            "context_files": staged_context}
+            "context_files": staged_context,
+            "spec_requirements": bool(brief)}
 
 
 def _run_runner(case_dir: Path, timeout: int) -> Dict[str, Any]:

@@ -126,6 +126,17 @@ def _spec_requirements(prompt: str,
             })
     except Exception:
         pass
+    try:
+        import spec_named_signal_detect as _sig
+        r = _sig.detect_named_signals(prompt)
+        if r.get("has_named_signals") and r.get("requirement"):
+            reqs.append({
+                "kind": "preserve_named_signals",
+                "requirement": r["requirement"],
+                "named_signals": r.get("named_signals", [])[:20],
+            })
+    except Exception:
+        pass
     return reqs
 
 
