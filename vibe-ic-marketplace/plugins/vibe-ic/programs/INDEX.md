@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 865
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 865)
+- **Total programs (excluding helpers / shims):** 866
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 866)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 856 |
+| `any` | 857 |
 
 ## Alphabetical listing
 
@@ -394,6 +394,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ic_class_profile` | any | Wave 36 | IC class detection helper (Wave 36, v0.119.68). |
 | `ic_expert_backup_pack` | any | — | assemble the IC-Expert-Agent AI-backup context pack. |
 | `ic_expert_db_consistency_check` | any | — | gate: the IC Expert DB stays an ADVISORY |
+| `ic_expert_db_health_audit` | any | — | periodic HEALTH audit of the IC Expert DB |
 | `ic_expert_db_query` | any | — | GENERAL-CORE retrieval over the IC Expert DB. |
 | `iface_conformance_v2` | any | — | prompt→interface conformance gate (ORGANIC #695). |
 | `infiniband_protocol_synth` | any | — | InfiniBand Architecture (IBTA) protocol synth helper. |
@@ -937,7 +938,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (856 programs)
+### `any` (857 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1303,6 +1304,7 @@ _(no programs in this group)_
 - `ic_class_profile` — IC class detection helper (Wave 36, v0.119.68).  _[Wave 36]_
 - `ic_expert_backup_pack` — assemble the IC-Expert-Agent AI-backup context pack.
 - `ic_expert_db_consistency_check` — gate: the IC Expert DB stays an ADVISORY
+- `ic_expert_db_health_audit` — periodic HEALTH audit of the IC Expert DB
 - `ic_expert_db_query` — GENERAL-CORE retrieval over the IC Expert DB.
 - `iface_conformance_v2` — prompt→interface conformance gate (ORGANIC #695).
 - `infiniband_protocol_synth` — InfiniBand Architecture (IBTA) protocol synth helper.
