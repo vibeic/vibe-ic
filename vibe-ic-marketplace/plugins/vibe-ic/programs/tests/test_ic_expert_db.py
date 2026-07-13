@@ -88,6 +88,99 @@ def test_gate_accepts_clean_advisory_lesson(tmp_path):
     assert C.check(db)["pass"]
 
 
+# ── related[] cross-links (F1 — the lightweight concept graph) ───────
+
+def _tmp_db_entries(tmp_path, entries):
+    p = tmp_path / "db.json"
+    for e in entries:
+        e.setdefault("lesson_count", len(e.get("lessons", [])))
+    p.write_text(json.dumps({"entries": entries}))
+    return p
+
+
+def test_shipped_related_links_are_grounded_and_symmetric():
+    d = json.loads(DB.read_text())
+    by = {e["ic_class"]: e for e in d["entries"]}
+    rel = {c: set(e.get("related", [])) for c, e in by.items()}
+    for c, rs in rel.items():
+        assert c not in rs, f"{c} related self-references"
+        for r in rs:
+            assert r in by, f"{c} related '{r}' is dangling"
+            assert c in rel[r], f"related asymmetry: {c}->{r} but not back"
+
+
+def test_gate_rejects_dangling_related(tmp_path):
+    db = _tmp_db_entries(tmp_path, [
+        {"ic_class": "a", "lessons": ["clean lesson a"], "related": ["ghost"]}])
+    rep = C.check(db)
+    assert not rep["pass"]
+    assert any("dangling" in f for f in rep["findings"])
+
+
+def test_gate_rejects_self_related(tmp_path):
+    db = _tmp_db_entries(tmp_path, [
+        {"ic_class": "a", "lessons": ["clean lesson a"], "related": ["a"]}])
+    rep = C.check(db)
+    assert not rep["pass"]
+    assert any("self-reference" in f for f in rep["findings"])
+
+
+def test_gate_rejects_nonlist_related(tmp_path):
+    db = _tmp_db_entries(tmp_path, [
+        {"ic_class": "a", "lessons": ["clean lesson a"], "related": "b"}])
+    rep = C.check(db)
+    assert not rep["pass"]
+    assert any("list[str]" in f for f in rep["findings"])
+
+
+def test_gate_rejects_duplicate_related(tmp_path):
+    db = _tmp_db_entries(tmp_path, [
+        {"ic_class": "a", "lessons": ["la"], "related": ["b", "b"]},
+        {"ic_class": "b", "lessons": ["lb"], "related": ["a"]}])
+    rep = C.check(db)
+    assert not rep["pass"]
+    assert any("duplicate" in f for f in rep["findings"])
+
+
+def test_gate_accepts_valid_symmetric_related(tmp_path):
+    db = _tmp_db_entries(tmp_path, [
+        {"ic_class": "a", "lessons": ["la"], "related": ["b"]},
+        {"ic_class": "b", "lessons": ["lb"], "related": ["a"]}])
+    assert C.check(db)["pass"], C.check(db)["findings"]
+
+
+def test_gate_accepts_entry_without_related(tmp_path):
+    # related is OPTIONAL — its absence must never fail (backward-compat)
+    db = _tmp_db_entries(tmp_path, [{"ic_class": "a", "lessons": ["la"]}])
+    assert C.check(db)["pass"]
+
+
+def test_query_expand_related_null_does_not_crash(tmp_path):
+    # an explicit related:null (gate treats it as "absent") must not crash expand
+    p = tmp_path / "db.json"
+    p.write_text(json.dumps({"entries": [
+        {"ic_class": "divider-x", "lesson_count": 1,
+         "lessons": ["restoring divider partial remainder register"], "related": None}]}))
+    hits = Q.query("restoring divider partial remainder", k=3, db_path=p, expand_related=True)
+    assert isinstance(hits, list) and hits  # returned, did not raise
+
+
+def test_query_expand_related_is_optional_and_superset():
+    prompt = ("Design an accumulator / weighted-sum datapath that sums products "
+              "into a wide accumulator.")
+    base = Q.query(prompt, k=3)
+    exp = Q.query(prompt, k=3, expand_related=True)
+    # default path is unchanged: no related_to tags, and expand is a prefix-superset
+    assert all("related_to" not in h for h in base)
+    assert exp[:len(base)] == base
+    # the top hit for this prompt is an accumulator class that HAS related links,
+    # so the expand view must follow at least one of them
+    by = {e["ic_class"]: e for e in json.loads(DB.read_text())["entries"]}
+    top = base[0]["ic_class"] if base else None
+    if top and by.get(top, {}).get("related"):
+        assert any(h.get("related_to") == top for h in exp), "expand should follow links"
+
+
 # ── general-path integration via _lesson_digest ─────────────────────
 
 def test_db_digest_is_SEPARATE_from_main_digest(tmp_path):
