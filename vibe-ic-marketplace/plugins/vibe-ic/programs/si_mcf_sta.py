@@ -815,11 +815,23 @@ def run(project: PathLike, *, container: str = "vibeic-eda",
     work = ex / "si_mcf"
     work.mkdir(parents=True, exist_ok=True)
 
-    liberty_c = _to_container_path(str(liberty), container)
-    netlist_c = _to_container_path(str(netlist_p), container)
-    sdc_c = _to_container_path(str(sdc_p), container)
-    spef_c = _to_container_path(str(spef_p), container)
-    macro_libs_c = [_to_container_path(str(m), container) for m in macro_libs]
+    # v1.4.7 — resolve a RELATIVE input path against the project dir before the
+    # container-path translation (a caller passing `--liberty input/pdk/...`
+    # otherwise produced an untranslatable relative path → the container could
+    # not read it → sta_rc=1 → null slacks → a soft ADVISORY that could
+    # masquerade as a pass). _abs() makes every host path absolute first.
+    def _abs(p: str) -> str:
+        pp = Path(p)
+        if not pp.is_absolute():
+            cand = (project / pp)
+            pp = cand if cand.exists() else pp
+        return str(pp.resolve()) if pp.exists() else str(pp)
+
+    liberty_c = _to_container_path(_abs(str(liberty)), container)
+    netlist_c = _to_container_path(_abs(str(netlist_p)), container)
+    sdc_c = _to_container_path(_abs(str(sdc_p)), container)
+    spef_c = _to_container_path(_abs(str(spef_p)), container)
+    macro_libs_c = [_to_container_path(_abs(str(m)), container) for m in macro_libs]
 
     # (1) timing windows
     win_json = work / "si_mcf_windows.json"
@@ -884,8 +896,16 @@ def run(project: PathLike, *, container: str = "vibeic-eda",
 
     setup_after = corners_out["setup"]["worst_slack_after_ns"]
     hold_after = corners_out["hold"]["worst_slack_after_ns"]
+    # v1.4.7 — a NULL slack that is caused by an OpenSTA TOOL FAILURE (rc!=0)
+    # is an ERROR, never a soft ADVISORY: an unreadable liberty/spef path or a
+    # crashed run must NOT be able to masquerade as a pass. ADVISORY stays only
+    # for a legitimate no-data case (STA succeeded but produced no slack).
+    _sta_failed = (nom_rc != 0
+                   or corners_out["setup"].get("sta_rc") not in (0, None)
+                   or corners_out["hold"].get("sta_rc") not in (0, None))
     verdict = "PASS" if (_pos(setup_after) and _pos(hold_after)) else (
         "FAIL" if (setup_after is not None and hold_after is not None)
+        else "ERROR" if _sta_failed
         else "ADVISORY")
 
     report = {

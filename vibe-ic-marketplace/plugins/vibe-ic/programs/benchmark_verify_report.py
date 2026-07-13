@@ -71,6 +71,12 @@ STEP_METHOD = {
     "9":  ("metric", "synth netlist: cell-count/area in-range + LEC OUR==REF"),
     "10": ("metric", "pre-layout multi-corner STA slack compare"),
     "11": ("metric", "DFT scan-chain length + ATPG coverage compare"),
+    # Functional-safety + at-speed delay-fault steps (flow stage2; chip-agnostic).
+    "FS1": ("clean", "ISO-26262 FMEDA diagnostic-coverage (fault-injection) vs safety goal — "
+                     "applies to safety designs; N/A otherwise"),
+    "DT1": ("metric", "transition-delay-fault (at-speed LOC) ATPG fault-coverage compare"),
+    "DT2": ("metric", "path-delay-fault (at-speed, timing-graded) ATPG fault-coverage compare"),
+    "DT3": ("metric", "small-delay-defect (SDD) at-speed grade / coverage compare"),
     "12": ("metric", "post-DFT netlist compare"),
     "13": ("equivalence", "LEC: RTL == post-DFT netlist"),
     "14": ("clean", "pre-PnR Yosys gate parity"),
@@ -117,10 +123,16 @@ def _load_steps(flow_yaml: Path):
         return [(str(s.get("id")), s.get("name", ""), str(s.get("stage", "")))
                 for s in d.get("steps", []) if isinstance(s, dict)]
     except Exception as e:
-        print(f"[warn] could not parse flow yaml ({e}); using built-in 56-step ids",
+        print(f"[warn] could not parse flow yaml ({e}); using built-in step ids",
               file=sys.stderr)
+        # Keep this fallback set in sync with flow/phase1_phase2_phase3.yaml.
+        # FS1/DT1/DT2/DT3 are the stage2 functional-safety + at-speed
+        # delay-fault steps; omitting them left an all-pass project with 4
+        # PENDING/unresolved steps when the yaml could not be parsed.
         ids = (["D1"] + [str(i) for i in range(1, 7)] + ["P0"]
-               + [str(i) for i in range(7, 15)]
+               + [str(i) for i in range(7, 12)]
+               + ["FS1","DT1","DT2","DT3"]
+               + [str(i) for i in range(12, 15)]
                + ["A1","A2","A3","A4","A5","A6","A7","A8","A9"]
                + [str(i) for i in range(15, 40)]
                + ["M1","M2","M3","M4"] + [str(i) for i in range(40, 45)])

@@ -108,9 +108,17 @@ def test_cvdp_adapter_complete_count_is_prompt_context_only():
     # Signal/Direction/Width table and the `- `name` (input, N bits):` prose bullet
     # list. Restoring both input-only parsers recovered 223 -> 226 (comparator via
     # the signal-direction table; apb_dsp_unit + sorter via the prose-bullet list),
-    # all prompt-sourced, ZERO harness reads, and a strict superset of the 223 set
-    # (no COMPLETE lost). This is the §4.05-compliant clean-room baseline.
-    assert comp == 226, f"CVDP COMPLETE (prompt+context only) drifted to {comp}"
+    # all prompt-sourced, ZERO harness reads, and a strict superset of the 223 set.
+    #
+    # 2026-07-13 (PR #130 `recover_interface_from_prompt`, cvdp RCA distillation):
+    # a "modify existing RTL" prompt that RE-DECLARES its interface in an explicit
+    # "Updated Input/Output Interfaces" prose section is now parsed from input.prompt
+    # (authoritative over the stale context-RTL header). This recovered 226 -> 228:
+    # +apb_gpio_0001 and +packet_controller_0001, BOTH sourced solely from
+    # input.prompt (verified: neutralizing recover_interface_from_prompt drops the
+    # count back to exactly 226), a strict superset (no COMPLETE lost) and ZERO
+    # harness/golden reads. This is the §4.05-compliant clean-room baseline.
+    assert comp == 228, f"CVDP COMPLETE (prompt+context only) drifted to {comp}"
     # §4.05: the cocotb harness signal-set block is NO LONGER re-attached; the
     # supplied (prompt+context) interface is echoed in `interface_source` instead.
     s = C.extract(recs[0])

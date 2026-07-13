@@ -23,7 +23,13 @@ def _load_mod():
 
 
 def _all_step_ids(mod):
-    flow = GEN.parent.parent.parent / "flow" / "phase1_phase2_phase3.yaml"
+    # Use the SAME flow yaml the generator resolves (plugins/vibe-ic/flow/...);
+    # GEN = programs/benchmark_verify_report.py, so GEN.parent.parent == the
+    # plugin root. The previous extra `.parent` pointed at plugins/flow/ which
+    # does not exist, silently falling back to _load_steps' stale built-in
+    # 56-step ids (missing the flow's newer lettered steps FS1/DT1/DT2/DT3) —
+    # so those steps got no verdict file and showed as PENDING/unresolved.
+    flow = GEN.parent.parent / "flow" / "phase1_phase2_phase3.yaml"
     return [sid for sid, _, _ in mod._load_steps(flow)]
 
 

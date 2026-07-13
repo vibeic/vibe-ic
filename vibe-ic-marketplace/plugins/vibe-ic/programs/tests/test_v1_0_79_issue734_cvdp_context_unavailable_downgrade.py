@@ -119,11 +119,18 @@ def test_positive_dataset_reenables_exclusion(tmp_path):
     """With --dataset carrying input.context{gf_multiplier}, the #715 exclusion
     fires properly — gf_multiplier is a known context module, not blocked, and
     NOT via the INACTIVE-degrade path."""
+    # The context stub must declare the ports the completion instantiates
+    # (.a/.b/.y) — as the REAL CVDP context module does. The context-fed yosys
+    # smoke (PR #122/#130) now genuinely elaborates the design WITH the context
+    # module, so a bare portless `module gf_multiplier; endmodule` (which the old,
+    # non-context-fed gate never synthesized) would fail on a real port mismatch —
+    # a correct catch, not the #734 false-block this test guards against.
     rc, notes = _run(
         tmp_path,
         json.dumps({"id": _RID, "prompt": _GF_PROMPT}),
         dataset_line=json.dumps({"id": _RID, "input": {"context": {
-            "rtl/gf_multiplier.sv": "module gf_multiplier; endmodule"}}}))
+            "rtl/gf_multiplier.sv": "module gf_multiplier(input [7:0] a, input [7:0] b, "
+                                    "output [7:0] y); assign y = a & b; endmodule"}}}))
     assert rc == 0
     assert "multi-file INCOMPLETE (#715)" not in notes
     assert "INACTIVE" not in notes  # excluded properly, not degraded
