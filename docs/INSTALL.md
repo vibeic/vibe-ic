@@ -24,12 +24,12 @@ magic / netgen / iverilog / klayout with gatekeeper-verified FAIL→PASS fixes; 
 `tools/vibeic-eda/FIX_STATUS.md`). Build the reproducible image once, then run it:
 
 ```bash
-docker pull ghcr.io/vibeic/vibeic-eda:0.2.13          # or build locally: docker build -t vibeic-eda:0.2.13 tools/vibeic-eda
+docker pull ghcr.io/vibeic/vibeic-eda:0.2.16          # or build locally: docker build -t vibeic-eda:0.2.16 tools/vibeic-eda
 docker rm -f vibeic-eda 2>/dev/null || true           # "name already in use" = an old container exists; drop it first
 docker run -d --name vibeic-eda \
   -v "$HOME/AI_IC_design:$HOME/AI_IC_design:rw" \
   -v "$HOME/AI_IC_design:/foss/designs:rw" \
-  ghcr.io/vibeic/vibeic-eda:0.2.13 --skip sleep infinity
+  ghcr.io/vibeic/vibeic-eda:0.2.16 --skip sleep infinity
 docker exec vibeic-eda yosys --version                # sanity check → prints a version (bare exec resolves since 0.2.12)
 ```
 
