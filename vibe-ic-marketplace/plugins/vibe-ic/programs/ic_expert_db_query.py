@@ -49,11 +49,23 @@ def _kw(text: str) -> set:
             "implement","following","using","based","output","inputs","outputs"}
     return {w for w in toks if w not in stop}
 
-def query(prompt: str, k: int = 5, db_path: Path = _DEFAULT_DB):
+def query(prompt: str, k: int = 5, db_path: Path = _DEFAULT_DB,
+          expand_related: bool = False):
+    """Retrieve the top-k relevant lessons for `prompt`.
+
+    `expand_related` is OPT-IN (default False → byte-identical to the tuned
+    lexical ranking). When True, after the ranked top-k is chosen, one lesson
+    from each ic_class in the TOP hit's `related[]` graph is appended (score 0.0,
+    tagged `related_to`) — a synthesis view that follows the concept links. It is
+    off by default because an A/B on 94 designs showed that widening the author's
+    context LOWERED recovery, so the production spec-to-rtl path keeps the tight
+    top-k; the graph expansion is for maintenance / explicit synthesis queries.
+    """
     db = json.loads(Path(db_path).read_text())
+    entries = db.get("entries", [])
     q_fn, q_kw = _fn(prompt), _kw(prompt)
     ranked = []
-    for e in db.get("entries", []):
+    for e in entries:
         cls = e.get("ic_class", "")
         c_fn = _fn(cls)
         for les in e.get("lessons", []):
@@ -73,6 +85,22 @@ def query(prompt: str, k: int = 5, db_path: Path = _DEFAULT_DB):
         out.append({"ic_class": cls, "score": round(s, 2), "lesson": les})
         if len(out) >= k:
             break
+    if expand_related and out:
+        by_class = {e.get("ic_class"): e for e in entries}
+        seed = out[0]["ic_class"]
+        # `.get("related") or []` (not `.get("related", [])`) — an explicit
+        # related:null (which the gate treats as "absent") must not crash expand.
+        for r in (by_class.get(seed, {}).get("related") or []):
+            rentry = by_class.get(r)
+            if not rentry or not rentry.get("lessons"):
+                continue
+            les = rentry["lessons"][0]
+            if les in seen:
+                continue
+            seen.add(les)
+            out.append({"ic_class": r, "score": 0.0, "lesson": les, "related_to": seed})
+            if len(out) >= 2 * k:
+                break
     return out
 
 def render(hits) -> str:
@@ -92,9 +120,12 @@ def main(argv=None) -> int:
     ap.add_argument("--k", type=int, default=5)
     ap.add_argument("--db", type=Path, default=_DEFAULT_DB)
     ap.add_argument("--json", action="store_true", help="emit JSON instead of rendered digest")
+    ap.add_argument("--expand-related", action="store_true",
+                    help="follow the top hit's related[] concept links (synthesis view; "
+                         "OFF by default — the production path keeps the tight top-k)")
     a = ap.parse_args(argv)
     text = sys.stdin.read() if a.prompt == "-" else Path(a.prompt).read_text(errors="replace")
-    hits = query(text, a.k, a.db)
+    hits = query(text, a.k, a.db, expand_related=a.expand_related)
     print(json.dumps(hits, indent=2, ensure_ascii=False) if a.json else render(hits))
     return 0
 
