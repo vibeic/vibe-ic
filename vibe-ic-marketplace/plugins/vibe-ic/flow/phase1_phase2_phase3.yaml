@@ -405,6 +405,15 @@ steps:
     mcp_tools: [eda_formal]
     programs:
       - assertion_property_check
+      # Real SymbiYosys proof runner (chip-AGNOSTIC): emits the .sby, runs
+      # `sby` in the container with the built-in ABC engines (abc pdr =
+      # UNBOUNDED safety prove; abc bmc3 = disclosed BOUNDED functional BMC —
+      # no external SMT solver needed), parses the transcript, and writes
+      # formal/results.json + <top>_report.md. Fires when a formal harness
+      # (phase2/stage1/formal/formal_<top>.sv, authored via assertion-gen /
+      # formal-verify) exists; without one the runner's formal_not_run.json
+      # sentinel stays the honest SKIPPED-CONDITION (#608), never a fake PASS.
+      - formal_property_run
       # v0.52 Rule D: a synth-able full-stack tb must drive the chip top
       # bit-by-bit through the single-wire pad before FPGA compile, so
       # bit-level integration bugs surface in sim (~30 s) instead of in
@@ -681,7 +690,38 @@ steps:
       The gate RE-COUNTS detected/redundant/aborted from the per-fault list so a
       redundant/aborted fault can never inflate coverage. Primary metric = ATPG
       test coverage = detected/(sampled - redundant); fault coverage also
-      reported. At-speed timing grading -> ADVANCED_NODE_EXTENSION.md.
+      reported. At-speed timing grading -> step DT2.
+
+  - id: DT2
+    name: "Path-delay-fault (at-speed, timing-graded) ATPG"
+    stage: stage2
+    condition:
+      # Needs the DT1 scan cut PLUS the post-route timing model (routed
+      # netlist + SPEF) — self-skips (NOT_APPLICABLE) before Phase 3 runs.
+      files_exist: ["phase2/stage2/dft/cut_netlist.v",
+                    "phase3/stage3/extracted/*.spef",
+                    "phase3/stage3/pnr/*_pnr.v"]
+    programs:
+      - path_delay_fault_atpg_run
+      - path_delay_coverage_check
+    gate:
+      # produce/validate split (mirrors Step 11 / DT1): the RUNNER produces
+      # path_delay_coverage.json (phase3_one_shot_runner, once the routed
+      # netlist + SPEF exist); the flow GATE only VALIDATES it (independent
+      # per-path recount — a false/held/aborted path can never count as
+      # sensitised; the RECOMPUTED coverage governs).
+      program_exit_zero: "path_delay_coverage_check . --json reports/phase2/dft/path_delay_coverage_gate.json"
+    blocks_on: [DT1]
+    notes: |
+      At-speed timing-graded PDF ATPG: OpenSTA reports the K longest
+      LOC-launchable max-delay paths on the ROUTED netlist + SPEF + SDC (real
+      post-layout timing), then per path a 2-frame LOC miter on the DT1
+      flat core asserts start-flop-launch AND endpoint-capture via yosys
+      `sat -prove` (the 2-pattern = DET; proven-none = false/held, excluded).
+      Robust grade = single-input-change miter (only the start flop toggles).
+      DISCLOSED residuals: top-K only (exhaustive PDF is exponential);
+      PI-launched paths are not LOC-testable (held PIs) and are excluded,
+      never counted; SIC reconvergent-fanout is the known robustness residual.
 
   - id: 12
     name: "Post-DFT optimization (resynth / buffering)"

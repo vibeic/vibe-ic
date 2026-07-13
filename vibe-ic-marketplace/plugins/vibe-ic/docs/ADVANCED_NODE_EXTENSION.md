@@ -10,10 +10,12 @@ as steps would either fake a stub or inflate the score. Each row also has a
 so any report that touches the area must disclose the substitution.
 
 > This is the honest boundary. Everything the OSS toolchain CAN do was added as a
-> real gating step instead — see the campaign that closed 6 sign-off cap-gaps
-> (SPEF/DFT/post-DFT/SDF/SPICE/LEC) and added 3 program-first advanced steps
-> (VCD-vectored dynamic-IR, ISO-26262 FMEDA fault-injection DC, power-domain
-> signal-crossing CDC). Those are NOT here — they are real steps.
+> real gating step instead — see the campaign that closed ALL SEVEN sign-off
+> cap-gaps (SPEF/DFT/post-DFT/SDF/SPICE/LEC/FORMAL — the last via `formal_property_run`:
+> real SymbiYosys with the built-in ABC engines, unbounded safety + disclosed-bound
+> functional BMC) and added 4 program-first advanced steps (VCD-vectored dynamic-IR,
+> ISO-26262 FMEDA fault-injection DC, power-domain signal-crossing CDC, at-speed
+> path-delay-fault ATPG DT2). Those are NOT here — they are real steps.
 
 ## What the OSS flow already does (do NOT confuse with a gap)
 | Area | OSS coverage in the flow |
@@ -26,7 +28,7 @@ so any report that touches the area must disclose the substitution.
 | DFM / yield | `dfm_screen_check`, `analog_mc_yield_run` (real ngspice MC), `wafer_sort_yield_check` |
 | UPF / low-power | `l21_to_upf_emit` + M2 gates (power-domain / level-shifter / isolation) **+ NEW power-domain signal-crossing CDC** |
 | **Functional safety (DC)** | **NEW: FMEDA fault-injection diagnostic-coverage (`fmeda_fault_injection_coverage`, step FS1)** |
-| DFT / ATPG | AUCOHL Fault real stuck-at ATPG (Step 11) **+ NEW transition-delay-fault (LOC) ATPG via vibeic/yosys `sat -prove` 2-frame unroll (`transition_fault_atpg_run`, step DT1)** |
+| DFT / ATPG | AUCOHL Fault real stuck-at ATPG (Step 11) **+ transition-delay-fault (LOC) ATPG via vibeic/yosys `sat -prove` 2-frame unroll (`transition_fault_atpg_run`, step DT1) + NEW at-speed TIMING-graded path-delay-fault ATPG: OpenSTA K-longest paths on the ROUTED netlist+SPEF → per-path LOC miter SAT, robust/non-robust graded (`path_delay_fault_atpg_run`, step DT2)** |
 | **Post-layout cell-arc gate-sim** | iverilog `-gspecify` DOES back-annotate SDF IOPATH cell-arc delays (combinational + sequential CK→Q, proven exact); the OpenSTA SDF carries the cell arcs. Full-design at-speed gate-sim integration (cell-delay-aware TB calibration) is a tracked residual — NOT a commercial gap; STA signs off cell timing meanwhile |
 | Post-silicon | `bringup_plan_gen` (plan from L13) |
 | IP / subsystem | `ip_integration_check` (Step 15), `ip_catalog_*`, NoC/AXI/CHI detect |
@@ -38,8 +40,7 @@ so any report that touches the area must disclose the substitution.
 | **Full di/dt transient dynamic-IR** | OSS PSM is resistive/vectored only — no L·di/dt inductive-droop time-domain solve | RedHawk-SC, Voltus | VCD-vectored PSM is the OSS floor; transient = cap-gap |
 | **2.5D/3D advanced packaging / chiplet** | CoWoS/EMIB/TSV/hybrid-bond assembly, multi-die STA & thermal need a packaging PDK + assembly rules absent in OSS (the D2D *protocol* layer — UCIe/CXL/HBM3 — IS synthesized) | 3Dblox, Innovus-3D, Calibre-3DSTACK | Extension-only (no numbered step) |
 | **Full 3D self-heating thermal + thermal-aware STA** | field thermal solve + per-temperature timing needs a thermal solver | Celsius, RedHawk-SC-ET | thermal *screen* is the OSS floor; full solve = cap-gap |
-| **At-speed TIMING-graded (path-delay-fault) ATPG** | DT1 delivers TDF LOGIC coverage (transition launched + observed via SAT); proving the sensitized path is slower than the rated cycle needs OpenSTA K-longest-path sensitization | commercial at-speed ATPG | logic-TDF (DT1) is the OSS floor; timing-graded PDF = deferred tier |
-| **Coupling / 3D-aware parasitic extraction** | commercial_pdk (and OSS PDKs) ship per-layer R + area + fringe cap + the metal stack (→ a grounded-cap OpenRCX captable IS buildable), but NOT the inter-metal ILD/IMD thickness, metal elevation, dielectric-k, or lateral Cc-vs-spacing — those live only in the foundry Calibre-XRC `rules.C`/StarRC `.nxtgrd`, a separate deliverable not in the PDK snapshot | Calibre xRC, StarRC-XT, QRC | grounded-cap (LEF-RC via OpenRCX v2) is the OSS floor; coupling/3D = foundry-data gap |
+| **Foundry-calibrated coupling / 3D parasitic extraction** | the flow NOW adds analytical lateral same-layer coupling (spacing/overlap from the routed DEF, thickness from the tech LEF, DISCLOSED generic dielectric — step 22 `_spef_coupling`), but the foundry-calibrated field-solve data (inter-metal ILD/IMD thickness, metal elevation, per-dielectric k, pattern-solved Cc tables) lives only in the un-shipped Calibre-XRC `rules.C`/StarRC `.nxtgrd`; inter-layer crossover coupling, fringe/3D corrections, and aggressor-victim crosstalk (SI) sign-off remain beyond the analytical model | Calibre xRC, StarRC-XT, QRC + PrimeTime-SI | analytical lateral coupling (disclosed, NOT foundry-calibrated) is the OSS tier; field-solved coupling + crosstalk SI sign-off = foundry-data gap |
 | **MBIST / LBIST + memory ATPG** | memory BIST insertion + memory fault models are commercial | Tessent MBIST, TetraMAX | Extension-only |
 | **Side-channel security (DPA/CPA/EM leakage)** | leakage-model simulation needs a specialized engine | PROLEAD, commercial DPA tools | Extension-only |
 | **Full FMEDA (SPFM/LFM/PMHF)** | the measured-DC half IS in FS1; the roll-up needs FIT/λ base-failure-rate apportionment from a reliability DB (IEC 62380 / SN 29500 / foundry) | commercial safety flows | FS1 delivers DC; roll-up = methodology/commercial gap |

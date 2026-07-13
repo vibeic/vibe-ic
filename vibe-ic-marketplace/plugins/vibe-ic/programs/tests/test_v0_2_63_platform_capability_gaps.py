@@ -28,26 +28,38 @@ def _step(sid, name="step", outputs=None):
             [f"reports/never_emitted_{sid}.rpt"]}
 
 
-def test_gap_table_names_the_gap_steps_with_flags():
-    # 11/12/13/29 from #430; 28 added by #437(d) — the runner emits the
-    # SDF but never runs an SDF-annotated gate-level re-sim.
+def test_gap_table_is_now_empty():
+    # 11/12/13/29 from #430; 28 added by #437(d).
     # v1.3.94 — the commercial-PDK campaign CLOSED 22 (SPEF via OpenRCX v2
     # -lef_rc), 11 (Fault ATPG 96%), 12 (post-DFT opt_clean), 29 (iverilog SDF
-    # sim), 30 (ngspice correlation) with real OSS tools → they gate normally.
-    # Only 5 (formal proof) and 13 (RTL≡synth LEC, real Yosys SAT-model limit on
-    # commercial-PDK Liberty) remain documented cap-gaps.
-    assert set(F._PLATFORM_CAPABILITY_GAPS) == {5}
-    for sid, flag in F._PLATFORM_CAPABILITY_GAPS.items():
-        assert flag.startswith("cap:"), (sid, flag)
+    # sim), 30 (ngspice correlation), 13 (LEC via read_liberty
+    # -ignore_miss_func) with real OSS tools → they gate normally.
+    # v1.3.99 — the LAST gap (5, formal proof) closed via formal_property_run
+    # (real SymbiYosys with the built-in ABC engines: abc pdr unbounded safety
+    # + abc bmc3 disclosed-bound functional BMC — no external SMT solver).
+    # The table is EMPTY: every canonical step now gates on a real OSS engine.
+    assert F._PLATFORM_CAPABILITY_GAPS == {}
 
 
-def test_missing_gap_step_converts_to_skipped_with_named_flag(tmp_path):
-    for sid in (5,):
-        r = F.check_step(tmp_path, _step(sid), waivers={})
-        assert r.status == "SKIPPED-CONDITION", (sid, r.status)
-        joined = " ".join(r.reasons)
-        assert F._PLATFORM_CAPABILITY_GAPS[sid] in joined, (sid, joined)
-        assert "MISSING" in joined  # the conversion is disclosed, not silent
+def test_missing_gap_step_converts_to_skipped_with_named_flag(tmp_path,
+                                                              monkeypatch):
+    # The conversion MECHANISM stays pinned (a future genuine gap must still
+    # surface as a disclosed SKIPPED-CONDITION, never a silent MISSING) via a
+    # synthetic entry — the real table is empty since v1.3.99.
+    monkeypatch.setitem(F._PLATFORM_CAPABILITY_GAPS, 99, "cap:test_synthetic")
+    r = F.check_step(tmp_path, _step(99), waivers={})
+    assert r.status == "SKIPPED-CONDITION", r.status
+    joined = " ".join(r.reasons)
+    assert "cap:test_synthetic" in joined, joined
+    assert "MISSING" in joined  # the conversion is disclosed, not silent
+
+
+def test_formal_step_no_longer_masked(tmp_path):
+    # v1.3.99 — step 5 left the gap table: an absent formal proof now reports
+    # the honest natural MISSING (the runner's formal_not_run.json sentinel
+    # separately promotes an honest self-skip via #608 when it exists).
+    r = F.check_step(tmp_path, _step(5), waivers={})
+    assert r.status == "MISSING", r.status
 
 
 def test_step_with_evidence_keeps_natural_verdict(tmp_path):

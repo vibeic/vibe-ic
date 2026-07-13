@@ -95,10 +95,11 @@ def test_capability_gaps_follow_renumber():
     # v1.3.94 — Steps 29 (SDF sim) + 30 (SPICE corr) were CLOSED this campaign
     # with real OSS tools (iverilog $sdf_annotate; ngspice NLDM correlation), so
     # they gate normally now and are no longer cap-gaps. 28 (PERC) is enforced.
+    # v1.3.99 — 5 (formal) closed via formal_property_run: the table is EMPTY.
     assert 29 not in F._PLATFORM_CAPABILITY_GAPS
     assert 30 not in F._PLATFORM_CAPABILITY_GAPS
     assert 28 not in F._PLATFORM_CAPABILITY_GAPS  # PERC is enforced, not a gap
-    assert set(F._PLATFORM_CAPABILITY_GAPS) == {5}
+    assert F._PLATFORM_CAPABILITY_GAPS == {}
 
 
 def test_env_map_matches_yaml():

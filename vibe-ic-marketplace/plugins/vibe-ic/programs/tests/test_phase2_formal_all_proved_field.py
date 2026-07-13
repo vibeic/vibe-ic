@@ -60,8 +60,13 @@ def test_existing_real_results_not_clobbered():
     assert 'if not (formal_dir / "results.json").is_file():' in window
 
 
-def test_step5_is_named_capability_gap():
-    assert F._PLATFORM_CAPABILITY_GAPS[5] == "cap:formal_property_proof"
+def test_step5_no_longer_a_capability_gap():
+    # v1.3.99 — formal_property_run (real SymbiYosys, built-in ABC engines)
+    # closed the LAST cap-gap: step 5 left the table and gates normally; an
+    # absent proof is an honest MISSING unless the runner's formal_not_run.json
+    # sentinel self-skips it (#608).
+    assert 5 not in F._PLATFORM_CAPABILITY_GAPS
+    assert F._PLATFORM_CAPABILITY_GAPS == {}
 
 
 def test_registry_has_assertion_fallback():
