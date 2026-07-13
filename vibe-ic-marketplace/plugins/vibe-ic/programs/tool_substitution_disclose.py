@@ -137,24 +137,30 @@ SUBSTITUTIONS = [
     {
         "mandated": "Calibre xRC / StarRC-XT / QRC field-solved coupling extraction",
         "substitute": "OpenRCX v2 -lef_rc grounded RC + analytical lateral "
-                      "coupling augment (_spef_coupling, step 22)",
-        "caveat": "NOT foundry-calibrated: no rules.C/.nxtgrd field solve; "
-                  "lateral same-layer only (no inter-layer crossover, no "
-                  "fringe/3D correction), DISCLOSED generic dielectric; "
+                      "coupling augment (_spef_coupling, step 22) + REAL 3D BEM "
+                      "field solve via FasterCap on a PDK-inverted fitted "
+                      "dielectric stack (pdk_dielectric_fit + fastercap_extract, "
+                      "step 22 field_solve — lateral + inter-layer crossover)",
+        "caveat": "NOT foundry-calibrated: the dielectric stack is FITTED from "
+                  "the PDK's own area+fringe cap, not the foundry rules.C/.nxtgrd "
+                  "multi-dielectric profile; single fitted eps_r per solve; "
                   "aggressor-victim crosstalk (SI) sign-off remains commercial",
-        "match": ["xrc", "starrc", "nxtgrd", "rules.c", "qrc",
+        "match": ["xrc", "starrc", "nxtgrd", "rules.c", "qrc", "fastercap",
                   "field solver extraction", "coupling extraction"],
     },
     {
-        "mandated": "Commercial at-speed (path-delay) ATPG",
+        "mandated": "Commercial at-speed (path-delay / small-delay-defect) ATPG",
         "substitute": "path_delay_fault_atpg_run (step DT2: OpenSTA K-longest "
                       "on routed netlist+SPEF -> per-path LOC miter SAT, "
-                      "robust/non-robust graded)",
+                      "robust/non-robust graded) + sdd_atpg_run (step DT3: "
+                      "slack-weighted small-delay-defect grade)",
         "caveat": "Top-K longest paths only (exhaustive PDF is exponential; K "
                   "disclosed); PI-launched paths are not LOC-testable and are "
-                  "excluded, never counted",
+                  "excluded, never counted; SDD is STA-slack-graded, not a "
+                  "per-defect-size SPICE credit",
         "match": ["at-speed atpg", "at speed atpg", "path delay atpg",
-                  "path-delay atpg", "tetramax"],
+                  "path-delay atpg", "small delay defect", "sdd atpg",
+                  "tetramax"],
     },
     {
         "mandated": "Side-channel leakage sim (DPA/CPA/EM)",
