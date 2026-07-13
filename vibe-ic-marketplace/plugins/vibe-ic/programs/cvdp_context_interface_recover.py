@@ -353,7 +353,28 @@ def recover_interface(record: dict, target: Optional[str] = None) -> List[dict]:
     target = target or _bridge.toplevel_name(record)
     if not target:
         return []
+    # PRIORITY (ORGANIC 2026-07-13): a prompt that RE-DECLARES the interface in an
+    # explicit "Updated Interfaces" section is authoritative over the stale
+    # context-RTL header — the modify task's whole point is that the interface
+    # changed. Merge: the prompt-table ports win by name; context-only ports
+    # (widths the prose left symbolic) fill in resolved widths where the names
+    # match. Falls through to the pure context parse when no section is present.
+    prompt_ports = recover_interface_from_prompt(record)
     files = _context_rtl(record)
+    if prompt_ports:
+        if files:
+            ctx_w = {}
+            for _n, text in files.items():
+                span = _find_module_span(text, target)
+                if span is None:
+                    continue
+                for p in _parse_one_span(span, target):
+                    if p.get("width") is not None:
+                        ctx_w[p["name"]] = p["width"]
+            for p in prompt_ports:
+                if p.get("width") is None and p["name"] in ctx_w:
+                    p["width"] = ctx_w[p["name"]]
+        return prompt_ports
     if not files:
         return []
     best: List[dict] = []
@@ -374,6 +395,80 @@ def recover_interface(record: dict, target: Optional[str] = None) -> List[dict]:
         if all(x.get("width") is not None for x in best):
             break
     return best
+
+
+# ── Prompt-declared "Updated Interfaces" table (ORGANIC 2026-07-13, CVDP oracle-RCA) ──
+# A "modify / enhance existing RTL" prompt frequently RE-DECLARES the top-level
+# interface in an explicit prose section (e.g. "### Updated Input/Output
+# Interfaces" with "- **Inputs**:" / "- **Outputs**:" numbered lists of
+# `name[range]` items). When it does, that section is the AUTHORITATIVE new
+# interface — the starting input.context RTL header is STALE (its whole point is
+# that the interface changed). The largest CVDP EXTRACTION_GAP class was taking
+# the interface from the stale context header instead: e.g. apb_gpio listed one
+# `gpio[GPIO_WIDTH-1:0]` "Bidirectional" port replacing a legacy _in/_out/_enable
+# trio; the hidden TB binds `dut.gpio`, so keeping the trio => "no child object
+# named gpio". §4.05: the prompt is INPUT the blind author reads, never the
+# oracle. chip-AGNOSTIC: pure prose-list parse, no design literal.
+_IFACE_SECTION_RE = re.compile(
+    r"#+\s*[^\n]*?\b(?:Input\s*/\s*Output\s+Interface|I/?O\s+Interface|"
+    r"Interface\s+Update|Updated\s+Interface|Port\s+List|Top[- ]?Level\s+Port)"
+    r"[^\n]*\n", re.IGNORECASE)
+# a bulleted/numbered port item:  `name[range]` : description   (backticks required)
+_IFACE_PORT_RE = re.compile(
+    r"[-*\d.]+\s*`(?P<name>[A-Za-z_]\w*)\s*(?P<range>\[[^\]]*\])?`\s*[:：-]?\s*"
+    r"(?P<desc>[^\n]*)")
+# sub-list direction headers inside the section
+_IFACE_DIR_HDR_RE = re.compile(
+    r"\b(?P<dir>Inputs?|Outputs?|Inouts?|Bidirectional(?:\s+Ports?)?)\b\s*[:：]?",
+    re.IGNORECASE)
+
+
+def recover_interface_from_prompt(record_or_prompt) -> List[dict]:
+    """Recover [{name,dir,width}] from a prompt's explicit "Updated Interfaces"
+    prose section, when present. Returns [] if the prompt has no such section
+    (so callers can fall back to the context-RTL header). Direction comes from
+    the enclosing Inputs/Outputs/Inout sub-list header, OVERRIDDEN to `inout`
+    when the port's own description says 'bidirectional'. chip-AGNOSTIC."""
+    prompt = record_or_prompt if isinstance(record_or_prompt, str) else (
+        (record_or_prompt or {}).get("input", {}).get("prompt")
+        if isinstance(record_or_prompt, dict) else None)
+    if not isinstance(prompt, str) or not prompt:
+        return []
+    m = _IFACE_SECTION_RE.search(prompt)
+    if not m:
+        return []
+    body = prompt[m.end():]
+    # bound the section at the next same-or-higher markdown heading
+    nxt = re.search(r"\n#+\s", body)
+    if nxt:
+        body = body[:nxt.start()]
+    ports: List[dict] = []
+    seen = set()
+    cur_dir = None
+    for line in body.splitlines():
+        dh = _IFACE_DIR_HDR_RE.search(line)
+        # a line that is ONLY a direction header (e.g. "- **Inputs**:") sets context
+        if dh and not _IFACE_PORT_RE.search(line):
+            d = dh.group("dir").lower()
+            cur_dir = ("inout" if d.startswith("bidirectional") or d.startswith("inout")
+                       else "output" if d.startswith("output") else "input")
+            continue
+        pm = _IFACE_PORT_RE.search(line)
+        if not pm or cur_dir is None:
+            continue
+        name = pm.group("name")
+        if name in seen:
+            continue
+        desc = (pm.group("desc") or "")
+        direction = "inout" if re.search(r"bidirectional", desc, re.IGNORECASE) else cur_dir
+        width = None
+        rng = pm.group("range")
+        if rng:
+            width = _width_from_range(rng, {})   # params unknown at prompt level; leave None if symbolic
+        seen.add(name)
+        ports.append({"name": name, "dir": direction, "width": width})
+    # require at least a clk-ish + a data-ish port to trust it as a full interface
+    return ports if len(ports) >= 2 else []
 
 
 def recover_interface_from_text(text: str, target: str) -> List[dict]:
