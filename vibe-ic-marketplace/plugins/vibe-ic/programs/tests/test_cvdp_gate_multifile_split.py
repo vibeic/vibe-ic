@@ -103,3 +103,44 @@ def test_gate_record_splits_bare_multifile_blob(tmp_path):
     obj = json.loads(out_rec["completion"])
     paths = set(k for d in obj["code"] for k in d)
     assert paths == {"rtl/foo.sv", "rtl/bar.sv"}
+
+
+# ── empty-sibling clobber + bare-single-file emit (convergence tick3) ──────────
+CTX_TARGET = ("module inter_block(input a, output y);\n"
+              "  intra_block u(.a(a), .y(y));\nendmodule")
+
+
+def test_single_authored_file_emits_bare_not_envelope():
+    # a modify task: input.context has inter_block.sv + intra_block.sv; the author
+    # correctly authors ONLY inter_block (instantiates the sibling). The gate must
+    # emit BARE inter_block RTL — NOT a {"code":[…]} envelope (the scorer writes
+    # the response verbatim to TOPLEVEL, so an envelope lands as literal text), and
+    # NOT an empty intra_block.sv (which would clobber the harness's real sibling).
+    out = G._emit_or_split(CTX_TARGET, ["rtl/inter_block.sv", "rtl/intra_block.sv"], context_derived=True)
+    assert not out.lstrip().startswith('{"code"'), "must not emit envelope"
+    assert "module inter_block" in out
+    assert "module intra_block" not in out          # sibling not re-emitted (no empty clobber)
+
+
+def test_multi_authored_files_still_envelope():
+    # when the author genuinely authors BOTH modules into their eponymous files,
+    # the multi-file envelope is preserved (existing 7-residual-fix behaviour).
+    blob = A.replace("foo", "aaa") + "\n\n" + B.replace("bar", "bbb")
+    out = G._emit_or_split(blob, ["rtl/aaa.sv", "rtl/bbb.sv"], context_derived=True)
+    assert out.lstrip().startswith('{"code"')
+    j = json.loads(out)
+    paths = {list(d.keys())[0] for d in j["code"]}
+    assert paths == {"rtl/aaa.sv", "rtl/bbb.sv"}
+    for d in j["code"]:
+        assert list(d.values())[0].strip()          # no empty slot
+
+
+def test_no_empty_slot_ever_emitted():
+    # a blob defining only one of two expected modules must never yield an empty
+    # file for the other (empty .sv clobbers a passed-through context sibling).
+    out = G._emit_or_split(A, ["rtl/foo.sv", "rtl/other.sv"], context_derived=True)
+    if out.lstrip().startswith('{"code"'):
+        for d in json.loads(out)["code"]:
+            assert list(d.values())[0].strip(), "empty slot emitted"
+    else:
+        assert "module foo" in out

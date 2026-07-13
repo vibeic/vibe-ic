@@ -1336,21 +1336,42 @@ def _name_aware_split(combined: str, rtl_files: List[str]) -> Dict[str, str]:
 
 
 def _emit_or_split(combined: str,
-                   expected_files: Optional[List[str]]) -> str:
+                   expected_files: Optional[List[str]],
+                   context_derived: bool = False) -> str:
     """Return the completion bytes to emit. For a MULTI-FILE problem the emit is
-    ALWAYS the official `{"code":[{path:src},…]}` envelope (the harness decodes
-    it file-by-file) — NEVER a bare blob, which the scorer would write into EACH
-    expected slot → duplicate-module FAIL. When a clean per-module split exists
-    it is used; otherwise a NAME-AWARE split places each module in the expected
-    file whose basename matches it (so the named top file is never empty), with a
-    LOSSLESS positional fallback only when name-matching cannot apply. For the
-    dominant single-file (0/1 expected rtl) shape the bare blob is emitted
-    unchanged."""
+    the official `{"code":[{path:src},…]}` envelope — NEVER a bare blob, which the
+    scorer would write into EACH expected slot → duplicate-module FAIL. When a
+    clean per-module split exists it is used; otherwise a NAME-AWARE split places
+    each module in the expected file whose basename matches it, with a LOSSLESS
+    positional fallback only when name-matching cannot apply. For the dominant
+    single-file (0/1 expected rtl) shape the bare blob is emitted unchanged.
+
+    `context_derived` (set by gate_record) means the `expected_files` come from
+    `input.context` — i.e. they are pass-through sibling files the harness ALSO
+    compiles from its own copy. In that mode a modify/lint completion that
+    correctly authors ONLY the edited target (siblings instantiated, not
+    re-emitted — the context-sibling no-inline rule) leaves the other slots empty.
+    Two corrections then apply, BOTH verified against the official local_import
+    scorer (which writes the response VERBATIM to the single TOPLEVEL file and
+    does NOT decode a `{"code":[…]}` envelope):
+      1. DROP empty slots — an empty `rtl/<sibling>.sv` OVERWRITES the harness's
+         real sibling in VERILOG_SOURCES → `Can't resolve module reference` FAIL.
+      2. If exactly ONE authored file remains, emit its BARE RTL — the scorer
+         stages it to TOPLEVEL and keeps the context siblings; an envelope would
+         land as literal text in TOPLEVEL.sv and break elaboration.
+    Without `context_derived` (a genuine multi-OUTPUT deliverable, or a direct
+    caller) the lossless envelope is preserved unchanged."""
     rtl_files = _rtl_only(expected_files) if expected_files else []
     if len(rtl_files) > 1:
         split = _split_blob_to_expected(combined, expected_files)
         if split is None:
             split = _name_aware_split(combined, rtl_files)
+        if context_derived:
+            split = {k: v for k, v in split.items() if v and v.strip()}
+            if len(split) == 1:
+                return next(iter(split.values()))
+            if not split:
+                return combined
         return json.dumps({"code": [{k: v} for k, v in split.items()]},
                           ensure_ascii=False)
     return combined
@@ -1486,7 +1507,7 @@ def gate_record(rec: Dict, workdir: Path,
             # gate COMPILED == the bytes the scorer compiles from the emit.
             # MULTI-FILE split (when --dataset names >1 expected file) takes
             # precedence over the single-file bare normalize; else bare.
-            emitted = _emit_or_split(combined, expected_files)
+            emitted = _emit_or_split(combined, expected_files, context_derived=True)
             entry["emit_format"] = (
                 "json_dict (multi-file split from blob)"
                 if emitted is not combined and emitted != combined
@@ -1511,7 +1532,7 @@ def gate_record(rec: Dict, workdir: Path,
         out_rec = dict(rec)
         # always route through the multi-file splitter (a single bare blob for a
         # multi-file problem must be split); for single-file it returns `fixed`.
-        emitted = _emit_or_split(fixed, expected_files)
+        emitted = _emit_or_split(fixed, expected_files, context_derived=True)
         if emitted != code:
             out_rec["completion"] = emitted
         return True, out_rec, entry
@@ -1552,7 +1573,7 @@ def gate_record(rec: Dict, workdir: Path,
     # Unconditional (not gated on a hygiene diff): an unchanged fenced draft was
     # the dominant ELAB_ERROR shape — it kept the fence verbatim. MULTI-FILE
     # problems route through the splitter (one module per expected file).
-    out_rec["completion"] = _emit_or_split(combined, expected_files)
+    out_rec["completion"] = _emit_or_split(combined, expected_files, context_derived=True)
     # ORGANIC v1.2.45 — emit-side hang hint (RTL BYTE-EQUIVALENT: completion
     # is unchanged; ONLY `out_rec["hang_predicted"]` / `hang_reason` /
     # `hang_signatures` carry the tag). The scorer reads verdict-fields
