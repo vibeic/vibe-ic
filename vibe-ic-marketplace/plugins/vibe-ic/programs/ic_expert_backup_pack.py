@@ -69,12 +69,15 @@ def _db_hits(prompt: str, k: int) -> List[Dict[str, Any]]:
     return out
 
 
-def _spec_requirements(prompt: str) -> List[Dict[str, Any]]:
-    """Run the deterministic spec detectors on the prompt and return the concrete,
-    chip-agnostic requirements an author would otherwise silently drop. These are
-    the distilled RCA rules (issue #126): an addressable memory region behind the
-    same bus as the CSRs (extraction-gap) and a lint-review deliverable whose
-    graded axis is `verilator -Wall` cleanliness (coverage-gap). Input-only."""
+def _spec_requirements(prompt: str,
+                       context_keys=None) -> List[Dict[str, Any]]:
+    """Run the deterministic spec detectors on the prompt (+ `input.context` file
+    keys) and return the concrete, chip-agnostic requirements an author would
+    otherwise silently drop. These are the distilled RCA rules (issue #126): an
+    addressable memory region behind the same bus as the CSRs (extraction-gap), a
+    lint-review deliverable whose graded axis is `verilator -Wall` cleanliness
+    (coverage-gap), and a context-sibling collision advisory (never inline a
+    verbatim copy of a separately-compiled context module). Input-only."""
     reqs: List[Dict[str, Any]] = []
     try:
         import spec_memory_region_detect as _mem
@@ -100,14 +103,28 @@ def _spec_requirements(prompt: str) -> List[Dict[str, Any]]:
             })
     except Exception:
         pass
+    try:
+        import spec_context_sibling_detect as _sib
+        r = _sib.detect_context_siblings(prompt, context_keys)
+        if r.get("has_siblings") and r.get("requirement"):
+            reqs.append({
+                "kind": "context_sibling_no_inline",
+                "requirement": r["requirement"],
+                "sibling_modules": r.get("sibling_modules", []),
+                "prose_excluded": r.get("prose_excluded", []),
+            })
+    except Exception:
+        pass
     return reqs
 
 
 def assemble(prompt: str, iface: Optional[List[Dict[str, Any]]], target: Optional[str],
              expert_skills: List[str], verify_gates: List[str],
-             out_dir: Path, k: int = 5) -> Dict[str, Any]:
+             out_dir: Path, k: int = 5, context_keys=None) -> Dict[str, Any]:
     """Assemble the IC-Expert-Agent AI-backup pack into `out_dir`. Returns the
-    hand-off descriptor (also written to `out_dir/ic_expert_agent_handoff.json`)."""
+    hand-off descriptor (also written to `out_dir/ic_expert_agent_handoff.json`).
+    `context_keys` (optional) = the record's `input.context` file paths, used for
+    the context-sibling collision advisory."""
     out_dir.mkdir(parents=True, exist_ok=True)
     prompt = prompt or ""
 
@@ -133,7 +150,7 @@ def assemble(prompt: str, iface: Optional[List[Dict[str, Any]]], target: Optiona
         "prompt_is_input_only": True,
         "target_module": target,
         "interface_contract": contract_rel,
-        "spec_requirements": _spec_requirements(prompt),
+        "spec_requirements": _spec_requirements(prompt, context_keys),
         "expert_skills": expert_skills,
         "verify_gates": verify_gates,
         "db_classes": db_classes,
