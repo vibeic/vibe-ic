@@ -115,6 +115,17 @@ def _spec_requirements(prompt: str,
             })
     except Exception:
         pass
+    try:
+        import spec_selftb_coverage_detect as _stb
+        r = _stb.detect_selftb_coverage(prompt)
+        if r.get("shapes") and r.get("requirement"):
+            reqs.append({
+                "kind": "self_tb_coverage",
+                "requirement": r["requirement"],
+                "shapes": r.get("shapes", []),
+            })
+    except Exception:
+        pass
     return reqs
 
 
