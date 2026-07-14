@@ -31,7 +31,7 @@ RUN git clone https://github.com/vibeic/OpenROAD.git /src \
 # Stage 2 — vibeic/yosys (tri-state fanin preservation + modern slang SV frontend)
 # ---------------------------------------------------------------------------
 FROM ubuntu:24.04 AS yosys-builder
-ARG YOSYS_REF=vibeic/synth-fixes
+ARG YOSYS_REF=1042b3f554592b4f49ea5380ad6af912abc270cd  # pinned; branch vibeic/synth-fixes-v0.67 (v0.67 + 4 vibeic patches + stat-0cells #124, 2026-07-14)
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       build-essential cmake git bison flex gawk pkg-config \
       libreadline-dev tcl-dev libffi-dev zlib1g-dev python3 \
@@ -47,7 +47,7 @@ RUN git clone https://github.com/vibeic/yosys.git /yosys \
 # Stage 3 — vibeic/ngspice (batch-honesty rc + $& scalar + control-mode .param + native MC)
 # ---------------------------------------------------------------------------
 FROM ubuntu:24.04 AS ngspice-builder
-ARG NGSPICE_REF=vibeic/batch-honesty
+ARG NGSPICE_REF=cdb4fae2db9716de251cb55df9ebad0bc2c5172b  # pinned; branch vibeic/batch-honesty
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       build-essential git autoconf automake libtool bison flex \
       libx11-dev libxaw7-dev libreadline-dev libncurses-dev ca-certificates \
@@ -64,8 +64,8 @@ RUN git clone https://github.com/vibeic/ngspice.git /ngspice \
 #   netgen: property-error verdict, portless guard, -auto-global, -nopower, black-box match
 # ---------------------------------------------------------------------------
 FROM ubuntu:24.04 AS lvs-builder
-ARG MAGIC_REF=443eb4b64eeb4123bda0b99a0d88314fcfbb5a5f
-ARG NETGEN_REF=vibeic/lvs-fidelity
+ARG MAGIC_REF=9f91cd2487d61bbc7120b4c1371a3612986d6ddd  # pinned; branch vibeic/lvs-fidelity-8.3.675 (rebased onto 8.3.675 clean, 2026-07-13)
+ARG NETGEN_REF=b7d4138b6407d86107868efd5896644b4f81e535  # pinned; branch vibeic/lvs-fidelity
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       build-essential git m4 tcl-dev tk-dev libx11-dev libcairo2-dev libncurses-dev ca-certificates \
  && rm -rf /var/lib/apt/lists/*
@@ -80,7 +80,7 @@ RUN git clone https://github.com/vibeic/netgen.git /netgen \
 # Stage 5 — vibeic/iverilog (->> nonblocking-event codegen segfault fix + package ordering)
 # ---------------------------------------------------------------------------
 FROM ubuntu:24.04 AS iverilog-builder
-ARG IVERILOG_REF=vibeic/sv-tb-coverage
+ARG IVERILOG_REF=110cadd57c3a96ca81e84bdb0a78463e81575088  # pinned; branch vibeic/sv-tb-coverage
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       build-essential git autoconf gperf flex bison ca-certificates \
  && rm -rf /var/lib/apt/lists/*
@@ -100,7 +100,7 @@ RUN git clone https://github.com/vibeic/iverilog.git /iverilog \
 #   parity vs the old run_svrf_drc.py proven on the real commercial_pdk deck.
 # ---------------------------------------------------------------------------
 FROM ubuntu:24.04 AS klayout-builder
-ARG KLAYOUT_REF=vibeic/svrf-native-drc
+ARG KLAYOUT_REF=884e4a19bfde2fea85bcd5c1815e6297bf769abf  # pinned; branch vibeic/svrf-native-drc
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       build-essential git python3-dev zlib1g-dev libexpat1-dev libcurl4-openssl-dev libpng-dev \
       qtbase5-dev qttools5-dev-tools ca-certificates \
@@ -223,11 +223,10 @@ USER 1000
 
 # --- bare `docker exec` PATH (vibeic enhancement over stock iic-osic-tools) ---
 # The stock base only puts /foss/tools/* on PATH via /etc/profile.d/iic-osic-tools-setup.sh,
-# which runs for LOGIN shells only. A non-login `docker exec <c> bash -c '<tool>'` — the
-# exact idiom used by the eda-tools MCP AND by every `docker exec vibeic-eda <tool>` in the
-# INSTALL_GUIDE / README — therefore could not resolve yosys/openroad/sta/... ("executable
-# file not found in $PATH"). The MCP works around this by prefixing each command with
-# `export PATH=${TOOLS}/...:$PATH`, but a human running the documented probe cannot. Bake the
-# tool dirs into a global ENV PATH so tools resolve WITHOUT a login shell or per-command
-# export. Additive only (login shells still re-prepend via profile.d — harmless duplicate).
+# which runs for LOGIN shells only. A non-login `docker exec <c> <tool>` (and
+# `docker exec <c> bash -c '<tool>'`, the idiom the Vibe-IC MCP uses) therefore could not
+# resolve yosys/openroad/sta/... ("executable file not found in $PATH") — including the bare
+# `docker exec vibeic-eda yosys --version` in this repo's README Quick Start. Bake the tool
+# dirs into a global ENV PATH so tools resolve WITHOUT a login shell or a per-command export.
+# Additive only (login shells still re-prepend via profile.d — harmless duplicate).
 ENV PATH=/headless/.local/bin:/foss/tools/bin:/foss/tools/sak:/foss/tools/kactus2:/foss/tools/klayout:/foss/tools/osic-multitool:${PATH}

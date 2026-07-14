@@ -58,6 +58,7 @@ INSTALL_DOC_CANDIDATES = [
     # pointers (never :latest) — registered so --set/--bump rewrites them and
     # --check catches drift the same way as the install docs.
     "vibe-ic-marketplace/plugins/vibe-ic/programs/fault_atpg_run.py",
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/fmeda_fault_injection_coverage.py",
 ]
 
 # Files that legitimately carry OLD versions — never checked, never rewritten.
