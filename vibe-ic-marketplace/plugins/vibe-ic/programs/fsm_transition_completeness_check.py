@@ -243,10 +243,36 @@ def check_text(text: str) -> Tuple[List[Finding], str]:
     # arms (or the case selector itself for a clocked `state <= S` style).
     next_var = None
     counts = {}
+    # Vote for the next-state variable against the set of genuine STATE VALUES,
+    # NOT the broader `declared` set. `parse_states()` also returns module
+    # parameters used as loop bounds / bit-widths (`parameter N`, `parameter
+    # WIDTH`); a data loop inside a state arm such as
+    #   for (k=0;k<N;k=k+1) arr[k] <= in[k*WIDTH +: WIDTH];
+    # has an assignment `k = k+1) ... WIDTH ...` whose RHS text (scanned to the
+    # next ';') incidentally contains `WIDTH` inside an index/width expression.
+    # Counting that against `declared` credited the loop index `k` as a
+    # next-state assignment, letting it tie with (and, on a max() tie, displace)
+    # the real state variable — a false `fsm-inferred-latch` that BLOCKS a
+    # correct design. (ORGANIC #138)
+    #
+    # The state-value set is the case-item labels PLUS any declared state used as
+    # a CLEAN transition TARGET — a bare `= STATE ;` or a `? S1 : S2` ternary
+    # branch. That still admits a declared state that has no case-arm of its own
+    # (so a genuine latch whose transitions target such a state is still caught),
+    # while EXCLUDING a parameter, which only ever appears inside an index/width
+    # expression (`[k*WIDTH +: WIDTH]`) — never as a bare assigned value.
+    state_val_set = set(item_states)
+    for m in re.finditer(r"(?:<=|=)\s*([A-Za-z_]\w*)\s*;", case_body):
+        if m.group(1) in declared:
+            state_val_set.add(m.group(1))
+    for m in re.finditer(r"\?\s*([A-Za-z_]\w*)\s*:\s*([A-Za-z_]\w*)", case_body):
+        for g in m.groups():
+            if g in declared:
+                state_val_set.add(g)
     for s in item_states:
         for lhs, rhs in re.findall(
                 r"\b([A-Za-z_]\w*)\s*(?:<=|=)\s*([^;]+);", arm_bodies.get(s, "")):
-            if set(re.findall(r"\b\w+\b", rhs)) & declared:
+            if set(re.findall(r"\b\w+\b", rhs)) & state_val_set:
                 counts[lhs] = counts.get(lhs, 0) + 1
     if counts:
         for lhs in counts:
