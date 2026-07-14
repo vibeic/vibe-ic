@@ -66,3 +66,5 @@ integrity_note: |
   Surfaced by the v1.4.14 CVDP clean-run. NO draft was renamed to match a harness
   `-s <top>` string scraped from scoring logs — doing so would be an oracle read
   that inflates the number. Score left at the honest 202/302. Measure-only; NO-MIX.
+
+github_issue: https://github.com/vibeic/vibe-ic/issues/139
