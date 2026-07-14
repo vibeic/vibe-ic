@@ -84,6 +84,63 @@ def test_generate_emits_streaming_tb(tmp_path):
     assert (out / "verification_plan.json").is_file()
 
 
+def test_reset_initialises_all_data_inputs_before_asserting(tmp_path):
+    # REGRESSION (spm serial-multiplier fail): the generated _reset() MUST drive
+    # every data input to a known 0 BEFORE asserting reset, so no X propagates
+    # into the datapath / streaming scoreboard during power-up. Without this the
+    # bounded-latency + bit-order calibrator locked a WRONG (order, latency) and
+    # produced 203/208 false mismatches on functionally-correct RTL; with it the
+    # SAME RTL scores 208/208. chip-AGNOSTIC: inputs derived from the interface.
+    proj = _mk_spm_project(tmp_path)
+    res = T.generate(proj)
+    tb = (Path(res["out_dir"]) / "tb_spm.py").read_text()
+    # the data inputs are enumerated (x, y) and clk/rst are NOT reset-driven
+    assert "DUT_INPUTS = [" in tb
+    dut_inputs_line = next(l for l in tb.splitlines()
+                           if l.startswith("DUT_INPUTS ="))
+    assert "'x'" in dut_inputs_line and "'y'" in dut_inputs_line
+    assert "'clk'" not in dut_inputs_line and "'rst'" not in dut_inputs_line
+    # ordering: the input-zeroing loop appears BEFORE reset is asserted
+    body = tb.split("async def _reset(dut):", 1)[1]
+    zero_at = body.index("for _sig in DUT_INPUTS")
+    assert_at = body.index("getattr(dut, RST).value = 1")
+    assert zero_at < assert_at, "inputs must be zeroed before reset is asserted"
+    assert ".value = 0" in body[zero_at:assert_at]
+
+
+def test_reset_zeroes_inputs_for_parallel_arith(tmp_path):
+    # chip-AGNOSTIC: the same input-zeroing must appear for a parallel-arith DUT
+    # (different emit path, same _emit_common_header) — the operand ports a/b are
+    # enumerated in DUT_INPUTS, clk/rst are not.
+    gd = tmp_path / "phase1" / "generated_docs"
+    gd.mkdir(parents=True)
+    (gd / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({"fields": {
+        "top_module": "adder",
+        "top_ports": [{"name": "clk", "dir": "input", "width": 1},
+                      {"name": "rst", "dir": "input", "width": 1},
+                      {"name": "a", "dir": "input", "width": 8},
+                      {"name": "b", "dir": "input", "width": 8},
+                      {"name": "sum", "dir": "output", "width": 8}],
+        "clocks": [{"name": "clk", "edge": "posedge", "period_ns": 10}],
+        "reset_domains": [{"name": "rst", "polarity": "active_high"}]}}))
+    (gd / "L2_FRS.json").write_text(json.dumps({"frs_sections": [
+        {"title": "Function", "content": "sum = a + b"}]}))
+    rtl = tmp_path / "phase2" / "stage1" / "rtl"
+    rtl.mkdir(parents=True)
+    (rtl / "adder.v").write_text(
+        "module adder(input clk, rst, input [7:0] a, b, output [7:0] sum);"
+        "endmodule\n")
+    res = T.generate(tmp_path)
+    tb = (Path(res["out_dir"]) / "tb_adder.py").read_text()
+    dut_inputs_line = next(l for l in tb.splitlines()
+                           if l.startswith("DUT_INPUTS ="))
+    assert "'a'" in dut_inputs_line and "'b'" in dut_inputs_line
+    assert "'clk'" not in dut_inputs_line and "'rst'" not in dut_inputs_line
+    body = tb.split("async def _reset(dut):", 1)[1]
+    assert body.index("for _sig in DUT_INPUTS") < body.index(
+        "getattr(dut, RST).value = 1")
+
+
 def test_coverage_model_has_bins_and_cross(tmp_path):
     proj = _mk_spm_project(tmp_path)
     shape, _ = T.classify_dut(proj, "digital_arithmetic_primitive")
