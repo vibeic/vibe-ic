@@ -4,7 +4,7 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Awesome](https://awesome.re/badge.svg)](https://github.com/vibeic/awesome-open-ic)
-[![Plugin v1.4.16](https://img.shields.io/badge/plugin-v1.4.16-brightgreen.svg)](vibe-ic-marketplace/README.md)
+[![Plugin v1.4.17](https://img.shields.io/badge/plugin-v1.4.17-brightgreen.svg)](vibe-ic-marketplace/README.md)
 [![MCP-EDA v1.0.0](https://img.shields.io/badge/mcp--eda-v1.0.0-brightgreen.svg)](vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/README.md)
 
 > **Status: v1.4 — mature, benchmark-hardened.** The `vibe-ic` plugin is the
@@ -59,12 +59,12 @@ OpenROAD / yosys / ngspice / magic / netgen / iverilog / klayout with
 gatekeeper-verified FAIL→PASS fixes; scoreboard in `tools/vibeic-eda/FIX_STATUS.md`):
 
 ```bash
-docker pull ghcr.io/vibeic/vibeic-eda:0.2.16   # or build: docker build -t vibeic-eda:0.2.16 tools/vibeic-eda
+docker pull ghcr.io/vibeic/vibeic-eda:0.2.17   # or build: docker build -t vibeic-eda:0.2.17 tools/vibeic-eda
 docker rm -f vibeic-eda 2>/dev/null || true    # "name already in use"? drop the old container first
 docker run -d --name vibeic-eda \
   -v "$HOME/AI_IC_design:$HOME/AI_IC_design:rw" \
   -v "$HOME/AI_IC_design:/foss/designs:rw" \
-  ghcr.io/vibeic/vibeic-eda:0.2.16 --skip sleep infinity
+  ghcr.io/vibeic/vibeic-eda:0.2.17 --skip sleep infinity
 docker exec vibeic-eda yosys --version         # sanity check — should print a version
 ```
 
@@ -173,8 +173,9 @@ discloses any open↔commercial tool substitution and follows the
 [open-benchmark methodology](vibe-ic-marketplace/plugins/vibe-ic/skills/open-benchmark-methodology/SKILL.md).
 
 Latest clean-room runs (2026-07-12): **Claude Fable 5** driving plugin
-**v1.3.88** + forked `vibeic-eda:0.2.16`. The CVDP figure is from an earlier
-campaign with Claude Opus 4.8 (v1.2.96); each score names its model.
+**v1.3.88** on the forked vibeic-eda toolchain (each run's RESULT.md names the
+exact image it used). The CVDP figure is from an earlier campaign with Claude
+Opus 4.8 (v1.2.96); each score names its model.
 
 | Benchmark | Result | Notes |
 |---|---|---|
