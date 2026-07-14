@@ -10,7 +10,15 @@ knowledge. It must NOT:
   2. assert an oracle-VALUE bound to a named design (e.g. "design X expects 0xF2");
   3. claim to BE / OVERRIDE a deterministic gate (a lesson is ADVICE, not a hard
      rule the flow enforces — it must never say "the gate must accept", "disable
-     the check", "skip lint", "ignore the conformance gate", etc.).
+     the check", "skip lint", "ignore the conformance gate", etc.);
+  4. instruct sourcing a name/value from a hidden-scorer artifact (§4.05
+     ORACLE-SOURCE ban, issue #139 adjudication 2026-07-14): the scorer-side
+     `.env` (its TOPLEVEL / VERILOG_SOURCES variables), "harness metadata", or
+     the golden `output.*` are the oracle — a lesson keyed on them is only
+     actionable via a forbidden oracle read, so it can never be honest general
+     experience. Lessons MAY still describe how a hidden checker BINDS/samples
+     the design (craft about the observable contract); they may not name the
+     oracle files/variables as an INPUT to the authoring decision.
 
 Structural invariants also checked: the DB parses, every entry has ic_class +
 non-empty lessons, and lesson_count matches. The OPTIONAL `related[]` cross-link
@@ -46,6 +54,20 @@ _OVERRIDE_RE = re.compile(
     r"\b(?:disable|skip|bypass|ignore|suppress|waive|turn\s+off|override)\b"
     r"[^.\n]{0,30}\b(?:gate|lint|check|conformance|hygiene|synth|assertion|verific)",
     re.I)
+# §4.05 ORACLE-SOURCE ban (issue #139 adjudication, 2026-07-14): a lesson may
+# never key an authoring decision on a hidden-scorer artifact. History: a
+# captured lesson literally advised "reconcile the top-module name to the
+# harness TOPLEVEL/VERILOG_SOURCES from .env" — an instruction to read the
+# oracle, waved through because no regex covered it. These tokens are the
+# scorer-side file/variable names; none has a legitimate reason to appear in
+# spec-alone design advice (the legal input-side counterpart is named
+# `input.context` / "the prompt/task", which these patterns do not match).
+_ORACLE_SOURCE_RES = [
+    re.compile(r"\.env\b"),
+    re.compile(r"\bVERILOG_SOURCES\b"),
+    re.compile(r"\bharness\s+(?:metadata|TOPLEVEL)\b", re.I),
+    re.compile(r"\boutput\.(?:context|response)\b", re.I),
+]
 
 
 def check(db_path: Path):
@@ -90,6 +112,13 @@ def check(db_path: Path):
             if _OVERRIDE_RE.search(les):
                 findings.append(f"[{cls}] OVERRIDE: lesson tries to disable/override a gate "
                                 f"(advisory boundary)")
+            for rx in _ORACLE_SOURCE_RES:
+                m = rx.search(les)
+                if m:
+                    findings.append(f"[{cls}] ORACLE-SOURCE: lesson keys on the hidden-scorer "
+                                    f"artifact '{m.group(0)}' (§4.05 ban — advice must be "
+                                    f"actionable from the spec/input alone)")
+                    break
     return {"pass": not findings, "classes": len(entries),
             "total_lessons": total, "findings": findings}
 

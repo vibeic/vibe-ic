@@ -1,10 +1,10 @@
 {
  "_doc": "IC Expert DB — structured, chip-AGNOSTIC design-class knowledge (algorithm correctness / interface convention / latency-reset discipline / common traps). Consumed by the GENERAL Vibe-IC path (design_one_shot_runner spec-to-rtl / ic-expert authoring) via _lesson_digest-style retrieval. ADVISORY layer: never overrides a gate/program verdict — consistency enforced by ic_expert_db_consistency_check.py.",
  "_schema": "entries[].{ic_class, lesson_count, lessons[], related?[] (optional cross-links to sibling ic_class names sharing a core craft)}",
- "_source": "distilled from proven-correct (officially-scored PASS) reference designs; benchmark identifiers scrubbed at build time (blindness).",
+ "_source": "distilled from proven-correct (officially-scored PASS) reference designs, plus owner-reviewed general-convention distills from fail-mode triage prose (see capture_log.md); benchmark identifiers scrubbed at build time (blindness); §4.05 ORACLE-SOURCE ban enforced by ic_expert_db_consistency_check.py.",
  "_consistency": "lessons are DESIGN-CRAFT ADVICE for the AI author; they add knowledge, they do NOT assert hard rules that a gate/program checks. No lesson may contradict a deterministic gate.",
- "classes": 94,
- "total_lessons": 149,
+ "classes": 99,
+ "total_lessons": 157,
  "entries": [
   {
    "ic_class": "accumulator-datapath",
@@ -235,10 +235,12 @@
   },
   {
    "ic_class": "bus-interface-defaults",
-   "lesson_count": 2,
+   "lesson_count": 4,
    "lessons": [
     "When a spec names a bus/word interface (AMBA-style, a processor data word, a register file) but does not state the data width, the conventional default is 32-bit; parameterize (`parameter DATA_WIDTH=32`) rather than hardcoding, so a TB that overrides the width still elaborates.",
-    "When the signal-description table and the module-definition skeleton disagree on a port name (tables s_ready/m0_ready/m1_ready vs skeleton's truncated s_read/m0_read/m1_read), emit BOTH spellings as aliased ports (extend the reset/clock name-variant alias generator to read<->ready typo pairs) or prefer the table's fuller name."
+    "When the signal-description table and the module-definition skeleton disagree on a port name (tables s_ready/m0_ready/m1_ready vs skeleton's truncated s_read/m0_read/m1_read), emit BOTH spellings as aliased ports (extend the reset/clock name-variant alias generator to read<->ready typo pairs); if only one spelling can be kept, keep the SKELETON/header spelling — binding follows the declaration.",
+    "Unless the spec says otherwise, every declared output must carry a DEFINED value at every cycle after reset: drive 0 when idle/undecoded rather than leaving X/Z or a stale value, zero-extend a narrow field read over a wider bus, and give reset-less registered outputs a deterministic power-up value (initial = 0) so a time-zero sample reads 0, not X. Reads of unmapped/reserved addresses return 0, and writes to read-only or unmapped space are side-effect-free unless an error response is explicitly specified.",
+    "When a verbatim code header/skeleton (module declaration, port list, parameter list) CONFLICTS with a prose/table description, the code header wins for every BINDING fact — module name, port names, port order, widths, parameter names — because integration binds against the declaration, not the prose; the prose/table wins only for BEHAVIOR the header cannot express. For a probable typo pair between the two (a port named _read in the header vs _ready in the table), keep the header spelling on the port (optionally alias both) and note the discrepancy in a comment — do not 'correct' the declaration from the table."
    ]
   },
   {
@@ -355,14 +357,14 @@
     "On enhance/modify-existing-RTL tasks, carry over EVERY case/branch of the provided base RTL unchanged unless the task explicitly modifies it; the provided source is authoritative for untouched behavior. A prose example that contradicts the base RTL for an unmentioned mode (here Scenario-2 calling 0b110 'reserved' while base RTL implements it as modulo) does NOT override the base RTL, and do not add new guard conditions (out-of-range checks) to branches the base RTL lacked them on.",
     "For 'complete the partial FSM/algorithm' tasks, the self-TB MUST exercise the primary NON-degenerate path with real structured stimulus (a populated BST) and assert both the data result (key_position) and any prose-stated exact cycle latencies — not just the empty/degenerate case. A self-TB covering only the trivial path lets an incorrect core-traversal FSM pass our gate.",
     "For multi-module deliverables, emit exactly ONE definition per required module partitioned into the harness's expected filenames; never hedge with several alias/duplicate top-wrapper modules in one blob (this draft defined 6 modules incl. 4 near-duplicate top wrappers). When a single-file draft is materialized into a multi-file layout, duplicates become 'module already declared' errors under strict simulators (Icarus 13+); the runner's local Icarus 11 silently keeps the first declaration and masks the defect.",
-    "Multi-module emission fidelity: when the task names >1 module (or VERILOG_SOURCES lists multiple <module>.sv paths), write EACH named module to its own <module>.sv so every source path resolves; do not drop a required helper module. Draft content compiles fine as a single blob - only the file layout is wrong.",
+    "Multi-module emission fidelity: when the task names more than one module, write EACH named module to its own <module>.sv file (one module per eponymous file) so every deliverable resolves; do not drop a required helper module. A draft that compiles fine as a single blob can still fail delivery purely on file layout.",
     "Emission-serialization guard: JSON-deserialize the AI-backup {code:[{path:content},...]} response BEFORE writing and route each content to its path; never dump the JSON wrapper into a .sv nor leave a listed source empty. A pre-compile check (first non-comment char must not be '{') catches this class.",
     "Same class as 0006: prompt names elevator_control_system, floor_to_seven_segment AND Binary2BCD - emit each to its own <module>.sv; do not merge a distinct named module (Binary2BCD) into another file.",
-    "multi-file-emission partition rule: when harness VERILOG_SOURCES lists files whose basenames match module names, fan each generated module body into its eponymous file only, and dedupe against harness-provided support files — never let a module appear in two enumerated sources. The prompt gave both modules; the runner must split, not dump all modules into the top file.",
-    "When input.context supplies N separate RTL files (one module per file), preserve that partition on emit: write only the task-target module into its original file, pass the other context files through unchanged, and never inline context-provided modules into the target file -- the harness's multi-file VERILOG_SOURCES recompiles them and elaboration fails with duplicate-module errors.",
-    "When the prompt-declared top name contains a likely misspelling of a common word ('sequencial'->'sequential') or differs in word order from the design id, emit the top module (or a thin alias wrapper) under every normalized-spelling and id-derived name variant, so a prompt/id typo does not cause an 'unable to find root module' elaboration failure. (Both prompt and design id misspell it; oracle silently uses the corrected spelling.)",
+    "Multi-file-emission partition rule: when the task/prompt enumerates deliverable files whose basenames match module names, fan each generated module body into its eponymous file only, and dedupe against the provided support files — never let the same module appear in two delivered sources. When the prompt gives two modules, split them into their two files; do not dump all modules into the top file.",
+    "When input.context supplies N separate RTL files (one module per file), preserve that partition on emit: write only the task-target module into its original file, pass the other context files through unchanged, and never inline context-provided modules into the target file — a multi-file build recompiles the untouched files, so an inlined copy elaborates the same module twice (duplicate-module errors).",
+    "When the prompt-declared top name contains a likely misspelling of a common hardware word ('sequencial' for 'sequential'), keep the prompt spelling as the primary module name AND additionally emit a thin alias wrapper under the normalized (correctly-spelled) name, so the design elaborates under either spelling — a reviewer or integrator may reasonably use the corrected form. This is the same craft as the canonical-spelling alias for misspelled leaf names (leaf_typo_alias_emit.py); never bet on a single spelling when the prose itself is the typo.",
     "Self-verification of request/ready FSMs must exercise back-to-back transactions where the next start pulse is asserted on the SAME cycle the previous one signals ready/done. Design lesson: a terminal OUTPUT/DONE state that unconditionally returns to IDLE silently drops a 1-cycle i_start pulse landing on that return cycle and hangs on back-to-back use — completion states must still sample the start input (OUTPUT: if i_enable&i_start -> LOAD).",
-    "Deterministic rule: for a spec-only problem with NO module skeleton, bind the emitted TOP module name to the design<problem-slug> (derivable from the visible input.json id) so it matches the harness TOPLEVEL -- draft used the functional name and failed elaboration. Secondary read-and-clear craft: clear branch must not mask the concurrent increment via else-if priority: next=(sw_req?0:count)+cpu_trig, and present the read value via a registered latch even after sw_req deasserts.",
+    "Read-and-clear counter craft: the clear/read-request branch must not mask a CONCURRENT increment — an exclusive else-if priority (clear takes the whole branch) drops an event arriving in the same cycle as the clear; compute next = (clear ? 0 : count) + trigger so the concurrent event is retained, and present the read value through a registered latch so it stays stable after the read request deasserts.",
     "Pulse-width protocol decoders must classify bits by the RATIO of the HIGH phase to the measured reference LOW phase (self-calibrate from the always-present 0.6ms low; ~1x=>0, ~2x=>1, start ~4x), NOT by absolute clock-cycle windows from a nominal clock -- the verification clock often differs from the stated nominal (TB=1MHz vs prose 100KHz/1.67KHz).",
     "When 'fixing latch inference', honor the module's clocked spec and sibling modules: if the spec says the output is produced 'on the rising edge of clk' (or a sibling like the decoder registers the analogous output), convert the offending always_comb to a registered always_ff rather than merely adding always_comb default assignments -- a clocked-output TB (await RisingEdge on the valid) hangs on a combinational valid/data.",
     "Self-TBs for handshake FSMs must sample outputs the way an external checker does — drive stimulus, DEASSERT it, then check the output pulse on the FOLLOWING clock — and hold data-valid outputs (item id, change amount) across the consumer's sampling window, not only during the single producing state. The draft's combinational look-ahead (coin_sum>=price on the just-inserted coin) advances the DISPENSING pulse one cycle early; a canonical register-then-compare FSM (accumulate into a register, compare the registered total next cycle) aligns with the oracle. Verified: the register-then-compare edit moves dispense_item to the expected cycle (first assert then passes)."
@@ -414,11 +416,13 @@
   },
   {
    "ic_class": "handshake-valid-ready",
-   "lesson_count": 3,
+   "lesson_count": 5,
    "lessons": [
     "After a request/valid output's handshake completes (its ack/ready was sampled), hold that output DEASSERTED for at least one full clock before re-asserting it for the next item. A zero-gap combinational re-assert in the very next cycle reads as a single unbroken pulse to an edge-based checker.",
     "When a spec places 'toggle the protocol clock to latch data AND decrement the counter' in the SAME state, the counter OUTPUT must present the post-decrement value during that state (aligned with the latching edge). The draft registers the decrement one cycle late, so o_bits_left reads the pre-decrement value while o_spi_clk is high. Emit remaining-count so it equals bits-not-yet-latched at every protocol edge.",
-    "Preserve spec-introduced signal identifiers VERBATIM on top-level connecting nets — never append _w/_sig/_wire to a net whose name the prose introduces (here `parity`: 'Add parity as an output signal', 'parity is transmitted from tx_block to rx_block'). White-box modify-task TBs force/peek intermediate nets by the exact spec identifier, so a rename crashes every test with an AttributeError. SECONDARY (revealed after rename: 13/20 still fail): parity_error is functionally wrong for >8-bit widths and the force-injection path (tx `assign parity=^data_reg` on a shifting register mis-times the capture) — a follow-on ic_expert_db lesson on width-parametric parity."
+    "Preserve spec-introduced signal identifiers VERBATIM on top-level connecting nets — never append _w/_sig/_wire to a net whose name the prose introduces (here `parity`: 'Add parity as an output signal', 'parity is transmitted from tx_block to rx_block'). White-box modify-task TBs force/peek intermediate nets by the exact spec identifier, so a rename crashes every test with an AttributeError. SECONDARY (revealed after rename: 13/20 still fail): parity_error is functionally wrong for >8-bit widths and the force-injection path (tx `assign parity=^data_reg` on a shifting register mis-times the capture) — a follow-on ic_expert_db lesson on width-parametric parity.",
+    "While valid is asserted and ready is low, HOLD the payload and valid stable: never advance/rotate the data under a stalled handshake and never drop valid before ready has been sampled high — a downstream consumer latches the data presented at the valid&&ready edge and compares it against what was FIRST presented. Advance the source index/pointer only on the completed handshake (valid && ready), never on valid alone.",
+    "When a spec calls a flag a 'pulse' or says it is 'asserted for one cycle' (done, error, capture, match), emit it high for EXACTLY one clock and return it low even while the triggering CONDITION persists — edge-detect the condition against a one-cycle-delayed copy instead of exporting the level, or a persistent condition double-counts as multiple events. Conversely, a flag the spec describes as 'held until cleared/acknowledged' is a LEVEL: latch it and clear it only on the named clear event."
    ]
   },
   {
@@ -460,10 +464,9 @@
   },
   {
    "ic_class": "iterative-training-datapath",
-   "lesson_count": 4,
+   "lesson_count": 3,
    "lessons": [
     "For iterative weight-update trainers (Hebbian / perceptron / Fausett-style), the convergence/stop criterion is that the weight DELTAS are all zero on a pass — not that two consecutive weight snapshots happen to be equal. Test the update magnitude, not snapshot equality, or a coincidental repeat halts training early.",
-    "harness-toplevel-alias rule: at harness integration, reconcile the generated top-module identifier (and file basename) to the harness TOPLEVEL/VERILOG_SOURCES from .env when they differ from the prompt name — rename or emit a thin alias wrapper. Deterministic and chip-agnostic; the runner already knows the path (wrote hebb_gates.sv) so it has TOPLEVEL. Not a floor — recoverable from harness metadata the pipeline consumes.",
     "Microcode/FSM lesson: a microinstruction spec'd as 'signal stop and branch, no change to other signals' must NOT clobber accumulated datapath regs (draft's action-4 zeroes weights on stop; spec says retain), and accumulator state must live in sequential regs, not an always_comb block that reads/writes its own outputs (combinational feedback = no cross-cycle retention). Honor each action's explicit 'other signals unchanged' contract.",
     "When a spec says to EXTEND an existing microcode-ROM state machine with a new phase (e.g. a post-training test loop), implement it as additional ROM states advanced one-microinstruction-per-clock so per-step outputs stay observable at the same cadence as the existing phase; do NOT collapse it into a single-cycle combinational sweep that races to 'done' and only leaves the final result visible."
    ]
@@ -853,6 +856,41 @@
    "lesson_count": 1,
    "lessons": [
     "A hidden/whitebox harness commonly binds hierarchically by the design's OWN internal signal names under the top-level instance. Deliver the design as ONE FLAT module under the stated top name — never wrap the logic inside an inner sub-module the harness cannot see, and keep the internal signal names intact rather than renaming or re-hierarchizing them."
+   ]
+  },
+  {
+   "ic_class": "functional-modification-delivery",
+   "lesson_count": 1,
+   "lessons": [
+    "When a modification task asks you to ADD a new module or feature to an EXISTING provided file, deliver that file as an EXTENSION of the given content: keep the original module definition(s) intact (verbatim except the edits the task explicitly requests) and add the new top/logic ALONGSIDE them in the same file — never overwrite the file with only the new module. The new top usually instantiates the original module, so replacing the file deletes the very definition the new logic depends on and the design stops elaborating (unknown module); every pre-existing consumer of the original module breaks the same way. 'Extend' means the given design plus your addition; deleting provided logic requires an explicit instruction to replace it. Deterministic backstop: file_extend_preserve_check.py flags the self-breaking sub-case (an overwritten definition the delivered set still instantiates)."
+   ]
+  },
+  {
+   "ic_class": "reset-interface-defaults",
+   "lesson_count": 1,
+   "lessons": [
+    "When a spec mentions a reset without stating polarity or synchrony, take the convention from the SIGNAL NAME first: an _n/_b suffix (rst_n, resetn, nreset) means active-LOW, a bare rst/reset means active-HIGH. Put the reset in the sensitivity list (asynchronous assert) only when the prose says asynchronous / 'immediately' / 'regardless of the clock'; otherwise default to synchronous sampling at the active clock edge. Reset must return EVERY architectural register AND every declared output to its stated reset value (0 when unstated) so a sample taken right after deassertion reads defined values. When the spec says a control/clear input 'clears all outputs' with no timing qualifier, the asynchronous-assert form is the robust superset — it satisfies both an immediate-sampling and an edge-sampling consumer, while the synchronous-only form fails the immediate one."
+   ]
+  },
+  {
+   "ic_class": "output-latency-defaults",
+   "lesson_count": 1,
+   "lessons": [
+    "'Registered output' means EXACTLY one clock of latency: the result of inputs sampled at edge N is visible at edge N+1 — do not add a second register stage 'for safety'; a double-registered done/valid arrives one cycle late and every downstream sample slips by one. 'Combinational' or 'same-cycle' means ZERO added cycles. When a spec states a cycle count ('result after N cycles', 'done asserts in the cycle the last element is processed'), count from the edge that SAMPLES the start/enable, and emit a status/valid flag in the SAME cycle its data is valid unless the spec explicitly separates them. When the spec is silent on latency for a computed output, one registered stage is the conventional default — pick it, state the assumption in a comment, and keep every output of the block consistent with the same convention."
+   ]
+  },
+  {
+   "ic_class": "bit-ordering-endianness-defaults",
+   "lesson_count": 1,
+   "lessons": [
+    "When a spec serializes a word or packs fields without stating bit order, resolve it in this priority: (1) the named protocol's convention (UART data bits go LSB-first; I2C and SPI conventionally transfer MSB-first); (2) any worked example in the prose, followed bit-by-bit; (3) only then default to LSB-first shifting with the first-received bit landing in bit 0. For field PACKING, Verilog concatenation {A, B} places the FIRST-listed field in the MOST-significant slice — 'concatenate A and B' defaults to that reading, but an explicit [hi:lo] bit-position table always wins over prose ordering. Keep the shift direction a single localparam/one-line choice and note the assumption in a comment so a reviewer can flip it without a rewrite."
+   ]
+  },
+  {
+   "ic_class": "arithmetic-signedness-defaults",
+   "lesson_count": 1,
+   "lessons": [
+    "When a spec does not state signedness, operands are UNSIGNED by default; switch to signed (two's-complement) interpretation only when the prose says signed/negative/two's complement or a worked example uses a negative value. When signed, cast BOTH operands explicitly ($signed on each side of a compare/multiply/shift): in Verilog a single unsigned operand silently makes the whole expression unsigned, which flips comparisons and right-shifts. Overflow behavior defaults to natural modulo-2^N wrap-around unless the spec says saturate/clamp; a stated saturation applies on BOTH the positive and negative side of a signed range."
    ]
   }
  ]
