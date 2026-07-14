@@ -58,3 +58,5 @@ integrity_note: |
   plugin during the run (NO-MIX). The blocked draft was unblocked WITHOUT weakening
   the gate — rewritten to a flat packed-array load (behavior-identical, no k loop) —
   so the published number never depended on a gate change.
+
+github_issue: https://github.com/vibeic/vibe-ic/issues/138
