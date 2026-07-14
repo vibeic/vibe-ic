@@ -22,6 +22,17 @@ clean-room blindness doctrine + GATE-AS-SOLE-EMIT-PATH, ORGANIC #528/#529).
   — it is the input-side sole-source (a hand-rolled `{id, prompt}`-only export
   silently strips `input.context`, which prose alone never prevents).
 
+* **Extend, don't replace, given files (issue #139 class).** When a
+  functional-modification completion adds a NEW module whose deliverable file
+  IS one of the given `context` files, the completion for that file must carry
+  BOTH the (unchanged, except requested edits) original context module AND the
+  new top — the new top instantiates the original, so a file holding only the
+  new module deletes the definition it depends on and nothing elaborates.
+  Deterministic backstop before drafting the JSONL:
+  `programs/file_extend_preserve_check.py --before <context_dir> --after
+  <delivery_dir>` (exit 1 = self-breaking clobber). The judgment half lives in
+  the IC Expert DB (`functional-modification-delivery`).
+
 ## What you MUST NOT do
 
 * MUST NOT read the dataset's raw JSONL, golden/reference solutions

@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 879
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 879)
+- **Total programs (excluding helpers / shims):** 880
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 880)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 870 |
+| `any` | 871 |
 
 ## Alphabetical listing
 
@@ -288,6 +288,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `fibre_channel_protocol_synth` | any | — | Fibre Channel (INCITS T11 FC-FS / FC-PH) protocol synth helper. |
 | `field_agent_terminology_scan` | any | — | terminology guard for external text |
 | `figure_extractor` | any | — | the VISION tier's deterministic program side. |
+| `file_extend_preserve_check` | any | — | the deterministic half of the general |
 | `final_report_generate` | any | — | generate canonical, chip-AGNOSTIC final |
 | `final_test_attestation_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered |
 | `firstbit_synth` | any | — | DETERMINISTIC solver for the CVDP first-bit decoder. |
@@ -951,7 +952,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (870 programs)
+### `any` (871 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1211,6 +1212,7 @@ _(no programs in this group)_
 - `fibre_channel_protocol_synth` — Fibre Channel (INCITS T11 FC-FS / FC-PH) protocol synth helper.
 - `field_agent_terminology_scan` — terminology guard for external text
 - `figure_extractor` — the VISION tier's deterministic program side.
+- `file_extend_preserve_check` — the deterministic half of the general
 - `final_report_generate` — generate canonical, chip-AGNOSTIC final
 - `final_test_attestation_check` — gate (v1.6.13 Wave 88, renumbered  _[Wave 88]_
 - `firstbit_synth` — DETERMINISTIC solver for the CVDP first-bit decoder.
