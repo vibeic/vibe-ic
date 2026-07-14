@@ -68,6 +68,32 @@ Implements the iterative repair loop from AutoChip, RTLFixer, and VerilogCoder. 
 - Do not delete code to make errors go away; fix the root cause
 - Do not repair if the root cause is ambiguous; ask the user instead
 
+## Modify-task file delivery — extend, don't replace (issue #139 class)
+
+When the repair/modification deliverable is one of the PROVIDED files and your
+change adds a NEW module that instantiates the provided one, the delivered
+file must contain BOTH: the original module (verbatim except the requested
+edits) AND the new logic. Overwriting the file with only the new module
+deletes the definition the new logic depends on — the design stops
+elaborating (unknown module) and every pre-existing consumer breaks.
+"Extend" means the given design plus your addition; deleting provided logic
+requires an explicit instruction to replace it.
+
+Deterministic backstop (run before delivering):
+
+```bash
+python3 plugins/vibe-ic/programs/file_extend_preserve_check.py \
+    --before <original_files_dir> --after <delivered_files_dir>
+```
+
+Exit 1 = self-breaking clobber (an overwritten definition the delivered set
+still instantiates) — restore the original module alongside the new one.
+
+*why_not_bucket_a*: whether dropping a provided module that NOTHING still
+instantiates was an INTENDED replacement is task-wording judgment — that half
+stays advisory (IC Expert DB class `functional-modification-delivery`); the
+program flags only the zero-false-positive self-breaking sub-case.
+
 ## ⛔ ECO spare-cell preservation (mandatory)
 
 > ⛔ **ECO spare-cell preservation:** cells/gates/pads carrying the `dont_touch` /
