@@ -61,12 +61,24 @@ UNUSEDSIGNAL waivers on genuinely-redundant sign bits, removed a non-synth `#` d
 
 ## Fail triage (105 fails)
 
+Post-convergence (merged) fail modes of the remaining 100:
+
 | mode | count | note |
 |---|---|---|
-| assertion-fail | 75 | genuine functional mismatch vs golden TB (the real misses) |
-| timeout (600s) | 17 | design never completes the TB's expected handshake/sequence → functional (a correct design terminates); a few may be slow TBs |
-| harness lint-fail | 8 | **all optimization** — draft passes the gate (yosys smoke) but fails the harness's `verilator --lint-only -Wall`; functionally correct, hygiene-only |
-| no-log / infra | 5 | container produced no test log (needs manual replay to classify) |
+| assertion-fail | ~78 | genuine functional mismatch vs golden TB — the hard spec-INTERPRETATION residual; blind self-verify cannot catch these (the self-TB encodes the same reading). Documented limit: `ORGANIC-20260614-cvdp-harness-exact-selfverify`. |
+| timeout (600s) | ~17 | design never completes the TB's expected sequence; **~6 of these are a top-name floor (below)**, the rest are logic hangs / structural (e.g. `word_reducer_0008`: completion file clobbers the context module it instantiates). |
+| no-log / infra | ~5 | container killed before writing a log (mostly the same 600s timeout). |
+
+### Measurement floor: harness TOPLEVEL not blind-derivable (~6 problems, ~2%)
+~6 problems fix the scorer's cocotb TOPLEVEL to a name a blind (§4.05) author cannot expose —
+the prompt names a **different** module (`hebbian_rule` vs harness `hebb_gates`;
+`sync_serial_communication_top` vs `..._tx_rx`; `search_binary_search_tree` vs `binary_search_tree_sort`),
+a **typo** (`..._sequencial` vs `..._sequential`), or **no name** at all (`ethernet_packet_parser` →
+harness `field_extract`; `bus_arbiter` → `cvdp_copilot_bus_arbiter`). `iverilog -s <top>` cannot
+bind → every test fails on root-bind, not logic. Renaming to match would require reading the hidden
+harness `.env` (oracle) — forbidden. The gate's own comment names this "an ACCEPTED under-specification
+floor." **No draft was renamed** to a harness-scraped top; the score stays honestly at 202. Captured:
+`ORGANIC-20260714-cvdp-harness-toplevel-not-blind-derivable-floor`.
 
 ### Systematic finding → CAPTURE (version-less PR for the gatekeeper)
 The CVDP **optimization** harness scores with `verilator --lint-only -Wall -Wno-EOFNEWLINE`.
