@@ -289,6 +289,113 @@ def _check_body_connections(
     return errors
 
 
+# ── ORGANIC #151 — native custom-PDK model-include recognition ──────────────
+# The A3 gate historically recognised ONLY the open PDKs (sky130 / gf180): a
+# netlist that includes a rung-1/2 RESOLVED native model lib was NOT accepted as
+# a "PDK model include" (NO_MODEL_INCLUDE), and the authored native `.subckt`
+# definition libraries (whose models are supplied by the deck that includes
+# them) hard-FAILed. This block consumes the v1.4.24 resolver verdict so a
+# fully-native custom-PDK project can pass A3, WITHOUT relaxing the gate for
+# open-PDK / rung-3 projects. NDA-safe (basenames only); no vendor/SKU literal.
+
+# A top-level analysis card — its presence means the netlist is a RUNNABLE deck
+# (which must carry its model source), not a reusable `.subckt` DEFINITION
+# library (whose models come from the deck that `.include`s it).
+_ANALYSIS_CARD_RE = re.compile(
+    r"(?im)^\s*\.(control|tran|ac|dc|op|meas|noise|four|disto|pz|sens|tf)\b")
+_SUBCKT_DEF_RE = re.compile(r"(?im)^\s*\.subckt\b")
+
+
+def _resolve_native_libset(project: Path, declared_target: Optional[str]):
+    """The set of resolved-native model-lib BASENAMES for a rung-1/2 native PDK,
+    or (None, None) when no native resolution applies (no target / rung 3 / a
+    known open family). Basename match (not full path) so a deck that references
+    the staged lib from a different mount still validates against the resolver's
+    spice_libs/mc_libs set. rung-1 resolves on the local FS (no container)."""
+    if not declared_target:
+        return None, None
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import analog_pdk_availability as _apa
+    except Exception:
+        return None, None
+    try:
+        res = _apa.resolve_pdk(declared_target, project=str(project))
+    except Exception:
+        return None, None
+    if not res.get("available"):
+        return None, None
+    src = res.get("source")
+    if src not in ("project_custom_pdk", "container_installed"):
+        return None, None
+    matched = (res.get("matched_dir") or "").lower()
+    if src == "container_installed" and any(
+            k in matched for k in ("sky130", "gf180")):
+        return None, None            # known open family → unchanged behaviour
+    libs = list(res.get("spice_libs") or []) + list(res.get("mc_libs") or [])
+    if not libs:
+        return None, None
+    return {Path(p).name for p in libs}, src
+
+
+def _is_definition_library(text: str) -> bool:
+    """A reusable `.subckt` model/block library — has `.subckt` and NO top-level
+    analysis card, so its device models are supplied by the deck that
+    `.include`s it. For such a library a missing model include is EXPECTED, not
+    a defect."""
+    return (_SUBCKT_DEF_RE.search(text) is not None
+            and _ANALYSIS_CARD_RE.search(text) is None)
+
+
+def _native_model_include_ok(text: str, rel_path: str, native_libset: Set[str],
+                             findings: List[Finding]) -> bool:
+    """Native-PDK-aware model-include acceptance (#151). Returns True when the
+    netlist carries a valid native model source, False (with a finding) when it
+    FAILs:
+      * an include whose basename is in the resolved native set → VALID;
+      * no model include but a `.subckt` DEFINITION library → VALID;
+      * a model include present but NONE match the resolved native set
+        (out-of-ladder path) → FAIL (the no-leak guard);
+      * no include and a RUNNABLE deck → FAIL (NO_MODEL_INCLUDE — a runnable
+        native deck must load the staged native models)."""
+    model_includes = [
+        p for (_kind, p) in INCLUDE_RE.findall(text)
+        if ("/" in p or "\\" in p or "." in Path(p).name)
+    ]
+    if model_includes:
+        if any(Path(p).name in native_libset for p in model_includes):
+            findings.append(Finding(
+                rule="NATIVE_MODEL_INCLUDE", severity="INFO",
+                message=(f"{rel_path}: native custom-PDK model include "
+                         f"recognised (resolved via analog_pdk_availability)"),
+                file=rel_path))
+            return True
+        findings.append(Finding(
+            rule="NATIVE_PDK_INCLUDE_OUT_OF_LADDER", severity="ERROR",
+            message=(f"{rel_path}: model include(s) "
+                     f"{[Path(p).name for p in model_includes]} are NOT in the "
+                     f"resolved native PDK set — out-of-ladder include. Only a "
+                     f"resolved-native model lib (the staged custom-PDK "
+                     f"spice_libs/mc_libs) is a legal native model include."),
+            file=rel_path))
+        return False
+    if _is_definition_library(text):
+        findings.append(Finding(
+            rule="NATIVE_SUBCKT_LIB_ACCEPTED", severity="INFO",
+            message=(f"{rel_path}: native `.subckt` definition library "
+                     f"accepted (models supplied by the including deck; native "
+                     f"PDK resolved)"),
+            file=rel_path))
+        return True
+    findings.append(Finding(
+        rule="NO_MODEL_INCLUDE", severity="ERROR",
+        message=(f"{rel_path}: no .include/.lib model source and this is a "
+                 f"runnable deck — a native custom-PDK deck must load the "
+                 f"staged native model lib."),
+        file=rel_path))
+    return False
+
+
 def run_audit(project: Path) -> AuditResult:
     result = AuditResult()
 
@@ -321,6 +428,11 @@ def run_audit(project: Path) -> AuditResult:
     total_pdk_mismatches = 0  # v0.2.68 (#438b)
     declared_target = _declared_pdk_target(project)
     mismatch_waived = _pdk_mismatch_waived(project)
+    # ORGANIC #151 — resolve the project's native custom PDK ONCE (rung-1/2).
+    # When it resolves, a netlist that includes a resolved-native model lib (or a
+    # native `.subckt` definition library) is a legal model source; an
+    # out-of-ladder include still FAILs. None → unchanged open-PDK / rung-3 gate.
+    native_libset, native_src = _resolve_native_libset(project, declared_target)
     _pdk_undeclared_warned = False  # #451 — one named WARNING per run
 
     for sp in sp_files:
@@ -354,15 +466,29 @@ def run_audit(project: Path) -> AuditResult:
 
         file_ok = True
 
-        if not _check_model_includes(text, rel, result.findings):
-            file_ok = False
+        pdk = _detect_pdk(text)
+
+        # ORGANIC #151 — model-include acceptance. For a native custom-PDK
+        # project, a deck that is NOT an open-PDK deck (pdk is None) is judged
+        # native-aware: a resolved-native include or a `.subckt` definition
+        # library is legal; an out-of-ladder include FAILs. A deck that still
+        # carries an open-PDK (sky130/gf180) include (pdk not None) falls through
+        # to the unchanged presence check + the #438b PDK_MISMATCH gate below —
+        # so a cross-family overlay on a native project still FAILs. Non-native
+        # projects (native_libset is None) are entirely unchanged.
+        if native_libset is not None and pdk is None:
+            if not _native_model_include_ok(text, rel, native_libset,
+                                            result.findings):
+                file_ok = False
+        else:
+            if not _check_model_includes(text, rel, result.findings):
+                file_ok = False
 
         body_errs = _check_body_connections(text, rel, result.findings)
         if body_errs > 0:
             file_ok = False
             total_body_errors += body_errs
 
-        pdk = _detect_pdk(text)
         model_errs = _check_known_models(text, rel, pdk, result.findings)
         if model_errs > 0:
             file_ok = False
@@ -447,6 +573,9 @@ def run_audit(project: Path) -> AuditResult:
         "declared_pdk_target": declared_target,       # #438(b)
         "pdk_mismatch_errors": total_pdk_mismatches,  # #438(b)
         "pdk_mismatch_waived": mismatch_waived,       # #438(b)
+        "native_pdk_source": native_src,              # #151 (None=open/rung-3)
+        "native_pdk_lib_count": (len(native_libset)
+                                 if native_libset is not None else 0),
         "pass": result.passed,
         "verdict_tier": verdict_tier,
     }
