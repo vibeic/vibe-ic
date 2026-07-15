@@ -8280,6 +8280,18 @@ def _dft_disclose_skip(path: Path, reason: str, extra: Optional[dict] = None):
     path.write_text(json.dumps(payload, indent=2))
 
 
+# The post-DFT-optimization skip-sentinel must OWN its canonical output so
+# flow_compliance's STRICT early-MISSING promotion (#675 strict) can promote
+# step 12 to SKIPPED-CONDITION WITHOUT the marker being able to mask a DIFFERENT
+# step that shares phase2/stage2/synth/ (e.g. step-9 netlist.v). The named
+# capability_flag makes the deferral capability-AWARE; skips_required_output
+# names EXACTLY the absent output this marker stands in for.
+_POST_DFT_SKIP_OWN = {
+    "capability_flag": "cap:post_dft_scan_optimization",
+    "skips_required_output": "phase2/stage2/synth/post_dft_netlist.v",
+}
+
+
 def step_dft_lec_chain(project: Path, top_name: str, container: str,
                        ic_class: str, full_chip: bool = True
                        ) -> List[StepResult]:
@@ -8522,19 +8534,20 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                 _dft_disclose_skip(
                     synth_dir / "post_dft_not_run.json",
                     f"yosys opt_clean of scan netlist failed (rc={rc}): "
-                    f"{(err or out)[-200:]}")
+                    f"{(err or out)[-200:]}", _POST_DFT_SKIP_OWN)
                 results.append(StepResult("post_dft_opt", "SKIP",
                                time.time() - t0,
                                f"post-DFT opt failed (rc={rc}) → disclosed-skip"))
         except Exception as exc:
             _dft_disclose_skip(synth_dir / "post_dft_not_run.json",
-                               f"post-DFT opt error: {exc}")
+                               f"post-DFT opt error: {exc}", _POST_DFT_SKIP_OWN)
             results.append(StepResult("post_dft_opt", "SKIP", time.time() - t0,
                            f"post-DFT opt errored ({exc}) → disclosed-skip"))
     else:
         _dft_disclose_skip(synth_dir / "post_dft_not_run.json",
                            "no scan_netlist.v (DFT was disclosed-skipped) — "
-                           "post-DFT optimization has no scan netlist to optimise")
+                           "post-DFT optimization has no scan netlist to optimise",
+                           _POST_DFT_SKIP_OWN)
         results.append(StepResult("post_dft_opt", "SKIP", time.time() - t0,
                        "no scan netlist → post-DFT disclosed-skip"))
 

@@ -1429,6 +1429,119 @@ def _sibling_self_skip_for_missing(project: Path,
     return None
 
 
+def _norm_out_path(s: str) -> str:
+    """Normalize an output path for exact ownership comparison: trim, drop a
+    leading `./`. Pure."""
+    s = s.strip()
+    while s.startswith("./"):
+        s = s[2:]
+    return s
+
+
+def _output_claim_matches(declared: str, missing_patterns: List[str]) -> bool:
+    """A marker's declared skipped-output OWNS one of the step's missing
+    required-output specs — by EXACT (normalized) string equality against one of
+    the split "A OR B" alternatives. Pure.
+
+    EXACT match ONLY — deliberately NOT fnmatch. A glob match (in either
+    direction) would reopen two masking vectors the adversarial review flagged:
+    (a) a forged broad-glob declaration like `reports/phase3/*` would match a
+    sign-off `drc_signoff.rpt`; (b) a step with a glob required-output like
+    `phase2/stage2/synth/*.v` could be masked by a foreign concrete marker naming
+    any `.v` in the shared dir. Requiring the declaration to be the literal
+    required-output spec the step expects removes both — a marker can only own the
+    exact output string it declares, never a wildcard family. A future marker that
+    must own a glob-only required-output declares that spec string verbatim."""
+    d = _norm_out_path(declared)
+    return any(d == _norm_out_path(p) for p in missing_patterns)
+
+
+def _declared_sibling_self_skip_for_missing(project: Path,
+                                            missing_patterns: List[str]
+                                            ) -> Optional[str]:
+    """STRICT variant of `_sibling_self_skip_for_missing`, for the EARLY
+    required_outputs-MISSING path where there is NO substantive gate to run as a
+    backstop (a step whose only evidence is output-presence).
+
+    The loose variant matches ANY skip-verdict sibling in the missing output's
+    directory — SAFE at the `files_exist` gate path (a second sub-gate still runs
+    and FAILs a real defect) but UNSAFE at the early-return, because output
+    directories are SHARED between steps (phase2/stage2/synth/ holds BOTH step-9
+    `netlist.v` and step-12 `post_dft_not_run.json`; reports/phase3/ holds many
+    sign-off reports). A dir-level match there could let one step's honest
+    skip-marker MASK a DIFFERENT step's genuinely-absent output — e.g. mask a
+    real synthesis FAIL (step 9) or a DRC/LVS sign-off FAIL (step 31) — turning a
+    true MISSING/FAIL into a false SKIPPED-CONDITION.
+
+    This strict form promotes MISSING→SKIPPED-CONDITION ONLY when a co-located
+    sibling UNAMBIGUOUSLY OWNS this step's absent output. The sibling must carry:
+      (1) a self-skip verdict (SKIP / SKIPPED / SKIPPED-CONDITION);
+      (2) a NON-EMPTY `capability_flag` — the disclosed OSS/analog capability gap
+          it defers under (capability-AWARE, not capability-blind). A hard
+          sign-off (DRC/LVS/ERC/STA) has NO disclosed capability gap, so no
+          legitimate runner marker ever defers it; and
+      (3) a `skips_required_output` (str or list) matching one of THIS step's
+          missing canonical outputs (exact or glob, either direction).
+    A marker that omits (2) or (3), or whose `skips_required_output` names a
+    DIFFERENT output, is IGNORED → the step stays MISSING. So a step-12 marker
+    (owns `post_dft_netlist.v`) can never mask step-9's `netlist.v`, and a stray
+    skip-json in reports/phase3/ can never mask a DRC/LVS sign-off. chip-AGNOSTIC;
+    the trust model is the same runner-emitted-evidence one the §4.05 blindness /
+    evidence-integrity audits already police, and a promotion yields only a
+    review-flagged SKIPPED-CONDITION (excluded from executed-PASS), never a clean
+    PASS.
+    """
+    seen_dirs: set = set()
+    for pat in missing_patterns:
+        parent_rel = str(Path(pat).parent)
+        if parent_rel in seen_dirs:
+            continue
+        seen_dirs.add(parent_rel)
+        dir_candidates: List[Path] = []
+        direct = project / parent_rel
+        if direct.is_dir():
+            dir_candidates.append(direct)
+        for hit in _glob_first(project, parent_rel):
+            hp = project / hit
+            if hp.is_dir():
+                dir_candidates.append(hp)
+        for d in dir_candidates:
+            try:
+                json_siblings = sorted(d.glob("*.json"))
+            except OSError:
+                continue
+            for sib in json_siblings:
+                try:
+                    data = json.loads(sib.read_text())
+                except Exception:
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                vd = str(data.get("verdict", "")).upper().replace("_", "-")
+                if vd not in _SELF_SKIP_VERDICTS:
+                    continue
+                if not str(data.get("capability_flag", "")).strip():
+                    continue  # capability-AWARE: no disclosed gap → not eligible
+                declared = data.get("skips_required_output")
+                declared_list = ([declared] if isinstance(declared, str)
+                                 else list(declared)
+                                 if isinstance(declared, (list, tuple)) else [])
+                if not any(_output_claim_matches(do, missing_patterns)
+                           for do in declared_list if isinstance(do, str)):
+                    continue  # marker does not OWN this step's absent output
+                try:
+                    sib_rel = str(sib.relative_to(project))
+                except ValueError:
+                    sib_rel = sib.name
+                reason = str(data.get("reason", ""))[:150]
+                flag = str(data.get("capability_flag", ""))
+                return (f"{sib_rel}: owns this output "
+                        f"(skips_required_output) and self-reports "
+                        f"verdict={vd} [{flag}]"
+                        + (f" ({reason})" if reason else ""))
+    return None
+
+
 def _expand_globs(args: List[str], cwd: Path) -> List[str]:
     """Expand shell-style globs in program arguments (bash nullglob semantics).
     If a glob pattern has NO match, drop it — this mirrors what a shell with
@@ -4861,6 +4974,40 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                 f"(approver: {waivers[sid].get('approver', '?')})",
                 f"  ↳ natural: {natural_reason}",
             ]
+        else:
+            # ORGANIC #675 (extension) — the `files_exist` gate path already
+            # honors an honest co-located `*_not_run.json` / `*_skipped.json`
+            # sibling that discloses the runner deliberately skipped this step
+            # (see `_sibling_self_skip_for_missing`, called ~line 3735). A step
+            # whose ONLY evidence is a required_output (empty
+            # `verification.commands`) early-returns HERE and never reached that
+            # path, so an honestly-disclosed downstream cap-gap skip (post-DFT
+            # optimization when scan insertion was disclosed-skipped, SDF
+            # gate-level sim / post-layout SPICE correlation which the OSS chain
+            # discloses it cannot drive) fell through to a hard MISSING.
+            #
+            # We honor it here with the STRICT
+            # `_declared_sibling_self_skip_for_missing` — NOT the loose dir-level
+            # match — because at the early-return there is NO second sub-gate to
+            # backstop a false promotion, and output DIRECTORIES are shared
+            # between steps (phase2/stage2/synth/ holds both step-9 netlist.v and
+            # step-12's marker; reports/phase3/ holds many sign-offs). The strict
+            # form promotes ONLY when a sibling UNAMBIGUOUSLY OWNS this step's
+            # absent output (self-skip verdict + a named capability_flag + a
+            # `skips_required_output` matching one of THIS step's missing
+            # patterns), so a step-12 marker can never mask a step-9 synth FAIL
+            # and no marker can mask a DRC/LVS sign-off. A marker lacking the
+            # ownership claim, or naming a different output, stays MISSING.
+            missing_pats = [sp for pat in outputs
+                            for sp in (p.strip() for p in pat.split(" OR "))]
+            skip_hint = _declared_sibling_self_skip_for_missing(
+                project, missing_pats)
+            if skip_hint:
+                result.status = "SKIPPED-CONDITION"
+                result.reasons.append(
+                    "SKIPPED-CONDITION: canonical output absent but a co-located "
+                    "sibling that OWNS it honestly self-reports a disclosed "
+                    f"capability-gap skip (#675 strict): {skip_hint}")
         return _apply_capability_gap(
             _evidence_integrity_scan(project, result), sid)
 
