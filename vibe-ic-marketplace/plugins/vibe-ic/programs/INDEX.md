@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 883
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 883)
+- **Total programs (excluding helpers / shims):** 885
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 885)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 874 |
+| `any` | 876 |
 
 ## Alphabetical listing
 
@@ -171,6 +171,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `cmd_protocol_crc_verify` | any | — | Derive + verify CRC params from xlsx golden vectors. |
 | `cmd_response_conformance_check` | any | v0.50 | v0.50 plugin gate |
 | `cmd_response_otp_provenance_check` | any | — | for opcodes whose response |
+| `collect_external_outputs` | any | — | copy volatile external-path artifacts into the |
 | `comb_advanced_synth` | any | — | deterministic SOLVER for ADVANCED purely-combinational |
 | `comb_gate_synth` | any | — | deterministic SOLVER for the COMBINATIONAL GATE / WIRE / |
 | `comb_state_table_synth` | any | — | deterministic SOLVER for a COMBINATIONAL state |
@@ -888,6 +889,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `waiver_legitimacy_check` | any | v0.116 | v0.116 (BACKLOG-v11 candidate). |
 | `waiver_staleness_check` | any | — | BACKLOG-v10 P1.3. |
 | `waiver_template_gen` | any | — | Generate a `waivers.json.template` scaffold |
+| `waivers_materialize` | any | — | materialize the MACHINERY-SANCTIONED in-memory |
 | `waivers_schema_check` | any | Wave 91 | Validate <project>/waivers.json for the |
 | `wake_gen_bus_active_reset_check` | any | Wave 15 | Wave 15 silent-bug gate. |
 | `wake_gen_silence_gate` | aid_class_half_duplex, digital_cmd_driven, mixed_signal_otp | Wave 58 | Wave 58 / BACKLOG-v12 P0.1 plugin gate. |
@@ -955,7 +957,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (874 programs)
+### `any` (876 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1100,6 +1102,7 @@ _(no programs in this group)_
 - `cmd_protocol_crc_verify` — Derive + verify CRC params from xlsx golden vectors.
 - `cmd_response_conformance_check` — v0.50 plugin gate  _[v0.50]_
 - `cmd_response_otp_provenance_check` — for opcodes whose response
+- `collect_external_outputs` — copy volatile external-path artifacts into the
 - `comb_advanced_synth` — deterministic SOLVER for ADVANCED purely-combinational
 - `comb_gate_synth` — deterministic SOLVER for the COMBINATIONAL GATE / WIRE /
 - `comb_state_table_synth` — deterministic SOLVER for a COMBINATIONAL state
@@ -1812,6 +1815,7 @@ _(no programs in this group)_
 - `waiver_legitimacy_check` — v0.116 (BACKLOG-v11 candidate).  _[v0.116]_
 - `waiver_staleness_check` — BACKLOG-v10 P1.3.
 - `waiver_template_gen` — Generate a `waivers.json.template` scaffold
+- `waivers_materialize` — materialize the MACHINERY-SANCTIONED in-memory
 - `waivers_schema_check` — Validate <project>/waivers.json for the  _[Wave 91]_
 - `wake_gen_bus_active_reset_check` — Wave 15 silent-bug gate.  _[Wave 15]_
 - `wake_pulse_emit_gated_by_first_rx_command_check` — Wave 18 gate.  _[Wave 18]_
