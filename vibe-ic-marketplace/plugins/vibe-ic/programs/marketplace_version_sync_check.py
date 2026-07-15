@@ -249,11 +249,36 @@ def main() -> int:
     # `./vibe-ic-marketplace/plugins/vibe-ic` resolves to the maintained plugin).
     canonical = _resolved_plugin_paths(primary, primary_mkt)
     manifests: List[Tuple[Path, dict]] = [(primary, primary_mkt)]
+    seen_paths = {str(primary.resolve())}
     for outer_path in _find_outer_marketplaces(primary, canonical):
         try:
             manifests.append((outer_path, json.loads(outer_path.read_text())))
+            seen_paths.add(str(outer_path.resolve()))
         except Exception:
             continue
+
+    # ORGANIC #152 — union in the SHARED, direction-agnostic discovery. The
+    # outer-walk above only walks UP from the PRIMARY, so a cwd at the repo root
+    # (primary = the ROOT manifest) would MISS the NESTED manifest (it is DOWN,
+    # inside vibe-ic-marketplace/) — the v1.4.17 `--fix` blind spot. Walking up
+    # from each referenced plugin ROOT finds BOTH manifests regardless of cwd,
+    # since both are ancestors of the plugin root. Deduped by resolved path.
+    try:
+        import plugin_manifest_discovery as _pmd
+        for pj_path in canonical:
+            plugin_root = Path(pj_path).resolve().parent.parent
+            _pj, extra = _pmd.find_plugin_and_manifests(plugin_root)
+            for mk in extra:
+                rp = str(mk.resolve())
+                if rp in seen_paths:
+                    continue
+                try:
+                    manifests.append((mk, json.loads(mk.read_text())))
+                    seen_paths.add(rp)
+                except Exception:
+                    continue
+    except Exception:
+        pass
 
     findings: List[Finding] = []
     matched: List[str] = []
@@ -272,8 +297,27 @@ def main() -> int:
         total = 0
         for mkt_json, mkt in manifests:
             total += _apply_fix(mkt_json, mkt, findings)
+        # ORGANIC #152 — POST-FIX SELF-CHECK: re-read every manifest and confirm
+        # ZERO residual drift; a partial fix (a manifest the walk missed) must
+        # not silently pass. Red light → abort with rc 2.
+        residual: List[Finding] = []
+        recheck_matched: List[str] = []
+        for mkt_json, _old in manifests:
+            try:
+                fresh = json.loads(mkt_json.read_text())
+            except Exception:
+                continue
+            _check_manifest(mkt_json, fresh, residual, recheck_matched)
+        if residual:
+            print(f"[FAIL] marketplace_version_sync_check: post-fix self-check "
+                  f"still finds {len(residual)} drift(s) across "
+                  f"{n_manifests} manifest(s) — fix incomplete.")
+            for mkt_json, name, mver, pver, _pj in residual:
+                print(f"  - [{_rel(mkt_json)}] {name}: {mver!r} != {pver!r}")
+            return 2
         print(f"[PASS_AFTER_FIX] marketplace_version_sync_check: "
-              f"wrote {total} version(s) across {n_manifests} manifest(s)")
+              f"wrote {total} version(s) across {n_manifests} manifest(s); "
+              f"post-fix self-check clean")
         return 0
 
     print(f"[FAIL] marketplace_version_sync_check: "
