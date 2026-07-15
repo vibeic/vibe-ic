@@ -278,6 +278,15 @@ _SAFETY_DECL_RE = re.compile(
 
 _MODULE_RE = re.compile(r"\bmodule\s+([A-Za-z_]\w*)\s*", re.MULTILINE)
 
+# The runner's reset/clock-variant alias suffix (design_one_shot_runner renames
+# `<top>` → `<top>__rcvar_inner`). Two modules sharing the same base are the SAME
+# logical block (a wrapper + its inner), never an encoder/decoder pair (#145).
+_RCVAR_SUFFIX = "__rcvar_inner"
+
+
+def _rcvar_base(mod: str) -> str:
+    return mod[:-len(_RCVAR_SUFFIX)] if mod.endswith(_RCVAR_SUFFIX) else mod
+
 
 def _module_ports(text: str, module: str) -> List[Tuple[str, str, int]]:
     """Best-effort port list (name, dir, width) for `module`. Handles ANSI
@@ -368,17 +377,26 @@ def detect_safety_mechanism(rtl_dir: Path,
     if dec is None:
         return None
 
-    # §4.05 declared-mechanism gate: a decoder-SHAPED module (narrower output)
-    # only counts as a SAFETY mechanism if it EITHER exposes a detect flag OR a
-    # safety mechanism is declared in prose/L23. This stops a plain decoder /
-    # mux on a NON-safety design from false-firing (→ NOT_APPLICABLE instead).
-    if not (dec["detect"] or _SAFETY_DECL_RE.search(combined)):
+    # §4.05 declared-mechanism gate (TIGHTENED, #145): a decoder-SHAPED module
+    # counts as a SAFETY mechanism ONLY with POSITIVE ECC structure — a real
+    # corrected-DATA output narrower than the codeword input (`dec["out"]`, i.e.
+    # syndrome-correction evidence) — OR an explicit safety declaration in
+    # prose/L23. A bare 1-bit detect/`error` STATUS flag is NOT sufficient on its
+    # own: a generic register-mapped IP with an `error` status output + a data
+    # bus would otherwise be read as an encoder/decoder pair and forced into an
+    # ASIL-D FMEDA it can never satisfy (#145 — sha256 crypto accelerator).
+    if not (dec["out"] is not None or _SAFETY_DECL_RE.search(combined)):
         return None
 
     # Find an encoder: input == decoder data_width, output == code_width.
     enc = None
     for mod, (f, ports) in mods.items():
         if mod == dec["module"]:
+            continue
+        # #145 — never pair a module with its OWN reset/clock-variant alias: the
+        # runner renames `<top>` → `<top>__rcvar_inner` (a wrapper + inner pair),
+        # which is NOT an encoder/decoder pair.
+        if _rcvar_base(mod) == _rcvar_base(dec["module"]):
             continue
         ins = [(n, w) for n, d, w in ports if d == "input" and n.lower() not in _CLK_RST]
         outs = [(n, w) for n, d, w in ports if d == "output"]

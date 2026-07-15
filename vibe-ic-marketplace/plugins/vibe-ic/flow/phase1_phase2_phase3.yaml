@@ -1204,6 +1204,17 @@ steps:
       all_of:
         - files_exist: ["phase3/stage3/sta/post_route_timing.rpt"]
         - program_exit_zero: "sta_report_check . --mode phase3/stage3/sta --json reports/phase3/sta/post_route_summary.json"
+        # #147 — the nominal-corner gate above never consumes the ABSOLUTE
+        # worst-setup / worst-hold slack across ALL sign-off corners, so a slow
+        # (max-RC) corner setup violation could ship as a PASS while the flow's
+        # own TAPEOUT-SIGNOFF multicorner report showed `worst slack max -1.71`.
+        # This OPTIONAL sub-gate FAILs Step 23 on a negative worst-slack at any
+        # sign-off corner (setup @ max-RC / hold @ min-RC); it self-skips
+        # (NOT_APPLICABLE rc 0) when no multicorner report was produced, so it is
+        # backward-compatible. A reviewed acceptance goes through waivers.json.
+        - optional_program_exit_zero:
+            command: "post_route_signoff_corner_check . --json reports/phase3/sta/post_route_signoff_corner.json"
+            condition_files_exist: ["phase3/stage3/sta/sta_spef_multicorner.rpt"]
     blocks_on: [22]
 
   - id: 24
