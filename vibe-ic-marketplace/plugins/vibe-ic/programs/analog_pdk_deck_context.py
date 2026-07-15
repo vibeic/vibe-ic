@@ -271,6 +271,7 @@ def custom_family_context(res: Dict[str, Any],
     union_subckts: Dict[str, int] = {}
     union_models: Dict[str, str] = {}
     per_lib_sections: Dict[str, List[str]] = {}
+    per_lib_subckts: Dict[str, Dict[str, int]] = {}
     for lib in libs:
         txt = reader(lib)
         if txt is None:
@@ -280,16 +281,34 @@ def custom_family_context(res: Dict[str, Any],
         union_subckts.update(dev["subckts"])
         union_models.update(dev["models"])
         per_lib_sections[lib] = parse_sections(txt)
+        per_lib_subckts[lib] = dev["subckts"]
 
     device_map, unresolved, notes = map_device_roles(union_subckts, required)
 
-    # pick the primary lib: the readable staged lib that defines the MOST corner
-    # sections (that is the file the `.lib <path> <section>` line points at);
-    # fall back to the first readable lib.
+    # ORGANIC #149 — pick the primary lib (the file the `.lib <path> <section>`
+    # deck line points at) by whether it DEFINES the RESOLVED device-role
+    # subckts, NOT merely by which lib ships the most `.lib <section>` corner
+    # definitions. The device ROLES resolve from the UNION of all libs and can
+    # live in one lib (e.g. the LV-CMOS lib) while a DIFFERENT lib (e.g. an
+    # HV/LDMOS lib) has more corner sections — the old "most sections" pick then
+    # loaded a corner section from a lib that does not define the instantiated
+    # device subckt → ngspice `unknown subckt`. Rank readable libs by the count
+    # of resolved device_map subckts they define; section count is only the
+    # tiebreaker. A single readable lib is unchanged (it wins trivially); when
+    # NO devices resolved, n_defines is 0 for all libs and the ranking degrades
+    # to the historical section-count pick. Structural, no vendor/SKU literal.
     readable = [l for l in libs if l not in unread]
+    resolved_dev_names = {v for v in device_map.values()}
+
+    def _primary_rank(lib: str) -> Tuple[int, int]:
+        defined = set(per_lib_subckts.get(lib, {}))
+        n_defines = len(resolved_dev_names & defined)
+        n_sections = len(per_lib_sections.get(lib, []))
+        return (n_defines, n_sections)
+
     primary = None
     if readable:
-        primary = max(readable, key=lambda l: len(per_lib_sections.get(l, [])))
+        primary = max(readable, key=_primary_rank)
     sections = per_lib_sections.get(primary, []) if primary else []
     # union sections across libs is what's "available"; primary drives the deck.
     all_sections: List[str] = []
