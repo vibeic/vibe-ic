@@ -115,6 +115,84 @@ def parse_states(text: str) -> List[str]:
 _NEXT_VAR_HINTS = ("next_state", "state_next", "nstate", "n_state",
                    "next_st", "ns")
 
+# ORGANIC #153 — a REAL assignment operator, never a comparison. The nonblocking
+# `<=` is matched intact; the blocking `=` must NOT be part of `==` / `!=` / `<=`
+# / `>=` (`(?<![<>=!])=(?!=)`). Anchoring here stops an `if (x == K)` header from
+# being read as an assignment `x = …` whose RHS then scans across the statement
+# boundary into the guarded body and credits `x` (often an INPUT PORT) with a
+# bogus next-state vote.
+_ASSIGN_OP = r"(?:<=|(?<![<>=!])=(?!=))"
+_ASSIGN_LHS_OP_RE = re.compile(r"\b([A-Za-z_]\w*)\s*" + _ASSIGN_OP)
+
+
+def _iter_assignments(text: str):
+    """Yield (lhs, rhs) for each REAL blocking/nonblocking assignment in `text`.
+    Excludes ==/!=/>=/<=-as-comparison (via _ASSIGN_OP) AND terminates the RHS at
+    the first ';', an UNBALANCED ')' (the close of an enclosing `if (…)`
+    condition), or a block keyword — so a mis-anchored match can never scan across
+    a statement boundary into the guarded body (ORGANIC #153 defects 1+2)."""
+    n = len(text)
+    for m in _ASSIGN_LHS_OP_RE.finditer(text):
+        lhs = m.group(1)
+        j = m.end()
+        depth = 0
+        buf: List[str] = []
+        while j < n:
+            c = text[j]
+            if c == ";":
+                break
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                if depth == 0:
+                    break                     # unbalanced close → end of RHS
+                depth -= 1
+            buf.append(c)
+            j += 1
+        rhs = re.split(r"\b(?:begin|end|if|else|case|endcase)\b",
+                       "".join(buf), 1)[0]
+        yield lhs, rhs
+
+
+# module INPUT PORTS — read-only, never assigned as a bare LHS, so they can never
+# be a next-state register. Excluded from next-state candidates (ORGANIC #153).
+# The comma-continuation stops before the next direction/type keyword so an ANSI
+# `input a, input [7:0] b` list does not swallow the following `input` token (nor
+# drop `b`); a non-ANSI `input a, b, c;` list is captured in full.
+_INPUT_PORT_RE = re.compile(
+    r"\binput\b\s+(?:(?:wire|reg|logic|signed|unsigned)\b\s*)*"
+    r"(?:\[[^\]]*\]\s*)?"
+    r"([A-Za-z_]\w*)"
+    r"((?:\s*,\s*(?!(?:input|output|inout|wire|reg|logic|signed|unsigned)\b)"
+    r"[A-Za-z_]\w*)*)", re.IGNORECASE)
+
+
+def _module_input_ports(text: str) -> set:
+    """Names declared as module INPUT ports (ANSI header or non-ANSI body)."""
+    ports = set()
+    for m in _INPUT_PORT_RE.finditer(text):
+        ports.add(m.group(1))
+        for name in re.findall(r"[A-Za-z_]\w*", m.group(2) or ""):
+            ports.add(name)
+    return ports
+
+
+def _case_enclosing_always_is_clocked(body: str, selector: str) -> bool:
+    """True when the `case (selector)` sits inside a CLOCKED always block
+    (`@(posedge …)` / `@(negedge …)`). In a clocked block a non-assigning arm
+    HOLDS the state register (a legal self-loop) — NOT a combinational latch — so
+    the inferred-latch rule must not fire (ORGANIC #153 robustness). Fail-SAFE:
+    when the enclosing block cannot be identified, returns False (keep flagging so
+    a genuine combinational latch is never masked)."""
+    m = re.search(r"\bcase\s*\(\s*" + re.escape(selector), body)
+    if not m:
+        return False
+    aidx = body.rfind("always", 0, m.start())
+    if aidx == -1:
+        return False
+    header = body[aidx:m.start()]
+    return re.search(r"@\s*\([^)]*\b(?:posedge|negedge)\b", header) is not None
+
 
 def _find_case_block(body: str) -> Optional[Tuple[str, str]]:
     """Return (case_selector, case_body) for the FIRST `case (...) ... endcase`
@@ -132,12 +210,18 @@ def _find_case_block(body: str) -> Optional[Tuple[str, str]]:
     return (selector, m.group(2))
 
 
-def _next_var_in(body: str, states: List[str]) -> Optional[str]:
+def _next_var_in(body: str, states: List[str],
+                 input_ports: Optional[set] = None) -> Optional[str]:
     """Pick the next-state variable: the LHS (blocking or non-blocking) most
-    often assigned a declared STATE name as its RHS inside the body."""
+    often assigned a declared STATE name as its RHS inside the body. Uses the
+    ORGANIC #153 safe assignment iterator (no ==-misparse) and excludes module
+    INPUT PORTS (never a next-state register)."""
     counts = {}
     state_set = set(states)
-    for lhs, rhs in re.findall(r"\b([A-Za-z_]\w*)\s*(?:<=|=)\s*([^;]+);", body):
+    ports = input_ports or set()
+    for lhs, rhs in _iter_assignments(body):
+        if lhs in ports:
+            continue
         rhs_ids = set(re.findall(r"\b([A-Za-z_]\w*)\b", rhs))
         if rhs_ids & state_set:
             counts[lhs] = counts.get(lhs, 0) + 1
@@ -261,6 +345,11 @@ def check_text(text: str) -> Tuple[List[Finding], str]:
     # (so a genuine latch whose transitions target such a state is still caught),
     # while EXCLUDING a parameter, which only ever appears inside an index/width
     # expression (`[k*WIDTH +: WIDTH]`) — never as a bare assigned value.
+    # ORGANIC #153 — exclude module INPUT PORTS from next-state candidates: an
+    # input is read-only, never assigned as a bare LHS, so it can never be a
+    # next-state register. (Compounded the ==-misparse: a compared input port
+    # picked up a bogus vote and won an order-dependent max() tie.)
+    input_ports = _module_input_ports(body)
     state_val_set = set(item_states)
     for m in re.finditer(r"(?:<=|=)\s*([A-Za-z_]\w*)\s*;", case_body):
         if m.group(1) in declared:
@@ -270,8 +359,9 @@ def check_text(text: str) -> Tuple[List[Finding], str]:
             if g in declared:
                 state_val_set.add(g)
     for s in item_states:
-        for lhs, rhs in re.findall(
-                r"\b([A-Za-z_]\w*)\s*(?:<=|=)\s*([^;]+);", arm_bodies.get(s, "")):
+        for lhs, rhs in _iter_assignments(arm_bodies.get(s, "")):
+            if lhs in input_ports:
+                continue                      # an input port is never a next-state reg
             if set(re.findall(r"\b\w+\b", rhs)) & state_val_set:
                 counts[lhs] = counts.get(lhs, 0) + 1
     if counts:
@@ -280,19 +370,31 @@ def check_text(text: str) -> Tuple[List[Finding], str]:
                 next_var = lhs
                 break
         if next_var is None:
-            next_var = max(counts, key=counts.get)
+            # ORGANIC #153 — on a vote TIE, prefer the case SELECTOR identifier:
+            # by construction `case (state)` votes on the FSM state variable, so
+            # the selector is the correct next_var. `max()` alone returns the
+            # first-inserted key on a tie (order-dependent — the original bug).
+            top = max(counts.values())
+            tied = [v for v in counts if counts[v] == top]
+            sel_id = selector.strip()
+            if len(tied) > 1 and sel_id in tied:
+                next_var = sel_id
+            else:
+                next_var = max(counts, key=counts.get)
     else:
         # no arm assigns a state constant — selector might BE the next-state
         # (clocked case `state <= ...` with state names only in selector). Bail
         # rather than guess.
         return ([], "SKIP-no-next-state-assignment")
 
-    # pre-assignment of next_var before the case (default-assign idiom).
+    # pre-assignment of next_var before the case (default-assign idiom). Use the
+    # #153 assignment operator so an `if (next_var == K)` comparison in the pre
+    # region is NOT misread as a pre-assign (which would mask a real latch).
     pre = body[:body.find("case")] if "case" in body else ""
     pre_assigns = re.search(
-        rf"\b{re.escape(next_var)}\s*(?:<=|=)\s*[^;]+;", pre) is not None
+        rf"\b{re.escape(next_var)}\s*{_ASSIGN_OP}", pre) is not None
     default_assigns = bool(re.search(
-        rf"\b{re.escape(next_var)}\s*(?:<=|=)", default_body)) if has_default \
+        rf"\b{re.escape(next_var)}\s*{_ASSIGN_OP}", default_body)) if has_default \
         else False
 
     findings: List[Finding] = []
@@ -307,10 +409,16 @@ def check_text(text: str) -> Tuple[List[Finding], str]:
     # fires ~19% on known-good designs) are NOT structurally separable from a
     # correct design without the spec's intended transition table; they stay a
     # self-TB / judgment responsibility and are DELIBERATELY not flagged here.
-    if not pre_assigns and not default_assigns:
+    # ORGANIC #153 (robustness) — the inferred-latch rule applies to a
+    # COMBINATIONAL next-state block only. In a CLOCKED block (`@(posedge …)`) a
+    # non-assigning arm HOLDS the state register — a legal self-loop, a flop, not
+    # a latch — so it must not be flagged. A genuine latch is combinational and
+    # is still caught (fail-safe: when the block can't be classified, we flag).
+    clocked = _case_enclosing_always_is_clocked(body, selector)
+    if not pre_assigns and not default_assigns and not clocked:
         for s in item_states:
             arm = arm_bodies.get(s, "")
-            if not re.search(rf"\b{re.escape(next_var)}\s*(?:<=|=)", arm):
+            if not re.search(rf"\b{re.escape(next_var)}\s*{_ASSIGN_OP}", arm):
                 findings.append(Finding(
                     "fsm-inferred-latch", "ERROR", s,
                     f"state {s!r}'s arm does not assign {next_var!r}, the case "
