@@ -17138,6 +17138,34 @@ def main() -> int:
     # summary so flow_compliance_check sees the waivers.)
     _autogen_waivers_json(project, plan)
 
+    # #146 blocker-1 — MATERIALIZE the flow's MACHINERY-SANCTIONED in-memory
+    # ENV_UNAVAILABLE auto-waivers (pdk-substitution / fpga-board cap-gap) into
+    # waivers.json so the strict audit's required-artifact slot is populated by a
+    # real, schema-valid, review-required FILE — WITHOUT self-approval and
+    # WITHOUT promoting any human-judgment (template) waiver. Merges into the
+    # auto-file `_autogen_waivers_json` may have just written; never clobbers a
+    # human file; writes NOTHING when no sanctioned tier is disclosed (absence
+    # stays an honest MISSING). Runs BEFORE the final summary so the audit sees it.
+    try:
+        import waivers_materialize as _wm
+        _wm.materialize(project)
+    except Exception as _wm_exc:  # best-effort; never crash finalize
+        print(f"[WARN] waivers_materialize non-fatal: {_wm_exc}", file=sys.stderr)
+
+    # #146 blocker-3 — COLLECT external-storage outputs into the project tree
+    # before the audit: any LIVE artifact a canonical report cites at a volatile
+    # /tmp path is copied in-tree (top-level collected_external/) and its
+    # reference rewritten to the project-relative path, so
+    # project_outputs_in_tree_check does not FAIL a run whose deliverables merely
+    # sit in EDA scratch. A DANGLING reference is left untouched (still FAILs —
+    # a genuinely-lost deliverable is never masked). Runs BEFORE the final summary.
+    try:
+        import collect_external_outputs as _ceo
+        _ceo.collect(project)
+    except Exception as _ceo_exc:  # best-effort; never crash finalize
+        print(f"[WARN] collect_external_outputs non-fatal: {_ceo_exc}",
+              file=sys.stderr)
+
     # v1.6.32: emit canonical final_summary.md (best-effort). This runs
     # flow_compliance_check, which refreshes
     # reports/audit/phase23_completion_audit.json — the audit the
