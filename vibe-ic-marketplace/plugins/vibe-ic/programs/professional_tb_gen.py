@@ -202,10 +202,23 @@ def classify_dut(project: Path, ic_class: str
         return bool(p.get("is_parametric")) or w is None or (
             isinstance(w, int) and w > 1)
 
-    serial_ins = [p for p in ins if _is_serial(p)]
+    # #140 — a memory-mapped / command-driven register interface (address bus +
+    # write/read-data or cs/we) is NOT a serial arithmetic datapath. Route it to
+    # the generic dual-track reference hook so a register-file interface is never
+    # mis-read as an (x*y) serial-multiply DUT.
+    if _is_register_mapped(ins, outs):
+        return ({"kind": "generic", "top": top, "cr": cr, "ports": ports,
+                 "width": width}, None)
+
+    # #140 width/role sanity: a 1-bit CONTROL/STATUS line (cs/we/error/irq/...)
+    # carries no streamed data bits, so it is NEVER a serial data operand or a
+    # serial product. Exclude it from the serial candidate sets.
+    serial_ins = [p for p in ins
+                  if _is_serial(p) and not _is_ctrl_status(p["name"])]
     parallel_ins = [p for p in ins if _is_parallel(p)]
-    serial_outs = [p for p in outs if _is_serial(p)]
-    op = _detect_stream_operator(project)
+    serial_outs = [p for p in outs
+                   if _is_serial(p) and not _is_ctrl_status(p["name"])]
+    op = _detect_stream_operator(project, ic_class)
     if (len(parallel_ins) >= 1 and len(serial_ins) >= 1
             and len(serial_outs) >= 1 and op):
         return ({"kind": "serial_stream", "top": top, "cr": cr,
@@ -218,13 +231,104 @@ def classify_dut(project: Path, ic_class: str
              "width": width}, None)
 
 
-def _detect_stream_operator(project: Path) -> Optional[str]:
+# ── #140: register-map / control-status structural guards (chip-AGNOSTIC) ────
+def _name_comps(name: str) -> set:
+    """Whole-word components of a port name (split on _/digits/non-word)."""
+    return {c for c in re.split(r"[_\W0-9]+", name.lower()) if c}
+
+
+# Control / handshake / status lexicon — a 1-bit port whose name reads as one of
+# these lines is a control/status signal, never a serial DATA operand.
+_CTRL_STATUS_TOKENS = frozenset({
+    # control inputs
+    "cs", "csb", "csn", "ncs", "we", "wen", "web", "oe", "oen", "ce", "cen",
+    "en", "enable", "start", "go", "req", "request", "stb", "strobe", "sel",
+    "select", "wr", "rd", "rw", "wnr", "load", "clear", "clr", "flush",
+    "valid", "vld", "ready", "rdy", "ack", "hold", "keep",
+    # status outputs
+    "error", "err", "fault", "irq", "int", "intr", "done", "busy", "empty",
+    "full", "overflow", "underflow", "ovf", "unf", "alert", "warn", "nak",
+})
+
+# ic_class families that are register-mapped / command-driven / protocol / crypto
+# — never a serial arithmetic datapath, so the stream-operator must not fire.
+_NON_DATAPATH_CLASSES = frozenset({
+    "crypto_accelerator", "bus_peripheral", "digital_cmd_driven",
+    "processor_cpu", "bus_interconnect_protocol", "serial_peripheral_protocol",
+    "mixed_signal_otp", "aid_class_half_duplex_single_wire",
+})
+
+
+def _is_ctrl_status(name: str) -> bool:
+    """True iff a port name reads as a control/handshake/status line — never a
+    serial data operand. Component-aware so `cs_n`, `wr_en`, `parity_err`,
+    `data_valid` match while a bare data bus (`din`, `mosi`, `y`) does not."""
+    return bool(_name_comps(name) & _CTRL_STATUS_TOKENS)
+
+
+def _sig_has(ports: List[dict], *tokens: str) -> bool:
+    toks = set(tokens)
+    return any(_name_comps(p["name"]) & toks for p in ports)
+
+
+def _sig_has_pair(ports: List[dict], a: str, b: str) -> bool:
+    return any({a, b} <= _name_comps(p["name"]) for p in ports)
+
+
+def _is_register_mapped(ins: List[dict], outs: List[dict]) -> bool:
+    """Memory-mapped / command-driven register-file signature: an address bus
+    PLUS EITHER a write-data/read-data bus pair OR chip-select + write-enable
+    control. Such an interface is a register peripheral, not a serial arithmetic
+    datapath (#140). chip-AGNOSTIC / name-based — no chip or vendor literal."""
+    allp = ins + outs
+    has_addr = _sig_has(allp, "addr", "address", "paddr", "haddr",
+                        "awaddr", "araddr")
+    if not has_addr:
+        return False
+    has_wdata = (_sig_has(ins, "wdata", "writedata")
+                 or _sig_has_pair(ins, "write", "data"))
+    has_rdata = (_sig_has(outs, "rdata", "readdata")
+                 or _sig_has_pair(outs, "read", "data"))
+    has_cs = _sig_has(ins, "cs", "csb", "csn", "ncs", "chipselect")
+    has_we = (_sig_has(ins, "we", "wen", "web", "wr")
+              or _sig_has_pair(ins, "write", "enable")
+              or _sig_has_pair(ins, "write", "en"))
+    return (has_wdata and has_rdata) or (has_cs and has_we)
+
+
+def _detect_stream_operator(project: Path,
+                            ic_class: Optional[str] = None) -> Optional[str]:
     """Operator for a serial datapath from L2/L3 prose (multiply is by far the
-    common serial primitive). Returns a python-eval operator token or None."""
+    common serial primitive). Returns a python-eval operator token or None.
+
+    §4.05 GENERAL (#140): fires only on genuine arithmetic-datapath evidence — an
+    explicit `x*y` / `p = x` datapath equation, a real multiplier / multiply
+    (-accumulate) noun-verb (NOT `multiplexer`), or a partial-product term. Bare
+    metadata / crypto tokens are EXCLUDED: `product` false-fires on `product_name`
+    / `product_family` / "Product & Tapeout Metadata" (L1 metadata), and `mac`
+    false-fires on a crypto Message-Authentication-Code — neither is arithmetic.
+    Also never fires for a register-mapped / command-driven / crypto ic_class."""
+    if ic_class and str(ic_class).strip().lower() in _NON_DATAPATH_CLASSES:
+        return None
     txt = _aog._doc_text(project).lower()
-    if re.search(r"\bmultipl|\bproduct\b|\bmac\b|\bx\s*\*\s*y\b|\bp\s*=\s*x", txt):
+    if _STREAM_MUL_RE.search(txt):
         return "*"
     return None
+
+
+# Genuine arithmetic-datapath evidence (see _detect_stream_operator). The
+# `\bmultipl(y|ies|ied|ying)` / `\bmultiplic(and|ation|...)` / `\bmultiplier`
+# stems all require a char that `multiplexer` ("multipl"+"e") never has, so a
+# clock/data multiplexer never false-fires as a multiply datapath.
+_STREAM_MUL_RE = re.compile(
+    r"\bx\s*[\*×]\s*y\b"                     # x*y datapath equation
+    r"|\by\s*[\*×]\s*x\b"
+    r"|\bp\s*=\s*x\b"                             # p = x ...  serial product
+    r"|\bpartial\s+products?\b"                   # multiplier micro-arch term
+    r"|\bmultiplic(?:and|ation|ations|ative)\b"
+    r"|\bmultiplier\b|\bmultipliers\b"
+    r"|\bmultipl(?:y|ies|ied|ying)(?:[\s\-‑]*accumulate)?\b",
+    re.IGNORECASE)
 
 
 # --------------------------------------------------------------------------

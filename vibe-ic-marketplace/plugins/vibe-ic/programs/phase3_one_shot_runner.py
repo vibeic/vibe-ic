@@ -11860,6 +11860,47 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         except Exception as _sdfsim_exc:
             notes.append(f"sdf_gate_sim non-fatal: {_sdfsim_exc}")
 
+    # --- Step DT1 — transition-delay-fault (LOC) coverage PRODUCER --------
+    # #146 blocker-2 — DT1/DT2 producer PARITY. The Step-11 scan cut
+    # (cut_netlist.v) is only born by the time phase3 runs (the phase2 DT1
+    # producer's precondition is not yet met when it fires), so — exactly like
+    # the DT2 path-delay producer below — the DT1 transition producer must ALSO
+    # fire from phase3 once cut_netlist.v exists. Without this, DT1's gate
+    # (transition_coverage_check) hard-FAILs on a permanently-absent
+    # transition_coverage.json. Best-effort + NONFATAL; the flow's DT1 gate only
+    # VALIDATES the produced report (independent detected/redundant/aborted
+    # recount). Placed BEFORE DT2 so DT3 (needs BOTH coverage files) can fire.
+    _dt1_json = project / "reports/phase2/dft/transition_coverage.json"
+    _dt1_cut = project / "phase2/stage2/dft/cut_netlist.v"
+    if not _dt1_json.is_file() and _dt1_cut.is_file():
+        _dt1_clk = None
+        _dt1_sdc = project / "phase3/stage3/pnr/constraint.sdc"
+        if _dt1_sdc.is_file():
+            _m1 = re.search(
+                r"create_clock[^\n]*?(?:-name\s+(\w+)|get_ports\s*\{?\s*(\w+))",
+                _dt1_sdc.read_text(errors="replace"))
+            if _m1:
+                _dt1_clk = _m1.group(1) or _m1.group(2)
+        if _dt1_clk:
+            try:
+                _dt1_cmd = [sys.executable,
+                            str(PROGRAMS_DIR / "transition_fault_atpg_run.py"),
+                            str(project), "--clock", _dt1_clk,
+                            "--max-faults", "400", "--json", str(_dt1_json)]
+                _dt1_pdk_in = project / "input" / "pdk"
+                if _dt1_pdk_in.is_dir():
+                    _dt1_cmd += ["--pdk-dir", str(_dt1_pdk_in.resolve())]
+                _dt1_json.parent.mkdir(parents=True, exist_ok=True)
+                subprocess.run(_dt1_cmd, capture_output=True, text=True,
+                               timeout=2400)
+                if _dt1_json.is_file():
+                    written.append(str(_dt1_json))
+            except Exception as _dt1_exc:
+                notes.append(f"transition_fault_atpg non-fatal: {_dt1_exc}")
+        else:
+            notes.append("transition_fault_atpg skipped: no create_clock "
+                         "name found in the routed SDC")
+
     # --- Step DT2 — path-delay-fault (at-speed, timing-graded) ATPG ------
     # The post-route timing model (routed netlist + SPEF) is born HERE, so
     # the DT2 PRODUCER fires from phase3 (the scan cut + flat core come from
