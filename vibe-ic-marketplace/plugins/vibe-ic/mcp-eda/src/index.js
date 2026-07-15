@@ -67,6 +67,7 @@ import {
 // SECONDARY PnR path emits its own OpenROAD Tcl and previously lacked this loop;
 // this closes that parity gap so both PnR paths behave identically.
 import { antennaRepairTcl } from "./lib/pnr_antenna.mjs";
+import { layoutHasGeometry } from "./lib/analog_layout_geometry.mjs";
 
 function _shellSingleQuotedHeredoc(content, sentinel) {
   // Run `<content>` through a `cat << 'SENTINEL' > target` block. The
@@ -5725,14 +5726,17 @@ ${signals.map((s, i) => `set_property port_width 1 [get_debug_ports u_ila_0/prob
 // ─── eda_analog_layout ───
 server.tool(
   "eda_analog_layout",
-  "Run Magic analog layout with matching/guard-ring constraints. Reads a SPICE netlist, "
-  + "places transistors with common-centroid / interdigitated matching directives, adds "
-  + "guard rings for substrate isolation, and exports GDS + LEF + extracted netlist. "
-  + "Supports GF180 and SKY130 analog devices (nfet/pfet). v0.108: analog hardmacro pipeline.",
+  "Run Magic on a sized SPICE netlist and stream GDS + LEF + extracted netlist. "
+  + "The matching / common-centroid / guard-ring directives are recorded but NOT yet "
+  + "auto-placed (that needs a real PCell/paint/place+route pass). ORGANIC #144: the tool "
+  + "inspects the streamed geometry and returns status DONE only when real placed geometry "
+  + "exists; if the netlist merely loaded and nothing was placed it returns status SCAFFOLD "
+  + "(never a fake success). Supports GF180 / SKY130 / IHP-SG13G2 analog devices. "
+  + "v0.108: analog hardmacro pipeline.",
   {
     spice_netlist: z.string().describe("Path to SPICE netlist (.sp) with sized transistors"),
     block_name: z.string().describe("Analog block name (e.g. 'bandgap', 'ldo')"),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180").describe("Target PDK"),
+    pdk: z.enum(["gf180", "sky130", "sg13g2", "ihp", "custom"]).default("gf180").describe("Target PDK (native tech resolved family-agnostically)"),
     output_dir: z.string().describe("Output directory for GDS, LEF, extracted netlist"),
     matching_pairs: z.array(z.array(z.string()).min(2).max(2)).default([]).describe(
       "Pairs of instance names that must be matched (common-centroid), e.g. [['M1','M2'],['M3','M4']]"
@@ -5758,9 +5762,16 @@ server.tool(
     }
     fs.mkdirSync(output_dir, { recursive: true });
 
+    // Native tech resolution is family-agnostic: each installed PDK exposes
+    // its magicrc at `<PDK_ROOT>/<tech>/libs.tech/magic/<tech>.magicrc` and its
+    // netgen setup at `<tech>_setup.tcl`. ORGANIC-headline: IHP SG13G2 ships
+    // in the container (libs.tech/{magic,klayout,netgen}), so A5/A6 tech files
+    // resolve natively — no substitution.
     const pdkMap = {
       gf180: { tech: "gf180mcuD", magicrc: `${PDK_ROOT}/gf180mcuD/libs.tech/magic/gf180mcuD.magicrc` },
       sky130: { tech: "sky130A", magicrc: `${PDK_ROOT}/sky130A/libs.tech/magic/sky130A.magicrc` },
+      sg13g2: { tech: "ihp-sg13g2", magicrc: `${PDK_ROOT}/ihp-sg13g2/libs.tech/magic/ihp-sg13g2.magicrc` },
+      ihp: { tech: "ihp-sg13g2", magicrc: `${PDK_ROOT}/ihp-sg13g2/libs.tech/magic/ihp-sg13g2.magicrc` },
       custom: { tech: "custom", magicrc: custom_pdk_path || "" },
     };
     const pdkInfo = pdkMap[pdk];
@@ -5811,12 +5822,14 @@ puts "DONE: analog layout complete for ${block_name}"
     let stderr = mres.success ? "" : (mres.error || "");
     let exitCode = mres.success ? 0 : (mres.exitCode || 1);
 
+    const gdsOut = path.join(output_dir, `${block_name}.gds`);
+    const magOut = path.join(output_dir, `${block_name}.mag`);
     const result = {
       block_name,
       pdk,
       tcl_script: tclPath,
       outputs: {
-        gds: path.join(output_dir, `${block_name}.gds`),
+        gds: gdsOut,
         lef: path.join(output_dir, `${block_name}.lef`),
         extracted_netlist: path.join(output_dir, `${block_name}_extracted.sp`),
       },
@@ -5827,7 +5840,27 @@ puts "DONE: analog layout complete for ${block_name}"
       stderr_tail: stderr.slice(-2000),
     };
 
-    if (drc_check && exitCode === 0) {
+    // ORGANIC #144 — geometry-emptiness honesty. The TCL above is
+    // `readspice`+`gds write` with the matching / guard-ring directives
+    // emitted only as `puts INFO` comments — it loads the device hierarchy
+    // but PLACES nothing. Inspect the streamed GDS/.mag: if it carries no
+    // real placed geometry, this is a SCAFFOLD, not a placed layout — never
+    // report a fake DONE/success. `readspice` alone does not constitute
+    // placement, so the empty stream must not be treated as a real layout.
+    const geom = layoutHasGeometry({ gdsPath: gdsOut, magPath: magOut });
+    result.placement = {
+      status: geom.status,               // "DONE" (real geometry) | "SCAFFOLD"
+      has_geometry: geom.hasGeometry,
+      gds_geometry_records: geom.gdsRecords,
+      mag_geometry_lines: geom.magLines,
+      detail: geom.detail,
+    };
+    // DRC/LVS may only claim a verdict when magic ran AND real geometry
+    // exists — running DRC/LVS against an empty cell would falsely report
+    // "0 errors" / "match" on nothing placed.
+    const layoutOk = exitCode === 0 && geom.hasGeometry;
+
+    if (drc_check && layoutOk) {
       const drcCmd = `cd ${output_dir} && magic -dnull -noconsole -T ${pdkInfo.magicrc} -c 'load ${block_name}; drc check; drc count; quit'`;
       const drcRes = dockerExec(drcCmd, 120000);
       if (drcRes.success) {
@@ -5839,7 +5872,7 @@ puts "DONE: analog layout complete for ${block_name}"
       }
     }
 
-    if (lvs_check && exitCode === 0) {
+    if (lvs_check && layoutOk) {
       const lvsCmd = `cd ${output_dir} && netgen -batch lvs '${block_name}_extracted.sp ${block_name}' '${spice_netlist} ${block_name}' ${pdkInfo.tech}_setup.tcl ${block_name}_lvs.log`;
       const lvsRes = dockerExec(lvsCmd, 120000);
       if (lvsRes.success) {
@@ -5860,8 +5893,28 @@ puts "DONE: analog layout complete for ${block_name}"
       }
     }
 
-    result.success = exitCode === 0;
-    writeManifest(output_dir, { step: "eda_analog_layout", status: exitCode === 0 ? "PASS" : "FAIL", block: block_name, pdk });
+    // ORGANIC #144 — the tool succeeds ONLY when magic ran AND real geometry
+    // was placed. An empty stream (netlist loaded, nothing placed) is a
+    // SCAFFOLD, reported honestly — never a fake DONE. The manifest records
+    // SCAFFOLD (not PASS) so downstream gates and human review see the truth.
+    if (exitCode !== 0) {
+      result.status = "FAIL";
+      result.success = false;
+      result.message = `magic exited ${exitCode} — layout did not run.`;
+    } else if (!geom.hasGeometry) {
+      result.status = "SCAFFOLD";
+      result.success = false;
+      result.message =
+        `SCAFFOLD: ${geom.detail} The generated Magic TCL is ` +
+        `readspice + gds write with matching/guard-ring emitted only as ` +
+        `INFO comments; it does not place devices. Use a real auto-layout ` +
+        `pass (PCell/paint/place + guard-ring + route) before A5 sign-off.`;
+    } else {
+      result.status = "DONE";
+      result.success = true;
+      result.message = `DONE: analog layout complete for ${block_name} — ${geom.detail}`;
+    }
+    writeManifest(output_dir, { step: "eda_analog_layout", status: result.status, block: block_name, pdk });
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
 );
