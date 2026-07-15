@@ -393,7 +393,16 @@ def _ensure_cut(project: Path, netlist_rel: str, cut_rel: str, clock: str,
     Returns (ok, message)."""
     cut_abs = project / cut_rel
     if cut_abs.exists() and cut_abs.stat().st_size > 0:
-        return True, f"reused existing cut netlist: {cut_rel}"
+        # Only reuse a REAL full-scan cut — one with NO residual flop cells (a
+        # cut turns every flop into a pseudo-PI/PO pair). A stale/bogus file that
+        # still instantiates flops (e.g. a prior run cut with the wrong --dff
+        # seed, so `fault cut` cut nothing) is NOT a cut; regenerate it, else
+        # parse_cut_ports finds 0 pairs → a FALSE NOT_APPLICABLE on a sequential
+        # design (which the coverage gate would silently pass — gaming).
+        if not _far.detect_dff_cells(cut_abs.read_text(errors="replace")):
+            return True, f"reused existing cut netlist: {cut_rel}"
+        print(f"{_PROGRAM}: existing {cut_rel} still has flop cells → not a real "
+              f"cut, regenerating", file=sys.stderr)
     # Auto-detect the flop cells from the mapped netlist (union with any seed).
     try:
         ntext = (project / netlist_rel).read_text(errors="replace")
@@ -463,6 +472,63 @@ def _resolve_liberty_mount(project: Path, liberty: str):
     except ValueError:
         # resolves outside the project (symlinked PDK) — bind-mount its dir
         return "/libmnt/" + real.name, (str(real.parent), "/libmnt")
+
+
+def _resolve_design_liberty(project: Path, explicit: "str | None") -> str:
+    """Chip/PDK-AGNOSTIC std-cell Liberty resolution for the at-speed ATPG
+    producers (TDF/PDF). The gate-levelise step needs ANY std-cell Liberty read
+    AS LOGIC; the prior code globbed ONLY `input/pdk/liberty/*typ*.lib` and, when
+    that project-relative tree was absent (the mainstream sky130 flow, whose
+    Liberty is container-baked and recorded per-project, not shipped in-tree),
+    fell through to a NON-EXISTENT `input/pdk/liberty/typ.lib` — so gate-levelise
+    read a missing file and the producer errored (a false FAIL, not a real
+    coverage miss). Resolution order:
+      1. explicit --liberty (caller override, e.g. commercial PDK);
+      2. the project's OWN PDK glob input/pdk/liberty/*typ*.lib (kept FIRST so a
+         shipped Liberty always wins);
+      3. the Liberty the FLOW ITSELF used, recorded per-project in
+         phase2/stage2/constraints/pvt_matrix.json (its primary corner) — a
+         gf180 project records its gf180 path there, sky130 records sky130, so
+         this stays PDK-agnostic;
+      4. the shared OSS container default (lec_run.DEFAULT_LIBERTY) that
+         synth/PnR/STA/LEC already use flow-wide — a single source of truth.
+    Returns a path string (container-absolute /foss… used as-is, or a project-
+    relative path); `_resolve_liberty_mount` handles either. No chip literal."""
+    if explicit:
+        return explicit
+    hits = sorted(project.glob("input/pdk/liberty/*typ*.lib"))
+    if hits:
+        return str(hits[0].relative_to(project))
+    pvt = project / "phase2" / "stage2" / "constraints" / "pvt_matrix.json"
+    if pvt.is_file():
+        try:
+            d = json.loads(pvt.read_text(errors="ignore"))
+            corners = d.get("corners") or []
+            primary = str(d.get("primary_corner") or "").strip().lower()
+
+            def _lib_of(c):
+                return c.get("liberty") if isinstance(c, dict) else None
+            # primary corner by label (e.g. "TT"), else a tt/typ corner, else any
+            pick = next((c for c in corners if _lib_of(c)
+                         and str(c.get("label", "")).strip().lower() == primary),
+                        None)
+            if pick is None:
+                pick = next((c for c in corners if _lib_of(c)
+                             and ("tt" in Path(_lib_of(c)).name.lower()
+                                  or "typ" in Path(_lib_of(c)).name.lower())),
+                            None)
+            if pick is None:
+                pick = next((c for c in corners if _lib_of(c)), None)
+            if pick and _lib_of(pick):
+                return str(_lib_of(pick))
+        except (ValueError, OSError):
+            pass
+    try:
+        import lec_run  # type: ignore
+    except Exception:  # pragma: no cover - path fallback
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import lec_run  # type: ignore
+    return lec_run.DEFAULT_LIBERTY
 
 
 def _build_batch_script(flat_rel: str, miter_rel: str, top: str,
@@ -583,7 +649,23 @@ def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
     # NOT_APPLICABLE: a purely combinational design (no cut flops) has no
     # launch mechanism → transition-fault ATPG under LOC does not apply. This
     # is an honest N/A (never a fake pass), self-skipping per the flow gate.
+    # ANTI-GAMING GUARD: only a GENUINELY combinational design may self-N/A. If
+    # the SOURCE netlist has sequential cells yet the cut exposed 0 pairs, the
+    # cut did not actually run (wrong --dff seed / stale bogus cut) — that is a
+    # real capability gap, reported as an honest ERROR, NEVER a false N/A that
+    # the coverage gate would silently pass.
     if not pairs:
+        src_has_flops = bool(_far.detect_dff_cells(
+            (project / netlist_rel).read_text(errors="replace")))
+        if src_has_flops:
+            base.update({
+                "verdict": "ERROR", "status": "ERROR", "scan_flops": 0,
+                "reasons": ["design has sequential cells but the scan cut exposed "
+                            "0 pseudo-PI/PO pairs — the cut did not run correctly "
+                            "(NOT a combinational design); refusing a false "
+                            "NOT_APPLICABLE"],
+            })
+            return 1, base
         base.update({
             "verdict": "NOT_APPLICABLE", "status": "NOT_APPLICABLE",
             "scan_flops": 0,
@@ -701,8 +783,10 @@ def main(argv: list[str] | None = None) -> int:
         args.netlist = _first_rel("phase2/stage2/synth/*_synth.v",
                                   "phase2/stage2/synth/synth.v")
     if args.liberty is None:
-        args.liberty = _first_rel("input/pdk/liberty/*typ*.lib",
-                                  "input/pdk/liberty/typ.lib")
+        # Chip/PDK-AGNOSTIC: project PDK glob → the flow's recorded corner
+        # Liberty (pvt_matrix.json) → shared OSS default. NEVER a dead relative
+        # fallback (which made gate-levelise read a missing file → false FAIL).
+        args.liberty = _resolve_design_liberty(project, None)
     if args.top is None:
         stem = Path(args.netlist).stem
         if stem.endswith("_synth"):

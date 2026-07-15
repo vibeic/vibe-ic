@@ -303,9 +303,31 @@ def _strip_login_banner(text: str) -> str:
         if not ln.lstrip().startswith("[INFO]"))
 
 
+# A Yosys pre-techmap netlist instantiates its cells as ESCAPED internal-
+# primitive identifiers (`\$_DFF_P_`, `\$_NAND_`, `\$_NOT_`, …). Detect that
+# vocabulary structurally so the gate-read recipe can switch to `-icells`
+# (which re-binds those names to real internal cells instead of aborting
+# `hierarchy -check` on an "undefined module `\$_DFF_P_'"). Anchored on the
+# backslash-escaped `\$_` prefix (tool-defined, NOT a chip/PDK literal) so it
+# never matches an RTL wire named `$foo` or a Liberty cell `sky130_fd_sc_hd__*`.
+_GENERIC_PRIM_RE = re.compile(r"\\\$_[A-Z]")
+
+
+def _netlist_uses_generic_primitives(path: str) -> bool:
+    """True iff <path> is a generic Yosys `$_`-primitive (pre-techmap) netlist —
+    i.e. it instantiates escaped internal-gate identifiers like `\\$_DFF_P_`.
+    chip/PDK-AGNOSTIC: keys only on the Yosys-defined `\\$_` prefix."""
+    try:
+        text = Path(path).read_text(errors="ignore")
+    except OSError:
+        return False
+    return bool(_GENERIC_PRIM_RE.search(text))
+
+
 def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
                        liberty: Optional[str],
-                       blackbox_v: Optional[List[str]] = None) -> str:
+                       blackbox_v: Optional[List[str]] = None,
+                       gate_is_generic: bool = False) -> str:
     """Build the Yosys RTL(gold)≡synth-netlist(gate) equiv script.
 
     v1.3.85 — APPROACH C (satgen-modelable BOTH sides). Step-13 compares an RTL
@@ -335,10 +357,23 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
     `liberty` may be None (a generic `$_`-primitive netlist needs no Liberty; it
     is already satgen-modelable). `blackbox_v` — PDK physical-only cell Verilog
     (fill/tap/decap) read `-lib` so those inert cells become empty blackboxes;
-    empty for a pre-PnR synth netlist (those cells are inserted later)."""
+    empty for a pre-PnR synth netlist (those cells are inserted later).
+
+    `gate_is_generic=True` — the gate is a pre-techmap Yosys netlist whose cells
+    are escaped internal primitives (`\\$_DFF_P_`, `\\$_NAND_`, …). Read it with
+    `read_verilog -icells` and NO Liberty: `-icells` re-binds those escaped names
+    to real internal cells so `hierarchy -check` RESOLVES them (a plain
+    `read_verilog` treats `\\$_DFF_P_` as an undefined user module and ABORTS
+    before `equiv_make` → 0 $equiv points → a false compared_points=0 FAIL). The
+    resulting `$_`-primitive gate is already satgen-modelable, so equiv proceeds
+    normally. chip/PDK-AGNOSTIC — no Liberty vocabulary is involved."""
     gold_read = " ".join(gold_files)
     bb = "".join(f"read_verilog -lib {q}\n" for q in (blackbox_v or []))
-    if liberty:
+    if gate_is_generic:
+        # Pre-techmap `$_`-primitive gate: -icells re-binds the escaped names so
+        # `hierarchy -check` resolves them (no Liberty; already satgen-modelable).
+        gate_read = f"{bb}read_verilog -icells {gate_netlist}\n"
+    elif liberty:
         # Expand Liberty cells to $_ primitives (functions + ff/latch groups),
         # skipping any cell with no function (stays blackbox → honest SAT gap).
         gate_read = (f"read_liberty -ignore_miss_func {liberty}\n"
@@ -600,7 +635,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     gate_abs = str(gate_netlist.resolve())
-    script = build_equiv_script(gold_files, gate_abs, resolved_top, liberty)
+    # A pre-techmap generic `$_`-primitive netlist must be read with `-icells`
+    # and NO Liberty, else `hierarchy -check` aborts on an undefined `\$_DFF_P_`
+    # module before any $equiv point is built (compared_points=0 false-FAIL).
+    gate_is_generic = _netlist_uses_generic_primitives(gate_abs)
+    if gate_is_generic:
+        liberty = None
+        print("[lec_run] gate is a generic $_-primitive netlist → "
+              "read_verilog -icells (no Liberty).", file=sys.stderr)
+    script = build_equiv_script(gold_files, gate_abs, resolved_top, liberty,
+                                gate_is_generic=gate_is_generic)
 
     # Write the .ys into the (bind-mounted) project reports dir so the
     # container sees it at the same absolute path (same assumption that lets

@@ -767,8 +767,10 @@ def main(argv: list[str] | None = None) -> int:
         args.netlist = _first_rel("phase2/stage2/synth/*_synth.v",
                                   "phase2/stage2/synth/synth.v")
     if args.liberty is None:
-        args.liberty = _first_rel("input/pdk/liberty/*typ*.lib",
-                                  "input/pdk/liberty/typ.lib")
+        # Chip/PDK-AGNOSTIC shared resolver (project PDK glob → the flow's
+        # recorded corner Liberty → shared OSS default); never a dead relative
+        # fallback that made gate-levelise read a missing file → false FAIL.
+        args.liberty = _tdf._resolve_design_liberty(project, None)
     if args.top is None:
         stem = Path(args.sta_netlist).stem
         if stem.endswith("_pnr"):

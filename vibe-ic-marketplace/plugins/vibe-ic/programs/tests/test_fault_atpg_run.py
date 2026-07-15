@@ -125,6 +125,59 @@ def test_detect_dff_cells_ignores_wire_decls():
     assert far.detect_dff_cells(nl) == ""
 
 
+def test_detect_dff_cells_sky130_infix(tmp_path=None):
+    # v1.4.21 REGRESSION — sky130 flops are `sky130_fd_sc_hd__dfxtp_1` (lowercase
+    # `__df` INFIX, not a DFF prefix). The auto-detect previously returned "" on
+    # sky130 → `fault cut` got the wrong seed → cut NOTHING → 64 un-cut flops →
+    # a FALSE NOT_APPLICABLE (a sequential design silently skipping TDF ATPG).
+    nl = ("  sky130_fd_sc_hd__dfxtp_1 \\creg_reg[0]  (.CLK(clk), .D(d0), .Q(q0));\n"
+          "  sky130_fd_sc_hd__dfrtp_1 \\creg_reg[1]  (.CLK(clk), .D(d1), .Q(q1));\n"
+          "  sky130_fd_sc_hd__sdfxtp_1 u2 (.CLK(clk), .D(d2), .Q(q2));\n")
+    got = far.detect_dff_cells(nl)
+    assert "sky130_fd_sc_hd__dfxtp_1" in got
+    assert "sky130_fd_sc_hd__dfrtp_1" in got
+    assert "sky130_fd_sc_hd__sdfxtp_1" in got
+
+
+def test_detect_dff_cells_gf180_infix():
+    nl = ("  gf180mcu_fd_sc_mcu7t5v0__dffq_1 u0 (.D(x), .Q(y));\n"
+          "  gf180mcu_fd_sc_mcu7t5v0__sdffq_1 u1 (.D(a), .Q(b));\n")
+    got = far.detect_dff_cells(nl)
+    assert "gf180mcu_fd_sc_mcu7t5v0__dffq_1" in got
+    assert "gf180mcu_fd_sc_mcu7t5v0__sdffq_1" in got
+
+
+def test_detect_dff_cells_infix_no_false_positive_on_non_flops():
+    # non-flop std cells that merely contain letters — buf/dly/mux/inv — must NOT
+    # be mistaken for flops (only the `__[s][e]df…` D-flop family matches).
+    # LATCHES (`__dl*`, `__lat*`) and delay (`__dly*`) never reach `df`.
+    nl = ("  sky130_fd_sc_hd__buf_1 u0 (.A(a), .X(x));\n"
+          "  sky130_fd_sc_hd__dlygate4sd3_1 u1 (.A(a), .X(x));\n"
+          "  sky130_fd_sc_hd__dlrtp_1 u2 (.RESET_B(r), .D(d), .GATE(g), .Q(q));\n"
+          "  sky130_fd_sc_hd__mux2_1 u3 (.A0(a), .A1(b), .S(s), .X(x));\n"
+          "  sky130_fd_sc_hd__inv_1 u4 (.A(a), .Y(y));\n"
+          "  gf180mcu_fd_sc_mcu7t5v0__latq_1 u5 (.D(d), .Q(q));\n")
+    assert far.detect_dff_cells(nl) == ""
+
+
+def test_detect_dff_cells_sky130_enable_flop_family(tmp_path=None):
+    # v1.4.21 STEP-2.7 REGRESSION — the ENABLE-flop (`edf*`) and scan-enable-flop
+    # (`sedf*`) families are the MOST common flop on real sky130 synth (yosys maps
+    # `$_DFFE_*` → `edfxtp`; subservient has 1024 `edfxtp_1`). Missing them left a
+    # clock-enabled sequential design with detect=="" → a FALSE NOT_APPLICABLE the
+    # coverage gate silently passed (gate-gaming). `__s?e?df` must catch them.
+    nl = ("  sky130_fd_sc_hd__edfxtp_1 \\r0  (.CLK(clk), .DE(e), .D(d0), .Q(q0));\n"
+          "  sky130_fd_sc_hd__edfxbp_1 \\r1  (.CLK(clk), .DE(e), .D(d1), .Q(q1));\n"
+          "  sky130_fd_sc_hd__sedfxtp_1 u2 (.CLK(clk), .DE(e), .D(d2), .Q(q2));\n")
+    got = far.detect_dff_cells(nl)
+    assert "sky130_fd_sc_hd__edfxtp_1" in got
+    assert "sky130_fd_sc_hd__edfxbp_1" in got
+    assert "sky130_fd_sc_hd__sedfxtp_1" in got
+    # a pure-enable-flop sequential design is NEVER classified combinational —
+    # this is the anti-gaming invariant the false-N/A guard relies on
+    assert far.detect_dff_cells(nl) != ""
+
+
 def test_merge_dff_cells_unions_seed_and_detected():
     # seed misses the real cell (DFFHQD1); union must still include it.
     assert far.merge_dff_cells("DFFRQD1,DFFSQD1", "DFFHQD1") == \
