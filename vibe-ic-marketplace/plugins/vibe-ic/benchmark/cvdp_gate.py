@@ -62,6 +62,16 @@ try:
 except Exception:  # pragma: no cover - defensive (program missing)
     _ifacev2 = None
 
+# #139(b) — file-clobber PRESERVATION reuses the detector's zero-FP module
+# definition / instantiation helpers (provided context = legal INPUT). Lazy so
+# the gate still runs if the program is absent (repair simply no-ops).
+try:
+    if str(PROGRAMS_DIR) not in sys.path:
+        sys.path.insert(0, str(PROGRAMS_DIR))
+    import file_extend_preserve_check as _fx  # type: ignore
+except Exception:  # pragma: no cover - defensive (program missing)
+    _fx = None
+
 # ORGANIC #705 — DETERMINISTIC latency-conformance gate. Imported lazily so the
 # gate still runs if the program is absent (the stage simply no-ops). This is a
 # PRE-EMIT hook that only fires for an id whose latency spec (event / output /
@@ -1836,6 +1846,18 @@ def multifile_incompleteness(completion, prompt_text, context_modules=None):
 # vendor / SKU literal.
 _V642_VARIANT_SUFFIX_RE = re.compile(r"^(cvdp_copilot_.+?)_\d{3,}$")
 
+# #139(a) — generic stop-words that must NOT become a BARE id-derived alias
+# top: a wrapper `module top(…)` / `module dut(…)` would alias to a meaningless
+# or COLLIDING name rather than the design's real top (a design that legitimately
+# names a submodule `core`/`top`/`ctrl` would get a duplicate-declaration FAIL).
+# The id-PREFIXED form `cvdp_copilot_<stem>` is always specific, so it is exempt;
+# only the bare stem / reversed-token candidates are screened. chip-AGNOSTIC.
+_GENERIC_TOP_STOPWORDS = frozenset({
+    "top", "dut", "test", "tb", "testbench", "module", "core", "wrapper",
+    "design", "unit", "block", "logic", "data", "ctrl", "control", "main",
+    "sys", "system", "chip", "ip", "rtl", "mod", "inst", "u",
+})
+
 
 def required_top_from_id(rid):
     """ORGANIC #642 — the id-derived top-module name `cvdp_copilot_<stem>` for
@@ -1892,9 +1914,85 @@ def candidate_tops_from_id(rid):
     # preserving.
     out: List[str] = []
     for c in cands:
-        if c and c not in out and re.fullmatch(r"[A-Za-z_]\w*", c):
-            out.append(c)
+        if not (c and c not in out and re.fullmatch(r"[A-Za-z_]\w*", c)):
+            continue
+        # #139(a) — the id-PREFIXED form (`cvdp_copilot_<stem>`) is always
+        # specific; a BARE stem / reversed-token candidate that is a generic
+        # stop-word (`top`/`dut`/`core`/…) is dropped — an alias wrapper named
+        # after it would be meaningless or collide with a real design submodule.
+        if c != prefixed and c.lower() in _GENERIC_TOP_STOPWORDS:
+            continue
+        out.append(c)
     return out
+
+
+def _module_block(text: str, name: str) -> Optional[str]:
+    """The raw `module <name> … endmodule` block from `text`, or None. Verilog
+    modules do not nest, so a non-greedy match over a flat file is exact."""
+    m = re.search(r"(?s)\bmodule\s+" + re.escape(name) + r"\b.*?\bendmodule\b",
+                  text or "")
+    return m.group(0) if m else None
+
+
+def preserve_dropped_context_modules(
+        emitted: str, ctx_texts: Optional[List[str]]
+) -> Tuple[str, List[str]]:
+    """#139(b) — packaging-layer file-clobber PRESERVATION (defense-in-depth over
+    the v1.4.19 author-side lesson + file_extend_preserve_check detector).
+
+    When the delivered completion DROPS a provided-context module that the
+    delivered set STILL INSTANTIATES, re-include the provided module's text so
+    the set is not self-breaking. Provided context is a LEGAL INPUT
+    (`input.context`) — preserving an input the delivery relies on is NOT answer
+    manipulation. Returns (repaired_completion, [re-included module names]).
+
+    §4.05 no-leak: (1) a provided module that NOTHING in the delivered set
+    instantiates is an intended REPLACEMENT and is NEVER re-included; (2) nothing
+    outside `ctx_texts` is ever injected; (3) a module the author redefines is
+    left as-authored. A JSON multi-file envelope is left untouched (the repair
+    targets a flat/bare emit; the detector + author-side lesson still apply)."""
+    if not emitted or not ctx_texts or _fx is None:
+        return emitted, []
+    # never touch a JSON code-dict envelope (raw append would corrupt it).
+    try:
+        if json_code_files(emitted) is not None:
+            return emitted, []
+    except Exception:
+        pass
+    # index provided context modules: name -> raw `module … endmodule` block
+    provided: Dict[str, str] = {}
+    for ctext in ctx_texts or []:
+        for name in _fx.modules_defined(ctext):
+            if name not in provided:
+                blk = _module_block(ctext, name)
+                if blk:
+                    provided[name] = blk
+    if not provided:
+        return emitted, []
+    additions: List[str] = []
+    reincluded: List[str] = []
+    changed = True
+    # bounded fixpoint: a re-included module may itself instantiate another
+    # dropped provided module (cascade). Each pass adds >=1; `provided` is finite.
+    while changed:
+        changed = False
+        current = emitted + "\n" + "\n".join(additions)
+        defined = _fx.modules_defined(current)
+        for name, blk in provided.items():
+            if name in defined or name in reincluded:
+                continue                    # author kept/redefined it — leave it
+            if not _fx.instantiates(current, name):
+                continue                    # not instantiated → intended replace
+            additions.append(blk)
+            reincluded.append(name)
+            changed = True
+    if not additions:
+        return emitted, []
+    repaired = (emitted.rstrip()
+                + "\n\n// #139(b) gate-preserved provided-context module(s) the "
+                "delivered set still instantiates: " + ", ".join(reincluded)
+                + "\n" + "\n\n".join(additions) + "\n")
+    return repaired, reincluded
 
 
 def _load_prompts(path):
@@ -3527,6 +3625,18 @@ def main(argv=None) -> int:
                     out_rec["completion"] = maybe_alias_completion_multi(
                         out_rec.get("completion"), _id_cands,
                         completion_module_names)
+                # #139(b) — packaging-layer file-clobber PRESERVATION: if the
+                # delivered completion DROPPED a provided-context module the
+                # delivered set still instantiates, re-include the provided
+                # module text (input.context = legal input). No-op for a JSON
+                # multi-file envelope or when nothing dropped-but-instantiated.
+                _ctx_texts = context_rtl.get(_rid_alias)
+                if _ctx_texts:
+                    _repaired, _reinc = preserve_dropped_context_modules(
+                        out_rec.get("completion", ""), _ctx_texts)
+                    if _reinc:
+                        out_rec["completion"] = _repaired
+                        entry["context_preserved"] = list(_reinc)
                 passed.append(out_rec)
             else:
                 blocked += 1

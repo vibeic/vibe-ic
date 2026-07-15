@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 880
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 880)
+- **Total programs (excluding helpers / shims):** 883
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 883)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 871 |
+| `any` | 874 |
 
 ## Alphabetical listing
 
@@ -72,6 +72,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_hil_three_way_verdict` | any | — | deterministic three-way HIL verdict table. |
 | `analog_hw_spice_correlation_check` | any | — | deterministic gate for HW-vs-SPICE correlation |
 | `analog_hw_tb_de10lite_budget_check` | any | — | DE10-Lite board-budget gate. |
+| `analog_interface_classify` | any | — | structural L9 top-interface classifier |
 | `analog_lef_gds_outline_check` | any | — | A8 LEF-vs-GDS outline gate. |
 | `analog_liberty_nonzero_delay_check` | any | — | deterministic Liberty non-degeneracy gate. |
 | `analog_mc_yield_run` | any | — | REAL Monte-Carlo yield execution for the |
@@ -82,6 +83,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_netlist_pdk_check` | any | — | deterministic gate for SPICE netlist PDK compliance |
 | `analog_one_shot_runner` | any | Wave 90 | A1-A9 analog flow (parallel to Phase 2 digital). |
 | `analog_oracle_compare` | any | — | deterministic analog-benchmark comparator. |
+| `analog_pdk_availability` | any | — | native PDK availability resolver / ladder |
 | `analog_per_block_pv_completeness_check` | any | Wave 93 | strict per-block deliverable |
 | `analog_pre_vs_post_layout_check` | any | — | deterministic gate for pre/post-layout comparison |
 | `analog_real_corner_sweep` | any | — | v1.6.207 (ORGANIC-20260512). |
@@ -621,6 +623,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `port_convention_corpus` | any | v0.3.18 | v0.3.18 (ORGANIC #520, Bucket C). |
 | `port_parser` | any | — | the SHARED interface-port reader for the deterministic solvers. |
 | `post_layout_sim_check` | any | — | Verify post-layout gate-level simulation with SDF back-annotation. |
+| `post_route_signoff_corner_check` | any | — | Step-23 multi-corner sign-off SLACK gate. |
 | `power_domain_crossing_check` | any | — | M2 gate (substance-verifying). |
 | `power_domain_signal_crossing_check` | any | — | M2 gate (DERIVATION engine). |
 | `power_report_check` | any | — | wrapper for eda_report_audit --mode power. |
@@ -952,7 +955,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (871 programs)
+### `any` (874 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1000,6 +1003,7 @@ _(no programs in this group)_
 - `analog_hil_three_way_verdict` — deterministic three-way HIL verdict table.
 - `analog_hw_spice_correlation_check` — deterministic gate for HW-vs-SPICE correlation
 - `analog_hw_tb_de10lite_budget_check` — DE10-Lite board-budget gate.
+- `analog_interface_classify` — structural L9 top-interface classifier
 - `analog_lef_gds_outline_check` — A8 LEF-vs-GDS outline gate.
 - `analog_liberty_nonzero_delay_check` — deterministic Liberty non-degeneracy gate.
 - `analog_mc_yield_run` — REAL Monte-Carlo yield execution for the
@@ -1010,6 +1014,7 @@ _(no programs in this group)_
 - `analog_netlist_pdk_check` — deterministic gate for SPICE netlist PDK compliance
 - `analog_one_shot_runner` — A1-A9 analog flow (parallel to Phase 2 digital).  _[Wave 90]_
 - `analog_oracle_compare` — deterministic analog-benchmark comparator.
+- `analog_pdk_availability` — native PDK availability resolver / ladder
 - `analog_per_block_pv_completeness_check` — strict per-block deliverable  _[Wave 93]_
 - `analog_pre_vs_post_layout_check` — deterministic gate for pre/post-layout comparison
 - `analog_real_corner_sweep` — v1.6.207 (ORGANIC-20260512).
@@ -1544,6 +1549,7 @@ _(no programs in this group)_
 - `port_convention_corpus` — v0.3.18 (ORGANIC #520, Bucket C).  _[v0.3.18]_
 - `port_parser` — the SHARED interface-port reader for the deterministic solvers.
 - `post_layout_sim_check` — Verify post-layout gate-level simulation with SDF back-annotation.
+- `post_route_signoff_corner_check` — Step-23 multi-corner sign-off SLACK gate.
 - `power_domain_crossing_check` — M2 gate (substance-verifying).
 - `power_domain_signal_crossing_check` — M2 gate (DERIVATION engine).
 - `power_report_check` — wrapper for eda_report_audit --mode power.

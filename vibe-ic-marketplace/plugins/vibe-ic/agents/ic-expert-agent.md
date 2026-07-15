@@ -2528,17 +2528,17 @@ _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence roun
 
 _Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
 
-### Skill: the harness .env TOPLEVEL and the TB's dut.<sig> binds fix the top module name, file set, and signal names/structure
+### Skill: the prompt's stated interface header fixes the top module name, file set, and signal names/structure — reconcile prose against it
 
-**Pattern**: The scoring harness's `.env` (TOPLEVEL, `VERILOG_SOURCES`) and the TB's `dut.<sig>` accesses are the binding CONTRACT, overriding the prompt's prose/file names. The top MODULE name must equal `.env TOPLEVEL` (not the prose or file name); signal names AND their STRUCTURE must match what the TB references (`i_data` not `data_i`; `w_out` not `w`; a single inout `gpio` rather than split `gpio_in`/`gpio_out`/`gpio_en`).
+**Pattern**: The prompt's OWN stated interface — its ```verilog module <X>(…)` skeleton / `Module Name:` declaration / Inputs-Outputs table — is the binding interface contract for a blind-authored module; when the prompt's descriptive prose and its stated interface header disagree, the interface header (the form an external scorer binds by name) wins. The top MODULE name must equal the prompt's stated module name (not an incidental prose paraphrase or a differing file name); signal names AND their STRUCTURE must match the prompt's stated interface (`i_data` when the header says `i_data`, not a prose `data_i`; a single inout `gpio` when the interface lists one bidirectional pin rather than split `gpio_in`/`gpio_out`/`gpio_en`).
 
-**When to apply**: Whenever the prompt's module/port names disagree with the harness `.env` or the TB's `dut.` accesses. Unless the prompt names already match the TB binds exactly.
+**When to apply**: Whenever the prompt's descriptive prose disagrees with the prompt's own stated interface header (module stub / `Module Name:` / Inputs-Outputs table) on a module or port name/structure. Unless the prose and the stated header already agree. (SCOPE: this is the BLIND non-agentic authoring context, where the scoring harness `.env`/TOPLEVEL/`VERILOG_SOURCES` and the hidden TB source are NOT provided to the author — reconcile against the PROMPT's stated interface, never by reading a hidden `.env`/testbench. A DIFFERENT problem shape legitimately SHIPS a testbench or `.env` as `input.context` — a whitebox / provided-TB task — and there that provided TB's binds ARE a legal input to reconcile against.)
 
-**What to do**: Name the top module to `.env TOPLEVEL`; enumerate the TB's `dut.<sig>` accesses and declare exactly those nets with that direction/structure; for a multi-file `.env VERILOG_SOURCES`, ensure EVERY enumerated module elaborates.
+**What to do**: Name the top module to the prompt's stated module name; declare exactly the nets the prompt's interface names, with the direction/structure it states; for a stated multi-module deliverable, ensure EVERY named module elaborates. Take every name/structure from the PROMPT (module header + Inputs-Outputs prose) — never from a hidden harness `.env`/TB.
 
-**Why this is GENERAL**: binding to the harness/TB interface (not the prose) is the universal rule for any externally-scored module. *`why_not_bucket_a`*: reconciling a single inout `gpio` against split prose ports, or the top-module name against `.env`, requires reading the TB's actual binds and structure — beyond the port-name spelling a program can normalize. (Extends "port-name authority is the TESTBENCH" to module name + port structure.)
+**Why this is GENERAL**: binding to the stated interface header (not an incidental prose paraphrase) is the universal rule for any interface-scored module. *`why_not_bucket_a`*: reconciling a single inout `gpio` against split prose ports, or the top-module name against the stated header, requires reading the prompt's interface intent and structure — beyond the port-name spelling a program can normalize. (Extends "port-name authority is the stated interface header" to module name + port structure; the SOURCE is the prompt, never the oracle harness.)
 
-_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2)._
+_Captured by benchmark-enhancement-capture 2026-06-30 (CVDP 302 convergence round 2); §4.05 ORACLE-SOURCE rewrite 2026-07-15 (#139 track-1 sweep — blind-authoring sources the interface from the prompt, not the harness .env/TB)._
 
 ### Skill: an operation's decode must assert its COMPLETE control set and a sane fall-through default
 
