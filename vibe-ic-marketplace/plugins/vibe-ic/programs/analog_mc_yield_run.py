@@ -146,6 +146,122 @@ def _find_deck(project: Path, block: str):
     return (best[3] if best[0] > 0 else None), best[0]
 
 
+# ── ORGANIC #150 — native custom-PDK Monte-Carlo consumption ────────────────
+# When the L19 target resolves to a rung-1/2 NATIVE custom PDK
+# (analog_pdk_availability), the MC deck must load the RESOLVED native
+# statistical/mismatch lib — never overlay the open-PDK (sky130 tt_mm) mismatch
+# section on a native deck. That hybrid both (1) trips analog_netlist_pdk_check
+# PDK_MISMATCH and (2) applies sky130 statistics to native devices → no real
+# spread (sigma≈0). If the native family stages NO mc/mismatch lib → honest
+# UNSCOREABLE (the degeneracy-guard family), NEVER a cross-family overlay.
+
+# A `.lib <section>` name that enables device MISMATCH resampling in a native
+# mismatch lib (family-agnostic name hint; the resolver already narrowed to the
+# mismatch LIB — this only picks the mismatch SECTION inside it).
+_NATIVE_MC_SECTION_HINT = re.compile(
+    r"(?i)(mismatch|_mm(?:_|\b)|statistical|stat|agauss|montecarlo)")
+
+# An include-FORM model line: `.lib <path> <section>` or `.include <path>` where
+# the path token carries a directory separator. Distinct from a `.lib <section>`
+# section-DEFINITION line (no path) that lives INSIDE a model lib. Stripping this
+# from the deck body lets the MC wrapper own the SINGLE model source (no mixing).
+_INCLUDE_FORM_MODEL_RE = re.compile(
+    r"(?im)^\s*\.(?:lib\s+\S*[\\/]\S+\s+\S+|include\s+\S*[\\/]\S+)\s*$")
+
+
+def _pick_native_mc_section(mc_lib: str):
+    """The `.lib <section>` name the MC wrapper loads out of the native mismatch
+    lib: a mismatch/statistical-hinted section, else a typ section, else the
+    first. None ⇒ the lib carries no `.lib <section>` definitions ⇒ the wrapper
+    loads the whole file with `.include` instead. Reads the staged host path
+    (rung-1 mc_libs are host paths); returns None on any read failure."""
+    try:
+        txt = Path(mc_lib).read_text(errors="replace")
+    except OSError:
+        return None
+    try:
+        import analog_pdk_deck_context as _apdc
+        secs = _apdc.parse_sections(txt)
+    except Exception:
+        secs = []
+    if not secs:
+        return None
+    for s in secs:
+        if _NATIVE_MC_SECTION_HINT.search(s):
+            return s
+    for s in secs:
+        if s in ("tt", "typ", "nom", "tm") or s.startswith(("tt", "typ")):
+            return s
+    return secs[0]
+
+
+def _resolve_native_mc(project: Path, container: str):
+    """Resolve the NATIVE MC model include for a rung-1/2 resolved custom PDK.
+
+    Returns one of:
+      * None                        — no native resolution (rung 3 / no L19
+                                      target / a known open family) → the caller
+                                      keeps the open-PDK (sky130/gf180) path.
+      * {"mc_lib", "mc_section",…}  — a resolved native mismatch lib to load.
+      * {"unscoreable": <reason>}   — native family resolved but stages NO
+                                      mc/mismatch lib → honest UNSCOREABLE
+                                      (never a cross-family overlay).
+    chip-AGNOSTIC; NDA-safe (paths only)."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import analog_pdk_availability as _apa
+        import analog_netlist_pdk_check as _npc
+    except Exception:
+        return None
+    declared = _npc._declared_pdk_target(Path(project))
+    if not declared:
+        return None
+    try:
+        res = _apa.resolve_pdk(declared, project=str(project),
+                               container=container)
+    except Exception:
+        return None
+    if not res.get("available"):
+        return None
+    src = res.get("source")
+    if src not in ("project_custom_pdk", "container_installed"):
+        return None
+    # a KNOWN open family installed in the container keeps the open-PDK fast
+    # path (sky130 tt_mm regression preserved) — only a NATIVE custom / unknown
+    # installed family takes the resolved-mc_libs path.
+    matched = (res.get("matched_dir") or "").lower()
+    if src == "container_installed" and any(
+            k in matched for k in ("sky130", "gf180")):
+        return None
+    mc_libs = res.get("mc_libs") or []
+    if not mc_libs:
+        return {"unscoreable": (
+            f"L19 target {declared!r} resolves to a native custom PDK "
+            f"(source={src}) but stages NO Monte-Carlo / mismatch model lib "
+            f"(resolved mc_libs is empty). Refusing to overlay an open-PDK "
+            f"(sky130) mismatch section on a native deck — MC yield is honestly "
+            f"UNSCOREABLE until the family's statistical/mismatch lib is staged "
+            f"under input/pdk/. (degeneracy-guard family; NDA: paths only.)")}
+    mc_lib = mc_libs[0]
+    return {"mc_lib": mc_lib, "mc_section": _pick_native_mc_section(mc_lib),
+            "family": res.get("family"), "source": src}
+
+
+def _assert_single_model_family(wrap_text: str, mc_include_line: str) -> None:
+    """Structural guard (#150): after the wrapper prepends its single native
+    model include and strips any caller-side include from the deck body, EXACTLY
+    ONE include-form model line may remain — the one we prepended. A second
+    (e.g. a leftover open-PDK sky130 overlay) is a forbidden cross-family hybrid;
+    raise so the bug can never ship silently."""
+    lines = _INCLUDE_FORM_MODEL_RE.findall(wrap_text)
+    assert len(lines) == 1, (
+        f"cross-family MC deck: expected exactly 1 model include "
+        f"({mc_include_line!r}), found {len(lines)}: {lines}")
+    low = wrap_text.lower()
+    assert "/foss/pdks/sky130" not in low and "/foss/pdks/gf180" not in low, (
+        "native MC deck must not overlay an open-PDK (sky130/gf180) model lib")
+
+
 def run_block(project: Path, block: str, container: str, pdk: str,
               n: int) -> dict:
     deck, deck_rank = _find_deck(project, block)
@@ -174,38 +290,73 @@ def run_block(project: Path, block: str, container: str, pdk: str,
         return {"verdict": "SKIP", "rc": 2,
                 "reason": (f"no numeric spec limits (min/max) for block "
                            f"{block!r} — nothing to score yield against")}
-    mc_section = _MC_SECTION.get(pdk)
-    if not mc_section:
-        return {"verdict": "SKIP", "rc": 2,
-                "reason": f"no statistical model section known for pdk {pdk!r}"}
+
+    # ORGANIC #150 — native custom-PDK resolution BEFORE the open-PDK path. A
+    # native family that stages no mc/mismatch lib is honestly UNSCOREABLE (a
+    # structural verdict — no ngspice probe needed), never a cross-family
+    # overlay.
+    native = _resolve_native_mc(project, container)
+    if native and native.get("unscoreable"):
+        return {"verdict": "UNSCOREABLE", "rc": 2,
+                "reason": native["unscoreable"], "mc_runs": 0}
+
     if not _ars._ngspice_available(container):
         return {"verdict": "SKIP", "rc": 2,
                 "reason": f"ngspice not available in container {container!r}"}
-    pdk_lib = _ars.PDK_LIB.get(pdk)
-    if not pdk_lib:
-        return {"verdict": "SKIP", "rc": 2,
-                "reason": f"no ngspice model lib known for pdk {pdk!r}"}
 
     host_root = (Path(str(project).split("AI_IC_design")[0]) / "AI_IC_design"
                  if "AI_IC_design" in str(project) else project)
+
+    if native:
+        # native mismatch lib → the wrapper's SINGLE model source.
+        mc_lib_ct = _ars._container_path(container, host_root,
+                                         Path(native["mc_lib"]))
+        mc_section = native["mc_section"]
+        mc_include_line = (f".lib {mc_lib_ct} {mc_section}" if mc_section
+                           else f".include {mc_lib_ct}")
+        mc_model_section = mc_section or f"(whole lib {Path(native['mc_lib']).name})"
+    else:
+        mc_section = _MC_SECTION.get(pdk)
+        if not mc_section:
+            return {"verdict": "SKIP", "rc": 2,
+                    "reason": f"no statistical model section known for pdk {pdk!r}"}
+        pdk_lib = _ars.PDK_LIB.get(pdk)
+        if not pdk_lib:
+            return {"verdict": "SKIP", "rc": 2,
+                    "reason": f"no ngspice model lib known for pdk {pdk!r}"}
+        mc_include_line = f".lib {pdk_lib} {mc_section}"
+        mc_model_section = mc_section
+
     mc_dir = deck.parent / "mc_runs"
     mc_dir.mkdir(parents=True, exist_ok=True)
     deck_body = deck.read_text(errors="replace")
-    # strip any caller-side .lib of the model file — the MC wrapper owns it
-    deck_body = re.sub(rf"^\s*\.lib\s+\S*{re.escape(Path(pdk_lib).name)}\s+\S+\s*$",
-                       "* (.lib moved to MC wrapper)", deck_body,
-                       flags=re.MULTILINE | re.IGNORECASE)
+    if native:
+        # strip ANY caller-side include-form model line (native corner OR a stray
+        # open lib) so the wrapper owns the SINGLE native model source — no
+        # cross-family mixing (the _assert_single_model_family guard below is the
+        # structural backstop).
+        deck_body = _INCLUDE_FORM_MODEL_RE.sub(
+            "* (.lib moved to MC wrapper)", deck_body)
+    else:
+        # open-PDK path unchanged — strip only the open model lib by name.
+        deck_body = re.sub(
+            rf"^\s*\.lib\s+\S*{re.escape(Path(pdk_lib).name)}\s+\S+\s*$",
+            "* (.lib moved to MC wrapper)", deck_body,
+            flags=re.MULTILINE | re.IGNORECASE)
 
     per_run = []
     for i in range(1, n + 1):
         wrap = mc_dir / f"mc_{i:04d}.sp"
-        wrap.write_text(
+        wrap_text = (
             f"* MC iteration {i}/{n} — {self_name()} (foundry statistical "
-            f"section '{mc_section}')\n"
+            f"section '{mc_model_section}')\n"
             f".option seed={i}\n"
-            f".lib {pdk_lib} {mc_section}\n"
+            f"{mc_include_line}\n"
             + deck_body + ("\n.end\n" if ".end" not in deck_body.lower()
                            else "\n"))
+        if native:
+            _assert_single_model_family(wrap_text, mc_include_line)
+        wrap.write_text(wrap_text)
         # #464 — _run_ngspice now also returns a per-run sim_status (failed
         # sub-analyses + nulled metrics + warnings). Capture it so a Monte
         # Carlo iteration whose AC measure ERRORed is recorded as partial
@@ -299,7 +450,8 @@ def run_block(project: Path, block: str, container: str, pdk: str,
         "mc_spec_source": spec_src,
         "_mc_provenance": "real_ngspice_mc",
         "mc_log_dir": str(mc_dir.relative_to(project)),
-        "mc_model_section": mc_section,
+        "mc_model_section": mc_model_section,
+        "mc_pdk_source": (native.get("source") if native else pdk),
     })
     cr.write_text(json.dumps(data, indent=2) + "\n")
 
