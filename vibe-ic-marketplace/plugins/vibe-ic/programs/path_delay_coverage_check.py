@@ -10,8 +10,16 @@ reports/phase2/dft/path_delay_coverage.json and recomputes:
     sensitised          = #paths with loc_testable AND nr_verdict == 'DET'
     robust              = #sensitised with robust_verdict == 'DET'
     graded              = #paths with loc_testable
-    pdf_sensitised_cov  = sensitised / graded          (recomputed here)
+    false_held          = #graded with nr_verdict == 'RED' (SAT-proven redundant)
+    testable            = graded - false_held         (redundant excluded)
+    pdf_sensitised_cov  = sensitised / testable        (recomputed here)
     PASS iff pdf_sensitised_cov >= floor
+
+    TEST-coverage denominator, identical to DT1 (`transition_coverage_check`):
+    SAT-proven-redundant (false/held) paths are excluded from the denominator
+    exactly as DT1 excludes redundant stuck-at faults — a provably-unsensitisable
+    at-speed path has no 2-pattern by definition. ABORTED (SAT-undecided) paths
+    STAY in the denominator as non-covered (conservative, mirrors DT1's aborted).
 
 FALSE-CLEAN-PROOF (the crux): a path is counted covered ONLY when its RECORDED
 non-robust SAT verdict is exactly 'DET' (a real `model found: FAIL!` 2-pattern).
@@ -141,8 +149,11 @@ def evaluate(blob: Optional[dict], floor: float = PDF_FLOOR_DEFAULT) -> dict:
                 "reasons": ["no LOC-testable graded paths in the record list — "
                             "cannot pass on zero evidence"]}
 
-    sens_cov = round(100.0 * rc["sensitised"] / graded, 4)
-    robust_cov = round(100.0 * rc["robust"] / graded, 4)
+    testable = graded - rc["false_held"]  # exclude SAT-proven-redundant (DT1 parity)
+    sens_cov = (round(100.0 * rc["sensitised"] / testable, 4)
+                if testable > 0 else None)
+    robust_cov = (round(100.0 * rc["robust"] / testable, 4)
+                  if testable > 0 else None)
 
     written_sens = blob.get("sensitised_paths")
     sensitised_count_mismatch = (
@@ -153,17 +164,19 @@ def evaluate(blob: Optional[dict], floor: float = PDF_FLOOR_DEFAULT) -> dict:
             f"recount is {rc['sensitised']} (false/held/aborted counted as "
             "sensitised) — recomputed number governs")
 
-    ge_floor = sens_cov >= eff_floor
+    ge_floor = (sens_cov is not None and sens_cov >= eff_floor)
     if not ge_floor:
         reasons.append(
             f"recomputed PDF sensitised coverage {sens_cov}% < floor "
-            f"{eff_floor}% (sensitised {rc['sensitised']} / graded {graded}; "
-            f"robust {rc['robust']}; false/held {rc['false_held']} excluded; "
-            f"aborted {rc['aborted']} counted as non-covered)")
+            f"{eff_floor}% (sensitised {rc['sensitised']} / testable {testable}; "
+            f"{graded} graded; robust {rc['robust']}; false/held "
+            f"{rc['false_held']} excluded; aborted {rc['aborted']} counted "
+            "as non-covered)")
 
     return {
         "floor_pct": eff_floor,
         "graded_paths": graded,
+        "testable_paths": testable,
         "sensitised_paths": rc["sensitised"],
         "robust_paths": rc["robust"],
         "non_robust_paths": rc["sensitised"] - rc["robust"],
