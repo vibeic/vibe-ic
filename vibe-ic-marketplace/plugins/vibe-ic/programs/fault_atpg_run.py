@@ -197,16 +197,22 @@ PDK_CONFIG = {
 #      AND the enable families `__edfxtp`/`__sedfxtp` (yosys maps `$_DFFE_*` →
 #      `edfxtp`, the SINGLE most common flop on real sky130 synth — e.g. 1024 in
 #      subservient); gf180 `__dffq`/`__sdffq`/`__edffq`.
-# `__[s][e]df` after the library `__` separator is the D-flip-flop family across
-# the OSS PDKs (delay=`__dly`, latch=`__dl*`/`__lat*`, buffer=`__buf`, mux=`__mux`
-# never match — none reach `df`). This closes the sky130/gf180 miss (incl. the
-# enable-flop family) that would otherwise leave the auto-detect empty → a WRONG
-# `--dff` seed → `fault cut` cutting nothing → un-cut flops → a false
-# NOT_APPLICABLE that the coverage gate would silently pass (gate-gaming).
+#   3. GENERIC YOSYS PRIMITIVE — `\$_[…]DFF[…]_` escaped internal-cell FFs in a
+#      PRE-TECHMAP netlist: `\$_DFF_P_`, `\$_DFFE_PP_`, `\$_SDFF_PP0_`,
+#      `\$_DFFSR_PPP_` (the Fault-emitted cut/scan netlists are in THIS vocabulary
+#      — a bogus non-cut full of `\$_DFF_P_` must be recognised as still-having-
+#      flops so the cut-validity guard regenerates it). Latches (`\$_DLATCH_*`)
+#      and `\$_SR_*` never carry `DFF`, so they never match.
+# The three vocabularies together make the detect a TRUE superset. Non-flop cells
+# never match: delay=`__dly`, latch=`__dl*`/`__lat*`/`\$_DLATCH`, buffer=`__buf`,
+# mux=`__mux` — none reach `df`/`DFF`. This closes the empty-detect failure mode
+# (WRONG `--dff` seed → `fault cut` cutting nothing → un-cut flops → a false
+# NOT_APPLICABLE the coverage gate would silently pass — gate-gaming).
 _DFF_INST_RE = re.compile(
     r'^\s*('
     r'S?DFF[A-Za-z0-9_]*'                        # commercial prefix DFF*/SDFF*
     r'|[A-Za-z][A-Za-z0-9_]*__s?e?df[a-z0-9_]*'   # OSS-PDK infix *__[s][e]df…
+    r'|\\\$_[A-Z]*DFF[A-Z0-9_]*'                  # generic Yosys \$_…DFF…_ primitive
     r')\s+\\?[^\s()]+\s*\(', re.MULTILINE | re.IGNORECASE)
 
 

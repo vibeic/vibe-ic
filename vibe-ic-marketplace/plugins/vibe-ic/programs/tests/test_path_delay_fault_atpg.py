@@ -249,22 +249,29 @@ def _rec(idx, loc, covered, robust, status, arrival):
             "robust": robust, "status": status, "arrival": arrival}
 
 
-def test_pdf_coverage_math_excludes_false_and_aborted():
+def test_pdf_coverage_math_excludes_redundant_keeps_aborted():
+    # TEST-coverage convention (DT1 parity): SAT-proven-redundant (false/held)
+    # paths are excluded from the DENOMINATOR; ABORTED paths stay as non-covered.
+    # Both are excluded from the NUMERATOR (never counted covered).
     recs = [
         _rec(0, True, True, True, "robust", 4.0),
         _rec(1, True, True, False, "non_robust", 2.0),
-        _rec(2, True, False, False, "false_or_held", 5.0),   # excluded
-        _rec(3, True, False, False, "aborted", 1.0),          # non-covered
+        _rec(2, True, False, False, "false_or_held", 5.0),   # redundant → excl. denom
+        _rec(3, True, False, False, "aborted", 1.0),          # non-covered, in denom
         _rec(4, False, False, False, "unmappable", 9.0),      # not graded
     ]
     c = pdf.pdf_coverage_math(recs, period_ns=10.0, timing_fraction=0.30)
     assert c["graded_paths"] == 4          # the unmappable one is not graded
+    assert c["testable_paths"] == 3        # 4 graded − 1 redundant (false/held)
     assert c["sensitised_paths"] == 2      # only the 2 DET paths
     assert c["robust_paths"] == 1
     assert c["non_robust_paths"] == 1
     assert c["false_or_held_paths"] == 1
     assert c["aborted_paths"] == 1
-    assert c["pdf_sensitised_coverage_pct"] == 50.0   # 2/4
+    # test-coverage = sensitised / testable = 2/3 (redundant out, aborted in)
+    assert c["pdf_sensitised_coverage_pct"] == round(100.0 * 2 / 3, 4)
+    # fault-coverage (over all graded, redundant IN) reported for transparency
+    assert c["pdf_sensitised_fault_coverage_pct"] == 50.0   # 2/4
     # of the 2 sensitised, only arrival 4.0/10=0.40 clears the 0.30 fraction
     # (the non-robust one at 2.0/10=0.20 does not)
     assert c["at_speed_meaningful_paths"] == 1
@@ -290,16 +297,16 @@ def test_gate_recount_ignores_inflated_sensitised():
         "verdict": "PASS", "floor_pct": 80.0, "sensitised_paths": 6,
         "path_records": (
             [_grec(i, True, "DET", "DET") for i in range(4)]
-            + [_grec(4, True, "RED", "RED")]     # false path
-            + [_grec(5, True, "ABORT", "ABORT")]  # aborted
+            + [_grec(4, True, "RED", "RED"), _grec(5, True, "RED", "RED")]  # 2 false
+            + [_grec(6, True, "ABORT", "ABORT"), _grec(7, True, "ABORT", "ABORT")]
         ),
     }
     r = gate.evaluate(blob, floor=80.0)
     assert r["sensitised_count_mismatch"] is True
     assert r["sensitised_paths"] == 4            # recount, not the lied 6
-    assert r["false_or_held_paths"] == 1 and r["aborted_paths"] == 1
-    assert r["graded_paths"] == 6
-    # 4/6 = 66.7% < 80 → FAIL
+    assert r["false_or_held_paths"] == 2 and r["aborted_paths"] == 2
+    assert r["graded_paths"] == 8 and r["testable_paths"] == 6  # 8 − 2 redundant
+    # honest test-coverage 4/6 = 66.7% < 80 → FAIL (the lie can't rescue it)
     assert r["verdict"] == "FAIL"
 
 
@@ -314,12 +321,14 @@ def test_gate_robust_requires_own_det():
 
 
 def test_gate_false_path_never_counted_covered():
-    # every graded path is a FALSE path (RED) → 0% coverage → FAIL
+    # every graded path is a FALSE path (RED) → 0 testable → cannot pass on zero
+    # testable evidence → FAIL (a false path is NEVER counted covered).
     blob = {"verdict": "PASS", "floor_pct": 80.0,
             "path_records": [_grec(i, True, "RED", "RED") for i in range(5)]}
     r = gate.evaluate(blob, floor=80.0)
     assert r["sensitised_paths"] == 0 and r["false_or_held_paths"] == 5
-    assert r["pdf_sensitised_coverage_pct"] == 0.0
+    assert r["testable_paths"] == 0
+    assert r["pdf_sensitised_coverage_pct"] is None   # 0 testable → undefined, not a pass
     assert r["verdict"] == "FAIL"
 
 
@@ -353,14 +362,60 @@ def test_gate_error_fails():
 
 
 def test_gate_floor_never_relaxed_below_producer():
-    # producer floor 90 > cli default 80 → effective 90, 80% must FAIL
+    # producer floor 90 > cli default 80 → effective 90, 80% must FAIL.
+    # Use ABORTED paths (which STAY in the denominator as non-covered) so the
+    # honest test-coverage is 8/10 = 80% — redundant would be excluded instead.
     recs = ([_grec(i, True, "DET", "DET") for i in range(8)]
-            + [_grec(i, True, "RED", "RED") for i in range(2)])
+            + [_grec(8 + i, True, "ABORT", "ABORT") for i in range(2)])
     blob = {"verdict": "PASS", "floor_pct": 90.0, "path_records": recs}
     r = gate.evaluate(blob, floor=80.0)
     assert r["floor_pct"] == 90.0
-    assert r["pdf_sensitised_coverage_pct"] == 80.0    # 8/10
+    assert r["testable_paths"] == 10                   # no redundant → all graded testable
+    assert r["pdf_sensitised_coverage_pct"] == 80.0    # 8/10 (aborts counted non-covered)
     assert r["verdict"] == "FAIL"
+
+
+# ── DT1-parity: test-coverage denominator excludes SAT-proven-redundant ──────
+# v1.4.22 REGRESSION. DT2 previously divided by ALL graded paths (fault-coverage),
+# so a design whose long paths are mostly PROVEN-FALSE (nr==RED, no 2-pattern by
+# construction) was penalised for un-sensitisable paths — contradicting DT1
+# (`transition coverage_math` uses detected/(sampled−redundant)), DT2's own
+# `classify_path` docstring ("SOUND exclude"), and its reason strings. The fix
+# aligns DT2 to test-coverage: redundant OUT of the denominator, aborted IN.
+
+def test_dt1_parity_redundant_excluded_producer_and_gate_agree():
+    # spm-shaped: 11 real (DET) + 5 SAT-proven-false (RED) long paths, 0 abort.
+    recs = ([_grec(i, True, "DET", "DET") for i in range(11)]
+            + [_grec(11 + i, True, "RED", "RED") for i in range(5)])
+    # producer side (records carry covered/robust/status the producer writes)
+    prec = ([_rec(i, True, True, True, "robust", 5.0) for i in range(11)]
+            + [_rec(11 + i, True, False, False, "false_or_held", 5.0)
+               for i in range(5)])
+    c = pdf.pdf_coverage_math(prec, period_ns=10.0, timing_fraction=0.30)
+    assert c["graded_paths"] == 16 and c["testable_paths"] == 11
+    assert c["pdf_sensitised_coverage_pct"] == 100.0          # 11/11 testable
+    assert c["pdf_sensitised_fault_coverage_pct"] == 68.75    # 11/16 (transparency)
+    # gate independently agrees
+    g = gate.evaluate({"verdict": "PASS", "floor_pct": 80.0,
+                       "path_records": recs}, floor=80.0)
+    assert g["testable_paths"] == 11 and g["false_or_held_paths"] == 5
+    assert g["pdf_sensitised_coverage_pct"] == 100.0
+    assert g["verdict"] == "PASS"
+
+
+def test_dt1_parity_aborts_still_penalise_no_gaming():
+    # ANTI-GAMING invariant: excluding redundant must NOT let an under-tested
+    # design pass. Aborted (SAT-undecided) paths stay in the denominator, so a
+    # design that can't sensitise its paths still FAILs — the fix only forgives
+    # PROVABLY-false paths, never merely-unsolved ones.
+    recs = ([_grec(i, True, "DET", "DET") for i in range(6)]
+            + [_grec(6 + i, True, "RED", "RED") for i in range(1)]     # 1 redundant
+            + [_grec(7 + i, True, "ABORT", "ABORT") for i in range(4)])  # 4 aborted
+    g = gate.evaluate({"verdict": "PASS", "floor_pct": 80.0,
+                       "path_records": recs}, floor=80.0)
+    assert g["graded_paths"] == 11 and g["testable_paths"] == 10  # 11 − 1 redundant
+    assert g["pdf_sensitised_coverage_pct"] == 60.0              # 6/10, aborts counted
+    assert g["verdict"] == "FAIL"
 
 
 if __name__ == "__main__":

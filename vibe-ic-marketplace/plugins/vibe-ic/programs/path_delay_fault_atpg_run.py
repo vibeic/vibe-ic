@@ -359,7 +359,17 @@ def pdf_coverage_math(records: list[dict], period_ns: float | None,
     """Recompute PDF coverage from per-path records (independently redone by the
     gate). Pure. chip-AGNOSTIC.
 
-    Denominator = LOC-testable graded paths (start on a flop, endpoint mapped).
+    TEST-coverage denominator (identical convention to DT1's transition
+    `coverage_math`): testable = LOC-testable graded paths MINUS the
+    SAT-proven-redundant false/held paths (nr==RED). A path proven redundant has
+    NO sensitising 2-pattern by construction — penalising it would make this a
+    FAULT-coverage metric, which DT1 deliberately does not use (it excludes
+    redundant faults from its denominator, aborted stays). ABORTED (SAT-
+    undecided) paths STAY in the denominator as non-covered (conservative). The
+    fault-coverage ratio (numerator over ALL graded) is still reported as
+    `pdf_sensitised_fault_coverage_pct` for transparency, mirroring DT1's
+    `tdf_fault_coverage_pct`.
+
     A path is at-speed COVERED iff it is SAT-sensitised (covered) AND its
     arrival is a meaningful fraction of the clock period. sensitised counts
     testability (SAT 2-pattern exists) regardless of the timing fraction;
@@ -376,21 +386,28 @@ def pdf_coverage_math(records: list[dict], period_ns: float | None,
                 and (a / period_ns) >= timing_fraction)
     at_speed = [r for r in sensitised if _meaningful(r)]
 
-    n = len(graded)
-    sens_pct = (100.0 * len(sensitised) / n) if n else None
-    robust_pct = (100.0 * len(robust) / n) if n else None
+    n_graded = len(graded)
+    n_false = len(false_held)
+    testable = n_graded - n_false
+    sens_pct = (100.0 * len(sensitised) / testable) if testable > 0 else None
+    robust_pct = (100.0 * len(robust) / testable) if testable > 0 else None
+    sens_fault_pct = (100.0 * len(sensitised) / n_graded) if n_graded else None
     return {
-        "graded_paths": n,
+        "graded_paths": n_graded,
+        "testable_paths": testable,
         "sensitised_paths": len(sensitised),
         "robust_paths": len(robust),
         "non_robust_paths": len(sensitised) - len(robust),
-        "false_or_held_paths": len(false_held),
+        "false_or_held_paths": n_false,
         "aborted_paths": len(aborted),
         "at_speed_meaningful_paths": len(at_speed),
         "pdf_sensitised_coverage_pct": (round(sens_pct, 4)
                                         if sens_pct is not None else None),
         "pdf_robust_coverage_pct": (round(robust_pct, 4)
                                     if robust_pct is not None else None),
+        "pdf_sensitised_fault_coverage_pct": (round(sens_fault_pct, 4)
+                                              if sens_fault_pct is not None
+                                              else None),
         "timing_fraction": timing_fraction,
         "clock_period_ns": period_ns,
     }
@@ -565,7 +582,23 @@ def run_pdf_atpg(project: Path, netlist_rel: str, cut_rel: str, flat_rel: str,
     po_names = {n.lstrip('\\') for n, _ in prim_out}
 
     # NOT_APPLICABLE: purely combinational core (no launch flops).
+    # ANTI-GAMING GUARD (mirrors transition_fault_atpg_run): only a GENUINELY
+    # combinational design may self-N/A. If the SOURCE netlist has sequential
+    # cells yet the cut exposed 0 pairs, the cut did not actually run (wrong
+    # --dff seed / stale bogus cut) — that is a real gap, reported as an honest
+    # ERROR, NEVER a false N/A that the coverage gate would silently pass.
     if not pairs:
+        src_has_flops = bool(_tdf._far.detect_dff_cells(
+            (project / netlist_rel).read_text(errors="replace")))
+        if src_has_flops:
+            base.update({
+                "verdict": "ERROR", "status": "ERROR", "scan_flops": 0,
+                "reasons": ["design has sequential cells but the scan cut exposed "
+                            "0 pseudo-PI/PO pairs — the cut did not run correctly "
+                            "(NOT a combinational design); refusing a false "
+                            "NOT_APPLICABLE"],
+            })
+            return 1, base
         base.update({
             "verdict": "NOT_APPLICABLE", "status": "NOT_APPLICABLE",
             "scan_flops": 0,
@@ -691,10 +724,11 @@ def run_pdf_atpg(project: Path, netlist_rel: str, cut_rel: str, flat_rel: str,
         "status": "PASS" if ge_floor else "FAIL",
         "reasons": ([] if ge_floor else [
             f"PDF sensitised coverage {sens_cov}% < floor {floor}% "
-            f"(sensitised {cov['sensitised_paths']}/{cov['graded_paths']} "
-            f"graded top-K; robust {cov['robust_paths']}; false/held "
-            f"{cov['false_or_held_paths']} excluded; aborted "
-            f"{cov['aborted_paths']} counted as non-covered)"]),
+            f"(sensitised {cov['sensitised_paths']}/{cov['testable_paths']} "
+            f"testable; {cov['graded_paths']} graded top-K; robust "
+            f"{cov['robust_paths']}; false/held {cov['false_or_held_paths']} "
+            f"excluded; aborted {cov['aborted_paths']} counted as "
+            "non-covered)"]),
     })
     return (0 if ge_floor else 1), base
 
