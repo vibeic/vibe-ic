@@ -52,6 +52,7 @@ _THIS = Path(__file__).resolve()
 _PROGRAMS_DIR = _THIS.parent
 sys.path.insert(0, str(_PROGRAMS_DIR))
 import version_bump_monotonic_check as _vbm  # noqa: E402  (reuse parse_semver)
+import plugin_manifest_discovery as _pmd     # noqa: E402  (#152 shared discovery)
 
 _PATCH_MAX = 99  # patch段 0..99; x.y.99 -> x.(y+1).0
 
@@ -93,13 +94,6 @@ def _plugin_json(plugin_root: Path) -> Path:
     return plugin_root / ".claude-plugin" / "plugin.json"
 
 
-def _marketplace_json(plugin_root: Path) -> Optional[Path]:
-    # the marketplace.json that carries the `vibe-ic` entry lives at the
-    # marketplace root: <plugin_root>/../../.claude-plugin/marketplace.json.
-    mj = plugin_root.parent.parent / ".claude-plugin" / "marketplace.json"
-    return mj if mj.is_file() else None
-
-
 def _read_current(plugin_root: Path) -> Optional[str]:
     pj = _plugin_json(plugin_root)
     if not pj.is_file():
@@ -111,28 +105,20 @@ def _read_current(plugin_root: Path) -> Optional[str]:
 
 
 def _write_version(plugin_root: Path, version: str) -> List[str]:
-    """Write `version` into plugin.json AND the marketplace.json vibe-ic entry.
-    String-replace the plugin.json `version` field (preserve formatting); rewrite
-    the marketplace.json with json.dumps. Returns the list of files written."""
-    wrote: List[str] = []
-    pj = _plugin_json(plugin_root)
-    cur = json.loads(pj.read_text()).get("version")
-    txt = pj.read_text()
-    new = txt.replace(f'"version": "{cur}"', f'"version": "{version}"', 1)
-    if new == txt:  # formatting differs — fall back to a JSON round-trip
-        d = json.loads(txt)
-        d["version"] = version
-        new = json.dumps(d, indent=2) + "\n"
-    pj.write_text(new)
-    wrote.append(str(pj))
-    mj = _marketplace_json(plugin_root)
-    if mj is not None:
-        d = json.loads(mj.read_text())
-        for entry in d.get("plugins", []) or []:
-            if isinstance(entry, dict) and entry.get("name") == "vibe-ic":
-                entry["version"] = version
-        mj.write_text(json.dumps(d, indent=2) + "\n")
-        wrote.append(str(mj))
+    """Write `version` into plugin.json AND EVERY marketplace.json that references
+    this plugin (both the NESTED and the REPO-ROOT manifest — #152). Delegates to
+    the SHARED manifest-discovery helper (no hand-rolled single-manifest path that
+    can miss one), then POST-WRITE SELF-CHECKS that all three are in sync and
+    RAISES on any residual drift so a partial write can never ship. Returns the
+    list of files written."""
+    wrote = _pmd.write_version_all(plugin_root, version)
+    ok, drift = _pmd.verify_synced(plugin_root, expected=version)
+    if not ok:
+        raise RuntimeError(
+            "gatekeeper_assign_version post-write self-check FAILED — manifest "
+            f"drift after writing {version!r}: "
+            + "; ".join(f"{p} has {found!r} (want {want!r})"
+                        for p, found, want in drift))
     return wrote
 
 
@@ -150,7 +136,12 @@ def assign(repo: Optional[Path], from_version: Optional[str],
     if write:
         if not _plugin_json(plugin_root).is_file():
             return ({"error": f"plugin.json not found under {plugin_root}"}, 2)
-        wrote = _write_version(plugin_root, nxt)
+        try:
+            wrote = _write_version(plugin_root, nxt)
+        except RuntimeError as e:
+            # #152 — the post-write self-check found residual manifest drift.
+            # Abort with a clear rc-2 error, not an unhandled traceback.
+            return ({"error": str(e), "assigned": nxt}, 2)
     report = {
         "from": cur,
         "assigned": nxt,
