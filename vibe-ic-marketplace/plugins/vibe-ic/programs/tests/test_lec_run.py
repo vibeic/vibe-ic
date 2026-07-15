@@ -232,6 +232,60 @@ def test_build_equiv_script_omits_liberty_when_none():
 
 
 # ---------------------------------------------------------------------------
+# v1.4.21 REGRESSION — a GENERIC pre-techmap `$_`-primitive gate netlist must be
+# read with `read_verilog -icells` (no Liberty), else `hierarchy -check` aborts
+# on an undefined `\$_DFF_P_` module before any $equiv point is built and the
+# LEC reports a FALSE compared_points=0 FAIL (spm clean-run: RTL was 208/208
+# functionally correct yet Step-13 "FAILed" without ever checking equivalence).
+# ---------------------------------------------------------------------------
+def test_netlist_generic_detection(tmp_path):
+    generic = tmp_path / "netlist.v"
+    generic.write_text(
+        "module spm(input clk, output p);\n"
+        "  \\$_DFF_P_ _u0_ (.C(clk), .D(1'b0), .Q(p));\n"
+        "  \\$_NAND_ _u1_ (.A(clk), .B(clk), .Y());\n"
+        "endmodule\n")
+    assert lec_run._netlist_uses_generic_primitives(str(generic)) is True
+
+    mapped = tmp_path / "spm_synth.v"
+    mapped.write_text(
+        "module spm(input clk, output p);\n"
+        "  sky130_fd_sc_hd__dfxtp_1 _u0_ (.CLK(clk), .D(1'b0), .Q(p));\n"
+        "endmodule\n")
+    assert lec_run._netlist_uses_generic_primitives(str(mapped)) is False
+    # a plain RTL wire named `$foo` (no backslash-escaped `\$_` prefix) must NOT
+    # be mistaken for a generic-primitive netlist.
+    rtl = tmp_path / "rtl.v"
+    rtl.write_text("module m(input a); wire x; assign x = a; endmodule\n")
+    assert lec_run._netlist_uses_generic_primitives(str(rtl)) is False
+
+
+def test_build_equiv_script_generic_uses_icells_no_liberty():
+    # gate_is_generic=True → gate read is `read_verilog -icells`, NO read_liberty,
+    # even though a Liberty arg is supplied; the equiv recipe is otherwise intact.
+    s = lec_run.build_equiv_script(
+        ["/p/rtl/a.v"], "/p/synth/netlist.v", "spm",
+        lec_run.DEFAULT_LIBERTY, gate_is_generic=True)
+    assert "read_verilog -icells /p/synth/netlist.v" in s
+    assert "read_liberty" not in s            # generic gate needs no Liberty
+    assert "read_verilog -sv /p/rtl/a.v" in s  # gold still plain -sv
+    assert "equiv_make gold gate equiv" in s
+    assert "equiv_induct -seq 64" in s
+    assert "equiv_status" in s
+
+
+def test_build_equiv_script_default_is_unchanged_by_new_param():
+    # The Liberty-mapped APPROACH-C path (gate_is_generic defaults False) is
+    # byte-for-byte what it was — no -icells, Liberty expanded. Guards the proven
+    # HP18E80 path against regression from the new generic branch.
+    s = lec_run.build_equiv_script(
+        ["/p/rtl/a.v", "/p/rtl/b.v"], "/p/synth/netlist.v", "chip_top",
+        lec_run.DEFAULT_LIBERTY)
+    assert "-icells" not in s
+    assert f"read_liberty -ignore_miss_func {lec_run.DEFAULT_LIBERTY}" in s
+
+
+# ---------------------------------------------------------------------------
 # _discover_project_liberty — the auto-discovery pure helper (no container).
 # The Step-13 runner passes no --liberty, so the producer must find the
 # design's OWN PDK Liberty or it falls back to the sky130 default (useless for

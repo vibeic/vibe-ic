@@ -163,7 +163,9 @@ PDK_CONFIG = {
     },
     # sky130A high-density stdcell library (default OpenLane PDK).
     # Added 2026-05-24 for v2 e2e benchmark spm_e2e — covers the broad
-    # sky130_fd_sc_hd DFF family (dfxtp / dfrtp / dfstp / dfbbn / sdfxtp).
+    # sky130_fd_sc_hd DFF family (dfxtp / dfrtp / dfstp / dfbbn / sdfxtp) plus the
+    # ENABLE-flop family edfxtp/sedfxtp (yosys maps $_DFFE_* → edfxtp — the single
+    # most common flop on real sky130 synth, e.g. 1024 in subservient; v1.4.21).
     "sky130": {
         "cell_model": (
             "/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/verilog/"
@@ -177,21 +179,35 @@ PDK_CONFIG = {
             "sky130_fd_sc_hd__dfstp_1,sky130_fd_sc_hd__dfstp_2,"
             "sky130_fd_sc_hd__dfstp_4,"
             "sky130_fd_sc_hd__sdfxtp_1,sky130_fd_sc_hd__sdfxtp_2,"
-            "sky130_fd_sc_hd__sdfrtp_1,sky130_fd_sc_hd__sdfrtp_2"
+            "sky130_fd_sc_hd__sdfrtp_1,sky130_fd_sc_hd__sdfrtp_2,"
+            "sky130_fd_sc_hd__edfxtp_1,sky130_fd_sc_hd__edfxbp_1,"
+            "sky130_fd_sc_hd__sedfxtp_1,sky130_fd_sc_hd__sedfxbp_1"
         ),
     },
 }
 
-# Matches a flip-flop cell INSTANTIATION line: `CELLNAME instname (` where the
-# cell name follows the near-universal DFF / SDFF (scan-DFF) naming convention.
-# Anchored to line start + requires an instance name and an opening paren so a
-# `wire dff_x;` declaration can never match. Case-insensitive to cover both
-# UPPER (KeyFoundry DFFHQD1) and lower (sky130 dfxtp) conventions — but note
-# sky130/gf180 lowercase cells are `dfxtp`/`dffq`, not `dff*`, so those PDKs
-# still rely on their explicit PDK_CONFIG dff_cells (the auto-detect is a
-# no-cost SUPERSET, never a replacement).
+# Matches a flip-flop cell INSTANTIATION line: `CELLNAME instname (`. Anchored to
+# line start + requires an instance name and an opening paren so a `wire dff_x;`
+# declaration can never match. Two flop-cell naming conventions, both matched so
+# the auto-detect is a true PDK-agnostic SUPERSET (never dependent on a seed):
+#   1. commercial PREFIX — `DFF*` / `SDFF*` (KeyFoundry DFFHQD1, HP18E80 SDFFRQD1);
+#   2. OSS-PDK INFIX — `<lib>__[s][e]df…` where the flop family sits after the
+#      `__` library separator, with optional scan (`s`) and/or enable (`e`)
+#      variant letters: sky130 `__dfxtp`/`__dfrtp`/`__dfstp`/`__dfbbn`/`__sdfxtp`
+#      AND the enable families `__edfxtp`/`__sedfxtp` (yosys maps `$_DFFE_*` →
+#      `edfxtp`, the SINGLE most common flop on real sky130 synth — e.g. 1024 in
+#      subservient); gf180 `__dffq`/`__sdffq`/`__edffq`.
+# `__[s][e]df` after the library `__` separator is the D-flip-flop family across
+# the OSS PDKs (delay=`__dly`, latch=`__dl*`/`__lat*`, buffer=`__buf`, mux=`__mux`
+# never match — none reach `df`). This closes the sky130/gf180 miss (incl. the
+# enable-flop family) that would otherwise leave the auto-detect empty → a WRONG
+# `--dff` seed → `fault cut` cutting nothing → un-cut flops → a false
+# NOT_APPLICABLE that the coverage gate would silently pass (gate-gaming).
 _DFF_INST_RE = re.compile(
-    r'^\s*(S?DFF[A-Za-z0-9_]*)\s+\\?[^\s()]+\s*\(', re.MULTILINE | re.IGNORECASE)
+    r'^\s*('
+    r'S?DFF[A-Za-z0-9_]*'                        # commercial prefix DFF*/SDFF*
+    r'|[A-Za-z][A-Za-z0-9_]*__s?e?df[a-z0-9_]*'   # OSS-PDK infix *__[s][e]df…
+    r')\s+\\?[^\s()]+\s*\(', re.MULTILINE | re.IGNORECASE)
 
 
 def detect_dff_cells(netlist_text: str) -> str:
