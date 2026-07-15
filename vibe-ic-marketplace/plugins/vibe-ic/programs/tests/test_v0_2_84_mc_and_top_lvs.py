@@ -105,18 +105,105 @@ def test_mc_yield_written_and_gate_fires(tmp_path, monkeypatch):
 def test_mc_full_yield_passes_gate(tmp_path, monkeypatch):
     p = _mc_project(tmp_path)
     monkeypatch.setattr(ARS, "_ngspice_available", lambda c: True)
-    monkeypatch.setattr(ARS, "_run_ngspice", _fake_ngspice([1.8] * 20))
+    # 20 DISTINCT in-range values (real mismatch spread, all within [1.7,1.9])
+    # → real 100% yield. ORGANIC #142: identical samples would now be flagged
+    # degenerate, so a real full-yield run must show spread.
+    vals = [round(1.75 + i * 0.005, 3) for i in range(20)]  # 1.75..1.845
+    monkeypatch.setattr(ARS, "_run_ngspice", _fake_ngspice(vals))
     monkeypatch.setattr(ARS, "_container_path", lambda c, r, p_: str(p_))
     rep = MC.run_block(p, "ldo", "x", "sky130", 20)
     assert rep["verdict"] == "PASS" and rep["mc_yield_pct"] == 100.0
 
 
+def test_mc_degenerate_all_identical_is_unscoreable(tmp_path, monkeypatch):
+    """ORGANIC #142 no-leak — N IDENTICAL samples (sigma≈0, the typical-corner
+    mc_mm_switch=0 degenerate case) must be flagged UNSCOREABLE, NEVER reported
+    as a real 100%/0% yield."""
+    p = _mc_project(tmp_path)
+    monkeypatch.setattr(ARS, "_ngspice_available", lambda c: True)
+    monkeypatch.setattr(ARS, "_run_ngspice", _fake_ngspice([1.8] * 30))
+    monkeypatch.setattr(ARS, "_container_path", lambda c, r, p_: str(p_))
+    rep = MC.run_block(p, "ldo", "x", "sky130", 30)
+    assert rep["verdict"] == "UNSCOREABLE"
+    assert "mc_yield_pct" not in rep or rep.get("mc_yield_pct") is None
+    assert "spread" in rep["reason"] or "distinct" in rep["reason"]
+    # the honest per-spec record marks the degeneracy
+    assert rep["spec_yield"]["vout"]["degenerate"] is True
+
+
+def test_mc_real_spread_accepted(tmp_path, monkeypatch):
+    """A real mismatch spread (≥2 distinct values) is scored normally — the
+    mismatch-section idiom (tt_mm) produces this."""
+    p = _mc_project(tmp_path)
+    monkeypatch.setattr(ARS, "_ngspice_available", lambda c: True)
+    # 7 in-range + 3 out-of-range, all distinct → 70% yield
+    vals = [1.78, 1.80, 1.82, 1.84, 1.86, 1.88, 1.72, 1.60, 1.95, 1.98]
+    monkeypatch.setattr(ARS, "_run_ngspice", _fake_ngspice(vals))
+    monkeypatch.setattr(ARS, "_container_path", lambda c, r, p_: str(p_))
+    rep = MC.run_block(p, "ldo", "x", "sky130", 10)
+    assert rep["rc"] == 0
+    assert rep["mc_yield_pct"] == 70.0
+    assert rep["spec_yield"]["vout"]["distinct_values"] >= 2
+
+
 def test_mc_skips_honestly_without_specs(tmp_path, monkeypatch):
     blk = tmp_path / "phase2" / "analog" / "ldo"
     blk.mkdir(parents=True)
-    (blk / "ldo.sp").write_text("* deck\n.end\n")
+    # A RUNNABLE deck (has a .meas analysis card) but no spec.json → the
+    # specs-absent SKIP path, not the UNSCOREABLE (no-runnable-deck) path.
+    (blk / "ldo.sp").write_text(
+        "* deck\n.meas dc vout FIND v(out) AT=1u\n.end\n")
     rep = MC.run_block(tmp_path, "ldo", "x", "sky130", 5)
     assert rep["rc"] == 2 and "spec" in rep["reason"]
+
+
+# ── ORGANIC #142 — runnable-deck preference + UNSCOREABLE honesty ───────────
+
+def test_find_deck_prefers_runnable_over_bare_subckt(tmp_path):
+    """A bare A3 `.subckt` library sorts first alphabetically but is NOT
+    runnable; the runnable sizing_loop deck (with a .control/.meas analysis)
+    must be selected instead."""
+    blk = tmp_path / "phase3" / "analog" / "ldo"
+    (blk).mkdir(parents=True)
+    # bare A3 subckt library (no analysis card) — sorts first as `ldo.sp`
+    (blk / "ldo.sp").write_text(
+        ".subckt ldo vdd vss vin vout\nr1 vin vout 1k\n.ends ldo\n")
+    # runnable deck in a subdir _find_deck never used to search
+    sl = blk / "sizing_loop"
+    sl.mkdir()
+    (sl / "run_tt.sp").write_text(
+        "* ldo tb\n.control\nop\necho \"MEAS vout=\" $&v(out)\n.endc\n.end\n")
+    deck, rank = MC._find_deck(tmp_path, "ldo")
+    assert deck is not None
+    assert deck.name == "run_tt.sp"
+    assert rank == 3  # runnable AND scoreable (echo MEAS)
+
+
+def test_bare_subckt_only_is_unscoreable_not_zero_scored(tmp_path, monkeypatch):
+    """A block dir with ONLY a bare `.subckt` library → honest UNSCOREABLE
+    verdict; MC must NOT run N empty iterations that each score 0."""
+    blk = tmp_path / "phase3" / "analog" / "delta_sigma"
+    blk.mkdir(parents=True)
+    (blk / "delta_sigma.sp").write_text(
+        ".subckt delta_sigma vdd vss vin dout\n"
+        "* no analysis card — a reusable library only\n"
+        "r1 vin dout 1k\n.ends delta_sigma\n")
+    spec = tmp_path / "phase1" / "analog" / "delta_sigma"
+    spec.mkdir(parents=True)
+    (spec / "spec.json").write_text(json.dumps(
+        {"specs": [{"name": "vout", "min": 0.0, "max": 1.0}]}))
+    # Guard: ngspice must NEVER be invoked on a bare-subckt-only block.
+    called = {"n": 0}
+    monkeypatch.setattr(ARS, "_ngspice_available",
+                        lambda c: (called.__setitem__("n", called["n"] + 1)
+                                   or True))
+    rep = MC.run_block(tmp_path, "delta_sigma", "x", "sky130", 30)
+    assert rep["verdict"] == "UNSCOREABLE"
+    assert rep["rc"] == 2
+    assert "bare .subckt" in rep["reason"]
+    assert called["n"] == 0  # never even probed ngspice → no empty runs
+    # and no mc_runs dir of empty decks was created
+    assert not (blk / "mc_runs").exists()
 
 
 def test_mc_seeds_are_distinct_in_decks(tmp_path, monkeypatch):
@@ -129,7 +216,8 @@ def test_mc_seeds_are_distinct_in_decks(tmp_path, monkeypatch):
     seeds = [d.read_text().split(".option seed=")[1].split("\n")[0]
              for d in decks]
     assert seeds == ["1", "2", "3"]
-    assert all("sky130.lib.spice mc" in d.read_text() for d in decks)
+    # ORGANIC #142 — the MISMATCH corner section (tt_mm) is loaded, not `mc`.
+    assert all("sky130.lib.spice tt_mm" in d.read_text() for d in decks)
 
 
 @pytest.mark.skipif(not MCP_SRC.is_file(),

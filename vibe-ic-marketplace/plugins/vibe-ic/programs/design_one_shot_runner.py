@@ -1962,6 +1962,41 @@ def step_rtl_gen(project: Path, ic_class: str) -> StepResult:
                 extras={"fallback_skill": None,
                         "deferred_to": "analog_track",
                         "class_config": config})
+        # ORGANIC #141 — INTERFACE-AWARE N/A (pre-dispatch structural check on
+        # L9 top_ports). A converter / analog-applicable class whose ACTUAL top
+        # interface exposes NO digital clock/reset/data INPUT (all-analog:
+        # analog ins, analog supplies/refs, raw 1-bit modulator-bitstream OUTs;
+        # any on-chip clocks are OUTPUTS) has no honest synthesizable digital
+        # datapath to author — synthesizable RTL needs a clock the pinout does
+        # not provide, and fabricating one violates the no-invention rule.
+        # Route the digital RTL steps to the analog N/A path (exactly as the
+        # analog A-steps skip on a digital-only design) instead of
+        # WAIVE→spec-to-rtl→FAIL. A converter that DOES expose a digital
+        # clk/rst/data interface (real on-chip decimation) is unchanged.
+        # Structural + chip-AGNOSTIC — no IC-name / class-keyword carve-out;
+        # gated by analog_applicable so a pure-digital class never reaches here.
+        if config.get("analog_applicable"):
+            try:
+                import sys as _sys
+                if str(PROGRAMS_DIR) not in _sys.path:
+                    _sys.path.insert(0, str(PROGRAMS_DIR))
+                import analog_interface_classify as _aic
+                _absent, _why, _ev = _aic.digital_datapath_absent(project)
+            except Exception as _e:
+                _absent, _why, _ev = (False, f"classifier unavailable: {_e}", {})
+            if _absent:
+                return StepResult(
+                    "rtl_gen", "WAIVED",
+                    time.time() - t0,
+                    f"IC class {ic_class!r} is analog-applicable and its top "
+                    f"interface is ALL-ANALOG ({_why}) — no digital RTL to "
+                    f"author. Digital RTL steps route to the analog A1..A8 "
+                    f"track (/vibe-ic-analog): N/A, NOT spec-to-rtl.",
+                    extras={"fallback_skill": None,
+                            "deferred_to": "analog_track",
+                            "digital_datapath_absent": True,
+                            "interface_evidence": _ev,
+                            "class_config": config})
         # ROUTING FIX — surface the captured-lesson digest to the spec-to-rtl /
         # catalog-glue author. Shape-C blind authors already get this digest
         # (benchmark_dispatch._render_lesson_digest); a runner-driven (Shape-B)

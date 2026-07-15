@@ -3470,6 +3470,82 @@ def _project_is_pure_analog(project: Path) -> Tuple[bool, str]:
     return result
 
 
+_ANALOG_IFACE_NA_CACHE: Dict[str, Tuple[bool, str]] = {}
+
+
+def _digital_backend_is_na(project: Path) -> Tuple[bool, str]:
+    """True when the digital RTL→GDS backend stages are N/A for this project —
+    EITHER because it is a pure-analog class (registry contract), OR (ORGANIC
+    #141) because it is an analog-APPLICABLE class whose ACTUAL L9 top
+    interface exposes NO digital clock/reset/data INPUT (all-analog: analog
+    ins, analog supplies/refs, raw 1-bit modulator-bitstream OUTs). The latter
+    is the interface-aware discriminator: a `data_converter` with an all-analog
+    pinout has no honest synthesizable digital datapath to author, so its
+    digital steps are N/A (like the analog A-steps on a digital-only design),
+    NOT a hard-FAIL on the absent RTL. A converter that DOES expose a digital
+    clk/rst/data interface keeps its digital track.
+
+    Fail-CLOSED + chip-AGNOSTIC (mirrors `_project_is_pure_analog`): requires
+    NO synthesisable RTL present, an analog-applicable class, an analog block
+    list, AND the structural all-analog-interface signal."""
+    # (1) the registry-contract pure-analog path (unchanged).
+    is_pa, pa_reason = _project_is_pure_analog(project)
+    if is_pa:
+        return (True, pa_reason)
+
+    key = str(project.resolve())
+    if key in _ANALOG_IFACE_NA_CACHE:
+        return _ANALOG_IFACE_NA_CACHE[key]
+    result: Tuple[bool, str] = (False, "")
+    try:
+        # (2) no synthesisable RTL may exist (a real digital datapath present →
+        # the digital backend is NOT N/A).
+        for cand in ("phase2/stage1/rtl", "rtl", "src", "hdl"):
+            d = project / cand
+            if d.is_dir() and (any(d.glob("*.sv")) or any(d.glob("*.v"))):
+                _ANALOG_IFACE_NA_CACHE[key] = result
+                return result
+        # (3) analog-applicable class + analog block list (guards a digital
+        # project that merely lacks RTL from being mislabelled).
+        import sys as _sys
+        if str(PROGRAMS_DIR) not in _sys.path:
+            _sys.path.insert(0, str(PROGRAMS_DIR))
+        from ic_class_profile import detect_ic_class as _detect
+        profile = _detect(project) or {}
+        ic_class = str(profile.get("ic_class") or "unknown")
+        analog_applicable = False
+        try:
+            reg = json.loads((PROGRAMS_DIR / "ic_class_registry.json").read_text())
+            for c in (reg.get("classes") or []):
+                if (c.get("name") == ic_class
+                        or ic_class in (c.get("synonyms") or [])):
+                    analog_applicable = bool(c.get("analog_applicable"))
+                    break
+        except Exception:
+            analog_applicable = bool(profile.get("is_mixed_signal")
+                                     or profile.get("is_pure_analog"))
+        if not analog_applicable:
+            _ANALOG_IFACE_NA_CACHE[key] = result
+            return result
+        if not _has_canonical_analog_blocks(project):
+            _ANALOG_IFACE_NA_CACHE[key] = result
+            return result
+        # (4) the structural all-analog-interface signal.
+        import analog_interface_classify as _aic
+        absent, why, _ev = _aic.digital_datapath_absent(project)
+        if absent:
+            result = (
+                True,
+                f"analog-applicable class {ic_class!r} with an all-analog top "
+                f"interface ({why}); no digital RTL — digital backend "
+                f"(stages 1-4) + mixed-signal replaced by the analog A1..A9 "
+                f"track")
+    except Exception as e:
+        result = (False, f"interface-aware N/A detection unavailable: {e}")
+    _ANALOG_IFACE_NA_CACHE[key] = result
+    return result
+
+
 def _run_structural_rtl_gates(project: Path,
                               strict_timing: bool = False,
                               allow_thin_input: bool = False,
@@ -4883,12 +4959,16 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # chip-AGNOSTIC + fail-closed (see _project_is_pure_analog).
     step_stage = step.get("stage", "")
     if step_stage in _PURE_ANALOG_NA_STAGES:
-        is_pa, pa_reason = _project_is_pure_analog(project)
-        if is_pa:
+        # ORGANIC #141 — the digital backend is N/A for a pure-analog class OR
+        # for an analog-applicable class whose L9 top interface is all-analog
+        # (no digital clock/reset/data INPUT). Both route the digital RTL→GDS
+        # stages to SKIPPED-CONDITION instead of MISSING/FAIL.
+        is_na, na_reason = _digital_backend_is_na(project)
+        if is_na:
             result.status = "SKIPPED-CONDITION"
             result.reasons.append(
-                f"N/A for pure-analog IC: stage {step_stage!r} is the "
-                f"digital RTL→GDS backend — {pa_reason}.")
+                f"N/A for analog IC (no digital datapath): stage "
+                f"{step_stage!r} is the digital RTL→GDS backend — {na_reason}.")
             return result
 
     condition = step.get("condition")

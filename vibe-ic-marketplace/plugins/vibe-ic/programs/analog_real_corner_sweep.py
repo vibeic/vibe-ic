@@ -189,23 +189,53 @@ def _declared_pdk_target_for_emit(project: Path):
         return declared.strip()
 
 
-def pdk_substitution_header(project: Path, sim_pdk: str):
+def pdk_substitution_header(project: Path, sim_pdk: str, container=None,
+                            pdks_root="/foss/pdks", lister=None):
     """Return the structured `pdk_substitution` disclosure line (with trailing
     newline) when the L19 tapeout target genuinely differs from the simulation
-    PDK family `sim_pdk` (e.g. "sky130"); else "".
+    PDK family `sim_pdk` (e.g. "sky130") AND that target is NOT natively
+    installed in the EDA container; else "".
 
-    The emitted line is exactly the shape flow_compliance_check's
+    Headline honesty fix — the substitution disclosure (which earns the
+    A3/A5-A9 deferral waiver) must fire ONLY for a genuinely-absent target.
+    When the L19 target IS natively installed in the container (probed via
+    analog_pdk_availability), this is NOT a substitution: the native marker is
+    emitted instead (recognised by NEITHER the structured nor the prose
+    substitution predicate), so no deferral waiver is synthesised and the
+    native analog path must be exercised. chip-AGNOSTIC.
+
+    The substitution line is exactly the shape flow_compliance_check's
     `_pdk_substitution_disclosed` recognises:
         * pdk_substitution: target=<L19 pdk_target> substitute=<sim pdk> \
 reason=no public ngspice models for target; open-source substitute
-    The `substitute` token is the simulation family token (the same token
-    `_detect_pdk` returns from the deck body), so the gate's
-    family-containment predicate holds. chip-AGNOSTIC."""
+    """
     declared = _declared_pdk_target_for_emit(project)
     if not declared:
         return ""  # nothing concrete to substitute against → no disclosure
     if sim_pdk.lower() in declared.lower():
         return ""  # the deck IS the declared target → no substitution at all
+
+    # Headline fix — walk the native-PDK resolution LADDER before disclosing a
+    # substitution:
+    #   rung 1 — the PROJECT stages a custom analog PDK under input/pdk/ (the
+    #            commercial / NDA-node case) — always checked (local FS, cheap);
+    #   rung 2 — the target FAMILY is installed in the EDA container — checked
+    #            only when a container/lister is available.
+    # A native hit (rung 1 or 2) emits the `pdk_native_available` marker (which
+    # NEITHER substitution predicate recognises → no A3/A5-A9 deferral waiver).
+    # Only when NEITHER rung resolves does the honest substitution disclosure
+    # fire. An unreachable / empty probe falls back to substitution (legacy
+    # behaviour preserved).
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import analog_pdk_availability as _apa
+        res = _apa.resolve_pdk(declared, project=project, pdks_root=pdks_root,
+                               container=container, lister=lister)
+        if res.get("available"):
+            return _apa.native_available_header(res, sim_pdk)
+    except Exception:
+        pass  # probe failure → fall through to the substitution disclosure
+
     return (
         f"* pdk_substitution: target={declared} substitute={sim_pdk} "
         f"reason=no public ngspice models for target; open-source substitute\n"
@@ -1168,7 +1198,7 @@ def run_block(project, block, container, pdk, topology_override):
     # disclosure marker so flow_compliance_check downgrades the (correct)
     # #438b PDK-mismatch FAIL to WAIVED-DEFERRED. Empty string when there is
     # no substitution (deck == declared target / no concrete target).
-    subst_header = pdk_substitution_header(project, pdk)
+    subst_header = pdk_substitution_header(project, pdk, container=container)
 
     # GAP-ANALOG-2 — inherit the L5 block spec: the verdict target + the deck
     # reference/divider come from phase1/generated_docs/L5_ADI_SPEC.json when it

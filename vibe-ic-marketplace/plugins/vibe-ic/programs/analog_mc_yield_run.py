@@ -43,10 +43,23 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import analog_real_corner_sweep as _ars  # noqa: E402  (docker/ngspice helpers)
 
-# PDK statistical-section names — the FOUNDRY's own Monte-Carlo model
-# sections (process + mismatch distributions). PDK-family namespaced,
-# never chip-specific.
-_MC_SECTION = {"sky130": "mc", "gf180": "statistical"}
+# PDK Monte-Carlo model sections — the corner section that ENABLES device
+# MISMATCH resampling (the foundry's own mismatch distribution). ORGANIC #142
+# (corrected): a typical corner section HARDCODES `mc_mm_switch=0`, so a
+# deck-level override is ignored (the section wins) and every run returns the
+# IDENTICAL value (sigma≈0). The proven idiom is the MISMATCH corner section:
+# sky130 `tt_mm` sets `mc_mm_switch=1` (verified: LDO vout sigma 6.8e-16 → 9.81
+# mV). The `mc` section (mc_mm_switch=0, mc_pr_switch=1) does NOT resample
+# mismatch and additionally lacks the base device-model include. PDK-family
+# namespaced, never chip-specific. The degeneracy guard below is the
+# family-agnostic backstop: if the chosen section still yields no spread the run
+# is flagged UNSCOREABLE rather than reporting a fabricated 100%/0% yield.
+_MC_SECTION = {"sky130": "tt_mm", "gf180": "statistical"}
+
+# ORGANIC #142 — a MC result is only scoreable when the samples actually vary.
+# < this many DISTINCT measured values for a spec ⇒ degenerate (no statistical
+# spread) ⇒ that spec is UNSCOREABLE, never a fabricated yield.
+_MIN_DISTINCT_MC_VALUES = 2
 
 _NATIVE_MEAS_RE = re.compile(r"^([a-zA-Z_]\w*)\s*=\s*([\-0-9.eE+]+)",
                              re.MULTILINE)
@@ -75,20 +88,85 @@ def _load_specs(project: Path, block: str):
     return {}, None
 
 
+# ORGANIC #142 — a MC iteration is only scoreable against a deck that
+# actually RUNS an analysis. A bare `.subckt … .ends` library (the A3
+# canonical artefact) instantiates nothing → every wrapped run loads a model
+# set and runs no analysis → 0 scoreable measures. Rank candidate decks so a
+# RUNNABLE deck (top-level analysis card / TB harness — e.g. the sizing_loop
+# decks) always wins over a bare subckt library, searching subdirs too.
+_ANALYSIS_CARD_RE = re.compile(
+    r"(?im)^\s*\.(control|tran|ac|dc|op|meas|noise|four|disto|pz|sens|tf)\b")
+_ECHO_MEAS_RE = re.compile(r"(?im)^\s*echo\s+.*\bMEAS\b")
+_MEAS_CARD_RE = re.compile(r"(?im)^\s*\.meas")
+_SUBCKT_RE = re.compile(r"(?im)^\s*\.subckt\b")
+
+
+def _deck_rank(text: str) -> int:
+    """Rank a candidate .sp for MC-yield scoreability (higher = better):
+      3  runnable AND emits a scoreable measure (.meas / echo MEAS)
+      2  runnable (has a top-level analysis card) but no explicit measure
+      0  NOT runnable (bare `.subckt … .ends` library / no analysis card)
+    chip-AGNOSTIC: keyed on standard ngspice analysis-card syntax only."""
+    # An analysis card that sits INSIDE a `.control … .endc` block still
+    # counts; the regex is line-anchored and `.control`/`.meas`/`echo MEAS`
+    # are the load-bearing tokens. A bare subckt library has none of them.
+    runnable = bool(_ANALYSIS_CARD_RE.search(text)) or bool(
+        _ECHO_MEAS_RE.search(text))
+    if not runnable:
+        return 0
+    scoreable = bool(_MEAS_CARD_RE.search(text)) or bool(
+        _ECHO_MEAS_RE.search(text))
+    return 3 if scoreable else 2
+
+
 def _find_deck(project: Path, block: str):
+    """Return (deck_path, rank) for the best RUNNABLE deck, or (None, 0) when
+    only bare `.subckt` libraries exist. Searches `phase{2,3}/analog/<block>/`
+    recursively (incl. `sizing_loop/`). Deterministic: rank desc, then the
+    shallowest path, then lexical."""
+    cands: list[tuple[int, int, str, Path]] = []
     for base in (project / "phase2" / "analog" / block,
                  project / "phase3" / "analog" / block):
-        if base.is_dir():
-            sps = sorted(base.glob("*.sp"))
-            if sps:
-                return sps[0]
-    return None
+        if not base.is_dir():
+            continue
+        for sp in base.rglob("*.sp"):
+            if not sp.is_file():
+                continue
+            try:
+                text = sp.read_text(errors="replace")
+            except OSError:
+                continue
+            rank = _deck_rank(text)
+            depth = len(sp.relative_to(base).parts)
+            cands.append((rank, depth, str(sp), sp))
+    if not cands:
+        return None, 0
+    # rank DESC (higher better), then depth ASC (shallow first), then path ASC.
+    best = min(cands, key=lambda c: (-c[0], c[1], c[2]))
+    return (best[3] if best[0] > 0 else None), best[0]
 
 
 def run_block(project: Path, block: str, container: str, pdk: str,
               n: int) -> dict:
-    deck = _find_deck(project, block)
+    deck, deck_rank = _find_deck(project, block)
     if deck is None:
+        # ORGANIC #142 — distinguish "no deck at all" from "only a bare
+        # `.subckt` library (no analysis card)". The latter must NOT be run N
+        # times to score 0 every iteration — it is honestly UNSCOREABLE: MC
+        # yield cannot be computed until a runnable deck (TB harness with a
+        # `.control`/`.meas` analysis) exists for the block.
+        any_sp = any(
+            (project / ph / "analog" / block).is_dir()
+            and any((project / ph / "analog" / block).rglob("*.sp"))
+            for ph in ("phase2", "phase3"))
+        if any_sp:
+            return {"verdict": "UNSCOREABLE", "rc": 2,
+                    "reason": (f"block {block!r} has only bare .subckt "
+                               f"libraries (no top-level analysis card / TB "
+                               f"harness) — MC yield is not scoreable until a "
+                               f"runnable deck (e.g. sizing_loop/*.sp with a "
+                               f".control/.meas analysis) exists. Not running "
+                               f"{n} empty iterations.")}
         return {"verdict": "SKIP", "rc": 2,
                 "reason": f"no .sp deck found for block {block!r}"}
     specs, spec_src = _load_specs(project, block)
@@ -149,6 +227,7 @@ def run_block(project: Path, block: str, container: str, pdk: str,
 
     # per-spec yield
     spec_yield = {}
+    degenerate_specs = []
     for name, lim in specs.items():
         # #464 — a nulled metric is present-as-None; it is NOT a scored value
         # (skip it rather than crash the min/max comparison or count it).
@@ -157,16 +236,47 @@ def run_block(project: Path, block: str, container: str, pdk: str,
         if not scored:
             spec_yield[name] = {"runs_scored": 0, "yield_pct": None}
             continue
+        # ORGANIC #142 — degeneracy guard. A yield off N IDENTICAL samples is
+        # meaningless (the corner section did not resample device mismatch). If
+        # fewer than _MIN_DISTINCT_MC_VALUES distinct measured values were seen,
+        # the spec is UNSCOREABLE — never a fabricated 100%/0%.
+        distinct = len({round(float(r[name]), 12) for r in scored})
+        if distinct < _MIN_DISTINCT_MC_VALUES:
+            spec_yield[name] = {
+                "runs_scored": len(scored), "distinct_values": distinct,
+                "yield_pct": None, "degenerate": True}
+            degenerate_specs.append(name)
+            continue
         passed = sum(
             1 for r in scored
             if (lim.get("min") is None or r[name] >= lim["min"])
             and (lim.get("max") is None or r[name] <= lim["max"]))
         spec_yield[name] = {
-            "runs_scored": len(scored), "passed": passed,
+            "runs_scored": len(scored), "distinct_values": distinct,
+            "passed": passed,
             "yield_pct": round(100.0 * passed / len(scored), 2)}
     scoreable = [v["yield_pct"] for v in spec_yield.values()
-                 if v["yield_pct"] is not None]
+                 if v.get("yield_pct") is not None]
     if not scoreable:
+        # ORGANIC #142 — distinguish "MC produced NO statistical spread"
+        # (degenerate — the mismatch corner section was not selected / mismatch
+        # not resampled) from "no scoreable measure at all". The degenerate case
+        # is an honest UNSCOREABLE with a fix hint, NOT a fabricated yield.
+        if degenerate_specs:
+            return {"verdict": "UNSCOREABLE", "rc": 2,
+                    "reason": (
+                        f"MC produced NO statistical spread for "
+                        f"{degenerate_specs} (sigma≈0 / <"
+                        f"{_MIN_DISTINCT_MC_VALUES} distinct values). The "
+                        f"variation was not resampled — either the wrong CORNER "
+                        f"SECTION (a typical section hardcodes mc_mm_switch=0, "
+                        f"e.g. sky130 'tt' vs 'tt_mm') OR the wrong DEVICE "
+                        f"VARIANT (a deterministic device subckt overlaid with "
+                        f"an MC switch silently wins → sigma 0). Select the "
+                        f"PDK's statistical/mismatch section AND its MC device "
+                        f"variant; refusing to report a fabricated 100%/0% "
+                        f"yield. (family-agnostic backstop.)"),
+                    "mc_runs": n, "spec_yield": spec_yield}
         return {"verdict": "SKIP", "rc": 2,
                 "reason": ("MC ran but no run carried a scoreable measure "
                            "— check the deck's .meas names vs spec.json"),
