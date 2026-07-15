@@ -166,6 +166,63 @@ def _stubs_enabled(args=None) -> bool:
     return val in ("1", "true", "yes", "on")
 
 
+# ── A6 native per-block PV (v1.4.27 — consume the staged sign-off decks) ─────
+
+def _declared_l19_target(project: Path):
+    """The L19 tapeout pdk_target string, or None. Delegates to the shared
+    reader so the A6 producer agrees with the corner-sweep emitter."""
+    try:
+        sys.path.insert(0, str(PROGRAMS_DIR))
+        import analog_netlist_pdk_check as _npc
+        return _npc._declared_pdk_target(Path(project))
+    except Exception:
+        l19 = (Path(project) / "phase1" / "generated_docs"
+               / "L19_CONSTRAINTS_PDK.json")
+        try:
+            t = json.loads(l19.read_text(errors="replace")) \
+                .get("fields", {}).get("pdk_target")
+        except (OSError, ValueError):
+            return None
+        if isinstance(t, str) and t.strip() and not t.strip().lower().startswith(
+                ("n/a", "na ", "none", "tbd")):
+            return t.strip()
+        return None
+
+
+def _try_native_a6_pv(project: Path, block: str, container: str):
+    """Run native per-block PV (svrfdrc DRC + klayout_pdk_lvs LVS) when the
+    v1.4.24 resolver resolves the project's STAGED sign-off decks (rung 1/2).
+    Returns the producer status dict (with `ran`), or None when the native path
+    does not apply (no declared target / no resolved deck) — the caller then
+    keeps its existing waiver / stub path. Never raises."""
+    try:
+        sys.path.insert(0, str(PROGRAMS_DIR))
+        import analog_a6_native_pv as _pv
+        import analog_pdk_availability as _apa
+    except Exception:
+        return None
+    declared = _declared_l19_target(project)
+    if not declared:
+        return None
+    try:
+        res = _apa.resolve_pdk(declared, project=str(project),
+                               container=container)
+    except Exception:
+        return None
+    if not (res.get("available")
+            and (res.get("drc_deck") or res.get("lvs_deck"))):
+        return None
+    try:
+        return _pv.run_block_pv(project, block, res, container)
+    except Exception:
+        return None
+
+
+def _pv_verdict(native, kind):
+    d = (native or {}).get(kind)
+    return d.get("verdict") if isinstance(d, dict) else "n/a"
+
+
 def _emit_deterministic_stub(project: Path, bname: str,
                               step_name: str) -> List[Path]:
     """Emit minimal-substance artefacts for the given (block, step)
@@ -478,8 +535,35 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
         # OR (A6 per-block PV only) DRC/LVS evidence missing-but-required.
         # A6's hardened gate returns FAIL (not rc=2) on missing PV
         # evidence per the no-fabrication doctrine, so the rc=2 stub
-        # fallback above never fires for A6. Honour stub-mode here by
-        # emitting honest zero-violation / match evidence + re-running.
+        # fallback above never fires for A6.
+        #
+        # v1.4.27 — NATIVE per-block PV FIRST (real evidence beats a stub). When
+        # the v1.4.24 resolver resolves the project's STAGED sign-off decks
+        # (rung 1 custom PDK / rung 2 installed) and the block GDS is present,
+        # run svrfdrc DRC + klayout_pdk_lvs LVS, write the real drc.report /
+        # comp.json, then re-run the A6 gate on that evidence. A violating block
+        # FAILs A6 honestly (no false-clean); a clean+match PASSes for real.
+        if step_name == "A6_block_pv":
+            native = _try_native_a6_pv(
+                project, bname,
+                getattr(args, "container", None) or "vibeic-eda")
+            if native and native.get("ran"):
+                cp2 = subprocess.run(cmd, capture_output=True,
+                                      text=True, timeout=1800)
+                passed = cp2.returncode == 0
+                return StepResult(
+                    step_name, bname,
+                    "PASS_WITH_NATIVE_PV" if passed else "FAIL",
+                    time.time() - t0,
+                    (f"native per-block PV executed "
+                     f"(DRC={_pv_verdict(native, 'drc')}, "
+                     f"LVS={_pv_verdict(native, 'lvs')}); A6 gate re-ran "
+                     f"{'PASS' if passed else 'FAIL'}"),
+                    extras={"native_pv": native,
+                            "extraction_strategy": "native_signoff_pv",
+                            "low_confidence": False})
+        # Honour stub-mode: emit honest zero-violation / match evidence +
+        # re-run (only when no native PV ran and stubs are enabled).
         if step_name == "A6_block_pv" and _stubs_enabled(args):
             stub_paths = _emit_deterministic_stub(project, bname, step_name)
             if stub_paths:
