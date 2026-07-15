@@ -1016,17 +1016,40 @@ def resolve_spec(project, block, btype):
 
 
 def render_deck(btype, block, pdk, pdk_lib, corner, knob, val,
-                deck_overrides=None, temp_c=None):
+                deck_overrides=None, temp_c=None, devices=None):
     """Render T[btype] for one sweep point, then apply the L5 deck overrides
     (GAP-ANALOG-2) and a REAL per-corner temperature card (GAP-ANALOG-3).
 
     Overrides rewrite the deck's OWN canonical source lines (generic ngspice
     deck syntax — a `v_vref`/`v_vdd` source line — never a chip literal); a
     field whose line is absent is silently skipped (the caller's disclosure
-    records it as fallback). Returns (deck_text, applied_overrides)."""
+    records it as fallback). Returns (deck_text, applied_overrides).
+
+    Family-agnostic device mapping (v1.4.27, native custom-PDK consumption):
+    `devices` is a {role: subckt_name} map from the resolved PDK deck context
+    (analog_pdk_deck_context). The templates are AUTHORED against the sky130
+    device tokens; when a non-sky130 family is resolved, the template's canonical
+    tokens are REWRITTEN to the resolved family's device subckt names, so the
+    emitted deck carries the FAMILY's devices — never sky130 literals against a
+    foreign lib. A missing role is caught upstream (NEEDS_NATIVE_TEMPLATE); it
+    never reaches here as a silent sky130 fallback for a foreign family."""
     kw = {(knob if knob != "__noop__" else "_unused"): val}
     deck = T[btype].format(block=block, pdk=pdk, pdk_lib=pdk_lib,
                            corner=corner, **kw)
+    # Remap the template's canonical sky130 device tokens to the RESOLVED
+    # family's device subckt names (only when they differ — sky130 stays
+    # byte-identical). Import kept local so this module has no import-time
+    # dependency on the deck-context helper.
+    if devices:
+        try:
+            from analog_pdk_deck_context import SKY130_DEVICES as _SKY
+        except Exception:
+            _SKY = {"nmos": "sky130_fd_pr__nfet_01v8",
+                    "pmos": "sky130_fd_pr__pfet_01v8"}
+        for role, canon in _SKY.items():
+            fam = devices.get(role)
+            if fam and fam != canon:
+                deck = deck.replace(canon, fam)
     ov = deck_overrides or {}
     applied = {}
     if "vref" in ov:
@@ -1062,18 +1085,23 @@ PVT_PROCESS = (("ss", -0.03), ("tt", 0.0), ("ff", +0.03))
 PVT_TEMPS = (("m40c", -40, +0.01), ("27c", 27, 0.0), ("125c", 125, -0.01))
 
 
-def build_pvt_grid(base, base_log, real_sims, tol):
+def build_pvt_grid(base, base_log, real_sims, tol, process_corners=None):
     """Construct the 9-corner PVT grid with HONEST per-corner provenance.
 
     real_sims : {(proc, tlbl): {"value": float, "log": str, "ok": bool}} for
                 corners that were REALLY simulated (section present + ngspice
                 converged + log on disk). Any corner NOT present (or whose
                 ok/log/value is falsey) is DERIVED from `base` and marked
-                simulator_run=false. Returns (pvt_grid, corners_executed)."""
+                simulator_run=false. Returns (pvt_grid, corners_executed).
+
+    `process_corners` (from the resolved PDK deck context) names the process
+    sections the grid spans; defaults to the open-PDK ss/tt/ff (PVT_PROCESS) so
+    the sky130 path is unchanged."""
     real_sims = real_sims or {}
+    corners = process_corners or PVT_PROCESS
     pvt_grid = []
     corners_executed = 0
-    for proc, p_off in PVT_PROCESS:
+    for proc, p_off in corners:
         for tlbl, temp_c, t_off in PVT_TEMPS:
             real = real_sims.get((proc, tlbl))
             is_executed = bool(real and real.get("ok") and real.get("log")
@@ -1126,26 +1154,33 @@ def _pdk_has_section(container, pdk_lib, section):
 
 
 def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
-                     pdk_lib, knob, val, deck_overrides, subst_header, base_tt):
+                     pdk_lib, knob, val, deck_overrides, subst_header, base_tt,
+                     process_corners=None, devices=None, typ_section="tt"):
     """Attempt a REAL ngspice sim at each PVT corner (real .lib section + real
     .temp) for the sized sweep point. Returns a real_sims dict for the corners
     that genuinely converged; a corner whose model section is absent or whose
-    ngspice run failed is OMITTED so the caller derives it. tt@27C reuses the
-    step-1 base run (base_tt) — it is a genuine tt sim at the ngspice default
-    27 °C. §4.05: a corner is recorded real ONLY when its ngspice log exists on
-    disk. chip-AGNOSTIC."""
+    ngspice run failed is OMITTED so the caller derives it. The nominal/typ
+    corner reuses the step-1 base run (base_tt). §4.05: a corner is recorded
+    real ONLY when its ngspice log exists on disk. chip-AGNOSTIC.
+
+    `process_corners` (from the resolved PDK deck context) is the list of
+    (section_name, offset) the grid sweeps; it defaults to the open-PDK ss/tt/ff
+    (PVT_PROCESS) so the sky130 path is unchanged. `devices` is the resolved
+    {role: subckt} map remapped into each corner deck."""
+    corners = process_corners or PVT_PROCESS
     real_sims = {}
     if base_tt is not None:
-        real_sims[("tt", "27c")] = base_tt
+        real_sims[(typ_section, "27c")] = base_tt
     tkey = TARGETS.get(btype, {}).get("key", "vout")
-    for proc, _po in PVT_PROCESS:
+    for proc, _po in corners:
         if not _pdk_has_section(container, pdk_lib, proc):
             continue                      # section absent → all its temps derive
         for tlbl, temp_c, _to in PVT_TEMPS:
             if (proc, tlbl) in real_sims:
-                continue                  # already have the base tt@27C
+                continue                  # already have the base typ@27C
             deck, _ = render_deck(btype, block, pdk, pdk_lib, proc, knob, val,
-                                  deck_overrides=deck_overrides, temp_c=temp_c)
+                                  deck_overrides=deck_overrides, temp_c=temp_c,
+                                  devices=devices)
             sp = sl_dir / f"pvt_{proc}_{tlbl}.sp"
             sp.write_text((subst_header or "") + deck)
             ok, meas, raw, _ss = _run_ngspice(
@@ -1166,6 +1201,95 @@ def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
     return real_sims
 
 
+# ───── Native custom-PDK deck context (v1.4.27 — consume the resolver) ─────
+#
+# The v1.4.24 resolver (analog_pdk_availability) DECIDES the native PDK path;
+# these helpers CONSUME it so the emitted deck's model-lib include, corner
+# SECTION names, and DEVICE MAP come from the resolved family — never a
+# hardcoded sky130 literal for a foreign lib. chip-AGNOSTIC; NDA-safe.
+
+def _template_required_roles(btype):
+    """The device roles the block's template actually instantiates (so a
+    single-transistor-class family, e.g. an nmos-only bandgap deck, is not held
+    to a pmos it never uses)."""
+    t = T.get(btype, "")
+    roles = []
+    if "sky130_fd_pr__nfet_01v8" in t:
+        roles.append("nmos")
+    if "sky130_fd_pr__pfet_01v8" in t:
+        roles.append("pmos")
+    return tuple(roles) or ("nmos",)
+
+
+def _make_lib_reader(container):
+    """A model-lib text reader: local FS first (rung-1 staged libs are local
+    project files), container `cat` fallback (rung-2 installed libs live in the
+    EDA image). Returns None on any failure. Paths only (NDA hygiene)."""
+    def R(path):
+        try:
+            p = Path(path)
+            if p.is_file():
+                return p.read_text(errors="replace")
+        except OSError:
+            pass
+        try:
+            r = _docker(container, f"cat {shlex.quote(str(path))} 2>/dev/null")
+            if r.returncode == 0 and (r.stdout or "").strip():
+                return r.stdout
+        except Exception:
+            pass
+        return None
+    return R
+
+
+def _deck_context(project, container, pdk, btype):
+    """Resolve the family-agnostic deck context for one block. Delegates the
+    L19-target native resolution to analog_pdk_availability and the deck-shape
+    resolution to analog_pdk_deck_context. On ANY import / probe failure it
+    falls back to the known open-PDK context (sky130 path preserved)."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import analog_pdk_deck_context as _apdc
+    except Exception:
+        return None                                # caller → known-family path
+    declared = _declared_pdk_target_for_emit(project)
+    res = None
+    if declared:
+        try:
+            import analog_pdk_availability as _apa
+            res = _apa.resolve_pdk(declared, project=project, container=container)
+        except Exception:
+            res = None
+    required = _template_required_roles(btype)
+    reader = _make_lib_reader(container)
+    try:
+        return _apdc.resolve_deck_context(pdk, res=res, required=required,
+                                          reader=reader)
+    except Exception:
+        return None
+
+
+def _write_native_template_gap(bdir, block, btype, ctx):
+    """Honest artefact for a resolved-but-not-emittable custom family: records
+    the NEEDS_NATIVE_TEMPLATE work-item(s) rather than fabricating a sim or
+    silently emitting a cross-family sky130 deck. §4.05 / NDA: paths only."""
+    rec = {
+        "block": block, "block_type": btype,
+        "_provenance": "native_template_gap",
+        "status": "NEEDS_NATIVE_TEMPLATE",
+        "reason": ("the L19 target resolves to a native custom PDK, but the "
+                   "corner-sweep deck cannot be emitted for it deterministically "
+                   "(a required device role or corner section is unresolved); "
+                   "emitting sky130 devices against a foreign lib is forbidden"),
+        "deck_context": ctx.as_json(),
+        "work_items": ctx.work_items,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    (bdir / "corner_sweep_native_gap.json").write_text(
+        json.dumps(rec, indent=2))
+    return rec
+
+
 # ─────────────────── Main per-block driver ───────────────────
 
 def run_block(project, block, container, pdk, topology_override):
@@ -1175,10 +1299,6 @@ def run_block(project, block, container, pdk, topology_override):
         return 2
     if not _ngspice_available(container):
         print(f"[real_sim] ngspice not in container {container}", file=sys.stderr)
-        return 2
-    pdk_lib = PDK_LIB.get(pdk)
-    if not pdk_lib or _docker(container, f"test -f {shlex.quote(pdk_lib)}").returncode != 0:
-        print(f"[real_sim] pdk lib not reachable: {pdk_lib}", file=sys.stderr)
         return 2
 
     # Host root for docker mount mapping
@@ -1192,6 +1312,34 @@ def run_block(project, block, container, pdk, topology_override):
 
     sl_dir = bdir / "sizing_loop"
     sl_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── native custom-PDK deck context (v1.4.27) — consume the resolver ──────
+    # When the project stages its own custom analog PDK (rung 1) or an unknown
+    # family is installed (rung 2), the deck's model-lib include, corner SECTION
+    # names, and DEVICE MAP come from the RESOLVED family — not sky130 literals.
+    # A resolved-but-not-emittable family FAILS HONESTLY here
+    # (NEEDS_NATIVE_TEMPLATE) rather than emit a cross-family sky130 deck. The
+    # known open PDKs (sky130 / gf180) take the byte-identical fast path.
+    ctx = _deck_context(project, container, pdk, btype)
+    if ctx is None or ctx.source == "known_family":
+        pdk_lib = PDK_LIB.get(pdk)
+        devices = None
+        typ_section = (ctx.typ_section if ctx else None) or "tt"
+        grid_corners = None                        # → PVT_PROCESS (ss/tt/ff)
+    else:
+        if ctx.status != "OK":
+            _write_native_template_gap(bdir, block, btype, ctx)
+            print(f"[real_sim] block={block}: NEEDS_NATIVE_TEMPLATE "
+                  f"(family={ctx.family}) — {ctx.work_items}", file=sys.stderr)
+            return 2
+        pdk_lib = _container_path(container, host_root, Path(ctx.model_lib))
+        devices = ctx.device_map
+        typ_section = ctx.typ_section
+        grid_corners = ctx.process_corners
+
+    if not pdk_lib or _docker(container, f"test -f {shlex.quote(pdk_lib)}").returncode != 0:
+        print(f"[real_sim] pdk lib not reachable: {pdk_lib}", file=sys.stderr)
+        return 2
 
     # ORGANIC-20260606 #496 (round-2) — when the L19 tapeout target differs
     # from the simulation PDK family, prepend the STRUCTURED pdk_substitution
@@ -1215,12 +1363,15 @@ def run_block(project, block, container, pdk, topology_override):
     block_failed_analyses: set[str] = set()
     block_nulled_metrics: set[str] = set()
     for knob, val in SWEEPS.get(btype, [("__noop__",0)]):
-        # The knob sweep runs at the tt corner / 27 °C base (ngspice default
-        # temp). The full ss/tt/ff × temp PVT grid is REALLY simulated at the
-        # sized point below (GAP-ANALOG-3); a corner that cannot really run
-        # stays honestly DERIVED from this tt@27C base.
-        tb, _applied = render_deck(btype, block, pdk, pdk_lib, "tt", knob, val,
-                                   deck_overrides=deck_overrides, temp_c=None)
+        # The knob sweep runs at the NOMINAL corner / 27 °C base (ngspice
+        # default temp). The full process × temp PVT grid is REALLY simulated at
+        # the sized point below (GAP-ANALOG-3); a corner that cannot really run
+        # stays honestly DERIVED from this nominal@27C base. `typ_section` /
+        # `devices` come from the resolved PDK deck context (open PDK → tt /
+        # sky130 tokens; custom family → its own section / device names).
+        tb, _applied = render_deck(btype, block, pdk, pdk_lib, typ_section,
+                                   knob, val, deck_overrides=deck_overrides,
+                                   temp_c=None, devices=devices)
         # #496 (round-2): structured PDK-substitution disclosure goes FIRST so
         # it lands in the deck head (the gate scans the first 24 lines).
         tb = subst_header + tb
@@ -1295,9 +1446,11 @@ def run_block(project, block, container, pdk, topology_override):
     real_sims = _run_pvt_corners(
         project, container, host_root, sl_dir, btype, block, pdk, pdk_lib,
         best.get("knob", "__noop__"), best.get("val", 0),
-        deck_overrides, subst_header, base_tt)
+        deck_overrides, subst_header, base_tt,
+        process_corners=grid_corners, devices=devices, typ_section=typ_section)
     pvt_grid, corners_executed = build_pvt_grid(
-        base, base_log, real_sims, target.get("tol"))
+        base, base_log, real_sims, target.get("tol"),
+        process_corners=grid_corners)
 
     verdict = _verdict(best, target)
     # v1.6.228 — for honest sim FAILs (where SKY130 demo template
@@ -1374,7 +1527,7 @@ def run_block(project, block, container, pdk, topology_override):
         "full_pvt_sweep_executed": full_pvt,
         "corners": pvt_grid,
         "best_corner": {
-            "name": "tt_27c", "value": best.get(target["key"]),
+            "name": f"{typ_section}_27c", "value": best.get(target["key"]),
             "raw_meas": best,
         },
         "all_runs": runs,
