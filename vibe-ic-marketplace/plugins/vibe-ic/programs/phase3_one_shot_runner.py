@@ -11979,6 +11979,13 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                        "drive a back-annotated sim (#437d). RTL-TB+STA is "
                        "an approximation, not gate-level timing sim."),
             "capability_flag": "cap:sdf_annotated_gatelevel_sim",
+            # OWN the step-29 canonical outputs so flow_compliance's STRICT
+            # early-MISSING promotion (#675 strict) can defer step 29 WITHOUT
+            # this marker being able to mask any other step's absent output.
+            "skips_required_output": [
+                "phase3/stage3/sim_postlayout/results.log",
+                "phase3/stage3/sim_postlayout/pass.flag",
+            ],
             # #484: per-design identity so this honest SKIP shape differs
             # per design (not flagged as a canned cross-design report).
             "design_identity": _design_identity_fields(project),
@@ -12036,6 +12043,13 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                        "multi-corner STA (step 23); SPICE correlation is a "
                        "belt-and-suspenders analog cross-check run on the A-track."),
             "capability_flag": "cap:post_layout_spice_correlation",
+            # OWN the step-30 canonical outputs so flow_compliance's STRICT
+            # early-MISSING promotion (#675 strict) can defer step 30 WITHOUT
+            # this marker being able to mask any other step's absent output.
+            "skips_required_output": [
+                "phase3/stage3/spice/correlation.json",
+                "reports/phase3/spice_correlation.json",
+            ],
             "design_identity": _design_identity_fields(project),
             "advisory_approximation": {
                 "post_route_sta_signoff": True,
