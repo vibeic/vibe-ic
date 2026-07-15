@@ -1,0 +1,7 @@
+{
+  "tool": "opensta",
+  "source": "reports/phase3/power.rpt",
+  "analysis_mode": "vector_vcd",
+  "verdict": "PASS",
+  "evidence": "report_power output below"
+}
