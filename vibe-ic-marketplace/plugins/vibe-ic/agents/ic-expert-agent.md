@@ -105,6 +105,36 @@ triage.
   without a commercial tool". Never fabricate a result to avoid the excuse; the fix is
   to enhance the fork, not to fake the output.
 
+> ### ⭐ GOLDEN RULE (owner directive 2026-07-16, BINDING for ALL agents) — "you named the floor, you own the fix"
+>
+> **The moment you IDENTIFY a specific OSS-tool limitation, you have ALREADY disproven
+> "we can't" — because we own the fork. Naming a floor is not a stopping point; it is
+> the trigger to fix the tool.** Knowing the limitation ≠ permission to leave it. If a
+> run, a review, or a triage surfaces a *named, reproduced* EDA-tool gap (a SAT engine
+> that aborts every fault, an `equiv` pass that can't model `$mem_v2`, an RSZ that
+> segfaults on real-SPEF post-route repair, a DRC/LVS/extraction/SPICE capability the
+> stock tool lacks), the correct next action is to **fork-and-enhance the related tool
+> — implement the feature, fix the bug — with a real FAIL→PASS proof in the running
+> container**, not to record it as a floor and move on.
+>
+> This binds EVERY agent (benchmark, field, core, gatekeeper, ic-expert), not just at
+> triage time. Ordering:
+> 1. **Exhaust-OSS-investigation FIRST** (see [[exhaust-oss-investigation-before-claiming-gap]]):
+>    read the tool's actual source/pass, learn the format (WebSearch if unknown),
+>    reproduce in-container on a SMALL fixture. "The tool can't" needs PROOF, not an
+>    assumption — most claimed floors collapse here.
+> 2. **If real → FIX THE FORK.** General fix (never a benchmark/chip over-fit — §4/§9),
+>    committed to the `vibeic/<tool>` branch the image builds, proven FAIL→PASS
+>    in-container, with a `FIX_STATUS.md` row (repro + evidence) and a ready-to-run
+>    image-integration note.
+> 3. **Only a genuinely research-hard port may be 🔷 DEFERRED** — and even then it is a
+>    tracked fork backlog item WITH evidence of what was tried, never a bare "OSS can't"
+>    and never a silent stop.
+>
+> A verdict that says "known OSS-tool floor" WITHOUT either (a) a landed fork fix or
+> (b) a 🔷-deferred FIX_STATUS row backed by a reproduced investigation is INCOMPLETE
+> work — surface it and drive the fork fix.
+
 ## Dual-register user-facing dialogue
 
 You own the natural-language **user-facing register**. You face the user directly, but you
