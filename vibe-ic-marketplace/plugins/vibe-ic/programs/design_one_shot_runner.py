@@ -871,6 +871,57 @@ def _is_pure_analog_no_rtl_track(ic_class: Optional[str]) -> Tuple[bool, str]:
             f"fallback_skill={config.get('fallback_skill')!r})")
 
 
+def _analog_rtl_track_absent(project: Path,
+                             ic_class: Optional[str]) -> Tuple[bool, str]:
+    """True when the RTL-dependent digital steps (reference_tb, the ECO loop,
+    yosys_synth) have NO honest work to do — so they must SKIP, not FAIL on the
+    absent rtl/. TWO chip-AGNOSTIC signals, mirroring both the WAIVE decision
+    step_rtl_gen already makes (ORGANIC #141) and the flow_compliance backend
+    N/A routing (_digital_backend_is_na):
+
+      (a) STATIC — the IC class is a *pure-analog* registry entry
+          (analog_applicable=True, rtl_gen=null, fallback_skill=null); OR
+      (b) RUNTIME (ORGANIC #148, residual of #141) — the class is
+          analog-APPLICABLE and its ACTUAL L9 top interface is ALL-ANALOG (no
+          digital clock/reset/data INPUT). This is the SAME structural signal
+          that made step_rtl_gen WAIVE-to-analog-track, so it catches a class
+          like `data_converter` that carries a spec-to-rtl fallback_skill
+          (making (a) False) yet whose concrete pinout has no digital datapath
+          to synthesise. Without this the runner WAIVEs rtl_gen but then
+          hard-FAILs reference_tb / yosys_synth on the by-design-absent rtl/.
+
+    (b) is fail-SAFE: `digital_datapath_absent` returns False whenever L9 is
+    missing/empty OR any digital clk/rst/data INPUT exists — so a digital or
+    mixed design NEVER routes its RTL-dependent steps to SKIP. Returns
+    (absent, reason)."""
+    # (a) static registry-contract pure-analog (unchanged).
+    is_pa, pa_reason = _is_pure_analog_no_rtl_track(ic_class)
+    if is_pa:
+        return (True, pa_reason)
+    # (b) runtime interface-aware all-analog. Gated by analog_applicable so a
+    # pure-digital class never reaches the structural classifier.
+    config = _lookup_class(ic_class) if ic_class else None
+    if config and config.get("analog_applicable"):
+        try:
+            import sys as _sys
+            if str(PROGRAMS_DIR) not in _sys.path:
+                _sys.path.insert(0, str(PROGRAMS_DIR))
+            import analog_interface_classify as _aic
+            absent, why, _ev = _aic.digital_datapath_absent(project)
+        except Exception:
+            absent, why = (False, "")
+        if absent:
+            return (True,
+                    f"class {ic_class!r} is analog-applicable with an "
+                    f"all-analog top interface ({why}) — no digital RTL by "
+                    f"design; RTL-dependent digital steps defer to the analog "
+                    f"A1..A8 track (/vibe-ic-analog): N/A, NOT a rtl/-missing "
+                    f"FAIL")
+    return (False,
+            f"class {ic_class!r} has a digital RTL track (not pure-analog and "
+            f"its top interface is not all-analog)")
+
+
 def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepResult]:
     """since v0.1.10 — program-first RTL. If the project ships a structured RTL
     spec, route it through deterministic_rtl_dispatcher (FSM-table / truth-table /
@@ -5348,13 +5399,15 @@ def step_reference_tb(project: Path, top_name: str = "chip_top",
     t0 = time.time()
     rtl_dir = _pl.rtl_dir(project)
     if not rtl_dir.is_dir():
-        # v0.2.55 — pure-analog classes have NO digital RTL track (the
-        # registry sets rtl_gen=null AND fallback_skill=null; analog
-        # A1..A8 owns verification). The absent rtl/ is the EXPECTED
-        # state, not a failure — SKIP and defer to the analog track
-        # rather than hard-FAILing on "rtl/ missing". chip-AGNOSTIC:
-        # decided from the registry contract, not a chip name.
-        is_analog, reason = _is_pure_analog_no_rtl_track(ic_class)
+        # v0.2.55 + ORGANIC #148 — an analog design has NO digital RTL track:
+        # EITHER a pure-analog registry class (rtl_gen=null AND
+        # fallback_skill=null), OR (residual of #141) an analog-applicable
+        # class whose ACTUAL L9 top interface is all-analog — the SAME signal
+        # that made step_rtl_gen WAIVE-to-analog-track. The absent rtl/ is the
+        # EXPECTED state, not a failure — SKIP and defer to the analog track
+        # rather than hard-FAILing on "rtl/ missing". chip-AGNOSTIC: registry
+        # contract OR structural interface signal, never a chip name.
+        is_analog, reason = _analog_rtl_track_absent(project, ic_class)
         if is_analog:
             return StepResult(
                 "reference_tb", "SKIP",
@@ -6370,12 +6423,15 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
     t0 = time.time()
     rtl_dir = _pl.rtl_dir(project)
     if not rtl_dir.is_dir():
-        # v0.2.55 — pure-analog classes have NO digital RTL to
-        # synthesize (registry rtl_gen=null + fallback_skill=null;
-        # analog A1..A8 owns the design). Absent rtl/ is EXPECTED —
-        # SKIP and defer to the analog track rather than FAIL.
-        # chip-AGNOSTIC: registry contract, not a chip name.
-        is_analog, reason = _is_pure_analog_no_rtl_track(ic_class)
+        # v0.2.55 + ORGANIC #148 — an analog design has NO digital RTL to
+        # synthesize: EITHER a pure-analog registry class (rtl_gen=null +
+        # fallback_skill=null), OR (residual of #141) an analog-applicable
+        # class whose ACTUAL L9 top interface is all-analog (the same signal
+        # that made step_rtl_gen WAIVE-to-analog-track). Absent rtl/ is
+        # EXPECTED — SKIP and defer to the analog track rather than FAIL.
+        # chip-AGNOSTIC: registry contract OR structural interface, not a chip
+        # name.
+        is_analog, reason = _analog_rtl_track_absent(project, ic_class)
         if is_analog:
             return StepResult(
                 "yosys_synth", "SKIP",
