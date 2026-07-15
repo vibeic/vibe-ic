@@ -42,16 +42,94 @@ def test_happy_path_mag(tmp_path: Path) -> None:
     assert rpt["verdict"] == "PASS"
 
 
+# A minimal real GDS stream: one BOUNDARY (0x08) geometry record followed by
+# zero padding so it clears the 200-byte size bar AND carries real geometry.
+_GDS_WITH_GEOMETRY = b"\x00\x04\x08\x00" + b"\x00" * 508
+# An empty-geometry GDS: a HEADER record + padding, NO geometry record — the
+# exact shape an `eda_analog_layout` `readspice`+`gds write` (no placement)
+# streams. ORGANIC #144: this must now FAIL, not pass on size alone.
+_GDS_EMPTY_GEOMETRY = b"\x00\x06\x00\x02" + b"\x00" * 508
+
+
 def test_happy_path_gds_alternative(tmp_path: Path) -> None:
-    """Either layout.mag OR <block>.gds satisfies A5."""
+    """Either layout.mag OR <block>.gds satisfies A5 — when the GDS carries
+    real placed geometry (ORGANIC #144: at least one geometry record)."""
     _block_list(tmp_path, ["ldo"])
     d = tmp_path / "phase3" / "analog" / "ldo"
     d.mkdir(parents=True, exist_ok=True)
-    (d / "ldo.gds").write_bytes(b"\x00\x06\x00\x02" + b"\x00" * 508)
+    (d / "ldo.gds").write_bytes(_GDS_WITH_GEOMETRY)
     (d / "drc_clean.flag").write_text("clean\n")
     (d / "lvs_match.flag").write_text("match\n")
     r = _run(tmp_path)
-    assert r.returncode == 0
+    assert r.returncode == 0, r.stderr
+
+
+def test_empty_geometry_gds_fails(tmp_path: Path) -> None:
+    """ORGANIC #144 no-leak — a size-passing but geometry-EMPTY GDS (the
+    `readspice`+`gds write` empty stream) FAILs the tightened gate."""
+    _block_list(tmp_path, ["ldo"])
+    d = tmp_path / "phase3" / "analog" / "ldo"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "ldo.gds").write_bytes(_GDS_EMPTY_GEOMETRY)
+    (d / "drc_clean.flag").write_text("clean\n")
+    (d / "lvs_match.flag").write_text("match\n")
+    r = _run(tmp_path)
+    assert r.returncode == 1, r.stdout
+    rpt = json.loads((tmp_path / "report.json").read_text())
+    rules = {f["rule"] for f in rpt.get("findings", [])}
+    assert "A5_LAYOUT_EMPTY_GEOMETRY" in rules, rpt
+
+
+def test_padded_mag_stub_fails(tmp_path: Path) -> None:
+    """ORGANIC #144 no-leak — the runner's own deterministic A5 stub
+    (`layout.mag` = magic header + `"x"*400` padding, no placed geometry)
+    now FAILs on the geometry assertion instead of passing on size."""
+    _block_list(tmp_path, ["ldo"])
+    d = tmp_path / "phase3" / "analog" / "ldo"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "layout.mag").write_text(
+        "magic\ntech sky130A\n# deterministic-stub padding "
+        + "x" * 400 + "\n")
+    (d / "drc_clean.flag").write_text("clean\n")
+    (d / "lvs_match.flag").write_text("match\n")
+    r = _run(tmp_path)
+    assert r.returncode == 1, r.stdout
+    rpt = json.loads((tmp_path / "report.json").read_text())
+    rules = {f["rule"] for f in rpt.get("findings", [])}
+    assert "A5_LAYOUT_EMPTY_GEOMETRY" in rules, rpt
+
+
+def test_empty_geometry_mag_no_marker_fails(tmp_path: Path) -> None:
+    """A geometry-empty .mag with NO stub marker (e.g. just a header + a
+    long comment) still FAILs — the geometry parse, not just the marker,
+    is load-bearing."""
+    _block_list(tmp_path, ["ldo"])
+    d = tmp_path / "phase3" / "analog" / "ldo"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "layout.mag").write_text(
+        "magic\ntech sky130A\ntimestamp 0\n"
+        + "# placeholder header only, no paint\n" * 20)
+    (d / "drc_clean.flag").write_text("clean\n")
+    (d / "lvs_match.flag").write_text("match\n")
+    r = _run(tmp_path)
+    assert r.returncode == 1, r.stdout
+
+
+def test_real_mag_with_instances_passes(tmp_path: Path) -> None:
+    """A .mag whose geometry is cell instances (`use` lines) — no paint
+    rects — still passes (instance-based placement is real geometry)."""
+    _block_list(tmp_path, ["ldo"])
+    d = tmp_path / "phase3" / "analog" / "ldo"
+    d.mkdir(parents=True, exist_ok=True)
+    body = "magic\ntech sky130A\ntimestamp 0\n"
+    for i in range(8):
+        body += (f"use sky130_fd_pr__nfet_01v8 m{i}\n"
+                 f"transform 1 0 0 0 1 {i*10}\nbox 0 0 100 100\n")
+    (d / "layout.mag").write_text(body)
+    (d / "drc_clean.flag").write_text("clean\n")
+    (d / "lvs_match.flag").write_text("match\n")
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stderr
 
 
 def test_missing_per_block_waived(tmp_path: Path) -> None:
