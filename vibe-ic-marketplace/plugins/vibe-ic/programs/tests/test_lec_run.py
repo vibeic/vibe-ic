@@ -135,6 +135,42 @@ def test_parse_empty_is_parse_error():
 
 
 # ---------------------------------------------------------------------------
+# #155 follow-up — a post-memory_map memory-inclusive proof that exceeds the LEC
+# wall budget leaves no equiv_status (parse_error) but carries the timeout
+# marker. That is a DISCLOSED budget gap → SKIPPED-CONDITION, NEVER a regression
+# to FAIL (before #155 the same design fast-skipped on the $mem_v2 SAT-model gap).
+# ---------------------------------------------------------------------------
+def test_parse_timeout_is_skipped_condition_not_fail():
+    txt = ("14. Executing EQUIV_INDUCT pass.\n"
+           "Trying to prove $equiv for \\state[3]: ...\n"
+           "[lec_run] ERROR: yosys equiv timed out\n")
+    p = lec_run.parse_equiv_output(txt)
+    assert p["parse_error"] is True
+    assert p["verdict"] == "SKIPPED-CONDITION"     # NOT FAIL
+    assert p["equivalent"] is False                # never a fake pass
+    assert "budget" in p["verdict_explanation"].lower()
+
+
+def test_parse_garbage_without_timeout_still_fails():
+    # NO timeout marker → the unparseable case is still an honest FAIL (the
+    # SKIPPED reclassification must not swallow genuine no-output failures).
+    p = lec_run.parse_equiv_output("random tool noise, no equiv verdict here")
+    assert p["parse_error"] is True
+    assert p["verdict"] == "FAIL"
+
+
+def test_parse_unproven_with_timeout_is_still_fail():
+    # A REAL mismatch (unproven $equiv found) that also happens to time out is
+    # NOT parse_error → stays FAIL: the timeout SKIP only covers no-verdict runs.
+    txt = ("Found 8 $equiv cells in equiv:\n"
+           "  Of those cells 0 are proven and 8 are unproven.\n"
+           "[lec_run] ERROR: yosys equiv timed out\n")
+    p = lec_run.parse_equiv_output(txt)
+    assert p["parse_error"] is False
+    assert p["verdict"] == "FAIL"
+
+
+# ---------------------------------------------------------------------------
 # build_report — JSON schema keys the downstream gate reads
 # ---------------------------------------------------------------------------
 def test_build_report_schema_keys():
