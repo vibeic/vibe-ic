@@ -199,6 +199,32 @@ def test_discover_lefdef_layermap_none_when_absent(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# FLOOR-STREAMOUT loud-WARN (v1.4.34): deck present + streamout map absent is
+# the silent legacy-numbering fallback that produced spm's false-DRC wall.
+# --------------------------------------------------------------------------
+def test_streamout_warn_fires_when_deck_present_map_absent():
+    # The exact ic1-spm condition: a sign-off DRC deck exists, no streamout map.
+    w = R._streamout_layermap_warning("/pdk/calibre/KF_DRC_D4.20.rule", None)
+    assert w is not None
+    # Loud + actionable: names the deck, calls out legacy numbering + artefacts.
+    assert "KF_DRC_D4.20.rule" in w
+    assert "LEGACY" in w and "ARTEFACTS" in w
+
+
+def test_streamout_warn_silent_when_map_present():
+    # A discoverable streamout map → no warning (GDS lands on foundry numbers).
+    assert R._streamout_layermap_warning(
+        "/pdk/calibre/KF_DRC.rule", "/pdk/lef/KF_layermap_SOC.txt") is None
+
+
+def test_streamout_warn_silent_when_no_deck():
+    # No sign-off deck → legacy numbering is irrelevant (OSS PDK path); no warning
+    # even if the map is also absent.
+    assert R._streamout_layermap_warning(None, None) is None
+    assert R._streamout_layermap_warning(None, "/pdk/lef/map.txt") is None
+
+
+# --------------------------------------------------------------------------
 # Filler/decap master discovery for commercial PDKs (density fill enablement).
 # --------------------------------------------------------------------------
 def _pdk_with_lef(lef_path):

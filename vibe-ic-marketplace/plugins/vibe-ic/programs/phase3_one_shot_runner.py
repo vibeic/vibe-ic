@@ -2168,6 +2168,33 @@ def _discover_lefdef_layermap(pdk_dir: Path) -> Optional[str]:
     return None
 
 
+def _streamout_layermap_warning(calibre_drc: Optional[str],
+                                lefdef_layermap: Optional[str]) -> Optional[str]:
+    """FLOOR-STREAMOUT loud-WARN (ic1-spm HP18E80 clean-room, v1.4.34).
+
+    When a commercial PDK ships a sign-off DRC deck (`calibre_drc`) but NO
+    discoverable Encounter/SoC LEF->GDS streamout layermap (`lefdef_layermap`
+    is None), GDS streams out on LEGACY (compact) layer numbering. A foundry
+    sign-off deck then MISREADS routing layers on those numbers and reports a
+    WALL of spurious FEOL violations that are numbering ARTEFACTS, not design
+    defects (spm HP18E80: routing read as thick-gate-oxide). The fallback was
+    previously SILENT — the false-DRC wall looks like a design failure. Return a
+    loud operator warning in exactly that case (deck present AND map absent);
+    None otherwise. Chip-AGNOSTIC: keyed purely on deck-present + map-absent, no
+    vendor literal."""
+    if calibre_drc is not None and lefdef_layermap is None:
+        return (
+            "streamout: a sign-off DRC deck is present "
+            f"({Path(calibre_drc).name}) but NO Encounter/SoC LEF->GDS streamout "
+            "layermap was found under the PDK — GDS will use LEGACY (compact) "
+            "layer numbering. A foundry sign-off deck MISREADS routing layers on "
+            "legacy numbers and reports a WALL of spurious FEOL violations that "
+            "are numbering ARTEFACTS, not design defects. Supply the PDK's "
+            "`*layermap*for*ncounter*` / `*layermap*SOC*` map (or set it in the "
+            "bridge config) before trusting DRC results.")
+    return None
+
+
 def _detect_pdk(project: Path, override: Optional[str] = None
                 ) -> Optional[PdkConfig]:
     """Detect which PDK to use. chip-AGNOSTIC: looks at project's input/pdk/
@@ -2343,6 +2370,15 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 iter(sorted(calibre_dir.glob("*LVS*.device"))), None
             ) if calibre_dir.is_dir() else None
 
+            # v1.4.34 — FLOOR-STREAMOUT: resolve the streamout layermap ONCE and,
+            # if a sign-off DRC deck is present but no map was found, WARN loudly
+            # (previously a silent legacy-numbering fallback → false-DRC wall).
+            _lefdef_layermap = _discover_lefdef_layermap(pdk_dir)
+            _lm_warn = _streamout_layermap_warning(
+                str(calibre_drc) if calibre_drc else None, _lefdef_layermap)
+            if _lm_warn:
+                print(f"[WARN] {_lm_warn}", file=sys.stderr)
+
             # v1.6.53 — KLayout deck discovery. Custom PDKs that ship
             # ONLY a Calibre deck cannot run open-source DRC; but many
             # ship a KLayout deck alongside (`klayout/`, `drc/`, or
@@ -2415,7 +2451,9 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 # Encounter/SoC LEF->GDS streamout map so GDS gets the foundry's
                 # official layer numbers (else a sign-off deck misreads routing
                 # layers — spm HP18E80: 1394 spurious TG2 violations without it).
-                lefdef_layermap=_discover_lefdef_layermap(pdk_dir),
+                # v1.4.34: resolved once above (+ loud WARN when deck present but
+                # map absent) — see _streamout_layermap_warning.
+                lefdef_layermap=_lefdef_layermap,
                 stdcell_marker_layer=_signoff_cfg.get(
                     "stdcell_exclusion_marker_layer"),
                 bridge_magicrc=str(_b_magicrc) if _b_magicrc else None,
