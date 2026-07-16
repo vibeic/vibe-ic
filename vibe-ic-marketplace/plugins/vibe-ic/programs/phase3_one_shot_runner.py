@@ -2168,6 +2168,174 @@ def _discover_lefdef_layermap(pdk_dir: Path) -> Optional[str]:
     return None
 
 
+def _synthesize_streamout_layermap(
+        calibre_drc: Optional[str], tech_lef: Optional[str],
+        out_dir) -> Tuple[Optional[str], List[str]]:
+    """FLOOR-STREAMOUT deck-derived streamout layermap synthesis (v1.4.43,
+    sha256 commercial-PDK clean-room).
+
+    When a commercial PDK ships a sign-off DRC deck but NO standalone
+    Encounter/SoC LEF->GDS streamout map (`_discover_lefdef_layermap` == None),
+    the KLayout LEF/DEF reader falls back to legacy/compact numbering. On the
+    real sha256 clean-run this put the routing metals on the deck-correct
+    numbers (POLY=3, MET1-4=9/11/13/15) but scattered the via/cut layers onto
+    GDS 30/36-44, COLLIDING with the deck's reserved FEOL device layers
+    (PACT=30, FSWL=38, TGOX2=39, MVT=41, FUSEOPEN=42) -> 43898 stray shapes read
+    as thick-gate-oxide (TG2.W.1), 1557 as fuse-open (the whole LMFfc.* fuse
+    chain), 12237 as p-active (PDF.D.2.1 density): a WALL of spurious FEOL
+    violations that are numbering ARTEFACTS, not design defects.
+
+    The LEF->GDS numbering the deck EXPECTS is embedded in the deck itself, as
+    its `LAYER <name> <internal>` + `LAYER MAP <gds> DATATYPE <dt> <internal>`
+    indirection table. Synthesize the streamout map from THAT: for every LEF
+    routing/cut layer, look up the deck's real GDS number BY NAME and emit a
+    KLayout LEF/DEF map line (`<lef_layer> <purpose_csv> <gds> <dt>`, same
+    shape as the proven sky130A.map) pinning it there. The SAME synthesized
+    map is fed to the LVS extraction (`--pdk-map`) so streamout and LVS share
+    ONE numbering. chip/PDK-AGNOSTIC: every number is read from the deck the
+    PDK ships; no layer name or number is hardcoded.
+
+    Safety (never a silent mis-map):
+      * a LEF routing/cut layer with NO deck entry -> WARN (CUT = CRITICAL) and
+        the layer is OMITTED (the reader keeps its default for that one layer);
+      * an emitted routing/cut number that would land on a deck layer which is
+        NOT itself a routing/cut layer (a FEOL/device number) is DROPPED + WARN,
+        never shipped.
+
+    Returns (map_path or None, notes). None when nothing could be synthesized
+    (no deck, unreadable, or zero routing/cut layers resolved) -> the caller
+    keeps `lefdef_layermap=None` and the existing loud missing-map WARN fires."""
+    notes: List[str] = []
+    if not calibre_drc or not tech_lef:
+        return None, notes
+    deck_p, lef_p = Path(calibre_drc), Path(tech_lef)
+    if not deck_p.is_file() or not lef_p.is_file():
+        return None, notes
+    try:
+        deck = deck_p.read_text(errors="ignore")
+        lef = lef_p.read_text(errors="ignore")
+    except OSError:
+        return None, notes
+
+    # 1) deck indirection: internal-id -> name, internal-id -> (gds, datatype).
+    #    `LAYER <name> <internal>` (name line) vs `LAYER MAP <gds> DATATYPE <dt>
+    #    <internal>` (map line) — the trailing `$` keeps the name-line regex
+    #    from swallowing a map line.
+    id_to_name = {}
+    for m in re.finditer(r"(?m)^\s*LAYER\s+(\w+)\s+(\d+)\s*$", deck):
+        id_to_name[m.group(2)] = m.group(1)
+    id_to_gds = {}  # prefer a datatype-0 mapping when an id has several
+    for m in re.finditer(
+            r"(?m)^\s*LAYER\s+MAP\s+(\d+)\s+DATATYPE\s+(\d+)\s+(\d+)\s*$", deck):
+        gds, dt, iid = int(m.group(1)), int(m.group(2)), m.group(3)
+        if iid not in id_to_gds or (dt == 0 and id_to_gds[iid][1] != 0):
+            id_to_gds[iid] = (gds, dt)
+    name_to_gds = {}  # NAME(upper) -> (gds, dt)
+    for iid, nm in id_to_name.items():
+        if iid in id_to_gds:
+            name_to_gds.setdefault(nm.upper(), id_to_gds[iid])
+    if not name_to_gds:
+        notes.append("[layermap-synth] deck has no parseable LAYER MAP table — "
+                     "no map synthesized")
+        return None, notes
+
+    # 2) LEF routing + cut layer names, in declaration order.
+    routing, cut = [], []
+    cur = None
+    for line in lef.splitlines():
+        s = line.strip()
+        mm = re.match(r"^LAYER\s+(\w+)", s)
+        if mm:
+            cur = mm.group(1)
+            continue
+        mt = re.match(r"^TYPE\s+(\w+)", s)
+        if mt and cur:
+            if mt.group(1) == "ROUTING":
+                routing.append(cur)
+            elif mt.group(1) == "CUT":
+                cut.append(cur)
+            cur = None
+    if not routing and not cut:
+        notes.append("[layermap-synth] tech LEF declares no ROUTING/CUT layer — "
+                     "no map synthesized")
+        return None, notes
+
+    # 3) deck GDS numbers used by ANY non-routing/cut (FEOL/device) layer — an
+    #    emitted routable number that ALSO appears here is ambiguous (the deck
+    #    reads it as both a route and a FEOL layer) and must never be shipped.
+    routecut_upper = set(n.upper() for n in routing + cut)
+    feol_gds = set(g for nm_up, (g, _d) in name_to_gds.items()
+                   if nm_up not in routecut_upper)
+
+    # 4) emit KLayout LEF/DEF map lines (proven sky130A.map shape).
+    lines: List[str] = []
+    emitted = 0
+    unresolved: List[Tuple[str, str]] = []
+
+    def _lookup(nm, is_cut):
+        gd = name_to_gds.get(nm.upper())
+        if gd is None:
+            unresolved.append(("CUT" if is_cut else "ROUTING", nm))
+            return None
+        if gd[0] in feol_gds:
+            notes.append(
+                f"[layermap-synth] WARN: {'CUT' if is_cut else 'ROUTING'} {nm} "
+                f"-> deck GDS {gd[0]}/{gd[1]} is a reserved non-routing (FEOL) "
+                f"number — DROPPED (reader default kept); never shipped onto FEOL")
+            return None
+        return gd
+
+    for nm in routing:
+        gd = _lookup(nm, is_cut=False)
+        if gd is None:
+            continue
+        lines.append(f"{nm:<8}{'LEFPIN,NET,SPNET,PIN,VIA':<26}{gd[0]:>4} {gd[1]}")
+        lines.append(f"{nm:<8}{'LEFOBS':<26}{gd[0]:>4} {gd[1]}")
+        emitted += 1
+    for nm in cut:
+        gd = _lookup(nm, is_cut=True)
+        if gd is None:
+            continue
+        lines.append(f"{nm:<8}{'VIA,LEFPIN,PIN':<26}{gd[0]:>4} {gd[1]}")
+        emitted += 1
+
+    for kind, nm in unresolved:
+        sev = "CRITICAL" if kind == "CUT" else "WARN"
+        notes.append(
+            f"[layermap-synth] {sev}: LEF {kind} layer '{nm}' has NO deck LAYER "
+            f"MAP entry — omitted (KLayout default numbering kept for it, MAY "
+            f"collide with a FEOL layer). Supply the PDK streamout map to fix.")
+
+    if emitted == 0:
+        notes.append("[layermap-synth] no routing/cut layer resolved from the "
+                     "deck — no map synthesized")
+        return None, notes
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / (deck_p.stem + "_streamout_synth.map")
+    header = [
+        "# Synthesized streamout LEF->GDS layermap (deck-derived, chip-AGNOSTIC).",
+        f"# Source sign-off deck: {deck_p.name}",
+        "# The PDK ships NO standalone Encounter/SoC streamout map; this map is",
+        "# derived from the deck's own LAYER / LAYER MAP indirection table so the",
+        "# streamed GDS lands routing/via layers on the numbers the deck reads,",
+        "# not on legacy numbers that collide with reserved FEOL device layers.",
+        "# Consumed by BOTH KLayout DEF->GDS streamout (LEFDEF_MAP) and the LVS",
+        "# extraction (--pdk-map) so both share one numbering.",
+        "# Format: <lef_layer> <purpose_csv> <gds_layer> <gds_datatype>",
+    ]
+    out_path.write_text("\n".join(header + lines) + "\n")
+    resolved_cuts = sum(1 for nm in cut
+                        if name_to_gds.get(nm.upper())
+                        and name_to_gds[nm.upper()][0] not in feol_gds)
+    notes.append(
+        f"[layermap-synth] synthesized {emitted} routing/cut layer(s) from "
+        f"{deck_p.name} ({resolved_cuts}/{len(cut)} cut/via pinned to their deck "
+        f"numbers, nothing on reserved FEOL) -> {out_path.name}")
+    return str(out_path), notes
+
+
 def _discover_topmetal_width_fix(project: Path, calibre_drc: Optional[str],
                                   tech_lef: Optional[Path]
                                   ) -> Tuple[Optional[Path], List[str]]:
@@ -2525,6 +2693,23 @@ def _detect_pdk(project: Path, override: Optional[str] = None
             # if a sign-off DRC deck is present but no map was found, WARN loudly
             # (previously a silent legacy-numbering fallback → false-DRC wall).
             _lefdef_layermap = _discover_lefdef_layermap(pdk_dir)
+            # v1.4.43 — FLOOR-STREAMOUT: when the PDK ships a sign-off DRC deck
+            # but NO standalone Encounter/SoC streamout map, SYNTHESIZE one from
+            # the deck's own LAYER / LAYER MAP table so the streamed GDS (and the
+            # LVS extraction, which reads the SAME map via --pdk-map) land the
+            # routing/via layers on the numbers the deck reads — not on legacy
+            # numbers that collide with reserved FEOL device layers (sha256:
+            # routing vias read as fuse-open/thick-gate-oxide, firing a spurious
+            # LMF/TG2 wall). chip-AGNOSTIC — nothing hardcoded. A staged foundry
+            # map (found above) always wins; this is the fallback.
+            if _lefdef_layermap is None and calibre_drc is not None:
+                _synth_map, _synth_notes = _synthesize_streamout_layermap(
+                    str(calibre_drc), str(tech_lef) if tech_lef else None,
+                    project / "phase3" / "pdk_stage")
+                for _n in _synth_notes:
+                    print(_n, file=sys.stderr)
+                if _synth_map:
+                    _lefdef_layermap = _synth_map
             _lm_warn = _streamout_layermap_warning(
                 str(calibre_drc) if calibre_drc else None, _lefdef_layermap)
             if _lm_warn:
