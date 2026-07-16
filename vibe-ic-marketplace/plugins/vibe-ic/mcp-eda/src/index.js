@@ -67,6 +67,7 @@ import {
 // SECONDARY PnR path emits its own OpenROAD Tcl and previously lacked this loop;
 // this closes that parity gap so both PnR paths behave identically.
 import { antennaRepairTcl } from "./lib/pnr_antenna.mjs";
+import { threadCountTcl } from "./lib/pnr_threads.mjs";
 import { layoutHasGeometry } from "./lib/analog_layout_geometry.mjs";
 
 function _shellSingleQuotedHeredoc(content, sentinel) {
@@ -1321,7 +1322,7 @@ ${output_routed_v ? `write_verilog ${output_routed_v}` : ""}`
       : "";
 
     const tclScript = `
-read_lef ${techlefPath(cfg)}
+${threadCountTcl()}read_lef ${techlefPath(cfg)}
 read_lef ${celllefPath(cfg)}
 read_liberty ${libPath(cfg)}
 read_verilog ${netlist}
