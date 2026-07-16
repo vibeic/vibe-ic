@@ -110,6 +110,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 import _path_layout as _pl
 import sdc_constraints as _sdc
+import floorplan_contract as _fpc
 # v1.6.95 — Capability 1 of GitHub issue #27. Deeper README parser
 # extracts key sizes / block width / S-box parallelism / supported
 # cipher modes / cited public-standard URLs from README prose and
@@ -51390,6 +51391,91 @@ def _post_emit_sdc_constraints(project: Path) -> None:
         out.write_text(json.dumps(l8, indent=2, ensure_ascii=False) + "\n")
 
 
+def _post_emit_floorplan_contract(project: Path) -> None:
+    """G-FIXED-DIE-1 — ingest a design-PROVIDED MANDATED fixed-floorplan
+    contract into L19 (fields.die_area_budget_um / floorplan_hints /
+    constraints_present).
+
+    Pre-fix, phase1 dropped this contract entirely: when a design SUPPLIED a
+    fixed floorplan — an OpenLane-style ``config.json`` with
+    ``FP_SIZING:"absolute"`` + ``DIE_AREA:[x0,y0,x1,y1]`` + ``FP_DEF_TEMPLATE``,
+    and/or an L9 prose ``DIE_AREA = [x0,y0,x1,y1] µm`` statement, plus a fixed
+    ``pin_order.cfg`` and power-source ``vsrc/*.loc`` files — L19 still emitted
+    ``die_area_budget_um:null / floorplan_hints:[] / constraints_present:false``
+    so phase3 auto-sized a die the design had already fixed.
+
+    Only pdk_target got extracted (via _emit_l19_to_l23_skeletons). This hook
+    fills the floorplan half from the same INPUT, chip-AGNOSTICally, via the
+    shared `floorplan_contract` module (which both phase1 and phase3 read).
+
+    Runs AFTER _post_emit_sdc_constraints so L19_CONSTRAINTS_PDK.json exists on
+    disk and its constraints_present flag is honored (never downgraded).
+    §4.05: reads only the design's own OpenLane config + prose docs — never an
+    oracle/golden/testbench/reference-flow. Chip-AGNOSTIC; runs regardless of
+    ic_class."""
+    try:
+        contract = _fpc.extract_floorplan_contract(project)
+    except Exception as e:
+        print(f"      floorplan-contract extract FAILED (fail-open): {e}",
+              file=sys.stderr)
+        return
+    if not contract.get("constraints_present"):
+        return                        # design mandates no fixed floorplan
+    l19 = _try_load_l_doc(project, "L19_CONSTRAINTS_PDK")
+    if not isinstance(l19, dict):
+        return
+    fields = l19.get("fields")
+    if not isinstance(fields, dict):
+        fields = {}
+        l19["fields"] = fields
+
+    changed = False
+    die = contract.get("die_area_budget_um")
+    # Do not clobber a good value already present; fill only when null/empty.
+    if die and not fields.get("die_area_budget_um"):
+        fields["die_area_budget_um"] = die
+        changed = True
+
+    new_hints = contract.get("floorplan_hints") or []
+    if new_hints:
+        existing = fields.get("floorplan_hints")
+        if not isinstance(existing, list):
+            existing = []
+        seen = set()
+        for h in existing:
+            if isinstance(h, dict):
+                seen.add((h.get("kind"), h.get("value"), h.get("source")))
+        for h in new_hints:
+            key = (h.get("kind"), h.get("value"), h.get("source"))
+            if key in seen:
+                continue
+            seen.add(key)
+            existing.append(h)
+            changed = True
+        fields["floorplan_hints"] = existing
+
+    if not fields.get("constraints_present"):
+        fields["constraints_present"] = True
+        changed = True
+
+    if changed:
+        if l19.get("extraction_status") in (None, "NOT_YET_EXTRACTED"):
+            l19["extraction_status"] = "PARTIALLY_EXTRACTED"
+        # Record die-area provenance in the doc's extraction_evidence map.
+        src = contract.get("die_area_source")
+        if die and src:
+            ev = l19.get("extraction_evidence")
+            if not isinstance(ev, dict):
+                ev = {}
+                l19["extraction_evidence"] = ev
+            ev.setdefault(src, []).append({
+                "literal": f"DIE_AREA → {die}µm",
+                "label": "die_area_budget_um",
+            })
+        out = _pl.generated_docs_dir(project) / "L19_CONSTRAINTS_PDK.json"
+        out.write_text(json.dumps(l19, indent=2, ensure_ascii=False) + "\n")
+
+
 # v1.6.369 — for #264 P2 ORGANIC. Structural emitter for
 # L9.reset_domains. Pre-v1.6.369 there was no writer for this slot
 # anywhere in `gen_l9_integration_spec`; all 8 benchmark chips
@@ -55663,6 +55749,17 @@ def main() -> int:
     except Exception as _sdc_err:
         print(f"      SDC constraints ingest FAILED (fail-open): "
               f"{_sdc_err}", file=sys.stderr)
+
+    # G-FIXED-DIE-1 — ingest a design-PROVIDED MANDATED fixed-floorplan
+    # contract (OpenLane config.json DIE_AREA/FP_SIZING/FP_DEF_TEMPLATE and/or
+    # L9 prose DIE_AREA + fixed pin_order.cfg / vsrc/*.loc) into L19.fields
+    # (die_area_budget_um / floorplan_hints / constraints_present). Runs after
+    # the SDC ingest so L19_CONSTRAINTS_PDK.json already exists. Chip-AGNOSTIC.
+    try:
+        _post_emit_floorplan_contract(project)
+    except Exception as _fpc_err:
+        print(f"      floorplan-contract ingest FAILED (fail-open): "
+              f"{_fpc_err}", file=sys.stderr)
 
     # v0.1.77 (R53/R54/R55): serial_peripheral_protocol class-gated synth.
     # Runs AFTER 14d L19-L23 skeleton so the L19-L23 + L4 + L11 + L13
