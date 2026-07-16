@@ -97,10 +97,10 @@ RUN git clone https://github.com/vibeic/iverilog.git /iverilog \
 #   intact. Phase-3 streamout AND commercial sign-off DRC both point here.
 #   The svrf-native-drc branch = streamout-fixes + db::SVRFDeck/db::SVRFEngine + the
 #   `svrfdrc <deck> <layout> <report>` buddy (native C++, NO Python interpreter). Byte-
-#   parity vs the old run_svrf_drc.py proven on the real HP18E80 deck.
+#   parity vs the old run_svrf_drc.py proven on a real commercial foundry deck.
 # ---------------------------------------------------------------------------
 FROM ubuntu:24.04 AS klayout-builder
-ARG KLAYOUT_REF=884e4a19bfde2fea85bcd5c1815e6297bf769abf  # pinned; branch vibeic/svrf-native-drc
+ARG KLAYOUT_REF=e3d26a3342ecaf3468d422e50f806ebff48cbbb0  # pinned; branch vibeic/svrf-native-drc
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       build-essential git python3-dev zlib1g-dev libexpat1-dev libcurl4-openssl-dev libpng-dev \
       qtbase5-dev qttools5-dev-tools ca-certificates \
@@ -187,7 +187,7 @@ RUN command -v fault >/dev/null 2>&1 && ln -sf "$(command -v fault)" /foss/tools
 # /foss/tools/klayout-vibeic above. The `svrfdrc()` entry + the whole native SVRF
 # engine (dbSVRFDeck/dbSVRFEngine) are baked into the FORK's libklayout_bd.so there.
 # NO Python interpreter, NO `-r` script, NO GUI macro — byte-parity with the retired
-# run_svrf_drc.py proven on the real HP18E80 deck.
+# run_svrf_drc.py proven on a real commercial foundry deck.
 #
 # WRAPPER (not a bare symlink): the buddy's ELF carries DT_RUNPATH=/foss/tools/klayout-vibeic,
 # but the runtime env sets LD_LIBRARY_PATH=/foss/tools/klayout:... and DT_RUNPATH is
