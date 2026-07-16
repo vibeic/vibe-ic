@@ -4271,7 +4271,7 @@ def _l9_declared_die_util(project: Path) -> Optional[float]:
 # with no adjacent numbers, a "plugin decides" cell) → None → auto-size (missing a
 # declaration is SAFE; mis-parsing a wrong die is UNSAFE). chip-AGNOSTIC token parse.
 _L9_DIE_AREA_RECT_RE = re.compile(
-    r"DIE_AREA\b[)\s:=|({}'\"`]{0,8}"
+    r"DIE_AREA\b[)\s:=|({}'\"`\[]{0,8}"
     r"(-?\d+(?:\.\d+)?)[\s,]+(-?\d+(?:\.\d+)?)[\s,]+"
     r"(-?\d+(?:\.\d+)?)[\s,]+(-?\d+(?:\.\d+)?)",
     re.IGNORECASE)
@@ -4325,25 +4325,74 @@ def _l9_declared_die_area(project: Optional[Path]) -> Optional[str]:
     return None
 
 
+_L19_DIE_WXH_RE = re.compile(r"^\s*(\d+)\s*[xX]\s*(\d+)\s*$")
+
+
+def _l19_declared_die_area(project: Optional[Path]) -> Optional[str]:
+    """G-FIXED-DIE-1 — return the phase1-extracted mandated die as a 'WxH'
+    string from L19.fields.die_area_budget_um, or None.
+
+    phase1's floorplan-contract ingest (`_post_emit_floorplan_contract`) lands
+    the design-MANDATED die here from an OpenLane ``config.json`` DIE_AREA
+    AND/OR L9 prose. Consuming L19 closes the case where a design ships the
+    fixed die ONLY through its OpenLane config (no prose rect) —
+    `_l9_declared_die_area` (prose-only) would miss it, so phase3 would auto-
+    size a die the design had already fixed. Only a real, positive 'WxH'
+    counts (§4.05 / no-fabricate). chip-AGNOSTIC."""
+    if project is None:
+        return None
+    try:
+        p = _pl.generated_docs_dir(project) / "L19_CONSTRAINTS_PDK.json"
+        if not p.is_file():
+            return None
+        doc = json.loads(p.read_text(errors="ignore"))
+    except Exception:
+        return None
+    if not isinstance(doc, dict):
+        return None
+    fields = doc.get("fields")
+    if not isinstance(fields, dict):
+        return None
+    val = fields.get("die_area_budget_um")
+    if not isinstance(val, str):
+        return None
+    m = _L19_DIE_WXH_RE.match(val)
+    if not m:
+        return None
+    w, h = int(m.group(1)), int(m.group(2))
+    if w > 0 and h > 0:
+        return f"{w}x{h}"
+    return None
+
+
 def _effective_die_um(die_um_flag: str,
                       project: Optional[Path]
                       ) -> Tuple[str, Optional[str]]:
     """R5 precedence resolver (pure, deterministic): resolve the die-sizing SOURCE
     before the netlist-based auto-sizer runs.
 
-        explicit `--die-um WxH` flag  >  L9-mandated fixed DIE_AREA  >  'auto'
+        explicit `--die-um WxH` flag  >  L9-mandated fixed DIE_AREA
+                                      >  L19-mandated die_area_budget_um  >  'auto'
 
     Returns (die_um, note). An explicit WxH flag ALWAYS wins (returned verbatim,
-    no L9 read). Only when the flag is the 'auto' default is L9 consulted; a fixed
-    L9 DIE_AREA is then returned so it behaves EXACTLY like an explicit flag
-    (pinned — never auto-sized over). No L9 declaration → 'auto' passes through to
-    the netlist-based auto-sizer unchanged. chip-AGNOSTIC."""
+    no doc read). Only when the flag is the 'auto' default are the design-mandated
+    sources consulted: the L9 prose rect first, then (G-FIXED-DIE-1) the
+    phase1-extracted L19.die_area_budget_um — which catches a design that ships
+    its fixed die ONLY via an OpenLane config.json (no prose rect). Either
+    mandated die is returned so it behaves EXACTLY like an explicit flag (pinned
+    — never auto-sized over). No mandate → 'auto' passes through to the netlist-
+    based auto-sizer unchanged. chip-AGNOSTIC."""
     if str(die_um_flag).lower() != "auto":
         return die_um_flag, None
     l9 = _l9_declared_die_area(project)
     if l9 is not None:
         return l9, (f"die-um=auto but the L9 floorplan spec mandates a FIXED "
                     f"DIE_AREA {l9}µm — honoring it verbatim (no auto-size)")
+    l19 = _l19_declared_die_area(project)
+    if l19 is not None:
+        return l19, (f"die-um=auto but L19.die_area_budget_um mandates a FIXED "
+                     f"DIE_AREA {l19}µm (design-provided floorplan contract) — "
+                     f"honoring it verbatim (no auto-size)")
     return die_um_flag, None
 
 
