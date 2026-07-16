@@ -323,5 +323,22 @@ def test_gate_floor_never_relaxed_below_producer():
     assert r["verdict"] == "FAIL"
 
 
+def test_tdf_pre_flatten_script_legalizes_memory_before_flatten():
+    # v1.4.39 (ic2-sha256 sha256 DT1 floor): proc + memory_collect + memory_map
+    # must run BEFORE flatten so a K-ROM $mem_v2 (sha256 round-constant ROM)
+    # doesn't abort flatten with "Found processes in selected module".
+    s = tdf._tdf_pre_flatten_script("/pdk/x.lib", "cut/core.v", "sha256",
+                                    "flat/flat_core.v")
+    for cmd in ("proc", "memory_collect", "memory_map", "flatten -separator _"):
+        assert cmd in s
+    # ORDER is load-bearing: proc + memory_map BEFORE flatten.
+    assert s.index("proc") < s.index("memory_map") < s.index("flatten -separator _")
+    # still reads liberty-as-logic + the cut netlist + writes the flat core.
+    assert "read_liberty -ignore_miss_func /pdk/x.lib" in s
+    assert "read_verilog /work/cut/core.v" in s
+    assert "hierarchy -top sha256" in s
+    assert "write_verilog -noattr /work/flat/flat_core.v" in s
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

@@ -445,6 +445,32 @@ def _ensure_cut(project: Path, netlist_rel: str, cut_rel: str, clock: str,
     return True, f"ran fault cut (--dff {cells})"
 
 
+def _tdf_pre_flatten_script(liberty_ctr: str, cut_rel: str, top: str,
+                            flat_rel: str) -> str:
+    """Build the yosys pre-flatten script for the TDF miter core (pure/testable).
+
+    v1.4.39 (ic2-sha256 sha256 DT1 floor): `proc; memory_collect; memory_map` run
+    BEFORE `flatten`. A cut netlist bearing a K-ROM `$mem_v2` (e.g. sha256's
+    round-constant ROM) still carries a `$proc`/`$mem_v2` cell, so a bare
+    `flatten` aborts with "Found processes in selected module" and the TDF run
+    ERRORs. `proc` lowers processes; `memory_collect; memory_map` map the memory
+    to logic, so the miter core flattens to generic `$_*_` gates. Same recipe as
+    the #155 LEC memory_map fix; a no-op on memory-less designs (the passes just
+    find nothing to legalize). `flatten -separator _` keeps inlined pin nets as
+    CLEAN ids so `sat -set`/`connect` can reference every fault site."""
+    return (
+        f"read_liberty -ignore_miss_func {liberty_ctr}\n"
+        f"read_verilog /work/{cut_rel}\n"
+        f"hierarchy -top {top}\n"
+        "proc\n"
+        "memory_collect\n"
+        "memory_map\n"
+        "flatten -separator _\n"
+        "opt_clean\n"
+        f"write_verilog -noattr /work/{flat_rel}\n"
+    )
+
+
 def _gate_levelise(project: Path, cut_rel: str, liberty_ctr: str,
                    top: str, flat_rel: str, pdk_dir: Path | None,
                    timeout: int,
@@ -460,14 +486,7 @@ def _gate_levelise(project: Path, cut_rel: str, liberty_ctr: str,
     # `connect` / `rename` (the '.' is the hierarchy separator), which would
     # abort the whole batch mid-run. This keeps every fault site referenceable
     # across yosys builds that name flattened cell nets `<inst>.<pin>`.
-    script = (
-        f"read_liberty -ignore_miss_func {liberty_ctr}\n"
-        f"read_verilog /work/{cut_rel}\n"
-        f"hierarchy -top {top}\n"
-        "flatten -separator _\n"
-        "opt_clean\n"
-        f"write_verilog -noattr /work/{flat_rel}\n"
-    )
+    script = _tdf_pre_flatten_script(liberty_ctr, cut_rel, top, flat_rel)
     script_rel = str(Path(flat_rel).parent / "_tdf_pre.ys")
     (project / script_rel).write_text(script)
     ec, out, err = _run_in_docker(
