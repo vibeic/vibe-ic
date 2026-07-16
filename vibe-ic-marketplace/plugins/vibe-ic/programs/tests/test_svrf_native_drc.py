@@ -180,6 +180,49 @@ def test_step_drc_env_unavailable_names_buddy(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# v1.4.38 — DRC wall-clock budget (ic2-sha256 commercial_pdk sha256 floor): the stall
+# watchdog never kills a 100%-CPU tool, so svrfdrc's pathological single-thread
+# derived-layer build ran 4.4h unbounded. A non-completing DRC is an HONEST
+# SKIPPED-CONDITION (perf ceiling), never a FAIL or a silent multi-hour hang.
+# --------------------------------------------------------------------------
+def test_drc_wall_budget_default_and_env(monkeypatch):
+    monkeypatch.delenv("VIBE_IC_DRC_BUDGET_S", raising=False)
+    assert R._drc_wall_budget_s() == 7200.0          # 2h default
+    monkeypatch.setenv("VIBE_IC_DRC_BUDGET_S", "3600")
+    assert R._drc_wall_budget_s() == 3600.0
+    monkeypatch.setenv("VIBE_IC_DRC_BUDGET_S", "notanumber")
+    assert R._drc_wall_budget_s() == 7200.0          # invalid -> safe default
+    monkeypatch.setenv("VIBE_IC_DRC_BUDGET_S", "0")
+    assert R._drc_wall_budget_s() == 7200.0          # non-positive -> default
+
+
+def test_try_svrf_native_drc_timeout_is_skipped_condition(tmp_path, monkeypatch):
+    # rc 124 (wall-clock ceiling) -> SKIPPED-CONDITION + SVRFDRC_PERF_CEILING,
+    # and the DRC step passes a BOUNDED hard_ceiling_s (not the 24h default).
+    monkeypatch.setattr(R, "_svrfdrc_bin_container", lambda c: "svrfdrc")
+    monkeypatch.setattr(R, "_to_container_path", lambda p, c: p)
+    monkeypatch.delenv("VIBE_IC_DRC_BUDGET_S", raising=False)
+    seen = {}
+
+    def _fake_exec(c, cmd, **k):
+        seen["hard_ceiling_s"] = k.get("hard_ceiling_s")
+        return (124, "", "")                         # wall-clock ceiling hit
+    monkeypatch.setattr(R, "_docker_exec", _fake_exec)
+    gds = R._pl.pnr_dir(tmp_path) / "spm.gds"
+    gds.parent.mkdir(parents=True, exist_ok=True)
+    gds.write_text("gds")
+    res = R._try_svrf_native_drc(
+        tmp_path, "spm",
+        R.PdkConfig(name="custom:commercial_pdk", liberty="x", tech_lef="x",
+                    cell_lef="x", cell_gds=None, site="unit", drc_deck=None,
+                    calibre_drc="/x/DRC.rule"),
+        "vibeic-eda")
+    assert res.status == "SKIPPED-CONDITION"
+    assert res.extras.get("finding") == "SVRFDRC_PERF_CEILING"
+    assert seen["hard_ceiling_s"] == 7200.0          # bounded, not the 24h ceiling
+
+
+# --------------------------------------------------------------------------
 # LEF->GDS streamout layermap discovery (so GDS gets the foundry's real layer
 # numbers; without it a sign-off deck misreads routing layers).
 # --------------------------------------------------------------------------
