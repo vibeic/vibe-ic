@@ -128,6 +128,22 @@ def _parse_spice_measurements(results: List[Path]) -> dict:
     return meas
 
 
+# A real STA numeric token: optional sign, integer, optional fraction, optional
+# exponent. Deliberately does NOT admit a bare run of '-' (a report separator
+# line), so it can never be handed to float(). chip/PDK-AGNOSTIC.
+_STA_NUM = r"[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?"
+
+
+def _safe_float(tok: str):
+    """float(tok) that returns None instead of raising on a non-numeric token
+    (e.g. a '----' separator the STA report interleaves between blocks). Keeps
+    the timing-report scrapers crash-proof against unforeseen line shapes."""
+    try:
+        return float(tok)
+    except (TypeError, ValueError):
+        return None
+
+
 def _extract_sta_worst_paths(project: Path) -> List[dict]:
     """Extract worst-path delays from STA reports.
 
@@ -143,14 +159,48 @@ def _extract_sta_worst_paths(project: Path) -> List[dict]:
             text = rpt.read_text(errors="replace")
         except OSError:
             continue
-        delay_re = re.compile(
-            r"(?:data\s+arrival\s+time|Path\s+Delay)\s+([\d.]+)",
+        # Arrival/path delay in EITHER column order, anchored to the SAME line
+        # ([ \t], never \s): "Path Delay   <v>" / "data arrival time   <v>"
+        # (value AFTER) and OpenROAD's "<v>   data arrival time" (value BEFORE,
+        # the cumulative-time column). The pre-fix `...\s+([\d.]+)` spanned the
+        # newline and read the FOLLOWING line's number as the arrival time.
+        delay_after_re = re.compile(
+            r"(?:data\s+arrival\s+time|Path\s+Delay)[ \t]+(" + _STA_NUM + r")",
             re.IGNORECASE,
         )
-        slack_re = re.compile(r"slack\s*\(?\w*\)?\s+([-\d.]+)", re.IGNORECASE)
+        delay_before_re = re.compile(
+            r"(" + _STA_NUM + r")[ \t]+data\s+arrival\s+time", re.IGNORECASE)
+        # OpenROAD `report_checks` prints the slack value on the SAME line as
+        # the word "slack", in EITHER order — "<slack>   slack (MET)" (value
+        # FIRST, current OpenROAD) or "slack (MET)   <slack>" (value LAST, some
+        # OpenSTA prints) — and follows the block with a run of '-' separator
+        # dashes. Anchor every capture to the SAME line ([ \t], never \s which
+        # spans the newline into the dashes) and accept ONLY a real numeric
+        # token, so a separator line can never be swallowed into float(). The
+        # pre-fix `[-\d.]+` did exactly that (its \s+ ate the newline, its class
+        # then matched the dashes) and raised ValueError, aborting the whole
+        # Post-Layout SPICE Verification / Step 30 gate. chip/PDK-AGNOSTIC.
+        slack_before_re = re.compile(
+            r"(" + _STA_NUM + r")[ \t]+slack\b", re.IGNORECASE)
+        slack_after_re = re.compile(
+            r"slack[ \t]*\(?\w*\)?[ \t]*[:=]?[ \t]+(" + _STA_NUM + r")",
+            re.IGNORECASE)
+        worst_re = re.compile(
+            r"(?:worst[ \t]+slack|wns)[ \t]*(?:max|min)?[ \t]+("
+            + _STA_NUM + r")", re.IGNORECASE)
 
-        delays = [float(m.group(1)) for m in delay_re.finditer(text)]
-        slacks = [float(m.group(1)) for m in slack_re.finditer(text)]
+        delays = []
+        for _rx in (delay_after_re, delay_before_re):
+            for m in _rx.finditer(text):
+                v = _safe_float(m.group(1))
+                if v is not None:
+                    delays.append(v)
+        slacks = []
+        for _rx in (slack_before_re, slack_after_re, worst_re):
+            for m in _rx.finditer(text):
+                v = _safe_float(m.group(1))
+                if v is not None:
+                    slacks.append(v)
 
         if delays:
             worst_delay = max(delays)
