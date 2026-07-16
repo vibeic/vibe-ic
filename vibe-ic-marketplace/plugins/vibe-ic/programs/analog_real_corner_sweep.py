@@ -1290,6 +1290,38 @@ def _write_native_template_gap(bdir, block, btype, ctx):
     return rec
 
 
+# ─────────────────── G-ANALOG-SPICE F1: HSPICE→ngspice lib normalize ────────
+
+def _normalize_hspice_model_lib(model_lib_host: Path, bdir: Path) -> Path:
+    """Return an ngspice-consumable model-lib HOST path for `model_lib_host`.
+
+    Delegates to the chip-AGNOSTIC `hspice_lib_ngspice_normalize` program: if the
+    lib's include closure carries an HSPICE-only directive ngspice cannot consume
+    (confirmed: `.malias`), a NORMALIZED copy of the offending file(s) is staged
+    under `<bdir>/_pdk_stage/` and its path is returned; otherwise the ORIGINAL
+    path is returned byte-identically (open-PDK ngspice-native libs are a NO-OP).
+
+    Fail-safe: on ANY import / normalization error the ORIGINAL path is returned,
+    so a normalizer fault can never make a previously-runnable native lib
+    unreachable — it just reverts to the prior (native-HSPICE) behaviour."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import hspice_lib_ngspice_normalize as _hln
+    except Exception:
+        return model_lib_host
+    try:
+        stage_dir = bdir / "_pdk_stage"
+        res = _hln.normalize_for_ngspice(model_lib_host, stage_dir)
+        if res.get("changed"):
+            print(f"[real_sim] HSPICE->ngspice normalized model lib: "
+                  f"{'; '.join(res.get('notes', []))}", file=sys.stderr)
+        return Path(res["normalized_lib"])
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[real_sim] HSPICE normalize skipped ({exc}) — using native lib",
+              file=sys.stderr)
+        return model_lib_host
+
+
 # ─────────────────── Main per-block driver ───────────────────
 
 def run_block(project, block, container, pdk, topology_override):
@@ -1332,7 +1364,18 @@ def run_block(project, block, container, pdk, topology_override):
             print(f"[real_sim] block={block}: NEEDS_NATIVE_TEMPLATE "
                   f"(family={ctx.family}) — {ctx.work_items}", file=sys.stderr)
             return 2
-        pdk_lib = _container_path(container, host_root, Path(ctx.model_lib))
+        # G-ANALOG-SPICE F1 — a native-HSPICE commercial model lib may carry
+        # HSPICE-only packaging directives (confirmed: `.malias`) that ngspice
+        # cannot consume: it reads the alias RHS as an undefined parameter and
+        # exits 1 before any analysis. Stage an ngspice-normalized copy of the
+        # offending file(s) under <block>/_pdk_stage/ and point the deck at it.
+        # Content-probed and fail-safe: a lib with NO HSPICE-only directive
+        # (e.g. the open-PDK ngspice model files) is a byte-identical NO-OP that
+        # returns the ORIGINAL path, so this never touches sky130/gf180. The
+        # real PDK lib is never mutated. chip-AGNOSTIC (keyed on directive
+        # syntax, not on any PDK name).
+        model_lib_host = _normalize_hspice_model_lib(Path(ctx.model_lib), bdir)
+        pdk_lib = _container_path(container, host_root, model_lib_host)
         devices = ctx.device_map
         typ_section = ctx.typ_section
         grid_corners = ctx.process_corners
