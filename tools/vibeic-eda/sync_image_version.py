@@ -59,6 +59,10 @@ INSTALL_DOC_CANDIDATES = [
     # --check catches drift the same way as the install docs.
     "vibe-ic-marketplace/plugins/vibe-ic/programs/fault_atpg_run.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/fmeda_fault_injection_coverage.py",
+    # A test's `docker image inspect ghcr.io/vibeic/vibeic-eda:<v>` availability
+    # probe is a live pointer too — it must track VERSION or the skip guard checks
+    # for a stale image that is never present (v1.4.40: registered so it syncs).
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_v1_4_21_dft_atpg_liberty_resolver.py",
 ]
 
 # Files that legitimately carry OLD versions — never checked, never rewritten.
