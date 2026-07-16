@@ -5723,9 +5723,106 @@ def _antenna_repair_tcl(pdk: "PdkConfig") -> str:
         "puts \"ANTENNA_POSTROUTE_DONE\"\n")
 
 
-def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str) -> str:
+# #147 — cache the post-route real-SPEF-repair capability per container so the
+# probe (one cheap OpenROAD `help` / env read) runs at most once per process.
+_POSTROUTE_REPAIR_CAP_CACHE: dict = {}
+
+
+def _openroad_supports_postroute_spef_repair(container: str) -> bool:
+    """True iff the container's OpenROAD carries the fork's post-detailed-route
+    real-SPEF repair fix (vibeic/OpenROAD @ 42ca417ad1 + regression-locked;
+    FIX_STATUS Tool-1 row: the Signal-11 crash-fix + `-detailed_routing`
+    incremental-reroute flag that lets the RSZ repair-move family run on a
+    SPEF-annotated ROUTED design instead of segfaulting — sha256 routed/ss/
+    OpenRCX: stock segfaults, patched repairs 8 resized + 4 buf, max-slew
+    289→0, exit 0).
+
+    The probe MUST be out-of-band: the repair itself cannot be speculatively
+    tried because a `catch` cannot contain a Signal-11 (it kills the whole
+    openroad process → GDS never written). Positive signals (ANY one → capable):
+      1. an explicit opt-in env `VIBEIC_OPENROAD_POSTROUTE_SPEF_REPAIR=1` in the
+         container (the re-baked image can set it to force-enable);
+      2. the fork-added `-detailed_routing` flag advertised on `help
+         repair_timing` / `help repair_design` — a BINARY-keyed signal, so
+         swapping in the fixed OpenROAD auto-enables the repair with no external
+         marker (mirrors #155's yosys `-memory_map` help probe).
+    Fail-safe: any Docker/OpenROAD error or NO positive signal → False, so the
+    guarded MEASURE-ONLY block runs (byte-identical to today; stock OpenROAD
+    never segfaults). The running vibeic-eda:0.2.17 (OpenROAD
+    26Q3-111-g3efb695851, `help repair_timing` = `[-setup] [-hold]
+    [-recover_power …]`, no fork flag) returns False; the image re-bake to
+    42ca417ad1 flips it True. Cached per container. chip-AGNOSTIC."""
+    if container in _POSTROUTE_REPAIR_CAP_CACHE:
+        return _POSTROUTE_REPAIR_CAP_CACHE[container]
+    capable = False
+    try:
+        rc, out, _ = _docker_exec_raw(
+            container,
+            'printf %s "${VIBEIC_OPENROAD_POSTROUTE_SPEF_REPAIR:-}"', timeout=30)
+        if rc == 0 and out.strip().lower() in ("1", "true", "yes", "on"):
+            capable = True
+        else:
+            rc, out, err = _docker_exec_raw(
+                container,
+                "openroad -no_init -no_splash -exit <<'EOF' 2>&1\n"
+                "help repair_timing\n"
+                "help repair_design\n"
+                "EOF",
+                timeout=60)
+            capable = bool(
+                re.search(r"-detailed_routing\b", (out or "") + "\n" + (err or "")))
+    except Exception:  # nosec - probe is best-effort; any failure → fail-safe skip
+        capable = False
+    _POSTROUTE_REPAIR_CAP_CACHE[container] = capable
+    return capable
+
+
+def _postroute_repair_commands(spef_c: str) -> str:
+    """The fork-capable branch of #147 — real-SPEF post-detailed-route setup
+    repair, emitted ONLY when `_openroad_supports_postroute_spef_repair` is True
+    (stock OpenROAD never sees these commands, so it cannot segfault). Reads the
+    just-extracted sign-off SPEF back as the timing parasitics, then runs the
+    setup-repair sequence the fork's Signal-11 crash-fix makes safe on a routed,
+    SPEF-annotated design, driving the incremental reroute of only the repaired
+    nets via the fork's `-detailed_routing` flag (kDetailedRouting→Steiner).
+    Every step is NONFATAL-guarded and the worst-slack is reported before/after
+    so the improvement is auditable. chip-AGNOSTIC — standard OpenROAD/fork TCL.
+
+    NOTE (image-rebake dependency): the running vibeic-eda:0.2.17 is pre-rebake
+    (probe False) so this block is NOT exercised yet; the exact fork recipe is
+    verified by the fork against the re-baked 42ca417ad1 image (FIX_STATUS)."""
+    return (
+        "  # #147 fork-capable real-SPEF post-route setup repair "
+        "(vibeic/OpenROAD 42ca417ad1).\n"
+        "  # Signal-11 crash-fix makes the RSZ repair-move family safe on a\n"
+        "  # routed, SPEF-annotated design; -detailed_routing drives the\n"
+        "  # incremental reroute of only the repaired nets. Probe-gated so\n"
+        "  # stock OpenROAD never reaches here (it would segfault).\n"
+        f"  if {{[catch {{read_spef {spef_c}}} _prr_rd]}} {{ "
+        "puts \"SPEF_REPAIR_READ_NONFATAL: $_prr_rd\" }\n"
+        "  catch {puts \"SPEF_REPAIR_WNS_BEFORE: [sta::worst_slack -max]\"}\n"
+        "  if {[catch {repair_design} _prr_rd2]} { "
+        "puts \"SPEF_REPAIR_DESIGN_NONFATAL: $_prr_rd2\" }\n"
+        "  if {[catch {repair_timing -setup -detailed_routing} _prr_rt]} { "
+        "puts \"SPEF_REPAIR_SETUP_NONFATAL: $_prr_rt\" }\n"
+        "  catch {puts \"SPEF_REPAIR_WNS_AFTER: [sta::worst_slack -max]\"}\n"
+        "  puts \"SPEF_REPAIR_APPLIED\"\n"
+    )
+
+
+def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str,
+                                fork_repair_capable: bool = False) -> str:
     """ORGANIC #557 / #581 — emit the OpenROAD Tcl for the
-    post-detailed-route SPEF extraction (MEASURE-ONLY).
+    post-detailed-route SPEF extraction (MEASURE-ONLY by default).
+
+    #147 — when `fork_repair_capable` is True (the running OpenROAD carries the
+    fork's post-route repair crash-fix, per
+    `_openroad_supports_postroute_spef_repair`), the extracted sign-off SPEF is
+    read back and a real setup-repair (`repair_design` + `repair_timing -setup
+    -detailed_routing`) runs on the SPEF-annotated routed design. When False
+    (stock / pre-rebake OpenROAD) the block stays MEASURE-ONLY exactly as
+    before, so no stock user hits the RSZ Signal-11 segfault (the honest
+    disclosure below is unchanged).
 
     Sequence (all NONFATAL-guarded):
       1. Discover the OpenRCX captable for the loaded PDK (same logic as
@@ -5756,12 +5853,26 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str) -> str:
 
     Chip-AGNOSTIC: pure standard OpenROAD TCL, captable path discovered by glob.
     """
+    if fork_repair_capable:
+        head = (
+            "# --- #147: post-route real-SPEF extraction + FORK setup repair ---\n"
+            "# The running OpenROAD carries the fork's Signal-11 crash-fix\n"
+            "# (vibeic/OpenROAD 42ca417ad1), so the RSZ repair-move family is\n"
+            "# SAFE on a SPEF-annotated routed design: this block extracts the\n"
+            "# sign-off SPEF THEN reads it back and closes setup on real\n"
+            "# parasitics (probe-gated — stock OpenROAD never reaches the repair).\n")
+        repair = _postroute_repair_commands(f"{out_dir_c}/post_route_repair.spef")
+    else:
+        head = (
+            "# --- ORGANIC #557/#581: post-route SPEF extraction (MEASURE-ONLY) ---\n"
+            "# r3: NO repair_timing/repair_design here — the stock RSZ repair-move\n"
+            "# family segfaults on a post-detailed-route SPEF-annotated design\n"
+            "# (the fork crash-fix is not present on this OpenROAD build). Timing\n"
+            "# repair is pre-route (CTS estimate passes + #561 ECO from\n"
+            "# post_hold.def). This block only EXTRACTS the sign-off SPEF.\n")
+        repair = ""
     return (
-        "# --- ORGANIC #557/#581: post-route SPEF extraction (MEASURE-ONLY) ---\n"
-        "# r3: NO repair_timing/repair_design here — the RSZ repair-move\n"
-        "# family segfaults on a post-detailed-route SPEF-annotated design.\n"
-        "# Timing repair is pre-route (CTS estimate passes + #561 ECO from\n"
-        "# post_hold.def). This block only EXTRACTS the sign-off SPEF.\n"
+        head +
         f"set _prs_tlef {tech_lef_c}\n"
         "set _prs_i [string first \"/libs.ref/\" $_prs_tlef]\n"
         "set _prs_rules \"\"\n"
@@ -5789,6 +5900,7 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str) -> str:
         f"    if {{[catch {{write_spef {out_dir_c}/post_route_repair.spef}} "
         f"_prs_spef_wr]}} {{ puts \"SPEF_WRITE_NONFATAL: $_prs_spef_wr\" }}\n"
         "    puts \"SPEF_MEASURE_COMPLETE\"\n"
+        + repair +
         "  }\n"
         "} else {\n"
         "  puts \"SPEF_REPAIR_SKIP: no captable found; post-route SPEF extract skipped\"\n"
@@ -6504,9 +6616,23 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     antenna_repair_block = _antenna_repair_tcl(pdk)
     pg_cleanup_block = _pg_net_cleanup_tcl()
     dont_use_block = _dont_use_tcl(pdk)
-    # ORGANIC #557 — post-route SPEF-domain repair block (pure helper so it
-    # can be unit-tested and the emitter/checker drift gate applies).
-    spef_repair_block = _post_route_spef_repair_tcl(out_dir_c, tech_lef_c)
+    # ORGANIC #557 / #147 — post-route SPEF-domain repair block (pure helper so
+    # it can be unit-tested and the emitter/checker drift gate applies). #147:
+    # PROBE the running OpenROAD once (cached) for the fork's post-route repair
+    # crash-fix (vibeic/OpenROAD 42ca417ad1); capable → the block reads the
+    # sign-off SPEF back and closes setup on real parasitics, else it stays
+    # MEASURE-ONLY (stock OpenROAD would Signal-11 segfault — probe-gated).
+    _fork_repair_capable = _openroad_supports_postroute_spef_repair(container)
+    if _fork_repair_capable:
+        print("[phase3] OpenROAD carries the fork post-route SPEF-repair "
+              "crash-fix (42ca417ad1) → enabling real-SPEF setup repair.",
+              file=sys.stderr)
+    else:
+        print("[phase3] OpenROAD lacks the fork post-route SPEF-repair crash-fix "
+              "(pre-rebake) → MEASURE-ONLY SPEF extract (no segfault).",
+              file=sys.stderr)
+    spef_repair_block = _post_route_spef_repair_tcl(
+        out_dir_c, tech_lef_c, fork_repair_capable=_fork_repair_capable)
 
     # ORGANIC #650 — INGEST a `pin_order.cfg` when the project ships one.
     # _v1_6_599 above is the wrapper-class pre-flight (FAILs only when a
