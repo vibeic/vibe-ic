@@ -176,3 +176,83 @@ class TestConvert:
         assert rc == 0
         text = (tmp_path / "source.spice").read_text()
         assert "DANGLE_1" in text
+
+
+# ---------------------------------------------------------------------------
+# Escaped Verilog identifier + bit-select tokenisation.
+#
+# A yosys post-PnR netlist declares a hierarchical bus as an ESCAPED identifier
+# `wire [7:0] \blk.sub.reg.q ;` and a bit-select on it as `\blk.sub.reg.q [2]`:
+# the space TERMINATES the escaped id (Verilog LRM) and the trailing `[2]` is the
+# bit-select that BELONGS to the net. If `norm()` keeps that terminator space in
+# the middle of the name, `[->.` yields `\blk.sub.reg.q .2` and `' '.join(nets)`
+# splits ONE net into TWO SPICE tokens, overflowing the cell's pin arity ->
+# netgen "Too many parameters in call in <cell>". These tests pin the collapse to
+# a single node AND that ordinary (non-escaped) `bus[N]` stays byte-unchanged.
+# Fictional hierarchies only — nothing hardcoded from any real design.
+# ---------------------------------------------------------------------------
+class TestEscapedBusBitSelect:
+    def test_escaped_id_bitselect_is_single_token(self):
+        # the space between the escaped id and its bit-select is collapsed
+        assert mod.norm(r"\blk.sub.reg.q [2]") == r"\blk.sub.reg.q.2"
+
+    def test_escaped_id_bitselect_no_internal_space(self):
+        out = mod.norm(r"\a.b.c [0]")
+        assert " " not in out
+        assert out == r"\a.b.c.0"
+
+    def test_escaped_id_multidigit_bit(self):
+        assert mod.norm(r"\dut.pipe.stage.acc [31]") == r"\dut.pipe.stage.acc.31"
+
+    def test_escaped_bare_id_unchanged(self):
+        # an escaped scalar (no bit-select) is left as-is
+        assert mod.norm(r"\blk.sub.reg.i_en") == r"\blk.sub.reg.i_en"
+
+    def test_ordinary_bus_byte_unchanged(self):
+        # REGRESSION: a plain (non-escaped) bus bit is untouched by the escaped
+        # path — no `\`, so the whitespace-collapse never runs.
+        assert mod.norm("data[7]") == "data.7"
+        assert mod.norm("q[10]") == "q.10"
+        assert mod.norm("n_1234") == "n_1234"
+
+    def test_escaped_bus_full_convert_correct_arity(self, tmp_path):
+        # End-to-end: two cells share the SAME escaped bus bits. Every emitted
+        # X-line must have exactly (1 + n_pins + 1) whitespace fields — the
+        # escaped net must NOT add a phantom token.
+        cells = (".SUBCKT INVD1 I ZN VDD VSS\n.ENDS\n"
+                 ".SUBCKT NOR2D1 A1 A2 ZN VDD VSS\n.ENDS\n")
+        vtext = (
+            "module widget (o_out, i_in);\n"
+            "  input i_in;\n  output o_out;\n"
+            "  wire [7:0] \\blk.sub.reg.q ;\n"
+            "  INVD1 _00_ (.I(\\blk.sub.reg.q [2]), .ZN(o_out),"
+            " .VDD(VDD), .VSS(VSS));\n"
+            "  NOR2D1 _01_ (.A1(\\blk.sub.reg.q [7]),\n"
+            "    .A2(\\blk.sub.reg.q [6]),\n"
+            "    .ZN(\\blk.sub.reg.q [2]), .VDD(VDD), .VSS(VSS));\n"
+            "  INVD1 _02_ (.I(i_in), .ZN(\\blk.sub.reg.q [7]),"
+            " .VDD(VDD), .VSS(VSS));\n"
+            "endmodule\n"
+        )
+        v = tmp_path / "widget.v"; v.write_text(vtext)
+        c = tmp_path / "cells.spice"; c.write_text(cells)
+        out = tmp_path / "src.spice"
+        rc = mod.convert(str(v), str(c), str(out), include_cells=False)
+        assert rc == 0
+        x_lines = [ln for ln in out.read_text().splitlines()
+                   if ln.startswith("X")]
+        assert len(x_lines) == 3
+        by_inst = {ln.split()[0]: ln for ln in x_lines}
+        # INVD1 = X + 4 nets + cell = 6 fields; NOR2D1 = X + 5 nets + cell = 7.
+        assert len(by_inst["X_00_"].split()) == 6
+        assert len(by_inst["X_02_"].split()) == 6
+        assert len(by_inst["X_01_"].split()) == 7
+        # the escaped bus bit is ONE token, and the SAME string wherever it
+        # appears (so netgen sees one shared node -> topology preserved).
+        assert r"\blk.sub.reg.q.2" in by_inst["X_00_"].split()
+        assert r"\blk.sub.reg.q.2" in by_inst["X_01_"].split()
+        assert r"\blk.sub.reg.q.7" in by_inst["X_01_"].split()
+        assert r"\blk.sub.reg.q.7" in by_inst["X_02_"].split()
+        # no emitted line carries a bare ` .N` phantom token
+        for ln in x_lines:
+            assert " ." not in ln

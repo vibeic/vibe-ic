@@ -45,6 +45,19 @@ def norm(net):
         return "VSS"
     if net in ("1'b1", "1'B1"):
         return "VDD"
+    # Verilog escaped identifier + bit-select. A yosys gate netlist writes a
+    # bit-select on an ESCAPED bus as `\name [N]`: per Verilog LRM the escaped id
+    # runs `\` + non-whitespace until whitespace TERMINATES it, and the trailing
+    # `[N]` is the bit-select that BELONGS to the net. That terminator space is
+    # not outer whitespace, so `.strip()` leaves it in the MIDDLE of the name;
+    # `[->.` then yields `\name .N` and `' '.join(nets)` splits the ONE net into
+    # TWO SPICE tokens, giving the cell call an extra node ("Too many parameters
+    # in call in <cell>"). Collapse whitespace sitting between an escaped id and
+    # its bit-select so `\a.b.c [N]` normalizes to the single node `\a.b.c.N`,
+    # identical in form to an ordinary `bus[N]` -> `bus.N`. Chip-AGNOSTIC: pure
+    # Verilog/SPICE syntax. Ordinary nets (no leading `\`) are byte-unchanged.
+    if net.startswith("\\"):
+        net = re.sub(r"\s+(\[\d)", r"\1", net)
     return net.replace("[", ".").replace("]", "")
 
 
