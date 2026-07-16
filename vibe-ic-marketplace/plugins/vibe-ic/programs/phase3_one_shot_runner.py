@@ -2195,6 +2195,41 @@ def _streamout_layermap_warning(calibre_drc: Optional[str],
     return None
 
 
+def _stdcell_exclusion_marker_warning(calibre_drc: Optional[str],
+                                      marker_layer: Optional[str]) -> Optional[str]:
+    """FLOOR-DRC cell-interior-exemption guard (ic1-spm commercial_pdk clean-room, v1.4.36).
+
+    Foundry sign-off decks exempt qualified std-cell INTERIORS via a universal
+    "don't-check" marker layer (`__x__ = NOT x DCTY`, hundreds of derivations).
+    Foundry-delivered library GDS commonly does NOT carry that marker, so the
+    P&R integrator must SYNTHESIZE it by painting it over placed std-cell
+    footprints — exactly what the streamout `stdcell_exclusion_marker_layer`
+    config drives. When a commercial Calibre DRC deck is present but NO exclusion
+    marker is configured, the marker input stays EMPTY, every `NOT x DCTY`
+    derivation re-checks foundry-qualified cell interiors, and the FEOL rules
+    OVER-FIRE by the thousand on cells that are cell-level-qualified (spm commercial_pdk:
+    15 false FEOL families — implant-enclosure, poly↔contact, contact). Return a
+    loud operator warning in that case; None otherwise.
+
+    FAIL-SAFE by design: we do NOT auto-detect + auto-paint the don't-check layer
+    — painting a mis-detected marker would silently WAIVE real violations (a
+    false-clean, the worst outcome). We surface the miss so the operator wires the
+    deck's ACTUAL marker into the bridge signoff_config. chip-AGNOSTIC: keyed on
+    deck-present + marker-unconfigured, no vendor literal."""
+    if calibre_drc is not None and not marker_layer:
+        return (
+            "sign-off: a commercial DRC deck is present "
+            f"({Path(calibre_drc).name}) but NO std-cell exclusion marker is "
+            "configured (bridge signoff_config `stdcell_exclusion_marker_layer`). "
+            "Foundry decks exempt qualified std-cell interiors via a don't-check "
+            "marker the library GDS usually does NOT carry; with it unconfigured "
+            "the marker input is EMPTY, so every interior FEOL rule re-checks "
+            "foundry-qualified cells and OVER-FIRES (false implant / poly-contact "
+            "/ contact violations). Set `stdcell_exclusion_marker_layer` to the "
+            "deck's cell-interior don't-check layer (L/D) before trusting FEOL DRC.")
+    return None
+
+
 def _detect_pdk(project: Path, override: Optional[str] = None
                 ) -> Optional[PdkConfig]:
     """Detect which PDK to use. chip-AGNOSTIC: looks at project's input/pdk/
@@ -2412,6 +2447,15 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                     _signoff_cfg = json.loads(_cfg_f.read_text())
                 except Exception:
                     _signoff_cfg = {}
+            # v1.4.36 — FLOOR-DRC: WARN loudly when a commercial DRC deck is
+            # present but no std-cell exclusion marker is configured (the silent
+            # config miss that re-checks qualified cell interiors → false FEOL
+            # over-fire). Fail-safe: surface it, never auto-guess the marker.
+            _excl_warn = _stdcell_exclusion_marker_warning(
+                str(calibre_drc) if calibre_drc else None,
+                _signoff_cfg.get("stdcell_exclusion_marker_layer"))
+            if _excl_warn:
+                print(f"[WARN] {_excl_warn}", file=sys.stderr)
             _b_magicrc = (next(iter(sorted((_bridge / "magic").glob("*.magicrc"))), None)
                           if (_bridge / "magic").is_dir() else None)
             _b_netgen = (next(iter(sorted((_bridge / "netgen").glob("*_setup.tcl"))), None)
