@@ -2452,6 +2452,101 @@ def _discover_topmetal_width_fix(project: Path, calibre_drc: Optional[str],
     return out_path, notes
 
 
+def _discover_supply_pin_dir_fix(project: Path, cell_lef: Optional[Path]
+                                 ) -> Tuple[Optional[Path], List[str]]:
+    """FLOOR-PNR-BUFFER supply-pin DIRECTION hygiene (v1.4.x, ibex CPU-scale
+    HP18E80 clean-room — measured, not assumed).
+
+    ROOT CAUSE (proven in-container on the running image):
+    ODB defaults a LEF MACRO `PIN` that carries NO `DIRECTION` statement to
+    IoType INPUT (the LEF default). A commercial std-cell LEF commonly OMITS
+    `DIRECTION` on its `USE POWER` / `USE GROUND` supply pins (sky130 declares
+    them `DIRECTION INOUT`, so it escapes this path; this PDK's 650 supply pins
+    do not). OpenROAD's ODB buffer-insertion input counter
+    (`dbInsertBuffer::checkAndCreateBuffer`) filters candidate MTerms by IoType
+    ONLY — not by SigType — so it counts those supply pins as signal inputs:
+    EVERY buffer master then appears to have >=3 inputs (A + VDD + VSS) and is
+    rejected (`ODB-1207 Buffer master '<buf>' has more than one input`), which
+    makes ALL buffer insertion in `repair_design` / `repair_timing` / antenna
+    repair fail (`ODB-1205`). High-fanout nets (a 1000+-terminal reset/enable
+    web) then stay UNBUFFERED, and detailed route cannot legalize the flat monster
+    net -> systematic same-layer SHORTS even at low utilization (ibex stand-in:
+    6253 MET2 shorts, non-converging, at 30.9% util with 0 GR overflow). Smaller
+    designs escape only because they never need buffer insertion, so the reject
+    never fires — the LEF routing RULES themselves are correct.
+
+    FIX: stage a LOCALLY-corrected copy of the cell LEF under
+    <project>/phase3/pdk_stage/ (covered by the project's blanket `*.lef`
+    gitignore — the real PDK LEF is NEVER touched) in which every `USE POWER` /
+    `USE GROUND` PIN that LACKS a `DIRECTION` gets `DIRECTION INOUT ;` injected —
+    which is the LEF-correct direction for a supply pin, so ODB stops counting it
+    as a signal input and buffer insertion works. Every downstream step reading
+    `pdk.cell_lef` (PnR, CTS, ECO, antenna, LVS) inherits it with no extra wiring.
+
+    chip/PDK-AGNOSTIC: keyed PURELY on `USE POWER` / `USE GROUND` + an absent
+    `DIRECTION`; no cell / vendor / metal literal and no numeric value. Fail-safe
+    no-op (byte-identical, ORIGINAL path returned) when every supply pin already
+    declares a direction (e.g. sky130) or the LEF is unreadable.
+
+    Returns (effective_cell_lef_path, notes)."""
+    notes: List[str] = []
+    if not cell_lef:
+        return cell_lef, notes
+    cell_lef_p = Path(cell_lef)
+    if not cell_lef_p.is_file():
+        return cell_lef, notes
+    try:
+        lines = cell_lef_p.read_text(errors="ignore").split("\n")
+    except OSError:
+        return cell_lef, notes
+
+    pin_open = re.compile(r"^(\s*)PIN\s+(\S+)\s*$")
+    use_supply = re.compile(r"^\s*USE\s+(POWER|GROUND)\s*;", re.IGNORECASE)
+    has_dir = re.compile(r"^\s*DIRECTION\s+\S+", re.IGNORECASE)
+
+    out: List[str] = []
+    fixed = 0
+    i, n = 0, len(lines)
+    while i < n:
+        m = pin_open.match(lines[i])
+        if not m:
+            out.append(lines[i]); i += 1
+            continue
+        indent, pin = m.group(1), m.group(2)
+        end_re = re.compile(r"^\s*END\s+" + re.escape(pin) + r"\s*$")
+        block = [lines[i]]
+        i += 1
+        while i < n and not end_re.match(lines[i]):
+            block.append(lines[i]); i += 1
+        if i < n:            # the `END <pin>` line
+            block.append(lines[i]); i += 1
+        is_supply = any(use_supply.match(ln) for ln in block)
+        if is_supply and not any(has_dir.match(ln) for ln in block):
+            # inject DIRECTION INOUT ; right after the `PIN <name>` line
+            out.append(block[0])
+            out.append(f"{indent}  DIRECTION INOUT ;")
+            out.extend(block[1:])
+            fixed += 1
+        else:
+            out.extend(block)
+
+    if fixed == 0:
+        return cell_lef, notes
+
+    stage_dir = project / "phase3" / "pdk_stage"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    out_path = stage_dir / (cell_lef_p.stem + "_supplydir_fix.lef")
+    out_path.write_text("\n".join(out))
+    notes.append(
+        f"[supply-pin-dir-fix] {fixed} USE POWER/GROUND pin(s) in "
+        f"{cell_lef_p.name} lacked a DIRECTION (ODB defaults them to INPUT, so "
+        f"OpenROAD's buffer-input counter rejects every buffer master -> "
+        f"repair_design inserts 0 buffers -> high-fanout nets stay unbuffered -> "
+        f"detailed-route shorts). Staged a corrected cell LEF with "
+        f"`DIRECTION INOUT` on those supply pins (the real PDK LEF is untouched).")
+    return out_path, notes
+
+
 def _streamout_layermap_warning(calibre_drc: Optional[str],
                                 lefdef_layermap: Optional[str]) -> Optional[str]:
     """FLOOR-STREAMOUT loud-WARN (ic1-spm HP18E80 clean-room, v1.4.34).
@@ -2771,6 +2866,17 @@ def _detect_pdk(project: Path, override: Optional[str] = None
             tech_lef, _tm_notes = _discover_topmetal_width_fix(
                 project, str(calibre_drc) if calibre_drc else None, tech_lef)
             for _n in _tm_notes:
+                print(_n, file=sys.stderr)
+
+            # FLOOR-PNR-BUFFER supply-pin DIRECTION hygiene: a commercial cell
+            # LEF that omits DIRECTION on its USE POWER/GROUND pins makes ODB
+            # default them to INPUT, so OpenROAD's buffer-input counter rejects
+            # EVERY buffer master (ODB-1207) -> repair_design inserts 0 buffers
+            # -> high-fanout nets stay unbuffered -> detailed-route shorts (ibex
+            # HP18E80: 6253 MET2 shorts). Stage a corrected cell LEF (DIRECTION
+            # INOUT on supply pins; real PDK LEF untouched). No-op for sky130.
+            cell_lef, _sp_notes = _discover_supply_pin_dir_fix(project, cell_lef)
+            for _n in _sp_notes:
                 print(_n, file=sys.stderr)
 
             return PdkConfig(
