@@ -92,6 +92,40 @@ def test_svrfdrc_bin_container_env_override(monkeypatch):
     assert "command -v /opt/svrfdrc" in seen["cmd"]
 
 
+# v1.4.35 — the image's /etc/profile.d prints `[INFO] Final PATH variable:` to
+# STDOUT on every login shell; `_docker_exec` uses `bash -lc`, so `command -v`
+# stdout arrives banner-polluted. The resolver must still return the clean path.
+_BANNER_POLLUTED = (
+    "[INFO] Setting up iic-osic-tools ...\n"
+    "[INFO] Final PATH variable: /foss/tools/bin:/usr/bin\n"
+    "/foss/tools/bin/svrfdrc\n"
+)
+
+
+def test_clean_command_v_path_strips_login_banner():
+    assert R._clean_command_v_path(_BANNER_POLLUTED, "svrfdrc") \
+        == "/foss/tools/bin/svrfdrc"
+
+
+def test_clean_command_v_path_passthrough_when_clean():
+    assert R._clean_command_v_path("/foss/tools/bin/svrfdrc\n", "svrfdrc") \
+        == "/foss/tools/bin/svrfdrc"
+
+
+def test_clean_command_v_path_falls_back_to_name_when_only_chatter():
+    # A shell builtin/alias resolution or an all-banner stdout → the name itself
+    # (rc==0 already proved it resolved; never return empty).
+    assert R._clean_command_v_path("[INFO] noise\n", "svrfdrc") == "svrfdrc"
+
+
+def test_svrfdrc_bin_container_strips_banner_pollution(monkeypatch):
+    # End-to-end: banner-polluted `command -v` stdout → clean resolved path,
+    # NOT the 3-line `[INFO]...\n[INFO]...\n/foss/tools/bin/svrfdrc` string.
+    monkeypatch.setattr(R, "_docker_exec",
+                        lambda c, cmd, **k: (0, _BANNER_POLLUTED, ""))
+    assert R._svrfdrc_bin_container("vibeic-eda") == "/foss/tools/bin/svrfdrc"
+
+
 def test_try_svrf_native_drc_returns_none_when_buddy_absent(
         tmp_path, monkeypatch):
     # When the buddy is absent from the image, the helper returns None so step_drc
