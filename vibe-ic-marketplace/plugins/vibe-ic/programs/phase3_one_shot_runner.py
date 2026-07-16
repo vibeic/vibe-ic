@@ -7376,6 +7376,34 @@ if _marker and cell_gds_path and os.path.exists(cell_gds_path):
         _lib = pya.Layout()
         _lib.read(cell_gds_path)
         _libnames = set(c.name for c in _lib.each_cell())
+        # GAP (spm commercial_pdk, row-boundary DRC residual): painting only the
+        # DEF/LEF-abstract SIZE box (`_inst.bbox()` at this point in the
+        # flow) covers the cell's declared placement footprint, not its
+        # TRUE drawn extent. Measured on this library: EVERY sampled
+        # master (fillers included, not just active cells) draws its
+        # implant/metal a little OUTSIDE its own SIZE box by design — an
+        # abutment-merge overhang meant to be absorbed by a neighbour's
+        # matching overhang. At a row/core boundary there is no neighbour,
+        # so the overhang survives past the SIZE-box marker and the
+        # deck's own qualified-cell exemption never reaches it: real,
+        # benign, foundry-drawn geometry then fires as if it were fresh
+        # backend content. Fix: paint each instance's TRUE extent — the
+        # transformed bbox of its OWN library-GDS cell (whatever that
+        # specific master draws, on any layer) — never the LEF SIZE box
+        # alone, and never a hardcoded margin / row / die-wide fill.
+        # chip-AGNOSTIC: the extent is read back from the library GDS
+        # per-master, not asserted as a number.
+        _dbu_scale = _lib.dbu / ly.dbu
+
+        def _lib_extent(name):
+            lc = _lib.cell(name)
+            b = lc.bbox() if lc is not None else pya.Box()
+            if b.empty() or _dbu_scale == 1.0:
+                return b
+            return pya.Box(int(round(b.left * _dbu_scale)), int(round(b.bottom * _dbu_scale)),
+                            int(round(b.right * _dbu_scale)), int(round(b.top * _dbu_scale)))
+
+        _lib_bbox_cache = {}
         _tcm = ly.cell(top)
         if _tcm is not None:
             # comma-separated list: a deck may key its exemption on more
@@ -7389,11 +7417,56 @@ if _marker and cell_gds_path and os.path.exists(cell_gds_path):
                 _ml, _md = (int(x) for x in _one.split('/'))
                 _li_m = ly.layer(pya.LayerInfo(_ml, _md))
                 _painted = 0
+                _old_reg = pya.Region()
+                _new_reg = pya.Region()
                 for _inst in _tcm.each_inst():
-                    if _inst.cell.name in _libnames:
-                        _tcm.shapes(_li_m).insert(_inst.bbox())
-                        _painted += 1
-                print(f"STDCELL_MARKER {_one}: painted {_painted} std-cell footprint(s)")
+                    if _inst.cell.name not in _libnames:
+                        continue
+                    _old_box = _inst.bbox()
+                    _lib_box = _lib_bbox_cache.get(_inst.cell.name)
+                    if _lib_box is None:
+                        _lib_box = _lib_extent(_inst.cell.name)
+                        _lib_bbox_cache[_inst.cell.name] = _lib_box
+                    _true_box = (_inst.trans * _lib_box) if not _lib_box.empty() else _old_box
+                    _union_box = _old_box + _true_box  # Box union — never shrinks coverage
+                    _tcm.shapes(_li_m).insert(_union_box)
+                    _old_reg.insert(_old_box)
+                    _new_reg.insert(_union_box)
+                    _painted += 1
+                # ANTI-MASKING GUARD (mandatory — this is waiver-adjacent).
+                # The ADDED coverage (true-extent minus SIZE-box) may only
+                # ever land on qualified-cell geometry this marker is meant
+                # to exempt — never on real net-carrying content. Right
+                # here, immediately after the bare DEF+LEF read and BEFORE
+                # manual FEOL substitution copies any cell's real geometry
+                # in, every std-cell instance is still a bare LEF abstract
+                # — so the ONLY flat top-level shapes on other layers are
+                # the DEF's ROUTED/SPECIALNETS wires. If the added margin
+                # touches ANY of them, do not expand for this marker layer:
+                # revert to the SIZE-box behaviour and disclose it loudly.
+                # Never a silent over-waive.
+                _added = _new_reg.merged() - _old_reg.merged()
+                _leak = 0
+                if not _added.is_empty():
+                    for _oli in ly.layer_indexes():
+                        if _oli == _li_m:
+                            continue
+                        _flat = pya.Region(_tcm.shapes(_oli))
+                        if _flat.is_empty():
+                            continue
+                        _leak += (_added & _flat).count()
+                if _leak:
+                    _tcm.shapes(_li_m).clear()
+                    for _p in _old_reg.merged().each():
+                        _tcm.shapes(_li_m).insert(_p)
+                    print(f"STDCELL_MARKER {_one}: ANTI-MASKING GUARD TRIPPED "
+                          f"({_leak} routed-net shape(s) under the proposed "
+                          f"true-extent expansion) — reverted to SIZE-bbox "
+                          f"coverage for this layer; expansion NOT applied")
+                else:
+                    print(f"STDCELL_MARKER {_one}: painted {_painted} std-cell "
+                          f"footprint(s) at true library extent (anti-masking "
+                          f"guard clean, 0 routed-net overlap)")
     except Exception as e:
         print(f"warn stdcell marker: {e}")
 # MANUAL FEOL SUBSTITUTION — copy each std-cell's REAL geometry from the cell
@@ -8972,6 +9045,23 @@ def _parse_svrf_tally(rpt: Path) -> Tuple[int, int, int, List[str]]:
 #     from this check; with no marker layer in the input GDS the check over-fires
 #     on pre-characterised cell geometry. Signature-confirmed here: only met1
 #     (std-cell-internal) min-area fires; met2/3/4 (routing) all pass.
+#     CAVEAT (spm commercial_pdk row-boundary close-loop, 2026-07-16): the `_not_X`
+#     NAME-MATCH is a real-signal proxy, not a proof of mechanism — some decks
+#     build `..._not_<marker>` via `OR(CUT(A, X), ANDNOT(A, X))`, which is the
+#     set identity A = (A∩X) ∪ (A\X) and recombines to the FULL `A` regardless
+#     of whether X (the marker) is empty or populated. On this deck, Mx.A.1's
+#     `backend__metN_not_artisan` is exactly that shape: proven (independent
+#     KLayout reconstruction, exact violation-count match) to be measuring
+#     raw `__metN__` (metal minus the deck's OWN "don't-check" layer) directly,
+#     with ZERO dependence on the "artisan" marker's emptiness — this function
+#     labelled it MARKER_ABSENT right BY LUCK (X does happen to be empty here
+#     too), not because the `_not_X` reference is load-bearing. Do not treat
+#     an MARKER_ABSENT hit here as proof that repainting X would fix it; it is
+#     STILL a reliable geometry/artifact signal (conservative default unchanged
+#     — unproven stays GEOMETRY), just not evidence of *which* marker mechanism
+#     is the fix. See the sibling std-cell TRUE-EXTENT marker fix in
+#     `_GDS_STREAMOUT_PY` for the actual mechanism this deck relies on
+#     (the qualified-cell footprint marker, not "artisan").
 #   DENSITY_FILL — a DENSITY rule (CMP metal/active density window). On a small
 #     test chip the design is too sparse to hit the floor; resolved by foundry
 #     metal fill or a formal density waiver.
