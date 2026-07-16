@@ -70,32 +70,76 @@ def test_spef_repair_tcl_is_measure_only_no_repair(tmp_path):
     assert "global_route" not in cmds
 
 
-# ── #147 — fork-capable real-SPEF post-route setup repair (probe-gated) ──────
-def test_spef_repair_capable_branch_runs_real_setup_repair(tmp_path):
-    """#147 — when the running OpenROAD carries the fork crash-fix
-    (fork_repair_capable=True) the block reads the sign-off SPEF back and runs
-    the real setup repair (repair_design + repair_timing -setup with the fork
-    -detailed_routing incremental-reroute flag), each NONFATAL-guarded, and
-    reports worst-slack before/after so the improvement is auditable."""
-    tcl = R._post_route_spef_repair_tcl("/the_out", "/tech.lef",
-                                        fork_repair_capable=True)
+# ── #147 — fork real-SPEF setup-repair ESTIMATE (probe-gated, END-of-flow) ────
+def test_postroute_repair_estimate_block_recipe():
+    """#147 — the fork-capable ESTIMATE block runs the real setup repair:
+    read_spef → `estimate_parasitics -detailed_routing` (flag lives HERE) →
+    `repair_design` → `repair_timing -setup` (NO flag), each NONFATAL-guarded,
+    worst-slack before/after, to a SEPARATE sta_spef_repaired.rpt."""
+    tcl = R._postroute_repair_estimate_tcl("/the_out", fork_repair_capable=True)
     cmds = "\n".join(ln for ln in tcl.splitlines()
                      if not ln.lstrip().startswith("#"))
     assert "read_spef /the_out/post_route_repair.spef" in cmds
+    assert "estimate_parasitics -detailed_routing" in cmds
     assert "repair_design" in cmds
-    assert "repair_timing -setup -detailed_routing" in cmds
-    assert "SPEF_REPAIR_APPLIED" in cmds
-    # STILL measure-first: the sign-off SPEF is extracted before the repair.
+    assert "repair_timing -setup" in cmds
+    assert "SPEF_REPAIR_APPLIED_ON_ESTIMATE" in cmds
+    # improved slack goes to a SEPARATE report, NEVER the authoritative sta.rpt.
+    assert "sta_spef_repaired.rpt" in cmds
+    # the flag is on estimate_parasitics, NOT repair_timing — a `repair_timing
+    # -setup -detailed_routing` throws STA-0562 and the NONFATAL catch would
+    # silently swallow it (no repair). Guard that regression:
+    assert "repair_timing -setup -detailed_routing" not in cmds
+    assert "catch {estimate_parasitics -detailed_routing}" in cmds
+    # do NOT insert global_route -start_incremental (EST-0104).
+    assert "global_route -start_incremental" not in cmds
+
+
+def test_postroute_repair_estimate_empty_on_stock():
+    # stock upstream OpenROAD (probe False) → NO block at all, so it can never
+    # reach a repair command it would segfault on.
+    assert R._postroute_repair_estimate_tcl("/o", fork_repair_capable=False) == ""
+
+
+def test_spef_extract_block_is_measure_only_never_modifies_design():
+    # The extraction block (runs BEFORE write_def) must NEVER carry a repair
+    # move — that would ship unrouted ECO cells into the DEF/GDS/netlist.
+    cmds = "\n".join(ln for ln in R._post_route_spef_repair_tcl(
+        "/out", "/tech.lef").splitlines() if not ln.lstrip().startswith("#"))
     assert "SPEF_MEASURE_COMPLETE" in cmds
-    # every repair move is guarded so one failure cannot abort the flow.
-    assert "catch {repair_design}" in cmds
-    assert "catch {repair_timing -setup -detailed_routing}" in cmds
+    for banned in ("repair_timing", "repair_design", "estimate_parasitics "
+                   "-detailed_routing", "detailed_route", "global_route"):
+        assert banned not in cmds
+
+
+def test_pnr_tcl_repair_estimate_runs_after_shipped_artifacts():
+    # ORDER GUARANTEE: the estimate block appears AFTER routed.def / <top>.def /
+    # <top>_pnr.v / sta.rpt are written, so it can only measure — never corrupt
+    # the shipped design.
+    kw = dict(
+        tech_lef_c="/t.lef", cell_lef_c="/c.lef", macro_lefs_tcl="",
+        liberty_c="/l.lib", macro_libs_tcl="", netlist_c="/n.v", top="foo",
+        sdc_c="/s.sdc", dont_use_block="", metal_prefix="met",
+        die_w=100, die_h=100, core_pad=10, core_w=80, core_h=80, site="unit",
+        out_dir_c="/out", tapcell_block="", pdn_block="", util=0.45,
+        spare_protection_tcl="", spare_postfix_tcl="", clk_buf="", clk_buf_root="",
+        routing_constraint_tcl="", pg_cleanup_block="",
+        spef_repair_block="# extract\n", antenna_repair_block="", filler_block="",
+        spef_repair_estimate_block="SPEF_REPAIR_ESTIMATE_MARKER\n")
+    tcl = R._build_pnr_tcl_text(**kw)
+    assert "SPEF_REPAIR_ESTIMATE_MARKER" in tcl
+    assert (tcl.index("write_def /out/routed.def")
+            < tcl.index("write_verilog /out/foo_pnr.v")
+            < tcl.index("report_checks > /out/sta.rpt")
+            < tcl.index("SPEF_REPAIR_ESTIMATE_MARKER")
+            < tcl.index("\nexit"))
 
 
 def test_openroad_postroute_repair_probe(monkeypatch):
     """The #147 capability probe: env opt-in OR the fork `-detailed_routing`
-    flag on repair_timing/repair_design help → capable; stock help / error →
-    fail-safe False. Cached per container."""
+    flag on `help estimate_parasitics` → capable; stock help / error →
+    fail-safe False. Cached per container. The flag is on estimate_parasitics,
+    NOT repair_timing/repair_design (probing those can never discriminate)."""
     R._POSTROUTE_REPAIR_CAP_CACHE.clear()
 
     # (a) explicit env opt-in → capable.
@@ -106,24 +150,26 @@ def test_openroad_postroute_repair_probe(monkeypatch):
     monkeypatch.setattr(R, "_docker_exec_raw", _env_on)
     assert R._openroad_supports_postroute_spef_repair("c-env") is True
 
-    # (b) no env, but the fork flag is advertised on the repair-command help.
+    # (b) no env, but the fork flag is advertised on estimate_parasitics help.
     R._POSTROUTE_REPAIR_CAP_CACHE.clear()
 
     def _fork_help(container, cmd, timeout=1800):
         if "VIBEIC_OPENROAD_POSTROUTE_SPEF_REPAIR" in cmd:
             return 0, "", ""
-        return 0, ("repair_timing [-setup] [-hold] [-detailed_routing]\n"
-                   "repair_design [-detailed_routing]\n"), ""
+        # exactly the fork build's help line (pipe-separated flags).
+        return 0, ("estimate_parasitics -placement|-global_routing|"
+                   "-detailed_routing [-spef_file filename]\n"), ""
     monkeypatch.setattr(R, "_docker_exec_raw", _fork_help)
     assert R._openroad_supports_postroute_spef_repair("c-fork") is True
 
-    # (c) stock help (no fork flag) → fail-safe False (guarded skip runs).
+    # (c) stock help (no -detailed_routing) → fail-safe False (guarded skip).
     R._POSTROUTE_REPAIR_CAP_CACHE.clear()
 
     def _stock_help(container, cmd, timeout=1800):
         if "VIBEIC_OPENROAD_POSTROUTE_SPEF_REPAIR" in cmd:
             return 0, "", ""
-        return 0, "repair_timing [-setup] [-hold] [-recover_power percent]\n", ""
+        return 0, ("estimate_parasitics -placement|-global_routing "
+                   "[-spef_file filename]\n"), ""
     monkeypatch.setattr(R, "_docker_exec_raw", _stock_help)
     assert R._openroad_supports_postroute_spef_repair("c-stock") is False
 
