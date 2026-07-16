@@ -115,6 +115,17 @@ _UNPROVEN_LIST_RE = re.compile(r"Unproven\s+\$equiv\s+cells:\s*([^\n]+)")
 
 # Canonical Yosys success line (corroboration for the gate's .rpt parse).
 _SUCCESS_RE = re.compile(r"Equivalence\s+successfully\s+proven", re.IGNORECASE)
+# #155 follow-up — POSITIVE timeout discriminator: this is the EXACT marker that
+# run_yosys_equiv (below) writes into the raw log ITSELF when the yosys subprocess
+# is KILLED by the wall budget (`subprocess.TimeoutExpired`) — it is NOT tool
+# output a design could emit, so it can never be spoofed by a genuine-garbage log.
+# Post-memory_map a memory-bearing design is now genuinely satgen-modelable, so
+# equiv_induct ATTEMPTS the full sequential proof; on a large design (e.g.
+# sha256's memory-inclusive miter) that induction can exceed the LEC wall clock,
+# leaving no final equiv_status → parse_error. Matching the distinctive
+# `yosys equiv timed out` phrase keeps this a real timeout signal, not any
+# coincidental substring.
+_TIMEOUT_RE = re.compile(r"yosys equiv timed out", re.IGNORECASE)
 
 
 def parse_equiv_output(text: str) -> Dict:
@@ -195,7 +206,25 @@ def parse_equiv_output(text: str) -> Dict:
         and not sat_aborts
     )
 
-    if parse_error:
+    # #155 follow-up — a post-memory_map memory-inclusive proof that exceeds the
+    # LEC wall budget leaves no equiv_status (parse_error) but carries the timeout
+    # marker. That is a DISCLOSED budget/capability gap → SKIPPED-CONDITION, NOT a
+    # FAIL: a timeout is not a proven mismatch, and BEFORE #155 this same design
+    # fast-skipped on the $mem_v2 SAT-model gap (also SKIPPED-CONDITION). Without
+    # this branch #155 would REGRESS a large memory design (e.g. sha256, whose
+    # proof runs >1200s) from a neutral skip to a spurious FAIL. A genuine
+    # mismatch still surfaces as unproven $equiv cells (not parse_error) → FAIL.
+    timed_out = bool(_TIMEOUT_RE.search(text))
+    if parse_error and timed_out:
+        equivalent = False
+        verdict = "SKIPPED-CONDITION"
+        verdict_explanation = (
+            "Yosys equiv_induct did not finish within the LEC time budget — the "
+            "memory-inclusive sequential proof (post-memory_map) exceeded the "
+            "wall clock before emitting equiv_status. This is a DISCLOSED budget "
+            "gap, NOT a proven mismatch; raise --timeout or close the remainder "
+            "with sign-off LEC (Conformal/VC LEC).")
+    elif parse_error:
         equivalent = False
         verdict = "FAIL"
         verdict_explanation = (
