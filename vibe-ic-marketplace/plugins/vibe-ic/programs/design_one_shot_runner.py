@@ -1386,7 +1386,8 @@ def _rcvar_is_thin_wrapper(bodies: Dict[str, Tuple[Path, str, str]],
 def _rcvar_is_chip_top_name(name: str) -> bool:
     """True for the RUNNER's auto-emitted wrapper naming convention. This is
     chip-AGNOSTIC: 'chip_top' is the runner's own fixed wrapper name (see
-    step_yosys_synth._autoemit_chip_top_if_needed), not a chip-specific SKU."""
+    _autoemit_chip_top_wrapper, reused by step_yosys_synth +
+    step_reused_ip_consume), not a chip-specific SKU."""
     return name == "chip_top" or "chip_top" in name
 
 
@@ -1878,6 +1879,103 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
         f"{_additive_note}"
         + (f"; rewired {rewired} internal caller file(s) to the inner"
            if rewired else ""), written)
+
+
+def step_reused_ip_consume(project: Path,
+                           top_name: str = "chip_top") -> StepResult:
+    """Floor G-CATALOG-GLUE — DETERMINISTIC reused-IP RTL CONSUME step.
+
+    Runs right after ``step_rtl_gen``. When rtl_gen WAIVED (reused-IP /
+    catalog-glue) and left ``phase2/stage1/rtl/`` EMPTY but the design's INPUT
+    itself PROVIDES the intended build RTL, this step DETERMINISTICALLY:
+
+      1. stages the provided implementation RTL (``input/vendor_rtl/`` and/or
+         ``input/design_src/**/rtl/``, recorded in SOURCE_MANIFEST) into
+         ``phase2/stage1/rtl/`` — SystemVerilog handled by the downstream
+         slang/sv2v pre-pass, never silently dropped (G-SV-INGEST note), and
+      2. auto-emits the SAME deterministic ``chip_top`` wrapper the synth path
+         uses (``_autoemit_chip_top_wrapper``) so ``synth -top chip_top`` finds
+         a module — instead of HALTING at phase2.
+
+    The residual glue that genuinely needs an LLM STILL WAIVES to
+    ``catalog-glue-author``. Self-gating + §4.05 NO-LEAK (see
+    ``reused_ip_rtl_consume``): fires ONLY when rtl/ is empty AND the design
+    ships its own build RTL under input/. NEVER FAILs — a design that provides
+    nothing is a clean SKIP, leaving the WAIVE-to-AI path unchanged."""
+    t0 = time.time()
+    try:
+        import sys as _sys
+        if str(PROGRAMS_DIR) not in _sys.path:
+            _sys.path.insert(0, str(PROGRAMS_DIR))
+        import reused_ip_rtl_consume as _consume
+        res = _consume.consume_reused_ip_rtl(project)
+    except Exception as _e:  # pragma: no cover — robustness aid never crashes
+        return StepResult("reused_ip_consume", "SKIP", time.time() - t0,
+                          f"consume unavailable: {_e}")
+    if not res.get("reused_ip"):
+        # Nothing to consume (rtl/ already populated OR design ships no build
+        # RTL). Clean SKIP — the WAIVE-to-catalog-glue-author path is unchanged.
+        return StepResult("reused_ip_consume", "SKIP", time.time() - t0,
+                          res.get("reason", "no design-provided build RTL"),
+                          extras=res)
+    # Provided RTL staged — now make a synthesizable top exist, mirroring
+    # step_yosys_synth's EXACT resolution ORDER so we never bind a DIFFERENT
+    # top than the synth path would:
+    #   (1) instantiation-graph root (the real integration top nobody
+    #       instantiates — e.g. a *_wrapper the auto-emit heuristic skips), else
+    #   (2) the deterministic chip_top wrapper (_autoemit_chip_top_wrapper — the
+    #       SAME shape the synth path uses) around the single resolved leaf.
+    # (1) prevents wrapping an INNER leaf when the design ships a genuine named
+    # top; (2) covers the RTLLM-style single-leaf case. Either way synth finds a
+    # module instead of HALTING on empty rtl/.
+    rtl_dir = _pl.rtl_dir(project)
+    synth_top_resolved = None
+    chip_top_emitted = None
+    l9_top_module = None
+    try:
+        _l9p = (project / "phase1" / "generated_docs"
+                / "L9_INTEGRATION_SPEC.json")
+        if _l9p.is_file():
+            _l9 = json.loads(_l9p.read_text(errors="replace"))
+            if isinstance(_l9, dict):
+                _v = _l9.get("top_module")
+                if isinstance(_v, str) and _v.strip():
+                    l9_top_module = _v.strip()
+    except Exception:
+        l9_top_module = None
+    try:
+        _staged_mods = set(_v661_rtl_module_names(project))
+        if top_name not in _staged_mods:
+            _root = _v661_resolve_dut_module(project, top_name, l9_top_module)
+            if _root and _root in _staged_mods:
+                synth_top_resolved = _root
+    except Exception:
+        pass
+    if synth_top_resolved is None:
+        try:
+            _emitted = _autoemit_chip_top_wrapper(project, rtl_dir, top_name)
+            if _emitted is not None:
+                chip_top_emitted = _emitted.name
+                synth_top_resolved = top_name
+        except Exception:
+            pass
+    res["chip_top_emitted"] = chip_top_emitted
+    res["synth_top_resolved"] = synth_top_resolved
+    _sv = (f" {res['sv_ingest_note']}" if res.get("sv_ingest_note") else "")
+    if chip_top_emitted:
+        _ct = f" Auto-emitted {chip_top_emitted} (thin wrapper)."
+    elif synth_top_resolved:
+        _ct = (f" Synth top resolves to instantiation-graph root "
+               f"'{synth_top_resolved}' (design ships a named top).")
+    else:
+        _ct = (" Top resolution deferred to synth (graph-root/auto-emit "
+               "fallback).")
+    return StepResult(
+        "reused_ip_consume", "PASS", time.time() - t0,
+        f"Staged {len(res['staged'])} design-provided build-RTL file(s) into "
+        f"phase2/stage1/rtl/ so synth no longer halts on empty rtl/."
+        + _ct + _sv,
+        extras=res)
 
 
 def step_rtl_gen(project: Path, ic_class: str) -> StepResult:
@@ -6417,6 +6515,275 @@ def _prune_tail_advisory(cg_report: dict, synth_top: str):
     return advisory, log_line
 
 
+def _autoemit_chip_top_wrapper(project: Path, rtl_dir: Path,
+                              synth_top: str):
+    """Deterministic chip_top wrapper auto-emit (extracted from
+    step_yosys_synth so the reused-IP CONSUME path can reuse the SAME shape).
+
+    Scans ``rtl_dir`` for a synthesizable top. If a module named ``synth_top``
+    already exists (caller/author provided one) OR the design is genuinely
+    multi-root-ambiguous, returns ``None`` (no wrapper). Otherwise emits a
+    thin pass-through ``<synth_top>.v`` / ``.sv`` that instantiates the single
+    resolved DUT and returns its Path. chip-AGNOSTIC; L9.top_module (when
+    present) disambiguates a multi-module design."""
+    chip_top_v = rtl_dir / f"{synth_top}.v"
+    chip_top_sv = rtl_dir / f"{synth_top}.sv"
+    if chip_top_v.is_file() or chip_top_sv.is_file():
+        return None  # caller already provided one
+    # v0.1.62 — the design's declared top (L9.top_module) disambiguates which
+    # DUT to wrap when rtl/ has several modules (e.g. sha256 = sha256 +
+    # sha256_core + sha256_k). Without this, the multi-module case bailed
+    # "ambiguous" → no chip_top → yosys "Module 'chip_top' not found".
+    l9_top_module = None
+    try:
+        _l9p = (project / "phase1" / "generated_docs"
+                / "L9_INTEGRATION_SPEC.json")
+        if _l9p.is_file():
+            _l9 = json.loads(_l9p.read_text(errors="replace"))
+            if isinstance(_l9, dict):
+                v = _l9.get("top_module")
+                if isinstance(v, str) and v.strip():
+                    l9_top_module = v.strip()
+    except Exception:
+        pass
+    # Find candidate authored top modules in rtl/. A "candidate" is any
+    # .v / .sv whose first `module <name>(...)` declaration has at least
+    # one port. Skip files whose top-module declaration matches synth_top
+    # (we already checked above). Skip obvious helper / sub-module files
+    # (no _asic, _wrapper, _tb, _test names — those are not the L9 top).
+    import re as _re
+    mod_re = _re.compile(r"^\s*module\s+([A-Za-z_]\w*)\s*[(#]", _re.M)
+
+    # v0.1.62 fix (Bucket A — spm benchmark, chip_top auto-emit) — the
+    # paren-matching walker that extracts the port list used to count `(`
+    # and `)` that appear INSIDE COMMENTS. spm's port has
+    # `input wire y,  // serial multiplier (LSB-first)` — the `(LSB-first)`
+    # was counted, and combined with an off-by-one depth after skipping the
+    # `#(parameter …)` block, the walker mistook the `)` in that comment for
+    # the port-list close → truncated port list → `module chip_top (… y,);`
+    # with no closing `)` → yosys "syntax error, unexpected '('". Fix:
+    # (a) scan a COMMENT-MASKED copy (offsets preserved) so comment parens
+    #     never count, and (b) capture the `#(params)` block SEPARATELY from
+    #     the port list so the instance connects only real ports while the
+    #     wrapper header still declares the params (so `[size-1:0]` resolves).
+    # Chip-AGNOSTIC: applies to any parameterized module with commented ports.
+    # Helpers are module-level (_chip_top_*) so the regression suite pins them.
+    _mask_comments = _chip_top_mask_comments
+    _extract_param_and_ports = _chip_top_extract_param_and_ports
+    # v0.1.38 fix (Bucket A — 2 RTLLM agents on same LoC + 1 multi-module
+    # report): (1) the `#(parameter)` walker used to set depth=1 after
+    # skipping params, then re-read the same `(` and bump to depth=2 —
+    # parameterized modules never yielded a port block. (2) per-file we
+    # used to look at only the FIRST module declaration; for multi-module
+    # files (e.g. barrel_shifter.v containing helper mux2X1 first, then
+    # barrel_shifter) this picked the wrong top. Now we scan ALL module
+    # decls per file and prefer the one whose name matches file basename
+    # or synth_top.
+    candidates = []
+    for f in sorted(rtl_dir.glob("*.v")) + sorted(rtl_dir.glob("*.sv")):
+        name = f.stem
+        if any(name.endswith(s) for s in ("_asic", "_wrapper", "_tb",
+                                          "_test", "_synth")):
+            continue
+        try:
+            text = f.read_text(errors="ignore")
+        except Exception:
+            continue
+        # scan ALL module decls in this file (v0.1.38 multi-module fix);
+        # v0.1.62 — comment-masked, params captured separately.
+        text_scan = _mask_comments(text)
+        file_mods = []
+        for m in mod_re.finditer(text_scan):
+            mod_name = m.group(1)
+            if mod_name == synth_top:
+                return None  # already in some file
+            param_block, port_block = _extract_param_and_ports(
+                text_scan, m.end() - 1)
+            if port_block is not None:
+                file_mods.append((mod_name, param_block, port_block, f))
+        if not file_mods:
+            continue
+        # v0.1.38 (multi-module fix): prefer the module whose name matches
+        # the file basename; else fall back to the first module in file.
+        chosen = next((t for t in file_mods if t[0] == f.stem), file_mods[0])
+        candidates.append(chosen)
+    if not candidates:
+        return None  # nothing usable
+    # v0.1.38 (multi-file fix): if any candidate name matches the file
+    # basename of its source file, prefer that one as the dut. If multiple
+    # files contribute, pick deterministically (already sorted by glob).
+    if len(candidates) > 1:
+        # v0.1.62 — first prefer the candidate whose module name matches the
+        # design's declared L9.top_module (resolves multi-module designs like
+        # sha256 deterministically instead of bailing ambiguous).
+        if l9_top_module:
+            preferred = [t for t in candidates if t[0] == l9_top_module]
+            if len(preferred) == 1:
+                candidates = preferred
+    if len(candidates) > 1:
+        # filter to "module name == file stem" pairs only
+        basenamed = [t for t in candidates if t[0] == t[3].stem]
+        if len(basenamed) == 1:
+            candidates = basenamed
+        else:
+            return None  # genuinely ambiguous — let yosys report
+    mod_name, param_block, port_block, src_file = candidates[0]
+    # v0.1.33 — extract just the port NAMES from the port_block so the
+    # instance uses named-port connections `.a(a), .b(b), …` instead of
+    # splatting the full DECLARATIONS (input wire …) into the instance
+    # port list (which is invalid Verilog and broke all 10 batch04
+    # designs in the v0.1.32 RTLLM re-run).
+    import re as _re
+    # Strip outer parens from port_block
+    inner = port_block.strip()
+    if inner.startswith('(') and inner.endswith(')'):
+        inner = inner[1:-1]
+    # Each declaration is a comma-separated chunk; per-chunk grab the
+    # last identifier (the port name, after type / direction / width).
+    port_names = []
+    for chunk in inner.split(','):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        # last identifier (allow `[N:0]` interjections; just grab the
+        # final \w+ token, ignoring trailing brackets/whitespace).
+        ids = _re.findall(r'[A-Za-z_]\w*', chunk)
+        # filter out the reserved keywords that appear in declarations
+        kw = {"input", "output", "inout", "wire", "reg", "logic",
+              "signed", "unsigned", "var"}
+        ids = [i for i in ids if i not in kw]
+        if ids:
+            port_names.append(ids[-1])
+    connects = ",\n    ".join(f".{n}({n})" for n in port_names)
+    # v0.1.62 — if the DUT is parameterized, declare the SAME params on the
+    # wrapper (so widths like `[size-1:0]` resolve in the wrapper port list)
+    # AND propagate them by name to the instance.
+    param_header = f" {param_block.strip()}" if param_block.strip() else ""
+    inst_params = ""
+    if param_block.strip():
+        pnames = []
+        for pm in _re.finditer(r'\b(?:parameter|localparam)\b[^=,()]*?'
+                               r'([A-Za-z_]\w*)\s*=', param_block):
+            if pm.group(1) not in pnames:
+                pnames.append(pm.group(1))
+        if pnames:
+            inst_params = " #(" + ", ".join(
+                f".{p}({p})" for p in pnames) + ")"
+    # ORGANIC-20260606 #463 — the wrapper's outputs are structurally
+    # driven by the instance, so strip reg/logic storage keywords from
+    # OUTPUT chunks only (input/inout, width, signedness preserved).
+    # `output reg p` on an instance-driven wrapper output is lint-fatal
+    # in strict SV.
+    wrapper_port_block = _chip_top_strip_output_storage(port_block)
+    # #115 follow-up — the copied block may carry the reset-alias
+    # wrapper's `ifdef VERILATOR tri port pulls. chip_top KEEPS them
+    # (outermost face owns the pull) and the INNER wrapper's port-face
+    # tri is neutralized to plain inputs — Verilator never transfers a
+    # driven value through a two-level tri-port chain (dead reset),
+    # while a plain unbound chip_top input would tie to 0 and freeze
+    # the design in reset. See _chip_top_neutralize_inner_vl_port_tri.
+    if "`ifdef VERILATOR" in port_block and _re.search(
+            r"\btri[01]\b", port_block):
+        try:
+            _inner_txt = src_file.read_text(errors="ignore")
+            _rew = _chip_top_neutralize_inner_vl_port_tri(
+                _inner_txt, mod_name)
+            if _rew is not None:
+                src_file.write_text(_rew)
+        except Exception:
+            pass
+    else:
+        # #119 — re-emit path: the inner wrapper is ALREADY neutralized
+        # (plain faces; the additive intent survives only as the body's
+        # __rcvar_pull nets). A verbatim copy would emit a PULL-LESS
+        # chip_top (Verilator ties an unbound plain input to 0 —
+        # active-low reset permanently asserted). Restore the pull on
+        # chip_top's outermost faces from the body signature.
+        try:
+            _inner_txt = src_file.read_text(errors="ignore")
+            if "__rcvar_pull" in _inner_txt:
+                _res = _chip_top_restore_vl_port_tri(
+                    wrapper_port_block, _inner_txt)
+                if _res is not None:
+                    wrapper_port_block = _res
+        except Exception:
+            pass
+    # ISSUE #120 — reset-alias residual DISCLOSURE guard.
+    # After the if/else above, the on-disk inner alias wrapper (`mod_name`)
+    # is NEUTRALIZED (plain reset port faces; the additive pull survives
+    # only as body `__rcvar_pull nets + the port-direct `ifdef VERILATOR
+    # combine). chip_top is the outermost face and owns the pull, so a TB
+    # that binds chip_top (the in-flow default) is safe. But a Verilator TB
+    # that DIRECT-binds the neutralized wrapper itself (out-of-flow today;
+    # candidate: an eco-loop reference_tb restaging original rtl) would tie
+    # an unbound reset face to 0 -> active-low reset permanently asserted ->
+    # stuck in reset. We cannot re-pull the inner wrapper here (that would
+    # recreate the #115 two-level tri-port dead-reset for the primary
+    # chip_top bind — the wrapper is a single on-disk artifact with one
+    # state), so we DISCLOSE the trade-off: persist a machine-readable guard
+    # sidecar marking the wrapper as NOT a valid direct Verilator bind top.
+    # A dotfile so it never matches the rtl `*.v/*.sv globs. Any bind-top
+    # selection can read it (or call `_alias_wrapper_unsafe_as_vl_bind_top`)
+    # so a neutralized wrapper can never SILENTLY ship stuck-in-reset.
+    try:
+        _wtxt = src_file.read_text(errors="ignore")
+        _disc = _alias_wrapper_vl_bind_guard_finding(
+            _wtxt, mod_name, synth_top)
+        if _disc is not None:
+            (rtl_dir / f".{mod_name}__vl_bind_guard.json").write_text(
+                json.dumps(_disc, indent=2))
+    except Exception:
+        pass
+    # ORGANIC #582 — sv2v output is ALWAYS non-ANSI (header lists bare
+    # names; directions/widths live in body declarations). Copying that
+    # header verbatim produced a wrapper with ZERO I/O declarations →
+    # yosys "port 'X' has no I/O member declaration" on every port.
+    # Detect a direction-keyword-free port list and harvest the DUT
+    # body's declarations into the wrapper body.
+    nonansi_decls = ""
+    if port_names and not _re.search(r"\b(?:input|output|inout)\b",
+                                     port_block):
+        try:
+            _dut_masked = _mask_comments(
+                src_file.read_text(errors="ignore"))
+        except Exception:
+            _dut_masked = ""
+        _harvested = _chip_top_nonansi_port_decls(
+            _dut_masked, mod_name, port_names)
+        if _harvested:
+            nonansi_decls = _harvested + "\n"
+    wrapper = (
+        f"// SPDX-License-Identifier: Apache-2.0\n"
+        f"{_GENERATED_DESIGN_HEADER}"
+        f"// v0.1.62 auto-emitted chip_top wrapper (design_one_shot_runner).\n"
+        f"// L9.top_module = '{synth_top}' but rtl/ only defined '{mod_name}'\n"
+        f"// (in {src_file.name}). This thin pass-through lets yosys synth\n"
+        f"// against L9's expected top without modifying the authored RTL.\n"
+        f"`default_nettype none\n"
+        f"module {synth_top}{param_header} {wrapper_port_block};\n"
+        f"{nonansi_decls}"
+        f"  {mod_name}{inst_params} u_dut (\n    {connects}\n  );\n"
+        f"endmodule\n"
+        f"`default_nettype wire\n"
+    )
+    # ORGANIC #660 — when the copied param block carries SV-2017-only
+    # syntax (package-scoped `pkg::type` param types, enum/typedef/struct/
+    # interface/logic-typed params), emit the wrapper as `<top>.sv` so it
+    # joins the .sv sv2v-conversion set in BOTH the synth and reference_tb
+    # frontends. The reference_tb sv2v pre-pass filters strictly on `.sv`;
+    # a `.v` wrapper carrying SV param syntax would be passed to
+    # `iverilog -g2012` UNCONVERTED and syntax-error on the runner's own
+    # output. A plain Verilog-2005 param block keeps the `.v` extension
+    # (byte-identical historical behaviour). chip-AGNOSTIC SV-syntax
+    # surface predicate — no chip/vendor literal.
+    if _chip_top_param_block_needs_sv(param_block):
+        chip_top_dst = chip_top_sv
+    else:
+        chip_top_dst = chip_top_v
+    chip_top_dst.write_text(wrapper)
+    return chip_top_dst
+
+
 def step_yosys_synth(project: Path, top_name: str = "chip_top",
                      container: str = "vibeic-eda",
                      ic_class: Optional[str] = None) -> StepResult:
@@ -6578,265 +6945,10 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
     # if absent BUT exactly one non-helper module is present, auto-generate a
     # thin pass-through chip_top.v that instantiates it. Chip-AGNOSTIC: only
     # fires when no chip_top exists; respects manually-authored chip_top.v.
-    def _autoemit_chip_top_if_needed():
-        chip_top_v = rtl_dir / f"{synth_top}.v"
-        chip_top_sv = rtl_dir / f"{synth_top}.sv"
-        if chip_top_v.is_file() or chip_top_sv.is_file():
-            return  # caller already provided one
-        # v0.1.62 — the design's declared top (L9.top_module) disambiguates which
-        # DUT to wrap when rtl/ has several modules (e.g. sha256 = sha256 +
-        # sha256_core + sha256_k). Without this, the multi-module case bailed
-        # "ambiguous" → no chip_top → yosys "Module 'chip_top' not found".
-        l9_top_module = None
-        try:
-            _l9p = (project / "phase1" / "generated_docs"
-                    / "L9_INTEGRATION_SPEC.json")
-            if _l9p.is_file():
-                _l9 = json.loads(_l9p.read_text(errors="replace"))
-                if isinstance(_l9, dict):
-                    v = _l9.get("top_module")
-                    if isinstance(v, str) and v.strip():
-                        l9_top_module = v.strip()
-        except Exception:
-            pass
-        # Find candidate authored top modules in rtl/. A "candidate" is any
-        # .v / .sv whose first `module <name>(...)` declaration has at least
-        # one port. Skip files whose top-module declaration matches synth_top
-        # (we already checked above). Skip obvious helper / sub-module files
-        # (no _asic, _wrapper, _tb, _test names — those are not the L9 top).
-        import re as _re
-        mod_re = _re.compile(r"^\s*module\s+([A-Za-z_]\w*)\s*[(#]", _re.M)
-
-        # v0.1.62 fix (Bucket A — spm benchmark, chip_top auto-emit) — the
-        # paren-matching walker that extracts the port list used to count `(`
-        # and `)` that appear INSIDE COMMENTS. spm's port has
-        # `input wire y,  // serial multiplier (LSB-first)` — the `(LSB-first)`
-        # was counted, and combined with an off-by-one depth after skipping the
-        # `#(parameter …)` block, the walker mistook the `)` in that comment for
-        # the port-list close → truncated port list → `module chip_top (… y,);`
-        # with no closing `)` → yosys "syntax error, unexpected '('". Fix:
-        # (a) scan a COMMENT-MASKED copy (offsets preserved) so comment parens
-        #     never count, and (b) capture the `#(params)` block SEPARATELY from
-        #     the port list so the instance connects only real ports while the
-        #     wrapper header still declares the params (so `[size-1:0]` resolves).
-        # Chip-AGNOSTIC: applies to any parameterized module with commented ports.
-        # Helpers are module-level (_chip_top_*) so the regression suite pins them.
-        _mask_comments = _chip_top_mask_comments
-        _extract_param_and_ports = _chip_top_extract_param_and_ports
-        # v0.1.38 fix (Bucket A — 2 RTLLM agents on same LoC + 1 multi-module
-        # report): (1) the `#(parameter)` walker used to set depth=1 after
-        # skipping params, then re-read the same `(` and bump to depth=2 —
-        # parameterized modules never yielded a port block. (2) per-file we
-        # used to look at only the FIRST module declaration; for multi-module
-        # files (e.g. barrel_shifter.v containing helper mux2X1 first, then
-        # barrel_shifter) this picked the wrong top. Now we scan ALL module
-        # decls per file and prefer the one whose name matches file basename
-        # or synth_top.
-        candidates = []
-        for f in sorted(rtl_dir.glob("*.v")) + sorted(rtl_dir.glob("*.sv")):
-            name = f.stem
-            if any(name.endswith(s) for s in ("_asic", "_wrapper", "_tb",
-                                              "_test", "_synth")):
-                continue
-            try:
-                text = f.read_text(errors="ignore")
-            except Exception:
-                continue
-            # scan ALL module decls in this file (v0.1.38 multi-module fix);
-            # v0.1.62 — comment-masked, params captured separately.
-            text_scan = _mask_comments(text)
-            file_mods = []
-            for m in mod_re.finditer(text_scan):
-                mod_name = m.group(1)
-                if mod_name == synth_top:
-                    return  # already in some file
-                param_block, port_block = _extract_param_and_ports(
-                    text_scan, m.end() - 1)
-                if port_block is not None:
-                    file_mods.append((mod_name, param_block, port_block, f))
-            if not file_mods:
-                continue
-            # v0.1.38 (multi-module fix): prefer the module whose name matches
-            # the file basename; else fall back to the first module in file.
-            chosen = next((t for t in file_mods if t[0] == f.stem), file_mods[0])
-            candidates.append(chosen)
-        if not candidates:
-            return  # nothing usable
-        # v0.1.38 (multi-file fix): if any candidate name matches the file
-        # basename of its source file, prefer that one as the dut. If multiple
-        # files contribute, pick deterministically (already sorted by glob).
-        if len(candidates) > 1:
-            # v0.1.62 — first prefer the candidate whose module name matches the
-            # design's declared L9.top_module (resolves multi-module designs like
-            # sha256 deterministically instead of bailing ambiguous).
-            if l9_top_module:
-                preferred = [t for t in candidates if t[0] == l9_top_module]
-                if len(preferred) == 1:
-                    candidates = preferred
-        if len(candidates) > 1:
-            # filter to "module name == file stem" pairs only
-            basenamed = [t for t in candidates if t[0] == t[3].stem]
-            if len(basenamed) == 1:
-                candidates = basenamed
-            else:
-                return  # genuinely ambiguous — let yosys report
-        mod_name, param_block, port_block, src_file = candidates[0]
-        # v0.1.33 — extract just the port NAMES from the port_block so the
-        # instance uses named-port connections `.a(a), .b(b), …` instead of
-        # splatting the full DECLARATIONS (input wire …) into the instance
-        # port list (which is invalid Verilog and broke all 10 batch04
-        # designs in the v0.1.32 RTLLM re-run).
-        import re as _re
-        # Strip outer parens from port_block
-        inner = port_block.strip()
-        if inner.startswith('(') and inner.endswith(')'):
-            inner = inner[1:-1]
-        # Each declaration is a comma-separated chunk; per-chunk grab the
-        # last identifier (the port name, after type / direction / width).
-        port_names = []
-        for chunk in inner.split(','):
-            chunk = chunk.strip()
-            if not chunk:
-                continue
-            # last identifier (allow `[N:0]` interjections; just grab the
-            # final \w+ token, ignoring trailing brackets/whitespace).
-            ids = _re.findall(r'[A-Za-z_]\w*', chunk)
-            # filter out the reserved keywords that appear in declarations
-            kw = {"input", "output", "inout", "wire", "reg", "logic",
-                  "signed", "unsigned", "var"}
-            ids = [i for i in ids if i not in kw]
-            if ids:
-                port_names.append(ids[-1])
-        connects = ",\n    ".join(f".{n}({n})" for n in port_names)
-        # v0.1.62 — if the DUT is parameterized, declare the SAME params on the
-        # wrapper (so widths like `[size-1:0]` resolve in the wrapper port list)
-        # AND propagate them by name to the instance.
-        param_header = f" {param_block.strip()}" if param_block.strip() else ""
-        inst_params = ""
-        if param_block.strip():
-            pnames = []
-            for pm in _re.finditer(r'\b(?:parameter|localparam)\b[^=,()]*?'
-                                   r'([A-Za-z_]\w*)\s*=', param_block):
-                if pm.group(1) not in pnames:
-                    pnames.append(pm.group(1))
-            if pnames:
-                inst_params = " #(" + ", ".join(
-                    f".{p}({p})" for p in pnames) + ")"
-        # ORGANIC-20260606 #463 — the wrapper's outputs are structurally
-        # driven by the instance, so strip reg/logic storage keywords from
-        # OUTPUT chunks only (input/inout, width, signedness preserved).
-        # `output reg p` on an instance-driven wrapper output is lint-fatal
-        # in strict SV.
-        wrapper_port_block = _chip_top_strip_output_storage(port_block)
-        # #115 follow-up — the copied block may carry the reset-alias
-        # wrapper's `ifdef VERILATOR tri port pulls. chip_top KEEPS them
-        # (outermost face owns the pull) and the INNER wrapper's port-face
-        # tri is neutralized to plain inputs — Verilator never transfers a
-        # driven value through a two-level tri-port chain (dead reset),
-        # while a plain unbound chip_top input would tie to 0 and freeze
-        # the design in reset. See _chip_top_neutralize_inner_vl_port_tri.
-        if "`ifdef VERILATOR" in port_block and _re.search(
-                r"\btri[01]\b", port_block):
-            try:
-                _inner_txt = src_file.read_text(errors="ignore")
-                _rew = _chip_top_neutralize_inner_vl_port_tri(
-                    _inner_txt, mod_name)
-                if _rew is not None:
-                    src_file.write_text(_rew)
-            except Exception:
-                pass
-        else:
-            # #119 — re-emit path: the inner wrapper is ALREADY neutralized
-            # (plain faces; the additive intent survives only as the body's
-            # __rcvar_pull nets). A verbatim copy would emit a PULL-LESS
-            # chip_top (Verilator ties an unbound plain input to 0 —
-            # active-low reset permanently asserted). Restore the pull on
-            # chip_top's outermost faces from the body signature.
-            try:
-                _inner_txt = src_file.read_text(errors="ignore")
-                if "__rcvar_pull" in _inner_txt:
-                    _res = _chip_top_restore_vl_port_tri(
-                        wrapper_port_block, _inner_txt)
-                    if _res is not None:
-                        wrapper_port_block = _res
-            except Exception:
-                pass
-        # ISSUE #120 — reset-alias residual DISCLOSURE guard.
-        # After the if/else above, the on-disk inner alias wrapper (`mod_name`)
-        # is NEUTRALIZED (plain reset port faces; the additive pull survives
-        # only as body `__rcvar_pull nets + the port-direct `ifdef VERILATOR
-        # combine). chip_top is the outermost face and owns the pull, so a TB
-        # that binds chip_top (the in-flow default) is safe. But a Verilator TB
-        # that DIRECT-binds the neutralized wrapper itself (out-of-flow today;
-        # candidate: an eco-loop reference_tb restaging original rtl) would tie
-        # an unbound reset face to 0 -> active-low reset permanently asserted ->
-        # stuck in reset. We cannot re-pull the inner wrapper here (that would
-        # recreate the #115 two-level tri-port dead-reset for the primary
-        # chip_top bind — the wrapper is a single on-disk artifact with one
-        # state), so we DISCLOSE the trade-off: persist a machine-readable guard
-        # sidecar marking the wrapper as NOT a valid direct Verilator bind top.
-        # A dotfile so it never matches the rtl `*.v/*.sv globs. Any bind-top
-        # selection can read it (or call `_alias_wrapper_unsafe_as_vl_bind_top`)
-        # so a neutralized wrapper can never SILENTLY ship stuck-in-reset.
-        try:
-            _wtxt = src_file.read_text(errors="ignore")
-            _disc = _alias_wrapper_vl_bind_guard_finding(
-                _wtxt, mod_name, synth_top)
-            if _disc is not None:
-                (rtl_dir / f".{mod_name}__vl_bind_guard.json").write_text(
-                    json.dumps(_disc, indent=2))
-        except Exception:
-            pass
-        # ORGANIC #582 — sv2v output is ALWAYS non-ANSI (header lists bare
-        # names; directions/widths live in body declarations). Copying that
-        # header verbatim produced a wrapper with ZERO I/O declarations →
-        # yosys "port 'X' has no I/O member declaration" on every port.
-        # Detect a direction-keyword-free port list and harvest the DUT
-        # body's declarations into the wrapper body.
-        nonansi_decls = ""
-        if port_names and not _re.search(r"\b(?:input|output|inout)\b",
-                                         port_block):
-            try:
-                _dut_masked = _mask_comments(
-                    src_file.read_text(errors="ignore"))
-            except Exception:
-                _dut_masked = ""
-            _harvested = _chip_top_nonansi_port_decls(
-                _dut_masked, mod_name, port_names)
-            if _harvested:
-                nonansi_decls = _harvested + "\n"
-        wrapper = (
-            f"// SPDX-License-Identifier: Apache-2.0\n"
-            f"{_GENERATED_DESIGN_HEADER}"
-            f"// v0.1.62 auto-emitted chip_top wrapper (design_one_shot_runner).\n"
-            f"// L9.top_module = '{synth_top}' but rtl/ only defined '{mod_name}'\n"
-            f"// (in {src_file.name}). This thin pass-through lets yosys synth\n"
-            f"// against L9's expected top without modifying the authored RTL.\n"
-            f"`default_nettype none\n"
-            f"module {synth_top}{param_header} {wrapper_port_block};\n"
-            f"{nonansi_decls}"
-            f"  {mod_name}{inst_params} u_dut (\n    {connects}\n  );\n"
-            f"endmodule\n"
-            f"`default_nettype wire\n"
-        )
-        # ORGANIC #660 — when the copied param block carries SV-2017-only
-        # syntax (package-scoped `pkg::type` param types, enum/typedef/struct/
-        # interface/logic-typed params), emit the wrapper as `<top>.sv` so it
-        # joins the .sv sv2v-conversion set in BOTH the synth and reference_tb
-        # frontends. The reference_tb sv2v pre-pass filters strictly on `.sv`;
-        # a `.v` wrapper carrying SV param syntax would be passed to
-        # `iverilog -g2012` UNCONVERTED and syntax-error on the runner's own
-        # output. A plain Verilog-2005 param block keeps the `.v` extension
-        # (byte-identical historical behaviour). chip-AGNOSTIC SV-syntax
-        # surface predicate — no chip/vendor literal.
-        if _chip_top_param_block_needs_sv(param_block):
-            chip_top_dst = chip_top_sv
-        else:
-            chip_top_dst = chip_top_v
-        chip_top_dst.write_text(wrapper)
-        rtl_files.append(str(chip_top_dst))
     try:
-        _autoemit_chip_top_if_needed()
+        _emitted = _autoemit_chip_top_wrapper(project, rtl_dir, synth_top)
+        if _emitted is not None:
+            rtl_files.append(str(_emitted))
     except Exception:
         pass  # non-fatal: yosys will still try and may succeed
     # ORGANIC #639 — REUSED-IP / catalog-glue staging has no
@@ -9399,6 +9511,19 @@ def main() -> int:
 
     # Step 2 — RTL gen
     plan.append(step_rtl_gen(project, ic_class))
+
+    # Floor G-CATALOG-GLUE — DETERMINISTIC reused-IP CONSUME. When step_rtl_gen
+    # WAIVED (reused-IP / catalog-glue) and left rtl/ EMPTY but the design's
+    # INPUT itself PROVIDES the intended build RTL (input/vendor_rtl/ or
+    # input/design_src/**/rtl/), stage those files into phase2/stage1/rtl/ and
+    # emit a chip_top wrapper so `synth -top chip_top` finds a module — instead
+    # of HALTING at phase2 with 'Module chip_top not found'. The residual glue
+    # that genuinely needs an LLM STILL WAIVES to catalog-glue-author. Self-
+    # gating + §4.05 NO-LEAK: fires ONLY when rtl/ is empty AND the design ships
+    # its own build RTL under input/ (never reads output/ / a testbench / a
+    # gate-level netlist), so a normal generator/author run and a no-build-RTL
+    # design are untouched.
+    plan.append(step_reused_ip_consume(project, args.top_name))
 
     # ORGANIC #517 — auto-emit canonical-spelling alias wrappers for any leaf
     # module whose name is a probable typo of a canonical hardware term. Runs
