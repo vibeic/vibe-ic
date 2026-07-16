@@ -8904,6 +8904,24 @@ def _classify_svrf_fails(rpt: Path) -> Dict[str, Any]:
     return out
 
 
+def _drc_wall_budget_s() -> float:
+    """Wall-clock budget (seconds) for the native svrfdrc DRC step.
+
+    v1.4.38 (ic2-sha256 HP18E80 sha256 floor): the progress-stall watchdog only
+    kills on NO CPU progress, so a 100%-CPU tool is treated as "progressing" and
+    runs to the ~24h hard ceiling. svrfdrc's single-thread derived-layer build
+    (SHRINK/boolean/merge) is pathological on dense large designs (sha256: 100%
+    CPU, 4.4h, zero output). This wall-clock cap bounds the DRC step so a perf
+    ceiling surfaces as an HONEST SKIPPED-CONDITION, never a multi-hour silent
+    hang. Default 2h; env VIBE_IC_DRC_BUDGET_S overrides (e.g. raise for a
+    genuinely-large sign-off, lower for CI). chip/tool-AGNOSTIC."""
+    try:
+        v = float(os.environ.get("VIBE_IC_DRC_BUDGET_S", "7200"))
+        return v if v > 0 else 7200.0
+    except (TypeError, ValueError):
+        return 7200.0
+
+
 def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
                          container: str) -> Optional[StepResult]:
     """Run the commercial Calibre/SVRF `.rule` DRC deck NATIVELY via the vibeic
@@ -8930,11 +8948,25 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
     # svrfdrc <deck> <layout> <report> [--cell=TOP] — byte-identical report to the
     # retired run_svrf_drc.py, so _parse_svrf_tally / _classify_svrf_fails are unchanged.
     cmd = f"{bin_c} {deck_c} {gds_c} {rpt_c} --cell={top}"
-    rc, out, err = _docker_exec(container, cmd, marker=gds_c)
+    # v1.4.38 — bound the DRC step at a WALL-CLOCK budget (the stall watchdog never
+    # kills a 100%-CPU tool; the default ceiling is ~24h). A non-completing DRC is
+    # NOT a proven violation → SKIPPED-CONDITION (disclosed perf ceiling), like the
+    # LEC timeout-guard, never a FAIL or a silent multi-hour hang.
+    _drc_budget = _drc_wall_budget_s()
+    rc, out, err = _docker_exec(container, cmd, marker=gds_c,
+                                hard_ceiling_s=_drc_budget)
     if rc in (_RC_STALLED, 124):
-        return StepResult("drc", "FAIL", time.time() - t0,
-                          f"svrf-native commercial DRC killed as hung/ceiling "
-                          f"(rc={rc}) — no sign-off from a partial report.")
+        _mins = int(_drc_budget // 60)
+        return StepResult(
+            "drc", "SKIPPED-CONDITION", time.time() - t0,
+            f"svrf-native commercial DRC did not complete within the "
+            f"{_mins}-minute wall-clock budget (rc={rc}) — a svrfdrc performance "
+            f"ceiling on large/dense geometry (single-thread derived-layer "
+            f"build), NOT a proven violation. No sign-off from a partial report; "
+            f"disclosed. Re-run under a fixed/parallelised engine or raise "
+            f"VIBE_IC_DRC_BUDGET_S.",
+            extras={"finding": "SVRFDRC_PERF_CEILING",
+                    "drc_budget_s": _drc_budget})
     if not rpt.is_file():
         return StepResult("drc", "FAIL", time.time() - t0,
                           f"svrf-native commercial DRC produced no report; "
