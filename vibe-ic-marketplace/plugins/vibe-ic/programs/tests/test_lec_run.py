@@ -286,6 +286,68 @@ def test_build_equiv_script_default_is_unchanged_by_new_param():
 
 
 # ---------------------------------------------------------------------------
+# #155 — equiv_make -memory_map (fork yosys 64286d02b): the flag is emitted
+# ONLY when the capability probe says the running yosys supports it. On the
+# pre-rebake vibeic-eda:0.2.17 image the probe returns False → bare equiv_make,
+# a memory-bearing design stays an honest SKIPPED-CONDITION (no false pass).
+# ---------------------------------------------------------------------------
+def test_build_equiv_script_memory_map_off_by_default():
+    # Default (probe-negative / pre-rebake) → bare equiv_make, byte-identical
+    # to the historical recipe.
+    s = lec_run.build_equiv_script(
+        ["/p/rtl/a.v"], "/p/synth/netlist.v", "top", None)
+    assert "equiv_make gold gate equiv" in s
+    assert "-memory_map" not in s
+
+
+def test_build_equiv_script_memory_map_on_emits_flag():
+    # Probe-positive → `equiv_make -memory_map gold gate equiv`.
+    s = lec_run.build_equiv_script(
+        ["/p/rtl/a.v"], "/p/synth/netlist.v", "top", None, memory_map=True)
+    assert "equiv_make -memory_map gold gate equiv" in s
+    # the rest of the proven recipe is intact.
+    assert "equiv_simple" in s
+    assert "equiv_induct -seq 64" in s
+    assert "equiv_status" in s
+
+
+def test_yosys_supports_equiv_memory_map_probe(monkeypatch):
+    # The probe greps `yosys -p "help equiv_make"` for the `-memory_map` token
+    # and caches per container. Fail-safe: absence / error → False.
+    calls = {"n": 0}
+
+    class _R:
+        def __init__(self, out):
+            self.stdout, self.stderr, self.returncode = out, "", 0
+
+    # (a) fork help text advertising the flag → True (and cached: one _docker call).
+    def _fake_docker_yes(container, cmd, timeout=120):
+        calls["n"] += 1
+        return _R("[INFO] banner\n    equiv_make [options] gold_top gate_top\n"
+                  "        -memory_map\n            legalize $mem/$mem_v2 …\n")
+    monkeypatch.setattr(lec_run, "_docker", _fake_docker_yes)
+    lec_run._EQUIV_MEMORY_MAP_CACHE.clear()
+    assert lec_run._yosys_supports_equiv_memory_map("c-yes") is True
+    assert lec_run._yosys_supports_equiv_memory_map("c-yes") is True
+    assert calls["n"] == 1  # cached — probed at most once
+
+    # (b) pre-fork help text WITHOUT the flag → False (bare equiv_make fallback).
+    def _fake_docker_no(container, cmd, timeout=120):
+        return _R("    equiv_make [options] gold_top gate_top\n"
+                  "        -inames\n        -blackbox\n")
+    monkeypatch.setattr(lec_run, "_docker", _fake_docker_no)
+    lec_run._EQUIV_MEMORY_MAP_CACHE.clear()
+    assert lec_run._yosys_supports_equiv_memory_map("c-no") is False
+
+    # (c) Docker/Yosys error → fail-safe False (never speculatively enables).
+    def _fake_docker_err(container, cmd, timeout=120):
+        raise OSError("docker not reachable")
+    monkeypatch.setattr(lec_run, "_docker", _fake_docker_err)
+    lec_run._EQUIV_MEMORY_MAP_CACHE.clear()
+    assert lec_run._yosys_supports_equiv_memory_map("c-err") is False
+
+
+# ---------------------------------------------------------------------------
 # _discover_project_liberty — the auto-discovery pure helper (no container).
 # The Step-13 runner passes no --liberty, so the producer must find the
 # design's OWN PDK Liberty or it falls back to the sky130 default (useless for

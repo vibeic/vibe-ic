@@ -294,6 +294,42 @@ def _container_file_exists(container: str, path: str) -> bool:
         return False
 
 
+# #155 — cache the equiv_make `-memory_map` capability per container so the
+# probe (one cheap `yosys -p "help equiv_make"`) runs at most once per process.
+_EQUIV_MEMORY_MAP_CACHE: Dict[str, bool] = {}
+
+
+def _yosys_supports_equiv_memory_map(container: str) -> bool:
+    """True iff the container's yosys `equiv_make` accepts `-memory_map`.
+
+    The fork yosys `synth-fixes-v0.67` (vibeic/yosys @ 64286d02b) added
+    `equiv_make -memory_map`, which legalizes `$mem`/`$mem_v2` on BOTH gold and
+    gate INSIDE the miter (aligned) so a memory-bearing design proves instead of
+    aborting with an unmodelable-memory SKIPPED-CONDITION. The running
+    vibeic-eda:0.2.17 image pins the PRE-fork yosys (1042b3f55) which lacks the
+    flag; this probe therefore returns False on it (the honest bare-`equiv_make`
+    fallback — a standalone `memory_map` pass is NOT a substitute, it leaves the
+    two sides misaligned and unproven), and auto-returns True once the image
+    re-bakes to 64286d02b.
+
+    Probes `yosys -p "help equiv_make"` and looks for the `-memory_map` token.
+    Fail-safe: any Docker/Yosys error → False (never speculatively enables a
+    flag the tool cannot parse). Result cached per container. chip-AGNOSTIC —
+    no design literal, only the tool's own help text."""
+    if container in _EQUIV_MEMORY_MAP_CACHE:
+        return _EQUIV_MEMORY_MAP_CACHE[container]
+    supported = False
+    try:
+        r = _docker(container, 'yosys -p "help equiv_make" 2>&1', timeout=60)
+        text = _strip_login_banner((r.stdout or "") + "\n" + (r.stderr or ""))
+        supported = bool(re.search(r"(?m)^\s*-memory_map\b", text)
+                         or re.search(r"\bequiv_make\b[^\n]*-memory_map\b", text))
+    except (subprocess.SubprocessError, OSError):
+        supported = False
+    _EQUIV_MEMORY_MAP_CACHE[container] = supported
+    return supported
+
+
 def _strip_login_banner(text: str) -> str:
     """Drop the container login-profile `[INFO] ...` banner lines that
     `bash -lc` prints before the actual tool output (they are PATH/PYTHONPATH
@@ -327,7 +363,8 @@ def _netlist_uses_generic_primitives(path: str) -> bool:
 def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
                        liberty: Optional[str],
                        blackbox_v: Optional[List[str]] = None,
-                       gate_is_generic: bool = False) -> str:
+                       gate_is_generic: bool = False,
+                       memory_map: bool = False) -> str:
     """Build the Yosys RTL(gold)≡synth-netlist(gate) equiv script.
 
     v1.3.85 — APPROACH C (satgen-modelable BOTH sides). Step-13 compares an RTL
@@ -366,7 +403,22 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
     `read_verilog` treats `\\$_DFF_P_` as an undefined user module and ABORTS
     before `equiv_make` → 0 $equiv points → a false compared_points=0 FAIL). The
     resulting `$_`-primitive gate is already satgen-modelable, so equiv proceeds
-    normally. chip/PDK-AGNOSTIC — no Liberty vocabulary is involved."""
+    normally. chip/PDK-AGNOSTIC — no Liberty vocabulary is involved.
+
+    `memory_map=True` (issue #155) emits `equiv_make -memory_map` instead of the
+    bare `equiv_make`. The fork yosys `synth-fixes-v0.67` (vibeic/yosys @
+    64286d02b) added `-memory_map`, which legalizes `$mem`/`$mem_v2` on BOTH the
+    gold and gate INSIDE the miter (aligned) so a memory-bearing design (e.g.
+    sha256's 1067-unproven `$mem_v2` case) PROVES instead of aborting with an
+    unmodelable-memory SKIPPED-CONDITION. It must be done inside equiv_make: a
+    STANDALONE `memory_map` pass run on each side separately legalizes them
+    UN-aligned and equiv_induct still leaves every $equiv point unproven (proven
+    empirically on stock yosys 1042b3f55 — 0/8 proven). The caller sets this ONLY
+    when it has probed that the running yosys supports the flag
+    (`_yosys_supports_equiv_memory_map`); the running vibeic-eda:0.2.17 image
+    pins the pre-fork yosys (1042b3f55) which lacks it, so the default stays the
+    bare `equiv_make` and a non-memory design's verdict is byte-identical. Once
+    the image re-bakes to 64286d02b the probe auto-enables the flag."""
     gold_read = " ".join(gold_files)
     bb = "".join(f"read_verilog -lib {q}\n" for q in (blackbox_v or []))
     if gate_is_generic:
@@ -398,7 +450,12 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
         f"design -stash gate\n"
         f"design -copy-from gold -as gold {top}\n"
         f"design -copy-from gate -as gate {top}\n"
-        f"equiv_make gold gate equiv\n"
+        # #155: `-memory_map` (fork yosys 64286d02b) legalizes $mem/$mem_v2 on
+        # BOTH sides INSIDE the miter (aligned); enabled ONLY when the probe
+        # confirmed the running yosys supports it, else the bare form (a memory
+        # design stays an honest SKIPPED-CONDITION rather than a false pass — a
+        # standalone memory_map pass does NOT align the two sides, proven 0/8).
+        f"equiv_make {'-memory_map ' if memory_map else ''}gold gate equiv\n"
         f"hierarchy -top equiv\n"
         f"equiv_simple\n"
         f"equiv_induct -seq 4\n"
@@ -643,8 +700,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         liberty = None
         print("[lec_run] gate is a generic $_-primitive netlist → "
               "read_verilog -icells (no Liberty).", file=sys.stderr)
+    # #155 — probe whether this container's yosys supports `equiv_make
+    # -memory_map` (fork yosys 64286d02b). When present, memory-bearing designs
+    # ($mem/$mem_v2) prove instead of a SKIPPED-CONDITION; when absent (the
+    # pre-rebake vibeic-eda:0.2.17), fall back to the bare `equiv_make` + the
+    # honest disclosure. A non-memory design's verdict is identical either way.
+    memory_map = _yosys_supports_equiv_memory_map(container)
+    if memory_map:
+        print("[lec_run] yosys equiv_make supports -memory_map → legalizing "
+              "$mem/$mem_v2 on both sides (fork yosys 64286d02b).",
+              file=sys.stderr)
+    else:
+        print("[lec_run] yosys equiv_make lacks -memory_map (pre-rebake image) "
+              "→ bare equiv_make; a memory-bearing design stays an honest "
+              "SKIPPED-CONDITION, not a false pass.", file=sys.stderr)
     script = build_equiv_script(gold_files, gate_abs, resolved_top, liberty,
-                                gate_is_generic=gate_is_generic)
+                                gate_is_generic=gate_is_generic,
+                                memory_map=memory_map)
 
     # Write the .ys into the (bind-mounted) project reports dir so the
     # container sees it at the same absolute path (same assumption that lets
