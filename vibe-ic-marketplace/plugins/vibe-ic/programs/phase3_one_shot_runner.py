@@ -8715,6 +8715,30 @@ def _magic_run_drc(gds: Path, top: str, container: str
 _SVRFDRC_BIN = "svrfdrc"
 
 
+def _clean_command_v_path(out: str, binname: str) -> str:
+    """Extract the resolved path from `command -v <name>` stdout, tolerating
+    login-shell BANNER lines the image prints to STDOUT.
+
+    v1.4.35 (ic2-sha256 HP18E80 clean-run): the vibeic-eda image's
+    `/etc/profile.d/iic-osic-tools-setup.sh` echoes `[INFO] Final PATH variable:`
+    (+PYTHONPATH) to STDOUT on every LOGIN shell, and `_docker_exec` runs
+    `bash -lc`, so a naive `out.strip()` returns e.g.
+    `"[INFO] ...\\n[INFO] ...\\n/foss/tools/bin/svrfdrc"` — a banner-polluted path.
+    `command -v` emits the resolution (an absolute path, or the bare name for a
+    builtin) as its OWN line; banners are bracketed (`[INFO]`/`[WARNING]`). Take
+    the LAST line that is an absolute path or exactly the queried name; fall back
+    to the name when only chatter remains (rc==0 already proved it resolved).
+    chip/host-AGNOSTIC — no vendor literal, keyed on line shape."""
+    cand = ""
+    for line in out.splitlines():
+        s = line.strip()
+        if not s or s.startswith("["):          # login-shell banner — skip
+            continue
+        if s.startswith("/") or s == binname:    # a real command -v resolution
+            cand = s                             # keep the LAST such line
+    return cand or binname
+
+
 def _svrfdrc_bin_container(container: str) -> Optional[str]:
     """Return the CONTAINER command for the NATIVE `svrfdrc` buddy when the image
     carries it (vibeic-eda bakes it on PATH from the klayout-vibeic build). Probed
@@ -8726,7 +8750,9 @@ def _svrfdrc_bin_container(container: str) -> Optional[str]:
     try:
         rc, out, _err = _docker_exec(container, f"command -v {binname}",
                                      timeout=30)
-        return (out.strip() or binname) if rc == 0 else None
+        # v1.4.35 — strip login-shell banner pollution from the `bash -lc` stdout
+        # (else the resolved path is prefixed with the image's [INFO] chatter).
+        return _clean_command_v_path(out, binname) if rc == 0 else None
     except Exception:
         return None
 
