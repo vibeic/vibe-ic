@@ -2168,6 +2168,122 @@ def _discover_lefdef_layermap(pdk_dir: Path) -> Optional[str]:
     return None
 
 
+def _discover_topmetal_width_fix(project: Path, calibre_drc: Optional[str],
+                                  tech_lef: Optional[Path]
+                                  ) -> Tuple[Optional[Path], List[str]]:
+    """FLOOR-DRC thick-top-metal LEF/deck reconciliation (v1.4.41, spm on a
+    commercial thick-top-metal PDK, Mt.W.1_3/Mt.EN.1_3 proven via independent
+    klayout width_check + enclosing_check: 1 and 6 violations respectively,
+    EXACT match to the deck's own count — a real geometry defect, not an
+    engine artifact).
+
+    A commercial deck often ships a "thick top metal" stackup OPTION,
+    switched on by an uncommented `#DEFINE TOPMETAL_N` and enforced by that
+    deck's own `Mt.*` rule family (distinct from the ordinary `Mx.*` rules
+    for the lower metals) — with a STRICTER minimum width/enclosure than the
+    plain per-layer `WIDTH`/`MINWIDTH` the tech LEF declares for that same
+    GDS layer (e.g. the LEF states the top metal's WIDTH/MINWIDTH 0.28um
+    while the deck's ENABLED TOPMETAL_5 option requires Mt.W.1 >= 0.44um). A
+    router given only the
+    LEF has no way to know the stricter number, so it legally-per-LEF draws
+    that layer too narrow — a genuine capability gap in OUR flow (we own
+    OpenROAD's inputs), not a router bug and not a PDK we can edit.
+
+    Fix: discover the deck's REAL number for every enabled TOPMETAL_N and,
+    if it exceeds what the tech LEF states for that layer, stage a LOCALLY
+    CORRECTED copy of the tech LEF (WIDTH/MINWIDTH raised to the deck value
+    — NEVER lowered) under <project>/phase3/pdk_stage/ (already covered by
+    the project's blanket `*.lef` gitignore — never the real PDK file, never
+    committed). Every step that reads `pdk.tech_lef` (PnR, ECO/SPEF repair,
+    antenna-diode discovery, …) then sees the corrected number with NO
+    further wiring, since they all consume the ONE `PdkConfig.tech_lef`
+    field. Chip/PDK-AGNOSTIC: no metal name or numeric value is hardcoded —
+    both come from parsing the deck + LEF text the PDK actually ships.
+
+    Returns (effective_tech_lef_path, notes) — `notes` is a list of
+    human-readable strings (one per corrected layer) for the caller to
+    print; empty list + the ORIGINAL tech_lef when nothing needed fixing
+    (no deck, no enabled TOPMETAL_N, no Mt.W.1 rule found, or the LEF is
+    already >= the deck's value — a byte-identical no-op)."""
+    notes: List[str] = []
+    if not calibre_drc or not tech_lef:
+        return tech_lef, notes
+    calibre_drc_p, tech_lef_p = Path(calibre_drc), Path(tech_lef)
+    if not calibre_drc_p.is_file() or not tech_lef_p.is_file():
+        return tech_lef, notes
+    try:
+        deck_text = calibre_drc_p.read_text(errors="ignore")
+        lef_text = tech_lef_p.read_text(errors="ignore")
+    except OSError:
+        return tech_lef, notes
+
+    enabled_ns = sorted(set(
+        m.group(1) for m in re.finditer(r"(?m)^#DEFINE\s+TOPMETAL_(\d+)\s*$",
+                                         deck_text)))
+    if not enabled_ns:
+        return tech_lef, notes
+
+    fixed_any = False
+    for n in enabled_ns:
+        met = f"MET{n}"
+        via = f"VIA{n}"  # the via BELOW METn connects MET(n-1) <-> METn
+        wm = re.search(
+            r"@Mt\.W\.1:[^\n]*\n\s*INTERNAL\s+__" + re.escape(met.lower()) +
+            r"__\s*<\s*([0-9.]+)", deck_text, re.IGNORECASE)
+        if not wm:
+            continue  # this deck doesn't gate METn's width via Mt.W.1 -> no-op
+        deck_width_um = float(wm.group(1))
+
+        lblock = re.search(
+            r"(?ms)^LAYER\s+" + re.escape(met) + r"\s*\n(.*?)^END\s+" +
+            re.escape(met) + r"\s*$", lef_text)
+        if not lblock:
+            continue
+        block = lblock.group(1)
+        wmatch = re.search(r"(?m)^(\s*WIDTH\s+)([0-9.]+)(\s*;)", block)
+        mwmatch = re.search(r"(?m)^(\s*MINWIDTH\s+)([0-9.]+)(\s*;)", block)
+        lef_width_um = min(
+            float(wmatch.group(2)) if wmatch else 1e9,
+            float(mwmatch.group(2)) if mwmatch else 1e9)
+        if lef_width_um >= deck_width_um:
+            continue  # LEF already honors the deck's real minimum
+
+        enm = re.search(
+            r"@Mt\.EN\.1:[^\n]*\b" + re.escape(met) + r"\s+" +
+            re.escape(via) + r"\b[^\n]*\n(?:.*\n)*?\s*ENCLOSURE\s+\S+\s+\S+"
+            r"\s*<\s*([0-9.]+)", deck_text, re.IGNORECASE)
+        enc_note = f", Mt.EN.1 enclosure={enm.group(1)}um" if enm else ""
+
+        fixed_block = block
+        if wmatch:
+            fixed_block = (fixed_block[:wmatch.start()] +
+                           f"{wmatch.group(1)}{deck_width_um}{wmatch.group(3)}" +
+                           fixed_block[wmatch.end():])
+        # re-locate MINWIDTH after the WIDTH edit may have shifted offsets
+        mwmatch2 = re.search(r"(?m)^(\s*MINWIDTH\s+)([0-9.]+)(\s*;)", fixed_block)
+        if mwmatch2:
+            fixed_block = (fixed_block[:mwmatch2.start()] +
+                            f"{mwmatch2.group(1)}{deck_width_um}{mwmatch2.group(3)}" +
+                            fixed_block[mwmatch2.end():])
+        lef_text = (lef_text[:lblock.start(1)] + fixed_block +
+                    lef_text[lblock.end(1):])
+        notes.append(
+            f"[topmetal-width-fix] deck enables TOPMETAL_{n}: {met} Mt.W.1 "
+            f"min-width={deck_width_um}um{enc_note} > LEF WIDTH/MINWIDTH="
+            f"{lef_width_um}um -> staged a corrected LEF (WIDTH/MINWIDTH "
+            f"raised to {deck_width_um}um; the real PDK LEF is untouched)")
+        fixed_any = True
+
+    if not fixed_any:
+        return tech_lef, notes
+
+    stage_dir = project / "phase3" / "pdk_stage"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    out_path = stage_dir / (tech_lef_p.stem + "_topmetal_fix.lef")
+    out_path.write_text(lef_text)
+    return out_path, notes
+
+
 def _streamout_layermap_warning(calibre_drc: Optional[str],
                                 lefdef_layermap: Optional[str]) -> Optional[str]:
     """FLOOR-STREAMOUT loud-WARN (ic1-spm HP18E80 clean-room, v1.4.34).
@@ -2460,6 +2576,17 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                           if (_bridge / "magic").is_dir() else None)
             _b_netgen = (next(iter(sorted((_bridge / "netgen").glob("*_setup.tcl"))), None)
                          if (_bridge / "netgen").is_dir() else None)
+
+            # v1.4.41 — FLOOR-DRC thick-top-metal reconciliation: if the
+            # sign-off deck enables a TOPMETAL_N option whose Mt.W.1 minimum
+            # width exceeds the tech LEF's plain WIDTH/MINWIDTH for that
+            # layer, route PnR at a LOCALLY-STAGED corrected LEF instead (the
+            # real PDK LEF is never touched). No-op when the LEF already
+            # honors the deck (or the deck defines no such option).
+            tech_lef, _tm_notes = _discover_topmetal_width_fix(
+                project, str(calibre_drc) if calibre_drc else None, tech_lef)
+            for _n in _tm_notes:
+                print(_n, file=sys.stderr)
 
             return PdkConfig(
                 name=f"custom:{pdk_dir.name}",
