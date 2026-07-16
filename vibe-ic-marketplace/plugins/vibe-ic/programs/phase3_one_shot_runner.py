@@ -7643,64 +7643,85 @@ if _marker and cell_gds_path and os.path.exists(cell_gds_path):
             # comma-separated list: a deck may key its exemption on more
             # than one layer (e.g. an identity marker PLUS the don't-check
             # master its own consistency rule requires the marker to sit
-            # inside — commercial_pdk: Artisan 65/0 inside DCTY0 113/0).
+            # inside — commercial_pdk: Artisan 65/0 inside DCTY0 113/0). ALL marker
+            # layers are resolved up front and painted with the IDENTICAL
+            # region (below), so the deck's own "identity ⊆ don't-check"
+            # consistency rule (e.g. `Artisan.CHECK = COPY (Artisan andnot
+            # DCTY)`) can never fire from a paint mismatch between them.
+            _marker_lis = []
             for _one in _marker.split(','):
                 _one = _one.strip()
                 if not _one:
                     continue
                 _ml, _md = (int(x) for x in _one.split('/'))
-                _li_m = ly.layer(pya.LayerInfo(_ml, _md))
-                _painted = 0
-                _old_reg = pya.Region()
-                _new_reg = pya.Region()
-                for _inst in _tcm.each_inst():
-                    if _inst.cell.name not in _libnames:
-                        continue
-                    _old_box = _inst.bbox()
-                    _lib_box = _lib_bbox_cache.get(_inst.cell.name)
-                    if _lib_box is None:
-                        _lib_box = _lib_extent(_inst.cell.name)
-                        _lib_bbox_cache[_inst.cell.name] = _lib_box
-                    _true_box = (_inst.trans * _lib_box) if not _lib_box.empty() else _old_box
-                    _union_box = _old_box + _true_box  # Box union — never shrinks coverage
-                    _tcm.shapes(_li_m).insert(_union_box)
-                    _old_reg.insert(_old_box)
-                    _new_reg.insert(_union_box)
-                    _painted += 1
-                # ANTI-MASKING GUARD (mandatory — this is waiver-adjacent).
-                # The ADDED coverage (true-extent minus SIZE-box) may only
-                # ever land on qualified-cell geometry this marker is meant
-                # to exempt — never on real net-carrying content. Right
-                # here, immediately after the bare DEF+LEF read and BEFORE
-                # manual FEOL substitution copies any cell's real geometry
-                # in, every std-cell instance is still a bare LEF abstract
-                # — so the ONLY flat top-level shapes on other layers are
-                # the DEF's ROUTED/SPECIALNETS wires. If the added margin
-                # touches ANY of them, do not expand for this marker layer:
-                # revert to the SIZE-box behaviour and disclose it loudly.
-                # Never a silent over-waive.
-                _added = _new_reg.merged() - _old_reg.merged()
-                _leak = 0
-                if not _added.is_empty():
-                    for _oli in ly.layer_indexes():
-                        if _oli == _li_m:
-                            continue
-                        _flat = pya.Region(_tcm.shapes(_oli))
-                        if _flat.is_empty():
-                            continue
-                        _leak += (_added & _flat).count()
-                if _leak:
-                    _tcm.shapes(_li_m).clear()
-                    for _p in _old_reg.merged().each():
+                _marker_lis.append((_one, ly.layer(pya.LayerInfo(_ml, _md))))
+            _marker_li_set = set(_li for _, _li in _marker_lis)
+            # ONE painted region for ALL marker layers: the union of every
+            # placed qualified cell's TRUE library extent (unioned with its
+            # SIZE box so coverage never shrinks).
+            _painted = 0
+            _paint_reg = pya.Region()
+            for _inst in _tcm.each_inst():
+                if _inst.cell.name not in _libnames:
+                    continue
+                _old_box = _inst.bbox()
+                _lib_box = _lib_bbox_cache.get(_inst.cell.name)
+                if _lib_box is None:
+                    _lib_box = _lib_extent(_inst.cell.name)
+                    _lib_bbox_cache[_inst.cell.name] = _lib_box
+                _true_box = (_inst.trans * _lib_box) if not _lib_box.empty() else _old_box
+                _union_box = _old_box + _true_box  # Box union — never shrinks coverage
+                _paint_reg.insert(_union_box)
+                _painted += 1
+            _paint_reg.merge()
+            # ANTI-MASKING GUARD (mandatory — this is waiver-adjacent). The
+            # marker exempts the WHOLE `__x__ = NOT x <marker>` device-layer
+            # family — and on this deck that family is NOT just FEOL: metal
+            # is derived the same way (`__met1__ = NOT MET1 DCTY` … MET8), so
+            # a marker pixel over a routed wire CARVES that wire (splitting it
+            # into min-width/-space-violating slivers) AND waives its real
+            # metal DRC — a #511 over-waive AND a fresh false-fail wall. So
+            # the marker may ONLY ever land where the TOP-LEVEL flat geometry
+            # is ABSENT. Right here — immediately after the bare DEF+LEF read
+            # and BEFORE manual FEOL substitution copies any cell's real
+            # geometry in — every std-cell instance is still a bare LEF
+            # abstract, so the ONLY flat top-level shapes on other layers are
+            # the DEF's ROUTED/SPECIALNETS wires (+ any top pins). Test the
+            # ENTIRE painted region (SIZE-box ∪ true-extent), not merely the
+            # overhang ring: painting the SIZE box itself over a routed wire
+            # carves it just the same. The marker layers themselves are
+            # EXCLUDED from the net probe (they carry no net — they are the
+            # marker we are about to paint). If ANY painted pixel overlaps a
+            # routed net, paint NOTHING for ANY marker layer — NEVER the old
+            # SIZE-box fallback, which still carved the cell's own overhang
+            # implant into width/area slivers and any interior-crossing routed
+            # metal. Disclose loudly; the cell-interior FEOL over-fire then
+            # remains a (correctly gate-FAILing) disclosed artifact, never
+            # masked. A flat marker fundamentally cannot exempt cell interiors
+            # on a design with routing over its cells — that needs a
+            # hierarchical / cell-aware sign-off, out of this streamout's scope.
+            _net_reg = pya.Region()
+            for _oli in ly.layer_indexes():
+                if _oli in _marker_li_set:
+                    continue
+                _net_reg.insert(_tcm.shapes(_oli))
+            _net_reg.merge()
+            _leak = 0 if _paint_reg.is_empty() else (_paint_reg & _net_reg).count()
+            if _leak == 0 and not _paint_reg.is_empty():
+                for _one, _li_m in _marker_lis:
+                    for _p in _paint_reg.each():
                         _tcm.shapes(_li_m).insert(_p)
-                    print(f"STDCELL_MARKER {_one}: ANTI-MASKING GUARD TRIPPED "
-                          f"({_leak} routed-net shape(s) under the proposed "
-                          f"true-extent expansion) — reverted to SIZE-bbox "
-                          f"coverage for this layer; expansion NOT applied")
-                else:
                     print(f"STDCELL_MARKER {_one}: painted {_painted} std-cell "
                           f"footprint(s) at true library extent (anti-masking "
                           f"guard clean, 0 routed-net overlap)")
+            else:
+                for _one, _li_m in _marker_lis:
+                    print(f"STDCELL_MARKER {_one}: ANTI-MASKING GUARD TRIPPED "
+                          f"({_leak} routed-net shape(s) under the qualified-cell "
+                          f"marker region) — marker NOT painted for this layer "
+                          f"(painting would carve real routed geometry; the "
+                          f"marker exempts metal too). Cell-interior FEOL "
+                          f"over-fire remains, disclosed; never masked.")
     except Exception as e:
         print(f"warn stdcell marker: {e}")
 # MANUAL FEOL SUBSTITUTION — copy each std-cell's REAL geometry from the cell

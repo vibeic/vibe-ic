@@ -20,14 +20,30 @@ alone. chip/PDK-AGNOSTIC: the extent is read back from the library GDS
 per-master at runtime; no cell name or overhang margin (e.g. the 0.22um /
 0.62um measured on THIS library) is ever hardcoded.
 
-Anti-masking guard (mandatory, waiver-adjacent): the ADDED coverage may only
+Anti-masking guard (mandatory, waiver-adjacent): the painted region may only
 ever land on qualified-cell geometry — never on real net-carrying content.
 Right after the bare DEF+LEF read and before manual FEOL substitution copies
 any cell's real geometry in, the only flat top-level shapes on other layers
-are the DEF's ROUTED/SPECIALNETS wires, so intersecting the added region
+are the DEF's ROUTED/SPECIALNETS wires, so intersecting the painted region
 against every other layer's flat top-level shapes is a clean, chip-agnostic
-over-waive detector. Any hit reverts that marker layer's painted region to
-the old SIZE-box coverage and discloses it — never a silent over-waive.
+over-waive detector.
+
+FOLLOW-ON FIX (caravel commercial_pdk dense-routing close-loop, 2026-07-17):
+v1.4.42 checked only the ADDED (overhang) ring and, on a hit, reverted to the
+old SIZE-box coverage. Two measured defects: (1) the marker exempts METAL too
+(the deck derives `__metN__ = NOT METN DCTY` for MET1..8 exactly as it does the
+FEOL layers), so painting it over ANY routed wire — SIZE-box interior included,
+not just the overhang — carves that wire into min-width/-space slivers AND
+waives its real DRC (a #511 over-waive); (2) the SIZE-box fallback still carved
+(caravel real deck: no-marker 10 fails → SIZE-box paint 22 → true-extent paint
+18). Fix: probe the ENTIRE painted region (SIZE-box ∪ true-extent) against
+top-level nets, and on ANY overlap paint NOTHING for the layer — never the
+SIZE-box fallback. All configured marker layers are resolved up front and
+painted with the identical region (net probe excludes every marker layer) so
+the deck's Artisan ⊆ DCTY0 consistency rule cannot fire from a paint mismatch.
+Proven: caravel dense → guard skips → DRC == the no-marker baseline (no harm,
+no over-waive); a net-free qualified-cell interior over-fire still CLEARS while
+a real off-cell violation still FAILS.
 
 These tests model the box/region algebra in plain Python (no `pya` — not
 importable on the host outside the vibeic-eda container) plus source-text +
@@ -60,9 +76,17 @@ def test_streamout_has_the_anti_masking_guard():
     src = p3._GDS_STREAMOUT_PY
     assert "ANTI-MASKING GUARD" in src
     assert "_leak" in src
-    assert "_added" in src
-    # the guard must revert (not merely warn) when it trips
-    assert "reverted to SIZE-bbox" in src or "revert" in src.lower()
+    # Follow-on fix (caravel commercial_pdk, dense-routing close-loop): the guard probes
+    # the ENTIRE painted region (SIZE-box ∪ true-extent), not just the overhang
+    # ring, against top-level net geometry — because the deck derives METAL the
+    # same `__metN__ = NOT METN <marker>` way it derives FEOL, so a marker pixel
+    # over a routed wire carves that wire (proven on caravel: no-marker 10 fails →
+    # SIZE-box paint 22 → true-extent paint 18). On overlap it paints NOTHING —
+    # NEVER the old SIZE-box fallback, which itself carved.
+    assert "_paint_reg" in src and "_net_reg" in src
+    assert "(_paint_reg & _net_reg)" in src
+    assert "NOT painted" in src                    # skip, not revert
+    assert "reverted to SIZE-bbox" not in src      # the harmful fallback is gone
 
 
 def test_streamout_never_hardcodes_the_measured_overhang_margin():
@@ -108,44 +132,49 @@ def test_true_extent_union_is_a_noop_when_master_has_no_overhang():
     assert covered == size_box             # no spurious expansion
 
 
-def test_anti_masking_guard_passes_when_added_margin_is_clear():
+def test_full_region_guard_passes_when_no_routing_is_under_the_marker():
+    # Follow-on fix: the guard now probes the ENTIRE painted region (SIZE-box ∪
+    # true-extent = `covered`), not merely the overhang ring. No routed-net box
+    # anywhere near this instance -> guard passes and paints the FULL true extent.
     size_box = (0, 0, 528, 504)
     lib_box = (-22, -31, 550, 535)
     covered = _box_union(size_box, lib_box)
-    # "added" region is (covered minus size_box); model it as the 4 margin
-    # strips a real Region difference would produce. No routed-net box
-    # anywhere near this instance -> guard must pass (no revert).
-    other_net_boxes = [(2000, 2000, 2100, 2100)]   # far away, unrelated net
-    added_strips = [
-        (covered[0], covered[1], size_box[0], covered[3]),   # left margin
-        (size_box[2], covered[1], covered[2], covered[3]),   # right margin
-        (covered[0], covered[1], covered[2], size_box[1]),   # bottom margin
-        (covered[0], size_box[3], covered[2], covered[3]),   # top margin
-    ]
-    leaked = any(_box_overlaps(strip, net) for strip in added_strips for net in other_net_boxes)
+    net_boxes = [(2000, 2000, 2100, 2100)]   # far away, unrelated net
+    leaked = any(_box_overlaps(covered, net) for net in net_boxes)
     assert leaked is False
-    # -> the real code paints `covered`, not `size_box`
+    painted = covered if not leaked else None
+    assert painted == covered                # paints the true extent, not size_box
     assert covered != size_box
 
 
-def test_anti_masking_guard_trips_and_reverts_when_routing_is_under_the_margin():
+def test_full_region_guard_skips_when_routing_runs_through_the_size_box_interior():
+    # THE caravel bug this fix closes: a routed wire runs through the SIZE box
+    # INTERIOR (not merely the overhang ring the old guard checked). The marker
+    # exempts metal too, so painting it there would carve that wire. The old
+    # guard's "revert to SIZE-box" fallback still carved it; the fixed guard
+    # paints NOTHING for this layer.
     size_box = (0, 0, 528, 504)
     lib_box = (-22, -31, 550, 535)
     covered = _box_union(size_box, lib_box)
-    # a routed-net wire happens to run straight through the LEFT margin strip
-    other_net_boxes = [(-30, 100, 10, 200)]
-    added_strips = [
-        (covered[0], covered[1], size_box[0], covered[3]),   # left margin
-        (size_box[2], covered[1], covered[2], covered[3]),   # right margin
-        (covered[0], covered[1], covered[2], size_box[1]),   # bottom margin
-        (covered[0], size_box[3], covered[2], covered[3]),   # top margin
-    ]
-    leaked = any(_box_overlaps(strip, net) for strip in added_strips for net in other_net_boxes)
+    net_boxes = [(100, 100, 200, 400)]       # a wire INSIDE the SIZE box
+    leaked = any(_box_overlaps(covered, net) for net in net_boxes)
     assert leaked is True
-    # -> the real code MUST revert to `size_box` for this instance/layer,
-    #    never ship `covered` when a real net is under the added margin.
-    painted = size_box if leaked else covered
-    assert painted == size_box
+    painted = covered if not leaked else None
+    assert painted is None                    # SKIP entirely — never size_box
+    assert painted != size_box
+
+
+def test_full_region_guard_catches_overhang_routing_too():
+    # The old overhang-ring-only guard still tripped on routing under the added
+    # margin; the full-region guard must remain at least as strict there.
+    size_box = (0, 0, 528, 504)
+    lib_box = (-22, -31, 550, 535)
+    covered = _box_union(size_box, lib_box)
+    net_boxes = [(-30, 100, 10, 200)]         # under the LEFT overhang margin
+    leaked = any(_box_overlaps(covered, net) for net in net_boxes)
+    assert leaked is True
+    painted = covered if not leaked else None
+    assert painted is None
 
 
 # ── _classify_svrf_fails: Mx.A.1's "marker_absent"/artisan label was right
@@ -153,6 +182,37 @@ def test_anti_masking_guard_trips_and_reverts_when_routing_is_under_the_margin()
 #    to the un-split identity fires regardless of whether the second operand
 #    is empty) — documented so a future rule with the same shape isn't
 #    mis-classified in either direction. ──────────────────────────────────────
+
+def test_all_marker_layers_resolved_up_front_and_painted_identically():
+    # Multi-marker consistency: ALL configured marker layers are resolved up
+    # front (`_marker_lis`) and painted with the SAME `_paint_reg`, so a deck's
+    # "identity ⊆ don't-check" consistency rule (commercial_pdk: Artisan ⊆ DCTY0, its
+    # `COPY (Artisan andnot DCTY)` check) can never fire from a per-layer paint
+    # mismatch. Proven necessary: painting 65/0 then letting 113/0's net probe
+    # see the just-painted 65/0 as "net" would skip 113/0 and light up the
+    # Artisan.CHECK consistency rule.
+    src = p3._GDS_STREAMOUT_PY
+    assert "_marker_lis" in src
+    assert "_marker_li_set" in src
+    assert "for _one, _li_m in _marker_lis" in src
+
+
+def test_net_probe_excludes_every_marker_layer():
+    # A marker layer carries no net — it is the marker we are about to paint —
+    # so the net probe MUST exclude ALL marker layers (not just the current one),
+    # else the first-painted marker blocks the second.
+    src = p3._GDS_STREAMOUT_PY
+    assert "if _oli in _marker_li_set" in src
+
+
+def test_streamout_documents_metal_is_marker_exempted_too():
+    # The load-bearing root cause: the deck derives METAL the same
+    # `__metN__ = NOT METN <marker>` way as FEOL, so the marker is NOT a
+    # FEOL-only exemption — painting it over a routed wire carves that wire.
+    # This rationale must be on record in the guard comment.
+    src = p3._GDS_STREAMOUT_PY
+    assert "__met1__ = NOT MET1 DCTY" in src or "exempts metal too" in src
+
 
 def test_classify_svrf_fails_module_documents_the_or_cut_andnot_identity_caveat():
     src = Path(p3.__file__).read_text()
