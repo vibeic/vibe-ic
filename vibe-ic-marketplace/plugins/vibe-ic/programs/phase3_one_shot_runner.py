@@ -10341,6 +10341,14 @@ def _run_klayout_lvs(project: Path, top: str, pdk: PdkConfig,
     threads = os.cpu_count() or 8
     lm_arg = (f" --layermap {_to_container_path(pdk.lvs_layermap, container)}"
               if pdk.lvs_layermap else "")
+    # v1.4.37 — wire the SAME Encounter/SoC layermap already discovered for streamout
+    # (pdk.lefdef_layermap) into the LVS extraction so its metal/via coverage matches
+    # the PDK's real routing stack. Without it a >4-metal PDK extracts with the generic
+    # 4-metal DEFAULT -> upper-metal nets SPLIT into disconnected pieces -> a FALSE LVS
+    # MISMATCH (commercial_pdk: net _218_ routed M1-M6 split in two; wiring M5/M6 took spm LVS
+    # from MISMATCH to full MATCH, spares untouched). Auto-extend only (never shrinks).
+    pdk_map_arg = (f" --pdk-map {_to_container_path(pdk.lefdef_layermap, container)}"
+                   if getattr(pdk, "lefdef_layermap", None) else "")
     base = "export QT_QPA_PLATFORM=offscreen && "
 
     # 1. cell library -> per-cell SPICE (learns each cell's pin order)
@@ -10348,13 +10356,13 @@ def _run_klayout_lvs(project: Path, top: str, pdk: PdkConfig,
         container, base
         + f"python3 {klvs_c} lib {_to_container_path(str(pdk.cell_gds), container)} "
         f"--out {_to_container_path(str(cells_sp), container)} "
-        f"--threads {threads}{lm_arg}", marker=klvs_c)
+        f"--threads {threads}{lm_arg}{pdk_map_arg}", marker=klvs_c)
     # 2. flat sign-off GDS -> transistor SPICE (power_shorts REPORTED, never hidden)
     rc_e, out_e, err_e = _docker_exec(
         container, base
         + f"python3 {klvs_c} extract {_to_container_path(str(gds_path), container)} "
         f"--out {_to_container_path(str(layout_sp), container)} "
-        f"--threads {threads}{lm_arg}", marker=klvs_c)
+        f"--threads {threads}{lm_arg}{pdk_map_arg}", marker=klvs_c)
     power_shorts = None
     power_short_locs = []
     _m = re.search(r"power_shorts=(-?\d+)", out_e or "")

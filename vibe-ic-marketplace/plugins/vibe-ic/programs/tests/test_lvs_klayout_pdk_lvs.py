@@ -231,3 +231,81 @@ def test_inline_includes_cycle_guard(tmp_path):
     # a<->b mutually include: must terminate (cycle guard), not infinite-loop
     out = mod._inline_includes(str(a))
     assert "a-body" in out and "b-body" in out
+
+
+# ── v1.4.37 — metal/via layermap coverage from the PDK's Encounter/SoC map ──
+# A commercial PDK's real metal stack (e.g. 6-metal commercial_pdk) exceeds the generic
+# 4-metal DEFAULT; extracting with too few metals SPLITS an upper-metal net into
+# disconnected pieces -> a spurious extra net -> a FALSE LVS mismatch. These pin
+# the parse + the auto-extend/WARN resolver (proven: wiring M5/M6 took spm LVS
+# from MISMATCH to full MATCH, spares untouched).
+_ENCOUNTER_MAP = """\
+# name purpose gdslayer gdsdatatype
+POLY    DRAWING  3  0
+MET1    NET      9  0
+MET1    PIN      9  2
+VIA1    NET      10 0
+MET2    NET      11 0
+VIA2    NET      12 0
+MET3    NET      13 0
+VIA3    NET      14 0
+MET4    NET      15 0
+VIA4    NET      16 0
+MET5    NET      17 0
+VIA5    NET      18 0
+MET6    NET      19 0
+"""
+
+
+def test_metal_via_from_pdk_map_ordered_and_complete(tmp_path):
+    m = tmp_path / "map.txt"
+    m.write_text(_ENCOUNTER_MAP)
+    metal, via = mod._metal_via_from_pdk_map(str(m))
+    # 6 metal, 5 via, ORDERED m1..m6 / v1..v5, routing (NET/dt0) geometry chosen.
+    assert metal == [[9, 0], [11, 0], [13, 0], [15, 0], [17, 0], [19, 0]]
+    assert via == [[10, 0], [12, 0], [14, 0], [16, 0], [18, 0]]
+
+
+def test_metal_via_from_pdk_map_prefers_net_over_pin_purpose(tmp_path):
+    # MET1 has a NET row (9/0) and a PIN row (9/2); the NET/routing geometry wins.
+    m = tmp_path / "map.txt"
+    m.write_text("MET1 PIN 9 2\nMET1 NET 9 0\n")
+    metal, _ = mod._metal_via_from_pdk_map(str(m))
+    assert metal == [[9, 0]]
+
+
+def test_metal_via_from_pdk_map_missing_file_is_empty():
+    assert mod._metal_via_from_pdk_map("/no/such/map.txt") == ([], [])
+
+
+def test_resolve_layermap_extends_metal_via_from_pdk_map(tmp_path):
+    m = tmp_path / "map.txt"
+    m.write_text(_ENCOUNTER_MAP)
+    lm, note = mod._resolve_layermap(None, str(m))
+    # DEFAULT is 4 metal / 3 via -> extended to 6 / 5 from the PDK map.
+    assert len(lm["metal"]) == 6 and len(lm["via"]) == 5
+    # device/text/rail-marker layers untouched (same as DEFAULT).
+    assert lm["poly"] == mod.DEFAULT_LAYERMAP["poly"]
+    assert lm["vss_rail_marker"] == mod.DEFAULT_LAYERMAP["vss_rail_marker"]
+    assert note is not None and "auto-extended" in note
+
+
+def test_resolve_layermap_no_pdk_map_warns_on_generic_default():
+    # No explicit lvs_layermap AND no PDK map -> generic 4-metal DEFAULT -> WARN.
+    lm, note = mod._resolve_layermap(None, None)
+    assert lm["metal"] == mod.DEFAULT_LAYERMAP["metal"]
+    assert note is not None and "WARN" in note
+
+
+def test_resolve_layermap_no_shrink_when_map_has_fewer(tmp_path):
+    # A supplied 6-metal layermap must NOT be shrunk by a 4-metal PDK map (grow-only).
+    full = tmp_path / "full.json"
+    full.write_text(json.dumps({**mod.DEFAULT_LAYERMAP,
+                                "metal": [[9, 0], [11, 0], [13, 0], [15, 0],
+                                          [17, 0], [19, 0]],
+                                "via": [[10, 0], [12, 0], [14, 0], [16, 0], [18, 0]]}))
+    small = tmp_path / "small.txt"
+    small.write_text("MET1 NET 9 0\nMET2 NET 11 0\n")
+    lm, note = mod._resolve_layermap(str(full), str(small))
+    assert len(lm["metal"]) == 6           # kept the supplied 6, not shrunk to 2
+    assert note is None                     # nothing extended -> no note
