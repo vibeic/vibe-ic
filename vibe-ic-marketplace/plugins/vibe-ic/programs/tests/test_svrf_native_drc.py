@@ -259,6 +259,36 @@ def test_streamout_warn_silent_when_no_deck():
 
 
 # --------------------------------------------------------------------------
+# FLOOR-DRC cell-interior-exemption guard (v1.4.36): commercial deck present +
+# std-cell exclusion marker unconfigured = the silent miss that re-checks
+# foundry-qualified cell interiors → false FEOL over-fire (spm's 15 fails).
+# --------------------------------------------------------------------------
+def test_excl_marker_warn_fires_when_deck_present_marker_unconfigured():
+    # ic1-spm's exact condition: a Calibre deck, no exclusion marker key.
+    w = R._stdcell_exclusion_marker_warning("/pdk/calibre/KF_DRC_D4.20.rule", None)
+    assert w is not None
+    assert "KF_DRC_D4.20.rule" in w
+    assert "stdcell_exclusion_marker_layer" in w and "OVER-FIRE" in w
+
+
+def test_excl_marker_warn_fires_on_empty_string_marker():
+    # An empty-string marker config is still "unconfigured".
+    assert R._stdcell_exclusion_marker_warning("/pdk/calibre/DRC.rule", "") is not None
+
+
+def test_excl_marker_warn_silent_when_marker_configured():
+    # Marker wired (e.g. the deck's 113/0 don't-check layer) → no warning.
+    assert R._stdcell_exclusion_marker_warning(
+        "/pdk/calibre/DRC.rule", "113/0") is None
+
+
+def test_excl_marker_warn_silent_when_no_deck():
+    # No commercial deck (OSS PDK path) → no exclusion-marker concern.
+    assert R._stdcell_exclusion_marker_warning(None, None) is None
+    assert R._stdcell_exclusion_marker_warning(None, "113/0") is None
+
+
+# --------------------------------------------------------------------------
 # Filler/decap master discovery for commercial PDKs (density fill enablement).
 # --------------------------------------------------------------------------
 def _pdk_with_lef(lef_path):
