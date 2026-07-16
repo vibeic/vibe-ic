@@ -8574,6 +8574,7 @@ def um(v):
 
 
 die = tc.bbox()
+die_area = float(die.area())
 summary = []
 for lay in spec.get("layers", []):
     lnum, dnum = (int(x) for x in str(lay["gds"]).split("/"))
@@ -8581,25 +8582,61 @@ for lay in spec.get("layers", []):
     tile = um(lay.get("tile_um", 1.2))
     pitch = um(lay.get("pitch_um", 1.9))
     margin = um(lay.get("margin_um", 0.65))
+    min_density = float(lay.get("min_density", 0.0) or 0.0)
+    # Fill-tile-to-fill-tile spacing floor = the config's OWN grid gap
+    # (pitch - tile): the base grid already leaves exactly this gap between
+    # neighbours and the un-densified run is spacing-clean, so honouring it
+    # on every densification pass keeps fill tiles from ever touching
+    # (no wide-metal) or crowding metal spacing.
+    gap = max(1, pitch - tile)
     existing = pya.Region(tc.begin_shapes_rec(li))
     existing.merge()
     frame = pya.Region(die)
     frame.size(-margin)                 # keep fill off the die edge
-    allowed = frame - existing.sized(margin)
-    tiles = pya.Region()
-    x = die.left + margin
-    while x + tile <= die.right - margin:
-        y = die.bottom + margin
-        while y + tile <= die.top - margin:
-            tiles.insert(pya.Box(x, y, x + tile, y + tile))
-            y += pitch
-        x += pitch
-    kept = tiles.select_inside(allowed)  # only tiles fully clear of live metal
-    n = kept.count()
-    tc.shapes(li).insert(kept)
-    total = existing.area() + kept.area()
-    dens = (total / float(die.area())) if die.area() else 0.0
-    summary.append((str(lay.get("name", lay["gds"])), n, dens))
+    live_halo = existing.sized(margin)  # spacing from live metal
+
+    def _grid_tiles(x0, y0):
+        tg = pya.Region()
+        x = die.left + x0
+        while x + tile <= die.right - margin:
+            y = die.bottom + y0
+            while y + tile <= die.top - margin:
+                tg.insert(pya.Box(x, y, x + tile, y + tile))
+                y += pitch
+            x += pitch
+        return tg
+
+    # Density-driven multi-phase fill. The base grid (phase 0) reproduces the
+    # legacy single-pass fill EXACTLY; when the layer declares a min_density
+    # the deck enforces and the base grid falls short (a thin route halo
+    # rejects a WHOLE base-grid cell even where most of it is clear), extra
+    # phase-shifted grids drop tiles into those grid-misaligned pockets.
+    # Every pass keeps only tiles a full `margin` from live metal AND a full
+    # `gap` from already-placed fill, so densifying never shorts a net,
+    # merges into wide-metal, nor crowds spacing — the sign-off deck re-checks
+    # the filled GDS with every rule live. chip-AGNOSTIC: pure geometry + the
+    # PDK bridge's own per-layer targets. Legacy behaviour (no min_density, or
+    # base grid already meeting it) is byte-for-byte unchanged.
+    phases = [(margin, margin)]
+    for _f in (0.5, 0.25, 0.75):
+        _off = int(pitch * _f)
+        phases.extend([(margin + _off, margin + _off),
+                       (margin + _off, margin),
+                       (margin, margin + _off)])
+    placed = pya.Region()
+    for (x0, y0) in phases:
+        allowed = frame - live_halo - placed.sized(gap)
+        kept = _grid_tiles(x0, y0).select_inside(allowed)
+        if kept.count():
+            placed += kept
+            placed.merge()
+        dens = ((existing.area() + placed.area()) / die_area) if die_area else 0.0
+        if not min_density or dens >= min_density:
+            break
+    tc.shapes(li).insert(placed)
+    total = existing.area() + placed.area()
+    dens = (total / die_area) if die_area else 0.0
+    summary.append((str(lay.get("name", lay["gds"])), placed.count(), dens))
 ly.write(gds_out)
 for name, n, dens in summary:
     print("DUMMY_FILL %s tiles=%d density=%.4f" % (name, n, dens))
