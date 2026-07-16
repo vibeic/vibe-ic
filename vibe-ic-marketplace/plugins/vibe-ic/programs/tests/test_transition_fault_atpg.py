@@ -175,18 +175,85 @@ def test_esc_id_escapes_dotted_names_only():
 
 # ── batch-log parsing: aborted faults are NOT detected ─────────────────────
 
-def test_parse_batch_log_missing_verdict_is_abort():
+def test_parse_batch_log_missing_verdict_and_unreached():
     faults = [("_000_", "STR", "1'b0", "1'b0"),
               ("_000_", "STF", "1'b1", "1'b1"),
               ("_001_", "STR", "1'b0", "1'b0")]
-    # only the first fault got a verdict; yosys then aborted
-    log = ("VIBEICTDF _000_ STR\nSAT proof finished - model found: FAIL!\n"
-           "VIBEICTDF _000_ STF\nERROR: solver crashed\n")
-    results, example = tdf._parse_batch_log(log, faults, ["clk"])
+    # fault 1 got a verdict; fault 2 got a marker but no verdict (attempted,
+    # undecided); fault 3 has NO marker at all (yosys never reached it).
+    log = ("VIBEICTDF_SETUP_DONE\n"
+           "VIBEICTDF _000_ STR\nSAT proof finished - model found: FAIL!\n"
+           "VIBEICTDF _000_ STF\nInterrupted SAT solver: TIMEOUT!\n")
+    results, example, setup_done = tdf._parse_batch_log(log, faults, ["clk"])
     vmap = {(n, k): v for n, k, v in results}
+    assert setup_done is True                  # the one-time setup marker fired
     assert vmap[("_000_", "STR")] == "DET"
-    assert vmap[("_000_", "STF")] == "ABORT"   # marker but no verdict
-    assert vmap[("_001_", "STR")] == "ABORT"   # no marker at all (yosys exited)
+    assert vmap[("_000_", "STF")] == "ABORT"    # marker but undecided → attempted
+    # #154: a fault with NO marker is UNREACHED (excluded from the graded
+    # sample), NOT counted as an undetected ABORT — that reclassification is
+    # what stops a wall-truncated batch from scoring a real design 0 %.
+    assert vmap[("_001_", "STR")] == "UNREACHED"
+
+
+def test_parse_batch_log_setup_absent():
+    faults = [("_000_", "STR", "1'b0", "1'b0")]
+    results, _example, setup_done = tdf._parse_batch_log(
+        "VIBEICTDF _000_ STR\nSAT proof finished - no model found: SUCCESS!\n",
+        faults, ["clk"])
+    assert setup_done is False
+    assert results[0][2] == "RED"
+
+
+# ── #154 FLATTEN-ONCE batch shape ─────────────────────────────────────────
+def test_build_batch_script_flattens_once_and_injects_on_flat_net():
+    faults = [("_14803_", "STR", "1'b0", "1'b0"),
+              ("_21044_", "STF", "1'b1", "1'b1")]
+    s = tdf._build_batch_script("flat.v", "miter.v", "sha256", faults, ["clk"],
+                                sat_timeout=90)
+    # The faulty copy + hierarchy + flatten + snapshot happen EXACTLY ONCE.
+    assert s.count("copy sha256 sha256_f") == 1
+    assert s.count("\nflatten\n") == 1
+    assert s.count("design -save baseflat") == 1
+    assert s.count(tdf._SETUP_MARKER) == 1
+    # Per fault: reload the flat snapshot + inject on the FLAT faulty-instance
+    # net `fb.<net>` (NOT a per-fault copy/hierarchy/flatten).
+    assert s.count("design -load baseflat") == 2
+    assert "connect -nomap -set fb._14803_ 1'b0" in s
+    assert "connect -nomap -set fb._21044_ 1'b1" in s
+    # sat still sets the launch frame on f1 and carries the per-fault -timeout.
+    assert "sat -prove trig 0 -timeout 90 -set f1._14803_ 1'b0" in s
+    # the OLD per-fault re-flatten idiom is gone.
+    assert "cd sha256_f" not in s
+
+
+def test_parse_time_spent_reads_yosys_breakdown():
+    log = ("...\nTime spent: 92% 8x sat (194 sec), 3% 8x flatten (7 sec), "
+           "5% 1x read_verilog (0 sec)\n")
+    sat_calls, sat_sec, flat_sec = tdf._parse_time_spent(log)
+    assert (sat_calls, sat_sec, flat_sec) == (8, 194, 7)
+    # absent line → all zero (caller then uses the graded-count fallback).
+    assert tdf._parse_time_spent("no timing here") == (0, 0, 0)
+
+
+def test_rightsize_sample_fits_wall_budget():
+    # 20 s/fault, 25 s setup, 1800 s wall, 0.85 safety →
+    # (1800*0.85 - 25)/20 = 75.25 → 75 faults; capped by --max-faults / avail.
+    assert tdf._rightsize_sample(20.0, 25.0, 1800, 400, 99858) == 75
+    assert tdf._rightsize_sample(20.0, 25.0, 1800, 50, 99858) == 50   # --max cap
+    assert tdf._rightsize_sample(20.0, 25.0, 1800, 400, 10) == 10     # availability
+    # never returns 0 — an honest tiny partial beats a fail-safe zero.
+    assert tdf._rightsize_sample(5000.0, 25.0, 1800, 400, 99858) == 1
+    # unknown per-fault cost (probe gave nothing) → fall back to the caps.
+    assert tdf._rightsize_sample(0.0, 25.0, 1800, 400, 99858) == 400
+
+
+def test_spread_order_prefix_is_representative():
+    items = list(range(64))
+    out = tdf._spread_order(items)
+    assert sorted(out) == items          # a permutation (no loss/dup)
+    # any short prefix spans the whole range (not a low-index cluster).
+    assert max(out[:8]) - min(out[:8]) >= 32
+    assert tdf._spread_order([1, 2]) == [1, 2]   # <3 unchanged
 
 
 # ── gate: FALSE-CLEAN-PROOF (redundant/aborted never detected) ─────────────
