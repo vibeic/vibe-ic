@@ -29,23 +29,24 @@ def test_summary_no_longer_hardcodes_14():
 
 def test_summary_uses_taxonomy_count():
     """The denominator must derive from l_doc_taxonomy.all_l_doc_codes()
-    (currently 24: L1-L23 + L8C/L8T + L14-L23)."""
+    (currently 28: L1-L13 + L8C/L8T split + L14-L23 + L24-L27)."""
     src = RUNNER.read_text()
     assert "all_l_doc_codes" in src, (
         "SUMMARY must call all_l_doc_codes() so it stays correct when "
         "the taxonomy grows.")
 
 
-def test_taxonomy_currently_24_codes():
+def test_taxonomy_currently_28_codes():
     """ANTI-REGRESSION: pin the current size so a future taxonomy expansion
-    that breaks this test forces an audit."""
+    that breaks this test forces an audit. #157 grew the taxonomy from 24 to
+    28 by folding the L24-L27 completeness extensions into L_DOCS_V2."""
     if "l_doc_taxonomy" in sys.modules:
         del sys.modules["l_doc_taxonomy"]
     sys.path.insert(0, str(PROGRAMS))
     import l_doc_taxonomy
     codes = l_doc_taxonomy.all_l_doc_codes()
-    assert len(codes) == 24, (
-        f"Taxonomy size changed from 24 to {len(codes)}. If this was "
+    assert len(codes) == 28, (
+        f"Taxonomy size changed from 28 to {len(codes)}. If this was "
         f"intentional, update this test's pinned value. If accidental, "
         f"check what L doc was added/removed.")
 
