@@ -2121,6 +2121,21 @@ class PdkConfig:
     # smaller value for a stricter house rule. PSM's padless-core single-bump
     # model (PSM-0073) makes the measured drop a CONSERVATIVE upper bound.
     ir_budget_pct: Optional[float] = None
+    # v1.4.59 — OPT-IN cell-aware FEOL over-fire exemption for the native svrfdrc
+    # sign-off engine (vibeic-eda >= 0.2.19). On a dense digital design the flat
+    # std-cell qualified-cell marker cannot exempt FEOL implant space/notch
+    # over-fires (routing carves it — a #511 over-waive), so the streamout's
+    # anti-masking guard correctly leaves them as disclosed (gate-FAILing)
+    # artifacts. The engine fork exempts them per-master (conservative: an over-
+    # fire is dropped only if its bridge is strictly interior to ONE standalone-
+    # qualified master's exact placed footprint AND no top-level FEOL forms it).
+    # This config supplies the FEOL device layers (the safety guard) + the deck
+    # rule-name prefixes to filter; the runner computes the standalone-qualified
+    # master set and builds the cfg. Shape:
+    #   {"feol_gds":["2/0","3/0","4/0","5/0"],
+    #    "feol_rules":["NW.S","OD.S","PO.S","NP.S","PP.S"], "strict_dbu":1}
+    # ABSENT (or the image lacks --cell-aware-feol) -> byte-identical stock DRC.
+    cell_aware_feol: Optional[Dict[str, Any]] = None
 
 
 def _discover_lefdef_layermap(pdk_dir: Path) -> Optional[str]:
@@ -2931,6 +2946,7 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 tap_geom_layers=_signoff_cfg.get("tap_geom_layers"),
                 pdn_straps=_signoff_cfg.get("pdn_straps"),
                 ir_budget_pct=_signoff_cfg.get("ir_budget_pct"),
+                cell_aware_feol=_signoff_cfg.get("cell_aware_feol"),
             )
     # fallback: sky130A in container
     return _detect_pdk(project, override="sky130A")
@@ -9478,6 +9494,101 @@ def _svrfdrc_supports_threads(container: str, bin_c: str) -> bool:
     return ok
 
 
+_SVRFDRC_CAF_CACHE: Dict[str, bool] = {}
+
+
+def _svrfdrc_supports_cell_aware_feol(container: str, bin_c: str) -> bool:
+    """True iff the container's svrfdrc buddy accepts ``--cell-aware-feol`` (the
+    opt-in cell-aware FEOL over-fire exemption, image >= 0.2.19). Probed once per
+    (container, bin) via ``svrfdrc --help`` and cached. On an older image this
+    returns False so the caller omits the flag (byte-identical stock DRC). The
+    flag is provably-never-false-clean and byte-identical when off, so a probe
+    miss only forgoes exemption of disclosed artifacts — never masks a real fail."""
+    key = f"{container}:{bin_c}"
+    if key in _SVRFDRC_CAF_CACHE:
+        return _SVRFDRC_CAF_CACHE[key]
+    ok = False
+    try:
+        rc, out, err = _docker_exec(container, f"{bin_c} --help", timeout=30)
+        ok = "--cell-aware-feol" in ((out or "") + (err or ""))
+    except Exception:
+        ok = False
+    _SVRFDRC_CAF_CACHE[key] = ok
+    return ok
+
+
+def _build_cell_aware_feol_cfg(project: Path, top: str, pdk: PdkConfig,
+                               container: str, bin_c: str, deck_c: str
+                               ) -> Optional[Any]:
+    """Build the opt-in ``--cell-aware-feol`` cfg for the native svrfdrc engine,
+    or return None when the gate is not met (byte-identical stock DRC).
+
+    GATE (ALL required): the design ships a ``cell_aware_feol`` sign-off-config
+    block (FEOL device layers + rule-name prefixes), a per-master library GDS
+    (``pdk.cell_gds``), and the placed ``{top}.def`` the GDS was streamed from.
+    Only then does the runner compute the STANDALONE-qualified master set (run
+    each UNIQUE placed master through the deck standalone; qualified iff 0
+    non-DENSITY fails) and write the cfg. Conservative: any failure -> None.
+
+    Returns the ``signoff_cell_aware_feol_cfg.CfgResult`` (with ``.written`` /
+    ``.cfg_path`` / ``.qualified``) or None."""
+    caf = pdk.cell_aware_feol
+    if not caf or not isinstance(caf, dict):
+        return None
+    if not pdk.cell_gds:
+        return None
+    def_host = _pl.pnr_dir(project) / f"{top}.def"
+    if not def_host.is_file():
+        return None
+    try:
+        import signoff_cell_aware_feol_cfg as _caf
+    except Exception:
+        # last-resort: import by path (programs/ dir on sys.path via runner)
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import signoff_cell_aware_feol_cfg as _caf  # noqa: F811
+        except Exception:
+            return None
+    feol_gds = _caf.feol_gds_from_config(caf)
+    prefixes = caf.get("feol_rules") or caf.get("feol_rule_prefixes") or []
+    if not feol_gds or not prefixes:
+        return None
+    try:
+        deck_text = Path(str(pdk.calibre_drc)).read_text(errors="ignore")
+        def_text = def_host.read_text(errors="ignore")
+    except OSError:
+        return None
+    lib_c = _to_container_path(str(pdk.cell_gds), container)
+    def_c = _to_container_path(str(def_host), container)
+    reports_dir = project / "phase3" / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    workdir_c = _to_container_path(str(reports_dir), container)
+
+    def _run_standalone(master: str) -> str:
+        # svrfdrc <deck> <lib> <rpt> --cell=<master> on the master LIBRARY;
+        # returns the report text (empty on failure) so the classifier decides.
+        safe = re.sub(r"[^A-Za-z0-9_.]", "_", master)
+        rpt_c = f"{workdir_c}/_caf_q_{safe}.rpt"
+        cmd = (f"{bin_c} {deck_c} {lib_c} {rpt_c} --cell={master} "
+               f">/dev/null 2>&1; cat {rpt_c} 2>/dev/null")
+        try:
+            rc, out, _err = _docker_exec(container, cmd, timeout=900)
+            return out or ""
+        except Exception:
+            return ""
+
+    cfg_out = reports_dir / "cell_aware_feol.cfg"
+    try:
+        res = _caf.build_cfg(
+            deck_text=deck_text, def_text=def_text, lib_container=lib_c,
+            def_container=def_c, feol_gds=feol_gds,
+            feol_rule_prefixes=prefixes, run_standalone=_run_standalone,
+            cfg_out=cfg_out, strict_dbu=int(caf.get("strict_dbu", 1)))
+    except Exception:
+        return None
+    return res if res.written else None
+
+
 def _parse_svrf_tally(rpt: Path) -> Tuple[int, int, int, List[str]]:
     """Parse a run_svrf_drc.py report → (fails, passes, skips, failing_rules).
     Counts the per-rule result lines (`FAIL <rule> …` / `PASS …` / `SKIP …`),
@@ -9652,6 +9763,24 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
     # ceiling below — derivation-phase parallelism is the follow-on.
     if _svrfdrc_supports_threads(container, bin_c):
         cmd += f" --threads={_openroad_thread_count()}"
+    # v1.4.59 — OPT-IN cell-aware FEOL over-fire exemption. Gated on: the image's
+    # svrfdrc supports --cell-aware-feol (>= 0.2.19), AND the design ships the
+    # inputs (a `cell_aware_feol` sign-off-config block + per-master library GDS +
+    # the placed {top}.def). Only then is a cfg built — the runner STANDALONE-
+    # qualifies each unique placed master (0 non-DENSITY fails on the deck) and
+    # names the FEOL device layers (the engine's safety guard) + rules. WITHOUT
+    # the flag the report is BYTE-IDENTICAL. The exemption is the engine fork's
+    # CONSERVATIVE per-master geometry (an over-fire is dropped only if its bridge
+    # is strictly interior to ONE qualified master's exact footprint AND no
+    # top-level FEOL forms it) — the plugin only SUPPLIES the qualified-master cfg,
+    # never waives; a genuine / boundary / top-level violation is always KEPT.
+    caf_res = None
+    if _svrfdrc_supports_cell_aware_feol(container, bin_c):
+        caf_res = _build_cell_aware_feol_cfg(project, top, pdk, container,
+                                             bin_c, deck_c)
+        if caf_res is not None and getattr(caf_res, "written", False):
+            cfg_c = _to_container_path(str(caf_res.cfg_path), container)
+            cmd += f" --cell-aware-feol={cfg_c}"
     # v1.4.38 — bound the DRC step at a WALL-CLOCK budget (the stall watchdog never
     # kills a 100%-CPU tool; the default ceiling is ~24h). A non-completing DRC is
     # NOT a proven violation → SKIPPED-CONDITION (disclosed perf ceiling), like the
@@ -9697,6 +9826,25 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
             f"geometry); {n_den} DENSITY-fill gap(s) {cls['density_fill']} "
             f"(test-chip sparsity → foundry metal fill or formal density "
             f"waiver).")
+    # v1.4.59 — disclose an ACTIVE cell-aware FEOL exemption (opt-in; only present
+    # when the design shipped the inputs AND the image supports it). The report is
+    # already the EXEMPTED one (the flag was on the single run); this states which
+    # masters were standalone-qualified so the reduced FEOL count is auditable and
+    # never opaque. When absent the wording is byte-identical to the stock path.
+    caf_note = ""
+    caf_extra = None
+    if caf_res is not None and getattr(caf_res, "written", False):
+        _cj = caf_res.to_json()
+        caf_note = (
+            f" CELL-AWARE-FEOL EXEMPTION ACTIVE (opt-in, engine-side): "
+            f"{_cj['n_qualified']}/{_cj['n_placed_unique']} placed master(s) "
+            f"standalone-qualified (0 non-DENSITY fails on the deck); the engine "
+            f"exempted ONLY FEOL over-fires strictly interior to a single "
+            f"qualified master's footprint on rules {_cj['feol_rules'][:8]} "
+            f"(FEOL guard layers {_cj['feol_gds']}). Genuine / boundary / "
+            f"top-level violations are KEPT — the plugin supplies the qualified "
+            f"cfg, the fork engine does the conservative geometry; never a waiver.")
+        caf_extra = _cj
     detail = (
         f"SVRF-NATIVE commercial DRC — the foundry's OWN Calibre `.rule` deck "
         f"executed on the vibeic KLayout engine (NO Calibre license): "
@@ -9705,7 +9853,7 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
         f"checkers, never silently passed). deck={pdk.calibre_drc}. §4.05: this "
         f"runs the real foundry deck natively (categorically stronger than an "
         f"OSS-proxy deck); it is NOT a golden-Calibre numerical cross-run."
-        + breakdown
+        + breakdown + caf_note
         + (f" firing rules (first 10): {failing[:10]}" if failing else ""))
     return StepResult(
         "drc", verdict, time.time() - t0, detail, [str(rpt)],
@@ -9713,6 +9861,7 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
                 "calibre_drc_deck": str(pdk.calibre_drc),
                 "rules_fail": fails, "rules_pass": passes, "rules_skip": skips,
                 "failing_rules": failing[:50], "gds": str(gds),
+                "cell_aware_feol": caf_extra,
                 "fail_classes": {
                     "geometry": cls["geometry"],
                     "marker_absent": cls["marker_absent"],
