@@ -53,6 +53,27 @@ def test_parse_def_components(tmp_path):
         ("inst2", "CELLA", 1200, 0, "S")]
 
 
+def test_parse_def_components_with_source_clause(tmp_path):
+    """Regression: router-inserted fillers/decaps carry `+ SOURCE DIST` (and a
+    cell may carry `+ EEQMASTER`) BEFORE the placement — the parser must not drop
+    them (a dropped placed master shrinks the qualified footprint and mis-labels a
+    real cell-interior candidate as top-level)."""
+    d = tmp_path / "p.def"
+    d.write_text(
+        "COMPONENTS 4 ;\n"
+        "- f0 FILL1 + SOURCE DIST + PLACED ( 10 0 ) N ;\n"
+        "- d0 DECAP4 + SOURCE DIST + FIXED ( 20 0 ) FS ;\n"
+        "- u0 NAND2 + EEQMASTER NAND2X + SOURCE NETLIST + PLACED ( 30 0 ) S ;\n"
+        "- u1 INV + PLACED ( 40 0 ) N ;\n"
+        "END COMPONENTS\n")
+    comps = A.parse_def_components(str(d))
+    assert comps == [
+        ("f0", "FILL1", 10, 0, "N"),
+        ("d0", "DECAP4", 20, 0, "FS"),
+        ("u0", "NAND2", 30, 0, "S"),
+        ("u1", "INV", 40, 0, "N")]
+
+
 def test_load_qualified_inline_and_file(tmp_path):
     assert A._load_qualified("CELLA,CELLB CELLC") == {"CELLA", "CELLB", "CELLC"}
     f = tmp_path / "q.txt"

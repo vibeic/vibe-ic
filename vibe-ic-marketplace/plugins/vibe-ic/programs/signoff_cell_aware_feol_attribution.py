@@ -69,8 +69,16 @@ _DEF_ORIENT = {
     "E": (1, False), "W": (3, False), "FE": (1, True), "FW": (3, True),
 }
 
+# The placement status may be preceded by optional `+ SOURCE {DIST|NETLIST|USER|
+# TIMING}` / `+ EEQMASTER ...` clauses (router-inserted fillers/decaps carry
+# `+ SOURCE DIST`), so match non-greedily up to the placement WITHOUT crossing the
+# record `;` terminator. The prior regex required PLACED to immediately follow the
+# master and silently dropped every `+ SOURCE ...` component -> a placed-master
+# undercount that shrank the qualified-cell footprint (candidate over-fires then
+# mis-attributed as top-level). COVER placement is accepted alongside PLACED/FIXED.
 _COMP_RE = re.compile(
-    r"-\s+(\S+)\s+(\S+)\s+\+\s+(?:PLACED|FIXED)\s+\(\s*(-?\d+)\s+(-?\d+)\s*\)\s+(\w+)")
+    r"-\s+(\S+)\s+(\S+)\b[^;]*?\+\s+(?:PLACED|FIXED|COVER)\s*"
+    r"\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*(\w+)")
 
 
 def parse_layerlist(spec: str) -> List[Tuple[int, int]]:
