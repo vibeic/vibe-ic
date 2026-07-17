@@ -102,7 +102,7 @@ def _check(project: Path) -> tuple[int, list[str]]:
             "generated_docs/ absent.",
             "",
             "FAIL — Wave 30 (v0.119.62): Phase 1 (doc-extraction) was not attempted. "
-            "All 13 L docs (L1-L23) must exist in generated_docs/ "
+            "All 13 L docs (L1-L13) must exist in generated_docs/ "
             "before any Phase 2 RTL/burn step is allowed. Run the "
             "phase1-orchestrate skill (or every Phase 1 (doc-extraction) generator "
             "skill individually). NO waiver allowed."
@@ -116,7 +116,7 @@ def _check(project: Path) -> tuple[int, list[str]]:
             "attempted).",
             "",
             "FAIL — Wave 30 (v0.119.62): Phase 1 (doc-extraction) was not attempted. "
-            "All 13 L docs (L1-L23) must exist in generated_docs/ "
+            "All 13 L docs (L1-L13) must exist in generated_docs/ "
             "before any Phase 2 RTL/burn step is allowed. Run the "
             "phase1-orchestrate skill (or every Phase 1 (doc-extraction) generator "
             "skill individually). NO waiver allowed."
@@ -197,7 +197,7 @@ def _check(project: Path) -> tuple[int, list[str]]:
     if missing or empty or invalid:
         out.append("")
         out.append(
-            "FAIL — Wave 23 (v0.119.55): all 13 L docs (L1-L23) must "
+            "FAIL — Wave 23 (v0.119.55): all 13 L docs (L1-L13) must "
             "exist in generated_docs/ with non-empty content. NO waiver "
             "allowed.")
         if missing:
