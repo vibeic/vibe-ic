@@ -80,3 +80,4 @@ simv
 # scratch, never committed (ORGANIC #720). Anchored to root so it does NOT match
 # tracked source like vibe-ic-marketplace/.../mcp-eda/src/devices/_registry.js.
 /_*.js
+history.md
