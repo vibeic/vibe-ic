@@ -1,6 +1,6 @@
 ---
 name: vibe-ic-phase1
-description: Run Phase 1 (natural-language → L1-L23 JSON + human MD) via the deterministic phase1_one_shot_runner. AI-monitored + close-loop.
+description: Run Phase 1 (natural-language → L1-L27 JSON + human MD) via the deterministic phase1_one_shot_runner. AI-monitored + close-loop.
 argument-hint: <project-dir> [--ic-name <name>]
 ---
 > **Missing arg?** When `$ARGUMENTS` is empty, prompt the user first:
@@ -26,7 +26,7 @@ The first positional argument is the project directory (e.g. `/home/user/AI_IC_d
 3. Once all PASS, print the verdict + L doc path list, and hint the next step: `/phase2`
 
 **Helper skills (do not auto-expand; surface only when the user asks):**
-- `phase1` — natural-language → L1-L23 dialogue flow
-- `spec-review` — human review after L1-L23 emit
+- `phase1` — natural-language → L1-L27 dialogue flow
+- `spec-review` — human review after L1-L27 emit
 
 **Phase 1 not PASS means cannot enter Phase 2** — strictly depends on generated_docs/L*.json.

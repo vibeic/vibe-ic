@@ -1,6 +1,6 @@
 ---
 name: phase1-coverage-loop
-description: Closed-loop field-agent for Phase 1 coverage. Rotates through a benchmark IC folder (e.g. 2nd_banchmark/) running /vibe-ic-phase1 on each IC's README/prompt, measures input→L1-L23 token completeness with phase1_input_vs_generated_completeness_check, and files chip-AGNOSTIC plugin backlog issues for systematic ingester gaps. Same 4-step pattern as field-agent-loop (review → file → monitor → verify) but targets Phase 1 (Path A) instead of Phase 1/2/3. Invoke as a cron prompt; loop self-advances until STOP CONDITION (full rotation passes + no open ORGANIC-phase1 issue).
+description: Closed-loop field-agent for Phase 1 coverage. Rotates through a benchmark IC folder (e.g. 2nd_banchmark/) running /vibe-ic-phase1 on each IC's README/prompt, measures input→L1-L27 token completeness with phase1_input_vs_generated_completeness_check, and files chip-AGNOSTIC plugin backlog issues for systematic ingester gaps. Same 4-step pattern as field-agent-loop (review → file → monitor → verify) but targets Phase 1 (Path A) instead of Phase 1/2/3. Invoke as a cron prompt; loop self-advances until STOP CONDITION (full rotation passes + no open ORGANIC-phase1 issue).
 ---
 
 # Phase 1 Coverage Loop — Closed-Loop Phase 1 Ingester Improvement
