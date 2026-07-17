@@ -91,6 +91,63 @@ _MODEL_RE = re.compile(r"(?im)^\s*\.model\s+(\S+)\s+(\w+)")
 # section DEFINITION form: `.lib <bare-identifier>` alone (NOT the include form
 # `.lib "path" section`, which carries a path/quote after `.lib`).
 _LIB_SECTION_RE = re.compile(r"(?im)^\s*\.lib\s+([A-Za-z_]\w*)\s*$")
+# section END form: `.endl [name]`.
+_ENDL_RE = re.compile(r"(?im)^\s*\.endl\b")
+
+
+def _iter_section_bodies(text: str):
+    """Yield (section_name, body_text) for every `.lib <bare> ... .endl` block.
+    Non-nesting (HSPICE/ngspice section DEFs do not nest); a stray inner
+    `.lib <bare>` closes the current block defensively. Lines outside any block
+    are ignored. Pure — chip-AGNOSTIC (directive syntax only)."""
+    lines = (text or "").splitlines()
+    i, n = 0, len(lines)
+    while i < n:
+        m = _LIB_SECTION_RE.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        name = m.group(1)
+        j = i + 1
+        body: List[str] = []
+        while j < n and not _ENDL_RE.match(lines[j]):
+            if _LIB_SECTION_RE.match(lines[j]):        # defensive: no nesting
+                break
+            body.append(lines[j])
+            j += 1
+        yield name, "\n".join(body)
+        i = j + 1
+
+
+def parse_composed_corner_sections(lib_path: str, text: str) -> List[str]:
+    """Return the section names in `text` that are CROSS-FILE COMPOSED corners.
+
+    A foundry ships a corner ENTRY-POINT lib (e.g. a `corner<X>.lib`) whose
+    top-level `.lib <corner> ... .endl` sections do not define devices/params
+    themselves — they COMPOSE the process-param, noise-flag, passive and diode
+    sub-sections that a single device building-block sub-lib's per-section does
+    NOT. Structurally, such a section's body `.include`s / `.lib '<file>'
+    <section>`-includes at least one model file OTHER than its own — the signal
+    that it is the self-contained corner the deck should load, and the only lib
+    whose closure can carry the HSPICE-only packaging directives (`.malias`) the
+    ngspice normalizer strips.
+
+    A device building-block sub-lib's per-section (e.g. `tt_tn`) only includes
+    sections of its OWN file, so it is NOT reported here — it is not a complete
+    corner on its own. chip-AGNOSTIC: keyed purely on cross-file composition
+    structure, never a vendor / SKU / section-name literal."""
+    own = posixpath.basename(str(lib_path)).lower()
+    out: List[str] = []
+    for name, body in _iter_section_bodies(text):
+        cross_file = False
+        for inc in _iter_includes(body):
+            ref = posixpath.basename(inc).lower()
+            if ref and ref != own:
+                cross_file = True
+                break
+        if cross_file:
+            out.append(name)
+    return out
 
 
 @dataclass
@@ -108,6 +165,13 @@ class DeckContext:
     typ_section: Optional[str] = None
     process_corners: List[Tuple[str, float]] = field(default_factory=list)
     device_map: Dict[str, str] = field(default_factory=dict)
+    # {role: n_terminals} for each resolved device subckt. The corner templates
+    # are authored for a 4-terminal (d g s b) MOS; a foundry subckt that carries
+    # EXTRA terminals (e.g. a 5th p-substrate node, `d g s b sub`) needs those
+    # extra nodes supplied at instantiation, else ngspice aborts "Too few
+    # parameters for subcircuit". The deck emitter reads this to inject the
+    # missing substrate/well ties (see render_deck). chip-AGNOSTIC.
+    device_terminals: Dict[str, int] = field(default_factory=dict)
     unresolved_roles: List[str] = field(default_factory=list)
     work_items: List[str] = field(default_factory=list)
     disclosure: str = ""
@@ -121,6 +185,7 @@ class DeckContext:
             "typ_section": self.typ_section,
             "process_corners": [list(pc) for pc in self.process_corners],
             "device_map": self.device_map,
+            "device_terminals": self.device_terminals,
             "unresolved_roles": self.unresolved_roles,
             "work_items": self.work_items, "disclosure": self.disclosure,
         }
@@ -297,6 +362,9 @@ def known_family_context(selector: str) -> DeckContext:
         corner_sections=list(fam["corner_sections"]),
         typ_section=typ, process_corners=process,
         device_map=dict(fam["device_map"]),
+        # the open-PDK device templates are 4-terminal (d g s b) — no extra
+        # substrate/well node injection (keeps the sky130 deck byte-identical).
+        device_terminals={role: 4 for role in fam["device_map"]},
         disclosure=(f"known open PDK '{selector}' — device map + corner sections "
                     f"from the plugin's authored template family (no lib parse)."),
     )
@@ -331,12 +399,15 @@ def custom_family_context(res: Dict[str, Any],
     union_models: Dict[str, str] = {}
     per_lib_sections: Dict[str, List[str]] = {}
     per_lib_subckts: Dict[str, Dict[str, int]] = {}
+    per_lib_composed: Dict[str, List[str]] = {}
+    per_lib_own_devices: Dict[str, int] = {}
     for lib in libs:
         txt = reader(lib)
         if txt is None:
             unread.append(lib)
             continue
         dev = parse_devices(txt)
+        per_lib_own_devices[lib] = len(dev["subckts"])
         # Follow `.include`/`.lib <path> <section>` so a section-bearing corner
         # lib self-reports the devices it pulls in transitively (the deck's
         # `.lib <path> <section>` line loads exactly that closure). Degrades to
@@ -346,6 +417,9 @@ def custom_family_context(res: Dict[str, Any],
         union_models.update(dev["models"])
         per_lib_sections[lib] = parse_sections(txt)
         per_lib_subckts[lib] = tsub
+        # cross-file COMPOSED corner sections (a foundry corner ENTRY-POINT lib
+        # ships these; a device building-block sub-lib does not).
+        per_lib_composed[lib] = parse_composed_corner_sections(lib, txt)
 
     device_map, unresolved, notes = map_device_roles(union_subckts, required)
 
@@ -364,11 +438,36 @@ def custom_family_context(res: Dict[str, Any],
     readable = [l for l in libs if l not in unread]
     resolved_dev_names = {v for v in device_map.values()}
 
-    def _primary_rank(lib: str) -> Tuple[int, int]:
+    # v1.4.58 — a foundry that ships a CORNER ENTRY-POINT lib (`corner<X>.lib`)
+    # whose top-level `.lib <corner>` sections CROSS-FILE-COMPOSE the process /
+    # noise / passive / diode sub-sections must be picked over a device
+    # building-block sub-lib: a single sub-lib section (e.g. `tt_tn`) is NOT a
+    # self-contained corner (its `.subckt` needs noise-flag params + well-diode
+    # subckts from OTHER sections/files), so loading it aborts ngspice with
+    # `unknown subckt` / `Undefined parameter`. The entry-point lib's composed
+    # section pulls the whole closure AND is the only lib whose include graph
+    # carries the HSPICE-only `.malias` the ngspice normalizer strips. Rank a
+    # composed-corner lib above a non-composed one (device-role coverage stays
+    # the top gate; a composed lib that resolves NO device wins nothing).
+    # chip-AGNOSTIC: keyed on cross-file composition structure, no PDK literal.
+    #
+    # The strongest signal for a corner ENTRY-POINT lib is a PURE AGGREGATOR: it
+    # cross-file-composes corner sections AND defines ZERO devices in its OWN
+    # text (every device comes transitively). A device building-block sub-lib
+    # whose sections merely reference a passive sub-lib is composed too, but it
+    # DEFINES its devices inline (own_devices > 0), so it is NOT the entry point.
+    # Preferring the pure aggregator picks the `corner<X>.lib` over the device
+    # sub-libs (raw or pre-translated) deterministically; the sort-order fallback
+    # (base name before a `_ngspice`-suffixed variant) then favours the canonical
+    # raw corner file whose closure carries the `.malias` the normalizer strips.
+    def _primary_rank(lib: str) -> Tuple[int, int, int, int]:
         defined = set(per_lib_subckts.get(lib, {}))
         n_defines = len(resolved_dev_names & defined)
+        n_composed = len(per_lib_composed.get(lib, []))
+        own_dev = per_lib_own_devices.get(lib, 0)
+        is_aggregator = 1 if (n_composed and own_dev == 0) else 0
         n_sections = len(per_lib_sections.get(lib, []))
-        return (n_defines, n_sections)
+        return (n_defines, is_aggregator, n_composed, n_sections)
 
     primary = None
     if readable:
@@ -388,6 +487,18 @@ def custom_family_context(res: Dict[str, Any],
         if not p_unres:
             device_map, unresolved, notes = p_map, p_unres, p_notes
 
+    # Terminal count per resolved role (from the primary's transitive subckts).
+    # A foundry MOS subckt may carry a 5th (or more) substrate/well terminal the
+    # 4-terminal template does not supply — the deck emitter injects the extra
+    # ground ties from this map. Falls back to the union closure for a role the
+    # primary does not itself define (honest — matches the device_map fallback).
+    primary_subs = per_lib_subckts.get(primary, {}) if primary else {}
+    device_terminals: Dict[str, int] = {}
+    for role, dname in device_map.items():
+        nterm = primary_subs.get(dname, union_subckts.get(dname))
+        if isinstance(nterm, int):
+            device_terminals[role] = nterm
+
     sections = per_lib_sections.get(primary, []) if primary else []
     # union sections across libs is what's "available"; primary drives the deck.
     all_sections: List[str] = []
@@ -395,7 +506,13 @@ def custom_family_context(res: Dict[str, Any],
         for s in per_lib_sections.get(l, []):
             if s not in all_sections:
                 all_sections.append(s)
-    typ, process = map_corner_sections(sections or all_sections)
+    # When the primary is a CORNER ENTRY-POINT lib, map typ/slow/fast over its
+    # cross-file COMPOSED corner sections ONLY — never a device/noise-flag stub
+    # sub-section that would abort ngspice. Otherwise (a plain sectioned sub-lib,
+    # incl. the single-lib rung-1 fixtures) map over its own sections as before.
+    primary_composed = per_lib_composed.get(primary, []) if primary else []
+    corner_pool = primary_composed or sections or all_sections
+    typ, process = map_corner_sections(corner_pool)
 
     work_items: List[str] = []
     if unresolved:
@@ -427,10 +544,14 @@ def custom_family_context(res: Dict[str, Any],
         work_items.append("NEEDS_NATIVE_TEMPLATE: " + unread_note)
 
     status = "OK" if (not work_items) else "NEEDS_NATIVE_TEMPLATE"
+    composed_note = (f"; composed-corner sections={primary_composed}"
+                     if primary_composed else "")
+    term_note = (f"; device_terminals={device_terminals}"
+                 if any(v > 4 for v in device_terminals.values()) else "")
     disclosure = (
         f"custom PDK family '{family}' ({source}) — device map + corner "
         f"sections parsed from {len(readable)} resolved model lib(s); "
-        f"devices={device_map}, sections={sections or all_sections}."
+        f"devices={device_map}, sections={corner_pool}{composed_note}{term_note}."
         + (f" (note: {unread_note})" if unread_note else "")
         if status == "OK" else
         f"custom PDK family '{family}' ({source}) NOT natively emittable: "
@@ -438,9 +559,10 @@ def custom_family_context(res: Dict[str, Any],
     return DeckContext(
         status=status, source=source, family=str(family) if family else None,
         model_lib=primary, model_lib_includes=readable,
-        corner_sections=sections or all_sections,
+        corner_sections=corner_pool,
         typ_section=typ, process_corners=process,
-        device_map=device_map, unresolved_roles=unresolved,
+        device_map=device_map, device_terminals=device_terminals,
+        unresolved_roles=unresolved,
         work_items=work_items, disclosure=disclosure)
 
 
