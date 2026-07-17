@@ -67,6 +67,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from concurrent.futures import ThreadPoolExecutor
 import _path_layout as _pl
 import _sim_results_bridge as _srb
 
@@ -3614,19 +3615,19 @@ def _run_structural_rtl_gates(project: Path,
     # analog name-prefix so it stays chip-AGNOSTIC and never names a
     # gate the umbrella does not run.
     analog_skip_gates = _skip_analog_p0_gates() if skip_analog else frozenset()
-    for gate_name in _STRUCTURAL_RTL_GATES:
+    # ── #NNN: parallel structural-gate evaluation ─────────────────────────
+    # Each structural gate is an INDEPENDENT read-only validator run as its own
+    # subprocess with `cwd=project` (no `os.chdir`); the only per-gate output is
+    # a (skip|waiver|fail|pass) classification of its result. So the gates can
+    # run CONCURRENTLY — this is the dominant cost on structural-heavy chips
+    # (a ~200-gate P0 umbrella) — as long as the fails/skips/waivers
+    # lists stay in canonical `_STRUCTURAL_RTL_GATES` order (they feed the JSON
+    # report + verdict). The worker below is EXACTLY the former loop body,
+    # returning `(kind, payload)` instead of appending in place; the ordered
+    # dispatch loop then appends in gate order, so the report is byte-identical
+    # to the sequential path (env `VIBE_IC_COMPLIANCE_WORKERS=1` forces serial).
+    def _eval_gate_worker(gate_name: str):
         prog = PROGRAMS_DIR / f"{gate_name}.py"
-        if not prog.exists():
-            continue
-        if gate_name in class_skips:
-            skips.append(f"{gate_name} (SKIP: {class_skips[gate_name]})")
-            continue
-        if gate_name in analog_skip_gates:
-            skips.append(
-                f"{gate_name} (SKIP: analog track deferred via "
-                "--skip-analog (review_required at analog / foundry "
-                "sign-off))")
-            continue
         try:
             # v0.118 fix: pass `project` (not `rtl_dir`) so gates can
             # access project-level artefacts (generated_docs/L*.json,
@@ -3649,10 +3650,9 @@ def _run_structural_rtl_gates(project: Path,
                 timeout=60,
             )
         except subprocess.TimeoutExpired:
-            fails.append(f"FAIL: {gate_name} timed out")
-            continue
+            return ("fail", f"FAIL: {gate_name} timed out")
         if r.returncode == 2:
-            skips.append(gate_name)
+            return ("skip", gate_name)
         elif r.returncode == 1:
             _full_out = (r.stdout.strip() or r.stderr.strip())
             first_line = _full_out.split("\n")[0][:200]
@@ -3679,7 +3679,7 @@ def _run_structural_rtl_gates(project: Path,
             # _is_thin_input_eligible.
             if (thin_input_eligible
                     and gate_name in _THIN_INPUT_WAIVER_GATES):
-                waivers.append({
+                return ("waiver", {
                     "gate": gate_name,
                     "review_required": True,
                     "ticket": _THIN_INPUT_WAIVER_TICKET,
@@ -3710,7 +3710,7 @@ def _run_structural_rtl_gates(project: Path,
                   and _names_fsm_floor
                   and _field_count_fail_is_solely_fsm_floor(_full_out)
                   and _reused_ip_rtl_only_fsm_cap_eligible(project)):
-                waivers.append({
+                return ("waiver", {
                     "gate": gate_name,
                     "review_required": True,
                     "ticket": _REUSED_IP_RTL_ONLY_FSM_CAP_TICKET,
@@ -3733,7 +3733,48 @@ def _run_structural_rtl_gates(project: Path,
                     "first_line": _fsm_floor_line,
                 })
             else:
-                fails.append(f"FAIL: {gate_name} — {first_line}")
+                return ("fail", f"FAIL: {gate_name} — {first_line}")
+        return ("pass", None)
+
+    # Build the ordered task list: filter-skips resolve immediately (preserving
+    # their position); runnable gates are submitted to the pool. Then dispatch
+    # every result into fails/skips/waivers in canonical gate order.
+    _sworkers = _compliance_workers(len(_STRUCTURAL_RTL_GATES))
+    _pending: List[tuple] = []  # (tag, item) tag∈{"imm","fut"}
+    _ex = ThreadPoolExecutor(max_workers=_sworkers) if _sworkers > 1 else None
+    try:
+        for gate_name in _STRUCTURAL_RTL_GATES:
+            prog = PROGRAMS_DIR / f"{gate_name}.py"
+            if not prog.exists():
+                continue
+            if gate_name in class_skips:
+                _pending.append(
+                    ("imm", ("skip",
+                             f"{gate_name} (SKIP: {class_skips[gate_name]})")))
+                continue
+            if gate_name in analog_skip_gates:
+                _pending.append(
+                    ("imm", ("skip",
+                             f"{gate_name} (SKIP: analog track deferred via "
+                             "--skip-analog (review_required at analog / "
+                             "foundry sign-off))")))
+                continue
+            if _ex is not None:
+                _pending.append(("fut", _ex.submit(_eval_gate_worker, gate_name)))
+            else:
+                _pending.append(("imm", _eval_gate_worker(gate_name)))
+        for _tag, _item in _pending:
+            kind, payload = _item if _tag == "imm" else _item.result()
+            if kind == "skip":
+                skips.append(payload)
+            elif kind == "waiver":
+                waivers.append(payload)
+            elif kind == "fail":
+                fails.append(payload)
+            # "pass" → nothing appended
+    finally:
+        if _ex is not None:
+            _ex.shutdown(wait=True)
 
     return (len(fails) == 0), fails, skips, waivers
 
@@ -4911,6 +4952,45 @@ def _waiver_step_name_mismatch(waiver: Dict[str, Any],
             f"to the wrong step id; refusing to apply it")
 
 
+# ── #NNN: parallel per-step gate evaluation ──────────────────────────────
+# The per-step compliance gates are INDEPENDENT read-only validators of
+# already-produced artifacts. `check_step()` is a pure function of
+# (project, step, waivers, flags): it spawns each gate subprocess with
+# `cwd=project` (never `os.chdir`, which is process-global and thread-unsafe),
+# touches NO shared mutable module state (the only module caches on its call
+# graph are the deterministic-idempotent `_PURE_ANALOG_CACHE` — same key →
+# same value, so a benign write race stores identical data — and a thread-safe
+# `functools.lru_cache`), prints nothing (all output is driven later from the
+# ordered `results` list), and never reads an artifact that another step's gate
+# writes. So the steps can be evaluated CONCURRENTLY; the per-step verdict is
+# order-independent, and only the RESULTS-LIST ORDER (for display + the
+# downstream cascade attribution) must be preserved — which we do by collecting
+# the futures in submission order. This turns a large-SoC compliance sweep
+# (e.g. `final_audit` over 44 steps) from SUM-of-gate-times into
+# MAX-of-gate-times WITHOUT changing a single verdict (proven byte-identical
+# seq-vs-parallel across the benchmark IC suite).
+#
+# Bounded so the heavy honest gates (reset_dependency_check ~6 min, provenance
+# sha256 over multi-GB GDS) can't oversubscribe the box — each worker may itself
+# fork a gate subprocess, so we leave a core of headroom. `VIBE_IC_COMPLIANCE_
+# WORKERS` overrides (1 = the sequential fallback), mirroring the env-driven
+# `VIBE_IC_GATE_TIMEOUT_S` knob.
+def _compliance_workers(n_steps: int) -> int:
+    import os
+    if n_steps <= 1:
+        return 1
+    raw = os.environ.get("VIBE_IC_COMPLIANCE_WORKERS")
+    if raw:
+        try:
+            w = int(raw)
+        except ValueError:
+            w = 0
+        if w >= 1:
+            return max(1, min(w, n_steps))
+    cpu = os.cpu_count() or 2
+    return max(1, min(8, cpu - 1, n_steps))
+
+
 def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                skip_analog: bool = False, skip_hardware: bool = False) -> StepResult:
     raw_id = step["id"]
@@ -5760,15 +5840,31 @@ def main(argv: Optional[List[str]] = None) -> int:
     # gate didn't fire because no RTL is present yet, the marker is
     # still suppressed because nothing to verify).
     suppress_yaml_step14 = pre_pnr_result is not None
-    for step in steps:
-        sid = step.get("id")
-        if sid == "P0":
-            continue
-        if suppress_yaml_step14 and sid == 14:
-            continue
-        r = check_step(project, step, waivers, skip_analog=skip_analog,
-                       skip_hardware=skip_hardware)
-        results.append(r)
+    # Build the per-step evaluation list, preserving canonical YAML order
+    # (P0 umbrella + suppressed duplicate Step 14 already emitted above).
+    _eval_steps = [
+        step for step in steps
+        if step.get("id") != "P0"
+        and not (suppress_yaml_step14 and step.get("id") == 14)
+    ]
+    _workers = _compliance_workers(len(_eval_steps))
+    if _workers <= 1:
+        for step in _eval_steps:
+            results.append(check_step(
+                project, step, waivers,
+                skip_analog=skip_analog, skip_hardware=skip_hardware))
+    else:
+        # Independent read-only gates → evaluate concurrently; collect the
+        # futures in SUBMISSION order so `results` stays byte-for-byte the
+        # same list the sequential path produced (see `_compliance_workers`).
+        with ThreadPoolExecutor(max_workers=_workers) as _ex:
+            _futs = [
+                _ex.submit(check_step, project, step, waivers,
+                           skip_analog=skip_analog, skip_hardware=skip_hardware)
+                for step in _eval_steps
+            ]
+            for _fut in _futs:
+                results.append(_fut.result())
 
     # v0.3.5 — ORGANIC #502/#503: cascade attribution AFTER all step
     # verdicts are final (waiver conversions included): waiver chains
