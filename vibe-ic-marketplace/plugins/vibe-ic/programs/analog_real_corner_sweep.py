@@ -652,8 +652,14 @@ TARGETS = {
 # ─────────────────── Helpers ───────────────────
 
 def _docker(container, cmd, timeout=120):
+    # errors="replace": a foundry ngspice model lib can carry non-UTF-8 bytes
+    # (e.g. a µ micro-sign, 0xb5, in a comment). Strict decoding raised
+    # UnicodeDecodeError inside the container `cat` reader, which then reported
+    # the (perfectly valid) lib as UNREADABLE and dead-ended a native PDK deck
+    # at NEEDS_NATIVE_TEMPLATE. chip-AGNOSTIC: byte-decoding policy only.
     return subprocess.run(["docker","exec",container,"bash","-lc",cmd],
-                           capture_output=True,text=True,timeout=timeout)
+                           capture_output=True,text=True,errors="replace",
+                           timeout=timeout)
 
 
 # v1.6.218 (#95) — iic-osic-tools ships ngspice under
@@ -1146,7 +1152,12 @@ def _pdk_has_section(container, pdk_lib, section):
                     f"{shlex.quote(pdk_lib)} 2>/dev/null")
         sections = set()
         for ln in (r.stdout or "").splitlines():
-            m = re.search(r"\.lib\s+([A-Za-z_]+)", ln)
+            # re.I: the grep already matched case-insensitively, so a lib that
+            # writes the directive uppercase (`.LIB mos_ss`, as IHP sg13g2 does)
+            # reaches here as `.LIB ...`; a case-SENSITIVE `\.lib` then failed to
+            # re-extract the name → every corner section looked absent and the
+            # full PVT grid silently DERIVED instead of really simulating.
+            m = re.search(r"\.lib\s+([A-Za-z_]\w*)", ln, re.I)
             if m:
                 sections.add(m.group(1).lower())
         _PDK_SECTION_CACHE[key] = sections
