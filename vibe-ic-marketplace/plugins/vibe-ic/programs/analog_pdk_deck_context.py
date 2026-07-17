@@ -26,6 +26,7 @@ hygiene — never PDK content).
 """
 from __future__ import annotations
 
+import posixpath
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -165,6 +166,59 @@ def parse_devices(text: str) -> Dict[str, Any]:
     return {"subckts": subckts, "models": models}
 
 
+# Directives that pull another model file into a lib's parse scope. A PDK
+# commonly ships a `corner<X>.lib` that DEFINES the `.lib <section>` corner
+# sections and, inside each section, `.include`s the file(s) that actually
+# DEFINE the device `.subckt`s (confirmed: IHP sg13g2 cornerMOSlv.lib includes
+# sg13g2_moslv_mod.lib). Parsing only the corner lib's own text then sees the
+# sections but NOT the devices, so the section-bearing lib (the one the deck's
+# `.lib <path> <section>` line must point at) looked device-less. Following the
+# includes lets a section-bearing lib self-report its transitive devices.
+_INCLUDE_RE = re.compile(
+    r'(?im)^\s*\.(?:include|inc)\s+["\']?([^"\'\s]+)["\']?\s*$')
+# `.lib <path> <section>` INCLUDE form (a path — has a '/' or '.ext' — followed
+# by a section name); distinct from the `.lib <bare-identifier>` section DEF.
+_LIB_INCLUDE_RE = re.compile(
+    r'(?im)^\s*\.lib\s+["\']?([^"\'\s]*[./][^"\'\s]*)["\']?\s+\S+')
+
+
+def _iter_includes(text: str):
+    """Yield the referenced file paths of every `.include`/`.inc`/`.lib <path>
+    <section>` directive in `text` (verbatim, unresolved)."""
+    for m in _INCLUDE_RE.finditer(text or ""):
+        yield m.group(1)
+    for m in _LIB_INCLUDE_RE.finditer(text or ""):
+        yield m.group(1)
+
+
+def transitive_subckts(lib_path: str, text: str,
+                       reader: Optional[Callable[[str], Optional[str]]],
+                       _seen: Optional[set] = None, _depth: int = 0,
+                       ) -> Dict[str, int]:
+    """Union of `.subckt {name: n_terminals}` reachable from `text` by following
+    `.include`/`.inc`/`.lib <path> <section>` directives, resolved relative to
+    the including file's directory. Bounded depth + visited-set (a model-lib
+    include graph is a DAG in practice). A missing `reader`, an unreadable
+    include, or a cycle is skipped silently → degrades to the lib's OWN devices.
+    chip-AGNOSTIC (directive syntax only, no vendor/SKU literal)."""
+    subckts = dict(parse_devices(text)["subckts"])
+    if reader is None or _depth >= 8:
+        return subckts
+    seen = _seen if _seen is not None else set()
+    base = posixpath.dirname(str(lib_path))
+    for inc in _iter_includes(text):
+        tgt = inc if posixpath.isabs(inc) else posixpath.normpath(
+            posixpath.join(base, inc))
+        if tgt in seen:
+            continue
+        seen.add(tgt)
+        itxt = reader(tgt)
+        if itxt is None:
+            continue
+        subckts.update(transitive_subckts(tgt, itxt, reader, seen, _depth + 1))
+    return subckts
+
+
 def map_device_roles(subckts: Dict[str, int],
                      required: Tuple[str, ...] = _REQUIRED_ROLES_DEFAULT,
                      ) -> Tuple[Dict[str, str], List[str], List[str]]:
@@ -208,10 +262,15 @@ def map_corner_sections(sections: List[str]
     ONLY from sections that actually exist (never a fabricated corner)."""
     role_hit: Dict[str, str] = {}
     for sec in sections:
+        # `_`/non-alnum-delimited components, so a prefixed corner name like
+        # sg13g2's `mos_tt` / `mos_ss` / `mos_ff` maps to typ/slow/fast by its
+        # `tt`/`ss`/`ff` COMPONENT (not only a bare or leading token). Component
+        # equality (not substring) avoids false hits like `cutt` → `tt`.
+        comps = {c for c in re.split(r"[^a-z0-9]+", sec.lower()) if c}
         for role, toks in _SECTION_ROLE_TOKENS.items():
             if role in role_hit:
                 continue
-            if any(sec == t or sec.startswith(t) for t in toks):
+            if any(sec == t or sec.startswith(t) or t in comps for t in toks):
                 role_hit[role] = sec
     typ = role_hit.get("typ")
     if typ is None and sections:
@@ -278,10 +337,15 @@ def custom_family_context(res: Dict[str, Any],
             unread.append(lib)
             continue
         dev = parse_devices(txt)
-        union_subckts.update(dev["subckts"])
+        # Follow `.include`/`.lib <path> <section>` so a section-bearing corner
+        # lib self-reports the devices it pulls in transitively (the deck's
+        # `.lib <path> <section>` line loads exactly that closure). Degrades to
+        # the lib's OWN devices when includes are unreadable.
+        tsub = transitive_subckts(lib, txt, reader)
+        union_subckts.update(tsub)
         union_models.update(dev["models"])
         per_lib_sections[lib] = parse_sections(txt)
-        per_lib_subckts[lib] = dev["subckts"]
+        per_lib_subckts[lib] = tsub
 
     device_map, unresolved, notes = map_device_roles(union_subckts, required)
 
@@ -309,6 +373,21 @@ def custom_family_context(res: Dict[str, Any],
     primary = None
     if readable:
         primary = max(readable, key=_primary_rank)
+
+    # The emitted deck loads ONE lib: `.lib <primary> <section>`. The device
+    # subckts it instantiates must come from THAT lib's closure — otherwise a
+    # family shipping separate LV/HV corner libs can bind a device the loaded
+    # section never defines (ngspice `unknown subckt`). Re-derive device_map
+    # from the primary's own (transitive) devices; keep the union map only when
+    # the primary cannot cover a required role (honest fallback). A single-lib
+    # family (the synthetic fixtures + rung-1 staged libs) is unchanged: primary
+    # IS that lib, so its closure == the union.
+    if primary:
+        p_map, p_unres, p_notes = map_device_roles(
+            per_lib_subckts.get(primary, {}), required)
+        if not p_unres:
+            device_map, unresolved, notes = p_map, p_unres, p_notes
+
     sections = per_lib_sections.get(primary, []) if primary else []
     # union sections across libs is what's "available"; primary drives the deck.
     all_sections: List[str] = []
@@ -319,10 +398,6 @@ def custom_family_context(res: Dict[str, Any],
     typ, process = map_corner_sections(sections or all_sections)
 
     work_items: List[str] = []
-    if unread:
-        work_items.append(
-            f"NEEDS_NATIVE_TEMPLATE: {len(unread)} resolved model lib(s) not "
-            f"readable at emit time (paths only): {[Path(p).name for p in unread]}")
     if unresolved:
         found_roles = sorted(device_map)
         work_items.append(
@@ -340,12 +415,23 @@ def custom_family_context(res: Dict[str, Any],
         work_items.append(
             "NEEDS_NATIVE_TEMPLATE: no readable model lib among the resolved "
             "custom-PDK spice libs")
+    # Unread libs BLOCK only when they left the deck unresolved. When the
+    # required roles + corner section + primary ALL resolved from the READABLE
+    # libs, a few unreadable AUXILIARY libs (e.g. a non-CMOS HBT/ESD model file
+    # irrelevant to the nmos/pmos template — common when rung-2 lists EVERY
+    # installed lib, not a curated set) are informational, not a blocker.
+    unread_note = (
+        f"{len(unread)} model lib(s) not readable at emit time (paths only): "
+        f"{[Path(p).name for p in unread]}") if unread else ""
+    if unread and work_items:
+        work_items.append("NEEDS_NATIVE_TEMPLATE: " + unread_note)
 
     status = "OK" if (not work_items) else "NEEDS_NATIVE_TEMPLATE"
     disclosure = (
         f"custom PDK family '{family}' ({source}) — device map + corner "
         f"sections parsed from {len(readable)} resolved model lib(s); "
         f"devices={device_map}, sections={sections or all_sections}."
+        + (f" (note: {unread_note})" if unread_note else "")
         if status == "OK" else
         f"custom PDK family '{family}' ({source}) NOT natively emittable: "
         + " | ".join(work_items))
