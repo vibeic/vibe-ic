@@ -1022,7 +1022,8 @@ def resolve_spec(project, block, btype):
 
 
 def render_deck(btype, block, pdk, pdk_lib, corner, knob, val,
-                deck_overrides=None, temp_c=None, devices=None):
+                deck_overrides=None, temp_c=None, devices=None,
+                device_terminals=None):
     """Render T[btype] for one sweep point, then apply the L5 deck overrides
     (GAP-ANALOG-2) and a REAL per-corner temperature card (GAP-ANALOG-3).
 
@@ -1056,6 +1057,24 @@ def render_deck(btype, block, pdk, pdk_lib, corner, knob, val,
             fam = devices.get(role)
             if fam and fam != canon:
                 deck = deck.replace(canon, fam)
+        # A resolved foundry MOS subckt may carry EXTRA terminals beyond the
+        # template's 4 (d g s b) — e.g. a 5th p-substrate node `d g s b sub`.
+        # ngspice aborts "Too few parameters for subcircuit" unless the extra
+        # nodes are supplied. Inject (n-4) global-ground `0` ties (the substrate
+        # is the most-negative reference node) immediately before the device
+        # subckt name on every 4-node instantiation line. chip-AGNOSTIC: keyed
+        # on the RESOLVED terminal COUNT, not a device/vendor literal; a
+        # 4-terminal device is a NO-OP so the sky130 deck stays byte-identical.
+        if device_terminals:
+            for role, canon in _SKY.items():
+                fam = devices.get(role) or canon
+                n = device_terminals.get(role)
+                if not isinstance(n, int) or n <= 4:
+                    continue
+                extra = " ".join(["0"] * (n - 4))
+                deck = re.sub(
+                    rf"(?im)^(\s*x\w+(?:\s+\S+){{4}})\s+({re.escape(fam)})\b",
+                    rf"\1 {extra} \2", deck)
     ov = deck_overrides or {}
     applied = {}
     if "vref" in ov:
@@ -1166,7 +1185,8 @@ def _pdk_has_section(container, pdk_lib, section):
 
 def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
                      pdk_lib, knob, val, deck_overrides, subst_header, base_tt,
-                     process_corners=None, devices=None, typ_section="tt"):
+                     process_corners=None, devices=None, typ_section="tt",
+                     device_terminals=None):
     """Attempt a REAL ngspice sim at each PVT corner (real .lib section + real
     .temp) for the sized sweep point. Returns a real_sims dict for the corners
     that genuinely converged; a corner whose model section is absent or whose
@@ -1191,7 +1211,8 @@ def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
                 continue                  # already have the base typ@27C
             deck, _ = render_deck(btype, block, pdk, pdk_lib, proc, knob, val,
                                   deck_overrides=deck_overrides, temp_c=temp_c,
-                                  devices=devices)
+                                  devices=devices,
+                                  device_terminals=device_terminals)
             sp = sl_dir / f"pvt_{proc}_{tlbl}.sp"
             sp.write_text((subst_header or "") + deck)
             ok, meas, raw, _ss = _run_ngspice(
@@ -1367,6 +1388,7 @@ def run_block(project, block, container, pdk, topology_override):
     if ctx is None or ctx.source == "known_family":
         pdk_lib = PDK_LIB.get(pdk)
         devices = None
+        device_terminals = None
         typ_section = (ctx.typ_section if ctx else None) or "tt"
         grid_corners = None                        # → PVT_PROCESS (ss/tt/ff)
     else:
@@ -1388,6 +1410,7 @@ def run_block(project, block, container, pdk, topology_override):
         model_lib_host = _normalize_hspice_model_lib(Path(ctx.model_lib), bdir)
         pdk_lib = _container_path(container, host_root, model_lib_host)
         devices = ctx.device_map
+        device_terminals = ctx.device_terminals
         typ_section = ctx.typ_section
         grid_corners = ctx.process_corners
 
@@ -1425,7 +1448,8 @@ def run_block(project, block, container, pdk, topology_override):
         # sky130 tokens; custom family → its own section / device names).
         tb, _applied = render_deck(btype, block, pdk, pdk_lib, typ_section,
                                    knob, val, deck_overrides=deck_overrides,
-                                   temp_c=None, devices=devices)
+                                   temp_c=None, devices=devices,
+                                   device_terminals=device_terminals)
         # #496 (round-2): structured PDK-substitution disclosure goes FIRST so
         # it lands in the deck head (the gate scans the first 24 lines).
         tb = subst_header + tb
@@ -1501,7 +1525,8 @@ def run_block(project, block, container, pdk, topology_override):
         project, container, host_root, sl_dir, btype, block, pdk, pdk_lib,
         best.get("knob", "__noop__"), best.get("val", 0),
         deck_overrides, subst_header, base_tt,
-        process_corners=grid_corners, devices=devices, typ_section=typ_section)
+        process_corners=grid_corners, devices=devices, typ_section=typ_section,
+        device_terminals=device_terminals)
     pvt_grid, corners_executed = build_pvt_grid(
         base, base_log, real_sims, target.get("tol"),
         process_corners=grid_corners)
