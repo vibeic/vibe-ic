@@ -126,10 +126,61 @@ L_DOCS_V2_FLOW_EXT: Tuple[LDocSpec, ...] = (
              "secure boot. For security-sensitive ICs."),
 )
 
-# Full taxonomy v2 = v1 + protocol extensions + flow extensions = 24 entries
+# v2 EXTENSIONS (L24..L27) — all-chip-classes COMPLETENESS extensions.
+# Surfaced by the L1-L24 all-chip-classes survey: the L1-L23 set is complete
+# for digital / SoC / processor classes but MISSED three whole spec dimensions
+# that some chip classes require, plus a signoff/tapeout status layer.
+#   L24, L25 — BROADLY applicable (any fabricated chip goes through signoff and
+#              carries a reliability / mission-profile budget).
+#   L26, L27 — OPT-IN-ONLY (a dedicated MEMS class / a dedicated memory-module
+#              class respectively; neither exists yet). They are `not_applicable`
+#              for EVERY current ic_class + the unknown/fallback set, so a
+#              non-MEMS / non-memory-module chip never gets an empty L26/L27
+#              skeleton. See `_OPT_IN_ONLY_CODES` below.
+# full_name stems MUST match tools/phase1_engine/schema.py LAYER_FILE_NAMES.
+L_DOCS_V2_COMPLETENESS_EXT: Tuple[LDocSpec, ...] = (
+    LDocSpec("L24", "L24_SIGNOFF", "Signoff / Tapeout Checklist",
+             "DRC / LVS / STA / antenna / IR-drop sign-off status + the "
+             "tapeout gate checklist. Per-implementation, not protocol-level."),
+    LDocSpec("L25", "L25_RELIABILITY_MISSION_PROFILE",
+             "Reliability / Qualification & Mission-Profile",
+             "Qualification budgets + mission profile: temperature / lifetime "
+             "envelope, qual standard (JESD47, AEC-Q100/Q200), EM / NBTI / HCI "
+             "aging margins. Per-implementation, not protocol-level."),
+    LDocSpec("L26", "L26_MECHANICAL_TRANSDUCTION", "Mechanical / Transduction",
+             "MEMS & analog-physical dimension: movable structures "
+             "(membranes / cantilevers / springs), transduction principle, "
+             "package / mechanical stress. OPT-IN: dedicated MEMS class only."),
+    LDocSpec("L27", "L27_MEMORY_MODULE_SPD",
+             "Memory-Module Self-Describing Config",
+             "JEDEC SPD module-level metadata (EE1004 / TSE2004av / SPD5118), "
+             "distinct from the on-die register map. OPT-IN: dedicated JEDEC "
+             "memory-module class only."),
+)
+
+# Full taxonomy v2 = v1 + protocol extensions + flow extensions +
+# completeness extensions = 28 entries
 L_DOCS_V2: Tuple[LDocSpec, ...] = (
     L_DOCS_V1 + L_DOCS_V2_PROTOCOL_EXT + L_DOCS_V2_FLOW_EXT
+    + L_DOCS_V2_COMPLETENESS_EXT
 )
+
+
+# ---------------------------------------------------------------------------
+# OPT-IN-ONLY codes (L26/L27). These are NEVER in a default / unknown /
+# fallback "applicable" set — a class must EXPLICITLY list them applicable
+# (only a future dedicated MEMS / memory-module class would). This keeps a
+# non-MEMS / non-memory-module chip from emitting an empty L26/L27 skeleton.
+# ---------------------------------------------------------------------------
+_OPT_IN_ONLY_CODES: Set[str] = {"L26", "L27"}
+
+# Canonical N/A rationale for the opt-in-only codes, used as the fallback for
+# any ic_class that does not spell out its own rationale (e.g. the unknown /
+# unrecognised fallback path). chip-AGNOSTIC.
+_OPT_IN_NA_RATIONALE: Dict[str, str] = {
+    "L26": "No MEMS/mechanical transduction in this class",
+    "L27": "Not a JEDEC memory module (no SPD EEPROM)",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +218,7 @@ IC_CLASS_APPLICABILITY: Dict[str, Dict[str, List[str]]] = {
         "not_applicable": [
             "L4", "L5", "L7", "L11", "L13",
             "L20", "L21", "L23",
+            "L24", "L25", "L26", "L27",
         ],
         "rationale_not_applicable": {
             "L4": "Bus protocols expose channels, not memory-mapped registers",
@@ -177,6 +229,11 @@ IC_CLASS_APPLICABILITY: Dict[str, Dict[str, List[str]]] = {
             "L20": "DFT scan is per-implementation, not protocol-level",
             "L21": "Power intent is per-implementation, not protocol-level",
             "L23": "Security is per-implementation, not protocol-level",
+            "L24": "Signoff/tapeout is per-implementation, not protocol-level",
+            "L25": "Reliability/qualification is per-implementation, "
+                   "not protocol-level",
+            "L26": "No MEMS/mechanical transduction in this class",
+            "L27": "Not a JEDEC memory module (no SPD EEPROM)",
         },
     },
     "serial_peripheral_protocol": {
@@ -188,6 +245,7 @@ IC_CLASS_APPLICABILITY: Dict[str, Dict[str, List[str]]] = {
         "not_applicable": [
             "L5", "L11", "L13",
             "L20", "L21", "L23",
+            "L24", "L25", "L26", "L27",
         ],
         "rationale_not_applicable": {
             "L5": "No analog interface; pure digital serial protocol",
@@ -196,6 +254,11 @@ IC_CLASS_APPLICABILITY: Dict[str, Dict[str, List[str]]] = {
             "L20": "DFT scan is per-implementation, not protocol-level",
             "L21": "Power intent is per-implementation, not protocol-level",
             "L23": "Security is per-implementation, not protocol-level",
+            "L24": "Signoff/tapeout is per-implementation, not protocol-level",
+            "L25": "Reliability/qualification is per-implementation, "
+                   "not protocol-level",
+            "L26": "No MEMS/mechanical transduction in this class",
+            "L27": "Not a JEDEC memory module (no SPD EEPROM)",
         },
     },
     "cpu_core_isa": {
@@ -203,10 +266,12 @@ IC_CLASS_APPLICABILITY: Dict[str, Dict[str, List[str]]] = {
             "L1", "L2", "L6", "L8C", "L8T", "L9", "L10", "L12",
             "L14", "L15", "L16",
             "L19", "L20", "L22", "L23",
+            "L24", "L25",
         ],
         "not_applicable": [
             "L3", "L4", "L5", "L7", "L11", "L13",
             "L17", "L18", "L21",
+            "L26", "L27",
         ],
         "rationale_not_applicable": {
             "L3": "ISA opcodes go in L15 encoding tables, not L3 transactions",
@@ -218,6 +283,8 @@ IC_CLASS_APPLICABILITY: Dict[str, Dict[str, List[str]]] = {
             "L17": "ISA spec has no multi-channel external bus catalog",
             "L18": "Interconnect topology is system-level, not ISA-level",
             "L21": "Power intent is per-implementation, not ISA-level",
+            "L26": "No MEMS/mechanical transduction in this class",
+            "L27": "Not a JEDEC memory module (no SPD EEPROM)",
         },
     },
     "chip_otp_centric": {
@@ -226,10 +293,12 @@ IC_CLASS_APPLICABILITY: Dict[str, Dict[str, List[str]]] = {
             "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8C", "L8T",
             "L9", "L10", "L11", "L12", "L13",
             "L19", "L20", "L21", "L22",
+            "L24", "L25",
         ],
         "not_applicable": [
             "L14", "L15", "L16", "L17", "L18",
             "L23",
+            "L26", "L27",
         ],
         "rationale_not_applicable": {
             "L14": "Chip-level products don't usually carry protocol versioning",
@@ -238,6 +307,8 @@ IC_CLASS_APPLICABILITY: Dict[str, Dict[str, List[str]]] = {
             "L17": "No multi-channel external bus to catalog",
             "L18": "No interconnect topology at this level",
             "L23": "Security not in scope for this chip class",
+            "L26": "No MEMS/mechanical transduction in this class",
+            "L27": "Not a JEDEC memory module (no SPD EEPROM)",
         },
     },
     "memory_controller": {
@@ -246,10 +317,12 @@ IC_CLASS_APPLICABILITY: Dict[str, Dict[str, List[str]]] = {
             "L10", "L12",
             "L14", "L15", "L16", "L17", "L18",
             "L19", "L20", "L22",
+            "L24", "L25",
         ],
         "not_applicable": [
             "L4", "L5", "L11", "L13",
             "L21", "L23",
+            "L26", "L27",
         ],
         "rationale_not_applicable": {
             "L4": "DRAM-side register set goes in L15 encoding tables",
@@ -258,6 +331,8 @@ IC_CLASS_APPLICABILITY: Dict[str, Dict[str, List[str]]] = {
             "L13": "No lab calibration",
             "L21": "Power intent is system-level, not controller-level",
             "L23": "Security not in scope for raw memory controller",
+            "L26": "No MEMS/mechanical transduction in this class",
+            "L27": "Not a JEDEC memory module (no SPD EEPROM)",
         },
     },
     "analog_block": {
@@ -265,11 +340,13 @@ IC_CLASS_APPLICABILITY: Dict[str, Dict[str, List[str]]] = {
             "L1", "L2", "L5", "L6", "L8C", "L8T", "L9", "L10", "L11",
             "L12", "L13",
             "L19",
+            "L24", "L25",
         ],
         "not_applicable": [
             "L3", "L4", "L7",
             "L14", "L15", "L16", "L17", "L18",
             "L20", "L21", "L22", "L23",
+            "L26", "L27",
         ],
         "rationale_not_applicable": {
             "L3": "No command protocol; this is a continuous-time block",
@@ -284,6 +361,8 @@ IC_CLASS_APPLICABILITY: Dict[str, Dict[str, List[str]]] = {
             "L21": "Power intent is system-level, not analog-block-level",
             "L22": "Verification is SPICE/PVT (lives in L13), not vplan",
             "L23": "Security not in scope for raw analog block",
+            "L26": "No MEMS/mechanical transduction in this class",
+            "L27": "Not a JEDEC memory module (no SPD EEPROM)",
         },
     },
     "soc_multi_block": {
@@ -297,10 +376,12 @@ IC_CLASS_APPLICABILITY: Dict[str, Dict[str, List[str]]] = {
             "L1", "L2", "L4", "L7", "L9",
             "L18",
             "L19", "L20", "L21", "L22", "L23",
+            "L24", "L25",
         ],
         "not_applicable": [
             "L3", "L5", "L6", "L8C", "L8T", "L10", "L11", "L12", "L13",
             "L14", "L15", "L16", "L17",
+            "L26", "L27",
         ],
         "rationale_not_applicable": {
             # All these are PER-SUB-BLOCK concerns, not top-level SoC concerns.
@@ -317,14 +398,18 @@ IC_CLASS_APPLICABILITY: Dict[str, Dict[str, List[str]]] = {
             "L15": "Per-sub-block (per-block encoding)",
             "L16": "Per-sub-block (per-protocol compliance)",
             "L17": "Per-sub-block (per-bus channel catalog)",
+            "L26": "No MEMS/mechanical transduction in this class",
+            "L27": "Not a JEDEC memory module (no SPD EEPROM)",
         },
     },
 }
 
 
-# Default fallback when ic_class is unknown — emit ALL L1..L23 (legacy
-# behavior was L1..L13). The runner can choose to be conservative here
-# and emit L14..L23 as N/A-with-rationale until ic_class is detected.
+# Default fallback when ic_class is unknown — emit ALL codes EXCEPT the
+# opt-in-only completeness layers L26/L27 (legacy behavior was L1..L13, then
+# L1..L23). L26/L27 stay N/A-with-rationale until a dedicated MEMS / memory-
+# module class explicitly opts in. The runner can choose to be conservative
+# here and emit L14..L25 as N/A-with-rationale until ic_class is detected.
 DEFAULT_IC_CLASS = "unknown"
 
 
@@ -352,31 +437,45 @@ def l_doc_spec(code_or_name: str) -> LDocSpec:
 def applicable_l_docs(ic_class: str) -> Set[str]:
     """Return the set of L-doc codes that apply to the given ic_class.
 
-    Unknown ic_class → returns all codes (legacy-compatible behavior).
+    Unknown ic_class → returns all codes EXCEPT the opt-in-only codes
+    (L26/L27). Legacy behaviour returned literally every code, but the
+    opt-in-only completeness layers (MEMS / memory-module SPD) must NEVER
+    appear in a default / fallback applicable set — otherwise a non-MEMS /
+    non-memory-module chip would emit an empty L26/L27 skeleton. A class
+    must EXPLICITLY list an opt-in code applicable for it to apply.
     """
     entry = IC_CLASS_APPLICABILITY.get(ic_class)
     if entry is None:
-        return set(all_l_doc_codes())
+        return set(all_l_doc_codes()) - _OPT_IN_ONLY_CODES
     return set(entry["applicable"])
 
 
 def not_applicable_l_docs(ic_class: str) -> Set[str]:
-    """Return the set of L-doc codes that DO NOT apply to the ic_class."""
+    """Return the set of L-doc codes that DO NOT apply to the ic_class.
+
+    Unknown ic_class → returns the opt-in-only codes (L26/L27). They are the
+    only codes NOT in the unknown/fallback applicable set, so they resolve to
+    not-applicable (with a canonical N/A rationale) rather than being silently
+    dropped by a post-processor that keys on applicable XOR not-applicable.
+    """
     entry = IC_CLASS_APPLICABILITY.get(ic_class)
     if entry is None:
-        return set()
+        return set(_OPT_IN_ONLY_CODES)
     return set(entry["not_applicable"])
 
 
 def is_applicable(ic_class: str, l_doc: str) -> bool:
     """Is `l_doc` (code or full name) applicable to `ic_class`?
 
-    Unknown ic_class → True (legacy-compatible — emit everything).
+    Unknown ic_class → True for every code EXCEPT the opt-in-only codes
+    (L26/L27), which are False unless a class explicitly lists them applicable
+    (legacy-compatible emit-everything, minus the opt-in-only completeness
+    layers so they never become an empty skeleton on a generic chip).
     Unknown l_doc → raises KeyError so callers don't silently typo.
     """
     spec = l_doc_spec(l_doc)
     if ic_class not in IC_CLASS_APPLICABILITY:
-        return True
+        return spec.code not in _OPT_IN_ONLY_CODES
     return spec.code in IC_CLASS_APPLICABILITY[ic_class]["applicable"]
 
 
@@ -389,7 +488,14 @@ def na_rationale(ic_class: str, l_doc: str) -> str:
     entry = IC_CLASS_APPLICABILITY.get(ic_class, {})
     return entry.get("rationale_not_applicable", {}).get(
         spec.code,
-        f"L-doc {spec.code} is marked not-applicable for ic_class={ic_class}",
+        # Opt-in-only codes carry a canonical rationale even for an
+        # unrecognised / unknown ic_class (the fallback path where the
+        # class has no rationale_not_applicable map of its own).
+        _OPT_IN_NA_RATIONALE.get(
+            spec.code,
+            f"L-doc {spec.code} is marked not-applicable for "
+            f"ic_class={ic_class}",
+        ),
     )
 
 
