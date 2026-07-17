@@ -37,7 +37,7 @@ Append to `plugins/vibe-ic/programs/ic_class_registry.json`:
 
 ## chip-AGNOSTIC requirement
 
-Your generator MUST emit RTL parameterised by L1-L23 docs only. NO references to specific vendor PDFs / xlsx columns / pin numbers in the generator code. Encode chip-specific values in the L docs themselves.
+Your generator MUST emit RTL parameterised by L1-L27 docs only. NO references to specific vendor PDFs / xlsx columns / pin numbers in the generator code. Encode chip-specific values in the L docs themselves.
 
 ## Testing
 

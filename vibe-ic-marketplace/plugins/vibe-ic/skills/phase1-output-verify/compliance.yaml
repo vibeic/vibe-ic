@@ -3,7 +3,7 @@ testability: structured
 
 # Wave 82 (v1.6.2) — generated to satisfy
 # test_tools_and_integration::test_every_skill_has_compliance_yaml.
-# Phase 1 (Documents → L1-L23) output verification spot-check.
+# Phase 1 (Documents → L1-L27) output verification spot-check.
 skill: phase1-output-verify
 
 requirements:

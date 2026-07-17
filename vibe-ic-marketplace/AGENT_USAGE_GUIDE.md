@@ -73,7 +73,7 @@ Each role's full charter lives in `plugins/vibe-ic/agents/<role>.md`.
 | User phrase | Canonical task | Required entry point |
 |---|---|---|
 | "run phase 2+3", "synth → GDS", "make it taped out", "RTL to silicon", "run the flow" | **Phase 2+3 canonical flow** | Skill `flow-orchestrate` |
-| "generate L1-L23 from this datasheet", "phase 1" | Phase 1 document stack | Skill `datasheet-gen` + L2-L9 skills |
+| "generate L1-L27 from this datasheet", "phase 1" | Phase 1 document stack | Skill `datasheet-gen` + L2-L9 skills |
 | "write a testbench for X" | Single-skill invocation | Skill `testbench-gen` |
 | "review this RTL" | Single-skill invocation | Skill `rtl-review` |
 
