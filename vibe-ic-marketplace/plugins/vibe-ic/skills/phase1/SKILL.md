@@ -1,6 +1,6 @@
 ---
 name: phase1
-description: Phase 1 = the **prompt / dialogue entry point** to the Vibe-IC platform. Takes natural language (Chinese or English), runs the IC Expert Agent dialogue (it faces the user in a plain-language register and owns silicon depth), produces both (a) machine-readable L1-L23 JSON layer docs that feed Phase 2 directly AND (b) human-readable Markdown views of the same content for stakeholder review. Skips Phase 1 entirely — the L1-L23 JSON is the universal handoff format and Phase 1 emits it directly. Triggers when the user says "start a new IC design", "run Phase 1", "design a chip in natural language", provides only a prompt or wants AI to author the spec from scratch.
+description: Phase 1 = the **prompt / dialogue entry point** to the Vibe-IC platform. Takes natural language (Chinese or English), runs the IC Expert Agent dialogue (it faces the user in a plain-language register and owns silicon depth), produces both (a) machine-readable L1-L27 JSON layer docs that feed Phase 2 directly AND (b) human-readable Markdown views of the same content for stakeholder review. Skips Phase 1 entirely — the L1-L27 JSON is the universal handoff format and Phase 1 emits it directly. Triggers when the user says "start a new IC design", "run Phase 1", "design a chip in natural language", provides only a prompt or wants AI to author the spec from scratch.
 ---
 
 # Phase 1 — prompt / dialogue entry point
@@ -9,13 +9,13 @@ This is **one of two entry points** to the Vibe-IC platform. See "Two
 entry points" below for the complete picture.
 
 ```
-   Phase 1 (this skill):  Prompt / Dialogue ──► L1-L23 JSON     ──┐
+   Phase 1 (this skill):  Prompt / Dialogue ──► L1-L27 JSON     ──┐
                                               + Human Readable .md │
                                                                    ▼
                                                             Phase 2 → Phase 3
 ```
 
-Phase 1 emits the L1-L23 JSON directly — **Phase 1 is NOT in this
+Phase 1 emits the L1-L27 JSON directly — **Phase 1 is NOT in this
 path**. The JSON files are the universal handoff format consumed by
 Phase 2. The Markdown views are for human review only and have no
 load-bearing downstream consumer.
@@ -27,7 +27,7 @@ load-bearing downstream consumer.
 | **A. Prompt / Dialogue** | this `phase1` skill (`+ spec-review` for final confirm) | User has only an idea, wants AI to author the spec via dialogue |
 | **B. Existing Design Documents** | Phase 1's 17 doc-gen skills (`datasheet-gen`, `frs-gen`, `cmd-protocol-gen`, `regmap-gen`, `adi-spec-gen`, `control-logic-gen`, `test-debug-gen`, `timing-waveform-gen`, `rtl-constants-gen`, `integration-spec-gen`, `test-cases-gen`, `calibration-gen`, `behavioral-sequences-gen`, `lab-calibration-gen`, `doc-consistency-check`, `schematic-gen`, `otp-content-gen`) | User already has vendor PDFs / hand-authored markdown spec, wants per-layer extraction |
 
-Both entry points converge at L1-L23 JSON, then enter Phase 2 → Phase 3.
+Both entry points converge at L1-L27 JSON, then enter Phase 2 → Phase 3.
 
 ## What Phase 1 (this skill) does
 
@@ -212,7 +212,7 @@ calling `tools/phase1_engine/cli.py` internally:
 4. IC Expert Agent asks the user about each gap in its plain-language register (using the Q-bank, K2).
 5. Unanswered gaps → IC Expert fills from K3 / class_reference / retrieved
    neighbour with `source=defaulted` or `source=retrieved`.
-6. `render` emits the **14 layer JSONs** — 10 core (L1-L23 + L8R) plus
+6. `render` emits the **14 layer JSONs** — 10 core (L1-L9 + L8R) plus
    4 extension (L10-L13). The extension layers are skipped silently when
    no facts under their prefix exist (e.g. an IC with no L12 sequences
    simply doesn't get an `L12_BEHAVIORAL_SEQUENCES.json`).
@@ -289,7 +289,7 @@ function is subsumed by this `phase1` skill.
 
 The 10 v0.51 doc-gen skills (`datasheet-gen` through `integration-spec-gen`)
 were briefly archived in v0.58 but **restored to active in v0.60** as
-the Phase 1 Entry B path (existing-Design-Documents → L1-L23). They
+the Phase 1 Entry B path (existing-Design-Documents → L1-L27). They
 were never legacy in spirit — only in v0.58 placement.
 
 ## Compliance gate (mandatory)

@@ -45,7 +45,7 @@ CONSULT the source-of-truth — do NOT guess the flow or the routing:
     truth; `flow_compliance_check.py` enforces it — never claim PASS without exit 0).
   • `benchmark/CAPTURE_ROUTING.json` — step → program → skill routing.
 
-Phases: Phase 1 (NL/docs → L1-L23 JSON, IC-Expert dialogue) → Phase 2 (RTL gen →
+Phases: Phase 1 (NL/docs → L1-L27 JSON, IC-Expert dialogue) → Phase 2 (RTL gen →
 lint → synth → spec-conformance → audit) → Phase 3 (PnR → CTS → DRC/LVS/STA/IR-drop)
 [+ Analog A1-A9, Mixed-signal M1-M4]. Enter through Phase 1 — it is the one canonical
 front door.

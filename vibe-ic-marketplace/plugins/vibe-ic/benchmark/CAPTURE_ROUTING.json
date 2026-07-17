@@ -2,7 +2,7 @@
   "_comment": "Maps each Vibe-IC flow step to the right Bucket-A program file + Bucket-B skill file. Used by enhancement_emit.py to route a captured recovery to the correct target. Step IDs match the canonical flow naming.",
   "steps": {
     "phase1.ingest_render": {
-      "description": "Phase 1: NL prompt / docs → L1-L23 JSON",
+      "description": "Phase 1: NL prompt / docs → L1-L27 JSON",
       "bucket_A_program": "programs/phase1_one_shot_runner.py",
       "bucket_A_related": ["tools/phase1_engine/ingest.py", "tools/phase1_engine/cli.py"],
       "bucket_B_skill_file": "agents/ic-expert-agent.md",

@@ -1,6 +1,6 @@
 ---
 name: vibe-ic-phase2
-description: Run Phase 2 (L1-L23 → RTL → SOF → <half-duplex-tester> byte[6]=0xF2) via design_one_shot_runner. AI-monitored + close-loop ECO.
+description: Run Phase 2 (L1-L27 → RTL → SOF → <half-duplex-tester> byte[6]=0xF2) via design_one_shot_runner. AI-monitored + close-loop ECO.
 argument-hint: <project-dir> [--top-name chip_top] [--skip-hardware] [--max-eco 3]
 ---
 > **Missing arg?** When `$ARGUMENTS` is empty, prompt the user first:
