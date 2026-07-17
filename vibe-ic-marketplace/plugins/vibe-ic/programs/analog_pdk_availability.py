@@ -91,6 +91,38 @@ def _docker_lister(container: str) -> Callable[[str], List[str]]:
     return L
 
 
+# ── rung-2 model-lib discovery ─────────────────────────────────────────────
+# The corner-sweep deck-context resolver (analog_pdk_deck_context) needs the
+# actual ngspice model-lib FILES of an installed PDK to parse device roles +
+# corner sections. Rung 1 (project-staged) populates `spice_libs` by scanning
+# input/pdk/**; rung 2 (container-installed, e.g. ihp-sg13g2) previously left
+# `spice_libs` UNSET, so custom_family_context had nothing to parse and every
+# installed non-open family dead-ended at NEEDS_NATIVE_TEMPLATE — the whole
+# reason a native sg13g2 corner sweep never ran. This enumerates the ngspice
+# model libs the installed PDK ships so the resolver can parse them.
+_MODEL_LIB_EXTS = (".lib", ".spice", ".scs", ".mod")
+
+
+def _model_lib_candidates(lister: Callable[[str], List[str]],
+                          ngspice_dir: Optional[str]) -> List[str]:
+    """Enumerate the ngspice model-lib files a rung-2 installed PDK ships.
+
+    Best-effort + chip-AGNOSTIC: scans `<ngspice_dir>` and `<ngspice_dir>/models`
+    for model-lib files (`.lib`/`.spice`/`.scs`/`.mod`). Returns sorted, de-duped
+    container-absolute paths (possibly `[]` — then the caller keeps the honest
+    empty `spice_libs` and the deck resolver still fails NEEDS_NATIVE_TEMPLATE).
+    No family/SKU literal — pure extension + directory-layout scan."""
+    if not ngspice_dir:
+        return []
+    libs: List[str] = []
+    for sub in ("", "/models"):
+        d = f"{ngspice_dir.rstrip('/')}{sub}"
+        for name in (lister(d) or []):
+            if name.lower().endswith(_MODEL_LIB_EXTS):
+                libs.append(f"{d}/{name}")
+    return sorted(dict.fromkeys(libs))
+
+
 # ── family matching ──────────────────────────────────────────────────────
 
 def _norm(s: str) -> str:
@@ -139,6 +171,38 @@ def _match_installed(target: str, installed: List[str]) -> Optional[str]:
 
 # ── rung 1: project-staged custom PDK (the NDA commercial-node case) ────────
 
+def _is_spice_model_lib(path: str) -> bool:
+    """True when `path` is an actual SPICE/device model lib the corner sweep can
+    `.lib`/`.include`, vs a HARDMACRO artefact that shares the `.lib` extension.
+
+    The staged-PDK `spice_models` axis (shared with pdk_analog_completeness_check)
+    also globs `hardmacro(s)/**/*.lef` and `**/*.lib` for macro-completeness — but
+    a LEF layout abstract or a Liberty timing `.lib` is NOT a simulatable model
+    lib. Treating a generated `phase3/analog/hardmacro/<blk>.lib` (Liberty) as a
+    rung-1 staged PDK made resolve_pdk return a device-less custom family, which
+    SHADOWED the real installed (rung-2) PDK once a sibling block's A8 hardmacro
+    existed → the block's A4 corner sweep dead-ended at NEEDS_NATIVE_TEMPLATE.
+    Content-probed, chip-AGNOSTIC (SPICE vs Liberty syntax, no vendor/SKU token).
+    Fail-open: an unreadable `.lib` is kept (prior behaviour)."""
+    p = Path(path)
+    ext = p.suffix.lower()
+    if ext == ".lef":
+        return False                       # LEF is never a SPICE model lib
+    if ext != ".lib":
+        return True                        # .scs/.cir/.sp/.va/.osdi → SPICE
+    try:
+        head = p.read_text(errors="replace")[:4000]
+    except OSError:
+        return True
+    low = head.lower()
+    if ".model" in low or ".subckt" in low:
+        return True                        # unambiguous SPICE model lib
+    if re.search(r"(?im)^\s*library\s*\(", head) or re.search(
+            r"(?im)^\s*cell\s*\(", head):
+        return False                       # Liberty timing lib → not SPICE
+    return True                            # ambiguous → keep (fail-open)
+
+
 def _resolve_project_custom_pdk(project: Path,
                                 target: Optional[str]) -> Dict[str, Any]:
     """Rung 1 of the ladder — a project that STAGES its own analog PDK assets
@@ -175,6 +239,9 @@ def _resolve_project_custom_pdk(project: Path,
             for h in sorted(project.glob(pat)):
                 if h.is_file():
                     spice_libs.append(str(h))
+    # Drop hardmacro LEF/Liberty artefacts the shared `spice_models` axis also
+    # globs — only real SPICE/device model libs are simulatable rung-1 assets.
+    spice_libs = [s for s in spice_libs if _is_spice_model_lib(s)]
     # MC-SECTION SLOT (ORGANIC #142 addendum): a Monte-Carlo run must load the
     # PDK's STATISTICAL / MISMATCH model libs (mc_global / mismatch / statistical
     # variants), NOT the deterministic corner overlaid with an MC switch (the
@@ -310,6 +377,11 @@ def resolve_pdk(target: Optional[str], project=None,
     tech_entries = lister(f"{pdk_root}/libs.tech")
     tech_present = {k: (k in tech_entries) for k in _TECH_KEYS}
     available = bool(tech_present.get("ngspice"))
+    ngspice_dir = f"{pdk_root}/libs.tech/ngspice" if tech_present["ngspice"] else None
+    # Wire the installed PDK's ngspice model libs so the deck-context resolver
+    # can PARSE them (device roles + corner sections) — the missing piece that
+    # kept every rung-2 native family at NEEDS_NATIVE_TEMPLATE.
+    spice_libs = _model_lib_candidates(lister, ngspice_dir) if available else []
     res = {
         "available": available,
         "probe_ok": probe_ok,
@@ -321,7 +393,9 @@ def resolve_pdk(target: Optional[str], project=None,
         "pdk_root": pdk_root,
         "installed": installed,
         "tech_present": tech_present,
-        "ngspice_dir": f"{pdk_root}/libs.tech/ngspice" if tech_present["ngspice"] else None,
+        "spice_libs": spice_libs,
+        "spice_lib": spice_libs[0] if spice_libs else None,
+        "ngspice_dir": ngspice_dir,
         "magic_dir": f"{pdk_root}/libs.tech/magic" if tech_present["magic"] else None,
         "klayout_dir": f"{pdk_root}/libs.tech/klayout" if tech_present["klayout"] else None,
         "netgen_dir": f"{pdk_root}/libs.tech/netgen" if tech_present["netgen"] else None,
