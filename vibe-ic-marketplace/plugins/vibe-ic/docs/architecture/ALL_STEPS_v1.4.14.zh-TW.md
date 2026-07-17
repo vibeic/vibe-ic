@@ -34,8 +34,8 @@
 |---|---|---|---|---|---|---|
 | D1 | 匯入與文字萃取 → L1–L13 | 把 prompt 或既有文件收進 `input_doc/` 並確定性萃取核心設計層。 | 使用者文件 / prompt | `L1`–`L13` JSON | 確定性萃取器 | `phase1_all_l_docs_present_check`<br>skills：`datasheet-gen`・`frs-gen`・`cmd-protocol-gen`・`regmap-gen`・`adi-spec-gen`・`control-logic-gen`・`test-debug-gen`・`timing-waveform-gen`・`rtl-constants-gen`・`integration-spec-gen`・`test-cases-gen`・`calibration-gen`・`behavioral-sequences-gen`・`lab-calibration-gen`・`otp-content-gen`・`doc-consistency-check`・`schematic-gen`・`phase1` |
 | D2 | 產生 L1–L13 核心設計層文件 | 從文件確定性地萃取出核心設計層（datasheet、規格、暫存器圖等）。 | D1 純文字 | `L1_DATASHEET` … `L13` | 確定性萃取器 | — |
-| D3 | 產生 L14–L23 文件 | 補上協定、時序、power intent（L21）、skeleton 等延伸層。 | L1–L13 | `L14`–`L23` JSON | overlay 萃取器 | — |
-| D4 | 協定類別合成 | 偵測 IC 屬於哪一種協定類別（81 類）並合成對應協定事實。 | 輸入文件全文 | `ic_class` + 協定事實 | is_<proto> + <proto>_synth | — |
+| D3 | 產生 L14–L27 文件 | 補上協定、時序、power intent（L21）、skeleton 等延伸層。 | L1–L13 | `L14`–`L27` JSON | overlay 萃取器 | — |
+| D4 | 協定類別合成 | 偵測 IC 屬於哪一種協定類別（86 類）並合成對應協定事實。 | 輸入文件全文 | `ic_class` + 協定事實 | is_<proto> + <proto>_synth | — |
 | D5 | Coverage 報告 | 核對輸入文件的內容是否完整落入 L 文件。 | 輸入文件 + L 文件 | parity / coverage 報告 | parity 報告器 | — |
 
 ### 架構探索前端（選用，匯入 Step 1）
@@ -56,7 +56,7 @@
 
 | # | 步驟 | 做什麼 | 輸入 | 輸出 | 工具 (EDA) | Programs / Skills |
 |---|---|---|---|---|---|---|
-| 1 | Spec-to-RTL | 依 L 系列設計文件撰寫可合成的 RTL（SoC/CPU 類可走 IP-catalog 重用＋膠合層路徑，例如 Caravel 類 harness 平台）。 | L1–L23 文件 | `rtl/*.v(.sv)`・coverage 報告 | —（AI 依 L 文件撰寫；SoC 類走 IP-catalog） | skills：`spec-to-rtl` |
+| 1 | Spec-to-RTL | 依 L 系列設計文件撰寫可合成的 RTL（SoC/CPU 類可走 IP-catalog 重用＋膠合層路徑，例如 Caravel 類 harness 平台）。 | L1–L27 文件 | `rtl/*.v(.sv)`・coverage 報告 | —（AI 依 L 文件撰寫；SoC 類走 IP-catalog） | skills：`spec-to-rtl` |
 | 2 | 🔁 Lint | 靜態檢查 RTL 風格與常見錯誤，可自動修復的先修。 | RTL | lint 報告（hygiene / ROM-init） | Verilator lint | `rtl_hygiene_lint`・`rom_init_lint`・`rtl_bug_report_schema_check`・`internal_vs_external_timing_check`…<br>skills：`rtl-review` |
 | 3 | 🔁 CDC / RDC check | 檢查跨時脈域 / 跨重置域的訊號交握是否安全。 | RTL | CDC/RDC 報告（crossing / async / reset-dep） | 自研 CDC/RDC 掃描 | `cdc_crossing_check`・`cdc_async_input_check`・`reset_dependency_check`<br>skills：`cdc-check`・`rdc-check` |
 | 4 | 🔁 Simulation | 產生 per-IC oracle testbench 跑功能模擬（golden 比對）並量測覆蓋率；L21 申告 power domain 時，TB 建議涵蓋 power-state 切換情境（開源無 UPF-aware sim，結構驗證歸 M2）。 | RTL・L10 測項 | sim log・results.xml・coverage 報告 | iverilog/vvp・Verilator coverage<br>`eda_simulate` | `testbench_gen`・`coverage_closure`・`l10_tb_conformance_check`・`l12_tb_coverage_check`…<br>skills：`testbench-gen` |
