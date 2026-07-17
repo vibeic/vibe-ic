@@ -9451,6 +9451,33 @@ def _svrfdrc_bin_container(container: str) -> Optional[str]:
         return None
 
 
+_SVRFDRC_THREADS_CACHE: Dict[str, bool] = {}
+
+
+def _svrfdrc_supports_threads(container: str, bin_c: str) -> bool:
+    """True iff the container's svrfdrc buddy accepts ``--threads`` (the vibeic
+    rule-check parallelism, image >= 0.2.19). Probed once per (container, bin) via
+    ``svrfdrc --help`` and cached. On an older image without the flag this returns
+    False so the caller omits it (graceful degradation to the serial path).
+
+    Passing ``--threads=N`` is SAFE for the gate: the svrfdrc report is
+    BYTE-IDENTICAL for every thread count (parallelises only the independent
+    measurement-rule CHECK phase; DENSITY/connectivity/net rules + the serial
+    derivation build are unchanged), so ``_parse_svrf_tally`` /
+    ``_classify_svrf_fails`` are unaffected — only wall-clock changes."""
+    key = f"{container}:{bin_c}"
+    if key in _SVRFDRC_THREADS_CACHE:
+        return _SVRFDRC_THREADS_CACHE[key]
+    ok = False
+    try:
+        rc, out, err = _docker_exec(container, f"{bin_c} --help", timeout=30)
+        ok = "--threads" in ((out or "") + (err or ""))
+    except Exception:
+        ok = False
+    _SVRFDRC_THREADS_CACHE[key] = ok
+    return ok
+
+
 def _parse_svrf_tally(rpt: Path) -> Tuple[int, int, int, List[str]]:
     """Parse a run_svrf_drc.py report → (fails, passes, skips, failing_rules).
     Counts the per-rule result lines (`FAIL <rule> …` / `PASS …` / `SKIP …`),
@@ -9615,6 +9642,16 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
     # svrfdrc <deck> <layout> <report> [--cell=TOP] — byte-identical report to the
     # retired run_svrf_drc.py, so _parse_svrf_tally / _classify_svrf_fails are unchanged.
     cmd = f"{bin_c} {deck_c} {gds_c} {rpt_c} --cell={top}"
+    # v1.4.57 — parallelise the measurement-rule CHECK phase when the image's
+    # svrfdrc supports it (>= 0.2.19). The report is BYTE-IDENTICAL for every
+    # thread count (proven byte-for-byte, threads=1 vs 8), so this changes only
+    # wall-clock and NEVER the verdict — the tally/classify parsers are
+    # unaffected. Probe-gated: an older image (no --threads) degrades gracefully
+    # to the serial path. NOTE: the serial derived-layer DERIVATION phase still
+    # dominates large/dense designs, so this BOUNDS (does not eliminate) the perf
+    # ceiling below — derivation-phase parallelism is the follow-on.
+    if _svrfdrc_supports_threads(container, bin_c):
+        cmd += f" --threads={_openroad_thread_count()}"
     # v1.4.38 — bound the DRC step at a WALL-CLOCK budget (the stall watchdog never
     # kills a 100%-CPU tool; the default ceiling is ~24h). A non-completing DRC is
     # NOT a proven violation → SKIPPED-CONDITION (disclosed perf ceiling), like the
