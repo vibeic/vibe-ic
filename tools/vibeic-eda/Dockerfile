@@ -21,7 +21,8 @@ FROM openroad/ubuntu24.04-dev:latest AS openroad-builder
 # Pinned to the F-A2 commit (tapcell -bound_to_placement) shipped in vibeic-eda:0.2.7,
 # a fast-forward over the F-A1 repair_antennas -reroute commit (0.2.6).
 # HEAD of branch vibeic/post-route-detailed-routing-repair as of 2026-07-09.
-ARG OPENROAD_REF=3efb695851045c200b95d9bf243884e3810656a6
+# 2026-07-17: bump to 6042a8f3 — odb dbInsertBuffer skip supply pins in buffer-master validation.
+ARG OPENROAD_REF=6042a8f3fcc68f6a1c58d06ea219b8f64d5695d6
 RUN git clone https://github.com/vibeic/OpenROAD.git /src \
  && cd /src && git checkout ${OPENROAD_REF} \
  && git submodule update --init --recursive --depth 1 \
@@ -100,7 +101,7 @@ RUN git clone https://github.com/vibeic/iverilog.git /iverilog \
 #   parity vs the old run_svrf_drc.py proven on a real commercial foundry deck.
 # ---------------------------------------------------------------------------
 FROM ubuntu:24.04 AS klayout-builder
-ARG KLAYOUT_REF=e3d26a3342ecaf3468d422e50f806ebff48cbbb0  # pinned; branch vibeic/svrf-native-drc
+ARG KLAYOUT_REF=0b36462a59325f81defb65d745b417bdfdc3ad0c  # pinned; branch vibeic/svrf-native-drc (2026-07-17: svrfdrc --threads rule-check parallelism + opt-in --cell-aware-feol exemption)
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       build-essential git python3-dev zlib1g-dev libexpat1-dev libcurl4-openssl-dev libpng-dev \
       qtbase5-dev qttools5-dev-tools ca-certificates \
