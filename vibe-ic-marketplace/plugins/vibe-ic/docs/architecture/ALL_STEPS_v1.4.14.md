@@ -39,8 +39,8 @@ Flow: user free text → IC Expert Agent → finalised L-series documents.
 |---|---|---|---|---|---|---|
 | D1 | Doc extraction → L1–L13 | Ingest prompt/docs into `input_doc/` and deterministically extract the core design layers. | user docs / prompt | `L1`–`L13` JSON | deterministic extractors | `phase1_all_l_docs_present_check`<br>skills: `phase1` |
 | D2 | Core design-layer docs L1–L13 | Deterministic extraction of datasheet, FRS, register map, etc. | D1 plain text | `L1_DATASHEET` … `L13` | deterministic extractors | — |
-| D3 | Extended docs L14–L23 | Protocol, timing, power intent (L21), skeletons. | L1–L13 | `L14`–`L23` JSON | overlay extractor | — |
-| D4 | Protocol-class synthesis | Detect the IC's protocol class (81 classes) and synthesise class facts. | full input text | `ic_class` + protocol facts | is_<proto> + <proto>_synth | — |
+| D3 | Extended docs L14–L27 | Protocol, timing, power intent (L21), skeletons. | L1–L13 | `L14`–`L27` JSON | overlay extractor | — |
+| D4 | Protocol-class synthesis | Detect the IC's protocol class (86 classes) and synthesise class facts. | full input text | `ic_class` + protocol facts | is_<proto> + <proto>_synth | — |
 | D5 | Coverage report | Verify the input documents landed completely in the L docs. | input docs + L docs | parity / coverage report | parity reporter | — |
 
 ### Architecture-exploration front-ends (optional, feed Step 1)
@@ -61,7 +61,7 @@ Front-end precedence (**artifact-driven**): existing RTL > C/SystemC model (hls-
 
 | # | Step | What it does | Input | Output | Tools (EDA) | Programs / Skills |
 |---|---|---|---|---|---|---|
-| 1 | Spec-to-RTL | Author synthesizable RTL from the L-series docs (SoC/CPU classes may take the IP-catalog reuse + glue path, e.g. Caravel-class harness platforms). | L1–L23 docs | `rtl/*.v(.sv)` · coverage report | — (AI-authored from L docs; SoC via IP-catalog) | skills: `spec-to-rtl` |
+| 1 | Spec-to-RTL | Author synthesizable RTL from the L-series docs (SoC/CPU classes may take the IP-catalog reuse + glue path, e.g. Caravel-class harness platforms). | L1–L27 docs | `rtl/*.v(.sv)` · coverage report | — (AI-authored from L docs; SoC via IP-catalog) | skills: `spec-to-rtl` |
 | 2 | 🔁 Lint (RTL hygiene) | Static RTL style/bug checks; auto-fixable issues fixed first. | RTL | lint reports (hygiene / ROM-init) | Verilator lint | `rtl_hygiene_lint`・`rom_init_lint`・`rtl_bug_report_schema_check`・`internal_vs_external_timing_check`…<br>skills: `rtl-review` |
 | 3 | 🔁 CDC / RDC check | Clock-domain / reset-domain crossing safety. | RTL | CDC/RDC reports (crossing / async / reset-dep) | in-house CDC/RDC scan | `cdc_crossing_check`・`cdc_async_input_check`・`reset_dependency_check` |
 | 4 | 🔁 Simulation (testbench + coverage) | Per-IC oracle testbench functional simulation (golden compares) + coverage measurement; when L21 declares power domains, the TB should cover power-state transition scenarios (no open-source UPF-aware sim — structural verification stays with M2). | RTL · L10 test cases | sim logs · results.xml · coverage report | iverilog/vvp · Verilator coverage<br>`eda_simulate` | `testbench_gen`・`coverage_closure`・`l10_tb_conformance_check`・`l12_tb_coverage_check`…<br>skills: `testbench-gen` |
