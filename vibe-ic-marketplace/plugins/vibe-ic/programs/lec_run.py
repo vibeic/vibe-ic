@@ -116,15 +116,28 @@ _UNPROVEN_LIST_RE = re.compile(r"Unproven\s+\$equiv\s+cells:\s*([^\n]+)")
 # Canonical Yosys success line (corroboration for the gate's .rpt parse).
 _SUCCESS_RE = re.compile(r"Equivalence\s+successfully\s+proven", re.IGNORECASE)
 
-# Frontend PARSE-ABORT signatures — a read_verilog / read_slang failure that
-# prevented ANY equivalence miter from being built (0 compared points). This is
-# DISTINCT from a genuine mismatch (a miter DID run and left points unproven).
-# A zero-miter parse-abort is NOT classifiable as PASS or FAIL — nothing was
-# compared — so it re-classifies to INCONCLUSIVE (never a hard FAIL that would
-# cascade-mark downstream steps MISSING, never a vacuous PASS). Mirrors
-# synth_frontend.SLANG_ERROR_SIGNATURES (kept local so the pure parser has no
-# import dependency) + generic frontend file-open / elaboration aborts.
+# Frontend-ABORT signatures — a read_verilog / read_slang failure that prevented
+# ANY equivalence miter from being built (0 compared points). DISTINCT from a
+# genuine mismatch (a miter DID run and left points unproven). A zero-miter abort
+# is not classifiable as PASS or FAIL, so it (a) fires the read_slang gold-read
+# retry and (b) re-classifies to INCONCLUSIVE rather than a false FAIL that
+# cascade-marks downstream steps MISSING. TWO families, BOTH resolved by slang:
+#   (A) PARSE / lex aborts — the built-in reader can't tokenise the SV closure
+#       (package import before the ANSI port list, typedefs, unsupported syntax).
+#   (B) ELABORATION aborts — the built-in reader PARSES but can't ELABORATE a
+#       VALID SV-2017 construct that slang resolves. The canonical case is an SV
+#       package/enum constant used as a parameter value, which yosys's built-in
+#       const-evaluator mis-reports as non-constant (ibex, rv-ibex2 run:
+#       "chip_top.sv:85: ERROR: Parameter u_ibex_core.RV32M with non-constant
+#       value!"). Without (B) the retry never fired on ibex-class designs → a
+#       false compared_points=0 FAIL cascading 24 steps.
+# §4.05 NO-LEAK: widening the matcher widens what TRIGGERS a retry, never what
+# PASSES. A genuine non-constant-param DESIGN bug is rejected by slang TOO; a
+# slang-also-fails run STAYS FAIL (finalize_after_slang_retry never excuses it);
+# and a miter that runs and leaves points unequal still FAILs. The retry only
+# changes WHICH frontend reads the gold, never the equivalence verdict.
 _FRONTEND_PARSE_ABORT_RE = re.compile(
+    # (A) parse / lex aborts
     r"syntax\s+error"
     r"|unexpected\s+TOK_\w+"
     r"|TOK_PACKAGE|TOK_TYPEDEF"
@@ -133,16 +146,47 @@ _FRONTEND_PARSE_ABORT_RE = re.compile(
     r"|unable\s+to\s+open"
     r"|no\s+such\s+file"
     r"|cannot\s+(?:find|open)\s+(?:file|module)"
-    r"|failed\s+to\s+parse",
+    r"|failed\s+to\s+parse"
+    # (B) elaboration aborts that slang resolves (SV package/enum-as-param-value)
+    r"|Parameter\s+\S+\s+with\s+non-constant\s+value"
+    r"|non-constant\s+value"
+    r"|is\s+not\s+a\s+constant\b"
+    r"|failed\s+to\s+evaluate",
     re.IGNORECASE)
 
 
 def is_frontend_parse_abort(text: str) -> bool:
-    """True iff a Yosys log carries a FRONTEND parse-abort signature — a
-    read_verilog/read_slang failure that built no miter. PURE. Used to split a
-    zero-miter parse-abort (→ INCONCLUSIVE, and the slang retry trigger) from a
-    genuinely empty/garbage run (→ FAIL)."""
+    """True iff a Yosys log carries a FRONTEND abort signature — a
+    read_verilog/read_slang PARSE or ELABORATION failure that built no miter.
+    PURE. Consulted ONLY when parse_error is True (0 miter), so it can only fire
+    the slang retry / INCONCLUSIVE re-class on a zero-miter run — never on a real
+    mismatch whose miter ran."""
     return bool(_FRONTEND_PARSE_ABORT_RE.search(text or ""))
+
+
+def finalize_after_slang_retry(parsed: Dict, slang_retry_failed: bool) -> Dict:
+    """Downgrade a provisional INCONCLUSIVE verdict to FAIL when the read_slang
+    gold-read retry was attempted and slang ALSO could not build a miter.
+
+    §4.05 NO-LEAK: INCONCLUSIVE (a non-blocking SKIPPED-CONDITION) is only
+    justified when the capable SV-2017 frontend was NOT tried (e.g. slang
+    unavailable). Once slang — the most capable frontend — has ALSO failed to
+    elaborate the gold, the design is not excused as a built-in-reader tool gap;
+    a genuine elaboration error must NOT get a free non-blocking pass. PURE; a
+    no-op when slang was not attempted or slang succeeded."""
+    if not slang_retry_failed or parsed.get("verdict") != "INCONCLUSIVE":
+        return parsed
+    out = dict(parsed)
+    out["verdict"] = "FAIL"
+    out["equivalent"] = False
+    out["verdict_explanation"] = (
+        "Neither read_verilog -sv nor the read_slang SV-2017 frontend could "
+        "elaborate the gold to build an equivalence miter (0 compared points). "
+        "With the capable frontend ALSO failing, this is not excused as a "
+        "built-in-reader tool gap → reported as FAIL (fix the elaboration "
+        "error). §4.05: a slang-also-fails run never becomes a non-blocking "
+        "INCONCLUSIVE.")
+    return out
 
 
 def parse_equiv_output(text: str) -> Dict:
@@ -765,13 +809,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     t0 = time.time()
     launched, raw = _run("verilog")
 
-    # SLANG GOLD-READ FALLBACK: the built-in `read_verilog -sv` gold read
-    # parse-ABORTED (no miter built) on an SV closure the reader can't take
-    # (package-scope refs, unpacked-array ports). Retry the gold with the SAME
-    # `read_slang` frontend the synth step auto-uses, so a design that
-    # SYNTHESISES cleanly is also LEC-comparable. Only retry on a genuine
-    # zero-miter parse-abort; adopt the slang run only if it made progress
-    # (built a miter), else keep the INCONCLUSIVE verdict.
+    # SLANG GOLD-READ FALLBACK: the built-in `read_verilog -sv` gold read ABORTED
+    # (no miter built) on an SV closure the reader can't PARSE (package-scope
+    # refs, unpacked-array ports) OR can't ELABORATE (an SV package/enum constant
+    # used as a parameter value → the built-in const-evaluator's "non-constant
+    # value" abort; ibex). Retry the gold with the SAME `read_slang` frontend the
+    # synth step auto-uses, so a design that SYNTHESISES cleanly is also
+    # LEC-comparable. Only retry on a genuine zero-miter abort; adopt the slang
+    # run if it made progress (built a miter). If slang ALSO failed, record it so
+    # the verdict is finalized to FAIL (never a non-blocking pass for a design
+    # the capable frontend also can't elaborate).
+    slang_retry_failed = False
     if launched:
         _p1 = parse_equiv_output(raw)
         if _p1["parse_error"] and is_frontend_parse_abort(raw):
@@ -780,21 +828,24 @@ def main(argv: Optional[List[str]] = None) -> int:
                 slang_prefix = resolve_slang_load_prefix(container, _docker_exec3)
             except Exception:
                 slang_prefix = ""  # fork-safe default: read_slang built-in
-            print("[lec_run] gold read_verilog -sv parse-aborted → retrying "
-                  "gold with read_slang (SV-2017 frontend).", file=sys.stderr)
+            print("[lec_run] gold read_verilog -sv aborted (parse or "
+                  "elaboration) → retrying gold with read_slang (SV-2017 "
+                  "frontend).", file=sys.stderr)
             launched2, raw2 = _run("slang", slang_prefix)
             if launched2:
                 _p2 = parse_equiv_output(raw2)
+                raw = raw2
+                gold_frontend = "slang"
                 if not _p2["parse_error"]:
-                    raw = raw2
-                    gold_frontend = "slang"
                     print("[lec_run] read_slang gold read built a miter "
                           "(SV-2017 frontend).", file=sys.stderr)
                 else:
-                    # slang also couldn't parse: keep the more-recent log but the
-                    # verdict stays INCONCLUSIVE (never a false FAIL).
-                    raw = raw2
-                    gold_frontend = "slang"
+                    # slang ALSO could not elaborate → not excused as a tool gap;
+                    # finalize_after_slang_retry downgrades INCONCLUSIVE → FAIL.
+                    slang_retry_failed = True
+                    print("[lec_run] read_slang ALSO failed to elaborate the "
+                          "gold → verdict finalized to FAIL (no free pass).",
+                          file=sys.stderr)
     elapsed = round(time.time() - t0, 2)
 
     # Always persist the raw tool log for transparency / gate corroboration.
@@ -818,6 +869,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     parsed = parse_equiv_output(raw)
+    # §4.05 NO-LEAK: if the slang retry was attempted and slang ALSO failed to
+    # build a miter, downgrade the provisional INCONCLUSIVE to FAIL — a design
+    # the capable SV-2017 frontend cannot elaborate is not a free non-blocking
+    # pass. No-op when slang was not attempted or succeeded.
+    parsed = finalize_after_slang_retry(parsed, slang_retry_failed)
     report = build_report(parsed, resolved_top, gate_abs, liberty)
     report["elapsed_sec"] = elapsed
     report["gold_rtl_files"] = [Path(f).name for f in gold_files]

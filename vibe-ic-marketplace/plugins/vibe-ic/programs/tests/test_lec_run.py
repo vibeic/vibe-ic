@@ -466,3 +466,78 @@ def test_inconclusive_label_with_real_mismatch_still_fails(tmp_path):
     assert res.inconclusive is False
     assert res.passed is False
     assert gate.main([str(tmp_path)]) == 1       # real unproven → hard FAIL
+
+
+# ---------------------------------------------------------------------------
+# ELABORATION-abort trigger widening (rv-ibex2 coverage gap): the built-in
+# read_verilog -sv PARSES fine but aborts at ELABORATION on an SV package/enum
+# constant used as a parameter value ("Parameter … with non-constant value!").
+# The slang retry must FIRE for that signature too, not just parse/syntax aborts.
+# The abort string below is the REAL ibex field output quoted from the rv-ibex2
+# run (authentic, not hand-written).
+# ---------------------------------------------------------------------------
+_IBEX_ELAB_ABORT = (
+    "Executing Verilog-2005 frontend: /p/rtl/chip_top.sv\n"
+    "chip_top.sv:85: ERROR: Parameter u_ibex_core.RV32M with non-constant "
+    "value!\n")
+
+
+def test_elaboration_abort_triggers_the_slang_retry():
+    # POSITIVE: the ibex elaboration abort must be recognised as a frontend
+    # abort so the `parse_error and is_frontend_parse_abort` retry gate fires.
+    assert lec_run.is_frontend_parse_abort(_IBEX_ELAB_ABORT) is True
+    p = lec_run.parse_equiv_output(_IBEX_ELAB_ABORT)
+    assert p["parse_error"] is True
+    # the exact condition main() uses to fire the read_slang gold-read retry:
+    assert p["parse_error"] and lec_run.is_frontend_parse_abort(_IBEX_ELAB_ABORT)
+    # provisional (pre-retry) verdict is INCONCLUSIVE, never a false FAIL.
+    assert p["verdict"] == "INCONCLUSIVE"
+
+
+def test_non_constant_matcher_does_not_fire_on_a_real_miter_mismatch():
+    # NEGATIVE (no false-pass / no spurious retry): a real mismatch ran a miter
+    # (parse_error False), so is_frontend_parse_abort can't fire the retry and
+    # the verdict stays FAIL — even the word never appears here.
+    assert lec_run.is_frontend_parse_abort(MISMATCH_OUTPUT) is False
+    p = lec_run.parse_equiv_output(MISMATCH_OUTPUT)
+    assert p["parse_error"] is False and p["verdict"] == "FAIL"
+
+
+def test_slang_succeeds_but_unequal_still_fails():
+    # NEGATIVE (no false-pass): after the retry, slang built a REAL miter that
+    # left points unproven → FAIL (the retry only changed the frontend, not the
+    # equivalence verdict). finalize_after_slang_retry is a no-op on a real FAIL.
+    p = lec_run.parse_equiv_output(MISMATCH_OUTPUT)
+    assert lec_run.finalize_after_slang_retry(p, slang_retry_failed=False) is p
+    assert p["verdict"] == "FAIL"
+
+
+def test_slang_also_fails_downgrades_inconclusive_to_fail():
+    # NEGATIVE (no vacuous non-blocking pass): the built-in aborted, the slang
+    # retry was attempted, and slang ALSO could not elaborate → the provisional
+    # INCONCLUSIVE is downgraded to a hard FAIL (never a free pass).
+    prov = lec_run.parse_equiv_output(_IBEX_ELAB_ABORT)
+    assert prov["verdict"] == "INCONCLUSIVE"
+    fin = lec_run.finalize_after_slang_retry(prov, slang_retry_failed=True)
+    assert fin["verdict"] == "FAIL"
+    assert fin["equivalent"] is False
+    r = lec_run.build_report(fin, "top", "n.v", None)
+    assert r["inconclusive"] is False            # NOT the non-blocking path
+    # and when slang was NOT the failing frontend (succeeded / not attempted),
+    # the INCONCLUSIVE provisional is preserved.
+    assert lec_run.finalize_after_slang_retry(
+        prov, slang_retry_failed=False)["verdict"] == "INCONCLUSIVE"
+
+
+def test_slang_also_fails_report_is_hard_fail_in_gate(tmp_path):
+    # end-to-end §4.05: a slang-also-fails report is a BLOCKING FAIL at the gate,
+    # not the non-blocking INCONCLUSIVE skip.
+    prov = lec_run.parse_equiv_output(_IBEX_ELAB_ABORT)
+    fin = lec_run.finalize_after_slang_retry(prov, slang_retry_failed=True)
+    r = lec_run.build_report(fin, "top", "n.v", None)
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "lec.json").write_text(json.dumps(r))
+    res = gate.audit(tmp_path)
+    assert res.inconclusive is False
+    assert res.passed is False
+    assert gate.main([str(tmp_path)]) == 1
