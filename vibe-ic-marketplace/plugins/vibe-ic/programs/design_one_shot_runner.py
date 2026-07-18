@@ -6784,6 +6784,18 @@ def _autoemit_chip_top_wrapper(project: Path, rtl_dir: Path,
     return chip_top_dst
 
 
+def _phase2_synth_timeout_s() -> int:
+    """Phase-2 generic-synth wall cap. Default 300 s (historic behavior);
+    VIBEIC_PHASE2_SYNTH_TIMEOUT_S overrides for very large (>1M-cell)
+    designs whose technology-independent flatten+ABC pass legitimately
+    needs more — a machine/scale property, chip-AGNOSTIC."""
+    try:
+        v = int(os.environ.get("VIBEIC_PHASE2_SYNTH_TIMEOUT_S", "300"))
+        return v if v > 0 else 300
+    except Exception:
+        return 300
+
+
 def step_yosys_synth(project: Path, top_name: str = "chip_top",
                      container: str = "vibeic-eda",
                      ic_class: Optional[str] = None) -> StepResult:
@@ -7062,8 +7074,13 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
     # v1.6.193 (#80 P1) — drop `-q` so the `stat` summary line
     # ("Number of cells: N") reaches the log and the runner's
     # cell-count diagnostic surfaces in StepResult.detail.
+    # Phase-2 generic-synth wall cap: default 300 s (unchanged);
+    # VIBEIC_PHASE2_SYNTH_TIMEOUT_S raises it for >1M-cell designs whose
+    # flatten+ABC legitimately exceed 5 minutes — a machine/scale property,
+    # chip-AGNOSTIC, byte-identical when the env var is unset.
+    _synth_to = _phase2_synth_timeout_s()
     rc, out, err = _run(["yosys", "-p", script], cwd=synth_dir,
-                        timeout=300)
+                        timeout=_synth_to)
     if rc == 127:
         # #118 — the docker fallback must not assume the host synth_dir is
         # bind-mounted inside the container at the same path. Mounted ->
@@ -7077,7 +7094,7 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
             rc, out, err = _run(
                 ["docker", "exec", "-w", str(synth_dir), container,
                  "bash", "-lc", f"yosys -p '{script}'"],
-                timeout=300)
+                timeout=_synth_to)
         else:
             cont_wd, _needs = _phase2_container_workdir(
                 container, project, synth_dir)
@@ -7123,7 +7140,7 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                     rc, out, err = _run(
                         ["docker", "exec", "-w", cont_wd, container,
                          "bash", "-lc", f"yosys -p '{script_c}'"],
-                        timeout=300)
+                        timeout=_synth_to)
                     if rc == 0:
                         if not _phase2_retrieve_netlist(
                                 container, netlist_c, out_v, True):

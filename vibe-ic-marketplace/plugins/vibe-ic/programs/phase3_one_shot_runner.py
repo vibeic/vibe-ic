@@ -2005,6 +2005,14 @@ class PdkConfig:
     # Antenna-repair diode cell (v0.2.14). OpenROAD `repair_antenna` inserts these
     # after detailed_route to fix process-antenna violations; None → step SKIPPED.
     antenna_diode_cell: Optional[str] = None
+    # CTS clock-buffer masters carried on the PdkConfig so a NAMED open PDK
+    # (nangate45 / sky130A) drives clock_tree_synthesis with its OWN buffers
+    # (mirrors pdk_registry.json clk_buf_cell / clk_buf_root_cell). None →
+    # step_pnr's legacy heuristic (sky130 default / custom-PDK Liberty scan).
+    # Without this the nangate45 branch fed CTS a sky130 buffer name that does
+    # not exist in the Nangate library → CTS_NONFATAL → CTS silently skipped.
+    clk_buf: Optional[str] = None
+    clk_buf_root: Optional[str] = None
     # v0.2.14 — PnR cell-exclusion file (the PDK's OWN drc_exclude.cells, i.e. the
     # PNR_EXCLUDED_CELL_FILE that OpenLane/librelane feed to OpenROAD `set_dont_use`).
     # Applied after link_design, before any resizer/CTS/repair step, so the optimizer
@@ -2624,6 +2632,71 @@ def _stdcell_exclusion_marker_warning(calibre_drc: Optional[str],
     return None
 
 
+def _discover_local_macros(project: Path) -> Tuple[
+        List[str], List[str], List[str], List[str]]:
+    """Discover local IP macros (input/pdk_local/<vendor>/) — hard macros
+    (OTP, RAM, ADC, …) MUST be integrated into all backend steps so the
+    resulting netlist + DEF + GDS hold the macro outline. chip-AGNOSTIC:
+    scans common subdir names (lib, LEF, PA_GDS / GDS, Verilog).
+
+    Hoisted out of the custom-PDK auto-detect branch so the NAMED open-PDK
+    overrides (--pdk nangate45 / --pdk sky130A) integrate hard macros
+    identically: the named branches previously returned early with empty
+    macro lists, silently DROPPING the design's SRAM/OTP/ADC macros from
+    synth blackboxing, PnR read_lef, GDS streamout and the LVS reference.
+    """
+    macro_libs: List[str] = []
+    macro_lefs: List[str] = []
+    macro_gds:  List[str] = []
+    macro_v:    List[str] = []
+    pdk_local = project / "input" / "pdk_local"
+    if pdk_local.is_dir():
+        for vendor_dir in sorted(pdk_local.iterdir()):
+            if not vendor_dir.is_dir():
+                continue
+            # Group by macro base name so we can pick exactly one
+            # LEF/lib variant per macro (vendors ship multiple
+            # routing-layer / corner / antenna variants and
+            # loading them all causes parser collisions).
+            lef_by_macro: Dict[str, List[Path]] = {}
+            for sub in vendor_dir.rglob("*"):
+                if not sub.is_file():
+                    continue
+                ext = sub.suffix.lower()
+                if ext == ".lib":
+                    macro_libs.append(str(sub))
+                elif ext == ".lef":
+                    # Strip _ant / _M<N> / _M<N>L<L> tail to get base
+                    base = re.sub(
+                        r"(_ant|_M\d+(L\d+)?|_top)?$",
+                        "", sub.stem)
+                    lef_by_macro.setdefault(base, []).append(sub)
+                elif ext == ".gds":
+                    macro_gds.append(str(sub))
+                elif ext == ".v" and "_t" not in sub.stem:
+                    # exclude *_t.v (truth-model variant)
+                    macro_v.append(str(sub))
+            # Per-macro LEF: prefer M3, then M4, then any non-_ant.
+            for base, lefs in lef_by_macro.items():
+                ant = [f for f in lefs if "_ant" in f.stem]
+                nonant = [f for f in lefs if "_ant" not in f.stem]
+                m3 = [f for f in nonant if f.stem.endswith("_M3")]
+                m4 = [f for f in nonant if f.stem.endswith("_M4")]
+                pick = ((m3 or m4 or nonant or ant)[0]
+                        if (m3 or m4 or nonant or ant) else None)
+                if pick is not None:
+                    macro_lefs.append(str(pick))
+        # Dedup macro libs to typ-corner only when multiple corners
+        # are present.
+        if len(macro_libs) > 1:
+            typ_only = [f for f in macro_libs
+                        if "_tt" in f.lower() or "_typ" in f.lower()
+                        or "_t." in f.lower()]
+            if typ_only:
+                macro_libs = typ_only
+    return macro_libs, macro_lefs, macro_gds, macro_v
+
+
 def _detect_pdk(project: Path, override: Optional[str] = None
                 ) -> Optional[PdkConfig]:
     """Detect which PDK to use. chip-AGNOSTIC: looks at project's input/pdk/
@@ -2633,6 +2706,7 @@ def _detect_pdk(project: Path, override: Optional[str] = None
     """
     if override and override != "auto":
         if override == "sky130A":
+            _mlibs, _mlefs, _mgds, _mv = _discover_local_macros(project)
             return PdkConfig(
                 name="sky130A",
                 liberty=f"{PDKS_IN_CONTAINER}/sky130A/libs.ref/sky130_fd_sc_hd/"
@@ -2660,6 +2734,12 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 # v0.3.12 #509 r2 — foundry LEF/DEF layer-map (validated).
                 lefdef_layermap=f"{PDKS_IN_CONTAINER}/sky130A/libs.tech/"
                 "klayout/tech/sky130A.map",
+                # Same masters step_pnr previously hardcoded — explicit here
+                # so the named-PDK contract carries them (no behavior change).
+                clk_buf="sky130_fd_sc_hd__clkbuf_4",
+                clk_buf_root="sky130_fd_sc_hd__clkbuf_16",
+                macro_libs=_mlibs, macro_lefs=_mlefs,
+                macro_gds=_mgds, macro_v=_mv,
             )
         if override == "nangate45":
             # NanGate / FreePDK45 Open Cell Library (Si2, Apache-2.0) — a GENERIC,
@@ -2671,6 +2751,7 @@ def _detect_pdk(project: Path, override: Optional[str] = None
             # the OpenROAD-flow-scripts nangate45 platform re-staged into the
             # open_pdks libs.ref/<scl>/ layout by the vibeic-eda Dockerfile.
             ng = f"{PDKS_IN_CONTAINER}/nangate45/libs.ref/NangateOpenCellLibrary"
+            _mlibs, _mlefs, _mgds, _mv = _discover_local_macros(project)
             return PdkConfig(
                 name="nangate45",
                 liberty=f"{ng}/lib/NangateOpenCellLibrary_typical.lib",
@@ -2684,6 +2765,11 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 tapcell_master="TAPCELL_X1",
                 antenna_diode_cell="ANTENNA_X1",
                 tapcell_distance_um=20.0,
+                # pdk_registry.json nangate45 clk_buf_cell / clk_buf_root_cell
+                clk_buf="CLKBUF_X1",
+                clk_buf_root="CLKBUF_X3",
+                macro_libs=_mlibs, macro_lefs=_mlefs,
+                macro_gds=_mgds, macro_v=_mv,
             )
 
     pdk_dir = project / "input" / "pdk"
@@ -2758,59 +2844,11 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                     metal_prefix = m.group(1)
             except Exception:
                 pass
-            # Discover local IP macros (input/pdk_local/<vendor>/) —
-            # hard macros (OTP, RAM, ADC, …) MUST be integrated into all
-            # backend steps so the resulting netlist + DEF + GDS hold the
-            # macro outline. chip-AGNOSTIC: scans common subdir names
-            # (lib, LEF, PA_GDS / GDS, Verilog).
-            macro_libs: List[str] = []
-            macro_lefs: List[str] = []
-            macro_gds:  List[str] = []
-            macro_v:    List[str] = []
-            pdk_local = project / "input" / "pdk_local"
-            if pdk_local.is_dir():
-                for vendor_dir in sorted(pdk_local.iterdir()):
-                    if not vendor_dir.is_dir():
-                        continue
-                    # Group by macro base name so we can pick exactly one
-                    # LEF/lib variant per macro (vendors ship multiple
-                    # routing-layer / corner / antenna variants and
-                    # loading them all causes parser collisions).
-                    lef_by_macro: Dict[str, List[Path]] = {}
-                    for sub in vendor_dir.rglob("*"):
-                        if not sub.is_file():
-                            continue
-                        ext = sub.suffix.lower()
-                        if ext == ".lib":
-                            macro_libs.append(str(sub))
-                        elif ext == ".lef":
-                            # Strip _ant / _M<N> / _M<N>L<L> tail to get base
-                            base = re.sub(
-                                r"(_ant|_M\d+(L\d+)?|_top)?$",
-                                "", sub.stem)
-                            lef_by_macro.setdefault(base, []).append(sub)
-                        elif ext == ".gds":
-                            macro_gds.append(str(sub))
-                        elif ext == ".v" and "_t" not in sub.stem:
-                            # exclude *_t.v (truth-model variant)
-                            macro_v.append(str(sub))
-                    # Per-macro LEF: prefer M3, then M4, then any non-_ant.
-                    for base, lefs in lef_by_macro.items():
-                        ant = [f for f in lefs if "_ant" in f.stem]
-                        nonant = [f for f in lefs if "_ant" not in f.stem]
-                        m3 = [f for f in nonant if f.stem.endswith("_M3")]
-                        m4 = [f for f in nonant if f.stem.endswith("_M4")]
-                        pick = (m3 or m4 or nonant or ant)[0] if (m3 or m4 or nonant or ant) else None
-                        if pick is not None:
-                            macro_lefs.append(str(pick))
-                # Dedup macro libs to typ-corner only when multiple corners
-                # are present.
-                if len(macro_libs) > 1:
-                    typ_only = [f for f in macro_libs
-                                if "_tt" in f.lower() or "_typ" in f.lower()
-                                or "_t." in f.lower()]
-                    if typ_only:
-                        macro_libs = typ_only
+            # Discover local IP macros (input/pdk_local/<vendor>/) — hoisted
+            # into _discover_local_macros so the NAMED open-PDK overrides
+            # integrate hard macros identically (see helper docstring).
+            macro_libs, macro_lefs, macro_gds, macro_v = (
+                _discover_local_macros(project))
 
             # Foundry sign-off decks (Calibre format common in commercial
             # PDKs; KLayout ships .lydrc; Magic ships .magicrc).
@@ -6751,6 +6789,7 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         antenna_repair_block: str,
                         filler_block: str,
                         place_pins_block: Optional[str] = None,
+                        macro_place_block: str = "",
                         routability_driven: bool = True,
                         placement_padding_sites: int = 0,
                         spef_repair_estimate_block: str = "",
@@ -6852,7 +6891,7 @@ initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\
 make_tracks
 {place_pins_block}
 write_def {out_dir_c}/floorplan.def
-# === v0.1.46 — tapcell insertion for latch-up well-tie density ===
+{macro_place_block}# === v0.1.46 — tapcell insertion for latch-up well-tie density ===
 # v0.1.44 spm pilot Tier 5 finding: prior runs (v0.1.25 and v0.1.45 alike)
 # inserted ZERO tap cells, leaving the design at latch-up risk that no
 # open-PDK DRC deck currently catches (sky130A.lydrc has nwell.4 — the
@@ -7123,11 +7162,12 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     core_w = die_w - 2 * core_pad
     core_h = die_h - 2 * core_pad
 
-    # Pick clock buffer cells from PDK liberty (heuristic).
-    # chip-AGNOSTIC: prefer CLKBUF-named cells, else any BUFD-class.
-    clk_buf = "sky130_fd_sc_hd__clkbuf_4"
-    clk_buf_root = "sky130_fd_sc_hd__clkbuf_16"
-    if pdk.name.startswith("custom"):
+    # Pick clock buffer cells: PdkConfig-carried masters win (named open
+    # PDKs — nangate45/sky130A — carry their registry clk_buf_cell/root);
+    # else the legacy heuristic (sky130 default / custom-PDK Liberty scan).
+    clk_buf = pdk.clk_buf or "sky130_fd_sc_hd__clkbuf_4"
+    clk_buf_root = pdk.clk_buf_root or "sky130_fd_sc_hd__clkbuf_16"
+    if pdk.clk_buf is None and pdk.name.startswith("custom"):
         try:
             lib_text = Path(pdk.liberty).read_text(errors="ignore")
             cellnames: List[str] = []
@@ -7318,6 +7358,21 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # OpenROAD command modifies the in-memory database; write_def after
     # each captures that stage. Catches the v10632 fabrication regression
     # where a runner copied routed.def to all 5 stage names.
+    # Hard-macro placement (RTLMP) — only when local IP macros are present.
+    # Runs BEFORE tapcell/PDN/global placement (canonical ORFS step order);
+    # without it RePlAce treats the macros as movable mixed-size objects,
+    # which for many-macro designs yields overlapping/illegal floorplans.
+    # NONFATAL-guarded: on failure the flow falls back to the legacy
+    # mixed-size global placement (byte-identical when no macros present).
+    macro_place_block = ""
+    if pdk.macro_lefs:
+        macro_place_block = (
+            "# === hard-macro placement (local IP macros present) ===\n"
+            "if {[catch {rtl_macro_placer -halo_width 5 -halo_height 5} "
+            "_mpl_err]} {\n"
+            "  puts \"MACRO_PLACE_NONFATAL: $_mpl_err\"\n"
+            "}\n"
+            f"write_def {out_dir_c}/macro_placed.def\n")
     pnr_tcl.write_text(_build_pnr_tcl_text(
         tech_lef_c=tech_lef_c, cell_lef_c=cell_lef_c,
         macro_lefs_tcl=macro_lefs_tcl, liberty_c=liberty_c,
@@ -7336,6 +7391,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         antenna_repair_block=antenna_repair_block,
         filler_block=filler_block,
         place_pins_block=place_pins_block,
+        macro_place_block=macro_place_block,
         spef_repair_estimate_block=spef_repair_estimate_block,
         openroad_threads=_openroad_thread_count()))
     cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
