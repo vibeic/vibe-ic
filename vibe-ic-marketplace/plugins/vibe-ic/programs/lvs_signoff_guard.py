@@ -95,6 +95,13 @@ def has_top_level_ports(spice_text: str, top: Optional[str] = None) -> bool:
 # #524: the canonical "match uniquely" recognition is delegated to the SHARED
 # classifier (lvs_verdict_tokens.MATCHED_RE) so the token can never drift;
 # "the circuits match" stays a local extension (netgen summary-line variant).
+#
+# AUDITED (LVS wording-gate fix): this is a CLAIM DETECTOR, not a verdict
+# producer — it decides whether to APPLY the portless-extraction guard, and a
+# True only ever causes assert_lvs_trustworthy to RAISE. So the raw MATCHED_RE
+# use here runs in the fail-safe direction (over-detecting a match claim
+# strengthens the guard; it can never turn a failing LVS into a pass) and
+# deliberately stays BROADER than lvs_verdict_tokens.classify().
 _MATCH_PHRASES = (
     "the circuits match",
 )

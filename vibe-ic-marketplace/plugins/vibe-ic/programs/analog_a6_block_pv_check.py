@@ -198,6 +198,19 @@ def _parse_lvs_match(text: str) -> Optional[bool]:
         if _here not in _sys.path:
             _sys.path.insert(0, _here)
         import lvs_verdict_tokens as _lvt
+        # A netgen report's verdict belongs to the SHARED classifier, which is
+        # JSON-authoritative and fail-safe. Previously only the MISMATCH regex
+        # was consulted, so a netgen transcript the classifier REFUSED could
+        # still be talked into a match by the tool-generic phrase list below
+        # (e.g. a reworded failure next to "netlists match") — the same
+        # false-clean-by-wording hole the classifier itself just closed.
+        if _lvt.is_netgen_report(text):
+            verdict = _lvt.classify(text)
+            if verdict == "MATCH":
+                return True
+            if verdict == "MISMATCH":
+                return False
+            return None  # INCOMPLETE — never upgraded by generic phrases
         if _lvt.MISMATCHED_RE.search(text):
             return False
     except Exception:  # nosec — best-effort; phrase lists below still apply
