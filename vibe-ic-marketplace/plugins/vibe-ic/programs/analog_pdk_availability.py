@@ -46,6 +46,49 @@ from typing import Any, Callable, Dict, List, Optional
 
 DEFAULT_PDKS_ROOT = "/foss/pdks"
 
+# Monte-Carlo STATISTICAL CARD keywords — the parse-verified signal that a model
+# lib actually carries statistical / mismatch distributions (vs a pure name-hint
+# alias/wrapper). chip-AGNOSTIC: standard SPICE MC card idioms, no vendor/SKU
+# literal. Counted as KEYWORD OCCURRENCES only (never values) — NDA-safe.
+_STAT_CARD_RE = re.compile(r"(?i)\b(?:agauss|aunif|gauss|unif|mc_global)\b")
+_SUBCKT_DEF_RE = re.compile(r"(?im)^\s*\.subckt\b")
+
+
+def _statistical_card_count(path: str) -> int:
+    """Count of Monte-Carlo statistical CARD KEYWORDS (agauss/gauss/mc_global/…)
+    in a staged model lib — the parse-verified signal that the lib can actually
+    resample device mismatch (vs a pure alias/wrapper with none). Reads the
+    staged host path; returns 0 on any read failure. NDA-safe: keyword
+    OCCURRENCE counts only, never PDK values / content."""
+    try:
+        txt = Path(path).read_text(errors="replace")
+    except OSError:
+        return 0
+    return len(_STAT_CARD_RE.findall(txt))
+
+
+def _mc_lib_rank_key(path: str):
+    """Rank key for a Monte-Carlo model lib (Python sort ascending, so all keys
+    are NEGATED to put the best first): a SELF-CONTAINED statistical lib — one
+    that both carries statistical cards AND DEFINES the device `.subckt`s it
+    resamples — outranks a pure param-OVERLAY lib (stat cards but no device
+    definitions), which itself outranks a card-less alias/wrapper. The MC-run
+    layer wraps ONE model file as its single source, so a lib that defines its
+    devices can be wrapped standalone; a param-overlay whose devices live in a
+    SEPARATE base lib cannot (the deck's device instantiation would be undefined
+    → no spread). Card count then name break ties. Reads the staged host path
+    ONCE; a card-less alias sinks to the bottom. NDA-safe: keyword-occurrence /
+    structural counts only, never PDK values / content."""
+    try:
+        txt = Path(path).read_text(errors="replace")
+    except OSError:
+        return (0, 0, 0, Path(path).name)
+    cards = len(_STAT_CARD_RE.findall(txt))
+    defines_devices = bool(_SUBCKT_DEF_RE.search(txt))
+    self_contained = 1 if (cards > 0 and defines_devices) else 0
+    has_cards = 1 if cards > 0 else 0
+    return (-self_contained, -has_cards, -cards, Path(path).name)
+
 # The tech subdirs (under `<pdk>/libs.tech/`) each flow stage consumes.
 _TECH_KEYS = ("ngspice", "magic", "klayout", "netgen", "openroad", "xschem")
 
@@ -184,7 +227,17 @@ def _resolve_project_custom_pdk(project: Path,
     # degeneracy guard in analog_mc_yield_run is the family-agnostic backstop.
     # Name-hint only (chip-AGNOSTIC): mc / mismatch / statistical / stat / agauss.
     _MC_HINT = re.compile(r"(?i)(mc|mismatch|statistical|stat|agauss)")
-    mc_libs = [p for p in spice_libs if _MC_HINT.search(Path(p).name)]
+    mc_hinted = [p for p in spice_libs if _MC_HINT.search(Path(p).name)]
+    # GAP-ANALOG (verified statistical content): rank the MC-hinted libs by
+    # PARSE-VERIFIED statistical content — a SELF-CONTAINED statistical lib (real
+    # agauss/gauss/mc_global cards AND device `.subckt` definitions) outranks a
+    # param-OVERLAY lib (cards but no device defs — the MC-run layer can't wrap
+    # it standalone, the device would be undefined) which outranks a NAME-hinted
+    # alias/wrapper with NO cards at all. Never rank by filename order: an
+    # alphabetical `mc_libs[0]` can be the alias, which the MC-run layer would
+    # `.include` for zero spread → UNSCOREABLE. Reads the staged host path and
+    # counts CARD KEYWORDS / structural markers only (never values) — NDA-safe.
+    mc_libs = sorted(mc_hinted, key=_mc_lib_rank_key)
     available = bool(spice_libs)
     return {
         "available": available,

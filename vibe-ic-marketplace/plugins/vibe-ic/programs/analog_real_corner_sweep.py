@@ -750,10 +750,18 @@ def _container_path(container, host_root, host_path):
         Path(host_root).resolve())
     return f"/foss/designs/{rel}"
 
-def _run_ngspice(container, sp_in_container):
+def _run_ngspice(container, sp_in_container, cwd=None):
+    """Run ngspice -b on a deck. `cwd` (optional) runs ngspice FROM that
+    directory so a model lib's RELATIVE `.lib`/`.include` targets resolve — a
+    COMPOSED corner shim (GAP-ANALOG) stitches in sibling device/prereq libs by
+    relative name, which ngspice resolves against its working directory, not the
+    deck's location. When cwd is None the invocation is unchanged (the open-PDK
+    sky130/gf180 decks include their model lib by ABSOLUTE path, so the byte
+    behaviour is preserved). chip-AGNOSTIC."""
     ngspice_bin = _resolve_ngspice(container) or "ngspice"
+    prefix = f"cd {shlex.quote(cwd)} && " if cwd else ""
     cp = _docker(container,
-                 f"{shlex.quote(ngspice_bin)} -b "
+                 f"{prefix}{shlex.quote(ngspice_bin)} -b "
                  f"{shlex.quote(sp_in_container)} 2>&1")
     txt = cp.stdout
     meas = {}
@@ -1155,7 +1163,8 @@ def _pdk_has_section(container, pdk_lib, section):
 
 def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
                      pdk_lib, knob, val, deck_overrides, subst_header, base_tt,
-                     process_corners=None, devices=None, typ_section="tt"):
+                     process_corners=None, devices=None, typ_section="tt",
+                     sim_cwd=None):
     """Attempt a REAL ngspice sim at each PVT corner (real .lib section + real
     .temp) for the sized sweep point. Returns a real_sims dict for the corners
     that genuinely converged; a corner whose model section is absent or whose
@@ -1184,7 +1193,8 @@ def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
             sp = sl_dir / f"pvt_{proc}_{tlbl}.sp"
             sp.write_text((subst_header or "") + deck)
             ok, meas, raw, _ss = _run_ngspice(
-                container, _container_path(container, host_root, sp))
+                container, _container_path(container, host_root, sp),
+                cwd=sim_cwd)
             log = sl_dir / f"pvt_{proc}_{tlbl}.ngspice.log"
             log.write_text(raw)
             v = meas.get(tkey)
@@ -1341,6 +1351,14 @@ def run_block(project, block, container, pdk, topology_override):
         print(f"[real_sim] pdk lib not reachable: {pdk_lib}", file=sys.stderr)
         return 2
 
+    # GAP-ANALOG — run ngspice FROM the resolved model lib's directory for a
+    # custom / native family, so a COMPOSED corner shim's RELATIVE `.lib`
+    # includes (it stitches in sibling device/prereq libs by bare name) resolve.
+    # The known open PDKs (sky130 / gf180) include their model lib by ABSOLUTE
+    # path → sim_cwd stays None → byte-identical invocation preserved.
+    sim_cwd = (str(Path(pdk_lib).parent)
+               if (ctx and ctx.source != "known_family") else None)
+
     # ORGANIC-20260606 #496 (round-2) — when the L19 tapeout target differs
     # from the simulation PDK family, prepend the STRUCTURED pdk_substitution
     # disclosure marker so flow_compliance_check downgrades the (correct)
@@ -1378,7 +1396,8 @@ def run_block(project, block, container, pdk, topology_override):
         sp_host = sl_dir / f"run_{knob}_{val}.sp"
         sp_host.write_text(tb)
         ok, meas, raw, sim_status = _run_ngspice(
-            container, _container_path(container, host_root, sp_host))
+            container, _container_path(container, host_root, sp_host),
+            cwd=sim_cwd)
         # ORGANIC-20260606 #438(a): persist the ngspice invocation log —
         # `simulator_run: true` is only claimable for corners whose
         # invocation log exists on disk.
@@ -1447,7 +1466,8 @@ def run_block(project, block, container, pdk, topology_override):
         project, container, host_root, sl_dir, btype, block, pdk, pdk_lib,
         best.get("knob", "__noop__"), best.get("val", 0),
         deck_overrides, subst_header, base_tt,
-        process_corners=grid_corners, devices=devices, typ_section=typ_section)
+        process_corners=grid_corners, devices=devices, typ_section=typ_section,
+        sim_cwd=sim_cwd)
     pvt_grid, corners_executed = build_pvt_grid(
         base, base_log, real_sims, target.get("tol"),
         process_corners=grid_corners)

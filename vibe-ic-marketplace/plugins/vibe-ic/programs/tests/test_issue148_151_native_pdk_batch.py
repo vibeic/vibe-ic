@@ -195,7 +195,7 @@ def _native_mc_project(tmp_path: Path, with_mc: bool = True) -> Path:
 
 def _fake_ngspice(values):
     it = iter(values)
-    def fake(container, sp):
+    def fake(container, sp, cwd=None):
         v = next(it)
         return True, {"vout": v}, f"vout = {v}\n"
     return fake

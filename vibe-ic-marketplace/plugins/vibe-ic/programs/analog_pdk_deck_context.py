@@ -90,6 +90,30 @@ _MODEL_RE = re.compile(r"(?im)^\s*\.model\s+(\S+)\s+(\w+)")
 # section DEFINITION form: `.lib <bare-identifier>` alone (NOT the include form
 # `.lib "path" section`, which carries a path/quote after `.lib`).
 _LIB_SECTION_RE = re.compile(r"(?im)^\s*\.lib\s+([A-Za-z_]\w*)\s*$")
+# include-FORM `.lib` line: `.lib <path-or-name> <section>` — a lib section that
+# pulls in ANOTHER section/lib (TWO args after `.lib`, vs the single-arg
+# DEFINITION form above). `.include <path>` is the other compose form. A lib
+# carrying BOTH `.lib <section>` DEFINITIONS and these include forms is a
+# COMPOSED WRAPPER (see _lib_is_composed_wrapper). Structural — no PDK-name match.
+# NB: horizontal-whitespace-only ([ \t], not \s) between the two args so a
+# newline cannot bridge two consecutive single-arg `.lib <section>` DEFINITION
+# lines into a false "two-arg include" match — both args must be on one line.
+_LIB_INCLUDE_RE = re.compile(
+    r"""(?im)^[ \t]*\.lib[ \t]+(?:"[^"]*"|'[^']*'|\S+)[ \t]+\S""")
+_INCLUDE_DIRECTIVE_RE = re.compile(r"(?im)^[ \t]*\.include\b")
+# The FILE token pulled in by an include-FORM line: `.lib <target> <section>` or
+# `.include <target>`. Used to tell a COMPOSITION shim (whose sections stitch in
+# OTHER lib files) from a raw device lib (whose sections define devices inline).
+_LIB_INCLUDE_TARGET_RE = re.compile(
+    r"""(?im)^[ \t]*\.lib[ \t]+("[^"]*"|'[^']*'|\S+)[ \t]+\S+[ \t]*$""")
+_INCLUDE_TARGET_RE = re.compile(
+    r"""(?im)^[ \t]*\.include[ \t]+("[^"]*"|'[^']*'|\S+)""")
+# A Monte-Carlo / statistical / alias lib name (family-agnostic tokens, no
+# vendor/SKU literal). A NOMINAL corner-sweep shim must NOT fold these in — that
+# is the MC-yield path's job; a wrapper that composes them is a statistical /
+# aggregator index, not the nominal ngspice corner shim.
+_MC_LIB_HINT_RE = re.compile(
+    r"(?i)(?:(?<![a-z0-9])mc(?![a-z0-9])|mismatch|statistical|montecarlo|agauss)")
 
 
 @dataclass
@@ -201,6 +225,41 @@ def parse_sections(text: str) -> List[str]:
     return out
 
 
+def _lib_is_composed_wrapper(text: str) -> bool:
+    """Structural detector: True when a model lib is a COMPOSED CORNER WRAPPER —
+    it DEFINES `.lib <section>` corner blocks whose bodies themselves pull in
+    OTHER sections/libs (an include-form `.lib <path> <section>` line, or a
+    `.include`). The ngspice bridge needs such a wrapper section loaded as a
+    unit: it composes the prerequisite blocks (e.g. a noise-flag / temperature /
+    well-diode block) BEFORE the device model section, so a bare
+    `.lib <raw-lib> <corner>` that skips those prerequisites errors out. A raw
+    device lib has `.lib <section>` DEFINITIONS but NO include forms → not a
+    wrapper. Structural — no chip / vendor / SKU literal (never a PDK-name
+    match)."""
+    if not text:
+        return False
+    has_section_def = bool(_LIB_SECTION_RE.search(text))
+    has_compose = bool(_LIB_INCLUDE_RE.search(text)) or bool(
+        _INCLUDE_DIRECTIVE_RE.search(text))
+    return has_section_def and has_compose
+
+
+def _cross_file_include_targets(text: str, self_basename: str) -> set:
+    """The set of OTHER lib-file basenames a lib pulls in via include-form lines
+    (`.lib <file> <section>` / `.include <file>`), excluding a self-reference.
+    A COMPOSITION shim stitches in the device model lib(s) + prerequisite libs
+    this way; a raw device lib defines devices inline and pulls in nothing (or
+    only self). Structural — no chip / vendor / SKU literal."""
+    out: set = set()
+    for rex in (_LIB_INCLUDE_TARGET_RE, _INCLUDE_TARGET_RE):
+        for m in rex.finditer(text or ""):
+            tgt = m.group(1).strip("\"'")
+            base = Path(tgt).name
+            if base and base != self_basename:
+                out.add(base)
+    return out
+
+
 def map_corner_sections(sections: List[str]
                         ) -> Tuple[Optional[str], List[Tuple[str, float]]]:
     """Map available section names → (typ_section, process_corners). typ is the
@@ -272,6 +331,8 @@ def custom_family_context(res: Dict[str, Any],
     union_models: Dict[str, str] = {}
     per_lib_sections: Dict[str, List[str]] = {}
     per_lib_subckts: Dict[str, Dict[str, int]] = {}
+    per_lib_composed: Dict[str, bool] = {}
+    per_lib_cross_targets: Dict[str, set] = {}
     for lib in libs:
         txt = reader(lib)
         if txt is None:
@@ -282,6 +343,9 @@ def custom_family_context(res: Dict[str, Any],
         union_models.update(dev["models"])
         per_lib_sections[lib] = parse_sections(txt)
         per_lib_subckts[lib] = dev["subckts"]
+        per_lib_composed[lib] = _lib_is_composed_wrapper(txt)
+        per_lib_cross_targets[lib] = _cross_file_include_targets(
+            txt, Path(lib).name)
 
     device_map, unresolved, notes = map_device_roles(union_subckts, required)
 
@@ -297,14 +361,50 @@ def custom_family_context(res: Dict[str, Any],
     # tiebreaker. A single readable lib is unchanged (it wins trivially); when
     # NO devices resolved, n_defines is 0 for all libs and the ranking degrades
     # to the historical section-count pick. Structural, no vendor/SKU literal.
+    #
+    # GAP-ANALOG (composed ngspice wrapper): when a PDK ships BOTH a COMPOSITION
+    # SHIM (a wrapper whose corner section stitches in the prerequisite blocks +
+    # the device model section as a unit) AND raw device libs, PREFER the shim
+    # for ngspice. A bare `.lib <raw-lib> <corner>` skips the prerequisite blocks
+    # the ngspice bridge needs and errors (~142 errors); the shim composes
+    # everything. The shim is identified STRUCTURALLY (no PDK-name match) as a lib
+    # that is (a) a composed wrapper, (b) defines NO device subckts of its OWN
+    # (a raw device lib defines them inline — even if it self-includes a
+    # noiseflag/temp block, so bare `_lib_is_composed_wrapper` alone is too
+    # coarse), (c) COMPOSES (cross-file includes) a device-DEFINING lib, and
+    # (d) does NOT fold in Monte-Carlo / statistical / alias libs (a wrapper that
+    # composes those is a statistical / aggregator index, not the nominal corner
+    # shim — that content belongs to the MC-yield path). The shim flag ranks
+    # ABOVE the #149 device-defining signal. When NO shim exists (e.g.
+    # sky130-style bare libs, or a single raw lib), is_shim is 0 for all libs and
+    # the ranking degrades EXACTLY to the historical (n_defines, n_sections) pick.
     readable = [l for l in libs if l not in unread]
     resolved_dev_names = {v for v in device_map.values()}
+    # basenames of the libs that DEFINE a resolved device-role subckt — the libs
+    # a composition shim must stitch in to be the ngspice corner entry point.
+    definer_basenames = {
+        Path(l).name for l in readable
+        if resolved_dev_names & set(per_lib_subckts.get(l, {}))}
 
-    def _primary_rank(lib: str) -> Tuple[int, int]:
+    def _is_composition_shim(lib: str) -> bool:
+        if not per_lib_composed.get(lib):
+            return False                                   # not a wrapper at all
+        own = set(per_lib_subckts.get(lib, {}))
+        if resolved_dev_names & own:
+            return False                        # defines devices → raw device lib
+        tgts = per_lib_cross_targets.get(lib, set())
+        if not (tgts & definer_basenames):
+            return False                        # composes no device-defining lib
+        if any(_MC_LIB_HINT_RE.search(t) for t in tgts):
+            return False                # folds in MC/stat/alias → not a nominal shim
+        return True
+
+    def _primary_rank(lib: str) -> Tuple[int, int, int]:
+        is_shim = 1 if _is_composition_shim(lib) else 0
         defined = set(per_lib_subckts.get(lib, {}))
         n_defines = len(resolved_dev_names & defined)
         n_sections = len(per_lib_sections.get(lib, []))
-        return (n_defines, n_sections)
+        return (is_shim, n_defines, n_sections)
 
     primary = None
     if readable:
