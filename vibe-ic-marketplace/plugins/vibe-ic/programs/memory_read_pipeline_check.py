@@ -68,6 +68,16 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
+# Kimi-scale fix — this gate audits AUTHORED RTL SOURCE. Collection routes
+# through the shared collector (canonical phase2/stage1/rtl preferred;
+# generated netlist/sim/verify outputs + >8MB files excluded on fallback) so a
+# 342 MB emitted netlist can never enter the char-level comment strip again
+# (see _specrtl_common.rtl_source_files for the full scale rationale).
+try:
+    from _specrtl_common import rtl_source_files
+except ImportError:                      # packaged relative import
+    from ._specrtl_common import rtl_source_files
+
 
 @dataclass
 class Finding:
@@ -225,12 +235,9 @@ def check_file(path: Path) -> list[Finding]:
 def collect_files(path: Path) -> list[Path]:
     if path.is_file():
         return [path]
-    if path.is_dir():
-        return sorted(
-            p for p in path.rglob("*")
-            if p.is_file() and p.suffix in (".v", ".sv", ".vh")
-        )
-    return []
+    # Kimi-scale fix: shared authored-RTL collector. This gate has always
+    # also scanned *.vh headers, so the suffix set is widened accordingly.
+    return rtl_source_files(path, exts=("*.v", "*.sv", "*.vh"))
 
 
 def main() -> int:

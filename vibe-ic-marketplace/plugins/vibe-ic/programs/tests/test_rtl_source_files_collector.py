@@ -103,6 +103,35 @@ def test_bare_rtl_dir_argument_unchanged(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# 2b. exts widening (Kimi-scale round 2): gates that have always also scanned
+#     *.vh/*.svh headers keep that coverage through the shared collector
+# ---------------------------------------------------------------------------
+def test_exts_widening_keeps_headers_in_canonical_dir(tmp_path):
+    a = _mk(tmp_path / "phase2/stage1/rtl/top.v")
+    h = _mk(tmp_path / "phase2/stage1/rtl/timing.vh", "`define T_A_CYC 4\n")
+    s = _mk(tmp_path / "phase2/stage1/rtl/pkg.svh", "package p; endpackage\n")
+    _mk(tmp_path / "phase2/stage2/synth/netlist.v")          # emitted netlist
+    wide = sc.rtl_source_files(
+        tmp_path, exts=("*.v", "*.sv", "*.vh", "*.svh"))
+    assert wide == sorted([a, h, s])
+    # the default suffix set is unchanged (headers NOT collected)
+    assert sc.rtl_source_files(tmp_path) == [a]
+
+
+def test_exts_widening_fallback_applies_same_contract(tmp_path):
+    # fallback scan: excluded generated dirs + the size cap gate headers too.
+    keep_v = _mk(tmp_path / "src/design.v")
+    keep_h = _mk(tmp_path / "src/timing.vh", "`define T_A_CYC 4\n")
+    _mk(tmp_path / "sim/gen.vh")                             # generated dir
+    big = tmp_path / "src/huge.vh"
+    with big.open("wb") as fh:
+        fh.seek(sc.RTL_SOURCE_MAX_BYTES)                     # cap + 1 bytes
+        fh.write(b"\n")
+    got = sc.rtl_source_files(tmp_path, exts=("*.v", "*.sv", "*.vh", "*.svh"))
+    assert got == sorted([keep_v, keep_h])
+
+
+# ---------------------------------------------------------------------------
 # 3. end-to-end: a gate no longer ingests an emitted netlist (cwd=<project>,
 #    arg "." — exactly the flow_compliance strict-structural invocation)
 # ---------------------------------------------------------------------------
