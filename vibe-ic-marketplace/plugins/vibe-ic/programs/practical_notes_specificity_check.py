@@ -44,7 +44,7 @@ Rule enforced
 Plugin docs must work for ANY IC. Concretely:
 
   * No vendor product names (Lightning, Apple).
-  * No specific chip names (<chip-class>, <benchmark>, commercial_pdk, <PDK>).
+  * No specific chip names (<chip-class>, <benchmark>, <pdk-codename>, <PDK>).
   * No tester product names (<half-duplex-tester>) or dated test-rig validation.
   * No hard-coded vendor HID command bytes (`0x10 CMD_CONNECT_CHK`),
     PASS markers (`byte[6]=0xF2`), or chip pin labels (ACC_ID).

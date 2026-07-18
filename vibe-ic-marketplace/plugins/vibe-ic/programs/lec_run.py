@@ -413,7 +413,7 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
     `-ignore_miss_func` degrades HONESTLY: a cell with no `function` (e.g. a
     clock-gating latch `TLATNCAD*`) stays a blackbox, and if the design uses one
     `equiv_induct` still emits "No SAT model …" → SKIPPED-CONDITION, never a
-    fake pass.  Measured on commercial_pdk spm: 65/65 $equiv cells proven, 0 unproven,
+    fake pass.  Measured on a commercial-PDK spm: 65/65 $equiv cells proven, 0 unproven,
     "Equivalence successfully proven!"; a one-gate NAND2D1→NOR2D1 corruption of
     the netlist leaves 2 unproven → the gate FAILs (false-clean-PROOF). The
     induction escalates 4→16→64 frames so a pipelined design proves at the depth
@@ -556,7 +556,7 @@ def _discover_project_liberty(project: Path) -> Optional[Path]:
 
     The Step-13 runner passes no --liberty, so without this the producer falls
     back to the sky130 DEFAULT_LIBERTY — useless for a commercial-PDK design
-    whose cells (e.g. commercial_pdk NAND2D1 / DFFHQD1) are only SAT-modelable from ITS
+    whose cells (e.g. commercial-PDK NAND2D1 / DFFHQD1) are only SAT-modelable from ITS
     own Liberty. Searches the canonical Vibe-IC PDK location
     (`input/pdk/liberty/*.lib`) first, then a bounded `input/**.lib` fallback,
     and prefers the typical/nominal corner. Returns None if the project ships no

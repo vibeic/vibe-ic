@@ -8474,7 +8474,7 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
         elif "gf180mcu" in head:
             pdk = "gf180"
         elif re.search(r"\bDFFHQD\d|\bAOI211D1\b", head):
-            pdk = "commercial_pdk"   # v1.3.94 — commercial foundry commercial_pdk commercial PDK
+            pdk = "commercial_pdk"   # v1.3.94 — commercial 180nm PDK
         else:
             pdk = ""   # generic / unmapped netlist
         cov_json = reports_dir / "phase2/dft/coverage.json"
@@ -8484,9 +8484,9 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                "--clock", clk, "--json", str(cov_json)]
         if pdk:
             cmd += ["--pdk", pdk]
-        # v1.3.94 — the commercial commercial_pdk PDK ships only Liberty in-tree; Fault
+        # v1.3.94 — the commercial PDK ships only Liberty in-tree; Fault
         # needs a Verilog cell model. It is provisioned at input/pdk/verilog/
-        # commercial_pdk_neg.v and reaches the container via the separate --pdk-dir
+        # and reaches the container via the separate --pdk-dir
         # (/pdk) mount because input/pdk is a symlink OUTSIDE /work.
         if pdk == "commercial_pdk":
             cmd += ["--pdk-dir", str((project / "input" / "pdk").resolve()),

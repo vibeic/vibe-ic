@@ -466,7 +466,7 @@ function pdkConfig(pdk, customOpts) {
   if (pdk === "custom" && customOpts) {
     // v0.63: metal_prefix used to be hardcoded to "met" here, which silently
     // broke any custom PDK whose layers don't follow SKY130's naming
-    // (e.g. commercial_foundry commercial_pdk uses uppercase MET1-6). eda_pnr would
+    // (e.g. a commercial 180nm PDK uses uppercase MET1-6). eda_pnr would
     // produce empty `define_metal_layers` and OpenROAD would later fail
     // with no useful error. Now read it from customOpts.
     return {
@@ -887,7 +887,7 @@ server.tool(
     custom_site: z.string().optional().describe("Site name for floorplan (custom PDK)"),
     custom_vdd: z.string().optional().describe("VDD pin name (custom PDK)"),
     custom_vss: z.string().optional().describe("VSS pin name (custom PDK)"),
-    custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for commercial_foundry MET1-6). Default 'met'."),
+    custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for a commercial 180nm PDK's MET1-6). Default 'met'."),
   },
   async ({ verilog_files, top_module, output_netlist, pdk, sv_mode, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix }) => {
     try {
@@ -1287,7 +1287,7 @@ server.tool(
     custom_site: z.string().optional().describe("Site name for floorplan (custom PDK)"),
     custom_vdd: z.string().optional().describe("VDD pin name (custom PDK)"),
     custom_vss: z.string().optional().describe("VSS pin name (custom PDK)"),
-    custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for commercial_foundry MET1-6). Default 'met'."),
+    custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for a commercial 180nm PDK's MET1-6). Default 'met'."),
     custom_antenna_diode: z.string().optional().describe("Antenna diode master cell for a custom PDK (v1.3.53). Enables the incremental antenna repair->reroute loop (enable_detailed_route only). gf180/sky130 supply their own; absent for a custom PDK -> antenna repair is SKIPPED (manual diode ECO)."),
   },
   async ({ netlist, top_module, output_def, pdk, clock_port, clock_period_ns, utilization, density, enable_cts, enable_detailed_route, cts_buf_list, cts_root_buf, min_routing_layer, max_routing_layer, sdc_file, output_routed_v, pdn_stripe_layer, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix, custom_antenna_diode }) => {
@@ -1377,7 +1377,7 @@ exit`;
 
     // v2.6.0 M4: detailed_route auto-retry with set_routing_layers MET2-MAX
     // when DR fails due to MET1 pin access points. Common on legacy PDKs
-    // (e.g. commercial_foundry 180nm) whose narrow MET1 pins on CTS-inserted
+    // (e.g. a commercial 180nm PDK) whose narrow MET1 pins on CTS-inserted
     // clkbuf/clkinv cells lack any reachable access point. Caller didn't
     // pre-set min_routing_layer? We try once with MET2 → top.
     const drFailedDRT0073 = enable_detailed_route &&
@@ -1476,7 +1476,7 @@ server.tool(
     custom_site: z.string().optional().describe("Site name for floorplan (custom PDK)"),
     custom_vdd: z.string().optional().describe("VDD pin name (custom PDK)"),
     custom_vss: z.string().optional().describe("VSS pin name (custom PDK)"),
-    custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for commercial_foundry MET1-6). Default 'met'."),
+    custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for a commercial 180nm PDK's MET1-6). Default 'met'."),
   },
   async ({ def_file, output_gds, pdk, cell_gds_override, custom_lib, custom_techlef, custom_celllef, custom_cellgds, custom_site, custom_vdd, custom_vss, custom_metal_prefix }) => {
     try {
@@ -1596,7 +1596,7 @@ server.tool(
     custom_site: z.string().optional().describe("Site name for floorplan (custom PDK)"),
     custom_vdd: z.string().optional().describe("VDD pin name (custom PDK)"),
     custom_vss: z.string().optional().describe("VSS pin name (custom PDK)"),
-    custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for commercial_foundry MET1-6). Default 'met'."),
+    custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for a commercial 180nm PDK's MET1-6). Default 'met'."),
     si_mcf_project: z.string().optional().describe("Opt-in SI-aware crosstalk-DELAY STA (Miller Coupling Factor bound): pass a routed PROJECT dir (with a coupling-aware SPEF + SDC) to re-run OpenSTA on an MCF-bounded SPEF (Cc*MCF folded per aggressor/victim timing-window overlap; setup MCF=2 / hold MCF=0) via programs/si_mcf_sta.py, writing reports/phase3/si_mcf_sta.json. A conservative BOUND (advisory), not PrimeTime-SI's iterative coupled-waveform calc. When set, this runs instead of the single-netlist STA."),
     container: z.string().default("vibeic-eda").describe("Docker container for OpenSTA (si_mcf_project mode)"),
   },
@@ -2251,7 +2251,7 @@ server.tool(
         if (rulesN === 0) {
           // v0.112 (BACKLOG-v6 T2 closure): structural-only fallback
           // instead of hard error. Closes the layermap-missing case for
-          // custom PDKs (commercial_foundry commercial_pdk, etc.) by emitting a
+          // custom PDKs (a commercial 180nm PDK, etc.) by emitting a
           // KLayout deck that verifies GDS parses + top cell exists, but
           // does NOT enforce dimensional rules. Returns success=true
           // with deck_mode='structural_only' + advisory so the caller
@@ -2452,7 +2452,7 @@ server.tool(
     custom_vdd: z.string().optional(),
     custom_vss: z.string().optional(),
     custom_metal_prefix: z.string().optional(),
-    via_resistance_ohm: z.number().default(5.5).describe("Fallback per-via resistance when tech LEF lacks RESISTANCE PER CUT (e.g. commercial_foundry 180nm)"),
+    via_resistance_ohm: z.number().default(5.5).describe("Fallback per-via resistance when tech LEF lacks RESISTANCE PER CUT (e.g. a commercial 180nm PDK)"),
   },
   async ({ def_file, pdk, voltage, custom_lib, custom_techlef, custom_celllef, custom_site, custom_vdd, custom_vss, custom_metal_prefix, via_resistance_ohm }) => {
     try {
@@ -4464,7 +4464,7 @@ server.tool(
     custom_site: z.string().optional().describe("Site name for floorplan (custom PDK)"),
     custom_vdd: z.string().optional().describe("VDD pin name (custom PDK)"),
     custom_vss: z.string().optional().describe("VSS pin name (custom PDK)"),
-    custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for commercial_foundry MET1-6). Default 'met'."),
+    custom_metal_prefix: z.string().optional().describe("Metal-layer name prefix for custom PDKs whose layers don't match SKY130 'met' naming (e.g. 'MET' for a commercial 180nm PDK's MET1-6). Default 'met'."),
     field_solve_spef: z.string().optional().describe("Opt-in FIELD-SOLVED coupling upgrade: pass an existing grounded/analytical SPEF to UPGRADE it with real 3D BEM coupling. Inverts the PDK's own area+fringe cap to a fitted dielectric stack (programs/pdk_dielectric_fit.py) then runs the OSS solver FasterCap on the routed geometry (programs/fastercap_extract.py) — lateral + inter-layer crossover the analytical parallel-plate model misses. Requires def_file + custom_techlef. Self-reports NOT_APPLICABLE if FasterCap is absent (never a fabricated matrix). DISCLOSED: fitted stack, generic dielectric — NOT foundry rules.C, NOT crosstalk-SI sign-off. When set, this runs instead of Magic extraction."),
     field_solve_container: z.string().default("vibeic-eda").describe("Docker container for FasterCap (field_solve_spef mode)"),
   },

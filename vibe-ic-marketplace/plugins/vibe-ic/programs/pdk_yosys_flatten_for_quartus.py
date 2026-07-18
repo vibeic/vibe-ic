@@ -10,7 +10,7 @@ plus a per-cell synth-shim library (~338 modules). The crash is in
 Quartus's hierarchical name-mangler, NOT in the netlist itself.
 
 Workaround: use Yosys 0.62 to:
-  1. read PDK synth-shim (e.g. commercial_pdk_synth_shim.v from
+  1. read PDK synth-shim (e.g. <pdk>_synth_shim.v from
      pdk_udp_synth_shim_gen.py)
   2. read post-PnR gate netlist (chip_top_asic_pnr.v)
   3. hierarchy -top <top> -check; proc; flatten; clean
@@ -30,7 +30,7 @@ name) tuple.
 Usage:
     python3 pdk_yosys_flatten_for_quartus.py \\
         --gate-netlist <chip_top_asic_pnr.v> \\
-        --pdk-shim <commercial_pdk_synth_shim.v> \\
+        --pdk-shim <pdk_synth_shim.v> \\
         --top chip_top_asic \\
         --output <chip_top_asic_flat.v> \\
         [--container vibeic-eda]

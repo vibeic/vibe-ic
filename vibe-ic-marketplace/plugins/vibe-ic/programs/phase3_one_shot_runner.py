@@ -1528,16 +1528,16 @@ def _discover_pg_from_lef(
 
     Returns None when the LEF ships no such pins. chip-AGNOSTIC: reads the
     ACTUAL pin names + the follow-pin rail RECT height, so a commercial PDK
-    whose rails are named VDD/VSS (commercial foundry commercial_pdk) gets a real met1
+    whose rails are named VDD/VSS (a commercial 180nm PDK) gets a real met1
     follow-pins PDN instead of the sky130-only VPWR/VGND hardcode. Without a
     PDN the power rails are bare, unconnected metal that TritonRoute ignores
     for spacing — signal routes then land <min-space from the rails (the
-    commercial_pdk M1.S.1 family). The follow-pin stripe makes the rails real routed
+    commercial-PDK M1.S.1 family). The follow-pin stripe makes the rails real routed
     PG geometry the signal router keeps 0.23 clear of.
 
     Picks the widest-spanning RECT under each PG pin (that IS the row rail; a
     narrow tap stub is not). Layer name returned VERBATIM (OpenROAD matches the
-    tech-LEF layer name case-exactly: commercial_pdk = "MET1", sky130 = "met1")."""
+    tech-LEF layer name case-exactly: a commercial PDK = "MET1", sky130 = "met1")."""
     if not cell_lef:
         return None
     try:
@@ -1628,7 +1628,7 @@ def _build_pdn_tcl(pdk: "PdkConfig") -> str:
     # names + follow-pin rail width from the cell LEF and emit a met1
     # follow-pins PDN. Without it the bare, unconnected power-rail metal is
     # ignored by TritonRoute's spacing engine and signal routes land
-    # <min-space from the rails (commercial_pdk M1.S.1 x20). The follow-pins stripe
+    # <min-space from the rails (commercial-PDK M1.S.1 x20). The follow-pins stripe
     # turns each row rail into real routed PG geometry the signal router keeps
     # min-space clear of — AND connects power (removes the "0 SPECIALNETS =
     # silicon DOA" gap the sky130 path already guards). chip-AGNOSTIC.
@@ -1710,7 +1710,7 @@ _SKY130_FILLER_MASTERS = [
 # Commercial/custom PDKs name their fill + decoupling cells by a short family
 # prefix (FILL / DECAP / DCAP / FILLCAP / FILLER) + a size suffix (FILL64,
 # DECAP8, ...). Discover them from the cell LEF so density-fill runs on ANY PDK,
-# not just sky130 (commercial foundry commercial_pdk: FILL1..64 + DECAP4..64). chip-AGNOSTIC.
+# not just sky130 (a commercial 180nm PDK: FILL1..64 + DECAP4..64). chip-AGNOSTIC.
 _FILLER_MACRO_RE = re.compile(
     r'^\s*MACRO\s+((?:DECAP|DCAP|FILLCAP|FILLER|FILL)(\d*)\w*)\s*$',
     re.IGNORECASE | re.MULTILINE)
@@ -1743,8 +1743,8 @@ def _discover_filler_masters_from_lef(cell_lef: Optional[str]) -> List[str]:
 
 # v1.3.93 — an antenna-diode cell is marked in LEF with `CLASS CORE ANTENNACELL`
 # (the exact marker OpenROAD `repair_antennas` matches to pick a diode). sky130
-# has a hardcoded diode name; a commercial PDK ships its own (e.g. commercial foundry
-# commercial_pdk's `MACRO ANTENNA CLASS CORE ANTENNACELL`). Discover it by the marker so
+# has a hardcoded diode name; a commercial PDK ships its own (e.g.
+# `MACRO ANTENNA CLASS CORE ANTENNACELL`). Discover it by the marker so
 # antenna repair runs for ANY PDK — the same chip-AGNOSTIC LEF-discovery the
 # filler masters already use. Name-pattern/marker based, no vendor literal.
 _ANTENNACELL_RE = re.compile(
@@ -1773,7 +1773,7 @@ def _filler_masters_for_pdk(pdk: "PdkConfig") -> List[str]:
 
     sky130-style cell library (probed by tapcell_master) → SKY130 set.
     Custom / commercial PDK → discover FILL*/DECAP* masters from the cell LEF
-    (so density-fill runs for e.g. commercial foundry commercial_pdk). Genuinely unknown /
+    (so density-fill runs for e.g. a commercial 180nm PDK). Genuinely unknown /
     filler-less PDK → empty list (caller emits a SKIPPED line).
     """
     if pdk.tapcell_master and "sky130_fd_sc_hd" in pdk.tapcell_master:
@@ -2068,12 +2068,12 @@ class PdkConfig:
     # v1.3.91 — LVS engine selector. "magic" (default) = the #443 Magic
     # ext2spice + netgen route. "klayout" = geometric transistor extraction
     # (klayout_pdk_lvs.py) + netgen — the route that stays net-correct where a
-    # commercial-PDK LEF-abstract collapses Magic's top extraction (commercial_pdk).
+    # commercial-PDK LEF-abstract collapses Magic's top extraction.
     # Config-gated so the general flow is unchanged; requires port_label_restore.
     lvs_engine: str = "magic"
     # v1.3.91 — optional PDK layer-map JSON (container/host path) for the KLayout
     # LVS engine's geometric device recognition (klayout_pdk_lvs --layermap). None
-    # → the program's built-in commercial_pdk map. Chip-AGNOSTIC: any PDK supplies its own.
+    # → the program's built-in commercial-PDK map. Chip-AGNOSTIC: any PDK supplies its own.
     lvs_layermap: Optional[str] = None
     # v1.3.92 — post-route decap-under-signal-route SHORT guard. A decoupling-cap
     # filler (DECAP/DCAP/FILLCAP) whose LEF abstract omits a MET1 OBS over its
@@ -2089,7 +2089,7 @@ class PdkConfig:
     # byte-for-byte unchanged). Chip-AGNOSTIC: LEF-size + DEF-routing driven.
     decap_route_short_guard: Optional[Dict[str, Any]] = None
     # v1.3.93 — TAPLESS-CELL PDK latch-up verification. Some commercial PDKs
-    # (e.g. commercial foundry commercial_pdk) ship NO separate tapcell master: the well /
+    # (e.g. a commercial 180nm PDK) ship NO separate tapcell master: the well /
     # substrate ties are BUILT INTO every std/filler cell. For such a PDK
     # `tapcell_master` is None (the tapcell step is CORRECTLY skipped) and the
     # routed DEF carries 0 tap COMPONENTS by design — yet the design IS tapped
@@ -2130,7 +2130,7 @@ def _discover_lefdef_layermap(pdk_dir: Path) -> Optional[str]:
     map (e.g. `*_common_layermap_for_SOC_encounter.txt`) so GDS streamout
     assigns the FOUNDRY's official GDS layer numbers. Without it the streamout
     falls back to legacy/default numbering, and routing layers land on GDS
-    numbers a sign-off DRC deck misreads (spm commercial_pdk clean-run: routing shapes
+    numbers a sign-off DRC deck misreads (spm commercial-PDK clean-run: routing shapes
     read as thick-gate-oxide → 1394 spurious TG2 width violations).
 
     Discovered by FORMAT, not by vendor name (chip-AGNOSTIC): a `*layermap*`
@@ -2269,7 +2269,7 @@ def _detect_pdk(project: Path, override: Optional[str] = None
             # one-level glob silently MISSES it -> cell_gds=None -> the DEF->GDS
             # streamout falls back to a LEF-ABSTRACT GDS with no std-cell metal
             # -> the sign-off DRC then MISREADS pin-connected via pads as
-            # ISOLATED min-area violations (commercial_pdk spm: 993 phantom M1.A.1;
+            # ISOLATED min-area violations (commercial-PDK spm: 993 phantom M1.A.1;
             # under the real-cell GDS the same route is M1.A.1=0). Pick the
             # LARGEST match (the std-cell library GDS; macro GDS is discovered
             # separately as pdk.macro_gds). Mirrors the LEF discovery above,
@@ -2438,7 +2438,7 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                                     if calibre_lvs_dev else None),
                 # Encounter/SoC LEF->GDS streamout map so GDS gets the foundry's
                 # official layer numbers (else a sign-off deck misreads routing
-                # layers — spm commercial_pdk: 1394 spurious TG2 violations without it).
+                # layers — spm commercial-PDK: 1394 spurious TG2 violations without it).
                 lefdef_layermap=_discover_lefdef_layermap(pdk_dir),
                 stdcell_marker_layer=_signoff_cfg.get(
                     "stdcell_exclusion_marker_layer"),
@@ -4820,8 +4820,8 @@ def _discover_spare_cells_from_liberty(
         "nand2":    re.compile(r"(?:^|_)nand2\w*$", re.I),
         "nor2":     re.compile(r"(?:^|_)nor2\w*$", re.I),
         # A 2:1 mux is named `mux2*` (sky130/Nangate), `mx2*` / `mxi2*`
-        # (inverting) in Artisan-style commercial libraries (e.g. commercial foundry
-        # commercial_pdk `MX2D1`, `MXI2D1`), or `muxi2*`. Match all so the spare mix
+        # (inverting) in Artisan-style commercial libraries (e.g. a commercial
+        # 180nm PDK's `MX2D1`, `MXI2D1`), or `muxi2*`. Match all so the spare mix
         # resolves a concrete mux on any library — a `mux2`-only pattern drops
         # the class on commercial PDKs, sinking the spare-cell density target.
         "mux2":     re.compile(r"(?:^|_)m(?:ux|x)i?2\w*$", re.I),
@@ -6544,7 +6544,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # v1.6.38 — chip-AGNOSTIC: audit the tech LEF for single-cut via
     # coverage. OpenROAD's detailed_route requires single-cut via at
     # every routing-layer transition; PDKs that ship only multi-cut
-    # VIAn for upper layers (e.g. commercial_pdk's VIA56_*) trigger
+    # VIAn for upper layers (e.g. a commercial PDK's VIA56_*) trigger
     # `[ERROR DRT-0234] VIAn does not have single-cut via.`. When
     # detected, restrict signal/clock routing to the highest metal layer
     # that *is* covered. Sky130A and OSU PDKs already pass — this is
@@ -7164,7 +7164,7 @@ try:
     # a full-cell box on the FIRST tech-LEF layer — here `LAYER NACT` (GDS 1/0)
     # — so 633 abutting cells tiled a SOLID nact plane over the whole core.
     # That made __nact__ = the entire die and flooded every nact-keyed FEOL
-    # rule (commercial_pdk spm: PO.S.1.3 x3706, NPSD/PPSD implant x3279, CT.OT.1.1
+    # rule (commercial-PDK spm: PO.S.1.3 x3706, NPSD/PPSD implant x3279, CT.OT.1.1
     # x2557, PO.S.4.1.1, CT.S.2.1 ... — 19 failing families, all phantom). The
     # box is a macro-substitution artefact that NO produce_* option or
     # macro_resolution_mode suppresses. Manual substitution (clear each abstract
@@ -7196,7 +7196,7 @@ if _marker and cell_gds_path and os.path.exists(cell_gds_path):
             # comma-separated list: a deck may key its exemption on more
             # than one layer (e.g. an identity marker PLUS the don't-check
             # master its own consistency rule requires the marker to sit
-            # inside — commercial_pdk: Artisan 65/0 inside DCTY0 113/0).
+            # inside — commercial-PDK: Artisan 65/0 inside DCTY0 113/0).
             for _one in _marker.split(','):
                 _one = _one.strip()
                 if not _one:
@@ -7670,7 +7670,7 @@ def _klayout_merge_layers(project: Path, top: str, pdk: PdkConfig,
 # instead of overlapping (a commercial router merges them). A foundry min-space
 # rule is a MANUFACTURING (litho/etch) rule: it is NET-UNAWARE, so a signoff
 # deck's plain `EXTERNAL met < s` flags those same-net near-misses even though
-# they are electrically one net (commercial foundry commercial_pdk M1.S.1). The fix is a
+# they are electrically one net (a commercial 180nm PDK, M1.S.1). The fix is a
 # metal-finishing CLOSE (grow d, shrink d) per configured routing layer that
 # bridges gaps <= 2d. SAFETY: with 2d = max_bridge_um < the layer's min-space,
 # the close can ONLY merge shapes closer than the min-space — and since the
@@ -8683,7 +8683,7 @@ def _magic_run_drc(gds: Path, top: str, container: str
 # ---------------------------------------------------------------------------
 # SVRF-native commercial DRC (Calibre .rule deck run on the vibeic KLayout fork)
 # ---------------------------------------------------------------------------
-# A commercial PDK (e.g. commercial foundry commercial_pdk) ships its sign-off DRC as a
+# A commercial PDK ships its sign-off DRC as a
 # Calibre/SVRF `.rule` deck. The classic path needs the licensed `calibre`
 # binary. The vibeic KLayout fork's `svrf-drc` engine ingests that SAME `.rule`
 # deck NATIVELY (every SVRF measurement modifier maps 1:1 onto a KLayout
@@ -8697,7 +8697,7 @@ def _magic_run_drc(gds: Path, top: str, container: str
 # foundry Calibre/SVRF `.rule` deck directly on KLayout's db:: geometry engine
 # (NO Python interpreter, NO `-r` script, NO Calibre binary). It ships BAKED INTO
 # the vibeic-eda image on PATH as `svrfdrc` — no host checkout required. Byte-parity
-# with the retired run_svrf_drc.py proven on the real commercial_pdk deck.
+# with the retired run_svrf_drc.py proven on the real commercial-PDK deck.
 _SVRFDRC_BIN = "svrfdrc"
 
 
@@ -10211,7 +10211,7 @@ def _run_klayout_lvs(project: Path, top: str, pdk: PdkConfig,
     """v1.3.91 — geometric transistor-level LVS (KLayout `LayoutToNetlist`).
 
     The route that stays net-correct where a commercial-PDK LEF-abstract collapses
-    Magic's top-level extraction (commercial_foundry commercial_pdk): `klayout_pdk_lvs.py` extracts
+    Magic's top-level extraction (a commercial 180nm PDK): `klayout_pdk_lvs.py` extracts
     real transistors from the (label-restored) flat sign-off GDS + the cell-library
     GDS, `gate_verilog_to_spice.py` converts the gate netlist to a SPICE reference,
     and netgen compares spice-vs-spice. Deterministic + multithreaded (no LLM in the
@@ -13311,7 +13311,7 @@ exit
         return False
     # --- Step 22.5: coupling-aware augmentation (v1.3.95) --------------------
     # The OpenRCX `-lef_rc` path (used when the PDK ships no foundry captable —
-    # e.g. commercial_pdk, which lacks the Calibre-XRC rules.C / StarRC .nxtgrd
+    # e.g. a commercial 180nm PDK, which lacks the Calibre-XRC rules.C / StarRC .nxtgrd
     # coupling+3D-dielectric deliverable) produces GROUNDED caps only.  We add
     # the LATERAL (same-layer, side-to-side) coupling cap ANALYTICALLY from the
     # routed geometry: spacing/overlap measured from the DEF, thickness from the

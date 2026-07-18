@@ -4,9 +4,9 @@
 Validates that post-layout SPICE simulation was performed and its results
 correlate with the STA timing model. Three verification axes:
 
-  0. **Real ngspice cell-delay ↔ liberty correlation (commercial_pdk driver)**: when
+  0. **Real ngspice cell-delay ↔ liberty correlation (commercial-PDK driver)**: when
      the design ships an ngspice PDK bridge shim
-     (input/pdk/bridge/commercial_pdk_ngspice_shim.lib) and no correlation report
+     (input/pdk/bridge/*_ngspice_shim.lib) and no correlation report
      exists yet, this gate RUNS ngspice on a representative standard cell pulled
      from the LVS-extracted transistor netlist (nmos→nch_tn / pmos→pch_tn) and
      correlates the SPICE-measured propagation delay against the liberty NLDM
@@ -365,7 +365,7 @@ def check_analog_coverage(
 
 
 # ══════════════════════════════════════════════════════════════════════════
-#  commercial_pdk REAL ngspice cell-delay ↔ liberty correlation driver
+#  Commercial-PDK REAL ngspice cell-delay ↔ liberty correlation driver
 # ══════════════════════════════════════════════════════════════════════════
 #
 # Canonical Step-30 (post-layout SPICE correlation) for a commercial PDK that
@@ -384,7 +384,7 @@ def check_analog_coverage(
 # is NEVER copied into any emitted file or report (only derived delay numbers).
 #
 # The whole driver self-skips (returns None) when the bridge shim is absent
-# (non-commercial_pdk design) or ngspice is unreachable — it NEVER fabricates numbers.
+# (design without the bridge shim) or ngspice is unreachable — it NEVER fabricates numbers.
 
 _commercial_pdk_SHIM_NAME = "commercial_pdk_ngspice_shim.lib"
 _DEFAULT_CONTAINER = "vibeic-eda"
@@ -395,7 +395,7 @@ _MODEL_MAP = {"nmos": "nch_tn", "pmos": "pch_tn"}
 
 
 def _find_bridge_shim(project: Path) -> Optional[Path]:
-    """Locate the commercial_pdk ngspice bridge shim under the design input PDK."""
+    """Locate the commercial-PDK ngspice bridge shim under the design input PDK."""
     for rel in (
         "input/pdk/bridge/" + _commercial_pdk_SHIM_NAME,
         "pdk/bridge/" + _commercial_pdk_SHIM_NAME,
@@ -431,7 +431,7 @@ def _find_liberty_typ(project: Path) -> Optional[Path]:
 
 def _find_hspice_dir(project: Path) -> Optional[Path]:
     """Directory the shim's nested bare-filename `.lib` references resolve
-    against (contains e.g. commercial_pdk-S1.9cS.lib). Used as ngspice cwd so the
+    against (contains the foundry HSPICE `.lib` files). Used as ngspice cwd so the
     shim → *_ngspice.lib → HSPICE .lib chain resolves.
 
     NOTE: `input/pdk` is often a symlink; `Path.rglob` (pre-3.13) does NOT
@@ -634,7 +634,7 @@ def build_cell_delay_deck(shim_abs: str, corner: str, cell: str,
     step = max(0.001, tr_ns / 100.0)  # ns
     load_ff = load_pf * 1000.0
     return (
-        f"* {cell} SPICE↔liberty cell-delay correlation (commercial_pdk {corner}, "
+        f"* {cell} SPICE↔liberty cell-delay correlation (commercial PDK {corner}, "
         f"{temp_c:g}C, load={load_ff:g}fF, in_slew_tr={tr_ns:g}ns)\n"
         f".lib '{shim_abs}' {corner}\n"
         f".temp {temp_c:g}\n"
@@ -819,7 +819,7 @@ def run_commercial_pdk_cell_correlation(
                "MISMATCH" if max_abs > 10 else "CORRELATED")
 
     report = {
-        "program": "spice_correlation_check.commercial_pdk_cell_driver",
+        "program": "spice_correlation_check.commercial_cell_driver",
         "version": "1.1.0",
         "provenance": "real_ngspice",
         "simulator": "ngspice (vibeic-eda container)",
@@ -857,7 +857,7 @@ def run_commercial_pdk_cell_correlation(
 
 
 # ══════════════════════════════════════════════════════════════════════════
-#  commercial_pdk REAL ngspice FULL-PATH correlation driver (Step-30, additive)
+#  Commercial-PDK REAL ngspice FULL-PATH correlation driver (Step-30, additive)
 # ══════════════════════════════════════════════════════════════════════════
 #
 # Extends the single-cell driver to the FULL STA critical PATH: it parses the
@@ -1041,7 +1041,7 @@ def parse_verilog_instances(vtext: str) -> dict:
 
 def parse_spef_caps(spef_text: str) -> dict:
     """Map {net_name: total_cap_pf} from a SPEF (*NAME_MAP + *D_NET) (pure).
-    Assumes *C_UNIT PF (the commercial_pdk extraction unit); callers needing another
+    Assumes *C_UNIT PF (the commercial-PDK extraction unit); callers needing another
     unit should scale. Returns {} when the SPEF has no D_NET records."""
     id2name = {}
     for m in re.finditer(r"^\*(\d+)\s+([A-Za-z_]\S*)\s*$", spef_text, re.MULTILINE):
@@ -1222,7 +1222,7 @@ def build_path_deck(shim_abs: str, corner: str, stages: List[dict],
     in_edge_for_fall = "RISE" if invert_parity else "FALL"
     in_edge_for_rise = "FALL" if invert_parity else "RISE"
     deck = [
-        f"* spm critical-PATH stitch ({n} stages, commercial_pdk {corner}, {temp_c:g}C)",
+        f"* spm critical-PATH stitch ({n} stages, commercial PDK {corner}, {temp_c:g}C)",
         f".lib '{shim_abs}' {corner}",
         f".temp {temp_c:g}",
         f"vdd vdd 0 {vdd:g}",
@@ -1391,7 +1391,7 @@ def run_commercial_pdk_path_correlation(
                          "is_sta_direction": arc == direction})
 
     report = {
-        "program": "spice_correlation_check.commercial_pdk_path_driver",
+        "program": "spice_correlation_check.commercial_path_driver",
         "version": "1.2.0",
         "provenance": "real_ngspice",
         "simulator": "ngspice (vibeic-eda container)",
@@ -1823,7 +1823,7 @@ def run_commercial_pdk_topN_path_correlation(
     tr_ns = pulse_tr_for_slew(slew_ns, hdr["slew_lower_fall"],
                               hdr["slew_upper_fall"], hdr["slew_derate"])
     report = {
-        "program": "spice_correlation_check.commercial_pdk_topN_path_driver",
+        "program": "spice_correlation_check.commercial_topN_path_driver",
         "version": "1.0.0",
         "provenance": "real_ngspice",
         "simulator": "ngspice (vibeic-eda container)",
@@ -1880,7 +1880,7 @@ def run_audit(project: Path, run_spice: bool = True,
         return result
 
     # ── Canonical Step-30: run REAL ngspice cell-delay↔liberty correlation ──
-    # When the design ships an commercial_pdk ngspice bridge shim and no correlation
+    # When the design ships a commercial-PDK ngspice bridge shim and no correlation
     # report exists yet, characterise a representative extracted cell in real
     # ngspice and correlate it against the liberty NLDM arc. Honest skip (no
     # numbers fabricated) when the shim/liberty/simulator are unavailable.
@@ -1894,7 +1894,7 @@ def run_audit(project: Path, run_spice: bool = True,
             result.findings.append(Finding(
                 rule="SPICE_DRIVER_ERROR",
                 severity="INFO",
-                message=f"commercial_pdk ngspice correlation driver could not run: {e}",
+                message=f"commercial-PDK ngspice correlation driver could not run: {e}",
             ))
         if driver_report is not None:
             c = driver_report.get("correlation", {})
@@ -1923,7 +1923,7 @@ def run_audit(project: Path, run_spice: bool = True,
             result.findings.append(Finding(
                 rule="SPICE_PATH_DRIVER_ERROR",
                 severity="INFO",
-                message=f"commercial_pdk ngspice path-correlation driver could not run: {e}",
+                message=f"commercial-PDK ngspice path-correlation driver could not run: {e}",
             ))
     else:
         path_report = _check_path_correlation_json(project)
@@ -1961,7 +1961,7 @@ def run_audit(project: Path, run_spice: bool = True,
             result.findings.append(Finding(
                 rule="SPICE_TOPN_PATH_DRIVER_ERROR",
                 severity="INFO",
-                message=f"commercial_pdk ngspice top-N path-correlation driver "
+                message=f"commercial-PDK ngspice top-N path-correlation driver "
                         f"could not run: {e}",
             ))
     else:

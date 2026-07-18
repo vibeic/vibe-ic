@@ -23,7 +23,7 @@ USAGE — pre-compile
     python3 pdk_fpga_gds_reverify_runner.py \\
         --project           ./bench-a \\
         --pnr-netlist       phase3/chip_top_asic_pnr.v \\
-        --pdk-behavioral    pdk/commercial_pdk_neg.v \\
+        --pdk-behavioral    pdk/<pdk>_neg.v \\
         --otp-hex           input/otp.hex \\
         --rtl-chip-top      rtl/chip_top.sv \\
         --rtl-chip-top-asic rtl/chip_top_asic.sv \\
