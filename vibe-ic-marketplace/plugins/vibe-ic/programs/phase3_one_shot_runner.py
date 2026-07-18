@@ -11743,14 +11743,25 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     dyn_ir_json = rpt_phase3 / "dynamic_ir.json"
     if primary_def.is_file() and not dyn_ir_json.is_file():
         try:
-            # Pass the design's ACTUAL tech/cell LEF (the runner knows them) so
-            # the emitter's LEF auto-discovery can't pick a wrong sibling variant
-            # (e.g. a 3lm tech LEF for a 6lm design → undefined-layer DEF error).
+            # Pass the design's ACTUAL tech/cell LEF + LIBERTY (the runner knows
+            # them from the resolved PDK context) so the emitter never SKIPs on a
+            # failed auto-discovery. The LEF args stop the auto-discovery picking
+            # a wrong sibling variant (e.g. a 3lm tech LEF for a 6lm design →
+            # undefined-layer DEF error). The LIBERTY is the same one the STA/PSM
+            # steps resolve (pdk.liberty); WITHOUT it the transient emit SKIPs
+            # "missing required input(s) --liberty" (the emitter's input/pdk
+            # rglob does not always match the resolved PDK liberty) → the flagship
+            # dynamic-IR number is never generated. Wiring it makes the transient
+            # solve actually run. The genuine no-liberty / no-PDN SKIP is
+            # preserved (the emitter still SKIPs honestly when liberty is truly
+            # absent or the DEF has no power grid).
             _dyn_lef_args = []
             if getattr(pdk, "tech_lef", None):
                 _dyn_lef_args += ["--tech-lef", str(pdk.tech_lef)]
             if getattr(pdk, "cell_lef", None):
                 _dyn_lef_args += ["--cell-lef", str(pdk.cell_lef)]
+            if getattr(pdk, "liberty", None):
+                _dyn_lef_args += ["--liberty", str(pdk.liberty)]
             subprocess.run(
                 [sys.executable, str(PROGRAMS_DIR / "dynamic_ir_vectored_emit.py"),
                  "--project", str(project), "--out", str(dyn_ir_json),

@@ -364,6 +364,18 @@ def build_result(worst_dyn_mv: float, vdd_v: Optional[float],
     return res
 
 
+def missing_required_inputs(def_file, tech_lef, cell_lef, liberty) -> List[str]:
+    """CLI-flag names of the required transient-emit inputs that are absent
+    (None). The LIBERTY is REQUIRED — `analyze_power_grid -transient` needs the
+    cell timing/power models to solve, so the runner must wire pdk.liberty (the
+    same Liberty the STA/PSM steps resolve); without it the emit honestly SKIPs
+    "missing required input(s) --liberty" instead of generating the flagship
+    dynamic-IR number. PURE (no filesystem / docker)."""
+    return [n for n, v in (("--def", def_file), ("--tech-lef", tech_lef),
+                           ("--cell-lef", cell_lef), ("--liberty", liberty))
+            if v is None]
+
+
 def skip_result(reason: str, status: str = "SKIPPED_MISSING_INPUTS"
                 ) -> Dict[str, object]:
     """Honest SKIP payload — NO fabricated droop number (§4.05)."""
@@ -613,9 +625,8 @@ def main(argv: List[str]) -> int:
     if ns.out is None:
         print("error: --out or --project required", file=sys.stderr)
         return 2
-    missing = [n for n, v in (("--def", ns.def_file), ("--tech-lef", ns.tech_lef),
-                              ("--cell-lef", ns.cell_lef), ("--liberty", ns.liberty))
-               if v is None]
+    missing = missing_required_inputs(
+        ns.def_file, ns.tech_lef, ns.cell_lef, ns.liberty)
     if missing:
         payload = skip_result(
             f"cannot run: missing required input(s) {', '.join(missing)}",
