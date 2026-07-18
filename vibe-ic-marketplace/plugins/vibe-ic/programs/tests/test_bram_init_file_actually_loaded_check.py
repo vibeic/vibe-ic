@@ -372,3 +372,42 @@ def test_memory_resource_parser_is_label_agnostic():
     assert any("total memory bits" in x for x in labels)
     assert any("m9k" in x for x in labels)
     assert max(r[1] for r in rows) == 1024
+
+
+def test_historical_v0_119_48_miss_caught_by_observable_alone(tmp_path):
+    """THE HISTORICAL MISS, reproduced with every recognisable phrase REMOVED.
+
+    v0.119.48 (22nd attempt): `(* ram_init_file = "apple.mif" *)` on MAX 10,
+    Quartus silently demoted the ROM, every OTP-derived ID byte read 0, and the
+    host tester padded byte[6]=0x02. Sim PASSed ($readmemh), hardware FAILed.
+
+    Here the map report is stripped of the MIF/uninferred wording AND of the
+    276013/276014 message IDs, so neither the prose table nor the ID table can
+    contribute. The only thing left is the allocated-bit count. If the fix is
+    genuinely observable-based, that alone must FAIL — this is what proves the
+    verdict no longer depends on Quartus's choice of words.
+    """
+    proj = _make_project(
+        tmp_path,
+        rtl_files={
+            "otp.v": """\
+module otp(input clk, input [6:0] addr, output reg [7:0] q);
+  (* ram_init_file = "apple.mif" *) reg [7:0] mem [0:127];
+  always @(posedge clk) q <= mem[addr];
+endmodule
+"""
+        },
+        # renamed label + zero allocation: the image did not land
+        fit_summary="Total block memory bits : 0 / 1,677,312 ( 0 % )\n",
+        # deliberately scrubbed: no "uninferred", no "MIF", no 276013/276014
+        map_rpt="Info (999999): Design partition compilation completed\n",
+        qsf="set_global_assignment -name SEARCH_PATH ../rtl\n",
+    )
+    r = _run([str(proj)])
+    assert r.returncode == 1, (
+        "the historical silent-skip recurred: zero allocated memory bits "
+        f"scored PASS once the wording was scrubbed.\n{r.stdout}"
+    )
+    assert "OTP_NOT_LOADED_ON_FPGA" in r.stdout
+    # and it is the NUMBER doing the work, cited in the failure
+    assert "0 / 1677312" in r.stdout or "Allocated memory" in r.stdout
