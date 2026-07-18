@@ -3465,8 +3465,21 @@ def _verilator_sim_escape(
     # sim-only-construct signature. Honesty preserved: a closure that ALSO fails
     # under -DSYNTHESIS keeps the honest FAIL below. chip-AGNOSTIC: tool
     # error-token + the standard SIMULATION/SYNTHESIS define names.
+    # v1.4.x OBSERVABLE-OVER-WORDING: decided by the OBSERVABLE (the -DSIMULATION
+    # build produced no runnable simulation — vrc != 0 above) plus the DESIGN
+    # PROPERTY (the DUT closure branches on the define set), NOT by verilator's
+    # phrasing, which it renames between releases. `tb_text` is supplied so the
+    # helper can REFUSE the flip when the TESTBENCH itself branches on the
+    # define — that is the only way this retry could turn a FAIL into a pass.
+    try:
+        _tb_text = tb_path.read_text(errors="replace")
+    except OSError:
+        _tb_text = ""
     _retry, _retry_reason = _sf.verilator_should_retry_synthesis_define(
-        (vout or "") + "\n" + (verr or ""))
+        (vout or "") + "\n" + (verr or ""),
+        rtl_text_blob=_sf.read_text_blob(rtl_files),
+        tb_text=_tb_text,
+        produced_output=(vrc == 0))
     if _retry:
         srrc, srout, srerr = _vl_build_run("SYNTHESIS")
         if srrc == 0:
@@ -3745,8 +3758,14 @@ def _iverilog_compile_with_sv_fallback(
             _rtl_blob = "".join(_files_text.values())
         except Exception:
             _rtl_blob = ""
+        # v1.4.x OBSERVABLE-OVER-WORDING: the escape is decided by the
+        # OBSERVABLE (sv2v produced no usable conversion) plus the DESIGN
+        # PROPERTY (the RTL genuinely carries SVA/sequence/property constructs),
+        # NOT by sv2v's parse-error phrasing — which included an Alex-generated
+        # LEXER TOKEN NAME, the most volatile string that tool emits.
         _try_vl, _vl_reason = _sf.sim_frontend_should_try_verilator(
-            rtl_files, rc_s if rc_s != 0 else 1, _sv2v_err_txt, _rtl_blob)
+            rtl_files, rc_s, _sv2v_err_txt, _rtl_blob,
+            converted_exists=converted_host.is_file())
         if _try_vl:
             vrc, vout, verr, vfe = _verilator_sim_escape(
                 rtl_files, tb_path, run_dir, container, top_name, _vl_reason)

@@ -653,12 +653,23 @@ def test_define_retry_reuses_the_synth_frontend_decision():
     # $value$plusargs signature triggers the -DSYNTHESIS retry; a non-sim-only
     # failure does not.
     import synth_frontend
+    # v1.4.x — the decision is the OBSERVABLE (the slang gold read built no
+    # miter) + the DESIGN PROPERTY (the gold source branches on the define set),
+    # NOT slang's phrasing. Supply the gold RTL that makes the flip meaningful.
+    gold_rtl = ("module dut;\n`ifdef SIMULATION\n  initial x = $urandom;\n"
+                "`else\n  wire x = 1'b0;\n`endif\nendmodule\n")
     for sig in ("error: unsupported system task '$urandom'",
-                "std::randomize", "$value$plusargs"):
-        assert synth_frontend.synth_frontend_should_retry_under_synthesis(sig)[0]
-    # a genuine non-sim-only failure must NOT trigger a define retry (no leak).
+                "std::randomize", "$value$plusargs",
+                # …and a REWORDED abort the old allow-list would have missed:
+                "error: system function 'urandom_range' cannot be used in a "
+                "constant expression"):
+        assert synth_frontend.synth_frontend_should_retry_under_synthesis(
+            sig, rtl_text_blob=gold_rtl)[0], sig
+    # a genuine failure in a design with NO define-conditional arm must NOT
+    # trigger a define retry — the retry would re-read identical source (no leak).
     assert not synth_frontend.synth_frontend_should_retry_under_synthesis(
-        "ERROR: Module foo not found")[0]
+        "ERROR: Module foo not found",
+        rtl_text_blob="module dut; wire x = 1'b0; endmodule\n")[0]
 
 
 # REAL in-container: the FULL-SoC combo — an async-reset FF AND a $urandom in an
@@ -694,7 +705,9 @@ def test_urandom_simblock_plus_async_reaches_verdict_via_synthesis_define(tmp_pa
         assert "$urandom" in sim_log, "expected the -DSIMULATION $urandom abort"
         import synth_frontend
         assert synth_frontend.synth_frontend_should_retry_under_synthesis(
-            sim_log)[0], "the synth #668 decision must fire on this abort"
+            sim_log,
+            rtl_text_blob=_AES_LIKE_RTL)[0], \
+            "the synth #668 decision must fire on this abort"
 
         # gate = synth under -DSYNTHESIS (the arm the gate is built from) → dfrtp.
         map_ys = work / "map.ys"

@@ -34,13 +34,129 @@ The actual SV-aware frontends invoked on a positive decision are:
                   can compile (or a `verilator --lint-only` elaboration
                   sanity gate when sv2v is unavailable).
 
-Chip-AGNOSTIC: every decision is driven by file *extension* and tool
-*error signatures* only — never a chip-class / vendor string literal.
+Chip-AGNOSTIC: every decision is driven by an OBSERVABLE OUTCOME (did the
+frontend produce an elaborated design / any usable output?), a DESIGN
+PROPERTY of the RTL (does it branch on the sim/synth define? does it carry
+SVA constructs?), and file *extension* — never a chip-class / vendor string
+literal, and (since v1.4.x) never the tool's error PHRASING. See the
+OBSERVABLE-OVER-WORDING doctrine block below.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import List, Sequence, Tuple, Union
+
+# ---------------------------------------------------------------------------
+# OBSERVABLE-OVER-WORDING doctrine (v1.4.x, mirrors the lec_run slang-retry fix)
+#
+# A control decision must key on an OBSERVABLE OUTCOME ("did the frontend
+# produce an elaborated design / any usable output?") or on a DESIGN PROPERTY
+# of the RTL ("does this source actually carry a define-conditional arm?"),
+# NEVER on the tool's error PHRASING. Tools rename diagnostics between
+# releases; a wording allow-list that drives a RETRY silently stops firing on
+# the reworded abort and turns a recoverable closure into an honest-looking
+# FALSE FAIL, with nothing in the log to show the capability was skipped.
+#
+# The signature tuples below are RETAINED but DEMOTED to explanatory strings:
+# they colour the reason text in the log and nothing more. Grep for
+# `_EXPLANATORY_ONLY` — no `if` that changes control flow may read them.
+# ---------------------------------------------------------------------------
+_EXPLANATORY_ONLY = "not a control predicate — reason-string colouring only"
+
+# Bound on how much RTL text a design-property probe will read. A closure can
+# be hundreds of files; the directives/constructs we look for appear early and
+# often, so a cap keeps the probe O(1) without changing any verdict.
+_BLOB_SCAN_CAP_BYTES = 2_000_000
+
+
+def read_text_blob(files: Sequence[Union[str, Path]],
+                   cap_bytes: int = _BLOB_SCAN_CAP_BYTES) -> str:
+    """Concatenate `files` into one text blob for a DESIGN-PROPERTY probe.
+
+    Unreadable / binary files are skipped rather than raising: a design-property
+    probe is advisory input to a retry decision, never a verdict, so a partial
+    blob must degrade to "property not observed" (fail-safe: no retry) instead
+    of exploding the caller."""
+    out: List[str] = []
+    total = 0
+    for f in files:
+        if total >= cap_bytes:
+            break
+        try:
+            txt = Path(f).read_text(errors="replace")
+        except (OSError, ValueError):
+            continue
+        out.append(txt[:cap_bytes - total])
+        total += len(txt)
+    return "\n".join(out)
+
+
+def define_conditional_arms_present(
+    rtl_text_blob: str,
+    sim_define: str = "SIMULATION",
+    synth_define: str = "SYNTHESIS",
+) -> Tuple[bool, str]:
+    """DESIGN PROPERTY: does this source actually branch on the sim/synth define?
+
+    This is the invariant that bounds every ``-D<sim>`` → ``-D<synth>`` retry in
+    this module. If the closure carries NO `` `ifdef/`ifndef/`elsif `` on either
+    define name, then re-reading it under the other define feeds the frontend
+    BYTE-IDENTICAL text — the retry provably cannot change the outcome, so it is
+    skipped (no wasted tool invocation, and no possibility of a verdict change).
+
+    Returns (present, evidence) where evidence names the directives found."""
+    blob = rtl_text_blob or ""
+    if not blob:
+        return False, "no RTL text available to probe"
+    pat = re.compile(
+        r"`(ifdef|ifndef|elsif)\s+(" + re.escape(sim_define) + r"|"
+        + re.escape(synth_define) + r")\b")
+    hits = {f"`{m.group(1)} {m.group(2)}" for m in pat.finditer(blob)}
+    if not hits:
+        return False, (
+            f"no `ifdef/`ifndef/`elsif on {sim_define}/{synth_define} in the "
+            f"RTL — flipping the define feeds byte-identical source")
+    return True, "RTL carries " + ", ".join(sorted(hits))
+
+
+# DESIGN PROPERTY (not a tool-wording probe): simulation-only constructs as they
+# appear in the RTL SOURCE. Used ONLY to colour the reason string with WHY the
+# sim arm is likely unsynthesizable; the retry decision never depends on it.
+_SIMONLY_SOURCE_CONSTRUCTS: Tuple[str, ...] = (
+    "$urandom", "$random", "std::randomize", "randomize()",
+    "$value$plusargs", "$plusargs", "$fdisplay", "$fatal", "$dumpfile",
+)
+
+
+def simonly_constructs_in_source(rtl_text_blob: str) -> Tuple[bool, str]:
+    """DESIGN PROPERTY: does the RTL literally contain sim-only constructs?
+
+    Explanatory only — reported in the retry reason so the log says WHAT made
+    the simulation arm unsynthesizable, derived from the DESIGN rather than
+    from whatever the tool happened to call it this release."""
+    blob = rtl_text_blob or ""
+    hits = sorted({c for c in _SIMONLY_SOURCE_CONSTRUCTS if c in blob})
+    if not hits:
+        return False, "no sim-only construct visible in the RTL source"
+    return True, "RTL source contains " + ", ".join(hits)
+
+
+def _wording_note(err: str, signatures: Sequence[str]) -> str:
+    """Reason-string colouring ONLY (see :data:`_EXPLANATORY_ONLY`).
+
+    Names the recognised phrase when the tool happens to use one we know, so
+    the log stays as readable as it was under the old allow-list. Returns a
+    neutral note otherwise — an UNRECOGNISED phrasing is explicitly NOT a
+    reason to withhold the retry; that was the bug this doctrine retires."""
+    e = err or ""
+    for s in signatures:
+        if s in e:
+            return f"tool reported {s!r}"
+    first = next((ln.strip() for ln in e.splitlines() if ln.strip()), "")
+    if first:
+        return f"tool phrasing unrecognised ({first[:120]!r}) — decided on the observable"
+    return "tool produced no diagnostic text — decided on the observable"
 
 # yosys built-in Verilog-2005 frontend (`read_verilog -sv`) error
 # signatures that indicate an unsupported SystemVerilog construct rather
@@ -76,6 +192,18 @@ IVERILOG_SV_ERROR_SIGNATURES: Tuple[str, ...] = (
 # Backward-compat alias used by the original Phase-3 module-level name.
 _SLANG_ERROR_SIGNATURES = SLANG_ERROR_SIGNATURES
 
+# DESIGN PROPERTY (v1.4.x): modern-SystemVerilog constructs as they appear in
+# the RTL SOURCE — exactly the family named in this module's docstring that
+# `read_verilog -sv` / `iverilog -g2012` cannot read but a full SV-2017 frontend
+# can. Reading these from the SOURCE (rather than from the tool's error text)
+# is what lets the fallback fire on a REWORDED abort, and closes the residual
+# hole the file-extension test leaves: a `.v` file carrying SV constructs.
+MODERN_SV_CONSTRUCTS: Tuple[str, ...] = (
+    "package ", "endpackage", "import ", "::", "typedef ",
+    "'{",                       # named-field / assignment-pattern literal
+    "interface ", "modport", "struct packed", "union packed",
+)
+
 
 def decide_synth_frontend(
     rtl_files: Sequence[Union[str, Path]],
@@ -83,6 +211,7 @@ def decide_synth_frontend(
     default_netlist_exists: bool,
     default_log: str,
     error_signatures: Sequence[str] = SLANG_ERROR_SIGNATURES,
+    rtl_text_blob: str = "",
 ) -> Tuple[bool, str]:
     """Decide whether to invoke an SV-aware fallback frontend after the
     *default* frontend attempt.
@@ -121,6 +250,20 @@ def decide_synth_frontend(
     has_sv = any(str(f).lower().endswith(".sv") for f in rtl_files)
     if not default_failed:
         return False, "default frontend succeeded"
+    # DESIGN PROPERTY first (v1.4.x): does the RTL actually contain a modern-SV
+    # construct the default Verilog-2005 frontend cannot read? This closes the
+    # residual hole the extension test leaves — a `.v` file carrying SV
+    # constructs — WITHOUT consulting the tool's phrasing, and it fires whatever
+    # the frontend called its abort.
+    if rtl_text_blob:
+        sv_hit = sorted({c for c in MODERN_SV_CONSTRUCTS
+                         if c in rtl_text_blob})
+        if sv_hit:
+            return True, (
+                f"default frontend produced no netlist and the RTL contains "
+                f"modern-SV constructs ({', '.join(repr(c) for c in sv_hit)}) "
+                f"the Verilog-2005 frontend cannot read — trying the SV-2017 "
+                f"frontend [{_wording_note(default_log, error_signatures)}]")
     sig_hit = any(s in (default_log or "") for s in error_signatures)
     if sig_hit:
         return True, "default frontend errored with an SV signature"
@@ -136,6 +279,7 @@ def decide_iverilog_sv_fallback(
     default_rc: int,
     default_artifact_exists: bool,
     default_log: str,
+    rtl_text_blob: str = "",
 ) -> Tuple[bool, str]:
     """Convenience wrapper for the reference-TB / simulation step.
 
@@ -145,7 +289,8 @@ def decide_iverilog_sv_fallback(
     """
     return decide_synth_frontend(
         rtl_files, default_rc, default_artifact_exists, default_log,
-        error_signatures=IVERILOG_SV_ERROR_SIGNATURES)
+        error_signatures=IVERILOG_SV_ERROR_SIGNATURES,
+        rtl_text_blob=rtl_text_blob)
 
 
 # `sv2v` parse-error signatures that indicate the construct is an
@@ -157,6 +302,11 @@ def decide_iverilog_sv_fallback(
 # canonical signature is sv2v's consecutive-repetition lexer token
 # `(Sym_brack_l_aster)` / `unexpected token [*` inside a sequence/property
 # block. chip-AGNOSTIC: tool error-token + SV-keyword surface only.
+# _EXPLANATORY_ONLY (v1.4.x): RETAINED for the reason string, RETIRED as a
+# control predicate. `Sym_brack_l_aster` is an Alex-generated lexer token name
+# — the most volatile string sv2v emits — and keying the escape on it meant a
+# rename silently skipped the capability. The decision now reads the OBSERVABLE
+# (sv2v produced no conversion) + the DESIGN PROPERTY (SVA_KEYWORDS in the RTL).
 SV2V_ASSERTION_PARSE_SIGNATURES: Tuple[str, ...] = (
     "Sym_brack_l_aster",        # sv2v lexer token for `[*` (consecutive-rep)
     "unexpected token [*",      # sv2v parse error rendering of the same
@@ -181,6 +331,7 @@ def sim_frontend_should_try_verilator(
     sv2v_rc: int,
     sv2v_err: str,
     rtl_text_blob: str,
+    converted_exists: bool = True,
 ) -> Tuple[bool, str]:
     """Decide whether the SIM / reference_tb frontend should escape to a
     verilator (or slang) elaboration after the iverilog → sv2v ladder has
@@ -188,38 +339,51 @@ def sim_frontend_should_try_verilator(
 
     Mirrors the asymmetry the synth path already closes via `yosys -m slang`:
     the synth frontend accepts full SV-2017 (incl. SVA sequences), but the
-    sim frontend trailed it. The verilator escape is attempted ONLY when:
+    sim frontend trailed it.
 
-      * the sv2v pre-pass itself FAILED (sv2v_rc != 0), AND
-      * sv2v's stderr carries an SVA/sequence/property parse signature
-        (e.g. the consecutive-repetition `[*N]` lexer token), AND
-      * the actual RTL text carries an SVA keyword (so a non-assertion
-        "Parse error" — a real RTL defect — does NOT trigger the escape), AND
-      * at least one `.sv` input is present.
+    OBSERVABLE-BASED (v1.4.x). The escape used to require a match against sv2v's
+    parse-error PHRASING — including `Sym_brack_l_aster`, an Alex-generated
+    LEXER TOKEN NAME and the single most volatile string that tool emits. A
+    rename there silently skipped the whole verilator capability and produced a
+    FALSE FAIL. The escape now fires on:
 
-    Returns (should_try, reason). Honesty preserved: a defect ALL SV-2017
-    frontends reject still FAILs (verilator will also fail, and the caller
-    keeps the honest FAIL). chip-AGNOSTIC: tool error-token + SV-keyword
-    surface only — no chip/vendor/file literal."""
+      * the OBSERVABLE: sv2v produced NO usable conversion (non-zero rc, or no
+        converted output file) — whatever it said about why, AND
+      * the DESIGN PROPERTY: the RTL genuinely contains an SVA / sequence /
+        property construct, i.e. something sv2v is known not to lower and a full
+        SV-2017 frontend does. This is read from the RTL SOURCE, not from the
+        error text, so a real RTL defect in an assertion-free design still FAILs
+        honestly rather than being escaped, AND
+      * at least one `.sv` input is present (structural — sv2v/verilator escape
+        cannot help a pure Verilog-2005 closure).
+
+    §4.05 — widening the ESCAPE does not widen PASS: verilator must still build
+    AND run the TB to its completion marker for the caller to accept a pass, so
+    a design with a genuine functional bug fails on the escape path exactly as
+    it would have on the iverilog path. And because the escape only runs when
+    sv2v produced NOTHING, there is no existing result to shop for.
+
+    Returns (should_try, reason). chip-AGNOSTIC: file extension + SV-keyword
+    surface of the DESIGN — no chip/vendor/file literal."""
     has_sv = any(str(f).lower().endswith(".sv") for f in rtl_files)
     if not has_sv:
         return False, "no .sv input — verilator escape would not help"
-    if sv2v_rc == 0:
+    if sv2v_rc == 0 and converted_exists:
         return False, "sv2v converted cleanly — no escape needed"
-    err = sv2v_err or ""
-    sig_hit = any(s in err for s in SV2V_ASSERTION_PARSE_SIGNATURES)
-    if not sig_hit:
-        return False, ("sv2v failure carries no SVA/sequence parse "
-                       "signature — not an assertion-construct gap")
     blob = rtl_text_blob or ""
-    kw_hit = any(k in blob for k in SVA_KEYWORDS)
+    kw_hit = sorted({k for k in SVA_KEYWORDS if k in blob})
     if not kw_hit:
-        return False, ("sv2v parse error but RTL has no SVA/sequence/"
-                       "property keyword — treat as genuine defect, FAIL")
-    return True, ("sv2v cannot lower an SVA/sequence/property construct "
-                  "(e.g. consecutive-repetition [*N]); the identical "
-                  "closure elaborates under a full SV-2017 frontend — "
-                  "escaping to verilator (mirrors the synth slang path)")
+        return False, ("sv2v produced no conversion and the RTL carries no "
+                       "SVA/sequence/property construct — nothing a full "
+                       "SV-2017 frontend would lower differently; treat as a "
+                       "genuine defect and FAIL")
+    note = _wording_note(sv2v_err, SV2V_ASSERTION_PARSE_SIGNATURES)
+    return True, (
+        f"sv2v produced NO conversion and the RTL contains SVA/sequence/"
+        f"property constructs ({', '.join(repr(k) for k in kw_hit)}) that sv2v "
+        f"cannot lower; the identical closure elaborates under a full SV-2017 "
+        f"frontend — escaping to verilator (mirrors the synth slang path) "
+        f"[{note}]")
 
 
 def decide_sv2v_tb_define(
@@ -298,6 +462,11 @@ def decide_sv2v_tb_define(
 # synthesizable `else passthrough is taken instead). These are NOT genuine RTL
 # defects; they are a define-set mismatch. chip-AGNOSTIC: verilator tool-token
 # surface + the standard randomisation-helper vocabulary, no chip/vendor literal.
+# _EXPLANATORY_ONLY (v1.4.x): RETAINED for the reason string, RETIRED as a
+# control predicate — verilator renames its `Unsupported:` diagnostics between
+# releases, so this allow-list silently stopped firing on reworded aborts. The
+# retry now reads the OBSERVABLE (no runnable simulation produced) + the DESIGN
+# PROPERTY (the closure branches on the sim/synth define).
 VERILATOR_SIMONLY_CONSTRUCT_SIGNATURES: Tuple[str, ...] = (
     "Duplicate declaration of signal: stdrand",   # std::randomize() scaffold
     "stdrand",                                     # verilator std::randomize tmp
@@ -312,6 +481,9 @@ VERILATOR_SIMONLY_CONSTRUCT_SIGNATURES: Tuple[str, ...] = (
 
 def verilator_should_retry_synthesis_define(
     verilator_err: str,
+    rtl_text_blob: str = "",
+    tb_text: str = "",
+    produced_output: bool = False,
     sim_define: str = "SIMULATION",
     synth_define: str = "SYNTHESIS",
 ) -> Tuple[bool, str]:
@@ -324,29 +496,57 @@ def verilator_should_retry_synthesis_define(
     sim-only-construct error verilator cannot lower — even though that arm is
     functionally DEAD and the IDENTICAL closure elaborates + runs to $finish
     under -DSYNTHESIS (the synthesizable `else passthrough), the SAME define the
-    synth slang path already uses successfully. `decide_sv2v_tb_define` only
-    flips to SYNTHESIS on an include HOLE, and the #657 escape only fires on an
-    SVA signature; neither covers this, and the escape never tried SYNTHESIS.
+    synth slang path already uses successfully.
 
-    Retry iff verilator's stderr carries a SIM-ONLY-CONSTRUCT signature. Honesty
-    preserved: a closure that ALSO fails under -D<synth_define> still FAILs (the
-    caller keeps the honest failure). chip-AGNOSTIC: tool error-token + the
-    standard SIMULATION/SYNTHESIS define names, no chip/vendor/file literal.
+    OBSERVABLE-BASED (v1.4.x). The retry is NOT keyed on how verilator phrased
+    the abort — verilator renames its `Unsupported:` diagnostics between
+    releases, so that allow-list silently stopped firing and produced a FALSE
+    FAIL. It is keyed on the OBSERVABLE (the build produced no runnable
+    simulation) plus the DESIGN PROPERTY that the closure branches on the define
+    set at all.
+
+    THE TESTBENCH GUARD (§4.05, new — the old wording gate had no equivalent):
+    the retry is REFUSED when the TESTBENCH itself branches on the define set.
+    Flipping the define is only sound while it changes the DUT's arms; if it
+    also changes the TB, the retry could compile away the TB's own checking and
+    run to completion vacuously — converting a genuine failure into a pass. That
+    is the one way this retry could widen PASS, so it is closed explicitly.
+
+    Honesty preserved: a closure that ALSO fails under -D<synth_define> still
+    FAILs (the caller keeps the honest failure), and the caller's completion
+    -MARKER check still has to be satisfied by the retry's own transcript.
+    chip-AGNOSTIC: preprocessor grammar + the standard SIMULATION/SYNTHESIS
+    define names, no chip/vendor/file literal.
 
     Returns (should_retry, reason)."""
-    err = verilator_err or ""
-    hit = any(s in err for s in VERILATOR_SIMONLY_CONSTRUCT_SIGNATURES)
-    if not hit:
+    if produced_output:
         return False, (
-            f"verilator failure carries no sim-only-construct signature — "
-            f"not a -D{sim_define}/-D{synth_define} define-set mismatch; "
+            f"the -D{sim_define} build already produced a runnable simulation — "
+            f"no retry (a real result must not be re-run under -D{synth_define})")
+    arms, arm_evidence = define_conditional_arms_present(
+        rtl_text_blob, sim_define, synth_define)
+    if not arms:
+        return False, (
+            f"verilator produced no simulation, but {arm_evidence}; a "
+            f"-D{synth_define} retry would re-read byte-identical source — "
             f"keep the honest FAIL")
+    tb_arms, tb_evidence = define_conditional_arms_present(
+        tb_text, sim_define, synth_define)
+    if tb_arms:
+        return False, (
+            f"REFUSING the -D{synth_define} retry: the TESTBENCH itself "
+            f"branches on the define set ({tb_evidence}). Flipping the define "
+            f"could compile away the TB's own checking and let the run finish "
+            f"vacuously — that would convert a genuine FAIL into a pass. Keep "
+            f"the honest FAIL")
+    _, construct_evidence = simonly_constructs_in_source(rtl_text_blob)
+    note = _wording_note(verilator_err, VERILATOR_SIMONLY_CONSTRUCT_SIGNATURES)
     return True, (
-        f"verilator failed under -D{sim_define} on a sim-only construct "
-        f"(std::randomize/$urandom in a dead `ifdef {sim_define} arm); the "
-        f"IDENTICAL closure elaborates under -D{synth_define} (the "
-        f"synthesizable `else passthrough — the define the synth path "
-        f"already uses) — retrying under -D{synth_define}")
+        f"verilator produced NO simulation under -D{sim_define} and the DUT "
+        f"closure branches on the define set ({arm_evidence}; "
+        f"{construct_evidence}) while the TESTBENCH does not — so the "
+        f"-D{synth_define} arm is a DIFFERENT source and the TB's checking is "
+        f"unaffected; retrying under -D{synth_define} [{note}]")
 
 
 # ORGANIC E2E (opentitan_aes GDS blocker, 2026-07-01) — the phase-3 yosys/slang/
@@ -357,6 +557,9 @@ def verilator_should_retry_synthesis_define(
 # elaborates under -DSYNTHESIS (the synthesizable `else passthrough). This is the
 # phase-3 companion to the phase-2 #668 verilator retry, but the error signatures
 # are the slang / sv2v / yosys forms (a superset that also covers verilator).
+# _EXPLANATORY_ONLY (v1.4.x): RETAINED for the reason string, RETIRED as a
+# control predicate — see the doctrine block at the top of this module. The
+# retry now reads the OBSERVABLE (no netlist produced) + the DESIGN PROPERTY.
 SYNTH_FRONTEND_SIMONLY_CONSTRUCT_SIGNATURES: Tuple[str, ...] = (
     "$urandom",
     "std::randomize",
@@ -369,30 +572,57 @@ SYNTH_FRONTEND_SIMONLY_CONSTRUCT_SIGNATURES: Tuple[str, ...] = (
 
 def synth_frontend_should_retry_under_synthesis(
     synth_err: str,
+    rtl_text_blob: str = "",
+    produced_output: bool = False,
     sim_define: str = "SIMULATION",
     synth_define: str = "SYNTHESIS",
 ) -> Tuple[bool, str]:
     """Phase-3 companion to #668 — decide whether a phase-3 yosys/slang/sv2v synth
     build that FAILED under -D<sim_define> should retry the SAME closure under
-    -D<synth_define>. Retry iff the error carries a sim-only-construct signature
-    (the DV-only `ifdef <sim_define> arm). Honesty preserved: a closure that ALSO
-    fails under -D<synth_define> keeps the honest FAIL at the caller. chip-AGNOSTIC:
-    tool error-token + the standard SIMULATION/SYNTHESIS define names, no chip /
-    vendor / file literal.
+    -D<synth_define>.
+
+    OBSERVABLE-BASED (v1.4.x, mirrors the lec_run slang-retry fix). The decision
+    is NOT keyed on how the tool phrased its abort — that allow-list turned every
+    reworded diagnostic (slang/yosys/sv2v rename theirs between releases) into a
+    silent FALSE FAIL. It is keyed on:
+
+      1. the OBSERVABLE: the build produced NO usable output (`produced_output`
+         is False — the caller's netlist-exists / rc check), and
+      2. the DESIGN PROPERTY: the closure actually branches on the sim/synth
+         define, so flipping it can change what the frontend reads at all.
+
+    Both are required. (2) is what BOUNDS the widened trigger: with no
+    define-conditional arm the retry would re-read byte-identical text, so it is
+    skipped — cannot help, cannot hurt. With no RTL text supplied the property is
+    unobservable and the answer is fail-safe NO (never retry on nothing).
+
+    §4.05 — this widens what is RETRIED, never what PASSES. The caller keeps the
+    retry's own rc/artifact check, so a closure that also fails under
+    -D<synth_define> keeps the honest FAIL; and because the retry only runs when
+    NO output exists, there is no result to shop for. chip-AGNOSTIC: preprocessor
+    grammar + the standard SIMULATION/SYNTHESIS define names, no chip/vendor/file
+    literal.
 
     Returns (should_retry, reason)."""
-    err = synth_err or ""
-    hit = any(s in err for s in SYNTH_FRONTEND_SIMONLY_CONSTRUCT_SIGNATURES)
-    if not hit:
+    if produced_output:
+        # Anti-verdict-shopping: a real result already exists — never re-read it
+        # with another define hoping for a better answer.
         return False, (
-            f"synth failure carries no sim-only-construct signature — not a "
-            f"-D{sim_define}/-D{synth_define} define-set mismatch; keep the "
-            f"honest FAIL")
+            f"synth already produced a netlist — no retry (a real result must "
+            f"not be re-read under -D{synth_define})")
+    arms, arm_evidence = define_conditional_arms_present(
+        rtl_text_blob, sim_define, synth_define)
+    if not arms:
+        return False, (
+            f"synth produced no netlist, but {arm_evidence}; a -D{synth_define} "
+            f"retry would re-read byte-identical source — keep the honest FAIL")
+    _, construct_evidence = simonly_constructs_in_source(rtl_text_blob)
+    note = _wording_note(synth_err, SYNTH_FRONTEND_SIMONLY_CONSTRUCT_SIGNATURES)
     return True, (
-        f"synth failed under -D{sim_define} on a sim-only construct "
-        f"($urandom/std::randomize in a dead `ifdef {sim_define} arm); the "
-        f"IDENTICAL closure elaborates under -D{synth_define} (the synthesizable "
-        f"`else passthrough) — retrying under -D{synth_define}")
+        f"synth produced NO netlist under -D{sim_define} and the closure "
+        f"branches on the define set ({arm_evidence}; {construct_evidence}), so "
+        f"the -D{synth_define} arm is a DIFFERENT — synthesizable — source; "
+        f"retrying under -D{synth_define} [{note}]")
 
 
 # ---------------------------------------------------------------------------
@@ -419,19 +649,33 @@ SLANG_PROBE_CMD: str = (
 )
 
 
+# The OBSERVABLE that a yosys command EXISTS: yosys numbers and announces each
+# pass it actually dispatches ("1. Executing SLANG frontend."). An UNKNOWN
+# command prints the `-- Running command ... --` banner but NEVER reaches a
+# numbered pass. So "did a pass execute?" is positive CAPABILITY evidence, not
+# an error phrase — it holds whatever yosys calls its not-found diagnostic.
+_YOSYS_PASS_EXECUTED_RE = re.compile(r"^\s*\d+\.\s+Executing\s", re.MULTILINE)
+
+
 def read_slang_is_builtin(probe_output: str) -> bool:
     """True iff `read_slang` is available WITHOUT `plugin -i slang`.
 
-    Decided from the output of :data:`SLANG_PROBE_CMD`. The ONLY case that
-    REQUIRES the plugin load is an unloaded loadable module — which ALWAYS
-    prints the definitive "No such command: read_slang". So we key the load
-    on exactly that signal and DEFAULT TO BUILT-IN otherwise (fork-safe: the
-    shipped `vibeic-eda` image is built-in and produces positive evidence
-    like "Executing SLANG frontend" / "no input files"; an inconclusive or
-    empty probe must NOT emit a load that would abort the fork's -p script).
-    A `.so` image correctly shows "No such command" until the module is
-    loaded, so it still gets the load prefix."""
-    return "No such command: read_slang" not in (probe_output or "")
+    Decided from the output of :data:`SLANG_PROBE_CMD`.
+
+    OBSERVABLE-FIRST (v1.4.x): the primary signal is whether yosys actually
+    DISPATCHED the command — i.e. a numbered pass executed. That is a direct
+    observation of the capability rather than a probe of how yosys phrases a
+    not-found error. The historical "No such command" test is retained as a
+    secondary confirmation for the loadable-`.so` image, and the fork-safe
+    default (BUILT-IN) still applies to an inconclusive or empty probe: on the
+    shipped `vibeic-eda` image a wrongly-EMITTED `plugin -i slang` ABORTS the
+    whole `-p` script (the bug this fixes), whereas a wrongly-SKIPPED load
+    merely triggers the caller's sv2v / read_verilog fallback — recoverable."""
+    out = probe_output or ""
+    if _YOSYS_PASS_EXECUTED_RE.search(out):
+        # Positive capability evidence: yosys ran a pass for this command.
+        return True
+    return "No such command: read_slang" not in out
 
 
 def slang_load_prefix(probe_output: str) -> str:
