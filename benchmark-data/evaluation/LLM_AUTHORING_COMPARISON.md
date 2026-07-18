@@ -12,7 +12,7 @@ testbench / golden / sibling solutions).
 |---|---|---|---|
 | **VerilogEval-v2** (156)    | **153/156 = 98.08%** | 147/156 = 94.23% | **+6 problems / +3.85 pts** |
 | **VerilogEval-Human** (156) | **153/156 = 98.08%** | 149/156 = 95.51% | **+4 problems / +2.57 pts** |
-| RTLLM v2.0 (50)             | 49/50 = 98% | *in progress (quota-limited)* | — |
+| RTLLM v2.0 (50)             | 49/50 = 98% | *not measured (out of scope)* | — |
 
 excl. dataset defects: VE-v2 Claude 153/155=98.71% · Kimi 147/155=94.84%; VE-Human Claude 153/155=98.71% · Kimi 149/155=96.13%.
 
