@@ -143,7 +143,12 @@ def test_noleak_668_synthesis_define_retry_still_fires():
     verilator stdrand sim-only-construct signature still returns retry=True."""
     stderr = ("%Error: prim_cdc_rand_delay.sv:42: Duplicate declaration of "
               "signal: stdrand\n")
-    retry, reason = _sf.verilator_should_retry_synthesis_define(stderr)
+    retry, reason = _sf.verilator_should_retry_synthesis_define(
+        stderr,
+        rtl_text_blob=("module prim_cdc_rand_delay;\n`ifdef SIMULATION\n"
+                       "  int dly; initial dly = $urandom;\n`else\n"
+                       "  wire dly = 1'b0;\n`endif\nendmodule\n"),
+        tb_text="module tb; initial $finish; endmodule\n")
     assert retry is True, reason
     # and a non-sim-only failure still does NOT retry (honesty preserved).
     retry2, _ = _sf.verilator_should_retry_synthesis_define(

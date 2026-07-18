@@ -3413,8 +3413,15 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     # closure that ALSO fails under -DSYNTHESIS keeps the honest FAIL below.
     # chip-AGNOSTIC. Guards: 8 OpenTitan primitives on the AES end-to-end run.
     if rc != 0 or not netlist.is_file():
+        # v1.4.x OBSERVABLE-OVER-WORDING: the retry is decided by the OBSERVABLE
+        # (no netlist produced — the `if` above) plus the DESIGN PROPERTY (does
+        # the closure branch on the define set at all), NOT by how slang/yosys/
+        # sv2v phrased the abort. Supply the RTL source so the design property
+        # is observable; the error text is passed for the log line only.
         _retry_syn, _retry_reason = _sf.synth_frontend_should_retry_under_synthesis(
-            out + "\n" + err)
+            out + "\n" + err,
+            rtl_text_blob=_sf.read_text_blob(rtl_files),
+            produced_output=netlist.is_file())
         if _retry_syn:
             _syn_files = " ".join(
                 _to_container_path(str(f), container) for f in rtl_files)

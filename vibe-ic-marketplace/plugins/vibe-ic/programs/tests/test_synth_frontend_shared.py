@@ -352,23 +352,37 @@ endmodule
 # honest FAIL) on a genuine design error — the §4.05 no-leak boundary.
 import synth_frontend as _sfmod
 
+# v1.4.x — decided by the OBSERVABLE (no netlist) + the DESIGN PROPERTY
+# (the closure branches on the define set), not by the tool's phrasing.
+_SIMONLY_RTL_P3 = (
+    "module prim(input clk, input d, output q);\n"
+    "`ifdef SIMULATION\n"
+    "  initial q = $urandom;\n"
+    "`else\n"
+    "  logic qq; always_ff @(posedge clk) qq <= d; assign q = qq;\n"
+    "`endif\n"
+    "endmodule\n")
+
 
 def test_synth_dsynthesis_retry_fires_on_urandom():
     ok, reason = _sfmod.synth_frontend_should_retry_under_synthesis(
-        "slang: error: $urandom not allowed in a constant context")
+        "slang: error: $urandom not allowed in a constant context",
+        rtl_text_blob=_SIMONLY_RTL_P3)
     assert ok is True
     assert "-DSYNTHESIS" in reason
 
 
 def test_synth_dsynthesis_retry_fires_on_std_randomize():
     ok, _ = _sfmod.synth_frontend_should_retry_under_synthesis(
-        "std::randomize used in a synthesis context")
+        "std::randomize used in a synthesis context",
+        rtl_text_blob=_SIMONLY_RTL_P3)
     assert ok is True
 
 
 def test_synth_dsynthesis_retry_fires_on_slang_feature_unimplemented():
     ok, _ = _sfmod.synth_frontend_should_retry_under_synthesis(
-        "error: Feature unimplemented: $value$plusargs")
+        "error: Feature unimplemented: $value$plusargs",
+        rtl_text_blob=_SIMONLY_RTL_P3)
     assert ok is True
 
 
@@ -377,7 +391,8 @@ def test_synth_dsynthesis_retry_stays_off_on_genuine_design_error():
     # signature → do NOT retry, keep the honest FAIL (a -DSYNTHESIS retry would
     # mask a genuine bug).
     ok, reason = _sfmod.synth_frontend_should_retry_under_synthesis(
-        "ERROR: syntax error, unexpected TOK_ID at chip_top.sv:42")
+        "ERROR: syntax error, unexpected TOK_ID at chip_top.sv:42",
+        rtl_text_blob="module chip_top(input a); wire b = ; endmodule\n")
     assert ok is False
     assert "honest FAIL" in reason
 

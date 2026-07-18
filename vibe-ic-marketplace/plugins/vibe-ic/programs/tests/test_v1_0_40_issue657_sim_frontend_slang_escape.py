@@ -83,12 +83,24 @@ def test_no_escape_without_sv_input():
     assert should is False
 
 
-def test_no_escape_on_non_sva_signature():
-    # sv2v failed but the err carries no SVA/sequence parse signature
-    # (e.g. a missing-include lexer error) → not an assertion-construct gap.
-    should, _ = SF.sim_frontend_should_try_verilator(
-        ["m.sv"], 1, "m.sv:1: Could not find file 'macros.svh'", SVA_RTL)
-    assert should is False
+def test_escape_fires_on_unrecognised_sv2v_phrasing():
+    # v1.4.x CONTRACT CHANGE (deliberate — this test previously pinned the bug).
+    # The escape used to require sv2v's error PHRASING to match an allow-list
+    # containing `Sym_brack_l_aster`, an Alex-generated lexer token name. A
+    # rename there silently skipped the whole verilator capability and produced
+    # a FALSE FAIL. The decision now reads the OBSERVABLE (sv2v produced no
+    # conversion) + the DESIGN PROPERTY (the RTL really does carry SVA), so ANY
+    # phrasing — including a missing-include lexer error, which verilator may
+    # well resolve since it is given its own -I — reaches the escape.
+    # Honesty is unaffected: verilator must still build AND run the TB to its
+    # completion marker, so a closure it also rejects still FAILs.
+    for err in ("m.sv:1: Could not find file 'macros.svh'",
+                "sv2v: m.sv:7:10: syntax error near Sym_bracket_l_asterisk",
+                "sv2v: m.sv:2:19: unexpected '[*' in sequence_expr",
+                ""):
+        should, reason = SF.sim_frontend_should_try_verilator(
+            ["m.sv"], 1, err, SVA_RTL)
+        assert should is True, f"{err!r} → {reason}"
 
 
 # ── runner integration: the escape ladder is wired into the SIM path ────────

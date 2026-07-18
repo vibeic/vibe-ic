@@ -41,23 +41,44 @@ import design_one_shot_runner as R  # noqa: E402
 SIMONLY_ERR = ("%Error: prim_cdc_rand_delay.sv:17:8: Duplicate declaration of "
                "signal: stdrand")
 
+# v1.4.x — the retry is now decided by the OBSERVABLE (no output produced) plus
+# the DESIGN PROPERTY (the closure branches on the define set), NOT by the tool's
+# phrasing. These tests supply the RTL that MAKES the scenario real; the error
+# string is passed for the log line only. See synth_frontend's doctrine block.
+_SIMONLY_RTL = (
+    "module prim_cdc_rand_delay(input clk, input d, output q);\n"
+    "`ifdef SIMULATION\n"
+    "  int dly;\n"
+    "  always_ff @(posedge clk) dly <= $urandom_range(0, 3);\n"
+    "  assign q = d ^ (dly == 0);\n"
+    "`else\n"
+    "  logic qq; always_ff @(posedge clk) qq <= d; assign q = qq;\n"
+    "`endif\n"
+    "endmodule\n")
+_PLAIN_TB = ("module tb; initial begin #10; $display(\"TB_DONE\"); $finish; "
+             "end endmodule\n")
+
+
 
 # ── classifier: fires on sim-only constructs only ───────────────────────────
 
 def test_retry_on_duplicate_stdrand():
-    ok, reason = SF.verilator_should_retry_synthesis_define(SIMONLY_ERR)
+    ok, reason = SF.verilator_should_retry_synthesis_define(
+        SIMONLY_ERR, rtl_text_blob=_SIMONLY_RTL, tb_text=_PLAIN_TB)
     assert ok is True, reason
 
 
 def test_retry_on_urandom_unsupported():
     ok, _ = SF.verilator_should_retry_synthesis_define(
-        "%Error: foo.sv:10: Unsupported: $urandom")
+        "%Error: foo.sv:10: Unsupported: $urandom",
+        rtl_text_blob=_SIMONLY_RTL, tb_text=_PLAIN_TB)
     assert ok is True
 
 
 def test_retry_on_std_randomize():
     ok, _ = SF.verilator_should_retry_synthesis_define(
-        "%Error: bar.sv: std::randomize is not supported")
+        "%Error: bar.sv: std::randomize is not supported",
+        rtl_text_blob=_SIMONLY_RTL, tb_text=_PLAIN_TB)
     assert ok is True
 
 
@@ -81,9 +102,11 @@ def test_no_retry_on_empty_err():
 
 
 def test_custom_define_names_honoured():
+    rtl = _SIMONLY_RTL.replace("SIMULATION", "SIM")
     ok, reason = SF.verilator_should_retry_synthesis_define(
-        SIMONLY_ERR, sim_define="SIM", synth_define="SYN")
-    assert ok is True
+        SIMONLY_ERR, rtl_text_blob=rtl, tb_text=_PLAIN_TB,
+        sim_define="SIM", synth_define="SYN")
+    assert ok is True, reason
     assert "SIM" in reason and "SYN" in reason
 
 

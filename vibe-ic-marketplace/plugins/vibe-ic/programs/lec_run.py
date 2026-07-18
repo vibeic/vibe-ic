@@ -992,8 +992,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                     try:
                         from synth_frontend import \
                             synth_frontend_should_retry_under_synthesis
+                        from synth_frontend import read_text_blob
+                        # v1.4.x OBSERVABLE-OVER-WORDING: the OBSERVABLE is that
+                        # the slang gold read built no miter (_p2 parse_error —
+                        # the `else` we are in); the DESIGN PROPERTY (does the
+                        # gold source branch on the define set) comes from the
+                        # gold RTL itself, not from slang's phrasing.
                         _retry, _reason = \
-                            synth_frontend_should_retry_under_synthesis(raw2)
+                            synth_frontend_should_retry_under_synthesis(
+                                raw2,
+                                rtl_text_blob=read_text_blob(gold_files),
+                                produced_output=False)
                     except Exception:
                         _retry = False
                     if _retry:
