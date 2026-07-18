@@ -57,45 +57,76 @@ def parse_cputime_hms(tok: str) -> Optional[float]:
         return None
 
 
+def _sum_marked_tree_cpu(out: str, marker: str,
+                         parse_cpu) -> Optional[float]:
+    """Sum CPU over the PROCESS TREE rooted at marker-matched processes.
+
+    Rows are `pid ppid cpu args`. The match set is every process whose argv
+    contains `marker` PLUS all transitive descendants. The descendants are
+    load-bearing: yosys runs its whole ABC technology-mapping pass in a child
+    `yosys-abc` whose argv does NOT carry the caller's marker (the output
+    netlist path lives only in the parent's `-p` script). During ABC's long
+    quiet phase the parent idles, the log stops growing, and the child burns
+    100% CPU invisibly — argv-only accounting reported zero progress and the
+    stall watchdog killed a HEALTHY 1.8M-cell synth at the 30-min grace
+    (first hit: Kimi-scale phase-3 synth; the identical run passed earlier
+    purely because a lighter machine kept ABC's quiet phase under the grace).
+    """
+    rows = []
+    for line in out.splitlines():
+        parts = line.strip().split(None, 3)
+        if len(parts) < 4:
+            continue
+        pid, ppid, cpu_tok, args = parts
+        cpu = parse_cpu(cpu_tok)
+        if cpu is None:
+            continue
+        rows.append((pid, ppid, cpu, args))
+    matched = {pid for pid, _pp, _c, args in rows if marker in args}
+    if not matched:
+        return None
+    grew = True
+    while grew:
+        grew = False
+        for pid, ppid, _c, _a in rows:
+            if pid not in matched and ppid in matched:
+                matched.add(pid)
+                grew = True
+    return sum(c for pid, _pp, c, _a in rows if pid in matched)
+
+
 def container_cpu_seconds(container: str, marker: Optional[str],
                           docker_exec_raw: RawExec,
                           timeout: int = 15) -> Optional[float]:
-    """Sum CPU-seconds (utime+stime) of in-container processes whose argv
-    contains `marker`, using the injected raw exec for the short `ps` probe.
-    Returns float seconds, or None when unavailable (no marker / ps missing /
-    nothing matched). tool/chip-AGNOSTIC — `marker` is a caller token."""
+    """Sum CPU-seconds (utime+stime) of the in-container process TREES whose
+    root argv contains `marker` (descendants included — see
+    `_sum_marked_tree_cpu`), using the injected raw exec for the short `ps`
+    probe. Returns float seconds, or None when unavailable (no marker / ps
+    missing / nothing matched). tool/chip-AGNOSTIC — `marker` is a caller
+    token."""
     if not marker:
         return None
+
+    def _parse_float(tok):
+        try:
+            return float(tok)
+        except ValueError:
+            return None
+
     rc, out, _ = docker_exec_raw(
-        container, "ps -eo cputimes=,args= 2>/dev/null", timeout=timeout)
+        container, "ps -eo pid=,ppid=,cputimes=,args= 2>/dev/null",
+        timeout=timeout)
     if rc == 0 and (out or "").strip():
-        total, found = 0.0, False
-        for line in out.splitlines():
-            parts = line.strip().split(None, 1)
-            if len(parts) < 2 or marker not in parts[1]:
-                continue
-            try:
-                total += float(parts[0])
-                found = True
-            except ValueError:
-                continue
-        if found:
+        total = _sum_marked_tree_cpu(out, marker, _parse_float)
+        if total is not None:
             return total
     # Portable fallback: cputime = [[DD-]HH:]MM:SS
     rc, out, _ = docker_exec_raw(
-        container, "ps -eo cputime=,args= 2>/dev/null", timeout=timeout)
+        container, "ps -eo pid=,ppid=,cputime=,args= 2>/dev/null",
+        timeout=timeout)
     if rc != 0 or not (out or "").strip():
         return None
-    total, found = 0.0, False
-    for line in out.splitlines():
-        parts = line.strip().split(None, 1)
-        if len(parts) < 2 or marker not in parts[1]:
-            continue
-        secs = parse_cputime_hms(parts[0])
-        if secs is not None:
-            total += secs
-            found = True
-    return total if found else None
+    return _sum_marked_tree_cpu(out, marker, parse_cputime_hms)
 
 
 def run_docker_supervised(container: str, cmd: str, marker: str, *,
