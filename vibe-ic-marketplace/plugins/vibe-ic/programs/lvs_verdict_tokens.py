@@ -143,6 +143,22 @@ _PIN_NOMATCH_RE = re.compile(r"^.*\(no matching pin\).*$", re.M)
 # able to carry the top-level verdict.
 _FINAL_RESULT_LINE_RE = re.compile(r"Final result\s*:(.*)$", re.M | re.I)
 
+# The verdict phrase ANCHORED to where netgen actually writes it: immediately
+# after `Final result:`. Slicing after the marker is NOT sufficient on its own —
+# the sliced region still carries tool- and DESIGN-supplied DATA (paths, cell and
+# net names), and a token sitting inside that data can impersonate the structural
+# token. Measured, both returned a FALSE MATCH before anchoring:
+#   Final result: comparison ended for cell \circuits match uniquely
+#       — a SystemVerilog ESCAPED identifier legally contains SPACES, so
+#         `Circuits\s+match\s+uniquely` matches a DESIGN-chosen name;
+#   Final result: read from /work/circuits match uniquely/top.spice
+#       — same, via an environment-chosen PATH.
+# The design names its own nets; it must never be able to name its way to a pass.
+# (Credit: the sibling synth-frontend fix hit the same class — a pass ARGUMENT
+# path containing "frontend" impersonating the pass-CLASS token.)
+_TERMINAL_MATCH_RE = re.compile(
+    r"^\s*(?:Circuits?|Netlists?)\s+match\s+uniquely", re.I)
+
 # Unambiguous negative wording for phrasings MISMATCHED_RE does not enumerate.
 # Deliberately COUNT-FREE: every phrase here is one no clean netgen report can
 # print, so broadening the failure net cannot manufacture a false alarm (the
@@ -276,10 +292,14 @@ def _classify_text(blob: str) -> str:
         # per-subcell `match uniquely` lines printed before the top-level
         # compare was reached.
         return "INCOMPLETE"
-    if all(MATCHED_RE.search(ln) for ln in finals):
+    # UNANIMITY, not first-or-last: EVERY terminal line must read clean. yosys is
+    # known to re-enter a frontend deep in a flow, and netgen can print more than
+    # one terminal line in a hierarchical run — so any "take the first/last
+    # occurrence" rule is one re-entry away from reading the wrong verdict.
+    if all(_TERMINAL_MATCH_RE.match(ln) for ln in finals):
         return "MATCH"
     # The compare terminated, but in wording we cannot read as a clean match.
-    dissenting = [ln for ln in finals if not MATCHED_RE.search(ln)]
+    dissenting = [ln for ln in finals if not _TERMINAL_MATCH_RE.match(ln)]
     if any(_TERMINAL_NEGATIVE_RE.search(ln) for ln in dissenting):
         return "MISMATCH"
     return "INCOMPLETE"
