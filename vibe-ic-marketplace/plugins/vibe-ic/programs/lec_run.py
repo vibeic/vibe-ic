@@ -530,6 +530,22 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
         # design has no memory. Plain stock-yosys command — no fork flag/probe.
         f"memory_map\n"
         f"flatten\n"
+        # ASYNC-FF LEGALIZATION: an async-reset/-set FF (SV `always @(posedge clk
+        # or negedge rst_n)`) maps to `$_DFF_PN0_`/`$_DFFSR_*`, which
+        # equiv_induct's SAT engine cannot model — it aborts "No SAT model
+        # available for async FF cell … ($_DFF_PN0_). Consider running
+        # `async2sync` or `clk2fflogic` first." (observed on ibex, rv-ibex2).
+        # async2sync converts the async control into synchronous D-input logic the
+        # SAT engine CAN model. Applied UNIFORMLY on BOTH sides and AFTER flatten,
+        # regardless of which frontend read the gold — so the read_slang gold-read
+        # retry path (SV-package designs like ibex, which are exactly the async-
+        # reset CPUs) is covered too. SOUND: it is an identical modeling transform
+        # on gold and gate, so an equivalent design stays equivalent and a real
+        # reset-behaviour difference still surfaces as unproven. No-op on a design
+        # with no async FF (spm 65/65 unchanged). Verified in-container: an
+        # async-reset DFF pair stops at the async-FF SAT abort WITHOUT this and
+        # proves "4/4, Equivalence successfully proven!" WITH it.
+        f"async2sync\n"
         f"opt_clean\n"
         f"splitnets -ports\n"
         f"design -stash gold\n"
@@ -541,6 +557,7 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
         # netlist still carries a $mem*/$mem_v2 cell (no-op otherwise).
         f"memory_map\n"
         f"flatten\n"
+        f"async2sync\n"   # async-FF legalization (see the gold side) — both sides
         f"opt_clean\n"
         f"splitnets -ports\n"
         f"design -stash gate\n"

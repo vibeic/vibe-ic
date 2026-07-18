@@ -10,8 +10,11 @@ The two fixture blobs are REAL Yosys 0.66 output captured from spm:
                   cell with no SAT model -> honest SKIPPED-CONDITION
 """
 import json
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 SCRIPT = Path(__file__).parent.parent / "lec_run.py"
 assert SCRIPT.exists(), f"Script not found: {SCRIPT}"
@@ -541,3 +544,125 @@ def test_slang_also_fails_report_is_hard_fail_in_gate(tmp_path):
     assert res.inconclusive is False
     assert res.passed is False
     assert gate.main([str(tmp_path)]) == 1
+
+
+# ---------------------------------------------------------------------------
+# ASYNC-FF LEGALIZATION on BOTH read paths (rv-ibex2 residual #2): an async-
+# reset/-set FF maps to $_DFF_PN0_ which equiv_induct's SAT engine can't model
+# ("No SAT model available for async FF … consider async2sync/clk2fflogic").
+# async2sync must be emitted on BOTH sides, AFTER flatten, regardless of which
+# frontend read the gold — so the read_slang gold-read retry path (the SV-package
+# CPUs like ibex, which are exactly the async-reset designs) is covered too.
+# ---------------------------------------------------------------------------
+def test_async2sync_emitted_on_both_sides_and_frontends():
+    for frontend in ("verilog", "slang"):
+        s = lec_run.build_equiv_script(
+            ["/p/rtl/a.sv"], "/p/synth/n.v", "top", lec_run.DEFAULT_LIBERTY,
+            gold_frontend=frontend)
+        # exactly one async2sync per side (gold + gate).
+        assert s.count("\nasync2sync\n") == 2, (frontend, s)
+        # AFTER flatten on each side (async2sync legalizes the flattened FF cells).
+        assert s.index("flatten") < s.index("async2sync")
+        # gold-side async2sync sits before `design -stash gold`.
+        gold = s.split("design -stash gold")[0]
+        assert "async2sync" in gold and gold.index("flatten") < gold.index("async2sync")
+
+
+def test_async2sync_applies_to_the_slang_retry_path():
+    # the SLANG gold-read path (fired by the elaboration-abort retry) gets the
+    # SAME async-FF legalization as the default verilog path — not bypassed.
+    v = lec_run.build_equiv_script(["/p/a.sv"], "/p/n.v", "top", None,
+                                   gold_frontend="verilog")
+    sl = lec_run.build_equiv_script(["/p/a.sv"], "/p/n.v", "top", None,
+                                    gold_frontend="slang")
+    assert v.count("\nasync2sync\n") == sl.count("\nasync2sync\n") == 2
+    assert "read_slang" in sl and "async2sync" in sl
+
+
+# --- REAL in-container async-reset proof (fork-safe, NDA-clean, sky130) -------
+# The strongest gate: synth an async-reset DFF to sky130 (→ dfrtp → $_DFF_PN0_),
+# then run the ACTUAL lec_run recipe on the SLANG gold-read path and assert equiv
+# REACHES a proven verdict — not the "No SAT model available for async FF" stop.
+# Skips when no path-visible container is available.
+_ASYNC_RTL = (
+    "module dff_ar(input clk, input rst_n, input [3:0] d, output reg [3:0] q);\n"
+    "  always @(posedge clk or negedge rst_n)\n"
+    "    if (!rst_n) q <= 4'b0; else q <= d + 4'd1;\n"
+    "endmodule\n")
+_SKY130_HD_LIB = ("/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/"
+                  "sky130_fd_sc_hd__tt_025C_1v80.lib")
+
+
+def _mounted_workdir(tmp_path):
+    """Container-visible work dir + cleanup (tmp_path if bind-mounted, else a
+    self-cleaning $HOME tempdir). (None, noop) when no container path exists."""
+    def _sees(root):
+        try:
+            p = root / ".probe"
+            p.write_text("ok")
+            r = subprocess.run(
+                ["docker", "exec", "vibeic-eda", "bash", "-lc", f"cat {p}"],
+                capture_output=True, text=True, timeout=30)
+            p.unlink(missing_ok=True)
+            return r.returncode == 0 and "ok" in (r.stdout or "")
+        except (subprocess.SubprocessError, OSError):
+            return False
+    if _sees(tmp_path):
+        return tmp_path, (lambda: None)
+    import tempfile
+    import shutil
+    d = Path(tempfile.mkdtemp(prefix=".lec_async_it_", dir=str(Path.home())))
+    if _sees(d):
+        return d, (lambda: shutil.rmtree(d, ignore_errors=True))
+    shutil.rmtree(d, ignore_errors=True)
+    return None, (lambda: None)
+
+
+def _yosys(script_path):
+    cmd = (f"export PATH=/foss/tools/yosys/bin:$PATH && "
+           f"yosys -s {script_path} 2>&1")
+    return subprocess.run(["docker", "exec", "vibeic-eda", "bash", "-lc", cmd],
+                          capture_output=True, text=True, timeout=300).stdout or ""
+
+
+def test_async_reset_reaches_verdict_on_slang_path_in_container(tmp_path):
+    work, cleanup = _mounted_workdir(tmp_path)
+    if work is None:
+        pytest.skip("vibeic-eda container not available / path not bind-mounted")
+    try:
+        (work / "dff_ar.v").write_text(_ASYNC_RTL)
+        # is the sky130_hd lib present in the container?
+        chk = subprocess.run(
+            ["docker", "exec", "vibeic-eda", "bash", "-lc",
+             f"test -f {_SKY130_HD_LIB} && echo ok"],
+            capture_output=True, text=True, timeout=30)
+        if "ok" not in (chk.stdout or ""):
+            pytest.skip("sky130_hd Liberty not present in container")
+        # synth+map the async-reset RTL to sky130 → a dfrtp ($_DFF_PN0_) gate.
+        map_ys = work / "map.ys"
+        map_ys.write_text(
+            f"read_verilog -sv {work/'dff_ar.v'}\n"
+            f"synth -top dff_ar\n"
+            f"dfflibmap -liberty {_SKY130_HD_LIB}\n"
+            f"abc -liberty {_SKY130_HD_LIB}\n"
+            f"write_verilog {work/'gate.v'}\n")
+        _yosys(map_ys)
+        assert (work / "gate.v").is_file(), "mapping did not produce a gate netlist"
+
+        # the ACTUAL lec_run recipe on the SLANG gold-read path.
+        script = lec_run.build_equiv_script(
+            [str(work / "dff_ar.v")], str(work / "gate.v"), "dff_ar",
+            _SKY130_HD_LIB, gold_frontend="slang")
+        eq_ys = work / "equiv.ys"
+        eq_ys.write_text(script)
+        log = _yosys(eq_ys)
+        parsed = lec_run.parse_equiv_output(log)
+
+        # MUST reach a real verdict, NOT the async-FF SAT stop.
+        assert "No SAT model available for async" not in log, (
+            "async2sync should have legalized the async FF; got the SAT stop:\n"
+            + log[-600:])
+        assert parsed["verdict"] == "PASS", (parsed, log[-600:])
+        assert (parsed["proven"] or 0) > 0 and parsed["unproven"] == 0
+    finally:
+        cleanup()
