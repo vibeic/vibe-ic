@@ -1,0 +1,26 @@
+# ── NDA HYGIENE (ABSOLUTE) ──────────────────────────────────────────────
+# Commercial 180nm NDA PDK content is NEVER committed.
+# input/ holds the staged commercial PDK (symlinks to out-of-repo scratch)
+# plus the non-NDA spec docs + design RTL copy. Exclude the whole tree.
+input/
+# Any stray staged PDK / bridge / deck copies anywhere in the run
+**/pdk/liberty/
+**/pdk/lef/
+**/pdk/gds/
+**/pdk/calibre/
+**/pdk/spice/
+**/pdk/bridge/
+**/pdk_stage/
+# heavy binaries that need per-file NDA review before any commit
+*.gds
+*.lef
+*.lib
+*.cdl
+*.spice
+*.sp
+*.oas
+*.gds.gz
+# netlists that may embed foundry cell names / device params
+**/stage*/**/*.v
+**/stage*/**/*.def
+**/stage*/**/*.spef
