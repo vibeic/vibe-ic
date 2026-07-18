@@ -70,7 +70,7 @@ def _mc_project(tmp_path):
 def _fake_ngspice(values):
     """Sequence of vout values, one per MC iteration."""
     it = iter(values)
-    def fake(container, sp):
+    def fake(container, sp, cwd=None):
         v = next(it)
         return True, {"vout": v}, f"vout = {v}\n"
     return fake
