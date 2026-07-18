@@ -1257,13 +1257,43 @@ steps:
     closed_loop:
       fallback_to: 21
       trigger: "Antenna violation; insert diode or re-route"
+    programs:
+      - antenna_report_check
+      - gds_antenna_deck_check
     required_outputs:
       - "reports/phase3/antenna.rpt"
     gate:
-      # Substance gate (was presence-only) — parses the OpenROAD check_antennas
-      # violation count; FAILs on net/pin violations > 0, mirroring the EM (25)
-      # and IR (24) report_check siblings. PDK-waiver aware; clean reports PASS.
-      program_exit_zero: "antenna_report_check . --mode antenna --json reports/phase3/antenna.json"
+      all_of:
+        # Substance gate (was presence-only) — parses the OpenROAD check_antennas
+        # violation count; FAILs on net/pin violations > 0, mirroring the EM (25)
+        # and IR (24) report_check siblings. PDK-waiver aware; clean reports PASS.
+        # This is a ROUTER-REPORT consumer: it can only repeat what the router
+        # already believed. PRESERVED unchanged — the deck below ADDS a second
+        # opinion, it does not replace this one.
+        - program_exit_zero: "antenna_report_check . --mode antenna --json reports/phase3/antenna.json"
+        # INDEPENDENT GDS-geometry antenna sign-off (the authoritative second
+        # opinion the flow never had). Reconstructs the as-fabricated
+        # connectivity from the streamed GDS and computes per-net
+        # metal_area/gate_area with STAGED connectivity — at the layer-k etch
+        # stage only layers 1..k exist, so an upper-metal jumper cannot relieve
+        # a lower-stage antenna, a relief the router's final-netlist model DOES
+        # credit. It also runs cumulative-antenna-area (CAA) charge sharing,
+        # which a per-layer check structurally cannot see, and CROSS-CHECKS its
+        # count against reports/phase3/antenna.rpt: a clean/dirty DISAGREEMENT
+        # is a hard FAIL so a router-vs-geometry inconsistency is surfaced
+        # rather than averaged away.
+        #
+        # OPT-IN by PDK: the layer stack and per-metal ratio bounds are foundry
+        # data, so the gate runs only where the PDK integrator has placed a deck
+        # config. Without one there is nothing to measure geometry against and
+        # Step 26 keeps exactly its previous verdict. WITH one, the gate always
+        # reports: if KLayout or the deck engine is unavailable it exits 2 with
+        # a NAMED disclosure -> VACUOUS-PASS, never a bare PASS earned by a
+        # checker that did not run. (`gds_antenna_deck_check --strict` turns
+        # that disclosure into a hard FAIL for a production tapeout.)
+        - optional_program_exit_zero:
+            command: "gds_antenna_deck_check . --json reports/phase2/gates/gate_oxide_geom_deck.json"
+            condition_files_exist: ["signoff/gate_oxide_deck.json", "input/pdk/bridge/gate_oxide_deck.json"]
     blocks_on: [21]
 
   # ── Step 27: Signal Integrity ────────────────────────────
@@ -1475,6 +1505,14 @@ steps:
       - metal_fill_density_check
       # ECO-aware: re-confirm spares survive fill (no overlap / removal).
       - spare_cell_preservation_check
+      # Per-layer DENSITY-TARGETED metal fill on the streamed GDS. The
+      # checks above only MEASURE density; OpenROAD filler_placement fills
+      # std-cell ROWS. Neither computes how much metal a sparse LAYER needs,
+      # so a die under the foundry CMP floor was flagged and left sparse.
+      # The emitter runs inside streamout (phase3_one_shot_runner.step_gds),
+      # before the density checks and sign-off DRC consume the GDS; the gate
+      # below only VERIFIES its report so an audit never mutates the layout.
+      - metal_fill_emit
     required_outputs:
       - "phase3/stage3/pnr/filled.def OR phase3/stage3/pnr/metal_fill.done"
     gate:
@@ -1488,6 +1526,16 @@ steps:
         - optional_program_exit_zero:
             command: "spare_cell_preservation_check . --json reports/phase2/gates/spare_preservation_postfill.json"
             condition_files_exist: ["phase3/stage3/pnr/spare_cells.json"]
+        # Density-targeted fill VERDICT. `--verify-only` re-reports what the
+        # streamout emitter already wrote — it never re-runs the fill, so
+        # auditing a finished project cannot mutate its GDS. PARTIAL (a layer
+        # that never reached its target) FAILs with the achieved worst-window
+        # density disclosed; a missing report exits 2 with a NAMED disclosure
+        # (VACUOUS-PASS), never a silent "filled". Opt-in per PDK, same as the
+        # Step-26 geometry deck: no fill config, no claim.
+        - optional_program_exit_zero:
+            command: "metal_fill_emit . --verify-only --json reports/phase2/gates/cmp_fill_emit.json"
+            condition_files_exist: ["signoff/cmp_fill_targets.json", "input/pdk/bridge/cmp_fill_targets.json"]
     blocks_on: [32]
 
   # ── Step 35: DFM screen ──────────────────────────────────────────
