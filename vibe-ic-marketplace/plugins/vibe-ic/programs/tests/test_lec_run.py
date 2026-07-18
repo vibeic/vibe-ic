@@ -392,7 +392,9 @@ def test_gold_frontend_slang_emits_plugin_load_when_needed():
 # genuine miter that runs and leaves unproven points still FAILs.
 # ---------------------------------------------------------------------------
 _FRONTEND_ABORT_OUTPUT = """\
-Executing Verilog-2005 frontend: /p/rtl/ibex_alu.sv
+-- Running command `read_verilog -sv /p/rtl/ibex_alu.sv' --
+
+1. Executing Verilog-2005 frontend: /p/rtl/ibex_alu.sv
 /p/rtl/ibex_alu.sv:10: ERROR: syntax error, unexpected TOK_PACKAGE
 """
 
@@ -480,7 +482,9 @@ def test_inconclusive_label_with_real_mismatch_still_fails(tmp_path):
 # run (authentic, not hand-written).
 # ---------------------------------------------------------------------------
 _IBEX_ELAB_ABORT = (
-    "Executing Verilog-2005 frontend: /p/rtl/chip_top.sv\n"
+    "-- Running command `read_verilog -sv /p/rtl/chip_top.sv' --\n"
+    "\n"
+    "1. Executing Verilog-2005 frontend: /p/rtl/chip_top.sv\n"
     "chip_top.sv:85: ERROR: Parameter u_ibex_core.RV32M with non-constant "
     "value!\n")
 

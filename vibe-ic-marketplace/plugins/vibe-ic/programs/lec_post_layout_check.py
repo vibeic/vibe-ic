@@ -57,7 +57,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 GATE = "lec_post_layout_check"
 
@@ -111,11 +111,71 @@ def functional_read_liberty_aborted(log: str) -> bool:
 
 def build_functional_probe_script(lib: str) -> str:
     """A minimal Yosys script that just FUNCTIONALLY reads the Liberty (no
-    `-lib`). On a pre-fork binary this ABORTS at read_liberty on an ICG cell
-    ("Missing function on output …"); on the fork it succeeds. The runner
-    classifies the probe log with functional_read_liberty_aborted() to pick the
-    recipe WITHOUT paying for a full equiv run first."""
+    `-lib`). On a binary that cannot build a function for every cell this ABORTS
+    at read_liberty (e.g. on an integrated clock-gate output); where it is
+    supported it succeeds. The runner classifies the probe with
+    functional_read_liberty_supported() to pick the recipe WITHOUT paying for a
+    full equiv run first."""
     return f"read_liberty {lib}\n"
+
+
+def functional_read_liberty_supported(
+    probe_rc: int,
+    liberty_exists: bool,
+    liberty_nonempty: bool,
+) -> Tuple[bool, str]:
+    """OBSERVABLE (v1.4.x): did the FUNCTIONAL `read_liberty` actually work?
+
+    A CAPABILITY PROBE SHOULD PROBE. The old decision grepped the FULL equiv
+    log for "Missing function on output". Two problems: (a) a reworded abort
+    silently selected the UNSOUND `-lib` recipe with no trace, and (b) grepping
+    the full equiv log meant any run whose transcript happened to contain that
+    phrase — including a genuine MISMATCH run — could trigger the fallback.
+    Running the dedicated probe instead ISOLATES the capability question from
+    the equivalence result, so an equivalence outcome can never select the
+    unsound recipe. That is a §4.05 TIGHTENING, not a widening.
+
+    §4.05 — DIRECTION OF SAFETY IS INVERTED HERE. On the retry sites in this
+    codebase, widening the trigger is safe because the fallback is another
+    honest attempt. Here the fallback is the `-lib` BLACKBOX recipe, which is
+    UNSOUND: it assumes matched cells are equal, so it can false-PASS NAND≡NOR.
+    Widening what selects it would therefore widen what can PASS. So this
+    deliberately does NOT fall back on every failure:
+
+      * liberty missing / empty  -> NOT a capability gap, an INPUT defect. No
+        fallback; the caller must fail honestly rather than run an unsound
+        compare on a file it never read.
+      * probe rc == 0            -> the sound functional recipe works. Use it.
+      * probe rc != 0 on a real, non-empty liberty -> genuine capability gap in
+        this binary. Fall back, and the caller RECORDS the unsound provenance.
+
+    Returns (supported, reason). `supported=False` with a reason naming an input
+    defect means "do not fall back" — the caller checks `liberty_exists` /
+    `liberty_nonempty` itself, which is why they are explicit parameters."""
+    if not liberty_exists:
+        return False, ("liberty file does not exist — an INPUT defect, not a "
+                       "capability gap; the unsound -lib fallback must NOT be "
+                       "selected on a file that was never read")
+    if not liberty_nonempty:
+        return False, ("liberty file is empty — an INPUT defect, not a "
+                       "capability gap; the unsound -lib fallback must NOT be "
+                       "selected on a file with no cells")
+    if probe_rc == 0:
+        return True, ("functional read_liberty probe succeeded — the SOUND "
+                      "recipe (proves each cell's function) is available")
+    return False, (
+        f"functional read_liberty probe FAILED (rc={probe_rc}) on a present, "
+        f"non-empty liberty — this binary cannot build a function for every "
+        f"cell (e.g. an integrated clock-gate output). Falling back to the "
+        f"UNSOUND -lib blackbox recipe, recorded as such in the provenance")
+
+
+def liberty_input_is_usable(liberty_exists: bool,
+                            liberty_nonempty: bool) -> bool:
+    """True iff the liberty is a real, non-empty file — i.e. a functional-read
+    failure would be a CAPABILITY gap rather than an INPUT defect. Callers use
+    this to refuse the unsound fallback on a bad input."""
+    return bool(liberty_exists and liberty_nonempty)
 
 
 # ---------------------------------------------------------------------------

@@ -5796,6 +5796,39 @@ def _antenna_repair_tcl(pdk: "PdkConfig") -> str:
 _POSTROUTE_REPAIR_CAP_CACHE: dict = {}
 
 
+_PROBE_REAL_RE = re.compile(r"^VIBEIC_PROBE_REAL:\s*(.*)$", re.MULTILINE)
+_PROBE_CTRL_RE = re.compile(r"^VIBEIC_PROBE_CTRL:\s*(.*)$", re.MULTILINE)
+
+
+def _flag_accepted_vs_control(probe_output: str) -> bool:
+    """DIFFERENTIAL capability observable — was the real flag accepted by the
+    command's argument parser?
+
+    Compares the real flag's outcome against a deliberately-INVALID control flag
+    tried in the same session. If the tool treats them the SAME, the real flag is
+    not recognised either. If it treats them DIFFERENTLY, the real flag got past
+    argument parsing — i.e. the capability exists.
+
+    This needs NO knowledge of how either rejection is phrased: the control
+    calibrates the probe at run time. A help-text reformat, a renamed error, or a
+    new error code all leave the comparison intact.
+
+    Fail-safe: a missing/garbled probe transcript yields False (skip the fork
+    path), which is byte-identical to today's MEASURE-ONLY behaviour."""
+    real_m = _PROBE_REAL_RE.search(probe_output or "")
+    ctrl_m = _PROBE_CTRL_RE.search(probe_output or "")
+    if not real_m or not ctrl_m:
+        return False
+    real, ctrl = real_m.group(1).strip(), ctrl_m.group(1).strip()
+    if not real or not ctrl:
+        return False
+    # The control MUST have been rejected; if the tool accepted a flag we know
+    # is invalid, the probe is not discriminating and we must not trust it.
+    if ctrl == "<accepted>":
+        return False
+    return real != ctrl
+
+
 def _openroad_supports_postroute_spef_repair(container: str) -> bool:
     """True iff the container's OpenROAD carries the fork's post-detailed-route
     real-SPEF repair fix (vibeic/OpenROAD `cf06074139`: the Signal-11 crash-fix
@@ -5834,15 +5867,37 @@ def _openroad_supports_postroute_spef_repair(container: str) -> bool:
         if rc == 0 and out.strip().lower() in ("1", "true", "yes", "on"):
             capable = True
         else:
-            # `help estimate_parasitics` — the flag lives HERE, not on repair_*.
+            # v1.4.x — A CAPABILITY PROBE SHOULD PROBE. The old probe scraped
+            # `help estimate_parasitics` for the `-detailed_routing` token, so a
+            # help-TEXT reformat silently disabled our own fork's post-route
+            # SPEF repair. This instead TRIES the flag and observes whether the
+            # command's ARGUMENT PARSER accepted it, self-calibrating against a
+            # deliberately-bogus control flag in the SAME session:
+            #
+            #   real flag ACCEPTED  -> gets past arg parsing, fails later on
+            #                          "no network has been linked"
+            #   real flag UNKNOWN   -> rejected AT arg parsing, exactly like the
+            #                          bogus control
+            #
+            # The DECISION is "does the real flag behave DIFFERENTLY from a flag
+            # we know is invalid?" — which needs no allow-list and holds however
+            # either diagnostic is worded. Verified live: the fork build gives
+            # "no network has been linked" vs "STA-0562 … not a known keyword"
+            # for the control; stock gives STA-0562 for both.
             rc, out, err = _docker_exec_raw(
                 container,
                 "openroad -no_init -no_splash -exit <<'EOF' 2>&1\n"
-                "catch {help estimate_parasitics}\n"
+                "if {[catch {estimate_parasitics -detailed_routing} e]} {"
+                " puts \"VIBEIC_PROBE_REAL: $e\" } else {"
+                " puts \"VIBEIC_PROBE_REAL: <accepted>\" }\n"
+                "if {[catch {estimate_parasitics"
+                " -vibeic_probe_unknown_control_flag} e]} {"
+                " puts \"VIBEIC_PROBE_CTRL: $e\" } else {"
+                " puts \"VIBEIC_PROBE_CTRL: <accepted>\" }\n"
                 "EOF",
                 timeout=60)
-            capable = bool(
-                re.search(r"-detailed_routing\b", (out or "") + "\n" + (err or "")))
+            capable = _flag_accepted_vs_control(
+                (out or "") + "\n" + (err or ""))
     except Exception:  # nosec - probe is best-effort; any failure → fail-safe skip
         capable = False
     _POSTROUTE_REPAIR_CAP_CACHE[container] = capable
@@ -9716,8 +9771,22 @@ _LVS_EXT_ERROR_FAIL_CEILING = 1000
 _LVS_EXT_ERROR_WARN_FLOOR = 1
 # `N error(s)` / `N errors were encountered` — case-insensitive, the
 # count is the immediately-preceding integer (commas tolerated).
+# v1.4.x — ORDER-AGNOSTIC. The original pattern required the count to PRECEDE
+# the word "error" (`106,250,195 errors`), so a summary reworded to
+# `errors: 106250195` / `error count: N` silently yielded NO count — and the
+# extraction-collapse guard then did not fire at all, feeding a garbage netlist
+# into netgen. Both orders are now recognised, and a log we cannot measure is
+# reported as EXPLICITLY UNMEASURED rather than silently treated as clean.
 _LVS_EXT_ERROR_RE = re.compile(
-    r"([0-9][0-9,]*)\s+error(?:s)?\b", re.IGNORECASE)
+    r"([0-9][0-9,]*)\s+error(?:s)?\b"           # "106,250,195 errors"
+    r"|error(?:s)?(?:\s+count)?\s*[:=]\s*([0-9][0-9,]*)",  # "errors: 106250195"
+    re.IGNORECASE)
+
+# Does the log mention extraction errors AT ALL (in any phrasing we recognise as
+# error-ish)? Used ONLY to distinguish "measured zero errors" from "we could not
+# measure", so the guard's absence is never silent. Never a control decision by
+# itself — the FAIL still requires a real parsed COUNT above the ceiling.
+_LVS_EXT_ERRORISH_RE = re.compile(r"\berrors?\b", re.IGNORECASE)
 
 
 def _run_drc_offgrid_population(project: Path) -> Optional[dict]:
@@ -9751,11 +9820,31 @@ def _parse_ext2spice_error_count(log_text: str) -> Optional[int]:
         return None
     counts: List[int] = []
     for m in _LVS_EXT_ERROR_RE.finditer(log_text):
+        raw = m.group(1) or m.group(2)
+        if not raw:
+            continue
         try:
-            counts.append(int(m.group(1).replace(",", "")))
+            counts.append(int(raw.replace(",", "")))
         except ValueError:
             continue
     return max(counts) if counts else None
+
+
+def _ext2spice_error_count_unmeasured(log_text: str) -> bool:
+    """True iff the extraction log TALKS about errors but we could not parse a
+    COUNT out of it — i.e. the collapse guard is running blind on this log.
+
+    The point is honesty, not control: the FAIL below still requires a real
+    parsed count above the ceiling, so this can never itself fail a run. It
+    exists so that "the guard could not measure" is RECORDED in the verdict
+    artifact instead of being indistinguishable from "the extraction was
+    clean" — which is exactly how a reworded summary used to disable the guard
+    with no trace at all."""
+    if not log_text:
+        return False
+    if _parse_ext2spice_error_count(log_text) is not None:
+        return False
+    return bool(_LVS_EXT_ERRORISH_RE.search(log_text))
 
 
 def _write_lvs_verdict(project: Path, status: str, finding: str,
@@ -10781,6 +10870,14 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
         else (out or "")
     ext_err_count = _parse_ext2spice_error_count(ext_log_txt)
     ext_warning: Optional[str] = None
+    # v1.4.x — never let the collapse guard go silently blind. If the log talks
+    # about errors but no count could be parsed, SAY SO in the verdict artifact.
+    if _ext2spice_error_count_unmeasured(ext_log_txt):
+        ext_warning = (
+            "Magic ext2spice reported error(s) in a form this runner could not "
+            "parse a COUNT from — the #477 extraction-collapse guard could NOT "
+            "be evaluated for this run (it is UNMEASURED, not measured-clean). "
+            "Review ext2spice.log by hand before trusting the compare.")
     if ext_err_count is not None and ext_err_count >= _LVS_EXT_ERROR_FAIL_CEILING:
         # ORGANIC #595 — cross-reference the OFFGRID DRC population. Magic's
         # extractor chokes on off-grid geometry, so an ext2spice error
@@ -14163,14 +14260,43 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
     # passes NAND≡NOR). Functional read ABORTS on a pre-fork yosys ("Missing
     # function on output" at an ICG cell); on that signal fall back to `-lib` and
     # RECORD which path ran (provenance). Auto-upgrades once the fork image lands.
+    # v1.4.x — A CAPABILITY PROBE SHOULD PROBE. Run the DEDICATED functional
+    # `read_liberty` probe and key on whether it WORKED (rc), instead of
+    # grepping the full equiv transcript for "Missing function on output".
+    # Isolating the capability question from the equivalence run also means an
+    # equivalence OUTCOME can never select the unsound -lib recipe — a §4.05
+    # tightening, since that recipe can false-PASS NAND≡NOR.
+    _probe_ys = out_json.parent / f"lec_post_{top}_libprobe.ys"
+    _probe_ys.write_text(mod.build_functional_probe_script(lib_c))
+    _probe_rc, _po, _pe = _docker_exec(
+        container,
+        (f"export PATH={TOOLS_IN_CONTAINER}/yosys/bin:"
+         f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+         f"yosys -s {_to_container_path(str(_probe_ys), container)}"),
+        marker=_to_container_path(str(_probe_ys), container))
+    # INPUT-vs-CAPABILITY: a missing/empty liberty is an input defect, and must
+    # NOT buy the unsound fallback (see functional_read_liberty_supported).
+    try:
+        _lib_host = Path(liberty) if liberty else None
+        _lib_exists = bool(_lib_host and _lib_host.is_file())
+        _lib_nonempty = bool(_lib_exists and _lib_host.stat().st_size > 0)
+    except OSError:
+        _lib_exists = _lib_nonempty = False
+    _func_ok, _func_reason = mod.functional_read_liberty_supported(
+        _probe_rc, _lib_exists, _lib_nonempty)
     lec_recipe = "functional"
     functional_lib = True
-    rc, log_text = _run_lec(functional_lib=True)
-    if mod.functional_read_liberty_aborted(log_text):
-        notes.append("post-layout LEC: functional read_liberty unavailable "
-                     "(pre-fork yosys) → falling back to -lib blackbox recipe "
-                     "(UNSOUND path recorded; upgrades to functional after the "
-                     "fork image rebuild).")
+    if _func_ok:
+        rc, log_text = _run_lec(functional_lib=True)
+    elif not mod.liberty_input_is_usable(_lib_exists, _lib_nonempty):
+        # Input defect — run the SOUND recipe anyway so the failure is honest.
+        # Falling back to the unsound compare here would let a liberty we never
+        # read produce a "match".
+        notes.append(f"post-layout LEC: {_func_reason}; keeping the SOUND "
+                     f"functional recipe so the failure stays honest.")
+        rc, log_text = _run_lec(functional_lib=True)
+    else:
+        notes.append(f"post-layout LEC: {_func_reason}")
         lec_recipe = "blackbox_lib_fallback"
         functional_lib = False
         rc, log_text = _run_lec(functional_lib=False)
