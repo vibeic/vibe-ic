@@ -643,9 +643,17 @@ def synth_frontend_should_retry_under_synthesis(
 # begins executing the SLANG frontend then errors on "no input files"; an
 # ABSENT command (image where slang is an unloaded .so, or genuinely missing)
 # yields "No such command: read_slang".
+# v1.4.x — A CAPABILITY PROBE SHOULD PROBE. The old probe ran `read_slang` with
+# NO input and inspected the resulting error text. That asks "how did yosys
+# phrase its complaint?" when the question is "can this image read SystemVerilog
+# with read_slang?". The probe now TRIES THE CAPABILITY on a tiny synthetic
+# fixture and observes whether a design came out the other side.
+_SLANG_PROBE_MODULE: str = "_vibeic_slang_probe_m"
 SLANG_PROBE_CMD: str = (
     "export PATH=/foss/tools/yosys/bin:/foss/tools/bin:$PATH && "
-    "yosys -p 'read_slang'"
+    f"printf 'module {_SLANG_PROBE_MODULE}; endmodule\\n' "
+    f"> /tmp/{_SLANG_PROBE_MODULE}.sv && "
+    f"yosys -p 'read_slang /tmp/{_SLANG_PROBE_MODULE}.sv; stat'"
 )
 
 
@@ -672,8 +680,16 @@ def read_slang_is_builtin(probe_output: str) -> bool:
     whole `-p` script (the bug this fixes), whereas a wrongly-SKIPPED load
     merely triggers the caller's sv2v / read_verilog fallback — recoverable."""
     out = probe_output or ""
+    # STRONGEST evidence (v1.4.x): the probe FIXTURE came out the other side.
+    # `stat` reports the elaborated design, so seeing the probe module's own
+    # name means read_slang genuinely parsed and elaborated SystemVerilog — the
+    # capability itself was exercised, not merely a diagnostic inspected.
+    if _SLANG_PROBE_MODULE in out:
+        return True
+    # Fallback for a probe that could not write its fixture (read-only /tmp,
+    # older SLANG_PROBE_CMD in a cached transcript): yosys numbers every pass it
+    # dispatches, so a numbered pass is still positive capability evidence.
     if _YOSYS_PASS_EXECUTED_RE.search(out):
-        # Positive capability evidence: yosys ran a pass for this command.
         return True
     return "No such command: read_slang" not in out
 

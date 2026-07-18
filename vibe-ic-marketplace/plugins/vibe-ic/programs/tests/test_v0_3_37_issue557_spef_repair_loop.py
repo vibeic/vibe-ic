@@ -136,10 +136,18 @@ def test_pnr_tcl_repair_estimate_runs_after_shipped_artifacts():
 
 
 def test_openroad_postroute_repair_probe(monkeypatch):
-    """The #147 capability probe: env opt-in OR the fork `-detailed_routing`
-    flag on `help estimate_parasitics` → capable; stock help / error →
-    fail-safe False. Cached per container. The flag is on estimate_parasitics,
-    NOT repair_timing/repair_design (probing those can never discriminate)."""
+    """The #147 capability probe: env opt-in OR a DIFFERENTIAL flag probe →
+    capable; stock / error → fail-safe False. Cached per container.
+
+    v1.4.x CONTRACT CHANGE (deliberate — this test previously pinned a wording
+    gate). The probe used to SCRAPE `help estimate_parasitics` for the
+    `-detailed_routing` token, so a help-TEXT reformat silently disabled our own
+    fork's post-route SPEF repair. It now TRIES the flag and compares the result
+    against a deliberately-invalid CONTROL flag in the same session: if the tool
+    treats them the same the flag is unknown; if differently, the arg parser
+    accepted it. The control calibrates the probe at run time, so no phrasing of
+    either rejection is consulted. The flag is on estimate_parasitics, NOT
+    repair_timing/repair_design (probing those can never discriminate)."""
     R._POSTROUTE_REPAIR_CAP_CACHE.clear()
 
     # (a) explicit env opt-in → capable.
@@ -153,25 +161,50 @@ def test_openroad_postroute_repair_probe(monkeypatch):
     # (b) no env, but the fork flag is advertised on estimate_parasitics help.
     R._POSTROUTE_REPAIR_CAP_CACHE.clear()
 
-    def _fork_help(container, cmd, timeout=1800):
+    def _fork_probe(container, cmd, timeout=1800):
         if "VIBEIC_OPENROAD_POSTROUTE_SPEF_REPAIR" in cmd:
             return 0, "", ""
-        # exactly the fork build's help line (pipe-separated flags).
-        return 0, ("estimate_parasitics -placement|-global_routing|"
-                   "-detailed_routing [-spef_file filename]\n"), ""
-    monkeypatch.setattr(R, "_docker_exec_raw", _fork_help)
+        # exactly what the fork build prints (captured live): the real flag gets
+        # PAST arg parsing and fails later; the bogus control is rejected AT it.
+        return 0, ("VIBEIC_PROBE_REAL: Error: no network has been linked.\n"
+                   "VIBEIC_PROBE_CTRL: STA-0562\n"), ""
+    monkeypatch.setattr(R, "_docker_exec_raw", _fork_probe)
     assert R._openroad_supports_postroute_spef_repair("c-fork") is True
+
+    # (b2) the SAME conclusion under totally different phrasings — the property
+    # a help-text scrape could never satisfy.
+    R._POSTROUTE_REPAIR_CAP_CACHE.clear()
+
+    def _fork_reworded(container, cmd, timeout=1800):
+        if "VIBEIC_OPENROAD_POSTROUTE_SPEF_REPAIR" in cmd:
+            return 0, "", ""
+        return 0, ("VIBEIC_PROBE_REAL: no design loaded; nothing to estimate\n"
+                   "VIBEIC_PROBE_CTRL: ERR-9999 unrecognised option\n"), ""
+    monkeypatch.setattr(R, "_docker_exec_raw", _fork_reworded)
+    assert R._openroad_supports_postroute_spef_repair("c-fork2") is True
 
     # (c) stock help (no -detailed_routing) → fail-safe False (guarded skip).
     R._POSTROUTE_REPAIR_CAP_CACHE.clear()
 
-    def _stock_help(container, cmd, timeout=1800):
+    def _stock_probe(container, cmd, timeout=1800):
         if "VIBEIC_OPENROAD_POSTROUTE_SPEF_REPAIR" in cmd:
             return 0, "", ""
-        return 0, ("estimate_parasitics -placement|-global_routing "
-                   "[-spef_file filename]\n"), ""
-    monkeypatch.setattr(R, "_docker_exec_raw", _stock_help)
+        # stock: the real flag is rejected EXACTLY like the bogus control
+        # (captured live by probing a flag that genuinely does not exist).
+        return 0, ("VIBEIC_PROBE_REAL: STA-0562\n"
+                   "VIBEIC_PROBE_CTRL: STA-0562\n"), ""
+    monkeypatch.setattr(R, "_docker_exec_raw", _stock_probe)
     assert R._openroad_supports_postroute_spef_repair("c-stock") is False
+
+    # (c2) a probe that produced no markers at all → fail-safe False.
+    R._POSTROUTE_REPAIR_CAP_CACHE.clear()
+
+    def _garbled(container, cmd, timeout=1800):
+        if "VIBEIC_OPENROAD_POSTROUTE_SPEF_REPAIR" in cmd:
+            return 0, "", ""
+        return 0, "openroad: command not found\n", ""
+    monkeypatch.setattr(R, "_docker_exec_raw", _garbled)
+    assert R._openroad_supports_postroute_spef_repair("c-garbled") is False
 
     # (d) docker/openroad error → fail-safe False (never speculatively enables).
     R._POSTROUTE_REPAIR_CAP_CACHE.clear()

@@ -56,7 +56,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 PROGRAM = "lec_run"
 
@@ -178,8 +178,85 @@ def is_frontend_parse_abort(text: str) -> bool:
     read_verilog/read_slang PARSE or ELABORATION failure that built no miter.
     PURE. Consulted ONLY when parse_error is True (0 miter), so it can only fire
     the slang retry / INCONCLUSIVE re-class on a zero-miter run — never on a real
-    mismatch whose miter ran."""
+    mismatch whose miter ran.
+
+    v1.4.x — RETAINED for the slang-RETRY trigger and for the reason string, but
+    NO LONGER the verdict classifier. INCONCLUSIVE-vs-FAIL on a zero-miter run is
+    now decided by :func:`frontend_aborted_before_elaboration`, an observation of
+    HOW FAR the run got rather than of how the tool phrased its abort."""
     return bool(_FRONTEND_PARSE_ABORT_RE.search(text or ""))
+
+
+# ---------------------------------------------------------------------------
+# STAGE-PROGRESS OBSERVABLE (v1.4.x) — how far did the yosys run actually get?
+#
+# THE RESIDUAL HALF OF THE ea13744db BUG. Frontend SELECTION moved to the
+# observable there, but the VERDICT classification — INCONCLUSIVE vs FAIL on a
+# zero-miter run — still keyed on `_FRONTEND_PARSE_ABORT_RE`. A reworded abort
+# restores the false FAIL, which cascade-marks 24 downstream steps MISSING.
+#
+# The observable: yosys NUMBERS and ANNOUNCES every pass it dispatches
+# ("1. Executing Verilog-2005 frontend: …", "2. Executing HIERARCHY pass …").
+# Verified live on the vibeic-eda image:
+#   read ok + hierarchy ok      -> passes = [Verilog-2005 frontend, HIERARCHY]
+#   frontend abort (modern SV)  -> passes = [Verilog-2005 frontend]         <-- stopped AT the read
+#   post-frontend failure       -> passes = [Verilog-2005 frontend, HIERARCHY]
+#   yosys never ran / crashed   -> passes = []
+# So "only frontend passes executed" is POSITIVE evidence that the read is where
+# it stopped — i.e. no elaborated design was ever produced — whatever the tool
+# said. Pass-class names ("… frontend") are yosys's own command-inventory
+# naming, which is API-stable, unlike error phrasing which is not.
+_YOSYS_PASS_RE = re.compile(r"^\s*[\d.]+\.\s+Executing\s+(.+?)\s*$", re.MULTILINE)
+# A yosys READ pass announces itself as an "<X> frontend" (Verilog-2005 / SLANG /
+# Liberty / RTLIL / BLIF). Every design-BUILDING pass announces as "<NAME> pass".
+_YOSYS_FRONTEND_PASS_RE = re.compile(r"\bfrontend\b", re.IGNORECASE)
+
+
+def yosys_executed_passes(text: str) -> List[str]:
+    """Ordered list of the yosys passes that ACTUALLY executed in this log.
+
+    PURE. The primitive behind the stage-progress observable; exposed so a test
+    can pin the parse against real transcripts."""
+    return [m.group(1) for m in _YOSYS_PASS_RE.finditer(text or "")]
+
+
+def frontend_aborted_before_elaboration(text: str) -> Tuple[bool, str]:
+    """OBSERVABLE: did the run stop AT the frontend, producing no elaborated
+    design? Returns (aborted_at_frontend, evidence).
+
+    True requires POSITIVE evidence on BOTH counts:
+      1. at least one pass executed AND it was a READ/frontend pass — so yosys
+         genuinely ran and genuinely reached the read; and
+      2. NO non-frontend pass ever executed — so the design was never built.
+
+    This deliberately preserves the asymmetry the earlier fix imposed. A yosys /
+    docker CRASH with no frontend evidence yields NO executed passes -> False ->
+    the caller keeps the HARD FAIL. A run that got PAST the read and died later
+    has a non-frontend pass in the list -> False -> HARD FAIL. Only the narrow
+    "reached the read, never got past it" shape re-classifies to INCONCLUSIVE.
+
+    §4.05 — INCONCLUSIVE is the LESS blocking outcome (a FAIL cascade-marks 24
+    downstream steps MISSING), so widening it is the direction that could hide a
+    genuine failure. That is exactly why this requires positive stage evidence
+    rather than merely the ABSENCE of a recognised phrase. Neither outcome is
+    ever a PASS: a miter that runs and leaves points unequal still FAILs."""
+    passes = yosys_executed_passes(text)
+    if not passes:
+        return False, ("no yosys pass executed at all — the tool never reached "
+                       "a frontend (crash / container / invocation failure); "
+                       "there is no evidence of a frontend abort")
+    non_frontend = [p for p in passes
+                    if not _YOSYS_FRONTEND_PASS_RE.search(p)]
+    if non_frontend:
+        return False, (
+            f"the run got PAST the read — {len(passes)} pass(es) executed and "
+            f"{non_frontend[0]!r} ran after the frontend, so a design WAS "
+            f"elaborated; whatever failed later is not a frontend abort")
+    return True, (
+        f"only frontend/read pass(es) executed ({', '.join(passes[:3])}"
+        f"{'…' if len(passes) > 3 else ''}) and no design-building pass ever "
+        f"ran — the read is where it stopped, so no elaborated design was "
+        f"produced")
 
 
 # SV-2017 gold signature — DESIGN properties the yosys built-in reader cannot
@@ -357,23 +434,27 @@ def parse_equiv_output(text: str) -> Dict:
         and not sat_aborts
     )
 
-    if parse_error and is_frontend_parse_abort(text):
-        # A frontend PARSE-ABORT (read_verilog/read_slang could not elaborate
-        # the gold or gate) built NO miter → 0 compared points. This is NOT
-        # classifiable as PASS or FAIL (nothing was compared) → INCONCLUSIVE.
-        # §4.05-safe: a genuine miter that runs and leaves unproven points still
-        # FAILs below; only the zero-miter parse-abort re-classifies. The false
-        # FAIL this replaces was cascade-marking 24 downstream steps MISSING.
+    _fe_aborted, _fe_evidence = frontend_aborted_before_elaboration(text)
+    if parse_error and _fe_aborted:
+        # OBSERVABLE (v1.4.x): the run REACHED the read and never got past it,
+        # so no elaborated design was ever produced and NO miter was built → 0
+        # compared points. Not classifiable as PASS or FAIL → INCONCLUSIVE.
+        # Decided by stage progress, NOT by how the frontend phrased its abort —
+        # a reworded abort used to restore the false FAIL that cascade-marks 24
+        # downstream steps MISSING.
+        # §4.05: this requires POSITIVE stage evidence, so a crash with no
+        # frontend evidence, and a run that died AFTER elaborating, both stay
+        # HARD FAIL below. A genuine miter that runs and leaves unproven points
+        # still FAILs; only the zero-miter stopped-at-the-read shape re-classes.
         equivalent = False
         verdict = "INCONCLUSIVE"
         verdict_explanation = (
-            "Yosys built NO equivalence miter — a frontend PARSE-ABORT "
-            "(read_verilog / read_slang could not elaborate the gold or gate; "
-            "e.g. SystemVerilog package-scope or unpacked-array port the "
-            "built-in reader rejects) left 0 compared points. Not classifiable "
-            "as PASS or FAIL → INCONCLUSIVE (the static/functional sign-off is "
-            "not decided here; re-run with the slang frontend or fix the parse "
-            "error). See reports/lec.rpt for the frontend error.")
+            "Yosys built NO equivalence miter — the run stopped AT the frontend "
+            "so no elaborated design was ever produced, leaving 0 compared "
+            f"points. Observable: {_fe_evidence}. Not classifiable as PASS or "
+            "FAIL → INCONCLUSIVE (the static/functional sign-off is not decided "
+            "here; re-run with the slang frontend or fix the read error). See "
+            "reports/lec.rpt for the frontend error.")
     elif parse_error and _TIMEOUT_RE.search(text):
         # The miter was still running when the budget expired: no comparison was
         # made, so this is NOT evidence of a mismatch — but it is also NOT a
@@ -387,12 +468,19 @@ def parse_equiv_output(text: str) -> Dict:
             "mismatch: re-run with a larger --timeout to obtain a real "
             "verdict. Blocking (never a free pass) until it is decided.")
     elif parse_error:
+        # HARD FAIL, deliberately NOT re-classified: there is no positive
+        # evidence the FRONTEND is where this stopped. Either yosys never ran
+        # (crash / container failure) or it elaborated a design and died later —
+        # both are real failures, and INCONCLUSIVE (the less blocking outcome)
+        # must never be reachable without stage evidence. The observable that
+        # ruled it out is recorded so the distinction is auditable.
         equivalent = False
         verdict = "FAIL"
         verdict_explanation = (
             "Yosys produced no parseable equivalence result — the equiv "
             "check did not reach a verdict (see reports/lec.rpt for the raw "
-            "tool log). Not classifiable as PASS or FAIL.")
+            f"tool log). NOT re-classified as INCONCLUSIVE because {_fe_evidence}"
+            " — a run with no frontend-abort evidence stays a blocking FAIL.")
     elif matched:
         equivalent = True
         verdict = "PASS"
