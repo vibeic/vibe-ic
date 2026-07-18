@@ -62,7 +62,7 @@ Physical: synth 418 cells; design area 12294 µm²; core-util 44.1%; routed, ant
 ## Tool substitution (per open-benchmark-methodology §3)
 
 Full OSS forked toolchain `vibeic-eda:0.2.20-int` (no commercial EDA): iverilog (functional), yosys +
-OpenROAD (synth/PnR/STA/IR), KLayout SVRF (native in-KLayout DRC on the foundry rule deck) + KLayout /
+OpenROAD (synth/PnR/STA/IR), KLayout SVRF (native in-KLayout DRC on the commercial-PDK rule deck) + KLayout /
 netgen (LVS), magic. DRC/LVS are native OSS on the commercial rule deck — no commercial-tool cross-run in
 this pass.
 
