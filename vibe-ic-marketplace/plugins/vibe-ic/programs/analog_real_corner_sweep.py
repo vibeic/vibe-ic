@@ -730,34 +730,50 @@ def _ngspice_available(container):
 # project subtree.
 _CONTAINER_PATH_CACHE: dict = {}
 
+def _norm_host_path(host_path):
+    """Normalise a host path for the container WITHOUT dereferencing its final
+    component. Only the parent DIRECTORY is resolved (enough to normalise `..` /
+    a symlinked ancestor for the mount probe); a symlinked LEAF is kept as-is.
+    Following the leaf would move the file into its target's directory, and a
+    model lib's RELATIVE `.include` / `.lib` targets resolve against the
+    directory the file is OPENED from — so dereferencing silently relocates
+    every one of its bare-name includes."""
+    p = Path(host_path)
+    return p.parent.resolve() / p.name
+
+
 def _container_path(container, host_root, host_path):
     key = (container, str(Path(host_path).parent.resolve()))
+    norm = _norm_host_path(host_path)
     cached = _CONTAINER_PATH_CACHE.get(key)
     if cached == "verbatim":
-        return str(Path(host_path).resolve())
+        return str(norm)
     if cached == "foss_designs":
-        rel = Path(host_path).resolve().relative_to(
-            Path(host_root).resolve())
+        rel = norm.relative_to(Path(host_root).resolve())
         return f"/foss/designs/{rel}"
     # Probe: is the host_path's parent reachable verbatim?
     parent = str(Path(host_path).parent.resolve())
     r = _docker(container, f"test -e {shlex.quote(parent)}")
     if r.returncode == 0:
         _CONTAINER_PATH_CACHE[key] = "verbatim"
-        return str(Path(host_path).resolve())
+        return str(norm)
     _CONTAINER_PATH_CACHE[key] = "foss_designs"
-    rel = Path(host_path).resolve().relative_to(
-        Path(host_root).resolve())
+    rel = norm.relative_to(Path(host_root).resolve())
     return f"/foss/designs/{rel}"
 
 def _run_ngspice(container, sp_in_container, cwd=None):
     """Run ngspice -b on a deck. `cwd` (optional) runs ngspice FROM that
-    directory so a model lib's RELATIVE `.lib`/`.include` targets resolve — a
-    COMPOSED corner shim (GAP-ANALOG) stitches in sibling device/prereq libs by
-    relative name, which ngspice resolves against its working directory, not the
-    deck's location. When cwd is None the invocation is unchanged (the open-PDK
-    sky130/gf180 decks include their model lib by ABSOLUTE path, so the byte
-    behaviour is preserved). chip-AGNOSTIC."""
+    directory — the model lib's own directory, so any deck-relative output /
+    scratch file lands beside it.
+
+    NOTE (measured, ngspice-46): cwd does NOT decide how a model lib's RELATIVE
+    `.lib` / `.include` targets resolve — ngspice resolves those against the
+    directory of the INCLUDING FILE, and there is no `-I` / search-path option
+    (`set sourcepath` does not apply to `.include` either). Co-locating the
+    shim's include closure is what makes those targets resolve; see
+    analog_pdk_deck_context.build_lib_include_farm. When cwd is None the
+    invocation is unchanged (the open-PDK sky130/gf180 decks include their model
+    lib by ABSOLUTE path). chip-AGNOSTIC."""
     ngspice_bin = _resolve_ngspice(container) or "ngspice"
     prefix = f"cd {shlex.quote(cwd)} && " if cwd else ""
     cp = _docker(container,
@@ -1328,7 +1344,8 @@ def _deck_context(project, container, pdk, btype):
     reader = _make_lib_reader(container)
     try:
         return _apdc.resolve_deck_context(pdk, res=res, required=required,
-                                          reader=reader)
+                                          reader=reader,
+                                          farm_dir=_apdc.lib_farm_dir(project))
     except Exception:
         return None
 
@@ -1410,8 +1427,10 @@ def run_block(project, block, container, pdk, topology_override):
         return 2
 
     # GAP-ANALOG — run ngspice FROM the resolved model lib's directory for a
-    # custom / native family, so a COMPOSED corner shim's RELATIVE `.lib`
-    # includes (it stitches in sibling device/prereq libs by bare name) resolve.
+    # custom / native family (for a farmed shim that IS the include farm, so the
+    # closure sits in cwd too). This is NOT what makes the shim's bare-name
+    # includes resolve — ngspice resolves those against the INCLUDING FILE's
+    # directory, which is why the closure is farmed; see _run_ngspice.
     # The known open PDKs (sky130 / gf180) include their model lib by ABSOLUTE
     # path → sim_cwd stays None → byte-identical invocation preserved.
     sim_cwd = (str(Path(pdk_lib).parent)

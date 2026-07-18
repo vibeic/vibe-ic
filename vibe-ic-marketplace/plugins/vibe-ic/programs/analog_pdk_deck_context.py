@@ -26,6 +26,8 @@ hygiene — never PDK content).
 """
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -176,12 +178,17 @@ class DeckContext:
     unresolved_roles: List[str] = field(default_factory=list)
     work_items: List[str] = field(default_factory=list)
     disclosure: str = ""
+    # {"dir", "n_linked", "collisions"} when the caller asked for an include
+    # farm (see build_lib_include_farm); None when no farm was built. Counts +
+    # the farm dir only — never a lib basename (NDA hygiene).
+    include_farm: Optional[Dict[str, Any]] = None
 
     def as_json(self) -> Dict[str, Any]:
         return {
             "status": self.status, "source": self.source, "family": self.family,
             "model_lib": self.model_lib,
             "model_lib_includes": self.model_lib_includes,
+            "include_farm": self.include_farm,
             "corner_sections": self.corner_sections,
             "typ_section": self.typ_section,
             "device_terms": self.device_terms,
@@ -304,6 +311,162 @@ def _cross_file_include_targets(text: str, self_basename: str) -> set:
     return out
 
 
+LIB_FARM_DIRNAME = ".pdk_lib_farm"
+
+
+def lib_farm_dir(project: Any) -> Path:
+    """The canonical per-project model-lib include farm (see
+    build_lib_include_farm). One farm per project, shared by every analog block
+    and by the MC-yield path, so the same staged lib is always loaded through the
+    same path. Dot-prefixed and git-excluded from the inside — the SKU-bearing
+    link names never enter the repo."""
+    return Path(project) / "phase3" / "analog" / LIB_FARM_DIRNAME
+
+
+def _resolve_include_closure(roots: List[Path], libs: List[Path]
+                             ) -> Tuple[List[Path], List[str], List[str]]:
+    """Walk the transitive bare-name include graph from `roots` over the staged
+    `libs`. Returns (closure, ambiguous, missing) where `closure` is the ordered
+    set of files really reachable, and the two lists name the UNRESOLVABLE hops
+    (as target basenames, for the caller to count — never to guess with).
+
+    Each hop is resolved the way ngspice itself would, then widened by exactly
+    one deterministic step:
+      1. a file of that name NEXT TO the including file wins outright (this is
+         ngspice's own rule — unambiguous by construction);
+      2. otherwise the staged set is searched by basename: exactly ONE distinct
+         file → that one; TWO OR MORE → AMBIGUOUS, resolved for neither.
+    So the closure only ever contains files a correct resolver would have loaded;
+    it never picks between same-named candidates."""
+    by_base: Dict[str, List[Path]] = {}
+    for p in libs:
+        by_base.setdefault(p.name, []).append(p)
+    closure: List[Path] = []
+    seen: set = set()
+    ambiguous: List[str] = []
+    missing: List[str] = []
+    queue = list(roots)
+    while queue:
+        cur = queue.pop(0)
+        try:
+            key = str(cur.resolve())
+        except OSError:
+            continue
+        if key in seen or not cur.is_file():
+            continue
+        seen.add(key)
+        closure.append(cur)
+        try:
+            txt = cur.read_text(errors="replace")
+        except OSError:
+            continue
+        for tgt in sorted(_cross_file_include_targets(txt, cur.name)):
+            sib = cur.parent / tgt
+            if sib.is_file():
+                queue.append(sib)                        # rule 1: ngspice's own
+                continue
+            cands = {str(p.resolve()): p for p in by_base.get(tgt, [])
+                     if p.is_file()}
+            if len(cands) == 1:
+                queue.append(next(iter(cands.values())))  # rule 2: unique
+            elif len(cands) > 1:
+                ambiguous.append(tgt)
+            else:
+                missing.append(tgt)
+    return closure, ambiguous, missing
+
+
+def build_lib_include_farm(libs: List[str], farm_dir: Any,
+                           roots: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Co-locate the model libs REACHABLE from `roots` under one directory as
+    SYMLINKS keyed by basename, and return
+    {"dir", "map": {staged-path: farm-path}, "n_linked", "ambiguous", "missing"}.
+
+    WHY (GAP-ANALOG, corner-include resolution): a PDK's composed corner shim
+    stitches in its prerequisite / device libs by BARE RELATIVE NAME, and ngspice
+    resolves a relative `.include` / `.lib` target against the directory of the
+    INCLUDING FILE — never against the process cwd. When the staged libs span
+    several directories, a bare include that crosses a directory boundary is
+    unresolvable from ANY cwd ("Could not find library file …" → fatal exit(1) on
+    every corner). Loading the entry lib through a farm whose members are all
+    basename-siblings makes every hop resolve, transitively, without copying or
+    rewriting a single byte of PDK content.
+
+    Scoped to the include CLOSURE of `roots`, not to every staged lib: a PDK may
+    legitimately stage two different files under one basename in different
+    directories, and only one of them is reachable. Farming the whole staged set
+    flat would make that name ambiguous and block an otherwise-resolvable deck.
+
+    Cannot silently substitute a wrong lib:
+      * a hop whose basename has two DISTINCT candidates and no same-directory
+        winner is AMBIGUOUS — it is linked for NEITHER, so ngspice fails loudly
+        rather than loading an arbitrary one;
+      * a target genuinely absent from the staged set is absent from the farm too
+        — ngspice still errors and the run still fails;
+      * the farm holds symlinks only, so a linked lib is byte-for-byte the file
+        the resolver chose.
+
+    chip/PDK-AGNOSTIC (structural — no vendor / SKU / filename literal). NDA: the
+    summary carries COUNTS and the farm dir only, never a lib basename, and the
+    farm self-excludes from git so the SKU-bearing link names never enter the
+    repo."""
+    staged = []
+    for lib in libs:
+        p = Path(lib)
+        try:
+            if p.is_file():
+                staged.append(p)
+        except OSError:
+            continue
+    root_paths = [Path(r) for r in (roots if roots is not None else libs)]
+    closure, ambiguous, missing = _resolve_include_closure(root_paths, staged)
+    empty = {"dir": None, "map": {}, "n_linked": 0,
+             "ambiguous": len(set(ambiguous)), "missing": len(set(missing))}
+    if not closure:
+        return empty
+    # One farm per ROOT SET: two entry libs whose closures disagree on a basename
+    # must not share a directory, or the second would silently shadow the first.
+    tag = hashlib.sha256(
+        "\n".join(sorted(str(p.resolve()) for p in root_paths)).encode()
+    ).hexdigest()[:12]
+    farm = Path(farm_dir) / tag
+    try:
+        farm.mkdir(parents=True, exist_ok=True)
+        (Path(farm_dir) / ".gitignore").write_text("*\n")
+    except OSError as exc:
+        return dict(empty, error=str(exc))
+    # a basename claimed by two DISTINCT files INSIDE the closure cannot be
+    # represented in a flat farm — link neither, and report it as ambiguous.
+    by_base: Dict[str, set] = {}
+    for p in closure:
+        by_base.setdefault(p.name, set()).add(str(p.resolve()))
+    shadowed = {b for b, reals in by_base.items() if len(reals) > 1}
+    mapping: Dict[str, str] = {}
+    for p in closure:
+        if p.name in shadowed:
+            continue
+        # link to the ABSOLUTE STAGED path (not the realpath): the container
+        # already reaches the staged path today, and the PDK's own symlink chain
+        # stays exactly as it was staged.
+        target = str(p.absolute())
+        link = farm / p.name
+        try:
+            if link.is_symlink():
+                if os.readlink(str(link)) != target:
+                    link.unlink()
+                    link.symlink_to(target)
+            elif link.exists():
+                continue                    # a real file squats the name — leave it
+            else:
+                link.symlink_to(target)
+        except OSError:
+            continue
+        mapping[str(p)] = str(link)
+    return {"dir": str(farm), "map": mapping, "n_linked": len(mapping),
+            "ambiguous": len(set(ambiguous) | shadowed),
+            "missing": len(set(missing))}
+
+
 def map_corner_sections(sections: List[str]
                         ) -> Tuple[Optional[str], List[Tuple[str, Any]]]:
     """Map available section names → (typ_section, process_corners). typ is the
@@ -358,6 +521,7 @@ def _default_reader(path: str) -> Optional[str]:
 def custom_family_context(res: Dict[str, Any],
                           required: Tuple[str, ...] = _REQUIRED_ROLES_DEFAULT,
                           reader: Optional[Callable[[str], Optional[str]]] = None,
+                          farm_dir: Any = None,
                           ) -> DeckContext:
     """Build the deck context for a RESOLVED custom / installed non-open family
     (rung 1 project_custom_pdk, or rung 2 container_installed of an unknown
@@ -503,6 +667,33 @@ def custom_family_context(res: Dict[str, Any],
         if comp:
             passive_map[sec] = comp
 
+    # ── include farm (GAP-ANALOG corner-include resolution) ──────────────────
+    # Load the primary lib through a basename-farm so its bare relative
+    # `.include` / `.lib` targets — which ngspice resolves against the INCLUDING
+    # FILE's directory, so no cwd choice can help — resolve transitively even
+    # when the staged libs span several directories. Opt-in: a caller that
+    # passes no farm_dir (and every known open PDK, which never reaches here)
+    # keeps the previous raw-path behaviour byte-identical.
+    farm = None
+    if farm_dir is not None and primary:
+        farm = build_lib_include_farm(readable, farm_dir, roots=[primary])
+        primary_composes = bool(per_lib_composed.get(primary))
+        farmed_primary = (farm.get("map") or {}).get(primary)
+        if farmed_primary:
+            primary = farmed_primary
+        if primary_composes and (farm.get("ambiguous") or farm.get("missing")):
+            # A hop the primary really needs could not be resolved to ONE file.
+            # Picking either candidate — or leaving it for ngspice to not find —
+            # would be a guess or a late fatal; say so honestly here instead.
+            work_items.append(
+                "NEEDS_NATIVE_TEMPLATE: the primary model lib composes other "
+                "libs by bare relative name (which ngspice resolves against the "
+                "INCLUDING FILE's directory), and "
+                f"{farm.get('ambiguous')} such target(s) are ambiguous across "
+                f"the staged libs while {farm.get('missing')} are absent from "
+                "them — refusing to guess which file is meant")
+        farm = {k: v for k, v in farm.items() if k != "map"}
+
     status = "OK" if (not work_items) else "NEEDS_NATIVE_TEMPLATE"
     disclosure = (
         f"custom PDK family '{family}' ({source}) — device map + corner "
@@ -518,13 +709,14 @@ def custom_family_context(res: Dict[str, Any],
         typ_section=typ, process_corners=process,
         device_map=device_map, device_terms=device_terms,
         passive_sections=passive_map, unresolved_roles=unresolved,
-        work_items=work_items, disclosure=disclosure)
+        work_items=work_items, disclosure=disclosure, include_farm=farm)
 
 
 def resolve_deck_context(pdk_selector: str,
                          res: Optional[Dict[str, Any]] = None,
                          required: Tuple[str, ...] = _REQUIRED_ROLES_DEFAULT,
                          reader: Optional[Callable[[str], Optional[str]]] = None,
+                         farm_dir: Any = None,
                          ) -> DeckContext:
     """Dispatcher — the ONE entry point the deck emitter calls.
 
@@ -539,11 +731,11 @@ def resolve_deck_context(pdk_selector: str,
     if res and res.get("available"):
         src = res.get("source")
         if src == "project_custom_pdk":
-            return custom_family_context(res, required, reader)
+            return custom_family_context(res, required, reader, farm_dir)
         if src == "container_installed":
             matched = (res.get("matched_dir") or "").lower()
             # a known open family installed in the container → fast path;
             # an UNKNOWN installed family → parse it (family-agnostic).
             if not any(k in matched for k in _KNOWN_FAMILIES):
-                return custom_family_context(res, required, reader)
+                return custom_family_context(res, required, reader, farm_dir)
     return known_family_context(pdk_selector)

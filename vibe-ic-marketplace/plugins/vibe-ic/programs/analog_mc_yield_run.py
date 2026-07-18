@@ -377,7 +377,24 @@ def _resolve_native_mc(project: Path, container: str):
             if _mc_lib_defines_any(cand, dev_names):
                 mc_lib = cand
                 break
-    out = {"mc_lib": mc_lib,
+    # GAP-ANALOG (corner-include resolution): load the statistical lib — and the
+    # passive companion below — through the project's basename include farm, so
+    # any bare relative `.include` / `.lib` target it carries resolves even when
+    # the staged libs span several directories (ngspice resolves a relative
+    # include against the INCLUDING FILE's directory, so no cwd choice helps).
+    # The farm never substitutes a different file: an ambiguous or absent target
+    # is simply not in it and ngspice still fails loudly. No-op when the farm
+    # cannot be built (paths stay exactly as resolved).
+    farm_map = {}
+    try:
+        import analog_pdk_deck_context as _apdc
+        mc_roots = [mc_lib] + ([ctx.model_lib] if ctx and ctx.model_lib else [])
+        farm_map = _apdc.build_lib_include_farm(
+            list(res.get("spice_libs") or []),
+            _apdc.lib_farm_dir(Path(project)), roots=mc_roots).get("map") or {}
+    except Exception:
+        farm_map = {}
+    out = {"mc_lib": farm_map.get(mc_lib, mc_lib),
            "mc_sections": _pick_native_mc_section(mc_lib, dev_names),
            "family": res.get("family"), "source": src}
     # PASSIVE COMPANION (PMOS well-diode): the MC sections resample the ACTIVE
@@ -389,7 +406,7 @@ def _resolve_native_mc(project: Path, container: str):
     if ctx and ctx.model_lib and ctx.passive_sections:
         psec = ctx.passive_sections.get(ctx.typ_section)
         if psec:
-            out["passive_lib"] = ctx.model_lib
+            out["passive_lib"] = farm_map.get(ctx.model_lib, ctx.model_lib)
             out["passive_section"] = psec
             out["pmos_device"] = (ctx.device_map or {}).get("pmos")
     return out
