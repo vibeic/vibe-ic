@@ -431,3 +431,67 @@ def test_liberty_probe_against_the_real_open_pdks():
         # Whatever the image supports, the verdict must MATCH the probe rc —
         # that is the invariant, not a hardcoded expectation about the image.
         assert ok is (rc == 0), why
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# (1-hardening) the frontend PASS-CLASS token, not a substring of the whole
+# pass line. Found by a peer review of the sibling LVS wording fix, whose first
+# draft matched a whole LINE and so accepted a marker appearing anywhere in it.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_frontend_class_token_is_not_matched_inside_an_argument():
+    """The captured pass name INCLUDES the pass ARGUMENTS — real yosys prints
+    "Verilog-2005 frontend: /tmp/frontend/rtl/m.v" — so a bare \\bfrontend\\b
+    would also fire on a PATH containing that word.
+
+    That misfires in the DANGEROUS direction: a design-BUILDING pass wrongly
+    counted as a frontend pass empties the non-frontend list and buys the
+    LENIENT verdict (INCONCLUSIVE) for a run that actually got past the read.
+    `frontend` must therefore be the pass-CLASS token — the last word before the
+    argument separator, the terminating '.', or end of string."""
+    is_fe = lambda n: bool(LR._YOSYS_FRONTEND_PASS_RE.search(n))  # noqa: E731
+    # real read passes (incl. one whose PATH contains "frontend")
+    assert is_fe("Verilog-2005 frontend: /tmp/lec_obs/good.v")
+    assert is_fe("Verilog-2005 frontend: /tmp/frontend/rtl/m.v")
+    assert is_fe("SLANG frontend.")
+    assert is_fe("Liberty frontend: /pdk/x.lib")
+    # real design-building / writer passes
+    assert not is_fe("HIERARCHY pass (managing design hierarchy).")
+    assert not is_fe("TECHMAP pass (map to technology primitives).")
+    assert not is_fe("Verilog backend.")
+    # THE ADVERSARIAL CASE: a building pass whose ARGUMENT contains "frontend"
+    assert not is_fe("SOMEPASS pass (reading /work/frontend/lib.v).")
+
+
+def test_building_pass_with_frontend_in_its_argument_stays_hard_fail():
+    """End-to-end on the adversarial transcript: the run got PAST the read, so
+    it must stay a blocking FAIL and must NOT be re-classified."""
+    adversarial = (
+        "1. Executing Verilog-2005 frontend: /work/frontend/rtl/top.v\n"
+        "2. Executing SOMEPASS pass (reading /work/frontend/lib.v).\n"
+        "ERROR: died after elaboration\n")
+    aborted, evidence = LR.frontend_aborted_before_elaboration(adversarial)
+    assert aborted is False, evidence
+    assert LR.parse_equiv_output(adversarial)["verdict"] == "FAIL"
+
+
+def test_nested_frontend_deep_in_the_flow_is_not_a_frontend_abort():
+    """REAL yosys behaviour: techmap internally re-enters the Verilog frontend
+    ("5.1. Executing Verilog-2005 frontend: .../techmap.v"). A frontend pass
+    appearing LATE must not make a fully-elaborated run look like a read abort —
+    it does not, because TECHMAP itself is a design-building pass."""
+    nested = (
+        "1. Executing Verilog-2005 frontend: /tmp/frontend/rtl/m.v\n"
+        "5. Executing TECHMAP pass (map to technology primitives).\n"
+        "5.1. Executing Verilog-2005 frontend: /share/yosys/techmap.v\n")
+    assert LR.frontend_aborted_before_elaboration(nested)[0] is False
+
+
+def test_unparseable_pass_list_resolves_to_the_blocking_verdict():
+    """Fail-safe by ELIMINATION: malformed / empty / unparseable evidence must
+    land on FAIL, never on the lenient INCONCLUSIVE — so 'we failed to parse it'
+    can never buy the softer verdict."""
+    for text in ("", "\x00\x01 garbage", "docker daemon died",
+                 "Executing Verilog-2005 frontend: /x.v"):  # no pass NUMBER
+        assert LR.frontend_aborted_before_elaboration(text)[0] is False, text
+        assert LR.parse_equiv_output(text)["verdict"] == "FAIL", text
