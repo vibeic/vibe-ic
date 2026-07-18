@@ -26,6 +26,16 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Set, Tuple
 
+# Kimi-scale fix — this gate audits AUTHORED RTL SOURCE. Collection routes
+# through the shared collector (canonical phase2/stage1/rtl preferred;
+# generated netlist/sim/verify outputs + >8MB files excluded on fallback) so a
+# 342 MB emitted netlist can never enter the char-level comment strip again
+# (see _specrtl_common.rtl_source_files for the full scale rationale).
+try:
+    from _specrtl_common import rtl_source_files
+except ImportError:                      # packaged relative import
+    from ._specrtl_common import rtl_source_files
+
 
 @dataclass
 class Finding:
@@ -67,10 +77,8 @@ def strip_comments(src: str) -> str:
 
 
 def find_rtl_files(project_dir: Path) -> List[Path]:
-    files = []
-    for ext in ('*.v', '*.sv'):
-        files.extend(project_dir.rglob(ext))
-    return [f for f in files if f.is_file()]
+    # Kimi-scale fix: shared authored-RTL collector.
+    return rtl_source_files(project_dir)
 
 
 HANDSHAKE_SUFFIX = re.compile(r'\b(\w+_(?:valid|done|ready))\b')

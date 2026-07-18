@@ -50,6 +50,19 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 import _path_layout as _pl
 
+# Kimi-scale fix — the assembler-file discovery audits AUTHORED RTL SOURCE.
+# It routes through the shared collector (canonical phase2/stage1/rtl
+# preferred; generated netlist/sim/verify outputs + >8MB files excluded on
+# fallback) so a 342 MB emitted netlist can never enter the body-heuristic
+# read_text scan again (see _specrtl_common.rtl_source_files for the full
+# scale rationale). The gate's OTHER inputs — phase1/generated_docs L2*/L8*
+# JSON, waivers.json, and the rtl_dir-only inout-id_bus cross-check — are
+# untouched.
+try:
+    from _specrtl_common import rtl_source_files
+except ImportError:                      # packaged relative import
+    from ._specrtl_common import rtl_source_files
+
 # ----------------------------------------------------------------------
 # Synonyms — generic vocabulary
 # ----------------------------------------------------------------------
@@ -193,18 +206,12 @@ def _is_waived(project: Path) -> bool:
 
 
 def _discover_assembler_files(project: Path) -> List[Path]:
-    rtl_dirs = [_pl.rtl_dir(project), project]
-    seen: set = set()
-    cands: List[Path] = []
-    for d in rtl_dirs:
-        if not d.is_dir():
-            continue
-        for ext in ("*.sv", "*.v"):
-            for p in d.rglob(ext):
-                if p in seen:
-                    continue
-                seen.add(p)
-                cands.append(p)
+    # Kimi-scale fix: the old [rtl_dir, project] dual rglob unioned the whole
+    # project tree in (emitted netlists included). The shared collector keeps
+    # the same effective candidate set — canonical phase2/stage1/rtl when it
+    # exists (which the old rtl_dir pass already prioritised), else a
+    # generated-output-excluded project scan.
+    cands: List[Path] = rtl_source_files(project)
     keep: List[Path] = []
     for p in cands:
         name = p.name.lower()
