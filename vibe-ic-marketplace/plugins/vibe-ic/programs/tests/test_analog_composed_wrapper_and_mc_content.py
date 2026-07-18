@@ -272,7 +272,7 @@ def test_guard_allows_passive_companion_file():
     the allowed set → allowed (not a cross-family overlay)."""
     wrap = (".lib /stage/pdk/spice/zzz_mc.lib mc_global\n"
             ".lib /stage/pdk/spice/zzz_mc.lib mc_mos_tn\n"
-            ".lib /stage/pdk/spice/shim.lib ttt_passive\n"
+            ".lib /stage/pdk/spice/shim.lib tt_passive\n"
             "xmp out g vdd vdd vdd pch\n.end\n")
     MC._assert_single_model_family(
         wrap, {"/stage/pdk/spice/zzz_mc.lib", "/stage/pdk/spice/shim.lib"})
@@ -347,8 +347,8 @@ def test_gapB2_native_mc_deck_composes_global_and_device(tmp_path, monkeypatch):
 def _shim_lv_passive_text(raw="foo_raw.lib") -> str:
     """A composed shim with a LV corner + a PASSIVE companion section (each
     include-forms the raw lib), the general shape of a commercial ngspice shim."""
-    return (f".lib ttt_lv\n.lib \"{raw}\" noiseflag\n.lib \"{raw}\" tt\n.endl\n"
-            f".lib ttt_passive\n.lib \"{raw}\" passive\n.endl\n")
+    return (f".lib tt_lv\n.lib \"{raw}\" noiseflag\n.lib \"{raw}\" tt\n.endl\n"
+            f".lib tt_passive\n.lib \"{raw}\" passive\n.endl\n")
 
 
 def _raw_5term_pmos_text() -> str:
@@ -373,15 +373,15 @@ def test_deck_context_resolves_terminals_and_passive():
     # 4-terminal NMOS, 5-terminal PMOS captured
     assert ctx.device_terms == {"nmos": 4, "pmos": 5}
     # the LV corner is paired with its passive companion
-    assert ctx.passive_sections.get("ttt_lv") == "ttt_passive"
+    assert ctx.passive_sections.get("tt_lv") == "tt_passive"
 
 
 def test_render_deck_pads_multiterminal_pmos_and_pairs_passive():
     deck, _ = ARS.render_deck(
-        "ldo", "u_ldo", "custom", "/x.lib", "ttt_lv", "m_pass", 40,
+        "ldo", "u_ldo", "custom", "/x.lib", "tt_lv", "m_pass", 40,
         devices={"nmos": "foo_nch", "pmos": "foo_pch"},
         device_terms={"nmos": 4, "pmos": 5},
-        passive_section="ttt_passive")
+        passive_section="tt_passive")
     # PMOS instances grow the 5th (well) terminal = a repeat of the 4th (bulk)
     for line in deck.splitlines():
         if line.startswith("xmp"):
@@ -394,8 +394,8 @@ def test_render_deck_pads_multiterminal_pmos_and_pairs_passive():
             nodes = line.split()[1:line.split().index("foo_nch")]
             assert len(nodes) == 4, line
     # LV + passive pairing emitted
-    assert ".lib /x.lib ttt_lv" in deck
-    assert ".lib /x.lib ttt_passive" in deck
+    assert ".lib /x.lib tt_lv" in deck
+    assert ".lib /x.lib tt_passive" in deck
     assert "sky130_fd_pr" not in deck
 
 
@@ -435,6 +435,47 @@ def test_mc_degeneracy_control_unscoreable(tmp_path, monkeypatch):
     rep = MC.run_block(p, "ldo", "x", "sky130", 8)
     assert rep["verdict"] == "UNSCOREABLE"
     assert (rep.get("spec_yield") or {}).get("vout", {}).get("degenerate") is True
+
+
+# ══ 15-corner skew grid (bench-adc: run the shim's pre-composed skew sections) ══
+
+def test_map_corner_sections_adds_skew_when_present():
+    """A shim exposing skew sections (sft/fst = slow-N-fast-P / fast-N-slow-P)
+    grows the process grid to 5 corners; the skew corners carry offset None."""
+    secs = ["tt_lv", "ss_lv", "ff_lv", "sf_lv", "fs_lv"]
+    typ, process = APDC.map_corner_sections(secs)
+    assert typ == "tt_lv"
+    names = [p[0] for p in process]
+    assert names == ["ss_lv", "tt_lv", "ff_lv", "sf_lv", "fs_lv"]
+    offs = {p[0]: p[1] for p in process}
+    assert offs["sf_lv"] is None and offs["fs_lv"] is None   # skew: no ±% model
+    assert offs["ss_lv"] == -0.03 and offs["ff_lv"] == 0.03
+
+
+def test_map_corner_sections_no_skew_when_absent():
+    """No-leak: a lib with only ss/tt/ff (no skew section) stays a 3-corner grid —
+    skew is NEVER fabricated for a PDK whose shim doesn't expose it."""
+    typ, process = APDC.map_corner_sections(["ss", "tt", "ff"])
+    assert [p[0] for p in process] == ["ss", "tt", "ff"]
+    assert all(p[1] is not None for p in process)             # no skew corners
+
+
+def test_build_pvt_grid_skew_never_fabricated():
+    """A skew corner (offset None) that did NOT really run is left un-derived
+    (value None, provenance SKEW_NOT_RUN) — never fabricated off the typ base,
+    while a process corner still derives via the ±% model."""
+    corners = [("tt", 0.0), ("sf", None)]
+    real = {("tt", "27c"): {"value": 1.80, "ok": True, "log": "tt.log"}}
+    grid, executed = ARS.build_pvt_grid(1.80, "tt.log", real, 0.05,
+                                        process_corners=corners)
+    by = {e["name"]: e for e in grid}
+    # the process corner derives (non-None) off the base
+    assert by["tt_m40c"]["vout_v"] is not None
+    assert by["tt_m40c"]["_provenance"] == "DERIVED"
+    # the skew corner is NOT fabricated
+    assert by["sf_27c"]["vout_v"] is None
+    assert by["sf_27c"]["_provenance"] == "SKEW_NOT_RUN"
+    assert by["sf_27c"]["derived_from"] is None
 
 
 if __name__ == "__main__":
