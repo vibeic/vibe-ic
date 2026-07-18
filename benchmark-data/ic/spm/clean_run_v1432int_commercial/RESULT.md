@@ -2,7 +2,7 @@
 
 **Run dir:** `benchmark-data/ic/spm/clean_run_v1432int_commercial`
 **Image (A):** `ghcr.io/vibeic/vibeic-eda:0.2.20-int` (id `fa8cb832daf2`) — OpenROAD `1cd84e502a`, yosys `c31dfe3a8` (github.com/vibeic), magic `2431f660`, iverilog `bedf375`.
-**Baseline (B):** `0.2.19` run at `benchmark-data/ic/spm/clean_run_v1431_commercial_pdk` (metrics read numbers-only).
+**Baseline (B):** the `0.2.19` baseline spm run on the same commercial PDK (metrics read numbers-only).
 **PDK:** commercial 180nm (staged out-of-repo; read by tools via PATH, never into context). Never silicon-proven.
 **Shape:** A (full runner, chip-grade). **Entry:** `vibe_ic_one_shot_runner.py` (Phase-1 → Phase-2 → Phase-3), spec-to-rtl AI-author path (spm is `digital_arithmetic_primitive`, `rtl_gen=null`).
 
@@ -63,7 +63,7 @@ Physical: synth 418 cells; design area 12294 µm²; core-util 44.1%; routed, ant
 
 Full OSS forked toolchain `vibeic-eda:0.2.20-int` (no commercial EDA): iverilog (functional), yosys +
 OpenROAD (synth/PnR/STA/IR), KLayout SVRF (native in-KLayout DRC on the foundry rule deck) + KLayout /
-netgen (LVS), magic. DRC/LVS are native OSS on the commercial rule deck — no Calibre/Assura cross-run in
+netgen (LVS), magic. DRC/LVS are native OSS on the commercial rule deck — no commercial-tool cross-run in
 this pass.
 
 ## Reproduce
