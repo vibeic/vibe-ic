@@ -8136,13 +8136,23 @@ if cell_gds_path and os.path.exists(cell_gds_path):
         _lib = pya.Layout()
         _lib.read(cell_gds_path)
         _lib_tops = set(c.name for c in _lib.each_cell() if c.is_top())
+        # Library GDS come in two shapes: WRAPPER-style (a single top cell
+        # wrapping every std cell as subcells — substituting a DEF cell that
+        # shares the wrapper's name would paste the whole library, so skip
+        # it) and FLAT MULTI-TOP (every std cell IS a top cell, e.g.
+        # NangateOpenCellLibrary.gds with 135 tops — the tops ARE the
+        # masters we must substitute). Skipping ALL lib tops silently
+        # zeroed substitution on flat multi-top libraries: _subbed=0, every
+        # instance stayed a LEF box on the first tech-LEF layer (GDS 1/0),
+        # and the sign-off DRC read a phantom device-layer plane.
+        _skip_tops = _lib_tops if len(_lib_tops) == 1 else set()
         _laymap = {}
         for _sli in _lib.layer_indexes():
             _laymap[_sli] = ly.layer(_lib.get_info(_sli))
         _subbed = 0
         for _dci in list(ly.each_cell_top_down()):
             _dc = ly.cell(_dci)
-            if _dc.name == top or _dc.name in _lib_tops:
+            if _dc.name == top or _dc.name in _skip_tops:
                 continue
             if not _lib.has_cell(_dc.name):
                 continue
