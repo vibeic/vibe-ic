@@ -74,7 +74,7 @@ Usage:
         [--sta-netlist phase3/stage3/pnr/spm_pnr.v] \\
         [--spef phase3/stage3/extracted/spm.spef] \\
         [--sdc  phase3/stage3/pnr/constraint.sdc] \\
-        [--liberty input/pdk/liberty/commercial_pdk_typ.lib] \\
+        [--liberty input/pdk/liberty/<pdk>_typ.lib] \\
         [--netlist phase2/stage2/synth/spm_synth.v] \\
         [--cut-netlist phase2/stage2/dft/cut_netlist.v] \\
         [--flat-core phase2/stage2/dft/tdf/flat_core.v] \\

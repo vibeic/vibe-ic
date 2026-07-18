@@ -326,7 +326,7 @@ def cmd_cell(args, pya):
 # orbit its refinement never breaks, and netgen does not use net-name hints).
 # KLayout's `NetlistComparer` DOES use net/pin-name hints + backtracking, so it
 # resolves the bus — GIVEN four deterministic, chip-AGNOSTIC prep steps proven
-# on the real commercial_pdk spm sign-off (MATCH in 0.22s; corrupt-one-device →
+# on the real commercial-PDK spm sign-off (MATCH in 0.22s; corrupt-one-device →
 # MISMATCH confirms it keeps full discriminating power — NO false-clean):
 #   1. BULK NORMALIZATION (the unlock): both the geometric layout extraction and
 #      the gate→SPICE source tie each MOS body (4th terminal) inconsistently

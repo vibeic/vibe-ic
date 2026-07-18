@@ -66,7 +66,7 @@ _PDK_CELL_PREFIXES = (
     "commercial_pdk", "tsmc", "asap7sc",
 )
 
-# Real cell-name regex patterns (v229) — catches commercial_pdk / generic libs
+# Real cell-name regex patterns (v229) — catches commercial-PDK / generic libs
 _STDCELL_PATTERNS = (
     re.compile(r"\bDFF[A-Z]*\d+"),
     re.compile(r"\bAOI\d+"),

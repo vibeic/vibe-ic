@@ -36,7 +36,7 @@ Detected anti-patterns (chip-AGNOSTIC):
      attempted OpenROAD which produced X".
      Counter-evidence: OpenROAD + custom-PDK liberty/LEF works for most
      designs; v0.108 <benchmark> round 3 produced GDS via OpenROAD on
-     <foundry> commercial_pdk.
+     a <foundry> commercial PDK.
 
   3. DRC_FAKE — waiver on step 28 (PV) citing "KLayout L_lname not
      defined".
@@ -183,7 +183,7 @@ def _detect_patterns(waiver: Dict[str, Any], plan_covers: set) -> List[Finding]:
             counter_evidence=(
                 "OpenROAD + custom-PDK liberty/LEF works for the canonical "
                 "PnR steps 14-33. v0.108 <benchmark> round 3 produced a 3.93 MB "
-                "GDS via OpenROAD on <foundry> commercial_pdk (md5 "
+                "GDS via OpenROAD on a <foundry> commercial PDK (md5 "
                 "407946cd...). Commercial deck adds tape-out-grade "
                 "DRC/timing margins but is NOT required for engineering "
                 "PASS through step 33."

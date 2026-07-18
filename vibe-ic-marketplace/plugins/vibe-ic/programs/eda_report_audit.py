@@ -58,7 +58,7 @@ class AuditResult:
 
 
 # v0.119.21: tool-unavailable-for-PDK waiver. Custom open-source PDKs
-# (<foundry> commercial_pdk etc.) lack characterization data the IR / EM
+# (<foundry> PDKs etc.) lack characterization data the IR / EM
 # / SI / power / SPEF tools need. Blocking the gate forever penalises
 # honest projects; instead require a documented waiver with reason ≥20
 # chars (matches the waivers schema's anti-rubber-stamp policy).

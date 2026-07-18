@@ -6,7 +6,7 @@ WHY (the gap this closes)
 A real field-solved extraction (Calibre-xRC / StarRC / QRC) needs the foundry's
 process dielectric profile (``rules.C`` / ``.nxtgrd``) — a multi-dielectric ILD
 stack with the true per-layer heights and permittivities.  That file is NOT in
-the commercial_pdk (or most vendor) LEF/.tf snapshot, which ships only, per routing
+a commercial 180nm PDK's (or most vendor) LEF/.tf snapshot, which ships only, per routing
 layer:
 
     * CPERSQDIST      — area capacitance over the substrate ground plane (pF/um^2)

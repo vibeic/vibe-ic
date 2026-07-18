@@ -9,7 +9,7 @@ foundry-specific PDK names, no chip-specific filenames hardcoded.
 `backlog_sanitize_check.py` already enforces this for community-
 backlog YAML; this gate extends the same discipline to plugin source.
 The v1.6.37 escape (`emit_em_report` had `j_max_ma_per_um = 2.0  #
-commercial_pdk SOA M1-M4 @ 110C / 10-yr`) violated chip-AGNOSTIC in code
+commercial-PDK SOA M1-M4 @ 110C / 10-yr`) violated chip-AGNOSTIC in code
 without ever touching a backlog file.
 
 The list of forbidden tokens is bootstrapped from the existing

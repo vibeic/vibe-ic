@@ -145,14 +145,14 @@ PDK_CONFIG = {
         ),
         "dff_cells": "gf180mcu_fd_sc_mcu7t5v0__dffq_1,gf180mcu_fd_sc_mcu7t5v0__dffrq_1",
     },
-    # commercial_pdk / commercial_pdk commercial_foundry commercial PDK — used in the v046
-    # aon_timer pilot and the spm commercial_pdk flow. This proprietary PDK ships a
-    # Verilog simulation model (commercial_pdk_neg.v) but the run-dir PDK often
+    # commercial 180nm PDK — used in the v046
+    # aon_timer pilot and the spm commercial-PDK flow. This proprietary PDK ships a
+    # Verilog simulation model but the run-dir PDK often
     # carries only the liberty; point --cell-model-path at the model copied
     # into the run dir's input/pdk/verilog/. The dff_cells list below is a
     # SEED only — the real set is auto-detected from the netlist by
     # detect_dff_cells() (unioned in), so a design that uses DFFHQD1 (not the
-    # seeded DFFRQD1/DFFSQD1) is still cut correctly. Common commercial_pdk DFF
+    # seeded DFFRQD1/DFFSQD1) is still cut correctly. Common commercial-PDK DFF
     # families: DFFHQD*/DFFSQD*/DFFRQD*/DFFSRQD*/SDFFHQD* (scan variants).
     "commercial_pdk": {
         # Inside the container this path is /pdk/verilog/... if the host
@@ -190,7 +190,7 @@ PDK_CONFIG = {
 # line start + requires an instance name and an opening paren so a `wire dff_x;`
 # declaration can never match. Two flop-cell naming conventions, both matched so
 # the auto-detect is a true PDK-agnostic SUPERSET (never dependent on a seed):
-#   1. commercial PREFIX — `DFF*` / `SDFF*` (commercial_foundry DFFHQD1, commercial_pdk SDFFRQD1);
+#   1. commercial PREFIX — `DFF*` / `SDFF*` (e.g. DFFHQD1, SDFFRQD1);
 #   2. OSS-PDK INFIX — `<lib>__[s][e]df…` where the flop family sits after the
 #      `__` library separator, with optional scan (`s`) and/or enable (`e`)
 #      variant letters: sky130 `__dfxtp`/`__dfrtp`/`__dfstp`/`__dfbbn`/`__sdfxtp`
@@ -488,7 +488,7 @@ def run_fault(
 
     cell_model_override : explicit Verilog cell-model path (container-absolute
         or project-relative → /work/...). Wins over the PDK config; lets the
-        commercial commercial_pdk model live inside the run dir for reproducibility.
+        commercial-PDK model live inside the run dir for reproducibility.
     dff_cells_override  : explicit `fault cut --dff` list. When None, the flop
         cells are auto-detected from the netlist and unioned with the PDK-config
         seed (detect_dff_cells + merge_dff_cells)."""
@@ -731,7 +731,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"fault_atpg_run: netlist not found: {netlist}", file=sys.stderr)
         return 2
 
-    # For commercial_pdk default PDK dir is ../../shared_pdk relative to project,
+    # For the commercial PDK the default PDK dir is ../../shared_pdk relative to project,
     # matching benchmark/phase2+3_v046 convention
     pdk_dir = None
     if args.pdk_dir:

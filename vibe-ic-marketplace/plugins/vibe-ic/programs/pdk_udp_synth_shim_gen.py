@@ -22,8 +22,8 @@ Output: a synth-equivalent .v file that:
   - simulates correctly under iverilog (no specify timing issues)
 
 Use case: FPGA-reverify of post-PnR gate-level netlist when the
-foundry library is HSPICE/Spectre/ELDO-targeted (e.g. commercial_pdk
-commercial_pdk_*.v). The original specify-heavy library is fine for
+foundry library is HSPICE/Spectre/ELDO-targeted (e.g. a commercial
+180nm foundry library). The original specify-heavy library is fine for
 SPICE / formal LEC against gate netlist + .lib timing, but useless
 for FPGA emulation of the gate-level chip.
 

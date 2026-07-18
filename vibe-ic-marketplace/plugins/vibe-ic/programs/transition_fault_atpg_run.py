@@ -80,7 +80,7 @@ Usage:
         --clock clk \\
         [--netlist phase2/stage2/synth/spm_synth.v] \\
         [--cut-netlist phase2/stage2/dft/cut_netlist.v] \\
-        [--liberty input/pdk/liberty/commercial_pdk_typ.lib] \\
+        [--liberty input/pdk/liberty/<pdk>_typ.lib] \\
         [--top spm] [--dff-cells DFFHQD1] \\
         [--floor 90] [--max-faults 400] [--json <out>]
 

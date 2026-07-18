@@ -43,7 +43,7 @@ def audit(project_dir: Path) -> Tuple[List[Finding], dict]:
              "waived": False}
 
     # v0.119.21: tool-unavailable-for-PDK waiver. Custom PDKs without a
-    # Magic .tech file (<foundry> commercial_pdk, etc.) cannot run
+    # Magic .tech file (<foundry> PDKs, etc.) cannot run
     # parasitic extraction in the open-source flow. The honest path is
     # a documented waiver with a reason ≥20 chars (matches the waivers
     # schema's anti-rubber-stamp policy). No content fabrication.
