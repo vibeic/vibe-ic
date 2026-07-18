@@ -65,6 +65,11 @@ DEFAULT_LIBERTY = (
     "/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/"
     "sky130_fd_sc_hd__tt_025C_1v80.lib"
 )
+# Per-yosys-invocation budget. The equiv miter on a CPU-class gold (ibex:
+# ~2k compared points through equiv_induct -seq 64) runs far past the old
+# 1800s, and a killed run produced NO evidence — indistinguishable at the
+# gate from a real mismatch. Tunable via --timeout for smaller budgets.
+DEFAULT_YOSYS_TIMEOUT_S = 7200
 DEFAULT_JSON_REL = "reports/lec.json"
 DEFAULT_RPT_REL = "reports/lec.rpt"
 
@@ -113,15 +118,28 @@ _SAT_ABORT_RE = re.compile(
 # Best-effort per-instance unproven cell list.
 _UNPROVEN_LIST_RE = re.compile(r"Unproven\s+\$equiv\s+cells:\s*([^\n]+)")
 
+# BUDGET-EXHAUSTED marker. A killed equiv run produced NO comparison, which
+# the generic "no parseable result" wording rendered indistinguishable from a
+# real mismatch at the gate. It stays a BLOCKING non-PASS (never a free pass),
+# but the explanation must name the cause so a reader can raise --timeout
+# instead of hunting a mismatch that was never found.
+_TIMEOUT_MARKER = "[lec_run] ERROR: yosys equiv exceeded its time budget"
+_TIMEOUT_RE = re.compile(re.escape(_TIMEOUT_MARKER))
+
 # Canonical Yosys success line (corroboration for the gate's .rpt parse).
 _SUCCESS_RE = re.compile(r"Equivalence\s+successfully\s+proven", re.IGNORECASE)
 
 # Frontend-ABORT signatures — a read_verilog / read_slang failure that prevented
 # ANY equivalence miter from being built (0 compared points). DISTINCT from a
 # genuine mismatch (a miter DID run and left points unproven). A zero-miter abort
-# is not classifiable as PASS or FAIL, so it (a) fires the read_slang gold-read
-# retry and (b) re-classifies to INCONCLUSIVE rather than a false FAIL that
-# cascade-marks downstream steps MISSING. TWO families, BOTH resolved by slang:
+# is not classifiable as PASS or FAIL, so it re-classifies to INCONCLUSIVE rather
+# than a false FAIL that cascade-marks downstream steps MISSING.
+# SCOPE (v1.4.33): this signature now decides ONLY the VERDICT classification.
+# WHICH FRONTEND reads the gold is decided by `should_retry_gold_with_slang`,
+# which keys on the OBSERVABLE "no miter was built" rather than on the tool's
+# error wording — an allow-list of phrasings silently skipped the capable
+# frontend whenever a new abort was worded differently (how ibex was missed).
+# TWO families, BOTH resolved by slang:
 #   (A) PARSE / lex aborts — the built-in reader can't tokenise the SV closure
 #       (package import before the ANSI port list, typedefs, unsupported syntax).
 #   (B) ELABORATION aborts — the built-in reader PARSES but can't ELABORATE a
@@ -162,6 +180,78 @@ def is_frontend_parse_abort(text: str) -> bool:
     the slang retry / INCONCLUSIVE re-class on a zero-miter run — never on a real
     mismatch whose miter ran."""
     return bool(_FRONTEND_PARSE_ABORT_RE.search(text or ""))
+
+
+# SV-2017 gold signature — DESIGN properties the yosys built-in reader cannot
+# reliably elaborate: a `package`/`interface` declaration, a package import, a
+# package-scope reference (`pkg::CONST`, the ibex `ibex_pkg::RV32MFast`-as-param
+# case), or a `typedef`. Used ONLY to EXPLAIN which frontend was chosen — never
+# as the sole trigger, and never keyed on a chip name, a path, or an IC class.
+_SV2017_GOLD_RE = re.compile(
+    r"(?m)^\s*(?:package|interface)\s+\w+"
+    r"|^\s*import\s+\w+\s*::"
+    r"|^\s*typedef\b"
+    r"|(?<![\w.])\w+\s*::\s*\w+")
+
+
+def gold_requires_sv2017(gold_files: List[str]) -> bool:
+    """True iff the gold RTL uses SV-2017 constructs beyond the yosys built-in
+    reader's subset (package / interface / import / package-scope ref / typedef).
+    PURE, filesystem-only, DESIGN-property driven."""
+    for f in gold_files:
+        try:
+            text = Path(f).read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if _SV2017_GOLD_RE.search(text):
+            return True
+    return False
+
+
+def should_retry_gold_with_slang(parsed: Dict, gold_log: str,
+                                 requires_sv2017: bool) -> "tuple[bool, str]":
+    """Decide whether to re-read the GOLD with `read_slang`. Returns (retry, why).
+
+    THE RULE (general, design-driven): retry whenever the built-in gold read
+    produced NO equivalence miter at all — i.e. `parse_error`, meaning yosys
+    printed no proven/unproven/total counts and no SAT-model abort, so ZERO
+    points were compared. A zero-miter run carries no equivalence evidence in
+    either direction, and `read_slang` is the most capable SV-2017 frontend
+    available (the same one `synth` falls back to), so it has not yet been given
+    a chance to decide the question.
+
+    WHY NOT the old rule: the retry used to fire only when the yosys log matched
+    `_FRONTEND_PARSE_ABORT_RE` — a hard-coded allow-list of error PHRASINGS.
+    Any zero-miter abort worded differently silently skipped the capable
+    frontend and fell through to a FALSE FAIL (this is exactly how ibex's
+    "Parameter ... with non-constant value" elaboration abort was missed until
+    the phrase was hand-added). Keying on the OBSERVABLE (no miter was built)
+    instead of on the tool's wording removes the whole class of misses.
+
+    §4.05 NO-LEAK — widening the TRIGGER cannot widen what PASSES:
+      * `parse_error` is False the moment a miter actually ran, so a genuine
+        mismatch (miter ran, points left unproven) can NEVER reach this retry.
+      * If slang also builds no miter, `finalize_after_slang_retry` keeps the
+        verdict at FAIL — no free non-blocking pass.
+      * The VERDICT classification (INCONCLUSIVE vs FAIL) still uses the narrow
+        `is_frontend_parse_abort` signature, deliberately NOT widened here: a
+        yosys/docker crash with no frontend-abort evidence stays a hard FAIL.
+    The `why` string is recorded in reports/lec.json so the fallback and its
+    justification are explicit and auditable.
+    """
+    if not parsed.get("parse_error"):
+        return False, ""
+    if is_frontend_parse_abort(gold_log):
+        return True, ("built-in read_verilog -sv aborted with a frontend "
+                      "parse/elaboration signature and built no miter")
+    if requires_sv2017:
+        return True, ("built-in read_verilog -sv built no miter and the gold "
+                      "RTL uses SV-2017 constructs (package / interface / "
+                      "import / package-scope ref / typedef) outside its "
+                      "supported subset")
+    return True, ("built-in read_verilog -sv built no miter (0 compared "
+                  "points, no equivalence evidence) — the capable SV-2017 "
+                  "frontend has not been tried yet")
 
 
 def finalize_after_slang_retry(parsed: Dict, slang_retry_failed: bool) -> Dict:
@@ -284,6 +374,18 @@ def parse_equiv_output(text: str) -> Dict:
             "as PASS or FAIL → INCONCLUSIVE (the static/functional sign-off is "
             "not decided here; re-run with the slang frontend or fix the parse "
             "error). See reports/lec.rpt for the frontend error.")
+    elif parse_error and _TIMEOUT_RE.search(text):
+        # The miter was still running when the budget expired: no comparison was
+        # made, so this is NOT evidence of a mismatch — but it is also NOT a
+        # pass. Blocking FAIL with the cause named (raise --timeout and re-run).
+        equivalent = False
+        verdict = "FAIL"
+        verdict_explanation = (
+            "Yosys equiv exceeded its time budget before equiv_status could "
+            "report — 0 points compared, so NO equivalence evidence exists in "
+            "either direction. This is a RESOURCE limit, not a proven "
+            "mismatch: re-run with a larger --timeout to obtain a real "
+            "verdict. Blocking (never a free pass) until it is decided.")
     elif parse_error:
         equivalent = False
         verdict = "FAIL"
@@ -583,7 +685,7 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
 
 
 def run_yosys_equiv(container: str, ys_path_in_container: str,
-                    timeout: int = 1800):
+                    timeout: int = DEFAULT_YOSYS_TIMEOUT_S):
     """Run `yosys -s <ys>` in the container. Returns (launched, raw_output).
 
     launched=False means Docker/Yosys could not run at all (the caller then
@@ -600,7 +702,7 @@ def run_yosys_equiv(container: str, ys_path_in_container: str,
             out = out.decode("utf-8", "replace")
         return (bool(_strip_login_banner(out).strip()),
                 _strip_login_banner(out)
-                + "\n[lec_run] ERROR: yosys equiv timed out")
+                + f"\n{_TIMEOUT_MARKER} after {timeout}s")
     except (subprocess.SubprocessError, OSError) as exc:
         return False, f"[lec_run] ERROR: could not exec yosys: {exc}"
 
@@ -725,6 +827,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="Docker container running yosys (default vibeic-eda)")
     ap.add_argument("--liberty", default=DEFAULT_LIBERTY,
                     help="Absolute .lib path INSIDE the container")
+    ap.add_argument("--timeout", type=int, default=DEFAULT_YOSYS_TIMEOUT_S,
+                    help="Per-yosys-invocation budget in seconds "
+                         f"(default {DEFAULT_YOSYS_TIMEOUT_S})")
     ap.add_argument("--json", default=DEFAULT_JSON_REL,
                     help="Output JSON path, relative to project")
     args = ap.parse_args(argv)
@@ -833,7 +938,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                                     slang_prefix=slang_prefix,
                                     gold_defines=defines)
         ys_host.write_text(script, encoding="utf-8")
-        return run_yosys_equiv(container, ys_in_container)
+        return run_yosys_equiv(container, ys_in_container,
+                               timeout=args.timeout)
 
     t0 = time.time()
     launched, raw = _run("verilog")
@@ -853,17 +959,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     # so the verdict is finalized to FAIL (never a non-blocking pass for a design
     # the capable frontend also can't build).
     slang_retry_failed = False
+    gold_frontend_reason = ""
     if launched:
         _p1 = parse_equiv_output(raw)
-        if _p1["parse_error"] and is_frontend_parse_abort(raw):
+        _retry_gold, gold_frontend_reason = should_retry_gold_with_slang(
+            _p1, raw, gold_requires_sv2017(gold_files))
+        if _retry_gold:
             try:
                 from synth_frontend import resolve_slang_load_prefix
                 slang_prefix = resolve_slang_load_prefix(container, _docker_exec3)
             except Exception:
                 slang_prefix = ""  # fork-safe default: read_slang built-in
-            print("[lec_run] gold read_verilog -sv aborted (parse or "
-                  "elaboration) → retrying gold with read_slang (SV-2017 "
-                  "frontend, -DSIMULATION define set).", file=sys.stderr)
+            print(f"[lec_run] FALLBACK gold frontend verilog → slang: "
+                  f"{gold_frontend_reason}. Retrying the gold read with "
+                  "read_slang (SV-2017 frontend, -DSIMULATION define set).",
+                  file=sys.stderr)
             launched2, raw2 = _run("slang", slang_prefix, gold_defines)
             if launched2:
                 _p2 = parse_equiv_output(raw2)
@@ -941,6 +1051,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     # (verilog | slang; -DSIMULATION vs -DSYNTHESIS — how synth built the gate).
     report["gold_frontend"] = gold_frontend
     report["gold_defines"] = gold_defines if gold_frontend == "slang" else None
+    # WHY that frontend — empty when the built-in reader built the miter on the
+    # first pass; otherwise the explicit justification for the slang fallback.
+    report["gold_frontend_reason"] = gold_frontend_reason or None
     json_out.write_text(json.dumps(report, indent=2, ensure_ascii=False))
 
     print(json.dumps({

@@ -768,3 +768,245 @@ def test_async_reset_reaches_verdict_on_slang_path_in_container(tmp_path):
         assert (parsed["proven"] or 0) > 0 and parsed["unproven"] == 0
     finally:
         cleanup()
+
+
+# ---------------------------------------------------------------------------
+# GOLD-FRONTEND SELECTION RULE (v1.4.33) — the slang gold-read must be selected
+# by the OBSERVABLE "the built-in reader built no miter", not by an allow-list of
+# yosys error PHRASINGS. The old phrasing allow-list silently skipped the capable
+# SV-2017 frontend whenever an abort was worded differently, and the verdict fell
+# through to a FALSE FAIL with compared_points=0 (ibex, run_v1432int: the
+# "Parameter ... with non-constant value" elaboration abort was not in the list).
+# ---------------------------------------------------------------------------
+_ZERO_MITER = {"parse_error": True, "proven": None, "unproven": None,
+               "total": None, "sat_model_unsupported_cells": []}
+
+
+def test_slang_retry_fires_on_any_zero_miter_even_with_unknown_wording():
+    # a zero-miter abort whose wording matches NO signature in
+    # _FRONTEND_PARSE_ABORT_RE must STILL select the slang gold read.
+    log = "ERROR: something the allow-list has never seen before.\n"
+    assert not lec_run.is_frontend_parse_abort(log), (
+        "fixture must be an UNKNOWN wording for this test to mean anything")
+    retry, why = lec_run.should_retry_gold_with_slang(
+        dict(_ZERO_MITER), log, requires_sv2017=False)
+    assert retry is True
+    assert "no miter" in why           # the observable, not the wording
+
+
+def test_slang_retry_never_fires_when_a_miter_actually_ran():
+    # §4.05 NO-LEAK: a real mismatch (miter ran, points unproven) must never be
+    # re-read with a different frontend — that would be verdict shopping.
+    parsed = lec_run.parse_equiv_output(MISMATCH_OUTPUT)
+    assert parsed["parse_error"] is False and parsed["verdict"] == "FAIL"
+    retry, why = lec_run.should_retry_gold_with_slang(
+        parsed, MISMATCH_OUTPUT, requires_sv2017=True)
+    assert retry is False and why == ""
+
+
+def test_sv2017_gold_property_is_design_driven(tmp_path):
+    # the SV-2017 signal is a property of the RTL TEXT — package / import /
+    # package-scope ref / typedef — never a chip name or a path.
+    plain = tmp_path / "plain.v"
+    plain.write_text("module m(input a, output b); assign b = ~a; endmodule\n")
+    assert lec_run.gold_requires_sv2017([str(plain)]) is False
+
+    for src in ("package p; endpackage\n",
+                "import p::*;\n",
+                "typedef enum {A, B} e_t;\n",
+                "module m #(parameter p::e_t X = p::A) (); endmodule\n"):
+        f = tmp_path / "sv.sv"
+        f.write_text(src)
+        assert lec_run.gold_requires_sv2017([str(f)]) is True, src
+
+
+def test_zero_miter_reason_names_the_sv2017_property_when_present():
+    retry, why = lec_run.should_retry_gold_with_slang(
+        dict(_ZERO_MITER), "ERROR: unrecognised\n", requires_sv2017=True)
+    assert retry is True and "SV-2017" in why
+
+
+def test_widened_trigger_does_not_widen_the_inconclusive_classification():
+    # §4.05: the VERDICT classifier keeps the NARROW signature. A zero-miter run
+    # with no frontend-abort evidence (e.g. a yosys crash) stays a hard FAIL and
+    # is NOT excused as the non-blocking INCONCLUSIVE.
+    log = "ERROR: something the allow-list has never seen before.\n"
+    parsed = lec_run.parse_equiv_output(log)
+    assert parsed["parse_error"] is True
+    assert parsed["verdict"] == "FAIL"
+    assert parsed["equivalent"] is False
+
+
+def test_slang_also_failing_after_the_widened_retry_stays_fail():
+    # the widened trigger buys an EXTRA ATTEMPT, never a free pass: if slang also
+    # builds no miter the verdict is finalized to FAIL.
+    prov = {"verdict": "INCONCLUSIVE", "equivalent": False}
+    fin = lec_run.finalize_after_slang_retry(prov, slang_retry_failed=True)
+    assert fin["verdict"] == "FAIL" and fin["equivalent"] is False
+
+
+# ---------------------------------------------------------------------------
+# PROVEN-NEGATIVE for the widened gold-frontend trigger (container-backed).
+#
+# The fix gives the slang gold read MORE chances to run. The load-bearing risk
+# is therefore a LEAK: that "try harder to elaborate the gold" quietly turns a
+# genuinely NON-EQUIVALENT design into a pass. This test builds an SV-2017 gold
+# that ONLY the slang frontend can elaborate (an enum constant from a package
+# used as a parameter value — the exact ibex construct), synthesizes the gate
+# from the CORRECT source, then CORRUPTS one output bit of the gold and asserts
+# the LEC still reports NOT-equivalent through the very same slang path.
+# ---------------------------------------------------------------------------
+_SV_PKG_GOLD = """\
+package op_pkg;
+  typedef enum logic [1:0] {OP_AND, OP_OR, OP_XOR} op_e;
+endpackage
+
+module sv_alu import op_pkg::*; #(
+    parameter op_e MODE = OP_XOR
+) (
+    input  logic       clk,
+    input  logic [3:0] a,
+    input  logic [3:0] b,
+    output logic [3:0] y
+);
+  logic [3:0] comb;
+  always_comb begin
+    unique case (MODE)
+      OP_AND:  comb = a & b;
+      OP_OR:   comb = a | b;
+      default: comb = a ^ b;
+    endcase
+  end
+  always_ff @(posedge clk) y <= {CORRUPT};
+endmodule
+"""
+
+
+def _write_sv_gold(path: Path, corrupt: bool) -> None:
+    # CORRUPTION = invert bit 0 of the registered output. A real functional
+    # difference, invisible to any structural/parse-level check.
+    body = "{comb[3:1], ~comb[0]}" if corrupt else "comb"
+    path.write_text(_SV_PKG_GOLD.replace("{CORRUPT}", body))
+
+
+def test_widened_trigger_still_reports_a_corrupted_sv_design_as_not_equivalent(
+        tmp_path):
+    work, cleanup = _mounted_workdir(tmp_path)
+    if work is None:
+        pytest.skip("vibeic-eda container not available / path not bind-mounted")
+    try:
+        chk = subprocess.run(
+            ["docker", "exec", "vibeic-eda", "bash", "-lc",
+             f"test -f {_SKY130_HD_LIB} && echo ok"],
+            capture_output=True, text=True, timeout=30)
+        if "ok" not in (chk.stdout or ""):
+            pytest.skip("sky130_hd Liberty not present in container")
+
+        good = work / "sv_alu.sv"
+        _write_sv_gold(good, corrupt=False)
+
+        # PRECONDITION 1: this gold is exactly the class the fix targets.
+        assert lec_run.gold_requires_sv2017([str(good)]) is True
+
+        # PRECONDITION 2: the yosys BUILT-IN reader cannot elaborate it (the enum
+        # constant from a package used as a parameter value — the ibex
+        # construct), so the slang fallback is what decides the verdict below.
+        probe = work / "probe.ys"
+        probe.write_text(f"read_verilog -sv {good}\nhierarchy -top sv_alu\n")
+        probe_log = _yosys(probe)
+        assert "ERROR" in probe_log, (
+            "fixture no longer defeats the built-in reader — the test would "
+            "stop exercising the slang path:\n" + probe_log[-600:])
+        # PRECONDITION 3: and that abort is what the trigger keys on.
+        assert lec_run.should_retry_gold_with_slang(
+            {"parse_error": True}, probe_log,
+            requires_sv2017=True)[0] is True
+
+        # gate netlist built from the CORRECT source, mapped to real cells.
+        map_ys = work / "map.ys"
+        map_ys.write_text(
+            f"read_slang {good} --top sv_alu\n"
+            f"synth -top sv_alu\n"
+            f"dfflibmap -liberty {_SKY130_HD_LIB}\n"
+            f"abc -liberty {_SKY130_HD_LIB}\n"
+            f"write_verilog {work/'gate.v'}\n")
+        _yosys(map_ys)
+        assert (work / "gate.v").is_file(), "slang synth produced no gate netlist"
+
+        def _verdict(gold: Path, ys_name: str) -> dict:
+            script = lec_run.build_equiv_script(
+                [str(gold)], str(work / "gate.v"), "sv_alu", _SKY130_HD_LIB,
+                gold_frontend="slang")
+            ys = work / ys_name
+            ys.write_text(script)
+            return lec_run.parse_equiv_output(_yosys(ys))
+
+        # POSITIVE: the honest gold proves equivalent through the slang path.
+        ok = _verdict(good, "equiv_ok.ys")
+        assert ok["verdict"] == "PASS", ok
+        assert (ok["proven"] or 0) > 0 and ok["unproven"] == 0
+
+        # NEGATIVE (load-bearing): one inverted output bit must NOT pass.
+        bad = work / "sv_alu_bad.sv"
+        _write_sv_gold(bad, corrupt=True)
+        broken = _verdict(bad, "equiv_bad.ys")
+        assert broken["verdict"] != "PASS", (
+            "LEAK: a functionally corrupted design passed LEC through the "
+            "widened slang gold-read path: " + repr(broken))
+        assert broken["equivalent"] is False
+        assert (broken["unproven"] or 0) > 0
+    finally:
+        cleanup()
+
+
+# ---------------------------------------------------------------------------
+# BUDGET EXHAUSTION is a RESOURCE limit, not a mismatch. A killed equiv run
+# compared 0 points, so it carries no evidence in either direction — it must
+# stay BLOCKING (never a free pass) but must SAY SO, otherwise a reader chases a
+# mismatch that was never found. Observed on ibex, whose slang miter outran the
+# old 1800s budget.
+# ---------------------------------------------------------------------------
+def test_timeout_is_reported_as_a_budget_limit_not_a_mismatch():
+    log = "Yosys 0.67\n" + lec_run._TIMEOUT_MARKER + " after 1800s"
+    parsed = lec_run.parse_equiv_output(log)
+    assert parsed["verdict"] == "FAIL"          # BLOCKING — no free pass
+    assert parsed["equivalent"] is False
+    assert "time budget" in parsed["verdict_explanation"]
+    assert "RESOURCE limit" in parsed["verdict_explanation"]
+    assert "not a proven" in parsed["verdict_explanation"]
+
+
+def test_timeout_wording_does_not_leak_into_a_real_mismatch():
+    # a miter that RAN keeps the mismatch wording even if the text is noisy.
+    parsed = lec_run.parse_equiv_output(MISMATCH_OUTPUT)
+    assert parsed["verdict"] == "FAIL"
+    assert "time budget" not in parsed["verdict_explanation"]
+
+
+def test_yosys_budget_is_tunable_and_defaults_above_the_runner_observed_need():
+    # ibex's slang miter exceeded 1800s; the default must leave real headroom
+    # and must be overridable per invocation.
+    assert lec_run.DEFAULT_YOSYS_TIMEOUT_S >= 3600
+    import inspect
+    sig = inspect.signature(lec_run.run_yosys_equiv)
+    assert sig.parameters["timeout"].default == lec_run.DEFAULT_YOSYS_TIMEOUT_S
+
+
+# ---------------------------------------------------------------------------
+# RUNNER/PRODUCER TIMEOUT INVARIANT. design_one_shot_runner wraps lec_run in a
+# subprocess timeout. When that OUTER budget is smaller than the producer's own
+# INNER budget, the runner kills lec_run mid-miter and the LEC verdict falls
+# through to a disclosed-skip — the enhancement runs but never lands a verdict.
+# The two were hard-coded independently (outer 1200s vs inner 1800s) and drifted.
+# ---------------------------------------------------------------------------
+def test_runner_outer_timeout_exceeds_the_producer_worst_case():
+    import design_one_shot_runner as runner
+    inner = runner.lec_producer_yosys_timeout_s()
+    assert inner == lec_run.DEFAULT_YOSYS_TIMEOUT_S, (
+        "the runner must READ the producer's budget, not restate it")
+    # lec_run makes up to three yosys invocations (built-in gold read, slang
+    # gold read, slang -DSYNTHESIS define retry).
+    src = (Path(runner.__file__).read_text()).split(
+        "Step 13 — LEC (RTL ≡ handoff netlist)", 1)[1]
+    assert "3 * lec_producer_yosys_timeout_s()" in src
+    assert "timeout=1200" not in src

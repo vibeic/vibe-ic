@@ -8383,6 +8383,22 @@ _POST_DFT_SKIP_OWN = {
 }
 
 
+def lec_producer_yosys_timeout_s() -> int:
+    """lec_run's PER-YOSYS-INVOCATION budget, read from the producer itself.
+
+    The runner's outer subprocess timeout must always exceed the producer's own
+    worst case; hard-coding it let the two drift apart, and the runner silently
+    killed lec_run mid-miter (the LEC verdict then fell through to a
+    disclosed-skip rather than a real EQUIV / non-EQUIV). Falls back to the
+    historical value only if the producer cannot be imported."""
+    try:
+        sys.path.insert(0, str(PROGRAMS_DIR))
+        from lec_run import DEFAULT_YOSYS_TIMEOUT_S  # type: ignore
+        return int(DEFAULT_YOSYS_TIMEOUT_S)
+    except Exception:
+        return 1800
+
+
 def step_dft_lec_chain(project: Path, top_name: str, container: str,
                        ic_class: str, full_chip: bool = True
                        ) -> List[StepResult]:
@@ -8643,6 +8659,10 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                        "no scan netlist → post-DFT disclosed-skip"))
 
     # ================= Step 13 — LEC (RTL ≡ handoff netlist) =================
+    # Headroom for lec_run's three worst-case yosys attempts plus docker/parse
+    # overhead. DERIVED from the producer's own per-invocation budget so the two
+    # can never drift apart again. See the timeout note at the call.
+    _LEC_PRODUCER_TIMEOUT_S = 3 * lec_producer_yosys_timeout_s() + 300
     t0 = time.time()
     gate_netlist = ("phase2/stage2/synth/post_dft_netlist.v"
                     if post_dft.is_file()
@@ -8653,8 +8673,16 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                "--gold-rtl-dir", "phase2/stage1/rtl",
                "--gate-netlist", gate_netlist, "--top", top_name,
                "--container", container, "--json", "reports/lec.json"]
+        # The outer timeout MUST exceed the producer's own worst case, else the
+        # runner kills lec_run before it can write a truthful report and the
+        # verdict falls through to a disclosed-skip. lec_run budgets 1800s PER
+        # yosys invocation and makes up to three (built-in gold read, slang
+        # gold read, slang -DSYNTHESIS define retry) — on a CPU-class gold the
+        # slang miter alone runs tens of minutes. 1200s was BELOW even a single
+        # inner attempt, so any design needing the slang fallback was killed.
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
+            r = subprocess.run(cmd, capture_output=True, text=True,
+                               timeout=_LEC_PRODUCER_TIMEOUT_S)
             if (reports_dir / "lec.json").is_file():
                 results.append(StepResult("lec_equivalence", "PASS",
                                time.time() - t0,
