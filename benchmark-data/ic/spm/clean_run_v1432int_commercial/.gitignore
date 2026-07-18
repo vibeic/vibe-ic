@@ -1,7 +1,7 @@
 # ── NDA HYGIENE (ABSOLUTE) ──────────────────────────────────────────────
 # Commercial PDK content is NEVER committed. Only this run's generic,
 # numbers-only RESULT.md (+ this .gitignore) is tracked. Everything the flow
-# emits (reports, logs, netlists, layout) may quote foundry cell / rule / SKU
+# emits (reports, logs, netlists, layout) may quote commercial-PDK cell / rule
 # tokens and is therefore left UNTRACKED.
 #
 # input/ holds the staged commercial PDK (symlinks to out-of-repo scratch)
@@ -14,7 +14,7 @@ input/
 **/pdk/calibre/
 **/pdk/spice/
 **/pdk/bridge/
-# tool-emitted reports/logs/netlists — may carry foundry cell / rule names
+# tool-emitted reports/logs/netlists — may carry commercial-PDK cell / rule names
 reports/
 phase1/
 phase2/
