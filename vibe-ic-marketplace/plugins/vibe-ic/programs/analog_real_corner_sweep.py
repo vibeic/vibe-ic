@@ -102,6 +102,73 @@ _TRAN_METRIC_KEYS = frozenset({
 _ANALYSIS_METRIC_KEYS = {"ac": _AC_METRIC_KEYS, "tran": _TRAN_METRIC_KEYS}
 
 
+def parse_json_measure_sidecar(text):
+    """(A) THE STRUCTURED OBSERVABLE — the ngspice fork's `--json-measure`
+    sidecar (vibeic ngspice enhancement #29, commit 26d8f72).
+
+    Format (read from the fork's json_measure_dump()): a JSON array of
+        {"name","analysis","type","unit","pass":bool,"value":number|null}
+    A FAILED measure emits `"value": null` and `"pass": false` — never the
+    bogus 0.0 that the text path can mistake for a real measurement. The
+    sidecar is written at sp_shutdown() on EVERY exit path, so even a batch
+    that ends rc=1 still produces it.
+
+    Returns {name: (passed_bool, value_or_None)}, or None when the text is
+    absent/unparseable — None means "no structured verdict available", which
+    is never read as evidence that a measurement succeeded."""
+    if not text or not text.strip():
+        return None
+    try:
+        recs = json.loads(text)
+    except Exception:
+        return None
+    if not isinstance(recs, list):
+        return None
+    out = {}
+    for r in recs:
+        if not isinstance(r, dict):
+            continue
+        name = r.get("name")
+        if not name:
+            continue
+        val = r.get("value")
+        ok = bool(r.get("pass")) and isinstance(val, (int, float))
+        out[str(name)] = (ok, val if ok else None)
+    return out or None
+
+
+# Cache the per-binary capability probe — a stock ngspice rejects the flag
+# with `unrecognized option`, so we must not pass it blindly.
+_JSON_MEASURE_SUPPORT = {}
+
+
+def _supports_json_measure(container, ngspice_bin):
+    """Does THIS ngspice build carry the fork's `--json-measure`?
+
+    MEASURED, not assumed: the deployed vibeic-eda:0.2.19 image ships an
+    ngspice WITHOUT the #29 patch — it answers `ngspice: unrecognized option
+    '--json-measure=...'` (and still runs, rc=0). Probing keeps the structured
+    path dormant until the image carries the patched build, instead of
+    emitting a spurious option error on every corner of every run."""
+    key = (container, ngspice_bin)
+    if key in _JSON_MEASURE_SUPPORT:
+        return _JSON_MEASURE_SUPPORT[key]
+    ok = False
+    try:
+        cp = _docker(container,
+                     f"{shlex.quote(ngspice_bin)} --json-measure=/dev/null "
+                     f"-v 2>&1 | head -20")
+        blob = (cp.stdout or "")
+        ok = "unrecognized option" not in blob.lower()
+    except Exception:
+        ok = False
+    _JSON_MEASURE_SUPPORT[key] = ok
+    return ok
+
+
+_NO_SUCH_VECTOR_RE = re.compile(r"(?i)no such vector\s+as\s+([A-Za-z_]\w*)")
+
+
 def _scan_analysis_failures(txt):
     """Scan one ngspice log for per-analysis error markers.
 
@@ -140,12 +207,22 @@ def _scan_analysis_failures(txt):
         for atype2, keys in _ANALYSIS_METRIC_KEYS.items():
             if name in keys:
                 failed_analyses.add(atype2)
-    # An "argument out of range" / "no such vector" on an AC-derived vector
-    # (vdb / gain) means the AC sweep itself produced nothing usable.
+    # An "argument out of range" on an AC-derived vector (vdb) means the AC
+    # sweep itself produced nothing usable.
     blob = (txt or "")
-    if (("vdb(" in blob and "argument out of range" in blob.lower())
-            or re.search(r"(?i)no such vector\s+as\s+gain", blob)):
+    if "vdb(" in blob and "argument out of range" in blob.lower():
         failed_analyses.add("ac")
+    # `no such vector as <name>` for ANY metric name — the vector a measure
+    # depends on does not exist, so that metric (and its analysis) is dead.
+    # Previously this was hardcoded to the literal name `gain`, which both
+    # missed every other metric and read as a chip-ish literal; keying on the
+    # captured NAME is strictly more general.
+    for m in _NO_SUCH_VECTOR_RE.finditer(blob):
+        name = m.group(1)
+        failed_meas_keys.add(name)
+        for atype2, keys in _ANALYSIS_METRIC_KEYS.items():
+            if name in keys:
+                failed_analyses.add(atype2)
     return failed_analyses, failed_meas_keys, warnings
 
 
@@ -783,10 +860,25 @@ def _run_ngspice(container, sp_in_container, cwd=None):
     decks include their model lib by ABSOLUTE path). chip-AGNOSTIC."""
     ngspice_bin = _resolve_ngspice(container) or "ngspice"
     prefix = f"cd {shlex.quote(cwd)} && " if cwd else ""
+    # (A) Ask for the STRUCTURED per-.measure sidecar when this build supports
+    # it (ngspice fork #29). Capability-probed, never assumed — a stock build
+    # answers `unrecognized option` and would emit that on every corner.
+    json_path = None
+    json_flag = ""
+    if _supports_json_measure(container, ngspice_bin):
+        json_path = f"{sp_in_container}.measure.json"
+        json_flag = f"--json-measure={shlex.quote(json_path)} "
     cp = _docker(container,
-                 f"{prefix}{shlex.quote(ngspice_bin)} -b "
+                 f"{prefix}{shlex.quote(ngspice_bin)} -b {json_flag}"
                  f"{shlex.quote(sp_in_container)} 2>&1")
     txt = cp.stdout
+    json_meas = None
+    if json_path:
+        try:
+            jc = _docker(container, f"cat {shlex.quote(json_path)} 2>/dev/null")
+            json_meas = parse_json_measure_sidecar(jc.stdout)
+        except Exception:
+            json_meas = None
     meas = {}
     # Native `name = value` meas-result lines first (authoritative —
     # ngspice prints these directly from each `.meas`/`meas` command).
@@ -812,17 +904,66 @@ def _run_ngspice(container, sp_in_container, cwd=None):
     # can downgrade provenance instead of silently swallowing the failure.
     failed_analyses, failed_meas_keys, warnings = _scan_analysis_failures(txt)
     nulled_keys: set[str] = set()
+
+    if json_meas is not None:
+        # (A) STRUCTURED PATH — the sidecar is AUTHORITATIVE. A measure the
+        # simulator itself marked failed (pass:false / value:null) is not a
+        # measurement, whatever scalar the `$&` echo summary printed for it.
+        # No log phrase is consulted to reach this verdict.
+        measure_source = "json_sidecar"
+        for k, (ok, _v) in json_meas.items():
+            if not ok and k in meas:
+                meas[k] = None
+                nulled_keys.add(k)
+        for atype2, keys in _ANALYSIS_METRIC_KEYS.items():
+            if any(not json_meas[k][0] for k in keys if k in json_meas):
+                failed_analyses.add(atype2)
+    else:
+        # (B) TEXT FALLBACK — only when no sidecar exists (a stock ngspice, as
+        # the currently-deployed image is). Made FAIL-SAFE: this path cannot
+        # certify a measurement, so ambiguity resolves to NULL, never to KEEP.
+        measure_source = "text_scrape"
+        # FAIL-SAFE 1: a non-zero ngspice exit means the batch did not complete
+        # normally — nothing it printed is a trustworthy measurement.
+        if cp.returncode != 0:
+            for k in list(meas):
+                if meas[k] is not None:
+                    meas[k] = None
+                    nulled_keys.add(k)
+            failed_analyses.add("*")
+            warnings.append(
+                f"ngspice exited {cp.returncode} — all metrics nulled "
+                "(a non-zero exit cannot yield measured data)")
+        # FAIL-SAFE 2: reconcile DECLARED measures against DELIVERED native
+        # results. ngspice prints each SUCCESSFUL `.meas` as `name = value`;
+        # the `$&`-substituted echo summary prints a scalar even for a FAILED
+        # one. So a key that reaches us ONLY through the echo summary, while
+        # the log carries any failure signal, has no evidence of having been
+        # measured — null it instead of trusting the echoed number. This is
+        # structural (presence/absence of a native result), not phrase-based.
+        native_keys = {m.group(1) for m in _NATIVE_MEAS_RE.finditer(txt)}
+        if failed_analyses or failed_meas_keys:
+            for k in list(meas):
+                if (meas[k] is not None and k not in native_keys
+                        and k not in nulled_keys):
+                    meas[k] = None
+                    nulled_keys.add(k)
+                    warnings.append(
+                        f"metric {k!r} came only from the echo summary with no "
+                        "native meas result while the run reported failures — "
+                        "nulled (unverifiable, not measured)")
+
     # Drop metrics whose owning analysis failed (e.g. all AC metrics when the
     # `ac` sweep errored), so a bogus 0.0 never reaches corner_results.json.
     for atype in failed_analyses:
         for k in _ANALYSIS_METRIC_KEYS.get(atype, frozenset()):
-            if k in meas:
+            if k in meas and meas[k] is not None:
                 meas[k] = None
                 nulled_keys.add(k)
     # Also drop any individually-failed measure name even if its analysis kind
     # could not be inferred (defensive — a failed meas is never a real value).
     for k in failed_meas_keys:
-        if k in meas:
+        if k in meas and meas[k] is not None:
             meas[k] = None
             nulled_keys.add(k)
     sim_status = {
@@ -830,6 +971,10 @@ def _run_ngspice(container, sp_in_container, cwd=None):
         "nulled_metrics": sorted(nulled_keys),
         "warnings": warnings,
         "partial": bool(failed_analyses or nulled_keys),
+        # Provenance honesty: did the verdict rest on the simulator's own
+        # structured per-measure record, or on scraping its log?
+        "measure_source": measure_source,
+        "measures_structurally_verified": json_meas is not None,
     }
     # #438(a): return the FULL transcript — run_block persists it as the
     # per-run ngspice invocation log that substantiates simulator_run.
@@ -1465,6 +1610,7 @@ def run_block(project, block, container, pdk, topology_override):
     # #464 — accumulate per-block partial-measurement evidence across runs.
     block_sim_warnings: list[str] = []
     block_failed_analyses: set[str] = set()
+    block_measure_sources: set[str] = set()
     block_nulled_metrics: set[str] = set()
     for knob, val in SWEEPS.get(btype, [("__noop__",0)]):
         # The knob sweep runs at the NOMINAL corner / 27 °C base (ngspice
@@ -1513,7 +1659,9 @@ def run_block(project, block, container, pdk, topology_override):
         block_sim_warnings.extend(sim_status["warnings"])
         block_failed_analyses.update(sim_status["failed_analyses"])
         block_nulled_metrics.update(sim_status["nulled_metrics"])
+        block_measure_sources.add(sim_status.get("measure_source", "text_scrape"))
         runs.append({"knob":knob, "val":val, "ok":ok,
+                     "measure_source": sim_status.get("measure_source"),
                      "ngspice_log": str(log_host.relative_to(project)),
                      "sim_warnings": sim_status["warnings"],
                      "partial_measurement": sim_status["partial"],
@@ -1610,6 +1758,14 @@ def run_block(project, block, container, pdk, topology_override):
         "partial_measurement": block_partial,
         "analysis_status": analysis_status,
         "failed_analyses": sorted(block_failed_analyses),
+        # Was each metric's keep/null decision backed by the simulator's own
+        # structured per-.measure record, or by scraping its log? A text
+        # scrape cannot certify a measurement, so record which was used
+        # rather than letting both look equally authoritative.
+        "measure_sources": sorted(block_measure_sources),
+        "measures_structurally_verified": (
+            bool(block_measure_sources)
+            and block_measure_sources == {"json_sidecar"}),
         "nulled_metrics": sorted(block_nulled_metrics),
         "sim_warnings": block_sim_warnings_dedup,
         "simulator": "ngspice (iic-osic-tools docker)",
