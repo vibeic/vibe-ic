@@ -625,6 +625,108 @@ def _yosys(script_path):
                           capture_output=True, text=True, timeout=300).stdout or ""
 
 
+# ---------------------------------------------------------------------------
+# DEFINE-SET MIRROR (rv-aes): the slang gold-read must mirror the synth
+# invocation's define set, not read_slang alone. synth reads -DSIMULATION -DYOSYS
+# primary and retries -DSYNTHESIS -DYOSYS when a sim-only construct ($urandom /
+# std::randomize / $value$plusargs in a dead `ifdef SIMULATION arm) breaks it.
+# The LEC gold-read must do the same so the gold matches how synth built the gate
+# (else the miter aborts on $urandom).
+# ---------------------------------------------------------------------------
+def test_slang_gold_read_define_set_is_parameterised_not_hardcoded():
+    # default = synth PRIMARY (-DSIMULATION -DYOSYS); the -DSYNTHESIS retry set
+    # flows through, dropping -DSIMULATION so the dead sim-only arm is excluded.
+    d = lec_run.build_equiv_script(["/g.sv"], "/n.v", "top", None,
+                                   gold_frontend="slang")
+    assert "read_slang /g.sv --top top -DSIMULATION -DYOSYS" in d
+    s = lec_run.build_equiv_script(["/g.sv"], "/n.v", "top", None,
+                                   gold_frontend="slang",
+                                   gold_defines="-DSYNTHESIS -DYOSYS")
+    slang_line = s.split("read_slang", 1)[1].splitlines()[0]
+    assert "-DSYNTHESIS -DYOSYS" in slang_line
+    assert "-DSIMULATION" not in slang_line   # sim-only arm excluded
+
+
+def test_define_retry_reuses_the_synth_frontend_decision():
+    # the LEC define-set retry uses the SAME decision the synth path uses (read
+    # from the synth invocation, not hardcoded): a $urandom / std::randomize /
+    # $value$plusargs signature triggers the -DSYNTHESIS retry; a non-sim-only
+    # failure does not.
+    import synth_frontend
+    for sig in ("error: unsupported system task '$urandom'",
+                "std::randomize", "$value$plusargs"):
+        assert synth_frontend.synth_frontend_should_retry_under_synthesis(sig)[0]
+    # a genuine non-sim-only failure must NOT trigger a define retry (no leak).
+    assert not synth_frontend.synth_frontend_should_retry_under_synthesis(
+        "ERROR: Module foo not found")[0]
+
+
+# REAL in-container: the FULL-SoC combo — an async-reset FF AND a $urandom in an
+# `ifdef SIMULATION block — reaches a clean verdict via the slang-retry path with
+# the -DSYNTHESIS define set + async2sync (no $urandom abort, no async SAT stop).
+_AES_LIKE_RTL = (
+    "module dut(input clk, input rst_n, input [3:0] d, output reg [3:0] q);\n"
+    "`ifdef SIMULATION\n"
+    "  initial q = $urandom;   // sim-only, non-synthesizable\n"
+    "`endif\n"
+    "  always @(posedge clk or negedge rst_n)\n"
+    "    if (!rst_n) q <= 4'b0; else q <= d + 4'd1;\n"
+    "endmodule\n")
+
+
+def test_urandom_simblock_plus_async_reaches_verdict_via_synthesis_define(tmp_path):
+    work, cleanup = _mounted_workdir(tmp_path)
+    if work is None:
+        pytest.skip("vibeic-eda container not available / path not bind-mounted")
+    try:
+        chk = subprocess.run(
+            ["docker", "exec", "vibeic-eda", "bash", "-lc",
+             f"test -f {_SKY130_HD_LIB} && echo ok"],
+            capture_output=True, text=True, timeout=30)
+        if "ok" not in (chk.stdout or ""):
+            pytest.skip("sky130_hd Liberty not present in container")
+        (work / "dut.sv").write_text(_AES_LIKE_RTL)
+        # sanity: -DSIMULATION slang read DOES die on $urandom (the abort we fix).
+        sim_probe = work / "sim_probe.ys"
+        sim_probe.write_text(
+            f"read_slang {work/'dut.sv'} --top dut -DSIMULATION -DYOSYS\n")
+        sim_log = _yosys(sim_probe)
+        assert "$urandom" in sim_log, "expected the -DSIMULATION $urandom abort"
+        import synth_frontend
+        assert synth_frontend.synth_frontend_should_retry_under_synthesis(
+            sim_log)[0], "the synth #668 decision must fire on this abort"
+
+        # gate = synth under -DSYNTHESIS (the arm the gate is built from) → dfrtp.
+        map_ys = work / "map.ys"
+        map_ys.write_text(
+            f"read_slang {work/'dut.sv'} --top dut -DSYNTHESIS -DYOSYS\n"
+            f"synth -top dut\n"
+            f"dfflibmap -liberty {_SKY130_HD_LIB}\n"
+            f"abc -liberty {_SKY130_HD_LIB}\n"
+            f"write_verilog {work/'gate.v'}\n")
+        _yosys(map_ys)
+        assert (work / "gate.v").is_file()
+
+        # the recipe main() emits on the -DSYNTHESIS define-retry (slang + async2sync).
+        script = lec_run.build_equiv_script(
+            [str(work / "dut.sv")], str(work / "gate.v"), "dut",
+            _SKY130_HD_LIB, gold_frontend="slang",
+            gold_defines="-DSYNTHESIS -DYOSYS")
+        eq_ys = work / "equiv.ys"
+        eq_ys.write_text(script)
+        log = _yosys(eq_ys)
+        parsed = lec_run.parse_equiv_output(log)
+
+        assert "unsupported system task '$urandom'" not in log, (
+            "the -DSYNTHESIS define set must exclude the sim-only $urandom arm")
+        assert "No SAT model available for async" not in log, (
+            "async2sync must legalize the async-reset FF")
+        assert parsed["verdict"] == "PASS", (parsed, log[-600:])
+        assert (parsed["proven"] or 0) > 0 and parsed["unproven"] == 0
+    finally:
+        cleanup()
+
+
 def test_async_reset_reaches_verdict_on_slang_path_in_container(tmp_path):
     work, cleanup = _mounted_workdir(tmp_path)
     if work is None:

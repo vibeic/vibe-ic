@@ -436,7 +436,8 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
                        blackbox_v: Optional[List[str]] = None,
                        gate_is_generic: bool = False,
                        gold_frontend: str = "verilog",
-                       slang_prefix: str = "") -> str:
+                       slang_prefix: str = "",
+                       gold_defines: str = "-DSIMULATION -DYOSYS") -> str:
     """Build the Yosys RTL(gold)≡synth-netlist(gate) equiv script.
 
     v1.3.85 — APPROACH C (satgen-modelable BOTH sides). Step-13 compares an RTL
@@ -513,11 +514,19 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
     # so a design that SYNTHESISES cleanly is also LEC-comparable. On a non-fork
     # image `read_slang` needs `plugin -i slang` first (slang_prefix carries it);
     # the vibeic-eda fork ships it built-in (slang_prefix == "").
+    # The slang read must MIRROR the synth invocation's DEFINE SET, not just
+    # read_slang alone (rv-aes): synth reads `-DSIMULATION -DYOSYS` primary and
+    # retries `-DSYNTHESIS -DYOSYS` when a sim-only construct ($urandom /
+    # std::randomize / $value$plusargs in a dead `ifdef SIMULATION arm) breaks
+    # the build. `gold_defines` carries whichever set main() is on, so the gold
+    # elaborates the same arm synth built the gate from (else the miter aborts
+    # on $urandom). Default is the synth PRIMARY set; main() flips it to
+    # -DSYNTHESIS on the same sim-only-construct signature synth uses.
     if gold_frontend == "slang":
         _plugin_line = ("plugin -i slang\n"
                         if "plugin" in (slang_prefix or "") else "")
         gold_read_cmd = (f"{_plugin_line}read_slang {gold_read} "
-                         f"--top {top} -DSIMULATION -DYOSYS")
+                         f"--top {top} {gold_defines}")
     else:
         gold_read_cmd = f"read_verilog -sv {gold_read}"
     return (
@@ -814,12 +823,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     ys_host = rpt_out.parent / "lec_equiv.ys"
     ys_in_container = str(ys_host.resolve())
     gold_frontend = "verilog"
+    gold_defines = "-DSIMULATION -DYOSYS"   # synth PRIMARY define set (mirrored)
 
-    def _run(frontend: str, slang_prefix: str = ""):
+    def _run(frontend: str, slang_prefix: str = "",
+             defines: str = "-DSIMULATION -DYOSYS"):
         script = build_equiv_script(gold_files, gate_abs, resolved_top, liberty,
                                     gate_is_generic=gate_is_generic,
                                     gold_frontend=frontend,
-                                    slang_prefix=slang_prefix)
+                                    slang_prefix=slang_prefix,
+                                    gold_defines=defines)
         ys_host.write_text(script, encoding="utf-8")
         return run_yosys_equiv(container, ys_in_container)
 
@@ -830,12 +842,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     # (no miter built) on an SV closure the reader can't PARSE (package-scope
     # refs, unpacked-array ports) OR can't ELABORATE (an SV package/enum constant
     # used as a parameter value → the built-in const-evaluator's "non-constant
-    # value" abort; ibex). Retry the gold with the SAME `read_slang` frontend the
-    # synth step auto-uses, so a design that SYNTHESISES cleanly is also
-    # LEC-comparable. Only retry on a genuine zero-miter abort; adopt the slang
-    # run if it made progress (built a miter). If slang ALSO failed, record it so
-    # the verdict is finalized to FAIL (never a non-blocking pass for a design
-    # the capable frontend also can't elaborate).
+    # value" abort; ibex). Retry the gold with `read_slang` — a COMPLETE MIRROR
+    # of the synth frontend: the SAME SV-2017 reader AND the SAME define-set
+    # progression (rv-aes). synth reads `-DSIMULATION -DYOSYS` primary and, on a
+    # sim-only-construct failure ($urandom / std::randomize / $value$plusargs in
+    # a dead `ifdef SIMULATION arm), retries `-DSYNTHESIS -DYOSYS` (the
+    # synthesizable `else — the arm the gate was actually built from). Mirror
+    # that two-pass so the gold matches the gate. Only retry on a genuine
+    # zero-miter abort; if slang ALSO fails (under BOTH define sets), record it
+    # so the verdict is finalized to FAIL (never a non-blocking pass for a design
+    # the capable frontend also can't build).
     slang_retry_failed = False
     if launched:
         _p1 = parse_equiv_output(raw)
@@ -847,8 +863,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 slang_prefix = ""  # fork-safe default: read_slang built-in
             print("[lec_run] gold read_verilog -sv aborted (parse or "
                   "elaboration) → retrying gold with read_slang (SV-2017 "
-                  "frontend).", file=sys.stderr)
-            launched2, raw2 = _run("slang", slang_prefix)
+                  "frontend, -DSIMULATION define set).", file=sys.stderr)
+            launched2, raw2 = _run("slang", slang_prefix, gold_defines)
             if launched2:
                 _p2 = parse_equiv_output(raw2)
                 raw = raw2
@@ -857,12 +873,39 @@ def main(argv: Optional[List[str]] = None) -> int:
                     print("[lec_run] read_slang gold read built a miter "
                           "(SV-2017 frontend).", file=sys.stderr)
                 else:
-                    # slang ALSO could not elaborate → not excused as a tool gap;
-                    # finalize_after_slang_retry downgrades INCONCLUSIVE → FAIL.
-                    slang_retry_failed = True
-                    print("[lec_run] read_slang ALSO failed to elaborate the "
-                          "gold → verdict finalized to FAIL (no free pass).",
-                          file=sys.stderr)
+                    # DEFINE-SET MIRROR (synth #668): did slang die on a sim-only
+                    # construct ($urandom etc.) in the dead `ifdef SIMULATION arm?
+                    # Retry under -DSYNTHESIS (the synthesizable else — how synth
+                    # built the gate), reusing the SAME decision the synth path
+                    # uses (synth_frontend_should_retry_under_synthesis).
+                    _retry = False
+                    try:
+                        from synth_frontend import \
+                            synth_frontend_should_retry_under_synthesis
+                        _retry, _reason = \
+                            synth_frontend_should_retry_under_synthesis(raw2)
+                    except Exception:
+                        _retry = False
+                    if _retry:
+                        gold_defines = "-DSYNTHESIS -DYOSYS"
+                        print("[lec_run] read_slang -DSIMULATION died on a "
+                              "sim-only construct → retrying -DSYNTHESIS (mirror "
+                              "synth #668).", file=sys.stderr)
+                        launched3, raw3 = _run("slang", slang_prefix, gold_defines)
+                        if launched3:
+                            _p3 = parse_equiv_output(raw3)
+                            raw = raw3
+                            if _p3["parse_error"]:
+                                slang_retry_failed = True
+                        else:
+                            slang_retry_failed = True
+                    else:
+                        # slang failed for a non-define reason → no free pass.
+                        slang_retry_failed = True
+                    if slang_retry_failed:
+                        print("[lec_run] read_slang could not build the gold "
+                              "miter under either define set → verdict finalized "
+                              "to FAIL (no free pass).", file=sys.stderr)
     elapsed = round(time.time() - t0, 2)
 
     # Always persist the raw tool log for transparency / gate corroboration.
@@ -894,8 +937,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     report = build_report(parsed, resolved_top, gate_abs, liberty)
     report["elapsed_sec"] = elapsed
     report["gold_rtl_files"] = [Path(f).name for f in gold_files]
-    # Provenance: which gold frontend actually built the miter (verilog | slang).
+    # Provenance: which gold frontend + define set actually built the miter
+    # (verilog | slang; -DSIMULATION vs -DSYNTHESIS — how synth built the gate).
     report["gold_frontend"] = gold_frontend
+    report["gold_defines"] = gold_defines if gold_frontend == "slang" else None
     json_out.write_text(json.dumps(report, indent=2, ensure_ascii=False))
 
     print(json.dumps({
