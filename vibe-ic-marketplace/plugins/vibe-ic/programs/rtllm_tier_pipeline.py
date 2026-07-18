@@ -111,8 +111,88 @@ def _flag(name: str) -> bool:
     return os.environ.get(name, "") not in ("", "0", "false", "False")
 
 
-_PASS_RE = re.compile(r"pass", re.I)
-_FAIL_RE = re.compile(r"failures|===\s*Error|===\s*error|FAIL|Failed")
+# --------------------------------------------------------------------------- #
+# the TESTBENCH VERDICT CONTRACT — a STRUCTURED, ANCHORED observable
+# --------------------------------------------------------------------------- #
+# A bare `re.search(r"pass", re.I)` over the transcript is NOT a verdict: it
+# fires on "byPASS_en = 1", "PASSthrough_mux", "PASSword" — any design whose TB
+# happens to dump a signal or module name containing those letters scored PASS,
+# and this feeds a PUBLISHED benchmark number. The verdict now keys on the
+# testbench's OWN verdict statement, in the same shape verilogeval_tier_pipeline
+# uses for `Mismatches: N in M samples`: prefer the STRUCTURED counted line,
+# fall back to an ANCHORED whole-token banner, and FAIL-SAFE when neither is
+# present (no recognisable verdict is NOT a pass).
+#
+# The forms below are the ones RTLLM's 50 shipped testbenches actually print
+# (surveyed over the corpus's own `$display` strings) — a structural contract,
+# not a per-design literal (§4.05 chip-AGNOSTIC).
+
+# (1) STRUCTURED, COUNTED — the strongest form, carries its own failure count:
+#     "===========Test completed with   7 /100 failures==========="
+#     "=========== Test completed with 3 failures ==========="
+#     "Test completed with 2 errors."
+_COUNTED_VERDICT_RE = re.compile(
+    r"Test\s+completed\s+with\s+(\d+)\s*(?:/\s*\d+\s*)?(?:failure|error)s?", re.I)
+
+# (2) ANCHORED BANNER — RTLLM's canonical success/failure markers. The phrase
+#     "Your Design Passed" cannot be produced by a signal name; the `Error` /
+#     `Failed` banners are pinned to the `===` rule so a prose "error:" note
+#     elsewhere in the transcript does not masquerade as the verdict.
+_BANNER_PASS_RE = re.compile(r"={3,}\s*Your\s+Design\s+Passed\s*={3,}", re.I)
+_BANNER_FAIL_RE = re.compile(r"={3,}\s*(?:Error|Failed)\s*={3,}", re.I)
+
+# (3) ANCHORED FAILURE STATEMENT — line-anchored, word-boundary failure reports
+#     ("Test failed: a = ...", "Failed at i=3, ...", "Error: dividend=..."). A
+#     failure anywhere is authoritative even if a pass banner also appears.
+_LINE_FAIL_RE = re.compile(
+    r"^[\s=*-]*(?:test\s+)?(?:failed|failure|error)\b\s*[:@]|"
+    r"^[\s=*-]*failed\s+at\b", re.I | re.M)
+
+# (4) ANCHORED WHOLE-LINE PASS — a TB whose entire verdict line is a pass token
+#     ("PASSED", "=== test passed ==="). `\bpass` has a WORD BOUNDARY, so
+#     "bypass" / "passthrough" / "password" can never satisfy it.
+_LINE_PASS_RE = re.compile(
+    r"^[\s=*-]*(?:all\s+)?(?:tests?|simulation|design)?\s*"
+    r"\bpass(?:ed)?\b[\s=*!.-]*$", re.I | re.M)
+
+
+def testbench_verdict(out: str, returncode: Optional[int] = None) -> Tuple[bool, str]:
+    """(passed, reason) from a simulation transcript, decided on the TB's own
+    verdict statement. FAIL-SAFE: anything unrecognised is NOT a pass.
+
+    Order: a non-zero simulator exit is never a pass -> the STRUCTURED counted
+    line -> an anchored failure statement/banner -> an anchored pass banner or
+    whole-line pass token -> no recognisable verdict (not a pass)."""
+    out = out or ""
+    if returncode is not None and returncode != 0:
+        return False, f"simulator exited {returncode} (abnormal termination)"
+    if not out.strip():
+        return False, "no simulation output (silent transcript)"
+
+    counted = _COUNTED_VERDICT_RE.search(out)
+    fail_stmt = _BANNER_FAIL_RE.search(out) or _LINE_FAIL_RE.search(out)
+    pass_stmt = _BANNER_PASS_RE.search(out) or _LINE_PASS_RE.search(out)
+
+    # (1) the structured counted line is authoritative when present.
+    if counted:
+        n = int(counted.group(1))
+        if n > 0:
+            return False, f"testbench reported {n} failure(s)"
+        # 0 failures counted — honour it unless a failure statement contradicts.
+        if fail_stmt:
+            return False, "0-failure count contradicted by a failure statement"
+        return True, "testbench reported 0 failures"
+
+    # (2) any anchored failure statement wins over a co-occurring pass token.
+    if fail_stmt:
+        return False, f"testbench failure statement: {fail_stmt.group(0).strip()[:60]}"
+
+    # (3) an anchored pass statement.
+    if pass_stmt:
+        return True, f"testbench pass statement: {pass_stmt.group(0).strip()[:60]}"
+
+    # (4) FAIL-SAFE — no verdict the contract recognises.
+    return False, "no recognisable testbench verdict in transcript"
 # data files a testbench may $readmemh / $readmemb at runtime (copied into the
 # scratch build dir so relative paths resolve — the cwd=design rule).
 _DATA_EXT = (".txt", ".hex", ".dat", ".mem", ".data", ".list", ".bin")
@@ -218,17 +298,20 @@ def iverilog_score(design_dir: str, rtl_text: str, top: str,
             return False, False, f"compile-exc {e}"
         if c.returncode != 0:
             return False, False, "COMPILE-FAIL: " + (c.stderr[-400:] or c.stdout[-400:])
+        rc: Optional[int] = None
         try:
             r = subprocess.run(["vvp", sim], capture_output=True, text=True,
                                timeout=timeout_run, cwd=td)
-            out = r.stdout + r.stderr
+            out, rc = r.stdout + r.stderr, r.returncode
         except subprocess.TimeoutExpired as e:
+            # a hang: keep whatever the run printed, but rc stays None — the
+            # verdict contract must find a real verdict in it to score a pass.
             so = e.stdout or b""
             out = so.decode(errors="replace") if isinstance(so, bytes) else so
         except Exception as e:
             return True, False, f"run-exc {e}"
-        passed = bool(_PASS_RE.search(out)) and not _FAIL_RE.search(out)
-        return True, passed, out[-400:]
+        passed, why = testbench_verdict(out, rc)
+        return True, passed, f"[{why}] " + out[-400:]
 
 
 # --------------------------------------------------------------------------- #

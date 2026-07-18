@@ -320,3 +320,115 @@ def test_full_distribution_converges_to_expected_shape():
     assert c[5] == 4              # the 4 proven golden-fails-own-test floors
     assert c[1] + c[2] + c[3] == 46   # stable = solvable ceiling (total - floors)
     assert c[3] == 0              # every gate-able design is COMPLETE (Tier2) here
+
+
+# =========================================================================== #
+# testbench_verdict — the STRUCTURED, ANCHORED pass/fail observable.
+#
+# This decides a PUBLISHED benchmark number, so the NEGATIVE cases are the
+# load-bearing ones. The rule it replaced was `re.search(r"pass", re.I)`, which
+# fired on any transcript containing "bypass" / "passthrough" / "password".
+# =========================================================================== #
+@pytest.mark.parametrize("transcript", [
+    "time=100 bypass_en = 1\ntime=200 bypass_en = 0\nsim finished\n",
+    "Instantiating passthrough_mux\ndone\n",
+    "password = secret\n",
+    "stimulus: a=3 b=4 bypass_en=1\n",
+    "PASSTHROUGH stage enabled\nBypassed the pipeline register\n",
+])
+def test_substring_pass_tokens_never_score_pass(transcript):
+    """PROVEN-NEGATIVE: a signal/module name containing the letters "pass" is
+    not a verdict. `\\bpass\\b` has a word boundary, so "bypass" cannot satisfy it."""
+    passed, why = P.testbench_verdict(transcript)
+    assert passed is False, f"false PASS on: {transcript!r} ({why})"
+
+
+@pytest.mark.parametrize("transcript,rc", [
+    ("", 0),                     # silent transcript
+    ("   \n\n", 0),              # whitespace only
+    ("$%^&* ~~~ nonsense", 0),   # garbled
+])
+def test_no_output_or_unrecognised_never_scores_pass(transcript, rc):
+    """FAIL-SAFE: no recognisable verdict is NOT a pass."""
+    assert P.testbench_verdict(transcript, rc)[0] is False
+
+
+def test_nonzero_simulator_exit_never_scores_pass():
+    """A pass banner from an abnormally-terminated sim is not a pass."""
+    out = "===========Your Design Passed===========\n"
+    assert P.testbench_verdict(out, 0)[0] is True     # normal exit -> honoured
+    assert P.testbench_verdict(out, 1)[0] is False    # crashed -> refused
+
+
+@pytest.mark.parametrize("transcript", [
+    "bypass_en = 1\n===========Error===========\n",
+    "===========Failed===========\n",
+    "===========Test completed with          7 /100 failures===========\n",
+    "=========== Test completed with 3 failures ===========\n",
+    "Test failed: a = 00000011, b = 00000100, c = 00000000\n",
+    "Failed at i=  3, out=1010, expected=1011\n",
+    "Error: dividend=156, divisor= 10, expected=00f6, got=faf1\n",
+    "Test completed with 2 errors.\n",
+])
+def test_real_failures_still_score_fail(transcript):
+    """PROVEN-NEGATIVE: a genuine failure stays a FAIL even when the word
+    "pass" also appears in the transcript."""
+    assert P.testbench_verdict(transcript, 0)[0] is False
+    assert P.testbench_verdict("bypass_en=1\npassthrough\n" + transcript, 0)[0] is False
+
+
+@pytest.mark.parametrize("transcript", [
+    "===========Your Design Passed===========\n",
+    "=========== Your Design Passed ===========\n",
+    "=========== Test completed with  0 /100 failures ===========\n",
+    "Test completed with 0 failures\n",
+    "PASSED\n",
+    "bypass_en=1\npassthrough ok\n===========Your Design Passed===========\n",
+])
+def test_genuine_passes_still_score_pass(transcript):
+    """POSITIVE GATE: a genuinely passing design still scores PASS — including
+    one whose transcript ALSO contains bypass-like noise. No false alarms."""
+    passed, why = P.testbench_verdict(transcript, 0)
+    assert passed is True, f"false FAIL on: {transcript!r} ({why})"
+
+
+def test_zero_count_contradicted_by_failure_statement_is_fail():
+    """A 0-failure count that a failure statement contradicts is not a pass."""
+    out = "Test failed: a = 1, b = 0\nTest completed with 0 failures\n"
+    assert P.testbench_verdict(out, 0)[0] is False
+
+
+@_needs_iv
+def test_end_to_end_wrong_design_with_bypass_signal_scores_fail(tmp_path):
+    """END-TO-END: the exact live exploit. A DUT that computes 3+4=0 — whose
+    testbench prints `Test failed:` (lowercase, which the old case-sensitive
+    fail regex missed) while a `bypass_en` signal dump supplies the "pass"
+    substring — scored PASS under the old rule. It must score FAIL."""
+    (tmp_path / "design_description.txt").write_text("placeholder")
+    (tmp_path / "testbench.v").write_text("""
+module testbench;
+  reg [7:0] a = 8'd3, b = 8'd4; reg bypass_en = 1; wire [7:0] c;
+  integer error = 0;
+  dut u(.a(a), .b(b), .bypass_en(bypass_en), .c(c));
+  initial begin
+    #10;
+    $display("stimulus: a=%d b=%d bypass_en=%b", a, b, bypass_en);
+    if (c !== a + b) begin
+      error = error + 1;
+      $display("Test failed: a = %b, b = %b, c = %b", a, b, c);
+    end
+    if (error == 0) $display("===========Your Design Passed===========");
+    $finish;
+  end
+endmodule
+""")
+    wrong = ("module dut(input [7:0] a, input [7:0] b, input bypass_en,\n"
+             "           output [7:0] c);\n  assign c = 8'd0;\nendmodule\n")
+    compiled, passed, log = P.iverilog_score(str(tmp_path), wrong, "dut")
+    assert compiled is True
+    assert passed is False, f"false PASS on a 3+4=0 design: {log}"
+
+    right = ("module dut(input [7:0] a, input [7:0] b, input bypass_en,\n"
+             "           output [7:0] c);\n  assign c = a + b;\nendmodule\n")
+    compiled, passed, log = P.iverilog_score(str(tmp_path), right, "dut")
+    assert passed is True, f"false FAIL on a correct design: {log}"
