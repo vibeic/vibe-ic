@@ -17,7 +17,7 @@ ERROR: tritonpart::repair_timing failed
 
 OpenROAD's `repair_timing -hold` lifts every cell whose master matches its
 internal buffer/inverter heuristic, then asserts that each candidate has
-exactly one input pin. Some PDKs (notably <foundry> commercial_pdk)
+exactly one input pin. Some PDKs (notably some <foundry> PDKs)
 ship "delay-line" cells (`DLY*D*`, `DEL*`, `BUF*x4`) that have multiple
 input pins exposed for layout — OpenROAD's filter mistakenly picks them
 up and crashes.

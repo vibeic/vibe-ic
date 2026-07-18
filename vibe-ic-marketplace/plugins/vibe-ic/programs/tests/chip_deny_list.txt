@@ -33,3 +33,15 @@ uhee628
 # Typo variants (caught during v0.1.2 sanitize)
 a3616
 noris
+
+# Commercial NDA PDK SKU / foundry (added 2026-07-18 — the guard was BLIND to
+# these, which is why ~90 SKU leaks sat undetected in plugin source/comments.
+# The ONLY sanctioned in-source occurrences are the load-bearing PDK-discovery
+# literals + detector patterns enumerated in chip_deny_allow.txt; every other
+# occurrence (prose/comment/example) is a real leak and MUST fail this guard.)
+commercial_pdk
+commercial_pdk
+commercial_pdk
+commercial_foundry
+commercial foundry
+commercial_foundry

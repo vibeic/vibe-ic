@@ -1,0 +1,28 @@
+# chip_deny_allow.txt — occurrence-level (line-EXACT) exceptions to
+# source_chip_agnostic_check / test_chip_agnostic_guard.
+#
+# Format: <rel_path><TAB><exact stripped source line>
+# `#` comments and blank lines ignored. A deny-listed-token finding is
+# suppressed ONLY when BOTH the file path AND the exact stripped source line
+# match an entry here. Consequences (both intentional / fail-safe):
+#   * a NEW prose/comment leak is a DIFFERENT line  -> still caught;
+#   * EDITING a sanctioned line changes its text     -> re-flagged (re-review).
+#
+# Every entry is either (A) a DETECTOR pattern that must carry the SKU to do
+# its job, or (B) a LOAD-BEARING PDK-discovery literal the plugin needs to
+# locate the real PDK / real on-disk files at run time. Genericizing any of
+# them would break the guard or the flow. The long-term fix (config/env-driven
+# PDK-name resolution, so NO SKU literal is needed in source) is a separate
+# deferred item — see INTEGRATION_PLAN.md.
+
+# --- (A) Detector data: SKU inside the scanner's own recognition list ---
+programs/fpga_gate_level_attestation_check.py	"commercial_pdk", "tsmc", "asap7sc",
+
+# --- (B) Load-bearing PDK-discovery literals (real PDK name / real lib globs) ---
+programs/design_one_shot_runner.py	if pdk == "commercial_pdk":
+programs/design_one_shot_runner.py	pdk = "commercial_pdk"   # v1.3.94 — commercial 180nm PDK
+programs/fault_atpg_run.py	"commercial_pdk": {
+programs/fault_atpg_run.py	elif args.pdk == "commercial_pdk":
+programs/fault_atpg_run.py	p.add_argument("--pdk", default="commercial_pdk",
+programs/spice_correlation_check.py	for pat in ("commercial_pdk-S1.9c*.lib", "commercial_pdk-*.lib"):
+programs/spice_correlation_check.py	if (known / "commercial_pdk-S1.9cS.lib").is_file() or list(known.glob("commercial_pdk-*.lib")):

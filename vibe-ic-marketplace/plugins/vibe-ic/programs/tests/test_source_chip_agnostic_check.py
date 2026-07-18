@@ -113,3 +113,54 @@ def test_substring_in_word_not_match(tmp_path: Path) -> None:
 def test_vacuous_on_missing_root(tmp_path: Path) -> None:
     v, findings = audit(tmp_path / "nonexistent")
     assert v == "VACUOUS_PASS"
+
+
+# ---------------------------------------------------------------------------
+# Commercial-PDK SKU: the deny-list was BLIND to it (chip_deny_list.txt didn't
+# list commercial_pdk/commercial_pdk), which is why ~90 SKU leaks sat undetected. These verify
+# the token is now in the DEFAULT panel AND that the line-EXACT allowlist
+# (chip_deny_allow.txt) suppresses ONLY the sanctioned discovery literals while
+# staying fail-safe against a fresh prose leak in the very same file.
+# ---------------------------------------------------------------------------
+def test_commercial_sku_now_in_default_panel(tmp_path: Path) -> None:
+    """A fresh prose leak of the commercial SKU is caught WITHOUT extra_tokens
+    (previously the guard's default panel was blind to it)."""
+    root = _mk_plugin(tmp_path, {
+        "programs/widget.py": "# tuned for commercial_pdk metal stack\nx = 1\n",
+    })
+    v, findings = audit(root)
+    assert v == "FAIL"
+    assert any(f.token.lower() == "commercial_pdk" for f in findings)
+
+
+def test_line_allow_suppresses_sanctioned_discovery_literal(tmp_path: Path) -> None:
+    """The exact load-bearing PDK-discovery line registered in
+    chip_deny_allow.txt is suppressed (the plugin must name the real PDK)."""
+    root = _mk_plugin(tmp_path, {
+        "programs/fault_atpg_run.py": '"commercial_pdk": {\n',
+    })
+    v, findings = audit(root)
+    assert v == "PASS", findings
+
+
+def test_line_allow_is_fail_safe_new_prose_leak_still_caught(tmp_path: Path) -> None:
+    """A NEW prose leak in the SAME allow-listed file is a DIFFERENT line, so it
+    is still caught — the allowlist is line-EXACT, never file-level."""
+    root = _mk_plugin(tmp_path, {
+        "programs/fault_atpg_run.py":
+            '"commercial_pdk": {\n'                       # sanctioned -> allowed
+            '# new leak: retuned for commercial_pdk corner\n',  # prose -> caught
+    })
+    v, findings = audit(root)
+    assert v == "FAIL"
+    assert any(f.line == 2 for f in findings)
+
+
+def test_line_allow_near_miss_not_blanket_allowed(tmp_path: Path) -> None:
+    """A line that only RESEMBLES a sanctioned line (trailing text appended) is
+    NOT suppressed — proves exact-match keying, not substring/prefix."""
+    root = _mk_plugin(tmp_path, {
+        "programs/fault_atpg_run.py": '"commercial_pdk": {  # sneaky\n',
+    })
+    v, findings = audit(root)
+    assert v == "FAIL"

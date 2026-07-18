@@ -309,7 +309,7 @@ the oracle; the blindness boundary still holds).
 **The load-bearing rule — fix at the GENERATING step's tool, not where the
 problem is DETECTED.** Attribute the defect to the step that PRODUCED it, and
 fix the forked tool THAT step uses — do not patch a later step's tool. Worked
-example (commercial_pdk spm, 2026-07-11): 993 MET1 min-area DRC violations were
+example (commercial-PDK spm, 2026-07-11): 993 MET1 min-area DRC violations were
 *detected* by the DRC step (KLayout/svrf) but *generated* by the routing step
 (OpenROAD `detailed_route`, which silently dropped min-area on via-access pads
 touching fixed pin edges). The fix belongs in **forked OpenROAD's `drt`**
