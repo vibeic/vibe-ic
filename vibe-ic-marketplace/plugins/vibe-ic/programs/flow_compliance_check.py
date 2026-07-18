@@ -4023,6 +4023,15 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
             # step to WAIVED-DEFERRED (Overall PASS_WITH_WAIVERS) instead of a
             # bare PASS — mirrors the non-optional `program_exit_zero` branch.
             reasons.append(out)
+        elif out.startswith(_VACUOUS_HINT_PREFIX):
+            # An OPTIONAL gate program may signal the disclosed-skip tier by
+            # EXIT CODE (rc 2) exactly as a required one does. In that case
+            # `_check_program_exit_zero` already replaced the snippet with the
+            # `__VACUOUS_HINT__:` marker, so the stdout-token test below can no
+            # longer see the program's own `VACUOUS_PASS:` line and the
+            # disclosure was silently downgraded to a bare pass. Forward the
+            # marker instead — mirrors the `__WAIVER_HINT__` branch above.
+            reasons.append(out)
         elif _stdout_signals_vacuous(out):
             # Wave 93 — preserve the VACUOUS signal for upstream verdict
             # aggregation. The hint is filtered out before display so the
