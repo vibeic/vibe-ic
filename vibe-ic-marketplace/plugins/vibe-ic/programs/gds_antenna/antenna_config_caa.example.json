@@ -1,0 +1,16 @@
+{
+  "_comment": "Synthetic (NDA-clean) CAA (cumulative-antenna) deck. metric='layer' runs the true per-layer metal ratio; 'cumulative_ratio' turns on cumulative-antenna-area checking (metal+via+contact charge sharing) against a SEPARATE bound. A design under every per-layer 'ratio' can still exceed 'cumulative_ratio'. Layer numbers + bounds are generic placeholders; supply foundry values for a real sign-off.",
+  "gate": {"and": ["poly", "active"]},
+  "gate_layers": {"poly": [2, 0], "active": [1, 0]},
+  "conductors": [
+    {"name": "poly", "layer": [2, 0], "role": "poly"},
+    {"name": "cont", "layer": [3, 0], "role": "contact"},
+    {"name": "met1", "layer": [4, 0], "role": "metal", "ratio": 40.0},
+    {"name": "via1", "layer": [5, 0], "role": "via"},
+    {"name": "met2", "layer": [6, 0], "role": "metal", "ratio": 40.0}
+  ],
+  "metric": "layer",
+  "cumulative_ratio": 50.0,
+  "cumulative_roles": ["metal", "via", "contact"],
+  "diode_credit": false
+}
