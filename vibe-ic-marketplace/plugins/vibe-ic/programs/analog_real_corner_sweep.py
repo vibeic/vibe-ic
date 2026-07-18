@@ -766,14 +766,21 @@ def _run_ngspice(container, sp_in_container, cwd=None):
     directory — the model lib's own directory, so any deck-relative output /
     scratch file lands beside it.
 
-    NOTE (measured, ngspice-46): cwd does NOT decide how a model lib's RELATIVE
-    `.lib` / `.include` targets resolve — ngspice resolves those against the
-    directory of the INCLUDING FILE, and there is no `-I` / search-path option
-    (`set sourcepath` does not apply to `.include` either). Co-locating the
-    shim's include closure is what makes those targets resolve; see
-    analog_pdk_deck_context.build_lib_include_farm. When cwd is None the
-    invocation is unchanged (the open-PDK sky130/gf180 decks include their model
-    lib by ABSOLUTE path). chip-AGNOSTIC."""
+    RESOLUTION RULE (measured on ngspice-46, both `.lib <file> <sec>` and
+    `.include <file>`): a RELATIVE target is found iff it sits in the INCLUDING
+    FILE's directory OR in the process cwd — the two are searched, nothing else.
+    There is no `-I` / search-path option, and `set sourcepath` does not apply.
+
+    So for a staged PDK whose libs span several directories, a shim's bare-name
+    cross-directory hop satisfies NEITHER and is fatal. Pointing cwd at any one
+    EXISTING directory cannot fix that (no existing directory holds the whole
+    closure) — which is why build_lib_include_farm CREATES one, and why `cwd`
+    must then be that farm: co-location supplies the first hop, cwd supplies
+    every hop after it. Both halves are required; each alone still fails. See
+    analog_pdk_deck_context.build_lib_include_farm.
+
+    When cwd is None the invocation is unchanged (the open-PDK sky130/gf180
+    decks include their model lib by ABSOLUTE path). chip-AGNOSTIC."""
     ngspice_bin = _resolve_ngspice(container) or "ngspice"
     prefix = f"cd {shlex.quote(cwd)} && " if cwd else ""
     cp = _docker(container,
@@ -1427,10 +1434,12 @@ def run_block(project, block, container, pdk, topology_override):
         return 2
 
     # GAP-ANALOG — run ngspice FROM the resolved model lib's directory for a
-    # custom / native family (for a farmed shim that IS the include farm, so the
-    # closure sits in cwd too). This is NOT what makes the shim's bare-name
-    # includes resolve — ngspice resolves those against the INCLUDING FILE's
-    # directory, which is why the closure is farmed; see _run_ngspice.
+    # custom / native family. For a FARMED shim that directory IS the include
+    # farm, which is load-bearing, not incidental: ngspice searches a relative
+    # target in the including file's directory OR in cwd (see _run_ngspice), and
+    # once it follows a farm symlink the including directory reverts to the
+    # PDK's real one — so cwd=farm is what carries every hop after the first.
+    # Co-location alone (cwd elsewhere) still fails; keep the two together.
     # The known open PDKs (sky130 / gf180) include their model lib by ABSOLUTE
     # path → sim_cwd stays None → byte-identical invocation preserved.
     sim_cwd = (str(Path(pdk_lib).parent)

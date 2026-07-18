@@ -1,12 +1,19 @@
 """Corner-sweep include resolution across a MULTI-DIRECTORY staged PDK.
 
 A PDK's composed corner shim reaches its prerequisite / device libs by BARE
-RELATIVE NAME. ngspice resolves such a target against the directory of the
-INCLUDING FILE — never against the process cwd — so when the staged libs span
-several directories the shim's includes are unresolvable from ANY cwd and every
-corner dies with `ERROR, library file … not found` / `exit(1)`.
-analog_pdk_deck_context farms the shim's include CLOSURE into one directory of
-symlinks so each hop resolves.
+RELATIVE NAME. Measured on ngspice-46 (both `.lib <file> <sec>` and `.include`):
+such a target is found iff it sits in the INCLUDING FILE's directory OR in the
+process cwd — those two, nothing else; there is no -I option and `set
+sourcepath` does not apply. So when a PDK stages its libs across several
+directories, a cross-directory hop satisfies neither and every corner dies with
+`ERROR, library file … not found` / `exit(1)`; and since no EXISTING directory
+holds the whole closure, no choice of cwd alone can fix it either.
+
+analog_pdk_deck_context therefore CREATES such a directory, farming the shim's
+include CLOSURE into one directory of symlinks. The sweep must then also RUN
+from that farm: co-location supplies the first hop, cwd supplies every hop after
+it (ngspice reverts to the PDK's real directory once it follows a farm symlink).
+Both halves are required — test_sim_cwd_is_the_farm pins the coupling.
 
 These tests pin BOTH halves: the farm resolves a legitimately-split staged set,
 AND it never silently substitutes a lib it had to guess at.
@@ -102,6 +109,19 @@ def test_farm_excludes_itself_from_git(tmp_path):
     res, _shim, _dev = _stage_split(tmp_path)
     APDC.custom_family_context(res, farm_dir=tmp_path / "farm")
     assert (tmp_path / "farm" / ".gitignore").read_text().strip() == "*"
+
+
+def test_sim_cwd_is_the_farm(tmp_path):
+    """The sweep runs ngspice from the model lib's parent. Once that lib is
+    farmed, the parent IS the farm — and it must stay that way: co-location gets
+    the first hop, cwd gets the rest, and each alone still fails."""
+    res, _shim, _dev = _stage_split(tmp_path)
+    ctx = APDC.custom_family_context(res, farm_dir=tmp_path / "farm")
+    sim_cwd = Path(ctx.model_lib).parent
+    assert sim_cwd == Path(ctx.include_farm["dir"])
+    # every closure member is reachable from that cwd by BARE NAME
+    for name in (Path(_shim).name, Path(_dev).name):
+        assert (sim_cwd / name).exists()
 
 
 # ── the load-bearing half: never guess ──────────────────────────────────────

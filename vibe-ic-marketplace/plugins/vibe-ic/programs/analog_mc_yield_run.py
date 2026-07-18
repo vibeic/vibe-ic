@@ -500,9 +500,14 @@ def run_block(project: Path, block: str, container: str, pdk: str,
         else:
             mc_include_line = f".include {mc_lib_ct}"
             mc_model_section = f"(whole lib {Path(native['mc_lib']).name})"
-        # GAP-ANALOG — run ngspice FROM the native statistical lib's directory so
-        # its RELATIVE `.lib`/`.include` targets (it composes the base device lib
-        # by bare name) resolve. Open-PDK path uses an ABSOLUTE lib → cwd None.
+        # GAP-ANALOG — run ngspice FROM the statistical lib's directory; for a
+        # FARMED lib that directory IS the include farm, which is load-bearing.
+        # Measured on ngspice-46: a RELATIVE `.lib` / `.include` target is found
+        # iff it sits in the INCLUDING FILE's directory OR in cwd (no -I option,
+        # `set sourcepath` does not apply). Co-locating the closure supplies the
+        # first hop, cwd=farm supplies the rest — each alone still fails. See
+        # analog_pdk_deck_context.build_lib_include_farm.
+        # Open-PDK path uses an ABSOLUTE lib → cwd None.
         mc_sim_cwd = str(Path(mc_lib_ct).parent)
         mc_allowed_files = {mc_lib_ct}
     else:
