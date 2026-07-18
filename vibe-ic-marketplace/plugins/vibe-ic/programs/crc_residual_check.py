@@ -26,6 +26,16 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List
 
+# Kimi-scale fix — this gate audits AUTHORED RTL SOURCE. Directory arguments
+# route through the shared collector (canonical phase2/stage1/rtl preferred;
+# generated netlist/sim/verify outputs + >8MB files excluded on fallback) so a
+# 342 MB emitted netlist can never enter the per-line regex scan again
+# (see _specrtl_common.rtl_source_files for the full scale rationale).
+try:
+    from _specrtl_common import rtl_source_files
+except ImportError:                      # packaged relative import
+    from ._specrtl_common import rtl_source_files
+
 
 @dataclass
 class Finding:
@@ -67,12 +77,12 @@ CRC_RELATED_RE = re.compile(r"\bcrc\w*\b", re.IGNORECASE)
 def analyze_tree(paths: List[Path]) -> List[Finding]:
     findings: List[Finding] = []
 
-    # Gather all Verilog files across input paths
+    # Gather all Verilog files across input paths (directories go through the
+    # shared authored-RTL collector; explicit files are honoured verbatim).
     files: List[Path] = []
     for p in paths:
         if p.is_dir():
-            files.extend(sorted(p.rglob("*.v")))
-            files.extend(sorted(p.rglob("*.sv")))
+            files.extend(rtl_source_files(p))
         elif p.is_file():
             files.append(p)
 
@@ -134,12 +144,13 @@ def main(argv: List[str]) -> int:
     all_findings = analyze_tree([Path(p) for p in args.paths])
     errors = [f for f in all_findings if f.severity == "error"]
 
-    # count files scanned
+    # count files scanned (same collector as analyze_tree so the stat matches
+    # what was actually scanned)
     fscanned = 0
     for p in args.paths:
         pp = Path(p)
         if pp.is_dir():
-            fscanned += sum(1 for _ in pp.rglob("*.v")) + sum(1 for _ in pp.rglob("*.sv"))
+            fscanned += len(rtl_source_files(pp))
         elif pp.is_file():
             fscanned += 1
 

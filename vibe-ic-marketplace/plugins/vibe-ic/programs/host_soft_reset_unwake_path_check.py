@@ -44,6 +44,16 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Optional
 
+# Kimi-scale fix — this gate audits AUTHORED RTL SOURCE. Collection routes
+# through the shared collector (canonical phase2/stage1/rtl preferred;
+# generated netlist/sim/verify outputs + >8MB files excluded on fallback) so a
+# 342 MB emitted netlist can never enter the comment-strip/regex scan again
+# (see _specrtl_common.rtl_source_files for the full scale rationale).
+try:
+    from _specrtl_common import rtl_source_files
+except ImportError:                      # packaged relative import
+    from ._specrtl_common import rtl_source_files
+
 _STATE_TOKENS = (
     "awake", "woken", "active", "enable", "enabled", "started", "live",
     "running", "armed", "ready_lock", "on_state",
@@ -78,10 +88,9 @@ class Finding:
 
 
 def _list_rtl_files(rtl_dir: Path) -> List[Path]:
-    out: List[Path] = []
-    for ext in (".v", ".sv"):
-        out.extend(sorted(rtl_dir.rglob(f"*{ext}")))
-    return out
+    # Kimi-scale fix: shared authored-RTL collector (both audit() and
+    # _build_report()'s files_scanned count go through this single point).
+    return rtl_source_files(rtl_dir)
 
 
 def _strip_comments(text: str) -> str:
