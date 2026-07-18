@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import pytest
 import subprocess
 import sys
 from pathlib import Path
@@ -245,3 +246,129 @@ endmodule
     r = _run([str(proj)])
     assert r.returncode == 1, r.stdout
     assert "OTP_NOT_LOADED_ON_FPGA" in r.stdout
+
+
+# ===========================================================================
+# The OBSERVABLE — allocated memory bits decide, warning prose does not.
+#
+# Prior behaviour keyed the verdict on a literal "Total memory bits" label and
+# 8 warning phrases. A Quartus build that allocated ZERO memory and emitted
+# `Info (276013): RAM logic ... cannot be implemented as a memory block`
+# reported "PASS — BRAM/ROM init declarations are loaded into bitstream",
+# because neither string matched. These pin that it cannot happen again.
+# ===========================================================================
+_ROM_RTL = {
+    "otp_rom.v": """\
+module otp_rom(input clk, input [6:0] addr, output reg [7:0] q);
+  reg [7:0] mem [0:127];
+  initial $readmemh("rom.hex", mem);
+  always @(posedge clk) q <= mem[addr];
+endmodule
+"""
+}
+_CLEAN_MAP = "; clean compilation ;\n"
+
+
+def _rom_project(tmp_path, fit_summary, map_rpt=_CLEAN_MAP):
+    proj = _make_project(
+        tmp_path, rtl_files=dict(_ROM_RTL),
+        fit_summary=fit_summary, map_rpt=map_rpt,
+        qsf="set_global_assignment -name SEARCH_PATH ../rtl\n",
+    )
+    (proj / "phase2" / "stage1" / "rtl" / "rom.hex").write_text("00\n")
+    return proj
+
+
+# --- POSITIVE GATE: a genuinely loaded image still PASSes, whatever label ---
+@pytest.mark.parametrize("fit_summary", [
+    "Total memory bits : 1024 / 1,677,312 ( 0 % )\n",   # the legacy label
+    "Total block memory bits : 1024 / 1,677,312\n",     # a renamed label
+    "M9K blocks : 3 / 182\n",                           # block-count form
+    "; Total memory bits ; 2048 / 1,677,312 ;\n",       # .rpt table form
+])
+def test_allocated_memory_still_passes_any_label(tmp_path, fit_summary):
+    r = _run([str(_rom_project(tmp_path, fit_summary))])
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+# --- PROVEN-NEGATIVE: zero allocation FAILs however the label is worded ---
+@pytest.mark.parametrize("fit_summary", [
+    "Total memory bits : 0 / 1,677,312\n",
+    "Total block memory bits : 0 / 1,677,312\n",        # the label that slipped
+    "; Total memory bits ; 0 / 1,677,312 ;\n",
+    "Total RAM Blocks : 0 / 182\n",
+])
+def test_zero_allocation_fails_any_label(tmp_path, fit_summary):
+    r = _run([str(_rom_project(tmp_path, fit_summary))])
+    assert r.returncode == 1, f"zero allocation scored PASS: {r.stdout}"
+    assert "OTP_NOT_LOADED_ON_FPGA" in r.stdout
+
+
+# --- PROVEN-NEGATIVE: the message ID condemns whatever prose trails it ---
+@pytest.mark.parametrize("map_line", [
+    # the real field failure, REWORDED so no legacy phrase matches
+    'Info (276013): RAM logic "otp:u|mem" cannot be implemented as a memory '
+    'block because the initialization file format is unsupported\n',
+    # wording no pattern table could have anticipated
+    "Info (276014): 1 memory primitive was demoted to registers by the mapper\n",
+])
+def test_uninferred_message_id_fails_regardless_of_wording(tmp_path, map_line):
+    """Quartus message IDs are stable across version, wording and locale; the
+    prose after them is not. The ID decides."""
+    proj = _rom_project(tmp_path, "Total memory bits : 1024 / 1,677,312\n",
+                        map_rpt=map_line)
+    r = _run([str(proj)])
+    assert r.returncode == 1, f"uninferred RAM scored PASS: {r.stdout}"
+    assert "UNINFERRED_RAM_MSG_ID" in r.stdout
+
+
+# --- FAIL-SAFE: allocation not establishable is never a PASS ---
+@pytest.mark.parametrize("fit_summary,map_rpt", [
+    ("Fitter completed successfully.\n", _CLEAN_MAP),   # no resource line
+    ("$%^&* garbled\n", "~~~ nonsense ~~~\n"),          # unparseable reports
+])
+def test_unverifiable_allocation_is_fail_not_pass(tmp_path, fit_summary, map_rpt):
+    """A PASS requires positive evidence that memory was allocated. Absence of
+    a recognised warning is not evidence."""
+    r = _run([str(_rom_project(tmp_path, fit_summary, map_rpt))])
+    assert r.returncode == 1, f"unverifiable build scored PASS: {r.stdout}"
+    assert "BRAM_LOAD_UNVERIFIABLE" in r.stdout
+
+
+def test_no_build_yet_still_warns_not_fails(tmp_path):
+    """No false alarm before the first build: 'build has not run' stays a WARN
+    and never claims the image loaded."""
+    proj = _make_project(tmp_path, rtl_files=dict(_ROM_RTL))
+    r = _run([str(proj)])
+    assert r.returncode == 0
+    assert "WARN" in r.stdout and "build has not run yet" in r.stdout
+
+
+def test_no_rom_in_rtl_still_skips(tmp_path):
+    """A project with no memory intent is untouched by the fail-safe."""
+    proj = _make_project(
+        tmp_path,
+        rtl_files={"adder.v": "module adder(input a, output b);\n"
+                              "assign b = a;\nendmodule\n"},
+        fit_summary="Fitter completed successfully.\n",
+    )
+    r = _run([str(proj)])
+    assert r.returncode == 0
+    assert "SKIP" in r.stdout
+
+
+def test_memory_resource_parser_is_label_agnostic():
+    """The parser harvests the NUMBER under whatever label Quartus prints."""
+    sys.path.insert(0, str(PROG.parent))
+    import bram_init_file_actually_loaded_check as m
+    rows = m.parse_memory_resources(
+        "Total logic elements : 500 / 49,760\n"       # not memory -> ignored
+        "Total memory bits : 1024 / 1,677,312\n"
+        "Total block memory bits : 0 / 1,677,312\n"
+        "; M9K blocks ; 3 / 182 ;\n"
+    )
+    labels = {r[0].lower() for r in rows}
+    assert not any("logic elements" in x for x in labels)
+    assert any("total memory bits" in x for x in labels)
+    assert any("m9k" in x for x in labels)
+    assert max(r[1] for r in rows) == 1024
