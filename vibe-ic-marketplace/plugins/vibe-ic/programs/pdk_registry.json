@@ -205,6 +205,26 @@
       }
     },
     {
+      "name": "nangate45",
+      "process_node_nm": 45,
+      "open_source": true,
+      "_comment": "NanGate / FreePDK45 Open Cell Library (Si2, Apache-2.0; based on NCSU FreePDK45). A GENERIC, NON-FOUNDRY 45nm standard-cell library: full LEF + Liberty + GDS, so synth / floorplan / PnR / CTS / STA / area-timing estimation all run (this is the same enablement the open 45nm flows use). The KLayout FreePDK45 DRC deck (FreePDK45.lydrc) is an EDUCATIONAL rule-check, NOT a manufacturable foundry sign-off; a CDL source netlist ships for structural LVS but there is NO KLayout LVS deck (lvs_deck=null). tapeout_capable=false: FreePDK45 is a fictional process with no real foundry, no manufacturable GDS layer stack, and no foundry sign-off — use it for learning, RTL-to-GDS flow bring-up, and area/timing benchmarking, never for production silicon. Container assets are the OpenROAD-flow-scripts nangate45 platform (v3.0), re-staged into the open_pdks-style libs.ref/<scl>/ layout the resolvers expect (see vibeic-eda Dockerfile).",
+      "tapeout_capable": false,
+      "container_path": "/foss/pdks/nangate45",
+      "liberty_glob": "libs.ref/NangateOpenCellLibrary/lib/NangateOpenCellLibrary_typical.lib",
+      "tech_lef_glob": "libs.ref/NangateOpenCellLibrary/techlef/NangateOpenCellLibrary.tech.lef",
+      "cell_lef_glob": "libs.ref/NangateOpenCellLibrary/lef/NangateOpenCellLibrary.lef",
+      "cell_gds_glob": "libs.ref/NangateOpenCellLibrary/gds/NangateOpenCellLibrary.gds",
+      "site": "FreePDK45_38x28_10R_NP_162NW_34O",
+      "metal_prefix": "metal",
+      "clk_buf_cell": "CLKBUF_X1",
+      "clk_buf_root_cell": "CLKBUF_X3",
+      "drc_deck": "libs.tech/klayout/drc/FreePDK45.lydrc",
+      "lvs_deck": null,
+      "cdl_netlist": "libs.tech/cdl/NangateOpenCellLibrary.cdl",
+      "owner_plugin": "vibe-ic"
+    },
+    {
       "name": "custom_auto_detect",
       "_comment": "Generic placeholder \u2014 phase3_one_shot_runner.py auto-detects site/metal_prefix/clk_buf from project's input/pdk/ when no named PDK matches. This entry just documents the auto-detect heuristics.",
       "open_source": false,
