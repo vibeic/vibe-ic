@@ -25,6 +25,17 @@ native Monte-Carlo 100 % yield).
   the tools read the models by PATH — only tool OUTPUT is reported.
 - NEVER "silicon-proven". Simulated results against released device + statistical
   models; foundry sign-off is a separate human-owned gate.
+- **HV LDMOS models are reduced-fidelity** (per the ngspice-shim WARNING). This IC
+  uses ONLY the LV (1.8 V) CMOS core devices — no HV path is claimed. The HV
+  reduced-fidelity caveat is disclosed and does not affect these results.
+
+---
+
+## /benchmark-verify — six-pillar verdict (numbers-only)
+Pillar-5 (analog closed-loop) is the focus and is **FAIL**: the analog corner-sweep
+gate produced **no scoreable output** (rc=2, `corner_results.json` not written, so
+`analog_corner_sweep_check` did not run). Corners executed **0/15** for BOTH
+blocks; MC not reached. Other pillars unchanged from baseline scope (table below).
 
 ---
 
