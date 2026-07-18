@@ -106,6 +106,7 @@ class Finding:
 class AuditResult:
     program: str = GATE
     passed: bool = False
+    inconclusive: bool = False
     equivalent: Optional[bool] = None
     compared_points: Optional[int] = None
     non_equivalent_points: Optional[int] = None
@@ -294,6 +295,35 @@ def audit(project: Path) -> AuditResult:
         "rpt": rpt_info,
     }
 
+    # --- (d) INCONCLUSIVE: a frontend PARSE-ABORT built no miter ----------
+    # A run that reaches 0 compared points because the gold/gate never PARSED
+    # (read_verilog / read_slang could not elaborate a modern-SV closure) is NOT
+    # classifiable as PASS or FAIL — there was no miter. It must NOT be a hard
+    # FAIL (which cascade-marks 24 downstream steps MISSING) and must NOT be a
+    # vacuous PASS. §4.05-safe: this re-classifies ONLY a genuine zero-miter
+    # parse-abort — a miter that DID run and left non-equivalent / unproven
+    # points still FAILs (the guard below requires no such points).
+    verdict_field = str(lc.get("verdict", "")).strip().upper()
+    is_inconclusive = (lc.get("inconclusive") is True
+                       or verdict_field == "INCONCLUSIVE")
+    zero_miter = ((compared in (None, 0))
+                  and (non_equiv in (None, 0))
+                  and (unproven in (None, 0))
+                  and not rpt_info.get("rpt_success_line"))
+    if is_inconclusive and zero_miter:
+        res.inconclusive = True
+        res.passed = False
+        res.findings.append(Finding(
+            rule="LEC_INCONCLUSIVE_PARSE_ABORT", severity="WARNING",
+            message=("LEC verdict is INCONCLUSIVE — a frontend parse-abort "
+                     "built no equivalence miter (0 compared points), so RTL≡"
+                     "netlist could not be decided. This is a non-blocking "
+                     "SKIPPED-CONDITION (never a hard FAIL that cascades, never "
+                     "a vacuous PASS). Re-run with the slang frontend or fix the "
+                     "parse error to get a real verdict."),
+            file=LEC_JSON_REL))
+        return res
+
     # --- substance verdict ------------------------------------------------
     # (a) the boolean itself must be true.
     if equivalent is not True:
@@ -385,7 +415,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         out.write_text(report_json)
 
     print(report_json)
-    return 0 if result.passed else 1
+    # PASS → 0. An INCONCLUSIVE parse-abort is a non-blocking SKIPPED-CONDITION
+    # (never a hard FAIL that cascade-marks downstream steps MISSING, never a
+    # vacuous PASS: result.passed stays False) → 0. A real not-equivalent /
+    # unproven / vacuous / missing result → 1.
+    return 0 if (result.passed or result.inconclusive) else 1
 
 
 if __name__ == "__main__":

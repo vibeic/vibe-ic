@@ -11730,15 +11730,16 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                     written.append(str(aging_sta_rpt))
         except Exception as exc:
             notes.append(f"aging STA emit failed: {exc}")
-    # (c) Dynamic IR — v1.3.96: VCD-VECTORED PSM (real OSS engine). OpenROAD
-    #     `read_vcd` + activity-weighted `analyze_power_grid` gives an IR-drop
-    #     under REAL switching that the vectorless-static default (Step 24)
-    #     cannot capture (verified on spm: a peak-switching VCD -> 4.4x static).
-    #     Emits reports/phase3/dynamic_ir.json with the real worst-IR when a
-    #     design VCD exists, else an HONEST skip JSON (no fabricated number) —
-    #     the Step-24 dynamic_ir_drop_check gate SKIPs on the marker. Full di/dt
-    #     transient solve stays a documented commercial gap
-    #     (ADVANCED_NODE_EXTENSION.md).
+    # (c) Dynamic IR — REAL TRANSIENT (di/dt) PSM solve. The vibeic-eda OpenROAD
+    #     fork ships `analyze_power_grid -transient` (static DC operating point +
+    #     backward-Euler RC time-stepping under a vectorless per-clock triangular
+    #     current model; quasi-static when no on-die cap). The emitter GENERATES
+    #     the real worst DYNAMIC droop (no VCD needed — di/dt is derived from the
+    #     SDC clock period), distinct from the static Step-24 number, into
+    #     reports/phase3/dynamic_ir.json {max_dynamic_drop_mv, vdd_v}; the Step-24
+    #     dynamic_ir_drop_check gate reads it. HONEST SKIP only on no-PDN /
+    #     missing-inputs (never a fabricated number). The per-instance VECTORED
+    #     DVD (SAIF/VCD + package L·di/dt) is the accuracy tier tracked separately.
     dyn_ir_json = rpt_phase3 / "dynamic_ir.json"
     if primary_def.is_file() and not dyn_ir_json.is_file():
         try:
@@ -11755,11 +11756,11 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                  "--project", str(project), "--out", str(dyn_ir_json),
                  "--static-json", str(rpt_phase3 / "ir_drop.json"),
                  "--container", container] + _dyn_lef_args,
-                timeout=600, check=False, capture_output=True, text=True)
+                timeout=1800, check=False, capture_output=True, text=True)
             if dyn_ir_json.is_file():
                 written.append(str(dyn_ir_json))
         except Exception as exc:
-            notes.append(f"dynamic IR (VCD-vectored) emit failed: {exc}")
+            notes.append(f"dynamic IR (transient PSM) emit failed: {exc}")
     # (d) Thermal power-density screen — mostly WIRING (power report already
     #     exists) → reports/phase3/thermal_screen.json.
     thermal_json = rpt_phase3 / "thermal_screen.json"
@@ -13964,22 +13965,44 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
     if strip_ports:
         notes.append("post-layout LEC: stripping gate-only supply ports "
                      f"{','.join(strip_ports)} before equiv_make.")
-    ys = mod.build_yosys_equiv_script(gold_c, gate_c, lib_c, top,
-                                      blackbox_v=blackbox,
-                                      strip_gate_ports=strip_ports)
     out_json.parent.mkdir(parents=True, exist_ok=True)
     ys_path = out_json.parent / f"lec_post_{top}.ys"
-    ys_path.write_text(ys)
     ys_c = _to_container_path(str(ys_path), container)
     log_c = _to_container_path(str(out_json.parent / "lec_post_layout.log"),
                                container)
-    cmd = (f"export PATH={TOOLS_IN_CONTAINER}/yosys/bin:"
-           f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
-           f"yosys -s {ys_c} 2>&1 | tee {log_c}")
-    rc, out, err = _docker_exec(container, cmd, marker=ys_c)
     log_host = out_json.parent / "lec_post_layout.log"
-    log_text = (log_host.read_text(errors="replace")
+
+    def _run_lec(functional_lib: bool):
+        """Build the recipe (functional or -lib), run yosys, return log text."""
+        ys = mod.build_yosys_equiv_script(gold_c, gate_c, lib_c, top,
+                                          blackbox_v=blackbox,
+                                          strip_gate_ports=strip_ports,
+                                          functional_lib=functional_lib)
+        ys_path.write_text(ys)
+        cmd = (f"export PATH={TOOLS_IN_CONTAINER}/yosys/bin:"
+               f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+               f"yosys -s {ys_c} 2>&1 | tee {log_c}")
+        rc, out, err = _docker_exec(container, cmd, marker=ys_c)
+        text = (log_host.read_text(errors="replace")
                 if log_host.is_file() else (out or "") + (err or ""))
+        return rc, text
+
+    # SOUNDNESS: prefer the FUNCTIONAL read_liberty recipe (proves each cell's
+    # function; the `-lib` blackbox path assumes matched cells equal → false-
+    # passes NAND≡NOR). Functional read ABORTS on a pre-fork yosys ("Missing
+    # function on output" at an ICG cell); on that signal fall back to `-lib` and
+    # RECORD which path ran (provenance). Auto-upgrades once the fork image lands.
+    lec_recipe = "functional"
+    functional_lib = True
+    rc, log_text = _run_lec(functional_lib=True)
+    if mod.functional_read_liberty_aborted(log_text):
+        notes.append("post-layout LEC: functional read_liberty unavailable "
+                     "(pre-fork yosys) → falling back to -lib blackbox recipe "
+                     "(UNSOUND path recorded; upgrades to functional after the "
+                     "fork image rebuild).")
+        lec_recipe = "blackbox_lib_fallback"
+        functional_lib = False
+        rc, log_text = _run_lec(functional_lib=False)
     parsed = mod.parse_equiv_log(log_text)
     doc = {
         "tool": "yosys-equiv",
@@ -13996,6 +14019,13 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
         "verdict": parsed.get("verdict"),
         "skipped": False,
         "yosys_rc": rc,
+        # SOUNDNESS provenance: which Liberty-read recipe actually ran. The
+        # "functional" path proves each cell's function (sound); the
+        # "blackbox_lib_fallback" path (pre-fork yosys) assumes matched cells
+        # equal (unsound — recorded so a signoff reviewer sees it and it
+        # upgrades to functional after the fork image rebuild).
+        "lec_recipe": lec_recipe,
+        "functional_read_liberty": functional_lib,
         "scope": ("re-proves the FINAL routed/ECO netlist == the "
                   f"{gold_kind} reference after CTS/PnR/ECO/fill "
                   "(Step-13 only proved RTL==synth)."),
@@ -15793,42 +15823,6 @@ exit
     notes.append(f"aging STA: worst slack {worst} ns under generic aging derate "
                  f"late={aging_late_derate:.2f} (disclosed margin)")
     return True
-
-
-def _emit_dynamic_ir_stance(project: Path, top: str, pdk: PdkConfig,
-                            container: str, out_json: Path,
-                            notes: List[str]) -> bool:
-    """Dynamic (transient) IR-drop — HONEST BLOCKED disclosure.
-
-    OpenROAD PSM `analyze_power_grid` is STATIC-only (`-net [-corner]
-    [-error_file]`, plus `-enable_em`); there is NO transient/dynamic (di/dt)
-    mode in the OSS flow, and no OSS tool produces a vectorless transient droop
-    number. §4.05: rather than FABRICATE a dynamic-IR number a tool did not
-    produce, this writes a DISCLOSURE stance (reports/phase3/dynamic_ir_stance.
-    json) and deliberately does NOT write dynamic_ir.json — so the signoff
-    ladder's dynamic-IR tier SKIPs (NOT_RUN) honestly. Returns False (no
-    gate-consumable dynamic-IR report was produced — by design)."""
-    out_json.parent.mkdir(parents=True, exist_ok=True)
-    out_json.write_text(json.dumps({
-        "signoff_dimension": "dynamic_transient_ir_drop",
-        "status": "BLOCKED_NO_OSS_TRANSIENT_ENGINE",
-        "dynamic_ir_report_emitted": False,
-        "reason": ("OpenROAD PSM analyze_power_grid is STATIC-only (no "
-                   "transient/dynamic di/dt mode); no OSS tool produces a "
-                   "vectorless transient voltage-droop number."),
-        "what_would_close_it": ("a transient PSM/DVD engine (commercial "
-                                "RedHawk-SC / Voltus, or an OpenROAD PSM "
-                                "transient extension) driven by a VCD/SAIF "
-                                "switching profile → reports/phase3/"
-                                "dynamic_ir.json {max_dynamic_drop_mv, vdd_v}."),
-        "disclosure": ("§4.05: no fabricated dynamic-IR number. The static IR "
-                       "sign-off (reports/phase3/ir_drop.json) stands; the "
-                       "dynamic-IR ladder tier SKIPs honestly until a transient "
-                       "engine is wired."),
-    }, indent=2) + "\n")
-    notes.append("dynamic IR: OSS PSM is static-only — dynamic_ir.json NOT "
-                 "fabricated; stance disclosed, ladder tier SKIPs honestly.")
-    return False
 
 
 def _emit_thermal_screen(project: Path, top: str, pdk: PdkConfig,

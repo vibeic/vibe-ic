@@ -348,3 +348,121 @@ def test_discover_liberty_bounded_fallback_under_input(tmp_path):
 def test_discover_liberty_none_when_project_ships_no_lib(tmp_path):
     (tmp_path / "input").mkdir()
     assert lec_run._discover_project_liberty(tmp_path) is None
+
+
+# ---------------------------------------------------------------------------
+# (c) SLANG gold-read fallback — build_equiv_script gold_frontend param.
+# The built-in `read_verilog -sv` gold read parse-aborts on a real SV closure
+# (package-scope refs, unpacked-array ports); the gold must then be read with
+# the SAME `read_slang` SV-2017 frontend the synth step auto-uses.
+# ---------------------------------------------------------------------------
+def test_gold_frontend_default_is_read_verilog():
+    s = lec_run.build_equiv_script(["/p/rtl/a.sv"], "/p/synth/n.v", "top", None)
+    assert "read_verilog -sv /p/rtl/a.sv" in s        # default gold read
+    assert "read_slang" not in s
+
+
+def test_gold_frontend_slang_emits_read_slang_with_top_and_defines():
+    s = lec_run.build_equiv_script(
+        ["/p/rtl/a.sv", "/p/rtl/b.sv"], "/p/synth/n.v", "top", None,
+        gold_frontend="slang")
+    assert ("read_slang /p/rtl/a.sv /p/rtl/b.sv --top top "
+            "-DSIMULATION -DYOSYS") in s
+    assert "read_verilog -sv /p/rtl/a.sv" not in s     # gold is slang now
+    # gate side unchanged (plain read_verilog for a mapped netlist)
+    assert "read_verilog" in s
+    # no plugin load when read_slang is built-in (default slang_prefix "")
+    assert "plugin -i slang" not in s
+
+
+def test_gold_frontend_slang_emits_plugin_load_when_needed():
+    s = lec_run.build_equiv_script(
+        ["/p/rtl/a.sv"], "/p/synth/n.v", "top", None,
+        gold_frontend="slang", slang_prefix="plugin -i slang; ")
+    assert "plugin -i slang\n" in s                    # own command line
+    assert s.index("plugin -i slang") < s.index("read_slang")
+
+
+# ---------------------------------------------------------------------------
+# (d) parse-abort → INCONCLUSIVE, never a false FAIL. A frontend parse-abort
+# built NO miter (0 compared points) → not classifiable as PASS or FAIL. A
+# genuine miter that runs and leaves unproven points still FAILs.
+# ---------------------------------------------------------------------------
+_FRONTEND_ABORT_OUTPUT = """\
+Executing Verilog-2005 frontend: /p/rtl/ibex_alu.sv
+/p/rtl/ibex_alu.sv:10: ERROR: syntax error, unexpected TOK_PACKAGE
+"""
+
+
+def test_is_frontend_parse_abort_detector():
+    assert lec_run.is_frontend_parse_abort(_FRONTEND_ABORT_OUTPUT) is True
+    assert lec_run.is_frontend_parse_abort("Can't open input file `x.v'") is True
+    # a genuine mismatch log (miter ran) is NOT a frontend parse-abort
+    assert lec_run.is_frontend_parse_abort(MISMATCH_OUTPUT) is False
+    assert lec_run.is_frontend_parse_abort("") is False
+
+
+def test_parse_frontend_abort_is_inconclusive_not_fail():
+    p = lec_run.parse_equiv_output(_FRONTEND_ABORT_OUTPUT)
+    assert p["verdict"] == "INCONCLUSIVE"       # NOT "FAIL"
+    assert p["equivalent"] is False
+    assert p["parse_error"] is True
+    assert p["proven"] is None and p["unproven"] is None
+
+
+def test_parse_empty_stays_fail_not_inconclusive():
+    # empty output carries NO frontend parse-abort signature → still FAIL
+    # (a genuine could-not-run-the-tool, not a truthful INCONCLUSIVE).
+    p = lec_run.parse_equiv_output("")
+    assert p["verdict"] == "FAIL"
+
+
+def test_genuine_mismatch_still_fails_not_inconclusive():
+    # §4.05-safe: a miter that RAN and left unproven points is a real FAIL —
+    # the INCONCLUSIVE reclassification is only for a ZERO-miter parse-abort.
+    p = lec_run.parse_equiv_output(MISMATCH_OUTPUT)
+    assert p["verdict"] == "FAIL"
+
+
+def test_build_report_marks_inconclusive():
+    p = lec_run.parse_equiv_output(_FRONTEND_ABORT_OUTPUT)
+    r = lec_run.build_report(p, "chip_top", "netlist.v", None)
+    assert r["inconclusive"] is True
+    assert r["verdict"] == "INCONCLUSIVE"
+    # a normal PASS report is not inconclusive
+    r2 = lec_run.build_report(lec_run.parse_equiv_output(PASS_OUTPUT),
+                              "chip_top", "netlist.v", None)
+    assert r2["inconclusive"] is False
+
+
+# ---------------------------------------------------------------------------
+# (d, consumer) the downstream gate treats an INCONCLUSIVE report as a
+# non-blocking SKIPPED-CONDITION (rc 0), never a hard FAIL nor a vacuous PASS.
+# ---------------------------------------------------------------------------
+def test_inconclusive_report_is_non_blocking_in_gate(tmp_path):
+    p = lec_run.parse_equiv_output(_FRONTEND_ABORT_OUTPUT)
+    r = lec_run.build_report(p, "chip_top", "netlist.v", None)
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "lec.json").write_text(json.dumps(r))
+    (tmp_path / "reports" / "lec.rpt").write_text(_FRONTEND_ABORT_OUTPUT)
+    res = gate.audit(tmp_path)
+    assert res.inconclusive is True
+    assert res.passed is False                  # never a vacuous PASS
+    rules = {f.rule for f in res.findings}
+    assert "LEC_INCONCLUSIVE_PARSE_ABORT" in rules
+    assert "LEC_NOT_EQUIVALENT" not in rules     # not the hard-FAIL path
+    assert gate.main([str(tmp_path)]) == 0       # non-blocking → rc 0
+
+
+def test_inconclusive_label_with_real_mismatch_still_fails(tmp_path):
+    # a report LABELED inconclusive but carrying unproven>0 (a real miter
+    # mismatch) must NOT get the free pass — the zero-miter guard forces FAIL.
+    doc = {"verdict": "INCONCLUSIVE", "inconclusive": True,
+           "equivalent": False, "compared_points": 33,
+           "unproven_points": 7, "non_equivalent_points": 0}
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "lec.json").write_text(json.dumps(doc))
+    res = gate.audit(tmp_path)
+    assert res.inconclusive is False
+    assert res.passed is False
+    assert gate.main([str(tmp_path)]) == 1       # real unproven → hard FAIL
