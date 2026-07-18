@@ -214,6 +214,48 @@ def test_json_report_directory_is_searched(tmp_path):
     assert T.classify(CLEAN, json_report=tmp_path) == "MISMATCH"
 
 
+# ── DESIGN-CHOSEN DATA may not impersonate the verdict token ──────────────
+# Slicing after the `Final result:` marker is not sufficient on its own: the
+# sliced region still carries tool- and design-supplied DATA (paths, cell and
+# net names), and a token inside that data can impersonate the structural token.
+# Both of these returned a FALSE MATCH before the verdict phrase was anchored.
+@pytest.mark.parametrize("blob", [
+    # A SystemVerilog ESCAPED identifier legally contains spaces, so a
+    # design-chosen name can spell the verdict phrase exactly.
+    r"Final result: comparison ended for cell \circuits match uniquely ",
+    # Same, via an environment-chosen path.
+    "Final result: read from /work/circuits match uniquely/top.spice",
+    # And in the pin table rather than the terminal line.
+    "Final result: ???\n" + r"\circuits match uniquely  |(no matching pin)",
+])
+def test_design_chosen_names_cannot_spell_their_way_to_a_pass(blob):
+    """The design names its own nets; it must never name its way to a pass."""
+    assert T.classify(blob) != "MATCH"
+
+
+@pytest.mark.parametrize("line", [
+    "Final result: Circuits match uniquely.",
+    "Final result: Netlists match uniquely.",
+    "Final result:Circuits match uniquely.",
+    "Final result:   Netlists match uniquely.",
+])
+def test_anchoring_preserves_genuine_netgen_terminal_wording(line):
+    """Anchoring must not cost us real passes — netgen's own spacing variants."""
+    assert T.classify(line) == "MATCH"
+
+
+# ── terminal lines are judged by UNANIMITY, not first/last occurrence ──────
+@pytest.mark.parametrize("blob", [
+    "Final result: Circuits match uniquely.\nFinal result: ???",
+    "Final result: ???\nFinal result: Circuits match uniquely.",
+])
+def test_every_terminal_line_must_read_clean_regardless_of_order(blob):
+    """Tools re-enter passes and print terminal lines more than once, so any
+    'take the first/last occurrence' rule is one re-entry away from reading the
+    wrong verdict. Every terminal line must agree."""
+    assert T.classify(blob) != "MATCH"
+
+
 # ── embedded-report scanning is itself fail-safe ──────────────────────────
 def test_worst_verdict_wins_when_several_reports_are_embedded():
     """A guard never averages: the most adverse embedded verdict decides."""
