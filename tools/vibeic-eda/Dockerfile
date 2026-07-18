@@ -142,6 +142,37 @@ RUN git clone https://github.com/vibeic/cocotb.git           /tb/cocotb         
  && git clone https://github.com/vibeic/pyuvm.git            /tb/pyuvm           && git -C /tb/pyuvm           checkout ${PYUVM_REF} \
  && git clone https://github.com/vibeic/sby.git              /tb/sby             && git -C /tb/sby             checkout ${SBY_REF}
 
+# ---------------------------------------------------------------------------
+# Stage 9: NanGate45 / FreePDK45 open 45nm enablement (Si2/NanGate, Apache-2.0)
+# ---------------------------------------------------------------------------
+# The plugin's three PDK resolvers (programs/pdk_registry.json `nangate45`,
+# mcp-eda pdkConfig(), phase3_one_shot_runner _detect_pdk) resolve container
+# assets at /foss/pdks/nangate45 in the open_pdks-style libs.ref/<scl>/
+# layout. The iic-osic-tools base ships no 45nm enablement, so stage the
+# OpenROAD-flow-scripts nangate45 platform (std-cell lib/lef/gds + FakeRAM45
+# SRAM macro lib/lef + the EDUCATIONAL FreePDK45 KLayout deck + CDL) here.
+# NOT a foundry sign-off enablement (pdk_registry.json: tapeout_capable=false).
+FROM alpine/git AS nangate45-src
+ARG ORFS_REF=f255c15b3dd4362a704b6af9f617b4091bdd4e6a
+RUN git clone --filter=blob:none --no-checkout \
+      https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts.git /orfs \
+ && git -C /orfs sparse-checkout init --cone \
+ && git -C /orfs sparse-checkout set flow/platforms/nangate45 \
+ && git -C /orfs checkout ${ORFS_REF}
+RUN P=/orfs/flow/platforms/nangate45; S=/stage/nangate45; \
+    SCL=$S/libs.ref/NangateOpenCellLibrary; \
+    mkdir -p $SCL/lib $SCL/techlef $SCL/lef $SCL/gds \
+             $S/libs.tech/klayout/drc $S/libs.tech/cdl && \
+    cp $P/lib/NangateOpenCellLibrary_typical.lib $SCL/lib/ && \
+    cp $P/lib/fakeram45_*.lib $SCL/lib/ && \
+    cp $P/lef/NangateOpenCellLibrary.tech.lef $SCL/techlef/ && \
+    cp $P/lef/NangateOpenCellLibrary.macro.mod.lef $SCL/lef/NangateOpenCellLibrary.lef && \
+    cp $P/lef/fakeram45_*.lef $SCL/lef/ && \
+    cp $P/gds/NangateOpenCellLibrary.gds $SCL/gds/ && \
+    cp $P/drc/FreePDK45.lydrc $S/libs.tech/klayout/drc/ && \
+    cp $P/FreePDK45.lyt $P/FreePDK45.lyp $S/libs.tech/klayout/ && \
+    cp $P/cdl/NangateOpenCellLibrary.cdl $S/libs.tech/cdl/
+
 # ===========================================================================
 # Runtime: layer the patched tools onto the iic-osic-tools base.
 # ===========================================================================
@@ -152,6 +183,8 @@ LABEL org.opencontainers.image.source="https://github.com/vibeic"
 
 # /foss/tools is root-owned and the base runs as user 1000 — become root to mutate it.
 USER root
+# --- NanGate45 / FreePDK45 open 45nm enablement (Stage 9 above) ---
+COPY --from=nangate45-src /stage/nangate45 /foss/pdks/nangate45
 # --- vibeic/OpenROAD (native 24.04 build → RUNPATH /opt/or-tools, no lib bundling) ---
 COPY --from=openroad-builder /opt/or-tools /opt/or-tools
 COPY --from=openroad-builder /src/build/bin/openroad /foss/tools/openroad/bin/openroad
