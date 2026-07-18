@@ -33,6 +33,17 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional
 
+# Kimi-scale fix — this WARN-tier gate audits AUTHORED RTL SOURCE. Collection
+# routes through the shared collector (canonical phase2/stage1/rtl preferred;
+# generated netlist/sim/verify outputs + >8MB files excluded on fallback) so a
+# 342 MB emitted netlist can never enter the per-constant reference scan again
+# (see _specrtl_common.rtl_source_files for the full scale rationale). The
+# .timing_constant_regex config read and the --regex override are untouched.
+try:
+    from _specrtl_common import rtl_source_files
+except ImportError:                      # packaged relative import
+    from ._specrtl_common import rtl_source_files
+
 DEFAULT_TIMING_REGEX = r"^T_[A-Z0-9_]+_(CYC|TICKS|NS|US|MS)$"
 
 DEFINE_RE = re.compile(r"^\s*`define\s+(\w+)")
@@ -58,8 +69,10 @@ class AuditResult:
 
 
 def discover_rtl_files(base: Path) -> List[Path]:
-    exts = {".v", ".sv", ".vh", ".svh"}
-    return sorted(p for p in base.rglob("*") if p.suffix.lower() in exts)
+    # Kimi-scale fix: shared authored-RTL collector. This gate has always
+    # also scanned *.vh/*.svh headers (`define/localparam timing constants
+    # live there), so the suffix set is widened accordingly.
+    return rtl_source_files(base, exts=("*.v", "*.sv", "*.vh", "*.svh"))
 
 
 def load_custom_regex(base: Path) -> Optional[str]:

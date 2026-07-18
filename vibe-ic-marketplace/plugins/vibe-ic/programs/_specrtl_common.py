@@ -98,7 +98,8 @@ RTL_SOURCE_EXCLUDED_DIR_PARTS = frozenset({
 RTL_SOURCE_MAX_BYTES = 8 * 1024 * 1024
 
 
-def rtl_source_files(project_dir) -> List[Path]:
+def rtl_source_files(project_dir,
+                     exts: Tuple[str, ...] = RTL_SOURCE_EXTS) -> List[Path]:
     """Collect a project's AUTHORED RTL source files (*.v / *.sv).
 
     Contract:
@@ -112,6 +113,15 @@ def rtl_source_files(project_dir) -> List[Path]:
          excluded from the match) AND any file larger than
          RTL_SOURCE_MAX_BYTES.
 
+    ``exts`` (Kimi-scale round 2): the glob patterns collected, default
+    RTL_SOURCE_EXTS. Some family gates have always ALSO scanned header files
+    (*.vh / *.svh — `define / parameter timing constants live there); they
+    pass a widened tuple so adopting the shared collector never narrows the
+    suffix set they legitimately audit (§4.05: dropping a `.vh` declaration
+    could false-SKIP a real dead-constant / undocumented-latency finding).
+    The canonical-dir preference, generated-dir exclusion, and size-cap
+    contract are identical for every suffix.
+
     ``project_dir`` must be a directory; anything else returns []. Returned
     paths are descendants of ``project_dir`` exactly as the caller passed it
     (never resolve()d — gates run with cwd=<project> and report relative
@@ -123,12 +133,12 @@ def rtl_source_files(project_dir) -> List[Path]:
         return []
     canonical = root / "phase2" / "stage1" / "rtl"
     if canonical.is_dir():
-        files = [p for ext in RTL_SOURCE_EXTS for p in canonical.rglob(ext)
+        files = [p for ext in exts for p in canonical.rglob(ext)
                  if p.is_file()]
         if files:
             return sorted(set(files))
     out: List[Path] = []
-    for ext in RTL_SOURCE_EXTS:
+    for ext in exts:
         for p in root.rglob(ext):
             if not p.is_file():
                 continue

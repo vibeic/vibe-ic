@@ -3660,6 +3660,20 @@ def _resolve_adder_map_file(project: Path, declared: str) -> Optional[Path]:
     return None
 
 
+_SIGNED_NET_DECL_RE = re.compile(
+    r"^(\s*(?:wire|reg|input|output|inout)\b[^;\n]*?)\s+signed\b",
+    re.MULTILINE)
+
+
+def _strip_signed_net_decls(nl_text: str) -> Tuple[str, int]:
+    """Strip the `signed` qualifier from net/port declarations in an
+    emitted gate-level netlist (see the defence-in-depth guard in
+    step_synth). Escaped identifiers that merely CONTAIN 'signed'
+    (`\\bus_signed`) never match — the qualifier must stand alone after
+    the declaration keyword/range. Returns (new_text, n_replaced)."""
+    return _SIGNED_NET_DECL_RE.subn(r"\1", nl_text)
+
+
 def step_synth(project: Path, top: str, pdk: PdkConfig,
                container: str) -> StepResult:
     t0 = time.time()
@@ -4045,6 +4059,23 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     try:
         _v1_6_605_remap_surviving_dlatch(
             netlist, top, pdk, out_dir, out_dir_c, container, liberty_c)
+    except Exception:
+        pass
+    # Defence-in-depth signed-net guard. Yosys write_verilog preserves a
+    # `signed` qualifier on nets that survive from RTL signed locals /
+    # loop variables (e.g. a combinational `integer k` emits
+    # `wire signed [31:0] k;` after flatten). OpenROAD's STRUCTURAL
+    # Verilog reader rejects the `signed` keyword in ANY declaration
+    # (STA-0171 syntax error) — the same reader limitation long known
+    # for module PORTS. A gate-level net has no semantic signedness, so
+    # stripping the qualifier is a pure-syntactic no-op for PnR/STA.
+    # First hit: 3.1M-cell INT4 accelerator whose dequant-loop `integer`
+    # survived flatten and killed link_design. Non-fatal on IO error.
+    try:
+        nl_text = netlist.read_text(encoding="utf-8", errors="ignore")
+        new_text, n_signed = _strip_signed_net_decls(nl_text)
+        if n_signed > 0:
+            netlist.write_text(new_text, encoding="utf-8")
     except Exception:
         pass
     # Cell count from yosys stat

@@ -57,6 +57,18 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+# Kimi-scale fix — this gate audits AUTHORED RTL SOURCE. The *.v/*.sv
+# collection routes through the shared collector (canonical phase2/stage1/rtl
+# preferred; generated netlist/sim/verify outputs + >8MB files excluded on
+# fallback) so a 342 MB emitted netlist can never enter the comment strip /
+# divider scan again (see _specrtl_common.rtl_source_files for the full scale
+# rationale). The SDC side is deliberately UNTOUCHED: --sdc file-or-dir reads
+# and the project-wide *.sdc auto-discovery are legitimate non-RTL inputs.
+try:
+    from _specrtl_common import rtl_source_files
+except ImportError:                      # packaged relative import
+    from ._specrtl_common import rtl_source_files
+
 
 @dataclass
 class Finding:
@@ -275,7 +287,8 @@ def audit(rtl_target: Path, sdc_path: Optional[Path]) -> List[Finding]:
     if rtl_target.is_file():
         files = [rtl_target]
     else:
-        files = sorted(list(rtl_target.rglob("*.v")) + list(rtl_target.rglob("*.sv")))
+        # Kimi-scale fix: shared authored-RTL collector (*.v/*.sv).
+        files = rtl_source_files(rtl_target)
     if not files:
         findings.append(Finding(
             "WARN", "no_rtl_files", str(rtl_target), 0,
