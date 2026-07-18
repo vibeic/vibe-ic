@@ -67,6 +67,48 @@ The **same two-layer model** the vibe-ic plugin already uses, extended to the to
 - **CONTRIBUTING.md** on each fork states this (present on vibeic/OpenROAD + vibeic/yosys;
   TODO: add to magic/netgen/klayout/ngspice/iverilog — template in §4).
 
+## 2.5 Who reviews the PRs — ONE Gatekeeper ROLE, per-repo machine GATE (owner decision 2026-07-18)
+
+Every fork (`vibeic/<tool>`) AND the plugin repo (`vibeic/vibe-ic`) accept inbound PRs.
+They are all resolved by **ONE unified repo-gatekeeper ROLE** — a single review identity
+and a single set of principles — NOT by N independent maintainers with drifting standards.
+
+The unification is of the **REVIEW DISCIPLINE**, not of the machine gate:
+
+- **UNIFIED across every repo (the gatekeeper role — same for vibe-ic + all 7 forks):**
+  1. **NDA source-comment scan** — no commercial-PDK SKU / foundry / rule-id in the diff,
+     comments, or fixtures (the public-source-comment leak vector).
+  2. **FAIL→PASS proof required** — reproducible stock/old → patched behavior.
+  3. **Step-2.7 adversarial review** — §4.05 no-leak (a relaxation must not wave through a
+     real defect; the negative/proven-negative is the load-bearing half).
+  4. **Land discipline** — never `--force`/`--admin`/`--no-verify`; squash; record a
+     `FIX_STATUS.md` row; bump the `Dockerfile` `*_REF` and rebuild `vibeic-eda`.
+
+- **PER-REPO (the machine gate — different because each tool builds/tests differently):**
+  | repo | machine gate (build + test) |
+  |---|---|
+  | vibeic/vibe-ic (plugin) | pytest (existing `gatekeeper_review.py`) |
+  | vibeic/OpenROAD | cmake build + ctest (C++) |
+  | vibeic/yosys | make + test (C++) |
+  | vibeic/magic | build + test (C) |
+  | vibeic/netgen | build + test (C) |
+  | vibeic/klayout | build + test (C++/Ruby) |
+  | vibeic/ngspice | configure + make check (C) |
+  | vibeic/iverilog | build + ivtest (C++) |
+
+  The vibe-ic `gatekeeper_review.py` (pytest) does NOT apply to a fork — a fork's gate is
+  its own CI (build+test), declared per-repo. The gatekeeper runs *that repo's* gate.
+
+**Flow for an inbound PR to `vibeic/<tool>`:** poll → run *that repo's* CI gate (machine) +
+the unified NDA scan + Step-2.7 (agent) → on green, land on the fork branch + FIX_STATUS row
++ Dockerfile ref bump + `vibeic-eda` rebuild. Same role, same 4 principles, per-repo CI.
+
+**Implementation (follow-up, not yet built):** extend the existing repo-gatekeeper into a
+`fork-gatekeeper` loop that is fork-aware — polls every `vibeic/<tool>` for inbound PRs,
+reads each repo's declared CI gate, applies the 4 unified principles, lands. The vibe-ic
+repo-gatekeeper keeps resolving the plugin repo (pytest gate) unchanged; the fork-gatekeeper
+is the same review discipline extended over the 7 tool forks with per-repo machine gates.
+
 ## 3. Fork-fix classification table (this session, 2026-07)
 
 Every fix is a **vibeic-original** fork commit on our fork branch. "Upstream PR" column is
@@ -93,8 +135,12 @@ provenance index; FIX_STATUS is the proof ledger.)
       stating the inbound-PR rule (file against this fork; FAIL→PASS + NDA-clean fixture; we land).
 - [ ] Add an `upstream-sync` note per fork: last `git fetch upstream` reviewed + what (if any)
       was cherry-picked — so pull-review is auditable.
-- [ ] (optional) a `fork-gatekeeper` cron that runs the machine gates + NDA scan on any inbound
-      PR to a `vibeic/<tool>` fork, mirroring the vibe-ic repo-gatekeeper.
+- [ ] **fork-gatekeeper (architecture decision, §2.5 — build it):** extend the repo-gatekeeper
+      into a fork-aware loop that polls every `vibeic/<tool>` inbound PR, runs *that repo's*
+      declared CI gate (per-repo build+test) + the 4 unified principles (NDA scan / FAIL→PASS /
+      Step-2.7 / land discipline), and lands. ONE role, per-repo machine gate.
+- [ ] declare each fork's CI gate (a `.github/workflows/gate.yml` or a `gate.spec` the
+      fork-gatekeeper reads) — cmake+ctest / make+test / configure+make-check / ivtest per §2.5.
 
 ### CONTRIBUTING.md template (for the 5 forks missing it)
 ```
