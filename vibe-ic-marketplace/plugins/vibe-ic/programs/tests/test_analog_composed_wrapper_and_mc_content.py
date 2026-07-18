@@ -256,22 +256,34 @@ def test_device_family_tag_helper():
     assert MC._device_family_tag(None) is None
 
 
-# ── the single-model-family guard admits multi-section-same-file, rejects hybrid
+# ── the single-model-family guard admits multi-section-same-file + the same-PDK
+#    passive companion, rejects an out-of-set (foreign) file
 
 def test_guard_allows_multi_section_same_file():
     wrap = (".lib /stage/pdk/spice/zzz_mc.lib mc_global\n"
             ".lib /stage/pdk/spice/zzz_mc.lib mc_mos_tn\n"
             "xmn out g 0 0 nch\n.control\nop\n.endc\n.end\n")
-    # two `.lib` lines but ONE model file → allowed
-    MC._assert_single_model_family(wrap, "…")
+    # two `.lib` lines but ONE (allowed) model file → allowed
+    MC._assert_single_model_family(wrap, {"/stage/pdk/spice/zzz_mc.lib"})
 
 
-def test_guard_rejects_second_distinct_file():
+def test_guard_allows_passive_companion_file():
+    """The MC lib PLUS the same-PDK passive companion (well-diode) are both in
+    the allowed set → allowed (not a cross-family overlay)."""
+    wrap = (".lib /stage/pdk/spice/zzz_mc.lib mc_global\n"
+            ".lib /stage/pdk/spice/zzz_mc.lib mc_mos_tn\n"
+            ".lib /stage/pdk/spice/shim.lib ttt_passive\n"
+            "xmp out g vdd vdd vdd pch\n.end\n")
+    MC._assert_single_model_family(
+        wrap, {"/stage/pdk/spice/zzz_mc.lib", "/stage/pdk/spice/shim.lib"})
+
+
+def test_guard_rejects_out_of_set_file():
     wrap = (".lib /stage/pdk/spice/zzz_mc.lib mc_global\n"
             ".lib /other/pdk/spice/second.lib tt\n"
             "xmn out g 0 0 nch\n.end\n")
     with pytest.raises(AssertionError):
-        MC._assert_single_model_family(wrap, "…")
+        MC._assert_single_model_family(wrap, {"/stage/pdk/spice/zzz_mc.lib"})
 
 
 # ══ GAP B2 end-to-end — native MC deck composes global+device from ONE file ══
@@ -328,6 +340,101 @@ def test_gapB2_native_mc_deck_composes_global_and_device(tmp_path, monkeypatch):
         for m in MC._INCLUDE_FORM_MODEL_PATH_RE.finditer(t):
             paths.add(m.group(1) or m.group(2))
         assert len(paths) == 1
+
+
+# ══ multi-terminal device + LV/passive split (bench-adc recipe (b)) ═══════════
+
+def _shim_lv_passive_text(raw="foo_raw.lib") -> str:
+    """A composed shim with a LV corner + a PASSIVE companion section (each
+    include-forms the raw lib), the general shape of a commercial ngspice shim."""
+    return (f".lib ttt_lv\n.lib \"{raw}\" noiseflag\n.lib \"{raw}\" tt\n.endl\n"
+            f".lib ttt_passive\n.lib \"{raw}\" passive\n.endl\n")
+
+
+def _raw_5term_pmos_text() -> str:
+    """Raw device lib: 4-terminal NMOS, 5-terminal PMOS (d g s b + well), and a
+    passive well-diode subckt in the passive section."""
+    return (".lib noiseflag\n.param nf=0\n.endl\n"
+            ".lib tt\n.subckt foo_nch d g s b w=1 l=1\n.ends\n"
+            ".subckt foo_pch d g s b nw w=1 l=1\n.ends\n.endl\n"
+            ".lib passive\n.subckt foo_welldio a c\n.ends\n.endl\n")
+
+
+def test_deck_context_resolves_terminals_and_passive():
+    shim = "/stage/pdk/spice/foo_ngspice_shim.lib"
+    raw = "/stage/pdk/spice/foo_raw.lib"
+    texts = {shim: _shim_lv_passive_text(), raw: _raw_5term_pmos_text()}
+    ctx = APDC.custom_family_context(
+        {"available": True, "source": "project_custom_pdk", "family": "synthfab",
+         "spice_libs": [shim, raw]}, reader=lambda p: texts.get(p))
+    assert ctx.status == "OK"
+    assert ctx.model_lib == shim                       # composed shim primary
+    assert ctx.device_map == {"nmos": "foo_nch", "pmos": "foo_pch"}
+    # 4-terminal NMOS, 5-terminal PMOS captured
+    assert ctx.device_terms == {"nmos": 4, "pmos": 5}
+    # the LV corner is paired with its passive companion
+    assert ctx.passive_sections.get("ttt_lv") == "ttt_passive"
+
+
+def test_render_deck_pads_multiterminal_pmos_and_pairs_passive():
+    deck, _ = ARS.render_deck(
+        "ldo", "u_ldo", "custom", "/x.lib", "ttt_lv", "m_pass", 40,
+        devices={"nmos": "foo_nch", "pmos": "foo_pch"},
+        device_terms={"nmos": 4, "pmos": 5},
+        passive_section="ttt_passive")
+    # PMOS instances grow the 5th (well) terminal = a repeat of the 4th (bulk)
+    for line in deck.splitlines():
+        if line.startswith("xmp"):
+            nodes = line.split()[1:line.split().index("foo_pch")]
+            assert len(nodes) == 5, line          # d g s b + well
+            assert nodes[3] == nodes[4]           # well ties to bulk rail
+    # NMOS instances stay 4-terminal
+    for line in deck.splitlines():
+        if line.startswith("xmn"):
+            nodes = line.split()[1:line.split().index("foo_nch")]
+            assert len(nodes) == 4, line
+    # LV + passive pairing emitted
+    assert ".lib /x.lib ttt_lv" in deck
+    assert ".lib /x.lib ttt_passive" in deck
+    assert "sky130_fd_pr" not in deck
+
+
+def test_render_deck_sky130_new_args_are_noop():
+    """No-leak: sky130 with the new device_terms(4)/passive(None) args renders
+    byte-identical to the pre-existing no-context path (no pad, no pairing)."""
+    a, _ = ARS.render_deck("ldo", "u_ldo", "sky130", "/x.lib", "tt", "m_pass", 40,
+                           devices=None)
+    b, _ = ARS.render_deck("ldo", "u_ldo", "sky130", "/x.lib", "tt", "m_pass", 40,
+                           devices={"nmos": "sky130_fd_pr__nfet_01v8",
+                                    "pmos": "sky130_fd_pr__pfet_01v8"},
+                           device_terms={"nmos": 4, "pmos": 4},
+                           passive_section=None)
+    assert a == b
+
+
+def test_pad_mos_instances_helper():
+    line = "xmp_pass vout vg vdd vdd sky130_fd_pr__pfet_01v8 w=5 l=0.5\n"
+    out = ARS._pad_mos_instances(line, "sky130_fd_pr__pfet_01v8", "foo_pch", 5)
+    assert out.strip() == "xmp_pass vout vg vdd vdd vdd foo_pch w=5 l=0.5"
+    # 4-terminal device: no padding, just token remap
+    out4 = ARS._pad_mos_instances(line, "sky130_fd_pr__pfet_01v8", "foo_nch", 4)
+    assert out4.strip() == "xmp_pass vout vg vdd vdd foo_nch w=5 l=0.5"
+
+
+# ── degeneracy CONTROL — a deterministic (no-spread) MC is UNSCOREABLE, never a
+#    fabricated 100% (the positive control bench-adc requires) ─────────────────
+
+def test_mc_degeneracy_control_unscoreable(tmp_path, monkeypatch):
+    """Same measure with NO real resample (identical samples) → the guard flags
+    UNSCOREABLE, never a fake yield — proving a real yield means real spread."""
+    p = _native_mc_project(tmp_path)
+    monkeypatch.setattr(ARS, "_ngspice_available", lambda c: True)
+    # every seed returns the SAME value (a deterministic corner → sigma 0)
+    monkeypatch.setattr(ARS, "_run_ngspice", _fake_ngspice([1.80] * 8))
+    monkeypatch.setattr(ARS, "_container_path", lambda c, r, p_: str(p_))
+    rep = MC.run_block(p, "ldo", "x", "sky130", 8)
+    assert rep["verdict"] == "UNSCOREABLE"
+    assert (rep.get("spec_yield") or {}).get("vout", {}).get("degenerate") is True
 
 
 if __name__ == "__main__":

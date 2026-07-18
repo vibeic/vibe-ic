@@ -1023,8 +1023,37 @@ def resolve_spec(project, block, btype):
     return res
 
 
+# A MOS template instance line — `X<inst> d g s b <device> w= l= …` — with its
+# FOUR terminal nodes captured (inst+3 in group 1, the 4th=bulk in group 2) so a
+# >4-terminal commercial device can be PADDED (the extra well/substrate terminals
+# tie to the bulk node). `{canon}` is the sky130 token filled in per role.
+def _pad_mos_instances(deck: str, canon: str, fam: str, nterm: int) -> str:
+    """Rewrite each `X.. d g s b {canon} …` instance to the resolved device
+    `fam`, PADDING (nterm-4) copies of the 4th node (bulk) so a >4-terminal
+    commercial device (e.g. a 5-terminal PMOS carrying a well/deep-nwell tie)
+    gets enough terminals — the extra well/substrate terminals tie to the same
+    rail as the bulk. chip-AGNOSTIC: node padding by terminal COUNT, no chip
+    literal."""
+    npad = max(0, int(nterm) - 4)
+    if npad == 0:
+        return deck.replace(canon, fam)
+    pat = re.compile(
+        r"(?im)^([ \t]*x\S+(?:[ \t]+\S+){3})([ \t]+)(\S+)([ \t]+)"
+        + re.escape(canon) + r"\b")
+
+    def _sub(m):
+        head, sp1, n4, sp2 = m.group(1), m.group(2), m.group(3), m.group(4)
+        pad = (" " + n4) * npad
+        return f"{head}{sp1}{n4}{pad}{sp2}{fam}"
+
+    deck = pat.sub(_sub, deck)
+    # any remaining canon (non-instance references) → fam
+    return deck.replace(canon, fam)
+
+
 def render_deck(btype, block, pdk, pdk_lib, corner, knob, val,
-                deck_overrides=None, temp_c=None, devices=None):
+                deck_overrides=None, temp_c=None, devices=None,
+                device_terms=None, passive_section=None):
     """Render T[btype] for one sweep point, then apply the L5 deck overrides
     (GAP-ANALOG-2) and a REAL per-corner temperature card (GAP-ANALOG-3).
 
@@ -1040,24 +1069,42 @@ def render_deck(btype, block, pdk, pdk_lib, corner, knob, val,
     tokens are REWRITTEN to the resolved family's device subckt names, so the
     emitted deck carries the FAMILY's devices — never sky130 literals against a
     foreign lib. A missing role is caught upstream (NEEDS_NATIVE_TEMPLATE); it
-    never reaches here as a silent sky130 fallback for a foreign family."""
+    never reaches here as a silent sky130 fallback for a foreign family.
+
+    GAP-ANALOG (multi-terminal device + LV/passive split):
+      * `device_terms` {role: terminal-count} pads a >4-terminal commercial
+        device instantiation (a 4-terminal template instance grows the extra
+        well/substrate terminals, tied to bulk);
+      * `passive_section` (paired with `corner`) is emitted as a second
+        `.lib <pdk_lib> <passive>` line right after the corner include so the
+        PMOS parasitic well-diode subckt resolves (LV-only leaves it undefined).
+    Both are inert for the open PDKs (4-terminal devices, single-section libs)."""
     kw = {(knob if knob != "__noop__" else "_unused"): val}
     deck = T[btype].format(block=block, pdk=pdk, pdk_lib=pdk_lib,
                            corner=corner, **kw)
     # Remap the template's canonical sky130 device tokens to the RESOLVED
     # family's device subckt names (only when they differ — sky130 stays
-    # byte-identical). Import kept local so this module has no import-time
-    # dependency on the deck-context helper.
+    # byte-identical), padding terminal count for >4-terminal devices. Import
+    # kept local so this module has no import-time dependency on the helper.
     if devices:
         try:
             from analog_pdk_deck_context import SKY130_DEVICES as _SKY
         except Exception:
             _SKY = {"nmos": "sky130_fd_pr__nfet_01v8",
                     "pmos": "sky130_fd_pr__pfet_01v8"}
+        terms = device_terms or {}
         for role, canon in _SKY.items():
             fam = devices.get(role)
             if fam and fam != canon:
-                deck = deck.replace(canon, fam)
+                deck = _pad_mos_instances(deck, canon, fam,
+                                          int(terms.get(role, 4) or 4))
+    # LV+passive pairing: emit the paired passive `.lib` right after the corner
+    # include so a >4-terminal device's parasitic well-diode subckt resolves.
+    if passive_section and pdk_lib:
+        prim = f".lib {pdk_lib} {corner}"
+        if prim in deck:
+            deck = deck.replace(
+                prim, prim + f"\n.lib {pdk_lib} {passive_section}", 1)
     ov = deck_overrides or {}
     applied = {}
     if "vref" in ov:
@@ -1164,7 +1211,7 @@ def _pdk_has_section(container, pdk_lib, section):
 def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
                      pdk_lib, knob, val, deck_overrides, subst_header, base_tt,
                      process_corners=None, devices=None, typ_section="tt",
-                     sim_cwd=None):
+                     sim_cwd=None, device_terms=None, passive_map=None):
     """Attempt a REAL ngspice sim at each PVT corner (real .lib section + real
     .temp) for the sized sweep point. Returns a real_sims dict for the corners
     that genuinely converged; a corner whose model section is absent or whose
@@ -1189,7 +1236,8 @@ def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
                 continue                  # already have the base typ@27C
             deck, _ = render_deck(btype, block, pdk, pdk_lib, proc, knob, val,
                                   deck_overrides=deck_overrides, temp_c=temp_c,
-                                  devices=devices)
+                                  devices=devices, device_terms=device_terms,
+                                  passive_section=(passive_map or {}).get(proc))
             sp = sl_dir / f"pvt_{proc}_{tlbl}.sp"
             sp.write_text((subst_header or "") + deck)
             ok, meas, raw, _ss = _run_ngspice(
@@ -1334,6 +1382,8 @@ def run_block(project, block, container, pdk, topology_override):
     if ctx is None or ctx.source == "known_family":
         pdk_lib = PDK_LIB.get(pdk)
         devices = None
+        device_terms = None
+        passive_map = {}
         typ_section = (ctx.typ_section if ctx else None) or "tt"
         grid_corners = None                        # → PVT_PROCESS (ss/tt/ff)
     else:
@@ -1344,6 +1394,8 @@ def run_block(project, block, container, pdk, topology_override):
             return 2
         pdk_lib = _container_path(container, host_root, Path(ctx.model_lib))
         devices = ctx.device_map
+        device_terms = ctx.device_terms
+        passive_map = ctx.passive_sections
         typ_section = ctx.typ_section
         grid_corners = ctx.process_corners
 
@@ -1389,7 +1441,9 @@ def run_block(project, block, container, pdk, topology_override):
         # sky130 tokens; custom family → its own section / device names).
         tb, _applied = render_deck(btype, block, pdk, pdk_lib, typ_section,
                                    knob, val, deck_overrides=deck_overrides,
-                                   temp_c=None, devices=devices)
+                                   temp_c=None, devices=devices,
+                                   device_terms=device_terms,
+                                   passive_section=passive_map.get(typ_section))
         # #496 (round-2): structured PDK-substitution disclosure goes FIRST so
         # it lands in the deck head (the gate scans the first 24 lines).
         tb = subst_header + tb
@@ -1467,7 +1521,7 @@ def run_block(project, block, container, pdk, topology_override):
         best.get("knob", "__noop__"), best.get("val", 0),
         deck_overrides, subst_header, base_tt,
         process_corners=grid_corners, devices=devices, typ_section=typ_section,
-        sim_cwd=sim_cwd)
+        sim_cwd=sim_cwd, device_terms=device_terms, passive_map=passive_map)
     pvt_grid, corners_executed = build_pvt_grid(
         base, base_log, real_sims, target.get("tol"),
         process_corners=grid_corners)

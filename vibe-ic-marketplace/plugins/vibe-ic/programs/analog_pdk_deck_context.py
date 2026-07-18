@@ -114,6 +114,28 @@ _INCLUDE_TARGET_RE = re.compile(
 # aggregator index, not the nominal ngspice corner shim.
 _MC_LIB_HINT_RE = re.compile(
     r"(?i)(?:(?<![a-z0-9])mc(?![a-z0-9])|mismatch|statistical|montecarlo|agauss)")
+# A PASSIVE / parasitic corner section (the block that defines the well-diode /
+# resistor / cap parasitic subckts an LV-CMOS device instance references). Loaded
+# ALONGSIDE the LV corner so a >4-terminal device's parasitic well-diode resolves.
+# Family-agnostic name tokens, no vendor/SKU literal.
+_PASSIVE_SECTION_RE = re.compile(r"(?i)(?:passiv|(?:^|_)pas(?:$|_)|(?:^|_)rc(?:$|_))")
+
+
+def _passive_companion(corner_section: str, sections: List[str]) -> Optional[str]:
+    """The passive/parasitic corner section to load ALONGSIDE `corner_section`
+    (an LV-CMOS section) so the PMOS parasitic well-diode subckt resolves. Prefers
+    a passive section sharing the corner's leading process token (e.g. `ttt_lv` →
+    `ttt_passive`); falls back to any single passive section (a shared parasitic
+    block). None when the lib has no LV/passive split. chip-AGNOSTIC."""
+    passives = [s for s in sections
+                if _PASSIVE_SECTION_RE.search(s) and s != corner_section]
+    if not passives:
+        return None
+    head = corner_section.split("_", 1)[0]
+    for s in passives:
+        if s.split("_", 1)[0] == head or s.startswith(head):
+            return s
+    return passives[0]
 
 
 @dataclass
@@ -131,6 +153,16 @@ class DeckContext:
     typ_section: Optional[str] = None
     process_corners: List[Tuple[str, float]] = field(default_factory=list)
     device_map: Dict[str, str] = field(default_factory=dict)
+    # {role: terminal-count} for the resolved devices — so the deck emitter can
+    # PAD a 4-terminal template instantiation to a >4-terminal commercial device
+    # (e.g. a 5-terminal PMOS carrying a well/deep-nwell tie). {} for the open
+    # PDKs (their devices are 4-terminal → no padding).
+    device_terms: Dict[str, int] = field(default_factory=dict)
+    # {corner-section: passive-companion-section} — the passive section to LOAD
+    # ALONGSIDE each LV-CMOS corner section so the PMOS parasitic well-diode
+    # subckt resolves (an LV-only section leaves it "unknown subckt"). {} for the
+    # open PDKs / single-section libs (no LV/passive split).
+    passive_sections: Dict[str, str] = field(default_factory=dict)
     unresolved_roles: List[str] = field(default_factory=list)
     work_items: List[str] = field(default_factory=list)
     disclosure: str = ""
@@ -142,6 +174,8 @@ class DeckContext:
             "model_lib_includes": self.model_lib_includes,
             "corner_sections": self.corner_sections,
             "typ_section": self.typ_section,
+            "device_terms": self.device_terms,
+            "passive_sections": self.passive_sections,
             "process_corners": [list(pc) for pc in self.process_corners],
             "device_map": self.device_map,
             "unresolved_roles": self.unresolved_roles,
@@ -441,6 +475,22 @@ def custom_family_context(res: Dict[str, Any],
             "NEEDS_NATIVE_TEMPLATE: no readable model lib among the resolved "
             "custom-PDK spice libs")
 
+    # {role: terminal-count} for the resolved devices (from the parsed subckt
+    # terminal counts) — the deck emitter pads a 4-terminal template to a
+    # >4-terminal commercial device (e.g. a 5-terminal PMOS w/ well tie).
+    device_terms = {role: union_subckts.get(sub, 4)
+                    for role, sub in device_map.items()}
+    # {corner-section: passive-companion} — the passive section to load ALONGSIDE
+    # each corner section so a >4-terminal device's parasitic well-diode resolves.
+    avail_sections = sections or all_sections
+    passive_map: Dict[str, str] = {}
+    for sec in avail_sections:
+        if _PASSIVE_SECTION_RE.search(sec):
+            continue                                   # a passive section itself
+        comp = _passive_companion(sec, avail_sections)
+        if comp:
+            passive_map[sec] = comp
+
     status = "OK" if (not work_items) else "NEEDS_NATIVE_TEMPLATE"
     disclosure = (
         f"custom PDK family '{family}' ({source}) — device map + corner "
@@ -454,7 +504,8 @@ def custom_family_context(res: Dict[str, Any],
         model_lib=primary, model_lib_includes=readable,
         corner_sections=sections or all_sections,
         typ_section=typ, process_corners=process,
-        device_map=device_map, unresolved_roles=unresolved,
+        device_map=device_map, device_terms=device_terms,
+        passive_sections=passive_map, unresolved_roles=unresolved,
         work_items=work_items, disclosure=disclosure)
 
 
