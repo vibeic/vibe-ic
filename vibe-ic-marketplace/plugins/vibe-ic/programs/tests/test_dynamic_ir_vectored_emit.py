@@ -216,6 +216,72 @@ def test_skip_result_no_pdn_status():
     assert s["status"] == "SKIPPED_NO_PDN"
 
 
+# ── LIBERTY is a REQUIRED transient input (runner must wire pdk.liberty) ─────────
+
+def test_liberty_is_a_required_input():
+    # the transient solve needs the cell timing/power models; a missing liberty
+    # is an honest skip, and all-present means the emit proceeds (no skip).
+    assert E.missing_required_inputs("d.def", "t.lef", "c.lef", None) \
+        == ["--liberty"]
+    assert E.missing_required_inputs("d.def", "t.lef", "c.lef", "x.lib") == []
+    # DEF / LEF still required too.
+    assert "--def" in E.missing_required_inputs(None, "t", "c", "l")
+    assert "--tech-lef" in E.missing_required_inputs("d", None, "c", "l")
+
+
+def _synth_project(tmp_path, with_liberty: bool, with_pdn: bool):
+    """Minimal run-dir layout the emitter auto-discovers. DEF has no SPECIALNETS
+    unless with_pdn, so the emit reaches the (docker-free) no-PDN skip — enough
+    to prove it got PAST the missing-inputs gate without needing a container."""
+    pnr = tmp_path / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True)
+    body = "DESIGN chip_top ;\n"
+    if with_pdn:
+        body += ("SPECIALNETS 1 ;\n- VDD ( * VDD ) + USE POWER ;\n"
+                 "END SPECIALNETS\n")
+    body += "END DESIGN\n"
+    (pnr / "chip_top.def").write_text(body)
+    pdk = tmp_path / "input" / "pdk"
+    (pdk / "lef").mkdir(parents=True)
+    (pdk / "lef" / "sky_tech.lef").write_text("LAYER MET1 ;\n")
+    (pdk / "lef" / "sky_macro.lef").write_text("MACRO m ;\n")
+    if with_liberty:
+        (pdk / "liberty").mkdir(parents=True)
+        (pdk / "liberty" / "cells_typ.lib").write_text("library(x){}\n")
+    return tmp_path
+
+
+def test_emit_path_with_resolved_liberty_does_not_skip_missing_inputs(tmp_path):
+    # LIBERTY present (as the runner now wires pdk.liberty) → the emit gets PAST
+    # the missing-inputs gate and reaches the transient path (here the honest
+    # no-PDN skip, since this synthetic DEF has no power grid). The point:
+    # status is NOT SKIPPED_MISSING_INPUTS.
+    proj = _synth_project(tmp_path, with_liberty=True, with_pdn=False)
+    out = proj / "dynamic_ir.json"
+    rc = E.main(["--project", str(proj), "--out", str(out)])
+    payload = json.loads(out.read_text())
+    assert payload["status"] != "SKIPPED_MISSING_INPUTS"
+    assert payload["status"] == "SKIPPED_NO_PDN"   # reached emit(), not missing
+    assert rc == 0
+
+
+def test_emit_path_without_liberty_honestly_skips_missing_inputs(tmp_path):
+    # genuine no-liberty → the honest SKIPPED_MISSING_INPUTS is preserved.
+    proj = _synth_project(tmp_path, with_liberty=False, with_pdn=True)
+    out = proj / "dynamic_ir.json"
+    E.main(["--project", str(proj), "--out", str(out)])
+    payload = json.loads(out.read_text())
+    assert payload["status"] == "SKIPPED_MISSING_INPUTS"
+    assert "--liberty" in payload["reason"]
+
+
+def test_auto_discover_finds_project_liberty(tmp_path):
+    proj = _synth_project(tmp_path, with_liberty=True, with_pdn=True)
+    disc = E._auto_discover(proj)
+    assert disc["liberty"] is not None
+    assert disc["liberty"].name == "cells_typ.lib"
+
+
 def test_no_vcd_skip_marker_is_gone():
     # the emitter no longer produces a "SKIPPED_NO_VCD" marker — transient needs
     # no VCD. (The gate still tolerates the legacy string for old reports.)
