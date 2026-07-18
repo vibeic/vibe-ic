@@ -208,8 +208,21 @@ def is_frontend_parse_abort(text: str) -> bool:
 # naming, which is API-stable, unlike error phrasing which is not.
 _YOSYS_PASS_RE = re.compile(r"^\s*[\d.]+\.\s+Executing\s+(.+?)\s*$", re.MULTILINE)
 # A yosys READ pass announces itself as an "<X> frontend" (Verilog-2005 / SLANG /
-# Liberty / RTLIL / BLIF). Every design-BUILDING pass announces as "<NAME> pass".
-_YOSYS_FRONTEND_PASS_RE = re.compile(r"\bfrontend\b", re.IGNORECASE)
+# Liberty / RTLIL / BLIF). Every design-BUILDING pass announces as "<NAME> pass",
+# and writers as "<NAME> backend".
+#
+# STRUCTURAL, not substring (hardened after a peer review of the sibling LVS
+# wording fix, whose first draft matched a whole LINE and so accepted a marker
+# appearing anywhere in it). The captured pass name INCLUDES the pass ARGUMENTS —
+# real yosys output is "Verilog-2005 frontend: /tmp/frontend/rtl/m.v" — so a bare
+# \bfrontend\b would also fire on a PATH containing that word. That misfires in
+# the DANGEROUS direction: a design-building pass wrongly counted as a frontend
+# pass empties the non-frontend list and buys the LENIENT verdict.
+# So `frontend` is required to be the pass-CLASS token: the last word before the
+# argument separator (`:`), the terminating `.`, or end of string — never a word
+# sitting inside an argument.
+_YOSYS_FRONTEND_PASS_RE = re.compile(r"\bfrontend\b\s*(?:[:.]|$)",
+                                     re.IGNORECASE)
 
 
 def yosys_executed_passes(text: str) -> List[str]:
