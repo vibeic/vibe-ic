@@ -75,6 +75,50 @@ V_RUN_ERROR = "RUN_ERROR"
 
 
 # ---------------------------------------------------------------------------
+# (1a-probe) Functional read_liberty capability probe (SOUNDNESS gating)
+# ---------------------------------------------------------------------------
+# `read_liberty -lib <lib>` imports every cell as an UNINTERPRETED BLACKBOX;
+# `equiv_make` then only STRUCTURALLY matches cells and ASSUMES matched cells are
+# equal — it never proves the cell function, so a gold `nand2(a,b)` vs a gate
+# `nor2(a,b)` (genuinely NOT equal) is FALSELY reported "proven". That is worse
+# than a floor: it can green-light an inequivalent netlist. Functional
+# `read_liberty <lib>` (NO `-lib`) instead expands every cell's `function` and
+# ff/latch group into Yosys primitives the SAT engine models, so NAND≢NOR is
+# correctly rejected AND a PnR buffer-insert (y=a vs y=buf(a)) proves.
+#
+# The only blocker to functional models was that functional `read_liberty`
+# ABORTS parsing an integrated clock-gate cell ("Missing function on output
+# GCLK … dlclkp" / a commercial ICG output) on a pre-fork Yosys — fixed in the
+# vibeic-eda fork yosys 7c8d7a282. So the functional path is CAPABILITY-GATED:
+# the runner tries functional and, on that abort, falls back to the (unsound but
+# always-available) `-lib` recipe, RECORDING which path ran. This makes the fix
+# safe to land BEFORE the image rebuild and auto-upgrade to the sound path after.
+#
+# NOTE: key ONLY on the read_liberty-time "Missing function on output" abort —
+# NOT the equiv-time "No SAT model available for cell …" line, which is the
+# NORMAL honest-gap signal for inert physical-only cells and must never trigger
+# a spurious fallback.
+_FUNC_READ_LIB_ABORT_RE = re.compile(r"Missing function on output", re.IGNORECASE)
+
+
+def functional_read_liberty_aborted(log: str) -> bool:
+    """True iff a Yosys log shows the pre-fork functional `read_liberty` abort
+    (the ICG "Missing function on output …" parse error). PURE — the runner
+    feeds the functional-recipe (or probe) log here to decide the -lib fallback.
+    Does NOT match the equiv-time "No SAT model available" physical-cell gap."""
+    return bool(_FUNC_READ_LIB_ABORT_RE.search(log or ""))
+
+
+def build_functional_probe_script(lib: str) -> str:
+    """A minimal Yosys script that just FUNCTIONALLY reads the Liberty (no
+    `-lib`). On a pre-fork binary this ABORTS at read_liberty on an ICG cell
+    ("Missing function on output …"); on the fork it succeeds. The runner
+    classifies the probe log with functional_read_liberty_aborted() to pick the
+    recipe WITHOUT paying for a full equiv run first."""
+    return f"read_liberty {lib}\n"
+
+
+# ---------------------------------------------------------------------------
 # (1a) The Yosys equivalence recipe (PRODUCES the log the parser consumes)
 # ---------------------------------------------------------------------------
 # Auto-escalating sequential-induction depths for equiv_induct.
@@ -97,7 +141,8 @@ DEFAULT_SEQ_DEPTHS = (4, 16, 64)
 def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
                              blackbox_v: Optional[List[str]] = None,
                              seq_depths: Optional[List[int]] = None,
-                             strip_gate_ports: Optional[List[str]] = None) -> str:
+                             strip_gate_ports: Optional[List[str]] = None,
+                             functional_lib: bool = False) -> str:
     """Emit the Yosys .ys that structurally proves gold_v == gate_v.
 
     gold_v : golden reference netlist/RTL (e.g. <top>_synth.v or the RTL).
@@ -111,6 +156,14 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
                  the proof depth-adaptive so a retiming/pipeline-equivalent pair
                  proves at the depth matching its latency instead of falsely
                  failing at the shallow default. Sound: deeper only proves more.
+    functional_lib : when True, read the Liberty FUNCTIONALLY (`read_liberty`
+                 WITHOUT `-lib`) so equiv proves each cell's FUNCTION instead of
+                 assuming matched cells equal — the SOUND path (rejects NAND≢NOR,
+                 proves buffer-inserts). Requires the vibeic-eda fork yosys
+                 (7c8d7a282: functional read models ICG clock gates); the runner
+                 CAPABILITY-PROBES and only sets this True when the binary can do
+                 it (else the unsound-but-available `-lib` path, functional_lib
+                 False, is used and RECORDED). See functional_read_liberty_aborted.
 
     All paths are used verbatim (caller translates host->container). Same
     engine shape as `eda_lvs mode=yosys_equiv`."""
@@ -129,6 +182,52 @@ def build_yosys_equiv_script(gold_v: str, gate_v: str, lib: str, top: str,
     # cells, so the shallow-first order keeps the common case cheap.
     depths = sorted({int(d) for d in depths if int(d) > 0})
     induct = "\n".join(f"equiv_induct -seq {d}" for d in depths) or "equiv_induct"
+
+    if functional_lib:
+        # FUNCTIONAL (SOUND) recipe. Per-side, three GOTCHAs make functional
+        # cell models actually reach the SAT miter:
+        #   GOTCHA 1 — `flatten` (before `design -stash`): `design -copy-from …
+        #     {top}` copies ONLY {top}, NOT the per-cell function modules
+        #     read_liberty created; without flatten the miter sees blackboxes
+        #     again → "No SAT model available for cell …". flatten inlines the
+        #     functional logic into {top} so the models survive the copy.
+        #   GOTCHA 2 — `async2sync`: equiv's SAT cannot model level-sensitive
+        #     $_DLATCH_*/$dlatch (the ICG model is a latch; proc may emit
+        #     $dlatch). async2sync (lighter than clk2fflogic; verified
+        #     sufficient) converts them; ORDER = after prep, before equiv_make.
+        #   GOTCHA 3 — `opt -purge; opt_clean -purge` (BOTH sides): source-RTL
+        #     dead unobservable public nets get $equiv key-points induction
+        #     can't close → spurious unproven; purge prunes them. chip-agnostic.
+        # The physical-only cell blackbox block ({bb_block}) is kept: fill/tap/
+        # decap/diode/antenna carry no function and stay inert -lib blackboxes.
+        def _func_side(read_v: str, stash: str, extra_strip: str = "") -> str:
+            return (f"read_liberty {lib}\n"
+                    f"{bb_block}{read_v}\n"
+                    f"prep -top {top}\n"
+                    f"{extra_strip}"
+                    f"flatten\n"
+                    f"async2sync\n"
+                    f"opt -purge\n"
+                    f"opt_clean -purge\n"
+                    f"splitnets -ports\n"
+                    f"design -stash {stash}\n")
+        gold_block = _func_side(f"read_verilog -sv {gold_v}", "gold")
+        gate_block = _func_side(f"read_verilog -sv {gate_v}", "gate", strip_block)
+        return (
+            "# Vibe-IC post-layout LEC — FUNCTIONAL (sound) Liberty cell models.\n"
+            f"{gold_block}\n{gate_block}\n"
+            f"design -copy-from gold -as gold {top}\n"
+            f"design -copy-from gate -as gate {top}\n"
+            "equiv_make gold gate equiv\n"
+            "hierarchy -top equiv\n"
+            "equiv_simple\n"
+            f"{induct}\n"
+            "equiv_status\n")
+
+    # BLACKBOX `-lib` recipe (available on ANY yosys; UNSOUND — equiv_make
+    # assumes matched cells equal, so NAND≡NOR false-passes). Used only as the
+    # fallback when the binary cannot do functional read_liberty. Byte-identical
+    # to the pre-functional recipe so the -lib path is unchanged.
     return f"""# Vibe-IC post-layout LEC — gold(reference) vs gate(routed) structural equiv.
 read_liberty -lib {lib}
 {bb_block}read_verilog -sv {gold_v}

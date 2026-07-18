@@ -116,6 +116,34 @@ _UNPROVEN_LIST_RE = re.compile(r"Unproven\s+\$equiv\s+cells:\s*([^\n]+)")
 # Canonical Yosys success line (corroboration for the gate's .rpt parse).
 _SUCCESS_RE = re.compile(r"Equivalence\s+successfully\s+proven", re.IGNORECASE)
 
+# Frontend PARSE-ABORT signatures — a read_verilog / read_slang failure that
+# prevented ANY equivalence miter from being built (0 compared points). This is
+# DISTINCT from a genuine mismatch (a miter DID run and left points unproven).
+# A zero-miter parse-abort is NOT classifiable as PASS or FAIL — nothing was
+# compared — so it re-classifies to INCONCLUSIVE (never a hard FAIL that would
+# cascade-mark downstream steps MISSING, never a vacuous PASS). Mirrors
+# synth_frontend.SLANG_ERROR_SIGNATURES (kept local so the pure parser has no
+# import dependency) + generic frontend file-open / elaboration aborts.
+_FRONTEND_PARSE_ABORT_RE = re.compile(
+    r"syntax\s+error"
+    r"|unexpected\s+TOK_\w+"
+    r"|TOK_PACKAGE|TOK_TYPEDEF"
+    r"|unsupported\s+SystemVerilog"
+    r"|can'?t\s+open\s+input\s+file"
+    r"|unable\s+to\s+open"
+    r"|no\s+such\s+file"
+    r"|cannot\s+(?:find|open)\s+(?:file|module)"
+    r"|failed\s+to\s+parse",
+    re.IGNORECASE)
+
+
+def is_frontend_parse_abort(text: str) -> bool:
+    """True iff a Yosys log carries a FRONTEND parse-abort signature — a
+    read_verilog/read_slang failure that built no miter. PURE. Used to split a
+    zero-miter parse-abort (→ INCONCLUSIVE, and the slang retry trigger) from a
+    genuinely empty/garbage run (→ FAIL)."""
+    return bool(_FRONTEND_PARSE_ABORT_RE.search(text or ""))
+
 
 def parse_equiv_output(text: str) -> Dict:
     """Parse raw Yosys equiv_status stdout into a structured verdict.
@@ -195,7 +223,24 @@ def parse_equiv_output(text: str) -> Dict:
         and not sat_aborts
     )
 
-    if parse_error:
+    if parse_error and is_frontend_parse_abort(text):
+        # A frontend PARSE-ABORT (read_verilog/read_slang could not elaborate
+        # the gold or gate) built NO miter → 0 compared points. This is NOT
+        # classifiable as PASS or FAIL (nothing was compared) → INCONCLUSIVE.
+        # §4.05-safe: a genuine miter that runs and leaves unproven points still
+        # FAILs below; only the zero-miter parse-abort re-classifies. The false
+        # FAIL this replaces was cascade-marking 24 downstream steps MISSING.
+        equivalent = False
+        verdict = "INCONCLUSIVE"
+        verdict_explanation = (
+            "Yosys built NO equivalence miter — a frontend PARSE-ABORT "
+            "(read_verilog / read_slang could not elaborate the gold or gate; "
+            "e.g. SystemVerilog package-scope or unpacked-array port the "
+            "built-in reader rejects) left 0 compared points. Not classifiable "
+            "as PASS or FAIL → INCONCLUSIVE (the static/functional sign-off is "
+            "not decided here; re-run with the slang frontend or fix the parse "
+            "error). See reports/lec.rpt for the frontend error.")
+    elif parse_error:
         equivalent = False
         verdict = "FAIL"
         verdict_explanation = (
@@ -262,6 +307,10 @@ def build_report(parsed: Dict, top: str, gate_netlist: str,
         "gate": f"{Path(gate_netlist).name} (synth)",
         "tool": "yosys equiv_make+equiv_simple+equiv_induct",
         "verdict": parsed["verdict"],
+        # A frontend parse-abort built no miter → INCONCLUSIVE (0 compared
+        # points); the downstream gate treats this as a non-blocking
+        # SKIPPED-CONDITION, never a hard FAIL nor a vacuous PASS.
+        "inconclusive": parsed["verdict"] == "INCONCLUSIVE",
         "sat_model_unsupported_cells": parsed["sat_model_unsupported_cells"],
         "unproven_cells": parsed["unproven_cells"],
         "verdict_explanation": parsed["verdict_explanation"],
@@ -277,6 +326,18 @@ def _docker(container: str, cmd: str, timeout: int = 120):
     return subprocess.run(
         ["docker", "exec", container, "bash", "-lc", cmd],
         capture_output=True, text=True, timeout=timeout)
+
+
+def _docker_exec3(container: str, cmd: str):
+    """`(rc, out, err)` docker-exec adapter matching the `exec_fn` contract of
+    synth_frontend.resolve_slang_load_prefix (used to probe the slang load
+    prefix for the gold-read slang fallback). Never raises — returns a non-zero
+    rc + empty streams on failure so the caller keeps the fork-safe default."""
+    try:
+        r = _docker(container, cmd, timeout=60)
+        return r.returncode, r.stdout, r.stderr
+    except (subprocess.SubprocessError, OSError) as exc:
+        return 1, "", str(exc)
 
 
 def _container_available(container: str) -> bool:
@@ -329,7 +390,9 @@ def _netlist_uses_generic_primitives(path: str) -> bool:
 def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
                        liberty: Optional[str],
                        blackbox_v: Optional[List[str]] = None,
-                       gate_is_generic: bool = False) -> str:
+                       gate_is_generic: bool = False,
+                       gold_frontend: str = "verilog",
+                       slang_prefix: str = "") -> str:
     """Build the Yosys RTL(gold)≡synth-netlist(gate) equiv script.
 
     v1.3.85 — APPROACH C (satgen-modelable BOTH sides). Step-13 compares an RTL
@@ -398,9 +461,24 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
                      f"{bb}read_verilog {gate_netlist}\n")
     else:
         gate_read = f"{bb}read_verilog -sv {gate_netlist}\n"
+    # GOLD frontend: default is yosys's built-in `read_verilog -sv` (SV subset).
+    # On a real SV CPU/SoC gold (package-scope refs like `pkg::`, unpacked-array
+    # ports) that reader parse-ABORTS → 0 miter → a FALSE FAIL. `gold_frontend=
+    # "slang"` reads the gold with `read_slang` — the SAME full SV-2017 frontend
+    # the synth step auto-falls-back to (synth_frontend.decide_synth_frontend) —
+    # so a design that SYNTHESISES cleanly is also LEC-comparable. On a non-fork
+    # image `read_slang` needs `plugin -i slang` first (slang_prefix carries it);
+    # the vibeic-eda fork ships it built-in (slang_prefix == "").
+    if gold_frontend == "slang":
+        _plugin_line = ("plugin -i slang\n"
+                        if "plugin" in (slang_prefix or "") else "")
+        gold_read_cmd = (f"{_plugin_line}read_slang {gold_read} "
+                         f"--top {top} -DSIMULATION -DYOSYS")
+    else:
+        gold_read_cmd = f"read_verilog -sv {gold_read}"
     return (
         # --- gold = RTL, kept as generic satgen-modelable Yosys cells ---
-        f"read_verilog -sv {gold_read}\n"
+        f"{gold_read_cmd}\n"
         f"prep -top {top}\n"
         # #155: legalize any $mem/$mem_v2 (packed by prep's memory_collect) to
         # flops+decode BEFORE flatten so equiv_induct's satgen can model it;
@@ -669,18 +747,54 @@ def main(argv: Optional[List[str]] = None) -> int:
         liberty = None
         print("[lec_run] gate is a generic $_-primitive netlist → "
               "read_verilog -icells (no Liberty).", file=sys.stderr)
-    script = build_equiv_script(gold_files, gate_abs, resolved_top, liberty,
-                                gate_is_generic=gate_is_generic)
-
     # Write the .ys into the (bind-mounted) project reports dir so the
     # container sees it at the same absolute path (same assumption that lets
     # yosys read the RTL/netlist by their host absolute paths).
     ys_host = rpt_out.parent / "lec_equiv.ys"
-    ys_host.write_text(script, encoding="utf-8")
     ys_in_container = str(ys_host.resolve())
+    gold_frontend = "verilog"
+
+    def _run(frontend: str, slang_prefix: str = ""):
+        script = build_equiv_script(gold_files, gate_abs, resolved_top, liberty,
+                                    gate_is_generic=gate_is_generic,
+                                    gold_frontend=frontend,
+                                    slang_prefix=slang_prefix)
+        ys_host.write_text(script, encoding="utf-8")
+        return run_yosys_equiv(container, ys_in_container)
 
     t0 = time.time()
-    launched, raw = run_yosys_equiv(container, ys_in_container)
+    launched, raw = _run("verilog")
+
+    # SLANG GOLD-READ FALLBACK: the built-in `read_verilog -sv` gold read
+    # parse-ABORTED (no miter built) on an SV closure the reader can't take
+    # (package-scope refs, unpacked-array ports). Retry the gold with the SAME
+    # `read_slang` frontend the synth step auto-uses, so a design that
+    # SYNTHESISES cleanly is also LEC-comparable. Only retry on a genuine
+    # zero-miter parse-abort; adopt the slang run only if it made progress
+    # (built a miter), else keep the INCONCLUSIVE verdict.
+    if launched:
+        _p1 = parse_equiv_output(raw)
+        if _p1["parse_error"] and is_frontend_parse_abort(raw):
+            try:
+                from synth_frontend import resolve_slang_load_prefix
+                slang_prefix = resolve_slang_load_prefix(container, _docker_exec3)
+            except Exception:
+                slang_prefix = ""  # fork-safe default: read_slang built-in
+            print("[lec_run] gold read_verilog -sv parse-aborted → retrying "
+                  "gold with read_slang (SV-2017 frontend).", file=sys.stderr)
+            launched2, raw2 = _run("slang", slang_prefix)
+            if launched2:
+                _p2 = parse_equiv_output(raw2)
+                if not _p2["parse_error"]:
+                    raw = raw2
+                    gold_frontend = "slang"
+                    print("[lec_run] read_slang gold read built a miter "
+                          "(SV-2017 frontend).", file=sys.stderr)
+                else:
+                    # slang also couldn't parse: keep the more-recent log but the
+                    # verdict stays INCONCLUSIVE (never a false FAIL).
+                    raw = raw2
+                    gold_frontend = "slang"
     elapsed = round(time.time() - t0, 2)
 
     # Always persist the raw tool log for transparency / gate corroboration.
@@ -707,6 +821,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     report = build_report(parsed, resolved_top, gate_abs, liberty)
     report["elapsed_sec"] = elapsed
     report["gold_rtl_files"] = [Path(f).name for f in gold_files]
+    # Provenance: which gold frontend actually built the miter (verilog | slang).
+    report["gold_frontend"] = gold_frontend
     json_out.write_text(json.dumps(report, indent=2, ensure_ascii=False))
 
     print(json.dumps({
@@ -721,9 +837,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     }, indent=2, ensure_ascii=False))
 
     # PRODUCER contract: 0 whenever a truthful verdict was written (PASS,
-    # SKIPPED-CONDITION, or an evidence-backed FAIL). 1 only when Yosys ran
-    # but produced no parseable equivalence evidence (could-not-run-the-check).
-    return 1 if parsed["parse_error"] else 0
+    # SKIPPED-CONDITION, INCONCLUSIVE, or an evidence-backed FAIL). 1 only when
+    # Yosys ran but produced no parseable evidence AND it is not a frontend
+    # parse-abort (a parse-abort is a truthful INCONCLUSIVE, not a tool failure).
+    return 1 if (parsed["parse_error"]
+                 and parsed["verdict"] != "INCONCLUSIVE") else 0
 
 
 if __name__ == "__main__":

@@ -17,8 +17,11 @@ Covered:
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
@@ -44,6 +47,216 @@ def test_recipe_no_blackbox_ok():
     ys = L.build_yosys_equiv_script("gold.v", "gate.v", "lib.lib", "top")
     assert "equiv_status" in ys
     assert "read_verilog -lib" not in ys  # none supplied
+
+
+# ---- FUNCTIONAL (sound) recipe -------------------------------------------
+def test_functional_recipe_reads_liberty_without_lib():
+    # functional_lib=True → SOUND models: `read_liberty <lib>` (NO -lib) so
+    # equiv proves each cell's function instead of assuming matched cells equal.
+    ys = L.build_yosys_equiv_script("gold.v", "gate.v", "lib.lib", "top",
+                                    functional_lib=True)
+    assert "read_liberty lib.lib" in ys        # functional read
+    assert "read_liberty -lib lib.lib" not in ys   # NOT the blackbox false-pass
+    # the three GOTCHA transforms that make functional models reach the miter:
+    assert "flatten" in ys                     # GOTCHA 1: models survive copy
+    assert "async2sync" in ys                  # GOTCHA 2: latch/ICG handling
+    assert "opt -purge" in ys and "opt_clean -purge" in ys  # GOTCHA 3: dead nets
+    # engine tail unchanged
+    for cmd in ("equiv_make gold gate equiv", "equiv_simple", "equiv_induct",
+                "equiv_status"):
+        assert cmd in ys, cmd
+    # order: flatten before design -stash (so models are inlined before copy),
+    # async2sync after prep and before equiv_make.
+    assert ys.index("flatten") < ys.index("design -stash gold")
+    assert ys.index("async2sync") < ys.index("equiv_make gold gate equiv")
+
+
+def test_functional_recipe_keeps_physical_blackbox():
+    # physical-only cells (fill/tap/decap/diode) still read -lib as inert
+    # blackboxes even in the functional recipe (they carry no function).
+    ys = L.build_yosys_equiv_script(
+        "gold.v", "gate.v", "lib.lib", "top",
+        blackbox_v=["/pdk/sc__fill.v"], functional_lib=True)
+    assert "read_verilog -lib /pdk/sc__fill.v" in ys
+
+
+def test_functional_recipe_strips_gate_supply_ports():
+    ys = L.build_yosys_equiv_script(
+        "gold.v", "gate.v", "lib.lib", "top",
+        strip_gate_ports=["VDD", "VSS"], functional_lib=True)
+    assert "delete top/w:VDD" in ys and "delete top/w:VSS" in ys
+    assert ys.index("delete top/w:VDD") < ys.index("equiv_make gold gate equiv")
+
+
+def test_blackbox_recipe_is_the_default_and_unchanged():
+    # functional_lib defaults False → the always-available (-lib) recipe, byte-
+    # for-byte the pre-functional script (guards the proven path from drift).
+    default = L.build_yosys_equiv_script("g.v", "n.v", "l.lib", "top")
+    explicit = L.build_yosys_equiv_script("g.v", "n.v", "l.lib", "top",
+                                          functional_lib=False)
+    assert default == explicit
+    assert "read_liberty -lib l.lib" in default
+    assert "async2sync" not in default  # no functional-only transforms
+
+
+# ---- functional read_liberty capability probe ----------------------------
+def test_probe_classifier_detects_icg_abort():
+    # the pre-fork functional read_liberty abort on an ICG cell → fall back.
+    log = ("Executing Liberty frontend.\n"
+           "ERROR: Missing function on output GCLK of cell dlclkp.\n")
+    assert L.functional_read_liberty_aborted(log) is True
+
+
+def test_probe_classifier_ignores_equiv_sat_gap():
+    # the equiv-time "No SAT model available for cell …" is the NORMAL inert
+    # physical-cell gap — it must NOT trigger a spurious functional→-lib fallback.
+    log = ("Found 10 $equiv cells in equiv:\n"
+           "ERROR: No SAT model available for cell _1__gate (FILLER).\n")
+    assert L.functional_read_liberty_aborted(log) is False
+
+
+def test_build_functional_probe_script():
+    s = L.build_functional_probe_script("/pdk/x.lib")
+    assert s.strip() == "read_liberty /pdk/x.lib"   # NO -lib → functional read
+
+
+# ---- SOUNDNESS parser gate: matched-output function bug is NEVER a PASS ----
+def test_parser_matched_output_function_bug_is_not_pass():
+    # A gold NAND2 vs gate NOR2 (matched ports, genuinely different function)
+    # leaves the output $equiv cell UNPROVEN. The parser MUST return UNPROVEN,
+    # never PROVEN_EQUIVALENT — this locks in that we never regress to the -lib
+    # blackbox false-pass (which reports this pair "proven").
+    log = ("Found 1 $equiv cells in equiv:\n"
+           "  Of those cells 0 are proven and 1 are unproven.\n")
+    r = L.parse_equiv_log(log)
+    assert r["verdict"] == L.V_UNPROVEN
+    assert r["equivalent"] is False
+    assert L.evaluate_report({"verdict": r["verdict"], "total_points": 1,
+                              "proven_points": 0, "unproven_points": 1,
+                              "equivalent": False})["result"] == "FAIL"
+
+
+def test_parser_buffer_insert_positive_proves():
+    log = ("Found 3 $equiv cells in equiv:\n"
+           "  Of those cells 3 are proven and 0 are unproven.\n"
+           "Equivalence successfully proven!\n")
+    r = L.parse_equiv_log(log)
+    assert r["verdict"] == L.V_PASS and r["equivalent"] is True
+
+
+# ---- REAL in-container soundness negative control (fork-safe, NDA-clean) ---
+# The strongest gate: actually run the FUNCTIONAL recipe on a synthetic
+# combinational Liberty and assert the engine UNPROVES a matched-output function
+# bug and PROVES a buffer-insert. functional read_liberty works on the current
+# image for combinational cells (the fork fix is only needed for ICG cells), so
+# this runs TODAY. Skips when no usable, path-visible container is available.
+def _container_sees(root: Path) -> bool:
+    """True iff `docker exec vibeic-eda` can read a probe file under `root` (i.e.
+    the path is bind-mounted at the same absolute path inside the container)."""
+    try:
+        probe = root / ".lec_container_probe"
+        probe.write_text("ok")
+        r = subprocess.run(
+            ["docker", "exec", "vibeic-eda", "bash", "-lc",
+             f"test -f {probe} && cat {probe}"],
+            capture_output=True, text=True, timeout=30)
+        probe.unlink(missing_ok=True)
+        return r.returncode == 0 and "ok" in (r.stdout or "")
+    except (subprocess.SubprocessError, OSError):
+        return False
+
+
+def _mounted_workdir(tmp_path: Path):
+    """A container-visible work dir + a cleanup callback. Prefer pytest's
+    tmp_path (auto-cleaned); if that isn't bind-mounted into the container, fall
+    back to a self-cleaning tempdir under $HOME (mounted here). Returns
+    (dir, cleanup) or (None, noop) when no container-visible path exists."""
+    if _container_sees(tmp_path):
+        return tmp_path, (lambda: None)
+    import tempfile
+    import shutil
+    d = Path(tempfile.mkdtemp(prefix=".lec_it_", dir=str(Path.home())))
+    if _container_sees(d):
+        return d, (lambda: shutil.rmtree(d, ignore_errors=True))
+    shutil.rmtree(d, ignore_errors=True)
+    return None, (lambda: None)
+
+
+def _run_equiv_in_container(ys_text: str, ys_path: Path) -> dict:
+    ys_path.write_text(ys_text)
+    cmd = (f"export PATH=/foss/tools/yosys/bin:/foss/tools/bin:$PATH && "
+           f"yosys -s {ys_path} 2>&1")
+    r = subprocess.run(["docker", "exec", "vibeic-eda", "bash", "-lc", cmd],
+                       capture_output=True, text=True, timeout=300)
+    log = "\n".join(ln for ln in (r.stdout or "").splitlines()
+                    if not ln.lstrip().startswith("[INFO]"))
+    return L.parse_equiv_log(log)
+
+
+_SOUNDNESS_LIB = """library(soundness) {
+  cell(AND2X1) { area:1;
+    pin(A){direction:input;} pin(B){direction:input;}
+    pin(Y){direction:output; function:"(A*B)";} }
+  cell(NAND2X1) { area:1;
+    pin(A){direction:input;} pin(B){direction:input;}
+    pin(Y){direction:output; function:"(A*B)'";} }
+  cell(BUFX1) { area:1;
+    pin(A){direction:input;}
+    pin(Y){direction:output; function:"A";} }
+}
+"""
+
+
+def test_functional_recipe_unproves_function_bug_in_container(tmp_path):
+    work, cleanup = _mounted_workdir(tmp_path)
+    if work is None:
+        pytest.skip("vibeic-eda container not available / path not bind-mounted")
+    try:
+        lib = work / "soundness.lib"
+        lib.write_text(_SOUNDNESS_LIB)
+        (work / "gold_and.v").write_text(
+            "module top(input a, input b, output y);\n"
+            "  AND2X1 u0(.A(a), .B(b), .Y(y));\nendmodule\n")
+        (work / "gate_nand.v").write_text(
+            "module top(input a, input b, output y);\n"
+            "  NAND2X1 u0(.A(a), .B(b), .Y(y));\nendmodule\n")
+        (work / "gold_buf.v").write_text(
+            "module top(input a, output y);\n"
+            "  BUFX1 u0(.A(a), .Y(y));\nendmodule\n")
+        (work / "gate_buf.v").write_text(
+            "module top(input a, output y);\n  wire t;\n"
+            "  BUFX1 u0(.A(a), .Y(t));\n  BUFX1 u1(.A(t), .Y(y));\nendmodule\n")
+
+        # (neg) functional recipe MUST NOT prove a matched-output function bug.
+        neg = _run_equiv_in_container(
+            L.build_yosys_equiv_script(str(work / "gold_and.v"),
+                                       str(work / "gate_nand.v"), str(lib), "top",
+                                       functional_lib=True),
+            work / "neg.ys")
+        assert neg["verdict"] != L.V_PASS, neg
+        assert neg["equivalent"] is False
+
+        # (bug) the -lib blackbox recipe FALSE-PASSES the same pair — documents
+        # the unsoundness the functional path fixes (-lib is fallback-only).
+        bug = _run_equiv_in_container(
+            L.build_yosys_equiv_script(str(work / "gold_and.v"),
+                                       str(work / "gate_nand.v"), str(lib), "top",
+                                       functional_lib=False),
+            work / "bug.ys")
+        assert bug["verdict"] == L.V_PASS, (
+            "the -lib blackbox recipe is expected to false-pass; if it no "
+            "longer does, update this soundness rationale")
+
+        # (pos) functional recipe MUST prove a genuine buffer-insert equivalence.
+        pos = _run_equiv_in_container(
+            L.build_yosys_equiv_script(str(work / "gold_buf.v"),
+                                       str(work / "gate_buf.v"), str(lib), "top",
+                                       functional_lib=True),
+            work / "pos.ys")
+        assert pos["verdict"] == L.V_PASS, pos
+        assert pos["unproven"] == 0
+    finally:
+        cleanup()
 
 
 # ---- v1.3.93 gate-only supply-port strip ----------------------------------
