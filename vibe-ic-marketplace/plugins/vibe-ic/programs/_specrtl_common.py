@@ -18,12 +18,14 @@ Exposed:
   classify_rtl_resets(module_body)         -> {signal: {"mode":set,"polarity":set}}
   SpecContract(module, ports, reset, latency_registered)  dataclass
   extract_spec_contract(text)              -> SpecContract
+  rtl_source_files(project_dir)            -> [Path]  (authored-RTL collector)
 """
 from __future__ import annotations
 
 import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 
@@ -49,6 +51,105 @@ def strip_comments(src: str) -> str:
             out.append(src[i])
             i += 1
     return ''.join(out)
+
+
+# ---------------------------------------------------------------------------
+# AUTHORED-RTL source collection (shared by the strict-structural gate family)
+# ---------------------------------------------------------------------------
+# SCALE RATIONALE (first Kimi-scale run, 2026-07): the RTL-SOURCE structural
+# gates (self_rx_mask_check, host_soft_reset_unwake_path_check,
+# crc_completeness_check, crc_residual_check, handshake_check,
+# bitwidth_consistency_check, rx_byte_valid_requires_ibt_gate_check) each
+# collected Verilog by rglobbing the WHOLE project for *.v/*.sv (they run with
+# cwd=<project>, arg "."). On a 3.1M-cell design the emitted GENERIC NETLISTS
+# phase2/stage2/synth/netlist_yosys.v and netlist.v are 342 MB EACH; the
+# gates' char-level comment strippers and regex passes then take >30 min per
+# gate, and all 7 parallel gates were killed at the #525 900 s per-gate
+# budget — an INCONCLUSIVE audit purely from pathological ingestion. These
+# gates audit AUTHORED RTL SOURCE; an emitted netlist / sim build / verify
+# tree is NEVER a legitimate input to them, so excluding those outputs
+# narrows nothing they legitimately scan (§4.05-safe: on a small project the
+# canonical rtl dir is what they effectively audited anyway).
+#
+# chip-AGNOSTIC + dependency-free: pathlib only, flow-stage directory names
+# from the canonical runner layout (_path_layout), no chip/vendor/SKU literal.
+
+# Verilog source suffixes the gate family collects (kept in lock-step with the
+# per-gate `rglob("*.v") + rglob("*.sv")` calls this helper replaces).
+RTL_SOURCE_EXTS: Tuple[str, ...] = ("*.v", "*.sv")
+
+# Generated-output directory names (any path component below the project root)
+# that hold EMITTED artefacts, never authored RTL source:
+#   stage2/stage3/stage4/phase3 — synth / PnR / tapeout stage outputs
+#   synth                       — netlist.v / netlist_yosys.v home
+#   sim / sim_full_stack / sim_professional / verify — sim builds + benches
+#   reports / _logs             — reports and logs (stray .v copies)
+RTL_SOURCE_EXCLUDED_DIR_PARTS = frozenset({
+    "stage2", "stage3", "stage4", "phase3",
+    "sim", "sim_full_stack", "sim_professional", "verify",
+    "reports", "_logs", "synth",
+})
+
+# Sanity cap for the FALLBACK (no canonical rtl dir) scan: no authored RTL
+# source file is 342 MB — only flat machine-emitted netlists reach that size.
+# 8 MB is far above any hand/LLM-authored module yet far below the smallest
+# netlist that ever hurt (the #615 precedent used a 2 MB floor for the same
+# distinction inside reset_dependency_check).
+RTL_SOURCE_MAX_BYTES = 8 * 1024 * 1024
+
+
+def rtl_source_files(project_dir) -> List[Path]:
+    """Collect a project's AUTHORED RTL source files (*.v / *.sv).
+
+    Contract:
+      1. If ``<project>/phase2/stage1/rtl/`` — the canonical authored-RTL home
+         (runner layout ``_path_layout.rtl_dir``) — exists and holds at least
+         one *.v/*.sv file, ONLY that tree is scanned.
+      2. Otherwise (legacy layouts, or the caller passed a bare RTL dir
+         directly), rglob ``project_dir`` but EXCLUDE any file that sits under
+         a generated-output directory (RTL_SOURCE_EXCLUDED_DIR_PARTS matched
+         against the path components below ``project_dir``, filename itself
+         excluded from the match) AND any file larger than
+         RTL_SOURCE_MAX_BYTES.
+
+    ``project_dir`` must be a directory; anything else returns []. Returned
+    paths are descendants of ``project_dir`` exactly as the caller passed it
+    (never resolve()d — gates run with cwd=<project> and report relative
+    paths), sorted and de-duplicated. Single-FILE arguments stay the calling
+    gate's own business — this helper is only the directory collector.
+    """
+    root = Path(project_dir)
+    if not root.is_dir():
+        return []
+    canonical = root / "phase2" / "stage1" / "rtl"
+    if canonical.is_dir():
+        files = [p for ext in RTL_SOURCE_EXTS for p in canonical.rglob(ext)
+                 if p.is_file()]
+        if files:
+            return sorted(set(files))
+    out: List[Path] = []
+    for ext in RTL_SOURCE_EXTS:
+        for p in root.rglob(ext):
+            if not p.is_file():
+                continue
+            try:
+                rel_parts = p.relative_to(root).parts
+            except ValueError:
+                # e.g. root == Path('.'): rglob already yields bare relative
+                # paths that do not textually start with '.', so the parts ARE
+                # the relative parts.
+                rel_parts = p.parts
+            # Only DIRECTORY components below the root are matched ([:-1]) —
+            # a design file merely NAMED `synth.v`/`verify.sv` is kept.
+            if RTL_SOURCE_EXCLUDED_DIR_PARTS.intersection(rel_parts[:-1]):
+                continue
+            try:
+                if p.stat().st_size > RTL_SOURCE_MAX_BYTES:
+                    continue
+            except OSError:
+                continue
+            out.append(p)
+    return sorted(set(out))
 
 
 # ---------------------------------------------------------------------------
