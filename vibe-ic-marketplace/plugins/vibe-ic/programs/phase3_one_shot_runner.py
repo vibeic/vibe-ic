@@ -10047,10 +10047,18 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
     # DRC step FAIL with "Unable to open file: /home//... (errno=2)".
     gds_c = _to_container_path(str(gds), container)
     rpt_c = _to_container_path(str(rpt), container)
+    # Open .lydrc decks follow two -rd variable-name conventions for the
+    # layout/report handoff: sky130A.lydrc reads $input/$report, the
+    # klayoutmatthias FreePDK45.lydrc reads $in_gds/$report_file. Define
+    # BOTH spellings — an extra -rd a deck never reads is inert, and the
+    # deck's own `source(...)`/`report(...)` picks whichever it declares.
+    # (First hit: nangate45 DRC died with "'source': No layout loaded".)
     cmd = (
         f"export QT_QPA_PLATFORM=offscreen && "
         f"klayout -b -r {pdk.drc_deck} "
-        f"-rd input={gds_c} -rd report={rpt_c} -rd top_cell={top}"
+        f"-rd input={gds_c} -rd report={rpt_c} "
+        f"-rd in_gds={gds_c} -rd report_file={rpt_c} "
+        f"-rd top_cell={top}"
     )
     # v1.3.47 — progress-stall watchdog (not a fixed 3600s kill). A large-GDS
     # DRC that is still burning CPU / emitting progress is never killed; only a
