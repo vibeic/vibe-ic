@@ -24,3 +24,19 @@ input/
 **/stage*/**/*.v
 **/stage*/**/*.def
 **/stage*/**/*.spef
+# tool reports (.rpt) + console logs echo the signoff deck PATH, per-rule
+# rule-IDs, foundry cell names (DRC/LVS/STA reports), and the old run-dir path
+# → NEVER commit. Metrics/verdicts live in RESULT.md only.
+*.rpt
+*.log
+# entire working + report trees are metrics-only-via-RESULT.md; keep them out
+# so a careless `git add <run-dir>` can never stage NDA-derived content.
+reports/
+phase1/
+phase2/
+phase3/
+steps/
+sim/
+provenance.jsonl
+waivers.json
+rig_topology.json
