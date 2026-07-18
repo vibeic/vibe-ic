@@ -2047,6 +2047,11 @@ class PdkConfig:
     #   sign-off DRC ({"layers":[{gds,min_density,tile_um,pitch_um,
     #   margin_um},...]}); None → no fill inserted.
     stdcell_marker_layer: Optional[str] = None
+    # Path to the bridge sign-off config itself. The streamout layer
+    # conformance check reads it to learn which layers the flow is entitled to
+    # draw on beyond the library's own (fill, tap geometry, rail markers,
+    # port-label text), so those are not mistaken for un-mapped orphans.
+    signoff_config_path: Optional[str] = None
     bridge_magicrc: Optional[str] = None
     bridge_netgen_setup: Optional[str] = None
     dummy_fill: Optional[Dict[str, Any]] = None
@@ -2128,6 +2133,26 @@ class PdkConfig:
     # smaller value for a stricter house rule. PSM's padless-core single-bump
     # model (PSM-0073) makes the measured drop a CONSERVATIVE upper bound.
     ir_budget_pct: Optional[float] = None
+
+
+def _declared_lefdef_layermap(pdk_dir: Path,
+                              signoff_cfg: Dict[str, Any]) -> Optional[str]:
+    """Bridge-declared streamout layermap (`lefdef_layermap` in the PDK
+    bridge's signoff config), resolved relative to the PDK dir — the same
+    shape `lvs_layermap` already uses.
+
+    Discovery-by-glob only works when the vendor map sits INSIDE the staged
+    PDK tree. A bundle that stages `lef/*.lef` without the map file that
+    ships beside them leaves discovery empty and the streamout silently
+    falls back to legacy numbering (see `_discover_lefdef_layermap`). An
+    explicit declaration lets such a bundle point at the map wherever it
+    was staged. Returns None when undeclared or the path does not exist."""
+    rel = (signoff_cfg or {}).get("lefdef_layermap")
+    if not rel:
+        return None
+    p = Path(str(rel))
+    cand = p if p.is_absolute() else (pdk_dir / p)
+    return str(cand) if cand.is_file() else None
 
 
 def _discover_lefdef_layermap(pdk_dir: Path) -> Optional[str]:
@@ -2446,9 +2471,13 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 # Encounter/SoC LEF->GDS streamout map so GDS gets the foundry's
                 # official layer numbers (else a sign-off deck misreads routing
                 # layers — spm commercial-PDK: 1394 spurious TG2 violations without it).
-                lefdef_layermap=_discover_lefdef_layermap(pdk_dir),
+                lefdef_layermap=(
+                    _declared_lefdef_layermap(pdk_dir, _signoff_cfg)
+                    or _discover_lefdef_layermap(pdk_dir)),
                 stdcell_marker_layer=_signoff_cfg.get(
                     "stdcell_exclusion_marker_layer"),
+                signoff_config_path=(str(_cfg_f) if _cfg_f.is_file()
+                                     else None),
                 bridge_magicrc=str(_b_magicrc) if _b_magicrc else None,
                 bridge_netgen_setup=str(_b_netgen) if _b_netgen else None,
                 dummy_fill=_signoff_cfg.get("dummy_fill"),
@@ -8176,6 +8205,31 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     # → legacy numbering preserved.
     lefdef_map_c = (_to_container_path(str(pdk.lefdef_layermap), container)
                     if pdk.lefdef_layermap else "")
+    # Sign-off streamout numbering is LOAD-BEARING, not advisory. Without a
+    # LEF/DEF layer map the DEF reader assigns its own compact numbering, so
+    # every DEF-sourced shape (routing, vias, PDN) lands on GDS numbers that
+    # have nothing to do with the foundry's. A foundry deck then reads those
+    # shapes as unrelated purposes and the design fails rules it does not
+    # actually violate — while the streamout step still reports PASS, because
+    # the old code only PRINTED "legacy numbering" and carried on. Measured on
+    # the caravel_user_project commercial-PDK clean run: identical DEF, identical
+    # deck, 4533 rules checked either way — 51 rules firing with the map absent
+    # vs 1 with it applied, and the foundry via layers were EMPTY in the
+    # un-mapped GDS (the router's vias had been written elsewhere). A GDS in
+    # that state cannot be fabricated, so shipping it as PASS is the defect.
+    # Scoped to foundry sign-off (a vendor deck is present); OSS PDKs either
+    # carry their own map or never reach this branch.
+    if pdk.calibre_drc and not lefdef_map_c:
+        return StepResult(
+            "gds", "FAIL", time.time() - t0,
+            "streamout layer map missing: this PDK ships a foundry sign-off "
+            "DRC deck, but no LEF/DEF->GDS streamout layermap was found. The "
+            "DEF reader would fall back to legacy numbering and every routed "
+            "shape would land on a non-foundry GDS layer, so the sign-off deck "
+            "reads the layout as geometry the design never drew. Stage the "
+            "vendor streamout map (`<name> <purpose> <layer> <datatype>`) "
+            "under input/pdk/, or declare its path as `lefdef_layermap` in the "
+            "PDK bridge signoff config.")
     # v1.3.83 — std-cell exclusion marker env (config-driven; empty → no-op).
     marker_arg = pdk.stdcell_marker_layer or ""
     cmd = (
@@ -8234,6 +8288,32 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     # (no-op for OSS PDKs).
     label_ok, label_note = _klayout_restore_port_labels(
         project, top, pdk, container, gds_out, def_file)
+    # A map can also be present but WRONG or partial, which the pre-flight
+    # gate above cannot see. Verify the finished artifact instead: every layer
+    # carrying shapes must be accounted for by the map, the library GDS or the
+    # bridge config. Anything else is geometry on a layer no authority
+    # recognises — the same defect, caught from the GDS itself.
+    if pdk.calibre_drc:
+        try:
+            import importlib
+            _lmc = importlib.import_module("gds_streamout_layermap_check")
+            _f, _s = _lmc.audit(
+                gds_out,
+                Path(pdk.lefdef_layermap) if pdk.lefdef_layermap else None,
+                Path(pdk.cell_gds) if pdk.cell_gds else None,
+                (Path(pdk.signoff_config_path)
+                 if pdk.signoff_config_path else None))
+            _errs = [x for x in _f if x.severity == "ERROR"]
+            if _errs:
+                return StepResult(
+                    "gds", "FAIL", time.time() - t0,
+                    "streamout layer conformance: "
+                    + "; ".join(f"{x.category}: {x.message}" for x in _errs)
+                    + f" (orphan layers: {', '.join(_s.orphans) or 'none'})")
+        except Exception:                              # noqa: BLE001
+            # The check is a guard, not a dependency: if it cannot run, the
+            # pre-flight gate above has already covered the missing-map case.
+            pass
     return StepResult("gds", "PASS", time.time() - t0,
                       f"gds={gds_out.name} size={gds_out.stat().st_size} "
                       f"(streamout=klayout"
