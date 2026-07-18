@@ -30,15 +30,33 @@ def test_parse_cputime_hms():
 
 
 def test_container_cpu_seconds_sums_marker_matches():
+    # 4-column rows (pid ppid cpu args) — process-TREE accounting.
     marker = "/foss/x/pnr.tcl"
-    ps = ("123 openroad -exit /foss/x/pnr.tcl\n"
-          "  4 bash -lc openroad -exit /foss/x/pnr.tcl\n"
-          " 99 klayout -b -r /other/deck\n")
+    ps = ("10 1 123 openroad -exit /foss/x/pnr.tcl\n"
+          "11 1   4 bash -lc openroad -exit /foss/x/pnr.tcl\n"
+          "12 1  99 klayout -b -r /other/deck\n")
 
     def raw(c, cmd, timeout=15):
         return (0, ps, "") if "cputimes=" in cmd else (1, "", "")
 
     assert DW.container_cpu_seconds("c", marker, raw) == 127.0
+
+
+def test_container_cpu_seconds_counts_marked_trees_descendants():
+    # The load-bearing case: yosys runs ABC in a child `yosys-abc` whose argv
+    # does NOT carry the marker. Argv-only accounting reported zero progress
+    # during ABC's long quiet phase and the stall watchdog killed a healthy
+    # 1.8M-cell synth; tree accounting must count the descendant.
+    marker = "/proj/netlist.v"
+    ps = ("100 1    5 yosys -p write_verilog /proj/netlist.v\n"
+          "200 100 3600 /foss/tools/yosys/bin/yosys-abc -s\n"
+          "300 200  10 abc-helper\n"
+          "400 1   999 klayout -b -r /other/deck\n")
+
+    def raw(c, cmd, timeout=15):
+        return (0, ps, "") if "cputimes=" in cmd else (1, "", "")
+
+    assert DW.container_cpu_seconds("c", marker, raw) == 3615.0
 
 
 def test_container_cpu_seconds_none_without_marker():
@@ -47,7 +65,7 @@ def test_container_cpu_seconds_none_without_marker():
 
 def test_container_cpu_seconds_none_when_no_match():
     def raw(c, cmd, timeout=15):
-        return (0, "1 openroad -exit /other.tcl\n", "")
+        return (0, "5 1 1 openroad -exit /other.tcl\n", "")
     assert DW.container_cpu_seconds("c", "/not/here.tcl", raw) is None
 
 
@@ -55,7 +73,7 @@ def test_container_cpu_seconds_hms_fallback():
     def raw(c, cmd, timeout=15):
         if "cputimes=" in cmd:
             return (1, "", "")     # unsupported → empty
-        return (0, "00:02:00 netgen -batch lvs netlist.spice top\n", "")
+        return (0, "7 1 00:02:00 netgen -batch lvs netlist.spice top\n", "")
     assert DW.container_cpu_seconds("c", "netlist.spice", raw) == 120.0
 
 
