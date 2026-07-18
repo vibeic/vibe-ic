@@ -83,6 +83,55 @@ def _load_deny_tokens(path: Path) -> Tuple[str, ...]:
 
 _FORBIDDEN_TOKENS: Tuple[str, ...] = _load_deny_tokens(_DENY_PATH)
 
+
+# ---------------------------------------------------------------------------
+# Occurrence-level allowlist (line-EXACT) — the fine-grained companion to the
+# file-level `_ALLOWLIST_PATTERNS` below.
+#
+# A few deny-listed SKU tokens are UNAVOIDABLE in source: the plugin must name
+# the real PDK / real on-disk filenames to DISCOVER them at run time (the
+# `_commercial_pdk_SHIM_NAME` shim filename + `commercial_pdk-*.lib` library globs the SPICE
+# gate rglobs for; the `commercial_pdk` PDK-config key + cell-model path the
+# fault/DFT flow matches), and two DETECTOR programs must carry the SKU inside
+# their OWN scan patterns (removing it would blind the very guard that catches
+# leaks). These are enumerated line-EXACTLY in `chip_deny_allow.txt`.
+#
+# A finding is suppressed ONLY when BOTH the file path AND the exact stripped
+# source line match an allow entry — so (both intentional):
+#   * a NEW prose/comment leak is a DIFFERENT line  -> still caught (fail-safe);
+#   * EDITING a sanctioned line changes its text     -> re-flagged, forcing a
+#     deliberate re-review + allow-list update.
+# The proper long-term fix (config/env-driven PDK-name resolution so NO SKU
+# literal is needed in source at all) is tracked as a separate deferred item.
+_ALLOW_PATH = (
+    Path(__file__).resolve().parent
+    / "tests" / "chip_deny_allow.txt"
+)
+
+
+def _load_line_allow(path: Path) -> dict:
+    r"""Read `<rel_path>\t<exact stripped source line>` entries (one per line;
+    `#` comments and blank lines ignored). Returns
+    {normalized_rel_path: set(lines)}. Missing file -> empty (no suppression)."""
+    allow: dict = {}
+    try:
+        raw = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return allow
+    for ln in raw:
+        if not ln.strip() or ln.lstrip().startswith("#"):
+            continue
+        if "\t" not in ln:
+            continue
+        rel, line = ln.split("\t", 1)
+        rel_norm = rel.strip().replace("\\", "/")
+        allow.setdefault(rel_norm, set()).add(line)
+    return allow
+
+
+_LINE_ALLOW: dict = _load_line_allow(_ALLOW_PATH)
+
+
 # File / directory patterns whose content is allowed to mention the
 # above tokens (because the file IS the documentation about them, or
 # is a regex-pattern store keyed on these tokens for input-doc parsing).
@@ -130,6 +179,13 @@ def _is_allowlisted(rel_path: str) -> bool:
     return any(p in rel_norm for p in _ALLOWLIST_PATTERNS)
 
 
+def _is_line_allowlisted(rel_norm: str, line: str) -> bool:
+    """True when this exact (file, stripped line) is a sanctioned PDK-discovery
+    literal / detector pattern registered in chip_deny_allow.txt."""
+    allowed = _LINE_ALLOW.get(rel_norm)
+    return bool(allowed) and line.strip() in allowed
+
+
 def _build_token_re(extra: Optional[List[str]] = None) -> re.Pattern:
     tokens = list(_FORBIDDEN_TOKENS)
     if extra:
@@ -168,7 +224,10 @@ def audit(plugin_root: Path,
             text = f.read_text(encoding="utf-8")
         except OSError:
             continue
+        rel_norm = rel_str.replace("\\", "/")
         for ln_no, line in enumerate(text.splitlines(), start=1):
+            if _is_line_allowlisted(rel_norm, line):
+                continue
             for m in token_re.finditer(line):
                 tok = m.group(1)
                 # Extract context — short snippet around the match

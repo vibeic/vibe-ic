@@ -13,8 +13,8 @@ Take a DRC report and a layout, and produce a targeted fix plan — which rules 
 > forked KLayout **SVRF engine natively parses AND executes the foundry's own
 > Calibre/Assura SVRF `.rule` DRC deck** (the very same deck the foundry ships,
 > unmodified). Sign-off-grade DRC on a commercial/NDA PDK therefore requires **NO
-> Calibre or Assura binary/license**. Proven on the commercial foundry commercial_pdk (180 nm)
-> deck `Calibre_commercial_pdk_DRC_D4.20.rule`: **224 layers, 4533 rules executed** natively
+> Calibre or Assura binary/license**. Proven on a commercial 180 nm PDK
+> deck `Calibre_<PDK>_DRC.rule`: **224 layers, 4533 rules executed** natively
 > in one run.
 
 - **What it is:** a **native C++ KLayout buddy** (`svrfdrc`, compiled from
@@ -25,7 +25,7 @@ Take a DRC report and a layout, and produce a targeted fix plan — which rules 
   Edge/DENSITY/ANTENNA classes with no polygon-DRC equivalent are honestly SKIPPED,
   never falsely PASSed. **NO Python interpreter, NO `-r` script, NO `.drc` file.**
   (It replaces the retired pure-Python `run_svrf_drc.py`; the report format is
-  byte-identical, proven on the real commercial_pdk deck, so downstream parsing/classifying
+  byte-identical, proven on the real commercial-PDK deck, so downstream parsing/classifying
   is unchanged.)
 - **Where (productized — clean-install-safe):** the `svrfdrc` binary is **BAKED INTO
   the vibeic-eda image on PATH** (built into `klayout-vibeic`), so a fresh install
