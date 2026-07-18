@@ -2050,6 +2050,13 @@ class PdkConfig:
     bridge_magicrc: Optional[str] = None
     bridge_netgen_setup: Optional[str] = None
     dummy_fill: Optional[Dict[str, Any]] = None
+    # metal_fill_density: config driving the per-layer DENSITY-TARGETED metal
+    #   fill ({"boundary_layer":[l,d],"window_um":W,"max_passes":N,"layers":
+    #   [{name,layer,target,max,space,width},...]}). Distinct from dummy_fill:
+    #   that lays down a fixed PATTERN, this MEASURES each layer's worst density
+    #   window and iterates fill until the layer reaches its target — the number
+    #   the foundry's CMP floor is actually stated in. None → no density fill.
+    metal_fill_density: Optional[Dict[str, Any]] = None
     # same_net_heal: config driving the post-merge same-net routing-metal
     #   near-miss heal ({"layers":[{gds,name,max_bridge_um},...]}); each
     #   max_bridge_um MUST stay below that layer's min-space so the close can
@@ -2445,6 +2452,7 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 bridge_magicrc=str(_b_magicrc) if _b_magicrc else None,
                 bridge_netgen_setup=str(_b_netgen) if _b_netgen else None,
                 dummy_fill=_signoff_cfg.get("dummy_fill"),
+                metal_fill_density=_signoff_cfg.get("metal_fill_density"),
                 same_net_heal=_signoff_cfg.get("same_net_heal"),
                 port_label_restore=_signoff_cfg.get("port_label_restore"),
                 lvs_engine=_signoff_cfg.get("lvs_engine", "magic"),
@@ -8041,6 +8049,53 @@ def _klayout_restore_port_labels(project: Path, top: str, pdk: PdkConfig,
     return False, f"port-label restore NONFATAL: rc={rc} {(out + err)[-300:]}"
 
 
+def _density_metal_fill(project: Path, top: str, pdk: PdkConfig,
+                        gds_path: Path) -> Tuple[bool, str]:
+    """Per-layer DENSITY-TARGETED metal fill on the streamed GDS.
+
+    Delegates to the `metal_fill_emit` plugin program, which drives the KLayout
+    fork's fill engine. Runs at streamout so the per-layer density checks
+    (`metal_layer_density_check`, `erc_density_check`, `dfm_screen_check`) and
+    the sign-off DRC all consume the FILLED layout — filling after they have
+    measured would be theatre. Placed after the dummy-fill PATTERN pass so it
+    measures, and tops up, whatever that already deposited.
+
+    The fill is DRC-safe by construction (per-layer keep-out + space/width from
+    the config), so the sign-off deck still verifies it — nothing is waived.
+
+    NONFATAL, like its `_klayout_dummy_fill` / `_klayout_same_net_heal`
+    siblings: any failure leaves the GDS untouched and is DISCLOSED in the step
+    note. Config-gated — no `metal_fill_density` config, no fill and no claim.
+    """
+    if not pdk.metal_fill_density:
+        return False, "no metal_fill_density config"
+    if not gds_path.is_file():
+        return False, "no GDS to fill"
+    if not (pdk.metal_fill_density or {}).get("layers"):
+        return False, "metal_fill_density config has no layers"
+    prog = Path(__file__).resolve().parent / "metal_fill_emit.py"
+    if not prog.is_file():
+        return False, "metal_fill_emit program not found"
+    pnr_dir = _pl.pnr_dir(project)
+    cfg = pnr_dir / "metal_fill_density_cfg.json"
+    cfg.write_text(json.dumps(pdk.metal_fill_density, indent=2))
+    try:
+        cp = subprocess.run(
+            [sys.executable, str(prog), str(project),
+             "--gds", str(gds_path), "--config", str(cfg),
+             "--cell", top, "--in-place"],
+            capture_output=True, text=True, timeout=3600)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"density fill NONFATAL: {exc}"
+    if cp.returncode != 0:
+        # rc 2 is the program's NAMED disclosed-skip; rc 1 is PARTIAL/FAIL with
+        # the achieved density in its report. Both are reported, never hidden.
+        tail = ((cp.stdout or "") + (cp.stderr or "")).strip().splitlines()
+        return False, ("density fill did NOT complete: "
+                       + (tail[0][:200] if tail else f"rc={cp.returncode}"))
+    return True, "per-layer density fill reached target on every layer"
+
+
 def step_gds(project: Path, top: str, pdk: PdkConfig,
              container: str) -> StepResult:
     t0 = time.time()
@@ -8063,6 +8118,10 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     # Magic's native union merges only abutting/overlapping geometry, NOT
     # the sub-min-space same-net gaps the OSS router leaves, so the heal is
     # genuinely needed and MUST NOT be bypassed by a successful Magic stream.)
+    # NOTE: metal_fill_density is deliberately NOT in this list. Unlike the
+    # features below it is a POST-streamout pass over the finished GDS, so it
+    # works on either streamout engine and must not cost the design Magic's
+    # native geometry merge.
     if (pdk.stdcell_marker_layer or pdk.dummy_fill or pdk.same_net_heal
             or pdk.port_label_restore):
         magic_ok, magic_transcript = False, (
@@ -8076,14 +8135,20 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
         # ORGANIC #600 — manufacturing-grid snap before signoff DRC.
         snap_ok, snap_note = _gds_grid_snap(project, top, pdk, container,
                                             gds_out)
+        # Per-layer density fill BEFORE the density checks / sign-off DRC read
+        # this GDS. Config-gated + NONFATAL; the note always discloses.
+        dfill_ok, dfill_note = _density_metal_fill(project, top, pdk, gds_out)
         return StepResult(
             "gds", "PASS", time.time() - t0,
             f"gds={gds_out.name} size={gds_out.stat().st_size} "
             f"(streamout=magic, abutting geometry merged"
-            f"{'; ' + snap_note if snap_ok else ''})",
+            f"{'; ' + snap_note if snap_ok else ''}"
+            f"{'; ' + dfill_note if dfill_ok else ''})",
             [str(gds_out)],
             extras={"streamout_engine": "magic",
-                    "grid_snap": snap_ok, "grid_snap_note": snap_note})
+                    "grid_snap": snap_ok, "grid_snap_note": snap_note,
+                    "density_fill": dfill_ok,
+                    "density_fill_note": dfill_note})
 
     script = pnr_dir / "stream_out.py"
     script.write_text(_GDS_STREAMOUT_PY)
@@ -8158,6 +8223,11 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
                                                gds_out))
                           if pdk.dummy_fill else
                           (False, "no dummy_fill config"))
+    # Per-layer DENSITY-TARGETED fill: measures each layer's worst density
+    # window and tops it up to the foundry target, after the fixed dummy-fill
+    # PATTERN above and before the density checks / sign-off DRC consume this
+    # GDS. Config-gated + NONFATAL; the note always discloses the outcome.
+    dfill_ok, dfill_note = _density_metal_fill(project, top, pdk, gds_out)
     # v1.3.91 — restore top PORT text labels + VDD/VSS rail markers LAST (after
     # merge/heal/fill so the labels/markers land on the final geometry): makes
     # the KLayout-streamed GDS LVS-able by the geometric extractor. Config-gated
@@ -8171,9 +8241,12 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
                       f"{'; ' + merge_note if merge_ok else ''}"
                       f"{'; ' + heal_note if heal_ok else ''}"
                       f"{'; ' + fill_note if fill_ok else ''}"
+                      f"{'; ' + dfill_note if dfill_ok else ''}"
                       f"{'; ' + label_note if label_ok else ''})",
                       [str(gds_out)],
                       extras={"streamout_engine": "klayout",
+                              "density_fill": dfill_ok,
+                              "density_fill_note": dfill_note,
                               "grid_snap": snap_ok,
                               "grid_snap_note": snap_note,
                               "layer_merge": merge_ok,
