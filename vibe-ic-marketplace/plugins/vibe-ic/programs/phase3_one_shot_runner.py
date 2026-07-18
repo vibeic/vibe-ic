@@ -2768,6 +2768,17 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 # pdk_registry.json nangate45 clk_buf_cell / clk_buf_root_cell
                 clk_buf="CLKBUF_X1",
                 clk_buf_root="CLKBUF_X3",
+                # LEF/DEF streamout map synthesized from the ORFS platform's
+                # FreePDK45.lyt inline layer_map (metal1..10 = GDS 11..29 odd,
+                # via1..10 = 12..30 even, dt 0) — the numbering the
+                # FreePDK45.lydrc deck reads. Without it the KLayout DEF
+                # reader's compact numbering lands routing/PDN shapes on the
+                # deck's FEOL device numbers (active=1..poly=9) → millions of
+                # spurious implant/VT/well DRC items (numbering artefacts,
+                # not design defects — first hit: 18.7M false FEOL items on a
+                # 1.36M-cell assembly whose stock cells check clean).
+                lefdef_layermap=f"{PDKS_IN_CONTAINER}/nangate45/libs.tech/"
+                "klayout/tech/FreePDK45.map",
                 macro_libs=_mlibs, macro_lefs=_mlefs,
                 macro_gds=_mgds, macro_v=_mv,
             )

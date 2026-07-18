@@ -171,7 +171,19 @@ RUN P=/orfs/flow/platforms/nangate45; S=/stage/nangate45; \
     cp $P/gds/NangateOpenCellLibrary.gds $SCL/gds/ && \
     cp $P/drc/FreePDK45.lydrc $S/libs.tech/klayout/drc/ && \
     cp $P/FreePDK45.lyt $P/FreePDK45.lyp $S/libs.tech/klayout/ && \
-    cp $P/cdl/NangateOpenCellLibrary.cdl $S/libs.tech/cdl/
+    cp $P/cdl/NangateOpenCellLibrary.cdl $S/libs.tech/cdl/ && \
+    mkdir -p $S/libs.tech/klayout/tech && \
+    { for i in 1 2 3 4 5 6 7 8 9 10; do \
+        m=$((9 + 2 * i)); v=$((10 + 2 * i)); \
+        printf 'metal%s  NET,SPNET,LEFPIN,PIN  %s 0\n' "$i" "$m"; \
+        printf 'NAME    metal%s/LABEL,metal%s/LEFPIN  %s 0\n' "$i" "$i" "$m"; \
+        printf 'via%s    VIA,LEFPIN,PIN  %s 0\n' "$i" "$v"; \
+      done; \
+      printf 'OUTLINE ALL 235 0\n'; \
+    } > $S/libs.tech/klayout/tech/FreePDK45.map
+    # ^ LEF/DEF streamout map derived from FreePDK45.lyt's inline layer_map
+    #   (metal1..10 = GDS 11..29 odd / via1..10 = 12..30 even, dt 0) — the
+    #   numbering FreePDK45.lydrc reads; wired as PdkConfig.lefdef_layermap.
 
 # ===========================================================================
 # Runtime: layer the patched tools onto the iic-osic-tools base.
