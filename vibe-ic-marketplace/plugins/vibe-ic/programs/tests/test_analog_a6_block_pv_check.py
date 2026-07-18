@@ -64,11 +64,49 @@ def test_pass_real_reports(tmp_path: Path) -> None:
     d = _bdir(tmp_path, "bandgap")
     (d / "drc.report").write_text(
         "Magic DRC run\n[INFO] geometry checked\nTotal DRC errors: 0\n")
+    # A REAL netgen report always ends with a terminal `Final result:` line
+    # (confirmed against every netgen report artifact on disk). A bare
+    # `Circuits match uniquely.` with no terminal line is a truncated
+    # hierarchical run — per-subcell match lines print long before the
+    # top-level compare — and is refused by the shared classifier (#477).
+    # See test_lvs_report_without_terminal_line_is_not_a_pass below.
     (d / "lvs.report").write_text(
-        "Netgen LVS\nCircuits match uniquely.\n")
+        "Netgen LVS\nCircuits match uniquely.\n"
+        "Final result: Circuits match uniquely.\n")
     r = _run(tmp_path)
     assert r.returncode == 0, r.stderr
     assert _report(tmp_path)["verdict"] == "PASS"
+
+
+def test_lvs_report_without_terminal_line_is_not_a_pass(tmp_path: Path) -> None:
+    """A netgen report carrying a `match uniquely` line but NO terminal
+    `Final result:` line is a truncated run, not a clean LVS. The A6 gate used
+    its own tool-generic phrase list here and would PASS it; it now yields the
+    netgen verdict to the shared classifier, which refuses it. Honesty: FAIL on
+    inconclusive evidence, never a vacuous PASS."""
+    _block_list(tmp_path, ["bandgap"])
+    d = _bdir(tmp_path, "bandgap")
+    (d / "drc.report").write_text("Total DRC errors: 0\n")
+    (d / "lvs.report").write_text("Netgen LVS\nCircuits match uniquely.\n")
+    r = _run(tmp_path)
+    assert r.returncode != 0
+    assert _report(tmp_path)["verdict"] != "PASS"
+
+
+def test_lvs_report_reworded_mismatch_is_not_a_pass(tmp_path: Path) -> None:
+    """The wording-gate defect, at the A6 layer: a netgen failure worded
+    outside the enumerated phrase list, next to a `match uniquely` line, must
+    never be read as a clean block."""
+    _block_list(tmp_path, ["bandgap"])
+    d = _bdir(tmp_path, "bandgap")
+    (d / "drc.report").write_text("Total DRC errors: 0\n")
+    (d / "lvs.report").write_text(
+        "Circuits match uniquely.\n"
+        "Result: Netlists are NOT equivalent.\n"
+        "Final result: Netlist comparison FAILED (2 discrepancies).\n")
+    r = _run(tmp_path)
+    assert r.returncode != 0
+    assert _report(tmp_path)["verdict"] != "PASS"
 
 
 def test_pass_multi_block(tmp_path: Path) -> None:

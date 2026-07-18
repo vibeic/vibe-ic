@@ -25,17 +25,61 @@ The semantics mirror the empirically-validated MCP-EDA classifier
     fail);
   * a mismatch token is AUTHORITATIVE over any `match uniquely` token.
 
+JSON-AUTHORITATIVE VERDICT (the wording gate is CLOSED)
+------------------------------------------------------
+Classifying an LVS sign-off by REGEXING netgen's English is a false-clean
+generator: a mismatch phrased in wording the regex does not enumerate, next to
+any `match uniquely` line (per-subcell lines print by the hundreds), used to
+return MATCH. Measured on this very module before the fix — a transcript
+reading `Result: Netlists are NOT equivalent.` / `Netlist comparison FAILED
+(2 discrepancies).` classified **MATCH**. An LVS false-clean ships a broken
+chip as verified; it is the defect class that reaches silicon.
+
+The fix follows the house pattern (`verilogeval_tier_pipeline` gates on the
+observable `Mismatches: N in M samples` line, not on the word "TIMEOUT"):
+decide on an observable OUTCOME, use wording only to EXPLAIN.
+
+Our netgen fork emits that observable. Fork enhancement E1 (`vibeic fork (LVS
+fidelity, E1)`) makes `-json` a top-level OBJECT carrying a machine verdict:
+
+    {"verdict": "match"|"mismatch"|"unknown", "verdict_reason": "...",
+     "summary": {"devices": {...}, "nets": {...}, "unmatched_nets": {...},
+                 "unmatched_devices": {...}, "property_error_count": K, ...},
+     "cells": [...]}
+
+`verdict` is derived from netgen's OWN numeric verify() result (1 unique match,
+-3 property error, -1 nothing to compare, 0/-2/-4 not a unique match) — the
+SAME engine state that drives the `Final result:` text, never re-parsed from
+it. So JSON and text can never disagree, and the JSON is the observable.
+
+PRECEDENCE
+  1. E1 JSON verdict, when present, is AUTHORITATIVE (passed in, or found
+     embedded in the blob). `mismatch` wins even if the text looks matchy.
+     The ONE exception is fail-safe-only: a JSON `match` alongside a text
+     mismatch token yields MISMATCH — the authoritative source may never be
+     used to UPGRADE a failing text into a pass.
+  2. Text tokens ONLY when no JSON is present (older netgen), and then
+     FAIL-SAFE: MATCH requires POSITIVE evidence — a terminal `Final result:`
+     line that ITSELF reads as a unique match, with no other terminal line
+     dissenting. Unrecognized terminal wording is INCOMPLETE or MISMATCH,
+     NEVER MATCH. Absence of a known failure phrase is not evidence of a pass.
+
 CLASSES
 -------
-  MATCH      — a real `Circuits/Netlists match uniquely` verdict and no
-               mismatch token.
-  MISMATCH   — any terminal mismatch token present (authoritative).
-  INCOMPLETE — NEITHER token present: the compare did not run to completion
-               (netgen killed mid-run / truncated report). Never upgraded to
-               MATCH or MISMATCH (#477 honesty: an incomplete run is not a
-               conclusive result in either direction).
+  MATCH      — POSITIVE evidence of a clean compare: an E1 JSON
+               `verdict == "match"`, or (no JSON) every terminal
+               `Final result:` line reading `Circuits/Netlists match uniquely`.
+  MISMATCH   — an E1 JSON `verdict == "mismatch"`, any terminal mismatch
+               token, or a terminal line carrying negative wording
+               (authoritative over any `match uniquely` line).
+  INCOMPLETE — no conclusive evidence either way: the compare did not run to
+               completion (netgen killed mid-run / truncated report), or it
+               ended in wording we do not recognize. Never upgraded to MATCH
+               (#477 honesty: an incomplete run is not a conclusive result in
+               either direction — and an UNREADABLE one is not a pass).
 
-chip-AGNOSTIC: pure netgen phrase classification; no design/cell literal.
+chip-AGNOSTIC: pure netgen verdict/phrase classification; no design/cell
+literal.
 """
 from __future__ import annotations
 
@@ -44,7 +88,24 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import List
+from typing import Any, Dict, List, Optional, Union
+
+# ── E1 structured machine verdict (the OBSERVABLE) ─────────────────────────
+# netgen's own numeric verify() result, mapped to this module's classes.
+# Anything not in this map — a verdict string a future fork adds, a non-string,
+# a missing key — is INCOMPLETE, never MATCH (fail-safe by construction).
+_E1_VERDICT_MAP = {
+    "match": "MATCH",
+    "mismatch": "MISMATCH",
+    "unknown": "INCOMPLETE",
+}
+
+# The E1 report is identified STRUCTURALLY (all three keys), not by a filename
+# or a lone "verdict" key some other tool might also emit.
+_E1_REQUIRED_KEYS = ("verdict", "verdict_reason", "summary")
+_VERDICT_KEY_RE = re.compile(r'"verdict"\s*:')
+
+JsonSource = Union[None, str, Path, Dict[str, Any]]
 
 # Genuine clean-match phrases — netgen's "match uniquely" wording, never the
 # bare substring "match" (which also appears inside FAIL phrases like
@@ -75,20 +136,174 @@ _PIN_NOMATCH_RE = re.compile(r"^.*\(no matching pin\).*$", re.M)
 # `match uniquely` token without it is a per-subcell line of a hierarchical
 # run that was killed before the top-level compare (mirrors the
 # netgen_verdict.mjs guard).
-_FINAL_RESULT_RE = re.compile(r"Final result\s*:", re.I)
+#
+# The terminal verdict text — the text fallback's POSITIVE evidence. Captures
+# only what follows `Final result:`, NOT the whole line: a `match uniquely`
+# printed BEFORE the colon (or on a per-subcell line elsewhere) must not be
+# able to carry the top-level verdict.
+_FINAL_RESULT_LINE_RE = re.compile(r"Final result\s*:(.*)$", re.M | re.I)
+
+# Unambiguous negative wording for phrasings MISMATCHED_RE does not enumerate.
+# Deliberately COUNT-FREE: every phrase here is one no clean netgen report can
+# print, so broadening the failure net cannot manufacture a false alarm (the
+# count-bearing words like "discrepancies" are scoped to the terminal line
+# only, via _TERMINAL_NEGATIVE_RE, where a clean report never lands).
+_NEGATIVE_HINT_RE = re.compile(
+    r"not\s+equivalent"
+    r"|comparison\s+failed"
+    r"|LVS\s+FAILED"
+    r"|failed\s+to\s+match"
+    r"|(?:netlists?|circuits?)\s+differ", re.I)
+
+# Negative wording judged ONLY against a terminal `Final result:` line.
+_TERMINAL_NEGATIVE_RE = re.compile(
+    r"\bfail(?:ed|ure|s)?\b"
+    r"|\bmismatch(?:e[sd])?\b"
+    r"|\bdiscrepanc(?:y|ies)\b"
+    r"|\bnot\b"
+    r"|\bno\b"
+    r"|\berror", re.I)
 
 
-def classify(blob: str) -> str:
-    """Classify a netgen transcript+report blob → MATCH / MISMATCH / INCOMPLETE.
+def _looks_like_e1(obj: Any) -> bool:
+    """True iff `obj` is an E1 structured LVS report (all required keys, and a
+    STRING verdict). Identified structurally so a stray `"verdict"` key from
+    some other tool can never be mistaken for the authoritative source."""
+    return (isinstance(obj, dict)
+            and all(k in obj for k in _E1_REQUIRED_KEYS)
+            and isinstance(obj.get("verdict"), str))
 
-    A mismatch token is AUTHORITATIVE (checked first). A match token WITHOUT a
-    `Final result:` line is a truncated hierarchical run (per-subcell match
-    lines print long before the top-level compare) → INCOMPLETE, never MATCH."""
-    if MISMATCHED_RE.search(blob):
+
+# Worst-wins precedence when a transcript embeds more than one E1 report: we
+# are a guard, so the most adverse verdict present decides.
+_E1_SEVERITY = {"MISMATCH": 2, "INCOMPLETE": 1, "MATCH": 0}
+
+
+def _find_embedded_e1(blob: str) -> Optional[Dict[str, Any]]:
+    """Find an E1 report embedded in a transcript blob (runners commonly cat
+    the `-json` output into the log). Cheap: only the `"verdict"` key sites are
+    probed, walking back to the enclosing `{` — E1 emits `verdict` first.
+
+    A non-E1 object at one site does not end the search (another tool may emit
+    its own `verdict` key earlier in the log), and when several E1 reports are
+    present the most ADVERSE verdict wins — a guard never averages."""
+    if not blob or '"verdict"' not in blob:
+        return None
+    dec = json.JSONDecoder()
+    best: Optional[Dict[str, Any]] = None
+    best_sev = -1
+    for km in _VERDICT_KEY_RE.finditer(blob):
+        start, tries = blob.rfind("{", 0, km.start()), 0
+        while start != -1 and tries < 4:
+            try:
+                obj, _ = dec.raw_decode(blob, start)
+            except ValueError:
+                start, tries = blob.rfind("{", 0, start), tries + 1
+                continue
+            if _looks_like_e1(obj):
+                sev = _E1_SEVERITY.get(
+                    _E1_VERDICT_MAP.get(obj["verdict"].strip().lower(),
+                                        "INCOMPLETE"), 1)
+                if sev > best_sev:
+                    best, best_sev = obj, sev
+            break  # decoded here; move to the next "verdict" site
+    return best
+
+
+# netgen's own fingerprints. A blob carrying these is a netgen report, and its
+# verdict belongs to THIS module — a tool-generic phrase list must not be
+# allowed to read a match out of a netgen transcript this module refused.
+_NETGEN_SHAPE_RE = re.compile(
+    r"Final result\s*:"
+    r"|Circuits?\s+match\s+uniquely"
+    r"|Netlists?\s+match\s+uniquely"
+    r"|Subcircuit summary"
+    r"|failed\s+pin\s+matching", re.I)
+
+
+def is_netgen_report(blob: str) -> bool:
+    """True iff `blob` looks like a netgen LVS transcript/report. Callers with
+    tool-generic phrase lists (calibre/other evidence shapes) use this to yield
+    netgen verdicts to `classify()` instead of re-deriving them from text."""
+    return bool(_NETGEN_SHAPE_RE.search(blob or ""))
+
+
+def load_json_report(source: JsonSource) -> Optional[Dict[str, Any]]:
+    """Resolve an E1 report from a dict, a file path, or a directory holding
+    one. Returns None when there is no readable E1 report — callers then fall
+    back to the (fail-safe) text path. Never raises: an unreadable/corrupt
+    report is ABSENT, and absence can only ever cost us a MATCH, never grant
+    one."""
+    if source is None:
+        return None
+    if isinstance(source, dict):
+        return source if _looks_like_e1(source) else None
+    p = Path(source)
+    try:
+        if p.is_dir():
+            for cand in sorted(p.glob("*.json")):
+                obj = load_json_report(cand)
+                if obj is not None:
+                    return obj
+            return None
+        if not p.is_file():
+            return None
+        obj = json.loads(p.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return None
+    return obj if _looks_like_e1(obj) else None
+
+
+def _resolve_report(blob: str, json_report: JsonSource) -> Optional[Dict[str, Any]]:
+    """The E1 report to classify on: the caller's, else one embedded in blob."""
+    obj = load_json_report(json_report)
+    return obj if obj is not None else _find_embedded_e1(blob or "")
+
+
+def _classify_text(blob: str) -> str:
+    """FAIL-SAFE text fallback — used ONLY when no E1 JSON report exists.
+
+    MATCH requires POSITIVE evidence and is the NARROWEST outcome: every
+    terminal `Final result:` line must itself read as a unique match. The
+    absence of a known failure phrase is NOT evidence of a pass, so wording we
+    do not recognize resolves to MISMATCH (terminal line reads negative) or
+    INCOMPLETE (unreadable), never to MATCH."""
+    if MISMATCHED_RE.search(blob) or _NEGATIVE_HINT_RE.search(blob):
         return "MISMATCH"
-    if MATCHED_RE.search(blob) and _FINAL_RESULT_RE.search(blob):
+    finals = _FINAL_RESULT_LINE_RE.findall(blob)
+    if not finals:
+        # No terminal line at all: a truncated hierarchical run whose
+        # per-subcell `match uniquely` lines printed before the top-level
+        # compare was reached.
+        return "INCOMPLETE"
+    if all(MATCHED_RE.search(ln) for ln in finals):
         return "MATCH"
+    # The compare terminated, but in wording we cannot read as a clean match.
+    dissenting = [ln for ln in finals if not MATCHED_RE.search(ln)]
+    if any(_TERMINAL_NEGATIVE_RE.search(ln) for ln in dissenting):
+        return "MISMATCH"
     return "INCOMPLETE"
+
+
+def classify(blob: str, json_report: JsonSource = None) -> str:
+    """Classify a netgen LVS result → MATCH / MISMATCH / INCOMPLETE.
+
+    The E1 structured report (`json_report`, or one embedded in `blob`) is
+    AUTHORITATIVE when present — it carries netgen's own numeric verdict, so a
+    reworded transcript cannot move it. Text tokens are consulted only in its
+    absence, and then only fail-safely (see `_classify_text`).
+
+    The single exception to JSON authority runs in the SAFE direction: a JSON
+    `match` contradicted by a text mismatch token returns MISMATCH. The fork
+    guarantees the two agree; if they ever do not, we refuse the sign-off
+    rather than grant it."""
+    obj = _resolve_report(blob, json_report)
+    if obj is not None:
+        verdict = _E1_VERDICT_MAP.get(obj["verdict"].strip().lower(), "INCOMPLETE")
+        if verdict == "MATCH" and MISMATCHED_RE.search(blob or ""):
+            return "MISMATCH"
+        return verdict
+    return _classify_text(blob or "")
 
 
 # ── ORGANIC (GAP-E2E-9) — sub-classify a MISMATCH: benign OSS power-pin-only
@@ -113,6 +328,12 @@ _POWER_NET_RE = re.compile(
     r"|VCC[A-Z0-9]*|GND[A-Z0-9]*|HI|LO|TIE_?HI|TIE_?LO)$", re.I)
 _PROPERTY_ERR_RE = re.compile(r"property\s+errors?\s+were\s+found", re.I)
 
+# POSITIVE evidence that the mismatch IS the pin-correspondence failure whose
+# benign power-only variant we are willing to disclose as a waiver candidate.
+# Without this shape the mismatch is some OTHER failure and stays REAL — the
+# benign bucket is never reachable by elimination.
+_PIN_MATCH_FAIL_RE = re.compile(r"failed\s+pin\s+matching", re.I)
+
 
 def _is_power_token(tok: str) -> bool:
     """True iff `tok` names a power/ground/tie net (sky130 VPWR/VGND/VPB/VNB,
@@ -120,7 +341,33 @@ def _is_power_token(tok: str) -> bool:
     return bool(_POWER_NET_RE.match((tok or "").strip()))
 
 
-def mismatch_class(blob: str) -> str:
+def _e1_says_real_defect(obj: Dict[str, Any]) -> bool:
+    """True iff the E1 report carries STRUCTURED evidence of a real defect —
+    any property error, any unmatched device, any unmatched net, or a D5 ranked
+    `property_mismatches` entry.
+
+    Fail-safe by construction: a malformed / partial summary returns True. The
+    benign bucket must be EARNED from counts we could actually read; we never
+    infer 'benign' from a field we failed to parse."""
+    s = obj.get("summary")
+    if not isinstance(s, dict):
+        return True
+    prop = s.get("property_error_count")
+    if not isinstance(prop, int) or prop > 0:
+        return True
+    for grp in ("unmatched_devices", "unmatched_nets"):
+        g = s.get(grp)
+        if not isinstance(g, dict):
+            return True
+        for side in ("ckt1", "ckt2"):
+            v = g.get(side)
+            if not isinstance(v, int) or v > 0:
+                return True
+    # D5 ranked property mismatches — present means real, ranked deltas exist.
+    return bool(obj.get("property_mismatches") or s.get("property_error_cells"))
+
+
+def mismatch_class(blob: str, json_report: JsonSource = None) -> str:
     """Sub-classify a netgen report → for triage ONLY (the classify() verdict is
     authoritative and unchanged). Returns:
       * 'NONE'                 — not a MISMATCH (MATCH / INCOMPLETE).
@@ -133,9 +380,22 @@ def mismatch_class(blob: str) -> str:
                                  nets (the universal power-unaware-netlist OSS
                                  SETUP artifact) — a reviewed-waiver CANDIDATE, not
                                  a silent pass.
-    chip-AGNOSTIC: pure netgen phrase + power-net-name classification."""
-    if classify(blob) != "MISMATCH":
+    POSITIVE-EVIDENCE INVERSION (the demotion gate is CLOSED): `POWER_PIN_ONLY`
+    is now REACHABLE ONLY by earning it — the E1 structured counts must show no
+    real defect (when a report exists) AND the transcript must carry BOTH the
+    pin-correspondence failure shape (`failed pin matching`) AND power/tie-net
+    evidence. A mismatch we cannot positively recognize as that artifact — any
+    reworded failure, any unparsed summary — stays `SIGNAL_NET_MISMATCH`. The
+    benign bucket is never reached by elimination, so a real connectivity
+    defect can no longer be demoted into a waivable class by wording drift.
+
+    chip-AGNOSTIC: pure netgen verdict + phrase + power-net-name classification."""
+    obj = _resolve_report(blob, json_report)
+    if classify(blob, json_report=obj) != "MISMATCH":
         return "NONE"
+    # Structured evidence is authoritative and checked FIRST — §4.05 no-leak.
+    if obj is not None and _e1_says_real_defect(obj):
+        return "SIGNAL_NET_MISMATCH"
     # Real signal-net evidence → NOT benign (checked FIRST — §4.05 no-leak). The
     # RELIABLE top-level-real-mismatch signatures are the `(no pin, node is …)`
     # rows (netgen's top-level failure-table shape, per this module's established
@@ -146,6 +406,11 @@ def mismatch_class(blob: str) -> str:
     if _PROPERTY_ERR_RE.search(blob):
         return "SIGNAL_NET_MISMATCH"
     if _PIN_NODE_RE.search(blob):                 # `(no pin, node is …)` rows
+        return "SIGNAL_NET_MISMATCH"
+    # POSITIVE evidence that this mismatch is the pin-correspondence failure at
+    # all. Any OTHER failure — including one worded in tokens we do not know —
+    # is REAL, not a waiver candidate.
+    if not _PIN_MATCH_FAIL_RE.search(blob):
         return "SIGNAL_NET_MISMATCH"
     # No top-level signal-failure rows. Confirm the mismatch carries the
     # power-unaware-netlist SETUP evidence (a power/tie `(no matching pin)` row OR
@@ -181,17 +446,23 @@ def main(argv=None) -> int:
         description="Classify a netgen LVS report's terminal verdict (#524).")
     ap.add_argument("report", help="netgen lvs report / transcript file")
     ap.add_argument("--json", default=None, help="write JSON verdict here")
+    ap.add_argument("--json-report", default=None,
+                    help="netgen -json structured E1 report (file or dir). "
+                         "AUTHORITATIVE when present; defaults to one embedded "
+                         "in the transcript, else the fail-safe text path.")
     args = ap.parse_args(argv)
     p = Path(args.report)
     if not p.is_file():
         print(f"ERROR: report not found: {p}", file=sys.stderr)
         return 2
     blob = p.read_text(errors="replace")
-    verdict = classify(blob)
+    obj = _resolve_report(blob, args.json_report)
+    verdict = classify(blob, json_report=obj)
     out = {
         "report": str(p),
         "verdict": verdict,
-        "mismatch_class": mismatch_class(blob),  # GAP-E2E-9 triage sub-class
+        "verdict_source": "netgen-json" if obj is not None else "text-fallback",
+        "mismatch_class": mismatch_class(blob, json_report=obj),
         "pin_mismatch_evidence": pin_mismatch_evidence(blob),
     }
     text = json.dumps(out, indent=2, ensure_ascii=False)
