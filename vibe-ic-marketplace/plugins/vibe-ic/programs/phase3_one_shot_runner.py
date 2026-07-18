@@ -28,7 +28,7 @@ Usage:
                   [--container vibeic-eda]
                   [--die-um 200x200]
                   [--util 0.45]
-                  [--pdk auto|sky130A|<custom>]
+                  [--pdk auto|sky130A|nangate45|<custom>]
                   [--spare-density 0.02]   # Design-for-ECO spare-cell density
 
 Exit codes: 0 PASS / PASS_WITH_WAIVERS, 1 FAIL, 2 IO/arg error.
@@ -2660,6 +2660,30 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 # v0.3.12 #509 r2 — foundry LEF/DEF layer-map (validated).
                 lefdef_layermap=f"{PDKS_IN_CONTAINER}/sky130A/libs.tech/"
                 "klayout/tech/sky130A.map",
+            )
+        if override == "nangate45":
+            # NanGate / FreePDK45 Open Cell Library (Si2, Apache-2.0) — a GENERIC,
+            # NON-FOUNDRY 45nm std-cell library. synth/PnR/CTS/STA/area all run
+            # (the same enablement the open 45nm flows use), and the FreePDK45
+            # KLayout deck gives an EDUCATIONAL DRC — but this is NOT a
+            # manufacturable foundry sign-off (pdk_registry.json nangate45:
+            # tapeout_capable=false; FreePDK45 is a fictional process). Assets are
+            # the OpenROAD-flow-scripts nangate45 platform re-staged into the
+            # open_pdks libs.ref/<scl>/ layout by the vibeic-eda Dockerfile.
+            ng = f"{PDKS_IN_CONTAINER}/nangate45/libs.ref/NangateOpenCellLibrary"
+            return PdkConfig(
+                name="nangate45",
+                liberty=f"{ng}/lib/NangateOpenCellLibrary_typical.lib",
+                tech_lef=f"{ng}/techlef/NangateOpenCellLibrary.tech.lef",
+                cell_lef=f"{ng}/lef/NangateOpenCellLibrary.lef",
+                cell_gds=f"{ng}/gds/NangateOpenCellLibrary.gds",
+                site="FreePDK45_38x28_10R_NP_162NW_34O",
+                drc_deck=f"{PDKS_IN_CONTAINER}/nangate45/libs.tech/klayout/drc/"
+                         "FreePDK45.lydrc",
+                metal_prefix="metal",
+                tapcell_master="TAPCELL_X1",
+                antenna_diode_cell="ANTENNA_X1",
+                tapcell_distance_um=20.0,
             )
 
     pdk_dir = project / "input" / "pdk"
@@ -18089,7 +18113,7 @@ def main() -> int:
                         "std cell rows); 0.30 produces 0 violations same die. "
                         "Conservative default; caller can override.")
     p.add_argument("--pdk", default="auto",
-                   help="auto (default) | sky130A | <custom>")
+                   help="auto (default) | sky130A | nangate45 | <custom>")
     # Design-for-ECO (Step 18) — spare-cell-array density as a fraction
     # of the placed-cell count. Default 2% (0.02); clamped to [0, 0.2].
     p.add_argument("--spare-density", type=float,
