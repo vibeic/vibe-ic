@@ -445,6 +445,23 @@ function pdkConfig(pdk, customOpts) {
       // paths repair antennas identically.
       antenna_diode_cell: "sky130_fd_sc_hd__diode_2",
     },
+    nangate45: {
+      // NanGate / FreePDK45 Open Cell Library (Si2, Apache-2.0) — a GENERIC,
+      // non-foundry 45nm std-cell lib. synth/PnR/CTS/STA/area run; the KLayout
+      // FreePDK45 decks are EDUCATIONAL, not a manufacturable sign-off (see
+      // programs/pdk_registry.json nangate45: tapeout_capable=false). Assets are
+      // the OpenROAD-flow-scripts nangate45 platform re-staged into the
+      // open_pdks libs.ref/<scl>/ layout by the vibeic-eda Dockerfile.
+      pdk_path: `${PDK_ROOT}/nangate45`,
+      scl: "NangateOpenCellLibrary",
+      lib_suffix: "_typical.lib",
+      techlef_suffix: ".tech.lef",
+      site: "FreePDK45_38x28_10R_NP_162NW_34O",
+      metal_prefix: "metal",
+      vdd_pin: "VDD",
+      vss_pin: "VSS",
+      antenna_diode_cell: "ANTENNA_X1",
+    },
   };
   if (pdk === "custom" && customOpts) {
     // v0.63: metal_prefix used to be hardcoded to "met" here, which silently
@@ -861,7 +878,7 @@ server.tool(
     verilog_files: z.array(z.string()).describe("Paths to Verilog/SV source files (inside container)"),
     top_module: z.string().describe("Top module name"),
     output_netlist: z.string().describe("Output netlist path (inside container)"),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180").describe("Target PDK"),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180").describe("Target PDK"),
     sv_mode: z.boolean().default(true).describe("Use -sv flag for SystemVerilog"),
     custom_lib: z.string().optional().describe("Path to Liberty .lib file (custom PDK)"),
     custom_techlef: z.string().optional().describe("Path to tech LEF file (custom PDK)"),
@@ -1249,7 +1266,7 @@ server.tool(
     netlist: z.string().describe("Synthesized Verilog netlist path"),
     top_module: z.string().describe("Top module name"),
     output_def: z.string().describe("Output DEF file path"),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180"),
     clock_port: z.string().default("clk"),
     clock_period_ns: z.number().default(200),
     utilization: z.number().default(40),
@@ -1450,7 +1467,7 @@ server.tool(
   {
     def_file: z.string().describe("Input routed DEF file path"),
     output_gds: z.string().describe("Output merged GDS file path"),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180"),
     cell_gds_override: z.string().optional().describe("Override cell GDS path (default: auto-resolved from PDK)"),
     custom_lib: z.string().optional().describe("Path to Liberty .lib file (custom PDK)"),
     custom_techlef: z.string().optional().describe("Path to tech LEF file (custom PDK)"),
@@ -1569,7 +1586,7 @@ server.tool(
   {
     netlist: z.string().describe("Gate-level netlist"),
     top_module: z.string().describe("Top module"),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180"),
     clock_port: z.string().default("clk"),
     clock_period_ns: z.number().default(200),
     custom_lib: z.string().optional().describe("Path to Liberty .lib file (custom PDK)"),
@@ -1693,7 +1710,7 @@ server.tool(
     layout_netlist: z.string().describe("Layout netlist. mode=netgen: SPICE; mode=yosys_equiv: Verilog (e.g. routed .v)"),
     schematic_netlist: z.string().describe("Schematic/synthesis netlist. SPICE for netgen, Verilog for yosys_equiv"),
     top_module: z.string().describe("Top module name"),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180"),
     custom_lib: z.string().optional().describe("Liberty .lib path for cell semantics (yosys_equiv mode)"),
     setup_supplement: z.string().optional().describe("Optional path to a supplementary Netgen TCL (e.g. from programs/lvs_netgen_setup_emit.py). Concatenated AFTER the foundry setup. netgen mode only; ignored on yosys_equiv."),
     load_stdcell_lib: z.boolean().default(false).describe("netgen mode: load the PDK std-cell SPICE library (e.g. sky130_fd_sc_hd.spice) INTO the schematic circuit before lvs, so a post-PnR GATE netlist's empty cell placeholders expand to transistors for a true device-level compare. Default false (the schematic side is already transistor-level)."),
@@ -2140,7 +2157,7 @@ server.tool(
   {
     gds_file: z.string().describe("Input GDS file path"),
     top_cell: z.string().describe("Top cell name in GDS"),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180"),
     custom_techlef: z.string().optional().describe("Path to tech LEF (custom PDK; rules auto-derived from WIDTH/SPACING)"),
     custom_drc_script: z.string().optional().describe("Path to a hand-written KLayout .drc script (custom PDK; bypasses LEF auto-derivation)"),
     custom_layermap: z.string().optional().describe("Path to layer map file mapping LEF layer names to GDS (layer,datatype). Format per line: 'LAYER NET <gds_layer> <gds_datatype>'. Default: detect from techlef directory."),
@@ -2426,7 +2443,7 @@ server.tool(
   "Analyze IR drop on power grid using OpenROAD PSM (Power Grid Analysis). v0.76 adds custom PDK support and via-resistance fallback.",
   {
     def_file: z.string().describe("DEF file with placed design"),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180"),
     voltage: z.number().default(1.8).describe("VDD voltage in volts"),
     custom_lib: z.string().optional(),
     custom_techlef: z.string().optional(),
@@ -2656,7 +2673,7 @@ server.tool(
   {
     schematic: z.string().describe("Path to .sch schematic file inside Docker container"),
     output_dir: z.string().default("./analog/xschem_out").describe("Output directory for generated netlist. v0.123: default changed from /tmp/xschem_out so artifacts land in the project tree."),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180"),
     custom_xschemrc: z.string().optional().describe("Path to custom xschemrc file (custom PDK only)"),
   },
   async ({ schematic, output_dir, pdk, custom_xschemrc }) => {
@@ -2721,7 +2738,7 @@ server.tool(
   "Run multi-corner PVT SPICE sweep with automated .meas extraction and yield table. v0.108: analog design pipeline. Runs one ngspice invocation per corner×temp combination, aggregates results into a JSON yield matrix.",
   {
     spice_file: z.string().describe("Base SPICE netlist file (.sp) — must NOT contain .lib/.temp directives (they are injected per corner)"),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180"),
     corners: z.array(z.string()).default(["typical", "ss", "ff"]).describe("Process corner names. For gf180/sky130 they are mapped to the foundry deck's section names; for pdk=custom each entry is used verbatim as the .lib section name in custom_corner_lib."),
     temperatures: z.array(z.number()).default([-40, 25, 125]).describe("Temperature sweep points in °C"),
     supplies: z.array(z.number()).optional().describe("Supply voltages to sweep (if omitted: uses nominal only)"),
@@ -2978,7 +2995,7 @@ server.tool(
     clock: z.string().default("clk").describe("Clock signal name"),
     reset: z.string().default("rst_n").describe("Reset signal name"),
     reset_active_low: z.boolean().default(true),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180"),
     tv_count: z.number().default(200).describe("Number of test vectors to generate"),
     add_jtag: z.boolean().default(false).describe("Also insert JTAG TAP controller"),
     output_dir: z.string().describe("Output directory for DFT files"),
@@ -4436,7 +4453,7 @@ server.tool(
     def_file: z.string().optional().describe("Input DEF file path (provide either def_file or gds_file)"),
     gds_file: z.string().optional().describe("Input GDS file path (provide either def_file or gds_file)"),
     top_cell: z.string().describe("Top cell name"),
-    pdk: z.enum(["gf180", "sky130", "custom"]).default("gf180"),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).default("gf180"),
     output_format: z.enum(["spef", "spice"]).default("spef").describe("Output format: spef or spice"),
     output_dir: z.string().default("./extracted").describe("Output directory. v0.123: default changed from /tmp/extraction so artifacts land in the project tree."),
     promote_ports: z.boolean().default(false).describe("Inject `port makeall` into the extraction TCL so the emitted `.subckt <top>_flat` carries top-level ports (needed for device-level netgen LVS top-level pin matching). Only useful for output_format=spice. Default false (preserves the legacy portless extraction)."),
@@ -4796,7 +4813,7 @@ server.tool(
     script_file: z.string().optional().describe("Path to script file (alternative to inline script)"),
     extra_args: z.array(z.string()).default([]).describe("Extra CLI args appended after the script"),
     timeout_sec: z.number().default(900).describe("Timeout in seconds (default 15 min)"),
-    pdk: z.enum(["gf180", "sky130", "custom"]).optional().describe("engine=magic: which PDK to export (PDK/PDK_ROOT) and whose foundry .magicrc to load via -rcfile. REQUIRED for magic GDS/extraction scripts — without it magic aborts on env(PDK) and never reads the script. Ignored by other engines."),
+    pdk: z.enum(["gf180", "sky130", "nangate45", "custom"]).optional().describe("engine=magic: which PDK to export (PDK/PDK_ROOT) and whose foundry .magicrc to load via -rcfile. REQUIRED for magic GDS/extraction scripts — without it magic aborts on env(PDK) and never reads the script. Ignored by other engines."),
     custom_magicrc: z.string().optional().describe("engine=magic, pdk=custom: explicit path to the foundry .magicrc to pass via -rcfile."),
     pdk_root: z.string().optional().describe("engine=magic: PDK_ROOT to export (default /foss/pdks)."),
   },
