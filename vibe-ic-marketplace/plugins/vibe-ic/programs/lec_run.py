@@ -211,18 +211,43 @@ _YOSYS_PASS_RE = re.compile(r"^\s*[\d.]+\.\s+Executing\s+(.+?)\s*$", re.MULTILIN
 # Liberty / RTLIL / BLIF). Every design-BUILDING pass announces as "<NAME> pass",
 # and writers as "<NAME> backend".
 #
-# STRUCTURAL, not substring (hardened after a peer review of the sibling LVS
-# wording fix, whose first draft matched a whole LINE and so accepted a marker
-# appearing anywhere in it). The captured pass name INCLUDES the pass ARGUMENTS —
-# real yosys output is "Verilog-2005 frontend: /tmp/frontend/rtl/m.v" — so a bare
-# \bfrontend\b would also fire on a PATH containing that word. That misfires in
-# the DANGEROUS direction: a design-building pass wrongly counted as a frontend
-# pass empties the non-frontend list and buys the LENIENT verdict.
-# So `frontend` is required to be the pass-CLASS token: the last word before the
-# argument separator (`:`), the terminating `.`, or end of string — never a word
-# sitting inside an argument.
-_YOSYS_FRONTEND_PASS_RE = re.compile(r"\bfrontend\b\s*(?:[:.]|$)",
-                                     re.IGNORECASE)
+# ANCHORED to where yosys structurally writes the class token, in two rounds of
+# peer review with the sibling LVS wording fix.
+#
+# ROUND 1 (their finding): the captured pass name INCLUDES the pass ARGUMENTS —
+# real yosys prints "Verilog-2005 frontend: /tmp/frontend/rtl/m.v" — so a bare
+# \bfrontend\b also fires on a PATH containing that word. Misfires in the
+# DANGEROUS direction: a design-BUILDING pass wrongly counted as a read pass
+# empties the non-frontend list and buys the LENIENT verdict (INCONCLUSIVE).
+#
+# ROUND 2 (their sharpened threat model): requiring `frontend` to be followed by
+# `:` / `.` / end was still forgeable, because those separators occur INSIDE
+# arguments too — "SOMEPASS pass (reading /work/frontend.)" and
+# "… (reading /work/frontend: x)" both satisfied it. Their sharper framing is the
+# right one and generalises past LVS: THE DESIGN AND THE ENVIRONMENT NAME THEIR
+# OWN THINGS, so any structural token matched against a region that contains
+# paths / net names / cell names is a token those inputs can FORGE. (In netgen's
+# case a SystemVerilog escaped identifier legally contains SPACES, so a net can
+# spell a verdict phrase exactly.)
+#
+# So the class token is now read ONLY from the CLASS DESCRIPTOR — the text before
+# the first argument separator (`:` for a frontend's file, `(` for a pass's
+# description) — which is the one region yosys writes and the inputs cannot
+# reach. Verified against real output: reads are "<X> frontend: <path>" or
+# "<X> frontend."; builders are "<NAME> pass (<desc>)" or "<NAME> pass."; writers
+# are "<X> backend.".
+_YOSYS_PASS_ARG_SEP_RE = re.compile(r"[:(]")
+_YOSYS_FRONTEND_CLASS_RE = re.compile(r"\bfrontend$", re.IGNORECASE)
+
+
+def _yosys_pass_is_frontend(pass_name: str) -> bool:
+    """True iff this yosys pass announcement is a READ (frontend) pass.
+
+    Reads the class token from the DESCRIPTOR only, never from the arguments —
+    see the note above. Fail-safe direction: anything unrecognised is treated as
+    NOT a frontend pass, which pushes the verdict toward the BLOCKING outcome."""
+    descriptor = _YOSYS_PASS_ARG_SEP_RE.split(pass_name or "", 1)[0]
+    return bool(_YOSYS_FRONTEND_CLASS_RE.search(descriptor.strip().rstrip(".")))
 
 
 def yosys_executed_passes(text: str) -> List[str]:
@@ -258,8 +283,7 @@ def frontend_aborted_before_elaboration(text: str) -> Tuple[bool, str]:
         return False, ("no yosys pass executed at all — the tool never reached "
                        "a frontend (crash / container / invocation failure); "
                        "there is no evidence of a frontend abort")
-    non_frontend = [p for p in passes
-                    if not _YOSYS_FRONTEND_PASS_RE.search(p)]
+    non_frontend = [p for p in passes if not _yosys_pass_is_frontend(p)]
     if non_frontend:
         return False, (
             f"the run got PAST the read — {len(passes)} pass(es) executed and "

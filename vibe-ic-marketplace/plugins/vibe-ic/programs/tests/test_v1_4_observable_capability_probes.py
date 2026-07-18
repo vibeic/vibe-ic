@@ -449,7 +449,7 @@ def test_frontend_class_token_is_not_matched_inside_an_argument():
     LENIENT verdict (INCONCLUSIVE) for a run that actually got past the read.
     `frontend` must therefore be the pass-CLASS token — the last word before the
     argument separator, the terminating '.', or end of string."""
-    is_fe = lambda n: bool(LR._YOSYS_FRONTEND_PASS_RE.search(n))  # noqa: E731
+    is_fe = LR._yosys_pass_is_frontend
     # real read passes (incl. one whose PATH contains "frontend")
     assert is_fe("Verilog-2005 frontend: /tmp/lec_obs/good.v")
     assert is_fe("Verilog-2005 frontend: /tmp/frontend/rtl/m.v")
@@ -495,3 +495,40 @@ def test_unparseable_pass_list_resolves_to_the_blocking_verdict():
                  "Executing Verilog-2005 frontend: /x.v"):  # no pass NUMBER
         assert LR.frontend_aborted_before_elaboration(text)[0] is False, text
         assert LR.parse_equiv_output(text)["verdict"] == "FAIL", text
+
+
+def test_class_token_cannot_be_forged_by_a_path_or_a_design_chosen_name():
+    """ROUND 2 of the peer review with the LVS wording fix. Requiring `frontend`
+    to be followed by ':' / '.' / end was STILL forgeable, because those
+    separators occur inside ARGUMENTS too. Their sharper framing generalises past
+    LVS: THE DESIGN AND THE ENVIRONMENT NAME THEIR OWN THINGS, so any structural
+    token matched against a region containing paths / net names / cell names is a
+    token those inputs can forge. (In netgen's case a SystemVerilog escaped
+    identifier legally contains SPACES, so a net can spell a verdict phrase
+    exactly.) The class token is therefore read ONLY from the class DESCRIPTOR —
+    the region yosys writes and the inputs cannot reach."""
+    is_fe = LR._yosys_pass_is_frontend
+    # forged separators inside an argument — all previously accepted
+    assert not is_fe("SOMEPASS pass (reading /work/frontend.)")
+    assert not is_fe("SOMEPASS pass (reading /work/frontend: x)")
+    assert not is_fe("SOMEPASS pass (reading /work/frontend/lib.v).")
+    # a design/env-chosen name that spells the class token outright
+    assert not is_fe("SOMEPASS pass (net \\my frontend: fake )")
+    # real reads still classify correctly, incl. a path ending in "frontend."
+    assert is_fe("Verilog-2005 frontend: /tmp/adv/frontend./m.v")
+    assert is_fe("Verilog-2005 frontend: /tmp/frontend/rtl/m.v")
+    assert is_fe("SLANG frontend.")
+    # real builders/writers with no arguments at all
+    assert not is_fe("BMUXMAP pass.")
+    assert not is_fe("Verilog backend.")
+
+
+def test_forged_argument_still_yields_the_blocking_verdict():
+    """End-to-end: a building pass whose argument forges the class token must
+    still leave the run classified FAIL, not the lenient INCONCLUSIVE."""
+    forged = (
+        "1. Executing Verilog-2005 frontend: /work/rtl/top.v\n"
+        "2. Executing SOMEPASS pass (reading /work/frontend: x)\n"
+        "ERROR: died after elaboration\n")
+    assert LR.frontend_aborted_before_elaboration(forged)[0] is False
+    assert LR.parse_equiv_output(forged)["verdict"] == "FAIL"
