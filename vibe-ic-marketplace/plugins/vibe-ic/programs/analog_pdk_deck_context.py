@@ -75,15 +75,25 @@ _ROLE_TOKENS = {
 }
 _REQUIRED_ROLES_DEFAULT = ("nmos", "pmos")
 
-# Corner-section role tokens (slow / typ / fast). typ is the nominal section the
-# knob sweep runs at; slow/fast bracket the process grid.
+# Corner-section role tokens. typ is the nominal section the knob sweep runs at;
+# slow/fast bracket the process grid; skew_sf / skew_fs are the N/P CROSS-skew
+# corners (slow-N/fast-P and fast-N/slow-P) where an OTA bias point splits — added
+# to the grid ONLY when the resolved shim actually exposes a skew section (never
+# fabricated). NB: the skew tokens `sf`/`fs` are matched as a section-name PREFIX
+# distinct from the process `ss`/`ff` (a `sf…` section is skew, `ss…` is slow).
 _SECTION_ROLE_TOKENS = {
     "slow": ("ss", "slow"),
     "typ":  ("tt", "typ", "nom", "tm"),
     "fast": ("ff", "fast"),
+    "skew_sf": ("sf", "snfp", "sfnp", "snf"),   # slow-N / fast-P
+    "skew_fs": ("fs", "fnsp", "fsnp", "fsn"),   # fast-N / slow-P
 }
-# process offsets mirror analog_real_corner_sweep.PVT_PROCESS (±3% off nominal)
-_SECTION_ROLE_OFFSET = {"slow": -0.03, "typ": 0.0, "fast": +0.03}
+# process offsets mirror analog_real_corner_sweep.PVT_PROCESS (±3% off nominal).
+# The SKEW corners carry offset None — a mixed N/P skew has NO scalar ±% model, so
+# a skew corner that cannot be REALLY simulated is left un-derived (value None),
+# never fabricated off the typ base.
+_SECTION_ROLE_OFFSET = {"slow": -0.03, "typ": 0.0, "fast": +0.03,
+                        "skew_sf": None, "skew_fs": None}
 
 _SUBCKT_RE = re.compile(r"(?im)^\s*\.subckt\s+(\S+)\s+(.*)$")
 _MODEL_RE = re.compile(r"(?im)^\s*\.model\s+(\S+)\s+(\w+)")
@@ -124,8 +134,8 @@ _PASSIVE_SECTION_RE = re.compile(r"(?i)(?:passiv|(?:^|_)pas(?:$|_)|(?:^|_)rc(?:$
 def _passive_companion(corner_section: str, sections: List[str]) -> Optional[str]:
     """The passive/parasitic corner section to load ALONGSIDE `corner_section`
     (an LV-CMOS section) so the PMOS parasitic well-diode subckt resolves. Prefers
-    a passive section sharing the corner's leading process token (e.g. `ttt_lv` →
-    `ttt_passive`); falls back to any single passive section (a shared parasitic
+    a passive section sharing the corner's leading process token (e.g. `tt_lv` →
+    `tt_passive`); falls back to any single passive section (a shared parasitic
     block). None when the lib has no LV/passive split. chip-AGNOSTIC."""
     passives = [s for s in sections
                 if _PASSIVE_SECTION_RE.search(s) and s != corner_section]
@@ -295,10 +305,12 @@ def _cross_file_include_targets(text: str, self_basename: str) -> set:
 
 
 def map_corner_sections(sections: List[str]
-                        ) -> Tuple[Optional[str], List[Tuple[str, float]]]:
+                        ) -> Tuple[Optional[str], List[Tuple[str, Any]]]:
     """Map available section names → (typ_section, process_corners). typ is the
-    nominal knob-sweep section; process_corners is the slow/typ/fast grid built
-    ONLY from sections that actually exist (never a fabricated corner)."""
+    nominal knob-sweep section; process_corners is the slow/typ/fast (+ N/P skew
+    when present) grid built ONLY from sections that actually exist (never a
+    fabricated corner). A skew corner carries offset None (no scalar ±% model);
+    it is added ONLY when the shim exposes a skew section."""
     role_hit: Dict[str, str] = {}
     for sec in sections:
         for role, toks in _SECTION_ROLE_TOKENS.items():
@@ -310,8 +322,8 @@ def map_corner_sections(sections: List[str]
     if typ is None and sections:
         typ = sections[0]                          # honest fallback: first section
         role_hit.setdefault("typ", typ)
-    process: List[Tuple[str, float]] = []
-    for role in ("slow", "typ", "fast"):
+    process: List[Tuple[str, Any]] = []
+    for role in ("slow", "typ", "fast", "skew_sf", "skew_fs"):
         sec = role_hit.get(role)
         if sec:
             process.append((sec, _SECTION_ROLE_OFFSET[role]))

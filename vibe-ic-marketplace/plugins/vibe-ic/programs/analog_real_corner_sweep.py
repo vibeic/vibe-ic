@@ -1163,7 +1163,10 @@ def build_pvt_grid(base, base_log, real_sims, tol, process_corners=None):
                                and real.get("value") is not None)
             if is_executed:
                 v = real["value"]
-            elif base is None:
+            elif base is None or p_off is None:
+                # p_off None = an N/P SKEW corner: a mixed skew has NO scalar ±%
+                # model, so a skew corner that did not REALLY run is left
+                # un-derived (value None), never fabricated off the typ base.
                 v = None
             else:
                 v = base * (1.0 + p_off) * (1.0 + t_off)
@@ -1180,6 +1183,9 @@ def build_pvt_grid(base, base_log, real_sims, tol, process_corners=None):
                 entry["_provenance"] = "real_ngspice"
                 entry["ngspice_log"] = real["log"]
                 entry["derived_from"] = None
+            elif p_off is None:
+                entry["_provenance"] = "SKEW_NOT_RUN"
+                entry["derived_from"] = None       # skew is never fabricated
             else:
                 entry["_provenance"] = "DERIVED"
                 entry["derived_from"] = "tt_27c base × process±3% × temp±1%"
