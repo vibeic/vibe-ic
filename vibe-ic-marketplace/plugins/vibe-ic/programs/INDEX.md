@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 885
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 885)
+- **Total programs (excluding helpers / shims):** 888
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 888)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 876 |
+| `any` | 879 |
 
 ## Alphabetical listing
 
@@ -48,6 +48,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_a4_corner_sweep_check` | any | — | A4 deterministic gate (v1.6.35). |
 | `analog_a5_layout_check` | any | — | A5 deterministic gate (v1.6.35). |
 | `analog_a6_block_pv_check` | any | — | A6 deterministic gate |
+| `analog_a6_native_pv` | any | — | A6 per-block PHYSICAL-VERIFICATION producer |
 | `analog_a7_post_layout_resim_check` | any | — | A7 deterministic gate. |
 | `analog_a8_before_floorplan_check` | any | — | analog/digital ordering gate. |
 | `analog_a8_hardmacro_gen_check` | any | — | A8 deterministic gate. |
@@ -84,6 +85,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_one_shot_runner` | any | Wave 90 | A1-A9 analog flow (parallel to Phase 2 digital). |
 | `analog_oracle_compare` | any | — | deterministic analog-benchmark comparator. |
 | `analog_pdk_availability` | any | — | native PDK availability resolver / ladder |
+| `analog_pdk_deck_context` | any | — | family-agnostic ngspice deck-emission context. |
 | `analog_per_block_pv_completeness_check` | any | Wave 93 | strict per-block deliverable |
 | `analog_pre_vs_post_layout_check` | any | — | deterministic gate for pre/post-layout comparison |
 | `analog_real_corner_sweep` | any | — | v1.6.207 (ORGANIC-20260512). |
@@ -258,7 +260,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ds_quality_check` | any | — | Datasheet (L1) quality scorer, 0-100. |
 | `dual_track_select` | any | — | deterministic DUAL-TRACK convergence selector. |
 | `dynamic_ir_drop_check` | any | — | transient (dynamic) IR-drop budget gate for tapeout. |
-| `dynamic_ir_vectored_emit` | any | — | VCD-vectored dynamic IR-drop EMITTER (real OSS PSM). |
+| `dynamic_ir_vectored_emit` | any | — | TRANSIENT (dynamic) IR-drop EMITTER (real PSM). |
 | `eco_loop_audit` | any | — | Audit ECO (Engineering Change Order) log for completeness. |
 | `eco_status_gen` | any | — | emit Step 30 ECO status flag (no_eco_needed.flag or eco_log.json). |
 | `eco_trigger_decision` | any | — | the SHARED ECO auto-trigger decision. |
@@ -617,6 +619,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `placement_legality_check` | any | — | Step 17 (Placement) SUBSTANCE gate. |
 | `plugin_change_pytest_gate` | any | — | plugin_change_pytest_gate.py -- "Plugin-test hard rule" pre-claim-DONE gate. |
 | `plugin_full_audit` | any | — | deterministic D1 + D2 of the "have full test" audit. |
+| `plugin_manifest_discovery` | any | — | ONE source of truth for locating EVERY |
 | `png_ocr_extractor` | any | — | for #36 Bug 3: PNG OCR Tier-2 fallback. |
 | `pnr_doctor` | any | v0.1.96 | OpenROAD P&R-log error classifier (synth-doctor Pattern-B → program). |
 | `pnr_timing_repair_completeness_check` | any | v0.1.26 | chip-AGNOSTIC static audit of an |
@@ -957,7 +960,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (876 programs)
+### `any` (879 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -981,6 +984,7 @@ _(no programs in this group)_
 - `analog_a4_corner_sweep_check` — A4 deterministic gate (v1.6.35).
 - `analog_a5_layout_check` — A5 deterministic gate (v1.6.35).
 - `analog_a6_block_pv_check` — A6 deterministic gate
+- `analog_a6_native_pv` — A6 per-block PHYSICAL-VERIFICATION producer
 - `analog_a7_post_layout_resim_check` — A7 deterministic gate.
 - `analog_a8_before_floorplan_check` — analog/digital ordering gate.
 - `analog_a8_hardmacro_gen_check` — A8 deterministic gate.
@@ -1017,6 +1021,7 @@ _(no programs in this group)_
 - `analog_one_shot_runner` — A1-A9 analog flow (parallel to Phase 2 digital).  _[Wave 90]_
 - `analog_oracle_compare` — deterministic analog-benchmark comparator.
 - `analog_pdk_availability` — native PDK availability resolver / ladder
+- `analog_pdk_deck_context` — family-agnostic ngspice deck-emission context.
 - `analog_per_block_pv_completeness_check` — strict per-block deliverable  _[Wave 93]_
 - `analog_pre_vs_post_layout_check` — deterministic gate for pre/post-layout comparison
 - `analog_real_corner_sweep` — v1.6.207 (ORGANIC-20260512).
@@ -1187,7 +1192,7 @@ _(no programs in this group)_
 - `ds_quality_check` — Datasheet (L1) quality scorer, 0-100.
 - `dual_track_select` — deterministic DUAL-TRACK convergence selector.
 - `dynamic_ir_drop_check` — transient (dynamic) IR-drop budget gate for tapeout.
-- `dynamic_ir_vectored_emit` — VCD-vectored dynamic IR-drop EMITTER (real OSS PSM).
+- `dynamic_ir_vectored_emit` — TRANSIENT (dynamic) IR-drop EMITTER (real PSM).
 - `eco_loop_audit` — Audit ECO (Engineering Change Order) log for completeness.
 - `eco_status_gen` — emit Step 30 ECO status flag (no_eco_needed.flag or eco_log.json).
 - `eco_trigger_decision` — the SHARED ECO auto-trigger decision.
@@ -1545,6 +1550,7 @@ _(no programs in this group)_
 - `placement_legality_check` — Step 17 (Placement) SUBSTANCE gate.
 - `plugin_change_pytest_gate` — plugin_change_pytest_gate.py -- "Plugin-test hard rule" pre-claim-DONE gate.
 - `plugin_full_audit` — deterministic D1 + D2 of the "have full test" audit.
+- `plugin_manifest_discovery` — ONE source of truth for locating EVERY
 - `png_ocr_extractor` — for #36 Bug 3: PNG OCR Tier-2 fallback.
 - `pnr_doctor` — OpenROAD P&R-log error classifier (synth-doctor Pattern-B → program).  _[v0.1.96]_
 - `pnr_timing_repair_completeness_check` — chip-AGNOSTIC static audit of an  _[v0.1.26]_
