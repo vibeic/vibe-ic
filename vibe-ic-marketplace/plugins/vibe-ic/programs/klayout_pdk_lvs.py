@@ -272,7 +272,7 @@ def _metal_via_from_pdk_map(path):
     DEFAULT_LAYERMAP's generic 4-metal/3-via example. Extracting with too few
     metal layers leaves upper-metal wires out of the connectivity graph, so any
     net that routes through an uncovered layer SPLITS into disconnected pieces ->
-    a spurious extra net -> a FALSE LVS mismatch (commercial_foundry commercial_pdk: exactly one
+    a spurious extra net -> a FALSE LVS mismatch (a commercial PDK: exactly one
     6-metal net split, taking spm from MISMATCH to MATCH once M5/M6 were covered).
 
     Picks each layer's ROUTING geometry: purpose NET/DRAWING if present, else the

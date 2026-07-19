@@ -5,7 +5,7 @@ OpenROAD Tcl.
 Background: OpenROAD DEFAULTS TO 1 THREAD. The phase3 runner now emits
 `set_thread_count N` as the first PnR-Tcl command so global_route / detailed_route
 / the antenna repair loop / CTS all run threaded (measured floor: single-threaded
-the subservient/commercial_pdk antenna reroute was ~394 s/round and blew the step cap;
+the subservient/commercial PDK antenna reroute was ~394 s/round and blew the step cap;
 at 8 threads 74 s/round and the design reaches GDS in budget). `eda_pnr` must
 parallelize identically or the two PnR paths drift.
 
