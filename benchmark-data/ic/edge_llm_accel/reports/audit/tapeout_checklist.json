@@ -1,7 +1,7 @@
 {
   "program": "tapeout_checklist_gen",
   "version": "1.0.0",
-  "generated_at": "2026-07-19T02:54:16.985279+00:00",
+  "generated_at": "2026-07-19T13:25:35.511916+00:00",
   "project": "/home/reyerchu/vibe-ic/benchmark-data/ic/edge_llm_accel",
   "summary": {
     "blockers_total": 10,
@@ -83,7 +83,7 @@
       "pattern": "reports/phase3/drc_signoff.rpt",
       "present": true,
       "path": "reports/phase3/drc_signoff.rpt",
-      "size_bytes": 976659302,
+      "size_bytes": 10037407,
       "severity": "blocker",
       "gate": null,
       "gate_note": null,

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "version": "0.119.62",
-  "run_at": "2026-07-19T02:59:11.809989+00:00",
+  "run_at": "2026-07-19T13:30:54.473630+00:00",
   "phase": "all",
   "strict_structural": false,
   "strict_step_artifacts": false,
@@ -14,11 +14,11 @@
     "PASS": 22,
     "FAIL": 8,
     "MISSING": 4,
-    "WAIVED": 4,
+    "WAIVED": 3,
     "DEFERRED-BY-UPSTREAM": 0,
     "SKIPPED-CONDITION": 25,
     "SKIPPED-SETUP-REQUIRED": 0,
-    "VACUOUS_PASS": 0
+    "VACUOUS_PASS": 1
   },
   "structural_fail_lines": [],
   "step_artifact_fail_lines": [],
