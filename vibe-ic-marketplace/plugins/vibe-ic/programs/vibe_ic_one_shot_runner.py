@@ -386,6 +386,13 @@ def main() -> int:
                         "route-plateauing low utilization on a fixed 1500x1500 die")
     p.add_argument("--util", type=float, default=0.4)
     p.add_argument("--pdk", default="auto")
+    p.add_argument("--allow-oss-pdk-fallback", action="store_true",
+                   help="Pass through to phase3: acknowledge an "
+                        "open-source in-container PDK fallback even "
+                        "though a commercial PDK is configured for "
+                        "this host. Without it a silent OSS fallback "
+                        "is REFUSED (it would emit VOID sign-off "
+                        "reports).")
     p.add_argument("--ic-name", default="UNNAMED_CHIP")
     p.add_argument("--dashboard", dest="dashboard", action="store_true",
                    default=True,
@@ -650,6 +657,8 @@ def main() -> int:
                    "--die-um", args.die_um,
                    "--util", str(args.util),
                    "--pdk", args.pdk]
+        if getattr(args, "allow_oss_pdk_fallback", False):
+            p3_args.append("--allow-oss-pdk-fallback")
         rc = _run_phase("PHASE 3 (synth → PnR → GDS → DRC → LVS)",
                          runner, p3_args, env=_phase_env)
         rep = _read_report(_pl.report_path(project, "phase3_one_shot.json"))

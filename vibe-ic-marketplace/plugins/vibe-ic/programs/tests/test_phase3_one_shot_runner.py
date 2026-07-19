@@ -29,7 +29,19 @@ PROG = Path(__file__).resolve().parent.parent / \
     "phase3_one_shot_runner.py"
 
 
+# v1.4.62 — these control-flow tests exercise the DEFAULT (`--pdk auto`)
+# resolution, which lands on the container's OSS enablement. On a host that has
+# a commercial PDK configured, `commercial_pdk_fallback_guard` now REFUSES that
+# silent fallback (it would emit VOID sign-off reports under a false PDK
+# belief). These tests are about orchestrator control flow, not PDK intent, so
+# they acknowledge the OSS fallback explicitly — which also makes them
+# deterministic regardless of the host's private commercial-PDK config.
+_ACK_OSS = "--allow-oss-pdk-fallback"
+
+
 def _run(args: list, timeout: int = 90) -> subprocess.CompletedProcess:
+    if args and not args[0].startswith("-") and _ACK_OSS not in args:
+        args = args + [_ACK_OSS]
     return subprocess.run(
         [sys.executable, str(PROG)] + args,
         capture_output=True, text=True, timeout=timeout,

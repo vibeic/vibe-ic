@@ -2704,6 +2704,90 @@ def _discover_local_macros(project: Path) -> Tuple[
             if typ_only:
                 macro_libs = typ_only
     return macro_libs, macro_lefs, macro_gds, macro_v
+# ---------------------------------------------------------------------------
+# Silent wrong-PDK fallback guard (chip-AGNOSTIC)
+# ---------------------------------------------------------------------------
+# OSS enablements that ship INSIDE the container image. `_detect_pdk` returns
+# one of these whenever `<project>/input/pdk/` is absent — i.e. whenever NO
+# project-staged PDK was resolved. A project-staged PDK always resolves to a
+# `custom:<dir>` name instead.
+_OSS_CONTAINER_PDKS: Tuple[str, ...] = (
+    "sky130A", "sky130B",
+    "gf180mcuA", "gf180mcuB", "gf180mcuC", "gf180mcuD",
+    "nangate45", "asap7",
+)
+
+
+def commercial_pdk_fallback_guard(
+    project: Path,
+    resolved_pdk_name: Optional[str],
+    override: Optional[str],
+    commercial_configured: bool,
+    allow_oss_fallback: bool = False,
+) -> Optional[str]:
+    """REFUSE a silent OSS-PDK fallback when a commercial PDK is configured.
+
+    Root cause (sha256 canary, 2026-07-19): `_detect_pdk` keys the
+    project-staged PDK on `<project>/input/pdk/`. When that directory is
+    absent it falls back to the container's OSS enablement **silently** — even
+    when the operator has a commercial PDK configured
+    (`_commercial_pdk.is_configured()`). Phase 3 then runs to completion and
+    emits authoritative-looking DRC / LVS sign-off reports built from the OSS
+    std-cell library for a run the operator believes was on the commercial
+    PDK. Those reports are VOID but look real — the most dangerous defect
+    class (tool reports success while silently not doing the thing).
+
+    Fires ONLY when ALL of:
+      * a commercial PDK is configured for this host, AND
+      * the operator did NOT explicitly select a PDK (`--pdk auto`) — an
+        explicit `--pdk sky130A` is a deliberate OSS run, AND
+      * PDK resolution landed on an in-container OSS enablement rather than a
+        project-staged (`custom:<dir>`) PDK, AND
+      * the operator did NOT acknowledge the fallback
+        (`--allow-oss-pdk-fallback`).
+
+    A genuinely-OSS run (nothing configured) is UNAFFECTED — that is the
+    positive case and it must keep proceeding untouched.
+
+    Returns the loud refusal message, or None when the run may proceed.
+    NDA: never prints the configured PDK's identifier/SKU.
+
+    chip-AGNOSTIC: keyed on host config + resolution outcome, no chip literal.
+    """
+    if allow_oss_fallback:
+        return None
+    if not commercial_configured:
+        return None
+    if override and override != "auto":
+        # Operator explicitly named the PDK — deliberate, not a silent fallback.
+        return None
+    if not resolved_pdk_name:
+        return None
+    if resolved_pdk_name.startswith("custom:"):
+        # A project-staged PDK WAS resolved — nothing fell back.
+        return None
+    if resolved_pdk_name not in _OSS_CONTAINER_PDKS:
+        return None
+    staged = project / "input" / "pdk"
+    return (
+        "[FAIL] phase3 PDK resolution REFUSED — silent wrong-PDK fallback.\n"
+        "  configured for this host : a COMMERCIAL PDK "
+        "(identifier withheld; see VIBEIC_COMMERCIAL_PDK_ID / "
+        "~/.config/vibeic/commercial_pdk.json)\n"
+        f"  actually resolved        : {resolved_pdk_name} "
+        "(open-source, in-container fallback)\n"
+        f"  reason                   : no staged PDK at {staged}/ "
+        "(expected {liberty,lef}/ subdirs)\n"
+        "  impact                   : Phase 3 would run to completion and emit "
+        "authoritative-looking DRC / LVS sign-off reports built from the "
+        "OPEN-SOURCE std-cell library. Those reports would be VOID for the "
+        "commercial PDK the operator believes this run used.\n"
+        "  how to fix               : stage the commercial PDK under "
+        f"{staged}/ (liberty/, lef/, and optionally gds/, calibre/, bridge/), "
+        "OR re-run with an explicit `--pdk <oss-name>` if an open-source run "
+        "was intended, OR pass `--allow-oss-pdk-fallback` to acknowledge the "
+        "fallback in writing."
+    )
 
 
 def _detect_pdk(project: Path, override: Optional[str] = None
@@ -10129,6 +10213,22 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
     _drc_budget = _drc_wall_budget_s()
     rc, out, err = _docker_exec(container, cmd, marker=gds_c,
                                 hard_ceiling_s=_drc_budget)
+    # v1.4.62 — svrfdrc has a rare, NON-DETERMINISTIC heap-corruption abort
+    # (`malloc(): unaligned tcache chunk` / SIGABRT|SIGSEGV -> rc 134/139, core
+    # dump, NO report) in the parallel measurement-rule path. It is a memory-state
+    # race, NOT a design defect: an identical re-run recovers a byte-identical
+    # clean report (proven 8/8 on spm under vibeic-eda:0.2.22). A crash that
+    # produced NO report is not a verdict, so RETRY the step once before a missing
+    # report is read as a FAIL below. Chip-AGNOSTIC — keys on the tool's crash
+    # signature (rc + heap-abort stderr), NEVER the design. The root-cause heap fix
+    # is tracked as a klayout-vibeic fork item (FIX_STATUS: svrfdrc heap safety).
+    if (not rpt.is_file()
+            and (rc in (134, 139)
+                 or re.search(r"malloc\(\):|free\(\):|tcache|corrupted|"
+                              r"core dumped|Segmentation fault|double free",
+                              (out or "") + (err or ""), re.I))):
+        rc, out, err = _docker_exec(container, cmd, marker=gds_c,
+                                    hard_ceiling_s=_drc_budget)
     if rc in (_RC_STALLED, 124):
         _mins = int(_drc_budget // 60)
         return StepResult(
@@ -18515,6 +18615,12 @@ def main() -> int:
                         "Conservative default; caller can override.")
     p.add_argument("--pdk", default="auto",
                    help="auto (default) | sky130A | nangate45 | <custom>")
+    p.add_argument("--allow-oss-pdk-fallback", action="store_true",
+                   help="Acknowledge, in writing, that an open-source "
+                        "in-container PDK may be used even though a commercial "
+                        "PDK is configured for this host. Without this flag a "
+                        "silent OSS fallback is REFUSED (it would emit VOID "
+                        "sign-off reports under a false PDK belief).")
     # Design-for-ECO (Step 18) — spare-cell-array density as a fraction
     # of the placed-cell count. Default 2% (0.02); clamped to [0, 0.2].
     p.add_argument("--spare-density", type=float,
@@ -18552,6 +18658,38 @@ def main() -> int:
         print("[SKIP] phase3_one_shot_runner: no usable PDK detected. "
               "Provide input/pdk/{liberty,lef}/ or use --pdk sky130A.")
         return 0
+
+    # Silent wrong-PDK fallback guard — a configured commercial PDK must NEVER
+    # become an OSS in-container fallback without the operator saying so. A
+    # genuinely-OSS host (nothing configured) is unaffected.
+    try:
+        import _commercial_pdk as _cpdk  # local, optional
+        _cp_configured = bool(_cpdk.is_configured())
+    except Exception:
+        _cp_configured = False
+    _cp_refusal = commercial_pdk_fallback_guard(
+        project, pdk.name, args.pdk, _cp_configured,
+        allow_oss_fallback=bool(getattr(args, "allow_oss_pdk_fallback", False)))
+    if _cp_refusal:
+        print(_cp_refusal, file=sys.stderr)
+        try:
+            _rp = _pl.reports_phase3_dir(project)
+            _rp.mkdir(parents=True, exist_ok=True)
+            (_rp / "pdk_resolution_refusal.json").write_text(json.dumps({
+                "program": "phase3_one_shot_runner",
+                "gate": "commercial_pdk_fallback_guard",
+                "verdict": "REFUSED",
+                "pass": False,
+                "resolved_pdk": pdk.name,
+                "resolved_pdk_kind": "oss_in_container_fallback",
+                "commercial_pdk_configured": True,
+                "pdk_override": args.pdk,
+                "staged_pdk_dir": str(project / "input" / "pdk"),
+                "rationale": _cp_refusal,
+            }, indent=2) + "\n")
+        except Exception:
+            pass
+        return 4
 
     # Wave-on-fix v1.6.10 - resolve ASIC top once, share across all
     # steps. step_synth's local override of `top` was not propagating

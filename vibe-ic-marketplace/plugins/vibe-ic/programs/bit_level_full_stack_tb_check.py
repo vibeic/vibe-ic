@@ -98,6 +98,90 @@ _DEFAULT_MIN_DISTINCT = 10
 _DEFAULT_MIN_OPCODES = 3
 _DEFAULT_PADDING = "0x02"
 
+# A register-map protocol needs at least this many DISTINCT addressable
+# registers before a write-regs -> control-write -> status-poll -> read-result
+# transaction sequence is even expressible. Below the threshold the L4 doc is a
+# bare `register_map_present` claim with no synthesisable content, so the
+# opcode-TB N/A decision stands.
+_MIN_REGMAP_REGISTERS = 2
+
+
+def register_map_protocol_evidence(generated_docs: Path) -> dict | None:
+    """Return register-map protocol evidence from L4/L5, or None.
+
+    Chip-AGNOSTIC discriminator between the TWO reasons `L3.opcodes == []`:
+
+      (a) the IC genuinely has NO specifiable command protocol — a pure
+          datapath / arithmetic primitive (no registers, no command sequence).
+          The opcode-driven bit-level full-stack TB is honestly N/A.
+
+      (b) the IC DOES have a fully specified protocol, just not an
+          opcode/byte-stream one: a MEMORY-MAPPED REGISTER FILE declared in
+          the L4 register map (+ L5 command/behavioural sequence). Here
+          `opcodes == []` means the TB GENERATOR could not synthesise the
+          stimulus — a functional-coverage GAP in our tooling, NOT an N/A.
+
+    Only (a) may be waived. Conflating (b) with (a) is how a 0%-functional-
+    coverage run reports a green `vacuous_pass`.
+    """
+    l4 = generated_docs / "L4_REGMAP.json"
+    if not l4.is_file():
+        return None
+    try:
+        d = json.loads(l4.read_text())
+    except Exception:
+        return None
+    if not isinstance(d, dict):
+        return None
+    regs = d.get("registers")
+    if not isinstance(regs, list):
+        return None
+    addrs = set()
+    named = 0
+    for r in regs:
+        if not isinstance(r, dict):
+            continue
+        if not (r.get("name") or "").strip():
+            continue
+        named += 1
+        a = r.get("address_int")
+        if a is None:
+            a = r.get("address")
+        if a is not None and str(a).strip() != "":
+            addrs.add(str(a).strip())
+    if named < _MIN_REGMAP_REGISTERS or len(addrs) < _MIN_REGMAP_REGISTERS:
+        return None
+    return {
+        "source": "L4_REGMAP.json",
+        "register_map_present": bool(d.get("register_map_present")),
+        "registers": named,
+        "distinct_addresses": len(addrs),
+    }
+
+
+def functional_coverage_scored(sim_dir: Path) -> int | None:
+    """Golden-scored vector count from sim_full_stack/results.json, or None.
+
+    `functional_coverage.scored_with_golden` is the ONLY honest measure of
+    functional verification here: a vector with `expected_bytes: null` is a
+    bring-up placeholder, never evidence.
+    """
+    rj = sim_dir / "results.json"
+    if not rj.is_file():
+        return None
+    try:
+        d = json.loads(rj.read_text())
+    except Exception:
+        return None
+    fc = d.get("functional_coverage")
+    if isinstance(fc, dict) and isinstance(fc.get("scored_with_golden"), int):
+        return int(fc["scored_with_golden"])
+    pv = d.get("per_vector")
+    if isinstance(pv, list):
+        return sum(1 for v in pv
+                   if isinstance(v, dict) and v.get("expected_bytes") is not None)
+    return None
+
 
 def _find_top_module(rtl_dir: Path, l9_path: Path | None,
                      explicit_top: str | None) -> str | None:
@@ -414,8 +498,61 @@ def main():
             _no_op = bool(_d.get("no_opcodes_in_input")) or \
                 not (_d.get("opcodes") or [])
             if _no_op:
+                # HONESTY GUARD (sha256 canary, 2026-07-19) — `opcodes == []`
+                # has TWO very different causes and only ONE of them is N/A.
+                # If L4/L5 declare a MEMORY-MAPPED REGISTER FILE, the design
+                # DOES have a fully specifiable protocol (write regs ->
+                # control-write -> status-poll -> read result) that the TB
+                # generator simply cannot synthesise yet. Reporting that as a
+                # `vacuous_pass` lets a run with ZERO golden-scored vectors
+                # satisfy the functional-verification pillar. It must instead
+                # surface an EXPLICIT functional-coverage GAP.
+                # chip-AGNOSTIC: keyed on L3/L4 structure, no chip literal.
+                _regmap = register_map_protocol_evidence(
+                    _pl.generated_docs_dir(proj))
+                _sim = (Path(args.sim_dir) if args.sim_dir
+                        else _pl.sim_full_stack_dir(proj))
+                # None == no full-stack result at all == no functional
+                # coverage; treat it exactly like an explicit 0.
+                _scored = functional_coverage_scored(_sim)
+                if _regmap and (_scored or 0) == 0:
+                    _msg = (
+                        "FUNCTIONAL_COVERAGE_GAP: register-map protocol not "
+                        "yet synthesizable by the TB generator — 0 "
+                        "functionally-scored vectors. L3 declares no "
+                        "opcode/byte-stream protocol "
+                        "(no_opcodes_in_input), but L4/L5 DO declare a "
+                        f"memory-mapped register file "
+                        f"({_regmap['registers']} register(s), "
+                        f"{_regmap['distinct_addresses']} distinct "
+                        "address(es)), so this IC HAS a specifiable protocol "
+                        "(write regs -> control-write -> status-poll -> read "
+                        "result) that full_stack_tb_gen failed to synthesise. "
+                        "This is OUR tooling gap, NOT an N/A: a vacuous TB is "
+                        "not a pass and must not satisfy the functional-"
+                        "verification pillar. Follow-on: register-file "
+                        "transaction driver in full_stack_tb_gen (synthesise "
+                        "stimulus from the L4 register map + L5 command "
+                        "sequence).")
+                    _res = {
+                        "pass": False,
+                        "vacuous_pass": False,
+                        "functional_verified": False,
+                        "rule": "register_map_protocol_unsynthesized",
+                        "verdict": "FUNCTIONAL_COVERAGE_GAP",
+                        "scored_with_golden": int(_scored or 0),
+                        "register_map_evidence": _regmap,
+                        "rationale": _msg,
+                    }
+                    if args.json:
+                        Path(args.json).parent.mkdir(parents=True,
+                                                     exist_ok=True)
+                        Path(args.json).write_text(json.dumps(_res, indent=2))
+                    print(json.dumps(_res, indent=2))
+                    return 1
                 _msg = ("VACUOUS_PASS: IC has no command protocol / opcodes "
-                        "(L3_CMD_PROTOCOL.no_opcodes_in_input) — opcode-driven "
+                        "(L3_CMD_PROTOCOL.no_opcodes_in_input) and no L4/L5 "
+                        "register-map protocol — opcode-driven "
                         "bit-level full-stack TB is N/A for this non-protocol "
                         "IC (mirrors runner full_stack_tb_gen/reference_tb "
                         "SKIP).")

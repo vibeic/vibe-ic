@@ -219,6 +219,38 @@ def _load_json(p: Path):
         return None
 
 
+# Canonical + legacy locations of the full-stack TB result. chip-AGNOSTIC.
+_FULL_STACK_RESULTS = (
+    Path("phase2/stage1/sim_full_stack/results.json"),
+    Path("sim_full_stack/results.json"),
+    Path("sim/full_stack/results.json"),
+)
+
+
+def _full_stack_functional_coverage(project: Path):
+    """(scored_with_golden, placeholder, relative_path) from the full-stack TB
+    result, or (None, None, None) when no full-stack result exists.
+
+    `scored_with_golden` counts vectors compared against a CONCRETE golden.
+    A vector with `expected_bytes: null` is a bring-up placeholder and is
+    never evidence of functional correctness.
+    """
+    for rel in _FULL_STACK_RESULTS:
+        d = _load_json(project / rel)
+        if not isinstance(d, dict):
+            continue
+        fc = d.get("functional_coverage")
+        if isinstance(fc, dict) and isinstance(fc.get("scored_with_golden"), int):
+            return (int(fc["scored_with_golden"]),
+                    fc.get("placeholder"), str(rel))
+        pv = d.get("per_vector")
+        if isinstance(pv, list) and pv:
+            scored = sum(1 for v in pv if isinstance(v, dict)
+                         and v.get("expected_bytes") is not None)
+            return scored, len(pv) - scored, str(rel)
+    return None, None, None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
@@ -285,6 +317,23 @@ def main():
         func_detail = f"{ok}/{tot} requirements verified"
     else:
         func_pct, func_detail = None, "reports/functional_coverage.json MISSING"
+
+    # HONESTY GUARD (sha256 canary, 2026-07-19) — a full-stack TB that scored
+    # ZERO vectors against a golden is a VACUOUS pass and must never satisfy
+    # Pillar 1, no matter what reports/functional_coverage.json claims. The
+    # full-stack results.json is the flow's own admission: `functional_coverage
+    # .scored_with_golden == 0` with placeholder bring-up vectors means NO
+    # functional correctness was verified end-to-end. chip-AGNOSTIC: reads the
+    # flow's own coverage counters, no chip literal.
+    fs_scored, fs_placeholder, fs_path = _full_stack_functional_coverage(project)
+    if fs_scored is not None and fs_scored == 0:
+        func_pct = 0.0
+        func_detail = (
+            f"FUNCTIONAL COVERAGE GAP — {fs_path} reports "
+            f"scored_with_golden=0 (placeholder={fs_placeholder}): the "
+            "full-stack TB verified NO vector against a golden. A vacuous TB "
+            "is not a pass" + (f"; prior claim: {func_detail}"
+                               if fc else "") + ".")
 
     # ── Pillar 3: code coverage ──
     # N/A for an analog-only IC: code coverage measures DIGITAL RTL line/branch/
