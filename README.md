@@ -4,7 +4,7 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Awesome](https://awesome.re/badge.svg)](https://github.com/vibeic/awesome-open-ic)
-[![Plugin v1.4.17](https://img.shields.io/badge/plugin-v1.4.17-brightgreen.svg)](vibe-ic-marketplace/README.md)
+[![Plugin v1.4.61](https://img.shields.io/badge/plugin-v1.4.61-brightgreen.svg)](vibe-ic-marketplace/README.md)
 [![MCP-EDA v1.0.0](https://img.shields.io/badge/mcp--eda-v1.0.0-brightgreen.svg)](vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/README.md)
 
 > **Status: v1.4 — mature, benchmark-hardened.** The `vibe-ic` plugin is the
@@ -35,7 +35,10 @@ checkers (no fabrication, no hallucinated PASS).
 │       ├── ip-catalog/           open-source IP catalog (manifests)
 │       └── benchmark/            benchmark harness + registry
 ├── IP/                         open-core git submodules (serv · ibex · sha256 · opentitan)
-├── benchmark-data/             benchmark inputs + results (ic/<6 ICs> + evaluation/)
+├── benchmark-data/             the benchmark corpus (6.8 GB) — see "The benchmark corpus" below
+│   ├── ic/                      7 canonical benchmark ICs driven doc → RTL → GDS
+│   ├── evaluation/              8 open-benchmark / parity evaluation sets
+│   └── datasets/                vendored upstream benchmark datasets
 ├── benchmark_external/         external-benchmark harness notes (CVDP legal-input definition)
 ├── tools/                      repo dev / CI utilities (second pytest tree)
 ├── docs/                       repo-level guides — INSTALL.md · governance runbook
@@ -69,8 +72,26 @@ docker exec vibeic-eda yosys --version         # sanity check — should print a
 ```
 
 Stock fallback: `docker pull hpretl/iic-osic-tools:latest` (run it named `vibeic-eda`).
-Already running an older tag? Swap without retyping mounts: `tools/vibeic-eda/restart-eda.sh 0.2.12`.
+Already running an older tag? Swap without retyping mounts: `tools/vibeic-eda/restart-eda.sh 0.2.19`.
 See **[docs/INSTALL.md](docs/INSTALL.md)** for the required bind-mounts (Phase 3 needs the identity mount).
+
+The image tag is pinned by the one-line `tools/vibeic-eda/VERSION`;
+`tools/vibeic-eda/sync_image_version.py --check` fails the build if any install
+doc drifts from it, so the tag above is never stale by hand.
+
+**PDKs.** The flow resolves PDKs through
+`plugins/vibe-ic/programs/pdk_registry.json`:
+
+| PDK | What it is |
+|---|---|
+| `sky130A` · `gf180mcuD` · `ihp-sg13g2` | open foundry PDKs — the real sign-off targets |
+| `nangate45` · `asap7` | **generic / predictive research-and-education enablements** — full LEF + Liberty + GDS so synth / PnR / CTS / STA and area-timing comparison run, but each is marked `tapeout_capable=false` in the registry: no real foundry, no manufacturable layer stack, and the shipped DRC decks are educational rule-checks, **not** sign-off |
+| `custom_auto_detect` | a PDK you stage yourself, auto-detected from its on-disk layout |
+
+A **commercial PDK** is supported as a *mechanism* only: the resolver reads a
+`VIBEIC_COMMERCIAL_PDK_ID` env var (or a private, gitignored user config) and
+never carries a vendor identifier in this repo — see
+`plugins/vibe-ic/programs/_commercial_pdk.py`. No PDK is bundled with the plugin.
 
 ### 2. Install the `vibe-ic` plugin (one step)
 
@@ -90,7 +111,7 @@ claude plugin install vibe-ic
 > `/plugin marketplace add vibeic/vibe-ic` and
 > `/plugin install vibe-ic@vibe-ic-marketplace`.
 
-### 4. Design something
+### 3. Design something
 
 ```bash
 claude "Design a temperature sensor IC: I2C interface, 12-bit, alert
@@ -175,11 +196,11 @@ discloses any open↔commercial tool substitution and follows the
 Latest clean-room runs (2026-07-12): **Claude Fable 5** driving plugin
 **v1.3.88** on the forked vibeic-eda toolchain (each run's RESULT.md names the
 exact image it used). The CVDP figure is from an earlier campaign with Claude
-Opus 4.8 (v1.2.96); each score names its model.
+Opus 4.8 (v1.2.63); each score names its model.
 
 | Benchmark | Result | Notes |
 |---|---|---|
-| **NVIDIA CVDP** (nonagentic code-generation, no-commercial) | **243/302 = 80.46%** official-compliant blind pass@1 *(Opus 4.8, v1.2.96)* | **prompt+context-only** — the deterministic solver reads ONLY `input.prompt` + `input.context`; the hidden test harness (`.env`, cocotb testbench) and the golden solution are OFF-LIMITS oracle, enforced by a regression guard that proves the emit is byte-identical with vs without them. Scored on the official `run_benchmark.py` in the pinned `cvdp-sim` image. |
+| **NVIDIA CVDP** (nonagentic code-generation, no-commercial) | **243/302 = 80.46%** official-compliant blind pass@1 *(Opus 4.8, v1.2.63)* | **prompt+context-only** — the deterministic solver reads ONLY `input.prompt` + `input.context`; the hidden test harness (`.env`, cocotb testbench) and the golden solution are OFF-LIMITS oracle, enforced by a regression guard that proves the emit is byte-identical with vs without them. Scored on the official `run_benchmark.py` in the pinned `cvdp-sim` image. |
 | **RTLLM v2.0** | **49/50 = 98%** blind pass@1 (**49/49 = 100%** excluding the 1 proven upstream dataset defect) *(Fable 5, v1.3.88)* | spec-to-RTL, runner-driven (Shape B), §4.05-blind, iverilog-scored; single-shot 47/50 = 94%, converged after ONE blind close-loop round. The sole residual (`ring_counter`) is a golden that fails its own testbench — a per-design RESULT entry, not a silent drop. |
 | **VerilogEval-v2** | **153/156 = 98.08%** blind pass@1, **single-shot** *(Fable 5, v1.3.88)* | spec-to-RTL, §4.05-blind, iverilog-scored; 130/156 problems emitted by deterministic solvers. All 3 residuals are documented dataset defects / spec ambiguities — the score sits at the defect floor with no close-loop round. |
 | **VerilogEval-Human** | **153/156 = 98.08%** blind pass@1, **single-shot** *(Fable 5, v1.3.88)* | code-complete (iccad2023), §4.05-blind, iverilog-scored; 129/156 deterministic emits. |
@@ -189,6 +210,98 @@ Opus 4.8 (v1.2.96); each score names its model.
 > golden reference to inflate a number, and a fresh clean-room re-run reproduces
 > the published figure. Tool substitutions (Synopsys VCS → Icarus, Design
 > Compiler → Yosys+OpenROAD, …) are disclosed in every `RESULT.md`.
+
+---
+
+## The benchmark corpus — `benchmark-data/`
+
+Every number above is backed by files in this repo. `benchmark-data/` is 6.8 GB
+split three ways by **what the data is for**:
+
+| Sub-tree | Size | What it holds |
+|---|---|---|
+| [`ic/`](benchmark-data/ic) | 5.0 GB | the 7 canonical benchmark ICs, driven end-to-end (documents → RTL → GDS) |
+| [`evaluation/`](benchmark-data/evaluation) | 994 MB | 8 evaluation sets — open-benchmark runs + the Phase-1 parity sweep |
+| [`datasets/`](benchmark-data/datasets) | 838 MB | vendored upstream benchmark datasets (inputs, not our output) |
+
+Two audiences, two entry points. If you are **checking a published claim**, read
+the `RESULT.md` / `BENCHMARK_VERIFICATION_REPORT.md` at the top of the relevant
+directory — each row names the artifact that evidences it, so a claim can be
+traced to a file rather than taken on trust. If you are **re-running**, take only
+the `input/` sub-tree; everything else is output and is regenerated.
+
+### `ic/` — the 7 canonical benchmark ICs
+
+The ICs we push through the *whole* flow under the corrected protocol in
+[`ic/METHODOLOGY.md`](benchmark-data/ic/METHODOLOGY.md), whose hard rule is that
+the input is **curated design documents only** — no RTL, no reference netlist —
+so a run cannot quietly copy the answer it is being scored against.
+
+| IC | What it is |
+|---|---|
+| `spm` | configurable N-bit serial-parallel integer multiplier |
+| `sha256` | SHA-256 hash core |
+| `subservient` | bit-serial RISC-V core |
+| `ibex` | 32-bit RISC-V CPU core |
+| `opentitan_aes` | AES block from the OpenTitan family |
+| `caravel_user_project` | user-project harness for the Caravel SoC frame |
+| `u_hawaii_adc` | **the analog / mixed-signal one** — runs the Analog A1-A9 track (spec → topology → sizing → corner sweep → layout → post-layout resim → hardmacro) rather than the digital Phase-3 track |
+
+A typical IC directory:
+
+```
+ic/<name>/
+├── input/docs/          the ONLY legal input — curated design documents
+├── phase1/generated_docs/L*.json    the L1-L27 handoff Phase 2 requires
+├── phase2/              generated RTL, lint, simulation
+├── phase3/              synth · PnR · DRC/LVS · GDS  (analog/ for the AMS track)
+├── reports/             per-gate JSON + coverage + the phase audits
+├── sim/                 simulation artifacts
+├── RESULT.md            the verdict, per-phase, with the evidence path per row
+├── SOURCE_MANIFEST.md   provenance of anything reused
+└── clean_run_*/         one self-contained dir per clean-room re-run
+```
+
+`clean_run_*/` is why the tree is large and is deliberate: a new run never
+overwrites an older verdict, so a regression stays visible instead of being
+silently replaced.
+
+Where the six-pillar
+[`/benchmark-verify`](vibe-ic-marketplace/plugins/vibe-ic/skills/benchmark-verify/SKILL.md)
+gate (functional coverage · 56-step comparison vs the open-source reference ·
+code coverage · FPGA verification · analog closed-loop · design-for-ECO
+readiness) has been driven to completion, the IC also carries a
+`BENCHMARK_VERIFICATION_REPORT.md` — present today for `spm`, `sha256`,
+`subservient`, and `u_hawaii_adc`.
+
+### `evaluation/` — the 8 evaluation sets
+
+Results from public benchmarks and from our own parity sweeps. Each set keeps
+its per-run directories plus a `RESULT.md` naming the model, the plugin version,
+and the exact toolchain image that produced the number.
+
+| Set | Size | What it is |
+|---|---|---|
+| `cvdp` | 280 MB | NVIDIA CVDP campaign — the compliance-hardened re-runs behind the 243/302 figure |
+| `cvdp-open-v1252` | 13 MB | per-problem CVDP working dirs from the open (agentic) split |
+| `verilogeval_v2` | 164 MB | VerilogEval-v2 spec-to-RTL runs |
+| `verilogeval_human` | 114 MB | VerilogEval-Human code-completion runs |
+| `verilogeval_machine` | 34 MB | VerilogEval-Machine runs (earlier campaigns) |
+| `rtllm` | 55 MB | RTLLM v2.0 spec-to-RTL runs |
+| `phase1_parity` | 334 MB | the **87-protocol Phase-1 parity sweep** — does the deterministic Phase-1 engine extract the same protocol facts as the AI reference? One directory per protocol, each holding the engine's `phase1/generated_docs/L*.json` and the extraction-coverage / parity reports under `reports/` |
+| `interconnect` | 48 KB | chip-to-chip interconnect benchmark **anchors** — manifests with pinned upstream commits + licenses; the upstream RTL is fetched on demand, not vendored (see its [`README.md`](benchmark-data/evaluation/interconnect/README.md)) |
+
+Sitting alongside them are the cross-cutting ledgers — `FAIL_CASE_LEDGER.md`,
+`RESIDUAL_DEFECTS.md`, and the per-campaign `RESULT_*.md` — which record the
+failures and the known dataset defects rather than only the wins.
+
+### `datasets/` — vendored upstream inputs
+
+`cvdp-benchmark-dataset` (838 MB): the upstream CVDP problem sets as shipped,
+one `.jsonl` per dataset version and split (`v1.0.2` … `v1.1.0`; agentic /
+nonagentic × code-generation / code-comprehension × commercial / no-commercial).
+This is **input we did not author** — kept in-tree and version-pinned so a
+published score can be reproduced against exactly the split it was measured on.
 
 ---
 
@@ -263,6 +376,9 @@ guaranteed by the **gates**, not by an author≠approver split.
 - **MCP-EDA server & EDA tools** — `vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/README.md`
   and `.../mcp-eda/INSTALL_GUIDE.md`
 - **Benchmark methodology** — `vibe-ic-marketplace/plugins/vibe-ic/skills/open-benchmark-methodology/SKILL.md`
+- **Benchmark-IC protocol** (what counts as a legal input) — `benchmark-data/ic/METHODOLOGY.md`
+- **Six-pillar IC verification** — `vibe-ic-marketplace/plugins/vibe-ic/skills/benchmark-verify/SKILL.md`
+- **EDA fork scoreboard & image build** — `tools/vibeic-eda/README.md` and `tools/vibeic-eda/FIX_STATUS.md`
 - **Agent roles & governance** — `vibe-ic-marketplace/AGENT_USAGE_GUIDE.md`
 - **Contributing a new IC class / PDK / gate / skill / device** —
   `vibe-ic-marketplace/docs/CONTRIBUTING_*.md`
@@ -278,21 +394,24 @@ pins each fork's SHA). This repo — the **plugin** — is the one you install.
 
 ```
 11 forked EDA tools ──▶ vibeic-eda ──▶ vibe-ic ──▶ you
-(OpenROAD·klayout·      (Docker image)  (this repo:   (Claude Code)
- magic·netgen·yosys·                     the plugin)
- iverilog·verilator·                        │
- ngspice·cocotb·sby·                        ▼
- pyuvm — each a real                    vibe-ic-studio
+(OpenROAD·yosys·        (Docker image)  (this repo:   (Claude Code)
+ ngspice·magic·netgen·                   the plugin)
+ iverilog·klayout·                          │
+ cocotb·cocotb-coverage·                    ▼
+ pyuvm·sby — each a real                vibe-ic-studio
  fork, upstream-tracked)               (web control surface)
 ```
 
 - **[vibeic-eda](https://github.com/vibeic/vibeic-eda)** — the forked +
   bug-fixed open-source EDA toolchain, shipped as a Docker image. Rebuilds when
   a fork changes, not when this plugin changes.
-- **The EDA forks** (OpenROAD, KLayout, Magic, Netgen, Yosys, Icarus, Verilator,
-  ngspice, cocotb, sby, pyuvm) — each stays its **own** fork repo so upstream
-  fixes can be pulled and our fixes contributed back. They are never vendored
-  into this plugin.
+- **The EDA forks** — the 11 the image builds from source, each pinned to a
+  commit SHA in `tools/vibeic-eda/Dockerfile`: OpenROAD, Yosys, ngspice, Magic,
+  Netgen, Icarus Verilog, KLayout, cocotb, cocotb-coverage, pyuvm, and
+  SymbiYosys. Verilator is tracked as a fork too, with no custom patch warranted
+  on the shipped version. Each stays its **own** repo so upstream fixes can be
+  pulled and our fixes contributed back; they are never vendored into this
+  plugin. Per-fork scoreboard: [`tools/vibeic-eda/FIX_STATUS.md`](tools/vibeic-eda/FIX_STATUS.md).
 - **[vibe-ic-studio](https://github.com/vibeic/vibe-ic-studio)** — the web
   control surface (Platform + Project layers), deployed independently.
 - **[Awesome Open IC](https://github.com/vibeic/awesome-open-ic)** — a curated,
@@ -318,9 +437,16 @@ tools/install-git-hooks.sh
 ```
 
 `.git/hooks/` is not tracked, so the repo's hooks do nothing until installed.
-They block a proprietary-PDK foundry / SKU / process name from reaching a commit
-**message** (`commit-msg`) or a push (`pre-push`) — a surface the source-file
-guard cannot see. See [tools/git-hooks/README.md](tools/git-hooks/README.md).
+The installer symlinks the two tracked hooks, so a later `git pull` that improves
+a hook takes effect with no re-install; re-running is idempotent, and it refuses
+to clobber a pre-existing hook of the same name unless you pass `--force`.
+
+Both hooks block a proprietary-PDK foundry / SKU / process name from reaching a
+commit **message** — `commit-msg` as the commit is created, `pre-push` across
+every message in the range being pushed. That is a surface the source-file guard
+(`source_chip_agnostic_check.py`, which scans source files only) cannot see, so
+the two are complementary and you want both. See
+[tools/git-hooks/README.md](tools/git-hooks/README.md).
 
 ---
 
