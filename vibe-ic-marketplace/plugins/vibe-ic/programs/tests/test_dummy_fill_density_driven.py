@@ -1,7 +1,7 @@
 """Density-driven multi-phase dummy-metal fill reaches the deck's declared
 per-layer min_density where the legacy single-grid fill fell short.
 
-The audited rot (real commercial_pdk subservient sign-off, phase3 GDS): the
+The audited rot (real commercial-PDK subservient sign-off, phase3 GDS): the
 config-driven dummy-METAL fill placed a SINGLE fixed grid (tile at pitch,
 tiles fully clear of live metal). On a routing layer whose thin routes chop
 the die into pockets that the one grid phase can not align to, the whole-die

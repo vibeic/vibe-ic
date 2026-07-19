@@ -1,7 +1,7 @@
 """Tests for professional_tb_gen — deterministic pro-TB generation from L-docs.
 
 Pure/structural tests (no container/sim). The full cocotb run (208/208 on the
-spm bit-serial multiplier) is exercised in the commercial_pdk/clean-run integration.
+spm bit-serial multiplier) is exercised in the commercial-PDK/clean-run integration.
 """
 from __future__ import annotations
 

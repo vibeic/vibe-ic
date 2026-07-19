@@ -413,7 +413,7 @@ class TestSiliconCriticalPnrBlocks:
         "END INVD1\n")
 
     def _commercial_pdk(self, lef_path):
-        # A non-sky130 PDK (VDD/VSS rails, no tapcell_master) — the commercial_pdk
+        # A non-sky130 PDK (VDD/VSS rails, no tapcell_master) — the commercial PDK
         # shape. tapcell_master None → adaptive PDN path.
         return mod.PdkConfig(
             name="custom:commercial_pdk", liberty="/p/l.lib",
@@ -437,7 +437,7 @@ class TestSiliconCriticalPnrBlocks:
         # The commercial PDK must get a REAL met1 follow-pins PDN using the
         # DISCOVERED rail names (VDD/VSS) — not the sky130 VPWR/VGND hardcode,
         # which matches nothing → no PDN → TritonRoute ignores the bare power
-        # rails → signal routes land <min-space (commercial_pdk M1.S.1). Follow-pins
+        # rails → signal routes land <min-space (commercial PDK M1.S.1). Follow-pins
         # turns each rail into routed PG geometry the router keeps clear of.
         lef = tmp_path / "cells.lef"
         lef.write_text(self._COMMERCIAL_LEF)
@@ -448,7 +448,7 @@ class TestSiliconCriticalPnrBlocks:
         assert "add_pdn_stripe -grid grid -layer MET1 -width 0.8 -followpins" in tcl
         assert "pdngen" in tcl
         assert "PDN_NONFATAL" in tcl
-        # Must NOT emit the sky130-only pin names (they match no commercial_pdk pin).
+        # Must NOT emit the sky130-only pin names (they match no commercial PDK pin).
         assert "VPWR" not in tcl and "VGND" not in tcl
 
     def test_pdn_block_pins_VPB_and_VNB_for_sky130(self):

@@ -1,5 +1,5 @@
 """Regression: _detect_pdk must discover a commercial PDK's std-cell GDS even
-when it lives in a NESTED subdir (the commercial foundry commercial_pdk layout:
+when it lives in a NESTED subdir (the commercial PDK layout:
 input/pdk/gds/<lib>_gds_<date>/<lib>.gds).
 
 The bug (pre-fix): cell_gds was computed as

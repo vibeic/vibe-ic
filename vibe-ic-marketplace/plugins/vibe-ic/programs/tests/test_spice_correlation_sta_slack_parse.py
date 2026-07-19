@@ -3,7 +3,7 @@
 report separator dash line, and must read the OpenROAD ``report_checks`` slack
 value in EITHER column order.
 
-ROOT CAUSE this guards (real spm / commercial_pdk sign-off, Post-Layout SPICE
+ROOT CAUSE this guards (real spm / commercial PDK sign-off, Post-Layout SPICE
 Verification / Step 30): the pre-fix slack regex was
 ``slack\\s*\\(?\\w*\\)?\\s+([-\\d.]+)`` — its ``\\s+`` swallowed the newline after
 ``slack (MET)`` and its ``[-\\d.]+`` class then matched the following run of

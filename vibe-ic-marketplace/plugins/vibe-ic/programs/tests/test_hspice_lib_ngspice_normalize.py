@@ -182,7 +182,12 @@ def test_no_chip_or_pdk_literal_in_program():
     # everywhere (they are NOT chip-specific detection literals), so they are
     # allowed; the forbidden set is the commercial-chip / vendor / node literals.
     src = PROG.read_text().lower()
-    for bad in ("commercial_pdk", "commercial_foundry", "commercial_pdk", "hawaii"):
+    # The commercial NDA tokens are reconstructed from the encoded store so this
+    # test carries no literal SKU; "hawaii" is an extra private-source token.
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import _commercial_pdk as _cpdk  # noqa: E402
+    for bad in [t.lower() for t in _cpdk.nda_tokens()] + ["hawaii"]:
         assert bad not in src, f"forbidden literal {bad!r} in normalizer source"
 
 

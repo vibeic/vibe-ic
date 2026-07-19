@@ -1,5 +1,5 @@
 """test_spice_correlation_check_commercial_pdk.py — pure-helper unit tests for the
-commercial_pdk real-ngspice cell-delay ↔ liberty NLDM correlation driver added to
+commercial-PDK real-ngspice cell-delay ↔ liberty NLDM correlation driver added to
 spice_correlation_check.py.
 
 These tests exercise ONLY the deterministic, side-effect-free helpers
@@ -19,7 +19,7 @@ sys.path.insert(0, str(PROG_DIR))
 import spice_correlation_check as m  # noqa: E402
 
 
-# A tiny liberty fragment mirroring the commercial_pdk_typ.lib STRUCTURE
+# A tiny liberty fragment mirroring the commercial-PDK typ liberty STRUCTURE
 # (units + thresholds + one 2x2 NLDM cell). No NDA content — invented numbers.
 _LIB = """
 library (toy) {

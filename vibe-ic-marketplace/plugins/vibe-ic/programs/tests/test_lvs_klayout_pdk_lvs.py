@@ -91,7 +91,7 @@ class TestLoadLayerMap:
         assert loaded is not mod.DEFAULT_LAYERMAP
 
 
-class Testcommercial_pdkLayermap:
+class TestCommercialPdkLayermap:
     def test_has_all_required_keys(self):
         lm = mod.DEFAULT_LAYERMAP
         for key in ("poly", "nwell", "nactive", "pactive", "cont", "text",
@@ -234,7 +234,7 @@ def test_inline_includes_cycle_guard(tmp_path):
 
 
 # ── v1.4.37 — metal/via layermap coverage from the PDK's Encounter/SoC map ──
-# A commercial PDK's real metal stack (e.g. 6-metal commercial_pdk) exceeds the generic
+# A commercial PDK's real metal stack (e.g. 6-metal commercial PDK) exceeds the generic
 # 4-metal DEFAULT; extracting with too few metals SPLITS an upper-metal net into
 # disconnected pieces -> a spurious extra net -> a FALSE LVS mismatch. These pin
 # the parse + the auto-extend/WARN resolver (proven: wiring M5/M6 took spm LVS

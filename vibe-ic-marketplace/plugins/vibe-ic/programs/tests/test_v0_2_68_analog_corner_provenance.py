@@ -149,7 +149,7 @@ def _pdk_project(tmp_path, declared):
 
 
 def test_pdk_mismatch_named_finding(tmp_path):
-    _pdk_project(tmp_path, "commercial_pdk 180nm BCD")
+    _pdk_project(tmp_path, "commercial 180nm BCD")
     r = NPC.run_audit(tmp_path)
     assert r.passed is False
     assert any(f.rule == "PDK_MISMATCH" for f in r.findings)
@@ -169,11 +169,11 @@ def test_pdk_na_target_skips_comparison(tmp_path):
 
 
 def test_pdk_mismatch_waivable_with_rationale(tmp_path):
-    _pdk_project(tmp_path, "commercial_pdk 180nm BCD")
+    _pdk_project(tmp_path, "commercial 180nm BCD")
     (tmp_path / "waivers.json").write_text(json.dumps({
         "waived_steps": [{
             "id": "A4", "ticket": "VIBE-PDK_MISMATCH-1",
-            "rationale": "Native commercial_pdk ngspice models unavailable; "
+            "rationale": "native commercial-PDK ngspice models unavailable; "
                          "sky130 proxy decks document the env gap.",
             "approver": "user", "review_required": True,
         }]
