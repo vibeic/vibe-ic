@@ -145,6 +145,45 @@ def _strip_block_and_line_comments(src: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Empty-JSON-field blanking (a SCHEMA KEY is not a STATEMENT)
+# ---------------------------------------------------------------------------
+# A skeleton L-doc carries the FULL schema, so `"scan_chain": []`,
+# `"jtag_tap": null`, `"dft_present": false` are present in EVERY design —
+# including designs with NO DFT at all. Matching the KEY therefore FABRICATED a
+# scan/JTAG/BIST requirement for every such design, contradicting this module's
+# own no-fabrication promise. A requirement may only be minted from a key that
+# carries a NON-EMPTY, TRUTHY VALUE — an actually-declared scan chain / TAP /
+# BIST block. chip-AGNOSTIC: pure JSON shape, no design literal.
+#
+# `"key": <empty>` is blanked (key AND value replaced by spaces, so character
+# offsets — and therefore evidence lines — are preserved). Blanking the value
+# too lets a PARENT container become empty in turn (`"dft": {"scan_chain": []}`
+# -> `"dft": {              }`), so the pass is applied to a FIXPOINT and a
+# nested all-empty subtree cannot leave its parent key alive.
+_JSON_EMPTY_FIELD_RE = re.compile(
+    r'"(?:[^"\\]|\\.)*"\s*:\s*'                     # "key":
+    r'(?:\[[\s,]*\]|\{[\s,]*\}|null|false|""'       # [] {} null false ""
+    r'|0+(?:\.0+)?(?=\s*[,\}\]\r\n]|\s*$))',        # a zero count
+    re.IGNORECASE)
+
+
+def _blank_empty_json_fields(src: str) -> str:
+    """Blank every `"key": <empty/false/null/zero>` JSON field, to a fixpoint.
+
+    Length-preserving (each removed run becomes spaces) so evidence line/offset
+    reporting is unaffected. Text that is not JSON is left alone: prose does not
+    contain `"key": null` forms."""
+    prev = None
+    cur = src
+    for _ in range(12):                     # fixpoint, bounded (no runaway)
+        if cur == prev:
+            break
+        prev = cur
+        cur = _JSON_EMPTY_FIELD_RE.sub(lambda m: " " * len(m.group(0)), cur)
+    return cur
+
+
+# ---------------------------------------------------------------------------
 # Evidence helpers
 # ---------------------------------------------------------------------------
 def _evidence_line(text: str, pos: int) -> str:
@@ -187,6 +226,10 @@ def extract(prompt_text: str) -> List[Dict]:
     # remaining text carries markdown + prose + live code, all of which the
     # word-boundary anchors are robust against.
     text = _strip_block_and_line_comments(prompt_text)
+    # A schema KEY whose VALUE is empty/false/null states NOTHING — blank it so
+    # a skeleton L-doc can never mint a scan/JTAG/BIST requirement for a design
+    # that declares no DFT (the no-fabrication invariant).
+    text = _blank_empty_json_fields(text)
 
     items: List[Dict] = []
 

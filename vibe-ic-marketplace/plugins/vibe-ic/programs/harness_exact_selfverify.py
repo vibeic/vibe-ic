@@ -118,14 +118,41 @@ _TB_PASS_RE = re.compile(
 # `FAILED` / a bare `FAIL` line), a severity task (`$error` / `$fatal` /
 # `FATAL`), or a NONZERO error count (`errors: 3` / `3 errors`). A zero count
 # (`error count = 0`, `errors == 0`) never matches (floored by `[1-9]`).
+#
+# v1.4.x — the `N errors` alternative was NOT anchored to its OWN count field,
+# so a PASSING summary like `checks=10016 errors=0` false-BLOCKED: the digits of
+# a DIFFERENT field (`checks=10016`) were read as the error count because the
+# following token happened to be `errors`. A count binds to `ERRORS` only when
+# (a) no other field owns those digits — nothing binds them with `:`/`=` on the
+# left — and (b) `ERRORS` does not carry its OWN value on the right (if it does,
+# THAT value is the count and the `ERRORS?\s*[:=]\s*[1-9]` alternative decides).
 _TB_FAIL_RE = re.compile(
     r"\bTEST[_\s]?FAIL|"
     r"\bFAILED\b|"
     r"^\s*FAIL\s*$|"
     r"\bFATAL\b|"
     r"\$(?:error|fatal)\b|"
-    r"\bERRORS?\s*[:=]\s*[1-9]|"        # errors: 3 / error = 7  (nonzero)
-    r"\b[1-9]\d*\s+ERRORS?\b",          # 3 errors               (nonzero)
+    # RIGHT-bound count: `errors: 3` / `error = 7` / `errors 3` (nonzero). The
+    # digits immediately FOLLOWING the `ERRORS` label always belong to it —
+    # that is the `<label> <value>` convention.
+    r"\bERRORS?\s*[:=]\s*0*[1-9]|"
+    r"\bERRORS?\s+0*[1-9]\d*\b|"
+    # LEFT-bound count: `3 errors`. The digits must be UNBOUND on the left (not
+    # some other field's value, `checks=10016`) AND `ERRORS` must not own a
+    # count on the right — if it does, THAT is the error count and the
+    # right-bound alternatives above decide.
+    r"(?<![:=])(?<![\w.])[1-9]\d*\s+ERRORS?\b"
+    r"(?!\s*[:=]\s*\d)(?!\s+\d+\b(?!\s*[A-Za-z_]))",
+    re.IGNORECASE | re.MULTILINE)
+# An EXPLICIT ZERO error count is a PASS verdict, not a fail token — `errors=0`,
+# `0 errors`, `no errors`. Checked only AFTER the fail patterns above, so a blob
+# that ALSO contains a real failure (`errors=0 ... errors=7`) still FAILs: the
+# fail token wins outright and this never rescues it.
+_TB_ZERO_ERR_RE = re.compile(
+    r"\bERRORS?\s*[:=]\s*0+\b(?!\.\d*[1-9])|"        # errors: 0 / errors=0
+    r"\bERRORS?\s+0+\b|"                             # errors 0
+    r"(?<![\w.])0+\s+ERRORS?\b|"                     # 0 errors
+    r"\bNO\s+ERRORS?\b",                             # no errors
     re.IGNORECASE | re.MULTILINE)
 # Case-SENSITIVE bare UPPERCASE `ERROR`/`ERRORS` banner — a fail token only when
 # no clear PASS banner is present (checked AFTER the PASS test in _tb_verdict),
@@ -443,6 +470,13 @@ def _tb_verdict(sim_out: str) -> Tuple[Optional[bool], str]:
         return False, "functional TB printed a FAIL/ERROR token"
     if _TB_PASS_RE.search(sim_out):
         return True, "functional TB printed a PASS token"
+    # An EXPLICIT ZERO error count is a deterministic PASS verdict of the same
+    # class as `Mismatches: 0 in N`. It is only reached when NO fail token
+    # matched above, so it can never rescue a genuine failure. It must also be
+    # tested BEFORE the bare-uppercase-ERROR banner, or an `ERRORS=0` summary
+    # would false-BLOCK on its own zero count.
+    if _TB_ZERO_ERR_RE.search(sim_out):
+        return True, "functional TB reported an explicit zero error count"
     if _TB_FAIL_UPPER_RE.search(sim_out):
         return False, "functional TB printed a bare ERROR banner (no PASS)"
     return None, "functional TB printed no recognised PASS/FAIL verdict line"

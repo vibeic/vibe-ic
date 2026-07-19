@@ -48,6 +48,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import waiver_staleness as _ws  # noqa: E402  (after sys.path bootstrap)
+
 _PROGRAM = "waivers_materialize"
 
 
@@ -90,14 +92,20 @@ def _is_auto_generated(data: Any) -> bool:
         for e in entries)
 
 
-def _to_entry(w: Dict[str, Any]) -> Dict[str, Any]:
+def _to_entry(w: Dict[str, Any], project: Path) -> Dict[str, Any]:
     """A materialized `waived_steps` entry — FIELD-IDENTICAL to the in-memory
     synth waiver (preserves `_env_unavailable`, evidence, ticket, tier so
-    check_step behaves identically), plus the review/auto markers."""
+    check_step behaves identically), plus the review/auto markers.
+
+    STALENESS STAMP (false-clean guard): an ENV_UNAVAILABLE entry is stamped
+    with the CONDITION it is issued under (`step_did_not_execute` + the run
+    identity). A later run that actually EXECUTES the step breaks the condition
+    and the consumer REFUSES the waiver — so a waiver written when a step could
+    not run can never excuse a failure that really happened."""
     entry = dict(w)
     entry["review_required"] = True
     entry["auto_synthesized"] = True
-    return entry
+    return _ws.stamp(entry, project)
 
 
 _COMMENT = (
@@ -109,18 +117,50 @@ _COMMENT = (
     "— a human closes it at foundry sign-off; this is not a green PASS.")
 
 
+def prune_stale(project: Path) -> List[Dict[str, Any]]:
+    """Drop every AUTO-GENERATED waiver in <project>/waivers.json whose
+    reason-condition no longer holds — i.e. the ENV_UNAVAILABLE-excused step
+    actually EXECUTED in this run. Returns the refused entries (each carrying
+    `_refused_reason`) so the rejection is auditable, never silent.
+
+    A HUMAN-authored waivers.json is never touched (same invariant as
+    `materialize`); only machine-materialized entries are pruned."""
+    wpath = project / "waivers.json"
+    if not wpath.is_file():
+        return []
+    try:
+        data = json.loads(wpath.read_text())
+    except (OSError, ValueError):
+        return []                          # unreadable/foreign — never clobber
+    if not _is_auto_generated(data):
+        return []                          # HUMAN file wins — never touched
+    entries = list(data.get("waived_steps") or [])
+    keep, refused = _ws.filter_honorable(
+        [e for e in entries if isinstance(e, dict)], project)
+    if not refused:
+        return []
+    data["waived_steps"] = keep
+    data["_refused_stale_waivers"] = refused
+    wpath.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    return refused
+
+
 def materialize(project: Path, force: bool = False
                 ) -> Tuple[int, List[Any]]:
     """Write the sanctioned auto-waivers into <project>/waivers.json.
     Returns (count_written, [step ids]). See module docstring for invariants."""
     wpath = project / "waivers.json"
+    # FALSE-CLEAN GUARD: before anything else, evict any carried-over waiver
+    # whose excused step actually ran this time. A stale waiver must never
+    # survive into a run that executed the step it excuses.
+    prune_stale(project)
     sanctioned = sanctioned_auto_waivers(project)
     if not sanctioned:
         return 0, []                       # honest MISSING — nothing to write
 
     def _key(sid: Any):
         return (str(type(sid)), str(sid))
-    new_entries = [_to_entry(sanctioned[sid])
+    new_entries = [_to_entry(sanctioned[sid], project)
                    for sid in sorted(sanctioned, key=_key)]
 
     if wpath.exists() and not force:

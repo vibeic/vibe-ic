@@ -4449,6 +4449,30 @@ def _synthesise_pdk_substitution_waivers(
         }
 
 
+def _refuse_stale_waivers(project: Path, out: Dict[Any, Dict[str, Any]]) -> None:
+    """FALSE-CLEAN GUARD — refuse a STALE waiver (in-place on `out`).
+
+    An ENV_UNAVAILABLE waiver is issued under exactly ONE condition: the step
+    COULD NOT RUN on this host. But `waivers.json` is a FILE and it SURVIVES
+    into the next run — so a waiver written when the tool was absent could
+    excuse a DRC/LVS that a LATER run actually EXECUTED and that actually
+    FAILED. That is a false-clean: the failure really happened and the audit
+    reports it as waived.
+
+    Re-evaluate each waiver's condition against THIS run's own phase-report
+    evidence and drop any whose excused step demonstrably EXECUTED. Only
+    POSITIVE execution evidence refuses a waiver — no evidence honors it, so a
+    genuine ENV_UNAVAILABLE deferral is unaffected. Refusals are printed, never
+    silent. chip-AGNOSTIC: keys on step status, never a design literal."""
+    try:
+        import waiver_staleness as _ws
+        refused = _ws.prune_stale_mapping(out, project)
+        for sid, why in sorted(refused.items(), key=lambda kv: str(kv[0])):
+            print(f"flow_compliance_check: step {sid}: {why}", file=sys.stderr)
+    except Exception:  # pragma: no cover - the guard must never crash the load
+        pass
+
+
 def _load_waivers(project: Path, max_step: int = 40) -> Dict[int, Dict[str, str]]:
     """Load waivers AFTER validating schema. Returns {} if file missing.
     Raises SystemExit(1) if waivers.json exists but is malformed/rubber-stamped."""
@@ -4461,6 +4485,7 @@ def _load_waivers(project: Path, max_step: int = 40) -> Dict[int, Dict[str, str]
         out: Dict[Any, Dict[str, Any]] = {}
         _synthesise_pdk_substitution_waivers(project, out)
         _synthesise_fpga_skip_waivers(project, out)  # ORGANIC #607
+        _refuse_stale_waivers(project, out)
         return out
     # Reuse waivers_schema_check for validation
     try:
@@ -4572,6 +4597,7 @@ def _load_waivers(project: Path, max_step: int = 40) -> Dict[int, Dict[str, str]
         # explicit waivers so hand-authored A-step entries take precedence.
         _synthesise_pdk_substitution_waivers(project, out)
         _synthesise_fpga_skip_waivers(project, out)  # ORGANIC #607
+        _refuse_stale_waivers(project, out)
         return out
     except Exception as exc:
         print(f"flow_compliance_check: cannot parse {wpath}: {exc}",
