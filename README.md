@@ -311,6 +311,17 @@ fixtures. Please read [CONTRIBUTING.md](CONTRIBUTING.md) and the
 For security vulnerabilities, see [SECURITY.md](SECURITY.md) — please
 do **not** open a public issue.
 
+### Install the git hooks (one line)
+
+```bash
+tools/install-git-hooks.sh
+```
+
+`.git/hooks/` is not tracked, so the repo's hooks do nothing until installed.
+They block a proprietary-PDK foundry / SKU / process name from reaching a commit
+**message** (`commit-msg`) or a push (`pre-push`) — a surface the source-file
+guard cannot see. See [tools/git-hooks/README.md](tools/git-hooks/README.md).
+
 ---
 
 ## License

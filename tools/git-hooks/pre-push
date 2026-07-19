@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# pre-push — last line of defence: scan the MESSAGES of every commit about to be
+# pushed for an NDA foundry / SKU / process token.
+#
+# The commit-msg hook blocks the leak at authoring time, but a message can still
+# reach a push via `--no-verify`, a rebase/amend that reuses an old message, a
+# cherry-pick, a squash, or another tool that never ran the hook. This hook scans
+# the exact range git is about to publish, so nothing gets to the remote unseen.
+#
+# Install: tools/install-git-hooks.sh
+# stdin:   <local ref> <local sha> <remote ref> <remote sha>   (one line per ref)
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+CHECKER="$REPO_ROOT/vibe-ic-marketplace/plugins/vibe-ic/programs/commit_msg_nda_check.py"
+ZERO='0000000000000000000000000000000000000000'
+
+if [ ! -f "$CHECKER" ]; then
+  echo "pre-push: WARNING — NDA message guard not found at $CHECKER; skipping." >&2
+  exit 0
+fi
+
+FAILED=0
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  # Branch deletion — nothing new is published.
+  [ "$local_sha" = "$ZERO" ] && continue
+
+  if [ "$remote_sha" = "$ZERO" ]; then
+    # New branch on the remote: scan only commits not already on some remote,
+    # so we gate what THIS push adds rather than re-litigating all of history.
+    RANGE="$local_sha --not --remotes"
+  else
+    RANGE="${remote_sha}..${local_sha}"
+  fi
+
+  # The checker splits RANGE on whitespace into git-log arguments.
+  if ! python3 "$CHECKER" --repo "$REPO_ROOT" --rev-range "$RANGE"; then
+    FAILED=1
+  fi
+done
+
+if [ "$FAILED" -ne 0 ]; then
+  echo "pre-push: BLOCKED — NDA token(s) in the commit message(s) being pushed." >&2
+  cat >&2 <<'EOF'
+Reword the offending commit message(s) before pushing:
+    git rebase -i <base>      # mark the offending commit(s) `reword`
+Use the generic wording ("commercial PDK", "commercial foundry").
+Re-scan with:
+    python3 vibe-ic-marketplace/plugins/vibe-ic/programs/commit_msg_nda_check.py \
+        --rev-range origin/main..HEAD
+EOF
+  exit 1
+fi
+
+exit 0

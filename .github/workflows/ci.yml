@@ -11,7 +11,11 @@ jobs:
     name: Plugin tests + chip-AGNOSTIC guard
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 — the commit-MESSAGE NDA guard below walks a commit
+      # RANGE, which a shallow (depth-1) clone cannot do.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -38,6 +42,33 @@ jobs:
         run: |
           python3 vibe-ic-marketplace/plugins/vibe-ic/programs/source_chip_agnostic_check.py \
             vibe-ic-marketplace/plugins/vibe-ic
+
+      # The guard above scans FILES only — a commit MESSAGE naming the
+      # commercial foundry / SKU / process is an equally permanent public leak
+      # and used to pass every gate. Scan the messages this event introduces.
+      # Output is MASKED (token ROLE, never the literal), so this log is safe.
+      - name: NDA guard — commit MESSAGES
+        run: |
+          set -euo pipefail
+          CHECK=vibe-ic-marketplace/plugins/vibe-ic/programs/commit_msg_nda_check.py
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+          fi
+          # An empty / all-zero / unknown base (first push, force-push, a base
+          # not in this clone) has no honest range: fall back to the tip commit
+          # rather than reporting a vacuous clean scan.
+          if [ -z "${BASE:-}" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            echo "base unresolvable — scanning HEAD only" >&2
+            RANGE="HEAD~1..HEAD"
+            git cat-file -e 'HEAD~1^{commit}' 2>/dev/null || RANGE="HEAD"
+          else
+            RANGE="${BASE}..HEAD"
+          fi
+          echo "Scanning commit messages in: $RANGE" >&2
+          python3 "$CHECK" --repo "$GITHUB_WORKSPACE" --rev-range "$RANGE"
 
       - name: pytest (plugin)
         run: |

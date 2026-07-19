@@ -140,6 +140,19 @@ jobs:
         run: |
           python3 "$PROGRAMS/source_chip_agnostic_check.py" "$PLUGIN_ROOT"
 
+      # The source guard above scans FILES only. A commit whose MESSAGE names
+      # the commercial foundry / SKU / process therefore passed every gate — and
+      # one really did land on main after the full-history NDA rewrite. A commit
+      # message is permanent and publicly mirrored, so scan the landing range.
+      # The checker's output is MASKED (token ROLE, never the literal), so this
+      # step's log is safe.
+      - name: NDA guard — commit MESSAGES in this PR
+        run: |
+          set -euo pipefail
+          BASE="${{ steps.base.outputs.sha }}"
+          python3 "$PROGRAMS/commit_msg_nda_check.py" \
+            --repo "$GITHUB_WORKSPACE" --rev-range "${BASE}..HEAD"
+
       - name: git prohibition guard (scan this PR's commit messages)
         run: |
           set -euo pipefail
