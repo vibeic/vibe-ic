@@ -110,6 +110,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 import _path_layout as _pl
 import sdc_constraints as _sdc
+import floorplan_contract as _fpc
 # v1.6.95 — Capability 1 of GitHub issue #27. Deeper README parser
 # extracts key sizes / block width / S-box parallelism / supported
 # cipher modes / cited public-standard URLs from README prose and
@@ -8021,6 +8022,27 @@ _L19_L23_CODES_AND_NAMES: List[Tuple[str, str]] = [
 ]
 
 
+# #157 — L24-L27 all-chip-classes COMPLETENESS emit chain. The default
+# emission previously capped at L23, so L24 (signoff/tapeout), L25
+# (reliability/mission-profile), L26 (MEMS/transduction) and L27
+# (memory-module SPD) never appeared on disk even though the schema + taxonomy
+# already define them. Unlike L19-L23 (emitted as skeletons unconditionally,
+# with the R13 gate downgrading them to na_stub only for a KNOWN non-applicable
+# class), the L24-L27 emission is APPLICABILITY-AWARE at the SOURCE:
+#   • L24/L25 are broadly applicable → SKELETON for any fabricated chip class,
+#     na_stub for a pure-protocol-spec class.
+#   • L26/L27 are OPT-IN-ONLY → na_stub for EVERY current class INCLUDING the
+#     unknown/fallback class (l_doc_taxonomy.is_applicable returns False), so a
+#     non-MEMS / non-memory-module chip never gets an empty L26/L27 skeleton.
+# The stem names MUST match tools/phase1_engine/schema.py LAYER_FILE_NAMES.
+_L24_L27_CODES_AND_NAMES: List[Tuple[str, str]] = [
+    ("L24", "L24_SIGNOFF"),
+    ("L25", "L25_RELIABILITY_MISSION_PROFILE"),
+    ("L26", "L26_MECHANICAL_TRANSDUCTION"),
+    ("L27", "L27_MEMORY_MODULE_SPD"),
+]
+
+
 # ORGANIC-20260606 #451 — deterministic pdk_target extraction. Phase 1
 # never populated L19.fields.pdk_target even when the input docs named
 # the target process, so the #438b PDK-mismatch gate (declared-vs-deck)
@@ -8218,6 +8240,60 @@ def _emit_l19_to_l23_skeletons(project: Path) -> List["LDocResult"]:
             out.append(r)
         except Exception as e:
             print(f"      L19-L23 skeleton emit {doc_name} crashed: {e}",
+                  file=sys.stderr)
+    return out
+
+
+def _emit_l24_to_l27_docs(project: Path) -> List["LDocResult"]:
+    """#157 — emit the L24-L27 completeness docs, APPLICABILITY-AWARE at the
+    source so an opt-in-only layer (L26/L27) never becomes an empty skeleton.
+
+    For each L24-L27 code, decide na_stub vs skeleton with
+    `l_doc_taxonomy.is_applicable(ic_class, code)` (which already excludes the
+    opt-in-only L26/L27 from the unknown/fallback applicable set), then write
+    via `_write_l_doc` so R11 scrub + the R13 applicability gate fire the same
+    way they do for L1-L23. Honesty contract mirrors _emit_l19_to_l23_skeletons:
+      - a skeleton carries `extraction_status='NOT_YET_EXTRACTED'`;
+      - a not-applicable code lands as the canonical na_stub (no leaked
+        APPLICABLE flag);
+      - fail-open: a missing dependency / per-doc crash skips that doc (visible
+        in the SUMMARY count) rather than aborting the run.
+    chip-AGNOSTIC — the class comes from the canonical classifier, never a chip
+    literal.
+    """
+    out: List["LDocResult"] = []
+    try:
+        from phase1_post_process import emit_l_doc_skeleton as _emit_sk
+        from l_doc_taxonomy import is_applicable as _is_applicable
+        from l_doc_taxonomy import na_stub as _na_stub
+    except ImportError:
+        return out
+
+    # Resolve ic_class the SAME way _write_l_doc's R13 gate does
+    # (detect_ic_class → reports/ic_class.json single source of truth), so the
+    # na_stub-vs-skeleton decision here can never contradict the gate.
+    try:
+        from ic_class_profile import detect_ic_class as _detect
+        profile = _detect(project)
+        ic_class = profile.get("ic_class", "unknown") if isinstance(
+            profile, dict) else "unknown"
+    except Exception:
+        ic_class = "unknown"
+
+    for code, doc_name in _L24_L27_CODES_AND_NAMES:
+        try:
+            if _is_applicable(ic_class, code):
+                content = _emit_sk(code, ic_class, project_dir=project)
+                # Discard the skeleton's own (empty) evidence list; _write_l_doc
+                # (re)writes extraction_evidence from the evidence argument.
+                if isinstance(content, dict):
+                    content.pop("evidence", None)
+            else:
+                content = _na_stub(ic_class, code)
+            r = _write_l_doc(project, doc_name, content, {})
+            out.append(r)
+        except Exception as e:
+            print(f"      L24-L27 emit {doc_name} crashed: {e}",
                   file=sys.stderr)
     return out
 
@@ -51390,6 +51466,91 @@ def _post_emit_sdc_constraints(project: Path) -> None:
         out.write_text(json.dumps(l8, indent=2, ensure_ascii=False) + "\n")
 
 
+def _post_emit_floorplan_contract(project: Path) -> None:
+    """G-FIXED-DIE-1 — ingest a design-PROVIDED MANDATED fixed-floorplan
+    contract into L19 (fields.die_area_budget_um / floorplan_hints /
+    constraints_present).
+
+    Pre-fix, phase1 dropped this contract entirely: when a design SUPPLIED a
+    fixed floorplan — an OpenLane-style ``config.json`` with
+    ``FP_SIZING:"absolute"`` + ``DIE_AREA:[x0,y0,x1,y1]`` + ``FP_DEF_TEMPLATE``,
+    and/or an L9 prose ``DIE_AREA = [x0,y0,x1,y1] µm`` statement, plus a fixed
+    ``pin_order.cfg`` and power-source ``vsrc/*.loc`` files — L19 still emitted
+    ``die_area_budget_um:null / floorplan_hints:[] / constraints_present:false``
+    so phase3 auto-sized a die the design had already fixed.
+
+    Only pdk_target got extracted (via _emit_l19_to_l23_skeletons). This hook
+    fills the floorplan half from the same INPUT, chip-AGNOSTICally, via the
+    shared `floorplan_contract` module (which both phase1 and phase3 read).
+
+    Runs AFTER _post_emit_sdc_constraints so L19_CONSTRAINTS_PDK.json exists on
+    disk and its constraints_present flag is honored (never downgraded).
+    §4.05: reads only the design's own OpenLane config + prose docs — never an
+    oracle/golden/testbench/reference-flow. Chip-AGNOSTIC; runs regardless of
+    ic_class."""
+    try:
+        contract = _fpc.extract_floorplan_contract(project)
+    except Exception as e:
+        print(f"      floorplan-contract extract FAILED (fail-open): {e}",
+              file=sys.stderr)
+        return
+    if not contract.get("constraints_present"):
+        return                        # design mandates no fixed floorplan
+    l19 = _try_load_l_doc(project, "L19_CONSTRAINTS_PDK")
+    if not isinstance(l19, dict):
+        return
+    fields = l19.get("fields")
+    if not isinstance(fields, dict):
+        fields = {}
+        l19["fields"] = fields
+
+    changed = False
+    die = contract.get("die_area_budget_um")
+    # Do not clobber a good value already present; fill only when null/empty.
+    if die and not fields.get("die_area_budget_um"):
+        fields["die_area_budget_um"] = die
+        changed = True
+
+    new_hints = contract.get("floorplan_hints") or []
+    if new_hints:
+        existing = fields.get("floorplan_hints")
+        if not isinstance(existing, list):
+            existing = []
+        seen = set()
+        for h in existing:
+            if isinstance(h, dict):
+                seen.add((h.get("kind"), h.get("value"), h.get("source")))
+        for h in new_hints:
+            key = (h.get("kind"), h.get("value"), h.get("source"))
+            if key in seen:
+                continue
+            seen.add(key)
+            existing.append(h)
+            changed = True
+        fields["floorplan_hints"] = existing
+
+    if not fields.get("constraints_present"):
+        fields["constraints_present"] = True
+        changed = True
+
+    if changed:
+        if l19.get("extraction_status") in (None, "NOT_YET_EXTRACTED"):
+            l19["extraction_status"] = "PARTIALLY_EXTRACTED"
+        # Record die-area provenance in the doc's extraction_evidence map.
+        src = contract.get("die_area_source")
+        if die and src:
+            ev = l19.get("extraction_evidence")
+            if not isinstance(ev, dict):
+                ev = {}
+                l19["extraction_evidence"] = ev
+            ev.setdefault(src, []).append({
+                "literal": f"DIE_AREA → {die}µm",
+                "label": "die_area_budget_um",
+            })
+        out = _pl.generated_docs_dir(project) / "L19_CONSTRAINTS_PDK.json"
+        out.write_text(json.dumps(l19, indent=2, ensure_ascii=False) + "\n")
+
+
 # v1.6.369 — for #264 P2 ORGANIC. Structural emitter for
 # L9.reset_domains. Pre-v1.6.369 there was no writer for this slot
 # anywhere in `gen_l9_integration_spec`; all 8 benchmark chips
@@ -55653,6 +55814,22 @@ def main() -> int:
         print(f"      L19-L23 skeleton emit FAILED (fail-open): "
               f"{_l19_l23_err}", file=sys.stderr)
 
+    # #157 — L24-L27 completeness emit (applicability-aware: SKELETON for an
+    # applicable chip-class L24/L25, na_stub for a protocol-class L24/L25 and
+    # for the opt-in-only L26/L27 on every current class). Brings the DEFAULT
+    # emission path up to the L1-L27 taxonomy without over-emitting an empty
+    # MEMS / memory-module skeleton on a generic chip.
+    print(f"[14d2/15] L24-L27 completeness emit ...")
+    try:
+        _l24_l27_results = _emit_l24_to_l27_docs(project)
+        results.extend(_l24_l27_results)
+        for r in _l24_l27_results:
+            print(f"      → {r.path.name} (todo={r.todo_count}, "
+                  f"ev={r.evidence_count})")
+    except Exception as _l24_l27_err:
+        print(f"      L24-L27 completeness emit FAILED (fail-open): "
+              f"{_l24_l27_err}", file=sys.stderr)
+
     # ORGANIC #554 (a) — ingest staged input/constraints/*.sdc and
     # input/reference_flow/**/*.sdc into L8.clock_domains[] (freq_mhz/
     # freq_hz/period_ns) and L19.fields (constraints_present /
@@ -55663,6 +55840,17 @@ def main() -> int:
     except Exception as _sdc_err:
         print(f"      SDC constraints ingest FAILED (fail-open): "
               f"{_sdc_err}", file=sys.stderr)
+
+    # G-FIXED-DIE-1 — ingest a design-PROVIDED MANDATED fixed-floorplan
+    # contract (OpenLane config.json DIE_AREA/FP_SIZING/FP_DEF_TEMPLATE and/or
+    # L9 prose DIE_AREA + fixed pin_order.cfg / vsrc/*.loc) into L19.fields
+    # (die_area_budget_um / floorplan_hints / constraints_present). Runs after
+    # the SDC ingest so L19_CONSTRAINTS_PDK.json already exists. Chip-AGNOSTIC.
+    try:
+        _post_emit_floorplan_contract(project)
+    except Exception as _fpc_err:
+        print(f"      floorplan-contract ingest FAILED (fail-open): "
+              f"{_fpc_err}", file=sys.stderr)
 
     # v0.1.77 (R53/R54/R55): serial_peripheral_protocol class-gated synth.
     # Runs AFTER 14d L19-L23 skeleton so the L19-L23 + L4 + L11 + L13

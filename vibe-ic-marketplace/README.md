@@ -87,7 +87,7 @@ Vibe-IC brings the "Vibe Coding" paradigm to IC design. Instead of manually driv
 
 ```
 ┌────────────┬────────────────────────────────────────────────┬────────────────────────┐
-│ Phase 1    │ Dialogue → L1-L23 design documents              │ ic-expert-agent        │
+│ Phase 1    │ Dialogue → L1-L27 design documents              │ ic-expert-agent        │
 │            │ (phase1-orchestrate, 10 lesson files)          │ agent → L1..L9 JSON    │
 ├────────────┼────────────────────────────────────────────────┼────────────────────────┤
 │ Phase 2    │ Step 01-06: RTL generation + verification      │ RTL + sim + formal     │
@@ -210,9 +210,9 @@ Rubber-stamp waivers are rejected: reason must be ≥ 20 chars and not a placeho
 
 [`plugins/vibe-ic/agents/`](plugins/vibe-ic/agents/)
 
-### Two agents, strict separation of concerns
+### One unified agent
 
-- **`ic-expert-agent.md`** — consumes `pm_collected.json` + the fact manifest + per-layer lessons. For every `deferred` fact, fills in the documented `ic_expert_default` along with its reasoning. Emits the final L1-L23 JSON doc. **Never** reads the benchmark.
+- **`ic-expert-agent.md`** — the single IC Expert Agent (unified front-door + reviewer: it runs the plain-language requirement dialogue itself, absorbing the former PM Agent role). Consumes the elicited dialogue facts + the fact manifest + per-layer lessons. For every `deferred` fact, fills in the documented `ic_expert_default` along with its reasoning. Emits the final L1-L27 JSON doc. **Never** reads the benchmark.
 
 ### Fact manifest — Phase-1 source of truth
 
@@ -301,7 +301,7 @@ cp -r vibe-ic-marketplace/plugins/vibe-ic-d    /path/to/your-project/.claude/plu
 
 Grouped by design-flow phase.
 
-### Phase 1 — Dialogue → L1-L23 (11 skills)
+### Phase 1 — Dialogue → L1-L27 (11 skills)
 | Skill | Purpose |
 |---|---|
 | **phase1-orchestrate** | Entry point; drives the ic-expert-agent dialogue |

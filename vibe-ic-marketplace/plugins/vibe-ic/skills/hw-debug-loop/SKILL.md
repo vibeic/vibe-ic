@@ -33,7 +33,7 @@ C. Two classes of failure remain:
 
   - **Category B** — vendor doc disagrees with silicon (e.g. v099
     oracle returns 18 bytes for 0xE6 but the doc says 22). Plugin
-    extractor cannot detect this from L1-L23 alone; the only ground
+    extractor cannot detect this from L1-L27 alone; the only ground
     truth is silicon.
 
   - **Category C residual** — sub-microsecond pad / FPGA-pad-inference
@@ -235,7 +235,7 @@ references), and Phase 2+3 is closed.
 2. **Silently copying oracle bytes** — every spec → silicon delta
    must land in `waivers.json` with a link to the dump file. The
    waiver IS the spec correction; the agent who reads the spec
-   next must see why the L1-L23 → RTL flow needed a delta.
+   next must see why the L1-L27 → RTL flow needed a delta.
 
 3. **Adding fixes without a structural gate** — every C-class fix
    must be accompanied by a structural gate (or an extension of an

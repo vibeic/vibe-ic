@@ -1240,45 +1240,74 @@ _CONDITIONAL_LAYER_GUARDS = {
     "L10": ("has_command_protocol",),
     "L6": ("has_fsm", "has_command_protocol"),
     "L3": ("has_command_protocol",),
+    # Completeness layers (L24-L27). All four are guarded on profile flags
+    # that no CURRENT detector sets → they default absent → the conditional
+    # layer resolves to `skip` → it is NOT presence-enforced → NO false-fail
+    # on any current chip. They auto-activate (→ mandatory) the moment a
+    # detector/profile sets the flag (e.g. a future dedicated MEMS or memory-
+    # module class, or a project that has entered the physical-signoff flow).
+    #   L24 signoff / L25 reliability-mission-profile → `targets_signoff`
+    #     (a fabricated chip that has reached / declared physical signoff).
+    #   L26 MEMS/transduction  → `is_mems` OR `has_mechanical_transduction`.
+    #   L27 memory-module SPD  → `is_memory_module`.
+    "L24": ("targets_signoff",),
+    "L25": ("targets_signoff",),
+    "L26": ("is_mems", "has_mechanical_transduction"),
+    "L27": ("is_memory_module",),
 }
 
+
+# Completeness layers (L24-L27) — added to `conditional` for EVERY class so
+# `required_layers` classifies them (never silently drops one). Each is guarded
+# (see _CONDITIONAL_LAYER_GUARDS) on a profile flag that no current detector
+# sets, so they resolve to `skip` by default → NOT presence-enforced → NO
+# false-fail on any current chip. This keeps the L1-L13 mandatory floor
+# byte-unchanged (incl. the fail-closed unknown/bare_fpga → 13 mandatory) while
+# making L24/L25 enforceable once a project declares `targets_signoff` and
+# L26/L27 enforceable once a dedicated MEMS / memory-module class opts in.
+_COMPLETENESS_CONDITIONAL = ["L24", "L25", "L26", "L27"]
 
 _CLASS_LAYER_REQUIREMENTS = {
     "aid_class_half_duplex": {
         "mandatory": ["L1", "L2", "L3", "L4", "L5", "L6", "L7",
                       "L8", "L9", "L10", "L11", "L12", "L13"],
-        "conditional": [],
+        "conditional": list(_COMPLETENESS_CONDITIONAL),
     },
     "digital_cmd_driven": {
         "mandatory": ["L1", "L2", "L3", "L4", "L6", "L7", "L8", "L9", "L10"],
-        "conditional": ["L5", "L11", "L12", "L13"],
+        "conditional": ["L5", "L11", "L12", "L13"] + _COMPLETENESS_CONDITIONAL,
     },
     "mixed_signal_otp": {
         "mandatory": ["L1", "L2", "L3", "L4", "L5", "L6", "L7",
                       "L8", "L9", "L10", "L11"],
-        "conditional": ["L12", "L13"],
+        "conditional": ["L12", "L13"] + _COMPLETENESS_CONDITIONAL,
     },
     "pure_analog": {
         "mandatory": ["L1", "L2", "L5", "L8", "L13"],
-        "conditional": ["L3", "L6", "L7", "L10", "L11", "L12"],
+        "conditional": ["L3", "L6", "L7", "L10", "L11", "L12"]
+                       + _COMPLETENESS_CONDITIONAL,
     },
     "bare_fpga": {
         # Maintain legacy 13/13 path — fail-closed when we can't tell.
         "mandatory": ["L1", "L2", "L3", "L4", "L5", "L6", "L7",
                       "L8", "L9", "L10", "L11", "L12", "L13"],
-        "conditional": [],
+        "conditional": list(_COMPLETENESS_CONDITIONAL),
     },
     "unknown": {
         # Fail-closed default — every existing project keeps the legacy
         # 13/13 contract until L1/L2 are produced.
         "mandatory": ["L1", "L2", "L3", "L4", "L5", "L6", "L7",
                       "L8", "L9", "L10", "L11", "L12", "L13"],
-        "conditional": [],
+        "conditional": list(_COMPLETENESS_CONDITIONAL),
     },
 }
 
 
-_ALL_LAYERS = [f"L{i}" for i in range(1, 14)]
+# Universe of layers that `required_layers` classifies as mandatory / skip.
+# L1-L13 (the classic presence set) + the completeness layers L24-L27. The
+# advanced/protocol layers L14-L23 are intentionally NOT presence-enforced by
+# this brain (they remain opt-in, same as before), so they are excluded here.
+_ALL_LAYERS = [f"L{i}" for i in range(1, 14)] + ["L24", "L25", "L26", "L27"]
 
 
 def required_layers(profile: Dict[str, Any]) -> Dict[str, List[str]]:

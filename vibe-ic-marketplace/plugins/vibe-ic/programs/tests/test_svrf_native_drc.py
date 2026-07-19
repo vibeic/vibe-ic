@@ -92,6 +92,40 @@ def test_svrfdrc_bin_container_env_override(monkeypatch):
     assert "command -v /opt/svrfdrc" in seen["cmd"]
 
 
+# v1.4.35 — the image's /etc/profile.d prints `[INFO] Final PATH variable:` to
+# STDOUT on every login shell; `_docker_exec` uses `bash -lc`, so `command -v`
+# stdout arrives banner-polluted. The resolver must still return the clean path.
+_BANNER_POLLUTED = (
+    "[INFO] Setting up iic-osic-tools ...\n"
+    "[INFO] Final PATH variable: /foss/tools/bin:/usr/bin\n"
+    "/foss/tools/bin/svrfdrc\n"
+)
+
+
+def test_clean_command_v_path_strips_login_banner():
+    assert R._clean_command_v_path(_BANNER_POLLUTED, "svrfdrc") \
+        == "/foss/tools/bin/svrfdrc"
+
+
+def test_clean_command_v_path_passthrough_when_clean():
+    assert R._clean_command_v_path("/foss/tools/bin/svrfdrc\n", "svrfdrc") \
+        == "/foss/tools/bin/svrfdrc"
+
+
+def test_clean_command_v_path_falls_back_to_name_when_only_chatter():
+    # A shell builtin/alias resolution or an all-banner stdout → the name itself
+    # (rc==0 already proved it resolved; never return empty).
+    assert R._clean_command_v_path("[INFO] noise\n", "svrfdrc") == "svrfdrc"
+
+
+def test_svrfdrc_bin_container_strips_banner_pollution(monkeypatch):
+    # End-to-end: banner-polluted `command -v` stdout → clean resolved path,
+    # NOT the 3-line `[INFO]...\n[INFO]...\n/foss/tools/bin/svrfdrc` string.
+    monkeypatch.setattr(R, "_docker_exec",
+                        lambda c, cmd, **k: (0, _BANNER_POLLUTED, ""))
+    assert R._svrfdrc_bin_container("vibeic-eda") == "/foss/tools/bin/svrfdrc"
+
+
 def test_try_svrf_native_drc_returns_none_when_buddy_absent(
         tmp_path, monkeypatch):
     # When the buddy is absent from the image, the helper returns None so step_drc
@@ -146,6 +180,49 @@ def test_step_drc_env_unavailable_names_buddy(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# v1.4.38 — DRC wall-clock budget (ic2-sha256 commercial_pdk sha256 floor): the stall
+# watchdog never kills a 100%-CPU tool, so svrfdrc's pathological single-thread
+# derived-layer build ran 4.4h unbounded. A non-completing DRC is an HONEST
+# SKIPPED-CONDITION (perf ceiling), never a FAIL or a silent multi-hour hang.
+# --------------------------------------------------------------------------
+def test_drc_wall_budget_default_and_env(monkeypatch):
+    monkeypatch.delenv("VIBE_IC_DRC_BUDGET_S", raising=False)
+    assert R._drc_wall_budget_s() == 7200.0          # 2h default
+    monkeypatch.setenv("VIBE_IC_DRC_BUDGET_S", "3600")
+    assert R._drc_wall_budget_s() == 3600.0
+    monkeypatch.setenv("VIBE_IC_DRC_BUDGET_S", "notanumber")
+    assert R._drc_wall_budget_s() == 7200.0          # invalid -> safe default
+    monkeypatch.setenv("VIBE_IC_DRC_BUDGET_S", "0")
+    assert R._drc_wall_budget_s() == 7200.0          # non-positive -> default
+
+
+def test_try_svrf_native_drc_timeout_is_skipped_condition(tmp_path, monkeypatch):
+    # rc 124 (wall-clock ceiling) -> SKIPPED-CONDITION + SVRFDRC_PERF_CEILING,
+    # and the DRC step passes a BOUNDED hard_ceiling_s (not the 24h default).
+    monkeypatch.setattr(R, "_svrfdrc_bin_container", lambda c: "svrfdrc")
+    monkeypatch.setattr(R, "_to_container_path", lambda p, c: p)
+    monkeypatch.delenv("VIBE_IC_DRC_BUDGET_S", raising=False)
+    seen = {}
+
+    def _fake_exec(c, cmd, **k):
+        seen["hard_ceiling_s"] = k.get("hard_ceiling_s")
+        return (124, "", "")                         # wall-clock ceiling hit
+    monkeypatch.setattr(R, "_docker_exec", _fake_exec)
+    gds = R._pl.pnr_dir(tmp_path) / "spm.gds"
+    gds.parent.mkdir(parents=True, exist_ok=True)
+    gds.write_text("gds")
+    res = R._try_svrf_native_drc(
+        tmp_path, "spm",
+        R.PdkConfig(name="custom:commercial_pdk", liberty="x", tech_lef="x",
+                    cell_lef="x", cell_gds=None, site="unit", drc_deck=None,
+                    calibre_drc="/x/DRC.rule"),
+        "vibeic-eda")
+    assert res.status == "SKIPPED-CONDITION"
+    assert res.extras.get("finding") == "SVRFDRC_PERF_CEILING"
+    assert seen["hard_ceiling_s"] == 7200.0          # bounded, not the 24h ceiling
+
+
+# --------------------------------------------------------------------------
 # LEF->GDS streamout layermap discovery (so GDS gets the foundry's real layer
 # numbers; without it a sign-off deck misreads routing layers).
 # --------------------------------------------------------------------------
@@ -196,6 +273,62 @@ def test_discover_lefdef_layermap_prefers_encounter_over_virtuoso(tmp_path):
 def test_discover_lefdef_layermap_none_when_absent(tmp_path):
     (tmp_path / "input").mkdir()
     assert R._discover_lefdef_layermap(tmp_path) is None
+
+
+# --------------------------------------------------------------------------
+# FLOOR-STREAMOUT loud-WARN (v1.4.34): deck present + streamout map absent is
+# the silent legacy-numbering fallback that produced spm's false-DRC wall.
+# --------------------------------------------------------------------------
+def test_streamout_warn_fires_when_deck_present_map_absent():
+    # The exact ic1-spm condition: a sign-off DRC deck exists, no streamout map.
+    w = R._streamout_layermap_warning("/pdk/calibre/KF_DRC_D4.20.rule", None)
+    assert w is not None
+    # Loud + actionable: names the deck, calls out legacy numbering + artefacts.
+    assert "KF_DRC_D4.20.rule" in w
+    assert "LEGACY" in w and "ARTEFACTS" in w
+
+
+def test_streamout_warn_silent_when_map_present():
+    # A discoverable streamout map → no warning (GDS lands on foundry numbers).
+    assert R._streamout_layermap_warning(
+        "/pdk/calibre/KF_DRC.rule", "/pdk/lef/KF_layermap_SOC.txt") is None
+
+
+def test_streamout_warn_silent_when_no_deck():
+    # No sign-off deck → legacy numbering is irrelevant (OSS PDK path); no warning
+    # even if the map is also absent.
+    assert R._streamout_layermap_warning(None, None) is None
+    assert R._streamout_layermap_warning(None, "/pdk/lef/map.txt") is None
+
+
+# --------------------------------------------------------------------------
+# FLOOR-DRC cell-interior-exemption guard (v1.4.36): commercial deck present +
+# std-cell exclusion marker unconfigured = the silent miss that re-checks
+# foundry-qualified cell interiors → false FEOL over-fire (spm's 15 fails).
+# --------------------------------------------------------------------------
+def test_excl_marker_warn_fires_when_deck_present_marker_unconfigured():
+    # ic1-spm's exact condition: a Calibre deck, no exclusion marker key.
+    w = R._stdcell_exclusion_marker_warning("/pdk/calibre/KF_DRC_D4.20.rule", None)
+    assert w is not None
+    assert "KF_DRC_D4.20.rule" in w
+    assert "stdcell_exclusion_marker_layer" in w and "OVER-FIRE" in w
+
+
+def test_excl_marker_warn_fires_on_empty_string_marker():
+    # An empty-string marker config is still "unconfigured".
+    assert R._stdcell_exclusion_marker_warning("/pdk/calibre/DRC.rule", "") is not None
+
+
+def test_excl_marker_warn_silent_when_marker_configured():
+    # Marker wired (e.g. the deck's 113/0 don't-check layer) → no warning.
+    assert R._stdcell_exclusion_marker_warning(
+        "/pdk/calibre/DRC.rule", "113/0") is None
+
+
+def test_excl_marker_warn_silent_when_no_deck():
+    # No commercial deck (OSS PDK path) → no exclusion-marker concern.
+    assert R._stdcell_exclusion_marker_warning(None, None) is None
+    assert R._stdcell_exclusion_marker_warning(None, "113/0") is None
 
 
 # --------------------------------------------------------------------------

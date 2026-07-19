@@ -161,157 +161,38 @@ def _find_deck(project: Path, block: str):
 _NATIVE_MC_SECTION_HINT = re.compile(
     r"(?i)(mismatch|_mm(?:_|\b)|statistical|stat|agauss|montecarlo)")
 
-# A native statistical lib composes its Monte-Carlo enable in TWO section roles:
-#   * GLOBAL  — a lib-wide MC-enable / statistical block (e.g. `mc_global`,
-#               `statistical`, `montecarlo`) loaded FIRST so the device block
-#               resamples against it. It enables MC but samples NOTHING on its own.
-#   * DEVICE  — the per-device-class mismatch block for the deck's device FAMILY
-#               (e.g. `mc_mos_tn` for a `..._tn` device family) that actually
-#               resamples the device mismatch. Loading the global block WITHOUT a
-#               device block gives sigma≈0 (the failure this fixes); loading EVERY
-#               `mc_*` variant block (per-corner / local / thick-ox / …) instead
-#               pulls in undefined per-corner params and HSPICE-only idioms →
-#               ngspice errors. The right set is GLOBAL + the ONE MOS mismatch
-#               block whose corner-tag matches the deck's device family.
-# Family-agnostic NAME hints (no vendor/SKU literal); the resolver has already
-# narrowed to the statistical LIB — these only pick the SECTION(s).
-_MC_GLOBAL_EXACT_RE = re.compile(r"(?i)^(?:mc[_-]?global|montecarlo|statistical)$")
-_MC_DEVICE_SECTION_RE = re.compile(r"(?i)^mc[_-]\w+")
-
-
-def _device_family_tag(dev_names) -> str:
-    """The common trailing corner/process TAG shared by the deck's device-role
-    subckt names (e.g. {devn_tn, devp_tn} → 'tn') — used to pick the DEVICE
-    mismatch section whose tag matches (mc_mos_tn), not a different-corner block.
-    Returns None when the names carry no single common tail. chip-AGNOSTIC."""
-    tails = set()
-    for n in (dev_names or ()):
-        parts = [p for p in re.split(r"[_\W]+", str(n).lower()) if p]
-        if parts:
-            tails.add(parts[-1])
-    return next(iter(tails)) if len(tails) == 1 else None
-
 # An include-FORM model line: `.lib <path> <section>` or `.include <path>` where
 # the path token carries a directory separator. Distinct from a `.lib <section>`
 # section-DEFINITION line (no path) that lives INSIDE a model lib. Stripping this
 # from the deck body lets the MC wrapper own the SINGLE model source (no mixing).
 _INCLUDE_FORM_MODEL_RE = re.compile(
     r"(?im)^\s*\.(?:lib\s+\S*[\\/]\S+\s+\S+|include\s+\S*[\\/]\S+)\s*$")
-# The model FILE PATH captured from an include-FORM model line — so the
-# single-family guard can count DISTINCT model FILES (several `.lib <same-file>
-# <section>` lines composing global+device MC sections of ONE lib are allowed;
-# a SECOND distinct file — e.g. a leftover open-PDK overlay — is not).
-_INCLUDE_FORM_MODEL_PATH_RE = re.compile(
-    r"(?im)^\s*\.(?:lib\s+(\S*[\\/]\S+)\s+\S+|include\s+(\S*[\\/]\S+))\s*$")
 
 
-def _pick_native_mc_section(mc_lib: str, dev_names=None):
-    """The ORDERED list of `.lib <section>` names the MC wrapper loads out of the
-    native statistical/mismatch lib.
-
-    GAP-ANALOG (device mismatch not sampled): a Monte-Carlo run must load BOTH
-    the lib-wide GLOBAL MC-enable/statistical block (e.g. `mc_global`) AND the
-    DEVICE mismatch block for the deck's device family (e.g. `mc_mos_tn`). The
-    global block alone ENABLES MC but resamples NOTHING (sigma≈0). But it must be
-    JUST those two: loading EVERY `mc_*` variant (per-corner / local / thick-ox)
-    pulls in undefined per-corner params + HSPICE-only idioms → ngspice errors.
-    So the picker returns the GLOBAL enable block + the MOS mismatch block whose
-    corner-tag matches `dev_names` (the deck's device family, from the resolved
-    deck context). Without a device tag (or no tag-match) it falls back to a
-    SINGLE mismatch-hinted / device section — never the whole `mc_*` set.
-
-    Returns [] when the lib carries no `.lib <section>` definitions ⇒ the wrapper
+def _pick_native_mc_section(mc_lib: str):
+    """The `.lib <section>` name the MC wrapper loads out of the native mismatch
+    lib: a mismatch/statistical-hinted section, else a typ section, else the
+    first. None ⇒ the lib carries no `.lib <section>` definitions ⇒ the wrapper
     loads the whole file with `.include` instead. Reads the staged host path
-    (rung-1 mc_libs are host paths); [] on any read failure. NDA-safe: section
-    NAMES only, never PDK content."""
+    (rung-1 mc_libs are host paths); returns None on any read failure."""
     try:
         txt = Path(mc_lib).read_text(errors="replace")
     except OSError:
-        return []
+        return None
     try:
         import analog_pdk_deck_context as _apdc
         secs = _apdc.parse_sections(txt)
     except Exception:
         secs = []
     if not secs:
-        return []
-    # GLOBAL enable block (exact mc_global / statistical / montecarlo — NOT the
-    # `mc_global_local` per-instance variant).
-    globals_ = [s for s in secs if _MC_GLOBAL_EXACT_RE.match(s)]
-    # DEVICE mismatch block for the deck's device FAMILY: a `mc..mos..<tag>`
-    # section whose trailing corner-tag matches the device family (mc_mos_tn for
-    # a `..._tn` device), not a different-corner or variant block.
-    tag = _device_family_tag(dev_names)
-    dev_secs = []
-    if tag:
-        for s in secs:
-            toks = [t for t in re.split(r"[_\W]+", s.lower()) if t]
-            if "mos" in toks and toks and toks[-1] == tag:
-                dev_secs.append(s)
-    if not dev_secs:
-        # no device tag / no tag-match → a SINGLE mismatch-hinted or primary
-        # device section (never the whole `mc_*` variant set).
-        for s in secs:
-            if s not in globals_ and (_NATIVE_MC_SECTION_HINT.search(s)
-                                      or _MC_DEVICE_SECTION_RE.match(s)):
-                dev_secs = [s]
-                break
-    ordered = globals_ + dev_secs
-    if ordered:
-        seen: set = set()
-        out = []
-        for s in ordered:
-            if s not in seen:
-                seen.add(s)
-                out.append(s)
-        return out
-    # fallback: single mismatch-hinted → typ → first (legacy single-section pick)
+        return None
     for s in secs:
         if _NATIVE_MC_SECTION_HINT.search(s):
-            return [s]
+            return s
     for s in secs:
         if s in ("tt", "typ", "nom", "tm") or s.startswith(("tt", "typ")):
-            return [s]
-    return [secs[0]]
-
-
-def _resolved_deck_context(res: dict):
-    """The family-agnostic deck context for the resolved PDK (device map, passive
-    companion sections, model lib). Used to keep the MC lib DEVICE-CONSISTENT
-    with the nominal deck AND to re-add the passive well-diode section a PMOS
-    deck needs. Returns None on any failure."""
-    try:
-        import analog_pdk_deck_context as _apdc
-        return _apdc.resolve_deck_context("sky130", res=res)
-    except Exception:
-        return None
-
-
-def _resolved_deck_device_names(res: dict):
-    """The device-role subckt names the NOMINAL corner-sweep deck instantiates —
-    a statistical lib for a DIFFERENT process corner defines a different device
-    family, leaving the deck's device undefined (`unknown subckt`) → no spread.
-    Returns a set (empty on failure — the caller then keeps the stat-rank order)."""
-    ctx = _resolved_deck_context(res)
-    return {v for v in (ctx.device_map or {}).values() if v} if ctx else set()
-
-
-def _mc_lib_defines_any(mc_lib: str, dev_names: set) -> bool:
-    """True when the MC lib DEFINES at least one of `dev_names` as a `.subckt`
-    (so a standalone MC wrap of it resolves the deck's device). Reads the staged
-    host path; False on any read failure. NDA-safe: subckt NAMES only."""
-    if not dev_names:
-        return False
-    try:
-        txt = Path(mc_lib).read_text(errors="replace")
-    except OSError:
-        return False
-    try:
-        import analog_pdk_deck_context as _apdc
-        subs = set(_apdc.parse_devices(txt)["subckts"])
-    except Exception:
-        subs = set()
-    return bool(subs & dev_names)
+            return s
+    return secs[0]
 
 
 def _resolve_native_mc(project: Path, container: str):
@@ -321,8 +202,7 @@ def _resolve_native_mc(project: Path, container: str):
       * None                        — no native resolution (rung 3 / no L19
                                       target / a known open family) → the caller
                                       keeps the open-PDK (sky130/gf180) path.
-      * {"mc_lib", "mc_sections",…} — a resolved native mismatch lib + the
-                                      ordered global+device MC section list.
+      * {"mc_lib", "mc_section",…}  — a resolved native mismatch lib to load.
       * {"unscoreable": <reason>}   — native family resolved but stages NO
                                       mc/mismatch lib → honest UNSCOREABLE
                                       (never a cross-family overlay).
@@ -362,79 +242,21 @@ def _resolve_native_mc(project: Path, container: str):
             f"(sky130) mismatch section on a native deck — MC yield is honestly "
             f"UNSCOREABLE until the family's statistical/mismatch lib is staged "
             f"under input/pdk/. (degeneracy-guard family; NDA: paths only.)")}
-    # DEVICE-CONSISTENCY: among the stat-ranked mc_libs (best statistical content
-    # first — self-contained > overlay > alias), pick the FIRST that DEFINES the
-    # device family the nominal corner-sweep deck instantiates. A PDK may stage
-    # several per-corner statistical libs (typical / slow / fast / …); only the
-    # one matching the nominal device family can be wrapped standalone without
-    # leaving the deck's device undefined. Falls back to the best-stat mc_libs[0]
-    # when the device family cannot be resolved (keeps prior behaviour).
-    ctx = _resolved_deck_context(res)
-    dev_names = {v for v in (ctx.device_map or {}).values() if v} if ctx else set()
     mc_lib = mc_libs[0]
-    if dev_names:
-        for cand in mc_libs:
-            if _mc_lib_defines_any(cand, dev_names):
-                mc_lib = cand
-                break
-    # GAP-ANALOG (corner-include resolution): load the statistical lib — and the
-    # passive companion below — through the project's basename include farm, so
-    # any bare relative `.include` / `.lib` target it carries resolves even when
-    # the staged libs span several directories (ngspice resolves a relative
-    # include against the INCLUDING FILE's directory, so no cwd choice helps).
-    # The farm never substitutes a different file: an ambiguous or absent target
-    # is simply not in it and ngspice still fails loudly. No-op when the farm
-    # cannot be built (paths stay exactly as resolved).
-    farm_map = {}
-    try:
-        import analog_pdk_deck_context as _apdc
-        mc_roots = [mc_lib] + ([ctx.model_lib] if ctx and ctx.model_lib else [])
-        farm_map = _apdc.build_lib_include_farm(
-            list(res.get("spice_libs") or []),
-            _apdc.lib_farm_dir(Path(project)), roots=mc_roots).get("map") or {}
-    except Exception:
-        farm_map = {}
-    out = {"mc_lib": farm_map.get(mc_lib, mc_lib),
-           "mc_sections": _pick_native_mc_section(mc_lib, dev_names),
-           "family": res.get("family"), "source": src}
-    # PASSIVE COMPANION (PMOS well-diode): the MC sections resample the ACTIVE
-    # devices, but a >4-terminal device's parasitic well-diode subckt lives in
-    # the corner shim's PASSIVE section — a DIFFERENT file from the MC lib. When
-    # the deck instantiates the PMOS device, the MC wrapper must ALSO load that
-    # passive section (same-PDK companion, NOT a cross-family overlay). Surface
-    # the shim + its typ passive section so the caller can add it.
-    if ctx and ctx.model_lib and ctx.passive_sections:
-        psec = ctx.passive_sections.get(ctx.typ_section)
-        if psec:
-            out["passive_lib"] = farm_map.get(ctx.model_lib, ctx.model_lib)
-            out["passive_section"] = psec
-            out["pmos_device"] = (ctx.device_map or {}).get("pmos")
-    return out
+    return {"mc_lib": mc_lib, "mc_section": _pick_native_mc_section(mc_lib),
+            "family": res.get("family"), "source": src}
 
 
-def _assert_single_model_family(wrap_text: str, allowed_paths) -> None:
-    """Structural guard (#150): after the wrapper prepends its native model
-    include(s) and strips any caller-side include from the deck body, every
-    include-form model FILE in the wrap must be one the MC path INTENDED to load
-    — the native mc_lib, plus optionally a SAME-PDK passive companion (the corner
-    shim's passive section carrying a >4-terminal device's parasitic well-diode).
-    Multiple `.lib <same-file> <section>` lines (a global MC section + device MC
-    section(s)) are the correct composition. A file OUTSIDE the allowed set (e.g.
-    a leftover open-PDK sky130 overlay, or a stray corner lib) is a forbidden
-    cross-family hybrid; raise so the bug can never ship silently.
-
-    `allowed_paths` is a str or an iterable of the intended model-file paths."""
-    if isinstance(allowed_paths, str):
-        allowed = {allowed_paths}
-    else:
-        allowed = {str(p) for p in allowed_paths}
-    paths = set()
-    for m in _INCLUDE_FORM_MODEL_PATH_RE.finditer(wrap_text):
-        paths.add(m.group(1) or m.group(2))
-    stray = paths - allowed
-    assert not stray, (
-        f"MC deck loads unexpected model file(s) {sorted(stray)} "
-        f"(allowed: {sorted(allowed)})")
+def _assert_single_model_family(wrap_text: str, mc_include_line: str) -> None:
+    """Structural guard (#150): after the wrapper prepends its single native
+    model include and strips any caller-side include from the deck body, EXACTLY
+    ONE include-form model line may remain — the one we prepended. A second
+    (e.g. a leftover open-PDK sky130 overlay) is a forbidden cross-family hybrid;
+    raise so the bug can never ship silently."""
+    lines = _INCLUDE_FORM_MODEL_RE.findall(wrap_text)
+    assert len(lines) == 1, (
+        f"cross-family MC deck: expected exactly 1 model include "
+        f"({mc_include_line!r}), found {len(lines)}: {lines}")
     low = wrap_text.lower()
     assert "/foss/pdks/sky130" not in low and "/foss/pdks/gf180" not in low, (
         "native MC deck must not overlay an open-PDK (sky130/gf180) model lib")
@@ -486,30 +308,13 @@ def run_block(project: Path, block: str, container: str, pdk: str,
                  if "AI_IC_design" in str(project) else project)
 
     if native:
-        # native mismatch lib → the wrapper's SINGLE model FILE. GAP-ANALOG: it
-        # may compose SEVERAL `.lib` sections of that ONE file (global MC-enable
-        # block + device mismatch block(s)) so device mismatch is actually
-        # resampled; a bare global block alone gives sigma≈0.
+        # native mismatch lib → the wrapper's SINGLE model source.
         mc_lib_ct = _ars._container_path(container, host_root,
                                          Path(native["mc_lib"]))
-        mc_sections = native["mc_sections"]
-        if mc_sections:
-            mc_include_line = "\n".join(
-                f".lib {mc_lib_ct} {s}" for s in mc_sections)
-            mc_model_section = "+".join(mc_sections)
-        else:
-            mc_include_line = f".include {mc_lib_ct}"
-            mc_model_section = f"(whole lib {Path(native['mc_lib']).name})"
-        # GAP-ANALOG — run ngspice FROM the statistical lib's directory; for a
-        # FARMED lib that directory IS the include farm, which is load-bearing.
-        # Measured on ngspice-46: a RELATIVE `.lib` / `.include` target is found
-        # iff it sits in the INCLUDING FILE's directory OR in cwd (no -I option,
-        # `set sourcepath` does not apply). Co-locating the closure supplies the
-        # first hop, cwd=farm supplies the rest — each alone still fails. See
-        # analog_pdk_deck_context.build_lib_include_farm.
-        # Open-PDK path uses an ABSOLUTE lib → cwd None.
-        mc_sim_cwd = str(Path(mc_lib_ct).parent)
-        mc_allowed_files = {mc_lib_ct}
+        mc_section = native["mc_section"]
+        mc_include_line = (f".lib {mc_lib_ct} {mc_section}" if mc_section
+                           else f".include {mc_lib_ct}")
+        mc_model_section = mc_section or f"(whole lib {Path(native['mc_lib']).name})"
     else:
         mc_section = _MC_SECTION.get(pdk)
         if not mc_section:
@@ -521,7 +326,6 @@ def run_block(project: Path, block: str, container: str, pdk: str,
                     "reason": f"no ngspice model lib known for pdk {pdk!r}"}
         mc_include_line = f".lib {pdk_lib} {mc_section}"
         mc_model_section = mc_section
-        mc_sim_cwd = None            # open PDK includes by absolute path
 
     mc_dir = deck.parent / "mc_runs"
     mc_dir.mkdir(parents=True, exist_ok=True)
@@ -533,20 +337,6 @@ def run_block(project: Path, block: str, container: str, pdk: str,
         # structural backstop).
         deck_body = _INCLUDE_FORM_MODEL_RE.sub(
             "* (.lib moved to MC wrapper)", deck_body)
-        # PASSIVE COMPANION: the strip above removed the corner shim's passive
-        # `.lib` line too. When the deck instantiates the PMOS device whose
-        # parasitic well-diode lives in that passive section, RE-ADD it (same-PDK
-        # companion — the MC sections resample the ACTIVE devices; the well-diode
-        # stays deterministic). NMOS-only decks add nothing (byte-identical).
-        if native.get("passive_section") and native.get("passive_lib"):
-            pmos_dev = native.get("pmos_device")
-            if pmos_dev and pmos_dev in deck_body:
-                passive_ct = _ars._container_path(
-                    container, host_root, Path(native["passive_lib"]))
-                mc_include_line = (
-                    mc_include_line
-                    + f"\n.lib {passive_ct} {native['passive_section']}")
-                mc_allowed_files.add(passive_ct)
     else:
         # open-PDK path unchanged — strip only the open model lib by name.
         deck_body = re.sub(
@@ -565,7 +355,7 @@ def run_block(project: Path, block: str, container: str, pdk: str,
             + deck_body + ("\n.end\n" if ".end" not in deck_body.lower()
                            else "\n"))
         if native:
-            _assert_single_model_family(wrap_text, mc_allowed_files)
+            _assert_single_model_family(wrap_text, mc_include_line)
         wrap.write_text(wrap_text)
         # #464 — _run_ngspice now also returns a per-run sim_status (failed
         # sub-analyses + nulled metrics + warnings). Capture it so a Monte
@@ -575,8 +365,7 @@ def run_block(project: Path, block: str, container: str, pdk: str,
         # Tolerate the legacy 3-tuple return so any pre-existing caller/mock
         # that has not yet adopted the 4-tuple keeps working.
         _ret = _ars._run_ngspice(
-            container, _ars._container_path(container, host_root, wrap),
-            cwd=mc_sim_cwd)
+            container, _ars._container_path(container, host_root, wrap))
         if len(_ret) == 4:
             ok, meas, raw, sim_status = _ret
         else:

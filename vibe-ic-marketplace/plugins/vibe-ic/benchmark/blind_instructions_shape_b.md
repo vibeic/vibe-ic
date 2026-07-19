@@ -99,7 +99,7 @@ at the score front door.
    python3 ${CLAUDE_PLUGIN_ROOT}/programs/vibe_ic_one_shot_runner.py <project> \
        --skip-phase3 --skip-analog --skip-hardware --pdk sky130A
    ```
-   The runner internally: Path-A phase1 (NL → L1-L23) → phase2 spec-to-rtl (with
+   The runner internally: Path-A phase1 (NL → L1-L27) → phase2 spec-to-rtl (with
    chip_top wrapper, power-up `--fix`, lint, synth) → emits RTL at
    `<project>/phase2/stage1/rtl/`.
 
@@ -139,7 +139,7 @@ at the score front door.
      → detected ic_class → set the expected output path. It is now handing off
      to you (the AI playing the spec-to-rtl ROLE) to author RTL.
    - **Author RTL at `<project>/phase2/stage1/rtl/<top>.<v|sv>`** using the L
-     docs (L1-L23 esp.) PLUS the original `design_description.txt`. The blind
+     docs (L1-L27 esp.) PLUS the original `design_description.txt`. The blind
      rule still applies — never read the hidden testbench. Module name must
      match what L9 / the description states (NOT "TopModule" for RTLLM).
    - This is NOT "bypassing the runner" — bypass means authoring with MCP

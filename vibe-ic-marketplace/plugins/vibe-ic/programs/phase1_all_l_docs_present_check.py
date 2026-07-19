@@ -102,7 +102,7 @@ def _check(project: Path) -> tuple[int, list[str]]:
             "generated_docs/ absent.",
             "",
             "FAIL — Wave 30 (v0.119.62): Phase 1 (doc-extraction) was not attempted. "
-            "All 13 L docs (L1-L23) must exist in generated_docs/ "
+            "All 13 L docs (L1-L13) must exist in generated_docs/ "
             "before any Phase 2 RTL/burn step is allowed. Run the "
             "phase1-orchestrate skill (or every Phase 1 (doc-extraction) generator "
             "skill individually). NO waiver allowed."
@@ -116,37 +116,54 @@ def _check(project: Path) -> tuple[int, list[str]]:
             "attempted).",
             "",
             "FAIL — Wave 30 (v0.119.62): Phase 1 (doc-extraction) was not attempted. "
-            "All 13 L docs (L1-L23) must exist in generated_docs/ "
+            "All 13 L docs (L1-L13) must exist in generated_docs/ "
             "before any Phase 2 RTL/burn step is allowed. Run the "
             "phase1-orchestrate skill (or every Phase 1 (doc-extraction) generator "
             "skill individually). NO waiver allowed."
         ]
 
-    # Build prefix -> matching file list.
-    matched: dict[str, list[Path]] = {p: [] for p in _REQUIRED_PREFIXES}
-    for f in files:
-        for pref in _REQUIRED_PREFIXES:
-            if f.name.startswith(pref):
-                matched[pref].append(f)
-                break
-
-    # Wave 36 (v0.119.68) — consult IC class profile so L docs that
-    # are NOT applicable to the IC class drop to INFO rather than
-    # FAIL.  Fail-closed default: when detection returns "unknown"
-    # we keep the legacy 13/13 contract.
+    # Wave 36 (v0.119.68) — consult IC class profile so L docs that are NOT
+    # applicable to the IC class drop to INFO rather than FAIL.
+    # #157 (v1.4.x) — the ENFORCED set is now the class's
+    # required_layers(profile)["mandatory"] (which incl. an applicable L24/L25
+    # once a project declares `targets_signoff`), NOT a static L1-L13 tuple.
+    # A layer in `skip` (incl. L24-L27 for a non-signoff / non-MEMS /
+    # non-memory-module chip) demotes to INFO → no false-fail. Fail-closed
+    # default: when detection is unavailable OR returns "unknown", the legacy
+    # 13/13 L1-L13 contract stays intact.
     profile: dict | None = None
-    not_applicable_prefixes: set[str] = set()
+    mandatory_prefixes: list[str] = list(_REQUIRED_PREFIXES)
+    skip_prefixes: set[str] = set()
     if detect_ic_class is not None and required_layers is not None:
         try:
             profile = detect_ic_class(project)
             spec = required_layers(profile)
-            skip_layers = set(spec.get("skip", []))
-            for layer in skip_layers:
+            mand_layers = list(spec.get("mandatory", []))
+            skip_layers = list(spec.get("skip", []))
+            if mand_layers:
                 # layer is e.g. "L5" — translate to prefix "L5_"
-                not_applicable_prefixes.add(f"{layer}_")
+                mandatory_prefixes = [f"{layer}_" for layer in mand_layers]
+            skip_prefixes = {f"{layer}_" for layer in skip_layers}
         except Exception:
             profile = None
-            not_applicable_prefixes = set()
+            mandatory_prefixes = list(_REQUIRED_PREFIXES)
+            skip_prefixes = set()
+
+    # Prefixes we CONSIDER = the enforced (mandatory) set + the skip set
+    # (demoted to INFO). A mandatory prefix with no file FAILs; a skip prefix
+    # with no file is INFO. Any other L doc on disk (e.g. advanced L14-L23) is
+    # neither enforced nor reported — unchanged behaviour.
+    not_applicable_prefixes: set[str] = set(skip_prefixes)
+    considered_prefixes: list[str] = list(dict.fromkeys(
+        list(mandatory_prefixes) + sorted(skip_prefixes)))
+
+    # Build prefix -> matching file list over the considered universe.
+    matched: dict[str, list[Path]] = {p: [] for p in considered_prefixes}
+    for f in files:
+        for pref in considered_prefixes:
+            if f.name.startswith(pref):
+                matched[pref].append(f)
+                break
 
     missing: list[str] = []
     empty: list[str] = []
@@ -183,7 +200,10 @@ def _check(project: Path) -> tuple[int, list[str]]:
             ok.append(pref)
 
     out: list[str] = []
-    total_required = 13 - len(not_applicable)
+    # #157 — total_required tracks the class's MANDATORY layer count (the
+    # enforced set), not a static 13. For the fail-closed default (unknown /
+    # bare_fpga) this is exactly 13 (L1-L13) so the legacy contract is intact.
+    total_required = len(mandatory_prefixes)
     cls_label = (profile or {}).get("ic_class", "unknown")
     out.append(
         f"phase1_all_l_docs_present_check: "
@@ -197,13 +217,13 @@ def _check(project: Path) -> tuple[int, list[str]]:
     if missing or empty or invalid:
         out.append("")
         out.append(
-            "FAIL — Wave 23 (v0.119.55): all 13 L docs (L1-L23) must "
-            "exist in generated_docs/ with non-empty content. NO waiver "
-            "allowed.")
+            f"FAIL — Wave 23 (v0.119.55) / #157: all {total_required} "
+            f"mandatory L docs (ic_class={cls_label}) must exist in "
+            "generated_docs/ with non-empty content. NO waiver allowed.")
         if missing:
             out.append("")
             out.append(
-                f"  Missing L doc prefixes ({len(missing)}/13):")
+                f"  Missing L doc prefixes ({len(missing)}/{total_required}):")
             for pref in missing:
                 out.append(
                     f"    - {pref}*.json (e.g. {pref}DATASHEET.json / "

@@ -47,7 +47,7 @@ The canonical, machine-readable sources you MUST consult (never guess the flow):
 
 | Phase / step | Trigger a PROGRAM (deterministic, first) | then a GATE / SKILL (verify / judge / repair) |
 |---|---|---|
-| **P1** NL/docs → L1-L23 JSON | `phase1_one_shot_runner.py` (+`phase1_engine/ingest.py`) | IC-Expert dialogue + `phase1-completeness-deep-review`, `phase1-output-verify` |
+| **P1** NL/docs → L1-L27 JSON | `phase1_one_shot_runner.py` (+`phase1_engine/ingest.py`) | IC-Expert dialogue + `phase1-completeness-deep-review`, `phase1-output-verify` |
 | **P2** detect ic_class | `ic_class_profile.py` | — (dispatch decision) |
 | **P2** RTL authoring | `rtl_hygiene_lint.py --fix` (hygiene) | AI authors via `spec-to-rtl` when `rtl_gen=null`; wrap in `chip_top_gate_wrapper_gen.py` |
 | **P2** synth | `design_one_shot_runner.py` (yosys) | `synth-doctor` |
@@ -1885,9 +1885,9 @@ _Captured by benchmark-enhancement-capture 2026-06-07._
 
 ## You are a spec-coverage routing target (ORGANIC #697)
 
-`programs/spec_coverage_check.py` enforces spec-first coverage attribution across the WHOLE input chain (prompt → fact graph → L1-L23). When a downstream verification fails on a requirement that was present in the **fact graph from your plain-language elicitation** but **never made it into the L-docs you complete**, the program attributes it to `extraction-gap` with `route_to: ic-expert-agent` — i.e. **your L-doc completion dropped it.**
+`programs/spec_coverage_check.py` enforces spec-first coverage attribution across the WHOLE input chain (prompt → fact graph → L1-L27). When a downstream verification fails on a requirement that was present in the **fact graph from your plain-language elicitation** but **never made it into the L-docs you complete**, the program attributes it to `extraction-gap` with `route_to: ic-expert-agent` — i.e. **your L-doc completion dropped it.**
 
-Implication for your layer review: your "fill in values the user could not provide" job includes carrying EVERY captured requirement end-to-end into the L1-L23, not silently dropping one. The most-missed class (per the #697 CVDP evidence) is an ENUMERATED set's **outside-the-set / default / error-path** behavior — when L3/L5 lists the valid opcodes/modes/control-characters, the L-docs must ALSO state the non-listed/default path explicitly so spec-to-rtl implements it and the self-TB tests it. Also carry through: reset polarity/mode, stated output latency, every table-row mapping, signed-ness, byte/bit order, overflow/saturation behavior. An extraction-gap routed to you is a concrete L-doc-completion miss, not a benchmark floor.
+Implication for your layer review: your "fill in values the user could not provide" job includes carrying EVERY captured requirement end-to-end into the L1-L27, not silently dropping one. The most-missed class (per the #697 CVDP evidence) is an ENUMERATED set's **outside-the-set / default / error-path** behavior — when L3/L5 lists the valid opcodes/modes/control-characters, the L-docs must ALSO state the non-listed/default path explicitly so spec-to-rtl implements it and the self-TB tests it. Also carry through: reset polarity/mode, stated output latency, every table-row mapping, signed-ness, byte/bit order, overflow/saturation behavior. An extraction-gap routed to you is a concrete L-doc-completion miss, not a benchmark floor.
 
 ### Skill: Spec timing & encoding conventions a blind RTL author must extract (ORGANIC #699)
 

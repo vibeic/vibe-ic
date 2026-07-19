@@ -29,7 +29,7 @@ Read `benchmark_clean/METHODOLOGY.md` first. Non-negotiable:
 ## The five pillars (== report sections == hard gates)
 
 ### Pillar 1 — Functional Verification Coverage  ▸ gate: **== 100%**
-**LLM judgment (irreducible):** walk L1–L23 (functional spec, interface, register map,
+**LLM judgment (irreducible):** walk L1–L27 (functional spec, interface, register map,
 command/protocol, timing, behavioral sequences, test cases) and enumerate **every requirement** —
 a program cannot reliably know that a prose timing sentence in L8 is a distinct *testable*
 requirement (vs a restatement) nor author the directed test that covers it. For each requirement,
@@ -45,7 +45,7 @@ confirm it PASSES against the generated RTL.
 > **Spec-first coverage attribution (ORGANIC #697, BINDING — program-first):** before claiming
 > Pillar-1 PASS, run `programs/spec_coverage_check.py` to make our self-verification as complete as
 > the hidden scorer. Both derive from the SAME spec — where "spec" is the WHOLE input chain
-> (prompt → fact graph → L1-L23):
+> (prompt → fact graph → L1-L27):
 > ```bash
 > python3 programs/spec_coverage_check.py --prompt input/prompt.md \
 >     [--fact-graph input/fact_graph.json] --ldocs generated_docs/ \

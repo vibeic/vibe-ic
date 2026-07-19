@@ -372,3 +372,252 @@ errors on the same file. tool=iverilog; tool_enhancement: defer `$dumpvars` argu
 binding until the module's full scope symbol table is built (elaborate-after-scope-
 complete), matching v11 semantics. The scorer's masked call-scoped dump-strip (v1.3.86)
 is the disclosed plugin-side workaround this fix dissolves. Tracking: vibe-ic#125; fix PR OPEN: vibeic/iverilog#1 (built+verified, ivtest added, 1766/1769 regress).
+
+
+---
+
+## 5. Commercial-Feature Gap Survey & Enhancement Backlog (top-down, 2026-07-18)
+
+> **Complements sections 1–4.** Sections 1–4 are *bottom-up* — 51 limitations found by driving real
+> ICs through the flow. This section is a *top-down* systematic survey of what the leading commercial
+> suites (Synopsys / Cadence / Siemens EDA + Ansys / Keysight / Empyrean / Solido) do that our 12
+> forks cannot yet do, consolidated into one prioritized, executable backlog (~63 items). Overlaps
+> with §3 (e.g. OpenROAD post-route repair, coupling extraction) are intentional cross-confirmation.
+> Per-domain source reports live under `reports/` / scratchpad `eda_survey_*.md`.
+
+> Consolidated from a 6-domain adversarial survey (2024–2026 commercial datasheets + whitepapers,
+> cross-checked with EDA domain knowledge). Covers all **12 forked tools** vs the leading
+> commercial suites (Synopsys / Cadence / Siemens EDA + Ansys / Keysight / Empyrean / Solido).
+> Purpose: an executable, prioritized backlog we work through step by step.
+> Per-domain source reports: `eda_survey_{A_openroad,B_yosys,C_physical_verification,D_ngspice,E_sim_lint,F_verif_formal}.md`.
+
+---
+
+### 0. Executive framing — where we actually stand
+
+**The one-sentence truth: we own the CORE ENGINES; we lack the SIGNOFF + METHODOLOGY LAYER on top.**
+
+Every one of the 12 forks is a real, tapeout-capable engine at its core. The gap vs commercial is
+almost never "can it do the basic job" — it is the accuracy-sign-off layer (parasitics, SI, IR/EM,
+reliability), the variation/statistics layer, the verification-methodology layer (UVM/CRV/coverage/
+formal-apps/LEC), and the scale layer (distributed/GPU/hyperscale). Those are *additive* features we
+can fork in, not architectural rewrites.
+
+**Two structural insights that set the execution order:**
+
+1. **PEX is the keystone.** Field-solver-accurate, coupling-aware parasitic extraction is a P0 in
+   **BOTH** the physical-verification track (klayout/magic) **AND** the OpenROAD track
+   (OpenRCX→OpenSTA), and it is the hard *prerequisite* for: SI/crosstalk timing, dynamic IR-drop,
+   EM signoff, and PERC point-to-point / current-density reliability. **One keystone unblocks ~5
+   downstream P0s across two tools.** Build it first.
+
+2. **"Signoff integrity" is a cluster, not a feature.** Coupling PEX → SI timing → dynamic IR →
+   DvD-aware timing → EM form a single dependency chain. On the verification side,
+   constrained-random → SVA engine → coverage-DB → UVM form another. Sequence within each chain;
+   parallelize across chains.
+
+**Honesty guardrail (binding):** none of these forks is foundry-certified, and we never claim
+silicon-proven. Our real, unusual strengths to PRESERVE and build on: native `svrfdrc` running
+foundry SVRF decks without a Calibre license (4533 rules→0 on a commercial 180nm PDK), dual-engine
+LVS (Netgen + KLayout NetlistComparer), OpenROAD post-route detailed-routing repair, yosys
+hierarchy/LEC-friendliness.
+
+---
+
+### 1. Per-tool map: fork → commercial equivalent → headline gap
+
+| # | Fork | Commercial equivalent(s) | Headline gap (what it can't yet do) |
+|---|------|--------------------------|--------------------------------------|
+| 1 | **OpenROAD** | Cadence Innovus/Tempus/Voltus · Synopsys ICC2/Fusion/PrimeTime/RedHawk · Siemens Aprisa · Ansys RedHawk | No SI/crosstalk timing, no coupling-aware SPEF, static-only IR (no dynamic/DvD), no EM, MCMM stuck at one mode, no CCS/ECSM/LVF, no UPF, no physical-aware signoff-ECO |
+| 2 | **yosys** | Synopsys Design Compiler NXT/Fusion · Cadence Genus · Siemens Oasys-RTL | Simplistic single-value delay (no real NLDM/CCS), no physical-aware synthesis, no DesignWare-grade datapath, no multi-Vth leakage opt, **no ASIC DFT scan insertion**, shallow SDC |
+| 3 | **klayout** | Siemens Calibre nmDRC · Synopsys IC Validator · Cadence Pegasus | No field-solver PEX, no PERC reliability, no multi-patterning decomposition, no eqDRC engine, no smart/timing-aware fill, single-host DRC (no hyperscale cluster) |
+| 4 | **magic** | Calibre xACT/xACT-3D · Synopsys StarRC · Cadence Quantus | Rule/table-based extraction only — no field solver, no coupling-cap signoff SPEF, no golden correlation |
+| 5 | **netgen** | Calibre nmLVS/PERC · IC Validator LVS · Pegasus/PVS | Bus-heavy scaling needs manual normalization; **zero PERC layer** (voltage-aware DRC/ESD/latch-up/P2P) |
+| 6 | **ngspice** | Cadence Spectre X/RF/FMC · Synopsys PrimeSim · Siemens AFS · Keysight ADS · Empyrean ALPS | No native mismatch MC, no high-sigma, weaker convergence, no RF steady-state (PSS/HB/PNoise), no aging/EM, no FastSPICE/GPU, no foundry cert |
+| 7 | **iverilog** | Synopsys VCS · Cadence Xcelium · Siemens Questa | Partial SV, no constrained-random/UVM, no functional coverage DB, no full SVA, single-thread/slow (but: true 4-state + SDF GLS = our asset) |
+| 8 | **verilator** | Synopsys VCS/VC SpyGlass · Cadence Xcelium/HAL · Siemens Questa | Mostly 2-state (no X-prop), ignores SDF/timing, partial CRV, no production UVM, no UCIS coverage merge, no CDC/RDC |
+| 9 | **sby / SymbiYosys** | Cadence JasperGold · Synopsys VC Formal · Siemens Questa PropCheck | Core BMC/induction engine only — none of the formal APPS (CSR, connectivity, SEC, security, UNR-coverage, superlint, FuSa), no ML engine orchestration |
+| 10 | **(eqy — sby family)** | Synopsys Formality · Cadence Conformal | No SVF guidance ingest, weak on retiming/clock-gating → not trustworthy as tapeout RTL↔gate LEC |
+| 11 | **cocotb / cocotb-coverage** | UVM on VCS/Xcelium/Questa + vManager/Verdi Coverage | No verification management, no UCIS coverage merge/rank/trend, weaker constraint solver, no protocol VIP |
+| 12 | **pyuvm** | SV-UVM + VIP libraries (Synopsys/Cadence/Siemens) | RAL "under development", no protocol VIP (AXI/PCIe/DDR/…), slower constraint solver, no PSS |
+
+---
+
+### 2. Executable backlog — prioritized across the whole toolchain
+
+Legend: **[tool]** · forkability (E=easy, M=medium, H=hard, R=research-grade) · one-line "what to build".
+Priority tiers are CROSS-tool (do Tier 0 → Tier 1 → …); within a tier, respect the dependency notes.
+
+#### TIER 0 — Keystone (unblocks the most downstream P0s)
+
+- [ ] **0.1 Field-solver-accurate, coupling-aware PEX** · [magic+klayout→OpenRCX] · R — wrap/port an OSS
+  3D solver (FasterCap/FastCap/FastHenry or new BEM/FEM) behind KLayout/Magic geometry; emit
+  coupling-aware R+C **SPEF** correlated to a field-solver reference. *Unblocks 1.1, 1.3, 1.4, 1.5,
+  2.x-PERC-P2P.* THE single highest-leverage item.
+
+#### TIER 1 — Signoff integrity + core methodology (all P0)
+
+**Digital backend / STA (OpenROAD · depends on 0.1 where noted):**
+- [ ] **1.1 Crosstalk / SI delta-delay + glitch engine in OpenSTA** · [openroad] · H — arrival-window,
+  aggressor-victim overlap, delta-delay/slew, static noise/glitch. *(needs 0.1)*
+- [ ] **1.2 True MCMM (multi-mode) in OpenSTA/flow** · [openroad] · M — lift the "one mode" limit;
+  many mode×corner scenarios analyzed+optimized concurrently (PrimeTime DMSA-style).
+- [ ] **1.3 Dynamic (vectorless+VCD) IR-drop + DvD-aware timing** · [openroad] · H — transient PDNSim
+  with decap/package-RLC, per-instance IR maps, droop→delay back-annotation into OpenSTA. *(needs 0.1)*
+- [ ] **1.4 Signal + power EM signoff** · [openroad] · M–H — current-density EM on straps+signal wires
+  vs PDK EM limits (Black/Blech); per-net EM report. *(needs 0.1)* — real even at 180nm.
+- [ ] **1.5 Physical-aware signoff-ECO loop (size/buffer/VT + spare-cell/metal-only)** · [openroad] · M
+  — post-route STA-driven fix-ECO, incremental legalize+reroute-affected-only. *Leverages our
+  post-route repair strength.*
+
+**Physical verification (klayout/magic/netgen):**
+- [ ] **1.6 PERC reliability layer — voltage-aware DRC + ESD/discharge-path + missing-clamp** ·
+  [klayout+netgen] · H/R — voltage propagation over extracted netlist + geometry-aware spacing keyed
+  to net voltage; programmable ERC framework (backbone for latch-up/P2P).
+- [ ] **1.7 Hyperscale / cluster DRC scheduler** · [klayout] · H — extend spatial-tiling into a
+  distributed multi-host/cloud scheduler with result-merge + hierarchical dedup (near-linear scaling).
+
+**Equivalence + formal sign-off (sby/eqy):**
+- [ ] **1.8 Harden `eqy` → Formality/Conformal-class LEC** · [sby/eqy] · H — SVF-equivalent synthesis
+  guidance ingest from yosys, key-point matching, clock-gating/retiming handling → trustworthy
+  RTL↔gate tapeout sign-off.
+- [ ] **1.9 Sequential Equivalence Checking (SEC) wrapper** · [sby+eqy] · H — multi-cycle equivalence
+  across retiming/pipeline/FSM-recode with auto mapping + init handling.
+- [ ] **1.10 Formal-apps layer on sby (CSR + connectivity + UNR-coverage)** · [sby] · M — ingest
+  IP-XACT/SystemRDL + connectivity tables → auto-emit SVA+sby; unreachability/dead-code sign-off.
+
+**Simulation + verification methodology (verilator/iverilog + pyuvm/cocotb):**
+- [ ] **1.11 Finish Verilator constrained-random (full `dist`/`solve-before`/soft/`randc`/`foreach`)** ·
+  [verilator] · M — the biggest lever to unlock UVM-style TBs.
+- [ ] **1.12 Real SVA temporal engine (`sequence`/`property`/`##`/`throughout`/`$past(n)`)** ·
+  [verilator+iverilog shared front-end] · H — no OSS sim has this; also seeds ABV + CDC.
+- [ ] **1.13 UCIS-style unified coverage DB + cross-run merge + ranking + vPlan** ·
+  [verilator+cocotb-coverage] · M — prerequisite for any coverage-closure sign-off claim.
+- [ ] **1.14 CDC static-analysis engine** · [verilator front-end] · M–H — domain inference,
+  synchronizer recognition, missing-sync/glitch/reconvergence rules, waiver DB (SpyGlass/Questa CDC).
+- [ ] **1.15 pyuvm RAL (register abstraction layer)** · [pyuvm] · M — predictor/adapter, mirrored/
+  desired values, prebuilt reg_bit_bash/reg_reset/reg_access sequences → SV-UVM parity.
+- [ ] **1.16 Open protocol VIP suite (start AXI + APB + simple serial)** · [pyuvm/cocotb] · H —
+  reusable agents + protocol checkers + coverage models; biggest day-to-day usability gap.
+- [ ] **1.17 UVM base-class bring-up on Verilator** · [verilator] · H — ride 1.11+1.12+classes to run
+  real (not toy) UVM envs (track Antmicro/CHIPS-Alliance/PlanV).
+
+**Synthesis QoR + testability (yosys):**
+- [ ] **1.18 Real NLDM-interpolated + SDC-aware timing feedback into ABC mapping** · [yosys] · M —
+  proper slew×load LUT engine (reuse OpenSTA) + broader SDC (generated clks, IO delays, false/MCP).
+  Biggest single QoR lever.
+- [ ] **1.19 DesignWare-style timing-driven datapath library** · [yosys] · M–H — adder-topology +
+  Booth/array-mult selection by slack, cross-operator carry-save merge (extend booth/alumacc/share).
+- [ ] **1.20 Multi-Vth leakage-recovery pass** · [yosys] · M — swap non-critical cells to higher-Vth;
+  immediate power win on sky130/gf180/180nm multi-Vt kits.
+- [ ] **1.21 ASIC scan-chain insertion + stitching flow** · [yosys] · M — scan-FF replacement, chain
+  ordering/wiring, test-DRC; the minimum DFT that makes real tapeout testable.
+
+**Analog signoff (ngspice — the analog-track P0 cluster):**
+- [ ] **1.22 Native mismatch + statistical Monte-Carlo layer** · [ngspice] · M — first-class local/
+  global process+mismatch params + distributed MC driver (offset/PSRR/yield). #1 daily analog need.
+- [ ] **1.23 ML-accelerated high-sigma / worst-case verifier** · [ngspice] · M — surrogate-model +
+  importance-sampling wrapper to reach 4–6σ in hundreds not billions of sims (Spectre FMC/Solido gap).
+- [ ] **1.24 Hardened convergence (pseudo-transient + multi-homotopy DC auto-fallback)** · [ngspice] · M
+  — dptran/ramp/source+gmin fallback for stiff bandgap/high-gain-opamp bias points.
+- [ ] **1.25 Parallel PVT corner-farm orchestrator** · [ngspice] · E–M — TT/SS/FF×temp×voltage fanned
+  across cores/hosts with spec aggregation (replace bespoke shell loops).
+
+#### TIER 2 — Quality / coverage (P1)
+
+**OpenROAD:** 
+- [ ] 2.1 AOCV table-based derating in OpenSTA · M
+- [ ] 2.2 Path-Based Analysis (PBA) to recover GBA pessimism · M
+- [ ] 2.3 Concurrent-clock-and-data / useful-skew (CCOpt-lite) · H
+- [ ] 2.4 UPF-lite multi-voltage (domains/level-shifter/isolation/retention/switch) · H
+- [ ] 2.5 LEF57/58 rule-aware detailed routing (EOL, cut-spacing, via-ladder, PRL, NDR) · M–H
+- [ ] 2.6 Concurrent place-opt (place+size+restructure in one solve) · H
+- [ ] 2.7 Multi-bit flop merge/split banking · M
+
+**yosys:**
+- [ ] 2.8 Physically-aware synthesis loop via OpenROAD placement feedback · R (structural, stage it)
+- [ ] 2.9 Multi-output/complex-cell datapath mapping (use full-adder cells ABC ignores) · M
+- [ ] 2.10 Constraint/loop-aware register retiming (LEC-accountable) · M
+- [ ] 2.11 Activity-driven multi-stage clock gating (SAIF/VCD) · E–M
+- [ ] 2.12 Native ECO / patch-synthesis (metal-only / spare-cell) · M–H
+
+**Physical verification:**
+- [ ] 2.13 Multi-patterning decomposition + odd-cycle checker (2/3-color, same-mask spacing) · H
+- [ ] 2.14 eqDRC-style equation engine in `svrfdrc` · H
+- [ ] 2.15 Automatic LVS normalization for bus-heavy designs (promote bulk-normalize to auto pre-pass) · M
+- [ ] 2.16 Smart / timing-aware metal fill (density+color+ECO-aware) · M
+- [ ] 2.17 Coupling-cap SPEF signoff + netlist reduction in Magic (bridges 0.1 → STA/SI) · H
+- [ ] 2.18 Incremental / recon DRC + root-cause color maps · M
+- [ ] 2.19 PERC P2P resistance / current-density (needs 0.1) · H
+- [ ] 2.20 Context/voltage-aware latch-up checker (rides 1.6) · H
+
+**ngspice (analog P1):**
+- [ ] 2.21 PSS / shooting-Newton steady-state engine (foundation for PAC/PNoise) · M
+- [ ] 2.22 Native S-parameter (.SP) analysis · E–M
+- [ ] 2.23 Harmonic-balance analysis (Xyce `.HB` prior art) · M–H
+- [ ] 2.24 MOSRA-style aging (NBTI/PBTI + HCI) two-phase stress · M
+- [ ] 2.25 PNoise / phase-noise (needs 2.21) · H
+- [ ] 2.26 Global electrothermal self-heating network solver · M–H
+- [ ] 2.27 DSPF/SPEF back-annotation + capacity for post-layout re-sim · M
+- [ ] 2.28 Certified modern-model pack via OSDI/OpenVAF + golden-diff harness · M
+
+**Simulation / verification (P1):**
+- [ ] 2.29 True 4-state / X-propagation mode in Verilator · H
+- [ ] 2.30 Modernize iverilog gate-level SDF GLS (all timing checks, min/typ/max, SDF corners, speed) · M–H
+- [ ] 2.31 RDC (reset-domain-crossing) static app (extends 1.14) · H
+- [ ] 2.32 FSM + branch + condition code coverage in Verilator · M
+- [ ] 2.33 Multi-core simulation kernel maturation (Verilator `--threads` partitioning) · M
+- [ ] 2.34 Root-cause debug assist (backward value-causality + protocol decode) · H
+- [ ] 2.35 Multi-engine portfolio + lightweight ML scheduler for sby · H
+- [ ] 2.36 Constrained-random solver upgrade for cocotb-coverage (Z3/OR-Tools) · M–H
+- [ ] 2.37 X-propagation formal app on sby · M
+- [ ] 2.38 Superlint-style fused lint+formal on sby · M
+- [ ] 2.39 Assertion-IP library (SVA protocol checkers) shared sby+cocotb · M
+- [ ] 2.40 Connectivity checking formal app · E–M
+
+#### TIER 3 — Advanced-node / productivity (P2, deferred for a 180nm-class flow)
+
+- [ ] 3.1 CCS/ECSM current-source delay+noise models [openroad/yosys] · H
+- [ ] 3.2 POCV/LVF non-Gaussian statistical timing [openroad] · H
+- [ ] 3.3 Advanced-node multi-patterning color-aware routing [openroad] · R
+- [ ] 3.4 RL full-flow optimizer (Cerebrus/DSO.ai-class; our AI layer can drive) [openroad] · M
+- [ ] 3.5 ML macro/floorplan placement [openroad] · M
+- [ ] 3.6 Hierarchical >100M-instance capacity / ILM / distributed [openroad] · H
+- [ ] 3.7 Package/board-aware PI (RLC, bumps, C4) [openroad] · H
+- [ ] 3.8 Scan compression + test-point insertion [yosys] · H
+- [ ] 3.9 MCMM concurrent optimization in synthesis [yosys] · H
+- [ ] 3.10 Pattern-matching DRC hotspot library [klayout] · M
+- [ ] 3.11 In-design real-time DRC + auto-repair [klayout] · H
+- [ ] 3.12 LFD / litho-hotspot + CMP/critical-area yield [klayout] · R
+- [ ] 3.13 FastSPICE matrix partitioning + GPU transient [ngspice] · R
+- [ ] 3.14 Envelope-following RF analysis [ngspice] · H
+- [ ] 3.15 Verilog-AMS / SV-AMS + RNM mixed-signal kernel [ngspice/verilator] · H
+- [ ] 3.16 UPF power-aware simulation [verilator] · R
+- [ ] 3.17 Save/restore/checkpoint [verilator/iverilog] · M
+- [ ] 3.18 Datapath validation (C/TLM↔RTL, HECTOR-class) [sby] · R
+- [ ] 3.19 Security Path Verification app [sby] · H
+- [ ] 3.20 Functional-safety fault injection (FuSa/FMEDA) [sby] · H
+- [ ] 3.21 Portable Stimulus (PSS 3.0) [cocotb/pyuvm] · H
+- [ ] 3.22 Foundry certification / vendor-qualified signoff [all] · R (organizational)
+
+---
+
+### 3. Dependency graph (the "do first" spine)
+
+```
+0.1 field-solver PEX ──┬─► 1.1 SI timing ──► (accurate signoff STA)
+                       ├─► 1.3 dynamic IR ──► DvD-aware timing
+                       ├─► 1.4 EM signoff
+                       ├─► 2.17 coupling SPEF ─► SI closure
+                       └─► 2.19 PERC P2P/current-density
+1.6 PERC framework ────┴─► 2.20 latch-up
+1.11 CRV ─► 1.12 SVA ─► 1.13 coverage-DB ─► 1.17 UVM ; 1.12 ─► 1.14 CDC ─► 2.31 RDC
+1.8 eqy-LEC ─► 1.9 SEC
+1.18 timing-mapping ─► 1.19 datapath ; 2.8 physical-synth (needs OpenROAD placement loop)
+2.21 PSS ─► 2.23 HB / 2.25 PNoise
+```
+
+### 4. Counts
+- Total consolidated enhancement items: **~63** (Tier 0: 1 · Tier 1 P0: 25 · Tier 2 P1: 40 → merged to 24 unique · Tier 3 P2: 22).
+- Tools with a *headline P0 hole*: OpenROAD (PEX/SI/IR/EM), klayout+magic+netgen (PEX/PERC), yosys (DFT/datapath/timing), ngspice (mismatch-MC/convergence), verilator (CRV/SVA/CDC), sby/eqy (LEC/SEC/apps), pyuvm (RAL/VIP).
+- Deferred honestly for a 180nm-class flow: advanced-node items (multi-patterning coloring, POCV/LVF, CCS/ECSM, GPU FastSPICE) — real, but not on the 180nm critical path.

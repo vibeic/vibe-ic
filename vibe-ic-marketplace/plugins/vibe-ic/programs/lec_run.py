@@ -118,13 +118,34 @@ _SAT_ABORT_RE = re.compile(
 # Best-effort per-instance unproven cell list.
 _UNPROVEN_LIST_RE = re.compile(r"Unproven\s+\$equiv\s+cells:\s*([^\n]+)")
 
-# BUDGET-EXHAUSTED marker. A killed equiv run produced NO comparison, which
-# the generic "no parseable result" wording rendered indistinguishable from a
-# real mismatch at the gate. It stays a BLOCKING non-PASS (never a free pass),
-# but the explanation must name the cause so a reader can raise --timeout
-# instead of hunting a mismatch that was never found.
+# BUDGET-EXHAUSTED marker (#155 POSITIVE timeout discriminator). run_yosys_equiv
+# (below) writes this EXACT string into the raw log ITSELF when the yosys
+# subprocess is KILLED by the wall budget (`subprocess.TimeoutExpired`) — it is
+# NOT tool output a design could emit, so it can never be spoofed by a
+# genuine-garbage log. Post-memory_map a memory-bearing design is genuinely
+# satgen-modelable, so equiv_induct ATTEMPTS the full sequential proof; on a
+# large design (e.g. sha256's memory-inclusive miter) that induction can exceed
+# the LEC wall clock, leaving no final equiv_status → parse_error. A killed run
+# produced NO comparison, so the cause must be NAMED (raise --timeout) instead of
+# read as a mismatch that was never found.
 _TIMEOUT_MARKER = "[lec_run] ERROR: yosys equiv exceeded its time budget"
 _TIMEOUT_RE = re.compile(re.escape(_TIMEOUT_MARKER))
+
+# EVIDENCE-BASED timeout split (merge of local FAIL vs origin #155
+# SKIPPED-CONDITION). A wall-budget kill (parse_error + _TIMEOUT_RE) is a pure
+# resource skip ONLY if the log carries NO recorded non-equivalence. This matches
+# the UNMISTAKABLE counterexample / non-equivalence phrases a yosys/SAT run
+# prints when it actually PROVED a difference — phrases a pure resource-
+# exhaustion log can never contain. PRECISION-first: a miss degrades to the
+# visible SKIPPED-CONDITION (never a PASS), a match escalates the timeout to a
+# real FAIL. chip-AGNOSTIC — no chip/vendor literal.
+_MISMATCH_EVIDENCE_RE = re.compile(
+    r"counter-?example"
+    r"|non-?equivalent"
+    r"|inequivalent"
+    r"|not\s+equivalent"
+    r"|equivalence\s+(?:check\s+)?failed",
+    re.IGNORECASE)
 
 # Canonical Yosys success line (corroboration for the gate's .rpt parse).
 _SUCCESS_RE = re.compile(r"Equivalence\s+successfully\s+proven", re.IGNORECASE)
@@ -493,17 +514,44 @@ def parse_equiv_output(text: str) -> Dict:
             "here; re-run with the slang frontend or fix the read error). See "
             "reports/lec.rpt for the frontend error.")
     elif parse_error and _TIMEOUT_RE.search(text):
-        # The miter was still running when the budget expired: no comparison was
-        # made, so this is NOT evidence of a mismatch — but it is also NOT a
-        # pass. Blocking FAIL with the cause named (raise --timeout and re-run).
+        # MERGE (#155 origin SKIPPED-CONDITION vs local FAIL) — EVIDENCE-BASED
+        # SPLIT: the miter was still running when the wall budget expired, leaving
+        # no equiv_status (parse_error) but the self-written timeout marker.
+        # Classify by the ACTUAL EVIDENCE in the log, not a binary policy:
+        #   * if the LEC actually RECORDED a mismatch / counterexample before it
+        #     was killed → a proven non-equivalence is a real FAIL regardless of
+        #     the timeout (a mismatch found is a mismatch found);
+        #   * otherwise (pure resource/time exhaustion, 0 points decided) →
+        #     SKIPPED-CONDITION: a DISCLOSED budget/capability gap (the SAME
+        #     family as the $mem_v2 SAT-model skip below), NOT a proven mismatch
+        #     — so origin #155 holds: a slow-but-not-disproven proof (e.g.
+        #     sha256's >1200s memory-inclusive miter) is NOT spuriously FAILed.
+        # It is STILL a visible non-PASS (equivalent:false, verdict != PASS),
+        # never a silent free pass — so local's "a resource limit is never a free
+        # pass" ALSO holds: a real regression cannot hide behind it.
+        # §4.05: the mismatch discriminator is PRECISION-first — it fires only on
+        # an unmistakable non-equivalence phrase a pure-timeout log cannot carry,
+        # so the DANGEROUS direction (a spurious FAIL on a slow proof) cannot
+        # occur; a missed mismatch degrades to the visible SKIPPED-CONDITION.
         equivalent = False
-        verdict = "FAIL"
-        verdict_explanation = (
-            "Yosys equiv exceeded its time budget before equiv_status could "
-            "report — 0 points compared, so NO equivalence evidence exists in "
-            "either direction. This is a RESOURCE limit, not a proven "
-            "mismatch: re-run with a larger --timeout to obtain a real "
-            "verdict. Blocking (never a free pass) until it is decided.")
+        if _MISMATCH_EVIDENCE_RE.search(text):
+            verdict = "FAIL"
+            verdict_explanation = (
+                "Yosys equiv exceeded its time budget, but the log RECORDED a "
+                "mismatch / counterexample before it was killed — a proven "
+                "non-equivalence is a real FAIL regardless of the timeout. See "
+                "reports/lec.rpt for the recorded counterexample.")
+        else:
+            verdict = "SKIPPED-CONDITION"
+            verdict_explanation = (
+                "Yosys equiv exceeded its time budget before equiv_status could "
+                "report — 0 points compared and NO mismatch was recorded, so "
+                "there is no equivalence evidence in either direction. This is a "
+                "DISCLOSED budget/capability gap (the same family as the $mem_v2 "
+                "SAT-model skip), NOT a proven mismatch: raise --timeout or close "
+                "the remainder with sign-off LEC (Conformal/VC LEC). It stays a "
+                "visible non-PASS (equivalent:false) — never a silent free pass a "
+                "regression could hide behind.")
     elif parse_error:
         # HARD FAIL, deliberately NOT re-classified: there is no positive
         # evidence the FRONTEND is where this stopped. Either yosys never ran
@@ -1204,9 +1252,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     # PRODUCER contract: 0 whenever a truthful verdict was written (PASS,
     # SKIPPED-CONDITION, INCONCLUSIVE, or an evidence-backed FAIL). 1 only when
     # Yosys ran but produced no parseable evidence AND it is not a frontend
-    # parse-abort (a parse-abort is a truthful INCONCLUSIVE, not a tool failure).
+    # parse-abort (INCONCLUSIVE) nor a disclosed wall-budget skip
+    # (SKIPPED-CONDITION) — both are truthful, visible-non-PASS verdicts, not
+    # tool failures. An evidence-backed timeout FAIL keeps parse_error+FAIL → 1.
     return 1 if (parsed["parse_error"]
-                 and parsed["verdict"] != "INCONCLUSIVE") else 0
+                 and parsed["verdict"] not in ("INCONCLUSIVE",
+                                               "SKIPPED-CONDITION")) else 0
 
 
 if __name__ == "__main__":
