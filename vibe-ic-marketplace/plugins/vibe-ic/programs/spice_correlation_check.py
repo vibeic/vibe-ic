@@ -49,6 +49,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional, Tuple
 import _path_layout as _pl
+import _commercial_pdk as _cpdk  # config-driven commercial-PDK id (NDA: no SKU in source)
 
 
 ANALOG_MODULE_PATTERNS = re.compile(
@@ -436,7 +437,6 @@ def check_analog_coverage(
 # The whole driver self-skips (returns None) when the bridge shim is absent
 # (design without the bridge shim) or ngspice is unreachable — it NEVER fabricates numbers.
 
-_commercial_pdk_SHIM_NAME = "commercial_pdk_ngspice_shim.lib"
 _DEFAULT_CONTAINER = "vibeic-eda"
 # Whole-word device-model rename: the LVS-extracted netlist uses generic
 # nmos/pmos (LVS device names); the ngspice bridge shim binds W/L-binned
@@ -445,17 +445,22 @@ _MODEL_MAP = {"nmos": "nch_tn", "pmos": "pch_tn"}
 
 
 def _find_bridge_shim(project: Path) -> Optional[Path]:
-    """Locate the commercial-PDK ngspice bridge shim under the design input PDK."""
+    """Locate the commercial-PDK ngspice bridge shim under the design input PDK.
+    The shim filename comes from the private config; when unconfigured (public
+    install) this returns None and the whole SPICE driver self-skips."""
+    shim_name = _cpdk.ngspice_shim_name()
+    if not shim_name:
+        return None
     for rel in (
-        "input/pdk/bridge/" + _commercial_pdk_SHIM_NAME,
-        "pdk/bridge/" + _commercial_pdk_SHIM_NAME,
+        "input/pdk/bridge/" + shim_name,
+        "pdk/bridge/" + shim_name,
     ):
         p = project / rel
         if p.is_file():
             return p
     # `input/pdk` is often a symlink → root rglob at pdk (walk root is followed).
     root = project / "input" / "pdk"
-    hits = sorted(root.rglob(_commercial_pdk_SHIM_NAME)) if root.is_dir() else []
+    hits = sorted(root.rglob(shim_name)) if root.is_dir() else []
     return hits[0] if hits else None
 
 
@@ -487,12 +492,17 @@ def _find_hspice_dir(project: Path) -> Optional[Path]:
     NOTE: `input/pdk` is often a symlink; `Path.rglob` (pre-3.13) does NOT
     traverse intermediate directory symlinks, so we root the search at
     `input/pdk` (the symlink itself, followed as the walk root) — not `input`."""
+    # HSPICE `.lib` glob patterns come from the private config; unconfigured
+    # (public install) -> no patterns -> nothing found -> the driver self-skips.
+    lib_globs = _cpdk.hspice_lib_globs()
+    if not lib_globs:
+        return None
     known = project / "input" / "pdk" / "spice" / "HSPICE"
-    if (known / "commercial_pdk-S1.9cS.lib").is_file() or list(known.glob("commercial_pdk-*.lib")):
+    if any(list(known.glob(g)) for g in lib_globs):
         return known
     pdk = project / "input" / "pdk"
     roots = [pdk, project / "pdk", project / "input"]
-    for pat in ("commercial_pdk-S1.9c*.lib", "commercial_pdk-*.lib"):
+    for pat in lib_globs:
         for root in roots:
             if not root.is_dir():
                 continue

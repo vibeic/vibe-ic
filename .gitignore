@@ -33,6 +33,13 @@ yarn-error.log*
 .env
 .env.local
 
+# Private commercial-PDK config (NDA). Resolved at runtime by
+# plugins/vibe-ic/programs/_commercial_pdk.py from $VIBEIC_PRIVATE_CONFIG or
+# ~/.config/vibeic/commercial_pdk.json (both OUTSIDE the repo by default). This
+# defensively ignores any repo-local copy so the private SKU never gets tracked.
+**/commercial_pdk.json
+.config/vibeic/
+
 # EDA tool outputs (large, regeneratable)
 *.gds
 *.def
