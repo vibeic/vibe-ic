@@ -12,6 +12,46 @@
 `0 hallucinations` across all 87 specs, both runs, is the load-bearing number: the deterministic
 extractor **never fabricates** a fact the spec does not state.
 
+## ⚠️ What the 87 inputs actually are — source-tier qualification
+
+The parity number above is uniform. **The inputs behind it are not.** Only 23 of the 87 protocols
+were measured against the real specification from its issuing body. The rest were measured against
+an encyclopedia article, a vendor document, or an authored text reconstruction.
+
+<!-- source-tier-counts -->
+| Source tier | Count | What the input document is |
+|---|---|---|
+| **`specification`** — 23 | 23 | The protocol spec as published by its issuing body (ARM AMBA, Bosch CAN, JEDEC JESD79-3C, IEEE 802.3-2005, NXP UM10204, MIPI I3C/DSI, PCI-SIG PCIe 1.0, USB 2.0, Bluetooth 5.2, TCG TPM 2.0, Wishbone B4, …). |
+| **`encyclopedia`** — 12 | 12 | A **Wikipedia** article print/export, not a spec: `arinc429, cxl, ethernet_800g, hbm3, hdlc, lpddr5, milstd1553, nvlink, pcie_gen5, spdif, ufs, usb4`. (`ufs` concatenates 3 articles.) |
+| **`vendor_document`** — 13 | 13 | A vendor app note / datasheet / IP manual / brochure / slide deck — **not the protocol spec**: `canfd, dali, ethercat, hdmi, jtag, mipi, nfc, onewire, rs485, soundwire, spi, uart, ucie`. |
+| **`reconstructed_text`** — 39 | 39 | An authored plain-text technical reference written **for this benchmark**, summarising a named standard — the 40 "reconstructed `*_spec.txt`" of the headline, minus `ufs` (which is encyclopedic). |
+| **`unknown`** — 0 | 0 | None. Every protocol's tier was substantiated. |
+
+**A parity score measured against an encyclopedia article or a vendor application note is NOT
+evidence of parity against the real specification.** A Wikipedia article carries none of the
+normative bit-level, timing, or state-machine detail a spec carries, so there is far less for the
+extractor to be right or wrong about; a vendor app note describes a *product*, not the protocol.
+For the 52 non-`specification` protocols the number measures extraction fidelity **against that
+document**, and nothing more.
+
+This is a **known, deliberate methodology, not a hidden defect** — `ufs_spec.txt`'s own header names
+the convention ("the same honesty posture as the existing Tier-3 benchmarks (vendor briefs /
+Wikipedia)"), and the headline above already discloses the 49-PDF / 40-reconstructed split. What was
+missing was the per-protocol tier at the point where the score is read. It is now recorded as data in
+[`source_tier.json`](source_tier.json) — with the evidence that substantiated each tier (PDF `/Title`
+and `/Producer` metadata, first-page text, in-file provenance headers) — because the input documents
+are subject to removal for licensing reasons and **the tier must survive the document**.
+
+Filenames are not evidence and were not trusted: `ARINC429_Spec.pdf` is `/Title='ARINC 429 -
+Wikipedia'`, `HDMI_Spec.pdf` is a TI TFP410 transmitter datasheet, `CAN_FD_Spec.pdf` is the Bosch
+M_CAN *controller IP user's manual*, and `SoundWire_Spec.pdf` is a 2015 MIPI webinar deck. Three
+entries in `specification` also carry a scope caveat in their `note`: `sata` is the AHCI
+host-controller spec (not the SATA wire protocol), `sdmmc` is the *Simplified* public subset, and
+`ethernet` is Section Two of IEEE 802.3-2005 only.
+
+Verified by `programs/phase1_parity_source_tier_check.py`, which fails if any protocol goes untiered
+or if the counts in this table drift from the data.
+
 ## What the 31 baseline gaps actually were (§3.9 attribution + §4.1 oracle-defect proof)
 Triage found the gaps were **dominated by GOLD DEFECTS, not program bugs** — so per §4.1 (never
 converge a correct program to a flawed oracle) the program was NOT bent to match them. The two

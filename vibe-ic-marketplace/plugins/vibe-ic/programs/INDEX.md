@@ -597,6 +597,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `phase1_loop_stop_condition_check` | any | — | deterministic STOP gate for the |
 | `phase1_no_waivers_used_check` | any | Wave 23 | gate (Wave 23, v0.119.55). |
 | `phase1_one_shot_runner` | any | — | Phase 1 unified dispatcher. |
+| `phase1_parity_source_tier_check` | any | — | Assert every parity protocol has a source-tier and the RESULT md matches. |
 | `phase1_port_extract` | any | — | deterministic PORT / PARAM / RESET extraction for the |
 | `phase1_post_process` | any | v0.1.51 | phase1 output post-processor. |
 | `phase1_protocol_spec_extract` | any | v0.1.51 | Phase 1 protocol-spec extractor (L14-L18). |
@@ -1529,6 +1530,7 @@ _(no programs in this group)_
 - `phase1_loop_stop_condition_check` — deterministic STOP gate for the
 - `phase1_no_waivers_used_check` — gate (Wave 23, v0.119.55).  _[Wave 23]_
 - `phase1_one_shot_runner` — Phase 1 unified dispatcher.
+- `phase1_parity_source_tier_check` — Assert every parity protocol has a source-tier and the RESULT md matches.
 - `phase1_port_extract` — deterministic PORT / PARAM / RESET extraction for the
 - `phase1_post_process` — phase1 output post-processor.  _[v0.1.51]_
 - `phase1_protocol_spec_extract` — Phase 1 protocol-spec extractor (L14-L18).  _[v0.1.51]_
