@@ -70,8 +70,9 @@ def nda_tokens() -> List[str]:
 
 def nda_regex_family() -> List[str]:
     """The process / foundry-product codename family used by the prose
-    detectors' `pdk_codename` rule (parity with the historical
-    `\\bcommercial_pdk(pm180su)?\\b|\\bcommercial_pdk\\b` pattern)."""
+    detectors' `pdk_codename` rule (word-bounded, case-insensitive at match
+    time). Returns the decoded tokens; the historical hand-written pattern was
+    the equivalent alternation of these same tokens."""
     return [_dec("sku_full"), _dec("foundry_product"), _dec("sku_prefix")]
 
 
