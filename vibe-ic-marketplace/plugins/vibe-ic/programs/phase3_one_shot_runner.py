@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import _path_layout as _pl
 import _watchdog as _wd  # v1.3.47 — plugin-wide progress-stall supervision
+import _docker_watchdog as _dwd  # shared in-container CPU probe (tree-aware)
 import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
 import lvs_verdict_tokens as _lvt  # #524 — shared netgen terminal-verdict tokens
 import lvs_netgen_setup_emit as _lvs_setup  # GAP-E2E-9 — power-net globalisation
@@ -442,43 +443,19 @@ def _container_cpu_seconds(container: str, marker: Optional[str],
     tool's total climbs monotonically, so a rising sum is unambiguous forward
     progress even when the tool emits no output. Falls back to the portable
     `cputime` (``[[DD-]HH:]MM:SS``) format when `cputimes` is unsupported."""
-    if not marker:
-        return None
-    # NB: use the RAW exec (never the supervised path) — this is a short bounded
-    # probe called BY the supervisor; routing it back through run_supervised
-    # would be heavyweight and self-referential.
-    rc, out, _ = _docker_exec_raw(container,
-                                  "ps -eo cputimes=,args= 2>/dev/null",
-                                  timeout=timeout)
-    if rc == 0 and out.strip():
-        total, found = 0.0, False
-        for line in out.splitlines():
-            parts = line.strip().split(None, 1)
-            if len(parts) < 2 or marker not in parts[1]:
-                continue
-            try:
-                total += float(parts[0])
-                found = True
-            except ValueError:
-                continue
-        if found:
-            return total
-    # Portable fallback: cputime = [[DD-]HH:]MM:SS
-    rc, out, _ = _docker_exec_raw(container,
-                                  "ps -eo cputime=,args= 2>/dev/null",
-                                  timeout=timeout)
-    if rc != 0 or not out.strip():
-        return None
-    total, found = 0.0, False
-    for line in out.splitlines():
-        parts = line.strip().split(None, 1)
-        if len(parts) < 2 or marker not in parts[1]:
-            continue
-        secs = _parse_cputime_hms(parts[0])
-        if secs is not None:
-            total += secs
-            found = True
-    return total if found else None
+    # DELEGATE to the shared `_docker_watchdog.container_cpu_seconds` —
+    # single source of truth for the probe, incl. the process-TREE closure:
+    # yosys runs its whole ABC pass in a child `yosys-abc` whose argv does
+    # NOT carry the marker, so the argv-only sum this function used to
+    # duplicate reported zero progress through ABC's long quiet phase and
+    # the stall watchdog killed a HEALTHY 1.8M-cell synth — twice (the
+    # shared copy was fixed first; this private duplicate kept the bug
+    # alive — the recurring reimplement-vs-share failure mode).
+    def _raw(_c: str, cmd: str, timeout: int = 15) -> Tuple[int, str, str]:
+        return _docker_exec_raw(_c, cmd, timeout)
+
+    return _dwd.container_cpu_seconds(container, marker, _raw,
+                                      timeout=timeout)
 
 
 def _parse_cputime_hms(tok: str) -> Optional[float]:
