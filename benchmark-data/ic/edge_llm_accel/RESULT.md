@@ -1,8 +1,7 @@
 # RESULT — edge_llm_accel (Kimi-K3-scale edge-LLM INT4 GEMM accelerator, NanGate45)
 
-> STATUS: flow closed and verified; the educational-DRC final emission (corrected
-> artwork scale) + an 8-seed V2 soak are in flight and will land as a follow-up
-> results commit. Everything below is measured, not projected.
+> STATUS: COMPLETE — flow closed, verified, educational-DRC final emission and
+> the 8-seed V2 soak both landed. Everything below is measured.
 
 ## 1. Headline
 
@@ -25,11 +24,22 @@
   abstract per FakeRAM). LVS: honest ENV_UNAVAILABLE (Nangate45 ships no
   Magic/netgen tech — fictional process; see §7).
 - **Functional verification**: V1 systolic-core golden — 108 tiles / 56,760
-  every-cycle comparisons / 0 mismatches; V2 full-scale end-to-end — 20 random
-  64×64 tiles bit-true 64/64 + dequant-saturation directed + protocol +
-  back-to-back-no-reset suite (residue-aware golden bit-true). Caught real bug
-  F1 pre-silicon (§4.3); residual F2 declared with usage contract
-  (`plugin_output/declaration.json`).
+  every-cycle comparisons / 0 mismatches; V2 full-scale end-to-end — **180
+  random 64×64 tiles bit-true 64/64 across 9 RNG seeds** (20 original + 8-seed
+  parallel soak, `verify/soak/`) + dequant-saturation directed + protocol +
+  back-to-back-no-reset suites (residue-aware golden bit-true, 8/8 seeds ALL
+  TESTS PASS). Caught real bug F1 pre-silicon (§4.3); residual F2 declared
+  with usage contract (`plugin_output/declaration.json`).
+- **Educational KLayout DRC (FreePDK45.lydrc) final emission** on the
+  artwork-embedded, correctly-scaled GDS (4.68 GB): **23,082 items, fully
+  attributed** — WELL.4 = 15,814 (the deck's 200 nm well-separation
+  interpretation vs the Nangate library's standard abutting-row well
+  convention; sampled items sit uniformly on row-boundary bands — an
+  artwork+deck pair characteristic, not a design defect), METALx_ANTENNA =
+  7,247 (the deck's simplified flat antenna model; OpenROAD's hierarchical
+  antenna check — the authoritative one — reports 0), ACTIVE.4 = 20 (exactly
+  the 20 abstract FakeRAM macros — artwork voids under LEF-only macros),
+  METAL1.5 = 1. Router DRC (authoritative, tech-LEF rules) remains **0**.
 - **Wall-clock**: campaign start (docs authoring) 2026-07-18 20:30 → flow closed
   ~14 h later INCLUDING all convergence + eleven chip-AGNOSTIC plugin fixes
   distilled en route (vs Kimi K3's 48 h). Measured stage walls in §5.
@@ -167,13 +177,14 @@ Expert Agent convergence — different kind of autonomy, both open-source EDA on
 - **`l_doc_structured_field_count_check`** — cleared: L5 explicit-N/A
   declaration + L7 typed test cases TC1–TC6 + test-mode table added to the
   input docs; gate PASS (14/14 L docs) after phase-1 regen.
-- **Educational-deck DRC final number** — in flight: the corrected-scale
-  artwork-embedded GDS is being re-emitted (dbu-rescale fix `9e0fa7fb2`) and
-  the FreePDK45 deck re-run; lands in the follow-up results commit. Router
-  DRC (the authoritative in-loop geometry check against the platform tech
-  LEF) is 0; every prior educational-deck wall was §4.1-proven to be a
+- **Educational-deck DRC final number** — landed (headline §1): 23,082 items,
+  every category attributed (well-abutment interpretation / simplified flat
+  antenna model / abstract-macro voids / 1 metal item). Router DRC (the
+  authoritative in-loop geometry check against the platform tech LEF) is 0;
+  every prior educational-deck wall was §4.1-proven to be a
   streamout/numbering artefact (trajectory §4.9–4.10), each with a
-  chip-AGNOSTIC fix landed.
+  chip-AGNOSTIC fix landed (`-rd` conventions, layer map, VIA purposes,
+  flat-multi-top substitution, dbu rescale).
 - **LVS** — ENV_UNAVAILABLE waiver (auto-emitted in `waivers.json`,
   review_required): Nangate45 ships no Magic/netgen tech and no LVS deck
   (`lvs_deck=null`, `tapeout_capable=false`) — the fictional-process boundary,
