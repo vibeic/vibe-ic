@@ -88,13 +88,13 @@ python3 plugins/vibe-ic/programs/flow_compliance_check.py <project_dir> \
 # exit 0 is the only PASS
 ```
 
-#### `stage_phase1` — Phase 1, Spec Extraction (input → L1-L27 structured JSON) — 1 step
+#### `stage_phase1` — Phase 1, Spec Extraction (input → the L1-L23 layered JSON set (+L24/L25 where applicable)) — 1 step
 
 End-of-stage gate: `phase1_compliance`
 
 | # | Step | Machine gate |
 |---|---|---|
-| `D1` | Phase 1 doc extraction — dialogue **or** existing documents → the L1-L27 layered JSON set | program |
+| `D1` | Phase 1 doc extraction — dialogue **or** existing documents → the L1-L23 layered JSON set (L24/L25 broadly applicable; L26/L27 opt-in for dedicated MEMS / memory-module classes) | program |
 
 #### `stage1` — RTL Generation + Verification — 7 steps
 
@@ -294,7 +294,7 @@ training, and five maintainer/governance roles.
   reviewer: it runs the plain-language requirement dialogue itself). Consumes
   the elicited dialogue facts, the fact manifest, and the per-layer lessons.
   For every `deferred` fact it fills in the documented `ic_expert_default`
-  along with its reasoning, then emits the final L1-L27 JSON set. **Never**
+  along with its reasoning, then emits the final L1-L23 JSON set (plus L24/L25 where applicable). **Never**
   reads the benchmark.
 - **Personas** — `persona-common` / `persona-medium` / `persona-high` simulate
   a plain user, a hobbyist, and a senior IC designer, so the dialogue path can
@@ -369,8 +369,8 @@ for the container prerequisites.
                       # Path A (natural language) vs Path B (existing docs)
 
 # ---- Or phase by phase ---------------------------------------------------
-/vibe-ic-phase1       # input → L1-L27 layered JSON + human-readable MD
-/vibe-ic-phase2       # L1-L27 → RTL → verification → FPGA .sof
+/vibe-ic-phase1       # input → the L1-L23 layered JSON set + human-readable MD
+/vibe-ic-phase2       # L1-L23 → RTL → verification → FPGA .sof
 /vibe-ic-phase3       # synth → PnR → GDS → DRC / LVS / STA
 /vibe-ic-phase23      # chained Phase 2 → Phase 3
 /vibe-ic-benchmark    # run an open benchmark the methodology-correct way
