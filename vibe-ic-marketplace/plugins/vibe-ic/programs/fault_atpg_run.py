@@ -68,6 +68,7 @@ import subprocess
 import sys
 from pathlib import Path
 import _path_layout as _pl
+import _commercial_pdk as _cpdk  # config-driven commercial-PDK id (NDA: no SKU in source)
 
 
 def _resolve_docker_image() -> str:
@@ -145,22 +146,6 @@ PDK_CONFIG = {
         ),
         "dff_cells": "gf180mcu_fd_sc_mcu7t5v0__dffq_1,gf180mcu_fd_sc_mcu7t5v0__dffrq_1",
     },
-    # commercial 180nm PDK — used in the v046
-    # aon_timer pilot and the spm commercial-PDK flow. This proprietary PDK ships a
-    # Verilog simulation model but the run-dir PDK often
-    # carries only the liberty; point --cell-model-path at the model copied
-    # into the run dir's input/pdk/verilog/. The dff_cells list below is a
-    # SEED only — the real set is auto-detected from the netlist by
-    # detect_dff_cells() (unioned in), so a design that uses DFFHQD1 (not the
-    # seeded DFFRQD1/DFFSQD1) is still cut correctly. Common commercial-PDK DFF
-    # families: DFFHQD*/DFFSQD*/DFFRQD*/DFFSRQD*/SDFFHQD* (scan variants).
-    "commercial_pdk": {
-        # Inside the container this path is /pdk/verilog/... if the host
-        # mounts shared_pdk at /pdk; fault_atpg_run mounts it that way below.
-        # Overridable via --cell-model-path (project-relative → /work/...).
-        "cell_model": "/pdk/verilog/commercial_pdk_verilog_210524/commercial_pdk_neg.v",
-        "dff_cells": "DFFHQD1,DFFHQD2,DFFHQD4,DFFSQD1,DFFRQD1,DFFSRQD1",
-    },
     # sky130A high-density stdcell library (default OpenLane PDK).
     # Added 2026-05-24 for v2 e2e benchmark spm_e2e — covers the broad
     # sky130_fd_sc_hd DFF family (dfxtp / dfrtp / dfstp / dfbbn / sdfxtp) plus the
@@ -185,6 +170,22 @@ PDK_CONFIG = {
         ),
     },
 }
+
+# commercial 180nm PDK — used in the v046 aon_timer pilot and the spm
+# commercial-PDK flow. This proprietary (NDA) PDK ships a Verilog simulation
+# model but the run-dir PDK often carries only the liberty; point
+# --cell-model-path at the model copied into the run dir's input/pdk/verilog/.
+# The dff_cells value is a SEED only — the real set is auto-detected from the
+# netlist by detect_dff_cells() (unioned in), so a design that uses DFFHQD1
+# (not the seeded DFFRQD1/DFFSQD1) is still cut correctly.
+#
+# The SKU and its paths come from the private config (see _commercial_pdk); the
+# entry is only present when the owner has configured it (public installs get an
+# unchanged sky130/gf180 PDK_CONFIG — no commercial entry, no SKU literal).
+if _cpdk.COMMERCIAL_PDK_ID:
+    _commercial_cfg = _cpdk.commercial_pdk_config()
+    if _commercial_cfg:
+        PDK_CONFIG[_cpdk.COMMERCIAL_PDK_ID] = _commercial_cfg
 
 # Matches a flip-flop cell INSTANTIATION line: `CELLNAME instname (`. Anchored to
 # line start + requires an instance name and an opening paren so a `wire dff_x;`
@@ -686,7 +687,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--clock", required=True, help="Clock signal name (e.g. clk_i)")
     p.add_argument("--reset", help="Reset signal name (optional)")
     p.add_argument("--reset-active-low", action="store_true", help="Reset is active low")
-    p.add_argument("--pdk", default="commercial_pdk",
+    p.add_argument("--pdk", default=(_cpdk.COMMERCIAL_PDK_ID or "sky130"),
                    help=f"PDK name. Supported: {', '.join(PDK_CONFIG.keys())}")
     p.add_argument("--pdk-dir", help="Path to PDK dir (mounted at /pdk for custom PDKs)")
     p.add_argument("--cell-model-path", default=None,
@@ -736,7 +737,7 @@ def main(argv: list[str] | None = None) -> int:
     pdk_dir = None
     if args.pdk_dir:
         pdk_dir = Path(args.pdk_dir).resolve()
-    elif args.pdk == "commercial_pdk":
+    elif _cpdk.COMMERCIAL_PDK_ID and args.pdk == _cpdk.COMMERCIAL_PDK_ID:
         candidate = project.parent / "shared_pdk"
         if candidate.exists():
             pdk_dir = candidate

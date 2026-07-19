@@ -89,6 +89,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import _path_layout as _pl
+import _commercial_pdk as _cpdk  # config-driven commercial-PDK id (NDA: no SKU in source)
 import _lesson_digest  # surface the captured-lesson digest to spec-to-rtl authors
 import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
 # v0.2.33 (ORGANIC-20260526-sv-synth-frontend) — shared SV-frontend
@@ -8643,7 +8644,9 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
         elif "gf180mcu" in head:
             pdk = "gf180"
         elif re.search(r"\bDFFHQD\d|\bAOI211D1\b", head):
-            pdk = "commercial_pdk"   # v1.3.94 — commercial 180nm PDK
+            # v1.3.94 — commercial 180nm PDK. Its SKU is resolved from the
+            # private config (empty in public installs -> generic behaviour).
+            pdk = _cpdk.COMMERCIAL_PDK_ID
         else:
             pdk = ""   # generic / unmapped netlist
         cov_json = reports_dir / "phase2/dft/coverage.json"
@@ -8657,9 +8660,11 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
         # needs a Verilog cell model. It is provisioned at input/pdk/verilog/
         # and reaches the container via the separate --pdk-dir
         # (/pdk) mount because input/pdk is a symlink OUTSIDE /work.
-        if pdk == "commercial_pdk":
-            cmd += ["--pdk-dir", str((project / "input" / "pdk").resolve()),
-                    "--cell-model-path", "/pdk/verilog/commercial_pdk_neg.v"]
+        if pdk and pdk == _cpdk.COMMERCIAL_PDK_ID:
+            _cell_model = _cpdk.cell_model_container_path()
+            cmd += ["--pdk-dir", str((project / "input" / "pdk").resolve())]
+            if _cell_model:
+                cmd += ["--cell-model-path", _cell_model]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
             scan_nl = dft_dir / "scan_netlist.v"
@@ -8763,7 +8768,7 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
             if (project / "input" / "pdk" / "liberty").is_dir() else []
         if _tdf_lib:
             tdf_cmd += ["--liberty", str(_tdf_lib[0])]
-        if pdk == "commercial_pdk":
+        if pdk and pdk == _cpdk.COMMERCIAL_PDK_ID:
             tdf_cmd += ["--pdk-dir", str((project / "input" / "pdk").resolve())]
         try:
             subprocess.run(tdf_cmd, capture_output=True, text=True, timeout=1800)
