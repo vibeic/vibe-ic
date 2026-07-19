@@ -2133,6 +2133,21 @@ class PdkConfig:
     # smaller value for a stricter house rule. PSM's padless-core single-bump
     # model (PSM-0073) makes the measured drop a CONSERVATIVE upper bound.
     ir_budget_pct: Optional[float] = None
+    # v1.4.59 — OPT-IN cell-aware FEOL over-fire exemption for the native svrfdrc
+    # sign-off engine (vibeic-eda >= 0.2.19). On a dense digital design the flat
+    # std-cell qualified-cell marker cannot exempt FEOL implant space/notch
+    # over-fires (routing carves it — a #511 over-waive), so the streamout's
+    # anti-masking guard correctly leaves them as disclosed (gate-FAILing)
+    # artifacts. The engine fork exempts them per-master (conservative: an over-
+    # fire is dropped only if its bridge is strictly interior to ONE standalone-
+    # qualified master's exact placed footprint AND no top-level FEOL forms it).
+    # This config supplies the FEOL device layers (the safety guard) + the deck
+    # rule-name prefixes to filter; the runner computes the standalone-qualified
+    # master set and builds the cfg. Shape:
+    #   {"feol_gds":["2/0","3/0","4/0","5/0"],
+    #    "feol_rules":["NW.S","OD.S","PO.S","NP.S","PP.S"], "strict_dbu":1}
+    # ABSENT (or the image lacks --cell-aware-feol) -> byte-identical stock DRC.
+    cell_aware_feol: Optional[Dict[str, Any]] = None
 
 
 def _declared_lefdef_layermap(pdk_dir: Path,
@@ -2197,6 +2212,447 @@ def _discover_lefdef_layermap(pdk_dir: Path) -> Optional[str]:
                     break                  # not the streamout format → next file
         except OSError:
             continue
+    return None
+
+
+def _synthesize_streamout_layermap(
+        calibre_drc: Optional[str], tech_lef: Optional[str],
+        out_dir) -> Tuple[Optional[str], List[str]]:
+    """FLOOR-STREAMOUT deck-derived streamout layermap synthesis (v1.4.43,
+    sha256 commercial-PDK clean-room).
+
+    When a commercial PDK ships a sign-off DRC deck but NO standalone
+    Encounter/SoC LEF->GDS streamout map (`_discover_lefdef_layermap` == None),
+    the KLayout LEF/DEF reader falls back to legacy/compact numbering. On the
+    real sha256 clean-run this put the routing metals on the deck-correct
+    numbers (POLY=3, MET1-4=9/11/13/15) but scattered the via/cut layers onto
+    GDS 30/36-44, COLLIDING with the deck's reserved FEOL device layers
+    (PACT=30, FSWL=38, TGOX2=39, MVT=41, FUSEOPEN=42) -> 43898 stray shapes read
+    as thick-gate-oxide (TG2.W.1), 1557 as fuse-open (the whole LMFfc.* fuse
+    chain), 12237 as p-active (PDF.D.2.1 density): a WALL of spurious FEOL
+    violations that are numbering ARTEFACTS, not design defects.
+
+    The LEF->GDS numbering the deck EXPECTS is embedded in the deck itself, as
+    its `LAYER <name> <internal>` + `LAYER MAP <gds> DATATYPE <dt> <internal>`
+    indirection table. Synthesize the streamout map from THAT: for every LEF
+    routing/cut layer, look up the deck's real GDS number BY NAME and emit a
+    KLayout LEF/DEF map line (`<lef_layer> <purpose_csv> <gds> <dt>`, same
+    shape as the proven sky130A.map) pinning it there. The SAME synthesized
+    map is fed to the LVS extraction (`--pdk-map`) so streamout and LVS share
+    ONE numbering. chip/PDK-AGNOSTIC: every number is read from the deck the
+    PDK ships; no layer name or number is hardcoded.
+
+    Safety (never a silent mis-map):
+      * a LEF routing/cut layer with NO deck entry -> WARN (CUT = CRITICAL) and
+        the layer is OMITTED (the reader keeps its default for that one layer);
+      * an emitted routing/cut number that would land on a deck layer which is
+        NOT itself a routing/cut layer (a FEOL/device number) is DROPPED + WARN,
+        never shipped.
+
+    Returns (map_path or None, notes). None when nothing could be synthesized
+    (no deck, unreadable, or zero routing/cut layers resolved) -> the caller
+    keeps `lefdef_layermap=None` and the existing loud missing-map WARN fires."""
+    notes: List[str] = []
+    if not calibre_drc or not tech_lef:
+        return None, notes
+    deck_p, lef_p = Path(calibre_drc), Path(tech_lef)
+    if not deck_p.is_file() or not lef_p.is_file():
+        return None, notes
+    try:
+        deck = deck_p.read_text(errors="ignore")
+        lef = lef_p.read_text(errors="ignore")
+    except OSError:
+        return None, notes
+
+    # 1) deck indirection: internal-id -> name, internal-id -> (gds, datatype).
+    #    `LAYER <name> <internal>` (name line) vs `LAYER MAP <gds> DATATYPE <dt>
+    #    <internal>` (map line) — the trailing `$` keeps the name-line regex
+    #    from swallowing a map line.
+    id_to_name = {}
+    for m in re.finditer(r"(?m)^\s*LAYER\s+(\w+)\s+(\d+)\s*$", deck):
+        id_to_name[m.group(2)] = m.group(1)
+    id_to_gds = {}  # prefer a datatype-0 mapping when an id has several
+    for m in re.finditer(
+            r"(?m)^\s*LAYER\s+MAP\s+(\d+)\s+DATATYPE\s+(\d+)\s+(\d+)\s*$", deck):
+        gds, dt, iid = int(m.group(1)), int(m.group(2)), m.group(3)
+        if iid not in id_to_gds or (dt == 0 and id_to_gds[iid][1] != 0):
+            id_to_gds[iid] = (gds, dt)
+    name_to_gds = {}  # NAME(upper) -> (gds, dt)
+    for iid, nm in id_to_name.items():
+        if iid in id_to_gds:
+            name_to_gds.setdefault(nm.upper(), id_to_gds[iid])
+    if not name_to_gds:
+        notes.append("[layermap-synth] deck has no parseable LAYER MAP table — "
+                     "no map synthesized")
+        return None, notes
+
+    # 2) LEF routing + cut layer names, in declaration order.
+    routing, cut = [], []
+    cur = None
+    for line in lef.splitlines():
+        s = line.strip()
+        mm = re.match(r"^LAYER\s+(\w+)", s)
+        if mm:
+            cur = mm.group(1)
+            continue
+        mt = re.match(r"^TYPE\s+(\w+)", s)
+        if mt and cur:
+            if mt.group(1) == "ROUTING":
+                routing.append(cur)
+            elif mt.group(1) == "CUT":
+                cut.append(cur)
+            cur = None
+    if not routing and not cut:
+        notes.append("[layermap-synth] tech LEF declares no ROUTING/CUT layer — "
+                     "no map synthesized")
+        return None, notes
+
+    # 3) deck GDS numbers used by ANY non-routing/cut (FEOL/device) layer — an
+    #    emitted routable number that ALSO appears here is ambiguous (the deck
+    #    reads it as both a route and a FEOL layer) and must never be shipped.
+    routecut_upper = set(n.upper() for n in routing + cut)
+    feol_gds = set(g for nm_up, (g, _d) in name_to_gds.items()
+                   if nm_up not in routecut_upper)
+
+    # 4) emit KLayout LEF/DEF map lines (proven sky130A.map shape).
+    lines: List[str] = []
+    emitted = 0
+    unresolved: List[Tuple[str, str]] = []
+
+    def _lookup(nm, is_cut):
+        gd = name_to_gds.get(nm.upper())
+        if gd is None:
+            unresolved.append(("CUT" if is_cut else "ROUTING", nm))
+            return None
+        if gd[0] in feol_gds:
+            notes.append(
+                f"[layermap-synth] WARN: {'CUT' if is_cut else 'ROUTING'} {nm} "
+                f"-> deck GDS {gd[0]}/{gd[1]} is a reserved non-routing (FEOL) "
+                f"number — DROPPED (reader default kept); never shipped onto FEOL")
+            return None
+        return gd
+
+    for nm in routing:
+        gd = _lookup(nm, is_cut=False)
+        if gd is None:
+            continue
+        lines.append(f"{nm:<8}{'LEFPIN,NET,SPNET,PIN,VIA':<26}{gd[0]:>4} {gd[1]}")
+        lines.append(f"{nm:<8}{'LEFOBS':<26}{gd[0]:>4} {gd[1]}")
+        emitted += 1
+    for nm in cut:
+        gd = _lookup(nm, is_cut=True)
+        if gd is None:
+            continue
+        lines.append(f"{nm:<8}{'VIA,LEFPIN,PIN':<26}{gd[0]:>4} {gd[1]}")
+        emitted += 1
+
+    for kind, nm in unresolved:
+        sev = "CRITICAL" if kind == "CUT" else "WARN"
+        notes.append(
+            f"[layermap-synth] {sev}: LEF {kind} layer '{nm}' has NO deck LAYER "
+            f"MAP entry — omitted (KLayout default numbering kept for it, MAY "
+            f"collide with a FEOL layer). Supply the PDK streamout map to fix.")
+
+    if emitted == 0:
+        notes.append("[layermap-synth] no routing/cut layer resolved from the "
+                     "deck — no map synthesized")
+        return None, notes
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / (deck_p.stem + "_streamout_synth.map")
+    header = [
+        "# Synthesized streamout LEF->GDS layermap (deck-derived, chip-AGNOSTIC).",
+        f"# Source sign-off deck: {deck_p.name}",
+        "# The PDK ships NO standalone Encounter/SoC streamout map; this map is",
+        "# derived from the deck's own LAYER / LAYER MAP indirection table so the",
+        "# streamed GDS lands routing/via layers on the numbers the deck reads,",
+        "# not on legacy numbers that collide with reserved FEOL device layers.",
+        "# Consumed by BOTH KLayout DEF->GDS streamout (LEFDEF_MAP) and the LVS",
+        "# extraction (--pdk-map) so both share one numbering.",
+        "# Format: <lef_layer> <purpose_csv> <gds_layer> <gds_datatype>",
+    ]
+    out_path.write_text("\n".join(header + lines) + "\n")
+    resolved_cuts = sum(1 for nm in cut
+                        if name_to_gds.get(nm.upper())
+                        and name_to_gds[nm.upper()][0] not in feol_gds)
+    notes.append(
+        f"[layermap-synth] synthesized {emitted} routing/cut layer(s) from "
+        f"{deck_p.name} ({resolved_cuts}/{len(cut)} cut/via pinned to their deck "
+        f"numbers, nothing on reserved FEOL) -> {out_path.name}")
+    return str(out_path), notes
+
+
+def _discover_topmetal_width_fix(project: Path, calibre_drc: Optional[str],
+                                  tech_lef: Optional[Path]
+                                  ) -> Tuple[Optional[Path], List[str]]:
+    """FLOOR-DRC thick-top-metal LEF/deck reconciliation (v1.4.41, spm on a
+    commercial thick-top-metal PDK, Mt.W.1_3/Mt.EN.1_3 proven via independent
+    klayout width_check + enclosing_check: 1 and 6 violations respectively,
+    EXACT match to the deck's own count — a real geometry defect, not an
+    engine artifact).
+
+    A commercial deck often ships a "thick top metal" stackup OPTION,
+    switched on by an uncommented `#DEFINE TOPMETAL_N` and enforced by that
+    deck's own `Mt.*` rule family (distinct from the ordinary `Mx.*` rules
+    for the lower metals) — with a STRICTER minimum width/enclosure than the
+    plain per-layer `WIDTH`/`MINWIDTH` the tech LEF declares for that same
+    GDS layer (e.g. the LEF states the top metal's WIDTH/MINWIDTH 0.28um
+    while the deck's ENABLED TOPMETAL_5 option requires Mt.W.1 >= 0.44um). A
+    router given only the
+    LEF has no way to know the stricter number, so it legally-per-LEF draws
+    that layer too narrow — a genuine capability gap in OUR flow (we own
+    OpenROAD's inputs), not a router bug and not a PDK we can edit.
+
+    Fix: discover the deck's REAL number for every enabled TOPMETAL_N and,
+    if it exceeds what the tech LEF states for that layer, stage a LOCALLY
+    CORRECTED copy of the tech LEF (WIDTH/MINWIDTH raised to the deck value
+    — NEVER lowered) under <project>/phase3/pdk_stage/ (already covered by
+    the project's blanket `*.lef` gitignore — never the real PDK file, never
+    committed). Every step that reads `pdk.tech_lef` (PnR, ECO/SPEF repair,
+    antenna-diode discovery, …) then sees the corrected number with NO
+    further wiring, since they all consume the ONE `PdkConfig.tech_lef`
+    field. Chip/PDK-AGNOSTIC: no metal name or numeric value is hardcoded —
+    both come from parsing the deck + LEF text the PDK actually ships.
+
+    Returns (effective_tech_lef_path, notes) — `notes` is a list of
+    human-readable strings (one per corrected layer) for the caller to
+    print; empty list + the ORIGINAL tech_lef when nothing needed fixing
+    (no deck, no enabled TOPMETAL_N, no Mt.W.1 rule found, or the LEF is
+    already >= the deck's value — a byte-identical no-op)."""
+    notes: List[str] = []
+    if not calibre_drc or not tech_lef:
+        return tech_lef, notes
+    calibre_drc_p, tech_lef_p = Path(calibre_drc), Path(tech_lef)
+    if not calibre_drc_p.is_file() or not tech_lef_p.is_file():
+        return tech_lef, notes
+    try:
+        deck_text = calibre_drc_p.read_text(errors="ignore")
+        lef_text = tech_lef_p.read_text(errors="ignore")
+    except OSError:
+        return tech_lef, notes
+
+    enabled_ns = sorted(set(
+        m.group(1) for m in re.finditer(r"(?m)^#DEFINE\s+TOPMETAL_(\d+)\s*$",
+                                         deck_text)))
+    if not enabled_ns:
+        return tech_lef, notes
+
+    fixed_any = False
+    for n in enabled_ns:
+        met = f"MET{n}"
+        via = f"VIA{n}"  # the via BELOW METn connects MET(n-1) <-> METn
+        wm = re.search(
+            r"@Mt\.W\.1:[^\n]*\n\s*INTERNAL\s+__" + re.escape(met.lower()) +
+            r"__\s*<\s*([0-9.]+)", deck_text, re.IGNORECASE)
+        if not wm:
+            continue  # this deck doesn't gate METn's width via Mt.W.1 -> no-op
+        deck_width_um = float(wm.group(1))
+
+        lblock = re.search(
+            r"(?ms)^LAYER\s+" + re.escape(met) + r"\s*\n(.*?)^END\s+" +
+            re.escape(met) + r"\s*$", lef_text)
+        if not lblock:
+            continue
+        block = lblock.group(1)
+        wmatch = re.search(r"(?m)^(\s*WIDTH\s+)([0-9.]+)(\s*;)", block)
+        mwmatch = re.search(r"(?m)^(\s*MINWIDTH\s+)([0-9.]+)(\s*;)", block)
+        lef_width_um = min(
+            float(wmatch.group(2)) if wmatch else 1e9,
+            float(mwmatch.group(2)) if mwmatch else 1e9)
+        if lef_width_um >= deck_width_um:
+            continue  # LEF already honors the deck's real minimum
+
+        enm = re.search(
+            r"@Mt\.EN\.1:[^\n]*\b" + re.escape(met) + r"\s+" +
+            re.escape(via) + r"\b[^\n]*\n(?:.*\n)*?\s*ENCLOSURE\s+\S+\s+\S+"
+            r"\s*<\s*([0-9.]+)", deck_text, re.IGNORECASE)
+        enc_note = f", Mt.EN.1 enclosure={enm.group(1)}um" if enm else ""
+
+        fixed_block = block
+        if wmatch:
+            fixed_block = (fixed_block[:wmatch.start()] +
+                           f"{wmatch.group(1)}{deck_width_um}{wmatch.group(3)}" +
+                           fixed_block[wmatch.end():])
+        # re-locate MINWIDTH after the WIDTH edit may have shifted offsets
+        mwmatch2 = re.search(r"(?m)^(\s*MINWIDTH\s+)([0-9.]+)(\s*;)", fixed_block)
+        if mwmatch2:
+            fixed_block = (fixed_block[:mwmatch2.start()] +
+                            f"{mwmatch2.group(1)}{deck_width_um}{mwmatch2.group(3)}" +
+                            fixed_block[mwmatch2.end():])
+        lef_text = (lef_text[:lblock.start(1)] + fixed_block +
+                    lef_text[lblock.end(1):])
+        notes.append(
+            f"[topmetal-width-fix] deck enables TOPMETAL_{n}: {met} Mt.W.1 "
+            f"min-width={deck_width_um}um{enc_note} > LEF WIDTH/MINWIDTH="
+            f"{lef_width_um}um -> staged a corrected LEF (WIDTH/MINWIDTH "
+            f"raised to {deck_width_um}um; the real PDK LEF is untouched)")
+        fixed_any = True
+
+    if not fixed_any:
+        return tech_lef, notes
+
+    stage_dir = project / "phase3" / "pdk_stage"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    out_path = stage_dir / (tech_lef_p.stem + "_topmetal_fix.lef")
+    out_path.write_text(lef_text)
+    return out_path, notes
+
+
+def _discover_supply_pin_dir_fix(project: Path, cell_lef: Optional[Path]
+                                 ) -> Tuple[Optional[Path], List[str]]:
+    """FLOOR-PNR-BUFFER supply-pin DIRECTION hygiene (v1.4.x, ibex CPU-scale
+    commercial_pdk clean-room — measured, not assumed).
+
+    ROOT CAUSE (proven in-container on the running image):
+    ODB defaults a LEF MACRO `PIN` that carries NO `DIRECTION` statement to
+    IoType INPUT (the LEF default). A commercial std-cell LEF commonly OMITS
+    `DIRECTION` on its `USE POWER` / `USE GROUND` supply pins (sky130 declares
+    them `DIRECTION INOUT`, so it escapes this path; this PDK's 650 supply pins
+    do not). OpenROAD's ODB buffer-insertion input counter
+    (`dbInsertBuffer::checkAndCreateBuffer`) filters candidate MTerms by IoType
+    ONLY — not by SigType — so it counts those supply pins as signal inputs:
+    EVERY buffer master then appears to have >=3 inputs (A + VDD + VSS) and is
+    rejected (`ODB-1207 Buffer master '<buf>' has more than one input`), which
+    makes ALL buffer insertion in `repair_design` / `repair_timing` / antenna
+    repair fail (`ODB-1205`). High-fanout nets (a 1000+-terminal reset/enable
+    web) then stay UNBUFFERED, and detailed route cannot legalize the flat monster
+    net -> systematic same-layer SHORTS even at low utilization (ibex stand-in:
+    6253 MET2 shorts, non-converging, at 30.9% util with 0 GR overflow). Smaller
+    designs escape only because they never need buffer insertion, so the reject
+    never fires — the LEF routing RULES themselves are correct.
+
+    FIX: stage a LOCALLY-corrected copy of the cell LEF under
+    <project>/phase3/pdk_stage/ (covered by the project's blanket `*.lef`
+    gitignore — the real PDK LEF is NEVER touched) in which every `USE POWER` /
+    `USE GROUND` PIN that LACKS a `DIRECTION` gets `DIRECTION INOUT ;` injected —
+    which is the LEF-correct direction for a supply pin, so ODB stops counting it
+    as a signal input and buffer insertion works. Every downstream step reading
+    `pdk.cell_lef` (PnR, CTS, ECO, antenna, LVS) inherits it with no extra wiring.
+
+    chip/PDK-AGNOSTIC: keyed PURELY on `USE POWER` / `USE GROUND` + an absent
+    `DIRECTION`; no cell / vendor / metal literal and no numeric value. Fail-safe
+    no-op (byte-identical, ORIGINAL path returned) when every supply pin already
+    declares a direction (e.g. sky130) or the LEF is unreadable.
+
+    Returns (effective_cell_lef_path, notes)."""
+    notes: List[str] = []
+    if not cell_lef:
+        return cell_lef, notes
+    cell_lef_p = Path(cell_lef)
+    if not cell_lef_p.is_file():
+        return cell_lef, notes
+    try:
+        lines = cell_lef_p.read_text(errors="ignore").split("\n")
+    except OSError:
+        return cell_lef, notes
+
+    pin_open = re.compile(r"^(\s*)PIN\s+(\S+)\s*$")
+    use_supply = re.compile(r"^\s*USE\s+(POWER|GROUND)\s*;", re.IGNORECASE)
+    has_dir = re.compile(r"^\s*DIRECTION\s+\S+", re.IGNORECASE)
+
+    out: List[str] = []
+    fixed = 0
+    i, n = 0, len(lines)
+    while i < n:
+        m = pin_open.match(lines[i])
+        if not m:
+            out.append(lines[i]); i += 1
+            continue
+        indent, pin = m.group(1), m.group(2)
+        end_re = re.compile(r"^\s*END\s+" + re.escape(pin) + r"\s*$")
+        block = [lines[i]]
+        i += 1
+        while i < n and not end_re.match(lines[i]):
+            block.append(lines[i]); i += 1
+        if i < n:            # the `END <pin>` line
+            block.append(lines[i]); i += 1
+        is_supply = any(use_supply.match(ln) for ln in block)
+        if is_supply and not any(has_dir.match(ln) for ln in block):
+            # inject DIRECTION INOUT ; right after the `PIN <name>` line
+            out.append(block[0])
+            out.append(f"{indent}  DIRECTION INOUT ;")
+            out.extend(block[1:])
+            fixed += 1
+        else:
+            out.extend(block)
+
+    if fixed == 0:
+        return cell_lef, notes
+
+    stage_dir = project / "phase3" / "pdk_stage"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    out_path = stage_dir / (cell_lef_p.stem + "_supplydir_fix.lef")
+    out_path.write_text("\n".join(out))
+    notes.append(
+        f"[supply-pin-dir-fix] {fixed} USE POWER/GROUND pin(s) in "
+        f"{cell_lef_p.name} lacked a DIRECTION (ODB defaults them to INPUT, so "
+        f"OpenROAD's buffer-input counter rejects every buffer master -> "
+        f"repair_design inserts 0 buffers -> high-fanout nets stay unbuffered -> "
+        f"detailed-route shorts). Staged a corrected cell LEF with "
+        f"`DIRECTION INOUT` on those supply pins (the real PDK LEF is untouched).")
+    return out_path, notes
+
+
+def _streamout_layermap_warning(calibre_drc: Optional[str],
+                                lefdef_layermap: Optional[str]) -> Optional[str]:
+    """FLOOR-STREAMOUT loud-WARN (ic1-spm commercial_pdk clean-room, v1.4.34).
+
+    When a commercial PDK ships a sign-off DRC deck (`calibre_drc`) but NO
+    discoverable Encounter/SoC LEF->GDS streamout layermap (`lefdef_layermap`
+    is None), GDS streams out on LEGACY (compact) layer numbering. A foundry
+    sign-off deck then MISREADS routing layers on those numbers and reports a
+    WALL of spurious FEOL violations that are numbering ARTEFACTS, not design
+    defects (spm commercial_pdk: routing read as thick-gate-oxide). The fallback was
+    previously SILENT — the false-DRC wall looks like a design failure. Return a
+    loud operator warning in exactly that case (deck present AND map absent);
+    None otherwise. Chip-AGNOSTIC: keyed purely on deck-present + map-absent, no
+    vendor literal."""
+    if calibre_drc is not None and lefdef_layermap is None:
+        return (
+            "streamout: a sign-off DRC deck is present "
+            f"({Path(calibre_drc).name}) but NO Encounter/SoC LEF->GDS streamout "
+            "layermap was found under the PDK — GDS will use LEGACY (compact) "
+            "layer numbering. A foundry sign-off deck MISREADS routing layers on "
+            "legacy numbers and reports a WALL of spurious FEOL violations that "
+            "are numbering ARTEFACTS, not design defects. Supply the PDK's "
+            "`*layermap*for*ncounter*` / `*layermap*SOC*` map (or set it in the "
+            "bridge config) before trusting DRC results.")
+    return None
+
+
+def _stdcell_exclusion_marker_warning(calibre_drc: Optional[str],
+                                      marker_layer: Optional[str]) -> Optional[str]:
+    """FLOOR-DRC cell-interior-exemption guard (ic1-spm commercial_pdk clean-room, v1.4.36).
+
+    Foundry sign-off decks exempt qualified std-cell INTERIORS via a universal
+    "don't-check" marker layer (`__x__ = NOT x DCTY`, hundreds of derivations).
+    Foundry-delivered library GDS commonly does NOT carry that marker, so the
+    P&R integrator must SYNTHESIZE it by painting it over placed std-cell
+    footprints — exactly what the streamout `stdcell_exclusion_marker_layer`
+    config drives. When a commercial Calibre DRC deck is present but NO exclusion
+    marker is configured, the marker input stays EMPTY, every `NOT x DCTY`
+    derivation re-checks foundry-qualified cell interiors, and the FEOL rules
+    OVER-FIRE by the thousand on cells that are cell-level-qualified (spm commercial_pdk:
+    15 false FEOL families — implant-enclosure, poly↔contact, contact). Return a
+    loud operator warning in that case; None otherwise.
+
+    FAIL-SAFE by design: we do NOT auto-detect + auto-paint the don't-check layer
+    — painting a mis-detected marker would silently WAIVE real violations (a
+    false-clean, the worst outcome). We surface the miss so the operator wires the
+    deck's ACTUAL marker into the bridge signoff_config. chip-AGNOSTIC: keyed on
+    deck-present + marker-unconfigured, no vendor literal."""
+    if calibre_drc is not None and not marker_layer:
+        return (
+            "sign-off: a commercial DRC deck is present "
+            f"({Path(calibre_drc).name}) but NO std-cell exclusion marker is "
+            "configured (bridge signoff_config `stdcell_exclusion_marker_layer`). "
+            "Foundry decks exempt qualified std-cell interiors via a don't-check "
+            "marker the library GDS usually does NOT carry; with it unconfigured "
+            "the marker input is EMPTY, so every interior FEOL rule re-checks "
+            "foundry-qualified cells and OVER-FIRES (false implant / poly-contact "
+            "/ contact violations). Set `stdcell_exclusion_marker_layer` to the "
+            "deck's cell-interior don't-check layer (L/D) before trusting FEOL DRC.")
     return None
 
 
@@ -2399,6 +2855,32 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 iter(sorted(calibre_dir.glob("*LVS*.device"))), None
             ) if calibre_dir.is_dir() else None
 
+            # v1.4.34 — FLOOR-STREAMOUT: resolve the streamout layermap ONCE and,
+            # if a sign-off DRC deck is present but no map was found, WARN loudly
+            # (previously a silent legacy-numbering fallback → false-DRC wall).
+            _lefdef_layermap = _discover_lefdef_layermap(pdk_dir)
+            # v1.4.43 — FLOOR-STREAMOUT: when the PDK ships a sign-off DRC deck
+            # but NO standalone Encounter/SoC streamout map, SYNTHESIZE one from
+            # the deck's own LAYER / LAYER MAP table so the streamed GDS (and the
+            # LVS extraction, which reads the SAME map via --pdk-map) land the
+            # routing/via layers on the numbers the deck reads — not on legacy
+            # numbers that collide with reserved FEOL device layers (sha256:
+            # routing vias read as fuse-open/thick-gate-oxide, firing a spurious
+            # LMF/TG2 wall). chip-AGNOSTIC — nothing hardcoded. A staged foundry
+            # map (found above) always wins; this is the fallback.
+            if _lefdef_layermap is None and calibre_drc is not None:
+                _synth_map, _synth_notes = _synthesize_streamout_layermap(
+                    str(calibre_drc), str(tech_lef) if tech_lef else None,
+                    project / "phase3" / "pdk_stage")
+                for _n in _synth_notes:
+                    print(_n, file=sys.stderr)
+                if _synth_map:
+                    _lefdef_layermap = _synth_map
+            _lm_warn = _streamout_layermap_warning(
+                str(calibre_drc) if calibre_drc else None, _lefdef_layermap)
+            if _lm_warn:
+                print(f"[WARN] {_lm_warn}", file=sys.stderr)
+
             # v1.6.53 — KLayout deck discovery. Custom PDKs that ship
             # ONLY a Calibre deck cannot run open-source DRC; but many
             # ship a KLayout deck alongside (`klayout/`, `drc/`, or
@@ -2432,10 +2914,41 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                     _signoff_cfg = json.loads(_cfg_f.read_text())
                 except Exception:
                     _signoff_cfg = {}
+            # v1.4.36 — FLOOR-DRC: WARN loudly when a commercial DRC deck is
+            # present but no std-cell exclusion marker is configured (the silent
+            # config miss that re-checks qualified cell interiors → false FEOL
+            # over-fire). Fail-safe: surface it, never auto-guess the marker.
+            _excl_warn = _stdcell_exclusion_marker_warning(
+                str(calibre_drc) if calibre_drc else None,
+                _signoff_cfg.get("stdcell_exclusion_marker_layer"))
+            if _excl_warn:
+                print(f"[WARN] {_excl_warn}", file=sys.stderr)
             _b_magicrc = (next(iter(sorted((_bridge / "magic").glob("*.magicrc"))), None)
                           if (_bridge / "magic").is_dir() else None)
             _b_netgen = (next(iter(sorted((_bridge / "netgen").glob("*_setup.tcl"))), None)
                          if (_bridge / "netgen").is_dir() else None)
+
+            # v1.4.41 — FLOOR-DRC thick-top-metal reconciliation: if the
+            # sign-off deck enables a TOPMETAL_N option whose Mt.W.1 minimum
+            # width exceeds the tech LEF's plain WIDTH/MINWIDTH for that
+            # layer, route PnR at a LOCALLY-STAGED corrected LEF instead (the
+            # real PDK LEF is never touched). No-op when the LEF already
+            # honors the deck (or the deck defines no such option).
+            tech_lef, _tm_notes = _discover_topmetal_width_fix(
+                project, str(calibre_drc) if calibre_drc else None, tech_lef)
+            for _n in _tm_notes:
+                print(_n, file=sys.stderr)
+
+            # FLOOR-PNR-BUFFER supply-pin DIRECTION hygiene: a commercial cell
+            # LEF that omits DIRECTION on its USE POWER/GROUND pins makes ODB
+            # default them to INPUT, so OpenROAD's buffer-input counter rejects
+            # EVERY buffer master (ODB-1207) -> repair_design inserts 0 buffers
+            # -> high-fanout nets stay unbuffered -> detailed-route shorts (ibex
+            # commercial_pdk: 6253 MET2 shorts). Stage a corrected cell LEF (DIRECTION
+            # INOUT on supply pins; real PDK LEF untouched). No-op for sky130.
+            cell_lef, _sp_notes = _discover_supply_pin_dir_fix(project, cell_lef)
+            for _n in _sp_notes:
+                print(_n, file=sys.stderr)
 
             return PdkConfig(
                 name=f"custom:{pdk_dir.name}",
@@ -2471,9 +2984,13 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 # Encounter/SoC LEF->GDS streamout map so GDS gets the foundry's
                 # official layer numbers (else a sign-off deck misreads routing
                 # layers — spm commercial-PDK: 1394 spurious TG2 violations without it).
+                # Prefer a sign-off-config-DECLARED map (never stream a sign-off
+                # GDS on legacy numbering); else the map resolved once above
+                # (discover + synthesize-from-deck + loud WARN when a deck is
+                # present but no map — see _streamout_layermap_warning, v1.4.34).
                 lefdef_layermap=(
                     _declared_lefdef_layermap(pdk_dir, _signoff_cfg)
-                    or _discover_lefdef_layermap(pdk_dir)),
+                    or _lefdef_layermap),
                 stdcell_marker_layer=_signoff_cfg.get(
                     "stdcell_exclusion_marker_layer"),
                 signoff_config_path=(str(_cfg_f) if _cfg_f.is_file()
@@ -2492,6 +3009,7 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 tap_geom_layers=_signoff_cfg.get("tap_geom_layers"),
                 pdn_straps=_signoff_cfg.get("pdn_straps"),
                 ir_budget_pct=_signoff_cfg.get("ir_budget_pct"),
+                cell_aware_feol=_signoff_cfg.get("cell_aware_feol"),
             )
     # fallback: sky130A in container
     return _detect_pdk(project, override="sky130A")
@@ -3945,7 +4463,7 @@ def _l9_declared_die_util(project: Path) -> Optional[float]:
 # with no adjacent numbers, a "plugin decides" cell) → None → auto-size (missing a
 # declaration is SAFE; mis-parsing a wrong die is UNSAFE). chip-AGNOSTIC token parse.
 _L9_DIE_AREA_RECT_RE = re.compile(
-    r"DIE_AREA\b[)\s:=|({}'\"`]{0,8}"
+    r"DIE_AREA\b[)\s:=|({}'\"`\[]{0,8}"
     r"(-?\d+(?:\.\d+)?)[\s,]+(-?\d+(?:\.\d+)?)[\s,]+"
     r"(-?\d+(?:\.\d+)?)[\s,]+(-?\d+(?:\.\d+)?)",
     re.IGNORECASE)
@@ -3999,25 +4517,74 @@ def _l9_declared_die_area(project: Optional[Path]) -> Optional[str]:
     return None
 
 
+_L19_DIE_WXH_RE = re.compile(r"^\s*(\d+)\s*[xX]\s*(\d+)\s*$")
+
+
+def _l19_declared_die_area(project: Optional[Path]) -> Optional[str]:
+    """G-FIXED-DIE-1 — return the phase1-extracted mandated die as a 'WxH'
+    string from L19.fields.die_area_budget_um, or None.
+
+    phase1's floorplan-contract ingest (`_post_emit_floorplan_contract`) lands
+    the design-MANDATED die here from an OpenLane ``config.json`` DIE_AREA
+    AND/OR L9 prose. Consuming L19 closes the case where a design ships the
+    fixed die ONLY through its OpenLane config (no prose rect) —
+    `_l9_declared_die_area` (prose-only) would miss it, so phase3 would auto-
+    size a die the design had already fixed. Only a real, positive 'WxH'
+    counts (§4.05 / no-fabricate). chip-AGNOSTIC."""
+    if project is None:
+        return None
+    try:
+        p = _pl.generated_docs_dir(project) / "L19_CONSTRAINTS_PDK.json"
+        if not p.is_file():
+            return None
+        doc = json.loads(p.read_text(errors="ignore"))
+    except Exception:
+        return None
+    if not isinstance(doc, dict):
+        return None
+    fields = doc.get("fields")
+    if not isinstance(fields, dict):
+        return None
+    val = fields.get("die_area_budget_um")
+    if not isinstance(val, str):
+        return None
+    m = _L19_DIE_WXH_RE.match(val)
+    if not m:
+        return None
+    w, h = int(m.group(1)), int(m.group(2))
+    if w > 0 and h > 0:
+        return f"{w}x{h}"
+    return None
+
+
 def _effective_die_um(die_um_flag: str,
                       project: Optional[Path]
                       ) -> Tuple[str, Optional[str]]:
     """R5 precedence resolver (pure, deterministic): resolve the die-sizing SOURCE
     before the netlist-based auto-sizer runs.
 
-        explicit `--die-um WxH` flag  >  L9-mandated fixed DIE_AREA  >  'auto'
+        explicit `--die-um WxH` flag  >  L9-mandated fixed DIE_AREA
+                                      >  L19-mandated die_area_budget_um  >  'auto'
 
     Returns (die_um, note). An explicit WxH flag ALWAYS wins (returned verbatim,
-    no L9 read). Only when the flag is the 'auto' default is L9 consulted; a fixed
-    L9 DIE_AREA is then returned so it behaves EXACTLY like an explicit flag
-    (pinned — never auto-sized over). No L9 declaration → 'auto' passes through to
-    the netlist-based auto-sizer unchanged. chip-AGNOSTIC."""
+    no doc read). Only when the flag is the 'auto' default are the design-mandated
+    sources consulted: the L9 prose rect first, then (G-FIXED-DIE-1) the
+    phase1-extracted L19.die_area_budget_um — which catches a design that ships
+    its fixed die ONLY via an OpenLane config.json (no prose rect). Either
+    mandated die is returned so it behaves EXACTLY like an explicit flag (pinned
+    — never auto-sized over). No mandate → 'auto' passes through to the netlist-
+    based auto-sizer unchanged. chip-AGNOSTIC."""
     if str(die_um_flag).lower() != "auto":
         return die_um_flag, None
     l9 = _l9_declared_die_area(project)
     if l9 is not None:
         return l9, (f"die-um=auto but the L9 floorplan spec mandates a FIXED "
                     f"DIE_AREA {l9}µm — honoring it verbatim (no auto-size)")
+    l19 = _l19_declared_die_area(project)
+    if l19 is not None:
+        return l19, (f"die-um=auto but L19.die_area_budget_um mandates a FIXED "
+                     f"DIE_AREA {l19}µm (design-provided floorplan contract) — "
+                     f"honoring it verbatim (no auto-size)")
     return die_um_flag, None
 
 
@@ -5578,6 +6145,11 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "# Generated by phase3_one_shot_runner._build_eco_repair_tcl\n"
         "# Chip-AGNOSTIC: standard OpenROAD APIs only.\n"
         "\n"
+        # G-ANTENNA-REROUTE — the ECO reroute runs its OWN detailed_route; OpenROAD
+        # defaults to 1 thread, so without this it grinds single-threaded (the
+        # bounded ~8-iteration reroute this file's own comment flags as
+        # ~1 min/iter). Parallelize it the same as the main pnr.tcl session.
+        f"set_thread_count {_openroad_thread_count()}\n"
         f"read_lef {tech_lef_c}\n"
         f"read_lef {cell_lef_c}\n"
         f"{liberty_block}"
@@ -6230,6 +6802,41 @@ def _emit_cts_report_if_complete(project: Path, top: str):
     return str(rpt)
 
 
+def _openroad_thread_count() -> int:
+    """G-ANTENNA-REROUTE — thread count for the OpenROAD PnR session
+    (`global_route` + `detailed_route` + EVERY antenna-repair reroute + CTS /
+    resize). OpenROAD DEFAULTS TO 1 THREAD (`ord::thread_count` == 1 with no
+    `set_thread_count`), so a pnr.tcl that never sets it runs the WHOLE route —
+    and each antenna-diode reroute round — SINGLE-THREADED on a many-core host.
+
+    Measured floor (subservient RISC-V SoC on the commercial commercial_pdk PDK, a
+    design that detailed-routes CLEAN then needs antenna diodes): single-threaded
+    the main detailed_route is ~858 s and EACH post-diode reroute round is
+    ~394 s, so 858 s + 2-4 rounds blows the 20-min per-step cap before GDS. The
+    SAME flow at 8 threads: main route 211 s, each reroute round 74 s, the full
+    escalating repair loop converges antenna-clean (0 net / 0 pin) + DRC-clean in
+    ~473 s — a routed-clean design reaches GDS well inside budget. The reroute
+    was ALREADY dirty-net incremental (its 0th detailed-route iteration starts at
+    ~986 violations, ~1/3 of a from-scratch route's ~2845, not a full re-route);
+    the wall was purely the single-threaded execution.
+
+    Uses all host CPUs by default; `VIBEIC_OPENROAD_THREADS` (a positive int, or
+    "max") overrides — e.g. to bound oversubscription when several PnR jobs share
+    a CI box. Machine property only — chip/PDK-AGNOSTIC (no design/vendor input).
+    """
+    env = os.environ.get("VIBEIC_OPENROAD_THREADS", "").strip()
+    if env:
+        if env.lower() == "max":
+            return os.cpu_count() or 4
+        try:
+            n = int(env)
+            if n > 0:
+                return n
+        except ValueError:
+            pass
+    return os.cpu_count() or 4
+
+
 def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         macro_lefs_tcl: str, liberty_c: str,
                         macro_libs_tcl: str, netlist_c: str, top: str,
@@ -6247,7 +6854,8 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         place_pins_block: Optional[str] = None,
                         routability_driven: bool = True,
                         placement_padding_sites: int = 0,
-                        spef_repair_estimate_block: str = "") -> str:
+                        spef_repair_estimate_block: str = "",
+                        openroad_threads: int = 0) -> str:
     """ORGANIC #581 — the COMPLETE pnr.tcl template as a PURE builder
     (v0.1.49 doctrine: extract Tcl-block builders into pure helpers so
     regression tests pin them). The #557 SPEF-repair block shipped with
@@ -6300,8 +6908,18 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
             f"-right {_pad_n}\n")
     else:
         _placement_padding_block = ""
+    # G-ANTENNA-REROUTE — parallelize the WHOLE OpenROAD PnR session. OpenROAD
+    # defaults to 1 thread; with no set_thread_count the main detailed_route AND
+    # every antenna-diode reroute round run single-threaded, ballooning the PnR
+    # wall past the step cap on a many-core host. Emitted FIRST so it governs
+    # global_route / detailed_route / the antenna repair loop / CTS / resize.
+    # Machine property (host CPUs) — chip-AGNOSTIC. openroad_threads<=0 (only the
+    # legacy test-default) omits it, preserving byte-identical old behavior.
+    _thread_block = (
+        f"set_thread_count {int(openroad_threads)}\n"
+        if int(openroad_threads) > 0 else "")
     return f"""
-read_lef {tech_lef_c}
+{_thread_block}read_lef {tech_lef_c}
 read_lef {cell_lef_c}
 {macro_lefs_tcl}
 read_liberty {liberty_c}
@@ -6819,7 +7437,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         antenna_repair_block=antenna_repair_block,
         filler_block=filler_block,
         place_pins_block=place_pins_block,
-        spef_repair_estimate_block=spef_repair_estimate_block))
+        spef_repair_estimate_block=spef_repair_estimate_block,
+        openroad_threads=_openroad_thread_count()))
     cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
            f"openroad -no_init -exit {pnr_tcl_c} 2>&1 | "
@@ -7290,24 +7909,118 @@ if _marker and cell_gds_path and os.path.exists(cell_gds_path):
         _lib = pya.Layout()
         _lib.read(cell_gds_path)
         _libnames = set(c.name for c in _lib.each_cell())
+        # GAP (spm commercial_pdk, row-boundary DRC residual): painting only the
+        # DEF/LEF-abstract SIZE box (`_inst.bbox()` at this point in the
+        # flow) covers the cell's declared placement footprint, not its
+        # TRUE drawn extent. Measured on this library: EVERY sampled
+        # master (fillers included, not just active cells) draws its
+        # implant/metal a little OUTSIDE its own SIZE box by design — an
+        # abutment-merge overhang meant to be absorbed by a neighbour's
+        # matching overhang. At a row/core boundary there is no neighbour,
+        # so the overhang survives past the SIZE-box marker and the
+        # deck's own qualified-cell exemption never reaches it: real,
+        # benign, foundry-drawn geometry then fires as if it were fresh
+        # backend content. Fix: paint each instance's TRUE extent — the
+        # transformed bbox of its OWN library-GDS cell (whatever that
+        # specific master draws, on any layer) — never the LEF SIZE box
+        # alone, and never a hardcoded margin / row / die-wide fill.
+        # chip-AGNOSTIC: the extent is read back from the library GDS
+        # per-master, not asserted as a number.
+        _dbu_scale = _lib.dbu / ly.dbu
+
+        def _lib_extent(name):
+            lc = _lib.cell(name)
+            b = lc.bbox() if lc is not None else pya.Box()
+            if b.empty() or _dbu_scale == 1.0:
+                return b
+            return pya.Box(int(round(b.left * _dbu_scale)), int(round(b.bottom * _dbu_scale)),
+                            int(round(b.right * _dbu_scale)), int(round(b.top * _dbu_scale)))
+
+        _lib_bbox_cache = {}
         _tcm = ly.cell(top)
         if _tcm is not None:
             # comma-separated list: a deck may key its exemption on more
             # than one layer (e.g. an identity marker PLUS the don't-check
             # master its own consistency rule requires the marker to sit
-            # inside — commercial-PDK: Artisan 65/0 inside DCTY0 113/0).
+            # inside — commercial-PDK: Artisan 65/0 inside DCTY0 113/0). ALL marker
+            # layers are resolved up front and painted with the IDENTICAL
+            # region (below), so the deck's own "identity ⊆ don't-check"
+            # consistency rule (e.g. `Artisan.CHECK = COPY (Artisan andnot
+            # DCTY)`) can never fire from a paint mismatch between them.
+            _marker_lis = []
             for _one in _marker.split(','):
                 _one = _one.strip()
                 if not _one:
                     continue
                 _ml, _md = (int(x) for x in _one.split('/'))
-                _li_m = ly.layer(pya.LayerInfo(_ml, _md))
-                _painted = 0
-                for _inst in _tcm.each_inst():
-                    if _inst.cell.name in _libnames:
-                        _tcm.shapes(_li_m).insert(_inst.bbox())
-                        _painted += 1
-                print(f"STDCELL_MARKER {_one}: painted {_painted} std-cell footprint(s)")
+                _marker_lis.append((_one, ly.layer(pya.LayerInfo(_ml, _md))))
+            _marker_li_set = set(_li for _, _li in _marker_lis)
+            # ONE painted region for ALL marker layers: the union of every
+            # placed qualified cell's TRUE library extent (unioned with its
+            # SIZE box so coverage never shrinks).
+            _painted = 0
+            _paint_reg = pya.Region()
+            for _inst in _tcm.each_inst():
+                if _inst.cell.name not in _libnames:
+                    continue
+                _old_box = _inst.bbox()
+                _lib_box = _lib_bbox_cache.get(_inst.cell.name)
+                if _lib_box is None:
+                    _lib_box = _lib_extent(_inst.cell.name)
+                    _lib_bbox_cache[_inst.cell.name] = _lib_box
+                _true_box = (_inst.trans * _lib_box) if not _lib_box.empty() else _old_box
+                _union_box = _old_box + _true_box  # Box union — never shrinks coverage
+                _paint_reg.insert(_union_box)
+                _painted += 1
+            _paint_reg.merge()
+            # ANTI-MASKING GUARD (mandatory — this is waiver-adjacent). The
+            # marker exempts the WHOLE `__x__ = NOT x <marker>` device-layer
+            # family — and on this deck that family is NOT just FEOL: metal
+            # is derived the same way (`__met1__ = NOT MET1 DCTY` … MET8), so
+            # a marker pixel over a routed wire CARVES that wire (splitting it
+            # into min-width/-space-violating slivers) AND waives its real
+            # metal DRC — a #511 over-waive AND a fresh false-fail wall. So
+            # the marker may ONLY ever land where the TOP-LEVEL flat geometry
+            # is ABSENT. Right here — immediately after the bare DEF+LEF read
+            # and BEFORE manual FEOL substitution copies any cell's real
+            # geometry in — every std-cell instance is still a bare LEF
+            # abstract, so the ONLY flat top-level shapes on other layers are
+            # the DEF's ROUTED/SPECIALNETS wires (+ any top pins). Test the
+            # ENTIRE painted region (SIZE-box ∪ true-extent), not merely the
+            # overhang ring: painting the SIZE box itself over a routed wire
+            # carves it just the same. The marker layers themselves are
+            # EXCLUDED from the net probe (they carry no net — they are the
+            # marker we are about to paint). If ANY painted pixel overlaps a
+            # routed net, paint NOTHING for ANY marker layer — NEVER the old
+            # SIZE-box fallback, which still carved the cell's own overhang
+            # implant into width/area slivers and any interior-crossing routed
+            # metal. Disclose loudly; the cell-interior FEOL over-fire then
+            # remains a (correctly gate-FAILing) disclosed artifact, never
+            # masked. A flat marker fundamentally cannot exempt cell interiors
+            # on a design with routing over its cells — that needs a
+            # hierarchical / cell-aware sign-off, out of this streamout's scope.
+            _net_reg = pya.Region()
+            for _oli in ly.layer_indexes():
+                if _oli in _marker_li_set:
+                    continue
+                _net_reg.insert(_tcm.shapes(_oli))
+            _net_reg.merge()
+            _leak = 0 if _paint_reg.is_empty() else (_paint_reg & _net_reg).count()
+            if _leak == 0 and not _paint_reg.is_empty():
+                for _one, _li_m in _marker_lis:
+                    for _p in _paint_reg.each():
+                        _tcm.shapes(_li_m).insert(_p)
+                    print(f"STDCELL_MARKER {_one}: painted {_painted} std-cell "
+                          f"footprint(s) at true library extent (anti-masking "
+                          f"guard clean, 0 routed-net overlap)")
+            else:
+                for _one, _li_m in _marker_lis:
+                    print(f"STDCELL_MARKER {_one}: ANTI-MASKING GUARD TRIPPED "
+                          f"({_leak} routed-net shape(s) under the qualified-cell "
+                          f"marker region) — marker NOT painted for this layer "
+                          f"(painting would carve real routed geometry; the "
+                          f"marker exempts metal too). Cell-interior FEOL "
+                          f"over-fire remains, disclosed; never masked.")
     except Exception as e:
         print(f"warn stdcell marker: {e}")
 # MANUAL FEOL SUBSTITUTION — copy each std-cell's REAL geometry from the cell
@@ -8002,6 +8715,7 @@ def um(v):
 
 
 die = tc.bbox()
+die_area = float(die.area())
 summary = []
 for lay in spec.get("layers", []):
     lnum, dnum = (int(x) for x in str(lay["gds"]).split("/"))
@@ -8009,25 +8723,61 @@ for lay in spec.get("layers", []):
     tile = um(lay.get("tile_um", 1.2))
     pitch = um(lay.get("pitch_um", 1.9))
     margin = um(lay.get("margin_um", 0.65))
+    min_density = float(lay.get("min_density", 0.0) or 0.0)
+    # Fill-tile-to-fill-tile spacing floor = the config's OWN grid gap
+    # (pitch - tile): the base grid already leaves exactly this gap between
+    # neighbours and the un-densified run is spacing-clean, so honouring it
+    # on every densification pass keeps fill tiles from ever touching
+    # (no wide-metal) or crowding metal spacing.
+    gap = max(1, pitch - tile)
     existing = pya.Region(tc.begin_shapes_rec(li))
     existing.merge()
     frame = pya.Region(die)
     frame.size(-margin)                 # keep fill off the die edge
-    allowed = frame - existing.sized(margin)
-    tiles = pya.Region()
-    x = die.left + margin
-    while x + tile <= die.right - margin:
-        y = die.bottom + margin
-        while y + tile <= die.top - margin:
-            tiles.insert(pya.Box(x, y, x + tile, y + tile))
-            y += pitch
-        x += pitch
-    kept = tiles.select_inside(allowed)  # only tiles fully clear of live metal
-    n = kept.count()
-    tc.shapes(li).insert(kept)
-    total = existing.area() + kept.area()
-    dens = (total / float(die.area())) if die.area() else 0.0
-    summary.append((str(lay.get("name", lay["gds"])), n, dens))
+    live_halo = existing.sized(margin)  # spacing from live metal
+
+    def _grid_tiles(x0, y0):
+        tg = pya.Region()
+        x = die.left + x0
+        while x + tile <= die.right - margin:
+            y = die.bottom + y0
+            while y + tile <= die.top - margin:
+                tg.insert(pya.Box(x, y, x + tile, y + tile))
+                y += pitch
+            x += pitch
+        return tg
+
+    # Density-driven multi-phase fill. The base grid (phase 0) reproduces the
+    # legacy single-pass fill EXACTLY; when the layer declares a min_density
+    # the deck enforces and the base grid falls short (a thin route halo
+    # rejects a WHOLE base-grid cell even where most of it is clear), extra
+    # phase-shifted grids drop tiles into those grid-misaligned pockets.
+    # Every pass keeps only tiles a full `margin` from live metal AND a full
+    # `gap` from already-placed fill, so densifying never shorts a net,
+    # merges into wide-metal, nor crowds spacing — the sign-off deck re-checks
+    # the filled GDS with every rule live. chip-AGNOSTIC: pure geometry + the
+    # PDK bridge's own per-layer targets. Legacy behaviour (no min_density, or
+    # base grid already meeting it) is byte-for-byte unchanged.
+    phases = [(margin, margin)]
+    for _f in (0.5, 0.25, 0.75):
+        _off = int(pitch * _f)
+        phases.extend([(margin + _off, margin + _off),
+                       (margin + _off, margin),
+                       (margin, margin + _off)])
+    placed = pya.Region()
+    for (x0, y0) in phases:
+        allowed = frame - live_halo - placed.sized(gap)
+        kept = _grid_tiles(x0, y0).select_inside(allowed)
+        if kept.count():
+            placed += kept
+            placed.merge()
+        dens = ((existing.area() + placed.area()) / die_area) if die_area else 0.0
+        if not min_density or dens >= min_density:
+            break
+    tc.shapes(li).insert(placed)
+    total = existing.area() + placed.area()
+    dens = (total / die_area) if die_area else 0.0
+    summary.append((str(lay.get("name", lay["gds"])), placed.count(), dens))
 ly.write(gds_out)
 for name, n, dens in summary:
     print("DUMMY_FILL %s tiles=%d density=%.4f" % (name, n, dens))
@@ -8916,6 +9666,30 @@ def _magic_run_drc(gds: Path, top: str, container: str
 _SVRFDRC_BIN = "svrfdrc"
 
 
+def _clean_command_v_path(out: str, binname: str) -> str:
+    """Extract the resolved path from `command -v <name>` stdout, tolerating
+    login-shell BANNER lines the image prints to STDOUT.
+
+    v1.4.35 (ic2-sha256 commercial_pdk clean-run): the vibeic-eda image's
+    `/etc/profile.d/iic-osic-tools-setup.sh` echoes `[INFO] Final PATH variable:`
+    (+PYTHONPATH) to STDOUT on every LOGIN shell, and `_docker_exec` runs
+    `bash -lc`, so a naive `out.strip()` returns e.g.
+    `"[INFO] ...\\n[INFO] ...\\n/foss/tools/bin/svrfdrc"` — a banner-polluted path.
+    `command -v` emits the resolution (an absolute path, or the bare name for a
+    builtin) as its OWN line; banners are bracketed (`[INFO]`/`[WARNING]`). Take
+    the LAST line that is an absolute path or exactly the queried name; fall back
+    to the name when only chatter remains (rc==0 already proved it resolved).
+    chip/host-AGNOSTIC — no vendor literal, keyed on line shape."""
+    cand = ""
+    for line in out.splitlines():
+        s = line.strip()
+        if not s or s.startswith("["):          # login-shell banner — skip
+            continue
+        if s.startswith("/") or s == binname:    # a real command -v resolution
+            cand = s                             # keep the LAST such line
+    return cand or binname
+
+
 def _svrfdrc_bin_container(container: str) -> Optional[str]:
     """Return the CONTAINER command for the NATIVE `svrfdrc` buddy when the image
     carries it (vibeic-eda bakes it on PATH from the klayout-vibeic build). Probed
@@ -8927,9 +9701,133 @@ def _svrfdrc_bin_container(container: str) -> Optional[str]:
     try:
         rc, out, _err = _docker_exec(container, f"command -v {binname}",
                                      timeout=30)
-        return (out.strip() or binname) if rc == 0 else None
+        # v1.4.35 — strip login-shell banner pollution from the `bash -lc` stdout
+        # (else the resolved path is prefixed with the image's [INFO] chatter).
+        return _clean_command_v_path(out, binname) if rc == 0 else None
     except Exception:
         return None
+
+
+_SVRFDRC_THREADS_CACHE: Dict[str, bool] = {}
+
+
+def _svrfdrc_supports_threads(container: str, bin_c: str) -> bool:
+    """True iff the container's svrfdrc buddy accepts ``--threads`` (the vibeic
+    rule-check parallelism, image >= 0.2.19). Probed once per (container, bin) via
+    ``svrfdrc --help`` and cached. On an older image without the flag this returns
+    False so the caller omits it (graceful degradation to the serial path).
+
+    Passing ``--threads=N`` is SAFE for the gate: the svrfdrc report is
+    BYTE-IDENTICAL for every thread count (parallelises only the independent
+    measurement-rule CHECK phase; DENSITY/connectivity/net rules + the serial
+    derivation build are unchanged), so ``_parse_svrf_tally`` /
+    ``_classify_svrf_fails`` are unaffected — only wall-clock changes."""
+    key = f"{container}:{bin_c}"
+    if key in _SVRFDRC_THREADS_CACHE:
+        return _SVRFDRC_THREADS_CACHE[key]
+    ok = False
+    try:
+        rc, out, err = _docker_exec(container, f"{bin_c} --help", timeout=30)
+        ok = "--threads" in ((out or "") + (err or ""))
+    except Exception:
+        ok = False
+    _SVRFDRC_THREADS_CACHE[key] = ok
+    return ok
+
+
+_SVRFDRC_CAF_CACHE: Dict[str, bool] = {}
+
+
+def _svrfdrc_supports_cell_aware_feol(container: str, bin_c: str) -> bool:
+    """True iff the container's svrfdrc buddy accepts ``--cell-aware-feol`` (the
+    opt-in cell-aware FEOL over-fire exemption, image >= 0.2.19). Probed once per
+    (container, bin) via ``svrfdrc --help`` and cached. On an older image this
+    returns False so the caller omits the flag (byte-identical stock DRC). The
+    flag is provably-never-false-clean and byte-identical when off, so a probe
+    miss only forgoes exemption of disclosed artifacts — never masks a real fail."""
+    key = f"{container}:{bin_c}"
+    if key in _SVRFDRC_CAF_CACHE:
+        return _SVRFDRC_CAF_CACHE[key]
+    ok = False
+    try:
+        rc, out, err = _docker_exec(container, f"{bin_c} --help", timeout=30)
+        ok = "--cell-aware-feol" in ((out or "") + (err or ""))
+    except Exception:
+        ok = False
+    _SVRFDRC_CAF_CACHE[key] = ok
+    return ok
+
+
+def _build_cell_aware_feol_cfg(project: Path, top: str, pdk: PdkConfig,
+                               container: str, bin_c: str, deck_c: str
+                               ) -> Optional[Any]:
+    """Build the opt-in ``--cell-aware-feol`` cfg for the native svrfdrc engine,
+    or return None when the gate is not met (byte-identical stock DRC).
+
+    GATE (ALL required): the design ships a ``cell_aware_feol`` sign-off-config
+    block (FEOL device layers + rule-name prefixes), a per-master library GDS
+    (``pdk.cell_gds``), and the placed ``{top}.def`` the GDS was streamed from.
+    Only then does the runner compute the STANDALONE-qualified master set (run
+    each UNIQUE placed master through the deck standalone; qualified iff 0
+    non-DENSITY fails) and write the cfg. Conservative: any failure -> None.
+
+    Returns the ``signoff_cell_aware_feol_cfg.CfgResult`` (with ``.written`` /
+    ``.cfg_path`` / ``.qualified``) or None."""
+    caf = pdk.cell_aware_feol
+    if not caf or not isinstance(caf, dict):
+        return None
+    if not pdk.cell_gds:
+        return None
+    def_host = _pl.pnr_dir(project) / f"{top}.def"
+    if not def_host.is_file():
+        return None
+    try:
+        import signoff_cell_aware_feol_cfg as _caf
+    except Exception:
+        # last-resort: import by path (programs/ dir on sys.path via runner)
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import signoff_cell_aware_feol_cfg as _caf  # noqa: F811
+        except Exception:
+            return None
+    feol_gds = _caf.feol_gds_from_config(caf)
+    prefixes = caf.get("feol_rules") or caf.get("feol_rule_prefixes") or []
+    if not feol_gds or not prefixes:
+        return None
+    try:
+        deck_text = Path(str(pdk.calibre_drc)).read_text(errors="ignore")
+        def_text = def_host.read_text(errors="ignore")
+    except OSError:
+        return None
+    lib_c = _to_container_path(str(pdk.cell_gds), container)
+    def_c = _to_container_path(str(def_host), container)
+    reports_dir = project / "phase3" / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    workdir_c = _to_container_path(str(reports_dir), container)
+
+    def _run_standalone(master: str) -> str:
+        # svrfdrc <deck> <lib> <rpt> --cell=<master> on the master LIBRARY;
+        # returns the report text (empty on failure) so the classifier decides.
+        safe = re.sub(r"[^A-Za-z0-9_.]", "_", master)
+        rpt_c = f"{workdir_c}/_caf_q_{safe}.rpt"
+        cmd = (f"{bin_c} {deck_c} {lib_c} {rpt_c} --cell={master} "
+               f">/dev/null 2>&1; cat {rpt_c} 2>/dev/null")
+        try:
+            rc, out, _err = _docker_exec(container, cmd, timeout=900)
+            return out or ""
+        except Exception:
+            return ""
+
+    cfg_out = reports_dir / "cell_aware_feol.cfg"
+    try:
+        res = _caf.build_cfg(
+            deck_text=deck_text, def_text=def_text, lib_container=lib_c,
+            def_container=def_c, feol_gds=feol_gds,
+            feol_rule_prefixes=prefixes, run_standalone=_run_standalone,
+            cfg_out=cfg_out, strict_dbu=int(caf.get("strict_dbu", 1)))
+    except Exception:
+        return None
+    return res if res.written else None
 
 
 def _parse_svrf_tally(rpt: Path) -> Tuple[int, int, int, List[str]]:
@@ -8976,6 +9874,23 @@ def _parse_svrf_tally(rpt: Path) -> Tuple[int, int, int, List[str]]:
 #     from this check; with no marker layer in the input GDS the check over-fires
 #     on pre-characterised cell geometry. Signature-confirmed here: only met1
 #     (std-cell-internal) min-area fires; met2/3/4 (routing) all pass.
+#     CAVEAT (spm commercial_pdk row-boundary close-loop, 2026-07-16): the `_not_X`
+#     NAME-MATCH is a real-signal proxy, not a proof of mechanism — some decks
+#     build `..._not_<marker>` via `OR(CUT(A, X), ANDNOT(A, X))`, which is the
+#     set identity A = (A∩X) ∪ (A\X) and recombines to the FULL `A` regardless
+#     of whether X (the marker) is empty or populated. On this deck, Mx.A.1's
+#     `backend__metN_not_artisan` is exactly that shape: proven (independent
+#     KLayout reconstruction, exact violation-count match) to be measuring
+#     raw `__metN__` (metal minus the deck's OWN "don't-check" layer) directly,
+#     with ZERO dependence on the "artisan" marker's emptiness — this function
+#     labelled it MARKER_ABSENT right BY LUCK (X does happen to be empty here
+#     too), not because the `_not_X` reference is load-bearing. Do not treat
+#     an MARKER_ABSENT hit here as proof that repainting X would fix it; it is
+#     STILL a reliable geometry/artifact signal (conservative default unchanged
+#     — unproven stays GEOMETRY), just not evidence of *which* marker mechanism
+#     is the fix. See the sibling std-cell TRUE-EXTENT marker fix in
+#     `_GDS_STREAMOUT_PY` for the actual mechanism this deck relies on
+#     (the qualified-cell footprint marker, not "artisan").
 #   DENSITY_FILL — a DENSITY rule (CMP metal/active density window). On a small
 #     test chip the design is too sparse to hit the floor; resolved by foundry
 #     metal fill or a formal density waiver.
@@ -9035,6 +9950,24 @@ def _classify_svrf_fails(rpt: Path) -> Dict[str, Any]:
     return out
 
 
+def _drc_wall_budget_s() -> float:
+    """Wall-clock budget (seconds) for the native svrfdrc DRC step.
+
+    v1.4.38 (ic2-sha256 commercial_pdk sha256 floor): the progress-stall watchdog only
+    kills on NO CPU progress, so a 100%-CPU tool is treated as "progressing" and
+    runs to the ~24h hard ceiling. svrfdrc's single-thread derived-layer build
+    (SHRINK/boolean/merge) is pathological on dense large designs (sha256: 100%
+    CPU, 4.4h, zero output). This wall-clock cap bounds the DRC step so a perf
+    ceiling surfaces as an HONEST SKIPPED-CONDITION, never a multi-hour silent
+    hang. Default 2h; env VIBE_IC_DRC_BUDGET_S overrides (e.g. raise for a
+    genuinely-large sign-off, lower for CI). chip/tool-AGNOSTIC."""
+    try:
+        v = float(os.environ.get("VIBE_IC_DRC_BUDGET_S", "7200"))
+        return v if v > 0 else 7200.0
+    except (TypeError, ValueError):
+        return 7200.0
+
+
 def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
                          container: str) -> Optional[StepResult]:
     """Run the commercial Calibre/SVRF `.rule` DRC deck NATIVELY via the vibeic
@@ -9061,11 +9994,53 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
     # svrfdrc <deck> <layout> <report> [--cell=TOP] — byte-identical report to the
     # retired run_svrf_drc.py, so _parse_svrf_tally / _classify_svrf_fails are unchanged.
     cmd = f"{bin_c} {deck_c} {gds_c} {rpt_c} --cell={top}"
-    rc, out, err = _docker_exec(container, cmd, marker=gds_c)
+    # v1.4.57 — parallelise the measurement-rule CHECK phase when the image's
+    # svrfdrc supports it (>= 0.2.19). The report is BYTE-IDENTICAL for every
+    # thread count (proven byte-for-byte, threads=1 vs 8), so this changes only
+    # wall-clock and NEVER the verdict — the tally/classify parsers are
+    # unaffected. Probe-gated: an older image (no --threads) degrades gracefully
+    # to the serial path. NOTE: the serial derived-layer DERIVATION phase still
+    # dominates large/dense designs, so this BOUNDS (does not eliminate) the perf
+    # ceiling below — derivation-phase parallelism is the follow-on.
+    if _svrfdrc_supports_threads(container, bin_c):
+        cmd += f" --threads={_openroad_thread_count()}"
+    # v1.4.59 — OPT-IN cell-aware FEOL over-fire exemption. Gated on: the image's
+    # svrfdrc supports --cell-aware-feol (>= 0.2.19), AND the design ships the
+    # inputs (a `cell_aware_feol` sign-off-config block + per-master library GDS +
+    # the placed {top}.def). Only then is a cfg built — the runner STANDALONE-
+    # qualifies each unique placed master (0 non-DENSITY fails on the deck) and
+    # names the FEOL device layers (the engine's safety guard) + rules. WITHOUT
+    # the flag the report is BYTE-IDENTICAL. The exemption is the engine fork's
+    # CONSERVATIVE per-master geometry (an over-fire is dropped only if its bridge
+    # is strictly interior to ONE qualified master's exact footprint AND no
+    # top-level FEOL forms it) — the plugin only SUPPLIES the qualified-master cfg,
+    # never waives; a genuine / boundary / top-level violation is always KEPT.
+    caf_res = None
+    if _svrfdrc_supports_cell_aware_feol(container, bin_c):
+        caf_res = _build_cell_aware_feol_cfg(project, top, pdk, container,
+                                             bin_c, deck_c)
+        if caf_res is not None and getattr(caf_res, "written", False):
+            cfg_c = _to_container_path(str(caf_res.cfg_path), container)
+            cmd += f" --cell-aware-feol={cfg_c}"
+    # v1.4.38 — bound the DRC step at a WALL-CLOCK budget (the stall watchdog never
+    # kills a 100%-CPU tool; the default ceiling is ~24h). A non-completing DRC is
+    # NOT a proven violation → SKIPPED-CONDITION (disclosed perf ceiling), like the
+    # LEC timeout-guard, never a FAIL or a silent multi-hour hang.
+    _drc_budget = _drc_wall_budget_s()
+    rc, out, err = _docker_exec(container, cmd, marker=gds_c,
+                                hard_ceiling_s=_drc_budget)
     if rc in (_RC_STALLED, 124):
-        return StepResult("drc", "FAIL", time.time() - t0,
-                          f"svrf-native commercial DRC killed as hung/ceiling "
-                          f"(rc={rc}) — no sign-off from a partial report.")
+        _mins = int(_drc_budget // 60)
+        return StepResult(
+            "drc", "SKIPPED-CONDITION", time.time() - t0,
+            f"svrf-native commercial DRC did not complete within the "
+            f"{_mins}-minute wall-clock budget (rc={rc}) — a svrfdrc performance "
+            f"ceiling on large/dense geometry (single-thread derived-layer "
+            f"build), NOT a proven violation. No sign-off from a partial report; "
+            f"disclosed. Re-run under a fixed/parallelised engine or raise "
+            f"VIBE_IC_DRC_BUDGET_S.",
+            extras={"finding": "SVRFDRC_PERF_CEILING",
+                    "drc_budget_s": _drc_budget})
     if not rpt.is_file():
         return StepResult("drc", "FAIL", time.time() - t0,
                           f"svrf-native commercial DRC produced no report; "
@@ -9092,6 +10067,25 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
             f"geometry); {n_den} DENSITY-fill gap(s) {cls['density_fill']} "
             f"(test-chip sparsity → foundry metal fill or formal density "
             f"waiver).")
+    # v1.4.59 — disclose an ACTIVE cell-aware FEOL exemption (opt-in; only present
+    # when the design shipped the inputs AND the image supports it). The report is
+    # already the EXEMPTED one (the flag was on the single run); this states which
+    # masters were standalone-qualified so the reduced FEOL count is auditable and
+    # never opaque. When absent the wording is byte-identical to the stock path.
+    caf_note = ""
+    caf_extra = None
+    if caf_res is not None and getattr(caf_res, "written", False):
+        _cj = caf_res.to_json()
+        caf_note = (
+            f" CELL-AWARE-FEOL EXEMPTION ACTIVE (opt-in, engine-side): "
+            f"{_cj['n_qualified']}/{_cj['n_placed_unique']} placed master(s) "
+            f"standalone-qualified (0 non-DENSITY fails on the deck); the engine "
+            f"exempted ONLY FEOL over-fires strictly interior to a single "
+            f"qualified master's footprint on rules {_cj['feol_rules'][:8]} "
+            f"(FEOL guard layers {_cj['feol_gds']}). Genuine / boundary / "
+            f"top-level violations are KEPT — the plugin supplies the qualified "
+            f"cfg, the fork engine does the conservative geometry; never a waiver.")
+        caf_extra = _cj
     detail = (
         f"SVRF-NATIVE commercial DRC — the foundry's OWN Calibre `.rule` deck "
         f"executed on the vibeic KLayout engine (NO Calibre license): "
@@ -9100,7 +10094,7 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
         f"checkers, never silently passed). deck={pdk.calibre_drc}. §4.05: this "
         f"runs the real foundry deck natively (categorically stronger than an "
         f"OSS-proxy deck); it is NOT a golden-Calibre numerical cross-run."
-        + breakdown
+        + breakdown + caf_note
         + (f" firing rules (first 10): {failing[:10]}" if failing else ""))
     return StepResult(
         "drc", verdict, time.time() - t0, detail, [str(rpt)],
@@ -9108,6 +10102,7 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
                 "calibre_drc_deck": str(pdk.calibre_drc),
                 "rules_fail": fails, "rules_pass": passes, "rules_skip": skips,
                 "failing_rules": failing[:50], "gds": str(gds),
+                "cell_aware_feol": caf_extra,
                 "fail_classes": {
                     "geometry": cls["geometry"],
                     "marker_absent": cls["marker_absent"],
@@ -10506,6 +11501,14 @@ def _run_klayout_lvs(project: Path, top: str, pdk: PdkConfig,
     threads = os.cpu_count() or 8
     lm_arg = (f" --layermap {_to_container_path(pdk.lvs_layermap, container)}"
               if pdk.lvs_layermap else "")
+    # v1.4.37 — wire the SAME Encounter/SoC layermap already discovered for streamout
+    # (pdk.lefdef_layermap) into the LVS extraction so its metal/via coverage matches
+    # the PDK's real routing stack. Without it a >4-metal PDK extracts with the generic
+    # 4-metal DEFAULT -> upper-metal nets SPLIT into disconnected pieces -> a FALSE LVS
+    # MISMATCH (commercial_pdk: net _218_ routed M1-M6 split in two; wiring M5/M6 took spm LVS
+    # from MISMATCH to full MATCH, spares untouched). Auto-extend only (never shrinks).
+    pdk_map_arg = (f" --pdk-map {_to_container_path(pdk.lefdef_layermap, container)}"
+                   if getattr(pdk, "lefdef_layermap", None) else "")
     base = "export QT_QPA_PLATFORM=offscreen && "
 
     # 1. cell library -> per-cell SPICE (learns each cell's pin order)
@@ -10513,13 +11516,13 @@ def _run_klayout_lvs(project: Path, top: str, pdk: PdkConfig,
         container, base
         + f"python3 {klvs_c} lib {_to_container_path(str(pdk.cell_gds), container)} "
         f"--out {_to_container_path(str(cells_sp), container)} "
-        f"--threads {threads}{lm_arg}", marker=klvs_c)
+        f"--threads {threads}{lm_arg}{pdk_map_arg}", marker=klvs_c)
     # 2. flat sign-off GDS -> transistor SPICE (power_shorts REPORTED, never hidden)
     rc_e, out_e, err_e = _docker_exec(
         container, base
         + f"python3 {klvs_c} extract {_to_container_path(str(gds_path), container)} "
         f"--out {_to_container_path(str(layout_sp), container)} "
-        f"--threads {threads}{lm_arg}", marker=klvs_c)
+        f"--threads {threads}{lm_arg}{pdk_map_arg}", marker=klvs_c)
     power_shorts = None
     power_short_locs = []
     _m = re.search(r"power_shorts=(-?\d+)", out_e or "")

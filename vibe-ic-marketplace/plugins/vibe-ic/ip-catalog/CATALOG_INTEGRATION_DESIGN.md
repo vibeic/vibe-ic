@@ -10,7 +10,7 @@ Strict-blind pilot proved Plugin can't reverse-engineer 2-3 kGE CPU from 9-docum
 
 ### Touch point 1:Phase 2 `detect_ic_class` extension
 
-When `ic_class_profile.detect_ic_class()` returns one of the registered classes(`digital_arithmetic_primitive`, `digital_cmd_driven`, ...), ALSO scan IP catalog manifests for matches against L1-L23 facts.
+When `ic_class_profile.detect_ic_class()` returns one of the registered classes(`digital_arithmetic_primitive`, `digital_cmd_driven`, ...), ALSO scan IP catalog manifests for matches against L1-L27 facts.
 
 Pseudo-code:
 ```python

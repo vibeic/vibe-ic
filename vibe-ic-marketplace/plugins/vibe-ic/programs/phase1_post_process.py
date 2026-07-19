@@ -461,6 +461,34 @@ def _skeleton_fields_for(l_doc_code: str) -> Dict[str, Any]:
             "side_channel_mitigation": [],
             "secure_boot": False,
         },
+        # ── Completeness extensions (L24-L27). chip-AGNOSTIC placeholders /
+        # nulls only — NO fabricated values. ─────────────────────────────
+        "L24": {
+            "drc_status": None,        # e.g. "CLEAN" / "N violations" / null
+            "lvs_status": None,
+            "sta_status": None,
+            "antenna_status": None,
+            "ir_drop_status": None,
+            "tapeout_gates": [],       # [{gate, status, waiver_ref}]
+        },
+        "L25": {
+            "mission_profile": None,   # e.g. lifetime-weighted load profile
+            "temp_range": None,        # e.g. {"min_c": null, "max_c": null}
+            "qual_standard": None,     # e.g. "JESD47" / "AEC-Q100" / null
+            "em_budget": None,
+            "aging_margin": None,      # NBTI / HCI aging headroom
+        },
+        "L26": {
+            "transducer_type": None,   # transduction principle
+            "movable_structures": [],  # [{name, kind, dimensions}]
+            "package_stress": None,
+        },
+        "L27": {
+            "spd_revision": None,      # SPD spec revision
+            "module_type": None,       # JEDEC module type
+            "timing_parameters": [],   # [{name, value, units}]
+            "manufacturer_data": {},   # module-level metadata block
+        },
     }.get(l_doc_code, {})
 
 
@@ -512,6 +540,29 @@ def _extraction_hints_for(l_doc_code: str) -> List[str]:
         "L23": [
             "Look for key-management, side-channel, secure-boot sections.",
             "Capture attack surface enumeration.",
+        ],
+        # ── Completeness extensions (L24-L27). ───────────────────────────
+        "L24": [
+            "Look for signoff / tapeout / sign-off checklist sections.",
+            "Capture DRC / LVS / STA / antenna / IR-drop status per gate.",
+            "Capture the tapeout gate list + any waiver references.",
+        ],
+        "L25": [
+            "Look for reliability / qualification / mission-profile sections.",
+            "Capture qual standard (JESD47, AEC-Q100/Q200) if stated.",
+            "Capture temperature range, EM budget, NBTI/HCI aging margins.",
+        ],
+        "L26": [
+            "Look for MEMS / mechanical / transducer / movable-structure "
+            "sections (membranes, cantilevers, springs).",
+            "Capture transduction principle + package/mechanical stress.",
+            "OPT-IN: only a dedicated MEMS class carries this layer.",
+        ],
+        "L27": [
+            "Look for JEDEC SPD / module-config / self-describing-config "
+            "sections (EE1004 / TSE2004av / SPD5118).",
+            "Capture SPD revision, module type, module timing parameters.",
+            "OPT-IN: only a dedicated memory-module class carries this layer.",
         ],
     }.get(l_doc_code, [])
 

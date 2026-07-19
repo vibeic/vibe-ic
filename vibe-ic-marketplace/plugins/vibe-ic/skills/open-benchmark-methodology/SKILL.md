@@ -82,7 +82,7 @@ natural language to RTL fundamentally requires a language model. What IS determi
 
 | Step | Deterministic program? | Where |
 |---|---|---|
-| Phase 1: NL prompt → L1-L23 JSON | ✅ | `phase1_engine` / `phase1_one_shot_runner.py` |
+| Phase 1: NL prompt → L1-L27 JSON | ✅ | `phase1_engine` / `phase1_one_shot_runner.py` |
 | ic_class detection + dispatch | ✅ | `design_one_shot_runner.py` + `ic_class_profile.py` |
 | **spec → RTL authoring** | **❌ AI skill** | `spec-to-rtl` (fallback skill) |
 | RTL hygiene (power-up `--fix`, latch repair) | ✅ | `rtl_hygiene_lint.py --fix` |
@@ -124,8 +124,8 @@ For every new benchmark, answer these questions in order:
 ### The four real shapes — concrete templates
 
 #### Shape A — Full runner (chip-grade)
-**When**: benchmark IC includes L1-L23 design-doc-style inputs (or upstream docs you transcribe into
-L1-L23), targets a PDK, expects DRC/LVS/STA sign-off. Examples: `benchmark_clean/{spm,sha256,subservient,u_hawaii_adc}`.
+**When**: benchmark IC includes L1-L27 design-doc-style inputs (or upstream docs you transcribe into
+L1-L27), targets a PDK, expects DRC/LVS/STA sign-off. Examples: `benchmark_clean/{spm,sha256,subservient,u_hawaii_adc}`.
 
 ```bash
 # Path B: vendor docs already in input/docs/L*.md
@@ -314,7 +314,7 @@ A hidden scoring testbench is generated from the **same specification the author
 everything the scorer checks is — by construction — a SUBSET of the spec UNLESS the benchmark
 couples to something the spec never states. **"Spec" is the ENTIRE input chain** — a requirement
 is "in spec" if it exists at ANY station: input prompt (USER) → structured input / fact graph (PM
-AGENT) → Design Documents / L1-L23 (IC EXPERT AGENT) → spec-to-rtl authoring (RTL). Therefore a
+AGENT) → Design Documents / L1-L27 (IC EXPERT AGENT) → spec-to-rtl authoring (RTL). Therefore a
 verification FAILURE is almost always **one of our own gaps**, not an unfixable floor:
 
   - **(1) SPEC-EXTRACTION GAP** — the requirement EXISTS somewhere in the chain but was not carried
@@ -332,7 +332,7 @@ not-in-spec. A majority of the residual was initially mis-shelved as "FLOOR".
 > **PROGRAM-FIRST gate — `programs/spec_coverage_check.py` fires automatically:**
 > ```bash
 > python3 programs/spec_coverage_check.py \
->     [--prompt PROMPT] [--fact-graph FG] [--ldocs L1-L23_DIR] \
+>     [--prompt PROMPT] [--fact-graph FG] [--ldocs L1-L27_DIR] \
 >     [--rtl RTL] [--tb TB] [--failure "<failing behavior>"] [--strict] [--json OUT]
 > ```
 > (`--spec` is the back-compat alias for `--prompt`.) It extracts a DETERMINISTIC checklist of

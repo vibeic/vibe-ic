@@ -15,7 +15,7 @@
 #   • the plugin by name / command: vibe-ic, vibeic, vibe ic, /vibe-ic-*
 #   • an unambiguous IC-design-flow verb/noun: RTL, Verilog/SystemVerilog, tape-out,
 #     synthesis/synthesize, place-and-route / PnR, floorplan, DRC/LVS/STA, netlist,
-#     spec-to-rtl, phase 1/2/3, the L1-L23 doc track.
+#     spec-to-rtl, phase 1/2/3, the L1-L27 doc track.
 # NEVER blocks the turn: always exit 0.
 set +e
 
@@ -55,7 +55,7 @@ Operate AS the plugin's author, not a generic tool-caller:
        `benchmark/CAPTURE_ROUTING.json`   (step → program → skill)
   • program-first + AI-backup (dual-track convergence); §4.05 — read only the design
     INPUT, never the oracle/harness/golden;
-  • enter through Phase 1 (the one canonical front door): Phase 1 (NL/docs→L1-L23) →
+  • enter through Phase 1 (the one canonical front door): Phase 1 (NL/docs→L1-L27) →
     Phase 2 (RTL→lint→synth→conformance→audit) → Phase 3 (PnR→CTS→DRC/LVS/STA/IR)
     [+ Analog A1-A9 / Mixed M1-M4].
 </system-reminder>

@@ -21,7 +21,8 @@ FROM openroad/ubuntu24.04-dev:latest AS openroad-builder
 # Pinned to the F-A2 commit (tapcell -bound_to_placement) shipped in vibeic-eda:0.2.7,
 # a fast-forward over the F-A1 repair_antennas -reroute commit (0.2.6).
 # HEAD of branch vibeic/post-route-detailed-routing-repair as of 2026-07-09.
-ARG OPENROAD_REF=3efb695851045c200b95d9bf243884e3810656a6
+# 2026-07-17: bump to 6042a8f3 — odb dbInsertBuffer skip supply pins in buffer-master validation.
+ARG OPENROAD_REF=6042a8f3fcc68f6a1c58d06ea219b8f64d5695d6
 RUN git clone https://github.com/vibeic/OpenROAD.git /src \
  && cd /src && git checkout ${OPENROAD_REF} \
  && git submodule update --init --recursive --depth 1 \
@@ -97,10 +98,10 @@ RUN git clone https://github.com/vibeic/iverilog.git /iverilog \
 #   intact. Phase-3 streamout AND commercial sign-off DRC both point here.
 #   The svrf-native-drc branch = streamout-fixes + db::SVRFDeck/db::SVRFEngine + the
 #   `svrfdrc <deck> <layout> <report>` buddy (native C++, NO Python interpreter). Byte-
-#   parity vs the old run_svrf_drc.py proven on the real commercial_pdk deck.
+#   parity vs the old run_svrf_drc.py proven on a real commercial foundry deck.
 # ---------------------------------------------------------------------------
 FROM ubuntu:24.04 AS klayout-builder
-ARG KLAYOUT_REF=884e4a19bfde2fea85bcd5c1815e6297bf769abf  # pinned; branch vibeic/svrf-native-drc
+ARG KLAYOUT_REF=0f0094decd3e8751c4a291d91e01e063c7ca31c3  # pinned; branch vibeic/svrf-native-drc (2026-07-17: svrfdrc --threads rule-check parallelism + opt-in --cell-aware-feol exemption; re-pinned 2026-07-18 after an NDA-redaction history rewrite — same tree, new SHA)
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       build-essential git python3-dev zlib1g-dev libexpat1-dev libcurl4-openssl-dev libpng-dev \
       qtbase5-dev qttools5-dev-tools ca-certificates \
@@ -187,7 +188,7 @@ RUN command -v fault >/dev/null 2>&1 && ln -sf "$(command -v fault)" /foss/tools
 # /foss/tools/klayout-vibeic above. The `svrfdrc()` entry + the whole native SVRF
 # engine (dbSVRFDeck/dbSVRFEngine) are baked into the FORK's libklayout_bd.so there.
 # NO Python interpreter, NO `-r` script, NO GUI macro — byte-parity with the retired
-# run_svrf_drc.py proven on the real commercial_pdk deck.
+# run_svrf_drc.py proven on a real commercial foundry deck.
 #
 # WRAPPER (not a bare symlink): the buddy's ELF carries DT_RUNPATH=/foss/tools/klayout-vibeic,
 # but the runtime env sets LD_LIBRARY_PATH=/foss/tools/klayout:... and DT_RUNPATH is

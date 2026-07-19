@@ -55,12 +55,12 @@ analog_steps: 9
 stages:
   # v2 — Phase 1 doc-extraction stage. Unified entry that wraps the
   # 17 doc-gen skills (Path A: input_doc/) + 1 dialogue skill
-  # (Path B: input_prompt/). Output is L1-L23 JSON in
+  # (Path B: input_prompt/). Output is L1-L27 JSON in
   # phase1/generated_docs/ — the universal handoff to Phase 2.
   # SKIP allowed when phase1/generated_docs/ already populated by an
   # external authoring path (e.g. the runner's dialogue mode).
   - id: stage_phase1
-    name: "Phase 1 - Spec Extraction (input → L1-L23 structured JSON)"
+    name: "Phase 1 - Spec Extraction (input → L1-L27 structured JSON)"
     steps: [D1]
     gate_at_end: phase1_compliance
 
@@ -130,7 +130,7 @@ steps:
   # doc-gen skills + dialogue entry. Gate passes when all 13 L docs
   # (L1..L13) exist as JSON under phase1/generated_docs/.
   - id: D1
-    name: "Phase 1 Doc Extraction (17 skills + dialogue entry → L1-L23)"
+    name: "Phase 1 Doc Extraction (17 skills + dialogue entry → L1-L27)"
     stage: stage_phase1
     skills:
       - datasheet-gen

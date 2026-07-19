@@ -4,7 +4,7 @@
 
 ## When Plugin selects this IP
 
-Plugin's catalog selector matches SERV when L1-L23 spec says:
+Plugin's catalog selector matches SERV when L1-L27 spec says:
 - L2.cpu_isa starts with `rv32i`
 - L2.cpu_arch mentions `bit-serial` / `bit_serial` / `bit by bit`
 - L1.target_area_ge is small (<5000 GE)

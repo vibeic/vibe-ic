@@ -26,8 +26,7 @@ hygiene — never PDK content).
 """
 from __future__ import annotations
 
-import hashlib
-import os
+import posixpath
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -77,77 +76,78 @@ _ROLE_TOKENS = {
 }
 _REQUIRED_ROLES_DEFAULT = ("nmos", "pmos")
 
-# Corner-section role tokens. typ is the nominal section the knob sweep runs at;
-# slow/fast bracket the process grid; skew_sf / skew_fs are the N/P CROSS-skew
-# corners (slow-N/fast-P and fast-N/slow-P) where an OTA bias point splits — added
-# to the grid ONLY when the resolved shim actually exposes a skew section (never
-# fabricated). NB: the skew tokens `sf`/`fs` are matched as a section-name PREFIX
-# distinct from the process `ss`/`ff` (a `sf…` section is skew, `ss…` is slow).
+# Corner-section role tokens (slow / typ / fast). typ is the nominal section the
+# knob sweep runs at; slow/fast bracket the process grid.
 _SECTION_ROLE_TOKENS = {
     "slow": ("ss", "slow"),
     "typ":  ("tt", "typ", "nom", "tm"),
     "fast": ("ff", "fast"),
-    "skew_sf": ("sf", "snfp", "sfnp", "snf"),   # slow-N / fast-P
-    "skew_fs": ("fs", "fnsp", "fsnp", "fsn"),   # fast-N / slow-P
 }
-# process offsets mirror analog_real_corner_sweep.PVT_PROCESS (±3% off nominal).
-# The SKEW corners carry offset None — a mixed N/P skew has NO scalar ±% model, so
-# a skew corner that cannot be REALLY simulated is left un-derived (value None),
-# never fabricated off the typ base.
-_SECTION_ROLE_OFFSET = {"slow": -0.03, "typ": 0.0, "fast": +0.03,
-                        "skew_sf": None, "skew_fs": None}
+# process offsets mirror analog_real_corner_sweep.PVT_PROCESS (±3% off nominal)
+_SECTION_ROLE_OFFSET = {"slow": -0.03, "typ": 0.0, "fast": +0.03}
 
 _SUBCKT_RE = re.compile(r"(?im)^\s*\.subckt\s+(\S+)\s+(.*)$")
 _MODEL_RE = re.compile(r"(?im)^\s*\.model\s+(\S+)\s+(\w+)")
 # section DEFINITION form: `.lib <bare-identifier>` alone (NOT the include form
 # `.lib "path" section`, which carries a path/quote after `.lib`).
 _LIB_SECTION_RE = re.compile(r"(?im)^\s*\.lib\s+([A-Za-z_]\w*)\s*$")
-# include-FORM `.lib` line: `.lib <path-or-name> <section>` — a lib section that
-# pulls in ANOTHER section/lib (TWO args after `.lib`, vs the single-arg
-# DEFINITION form above). `.include <path>` is the other compose form. A lib
-# carrying BOTH `.lib <section>` DEFINITIONS and these include forms is a
-# COMPOSED WRAPPER (see _lib_is_composed_wrapper). Structural — no PDK-name match.
-# NB: horizontal-whitespace-only ([ \t], not \s) between the two args so a
-# newline cannot bridge two consecutive single-arg `.lib <section>` DEFINITION
-# lines into a false "two-arg include" match — both args must be on one line.
-_LIB_INCLUDE_RE = re.compile(
-    r"""(?im)^[ \t]*\.lib[ \t]+(?:"[^"]*"|'[^']*'|\S+)[ \t]+\S""")
-_INCLUDE_DIRECTIVE_RE = re.compile(r"(?im)^[ \t]*\.include\b")
-# The FILE token pulled in by an include-FORM line: `.lib <target> <section>` or
-# `.include <target>`. Used to tell a COMPOSITION shim (whose sections stitch in
-# OTHER lib files) from a raw device lib (whose sections define devices inline).
-_LIB_INCLUDE_TARGET_RE = re.compile(
-    r"""(?im)^[ \t]*\.lib[ \t]+("[^"]*"|'[^']*'|\S+)[ \t]+\S+[ \t]*$""")
-_INCLUDE_TARGET_RE = re.compile(
-    r"""(?im)^[ \t]*\.include[ \t]+("[^"]*"|'[^']*'|\S+)""")
-# A Monte-Carlo / statistical / alias lib name (family-agnostic tokens, no
-# vendor/SKU literal). A NOMINAL corner-sweep shim must NOT fold these in — that
-# is the MC-yield path's job; a wrapper that composes them is a statistical /
-# aggregator index, not the nominal ngspice corner shim.
-_MC_LIB_HINT_RE = re.compile(
-    r"(?i)(?:(?<![a-z0-9])mc(?![a-z0-9])|mismatch|statistical|montecarlo|agauss)")
-# A PASSIVE / parasitic corner section (the block that defines the well-diode /
-# resistor / cap parasitic subckts an LV-CMOS device instance references). Loaded
-# ALONGSIDE the LV corner so a >4-terminal device's parasitic well-diode resolves.
-# Family-agnostic name tokens, no vendor/SKU literal.
-_PASSIVE_SECTION_RE = re.compile(r"(?i)(?:passiv|(?:^|_)pas(?:$|_)|(?:^|_)rc(?:$|_))")
+# section END form: `.endl [name]`.
+_ENDL_RE = re.compile(r"(?im)^\s*\.endl\b")
 
 
-def _passive_companion(corner_section: str, sections: List[str]) -> Optional[str]:
-    """The passive/parasitic corner section to load ALONGSIDE `corner_section`
-    (an LV-CMOS section) so the PMOS parasitic well-diode subckt resolves. Prefers
-    a passive section sharing the corner's leading process token (e.g. `tt_lv` →
-    `tt_passive`); falls back to any single passive section (a shared parasitic
-    block). None when the lib has no LV/passive split. chip-AGNOSTIC."""
-    passives = [s for s in sections
-                if _PASSIVE_SECTION_RE.search(s) and s != corner_section]
-    if not passives:
-        return None
-    head = corner_section.split("_", 1)[0]
-    for s in passives:
-        if s.split("_", 1)[0] == head or s.startswith(head):
-            return s
-    return passives[0]
+def _iter_section_bodies(text: str):
+    """Yield (section_name, body_text) for every `.lib <bare> ... .endl` block.
+    Non-nesting (HSPICE/ngspice section DEFs do not nest); a stray inner
+    `.lib <bare>` closes the current block defensively. Lines outside any block
+    are ignored. Pure — chip-AGNOSTIC (directive syntax only)."""
+    lines = (text or "").splitlines()
+    i, n = 0, len(lines)
+    while i < n:
+        m = _LIB_SECTION_RE.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        name = m.group(1)
+        j = i + 1
+        body: List[str] = []
+        while j < n and not _ENDL_RE.match(lines[j]):
+            if _LIB_SECTION_RE.match(lines[j]):        # defensive: no nesting
+                break
+            body.append(lines[j])
+            j += 1
+        yield name, "\n".join(body)
+        i = j + 1
+
+
+def parse_composed_corner_sections(lib_path: str, text: str) -> List[str]:
+    """Return the section names in `text` that are CROSS-FILE COMPOSED corners.
+
+    A foundry ships a corner ENTRY-POINT lib (e.g. a `corner<X>.lib`) whose
+    top-level `.lib <corner> ... .endl` sections do not define devices/params
+    themselves — they COMPOSE the process-param, noise-flag, passive and diode
+    sub-sections that a single device building-block sub-lib's per-section does
+    NOT. Structurally, such a section's body `.include`s / `.lib '<file>'
+    <section>`-includes at least one model file OTHER than its own — the signal
+    that it is the self-contained corner the deck should load, and the only lib
+    whose closure can carry the HSPICE-only packaging directives (`.malias`) the
+    ngspice normalizer strips.
+
+    A device building-block sub-lib's per-section (e.g. `tt_tn`) only includes
+    sections of its OWN file, so it is NOT reported here — it is not a complete
+    corner on its own. chip-AGNOSTIC: keyed purely on cross-file composition
+    structure, never a vendor / SKU / section-name literal."""
+    own = posixpath.basename(str(lib_path)).lower()
+    out: List[str] = []
+    for name, body in _iter_section_bodies(text):
+        cross_file = False
+        for inc in _iter_includes(body):
+            ref = posixpath.basename(inc).lower()
+            if ref and ref != own:
+                cross_file = True
+                break
+        if cross_file:
+            out.append(name)
+    return out
 
 
 @dataclass
@@ -165,36 +165,27 @@ class DeckContext:
     typ_section: Optional[str] = None
     process_corners: List[Tuple[str, float]] = field(default_factory=list)
     device_map: Dict[str, str] = field(default_factory=dict)
-    # {role: terminal-count} for the resolved devices — so the deck emitter can
-    # PAD a 4-terminal template instantiation to a >4-terminal commercial device
-    # (e.g. a 5-terminal PMOS carrying a well/deep-nwell tie). {} for the open
-    # PDKs (their devices are 4-terminal → no padding).
-    device_terms: Dict[str, int] = field(default_factory=dict)
-    # {corner-section: passive-companion-section} — the passive section to LOAD
-    # ALONGSIDE each LV-CMOS corner section so the PMOS parasitic well-diode
-    # subckt resolves (an LV-only section leaves it "unknown subckt"). {} for the
-    # open PDKs / single-section libs (no LV/passive split).
-    passive_sections: Dict[str, str] = field(default_factory=dict)
+    # {role: n_terminals} for each resolved device subckt. The corner templates
+    # are authored for a 4-terminal (d g s b) MOS; a foundry subckt that carries
+    # EXTRA terminals (e.g. a 5th p-substrate node, `d g s b sub`) needs those
+    # extra nodes supplied at instantiation, else ngspice aborts "Too few
+    # parameters for subcircuit". The deck emitter reads this to inject the
+    # missing substrate/well ties (see render_deck). chip-AGNOSTIC.
+    device_terminals: Dict[str, int] = field(default_factory=dict)
     unresolved_roles: List[str] = field(default_factory=list)
     work_items: List[str] = field(default_factory=list)
     disclosure: str = ""
-    # {"dir", "n_linked", "collisions"} when the caller asked for an include
-    # farm (see build_lib_include_farm); None when no farm was built. Counts +
-    # the farm dir only — never a lib basename (NDA hygiene).
-    include_farm: Optional[Dict[str, Any]] = None
 
     def as_json(self) -> Dict[str, Any]:
         return {
             "status": self.status, "source": self.source, "family": self.family,
             "model_lib": self.model_lib,
             "model_lib_includes": self.model_lib_includes,
-            "include_farm": self.include_farm,
             "corner_sections": self.corner_sections,
             "typ_section": self.typ_section,
-            "device_terms": self.device_terms,
-            "passive_sections": self.passive_sections,
             "process_corners": [list(pc) for pc in self.process_corners],
             "device_map": self.device_map,
+            "device_terminals": self.device_terminals,
             "unresolved_roles": self.unresolved_roles,
             "work_items": self.work_items, "disclosure": self.disclosure,
         }
@@ -240,6 +231,59 @@ def parse_devices(text: str) -> Dict[str, Any]:
     return {"subckts": subckts, "models": models}
 
 
+# Directives that pull another model file into a lib's parse scope. A PDK
+# commonly ships a `corner<X>.lib` that DEFINES the `.lib <section>` corner
+# sections and, inside each section, `.include`s the file(s) that actually
+# DEFINE the device `.subckt`s (confirmed: IHP sg13g2 cornerMOSlv.lib includes
+# sg13g2_moslv_mod.lib). Parsing only the corner lib's own text then sees the
+# sections but NOT the devices, so the section-bearing lib (the one the deck's
+# `.lib <path> <section>` line must point at) looked device-less. Following the
+# includes lets a section-bearing lib self-report its transitive devices.
+_INCLUDE_RE = re.compile(
+    r'(?im)^\s*\.(?:include|inc)\s+["\']?([^"\'\s]+)["\']?\s*$')
+# `.lib <path> <section>` INCLUDE form (a path — has a '/' or '.ext' — followed
+# by a section name); distinct from the `.lib <bare-identifier>` section DEF.
+_LIB_INCLUDE_RE = re.compile(
+    r'(?im)^\s*\.lib\s+["\']?([^"\'\s]*[./][^"\'\s]*)["\']?\s+\S+')
+
+
+def _iter_includes(text: str):
+    """Yield the referenced file paths of every `.include`/`.inc`/`.lib <path>
+    <section>` directive in `text` (verbatim, unresolved)."""
+    for m in _INCLUDE_RE.finditer(text or ""):
+        yield m.group(1)
+    for m in _LIB_INCLUDE_RE.finditer(text or ""):
+        yield m.group(1)
+
+
+def transitive_subckts(lib_path: str, text: str,
+                       reader: Optional[Callable[[str], Optional[str]]],
+                       _seen: Optional[set] = None, _depth: int = 0,
+                       ) -> Dict[str, int]:
+    """Union of `.subckt {name: n_terminals}` reachable from `text` by following
+    `.include`/`.inc`/`.lib <path> <section>` directives, resolved relative to
+    the including file's directory. Bounded depth + visited-set (a model-lib
+    include graph is a DAG in practice). A missing `reader`, an unreadable
+    include, or a cycle is skipped silently → degrades to the lib's OWN devices.
+    chip-AGNOSTIC (directive syntax only, no vendor/SKU literal)."""
+    subckts = dict(parse_devices(text)["subckts"])
+    if reader is None or _depth >= 8:
+        return subckts
+    seen = _seen if _seen is not None else set()
+    base = posixpath.dirname(str(lib_path))
+    for inc in _iter_includes(text):
+        tgt = inc if posixpath.isabs(inc) else posixpath.normpath(
+            posixpath.join(base, inc))
+        if tgt in seen:
+            continue
+        seen.add(tgt)
+        itxt = reader(tgt)
+        if itxt is None:
+            continue
+        subckts.update(transitive_subckts(tgt, itxt, reader, seen, _depth + 1))
+    return subckts
+
+
 def map_device_roles(subckts: Dict[str, int],
                      required: Tuple[str, ...] = _REQUIRED_ROLES_DEFAULT,
                      ) -> Tuple[Dict[str, str], List[str], List[str]]:
@@ -276,217 +320,29 @@ def parse_sections(text: str) -> List[str]:
     return out
 
 
-def _lib_is_composed_wrapper(text: str) -> bool:
-    """Structural detector: True when a model lib is a COMPOSED CORNER WRAPPER —
-    it DEFINES `.lib <section>` corner blocks whose bodies themselves pull in
-    OTHER sections/libs (an include-form `.lib <path> <section>` line, or a
-    `.include`). The ngspice bridge needs such a wrapper section loaded as a
-    unit: it composes the prerequisite blocks (e.g. a noise-flag / temperature /
-    well-diode block) BEFORE the device model section, so a bare
-    `.lib <raw-lib> <corner>` that skips those prerequisites errors out. A raw
-    device lib has `.lib <section>` DEFINITIONS but NO include forms → not a
-    wrapper. Structural — no chip / vendor / SKU literal (never a PDK-name
-    match)."""
-    if not text:
-        return False
-    has_section_def = bool(_LIB_SECTION_RE.search(text))
-    has_compose = bool(_LIB_INCLUDE_RE.search(text)) or bool(
-        _INCLUDE_DIRECTIVE_RE.search(text))
-    return has_section_def and has_compose
-
-
-def _cross_file_include_targets(text: str, self_basename: str) -> set:
-    """The set of OTHER lib-file basenames a lib pulls in via include-form lines
-    (`.lib <file> <section>` / `.include <file>`), excluding a self-reference.
-    A COMPOSITION shim stitches in the device model lib(s) + prerequisite libs
-    this way; a raw device lib defines devices inline and pulls in nothing (or
-    only self). Structural — no chip / vendor / SKU literal."""
-    out: set = set()
-    for rex in (_LIB_INCLUDE_TARGET_RE, _INCLUDE_TARGET_RE):
-        for m in rex.finditer(text or ""):
-            tgt = m.group(1).strip("\"'")
-            base = Path(tgt).name
-            if base and base != self_basename:
-                out.add(base)
-    return out
-
-
-LIB_FARM_DIRNAME = ".pdk_lib_farm"
-
-
-def lib_farm_dir(project: Any) -> Path:
-    """The canonical per-project model-lib include farm (see
-    build_lib_include_farm). One farm per project, shared by every analog block
-    and by the MC-yield path, so the same staged lib is always loaded through the
-    same path. Dot-prefixed and git-excluded from the inside — the SKU-bearing
-    link names never enter the repo."""
-    return Path(project) / "phase3" / "analog" / LIB_FARM_DIRNAME
-
-
-def _resolve_include_closure(roots: List[Path], libs: List[Path]
-                             ) -> Tuple[List[Path], List[str], List[str]]:
-    """Walk the transitive bare-name include graph from `roots` over the staged
-    `libs`. Returns (closure, ambiguous, missing) where `closure` is the ordered
-    set of files really reachable, and the two lists name the UNRESOLVABLE hops
-    (as target basenames, for the caller to count — never to guess with).
-
-    Each hop is resolved the way ngspice itself would, then widened by exactly
-    one deterministic step:
-      1. a file of that name NEXT TO the including file wins outright (this is
-         ngspice's own rule — unambiguous by construction);
-      2. otherwise the staged set is searched by basename: exactly ONE distinct
-         file → that one; TWO OR MORE → AMBIGUOUS, resolved for neither.
-    So the closure only ever contains files a correct resolver would have loaded;
-    it never picks between same-named candidates."""
-    by_base: Dict[str, List[Path]] = {}
-    for p in libs:
-        by_base.setdefault(p.name, []).append(p)
-    closure: List[Path] = []
-    seen: set = set()
-    ambiguous: List[str] = []
-    missing: List[str] = []
-    queue = list(roots)
-    while queue:
-        cur = queue.pop(0)
-        try:
-            key = str(cur.resolve())
-        except OSError:
-            continue
-        if key in seen or not cur.is_file():
-            continue
-        seen.add(key)
-        closure.append(cur)
-        try:
-            txt = cur.read_text(errors="replace")
-        except OSError:
-            continue
-        for tgt in sorted(_cross_file_include_targets(txt, cur.name)):
-            sib = cur.parent / tgt
-            if sib.is_file():
-                queue.append(sib)                        # rule 1: ngspice's own
-                continue
-            cands = {str(p.resolve()): p for p in by_base.get(tgt, [])
-                     if p.is_file()}
-            if len(cands) == 1:
-                queue.append(next(iter(cands.values())))  # rule 2: unique
-            elif len(cands) > 1:
-                ambiguous.append(tgt)
-            else:
-                missing.append(tgt)
-    return closure, ambiguous, missing
-
-
-def build_lib_include_farm(libs: List[str], farm_dir: Any,
-                           roots: Optional[List[str]] = None) -> Dict[str, Any]:
-    """Co-locate the model libs REACHABLE from `roots` under one directory as
-    SYMLINKS keyed by basename, and return
-    {"dir", "map": {staged-path: farm-path}, "n_linked", "ambiguous", "missing"}.
-
-    WHY (GAP-ANALOG, corner-include resolution): a PDK's composed corner shim
-    stitches in its prerequisite / device libs by BARE RELATIVE NAME, and ngspice
-    resolves a relative `.include` / `.lib` target against the directory of the
-    INCLUDING FILE — never against the process cwd. When the staged libs span
-    several directories, a bare include that crosses a directory boundary is
-    unresolvable from ANY cwd ("Could not find library file …" → fatal exit(1) on
-    every corner). Loading the entry lib through a farm whose members are all
-    basename-siblings makes every hop resolve, transitively, without copying or
-    rewriting a single byte of PDK content.
-
-    Scoped to the include CLOSURE of `roots`, not to every staged lib: a PDK may
-    legitimately stage two different files under one basename in different
-    directories, and only one of them is reachable. Farming the whole staged set
-    flat would make that name ambiguous and block an otherwise-resolvable deck.
-
-    Cannot silently substitute a wrong lib:
-      * a hop whose basename has two DISTINCT candidates and no same-directory
-        winner is AMBIGUOUS — it is linked for NEITHER, so ngspice fails loudly
-        rather than loading an arbitrary one;
-      * a target genuinely absent from the staged set is absent from the farm too
-        — ngspice still errors and the run still fails;
-      * the farm holds symlinks only, so a linked lib is byte-for-byte the file
-        the resolver chose.
-
-    chip/PDK-AGNOSTIC (structural — no vendor / SKU / filename literal). NDA: the
-    summary carries COUNTS and the farm dir only, never a lib basename, and the
-    farm self-excludes from git so the SKU-bearing link names never enter the
-    repo."""
-    staged = []
-    for lib in libs:
-        p = Path(lib)
-        try:
-            if p.is_file():
-                staged.append(p)
-        except OSError:
-            continue
-    root_paths = [Path(r) for r in (roots if roots is not None else libs)]
-    closure, ambiguous, missing = _resolve_include_closure(root_paths, staged)
-    empty = {"dir": None, "map": {}, "n_linked": 0,
-             "ambiguous": len(set(ambiguous)), "missing": len(set(missing))}
-    if not closure:
-        return empty
-    # One farm per ROOT SET: two entry libs whose closures disagree on a basename
-    # must not share a directory, or the second would silently shadow the first.
-    tag = hashlib.sha256(
-        "\n".join(sorted(str(p.resolve()) for p in root_paths)).encode()
-    ).hexdigest()[:12]
-    farm = Path(farm_dir) / tag
-    try:
-        farm.mkdir(parents=True, exist_ok=True)
-        (Path(farm_dir) / ".gitignore").write_text("*\n")
-    except OSError as exc:
-        return dict(empty, error=str(exc))
-    # a basename claimed by two DISTINCT files INSIDE the closure cannot be
-    # represented in a flat farm — link neither, and report it as ambiguous.
-    by_base: Dict[str, set] = {}
-    for p in closure:
-        by_base.setdefault(p.name, set()).add(str(p.resolve()))
-    shadowed = {b for b, reals in by_base.items() if len(reals) > 1}
-    mapping: Dict[str, str] = {}
-    for p in closure:
-        if p.name in shadowed:
-            continue
-        # link to the ABSOLUTE STAGED path (not the realpath): the container
-        # already reaches the staged path today, and the PDK's own symlink chain
-        # stays exactly as it was staged.
-        target = str(p.absolute())
-        link = farm / p.name
-        try:
-            if link.is_symlink():
-                if os.readlink(str(link)) != target:
-                    link.unlink()
-                    link.symlink_to(target)
-            elif link.exists():
-                continue                    # a real file squats the name — leave it
-            else:
-                link.symlink_to(target)
-        except OSError:
-            continue
-        mapping[str(p)] = str(link)
-    return {"dir": str(farm), "map": mapping, "n_linked": len(mapping),
-            "ambiguous": len(set(ambiguous) | shadowed),
-            "missing": len(set(missing))}
-
-
 def map_corner_sections(sections: List[str]
-                        ) -> Tuple[Optional[str], List[Tuple[str, Any]]]:
+                        ) -> Tuple[Optional[str], List[Tuple[str, float]]]:
     """Map available section names → (typ_section, process_corners). typ is the
-    nominal knob-sweep section; process_corners is the slow/typ/fast (+ N/P skew
-    when present) grid built ONLY from sections that actually exist (never a
-    fabricated corner). A skew corner carries offset None (no scalar ±% model);
-    it is added ONLY when the shim exposes a skew section."""
+    nominal knob-sweep section; process_corners is the slow/typ/fast grid built
+    ONLY from sections that actually exist (never a fabricated corner)."""
     role_hit: Dict[str, str] = {}
     for sec in sections:
+        # `_`/non-alnum-delimited components, so a prefixed corner name like
+        # sg13g2's `mos_tt` / `mos_ss` / `mos_ff` maps to typ/slow/fast by its
+        # `tt`/`ss`/`ff` COMPONENT (not only a bare or leading token). Component
+        # equality (not substring) avoids false hits like `cutt` → `tt`.
+        comps = {c for c in re.split(r"[^a-z0-9]+", sec.lower()) if c}
         for role, toks in _SECTION_ROLE_TOKENS.items():
             if role in role_hit:
                 continue
-            if any(sec == t or sec.startswith(t) for t in toks):
+            if any(sec == t or sec.startswith(t) or t in comps for t in toks):
                 role_hit[role] = sec
     typ = role_hit.get("typ")
     if typ is None and sections:
         typ = sections[0]                          # honest fallback: first section
         role_hit.setdefault("typ", typ)
-    process: List[Tuple[str, Any]] = []
-    for role in ("slow", "typ", "fast", "skew_sf", "skew_fs"):
+    process: List[Tuple[str, float]] = []
+    for role in ("slow", "typ", "fast"):
         sec = role_hit.get(role)
         if sec:
             process.append((sec, _SECTION_ROLE_OFFSET[role]))
@@ -506,6 +362,9 @@ def known_family_context(selector: str) -> DeckContext:
         corner_sections=list(fam["corner_sections"]),
         typ_section=typ, process_corners=process,
         device_map=dict(fam["device_map"]),
+        # the open-PDK device templates are 4-terminal (d g s b) — no extra
+        # substrate/well node injection (keeps the sky130 deck byte-identical).
+        device_terminals={role: 4 for role in fam["device_map"]},
         disclosure=(f"known open PDK '{selector}' — device map + corner sections "
                     f"from the plugin's authored template family (no lib parse)."),
     )
@@ -521,7 +380,6 @@ def _default_reader(path: str) -> Optional[str]:
 def custom_family_context(res: Dict[str, Any],
                           required: Tuple[str, ...] = _REQUIRED_ROLES_DEFAULT,
                           reader: Optional[Callable[[str], Optional[str]]] = None,
-                          farm_dir: Any = None,
                           ) -> DeckContext:
     """Build the deck context for a RESOLVED custom / installed non-open family
     (rung 1 project_custom_pdk, or rung 2 container_installed of an unknown
@@ -541,21 +399,27 @@ def custom_family_context(res: Dict[str, Any],
     union_models: Dict[str, str] = {}
     per_lib_sections: Dict[str, List[str]] = {}
     per_lib_subckts: Dict[str, Dict[str, int]] = {}
-    per_lib_composed: Dict[str, bool] = {}
-    per_lib_cross_targets: Dict[str, set] = {}
+    per_lib_composed: Dict[str, List[str]] = {}
+    per_lib_own_devices: Dict[str, int] = {}
     for lib in libs:
         txt = reader(lib)
         if txt is None:
             unread.append(lib)
             continue
         dev = parse_devices(txt)
-        union_subckts.update(dev["subckts"])
+        per_lib_own_devices[lib] = len(dev["subckts"])
+        # Follow `.include`/`.lib <path> <section>` so a section-bearing corner
+        # lib self-reports the devices it pulls in transitively (the deck's
+        # `.lib <path> <section>` line loads exactly that closure). Degrades to
+        # the lib's OWN devices when includes are unreadable.
+        tsub = transitive_subckts(lib, txt, reader)
+        union_subckts.update(tsub)
         union_models.update(dev["models"])
         per_lib_sections[lib] = parse_sections(txt)
-        per_lib_subckts[lib] = dev["subckts"]
-        per_lib_composed[lib] = _lib_is_composed_wrapper(txt)
-        per_lib_cross_targets[lib] = _cross_file_include_targets(
-            txt, Path(lib).name)
+        per_lib_subckts[lib] = tsub
+        # cross-file COMPOSED corner sections (a foundry corner ENTRY-POINT lib
+        # ships these; a device building-block sub-lib does not).
+        per_lib_composed[lib] = parse_composed_corner_sections(lib, txt)
 
     device_map, unresolved, notes = map_device_roles(union_subckts, required)
 
@@ -571,54 +435,70 @@ def custom_family_context(res: Dict[str, Any],
     # tiebreaker. A single readable lib is unchanged (it wins trivially); when
     # NO devices resolved, n_defines is 0 for all libs and the ranking degrades
     # to the historical section-count pick. Structural, no vendor/SKU literal.
-    #
-    # GAP-ANALOG (composed ngspice wrapper): when a PDK ships BOTH a COMPOSITION
-    # SHIM (a wrapper whose corner section stitches in the prerequisite blocks +
-    # the device model section as a unit) AND raw device libs, PREFER the shim
-    # for ngspice. A bare `.lib <raw-lib> <corner>` skips the prerequisite blocks
-    # the ngspice bridge needs and errors (~142 errors); the shim composes
-    # everything. The shim is identified STRUCTURALLY (no PDK-name match) as a lib
-    # that is (a) a composed wrapper, (b) defines NO device subckts of its OWN
-    # (a raw device lib defines them inline — even if it self-includes a
-    # noiseflag/temp block, so bare `_lib_is_composed_wrapper` alone is too
-    # coarse), (c) COMPOSES (cross-file includes) a device-DEFINING lib, and
-    # (d) does NOT fold in Monte-Carlo / statistical / alias libs (a wrapper that
-    # composes those is a statistical / aggregator index, not the nominal corner
-    # shim — that content belongs to the MC-yield path). The shim flag ranks
-    # ABOVE the #149 device-defining signal. When NO shim exists (e.g.
-    # sky130-style bare libs, or a single raw lib), is_shim is 0 for all libs and
-    # the ranking degrades EXACTLY to the historical (n_defines, n_sections) pick.
     readable = [l for l in libs if l not in unread]
     resolved_dev_names = {v for v in device_map.values()}
-    # basenames of the libs that DEFINE a resolved device-role subckt — the libs
-    # a composition shim must stitch in to be the ngspice corner entry point.
-    definer_basenames = {
-        Path(l).name for l in readable
-        if resolved_dev_names & set(per_lib_subckts.get(l, {}))}
 
-    def _is_composition_shim(lib: str) -> bool:
-        if not per_lib_composed.get(lib):
-            return False                                   # not a wrapper at all
-        own = set(per_lib_subckts.get(lib, {}))
-        if resolved_dev_names & own:
-            return False                        # defines devices → raw device lib
-        tgts = per_lib_cross_targets.get(lib, set())
-        if not (tgts & definer_basenames):
-            return False                        # composes no device-defining lib
-        if any(_MC_LIB_HINT_RE.search(t) for t in tgts):
-            return False                # folds in MC/stat/alias → not a nominal shim
-        return True
-
-    def _primary_rank(lib: str) -> Tuple[int, int, int]:
-        is_shim = 1 if _is_composition_shim(lib) else 0
+    # v1.4.58 — a foundry that ships a CORNER ENTRY-POINT lib (`corner<X>.lib`)
+    # whose top-level `.lib <corner>` sections CROSS-FILE-COMPOSE the process /
+    # noise / passive / diode sub-sections must be picked over a device
+    # building-block sub-lib: a single sub-lib section (e.g. `tt_tn`) is NOT a
+    # self-contained corner (its `.subckt` needs noise-flag params + well-diode
+    # subckts from OTHER sections/files), so loading it aborts ngspice with
+    # `unknown subckt` / `Undefined parameter`. The entry-point lib's composed
+    # section pulls the whole closure AND is the only lib whose include graph
+    # carries the HSPICE-only `.malias` the ngspice normalizer strips. Rank a
+    # composed-corner lib above a non-composed one (device-role coverage stays
+    # the top gate; a composed lib that resolves NO device wins nothing).
+    # chip-AGNOSTIC: keyed on cross-file composition structure, no PDK literal.
+    #
+    # The strongest signal for a corner ENTRY-POINT lib is a PURE AGGREGATOR: it
+    # cross-file-composes corner sections AND defines ZERO devices in its OWN
+    # text (every device comes transitively). A device building-block sub-lib
+    # whose sections merely reference a passive sub-lib is composed too, but it
+    # DEFINES its devices inline (own_devices > 0), so it is NOT the entry point.
+    # Preferring the pure aggregator picks the `corner<X>.lib` over the device
+    # sub-libs (raw or pre-translated) deterministically; the sort-order fallback
+    # (base name before a `_ngspice`-suffixed variant) then favours the canonical
+    # raw corner file whose closure carries the `.malias` the normalizer strips.
+    def _primary_rank(lib: str) -> Tuple[int, int, int, int]:
         defined = set(per_lib_subckts.get(lib, {}))
         n_defines = len(resolved_dev_names & defined)
+        n_composed = len(per_lib_composed.get(lib, []))
+        own_dev = per_lib_own_devices.get(lib, 0)
+        is_aggregator = 1 if (n_composed and own_dev == 0) else 0
         n_sections = len(per_lib_sections.get(lib, []))
-        return (is_shim, n_defines, n_sections)
+        return (n_defines, is_aggregator, n_composed, n_sections)
 
     primary = None
     if readable:
         primary = max(readable, key=_primary_rank)
+
+    # The emitted deck loads ONE lib: `.lib <primary> <section>`. The device
+    # subckts it instantiates must come from THAT lib's closure — otherwise a
+    # family shipping separate LV/HV corner libs can bind a device the loaded
+    # section never defines (ngspice `unknown subckt`). Re-derive device_map
+    # from the primary's own (transitive) devices; keep the union map only when
+    # the primary cannot cover a required role (honest fallback). A single-lib
+    # family (the synthetic fixtures + rung-1 staged libs) is unchanged: primary
+    # IS that lib, so its closure == the union.
+    if primary:
+        p_map, p_unres, p_notes = map_device_roles(
+            per_lib_subckts.get(primary, {}), required)
+        if not p_unres:
+            device_map, unresolved, notes = p_map, p_unres, p_notes
+
+    # Terminal count per resolved role (from the primary's transitive subckts).
+    # A foundry MOS subckt may carry a 5th (or more) substrate/well terminal the
+    # 4-terminal template does not supply — the deck emitter injects the extra
+    # ground ties from this map. Falls back to the union closure for a role the
+    # primary does not itself define (honest — matches the device_map fallback).
+    primary_subs = per_lib_subckts.get(primary, {}) if primary else {}
+    device_terminals: Dict[str, int] = {}
+    for role, dname in device_map.items():
+        nterm = primary_subs.get(dname, union_subckts.get(dname))
+        if isinstance(nterm, int):
+            device_terminals[role] = nterm
+
     sections = per_lib_sections.get(primary, []) if primary else []
     # union sections across libs is what's "available"; primary drives the deck.
     all_sections: List[str] = []
@@ -626,13 +506,15 @@ def custom_family_context(res: Dict[str, Any],
         for s in per_lib_sections.get(l, []):
             if s not in all_sections:
                 all_sections.append(s)
-    typ, process = map_corner_sections(sections or all_sections)
+    # When the primary is a CORNER ENTRY-POINT lib, map typ/slow/fast over its
+    # cross-file COMPOSED corner sections ONLY — never a device/noise-flag stub
+    # sub-section that would abort ngspice. Otherwise (a plain sectioned sub-lib,
+    # incl. the single-lib rung-1 fixtures) map over its own sections as before.
+    primary_composed = per_lib_composed.get(primary, []) if primary else []
+    corner_pool = primary_composed or sections or all_sections
+    typ, process = map_corner_sections(corner_pool)
 
     work_items: List[str] = []
-    if unread:
-        work_items.append(
-            f"NEEDS_NATIVE_TEMPLATE: {len(unread)} resolved model lib(s) not "
-            f"readable at emit time (paths only): {[Path(p).name for p in unread]}")
     if unresolved:
         found_roles = sorted(device_map)
         work_items.append(
@@ -650,73 +532,44 @@ def custom_family_context(res: Dict[str, Any],
         work_items.append(
             "NEEDS_NATIVE_TEMPLATE: no readable model lib among the resolved "
             "custom-PDK spice libs")
-
-    # {role: terminal-count} for the resolved devices (from the parsed subckt
-    # terminal counts) — the deck emitter pads a 4-terminal template to a
-    # >4-terminal commercial device (e.g. a 5-terminal PMOS w/ well tie).
-    device_terms = {role: union_subckts.get(sub, 4)
-                    for role, sub in device_map.items()}
-    # {corner-section: passive-companion} — the passive section to load ALONGSIDE
-    # each corner section so a >4-terminal device's parasitic well-diode resolves.
-    avail_sections = sections or all_sections
-    passive_map: Dict[str, str] = {}
-    for sec in avail_sections:
-        if _PASSIVE_SECTION_RE.search(sec):
-            continue                                   # a passive section itself
-        comp = _passive_companion(sec, avail_sections)
-        if comp:
-            passive_map[sec] = comp
-
-    # ── include farm (GAP-ANALOG corner-include resolution) ──────────────────
-    # Load the primary lib through a basename-farm so its bare relative
-    # `.include` / `.lib` targets — which ngspice resolves against the INCLUDING
-    # FILE's directory, so no cwd choice can help — resolve transitively even
-    # when the staged libs span several directories. Opt-in: a caller that
-    # passes no farm_dir (and every known open PDK, which never reaches here)
-    # keeps the previous raw-path behaviour byte-identical.
-    farm = None
-    if farm_dir is not None and primary:
-        farm = build_lib_include_farm(readable, farm_dir, roots=[primary])
-        primary_composes = bool(per_lib_composed.get(primary))
-        farmed_primary = (farm.get("map") or {}).get(primary)
-        if farmed_primary:
-            primary = farmed_primary
-        if primary_composes and (farm.get("ambiguous") or farm.get("missing")):
-            # A hop the primary really needs could not be resolved to ONE file.
-            # Picking either candidate — or leaving it for ngspice to not find —
-            # would be a guess or a late fatal; say so honestly here instead.
-            work_items.append(
-                "NEEDS_NATIVE_TEMPLATE: the primary model lib composes other "
-                "libs by bare relative name (which ngspice resolves against the "
-                "INCLUDING FILE's directory), and "
-                f"{farm.get('ambiguous')} such target(s) are ambiguous across "
-                f"the staged libs while {farm.get('missing')} are absent from "
-                "them — refusing to guess which file is meant")
-        farm = {k: v for k, v in farm.items() if k != "map"}
+    # Unread libs BLOCK only when they left the deck unresolved. When the
+    # required roles + corner section + primary ALL resolved from the READABLE
+    # libs, a few unreadable AUXILIARY libs (e.g. a non-CMOS HBT/ESD model file
+    # irrelevant to the nmos/pmos template — common when rung-2 lists EVERY
+    # installed lib, not a curated set) are informational, not a blocker.
+    unread_note = (
+        f"{len(unread)} model lib(s) not readable at emit time (paths only): "
+        f"{[Path(p).name for p in unread]}") if unread else ""
+    if unread and work_items:
+        work_items.append("NEEDS_NATIVE_TEMPLATE: " + unread_note)
 
     status = "OK" if (not work_items) else "NEEDS_NATIVE_TEMPLATE"
+    composed_note = (f"; composed-corner sections={primary_composed}"
+                     if primary_composed else "")
+    term_note = (f"; device_terminals={device_terminals}"
+                 if any(v > 4 for v in device_terminals.values()) else "")
     disclosure = (
         f"custom PDK family '{family}' ({source}) — device map + corner "
         f"sections parsed from {len(readable)} resolved model lib(s); "
-        f"devices={device_map}, sections={sections or all_sections}."
+        f"devices={device_map}, sections={corner_pool}{composed_note}{term_note}."
+        + (f" (note: {unread_note})" if unread_note else "")
         if status == "OK" else
         f"custom PDK family '{family}' ({source}) NOT natively emittable: "
         + " | ".join(work_items))
     return DeckContext(
         status=status, source=source, family=str(family) if family else None,
         model_lib=primary, model_lib_includes=readable,
-        corner_sections=sections or all_sections,
+        corner_sections=corner_pool,
         typ_section=typ, process_corners=process,
-        device_map=device_map, device_terms=device_terms,
-        passive_sections=passive_map, unresolved_roles=unresolved,
-        work_items=work_items, disclosure=disclosure, include_farm=farm)
+        device_map=device_map, device_terminals=device_terminals,
+        unresolved_roles=unresolved,
+        work_items=work_items, disclosure=disclosure)
 
 
 def resolve_deck_context(pdk_selector: str,
                          res: Optional[Dict[str, Any]] = None,
                          required: Tuple[str, ...] = _REQUIRED_ROLES_DEFAULT,
                          reader: Optional[Callable[[str], Optional[str]]] = None,
-                         farm_dir: Any = None,
                          ) -> DeckContext:
     """Dispatcher — the ONE entry point the deck emitter calls.
 
@@ -731,11 +584,11 @@ def resolve_deck_context(pdk_selector: str,
     if res and res.get("available"):
         src = res.get("source")
         if src == "project_custom_pdk":
-            return custom_family_context(res, required, reader, farm_dir)
+            return custom_family_context(res, required, reader)
         if src == "container_installed":
             matched = (res.get("matched_dir") or "").lower()
             # a known open family installed in the container → fast path;
             # an UNKNOWN installed family → parse it (family-agnostic).
             if not any(k in matched for k in _KNOWN_FAMILIES):
-                return custom_family_context(res, required, reader, farm_dir)
+                return custom_family_context(res, required, reader)
     return known_family_context(pdk_selector)

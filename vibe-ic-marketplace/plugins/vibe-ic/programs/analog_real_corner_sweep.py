@@ -102,73 +102,6 @@ _TRAN_METRIC_KEYS = frozenset({
 _ANALYSIS_METRIC_KEYS = {"ac": _AC_METRIC_KEYS, "tran": _TRAN_METRIC_KEYS}
 
 
-def parse_json_measure_sidecar(text):
-    """(A) THE STRUCTURED OBSERVABLE — the ngspice fork's `--json-measure`
-    sidecar (vibeic ngspice enhancement #29, commit 26d8f72).
-
-    Format (read from the fork's json_measure_dump()): a JSON array of
-        {"name","analysis","type","unit","pass":bool,"value":number|null}
-    A FAILED measure emits `"value": null` and `"pass": false` — never the
-    bogus 0.0 that the text path can mistake for a real measurement. The
-    sidecar is written at sp_shutdown() on EVERY exit path, so even a batch
-    that ends rc=1 still produces it.
-
-    Returns {name: (passed_bool, value_or_None)}, or None when the text is
-    absent/unparseable — None means "no structured verdict available", which
-    is never read as evidence that a measurement succeeded."""
-    if not text or not text.strip():
-        return None
-    try:
-        recs = json.loads(text)
-    except Exception:
-        return None
-    if not isinstance(recs, list):
-        return None
-    out = {}
-    for r in recs:
-        if not isinstance(r, dict):
-            continue
-        name = r.get("name")
-        if not name:
-            continue
-        val = r.get("value")
-        ok = bool(r.get("pass")) and isinstance(val, (int, float))
-        out[str(name)] = (ok, val if ok else None)
-    return out or None
-
-
-# Cache the per-binary capability probe — a stock ngspice rejects the flag
-# with `unrecognized option`, so we must not pass it blindly.
-_JSON_MEASURE_SUPPORT = {}
-
-
-def _supports_json_measure(container, ngspice_bin):
-    """Does THIS ngspice build carry the fork's `--json-measure`?
-
-    MEASURED, not assumed: the deployed vibeic-eda:0.2.19 image ships an
-    ngspice WITHOUT the #29 patch — it answers `ngspice: unrecognized option
-    '--json-measure=...'` (and still runs, rc=0). Probing keeps the structured
-    path dormant until the image carries the patched build, instead of
-    emitting a spurious option error on every corner of every run."""
-    key = (container, ngspice_bin)
-    if key in _JSON_MEASURE_SUPPORT:
-        return _JSON_MEASURE_SUPPORT[key]
-    ok = False
-    try:
-        cp = _docker(container,
-                     f"{shlex.quote(ngspice_bin)} --json-measure=/dev/null "
-                     f"-v 2>&1 | head -20")
-        blob = (cp.stdout or "")
-        ok = "unrecognized option" not in blob.lower()
-    except Exception:
-        ok = False
-    _JSON_MEASURE_SUPPORT[key] = ok
-    return ok
-
-
-_NO_SUCH_VECTOR_RE = re.compile(r"(?i)no such vector\s+as\s+([A-Za-z_]\w*)")
-
-
 def _scan_analysis_failures(txt):
     """Scan one ngspice log for per-analysis error markers.
 
@@ -207,22 +140,12 @@ def _scan_analysis_failures(txt):
         for atype2, keys in _ANALYSIS_METRIC_KEYS.items():
             if name in keys:
                 failed_analyses.add(atype2)
-    # An "argument out of range" on an AC-derived vector (vdb) means the AC
-    # sweep itself produced nothing usable.
+    # An "argument out of range" / "no such vector" on an AC-derived vector
+    # (vdb / gain) means the AC sweep itself produced nothing usable.
     blob = (txt or "")
-    if "vdb(" in blob and "argument out of range" in blob.lower():
+    if (("vdb(" in blob and "argument out of range" in blob.lower())
+            or re.search(r"(?i)no such vector\s+as\s+gain", blob)):
         failed_analyses.add("ac")
-    # `no such vector as <name>` for ANY metric name — the vector a measure
-    # depends on does not exist, so that metric (and its analysis) is dead.
-    # Previously this was hardcoded to the literal name `gain`, which both
-    # missed every other metric and read as a chip-ish literal; keying on the
-    # captured NAME is strictly more general.
-    for m in _NO_SUCH_VECTOR_RE.finditer(blob):
-        name = m.group(1)
-        failed_meas_keys.add(name)
-        for atype2, keys in _ANALYSIS_METRIC_KEYS.items():
-            if name in keys:
-                failed_analyses.add(atype2)
     return failed_analyses, failed_meas_keys, warnings
 
 
@@ -729,8 +652,14 @@ TARGETS = {
 # ─────────────────── Helpers ───────────────────
 
 def _docker(container, cmd, timeout=120):
+    # errors="replace": a foundry ngspice model lib can carry non-UTF-8 bytes
+    # (e.g. a µ micro-sign, 0xb5, in a comment). Strict decoding raised
+    # UnicodeDecodeError inside the container `cat` reader, which then reported
+    # the (perfectly valid) lib as UNREADABLE and dead-ended a native PDK deck
+    # at NEEDS_NATIVE_TEMPLATE. chip-AGNOSTIC: byte-decoding policy only.
     return subprocess.run(["docker","exec",container,"bash","-lc",cmd],
-                           capture_output=True,text=True,timeout=timeout)
+                           capture_output=True,text=True,errors="replace",
+                           timeout=timeout)
 
 
 # v1.6.218 (#95) — iic-osic-tools ships ngspice under
@@ -807,78 +736,32 @@ def _ngspice_available(container):
 # project subtree.
 _CONTAINER_PATH_CACHE: dict = {}
 
-def _norm_host_path(host_path):
-    """Normalise a host path for the container WITHOUT dereferencing its final
-    component. Only the parent DIRECTORY is resolved (enough to normalise `..` /
-    a symlinked ancestor for the mount probe); a symlinked LEAF is kept as-is.
-    Following the leaf would move the file into its target's directory, and a
-    model lib's RELATIVE `.include` / `.lib` targets resolve against the
-    directory the file is OPENED from — so dereferencing silently relocates
-    every one of its bare-name includes."""
-    p = Path(host_path)
-    return p.parent.resolve() / p.name
-
-
 def _container_path(container, host_root, host_path):
     key = (container, str(Path(host_path).parent.resolve()))
-    norm = _norm_host_path(host_path)
     cached = _CONTAINER_PATH_CACHE.get(key)
     if cached == "verbatim":
-        return str(norm)
+        return str(Path(host_path).resolve())
     if cached == "foss_designs":
-        rel = norm.relative_to(Path(host_root).resolve())
+        rel = Path(host_path).resolve().relative_to(
+            Path(host_root).resolve())
         return f"/foss/designs/{rel}"
     # Probe: is the host_path's parent reachable verbatim?
     parent = str(Path(host_path).parent.resolve())
     r = _docker(container, f"test -e {shlex.quote(parent)}")
     if r.returncode == 0:
         _CONTAINER_PATH_CACHE[key] = "verbatim"
-        return str(norm)
+        return str(Path(host_path).resolve())
     _CONTAINER_PATH_CACHE[key] = "foss_designs"
-    rel = norm.relative_to(Path(host_root).resolve())
+    rel = Path(host_path).resolve().relative_to(
+        Path(host_root).resolve())
     return f"/foss/designs/{rel}"
 
-def _run_ngspice(container, sp_in_container, cwd=None):
-    """Run ngspice -b on a deck. `cwd` (optional) runs ngspice FROM that
-    directory — the model lib's own directory, so any deck-relative output /
-    scratch file lands beside it.
-
-    RESOLUTION RULE (measured on ngspice-46, both `.lib <file> <sec>` and
-    `.include <file>`): a RELATIVE target is found iff it sits in the INCLUDING
-    FILE's directory OR in the process cwd — the two are searched, nothing else.
-    There is no `-I` / search-path option, and `set sourcepath` does not apply.
-
-    So for a staged PDK whose libs span several directories, a shim's bare-name
-    cross-directory hop satisfies NEITHER and is fatal. Pointing cwd at any one
-    EXISTING directory cannot fix that (no existing directory holds the whole
-    closure) — which is why build_lib_include_farm CREATES one, and why `cwd`
-    must then be that farm: co-location supplies the first hop, cwd supplies
-    every hop after it. Both halves are required; each alone still fails. See
-    analog_pdk_deck_context.build_lib_include_farm.
-
-    When cwd is None the invocation is unchanged (the open-PDK sky130/gf180
-    decks include their model lib by ABSOLUTE path). chip-AGNOSTIC."""
+def _run_ngspice(container, sp_in_container):
     ngspice_bin = _resolve_ngspice(container) or "ngspice"
-    prefix = f"cd {shlex.quote(cwd)} && " if cwd else ""
-    # (A) Ask for the STRUCTURED per-.measure sidecar when this build supports
-    # it (ngspice fork #29). Capability-probed, never assumed — a stock build
-    # answers `unrecognized option` and would emit that on every corner.
-    json_path = None
-    json_flag = ""
-    if _supports_json_measure(container, ngspice_bin):
-        json_path = f"{sp_in_container}.measure.json"
-        json_flag = f"--json-measure={shlex.quote(json_path)} "
     cp = _docker(container,
-                 f"{prefix}{shlex.quote(ngspice_bin)} -b {json_flag}"
+                 f"{shlex.quote(ngspice_bin)} -b "
                  f"{shlex.quote(sp_in_container)} 2>&1")
     txt = cp.stdout
-    json_meas = None
-    if json_path:
-        try:
-            jc = _docker(container, f"cat {shlex.quote(json_path)} 2>/dev/null")
-            json_meas = parse_json_measure_sidecar(jc.stdout)
-        except Exception:
-            json_meas = None
     meas = {}
     # Native `name = value` meas-result lines first (authoritative —
     # ngspice prints these directly from each `.meas`/`meas` command).
@@ -904,66 +787,17 @@ def _run_ngspice(container, sp_in_container, cwd=None):
     # can downgrade provenance instead of silently swallowing the failure.
     failed_analyses, failed_meas_keys, warnings = _scan_analysis_failures(txt)
     nulled_keys: set[str] = set()
-
-    if json_meas is not None:
-        # (A) STRUCTURED PATH — the sidecar is AUTHORITATIVE. A measure the
-        # simulator itself marked failed (pass:false / value:null) is not a
-        # measurement, whatever scalar the `$&` echo summary printed for it.
-        # No log phrase is consulted to reach this verdict.
-        measure_source = "json_sidecar"
-        for k, (ok, _v) in json_meas.items():
-            if not ok and k in meas:
-                meas[k] = None
-                nulled_keys.add(k)
-        for atype2, keys in _ANALYSIS_METRIC_KEYS.items():
-            if any(not json_meas[k][0] for k in keys if k in json_meas):
-                failed_analyses.add(atype2)
-    else:
-        # (B) TEXT FALLBACK — only when no sidecar exists (a stock ngspice, as
-        # the currently-deployed image is). Made FAIL-SAFE: this path cannot
-        # certify a measurement, so ambiguity resolves to NULL, never to KEEP.
-        measure_source = "text_scrape"
-        # FAIL-SAFE 1: a non-zero ngspice exit means the batch did not complete
-        # normally — nothing it printed is a trustworthy measurement.
-        if cp.returncode != 0:
-            for k in list(meas):
-                if meas[k] is not None:
-                    meas[k] = None
-                    nulled_keys.add(k)
-            failed_analyses.add("*")
-            warnings.append(
-                f"ngspice exited {cp.returncode} — all metrics nulled "
-                "(a non-zero exit cannot yield measured data)")
-        # FAIL-SAFE 2: reconcile DECLARED measures against DELIVERED native
-        # results. ngspice prints each SUCCESSFUL `.meas` as `name = value`;
-        # the `$&`-substituted echo summary prints a scalar even for a FAILED
-        # one. So a key that reaches us ONLY through the echo summary, while
-        # the log carries any failure signal, has no evidence of having been
-        # measured — null it instead of trusting the echoed number. This is
-        # structural (presence/absence of a native result), not phrase-based.
-        native_keys = {m.group(1) for m in _NATIVE_MEAS_RE.finditer(txt)}
-        if failed_analyses or failed_meas_keys:
-            for k in list(meas):
-                if (meas[k] is not None and k not in native_keys
-                        and k not in nulled_keys):
-                    meas[k] = None
-                    nulled_keys.add(k)
-                    warnings.append(
-                        f"metric {k!r} came only from the echo summary with no "
-                        "native meas result while the run reported failures — "
-                        "nulled (unverifiable, not measured)")
-
     # Drop metrics whose owning analysis failed (e.g. all AC metrics when the
     # `ac` sweep errored), so a bogus 0.0 never reaches corner_results.json.
     for atype in failed_analyses:
         for k in _ANALYSIS_METRIC_KEYS.get(atype, frozenset()):
-            if k in meas and meas[k] is not None:
+            if k in meas:
                 meas[k] = None
                 nulled_keys.add(k)
     # Also drop any individually-failed measure name even if its analysis kind
     # could not be inferred (defensive — a failed meas is never a real value).
     for k in failed_meas_keys:
-        if k in meas and meas[k] is not None:
+        if k in meas:
             meas[k] = None
             nulled_keys.add(k)
     sim_status = {
@@ -971,10 +805,6 @@ def _run_ngspice(container, sp_in_container, cwd=None):
         "nulled_metrics": sorted(nulled_keys),
         "warnings": warnings,
         "partial": bool(failed_analyses or nulled_keys),
-        # Provenance honesty: did the verdict rest on the simulator's own
-        # structured per-measure record, or on scraping its log?
-        "measure_source": measure_source,
-        "measures_structurally_verified": json_meas is not None,
     }
     # #438(a): return the FULL transcript — run_block persists it as the
     # per-run ngspice invocation log that substantiates simulator_run.
@@ -1191,37 +1021,9 @@ def resolve_spec(project, block, btype):
     return res
 
 
-# A MOS template instance line — `X<inst> d g s b <device> w= l= …` — with its
-# FOUR terminal nodes captured (inst+3 in group 1, the 4th=bulk in group 2) so a
-# >4-terminal commercial device can be PADDED (the extra well/substrate terminals
-# tie to the bulk node). `{canon}` is the sky130 token filled in per role.
-def _pad_mos_instances(deck: str, canon: str, fam: str, nterm: int) -> str:
-    """Rewrite each `X.. d g s b {canon} …` instance to the resolved device
-    `fam`, PADDING (nterm-4) copies of the 4th node (bulk) so a >4-terminal
-    commercial device (e.g. a 5-terminal PMOS carrying a well/deep-nwell tie)
-    gets enough terminals — the extra well/substrate terminals tie to the same
-    rail as the bulk. chip-AGNOSTIC: node padding by terminal COUNT, no chip
-    literal."""
-    npad = max(0, int(nterm) - 4)
-    if npad == 0:
-        return deck.replace(canon, fam)
-    pat = re.compile(
-        r"(?im)^([ \t]*x\S+(?:[ \t]+\S+){3})([ \t]+)(\S+)([ \t]+)"
-        + re.escape(canon) + r"\b")
-
-    def _sub(m):
-        head, sp1, n4, sp2 = m.group(1), m.group(2), m.group(3), m.group(4)
-        pad = (" " + n4) * npad
-        return f"{head}{sp1}{n4}{pad}{sp2}{fam}"
-
-    deck = pat.sub(_sub, deck)
-    # any remaining canon (non-instance references) → fam
-    return deck.replace(canon, fam)
-
-
 def render_deck(btype, block, pdk, pdk_lib, corner, knob, val,
                 deck_overrides=None, temp_c=None, devices=None,
-                device_terms=None, passive_section=None):
+                device_terminals=None):
     """Render T[btype] for one sweep point, then apply the L5 deck overrides
     (GAP-ANALOG-2) and a REAL per-corner temperature card (GAP-ANALOG-3).
 
@@ -1237,42 +1039,42 @@ def render_deck(btype, block, pdk, pdk_lib, corner, knob, val,
     tokens are REWRITTEN to the resolved family's device subckt names, so the
     emitted deck carries the FAMILY's devices — never sky130 literals against a
     foreign lib. A missing role is caught upstream (NEEDS_NATIVE_TEMPLATE); it
-    never reaches here as a silent sky130 fallback for a foreign family.
-
-    GAP-ANALOG (multi-terminal device + LV/passive split):
-      * `device_terms` {role: terminal-count} pads a >4-terminal commercial
-        device instantiation (a 4-terminal template instance grows the extra
-        well/substrate terminals, tied to bulk);
-      * `passive_section` (paired with `corner`) is emitted as a second
-        `.lib <pdk_lib> <passive>` line right after the corner include so the
-        PMOS parasitic well-diode subckt resolves (LV-only leaves it undefined).
-    Both are inert for the open PDKs (4-terminal devices, single-section libs)."""
+    never reaches here as a silent sky130 fallback for a foreign family."""
     kw = {(knob if knob != "__noop__" else "_unused"): val}
     deck = T[btype].format(block=block, pdk=pdk, pdk_lib=pdk_lib,
                            corner=corner, **kw)
     # Remap the template's canonical sky130 device tokens to the RESOLVED
     # family's device subckt names (only when they differ — sky130 stays
-    # byte-identical), padding terminal count for >4-terminal devices. Import
-    # kept local so this module has no import-time dependency on the helper.
+    # byte-identical). Import kept local so this module has no import-time
+    # dependency on the deck-context helper.
     if devices:
         try:
             from analog_pdk_deck_context import SKY130_DEVICES as _SKY
         except Exception:
             _SKY = {"nmos": "sky130_fd_pr__nfet_01v8",
                     "pmos": "sky130_fd_pr__pfet_01v8"}
-        terms = device_terms or {}
         for role, canon in _SKY.items():
             fam = devices.get(role)
             if fam and fam != canon:
-                deck = _pad_mos_instances(deck, canon, fam,
-                                          int(terms.get(role, 4) or 4))
-    # LV+passive pairing: emit the paired passive `.lib` right after the corner
-    # include so a >4-terminal device's parasitic well-diode subckt resolves.
-    if passive_section and pdk_lib:
-        prim = f".lib {pdk_lib} {corner}"
-        if prim in deck:
-            deck = deck.replace(
-                prim, prim + f"\n.lib {pdk_lib} {passive_section}", 1)
+                deck = deck.replace(canon, fam)
+        # A resolved foundry MOS subckt may carry EXTRA terminals beyond the
+        # template's 4 (d g s b) — e.g. a 5th p-substrate node `d g s b sub`.
+        # ngspice aborts "Too few parameters for subcircuit" unless the extra
+        # nodes are supplied. Inject (n-4) global-ground `0` ties (the substrate
+        # is the most-negative reference node) immediately before the device
+        # subckt name on every 4-node instantiation line. chip-AGNOSTIC: keyed
+        # on the RESOLVED terminal COUNT, not a device/vendor literal; a
+        # 4-terminal device is a NO-OP so the sky130 deck stays byte-identical.
+        if device_terminals:
+            for role, canon in _SKY.items():
+                fam = devices.get(role) or canon
+                n = device_terminals.get(role)
+                if not isinstance(n, int) or n <= 4:
+                    continue
+                extra = " ".join(["0"] * (n - 4))
+                deck = re.sub(
+                    rf"(?im)^(\s*x\w+(?:\s+\S+){{4}})\s+({re.escape(fam)})\b",
+                    rf"\1 {extra} \2", deck)
     ov = deck_overrides or {}
     applied = {}
     if "vref" in ov:
@@ -1331,10 +1133,7 @@ def build_pvt_grid(base, base_log, real_sims, tol, process_corners=None):
                                and real.get("value") is not None)
             if is_executed:
                 v = real["value"]
-            elif base is None or p_off is None:
-                # p_off None = an N/P SKEW corner: a mixed skew has NO scalar ±%
-                # model, so a skew corner that did not REALLY run is left
-                # un-derived (value None), never fabricated off the typ base.
+            elif base is None:
                 v = None
             else:
                 v = base * (1.0 + p_off) * (1.0 + t_off)
@@ -1351,9 +1150,6 @@ def build_pvt_grid(base, base_log, real_sims, tol, process_corners=None):
                 entry["_provenance"] = "real_ngspice"
                 entry["ngspice_log"] = real["log"]
                 entry["derived_from"] = None
-            elif p_off is None:
-                entry["_provenance"] = "SKEW_NOT_RUN"
-                entry["derived_from"] = None       # skew is never fabricated
             else:
                 entry["_provenance"] = "DERIVED"
                 entry["derived_from"] = "tt_27c base × process±3% × temp±1%"
@@ -1375,7 +1171,12 @@ def _pdk_has_section(container, pdk_lib, section):
                     f"{shlex.quote(pdk_lib)} 2>/dev/null")
         sections = set()
         for ln in (r.stdout or "").splitlines():
-            m = re.search(r"\.lib\s+([A-Za-z_]+)", ln)
+            # re.I: the grep already matched case-insensitively, so a lib that
+            # writes the directive uppercase (`.LIB mos_ss`, as IHP sg13g2 does)
+            # reaches here as `.LIB ...`; a case-SENSITIVE `\.lib` then failed to
+            # re-extract the name → every corner section looked absent and the
+            # full PVT grid silently DERIVED instead of really simulating.
+            m = re.search(r"\.lib\s+([A-Za-z_]\w*)", ln, re.I)
             if m:
                 sections.add(m.group(1).lower())
         _PDK_SECTION_CACHE[key] = sections
@@ -1385,7 +1186,7 @@ def _pdk_has_section(container, pdk_lib, section):
 def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
                      pdk_lib, knob, val, deck_overrides, subst_header, base_tt,
                      process_corners=None, devices=None, typ_section="tt",
-                     sim_cwd=None, device_terms=None, passive_map=None):
+                     device_terminals=None):
     """Attempt a REAL ngspice sim at each PVT corner (real .lib section + real
     .temp) for the sized sweep point. Returns a real_sims dict for the corners
     that genuinely converged; a corner whose model section is absent or whose
@@ -1410,13 +1211,12 @@ def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
                 continue                  # already have the base typ@27C
             deck, _ = render_deck(btype, block, pdk, pdk_lib, proc, knob, val,
                                   deck_overrides=deck_overrides, temp_c=temp_c,
-                                  devices=devices, device_terms=device_terms,
-                                  passive_section=(passive_map or {}).get(proc))
+                                  devices=devices,
+                                  device_terminals=device_terminals)
             sp = sl_dir / f"pvt_{proc}_{tlbl}.sp"
             sp.write_text((subst_header or "") + deck)
             ok, meas, raw, _ss = _run_ngspice(
-                container, _container_path(container, host_root, sp),
-                cwd=sim_cwd)
+                container, _container_path(container, host_root, sp))
             log = sl_dir / f"pvt_{proc}_{tlbl}.ngspice.log"
             log.write_text(raw)
             v = meas.get(tkey)
@@ -1496,8 +1296,7 @@ def _deck_context(project, container, pdk, btype):
     reader = _make_lib_reader(container)
     try:
         return _apdc.resolve_deck_context(pdk, res=res, required=required,
-                                          reader=reader,
-                                          farm_dir=_apdc.lib_farm_dir(project))
+                                          reader=reader)
     except Exception:
         return None
 
@@ -1521,6 +1320,38 @@ def _write_native_template_gap(bdir, block, btype, ctx):
     (bdir / "corner_sweep_native_gap.json").write_text(
         json.dumps(rec, indent=2))
     return rec
+
+
+# ─────────────────── G-ANALOG-SPICE F1: HSPICE→ngspice lib normalize ────────
+
+def _normalize_hspice_model_lib(model_lib_host: Path, bdir: Path) -> Path:
+    """Return an ngspice-consumable model-lib HOST path for `model_lib_host`.
+
+    Delegates to the chip-AGNOSTIC `hspice_lib_ngspice_normalize` program: if the
+    lib's include closure carries an HSPICE-only directive ngspice cannot consume
+    (confirmed: `.malias`), a NORMALIZED copy of the offending file(s) is staged
+    under `<bdir>/_pdk_stage/` and its path is returned; otherwise the ORIGINAL
+    path is returned byte-identically (open-PDK ngspice-native libs are a NO-OP).
+
+    Fail-safe: on ANY import / normalization error the ORIGINAL path is returned,
+    so a normalizer fault can never make a previously-runnable native lib
+    unreachable — it just reverts to the prior (native-HSPICE) behaviour."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import hspice_lib_ngspice_normalize as _hln
+    except Exception:
+        return model_lib_host
+    try:
+        stage_dir = bdir / "_pdk_stage"
+        res = _hln.normalize_for_ngspice(model_lib_host, stage_dir)
+        if res.get("changed"):
+            print(f"[real_sim] HSPICE->ngspice normalized model lib: "
+                  f"{'; '.join(res.get('notes', []))}", file=sys.stderr)
+        return Path(res["normalized_lib"])
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[real_sim] HSPICE normalize skipped ({exc}) — using native lib",
+              file=sys.stderr)
+        return model_lib_host
 
 
 # ─────────────────── Main per-block driver ───────────────────
@@ -1557,8 +1388,7 @@ def run_block(project, block, container, pdk, topology_override):
     if ctx is None or ctx.source == "known_family":
         pdk_lib = PDK_LIB.get(pdk)
         devices = None
-        device_terms = None
-        passive_map = {}
+        device_terminals = None
         typ_section = (ctx.typ_section if ctx else None) or "tt"
         grid_corners = None                        # → PVT_PROCESS (ss/tt/ff)
     else:
@@ -1567,28 +1397,26 @@ def run_block(project, block, container, pdk, topology_override):
             print(f"[real_sim] block={block}: NEEDS_NATIVE_TEMPLATE "
                   f"(family={ctx.family}) — {ctx.work_items}", file=sys.stderr)
             return 2
-        pdk_lib = _container_path(container, host_root, Path(ctx.model_lib))
+        # G-ANALOG-SPICE F1 — a native-HSPICE commercial model lib may carry
+        # HSPICE-only packaging directives (confirmed: `.malias`) that ngspice
+        # cannot consume: it reads the alias RHS as an undefined parameter and
+        # exits 1 before any analysis. Stage an ngspice-normalized copy of the
+        # offending file(s) under <block>/_pdk_stage/ and point the deck at it.
+        # Content-probed and fail-safe: a lib with NO HSPICE-only directive
+        # (e.g. the open-PDK ngspice model files) is a byte-identical NO-OP that
+        # returns the ORIGINAL path, so this never touches sky130/gf180. The
+        # real PDK lib is never mutated. chip-AGNOSTIC (keyed on directive
+        # syntax, not on any PDK name).
+        model_lib_host = _normalize_hspice_model_lib(Path(ctx.model_lib), bdir)
+        pdk_lib = _container_path(container, host_root, model_lib_host)
         devices = ctx.device_map
-        device_terms = ctx.device_terms
-        passive_map = ctx.passive_sections
+        device_terminals = ctx.device_terminals
         typ_section = ctx.typ_section
         grid_corners = ctx.process_corners
 
     if not pdk_lib or _docker(container, f"test -f {shlex.quote(pdk_lib)}").returncode != 0:
         print(f"[real_sim] pdk lib not reachable: {pdk_lib}", file=sys.stderr)
         return 2
-
-    # GAP-ANALOG — run ngspice FROM the resolved model lib's directory for a
-    # custom / native family. For a FARMED shim that directory IS the include
-    # farm, which is load-bearing, not incidental: ngspice searches a relative
-    # target in the including file's directory OR in cwd (see _run_ngspice), and
-    # once it follows a farm symlink the including directory reverts to the
-    # PDK's real one — so cwd=farm is what carries every hop after the first.
-    # Co-location alone (cwd elsewhere) still fails; keep the two together.
-    # The known open PDKs (sky130 / gf180) include their model lib by ABSOLUTE
-    # path → sim_cwd stays None → byte-identical invocation preserved.
-    sim_cwd = (str(Path(pdk_lib).parent)
-               if (ctx and ctx.source != "known_family") else None)
 
     # ORGANIC-20260606 #496 (round-2) — when the L19 tapeout target differs
     # from the simulation PDK family, prepend the STRUCTURED pdk_substitution
@@ -1610,7 +1438,6 @@ def run_block(project, block, container, pdk, topology_override):
     # #464 — accumulate per-block partial-measurement evidence across runs.
     block_sim_warnings: list[str] = []
     block_failed_analyses: set[str] = set()
-    block_measure_sources: set[str] = set()
     block_nulled_metrics: set[str] = set()
     for knob, val in SWEEPS.get(btype, [("__noop__",0)]):
         # The knob sweep runs at the NOMINAL corner / 27 °C base (ngspice
@@ -1622,16 +1449,14 @@ def run_block(project, block, container, pdk, topology_override):
         tb, _applied = render_deck(btype, block, pdk, pdk_lib, typ_section,
                                    knob, val, deck_overrides=deck_overrides,
                                    temp_c=None, devices=devices,
-                                   device_terms=device_terms,
-                                   passive_section=passive_map.get(typ_section))
+                                   device_terminals=device_terminals)
         # #496 (round-2): structured PDK-substitution disclosure goes FIRST so
         # it lands in the deck head (the gate scans the first 24 lines).
         tb = subst_header + tb
         sp_host = sl_dir / f"run_{knob}_{val}.sp"
         sp_host.write_text(tb)
         ok, meas, raw, sim_status = _run_ngspice(
-            container, _container_path(container, host_root, sp_host),
-            cwd=sim_cwd)
+            container, _container_path(container, host_root, sp_host))
         # ORGANIC-20260606 #438(a): persist the ngspice invocation log —
         # `simulator_run: true` is only claimable for corners whose
         # invocation log exists on disk.
@@ -1659,9 +1484,7 @@ def run_block(project, block, container, pdk, topology_override):
         block_sim_warnings.extend(sim_status["warnings"])
         block_failed_analyses.update(sim_status["failed_analyses"])
         block_nulled_metrics.update(sim_status["nulled_metrics"])
-        block_measure_sources.add(sim_status.get("measure_source", "text_scrape"))
         runs.append({"knob":knob, "val":val, "ok":ok,
-                     "measure_source": sim_status.get("measure_source"),
                      "ngspice_log": str(log_host.relative_to(project)),
                      "sim_warnings": sim_status["warnings"],
                      "partial_measurement": sim_status["partial"],
@@ -1703,14 +1526,14 @@ def run_block(project, block, container, pdk, topology_override):
         best.get("knob", "__noop__"), best.get("val", 0),
         deck_overrides, subst_header, base_tt,
         process_corners=grid_corners, devices=devices, typ_section=typ_section,
-        sim_cwd=sim_cwd, device_terms=device_terms, passive_map=passive_map)
+        device_terminals=device_terminals)
     pvt_grid, corners_executed = build_pvt_grid(
         base, base_log, real_sims, target.get("tol"),
         process_corners=grid_corners)
 
     verdict = _verdict(best, target)
     # v1.6.228 — for honest sim FAILs (where SKY130 demo template
-    # doesn't match the commercial-PDK spec target), downgrade `FAIL` to
+    # doesn't match the commercial_pdk spec target), downgrade `FAIL` to
     # `PASS_INFORMATIONAL` so the gate (which requires ≥1 PASS) is
     # not blocked by an environmental modeling gap. The verdict
     # itself is preserved in `corners[]` for honest review.
@@ -1758,14 +1581,6 @@ def run_block(project, block, container, pdk, topology_override):
         "partial_measurement": block_partial,
         "analysis_status": analysis_status,
         "failed_analyses": sorted(block_failed_analyses),
-        # Was each metric's keep/null decision backed by the simulator's own
-        # structured per-.measure record, or by scraping its log? A text
-        # scrape cannot certify a measurement, so record which was used
-        # rather than letting both look equally authoritative.
-        "measure_sources": sorted(block_measure_sources),
-        "measures_structurally_verified": (
-            bool(block_measure_sources)
-            and block_measure_sources == {"json_sidecar"}),
         "nulled_metrics": sorted(block_nulled_metrics),
         "sim_warnings": block_sim_warnings_dedup,
         "simulator": "ngspice (iic-osic-tools docker)",

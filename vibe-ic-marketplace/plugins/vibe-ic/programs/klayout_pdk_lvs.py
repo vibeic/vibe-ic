@@ -260,8 +260,97 @@ def _load_lm(path):
         return json.load(f)
 
 
+_METAL_RE = re.compile(r"^(?:MET|METAL|M)(\d+)$", re.IGNORECASE)
+_VIA_RE = re.compile(r"^(?:VIA|V)(\d+)$", re.IGNORECASE)
+
+
+def _metal_via_from_pdk_map(path):
+    """Parse an Encounter/SoC LEF->GDS layermap (`<NAME> <PURPOSE> <gdsL> <gdsDT>`
+    rows) into ORDERED metal + via `[gds, dt]` lists (m1..mN, v1..vN).
+
+    A commercial PDK's routing stack often has MORE metal layers than
+    DEFAULT_LAYERMAP's generic 4-metal/3-via example. Extracting with too few
+    metal layers leaves upper-metal wires out of the connectivity graph, so any
+    net that routes through an uncovered layer SPLITS into disconnected pieces ->
+    a spurious extra net -> a FALSE LVS mismatch (commercial_foundry commercial_pdk: exactly one
+    6-metal net split, taking spm from MISMATCH to MATCH once M5/M6 were covered).
+
+    Picks each layer's ROUTING geometry: purpose NET/DRAWING if present, else the
+    datatype-0 row, else the first row. chip-AGNOSTIC (name-pattern only; the GDS
+    numbers are read from the file at runtime, nothing hardcoded)."""
+    metals, vias = {}, {}
+    try:
+        with open(path, errors="ignore") as f:
+            for line in f:
+                s = line.strip()
+                if not s or s[0] in "#/*;":
+                    continue
+                t = s.split()
+                if (len(t) < 4 or not t[2].lstrip("-").isdigit()
+                        or not t[3].lstrip("-").isdigit()):
+                    continue
+                name, purpose, g, d = t[0], t[1].upper(), int(t[2]), int(t[3])
+                mm = _METAL_RE.match(name)
+                vv = _VIA_RE.match(name)
+                if mm:
+                    metals.setdefault(int(mm.group(1)), []).append((purpose, g, d))
+                elif vv:
+                    vias.setdefault(int(vv.group(1)), []).append((purpose, g, d))
+    except OSError:
+        return [], []
+
+    def _pick(rows):
+        for want in ("NET", "DRAWING", "DRW"):
+            for (p, g, d) in rows:
+                if p == want:
+                    return [g, d]
+        for (p, g, d) in rows:
+            if d == 0:
+                return [g, d]
+        return [rows[0][1], rows[0][2]]
+
+    return ([_pick(metals[i]) for i in sorted(metals)],
+            [_pick(vias[i]) for i in sorted(vias)])
+
+
+def _resolve_layermap(layermap_path, pdk_map_path=None):
+    """Return (layermap, note). Start from the supplied `--layermap` JSON (or the
+    generic DEFAULT), then EXTEND the metal/via lists to the PDK's full routing
+    stack discovered from `--pdk-map` (the same Encounter/SoC map the streamout
+    step already finds via _discover_lefdef_layermap). Only ever GROWS the
+    metal/via coverage (never shrinks a supplied map); device/text/rail-marker
+    layers are left untouched. `note` is a human-readable stderr line (or None)."""
+    base = _load_lm(layermap_path)
+    lm = dict(base)
+    note = None
+    base_m = len(lm.get("metal", []) or [])
+    base_v = len(lm.get("via", []) or [])
+    if pdk_map_path and os.path.exists(pdk_map_path):
+        pm, pv = _metal_via_from_pdk_map(pdk_map_path)
+        if len(pm) > base_m or len(pv) > base_v:
+            if len(pm) > base_m:
+                lm["metal"] = pm
+            if len(pv) > base_v:
+                lm["via"] = pv
+            note = ("[lvs] auto-extended metal/via coverage "
+                    f"{base_m}m/{base_v}v -> {len(lm['metal'])}m/{len(lm['via'])}v "
+                    f"from PDK map {os.path.basename(pdk_map_path)} (a short metal "
+                    "stack SPLITS upper-metal nets -> false MISMATCH)")
+    elif layermap_path is None:
+        # No explicit map AND no PDK map to auto-derive from: the generic 4-metal
+        # DEFAULT is in use. WARN — a >4-metal PDK will false-MISMATCH.
+        note = (f"[lvs][WARN] using the GENERIC {base_m}-metal/{base_v}-via default "
+                "layermap (no lvs_layermap, no discoverable PDK layermap). On a PDK "
+                "with more metal layers, nets routed on the uncovered layers SPLIT "
+                "-> a FALSE LVS mismatch. Supply the PDK's layermap or make its "
+                "Encounter/SoC map discoverable.")
+    return lm, note
+
+
 def cmd_extract(args, pya):
-    lm = _load_lm(args.layermap)
+    lm, _note = _resolve_layermap(args.layermap, getattr(args, "pdk_map", None))
+    if _note:
+        print(_note, file=sys.stderr)
     ly = pya.Layout(); ly.read(args.gds)
     l2n = pya.LayoutToNetlist(pya.RecursiveShapeIterator(ly, ly.top_cell(), []))
     l2n.threads = args.threads
@@ -283,7 +372,9 @@ def cmd_extract(args, pya):
 
 
 def cmd_lib(args, pya):
-    lm = _load_lm(args.layermap)
+    lm, _note = _resolve_layermap(args.layermap, getattr(args, "pdk_map", None))
+    if _note:
+        print(_note, file=sys.stderr)
     ly = pya.Layout(); ly.read(args.gds)
     l2n = pya.LayoutToNetlist(pya.RecursiveShapeIterator(ly, ly.top_cells()[0], []))
     l2n.threads = args.threads
@@ -297,7 +388,9 @@ def cmd_lib(args, pya):
 
 
 def cmd_cell(args, pya):
-    lm = _load_lm(args.layermap)
+    lm, _note = _resolve_layermap(args.layermap, getattr(args, "pdk_map", None))
+    if _note:
+        print(_note, file=sys.stderr)
     ly = pya.Layout(); ly.read(args.gds)
     if args.cell not in [c.name for c in ly.each_cell()]:
         print("no such cell", args.cell); return 2
@@ -578,6 +671,11 @@ def main(argv=None):
     ap.add_argument("--tol-rel", type=float, default=0.02, dest="tol_rel",
                     help="compare: W/L relative tolerance (default 0.02)")
     ap.add_argument("--layermap", help="JSON PDK layer map (default: a generic example; supply your PDK's)")
+    ap.add_argument("--pdk-map", dest="pdk_map",
+                    help="PDK Encounter/SoC LEF->GDS layermap file (`<NAME> <PURPOSE> "
+                         "<gdsL> <gdsDT>` rows); auto-extends the metal/via layer "
+                         "coverage to the PDK's full routing stack so upper-metal nets "
+                         "are not split (prevents a false LVS mismatch on >4-metal PDKs)")
     ap.add_argument("--threads", type=int, default=_default_threads())
     args = ap.parse_args(argv)
     pya = _require_pya()

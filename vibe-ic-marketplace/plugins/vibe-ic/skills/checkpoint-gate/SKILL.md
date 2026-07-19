@@ -78,7 +78,7 @@ and the project's `<host_tester>` then FAILs at integration.
 - [ ] `phase1_spec/03_spec_confirmed.md` — confirmed specification
 - [ ] `phase1_spec/04_datasheet.md` — 10-section datasheet (score ≥7)
 - [ ] `phase1_spec/05_appnote.md` — 8-section application note (score ≥7)
-- [ ] `generated_docs/` — all 10 L1-L23 JSONs (enforced by phase1_doc_presence_check.py)
+- [ ] `generated_docs/` — all 10 core layer JSONs (L1-L9 + L8R) (enforced by phase1_doc_presence_check.py)
 
 ### Quality Checks
 
