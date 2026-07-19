@@ -1533,7 +1533,7 @@ def run_block(project, block, container, pdk, topology_override):
 
     verdict = _verdict(best, target)
     # v1.6.228 — for honest sim FAILs (where SKY130 demo template
-    # doesn't match the commercial_pdk spec target), downgrade `FAIL` to
+    # doesn't match the commercial PDK spec target), downgrade `FAIL` to
     # `PASS_INFORMATIONAL` so the gate (which requires ≥1 PASS) is
     # not blocked by an environmental modeling gap. The verdict
     # itself is preserved in `corners[]` for honest review.

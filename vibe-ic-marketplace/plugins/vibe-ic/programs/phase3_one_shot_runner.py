@@ -2502,7 +2502,7 @@ def _discover_topmetal_width_fix(project: Path, calibre_drc: Optional[str],
 def _discover_supply_pin_dir_fix(project: Path, cell_lef: Optional[Path]
                                  ) -> Tuple[Optional[Path], List[str]]:
     """FLOOR-PNR-BUFFER supply-pin DIRECTION hygiene (v1.4.x, ibex CPU-scale
-    commercial_pdk clean-room — measured, not assumed).
+    commercial PDK clean-room — measured, not assumed).
 
     ROOT CAUSE (proven in-container on the running image):
     ODB defaults a LEF MACRO `PIN` that carries NO `DIRECTION` statement to
@@ -2596,14 +2596,14 @@ def _discover_supply_pin_dir_fix(project: Path, cell_lef: Optional[Path]
 
 def _streamout_layermap_warning(calibre_drc: Optional[str],
                                 lefdef_layermap: Optional[str]) -> Optional[str]:
-    """FLOOR-STREAMOUT loud-WARN (ic1-spm commercial_pdk clean-room, v1.4.34).
+    """FLOOR-STREAMOUT loud-WARN (ic1-spm commercial PDK clean-room, v1.4.34).
 
     When a commercial PDK ships a sign-off DRC deck (`calibre_drc`) but NO
     discoverable Encounter/SoC LEF->GDS streamout layermap (`lefdef_layermap`
     is None), GDS streams out on LEGACY (compact) layer numbering. A foundry
     sign-off deck then MISREADS routing layers on those numbers and reports a
     WALL of spurious FEOL violations that are numbering ARTEFACTS, not design
-    defects (spm commercial_pdk: routing read as thick-gate-oxide). The fallback was
+    defects (spm commercial PDK: routing read as thick-gate-oxide). The fallback was
     previously SILENT — the false-DRC wall looks like a design failure. Return a
     loud operator warning in exactly that case (deck present AND map absent);
     None otherwise. Chip-AGNOSTIC: keyed purely on deck-present + map-absent, no
@@ -2623,7 +2623,7 @@ def _streamout_layermap_warning(calibre_drc: Optional[str],
 
 def _stdcell_exclusion_marker_warning(calibre_drc: Optional[str],
                                       marker_layer: Optional[str]) -> Optional[str]:
-    """FLOOR-DRC cell-interior-exemption guard (ic1-spm commercial_pdk clean-room, v1.4.36).
+    """FLOOR-DRC cell-interior-exemption guard (ic1-spm commercial PDK clean-room, v1.4.36).
 
     Foundry sign-off decks exempt qualified std-cell INTERIORS via a universal
     "don't-check" marker layer (`__x__ = NOT x DCTY`, hundreds of derivations).
@@ -2633,7 +2633,7 @@ def _stdcell_exclusion_marker_warning(calibre_drc: Optional[str],
     config drives. When a commercial Calibre DRC deck is present but NO exclusion
     marker is configured, the marker input stays EMPTY, every `NOT x DCTY`
     derivation re-checks foundry-qualified cell interiors, and the FEOL rules
-    OVER-FIRE by the thousand on cells that are cell-level-qualified (spm commercial_pdk:
+    OVER-FIRE by the thousand on cells that are cell-level-qualified (spm commercial PDK:
     15 false FEOL families — implant-enclosure, poly↔contact, contact). Return a
     loud operator warning in that case; None otherwise.
 
@@ -2944,7 +2944,7 @@ def _detect_pdk(project: Path, override: Optional[str] = None
             # default them to INPUT, so OpenROAD's buffer-input counter rejects
             # EVERY buffer master (ODB-1207) -> repair_design inserts 0 buffers
             # -> high-fanout nets stay unbuffered -> detailed-route shorts (ibex
-            # commercial_pdk: 6253 MET2 shorts). Stage a corrected cell LEF (DIRECTION
+            # commercial PDK: 6253 MET2 shorts). Stage a corrected cell LEF (DIRECTION
             # INOUT on supply pins; real PDK LEF untouched). No-op for sky130.
             cell_lef, _sp_notes = _discover_supply_pin_dir_fix(project, cell_lef)
             for _n in _sp_notes:
@@ -6809,7 +6809,7 @@ def _openroad_thread_count() -> int:
     `set_thread_count`), so a pnr.tcl that never sets it runs the WHOLE route —
     and each antenna-diode reroute round — SINGLE-THREADED on a many-core host.
 
-    Measured floor (subservient RISC-V SoC on the commercial commercial_pdk PDK, a
+    Measured floor (subservient RISC-V SoC on the commercial PDK, a
     design that detailed-routes CLEAN then needs antenna diodes): single-threaded
     the main detailed_route is ~858 s and EACH post-diode reroute round is
     ~394 s, so 858 s + 2-4 rounds blows the 20-min per-step cap before GDS. The
@@ -7909,7 +7909,7 @@ if _marker and cell_gds_path and os.path.exists(cell_gds_path):
         _lib = pya.Layout()
         _lib.read(cell_gds_path)
         _libnames = set(c.name for c in _lib.each_cell())
-        # GAP (spm commercial_pdk, row-boundary DRC residual): painting only the
+        # GAP (spm commercial PDK, row-boundary DRC residual): painting only the
         # DEF/LEF-abstract SIZE box (`_inst.bbox()` at this point in the
         # flow) covers the cell's declared placement footprint, not its
         # TRUE drawn extent. Measured on this library: EVERY sampled
@@ -9670,7 +9670,7 @@ def _clean_command_v_path(out: str, binname: str) -> str:
     """Extract the resolved path from `command -v <name>` stdout, tolerating
     login-shell BANNER lines the image prints to STDOUT.
 
-    v1.4.35 (ic2-sha256 commercial_pdk clean-run): the vibeic-eda image's
+    v1.4.35 (ic2-sha256 commercial PDK clean-run): the vibeic-eda image's
     `/etc/profile.d/iic-osic-tools-setup.sh` echoes `[INFO] Final PATH variable:`
     (+PYTHONPATH) to STDOUT on every LOGIN shell, and `_docker_exec` runs
     `bash -lc`, so a naive `out.strip()` returns e.g.
@@ -9874,7 +9874,7 @@ def _parse_svrf_tally(rpt: Path) -> Tuple[int, int, int, List[str]]:
 #     from this check; with no marker layer in the input GDS the check over-fires
 #     on pre-characterised cell geometry. Signature-confirmed here: only met1
 #     (std-cell-internal) min-area fires; met2/3/4 (routing) all pass.
-#     CAVEAT (spm commercial_pdk row-boundary close-loop, 2026-07-16): the `_not_X`
+#     CAVEAT (spm commercial PDK row-boundary close-loop, 2026-07-16): the `_not_X`
 #     NAME-MATCH is a real-signal proxy, not a proof of mechanism — some decks
 #     build `..._not_<marker>` via `OR(CUT(A, X), ANDNOT(A, X))`, which is the
 #     set identity A = (A∩X) ∪ (A\X) and recombines to the FULL `A` regardless
@@ -9953,7 +9953,7 @@ def _classify_svrf_fails(rpt: Path) -> Dict[str, Any]:
 def _drc_wall_budget_s() -> float:
     """Wall-clock budget (seconds) for the native svrfdrc DRC step.
 
-    v1.4.38 (ic2-sha256 commercial_pdk sha256 floor): the progress-stall watchdog only
+    v1.4.38 (ic2-sha256 commercial PDK sha256 floor): the progress-stall watchdog only
     kills on NO CPU progress, so a 100%-CPU tool is treated as "progressing" and
     runs to the ~24h hard ceiling. svrfdrc's single-thread derived-layer build
     (SHRINK/boolean/merge) is pathological on dense large designs (sha256: 100%
@@ -11505,7 +11505,7 @@ def _run_klayout_lvs(project: Path, top: str, pdk: PdkConfig,
     # (pdk.lefdef_layermap) into the LVS extraction so its metal/via coverage matches
     # the PDK's real routing stack. Without it a >4-metal PDK extracts with the generic
     # 4-metal DEFAULT -> upper-metal nets SPLIT into disconnected pieces -> a FALSE LVS
-    # MISMATCH (commercial_pdk: net _218_ routed M1-M6 split in two; wiring M5/M6 took spm LVS
+    # MISMATCH (commercial PDK: net _218_ routed M1-M6 split in two; wiring M5/M6 took spm LVS
     # from MISMATCH to full MATCH, spares untouched). Auto-extend only (never shrinks).
     pdk_map_arg = (f" --pdk-map {_to_container_path(pdk.lefdef_layermap, container)}"
                    if getattr(pdk, "lefdef_layermap", None) else "")

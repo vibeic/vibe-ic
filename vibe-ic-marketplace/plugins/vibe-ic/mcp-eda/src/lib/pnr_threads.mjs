@@ -2,7 +2,7 @@
 // `_openroad_thread_count` (G-ANTENNA-REROUTE). OpenROAD DEFAULTS TO 1 THREAD,
 // so a PnR Tcl with no `set_thread_count` runs `global_route` + `detailed_route`
 // + EVERY antenna-diode reroute round SINGLE-THREADED on a many-core host — the
-// measured wall that blew the per-step cap before GDS (subservient/commercial_pdk: main
+// measured wall that blew the per-step cap before GDS (subservient/commercial PDK: main
 // detailed_route ~858 s + ~394 s PER antenna reroute round single-threaded; the
 // same steps at 8 threads: 211 s + 74 s/round). The reroute was ALREADY dirty-net
 // incremental; the wall was purely single-threaded execution.
