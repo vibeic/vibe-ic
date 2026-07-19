@@ -153,8 +153,45 @@ def _read_step_verdict(project: Path, sid: str):
 
 
 def _is_analog_ic(project: Path) -> bool:
-    return (project / "analog" / "analog_block_list.json").is_file() or \
-           bool(glob.glob(str(project / "phase3" / "analog" / "*" / "*.gds")))
+    """True iff the IC carries analog blocks — the predicate that gates Pillar 5.
+
+    chip-AGNOSTIC. Signals (any one):
+      * an analog block list at EITHER canonical location. The analog runner
+        writes `phase3/analog/analog_block_list.json`; only the legacy
+        project-root `analog/` location was checked before.
+      * a per-block analog artefact produced anywhere in the A1..A9 track —
+        corner_results.json (A4), spec.json (A1), topology.md (A2), a block
+        netlist (A3) or a block GDS (A5).
+
+    Why both: the old predicate demanded either the ROOT block list (a path the
+    runner does not write) or a block **GDS** (an A5-layout artefact). An
+    analog IC whose A-track ran the real corner sweep but stopped before layout
+    — the normal state whenever A5 is waived — therefore fell through to
+    `analog_ic=False` and Pillar 5 (analog closed-loop verification) reported
+    "pure-digital IC (no analog blocks) / PASS". That is a silent FALSE PASS on
+    the load-bearing pillar for every mixed-signal IC, and it also N/A'd every
+    A1..A9 row of the Pillar-2 step comparison.
+
+    The program already contradicted itself: Pillar 5's own else-branch reads
+    `phase3/analog/analog_block_list.json`, the very path this predicate did
+    not accept. Detection now keys on the artefacts the A-track actually emits,
+    so an analog IC is recognised from A1 onward instead of only after A5.
+
+    A genuinely pure-digital IC has none of these artefacts and stays N/A —
+    that is the positive case and it must keep reporting N/A untouched.
+    """
+    for rel in ("analog/analog_block_list.json",
+                "phase3/analog/analog_block_list.json"):
+        if (project / rel).is_file():
+            return True
+    for pat in ("phase3/analog/*/corner_results.json",
+                "phase3/analog/*/spec.json",
+                "phase3/analog/*/topology.md",
+                "phase3/analog/*/*.sp",
+                "phase3/analog/*/*.gds"):
+        if glob.glob(str(project / pat)):
+            return True
+    return False
 
 
 def _has_place_and_route(project: Path) -> bool:
@@ -370,13 +407,47 @@ def main():
                        if hw else "reports/hw_test.json MISSING")
 
     # ── Pillar 5: analog ──
+    # The pillar asks "did the analog loop CLOSE", so mere presence of a block
+    # list must not pass it. Presence-only made Pillar 5 structurally unable to
+    # fail: any IC with analog blocks passed the load-bearing analog gate even
+    # when the A-track verdict was FAIL and the corner sweep never measured.
+    # Evidence consulted (all already on disk, no new tooling):
+    #   * the A-track runner verdict (reports/phase3/analog_one_shot.json)
+    #   * each block's corner_results.json `partial_measurement` flag — a
+    #     partial sweep means .meas did not resolve on every corner, so the
+    #     block's specs are NOT verified across PVT.
+    # Anything short of a converged A-track is PENDING (never a silent pass).
     if not analog_ic:
         analog_state, analog_detail = "N/A", "pure-digital IC (no analog blocks)"
     else:
         abl = _load_json(project / "analog" / "analog_block_list.json") or \
               _load_json(project / "phase3" / "analog" / "analog_block_list.json")
-        analog_state = "PRESENT"
-        analog_detail = f"analog blocks: {abl if abl else '(see analog/ reports)'}"
+        names = [b.get("name") for b in (abl or {}).get("blocks", []) if b.get("name")]
+        a_run = _load_json(project / "reports" / "phase3" / "analog_one_shot.json")
+        a_verdict = str((a_run or {}).get("verdict") or "").upper()
+        partial = []
+        for cr in sorted(glob.glob(str(project / "phase3" / "analog" / "*" /
+                                       "corner_results.json"))):
+            d = _load_json(Path(cr)) or {}
+            if d.get("partial_measurement"):
+                partial.append(Path(cr).parent.name)
+        blocks_txt = ", ".join(names) if names else "(see analog/ reports)"
+        if not a_run:
+            analog_state = "PENDING"
+            analog_detail = (f"analog blocks: {blocks_txt} — A-track verdict MISSING "
+                             "(reports/phase3/analog_one_shot.json)")
+        elif a_verdict.startswith("FAIL"):
+            analog_state = "FAIL"
+            analog_detail = (f"analog blocks: {blocks_txt} — A-track verdict "
+                             f"{a_verdict}")
+        elif partial:
+            analog_state = "PENDING"
+            analog_detail = (f"analog blocks: {blocks_txt} — corner sweep is "
+                             f"PARTIAL (.meas unresolved) for: {', '.join(partial)}")
+        else:
+            analog_state = "CONVERGED"
+            analog_detail = (f"analog blocks: {blocks_txt} — A-track verdict "
+                             f"{a_verdict}, all corner sweeps fully measured")
 
     # ── Pillar 6: Design-for-ECO readiness (spare-cell coverage + preservation) ──
     # Applicable to any DIGITAL place-and-route IC; N/A only when the IC never
@@ -431,7 +502,10 @@ def main():
     # (no digital RTL), mirroring Pillar 6's N/A-without-place-and-route.
     g_code = cc_na or (line_pct is not None and float(line_pct) >= a.code_cov_floor)
     g_fpga = fpga_na or (fpga_verdict == "PASS")
-    g_analog = (not analog_ic) or (analog_state == "PRESENT")  # presence; deep check via analog skills
+    # Pillar 5 passes only on a CONVERGED A-track (verdict non-FAIL and every
+    # corner sweep fully measured). PRESENT/PENDING/FAIL do not pass — presence
+    # of analog blocks is not evidence that the analog loop closed.
+    g_analog = (not analog_ic) or (analog_state == "CONVERGED")
     # Design-for-ECO gate: N/A passes; otherwise requires coverage PASS + preservation intact.
     g_dfe = (not dfe_applicable) or (dfe_state == "PASS")
     overall = all([g_func, g_steps, g_code, g_fpga, g_analog, g_dfe])
