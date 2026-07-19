@@ -90,6 +90,28 @@ const CONTAINER = process.env.EDA_CONTAINER || "vibeic-eda";
 const PDK_ROOT = "/foss/pdks";
 const TOOLS = "/foss/tools";
 
+// ─── Parallel-by-default thread policy ───────────────────────────────────────
+// Every EDA tool below supports multithreading, and each of those threadings is
+// RESULT-INVARIANT (deterministic): enabling them only speeds the run up, it can
+// never change an output. So we wire the parallel flags ON by default. The tool
+// runs inside the container (dockerExec → `bash -c`), so the robust default is a
+// shell `$(nproc)` expanded IN the container (all cores). A single generic env
+// `VIBEIC_EDA_THREADS`, read here on the host at command-build time, is the
+// global override — set it to a positive integer to cap/pin the thread count.
+// No fixed number is hardcoded.
+function _edaThreadsToken() {
+  const v = (process.env.VIBEIC_EDA_THREADS || "").trim();
+  if (/^[0-9]+$/.test(v) && Number(v) > 0) return v;   // explicit override
+  return "$(nproc)";                                    // default: all cores
+}
+// OpenROAD's `-threads` accepts the literal `max` (== all cores) as well as an
+// integer; prefer `max` unless VIBEIC_EDA_THREADS pins a specific count.
+function _edaOpenroadThreadsToken() {
+  const v = (process.env.VIBEIC_EDA_THREADS || "").trim();
+  if (/^[0-9]+$/.test(v) && Number(v) > 0) return v;
+  return "max";
+}
+
 // Helper: write result manifest (P0 improvement)
 // After each PASS, records the latest result so reviewers never pick up stale logs
 function writeManifest(workDir, entry) {
@@ -1368,7 +1390,7 @@ ${drSnippet}
 puts "=== PNR_COMPLETE ==="
 exit`;
 
-    const pnrCmd = `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && echo '${tclScript.replace(/'/g, "'\\''")}' | openroad -exit 2>&1`;
+    const pnrCmd = `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && echo '${tclScript.replace(/'/g, "'\\''")}' | openroad -threads ${_edaOpenroadThreadsToken()} -exit 2>&1`;
     const t0pnr = Date.now();
     let result = dockerExec(pnrCmd, 600000);
     let durationPnrMs = Date.now() - t0pnr;
@@ -1391,7 +1413,7 @@ exit`;
       dr_retry_reason = `DRT-0073 access-point failure on ${mp}1 pins; auto-retry with set_routing_layers ${minMet}-${topMet}`;
       const retryRoutingLayers = `set_routing_layers -signal ${minMet}-${topMet} -clock ${minMet}-${topMet}`;
       const retryTcl = tclScript.replace(routingLayersSnippet || `make_tracks`, `make_tracks\n${retryRoutingLayers}`);
-      const retryCmd = `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && echo '${retryTcl.replace(/'/g, "'\\''")}' | openroad -exit 2>&1`;
+      const retryCmd = `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && echo '${retryTcl.replace(/'/g, "'\\''")}' | openroad -threads ${_edaOpenroadThreadsToken()} -exit 2>&1`;
       const t0retry = Date.now();
       result = dockerExec(retryCmd, 900000);
       durationPnrMs = Date.now() - t0retry;
@@ -1638,7 +1660,7 @@ server.tool(
       if (flatResult.success) { canonicalizeNetlistSrcCoords(flatNetlist); effectiveNetlist = flatNetlist; }
     }
 
-    const staCmd = `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && openroad -exit << 'EOF'
+    const staCmd = `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && openroad -threads ${_edaOpenroadThreadsToken()} -exit << 'EOF'
 read_liberty ${libPath(cfg)}
 read_verilog ${effectiveNetlist}
 link_design ${top_module}
@@ -2175,7 +2197,7 @@ server.tool(
     if (pdk === "custom") {
       if (custom_drc_script) {
         // Use user-supplied .drc deck
-        const drcCmdC = `QT_QPA_PLATFORM=offscreen ${TOOLS}/klayout/klayout -b -r ${custom_drc_script} -rd input=${gds_file} -rd report=${rdbPath} 2>&1`;
+        const drcCmdC = `QT_QPA_PLATFORM=offscreen ${TOOLS}/klayout/klayout -b -r ${custom_drc_script} -rd input=${gds_file} -rd report=${rdbPath} -rd threads=${_edaThreadsToken()} 2>&1`;
         const t0drcC = Date.now();
         const resultC = dockerExec(drcCmdC, 600000);
         const durationDrcMsC = Date.now() - t0drcC;
@@ -2305,7 +2327,7 @@ print('STRUCTURAL_DRC_GENERATED=' + out)
             output_summary: genRes.output.slice(-500),
           }) }] };
         }
-        const drcCmdAuto = `QT_QPA_PLATFORM=offscreen ${TOOLS}/klayout/klayout -b -r ${autoScript} 2>&1`;
+        const drcCmdAuto = `QT_QPA_PLATFORM=offscreen ${TOOLS}/klayout/klayout -b -r ${autoScript} -rd threads=${_edaThreadsToken()} 2>&1`;
         const tA = Date.now();
         const rA = dockerExec(drcCmdAuto, 600000);
         const durA = Date.now() - tA;
@@ -2378,8 +2400,13 @@ print('STRUCTURAL_DRC_GENERATED=' + out)
         deck_searched: deckDir,
       }) }] };
     }
+    // -rd threads=<n> is passed for parallel tiled DRC. The auto-generated deck
+    // (auto_drc_deck.py) reads it via `threads(...)`; the foundry sign-off deck
+    // (*.lydrc) is NOT under our control, so it may or may not honor $threads —
+    // harmless if unread. Getting the SVRF/foundry engine to thread is a separate
+    // item, tracked outside this change.
     const drcCmd = `QT_QPA_PLATFORM=offscreen ${TOOLS}/klayout/klayout -b -r ${deckPath} ` +
-                   `-rd input=${gds_file} -rd report=${rdbPath} -rd top_cell=${top_cell} 2>&1`;
+                   `-rd input=${gds_file} -rd report=${rdbPath} -rd top_cell=${top_cell} -rd threads=${_edaThreadsToken()} 2>&1`;
     const t0drc = Date.now();
     const result = dockerExec(drcCmd, 900000);
     const durationDrcMs = Date.now() - t0drc;
@@ -2481,7 +2508,7 @@ catch {
 }`;
 
     const result = dockerExec(
-      `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && openroad -exit << 'TCEOF'
+      `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && openroad -threads ${_edaOpenroadThreadsToken()} -exit << 'TCEOF'
 read_lef ${techlefPath(cfg)}
 read_lef ${celllefPath(cfg)}
 read_liberty ${libPath(cfg)}
@@ -2618,7 +2645,7 @@ server.tool(
       assertSafePath(output_file, "output_file");
     } catch (e) { return guardError(e); }
     const result = dockerExec(
-      `export PATH=${TOOLS}/ngspice/bin:${TOOLS}/bin:$PATH && ngspice -b ${spice_file} -o ${output_file} 2>&1 && echo 'SPICE_COMPLETE' && tail -20 ${output_file} 2>/dev/null`,
+      `export PATH=${TOOLS}/ngspice/bin:${TOOLS}/bin:$PATH && OMP_NUM_THREADS=${_edaThreadsToken()} ngspice -b ${spice_file} -o ${output_file} 2>&1 && echo 'SPICE_COMPLETE' && tail -20 ${output_file} 2>/dev/null`,
       300000
     );
 
@@ -2846,7 +2873,7 @@ server.tool(
 
       const escaped = wrapperLines.join("\n").replace(/'/g, "'\\''");
       scriptLines.push(`printf '%s\\n' '${escaped}' > ${wrapperFile}`);
-      scriptLines.push(`ngspice -b ${wrapperFile} -o ${outFile} 2>&1 || true`);
+      scriptLines.push(`OMP_NUM_THREADS=${_edaThreadsToken()} ngspice -b ${wrapperFile} -o ${outFile} 2>&1 || true`);
     }
 
     scriptLines.push(`echo "===CORNER_SWEEP_COMPLETE==="`);
@@ -3286,6 +3313,12 @@ server.tool(
     const results = {};
     let overall_pass = true;
 
+    // NOTE (parallel-by-default): each corner gets intra-corner parallelism via
+    // `sta -threads` below. The per-corner LOOP is intentionally LEFT SEQUENTIAL:
+    // dockerExec is a synchronous spawnSync wrapper, so `await Promise.all(...)`
+    // would NOT actually overlap the corners (each spawnSync blocks the event
+    // loop until it returns) — true corner-level concurrency would need a full
+    // async-spawn rewrite, which is out of scope here. Correctness first.
     for (const corner of corners) {
       const tclScript = `
 read_liberty ${corner.lib}
@@ -3299,7 +3332,7 @@ puts "=== MCORNER_${corner.name}_DONE ==="
 exit
 `;
       const result = dockerExec(
-        `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && echo '${tclScript.replace(/'/g, "'\\''")}' | sta -exit 2>&1`,
+        `export PATH=${TOOLS}/openroad/bin:${TOOLS}/bin:$PATH && echo '${tclScript.replace(/'/g, "'\\''")}' | sta -threads ${_edaOpenroadThreadsToken()} -exit 2>&1`,
         120000
       );
 
@@ -3904,7 +3937,7 @@ cd ${work_dir} && \\
 export PYTHONPATH="$(pwd):$PYTHONPATH" && \\
 export PATH=${TOOLS}/verilator/bin:${TOOLS}/iverilog/bin:${TOOLS}/bin:$PATH && \\
 export LD_LIBRARY_PATH=${TOOLS}/iverilog/lib:$LD_LIBRARY_PATH && \\
-make SIM=${sim} 2>&1
+make -j${_edaThreadsToken()} SIM=${sim} 2>&1
 `;
 
     const result = dockerExec(script, 300000);

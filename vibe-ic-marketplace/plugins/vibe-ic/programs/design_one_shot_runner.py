@@ -102,6 +102,19 @@ import synth_frontend as _sf
 TOOLS_IN_CONTAINER = "/foss/tools"
 
 
+def _eda_thread_count() -> int:
+    """Parallel-by-default thread count for EDA tool builds/runs.
+
+    Mirrors the OpenROAD thread-count spirit: default to all cores
+    (os.cpu_count()), globally overridable by the generic env
+    VIBEIC_EDA_THREADS (positive int). No fixed number is hardcoded.
+    """
+    v = (os.environ.get("VIBEIC_EDA_THREADS") or "").strip()
+    if v.isdigit() and int(v) > 0:
+        return int(v)
+    return os.cpu_count() or 4
+
+
 # Path resolution — robust against both layouts:
 #   source:  <root>/vibe-ic-marketplace/plugins/vibe-ic/programs/<this>
 #   cache:   ~/.claude/plugins/cache/vibe-ic-marketplace/vibe-ic/<ver>/programs/<this>
@@ -3441,10 +3454,19 @@ def _verilator_sim_escape(
     def _vl_build_run(define: str) -> Tuple[int, str, str]:
         # NOTE: obj_dir is re-created per attempt; a prior failed build must not
         # leave stale artifacts that mask the retry.
+        # Parallel-by-default: --build-jobs N parallelizes verilator's internal
+        # C++ COMPILE of the generated model (the make/g++ stage). This is a pure
+        # build speed-up and is RESULT-INVARIANT — compiling the model's .o files
+        # concurrently produces the identical simulation binary, so the sim's
+        # behaviour is unchanged. We deliberately do NOT add runtime `--threads`:
+        # it makes the SIMULATION multithreaded, which for a tiny single-TB model
+        # is often SLOWER and is design-size-gated, so it is left off here.
+        _bjobs = _eda_thread_count()
         cmd = (
             f"cd {stage} && export PATH={TOOLS_IN_CONTAINER}/bin:$PATH && "
             f"rm -rf {obj} && "
             f"verilator --binary --timing -Wno-fatal -Wno-lint "
+            f"--build-jobs {_bjobs} "
             f"-D{define} -DDUT_TOP_NAME={top_name} "
             f"--top-module {tb_path.stem} -Mdir {obj} "
             f"{tb_path.name} {' '.join(staged)} 2>&1 && "

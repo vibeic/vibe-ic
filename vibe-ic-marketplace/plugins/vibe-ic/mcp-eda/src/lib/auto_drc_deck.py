@@ -98,6 +98,13 @@ def emit_deck(deck_path: str, gds: str, top: str, rdb: str,
     with open(deck_path, "w") as f:
         f.write("source(%r, %r)\n" % (gds, top))
         f.write("report(%r, %r)\n" % ("Auto DRC from techlef", rdb))
+        # Parallel-by-default: enable KLayout's tiled multi-CPU DRC. The thread
+        # count arrives from the CLI as `-rd threads=<n>` (a Ruby global $threads,
+        # a string or nil). KLayout's tiled DRC is RESULT-INVARIANT: it splits the
+        # layout into tiles processed in parallel and merges the violation set, so
+        # the reported violations are identical to a single-threaded run — only
+        # faster. nil.to_i == 0 in Ruby, so an absent/blank $threads floors to 1.
+        f.write("threads([$threads.to_i, 1].max)\n")
         # Declare each mapped layer
         for L in layers:
             gd = gdsmap.get(L["name"])
