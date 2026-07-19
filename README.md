@@ -62,12 +62,12 @@ OpenROAD / yosys / ngspice / magic / netgen / iverilog / klayout with
 gatekeeper-verified FAIL→PASS fixes; scoreboard in `tools/vibeic-eda/FIX_STATUS.md`):
 
 ```bash
-docker pull ghcr.io/vibeic/vibeic-eda:0.2.19   # or build: docker build -t vibeic-eda:0.2.19 tools/vibeic-eda
+docker pull ghcr.io/vibeic/vibeic-eda:0.2.23   # or build: docker build -t vibeic-eda:0.2.23 tools/vibeic-eda
 docker rm -f vibeic-eda 2>/dev/null || true    # "name already in use"? drop the old container first
 docker run -d --name vibeic-eda \
   -v "$HOME/AI_IC_design:$HOME/AI_IC_design:rw" \
   -v "$HOME/AI_IC_design:/foss/designs:rw" \
-  ghcr.io/vibeic/vibeic-eda:0.2.19 --skip sleep infinity
+  ghcr.io/vibeic/vibeic-eda:0.2.23 --skip sleep infinity
 docker exec vibeic-eda yosys --version         # sanity check — should print a version
 ```
 
