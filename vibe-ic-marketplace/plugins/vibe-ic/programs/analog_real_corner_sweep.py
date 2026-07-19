@@ -454,10 +454,19 @@ T["delta_sigma"] = """\
 .param ci=1p
 v_vdd vdd 0 1.2
 v_vcm vcm 0 0.6
-* input step at t=100ns: 0.6 -> 0.7 V applied through the sampling cap
-v_in  vin 0 pwl(0 0.6  99n 0.6  101n 0.7  1000n 0.7)
-* AC excitation on the same diff node for open-loop UGBW (dc 0 so it does not
-* perturb the transient bias point; ngspice runs op/tran and ac independently)
+* input step at t=100ns: 0.6 -> 0.7 V applied through the sampling cap.
+* v1.4.62 FIX: the `ac 1` magnitude was described in the comment below but the
+* keyword was missing from this source, so `ac dec` (below) ran with ZERO
+* excitation -> vdb(vout) was a dead vector and dcgain/ugbw .meas failed on
+* every corner (delta_sigma got waived). The `ac 1` drives the open-loop AC
+* through cs -> vsum (the OTA - input); it is used ONLY by `.ac` and does NOT
+* perturb the transient bias point (ngspice runs op/tran and ac independently),
+* exactly as the comment intended. Mirrors the comparator template which
+* already carries `ac 0.5`. Chip-AGNOSTIC (any PDK).
+v_in  vin 0 ac 1 pwl(0 0.6  99n 0.6  101n 0.7  1000n 0.7)
+* AC excitation on the same diff node for open-loop UGBW (the `ac 1` above is
+* used only by `.ac`, so it does not perturb the transient bias point;
+* ngspice runs op/tran and ac independently)
 * bias current mirror
 r_ib vdd nbias 200k
 xmb nbias nbias 0 0 sky130_fd_pr__nfet_01v8 w=4 l=1
