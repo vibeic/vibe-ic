@@ -225,6 +225,25 @@
       "owner_plugin": "vibe-ic"
     },
     {
+      "name": "asap7",
+      "process_node_nm": 7,
+      "open_source": true,
+      "_comment": "ASAP7 — the ASU/ARM 7nm PREDICTIVE academic PDK (BSD-3-Clause). A realistic but GENERIC, NON-FOUNDRY 7nm FinFET standard-cell library (`asap7sc7p5t`, 7.5-track): full LEF + Liberty + GDS, so synth / floorplan / PnR / CTS / STA / area-timing estimation all run at a 7nm-representative node. The KLayout asap7 DRC deck (asap7.lydrc, BSD-2-Clause) is an EDUCATIONAL rule-check, NOT a manufacturable foundry sign-off; no KLayout/netgen LVS deck ships (lvs_deck=null). tapeout_capable=false: ASAP7 is a predictive process with no real foundry, no manufacturable layer stack, and no foundry sign-off, and its drawn geometry uses a 4x-scaled convention — use it for learning, RTL-to-GDS flow bring-up at 7nm, and area/timing benchmarking, never for production silicon. Assets are the OpenROAD-flow-scripts asap7 platform (v3.0): the DEFAULT RVT (R) VT flavor at the TYPICAL (TT) corner, re-staged into the open_pdks-style libs.ref/<scl>/ layout the resolvers expect (see vibeic-eda Dockerfile). ASAP7 splits Liberty into 5 functional groups (AO / INVBUF / OA / SEQ / SIMPLE), so liberty_glob matches the RVT-TT set rather than a single monolithic .lib.",
+      "tapeout_capable": false,
+      "container_path": "/foss/pdks/asap7",
+      "liberty_glob": "libs.ref/asap7sc7p5t/lib/*_RVT_TT_*.lib",
+      "tech_lef_glob": "libs.ref/asap7sc7p5t/techlef/asap7_tech_1x_201209.lef",
+      "cell_lef_glob": "libs.ref/asap7sc7p5t/lef/asap7sc7p5t_28_R_1x_220121a.lef",
+      "cell_gds_glob": "libs.ref/asap7sc7p5t/gds/asap7sc7p5t_28_R_220121a.gds",
+      "site": "asap7sc7p5t",
+      "metal_prefix": "M",
+      "clk_buf_cell": "BUFx4_ASAP7_75t_R",
+      "clk_buf_root_cell": "BUFx8_ASAP7_75t_R",
+      "drc_deck": "libs.tech/klayout/drc/asap7.lydrc",
+      "lvs_deck": null,
+      "owner_plugin": "vibe-ic"
+    },
+    {
       "name": "custom_auto_detect",
       "_comment": "Generic placeholder \u2014 phase3_one_shot_runner.py auto-detects site/metal_prefix/clk_buf from project's input/pdk/ when no named PDK matches. This entry just documents the auto-detect heuristics.",
       "open_source": false,
