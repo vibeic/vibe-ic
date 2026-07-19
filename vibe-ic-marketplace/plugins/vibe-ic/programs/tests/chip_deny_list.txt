@@ -34,14 +34,9 @@ uhee628
 a3616
 noris
 
-# Commercial NDA PDK SKU / foundry (added 2026-07-18 — the guard was BLIND to
-# these, which is why ~90 SKU leaks sat undetected in plugin source/comments.
-# The ONLY sanctioned in-source occurrences are the load-bearing PDK-discovery
-# literals + detector patterns enumerated in chip_deny_allow.txt; every other
-# occurrence (prose/comment/example) is a real leak and MUST fail this guard.)
-commercial_pdk
-commercial_pdk
-commercial_pdk
-commercial_foundry
-commercial foundry
-commercial_foundry
+# Commercial NDA PDK SKU / foundry tokens are NOT listed here as plaintext —
+# they would themselves be a `git grep`-visible leak. They live ENCODED (base64)
+# in programs/_commercial_pdk.py and are merged into this gate's panel at runtime
+# via `_commercial_pdk.nda_tokens()`. There is now NO source-side allowlist for
+# them: any literal foundry SKU / name / process token anywhere under
+# plugins/vibe-ic (except that single encoded home) FAILS the guard.

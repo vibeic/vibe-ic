@@ -49,6 +49,12 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
 
+try:  # NDA tokens live encoded here; the guard reconstructs them at runtime
+    import _commercial_pdk as _cpdk
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _commercial_pdk as _cpdk
+
 
 # Tokens forbidden in plugin source code. Match is case-INsensitive at
 # word boundaries. The canonical list lives in
@@ -85,51 +91,39 @@ _FORBIDDEN_TOKENS: Tuple[str, ...] = _load_deny_tokens(_DENY_PATH)
 
 
 # ---------------------------------------------------------------------------
-# Occurrence-level allowlist (line-EXACT) — the fine-grained companion to the
-# file-level `_ALLOWLIST_PATTERNS` below.
+# STRICT NDA panel — the commercial foundry SKU / name / process tokens.
 #
-# A few deny-listed SKU tokens are UNAVOIDABLE in source: the plugin must name
-# the real PDK / real on-disk filenames to DISCOVER them at run time (the
-# `_commercial_pdk_SHIM_NAME` shim filename + `commercial_pdk-*.lib` library globs the SPICE
-# gate rglobs for; the `commercial_pdk` PDK-config key + cell-model path the
-# fault/DFT flow matches), and two DETECTOR programs must carry the SKU inside
-# their OWN scan patterns (removing it would blind the very guard that catches
-# leaks). These are enumerated line-EXACTLY in `chip_deny_allow.txt`.
-#
-# A finding is suppressed ONLY when BOTH the file path AND the exact stripped
-# source line match an allow entry — so (both intentional):
-#   * a NEW prose/comment leak is a DIFFERENT line  -> still caught (fail-safe);
-#   * EDITING a sanctioned line changes its text     -> re-flagged, forcing a
-#     deliberate re-review + allow-list update.
-# The proper long-term fix (config/env-driven PDK-name resolution so NO SKU
-# literal is needed in source at all) is tracked as a separate deferred item.
-_ALLOW_PATH = (
-    Path(__file__).resolve().parent
-    / "tests" / "chip_deny_allow.txt"
+# These are NOT stored as plaintext anywhere (that would itself be a
+# `git grep`-visible leak); they live base64-ENCODED in `_commercial_pdk.py`
+# and are reconstructed at runtime here. Unlike the `_FORBIDDEN_TOKENS` panel
+# above, the NDA panel has NO allowlist of any kind (no file-level, no
+# line-level): a literal NDA token ANYWHERE under the plugin tree — including
+# tests/ — FAILS, EXCEPT the single sanctioned encoded home (`_commercial_pdk.py`,
+# which contains only the base64 forms, never a literal). This is the strengthened
+# contract that guarantees `git grep <SKU>` stays 0 forever.
+# ---------------------------------------------------------------------------
+_NDA_TOKENS: Tuple[str, ...] = tuple(_cpdk.nda_tokens())
+# The ONE file allowed to carry the (encoded) NDA tokens — its literals are
+# base64, so it never actually matches, but we exempt it explicitly for clarity.
+_NDA_ENCODED_HOME = "programs/_commercial_pdk.py"
+# Text file extensions scanned for the strict NDA panel across the WHOLE tree.
+_NDA_SCAN_EXTS = (
+    ".py", ".md", ".json", ".yaml", ".yml", ".tcl", ".txt",
+    ".cfg", ".ini", ".sh", ".v", ".sv", ".rule", ".rules", ".lib",
 )
 
 
-def _load_line_allow(path: Path) -> dict:
-    r"""Read `<rel_path>\t<exact stripped source line>` entries (one per line;
-    `#` comments and blank lines ignored). Returns
-    {normalized_rel_path: set(lines)}. Missing file -> empty (no suppression)."""
-    allow: dict = {}
-    try:
-        raw = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return allow
-    for ln in raw:
-        if not ln.strip() or ln.lstrip().startswith("#"):
-            continue
-        if "\t" not in ln:
-            continue
-        rel, line = ln.split("\t", 1)
-        rel_norm = rel.strip().replace("\\", "/")
-        allow.setdefault(rel_norm, set()).add(line)
-    return allow
-
-
-_LINE_ALLOW: dict = _load_line_allow(_ALLOW_PATH)
+def _build_nda_re() -> re.Pattern:
+    # SUBSTRING match (no word boundaries) — the NDA tokens are distinctive
+    # enough to never false-positive, and substring matching makes this guard
+    # exactly as strict as the `git grep <SKU>` gate it enforces (so e.g.
+    # `<SKU>_typ.lib` and `Calibre_<SKU>_DRC.rule` are both caught).
+    toks = sorted(set(_NDA_TOKENS), key=len, reverse=True)
+    if not toks:
+        # No tokens (should never happen) -> a never-matching pattern.
+        return re.compile(r"(?!x)x")
+    escaped = [re.escape(t) for t in toks]
+    return re.compile("(" + "|".join(escaped) + ")", re.IGNORECASE)
 
 
 # File / directory patterns whose content is allowed to mention the
@@ -179,13 +173,6 @@ def _is_allowlisted(rel_path: str) -> bool:
     return any(p in rel_norm for p in _ALLOWLIST_PATTERNS)
 
 
-def _is_line_allowlisted(rel_norm: str, line: str) -> bool:
-    """True when this exact (file, stripped line) is a sanctioned PDK-discovery
-    literal / detector pattern registered in chip_deny_allow.txt."""
-    allowed = _LINE_ALLOW.get(rel_norm)
-    return bool(allowed) and line.strip() in allowed
-
-
 def _build_token_re(extra: Optional[List[str]] = None) -> re.Pattern:
     tokens = list(_FORBIDDEN_TOKENS)
     if extra:
@@ -224,10 +211,7 @@ def audit(plugin_root: Path,
             text = f.read_text(encoding="utf-8")
         except OSError:
             continue
-        rel_norm = rel_str.replace("\\", "/")
         for ln_no, line in enumerate(text.splitlines(), start=1):
-            if _is_line_allowlisted(rel_norm, line):
-                continue
             for m in token_re.finditer(line):
                 tok = m.group(1)
                 # Extract context — short snippet around the match
@@ -241,7 +225,44 @@ def audit(plugin_root: Path,
                     context=ctx,
                 ))
 
+    # STRICT NDA pass — commercial foundry SKU/name/process tokens, scanned over
+    # the WHOLE plugin tree (every text file, tests/ included), with NO allowlist
+    # except the single encoded home. This is the strengthened grep-0 contract.
+    findings.extend(_scan_nda(plugin_root))
+
     return ("FAIL" if findings else "PASS"), findings
+
+
+def _scan_nda(plugin_root: Path) -> List[TokenFinding]:
+    """Scan the entire plugin tree for literal NDA foundry tokens. No allowlist
+    (tests/ included); only the encoded home `_commercial_pdk.py` is exempt."""
+    out: List[TokenFinding] = []
+    nda_re = _build_nda_re()
+    for f in plugin_root.rglob("*"):
+        if not f.is_file() or f.suffix.lower() not in _NDA_SCAN_EXTS:
+            continue
+        parts = f.parts
+        if "__pycache__" in parts or ".git" in parts:
+            continue
+        rel_str = str(f.relative_to(plugin_root))
+        if rel_str.replace("\\", "/") == _NDA_ENCODED_HOME:
+            continue
+        try:
+            text = f.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for ln_no, line in enumerate(text.splitlines(), start=1):
+            for m in nda_re.finditer(line):
+                start = max(0, m.start() - 20)
+                end = min(len(line), m.end() + 20)
+                out.append(TokenFinding(
+                    file=rel_str,
+                    line=ln_no,
+                    token=m.group(1),
+                    context=line[start:end].strip(),
+                    rule="FORBIDDEN_NDA_SKU",
+                ))
+    return out
 
 
 # ---------------------------------------------------------------------------

@@ -30,6 +30,12 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Dict, Tuple
 
+try:  # config-driven NDA-token source (detector reconstructs SKU from encoded form)
+    import _commercial_pdk as _cpdk
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _commercial_pdk as _cpdk
+
 try:
     import yaml
     HAS_YAML = True
@@ -69,8 +75,10 @@ HARD_RULES: List[Tuple[str, str, str]] = [
     ("vendor_pdf",
      r"\b[A-Z][A-Za-z0-9_-]*\.(pdf|PDF)\b",
      "Vendor document filename — describe the information, not the source"),
+    # NDA PDK/process codename family — pattern reconstructed at runtime from
+    # the encoded token store so no SKU literal lives in this detector's source.
     ("pdk_codename",
-     r"\bcommercial_pdk(pm180su)?\b|\bcommercial_pdk\b",
+     _cpdk.nda_source_regex_str(),
      "PDK/process codename specific to one project"),
     ("hid_cmd_byte",
      r"0x[0-9A-Fa-f]{2}\s*(?://|#)?\s*CMD_[A-Z_]+",

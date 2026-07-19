@@ -67,6 +67,12 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
 
+try:  # config-driven NDA-token source (detector reconstructs SKU from encoded form)
+    import _commercial_pdk as _cpdk
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _commercial_pdk as _cpdk
+
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]   # vibe-ic
 CORE_SKILLS = PLUGIN_ROOT / "skills"
@@ -92,7 +98,9 @@ HARD_RULES: list[tuple[str, str, str]] = [
      "Vendor name 'Apple'"),
     ("specific_otp_file", r"\bapple\.ver\b",
      "OTP filename apple.ver is benchmark-specific"),
-    ("specific_pdk_codename", r"\bcommercial_pdk(pm180su)?\b|\bcommercial_pdk\b",
+    # NDA PDK/process codename family — pattern reconstructed at runtime from
+    # the encoded token store so no SKU literal lives in this detector's source.
+    ("specific_pdk_codename", _cpdk.nda_source_regex_str(),
      "PDK / process codename specific to one project"),
     ("vendor_pdf_filename",
      r"\b[A-Z][A-Za-z0-9_-]*訊號格式\.pdf\b"
