@@ -1,7 +1,7 @@
 """G-ANTENNA-REROUTE — parallelize the OpenROAD PnR session so the antenna-diode
 reroute loop (and every routing step) is not single-threaded (chip/PDK-AGNOSTIC).
 
-PROVE-FIRST floor (subservient RISC-V SoC on the commercial commercial_pdk PDK, measured
+PROVE-FIRST floor (subservient RISC-V SoC on the commercial PDK, measured
 in-container against `routed_preantenna.def` + `post_hold.def`):
   * OpenROAD DEFAULTS TO 1 THREAD (`ord::thread_count` == 1). The emitted pnr.tcl
     never called `set_thread_count`, so the WHOLE route — and EVERY antenna-diode

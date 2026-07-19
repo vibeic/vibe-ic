@@ -58,7 +58,7 @@ def test_includes_design_facts_from_synth_log(tmp_path):
 def test_detects_process_node_from_pdk_lib(tmp_path):
     """180 in lib filename → process_nm = 180."""
     (tmp_path / "input/pdk/liberty").mkdir(parents=True)
-    (tmp_path / "input/pdk/liberty/commercial_pdk_typ.lib").write_text("library(x);")
+    (tmp_path / "input/pdk/liberty/commercial_pdk_180nm_typ.lib").write_text("library(x);")
     r = _run(tmp_path)
     audit = json.loads(
         (tmp_path / "reports/phase3/foundry_handoff_audit.json").read_text())

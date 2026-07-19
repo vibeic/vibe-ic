@@ -1,8 +1,8 @@
 """v1.4.x — std-cell marker widened from DEF/LEF SIZE bbox to true library
-extent, with a mandatory anti-masking guard (spm commercial_pdk real-flow close-loop,
+extent, with a mandatory anti-masking guard (spm commercial PDK real-flow close-loop,
 2026-07-16).
 
-Root cause (proven on the real commercial_pdk std-cell library, all 256 residual DRC
+Root cause (proven on the real commercial-PDK std-cell library, all 256 residual DRC
 instances across NPSD.W/A.1, PPSD.W/A.1, BASIC.TAP.OT.1, Mx.W.1_35/36/37,
 Mx.A.1(+_22/_23)): EVERY sampled library master (fillers included, not just
 active cells) draws its implant/metal a small amount OUTSIDE its own DEF/LEF
@@ -28,7 +28,7 @@ are the DEF's ROUTED/SPECIALNETS wires, so intersecting the painted region
 against every other layer's flat top-level shapes is a clean, chip-agnostic
 over-waive detector.
 
-FOLLOW-ON FIX (caravel commercial_pdk dense-routing close-loop, 2026-07-17):
+FOLLOW-ON FIX (caravel commercial PDK dense-routing close-loop, 2026-07-17):
 v1.4.42 checked only the ADDED (overhang) ring and, on a hit, reverted to the
 old SIZE-box coverage. Two measured defects: (1) the marker exempts METAL too
 (the deck derives `__metN__ = NOT METN DCTY` for MET1..8 exactly as it does the
@@ -76,7 +76,7 @@ def test_streamout_has_the_anti_masking_guard():
     src = p3._GDS_STREAMOUT_PY
     assert "ANTI-MASKING GUARD" in src
     assert "_leak" in src
-    # Follow-on fix (caravel commercial_pdk, dense-routing close-loop): the guard probes
+    # Follow-on fix (caravel commercial PDK, dense-routing close-loop): the guard probes
     # the ENTIRE painted region (SIZE-box ∪ true-extent), not just the overhang
     # ring, against top-level net geometry — because the deck derives METAL the
     # same `__metN__ = NOT METN <marker>` way it derives FEOL, so a marker pixel
@@ -186,7 +186,7 @@ def test_full_region_guard_catches_overhang_routing_too():
 def test_all_marker_layers_resolved_up_front_and_painted_identically():
     # Multi-marker consistency: ALL configured marker layers are resolved up
     # front (`_marker_lis`) and painted with the SAME `_paint_reg`, so a deck's
-    # "identity ⊆ don't-check" consistency rule (commercial_pdk: Artisan ⊆ DCTY0, its
+    # "identity ⊆ don't-check" consistency rule (commercial PDK: Artisan ⊆ DCTY0, its
     # `COPY (Artisan andnot DCTY)` check) can never fire from a per-layer paint
     # mismatch. Proven necessary: painting 65/0 then letting 113/0's net probe
     # see the just-painted 65/0 as "net" would skip 113/0 and light up the

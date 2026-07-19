@@ -261,7 +261,7 @@ def test_streamout_uses_manual_substitution_not_macro_resolution():
     # cell-GDS geometry BUT ALSO paints each macro's SIZE box on the first
     # tech-LEF layer (here LAYER NACT / GDS 1/0). 633 abutting cells tiled a
     # SOLID nact plane over the whole die -> __nact__ = the entire core ->
-    # every nact-keyed FEOL rule flooded (commercial_pdk spm: 19 phantom families,
+    # every nact-keyed FEOL rule flooded (commercial PDK spm: 19 phantom families,
     # PO.S.1.3 x3706 / implant x3279 / CT.OT.1.1 x2557 ...). No produce_*
     # option or macro_resolution_mode suppresses the box. The fix streams the
     # DEF as LEF abstracts and MANUALLY copies each std cell's real geometry

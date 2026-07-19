@@ -1,4 +1,4 @@
-"""Phase-3 DRC honesty fixes (ORGANIC 2026-07-11, commercial commercial_pdk run):
+"""Phase-3 DRC honesty fixes (ORGANIC 2026-07-11, commercial commercial PDK run):
 
   1. routed.drc.rpt router-DRC count — must be the FINAL converged
      `[INFO DRT-0199] Number of violations = N`, NOT the number of log LINES
@@ -55,7 +55,7 @@ def test_drt_final_none_when_no_drt_output():
 
 
 # ------------------------------------------- 2) commercial SVRF classifier ---
-# A faithful miniature of the real commercial_pdk report shape: an EMPTY exclusion
+# A faithful miniature of the real commercial-PDK report shape: an EMPTY exclusion
 # marker (`COPY __artisan__ … -> 0`), a `_not_artisan` min-area FAIL (artifact),
 # density FAILs (fill), and a wide-metal spacing FAIL with an opaque derived
 # layer (real geometry — must stay FAILing).

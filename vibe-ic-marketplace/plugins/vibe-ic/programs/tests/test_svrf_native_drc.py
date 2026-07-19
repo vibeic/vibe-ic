@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""svrf-native commercial DRC wiring (spm commercial_pdk clean-run, 2026-07-11).
+"""svrf-native commercial DRC wiring (spm commercial PDK clean-run, 2026-07-11).
 
 A commercial PDK ships its sign-off DRC as a Calibre/SVRF `.rule` deck. The
 vibeic KLayout fork's native `svrfdrc` buddy (C++, no Python interpreter) runs
@@ -10,7 +10,7 @@ of returning ENV_UNAVAILABLE.
 These tests pin the deterministic pieces (report tally parsing, buddy discovery
 via `command -v svrfdrc`, the native-buddy invocation, and the ENV_UNAVAILABLE
 fallback when the buddy is genuinely absent). The full container run is exercised
-by the commercial_pdk chip runs. Report format is byte-identical to the retired
+by the commercial PDK chip runs. Report format is byte-identical to the retired
 run_svrf_drc.py, so the tally/classifier tests are unchanged.
 """
 from __future__ import annotations
@@ -180,7 +180,7 @@ def test_step_drc_env_unavailable_names_buddy(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# v1.4.38 — DRC wall-clock budget (ic2-sha256 commercial_pdk sha256 floor): the stall
+# v1.4.38 — DRC wall-clock budget (ic2-sha256 commercial PDK sha256 floor): the stall
 # watchdog never kills a 100%-CPU tool, so svrfdrc's pathological single-thread
 # derived-layer build ran 4.4h unbounded. A non-completing DRC is an HONEST
 # SKIPPED-CONDITION (perf ceiling), never a FAIL or a silent multi-hour hang.

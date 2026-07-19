@@ -316,7 +316,7 @@ def test_build_equiv_script_generic_uses_icells_no_liberty():
 def test_build_equiv_script_default_is_unchanged_by_new_param():
     # The Liberty-mapped APPROACH-C path (gate_is_generic defaults False) is
     # byte-for-byte what it was — no -icells, Liberty expanded. Guards the proven
-    # commercial_pdk path against regression from the new generic branch.
+    # commercial PDK path against regression from the new generic branch.
     s = lec_run.build_equiv_script(
         ["/p/rtl/a.v", "/p/rtl/b.v"], "/p/synth/netlist.v", "chip_top",
         lec_run.DEFAULT_LIBERTY)

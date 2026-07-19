@@ -1,6 +1,6 @@
 """v1.3.93 — unit tests for the commercial-PDK phase3 sign-off gate fixes that
-drove spm to a genuine tapeout-clean state on a TAPLESS-CELL PDK (commercial foundry
-commercial_pdk). All pure-Python / deterministic (no `pya`, no container, no oracle):
+drove spm to a genuine tapeout-clean state on a TAPLESS-CELL PDK (commercial
+commercial PDK). All pure-Python / deterministic (no `pya`, no container, no oracle):
 
   * _parse_gds_layer_spec          — "N/D" | "N" GDS layer spec parsing.
   * _measure_tap_geometry          — FAIL-SAFE: never a fabricated pass when the

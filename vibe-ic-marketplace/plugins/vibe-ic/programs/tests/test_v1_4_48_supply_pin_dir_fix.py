@@ -1,4 +1,4 @@
-"""FLOOR-PNR-BUFFER — supply-pin DIRECTION hygiene (ibex CPU-scale commercial_pdk).
+"""FLOOR-PNR-BUFFER — supply-pin DIRECTION hygiene (ibex CPU-scale commercial PDK).
 
 MEASURED root cause (proven in-container on the running image, NOT assumed):
 a commercial std-cell LEF omits `DIRECTION` on its `USE POWER`/`USE GROUND`

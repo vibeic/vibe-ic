@@ -36,9 +36,9 @@ def test_explicit_liberty_wins(tmp_path):
 def test_project_pdk_glob_preferred(tmp_path):
     libdir = tmp_path / "input" / "pdk" / "liberty"
     libdir.mkdir(parents=True)
-    (libdir / "commercial_pdk_typ.lib").write_text("library(x){}\n")
+    (libdir / "commercial_pdk_demo_typ.lib").write_text("library(x){}\n")
     got = tdf._resolve_design_liberty(tmp_path, None)
-    assert got == "input/pdk/liberty/commercial_pdk_typ.lib"
+    assert got == "input/pdk/liberty/commercial_pdk_demo_typ.lib"
 
 
 def test_falls_back_to_flow_recorded_primary_corner(tmp_path):

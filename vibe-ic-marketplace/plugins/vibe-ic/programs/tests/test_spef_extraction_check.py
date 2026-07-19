@@ -80,13 +80,13 @@ def test_exit2_bad_dir(tmp_path):
 
 
 def test_pass_with_pdk_unavailable_waiver(tmp_path):
-    """v0.119.21: custom open-source PDKs (commercial_foundry commercial_pdk, etc.)
+    """v0.119.21: custom open-source PDKs (commercial 180nm PDK, etc.)
     have no Magic .tech for parasitic extraction. With a documented
     spef_extraction_unavailable_reason ≥20 chars, the gate accepts the
     deferral instead of blocking forever on a tool-unavailable wall."""
     (tmp_path / "waivers.json").write_text(json.dumps({
         "spef_extraction_unavailable_reason":
-            "commercial_foundry 180nm PDK has no Magic tech file; SPEF extraction "
+            "commercial 180nm PDK has no Magic tech file; SPEF extraction "
             "deferred until foundry sign-off uses commercial Calibre",
     }))
     result = _run(tmp_path)

@@ -25,7 +25,7 @@ def test_pass_with_pdk_unavailable_waiver(tmp_path):
     waiver. ≥20-char reason required (anti-rubber-stamp policy)."""
     (tmp_path / "waivers.json").write_text(json.dumps({
         "em_report_unavailable_reason":
-            "commercial_foundry commercial_pdk has no characterized current-density "
+            "commercial 180nm PDK has no characterized current-density "
             "limits; EM lifetime check deferred until commercial flow",
     }))
     r = _run([str(tmp_path)])
