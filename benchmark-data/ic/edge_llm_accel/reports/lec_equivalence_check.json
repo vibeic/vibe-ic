@@ -1,6 +1,7 @@
 {
   "program": "lec_equivalence_check",
   "passed": false,
+  "inconclusive": false,
   "equivalent": false,
   "compared_points": 0,
   "non_equivalent_points": 0,

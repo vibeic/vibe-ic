@@ -1,6 +1,6 @@
 # Phase 2+3 Final Summary — edge_llm_accel
 
-_Auto-generated chip-AGNOSTIC summary by_ `final_report_generate.py` _at 2026-07-19T02:59:25Z (UTC)._
+_Auto-generated chip-AGNOSTIC summary by_ `final_report_generate.py` _at 2026-07-19T13:31:14Z (UTC)._
 
 - **IC**: `edge_llm_accel`
 - **Project root**: `/home/reyerchu/vibe-ic/benchmark-data/ic/edge_llm_accel`
@@ -9,28 +9,29 @@ _Auto-generated chip-AGNOSTIC summary by_ `final_report_generate.py` _at 2026-07
 
 **`Overall: FAIL`**
 
-_Counts snapshot 2026-07-19T02:59:25Z · audit-digest sha256:5ec2a7141a38 · overall FAIL. A fresh `flow_compliance_check.py --strict` re-run may move these once late artefacts land._
+_Counts snapshot 2026-07-19T13:31:14Z · audit-digest sha256:f99a9e7e9bf9 · overall FAIL. A fresh `flow_compliance_check.py --strict` re-run may move these once late artefacts land._
 
 ```
 === Vibe-IC phase1_phase2_phase3 compliance ===
 Project: /home/reyerchu/vibe-ic/benchmark-data/ic/edge_llm_accel
 Flow def: /home/reyerchu/vibe-ic/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml
-Steps: 63 total (22/34 executed PASS, 4 DEFERRED via waiver)
-  PASS=22  FAIL=8  MISSING=4 (3 blocked-by-upstream of step 13)  WAIVED-DEFERRED=4  SKIPPED=25
+Steps: 63 total (23/35 executed PASS, 3 DEFERRED via waiver)
+  PASS=22  FAIL=8  MISSING=4 (3 blocked-by-upstream of step 13)  WAIVED-DEFERRED=3  SKIPPED=25  VACUOUS-PASS=1
 ```
 
-- PASS=20 (+VACUOUS-PASS=0 → executed PASS=20) — every executed canonical step passed deterministically.
-- WAIVED-DEFERRED=4 — deferred via documented waiver (human review required before tapeout).
+- PASS=20 (+VACUOUS-PASS=1 → executed PASS=21) — every executed canonical step passed deterministically.
+- WAIVED-DEFERRED=3 — deferred via documented waiver (human review required before tapeout).
 - SKIPPED-CONDITION=22 — gate predicate not yet met. manufacturing-stage (awaiting silicon)=5; mid-flow (board absent / capability gap / cascade-blocked)=17.
+- VACUOUS-PASS=1 — gate accepts the present project shape; check whether it should be a real PASS for your flow.
 - **FAIL=8** — blocking; do not claim PASS.
 
-Per the SOLE ACCEPTANCE CRITERION: `executed PASS = 20/37, deferred = 4 pending foundry sign-off`. Engineering Phase 2+3 INCOMPLETE — fix FAILs before claiming.
+Per the SOLE ACCEPTANCE CRITERION: `executed PASS = 21/38, deferred = 3 pending foundry sign-off`. Engineering Phase 2+3 INCOMPLETE — fix FAILs before claiming.
 
 ## Stage breakdown
 
 | Stage | Steps | PASS | Other |
 |---|---|---:|---|
-| Stage 1 (RTL) | 1–6, P0 (7) | 4 / 7 | ⚠️=2 ⏭️=1 |
+| Stage 1 (RTL) | 1–6, P0 (7) | 5 / 7 | ⚠️=1 ⏭️=1 🟦=1 |
 | Stage 2 (Synth/DFT) | 7–14, DT1, DT2, DT3, FS1 (12) | 4 / 12 | ⏭️=1 ❌=2 ❓=5 |
 | Stage 3 (PD) | 15–32 (18) | 9 / 18 | ⏭️=2 ❌=5 ❓=2 |
 | Analog (A1–A9) | A1–A9 (9) | 0 / 9 | ⏭️=9 |
@@ -99,7 +100,7 @@ _Per_ `flow/phase1_phase2_phase3.yaml` _v2._
 | 1 | Spec-to-RTL | — | `phase2/stage1/rtl/*.sv` | ✅ |
 | 2 | Lint | 1 | `reports/phase2/lint/r…` | ✅ |
 | 3 | CDC / RDC check | 1 | `reports/phase2/cdc/cr…` | ✅ |
-| 4 | Simulation | 2 | `phase2/stage1/sim/*.l…` | ⚠️ |
+| 4 | Simulation | 2 | `phase2/stage1/sim/*.l…` | 🟦 |
 | 5 | Formal verification | 2 | `phase2/stage1/formal…` | ⏭️ |
 | 6 | FPGA early prototype + v… | 2, 4, 5 | `phase2/stage1/fpga/ou…` | ⚠️ |
 
@@ -193,7 +194,8 @@ _Per_ `flow/phase1_phase2_phase3.yaml` _v2._
 | Verdict | Count |
 |---|---:|
 | ✅ PASS | 20 |
-| ⚠️ WAIVED-DEFERRED | 4 |
+| 🟦 VACUOUS-PASS | 1 |
+| ⚠️ WAIVED-DEFERRED | 3 |
 | ⏭️ SKIPPED-CONDITION | 22 |
 | ❌ FAIL | 8 |
 | ❓ MISSING | 9 |
@@ -232,7 +234,7 @@ tapeout sign-off reached the evidence threshold but a DRC/LVS slot was credited 
 
 - Standard-cell count post-synth: **3104629** (from `phase2/stage2/synth/netlist.v`)
 - DEF COMPONENTS post-PnR: **1494657**
-- Canonical step executed PASS: **20/37** (strict PASS: 20, deferred via waiver: 4, vacuous-pass: 0, manufacturing-skipped: 5, mid-flow-skipped: 17)
+- Canonical step executed PASS: **21/38** (strict PASS: 20, deferred via waiver: 3, vacuous-pass: 1, manufacturing-skipped: 5, mid-flow-skipped: 17)
 
 ## SHA-256 Attestation
 
