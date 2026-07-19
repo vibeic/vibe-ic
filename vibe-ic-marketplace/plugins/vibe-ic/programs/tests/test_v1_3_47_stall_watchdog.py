@@ -21,17 +21,32 @@ import _watchdog as W  # noqa: E402
 # ── _container_cpu_seconds parsing (marker-matched CPU sum) ───────────────────
 
 def test_container_cpu_seconds_sums_cputimes_for_marker(monkeypatch):
+    # 4-column rows (pid ppid cpu args) — shared tree-aware probe contract.
     marker = "/foss/designs/proj/pnr.tcl"
     ps_out = (
-        "  0 ps -eo cputimes=,args=\n"
-        "123 openroad -no_init -exit /foss/designs/proj/pnr.tcl\n"
-        "  4 bash -lc openroad -no_init -exit /foss/designs/proj/pnr.tcl | tee x\n"
-        " 99 klayout -b -r /foss/other/deck.lydrc\n"
+        "50 1    0 ps -eo pid=,ppid=,cputimes=,args=\n"
+        "10 11 123 openroad -no_init -exit /foss/designs/proj/pnr.tcl\n"
+        "11 1    4 bash -lc openroad -no_init -exit /foss/designs/proj/pnr.tcl | tee x\n"
+        "12 1   99 klayout -b -r /foss/other/deck.lydrc\n"
     )
     monkeypatch.setattr(R, "_docker_exec_raw",
                         lambda c, cmd, timeout=15: (0, ps_out, ""))
     # 123 (openroad) + 4 (its bash wrapper) = 127; the klayout line is excluded.
     assert R._container_cpu_seconds("c", marker) == 127.0
+
+
+def test_container_cpu_seconds_counts_descendants(monkeypatch):
+    # The two-kill lesson: yosys runs ABC in a child `yosys-abc` whose argv
+    # does not carry the marker — the tree closure must count it.
+    marker = "/proj/synth/netlist.v"
+    ps_out = (
+        "100 1    5 yosys -p write_verilog /proj/synth/netlist.v\n"
+        "200 100 3600 /foss/tools/yosys/bin/yosys-abc -s\n"
+        "300 1   99 klayout -b -r /other/deck\n"
+    )
+    monkeypatch.setattr(R, "_docker_exec_raw",
+                        lambda c, cmd, timeout=15: (0, ps_out, ""))
+    assert R._container_cpu_seconds("c", marker) == 3605.0
 
 
 def test_container_cpu_seconds_none_without_marker():
@@ -46,7 +61,7 @@ def test_container_cpu_seconds_fallback_to_cputime_hms(monkeypatch):
         calls["n"] += 1
         if "cputimes=" in cmd:
             return (1, "", "")          # cputimes unsupported → empty
-        return (0, "00:02:00 netgen -batch lvs netlist.spice top\n", "")
+        return (0, "7 1 00:02:00 netgen -batch lvs netlist.spice top\n", "")
 
     monkeypatch.setattr(R, "_docker_exec_raw", fake_exec)
     assert R._container_cpu_seconds("c", marker) == 120.0
