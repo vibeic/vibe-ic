@@ -8025,6 +8025,16 @@ if cell_gds_path and os.path.exists(cell_gds_path):
         _laymap = {}
         for _sli in _lib.layer_indexes():
             _laymap[_sli] = ly.layer(_lib.get_info(_sli))
+        # DBU RESCALE — the library GDS and the DEF-read layout may use
+        # different database units (NangateOpenCellLibrary.gds is finer than
+        # the DEF reader's default 1 nm). `Shapes.insert(shape, trans)`
+        # copies RAW integer coordinates, so without rescaling the artwork
+        # lands magnified by lib_dbu/target_dbu (first hit: 20x — 65 nm
+        # contacts became 1.3 um monsters overlapping everything, ~3M
+        # spurious contact-rule items). Compose a magnifying ICplxTrans so
+        # both the shape coordinates and the hierarchical displacement are
+        # rescaled into the target dbu. mag==1 keeps the legacy exact path.
+        _mag = _lib.dbu / ly.dbu
         _subbed = 0
         for _dci in list(ly.each_cell_top_down()):
             _dc = ly.cell(_dci)
@@ -8040,7 +8050,12 @@ if cell_gds_path and os.path.exists(cell_gds_path):
             for _sli in _lib.layer_indexes():
                 _dli = _laymap[_sli]
                 for _si in _lc.begin_shapes_rec(_sli):
-                    _dc.shapes(_dli).insert(_si.shape(), _si.trans())
+                    if _mag == 1.0:
+                        _dc.shapes(_dli).insert(_si.shape(), _si.trans())
+                    else:
+                        _dc.shapes(_dli).insert(
+                            _si.shape(),
+                            pya.ICplxTrans(_mag) * pya.ICplxTrans(_si.trans()))
             _subbed += 1
         print(f"CELL_GDS manual-substituted {_subbed} std cell(s)")
     except Exception as e:
