@@ -30,6 +30,17 @@ def _analog_block(project: Path, block: str) -> None:
     (d / f"{block}.gds").write_text("GDS-DATA" * 40)
     # the analog hardmacro behavioral wrapper .v must NOT count as digital RTL
     (d / f"{block}.v").write_text("// behavioral analog wrapper\nmodule m; endmodule\n")
+    # A-track convergence evidence. Pillar 5 requires a non-FAIL A-track verdict
+    # with every corner sweep FULLY measured; presence of blocks alone is not
+    # evidence the analog loop closed. This test's subject is the Pillar 3 + 4
+    # N/A behaviour, so the fixture supplies a genuinely converged A-track —
+    # which is what a PRODUCTION-READY analog IC must have.
+    (project / "reports" / "phase3").mkdir(parents=True, exist_ok=True)
+    (project / "reports" / "phase3" / "analog_one_shot.json").write_text(
+        json.dumps({"verdict": "PASS"}))
+    (d / "corner_results.json").write_text(json.dumps({
+        "partial_measurement": False, "_provenance": "real_ngspice",
+        "corners_executed": 9, "full_pvt_sweep_executed": True}))
 
 
 def _func_cov_100(project: Path) -> None:
