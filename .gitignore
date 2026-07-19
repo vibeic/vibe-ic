@@ -88,3 +88,17 @@ simv
 # tracked source like vibe-ic-marketplace/.../mcp-eda/src/devices/_registry.js.
 /_*.js
 history.md
+
+# Local benchmark RUN PRODUCTS are never committed wholesale — only a curated,
+# NDA-scrubbed results-only subset is (each shipped run dir carries its own
+# .gitignore whitelisting just its RESULT.md + clean report JSONs). A raw local
+# run dir can carry the commercial-PDK identifier in its own NAME, so leaving
+# these untracked-but-not-ignored is one `git add -A` away from re-leaking what
+# the 2026-07-19/20 history rewrite removed. Ignore raw run dirs by default;
+# a curated run is added explicitly with `git add <path>` (never -A).
+benchmark-data/ic/*/clean_run_*/
+!benchmark-data/ic/*/clean_run_*/.gitignore
+!benchmark-data/ic/*/clean_run_*/RESULT.md
+!benchmark-data/ic/*/clean_run_*/reports/
+# Vendored upstream benchmark datasets — large, and not ours to redistribute.
+benchmark-data/datasets/
