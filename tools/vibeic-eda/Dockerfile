@@ -170,6 +170,7 @@ RUN P=/orfs/flow/platforms/nangate45; S=/stage/nangate45; \
     cp $P/lef/fakeram45_*.lef $SCL/lef/ && \
     cp $P/gds/NangateOpenCellLibrary.gds $SCL/gds/ && \
     cp $P/drc/FreePDK45.lydrc $S/libs.tech/klayout/drc/ && \
+    sed -i 's/threads(4)/threads(24)/' $S/libs.tech/klayout/drc/FreePDK45.lydrc && \
     cp $P/FreePDK45.lyt $P/FreePDK45.lyp $S/libs.tech/klayout/ && \
     cp $P/cdl/NangateOpenCellLibrary.cdl $S/libs.tech/cdl/ && \
     mkdir -p $S/libs.tech/klayout/tech && \
