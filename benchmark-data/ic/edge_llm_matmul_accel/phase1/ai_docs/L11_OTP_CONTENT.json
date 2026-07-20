@@ -1,0 +1,7 @@
+{
+  "doc_class": "otp_content",
+  "applicability": "NOT_APPLICABLE",
+  "reason": "no one-time-programmable content; volatile SRAM only.",
+  "schema_version": 2,
+  "ic_name": "edge_llm_matmul_accel"
+}
