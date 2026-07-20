@@ -546,6 +546,7 @@ def test_review2_batch_dir_stem_collision_refused(tmp_path):
 # ── field round-2 reopen regressions (#528/#531/#535) ──────────────────────
 
 import json as _json
+from _hostpaths import require_corpus  # noqa: E402
 
 JSON_DICT_GOOD = _json.dumps({"code": [{"rtl/foo.sv":
     "module foo(input a, output b);\n  assign b = a;\nendmodule"}]})
@@ -638,11 +639,9 @@ def test_round2_535_empty_completion_blocked_not_doc_only(tmp_path):
 def test_round2_real_corpus_json_dict_records_extract():
     # content-gated real-corpus pin: the 3 falsely-blocked records (+ the
     # axis example) must all extract as json_dict / doc_only — never bare.
-    src = Path("/home/reyerchu/AI_IC_design/cvdp_open_run_v0325"
-               "/final_responses_r3.jsonl")
+    src = require_corpus("cvdp_open_run_v0325/final_responses_r3.jsonl")
     if not src.is_file():
-        src = Path("/home/reyerchu/AI_IC_design/cvdp_open_run_v0325"
-                   "/final_responses.jsonl")
+        src = require_corpus("cvdp_open_run_v0325/final_responses.jsonl")
     if not src.is_file():
         pytest.skip("real corpus not on this host")
     wanted = ("elevator_control_0006", "elevator_control_0026",
@@ -708,11 +707,9 @@ def test_round3_detection_text_strips_comments_and_strings():
 def test_round3_real_corpus_elevator_huffman_gate_pass(tmp_path):
     # content-gated binding pins: the 2 falsely-blocked official-PASS
     # records gate PASS; huffman_0001 does not regress.
-    src = Path("/home/reyerchu/AI_IC_design/cvdp_open_run_v0325"
-               "/final_responses_r3.jsonl")
+    src = require_corpus("cvdp_open_run_v0325/final_responses_r3.jsonl")
     if not src.is_file():
-        src = Path("/home/reyerchu/AI_IC_design/cvdp_open_run_v0325"
-                   "/final_responses.jsonl")
+        src = require_corpus("cvdp_open_run_v0325/final_responses.jsonl")
     if not src.is_file():
         pytest.skip("real corpus not on this host")
     if not (_HAS_IVERILOG and _HAS_YOSYS):
@@ -941,11 +938,9 @@ def test_synth_stage_block_stderr_names_the_synth_reason(tmp_path, capsys):
 def test_round4_real_corpus_four_records_gate_pass(tmp_path):
     # content-gated binding pins: the 4 round-4 falsely-blocked official-
     # PASS records gate PASS.
-    src = Path("/home/reyerchu/AI_IC_design/cvdp_open_run_v0325"
-               "/final_responses_r3.jsonl")
+    src = require_corpus("cvdp_open_run_v0325/final_responses_r3.jsonl")
     if not src.is_file():
-        src = Path("/home/reyerchu/AI_IC_design/cvdp_open_run_v0325"
-                   "/final_responses.jsonl")
+        src = require_corpus("cvdp_open_run_v0325/final_responses.jsonl")
     if not src.is_file():
         pytest.skip("real corpus not on this host")
     if not (_HAS_IVERILOG and _HAS_YOSYS):

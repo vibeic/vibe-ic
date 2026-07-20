@@ -37,16 +37,15 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import verilogeval_human_tier_pipeline as P  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
-_DATASET = Path(
-    "/home/reyerchu/AI_IC_design/_extbench/verilog-eval/"
-    "dataset_code-complete-iccad2023")
+_DATASET = corpus_path("_extbench/verilog-eval/dataset_code-complete-iccad2023")
 _HAVE_IVERILOG = shutil.which("iverilog") is not None and shutil.which("vvp") is not None
 _HAVE_DATASET = _DATASET.exists()
 
 _needs_bench = pytest.mark.skipif(
     not (_HAVE_IVERILOG and _HAVE_DATASET),
-    reason="requires iverilog + the VerilogEval-HUMAN dataset")
+    reason="requires iverilog + the VerilogEval-HUMAN dataset; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 
 
 # --------------------------------------------------------------------------- #

@@ -32,8 +32,9 @@ import re
 import sys
 import subprocess
 import tempfile
+from _hostpaths import repo_path_opt  # noqa: E402
 
-PLUGIN_BENCH = '/home/reyerchu/vibe-ic/vibe-ic-marketplace/plugins/vibe-ic/benchmark'
+PLUGIN_BENCH = str(repo_path_opt("vibe-ic-marketplace/plugins/vibe-ic/benchmark"))
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_DIR = os.path.dirname(TESTS_DIR)
 

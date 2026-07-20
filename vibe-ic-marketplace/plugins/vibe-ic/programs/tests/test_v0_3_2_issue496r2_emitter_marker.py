@@ -57,7 +57,7 @@ _TARGET_PDK = "sg13g2"         # non-default tapeout target, no public ngspice m
 
 # The REAL prose-format header, copied verbatim in shape from the on-disk
 # runner artifact
-# /home/reyerchu/AI_IC_design/u_hawaii_adc_e2e_v02100/phase3/analog/
+# <corpus>/u_hawaii_adc_e2e_v02100/phase3/analog/
 #   delta_sigma/delta_sigma.sp — a free-text 'PDK NOTE (disclosed)' block with
 # NO structured `pdk_substitution` marker anywhere. This is exactly the shape
 # the field agent says the round-1 gate could not read.

@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 import latchup_esd_spacing_check as L
+from _hostpaths import corpus_path, repo_path_opt, require_corpus  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #
@@ -368,12 +369,12 @@ def test_cli_def_not_found():
 # REAL routed-DEF validation (repo fixtures) — skipped if absent              #
 # --------------------------------------------------------------------------- #
 _REAL_GAP_DEFS = [
-    "/home/reyerchu/AI_IC_design/spm_pilot_v0144/rerun_d030/routed.def",          # 0 taps
-    "/home/reyerchu/vibe-ic/benchmark-data/ic/subservient/phase3/stage3/pnr/routed.def",  # 0 taps
+    str(corpus_path("spm_pilot_v0144/rerun_d030/routed.def")),          # 0 taps
+    str(repo_path_opt("benchmark-data/ic/subservient/phase3/stage3/pnr/routed.def")),  # 0 taps
 ]
 _REAL_OK_DEFS = [
-    "/home/reyerchu/AI_IC_design/spm_pilot_v0144/rerun_d030_tapcell/routed.def",  # 384 taps
-    "/home/reyerchu/AI_IC_design/spm_pilot_v0144/pdn_ir_v0146/routed.def",        # 384 taps
+    str(corpus_path("spm_pilot_v0144/rerun_d030_tapcell/routed.def")),  # 384 taps
+    str(corpus_path("spm_pilot_v0144/pdn_ir_v0146/routed.def")),        # 384 taps
 ]
 
 
@@ -402,8 +403,8 @@ def test_real_caravel_chip_io_guardring_absent_not_autofail():
     """Real Caravel chip_io.def: sky130 IO pads carry their guard ring INSIDE the
     pad GDS, not as separate placed instances — so the screen sees IO cells but no
     guard-ring master and returns GUARDRING_ABSENT (MANUAL), never auto-fail."""
-    path = ("/home/reyerchu/AI_IC_design/spm_pilot_v0144/caravel_work/"
-            "caravel_user_project/caravel/def/chip_io.def")
+    path = str(require_corpus("spm_pilot_v0144/caravel_work/caravel_user_project/"
+                              "caravel/def/chip_io.def"))
     if not Path(path).is_file():
         pytest.skip("real chip_io.def not present")
     r = L._guardring_topology_check(Path(path))

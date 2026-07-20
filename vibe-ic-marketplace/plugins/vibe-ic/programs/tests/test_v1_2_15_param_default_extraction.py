@@ -23,6 +23,7 @@ if str(_PROG) not in sys.path:
     sys.path.insert(0, str(_PROG))
 
 import verilog_width_resolve as W  # noqa: E402
+from _hostpaths import require_corpus  # noqa: E402
 
 
 def test_multi_param_header_all_items():
@@ -67,8 +68,8 @@ def test_no_leak_prose_sentence_with_assignment():
 
 
 def test_dataset_tlb_resolves_page_width():
-    ds = Path("/home/reyerchu/AI_IC_design/_extbench/cvdp_open_v110/"
-              "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
+    ds = require_corpus("_extbench/cvdp_open_v110/"
+                        "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
     if not ds.exists():
         import pytest
         pytest.skip("dataset not present")
@@ -83,8 +84,8 @@ def test_dataset_tlb_resolves_page_width():
 
 
 def test_dataset_gf_resolves_bullet_width():
-    ds = Path("/home/reyerchu/AI_IC_design/_extbench/cvdp_open_v110/"
-              "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
+    ds = require_corpus("_extbench/cvdp_open_v110/"
+                        "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
     if not ds.exists():
         import pytest
         pytest.skip("dataset not present")

@@ -20,6 +20,7 @@ if str(_PROG) not in sys.path:
     sys.path.insert(0, str(_PROG))
 
 import verilog_width_resolve as W  # noqa: E402
+from _hostpaths import require_corpus  # noqa: E402
 
 
 def test_prose_derived_sum_resolves():
@@ -66,8 +67,8 @@ def test_no_leak_no_backtick_expr():
 
 
 def test_dataset_hamming_encoded_data():
-    ds = Path("/home/reyerchu/AI_IC_design/_extbench/cvdp_open_v110/"
-              "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
+    ds = require_corpus("_extbench/cvdp_open_v110/"
+                        "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
     if not ds.exists():
         import pytest
         pytest.skip("dataset not present")

@@ -33,8 +33,9 @@ if str(_PROG) not in sys.path:
 import spec_otp_extract as OTP            # noqa: E402
 import spec_electrical_extract as ELEC    # noqa: E402
 import spec_analog_iface_extract as ANA   # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
-_ADC = "/home/reyerchu/AI_IC_design/u_hawaii_adc_e2e_v034/input/docs"
+_ADC = str(corpus_path("u_hawaii_adc_e2e_v034/input/docs"))
 
 
 def _kinds(items):

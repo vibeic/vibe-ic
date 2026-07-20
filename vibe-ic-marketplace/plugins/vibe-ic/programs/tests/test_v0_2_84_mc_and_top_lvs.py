@@ -38,7 +38,7 @@ import mixed_signal_top_lvs_run as TL            # noqa: E402
 def _find_mcp_src() -> Path:
     """Resolve mcp-eda/src/index.js relative to the repo root by
     walking up from this test file — NEVER a hardcoded absolute home path
-    (the old `/home/reyerchu/...` literal passed locally but does not
+    (the old `/home/<dev>/...` literal passed locally but does not
     exist on the CI runner at `/home/runner/work/...`, so the test failed
     the moment the suite ran to completion). The mcp is an
     OPTIONAL sibling of the plugin marketplace, so the test skips when it

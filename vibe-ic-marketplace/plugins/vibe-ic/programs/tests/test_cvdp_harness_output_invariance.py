@@ -34,6 +34,7 @@ if str(PROG) not in sys.path:
     sys.path.insert(0, str(PROG))
 
 import cvdp_atomic_bridge as B  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
 
 def _strip_oracle(rec: dict) -> dict:
@@ -99,11 +100,11 @@ def test_interface_invariant_and_from_prompt():
         assert {"a", "b", "carry_in"} <= {n for n, _ in a[0]}
 
 
-_DATASET = Path("/home/reyerchu/AI_IC_design/_extbench/cvdp_open_v110/"
-                "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
+_DATASET = corpus_path("_extbench/cvdp_open_v110/"
+                       "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
 
 
-@pytest.mark.skipif(not _DATASET.exists(), reason="CVDP dataset not present")
+@pytest.mark.skipif(not _DATASET.exists(), reason="CVDP dataset not present; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 def test_solve_invariant_over_real_dataset():
     """Over the real 302-record dataset, stripping harness+output must NEVER change
     solve() or toplevel_name() — the definitive prompt+context-only proof."""

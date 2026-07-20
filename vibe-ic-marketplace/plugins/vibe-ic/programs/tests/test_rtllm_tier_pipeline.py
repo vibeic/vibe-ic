@@ -28,8 +28,9 @@ import rtllm_iface_recover as R            # noqa: E402
 import arith_ext_synth as AX         # noqa: E402
 import port_parser as PP                   # noqa: E402
 import rtllm_port_bridge as BR             # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
-_RTLLM_ROOT = Path("/home/reyerchu/AI_IC_design/_extbench/RTLLM")
+_RTLLM_ROOT = corpus_path("_extbench/RTLLM")
 _HAVE_IV = shutil.which("iverilog") is not None and shutil.which("vvp") is not None
 _HAVE_DS = _RTLLM_ROOT.is_dir()
 _needs_iv = pytest.mark.skipif(not _HAVE_IV, reason="iverilog/vvp not installed")

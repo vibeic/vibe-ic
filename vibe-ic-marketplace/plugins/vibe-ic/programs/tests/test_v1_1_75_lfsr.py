@@ -24,6 +24,7 @@ PROG_DIR = Path(__file__).resolve().parents[1]    # programs/ (the solver dir)
 if str(PROG_DIR) not in sys.path:
     sys.path.insert(0, str(PROG_DIR))
 import lfsr_synth as L  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
 # --------------------------------------------------------------------------- #
 # Canonical inline fixtures — faithful transcriptions of the REAL VE-Human
@@ -181,7 +182,7 @@ def test_neg_no_lfsr_at_all():
 # HOST-SCORE — when iverilog + the real dataset exist, the emitted RTL must
 # simulate against the OFFICIAL ref + testbench with ZERO mismatches.
 # --------------------------------------------------------------------------- #
-_DS = Path("/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl")
+_DS = corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl")
 
 
 @pytest.mark.parametrize("prob", ["Prob082_lfsr32", "Prob086_lfsr5"])

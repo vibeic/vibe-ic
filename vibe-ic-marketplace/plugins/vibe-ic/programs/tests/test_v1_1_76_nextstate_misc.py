@@ -41,8 +41,9 @@ if str(_PROGRAMS) not in sys.path:
 
 import nextstate_misc_synth as M  # noqa: E402
 import spec_artifact_registry as R  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
-_DS = Path("/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl")
+_DS = corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl")
 _HAS_IVERILOG = shutil.which("iverilog") is not None and shutil.which("vvp") is not None
 
 
@@ -444,7 +445,7 @@ def test_no_leak_negatives_skip(prompt):
 # =========================================================================== #
 # corpus discipline: fires ONLY where the existing registry.generate is None  #
 # =========================================================================== #
-@pytest.mark.skipif(not _DS.is_dir(), reason="VerilogEval dataset not present")
+@pytest.mark.skipif(not _DS.is_dir(), reason="VerilogEval dataset not present; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 def test_corpus_fires_only_where_registry_generate_is_none():
     overlaps, fires = [], []
     for pp in sorted(_DS.glob("*_prompt.txt")):
@@ -471,7 +472,7 @@ def test_corpus_fires_only_where_registry_generate_is_none():
 
 
 @pytest.mark.skipif(not (_DS.is_dir() and _HAS_IVERILOG),
-                    reason="dataset + iverilog required")
+                    reason="dataset + iverilog required; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 def test_corpus_every_nondefect_fire_host_verifies_zero():
     """Every fire host-verifies to 0 mismatches EXCEPT Prob099, whose floor is the
     dataset's own broken testbench (proven separately)."""

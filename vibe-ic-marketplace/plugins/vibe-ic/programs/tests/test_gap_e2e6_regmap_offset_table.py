@@ -22,6 +22,7 @@ from pathlib import Path
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import phase1_doc_one_shot_runner as R   # noqa: E402
+from _hostpaths import require_corpus  # noqa: E402
 
 
 # An aes-style register-summary table: an `<ip>.`-prefixed, markdown-link
@@ -236,9 +237,7 @@ def test_noleak_non_hex_offset_cell_skipped():
 # ---------------------------------------------------------------------------
 
 def test_real_artifact_offsets_populate():
-    doc = Path(
-        "/home/reyerchu/AI_IC_design/opentitan_aes_e2e_v1263/"
-        "phase1/input_doc/aes_registers.txt")
+    doc = require_corpus("opentitan_aes_e2e_v1263/phase1/input_doc/aes_registers.txt")
     if not doc.exists():
         return  # reference artifact not present in this checkout
     tbl = R._gap_e2e6_parse_register_offset_table(doc.read_text())

@@ -39,12 +39,13 @@ if str(_PROG) not in sys.path:
 
 import phase1_protocol_spec_extract as P                 # noqa: E402
 import protocol_detector_no_misfire_matrix as M          # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
 _FIX = Path(__file__).resolve().parent / "fixtures" / "synthetic_benchmark_phase1"
 _REAL = {
-    "interlaken": "/home/reyerchu/AI_IC_design/interlaken_p3/phase1/input_doc",
-    "lpc": "/home/reyerchu/AI_IC_design/lpc_phase3/phase1/input_doc",
-    "mdio": "/home/reyerchu/AI_IC_design/mdio_phase1_p3/phase1/input_doc",
+    "interlaken": str(corpus_path("interlaken_p3/phase1/input_doc")),
+    "lpc": str(corpus_path("lpc_phase3/phase1/input_doc")),
+    "mdio": str(corpus_path("mdio_phase1_p3/phase1/input_doc")),
 }
 
 

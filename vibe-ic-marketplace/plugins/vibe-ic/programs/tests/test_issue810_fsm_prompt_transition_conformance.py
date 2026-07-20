@@ -36,6 +36,7 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import fsm_transition_completeness_check as F  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
 
 # A 2-state Moore FSM whose transitions are STATE-DEPENDENT (from A on in=0 go
@@ -226,9 +227,8 @@ def test_default_arm_does_not_false_block():
 # --------------------------------------------------------------------------- #
 # Real on-disk artifacts (content-gated; SKIP if the corpus path is absent).  #
 # --------------------------------------------------------------------------- #
-_DATASET = Path("/home/reyerchu/AI_IC_design/_extbench/verilog-eval/"
-                "dataset_code-complete-iccad2023")
-_R17 = Path("/home/reyerchu/AI_IC_design/_bench_open_v100_r17")
+_DATASET = corpus_path("_extbench/verilog-eval/dataset_code-complete-iccad2023")
+_R17 = corpus_path("_bench_open_v100_r17")
 
 
 @pytest.mark.parametrize("prob", ["Prob109_fsm1", "Prob107_fsm1s"])

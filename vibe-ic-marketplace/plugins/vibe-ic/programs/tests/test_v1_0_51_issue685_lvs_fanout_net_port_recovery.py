@@ -30,6 +30,7 @@ import pytest
 PROG = Path(__file__).resolve().parent.parent / "phase3_one_shot_runner.py"
 sys.path.insert(0, str(PROG.parent))
 import phase3_one_shot_runner as r  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
 
 def _def(pin_net_pairs):
@@ -135,15 +136,14 @@ def test_deterministic_kept_when_no_extracted_set():
 
 
 # ── real caravel repro (only if the round-6 artifacts are present) ─────
-_REPRO = Path("/home/reyerchu/AI_IC_design/_bench7_caravel_v1034_cleanroom"
-              "/caravel_r6")
+_REPRO = corpus_path("_bench7_caravel_v1034_cleanroom/caravel_r6")
 
 
 @pytest.mark.skipif(
     not ((_REPRO / "phase3/stage3/pnr/filled.def").is_file()
          and (_REPRO / "phase3/stage3/extracted/"
               "user_project_wrapper_extracted.sp").is_file()),
-    reason="caravel_r6 repro artifacts not present")
+    reason="caravel_r6 repro artifacts not present; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 def test_caravel_repro_recovers_16_la_data_out():
     def_text = (_REPRO / "phase3/stage3/pnr/filled.def").read_text(
         errors="replace")

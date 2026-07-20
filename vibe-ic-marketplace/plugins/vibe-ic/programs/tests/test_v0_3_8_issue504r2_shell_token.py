@@ -36,14 +36,14 @@ ALLOWED = ["design_description.txt"]
 
 # Roots as they appear in the REAL transcript lines (mapped to tmp at
 # audit time so the committed test is host/dataset-independent).
-_REAL_DS = "/home/reyerchu/AI_IC_design/_extbench/RTLLM"
-_REAL_WORK = "/home/reyerchu/AI_IC_design/rtllm_cleanroom_v034/work"
+_REAL_DS = "/home/testuser/AI_IC_design/_extbench/RTLLM"
+_REAL_WORK = "/home/testuser/AI_IC_design/rtllm_cleanroom_v034/work"
 
 # ── agent_batch01.jsonl:20 — VERBATIM (dead-branch OR-fallback) ──────
 _REAL_LINE_B01_20 = (
-    'cat "/home/reyerchu/AI_IC_design/_extbench/RTLLM/Arithmetic/'
+    'cat "/home/testuser/AI_IC_design/_extbench/RTLLM/Arithmetic/'
     'Multiplier/multi_16bit/design_description.txt" 2>/dev/null || '
-    'cat "/home/reyerchu/AI_IC_design/_extbench/RTLLM/Arithmetic/'
+    'cat "/home/testuser/AI_IC_design/_extbench/RTLLM/Arithmetic/'
     'Multiplier/multi_16bit/design_description.md"; echo exit=$?'
 )
 
@@ -61,8 +61,8 @@ declare -A M=(
  [serial2parallel]="Others/serial2parallel"
  [synchronizer]="Others/synchronizer"
 )
-B=/home/reyerchu/AI_IC_design/_extbench/RTLLM/Miscellaneous
-W=/home/reyerchu/AI_IC_design/rtllm_cleanroom_v034/work
+B=/home/testuser/AI_IC_design/_extbench/RTLLM/Miscellaneous
+W=/home/testuser/AI_IC_design/rtllm_cleanroom_v034/work
 for leaf in "${!M[@]}"; do
   src="$B/${M[$leaf]}/design_description.txt"
   cat "$src" > "$W/$leaf/input/phase1_prompt.md"

@@ -13,6 +13,7 @@ import importlib
 import json
 import sys
 from pathlib import Path
+from _hostpaths import require_repo  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 RUNNER = PROGRAMS / "phase1_doc_one_shot_runner.py"
@@ -93,7 +94,7 @@ def test_helper_emits_5_l_docs_for_bus_protocol(tmp_path):
     """When L1+L2 trigger bus_interconnect_protocol detection, the L19-L23
     emit chain produces 5 docs (R13 gate keeps L19+L22 as APPLICABLE
     skeletons, marks L20/L21/L23 as na_stub via the gate)."""
-    arm = Path("/home/reyerchu/vibe-ic/benchmark-data/evaluation/phase1_parity/arm_aix/phase1/generated_docs")
+    arm = require_repo("benchmark-data/evaluation/phase1_parity/arm_aix/phase1/generated_docs")
     if not (arm / "L1_DATASHEET.json").is_file():
         import pytest
         pytest.skip("AMBA AXI benchmark not present on this host")

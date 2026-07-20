@@ -13,6 +13,7 @@ import pytest
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PLUGIN / "benchmark"))
 import cvdp_fail_triage as T  # noqa: E402
+from _hostpaths import require_corpus  # noqa: E402
 
 SYNTH_LOG = """\
 >           value_after  = stats_after[f"Number of {key}"]
@@ -87,8 +88,7 @@ def test_cli_end_to_end(tmp_path):
 
 def test_real_run_classifies_when_present(tmp_path):
     # live-corpus doctrine: content-gated, never existence-gated.
-    real = Path("/home/reyerchu/AI_IC_design/cvdp_open_run_v0325"
-                "/work_score/raw_result.json")
+    real = require_corpus("cvdp_open_run_v0325/work_score/raw_result.json")
     if not real.is_file():
         pytest.skip("real CVDP run not on this host")
     raw = json.loads(real.read_text(errors="replace"))
@@ -192,8 +192,7 @@ def test_round2_problem_level_passing_tests_force_partial(tmp_path):
 def test_round2_real_final_run_flagship_and_truncated(tmp_path):
     # content-gated real-run pins: the flagship record classifies PARTIAL
     # and the 4 host-confirmed TRUNCATED records classify TRUNCATED.
-    real = Path("/home/reyerchu/AI_IC_design/cvdp_open_run_v0325"
-                "/work_score_final/raw_result.json")
+    real = require_corpus("cvdp_open_run_v0325/work_score_final/raw_result.json")
     if not real.is_file():
         pytest.skip("real final run not on this host")
     out = tmp_path / "t.json"

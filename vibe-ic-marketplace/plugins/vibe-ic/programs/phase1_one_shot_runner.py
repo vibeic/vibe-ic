@@ -161,14 +161,17 @@ def _find_phase1_engine() -> "Tuple[Optional[Path], List[str]]":
         tried.append(str(cand))
         if cand.is_file():
             return cand, tried
-    # 4. opensource_repo / sibling layouts
-    for guess in ("/home/user/AI_IC_design/tools/phase1_engine/cli.py",
-                  "/home/user/AI_IC_design/opensource_repo/tools/"
-                  "phase1_engine/cli.py"):
-        p = Path(guess)
-        tried.append(str(p))
-        if p.is_file():
-            return p, tried
+    # 4. opensource_repo / sibling layouts, relative to the walk-up ancestors.
+    #    PORTABILITY: an earlier release guessed at absolute paths under a
+    #    personal home directory here. Those exist on exactly one machine, so
+    #    on every other install they were dead entries that merely padded the
+    #    "searched" list. The sibling layout is expressed RELATIVE to the
+    #    plugin's own ancestors instead, which works wherever it is installed.
+    for ancestor in (here, *here.parents):
+        cand = ancestor / "opensource_repo" / "tools" / "phase1_engine" / "cli.py"
+        tried.append(str(cand))
+        if cand.is_file():
+            return cand, tried
     return None, tried
 
 

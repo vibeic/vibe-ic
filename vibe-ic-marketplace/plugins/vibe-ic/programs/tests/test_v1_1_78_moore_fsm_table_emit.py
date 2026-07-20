@@ -14,6 +14,7 @@ PROG = Path(__file__).resolve().parents[1]
 if str(PROG) not in sys.path:
     sys.path.insert(0, str(PROG))
 import moore_fsm_table_emit as M           # noqa: E402
+from _hostpaths import require_corpus  # noqa: E402
 
 # the real Prob127_lemmings1 interface (bullet form, verbatim shape)
 _LEM1_PROMPT = """\
@@ -151,7 +152,7 @@ def test_host_score_ps2_bitselect_hybrid():
     if not (shutil.which("iverilog") and shutil.which("vvp")):
         import pytest
         pytest.skip("iverilog/vvp absent")
-    DS = Path("/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl")
+    DS = require_corpus("_extbench/verilog-eval/dataset_spec-to-rtl")
     pr, ref, tb = (DS / "Prob128_fsm_ps2_prompt.txt",
                    DS / "Prob128_fsm_ps2_ref.sv", DS / "Prob128_fsm_ps2_test.sv")
     if not (pr.exists() and ref.exists() and tb.exists()):
@@ -177,7 +178,7 @@ def test_host_score_lemmings1_hybrid():
     if not (shutil.which("iverilog") and shutil.which("vvp")):
         import pytest
         pytest.skip("iverilog/vvp absent")
-    DS = Path("/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl")
+    DS = require_corpus("_extbench/verilog-eval/dataset_spec-to-rtl")
     pr, ref, tb = (DS / "Prob127_lemmings1_prompt.txt",
                    DS / "Prob127_lemmings1_ref.sv", DS / "Prob127_lemmings1_test.sv")
     if not (pr.exists() and ref.exists() and tb.exists()):

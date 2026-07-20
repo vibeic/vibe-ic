@@ -20,6 +20,7 @@ from pathlib import Path
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import fsm_transition_completeness_check as F  # noqa: E402
+from _hostpaths import require_corpus  # noqa: E402
 
 
 def _errs(rtl):
@@ -122,7 +123,7 @@ def test_no_false_positive_on_real_crypto_cores():
     # findings across the real crypto-core FSMs shipped in the AID tree when
     # present on this host (skips cleanly off-host).
     import pytest
-    base = Path("/home/reyerchu/AI_IC_design")
+    base = require_corpus()
     samples = [
         base / "_ext_ics/aes/src/rtl/aes_encipher_block.v",
         base / "_ext_ics/chacha/src/rtl/chacha_core.v",

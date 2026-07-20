@@ -31,8 +31,9 @@ if _PROGRAMS not in sys.path:
 
 import sequential_waveform_synth as M  # noqa: E402
 import spec_artifact_registry as R     # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
-DS = "/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl"
+DS = str(corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl"))
 
 FIRING = [
     "Prob117_circuit9",   # (a) counter-by-delta (3-bit, load+wrap)

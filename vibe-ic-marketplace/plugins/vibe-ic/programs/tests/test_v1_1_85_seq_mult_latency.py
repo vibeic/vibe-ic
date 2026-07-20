@@ -28,9 +28,10 @@ if str(PROG) not in sys.path:
     sys.path.insert(0, str(PROG))
 
 import arithmetic_synth as A  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
 _HAVE_IV = shutil.which("iverilog") is not None and shutil.which("vvp") is not None
-_RT = Path("/home/reyerchu/AI_IC_design/_extbench/RTLLM")
+_RT = corpus_path("_extbench/RTLLM")
 
 
 # --------------------------------------------------------------------------- #

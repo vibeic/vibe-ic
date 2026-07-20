@@ -25,6 +25,7 @@ import pytest
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 import phase1_doc_one_shot_runner as R  # noqa: E402
+from _hostpaths import require_corpus  # noqa: E402
 
 
 def test_project_name_declaration_is_used():
@@ -93,8 +94,7 @@ def test_end_to_end_phase1_uses_declaration(tmp_path):
 def test_real_caravel_ic_name_is_declared_project(tmp_path):
     """The real caravel: ic_name == caravel_user_project (the declared project
     name), never None / a macro / the bare folder leaf. SKIPs off-monorepo."""
-    base = Path("/home/reyerchu/AI_IC_design/_bench7_caravel_v1034_cleanroom/"
-                "caravel/input/docs")
+    base = require_corpus("_bench7_caravel_v1034_cleanroom/caravel/input/docs")
     if not base.is_dir():
         pytest.skip("real caravel docs not on disk")
     ext = {p.name: p.read_text(errors="ignore") for p in base.glob("L*.md")}

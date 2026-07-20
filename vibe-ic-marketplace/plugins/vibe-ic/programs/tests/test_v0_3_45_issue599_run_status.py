@@ -20,6 +20,7 @@ from pathlib import Path
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import run_status as RS  # noqa: E402
+from _hostpaths import require_repo  # noqa: E402
 
 
 def _project(tmp_path, phase="phase3", verdict=None, steps=None,
@@ -223,7 +224,7 @@ def test_run_status_wired_into_field_agent_skill():
 
 def test_real_completed_run_is_done():
     import pytest
-    art = Path("/home/reyerchu/vibe-ic/benchmark_ic/5th__opentitan_aes_v0338")
+    art = require_repo("benchmark_ic/5th__opentitan_aes_v0338")
     rep_f = art / "reports" / "orchestrator" / "phase3_one_shot.json"
     if not rep_f.is_file():
         pytest.skip("real phase3 report not on this host (live corpus)")

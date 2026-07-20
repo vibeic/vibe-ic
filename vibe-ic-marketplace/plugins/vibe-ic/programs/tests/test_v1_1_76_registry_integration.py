@@ -24,8 +24,9 @@ PROG = Path(__file__).resolve().parents[1]
 if str(PROG) not in sys.path:
     sys.path.insert(0, str(PROG))
 import spec_artifact_registry as R          # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
-_DS = "/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl"
+_DS = str(corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl"))
 
 WAVE2_KEYS = {
     "mealy_fsm_sequence", "fsm_prose", "dff_edge", "counter_popcount",

@@ -26,8 +26,9 @@ if str(PROG_DIR) not in sys.path:
     sys.path.insert(0, str(PROG_DIR))
 import mealy_sequence_synth as M  # noqa: E402
 import full_moore_fsm_synth as F  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
-_DS = Path("/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl")
+_DS = corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl")
 
 _HDR = (
     "I would like you to implement a module named TopModule with the following\n"

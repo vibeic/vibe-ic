@@ -30,6 +30,7 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import fsm_transition_completeness_check as F  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
 
 # A canonical VerilogEval-style one-hot spec: arrow-form transition table + a
@@ -255,17 +256,15 @@ def test_gates_atomic_blocks_on_rule():
 
 
 # ---- DEFECT ARTIFACT: the real on-disk sample, content-gated (Step-2.7 r2) --
-_REAL_SAMPLE = Path(
-    "/home/reyerchu/AI_IC_design/_bench_open_v100_r15/verilogeval-v2/"
-    "samples/Prob150_review2015_fsmonehot_sample01.sv")
-_REAL_PROMPT = Path(
-    "/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl/"
-    "Prob150_review2015_fsmonehot_prompt.txt")
+_REAL_SAMPLE = corpus_path("_bench_open_v100_r15/verilogeval-v2/samples/"
+                           "Prob150_review2015_fsmonehot_sample01.sv")
+_REAL_PROMPT = corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl/"
+                           "Prob150_review2015_fsmonehot_prompt.txt")
 
 
 @pytest.mark.skipif(
     not (_REAL_SAMPLE.is_file() and _REAL_PROMPT.is_file()),
-    reason="real defect artifact / prompt absent on this host")
+    reason="real defect artifact / prompt absent on this host; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 def test_real_prob150_sample_flags_dropped_count_selfloop():
     sample = _REAL_SAMPLE.read_text(errors="replace")
     # content-gate: only assert the defect when the dropped-self-loop shape is

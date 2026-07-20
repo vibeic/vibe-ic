@@ -15,6 +15,7 @@ import importlib
 import re
 import sys
 from pathlib import Path
+from _hostpaths import require_repo  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 
@@ -175,8 +176,8 @@ def test_runner_overlay_step_before_l14_l18():
 
 def test_real_amba_axi_extraction_finds_many_widths():
     """The real PDF must yield ≥30 width entries and a DATA_WIDTH_bits slot."""
-    inp = Path("/home/reyerchu/vibe-ic/benchmark-data/evaluation/phase1_parity/arm_aix/phase1/input_doc/"
-                "IHI0022H_amba_axi_protocol_spec.txt")
+    inp = require_repo("benchmark-data/evaluation/phase1_parity/arm_aix/phase1/"
+                       "input_doc/IHI0022H_amba_axi_protocol_spec.txt")
     if not inp.is_file():
         import pytest
         pytest.skip("AMBA AXI input_doc not present on this host")

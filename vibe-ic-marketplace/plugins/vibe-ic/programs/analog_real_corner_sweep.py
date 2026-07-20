@@ -21,8 +21,8 @@ Supported block types (sweep templates):
   comparator  | StrongARM-style 1-bit clocked latch — resolve + offset
 
   The delta_sigma/modulator/adc/comparator templates are DERIVED from the
-  hand-authored canonical ngspice decks in
-  /home/reyerchu/AI_IC_design/u_hawaii_adc_v0125_rerun/phase3/analog/
+  hand-authored canonical ngspice decks under the reference ADC project's
+  `phase3/analog/` directory
   (delta_sigma.sp, integrator_settle.sp, comparator.sp, adc.sp) — topology
   and device values are taken verbatim, not invented (ORGANIC-20260528-a4).
 
@@ -420,8 +420,8 @@ echo "MEAS vout=" $&vo " mid=" $&v(mid)
 
 # ─────────────── Converter / modulator family (ORGANIC-20260528-a4) ───────────────
 #
-# DERIVED FROM the hand-authored canonical reference decks under
-#   /home/reyerchu/AI_IC_design/u_hawaii_adc_v0125_rerun/phase3/analog/
+# DERIVED FROM the hand-authored canonical reference decks under the reference
+# ADC project's `phase3/analog/` directory:
 #     delta_sigma/delta_sigma.sp        (two-stage Miller OTA + AC open-loop gain/UGBW)
 #     delta_sigma/integrator_settle.sp  (SC integrator: cs/ci, transient step settle)
 #     delta_sigma/comparator.sp         (StrongARM-style 1-bit clocked quantizer, transient)

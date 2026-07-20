@@ -31,6 +31,7 @@ if str(_PROGRAMS) not in sys.path:
 
 import serdes_width_synth as S  # noqa: E402
 import memory_array_synth as M  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
 
 # ===================================================================== H6 serdes
@@ -311,14 +312,14 @@ def test_m1_instr_reg_unstated_field_layout_skips():
 
 # ===================================================================== VE 0-fire
 _VE_DIRS = [
-    "/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl",
-    "/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_code-complete-iccad2023",
+    str(corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl")),
+    str(corpus_path("_extbench/verilog-eval/dataset_code-complete-iccad2023")),
 ]
 
 
 @pytest.mark.skipif(
     not any(os.path.isdir(d) for d in _VE_DIRS),
-    reason="VerilogEval corpora not present on this host")
+    reason="VerilogEval corpora not present on this host; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 def test_ve_zero_fire_both_corpora():
     """Both NEW canonicals must fire 0 times on either VerilogEval corpus."""
     fired = []

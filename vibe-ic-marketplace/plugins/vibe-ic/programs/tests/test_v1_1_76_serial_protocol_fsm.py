@@ -33,8 +33,9 @@ if str(PROG_DIR) not in sys.path:
     sys.path.insert(0, str(PROG_DIR))
 import serial_protocol_fsm_synth as SP  # noqa: E402
 import spec_artifact_registry as REG    # noqa: E402  (Moore-solver steal check)
+from _hostpaths import corpus_path  # noqa: E402
 
-DS = Path("/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl")
+DS = corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl")
 HAVE_DS = DS.is_dir()
 IVERILOG = shutil.which("iverilog")
 VVP = shutil.which("vvp")

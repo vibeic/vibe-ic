@@ -23,9 +23,10 @@ if str(_PROG) not in sys.path:
 
 import cvdp_atomic_bridge as B  # noqa: E402
 import cvdp_complete_extract as C  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
-_DS = Path("/home/reyerchu/AI_IC_design/_extbench/cvdp_open_v110/"
-           "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
+_DS = corpus_path("_extbench/cvdp_open_v110/"
+                  "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
 
 
 def test_word_bit_after_name():

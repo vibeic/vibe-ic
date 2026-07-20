@@ -24,12 +24,13 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import cellular_automaton_synth as C  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Real benchmark prompts (host-scored end-to-end further down if iverilog + the
 # dataset are present); the unit assertions here are dataset-independent.
 # ---------------------------------------------------------------------------
-_DS = Path("/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl")
+_DS = corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl")
 _FIRING = ["Prob108_rule90", "Prob124_rule110"]
 
 # A self-contained rule-90 prompt (matches the VerilogEval Prob108 wording) so the

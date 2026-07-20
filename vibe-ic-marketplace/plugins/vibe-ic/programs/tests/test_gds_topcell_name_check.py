@@ -17,6 +17,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import gds_topcell_name_check as g  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
 
 # --------------------------------------------------------------------------
@@ -147,13 +148,11 @@ def test_garbage_input_no_crash(tmp_path):
 # --------------------------------------------------------------------------
 # Real-corpus PASS (skipped if the fixture GDS is not on this machine).
 # --------------------------------------------------------------------------
-_REAL_GDS = Path(
-    "/home/reyerchu/AI_IC_design/spm_benchmark_v0211/"
-    "phase3/stage4/gds/chip_top.gds")
+_REAL_GDS = corpus_path("spm_benchmark_v0211/phase3/stage4/gds/chip_top.gds")
 
 
 @pytest.mark.skipif(not _REAL_GDS.is_file(),
-                    reason="real corpus GDS not present")
+                    reason="real corpus GDS not present; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 def test_real_corpus_chip_top_passes(tmp_path):
     rc = g.main(["--gds-file", str(_REAL_GDS), "--top-name", "chip_top",
                  "--json", str(tmp_path / "r.json")])
@@ -163,7 +162,7 @@ def test_real_corpus_chip_top_passes(tmp_path):
 
 
 @pytest.mark.skipif(not _REAL_GDS.is_file(),
-                    reason="real corpus GDS not present")
+                    reason="real corpus GDS not present; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 def test_real_corpus_wrong_name_fails(tmp_path):
     rc = g.main(["--gds-file", str(_REAL_GDS), "--top-name", "not_the_top"])
     assert rc == 1

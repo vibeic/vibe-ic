@@ -20,6 +20,7 @@ if str(_PROG) not in sys.path:
     sys.path.insert(0, str(_PROG))
 
 import verilog_width_resolve as W  # noqa: E402
+from _hostpaths import require_corpus  # noqa: E402
 
 _TBL = (
     "| Parameter | Description | Default | Constraints |\n"
@@ -59,8 +60,8 @@ def test_param_defaults_uses_header_column():
 
 
 def test_dataset_16qam_resolves_table_params():
-    ds = Path("/home/reyerchu/AI_IC_design/_extbench/cvdp_open_v110/"
-              "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
+    ds = require_corpus("_extbench/cvdp_open_v110/"
+                        "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
     if not ds.exists():
         import pytest
         pytest.skip("dataset not present")

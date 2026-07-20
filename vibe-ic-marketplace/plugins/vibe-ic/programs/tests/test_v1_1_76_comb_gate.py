@@ -33,8 +33,9 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import comb_gate_synth  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
-_DS = Path("/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl")
+_DS = corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl")
 
 
 # --------------------------------------------------------------------------- #
@@ -347,7 +348,7 @@ _EXPECTED_FIRES = {
 }
 
 
-@pytest.mark.skipif(not _DS.is_dir(), reason="dataset absent")
+@pytest.mark.skipif(not _DS.is_dir(), reason="dataset absent; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 def test_corpus_fire_set_and_no_false_fires():
     fired = set()
     for pp in sorted(_DS.glob("*_prompt.txt")):
@@ -361,7 +362,7 @@ def test_corpus_fire_set_and_no_false_fires():
 
 
 @pytest.mark.skipif(not _DS.is_dir() or shutil.which("iverilog") is None,
-                    reason="dataset or iverilog absent")
+                    reason="dataset or iverilog absent; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 def test_corpus_every_fire_zero_mismatch():
     for pp in sorted(_DS.glob("*_prompt.txt")):
         base = pp.name[: -len("_prompt.txt")]

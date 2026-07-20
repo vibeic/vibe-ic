@@ -12,7 +12,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/programs/benchmark_dispatch.py cvdp
 
 # 3. Stage the project under the vibeic-eda mount root
 #    (the container can only see paths under the mount; symlinks aren't followed)
-MOUNT=~/AI_IC_design              # whatever your vibeic-eda /foss/designs mount maps to
+MOUNT="$VIBEIC_DESIGNS"           # whatever your vibeic-eda /foss/designs mount maps to (you chose it at install)
 rsync -a ~/datasets/cvdp_benchmark/example_dataset/<problem>/ $MOUNT/<problem>/
 
 # 4. Drive the runner per blind_instructions_shape_d.md

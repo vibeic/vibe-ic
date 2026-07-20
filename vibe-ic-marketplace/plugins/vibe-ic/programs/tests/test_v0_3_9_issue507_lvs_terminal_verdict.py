@@ -24,6 +24,7 @@ from pathlib import Path
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import eda_report_audit as ERA  # noqa: E402
+from _hostpaths import require_corpus  # noqa: E402
 
 # A realistic netgen footer carrying mismatch categories + signature
 # (and padded past the lvs byte-size authenticity floor, ~1536 B) so the
@@ -99,7 +100,7 @@ def test_no_terminal_verdict_is_incomplete_fail(tmp_path):
 def test_e2e_real_spm_artifact_fails_with_json(tmp_path):
     # #507 acceptance, verbatim CLI shape, against the REAL do-not-match
     # artifact when present on this host (skips cleanly off-host).
-    real = Path("/home/reyerchu/AI_IC_design/spm_e2e_v034")
+    real = require_corpus("spm_e2e_v034")
     rpt = real / "reports" / "phase3" / "lvs.rpt"
     if not rpt.is_file():
         import pytest

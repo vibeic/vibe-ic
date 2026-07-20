@@ -165,8 +165,9 @@ function _run(file, args, opts = {}) {
 }
 
 // v2.5.2: derive plugin programs dir from this file's location instead of
-// hardcoding /home/user/. Order: $VIBE_IC_PROGRAMS_DIR -> first existing of a
-// candidate list -> legacy hardcode.
+// hardcoding a personal home directory. Order: $VIBE_IC_PROGRAMS_DIR -> first
+// existing of a candidate list -> the plugin-relative path (NO invented
+// fallback).
 // v2.5.3: this file lives at <plugin>/mcp-eda/src/index.js, so the plugin's own
 // programs/ is two levels up (../../programs). Prior logic only probed a nested
 // vibe-ic-marketplace/plugins/vibe-ic-d/programs sibling, which does not exist
@@ -181,9 +182,14 @@ const _programsCandidates = [
   resolve(__dirname_eda, "..", "..", "..", "vibe-ic-d", "programs"),
   resolve(__dirname_eda, "..", "..", "vibe-ic-marketplace", "plugins", "vibe-ic-d", "programs"),
 ];
+// PORTABILITY: the last resort is the plugin's OWN programs/ path derived from
+// this file's location — never a personal absolute path. A prior release fell
+// back to one developer's home directory (and to `vibe-ic-d`, a plugin that no
+// longer exists), so on any other machine the resolved dir silently pointed at
+// nothing and every program-backed tool failed with a confusing error.
 const VIBE_IC_PROGRAMS_DIR = process.env.VIBE_IC_PROGRAMS_DIR
   || _programsCandidates.find(existsSync)
-  || "/home/user/AI_IC_design/vibe-ic-marketplace/plugins/vibe-ic-d/programs";
+  || _programsCandidates[0];
 
 // v0.99.1: load embedded Python helpers once at startup. Inlining them via
 // shell heredoc hit escape-hell at v0.99.0 (sh: 66: Syntax error: "("
@@ -389,7 +395,7 @@ function missingInContainer(files) {
 function stagingHint(missing) {
   return `[files not visible in container '${CONTAINER}'] ${missing.join(", ")}. `
     + `The EDA tools run inside the '${CONTAINER}' Docker container, which bind-mounts only `
-    + `the designs root (host AI_IC_design -> /foss/designs). Stage your RTL UNDER that mount `
+    + `the designs root (your chosen host designs directory -> /foss/designs). Stage your RTL UNDER that mount `
     + `and pass the in-container path (e.g. /foss/designs/<proj>/top.sv). NOTE: a host file copy `
     + `made under a restricted/sandboxed shell may not propagate into the mount — re-copy with `
     + `the sandbox disabled, then retry.`;
@@ -3400,7 +3406,7 @@ server.tool(
       "output_latency_advisor",        // registered-output / sampling latency (advisory)
       "spec_rtl_port_fidelity_check",  // L9↔RTL port match + garbled-index detection
     ])).describe("List of audit programs to run"),
-    programs_dir: z.string().default(VIBE_IC_PROGRAMS_DIR.endsWith("/") ? VIBE_IC_PROGRAMS_DIR : VIBE_IC_PROGRAMS_DIR + "/").describe("Directory containing audit program scripts. v2.5.2: auto-detected from this file's location (sibling vibe-ic-marketplace/plugins/vibe-ic-d/programs/) — overridable via $VIBE_IC_PROGRAMS_DIR. v2.4.1 hardcoded /home/user/ was wrong on most installs."),
+    programs_dir: z.string().default(VIBE_IC_PROGRAMS_DIR.endsWith("/") ? VIBE_IC_PROGRAMS_DIR : VIBE_IC_PROGRAMS_DIR + "/").describe("Directory containing audit program scripts. v2.5.2: auto-detected from this file's location (the plugin's own programs/ dir) — overridable via $VIBE_IC_PROGRAMS_DIR. Earlier releases hardcoded a personal home directory, which was wrong on every other install."),
   },
   async ({ rtl_dir, programs, programs_dir }) => {
     try {

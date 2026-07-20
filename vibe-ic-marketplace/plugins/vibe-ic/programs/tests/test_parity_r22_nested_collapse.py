@@ -18,6 +18,7 @@ import importlib
 import json
 import sys
 from pathlib import Path
+from _hostpaths import require_repo  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 
@@ -138,8 +139,10 @@ def test_hallucinations_still_counted_under_r22(tmp_path):
 def test_real_amba_axi_total_drops_under_r22(tmp_path):
     """End-to-end: R22 must drop the AMBA AXI parity TOTAL meaningfully
     from the v0.1.66 baseline of 339."""
-    arm_prog = Path("/home/reyerchu/vibe-ic/benchmark-data/evaluation/phase1_parity/arm_aix/phase1/generated_docs")
-    arm_agnt = Path("/home/reyerchu/vibe-ic/benchmark-data/evaluation/phase1_parity/arm_aix/phase1/claude_extracted")
+    arm_prog = require_repo("benchmark-data/evaluation/phase1_parity/"
+                            "arm_aix/phase1/generated_docs")
+    arm_agnt = require_repo("benchmark-data/evaluation/phase1_parity/"
+                            "arm_aix/phase1/claude_extracted")
     if not arm_prog.is_dir() or not arm_agnt.is_dir():
         import pytest
         pytest.skip("AMBA AXI benchmark not present on this host")

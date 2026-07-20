@@ -31,11 +31,12 @@ import calendar_counter_synth as C   # noqa: E402
 import memory_array_synth as M       # noqa: E402
 import serdes_width_synth as S       # noqa: E402
 import signal_gen_synth as G         # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
 _HAVE_IV = shutil.which("iverilog") is not None and shutil.which("vvp") is not None
-_RT = Path("/home/reyerchu/AI_IC_design/_extbench/RTLLM")
-_VE = [Path("/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_code-complete-iccad2023"),
-       Path("/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl")]
+_RT = corpus_path("_extbench/RTLLM")
+_VE = [corpus_path("_extbench/verilog-eval/dataset_code-complete-iccad2023"),
+       corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl")]
 
 
 def test_four_new_canonicals_registered():

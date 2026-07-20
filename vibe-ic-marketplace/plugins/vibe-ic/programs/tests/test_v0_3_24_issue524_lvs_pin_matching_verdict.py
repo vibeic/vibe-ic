@@ -26,6 +26,7 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import lvs_verdict_tokens as T  # noqa: E402
 import phase3_one_shot_runner as runner  # noqa: E402
+from _hostpaths import require_corpus  # noqa: E402
 
 PIN_FAIL_RPT = """\
 Netgen 1.5.316
@@ -252,9 +253,8 @@ def test_real_on_host_pin_fail_report_classifies_mismatch():
     # gate on CONTENT, not existence: only assert when the report currently
     # carries the #524 failing shape.
     candidates = [
-        Path("/home/reyerchu/AI_IC_design/subservient_e2e_v0323"
-             "/reports/phase3/lvs.rpt"),
-        Path("/home/reyerchu/AI_IC_design/_spm_signoff/lvs/spm_lvs5.out"),
+        require_corpus("subservient_e2e_v0323/reports/phase3/lvs.rpt"),
+        require_corpus("_spm_signoff/lvs/spm_lvs5.out"),
     ]
     blob = None
     for real in candidates:

@@ -37,8 +37,9 @@ if str(PROG_DIR) not in sys.path:
 import counter_advanced_synth as CA  # noqa: E402
 import lfsr_synth as LF              # noqa: E402
 import shift_register_synth as SR    # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
-RTLLM = Path("/home/reyerchu/AI_IC_design/_extbench/RTLLM")
+RTLLM = corpus_path("_extbench/RTLLM")
 
 
 def _have_iverilog():

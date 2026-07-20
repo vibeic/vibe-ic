@@ -30,16 +30,16 @@ if str(_PROGRAMS) not in sys.path:
 
 import dff_primitive_synth as D          # noqa: E402
 import verilogeval_tier_pipeline as P    # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
-_DATASET = Path("/home/reyerchu/AI_IC_design/_extbench/verilog-eval/"
-                "dataset_spec-to-rtl")
+_DATASET = corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl")
 _HAVE_IVERILOG = (shutil.which("iverilog") is not None
                   and shutil.which("vvp") is not None)
 _HAVE_DATASET = _DATASET.is_dir()
 _needs_iv = pytest.mark.skipif(not _HAVE_IVERILOG,
                                reason="iverilog/vvp not installed")
 _needs_ds = pytest.mark.skipif(not _HAVE_DATASET,
-                               reason="VerilogEval dataset absent")
+                               reason="VerilogEval dataset absent; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 
 # --------------------------------------------------------------------------- #
 # Prompt fixtures (prose shapes only — no golden RTL is read by the solver)

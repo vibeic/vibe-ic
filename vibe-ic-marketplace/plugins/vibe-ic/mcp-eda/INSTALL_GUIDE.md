@@ -130,13 +130,30 @@ Both PDKs are pre-installed at `/foss/pdks/` inside the container:
 
 ## Step 2: Start the EDA Container
 
-Launch the container with your designs directory mounted:
+Launch the container with your designs directory mounted.
+
+**Point this at a directory you ALREADY have** — normally your project directory,
+or the parent directory holding your projects. Letting the container see the
+files you are working on is the mount's only job.
+
+```bash
+export VIBEIC_DESIGNS="/path/to/your/projects"   # ← an EXISTING directory of yours
+```
+
+There is no default location, nothing picks one for you, and installing the
+plugin adds nothing to your home directory. `docker run` silently creates a
+missing bind-mount source as `root`, so the recipe below refuses to start when
+`$VIBEIC_DESIGNS` does not exist rather than leaving you a phantom directory. If
+you want a dedicated workspace instead of reusing an existing tree, create it
+yourself first and point at that.
 
 ```bash
 # Option A image: vibeic-eda:0.2.23   |   Option B image: hpretl/iic-osic-tools:latest
 docker rm -f vibeic-eda 2>/dev/null || true   # "name already in use" = an old container exists; drop it first
+[ -d "$VIBEIC_DESIGNS" ] || { echo "set VIBEIC_DESIGNS to an existing directory first"; exit 1; }
 docker run -d --name vibeic-eda \
-  -v "$HOME/AI_IC_design:/foss/designs:rw" \
+  -v "$VIBEIC_DESIGNS:$VIBEIC_DESIGNS:rw" \
+  -v "$VIBEIC_DESIGNS:/foss/designs:rw" \
   -p 8888:80 \
   -p 5901:5901 \
   vibeic-eda:0.2.23 --skip sleep infinity
@@ -148,7 +165,18 @@ docker run -d --name vibeic-eda \
 
 | Host Path | Container Path | Purpose |
 |-----------|---------------|---------|
-| `$HOME/AI_IC_design` | `/foss/designs` | Your design workspace (RTL, netlists, GDS) |
+| `$VIBEIC_DESIGNS` | `$VIBEIC_DESIGNS` | Identity mount — host absolute paths resolve unchanged in-container (Phase 3 needs this) |
+| `$VIBEIC_DESIGNS` | `/foss/designs` | Your design workspace (RTL, netlists, GDS) |
+
+`$VIBEIC_DESIGNS` is whatever directory **you** chose above — the plugin ships no
+default and never creates it.
+
+You do not normally need to configure anything further: when a runner or scorer
+is invoked with a project directory it derives the designs root from that project
+plus the container's own mount table. `VIBEIC_DESIGNS_HOST_ROOT` is an optional
+explicit override for CI and non-standard layouts. When a tool can resolve
+neither, it returns a `DESIGNS_ROOT_UNRESOLVED` status listing both routes — it
+never guesses a path and never creates one.
 
 The MCP EDA Server executes all EDA tools inside this container via
 `docker exec`, so file paths in MCP tool calls use container paths
@@ -169,7 +197,7 @@ You should see the container in `Up` status.
 ### 3a. Clone and Install
 
 ```bash
-cd ~/AI_IC_design
+cd "$VIBEIC_DESIGNS"
 git clone <your-repo-url>/mcp-eda.git
 cd mcp-eda
 npm install
@@ -180,7 +208,7 @@ npm install
 **Option A: CLI command (recommended)**
 
 ```bash
-claude mcp add eda-tools node ~/AI_IC_design/mcp-eda/src/index.js
+claude mcp add eda-tools node "$VIBEIC_DESIGNS/mcp-eda/src/index.js"
 ```
 
 **Option B: Manual configuration**
@@ -200,7 +228,7 @@ The file should contain:
     "eda-tools": {
       "type": "stdio",
       "command": "node",
-      "args": ["/home/<your-user>/AI_IC_design/mcp-eda/src/index.js"],
+      "args": ["/home/<your-user>/vibe-ic-designs/mcp-eda/src/index.js"],
       "env": {
         "EDA_CONTAINER": "vibeic-eda"
       }
@@ -264,7 +292,7 @@ programs.
 ### 4a. Clone and Install
 
 ```bash
-cd ~/AI_IC_design
+cd "$VIBEIC_DESIGNS"
 git clone <your-repo-url>/vibe-ic-marketplace.git
 cd vibe-ic-marketplace/plugins/vibe-ic-d
 pip install pytest   # for running compliance tests
@@ -396,7 +424,7 @@ For commercial or custom PDKs (e.g., proprietary 180nm libraries):
 ### 6a. Prepare PDK Files
 
 ```bash
-mkdir -p ~/AI_IC_design/pdk/my_custom_pdk
+mkdir -p "$VIBEIC_DESIGNS/pdk/my_custom_pdk"
 ```
 
 Place the following files:
@@ -458,11 +486,11 @@ docker exec vibeic-eda ls /foss/pdks/sky130A/ > /dev/null 2>&1 && echo "SKY130: 
 
 echo ""
 echo "=== Verifying MCP Server ==="
-node ~/AI_IC_design/mcp-eda/src/index.js --help 2>&1 | head -1 || echo "MCP Server: OK (stdio mode, no --help)"
+node "$VIBEIC_DESIGNS/mcp-eda/src/index.js" --help 2>&1 | head -1 || echo "MCP Server: OK (stdio mode, no --help)"
 
 echo ""
 echo "=== Verifying vibe-ic-d ==="
-cd ~/AI_IC_design/vibe-ic-marketplace/plugins/vibe-ic-d && python3 -m pytest tests/ --tb=no -q 2>&1 | tail -3
+cd "$VIBEIC_DESIGNS"/vibe-ic-marketplace/plugins/vibe-ic-d && python3 -m pytest tests/ --tb=no -q 2>&1 | tail -3
 
 echo ""
 echo "=== All checks complete ==="
@@ -742,7 +770,8 @@ you can fabricate a real chip:
 ```bash
 # 1. Start Docker container
 docker start vibeic-eda || docker run -d --name vibeic-eda \
-  -v "$HOME/AI_IC_design:/foss/designs:rw" \
+  -v "$VIBEIC_DESIGNS:$VIBEIC_DESIGNS:rw" \
+  -v "$VIBEIC_DESIGNS:/foss/designs:rw" \
   vibeic-eda:0.2.23 --skip sleep infinity   # or: hpretl/iic-osic-tools:latest (stock)
 
 # 2. Launch Claude Code with MCP
@@ -760,7 +789,8 @@ docker stop vibeic-eda
 ```bash
 docker rm -f vibeic-eda
 docker run -d --name vibeic-eda \
-  -v "$HOME/AI_IC_design:/foss/designs:rw" \
+  -v "$VIBEIC_DESIGNS:$VIBEIC_DESIGNS:rw" \
+  -v "$VIBEIC_DESIGNS:/foss/designs:rw" \
   vibeic-eda:0.2.23 --skip sleep infinity   # or: hpretl/iic-osic-tools:latest (stock)
 ```
 

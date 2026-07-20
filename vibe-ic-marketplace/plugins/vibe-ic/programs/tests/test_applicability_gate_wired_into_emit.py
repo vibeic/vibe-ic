@@ -14,6 +14,7 @@ import importlib
 import json
 import sys
 from pathlib import Path
+from _hostpaths import require_repo  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 RUNNER = PROGRAMS / "phase1_doc_one_shot_runner.py"
@@ -106,7 +107,7 @@ def test_end_to_end_bus_protocol_l4_becomes_na_stub(tmp_path):
     subsequent L4_REGMAP emission must be replaced with na_stub."""
     tax = _load_taxonomy()
     # Use the real AMBA AXI L1+L2 (the canonical evidence project)
-    arm = Path("/home/reyerchu/vibe-ic/benchmark-data/evaluation/phase1_parity/arm_aix/phase1/generated_docs")
+    arm = require_repo("benchmark-data/evaluation/phase1_parity/arm_aix/phase1/generated_docs")
     if not (arm / "L1_DATASHEET.json").is_file():
         import pytest
         pytest.skip("AMBA AXI benchmark not present on this host")

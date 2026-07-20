@@ -32,8 +32,9 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import waveform_ext_synth as X  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
-_DS = Path("/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl")
+_DS = corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl")
 _HAVE_TOOLS = bool(shutil.which("iverilog") and shutil.which("vvp"))
 _HAVE_DS = _DS.is_dir()
 
@@ -269,7 +270,7 @@ The module can be described by the following simulation waveform:
 
 # ── AUTHORITATIVE HOST-SCORE on the REAL dataset (the task's gate) ────────────
 @pytest.mark.skipif(not (_HAVE_TOOLS and _HAVE_DS),
-                    reason="iverilog/vvp + verilog-eval dataset required")
+                    reason="iverilog/vvp + verilog-eval dataset required; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 def test_real_prob083_fires_and_host_scores_clean():
     prob = "Prob083_mt2015_q4b"
     rtl = X.synth(_read(prob, "prompt.txt"), "TopModule")
@@ -278,7 +279,7 @@ def test_real_prob083_fires_and_host_scores_clean():
 
 
 @pytest.mark.skipif(not (_HAVE_TOOLS and _HAVE_DS),
-                    reason="iverilog/vvp + verilog-eval dataset required")
+                    reason="iverilog/vvp + verilog-eval dataset required; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 def test_real_prob098_fires_and_host_scores_clean():
     prob = "Prob098_circuit7"
     rtl = X.synth(_read(prob, "prompt.txt"), "TopModule")
@@ -286,7 +287,7 @@ def test_real_prob098_fires_and_host_scores_clean():
     assert _host_score(prob, rtl) == 0
 
 
-@pytest.mark.skipif(not _HAVE_DS, reason="verilog-eval dataset required")
+@pytest.mark.skipif(not _HAVE_DS, reason="verilog-eval dataset required; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 @pytest.mark.parametrize("prob", ["Prob117_circuit9", "Prob145_circuit8",
                                   "Prob131_mt2015_q4"])
 def test_real_honest_skip_members(prob):
@@ -295,7 +296,7 @@ def test_real_honest_skip_members(prob):
     assert X.synth(_read(prob, "prompt.txt"), "TopModule") is None
 
 
-@pytest.mark.skipif(not _HAVE_DS, reason="verilog-eval dataset required")
+@pytest.mark.skipif(not _HAVE_DS, reason="verilog-eval dataset required; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 def test_real_no_overlap_with_sibling_fires():
     # The companion must NOT steal anything the canonical sibling already handles.
     import waveform_truth_table_synth as W

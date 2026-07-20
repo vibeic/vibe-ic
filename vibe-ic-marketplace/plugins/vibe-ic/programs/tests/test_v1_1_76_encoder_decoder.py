@@ -29,6 +29,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from _hostpaths import corpus_path  # noqa: E402
 
 _HERE = Path(__file__).resolve().parent
 _PROGRAMS = _HERE.parent
@@ -41,7 +42,7 @@ _SPEC = importlib.util.spec_from_file_location(
 eds = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(eds)
 
-_DS = Path("/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl")
+_DS = corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl")
 
 
 def _ds(prob: str) -> str:
@@ -55,7 +56,7 @@ _HAVE_IVERILOG = shutil.which("iverilog") is not None and shutil.which("vvp") is
 # --------------------------------------------------------------------------- #
 # POSITIVES                                                                    #
 # --------------------------------------------------------------------------- #
-@pytest.mark.skipif(not _HAVE_DS, reason="dataset not present")
+@pytest.mark.skipif(not _HAVE_DS, reason="dataset not present; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 @pytest.mark.parametrize("prob,inw,outw", [
     ("Prob071_always_casez", 8, 3),
     ("Prob112_always_case2", 4, 2),
@@ -194,7 +195,7 @@ def test_neg_not_an_encoder_at_all():
 # --------------------------------------------------------------------------- #
 # CORPUS NO-LEAK — only the family members fire across the whole dataset       #
 # --------------------------------------------------------------------------- #
-@pytest.mark.skipif(not _HAVE_DS, reason="dataset not present")
+@pytest.mark.skipif(not _HAVE_DS, reason="dataset not present; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 def test_corpus_no_leak():
     fired = []
     for f in sorted(_DS.glob("*_prompt.txt")):
@@ -207,7 +208,7 @@ def test_corpus_no_leak():
 # HOST-SCORE — authoritative: iverilog + the dataset ref + testbench           #
 # --------------------------------------------------------------------------- #
 @pytest.mark.skipif(not (_HAVE_DS and _HAVE_IVERILOG),
-                    reason="dataset or iverilog not present")
+                    reason="dataset or iverilog not present; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 @pytest.mark.parametrize("prob", ["Prob071_always_casez", "Prob112_always_case2"])
 def test_host_score_zero_mismatches(prob):
     rtl = eds.synth(_ds(prob))

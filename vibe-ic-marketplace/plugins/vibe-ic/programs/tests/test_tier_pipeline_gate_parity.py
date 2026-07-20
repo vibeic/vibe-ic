@@ -27,8 +27,9 @@ if str(_PROGRAMS) not in sys.path:
 
 import verilogeval_tier_pipeline as P  # noqa: E402
 import spec_conformance_check as scc   # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
-_DS = Path("/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl")
+_DS = corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl")
 
 
 def test_blocking_ruleset_single_source_matches_gate():
@@ -46,7 +47,7 @@ def test_blocking_ruleset_single_source_matches_gate():
 
 
 @pytest.mark.skipif(not (_DS / "Prob082_lfsr32_prompt.txt").exists(),
-                    reason="dataset absent")
+                    reason="dataset absent; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 def test_gate_blocked_emit_is_not_tier1_but_clean_emit_is():
     prob = P.Problem(_DS / "Prob082_lfsr32_prompt.txt")
     # a PURE rotate (no tap-XOR) under the LFSR/shifter spec is exactly what the

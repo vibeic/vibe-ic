@@ -16,6 +16,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from _hostpaths import require_repo  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 
@@ -78,7 +79,7 @@ def test_detector_general_not_brand_keyword():
 def test_detector_real_amba_axi_l_docs_trigger():
     """The real benchmark_phase1/arm_aix L1/L2 must trigger the detector."""
     mod = _load()
-    arm = Path("/home/reyerchu/vibe-ic/benchmark-data/evaluation/phase1_parity/arm_aix/phase1/generated_docs")
+    arm = require_repo("benchmark-data/evaluation/phase1_parity/arm_aix/phase1/generated_docs")
     if not arm.is_dir():
         import pytest
         pytest.skip("AMBA AXI benchmark not present on this host")
@@ -137,7 +138,7 @@ def test_detect_ic_class_routes_amba_axi_to_bus_protocol(tmp_path):
     """The full detect_ic_class on the AMBA AXI L docs must return
     'bus_interconnect_protocol', not 'digital_arithmetic_primitive'."""
     mod = _load()
-    arm = Path("/home/reyerchu/vibe-ic/benchmark-data/evaluation/phase1_parity/arm_aix")
+    arm = require_repo("benchmark-data/evaluation/phase1_parity/arm_aix")
     if not (arm / "phase1" / "generated_docs" / "L1_DATASHEET.json").is_file():
         import pytest
         pytest.skip("AMBA AXI benchmark not present on this host")

@@ -34,14 +34,18 @@ from pathlib import Path
 import pytest
 
 import si_signoff_timing_aware as m
+from _hostpaths import repo_path_opt  # noqa: E402
 
 PROG = Path(m.__file__).resolve()
 
 # --- locate a real routed SPEF in the repo (main checkout), if present -------
 _REPO_SPEF_CANDIDATES = [
-    Path("/home/reyerchu/vibe-ic/benchmark-data/evaluation/phase1_parity/mdio/phase3/stage3/extracted/chip_top.spef"),
-    Path("/home/reyerchu/vibe-ic/benchmark-data/evaluation/phase1_parity/espi/phase3/stage3/extracted/chip_top.spef"),
-    Path("/home/reyerchu/vibe-ic/benchmark-data/evaluation/phase1_parity/sgmii/phase3/stage3/extracted/chip_top.spef"),
+    repo_path_opt("benchmark-data/evaluation/phase1_parity/mdio/"
+                  "phase3/stage3/extracted/chip_top.spef"),
+    repo_path_opt("benchmark-data/evaluation/phase1_parity/espi/"
+                  "phase3/stage3/extracted/chip_top.spef"),
+    repo_path_opt("benchmark-data/evaluation/phase1_parity/sgmii/"
+                  "phase3/stage3/extracted/chip_top.spef"),
 ]
 
 

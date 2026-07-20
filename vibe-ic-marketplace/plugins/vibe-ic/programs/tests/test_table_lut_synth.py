@@ -50,6 +50,7 @@ if str(PROG) not in sys.path:
     sys.path.insert(0, str(PROG))
 
 import table_lut_synth as S  # noqa: E402
+from _hostpaths import require_corpus  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #
@@ -412,8 +413,8 @@ def test_real_dataset_record_functional_when_present():
     """If the real CVDP jsonl is present on the host, the one record this solver
     emits for (the GP truth table) must compile and be functionally correct."""
     import json
-    ds = Path("/home/reyerchu/AI_IC_design/_extbench/cvdp_open_v110/"
-              "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
+    ds = require_corpus("_extbench/cvdp_open_v110/"
+                        "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
     if not ds.exists():
         pytest.skip("real CVDP dataset not on host")
     recs = {json.loads(l)["id"]: json.loads(l) for l in ds.open()}

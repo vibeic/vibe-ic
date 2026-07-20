@@ -20,8 +20,9 @@ if _PROGRAMS not in sys.path:
     sys.path.insert(0, _PROGRAMS)
 
 import dff_edge_synth as M  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
-DS = "/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl"
+DS = str(corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl"))
 
 
 def _prompt(prob):

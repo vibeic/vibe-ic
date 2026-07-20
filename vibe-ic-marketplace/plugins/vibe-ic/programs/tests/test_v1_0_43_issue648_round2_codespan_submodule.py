@@ -34,6 +34,7 @@ import pytest
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 import phase1_doc_one_shot_runner as R  # noqa: E402
+from _hostpaths import require_corpus  # noqa: E402
 
 
 # ── helper units ─────────────────────────────────────────────────────────────
@@ -101,8 +102,7 @@ def test_end_to_end_exact_submodules_no_prose_leak(tmp_path):
 def test_real_caravel_round3_artifact_if_present():
     """The field-agent's exact artifact: L9 submodules == {user_proj_example,
     counter}; no Clock/Single/The leak. SKIPs off-monorepo."""
-    base = Path("/home/reyerchu/AI_IC_design/_bench7_caravel_v1034_cleanroom/"
-                "caravel/input/docs")
+    base = require_corpus("_bench7_caravel_v1034_cleanroom/caravel/input/docs")
     if not base.is_dir():
         pytest.skip("real caravel docs not on disk")
     import tempfile

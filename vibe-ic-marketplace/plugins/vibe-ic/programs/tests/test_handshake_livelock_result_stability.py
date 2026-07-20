@@ -25,6 +25,7 @@ from pathlib import Path
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import handshake_livelock_result_stability_check as H  # noqa: E402
+from _hostpaths import require_corpus  # noqa: E402
 
 
 def _errs(rtl):
@@ -151,7 +152,7 @@ def test_no_false_positive_on_correct_corpus():
     # #523 NEGATIVE acceptance (#511 no-leak, load-bearing): the existing correct
     # multi-cycle / streaming designs must produce ZERO findings when on-host.
     import pytest
-    base = Path("/home/reyerchu/AI_IC_design")
+    base = require_corpus()
     globs = [
         "spm_e2e_v0320/phase2/stage1/rtl",
         "sha256_e2e_v0320/phase2/stage1/rtl",

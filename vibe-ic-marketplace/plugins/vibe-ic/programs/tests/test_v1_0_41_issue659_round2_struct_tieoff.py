@@ -39,6 +39,7 @@ PROG = (
 )
 sys.path.insert(0, str(PROG.parent))
 import l9_rtl_pin_consistency_check as G  # noqa: E402
+from _hostpaths import require_corpus  # noqa: E402
 
 
 def _run(project: Path) -> subprocess.CompletedProcess:
@@ -180,7 +181,7 @@ def test_reconcile_unbound_root_stays_residual():
 
 # ── the REAL reopen artifact (skips off-monorepo) ───────────────────────────
 def test_real_opentitan_aes_round3_artifact_passes():
-    art = Path("/home/reyerchu/AI_IC_design/_bench6_v100_r3/opentitan_aes")
+    art = require_corpus("_bench6_v100_r3/opentitan_aes")
     if not (art / "phase2" / "stage1" / "rtl" / "chip_top.sv").is_file():
         import pytest
         pytest.skip("round-3 opentitan_aes artifact not on disk")

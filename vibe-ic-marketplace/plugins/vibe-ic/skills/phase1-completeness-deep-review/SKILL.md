@@ -37,7 +37,7 @@ the agent may claim Overall PASS.
 
 ```bash
 python3 \
-  /home/user/AI_IC_design/vibe-ic-marketplace/plugins/vibe-ic/programs/phase1_doc_input_completeness_check.py \
+  /home/<your-user>/AI_IC_design/vibe-ic-marketplace/plugins/vibe-ic/programs/phase1_doc_input_completeness_check.py \
   <project_dir>
 ```
 
@@ -172,7 +172,7 @@ stronger; no project waits for the plugin.
 
 ```bash
 python3 \
-  /home/user/AI_IC_design/vibe-ic-marketplace/plugins/vibe-ic/programs/phase1_doc_input_completeness_check.py \
+  /home/<your-user>/AI_IC_design/vibe-ic-marketplace/plugins/vibe-ic/programs/phase1_doc_input_completeness_check.py \
   <project_dir>
 ```
 

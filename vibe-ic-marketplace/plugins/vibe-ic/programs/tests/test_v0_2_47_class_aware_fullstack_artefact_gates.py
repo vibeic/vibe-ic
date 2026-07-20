@@ -19,6 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import flow_compliance_check as fcc  # noqa: E402
 import ic_class_profile as icp  # noqa: E402
+from _hostpaths import require_corpus  # noqa: E402
 
 GATES = fcc._CLASS_SKIPPABLE_FULLSTACK_ARTEFACT_GATES
 
@@ -83,8 +84,7 @@ def test_real_runner_arbiter_project_skips_artefact_gates():
     layout, not a hand-built fixture (the original fixtures mirrored the
     wrong-path bug). Skips honestly when the local artifact is absent."""
     import pytest
-    real = Path("/home/reyerchu/AI_IC_design/cvdp_example_cleanroom_v0244"
-                "/work/cvdp_agentic_fixed_arbiter_0001")
+    real = require_corpus("cvdp_example_cleanroom_v0244/work/cvdp_agentic_fixed_arbiter_0001")
     if not (real / "phase1" / "generated_docs").is_dir():
         pytest.skip("real runner artifact not present on this machine")
     skips = fcc._class_skipped_gates(real)

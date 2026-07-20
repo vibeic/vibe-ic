@@ -10,6 +10,8 @@ a single verdict. The existing programs it COMPOSES (import or subprocess —
 never re-implemented):
 
   * source_chip_agnostic_check.py      — chip-AGNOSTIC plugin source guard
+  * shipped_path_portability_check.py  — no personal absolute path may
+    ship as a value (the phantom-directory / wrong-machine-default guard)
   * commit_msg_nda_check.py            — the MESSAGE-side twin of that guard:
                                          no NDA foundry / SKU / process token in
                                          any commit MESSAGE in base..head
@@ -299,6 +301,22 @@ def chip_agnostic_gate(plugin_root: Path) -> GateResult:
 
 
 # --------------------------------------------------------------------------
+# shipped_path_portability_check — the PORTABILITY twin of the source guard.
+# chip_agnostic_gate bans chip/vendor identity in shipped source; this bans
+# MACHINE identity: a personal absolute home path where it could be used as a
+# value. The defect it locks out shipped one developer's home directory as a
+# runtime default, which (worst case) got mkdir-ed into existence and grew a
+# phantom workspace directory on a clean install.
+# --------------------------------------------------------------------------
+def path_portability_gate(plugin_root: Path) -> GateResult:
+    prog = _PROGRAMS_DIR / "shipped_path_portability_check.py"
+    rc, out, err = _run_program(prog, [str(plugin_root)])
+    summary = (out.strip().splitlines() or [err.strip()] or [""])[0][:240]
+    return GateResult("shipped_path_portability_check", rc,
+                      summary or "(no output)")
+
+
+# --------------------------------------------------------------------------
 # commit_msg_nda_check — the MESSAGE-side twin of the source guard.
 #
 # chip_agnostic_gate above scans FILES. A commit whose MESSAGE names the
@@ -557,6 +575,7 @@ def review(base: str, head: str, *,
 
     gates.append(marketplace_sync_gate(plugin_root))
     gates.append(chip_agnostic_gate(plugin_root))
+    gates.append(path_portability_gate(plugin_root))
     gates.append(commit_msg_nda_gate(repo, base, head))
     gates.append(loop_watchdog_gate(plugin_root))
     gates.append(plugin_audit_gate(plugin_root))

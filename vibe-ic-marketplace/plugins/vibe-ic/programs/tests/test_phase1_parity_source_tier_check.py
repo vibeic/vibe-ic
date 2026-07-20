@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 import pytest
+from _hostpaths import repo_path_opt  # noqa: E402
 
 PROG = Path(__file__).resolve().parents[1] / "phase1_parity_source_tier_check.py"
 _spec = importlib.util.spec_from_file_location("p1_tier_check", PROG)
@@ -267,7 +268,7 @@ def test_cli_bad_root_returns_2(tmp_path: Path):
 # the real corpus
 # --------------------------------------------------------------------------
 
-REAL = Path("/home/reyerchu/vibe-ic/benchmark-data/evaluation/phase1_parity")
+REAL = repo_path_opt("benchmark-data/evaluation/phase1_parity")
 
 
 @pytest.mark.skipif(not (REAL / "source_tier.json").is_file(),

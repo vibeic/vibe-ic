@@ -48,10 +48,11 @@ for _p in (str(_PROGRAMS), str(_HERE)):
         sys.path.insert(0, _p)
 
 import mux_compare_synth as S  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
 _HAS_IVERILOG = shutil.which("iverilog") is not None and shutil.which("vvp") is not None
-_DATASET = Path("/home/reyerchu/AI_IC_design/_extbench/cvdp_open_v110/"
-                "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
+_DATASET = corpus_path("_extbench/cvdp_open_v110/"
+                       "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
 
 
 # --------------------------------------------------------------------------- #

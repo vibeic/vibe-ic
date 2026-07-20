@@ -32,8 +32,9 @@ PROG_DIR = Path(__file__).resolve().parents[1]
 if str(PROG_DIR) not in sys.path:
     sys.path.insert(0, str(PROG_DIR))
 import counter_advanced_synth as CA  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
-DS = Path("/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl")
+DS = corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl")
 HAVE_DS = DS.is_dir()
 IVERILOG = shutil.which("iverilog")
 VVP = shutil.which("vvp")

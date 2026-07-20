@@ -33,8 +33,9 @@ if str(_PROGRAMS) not in sys.path:
 
 import conway_2d_synth as C  # noqa: E402
 import cellular_automaton_synth as C1D  # noqa: E402  (mutual-exclusion partner)
+from _hostpaths import corpus_path  # noqa: E402
 
-_DS = Path("/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl")
+_DS = corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl")
 _PROB144 = "Prob144_conwaylife"
 
 # A self-contained Conway (16x16 toroidal Moore, B3/S23) prompt matching the

@@ -31,9 +31,10 @@ if _PROGRAMS not in sys.path:
     sys.path.insert(0, _PROGRAMS)
 
 import behavioral_fsm_synth as bfsm  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
 # Dataset location (host-scoring is best-effort; absent dataset -> those cases skip).
-_DS = "/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl"
+_DS = str(corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl"))
 _HAVE_IVERILOG = shutil.which("iverilog") is not None and shutil.which("vvp") is not None
 
 

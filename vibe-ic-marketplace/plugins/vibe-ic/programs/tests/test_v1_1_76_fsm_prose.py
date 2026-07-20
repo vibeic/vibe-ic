@@ -15,6 +15,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import fsm_prose_synth as F   # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #
@@ -267,7 +268,7 @@ Use one-hot A=4'b0001, B=4'b0010, C=4'b0100, D=4'b1000.
 # --------------------------------------------------------------------------- #
 # host-score on the REAL dataset if present (authoritative)
 # --------------------------------------------------------------------------- #
-_DS = "/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl"
+_DS = str(corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl"))
 
 
 def _host_score(prob):

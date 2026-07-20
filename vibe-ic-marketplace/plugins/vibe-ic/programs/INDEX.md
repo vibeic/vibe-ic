@@ -772,6 +772,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `smbus_pmbus_protocol_synth` | any | v0.1.91 | System Management Bus (SMBus 3.x) + Power Management Bus (PMBus 1.3) |
 | `sort_synth` | any | — | DETERMINISTIC solver for the CVDP bubble-sort engine family. |
 | `soundwire_protocol_synth` | any | v0.1.84 | MIPI SoundWire-class protocol synth helper. |
+| `shipped_path_portability_check` | any | — | path-portability guard — no personal absolute home path may ship as a value (the phantom-directory / wrong-machine-default guard). |
 | `source_chip_agnostic_check` | any | — | anti-fabrication gate (v1.6.38). |
 | `spacewire_protocol_synth` | any | — | SpaceWire protocol synth helper (ECSS-E-ST-50-12C). |
 | `spare_cell_coverage_check` | any | — | Design-for-ECO READINESS gate (Step 18). |

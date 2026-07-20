@@ -50,6 +50,7 @@ if str(PROG) not in sys.path:
 
 import hamming_synth as H  # noqa: E402
 import cvdp_atomic_bridge as CB  # noqa: E402  compliant name+interface source
+from _hostpaths import corpus_path  # noqa: E402
 
 _HAS_IVERILOG = shutil.which("iverilog") is not None and shutil.which("vvp") is not None
 
@@ -506,8 +507,8 @@ def test_iverilog_parameterized_decoder_second_geometry():
 # None FOR A DEMONSTRATED, PROMPT-VISIBLE REASON (missing name/interface, or the
 # §4.05 composite guard) — never a count the compliant extractor cannot meet.
 # --------------------------------------------------------------------------- #
-_DATASET = Path("/home/reyerchu/AI_IC_design/_extbench/cvdp_open_v110/"
-                "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
+_DATASET = corpus_path("_extbench/cvdp_open_v110/"
+                       "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
 
 _RID_SOLVABLE = "cvdp_copilot_hamming_code_tx_and_rx_0003"
 _RID_COMPOSITE = "cvdp_copilot_hamming_code_tx_and_rx_0013"
@@ -518,7 +519,7 @@ _RID_FLOOR = (
 )
 
 
-@pytest.mark.skipif(not _DATASET.exists(), reason="CVDP dataset not present")
+@pytest.mark.skipif(not _DATASET.exists(), reason="CVDP dataset not present; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 def test_real_dataset_hamming_records():
     import json
     recs = {r["id"]: r for r in (json.loads(l) for l in _DATASET.open())}

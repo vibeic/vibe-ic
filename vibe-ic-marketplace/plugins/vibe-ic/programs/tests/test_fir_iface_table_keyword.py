@@ -58,6 +58,7 @@ if not PROG.is_file():
 
 sys.path.insert(0, str(PROGRAMS))
 import iface_conformance_v2 as M  # noqa: E402
+from _hostpaths import require_repo  # noqa: E402
 
 
 # ── the FIR_0001 shape: a `| `name` | `type` | desc |` port table ────────────
@@ -147,9 +148,8 @@ def test_fir_type_column_table_no_phantom_logic(tmp_path):
 def test_fir_real_artifact_path():
     """If the real FIR_0001 artifacts are present in the run tree, the exact
     failing invocation must now be conformant (skipped when absent)."""
-    fir = Path("/home/reyerchu/vibe-ic/benchmark_external/cvdp/"
-               "run_v0352_cleanroom_20260614/converge1129/work/"
-               "cvdp_copilot_FIR_0001")
+    fir = require_repo("benchmark_external/cvdp/run_v0352_cleanroom_20260614/"
+                       "converge1129/work/cvdp_copilot_FIR_0001")
     spec = fir / "spec.md"
     rtl = fir / "rtl" / "fir_filter.sv"
     if not (spec.is_file() and rtl.is_file()):

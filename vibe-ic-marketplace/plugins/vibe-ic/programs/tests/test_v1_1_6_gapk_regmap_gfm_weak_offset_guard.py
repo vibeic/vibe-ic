@@ -49,6 +49,7 @@ from pathlib import Path
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PLUGIN / "programs"))
 import regmap_table_extractor as R  # noqa: E402
+from _hostpaths import require_corpus  # noqa: E402
 
 
 def _addrs(text, path="x.md"):
@@ -84,8 +85,7 @@ def test_gapk_real_u_hawaii_adc_l1_datasheet_zero_rows():
     u_hawaii_adc L1 datasheet (a mixed_signal_adc with ZERO sw-visible registers)
     must extract 0 register rows. Skips gracefully when the bench tree is absent
     so the test is portable (the synthetic case above is the binding floor)."""
-    doc = Path("/home/reyerchu/AI_IC_design/_bench6_v100_r18/"
-               "u_hawaii_adc/input/docs/L1_DATASHEET.md")
+    doc = require_corpus("_bench6_v100_r18/u_hawaii_adc/input/docs/L1_DATASHEET.md")
     if not doc.exists():
         import pytest
         pytest.skip("u_hawaii_adc bench fixture not present in this checkout")

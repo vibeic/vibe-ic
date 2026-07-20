@@ -13,6 +13,7 @@ conventions.
 import importlib
 import sys
 from pathlib import Path
+from _hostpaths import require_repo  # noqa: E402
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 
@@ -170,8 +171,8 @@ def test_runner_l1_overlay_gated_by_bus_interconnect_protocol():
 # ── End-to-end on real AMBA AXI ──────────────────────────────────────
 
 def test_real_amba_axi_l1_extracts_doc_metadata():
-    inp = Path("/home/reyerchu/vibe-ic/benchmark-data/evaluation/phase1_parity/arm_aix/phase1/input_doc/"
-                "IHI0022H_amba_axi_protocol_spec.txt")
+    inp = require_repo("benchmark-data/evaluation/phase1_parity/arm_aix/phase1/"
+                       "input_doc/IHI0022H_amba_axi_protocol_spec.txt")
     if not inp.is_file():
         import pytest
         pytest.skip("AMBA AXI input_doc not present on this host")

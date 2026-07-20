@@ -31,6 +31,8 @@ from pathlib import Path
 
 import pytest
 
+from _hostpaths import require_corpus
+
 SCRIPT = (Path(__file__).resolve().parents[2]
           / "benchmark" / "score_cocotb_mcp.py")
 
@@ -231,7 +233,7 @@ def _need_iic_eda():
 def _find_encoder_project():
     """Resolve a priority_encoder Shape-D project on the host, version-agnostic.
     Skips if none present so the test stays host-portable (no hardcoded version)."""
-    root = Path("/home/reyerchu/AI_IC_design")
+    root = require_corpus()
     cands = sorted(root.glob("_vibeic_cvdp_v*/cvdp_agentic_8x3_priority_encoder_0003"))
     if not cands:
         pytest.skip("no priority_encoder Shape-D project on host")
@@ -244,7 +246,7 @@ def test_priority_encoder_functional_pass_with_coverage_gate_flagged(tmp_path):
     r = subprocess.run(
         ["python3", str(SCRIPT), "--project", str(proj),
          "--top", "priority_encoder_8x3",
-         "--mount-root", "/home/reyerchu/AI_IC_design"],
+         "--mount-root", str(require_corpus())],
         capture_output=True, text=True, timeout=300)
     score_json = proj / "reports" / "cocotb_score.json"
     assert score_json.is_file(), r.stdout + r.stderr

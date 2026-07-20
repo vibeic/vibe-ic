@@ -109,13 +109,21 @@ def find_catalog_dir() -> Optional[Path]:
         candidate = ancestor / "ip-catalog"
         if candidate.is_dir() and (candidate / "_schema").is_dir():
             return candidate
-    # Hard fallbacks
-    for fallback in [
-        Path("~/AI_IC_design/opensource_repo/vibe-ic-marketplace/plugins/vibe-ic/ip-catalog"),
-        Path("~/AI_IC_design/vibe-ic-marketplace/plugins/vibe-ic/ip-catalog"),
-    ]:
-        if fallback.is_dir():
-            return fallback
+    # Explicit override, then a walk-up sibling layout. The previous fallbacks
+    # hardcoded this project's INTERNAL workspace directory name under `~` —
+    # which was doubly wrong: it is not a sensible location on anyone else's
+    # machine, and `Path("~/...")` is never expanded, so `.is_dir()` was always
+    # False and the fallback could not fire at all.
+    env = os.environ.get("VIBE_IC_IP_CATALOG_DIR")
+    if env:
+        cand = Path(env).expanduser()
+        if cand.is_dir():
+            return cand
+    for ancestor in [here] + list(here.parents):
+        cand = (ancestor / "opensource_repo" / "vibe-ic-marketplace"
+                / "plugins" / "vibe-ic" / "ip-catalog")
+        if cand.is_dir() and (cand / "_schema").is_dir():
+            return cand
     return None
 
 

@@ -49,12 +49,12 @@ if str(PROG) not in sys.path:
     sys.path.insert(0, str(PROG))
 
 import accumulate_synth as S  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
 _IVERILOG = bool(shutil.which("iverilog") and shutil.which("vvp"))
 
-_DATASET = Path(
-    "/home/reyerchu/AI_IC_design/_extbench/cvdp_open_v110/"
-    "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
+_DATASET = corpus_path("_extbench/cvdp_open_v110/"
+                       "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
 
 
 # --------------------------------------------------------------------------- #

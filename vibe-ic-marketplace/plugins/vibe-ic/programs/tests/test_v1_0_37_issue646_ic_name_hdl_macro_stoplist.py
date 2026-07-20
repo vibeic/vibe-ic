@@ -33,6 +33,7 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import phase1_doc_one_shot_runner as R  # noqa: E402
+from _hostpaths import require_corpus  # noqa: E402
 
 
 # ── (1) the macro stoplist ───────────────────────────────────────────────────
@@ -113,8 +114,7 @@ def test_real_caravel_folder_pick_unchanged_NOREGRESSION():
     """With the real caravel input + project path, the folder-corroborated
     `caravel` pick still wins (Tier 0 before the new explicit-decl Tier 0.7);
     `USE_POWER_PINS` is never the answer. SKIPs off-monorepo."""
-    base = Path("/home/reyerchu/AI_IC_design/_bench7_caravel_v1034_cleanroom/"
-                "caravel/input/docs")
+    base = require_corpus("_bench7_caravel_v1034_cleanroom/caravel/input/docs")
     if not base.is_dir():
         pytest.skip("real caravel docs not on disk")
     ext = {p.name: p.read_text(errors="ignore") for p in base.glob("L*.md")}

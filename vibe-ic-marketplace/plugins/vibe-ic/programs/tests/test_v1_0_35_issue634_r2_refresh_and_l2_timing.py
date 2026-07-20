@@ -43,6 +43,7 @@ if str(_PROGRAMS) not in sys.path:
 import phase1_doc_one_shot_runner as R          # noqa: E402
 import ic_class_profile as ICP                  # noqa: E402
 import l_doc_structured_field_count_check as G  # noqa: E402
+from _hostpaths import require_corpus  # noqa: E402
 
 
 # ── (1) refresh re-stamp mechanism (dead-code root cause) ────────────────────
@@ -128,7 +129,7 @@ def test_real_round2_converter_l2_passes_if_present():
     """End-state on the REAL round-2 converter input (when the run dir is on
     disk): regenerating L2 from its input docs clears the ≥15 floor. SKIPs
     off-monorepo."""
-    run = Path("/home/reyerchu/AI_IC_design/_bench6_v100_r2/u_hawaii_adc")
+    run = require_corpus("_bench6_v100_r2/u_hawaii_adc")
     docs_dir = run / "input" / "docs"
     if not docs_dir.is_dir():
         pytest.skip("real round-2 converter run dir not on disk")

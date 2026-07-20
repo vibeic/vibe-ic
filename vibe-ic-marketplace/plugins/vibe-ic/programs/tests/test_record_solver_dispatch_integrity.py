@@ -42,11 +42,10 @@ if str(PROG) not in sys.path:
 
 import cvdp_atomic_bridge as B  # noqa: E402
 import spec_artifact_registry as R  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
-_DATASET = Path(
-    "/home/reyerchu/AI_IC_design/_extbench/cvdp_open_v110/"
-    "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl"
-)
+_DATASET = corpus_path("_extbench/cvdp_open_v110/"
+                       "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
 _GP_ID = "cvdp_copilot_Carry_Lookahead_Adder_0001"
 
 

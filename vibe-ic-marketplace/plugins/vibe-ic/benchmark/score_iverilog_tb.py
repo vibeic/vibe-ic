@@ -43,7 +43,7 @@ The generation step must be blind (per the skill's absolute-blindness rule).
 from __future__ import annotations
 import argparse, atexit, json, subprocess, tempfile, os, re, shutil, sys
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 # ORGANIC #574 — the official testbenches carry `$dumpfile("wave.vcd")`; running
 # vvp with cwd=None inherits the caller's cwd (e.g. the plugin tree under pytest),
@@ -161,12 +161,136 @@ def _resolve_sample_b(design: str, samples: Path, dataset: Path,
 # So: iverilog "sorry"/"internal error" → escalate to Verilator, whose verdict is
 # authoritative; only a Verilator *build* failure stays a hard tool-gap → SKIP.
 _IV13_CONTAINER = os.environ.get("VIBEIC_IVERILOG13_CONTAINER", "vibeic-eda")
-_HOST_DESIGNS_ROOT = os.environ.get("VIBEIC_DESIGNS_HOST_ROOT", "/home/reyerchu/AI_IC_design")
 _CONT_DESIGNS_ROOT = os.environ.get("VIBEIC_DESIGNS_CONT_ROOT", "/foss/designs")
 
+# PORTABILITY — the designs-root resolution LADDER.
+#
+# The "designs root" is whatever host directory is bind-mounted into the EDA
+# container; its only job is to let the container see the caller's project
+# files. It is a property of the USER's machine, so there is no sane shipped
+# default. An earlier release hardcoded one developer's home directory, which
+# (a) silently produced container paths wrong on every other machine and (b) got
+# `mkdir(parents=True)`-ed into existence, materialising a phantom workspace
+# directory on a clean install.
+#
+# Resolution order — note that steps 1-2 cover essentially every real call, so
+# the user is almost never asked anything:
+#
+#   1. $VIBEIC_DESIGNS_HOST_ROOT — explicit; for power users and CI.
+#   2. DERIVED FROM THE CALLER'S PROJECT. Every scoring entry point is already
+#      handed a `design_dir`. We ask the container which host directory it has
+#      mounted that CONTAINS that project and use it; if docker can't be
+#      queried, we use the project directory itself. Zero configuration, zero
+#      phantom directory, and what gets used is exactly the tree the user is
+#      actually working in.
+#   3. Neither available (rare: no project argument AND no env) — we do NOT
+#      hard-exit and we do NOT invent a path. We return a STRUCTURED
+#      needs-a-human-decision status. These programs are non-interactive and
+#      are driven by an AI agent, which IS the interactive layer: the program
+#      reports a machine-readable state with the concrete options, and the
+#      agent relays the question to the user. Prompting from here would break
+#      on a non-TTY; guessing would resurrect the original defect.
+_HOST_DESIGNS_ROOT_ENV = "VIBEIC_DESIGNS_HOST_ROOT"
+_DESIGNS_ROOT_ERROR_CODE = "DESIGNS_ROOT_UNRESOLVED"
+_DESIGNS_ROOT_HELP = (
+    "Cannot tell which host directory the EDA container can see. Choose one:\n"
+    f"  (a) pass a project directory, so the root is derived from it "
+    f"automatically; or\n"
+    f"  (b) export {_HOST_DESIGNS_ROOT_ENV}=<an EXISTING directory you have "
+    f"bind-mounted into the '{_IV13_CONTAINER}' container as "
+    f"{_CONT_DESIGNS_ROOT}>.\n"
+    "Nothing is created for you — the plugin never adds directories to your "
+    "home directory."
+)
+_warned_no_designs_root = False
 
-def _to_container(p: str) -> str:
-    return p.replace(_HOST_DESIGNS_ROOT, _CONT_DESIGNS_ROOT)
+
+def _designs_root_undecided(detail: str = "") -> dict:
+    """The structured 'a human must choose' status (ladder step 3).
+
+    Deliberately a VALUE, not an exception or an exit: the caller is an AI agent
+    that can surface the choice to the user.
+    """
+    return {
+        "verdict": "SKIP",
+        "error_code": _DESIGNS_ROOT_ERROR_CODE,
+        "needs_user_decision": True,
+        "reason": (detail + " " if detail else "") + _DESIGNS_ROOT_HELP,
+        "options": [
+            {"id": "derive_from_project",
+             "how": "invoke with a project/design directory"},
+            {"id": "explicit_env",
+             "how": f"export {_HOST_DESIGNS_ROOT_ENV}=<existing directory>"},
+        ],
+    }
+
+
+def _container_mount_sources(container: str) -> "List[Path]":
+    """Host-side sources of the container's bind mounts. [] if unknowable."""
+    try:
+        out = subprocess.check_output(["docker", "inspect", container],
+                                      text=True, stderr=subprocess.DEVNULL,
+                                      timeout=20)
+        data = json.loads(out)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError, ValueError):
+        return []
+    if not data:
+        return []
+    srcs = []
+    for m in (data[0].get("Mounts") or []):
+        s = m.get("Source")
+        if s:
+            try:
+                srcs.append(Path(s).resolve())
+            except OSError:
+                pass
+    return srcs
+
+
+def _host_designs_root(design_dir: "Optional[Path]" = None) -> Optional[Path]:
+    """Resolve the host designs root via the ladder above. Never creates it.
+
+    Returns None only when the caller supplied no project AND no env var is set
+    — the case the caller must convert into `_designs_root_undecided()`.
+    """
+    global _warned_no_designs_root
+    # ---- 1. explicit env -------------------------------------------------
+    raw = os.environ.get(_HOST_DESIGNS_ROOT_ENV)
+    if raw:
+        p = Path(raw).expanduser()
+        if p.is_dir():
+            return p.resolve()
+        if not _warned_no_designs_root:
+            _warned_no_designs_root = True
+            print(f"[score_iverilog_tb] ${_HOST_DESIGNS_ROOT_ENV}={raw} is not "
+                  f"an existing directory — falling back to deriving the "
+                  f"designs root from the project being scored (nothing is "
+                  f"created).", file=sys.stderr)
+    # ---- 2. derive from the caller's project ----------------------------
+    if design_dir is not None:
+        try:
+            proj = Path(design_dir).resolve()
+        except OSError:
+            return None
+        # Prefer the actual bind mount that CONTAINS the project: staging there
+        # keeps host→container translation correct for the whole tree.
+        for src in _container_mount_sources(_IV13_CONTAINER):
+            if proj == src or src in proj.parents:
+                return src
+        # No queryable mount table (docker absent / container down): use the
+        # project itself. It is the user's own directory, it already exists, and
+        # it is the thing the container needs to see anyway.
+        if proj.is_dir():
+            return proj
+    # ---- 3. undecidable --------------------------------------------------
+    return None
+
+
+def _to_container(p: str, design_dir: "Optional[Path]" = None) -> str:
+    root = _host_designs_root(design_dir)
+    if root is None:
+        return p
+    return p.replace(str(root), _CONT_DESIGNS_ROOT)
 
 
 # CALL-scoped, not LINE-scoped (adversarial-verify finding on v1.3.83): the
@@ -348,14 +472,25 @@ def _verilator_run_text(text: str, design: str, tb: Path, design_dir: Path,
                         pass_re, tag: str):
     """Stage arbitrary RTL text under the designs root and build+run it under
     container Verilator against `tb`. Returns (built: bool, pass_marker: bool)."""
-    stage_dir = Path(_HOST_DESIGNS_ROOT) / ".vibeic_scorer_tmp"
+    # Ladder step 2: derive the root from the project we were handed.
+    root = _host_designs_root(design_dir)
+    if root is None:
+        # Undecidable (no project, no env). Report "not built" (inconclusive)
+        # rather than mkdir-ing an invented path; the dict-returning caller
+        # below surfaces the structured needs-a-decision status.
+        global _warned_no_designs_root
+        if not _warned_no_designs_root:
+            _warned_no_designs_root = True
+            print(f"[score_iverilog_tb] {_DESIGNS_ROOT_HELP}", file=sys.stderr)
+        return (False, False)
+    stage_dir = root / ".vibeic_scorer_tmp"
     stage_dir.mkdir(parents=True, exist_ok=True)
     p = stage_dir / f"{re.sub(r'[^A-Za-z0-9_]', '_', design.split('/')[-1])}_{tag}.v"
     try:
         p.write_text(text)
-        cs = _to_container(str(p.resolve()))
-        cd = _to_container(str(Path(design_dir).resolve()))
-        ctb = _to_container(str(Path(tb).resolve()))
+        cs = _to_container(str(p.resolve()), design_dir)
+        cd = _to_container(str(Path(design_dir).resolve()), design_dir)
+        ctb = _to_container(str(Path(tb).resolve()), design_dir)
         mdir = f"/tmp/vobj_{tag}_" + re.sub(r"\W", "_", design.split("/")[-1])
         cmd = (f"export PATH=/foss/tools/bin:$PATH && cd '{cd}' && rm -rf {mdir} && "
                f"verilator --binary --timing -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE "
@@ -421,13 +556,20 @@ def _verilator_compile_run(design: str, sample_c: str, tb: Path, design_dir: Pat
     even Verilator) → SKIP (genuine tool-gap, excluded from the denominator); a
     successful build with no pass marker → real functional FAIL."""
     staged = None
+    # Ladder step 2: derive the root from the project we were handed.
+    root = _host_designs_root(design_dir)
+    if root is None:
+        # Ladder step 3 — hand the caller a STRUCTURED decision request rather
+        # than exiting or inventing (and creating) a workspace directory.
+        return _designs_root_undecided(
+            "cannot resolve a designs root for this run.")
     try:
         # The power-up-fixed sample lives in a host /tmp dir the container can't
         # see (only the designs root is bind-mounted). Stage it UNDER the designs
         # root so _to_container maps it to a path Verilator-in-container can read.
         sample_c = Path(sample_c)
-        if _HOST_DESIGNS_ROOT not in str(sample_c.resolve()):
-            stage_dir = Path(_HOST_DESIGNS_ROOT) / ".vibeic_scorer_tmp"
+        if str(root) not in str(sample_c.resolve()):
+            stage_dir = root / ".vibeic_scorer_tmp"
             stage_dir.mkdir(parents=True, exist_ok=True)
             staged = stage_dir / f"{re.sub(r'[^A-Za-z0-9_]', '_', design.split('/')[-1])}.v"
             shutil.copyfile(sample_c, staged)
@@ -436,9 +578,9 @@ def _verilator_compile_run(design: str, sample_c: str, tb: Path, design_dir: Pat
         # relative (e.g. _extbench/RTLLM/...), and _to_container only rewrites the
         # absolute designs-root prefix. A relative `cd` would fail inside the
         # container (different default cwd) → spurious build failure → false SKIP.
-        cd = _to_container(str(Path(design_dir).resolve()))
-        cs = _to_container(str(Path(sample_c).resolve()))
-        ctb = _to_container(str(Path(tb).resolve()))
+        cd = _to_container(str(Path(design_dir).resolve()), design_dir)
+        cs = _to_container(str(Path(sample_c).resolve()), design_dir)
+        ctb = _to_container(str(Path(tb).resolve()), design_dir)
         mdir = "/tmp/vobj_" + re.sub(r"\W", "_", design.split("/")[-1])
         cmd = (f"export PATH=/foss/tools/bin:$PATH && cd '{cd}' && rm -rf {mdir} && "
                f"verilator --binary --timing -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE "

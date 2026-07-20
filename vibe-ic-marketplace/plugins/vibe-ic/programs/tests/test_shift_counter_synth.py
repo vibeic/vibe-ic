@@ -50,14 +50,14 @@ if str(PROG) not in sys.path:
     sys.path.insert(0, str(PROG))
 
 import shift_counter_synth as S  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
 _IVERILOG = shutil.which("iverilog") and shutil.which("vvp")
 
 # The real CVDP code-generation jsonl, if present on this host (functional cross-
 # check uses the dataset records directly; absence falls back to synthetic twins).
-_DATASET = Path(
-    "/home/reyerchu/AI_IC_design/_extbench/cvdp_open_v110/"
-    "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
+_DATASET = corpus_path("_extbench/cvdp_open_v110/"
+                       "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
 
 
 # --------------------------------------------------------------------------- #

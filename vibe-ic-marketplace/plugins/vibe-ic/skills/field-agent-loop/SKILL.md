@@ -118,8 +118,8 @@ Run when `agent_task_id` is null OR the prior agent task is
 completed/failed.
 
 ```bash
-cd /home/user/AI_IC_design/vibe-ic-marketplace && git pull --ff-only
-cd /home/user/AI_IC_design/mcp-eda         && git pull --ff-only
+cd /home/<your-user>/AI_IC_design/vibe-ic-marketplace && git pull --ff-only
+cd /home/<your-user>/AI_IC_design/mcp-eda         && git pull --ff-only
 ```
 
 Check `plugins/vibe-ic/.claude-plugin/plugin.json` version.

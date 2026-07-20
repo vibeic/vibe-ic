@@ -40,11 +40,12 @@ if str(_PROG) not in sys.path:
     sys.path.insert(0, str(_PROG))
 
 import bitmanip_synth as B  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
 HAVE_IVERILOG = shutil.which("iverilog") is not None and shutil.which("vvp") is not None
 
-DATASET = Path("/home/reyerchu/AI_IC_design/_extbench/cvdp_open_v110/"
-               "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
+DATASET = corpus_path("_extbench/cvdp_open_v110/"
+                      "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
 
 
 # --------------------------------------------------------------------------- #
@@ -545,7 +546,7 @@ def test_dataset_nbit_swizzling_emits_and_simulates():
             assert "RESULT 0" in _iverilog_ok(rtl, "nbit_swizzling", tb), f"W={W}"
 
 
-@pytest.mark.skipif(not DATASET.exists(), reason="CVDP dataset not present")
+@pytest.mark.skipif(not DATASET.exists(), reason="CVDP dataset not present; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 def test_real_dataset_only_three_clean_shapes_emit():
     recs = [json.loads(l) for l in DATASET.open()]
     emitted = {r["id"] for r in recs if B.solve(r)}

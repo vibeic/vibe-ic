@@ -19,6 +19,7 @@ if str(_PROG) not in sys.path:
 
 import spec_complete_extract as E  # noqa: E402
 import cvdp_complete_extract as C  # noqa: E402
+from _hostpaths import require_corpus  # noqa: E402
 
 _FIFO_DOC = """Design a synchronous FIFO `my_fifo`.
 ## Parameters
@@ -96,8 +97,8 @@ def test_cvdp_adapter_complete_count_is_prompt_context_only():
         (Verilog keywords mis-parsed as port names); the reserved-word guard drops
         them, so its honest verdict is now INCOMPLETE_SPEC_ABSENT.
     Both moves are pure prompt+context correctness — no harness read."""
-    ds = Path("/home/reyerchu/AI_IC_design/_extbench/cvdp_open_v110/"
-              "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
+    ds = require_corpus("_extbench/cvdp_open_v110/"
+                        "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
     if not ds.exists():
         pytest.skip("dataset not present")
     recs = [json.loads(l) for l in ds.read_text().splitlines()]

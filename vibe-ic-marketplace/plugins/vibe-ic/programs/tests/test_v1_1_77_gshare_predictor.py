@@ -42,10 +42,11 @@ _PROGRAMS = os.path.normpath(os.path.join(_HERE, ".."))   # programs/ (solver di
 sys.path.insert(0, _PROGRAMS)
 
 import gshare_predictor_synth as G   # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
 # Authoritative dataset (host-score gate). Tests that need it SKIP cleanly when the
 # external benchmark tree or iverilog is absent (keeps CI green off the lab host).
-_DS = "/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl"
+_DS = str(corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl"))
 _PROMPT = os.path.join(_DS, "Prob153_gshare_prompt.txt")
 _REF = os.path.join(_DS, "Prob153_gshare_ref.sv")
 _TB = os.path.join(_DS, "Prob153_gshare_test.sv")

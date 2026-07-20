@@ -16,7 +16,7 @@ Main execution (**program-driven**):
 python3 ${CLAUDE_PLUGIN_ROOT}/programs/phase1_one_shot_runner.py $ARGUMENTS
 ```
 
-The first positional argument is the project directory (e.g. `/home/user/AI_IC_design/<project>`).
+The first positional argument is the project directory (e.g. `/home/<your-user>/AI_IC_design/<project>`).
 
 **After the program completes, the AI must:**
 1. Read `<project>/reports/phase1_one_shot.json` — verdict + status / detail of every step

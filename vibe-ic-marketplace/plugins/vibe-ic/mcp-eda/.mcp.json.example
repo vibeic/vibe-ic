@@ -4,7 +4,7 @@
       "type": "stdio",
       "command": "node",
       "args": [
-        "/home/<your-user>/AI_IC_design/mcp-eda/src/index.js"
+        "/home/<your-user>/vibe-ic-designs/mcp-eda/src/index.js"
       ],
       "env": {
         "EDA_CONTAINER": "vibeic-eda"

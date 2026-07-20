@@ -16,9 +16,10 @@ if str(_PROG) not in sys.path:
     sys.path.insert(0, str(_PROG))
 
 import benchmark_completeness as BC  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
-_RTLLM = Path("/home/reyerchu/AI_IC_design/_extbench/RTLLM")
-_VE = Path("/home/reyerchu/AI_IC_design/_extbench/verilog-eval/dataset_spec-to-rtl")
+_RTLLM = corpus_path("_extbench/RTLLM")
+_VE = corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl")
 
 
 def test_verilogeval_port_parse_and_widths():

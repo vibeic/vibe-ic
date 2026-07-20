@@ -48,6 +48,7 @@ if str(PROG) not in sys.path:
     sys.path.insert(0, str(PROG))
 
 import graycode_parity_synth as G  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
 HAVE_IVERILOG = shutil.which("iverilog") is not None and shutil.which("vvp") is not None
 
@@ -495,11 +496,11 @@ def test_chip_agnostic_parity_even_arbitrary_name():
 # solver emits for ZERO records across the whole dataset whose interface it can only
 # have learned from the harness — i.e. no emit depends on the hidden oracle.
 # --------------------------------------------------------------------------- #
-DATASET = Path("/home/reyerchu/AI_IC_design/_extbench/cvdp_open_v110/"
-               "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
+DATASET = corpus_path("_extbench/cvdp_open_v110/"
+                      "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl")
 
 
-@pytest.mark.skipif(not DATASET.exists(), reason="CVDP dataset not present")
+@pytest.mark.skipif(not DATASET.exists(), reason="CVDP dataset not present; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 def test_real_dataset_compliant_no_harness_sourced_emit():
     import json
     import re

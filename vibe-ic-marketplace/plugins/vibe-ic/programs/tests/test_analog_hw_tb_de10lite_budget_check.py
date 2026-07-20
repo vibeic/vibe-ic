@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from _hostpaths import corpus_path
+
 SCRIPT = Path(__file__).parent.parent / "analog_hw_tb_de10lite_budget_check.py"
 assert SCRIPT.exists(), f"program not found at {SCRIPT}"
 
@@ -196,14 +198,15 @@ def test_non_de10lite_out_of_scope(tmp_path):
 # 9. Real corpus DE10-Lite QSF — regression: must NOT false-fire
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("corpus_qsf", [
-    "/home/reyerchu/phase2+3_v052/fpga/as3616_fpga.qsf",
-    "/home/reyerchu/AI_IC_design/spm_benchmark_v0211/phase2/stage1/fpga/spm_fpga_bist.qsf",
+@pytest.mark.parametrize("corpus_rel", [
+    "phase2+3_v052/fpga/as3616_fpga.qsf",
+    "spm_benchmark_v0211/phase2/stage1/fpga/spm_fpga_bist.qsf",
 ])
-def test_real_corpus_de10lite_pass(corpus_qsf):
-    p = Path(corpus_qsf)
+def test_real_corpus_de10lite_pass(corpus_rel):
+    p = corpus_path(corpus_rel)
     if not p.exists():
-        pytest.skip(f"corpus file absent: {corpus_qsf}")
+        pytest.skip("external benchmark corpus not available: set "
+                    f"$VIBEIC_CORPUS_ROOT to a directory containing {corpus_rel}")
     code, rep = _run(p)
     assert code == 0, rep
     assert rep["status"] == "PASS"

@@ -18,9 +18,9 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import verilogeval_human_tier_pipeline as H  # noqa: E402
+from _hostpaths import corpus_path  # noqa: E402
 
-_DSH = Path("/home/reyerchu/AI_IC_design/_extbench/verilog-eval/"
-            "dataset_code-complete-iccad2023")
+_DSH = corpus_path("_extbench/verilog-eval/dataset_code-complete-iccad2023")
 
 
 def test_pure_rotate_emit_is_gate_blocked():
@@ -42,7 +42,7 @@ def test_clean_emit_not_blocked():
 
 
 @pytest.mark.skipif(not (_DSH / "Prob092_gatesv100_ifc.txt").exists(),
-                    reason="VE-Human dataset absent")
+                    reason="VE-Human dataset absent; set $VIBEIC_CORPUS_ROOT to the external benchmark corpus")
 def test_gatesv_stays_tier1_after_fix():
     # after #4 the comb_advanced emit is conformance-clean -> gate parity keeps it Tier-1
     for stem in ("Prob092_gatesv100", "Prob094_gatesv"):

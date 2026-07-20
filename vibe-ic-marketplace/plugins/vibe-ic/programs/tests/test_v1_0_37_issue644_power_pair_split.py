@@ -33,6 +33,7 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import phase1_doc_one_shot_runner as R  # noqa: E402
+from _hostpaths import require_corpus  # noqa: E402
 
 
 def _gfm(doc):
@@ -148,8 +149,8 @@ def test_real_caravel_source_doc_if_present():
     """End-state on the REAL caravel interface doc (when on disk): the
     `vccd1`/`vssd1` power-pair row yields two legal ports, no '/' name. SKIPs
     off-monorepo."""
-    doc = Path("/home/reyerchu/AI_IC_design/_bench7_caravel_v1034_cleanroom/"
-               "caravel/input/docs/L3_external_interface.md")
+    doc = require_corpus("_bench7_caravel_v1034_cleanroom/caravel/"
+                         "input/docs/L3_external_interface.md")
     if not doc.is_file():
         pytest.skip("real caravel interface doc not on disk")
     recs = _gfm(doc.read_text(errors="ignore"))

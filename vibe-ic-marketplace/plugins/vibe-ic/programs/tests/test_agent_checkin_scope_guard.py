@@ -124,8 +124,8 @@ def test_mixed_list_reports_only_the_offender():
 
 
 def test_path_normalization_absolute_and_dotslash():
-    abs_backlog = "/home/reyerchu/vibe-ic/" + P_BACKLOG
-    assert g.normalize_path("/home/reyerchu/vibe-ic/" + P_PLUGIN) == P_PLUGIN
+    abs_backlog = "/home/testuser/vibe-ic/" + P_BACKLOG
+    assert g.normalize_path("/home/testuser/vibe-ic/" + P_PLUGIN) == P_PLUGIN
     assert g.normalize_path("./" + P_BENCH_DATA) == P_BENCH_DATA
     # benchmark-agent: an absolute BACKLOG path (now forbidden) still gets caught
     assert len(g.evaluate("benchmark-agent", [abs_backlog])) == 1
