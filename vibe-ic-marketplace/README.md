@@ -13,7 +13,7 @@ and the contribution guides for extending it.
 | | |
 |---|---|
 | Plugins in this marketplace | **1** — [`plugins/vibe-ic`](plugins/vibe-ic/) |
-| Plugin version | **1.4.61** |
+| Plugin version | **1.4.67** |
 | Deterministic programs | **917** (`plugins/vibe-ic/programs/*.py`) |
 | Skills | **60** (`plugins/vibe-ic/skills/*/SKILL.md`, each with a `compliance.yaml`) |
 | Slash commands | **7** (`plugins/vibe-ic/commands/*.md`) |
