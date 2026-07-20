@@ -2874,6 +2874,214 @@ def commercial_pdk_fallback_guard(
     )
 
 
+def _pdk_registry_entry(name: str) -> Optional[Dict[str, Any]]:
+    """PR-A1 — one pdk_registry.json entry by name (cached).
+
+    The registry declares every bundled OSS PDK's assets (container globs,
+    site, metal prefix, clk bufs, decks). Returns None when absent.
+    Chip-AGNOSTIC."""
+    if not _pdk_registry_entry._cache:
+        try:
+            reg = json.loads(
+                (PROGRAMS_DIR / "pdk_registry.json").read_text())
+            for e in (reg.get("pdks") or []):
+                if e.get("name"):
+                    _pdk_registry_entry._cache[e["name"]] = e
+        except Exception:
+            pass
+    return _pdk_registry_entry._cache.get(name)
+
+
+_pdk_registry_entry._cache: Dict[str, Any] = {}
+
+
+def _container_file_text(container: str, path: str) -> Optional[str]:
+    """PR-A1 — read a text file from the EDA container (docker exec cat)."""
+    try:
+        cp = subprocess.run(["docker", "exec", container, "cat", path],
+                            capture_output=True, text=True, timeout=120)
+        return cp.stdout if cp.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def _merge_liberty_texts(base_text: str, group_texts: List[str],
+                         lib_name: str = "merged") -> str:
+    """PR-A1 — merge split Liberty group files into one ``library{}``.
+
+    Header from ``base_text`` (library renamed), then the union of every
+    top-level ``cell (...)`` block across all groups (balanced-brace
+    extraction, dedup by cell name). Pure text transform — ASAP7 ships
+    its RVT-TT Liberty split in 5 functional groups while the flow
+    consumes ONE liberty path. Chip-AGNOSTIC."""
+    import re as _re_m
+
+    def _split_top(t: str):
+        m = _re_m.search(r"^\s*cell\s*\(", t, _re_m.MULTILINE)
+        if not m:
+            return t, []
+        header, rest = t[:m.start()], t[m.start():]
+        blocks, cur, depth, started = [], [], 0, False
+        for ch in rest:
+            cur.append(ch)
+            if ch == "{":
+                depth += 1
+                started = True
+            elif ch == "}":
+                depth -= 1
+                if started and depth == 0:
+                    blocks.append("".join(cur))
+                    cur = []
+                    started = False
+        return header, blocks
+
+    header, base_blocks = _split_top(base_text)
+    header = _re_m.sub(r"library\s*\([^\)]+\)",
+                       f"library ({lib_name})", header, count=1)
+    seen, out = set(), []
+    for b in base_blocks + [blk for t in group_texts
+                            for blk in _split_top(t)[1]]:
+        nm = _re_m.match(r"\s*cell\s*\(\s*([^\s\)]+)", b)
+        key = nm.group(1) if nm else b[:64]
+        if key not in seen:
+            seen.add(key)
+            out.append(b)
+    return header + "\n" + "\n".join(out) + "\n}\n"
+
+
+def _stage_asap7_merged_liberty(project: Path, container: str,
+                                reg: Dict[str, Any]) -> Path:
+    """PR-A1 — stage ONE merged ASAP7 liberty into the project.
+
+    The registry's ``liberty_glob`` matches 5 functional-group files
+    (AO/INVBUF/OA/SEQ/SIMPLE); yosys/OpenROAD in this flow each read a
+    single liberty path, so the groups are merged (header from the
+    SIMPLE group). Cached by a source-content hash in
+    ``phase3/pdk_stage/`` — a staging area the runner already uses.
+    """
+    import hashlib as _hl
+    cp = subprocess.run(
+        ["docker", "exec", container, "bash", "-lc",
+         f"ls {reg['container_path']}/{reg['liberty_glob']}"],
+        capture_output=True, text=True, timeout=60)
+    files = sorted(f for f in cp.stdout.split() if f.endswith(".lib"))
+    if not files:
+        raise SystemExit(
+            f"[FAIL] --pdk asap7: no liberty matches "
+            f"{reg['liberty_glob']} in container {container!r}.")
+    sig, texts = _hl.sha256(), []
+    for f in files:
+        t = _container_file_text(container, f)
+        if t is None:
+            raise SystemExit(
+                f"[FAIL] --pdk asap7: cannot read {f} from container "
+                f"{container!r} (is it running?)")
+        sig.update(t.encode())
+        texts.append((f, t))
+    base_i = next((i for i, (f, _) in enumerate(texts)
+                   if "SIMPLE" in f), 0)
+    merged = _merge_liberty_texts(
+        texts[base_i][1], [t for i, (_, t) in enumerate(texts)
+                           if i != base_i],
+        lib_name="asap7sc7p5t_RVT_TT_merged")
+    stage = project / "phase3" / "pdk_stage"
+    stage.mkdir(parents=True, exist_ok=True)
+    out = stage / "asap7sc7p5t_RVT_TT_merged.lib"
+    marker = out.with_suffix(".srcsha")
+    digest = sig.hexdigest()
+    if not (out.is_file() and marker.is_file()
+            and marker.read_text().strip() == digest):
+        out.write_text(merged)
+        marker.write_text(digest)
+        print(f"[phase3] staged merged ASAP7 liberty "
+              f"({len(files)} groups → {out.name})", file=sys.stderr)
+    return out
+
+
+def _stage_normalized_techlef(project: Path, container: str,
+                              reg: Dict[str, Any]) -> Path:
+    """PR-A1 — stage the ASAP7 tech LEF with negative routing-layer
+    OFFSETs normalized to their pitch-equivalent non-negative values.
+
+    The source PDK declares e.g. ``M2 OFFSET -0.27`` (legal; −0.27 ≡ 0
+    mod the 0.045 pitch) and the forked OpenROAD rejects negatives
+    (IFP-0039). The container original is never touched; the staged copy
+    lives in ``phase3/pdk_stage/``. Chip-AGNOSTIC: any negative offset
+    is remapped as ``o mod pitch`` (0 when it lands on a grid point).
+    """
+    import math as _math
+    import re as _re_t
+    src = f"{reg['container_path']}/{reg['tech_lef_glob']}"
+    t = _container_file_text(container, src)
+    if t is None:
+        raise SystemExit(
+            f"[FAIL] --pdk asap7: cannot read {src} from container "
+            f"{container!r} (is it running?)")
+
+    def _fix(m: "_re_t.Match") -> str:
+        layer, body = m.group(1), m.group(2)
+        off = _re_t.search(r"OFFSET\s+(-?[\d.]+)", body)
+        pitch = _re_t.search(r"PITCH\s+([\d.]+)", body)
+        if off and pitch:
+            o, p = float(off.group(1)), float(pitch.group(1))
+            if o < 0 and p > 0:
+                new = o - p * _math.floor(o / p)
+                if abs(new) < 1e-9 or abs(new - p) < 1e-9:
+                    new = 0.0
+                body = body.replace(off.group(0), f"OFFSET {new:g}")
+        return f"LAYER {layer}{body}"
+
+    fixed = _re_t.sub(r"LAYER\s+(\w+)(.*?)(?=\n\s*LAYER\s|\Z)",
+                      _fix, t, flags=_re_t.DOTALL)
+    stage = project / "phase3" / "pdk_stage"
+    stage.mkdir(parents=True, exist_ok=True)
+    out = stage / Path(reg["tech_lef_glob"]).name
+    if not out.is_file() or out.read_text(errors="ignore") != fixed:
+        out.write_text(fixed)
+    return out
+
+
+def _netlist_matches_liberty(netlist_path: Path,
+                             liberty_path: str) -> bool:
+    """PR-A3 — sniff-check a cached synth netlist against the ACTIVE PDK
+    liberty: sample up to 40 unique instantiated master names; every one
+    must exist as a ``cell(NAME)`` in the liberty. A single unknown
+    master ⇒ the netlist was mapped to a DIFFERENT PDK and must NOT be
+    reused — preserve-provenance must never launder a wrong-PDK netlist
+    into a PASS. Unreadable/absent inputs ⇒ True (legacy trust, no
+    behavior change). Chip-AGNOSTIC."""
+    try:
+        txt = Path(netlist_path).read_text(errors="ignore")
+        masters: List[str] = []
+        for m in re.finditer(
+                r"^\s*([A-Za-z_][\w$]*)\s+[A-Za-z_\\][\w$\\]*\s*\(",
+                txt, re.MULTILINE):
+            tok = m.group(1)
+            if tok in ("module", "wire", "reg", "assign", "input",
+                       "output", "inout", "always", "always_ff",
+                       "always_comb", "always_latch", "initial",
+                       "parameter", "localparam", "genvar", "generate",
+                       "function", "if", "else"):
+                continue
+            if tok not in masters:
+                masters.append(tok)
+            if len(masters) >= 40:
+                break
+        if not masters:
+            return True
+        lib_txt = Path(liberty_path).read_text(errors="ignore") \
+            if liberty_path else ""
+        if not lib_txt:
+            return True
+        cells = set(re.findall(r"cell\s*\(\s*([^\s\)]+)", lib_txt))
+        if not cells:
+            return True
+        return all(t in cells or t.lstrip("\\") in cells
+                   for t in masters)
+    except Exception:
+        return True
+
+
 def _detect_pdk(project: Path, override: Optional[str] = None
                 ) -> Optional[PdkConfig]:
     """Detect which PDK to use. chip-AGNOSTIC: looks at project's input/pdk/
@@ -2959,6 +3167,58 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 macro_libs=_mlibs, macro_lefs=_mlefs,
                 macro_gds=_mgds, macro_v=_mv,
             )
+        if override == "asap7":
+            # benchmark-spm-asap7 (PR-A1) — named ASAP7 branch resolved
+            # from pdk_registry.json. BEFORE this, `--pdk asap7` fell
+            # through the named-override chain to the container sky130A
+            # fallback and the run emitted sky130A sign-off reports while
+            # the operator believed they were ASAP7 — a silent wrong-PDK
+            # result, the exact defect class the commercial fallback
+            # guard exists to prevent. The registry already declares
+            # every ASAP7 asset; this branch wires it, plus the two ASAP7
+            # quirks that block out-of-box use: (a) the Liberty ships
+            # split in 5 functional groups → merged at staging;
+            # (b) the tech LEF's negative M2 OFFSET (−0.27 ≡ 0 mod the
+            # 0.045 pitch) trips forked OpenROAD IFP-0039 → normalized
+            # in the staged copy (container original untouched).
+            reg = _pdk_registry_entry("asap7")
+            if reg is None:
+                raise SystemExit(
+                    "[FAIL] --pdk asap7: pdk_registry.json carries no "
+                    "'asap7' entry (payload corrupt?) — REFUSING a silent "
+                    "fallback to another PDK.")
+            _mlibs, _mlefs, _mgds, _mv = _discover_local_macros(project)
+            _container = os.environ.get("EDA_CONTAINER", "vibeic-eda")
+            _lib = _stage_asap7_merged_liberty(project, _container, reg)
+            _tlef = _stage_normalized_techlef(project, _container, reg)
+            _croot = reg["container_path"]
+            return PdkConfig(
+                name="asap7",
+                liberty=str(_lib),
+                tech_lef=str(_tlef),
+                cell_lef=f"{_croot}/{reg['cell_lef_glob']}",
+                cell_gds=f"{_croot}/{reg['cell_gds_glob']}",
+                site=reg.get("site") or "unit",
+                drc_deck=(f"{_croot}/{reg['drc_deck']}"
+                          if reg.get("drc_deck") else None),
+                metal_prefix=reg.get("metal_prefix") or "M",
+                clk_buf=reg.get("clk_buf_cell"),
+                clk_buf_root=reg.get("clk_buf_root_cell"),
+                macro_libs=_mlibs, macro_lefs=_mlefs,
+                macro_gds=_mgds, macro_v=_mv,
+            )
+        # PR-A1 (b) — registry-declared names that still have NO named
+        # branch must not resolve to sky130A SILENTLY. Keep the legacy
+        # resolution (back-compat) but disclose loudly: the sign-off PDK
+        # may not be the one the operator named.
+        if override in ("gf180mcuD", "ihp-sg13g2", "sky130B",
+                        "gf180mcuA", "gf180mcuB", "gf180mcuC"):
+            print(f"[WARN] --pdk {override}: declared in pdk_registry.json "
+                  "but has no named _detect_pdk branch yet — resolution "
+                  "falls through to project input/pdk/ or the container "
+                  "sky130A fallback; the sign-off PDK may NOT be the one "
+                  "you named. (Named branches today: sky130A, nangate45, "
+                  "asap7.)", file=sys.stderr)
 
     pdk_dir = project / "input" / "pdk"
     if pdk_dir.is_dir():
@@ -18988,7 +19248,21 @@ def main() -> int:
         netlist_existing = _pl.synth_dir(project) / f"{effective_top}_synth.v"
         def_existing = _pl.pnr_dir(project) / f"{effective_top}.def"
         gds_existing = _pl.pnr_dir(project) / f"{effective_top}.gds"
-        if netlist_existing.is_file():
+        # PR-A3 — the preserve-provenance skip is PDK-keyed: a cached
+        # netlist whose instantiated masters are NOT in the ACTIVE
+        # liberty was mapped to a DIFFERENT PDK (e.g. a sky130 netlist
+        # left by a previous run now re-run with ASAP7). Reusing it would
+        # PnR the wrong library and still PASS — a laundered wrong-PDK
+        # provenance. Sniff-check and re-run synth on mismatch.
+        _nl_pdk_ok = (netlist_existing.is_file()
+                      and _netlist_matches_liberty(
+                          netlist_existing, str(pdk.liberty)))
+        if netlist_existing.is_file() and not _nl_pdk_ok:
+            print("[synth] cached netlist references cell masters NOT in "
+                  "the active PDK liberty — it was mapped to a DIFFERENT "
+                  "PDK; re-running synth (preserve-provenance is now "
+                  "PDK-keyed, PR-A3).", file=sys.stderr)
+        if _nl_pdk_ok:
             plan.append(StepResult(
                 "synth", "PASS", 0.0,
                 f"netlist already present: {netlist_existing.name} (skipped re-run to preserve provenance)",
