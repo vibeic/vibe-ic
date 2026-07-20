@@ -96,6 +96,7 @@ from typing import Dict, List, Optional, Tuple
 
 
 _RE_SHA256 = re.compile(r"^sha256:[0-9a-fA-F]{64}$")
+_RE_BARE_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 _RE_TIMESTAMP_SECONDS = re.compile(r"T\d{2}:\d{2}:(\d{2})")
 _RE_TIMESTAMP_HMS = re.compile(
     r"T(?P<H>\d{2}):(?P<M>\d{2}):(?P<S>\d{2})(?:\.(?P<frac>\d+))?")
@@ -263,6 +264,31 @@ def _removal_list(entry: dict) -> Optional[list]:
     return refs
 
 
+# A13 (#173) — `ip_catalog_pull` (ip_catalog_pull.py) records the RTL files it
+# copied as an `outputs_sha256` LIST of bare sha256 hex digests plus a
+# `files_pulled` count. That is a legitimate AGGREGATE provenance shape, distinct
+# from the per-path `outputs` dict the in-runner tool entries use. The check only
+# ever looked at `outputs`, so a catalog-pull entry (present on EVERY reused-IP /
+# SoC-class design — ibex, picorv32, sha256_core, …) false-FAILed with
+# PROVENANCE_OUTPUTS_MISSING — the "2 faults after a normal clean full run" (two
+# pulled IPs → two entries). The current writer ALSO emits `outputs` (v1.0.74), so
+# NEW runs verify via that dict below; this recognizer additionally accepts the
+# aggregate list form so a list-only / pre-v1.0.74 record is not false-flagged.
+# §4.05 — an EMPTY or malformed aggregate list STILL faults; a normal (non-pull)
+# entry with empty `outputs` is UNAFFECTED (still PROVENANCE_OUTPUTS_MISSING).
+def _ip_catalog_pull_aggregate(entry: dict) -> Optional[list]:
+    """Return the `outputs_sha256` aggregate-hash list of an `ip_catalog_pull`
+    provenance event (possibly empty), or None when the entry is NOT such an
+    event. Recognised strictly by `event == "ip_catalog_pull"` so the acceptance
+    is scoped to the documented catalog-pull schema and never relaxes the
+    `outputs`-dict requirement for ordinary tool-invocation entries."""
+    ev = entry.get("event")
+    if not (isinstance(ev, str) and ev.strip().lower() == "ip_catalog_pull"):
+        return None
+    lst = entry.get("outputs_sha256")
+    return lst if isinstance(lst, list) else []
+
+
 def _is_inside_project(project: Path, candidate: Path) -> bool:
     """v1.6.32 path-traversal guard. Resolve both paths (no strict, so
     non-existent paths are still resolvable) and verify candidate is
@@ -377,6 +403,47 @@ def audit(project: Path, strict_timing: bool = False,
             # empty-outputs FAIL below.
             if not (isinstance(outputs, dict) and outputs):
                 continue
+        # A13 (#173) — an `ip_catalog_pull` event records its outputs as an
+        # `outputs_sha256` aggregate list (bare hex) + `files_pulled` count, not
+        # a per-path `outputs` dict. When it carries a USABLE `outputs` dict
+        # (v1.0.74+ writer) fall through and verify that on-disk; otherwise
+        # validate the aggregate list here so the pull is not false-flagged
+        # OUTPUTS_MISSING. An empty / malformed / count-mismatched aggregate
+        # STILL faults (§4.05 — no fabricated completeness).
+        _agg = _ip_catalog_pull_aggregate(e)
+        if _agg is not None and not (isinstance(outputs, dict) and outputs):
+            tool = e.get("tool", e.get("event", "ip_catalog_pull"))
+            if not _agg:
+                findings.append(ProvenanceFinding(
+                    entry_index=i, tool=tool,
+                    rule="PROVENANCE_OUTPUTS_MISSING",
+                    detail="ip_catalog_pull event carries neither an 'outputs' "
+                           "dict nor a non-empty 'outputs_sha256' aggregate "
+                           "list"))
+                continue
+            bad = [h for h in _agg
+                   if not (isinstance(h, str) and _RE_BARE_SHA256.match(h))]
+            if bad:
+                findings.append(ProvenanceFinding(
+                    entry_index=i, tool=tool,
+                    rule="PROVENANCE_HASH_SHAPE_INVALID",
+                    detail=f"ip_catalog_pull 'outputs_sha256' has {len(bad)} "
+                           f"entry(ies) that are not bare sha256 hex digests"))
+                continue
+            fp = e.get("files_pulled")
+            if isinstance(fp, int) and fp != len(_agg):
+                findings.append(ProvenanceFinding(
+                    entry_index=i, tool=tool,
+                    rule="PROVENANCE_OUTPUTS_MISSING",
+                    detail=f"ip_catalog_pull declares files_pulled={fp} but "
+                           f"'outputs_sha256' lists {len(_agg)} hash(es) — the "
+                           f"pulled-file hash record is incomplete"))
+                continue
+            # Well-formed aggregate-hash record — accepted. The bare-hash list
+            # attests the pulled file set; per-path on-disk verification is not
+            # possible without paths (that is what the v1.0.74 `outputs` dict
+            # adds, verified above when present).
+            continue
         if not outputs or not isinstance(outputs, dict):
             findings.append(ProvenanceFinding(
                 entry_index=i, tool=tool,

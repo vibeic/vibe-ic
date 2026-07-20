@@ -3884,6 +3884,52 @@ def _resolve_skip_analog_anchor(project: Path) -> Optional[str]:
     return None
 
 
+# ORGANIC #171 (A11) — the Step-4 Simulation artifact gate keys on the canonical
+# connectivity-bridge outputs (`phase2/stage1/sim/results.xml` OR `.../pass.flag`).
+# A design whose functional oracle IS derivable (e.g. the spm bit-serial
+# multiplier) gets a REAL cocotb functional PASS from `professional_tb_gen`,
+# written under `phase2/stage1/sim_professional/<top>/results.xml` (a genuine
+# streaming-scoreboard transcript, failures=0). The runner does not ALSO emit the
+# canonical `sim/results.xml` / `pass.flag` for that class, so the files_exist gate
+# hard-FAILed Step-4 even though functional verification actually CLOSED. This
+# helper recognises that real professional-TB PASS as satisfying the Step-4
+# simulation-evidence requirement — the exact sibling of the coverage self-skip
+# supersede (#654) that already reads the SAME transcript at the coverage gate.
+#
+# §4.05 / anti-fabrication: fires ONLY when (a) the FAILing gate is the sim
+# functional-evidence gate — its missing set names `phase2/stage1/sim/results.xml`
+# — AND (b) `_srb.find_professional_tb_pass` returns a REAL PASS (tests>0,
+# failures==0, errors==0, passed>0). A missing / failing / vacuous professional
+# result → None → the gate stays FAILed EXACTLY as before. It never turns a fail
+# into a pass; it only recognises a transcript the canonical-path-only check could
+# not see. chip/PDK-AGNOSTIC: structural paths + JUnit structure, no chip literal.
+_SIM_STEP4_CANONICAL_RESULTS = "phase2/stage1/sim/results.xml"
+
+
+def _sim_files_superseded_by_professional_tb(
+        project: Path, missing_patterns: List[str]) -> Optional[str]:
+    """Return a reviewable reason string when a FAILing Step-4 sim ``files_exist``
+    gate is SUPERSEDED by a real ``professional_tb`` functional PASS, else None.
+
+    Scoped to the Step-4 simulation-evidence gate: at least one missing pattern
+    must be the canonical ``phase2/stage1/sim/results.xml`` (the functional-sim
+    connectivity bridge). For any OTHER ``files_exist`` gate this returns None →
+    byte-identical behaviour. Anti-fabrication is delegated to
+    ``_srb.find_professional_tb_pass`` (real functional PASS only). chip-AGNOSTIC."""
+    if not any(_SIM_STEP4_CANONICAL_RESULTS in (p or "")
+               for p in missing_patterns):
+        return None
+    pro = _srb.find_professional_tb_pass(project)
+    if not pro:
+        return None
+    return (f"Step-4 sim evidence: canonical {_SIM_STEP4_CANONICAL_RESULTS} / "
+            f"pass.flag absent, but a REAL professional_tb functional PASS is "
+            f"present at {pro.get('rel_path')} (tests={pro.get('tests')}, "
+            f"failures={pro.get('failures')}, errors={pro.get('errors')}, "
+            f"passed={pro.get('passed')}) — accepted as Step-4 functional-sim "
+            f"evidence (#171).")
+
+
 def _maybe_forward_skip_analog(project: Path, cmd_str: str,
                                skip_analog: bool) -> str:
     """Return ``cmd_str`` with ``--skip-analog`` (and, when the program also
@@ -3965,6 +4011,16 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
             skip_hint = _sibling_self_skip_for_missing(project, missing)
             if skip_hint is not None:
                 reasons.append(f"{_SKIP_HINT_PREFIX}{skip_hint}")
+                return True, reasons
+            # ORGANIC #171 (A11) — the Step-4 Simulation gate FAILs when the
+            # canonical sim/results.xml + pass.flag are both absent, but a design
+            # whose functional oracle is derivable wrote its REAL cocotb PASS under
+            # sim_professional/<top>/. Accept that real professional_tb PASS as
+            # Step-4 functional-sim evidence (plain reason → clean PASS, never a
+            # skip/vacuous promotion). None for every non-sim gate / no real pass.
+            pro_hint = _sim_files_superseded_by_professional_tb(project, missing)
+            if pro_hint is not None:
+                reasons.append(pro_hint)
                 return True, reasons
             reasons.append(f"missing files (any_of={any_of}): {missing}")
         return passed, reasons

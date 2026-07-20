@@ -1332,6 +1332,86 @@ def _scale_sdc_to_liberty_units(sdc_text: str, liberty_path: str) -> str:
     return note + out
 
 
+# A9 (#169) — a STAGED silicon SDC (one a PRIOR phase3 run wrote, then
+# `step_canonicalize_artefacts` copied to phase2/stage2/constraints/<top>.sdc)
+# carries the ORIGINATING PDK's design-rule (DRV) limits: `set_max_transition` /
+# `set_max_capacitance`, derived from THAT PDK's liberty. Re-used verbatim under
+# a DIFFERENT active PDK, those VALUES are wrong (sky130's 1.5 ns slew / 5 pF cap
+# are not ASAP7's). `_scale_sdc_to_liberty_units` fixes the UNITS (ns→ps) but
+# keeps the stale VALUE. The fix: stamp every phase3-staged SDC with a provenance
+# PDK id; when a later run's active PDK differs, RE-DERIVE the DRV limits from the
+# ACTIVE liberty (or DROP the DRV line when the active liberty declares none).
+_SDC_PROVENANCE_RE = re.compile(r"VIBEIC_SDC_PDK_PROVENANCE:\s*(\S+)")
+_SDC_MAX_TRANS_RE = re.compile(
+    r"^(\s*set_max_transition\s+)(-?\d+(?:\.\d+)?)", re.MULTILINE)
+_SDC_MAX_CAP_RE = re.compile(
+    r"^(\s*set_max_capacitance\s+)(-?\d+(?:\.\d+)?)", re.MULTILINE)
+
+
+def _stamp_sdc_provenance(sdc_text: str, pdk_name: str) -> str:
+    """Prepend (or replace) a `# VIBEIC_SDC_PDK_PROVENANCE: <pdk>` marker so a
+    LATER phase3 run under a DIFFERENT PDK can tell the staged SDC's PDK-derived
+    DRV limits are stale and re-derive them. Idempotent (never stacks the marker).
+    An SDC comment is inert to OpenSTA / create_clock collection. chip-AGNOSTIC."""
+    name = str(pdk_name or "unknown")
+    if _SDC_PROVENANCE_RE.search(sdc_text or ""):
+        return _SDC_PROVENANCE_RE.sub(
+            f"VIBEIC_SDC_PDK_PROVENANCE: {name}", sdc_text, count=1)
+    return f"# VIBEIC_SDC_PDK_PROVENANCE: {name}\n" + (sdc_text or "")
+
+
+def _reconcile_staged_sdc_drv(sdc_text: str, active_pdk_name: str,
+                              active_liberty: str, container: str = "") -> str:
+    """A9 (#169) — reconcile a staged SDC's DRV limits with the ACTIVE PDK.
+
+    Returns the SDC UNCHANGED (byte-identical) when:
+      * it carries NO provenance stamp — a hand-authored / legacy project SDC is
+        NEVER touched (sky130 / nangate hand-authored constraints unchanged), or
+      * the stamp already names the active PDK — the values are correct.
+
+    Otherwise (stamp names a DIFFERENT PDK) the `set_max_transition` /
+    `set_max_capacitance` operands are RE-DERIVED from the active liberty via
+    :func:`_liberty_drv_limits` (already in the active liberty's own units, so no
+    further unit scaling), or the DRV line is DROPPED when the active liberty
+    declares no such limit. The stamp is updated to the active PDK. §4.05: only a
+    real active-liberty value is ever substituted — never a fabricated one.
+    chip/PDK-AGNOSTIC."""
+    prov = _SDC_PROVENANCE_RE.search(sdc_text or "")
+    if prov is None:
+        return sdc_text
+    if prov.group(1) == str(active_pdk_name or ""):
+        return sdc_text
+    has_drv = (_SDC_MAX_TRANS_RE.search(sdc_text or "")
+               or _SDC_MAX_CAP_RE.search(sdc_text or ""))
+    if not has_drv:
+        # Provenance differs but there is no PDK-derived DRV to fix — just
+        # re-stamp so a further run sees the current provenance.
+        return _stamp_sdc_provenance(sdc_text, active_pdk_name)
+    drv = _liberty_drv_limits(str(active_liberty or ""), container)
+    slew = drv.get("max_transition_ns")
+    cap = drv.get("max_capacitance_pf")
+    out_lines: List[str] = []
+    for line in (sdc_text or "").split("\n"):
+        s = line.lstrip()
+        if s.startswith("set_max_transition"):
+            if slew is not None:
+                line = _SDC_MAX_TRANS_RE.sub(rf"\g<1>{slew:g}", line, count=1)
+            else:
+                continue  # active liberty declares no slew limit → drop stale line
+        elif s.startswith("set_max_capacitance"):
+            if cap is not None:
+                line = _SDC_MAX_CAP_RE.sub(rf"\g<1>{cap:g}", line, count=1)
+            else:
+                continue  # active liberty declares no cap limit → drop stale line
+        out_lines.append(line)
+    note = (f"# A9 DRV-provenance reconcile: staged SDC's design-rule limits were "
+            f"derived for PDK '{prov.group(1)}' but the active PDK is "
+            f"'{active_pdk_name}'; set_max_transition / set_max_capacitance "
+            f"RE-DERIVED from the active liberty (dropped where it declares none).")
+    out = note + "\n" + "\n".join(out_lines)
+    return _stamp_sdc_provenance(out, active_pdk_name)
+
+
 def _build_auto_silicon_sdc(project: Path, top: str = "",
                             drv_slew_ns: Optional[float] = None,
                             drv_cap_pf: Optional[float] = None,
@@ -1386,20 +1466,27 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
                 _tu_scale = 1.0 / _tu_scale  # → lib units per ns
         except Exception:
             _tu_scale = 1.0
-    _period_emit = clk_period_ns * _tu_scale
-    _io_emit = 2 * _tu_scale
+    # Regression-safe formatting: on an ns-unit PDK (_tu_scale == 1.0) emit the
+    # period / I/O delays BYTE-IDENTICALLY to the pre-A4 SDC (`10.0`, `2`) so
+    # sky130 / nangate output is unchanged; only the non-ns (e.g. ASAP7 ps)
+    # case reformats via `:g` to carry the scaled value without a trailing `.0`.
+    if _tu_scale == 1.0:
+        _period_str, _io_str = f"{clk_period_ns}", "2"
+    else:
+        _period_str = f"{clk_period_ns * _tu_scale:g}"
+        _io_str = f"{2 * _tu_scale:g}"
     _tu_note = (f"# time-unit scaling: liberty declares a non-ns time_unit; "
-                f"period {clk_period_ns:g} ns emitted as {_period_emit:g} "
+                f"period {clk_period_ns:g} ns emitted as {_period_str} "
                 f"lib-time-units\n" if _tu_scale != 1.0 else "")
     sdc_text = (
         "# Auto-generated minimal SDC for silicon top "
         f"(no constraints/*.sdc supplied; clk_period_ns={clk_period_ns} "
         f"clk_port={clk_port_name})\n"
         + _tu_note +
-        f"create_clock -name clk -period {_period_emit:g} "
+        f"create_clock -name clk -period {_period_str} "
         f"[get_ports {clk_port_name}]\n"
-        f"set_input_delay  {_io_emit:g} -clock clk [all_inputs]\n"
-        f"set_output_delay {_io_emit:g} -clock clk [all_outputs]\n"
+        f"set_input_delay  {_io_str} -clock clk [all_inputs]\n"
+        f"set_output_delay {_io_str} -clock clk [all_outputs]\n"
     )
     # GAP-E2E-7 — carry ONLY the timing exceptions the design's own staged
     # reference flow (input/constraints + input/reference_flow) explicitly
@@ -2405,8 +2492,14 @@ def _synthesize_streamout_layermap(
         gd = _lookup(nm, is_cut=False)
         if gd is None:
             continue
-        lines.append(f"{nm:<8}{'LEFPIN,NET,SPNET,PIN,VIA':<26}{gd[0]:>4} {gd[1]}")
-        lines.append(f"{nm:<8}{'LEFOBS':<26}{gd[0]:>4} {gd[1]}")
+        # A10 (#170) — carry BLOCKAGE + FILL on the SAME routing number so a
+        # DEF routing-blockage / metal-fill shape on this layer lands on its
+        # own deck number, not on a KLayout auto-assigned low GDS number that
+        # collides with a reserved FEOL device layer.
+        lines.append(
+            f"{nm:<8}{'LEFPIN,NET,SPNET,PIN,VIA,BLOCKAGE,FILL':<26} "
+            f"{gd[0]:>4} {gd[1]}")
+        lines.append(f"{nm:<8}{'LEFOBS':<26} {gd[0]:>4} {gd[1]}")
         emitted += 1
     for nm in cut:
         gd = _lookup(nm, is_cut=True)
@@ -3491,12 +3584,24 @@ def _detect_pdk(project: Path, override: Optional[str] = None
 #
 # Chip-AGNOSTIC: pattern matches only against cell-name token
 # vocabulary common to every cell library; no chip-class literal.
+# A8 (#168) — the tie-token trailing anchor was `_?\d*$`, which matches the
+# sky130 end-anchored form (`…__conb_1`) but NOT a library that appends a
+# drive-strength + library suffix AFTER the tie token: ASAP7's tie cells are
+# `TIEHIx1_ASAP7_75t_R` / `TIELOx1_ASAP7_75t_R` (token then `x1_ASAP7_75t_R`),
+# so discovery returned `lo_cell=None` → the spare-input tie-off block emitted
+# SPARE_TIEOFF_SKIPPED → `tied_off` stayed false → spare_cell_coverage_check
+# FAILed on spm/ASAP7. The trailing group now also accepts a drive-strength
+# suffix (`x1`, `_1`, …) after the token. The weak bare `hi`/`lo` alternatives
+# were dropped (they never matched sky130's `conb`/`conp` nor nangate's
+# `LOGIC0/1_X1`, and a suffix-tolerant bare `lo` would over-match): sky130
+# (conb/conp) and nangate (unmatched, as before) discovery is byte-identical;
+# only ASAP7-style `TIE(HI|LO)x<n>_…` names are newly recognised. chip-AGNOSTIC.
 _V1_6_596_TIE_HI_PAT = re.compile(
-    r"(?:^|_)(?:conb|conp|tieh|tiehi|tie_h|tie_hi|tiep|hi)_?\d*$",
+    r"(?:^|_)(?:conb|conp|tiehi|tie_hi|tieh|tiep)(?:[_x]?\d|_|$)",
     re.IGNORECASE,
 )
 _V1_6_596_TIE_LO_PAT = re.compile(
-    r"(?:^|_)(?:conp|conb|tiel|tielo|tie_l|tie_lo|tien|lo)_?\d*$",
+    r"(?:^|_)(?:conb|conp|tielo|tie_lo|tiel|tien)(?:[_x]?\d|_|$)",
     re.IGNORECASE,
 )
 # v1.6.600 — for #404 R3 ORGANIC. Real-benchmark verification on
@@ -4869,6 +4974,119 @@ def _auto_die_side_um(cell_count: int, util_frac: float,
     return max(min_side, min(side, max_side))
 
 
+# ── #158 — auto-die must also seat the IO PINS ───────────────────────────────
+# `_auto_die_side_um` sizes a die from post-synth CELL AREA only. A PIN-LIMITED
+# macro (few cells but many top-level IO bits) then gets a die whose PERIMETER
+# is too short to seat all its pins: OpenROAD IO placement aborts with
+# `[ERROR PPL-0024] number of pins exceeds ... available ... tracks` before any
+# routing. FIX: also compute the die side needed to seat every IO pin around the
+# perimeter (pin_count × pitch, distributed over the 4 edges with a keep-out
+# margin) and take the MAX of the cell-area-derived and pin-perimeter-derived
+# sides. For a normal (cell-area-dominated) design the pin side is far smaller,
+# so the MAX is the cell-area side → sky130/nangate byte-identical. chip-AGNOSTIC.
+#
+# Fallback pin pitch when the tech LEF can't be parsed — a conservative
+# open-PDK-typical routing pitch (larger ⇒ bigger die ⇒ safer against PPL-0024).
+_PIN_PITCH_FALLBACK_UM = 0.5
+# Each IO pin is modelled as consuming ~2 routing tracks (PPL's default pin-to-pin
+# keep-out) around the 4-edge perimeter: seats(S) = 4·S / (2·pitch) = 2·S/pitch,
+# so S ≥ N·pitch/2 seats N pins. This factor is N·pitch × 0.5.
+_PIN_PERIMETER_SIDE_FACTOR = 0.5
+
+
+def _routing_layer_pitches_um(tech_lef_text: str) -> List[float]:
+    """Return the PITCH (µm) of each ROUTING layer in the tech LEF, in
+    declaration order. A layer's `PITCH x [y] ;` may give one or two values
+    (x-pitch [y-pitch]); we take the first (x). Returns [] on parse failure.
+    chip-AGNOSTIC: pure LEF grammar."""
+    if not isinstance(tech_lef_text, str) or not tech_lef_text:
+        return []
+    pitches: List[float] = []
+    cur_is_routing = False
+    cur_pitch: Optional[float] = None
+    for raw in tech_lef_text.splitlines():
+        s = raw.strip()
+        m = re.match(r"^LAYER\s+(\w+)", s)
+        if m:
+            # flush the previous layer
+            if cur_is_routing and cur_pitch is not None:
+                pitches.append(cur_pitch)
+            cur_is_routing = False
+            cur_pitch = None
+            continue
+        if re.match(r"^TYPE\s+ROUTING\b", s):
+            cur_is_routing = True
+            continue
+        mp = re.match(r"^PITCH\s+([\d.]+)", s)
+        if mp and cur_pitch is None:
+            try:
+                cur_pitch = float(mp.group(1))
+            except ValueError:
+                cur_pitch = None
+    if cur_is_routing and cur_pitch is not None:
+        pitches.append(cur_pitch)
+    return [p for p in pitches if p and p > 0]
+
+
+def _pin_layer_pitch_um(tech_lef_text: str) -> float:
+    """Representative IO-pin pitch (µm): the default `place_pins` puts pins on
+    the 2nd/3rd routing layers (met2 vertical / met3 horizontal); use the MAX of
+    those two pitches (conservative — the coarser layer bounds how many pins fit
+    per edge). Falls back to the 1st routing layer, then to
+    `_PIN_PITCH_FALLBACK_UM`. chip-AGNOSTIC."""
+    pitches = _routing_layer_pitches_um(tech_lef_text)
+    if len(pitches) >= 3:
+        return max(pitches[1], pitches[2])
+    if len(pitches) == 2:
+        return max(pitches[0], pitches[1])
+    if len(pitches) == 1:
+        return pitches[0]
+    return _PIN_PITCH_FALLBACK_UM
+
+
+def _pin_perimeter_die_side_um(pin_count: int, pitch_um: float,
+                               min_side: int = _AUTO_DIE_MIN_SIDE_UM,
+                               max_side: int = _DEFAULT_DIE_MAX_UM) -> int:
+    """Square-die side (µm) whose 4-edge perimeter can seat `pin_count` IO pins
+    at `pitch_um` (each pin ≈ 2 tracks of keep-out): side ≥ N·pitch/2. Clamped to
+    [min_side, max_side]. Returns `min_side` for a non-positive pin count. Pure,
+    chip-AGNOSTIC."""
+    n = max(int(pin_count), 0)
+    p = pitch_um if (pitch_um and pitch_um > 0) else _PIN_PITCH_FALLBACK_UM
+    side = int(n * p * _PIN_PERIMETER_SIDE_FACTOR + 0.999)
+    return max(min_side, min(side, max_side))
+
+
+def _pin_layers_from_techlef(tech_lef_text: str,
+                             metal_prefix: str) -> Tuple[str, str]:
+    """benchmark-spm-asap7 (#165 A5) — resolve ``(hor_layers, ver_layers)`` for
+    OpenROAD ``place_pins`` from the tech LEF's routing-layer DIRECTIONs.
+
+    ``-hor_layers`` must name a HORIZONTAL routing layer and ``-ver_layers`` a
+    VERTICAL one, else PPL-0045 aborts I/O placement. The legacy code hardcoded
+    the sky130 convention (``<prefix>3``=hor, ``<prefix>2``=ver); ASAP7 is the
+    OPPOSITE (M2=HORIZONTAL, M3=VERTICAL). This considers the two low pin layers
+    ``<prefix>2`` / ``<prefix>3`` and assigns each by its DECLARED direction,
+    falling back to the legacy convention whenever the LEF states no direction
+    for them (so sky130 / nangate — and any container-path tech LEF the host
+    cannot read → empty text → fallback — are byte-identical). Pure,
+    chip/PDK-AGNOSTIC."""
+    hor, ver = f"{metal_prefix}3", f"{metal_prefix}2"  # legacy sky130 convention
+    try:
+        import re as _re_pin
+        dir_of = {n: d.upper() for n, d in _re_pin.findall(
+            r"LAYER\s+(\w+)\s*\n\s*TYPE\s+ROUTING\s*;\s*\n\s*DIRECTION\s+"
+            r"(HORIZONTAL|VERTICAL)", tech_lef_text or "")}
+        l2, l3 = f"{metal_prefix}2", f"{metal_prefix}3"
+        if dir_of.get(l2) == "HORIZONTAL":
+            hor, ver = l2, l3
+        elif dir_of.get(l3) == "HORIZONTAL":
+            hor, ver = l3, l2
+    except Exception:
+        pass
+    return hor, ver
+
+
 # ORGANIC (die-util fidelity follow-up) — a DESIGN-DECLARED auto-die target util.
 # The empirical v1.2.72 live runs showed the fixed 0.25 routing-headroom target
 # is right for a CONGESTION-bound design (aes converged dense) but a design may
@@ -5075,7 +5293,8 @@ def _effective_die_um(die_um_flag: str,
 
 def _resolve_auto_die_um(die_um: str, netlist: Path, util: float,
                          pdk: "PdkConfig",
-                         project: Optional[Path] = None
+                         project: Optional[Path] = None,
+                         top: str = "", container: str = ""
                          ) -> Tuple[str, Optional[str]]:
     """If `die_um` is the sentinel 'auto', compute a real 'WxH' from the synth
     netlist's cell count + the PDK site area + a target util. Otherwise return
@@ -5088,7 +5307,15 @@ def _resolve_auto_die_um(die_um: str, netlist: Path, util: float,
     design's OWN L9-declared core density (`_l9_declared_die_util`) when present
     (a design wanting timing/DRC headroom declares a sparser FP_CORE_UTIL /
     PL_TARGET_DENSITY), else the `_AUTO_DIE_TARGET_UTIL` default (~0.25). `util`
-    (the placement `--util`) is intentionally NOT the sizing target. chip-AGNOSTIC."""
+    (the placement `--util`) is intentionally NOT the sizing target.
+
+    #158 — the die must ALSO seat the IO PINS. A PIN-LIMITED macro (few cells,
+    many top IO bits) would otherwise get a die whose perimeter is too short and
+    OpenROAD IO placement aborts (PPL-0024). We compute the pin-perimeter-derived
+    side (pin bits × pin-layer pitch over the 4 edges) and take the MAX of the
+    cell-area-derived and pin-perimeter-derived sides. A cell-area-dominated
+    design keeps its cell-area side unchanged (the pin side is far smaller), so
+    sky130/nangate behaviour is byte-identical. chip-AGNOSTIC."""
     if str(die_um).lower() != "auto":
         return die_um, None
     try:
@@ -5110,14 +5337,42 @@ def _resolve_auto_die_um(die_um: str, netlist: Path, util: float,
     util_frac = _declared if _declared is not None else _AUTO_DIE_TARGET_UTIL
     _util_src = ("L9-declared" if _declared is not None
                  else "routing-headroom-default")
+    # #158 — pin-perimeter floor. Count the top module's effective IO bits and
+    # the pin-layer pitch from THIS PDK's tech LEF, then size the perimeter to
+    # seat them. Best-effort: any parse failure yields a pin count of 0 / the
+    # fallback pitch, so the pin floor never over-fires on a design it can't read.
+    pin_bits = _v1_6_600_count_effective_bits(netlist, top) if top else 0
+    pin_side = 0
+    _pin_pitch = _PIN_PITCH_FALLBACK_UM
+    if pin_bits > 0:
+        _tlef_text = _v1_6_604_read_text_or_container_cat(
+            str(pdk.tech_lef), container) or ""
+        _pin_pitch = _pin_layer_pitch_um(_tlef_text)
+        pin_side = _pin_perimeter_die_side_um(pin_bits, _pin_pitch)
     if cells <= 0:
+        # No countable cells — fall back to the fixed die, but still HONOR the
+        # pin-perimeter floor if the top exposes pins (a bare-pin harness).
+        if pin_side > 1500:
+            return (f"{pin_side}x{pin_side}",
+                    (f"die-um=auto: netlist has 0 countable cells but the top "
+                     f"exposes {pin_bits} IO bits; sized from the pin perimeter "
+                     f"→ {pin_side}x{pin_side} (pin_pitch={_pin_pitch:g}µm)"))
         return "1500x1500", ("die-um=auto but the netlist has 0 countable "
                              "cells; falling back to 1500x1500")
-    side = _auto_die_side_um(cells, util_frac, avg_cell)
+    cell_side = _auto_die_side_um(cells, util_frac, avg_cell)
+    side = max(cell_side, pin_side)
+    _pin_note = ""
+    if pin_side > cell_side:
+        _pin_note = (f"; PIN-LIMITED: pin-perimeter side {pin_side} "
+                     f"({pin_bits} IO bits × {_pin_pitch:g}µm pitch) exceeds "
+                     f"cell-area side {cell_side} → die grown to seat all pins")
+    elif pin_bits > 0:
+        _pin_note = (f"; pin-perimeter side {pin_side} ≤ cell-area side "
+                     f"{cell_side} (cell-area-dominated)")
     return (f"{side}x{side}",
             f"die-um=auto → {side}x{side} (cells={cells}, "
             f"avg_cell={avg_cell:.2f}µm², "
-            f"target_util={util_frac:g} [{_util_src}])")
+            f"target_util={util_frac:g} [{_util_src}]{_pin_note})")
 
 
 def _compute_downsized_die(die_w: int, die_h: int,
@@ -7654,8 +7909,17 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         # benchmark-spm-asap7 — staged SDCs are ns/pF-authored; rescale
         # numerics into the ACTIVE PDK liberty's declared units (ASAP7:
         # ps/fF) instead of a verbatim copy that reads 1000× too tight.
-        sdc.write_text(_scale_sdc_to_liberty_units(
-            project_sdc_silicon.read_text(), str(pdk.liberty)))
+        # A9 (#169): the unit rescale fixes the UNITS but a staged SDC also
+        # carries the ORIGINATING PDK's DRV *values* (set_max_transition /
+        # set_max_capacitance). When this SDC's provenance stamp names a
+        # DIFFERENT PDK than the active one, re-derive those limits from the
+        # active liberty (or drop them). No stamp (hand-authored SDC) or a
+        # matching stamp → byte-identical, so sky130/nangate are unchanged.
+        _staged_sdc = _scale_sdc_to_liberty_units(
+            project_sdc_silicon.read_text(), str(pdk.liberty))
+        _staged_sdc = _reconcile_staged_sdc_drv(
+            _staged_sdc, pdk.name, str(pdk.liberty), container)
+        sdc.write_text(_staged_sdc)
     else:
         # v1.6.560 sub-defect B: derive CLOCK_PERIOD from project sources
         # (L9 markdown / config.json / baseline config) before falling back
@@ -7703,7 +7967,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         print(f"[phase3] {_l9_die_note}", file=sys.stderr)
     _auto_die_requested = str(die_um).lower() == "auto"
     die_um, _auto_die_note = _resolve_auto_die_um(die_um, netlist, util, pdk,
-                                                  project)
+                                                  project, top=top,
+                                                  container=container)
     if _auto_die_note:
         print(f"[phase3] {_auto_die_note}", file=sys.stderr)
     try:
@@ -7908,21 +8173,12 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # and assign hor/ver to match (e.g. ASAP7: M2=HORIZONTAL, M3=VERTICAL
     # → hor=M2 ver=M3). Falls back to the legacy convention whenever the
     # LEF does not state a direction — sky130 behavior is unchanged.
-    _hor_pin_layer, _ver_pin_layer = (f"{pdk.metal_prefix}3",
-                                      f"{pdk.metal_prefix}2")
     try:
-        import re as _re_pin
         _tlef_txt = Path(str(pdk.tech_lef)).read_text(errors="ignore")
-        _dir_of = {n: d.upper() for n, d in _re_pin.findall(
-            r"LAYER\s+(\w+)\s*\n\s*TYPE\s+ROUTING\s*;\s*\n\s*DIRECTION\s+"
-            r"(HORIZONTAL|VERTICAL)", _tlef_txt)}
-        _l2, _l3 = f"{pdk.metal_prefix}2", f"{pdk.metal_prefix}3"
-        if _dir_of.get(_l2) == "HORIZONTAL":
-            _hor_pin_layer, _ver_pin_layer = _l2, _l3
-        elif _dir_of.get(_l3) == "HORIZONTAL":
-            _hor_pin_layer, _ver_pin_layer = _l3, _l2
     except Exception:
-        pass
+        _tlef_txt = ""
+    _hor_pin_layer, _ver_pin_layer = _pin_layers_from_techlef(
+        _tlef_txt, pdk.metal_prefix)
     _bare_place_pins = (
         f"place_pins -hor_layers {_hor_pin_layer} "
         f"-ver_layers {_ver_pin_layer}")
@@ -8401,6 +8657,33 @@ try:
     if _lefdef_map and os.path.exists(_lefdef_map):
         _cfg.map_file = [_lefdef_map]
         print(f"LEFDEF_MAP applied: {_lefdef_map}")
+        # A10 (#170) — a DECK-SYNTHESIZED map (`*_streamout_synth.map`, used only
+        # for a custom PDK that ships NO foundry streamout map) pins every
+        # routing/cut/via/pin/blockage/fill layer to its deck GDS number, but the
+        # DEF reader ALSO emits pure-annotation geometry — per-instance cell
+        # OUTLINE boxes, DEF REGIONS, and placement BLOCKAGES — on layer NAMES
+        # not in the map. With create_other_layers on, KLayout auto-assigns those
+        # to low GDS numbers that collide with the deck's reserved FEOL device
+        # layers (spm/ASAP7: ~323 stray items on 8/0, 9/0, 10/0 near the west
+        # pins) → a wall of phantom FEOL violations. These are annotation, NOT
+        # mask geometry, so a sign-off GDS must not carry them: disable the three
+        # annotation producers. Routing/via/pin/obstruction producers are LEFT
+        # default-on (their layers ARE mapped), so no real geometry is dropped.
+        # Scoped to the synthesized map ONLY — sky130/nangate and any declared
+        # foundry map keep byte-identical streamout. Each flag is guarded so an
+        # older KLayout lacking a property degrades gracefully.
+        if os.path.basename(_lefdef_map).endswith("_streamout_synth.map"):
+            _n_off = 0
+            for _pflag in ("produce_cell_outlines", "produce_regions",
+                           "produce_placement_blockages"):
+                try:
+                    setattr(_cfg, _pflag, False)
+                    _n_off += 1
+                except Exception as _pe:
+                    print(f"warn strict-annotation {_pflag}: {_pe}")
+            print(f"LEFDEF_MAP strict: {_n_off} annotation producer(s) "
+                  f"disabled (deck-synthesized map — no FEOL-colliding "
+                  f"outline/region/placement-blockage shapes)")
     else:
         print("LEFDEF_MAP not applied (none/missing) — legacy numbering")
     # FEOL substitution for the DEF cell instances is done MANUALLY after the
@@ -13088,7 +13371,13 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     runner_sdc = pnr_out / "constraint.sdc"
     canon_sdc = constraints_out / f"{top}.sdc"
     if runner_sdc.is_file() and not canon_sdc.is_file():
-        canon_sdc.write_text(runner_sdc.read_text())
+        # A9 (#169) — stamp the staged copy with the active PDK's provenance so
+        # a LATER run under a DIFFERENT PDK detects that this SDC's DRV limits
+        # are stale (`_reconcile_staged_sdc_drv`). The stamp is an SDC comment,
+        # inert to OpenSTA / create_clock collection; the runner's own
+        # pnr/constraint.sdc (what STA reads on THIS run) is left untouched.
+        canon_sdc.write_text(
+            _stamp_sdc_provenance(runner_sdc.read_text(), pdk.name))
         written.append(str(canon_sdc))
     pvt_path = constraints_out / "pvt_matrix.json"
     if not pvt_path.is_file():
