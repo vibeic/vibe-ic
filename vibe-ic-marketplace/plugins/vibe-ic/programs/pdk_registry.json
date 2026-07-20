@@ -242,8 +242,20 @@
       "drc_deck": "libs.tech/klayout/drc/asap7.lydrc",
       "_rcx_rules_comment": "B2/#175 — the ORFS asap7 OpenRCX extraction model (rcx_patterns.rules, header 'Extraction Rules for OpenRCX') is staged in the image at this path (vibeic-eda >=0.2.24). phase3_one_shot_runner._emit_spef resolves the captable via its libs.tech/{librelane,openlane}/rules.openrcx.*.nom[.magic] glob (derived from tech_lef root), so post-route SPEF EXTRACTS against a real per-layer RC model rather than the tech-LEF-RC fallback. This field RECORDS the staged asset for that glob (single typical corner only → nom; min/max disclosed absent).",
       "rcx_rules": "libs.tech/librelane/rules.openrcx.asap7.nom",
-      "_lvs_deck_comment": "B1/#174 — device-level LVS is a DISCLOSED capability gap for asap7 (lvs_deck=null), NOT an oversight. Blocked on TWO independent research-hard axes: (1) asap7 is a FinFET process and KLayout ships only planar DeviceExtractorMOS3/MOS4Transistor — no FinFET device recognition; the fork klayout_pdk_lvs.py NetlistComparer path (proven for sky130 planar CMOS) needs a from-scratch GenericDeviceExtractor FinFET deck for asap7's fin-quantized, 4x-scaled drawn geometry; (2) the staged asap7 platform ships NO transistor-level CDL/SPICE std-cell netlist, so there is no golden source netlist to compare an extraction against. LEC (yosys logical equivalence) covers RTL<->gate-netlist equivalence for asap7 designs. See vibeic-eda FIX_STATUS.md (Tool 3 klayout, B1 row).",
+      "_lvs_deck_comment": "B1/#174 — device-level LVS on asap7 is now REACHABLE (both former blockers retired; vibeic-eda >=0.2.25). (1) The transistor-level GOLDEN exists and is PUBLIC/BSD-3: the ASAP7 std-cell CDL (asap7sc7p5t_28), one .SUBCKT per cell with 4-terminal FinFETs (nmos_rvt/pmos_rvt, nfin=N), staged at cdl_netlist below. (2) FinFET recognition needs no FinFET-native extractor: KLayout's planar DeviceExtractorMOS3Transistor recognizes the ASAP7 device GEOMETRICALLY (GATE poly crossing ACTIVE, N/P split by the NSELECT/PSELECT implant markers); the ASAP7-specific unlock is subtracting GATE_CUT (10/0), which electrically severs the full-height drawn poly into the active gate plus rail-tied stubs (without it, connect(gate,LIG) welds the gate to the VDD/VSS rail straps = a false short). programs/asap7_finfet_lvs.py does the extract + reuses klayout_pdk_lvs's NetlistComparer path. VERIFIED on the asap7sc7p5t_28 R library: 159/208 (76%) device-level MATCH, proven-negative confirmed (one-net corrupt -> MISMATCH). The 49-cell residual is a DISCLOSED, well-understood LVS-hard case (folded multi-finger drive cells: the layout draws a golden nfin=N device as M parallel series-stacks with independent internal diffusion nodes — electrically equivalent, topologically distinct, needing series-parallel device reduction NetlistComparer does not perform; NEVER reported as MATCH). lvs_deck stays null because this is NOT a netgen setup TCL — the deck is the geometric KLayout path (klayout_lvs_tech below). LEC (yosys) still covers RTL<->gate equivalence. ASAP7 is predictive (tapeout_capable=false) — a MATCH is never silicon-proven. See vibeic-eda FIX_STATUS.md (Tool 3 klayout, B1 row).",
       "lvs_deck": null,
+      "cdl_netlist": "libs.tech/cdl/asap7sc7p5t_28_R.cdl",
+      "cdl_netlist_flavors": {
+        "R": "libs.tech/cdl/asap7sc7p5t_28_R.cdl",
+        "L": "libs.tech/cdl/asap7sc7p5t_28_L.cdl",
+        "SL": "libs.tech/cdl/asap7sc7p5t_28_SL.cdl",
+        "SRAM": "libs.tech/cdl/asap7sc7p5t_28_SRAM.cdl"
+      },
+      "spice_models": "libs.tech/hspice/7nm_TT_160803.pm",
+      "_spice_models_comment": "BSIM-CMG (level 72) FinFET device models, TT corner (SS/FF also staged in libs.tech/hspice/). Model tokens nmos_rvt/pmos_rvt/*_lvt/*_slvt/*_sram — the same names the CDL golden M-cards reference.",
+      "klayout_lvs_tech": "libs.tech/klayout/lvs/asap7.lyt",
+      "device_lvs_program": "asap7_finfet_lvs.py",
+      "device_lvs_verified": {"library": "asap7sc7p5t_28_R", "compared": 208, "match": 159, "match_rate": 0.764, "proven_negative": true},
       "owner_plugin": "vibe-ic"
     },
     {
