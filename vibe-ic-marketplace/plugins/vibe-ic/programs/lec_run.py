@@ -566,6 +566,41 @@ def parse_equiv_output(text: str) -> Dict:
             "check did not reach a verdict (see reports/lec.rpt for the raw "
             f"tool log). NOT re-classified as INCONCLUSIVE because {_fe_evidence}"
             " — a run with no frontend-abort evidence stays a blocking FAIL.")
+    elif (_TIMEOUT_RE.search(text)
+          and proven is None and unproven is None
+          and not _MISMATCH_EVIDENCE_RE.search(text)):
+        # ORGANIC v1462 (ibex/CPU-class) — a wall-clock TIMEOUT killed the run
+        # BEFORE any completed equiv_status verdict: NO `N are proven and M are
+        # unproven` line was ever emitted (proven AND unproven both unknown),
+        # only the INITIAL `$equiv` cell TOTAL leaked into the parse (so
+        # parse_error is False and the parse_error+timeout branch above was
+        # skipped — that is the bug this branch fixes). yosys was killed
+        # mid-equiv_simple, so ZERO points were decided in EITHER direction and
+        # NO counterexample was recorded. This is the SAME zero-completed-
+        # comparison class as the frontend parse-abort (INCONCLUSIVE), NOT a
+        # proven mismatch — blocking the whole flow on it is a false FAIL that
+        # cascade-marks downstream steps MISSING.
+        #
+        # §4.05 PRECISION-first / NO-LEAK: this fires ONLY when NEITHER a proven
+        # NOR an unproven count exists (no completed comparison) AND no
+        # counterexample phrase is present. A COMPLETED miter that left points
+        # unproven (e.g. sha256: `952 are proven and 1034 are unproven` — both
+        # parsed) has proven!=None and NEVER reaches here → it stays a real FAIL
+        # (the tested `miter ran, unproven>0 = FAIL` doctrine is untouched). A
+        # timeout that DID record `_MISMATCH_EVIDENCE_RE` escalates to the
+        # blocking FAIL below. Never a PASS — equivalent stays False.
+        equivalent = False
+        verdict = "INCONCLUSIVE"
+        verdict_explanation = (
+            "Yosys equiv was KILLED by the wall-clock budget BEFORE any "
+            "completed equiv_status verdict — no `N proven / M unproven` line "
+            "was emitted (only the initial $equiv cell total was seen) and NO "
+            "counterexample was recorded, so 0 points were decided in either "
+            "direction. A budget-exhausted proof is NOT a proven "
+            "non-equivalence → INCONCLUSIVE (a disclosed budget gap: raise "
+            "--timeout or close with sign-off LEC). It stays a visible non-PASS "
+            "(equivalent:false), never a silent free pass a regression could "
+            "hide behind.")
     elif matched:
         equivalent = True
         verdict = "PASS"
