@@ -1276,10 +1276,67 @@ def _drv_constraints_sdc_block(slew_ns: Optional[float],
     return "\n".join(lines) + "\n"
 
 
+def _scale_sdc_to_liberty_units(sdc_text: str, liberty_path: str) -> str:
+    """benchmark-spm-asap7 — rescale a STAGED (ns/pF-authored) SDC's numeric
+    timing/cap directives into the ACTIVE PDK liberty's declared units.
+
+    OpenSTA interprets SDC numbers in the library's ``time_unit`` /
+    ``capacitive_load_unit``. A staged SDC written in ns / pF is wrong by
+    1000× when the liberty declares ``"1ps"`` / ``(1,ff)`` (ASAP7) — the
+    sign-off clock becomes 1000× too tight. Scales the numeric operand of
+    ``create_clock -period``, ``set_input_delay``, ``set_output_delay``,
+    ``set_max_transition`` (time scale) and ``set_max_capacitance`` (cap
+    scale) and prepends a disclosure comment. Missing/unreadable units
+    ⇒ ×1 (byte-identical, legacy behavior). Chip/PDK-AGNOSTIC.
+    """
+    time_scale, cap_scale = 1.0, 1.0
+    try:
+        import re as _re_u
+        head = Path(liberty_path).read_text(errors="ignore")[:200000]
+        m = _re_u.search(r'time_unit\s*:\s*"(\d+(?:\.\d+)?)\s*([pnum]?s)"',
+                         head)
+        if m:
+            time_scale = 1.0 / (float(m.group(1)) *
+                                {"ps": 1e-3, "ns": 1.0, "us": 1e3,
+                                 "ms": 1e6}[m.group(2)])
+        mc = _re_u.search(r'capacitive_load_unit\s*\(\s*(\d+(?:\.\d+)?)\s*,\s*'
+                          r'([fpnum]+)\s*\)', head)
+        if mc:
+            cap_scale = 1.0 / (float(mc.group(1)) *
+                               {"ff": 1e-3, "pf": 1.0, "nf": 1e3,
+                                "uf": 1e6}[mc.group(2)])
+    except Exception:
+        return sdc_text
+    if time_scale == 1.0 and cap_scale == 1.0:
+        return sdc_text
+
+    def _scale_line(line: str) -> str:
+        import re as _re_l
+        stripped = line.lstrip()
+        for cmd, scale in (("create_clock", time_scale),
+                           ("set_input_delay", time_scale),
+                           ("set_output_delay", time_scale),
+                           ("set_max_transition", time_scale),
+                           ("set_max_capacitance", cap_scale)):
+            if stripped.startswith(cmd):
+                return _re_l.sub(
+                    r"(\d+(?:\.\d+)?)",
+                    lambda mm: f"{float(mm.group(1)) * scale:g}",
+                    line, count=1)
+        return line
+
+    out = "\n".join(_scale_line(l) for l in sdc_text.split("\n"))
+    note = (f"# unit-rescale: staged SDC numerics scaled into the PDK "
+            f"liberty's units (time ×{time_scale:g}, cap ×{cap_scale:g}) —\n"
+            f"# staged file was ns/pF-authored; see _scale_sdc_to_liberty_units\n")
+    return note + out
+
+
 def _build_auto_silicon_sdc(project: Path, top: str = "",
                             drv_slew_ns: Optional[float] = None,
                             drv_cap_pf: Optional[float] = None,
-                            drv_note: str = "") -> str:
+                            drv_note: str = "",
+                            liberty_path: str = "") -> str:
     """Build the minimal silicon-top auto-SDC text emitted by ``step_pnr`` when
     the project stages no ``constraints/*.sdc`` for silicon.
 
@@ -1308,14 +1365,41 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
     numbers are read from the active PDK's liberty, not hard-coded).
     """
     clk_period_ns, clk_port_name = _resolve_clock_spec(project, top=top)
+    # benchmark-spm-asap7 — SDC numeric values are interpreted by OpenSTA in
+    # the LIBRARY's own ``time_unit``. The resolved clock period / I/O delays
+    # are in ns; when the PDK liberty declares ``time_unit : "1ps"`` (e.g.
+    # ASAP7) the raw ns value would give a 1000×-too-tight sign-off clock
+    # (10 → 10 ps) and every path reports VIOLATED. Scale to the liberty's
+    # time unit (chip/PDK-AGNOSTIC: read from the liberty header; missing or
+    # unreadable ⇒ ×1 — legacy, byte-identical behavior on ns-unit PDKs).
+    _tu_scale = 1.0
+    if liberty_path:
+        try:
+            import re as _re_tu
+            _lib_head = Path(liberty_path).read_text(errors="ignore")[:200000]
+            _m_tu = _re_tu.search(
+                r'time_unit\s*:\s*"(\d+(?:\.\d+)?)\s*([pnum]?s)"', _lib_head)
+            if _m_tu:
+                _tu_scale = (float(_m_tu.group(1)) *
+                             {"ps": 1e-3, "ns": 1.0,
+                              "us": 1e3, "ms": 1e6}[_m_tu.group(2)])
+                _tu_scale = 1.0 / _tu_scale  # → lib units per ns
+        except Exception:
+            _tu_scale = 1.0
+    _period_emit = clk_period_ns * _tu_scale
+    _io_emit = 2 * _tu_scale
+    _tu_note = (f"# time-unit scaling: liberty declares a non-ns time_unit; "
+                f"period {clk_period_ns:g} ns emitted as {_period_emit:g} "
+                f"lib-time-units\n" if _tu_scale != 1.0 else "")
     sdc_text = (
         "# Auto-generated minimal SDC for silicon top "
         f"(no constraints/*.sdc supplied; clk_period_ns={clk_period_ns} "
         f"clk_port={clk_port_name})\n"
-        f"create_clock -name clk -period {clk_period_ns} "
+        + _tu_note +
+        f"create_clock -name clk -period {_period_emit:g} "
         f"[get_ports {clk_port_name}]\n"
-        "set_input_delay  2 -clock clk [all_inputs]\n"
-        "set_output_delay 2 -clock clk [all_outputs]\n"
+        f"set_input_delay  {_io_emit:g} -clock clk [all_inputs]\n"
+        f"set_output_delay {_io_emit:g} -clock clk [all_outputs]\n"
     )
     # GAP-E2E-7 — carry ONLY the timing exceptions the design's own staged
     # reference flow (input/constraints + input/reference_flow) explicitly
@@ -7307,7 +7391,11 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                             else [])), None)
     )
     if project_sdc_silicon and project_sdc_silicon.is_file():
-        sdc.write_text(project_sdc_silicon.read_text())
+        # benchmark-spm-asap7 — staged SDCs are ns/pF-authored; rescale
+        # numerics into the ACTIVE PDK liberty's declared units (ASAP7:
+        # ps/fF) instead of a verbatim copy that reads 1000× too tight.
+        sdc.write_text(_scale_sdc_to_liberty_units(
+            project_sdc_silicon.read_text(), str(pdk.liberty)))
     else:
         # v1.6.560 sub-defect B: derive CLOCK_PERIOD from project sources
         # (L9 markdown / config.json / baseline config) before falling back
@@ -7333,7 +7421,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             project, top=top,
             drv_slew_ns=_drv.get("max_transition_ns"),
             drv_cap_pf=_drv.get("max_capacitance_pf"),
-            drv_note=str(_drv.get("note") or "")))
+            drv_note=str(_drv.get("note") or ""),
+            liberty_path=str(pdk.liberty)))
 
     # ORGANIC E2E (GAP-E2E-4/10) — resolve `--die-um auto` to a design-sized
     # WxH from the synth netlist cell count + PDK site area + target util, so a
@@ -7552,9 +7641,31 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # `set_io_pin_constraint` directives so each pin lands on its required
     # die edge, then auto-assign only the unconstrained pins. With no cfg,
     # the bare `place_pins -hor_layers M3 -ver_layers M2` is kept verbatim.
+    #
+    # benchmark-spm-asap7 — chip-AGNOSTIC pin-layer direction resolution:
+    # the legacy bare assign hardcodes the sky130 convention (M2=VER,
+    # M3=HOR). Read the routing layers' DIRECTION from the PDK tech LEF
+    # and assign hor/ver to match (e.g. ASAP7: M2=HORIZONTAL, M3=VERTICAL
+    # → hor=M2 ver=M3). Falls back to the legacy convention whenever the
+    # LEF does not state a direction — sky130 behavior is unchanged.
+    _hor_pin_layer, _ver_pin_layer = (f"{pdk.metal_prefix}3",
+                                      f"{pdk.metal_prefix}2")
+    try:
+        import re as _re_pin
+        _tlef_txt = Path(str(pdk.tech_lef)).read_text(errors="ignore")
+        _dir_of = {n: d.upper() for n, d in _re_pin.findall(
+            r"LAYER\s+(\w+)\s*\n\s*TYPE\s+ROUTING\s*;\s*\n\s*DIRECTION\s+"
+            r"(HORIZONTAL|VERTICAL)", _tlef_txt)}
+        _l2, _l3 = f"{pdk.metal_prefix}2", f"{pdk.metal_prefix}3"
+        if _dir_of.get(_l2) == "HORIZONTAL":
+            _hor_pin_layer, _ver_pin_layer = _l2, _l3
+        elif _dir_of.get(_l3) == "HORIZONTAL":
+            _hor_pin_layer, _ver_pin_layer = _l3, _l2
+    except Exception:
+        pass
     _bare_place_pins = (
-        f"place_pins -hor_layers {pdk.metal_prefix}3 "
-        f"-ver_layers {pdk.metal_prefix}2")
+        f"place_pins -hor_layers {_hor_pin_layer} "
+        f"-ver_layers {_ver_pin_layer}")
     place_pins_block, pin_order_note = _v1_0_38_pin_placement_block(
         project, _bare_place_pins)
     # v1.6.36 — emit per-stage DEF snapshots so def_stage_progression_check
@@ -9567,6 +9678,79 @@ def _classify_geometry_inside_cells(
     return {r for r in rule_seen if rule_all_inside.get(r, False)}
 
 
+def _rve_item_bboxes(rpt_path) -> List[Dict[str, Any]]:
+    """benchmark-spm-asap7 — parse a KLayout RVE XML report into
+    per-violation records ``{rule, x0, y0, x1, y1}`` (microns, the same
+    unit DEF placement uses). Each ``<item>`` carries
+    ``<category>'RULE'</category>`` plus ``<value>shape: (coords…)</value>``
+    (edge / box / polygon / text-marker). A 2-number (single-point) value
+    becomes a degenerate bbox. Chip-AGNOSTIC: pure XML/geometry."""
+    import xml.etree.ElementTree as _ET
+    out: List[Dict[str, Any]] = []
+    try:
+        root = _ET.parse(str(rpt_path)).getroot()
+        for item in root.iter("item"):
+            rule = (item.findtext("category") or "").strip().strip("'")
+            coords: List[float] = []
+            for v in item.iter("value"):
+                nums = re.findall(r"-?\d+(?:\.\d+)?", v.text or "")
+                coords += [float(n) for n in nums]
+            if rule and len(coords) >= 2:
+                xs, ys = coords[0::2], coords[1::2]
+                out.append({"rule": rule,
+                            "x0": min(xs), "y0": min(ys),
+                            "x1": max(xs), "y1": max(ys)})
+    except Exception:
+        return []
+    return out
+
+
+def _placed_def_cell_bboxes(
+        def_path, lef_paths) -> List[Tuple[float, float, float, float]]:
+    """benchmark-spm-asap7 — placed std-cell instance bboxes from a DEF
+    (+ LEF ``MACRO ... SIZE w BY h``). Honors ``UNITS DISTANCE MICRONS``
+    (1000/2000 per µm) and swaps w/h for the 90°-rotated orientations
+    (E/W/FE/FW). Chip-AGNOSTIC: pure DEF/LEF parsing."""
+    sizes: Dict[str, Tuple[float, float]] = {}
+    try:
+        for lp in lef_paths:
+            if not lp or not Path(str(lp)).is_file():
+                continue
+            txt = Path(str(lp)).read_text(errors="ignore")
+            for m in re.finditer(
+                    r"MACRO\s+(\S+)(.*?)(?=\nMACRO\s|\nEND\s+LIBRARY|\Z)",
+                    txt, re.DOTALL):
+                sm = re.search(r"SIZE\s+([\d.]+)\s+BY\s+([\d.]+)",
+                               m.group(2))
+                if sm:
+                    sizes[m.group(1)] = (float(sm.group(1)),
+                                         float(sm.group(2)))
+    except Exception:
+        pass
+    boxes: List[Tuple[float, float, float, float]] = []
+    try:
+        dtxt = Path(str(def_path)).read_text(errors="ignore")
+    except Exception:
+        return boxes
+    um = 1000.0
+    m = re.search(r"UNITS\s+DISTANCE\s+MICRONS\s+(\d+)", dtxt)
+    if m:
+        um = float(m.group(1))
+    for cm in re.finditer(
+            r"-\s+\S+\s+(\S+)\s+.*?(?:PLACED|FIXED|COVER)\s*"
+            r"\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*(\w+)", dtxt):
+        master = cm.group(1)
+        if master not in sizes:
+            continue
+        w, h = sizes[master]
+        if cm.group(4).upper() in ("E", "W", "FE", "FW"):
+            w, h = h, w
+        x0 = int(cm.group(2)) / um
+        y0 = int(cm.group(3)) / um
+        boxes.append((x0, y0, x0 + w, y0 + h))
+    return boxes
+
+
 # ---------------------------------------------------------------------------
 # Fix #2 — Vacuous-Magic detection.
 #
@@ -10497,8 +10681,47 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
     # routing violation is present the verdict stays FAIL. Chip-
     # AGNOSTIC: per-PDK declarative table (see
     # `_V1_6_604_STDCELL_LAYER_RULE_PREFIXES`).
+    # benchmark-spm-asap7 — wire the geometry-aware cross-check into the
+    # classification: parse the KLayout RVE per-item bboxes and the placed
+    # DEF (+ LEF master sizes) into instance bboxes, so a rule whose EVERY
+    # violation lies wholly inside a placed std-cell is bucketed
+    # stdcell-library (educational decks like ASAP7's re-check qualified
+    # cell interiors on FEOL layers the router never emits). Any rule with
+    # ≥1 violation outside all cell bboxes stays user-routing → FAIL.
+    _geo_rules: set = set()
+    try:
+        _geo_rules = _classify_geometry_inside_cells(
+            _rve_item_bboxes(rpt),
+            _placed_def_cell_bboxes(
+                _pl.pnr_dir(project) / f"{top}.def",
+                [str(pdk.cell_lef), str(pdk.tech_lef)]))
+    except Exception:
+        _geo_rules = set()
+    # benchmark-spm-asap7 (b) — LEF layer-semantics classification for
+    # PDKs WITHOUT a `_V1_6_604` prefix-table entry (custom:). A deck rule
+    # whose layer prefix names neither a ROUTING layer nor a router-made
+    # CUT layer (V1+; the V0/contact layer is cell-authored) CANNOT have
+    # been introduced by the router or the design's logic — it is
+    # std-cell-internal geometry or a streamout layer-numbering artefact,
+    # never user routing. The `_v1_6_604_rule_is_user_routing` honesty
+    # gate inside the classifier still overrides this for m2+/via rules.
+    _sem_rules: set = set()
+    if pdk.name not in _V1_6_604_STDCELL_LAYER_RULE_PREFIXES:
+        try:
+            import re as _re_sem
+            _tlef_txt = Path(str(pdk.tech_lef)).read_text(errors="ignore")
+            _routing = {n.upper() for n in _re_sem.findall(
+                r"LAYER\s+(\w+)\s*\n\s*TYPE\s+ROUTING", _tlef_txt)}
+            _cuts = [n for n in _re_sem.findall(
+                r"LAYER\s+(\w+)\s*\n\s*TYPE\s+CUT", _tlef_txt)]
+            _user_layers = _routing | {c.upper() for c in _cuts[1:]}
+            _sem_rules = {r for r in per_rule
+                          if r.split(".")[0].upper() not in _user_layers}
+        except Exception:
+            _sem_rules = set()
     user_per_rule, cell_per_rule = _v1_6_604_classify_stdcell_violations(
-        per_rule, pdk.name)
+        per_rule, pdk.name,
+        cell_internal_rules=(_geo_rules | _sem_rules))
     user_vios = sum(user_per_rule.values())
     cell_vios = sum(cell_per_rule.values())
     if vios == 0:
