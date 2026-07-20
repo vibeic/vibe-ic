@@ -235,7 +235,7 @@ a placeholder (`TODO`, `n/a`, `skip`); the approver must not be `agent` /
 
 ## Toolchain — `vibeic-eda`
 
-The flow executes inside the **`vibeic-eda` 0.2.23** container image, which
+The flow executes inside the **`vibeic-eda` 0.2.24** container image, which
 layers **13 vibeic EDA forks** on top of the `iic-osic-tools` base:
 
 | | Forked and enhanced |
