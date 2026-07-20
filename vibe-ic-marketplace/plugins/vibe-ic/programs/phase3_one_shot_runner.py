@@ -7279,7 +7279,8 @@ def _postroute_repair_estimate_tcl(out_dir_c: str,
     )
 
 
-def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str) -> str:
+def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str,
+                                cell_lef_c: str = "") -> str:
     """ORGANIC #557 / #581 — emit the OpenROAD Tcl for the
     post-detailed-route SPEF extraction (MEASURE-ONLY).
 
@@ -7343,6 +7344,26 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str) -> str:
         "$_prs_root/libs.tech/{librelane,openlane}/rules.openrcx.*.nom]]\n"
         "  }\n"
         "  if {[llength $_prs_c] > 0} { set _prs_rules [lindex $_prs_c 0] }\n"
+        "}\n"
+        "# PR-B2b — staged tech-LEF fallback: a named PDK whose tech LEF was\n"
+        "# staged into the project (e.g. asap7, normalized for negative\n"
+        "# OFFSETs) carries no \"/libs.ref/\" in its path, so the derivation\n"
+        "# above silently finds nothing. The CELL LEF of a named PDK always\n"
+        "# lives in-container under <PDK>/libs.ref/ — derive the PDK root from\n"
+        "# it when the tech-LEF path yields no captable. chip-AGNOSTIC.\n"
+        "if {$_prs_rules eq \"\"} {\n"
+        f"  set _prs_clef {cell_lef_c}\n"
+        "  set _prs_j [string first \"/libs.ref/\" $_prs_clef]\n"
+        "  if {$_prs_j > 0} {\n"
+        "    set _prs_root2 [string range $_prs_clef 0 [expr {$_prs_j - 1}]]\n"
+        "    set _prs_c2 [lsort [glob -nocomplain "
+        "$_prs_root2/libs.tech/{librelane,openlane}/rules.openrcx.*.nom.magic]]\n"
+        "    if {[llength $_prs_c2] == 0} {\n"
+        "      set _prs_c2 [lsort [glob -nocomplain "
+        "$_prs_root2/libs.tech/{librelane,openlane}/rules.openrcx.*.nom]]\n"
+        "    }\n"
+        "    if {[llength $_prs_c2] > 0} { set _prs_rules [lindex $_prs_c2 0] }\n"
+        "  }\n"
         "}\n"
         "if {$_prs_rules ne \"\"} {\n"
         "  puts \"SPEF_REPAIR_CAPTABLE: $_prs_rules\"\n"
@@ -8140,7 +8161,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # ORGANIC #557 — post-route SPEF EXTRACTION (measure-only; pure helper so it
     # is unit-tested + the emitter/checker drift gate applies). Runs BEFORE
     # write_def so it MUST NOT modify the design.
-    spef_repair_block = _post_route_spef_repair_tcl(out_dir_c, tech_lef_c)
+    spef_repair_block = _post_route_spef_repair_tcl(out_dir_c, tech_lef_c,
+                                                    cell_lef_c)
     # #147 — PROBE the running OpenROAD once (cached) for the fork's post-route
     # repair fix (`estimate_parasitics -detailed_routing`, vibeic/OpenROAD
     # cf06074139 — LIVE in vibeic-eda:0.2.17). Capable → append an ESTIMATE-ONLY
@@ -15566,6 +15588,26 @@ if {{$_i > 0}} {{
     set _c [lsort [glob -nocomplain $_root/libs.tech/{{librelane,openlane}}/rules.openrcx.*.nom]]
   }}
   if {{[llength $_c] > 0}} {{ set _rules [lindex $_c 0] }}
+}}
+# PR-B2b — staged tech-LEF fallback: a named PDK whose tech LEF was staged
+# into the project (e.g. asap7, normalized for negative OFFSETs) carries no
+# "/libs.ref/" in its path, so the derivation above silently finds nothing
+# and the run degrades to the LEF-RC fallback — which itself dies on ASAP7
+# because the academic tech LEF declares no RESISTANCE (RCX-0138). The CELL
+# LEF of a named PDK always lives in-container under <PDK>/libs.ref/, so
+# derive the PDK root from it when the tech-LEF path yields no captable.
+# chip-AGNOSTIC: same glob convention, second path source.
+if {{$_rules eq ""}} {{
+  set _clef {cell_lef_c}
+  set _j [string first "/libs.ref/" $_clef]
+  if {{$_j > 0}} {{
+    set _root2 [string range $_clef 0 [expr {{$_j - 1}}]]
+    set _c2 [lsort [glob -nocomplain $_root2/libs.tech/{{librelane,openlane}}/rules.openrcx.*.nom.magic]]
+    if {{[llength $_c2] == 0}} {{
+      set _c2 [lsort [glob -nocomplain $_root2/libs.tech/{{librelane,openlane}}/rules.openrcx.*.nom]]
+    }}
+    if {{[llength $_c2] > 0}} {{ set _rules [lindex $_c2 0] }}
+  }}
 }}
 if {{$_rules ne ""}} {{
   # --- Step 22.3a: full OpenRCX extraction with the captable (sign-off SPEF) ---
