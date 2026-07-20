@@ -22,11 +22,20 @@ Exposed:
 """
 from __future__ import annotations
 
+import ast
 import json
+import operator
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
+
+
+# A port whose width could not be resolved to a concrete literal bit-count
+# (a parameterized / symbolic bound like `[WB_AW-1:0]` that no in-module
+# parameter resolves). It is UNKNOWN — NOT a literal 1 — so a width-equality
+# check must SKIP it rather than assert a false mismatch. chip-AGNOSTIC.
+WIDTH_UNKNOWN = 0
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +197,120 @@ _PORT_DECL = re.compile(
 _LITERAL_RANGE = re.compile(r'\[\s*(\d+)\s*:\s*(\d+)\s*\]')
 
 
+# ---------------------------------------------------------------------------
+# Parameter-aware width resolution
+# ---------------------------------------------------------------------------
+# A parameterized port bound (`[WB_AW-1:0]`, `[DATA_WIDTH*2-1:0]`,
+# `[$clog2(DEPTH)-1:0]`) must NOT be parsed as width 1: that manufactures a
+# false width-mismatch against a spec that states the resolved literal. Where
+# the referenced parameter is declared in the SAME module we resolve it to the
+# concrete bit-count; where it cannot be resolved the width is UNKNOWN
+# (WIDTH_UNKNOWN), never a literal 1. chip-AGNOSTIC: pure Verilog param grammar
+# + a whitelisted-operator arithmetic evaluator (no eval()).
+_PARAM_ASSIGN = re.compile(
+    r'\b(?:parameter|localparam)\b\s*'
+    r'(?:\b(?:signed|unsigned|integer|int|time|logic|reg|bit|byte)\b\s*)*'
+    r'(?:\[[^\]]*\]\s*)?'
+    r'([A-Za-z_]\w*)\s*=\s*([^,;)\n]+)')
+
+_SAFE_BINOPS = {
+    ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
+    ast.Div: operator.floordiv, ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod, ast.Pow: operator.pow,
+    ast.LShift: operator.lshift, ast.RShift: operator.rshift,
+    ast.BitOr: operator.or_, ast.BitAnd: operator.and_, ast.BitXor: operator.xor,
+}
+_SAFE_UNARYOPS = {ast.UAdd: operator.pos, ast.USub: operator.neg,
+                  ast.Invert: operator.invert}
+
+
+def _clog2(v: int) -> int:
+    """Verilog $clog2 — ceil(log2(v)); $clog2(0)=$clog2(1)=0."""
+    return (v - 1).bit_length() if v > 1 else 0
+
+
+def _eval_ast_int(node, env: Dict[str, int]) -> Optional[int]:
+    if isinstance(node, ast.Constant):
+        return node.value if isinstance(node.value, int) and not isinstance(node.value, bool) else None
+    if isinstance(node, ast.Name):
+        v = env.get(node.id)
+        return v if isinstance(v, int) else None
+    if isinstance(node, ast.BinOp) and type(node.op) in _SAFE_BINOPS:
+        l = _eval_ast_int(node.left, env)
+        r = _eval_ast_int(node.right, env)
+        if l is None or r is None:
+            return None
+        try:
+            return int(_SAFE_BINOPS[type(node.op)](l, r))
+        except (ZeroDivisionError, ValueError):
+            return None
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _SAFE_UNARYOPS:
+        v = _eval_ast_int(node.operand, env)
+        return None if v is None else int(_SAFE_UNARYOPS[type(node.op)](v))
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == 'clog2' and len(node.args) == 1):
+        a = _eval_ast_int(node.args[0], env)
+        return None if a is None else _clog2(a)
+    return None
+
+
+def _safe_eval_int(expr: str, env: Dict[str, int]) -> Optional[int]:
+    """Evaluate a simple Verilog integer expression against a param env, using a
+    whitelisted-operator AST walk (never eval()). Returns None if it references
+    an unresolved name, uses an unsupported construct, or is a sized literal."""
+    expr = re.sub(r'\$clog2', 'clog2', expr.strip())
+    if not expr:
+        return None
+    try:
+        tree = ast.parse(expr, mode='eval')
+    except SyntaxError:
+        return None
+    return _eval_ast_int(tree.body, env)
+
+
+def _parse_module_params(text: str) -> Dict[str, int]:
+    """Resolve `parameter`/`localparam NAME = <expr>` to concrete ints, to a
+    fixpoint so a later param can reference an earlier one. Sized-literal /
+    unresolvable params are simply left out."""
+    raw: Dict[str, str] = {}
+    for m in _PARAM_ASSIGN.finditer(text):
+        raw.setdefault(m.group(1), m.group(2).strip())
+    resolved: Dict[str, int] = {}
+    for _ in range(len(raw) + 1):
+        progressed = False
+        for name, expr in raw.items():
+            if name in resolved:
+                continue
+            v = _safe_eval_int(expr, resolved)
+            if v is not None:
+                resolved[name] = v
+                progressed = True
+        if not progressed:
+            break
+    return resolved
+
+
+def _resolve_bracket_width(bracket: str, params: Dict[str, int]) -> int:
+    """Width of a `[hi:lo]` packed dimension, resolving parameter names via
+    ``params``. Returns WIDTH_UNKNOWN when either bound cannot be resolved to a
+    concrete int (e.g. an unresolved parameter, or a ternary/complex bound)."""
+    inner = bracket.strip()
+    if inner.startswith('['):
+        inner = inner[1:]
+    if inner.endswith(']'):
+        inner = inner[:-1]
+    # Exactly one colon separates msb:lsb; a ternary (`?:`) or multi-colon bound
+    # is too complex to resolve statically → UNKNOWN (safe).
+    if inner.count(':') != 1:
+        return WIDTH_UNKNOWN
+    hi_s, lo_s = inner.split(':', 1)
+    hi = _safe_eval_int(hi_s, params)
+    lo = _safe_eval_int(lo_s, params)
+    if hi is None or lo is None:
+        return WIDTH_UNKNOWN
+    return abs(hi - lo) + 1
+
+
 # function/task argument declarations use the same input/output keywords as module
 # ports but are lexically scoped to the subprogram — blank their bodies (preserving
 # newlines) before port extraction so they are not mistaken for module ports.
@@ -200,16 +323,30 @@ def _strip_subprograms(text: str) -> str:
         lambda m: ''.join('\n' if c == '\n' else ' ' for c in m.group(0)), text)
 
 
-def parse_verilog_ports(text: str) -> List[Port]:
-    """Parse Verilog `input/output/inout [msb:lsb] a, b` declarations."""
+def parse_verilog_ports(text: str,
+                        params: Optional[Dict[str, int]] = None) -> List[Port]:
+    """Parse Verilog `input/output/inout [msb:lsb] a, b` declarations.
+
+    A NON-literal packed dimension (`[WB_AW-1:0]`) is resolved against ``params``
+    (the module's own parameters) where possible; if it cannot be resolved the
+    width is WIDTH_UNKNOWN, NEVER a literal 1. ``params`` defaults to the
+    parameters parsed from ``text`` itself, so any caller that passes a full
+    module / region gets parameter-aware widths with no signature change."""
+    if params is None:
+        params = _parse_module_params(text)
     ports: List[Port] = []
     for m in _PORT_DECL.finditer(text):
         direction = m.group(1)
-        width = 1
-        if m.group(2) is not None:
-            lit = _LITERAL_RANGE.fullmatch(m.group(2).strip())
+        if m.group(2) is None:
+            width = 1  # no packed dimension → genuine 1-bit scalar
+        else:
+            bracket = m.group(2).strip()
+            lit = _LITERAL_RANGE.fullmatch(bracket)
             if lit:
                 width = abs(int(lit.group(1)) - int(lit.group(2))) + 1
+            else:
+                # Parameterized / symbolic bound: resolve via params, else UNKNOWN.
+                width = _resolve_bracket_width(bracket, params)
         for nm in re.split(r'\s*,\s*', m.group(3)):
             nm = nm.strip()
             if nm:
@@ -1323,6 +1460,31 @@ def _detect_latency(text: str) -> Optional[bool]:
     return None
 
 
+def _json_port_direction(d: dict) -> str:
+    """Read a port dict's direction, accepting BOTH the `dir` key (the shape the
+    canonical Phase-1 extractor `phase1_port_extract` and the L9/L17 L-docs emit)
+    AND the `direction` key. Normalises `in`/`out`/`io` abbreviations to
+    canonical `input`/`output`/`inout` via _DIR_TOKEN so a spec written either
+    way matches the RTL-parsed direction. Defaults to `input` only when neither
+    key is present. chip-AGNOSTIC."""
+    raw = d.get('dir', d.get('direction'))
+    if raw is None:
+        return 'input'
+    return _DIR_TOKEN.get(str(raw).strip().lower(), str(raw).strip().lower())
+
+
+def _json_port_width(d: dict) -> int:
+    """Read a port dict's width as an int bit-count. A symbolic/parameterized
+    width (a non-integer string like `WB_AW` / `DATA_WIDTH-1:0`) is UNKNOWN, not
+    a literal 1 — return 0 (the width-UNKNOWN sentinel) so the width-mismatch
+    check skips it rather than asserting a false literal width."""
+    w = d.get('width', 1)
+    try:
+        return int(w)
+    except (TypeError, ValueError):
+        return 0  # symbolic/parameterized width — unknown, do not assert
+
+
 def extract_spec_contract(text: str, is_json: bool = False,
                           confirm: bool = True, client_factory=None) -> SpecContract:
     """Extract a declared contract from spec text.
@@ -1349,7 +1511,7 @@ def extract_spec_contract(text: str, is_json: bool = False,
             rst = data.get('reset', {}) or {}
             mod = data.get('module')
             lat = data.get('latency_registered')
-        ports = [Port(d['name'], d.get('direction', 'input'), int(d.get('width', 1)))
+        ports = [Port(d['name'], _json_port_direction(d), _json_port_width(d))
                  for d in port_dicts]
         return SpecContract(module=mod, ports=ports,
                             reset_mode=rst.get('mode'),

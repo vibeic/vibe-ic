@@ -44,22 +44,39 @@ def load_yaml(path: Path):
         return yaml.safe_load(f)
 
 
-def find_class_template(class_path: str, class_kb_dir: Path) -> dict:
-    """Load class template yaml by name, searching class_kb/templates/."""
+def find_class_template(class_path: str, class_kb_dir: Path) -> tuple[dict, bool]:
+    """Load class template yaml by name, searching class_kb/templates/.
+
+    Returns ``(template, fallback_applied)``. ``fallback_applied`` is True when
+    the requested ``class_path`` had no template of its own and a NEUTRAL
+    generic floor was substituted.
+
+    Fallback discipline (the fix for the unknown-class mis-scoring defect): an
+    unknown class MUST NOT inherit a protocol-specific floor. The previous
+    chain defaulted to ``cable-side-id-ic`` first, so any leaf not in the KB
+    (an accelerator, a DSP block, a bridge …) was scored against SERIAL-ID-IC
+    floors (opcode-count >= 8 / CRC-8 whitelist / 64-byte OTP) that do not
+    apply to it. The chain now falls back to ``generic-ic`` — a small
+    CLASS-AGNOSTIC floor — and finally to the vacuous ``any-ic`` only if that
+    neutral template is somehow absent. chip-AGNOSTIC."""
     templates_dir = class_kb_dir / "templates"
     if not templates_dir.exists():
         raise FileNotFoundError(f"class_kb/templates not found at {templates_dir}")
     candidate = templates_dir / f"{class_path}.yaml"
+    fallback_applied = False
     if not candidate.exists():
-        # fallback chain
-        for fallback in ("cable-side-id-ic", "protocol-ic", "any-ic"):
+        fallback_applied = True
+        # NEUTRAL fallback chain — never a protocol-specific class. generic-ic
+        # carries the class-agnostic floor; any-ic is the last-resort vacuous
+        # template so a missing generic-ic degrades to a WARN, not a hard error.
+        for fallback in ("generic-ic", "any-ic"):
             c = templates_dir / f"{fallback}.yaml"
             if c.exists():
                 candidate = c
                 break
     if not candidate.exists():
         raise FileNotFoundError(f"no class template found for {class_path}")
-    return load_yaml(candidate)
+    return load_yaml(candidate), fallback_applied
 
 
 def load_layer(docs_dir: Path, layer: str) -> dict | None:
@@ -200,7 +217,7 @@ def count_l9_wires(l9: dict) -> int:
 
 
 def check(docs_dir: Path, class_kb: Path, class_path: str) -> dict:
-    tpl = find_class_template(class_path, class_kb)
+    tpl, fallback_applied = find_class_template(class_path, class_kb)
     floor = (tpl or {}).get("spec_floor") or {}
 
     l3 = load_layer(docs_dir, "L3")
@@ -346,6 +363,21 @@ def check(docs_dir: Path, class_kb: Path, class_path: str) -> dict:
     # apb-peripheral / uart-peripheral) are filled in v0.56 A2; this
     # warning catches any future template that ships without a floor.
     warnings = []
+    # Unknown class → a NEUTRAL generic floor was substituted. Surface this so
+    # a human sees the score is class-agnostic (not a protocol/memory/crypto
+    # floor mis-applied to an unrelated design).
+    if fallback_applied:
+        warnings.append({
+            "severity": "WARN",
+            "rule": "unknown_class_generic_floor",
+            "class_path": class_path,
+            "template_used": str(tpl.get("class") if tpl else "any-ic"),
+            "message": (f"class `{class_path}` has no template in the class KB; "
+                        f"a NEUTRAL generic floor "
+                        f"(`{tpl.get('class') if tpl else 'any-ic'}`) was applied "
+                        "instead of a protocol-specific one. Add a dedicated "
+                        "class template if this IC needs tighter floors."),
+        })
     if tpl is not None and not floor:
         warnings.append({
             "severity": "WARN",

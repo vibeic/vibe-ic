@@ -47,6 +47,47 @@ BACKING_CHECKS = (
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
 
+# Per-check ARGUMENT SHAPE. The backing checks do NOT share one CLI contract:
+#   PROJECT   — takes the PROJECT root and resolves generated_docs/ itself.
+#   DOCS_DIR  — takes the generated_docs/ directory DIRECTLY.
+#   NONE      — takes NO positional at all (introspects the gate programs via
+#               its own --gates default; the project dir is meaningless to it).
+# Passing <project> positionally to every check (the prior behaviour) made the
+# DOCS_DIR checks look at the wrong directory (spurious FAIL) and made the NONE
+# check argparse-error on an "unrecognized argument" (spurious FAIL) — even
+# though each PASSES when invoked with its correct arg shape. This map restores
+# the correct shape per check. chip-AGNOSTIC.
+CHECK_ARG_SHAPE = {
+    "phase1_all_l_docs_present_check.py": "PROJECT",
+    "phase1_doc_presence_check.py": "DOCS_DIR",
+    "phase1_doc_input_completeness_check.py": "PROJECT",
+    "phase1_doc_content_implementation_completeness_check.py": "PROJECT",
+    "phase1_consistency_check.py": "DOCS_DIR",
+    "phase1_input_vs_generated_completeness_check.py": "PROJECT",
+    "phase1_gate_contract_check.py": "NONE",
+    "phase1_evidence_grounding_check.py": "PROJECT",
+}
+
+
+def resolve_docs_dir(project_dir: Path) -> Path:
+    """Return the generated_docs/ directory for ``project_dir``.
+
+    Tolerant of BOTH the canonical runner layout (``phase1/generated_docs`` —
+    _path_layout.generated_docs_dir) and the flat ``generated_docs`` layout.
+    Prefers a candidate that actually holds L*.json; else the first that
+    exists; else the canonical path (so a caller still gets a sensible dir)."""
+    candidates = [
+        project_dir / "phase1" / "generated_docs",
+        project_dir / "generated_docs",
+    ]
+    for c in candidates:
+        if c.is_dir() and any(c.glob("L*.json")):
+            return c
+    for c in candidates:
+        if c.is_dir():
+            return c
+    return candidates[0]
+
 
 @dataclass
 class CheckResult:
@@ -85,9 +126,9 @@ class Phase1Report:
 
 
 def scan_l_doc_presence(project_dir: Path) -> Dict[str, bool]:
-    """Look for L*.json in <project>/generated_docs/ (canonical location)."""
+    """Look for L*.json in the project's generated_docs/ (canonical or flat)."""
     out: Dict[str, bool] = {}
-    docs_dir = project_dir / "generated_docs"
+    docs_dir = resolve_docs_dir(project_dir)
     for doc in L_DOCS:
         # Match e.g. L1_PRODUCT_VISION.json (preferred) or L1.json
         candidates = (
@@ -98,8 +139,24 @@ def scan_l_doc_presence(project_dir: Path) -> Dict[str, bool]:
     return out
 
 
+def build_check_cmd(name: str, project_dir: Path) -> List[str]:
+    """Construct the argv for a backing check with the ARG SHAPE it expects.
+
+    Unknown checks default to PROJECT (the historical behaviour) so a newly
+    added backing check never silently drops its argument."""
+    shape = CHECK_ARG_SHAPE.get(name, "PROJECT")
+    cmd = [sys.executable, str(PROGRAMS_DIR / name)]
+    if shape == "DOCS_DIR":
+        cmd.append(str(resolve_docs_dir(project_dir)))
+    elif shape == "NONE":
+        pass  # takes no positional (introspects the gate programs itself)
+    else:  # PROJECT
+        cmd.append(str(project_dir))
+    return cmd
+
+
 def _run_check(name: str, project_dir: Path) -> CheckResult:
-    cmd = [sys.executable, str(PROGRAMS_DIR / name), str(project_dir)]
+    cmd = build_check_cmd(name, project_dir)
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=120, check=False)

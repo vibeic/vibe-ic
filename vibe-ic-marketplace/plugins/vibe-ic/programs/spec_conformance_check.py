@@ -83,12 +83,14 @@ from pathlib import Path
 from typing import List, Optional
 
 try:
-    from _specrtl_common import (Port, SpecContract, classify_rtl_resets,
+    from _specrtl_common import (Port, SpecContract, WIDTH_UNKNOWN,
+                                 classify_rtl_resets,
                                  extract_spec_contract, parse_rtl_ports,
                                  strip_comments)
 except ImportError:  # allow running from another cwd
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from _specrtl_common import (Port, SpecContract, classify_rtl_resets,
+    from _specrtl_common import (Port, SpecContract, WIDTH_UNKNOWN,
+                                 classify_rtl_resets,
                                  extract_spec_contract, parse_rtl_ports,
                                  strip_comments)
 
@@ -1378,7 +1380,13 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
         if rp.direction != sp.direction:
             f.append(Finding(path, 'ERROR', 'port-direction-mismatch', nm,
                 f"port '{nm}' direction RTL={rp.direction} vs spec={sp.direction}."))
-        if rp.width != sp.width:
+        # Skip the width assertion when EITHER side is WIDTH_UNKNOWN (a
+        # parameterized / symbolic bound that could not be resolved to a
+        # literal). Asserting equality against an unknown fabricates a false
+        # mismatch (the parameterized-width defect). Only compare two KNOWN
+        # literal widths.
+        if (rp.width != WIDTH_UNKNOWN and sp.width != WIDTH_UNKNOWN
+                and rp.width != sp.width):
             f.append(Finding(path, 'ERROR', 'port-width-mismatch', nm,
                 f"port '{nm}' width RTL={rp.width} vs spec={sp.width}."))
     if smap:

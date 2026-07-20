@@ -291,3 +291,53 @@ endmodule
     # out is 8-bit per the TopModule header — NOT 1-bit from the embedded buggy module.
     assert 'port-width-mismatch' not in rules(f)
     assert 'port-extra' not in rules(f)
+
+
+# ---- JSON `dir` key + parameterized width (defects #3 / #4) ----------------
+_RTL_WB = """
+module wb_if #(parameter WB_AW = 32, parameter WB_DW = 16)(
+    input  wire              clk,
+    input  wire [WB_AW-1:0]  adr,
+    input  wire [WB_DW-1:0]  dat_i,
+    output wire [WB_DW-1:0]  dat_o
+);
+    assign dat_o = dat_i;
+endmodule
+"""
+
+
+def test_json_spec_dir_key_no_false_direction_mismatch(tmp_path):
+    """A JSON L-doc spec using the `dir` port key must not mis-flag outputs
+    (previously every port defaulted to 'input')."""
+    spec = json.dumps({"module": "wb_if", "ports": [
+        {"name": "clk", "dir": "input", "width": 1},
+        {"name": "adr", "dir": "input", "width": 32},
+        {"name": "dat_i", "dir": "input", "width": 16},
+        {"name": "dat_o", "dir": "output", "width": 16}]})
+    res, findings = run(tmp_path, spec, _RTL_WB, '.json', '--top', 'wb_if')
+    assert 'port-direction-mismatch' not in rules(findings), findings
+    assert 'port-width-mismatch' not in rules(findings), findings
+
+
+def test_json_spec_dir_key_still_catches_real_direction_error(tmp_path):
+    """Proven-negative: a genuinely wrong direction is still flagged."""
+    spec = json.dumps({"module": "wb_if", "ports": [
+        {"name": "clk", "dir": "input", "width": 1},
+        {"name": "adr", "dir": "output", "width": 32},   # WRONG (RTL: input)
+        {"name": "dat_i", "dir": "input", "width": 16},
+        {"name": "dat_o", "dir": "output", "width": 16}]})
+    res, findings = run(tmp_path, spec, _RTL_WB, '.json', '--top', 'wb_if')
+    assert 'port-direction-mismatch' in rules(findings), findings
+
+
+def test_unresolvable_param_width_skips_assertion(tmp_path):
+    """RTL bound references a param not declared in-module -> width UNKNOWN ->
+    the width assertion is skipped, not fired as a false mismatch."""
+    rtl = ("module u(input clk, input [EXT_W-1:0] adr, output [7:0] stat);\n"
+           "  assign stat = adr[7:0];\nendmodule\n")
+    spec = json.dumps({"module": "u", "ports": [
+        {"name": "clk", "dir": "input", "width": 1},
+        {"name": "adr", "dir": "input", "width": 32},
+        {"name": "stat", "dir": "output", "width": 8}]})
+    res, findings = run(tmp_path, spec, rtl, '.json', '--top', 'u')
+    assert 'port-width-mismatch' not in rules(findings), findings
