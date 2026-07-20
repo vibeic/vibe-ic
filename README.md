@@ -62,17 +62,19 @@ OpenROAD / yosys / ngspice / magic / netgen / iverilog / klayout with
 gatekeeper-verified FAIL→PASS fixes; scoreboard in `tools/vibeic-eda/FIX_STATUS.md`):
 
 ```bash
+export VIBEIC_DESIGNS="/path/to/your/designs"  # ← your project / designs folder (must already exist)
+[ -d "$VIBEIC_DESIGNS" ] || { echo "VIBEIC_DESIGNS must point at an existing directory"; exit 1; }
 docker pull ghcr.io/vibeic/vibeic-eda:0.2.24   # or build: docker build -t vibeic-eda:0.2.24 tools/vibeic-eda
 docker rm -f vibeic-eda 2>/dev/null || true    # "name already in use"? drop the old container first
 docker run -d --name vibeic-eda \
-  -v "$HOME/AI_IC_design:$HOME/AI_IC_design:rw" \
-  -v "$HOME/AI_IC_design:/foss/designs:rw" \
+  -v "$VIBEIC_DESIGNS:$VIBEIC_DESIGNS:rw" \
+  -v "$VIBEIC_DESIGNS:/foss/designs:rw" \
   ghcr.io/vibeic/vibeic-eda:0.2.24 --skip sleep infinity
 docker exec vibeic-eda yosys --version         # sanity check — should print a version
 ```
 
 Stock fallback: `docker pull hpretl/iic-osic-tools:latest` (run it named `vibeic-eda`).
-Already running an older tag? Swap without retyping mounts: `tools/vibeic-eda/restart-eda.sh 0.2.19`.
+Already running an older tag? Swap without retyping mounts: `tools/vibeic-eda/restart-eda.sh 0.2.24`.
 See **[docs/INSTALL.md](docs/INSTALL.md)** for the required bind-mounts (Phase 3 needs the identity mount).
 
 The image tag is pinned by the one-line `tools/vibeic-eda/VERSION`;

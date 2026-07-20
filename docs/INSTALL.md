@@ -23,24 +23,34 @@ MCP server expects via `EDA_CONTAINER`). Provide it either way:
 magic / netgen / iverilog / klayout with gatekeeper-verified FAIL→PASS fixes; scoreboard in
 `tools/vibeic-eda/FIX_STATUS.md`). Build the reproducible image once, then run it:
 
+First point `VIBEIC_DESIGNS` at **your own** designs / projects directory — the folder where
+your IC projects already live. It **must already exist**: installing the plugin adds nothing
+to your home directory, and `docker run -v <src>:<dst>` would otherwise create a missing
+source directory *as root* — the phantom-directory bug. Do NOT default it to a plugin-named
+workspace; use a directory you already have (e.g. your project folder).
+
 ```bash
-docker pull ghcr.io/vibeic/vibeic-eda:0.2.23          # or build locally: docker build -t vibeic-eda:0.2.23 tools/vibeic-eda
+export VIBEIC_DESIGNS="/path/to/your/designs"         # ← your project / designs folder (must already exist)
+[ -d "$VIBEIC_DESIGNS" ] || { echo "VIBEIC_DESIGNS must point at an existing directory"; exit 1; }
+
+docker pull ghcr.io/vibeic/vibeic-eda:0.2.24          # or build locally: docker build -t vibeic-eda:0.2.24 tools/vibeic-eda
 docker rm -f vibeic-eda 2>/dev/null || true           # "name already in use" = an old container exists; drop it first
 docker run -d --name vibeic-eda \
-  -v "$HOME/AI_IC_design:$HOME/AI_IC_design:rw" \
-  -v "$HOME/AI_IC_design:/foss/designs:rw" \
-  ghcr.io/vibeic/vibeic-eda:0.2.23 --skip sleep infinity
+  -v "$VIBEIC_DESIGNS:$VIBEIC_DESIGNS:rw" \
+  -v "$VIBEIC_DESIGNS:/foss/designs:rw" \
+  ghcr.io/vibeic/vibeic-eda:0.2.24 --skip sleep infinity
 docker exec vibeic-eda yosys --version                # sanity check → prints a version (bare exec resolves since 0.2.12)
 ```
 
 **Or — the stock base** (standard tools, no fork enhancements): pull IIC-OSIC-TOOLS and give
-the container the same name:
+the container the same name (same `$VIBEIC_DESIGNS` mounts):
 
 ```bash
+[ -d "$VIBEIC_DESIGNS" ] || { echo "set VIBEIC_DESIGNS to an existing directory first"; exit 1; }
 docker pull hpretl/iic-osic-tools           # or the pinned tag in mcp-eda/INSTALL_GUIDE.md
 docker run -d --name vibeic-eda \
-  -v "$HOME/AI_IC_design:$HOME/AI_IC_design:rw" \
-  -v "$HOME/AI_IC_design:/foss/designs:rw" \
+  -v "$VIBEIC_DESIGNS:$VIBEIC_DESIGNS:rw" \
+  -v "$VIBEIC_DESIGNS:/foss/designs:rw" \
   hpretl/iic-osic-tools --skip sleep infinity
 ```
 
@@ -49,12 +59,12 @@ docker run -d --name vibeic-eda \
 > `/foss/designs` (second mount), but Phase 3's backend and the RTLLM Verilator-escalation
 > scorer also run in-container commands like `cd {host_path}` using the *host absolute*
 > path — that resolves ONLY if the SAME path exists inside the container, which is what the
-> first **identity mount** (`$HOME/AI_IC_design` → same path) provides. Without it the
+> first **identity mount** (`$VIBEIC_DESIGNS` → same path) provides. Without it the
 > in-container `cd` reports `No such file or directory` and Phase 3 aborts. `phase3_one_shot_runner`
 > auto-detects the mount table (`docker inspect … .Mounts`) and translates host→container
 > paths, so an unmounted container leaves it nothing to translate to. Keep your design tree
-> under `$HOME/AI_IC_design` (the workspace the mcp-eda `INSTALL_GUIDE.md` assumes); mount a
-> different workspace root at its OWN identity path if you use one.
+> under `$VIBEIC_DESIGNS` (the directory you chose above) — the plugin never invents a
+> workspace under your `$HOME`.
 
 ## Step 2 — Install the plugin
 

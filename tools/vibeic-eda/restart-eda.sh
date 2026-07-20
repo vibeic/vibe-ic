@@ -24,7 +24,7 @@
 # Env overrides:
 #   NAME=vibeic-eda            container name to manage
 #   IMAGE_REPO=vibeic/vibeic-eda   repo prepended to a bare tag argument
-#   DESIGNS_DIR=~/AI_IC_design designs dir mounted at /foss/designs (fresh-container fallback only)
+#   DESIGNS_DIR=/path/to/your/designs   existing designs dir mounted at /foss/designs (fresh-container fallback only; must already exist)
 #   RESTART_EDA_PRINT_IMAGE=1  print the resolved image ref and exit (no docker)
 #
 # After a successful recreate, confirm the toolchain from Claude Code with the
@@ -101,16 +101,18 @@ if docker container inspect "$NAME" >/dev/null 2>&1; then
     < <(docker inspect "$NAME" --format '{{range .Config.Cmd}}{{println .}}{{end}}')
 else
   echo "== no existing container '${NAME}' — using canonical vibeic-eda defaults"
-  # Generic defaults (no host-specific paths): designs dir from $DESIGNS_DIR
-  # (created if missing so docker doesn't create it root-owned), $HOME mounted
-  # through so in-container paths match the host's.
-  [[ -n "${HOME:-}" ]] || die \
-    "HOME is not set — run as your normal user (the fallback mounts need it)"
-  DESIGNS_DIR="${DESIGNS_DIR:-${HOME}/AI_IC_design}"
+  # Path-portability: NEVER default a designs dir under $HOME — docker would
+  # create a missing bind-mount source root-owned (the phantom-directory bug).
+  # With no existing container to preserve, require the user to name an EXISTING
+  # directory via DESIGNS_DIR (or VIBEIC_DESIGNS); refuse rather than invent one.
+  DESIGNS_DIR="${DESIGNS_DIR:-${VIBEIC_DESIGNS:-}}"
+  [[ -n "$DESIGNS_DIR" ]] || die \
+    "no existing '${NAME}' container to preserve, and neither DESIGNS_DIR nor VIBEIC_DESIGNS is set — point one at your existing designs dir, e.g.  DESIGNS_DIR=/path/to/your/designs ${0##*/} ${1:-<tag>}"
   [[ "$DESIGNS_DIR" == /* ]] || die \
     "DESIGNS_DIR must be an absolute path (got '${DESIGNS_DIR}') — a relative path would become a docker named volume, not a bind mount"
-  mkdir -p "$DESIGNS_DIR"
-  BINDS=( -v "${DESIGNS_DIR}:/foss/designs" -v "${HOME}:${HOME}" )
+  [[ -d "$DESIGNS_DIR" ]] || die \
+    "DESIGNS_DIR '${DESIGNS_DIR}' does not exist — create it deliberately first (the installer never creates a workspace for you)"
+  BINDS=( -v "${DESIGNS_DIR}:${DESIGNS_DIR}" -v "${DESIGNS_DIR}:/foss/designs" )
   USER_SPEC="$(id -u)"
   WORKDIR="/foss/designs"
   CMD=( --skip sleep infinity )
