@@ -295,14 +295,19 @@ def audit(project: Path) -> AuditResult:
         "rpt": rpt_info,
     }
 
-    # --- (d) INCONCLUSIVE: a frontend PARSE-ABORT built no miter ----------
-    # A run that reaches 0 compared points because the gold/gate never PARSED
-    # (read_verilog / read_slang could not elaborate a modern-SV closure) is NOT
-    # classifiable as PASS or FAIL — there was no miter. It must NOT be a hard
-    # FAIL (which cascade-marks 24 downstream steps MISSING) and must NOT be a
-    # vacuous PASS. §4.05-safe: this re-classifies ONLY a genuine zero-miter
-    # parse-abort — a miter that DID run and left non-equivalent / unproven
-    # points still FAILs (the guard below requires no such points).
+    # --- (d) INCONCLUSIVE: NO completed comparison → zero decided points ----
+    # A run that reaches 0 decided points is NOT classifiable as PASS or FAIL —
+    # there is no equivalence evidence in EITHER direction. Two causes, both
+    # non-blocking:
+    #   * a frontend PARSE-ABORT: the gold/gate never elaborated (read_verilog /
+    #     read_slang could not parse a modern-SV closure) → no miter built; and
+    #   * a wall-clock TIMEOUT that killed yosys BEFORE any completed
+    #     equiv_status verdict (v1462 ibex/CPU-class): 0 points decided, no
+    #     counterexample — a disclosed budget gap (lec_run marks it INCONCLUSIVE).
+    # It must NOT be a hard FAIL (which cascade-marks downstream steps MISSING)
+    # and must NOT be a vacuous PASS. §4.05-safe: this re-classifies ONLY a
+    # zero-decided-point run — a miter that DID run and left non-equivalent /
+    # unproven points still FAILs (the guard below requires no such points).
     verdict_field = str(lc.get("verdict", "")).strip().upper()
     is_inconclusive = (lc.get("inconclusive") is True
                        or verdict_field == "INCONCLUSIVE")
@@ -315,12 +320,15 @@ def audit(project: Path) -> AuditResult:
         res.passed = False
         res.findings.append(Finding(
             rule="LEC_INCONCLUSIVE_PARSE_ABORT", severity="WARNING",
-            message=("LEC verdict is INCONCLUSIVE — a frontend parse-abort "
-                     "built no equivalence miter (0 compared points), so RTL≡"
-                     "netlist could not be decided. This is a non-blocking "
-                     "SKIPPED-CONDITION (never a hard FAIL that cascades, never "
-                     "a vacuous PASS). Re-run with the slang frontend or fix the "
-                     "parse error to get a real verdict."),
+            message=("LEC verdict is INCONCLUSIVE — no completed comparison "
+                     "produced any decided points (0 compared): a frontend "
+                     "parse-abort built no miter, or a wall-clock timeout killed "
+                     "yosys before any equiv_status verdict. RTL≡netlist could "
+                     "not be decided in EITHER direction (no counterexample). "
+                     "This is a non-blocking SKIPPED-CONDITION (never a hard "
+                     "FAIL that cascades, never a vacuous PASS). Re-run with the "
+                     "slang frontend / a larger --timeout, or close with "
+                     "sign-off LEC, to get a real verdict."),
             file=LEC_JSON_REL))
         return res
 

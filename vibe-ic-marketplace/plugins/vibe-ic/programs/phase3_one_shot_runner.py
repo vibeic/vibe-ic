@@ -11533,6 +11533,49 @@ def _ext2spice_error_count_unmeasured(log_text: str) -> bool:
     return bool(_LVS_EXT_ERRORISH_RE.search(log_text))
 
 
+def _read_lvs_report_flushed(rpt_path: Path,
+                             attempts: int = 12,
+                             base_delay: float = 0.2,
+                             max_wait: float = 6.0) -> str:
+    """ORGANIC v1462 — read a netgen LVS report with a BOUNDED FLUSH RETRY.
+
+    netgen writes its terminal `Final result:` verdict LAST, to the REPORT FILE
+    (the report-path argument), while its stdout/stderr carry only the
+    setup-phase processing — e.g. the local netgen-setup's benign
+    `... (ignoring), No such cell!` notices for the physical-only ignore
+    classes. On a docker-overlay / networked filesystem the report file can lag
+    the netgen process exit by a beat, so reading it the instant netgen returns
+    can see an EMPTY or PARTIAL file. The transcript-only blob then carries no
+    terminal `Final result:` line and the runner mis-stamps a clean MATCH as
+    INCOMPLETE (`LVS_NO_TERMINAL_VERDICT`). Measured v1462 sky130A: all six
+    digital ICs (aes/caravel/spm/subservient/sha256/ibex) had
+    `Final result: Circuits match uniquely.` on disk in lvs.rpt while the runner
+    verdict read INCOMPLETE — a pure read/flush race, netgen DID emit the
+    verdict.
+
+    Retry with capped backoff until the report carries netgen's completion
+    marker (a terminal `Final result:` line) or the wall-clock budget expires,
+    whichever first. On genuine incompleteness (a killed/truncated run) the
+    marker never appears and we return the partial content after the bounded
+    wait, so a real INCOMPLETE still classifies INCOMPLETE. The report is the
+    AUTHORITATIVE verdict source; a caller falls back to the transcript only on
+    TOTAL report absence. chip-AGNOSTIC: no design/PDK literal, pure file I/O +
+    the shared completion marker."""
+    deadline = time.time() + max_wait
+    txt = ""
+    for i in range(max(1, attempts)):
+        try:
+            txt = rpt_path.read_text(errors="replace") if rpt_path.is_file() else ""
+        except OSError:
+            txt = ""
+        if _lvt.has_terminal_verdict(txt):
+            return txt                      # completion marker flushed → done
+        if time.time() >= deadline:
+            break
+        time.sleep(min(base_delay * (2 ** i), 1.0))
+    return txt
+
+
 def _write_lvs_verdict(project: Path, status: str, finding: str,
                        message: str, extras: Optional[Dict[str, Any]] = None
                        ) -> str:
@@ -12095,7 +12138,10 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
             _rc, out, err = _docker_exec(container, cmd, marker=nl_c)
         except Exception:  # nosec — netgen crash on the pre-attempt is non-fatal
             return None
-        txt = pa_rpt.read_text(errors="replace") if pa_rpt.is_file() else ""
+        # ORGANIC v1462 — bounded flush retry so a lagging power-aware report
+        # cannot make a genuine MATCH read empty (strictly monotonic: a missed
+        # match only defers to the plain path, never regresses).
+        txt = _read_lvs_report_flushed(pa_rpt)
         blob = (out or "") + "\n" + (err or "") + "\n" + txt
         if _lvt.classify(blob) != "MATCH":
             return None
@@ -12283,7 +12329,10 @@ def _run_klayout_lvs(project: Path, top: str, pdk: PdkConfig,
         f"netgen -batch source {_to_container_path(str(run_tcl), container)}",
         marker=_to_container_path(str(run_tcl), container))
     transcript = (out_n or "") + "\n" + (err_n or "")
-    rpt_txt = lvs_rpt.read_text(errors="replace") if lvs_rpt.is_file() else ""
+    # ORGANIC v1462 — bounded flush retry (see _read_lvs_report_flushed): the
+    # netgen report can lag the process exit on a docker-overlay FS, so wait for
+    # the terminal `Final result:` line before classifying the report.
+    rpt_txt = _read_lvs_report_flushed(lvs_rpt)
     blob = transcript + "\n" + rpt_txt
     cls = _lvt.classify(blob)
     # v1.3.93 — SECOND, STRONGER compare: KLayout `NetlistComparer` (pin-matched).
@@ -12668,7 +12717,13 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     # marker = the layout netlist path (in netgen's argv).
     rc, out, err = _docker_exec(container, cmd, marker=nl_c)
     transcript = (out or "") + "\n" + (err or "")
-    rpt_txt = lvs_rpt.read_text(errors="replace") if lvs_rpt.is_file() else ""
+    # ORGANIC v1462 — read the report with a bounded flush retry: netgen writes
+    # its terminal `Final result:` verdict to lvs.rpt (its stdout carries only
+    # the setup-phase `No such cell!` notices), and on a docker-overlay FS the
+    # report can lag the process exit, so a naive read stamps a clean MATCH as
+    # INCOMPLETE. The report is authoritative; the transcript is a fallback only
+    # on TOTAL report absence.
+    rpt_txt = _read_lvs_report_flushed(lvs_rpt)
     blob = transcript + "\n" + rpt_txt
     # #524 — the verdict comes from the SHARED classifier so the runner can
     # never again drift from the Step-31 gate (#507 put 'failed pin matching'

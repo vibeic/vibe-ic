@@ -244,6 +244,16 @@ def is_netgen_report(blob: str) -> bool:
     return bool(_NETGEN_SHAPE_RE.search(blob or ""))
 
 
+def has_terminal_verdict(blob: str) -> bool:
+    """True iff `blob` carries netgen's completion marker — a terminal
+    `Final result:` line. A COMPLETED netgen compare ALWAYS ends with one
+    (whether match or mismatch); its ABSENCE means the report is empty, partial,
+    or the run was killed before the top-level compare. Used by report readers
+    to know a `Final result:` verdict has actually flushed to the report file
+    before classifying it (netgen writes this line LAST). chip-AGNOSTIC."""
+    return bool(_FINAL_RESULT_LINE_RE.search(blob or ""))
+
+
 def load_json_report(source: JsonSource) -> Optional[Dict[str, Any]]:
     """Resolve an E1 report from a dict, a file path, or a directory holding
     one. Returns None when there is no readable E1 report — callers then fall

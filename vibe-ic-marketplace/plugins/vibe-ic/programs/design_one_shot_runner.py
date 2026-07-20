@@ -9413,6 +9413,18 @@ def step_emit_phase2_manifests(project: Path,
         evidence_log.write_text("\n".join(lines) + "\n")
         written.append("reports/phase2/fpga/on_board_evidence/usb_hid_tester_byte_capture.log")
 
+    # ORGANIC v1462 — emit the top-level acceptance artifact SOURCE_MANIFEST.md
+    # (GENERATED vs REUSED-IP) from the staged RTL + phase2/stage1/rtl/
+    # SOURCE_MANIFEST.json, where benchmark_verify_report.py probes. Faithful
+    # transform of on-disk provenance, non-destructive (skips a hand-authored
+    # one). Best-effort: a render failure never fails the manifest step.
+    try:
+        import source_manifest_md_emit as _smme
+        if _smme.emit(project) is not None and (project / "SOURCE_MANIFEST.md").is_file():
+            written.append("SOURCE_MANIFEST.md")
+    except Exception:  # nosec — provenance emission is never fatal
+        pass
+
     return StepResult("phase2_manifests", "PASS",
                       time.time() - t0,
                       f"{len(written)} manifest(s) written",
