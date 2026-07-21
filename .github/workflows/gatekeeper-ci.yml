@@ -198,6 +198,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # need base..HEAD history for the diff selector
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -217,14 +219,51 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends iverilog tcl yosys verilator
 
+      # Resolve the merge base of this change (same shape as governance-gates):
+      # pull_request -> base.sha, merge_group -> base_sha, fallback merge-base.
+      - name: Resolve base SHA
+        id: base
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "merge_group" ]; then
+            BASE="${{ github.event.merge_group.base_sha }}"
+          else
+            BASE="${{ github.event.pull_request.base.sha }}"
+          fi
+          if [ -z "${BASE:-}" ]; then
+            git fetch --no-tags --depth=1 origin main || true
+            BASE="$(git merge-base origin/main HEAD || git rev-parse HEAD~1)"
+          fi
+          echo "sha=$BASE" >> "$GITHUB_OUTPUT"
+          echo "Base SHA = $BASE" >&2
+
       - name: plugin_full_audit (D1 program-test + D2 step-checker)
         run: |
           python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN_ROOT"
 
-      - name: pytest (plugin tree)
+      # PATCH cadence gate: the FULL both-tree suite is milestone-only (90+ min
+      # on a 2-core hosted runner — unusable per-PR). Here we run only the FAST
+      # targeted subset that covers this PR's changed files, plus a fixed
+      # doctrine smoke set (the selector guarantees a non-empty floor). The full
+      # suite still runs on the x.y.0 `full-suite-milestone` job below.
+      - name: Select + run targeted pytest subset
         run: |
+          set -euo pipefail
+          BASE="${{ steps.base.outputs.sha }}"
+          python3 "$PROGRAMS/ci_targeted_test_select.py" --base "$BASE" \
+            > /tmp/targeted_tests.txt
+          echo "----- selected targeted subset -----"
+          cat /tmp/targeted_tests.txt
+          echo "------------------------------------"
           cd "$PLUGIN_ROOT"
-          pytest -q --maxfail=10 --timeout=300 --timeout-method=thread
+          # The selector prints plugin-root-relative paths; run them from here.
+          # It never emits an empty list (smoke set is the floor), but guard
+          # anyway so an unexpected empty file can't silently pass zero tests.
+          if [ ! -s /tmp/targeted_tests.txt ]; then
+            echo "::error::targeted selector produced no tests"; exit 1
+          fi
+          xargs pytest -q --maxfail=10 --timeout=180 --timeout-method=thread \
+            < /tmp/targeted_tests.txt
 
   # -------------------------------------------------------------------------
   # full-suite-milestone: the EXTRA both-tree coverage that ONLY runs on an
