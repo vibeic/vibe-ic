@@ -1215,6 +1215,21 @@ steps:
         - optional_program_exit_zero:
             command: "post_route_signoff_corner_check . --json reports/phase3/sta/post_route_signoff_corner.json"
             condition_files_exist: ["phase3/stage3/sta/sta_spef_multicorner.rpt"]
+        # The timing RECORD-completeness gate. The sub-gate above is
+        # `condition_files_exist`-gated on the very report whose ABSENCE is the
+        # defect: when no multicorner report exists the condition is false, the
+        # gate never runs, and Step 23 passes — so an unreported corner is
+        # indistinguishable from a met one. That is how a -4.33 ns slow-corner
+        # setup violation reached a campaign ledger that carried no STA column
+        # at all. This gate is therefore UNCONDITIONAL: it starts from the
+        # corners the flow DECLARED (the mcorner-OCV / multi-corner-SPEF stance
+        # files and pvt_matrix.json) and FAILs when the record does not account
+        # for each declared sign-off corner in the role it was declared to
+        # serve, when a reported corner is characterised only half-way, or when
+        # any sign-off corner violates — a typ-only "MET" never carries the run.
+        # A run that declares and records no corner at all self-reports
+        # NOT_APPLICABLE (rc 0), so pre-phase3 and analog runs are unaffected.
+        - program_exit_zero: "sta_corner_record_completeness_check . --json reports/phase3/sta/sta_corner_record_completeness.json"
     blocks_on: [22]
 
   - id: 24
