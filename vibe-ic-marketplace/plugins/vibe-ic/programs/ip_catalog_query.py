@@ -78,6 +78,13 @@ class CatalogMatch:
     # when instantiating the IP for synthesis (sim-only generate blocks
     # with PLI/system tasks are the canonical case).
     synth_safe_params: List[Dict[str, Any]] = field(default_factory=list)
+    # #187 (BENCHMARK INTEGRITY) — set when this catalog entry would hand back
+    # the IC-under-test's OWN reference design (its top/name intersects the IC
+    # identity) rather than a leaf COMPONENT IP. Such an entry is REFUSED by
+    # query_catalog unless self-match is explicitly acknowledged; offering it
+    # would leak the answer key through the front door (§4.05).
+    self_match: bool = False
+    self_match_reason: str = ""
 
     def to_audit_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -1286,15 +1293,124 @@ def _manifest_to_match(m: Dict[str, Any], pattern: str,
 _SOC_TOP_RANK_BIAS = 0.05
 
 
+# ---------------------------------------------------------------------------
+# #187 (BENCHMARK INTEGRITY) — SELF-MATCH GUARD
+# ---------------------------------------------------------------------------
+# A catalog entry whose upstream repo / module set IS the IC-under-test's own
+# reference design must never be offered as a pull candidate: doing so hands the
+# generation the answer key through the front door (§4.05 forbids reading the
+# oracle; the catalog can hand it over just the same). The guard keys on the
+# IC's TOP-LEVEL identity (its ic-name / L1 part identity / top_module) — a
+# legitimate COMPONENT IP supplies only a LEAF and its tokens never intersect
+# the IC's own top. chip-AGNOSTIC: pure name/repo normalization, no chip literal.
+
+# Generic tokens that are NOT design-identifying (the runner's auto wrapper name,
+# family words) — dropped from BOTH the IC identity and the entry token set so a
+# shared generic word can never trigger a false self-match.
+_GENERIC_IDENT_STOP = frozenset({
+    "chip_top", "chip", "top", "soc", "soc_top", "top_level", "toplevel",
+    "core", "design", "ip", "rtl", "wrapper", "dut", "module", "tb",
+    "src", "hdl", "verilog"})
+
+# L1/L3/L9 fields that carry a SPECIFIC design name (never a family/category).
+_IC_IDENT_KEYS = frozenset({
+    "part_number", "part_name", "part", "product_name", "design_name",
+    "ip_name", "chip_name", "module_name", "top_module", "top", "top_level"})
+
+
+def _norm_ident(x: Any) -> str:
+    """Normalize a name / path / URL to a bare identity token: basename, `.git`
+    and HDL extension stripped, lowercased."""
+    if not isinstance(x, str):
+        return ""
+    s = x.strip().split("#", 1)[0].split("?", 1)[0].rstrip("/")
+    if not s:
+        return ""
+    base = s.replace("\\", "/").rstrip("/").split("/")[-1]
+    low = base.lower()
+    for suf in (".git", ".sv", ".svh", ".vhdl", ".vhd", ".sva", ".v"):
+        if low.endswith(suf):
+            base = base[: -len(suf)]
+            break
+    return base.strip().lower()
+
+
+def _ic_identity_tokens(project: Path, facts: Dict[str, Any],
+                        ic_name: Optional[str] = None) -> set:
+    """The TOP-LEVEL identity tokens of the IC UNDER TEST (#187) — the run's
+    ic-name, the project dir name, and the SPECIFIC design-name fields of L1/L3/L9
+    — normalized, with generic tokens dropped. chip-AGNOSTIC."""
+    toks: set = set()
+
+    def _add(x: Any) -> None:
+        t = _norm_ident(x)
+        if t and t not in _GENERIC_IDENT_STOP:
+            toks.add(t)
+
+    _add(ic_name)
+    _add(project.name)
+    for k, v in (facts or {}).items():
+        if isinstance(k, str) and isinstance(v, str) \
+                and k.rsplit(".", 1)[-1].lower() in _IC_IDENT_KEYS:
+            _add(v)
+    return toks
+
+
+def _entry_identity_tokens(mt: CatalogMatch,
+                           manifest: Dict[str, Any]) -> set:
+    """The module / repo identity tokens a catalog entry SUPPLIES (#187): its
+    ip_name, declared top_module, the basenames of its rtl_files, and its
+    upstream (canonical_url) repo basename — normalized, generic tokens dropped."""
+    toks: set = set()
+
+    def _add(x: Any) -> None:
+        t = _norm_ident(x)
+        if t and t not in _GENERIC_IDENT_STOP:
+            toks.add(t)
+
+    _add(mt.ip_name)
+    _add(mt.canonical_url)
+    if isinstance(manifest, dict):
+        _add(manifest.get("top_module"))
+        _add(manifest.get("upstream") or manifest.get("upstream_repo"))
+    for f in (mt.rtl_files or []):
+        _add(f)
+    return toks
+
+
+def _self_match_reason(mt: CatalogMatch, manifest: Dict[str, Any],
+                       ic_ident: set) -> str:
+    """Non-empty reason when the catalog entry would hand back the IC's OWN
+    design (its top/name identity intersects the IC identity); "" for a
+    legitimate leaf COMPONENT IP. #187 benchmark integrity."""
+    if not ic_ident:
+        return ""
+    inter = sorted(_entry_identity_tokens(mt, manifest) & ic_ident)
+    if not inter:
+        return ""
+    return ("catalog entry supplies the IC-under-test's OWN design (shared "
+            f"top/identity token(s): {', '.join(inter)}) — offering it would "
+            "hand back the reference design; REFUSED (#187 benchmark integrity)")
+
+
 def query_catalog(project: Path,
                   catalog_dir: Optional[Path] = None,
-                  min_confidence: float = 0.4) -> List[CatalogMatch]:
-    """Top-level API. Returns ranked list of catalog matches for project."""
+                  min_confidence: float = 0.4,
+                  ic_name: Optional[str] = None,
+                  allow_self_match: bool = False) -> List[CatalogMatch]:
+    """Top-level API. Returns ranked list of catalog matches for project.
+
+    #187 — a catalog entry that would hand back the IC-under-test's OWN reference
+    design (its top/name intersects the IC identity — see `_self_match_reason`)
+    is REFUSED by default (never returned), so the flow can never pull the answer
+    key. Pass `allow_self_match=True` to instead RETURN such entries flagged
+    (`self_match=True`, with a reason) for an explicit-acknowledgement caller."""
     manifests = load_manifests(catalog_dir)
     if not manifests:
         return []
 
     facts = load_project_facts(project)
+    ic_ident = _ic_identity_tokens(project, facts, ic_name)
     by_name: Dict[str, Dict[str, Any]] = {
         m.get("ip_name", ""): m for m in manifests if m.get("ip_name")
     }
@@ -1319,7 +1435,16 @@ def query_catalog(project: Path,
                 best_pattern = pattern
 
         if best_confidence >= min_confidence:
-            matches.append(_manifest_to_match(m, best_pattern, best_confidence))
+            mt = _manifest_to_match(m, best_pattern, best_confidence)
+            reason = _self_match_reason(mt, m, ic_ident)
+            if reason:
+                mt.self_match = True
+                mt.self_match_reason = reason
+                print(f"ip_catalog_query: REFUSED self-match {ip_name!r} — "
+                      f"{reason}", file=sys.stderr)
+                if not allow_self_match:
+                    continue          # never offer the IC's own design
+            matches.append(mt)
             matched_names.add(ip_name)
             if _is_soc_top(m):
                 soc_top_names.add(ip_name)
@@ -1340,6 +1465,16 @@ def query_catalog(project: Path,
         matched_names.add(dep)
         dep_match = _manifest_to_match(
             dm, "depends_on(auto-included)", max(min_confidence, 0.4))
+        # #187 — the self-match guard applies to auto-included dependencies too:
+        # a dependency that is itself the IC's own design is refused.
+        _dep_reason = _self_match_reason(dep_match, dm, ic_ident)
+        if _dep_reason:
+            dep_match.self_match = True
+            dep_match.self_match_reason = _dep_reason
+            print(f"ip_catalog_query: REFUSED self-match dependency {dep!r} — "
+                  f"{_dep_reason}", file=sys.stderr)
+            if not allow_self_match:
+                continue
         matches.append(dep_match)
         if _is_soc_top(dm):
             soc_top_names.add(dep)
@@ -1378,6 +1513,13 @@ def main(argv: List[str]) -> int:
                     help="Override ip-catalog/ location")
     ap.add_argument("--min-confidence", type=float, default=0.4,
                     help="Minimum confidence to include in results (default 0.4)")
+    ap.add_argument("--ic-name", default=None,
+                    help="IC-under-test name (strengthens the #187 self-match "
+                         "guard; L1/L3/L9 identity is used when omitted)")
+    ap.add_argument("--allow-self-match", action="store_true",
+                    help="Return (flagged) instead of refusing a catalog entry "
+                         "that supplies the IC's OWN design (#187 — requires "
+                         "explicit acknowledgement)")
     ap.add_argument("--list-only", action="store_true",
                     help="List all manifests (no project query)")
     ap.add_argument("--json", action="store_true",
@@ -1401,6 +1543,8 @@ def main(argv: List[str]) -> int:
         project,
         Path(args.catalog_dir) if args.catalog_dir else None,
         min_confidence=args.min_confidence,
+        ic_name=args.ic_name,
+        allow_self_match=args.allow_self_match,
     )
 
     if args.json:

@@ -184,6 +184,20 @@ def pull_catalog_ip(match: CatalogMatch,
     Returns audit dict with files_pulled, sha256 of each, license, etc.
     Records a provenance.jsonl line.
     """
+    # 0. #187 self-match guard (defense-in-depth). query_catalog already refuses
+    #    a self-match by default, but a caller that hand-builds a CatalogMatch (or
+    #    passes allow_self_match) must not silently pull the IC's OWN reference
+    #    design — that hands back the answer key (§4.05). A flagged self-match is
+    #    REJECTED here too.
+    if getattr(match, "self_match", False):
+        return {
+            "ip_name": match.ip_name,
+            "status": "REJECTED",
+            "reason": (match.self_match_reason
+                       or "catalog entry supplies the IC-under-test's own design "
+                          "(#187 benchmark integrity) — refused"),
+        }
+
     # 1. License compliance gate
     ok, rationale = check_license_compatibility(match.license)
     if not ok:
@@ -520,6 +534,12 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--dry-run", action="store_true",
                     help="Query + show what would be pulled, don't actually copy")
     ap.add_argument("--min-confidence", type=float, default=0.4)
+    ap.add_argument("--ic-name", default=None,
+                    help="IC-under-test name (strengthens the #187 self-match "
+                         "guard; L1/L3/L9 identity is used when omitted)")
+    ap.add_argument("--allow-self-match", action="store_true",
+                    help="Do NOT refuse a catalog entry that supplies the IC's "
+                         "OWN design (#187 — requires explicit acknowledgement)")
     ap.add_argument("--prune", metavar="IP_NAME", default=None,
                     help="Cleanly prune/supersede a previously-pulled IP: "
                          "remove its pulled files and record a removal "
@@ -561,6 +581,8 @@ def main(argv: List[str]) -> int:
         project,
         Path(args.catalog_dir) if args.catalog_dir else None,
         min_confidence=args.min_confidence,
+        ic_name=args.ic_name,
+        allow_self_match=args.allow_self_match,
     )
 
     if not matches:
