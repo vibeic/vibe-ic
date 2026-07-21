@@ -11528,6 +11528,45 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
              f"pnr failure first: {upstream_pnr.detail[:400]}"),
             extras={"finding": "LVS_UPSTREAM_PNR_INCOMPLETE",
                     "upstream_pnr_status": upstream_pnr.status})
+    # v1.4.70 — DEVICE-level LVS route. A PDK whose registry declares a
+    # `device_lvs_program` (asap7 -> asap7_finfet_lvs.py) has an OSS device-LVS
+    # route: KLayout geometric transistor extraction (GATE_CUT-severed real gate)
+    # vs the staged CDL golden. It must NOT dead-end at the netgen/magic
+    # "no LVS setup -> ENV_UNAVAILABLE" branches below (that message is FALSE for
+    # such a PDK). Report the available route + the shipped std-cell library
+    # verification honestly. (Full routed-design extract+compare vs the
+    # CDL-expanded gate netlist is the tracked remaining integration.)
+    _lvs_reg = _pdk_registry_entry(pdk.name) or {}
+    _dev_lvs_prog = _lvs_reg.get("device_lvs_program")
+    if _dev_lvs_prog and _lvs_reg.get("cdl_netlist") and _lvs_reg.get("klayout_lvs_tech"):
+        if not _tool_in_path(container, "klayout"):
+            return StepResult(
+                "lvs", "ENV_UNAVAILABLE", time.time() - t0,
+                f"{pdk.name}: device-level LVS route ({_dev_lvs_prog}) needs "
+                f"`klayout` in container {container!r} PATH.",
+                extras={"missing_tool": "klayout",
+                        "device_lvs_program": _dev_lvs_prog})
+        _dev_ver = _lvs_reg.get("device_lvs_verified") or {}
+        return StepResult(
+            "lvs", "WAIVED", time.time() - t0,
+            f"{pdk.name}: open-source DEVICE-level LVS is available via "
+            f"{_dev_lvs_prog} — KLayout geometric transistor extraction "
+            f"(GATE_CUT-severed real gate) compared against the staged CDL "
+            f"golden ({_lvs_reg.get('cdl_netlist')}); NO netgen/magic setup "
+            f"needed, so this is NOT an ENV gap. The shipped std-cell library is "
+            f"device-LVS-verified: {_dev_ver.get('match')}/"
+            f"{_dev_ver.get('compared')} cells MATCH (proven-negative="
+            f"{_dev_ver.get('proven_negative')}). Design-level extract+compare "
+            f"(routed design vs the CDL-expanded gate netlist) is the tracked "
+            f"remaining integration; `{_dev_lvs_prog} batch <lib.gds> "
+            f"--golden-cdl <cdl>` runs the library verification. "
+            f"NOT silicon-proven ({pdk.name} predictive).",
+            extras={"device_lvs_program": _dev_lvs_prog,
+                    "device_lvs_verified": _dev_ver,
+                    "klayout_lvs_tech": _lvs_reg.get("klayout_lvs_tech"),
+                    "cdl_netlist": _lvs_reg.get("cdl_netlist"),
+                    "lvs_method": "klayout_device_geometric",
+                    "finding": "LVS_DEVICE_LEVEL_AVAILABLE"})
     if pdk.calibre_lvs:
         # v1.6.54 — verdict-tier split: ENV_UNAVAILABLE if calibre
         # binary absent, WAIVED if binary present (agent has chosen
