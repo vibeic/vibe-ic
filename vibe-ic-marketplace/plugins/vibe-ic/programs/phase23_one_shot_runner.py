@@ -66,6 +66,11 @@ def main() -> int:
     p.add_argument("--container", default="vibeic-eda")
     p.add_argument("--max-eco", type=int, default=3)
     p.add_argument("--skip-hardware", action="store_true")
+    p.add_argument("--force-rtl-regen", action="store_true",
+                   help="Forwarded to Phase 2: let the deterministic "
+                        "generator overwrite RTL it did not produce. "
+                        "DESTRUCTIVE and off by default — without it "
+                        "hand-authored RTL is PRESERVED and rtl_gen WAIVEs.")
     p.add_argument("--skip-phase2", action="store_true",
                    help="Skip Phase 2 (only run Phase 3 — pre supposes "
                         "rtl/ + generated_docs/ already present)")
@@ -135,6 +140,8 @@ def main() -> int:
                    "--max-eco", str(args.max_eco)]
         if args.skip_hardware:
             p2_args.append("--skip-hardware")
+        if args.force_rtl_regen:
+            p2_args.append("--force-rtl-regen")
         p2_rc, _ = _run_phase("PHASE 2 (= 2a + 2b)", p2_runner, p2_args)
         p2_json = _pl.report_path(project, "phase2_one_shot.json")
         if p2_json.is_file():
