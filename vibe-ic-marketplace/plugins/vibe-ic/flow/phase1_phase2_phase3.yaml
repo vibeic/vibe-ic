@@ -399,11 +399,25 @@ steps:
         - optional_program_exit_zero:
             command: "l12_tb_coverage_check . --json reports/phase2/gates/l12_tb_coverage.json"
             condition_files_exist: ["phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json"]
-        # Verilator coverage: gate only fires when the project has run
-        # `verilator_coverage_measure measure …` and produced coverage_actual.json.
-        - optional_program_exit_zero:
-            command: "verilator_coverage_measure check --coverage-json reports/phase2/coverage/coverage_actual.json"
-            condition_files_exist: ["reports/phase2/coverage/coverage_actual.json"]
+        # Verilator coverage: UNCONDITIONAL (vibe-ic#220).
+        #
+        # This gate used to fire only when the project had already produced
+        # coverage_actual.json — but an absent coverage_actual.json is the
+        # defect, not the exemption. A run that measured no coverage at all
+        # skipped the coverage gate and Step 4 reported nothing wrong, and
+        # nothing else enforced it: `required_outputs` is ANY-of (check_step
+        # marks MISSING only when NO pattern matched), so a bare
+        # `phase2/stage1/sim/*.log` satisfied the step while the coverage
+        # artefact was gone, and the only unconditional program in this gate is
+        # vacuous_testbench_check, which judges TB-drives-DUT structure rather
+        # than coverage.
+        #
+        # `verilator_coverage_measure check` already exits 2 on an absent or
+        # untrustworthy artefact, which the gate runner surfaces as an explicit
+        # VACUOUS_PASS (the `__VACUOUS_HINT__` sentinel) rather than a bare
+        # pass. So running it unconditionally converts an INVISIBLE skip into a
+        # DISCLOSED one, and a below-threshold measurement still exits 1.
+        - program_exit_zero: "verilator_coverage_measure check --coverage-json reports/phase2/coverage/coverage_actual.json"
         # NEW TB PATH gate — the professional cocotb TB (professional_tb_gen)
         # must never silently pass a real functional mismatch. Fires only when
         # the step wrote its report; PASS/WAIVED/SKIP -> exit 0, a recorded
@@ -1485,10 +1499,17 @@ steps:
         # parses reports/phase3/erc.rpt — floating signal nets / "ERC clean: NO"
         # are a real electrical-rule failure -> FAIL. Missing/empty/provenance-
         # less/metric-less artefact => honest FAIL (never a vacuous pass).
-        # Fires when either the density report or the ERC report exists.
-        - optional_program_exit_zero:
-            command: "erc_density_check . --json reports/phase2/gates/erc_density.json"
-            condition_files_exist: ["reports/density.rpt", "reports/density.json", "reports/phase3/erc.rpt", "reports/phase3/density.rpt"]
+        # UNCONDITIONAL (vibe-ic#220). This gate used to fire only when one of
+        # the density/ERC artefacts already existed — which disarmed the very
+        # promise three lines above ("Missing/empty/provenance-less/metric-less
+        # artefact => honest FAIL (never a vacuous pass)"). With all four
+        # trigger paths absent the gate never ran, and Step 31's
+        # `required_outputs` is ANY-of, so a present drc_signoff.rpt kept the
+        # step green with NO ERC and NO density verification behind it.
+        # erc_density_check already emits DENSITY_MISSING at ERROR severity and
+        # exits 1 on an absent density artefact, so the checker was correct all
+        # along and only its condition suppressed it.
+        - program_exit_zero: "erc_density_check . --json reports/phase2/gates/erc_density.json"
     blocks_on: [23, 24, 25, 26, 27, 29, 30]
 
   # ── Step 32: ECO ─────────────────────────────────────────────
@@ -1877,7 +1898,26 @@ steps:
     name: "Reliability qualification (HTOL / FIT attestation)"
     stage: stage5_manufacturing
     condition:
-      files_exist: ["phase3/stage5_manufacturing/htol_results.json"]
+      # vibe-ic#220 — scope on the SILICON INTAKE declaration, not on this
+      # step's own output.
+      #
+      # This condition used to name `htol_results.json`, which is also this
+      # step's required_output. Missing HTOL results are the defect the
+      # attestation exists to catch, so the gate was disarmed by exactly the
+      # situation it was written for — and worse than the predicate-level
+      # cases, because `check_step` evaluates a step-level condition
+      # (flow_compliance_check.py:5200) and returns SKIPPED-CONDITION at :5219
+      # BEFORE the required_outputs check at :5253. Listing the artefact as a
+      # required_output therefore never made its absence loud: the step
+      # returned long before that line. A chip with silicon and no reliability
+      # qual at all reported nothing wrong.
+      #
+      # `silicon_received.json` is the same intake declaration steps 40-43 use.
+      # Pre-silicon runs still skip (correct scoping — you cannot HTOL a design
+      # that was never fabricated), but once silicon exists an absent
+      # htol_results.json now reaches the required_outputs check and reports
+      # MISSING instead of vanishing.
+      files_exist: ["phase3/stage5_manufacturing/silicon_received.json"]
     programs:
       - htol_attestation_check
     required_outputs:

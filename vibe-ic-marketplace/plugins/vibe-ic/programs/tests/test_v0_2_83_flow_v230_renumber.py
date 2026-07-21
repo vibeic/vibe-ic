@@ -82,7 +82,21 @@ def test_step44_htol_conditional():
     s = _STEPS[44]
     assert "HTOL" in s["name"]
     assert s["blocks_on"] == [43]
-    assert "htol_results.json" in json.dumps(s.get("condition", {}))
+    # Step 44 stays CONDITIONAL — reliability qual is genuinely N/A for a
+    # design that was never fabricated. What changed in vibe-ic#220 is WHICH
+    # artefact scopes it. This used to assert the condition named
+    # `htol_results.json`, which is also step 44's own required_output, so the
+    # assertion pinned the self-disabling shape: missing HTOL results are the
+    # defect the attestation exists to catch, and naming them in the condition
+    # meant the step vanished exactly when it had something to report. The
+    # scope now comes from the silicon-intake declaration that steps 40-43
+    # already use, so an absent htol_results.json reaches the required_outputs
+    # check and reports MISSING.
+    cond = json.dumps(s.get("condition", {}))
+    assert "silicon_received.json" in cond
+    assert "htol_results.json" not in cond, (
+        "step 44 must not be gated on its own required_output")
+    assert "htol_results.json" in json.dumps(s.get("required_outputs", []))
 
 
 def test_file_order_is_numeric():

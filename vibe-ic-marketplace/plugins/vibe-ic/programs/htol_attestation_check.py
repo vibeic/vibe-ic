@@ -19,8 +19,11 @@ never fabricating reliability numbers:
     `acceleration_factor` (>1) is applied when provided, else the FIT
     is labelled unaccelerated — disclosed, never silently assumed.
 
-Exit codes: 0 PASS, 1 FAIL, 2 htol_results.json absent (vacuous — the
-flow condition keeps Step 43 dormant until the artifact exists).
+Exit codes: 0 PASS, 1 FAIL, 2 htol_results.json absent → BLOCKED
+(vibe-ic#220 — an unperformed reliability qual on shipped silicon is an
+unanswered question, not a benign SKIP; the flow step is scoped by the
+silicon-intake declaration, so it REACHES this gate and reports BLOCKED
+rather than self-disabling on its own missing output).
 chip-AGNOSTIC: numeric/structural rules only.
 """
 from __future__ import annotations
@@ -34,8 +37,18 @@ from pathlib import Path
 def audit(project: Path) -> dict:
     src = project / "phase3" / "stage5_manufacturing" / "htol_results.json"
     if not src.is_file():
-        return {"verdict": "SKIP", "rc": 2,
-                "reason": "htol_results.json absent — HTOL not run/recorded"}
+        # #220 — name the missing input and call it BLOCKED, never SKIP.
+        # Silicon reached this step, so reliability qualification was owed.
+        # "SKIP" reads as "nothing to do here"; an unperformed HTOL is not
+        # nothing to do, it is an unanswered question. rc stays non-zero.
+        return {"verdict": "BLOCKED", "rc": 2,
+                "missing_input": str(src),
+                "reason": ("phase3/stage5_manufacturing/htol_results.json "
+                           "absent — HTOL was never run or never recorded, so "
+                           "no FIT/reliability claim can be substantiated. "
+                           "Produce the HTOL result, or record an explicit "
+                           "waiver stating why this silicon ships without "
+                           "reliability qualification.")}
     try:
         d = json.loads(src.read_text(errors="replace"))
     except (OSError, ValueError):

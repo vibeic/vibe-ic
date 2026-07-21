@@ -62,6 +62,11 @@ SMOKE_BASENAMES: tuple[str, ...] = (
     "test_agent_checkin_scope_guard.py",
     "test_plugin_full_audit.py",
     "test_flow_compliance_check.py",
+    # vibe-ic#220 — the self-disabling-condition guard. Belongs in the SMOKE
+    # floor rather than in change-targeted selection: it asserts a global
+    # invariant over the shipped flow definition, so the PR that reintroduces
+    # the defect is precisely the PR whose changed-file set might not select it.
+    "test_flow_condition_reachability_check.py",
     "test_spec_conformance_check.py",
     "test_rtl_hygiene_lint.py",
 )

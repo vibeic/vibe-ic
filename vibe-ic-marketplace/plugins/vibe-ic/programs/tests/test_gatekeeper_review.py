@@ -88,9 +88,12 @@ def _build_clean_plugin(tmp_path: Path, version: str = "1.0.96") -> Path:
         "  - id: s1\n"
         '    gate:\n'
         '      program_exit_zero: "widget"\n')
-    # D2 also delegates to gate_self_assertion_check + single_testpath_guard;
-    # ship inert pass-through stand-ins so the audit does not flag them missing.
-    for guard in ("gate_self_assertion_check", "single_testpath_guard"):
+    # D2 also delegates to gate_self_assertion_check + single_testpath_guard
+    # + flow_condition_reachability_check (vibe-ic#220); ship inert
+    # pass-through stand-ins so the audit does not flag them missing. This
+    # tuple must track audit_d2's guard list.
+    for guard in ("gate_self_assertion_check", "single_testpath_guard",
+                  "flow_condition_reachability_check"):
         (progs / f"{guard}.py").write_text(
             "import sys\n"
             "def main(argv=None):\n"
