@@ -216,10 +216,25 @@ END filltie
 
 # ------------------------------------------------ emitted PDN Tcl -----------
 
-def _pdk(tmp_path, lef_text, metal_prefix):
+def _stack_tlef(tmp_path, metal_prefix):
+    """A minimal 4-layer routing stack under the PDK's own metal prefix, so the
+    adaptive PDN can derive upper-metal straps. Generic names/values — this
+    stands for any PDK reaching the adaptive path."""
+    p = tmp_path / f"{metal_prefix}_stack.tlef"
+    p.write_text("".join(
+        f"LAYER {metal_prefix}{i}\n  TYPE ROUTING ;\n  DIRECTION {d} ;\n"
+        f"  PITCH 0.5 ;\n  WIDTH 0.2 ;\nEND {metal_prefix}{i}\n"
+        for i, d in enumerate(
+            ["HORIZONTAL", "VERTICAL", "HORIZONTAL", "VERTICAL"], 1)))
+    return str(p)
+
+
+def _pdk(tmp_path, lef_text, metal_prefix, tech_lef=None):
     return mod.PdkConfig(
         name="unit", liberty="/nonexistent/x.lib",
-        tech_lef="/nonexistent/x.tlef", cell_lef=_lef(tmp_path, lef_text),
+        tech_lef=(tech_lef if tech_lef is not None
+                  else _stack_tlef(tmp_path, metal_prefix)),
+        cell_lef=_lef(tmp_path, lef_text),
         cell_gds=None, site="SITE", drc_deck=None,
         metal_prefix=metal_prefix, tapcell_master=None)
 
