@@ -91,6 +91,33 @@ def parse_layermap(layermap_path: str) -> dict[str, tuple[int, int]]:
     return out
 
 
+# Spacing/width measurement metric for the auto-synthesized deck.
+#
+# MUST stay `euclidian` — it is what every foundry sign-off deck uses, and it
+# is KLayout's own default for `width`/`space`. The auto-deck is the fallback
+# used precisely when a PDK ships NO foundry deck, so if it measures more
+# weakly than a real deck it produces a false clean bill of health.
+#
+# `projection` (used here until this was measured) only compares the facing
+# projection of parallel edges: it CANNOT see a corner-to-corner (45-degree)
+# separation at all. Measured on KLayout 0.30.6 with two shapes offset
+# dx = dy = 0.15 um against a 0.23 um limit (true Euclidean separation
+# 0.2121 um, a genuine violation):
+#
+#     metric=euclidian   violations=2   <- correctly flagged
+#     metric=square      violations=2   <- flagged
+#     metric=projection  violations=0   <- MISSED
+#
+# Note the direction: Euclidean is the more PERMISSIVE metric for diagonal
+# neighbours (it measures the true hypotenuse, sqrt(2)x longer than the
+# rectilinear offset), which is exactly why foundry decks pair a relaxed
+# corner-to-corner limit with tighter edge-to-edge limits — e.g. ASAP7
+# M1.S.6 corner rule is 20 nm while its edge rules are 25/27/31 nm. A router
+# does NOT need extra rectilinear margin to satisfy a Euclidean rule at 45
+# degrees; the hazard is the opposite, a deck that under-measures corners.
+_METRIC = "euclidian"
+
+
 def emit_deck(deck_path: str, gds: str, top: str, rdb: str,
               layers: list[dict], gdsmap: dict[str, tuple[int, int]]) -> int:
     """Write the .drc file. Returns the number of rule lines emitted."""
@@ -120,17 +147,18 @@ def emit_deck(deck_path: str, gds: str, top: str, rdb: str,
             nm = L["name"].lower()
             eps = max(L["width"] * 0.999, L["width"] - 0.001)
             f.write(
-                "%s.width(%.4f.um, projection)"
+                "%s.width(%.4f.um, %s)"
                 ".output(%r)\n"
-                % (nm, eps, "%s.W <%.3f" % (L["name"], L["width"]))
+                % (nm, eps, _METRIC, "%s.W <%.3f" % (L["name"], L["width"]))
             )
             rules_emitted += 1
             if L["spacing"]:
                 sp = max(L["spacing"] * 0.999, L["spacing"] - 0.001)
                 f.write(
-                    "%s.space(%.4f.um, projection)"
+                    "%s.space(%.4f.um, %s)"
                     ".output(%r)\n"
-                    % (nm, sp, "%s.S <%.3f" % (L["name"], L["spacing"]))
+                    % (nm, sp, _METRIC,
+                       "%s.S <%.3f" % (L["name"], L["spacing"]))
                 )
                 rules_emitted += 1
     return rules_emitted
