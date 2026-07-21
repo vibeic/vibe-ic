@@ -80,7 +80,7 @@ RUN git clone https://github.com/vibeic/netgen.git /netgen \
 # Stage 5 — vibeic/iverilog (->> nonblocking-event codegen segfault fix + package ordering)
 # ---------------------------------------------------------------------------
 FROM ubuntu:24.04 AS iverilog-builder
-ARG IVERILOG_REF=110cadd57c3a96ca81e84bdb0a78463e81575088  # pinned; branch vibeic/sv-tb-coverage
+ARG IVERILOG_REF=42a15a5c6125f093dbe8f664a5826d0cada86109  # pinned; branch vibeic/sv-tb-coverage (0.2.27: ff-verified descendant of 110cadd5 — no fix dropped; adds vibe-ic#125 $dumpvars/$dumpports forward-ref bind-against-completed-scope + graft guard test, plus SDF INCREMENT/COND/scale/mtm honouring + forward-ref elab)
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       build-essential git autoconf gperf flex bison ca-certificates \
  && rm -rf /var/lib/apt/lists/*
