@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 903
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 903)
+- **Total programs (excluding helpers / shims):** 904
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 904)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 894 |
+| `any` | 895 |
 
 ## Alphabetical listing
 
@@ -476,6 +476,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `lec_run` | any | — | Step 13 LEC PRODUCER (RTL ≡ synthesized gate netlist). |
 | `lesson_consumption_check` | any | — | staged != CONSUMED, enforced by a program. |
 | `lessons_corpus_consistency_check` | any | — | ORGANIC #741 |
+| `level_hysteresis_flag_oracle_check` | any | — | prompt-derived oracle for the |
 | `level_shifter_required_check` | any | — | M2 gate (substance-verifying). |
 | `lfsr_synth` | any | — | deterministic SOLVER for the LINEAR-FEEDBACK-SHIFT-REGISTER |
 | `lin_protocol_synth` | any | v0.1.84 | LIN-class protocol synth helper. |
@@ -975,7 +976,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (894 programs)
+### `any` (895 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1422,6 +1423,7 @@ _(no programs in this group)_
 - `lec_run` — Step 13 LEC PRODUCER (RTL ≡ synthesized gate netlist).
 - `lesson_consumption_check` — staged != CONSUMED, enforced by a program.
 - `lessons_corpus_consistency_check` — ORGANIC #741
+- `level_hysteresis_flag_oracle_check` — prompt-derived oracle for the
 - `level_shifter_required_check` — M2 gate (substance-verifying).
 - `lfsr_synth` — deterministic SOLVER for the LINEAR-FEEDBACK-SHIFT-REGISTER
 - `lin_protocol_synth` — LIN-class protocol synth helper.  _[v0.1.84]_

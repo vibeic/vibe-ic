@@ -445,6 +445,39 @@ def main():
                                      "prompt's disclosed simulation-waveform "
                                      "table: " + str(out)[-300:])})
 
+    # 4d. LEVEL-HYSTERESIS FLAG oracle (the ack-fidelity lesson: two blind
+    # campaigns emitted the literal rise->open polarity at the identical >50%
+    # mismatch — the second WHILE ACKNOWLEDGING the captured lesson, justified
+    # via a different generic lesson. A checkbox gate proves acknowledgement
+    # PRESENCE; only a simulation oracle proves FIDELITY). The check derives a
+    # deterministic oracle from the prompt ALONE: the relative-direction
+    # sentence admits exactly two uniform held-flag polarities; the prompt's
+    # ABSOLUTE anchors (reset-equivalence "all outputs asserted" bottom + zero-
+    # flow top, whose arrival directions are forced) filter them; ONLY when
+    # exactly one survives is the authored RTL walked up/down and compared.
+    # §4.05: every ambiguous precondition SKIPs (rc=0) — corpus-swept over 312
+    # prompt/sample pairs: 310 SKIP, and the only firings were the two genre
+    # instances (BLOCK on the wrong-polarity sample, PASS on the correct one).
+    lhf_json = wd / "level_hysteresis_findings.json"
+    rc, out = run([sys.executable, str(PROGRAMS / "level_hysteresis_flag_oracle_check.py"),
+                   "--prompt", str(prompt), "--rtl", str(sample),
+                   "--top", top_module, "--json", str(lhf_json)], env=cli_env)
+    lhf_verd = "BLOCK" if rc == 1 else ("DISCLOSED_TOOL_GAP" if rc == 2 else "PASS_OR_SKIP")
+    if rc == 0 and lhf_json.is_file():
+        try:
+            lhf_verd = json.loads(lhf_json.read_text()).get("verdict", "PASS_OR_SKIP")
+        except Exception:
+            pass
+    steps["level_hysteresis_flag_oracle"] = {"verdict": lhf_verd, "rc": rc,
+                                             "log": out[-300:]}
+    if rc == 1:
+        blocking.append({"program": "level_hysteresis_flag_oracle_check",
+                         "rule": "hysteresis-flag-polarity-mismatch",
+                         "message": ("authored RTL contradicts the prompt-derived "
+                                     "hysteresis-flag oracle (absolute anchors "
+                                     "outrank the relative-direction sentence): "
+                                     + str(out)[-300:])})
+
     # 5a. ENFORCED power-up determinism (v0.1.24 lesson) — repair reset-less
     #     registered outputs IN-PLACE before emit. Structural + prompt-blind.
     rc, out = run([sys.executable, str(PROGRAMS / "rtl_hygiene_lint.py"),
