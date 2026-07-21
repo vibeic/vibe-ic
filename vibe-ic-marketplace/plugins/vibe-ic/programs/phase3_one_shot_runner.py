@@ -10345,6 +10345,66 @@ def _pnr_pdn_status(project: Path) -> Tuple[bool, str]:
     return False, "no PDN insertion marker"
 
 
+def _def_net_orphan_instances(project: Path) -> Tuple[int, str]:
+    """Count PLACED instances that participate in NO net at all, read from the
+    routed DEF alone. Returns (count, detail).
+
+    WHY THIS GATES THE SAME-NET HEAL (§4.05). The heal is a NET-UNAWARE
+    morphological close. Its entire safety argument is that a gap narrower than
+    the tech-LEF min-space cannot be different-net, BECAUSE the detail router
+    keeps different-net shapes at least min-space apart. That guarantee only
+    covers metal the router knows belongs to a net. A placed cell that appears
+    in no NETS/SPECIALNETS entry (physical-only fillers, decaps, tie/antenna
+    cells whose PG pins were never global-connected) still contributes real
+    metal to the streamed GDS, and the router does NOT hold signal routes off
+    it. Its shapes therefore sit at arbitrary distance from live signals, and a
+    close that bridges sub-min-space gaps will SHORT them together.
+
+    Measured on a commercial 180nm BCD run (683x683um die, 100% row
+    utilisation): 9719 of 16123 placed instances participated in no net
+    (FILL1/FILL2/DECAP*), and 932 of the deck's 1287 MET1 sub-min-space edge
+    pairs were DIFFERENT-net (power-to-signal), not same-net slivers. A 0.22um
+    close there merged a filler VSS stub into signal net _01841_ - a real short
+    - even though the PDN marker check passed, because the PDN itself WAS
+    correctly inserted. A confirmed PDN is therefore necessary but NOT
+    sufficient, and this is the missing half of the precondition.
+
+    chip/PDK-AGNOSTIC: pure DEF token parsing (COMPONENTS + NETS/SPECIALNETS);
+    no foundry, layer, or cell-name literal appears here.
+    """
+    def_f = _pl.pnr_dir(project) / "routed.def"
+    if not def_f.is_file():
+        cands = sorted(_pl.pnr_dir(project).glob("*.def"))
+        def_f = cands[0] if cands else def_f
+    try:
+        txt = def_f.read_text(errors="replace")
+    except OSError:
+        return 0, "no DEF to check"
+
+    def _sect(name):
+        m = re.search(r"^%s\s+\d+\s*;(.*?)^END %s\s*$" % (name, name),
+                      txt, re.MULTILINE | re.DOTALL)
+        return m.group(1) if m else ""
+
+    comps = dict(re.findall(r"^\s*-\s+(\S+)\s+(\S+)",
+                            _sect("COMPONENTS"), re.MULTILINE))
+    if not comps:
+        return 0, "no COMPONENTS section in DEF"
+    refs = set()
+    for s in ("NETS", "SPECIALNETS"):
+        refs |= set(re.findall(r"\(\s*([^\s()*]+)\s+[^\s()]+\s*\)", _sect(s)))
+    orphans = [i for i in comps if i not in refs]
+    if not orphans:
+        return 0, "every placed instance participates in >=1 net"
+    by_master = {}
+    for i in orphans:
+        by_master[comps[i]] = by_master.get(comps[i], 0) + 1
+    top = ", ".join("%s x%d" % (m, n) for m, n in
+                    sorted(by_master.items(), key=lambda kv: -kv[1])[:5])
+    return len(orphans), ("%d/%d placed instances participate in no net (%s)"
+                          % (len(orphans), len(comps), top))
+
+
 def _klayout_same_net_heal(project: Path, top: str, pdk: PdkConfig,
                            container: str, gds_path: Path) -> Tuple[bool, str]:
     """Config-driven same-net routing-metal near-miss heal (see
@@ -10387,6 +10447,24 @@ def _klayout_same_net_heal(project: Path, top: str, pdk: PdkConfig,
             f"({pdn_mk}); the different-net-clean premise the same-net close "
             "relies on is unverified, so a net-unaware close could bridge/mask "
             "a real different-net near-miss (§4.05). Fix the PDN and re-run.")
+    # §4.05 PRECONDITION 2 (verified, not assumed): a confirmed PDN is NOT
+    # sufficient. The close is safe only when EVERY metal shape in the layout is
+    # owned by a net the router honoured. Placed cells that participate in no
+    # net at all (physical-only fillers / decaps / tie cells whose PG pins were
+    # never global-connected) still contribute metal, and the router does not
+    # keep signal routes min-space away from it - so a sub-min-space gap to such
+    # a shape is NOT evidence of same-net. Closing it SHORTS a live signal to
+    # that cell (in practice to VDD/VSS). REFUSE rather than ship a short.
+    n_orphan, orphan_detail = _def_net_orphan_instances(project)
+    if n_orphan:
+        return False, (
+            "same_net_heal REFUSED: " + orphan_detail + ". That metal is not "
+            "net-owned, so the router never held signal routes min-space away "
+            "from it and a sub-min-space gap is NOT proof of same-net; a "
+            "net-unaware close would short live signals to those cells "
+            "(§4.05). Global-connect the PG pins (or remove the cells) and "
+            "re-run - the sign-off DRC keeps reporting the near-misses until "
+            "the router genuinely fixes them.")
     # §4.05: keep only layers whose max_bridge_um < the layer min-space.
     safe_layers: List[Dict[str, Any]] = []
     refused: List[str] = []
