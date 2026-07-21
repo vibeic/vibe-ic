@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 904
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 904)
+- **Total programs (excluding helpers / shims):** 906
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 906)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 895 |
+| `any` | 897 |
 
 ## Alphabetical listing
 
@@ -161,6 +161,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `chip_gds_canonical_real_file_check` | any | — | top-level chip GDS files at |
 | `chip_top_gate_wrapper_gen` | any | — | v1.6.232 (merged v229+v231). |
 | `chip_top_open_drain_polarity_check` | any | — | v1.6.225. |
+| `ci_targeted_test_select` | any | — | pick a FAST targeted pytest subset for the |
 | `clause_smoke_tb` | any | — | ORGANIC #740 (G2) [chip-AGNOSTIC] |
 | `clock_cascade_synthesis_check` | any | — | refuse a top-level RTL that ties |
 | `clock_divider_period_check` | any | v0.116 | BACKLOG-v11 P0.2. |
@@ -887,6 +888,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `usb_pd_protocol_synth` | any | — | USB Power Delivery (USB-PD) protocol synth helper. |
 | `usb_protocol_synth` | any | v0.1.82 | USB-class protocol synth helper. |
 | `utilization_band_check` | any | v0.2.69 | Floorplan/placement utilization band classifier. |
+| `vacuous_testbench_check` | any | — | Phase-2 gate against VACUOUS testbenches. |
 | `vector_op_rtl_gen` | any | v0.1.8 | deterministic vector-operation → RTL generator. |
 | `vector_ops_synth` | any | — | deterministic SOLVER for the VECTOR-MANIPULATION family |
 | `vendor_fpga_reference_table_extraction_check` | any | v0.119.30 | gate (LL-29) that |
@@ -976,7 +978,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (895 programs)
+### `any` (897 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1112,6 +1114,7 @@ _(no programs in this group)_
 - `chip_gds_canonical_real_file_check` — top-level chip GDS files at
 - `chip_top_gate_wrapper_gen` — v1.6.232 (merged v229+v231).
 - `chip_top_open_drain_polarity_check` — v1.6.225.
+- `ci_targeted_test_select` — pick a FAST targeted pytest subset for the
 - `clause_smoke_tb` — ORGANIC #740 (G2) [chip-AGNOSTIC]
 - `clock_cascade_synthesis_check` — refuse a top-level RTL that ties
 - `clock_divider_period_check` — BACKLOG-v11 P0.2.  _[v0.116]_
@@ -1832,6 +1835,7 @@ _(no programs in this group)_
 - `usb_pd_protocol_synth` — USB Power Delivery (USB-PD) protocol synth helper.
 - `usb_protocol_synth` — USB-class protocol synth helper.  _[v0.1.82]_
 - `utilization_band_check` — Floorplan/placement utilization band classifier.  _[v0.2.69]_
+- `vacuous_testbench_check` — Phase-2 gate against VACUOUS testbenches.
 - `vector_op_rtl_gen` — deterministic vector-operation → RTL generator.  _[v0.1.8]_
 - `vector_ops_synth` — deterministic SOLVER for the VECTOR-MANIPULATION family
 - `vendor_fpga_reference_table_extraction_check` — gate (LL-29) that  _[v0.119.30]_

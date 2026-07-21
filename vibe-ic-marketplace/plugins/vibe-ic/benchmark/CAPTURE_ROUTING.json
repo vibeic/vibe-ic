@@ -47,6 +47,12 @@
       "bucket_A_related": ["programs/bit_level_full_stack_tb_check.py", "programs/oracle_tb_gen.py"],
       "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
     },
+    "phase2.tb_substance": {
+      "description": "Functional-verification SUBSTANCE — does a generated testbench actually drive the DUT, or does it merely print a pass? Distinct from phase2.full_stack_tb (which GENERATES a TB) and phase2.reference_tb (which checks a generated TB RAN). Discovery must stay DIRECTORY+STRUCTURE driven: scenario-named TBs (case_3.v, corner_operand.v) match no tb_*.v / *_tb.v glob, so a filename-driven audit silently reports zero hits on a corpus of real defects.",
+      "bucket_A_program": "programs/vacuous_testbench_check.py",
+      "bucket_A_related": ["programs/testbench_gen.py", "programs/l10_tb_conformance_check.py"],
+      "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
+    },
     "phase2.eco_loop": {
       "bucket_A_program": "programs/design_one_shot_runner.py",
       "bucket_B_skill_file": "skills/rtl-repair/SKILL.md"
