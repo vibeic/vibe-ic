@@ -1679,7 +1679,8 @@ def _build_tapcell_tcl(pdk: "PdkConfig") -> str:
 
 
 def _discover_pg_from_lef(
-        cell_lef: Optional[str]) -> Optional[Tuple[str, str, str, float]]:
+        cell_lef: Optional[str],
+        metal_prefix: str = "met") -> Optional[Tuple[str, str, str, float]]:
     """Discover (power_pin, ground_pin, followpin_layer, rail_width_um) from a
     cell LEF's std-cell power/ground PINs (USE POWER / USE GROUND).
 
@@ -1694,14 +1695,52 @@ def _discover_pg_from_lef(
 
     Picks the widest-spanning RECT under each PG pin (that IS the row rail; a
     narrow tap stub is not). Layer name returned VERBATIM (OpenROAD matches the
-    tech-LEF layer name case-exactly: a commercial PDK = "MET1", sky130 = "met1")."""
+    tech-LEF layer name case-exactly: a commercial PDK = "MET1", sky130 = "met1").
+
+    ROUTING-LAYER PREFERENCE (`metal_prefix`)
+    -----------------------------------------
+    Selecting the rail by TALLEST RECT alone is wrong for any PDK that also
+    declares WELL-BIAS pins as USE POWER / USE GROUND. gf180mcu does exactly
+    that: every std cell carries FOUR PG pins — VDD/VSS on `Metal1` and the
+    body ties VNW/VPW on `Nwell`/`Pwell`. Measured on the shipped
+    `gf180mcu_fd_sc_mcu7t5v0.lef` (cell `inv_1`):
+
+        PIN VDD  USE POWER   LAYER Metal1  RECT height 0.60 um
+        PIN VNW  USE POWER   LAYER Nwell   RECT height 2.59 um   <- taller
+        PIN VSS  USE GROUND  LAYER Metal1  RECT height 0.60 um
+        PIN VPW  USE GROUND  LAYER Pwell   RECT height 2.19 um   <- taller
+
+    The well RECTs are BOTH taller than the real rails AND span the full cell
+    width, so they pass the tap-stub guard and win on height. The function
+    then returned ("VNW", "VPW", "Nwell", 2.59) and the PDN emitted its
+    follow-pin stripes on `Nwell` — a NON-ROUTING layer. OpenROAD's detailed
+    router then took SIGNAL 11 (SIGSEGV) in
+    `drt::io::Parser::updateNetRouting` while reading the design, because the
+    net geometry sits on a layer with no routing/via setup.
+
+    So a PG candidate on a ROUTING-METAL layer is preferred over a taller one
+    that is not, ordering by `(is_metal, height)`. `metal_prefix` is the PDK's
+    own routing-layer stem, already carried on PdkConfig and in the registry
+    (gf180mcu = "Metal", sky130 = "met", a commercial 180nm PDK = "MET").
+
+    Backward-compatible: when NO candidate sits on a routing-metal layer the
+    ordering degenerates to tallest-RECT, i.e. exactly the previous behaviour.
+    The sky130 PDN uses a separate hard-coded branch and never reaches here."""
     if not cell_lef:
         return None
+    _mp = (metal_prefix or "met").lower()
+
+    def _is_metal(layer: Optional[str]) -> bool:
+        return bool(layer) and layer.lower().startswith(_mp)
     text = _read_pdk_text(cell_lef)
     if text is None:
         return None
     power = ground = None
     pwr_layer = pwr_w = gnd_w = None
+    # Selection keys: (is_metal, height). A routing-metal candidate always
+    # outranks a non-routing one however tall the latter is.
+    pwr_key: Optional[Tuple[bool, float]] = None
+    gnd_key: Optional[Tuple[bool, float]] = None
     cur_pin = cur_use = cur_layer = None
     macro_w = None
     for raw in text.splitlines():
@@ -1740,13 +1779,92 @@ def _discover_pg_from_lef(
             # a rail spans (nearly) the whole cell width; a tap stub does not
             if macro_w and xspan < 0.8 * macro_w:
                 continue
-            if cur_use == "POWER" and (pwr_w is None or h > pwr_w):
-                power, pwr_layer, pwr_w = cur_pin, cur_layer, h
-            elif cur_use == "GROUND" and (gnd_w is None or h > gnd_w):
-                ground, gnd_w = cur_pin, h
+            key = (_is_metal(cur_layer), h)
+            if cur_use == "POWER" and (pwr_key is None or key > pwr_key):
+                power, pwr_layer, pwr_w, pwr_key = cur_pin, cur_layer, h, key
+            elif cur_use == "GROUND" and (gnd_key is None or key > gnd_key):
+                ground, gnd_w, gnd_key = cur_pin, h, key
     if power and ground and pwr_layer and pwr_w:
         return (power, ground, pwr_layer, round(pwr_w, 4))
     return None
+
+
+def _discover_well_bias_pins_from_lef(
+        cell_lef: Optional[str],
+        metal_prefix: str = "met") -> Tuple[List[str], List[str]]:
+    """Discover std-cell WELL-BIAS pins: (power_side, ground_side) pin names.
+
+    These are PG pins (USE POWER / USE GROUND) that sit on a NON-routing layer
+    — i.e. a well/substrate layer such as gf180mcu's `Nwell`/`Pwell`. They are
+    the body ties, not the rails, and `_discover_pg_from_lef` deliberately does
+    NOT pick them (see its routing-layer preference).
+
+    They still have to be CONNECTED. On gf180mcu every std cell declares
+    VNW (Nwell, USE POWER) and VPW (Pwell, USE GROUND); if the PDN never ties
+    them to the rails the wells are left unbiased, and the power-aware LVS
+    compare reports the per-instance well nets as unmatched.
+
+    Returns ([], []) for a PDK whose std cells declare no such pins — sky130,
+    nangate45 and asap7 all take that path, so this is a no-op for them.
+    chip-AGNOSTIC: keyed on the LEF's own USE/LAYER records, no PDK literal."""
+    if not cell_lef:
+        return [], []
+    text = _read_pdk_text(cell_lef)
+    if text is None:
+        return [], []
+    _mp = (metal_prefix or "met").lower()
+    pwr_pins: List[str] = []
+    gnd_pins: List[str] = []
+    seen_pwr = set()
+    seen_gnd = set()
+    # A pin counts as a well tie only when EVERY layer it appears on is a
+    # non-routing layer. A pin that also has a routing-metal RECT is a real
+    # rail (or a rail with a well stub) and must not be re-tied here.
+    cur_pin = cur_use = None
+    layers: List[str] = []
+
+    def _flush() -> None:
+        if not (cur_pin and cur_use and layers):
+            return
+        if any(ly.lower().startswith(_mp) for ly in layers):
+            return  # touches routing metal -> it is a rail, not a well tie
+        if cur_use == "POWER" and cur_pin not in seen_pwr:
+            seen_pwr.add(cur_pin)
+            pwr_pins.append(cur_pin)
+        elif cur_use == "GROUND" and cur_pin not in seen_gnd:
+            seen_gnd.add(cur_pin)
+            gnd_pins.append(cur_pin)
+
+    for raw in text.splitlines():
+        s = raw.strip()
+        if s.startswith("MACRO "):
+            _flush()
+            cur_pin = cur_use = None
+            layers = []
+            continue
+        m = re.match(r"PIN\s+(\S+)", s)
+        if m:
+            _flush()
+            cur_pin = m.group(1)
+            cur_use = None
+            layers = []
+            continue
+        if cur_pin is None:
+            continue
+        if s.startswith("END ") and s.split()[1:2] == [cur_pin]:
+            _flush()
+            cur_pin = cur_use = None
+            layers = []
+            continue
+        m = re.match(r"USE\s+(\S+)", s)
+        if m:
+            cur_use = m.group(1).rstrip(";").upper()
+            continue
+        m = re.match(r"LAYER\s+(\S+)", s)
+        if m:
+            layers.append(m.group(1).rstrip(";"))
+    _flush()
+    return pwr_pins, gnd_pins
 
 
 def _build_pdn_tcl(pdk: "PdkConfig") -> str:
@@ -1788,9 +1906,32 @@ def _build_pdn_tcl(pdk: "PdkConfig") -> str:
     # turns each row rail into real routed PG geometry the signal router keeps
     # min-space clear of — AND connects power (removes the "0 SPECIALNETS =
     # silicon DOA" gap the sky130 path already guards). chip-AGNOSTIC.
-    pg = _discover_pg_from_lef(pdk.cell_lef)
+    # `getattr` default mirrors the PdkConfig field default, so a duck-typed
+    # or partially-populated PDK stub keeps working exactly as before.
+    _mp = getattr(pdk, "metal_prefix", "met")
+    pg = _discover_pg_from_lef(pdk.cell_lef, _mp)
     if pg:
         pwr, gnd, fpl, w = pg
+        # Tie the std-cell WELL-BIAS pins to the rails. On a PDK that declares
+        # body ties as PG pins (gf180mcu: VNW on Nwell, VPW on Pwell) the rail
+        # discovery above deliberately skips them, so without this they are
+        # never connected and the wells float. No-op for a PDK whose cells
+        # declare no such pins (sky130 / nangate45 / asap7).
+        _wb_pwr, _wb_gnd = _discover_well_bias_pins_from_lef(
+            pdk.cell_lef, _mp)
+        well_tcl = ""
+        well_note = ""
+        for _p in _wb_pwr:
+            well_tcl += (f"  add_global_connection -net {pwr} "
+                         f"-pin_pattern \"^{_p}$\" -power\n")
+        for _g in _wb_gnd:
+            well_tcl += (f"  add_global_connection -net {gnd} "
+                         f"-pin_pattern \"^{_g}$\" -ground\n")
+        if well_tcl:
+            well_note = (" + wells("
+                         + ",".join([f"{p}->{pwr}" for p in _wb_pwr]
+                                    + [f"{g}->{gnd}" for g in _wb_gnd])
+                         + ")")
         # v1.3.93 — optional upper-metal straps + inter-layer connects so the
         # per-row follow-pin rails form an interconnected MESH (else OpenROAD PSM
         # `analyze_power_grid` reports a disconnected grid = PSM-0069 and static
@@ -1829,7 +1970,8 @@ def _build_pdn_tcl(pdk: "PdkConfig") -> str:
             + "if {[catch {\n"
             f"  add_global_connection -net {pwr} -pin_pattern \"^{pwr}$\" -power\n"
             f"  add_global_connection -net {gnd} -pin_pattern \"^{gnd}$\" -ground\n"
-            "  global_connect\n"
+            + well_tcl
+            + "  global_connect\n"
             f"  set_voltage_domain -name CORE -power {pwr} -ground {gnd}\n"
             "  define_pdn_grid -name grid -voltage_domains CORE\n"
             f"  add_pdn_stripe -grid grid -layer {fpl} -width {w} -followpins\n"
@@ -1839,7 +1981,7 @@ def _build_pdn_tcl(pdk: "PdkConfig") -> str:
             "  puts \"PDN_NONFATAL: $_pdn_err\"\n"
             "} else {\n"
             f"  puts \"PDN_INSERTED_ADAPTIVE: {fpl} follow-pins "
-            f"net={pwr}/{gnd} width={w}{strap_note}\"\n"
+            f"net={pwr}/{gnd} width={w}{strap_note}{well_note}\"\n"
             "}\n")
     return ("puts \"PDN_SKIPPED: no PDK config for this design; "
             "silicon DOA without external PDN insertion\"\n")
