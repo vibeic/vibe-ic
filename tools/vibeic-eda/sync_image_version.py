@@ -9,10 +9,24 @@ WHY THIS EXISTS
     propagation mechanical and the drift a hard error:
 
         SOURCE OF TRUTH            the `VERSION` file (X.Y.Z, one line)
-        --check      (default)     FAIL if any LIVE pointer disagrees with VERSION
+        --check      (default)     FAIL if any LIVE pointer disagrees with VERSION,
+                                   OR if the VERSION anchor itself is STALE relative
+                                   to the newest published image tag (see below)
         --set X.Y.Z                write VERSION + rewrite every live pointer
         --bump patch|minor|major   compute the next version, then --set it
         --print                    print the current VERSION
+
+    ANCHOR-vs-REALITY (issue #215)
+        Internal consistency (every pointer == VERSION) is NECESSARY but NOT
+        SUFFICIENT: if the VERSION file is ITSELF stale, the whole tree is
+        *consistently wrong* and the old check went green about it — it would have
+        demanded a correct pointer be rolled BACK to the stale anchor. So --check
+        also compares VERSION against the newest published `ghcr.io/vibeic/...`
+        semver tag (the actual reality). VERSION older than the newest published
+        tag FAILs loudly, naming both. Registry query is best-effort: pin/override
+        it with the `VIBEIC_EDA_PUBLISHED_TAG` env (tests / offline / CI); if the
+        registry can't be reached AND no override is set, the anchor line reports
+        UNVERIFIED (internal consistency only) rather than silently claiming clean.
 
 TWO KINDS of `vibeic-eda:X.Y.Z`, treated DIFFERENTLY (verified empirically):
     * LIVE POINTER — "pull / run / build THIS image now". Lives in the install
@@ -40,10 +54,20 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import json
+import os
 import re
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
+
+# The published image whose newest semver tag is the ground truth for the anchor.
+GHCR_REPO = "vibeic/vibeic-eda"
+# Test / offline / CI pin: when set to X.Y.Z it is used verbatim as "the newest
+# published tag" instead of querying the registry. Lets the RED/GREEN fixtures for
+# the stale-anchor case run with no network and keeps CI deterministic.
+PUBLISHED_TAG_ENV = "VIBEIC_EDA_PUBLISHED_TAG"
 
 # Install docs (relative to repo root). EVERY vibeic-eda tag in these is a live
 # pointer. Only the ones that exist in the current repo are used, so the SAME
@@ -117,6 +141,73 @@ def next_version(cur: str, kind: str) -> str:
     return f"{x}.{y + 1}.0" if z >= 99 else f"{x}.{y}.{z + 1}"
 
 
+def _semver_key(v: str):
+    return tuple(int(n) for n in v.split("."))
+
+
+def _query_ghcr_tags(repo: str, timeout: float = 6.0):
+    """List tags for a public ghcr image via the anonymous Docker-registry v2 API.
+    Raises on any transport / parse failure — the caller degrades gracefully."""
+    tok_url = f"https://ghcr.io/token?scope=repository:{repo}:pull"
+    with urllib.request.urlopen(tok_url, timeout=timeout) as r:  # noqa: S310 (fixed host)
+        token = json.load(r).get("token", "")
+    req = urllib.request.Request(
+        f"https://ghcr.io/v2/{repo}/tags/list",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 (fixed host)
+        return json.load(r).get("tags", []) or []
+
+
+def newest_published_tag(repo: str = GHCR_REPO):
+    """(tag, source) for the newest PUBLISHED semver image tag — the reality the
+    VERSION anchor must not lag — or (None, reason) if it can't be determined.
+
+    Order: explicit override (env — tests / offline / CI pin) beats a live query.
+    Never raises: any registry failure returns (None, reason) so --check can fall
+    back to internal-consistency-only rather than crash or false-fail."""
+    ov = os.environ.get(PUBLISHED_TAG_ENV)
+    if ov is not None:
+        ov = ov.strip()
+        if not ov:
+            return None, f"{PUBLISHED_TAG_ENV} set but empty"
+        if not SEMVER_RE.match(ov):
+            return None, f"{PUBLISHED_TAG_ENV}='{ov}' is not X.Y.Z"
+        return ov, f"override:{PUBLISHED_TAG_ENV}"
+    try:
+        tags = _query_ghcr_tags(repo)
+    except Exception as e:  # network down, 404, auth, JSON — all degrade the same
+        return None, f"registry unreachable ({e.__class__.__name__})"
+    sem = [t for t in tags if SEMVER_RE.match(t)]
+    if not sem:
+        return None, "registry returned no X.Y.Z tags"
+    return max(sem, key=_semver_key), "ghcr"
+
+
+def check_anchor_vs_reality(version: str) -> int:
+    """Verify the VERSION anchor is not STALE relative to the actually-published
+    image. Prints one status line; returns 0 = ok/unverified, 1 = stale anchor."""
+    pub, src = newest_published_tag()
+    if pub is None:
+        print(f"  anchor-vs-reality        : UNVERIFIED ({src}) — internal "
+              f"consistency only; set {PUBLISHED_TAG_ENV}=X.Y.Z or enable network")
+        return 0
+    if _semver_key(version) < _semver_key(pub):
+        print(f"[FAIL] STALE ANCHOR: VERSION={version} is OLDER than the newest "
+              f"published image tag {pub} (source={src}).")
+        print(f"       Internal consistency is not correctness — every pointer "
+              f"equal to VERSION is *consistently wrong*.")
+        print(f"       Fix: python3 {Path(__file__).name} --set {pub}")
+        return 1
+    if _semver_key(version) > _semver_key(pub):
+        print(f"  anchor-vs-reality        : OK (VERSION={version} ahead of newest "
+              f"published {pub} — unreleased; source={src})")
+        return 0
+    print(f"  anchor-vs-reality        : OK (VERSION={version} == published {pub}; "
+          f"source={src})")
+    return 0
+
+
 def _matches(rel: str, globs) -> bool:
     base = rel.rsplit("/", 1)[-1]
     return any(fnmatch.fnmatch(base, g) or fnmatch.fnmatch(rel, g) for g in globs)
@@ -180,9 +271,15 @@ def do_check(root: Path, version: str, ignore) -> int:
     print(f"vibeic_eda_version_sync: VERSION = {version}")
     print(f"  install-doc refs checked : {len(strict)} across {len(ok_docs)} file(s)")
     print(f"  repo-wide ghcr pointers  : {len(net)}")
+    # Anchor-vs-reality (issue #215): the VERSION anchor must not itself be stale
+    # relative to the newest published image tag, or the whole tree is consistently
+    # wrong. This is a SEPARATE failure axis from pointer drift; either fails --check.
+    anchor_rc = check_anchor_vs_reality(version)
     if not drift_strict and not drift_net:
-        print(f"[PASS] all live pointers == {version}")
-        return 0
+        if anchor_rc == 0:
+            print(f"[PASS] all live pointers == {version} and anchor tracks reality")
+            return 0
+        return anchor_rc
     print(f"[FAIL] {len(drift_strict) + len(drift_net)} live pointer(s) != {version}:")
     for rel, ln, ver, kind in drift_strict:
         print(f"   {rel}:{ln}  {kind}={ver}  (want {version})")

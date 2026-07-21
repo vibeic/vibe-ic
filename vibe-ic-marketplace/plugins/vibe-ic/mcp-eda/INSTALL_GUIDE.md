@@ -79,7 +79,7 @@ property-error LVS verdict (kills silent false-pass), klayout MANUFACTURINGGRID 
 snap. Full scoreboard: `tools/vibeic-eda/FIX_STATUS.md`. Build the reproducible image once:
 
 ```bash
-docker build -t vibeic-eda:0.2.23 /path/to/repo/tools/vibeic-eda
+docker build -t vibeic-eda:0.2.26 /path/to/repo/tools/vibeic-eda
 ```
 
 ### Option B: the stock IIC-OSIC-Tools base
@@ -148,7 +148,7 @@ you want a dedicated workspace instead of reusing an existing tree, create it
 yourself first and point at that.
 
 ```bash
-# Option A image: vibeic-eda:0.2.23   |   Option B image: hpretl/iic-osic-tools:latest
+# Option A image: vibeic-eda:0.2.26   |   Option B image: hpretl/iic-osic-tools:latest
 docker rm -f vibeic-eda 2>/dev/null || true   # "name already in use" = an old container exists; drop it first
 [ -d "$VIBEIC_DESIGNS" ] || { echo "set VIBEIC_DESIGNS to an existing directory first"; exit 1; }
 docker run -d --name vibeic-eda \
@@ -156,7 +156,7 @@ docker run -d --name vibeic-eda \
   -v "$VIBEIC_DESIGNS:/foss/designs:rw" \
   -p 8888:80 \
   -p 5901:5901 \
-  vibeic-eda:0.2.23 --skip sleep infinity
+  vibeic-eda:0.2.26 --skip sleep infinity
 # Tip: to swap an already-running container to a new tag WITHOUT retyping the mounts/ports,
 # use the config-preserving helper:  tools/vibeic-eda/restart-eda.sh 0.2.12
 ```
@@ -772,7 +772,7 @@ you can fabricate a real chip:
 docker start vibeic-eda || docker run -d --name vibeic-eda \
   -v "$VIBEIC_DESIGNS:$VIBEIC_DESIGNS:rw" \
   -v "$VIBEIC_DESIGNS:/foss/designs:rw" \
-  vibeic-eda:0.2.23 --skip sleep infinity   # or: hpretl/iic-osic-tools:latest (stock)
+  vibeic-eda:0.2.26 --skip sleep infinity   # or: hpretl/iic-osic-tools:latest (stock)
 
 # 2. Launch Claude Code with MCP
 claude
@@ -791,7 +791,7 @@ docker rm -f vibeic-eda
 docker run -d --name vibeic-eda \
   -v "$VIBEIC_DESIGNS:$VIBEIC_DESIGNS:rw" \
   -v "$VIBEIC_DESIGNS:/foss/designs:rw" \
-  vibeic-eda:0.2.23 --skip sleep infinity   # or: hpretl/iic-osic-tools:latest (stock)
+  vibeic-eda:0.2.26 --skip sleep infinity   # or: hpretl/iic-osic-tools:latest (stock)
 ```
 
 ---
