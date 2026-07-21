@@ -7352,7 +7352,12 @@ def _post_route_spef_repair_tcl(out_dir_c: str, tech_lef_c: str,
         "# lives in-container under <PDK>/libs.ref/ — derive the PDK root from\n"
         "# it when the tech-LEF path yields no captable. chip-AGNOSTIC.\n"
         "if {$_prs_rules eq \"\"} {\n"
-        f"  set _prs_clef {cell_lef_c}\n"
+        # Brace-quote the interpolated cell-LEF path: when no cell LEF is known
+        # (the skip path), cell_lef_c is "" and a bare `set _prs_clef ` becomes a
+        # one-arg `set` that READS the (undefined) variable -> tclsh aborts the
+        # whole deck with `can't read "_prs_clef"`. `{}` makes it a valid empty
+        # string, and braces also protect a real path that contains spaces.
+        f"  set _prs_clef {{{cell_lef_c}}}\n"
         "  set _prs_j [string first \"/libs.ref/\" $_prs_clef]\n"
         "  if {$_prs_j > 0} {\n"
         "    set _prs_root2 [string range $_prs_clef 0 [expr {$_prs_j - 1}]]\n"
