@@ -14,7 +14,7 @@ Synthesis silently takes the behavioural arm and maps a storage macro to
 flip-flops. Measured on a 128x8 OTP, synthesising the identical RTL:
 
     with    -DSIMULATION : 1024 $_DFFE_PN0P_ + 8 $_DFF_PN0_   (volatile flops)
-    without -DSIMULATION :    1 EO0128X8KA180BA11             (the real macro)
+    without -DSIMULATION :    1 OTP128X8_MACRO             (the staged macro)
 
 i.e. a one-time-programmable memory that loses chip ID / serial / trim / lock
 bits at power-off — the opposite of the part's function — with nothing in any
@@ -65,7 +65,7 @@ module otp_mem (
   end
   assign rdata = rdata_r;
 `else
-  EO0128X8KA180BA11 u_otp (.CLK(clk), .A(addr), .DIN(wdata),
+  OTP128X8_MACRO u_otp (.CLK(clk), .A(addr), .DIN(wdata),
                            .WE(we), .Q(rdata));
 `endif
 endmodule
@@ -81,10 +81,10 @@ module chip_top (
 endmodule
 """
 
-MACRO_V = ("module EO0128X8KA180BA11 (input CLK, input [6:0] A, "
+MACRO_V = ("module OTP128X8_MACRO (input CLK, input [6:0] A, "
            "input [7:0] DIN, input WE, output [7:0] Q);\nendmodule\n")
-MACRO_LIB = ("library (EO0128X8KA180BA11_tt) {\n"
-             "  cell (EO0128X8KA180BA11) {\n    area : 12000.0;\n"
+MACRO_LIB = ("library (OTP128X8_MACRO_tt) {\n"
+             "  cell (OTP128X8_MACRO) {\n    area : 12000.0;\n"
              "    pin(CLK) { direction : input; }\n  }\n}\n")
 
 
@@ -98,10 +98,10 @@ def _mk_project(tmp_path: Path, ext: str = ".v", stage_macro: bool = False,
     if stage_macro:
         base = proj / "input" / "pdk_local" / "otp_ip"
         (base / "Verilog").mkdir(parents=True)
-        (base / "Verilog" / "EO0128X8KA180BA11.v").write_text(MACRO_V)
+        (base / "Verilog" / "OTP128X8_MACRO.v").write_text(MACRO_V)
         if macro_lib:
             (base / "lib").mkdir(parents=True)
-            (base / "lib" / "EO0128X8KA180BA11_tt.lib").write_text(MACRO_LIB)
+            (base / "lib" / "OTP128X8_MACRO_tt.lib").write_text(MACRO_LIB)
     return proj
 
 
@@ -193,7 +193,7 @@ def test_staged_macro_decision_is_reported(tmp_path, monkeypatch):
     dec = res.extras["macro_define_decision"]
     assert dec["verdict"] == "MACRO_INSTANTIATED"
     assert dec["define_sim"] is False
-    assert "EO0128X8KA180BA11" in dec["macro_cells"]
+    assert "OTP128X8_MACRO" in dec["macro_cells"]
     log = (proj / "phase2" / "stage2" / "synth" / "synth.log").read_text()
     assert "MACRO_INSTANTIATED" in log
 
@@ -203,7 +203,7 @@ def test_staged_macro_still_blackboxed_into_synth(tmp_path, monkeypatch):
     blackbox — otherwise the macro arm would not elaborate."""
     proj = _mk_project(tmp_path, ext=".v", stage_macro=True)
     cmds, _ = _run_step_synth(tmp_path, proj, monkeypatch)
-    assert any("read_liberty -lib" in c and "EO0128X8KA180BA11" in c
+    assert any("read_liberty -lib" in c and "OTP128X8_MACRO" in c
                for c in cmds), "\n".join(cmds)
 
 
@@ -224,13 +224,13 @@ def test_macro_staged_without_liberty_is_reported_at_error(
     assert dec["define_sim"] is True, (
         "keeping the historical define is the safe choice here; the defect is "
         "silence, not the define")
-    assert "EO0128X8KA180BA11" in dec["unbindable"]
+    assert "OTP128X8_MACRO" in dec["unbindable"]
 
 
 def test_macro_staged_but_never_instantiated_is_reported_at_error(tmp_path):
     """The staged cell name and the RTL's instance name disagree — exactly the
     shape that silently degrades to behavioural. Public API, no runner needed."""
-    rtl = RTL_OTP.replace("EO0128X8KA180BA11", "SOME_OTHER_CELL")
+    rtl = RTL_OTP.replace("OTP128X8_MACRO", "SOME_OTHER_CELL")
     macro = tmp_path / "M.lib"
     macro.write_text(MACRO_LIB)
     dec = sf.decide_macro_aware_sim_define(rtl, [macro])
@@ -256,8 +256,8 @@ def test_macro_staged_but_rtl_has_no_define_arm_is_a_warning(tmp_path):
 
 def test_commented_out_instantiation_is_not_a_use(tmp_path):
     rtl = RTL_OTP.replace(
-        "  EO0128X8KA180BA11 u_otp (.CLK(clk), .A(addr), .DIN(wdata),",
-        "  // EO0128X8KA180BA11 u_otp (.CLK(clk), .A(addr), .DIN(wdata),")
+        "  OTP128X8_MACRO u_otp (.CLK(clk), .A(addr), .DIN(wdata),",
+        "  // OTP128X8_MACRO u_otp (.CLK(clk), .A(addr), .DIN(wdata),")
     macro = tmp_path / "M.lib"
     macro.write_text(MACRO_LIB)
     dec = sf.decide_macro_aware_sim_define(rtl, [macro])
@@ -270,7 +270,7 @@ def test_else_arm_first_identifier_is_not_swallowed(tmp_path):
     after a bare `` `else `` must still be seen (a naive
     ``\\s*(\\w+)?`` symbol group eats it and inverts the verdict)."""
     rtl = ("module m();\n`ifdef SIMULATION\n  reg r;\n`else\n"
-           "  EO0128X8KA180BA11 u (.CLK(1'b0));\n`endif\nendmodule\n")
+           "  OTP128X8_MACRO u (.CLK(1'b0));\n`endif\nendmodule\n")
     macro = tmp_path / "M.lib"
     macro.write_text(MACRO_LIB)
     dec = sf.decide_macro_aware_sim_define(rtl, [macro])
@@ -412,7 +412,7 @@ def test_e2e_netlist_matches_the_decision(tmp_path, stage_macro, expect):
     (tmp_path / "otp_mem.v").write_text(RTL_OTP)
     staged = []
     if stage_macro:
-        lib = tmp_path / "EO0128X8KA180BA11_tt.lib"
+        lib = tmp_path / "OTP128X8_MACRO_tt.lib"
         lib.write_text(MACRO_LIB)
         staged = [lib]
 
@@ -431,7 +431,7 @@ def test_e2e_netlist_matches_the_decision(tmp_path, stage_macro, expect):
         libread = ""
         if stage_macro:
             libread = (f"read_liberty -lib -ignore_miss_dir -setattr blackbox "
-                       f"{tag}/EO0128X8KA180BA11_tt.lib; ")
+                       f"{tag}/OTP128X8_MACRO_tt.lib; ")
         script = (f"{libread}"
                   f"read_verilog -sv {d}{tag}/chip_top.v; "
                   f"read_verilog -sv {d}{tag}/otp_mem.v; "
@@ -448,7 +448,7 @@ def test_e2e_netlist_matches_the_decision(tmp_path, stage_macro, expect):
     stat = out.split("=== chip_top ===")[-1]
 
     if expect == "macro":
-        assert "EO0128X8KA180BA11" in stat and "DFF" not in stat, (
+        assert "OTP128X8_MACRO" in stat and "DFF" not in stat, (
             "a staged macro must be instantiated, not expanded to flops "
             f"(a volatile OTP):\n{stat}")
     else:
