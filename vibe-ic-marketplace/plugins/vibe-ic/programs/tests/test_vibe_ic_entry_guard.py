@@ -97,5 +97,108 @@ def test_json_report():
         assert data["findings_count"] == 1
 
 
+# ---------------------------------------------------------------------------
+# Shape-C per-problem phase1 evidence (open-benchmark-methodology § 7.5 rule 3).
+#
+# A Shape-C (atomic-micro-problem) run drives phase1_engine ONCE PER PROBLEM, so
+# the fact-graph lands under <run>/work/<prob>/…/generated_docs/L*.json rather
+# than at the run root. The guard originally had no branch for that layout and
+# rejected fully-compliant Shape-C runs as direct-agent authoring.
+#
+# This is a guard-RELAXING branch, so per § 4.05 the NEGATIVE no-leak cases
+# below are the load-bearing half: each sits JUST OUTSIDE the intended boundary
+# and MUST still be caught.
+# ---------------------------------------------------------------------------
+
+def _shape_c(td: Path, rel: str, name: str, body: str = '{"ic_name":"TopModule"}'):
+    p = td / rel
+    p.mkdir(parents=True, exist_ok=True)
+    (p / name).write_text(body)
+
+
+# ---- POSITIVE: both layouts gates_atomic.py itself accepts ----
+
+def test_pass_shape_c_out_generated_docs():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        _shape_c(td, "work/Prob001_zero/out/generated_docs", "L1_DATASHEET.json")
+        rc, out, err = run([str(td), "--strict"])
+        assert rc == 0, err
+        assert "PASS" in out
+
+
+def test_pass_shape_c_phase1_proj_layout():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        _shape_c(td, "work/Prob153_gshare/phase1_proj/phase1/generated_docs",
+                 "L9_INTEGRATION_SPEC.json", '{"top_module":"TopModule"}')
+        rc, out, err = run([str(td), "--strict"])
+        assert rc == 0, err
+
+
+# ---- NEGATIVE no-leak (§ 4.05): boundary-outside, must STILL be caught ----
+
+def test_noleak_bare_work_dir_still_caught():
+    """Direct-agent authoring: RTL in work/ but phase1 never ran."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        (td / "work" / "Prob001_zero").mkdir(parents=True)
+        (td / "work" / "Prob001_zero" / "sample.sv").write_text("module TopModule(); endmodule")
+        rc, out, err = run([str(td), "--strict"])
+        assert rc == 1
+        assert "no Vibe-IC runner evidence" in err
+
+
+def test_noleak_empty_generated_docs_still_caught():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        (td / "work" / "Prob001_zero" / "out" / "generated_docs").mkdir(parents=True)
+        rc, out, err = run([str(td), "--strict"])
+        assert rc == 1
+
+
+def test_noleak_non_layer_json_still_caught():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        _shape_c(td, "work/Prob001_zero/out/generated_docs", "notes.json", '{"faked":true}')
+        rc, out, err = run([str(td), "--strict"])
+        assert rc == 1
+
+
+def test_noleak_backup_layer_doc_still_caught():
+    """A stale .bak is not live phase1 output."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        _shape_c(td, "work/Prob001_zero/out/generated_docs", "L1_DATASHEET.json.bak")
+        rc, out, err = run([str(td), "--strict"])
+        assert rc == 1
+
+
+def test_noleak_unnumbered_layer_name_still_caught():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        _shape_c(td, "work/Prob001_zero/out/generated_docs", "Lfoo.json")
+        rc, out, err = run([str(td), "--strict"])
+        assert rc == 1
+
+
+def test_noleak_layer_doc_at_wrong_depth_still_caught():
+    """A layer doc at the run root (not under work/<prob>/) must not qualify."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        _shape_c(td, "generated_docs", "L1_DATASHEET.json")
+        rc, out, err = run([str(td), "--strict"])
+        assert rc == 1
+
+
+def test_noleak_directory_named_like_layer_doc_still_caught():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        (td / "work" / "Prob001_zero" / "out" / "generated_docs" /
+         "L1_DATASHEET.json").mkdir(parents=True)
+        rc, out, err = run([str(td), "--strict"])
+        assert rc == 1
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
