@@ -283,6 +283,29 @@ def is_testbench(code: str) -> bool:
     return bool(_PORTLESS_MODULE.search(code))
 
 
+def source_drives_dut(src: str) -> bool:
+    """True iff `src` contains at least one LIVE (uncommented) module
+    instantiation — i.e. the testbench actually drives *something*.
+
+    The SHARED substance primitive: the single source of truth for "does a
+    testbench drive the DUT", so this gate and l10_tb_conformance_check can
+    never disagree about whether a given testbench is vacuous. A commented-out
+    instantiation, a bare `$display` naming a case, or a placeholder marker are
+    all NOT drivers.
+    """
+    code, _ = split_code_and_comments(src)
+    return bool(find_live_instantiations(code))
+
+
+def any_source_drives_dut(sources) -> bool:
+    """True iff ANY source in `sources` (an iterable of Verilog/SV text) drives
+    the DUT. Tree-scope substance test shared with l10_tb_conformance_check: a
+    sim tree in which nothing drives the design is vacuous, so its
+    id-substring / opcode "evidence" is theatre and must not credit coverage.
+    """
+    return any(source_drives_dut(s) for s in sources)
+
+
 def discover_testbenches(sim_root: Path) -> List[Path]:
     files = sorted(p for p in sim_root.rglob("*")
                    if p.is_file() and p.suffix in (".v", ".sv"))

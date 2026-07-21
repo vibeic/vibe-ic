@@ -70,6 +70,17 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# #206 — share the SUBSTANCE detector with vacuous_testbench_check so the two
+# gates never disagree about whether a testbench actually drives the DUT. Import
+# by bare name (programs/ is on sys.path under the flow runner; add this file's
+# own dir as a fallback for a bare script invocation).
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    import vacuous_testbench_check as _vtb
+except Exception:  # pragma: no cover — never let a helper import break the gate
+    _vtb = None
+
 
 # ----- helpers ------------------------------------------------------
 
@@ -605,8 +616,27 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"(and no fallback under sim/)", file=sys.stderr)
         return 2
 
-    _, tb_blob = read_all_tb_text(tb_dir)
+    per_file, tb_blob = read_all_tb_text(tb_dir)
     summary = read_summary(_resolve_summary(args.summary))
+
+    # #206 — VACUOUS-TB substance gate (shared with vacuous_testbench_check so
+    # the two never disagree). A placeholder testbench prints a pass and never
+    # instantiates the DUT; its `$display("[TB <id>] PASS_PLACEHOLDER")` puts the
+    # case id into tb_blob, so the id-substring / opcode evidence below used to
+    # credit it — a check that COUNTED cases present, not cases exercised. When
+    # NOTHING under the sim tree drives the design, that "evidence" is theatre:
+    # suppress the blob so genuine digital cases FAIL (no evidence) while the
+    # existing anchored A/M waiver path is untouched (verification_intent cases
+    # still waive; §4.05 — a vacuous DIGITAL TB can never be waived). A tree with
+    # >=1 live driver keeps its full evidence corpus, so a trace-companion TB
+    # sitting beside a real driver still credits its cases.
+    vacuous_sim_tree = False
+    vacuous_files: List[str] = []
+    if per_file and _vtb is not None and not _vtb.any_source_drives_dut(
+            per_file.values()):
+        vacuous_sim_tree = True
+        vacuous_files = sorted(per_file.keys())
+        tb_blob = ""  # evidence suppressed — presence is not coverage (#206)
 
     # ORGANIC #773 — resolve the reviewable analog-deferral anchor. The
     # project root is the explicit --project, else inferred from the L10
@@ -645,6 +675,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         "checklist_gaps": checklist_gap_count,
         "capability_gap": (CAP_ANALOG_VERIFICATION_INTENT if waive_count else None),
         "analog_anchor": analog_anchor,
+        # #206 — the substance verdict the gate judged on: whether the sim tree
+        # actually drives the DUT, and (when it does not) the offending vacuous
+        # testbench files. Emitted so this verdict can be cross-checked from the
+        # gate's own output instead of trusted on its say-so.
+        "sim_tree_drives_dut": (not vacuous_sim_tree) if per_file else None,
+        "vacuous_sim_tree": vacuous_sim_tree,
+        "vacuous_testbench_files": vacuous_files,
         "results": results,
     }
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
@@ -653,6 +690,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     if fail_count:
         # A genuine FAIL dominates — even if some cases were waived, an
         # un-waivable digital miss is still a hard FAIL (§4.05 NO-LEAK).
+        if vacuous_sim_tree:
+            print(
+                f"[l10-tb-conformance] VACUOUS sim tree — none of "
+                f"{len(vacuous_files)} testbench(es) instantiate the DUT; "
+                f"id-substring / opcode presence is NOT coverage (#206). "
+                f"Files: {', '.join(vacuous_files)}",
+                file=sys.stderr,
+            )
         print(
             f"[l10-tb-conformance] {fail_count}/{len(cases)} cases lack evidence "
             f"(see {args.out}):",
