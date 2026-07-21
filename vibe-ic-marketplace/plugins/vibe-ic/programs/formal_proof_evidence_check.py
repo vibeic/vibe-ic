@@ -155,7 +155,7 @@ def _sibling_self_skip(formal_dir: Path):
 
 
 def _sibling_env_gap(formal_dir: Path):
-    """#211 — return `(basename, env_gap_dict)` of a co-located sibling that
+    """#216 — return `(basename, env_gap_dict)` of a co-located sibling that
     discloses an unreachable formal ENGINE, else None.
 
     Deliberately NOT folded into `_SELF_SKIP_VERDICTS`: an environment gap is
@@ -212,7 +212,7 @@ def audit(project: Path) -> dict:
                 f"proof ran (verdict=SKIPPED-CONDITION, #440 manifest "
                 f"shape) — vacuous for this gate, NOT a fabricated PASS")
             return rep
-        # #211 — when the proof ENGINE was never reached, the runner leaves
+        # #216 — when the proof ENGINE was never reached, the runner leaves
         # an ENV_UNAVAILABLE manifest naming the missing capability, the
         # search location and the remedy. This is STILL a hard FAIL — an
         # unreachable environment is not a self-skip and must never be
@@ -224,7 +224,7 @@ def audit(project: Path) -> dict:
             sib, gap = env_gap
             rep.update(verdict="FAIL", rc=1)
             rep["findings"].append(
-                f"ENV_UNAVAILABLE (#211): no proof ran because the formal "
+                f"ENV_UNAVAILABLE (#216): no proof ran because the formal "
                 f"engine was never reached — missing capability "
                 f"{gap.get('missing_capability', '?')!r}, looked for it at "
                 f"{gap.get('searched', '?')}. Remedy: "

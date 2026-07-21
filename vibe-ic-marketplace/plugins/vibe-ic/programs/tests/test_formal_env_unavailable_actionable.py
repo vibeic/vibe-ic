@@ -1,4 +1,4 @@
-"""#211 — the formal (Step 5) environment gap must be ACTIONABLE, and a
+"""#216 — the formal (Step 5) environment gap must be ACTIONABLE, and a
 waived formal step must defer only its GENUINE dependents.
 
 Measured defect (SN2025): Step 5 (formal) reported an `ENV_UNAVAILABLE`

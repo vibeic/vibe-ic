@@ -65,7 +65,7 @@ _ENGINE_RE = re.compile(r"engine_\d+:\s*(?P<engine>abc\s+\w+|smtbmc.*|btor.*|"
 _CEX_FRAME_RE = re.compile(r"asserted in frame (?P<frame>\d+)", re.IGNORECASE)
 _SBY_SIG_RE = re.compile(r"\bSBY\b|symbiyosys|smtbmc|engine_\d", re.IGNORECASE)
 
-# ── environment reachability (#211) ────────────────────────────────────────
+# ── environment reachability (#216) ────────────────────────────────────────
 # "The proof engine was never reached" and "the proof ran and was
 # inconclusive" are DIFFERENT facts. The pre-fix shape collapsed them: an
 # unreachable engine produced `verdict: INCONCLUSIVE` with one UNKNOWN
@@ -637,7 +637,7 @@ def detect_engines(container: Optional[str]) -> Dict[str, bool]:
     container (impure). `abc` (via yosys/sby) is always present. Used so an
     `--engine-backend btor|amulet` request can be honoured only when the engine
     truly exists — otherwise the program says so instead of faking a proof."""
-    # #211 — `abc` used to be hardcoded True and reported as available even
+    # #216 — `abc` used to be hardcoded True and reported as available even
     # when the probe itself could not run (nonexistent container, no Docker).
     # An availability map is EVIDENCE about the environment; asserting a tool
     # is present in an environment we could not reach is a claim with no
@@ -833,7 +833,7 @@ def run(project: Path, harness: Optional[Path] = None,
     log_path = formal_dir / f"{sby_path.stem}.sby.log"
     log_path.write_text(transcript)
 
-    # 2b) #211 — the proof ENGINE was never reached ---------------------------
+    # 2b) #216 — the proof ENGINE was never reached ---------------------------
     # Distinguished from an inconclusive proof: nothing ran, so there is no
     # proof strength to report and no property row to emit. We write an
     # ENV_UNAVAILABLE manifest that NAMES the missing capability, WHERE the
@@ -919,7 +919,7 @@ def run(project: Path, harness: Optional[Path] = None,
 
 
 def _write_env_gap_report(formal_dir: Path, manifest: dict) -> None:
-    """#211 — the human-readable face of an ENV_UNAVAILABLE formal step.
+    """#216 — the human-readable face of an ENV_UNAVAILABLE formal step.
 
     Answers the three questions that make an environment gap actionable:
     what capability is missing, where the flow looked for it, and what to

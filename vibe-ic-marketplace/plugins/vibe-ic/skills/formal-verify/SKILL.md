@@ -40,7 +40,7 @@ transcript, and writes `formal/results.json` + `<top>_report.md` that the
 task shows `DONE (PASS)`; rc 2 = honest NOT_APPLICABLE, never a fake). Without
 a harness the runner's `formal_not_run.json` sentinel stays the honest SKIP.
 
-**When the engine cannot be REACHED (#211).** "The proof engine was never
+**When the engine cannot be REACHED (#216).** "The proof engine was never
 reached" and "the proof ran and was inconclusive" are different facts and are
 reported differently. If `sby` is unreachable (container not running, Docker
 down, `sby` not on PATH) the program writes
