@@ -94,7 +94,13 @@ _DEPRECATIONS: Tuple[Deprecation, ...] = (
     ),
     Deprecation(
         token="write_gds",
-        pattern=re.compile(r"(?<![\w\-])write_gds\b"),
+        # `(?!\s*\()` — a TCL command is never invoked with parentheses, so a
+        # `write_gds(` is Python function-DEF or CALL syntax (e.g. a test's own
+        # raw-GDS-writer helper named write_gds), NOT the deprecated OpenROAD TCL
+        # command. Real TCL emission (`write_gds $out`, an f-string
+        # `write_gds {path}`) is still flagged — only Python paren-call/def is
+        # excluded, so the gate keeps full power without the false positive.
+        pattern=re.compile(r"(?<![\w\-])write_gds\b(?!\s*\()"),
         version="OpenROAD 2023+",
         replacement=(
             "OpenROAD no longer streams GDS; use the `def2gds` skill "
