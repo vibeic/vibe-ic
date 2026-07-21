@@ -58,6 +58,12 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _rtl_include_hub import (  # noqa: E402
+    drop_include_hubs as _drop_include_hubs,
+    macro_headers_first as _macro_headers_first,
+)
+
 PROGRAM = "lec_run"
 
 DEFAULT_CONTAINER = "vibeic-eda"
@@ -975,7 +981,16 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
     if gold_frontend == "slang":
         _plugin_line = ("plugin -i slang\n"
                         if "plugin" in (slang_prefix or "") else "")
-        gold_read_cmd = (f"{_plugin_line}read_slang {gold_read} "
+        # --single-unit: read ALL gold files as ONE compilation unit, so a
+        # macro defined in an early file is visible to every later file. This
+        # MIRRORS the shared preprocessor scope of the successive
+        # `read_verilog` calls synth uses. Without it slang makes each CLI file
+        # its own unit, and a design whose modules rely on a cross-file
+        # `` `define `` (the ordinary Verilog header idiom) aborts with
+        # "unknown macro or compiler directive" — a read abort, hence 0
+        # compared points. `_resolve_gold_files` guarantees the macro headers
+        # are concatenated first, which single-unit reads REQUIRE.
+        gold_read_cmd = (f"{_plugin_line}read_slang --single-unit {gold_read} "
                          f"--top {top} {gold_defines}")
     else:
         gold_read_cmd = f"read_verilog -sv {gold_read}"
@@ -1105,12 +1120,33 @@ def _discover_project_liberty(project: Path) -> Optional[Path]:
 
 
 def _resolve_gold_files(gold_dir: Path) -> List[str]:
-    """All .v/.sv files under the gold RTL dir (sorted, absolute paths)."""
+    """The .v/.sv gold sources to read, as absolute paths.
+
+    Alphabetically sorted, then TWO chip-AGNOSTIC corrections that make the
+    gold read match what phase-2 synth already does (see `_rtl_include_hub`):
+
+    1. INCLUDE-HUB AGGREGATORS ARE DROPPED. A file that `` `include ``s a
+       sibling which is ALSO staged standalone defines every included module
+       twice, so the read ABORTS and the miter is built from 0 points. Phase-2
+       synth's selector has excluded these since #614; the gold read did not,
+       so a design that SYNTHESISED cleanly could still produce a zero-point
+       LEC. (That zero-point run is already reported honestly as INCONCLUSIVE
+       by #192's stage-progress observable rather than a false
+       NOT_EQUIVALENT — this change is what turns the honest non-result into
+       an actual comparison.)
+
+    2. PURE MACRO HEADERS ARE MOVED FIRST, because the slang gold read is a
+       SINGLE compilation unit (`--single-unit`) that concatenates the files in
+       CLI order. Alphabetical order resolves cross-file `` `define ``s only by
+       luck of filename.
+
+    Both are no-ops on a gold dir with no aggregator and no macro header."""
     if not gold_dir.is_dir():
         return []
     files = sorted(
         p for p in gold_dir.iterdir()
         if p.is_file() and p.suffix.lower() in (".v", ".sv"))
+    files = _macro_headers_first(_drop_include_hubs(files))
     return [str(p.resolve()) for p in files]
 
 

@@ -48,6 +48,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 import _path_layout as _pl
+from _rtl_include_hub import drop_include_hubs as _drop_include_hubs  # shared aggregator filter
 import _watchdog as _wd  # v1.3.47 — plugin-wide progress-stall supervision
 import _docker_watchdog as _dwd  # shared in-container CPU probe (tree-aware)
 import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
@@ -5147,6 +5148,14 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
                     "testbench", "stimulus")
     silicon = [f for f in all_rtl
                if not any(s in f.name.lower() for s in skip_substrs)]
+    # Drop include-hub aggregators — a file that `include`s a sibling which is
+    # ALSO staged standalone. Reading both defines every included module twice
+    # and the read ABORTS ("duplicate definition" / "already declared"), so
+    # synth produces no netlist and phase 3 then SKIPs DRC and WAIVEs LVS for
+    # want of a GDS. The name filter above cannot catch this: an aggregator is
+    # identified by its `include grammar, not by its filename. Parity with
+    # phase-2 synth's selector, which has excluded these since #614.
+    silicon = _drop_include_hubs(silicon)
     # Package files MUST come first so `import pkg::*` resolves.
     pkg_files = [f for f in silicon if "pkg" in f.name.lower()]
     other = [f for f in silicon if "pkg" not in f.name.lower()]
