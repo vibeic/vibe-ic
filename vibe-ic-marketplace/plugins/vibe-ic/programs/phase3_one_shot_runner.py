@@ -2342,6 +2342,155 @@ def _build_sparse_die_aware_filler_tcl(filler_masters: List[str]) -> str:
         "}\n")
 
 
+# ── PG global-connect RE-APPLY + audit (post-instance-creation) ──────────────
+#
+# `global_connect` is a ONE-SHOT: it walks the instances that exist AT THE
+# MOMENT IT RUNS and attaches every PG terminal matching a registered
+# `add_global_connection` rule. The flow called it exactly once — inside the
+# PDN block, which runs BEFORE global placement. Every instance CREATED AFTER
+# that point therefore kept BOTH of its PG terminals on no net at all:
+#
+#   * `buffer_ports` / `repair_design` / `repair_timing` buffers
+#   * `clock_tree_synthesis` clock buffers
+#   * Design-for-ECO spare cells
+#   * `repair_antennas` diodes
+#   * and above all the decap/fill PHYSICAL-ONLY cells, which are inserted
+#     dead last, after detailed_route
+#
+# Those cells still occupy sites and still draw their own PG rail metal into
+# the layout, but with no owning net the router has no reason to keep signal
+# wires min-space clear of them, and the extracted layout has a supply network
+# that the physical-only cells are not actually part of. The streamed GDS then
+# fails the foundry's metal-1 spacing rule against metal the router never
+# treated as net-owned — a defect invisible to the router's own DRC (which
+# reports 0) and to the cell library's DRC (which also reports 0).
+#
+# MEASURED (2026-07-22), two designs, two PDKs, same defect:
+#   * commercial 180nm BCD, 16123 instances — 5835 PG-connected (exactly the
+#     floorplan.def instance count), 10288 instances / 20576 PG terminals left
+#     on no net; 9602 of them decap/fill. Sign-off deck: 1118 metal-1 spacing
+#     violations, 72% of them signal-to-supply.
+#   * open IHP sg13g2, 1813 instances — 352 PG-connected, 1461 instances /
+#     2922 PG terminals left on no net; 1359 of them decap/fill.
+# So this is NOT PDK-specific: it is the flow's instance/connect ORDERING, and
+# every PDK gets it. Only the strictness of the sign-off deck decides whether
+# it surfaces as a violation count or ships silently.
+#
+# The repair is to re-apply the stored global-connect rules AFTER the last
+# instance-creating step, then AUDIT. `global_connect` re-applies the rules
+# already registered on the block by the PDN step, so no rule is restated here
+# (and a PDK whose PDN never registered any rule is caught by the audit rather
+# than silently "succeeding").
+def _build_pg_reconnect_tcl(reroute: bool = True) -> str:
+    """Emit the post-insertion PG re-connect + audit (+ optional incremental
+    re-route) Tcl. Chip- and PDK-AGNOSTIC: no PDK/design literal appears — the
+    net names come from the rules the PDN step already registered on the block.
+
+    `reroute` re-runs `detailed_route` after the re-connect. That is the half
+    that actually FIXES the geometry: re-connecting alone makes the layout's
+    connectivity honest, but the signal wires were already placed against
+    metal the router had ignored, so they must be re-routed now that the
+    physical-only cells' rails are net-owned shapes the spacing engine sees.
+    Both halves are NONFATAL-guarded; the audit below is the gate."""
+    rr = (
+        "# The physical-only cells' rails are net-owned shapes only NOW, so the\n"
+        "# spacing engine has to see them: re-route incrementally. TritonRoute\n"
+        "# rips up and re-lays only the wires that now violate.\n"
+        "if {[catch {detailed_route -verbose 0} _pgrr_err]} {\n"
+        "  puts \"PG_REROUTE_NONFATAL: $_pgrr_err\"\n"
+        "} else {\n"
+        "  puts \"PG_REROUTE_DONE\"\n"
+        "}\n") if reroute else ""
+    return (
+        "# === PG global-connect RE-APPLY + audit (post-instance-creation) ===\n"
+        "# global_connect is a one-shot over the instances that exist when it\n"
+        "# runs. Everything created after the PDN step -- repair/CTS buffers,\n"
+        "# spare cells, antenna diodes, and the decap/fill physical-only cells\n"
+        "# inserted after routing -- was left with BOTH PG terminals on no net.\n"
+        "# Re-apply the rules the PDN step registered, then AUDIT.\n"
+        "#\n"
+        "# A do-not-touch instance is SKIPPED by global_connect (OpenROAD refuses\n"
+        "# to modify its terminals), so the Design-for-ECO spare cells -- which\n"
+        "# are set_dont_touch the moment they are placed, precisely so the\n"
+        "# optimizer cannot delete them -- were left with floating supply pins\n"
+        "# even by a re-applied global_connect. do-not-touch means \"do not\n"
+        "# resize or remove this cell\"; it must never mean \"leave its power pin\n"
+        "# unconnected\". Lift the flag across the connect and restore it exactly\n"
+        "# as found, so the protection the rest of the flow relies on is intact\n"
+        "# on both sides of this block.\n"
+        "set _pg_dnt {}\n"
+        "if {[catch {\n"
+        "  foreach _pg_i [[ord::get_db_block] getInsts] {\n"
+        "    if {[$_pg_i isDoNotTouch]} {\n"
+        "      lappend _pg_dnt $_pg_i\n"
+        "      $_pg_i setDoNotTouch false\n"
+        "    }\n"
+        "  }\n"
+        "} _pgdt_err]} {\n"
+        "  puts \"PG_DONTTOUCH_LIFT_NONFATAL: $_pgdt_err\"\n"
+        "}\n"
+        "puts \"PG_DONTTOUCH_LIFTED: [llength $_pg_dnt]\"\n"
+        "if {[catch {global_connect} _pgrc_err]} {\n"
+        "  puts \"PG_RECONNECT_NONFATAL: $_pgrc_err\"\n"
+        "} else {\n"
+        "  puts \"PG_RECONNECT_DONE\"\n"
+        "}\n"
+        "# Restore do-not-touch BEFORE the re-route, so the router cannot resize\n"
+        "# or drop a spare that the flow has promised downstream ECO it kept.\n"
+        "if {[catch {\n"
+        "  foreach _pg_i $_pg_dnt { $_pg_i setDoNotTouch true }\n"
+        "} _pgdr_err]} {\n"
+        "  puts \"PG_DONTTOUCH_RESTORE_NONFATAL: $_pgdr_err\"\n"
+        "} else {\n"
+        "  puts \"PG_DONTTOUCH_RESTORED: [llength $_pg_dnt]\"\n"
+        "}\n"
+        + rr +
+        "# Audit every POWER/GROUND instance terminal in the design. This is the\n"
+        "# gate's PRIMARY evidence and it is emitted unconditionally: a PDN that\n"
+        "# connects nothing must be visible, never silent.\n"
+        "if {[catch {\n"
+        "  set _pg_tot 0\n"
+        "  set _pg_bad 0\n"
+        "  set _pg_ex {}\n"
+        "  set _pg_blk [ord::get_db_block]\n"
+        "  foreach _pg_i [$_pg_blk getInsts] {\n"
+        "    foreach _pg_t [$_pg_i getITerms] {\n"
+        "      set _pg_s [[$_pg_t getMTerm] getSigType]\n"
+        "      if {$_pg_s ne \"POWER\" && $_pg_s ne \"GROUND\"} { continue }\n"
+        "      incr _pg_tot\n"
+        "      if {[$_pg_t getNet] eq \"NULL\"} {\n"
+        "        incr _pg_bad\n"
+        "        if {[llength $_pg_ex] < 5} {\n"
+        "          lappend _pg_ex [[$_pg_i getMaster] getName]\n"
+        "        }\n"
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "  puts \"PG_CONNECT_AUDIT: total=$_pg_tot unconnected=$_pg_bad"
+        " masters=[join $_pg_ex ,]\"\n"
+        "} _pga_err]} {\n"
+        "  puts \"PG_CONNECT_AUDIT_NONFATAL: $_pga_err\"\n"
+        "}\n")
+
+
+# The audit line the Tcl above emits, read back by the Python gate.
+_PG_AUDIT_RE = re.compile(
+    r"PG_CONNECT_AUDIT:\s*total=(\d+)\s+unconnected=(\d+)(?:\s+masters=(\S*))?")
+
+
+def _parse_pg_connect_audit(text: str) -> Optional[Tuple[int, int, str]]:
+    """Return (total_pg_iterms, unconnected_pg_iterms, example_masters) from the
+    LAST PG_CONNECT_AUDIT line in an OpenROAD log, or None when the design
+    never emitted one. None means "not measured" — which the caller must treat
+    as unproven, never as clean."""
+    last = None
+    for m in _PG_AUDIT_RE.finditer(text or ""):
+        last = m
+    if last is None:
+        return None
+    return (int(last.group(1)), int(last.group(2)), last.group(3) or "")
+
+
 @dataclass
 class PdkConfig:
     name: str
@@ -8588,6 +8737,7 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         pg_cleanup_block: str, spef_repair_block: str,
                         antenna_repair_block: str,
                         filler_block: str,
+                        pg_reconnect_block: str = "",
                         place_pins_block: Optional[str] = None,
                         macro_place_block: str = "",
                         routability_driven: bool = True,
@@ -8875,7 +9025,7 @@ if {{[catch {{write_def {out_dir_c}/routed_preantenna.def}} _cp_err]}} {{
 # (no filler in row gaps), and unused silicon area. SKY130 spm pilot added
 # 2079 decap + 150 fill cells; DRC still 0, worst IR 35 µV (2500× margin).
 # NONFATAL-guarded so PDKs without the masters degrade gracefully.
-{filler_block}write_def {out_dir_c}/routed.def
+{filler_block}{pg_reconnect_block}write_def {out_dir_c}/routed.def
 write_def {out_dir_c}/{top}.def
 write_verilog {out_dir_c}/{top}_pnr.v
 report_checks > {out_dir_c}/sta.rpt
@@ -9152,6 +9302,16 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # fill (util ≥ threshold). chip-AGNOSTIC.
     filler_block = _build_sparse_die_aware_filler_tcl(_filler_masters)
 
+    # PG global-connect RE-APPLY + audit. `global_connect` inside the PDN block
+    # runs BEFORE placement, so it can only connect the instances that exist
+    # then; every buffer, spare, antenna diode and decap/fill cell created
+    # afterwards keeps both PG terminals on no net. Re-apply the registered
+    # rules after the LAST instance-creating step, re-route so the router
+    # actually sees the now-net-owned rail metal, and audit. Emitted for every
+    # PDK (the audit must run even when the PDN was skipped — that is precisely
+    # the case that used to ship silently). See _build_pg_reconnect_tcl.
+    pg_reconnect_block = _build_pg_reconnect_tcl()
+
     # v0.2.14 — antenna repair + the DRT-0305 PG-net cleanup that must precede
     # routing. Both built by pure helpers so the silicon-critical Tcl is pinned by
     # regression tests (v0.1.49 doctrine).
@@ -9288,6 +9448,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         spef_repair_block=spef_repair_block,
         antenna_repair_block=antenna_repair_block,
         filler_block=filler_block,
+        pg_reconnect_block=pg_reconnect_block,
         place_pins_block=place_pins_block,
         macro_place_block=macro_place_block,
         spef_repair_estimate_block=spef_repair_estimate_block,
@@ -9508,6 +9669,70 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                     "util": util,
                     "non_signoff_outputs": [str(def_file)],
                     "resize_history": resize_history})
+    # ── PG-CONNECT gate — a supply network that half the design is not part of
+    # must never leave PnR silently. `global_connect` is a one-shot over the
+    # instances alive when it runs; the PDN step runs it before placement, so
+    # everything created after (repair/CTS buffers, spares, antenna diodes, and
+    # the decap/fill physical-only cells inserted after routing) used to keep
+    # BOTH PG terminals on no net. The Tcl now re-applies the rules and audits;
+    # this reads the audit and refuses to call the result a pass.
+    #
+    # Three outcomes, none of them silent:
+    #   unconnected == 0            -> PASS, with the count recorded as evidence
+    #   unconnected  > 0            -> FAIL (orphaned PG terminals shipped)
+    #   audit line absent / total 0 -> BLOCKED (nothing was measured; a PDN step
+    #                                  that connects zero PG pins is the exact
+    #                                  condition that shipped this defect, so it
+    #                                  is reported, never assumed clean)
+    _pg_log_txt = ""
+    try:
+        _pg_log_txt = (out_dir / "openroad.log").read_text(errors="ignore")
+    except Exception:
+        _pg_log_txt = (out or "") + "\n" + (err or "")
+    _pg_audit = _parse_pg_connect_audit(_pg_log_txt)
+    _pg_evidence = [str(out_dir / "openroad.log"), str(def_file)]
+    if _pg_audit is None:
+        return StepResult(
+            "pnr", "BLOCKED", time.time() - t0,
+            ("PG_CONNECT_UNMEASURED: the routed design emitted no "
+             "PG_CONNECT_AUDIT line, so it is not known whether the power/"
+             "ground terminals of the placed instances are attached to the "
+             "supply network at all. A PnR result whose supply connectivity "
+             "was never measured is not a sign-off result — it is the exact "
+             "state in which orphaned physical-only cells ship unnoticed."),
+            _pg_evidence, extras={"finding": "PG_CONNECT_UNMEASURED"})
+    _pg_total, _pg_bad, _pg_masters = _pg_audit
+    if _pg_total == 0:
+        return StepResult(
+            "pnr", "BLOCKED", time.time() - t0,
+            ("PG_CONNECT_ZERO_TERMINALS: the design reports zero POWER/GROUND "
+             "instance terminals. Either the cell library declares no PG pins "
+             "or the audit could not read them; either way no supply "
+             "connectivity was verified and the result cannot be signed off."),
+            _pg_evidence, extras={"finding": "PG_CONNECT_ZERO_TERMINALS",
+                                  "pg_terminals_total": _pg_total})
+    if _pg_bad > 0:
+        _pg_pct = 100.0 * _pg_bad / _pg_total
+        return StepResult(
+            "pnr", "FAIL", time.time() - t0,
+            (f"PG_TERMINALS_UNCONNECTED: {_pg_bad} of {_pg_total} power/ground "
+             f"instance terminals ({_pg_pct:.1f}%) are attached to no net "
+             f"after routing"
+             + (f" (e.g. masters {_pg_masters})" if _pg_masters else "")
+             + ". Those instances occupy sites and draw their own supply-rail "
+               "metal into the layout, but no net owns that metal: the router "
+               "has no reason to keep signal wires min-space clear of it, so "
+               "the streamed layout carries spacing violations that neither "
+               "the router's own DRC nor the cell library's DRC can see. Every "
+               "instance created after the PDN step's one-shot global_connect "
+               "is affected. Re-apply the global-connect rules after the last "
+               "instance-creating step and re-route."),
+            _pg_evidence,
+            extras={"finding": "PG_TERMINALS_UNCONNECTED",
+                    "pg_terminals_total": _pg_total,
+                    "pg_terminals_unconnected": _pg_bad,
+                    "pg_example_masters": _pg_masters,
+                    "non_signoff_outputs": [str(def_file)]})
     # v1.3.92 — post-route decap-under-signal-route SHORT guard (config-gated;
     # no-op on OSS PDKs). Runs on the final {top}.def, BEFORE streamout, so the
     # DEF leaving PnR is already short-free and both streamout paths inherit the
@@ -9611,7 +9836,13 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     pnr_outputs = [str(def_file), str(sta_file)]
     if spare_json_path.is_file():
         pnr_outputs.append(str(spare_json_path))
+    # PG connectivity is sign-off evidence, so it is stated on the PASS path
+    # too — "0 unconnected out of N" is a measurement, "no mention" is not.
+    detail += (f" | pg_connect: {_pg_total - _pg_bad}/{_pg_total} PG terminals "
+               f"connected (0 orphaned)")
     spare_extras = {
+        "pg_terminals_total": _pg_total,
+        "pg_terminals_unconnected": _pg_bad,
         "spare_density_target": round(spare_dens, 6),
         "spare_count": spare_plan.get("count", 0),
         "spare_types": spare_plan.get("types", {}),
