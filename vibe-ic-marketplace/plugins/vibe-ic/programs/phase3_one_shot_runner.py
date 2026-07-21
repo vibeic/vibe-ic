@@ -1688,9 +1688,8 @@ def _discover_pg_from_lef(
     tech-LEF layer name case-exactly: a commercial PDK = "MET1", sky130 = "met1")."""
     if not cell_lef:
         return None
-    try:
-        text = Path(cell_lef).read_text(errors="ignore")
-    except OSError:
+    text = _read_pdk_text(cell_lef)
+    if text is None:
         return None
     power = ground = None
     pwr_layer = pwr_w = gnd_w = None
@@ -1855,32 +1854,58 @@ _SKY130_FILLER_MASTERS = [
 ]
 
 
-# Commercial/custom PDKs name their fill + decoupling cells by a short family
-# prefix (FILL / DECAP / DCAP / FILLCAP / FILLER) + a size suffix (FILL64,
-# DECAP8, ...). Discover them from the cell LEF so density-fill runs on ANY PDK,
-# not just sky130 (a commercial 180nm PDK: FILL1..64 + DECAP4..64). chip-AGNOSTIC.
-_FILLER_MACRO_RE = re.compile(
-    r'^\s*MACRO\s+((?:DECAP|DCAP|FILLCAP|FILLER|FILL)(\d*)\w*)\s*$',
-    re.IGNORECASE | re.MULTILINE)
+# Fill / decoupling cells are named either as a bare family + size (a
+# commercial PDK's FILL64 / DECAP8) or — as EVERY open PDK does — with the
+# library name in front (sky130_fd_sc_hd__fill_8, sg13g2_fill_8,
+# gf180mcu_fd_sc_mcu7t5v0__fill_8). So the family token is matched as a NAME
+# SEGMENT (string start or after a `_` separator), not anchored to the start
+# of the macro name.
+#
+# The previous pattern anchored the family at the start of the macro name and
+# therefore matched NO open PDK at all: sky130_fd_sc_hd__fill_8,
+# sg13g2_fill_8 and gf180mcu_..._fill_8 all failed it. sky130 was masked from
+# the bug by the hardcoded _SKY130_FILLER_MASTERS shortcut in
+# _filler_masters_for_pdk; every other PDK silently got ZERO fillers and its
+# std-cell rows were left with open gaps. Measured on spm x ihp-sg13g2
+# (2026-07-21): FILLER_SKIPPED → 28 KLayout DRC items against the real IHP
+# deck, 26x NW.b ("Min. NWell space or notch (same net) is 0.62 um") + 2x
+# NW.b1, i.e. nwell notches at the unfilled row gaps. With fillers inserted
+# the same design checks clean.
+_FILLER_MACRO_RE = re.compile(r'^\s*MACRO\s+(\S+)\s*$', re.MULTILINE)
+# Family token as a name segment; trailing digits (if any) are the drive/size.
+_FILLER_FAMILY_RE = re.compile(
+    r'(?:^|_)(DECAP|DCAP|FILLCAP|FILLER|FILL)(?:_?(\d+))?(?:_|$)',
+    re.IGNORECASE)
 
 
-def _discover_filler_masters_from_lef(cell_lef: Optional[str]) -> List[str]:
+def _discover_filler_masters_from_lef(cell_lef: Optional[str],
+                                      container: Optional[str] = None
+                                      ) -> List[str]:
     """Discover decap+fill filler-cell masters from a cell LEF, ordered
     OpenROAD-style (decaps largest→smallest first, then fills largest→smallest
     — greedy tiling packs the big cells first). Returns [] on no LEF / no
-    fillers. Name-pattern based (no vendor literal)."""
+    fillers. Name-pattern based (no vendor literal).
+
+    `cell_lef` is normally a path INSIDE the EDA container (/foss/pdks/...),
+    which does not exist on the host filesystem. Reading it with a plain host
+    open() therefore raised OSError and silently returned [] for every
+    container-resident PDK. When `container` is given (or EDA_CONTAINER is
+    set) and the host path is absent, the LEF is read from inside the
+    container instead. Chip- and PDK-AGNOSTIC."""
     if not cell_lef:
         return []
-    try:
-        text = Path(cell_lef).read_text(errors="ignore")
-    except OSError:
+    text = _read_pdk_text(cell_lef, container)
+    if not text:
         return []
     decaps: List[tuple] = []
     fills: List[tuple] = []
     for m in _FILLER_MACRO_RE.finditer(text):
         name = m.group(1)
-        size = int(m.group(2)) if m.group(2) else 0
-        if name.upper().startswith(("DECAP", "DCAP", "FILLCAP")):
+        fam = _FILLER_FAMILY_RE.search(name)
+        if not fam:
+            continue
+        size = int(fam.group(2)) if fam.group(2) else 0
+        if fam.group(1).upper() in ("DECAP", "DCAP", "FILLCAP"):
             decaps.append((size, name))
         else:
             fills.append((size, name))
@@ -1900,15 +1925,22 @@ _ANTENNACELL_RE = re.compile(
     re.S | re.I)
 
 
-def _discover_antenna_diode_from_lef(lef_paths: List[Optional[str]]) -> Optional[str]:
+def _discover_antenna_diode_from_lef(lef_paths: List[Optional[str]],
+                                     container: Optional[str] = None
+                                     ) -> Optional[str]:
     """Return the first `CLASS CORE ANTENNACELL` macro name found across the given
-    LEFs (the PDK's antenna-diode cell), or None. Chip-AGNOSTIC marker match."""
+    LEFs (the PDK's antenna-diode cell), or None. Chip-AGNOSTIC marker match.
+
+    Same container-path caveat as _discover_filler_masters_from_lef: a PDK LEF
+    normally lives at a /foss/pdks/... path that exists only INSIDE the EDA
+    container, so a host-side read fails and the discovery silently yields
+    None. Fall back to reading through the container."""
+    _c = container or os.environ.get("EDA_CONTAINER")
     for lp in lef_paths:
         if not lp:
             continue
-        try:
-            text = Path(lp).read_text(errors="ignore")
-        except OSError:
+        text = _read_pdk_text(lp, _c)
+        if not text:
             continue
         m = _ANTENNACELL_RE.search(text)
         if m:
@@ -1920,9 +1952,16 @@ def _filler_masters_for_pdk(pdk: "PdkConfig") -> List[str]:
     """v0.1.48 — return the decap+fill cell-master set for this PDK.
 
     sky130-style cell library (probed by tapcell_master) → SKY130 set.
-    Custom / commercial PDK → discover FILL*/DECAP* masters from the cell LEF
-    (so density-fill runs for e.g. a commercial 180nm PDK). Genuinely unknown /
-    filler-less PDK → empty list (caller emits a SKIPPED line).
+    Any other PDK → discover FILL*/DECAP* masters from that PDK's OWN cell
+    LEF (read from inside the EDA container, where the PDK actually lives),
+    so density-fill runs for every PDK and not only for the one with a
+    hardcoded list. Genuinely filler-less PDK → empty list (caller emits a
+    SKIPPED line).
+
+    The sky130 literal shortcut is retained deliberately: it is the
+    established, benchmarked control path and LEF discovery now returns the
+    same set for it, so keeping the shortcut costs nothing and guarantees
+    the sky130 results stay bit-identical.
     """
     if pdk.tapcell_master and "sky130_fd_sc_hd" in pdk.tapcell_master:
         return list(_SKY130_FILLER_MASTERS)
@@ -2998,6 +3037,38 @@ def _container_file_text(container: str, path: str) -> Optional[str]:
         return None
 
 
+def _read_pdk_text(path: Optional[str],
+                   container: Optional[str] = None) -> Optional[str]:
+    """Read a PDK asset (LEF / tech LEF / any text) that may live only
+    INSIDE the EDA container.
+
+    Every PDK-introspection helper here is handed a path like
+    `/foss/pdks/<pdk>/libs.ref/.../x.lef`. That path exists in the
+    container, NOT on the host, so a plain host read raises OSError. The
+    helpers all caught that and returned their "nothing found" value, which
+    silently disabled the feature instead of reporting a problem:
+
+      • _discover_pg_from_lef      -> no PG pins  -> "PDN_SKIPPED: ...
+                                      silicon DOA without external PDN"
+      • _discover_filler_masters   -> no fillers  -> "FILLER_SKIPPED"
+      • _discover_antenna_diode    -> no diode    -> antenna repair skipped
+
+    sky130A never exposed this because each of those helpers has a
+    sky130-literal shortcut that returns before the read. Measured on
+    spm x ihp-sg13g2 (2026-07-21): PnR emitted ZERO PDN and zero fillers.
+
+    Host read first (so a staged/host-local copy still wins), then the
+    container. Chip- and PDK-AGNOSTIC."""
+    if not path:
+        return None
+    try:
+        return Path(path).read_text(errors="ignore")
+    except OSError:
+        pass
+    _c = container or os.environ.get("EDA_CONTAINER")
+    return _container_file_text(_c, path) if _c else None
+
+
 def _merge_liberty_texts(base_text: str, group_texts: List[str],
                          lib_name: str = "merged") -> str:
     """PR-A1 — merge split Liberty group files into one ``library{}``.
@@ -3175,6 +3246,123 @@ def _netlist_matches_liberty(netlist_path: Path,
         return True
 
 
+def _registry_glob_one(container: str, root: str, pattern: Optional[str],
+                       ) -> Optional[str]:
+    """Resolve ONE registry asset glob to a concrete in-container path.
+
+    Registry globs are container-relative (e.g.
+    "libs.ref/sg13g2_stdcell/lef/sg13g2_tech.lef", or a wildcard form like
+    "libs.ref/<scl>/liberty/*tt*.lib"). Resolution runs INSIDE the container
+    because that is where the PDK lives. Multiple matches are sorted and the
+    FIRST is taken so the choice is deterministic across runs (the caller
+    pins a single corner in the registry when the choice is significant).
+
+    Returns None when the pattern is unset or matches nothing — the caller
+    decides whether that asset is required. PDK-AGNOSTIC."""
+    if not pattern:
+        return None
+    full = f"{root.rstrip('/')}/{pattern.lstrip('/')}"
+    if not any(ch in full for ch in "*?["):
+        rc, _o, _e = _docker_exec_raw(
+            container, f"test -e {shlex.quote(full)}", timeout=60)
+        return full if rc == 0 else None
+    rc, out, _e = _docker_exec_raw(
+        container, f"ls -1d {full} 2>/dev/null | sort", timeout=60)
+    if rc != 0:
+        return None
+    hits = [ln.strip() for ln in out.splitlines() if ln.strip()]
+    return hits[0] if hits else None
+
+
+def _pdk_config_from_registry(project: Path, reg: Dict[str, Any]
+                              ) -> Optional[PdkConfig]:
+    """Build a PdkConfig from a pdk_registry.json entry — GENERIC, no
+    per-PDK code.
+
+    This is the resolution path for every registry-declared PDK that has no
+    hand-written named branch. It exists so that adding a PDK is a DATA
+    change (a registry entry) rather than a code change, and so that a PDK
+    the operator explicitly named can never silently resolve to a different
+    foundry's data.
+
+    Anything the registry leaves unstated is derived from the PDK's OWN
+    shipped LEF:
+      • SITE          — the `SITE <name>` declaration in the cell LEF.
+      • metal_prefix  — the alphabetic stem of the first ROUTING layer in
+                        the tech LEF. Derived from the tech LEF's LAYER
+                        order, NOT assumed to be sky130's "met".
+
+    Returns None when the mandatory assets (liberty + both LEFs) cannot be
+    resolved, so the caller can refuse rather than substitute. PDK-AGNOSTIC."""
+    container = os.environ.get("EDA_CONTAINER", "vibeic-eda")
+    root = reg.get("container_path") or ""
+    if not root:
+        return None
+    rc, _o, _e = _docker_exec_raw(
+        container, f"test -d {shlex.quote(root)}", timeout=60)
+    if rc != 0:
+        return None
+
+    liberty = _registry_glob_one(container, root, reg.get("liberty_glob"))
+    tech_lef = _registry_glob_one(container, root, reg.get("tech_lef_glob"))
+    cell_lef = _registry_glob_one(container, root, reg.get("cell_lef_glob"))
+    if not (liberty and tech_lef and cell_lef):
+        return None
+    cell_gds = _registry_glob_one(container, root, reg.get("cell_gds_glob"))
+
+    # SITE: registry value wins; else read the PDK's own cell LEF.
+    site = reg.get("site")
+    if not site:
+        _t = _container_file_text(container, cell_lef) or ""
+        m = re.search(r"^\s*SITE\s+([A-Za-z_][A-Za-z0-9_]*)", _t, re.MULTILINE)
+        site = m.group(1) if m else "unit"
+
+    # metal_prefix: registry value wins; else the alphabetic stem of the
+    # FIRST routing layer declared in this PDK's tech LEF.
+    metal_prefix = reg.get("metal_prefix")
+    if not metal_prefix:
+        _t = _container_file_text(container, tech_lef) or ""
+        m = re.search(
+            r"LAYER\s+([A-Za-z_]+)\d+\s*;?[^L]*?TYPE\s+ROUTING",
+            _t, re.IGNORECASE | re.DOTALL)
+        metal_prefix = m.group(1) if m else "met"
+
+    def _opt(key: str) -> Optional[str]:
+        return _registry_glob_one(container, root, reg.get(key))
+
+    _mlibs, _mlefs, _mgds, _mv = _discover_local_macros(project)
+    return PdkConfig(
+        name=reg.get("name") or "unknown",
+        liberty=liberty,
+        tech_lef=tech_lef,
+        cell_lef=cell_lef,
+        cell_gds=cell_gds,
+        site=site,
+        drc_deck=_opt("drc_deck"),
+        metal_prefix=metal_prefix,
+        # Absent in the registry => the PDK ships no such master and the
+        # dependent step self-skips (disclosed NONFATAL). It is NEVER
+        # defaulted to another PDK's cell name, which would be an
+        # unroutable/nonexistent master in this library.
+        tapcell_master=reg.get("tapcell_master"),
+        tapcell_distance_um=float(reg.get("tapcell_distance_um") or 14.0),
+        antenna_diode_cell=reg.get("antenna_diode_cell"),
+        clk_buf=reg.get("clk_buf_cell"),
+        clk_buf_root=reg.get("clk_buf_root_cell"),
+        pnr_exclude_cell_file=_opt("pnr_exclude_cell_file"),
+        lefdef_layermap=_opt("lefdef_layermap"),
+        # Optional upper-metal PDN strap plan. Absent => the adaptive PDN
+        # emits follow-pin rails only (still a real, connected PDN).
+        pdn_straps=reg.get("pdn_straps"),
+        # FEOL layer numbers for the tapless-cell latch-up VERIFICATION.
+        # Absent => the PERC geometry layer stays INDETERMINATE (it never
+        # fabricates a pass), which is the honest default.
+        tap_geom_layers=reg.get("tap_geom_layers"),
+        macro_libs=_mlibs, macro_lefs=_mlefs,
+        macro_gds=_mgds, macro_v=_mv,
+    )
+
+
 def _detect_pdk(project: Path, override: Optional[str] = None
                 ) -> Optional[PdkConfig]:
     """Detect which PDK to use. chip-AGNOSTIC: looks at project's input/pdk/
@@ -3300,18 +3488,51 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 macro_libs=_mlibs, macro_lefs=_mlefs,
                 macro_gds=_mgds, macro_v=_mv,
             )
-        # PR-A1 (b) — registry-declared names that still have NO named
-        # branch must not resolve to sky130A SILENTLY. Keep the legacy
-        # resolution (back-compat) but disclose loudly: the sign-off PDK
-        # may not be the one the operator named.
-        if override in ("gf180mcuD", "ihp-sg13g2", "sky130B",
-                        "gf180mcuA", "gf180mcuB", "gf180mcuC"):
-            print(f"[WARN] --pdk {override}: declared in pdk_registry.json "
-                  "but has no named _detect_pdk branch yet — resolution "
-                  "falls through to project input/pdk/ or the container "
-                  "sky130A fallback; the sign-off PDK may NOT be the one "
-                  "you named. (Named branches today: sky130A, nangate45, "
-                  "asap7.)", file=sys.stderr)
+        # ---------------------------------------------------------------
+        # GENERIC REGISTRY-DRIVEN RESOLUTION (chip- and PDK-AGNOSTIC).
+        #
+        # Before this, ONLY sky130A / nangate45 / asap7 had named branches.
+        # Every other registry-declared PDK (ihp-sg13g2, gf180mcuD, sky130B,
+        # gf180mcuA/B/C) printed a WARN and then FELL THROUGH to
+        # `return _detect_pdk(project, override="sky130A")` at the bottom of
+        # this function. The run then executed the ENTIRE backend — PnR, CTS,
+        # DRC, LVS, STA — against sky130A liberty/LEF/GDS while every report
+        # and the operator's own command line said otherwise.
+        #
+        # Measured on 2026-07-21 (spm x ihp-sg13g2, plugin 1.4.79): with
+        # `--pdk ihp-sg13g2`, phase3/stage3/pnr/pnr.tcl was written referencing
+        #   /foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/
+        #       sky130_fd_sc_hd__tt_025C_1v80.lib
+        #   /foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/techlef/
+        #       sky130_fd_sc_hd__nom.tlef
+        # i.e. a silent WRONG-PDK sign-off — the exact defect class the
+        # commercial-PDK fallback guard already refuses. A WARN on stderr is
+        # not an adequate control for a result that is structurally wrong.
+        #
+        # The registry ALREADY declares every asset for these PDKs, so no new
+        # per-PDK code is needed: build the PdkConfig from the registry entry
+        # itself. This generalises to any PDK a third-party plugin appends to
+        # pdk_registry.json — the documented extension seam — instead of
+        # requiring an upstream code change per PDK.
+        #
+        # Anything the registry does not state is auto-derived from the PDK's
+        # own LEF (SITE, routing-layer prefix), never inherited from sky130.
+        # If the named PDK cannot be resolved we REFUSE rather than silently
+        # substituting a different foundry's data.
+        if override not in ("sky130A", "nangate45", "asap7"):
+            _reg = _pdk_registry_entry(override)
+            if _reg is not None:
+                _cfg = _pdk_config_from_registry(project, _reg)
+                if _cfg is not None:
+                    return _cfg
+                raise SystemExit(
+                    f"[FAIL] --pdk {override}: declared in pdk_registry.json "
+                    f"but its assets could not be resolved inside container "
+                    f"'{os.environ.get('EDA_CONTAINER', 'vibeic-eda')}' "
+                    f"(container_path={_reg.get('container_path')!r}). "
+                    f"REFUSING to fall back to sky130A — that would emit "
+                    f"sign-off reports for a PDK you did not ask for. Fix the "
+                    f"registry entry or use an image that ships this PDK.")
 
     pdk_dir = project / "input" / "pdk"
     if pdk_dir.is_dir():
@@ -6370,23 +6591,49 @@ def _discover_spare_cells_from_liberty(
         "oai":      re.compile(r"(?:^|_)(?:o\d+ai|oai)\w*$", re.I),
         "dff":      re.compile(r"(?:^|_)(?:dff|dfxtp|dfrtp|sdff)\w*$", re.I),
     }
+    # SECOND-TIER patterns, consulted ONLY when the primary pattern for a
+    # class matches nothing in this library. They are deliberately broader,
+    # so they must not run first — a broad match would change which cell a
+    # library that the primary already handles resolves to (measured: a
+    # generic `d(ff|f<letters>)` form flips sky130 from dfrtp_2 to dfbbn_1).
+    # Tier 2 therefore only ever ADDS coverage for libraries that would
+    # otherwise resolve the class to None.
+    #
+    # `dff`: the primary token list (dff/dfxtp/dfrtp/sdff) is a sky130 +
+    # Nangate spelling list, so it matched NO flip-flop in IHP SG13G2,
+    # whose FFs are sg13g2_dfrbp_* / sg13g2_dfrbpq_* / sg13g2_sdfrbp_*.
+    # The class was dropped from the spare mix, the plan requested 8 spares
+    # but placed 7, and the Design-for-ECO coverage gate failed with
+    # "actual_density 0.019886 < target_density 0.02" (spm x ihp-sg13g2,
+    # 2026-07-21). The tier-2 form matches a `d`+`f`+suffix flip-flop name
+    # while still rejecting latches (dlhq/dlhr/dllr) and delay cells
+    # (dlygate*), which begin `dl`, not `df`.
+    patterns_tier2 = {
+        "dff": re.compile(r"(?:^|_)s?d(?:ff|f[a-z]{1,6})\w*$", re.I),
+    }
     used = used_cells or set()
     cells_sorted = sorted(set(cells), key=lambda n: (len(n), n))
     for cls, pat in patterns.items():
-        first_match: Optional[str] = None
-        for nm in cells_sorted:
-            if not pat.search(nm):
+        for _pat in (pat, patterns_tier2.get(cls)):
+            if _pat is None:
                 continue
-            if first_match is None:
-                first_match = nm
-            if nm not in used:
-                out[cls] = nm
-                break
-        if out[cls] is None and first_match is not None:
-            # Every variant of this class is in functional use — keep the
-            # base pick; the plan records the conflict so downstream LVS
-            # knows the class-level spare-only ignore will not engage.
-            out[cls] = first_match
+            first_match: Optional[str] = None
+            for nm in cells_sorted:
+                if not _pat.search(nm):
+                    continue
+                if first_match is None:
+                    first_match = nm
+                if nm not in used:
+                    out[cls] = nm
+                    break
+            if out[cls] is None and first_match is not None:
+                # Every variant of this class is in functional use — keep
+                # the base pick; the plan records the conflict so downstream
+                # LVS knows the class-level spare-only ignore will not
+                # engage.
+                out[cls] = first_match
+            if out[cls] is not None:
+                break  # primary tier resolved it; never consult tier 2
     return out
 
 
@@ -9644,9 +9891,8 @@ def _read_layer_min_space_um(tech_lef: Optional[str],
     tokens; layer name matched case-insensitively)."""
     if not tech_lef or not layer_name:
         return None
-    try:
-        txt = Path(tech_lef).read_text(errors="replace")
-    except OSError:
+    txt = _read_pdk_text(tech_lef)
+    if txt is None:
         return None
     m = re.search(r"^\s*LAYER\s+" + re.escape(layer_name) + r"\s*$(.*?)"
                   r"^\s*END\s+" + re.escape(layer_name) + r"\s*$",
@@ -12430,10 +12676,39 @@ def _v0_3_14_detect_spare_only_classes(netlist_text: str) -> List[str]:
     mismatch). This is the SAFE generalisation of the field's manual
     dfrtp_1/inv_1 ignore — derived per-design from the netlist, never
     hardcoded. chip-AGNOSTIC: only the generic 'spare' instance-name
-    convention + cell-class grouping participate."""
-    inst_re = re.compile(r'(sky130_\w+?__[a-z0-9_]+)\s+(\\?\S+)\s*\(', re.M)
+    convention + cell-class grouping participate.
+
+    The instance pattern used to be `sky130_\\w+?__[a-z0-9_]+`, i.e. it
+    only ever recognised SKY130 cell names, so on any other PDK the
+    grouping came back empty and NO spare-only class was ever ignored —
+    the exact opposite of the "derived per-design, never hardcoded" claim
+    above. Measured on spm x ihp-sg13g2 (2026-07-21): the five ECO spares
+    (spare_aoi_0 / spare_mux2_0 / spare_nand2_0 / spare_nand2_1 /
+    spare_nor2_0, classes sg13g2_a21oi_2 / sg13g2_mux2_1 /
+    sg13g2_nand2_2 / sg13g2_nor2_2) were left in the compare and netgen
+    reported "Number of devices: 447 **Mismatch** | 452" with five
+    "(no matching instance)" fragments. Matching a GENERIC structural
+    instantiation header instead recognises any PDK's cell names; the
+    sky130 behaviour is unchanged because sky130 names are a subset."""
+    # Generic Verilog structural instantiation header:
+    #     <cell_type> <instance_name> (
+    # Verilog keywords that can appear in that shape are excluded so a
+    # declaration or construct is never mistaken for an instantiation.
+    _NON_CELL = {
+        "module", "endmodule", "input", "output", "inout", "wire", "reg",
+        "assign", "parameter", "localparam", "always", "initial", "begin",
+        "end", "if", "else", "case", "endcase", "for", "while", "function",
+        "endfunction", "task", "endtask", "generate", "endgenerate",
+        "specify", "endspecify", "defparam", "supply0", "supply1", "tri",
+        "integer", "real", "genvar", "posedge", "negedge", "or", "and",
+        "not", "buf", "nand", "nor", "xor", "xnor", "signed", "unsigned",
+    }
+    inst_re = re.compile(
+        r'^\s*([A-Za-z_][A-Za-z0-9_$]*)\s+(\\?[^\s(;]+)\s*\(', re.M)
     by_class: Dict[str, List[str]] = {}
     for cls, inst in inst_re.findall(netlist_text or ""):
+        if cls.lower() in _NON_CELL:
+            continue
         by_class.setdefault(cls, []).append(inst)
     spare_re = re.compile(r'spare', re.I)
     return sorted(cls for cls, insts in by_class.items()
@@ -12635,14 +12910,50 @@ def _emit_local_netgen_setup(project: Path, pdk: PdkConfig,
     (these cells carry no functional connectivity in any design, so the
     ignore can never hide a real defect). Returns (host_path, container_path).
 
-    chip/PDK-AGNOSTIC: the ignore patterns are generic sky-family physical
-    cell-class regexes; design-specific directives (e.g. ECO spare-cell
-    classes that happen to be spare-ONLY in a given design, buffer-merged
-    output-port aliasing) are NOT emitted here — those need per-design
-    confirmation and remain design-side, since a class that is spare-only
-    in one design may be functional in another."""
+    chip/PDK-AGNOSTIC: the ignore patterns match the physical-cell FAMILY
+    token (fill / filler / decap / tap* / fakediode) as a NAME SEGMENT, so
+    they hold for any PDK's naming convention; design-specific directives
+    (e.g. ECO spare-cell classes that happen to be spare-ONLY in a given
+    design, buffer-merged output-port aliasing) are NOT emitted here —
+    those need per-design confirmation and remain design-side, since a
+    class that is spare-only in one design may be functional in another.
+
+    The patterns were previously written with a literal `sky130_fd_sc_`/
+    `sky130_ef_sc_` library prefix, so they matched NOTHING on any other
+    PDK and the physical-only cells stayed in the compare. Measured on
+    spm x ihp-sg13g2 (2026-07-21): with fillers correctly inserted, netgen
+    reported "Number of devices: 508 **Mismatch** | 457" and a wall of
+    "Net: FILLER_xx_8/VDD | (no matching net)" fragments — the layout's
+    sg13g2_fill_*/sg13g2_decap_* had no schematic counterpart and were
+    never ignored. Matching the family token instead of the vendor prefix
+    keeps the sky130 behaviour identical (those names still match) while
+    making the rule true for every PDK.
+
+    Deliberately NOT matched: tie cells (sg13g2_tiehi / sg13g2_tielo and
+    their equivalents). Those DO carry functional connectivity — they
+    drive real constant nets — so ignoring them could hide a real defect."""
     pdk_setup = (f"{PDKS_IN_CONTAINER}/{pdk.name}/libs.tech/netgen/"
                  f"{pdk.name}_setup.tcl")
+    # Family-token regexes (TCL ERE). Anchored at a `_` separator or the
+    # start of the name, and at the end (with an optional numeric drive
+    # suffix), so `..._fill_8`, `..._decap_4`, `..._tapvpwrvgnd_1` and
+    # `..._fakediode_2` match on ANY library prefix while a functional cell
+    # that merely contains the substring does not.
+    _phys_res = (
+        r"(^|_)fill(er)?(_[[:digit:]]+)?$",
+        r"(^|_)decap(_[[:digit:]]+)?$",
+        r"(^|_)tap[[:alpha:]]*(_[[:digit:]]+)?$",
+        r"(^|_)fakediode(_[[:digit:]]+)?$",
+    )
+
+    def _ignore_block(circuit: str, cells_var: str) -> str:
+        out = f"foreach _c ${cells_var} {{\n"
+        for rx in _phys_res:
+            out += (f"    if {{[regexp {{{rx}}} $_c]}} "
+                    f"{{ ignore class \"-{circuit} $_c\" }}\n")
+        out += "}\n"
+        return out
+
     body = (
         "# v0.3.13 ORGANIC #508/#509 — project-local netgen setup.\n"
         "# Sources the PDK setup, then unconditionally ignores the\n"
@@ -12650,19 +12961,11 @@ def _emit_local_netgen_setup(project: Path, pdk: PdkConfig,
         "# circuits (no functional connectivity → safe to ignore; not\n"
         "# gated behind MAGIC_EXT_USE_GDS, which floods cell-internal\n"
         "# disconnects on the cell-level DEF-direct compare).\n"
+        "# Patterns match the physical-cell FAMILY token as a name\n"
+        "# segment, so they are PDK-agnostic (any library prefix).\n"
         f"source {pdk_setup}\n"
-        "foreach _c $cells1 {\n"
-        "    if {[regexp {sky130_fd_sc_[^_]+__fill_[[:digit:]]+} $_c]}        { ignore class \"-circuit1 $_c\" }\n"
-        "    if {[regexp {sky130_fd_sc_[^_]+__tapvpwrvgnd_[[:digit:]]+} $_c]} { ignore class \"-circuit1 $_c\" }\n"
-        "    if {[regexp {sky130_fd_sc_[^_]+__decap_[[:digit:]]+} $_c]}       { ignore class \"-circuit1 $_c\" }\n"
-        "    if {[regexp {sky130_ef_sc_[^_]+__fakediode_[[:digit:]]+} $_c]}   { ignore class \"-circuit1 $_c\" }\n"
-        "}\n"
-        "foreach _c $cells2 {\n"
-        "    if {[regexp {sky130_fd_sc_[^_]+__fill_[[:digit:]]+} $_c]}        { ignore class \"-circuit2 $_c\" }\n"
-        "    if {[regexp {sky130_fd_sc_[^_]+__tapvpwrvgnd_[[:digit:]]+} $_c]} { ignore class \"-circuit2 $_c\" }\n"
-        "    if {[regexp {sky130_fd_sc_[^_]+__decap_[[:digit:]]+} $_c]}       { ignore class \"-circuit2 $_c\" }\n"
-        "    if {[regexp {sky130_ef_sc_[^_]+__fakediode_[[:digit:]]+} $_c]}   { ignore class \"-circuit2 $_c\" }\n"
-        "}\n"
+        + _ignore_block("circuit1", "cells1")
+        + _ignore_block("circuit2", "cells2")
     )
     # v0.3.14 — ORGANIC #509 round-3: per-design ECO spare-ONLY classes
     # (every instance is a spare → no functional connectivity → safe to
@@ -16605,9 +16908,8 @@ def _synthesize_physical_cell_stubs(pdk: PdkConfig, top: str, gate_v: Path,
     for lp in [pdk.cell_lef, pdk.tech_lef] + [str(m) for m in (pdk.macro_lefs or [])]:
         if not lp:
             continue
-        try:
-            txt = Path(lp).read_text(errors="ignore")
-        except OSError:
+        txt = _read_pdk_text(lp)
+        if txt is None:
             continue
         for m in _LEF_MACRO_PINS_RE.finditer(txt):
             nm = m.group(1)
@@ -17337,9 +17639,8 @@ def _discover_via_resistances(tech_lef: Optional[str]) -> Dict[str, float]:
     out: Dict[str, float] = {}
     if not tech_lef:
         return out
-    try:
-        text = Path(tech_lef).read_text(errors="ignore")
-    except OSError:
+    text = _read_pdk_text(tech_lef)
+    if text is None:
         return out
     cur_via = None
     cur_cut = None
@@ -18997,7 +19298,36 @@ def _measure_tap_geometry(project: Path, top: str, pdk: "PdkConfig",
     npl = _parse_gds_layer_spec(cfg.get("nplus"))
     ppl = _parse_gds_layer_spec(cfg.get("pplus"))
     poly = _parse_gds_layer_spec(cfg.get("poly"))     # optional refinement
-    if not (nw and npl and ppl):
+    # Some PDKs draw only ONE implant polarity and leave the other IMPLICIT
+    # (the complement, inside active area). IHP SG13G2 draws pSD (14/0) but
+    # NOT nSD (7/0 is empty in a std-cell layout: measured 0 polygons on a
+    # real signed-off spm GDS, against 3961 pSD and 1812 NWell polygons), so
+    # requiring both drawn implants made the tap measurement return ok=False,
+    # the TAPLESS_CELL_INTERNAL_TIES branch never engaged, and PERC reported
+    # a latch-up FAIL ("452 placed std cell(s) but no well taps") on a PDK
+    # whose own librelane config states "There are no endcap and welltie
+    # cells in ihp-sg13g2 thus set to undefined to skip insertion" — i.e.
+    # the ties are INSIDE the cells and the FAIL was a false positive.
+    #
+    # `implicit_implant` names the polarity that is NOT drawn; it is then
+    # derived as (active - <other implant>). Requires `activ`. PDK-AGNOSTIC:
+    # the layer numbers and which polarity is implicit both come from the
+    # PDK's own rule deck, nothing is assumed.
+    implicit = (cfg.get("implicit_implant") or "").strip().lower()
+    activ = _parse_gds_layer_spec(cfg.get("activ"))
+    if implicit in ("nplus", "pplus") and not activ:
+        return {"ok": False,
+                "reason": ("tap_geom_layers declares implicit_implant="
+                           f"{implicit!r} but no 'activ' layer to derive it from")}
+    if implicit == "nplus":
+        if not (nw and ppl):
+            return {"ok": False,
+                    "reason": "tap_geom_layers missing nwell/pplus GDS layers"}
+    elif implicit == "pplus":
+        if not (nw and npl):
+            return {"ok": False,
+                    "reason": "tap_geom_layers missing nwell/nplus GDS layers"}
+    elif not (nw and npl and ppl):
         return {"ok": False,
                 "reason": "tap_geom_layers missing nwell/nplus/pplus GDS layers"}
     gds = _pl.pnr_dir(project) / f"{top}.gds"
@@ -19005,6 +19335,20 @@ def _measure_tap_geometry(project: Path, top: str, pdk: "PdkConfig",
         return {"ok": False, "reason": f"sign-off GDS not found: {gds.name}"}
     gds_c = _to_container_path(str(gds), container)
     poly_line = (f"poly=reg({poly[0]},{poly[1]})" if poly else "poly=pya.Region()")
+    # Implant regions. When one polarity is implicit it is derived as
+    # (active - drawn_other_implant); the drawn one is additionally clipped
+    # to active so both sides are measured on the same footing.
+    if implicit == "nplus":
+        implant_lines = (
+            f"activ=reg({activ[0]},{activ[1]}); "
+            f"ppl=reg({ppl[0]},{ppl[1]}); npl=activ-ppl; ppl=ppl & activ\n")
+    elif implicit == "pplus":
+        implant_lines = (
+            f"activ=reg({activ[0]},{activ[1]}); "
+            f"npl=reg({npl[0]},{npl[1]}); ppl=activ-npl; npl=npl & activ\n")
+    else:
+        implant_lines = (
+            f"npl=reg({npl[0]},{npl[1]}); ppl=reg({ppl[0]},{ppl[1]})\n")
     script = (
         "import sys, json\n"
         "sys.path.insert(0,'/foss/tools/klayout/pymod')\n"
@@ -19014,8 +19358,9 @@ def _measure_tap_geometry(project: Path, top: str, pdk: "PdkConfig",
         "def reg(l,d):\n"
         "    li=ly.find_layer(l,d)\n"
         "    return pya.Region(top.begin_shapes_rec(li)) if li is not None else pya.Region()\n"
-        f"nw=reg({nw[0]},{nw[1]}); npl=reg({npl[0]},{npl[1]}); ppl=reg({ppl[0]},{ppl[1]}); {poly_line}\n"
-        "ntap=(npl & nw)-poly; ptap=(ppl-nw)-poly\n"
+        f"nw=reg({nw[0]},{nw[1]}); {poly_line}\n"
+        + implant_lines
+        + "ntap=(npl & nw)-poly; ptap=(ppl-nw)-poly\n"
         "ntap.merge(); ptap.merge()\n"
         "def a(r): return round(r.area()*dbu*dbu,3)\n"
         "print('TAP_GEOM '+json.dumps({'ntap_polys':ntap.count(),'ntap_area_um2':a(ntap),"
@@ -19036,8 +19381,14 @@ def _measure_tap_geometry(project: Path, top: str, pdk: "PdkConfig",
         return {"ok": False, "reason": f"tap-geometry parse error: {exc}"}
     d["ok"] = True
     d["gds"] = str(gds.relative_to(project))
-    d["layers"] = {"nwell": list(nw), "nplus": list(npl), "pplus": list(ppl),
-                   "poly": (list(poly) if poly else None)}
+    # The implicit polarity has no drawn layer number — record it as None
+    # (and name which one was derived) rather than assuming both are set.
+    d["layers"] = {"nwell": list(nw),
+                   "nplus": (list(npl) if npl else None),
+                   "pplus": (list(ppl) if ppl else None),
+                   "poly": (list(poly) if poly else None),
+                   "activ": (list(activ) if activ else None),
+                   "implicit_implant": (implicit or None)}
     return d
 
 
@@ -19933,6 +20284,19 @@ def main() -> int:
                          "of placed cells (default 0.02 = 2%%; clamped to "
                          "[0, 0.2]). 0 disables spare insertion."))
     args = p.parse_args()
+
+    # The container name is threaded EXPLICITLY into every step (step_pnr,
+    # step_drc, ...), but several PDK-resolution helpers read it from
+    # EDA_CONTAINER instead — and nothing ever SET that variable, so they
+    # silently fell back to the default image name `vibeic-eda`. On a host
+    # running a per-run container (`--container pdk_spm_sg13g2`) that meant
+    # PDK asset probing, the ASAP7 Liberty/tech-LEF staging and the LEF-based
+    # filler / antenna-cell discovery all interrogated the WRONG container —
+    # or none at all, if no container by that name exists. Publishing the
+    # operator's actual choice into the environment makes every one of those
+    # helpers agree with the steps. Chip- and PDK-AGNOSTIC.
+    if getattr(args, "container", None):
+        os.environ["EDA_CONTAINER"] = args.container
 
     project = args.project.resolve()
     if not project.is_dir():
