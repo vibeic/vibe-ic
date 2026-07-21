@@ -80,16 +80,37 @@ def test_lvs_path_does_not_force_magic_ext_use_gds():
     assert 'f"export MAGIC_EXT_USE_GDS' not in src      # f-string export
 
 
+def _emitted_ignore_regexps(body):
+    """The `ignore class` regexps the local netgen setup emits, as Python
+    patterns (#211: the setup now matches the physical-cell FAMILY token as a
+    name segment via TCL ERE, so we translate the POSIX classes and test the
+    patterns BEHAVIOURALLY rather than by literal substring)."""
+    import re as _re
+    return [_re.compile(m.replace("[[:digit:]]", r"\d")
+                        .replace("[[:alpha:]]", "[A-Za-z]"))
+            for m in _re.findall(r"regexp \{([^}]*)\} \$_c", body)]
+
+
 def test_local_netgen_setup_ignores_physical_cells(tmp_path):
     # the project-local netgen setup sources the PDK setup and
     # UNCONDITIONALLY ignores fill/tap/decap/fakediode on BOTH circuits.
+    # #211 made the ignore patterns PDK-agnostic (family token on any library
+    # prefix), so this asserts the emitted regexps actually IGNORE the
+    # canonical sky130 physical cells while SPARING functional cells — a
+    # behavioural check, stronger than the old literal-substring check.
     pdk = R._detect_pdk(Path("/nonexistent"), override="sky130A")
     host, cpath = R._emit_local_netgen_setup(tmp_path, pdk, "vibeic-eda")
     body = host.read_text()
     assert "sky130A_setup.tcl" in body          # sources PDK setup
-    for cls in ("fill_", "tapvpwrvgnd_", "decap_", "fakediode_"):
-        assert cls in body
     assert "$cells1" in body and "$cells2" in body  # both circuits
+    pats = _emitted_ignore_regexps(body)
+    assert pats, "no `ignore class` regexps emitted"
+    for nm in ("sky130_fd_sc_hd__fill_8", "sky130_fd_sc_hd__tapvpwrvgnd_1",
+               "sky130_fd_sc_hd__decap_4", "sky130_ef_sc_hd__fakediode_2"):
+        assert any(p.search(nm) for p in pats), f"physical cell not ignored: {nm}"
+    for nm in ("sky130_fd_sc_hd__dfrtp_1", "sky130_fd_sc_hd__inv_2",
+               "sky130_fd_sc_hd__and2_1", "sky130_fd_sc_hd__dfxtp_1"):
+        assert not any(p.search(nm) for p in pats), f"functional cell ignored: {nm}"
     # must NOT hardcode a design-specific functional class as ignored
     # (that could hide a real defect in another design).
     assert "dfrtp_1" not in body and "__inv_1" not in body

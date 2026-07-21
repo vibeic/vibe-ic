@@ -22,6 +22,8 @@ literal. Every fixture mirrors the real ASAP7 token shapes.
 import sys
 from pathlib import Path
 
+import pytest  # noqa: F401  (used by test_b3 refuse-contract check)
+
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
 import phase3_one_shot_runner as R  # noqa: E402
@@ -39,16 +41,44 @@ def test_a1_registry_declares_asap7_assets():
     assert reg.get("metal_prefix") == "M"
 
 
-def test_b3_unbranched_registry_name_warns_and_is_not_silent(tmp_path, capfd):
-    """A registry-declared name with NO named _detect_pdk branch (gf180mcuD)
-    must WARN loudly; it must never silently masquerade as the sky130A it
-    falls back to."""
-    # no input/pdk/ staged → resolution falls through to the sky130A container
-    pdk = R._detect_pdk(tmp_path, override="gf180mcuD")
-    err = capfd.readouterr().err
-    assert "gf180mcuD" in err and "no named" in err.lower()
-    # back-compat: it still returns SOMETHING usable, but the operator was told
-    assert pdk is not None
+def test_b3_unbranched_registry_name_refuses_not_silent_sky130a(
+        tmp_path, monkeypatch):
+    """CONTRACT (updated for #211): a registry-declared name with NO named
+    _detect_pdk branch (gf180mcuD) is now resolved GENERICALLY from the
+    registry. The old contract was warn-then-fall-back-to-sky130A; that WARN +
+    silent sky130A substitution is exactly the structural-wrong-sign-off defect
+    #211 removed. The new, stronger contract: the named PDK either resolves to
+    ITS OWN assets, or — when those assets cannot be resolved — REFUSES
+    (SystemExit). It must NEVER silently masquerade as sky130A.
+
+    Driven with a mocked container (no docker / no PDK install needed) whose
+    gf180mcuD directory exists but whose asset globs match nothing but the
+    login banner, so the outcome is deterministically the refuse branch."""
+    root = R._pdk_registry_entry("gf180mcuD")["container_path"].rstrip("/")
+    banner = "[INFO] Final PATH variable: /headless/.local/bin:/foss/tools/bin"
+
+    def _fake_exec(container, cmd, timeout=1800):
+        c = cmd.strip()
+        # the PDK directory exists; nothing else does — and every login shell
+        # prints the banner to stdout ahead of the command output.
+        if c.startswith("test -d ") and root in c:
+            return (0, banner + "\n", "")
+        if c.startswith("ls -1d "):        # wildcard asset glob: no real match
+            return (0, banner + "\n", "")
+        if c.startswith("test -e "):       # nothing exists
+            return (1, banner + "\n", "")
+        return (0, banner + "\n", "")
+
+    monkeypatch.setattr(R, "_docker_exec_raw", _fake_exec)
+    with pytest.raises(SystemExit) as ei:
+        R._detect_pdk(tmp_path, override="gf180mcuD")
+    msg = str(ei.value)
+    # loud + explicit about the PDK the operator named, and explicit that the
+    # resolver REFUSES rather than continuing with a substituted PDK.
+    assert "gf180mcuD" in msg
+    assert "REFUS" in msg.upper()
+    # any mention of sky130A here is the thing being refused, not the outcome.
+    assert "fall back" in msg.lower()
 
 
 # ---------------------------------------------------------------------------

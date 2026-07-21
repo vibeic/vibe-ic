@@ -3258,9 +3258,29 @@ def _registry_glob_one(container: str, root: str, pattern: Optional[str],
     pins a single corner in the registry when the choice is significant).
 
     Returns None when the pattern is unset or matches nothing — the caller
-    decides whether that asset is required. PDK-AGNOSTIC."""
+    decides whether that asset is required. PDK-AGNOSTIC.
+
+    GUARD (repo-gatekeeper #211): the container is entered through a LOGIN
+    shell (`docker exec … bash -lc …`), and the vibeic-eda image's profile
+    prints a startup banner ("[INFO] Final PATH variable: …",
+    "[INFO] Final PYTHONPATH variable: …") onto STDOUT *ahead* of the command
+    output. For the wildcard branch that banner lands in `ls`'s captured
+    stdout, and when the glob matches NOTHING the banner is the ONLY line
+    left. The pre-guard code returned that banner verbatim as `hits[0]` — a
+    NEW silent-degradation mode: `_pdk_config_from_registry` then saw a
+    non-empty "liberty"/"tech_lef"/"cell_lef" string and built a config whose
+    asset paths are `[INFO] Final PATH variable: …`, so the entire backend
+    would run against a garbage path while every report named the PDK the
+    operator asked for — precisely the silent substitution this whole change
+    set exists to refuse (measured on `_detect_pdk(override="gf180mcuD")`).
+    So a raw `ls` line is NOT trusted as a path: a candidate is accepted ONLY
+    when it (a) sits under the PDK root AND (b) actually EXISTS in the
+    container; every non-path noise line is dropped. If nothing survives the
+    asset is UNRESOLVED (None) and the caller REFUSES rather than substituting
+    nonsense."""
     if not pattern:
         return None
+    root_prefix = root.rstrip('/') + '/'
     full = f"{root.rstrip('/')}/{pattern.lstrip('/')}"
     if not any(ch in full for ch in "*?["):
         rc, _o, _e = _docker_exec_raw(
@@ -3270,8 +3290,21 @@ def _registry_glob_one(container: str, root: str, pattern: Optional[str],
         container, f"ls -1d {full} 2>/dev/null | sort", timeout=60)
     if rc != 0:
         return None
-    hits = [ln.strip() for ln in out.splitlines() if ln.strip()]
-    return hits[0] if hits else None
+    # `ls -1d <glob>` expands to paths that begin with the glob's literal
+    # prefix, i.e. always under `root_prefix`; the login-shell banner and any
+    # other non-path noise do not, so this drops them at zero extra cost. Each
+    # surviving candidate is then confirmed to really exist (belt-and-braces
+    # against a shell that echoes a non-existent token), taking the first that
+    # does — preserving the deterministic sorted-first choice.
+    for ln in out.splitlines():
+        h = ln.strip()
+        if not h.startswith(root_prefix):
+            continue
+        rc2, _o2, _e2 = _docker_exec_raw(
+            container, f"test -e {shlex.quote(h)}", timeout=60)
+        if rc2 == 0:
+            return h
+    return None
 
 
 def _pdk_config_from_registry(project: Path, reg: Dict[str, Any]

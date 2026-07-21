@@ -234,12 +234,22 @@ class TestLocalNetgenSetupGlobalisesPower:
             assert rail in body
 
     def test_existing_ignore_block_intact(self, tmp_path):
-        # the pre-existing physical-cell ignore behavior is UNCHANGED.
+        # the pre-existing physical-cell ignore behavior is preserved. #211
+        # generalised the patterns from vendor-literal to family-token, so the
+        # emitted regexps still IGNORE the canonical sky130 physical cells
+        # (checked behaviourally) while SPARING functional cells.
         body = self._emit(tmp_path)
         assert "sky130A_setup.tcl" in body
-        for cls in ("fill_", "tapvpwrvgnd_", "decap_", "fakediode_"):
-            assert cls in body
         assert "$cells1" in body and "$cells2" in body
+        pats = [re.compile(m.replace("[[:digit:]]", r"\d")
+                           .replace("[[:alpha:]]", "[A-Za-z]"))
+                for m in re.findall(r"regexp \{([^}]*)\} \$_c", body)]
+        assert pats, "no `ignore class` regexps emitted"
+        for nm in ("sky130_fd_sc_hd__fill_8", "sky130_fd_sc_hd__tapvpwrvgnd_1",
+                   "sky130_fd_sc_hd__decap_4", "sky130_ef_sc_hd__fakediode_2"):
+            assert any(p.search(nm) for p in pats), f"not ignored: {nm}"
+        for nm in ("sky130_fd_sc_hd__dfrtp_1", "sky130_fd_sc_hd__inv_2"):
+            assert not any(p.search(nm) for p in pats), f"wrongly ignored: {nm}"
 
     def test_globalisation_targets_only_power_rails(self, tmp_path):
         # §4.05 — every emitted `global <net>` names a power/ground/IO rail;
