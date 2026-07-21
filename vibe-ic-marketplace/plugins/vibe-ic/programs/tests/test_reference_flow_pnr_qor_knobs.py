@@ -179,7 +179,16 @@ class TestPnrKnobMapping:
         assert m["place_density"] is None
         assert m["repair_tns_percent"] is None
         assert m["cts_cluster_size"] is None
-        assert m["notes"] == []
+        # #198 Branch 1 audit trail: dropped is DISCLOSED, not silent. This
+        # previously asserted `notes == []` — i.e. it pinned the exact silence
+        # that makes a discarded knob indistinguishable from an undeclared one.
+        # The values above must still never be applied (asserted); what changed
+        # is that each drop now states knob + value + reason.
+        assert {r["knob"] for r in m["rejected"]} == {
+            "CORE_UTILIZATION", "PLACE_DENSITY", "TNS_END_PERCENT",
+            "CTS_CLUSTER_SIZE"}
+        assert all(n.startswith("REJECTED") for n in m["notes"])
+        assert all(r["reason"] for r in m["rejected"])
 
     def test_empty_knobs_all_none(self):
         m = mod._reference_flow_pnr_mapping({})
