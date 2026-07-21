@@ -478,7 +478,8 @@ def test_build_report_marks_inconclusive():
 
 # ---------------------------------------------------------------------------
 # (d, consumer) the downstream gate treats an INCONCLUSIVE report as a
-# non-blocking SKIPPED-CONDITION (rc 0), never a hard FAIL nor a vacuous PASS.
+# non-blocking SKIPPED-CONDITION (rc 3 + PASS_WITH_WAIVERS => WAIVED-DEFERRED),
+# never a hard FAIL, never a vacuous PASS, and never a bare PASS.
 # ---------------------------------------------------------------------------
 def test_inconclusive_report_is_non_blocking_in_gate(tmp_path):
     p = lec_run.parse_equiv_output(_FRONTEND_ABORT_OUTPUT)
@@ -492,7 +493,11 @@ def test_inconclusive_report_is_non_blocking_in_gate(tmp_path):
     rules = {f.rule for f in res.findings}
     assert "LEC_INCONCLUSIVE_PARSE_ABORT" in rules
     assert "LEC_NOT_EQUIVALENT" not in rules     # not the hard-FAIL path
-    assert gate.main([str(tmp_path)]) == 0       # non-blocking → rc 0
+  # #208 follow-up: still NON-BLOCKING (flow_compliance resolves rc=3 +
+    # the PASS_WITH_WAIVERS sentinel to WAIVED-DEFERRED, so the step does
+    # not fail and nothing cascades to MISSING) but no longer a BARE PASS,
+    # which rc=0 silently was at the `program_exit_zero` gate.
+    assert gate.main([str(tmp_path)]) == 3   # non-blocking, not a PASS
 
 
 def test_inconclusive_label_with_real_counterexample_still_fails(tmp_path):
@@ -527,7 +532,11 @@ def test_inconclusive_label_unproven_without_counterexample_is_inconclusive(tmp_
     rules = {f.rule for f in res.findings}
     assert "LEC_INCONCLUSIVE_NONCONVERGENCE" in rules
     assert "LEC_NOT_EQUIVALENT" not in rules
-    assert gate.main([str(tmp_path)]) == 0       # non-blocking → rc 0
+  # #208 follow-up: still NON-BLOCKING (flow_compliance resolves rc=3 +
+    # the PASS_WITH_WAIVERS sentinel to WAIVED-DEFERRED, so the step does
+    # not fail and nothing cascades to MISSING) but no longer a BARE PASS,
+    # which rc=0 silently was at the `program_exit_zero` gate.
+    assert gate.main([str(tmp_path)]) == 3   # non-blocking, not a PASS
 
 
 # ---------------------------------------------------------------------------

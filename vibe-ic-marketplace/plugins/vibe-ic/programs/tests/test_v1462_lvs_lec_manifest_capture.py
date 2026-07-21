@@ -110,7 +110,11 @@ def test_ibex_timeout_report_is_non_blocking_in_gate(tmp_path):
     assert res.passed is False                                 # never a vacuous PASS
     rules = {f.rule for f in res.findings}
     assert "LEC_NOT_EQUIVALENT" not in rules                   # not the hard-FAIL path
-    assert lec_gate.main([str(tmp_path)]) == 0                 # non-blocking rc 0
+  # #208 follow-up: still NON-BLOCKING (flow_compliance resolves rc=3 +
+    # the PASS_WITH_WAIVERS sentinel to WAIVED-DEFERRED, so the step does
+    # not fail and nothing cascades to MISSING) but no longer a BARE PASS,
+    # which rc=0 silently was at the `program_exit_zero` gate.
+    assert lec_gate.main([str(tmp_path)]) == 3   # non-blocking, not a PASS
 
 
 def test_completed_miter_unproven_still_fails():
