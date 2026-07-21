@@ -132,3 +132,48 @@ RSZ-0089). After adding the chain (v0.1.26): WNS = +10.95 ns MET on the same RTL
 General across all OpenROAD-driven PnR — template-level, not chip-specific.
 
 _Captured by benchmark-enhancement-capture 2026-05-28; extracted to programs in M4._
+
+## Captured rule — a corner that is unreported is not a corner that met
+
+**Enforced by a program — no longer prose judgment.**
+
+This skill already said, in prose, *"Multi-corner sign-off (ss/tt/ff × low/high
+temp × low/high Vdd)"* and *"Cross-corner view: if a path fails only at one
+corner, adjust margin first."* Prose cannot fail a run. Measured consequence: a
+campaign ledger carried **no STA column at all** while two ICs violated setup at
+the slow sign-off corner (worst setup slack **-4.33 ns**, TNS -259.13; and
+**-2.35 ns**, TNS -10.36), both persisting unchanged into the post-fix verify
+runs. Because timing was simply absent from the record, "the phase-3 failures
+were LVS tooling artifacts" — true of the LVS part — was allowed to stand as the
+whole explanation.
+
+```bash
+# 4. timing RECORD completeness (runs unconditionally on a run dir):
+python3 plugins/vibe-ic/programs/sta_corner_record_completeness_check.py \
+    <run_dir> --json /tmp/sta_corner_record.json
+```
+
+`sta_corner_record_completeness_check.py` FAILs when:
+- **R1** a reported corner is unnamed, or a corner carrying no sign-off role is
+  characterised only half-way (setup without hold, or the reverse);
+- **R2** a corner the flow DECLARED it would analyse has no datapoint for the
+  role it was declared to serve — including the case where an STA verdict JSON
+  outlives the report it cites;
+- **R3** any sign-off corner violates. **A typ-only "MET" is a misleading pass**
+  and never carries the run; when the typ corner met while a sign-off corner
+  violated, the finding says so in those words.
+
+It learns which corners are sign-off from the run's OWN declarations —
+`mcorner_ocv_stance.json` (`setup_process_corner` / `hold_process_corner`),
+`multi_corner_spef_stance.json` (`setup_corner` / `hold_corner`) and
+`pvt_matrix.json` (`primary_corner`) — so no corner name is hardcoded and a PDK
+with a different corner vocabulary is judged the same way. It always emits the
+full per-corner table (corner, axis, role, setup WNS, hold WNS, TNS, source
+log), on PASS as well as FAIL: the absence of that table is the defect itself.
+
+Distinct from `post_route_signoff_corner_check` (#147), which judges the slack
+inside the multicorner report and is wired `condition_files_exist` on that very
+report — so it self-skips when the report is absent. Do not read a
+NOT_APPLICABLE from it as "timing is fine".
+
+_Captured by benchmark-enhancement-capture 2026-07-21 (Bucket A, prose → program)._
