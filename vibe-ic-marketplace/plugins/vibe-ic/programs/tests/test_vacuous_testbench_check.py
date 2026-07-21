@@ -149,9 +149,58 @@ def test_deleted_dut_line_still_caught(tmp_path):
     assert "no_live_instantiation" in res["detectors_tripped"]
 
 
+def test_block_commented_dut_with_wrapped_ports_is_caught(tmp_path):
+    """A block comment across several lines is the obvious way to evade a
+    line-oriented `^\\s*//` regex, and it carries NO placeholder marker."""
+    body = """\
+`timescale 1ns/1ps
+module corner_case;
+  reg clk = 0, reset_n = 0;
+  initial begin
+    $display("[TB] done ok");
+    $finish;
+  end
+  /* widget u_dut (
+       .clk(clk),
+       .reset_n(reset_n)
+     ); */
+endmodule
+"""
+    assert "PASS_PLACEHOLDER" not in body
+    _tree(tmp_path, {"tb/corner_case.v": body})
+    res = G.check(tmp_path)
+    assert res["verdict"] == "FAIL"
+    assert "commented_dut_instantiation" in res["detectors_tripped"]
+
+
 # ---------------------------------------------------------------------------
 # the PASSING fixture — proof the gate discriminates and can stay silent
 # ---------------------------------------------------------------------------
+def test_comment_marker_inside_a_string_literal_is_not_a_comment(tmp_path):
+    """`//` inside a string is code, not a comment. Mis-lexing it would
+    manufacture a commented-DUT finding on a TB that really drives the DUT."""
+    body = """\
+`timescale 1ns/1ps
+module strlit;
+  reg clk = 0, rst = 1;
+  wire [7:0] q;
+  integer errors = 0;
+  widget u_dut (.clk(clk), .rst(rst), .q(q));
+  always #5 clk = ~clk;
+  initial begin
+    $display("hint: // widget u_dut (.clk(clk)); is how you wire it");
+    #100; if (q !== 8'd0) errors = errors + 1;
+    if (errors) $fatal(1);
+    $finish;
+  end
+endmodule
+"""
+    _tree(tmp_path, {"tb/strlit.v": body})
+    res = G.check(tmp_path)
+    assert res["verdict"] == "PASS", res.get("evidence")
+
+
+
 def test_clean_testbench_passes(tmp_path):
     """A detector that cannot stay silent is an alarm, not a detector."""
     _tree(tmp_path, {"tb/tb_widget.v": CLEAN_TB})
