@@ -177,6 +177,26 @@ _STOPLIST = frozenset({
     # `[A-Z][A-Z0-9_]{2,}` would otherwise harvest verbatim from
     # connector / table-header text (e.g. `USB B-TYPE` → `TYPE`).
     "TYPE", "NAME", "PIN", "PINS", "PORT", "PORTS",
+    # ---- Fabrication / process-technology vocabulary ----------------
+    # Names of the transistor technology the part is MANUFACTURED in.
+    # These appear in the prose of essentially every datasheet ("a
+    # low-power CMOS process", "NMOS pull-down") and are harvested by
+    # the all-caps family, but they are not design CONTENT: this gate
+    # asks whether the input docs' design facts reached the generated
+    # L docs, and a process-family noun is not a design fact. It names
+    # no signal, register, field, opcode, command, timing parameter or
+    # interface contract, so there is nothing for an L doc to carry and
+    # its absence can never be a real coverage gap — only a permanent
+    # false FAIL. (Process/PDK selection is carried by L19, sourced
+    # from the PDK configuration, not by round-tripping a prose noun.)
+    #
+    # INCLUSION RULE for this category, so future additions stay
+    # principled rather than reactive: a term belongs here only if it
+    # names a transistor/fabrication technology AND can never denote a
+    # signal, register, or electrical contract. Interface and I/O
+    # standards (LVCMOS, LVTTL, …) are deliberately EXCLUDED — those
+    # are real design constraints that must round-trip.
+    "CMOS", "NMOS", "PMOS", "MOSFET", "BICMOS", "FINFET",
 })
 # Token-shape reject list — PDF/text-extraction artefacts that the
 # regex above can match but which are not real design content.
@@ -1007,8 +1027,15 @@ def main(argv=None) -> int:
     per_layer = []
     captured_anywhere = 0
     captured_by_layer = {layer: set() for layer in layer_blobs}
+    # Identity of the tokens behind `tokens_missing_everywhere`. Without
+    # this the headline metric is an unactionable bare count: a reader
+    # cannot tell a real coverage gap from a tokenizer artefact, and
+    # every reader has to re-derive the answer from per_doc[].
+    missing_everywhere_tokens = []
     for tok in all_tokens:
         hits = _is_captured(tok, layer_blobs, regfield_map)
+        if not hits:
+            missing_everywhere_tokens.append(tok)
         if hits:
             captured_anywhere += 1
             for layer in hits:
@@ -1057,6 +1084,7 @@ def main(argv=None) -> int:
         "total_distinct_tokens_across_inputs": len(all_tokens),
         "tokens_captured_in_any_layer": captured_anywhere,
         "tokens_missing_everywhere": missing_anywhere,
+        "tokens_missing_everywhere_list": sorted(missing_everywhere_tokens),
         "fail_docs": fail_docs,
         "warn_docs": warn_docs,
         "reference_docs": reference_docs_seen,
@@ -1098,6 +1126,11 @@ def main(argv=None) -> int:
             f"**AI-only cells (extraction_strategy = "
             f"ai_deep_review_patch)**: {len(ai_tokens_global)}")
         md_lines.append(f"**Missing everywhere**: {missing_anywhere}")
+        if missing_everywhere_tokens:
+            md_lines.append(
+                "**Missing-everywhere tokens**: "
+                + ", ".join(f"`{t}`"
+                            for t in sorted(missing_everywhere_tokens)))
     md_lines.extend([
         "",
         "## Per-document cell counts",

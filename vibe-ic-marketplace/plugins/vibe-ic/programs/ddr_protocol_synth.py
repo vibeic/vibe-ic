@@ -28,6 +28,9 @@ import json
 from pathlib import Path
 from typing import Optional
 
+from _incidental_mention import AnchoredBlob as _AnchoredBlob
+from _incidental_mention import subject_term as _subject_term
+
 
 def _empty(v) -> bool:
     return v in (None, {}, []) or (isinstance(v, str) and not v.strip())
@@ -2337,9 +2340,18 @@ def is_ddr(blob: str) -> bool:
 
     Empty-safe. Reads ONLY ``blob`` (spec text). Byte-for-byte the
     same boolean the runner used inline.
+
+    Term membership is LEFT word-boundary anchored (see
+    ``_incidental_mention``): a bare ``in`` test matched a term buried
+    inside an unrelated longer word, so a part that merely has an
+    ADDRESS bus ("DDR"), cites JEDEC, and mentions DDR3 once in a
+    comparison sentence was classified as a DDR3 SDRAM. The third
+    branch additionally requires the generation name to be the
+    document's SUBJECT rather than a single citation.
     """
     if not blob:
         return False
+    blob = _AnchoredBlob(blob)
     has_nand_flash_signature = (
         ("NAND" in blob and (
             "CLE" in blob or "ALE" in blob
@@ -2383,5 +2395,13 @@ def is_ddr(blob: str) -> bool:
         or ("DDR3" in blob and "SDRAM" in blob
             and ("mode register" in blob.lower()
                  or "MR0" in blob))
-        or ("DDR" in blob and "JEDEC" in blob
-            and ("JESD79" in blob or "DDR3" in blob))))
+        # Weakest identity branch: a generic DDR mention plus a
+        # standards-body citation. "JEDEC" appears in the ESD /
+        # packaging / moisture-sensitivity section of virtually every
+        # datasheet and PDK guide regardless of what the part does, so
+        # this branch carries almost no evidence on its own. Require
+        # the GENERATION token to be the document's SUBJECT rather than
+        # one comparative sentence or reference-list row.
+        or (_subject_term(blob, "DDR") and "JEDEC" in blob
+            and (_subject_term(blob, "JESD79")
+                 or _subject_term(blob, "DDR3")))))
