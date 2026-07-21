@@ -4249,27 +4249,58 @@ _ORFS_NUM_PNR_KNOBS = (
 )
 
 
-def _reference_flow_pnr_knobs(project: Path) -> Dict[str, str]:
-    """Parse the design's OWN staged ``input/reference_flow/*.mk`` / ``*.tcl``
-    for the documented ORFS floorplan/place/CTS/timing QoR knobs it declares
-    (the NUMERIC back-end companions to the synth knobs read by
-    `_reference_flow_qor_knobs`). Returns only the knobs actually declared with
-    a valid numeric value — a subset of ``_ORFS_NUM_PNR_KNOBS`` → value string;
-    ``{}`` when no ``input/reference_flow`` config is staged.
+def _rf_pnr_scan(project: Path) -> Dict[str, object]:
+    """Scan the design's OWN staged ``input/reference_flow/*.mk`` / ``*.tcl``
+    for the documented ORFS floorplan/place/CTS/timing QoR knobs, recording
+    FULL PROVENANCE — which file every accepted knob came from, and every
+    declaration that was seen but could NOT be used.
 
-    Last-VALID-assignment wins (Make/Tcl override semantics); a non-numeric /
-    empty / unexpanded value is SKIPPED and never clears an earlier valid one
-    (§4.05 — never fabricate). chip-AGNOSTIC — keys on the ORFS knob NAMES only,
-    so an unknown design staging the same ORFS flow is served identically."""
+    Returns::
+
+        {"config_dir":   "input/reference_flow" | None,   # None = none staged
+         "config_files": ["<rel path>", ...],   # every *.mk/*.tcl scanned
+         "unreadable":   ["<rel path>", ...],   # staged but could not be read
+         "declared":     {KNOB: {"value": "<str>", "source": "<rel path>"}},
+         "rejected":     [{"knob","value","source","reason"}, ...]}
+
+    ``declared`` carries only knobs with a valid numeric value; last-VALID-
+    assignment wins (Make/Tcl override semantics) and a non-numeric / empty /
+    unexpanded value never clears an earlier valid one (§4.05 — never
+    fabricate) but IS recorded in ``rejected`` so the drop is auditable rather
+    than silent. chip-AGNOSTIC — keys on the ORFS knob NAMES only, so an
+    unknown design staging the same ORFS flow is served identically."""
     rdir = project / "input" / "reference_flow"
+    out: Dict[str, object] = {
+        "config_dir": None, "config_files": [], "unreadable": [],
+        "declared": {}, "rejected": [],
+    }
     if not rdir.is_dir():
-        return {}
-    knobs: Dict[str, str] = {}
+        return out
+    out["config_dir"] = "input/reference_flow"
+    config_files: List[str] = out["config_files"]  # type: ignore[assignment]
+    unreadable: List[str] = out["unreadable"]      # type: ignore[assignment]
+    declared: Dict[str, Dict[str, str]] = \
+        out["declared"]                            # type: ignore[assignment]
+    rejected: List[Dict[str, str]] = \
+        out["rejected"]                            # type: ignore[assignment]
+
+    def _rel(p: Path) -> str:
+        try:
+            return str(p.relative_to(project))
+        except ValueError:
+            return str(p)
+
     files = sorted(rdir.rglob("*.mk")) + sorted(rdir.rglob("*.tcl"))
     for f in files:
+        rel = _rel(f)
+        config_files.append(rel)
         try:
             text = f.read_text(errors="ignore")
-        except Exception:
+        except Exception as exc:
+            # An UNREADABLE staged config must not silently look like "no
+            # config" — record it so the report can state it (req: fail safe
+            # AND say so).
+            unreadable.append(f"{rel} ({type(exc).__name__})")
             continue
         is_tcl = f.suffix == ".tcl"
         for line in text.splitlines():
@@ -4291,12 +4322,41 @@ def _reference_flow_pnr_knobs(project: Path) -> Dict[str, str]:
             try:
                 float(v)
             except (TypeError, ValueError):
-                continue  # non-numeric / unexpanded → keep last valid, no fab
-            knobs[name] = v
-    return knobs
+                # non-numeric / unexpanded → keep last valid, no fabrication,
+                # but DISCLOSE the dropped declaration.
+                rejected.append({
+                    "knob": name, "value": v, "source": rel,
+                    "reason": ("non-numeric / unexpanded flow variable — "
+                               "not applied, default kept"),
+                })
+                continue
+            declared[name] = {"value": v, "source": rel}
+    return out
 
 
-def _reference_flow_pnr_mapping(knobs: Dict[str, str]) -> Dict[str, object]:
+def _reference_flow_pnr_knobs(project: Path) -> Dict[str, str]:
+    """The ingested ORFS floorplan/place/CTS/timing knobs the design's OWN
+    staged reference flow declares — ``{KNOB: "<value>"}``; ``{}`` when no
+    ``input/reference_flow`` config is staged. Thin projection of
+    `_rf_pnr_scan` (which carries the per-knob source file + the rejected
+    declarations for the audit report)."""
+    scan = _rf_pnr_scan(project)
+    return {k: d["value"] for k, d
+            in scan["declared"].items()}  # type: ignore[union-attr]
+
+
+def _reference_flow_pnr_knob_sources(project: Path) -> Dict[str, str]:
+    """``{KNOB: "<rel path of the file that declared it>"}`` for the ingested
+    PnR knobs — the provenance half of `_rf_pnr_scan`, so every adopted knob
+    in the audit report names the file it came from."""
+    scan = _rf_pnr_scan(project)
+    return {k: d["source"] for k, d
+            in scan["declared"].items()}  # type: ignore[union-attr]
+
+
+def _reference_flow_pnr_mapping(
+        knobs: Dict[str, str],
+        sources: Optional[Dict[str, str]] = None) -> Dict[str, object]:
     """Map the ingested ORFS numeric PnR knobs (`_reference_flow_pnr_knobs`) to
     the concrete OpenROAD floorplan/place/CTS/timing parameters step_pnr applies.
     Pure / deterministic. Returns::
@@ -4318,15 +4378,34 @@ def _reference_flow_pnr_mapping(knobs: Dict[str, str]) -> Dict[str, object]:
         setup repair chases — 100 = full TNS, not just the single worst path).
       * CTS_CLUSTER_SIZE / CTS_CLUSTER_DIAMETER → TritonCTS sink-clustering.
 
-    Every value is range-validated; an out-of-range declaration is dropped +
-    disclosed (never fabricated / never applied — §4.05). chip-AGNOSTIC: the ORFS
-    knob NAMES + their documented derivation, no design/vendor/SKU literal."""
+    Every value is range-validated. An out-of-range declaration is dropped AND
+    DISCLOSED — it is never fabricated / never applied (§4.05), and it never
+    passes silently: a rejected knob produces a ``REJECTED ...`` entry in both
+    ``notes`` and ``rejected`` so a run whose knob was discarded is
+    distinguishable in the report from a run that declared nothing at all.
+
+    ``sources`` (optional, from `_reference_flow_pnr_knob_sources`) maps each
+    knob to the config file that declared it; when supplied, every note names
+    its source file so the audit trail answers "why does this run's floorplan
+    differ" without re-reading the design. chip-AGNOSTIC: the ORFS knob NAMES +
+    their documented derivation, no design/vendor/SKU literal."""
     notes: List[str] = []
+    rejected: List[Dict[str, str]] = []
     out: Dict[str, object] = {
         "place_density": None, "die_target_util": None,
         "repair_tns_percent": None, "cts_cluster_size": None,
         "cts_cluster_diameter": None, "notes": notes,
+        "rejected": rejected,
     }
+    src = sources or {}
+
+    def _src_suffix(*names: str) -> str:
+        """`` [<file>]`` for the first declared knob among ``names`` whose
+        source is known; ``""`` when no provenance was supplied."""
+        for n in names:
+            if n in src:
+                return f" [{src[n]}]"
+        return ""
 
     def _f(name: str) -> Optional[float]:
         try:
@@ -4334,6 +4413,18 @@ def _reference_flow_pnr_mapping(knobs: Dict[str, str]) -> Dict[str, object]:
         except (TypeError, ValueError):
             return None
 
+    def _reject(name: str, value: Optional[float], reason: str) -> None:
+        """Record a DECLARED-but-unusable knob. The default is kept; the drop
+        is stated rather than swallowed."""
+        vs = f"{value:g}" if value is not None else ""
+        rejected.append({"knob": name, "value": vs,
+                         "source": src.get(name, ""), "reason": reason})
+        notes.append(
+            f"REJECTED {name}={vs} — {reason}; default kept"
+            f"{_src_suffix(name)}")
+
+    _core_util_key = "CORE_UTILIZATION" if "CORE_UTILIZATION" in knobs \
+        else "FP_CORE_UTIL"
     core_util = _f("CORE_UTILIZATION")
     if core_util is None:
         core_util = _f("FP_CORE_UTIL")
@@ -4342,13 +4433,17 @@ def _reference_flow_pnr_mapping(knobs: Dict[str, str]) -> Dict[str, object]:
     tns = _f("TNS_END_PERCENT")
     cluster_size = _f("CTS_CLUSTER_SIZE")
     cluster_diam = _f("CTS_CLUSTER_DIAMETER")
+    _core_util_ok = core_util is not None and 0.0 < core_util <= 100.0
 
     # CORE_UTILIZATION / FP_CORE_UTIL (percent) → auto-die core-util target.
-    if core_util is not None and 0.0 < core_util <= 100.0:
+    if _core_util_ok:
         out["die_target_util"] = core_util / 100.0
         notes.append(
-            f"CORE_UTILIZATION={core_util:g}% -> --die-um auto core-util target "
-            f"{core_util / 100.0:g}")
+            f"{_core_util_key}={core_util:g}% -> --die-um auto core-util target "
+            f"{core_util / 100.0:g}{_src_suffix(_core_util_key)}")
+    elif core_util is not None:
+        _reject(_core_util_key, core_util,
+                "outside the valid core-utilization range (0 < util <= 100%)")
 
     # global_placement -density: explicit PLACE_DENSITY wins; else ORFS derives
     # it from CORE_UTILIZATION + PLACE_DENSITY_LB_ADDON.
@@ -4356,34 +4451,56 @@ def _reference_flow_pnr_mapping(knobs: Dict[str, str]) -> Dict[str, object]:
         out["place_density"] = place_density
         notes.append(
             f"PLACE_DENSITY={place_density:g} -> global_placement -density "
-            f"{place_density:g}")
-    elif core_util is not None and 0.0 < core_util <= 100.0:
-        derived = core_util / 100.0 + (lb_addon if lb_addon is not None else 0.0)
-        if 0.0 < derived <= 1.0:
-            out["place_density"] = derived
+            f"{place_density:g}{_src_suffix('PLACE_DENSITY')}")
+    else:
+        if place_density is not None:
+            _reject("PLACE_DENSITY", place_density,
+                    "outside the valid placement-density range (0 < d <= 1)")
+        if _core_util_ok:
+            derived = core_util / 100.0 + (lb_addon if lb_addon is not None
+                                           else 0.0)
             _addon_s = (f" + PLACE_DENSITY_LB_ADDON={lb_addon:g}"
                         if lb_addon is not None else "")
-            notes.append(
-                f"CORE_UTILIZATION={core_util:g}%{_addon_s} -> derived "
-                f"global_placement -density {derived:g} (ORFS PLACE_DENSITY "
-                f"derivation; no explicit PLACE_DENSITY declared)")
+            if 0.0 < derived <= 1.0:
+                out["place_density"] = derived
+                notes.append(
+                    f"{_core_util_key}={core_util:g}%{_addon_s} -> derived "
+                    f"global_placement -density {derived:g} (ORFS PLACE_DENSITY "
+                    f"derivation; no explicit PLACE_DENSITY declared)"
+                    f"{_src_suffix(_core_util_key, 'PLACE_DENSITY_LB_ADDON')}")
+            else:
+                _reject("PLACE_DENSITY_LB_ADDON", lb_addon,
+                        f"ORFS-derived placement density {derived:g} "
+                        f"(CORE_UTILIZATION={core_util:g}%{_addon_s}) is "
+                        f"outside (0, 1]")
 
     if tns is not None and 0.0 <= tns <= 100.0:
         out["repair_tns_percent"] = int(round(tns))
         notes.append(
             f"TNS_END_PERCENT={tns:g} -> repair_timing -repair_tns "
-            f"{int(round(tns))}")
+            f"{int(round(tns))}{_src_suffix('TNS_END_PERCENT')}")
+    elif tns is not None:
+        _reject("TNS_END_PERCENT", tns,
+                "outside the valid TNS-endpoint percentage range (0..100)")
 
     if cluster_size is not None and cluster_size > 0:
         out["cts_cluster_size"] = int(round(cluster_size))
         notes.append(
             f"CTS_CLUSTER_SIZE={cluster_size:g} -> clock_tree_synthesis "
-            f"-sink_clustering_size {int(round(cluster_size))}")
+            f"-sink_clustering_size {int(round(cluster_size))}"
+            f"{_src_suffix('CTS_CLUSTER_SIZE')}")
+    elif cluster_size is not None:
+        _reject("CTS_CLUSTER_SIZE", cluster_size,
+                "CTS sink-cluster size must be > 0")
     if cluster_diam is not None and cluster_diam > 0:
         out["cts_cluster_diameter"] = cluster_diam
         notes.append(
             f"CTS_CLUSTER_DIAMETER={cluster_diam:g} -> clock_tree_synthesis "
-            f"-sink_clustering_max_diameter {cluster_diam:g}")
+            f"-sink_clustering_max_diameter {cluster_diam:g}"
+            f"{_src_suffix('CTS_CLUSTER_DIAMETER')}")
+    elif cluster_diam is not None:
+        _reject("CTS_CLUSTER_DIAMETER", cluster_diam,
+                "CTS sink-cluster max diameter must be > 0")
     return out
 
 
@@ -4396,6 +4513,190 @@ def _reference_flow_declared_die_util(project: Path) -> Optional[float]:
     v = _reference_flow_pnr_mapping(_reference_flow_pnr_knobs(project)).get(
         "die_target_util")
     return v if isinstance(v, float) else None
+
+
+# ── #198 Branch 1 — the AUDIT TRAIL for the reference-flow knob ingest ────────
+# A silent behaviour change in the physical flow is worse than no change: when
+# this run's floorplan / CTS / setup-repair differs from the last, someone must
+# be able to see WHICH knob did it, WHAT value it took, and WHICH file declared
+# it. The ingest above decides; this layer RECORDS — every adopted knob with its
+# value + source file, every declared-but-rejected knob with the reason it was
+# dropped, and, when nothing was staged at all, an explicit statement that the
+# generic defaults are in force (so "no reference flow" is never confused with
+# "reference flow silently ignored").
+#
+# STATUS values (the one-line verdict at the top of the report):
+#   no-config       — no input/reference_flow staged → generic defaults, and the
+#                     generated pnr.tcl is byte-identical to the legacy flow.
+#   no-knobs        — a config IS staged but declares none of the knobs we
+#                     recognize → generic defaults (nothing was ignored).
+#   knobs-rejected  — knobs were declared but ALL were unusable → generic
+#                     defaults, with the reason for each drop.
+#   knobs-adopted   — at least one knob was adopted and applied.
+_RF_PNR_REPORT_STEM = "reference_flow_knobs"
+
+
+def _reference_flow_pnr_audit(project: Path) -> Dict[str, object]:
+    """The complete, auditable record of the reference-flow PnR knob ingest for
+    ``project``. Pure read-only; safe to call on any project (a project with no
+    ``input/reference_flow`` yields ``status='no-config'`` and an empty
+    mapping). chip-AGNOSTIC."""
+    scan = _rf_pnr_scan(project)
+    declared: Dict[str, Dict[str, str]] = \
+        scan["declared"]                           # type: ignore[assignment]
+    knobs = {k: d["value"] for k, d in declared.items()}
+    sources = {k: d["source"] for k, d in declared.items()}
+    mapping = _reference_flow_pnr_mapping(knobs, sources)
+
+    # A knob is ADOPTED only when it actually CONTRIBUTED to a flow parameter —
+    # i.e. it is named by a non-REJECTED mapping note. A knob that was declared,
+    # was not rejected, but fed nothing (e.g. PLACE_DENSITY_LB_ADDON with no
+    # CORE_UTILIZATION to add to) is NOT reported as adopted: claiming it was
+    # would be exactly the misleading audit trail this report exists to prevent.
+    _applied_notes = [n for n in mapping["notes"]     # type: ignore[union-attr]
+                      if not n.startswith("REJECTED")]
+    adopted: List[Dict[str, str]] = []
+    inert: List[Dict[str, str]] = []
+    for k, d in sorted(declared.items()):
+        if any(r["knob"] == k for r in
+               mapping["rejected"]):            # type: ignore[union-attr]
+            continue
+        entry = {"knob": k, "value": d["value"], "source": d["source"]}
+        if any(k in n for n in _applied_notes):
+            adopted.append(entry)
+        else:
+            entry["reason"] = ("declared but fed no flow parameter (no "
+                               "companion knob to apply it to); default kept")
+            inert.append(entry)
+    # Ingest-stage rejections (non-numeric) + mapping-stage rejections
+    # (out-of-range) are one list for the reader.
+    rejected = list(scan["rejected"]) + list(   # type: ignore[arg-type]
+        mapping["rejected"]) + inert             # type: ignore[arg-type]
+
+    if scan["config_dir"] is None:
+        status = "no-config"
+    elif not declared and not rejected:
+        status = "no-knobs"
+    elif not adopted:
+        status = "knobs-rejected"
+    else:
+        status = "knobs-adopted"
+    return {
+        "status": status,
+        "config_dir": scan["config_dir"],
+        "config_files": scan["config_files"],
+        "unreadable": scan["unreadable"],
+        "adopted": adopted,
+        "rejected": rejected,
+        "applied": {k: mapping[k] for k in
+                    ("place_density", "die_target_util", "repair_tns_percent",
+                     "cts_cluster_size", "cts_cluster_diameter")},
+        "notes": list(mapping["notes"]),         # type: ignore[arg-type]
+    }
+
+
+_RF_PNR_STATUS_HEADLINE = {
+    "no-config": (
+        "No `input/reference_flow` config staged — phase-3 used its GENERIC "
+        "defaults for floorplan / placement / CTS / setup-repair. Behaviour is "
+        "unchanged from a run without this mechanism (the generated `pnr.tcl` "
+        "is byte-identical to the legacy flow)."),
+    "no-knobs": (
+        "A `input/reference_flow` config IS staged but declares none of the "
+        "recognized ORFS floorplan/place/CTS/timing knobs — phase-3 used its "
+        "GENERIC defaults. Nothing was silently ignored."),
+    "knobs-rejected": (
+        "The staged `input/reference_flow` declared knobs but NONE were usable "
+        "— every one is listed below with the reason it was dropped. Phase-3 "
+        "used its GENERIC defaults; no value was fabricated."),
+    "knobs-adopted": (
+        "Phase-3 ADOPTED the knobs the design's own staged "
+        "`input/reference_flow` declares, in place of its generic defaults. "
+        "Every adopted knob, its value, and the file that declared it are "
+        "listed below."),
+}
+
+
+def _render_reference_flow_pnr_report(audit: Dict[str, object]) -> str:
+    """Render the knob-ingest audit as human-readable markdown. Pure."""
+    status = str(audit["status"])
+    out: List[str] = [
+        "# Phase-3 reference-flow QoR-knob ingest",
+        "",
+        f"**Status:** `{status}`",
+        "",
+        _RF_PNR_STATUS_HEADLINE.get(status, ""),
+        "",
+    ]
+    cfg_files: List[str] = audit["config_files"]  # type: ignore[assignment]
+    if cfg_files:
+        out += ["## Config files read", ""]
+        out += [f"- `{f}`" for f in cfg_files] + [""]
+    unreadable: List[str] = audit["unreadable"]   # type: ignore[assignment]
+    if unreadable:
+        out += ["## Staged but UNREADABLE", "",
+                "These files were staged but could not be read. They were "
+                "skipped and the generic defaults kept — they are listed here "
+                "so the skip is visible rather than silent.", ""]
+        out += [f"- `{f}`" for f in unreadable] + [""]
+
+    adopted: List[Dict[str, str]] = audit["adopted"]  # type: ignore[assignment]
+    out += ["## Adopted knobs", ""]
+    if adopted:
+        out += ["| knob | value | source file |", "|---|---|---|"]
+        out += [f"| `{a['knob']}` | `{a['value']}` | `{a['source']}` |"
+                for a in adopted] + [""]
+    else:
+        out += ["_None — the generic defaults are in force._", ""]
+
+    rejected: List[Dict[str, str]] = \
+        audit["rejected"]                          # type: ignore[assignment]
+    if rejected:
+        out += ["## Declared but NOT applied", "",
+                "Declared by the design's config but dropped. The default was "
+                "kept and no value was fabricated.", "",
+                "| knob | declared value | source file | reason |",
+                "|---|---|---|---|"]
+        out += [f"| `{r['knob']}` | `{r.get('value', '')}` | "
+                f"`{r.get('source', '')}` | {r.get('reason', '')} |"
+                for r in rejected] + [""]
+
+    applied: Dict[str, object] = audit["applied"]  # type: ignore[assignment]
+    if any(v is not None for v in applied.values()):
+        out += ["## Resulting flow parameters", "",
+                "| phase-3 parameter | value |", "|---|---|"]
+        out += [f"| `{k}` | `{v}` |" for k, v in sorted(applied.items())
+                if v is not None] + [""]
+
+    notes: List[str] = audit["notes"]              # type: ignore[assignment]
+    if notes:
+        out += ["## Mapping trace", ""] + [f"- {n}" for n in notes] + [""]
+    return "\n".join(out)
+
+
+def _write_reference_flow_pnr_report(project: Path,
+                                     audit: Dict[str, object]) -> List[Path]:
+    """Persist the knob-ingest audit into the run's reports (markdown + JSON),
+    routed by `_path_layout.report_path`. Written on EVERY phase-3 PnR run,
+    including the ``no-config`` case — an absent config must SAY SO in the
+    report rather than leave the reader unable to tell "no reference flow" from
+    "reference flow silently ignored". Best-effort: a write failure never fails
+    the step. Returns the paths written."""
+    written: List[Path] = []
+    for name, body in (
+        (f"{_RF_PNR_REPORT_STEM}.md",
+         _render_reference_flow_pnr_report(audit)),
+        (f"{_RF_PNR_REPORT_STEM}.json",
+         json.dumps(audit, indent=2, sort_keys=True) + "\n"),
+    ):
+        try:
+            p = _pl.report_path(project, name)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(body)
+            written.append(p)
+        except Exception:
+            continue
+    return written
 
 
 _SIGNED_NET_DECL_RE = re.compile(
@@ -8449,19 +8750,43 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # CORE_UTILIZATION→die-util mapping was already consumed by the auto-die
     # sizer above (via `_reference_flow_declared_die_util`); here we consume the
     # placement-density override + the repair_tns / CTS-cluster directives.
-    _rf_map = _reference_flow_pnr_mapping(_reference_flow_pnr_knobs(project))
-    _rf_pnr_notes = list(_rf_map.get("notes") or [])  # type: ignore[arg-type]
+    #
+    # AUDIT (#198 Branch 1): the ingest decides, `_reference_flow_pnr_audit`
+    # RECORDS — every adopted knob with its value + source file, every declared-
+    # but-rejected knob with the reason, and, when nothing is staged, an explicit
+    # "generic defaults in force" statement. The report is written on EVERY run
+    # (including no-config) so a reader can always tell why this run's floorplan
+    # differs from the last, and can never mistake "no reference flow" for
+    # "reference flow silently ignored".
+    _rf_audit = _reference_flow_pnr_audit(project)
+    _rf_map: Dict[str, object] = \
+        _rf_audit["applied"]                       # type: ignore[assignment]
+    _rf_pnr_notes = list(_rf_audit["notes"] or [])  # type: ignore[arg-type]
     _rf_place_density = _rf_map.get("place_density")
     if isinstance(_rf_place_density, float):
         _rf_pnr_notes.append(
             f"global_placement -density override: {util:g} -> "
             f"{_rf_place_density:g} (design's staged reference_flow)")
         util = _rf_place_density
+    _rf_audit["place_density_override"] = (
+        _rf_place_density if isinstance(_rf_place_density, float) else None)
+    _rf_audit["notes"] = list(_rf_pnr_notes)
+    _rf_report_paths = _write_reference_flow_pnr_report(project, _rf_audit)
     if _rf_pnr_notes:
         print("[phase3] REFERENCE-FLOW PnR QoR-KNOB INGEST "
-              "(input/reference_flow):", file=sys.stderr)
+              f"(input/reference_flow) [{_rf_audit['status']}]:",
+              file=sys.stderr)
         for _n in _rf_pnr_notes:
             print(f"[phase3]   {_n}", file=sys.stderr)
+    else:
+        # FAIL-SAFE, STATED: no knob changed the flow. Say so rather than
+        # leaving silence that reads the same as "the mechanism never ran".
+        print("[phase3] REFERENCE-FLOW PnR QoR-KNOB INGEST "
+              f"(input/reference_flow) [{_rf_audit['status']}]: no knob "
+              "adopted — generic phase-3 defaults in force (behaviour "
+              "unchanged)", file=sys.stderr)
+    for _p in _rf_report_paths:
+        print(f"[phase3]   audit report: {_p}", file=sys.stderr)
     pnr_tcl.write_text(_build_pnr_tcl_text(
         tech_lef_c=tech_lef_c, cell_lef_c=cell_lef_c,
         macro_lefs_tcl=macro_lefs_tcl, liberty_c=liberty_c,
@@ -8807,6 +9132,9 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         "spare_count": spare_plan.get("count", 0),
         "spare_types": spare_plan.get("types", {}),
         "reference_flow_pnr_knobs": _rf_pnr_notes,
+        # Full machine-readable audit (status / adopted+source / rejected+
+        # reason) so a consumer need not re-parse the design's config.
+        "reference_flow_pnr_audit": _rf_audit,
     }
     if _rf_pnr_notes:
         detail += (f" | reference_flow_pnr_knobs: "

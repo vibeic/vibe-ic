@@ -372,6 +372,9 @@ _REPORT_CATEGORY: dict = {
     "spice_correlation.json": "phase3",
     "density.json": "phase3",
     "density.rpt": "phase3",
+    # #198 Branch 1 — which reference_flow QoR knobs phase-3 adopted/rejected
+    "reference_flow_knobs.json": "phase3",
+    "reference_flow_knobs.md": "phase3",
     # debug_first_pass.py outputs — phase varies per step
     "drc_fix_first_pass.json": "phase3",
     "hold_fix_first_pass.json": "phase3",
