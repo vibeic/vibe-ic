@@ -447,8 +447,18 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 600
     """Run a shell command inside a Docker container under a SIMPLE bounded
     wall-clock `timeout` — correct for short probes. Long tool runs use
     `_docker_exec(..., marker=...)` which routes through the progress-stall
-    watchdog instead."""
-    full = ["docker", "exec", container, "bash", "-lc", cmd]
+    watchdog instead.
+
+    The command carries its OWN container-side deadline 5 s before the host's
+    (`_docker_watchdog.wrap_with_container_timeout`). Without it a host
+    `subprocess.run` timeout kills only the `docker exec` CLIENT and ORPHANS
+    the tool inside the container — measured here: a 300 s sanity-synth
+    timeout left yosys+abc running 18 minutes later, holding 6 GB and a full
+    core inside a cpu/memory-capped container the live synth was sharing, and
+    still able to overwrite that step's output netlist. Chip-AGNOSTIC."""
+    import _docker_watchdog as _dw
+    _wrapped = _dw.wrap_with_container_timeout(cmd, timeout)
+    full = ["docker", "exec", container, "bash", "-lc", _wrapped]
     try:
         cp = subprocess.run(full, capture_output=True, text=True,
                             timeout=timeout)

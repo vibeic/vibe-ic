@@ -129,6 +129,47 @@ def container_cpu_seconds(container: str, marker: Optional[str],
     return _sum_marked_tree_cpu(out, marker, parse_cputime_hms)
 
 
+def wrap_with_container_timeout(cmd: str, timeout_s: float,
+                                margin_s: int = 5) -> str:
+    """Give an in-container command its OWN deadline, `margin_s` before the
+    host's.
+
+    WHY (measured 2026-07-22): a host-side `subprocess.run(..., timeout=N)`
+    kills the *`docker exec` client*, NOT the process inside the container.
+    Docker does not propagate that to the exec'd process, so the tool is
+    ORPHANED and keeps running — forever, unsupervised, holding its memory and
+    a core inside a cpu/memory-capped container that the rest of the run is
+    still sharing. Observed in one `ps` listing, 18 minutes after a 300 s
+    timeout was recorded, the leaked call and a correctly-wrapped one side by
+    side:
+
+        116   18:17  yosys -p read_verilog ...        <- leaked, no wrapper
+        2616  13:16  timeout --kill-after=5 86395 bash -lc ...   <- bounded
+        2647  13:16  yosys -p read_slang ...
+
+    Worse than the resource leak: both invocations wrote the SAME output
+    netlist path, so the orphan was free to overwrite the good artifact
+    produced by the step that replaced it — a silent wrong-result hazard, not
+    just waste.
+
+    The wrap is what makes the host deadline real: GNU `timeout` puts the
+    command in its own process group and signals the GROUP, so a tool that
+    spawns children (yosys -> abc, magic -> ext2spice) is torn down whole.
+    `--kill-after=5` escalates TERM to KILL. Firing `margin_s` early means the
+    container side is already dead when the host raises TimeoutExpired, so the
+    caller still gets its rc/partial output.
+
+    Degrades gracefully: a container with no `timeout` binary runs exactly as
+    before. chip/tool-AGNOSTIC.
+    """
+    inner = max(1, int(timeout_s) - margin_s)
+    return (
+        f"if command -v timeout >/dev/null 2>&1; then "
+        f"exec timeout --kill-after=5 {inner} bash -lc {shlex.quote(cmd)}; "
+        f"else exec bash -lc {shlex.quote(cmd)}; fi"
+    )
+
+
 def run_docker_supervised(container: str, cmd: str, marker: str, *,
                           docker_exec_raw: RawExec,
                           log_path: Optional[Path] = None,
@@ -144,12 +185,7 @@ def run_docker_supervised(container: str, cmd: str, marker: str, *,
     probes only (never routed back through the supervisor)."""
     # OUTER backstop: wrap with a container-side `timeout` at the CEILING so the
     # tool self-terminates even if the host supervisor dies.
-    ceil_inner = max(1, int(hard_ceiling_s) - 5)
-    wrapped = (
-        f"if command -v timeout >/dev/null 2>&1; then "
-        f"exec timeout --kill-after=5 {ceil_inner} bash -lc {shlex.quote(cmd)}; "
-        f"else exec bash -lc {shlex.quote(cmd)}; fi"
-    )
+    wrapped = wrap_with_container_timeout(cmd, hard_ceiling_s)
     if container in ("", "host"):
         full = ["bash", "-lc", wrapped]
     else:

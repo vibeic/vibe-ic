@@ -73,8 +73,15 @@ def _docker_exec_raw(container, cmd, timeout=600):
     short probes. Long tool runs use `_docker_exec(..., marker=...)` → the
     progress-stall watchdog."""
     import subprocess
-    full = (["docker", "exec", container, "bash", "-lc", cmd]
-            if container not in ("", "host") else ["bash", "-lc", cmd])
+    if container not in ("", "host"):
+        # OWN container-side deadline: a host timeout kills only the
+        # `docker exec` CLIENT and ORPHANS the tool inside the container
+        # (see `_docker_watchdog.wrap_with_container_timeout`).
+        import _docker_watchdog as _dw
+        full = ["docker", "exec", container, "bash", "-lc",
+                _dw.wrap_with_container_timeout(cmd, timeout)]
+    else:
+        full = ["bash", "-lc", cmd]
     try:
         r = subprocess.run(full, capture_output=True, text=True,
                            timeout=timeout)

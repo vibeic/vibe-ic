@@ -1054,8 +1054,14 @@ def _to_container_path(host_path: str, mounts: List[Tuple[str, str]]) -> str:
 def _docker_exec_raw(container: str, cmd: str, timeout: int = 600
                      ) -> Tuple[int, str, str]:
     """Simple bounded wall-clock docker exec — for short probes. Long tool runs
-    use `_docker_exec(..., marker=...)` → the progress-stall watchdog."""
-    full = ["docker", "exec", container, "bash", "-lc", cmd]
+    use `_docker_exec(..., marker=...)` → the progress-stall watchdog.
+
+    Carries its OWN container-side deadline: a host `subprocess.run` timeout
+    kills only the `docker exec` CLIENT and ORPHANS the tool in the container
+    (see `_docker_watchdog.wrap_with_container_timeout`). Chip-AGNOSTIC."""
+    import _docker_watchdog as _dw
+    full = ["docker", "exec", container, "bash", "-lc",
+            _dw.wrap_with_container_timeout(cmd, timeout)]
     try:
         cp = subprocess.run(full, capture_output=True, text=True,
                             timeout=timeout)
