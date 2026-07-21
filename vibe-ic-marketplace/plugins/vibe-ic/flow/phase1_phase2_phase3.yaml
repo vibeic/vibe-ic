@@ -338,6 +338,15 @@ steps:
       - professional_tb_check         # gate: the professional TB never silently
                                       # passes a real cocotb functional mismatch
       - testbench_gen                # scaffolds phase2/stage1/sim/tb/*.v from L10
+      # The scaffolder above emits a PLACEHOLDER TB (prints a pass, DUT
+      # instantiation commented out) that is MEANT to be replaced with real
+      # stimulus. This gate fails the run when it never was — otherwise
+      # functional verification is vacuous while every log reads PASS.
+      # Discovery is DIRECTORY+STRUCTURE driven (portless module under the sim
+      # tree), never a filename glob: the scaffolder names one TB per L10
+      # scenario (case_3.v, corner_operand.v, rv32i_40.v), so `tb_*.v`/`*_tb.v`
+      # patterns match none of them and a filename-driven audit sees 0 hits.
+      - vacuous_testbench_check      # gate: a TB must actually drive the DUT
       - coverage_closure              # gap analysis from coverage_actual.json
       # v0.53/v0.54 byte-level coverage gates (replace agent self-reports
       # of "≥ 95 % covered" with machine-measured numbers).
@@ -371,6 +380,15 @@ steps:
         - optional_program_exit_zero:
             command: "cpu_functional_oracle_waiver_check . --json reports/phase2/gates/cpu_functional_oracle_waiver.json"
             condition_files_exist: ["phase2/stage1/sim/results.xml"]
+        # VACUOUS-TB gate. Unconditional: the program self-reports
+        # NOT_APPLICABLE (exit 0) when there is no sim tree or no testbench in
+        # it, so it can never raise a false FAIL — and, being unconditional, it
+        # can never be silently skipped either. exit 1 = a testbench prints a
+        # pass without driving the design (three independent detectors: the
+        # scaffolder's placeholder marker, a commented-out DUT instantiation,
+        # and a sim tree in which NOTHING is instantiated live). The JSON report
+        # carries the offending file/line/text as cross-checkable evidence.
+        - program_exit_zero: "vacuous_testbench_check . --json reports/phase2/gates/vacuous_testbench.json"
         # L10 tb-conformance: run only when L10_TEST_CASES.json exists.
         - optional_program_exit_zero:
             command: "l10_tb_conformance_check --l10 phase1/generated_docs/L10_TEST_CASES.json --tb-dir phase2/stage1/sim/tb --out reports/phase2/gates/l10_tb_conformance.json"
