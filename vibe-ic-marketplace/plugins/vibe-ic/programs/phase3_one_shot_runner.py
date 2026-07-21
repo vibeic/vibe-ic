@@ -45,13 +45,14 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass, field, asdict
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Tuple
 import _path_layout as _pl
 import _watchdog as _wd  # v1.3.47 — plugin-wide progress-stall supervision
 import _docker_watchdog as _dwd  # shared in-container CPU probe (tree-aware)
 import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
 import lvs_verdict_tokens as _lvt  # #524 — shared netgen terminal-verdict tokens
+import extraction_input_capability_check as _eicap  # extraction-input precondition (BLOCKED)
 import lvs_netgen_setup_emit as _lvs_setup  # GAP-E2E-9 — power-net globalisation
 import lvs_power_aware_netlist_emit as _lvs_pa  # GAP-E2E-9 ROOT — power-aware netlist
 import lvs_power_aware_extract_tcl as _lvs_paext  # LVS ROOT (extract side) — power-aware DEF extraction
@@ -261,7 +262,7 @@ def _extract_error_signature(log_text: str, max_lines: int = 4) -> str:
 @dataclass
 class StepResult:
     name: str
-    status: str            # PASS / FAIL / SKIP / WAIVED / ENV_UNAVAILABLE
+    status: str            # PASS / FAIL / BLOCKED / SKIP / WAIVED / ENV_UNAVAILABLE
     duration_s: float = 0.0
     detail: str = ""
     output_files: List[str] = field(default_factory=list)
@@ -275,7 +276,15 @@ class StepResult:
 # Both still aggregate to PASS_WITH_WAIVERS for verdict purposes;
 # the split is only for diagnostics + report rollup so an audit can
 # tell at a glance which gaps are env-fixable vs design-fixable.
-_VERDICT_TIERS = ("PASS", "FAIL", "SKIP", "WAIVED", "ENV_UNAVAILABLE")
+# BLOCKED — the check could not be attempted because an INPUT is structurally
+# incapable of producing the evidence (e.g. a stub technology file from which
+# no netlist can be extracted). Distinct from FAIL ("a check ran and the design
+# did not pass") and from ENV_UNAVAILABLE ("the tool is not installed here"):
+# the tool IS present and the input IS present, but the input cannot support
+# the operation, so NOTHING is known about the design. Never green — see
+# `_aggregate_verdict`.
+_VERDICT_TIERS = ("PASS", "FAIL", "BLOCKED", "SKIP", "WAIVED",
+                  "ENV_UNAVAILABLE")
 
 
 def _docker_exec_raw(container: str, cmd: str, timeout: int = 1800
@@ -12357,6 +12366,54 @@ def _def_signal_routing_stats(def_path: Path) -> Tuple[bool, int]:
     return False, nets
 
 
+def _lvs_extraction_input_capability(container: str, magicrc: str,
+                                     pdk: PdkConfig
+                                     ) -> Optional["_eicap.CapabilityReport"]:
+    """Can the PDK's Magic technology file support THIS run's extraction?
+
+    Returns the capability report, or None when capability is UNKNOWN (the rc
+    names no tech file, or a file cannot be read). None means "proceed exactly
+    as before" — never block on a guess, because a false BLOCKED would take a
+    working sign-off away.
+
+    The requirement set is derived from `_MAGIC_EXT2SPICE_TCL`, the very script
+    this runner is about to execute, so the check asks only for what the recipe
+    actually consumes. Files are read through the CONTAINER, which is the
+    namespace the tool will resolve them in — a PDK bridge tech and an
+    in-container `libs.tech` tech are handled by the same code path.
+    chip-AGNOSTIC."""
+    def _cat(path: str) -> Optional[str]:
+        rc, out, _ = _docker_exec(container, f"cat {shlex.quote(path)}",
+                                  timeout=30)
+        return out if rc == 0 and out.strip() else None
+
+    rc_text = _cat(magicrc)
+    if rc_text is None:
+        return None
+    raw = _eicap.tech_path_from_magicrc_text(rc_text)
+    if raw is None:
+        return None
+    tech_path = raw if raw.startswith("/") else str(
+        PurePosixPath(magicrc).parent / raw)
+    tech_text = _cat(tech_path)
+    if tech_text is None and not tech_path.endswith(".tech"):
+        tech_path += ".tech"
+        tech_text = _cat(tech_path)
+    if tech_text is None:
+        return None
+    # The layers THIS design is routed on — read from the tech LEF the run is
+    # already using, so the cross-check is design-derived, not a fixed list.
+    design_layers = None
+    try:
+        design_layers = _eicap.lef_layers(
+            Path(str(pdk.tech_lef)).read_text(errors="replace"))
+    except (OSError, TypeError):
+        design_layers = None
+    return _eicap.check_magic_tech(
+        tech_text, _MAGIC_EXT2SPICE_TCL, path=tech_path,
+        design_layers=design_layers)
+
+
 def step_lvs(project: Path, top: str, pdk: PdkConfig,
              container: str,
              upstream_pnr: Optional[StepResult] = None) -> StepResult:
@@ -12515,6 +12572,52 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
             "open-source LVS needs the PDK Magic tech + netgen setup; "
             "missing: " + ", ".join(missing_tech) + " (#443)",
             extras={"missing_tech": missing_tech})
+    # EXTRACTION-INPUT PRECONDITION — the BLOCKED verdict.
+    #
+    # `test -f` above proves the tech file EXISTS. It does not prove the file
+    # can support extraction. A stub tech — sections declared but empty — is
+    # present and readable, yet Magic cannot resolve the design's layers, so
+    # `extract all` / `ext2spice` emit NOTHING and the run lands on
+    # LVS_EXTRACTION_NO_NETLIST -> FAIL. That verdict is the same terminal
+    # class as a genuine netlist mismatch, so a run that verified NOTHING
+    # becomes indistinguishable from a run that verified something and found
+    # it broken. They are different facts and the flow must say which it has.
+    #
+    # BLOCKED is that third answer: no compare could run, nothing is known
+    # about the design in either direction. It is a REFUSAL, never a pass —
+    # `_aggregate_verdict` puts it in the non-green bucket explicitly.
+    #
+    # FAIL-SAFE toward NOT-BLOCKED: the check asserts incapability only on
+    # positive evidence (a required section absent, or present-but-empty).
+    # An unreadable / unrecognised input returns None or `inconclusive` and
+    # the flow proceeds EXACTLY as it does today, so a complete tech file and
+    # a matching design still PASS, and a real mismatch still FAILs.
+    _cap = _lvs_extraction_input_capability(container, magicrc, pdk)
+    if _cap is not None and not _cap.usable and not _cap.inconclusive:
+        _caps_missing = ", ".join(_cap.missing_capability_names)
+        verdict = _write_lvs_verdict(
+            project, "BLOCKED", "LVS_INPUT_TECH_INCAPABLE",
+            f"LVS could not be attempted: the Magic technology file "
+            f"{_cap.path} cannot support extraction — missing "
+            f"{_caps_missing}. {_cap.reason} No netlist can be extracted from "
+            f"any layout with this tech file, so there is nothing to compare "
+            f"and NOTHING IS KNOWN about this design's LVS state — this is "
+            f"neither a pass nor a design defect. Complete the technology "
+            f"file (or point the flow at one that is complete) and re-run.",
+            extras={"tech_file": _cap.path,
+                    "capability": _cap.to_dict(),
+                    "blocked": True})
+        return StepResult(
+            "lvs", "BLOCKED", time.time() - t0,
+            f"LVS BLOCKED — cannot verify: technology file {_cap.path} is "
+            f"structurally incapable of extraction (missing {_caps_missing}). "
+            f"No netlist can be produced, so no compare is possible. This is "
+            f"NOT a pass and NOT a design failure; named in lvs_verdict.json.",
+            extras={"finding": "LVS_INPUT_TECH_INCAPABLE",
+                    "tech_file": _cap.path,
+                    "missing_capabilities": _cap.missing_capability_names,
+                    "capability": _cap.to_dict(),
+                    "lvs_verdict": verdict})
     # v0.3.13 — ORGANIC #508/#509 FINAL: DEF-DIRECT cell-level LVS. The
     # layout source is the ROUTED DEF (not the GDS) — Magic reads it
     # directly + `port makeall` promotes the DEF top pins to ports, the
@@ -21074,7 +21177,18 @@ def _derive_headline_verdict(project: Path, steps_verdict: str
 
 
 def _aggregate_verdict(plan: List[StepResult]) -> str:
-    if any(s.status == "FAIL" for s in plan):
+    # BLOCKED ("the check could not run; nothing is known") is grouped with
+    # FAIL here, and this grouping is LOAD-BEARING. The final `return "PASS"`
+    # below is a catch-all: ANY status this function does not enumerate falls
+    # through to it and turns the whole run green. A "cannot verify" step that
+    # produced a green run would be a worse defect than the ambiguity BLOCKED
+    # was introduced to remove, so BLOCKED is named explicitly and lands in
+    # the non-green bucket. The BLOCKED-vs-FAIL distinction is preserved where
+    # triage reads it — the step's own status, its `finding`, and
+    # lvs_verdict.json — while the headline verdict vocabulary
+    # (PASS / PASS_WITH_WAIVERS / FAIL) stays a stable contract for its
+    # existing consumers.
+    if any(s.status in ("FAIL", "BLOCKED") for s in plan):
         return "FAIL"
     # v1.6.54 — ENV_UNAVAILABLE counts toward PASS_WITH_WAIVERS the
     # same way as WAIVED / SKIP. The verdict tier is preserved at the

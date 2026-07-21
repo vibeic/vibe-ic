@@ -33,7 +33,7 @@ import re
 import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import lvs_verdict_tokens as _lvt  # #524 — shared netgen terminal-verdict tokens
 
@@ -397,11 +397,56 @@ def _check_drc(project_dir: Path) -> AuditResult:
     return result
 
 
+def _lvs_blocked_verdict(project_dir: Path) -> Optional[dict]:
+    """The runner's BLOCKED LVS verdict, or None.
+
+    Reads `reports/phase3/lvs_verdict.json` — the runner's own machine-readable
+    verdict artifact — and returns it ONLY when it records a BLOCKED status.
+    Any other status, or an absent/unreadable/malformed file, returns None so
+    the caller behaves exactly as before. Read-only: the netgen transcript that
+    the #189 classifier and this gate both parse is never touched.
+    """
+    p = Path(project_dir) / "reports" / "phase3" / "lvs_verdict.json"
+    try:
+        data = json.loads(p.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    status = str(data.get("status") or data.get("result") or "").strip().upper()
+    return data if status == "BLOCKED" else None
+
+
 def _check_lvs(project_dir: Path) -> AuditResult:
     result = AuditResult(program="eda_report_audit:lvs", passed=False)
     files = _discover(project_dir, ["*lvs*.rpt", "*lvs*.log", "*LVS*.rpt",
                                      "*LVS*.log", "*comp*.out"])
     if not files:
+        # A BLOCKED run produces NO netgen report by construction — extraction
+        # never ran, because an input could not support it. "No LVS report
+        # found" is true but says nothing about WHY, which is the ambiguity
+        # BLOCKED exists to remove. When the runner recorded a BLOCKED verdict,
+        # report THAT (with the offending file and the missing capability)
+        # instead. This never grants a pass: `passed` stays False on both
+        # paths — it only replaces an unattributed absence with the reason.
+        blocked = _lvs_blocked_verdict(project_dir)
+        if blocked:
+            result.findings.append(Finding(
+                rule="LVS_BLOCKED_INPUT_INCAPABLE", severity="ERROR",
+                message=(
+                    "LVS is BLOCKED, not failed and not clean: "
+                    + str(blocked.get("message")
+                          or "an extraction input cannot support extraction")
+                    + " No netlist could be extracted, so no compare ran and "
+                      "NOTHING is known about this design's LVS state. "
+                      "Sign-off must not proceed."),
+                file=str(blocked.get("tech_file") or "")))
+            result.summary = {"files_found": 0, "categories_found": [],
+                              "terminal_verdict": "BLOCKED",
+                              "blocked": True,
+                              "blocked_finding": blocked.get("finding"),
+                              "blocked_input": blocked.get("tech_file")}
+            return result
         result.findings.append(Finding(
             rule="LVS_REPORT_EXISTS", severity="ERROR",
             message="No LVS report found (searched *lvs*.rpt/log, *comp*.out)"))
