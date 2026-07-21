@@ -12409,9 +12409,22 @@ def _lvs_extraction_input_capability(container: str, magicrc: str,
             Path(str(pdk.tech_lef)).read_text(errors="replace"))
     except (OSError, TypeError):
         design_layers = None
+    # Magic composes a technology from several files via `include <name>`; a
+    # tech whose `extract` section lives in an included sibling is COMPLETE.
+    # Resolve includes in the CONTAINER, beside the tech file. An include we
+    # cannot read leaves the answer inconclusive, never BLOCKED.
+    _tech_dir = str(PurePosixPath(tech_path).parent)
+
+    def _include(name: str) -> Optional[str]:
+        for cand in (f"{_tech_dir}/{name}", f"{_tech_dir}/{name}.tech"):
+            txt = _cat(cand)
+            if txt is not None:
+                return txt
+        return None
+
     return _eicap.check_magic_tech(
         tech_text, _MAGIC_EXT2SPICE_TCL, path=tech_path,
-        design_layers=design_layers)
+        design_layers=design_layers, resolver=_include)
 
 
 def step_lvs(project: Path, top: str, pdk: PdkConfig,

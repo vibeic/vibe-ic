@@ -240,12 +240,32 @@ class TechSection:
         return True
 
 
-def parse_tech_sections(text: str) -> Dict[str, TechSection]:
-    """Parse a Magic tech file into its top-level sections.
+_INCLUDE_RE = re.compile(r"^\s*include\s+(?P<name>\S+)\s*$", re.I)
 
-    Generic: the section NAMES are whatever the file declares — nothing is
+# Magic composes a technology from SEVERAL files: a top-level tech file that
+# carries `include <name>` lines pulling in sibling files, each holding whole
+# sections. Real PDKs ship this way — a tech whose `extract` section lives in
+# an included file is COMPLETE, and judging the top-level file alone would
+# declare a working PDK incapable. Includes are therefore followed, and an
+# include we cannot resolve makes the answer INCONCLUSIVE rather than BLOCKED
+# (the capability we think is missing may be sitting in the file we could not
+# read).
+_MAX_INCLUDE_DEPTH = 8
+
+
+def parse_tech_sections(text: str,
+                        resolver: Optional[Any] = None,
+                        _depth: int = 0,
+                        _unresolved: Optional[List[str]] = None,
+                        ) -> Dict[str, TechSection]:
+    """Parse a Magic tech file into its top-level sections, following includes.
+
+    Generic: the section NAMES are whatever the files declare — nothing is
     assumed about which sections should exist. Duplicate sections merge (Magic
-    reads them cumulatively). Returns {lowercased name: TechSection}.
+    reads them cumulatively).
+
+    `resolver(name) -> text | None` supplies the body of an `include <name>`.
+    Names that do not resolve are appended to `_unresolved`.
     """
     sections: Dict[str, TechSection] = {}
     current: Optional[TechSection] = None
@@ -257,6 +277,21 @@ def parse_tech_sections(text: str) -> Dict[str, TechSection]:
             continue
         at_col0 = raw[:1] not in (" ", "\t")
         if current is None:
+            inc = _INCLUDE_RE.match(raw) if at_col0 else None
+            if inc:
+                name = inc.group("name")
+                sub = resolver(name) if resolver is not None else None
+                if sub is None:
+                    if _unresolved is not None:
+                        _unresolved.append(name)
+                elif _depth < _MAX_INCLUDE_DEPTH:
+                    for k, v in parse_tech_sections(
+                            sub, resolver, _depth + 1, _unresolved).items():
+                        if k in sections:
+                            sections[k].content_lines.extend(v.content_lines)
+                        else:
+                            sections[k] = v
+                continue
             if at_col0 and stripped.lower() != "end":
                 name = stripped.split()[0].lower()
                 current = sections.get(name) or TechSection(name, lineno)
@@ -350,15 +385,21 @@ _MIN_PLAUSIBLE_SECTIONS = 2
 def check_magic_tech(text: str,
                      commands: Iterable[str],
                      path: str = "<tech>",
-                     design_layers: Optional[Sequence[str]] = None
+                     design_layers: Optional[Sequence[str]] = None,
+                     resolver: Optional[Any] = None,
                      ) -> CapabilityReport:
     """Can this Magic tech file support `commands`?
 
     Blocks ONLY on positive evidence: a capability whose every candidate
     section is absent, or present-but-empty. Anything we cannot read or
     recognise is `inconclusive`, and the caller proceeds unchanged.
+
+    `resolver(name) -> text | None` supplies `include <name>` bodies. A
+    technology split across included files is complete when read together, so
+    an include we could not resolve suppresses a would-be BLOCKED.
     """
-    sections = parse_tech_sections(text or "")
+    unresolved: List[str] = []
+    sections = parse_tech_sections(text or "", resolver, 0, unresolved)
     found = sorted(sections)
     if len(sections) < _MIN_PLAUSIBLE_SECTIONS:
         return CapabilityReport(
@@ -408,6 +449,17 @@ def check_magic_tech(text: str,
         wanted = [str(l).strip().lower() for l in design_layers if str(l).strip()]
         checked = len(wanted)
         undefined = sorted({l for l in wanted if l not in types})
+
+    if missing and unresolved:
+        # The capability we believe is missing may live in an included file we
+        # could not read. Never block on that — this is precisely the case
+        # that would declare a complete, working PDK incapable.
+        return CapabilityReport(
+            path=path, usable=True, inconclusive=True,
+            sections_found=found, types_defined=len(types),
+            note=(f"technology includes {len(unresolved)} file(s) that could "
+                  f"not be read here ({', '.join(sorted(set(unresolved))[:4])}"
+                  f") — capability not asserted, flow proceeds unchanged"))
 
     if missing:
         caps = "; ".join(f"{m['capability']} ({m['state']}, needed for "
@@ -461,7 +513,28 @@ def check_magic_tech_file(tech_path: Path,
             note=(f"not readable here ({exc.__class__.__name__}) — capability "
                   f"not asserted, flow proceeds unchanged"))
     return check_magic_tech(text, commands, path=str(p),
-                            design_layers=design_layers)
+                            design_layers=design_layers,
+                            resolver=make_dir_resolver(p.parent))
+
+
+def make_dir_resolver(base_dir):
+    """An `include` resolver reading sibling files from `base_dir`.
+
+    Magic writes `include <name>` without the `.tech` suffix, so both spellings
+    are tried. Returns None for anything unreadable — the caller then treats
+    capability as unknown rather than missing.
+    """
+    base = Path(base_dir)
+
+    def resolve(name: str) -> Optional[str]:
+        for cand in (base / name, base / f"{name}.tech"):
+            try:
+                if cand.is_file():
+                    return cand.read_text(errors="replace")
+            except OSError:
+                continue
+        return None
+    return resolve
 
 
 # ---------------------------------------------------------------------------
