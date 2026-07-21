@@ -161,15 +161,62 @@ python3 plugins/vibe-ic/programs/sta_corner_record_completeness_check.py \
   outlives the report it cites;
 - **R3** any sign-off corner violates. **A typ-only "MET" is a misleading pass**
   and never carries the run; when the typ corner met while a sign-off corner
-  violated, the finding says so in those words.
+  violated, the finding says so in those words;
+- **R4** a multi-corner claim is not backed by multiple corner LIBRARIES —
+  either the collapse is undisclosed (`R4_MULTI_CORNER_CLAIM_UNSUPPORTED`) or
+  the run records no corner-to-liberty resolution at all
+  (`R4_LIBRARY_RESOLUTION_UNRECORDED`);
+- **R5** DRV is violated (`R5_DRV_VIOLATION`) **or was never queried**
+  (`R5_DRV_UNQUERIED`).
+
+### R4: a "multi-corner" run that read one library
+
+Measured: a flow's "multi-corner" STA read the **typ liberty three times**,
+varying only the SPEF. Three corners were reported; **one library was analysed**,
+and the report did not say so. The degradation path is *designed* — the runner's
+own docstring says that when corner libs are unavailable *"it degrades to the
+single-corner `read_liberty` (byte-identical to the pre-multi-corner
+emission)"*. **The degradation is not the defect; the silence is.** A degraded
+run was byte-indistinguishable from a genuine one. What that silence cost: real
+PVT STA run by hand closed setup+hold at three corners with TNS=0, but carried
+**139 `max_slew` DRV violations at the slow corner**, entirely invisible to the
+flow's single-corner check.
+
+R4 is judged at **run level**, not per axis: a single-library RC axis is *not* a
+degradation (the RC axis varies parasitics, and one process library across its
+corners is correct by design). The degradation is when the run as a whole reports
+several corners while never analysing more than one distinct library on **any**
+axis. Judging per axis would label every healthy run degraded — the mirror image
+of the defect.
+
+A disclosed collapse is **not** a FAIL. It yields the verdict
+**`SINGLE_CORNER_ONLY`** (exit 0): a PDK that genuinely ships one library cannot
+do better, and failing it would fabricate a violation on every single-library
+PDK. But the verdict *string* carries the limitation, so no downstream summary
+can quote a bare "PASS" and have it read as multi-corner closure. **Never record
+a `SINGLE_CORNER_ONLY` run as multi-corner sign-off.**
+
+### R5: DRV must actually be asked for
+
+`report_check_types -max_slew -max_capacitance` is what surfaces slew/cap
+violations. If the flow never emits it, the report **cannot** show a slew
+violation however many exist — an unqueried limit is indistinguishable from a
+met one, which is the same disease R2 names for unreported slack. The emitter
+attests the query with a `SIGNOFF_CHECK_TYPES_REPORTED` marker; its **absence**
+is what separates "queried and clean" from "never asked".
 
 It learns which corners are sign-off from the run's OWN declarations —
 `mcorner_ocv_stance.json` (`setup_process_corner` / `hold_process_corner`),
 `multi_corner_spef_stance.json` (`setup_corner` / `hold_corner`) and
 `pvt_matrix.json` (`primary_corner`) — so no corner name is hardcoded and a PDK
-with a different corner vocabulary is judged the same way. It always emits the
-full per-corner table (corner, axis, role, setup WNS, hold WNS, TNS, source
-log), on PASS as well as FAIL: the absence of that table is the defect itself.
+with a different corner vocabulary is judged the same way. The corner→liberty
+resolution comes from the same stances' `corner_library_resolution` block, and
+from the `# corner_liberty:` header lines the STA reports now carry; a corner
+*name* is never taken as evidence of which file was read, because believing the
+name is how this defect survived. It always emits the full per-corner table
+(corner, axis, role, setup WNS, hold WNS, TNS, source log) **plus the per-axis
+library-resolution and DRV table**, on PASS as well as FAIL: the absence of that
+evidence is the defect itself.
 
 Distinct from `post_route_signoff_corner_check` (#147), which judges the slack
 inside the multicorner report and is wired `condition_files_exist` on that very

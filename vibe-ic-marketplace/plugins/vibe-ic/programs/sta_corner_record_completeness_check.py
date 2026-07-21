@@ -63,6 +63,50 @@ R3 NO TYP-ONLY PASS — if any SIGN-OFF corner violates, the run's timing verdic
    corner MET while a sign-off corner violated, the finding says so explicitly,
    because that combination is the misleading pass this gate exists to stop.
 
+R4 CORNER-LIBRARY RESOLUTION — a multi-corner claim must be backed by multiple
+   corner LIBRARIES, and a degradation to fewer must be LOUD.
+   Measured: a run reported three corners while reading the SAME typ liberty
+   three times, varying only the SPEF. The multi-corner degradation path is
+   DESIGNED behaviour — the runner's own docstring says that when corner libs
+   are unavailable "it degrades to the single-corner read_liberty
+   (byte-identical to the pre-multi-corner emission)". The degradation is not
+   the defect; the SILENCE about it is. A degraded run was byte-indistinguishable
+   in its output from a genuine multi-corner run.
+   R4 is judged at RUN level, across every sign-off axis at once. A
+   single-library RC axis is NOT a degradation: the RC axis varies PARASITICS,
+   and analysing its corners with one process library is correct by design.
+   The degradation is when the run AS A WHOLE reports several corners while
+   never analysing more than one distinct library on ANY axis. Judging this per
+   axis would label every healthy run degraded — the mirror image of the defect,
+   and just as useless.
+   R4 then splits the outcome rather than collapsing it into one verdict:
+     * collapse with a multi-corner claim and NO disclosure -> FAIL
+       (`R4_MULTI_CORNER_CLAIM_UNSUPPORTED`). Reporting N corners backed by one
+       library is a false claim regardless of intent.
+     * collapse the run DISCLOSES about itself -> verdict `SINGLE_CORNER_ONLY`,
+       exit 0. A PDK that genuinely ships one library CANNOT do better, and
+       FAILing it would fabricate a violation on every single-library PDK — the
+       same error the R1 nominal-corner exemption exists to avoid. But it is
+       never allowed to read as multi-corner sign-off: the verdict STRING
+       carries the limitation, so no downstream summary can quote a bare "PASS".
+     * a multi-corner claim whose library resolution was never RECORDED at all
+       -> FAIL (`R4_LIBRARY_RESOLUTION_UNRECORDED`). Unverifiable multi-corner
+       sign-off is the exact shape being fixed; letting it pass silently for
+       want of a record would re-create the defect inside its own gate.
+   Which corners collapsed onto which library, and why the others could not be
+   resolved, are named in the finding and in the evidence table.
+
+R5 DRV (max_slew / max_capacitance / max_fanout) MUST BE SURFACED — measured:
+   139 max_slew violations at the slow corner, entirely invisible to the flow's
+   check. Two distinct failures, both FAIL:
+     * `R5_DRV_VIOLATION` — the record SHOWS DRV violations. They are real
+       sign-off violations and are reported as such, with per-corner counts.
+     * `R5_DRV_UNQUERIED` — a sign-off corner report exists but OpenSTA was
+       never asked for DRV at all (no `report_check_types`, no check-types
+       marker), or the query errored. An unqueried DRV limit is
+       indistinguishable from a met one — the same disease as an unreported
+       corner, which is what R2 already says about slack.
+
 How sign-off corners are learned (READ from the flow, never hardcoded)
 ----------------------------------------------------------------------
 This was determined by reading `phase3_one_shot_runner.py`, not assumed. The
@@ -116,7 +160,7 @@ artifact path for each — to stdout and into the verdict JSON, on PASS and FAIL
 alike. A gate that reproduced the missing-table defect while policing it would
 be absurd.
 
-Exit: 0 PASS / NOT_APPLICABLE · 1 FAIL · 2 IO-or-arg error.
+Exit: 0 PASS / NOT_APPLICABLE / SINGLE_CORNER_ONLY · 1 FAIL · 2 IO-or-arg error.
 
 chip-AGNOSTIC / benchmark-AGNOSTIC: no design, IC, PDK, vendor or corner-name
 literal drives any verdict; corner identity and sign-off role come from the
@@ -209,6 +253,48 @@ _SIGNOFF_HEADER_RE = re.compile(
 _CORNERS_AVAIL_RE = re.compile(r"#\s*corners_available:\s*(.+)", re.IGNORECASE)
 _PER_CORNER_RPT_RE = re.compile(r"^sta_(.+)\.rpt$", re.IGNORECASE)
 
+# ── R4: corner -> liberty resolution ───────────────────────────────────────
+# The emitter records which liberty each reported corner was actually analysed
+# with, both as a header line and inside the per-section banner. Without this
+# record a "multi-corner" report cannot be told apart from N reads of one lib.
+#   `# corner_liberty: max=/pdk/.../lib__ss_100C_1v60.lib`
+_CORNER_LIBERTY_RE = re.compile(
+    r"#\s*corner_liberty:\s*([\w.+-]+)\s*=\s*(\S+)", re.IGNORECASE)
+#   `=== SETUP (max-RC corner, SPEF=max, liberty=/pdk/.../x.lib) ===`
+#   `=== SETUP corner: process=SS liberty=/pdk/.../x.lib, SPEF=... ===`
+_SECTION_LIBERTY_RE = re.compile(r"liberty=(\S+?)[,)\s]", re.IGNORECASE)
+# The stance JSONs gain an explicit resolution block (authoritative when present)
+_LIB_RESOLUTION_FIELD = "corner_library_resolution"
+
+# ── R5: DRV (design-rule violation) evidence ───────────────────────────────
+# `report_check_types -max_slew -max_capacitance ...` prints one titled table
+# per check kind. Titles are matched loosely so an OpenSTA wording change
+# degrades to "no DRV section found" (loud) rather than to a silent clean pass.
+_DRV_KINDS = {
+    "max slew": "max_slew",
+    "max transition": "max_slew",
+    "max capacitance": "max_capacitance",
+    "max cap": "max_capacitance",
+    "max fanout": "max_fanout",
+}
+_DRV_TITLE_RE = re.compile(
+    r"^(max\s+(?:slew|transition|capacitance|cap|fanout))\s*$", re.IGNORECASE)
+# A non-DRV table title ends the current DRV table.
+_OTHER_TITLE_RE = re.compile(
+    r"^(min\s+pulse\s+width|recovery|removal|setup|hold|clock\s+gating|"
+    r"data\s+check|latch\s+check|unconstrained)\b.*$", re.IGNORECASE)
+_VIOLATED_RE = re.compile(r"\(VIOLATED\)", re.IGNORECASE)
+# Fallback when the build does not print the (VIOLATED) tag: a table row whose
+# trailing column (the slack) is negative.
+_TRAILING_NEG_RE = re.compile(r"(-\d+(?:\.\d+)?)\s*$")
+# The emitter's authoritative attestation that the check types actually ran
+# (see phase3_one_shot_runner._SIGNOFF_CHECK_TYPES_MARKER). Its ABSENCE is what
+# distinguishes "queried and clean" from "never asked".
+_CHECK_TYPES_OK_RE = re.compile(
+    r"SIGNOFF_CHECK_TYPES_REPORTED\b(.*)$", re.IGNORECASE)
+_CHECK_TYPES_FAIL_RE = re.compile(
+    r"SIGNOFF_CHECK_TYPES_FAILED\s+reason=(.*)$", re.IGNORECASE)
+
 
 # ── small helpers ──────────────────────────────────────────────────────────
 def _first_existing(project: Path, rels: Tuple[str, ...]) -> Optional[Path]:
@@ -295,6 +381,122 @@ def extract_slacks(text: str) -> Dict[str, Optional[float]]:
             tns = _merge_slack(tns, float(mtns.group(2)))
 
     return {"setup_wns_ns": setup, "hold_wns_ns": hold, "tns_ns": tns}
+
+
+def extract_drv(text: str) -> Dict[str, object]:
+    """DRV evidence from one STA report body: was OpenSTA ASKED for max_slew /
+    max_capacitance / max_fanout, and what did it answer?
+
+    Returns `queried` (the check-types marker, or a real DRV table, is present),
+    `violations` (per-kind counts) and `total`. `queried` False means the run
+    never asked — which this gate treats as a failure, not as a clean result,
+    because an unqueried limit and a met limit look identical downstream."""
+    counts: Dict[str, int] = {}
+    queried = False
+    query_error: Optional[str] = None
+    kinds_seen: List[str] = []
+    # Explicit 3-state walk (IDLE -> HEADER -> ROWS) rather than "am I under a
+    # title": `report_check_types` prints SEVERAL tables back to back, so an
+    # open-ended table would keep counting rows belonging to the NEXT one (the
+    # `Group Slack` / `Required Width` tables OpenSTA emits alongside). A table
+    # ends at the first line carrying no digit, which is where the next title
+    # begins.
+    kind: Optional[str] = None
+    state = "IDLE"
+
+    for raw in text.splitlines():
+        line = raw.strip()
+
+        mok = _CHECK_TYPES_OK_RE.search(line)
+        if mok:
+            queried = True
+            # The marker names the check types the emitter asked for.
+            for token, canon in _DRV_KINDS.items():
+                if token.replace(" ", "_") in mok.group(1).lower() \
+                        and canon not in kinds_seen:
+                    kinds_seen.append(canon)
+            continue
+        merr = _CHECK_TYPES_FAIL_RE.search(line)
+        if merr:
+            query_error = merr.group(1).strip()
+            continue
+
+        # A new === SETUP/HOLD === banner ends any open table.
+        if _SECTION_RE.search(line):
+            kind, state = None, "IDLE"
+            continue
+
+        mt = _DRV_TITLE_RE.match(line)
+        if mt:
+            kind = _DRV_KINDS[re.sub(r"\s+", " ", mt.group(1).strip().lower())]
+            queried = True
+            state = "HEADER"
+            if kind not in kinds_seen:
+                kinds_seen.append(kind)
+            counts.setdefault(kind, 0)
+            continue
+        if _OTHER_TITLE_RE.match(line):
+            kind, state = None, "IDLE"
+            continue
+        if kind is None or state == "IDLE":
+            continue
+
+        dashes = bool(line) and set(line) <= set("-=")
+        if state == "HEADER":
+            # The dashed rule under the column header opens the data rows; a
+            # tagged violator opens them too, for builds that print no rule.
+            if dashes or _VIOLATED_RE.search(line):
+                state = "ROWS"
+            if not _VIOLATED_RE.search(line):
+                continue
+        elif dashes:
+            continue
+
+        # state == ROWS: the table ends at the first line with no digit in it.
+        if not line or not any(ch.isdigit() for ch in line):
+            kind, state = None, "IDLE"
+            continue
+        if _VIOLATED_RE.search(line):
+            counts[kind] = counts.get(kind, 0) + 1
+            continue
+        mneg = _TRAILING_NEG_RE.search(line)
+        # Only a data row (a name followed by numbers) counts, never the title
+        # underline or a stray negative in prose.
+        if mneg and len(line.split()) >= 3:
+            counts[kind] = counts.get(kind, 0) + 1
+
+    violations = {k: v for k, v in counts.items() if v > 0}
+    return {
+        "queried": queried,
+        "query_error": query_error,
+        "kinds_queried": kinds_seen,
+        "violations": violations,
+        "total": sum(violations.values()),
+    }
+
+
+def extract_corner_libraries(text: str) -> Dict[str, str]:
+    """{corner: liberty path} recorded in an STA report — from the
+    `# corner_liberty:` header lines and from any `liberty=` in a section
+    banner. Empty when the report carries no such record (which R4 treats as
+    unrecorded, not as resolved)."""
+    out: Dict[str, str] = {}
+    for m in _CORNER_LIBERTY_RE.finditer(text):
+        out.setdefault(m.group(1).strip().lower(), m.group(2).strip())
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not _SECTION_RE.search(line):
+            continue
+        mlib = _SECTION_LIBERTY_RE.search(line)
+        if not mlib:
+            continue
+        mproc = _SECTION_PROCESS_RE.search(line)
+        mrc = re.search(r"\(\s*([\w.+-]+?)(?:-RC)?\s+corner", line, re.I)
+        name = (mproc.group(2) if mproc else
+                mrc.group(1) if mrc else None)
+        if name:
+            out.setdefault(name.strip().lower(), mlib.group(1).strip())
+    return out
 
 
 def _split_sections(text: str) -> List[Tuple[str, Optional[str], str]]:
@@ -560,6 +762,111 @@ def read_records(project: Path,
     return recs
 
 
+# ── per-axis evidence: library resolution (R4) + DRV (R5) ──────────────────
+_AXIS_ARTIFACTS = (
+    (AXIS_RC, _MULTICORNER_CANDIDATES, _RC_STANCE_CANDIDATES,
+     ("multi_corner",)),
+    (AXIS_PROCESS, _MCORNER_OCV_CANDIDATES, _PROCESS_STANCE_CANDIDATES,
+     ("multi_process_corner",)),
+)
+
+
+def read_axis_evidence(project: Path,
+                       decl: Dict[str, object]) -> List[Dict[str, object]]:
+    """For each sign-off axis that produced a report: the multi-corner CLAIM it
+    makes, how each reported corner resolved to a LIBERTY, and the DRV evidence.
+
+    The stance JSON's `corner_library_resolution` block is authoritative when
+    present; otherwise the record is recovered from the report itself. Nothing
+    is inferred from a corner NAME — a corner called `ss` proves nothing about
+    which file was read, and believing the name is how this defect survived."""
+    out: List[Dict[str, object]] = []
+    declared: List[Dict[str, str]] = decl.get("declared") or []  # type: ignore[assignment]
+
+    for axis, rpt_cands, stance_cands, claim_fields in _AXIS_ARTIFACTS:
+        rpt = _first_existing(project, rpt_cands)
+        stance_path = _first_existing(project, stance_cands)
+        stance = _load_json(stance_path)
+        if rpt is None and stance is None:
+            continue
+        try:
+            text = rpt.read_text(errors="replace") if rpt is not None else ""
+        except OSError:
+            text = ""
+
+        # -- the multi-corner CLAIM this axis makes ------------------------
+        claim = False
+        claim_src: Optional[str] = None
+        for f in claim_fields:
+            if stance and stance.get(f) is True:
+                claim, claim_src = True, f"{_rel(project, stance_path)}:{f}"
+                break
+        axis_roles = {d["corner"].strip().lower() for d in declared
+                      if d["axis"] == axis}
+        if not claim and len(axis_roles) >= 2 and text:
+            claim = True
+            claim_src = (f"{len(axis_roles)} distinct sign-off corners declared "
+                         f"on the {axis} axis")
+
+        # -- how each reported corner resolved to a liberty -----------------
+        block = stance.get(_LIB_RESOLUTION_FIELD) if stance else None
+        lib_by_corner: Dict[str, str] = {}
+        unresolved: List[str] = []
+        unresolved_reason: Optional[str] = None
+        res_src: Optional[str] = None
+        if isinstance(block, dict):
+            raw = block.get("liberty_by_corner")
+            if isinstance(raw, dict):
+                lib_by_corner = {str(k).strip().lower(): str(v)
+                                 for k, v in raw.items() if v}
+            raw_u = block.get("unresolved_corners")
+            if isinstance(raw_u, list):
+                unresolved = [str(c) for c in raw_u if c]
+            ru = block.get("unresolved_reason")
+            unresolved_reason = str(ru) if ru else None
+            res_src = f"{_rel(project, stance_path)}:{_LIB_RESOLUTION_FIELD}"
+        if not lib_by_corner and text:
+            lib_by_corner = extract_corner_libraries(text)
+            if lib_by_corner:
+                res_src = _rel(project, rpt) if rpt else None
+
+        distinct = sorted({v for v in lib_by_corner.values()})
+        groups: Dict[str, List[str]] = {}
+        for corner, lib in sorted(lib_by_corner.items()):
+            groups.setdefault(lib, []).append(corner)
+        collapsed = [{"liberty": lib, "corners": cs}
+                     for lib, cs in sorted(groups.items()) if len(cs) > 1]
+
+        # Did the flow record that it KNOWS the resolution collapsed? A collapse
+        # the run states about itself is a disclosure; one only the gate can see
+        # is the silence this rule exists to break.
+        collapse_disclosed = bool(
+            isinstance(block, dict) and (block.get("collapsed") is True
+                                         or block.get("degradation_disclosure")))
+
+        out.append({
+            "axis": axis,
+            "report": _rel(project, rpt) if rpt is not None else None,
+            "multi_corner_claim": claim,
+            "claim_source": claim_src,
+            "collapse_disclosed": collapse_disclosed,
+            "degradation_disclosure": (
+                str(block.get("degradation_disclosure"))
+                if isinstance(block, dict) and block.get("degradation_disclosure")
+                else None),
+            "liberty_by_corner": lib_by_corner,
+            "distinct_library_count": len(distinct),
+            "reported_corner_count": len(lib_by_corner),
+            "collapsed_groups": collapsed,
+            "unresolved_corners": unresolved,
+            "unresolved_reason": unresolved_reason,
+            "resolution_source": res_src,
+            "resolution_recorded": bool(lib_by_corner),
+            "drv": extract_drv(text) if text else None,
+        })
+    return out
+
+
 # ── evaluation ─────────────────────────────────────────────────────────────
 def evaluate(project: Path,
              slack_tol: float = _DEFAULT_SLACK_TOL_NS) -> Dict[str, object]:
@@ -567,6 +874,7 @@ def evaluate(project: Path,
     evidence table under `corners`, whatever the verdict."""
     decl = read_declarations(project)
     records = read_records(project, decl)
+    axes = read_axis_evidence(project, decl)
 
     declared: List[Dict[str, str]] = decl.get("declared") or []   # type: ignore[assignment]
     available: List[Dict[str, str]] = decl.get("available") or []  # type: ignore[assignment]
@@ -662,6 +970,7 @@ def evaluate(project: Path,
                         "a sign-off corner set)"],
             "corners": table, "primary_corner": primary,
             "declaration_sources": decl.get("sources"),
+            "axis_evidence": axes,
             "slack_tol_ns": slack_tol, "rules_violated": [],
         }
 
@@ -758,20 +1067,134 @@ def evaluate(project: Path,
             f"{', '.join(sorted(set(signoff_violated)))} VIOLATED — a typ-only "
             f"'MET' is a MISLEADING PASS and does not satisfy this run's timing")
 
+    # ---- R4: a multi-corner claim needs multiple corner LIBRARIES ----------
+    # The degradation itself is designed and legitimate; the silence is not.
+    # `degraded_disclosed` collects collapses that were honestly recorded and
+    # make no multi-corner claim — those set SINGLE_CORNER_ONLY, not FAIL.
+    # R4 is judged at RUN level, not per axis. A single-library RC axis is NOT
+    # a degradation — the RC axis varies parasitics, and one process library
+    # across its corners is correct by design. The degradation is when the RUN
+    # AS A WHOLE reports several corners while never analysing more than one
+    # distinct library on ANY axis. Judging per axis would label every healthy
+    # run degraded, which is the mirror-image of the defect.
+    degraded_disclosed: List[str] = []
+    claiming = [ax for ax in axes if ax.get("multi_corner_claim")]
+    unrecorded = [ax for ax in claiming if not ax.get("resolution_recorded")]
+    all_libs = {lib for ax in axes
+                for lib in (ax.get("liberty_by_corner") or {}).values()}
+    corners_reported = sum(int(ax.get("reported_corner_count") or 0)
+                           for ax in axes)
+
+    if claiming and unrecorded:
+        rules.append("R4_LIBRARY_RESOLUTION_UNRECORDED")
+        for ax in unrecorded:
+            findings.append(
+                f"R4 the {ax['axis']} axis claims multi-corner sign-off "
+                f"({ax['claim_source']}) but "
+                f"{ax.get('report') or 'the timing record'} records NO "
+                f"corner-to-liberty resolution, so a run that read N distinct "
+                f"corner libraries is indistinguishable from one that read the "
+                f"SAME library N times — the multi-corner claim is "
+                f"UNVERIFIABLE from its own record")
+    elif claiming and corners_reported >= 2 and len(all_libs) <= 1:
+        # Several corners reported, one library analysed anywhere in the run.
+        groups = [g for ax in axes
+                  for g in (ax.get("collapsed_groups") or [])]
+        detail = "; ".join(
+            f"{', '.join(g['corners'])} all resolved to "                # type: ignore[index]
+            f"{Path(str(g['liberty'])).name}" for g in groups)           # type: ignore[index]
+        why = next((str(ax["unresolved_reason"]) for ax in axes
+                    if ax.get("unresolved_reason")), None)
+        missing = sorted({str(c) for ax in axes
+                          for c in (ax.get("unresolved_corners") or [])})
+        why_s = why or "the run records no reason"
+        missing_s = (f"; corner libraries that could NOT be resolved: "
+                     f"{', '.join(missing)}" if missing else "")
+        disclosed = any(ax.get("collapse_disclosed") for ax in axes)
+        shared = f" — {detail}" if detail else ""
+        if not disclosed:
+            rules.append("R4_MULTI_CORNER_CLAIM_UNSUPPORTED")
+            findings.append(
+                f"R4 the run reports {corners_reported} corners but analysed "
+                f"only {len(all_libs)} distinct corner library{shared}, while "
+                f"claiming multi-corner sign-off ({claiming[0]['claim_source']}) "
+                f"and NOWHERE disclosing the degradation. Reporting "
+                f"{corners_reported} corners backed by one library is a FALSE "
+                f"CLAIM regardless of intent. Why the others could not be "
+                f"resolved: {why_s}{missing_s}")
+        else:
+            degraded_disclosed.append(
+                f"SINGLE-CORNER DEGRADATION: {corners_reported} corners "
+                f"reported, {len(all_libs)} distinct corner library analysed "
+                f"across every sign-off axis{shared}. Why the others could not "
+                f"be resolved: {why_s}{missing_s}. The run DISCLOSES this, and "
+                f"a PDK that ships one library cannot do better — so it is not "
+                f"a FAIL. But it is NOT multi-corner sign-off and must not be "
+                f"read as one: setup and hold were not separated by process, so "
+                f"a violation that appears only at an unanalysed corner CANNOT "
+                f"be seen in this record")
+
+    # ---- R5: DRV (max_slew / max_capacitance / max_fanout) must be surfaced -
+    for ax in axes:
+        drv = ax.get("drv")
+        if not isinstance(drv, dict) or not ax.get("report"):
+            continue
+        axis, rpt = str(ax["axis"]), str(ax["report"])
+        if not drv.get("queried"):
+            rules.append("R5_DRV_UNQUERIED")
+            why = (f" (the query errored: {drv['query_error']})"
+                   if drv.get("query_error") else
+                   " — no report_check_types output and no check-types marker")
+            findings.append(
+                f"R5 {rpt} ({axis} axis) carries sign-off timing but OpenSTA "
+                f"was never asked for DRV (max_slew / max_capacitance / "
+                f"max_fanout){why}. An unqueried DRV limit is indistinguishable "
+                f"from a met one, so this record cannot show a slew violation "
+                f"even if every net has one")
+            continue
+        viol: Dict[str, int] = drv.get("violations") or {}   # type: ignore[assignment]
+        if viol:
+            rules.append("R5_DRV_VIOLATION")
+            pretty = ", ".join(f"{k} x{v}" for k, v in sorted(viol.items()))
+            findings.append(
+                f"R5 {rpt} ({axis} axis) reports {drv['total']} DRV violation"
+                f"{'' if drv['total'] == 1 else 's'}: {pretty} — design-rule "
+                f"violations are sign-off violations and are surfaced here, "
+                f"not left in the report body for nobody to read")
+
     ordered = [r for r in ("R1_INCOMPLETE_CORNER_RECORD",
                            "R2_DECLARED_BUT_UNREPORTED",
-                           "R3_SIGNOFF_CORNER_VIOLATION") if r in rules]
-    passed = not ordered
+                           "R3_SIGNOFF_CORNER_VIOLATION",
+                           "R4_MULTI_CORNER_CLAIM_UNSUPPORTED",
+                           "R4_LIBRARY_RESOLUTION_UNRECORDED",
+                           "R5_DRV_UNQUERIED",
+                           "R5_DRV_VIOLATION") if r in rules]
+
+    if ordered:
+        verdict = "FAIL"
+    elif degraded_disclosed:
+        # Not a failure, but never a multi-corner sign-off either. The verdict
+        # STRING carries the limitation so no downstream summary can quote a
+        # bare "PASS" and have it read as multi-corner closure.
+        verdict = "SINGLE_CORNER_ONLY"
+    else:
+        verdict = "PASS"
+
+    reasons = findings + degraded_disclosed
+    if not reasons:
+        reasons = [f"timing record complete: every corner the flow declared is "
+                   f"reported for the role it serves, every sign-off corner MET "
+                   f"(tol {slack_tol} ns), each reported corner was analysed "
+                   f"with its own corner library, and DRV was queried and clean"]
     return {
-        "verdict": "PASS" if passed else "FAIL",
-        "status": "PASS" if passed else "FAIL",
-        "reasons": (findings if findings else
-                    [f"timing record complete: every corner the flow declared "
-                     f"is reported for the role it serves, and every sign-off "
-                     f"corner MET (tol {slack_tol} ns)"]),
+        "verdict": verdict,
+        "status": verdict,
+        "reasons": reasons,
         "corners": table,
         "primary_corner": primary,
         "declaration_sources": decl.get("sources"),
+        "axis_evidence": axes,
+        "single_corner_only": bool(degraded_disclosed),
         "slack_tol_ns": slack_tol,
         "rules_violated": ordered,
     }
@@ -800,6 +1223,44 @@ def render_table(res: Dict[str, object]) -> str:
             f"{_f('setup_wns_ns'):>10} {_f('hold_wns_ns'):>10} "
             f"{('n/a' if tns is None else f'{float(tns):.2f}'):>12}  "
             f"{r.get('source') or '-'}")
+
+    # The corner-library resolution and the DRV answer, per axis. Emitted on
+    # every verdict: a degradation that is not visible in the evidence is the
+    # defect R4 exists to stop, and this table is where it becomes visible.
+    axes = res.get("axis_evidence") or []
+    if axes:
+        lines.append("")
+        lines.append("corner-library resolution + DRV (per sign-off axis)")
+        lines.append("-" * len(hdr))
+        for ax in axes:  # type: ignore[union-attr]
+            n_c = ax.get("reported_corner_count") or 0
+            n_l = ax.get("distinct_library_count") or 0
+            claim = "CLAIMS multi-corner" if ax.get("multi_corner_claim") \
+                else "no multi-corner claim"
+            state = ("UNRECORDED" if not ax.get("resolution_recorded")
+                     else "COLLAPSED" if ax.get("collapsed_groups")
+                     else "distinct")
+            lines.append(
+                f"  {str(ax.get('axis')):<8} {claim:<22} "
+                f"corners={n_c} libraries={n_l} [{state}]  "
+                f"{ax.get('report') or '-'}")
+            for corner, lib in sorted(
+                    (ax.get("liberty_by_corner") or {}).items()):
+                lines.append(f"      {corner:<14} <- {lib}")
+            for c in (ax.get("unresolved_corners") or []):
+                lines.append(f"      {str(c):<14} <- UNRESOLVED")
+            drv = ax.get("drv")
+            if isinstance(drv, dict):
+                if not drv.get("queried"):
+                    lines.append("      DRV            NOT QUERIED "
+                                 "(max_slew/max_capacitance/max_fanout)")
+                elif drv.get("violations"):
+                    pretty = ", ".join(
+                        f"{k} x{v}"
+                        for k, v in sorted(drv["violations"].items()))
+                    lines.append(f"      DRV            VIOLATED: {pretty}")
+                else:
+                    lines.append("      DRV            queried, clean")
     return "\n".join(lines)
 
 
@@ -839,12 +1300,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 2
 
     tag = str(res["verdict"])
-    print(f"[{'PASS' if tag in ('PASS', 'NOT_APPLICABLE') else tag}] "
-          f"{_PROGRAM}: {tag}")
+    # SINGLE_CORNER_ONLY exits 0 (the degradation may be unavoidable) but is
+    # NEVER printed as PASS — the banner has to carry the limitation, or the
+    # verdict reads as multi-corner sign-off, which is the defect itself.
+    ok = tag in ("PASS", "NOT_APPLICABLE", "SINGLE_CORNER_ONLY")
+    banner = "PASS" if tag in ("PASS", "NOT_APPLICABLE") else tag
+    print(f"[{banner}] {_PROGRAM}: {tag}")
     print(render_table(res))
     for reason in res.get("reasons", []):  # type: ignore[union-attr]
         print(f"  - {reason}")
-    return 0 if tag in ("PASS", "NOT_APPLICABLE") else 1
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
