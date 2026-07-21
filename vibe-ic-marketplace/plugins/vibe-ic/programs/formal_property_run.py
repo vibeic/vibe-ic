@@ -65,6 +65,81 @@ _ENGINE_RE = re.compile(r"engine_\d+:\s*(?P<engine>abc\s+\w+|smtbmc.*|btor.*|"
 _CEX_FRAME_RE = re.compile(r"asserted in frame (?P<frame>\d+)", re.IGNORECASE)
 _SBY_SIG_RE = re.compile(r"\bSBY\b|symbiyosys|smtbmc|engine_\d", re.IGNORECASE)
 
+# ── environment reachability (#211) ────────────────────────────────────────
+# "The proof engine was never reached" and "the proof ran and was
+# inconclusive" are DIFFERENT facts. The pre-fix shape collapsed them: an
+# unreachable engine produced `verdict: INCONCLUSIVE` with one UNKNOWN
+# property row PER .sby TASK — rows manufactured from the CONFIG, since the
+# transcript was a single docker error line. That is a proof-strength claim
+# made on zero proof evidence, and it left whoever had to fix the host with
+# no capability name, no search location and no remedy.
+#
+# Each signature below is a TOOL/RUNTIME output shape (docker CLI, shell
+# not-found, our own FileNotFoundError note) — never a chip or design
+# literal, so the classification is chip-AGNOSTIC.
+_ENV_GAP_SIGNATURES = (
+    # (regex, missing_capability, remedy_template)
+    (re.compile(r"No such container:\s*(?P<detail>\S+)", re.IGNORECASE),
+     "docker container",
+     "the EDA container named {searched_container!r} is not running — start "
+     "it (docker start {searched_container!r}) or pass --container with the "
+     "name of a running vibeic-eda container (docker ps)"),
+    (re.compile(r"Cannot connect to the Docker daemon|"
+                r"docker daemon is not running|"
+                r"permission denied while trying to connect to the Docker",
+                re.IGNORECASE),
+     "docker daemon",
+     "the Docker daemon is not reachable from this host — start Docker, or "
+     "run with --container '' to invoke sby from the ambient PATH"),
+    (re.compile(r"sby/docker not found on PATH", re.IGNORECASE),
+     "sby",
+     "neither `sby` nor `docker` is on PATH — install SymbiYosys (our fork "
+     "ships in the vibeic-eda image at /usr/local/bin/sby) or run inside "
+     "the container with --container <name>"),
+    (re.compile(r"(?:^|[:\s])sby:?\s+(?:command not found|not found)"
+                r"|command not found:\s*sby", re.IGNORECASE),
+     "sby",
+     "`sby` is not on PATH inside the search location — our SymbiYosys fork "
+     "ships in the vibeic-eda image at /usr/local/bin/sby; verify with "
+     "`docker exec <container> command -v sby`"),
+)
+
+
+def classify_env_gap(transcript: str,
+                     container: Optional[str]) -> Optional[Dict[str, str]]:
+    """Return a structured, ACTIONABLE environment gap when the transcript
+    shows the proof engine was never REACHED, else None.
+
+    Pure: transcript text in, dict out — no process is spawned, so the
+    classification is unit-testable without Docker.
+
+    A gap is only reported when the transcript ALSO carries no SymbiYosys
+    signature: once sby has genuinely spoken, the run is a real (possibly
+    inconclusive) proof and must never be re-labelled an environment gap.
+
+    The returned dict answers the three questions a reader needs to fix the
+    host: WHAT capability is missing, WHERE the flow looked for it, and WHAT
+    to install or stage.
+    """
+    text = transcript or ""
+    if _SBY_SIG_RE.search(text):
+        return None  # sby ran and spoke — not an environment gap
+    searched = (f"docker exec {container} (PATH=/foss/tools/bin:"
+                f"/foss/tools/yosys/bin:$PATH)" if container
+                else "ambient PATH of the calling shell")
+    for rx, capability, remedy in _ENV_GAP_SIGNATURES:
+        m = rx.search(text)
+        if not m:
+            continue
+        return {
+            "missing_capability": capability,
+            "searched": searched,
+            "searched_container": container or "",
+            "remedy": remedy.format(searched_container=container or ""),
+            "tool_message": (m.group(0) or "").strip()[:300],
+        }
+    return None
+
 # ── .sby config parsing (per-task mode/depth/engine) ───────────────────────
 _SECTION_RE = re.compile(r"^\[(?P<name>[\w-]+)\]\s*$")
 # a line inside a section may be task-scoped: `task: value` or `~task: value`
@@ -562,9 +637,24 @@ def detect_engines(container: Optional[str]) -> Dict[str, bool]:
     container (impure). `abc` (via yosys/sby) is always present. Used so an
     `--engine-backend btor|amulet` request can be honoured only when the engine
     truly exists — otherwise the program says so instead of faking a proof."""
-    avail: Dict[str, bool] = {"abc": True}
+    # #211 — `abc` used to be hardcoded True and reported as available even
+    # when the probe itself could not run (nonexistent container, no Docker).
+    # An availability map is EVIDENCE about the environment; asserting a tool
+    # is present in an environment we could not reach is a claim with no
+    # evidence behind it.
+    #
+    # `abc` is NOT a standalone binary in the image — it ships bundled inside
+    # yosys/sby, so `command -v abc` legitimately misses it. Its availability
+    # is therefore derived from the carrier (`sby`/`yosys`) actually being
+    # found, which is exactly the condition under which sby can drive
+    # `abc pdr`. That keeps the report honest in BOTH directions: no
+    # fabricated presence when the environment is unreachable, and no false
+    # absence when abc is genuinely usable.
+    carriers = ("sby", "yosys")
+    probe_tools = carriers + _DATAPATH_ENGINES
     probe = "; ".join(f"command -v {t} >/dev/null 2>&1 && echo {t}"
-                      for t in _DATAPATH_ENGINES)
+                      for t in probe_tools)
+    reachable = True
     try:
         if container:
             cmd = ["docker", "exec", container, "bash", "-lc", probe]
@@ -572,10 +662,18 @@ def detect_engines(container: Optional[str]) -> Dict[str, bool]:
             cmd = ["bash", "-lc", probe]
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         found = set((p.stdout or "").split())
+        # A nonzero rc with NO tool echoed means the shell itself never ran
+        # (e.g. "No such container") — the probe result is not evidence.
+        if p.returncode != 0 and not found:
+            reachable = False
     except (subprocess.TimeoutExpired, FileNotFoundError):
         found = set()
-    for t in _DATAPATH_ENGINES:
-        avail[t] = t in found
+        reachable = False
+    avail: Dict[str, bool] = {t: (reachable and t in found)
+                              for t in _DATAPATH_ENGINES}
+    # abc is usable exactly when its carrier toolchain was genuinely found.
+    avail["abc"] = reachable and bool(found & set(carriers))
+    avail["_env_reachable"] = reachable
     return avail
 
 
@@ -735,6 +833,46 @@ def run(project: Path, harness: Optional[Path] = None,
     log_path = formal_dir / f"{sby_path.stem}.sby.log"
     log_path.write_text(transcript)
 
+    # 2b) #211 — the proof ENGINE was never reached ---------------------------
+    # Distinguished from an inconclusive proof: nothing ran, so there is no
+    # proof strength to report and no property row to emit. We write an
+    # ENV_UNAVAILABLE manifest that NAMES the missing capability, WHERE the
+    # flow looked, and the REMEDY, so the gap is actionable instead of a dead
+    # end. This is strictly NOT greener: `all_proved` stays False, no
+    # `results.json` proof artifact is produced, so Step 5's required outputs
+    # remain absent and the gate still refuses to pass.
+    env_gap = classify_env_gap(transcript, container)
+    if env_gap is not None:
+        env_manifest = {
+            "program": "formal_property_run",
+            "verdict": "ENV_UNAVAILABLE",
+            "all_proved": False,
+            "property_count": 0,
+            "properties": [],
+            "fallback_skill": "formal-verify",
+            "env_gap": env_gap,
+            "reason": (
+                f"formal proof engine unreachable: "
+                f"{env_gap['missing_capability']} not available at "
+                f"{env_gap['searched']} — {env_gap['remedy']}. "
+                f"Tool said: {env_gap['tool_message']}. "
+                f"NOTHING was proved and nothing was refuted; this is an "
+                f"ENVIRONMENT gap, not a design defect and not an "
+                f"inconclusive proof."
+            ),
+            "sby": str(sby_path.relative_to(project)),
+            "evidence": str(log_path.relative_to(project)),
+            "engine_availability": engine_availability,
+        }
+        # Written under its OWN name — never `results.json`, which is the
+        # proof-evidence artifact the Step-5 gate consumes. A run that never
+        # reached the engine must not leave anything that looks like a proof.
+        (formal_dir / "formal_env_unavailable.json").write_text(
+            json.dumps(env_manifest, indent=2, ensure_ascii=False) + "\n")
+        _write_env_gap_report(formal_dir, env_manifest)
+        env_manifest["rc"] = 3
+        return env_manifest
+
     # 3) parse + build results ----------------------------------------------
     cfg = parse_sby_config(sby_path.read_text())
     lp = parse_sby_log(transcript, sby_stem=sby_path.stem, seed=cfg)
@@ -778,6 +916,47 @@ def run(project: Path, harness: Optional[Path] = None,
         2 if results["verdict"] == "SKIPPED-CONDITION" else 1)
     results["rc"] = rc
     return results
+
+
+def _write_env_gap_report(formal_dir: Path, manifest: dict) -> None:
+    """#211 — the human-readable face of an ENV_UNAVAILABLE formal step.
+
+    Answers the three questions that make an environment gap actionable:
+    what capability is missing, where the flow looked for it, and what to
+    install or stage. `ENV_UNAVAILABLE` with no detail is a dead end for
+    whoever has to fix the host.
+    """
+    gap = manifest.get("env_gap") or {}
+    lines = [
+        "# Formal proof — ENVIRONMENT UNAVAILABLE",
+        "",
+        "**No proof ran.** The formal engine was never reached, so there is "
+        "no proof result — neither a pass nor a counterexample.",
+        "",
+        "| what | value |",
+        "|------|-------|",
+        f"| missing capability | `{gap.get('missing_capability', '?')}` |",
+        f"| where the flow looked | `{gap.get('searched', '?')}` |",
+        f"| tool message | `{gap.get('tool_message', '?')}` |",
+        "",
+        "## Remedy",
+        "",
+        str(gap.get("remedy", "?")),
+        "",
+        "## Why this is not a proof verdict",
+        "",
+        "- `all_proved` is **false** and no `results.json` was written — "
+        "Step 5's proof evidence is absent, so the gate still refuses to "
+        "pass this step.",
+        "- This state is NOT `INCONCLUSIVE`: an inconclusive result means "
+        "the solver ran and did not converge. Here the solver never started.",
+        "- Waiving this step requires a reviewed `waivers.json` entry with a "
+        "ticket and `review_required: true`. A waiver is OPEN WORK, never a "
+        "pass, and it never satisfies a downstream step that genuinely "
+        "depends on formal results.",
+    ]
+    (formal_dir / "formal_env_unavailable.md").write_text(
+        "\n".join(lines) + "\n")
 
 
 def _write_report(formal_dir: Path, results: dict) -> None:

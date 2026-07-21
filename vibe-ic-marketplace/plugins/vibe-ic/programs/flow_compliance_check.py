@@ -4190,7 +4190,26 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
 # inserted at 28, DFM at 35, downstream shifted; HTOL at 44). The pre-v2.3 map
 # carried off-by-one legacy ids (drc→29 while PV was 30, ir_drop→23
 # while IR was 24, …) — fixed wholesale here, single source = the YAML.
+#: #211 — ENV_UNAVAILABLE waiver entries that were REJECTED (not bound to a
+#: step) during the last `_load_waivers` call, each with the reason and the
+#: remedy. Surfaced as report advisories so a rejected waiver is visible
+#: instead of silently discarded. Populated by `_load_waivers`, which clears
+#: it on entry so repeated calls in one process do not accumulate.
+_ENV_WAIVER_REJECTIONS: List[str] = []
+
+
 _ENV_UNAVAILABLE_STEP_NAME_TO_ID: Dict[str, Any] = {
+    # #211 — the formal (Step 5) role-names. Their ABSENCE was itself the
+    # defect: an ENV_UNAVAILABLE waiver naming `formal` matched nothing here,
+    # hit the `sid is None -> continue` branch, and was dropped WITHOUT A
+    # TRACE — the step then reported a bare MISSING that never mentioned the
+    # formal engine, the waiver, or the ticket. Role names only, never a chip
+    # or vendor literal.
+    "formal":                  5,
+    "formal_verify":           5,
+    "formal_verification":     5,
+    "formal_proof":            5,
+    "formal_property_proof":   5,
     "fpga_compile":         6,
     "fpga_early_prototype": 6,
     "fpga_onboard_test":    39,
@@ -4532,6 +4551,7 @@ def _refuse_stale_waivers(project: Path, out: Dict[Any, Dict[str, Any]]) -> None
 def _load_waivers(project: Path, max_step: int = 40) -> Dict[int, Dict[str, str]]:
     """Load waivers AFTER validating schema. Returns {} if file missing.
     Raises SystemExit(1) if waivers.json exists but is malformed/rubber-stamped."""
+    _ENV_WAIVER_REJECTIONS.clear()  # #211 — fresh per call
     wpath = project / "waivers.json"
     if not wpath.exists():
         # v0.2.103 (#496) — even with no waivers.json, the disclosed
@@ -4612,6 +4632,14 @@ def _load_waivers(project: Path, max_step: int = 40) -> Dict[int, Dict[str, str]
         # waivers_schema_check.py pass will surface the omission), and
         # the step will FAIL normally. This is the "missing the waiver
         # entry still FAILs" half of the contract.
+        # #211 — a REJECTED ENV_UNAVAILABLE waiver must never vanish. Every
+        # `continue` below used to drop the entry silently: the step then
+        # reported a bare MISSING with no mention of the waiver, the missing
+        # capability, or the ticket, and the person holding the report had no
+        # way to learn a waiver had even been attempted. Rejections are now
+        # collected and surfaced as named advisories. Rejection still means
+        # the step is NOT waived and strict mode still fails it — this makes
+        # the report LOUDER, never greener.
         for w in data.get("waivers", []) or []:
             if not isinstance(w, dict):
                 continue
@@ -4621,16 +4649,43 @@ def _load_waivers(project: Path, max_step: int = 40) -> Dict[int, Dict[str, str]
             step_name = (w.get("step") or "").strip().lower()
             sid = _ENV_UNAVAILABLE_STEP_NAME_TO_ID.get(step_name)
             if sid is None:
+                _ENV_WAIVER_REJECTIONS.append(
+                    f"ENV_UNAVAILABLE waiver for step {step_name!r} was "
+                    f"NOT applied: that step role-name is not recognised, so "
+                    f"the waiver could not be bound to a flow step and the "
+                    f"step is reported on its own merits. Use one of the "
+                    f"known role names ("
+                    + ", ".join(sorted(_ENV_UNAVAILABLE_STEP_NAME_TO_ID))
+                    + ")."
+                )
                 continue
-            # Required attestation fields
+            # Required attestation fields. An ENV_UNAVAILABLE waiver is a
+            # claim that an environment could not be reached; it is only
+            # honoured when it is ACTIONABLE and reviewable.
             ticket = w.get("ticket")
             reviewer_required = w.get("review_required") is True
             evidence = w.get("evidence") or []
             rationale = (w.get("rationale") or "").strip()
-            if not (isinstance(ticket, str) and ticket
-                    and reviewer_required
-                    and isinstance(evidence, list) and evidence
-                    and len(rationale) >= 40):
+            missing: List[str] = []
+            if not (isinstance(ticket, str) and ticket):
+                missing.append("a non-empty `ticket`")
+            if not reviewer_required:
+                missing.append("`review_required: true`")
+            if not (isinstance(evidence, list) and evidence):
+                missing.append("a non-empty `evidence` list")
+            if len(rationale) < 40:
+                missing.append(
+                    "a `rationale` of at least 40 characters naming the "
+                    "missing capability, where the flow looked for it, and "
+                    "what to install or stage")
+            if missing:
+                _ENV_WAIVER_REJECTIONS.append(
+                    f"ENV_UNAVAILABLE waiver for step {step_name!r} "
+                    f"(flow step {sid}) was NOT applied — it is missing "
+                    + "; ".join(missing)
+                    + ". The step is reported on its own merits until the "
+                      "waiver is completed."
+                )
                 continue
             if sid in out:
                 continue  # explicit waived_steps entry takes precedence
@@ -5966,6 +6021,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # v0.100 H2: advisory — warn if post-route STA passed single-corner only
     advisories: List[str] = []
+
+    # #211 — a rejected ENV_UNAVAILABLE waiver is reported, never dropped.
+    # Without this the step showed a bare MISSING and the reader could not
+    # tell that a waiver had been attempted, let alone why it did not apply.
+    advisories.extend(_ENV_WAIVER_REJECTIONS)
     step20_pass = any(r.id == 20 and r.status == "PASS" for r in results)
     has_mcorner = bool(
         list(project.glob("sta/mcorner_*.rpt"))

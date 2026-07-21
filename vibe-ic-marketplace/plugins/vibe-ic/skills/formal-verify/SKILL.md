@@ -40,6 +40,33 @@ transcript, and writes `formal/results.json` + `<top>_report.md` that the
 task shows `DONE (PASS)`; rc 2 = honest NOT_APPLICABLE, never a fake). Without
 a harness the runner's `formal_not_run.json` sentinel stays the honest SKIP.
 
+**When the engine cannot be REACHED (#211).** "The proof engine was never
+reached" and "the proof ran and was inconclusive" are different facts and are
+reported differently. If `sby` is unreachable (container not running, Docker
+down, `sby` not on PATH) the program writes
+`phase2/stage1/formal/formal_env_unavailable.json` + `.md` with
+`verdict: ENV_UNAVAILABLE` and an `env_gap` block naming **what** capability is
+missing, **where** the flow looked for it, and **what to install or stage** —
+and it writes NO `results.json`, so nothing that looks like a proof enters the
+record. It never reports `INCONCLUSIVE`, which is a claim about solver
+convergence that a run with no transcript cannot support.
+
+Before waiving Step 5, CHECK THE CLAIM: our SymbiYosys fork ships inside the
+`vibeic-eda` image at `/usr/local/bin/sby`, so on a provisioned host there is
+usually nothing to waive — verify with
+`docker exec <container> command -v sby`. Passing the wrong `--container` name
+is a DISCOVERY bug, not an environment gap, and the fix is to point at a
+running container (`docker ps`), not to file a waiver.
+
+A genuine gap is waived through `waivers.json` with
+`step: "formal"`, `verdict_tier: "ENV_UNAVAILABLE"`, a `ticket`,
+`review_required: true`, non-empty `evidence`, and a `rationale` that names the
+capability, the search location and the remedy. An entry missing any of those,
+or naming an unknown step role, is REJECTED and reported as an advisory in the
+compliance output — it is never silently dropped, and the step stays unwaived.
+A waiver is open work: it never counts as a pass, and it defers only the steps
+that genuinely declare a `blocks_on` dependency on formal results.
+
 **Engine recipe (no external SMT solver needed).** The container ships NO
 z3/yices/boolector — do NOT dead-end on that: SBY's built-in **ABC engines**
 need none (`aigsmt none`): `abc pdr` proves safety properties UNBOUNDED;
