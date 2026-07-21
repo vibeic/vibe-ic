@@ -34,7 +34,7 @@ plugins/
 
 Naming: `partner-<vendor>-<topic>` (lowercase). Examples:
 - `partner-commercial_foundry-commercial_pdk`
-- `partner-emory-otp-eo0128x8`
+- `partner-memvendor-otp128x8`
 - `partner-tsmc-65nm`
 - `partner-acme-tester-md9000`
 - `community-class-rfic`
