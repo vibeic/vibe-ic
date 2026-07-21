@@ -458,8 +458,35 @@ def finalize_after_slang_retry(parsed: Dict, slang_retry_failed: bool) -> Dict:
     unavailable). Once slang — the most capable frontend — has ALSO failed to
     elaborate the gold, the design is not excused as a built-in-reader tool gap;
     a genuine elaboration error must NOT get a free non-blocking pass. PURE; a
-    no-op when slang was not attempted or slang succeeded."""
+    no-op when slang was not attempted or slang succeeded.
+
+    EXCEPTION — the #192 hard-macro staging gap is NOT a gold-frontend failure.
+    That INCONCLUSIVE is raised when the GATE side's `hierarchy -check` aborts
+    because the netlist instantiates a hard macro whose definition was never
+    staged into the miter. The gold RTL elaborated fine; no frontend, however
+    capable, can supply a module that is not there, so "slang also failed" is
+    not evidence about this design at all. Downgrading it re-introduces exactly
+    the harm #192 removed — a comparison that never started, booked as a proven
+    non-equivalence — and worse, the downgrade's own text tells the operator to
+    "fix the elaboration error", pointing at RTL that is provably fine.
+
+    Measured 2026-07-22 on a design carrying a `pdk_local` SRAM macro: `lec.json`
+    came out `verdict=FAIL`, `compared_points=0`, explanation "Neither
+    read_verilog -sv nor the read_slang SV-2017 frontend could elaborate the
+    gold", while that same JSON carried
+    `undefined_macro_modules: ["<the macro>"]` and `lec.rpt` ended on the
+    gate-side line `ERROR: Module '\\<macro>' referenced in module '\\<top>' in
+    cell '\\<inst>' is not part of the design.` — after the gold had already run
+    58 passes. The classification was right and the finalizer overwrote it.
+
+    Keyed on the recorded `undefined_macro_modules`, so it is chip-, macro- and
+    PDK-AGNOSTIC, and it cannot excuse a real gold elaboration failure (which
+    records no undefined macro)."""
     if not slang_retry_failed or parsed.get("verdict") != "INCONCLUSIVE":
+        return parsed
+    if parsed.get("undefined_macro_modules"):
+        # Gate-side hard-macro staging gap — nothing to do with the gold
+        # frontend. Keep the #192 INCONCLUSIVE and its remediation.
         return parsed
     out = dict(parsed)
     out["verdict"] = "FAIL"
