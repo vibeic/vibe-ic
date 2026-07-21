@@ -472,6 +472,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `lesson_consumption_check` | any | — | verify a genre-matched captured lesson was CONSUMED, not merely staged. |
 | `lessons_corpus_consistency_check` | any | — | ORGANIC #741 |
 | `level_shifter_required_check` | any | — | M2 gate (substance-verifying). |
+| `level_hysteresis_flag_oracle_check` | any | — | prompt-derived hysteresis-flag oracle (dual-candidate anchor filter + up/down walk sim). |
 | `lfsr_synth` | any | — | deterministic SOLVER for the LINEAR-FEEDBACK-SHIFT-REGISTER |
 | `lin_protocol_synth` | any | v0.1.84 | LIN-class protocol synth helper. |
 | `literal_verdict_keyword_check` | any | — | anti-fabrication gate (v1.6.38). |
@@ -1407,6 +1408,7 @@ _(no programs in this group)_
 - `lesson_consumption_check` — verify a genre-matched captured lesson was CONSUMED, not merely staged.
 - `lessons_corpus_consistency_check` — ORGANIC #741
 - `level_shifter_required_check` — M2 gate (substance-verifying).
+- `level_hysteresis_flag_oracle_check` — prompt-derived hysteresis-flag oracle (dual-candidate anchor filter + up/down walk sim).
 - `lfsr_synth` — deterministic SOLVER for the LINEAR-FEEDBACK-SHIFT-REGISTER
 - `lin_protocol_synth` — LIN-class protocol synth helper.  _[v0.1.84]_
 - `literal_verdict_keyword_check` — anti-fabrication gate (v1.6.38).
