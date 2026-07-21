@@ -12663,9 +12663,25 @@ def _lvs_extraction_input_capability(container: str, magicrc: str,
     rc_text = _cat(magicrc)
     if rc_text is None:
         return None
-    raw = _eicap.tech_path_from_magicrc_text(rc_text)
+    raw, _why, _verbatim = _eicap.tech_load_directive(rc_text)
     if raw is None:
-        return None
+        # NOT a silent pass. Both unresolvable cases used to return None here,
+        # which skipped the entire pre-flight with no error and no artifact —
+        # a magicrc whose `tech load` goes through a Tcl variable disabled the
+        # check completely, and downstream that silence is indistinguishable
+        # from "the check ran and found nothing wrong". Report it as a finding
+        # instead: inconclusive (we still cannot judge the technology, and
+        # guessing would risk a false BLOCKED) but never invisible.
+        _detail = (f"`tech load {_verbatim}` resolves through an unexpanded "
+                   f"Tcl variable" if _why == _eicap.TECH_LOAD_UNEXPANDED
+                   else "no `tech load` directive present")
+        return _eicap.CapabilityReport(
+            path=magicrc, usable=True, inconclusive=True,
+            reason=_why,
+            note=(f"extraction pre-flight DID NOT RUN: {_detail} in {magicrc}, "
+                  f"so the technology file could not be identified from the rc "
+                  f"— capability not asserted and the flow proceeds unchanged, "
+                  f"but this run carries NO pre-flight evidence."))
     tech_path = raw if raw.startswith("/") else str(
         PurePosixPath(magicrc).parent / raw)
     tech_text = _cat(tech_path)
@@ -12673,7 +12689,18 @@ def _lvs_extraction_input_capability(container: str, magicrc: str,
         tech_path += ".tech"
         tech_text = _cat(tech_path)
     if tech_text is None:
-        return None
+        # The rc names a technology file that is NOT THERE. The `test -f` gate
+        # upstream proves the magicrc exists; it never followed the rc to the
+        # technology it loads. Magic cannot load a file that does not exist, so
+        # this is positive evidence of incapability, not an unknown — BLOCKED.
+        return _eicap.CapabilityReport(
+            path=tech_path, usable=False, inconclusive=False,
+            missing=[{"capability": "the technology file itself",
+                      "sections": "-",
+                      "state": f"named by {magicrc} but not present",
+                      "needed_for": "tech load — Magic cannot start without it"}],
+            reason=(f"the magicrc {magicrc} loads {tech_path}, which does not "
+                    f"exist; Magic can resolve no layer at all without it"))
     # The layers THIS design is routed on — read from the tech LEF the run is
     # already using, so the cross-check is design-derived, not a fixed list.
     design_layers = None
@@ -12698,6 +12725,45 @@ def _lvs_extraction_input_capability(container: str, magicrc: str,
     return _eicap.check_magic_tech(
         tech_text, _MAGIC_EXT2SPICE_TCL, path=tech_path,
         design_layers=design_layers, resolver=_include)
+
+
+def _write_extraction_preflight(project: Path, magicrc: str,
+                                cap: Optional["_eicap.CapabilityReport"]
+                                ) -> Optional[str]:
+    """Persist the extraction pre-flight's own scope to reports/phase3/.
+
+    Always written, including when the pre-flight could NOT be performed, so a
+    run that was never checked is distinguishable from a run that was checked
+    and came back clean. `performed` is the field that carries that difference.
+    chip-AGNOSTIC."""
+    try:
+        rpt_dir = _pl.reports_phase3_dir(project)
+        rpt_dir.mkdir(parents=True, exist_ok=True)
+        path = rpt_dir / "lvs_extraction_preflight.json"
+        if cap is None:
+            payload: Dict[str, Any] = {
+                "performed": False,
+                "magicrc": magicrc,
+                "reason": "magicrc_unreadable",
+                "note": ("the magicrc could not be read here, so no extraction "
+                         "input was judged; flow proceeds unchanged"),
+            }
+        else:
+            payload = {
+                "performed": not cap.inconclusive,
+                "magicrc": magicrc,
+                "verdict": ("BLOCKED" if not cap.usable
+                            else "INCONCLUSIVE" if cap.inconclusive
+                            else "USABLE"),
+            }
+            payload.update(cap.to_dict())
+        path.write_text(json.dumps(payload, indent=2) + "\n")
+        try:
+            return str(path.relative_to(project))
+        except ValueError:
+            return str(path)
+    except OSError:
+        return None
 
 
 def step_lvs(project: Path, top: str, pdk: PdkConfig,
@@ -12879,6 +12945,11 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
     # the flow proceeds EXACTLY as it does today, so a complete tech file and
     # a matching design still PASS, and a real mismatch still FAILs.
     _cap = _lvs_extraction_input_capability(container, magicrc, pdk)
+    # A checker's SCOPE is a claim in itself. Persist what the pre-flight
+    # actually examined — and, just as importantly, when it could not run —
+    # so "no finding" is never mistaken downstream for "looked and found
+    # nothing". Written for every outcome: usable, inconclusive, or blocked.
+    _write_extraction_preflight(project, magicrc, _cap)
     if _cap is not None and not _cap.usable and not _cap.inconclusive:
         _caps_missing = ", ".join(_cap.missing_capability_names)
         verdict = _write_lvs_verdict(
