@@ -78,9 +78,30 @@ PDK_POWER_NETS: Dict[str, List[str]] = {
         "vddio", "vssio",
         "VPWR", "VGND", "VPB", "VNB",
     ],
-    # GF180 — single-domain VDD/VSS plus per-cell PG.
-    "gf180mcuC": ["VDD", "VSS", "VPWR", "VGND"],
-    "gf180mcuD": ["VDD", "VSS", "VPWR", "VGND"],
+    # GF180 (GlobalFoundries 180nm MCU) — single-domain VDD/VSS rails plus the
+    # per-cell WELL-BIAS pins VNW (n-well tie) / VPW (p-well tie).
+    #
+    # The prior list carried "VPWR"/"VGND", which are SKY130 names that DO NOT
+    # EXIST anywhere in gf180mcu. Measured on the shipped PDK
+    # (`gf180mcu_fd_sc_mcu7t5v0.lef`, vibeic-eda:0.2.24): the complete set of
+    # pins with `USE POWER`/`USE GROUND` across the whole std-cell library is
+    # exactly {VDD, VNW, VPW, VSS} — e.g. `inv_1` declares VDD (Metal1),
+    # VNW (Nwell), VPW (Pwell), VSS (Metal1). So the old list globalised two
+    # names that match nothing and MISSED the two that carry the well bias.
+    #
+    # Consequence: the real per-instance VNW/VPW well nets were never
+    # globalised, netgen saw a flat `<inst>/VNW` net per cell
+    # ("Net: _NNN_/VNW | (no matching net)") and the POWER-AWARE compare
+    # reported "Netlists do not match". It was MASKED on the plain compare,
+    # which drops the wells entirely.
+    #
+    # Globalising the ACTUAL gf180 PG/well names lets the per-cell VNW/VPW pins
+    # collapse to single nets that match the power-aware schematic (the wells
+    # are tied to the rails at the PDN; the routed DEF's VDD SPECIALNET carries
+    # the VNW pins). This restores THIS PDK's own pin semantics — it is not a
+    # waiver and it relaxes no gate.
+    "gf180mcuC": ["VDD", "VSS", "VNW", "VPW"],
+    "gf180mcuD": ["VDD", "VSS", "VNW", "VPW"],
     # IHP SG13G2 (open-source 130nm BiCMOS). The PDK's own Magic startup
     # file states the three names authoritatively:
     #     libs.tech/magic/ihp-sg13g2.magicrc
