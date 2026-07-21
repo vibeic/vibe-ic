@@ -1,11 +1,21 @@
 #!/usr/bin/env python3
 """vacuous_testbench_check.py — Phase-2 gate against VACUOUS testbenches.
 
-A vacuous testbench prints a PASS and never drives the design. The scaffolder
-(`testbench_gen.emit_unit_tb`) legitimately emits such a SKELETON — it is meant
-to be replaced with real stimulus. When it is NOT replaced, functional
-verification silently becomes theatre: the sim log says PASS, the DUT was never
-instantiated, and every downstream gate inherits a fabricated green.
+A vacuous testbench prints a PASS and never drives the design. Functional
+verification then silently becomes theatre: the sim log says PASS, the DUT was
+never instantiated, and every downstream gate inherits a fabricated green.
+
+WHERE THEY CAME FROM, AND WHY THIS GATE STILL LOOKS FOR THEM. The scaffolder
+(`testbench_gen.emit_unit_tb`) used to EMIT this shape as a SKELETON meant to be
+replaced with real stimulus; when it was not replaced — which was every time —
+the campaign shipped it as verification. The scaffolder no longer emits it: it
+now instantiates the DUT and asserts a falsifiable post-reset property, or emits
+nothing and says why. That fix is upstream of this gate and does NOT retire it.
+The corpus still holds the files the old scaffolder wrote (they are the record of
+runs that already happened and are not to be rewritten), a testbench can still be
+hand-written into this shape, and a detector whose only justification was one
+known producer is a detector that stops working the moment there is a second.
+The patterns below therefore stay exactly as broad as they were.
 
 WHY A FILENAME GLOB CANNOT FIND THIS. The pre-existing detectors glob
 `*_tb.v` / `tb_*.v` (see testbench_exists_check.TB_PATTERNS). The scaffolder

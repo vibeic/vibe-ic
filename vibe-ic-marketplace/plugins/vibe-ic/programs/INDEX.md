@@ -855,7 +855,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `tb_vcs_only_construct_detect` | any | — | detect VCS/Xcelium-only |
 | `tb_vcs_only_construct_remediate` | any | — | ORGANIC #717 |
 | `testbench_exists_check` | any | — | Deterministic testbench existence and coverage checker. |
-| `testbench_gen` | any | — | emit unit + integration testbench from L10 test_cases. |
+| `testbench_gen` | any | — | emit unit testbenches from L10 test_cases. |
 | `tester_oracle_health_check` | any | v0.45 | Prove the tester works before iterating RTL. |
 | `tester_verdict_frame_decode` | any | — | T1 composability fix |
 | `thermal_screen_check` | any | — | power-density / junction-temperature screen. |
@@ -1805,7 +1805,7 @@ _(no programs in this group)_
 - `tb_vcs_only_construct_detect` — detect VCS/Xcelium-only
 - `tb_vcs_only_construct_remediate` — ORGANIC #717
 - `testbench_exists_check` — Deterministic testbench existence and coverage checker.
-- `testbench_gen` — emit unit + integration testbench from L10 test_cases.
+- `testbench_gen` — emit unit testbenches from L10 test_cases.
 - `tester_oracle_health_check` — Prove the tester works before iterating RTL.  _[v0.45]_
 - `tester_verdict_frame_decode` — T1 composability fix
 - `thermal_screen_check` — power-density / junction-temperature screen.

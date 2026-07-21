@@ -96,8 +96,27 @@ def load_l10(path: str) -> List[Dict[str, Any]]:
     raise ValueError("L10 JSON did not contain a recognisable test-case list")
 
 
+# #209 — a generated TB that drives the DUT but carries NO case oracle marks
+# itself with this literal (emitted by `testbench_gen.ORACLE_NONE_MARKER`). Such
+# a file is a REAL testbench — it instantiates the DUT and can fail — so it must
+# still count as a driver for the #206 vacuity test. But it verifies only the
+# substance floor (no output is X after reset), NOT the case's expected
+# behaviour, so its text must NOT reach the evidence blob: the blob credits a
+# case whenever the case id appears in it, and the case id is this file's own
+# module name. Without this exclusion the #209 fix would silently convert every
+# previously-uncovered case into "covered" — trading a vacuous testbench for
+# vacuous coverage, which is the same lie one layer up.
+_ORACLE_NONE_MARKER = "VIBEIC_TB_ORACLE: NONE"
+
+
 def read_all_tb_text(tb_dir: str) -> Tuple[Dict[str, str], str]:
-    """Return (per-file text map, concatenated blob) of every .v / .sv under tb_dir."""
+    """Return (per-file text map, evidence blob) of every .v / .sv under tb_dir.
+
+    `per_file` holds EVERY testbench (it feeds the #206 substance test: does
+    anything here drive the DUT). The blob holds only files that carry a real
+    case oracle — a self-declared oracle-less scaffold (#209) is excluded, so
+    its presence can never be mistaken for coverage.
+    """
     per_file: Dict[str, str] = {}
     blob_parts: List[str] = []
     for p in sorted(Path(tb_dir).rglob("*")):
@@ -107,7 +126,8 @@ def read_all_tb_text(tb_dir: str) -> Tuple[Dict[str, str], str]:
             except Exception:
                 continue
             per_file[str(p)] = txt
-            blob_parts.append(txt)
+            if _ORACLE_NONE_MARKER not in txt:
+                blob_parts.append(txt)
     return per_file, "\n".join(blob_parts)
 
 
