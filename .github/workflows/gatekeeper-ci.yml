@@ -114,7 +114,7 @@ jobs:
       - name: Install python deps
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest pyyaml
+          python -m pip install pytest pyyaml pytest-timeout
 
       # Resolve the merge base of this change for the diff-/range-based gates.
       # pull_request: github.event.pull_request.base.sha is the base commit.
@@ -208,7 +208,7 @@ jobs:
       - name: Install python deps
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest pyyaml
+          python -m pip install pytest pyyaml pytest-timeout
 
       # Same EDA tool setup as ci.yml: the shape-C / port-rule gates compile
       # fixtures with iverilog, and the pnr.tcl emitter tests eval Tcl in tclsh.
@@ -224,7 +224,7 @@ jobs:
       - name: pytest (plugin tree)
         run: |
           cd "$PLUGIN_ROOT"
-          pytest -q --maxfail=10
+          pytest -q --maxfail=10 --timeout=300 --timeout-method=thread
 
   # -------------------------------------------------------------------------
   # full-suite-milestone: the EXTRA both-tree coverage that ONLY runs on an
@@ -258,7 +258,7 @@ jobs:
       - name: Install python deps
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest pyyaml
+          python -m pip install pytest pyyaml pytest-timeout
 
       - name: Install EDA tools (iverilog + tclsh + yosys + verilator)
         run: |
@@ -268,12 +268,12 @@ jobs:
       - name: pytest (plugin tree)
         run: |
           cd "$PLUGIN_ROOT"
-          pytest -q --maxfail=20
+          pytest -q --maxfail=20 --timeout=300 --timeout-method=thread
 
       - name: pytest (tools tree, if present)
         run: |
           if [ -d tools ] && ls tools/test_*.py >/dev/null 2>&1; then
-            pytest -q tools --maxfail=20
+            pytest -q tools --maxfail=20 --timeout=300 --timeout-method=thread
           else
             echo "no tools/test_*.py — skipping second tree"
           fi

@@ -27,7 +27,7 @@ jobs:
       - name: Install pytest
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest pyyaml
+          python -m pip install pytest pyyaml pytest-timeout
 
       # The plugin suite exercises real EDA paths: the shape-C / port-rule
       # gates compile fixtures with iverilog (gates_atomic.py), the pnr.tcl
@@ -75,10 +75,14 @@ jobs:
           echo "Scanning commit messages in: $RANGE" >&2
           python3 "$CHECK" --repo "$GITHUB_WORKSPACE" --rev-range "$RANGE"
 
+      # --timeout bounds any single test: the suite has helper tests that spawn a
+      # flow_dashboard --web server / subprocesses which can hang a runner
+      # indefinitely (no per-test cap => the whole job blocks to the 6h ceiling).
+      # thread method so a stuck C call / socket accept is still interrupted.
       - name: pytest (plugin)
         run: |
           cd vibe-ic-marketplace/plugins/vibe-ic
-          pytest -q --maxfail=10
+          pytest -q --maxfail=10 --timeout=300 --timeout-method=thread
 
   server-tests:
     name: mcp tests
