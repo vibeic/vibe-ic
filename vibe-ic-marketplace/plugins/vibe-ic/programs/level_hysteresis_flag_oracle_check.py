@@ -303,6 +303,7 @@ def simulate(rtl: Path, tb_text: str) -> Tuple[Optional[List[dict]], str]:
         tb.write_text(tb_text)
         binp = Path(td) / "sim"
         try:
+            # watchdog-exempt: bounded single-file iverilog TB compile with a fixed 120s budget — not an open-ended EDA generator
             c = subprocess.run(["iverilog", "-g2012", "-s", "__lhfo_tb",
                                 "-o", str(binp), str(rtl), str(tb)],
                                capture_output=True, text=True, timeout=120)
@@ -313,6 +314,7 @@ def simulate(rtl: Path, tb_text: str) -> Tuple[Optional[List[dict]], str]:
         if c.returncode != 0:
             return None, "tb compile failed: " + (c.stdout + c.stderr)[-300:]
         try:
+            # watchdog-exempt: bounded compiled-TB sim (fixed walk, ~40 cycles) with a fixed 120s budget
             r = subprocess.run([str(binp)], capture_output=True, text=True,
                                timeout=120, cwd=td)
         except subprocess.TimeoutExpired:
