@@ -52,6 +52,25 @@ and a tech file is never blocked for lacking a capability nothing asked for.
 The command->capability map encodes what MAGIC needs, which is a property of
 the tool and its file format — chip-, design-, and PDK-agnostic.
 
+A capability is NOT satisfied merely by its section being non-empty. Two of the
+three defects that motivated this module survived exactly that reasoning:
+
+  * `lef read` consumes the tech file's `lef` SECTION — the map from
+    LEF-namespace layer names onto Magic types. Modelling the COMMAND while
+    ignoring the SECTION it reads let a tech file with a populated `styles`
+    section and no `lef` section report USABLE, and the run then failed with
+    Magic rejecting each layer name it could not map.
+  * `extract` can be present, non-empty and syntactically valid while carrying
+    only resistance/capacitance rules. Devices come only from `device`
+    statements, so extraction succeeds and emits a netlist with ZERO devices —
+    a compare against nothing.
+
+Hence `Capability.statements`: coverage is checked at the STATEMENT level the
+command actually consumes, not at the section level that merely correlates
+with it. "The section is there" is an adjacent measurement, and a check that
+passes because it measured something adjacent to the question is the failure
+mode this whole module was written to remove.
+
 The design's own layers are the second, design-derived input: `design_layers`
 (read from the tech LEF the run is already using) is cross-checked against the
 types the tech file actually defines, so the check is grounded in what THIS
@@ -96,10 +115,24 @@ class Capability:
     the named tech sections is present AND non-empty. (Magic accepts several
     spellings for some sections across format revisions; naming them all here
     keeps the check from blocking a valid file written in an older dialect.)
+
+    `statements` is an ALL-OF *within* that section: leading keywords that must
+    each appear on some content line. A section can be present and non-empty and
+    still not supply the capability — an `extract` section carrying only
+    resistance and capacitance rules parses perfectly and emits ZERO devices, so
+    "section is non-empty" measures something ADJACENT to "the recipe's needs are
+    met". Statement-level coverage is what the command actually consumes.
+
+    `blocking` False marks a capability that is REPORTED but never terminal: the
+    recipe is degraded without it, yet extraction still produces a netlist, so
+    asserting incapability would risk a false BLOCKED. See the fail-safe note in
+    the module docstring — findings that are not certain must not block.
     """
     name: str            # human-readable capability
     sections: Tuple[str, ...]
     needed_for: str      # the tool command / stage that consumes it
+    statements: Tuple[str, ...] = ()
+    blocking: bool = True
 
 
 # The capability each Magic command consumes from the technology file.
@@ -144,18 +177,58 @@ _DRC_RULES = Capability(
     ("drc",),
     "drc check — design-rule evaluation",
 )
+# `lef read` / `def read` resolve every LAYER name in the LEF/DEF through the
+# tech file's own `lef` SECTION, which maps LEF-namespace names onto Magic
+# types (`routing <type> <lefname>...`, `cut ...`, `masterslice ...`, `obs ...`).
+# Without it Magic has no mapping for the names the file actually carries and
+# rejects them one by one ("Don't know how to parse layer ..."), so the layout
+# is never read and extraction runs on an empty cell.
+#
+# This is a distinct requirement from `types`/`planes`: those declare Magic's
+# OWN type namespace, which can be fully populated while the LEF-name mapping is
+# absent. Modelling the `lef read` COMMAND without modelling the `lef` SECTION
+# it consumes is precisely the adjacent-measurement error.
+_LEF_MAP = Capability(
+    "LEF layer map",
+    ("lef",),
+    "lef read / def read — maps LEF-namespace layer names onto Magic types",
+)
+# `extract` can be present, non-empty and syntactically perfect while carrying
+# only parasitic rules. Devices are emitted ONLY by `device` statements, so
+# without one the extracted netlist has zero transistors and the LVS compare is
+# vacuous — it "passes" a netlist containing nothing to compare.
+_EXTRACT_DEVICES = Capability(
+    "device extraction rules",
+    ("extract",),
+    "extract all / ext2spice lvs — emitting devices into the netlist",
+    statements=("device",),
+)
+# `substrate` names the implicit bulk node each device's substrate terminal ties
+# to. Its absence DEGRADES the netlist (bulk terminals resolve to a default)
+# but devices are still emitted, so this is positive evidence of a defect
+# WITHOUT being proof that extraction cannot run: reported, never terminal.
+_EXTRACT_SUBSTRATE = Capability(
+    "substrate declaration",
+    ("extract",),
+    "ext2spice lvs — the device bulk/substrate terminal",
+    statements=("substrate",),
+    blocking=False,
+)
 
 _MAGIC_COMMAND_CAPABILITIES: Dict[str, Tuple[Capability, ...]] = {
     # layout input
-    "lef":       (_PLANES, _LAYER_DEFS, _STYLES),
-    "def":       (_PLANES, _LAYER_DEFS, _STYLES),
+    "lef":       (_PLANES, _LAYER_DEFS, _STYLES, _LEF_MAP),
+    "def":       (_PLANES, _LAYER_DEFS, _STYLES, _LEF_MAP),
     "gds":       (_PLANES, _LAYER_DEFS, _STYLES, _CIFOUT),
     "cif":       (_PLANES, _LAYER_DEFS, _STYLES, _CIFOUT),
     "load":      (_PLANES, _LAYER_DEFS, _STYLES),
     # extraction
-    "extract":   (_PLANES, _LAYER_DEFS, _STYLES, _CONNECT, _EXTRACT_RULES),
-    "ext2spice": (_LAYER_DEFS, _CONNECT, _EXTRACT_RULES),
-    "ext2sim":   (_LAYER_DEFS, _CONNECT, _EXTRACT_RULES),
+    "extract":   (_PLANES, _LAYER_DEFS, _STYLES, _CONNECT, _EXTRACT_RULES,
+                  _EXTRACT_DEVICES, _EXTRACT_SUBSTRATE),
+    "ext2spice": (_LAYER_DEFS, _CONNECT, _EXTRACT_RULES,
+                  _EXTRACT_DEVICES, _EXTRACT_SUBSTRATE),
+    "ext2sim":   (_LAYER_DEFS, _CONNECT, _EXTRACT_RULES,
+                  _EXTRACT_DEVICES, _EXTRACT_SUBSTRATE),
     # checking
     "drc":       (_DRC_RULES,),
 }
@@ -239,6 +312,24 @@ class TechSection:
                 return False
         return True
 
+    def leading_keywords(self) -> set:
+        """The set of first tokens over this section's content lines.
+
+        Magic's section bodies are keyword-led statements (`device mosfet ...`,
+        `substrate ... `, `resist ...`). Statement-level coverage is checked
+        against this set, so a section can be non-empty and still be shown to
+        lack the specific statement a command consumes.
+        """
+        out: set = set()
+        for raw in self.content_lines:
+            line = _COMMENT_RE.sub("", raw).strip()
+            if line:
+                out.add(line.split()[0].lower())
+        return out
+
+    def has_statement(self, keyword: str) -> bool:
+        return keyword.lower() in self.leading_keywords()
+
 
 _INCLUDE_RE = re.compile(r"^\s*include\s+(?P<name>\S+)\s*$", re.I)
 
@@ -269,6 +360,14 @@ def parse_tech_sections(text: str,
     """
     sections: Dict[str, TechSection] = {}
     current: Optional[TechSection] = None
+
+    def _merge(sub_sections: Dict[str, TechSection]) -> None:
+        for k, v in sub_sections.items():
+            if k in sections:
+                sections[k].content_lines.extend(v.content_lines)
+            else:
+                sections[k] = v
+
     for lineno, raw in enumerate(text.splitlines(), start=1):
         stripped = raw.strip()
         if not stripped or stripped.startswith("#"):
@@ -276,22 +375,32 @@ def parse_tech_sections(text: str,
                 current.content_lines.append(raw)
             continue
         at_col0 = raw[:1] not in (" ", "\t")
+        # `include` is recognised at ANY indentation and BOTH between sections
+        # and inside one. Magic's include is a TEXTUAL splice, so it is valid
+        # wherever a line is valid; keying it to column 0 between sections made
+        # an indented include parse as a bogus section named "include" (and one
+        # inside a section vanish into that section's body), silently dropping
+        # every capability the included file supplies. Since Magic composes
+        # technologies this way, mis-parsing it is a false-BLOCKED generator.
+        inc = _INCLUDE_RE.match(raw)
+        if inc:
+            name = inc.group("name")
+            sub = resolver(name) if resolver is not None else None
+            if sub is None:
+                if _unresolved is not None:
+                    _unresolved.append(name)
+            elif _depth < _MAX_INCLUDE_DEPTH:
+                if current is None:
+                    # Between sections: the file supplies whole sections.
+                    _merge(parse_tech_sections(
+                        sub, resolver, _depth + 1, _unresolved))
+                else:
+                    # Inside a section: the file supplies that section's BODY
+                    # (this is how a long `extract`/`drc` body gets split out).
+                    # Textual splice — exactly Magic's own semantics.
+                    current.content_lines.extend(sub.splitlines())
+            continue
         if current is None:
-            inc = _INCLUDE_RE.match(raw) if at_col0 else None
-            if inc:
-                name = inc.group("name")
-                sub = resolver(name) if resolver is not None else None
-                if sub is None:
-                    if _unresolved is not None:
-                        _unresolved.append(name)
-                elif _depth < _MAX_INCLUDE_DEPTH:
-                    for k, v in parse_tech_sections(
-                            sub, resolver, _depth + 1, _unresolved).items():
-                        if k in sections:
-                            sections[k].content_lines.extend(v.content_lines)
-                        else:
-                            sections[k] = v
-                continue
             if at_col0 and stripped.lower() != "end":
                 name = stripped.split()[0].lower()
                 current = sections.get(name) or TechSection(name, lineno)
@@ -331,6 +440,50 @@ def defined_types(sections: Dict[str, TechSection]) -> set:
     return out
 
 
+# `lef read` maps a LEF-namespace layer name onto a Magic type through the `lef`
+# section: `<kind> <magic-type> <lefname> [<lefname> ...]`.
+_LEF_SECTION_KINDS = ("routing", "cut", "masterslice", "obs", "overlap",
+                      "bound", "ignore")
+
+
+def defined_layer_names(sections: Dict[str, TechSection]) -> set:
+    """Every spelling this technology can resolve a DESIGN layer name through.
+
+    A design's layer names come from its LEF, and Magic resolves them through
+    THREE namespaces, not one:
+
+      * `types`   — Magic's own type names and their comma aliases;
+      * `lef`     — the LEF-name -> Magic-type map (`routing m1 Metal1 MET1`),
+                    which is the namespace a LEF actually speaks;
+      * `aliases` — user-defined collective names.
+
+    Checking a LEF name against `types` ALONE is the wrong name space and
+    reports real, working PDKs as undefined: measured on the open-source PDKs
+    available here, LEF names such as the top-metal and gate-poly layers appear
+    only in the `lef` section, so a types-only comparison called 9 of one PDK's
+    27 LEF names and 12 of another's 65 undefined. That was harmless only while
+    the cross-check could not block; it becomes a false-BLOCKED generator the
+    moment it can. Widening to all three namespaces takes both to zero.
+
+    Purely grammatical — no layer literal is named here.
+    """
+    out = set(defined_types(sections))
+    sec = sections.get("lef")
+    if sec is not None:
+        for raw in sec.content_lines:
+            toks = _COMMENT_RE.sub("", raw).strip().split()
+            if len(toks) >= 3 and toks[0].lower() in _LEF_SECTION_KINDS:
+                for alias in toks[1:]:
+                    out.add(alias.strip().lower())
+    sec = sections.get("aliases")
+    if sec is not None:
+        for raw in sec.content_lines:
+            toks = _COMMENT_RE.sub("", raw).strip().split()
+            if len(toks) >= 2:
+                out.add(toks[0].strip().lower())
+    return out
+
+
 # ---------------------------------------------------------------------------
 # The check
 # ---------------------------------------------------------------------------
@@ -346,6 +499,10 @@ class CapabilityReport:
     usable: bool
     inconclusive: bool
     missing: List[Dict[str, str]] = field(default_factory=list)
+    # Capabilities the recipe consumes that are absent but NOT terminal — the
+    # netlist is degraded, not impossible. Reported so a real defect is never
+    # silent, never blocking so a degraded run is never called unverifiable.
+    advisories: List[Dict[str, str]] = field(default_factory=list)
     empty_sections: List[str] = field(default_factory=list)
     absent_sections: List[str] = field(default_factory=list)
     sections_found: List[str] = field(default_factory=list)
@@ -361,6 +518,7 @@ class CapabilityReport:
             "usable": self.usable,
             "inconclusive": self.inconclusive,
             "missing": self.missing,
+            "advisories": self.advisories,
             "empty_sections": self.empty_sections,
             "absent_sections": self.absent_sections,
             "sections_found": self.sections_found,
@@ -411,44 +569,79 @@ def check_magic_tech(text: str,
 
     needed = required_capabilities(commands)
     missing: List[Dict[str, str]] = []
+    advisories: List[Dict[str, str]] = []
     empty: List[str] = []
     absent: List[str] = []
     for cap in needed:
         satisfied = False
         cap_empty: List[str] = []
         cap_absent: List[str] = []
+        cap_incomplete: List[str] = []
         for name in cap.sections:
             sec = sections.get(name)
             if sec is None:
                 cap_absent.append(name)
             elif sec.is_empty:
                 cap_empty.append(name)
+            elif cap.statements and not all(sec.has_statement(s)
+                                            for s in cap.statements):
+                # Present, non-empty, and STILL not supplying what the command
+                # consumes. Naming the statement is the whole point: "the
+                # section is there" is the adjacent measurement.
+                lacking = [s for s in cap.statements if not sec.has_statement(s)]
+                cap_incomplete.append(f"{name} (no `{'`/`'.join(lacking)}` "
+                                      f"statement)")
             else:
                 satisfied = True
                 break
         if satisfied:
             continue
-        if cap_empty:
+        if cap_incomplete:
+            state = (f"section(s) {', '.join(sorted(cap_incomplete))} present "
+                     f"but INCOMPLETE")
+        elif cap_empty:
             state = (f"section(s) {', '.join(sorted(cap_empty))} present but "
                      f"EMPTY")
             empty.extend(cap_empty)
         else:
             state = f"section(s) {', '.join(sorted(cap_absent))} absent"
         absent.extend(cap_absent)
-        missing.append({
+        entry = {
             "capability": cap.name,
             "sections": ",".join(cap.sections),
             "state": state,
             "needed_for": cap.needed_for,
-        })
+        }
+        (missing if cap.blocking else advisories).append(entry)
 
-    types = defined_types(sections)
+    types = defined_layer_names(sections)
     undefined: List[str] = []
     checked = 0
+    layers_block = False
     if design_layers:
         wanted = [str(l).strip().lower() for l in design_layers if str(l).strip()]
         checked = len(wanted)
         undefined = sorted({l for l in wanted if l not in types})
+        # INDEPENDENTLY BLOCKING. This cross-check used only to append text to
+        # an already-failing reason, so a tech file that was structurally fine
+        # but defined NONE of the layers this design is built on returned
+        # USABLE — the cross-check could never be the thing that caught it.
+        #
+        # Blocking needs POSITIVE evidence, so the bar is TOTAL non-coverage:
+        # not one of the design's layers is resolvable in any of the three
+        # namespaces Magic uses. Partial non-coverage stays advisory, because
+        # a LEF may legitimately carry layers this flow never routes on.
+        layers_block = bool(checked) and len(undefined) == checked
+        if layers_block:
+            missing.append({
+                "capability": "design layer coverage",
+                "sections": "types,lef,aliases",
+                "state": (f"none of the {checked} layer(s) this design uses "
+                          f"resolve to a type ({', '.join(undefined[:6])}"
+                          f"{'...' if len(undefined) > 6 else ''})"),
+                "needed_for": ("lef read / def read — every design layer must "
+                               "resolve or the layout is never read"),
+            })
 
     if missing and unresolved:
         # The capability we believe is missing may live in an included file we
@@ -465,12 +658,14 @@ def check_magic_tech(text: str,
         caps = "; ".join(f"{m['capability']} ({m['state']}, needed for "
                          f"{m['needed_for']})" for m in missing)
         reason = (f"technology file cannot support extraction — {caps}")
-        if design_layers and checked and len(undefined) == checked:
-            reason += (f"; none of the {checked} layer(s) this design uses are "
-                       f"defined by it")
+        if advisories:
+            reason += ("; also degraded: "
+                       + "; ".join(f"{a['capability']} ({a['state']})"
+                                   for a in advisories))
         return CapabilityReport(
             path=path, usable=False, inconclusive=False,
             missing=missing,
+            advisories=advisories,
             empty_sections=sorted(set(empty)),
             absent_sections=sorted(set(absent)),
             sections_found=found,
@@ -480,15 +675,24 @@ def check_magic_tech(text: str,
             reason=reason)
 
     note = ""
+    if advisories:
+        note = ("; ".join(f"{a['capability']}: {a['state']} — needed for "
+                          f"{a['needed_for']}" for a in advisories)
+                + " (reported, not blocking: extraction still yields a netlist)")
     if undefined and checked and len(undefined) < checked:
         # Partial coverage is EVIDENCE, not a verdict: Magic renames and
-        # aliases layers, so a LEF name absent from `types` is routinely
-        # legitimate. Recorded for triage; never blocking.
-        note = (f"{len(undefined)}/{checked} design layer name(s) not found "
-                f"verbatim in `types` (informational — Magic aliases layers; "
-                f"not treated as a blocker)")
+        # aliases layers, so a LEF name absent from every declared namespace is
+        # routinely legitimate. Recorded for triage; never blocking.
+        # APPENDED, never assigned: overwriting here would silently drop a
+        # capability advisory, which is the same class of defect as the ones
+        # this module exists to catch.
+        partial = (f"{len(undefined)}/{checked} design layer name(s) not found "
+                   f"in `types`/`lef`/`aliases` (informational — Magic aliases "
+                   f"layers; not treated as a blocker)")
+        note = f"{note}; {partial}" if note else partial
     return CapabilityReport(
         path=path, usable=True, inconclusive=False,
+        advisories=advisories,
         sections_found=found, types_defined=len(types),
         design_layers_checked=checked, design_layers_undefined=undefined,
         note=note)
@@ -554,12 +758,38 @@ def tech_path_from_magicrc_text(text: str) -> Optional[str]:
     tool container). Returns None — never a guess — when the rc names no tech
     file or names one through a Tcl variable we cannot expand.
     """
+    return tech_load_directive(text)[0]
+
+
+# Why the reason matters as much as the path: the runner used to receive a bare
+# None for BOTH "this rc loads no technology at all" and "this rc loads one
+# through a Tcl variable", and in both cases skipped the capability check
+# ENTIRELY and silently. A magicrc written with a variable therefore disabled
+# the whole pre-flight with no error and no artifact — the check reported
+# nothing, which reads downstream as though it had looked and found nothing
+# wrong. Naming the reason lets the caller emit a FINDING instead of a silence.
+TECH_LOAD_OK = "ok"
+TECH_LOAD_NONE = "no_tech_load_directive"
+TECH_LOAD_UNEXPANDED = "tech_load_path_is_unexpanded_tcl"
+
+
+def tech_load_directive(text: str) -> Tuple[Optional[str], str, str]:
+    """`(path, reason, raw)` for a magicrc's `tech load`.
+
+    `path` is None whenever the technology cannot be identified from text
+    alone; `reason` says WHICH of the two unresolvable cases it is, and `raw`
+    carries the verbatim unexpanded argument so a finding can quote it.
+    """
+    first_raw = ""
     for m in _TECH_LOAD_RE.finditer(text or ""):
         raw = m.group("path").strip().strip('"').strip("'")
         if "$" in raw or "[" in raw:
+            first_raw = first_raw or raw
             continue  # unexpanded Tcl — do not guess
-        return raw
-    return None
+        return raw, TECH_LOAD_OK, raw
+    if first_raw:
+        return None, TECH_LOAD_UNEXPANDED, first_raw
+    return None, TECH_LOAD_NONE, ""
 
 
 def resolve_tech_from_magicrc(magicrc_path: Path) -> Optional[Path]:
