@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -98,7 +99,17 @@ def _launch_dashboard(project: Path, host: str, port: int,
     orchestrator runs. Returns the child PID (or None on failure). Never raises
     — a dashboard hiccup must not touch the flow. The child survives this
     process (start_new_session) so the FINAL state stays viewable after the run;
-    the caller prints the PID so the user can stop it."""
+    the caller prints the PID so the user can stop it.
+
+    #204 — a DETACHED daemon is a deliberate feature for a real user run (its
+    survival keeps the final state viewable), but a liability under a test
+    harness / CI / headless run, where nothing reaps it and it squats the port
+    for the next run. `VIBE_IC_NO_DASHBOARD` (set truthy) suppresses the spawn
+    entirely so no such context can leak a daemon; the whole test suite sets it
+    via an autouse fixture."""
+    if os.environ.get("VIBE_IC_NO_DASHBOARD", "").strip().lower() \
+            not in ("", "0", "false", "no", "off"):
+        return None
     dash = PROGRAMS_DIR / "flow_dashboard.py"
     if not dash.is_file():
         return None

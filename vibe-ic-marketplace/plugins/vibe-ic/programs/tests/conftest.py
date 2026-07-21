@@ -46,6 +46,20 @@ def _clean_stray_waveform_dumps():
             except OSError:
                 pass
 
+
+# #204 — the flow runner spawns a DETACHED (start_new_session) web dashboard by
+# default; nothing in a test reaps it, so any test that drives
+# vibe_ic_one_shot_runner.main() used to leak an orphan daemon that squats the
+# port and stalls later runs (the suite leaked ~30 across two hosts). Set
+# VIBE_IC_NO_DASHBOARD for EVERY test so `_launch_dashboard` suppresses the
+# spawn at the source. Tests that genuinely need a real daemon spawn it through
+# the reaping `_dashboard_daemon` fixture (test_issue204_*), which bypasses this
+# guard and stops its own child on teardown.
+@pytest.fixture(autouse=True)
+def _no_leaked_dashboard_daemon(monkeypatch):
+    monkeypatch.setenv("VIBE_IC_NO_DASHBOARD", "1")
+    yield
+
 for _p in (str(_PROGRAMS), str(_PLUGIN_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)

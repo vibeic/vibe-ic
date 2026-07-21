@@ -1329,10 +1329,16 @@ def serve(project: str, port: int = 8787, full: bool = False, host: str = "127.0
     for cand in range(port, port + 21):
         try:
             httpd = ThreadingHTTPServer((host, cand), handler)
-            bound_port = cand
+            # #204 — read the ACTUALLY-bound port from the socket, never the
+            # requested one. This makes `--port 0` (OS-assigned — the robust
+            # answer for N concurrent runs) work: the recorded/printed URL is
+            # always the real port, never ':0'. For a fixed port it equals cand.
+            bound_port = httpd.server_address[1]
             break
         except OSError as exc:
             last_exc = exc
+        if cand == 0:
+            break  # port 0 can't be busy; a failure here is not a port clash
     if httpd is None:
         raise last_exc  # every candidate port busy — surface the real error
     # Show 127.0.0.1 in the clickable line even when bound to 0.0.0.0.
