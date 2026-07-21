@@ -288,6 +288,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `extraction_coverage_check` | any | Wave 23 | gate (LL-38) verifies input/docs/ |
 | `extraction_coverage_denominator_audit` | any | Wave 31 | gate (Wave 31, v0.119.63). |
 | `extraction_evidence_schema_check` | any | Wave 23 | gate (LL-40, v0.119.39). |
+| `extraction_input_capability_check` | any | — | precondition gate on the EXTRACTION |
 | `fastercap_extract` | any | — | Real 3D field-solved coupling extraction via FasterCap on the routed geometry. |
 | `fault_atpg_run` | any | — | Open-source ATPG via Fault (cloudv-io/fault). |
 | `fetch_round_trip_sentinel_check` | any | — | P0.1 deterministic gate |
@@ -1240,6 +1241,7 @@ _(no programs in this group)_
 - `extraction_coverage_check` — gate (LL-38) verifies input/docs/  _[Wave 23]_
 - `extraction_coverage_denominator_audit` — gate (Wave 31, v0.119.63).  _[Wave 31]_
 - `extraction_evidence_schema_check` — gate (LL-40, v0.119.39).  _[Wave 23]_
+- `extraction_input_capability_check` — precondition gate on the EXTRACTION
 - `fastercap_extract` — Real 3D field-solved coupling extraction via FasterCap on the routed geometry.
 - `fault_atpg_run` — Open-source ATPG via Fault (cloudv-io/fault).
 - `fetch_round_trip_sentinel_check` — P0.1 deterministic gate
