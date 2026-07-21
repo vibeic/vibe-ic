@@ -380,6 +380,56 @@ def _collect_all_module_ports(rtl_files: List[Path]) -> set:
     return names
 
 
+def _named_module_ports(rtl_files: List[Path], top_name: str) -> Optional[set]:
+    """#207 — the port NAMES declared by the TOP module `top_name`, or None
+    when that module is not found/parseable in rtl/.
+
+    This is the AUTHORITATIVE surface that STA will constrain: the netlist top's
+    OWN ports, narrower and more precise than the all-modules union (#619). The
+    union admits a name that lives only on an INNER module (e.g. an alias
+    wrapper's `*__rcvar_inner` keeps `clk_i` while the top exposes the renamed
+    `clk`) — but an SDC `[get_ports clk_i]` on such an internal net makes STA
+    error, which is exactly the vacuous-SDC failure #207 reports. When the top
+    module is resolvable we select AND validate against these ports; when it is
+    not (no rtl/, or the top module absent), the caller falls back to the union
+    (pure-L9 behaviour preserved). Chip-AGNOSTIC: Verilog header parsing only."""
+    pat = re.compile(r"\bmodule\s+" + re.escape(top_name) + r"\b")
+    for f in rtl_files:
+        try:
+            txt = _strip_v_comments(f.read_text(encoding="utf-8",
+                                                errors="ignore"))
+        except Exception:
+            continue
+        m = pat.search(txt)
+        if not m:
+            continue
+        names = {name for name, _d, _w in _parse_module_ports(txt[m.start():])
+                 if name}
+        return names or None
+    return None
+
+
+def _sdc_port_refs(text: str) -> Tuple[List[str], List[str]]:
+    """#207 — (clock_refs, all_refs): the base port NAMES referenced by
+    `[get_ports {...}]` in the SDC, bus index stripped. `clock_refs` are those
+    on a `create_clock` line (the clock targets); `all_refs` is every get_ports
+    reference. `get_pins` (internal register pins on create_generated_clock) is
+    deliberately excluded — those are not top ports."""
+    clock_refs: List[str] = []
+    all_refs: List[str] = []
+    for line in text.splitlines():
+        is_clock_line = line.lstrip().startswith("create_clock")
+        for m in re.finditer(r"get_ports\s*\{([^}]*)\}", line):
+            for tok in m.group(1).split():
+                base = re.sub(r"\[.*$", "", tok).strip()
+                if not base:
+                    continue
+                all_refs.append(base)
+                if is_clock_line:
+                    clock_refs.append(base)
+    return clock_refs, all_refs
+
+
 # ---------------------------------------------------------------------------
 # Port classification
 # ---------------------------------------------------------------------------
@@ -558,6 +608,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         top = l9.get("top_module") or "chip_top"
 
+    # #207 — the AUTHORITATIVE surface STA constrains is the TOP module's OWN
+    # ports. Resolve them; fall back to the all-modules union (#619) only when
+    # the top module is not resolvable in rtl/. Selecting AND validating against
+    # the top's ports is what stops a create_clock landing on an inner-module net
+    # (e.g. alias-wrapper `clk_i`) that does not exist on chip_top.
+    top_ports = _named_module_ports(rtl_files, top)
+
     # Decide port set: prefer wrapper ports (board namespace) when wrapper
     # is the top entity, else fall back to L9.top_module_pins.
     inputs: List[str] = []
@@ -565,7 +622,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     async_ports: List[str] = []
     clock_port: Optional[str] = None
     dropped_pins: List[str] = []
-    rtl_ports: set = set()  # union of synthesizable RTL ports (#619)
+    rtl_ports: set = set()  # synthesizable RTL surface used to filter (#619/#207)
 
     if wrapper and top == wrapper[0]:
         ports = _parse_module_ports(wrapper[1])
@@ -593,7 +650,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         # surface (union of all rtl/ module ports). When rtl/ is absent /
         # unparseable, rtl_ports is empty and NO filtering happens (pure-L9
         # fallback preserved). Chip-AGNOSTIC: set membership on parsed ports.
-        rtl_ports = _collect_all_module_ports(rtl_files)  # union; may be empty
+        # #207 — filter against the TOP module's OWN ports when resolvable (so
+        # an L9 pin that lives only on an inner module is dropped, not emitted
+        # as an STA-invalid get_ports). Fall back to the all-modules union
+        # (#619) only when the top module is unresolvable; empty ⇒ no filtering.
+        rtl_ports = (top_ports if top_ports is not None
+                     else _collect_all_module_ports(rtl_files))
         for port in l9.get("top_module_pins", []):
             if not isinstance(port, dict):
                 continue
@@ -615,7 +677,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if not clock_port:
         # Fallback: take first 'clk*' from L9 that EXISTS on the synthesizable
-        # surface (#619), else 'clk'.
+        # surface (#619), else a clock-like TOP port (#207 — never a default
+        # guess that isn't actually a port), else 'clk'.
         clock_port = "clk"
         for port in l9.get("top_module_pins", []):
             if not (isinstance(port, dict) and _is_clock(port.get("name", ""))):
@@ -625,6 +688,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                 continue  # #619: don't bind a clock absent from the RTL surface
             clock_port = cand
             break
+        else:
+            # No L9 clock pin survived the surface filter. #207 — prefer an
+            # actual clock-like port ON the top interface over the bare "clk"
+            # guess, so the alias-wrapper top (`clk_i`→`clk`) is constrained on
+            # its REAL port and STA gets a live clock.
+            if top_ports and clock_port not in top_ports:
+                for pname in sorted(top_ports):
+                    if _is_clock(pname):
+                        clock_port = pname
+                        break
 
     fpga_dir = _pl.fpga_early_dir(project)
     fpga_dir.mkdir(parents=True, exist_ok=True)
@@ -637,6 +710,53 @@ def main(argv: Optional[List[str]] = None) -> int:
     text = _render_sdc(top, clock_port, period_ns, inputs, outputs,
                        async_ports, gen_clocks)
     out.write_text(text, encoding="utf-8")
+
+    # #207 — VALIDATE the generated SDC against the netlist it constrains. A
+    # create_clock (or any get_ports) targeting a port that does NOT exist on
+    # the top is an ERROR, not a warning: STA runs with no clock in effect and
+    # reports meaningless slack while the step vacuously PASSes. When the top
+    # module's own ports are resolvable, refuse to emit a vacuous PASS:
+    #   (1) every get_ports name must exist on the top interface, and
+    #   (2) at least one clock must be created on a REAL top port.
+    # Evidence (resolved ports, unresolved names, the netlist resolved against)
+    # is written so the verdict can be cross-checked from the gate's own output.
+    # When the top is unresolvable (no rtl/), validation is skipped (pure-L9
+    # fallback preserved) — there is no netlist to resolve names against.
+    validation: Dict[str, object] = {
+        "top": top,
+        "resolved_against": (str(out.parent) + f"::module {top} (rtl/)"
+                             if top_ports is not None else None),
+        "top_ports": (sorted(top_ports) if top_ports is not None else None),
+    }
+    if top_ports is not None:
+        clock_refs, all_refs = _sdc_port_refs(text)
+        unresolved = sorted({r for r in all_refs if r not in top_ports})
+        live_clocks = [c for c in clock_refs if c in top_ports]
+        validation.update(unresolved_ports=unresolved,
+                          clock_ports=clock_refs,
+                          live_clocks=live_clocks)
+        try:
+            gate_json = _pl.report_path(project, "phase2/gates/sdc_gen.json")
+            gate_json.parent.mkdir(parents=True, exist_ok=True)
+            gate_json.write_text(json.dumps(validation, indent=2),
+                                 encoding="utf-8")
+        except Exception:
+            pass
+        if unresolved or not live_clocks:
+            reasons = []
+            if unresolved:
+                reasons.append(
+                    f"{len(unresolved)} SDC port(s) do not exist on top "
+                    f"'{top}': {unresolved}")
+            if not live_clocks:
+                reasons.append(
+                    f"no create_clock landed on a real port of top '{top}' "
+                    f"(clock target(s)={clock_refs or ['<none>']}); STA would "
+                    f"run with NO clock in effect")
+            print("FAIL sdc_gen: vacuous SDC — " + "; ".join(reasons)
+                  + f"  (top interface: {sorted(top_ports)})", file=sys.stderr)
+            return 1
+
     print(f"PASS sdc_gen: {out} "
           f"(clock={clock_port}@{clock_mhz}MHz period={period_ns:.2f}ns; "
           f"{len(inputs)} in / {len(outputs)} out / "

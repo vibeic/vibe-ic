@@ -120,15 +120,23 @@ def test_no_rtl_pure_l9_fallback(tmp_path):
     assert {"clk", "din", "dout"} <= emitted, "no RTL -> must not filter"
 
 
-def test_alias_renamed_clock_not_dropped(tmp_path):
-    # top renamed clk_i->clk (#618 case), inner keeps clk_i; union holds both.
+def test_alias_renamed_clock_constrains_the_top_port(tmp_path):
+    # top renamed clk_i->clk (#618 case): chip_top exposes `clk`, the inner
+    # `*__rcvar_inner` keeps `clk_i`. #207 — the SDC must constrain the TOP
+    # port `clk` (the only get_ports-able clock on the elaborated netlist), NOT
+    # the inner net `clk_i`. The old union behaviour emitted
+    # `create_clock [get_ports clk_i]`, which STA cannot resolve (clk_i is not a
+    # top port) — a vacuous SDC. The clock now correctly binds to `clk`.
     pins = [{"name": "clk_i", "mode": "input"}, {"name": "din", "mode": "input"}]
     _mk(tmp_path, pins,
         "module chip_top (\n input clk, input [7:0] din\n);\n"
         " chip_top__rcvar_inner u (.clk_i(clk));\nendmodule\n"
         "module chip_top__rcvar_inner (\n input clk_i, input [7:0] din\n);\n"
         "endmodule\n")
+    rc = G.main([str(tmp_path), "--top-name", "chip_top", "--force"])
+    assert rc == 0, "the alias top has a real `clk` port — SDC must be valid"
     emitted = _emitted_ports(tmp_path)
-    # clk_i is the clock (create_clock get_ports clk_i) AND din survives.
     assert "din" in emitted
-    assert "clk_i" in emitted, "alias-renamed clock must survive via inner union"
+    assert "clk" in emitted, "clock must bind the REAL top port `clk` (#207)"
+    assert "clk_i" not in emitted, (
+        "clk_i is an inner net, not a top port — get_ports on it is invalid STA")
