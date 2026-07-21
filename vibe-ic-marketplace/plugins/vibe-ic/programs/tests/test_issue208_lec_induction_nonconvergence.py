@@ -153,7 +153,11 @@ def test_gate_flat_wall_is_non_blocking_inconclusive(tmp_path):
     rules = {f.rule for f in res.findings}
     assert "LEC_INCONCLUSIVE_NONCONVERGENCE" in rules
     assert "LEC_NOT_EQUIVALENT" not in rules
-    assert rc == 0, "non-convergence INCONCLUSIVE must be non-blocking"
+  # #208 follow-up: still NON-BLOCKING (flow_compliance resolves rc=3 +
+    # the PASS_WITH_WAIVERS sentinel to WAIVED-DEFERRED, so the step does
+    # not fail and nothing cascades to MISSING) but no longer a BARE PASS,
+    # which rc=0 silently was at the `program_exit_zero` gate.
+    assert rc == 3, "INCONCLUSIVE: non-blocking, but never a bare PASS"
 
 
 def test_gate_counterexample_is_hard_fail(tmp_path):
