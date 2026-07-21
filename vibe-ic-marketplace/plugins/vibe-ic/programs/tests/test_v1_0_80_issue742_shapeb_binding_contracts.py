@@ -164,7 +164,19 @@ def test_facetA_prefix_reproduces_compile_error_pre_fix(tmp_path):
              str(dd / "testbench.v")],
             capture_output=True, text=True, timeout=120)
     assert r.returncode != 0, "verbatim positional bind should NOT compile"
-    assert "Unable to assign to unresolved wires" in (r.stdout + r.stderr), r.stderr
+    # iverilog phrases this positional-bind elaboration failure differently
+    # across versions — older builds print "Unable to assign to unresolved
+    # wires"; newer ones print "Cannot perform procedural assignment ...
+    # continuously assigned" + "Elaboration failed". The reproduce-gate is that
+    # the bind does NOT elaborate; assert that robustly (rc!=0, above) with a
+    # reason-family check rather than pinning one version's exact phrase.
+    _out = (r.stdout + r.stderr).lower()
+    assert any(s in _out for s in (
+        "unable to assign to unresolved wires",
+        "procedural assignment",
+        "continuously assigned",
+        "elaboration failed",
+    )), r.stderr
 
 
 @_iv

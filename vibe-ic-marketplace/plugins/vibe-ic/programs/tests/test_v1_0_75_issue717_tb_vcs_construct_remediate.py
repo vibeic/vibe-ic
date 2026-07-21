@@ -74,6 +74,14 @@ def test_original_break_tb_rejected_by_iverilog(tmp_path):
     g = tmp_path / "dut.v"
     g.write_text(_GOLDEN)
     rc, out = _compile_run(tb, g, tmp_path)
+    if rc == 0:
+        # Precondition probe, not assumption: newer iverilog builds accept
+        # procedural `break;` in a plain `for`, so the VCS-only-construct REJECT
+        # floor this reproduces does not exist on this toolchain. Skip the
+        # reproduce (nothing to remediate here) — the remediator's real value is
+        # still gated by test_break_remediation_compiles_and_golden_passes.
+        pytest.skip("this iverilog build accepts procedural `break;` — the "
+                    "VCS-reject floor this reproduces is not present here")
     assert rc != 0 and "break" in out.lower()
 
 
