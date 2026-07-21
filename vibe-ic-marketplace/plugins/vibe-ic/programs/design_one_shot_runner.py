@@ -3161,22 +3161,35 @@ def step_l10_unit_tb_gen(project: Path,
     except Exception as e:  # pragma: no cover — defensive import guard
         return StepResult("l10_unit_tb_gen", "SKIP", time.time() - t0,
                           f"producer unavailable: {e}")
+    _tb_report: dict = {}
     try:
-        emitted = _tbg.emit_unit_tbs(project, top_name, kind="functional_vector")
+        emitted = _tbg.emit_unit_tbs(project, top_name, kind="functional_vector",
+                                     report=_tb_report)
     except Exception as e:
         return StepResult("l10_unit_tb_gen", "SKIP", time.time() - t0,
                           f"L10 unreadable: {e}")
-    if emitted < 0:
+    if emitted == -1:
         return StepResult("l10_unit_tb_gen", "SKIP", time.time() - t0,
                           "no L10_TEST_CASES.json — nothing to produce")
+    if emitted == -2:
+        # #209 — the producer REFUSED to emit because it could not bind the DUT.
+        # This is the correct outcome, not a failure to report as one: the old
+        # behaviour was to emit a PASS_PLACEHOLDER skeleton with the DUT
+        # commented out, which fabricated Step-4 evidence. Emitting nothing
+        # leaves the downstream l10_tb_conformance gate to fail honestly on
+        # missing coverage rather than pass on manufactured coverage.
+        return StepResult(
+            "l10_unit_tb_gen", "SKIP", time.time() - t0,
+            f"no TB emitted (refused to fabricate): {_tb_report.get('reason')}")
     if emitted == 0:
         return StepResult("l10_unit_tb_gen", "SKIP", time.time() - t0,
                           "no functional_vector L10 cases — nothing to produce")
     out_dir = _pl.sim_dir(project) / "tb"
     return StepResult(
         "l10_unit_tb_gen", "PASS", time.time() - t0,
-        f"emitted {emitted} functional_vector unit TB skeleton(s) under "
-        f"{out_dir} for Step-4 l10_tb_conformance evidence",
+        f"emitted {emitted} functional_vector unit TB(s) instantiating DUT "
+        f"{_tb_report.get('dut_module')!r} under {out_dir} for Step-4 "
+        f"l10_tb_conformance evidence",
         [str(out_dir)])
 
 
