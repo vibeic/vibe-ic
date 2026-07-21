@@ -553,9 +553,18 @@ def run_pdf_atpg(project: Path, netlist_rel: str, cut_rel: str, flat_rel: str,
         })
         return 0, base
 
+    # 0. AUTHORITATIVE FLOP IDENTIFICATION (shared with DT1) — the design's own
+    # Liberty says which cells hold state; their names do not.
+    lib_text, lib_source = _tdf._liberty_structure_text(
+        project, liberty, pdk_dir, timeout=min(timeout, 120))
+    lib_seq = _tdf._far.liberty_sequential_cells(lib_text) if lib_text else set()
+    base["liberty_source"] = lib_source
+    base["liberty_sequential_cells_declared"] = len(lib_seq)
+
     # 1. CUT + 2. GATE-LEVELISE (reuse DT1; or reuse an existing flat core).
     ok, msg = _tdf._ensure_cut(project, netlist_rel, cut_rel, clock, dff_cells,
-                               pdk_dir, timeout=min(timeout, 300))
+                               pdk_dir, timeout=min(timeout, 300),
+                               liberty_sequential=lib_seq)
     base["cut"] = msg
     if not ok:
         base.update({"verdict": "ERROR", "status": "ERROR", "reasons": [msg]})
@@ -581,31 +590,45 @@ def run_pdf_atpg(project: Path, netlist_rel: str, cut_rel: str, flat_rel: str,
     pair_bases = {b for b, _, _ in pairs}
     po_names = {n.lstrip('\\') for n, _ in prim_out}
 
-    # NOT_APPLICABLE: purely combinational core (no launch flops).
-    # ANTI-GAMING GUARD (mirrors transition_fault_atpg_run): only a GENUINELY
-    # combinational design may self-N/A. If the SOURCE netlist has sequential
-    # cells yet the cut exposed 0 pairs, the cut did not actually run (wrong
-    # --dff seed / stale bogus cut) — that is a real gap, reported as an honest
-    # ERROR, NEVER a false N/A that the coverage gate would silently pass.
+    # ZERO SCAN FLOPS — the same three-way decision as DT1 (see
+    # transition_fault_atpg_run): HAS_SEQUENTIAL is a failed cut, NO_SEQUENTIAL
+    # is an earned self-skip, and UNKNOWN is BLOCKED because the design's
+    # sequential content was never actually checked.
+    try:
+        _src_text = (project / netlist_rel).read_text(errors="replace")
+    except OSError:
+        _src_text = ""
+    evidence = _tdf._far.sequential_evidence(_src_text, lib_text or None)
+    base["sequential_evidence"] = evidence
     if not pairs:
-        src_has_flops = bool(_tdf._far.detect_dff_cells(
-            (project / netlist_rel).read_text(errors="replace")))
-        if src_has_flops:
+        if evidence["verdict"] == _tdf._far.SEQ_PRESENT:
             base.update({
                 "verdict": "ERROR", "status": "ERROR", "scan_flops": 0,
-                "reasons": ["design has sequential cells but the scan cut exposed "
-                            "0 pseudo-PI/PO pairs — the cut did not run correctly "
-                            "(NOT a combinational design); refusing a false "
-                            "NOT_APPLICABLE"],
+                "reasons": ["scan cut exposed 0 pseudo-PI/PO pairs on a design "
+                            "that HAS sequential cells ("
+                            + "; ".join(evidence["reasons"]) + ") — the cut did "
+                            "not run correctly (NOT a combinational design); "
+                            "refusing a false NOT_APPLICABLE"],
             })
             return 1, base
+        if evidence["verdict"] == _tdf._far.SEQ_ABSENT:
+            base.update({
+                "verdict": "NOT_APPLICABLE", "status": "NOT_APPLICABLE",
+                "scan_flops": 0,
+                "reasons": ["no sequential (scan-cut) flops — a combinational "
+                            "design has no launch-off-capture path-delay faults; "
+                            "PDF N/A (" + "; ".join(evidence["reasons"]) + ")"],
+            })
+            return 0, base
         base.update({
-            "verdict": "NOT_APPLICABLE", "status": "NOT_APPLICABLE",
-            "scan_flops": 0,
-            "reasons": ["no sequential (scan-cut) flops — a combinational design "
-                        "has no launch-off-capture path-delay faults; PDF N/A"],
+            "verdict": "BLOCKED", "status": "BLOCKED", "scan_flops": 0,
+            "reasons": ["scan cut exposed 0 pseudo-PI/PO pairs and it could NOT "
+                        "be established whether the design has sequential "
+                        "elements (" + "; ".join(evidence["reasons"])
+                        + f"; liberty: {lib_source}) — refusing a "
+                        "NOT_APPLICABLE self-skip on unverified grounds"],
         })
-        return 0, base
+        return 1, base
 
     # 3. TIMING — OpenSTA K-longest paths (real SPEF timing).
     n_paths = max(k * 2, 32)

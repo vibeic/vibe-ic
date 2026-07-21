@@ -19,11 +19,25 @@ aborted faults) is surfaced as `detected_count_mismatch` and the RECOMPUTED
 (lower) number governs. So a run that counts redundant faults as detected —
 or that never actually ran the SAT solver (0 verdicts) — FAILs.
 
-NOT_APPLICABLE (honest, never a fake pass): when the producer recorded
-`verdict=NOT_APPLICABLE` (a purely combinational design with no scan flops has
-no launch-off-capture transition faults), the gate resolves to NOT_APPLICABLE
-(rc 0) — self-skipping on non-applicable designs. A design that SHOULD have
-scan but produced no evidence FAILs (missing evidence, not a skip).
+NOT_APPLICABLE IS EARNED, NEVER ASSERTED. `verdict=NOT_APPLICABLE` is a CLAIM
+that the design is purely combinational, and the gate asks what it rests on
+before honouring it. The producer records `sequential_evidence` derived from the
+`ff` groups of the Liberty the flow already reads — a cell's `ff` group is
+authoritative, its name is not — and the gate adjudicates:
+
+  * evidence says the design HAS sequential elements -> FAIL. A scan insertion
+    that inserted nothing into a sequential design is a failed gate, not an
+    inapplicable one. (Measured: 0 of 65 flops detected because the detector
+    required a naming convention only some libraries follow; no chain was cut;
+    `scan_flops: 0` scored PASS.)
+  * evidence authoritatively says it has NONE -> NOT_APPLICABLE (rc 0). A
+    genuinely flop-free design must not false-FAIL.
+  * no evidence -> BLOCKED (rc 1). The claim was never checked. "We could not
+    verify" is now sayable, and it is not a pass.
+
+ABSENT ARTEFACT IS NEVER A PASS. No transition_coverage.json + a not-run record
+-> BLOCKED, quoting the recorded reason. No artefact and no record at all ->
+FAIL: nothing establishes that the step ever ran.
 
 CHOSEN FLOOR: default 90 % TDF LOGIC coverage — DISCLOSED as a chosen floor.
 This grades that each transition was LAUNCHED and OBSERVED; it is NOT at-speed
@@ -54,9 +68,19 @@ except Exception:  # pragma: no cover
 
 try:
     import transition_fault_atpg_run as _tdf  # reuse the pure coverage math
+    import fault_atpg_run as _far             # shared zero-flop adjudication
 except Exception:  # pragma: no cover
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import transition_fault_atpg_run as _tdf  # type: ignore
+    import fault_atpg_run as _far             # type: ignore
+
+# Where the producer/runner leaves a record when no coverage artefact could be
+# produced. An absent artefact WITH one of these is BLOCKED (the step said why);
+# an absent artefact WITHOUT one is FAIL (nothing knows whether it ever ran).
+_NOT_RUN_RECORDS = (
+    "phase2/stage2/dft/transition_atpg_not_run.json",
+    "reports/phase2/dft/transition_atpg_not_run.json",
+)
 
 
 _PROGRAM = "transition_coverage_check"
@@ -92,29 +116,73 @@ def _recount_from_fault_list(blob: dict):
     return det, red, abort
 
 
-def evaluate(blob: Optional[dict], floor: float = TDF_LOGIC_FLOOR_DEFAULT) -> dict:
+def evaluate(blob: Optional[dict], floor: float = TDF_LOGIC_FLOOR_DEFAULT,
+             not_run_record: Optional[dict] = None) -> dict:
     """Pure evaluator. Recomputes TDF coverage from raw counts and recomputes
     the verdict against the floor. NEVER trusts a written boolean; NEVER counts
-    redundant/aborted as detected. chip-AGNOSTIC."""
+    redundant/aborted as detected. chip-AGNOSTIC.
+
+    `not_run_record` — the producer's own not-run sentinel, when one exists. An
+    ABSENT coverage artefact is never a pass, but WHY it is absent decides
+    between FAIL and BLOCKED, and the two are different repairs: a step that ran
+    and could not measure is blocked on a capability; a step that left no trace
+    at all did not run, and nothing knows why."""
     reasons: list[str] = []
 
     if blob is None:
+        if isinstance(not_run_record, dict):
+            why = str(not_run_record.get("reason")
+                      or "producer recorded a not-run sentinel with no reason")
+            stage = not_run_record.get("not_run_stage")
+            return {"verdict": "BLOCKED", "status": "BLOCKED",
+                    "not_run_stage": stage,
+                    "reasons": [
+                        "no transition_coverage.json was produced; the step "
+                        f"recorded why it did not run{f' ({stage})' if stage else ''}: "
+                        + why
+                        + " — BLOCKED (the at-speed TDF coverage is unmeasured, "
+                          "which is not a pass)"]}
         return {"verdict": "FAIL", "status": "FAIL",
-                "reasons": ["transition_coverage.json absent or not valid JSON "
-                            "— the at-speed TDF step cannot pass without a real "
-                            "coverage measurement"]}
+                "reasons": ["transition_coverage.json absent or not valid JSON, "
+                            "and NO not-run record was left either — there is no "
+                            "evidence the at-speed TDF step ran at all. An "
+                            "absent coverage artefact is never a pass; the step "
+                            "must produce a measurement or state why it could "
+                            "not"]}
 
-    # Honest NOT_APPLICABLE passthrough (no scan flops → no TDF faults).
+    if blob.get("verdict") == "BLOCKED":
+        return {"verdict": "BLOCKED", "status": "BLOCKED",
+                "scan_flops": blob.get("scan_flops"),
+                "sequential_evidence": blob.get("sequential_evidence"),
+                "reasons": blob.get("reasons",
+                                    ["producer recorded BLOCKED"])}
+
+    # NOT_APPLICABLE is EARNED, not asserted. "No scan flops, therefore no TDF
+    # faults" is only sound on a design that genuinely has no sequential
+    # elements — which is checkable, from the `ff` groups of the Liberty the
+    # flow already reads. A producer that claims it without that evidence gets
+    # BLOCKED; one whose own evidence says the design HAS flops gets FAIL.
+    zero_flop = _far.adjudicate_zero_flop_claim(blob)
     if blob.get("verdict") == "NOT_APPLICABLE":
+        if zero_flop is not None:
+            return zero_flop
         return {"verdict": "NOT_APPLICABLE", "status": "NOT_APPLICABLE",
                 "scan_flops": blob.get("scan_flops", 0),
+                "sequential_evidence": blob.get("sequential_evidence"),
                 "reasons": blob.get("reasons",
                                     ["producer recorded NOT_APPLICABLE"])}
 
     if blob.get("verdict") == "ERROR":
         return {"verdict": "FAIL", "status": "FAIL",
+                "scan_flops": blob.get("scan_flops"),
+                "sequential_evidence": blob.get("sequential_evidence"),
                 "reasons": ["producer recorded ERROR (ATPG could not run): "
                             + "; ".join(blob.get("reasons", [])[:2])]}
+
+    # A numeric result is no shelter either: a coverage number computed over a
+    # core into which zero flops were cut measures nothing about the scan logic.
+    if zero_flop is not None and zero_flop.get("verdict") == "FAIL":
+        return zero_flop
 
     # Effective floor: never below the producer's chosen floor.
     written_floor = blob.get("floor_pct")
@@ -164,6 +232,8 @@ def evaluate(blob: Optional[dict], floor: float = TDF_LOGIC_FLOOR_DEFAULT) -> di
 
     out = {
         "count_source": source,
+        "scan_flops": blob.get("scan_flops"),
+        "sequential_evidence": blob.get("sequential_evidence"),
         "floor_pct": eff_floor,
         "recomputed_ge_floor": ge_floor,
         "detected_count_mismatch": detected_count_mismatch,
@@ -187,14 +257,28 @@ def _resolve_coverage_json(project: Path, override: Optional[str]) -> Optional[P
     return next((p for p in cands if p.is_file()), None)
 
 
+def _resolve_not_run_record(project: Path) -> tuple[Optional[dict], Optional[Path]]:
+    """Find the step's own record of why it produced no coverage artefact."""
+    for rel in _NOT_RUN_RECORDS:
+        p = project / rel
+        if p.is_file():
+            d = _load_json(p)
+            if d is not None:
+                return d, p
+    return None, None
+
+
 def audit(project: Path, coverage_json: Optional[str] = None,
           floor: float = TDF_LOGIC_FLOOR_DEFAULT) -> dict:
     path = _resolve_coverage_json(project, coverage_json)
+    blob = _load_json(path) if path else None
+    rec, rec_path = (_resolve_not_run_record(project) if blob is None
+                     else (None, None))
     base = {"program": _PROGRAM, "version": _VERSION,
             "project_dir": str(project),
-            "coverage_json": str(path) if path else None}
-    blob = _load_json(path) if path else None
-    result = evaluate(blob, floor=floor)
+            "coverage_json": str(path) if path else None,
+            "not_run_record": str(rec_path) if rec_path else None}
+    result = evaluate(blob, floor=floor, not_run_record=rec)
     result.update(base)
     return result
 
@@ -232,12 +316,17 @@ def main(argv: Optional[list] = None) -> int:
 
     v = report.get("verdict")
     print(f"{_PROGRAM}: verdict={v} "
+          f"scan_flops={report.get('scan_flops')} "
           f"test_cov={report.get('tdf_test_coverage_pct')}% "
           f"detected={report.get('detected')} redundant={report.get('redundant')} "
           f"aborted={report.get('aborted')} floor={report.get('floor_pct')}",
           file=sys.stderr)
+    if v in ("FAIL", "BLOCKED"):
+        for r in report.get("reasons", [])[:3]:
+            print(f"  {v}: {r}", file=sys.stderr)
     if v == "NOT_APPLICABLE":
         return 0
+    # BLOCKED is NOT a pass. An unmeasured at-speed step must not exit 0.
     return 0 if v == "PASS" else 1
 
 

@@ -4726,6 +4726,19 @@ def _check_condition(project: Path, condition: Dict[str, Any]) -> bool:
     # array. If present, the condition is satisfied without requiring
     # the agent to author the redundant trigger file.
     files = condition.get("files_exist", [])
+    # `any_of: true` — the step runs if ANY listed file is present, matching the
+    # long-standing `gate:` semantics (flow_compliance line ~3993). Default
+    # stays ALL-of, so every existing step's condition is byte-unchanged.
+    #
+    # Why a condition needs it at all: a step whose ONLY trigger is the artefact
+    # it consumes disappears silently when that artefact is missing — the very
+    # case where something went wrong. Listing the step's own not-run record
+    # alongside its input lets an unrunnable step still reach its gate and say
+    # so, instead of being skipped by condition and read as nothing to report.
+    if files and condition.get("any_of", False):
+        if not any(_glob_first(project, pat) for pat in files):
+            return False
+        return True
     if files:
         for pat in files:
             if _glob_first(project, pat):

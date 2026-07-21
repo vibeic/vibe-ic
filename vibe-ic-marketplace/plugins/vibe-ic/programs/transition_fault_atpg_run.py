@@ -84,9 +84,18 @@ Usage:
         [--top spm] [--dff-cells DFFHQD1] \\
         [--floor 90] [--max-faults 400] [--json <out>]
 
-Exit 0 = TDF logic coverage >= floor (or NOT_APPLICABLE: no sequential logic).
-Exit 1 = TDF logic coverage below floor OR the ATPG could not run.
+Exit 0 = TDF logic coverage >= floor (or NOT_APPLICABLE: no sequential logic,
+         established from the design's own Liberty — see below).
+Exit 1 = TDF logic coverage below floor OR the ATPG could not run OR BLOCKED.
 Exit 2 = usage / IO error.
+
+NOT_APPLICABLE IS EARNED, NOT ASSUMED. A design self-skips only when its own
+Liberty declares sequential cells and the netlist instantiates none of them. If
+the Liberty cannot be reached, the design's sequential content was never
+checked, and the verdict is BLOCKED (exit 1) — "we could not verify" — rather
+than a NOT_APPLICABLE that reads downstream as a clean skip. If the design DOES
+have sequential cells and the cut exposed none, that is ERROR: a scan-insertion
+result of zero flops on a sequential design is a failure, not a skip.
 
 The floor is enforced by the sibling gate `transition_coverage_check.py`; this
 producer's own exit mirrors it for convenience but the gate is authoritative.
@@ -414,9 +423,17 @@ def _run_in_docker(project: Path, shell_cmd: str, timeout: int,
 
 def _ensure_cut(project: Path, netlist_rel: str, cut_rel: str, clock: str,
                 dff_cells: str | None, pdk_dir: Path | None,
-                timeout: int) -> tuple[bool, str]:
+                timeout: int,
+                liberty_sequential: "set | None" = None) -> tuple[bool, str]:
     """Reuse phase2/stage2/dft/cut_netlist.v if present, else run `fault cut`.
-    Returns (ok, message)."""
+    Returns (ok, message).
+
+    `liberty_sequential` — the set of cells the design's OWN Liberty declares to
+    have an `ff` group. Supplying it makes both the cut-validity check and the
+    `--dff` list name-independent: whichever cells the netlist instantiates that
+    the library calls sequential ARE the flops, however they happen to be
+    spelled. Without it the caller falls back to name matching, which is a
+    guess about the library's spelling conventions."""
     cut_abs = project / cut_rel
     if cut_abs.exists() and cut_abs.stat().st_size > 0:
         # Only reuse a REAL full-scan cut — one with NO residual flop cells (a
@@ -425,7 +442,8 @@ def _ensure_cut(project: Path, netlist_rel: str, cut_rel: str, clock: str,
         # seed, so `fault cut` cut nothing) is NOT a cut; regenerate it, else
         # parse_cut_ports finds 0 pairs → a FALSE NOT_APPLICABLE on a sequential
         # design (which the coverage gate would silently pass — gaming).
-        if not _far.detect_dff_cells(cut_abs.read_text(errors="replace")):
+        if not _far.detect_dff_cells(cut_abs.read_text(errors="replace"),
+                                     liberty_sequential):
             return True, f"reused existing cut netlist: {cut_rel}"
         print(f"{_PROGRAM}: existing {cut_rel} still has flop cells → not a real "
               f"cut, regenerating", file=sys.stderr)
@@ -434,7 +452,7 @@ def _ensure_cut(project: Path, netlist_rel: str, cut_rel: str, clock: str,
         ntext = (project / netlist_rel).read_text(errors="replace")
     except OSError as exc:
         return False, f"cannot read netlist {netlist_rel}: {exc}"
-    detected = _far.detect_dff_cells(ntext)
+    detected = _far.detect_dff_cells(ntext, liberty_sequential)
     cells = _far.merge_dff_cells(dff_cells, detected) or (dff_cells or "DFFHQD1")
     cut_abs.parent.mkdir(parents=True, exist_ok=True)
     cmd = (f"fault cut --output /work/{cut_rel} --dff {cells} "
@@ -517,6 +535,50 @@ def _resolve_liberty_mount(project: Path, liberty: str):
     except ValueError:
         # resolves outside the project (symlinked PDK) — bind-mount its dir
         return "/libmnt/" + real.name, (str(real.parent), "/libmnt")
+
+
+def _liberty_structure_text(project: Path, liberty: str,
+                            pdk_dir: Path | None,
+                            timeout: int = 120) -> tuple[str, str]:
+    """Read the resolved std-cell Liberty far enough to enumerate which cells
+    declare an `ff` group. Returns (text, source) — `text` may be "" when the
+    Liberty could not be reached, which is a first-class outcome the caller
+    must NOT round down to "no flops" (see `_far.sequential_evidence`).
+
+    Two reads, because the flow's Liberty lives on either side of the container
+    boundary: a project-relative or host-visible path is read directly; a
+    container-baked path (the mainstream case — the Liberty synth/STA/LEC
+    already use is inside the tool image, not in the run dir) is reduced to its
+    group structure INSIDE the container and only that is brought back. Never
+    reaches into another PDK's data, and never invents cells: an unreachable
+    Liberty yields "", and the caller says so.
+
+    chip- and PDK-AGNOSTIC — nothing here knows a library's name."""
+    host_cands = []
+    if liberty.startswith("/"):
+        host_cands.append(Path(liberty))
+    else:
+        host_cands.append(project / liberty)
+    for cand in host_cands:
+        try:
+            if cand.is_file():
+                return cand.read_text(errors="replace"), f"host read {cand}"
+        except OSError:
+            pass
+    # Container read: reduce to group structure so a 20 MB Liberty crosses the
+    # boundary as kilobytes.
+    liberty_ctr, mount = _resolve_liberty_mount(project, liberty)
+    try:
+        ec, out, err = _run_in_docker(
+            project, f"{_far.LIBERTY_STRUCTURE_GREP} {liberty_ctr} || true",
+            timeout=timeout, pdk_dir=pdk_dir,
+            extra_mounts=([mount] if mount else None))
+    except Exception as exc:  # pragma: no cover - defensive
+        return "", f"container read failed: {exc}"
+    if ec == 0 and out.strip():
+        return out, f"container structure read {liberty_ctr}"
+    return "", (f"unreachable (host miss; container exit {ec}): "
+                f"{(err or '')[-160:]}")
 
 
 def _resolve_design_liberty(project: Path, explicit: "str | None") -> str:
@@ -757,9 +819,22 @@ def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
         "floor_pct": floor, "disclosure": _DISCLOSURE,
     }
 
+    # 0. AUTHORITATIVE FLOP IDENTIFICATION. Ask the design's own Liberty which
+    # cells declare an `ff` group, BEFORE cutting — so `fault cut --dff` is
+    # given the flops the library says exist rather than the ones a name pattern
+    # guesses at, and so the self-skip decision below has real evidence behind
+    # it. An unreachable Liberty is recorded as such, never silently treated as
+    # "this library declares no flops".
+    lib_text, lib_source = _liberty_structure_text(project, liberty, pdk_dir,
+                                                   timeout=min(timeout, 120))
+    lib_seq = _far.liberty_sequential_cells(lib_text) if lib_text else set()
+    base["liberty_source"] = lib_source
+    base["liberty_sequential_cells_declared"] = len(lib_seq)
+
     # 1. CUT
     ok, msg = _ensure_cut(project, netlist_rel, cut_rel, clock, dff_cells,
-                          pdk_dir, timeout=min(timeout, 300))
+                          pdk_dir, timeout=min(timeout, 300),
+                          liberty_sequential=lib_seq)
     base["cut"] = msg
     if not ok:
         base.update({"verdict": "ERROR", "status": "ERROR", "reasons": [msg]})
@@ -781,34 +856,60 @@ def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
     _top, prim_in, prim_out, pairs = parse_cut_ports(flat_text)
     prim_in_names = [n.lstrip('\\') for n, _ in prim_in]
 
-    # NOT_APPLICABLE: a purely combinational design (no cut flops) has no
-    # launch mechanism → transition-fault ATPG under LOC does not apply. This
-    # is an honest N/A (never a fake pass), self-skipping per the flow gate.
-    # ANTI-GAMING GUARD: only a GENUINELY combinational design may self-N/A. If
-    # the SOURCE netlist has sequential cells yet the cut exposed 0 pairs, the
-    # cut did not actually run (wrong --dff seed / stale bogus cut) — that is a
-    # real capability gap, reported as an honest ERROR, NEVER a false N/A that
-    # the coverage gate would silently pass.
+    # ZERO SCAN FLOPS — the three-way decision. `scan_flops: 0` is only ONE of
+    # these three things, and which one it is decides whether the step may
+    # self-skip. Collapsing them (as a single boolean "does the name pattern
+    # match anything?" did) is what let a scan-insertion result of zero flops on
+    # a design with 65 of them be reported as a clean NOT_APPLICABLE.
+    #
+    #   HAS_SEQUENTIAL → the cut did NOT run (wrong --dff list / stale bogus
+    #     cut). A scan-insertion step that inserted nothing into a sequential
+    #     design is a FAILURE, never a skip. ERROR.
+    #   NO_SEQUENTIAL  → genuinely combinational, established from the design's
+    #     own Liberty. There are no launch-off-capture transition faults to
+    #     find. Honest NOT_APPLICABLE.
+    #   UNKNOWN        → the Liberty could not be reached, so "this design has
+    #     no flops" was never actually checked. BLOCKED: we could not verify,
+    #     and that is now sayable instead of being rounded down to a self-skip.
+    try:
+        src_text = (project / netlist_rel).read_text(errors="replace")
+    except OSError:
+        src_text = ""
+    evidence = _far.sequential_evidence(src_text, lib_text or None)
+    base["sequential_evidence"] = evidence
+
     if not pairs:
-        src_has_flops = bool(_far.detect_dff_cells(
-            (project / netlist_rel).read_text(errors="replace")))
-        if src_has_flops:
+        if evidence["verdict"] == _far.SEQ_PRESENT:
             base.update({
                 "verdict": "ERROR", "status": "ERROR", "scan_flops": 0,
-                "reasons": ["design has sequential cells but the scan cut exposed "
-                            "0 pseudo-PI/PO pairs — the cut did not run correctly "
-                            "(NOT a combinational design); refusing a false "
-                            "NOT_APPLICABLE"],
+                "reasons": ["scan cut exposed 0 pseudo-PI/PO pairs on a design "
+                            "that HAS sequential cells ("
+                            + "; ".join(evidence["reasons"]) + ") — the cut did "
+                            "not run correctly (NOT a combinational design); "
+                            "refusing a false NOT_APPLICABLE"],
             })
             return 1, base
+        if evidence["verdict"] == _far.SEQ_ABSENT:
+            base.update({
+                "verdict": "NOT_APPLICABLE", "status": "NOT_APPLICABLE",
+                "scan_flops": 0,
+                "reasons": ["no sequential (scan-cut) flops found in the core — a "
+                            "combinational design has no launch-off-capture "
+                            "transition faults; TDF ATPG not applicable ("
+                            + "; ".join(evidence["reasons"]) + ")"],
+            })
+            return 0, base
         base.update({
-            "verdict": "NOT_APPLICABLE", "status": "NOT_APPLICABLE",
-            "scan_flops": 0,
-            "reasons": ["no sequential (scan-cut) flops found in the core — a "
-                        "combinational design has no launch-off-capture "
-                        "transition faults; TDF ATPG not applicable"],
+            "verdict": "BLOCKED", "status": "BLOCKED", "scan_flops": 0,
+            "reasons": ["scan cut exposed 0 pseudo-PI/PO pairs and it could NOT "
+                        "be established whether the design has sequential "
+                        "elements ("
+                        + "; ".join(evidence["reasons"])
+                        + f"; liberty: {lib_source}) — refusing both a coverage "
+                        "number and a NOT_APPLICABLE self-skip on unverified "
+                        "grounds"],
         })
-        return 0, base
+        return 1, base
 
     # 3. ENUMERATE
     nets = enumerate_fault_sites(flat_text)

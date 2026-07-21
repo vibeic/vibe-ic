@@ -700,7 +700,17 @@ steps:
     name: "Transition-delay-fault (at-speed LOC) ATPG"
     stage: stage2
     condition:
-      files_exist: ["phase2/stage2/dft/cut_netlist.v"]
+      # ANY of these three, not just the cut netlist. Gating DT1 solely on its
+      # INPUT meant that whenever the scan cut was missing the step vanished by
+      # condition — no artefact, no gate, no row — which is indistinguishable
+      # from a step that ran and self-skipped. The producer/runner now always
+      # leaves either a coverage artefact or a not-run record saying why, and
+      # either one is enough to reach the gate, so an unmeasured at-speed step
+      # reports BLOCKED with its reason instead of disappearing.
+      any_of: true
+      files_exist: ["phase2/stage2/dft/cut_netlist.v",
+                    "reports/phase2/dft/transition_coverage.json",
+                    "phase2/stage2/dft/transition_atpg_not_run.json"]
     programs:
       - transition_fault_atpg_run
       - transition_coverage_check

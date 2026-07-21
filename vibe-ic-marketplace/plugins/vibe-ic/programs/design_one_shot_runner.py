@@ -8995,12 +8995,39 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
 
     # ============ Step DT1 — Transition-delay-fault (LOC) ATPG =========
     # v1.3.97 — PRODUCE the TDF coverage from the Step-11 cut netlist, reusing
-    # the discovered `clk`. Best-effort: the flow's DT1 gate only VALIDATES the
-    # produced reports/phase2/dft/transition_coverage.json (via
-    # transition_coverage_check), mirroring the Step-11 produce/validate split.
-    # A combinational / no-flop / no-cut design self-returns NOT_APPLICABLE.
-    if clk and (dft_dir / "cut_netlist.v").is_file():
-        tdf_json = reports_dir / "phase2" / "dft" / "transition_coverage.json"
+    # the discovered `clk`. The flow's DT1 gate only VALIDATES the produced
+    # reports/phase2/dft/transition_coverage.json (via transition_coverage_
+    # check), mirroring the Step-11 produce/validate split.
+    #
+    # THE STEP ALWAYS LEAVES A RECORD. Previously the whole block sat behind a
+    # bare `if clk and cut_netlist.v`, with no else — so when the precondition
+    # was unmet the at-speed coverage artefact was simply ABSENT, with nothing
+    # anywhere saying why, and the DT1 row could not distinguish "never ran"
+    # from "ran and failed to write" from "ran and self-skipped". Those are
+    # three different repairs. The producer's exit status was discarded too, so
+    # a run that exited non-zero without writing its JSON also vanished.
+    # An absent artefact must never be silence; each of the three outcomes now
+    # names itself in `not_run_stage`, and the gate turns that into BLOCKED
+    # (recorded reason) rather than a step nobody notices.
+    _tdf_not_run = dft_dir / "transition_atpg_not_run.json"
+    _TDF_CAP = {"capability_flag": "cap:at_speed_timing_graded_atpg",
+                "skips_required_output":
+                    "reports/phase2/dft/transition_coverage.json"}
+    tdf_json = reports_dir / "phase2" / "dft" / "transition_coverage.json"
+    _tdf_missing = []
+    if not clk:
+        _tdf_missing.append("no clock was discovered for this design")
+    if not (dft_dir / "cut_netlist.v").is_file():
+        _tdf_missing.append("phase2/stage2/dft/cut_netlist.v absent — the "
+                            "Step-11 scan cut produced no cut netlist to run "
+                            "at-speed ATPG on")
+    if _tdf_missing:
+        _dft_disclose_skip(
+            _tdf_not_run,
+            "transition-delay-fault ATPG NEVER RAN — precondition unmet: "
+            + "; ".join(_tdf_missing),
+            dict(_TDF_CAP, not_run_stage="precondition_unmet"))
+    else:
         tdf_json.parent.mkdir(parents=True, exist_ok=True)
         tdf_cmd = [sys.executable,
                    str(PROGRAMS_DIR / "transition_fault_atpg_run.py"),
@@ -9013,12 +9040,34 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
         if pdk and pdk == _cpdk.COMMERCIAL_PDK_ID:
             tdf_cmd += ["--pdk-dir", str((project / "input" / "pdk").resolve())]
         try:
-            subprocess.run(tdf_cmd, capture_output=True, text=True, timeout=1800)
+            _tdf_p = subprocess.run(tdf_cmd, capture_output=True, text=True,
+                                    timeout=1800)
+            if not tdf_json.is_file():
+                # Ran, produced nothing. The producer writes its JSON on every
+                # path it reaches, so reaching none of them is itself the
+                # finding — record the exit status and the tail rather than
+                # leaving an absent file to be read as a self-skip.
+                _dft_disclose_skip(
+                    _tdf_not_run,
+                    "transition-delay-fault ATPG RAN but wrote no "
+                    "transition_coverage.json (producer exit "
+                    f"{_tdf_p.returncode}): "
+                    + ((_tdf_p.stderr or _tdf_p.stdout or "")[-400:]
+                       or "no output"),
+                    dict(_TDF_CAP, not_run_stage="producer_wrote_no_artifact",
+                         producer_exit=_tdf_p.returncode))
+            elif _tdf_not_run.is_file():
+                # A real measurement supersedes any stale record from a prior
+                # attempt, so the gate does not read a fresh result as blocked.
+                try:
+                    _tdf_not_run.unlink()
+                except OSError:
+                    pass
         except Exception as exc:
             _dft_disclose_skip(
-                dft_dir / "transition_atpg_not_run.json",
+                _tdf_not_run,
                 f"transition ATPG execution error: {exc}",
-                {"capability_flag": "cap:at_speed_timing_graded_atpg"})
+                dict(_TDF_CAP, not_run_stage="producer_execution_error"))
 
     # ================= Step 12 — Post-DFT optimization =================
     t0 = time.time()
