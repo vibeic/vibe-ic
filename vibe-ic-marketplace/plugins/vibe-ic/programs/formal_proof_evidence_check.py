@@ -154,6 +154,36 @@ def _sibling_self_skip(formal_dir: Path):
     return None
 
 
+def _sibling_env_gap(formal_dir: Path):
+    """#211 — return `(basename, env_gap_dict)` of a co-located sibling that
+    discloses an unreachable formal ENGINE, else None.
+
+    Deliberately NOT folded into `_SELF_SKIP_VERDICTS`: an environment gap is
+    not a self-skip. A self-skip makes this gate vacuous (rc=2); an
+    environment gap keeps it a hard FAIL and only changes the ATTRIBUTION, so
+    the reader learns what to install instead of "nothing claims a proof".
+    chip-AGNOSTIC: reads only the verdict + env_gap fields.
+    """
+    try:
+        siblings = sorted(formal_dir.glob("*.json"))
+    except OSError:
+        return None
+    for sib in siblings:
+        if sib.name == "results.json":
+            continue
+        try:
+            data = json.loads(sib.read_text(errors="replace"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        vd = str(data.get("verdict", "")).upper().replace("_", "-")
+        if vd == "ENV-UNAVAILABLE":
+            gap = data.get("env_gap")
+            return sib.name, (gap if isinstance(gap, dict) else {})
+    return None
+
+
 def audit(project: Path) -> dict:
     formal_dir = _pl.formal_dir(project)
     results_path = formal_dir / "results.json"
@@ -181,6 +211,29 @@ def audit(project: Path) -> dict:
                 f"co-located sibling '{skip_sib}' honestly self-reports no "
                 f"proof ran (verdict=SKIPPED-CONDITION, #440 manifest "
                 f"shape) — vacuous for this gate, NOT a fabricated PASS")
+            return rep
+        # #211 — when the proof ENGINE was never reached, the runner leaves
+        # an ENV_UNAVAILABLE manifest naming the missing capability, the
+        # search location and the remedy. This is STILL a hard FAIL — an
+        # unreachable environment is not a self-skip and must never be
+        # vacuous — but the finding carries the actionable detail instead of
+        # the bare "nothing claims a proof", which is a dead end for whoever
+        # has to fix the host.
+        env_gap = _sibling_env_gap(formal_dir)
+        if env_gap is not None:
+            sib, gap = env_gap
+            rep.update(verdict="FAIL", rc=1)
+            rep["findings"].append(
+                f"ENV_UNAVAILABLE (#211): no proof ran because the formal "
+                f"engine was never reached — missing capability "
+                f"{gap.get('missing_capability', '?')!r}, looked for it at "
+                f"{gap.get('searched', '?')}. Remedy: "
+                f"{gap.get('remedy', '?')} "
+                f"(disclosed by '{sib}'). This is an ENVIRONMENT gap, not a "
+                f"design defect and not an inconclusive proof — but it is "
+                f"NOT vacuous: Step 5 has no proof evidence, so this gate "
+                f"FAILs until the engine is reachable or the step is waived "
+                f"through a reviewed waivers.json entry.")
             return rep
         rep.update(verdict="FAIL", rc=1)
         rep["findings"].append(
