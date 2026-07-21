@@ -558,3 +558,105 @@ def test_program_first_gate_bypass_flag(tmp_path):
          "--out-dir", str(tmp_path / "out"), "--allow-unjustified-downgrade"],
         capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+# ---------------------------------------------------------------------------
+# #197 finding 1 — a Bucket-A record whose step has no `bucket_A_program`
+# (either a LISTED step with an explicit null program layer, or an UNLISTED
+# step that falls through to default_routing's null) must be reported as
+# UNROUTED, never crash the batch with AttributeError('NoneType' … 'replace')
+# and leave a partially-written output directory.
+# ---------------------------------------------------------------------------
+def _run_capture(tmp_path, records):
+    rec_file = tmp_path / "recoveries.json"
+    rec_file.write_text(json.dumps(records))
+    out_dir = tmp_path / "candidates"
+    r = subprocess.run(
+        [sys.executable, str(SCRIPT), "--records", str(rec_file),
+         "--out-dir", str(out_dir)],
+        capture_output=True, text=True, timeout=30)
+    spath = out_dir / "summary.json"
+    summary = json.loads(spath.read_text()) if spath.is_file() else None
+    return r, summary, out_dir
+
+
+def test_bucket_A_null_target_step_does_not_abort_batch(tmp_path):
+    """#197 finding 1 — a batch mixing (a) a LISTED step with an explicit null
+    program layer (analog.sizing_loop) and (b) an UNLISTED step (falls to
+    default_routing null) must NOT abort. The well-routed Bucket-A record and a
+    DIFFERENT-bucket record both still emit, and the two null-target records are
+    reported as unrouted in summary.json + on stderr (never silently dropped)."""
+    recs = [
+        # (a) LISTED step whose entry declares an explicit null bucket_A_program
+        {"step": "analog.sizing_loop", "design": "d1", "bucket": "A",
+         "rule_name": "sizing-loop-convergence", "docstring": "doc",
+         "expected_signal": "WARN", "fix_action": "x"},
+        # (b) UNLISTED step → default_routing (bucket_A_program is null)
+        {"step": "totally.unlisted.step", "design": "d2", "bucket": "A",
+         "rule_name": "unlisted-rule", "docstring": "doc",
+         "expected_signal": "WARN", "fix_action": "x"},
+        # (c) a well-routed Bucket-A record — must still emit
+        {"step": "phase2.rtl_gen", "design": "d3", "bucket": "A",
+         "rule_name": "restoring-div-remainder-width", "docstring": "doc",
+         "expected_signal": "WARN", "fix_action": "x"},
+        # (d) a Bucket-B record — a DIFFERENT bucket must still emit too
+        {"step": "phase3.drc", "design": "d4", "bucket": "B",
+         "why_not_bucket_a": "needs NL/convention pattern recognition no regex captures",
+         "skill_title": "DRC pattern", "pattern": "p", "when": "w",
+         "what": "x", "example": "e", "generality": "g"},
+    ]
+    r, summary, _ = _run_capture(tmp_path, recs)
+    assert r.returncode == 0, \
+        f"batch must NOT abort on a null program target; rc={r.returncode}\n{r.stderr}"
+    assert summary is not None, "summary.json must be written even with unrouted records"
+    # (c) the well-routed record still emits
+    assert any("rtl_hygiene_lint" in f for f in summary.get("bucket_A_files", [])), \
+        f"the well-routed Bucket-A record must still emit; got {summary.get('bucket_A_files')}"
+    # (d) the other bucket still emits
+    assert any(e["target"] == "skills/drc-fix/SKILL.md"
+               for e in summary.get("bucket_B_files", [])), \
+        "a Bucket-B record must still emit while Bucket A has unrouted records"
+    # the two null-target records are reported (not silently dropped)
+    unrouted_steps = {u["step"] for u in summary.get("bucket_A_unrouted", [])}
+    assert unrouted_steps == {"analog.sizing_loop", "totally.unlisted.step"}, \
+        f"both null-target steps must be reported as unrouted; got {unrouted_steps}"
+    # and surfaced on stderr for the human running the capture
+    assert "unrouted" in r.stderr.lower() and "analog.sizing_loop" in r.stderr
+
+
+def test_bucket_A_all_null_targets_completes_cleanly(tmp_path):
+    """#197 finding 1 — even when EVERY Bucket-A record is null-target, the run
+    completes (rc 0), writes summary.json, and reports them all as unrouted
+    rather than raising / leaving a partial output dir."""
+    recs = [
+        {"step": "analog.sizing_loop", "design": "d1", "bucket": "A",
+         "rule_name": "r1", "docstring": "doc",
+         "expected_signal": "WARN", "fix_action": "x"},
+        {"step": "another.unlisted", "design": "d2", "bucket": "A",
+         "rule_name": "r2", "docstring": "doc",
+         "expected_signal": "WARN", "fix_action": "x"},
+    ]
+    r, summary, _ = _run_capture(tmp_path, recs)
+    assert r.returncode == 0, r.stderr
+    assert summary is not None
+    assert len(summary.get("bucket_A_unrouted", [])) == 2
+    # no bucket_A output file was fabricated for a null target
+    assert not summary.get("bucket_A_files"), \
+        f"no bucket_A file should be written for null targets; got {summary.get('bucket_A_files')}"
+
+
+def test_phase2_lec_routes_to_lec_program(tmp_path):
+    """#197 finding 2 — a captured LEC / equivalence recovery now routes to the
+    LEC checker program instead of falling through to the null default (which
+    previously crashed the whole batch)."""
+    recs = [{
+        "step": "phase2.lec", "design": "d1", "bucket": "A",
+        "rule_name": "lec-hierarchy-both-sides-staged", "docstring": "doc",
+        "expected_signal": "ERROR", "fix_action": "flatten both sides"}]
+    r, summary, _ = _run_capture(tmp_path, recs)
+    assert r.returncode == 0, r.stderr
+    a_files = summary.get("bucket_A_files", [])
+    assert any("lec_equivalence_check" in f for f in a_files), \
+        f"phase2.lec Bucket A must route to lec_equivalence_check; got {a_files}"
+    assert not summary.get("bucket_A_unrouted"), \
+        "phase2.lec must NOT be unrouted now that it has a routing entry"

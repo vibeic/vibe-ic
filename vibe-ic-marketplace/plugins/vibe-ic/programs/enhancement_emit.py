@@ -721,12 +721,35 @@ def main():
                "routing_used": {}}
 
     # v0.1.35+ — route Bucket A and Bucket B per `step` field
+    # #197 finding 1 — Bucket-A records whose step has no program layer.
+    # Defined here so it is always in scope for the end-of-run summary even
+    # when there are no Bucket-A records at all.
+    unrouted_A: list[dict] = []
     if by_bucket["A"]:
         # group by target program file
         by_target: dict[str, list[dict]] = {}
         for r in by_bucket["A"]:
-            tgt = route_for(r.get("step", ""), routing).get(
-                "bucket_A_program", "programs/__unrouted__.py")
+            # WARNING (#197 finding 1): dict.get(key, default) returns the
+            # `default` argument ONLY when the key is ABSENT. Two very
+            # reachable cases yield a PRESENT key whose value is null — so
+            # `.get("bucket_A_program", "…")` returns None, NOT the string
+            # default:
+            #   (a) an UNLISTED step falls through to `default_routing`, whose
+            #       `bucket_A_program` is explicitly null; and
+            #   (b) a LISTED step that declares an explicit null program layer
+            #       because it has no dedicated deterministic check program yet
+            #       (e.g. `analog.sizing_loop`).
+            # A None target means "this step has no Bucket-A program layer".
+            # SKIP this record's program-rule sketch and record it as unrouted;
+            # NEVER raise. Raising here aborted the entire batch AFTER some
+            # artifacts were already written — losing every other captured
+            # recovery and leaving a half-populated output dir with a bare
+            # AttributeError traceback. A lost routing target must cost at most
+            # that one record's Bucket-A emission, never the whole capture.
+            tgt = route_for(r.get("step", ""), routing).get("bucket_A_program")
+            if not tgt:
+                unrouted_A.append(r)
+                continue
             by_target.setdefault(tgt, []).append(r)
         bucket_A_files = []
         for tgt, items in by_target.items():
@@ -744,8 +767,14 @@ def main():
     if by_bucket["B"]:
         by_target = {}
         for r in by_bucket["B"]:
+            # `... or "agents/ic-expert-agent.md"` (not `.get(k, default)`) so a
+            # LISTED step with an explicit null `bucket_B_skill_file` falls back
+            # to the general-judgment catch-all instead of crashing on None
+            # (#197 finding 1 — same None-vs-missing hazard as Bucket A; for
+            # skills the honest fallback is the catch-all, since there is always
+            # a general skill that can hold the section).
             tgt = route_for(r.get("step", ""), routing).get(
-                "bucket_B_skill_file", "agents/ic-expert-agent.md")
+                "bucket_B_skill_file") or "agents/ic-expert-agent.md"
             by_target.setdefault(tgt, []).append(r)
         bucket_B_files = []
         for tgt, items in by_target.items():
@@ -794,6 +823,28 @@ def main():
             chunks.append(emit_discard_note(r))
         p.write_text("\n".join(chunks))
         summary["bucket_D_file"] = str(p)
+
+    # #197 finding 1 — surface every Bucket-A record that had no program layer
+    # so a capture is NEVER silently lost. Recorded in summary.json AND printed
+    # to stderr; the batch still completed and emitted all other buckets.
+    if unrouted_A:
+        summary["bucket_A_unrouted"] = [
+            {"step": r.get("step") or "(no step)",
+             "design": r.get("design", "?"),
+             "rule_name": r.get("rule_name", "")}
+            for r in unrouted_A
+        ]
+        print(
+            f"WARNING: {len(unrouted_A)} Bucket-A record(s) had no routable "
+            f"`bucket_A_program` (step unlisted in CAPTURE_ROUTING.json, or "
+            f"listed with an explicit null program layer). Their program-rule "
+            f"sketch was SKIPPED and they are reported below as unrouted — the "
+            f"rest of the batch emitted normally. Add a routing entry (or a "
+            f"real program) for:",
+            file=sys.stderr)
+        for u in summary["bucket_A_unrouted"]:
+            print(f"  - step={u['step']!r} rule={u['rule_name']!r} "
+                  f"(design {u['design']})", file=sys.stderr)
 
     (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps(summary, indent=2))
