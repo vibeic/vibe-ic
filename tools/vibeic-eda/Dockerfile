@@ -65,7 +65,7 @@ RUN git clone https://github.com/vibeic/ngspice.git /ngspice \
 # ---------------------------------------------------------------------------
 FROM ubuntu:24.04 AS lvs-builder
 ARG MAGIC_REF=19185c197fbaa4a91ec52877a2c13ec08a97b7ed  # pinned; branch vibeic/integration is the LVS-fidelity line (gk-merge/2026-07-19) MERGED with vibeic/bridge-tech-multimetal, so the DEF/LVS robustness fixes the image already ran AND the 2026-07-18 batch (#46 foundry layer-map, #47/#37 grid snap, #28 SPEF, #48 NDR, #32 tech-from-LEF, #38) are both present. Neither line was dropped.
-ARG NETGEN_REF=b711fa5074a8a76f35ec4484768b24b3606f08e1  # pinned; branch vibeic/connectivity-match (0.2.22: lvs-fidelity line + J1 blackbox-zero-pin guard; superset of prior lvs-fidelity)
+ARG NETGEN_REF=0334b7dfb1d6adce0a8079f5552f68982815d3d9  # pinned; branch vibeic/connectivity-match (netgen PR#1: plain-mode lvs finishes + stdout==report, resolves vibe-ic#191 tool layer; report byte-identical so #189 classifier/Step-31 unaffected)
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       build-essential git m4 tcl-dev tk-dev libx11-dev libcairo2-dev libncurses-dev ca-certificates \
  && rm -rf /var/lib/apt/lists/*
