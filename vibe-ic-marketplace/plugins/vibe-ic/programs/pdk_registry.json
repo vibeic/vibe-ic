@@ -90,7 +90,40 @@
       "clk_buf_cell": "gf180mcu_fd_sc_mcu7t5v0__clkbuf_4",
       "clk_buf_root_cell": "gf180mcu_fd_sc_mcu7t5v0__clkbuf_16",
       "drc_deck": "libs.tech/klayout/tech/drc/gf180mcu.drc",
-      "lvs_deck": null,
+      "_lvs_deck_comment": "gf180mcuD DOES ship both sign-off LVS routes; both were declared absent, which made the LVS-capability report call this PDK LVS-incapable. Paths verified present in the shipped image: libs.tech/netgen/gf180mcuD_setup.tcl (netgen) and libs.tech/klayout/tech/lvs/gf180mcu.lvs (KLayout). Same defect class, same two directory conventions, as the ihp-sg13g2 entry below. NOTE the digital phase3 LVS route does NOT read this key — it builds the netgen setup path by convention (libs.tech/netgen/<pdk>_setup.tcl) and was already working; this key feeds the analog/PV availability report and the A5/A7 gates.",
+      "lvs_deck": "libs.tech/netgen/gf180mcuD_setup.tcl",
+      "klayout_lvs_deck": "libs.tech/klayout/tech/lvs/gf180mcu.lvs",
+      "_lefdef_layermap_comment": "LEF/DEF -> GDS streamout layer map. `--pdk sky130A` and `--pdk nangate45` each resolve one (sky130A.map / FreePDK45.map) from their hardcoded named branches; every registry-resolved PDK needs the key, and gf180mcuD had none, so streamout fell back to the DEF reader's COMPACT numbering. The gf180mcu.drc sign-off deck reads the foundry numbers (verified in libs.tech/klayout/tech/gf180mcu.map: Metal1=34/0, Metal2=36/0, Metal3=42/0, Metal4=46/0, Metal5=81/0, Via1=35/0), so on compact numbering the routing and PDN shapes land on the deck's FEOL device numbers and the DRC report is a numbering artefact, not a design measurement — the nangate45 branch records 18.7M spurious FEOL items from exactly this cause. This is the same file gf180mcuD's own librelane config.tcl sets as KLAYOUT_DEF_LAYER_MAP.",
+      "lefdef_layermap": "libs.tech/klayout/tech/gf180mcu.map",
+      "_pnr_exclude_comment": "PnR cell-exclusion list. Absent => the flow falls back to a get_lib_cells family heuristic. gf180mcuD ships the real list at libs.tech/librelane/gf180mcu_fd_sc_mcu7t5v0/pnr_exclude.cells (verified present in the shipped image).",
+      "pnr_exclude_cell_file": "libs.tech/librelane/gf180mcu_fd_sc_mcu7t5v0/pnr_exclude.cells",
+      "_pdn_straps_comment": "Upper-metal PDN mesh. Metal1 follow-pin rails ALONE leave the per-row rails electrically isolated, so OpenROAD PSM reports `Unconnected instance <inst>/VDD` then `[ERROR PSM-0069] Check connectivity failed on VDD` and static IR / EM cannot be computed at all (measured on ihp-sg13g2 before its straps were declared; the mechanism is PDK-independent). Values are taken VERBATIM from gf180mcuD's OWN libs.tech/librelane/config.tcl: PDN_VERTICAL_LAYER Metal4 / PDN_HORIZONTAL_LAYER Metal5, PDN_VWIDTH 1.6 PDN_VPITCH 153.6 PDN_VOFFSET 16.32, PDN_HWIDTH 1.6 PDN_HPITCH 153.18 PDN_HOFFSET 16.65, PDN_RAIL_LAYER Metal1. That file's PDN_RAIL_WIDTH 0.6 independently matches the follow-pin width this runner discovers from the cell LEF (VDD/VSS on Metal1, w=0.6), which cross-validates the source.",
+      "pdn_straps": {
+        "stripes": [
+          {
+            "layer": "Metal4",
+            "width": 1.6,
+            "pitch": 153.6,
+            "offset": 16.32
+          },
+          {
+            "layer": "Metal5",
+            "width": 1.6,
+            "pitch": 153.18,
+            "offset": 16.65
+          }
+        ],
+        "connects": [
+          [
+            "Metal1",
+            "Metal4"
+          ],
+          [
+            "Metal4",
+            "Metal5"
+          ]
+        ]
+      },
       "_physical_cell_comment": "Physical-cell masters read from the shipped LEF by their LEF CLASS, not by name shape: `gf180mcu_fd_sc_mcu7t5v0__filltie` is the library's only `CLASS core WELLTAP` and `gf180mcu_fd_sc_mcu7t5v0__antenna` its only `CLASS core ANTENNACELL`. Without tapcell_master the PnR step printed `TAPCELL_SKIPPED: no tapcell_master configured` and placed ZERO well taps, which is a categorical latch-up exposure. tapcell_distance_um 14.0 sits under the PDK's own 15um max-tap-distance rule for this 5V library — DF.13_MV and DF.14_MV in libs.tech/klayout/tech/drc/rule_decks/comp.rb both state 15um (the LV variants are 20um).",
       "tapcell_master": "gf180mcu_fd_sc_mcu7t5v0__filltie",
       "tapcell_distance_um": 14.0,
