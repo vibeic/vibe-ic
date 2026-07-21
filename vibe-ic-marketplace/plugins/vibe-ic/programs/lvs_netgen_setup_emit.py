@@ -81,6 +81,19 @@ PDK_POWER_NETS: Dict[str, List[str]] = {
     # GF180 — single-domain VDD/VSS plus per-cell PG.
     "gf180mcuC": ["VDD", "VSS", "VPWR", "VGND"],
     "gf180mcuD": ["VDD", "VSS", "VPWR", "VGND"],
+    # IHP SG13G2 (open-source 130nm BiCMOS). The PDK's own Magic startup
+    # file states the three names authoritatively:
+    #     libs.tech/magic/ihp-sg13g2.magicrc
+    #       set VDD VDD ; set GND VSS ; set SUB sub!
+    # `sub!` is a Magic GLOBAL node, but ext2spice emits it as an ordinary
+    # top-level node, so netgen sees an extra layout PORT `sub` with no
+    # schematic counterpart and reports "Netlists do not match" on an
+    # otherwise-clean compare. Globalising it restores the PDK's own
+    # declared semantics — it is not a waiver.
+    "ihp-sg13g2": ["VDD", "VSS", "sub"],
+    # NanGate45 / ASAP7 — single-domain VDD/VSS.
+    "nangate45": ["VDD", "VSS"],
+    "asap7": ["VDD", "VSS"],
 }
 
 
@@ -125,21 +138,37 @@ class LvsSetupOptions:
 
 
 def _normalize_pdk(pdk: str) -> str:
-    """Return a canonical PDK key (sky130A / gf180mcuC / gf180mcuD).
+    """Return a canonical PDK key present in PDK_POWER_NETS.
 
     Accepts the loose names a user might type: "sky130", "sky130a", "SkyWater",
-    "gf180", "gf180mcu". Defaults to sky130A if the input is sky130-like.
-    Unknown PDKs return "" — the caller emits a SKIPPED diagnostic.
+    "gf180", "gf180mcu". Unknown PDKs return "" — the caller emits a SKIPPED
+    diagnostic.
+
+    An EXACT (case-insensitive) match against the table is tried FIRST, so a
+    PDK whose canonical registry name is already a table key resolves without
+    needing a bespoke heuristic branch. Before this, the function only
+    understood sky130* and gf180*, so every other PDK — including
+    registry-declared, fully-supported ones — fell through to "" and the
+    emitter wrote LVS_SETUP_SKIPPED with NO power-net globalisation. Measured
+    on spm x ihp-sg13g2 (2026-07-21): netgen then reported "Final result:
+    Netlists do not match" purely because of the un-globalised substrate
+    node, on a layout whose DRC was already 0.
     """
     s = (pdk or "").strip().lower()
     if not s:
         return ""
+    for key in PDK_POWER_NETS:
+        if key.lower() == s:
+            return key
     if s.startswith("sky130") or "skywater" in s:
         return "sky130A"
     if s.startswith("gf180"):
         if "d" in s:
             return "gf180mcuD"
         return "gf180mcuC"
+    # Accept the common short/alias spellings of the IHP open PDK.
+    if s.startswith("ihp") or s.startswith("sg13g2"):
+        return "ihp-sg13g2"
     return ""
 
 

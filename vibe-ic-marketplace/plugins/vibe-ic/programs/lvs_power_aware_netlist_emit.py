@@ -109,6 +109,17 @@ _PDK_POWER_MODELS: Dict[str, PdkPowerModel] = {
         pg_pins=("VDD", "VSS", "VNW", "VPW"),
         cell_prefix_re=r"gf180mcu_fd_sc_[a-z0-9]+__",
     ),
+    # IHP SG13G2 (open-source 130nm BiCMOS). TWO PG pins only — verified
+    # from the shipped cell LEF, e.g. MACRO sg13g2_nor2_1 declares
+    # PIN VDD (USE POWER) and PIN VSS (USE GROUND) and NO body/well pin.
+    # That is consistent with this PDK being tapless: the well and
+    # substrate ties are internal to each cell, so there is no VPB/VNB
+    # (sky130) or VNW/VPW (gf180) body pin to model.
+    "ihp-sg13g2": PdkPowerModel(
+        key="ihp-sg13g2",
+        pg_pins=("VDD", "VSS"),
+        cell_prefix_re=r"sg13g2_",
+    ),
 }
 
 
@@ -120,10 +131,17 @@ def _normalize_pdk(pdk: str) -> str:
     s = (pdk or "").strip().lower()
     if not s:
         return ""
+    # Exact (case-insensitive) table hit first, so a PDK whose canonical
+    # registry name is already a key needs no bespoke branch.
+    for key in _PDK_POWER_MODELS:
+        if key.lower() == s:
+            return key
     if s.startswith("sky130") or "skywater" in s:
         return "sky130A"
     if s.startswith("gf180"):
         return "gf180mcuD" if s.endswith("d") or "mcud" in s else "gf180mcuC"
+    if s.startswith("ihp") or s.startswith("sg13g2"):
+        return "ihp-sg13g2"
     return ""
 
 
@@ -225,6 +243,13 @@ def _rail_connection_map(rails: List[str], tie_wells_to_rails: bool
     at the PDN), i.e. the layout a physically-correct Magic extraction produces —
     verified live: without it netgen reports 2 extra schematic-only well nets."""
     power, ground = rails[0], rails[1]
+    # A TAPLESS PDK exposes only the two real rails and no body pins at all
+    # (IHP SG13G2: PIN VDD / PIN VSS and nothing else). There is no well pin
+    # to tie, so both models collapse to the same name-for-name mapping.
+    # Without this the four-pin unpacking below raised IndexError on any
+    # 2-pin model and the power-aware LVS upgrade could never be offered.
+    if len(rails) < 4:
+        return [(p, p) for p in rails], list(rails)
     wpow, wgnd = rails[2], rails[3]
     if tie_wells_to_rails:
         conn = [(power, power), (ground, ground), (wpow, power), (wgnd, ground)]

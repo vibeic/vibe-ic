@@ -169,6 +169,31 @@ PDK_CONFIG = {
             "sky130_fd_sc_hd__sedfxtp_1,sky130_fd_sc_hd__sedfxbp_1"
         ),
     },
+    # IHP SG13G2 (open-source 130nm BiCMOS). Without this entry the PDK
+    # resolved to `generic_unmapped` and the runner fell back to the SKY130
+    # cell model — on an ihp-sg13g2 run the ATPG plan literally recorded
+    # "Cell model : /foss/pdks/sky130A/.../sky130_fd_sc_hd.v" and iverilog
+    # died with "Unknown module type: sky130_fd_sc_hd__udp_mux_4to2"
+    # (atpg_exit 171, faults_total 0). Reaching into another foundry's PDK
+    # is never right; the correct model is this PDK's own shipped Verilog.
+    # sg13g2_udp.v holds the UDP primitives the stdcell models reference and
+    # must be read alongside sg13g2_stdcell.v.
+    "ihp-sg13g2": {
+        "cell_model": (
+            "/foss/pdks/ihp-sg13g2/libs.ref/sg13g2_stdcell/verilog/"
+            "sg13g2_udp.v "
+            "/foss/pdks/ihp-sg13g2/libs.ref/sg13g2_stdcell/verilog/"
+            "sg13g2_stdcell.v"
+        ),
+        # The full SG13G2 flop family (both drives), incl. the scan variants.
+        "dff_cells": (
+            "sg13g2_dfrbp_1,sg13g2_dfrbp_2,"
+            "sg13g2_dfrbpq_1,sg13g2_dfrbpq_2,"
+            "sg13g2_sdfrbp_1,sg13g2_sdfrbp_2,"
+            "sg13g2_sdfrbpq_1,sg13g2_sdfrbpq_2,"
+            "sg13g2_sdfbbp_1"
+        ),
+    },
 }
 
 # commercial 180nm PDK — used in the v046 aon_timer pilot and the spm
@@ -192,12 +217,23 @@ if _cpdk.COMMERCIAL_PDK_ID:
 # declaration can never match. Two flop-cell naming conventions, both matched so
 # the auto-detect is a true PDK-agnostic SUPERSET (never dependent on a seed):
 #   1. commercial PREFIX — `DFF*` / `SDFF*` (e.g. DFFHQD1, SDFFRQD1);
-#   2. OSS-PDK INFIX — `<lib>__[s][e]df…` where the flop family sits after the
-#      `__` library separator, with optional scan (`s`) and/or enable (`e`)
+#   2. OSS-PDK INFIX — `<lib>_[_][s][e]df…` where the flop family sits after the
+#      library separator, with optional scan (`s`) and/or enable (`e`)
 #      variant letters: sky130 `__dfxtp`/`__dfrtp`/`__dfstp`/`__dfbbn`/`__sdfxtp`
 #      AND the enable families `__edfxtp`/`__sedfxtp` (yosys maps `$_DFFE_*` →
 #      `edfxtp`, the SINGLE most common flop on real sky130 synth — e.g. 1024 in
 #      subservient); gf180 `__dffq`/`__sdffq`/`__edffq`.
+#      The separator is `_{1,2}`, NOT a literal `__`: sky130 and gf180 both use a
+#      DOUBLE underscore, but that is a convention of those two libraries, not of
+#      OSS PDKs generally. IHP SG13G2 uses a SINGLE one (`sg13g2_dfrbpq_1`,
+#      `sg13g2_sdfrbp_1`), so a `__`-anchored pattern detected ZERO flops there.
+#      That reopened exactly the empty-detect hole this comment warns about
+#      below: measured on spm x ihp-sg13g2 (2026-07-21), a netlist with 65
+#      `sg13g2_dfrbpq_1` instances detected none, `fault cut` fell back to the
+#      seed `--dff DFFHQD1` (a commercial-PDK name absent from the design), cut
+#      nothing, and transition_coverage.json reported `scan_flops: 0` →
+#      `NOT_APPLICABLE` → the DT1 at-speed gate scored PASS on a design whose
+#      flops were never cut. A vacuous pass, not coverage.
 #   3. GENERIC YOSYS PRIMITIVE — `\$_[…]DFF[…]_` escaped internal-cell FFs in a
 #      PRE-TECHMAP netlist: `\$_DFF_P_`, `\$_DFFE_PP_`, `\$_SDFF_PP0_`,
 #      `\$_DFFSR_PPP_` (the Fault-emitted cut/scan netlists are in THIS vocabulary
@@ -212,7 +248,7 @@ if _cpdk.COMMERCIAL_PDK_ID:
 _DFF_INST_RE = re.compile(
     r'^\s*('
     r'S?DFF[A-Za-z0-9_]*'                        # commercial prefix DFF*/SDFF*
-    r'|[A-Za-z][A-Za-z0-9_]*__s?e?df[a-z0-9_]*'   # OSS-PDK infix *__[s][e]df…
+    r'|[A-Za-z][A-Za-z0-9_]*_{1,2}s?e?df[a-z0-9_]*'  # OSS-PDK infix *_[_][s][e]df…
     r'|\\\$_[A-Z]*DFF[A-Z0-9_]*'                  # generic Yosys \$_…DFF…_ primitive
     r')\s+\\?[^\s()]+\s*\(', re.MULTILINE | re.IGNORECASE)
 

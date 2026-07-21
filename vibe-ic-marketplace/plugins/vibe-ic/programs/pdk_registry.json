@@ -152,7 +152,7 @@
       "process_node_nm": 130,
       "open_source": true,
       "container_path": "/foss/pdks/ihp-sg13g2",
-      "liberty_glob": "libs.ref/sg13g2_stdcell/lib/*typ*.lib",
+      "liberty_glob": "libs.ref/sg13g2_stdcell/lib/sg13g2_stdcell_typ_1p20V_25C.lib",
       "tech_lef_glob": "libs.ref/sg13g2_stdcell/lef/sg13g2_tech.lef",
       "cell_lef_glob": "libs.ref/sg13g2_stdcell/lef/sg13g2_stdcell.lef",
       "cell_gds_glob": "libs.ref/sg13g2_stdcell/gds/sg13g2_stdcell.gds",
@@ -160,8 +160,30 @@
       "metal_prefix": "Metal",
       "clk_buf_cell": "sg13g2_buf_4",
       "clk_buf_root_cell": "sg13g2_buf_16",
-      "drc_deck": null,
-      "lvs_deck": null,
+      "_deck_comment": "IHP Open-PDK SG13G2 DOES ship both a KLayout DRC deck and sign-off LVS data; these were declared null, which made the DRC/LVS sign-off gates self-skip on a PDK that can actually run them. Paths verified present in vibeic-eda 0.2.24. The KLayout deck lives under libs.tech/klayout/tech/drc/ (NOT the libs.tech/klayout/drc/ layout sky130A/gf180/nangate45/asap7 use) and is a plain .drc, not a .lydrc — so a path convention assuming <pdk>/libs.tech/klayout/drc/<pdk>.lydrc cannot find it.",
+      "drc_deck": "libs.tech/klayout/tech/drc/ihp-sg13g2.drc",
+      "lvs_deck": "libs.tech/netgen/ihp-sg13g2_setup.tcl",
+      "klayout_lvs_deck": "libs.tech/klayout/tech/lvs/sg13g2.lvs",
+      "lefdef_layermap": "libs.tech/klayout/tech/sg13g2.map",
+      "_tapcell_comment": "SG13G2 ships NO tapcell/well-tie master (the 84 stdcell MACROs include sg13g2_tiehi/sg13g2_tielo signal tie cells and sg13g2_fill_*/sg13g2_decap_*, but no tap master). This is BY DESIGN and confirmed upstream twice: the PDK's own libs.tech/librelane/sg13g2_stdcell/config.tcl says 'There are no endcap and welltie cells in ihp-sg13g2 thus set to undefined to skip insertion' (WELLTAP_CELL/ENDCAP_CELL both commented out), and the OpenROAD-flow-scripts ihp-sg13g2 platform's tapcell.tcl contains only 'cut_rows' with no tapcell call. Well/substrate ties are INTERNAL to every std cell. tapcell_master=null makes the tapcell step self-skip with a disclosed NONFATAL, which is correct for this PDK rather than a hard failure.",
+      "tapcell_master": null,
+      "antenna_diode_cell": "sg13g2_antennanp",
+      "_tap_geom_comment": "FEOL layer numbers for the tapless-cell latch-up VERIFICATION (PERC geometry layer), taken from the PDK's own DRC deck libs.tech/klayout/tech/drc/rule_decks/layers_def.drc: activ_drw=(1,0), gatpoly_drw=(5,0), psd_drw=(14,0), nwell_drw=(31,0). SG13G2 draws ONLY the p-type implant: nsd_drw=(7,0) exists in the deck but is EMPTY in a std-cell layout (measured 0 polygons on a signed-off spm GDS vs 3961 pSD), because N+ is implied wherever Activ is not covered by pSD. Hence implicit_implant=nplus, derived as (activ - pplus). With this the tap measurement finds real ties (measured: 20 N-well tap regions / 936.8um2 and 21 P-substrate tap regions / 1091.7um2) and the latch-up screen resolves to TAPLESS_CELL_INTERNAL_TIES instead of a false-positive FAIL.",
+      "tap_geom_layers": {
+        "nwell": "31/0",
+        "pplus": "14/0",
+        "poly": "5/0",
+        "activ": "1/0",
+        "implicit_implant": "nplus"
+      },
+      "_pdn_straps_comment": "Upper-metal PDN mesh. Metal1 follow-pin rails ALONE leave the per-row rails electrically isolated from each other: OpenROAD PSM then reports hundreds of 'PSM-0039 Unconnected instance <inst>/VDD' followed by '[ERROR PSM-0069] Check connectivity failed on VDD', so static IR and EM cannot be computed and the IR-Drop / EM sign-off steps produce no report at all. Values are taken VERBATIM from the OpenROAD-flow-scripts ihp-sg13g2 platform pdn.tcl (TopMetal1/TopMetal2 stripes width 2.200, pitch 75.6, offset 13.600; connects Metal1->TopMetal1->TopMetal2); that file's Metal1 follow-pin width 0.44 independently matches the width this runner discovers from the cell LEF, which cross-validates the source.",
+      "pdn_straps": {
+        "stripes": [
+          {"layer": "TopMetal1", "width": 2.2, "pitch": 75.6, "offset": 13.6},
+          {"layer": "TopMetal2", "width": 2.2, "pitch": 75.6, "offset": 13.6}
+        ],
+        "connects": [["Metal1", "TopMetal1"], ["TopMetal1", "TopMetal2"]]
+      },
       "owner_plugin": "vibe-ic",
       "_device_map_comment": "R13 (analog A4) — per-PDK GENERIC->FOUNDRY device map. `device_map` is a PDK-AGNOSTIC schema field: keys are generic role tokens (nmos/pmos/nmos_hv/pmos_hv/res_poly/cap_mim/npn/...) that a corner-sweep deck template refers to abstractly; values are the REAL foundry primitive-device model names for THIS PDK. A corner sweep that must instantiate a device for `nmos` looks it up here instead of hardcoding a foundry token, so the SAME template drives any populated PDK. Read via programs/pdk_device_map.py. This ihp-sg13g2 entry is populated with the real IHP Open-PDK SG13G2 PSP primitive-device names; sky130A / gf180mcuD keep their existing `device_models` unchanged (no `device_map` required). `device_models` here is the flat set of legal SG13G2 model tokens (the union of the map values), matching the sky130/gf180 shape.",
       "device_model_prefix": "sg13_",
@@ -200,8 +222,8 @@
       "analog_device_params": {
         "vth_n_v": 0.42,
         "vth_p_v": 0.47,
-        "nominal_supply_v": 1.8,
-        "note": "lv nfet/pfet typical Vth (HV sg13_hv_* available)"
+        "nominal_supply_v": 1.2,
+        "note": "lv nfet/pfet typical Vth (HV sg13_hv_* available). Core supply is 1.2V, NOT 1.8V: the shipped Liberty sg13g2_stdcell_typ_1p20V_25C.lib declares nom_voltage : 1.2, and the corner set is 1p08/1p20/1p32 (LV) plus 1p35/1p50/1p65 (the elevated-VDD characterisation). The previous 1.8 was carried over from the sky130 entry and would mis-bias any analog sizing done against this PDK."
       }
     },
     {
