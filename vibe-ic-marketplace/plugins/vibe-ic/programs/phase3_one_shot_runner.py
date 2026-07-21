@@ -11528,14 +11528,15 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
              f"pnr failure first: {upstream_pnr.detail[:400]}"),
             extras={"finding": "LVS_UPSTREAM_PNR_INCOMPLETE",
                     "upstream_pnr_status": upstream_pnr.status})
-    # v1.4.70 — DEVICE-level LVS route. A PDK whose registry declares a
+    # v1.4.70/#182 — DEVICE-level LVS route. A PDK whose registry declares a
     # `device_lvs_program` (asap7 -> asap7_finfet_lvs.py) has an OSS device-LVS
     # route: KLayout geometric transistor extraction (GATE_CUT-severed real gate)
-    # vs the staged CDL golden. It must NOT dead-end at the netgen/magic
+    # vs the CDL golden. It must NOT dead-end at the netgen/magic
     # "no LVS setup -> ENV_UNAVAILABLE" branches below (that message is FALSE for
-    # such a PDK). Report the available route + the shipped std-cell library
-    # verification honestly. (Full routed-design extract+compare vs the
-    # CDL-expanded gate netlist is the tracked remaining integration.)
+    # such a PDK). v1.4.70 emitted WAIVED (library-only). #182: when a routed
+    # design GDS + gate netlist are present, run the DESIGN-level extract+compare
+    # (routed layout vs the CDL-expanded gate netlist) for a REAL per-design
+    # PASS/FAIL; keep WAIVED only when no routed design is available (library-only).
     _lvs_reg = _pdk_registry_entry(pdk.name) or {}
     _dev_lvs_prog = _lvs_reg.get("device_lvs_program")
     if _dev_lvs_prog and _lvs_reg.get("cdl_netlist") and _lvs_reg.get("klayout_lvs_tech"):
@@ -11546,20 +11547,32 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
                 f"`klayout` in container {container!r} PATH.",
                 extras={"missing_tool": "klayout",
                         "device_lvs_program": _dev_lvs_prog})
+        # #182 — DESIGN-level device LVS when a routed design GDS + a gate netlist
+        # exist. A routed sign-off GDS + its gate netlist are the two inputs the
+        # design-level extract+compare needs; run it for a real PASS/FAIL.
+        _a7_gds = _pl.pnr_dir(project) / f"{top}.gds"
+        _a7_def = _pl.pnr_dir(project) / f"{top}.def"
+        _a7_net, _a7_reason = _v0_3_15_select_lvs_netlist(project, top, _a7_def)
+        if (_a7_gds.is_file() and _a7_gds.stat().st_size > 0
+                and _a7_net is not None and _a7_net.is_file()):
+            return _run_asap7_device_lvs(project, top, pdk, container, _lvs_reg,
+                                         _a7_net, _a7_def, t0)
+        # No routed design (library-only context) -> WAIVED with the library
+        # verification and a pointer to the design-level route.
         _dev_ver = _lvs_reg.get("device_lvs_verified") or {}
         return StepResult(
             "lvs", "WAIVED", time.time() - t0,
             f"{pdk.name}: open-source DEVICE-level LVS is available via "
             f"{_dev_lvs_prog} — KLayout geometric transistor extraction "
-            f"(GATE_CUT-severed real gate) compared against the staged CDL "
+            f"(GATE_CUT-severed real gate) compared against the CDL "
             f"golden ({_lvs_reg.get('cdl_netlist')}); NO netgen/magic setup "
-            f"needed, so this is NOT an ENV gap. The shipped std-cell library is "
-            f"device-LVS-verified: {_dev_ver.get('match')}/"
+            f"needed, so this is NOT an ENV gap. No routed design GDS + gate "
+            f"netlist present here ({_a7_reason}), so this runs the shipped "
+            f"std-cell library verification: {_dev_ver.get('match')}/"
             f"{_dev_ver.get('compared')} cells MATCH (proven-negative="
-            f"{_dev_ver.get('proven_negative')}). Design-level extract+compare "
-            f"(routed design vs the CDL-expanded gate netlist) is the tracked "
-            f"remaining integration; `{_dev_lvs_prog} batch <lib.gds> "
-            f"--golden-cdl <cdl>` runs the library verification. "
+            f"{_dev_ver.get('proven_negative')}). A routed design gets a real "
+            f"design-level PASS/FAIL (`{_dev_lvs_prog} design <routed.gds> "
+            f"--top NAME --gate-netlist <v> --golden-cdl <cdl>`). "
             f"NOT silicon-proven ({pdk.name} predictive).",
             extras={"device_lvs_program": _dev_lvs_prog,
                     "device_lvs_verified": _dev_ver,
@@ -12806,6 +12819,108 @@ def _run_klayout_lvs(project: Path, top: str, pdk: PdkConfig,
         f"named in lvs_verdict.json — NOT a clean compare",
         extras={**common, "lvs_verdict": verdict, "finding": finding,
                 "mismatch_class": cls, "transcript_tail": transcript[-600:]})
+
+
+def _run_asap7_device_lvs(project: Path, top: str, pdk: PdkConfig,
+                          container: str, reg: Dict[str, Any],
+                          netlist: Path, def_file: Path,
+                          t0: float) -> StepResult:
+    """#182 — DESIGN-level device LVS for a PDK with a device_lvs_program (asap7).
+
+    Replaces the v1.4.70 library-only WAIVE with a REAL per-design PASS/FAIL: extract the
+    routed sign-off GDS with the GATE_CUT FinFET recipe across the full M1..M9 + V0..V8
+    routing stack (asap7_finfet_lvs.py `design`), build the device-level golden by
+    expanding every std-cell instance in the gate netlist into its CDL .SUBCKT, and
+    compare with klayout_pdk_lvs's proven NetlistComparer path (flatten + bulk-normalize
+    + power-only-cap waiver + W/L tolerance). A device/net MISMATCH or a real VDD<->VSS
+    short is an HONEST FAIL — never a false-clean. §4.05: reads only the routed GDS + the
+    gate netlist + the CDL golden; NEVER a per-instance oracle. A folded multi-finger
+    drive cell can still MISMATCH (the disclosed library residual). NOT silicon-proven —
+    asap7 is a predictive academic PDK (tapeout_capable=false)."""
+    ext_dir = _pl.extracted_dir(project)
+    ext_dir.mkdir(parents=True, exist_ok=True)
+    gds_path = _pl.pnr_dir(project) / f"{top}.gds"
+    cdl_rel = reg.get("cdl_netlist")
+    cbase = str(reg.get("container_path", "")).rstrip("/")
+    # Pass the CDL DIRECTORY (all VT/SRAM flavors), not just the R file — a routed
+    # design may mix flavors; the golden expander concatenates them and the comparer
+    # strips the unused subckts. Falls back to the single cdl_netlist file's dir.
+    cdl_dir_c = f"{cbase}/{os.path.dirname(cdl_rel)}" if cdl_rel else None
+    if not cdl_dir_c:
+        verdict = _write_lvs_verdict(
+            project, "ENV_UNAVAILABLE", "LVS_NO_CDL_GOLDEN",
+            f"{pdk.name} device LVS needs the staged CDL golden (registry "
+            f"'cdl_netlist'); none configured.")
+        return StepResult(
+            "lvs", "ENV_UNAVAILABLE", time.time() - t0,
+            f"{pdk.name} device LVS: no CDL golden in registry",
+            extras={"finding": "LVS_NO_CDL_GOLDEN", "lvs_verdict": verdict})
+    # ship the three programs (ONE source of truth — the files themselves)
+    a7_c = _to_container_path(str(_ship_program("asap7_finfet_lvs.py", ext_dir)),
+                             container)
+    _ship_program("klayout_pdk_lvs.py", ext_dir)
+    _ship_program("gate_verilog_to_spice.py", ext_dir)
+    gds_c = _to_container_path(str(gds_path), container)
+    net_c = _to_container_path(str(netlist), container)
+    ext_c = _to_container_path(str(ext_dir), container)
+    cmd = (f"export QT_QPA_PLATFORM=offscreen && python3 {a7_c} design {gds_c} "
+           f"--top {shlex.quote(top)} --gate-netlist {net_c} "
+           f"--golden-cdl-dir {shlex.quote(cdl_dir_c)} --out-dir {ext_c}")
+    if def_file and def_file.is_file():
+        cmd += f" --def {_to_container_path(str(def_file), container)}"
+    rc, out, err = _docker_exec(container, cmd, marker=a7_c)
+    m = re.search(r"A7_DESIGN_LVS\s+(\{.*\})", out or "")
+    if not m:
+        verdict = _write_lvs_verdict(
+            project, "FAIL", "LVS_DESIGN_NO_VERDICT",
+            f"{pdk.name} device-level LVS produced no verdict (rc={rc}).",
+            extras={"transcript_tail": ((out or "") + (err or ""))[-600:]})
+        return StepResult(
+            "lvs", "FAIL", time.time() - t0,
+            f"{pdk.name} device-level LVS produced no verdict (rc={rc})",
+            extras={"finding": "LVS_DESIGN_NO_VERDICT", "lvs_verdict": verdict,
+                    "transcript_tail": ((out or "") + (err or ""))[-600:]})
+    res = json.loads(m.group(1))
+    v = res.get("verdict")
+    common = {"lvs_engine": "asap7_device_klayout",
+              "lvs_method": "klayout_finfet_geometric_design_extract",
+              "device_lvs_program": reg.get("device_lvs_program"),
+              "layout_devices": res.get("layout_devices"),
+              "golden_devices": res.get("golden_devices"),
+              "mismatch_msgs": res.get("mismatch_msgs"),
+              "power_shorts": res.get("power_shorts"),
+              "power_short_locations": res.get("power_short_locations"),
+              "restored_pin_labels": res.get("restored_pin_labels"),
+              "cdl_golden": cdl_rel, "gate_netlist": netlist.name}
+    if v == "MATCH":
+        verdict = _write_lvs_verdict(
+            project, "PASS", "LVS_MATCH",
+            f"{pdk.name} DESIGN-level device LVS: routed {gds_path.name} MATCHes the "
+            f"CDL-expanded gate netlist {netlist.name} "
+            f"({res.get('layout_devices')} devices, 0 shorts). NOT silicon-proven "
+            f"({pdk.name} predictive PDK).", extras=common)
+        return StepResult(
+            "lvs", "PASS", time.time() - t0,
+            f"LVS MATCH ({pdk.name} device-level: {res.get('layout_devices')} devices "
+            f"vs gate netlist {netlist.name}); report at reports/phase3/lvs_verdict.json. "
+            f"NOT silicon-proven ({pdk.name} predictive).",
+            extras={**common, "finding": "LVS_MATCH", "lvs_verdict": verdict})
+    # MISMATCH or a real power short -> HONEST FAIL (never a false-clean)
+    ps = res.get("power_shorts") not in (None, 0, -1)
+    finding = "LVS_POWER_SHORT" if ps else "LVS_MISMATCH"
+    verdict = _write_lvs_verdict(
+        project, "FAIL", finding,
+        f"{pdk.name} DESIGN-level device LVS did NOT cleanly match "
+        f"(mismatch_msgs={res.get('mismatch_msgs')}, "
+        f"power_shorts={res.get('power_shorts')}) — routed {gds_path.name} vs gate "
+        f"netlist {netlist.name}. NOT a clean compare.", extras=common)
+    return StepResult(
+        "lvs", "FAIL", time.time() - t0,
+        f"{pdk.name} device-level LVS did NOT match ({finding}; "
+        f"mismatch_msgs={res.get('mismatch_msgs')}, "
+        f"power_shorts={res.get('power_shorts')}); named in lvs_verdict.json — "
+        f"NOT a clean compare",
+        extras={**common, "finding": finding, "lvs_verdict": verdict})
 
 
 def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
