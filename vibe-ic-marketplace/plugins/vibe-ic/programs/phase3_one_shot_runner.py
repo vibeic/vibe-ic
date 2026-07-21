@@ -12512,18 +12512,38 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
     pa_rpt.parent.mkdir(parents=True, exist_ok=True)
     pa_rpt_c = _to_container_path(str(pa_rpt), container)
 
+    # v1467 — why each model was rejected, so a silent fallback can never again
+    # hide a genuine match. Measured: on spm AND subservient the WELL-TIED model
+    # matches uniquely when netgen is re-run by hand on the run's own artifacts
+    # (spm 369=369 nets / 339=339 devices; subservient 978=978), yet the runner
+    # fell back to the 4-rail model, whose reference carries exactly 2 extra nets
+    # (VPB, VNB) and therefore cannot match a layout that ties the wells to the
+    # rails. The fallback was SILENT, which is why 6/6 digital ICs in the v1.4.62
+    # campaign and 2/2 here were recorded as genuine power-aware MISMATCHES.
+    attempt_log: List[Dict[str, Any]] = []
+
     def _attempt(tie_wells: bool) -> Optional[Tuple[Path, Dict[str, Any], str]]:
         """Emit a power-aware netlist (well-tied or 4-rail), run netgen against
         the extracted layout, return (netlist, stats, report_text) on a genuine
-        MATCH else None. Isolated so the two models can't cross-contaminate."""
+        MATCH else None. Isolated so the two models can't cross-contaminate.
+
+        Every rejection is recorded in `attempt_log` with the reason — an
+        attempt that is discarded without a trace is indistinguishable from one
+        that was never made."""
+        model = "well_tied" if tie_wells else "four_rail"
         suffix = "pwraware_welltied" if tie_wells else "pwraware"
         pa_nl = ext_dir / f"{top}_{suffix}.v"
         try:
             st = _lvs_pa.emit_to_file(netlist, pdk.name, pa_nl, top=top,
                                       tie_wells_to_rails=tie_wells)
-        except Exception:  # nosec — a bad netlist must never break the plain path
+        except Exception as exc:  # nosec — a bad netlist must never break the plain path
+            attempt_log.append({"model": model, "rejected_at": "emit",
+                                "reason": f"{type(exc).__name__}: {exc}"})
             return None
         if st.get("modules_patched", 0) <= 0 or not pa_nl.is_file():
+            attempt_log.append({"model": model, "rejected_at": "emit",
+                                "reason": "no module patched / netlist not written",
+                                "modules_patched": st.get("modules_patched", 0)})
             return None
         nl_c = _to_container_path(str(pa_nl), container)
         cmd = (
@@ -12536,19 +12556,49 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
             # still-progressing netgen extraction/compare is never killed.
             # marker = the layout netlist path (in netgen's argv).
             _rc, out, err = _docker_exec(container, cmd, marker=nl_c)
-        except Exception:  # nosec — netgen crash on the pre-attempt is non-fatal
+        except Exception as exc:  # nosec — netgen crash on the pre-attempt is non-fatal
+            attempt_log.append({"model": model, "rejected_at": "netgen",
+                                "reason": f"{type(exc).__name__}: {exc}"})
             return None
         # ORGANIC v1462 — bounded flush retry so a lagging power-aware report
         # cannot make a genuine MATCH read empty (strictly monotonic: a missed
         # match only defers to the plain path, never regresses).
         txt = _read_lvs_report_flushed(pa_rpt, netgen_rc=_rc)
         blob = (out or "") + "\n" + (err or "") + "\n" + txt
-        if _lvt.classify(blob) != "MATCH":
+        cls = _lvt.classify(blob)
+        if cls != "MATCH":
+            attempt_log.append({
+                "model": model, "rejected_at": "classify", "verdict": cls,
+                "netgen_rc": _rc,
+                "report_had_terminal_verdict": _lvt.has_terminal_verdict(txt),
+                "report_bytes": len(txt),
+                "netlist": str(pa_nl.relative_to(project)),
+                # An INCOMPLETE here with rc == 0 and an empty report is the
+                # #184 flush-read signature, NOT a power-network defect.
+                "reason": ("no terminal verdict in the report — read/flush, not "
+                           "a mismatch" if not _lvt.has_terminal_verdict(txt)
+                           else "netgen reported a conclusive non-match")})
             return None
+        attempt_log.append({"model": model, "accepted": True,
+                            "netlist": str(pa_nl.relative_to(project))})
         return pa_nl, st, txt
 
     # Well-tied model FIRST (matches a DEF-direct extraction), 4-rail as fallback.
     _res = _attempt(tie_wells=True) or _attempt(tie_wells=False)
+
+    def _persist_attempts() -> None:
+        """Land the per-model outcome on disk. Without this the fallback is
+        indistinguishable from 'power-aware was never attempted', and a genuine
+        well-tied MATCH lost to a read/flush reads as a power-network defect."""
+        try:
+            (project / "reports" / "phase3"
+             / "lvs_power_aware_attempts.json").write_text(
+                json.dumps({"attempts": attempt_log,
+                            "accepted": bool(_res)}, indent=2))
+        except OSError:
+            pass
+
+    _persist_attempts()
     if _res is None:
         return None                         # no genuine match → fall through
     pa_netlist, stats, pa_txt = _res
@@ -12569,6 +12619,7 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
         extras={"lvs_report": "reports/phase3/lvs.rpt",
                 "power_aware_netlist": str(pa_netlist.relative_to(project)),
                 "power_aware_stats": stats,
+                "power_aware_attempts": attempt_log,
                 "ext2spice_warning": ext_warning})
     detail = (
         f"netgen LVS: circuits match uniquely under a POWER-AWARE gate netlist "
