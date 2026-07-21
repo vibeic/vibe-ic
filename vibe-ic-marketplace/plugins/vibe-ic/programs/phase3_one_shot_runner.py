@@ -4748,8 +4748,24 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     # Define SIMULATION so behavioral fallback paths fire (e.g. otp_mem
     # uses $readmemh + reg array instead of vendor-specific altsyncram
     # primitive that only exists on Altera FPGAs). chip-AGNOSTIC.
+    #
+    # ...UNLESS a real vendor macro is staged for a cell this RTL can only
+    # instantiate with the define ABSENT. Forcing -DSIMULATION there makes the
+    # macro arm unreachable, so synth takes the behavioural arm and maps a
+    # storage macro to flip-flops — measured on a 128x8 OTP as 1024 enable
+    # flops in place of one macro instance, i.e. a one-time-programmable
+    # memory that is VOLATILE in silicon. The decision is keyed on the GENERAL
+    # property "is a real macro staged for this cell?" (chip-AGNOSTIC: not OTP,
+    # not any vendor). With NO macro staged the flag below is the literal
+    # "-DSIMULATION " and every command emitted here is BYTE-IDENTICAL to the
+    # historical flow, so the behavioural path the define was added for is
+    # untouched. See synth_frontend.decide_macro_aware_sim_define.
+    _macro_def = _sf.decide_macro_aware_sim_define(
+        _sf.read_text_blob(rtl_files),
+        list(pdk.macro_libs) + list(pdk.macro_lefs) + list(pdk.macro_v))
+    _simdef = "-DSIMULATION " if _macro_def["define_sim"] else ""
     reads = "; ".join(
-        f"read_verilog -sv -DSIMULATION {_to_container_path(str(f), container)}"
+        f"read_verilog -sv {_simdef}{_to_container_path(str(f), container)}"
         for f in rtl_files
     )
     # Read OTP image into the synth working directory so $readmemh resolves.
@@ -4924,7 +4940,23 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     _rf_header = ("=== REFERENCE-FLOW QoR-KNOB INGEST "
                   "(input/reference_flow) ===\n"
                   + "\n".join(_rf_notes) + "\n\n") if _rf_notes else ""
-    log.write_text(_rf_header + out + "\n" + err)
+    # FAIL LOUDLY, NOT SILENTLY. Which RTL path synth took — the real macro or
+    # the behavioural fallback — and why, at the head of the synth log so it is
+    # never something an audit has to infer from a cell count. The same record
+    # is carried in the StepResult extras below (the run's report channel).
+    _md_header = (
+        "=== STAGED-MACRO vs BEHAVIOURAL PATH "
+        f"[{_macro_def['severity']}] ===\n"
+        f"verdict      : {_macro_def['verdict']}\n"
+        f"synth define : "
+        f"{'-DSIMULATION (behavioural arm)' if _macro_def['define_sim'] else 'NO -DSIMULATION (macro arm)'}\n"
+        f"staged cells : {_macro_def['staged_cells'] or '(none)'}\n"
+        f"macro cells  : {_macro_def['macro_cells'] or '(none)'}\n"
+        f"reason       : {_macro_def['reason']}\n\n")
+    log.write_text(_md_header + _rf_header + out + "\n" + err)
+    if _macro_def["severity"] == "ERROR":
+        print(f"[phase3][synth][ERROR] {_macro_def['verdict']}: "
+              f"{_macro_def['reason']}", file=sys.stderr)
     # Fix #5 — frontend provenance. Default Yosys Verilog-2005 frontend.
     synth_frontend = "read_verilog_v2005"
     # Fix #5 chip-AGNOSTIC SV fallback: Yosys's built-in Verilog-2005
@@ -4955,7 +4987,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
             f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
             f"yosys -p '{macro_lib_reads + ('; ' if macro_lib_reads else '')}"
             f"{_slang_prefix}"
-            f"read_slang {slang_files} --top {top} -DSIMULATION -DYOSYS; "
+            f"read_slang {slang_files} --top {top} {_simdef}-DYOSYS; "
             f"hierarchy -top {top}; proc; flatten; tribuf -logic; "
             f"{_arith_pre_clause}"
             f"synth -top {top} -flatten; "
@@ -4982,7 +5014,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
             sv2v_cmd = (
                 f"{setup}cd {out_dir_c} && "
                 f"export PATH={TOOLS_IN_CONTAINER}/bin:$PATH && "
-                f"sv2v -DSIMULATION -DYOSYS {sv2v_in} > {sv2v_out} 2>sv2v.err && "
+                f"sv2v {_simdef}-DYOSYS {sv2v_in} > {sv2v_out} 2>sv2v.err && "
                 f"export PATH={TOOLS_IN_CONTAINER}/yosys/bin:"
                 f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
                 f"yosys -p "
@@ -5076,7 +5108,8 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
         return StepResult("synth", "FAIL", time.time() - t0, detail,
                           [str(log)],
                           extras={"synth_frontend": "none",
-                                  "synth_frontend_reason": fe_reason})
+                                  "synth_frontend_reason": fe_reason,
+                                  "macro_define_decision": _macro_def})
     # v1.6.596 — for #404 P3 ORGANIC. Defence-in-depth post-synth
     # net-rename pass. Even with hilomap applied, some Yosys versions
     # emit intermediate named tie nets that survive into the final
@@ -5152,13 +5185,15 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
                            "If still empty, check sub-module ports / "
                            "hierarchy elaboration."),
                           [str(netlist), str(log)],
-                          extras={"synth_frontend": synth_frontend})
+                          extras={"synth_frontend": synth_frontend,
+                                  "macro_define_decision": _macro_def})
     return StepResult("synth", "PASS", time.time() - t0,
                       f"netlist={netlist.name} cells={cell_count} "
                       f"frontend={synth_frontend}",
                       [str(netlist), str(log)],
                       extras={"synth_frontend": synth_frontend,
-                              "reference_flow_qor_knobs": _rf_notes})
+                              "reference_flow_qor_knobs": _rf_notes,
+                              "macro_define_decision": _macro_def})
 
 
 # ---------------------------------------------------------------------------

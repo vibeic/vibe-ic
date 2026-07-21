@@ -187,8 +187,14 @@ def test_synth_bound_frontends_define_yosys():
     p3 = (prog / "phase3_one_shot_runner.py").read_text()
     p2 = (prog / "design_one_shot_runner.py").read_text()
     for src, snippets in (
-            (p3, ["read_slang {slang_files} --top {top} -DSIMULATION -DYOSYS",
-                  "sv2v -DSIMULATION -DYOSYS {sv2v_in}",
+            # `{_simdef}` is the staged-macro-aware sim-define flag: the
+            # literal "-DSIMULATION " unless a real vendor macro is staged for
+            # a cell the RTL can only instantiate with the define absent (in
+            # which case forcing it would synthesise a behavioural array in
+            # place of the macro). -DYOSYS — what this pin is about — is
+            # unconditional at every synth-bound call site, as before.
+            (p3, ["read_slang {slang_files} --top {top} {_simdef}-DYOSYS",
+                  "sv2v {_simdef}-DYOSYS {sv2v_in}",
                   "read_slang {_syn_files} --top {top} -DSYNTHESIS -DYOSYS"]),
             (p2, ["-DSYNTHESIS -DYOSYS {inc_flag}; ",
                   "sv2v -DSYNTHESIS -DYOSYS {inc_flag} {reads_join}"])):
