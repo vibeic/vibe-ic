@@ -730,3 +730,284 @@ def resolve_slang_load_prefix(container: str, exec_fn) -> str:
         pref = ""
     _SLANG_PREFIX_CACHE[container] = pref
     return pref
+
+
+# ---------------------------------------------------------------------------
+# STAGED-MACRO-AWARE sim-define selection (chip-AGNOSTIC)
+#
+# Every phase-3 synth read path historically forced ``-DSIMULATION`` so that a
+# vendor primitive with an FPGA-only implementation (an Altera `altsyncram`, a
+# Xilinx `BRAM`, …) took its behavioural `` `ifdef SIMULATION `` arm instead of
+# a primitive that does not exist on an ASIC target. That intent is real and is
+# PRESERVED below.
+#
+# The consequence that was NOT intended: when the project has STAGED A REAL
+# VENDOR MACRO for that same cell (`input/pdk_local/<vendor>/` — Liberty + LEF
+# + GDS + Verilog model), the forced define ALSO makes the macro-instantiation
+# arm unreachable. Synthesis then silently takes the behavioural arm and maps a
+# storage macro to flip-flops. Measured on a 128x8 OTP: 1024 `$_DFFE_*` enable
+# flops in place of one macro instance — i.e. a one-time-programmable memory
+# that is VOLATILE in silicon and loses its contents at power-off.
+#
+# The decision below is keyed on the GENERAL property "is a real macro staged
+# for a cell this RTL can only instantiate with the define ABSENT?" — not on
+# OTP, not on any vendor, not on any chip. Any vendor macro with a behavioural
+# fallback has this shape.
+#
+# HONESTY / §4.05. This never widens PASS:
+#   * No macro staged  -> the sim define is KEPT and the emitted command is
+#     BYTE-IDENTICAL to the historical flow. The behavioural path that the
+#     define was added for is untouched.
+#   * Macro staged but NOT instantiable (no staged cell appears in the RTL, or
+#     it has no Liberty/LEF blackbox source for synth to bind) -> the sim
+#     define is KEPT (safe, historical) and the verdict is reported at ERROR
+#     severity. A silent fall-through to behavioural is exactly how the
+#     volatile-OTP defect shipped, so the one thing this must never do is stay
+#     quiet about it.
+# ---------------------------------------------------------------------------
+
+def _strip_comments(text: str) -> str:
+    """Drop /* */ and // comments so a commented-out instantiation (or a
+    cell name merely mentioned in a comment) is never read as a use."""
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    return re.sub(r"//[^\n]*", "", text)
+
+
+def _strip_string_literals(text: str) -> str:
+    """Blank "..." so a cell name inside a string is not read as a use."""
+    return re.sub(r'"(?:\\.|[^"\\])*"', '""', text)
+
+
+# Cell/module NAME declarations in each staged-macro artifact kind. Structural
+# vocabulary of the file formats themselves — no vendor/chip literal.
+#
+# Deliberately NOT anchored to the start of a line. Vendors ship compact and
+# machine-generated Liberty/LEF where the declaration does not begin a line,
+# and a missed declaration here degrades SILENTLY to the behavioural path —
+# the exact failure this decision exists to prevent. A leading `\b` is enough
+# to keep the near-miss keywords out: `endmodule`, `scaled_cell (`,
+# `test_cell (` and `cell_leakage_power` all have a word character before the
+# keyword, so no word boundary exists and none of them match.
+_MACRO_DECL_RES: "dict[str, object]" = {
+    ".v":   re.compile(r"\bmodule\s+([A-Za-z_]\w*)"),
+    ".sv":  re.compile(r"\bmodule\s+([A-Za-z_]\w*)"),
+    ".lib": re.compile(r"\bcell\s*\(\s*\"?([A-Za-z_]\w*)"),
+    ".lef": re.compile(r"\bMACRO\s+([A-Za-z_]\w*)"),
+}
+
+# A staged cell is BINDABLE by the phase-3 synth read paths only through an
+# artifact those paths actually read: the Liberty blackbox (`read_liberty -lib
+# -setattr blackbox`) or a LEF outline. A macro shipping ONLY a `.v` behavioural
+# model has nothing for synth to bind to, so dropping the define would trade a
+# silent wrong netlist for a hard elaboration failure — report instead.
+_BLACKBOX_SOURCE_EXTS = (".lib", ".lef")
+
+
+def staged_macro_cells(
+    staged_macro_files: Sequence[Union[str, Path]],
+) -> "dict[str, set]":
+    """Map every cell NAME declared by a staged macro artifact to the set of
+    artifact extensions that declare it.
+
+    Purely structural: reads `module` (Verilog model), `cell (` (Liberty) and
+    `MACRO` (LEF) declarations. Unreadable / binary artifacts (a `.gds`) are
+    skipped rather than raising — a staging probe must degrade to "nothing
+    observed" instead of exploding the caller."""
+    cells: "dict[str, set]" = {}
+    for f in staged_macro_files or ():
+        p = Path(f)
+        rex = _MACRO_DECL_RES.get(p.suffix.lower())
+        if rex is None:
+            continue
+        try:
+            txt = p.read_text(errors="replace")[:_BLOB_SCAN_CAP_BYTES]
+        except (OSError, ValueError):
+            continue
+        for name in rex.findall(_strip_comments(txt)):
+            cells.setdefault(name, set()).add(p.suffix.lower())
+    return cells
+
+
+def _instantiated_cells(text: str, cells: "Sequence[str]") -> "set":
+    """Cell names INSTANTIATED in `text` (`<Cell> <inst> (` or `<Cell> #(`).
+
+    A bare mention (a comment, a string, a `module <Cell>` declaration of the
+    macro itself) is not an instantiation and must not count."""
+    body = _strip_string_literals(_strip_comments(text or ""))
+    hit = set()
+    for c in cells:
+        # `(?!\w)` after the cell name stops a DIFFERENT identifier that merely
+        # EXTENDS it (`<Cell>_inst (...)`) from being read as a use of <Cell>.
+        pat = re.compile(
+            r"(?<![\w.])" + re.escape(c)
+            + r"(?!\w)\s*(?:#\s*\(|[A-Za-z_]\w*\s*\()")
+        for m in pat.finditer(body):
+            # `module <Cell> (` is the macro's own declaration, not a use.
+            head = body[max(0, m.start() - 12):m.start()]
+            if re.search(r"\bmodule\s*$", head):
+                continue
+            hit.add(c)
+            break
+    return hit
+
+
+# Conditional-compilation directives. A symbol is consumed ONLY for the
+# directives that take one, and ONLY on the SAME line ([ \t] never matches a
+# newline). This is deliberately NOT the shared
+# `sv_package_closure_check._annotate_conditionals` walker: that one matches
+# ``^\s*`(ifdef|ifndef|elsif|else|endif)\b\s*(\w+)?`` where ``\s*`` crosses
+# newlines, so on a bare `` `else `` the optional symbol group SWALLOWS the
+# first identifier of the next line. On exactly the shape this decision has to
+# read —
+#       `else
+#         <VendorMacro> u_inst ( ... );
+# — the macro's cell name is eaten and the arm looks like it instantiates
+# nothing, which would silently return the WRONG verdict here. (That gate
+# audits include closures, where the effect is a different and much rarer
+# false negative; it is left alone rather than widened into this change.)
+_PP_DIRECTIVE_RE = re.compile(
+    r"^[ \t]*`(?:(ifdef|ifndef|elsif)[ \t]+(\w+)|(else|endif)\b)", re.M)
+
+
+def _reachable_text(text: str, defines: "set") -> str:
+    """Text surviving `ifdef/`ifndef/`elsif/`else/`endif under `defines`.
+
+    Unbalanced directives degrade gracefully (the stack never underflows)."""
+    defines = set(defines or ())
+    out: List[str] = []
+    # stack frames: [taken_now, any_arm_taken_yet]
+    stack: List[List[bool]] = []
+    pos = 0
+    for m in _PP_DIRECTIVE_RE.finditer(text or ""):
+        if all(fr[0] for fr in stack):
+            out.append(text[pos:m.start()])
+        pos = m.end()
+        kw = m.group(1) or m.group(3)
+        sym = m.group(2) or ""
+        if kw == "ifdef":
+            taken = sym in defines
+            stack.append([taken, taken])
+        elif kw == "ifndef":
+            taken = sym not in defines
+            stack.append([taken, taken])
+        elif kw == "elsif":
+            if stack:
+                fr = stack[-1]
+                taken = (sym in defines) and not fr[1]
+                fr[0] = taken
+                fr[1] = fr[1] or taken
+        elif kw == "else":
+            if stack:
+                fr = stack[-1]
+                fr[0] = not fr[1]
+                fr[1] = True
+        elif kw == "endif":
+            if stack:
+                stack.pop()
+    if all(fr[0] for fr in stack):
+        out.append(text[pos:])
+    return "\n".join(out)
+
+
+def decide_macro_aware_sim_define(
+    rtl_text_blob: str,
+    staged_macro_files: "Sequence[Union[str, Path]] | None" = None,
+    sim_define: str = "SIMULATION",
+) -> "dict":
+    """Decide whether the phase-3 synth read paths may force ``-D<sim_define>``.
+
+    Answers ONE general question: *is a real vendor macro staged for a cell that
+    this RTL can only instantiate with the define ABSENT?* If so the define is
+    DROPPED so the macro arm is reachable and synthesis instantiates the real
+    macro. Otherwise the define is KEPT and the emitted synth command is
+    byte-identical to the historical flow.
+
+    Returns a report dict (also the record written into the run's reports):
+
+      define_sim   bool  - keep ``-D<sim_define>`` on the synth read paths
+      verdict      str   - BEHAVIOURAL_NO_MACRO / MACRO_INSTANTIATED /
+                           MACRO_ALREADY_REACHABLE / MACRO_STAGED_UNUSABLE
+      severity     str   - INFO / WARNING / ERROR
+      reason       str   - why this path was taken, in words
+      staged_cells list  - every cell name the staged artifacts declare
+      macro_cells  list  - staged cells this RTL instantiates behind the define
+      unbindable   list  - staged cells with no Liberty/LEF blackbox source
+    """
+    staged = staged_macro_cells(staged_macro_files or ())
+    names = sorted(staged)
+    base = {"staged_cells": names, "macro_cells": [], "unbindable": []}
+
+    if not names:
+        return dict(base, define_sim=True, verdict="BEHAVIOURAL_NO_MACRO",
+                    severity="INFO",
+                    reason=(f"no vendor macro staged under input/pdk_local/ — "
+                            f"keeping -D{sim_define} so the behavioural "
+                            f"fallback arm fires (historical flow, unchanged)"))
+
+    blob = rtl_text_blob or ""
+    with_sim = _instantiated_cells(_reachable_text(blob, {sim_define}), names)
+    without_sim = _instantiated_cells(_reachable_text(blob, set()), names)
+    # Cells the forced define makes UNREACHABLE — the defect's signature.
+    gated = sorted(without_sim - with_sim)
+    bindable = [c for c in gated
+                if staged.get(c, set()) & set(_BLACKBOX_SOURCE_EXTS)]
+    unbindable = [c for c in gated if c not in bindable]
+
+    if bindable:
+        return dict(base, define_sim=False, verdict="MACRO_INSTANTIATED",
+                    severity="INFO", macro_cells=bindable,
+                    unbindable=unbindable,
+                    reason=(
+                        f"staged vendor macro(s) {bindable!r} are instantiated "
+                        f"by this RTL ONLY when {sim_define} is UNDEFINED; "
+                        f"forcing -D{sim_define} would make the macro arm "
+                        f"unreachable and synthesise the behavioural fallback "
+                        f"in its place (a storage macro mapped to flip-flops). "
+                        f"DROPPING -D{sim_define} so the real macro is "
+                        f"instantiated"))
+
+    if unbindable:
+        return dict(base, define_sim=True, verdict="MACRO_STAGED_UNUSABLE",
+                    severity="ERROR", unbindable=unbindable,
+                    reason=(
+                        f"staged macro(s) {unbindable!r} are gated behind "
+                        f"{sim_define} being UNDEFINED, but ship NO Liberty/LEF "
+                        f"for synth to bind as a blackbox — synth cannot "
+                        f"instantiate them. KEEPING -D{sim_define} (the "
+                        f"behavioural arm) so the run still elaborates, but the "
+                        f"result is a BEHAVIOURAL model of a cell that was "
+                        f"staged as a real macro. Stage the macro Liberty/LEF "
+                        f"or remove the macro from input/pdk_local/"))
+
+    if with_sim:
+        return dict(base, define_sim=True, verdict="MACRO_ALREADY_REACHABLE",
+                    severity="INFO", macro_cells=sorted(with_sim),
+                    reason=(
+                        f"staged macro(s) {sorted(with_sim)!r} are instantiated "
+                        f"regardless of {sim_define} — keeping -D{sim_define} "
+                        f"(historical flow, unchanged)"))
+
+    # Staged, but this RTL instantiates it under NEITHER define-world.
+    branches, arm_evidence = define_conditional_arms_present(
+        blob, sim_define, sim_define)
+    if branches:
+        return dict(base, define_sim=True, verdict="MACRO_STAGED_UNUSABLE",
+                    severity="ERROR",
+                    reason=(
+                        f"macro(s) {names!r} are staged under input/pdk_local/ "
+                        f"and this RTL DOES branch on {sim_define} "
+                        f"({arm_evidence}), yet instantiates none of the staged "
+                        f"cells under either define-world — the RTL's macro arm "
+                        f"names a cell that was never staged (or the staged cell "
+                        f"was never wired in). Synthesis will take the "
+                        f"behavioural arm. KEEPING -D{sim_define}; reconcile the "
+                        f"instance name with the staged macro"))
+    return dict(base, define_sim=True, verdict="BEHAVIOURAL_NO_MACRO",
+                severity="WARNING",
+                reason=(
+                    f"macro(s) {names!r} are staged under input/pdk_local/ but "
+                    f"this RTL neither instantiates them nor branches on "
+                    f"{sim_define} — nothing for the synth define to select "
+                    f"(the macro is presumably integrated by a later backend "
+                    f"step). Keeping -D{sim_define} (historical flow, "
+                    f"unchanged)"))
