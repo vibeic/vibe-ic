@@ -64,9 +64,11 @@ except Exception:  # pragma: no cover
 
 try:
     import path_delay_fault_atpg_run as _pdf  # reuse the pure coverage math
+    import fault_atpg_run as _far             # shared zero-flop adjudication
 except Exception:  # pragma: no cover
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import path_delay_fault_atpg_run as _pdf  # type: ignore
+    import fault_atpg_run as _far             # type: ignore
 
 
 _PROGRAM = "path_delay_coverage_check"
@@ -119,9 +121,25 @@ def evaluate(blob: Optional[dict], floor: float = PDF_FLOOR_DEFAULT) -> dict:
                             "the at-speed PDF step cannot pass without a real "
                             "coverage measurement"]}
 
+    if blob.get("verdict") == "BLOCKED":
+        return {"verdict": "BLOCKED", "status": "BLOCKED",
+                "scan_flops": blob.get("scan_flops"),
+                "sequential_evidence": blob.get("sequential_evidence"),
+                "reasons": blob.get("reasons", ["producer recorded BLOCKED"])}
+
     if blob.get("verdict") == "NOT_APPLICABLE":
+        # A PDF self-skip has two legitimate grounds: no post-layout timing
+        # model yet (established from file presence, and checked there), or a
+        # genuinely combinational design. Only the SECOND rests on a flop count,
+        # so only a blob that actually carries sequential evidence is
+        # adjudicated — otherwise the pre-layout self-skip would false-FAIL.
+        if isinstance(blob.get("sequential_evidence"), dict):
+            override = _far.adjudicate_zero_flop_claim(blob)
+            if override is not None:
+                return override
         return {"verdict": "NOT_APPLICABLE", "status": "NOT_APPLICABLE",
                 "scan_flops": blob.get("scan_flops", 0),
+                "sequential_evidence": blob.get("sequential_evidence"),
                 "reasons": blob.get("reasons",
                                     ["producer recorded NOT_APPLICABLE"])}
 

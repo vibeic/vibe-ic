@@ -217,19 +217,264 @@ _DFF_INST_RE = re.compile(
     r')\s+\\?[^\s()]+\s*\(', re.MULTILINE | re.IGNORECASE)
 
 
-def detect_dff_cells(netlist_text: str) -> str:
-    """Scan a gate-level netlist for instantiated flip-flop cells whose module
-    name begins DFF / SDFF and return them sorted, comma-separated, de-duped —
-    suitable for `fault cut --dff`. Chip- and PDK-AGNOSTIC. Returns "" when
-    none are found (caller keeps the PDK-config seed).
+# ---------------------------------------------------------------------------
+# LIBERTY-DERIVED (name-independent) sequential-cell identification.
+#
+# WHY THIS EXISTS. `_DFF_INST_RE` above is a NAMING-CONVENTION matcher, and a
+# naming convention is a property of a particular library, never of silicon.
+# Every widening of that regex is a bet that the next PDK spells its flops the
+# way the last one did, and the bet has already been lost once: a `__`-anchored
+# separator matched sky130/gf180 and detected ZERO flops in a library that
+# separates with a single underscore — 0 of 65 instantiated flops, no scan chain
+# cut, and `scan_flops: 0` scored a PASS. The regex was then widened to `_{1,2}`,
+# which fixes that one library and leaves the same bet standing for the next.
+#
+# A cell's `ff` / `ff_bank` group in the Liberty the flow ALREADY reads is
+# authoritative: it is the library's own machine-readable declaration that the
+# cell holds state. Its NAME is not. So the primary identification is
+#   {modules instantiated in the netlist} INTERSECT {cells with an `ff` group}
+# which involves no cell-name vocabulary whatsoever and works for any library,
+# including ones that have not been written yet.
+#
+# The name pattern is KEPT, but demoted to a SUPERSET safety net: it is unioned
+# in (it can only ADD flops, never remove them), and it still covers the
+# pre-techmap generic-Yosys vocabulary (`\$_DFF_P_`) that no Liberty declares.
+# The direction of the fallback matters — see `sequential_evidence`: a claim
+# that a design HAS flops may rest on either source, but a claim that a design
+# has NONE (the claim that licenses a NOT_APPLICABLE self-skip) requires the
+# authoritative one.
+_LIB_COMMENT_RE = re.compile(r'/\*.*?\*/', re.S)
+# One ordered token stream: cell headers, sequential-group headers, and braces.
+# `\bcell` requires a word boundary, so `test_cell` / `scaled_cell` /
+# `cell_footprint` never match as a cell header.
+_LIB_TOKEN_RE = re.compile(
+    r'\bcell\s*\(\s*"?(?P<name>[A-Za-z_][A-Za-z0-9_$.\-]*)"?\s*\)'
+    r'|(?P<ff>\bff(?:_bank)?\s*\()'
+    r'|(?P<latch>\blatch(?:_bank)?\s*\()'
+    r'|(?P<open>\{)|(?P<close>\})')
+
+# Any `<module> <instance> (` line. Deliberately UNCONSTRAINED: the result is
+# only ever INTERSECTED with a Liberty-declared cell set, so Verilog keywords
+# and other noise cannot survive the intersection. No cell-name vocabulary.
+_INST_RE = re.compile(
+    r'^[ \t]*\\?([A-Za-z_$][A-Za-z0-9_$.\\/\[\]-]*)[ \t]+\\?[^\s();,]+[ \t]*\(',
+    re.MULTILINE)
+
+
+def liberty_sequential_cells(liberty_text: str,
+                             include_latches: bool = False) -> set:
+    """Return the set of cell names a Liberty declares SEQUENTIAL, by reading
+    each `cell (NAME) { … }` group and asking whether it contains an `ff` /
+    `ff_bank` group (with `include_latches`, also `latch` / `latch_bank`).
+
+    This is the AUTHORITATIVE, PDK-agnostic answer to "is this cell a flop?" —
+    it consults the library's own declaration instead of guessing from the
+    spelling of the name. Pure; no I/O.
+
+    Single linear token walk (a std-cell Liberty is tens of megabytes, so
+    per-cell brace matching would be quadratic). A sequential group is
+    attributed to the innermost OPEN cell, which is why a scan flop declaring
+    its `ff` inside a nested `test_cell` group is still recognised.
+
+    Degrades in the SAFE direction: if the structure is damaged (e.g. a lossy
+    reduction), groups over-attribute, so a combinational cell may be called
+    sequential. That can only turn a would-be self-skip into a refusal to
+    self-skip — never the reverse."""
+    text = _LIB_COMMENT_RE.sub(" ", liberty_text or "")
+    out, stack, depth, pending = set(), [], 0, None
+    for m in _LIB_TOKEN_RE.finditer(text):
+        if m.group("name"):
+            pending = m.group("name")
+        elif m.group("open"):
+            depth += 1
+            if pending is not None:
+                stack.append([pending, depth])
+                pending = None
+        elif m.group("close"):
+            if stack and stack[-1][1] == depth:
+                stack.pop()
+            depth = max(0, depth - 1)
+        elif stack and (m.group("ff") or (include_latches and m.group("latch"))):
+            out.add(stack[-1][0])
+    return out
+
+
+# A std-cell Liberty is often only reachable inside the tool container. Reading
+# it whole across that boundary is wasteful and unnecessary: only the group
+# headers and the brace structure are load-bearing. This reduces a 20 MB Liberty
+# to something small that `liberty_sequential_cells` parses identically.
+LIBERTY_STRUCTURE_GREP = (
+    r"grep -aE '(^|[^A-Za-z0-9_])(cell|ff|ff_bank|latch|latch_bank)[[:space:]]*\(|[{}]'")
+
+
+def instantiated_modules(netlist_text: str) -> set:
+    """Every module name instantiated in a (gate-level) netlist. Intentionally
+    over-inclusive — see `_INST_RE`. Pure."""
+    return {m.group(1).lstrip("\\")
+            for m in _INST_RE.finditer(netlist_text or "")}
+
+
+def detect_dff_cells(netlist_text: str,
+                     liberty_sequential: "set | None" = None) -> str:
+    """Scan a gate-level netlist for instantiated flip-flop cells and return
+    them sorted, comma-separated, de-duped — suitable for `fault cut --dff`.
+    Chip- and PDK-AGNOSTIC. Returns "" when none are found (caller keeps the
+    PDK-config seed).
+
+    `liberty_sequential` — the AUTHORITATIVE cell set from
+    `liberty_sequential_cells()`. When supplied, any instantiated module the
+    Liberty declares to have an `ff` group is detected REGARDLESS of how it is
+    spelled; the name pattern is unioned in on top as a superset safety net (it
+    still catches the pre-techmap `\\$_DFF_P_` vocabulary, which appears in no
+    Liberty). Omitting it falls back to name matching alone — the historical
+    behaviour, and a guess.
 
     This closes the failure mode where a PDK config seeds the WRONG flop cell
     (e.g. seed DFFRQD1,DFFSQD1 but the netlist actually uses DFFHQD1): the
     detected set is UNIONED with the seed so cut always sees the real flop
     cell and does not leave 64 un-cut sequential elements (which would tank
     the measured stuck-at coverage or make ATPG meaningless)."""
-    found = {m.group(1) for m in _DFF_INST_RE.finditer(netlist_text)}
+    found = {m.group(1) for m in _DFF_INST_RE.finditer(netlist_text or "")}
+    if liberty_sequential:
+        found |= (instantiated_modules(netlist_text) & set(liberty_sequential))
     return ",".join(sorted(found))
+
+
+# Three-valued outcome of "does this design contain sequential elements?".
+SEQ_PRESENT = "HAS_SEQUENTIAL"
+SEQ_ABSENT = "NO_SEQUENTIAL"
+SEQ_UNKNOWN = "UNKNOWN"
+
+
+def sequential_evidence(netlist_text: str,
+                        liberty_text: "str | None" = None) -> dict:
+    """Decide, WITH ITS PROVENANCE, whether a netlist contains sequential
+    elements. Returns a dict carrying the verdict, the method that produced it,
+    and the counts behind it — the evidence a downstream gate needs in order to
+    judge a `scan_flops: 0` result instead of taking it on trust.
+
+    The three outcomes are deliberately asymmetric, because the two claims carry
+    different weight:
+
+      HAS_SEQUENTIAL — flops were found. EITHER source may establish this; both
+        are unioned, so the answer is a superset and a flop is never missed.
+
+      NO_SEQUENTIAL — the design genuinely has no sequential elements. This is
+        the claim that licenses a NOT_APPLICABLE self-skip for every at-speed
+        step, so it may ONLY be made from the authoritative source: a Liberty
+        that declares sequential cells, none of which the netlist instantiates.
+        `authoritative` is True exactly here.
+
+      UNKNOWN — no Liberty was available to enumerate sequential cells, and the
+        name pattern (a guess) matched nothing. That is not evidence of absence;
+        it is absence of evidence. Saying so is the entire point: the previous
+        code could not express it and silently emitted NOT_APPLICABLE, which
+        read downstream as a clean self-skip.
+
+    Pure; no I/O. chip- and PDK-AGNOSTIC."""
+    lib_cells = liberty_sequential_cells(liberty_text) if liberty_text else set()
+    name_hits = {m.group(1) for m in _DFF_INST_RE.finditer(netlist_text or "")}
+    lib_hits = (instantiated_modules(netlist_text) & lib_cells
+                if lib_cells else set())
+
+    out = {
+        "liberty_consulted": bool(lib_cells),
+        "liberty_sequential_cells_declared": len(lib_cells),
+        "sequential_cells_instantiated": sorted(lib_hits | name_hits),
+        "liberty_matched_cells": sorted(lib_hits),
+        "name_pattern_matched_cells": sorted(name_hits),
+    }
+
+    if lib_hits or name_hits:
+        out.update({
+            "verdict": SEQ_PRESENT,
+            "authoritative": bool(lib_hits),
+            "method": "liberty_ff_group" if lib_hits else "cell_name_pattern",
+            "reasons": [
+                f"{len(lib_hits | name_hits)} distinct sequential cell type(s) "
+                f"instantiated: {', '.join(sorted(lib_hits | name_hits)[:8])}"],
+        })
+    elif lib_cells:
+        out.update({
+            "verdict": SEQ_ABSENT,
+            "authoritative": True,
+            "method": "liberty_ff_group",
+            "reasons": [
+                f"the design's own Liberty declares {len(lib_cells)} cell(s) "
+                "with an `ff` group and the netlist instantiates none of them "
+                "— genuinely combinational"],
+        })
+    else:
+        out.update({
+            "verdict": SEQ_UNKNOWN,
+            "authoritative": False,
+            "method": "none",
+            "reasons": [
+                "no Liberty was available to enumerate sequential cells, so "
+                "'this design has no flops' could not be checked — only a "
+                "cell-NAME pattern was consulted and it matched nothing, which "
+                "is absence of evidence, not evidence of absence"],
+        })
+    return out
+
+
+def adjudicate_zero_flop_claim(blob: dict) -> "dict | None":
+    """Gate-side adjudication of a DFT/ATPG result that reports ZERO scan flops.
+
+    A producer saying "0 flops, therefore not applicable" is a claim, and the
+    gate's job is to ask what it rests on. Returns a verdict dict when the claim
+    must be overridden, or None when the result may be evaluated normally.
+
+      * evidence says the design HAS sequential elements  -> FAIL. A scan
+        insertion that inserted nothing into a sequential design is a failed
+        gate, not an inapplicable one. This is the measured case: 0 of 65 flops
+        detected, no chain cut, `scan_flops: 0` scored PASS.
+      * evidence authoritatively says it has NONE          -> None (a genuinely
+        combinational design is legitimately NOT_APPLICABLE and must not
+        false-FAIL).
+      * no evidence, or non-authoritative evidence         -> BLOCKED. The
+        producer never established that the design is combinational, so neither
+        a coverage number nor a self-skip is supported. Not a pass, and
+        deliberately not silence either.
+
+    Pure; no I/O. chip- and PDK-AGNOSTIC — the caller supplies the artefact."""
+    ev = blob.get("sequential_evidence")
+    scan_flops = blob.get("scan_flops")
+    if isinstance(scan_flops, int) and scan_flops > 0:
+        return None
+
+    if isinstance(ev, dict) and ev.get("verdict") == SEQ_PRESENT:
+        cells = ev.get("sequential_cells_instantiated") or []
+        return {
+            "verdict": "FAIL", "status": "FAIL",
+            "scan_flops": scan_flops,
+            "sequential_evidence": ev,
+            "reasons": [
+                f"scan_flops={scan_flops} on a design that HAS sequential "
+                f"elements ({len(cells)} sequential cell type(s) instantiated: "
+                f"{', '.join(cells[:8])}) — scan insertion reported success "
+                "having inserted nothing; a zero-flop scan result is only "
+                "legitimate on a design with no sequential elements"],
+        }
+
+    if isinstance(ev, dict) and ev.get("verdict") == SEQ_ABSENT \
+            and ev.get("authoritative"):
+        return None
+
+    detail = ("no `sequential_evidence` was recorded at all"
+              if not isinstance(ev, dict)
+              else "; ".join(ev.get("reasons") or [ev.get("verdict", "?")]))
+    return {
+        "verdict": "BLOCKED", "status": "BLOCKED",
+        "scan_flops": scan_flops,
+        "sequential_evidence": ev if isinstance(ev, dict) else None,
+        "reasons": [
+            f"scan_flops={scan_flops} but whether the design has sequential "
+            f"elements was never established ({detail}) — a zero-flop result "
+            "is only legitimate on a genuinely flop-free design, and that was "
+            "not checked. Reporting BLOCKED rather than passing an unverified "
+            "self-skip"],
+    }
 
 
 def merge_dff_cells(seed: str | None, detected: str) -> str:

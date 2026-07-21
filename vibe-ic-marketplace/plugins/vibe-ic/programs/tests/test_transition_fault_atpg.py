@@ -301,8 +301,25 @@ def test_gate_zero_evidence_fails():
 
 
 def test_gate_not_applicable_passthrough():
+    """NOT_APPLICABLE is honoured — but only once it is EARNED.
+
+    This test used to assert that a bare `NOT_APPLICABLE` + `scan_flops: 0`
+    passed straight through. That unconditional passthrough was the hole: it is
+    what let a run that detected 0 of 65 flops, cut no scan chain, and measured
+    no coverage score a clean self-skip. The producer now records
+    `sequential_evidence` derived from the design's own Liberty, and the gate
+    honours the self-skip on the strength of that evidence rather than on the
+    producer's say-so. The uncorroborated form is covered by
+    test_dft_atpg_zero_flop_and_absent_artifact.py."""
     blob = {"verdict": "NOT_APPLICABLE", "scan_flops": 0,
-            "reasons": ["combinational design"]}
+            "reasons": ["combinational design"],
+            "sequential_evidence": {
+                "verdict": "NO_SEQUENTIAL", "authoritative": True,
+                "method": "liberty_ff_group",
+                "liberty_sequential_cells_declared": 12,
+                "sequential_cells_instantiated": [],
+                "reasons": ["the design's own Liberty declares 12 cell(s) with "
+                            "an `ff` group and the netlist instantiates none"]}}
     r = gate.evaluate(blob, floor=90.0)
     assert r["verdict"] == "NOT_APPLICABLE"
 
