@@ -92,3 +92,76 @@ endmodule
     fixed = F.fixup(src)
     assert "assign a" not in fixed
     assert "assign b" not in fixed
+
+
+# ─── #200 — module scoping ────────────────────────────────────────────
+# sv2v flattens every module into ONE file.  A net name that is
+# `output reg` (procedural) in module A and `assign`-driven in a DIFFERENT
+# module B is TWO different nets — B's continuous assign is its ONLY, legal
+# driver and must survive.  Only a net driven both ways INSIDE THE SAME
+# module is a real mixed-driver.  These fixtures are the production shape
+# (multi-module) that the original single-module fixtures never exercised.
+
+# `shared_o`: procedural (output reg) in module `a`, assign-only in module
+# `b`  -> NOT a mixed driver in either scope; module b's assign must survive.
+# `genuine_q`: BOTH assign + procedural inside module `a`  -> a real
+# same-scope mixed driver that must still be removed.
+_MULTI_MODULE_SRC = """\
+module a(input clk, input rst_n, output reg shared_o, output reg genuine_q);
+  assign genuine_q = 1'b0;              // same-scope mixed driver -> remove
+  always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      shared_o  <= 1'b0;
+      genuine_q <= 1'b0;
+    end else begin
+      shared_o  <= 1'b1;
+      genuine_q <= 1'b1;
+    end
+  end
+endmodule
+
+module b(input a_i, output shared_o);
+  assign shared_o = ~a_i;              // ONLY, legal driver in module b
+endmodule
+"""
+
+
+def test_200_cross_module_same_name_is_not_mixed():
+    # `shared_o` appears as output reg in `a` and assign-driven in `b`, but
+    # never both-ways in the SAME module -> must not be flagged mixed.
+    nets = F.mixed_driver_nets(_MULTI_MODULE_SRC)
+    assert "shared_o" not in nets
+    # The genuine same-scope mixed net IS still detected.
+    assert "genuine_q" in nets
+
+
+def test_200_cross_module_assign_survives():
+    fixed = F.fixup(_MULTI_MODULE_SRC)
+    # Module b's legitimate sole driver MUST survive (the ibex regression).
+    assert "assign shared_o = ~a_i" in fixed
+    # The genuine same-scope mixed driver in module a IS still removed.
+    assert "assign genuine_q" not in fixed
+    # Both modules and the procedural block stay intact.
+    assert "module a(" in fixed and "module b(" in fixed
+    assert "always @(posedge clk" in fixed
+
+
+def test_200_scoped_fixup_elaborates_and_keeps_driver(tmp_path):
+    # End-to-end: the scoped fixup output still elaborates and module b's
+    # continuous driver for shared_o survives (skipped if iverilog absent).
+    import shutil
+    import subprocess
+    iverilog = shutil.which("iverilog")
+    if not iverilog:
+        import pytest
+        pytest.skip("iverilog not available")
+    fixed = F.fixup(_MULTI_MODULE_SRC)
+    assert "assign shared_o = ~a_i" in fixed
+    src = tmp_path / "multi.v"
+    src.write_text(fixed)
+    out = tmp_path / "multi.out"
+    r = subprocess.run(
+        [iverilog, "-g2012", "-o", str(out), str(src)],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 0, f"iverilog failed: {r.stderr}"
