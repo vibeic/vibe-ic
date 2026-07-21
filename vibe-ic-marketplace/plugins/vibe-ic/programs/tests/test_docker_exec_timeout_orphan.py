@@ -139,3 +139,16 @@ def test_run_helper_applies_the_wrap():
     assert "_docker_exec_argv_with_deadline" in body, (
         "_run stopped hardening docker-exec argvs — a host timeout there "
         "orphans the in-container tool")
+
+
+def test_lec_run_docker_helper_carries_a_container_side_deadline():
+    """Fourth instance of the same shape: `lec_run._docker` is a bare
+    `subprocess.run(["docker","exec",...])` whose own `except TimeoutExpired`
+    handler proves a timeout is an expected outcome — so the leak was an
+    expected outcome too. Fixed by pattern from the measured Phase-2 leak."""
+    src = (PROGRAMS / "lec_run.py").read_text()
+    start = src.index("def _docker(container: str")
+    body = src[start:start + 1600]
+    assert "wrap_with_container_timeout" in body, (
+        "lec_run._docker lost its container-side deadline — a host timeout "
+        "there orphans a yosys equivalence run inside the container")

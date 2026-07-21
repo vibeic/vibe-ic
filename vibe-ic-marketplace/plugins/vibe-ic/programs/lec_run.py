@@ -844,6 +844,24 @@ def build_report(parsed: Dict, top: str, gate_netlist: str,
 # Container plumbing (patterned on analog_real_corner_sweep._docker).
 # ---------------------------------------------------------------------------
 def _docker(container: str, cmd: str, timeout: int = 120):
+    """Run `cmd` in the container under a bounded budget.
+
+    The command carries its OWN container-side deadline a few seconds before
+    the host's. Without it, `subprocess.run`'s timeout kills the `docker exec`
+    CLIENT only — Docker does not propagate that inward, so the tool (here a
+    yosys equivalence run on a whole gate netlist, which can be tens of GB of
+    RAM) is ORPHANED and keeps burning a core and its memory unsupervised.
+    This function's own `except TimeoutExpired` handler shows the timeout is an
+    expected outcome, which makes the leak an expected outcome too.
+
+    Same defect shape as the one measured leaking in the Phase-2 synth
+    dispatch; fixed here by pattern from that measurement, using the shared
+    helper. chip/tool-AGNOSTIC."""
+    try:
+        import _docker_watchdog as _dw
+        cmd = _dw.wrap_with_container_timeout(cmd, timeout)
+    except Exception:  # nosec — never let hardening break the call
+        pass
     return subprocess.run(
         ["docker", "exec", container, "bash", "-lc", cmd],
         capture_output=True, text=True, timeout=timeout)
