@@ -24,6 +24,10 @@ Failure rules:
                               (and at least one is FAIL or all blank)
   A4_NO_SIMULATOR_RUN      — every declared corner has
                               `simulator_run: false`. v10632 escape.
+  A4_CORNER_MARGIN_FAIL    — the nominal corner is in-spec but a REAL
+                              process/temp corner is outside the spec
+                              window (#185): the sweep is graded on its
+                              WORST corner, not the nominal/best one.
 
 This is a per-block companion to `analog_corner_sweep_check.py`
 (which is project-wide and stricter on min-corner-count + MC yield).
@@ -48,6 +52,70 @@ from _analog_a_check_common import (
 
 GATE = "analog_a4_corner_sweep_check"
 SKILL = "ams-sim"
+
+
+def _worst_corner_margin_fail(data: dict, corners: list) -> Optional[dict]:
+    """#185 — a corner sweep must be graded on its WORST corner, not the
+    nominal/best one. Return the worst offending corner ({name,value,rel_error,
+    tol}) when the NOMINAL corner is IN-spec (so this is a genuine PVT-margin
+    failure, NOT a template/env mismatch that v1.6.228 legitimately reports
+    informationally) but a REAL-simulated process/temp corner falls OUTSIDE the
+    spec window; else None.
+
+    Only REAL (`simulator_run: true`) corners are graded — a DERIVED
+    arithmetic-spread corner is not a measurement. chip-AGNOSTIC: keyed on the
+    spec target center + per-corner value, never a chip name."""
+    # spec target center + tolerance (a fraction, matching the corner `margin`).
+    target = tol = None
+    for s in (data.get("spec_results") or []):
+        if isinstance(s, dict) and s.get("target") is not None:
+            target, tol = s.get("target"), s.get("tolerance_pct")
+            break
+    try:
+        target = float(target)
+        tol = float(tol)
+    except (TypeError, ValueError):
+        return None                          # no gradable numeric target → skip
+    if target == 0:
+        return None
+
+    def _val(c):
+        for k in ("vout_v", "value"):
+            if isinstance(c, dict) and c.get(k) is not None:
+                return c.get(k)
+        return None
+
+    def _rel(v):
+        try:
+            return abs(float(v) - target) / abs(target)
+        except (TypeError, ValueError):
+            return None
+
+    # The nominal (tt@27C sized point) — the env/template-mismatch guard. When the
+    # nominal itself is out of spec, the sweep is an environmental modelling gap
+    # (v1.6.228), not a corner-margin failure — do NOT newly FAIL it here.
+    nominal_name = (data.get("best_corner") or {}).get("name")
+    nominal = next((c for c in corners if isinstance(c, dict)
+                    and c.get("name") == nominal_name), None)
+    if nominal is None:
+        return None                          # can't isolate the nominal → skip
+    nom_rel = _rel(_val(nominal))
+    if nom_rel is None or nom_rel > tol:
+        return None                          # nominal out-of-spec → env-gap path
+
+    worst = None
+    for c in corners:
+        if not isinstance(c, dict) or c is nominal:
+            continue
+        if c.get("simulator_run") is not True:
+            continue                         # DERIVED corner — not a measurement
+        rel = _rel(_val(c))
+        if rel is None or rel <= tol:
+            continue
+        if worst is None or rel > worst["rel_error"]:
+            worst = {"name": c.get("name"), "value": _val(c),
+                     "rel_error": rel, "tol": tol}
+    return worst
 
 
 def _check_block(project: Path, block: str
@@ -158,6 +226,22 @@ def _check_block(project: Path, block: str
                 "detail": ("no spec_results[] and "
                            "summary.all_corners_pass is not true"),
             }]
+    # #185 — WORST-corner gate: the best-corner spec_status can PASS while a real
+    # process/temp corner is outside the spec window. Grade the worst REAL corner
+    # (the helper applies the nominal-in-spec env-gap guard + only-real rule, and
+    # works on the emitted corners[] + spec target so it also covers legacy
+    # artifacts that carry no explicit `worst_corner`).
+    wc = _worst_corner_margin_fail(data, corners)
+    if isinstance(wc, dict) and wc.get("name"):
+        return "FAIL", [{
+            "block": block, "rule": "A4_CORNER_MARGIN_FAIL",
+            "rel_path": rel,
+            "detail": (f"worst REAL corner {wc['name']} value={wc.get('value')} "
+                       f"is outside the spec window (rel error "
+                       f"{wc.get('rel_error'):.4f} > tol {wc.get('tol')}) while "
+                       f"the nominal corner is in-spec — a genuine PVT-margin "
+                       f"failure the best-corner view hid (#185)"),
+        }]
     return "PASS", []
 
 

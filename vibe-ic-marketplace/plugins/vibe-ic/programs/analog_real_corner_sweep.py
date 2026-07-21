@@ -1365,6 +1365,55 @@ def _normalize_hspice_model_lib(model_lib_host: Path, bdir: Path) -> Path:
 
 # ─────────────────── Main per-block driver ───────────────────
 
+def _resolved_sim_pdk_label(ctx, pdk_arg: str) -> str:
+    """#185 — the TRUTHFUL simulation-PDK label. `pdk_used_for_sim` used to stamp
+    the verbatim `--pdk` CLI arg even when the RESOLVED deck context `.lib`'d a
+    DIFFERENT foundry's model set (a project custom / container-installed native
+    analog PDK) — so a sweep whose every deck sourced a native analog `.lib` was
+    mislabelled with the open-PDK arg. Prefer the resolved deck-context family
+    (the real family the decks sourced); fall back to the arg only when the
+    context carries no family. chip-AGNOSTIC: reads the resolver's family label,
+    no chip/vendor/SKU literal."""
+    fam = getattr(ctx, "family", None) if ctx is not None else None
+    fam = str(fam).strip() if fam is not None else ""
+    return fam or pdk_arg
+
+
+def _worst_corner_of(pvt_grid, target_center, tol):
+    """#185 — the WORST REAL corner across the sweep: the `simulator_run` corner
+    whose measured value is furthest (largest relative error) from the spec
+    target center. A corner sweep is graded on its worst corner, not the
+    nominal/best one — so the artifact must carry the worst-case corner explicitly
+    (the gate consumes it). Returns a summary dict (or None when the target/tol is
+    unknown or no real corner carries a value). Only REAL corners are considered;
+    a DERIVED arithmetic-spread corner is not a measurement. chip-AGNOSTIC."""
+    if target_center in (None, 0) or tol is None:
+        return None
+    try:
+        tc = float(target_center)
+        tolf = float(tol)
+    except (TypeError, ValueError):
+        return None
+    if tc == 0:
+        return None
+    worst = None
+    for c in pvt_grid or []:
+        if not isinstance(c, dict) or c.get("simulator_run") is not True:
+            continue
+        v = c.get("vout_v")
+        if v is None:
+            continue
+        try:
+            rel = abs(float(v) - tc) / abs(tc)
+        except (TypeError, ValueError):
+            continue
+        if worst is None or rel > worst["rel_error"]:
+            worst = {"name": c.get("name"), "value": v, "rel_error": rel,
+                     "tol": tolf, "in_spec": rel <= tolf,
+                     "temp_c": c.get("temp_c"), "process": c.get("process")}
+    return worst
+
+
 def run_block(project, block, container, pdk, topology_override):
     bdir = project / "phase3" / "analog" / block
     if not bdir.is_dir():
@@ -1593,7 +1642,13 @@ def run_block(project, block, container, pdk, topology_override):
         "nulled_metrics": sorted(block_nulled_metrics),
         "sim_warnings": block_sim_warnings_dedup,
         "simulator": "ngspice (iic-osic-tools docker)",
-        "pdk_used_for_sim": pdk,
+        # #185 — stamp the RESOLVED deck-context PDK family, not the verbatim
+        # --pdk arg (which is mislabelled when the decks sourced a native analog
+        # PDK). The exact resolved .lib path is recorded alongside for review.
+        "pdk_used_for_sim": _resolved_sim_pdk_label(ctx, pdk),
+        "pdk_arg": pdk,
+        "pdk_model_lib_resolved": (getattr(ctx, "model_lib", None)
+                                   if ctx is not None else None),
         "spec_label": target["label"],
         # GAP-ANALOG-2 — first-class L5-inheritance provenance: whether the
         # verdict target came from the block's L5 spec or the static default,
@@ -1618,6 +1673,11 @@ def run_block(project, block, container, pdk, topology_override):
             "name": f"{typ_section}_27c", "value": best.get(target["key"]),
             "raw_meas": best,
         },
+        # #185 — the WORST REAL corner across the PVT sweep, so the artifact (and
+        # the A4 gate) can grade the sweep on its worst corner rather than the
+        # nominal/best one. None when there is no fixed target / no real corner.
+        "worst_corner": _worst_corner_of(pvt_grid, target["target"],
+                                         target.get("tol")),
         "all_runs": runs,
         "spec_results": [
             {"name": target["key"], "status": spec_status,
@@ -1667,7 +1727,20 @@ def main():
     p.add_argument("project", type=Path)
     p.add_argument("--block", required=True)
     p.add_argument("--container", default="vibeic-eda")
-    p.add_argument("--pdk", default="sky130", choices=list(PDK_LIB.keys()))
+    # #185 — do NOT hard-restrict to the two open-PDK keys: a native analog PDK
+    # (e.g. a project custom / container-installed family) must be EXPRESSIBLE on
+    # the CLI so the truth can be stated, not just resolved silently. Any selector
+    # is accepted; the EFFECTIVE simulation PDK is resolved from the project's L19
+    # target / staged custom PDK by the deck context and stamped truthfully into
+    # corner_results.json as `pdk_used_for_sim`. The open-PDK fast path
+    # (sky130/gf180) is unchanged (known_family_context falls back to sky130 for
+    # an unknown selector without a resolvable native family).
+    p.add_argument("--pdk", default="sky130",
+                   help="open-PDK selector for the fast path (sky130/gf180); any "
+                        "other value is accepted so a native analog PDK is "
+                        "expressible. The effective sim PDK is resolved from the "
+                        "project L19 target / staged custom PDK and stamped as "
+                        "pdk_used_for_sim (#185).")
     p.add_argument("--topology", default="auto")
     args = p.parse_args()
     return run_block(args.project.resolve(), args.block, args.container,

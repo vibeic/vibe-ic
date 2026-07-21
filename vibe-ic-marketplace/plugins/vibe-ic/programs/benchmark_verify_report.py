@@ -207,29 +207,62 @@ def _has_place_and_route(project: Path) -> bool:
     return False
 
 
+def _rtl_file_is_testbench(path: str) -> bool:
+    """True iff `path` is a TESTBENCH / TB skeleton, NOT synthesizable design
+    RTL. Reuses rtl_hygiene_lint._is_testbench — the SAME predicate the hygiene
+    lint uses to decide synthesizability — so this report can never drift from it
+    (the #524 shared-helper doctrine). #185: the runner emits a
+    `sim_full_stack/tb_<top>_full.v` skeleton that is NOT design RTL; counting it
+    as digital RTL made an all-analog IC (whose only .v is that skeleton) read as
+    digital and FAIL Pillars 3/4 it can never satisfy. chip-AGNOSTIC. Falls back
+    to a filename check when the shared predicate is unavailable."""
+    try:
+        _here = str(Path(__file__).resolve().parent)
+        if _here not in sys.path:
+            sys.path.insert(0, _here)
+        import rtl_hygiene_lint as _rhl  # local program, same dir
+        try:
+            raw = Path(path).read_text(errors="replace")
+        except OSError:
+            raw = ""
+        return _rhl._is_testbench(raw, path)
+    except Exception:  # nosec — never let the shared import break the report
+        name = os.path.basename(path).lower()
+        return bool(re.search(r'(^|[_.])(tb|test|testbench)([_.]|$)', name))
+
+
 def _has_synth_digital_rtl(project: Path) -> bool:
     """True iff the IC carries a synthesizable DIGITAL RTL block — i.e. there is
     HDL the digital flow (RTL→synth→PnR→DFT→FPGA) can actually operate on.
 
-    chip-AGNOSTIC. Signals (any one):
-      * a phase2 RTL dir with HDL (phase2/**/rtl/*.v|*.sv|*.vhd), or
-      * a non-behavioral .v/.sv/.vhd anywhere under the project EXCEPT the
-        analog hardmacro behavioral wrappers (phase3/analog/**) and analog
-        cosim models (**/cosim/**), which are NOT synthesizable digital RTL.
+    chip-AGNOSTIC. A non-behavioral .v/.sv/.vhd anywhere under the project counts
+    EXCEPT:
+      * the analog hardmacro behavioral wrappers (phase3/analog/**) and analog
+        cosim models (**/cosim/**), which are NOT synthesizable digital RTL, and
+      * TESTBENCH / TB-skeleton files (tb_*, *_tb, testbench, the runner's
+        sim_full_stack/tb_<top>_full.v skeleton), excluded via the shared
+        rtl_hygiene_lint._is_testbench predicate (#185/#524 anti-drift) — the
+        runner writes a testbench and must not then read it back as proof the
+        design contains digital RTL.
 
-    An analog-front-end chip whose only Verilog is the analog hardmacro
-    wrapper + a behavioral mixed-signal cosim has NO synthesizable digital RTL.
+    An analog-front-end chip whose only Verilog is the analog hardmacro wrapper,
+    a behavioral mixed-signal cosim, or the emitted full-stack TB skeleton has NO
+    synthesizable digital RTL and reads N/A on the digital pillars.
     """
+    _seen: set = set()
     for pat in ("phase2/**/rtl/*.v", "phase2/**/rtl/*.sv", "phase2/**/rtl/*.vhd",
-                "phase2/**/*.v", "phase2/**/*.sv"):
-        if glob.glob(str(project / pat), recursive=True):
-            return True
-    for ext in ("*.v", "*.sv", "*.vhd"):
-        for f in glob.glob(str(project / "**" / ext), recursive=True):
+                "phase2/**/*.v", "phase2/**/*.sv",
+                "**/*.v", "**/*.sv", "**/*.vhd"):
+        for f in glob.glob(str(project / pat), recursive=True):
+            if f in _seen:
+                continue
+            _seen.add(f)
             low = f.lower()
             if (os.sep + "analog" + os.sep) in low:   # analog hardmacro wrapper
                 continue
             if (os.sep + "cosim" + os.sep) in low:     # analog cosim model
+                continue
+            if _rtl_file_is_testbench(f):              # TB skeleton, not design RTL
                 continue
             return True
     return False
