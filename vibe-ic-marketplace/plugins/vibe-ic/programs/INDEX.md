@@ -362,6 +362,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gate_netlist_rtl_gen` | any | v0.1.8 | deterministic gate-netlist → RTL generator. |
 | `gate_reliability_register` | any | — | gate_reliability_register.py -- Self-calibrating per-gate reliability ledger. |
 | `gate_self_assertion_check` | any | v0.2.24 | anti-fabrication gate-hole detector. |
+| `flow_condition_reachability_check` | any | #220 | self-disabling-condition guard: FAILs when a flow condition is unreachable in the scenario its step exists to detect. |
 | `gate_utils` | any | v0.117 | Shared helpers for v0.117+ structural-RTL gates. |
 | `gate_verilog_to_spice` | any | — | convert a structural (gate-level) Verilog netlist to SPICE for |
 | `gatekeeper_assign_version` | any | — | v1.1.7 (owner directive 2026-06-17). |
@@ -1315,6 +1316,7 @@ _(no programs in this group)_
 - `gate_netlist_rtl_gen` — deterministic gate-netlist → RTL generator.  _[v0.1.8]_
 - `gate_reliability_register` — gate_reliability_register.py -- Self-calibrating per-gate reliability ledger.
 - `gate_self_assertion_check` — anti-fabrication gate-hole detector.  _[v0.2.24]_
+- `flow_condition_reachability_check` — self-disabling-condition guard: FAILs when a flow condition is unreachable in the scenario its step exists to detect.  _[#220]_
 - `gate_utils` — Shared helpers for v0.117+ structural-RTL gates.  _[v0.117]_
 - `gate_verilog_to_spice` — convert a structural (gate-level) Verilog netlist to SPICE for
 - `gatekeeper_assign_version` — v1.1.7 (owner directive 2026-06-17).

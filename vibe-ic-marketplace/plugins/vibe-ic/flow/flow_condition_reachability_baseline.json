@@ -1,0 +1,56 @@
+{
+  "_comment": [
+    "Known-open self-disabling flow conditions (vibe-ic#220).",
+    "",
+    "Every entry here IS a hole: a step gated on the artefact whose absence is",
+    "the defect the step exists to catch. They are listed rather than fixed",
+    "because each is owned by an in-flight change on the same subsystem, and",
+    "silently allowlisting them would recreate exactly the invisibility this",
+    "guard exists to remove.",
+    "",
+    "flow_condition_reachability_check.py FAILs on any hole NOT listed here, and",
+    "ALSO FAILs when a listed entry is no longer a hole. A fix must therefore",
+    "delete its baseline entry in the same change — the file cannot rot into a",
+    "permanent excuse.",
+    "",
+    "Do not add to this file to make a build green. Add to it only with an",
+    "owner, and only when the fix genuinely belongs in another change."
+  ],
+  "holes": [
+    {
+      "step": "DT1",
+      "program": null,
+      "paths": ["phase2/stage2/dft/cut_netlist.v"],
+      "owner": "vibe-ic#219 (open)",
+      "note": "Instance 2 from the issue. #219 makes the producer always leave a transition_atpg_not_run.json record and adds `any_of: true` to _check_condition so that record can itself trigger the step. Fixed by that PR; entry is removed when it lands."
+    },
+    {
+      "step": "DT2",
+      "program": null,
+      "paths": [
+        "phase2/stage2/dft/cut_netlist.v",
+        "phase3/stage3/extracted/*.spef",
+        "phase3/stage3/pnr/*_pnr.v"
+      ],
+      "owner": "vibe-ic#219 family — NOT covered by that PR's current diff",
+      "note": "Same shape as DT1 and strictly worse: the condition is ALL-of, so ANY one of the three inputs going missing disarms the step. path_delay_coverage_check ALREADY returns verdict FAIL / rc 1 on an absent coverage JSON, so the checker is correct and only the condition disarms it. The producer (phase3_one_shot_runner.py, DT2 block) records its skips as ephemeral in-memory notes and writes no *_not_run.json, so there is no disclosure artefact to trigger on yet. Fix needs the producer change plus `any_of: true`."
+    },
+    {
+      "step": "DT3",
+      "program": null,
+      "paths": [
+        "reports/phase2/dft/path_delay_coverage.json",
+        "reports/phase2/dft/transition_coverage.json"
+      ],
+      "owner": "vibe-ic#219 family — NOT covered by that PR's current diff",
+      "note": "The cascade case: DT3 is gated ALL-of on DT1's and DT2's OUTPUTS, so whenever either upstream ATPG step self-disables, DT3 silently vanishes too. sdd_coverage_check ALREADY returns verdict FAIL / rc 1 on an absent coverage JSON. Like DT2 its producer writes no *_not_run.json record."
+    },
+    {
+      "step": "4",
+      "program": "professional_tb_check",
+      "paths": ["reports/phase2/gates/professional_tb.json"],
+      "owner": "unclear — needs an owner decision, do not fix blind",
+      "note": "UNCLEAR, deliberately not forced into a verdict. The trigger is a file under reports/phase2/gates/, i.e. gate output rather than design evidence, so it is unclear whether the artefact is an INPUT this gate validates (making absence the failure mode) or a prior gate's verdict being re-read (making absence correct scoping). Resolving it requires knowing which component writes professional_tb.json and when, which is not derivable from the flow YAML."
+    }
+  ]
+}

@@ -84,14 +84,29 @@ def audit_d2(plugin: Path) -> dict:
     progs_dir = plugin / "programs"
     findings = []
 
-    # (a) + (b): delegate to the dedicated guards
-    for guard in ("gate_self_assertion_check", "single_testpath_guard"):
+    # (a) + (b) + (e): delegate to the dedicated guards.
+    #
+    # vibe-ic#220 — a guard that COULD NOT RUN is not a clean guard. This loop
+    # used to record a finding only on returncode 1, so a guard exiting 2
+    # ("flow YAML not found", the operational tier) was indistinguishable from
+    # one that ran and found nothing. Combined with the plugin-directory
+    # argument these guards are invoked with, that made
+    # gate_self_assertion_check inert here — silently — which is exactly the
+    # self-disabling shape #220 is about, one level up from the flow YAML.
+    for guard in ("gate_self_assertion_check", "single_testpath_guard",
+                  "flow_condition_reachability_check"):
         gp = progs_dir / f"{guard}.py"
         if gp.is_file():
             r = subprocess.run([sys.executable, str(gp), str(plugin)],
                                capture_output=True, text=True)
             if r.returncode == 1:
                 findings.append({"check": guard, "detail": r.stdout.strip()[:300]})
+            elif r.returncode != 0:
+                findings.append({
+                    "check": guard,
+                    "detail": (f"guard could not run (exit {r.returncode}) — a "
+                               f"guard that did not execute is NOT a pass: "
+                               f"{(r.stderr or r.stdout).strip()[:200]}")})
         else:
             findings.append({"check": guard, "detail": "guard program missing"})
 
