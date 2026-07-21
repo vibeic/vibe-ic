@@ -3175,6 +3175,120 @@ def commercial_pdk_fallback_guard(
     )
 
 
+# ---------------------------------------------------------------------------
+# pdk_local hard-macro <-> target-PDK LAYER compatibility guard (chip-AGNOSTIC)
+# ---------------------------------------------------------------------------
+_LEF_LAYER_DECL_RE = re.compile(
+    r"^\s*LAYER\s+([A-Za-z_][A-Za-z0-9_]*)\s*$", re.MULTILINE)
+_LEF_LAYER_REF_RE = re.compile(
+    r"^\s*LAYER\s+([A-Za-z_][A-Za-z0-9_]*)\s*;", re.MULTILINE)
+
+
+def _lef_declared_layers(text: Optional[str]) -> set:
+    """Every layer DECLARED by a (tech) LEF: `LAYER <name>` with no `;`."""
+    return set(_LEF_LAYER_DECL_RE.findall(text or ""))
+
+
+def _lef_referenced_layers(text: Optional[str]) -> set:
+    """Every layer REFERENCED by a LEF body: `LAYER <name> ;` inside
+    PORT / OBS / VIA geometry."""
+    return set(_LEF_LAYER_REF_RE.findall(text or ""))
+
+
+def macro_lef_layer_compat_guard(
+    pdk_name: str,
+    tech_lef: Optional[str],
+    cell_lef: Optional[str],
+    macro_lefs: Optional[List[str]],
+    container: Optional[str] = None,
+) -> Optional[str]:
+    """REFUSE a `input/pdk_local/` hard macro whose LEF references layers the
+    TARGET PDK does not declare.
+
+    Root cause (edge_llm_accel x gf180mcuD, 2026-07-22): LEF layer names are
+    PDK-PRIVATE — nangate45 draws `metal1..metal10`, gf180mcuD `Metal1..Metal5`,
+    sky130A `met1..met5`, ihp-sg13g2 `Metal1..TopMetal2`. A design that carries
+    its own hard macro under `input/pdk_local/<vendor>/` (SRAM, OTP, ADC, PHY)
+    carries ONE abstract, cut for ONE PDK's stack. Point that design at a
+    different PDK and the macro's LEF still parses — because OpenROAD's LEF
+    reader does NOT fail on an unknown layer. It emits
+
+        [WARNING ODB-0176] error: undefined layer (metal3) referenced
+
+    once per shape and DROPS the shape, then reports
+    `LEF file: ..., created 1 library cells`. The macro therefore loads with
+    the RIGHT outline and ZERO pin geometry. Placement succeeds, the floorplan
+    looks correct, the GDS streams out — and the design ships an SRAM whose
+    every pin is physically unroutable. Nothing downstream notices: read_lef
+    returned 0, the cell exists, and the macro's nets simply have no landing
+    shape. This is the silent-wrong-result class, identical in kind to the
+    silent wrong-PDK fallback guarded above: the tool reports success while
+    not doing the thing.
+
+    A macro LEF is DECLARED COMPATIBLE only when every layer it references is
+    declared by the target PDK's tech LEF (or its cell LEF, for libraries that
+    declare layers there). Otherwise this returns a loud refusal.
+
+    NOT a substitution: this guard never renames, remaps or invents a layer.
+    Remapping `metal3 -> Metal3` would silently re-cut another PDK's abstract
+    onto this PDK's stack at a pitch it was never drawn for; the honest
+    outcome is a REFUSAL naming the missing layers, so the operator either
+    supplies a macro abstract cut for THIS PDK or accepts that this design is
+    not portable to it.
+
+    Returns the refusal message, or None when every macro is compatible
+    (including the no-macro case, which is the overwhelming majority).
+
+    chip-AGNOSTIC: no chip, vendor or PDK literal — the declared-layer set
+    comes from whatever tech LEF the target PDK resolved to.
+    """
+    if not macro_lefs:
+        return None
+    declared = _lef_declared_layers(_read_pdk_text(tech_lef, container))
+    if not declared:
+        # Could not read the tech LEF at all — do not fabricate a refusal.
+        return None
+    declared |= _lef_declared_layers(_read_pdk_text(cell_lef, container))
+
+    offenders: List[Tuple[str, List[str]]] = []
+    for mlef in macro_lefs:
+        referenced = _lef_referenced_layers(_read_pdk_text(mlef, container))
+        unknown = sorted(referenced - declared)
+        if unknown:
+            offenders.append((mlef, unknown))
+    if not offenders:
+        return None
+
+    lines = [
+        "[FAIL] phase3 hard-macro integration REFUSED — "
+        "pdk_local macro LEF is cut for a DIFFERENT PDK's layer stack.",
+        f"  target PDK          : {pdk_name}",
+        f"  tech LEF            : {tech_lef}",
+        "  declared routing/via layers : "
+        + ", ".join(sorted(declared)[:24])
+        + (" ..." if len(declared) > 24 else ""),
+    ]
+    for mlef, unknown in offenders:
+        lines.append(f"  INCOMPATIBLE macro  : {mlef}")
+        lines.append(f"    references undeclared layer(s) : "
+                     + ", ".join(unknown))
+    lines += [
+        "  impact              : OpenROAD's LEF reader does NOT fail on an "
+        "undefined layer — it prints `[WARNING ODB-0176] error: undefined "
+        "layer (<name>) referenced`, DROPS the shape, and still reports "
+        "`created N library cells`. The macro would load with the correct "
+        "OUTLINE and NO PIN GEOMETRY, so placement, CTS, PDN and GDS all "
+        "succeed while every macro pin is physically unroutable. The run "
+        "would look closed and be void.",
+        "  how to fix          : supply a macro abstract (LEF + Liberty) cut "
+        f"for {pdk_name}'s own layer stack under input/pdk_local/<vendor>/, "
+        "OR target the PDK this macro was cut for. This gate deliberately "
+        "does NOT remap layer names: re-cutting another PDK's abstract onto "
+        "this stack would silently change the physical result.",
+    ]
+    return "\n".join(lines)
+
+
 def _pdk_registry_entry(name: str) -> Optional[Dict[str, Any]]:
     """PR-A1 — one pdk_registry.json entry by name (cached).
 
@@ -21434,6 +21548,33 @@ def main() -> int:
                 "staged_pdk_dir": str(project / "input" / "pdk"),
                 "rationale": _cp_refusal,
             }, indent=2) + "\n")
+        except Exception:
+            pass
+        return 4
+
+    # pdk_local hard-macro <-> target-PDK LAYER compatibility. A macro abstract
+    # cut for another PDK's stack loads PINLESS (OpenROAD warns and drops the
+    # shapes) and the whole backend then closes on a void result. Refuse.
+    _ml_refusal = macro_lef_layer_compat_guard(
+        pdk.name, pdk.tech_lef, pdk.cell_lef, list(pdk.macro_lefs or []),
+        container=(getattr(args, "container", None)
+                   or os.environ.get("EDA_CONTAINER")))
+    if _ml_refusal:
+        print(_ml_refusal, file=sys.stderr)
+        try:
+            _rp = _pl.reports_phase3_dir(project)
+            _rp.mkdir(parents=True, exist_ok=True)
+            (_rp / "macro_lef_layer_compat_refusal.json").write_text(
+                json.dumps({
+                    "program": "phase3_one_shot_runner",
+                    "gate": "macro_lef_layer_compat_guard",
+                    "verdict": "REFUSED",
+                    "pass": False,
+                    "pdk": pdk.name,
+                    "tech_lef": pdk.tech_lef,
+                    "macro_lefs": list(pdk.macro_lefs or []),
+                    "rationale": _ml_refusal,
+                }, indent=2) + "\n")
         except Exception:
             pass
         return 4
