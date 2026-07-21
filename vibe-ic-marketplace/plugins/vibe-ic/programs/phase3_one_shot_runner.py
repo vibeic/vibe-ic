@@ -46,7 +46,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path, PurePosixPath
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 import _path_layout as _pl
 import _watchdog as _wd  # v1.3.47 — plugin-wide progress-stall supervision
 import _docker_watchdog as _dwd  # shared in-container CPU probe (tree-aware)
@@ -13462,7 +13462,23 @@ def _emit_local_netgen_setup(project: Path, pdk: PdkConfig,
 
     Deliberately NOT matched: tie cells (sg13g2_tiehi / sg13g2_tielo and
     their equivalents). Those DO carry functional connectivity — they
-    drive real constant nets — so ignoring them could hide a real defect."""
+    drive real constant nets — so ignoring them could hide a real defect.
+
+    The `fill` family token also has to cover the COMPOUND names some PDKs
+    use. gf180mcu ships (measured on `gf180mcu_fd_sc_mcu7t5v0.lef`):
+
+        gf180mcu_fd_sc_mcu7t5v0__fill        plain filler
+        gf180mcu_fd_sc_mcu7t5v0__fillcap     decap  (CLASS core)
+        gf180mcu_fd_sc_mcu7t5v0__filltie     welltap (CLASS core WELLTAP)
+
+    `fillcap`/`filltie` matched NEITHER `fill(er)?` NOR the `tap` token, so
+    on gf180mcuD both stayed in the compare and netgen reported "Netlists do
+    not match". Widening the alternation to `fill(er|cap|tie)?` covers them.
+
+    That widening is SAFE with respect to the tie-cell exclusion above,
+    because the token must START with `fill`: gf180's own functional tie
+    cells `__tieh` / `__tiel` (and sg13g2_tiehi / sg13g2_tielo) still do not
+    match and are still compared."""
     pdk_setup = (f"{PDKS_IN_CONTAINER}/{pdk.name}/libs.tech/netgen/"
                  f"{pdk.name}_setup.tcl")
     # Family-token regexes (TCL ERE). Anchored at a `_` separator or the
@@ -13471,7 +13487,7 @@ def _emit_local_netgen_setup(project: Path, pdk: PdkConfig,
     # `..._fakediode_2` match on ANY library prefix while a functional cell
     # that merely contains the substring does not.
     _phys_res = (
-        r"(^|_)fill(er)?(_[[:digit:]]+)?$",
+        r"(^|_)fill(er|cap|tie)?(_[[:digit:]]+)?$",
         r"(^|_)decap(_[[:digit:]]+)?$",
         r"(^|_)tap[[:alpha:]]*(_[[:digit:]]+)?$",
         r"(^|_)fakediode(_[[:digit:]]+)?$",
@@ -19945,7 +19961,28 @@ def _measure_tap_geometry(project: Path, top: str, pdk: "PdkConfig",
     return d
 
 
-def _welltap_presence_check(components: List[Tuple[str, str]]) -> Dict[str, Any]:
+def _rated_tap_prefixes(
+        extra_masters: Optional[Sequence[str]] = None) -> Tuple[str, ...]:
+    """The rated well/substrate-tap prefixes, plus the PDK's OWN tap cell.
+
+    `_WELLTAP_RATED` is a sky130-only allowlist and `_WELLTAP_TOKEN_RE` needs a
+    `tap` NAME SEGMENT, so a PDK whose welltap is named otherwise is invisible
+    to both screens. gf180mcu's `CLASS core WELLTAP` cell is
+    `gf180mcu_fd_sc_mcu7t5v0__filltie` — no `tap` token, not on the allowlist —
+    so a run that inserted 380 real taps (DRC DF.13/DF.14 clean) was still
+    reported as "0 rated tap cells" and false-FAILed the latch-up screen.
+
+    Passing the PDK's configured `tapcell_master` in makes the screen
+    chip-AGNOSTIC: it trusts the SAME cell name the tapcell insertion step was
+    told to use, so the two can never disagree. Nothing is widened for a PDK
+    that does not configure one."""
+    extra = tuple(sorted({m.lower() for m in (extra_masters or []) if m}))
+    return _WELLTAP_RATED + extra
+
+
+def _welltap_presence_check(
+        components: List[Tuple[str, str]],
+        rated_tap_masters: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     """Latch-up well-tap STRUCTURAL presence check (deterministic, pure, v0.2.10).
 
     Automates ONLY the adversarially-bulletproof half — tap PRESENCE — which catches
@@ -19969,14 +20006,20 @@ def _welltap_presence_check(components: List[Tuple[str, str]]) -> Dict[str, Any]
             return False
         return not any(t in ml for t in ("decap", "fill", "diode", "tapvpwr",
                                          "_endcap", "boundary", "antenna"))
+    _rated = _rated_tap_prefixes(rated_tap_masters)
+
+    def _is_rated(m: str) -> bool:
+        return any(m.lower().startswith(r) for r in _rated)
+
     std_cells = [m for _i, m in components if _is_std_cell(m)]
+    # A master is a tap candidate if it carries a `tap` token OR is the PDK's
+    # own configured welltap cell (which need not contain "tap" at all).
     tap_tokened = sorted({m for _i, m in components
-                          if _WELLTAP_TOKEN_RE.search(m.lower())})
-    valid_taps = [m for m in tap_tokened
-                  if any(m.lower().startswith(r) for r in _WELLTAP_RATED)]
+                          if _WELLTAP_TOKEN_RE.search(m.lower())
+                          or _is_rated(m)})
+    valid_taps = [m for m in tap_tokened if _is_rated(m)]
     unknown_taps = [m for m in tap_tokened if m not in valid_taps]
-    n_tap = sum(1 for _i, m in components
-                if any(m.lower().startswith(r) for r in _WELLTAP_RATED))
+    n_tap = sum(1 for _i, m in components if _is_rated(m))
     if not std_cells:
         return {"status": "NA", "n_tap": n_tap, "unknown_taps": unknown_taps,
                 "note": "N/A — no placed transistor-bearing std cells (not a placed block)."}
@@ -20302,7 +20345,12 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
     # Latch-up well-tap PRESENCE (v0.2.10) — AUTOMATES the conclusive structural
     # FAIL (0 substrate/well ties = the real v0.1.45 silicon bug). Spacing +
     # device-physics stay MANUAL below.
-    welltap = _welltap_presence_check(components)
+    # Thread the PDK's OWN configured welltap master in, so a PDK whose tap
+    # cell is not named `*tap*` (gf180mcu: `..._filltie`) is recognised by the
+    # same name the tapcell insertion step was told to use.
+    _tapcell = getattr(pdk, "tapcell_master", None)
+    welltap = _welltap_presence_check(
+        components, [_tapcell] if _tapcell else None)
     if welltap["status"] != "NA":
         # #684 round-8 — consistency with the sparse-die guard. When the
         # runner DELIBERATELY skipped the full-die tapcell tiling because the
@@ -20550,7 +20598,10 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
                     break
         geo = _geo.run_geometry_layer(
             str(def_file),
-            netlist_file=netlist_for_clamp)
+            netlist_file=netlist_for_clamp,
+            rated_tap_masters=([pdk.tapcell_master]
+                               if getattr(pdk, "tapcell_master", None)
+                               else None))
         geometry_residual = geo.get("foundry_data_residual")
 
         # v1.3.93 — TAPLESS-CELL PDK: the DEF-component tap-SPACING screen reports

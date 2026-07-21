@@ -71,7 +71,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import phase3_one_shot_runner as _p  # noqa: E402  (shipped DEF parsers — single source)
@@ -169,10 +169,22 @@ def _parse_placed_geometry(def_text: str) -> List[Tuple[str, str, int, int]]:
     return out
 
 
-def _is_rated_tap(master: str) -> bool:
-    """A rated well/substrate-tap master (reuse the shipped allowlist)."""
+def _is_rated_tap(master: str,
+                  extra_masters: Optional[Sequence[str]] = None) -> bool:
+    """A rated well/substrate-tap master (reuse the shipped allowlist).
+
+    `extra_masters` is the PDK's OWN configured tap cell(s) (`pdk.tapcell_master`),
+    forwarded by the caller so this screen is CHIP-AGNOSTIC. gf180mcu names its
+    `CLASS core WELLTAP` cell `gf180mcu_fd_sc_mcu7t5v0__filltie` — no `tap` token
+    and not on the sky130-only shipped allowlist — so without this a run that
+    inserted 380 real tap cells (DRC DF.13/DF.14 clean) still reported
+    "0 rated tap cells" and false-FAILed the latch-up screen."""
     ml = master.lower()
-    return any(ml.startswith(r) for r in _p._WELLTAP_RATED)
+    if any(ml.startswith(r) for r in _p._WELLTAP_RATED):
+        return True
+    if extra_masters:
+        return any(e and ml.startswith(e.lower()) for e in extra_masters)
+    return False
 
 
 def _is_tap_tokened(master: str) -> bool:
@@ -282,7 +294,9 @@ def _sparse_die_tap_skip_attested(def_file: Path) -> bool:
 
 
 def _latchup_tap_spacing_check(def_file: Path,
-                               screen_um: float = _DEFAULT_SCREEN_UM) -> Dict[str, Any]:
+                               screen_um: float = _DEFAULT_SCREEN_UM,
+                               rated_tap_masters: Optional[Sequence[str]] = None
+                               ) -> Dict[str, Any]:
     """Screen well/substrate-tap SPATIAL coverage of the std-cell field from the
     routed DEF. CONCLUSIVE-FAIL-ONLY per the anti-over-claim rule.
 
@@ -311,9 +325,11 @@ def _latchup_tap_spacing_check(def_file: Path,
     die = _parse_diearea_um(text, units)
     geom = _parse_placed_geometry(text)
     std = [(x / units, y / units) for _i, m, x, y in geom if _is_std_cell(m)]
-    taps = [(x / units, y / units) for _i, m, x, y in geom if _is_rated_tap(m)]
+    taps = [(x / units, y / units) for _i, m, x, y in geom
+            if _is_rated_tap(m, rated_tap_masters)]
     unknown_taps = sorted({m for _i, m, _x, _y in geom
-                           if _is_tap_tokened(m) and not _is_rated_tap(m)})
+                           if _is_tap_tokened(m)
+                           and not _is_rated_tap(m, rated_tap_masters)})
     base.update({"n_std": len(std), "n_tap": len(taps),
                  "unknown_taps": unknown_taps, "units_per_um": units,
                  "diearea_um": list(die) if die else None})
@@ -584,7 +600,9 @@ FOUNDRY_DATA_RESIDUAL = (
 
 def run_geometry_layer(def_file: str,
                        netlist_file: Optional[str] = None,
-                       screen_um: float = _DEFAULT_SCREEN_UM) -> Dict[str, Any]:
+                       screen_um: float = _DEFAULT_SCREEN_UM,
+                       rated_tap_masters: Optional[Sequence[str]] = None
+                       ) -> Dict[str, Any]:
     """Run the open-source PERC GEOMETRY layer on a routed DEF (and optional
     extracted netlist). Returns ONE aggregate report dict.
 
@@ -592,7 +610,8 @@ def run_geometry_layer(def_file: str,
     Returns keys: spacing, guardring, [clamp_netlist], any_conclusive_gap,
     foundry_data_residual."""
     dp = Path(def_file)
-    spacing = _latchup_tap_spacing_check(dp, screen_um=screen_um)
+    spacing = _latchup_tap_spacing_check(dp, screen_um=screen_um,
+                                         rated_tap_masters=rated_tap_masters)
     guardring = _guardring_topology_check(dp)
     report: Dict[str, Any] = {
         "def": str(def_file),
