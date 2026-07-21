@@ -295,17 +295,19 @@ def _build_port_models(rtl_text: str, top: Optional[str]
     ins: List[PortModel] = []
     outs: List[PortModel] = []
     for p in ports:
-        # A parsed width of 1 can mean a true scalar OR a parameter range the
-        # literal-only parser could not size. Detect the latter structurally so
-        # we never mask a 42 down to 1 bit.
-        wide = False
-        if p.width == 1:
-            m = re.search(
-                r"(input|output|inout)\b[^;()]*?(\[[^\]]*\])\s*"
-                r"(?:reg|wire|logic|signed|unsigned|\s)*\b" + re.escape(p.name)
-                + r"\b", rtl_text)
-            if m and not _SRC._LITERAL_RANGE.fullmatch(m.group(2).strip()):
-                wide = True
+        # A port whose declared range is a PARAMETER EXPRESSION (`[W-1:0]`,
+        # `[SIZE:0]`) is wide_unknown whether or not a default value happened to
+        # resolve it to a literal width: the example may assume non-default
+        # parameters (we instantiate with defaults), and a width-1 literal parse
+        # would also truncate a wide value to 1 bit. Detect it structurally for
+        # EVERY port — not only the p.width==1 unresolved case — so the verdict
+        # SKIPs (advisory) rather than false-PASS a parameterized module against
+        # a default-parameter run.
+        m = re.search(
+            r"(input|output|inout)\b[^;()]*?(\[[^\]]*\])\s*"
+            r"(?:reg|wire|logic|signed|unsigned|\s)*\b" + re.escape(p.name)
+            + r"\b", rtl_text)
+        wide = bool(m and not _SRC._LITERAL_RANGE.fullmatch(m.group(2).strip()))
         pm = PortModel(p.name, max(1, p.width), wide)
         if p.direction == "input":
             ins.append(pm)
