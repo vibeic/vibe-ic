@@ -650,7 +650,13 @@ def _try_lifo(prompt: str, ins, outs, params, top) -> Optional[str]:
         head,
         "    " + ",\n    ".join(ports),
         ");",
-        f"    localparam DEPTH = {depth_expr};",
+        # When the spec ALREADY declares a `DEPTH` parameter, depth_expr is the
+        # bare name "DEPTH"; re-declaring `localparam DEPTH = DEPTH` collides with
+        # that parameter (iverilog: "DEPTH has already been declared") — use the
+        # parameter directly. Only alias to a local `DEPTH` for a differently
+        # named / derived depth (e.g. FILO_DEPTH, `(1 << ADDR_WIDTH)`).
+        (f"    localparam DEPTH = {depth_expr};" if depth_expr != "DEPTH"
+         else "    // DEPTH is a module parameter (declared above), used directly"),
         "    localparam AW = $clog2(DEPTH);",
         f"    reg [{_w_hi(wexpr)}:0] mem [0:DEPTH-1];",
         "    reg [AW:0] sp;",  # stack pointer / count = number of valid entries (0..DEPTH)
