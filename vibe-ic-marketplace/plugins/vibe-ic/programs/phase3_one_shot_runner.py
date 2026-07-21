@@ -306,7 +306,16 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 1800
         f"exec timeout --kill-after=5 {_inner} bash -lc {shlex.quote(cmd)}; "
         f"else exec bash -lc {shlex.quote(cmd)}; fi"
     )
-    full = ["docker", "exec", container, "bash", "-lc", _wrapped]
+    full = ["docker", "exec",
+            # The vibeic-eda image's profile prints a startup banner
+            # ("[INFO] Final PATH variable: ...") to STDOUT on every LOGIN
+            # shell, ahead of the command output. `IIC_OSIC_TOOLS_QUIET` is
+            # the image's OWN documented knob for it
+            # (/etc/profile.d/iic-osic-tools-setup.sh guards both echoes on
+            # it), so suppressing at SOURCE keeps every probe's stdout
+            # clean instead of filtering the noise at each consumer.
+            "-e", "IIC_OSIC_TOOLS_QUIET=1",
+            container, "bash", "-lc", _wrapped]
 
     # v0.2.36 — on TimeoutExpired, subprocess may hand back partial
     # `stdout`/`stderr` as BYTES even though `text=True` was requested
@@ -368,7 +377,16 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800, *,
         f"exec timeout --kill-after=5 {_ceil_inner} bash -lc {shlex.quote(cmd)}; "
         f"else exec bash -lc {shlex.quote(cmd)}; fi"
     )
-    full = ["docker", "exec", container, "bash", "-lc", _wrapped]
+    full = ["docker", "exec",
+            # The vibeic-eda image's profile prints a startup banner
+            # ("[INFO] Final PATH variable: ...") to STDOUT on every LOGIN
+            # shell, ahead of the command output. `IIC_OSIC_TOOLS_QUIET` is
+            # the image's OWN documented knob for it
+            # (/etc/profile.d/iic-osic-tools-setup.sh guards both echoes on
+            # it), so suppressing at SOURCE keeps every probe's stdout
+            # clean instead of filtering the noise at each consumer.
+            "-e", "IIC_OSIC_TOOLS_QUIET=1",
+            container, "bash", "-lc", _wrapped]
 
     def _cpu_probe(_proc):
         return _container_cpu_seconds(container, marker)
