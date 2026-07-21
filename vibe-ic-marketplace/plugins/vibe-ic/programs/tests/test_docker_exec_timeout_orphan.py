@@ -95,3 +95,47 @@ def test_every_raw_exec_now_carries_a_container_side_deadline(mod_name):
     assert "wrap_with_container_timeout" in body, (
         f"{mod_name}._docker_exec_raw lost its container-side deadline — a "
         "host timeout there orphans the in-container tool")
+
+
+# ---------------------------------------------------------------------------
+# The path that ACTUALLY leaked: a full docker-exec argv handed to the generic
+# `_run` subprocess helper, bypassing `_docker_exec_raw` entirely.
+# ---------------------------------------------------------------------------
+import design_one_shot_runner as dosr  # noqa: E402
+
+
+def test_docker_exec_argv_gets_a_container_side_deadline():
+    """`docker exec -w <dir> <c> bash -lc "<tool>"` — the Phase-2 generic-synth
+    dispatch shape, and the one measured leaking."""
+    argv = ["docker", "exec", "-w", "/w", "c", "bash", "-lc",
+            "yosys -p 'synth'"]
+    out = dosr._docker_exec_argv_with_deadline(argv, 300)
+    assert out[:-1] == argv[:-1]                       # only the script changes
+    assert "timeout --kill-after=5 295 " in out[-1]
+    assert shlex.quote("yosys -p 'synth'") in out[-1]
+
+
+@pytest.mark.parametrize("argv", [
+    ["docker", "cp", "src", "c:/dst"],                 # not an exec
+    ["yosys", "-p", "synth"],                          # not docker at all
+    ["docker", "exec", "c", "ls"],                      # no bash -lc payload
+    ["docker", "exec", "c"],                            # too short
+])
+def test_non_exec_argvs_are_returned_untouched(argv):
+    assert dosr._docker_exec_argv_with_deadline(list(argv), 60) == argv
+
+
+def test_sh_lc_is_also_covered():
+    out = dosr._docker_exec_argv_with_deadline(
+        ["docker", "exec", "c", "sh", "-lc", "tool"], 60)
+    assert "timeout --kill-after=5 55 " in out[-1]
+
+
+def test_run_helper_applies_the_wrap():
+    """Regression lock on the call path, not just the helper."""
+    src = (PROGRAMS / "design_one_shot_runner.py").read_text()
+    start = src.index("def _run(cmd: List[str]")
+    body = src[start:start + 1200]
+    assert "_docker_exec_argv_with_deadline" in body, (
+        "_run stopped hardening docker-exec argvs — a host timeout there "
+        "orphans the in-container tool")
