@@ -2621,6 +2621,17 @@ def spec_conformance_gate_record(rid, completion, prompt_text, intended_top):
             and _width_block_ok(f)]
     adv = [f"{f.severity}:{f.rule}:{f.symbol}" for f in findings
            if f.severity in ("ERROR", "WARN")]
+    # A1 advisory: a port the SPEC declares with a pure-LITERAL width but the RTL
+    # declares with a PARAMETER width (non-literal, which the parser collapses to
+    # 1) is de-blocked above — a correct parameterized completion must NOT FALSE-
+    # BLOCK against a literal header, and _spec_check emits no finding for it. The
+    # structural width discrepancy is still surfaced, as an ADVISORY only (never a
+    # block, §4.05), so a reviewer sees the parameter-vs-literal difference.
+    if _spec_lit is not None and _rtl_lit is not None:
+        _rtl_names = {p.name for p in ports}
+        _param_width_adv = sorted(
+            n for n in _spec_lit if n in _rtl_names and n not in _rtl_lit)
+        adv += [f"WARN:port-width-mismatch:{n}" for n in _param_width_adv]
     if errs:
         return False, ("spec-conformance BLOCK: "
                        + "; ".join(f"{f.rule}({f.symbol})" for f in errs[:4]))
