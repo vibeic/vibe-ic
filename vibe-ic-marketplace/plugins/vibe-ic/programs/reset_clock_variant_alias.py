@@ -388,6 +388,64 @@ _AUTHORITATIVE_L9_GLOBS = (
     "phase1/**/L9_INTEGRATION_SPEC.json",
     "phase1/generated_docs/L9*.json")
 
+# ORGANIC #186 r2 — the AUTHORED L3/L9 documents themselves. The round-1 fix
+# only accepted a STRUCTURED JSON enumeration (`phase1/generated_docs/L3*.json`,
+# L9 `top_ports`), but that JSON is a DOWNSTREAM EXTRACTION of the real source of
+# truth: the L3 external-interface document's port table. Whenever phase-1 has
+# not produced that JSON yet, or produced it with an EMPTY `top_ports` (a state
+# the #689 note records as observed in the field: "L9 top_ports==[]"), the
+# markdown port table is the ONLY authoritative enumeration on disk — and the
+# round-1 fix read it as loose prose, so the #792 additive re-grafted the 9th
+# reset port onto a documented N-port top. These globs are keyed on the LAYER
+# FILENAME (L3 external-interface / L9 integration), never on content type, so a
+# free-text prompt (`input/phase1_prompt.md`) or the auto-bridged
+# `design_description.md` is NOT authoritative and keeps #792 additive (no-leak).
+_AUTHORITATIVE_DOC_GLOBS = (
+    "phase1/input_doc/L3*",
+    "phase1/input_doc/L9*",
+    "input/docs/L3*",
+    "input/docs/L9*",
+)
+
+# A markdown/pipe table row is an authoritative PORT-TABLE row only when one of
+# its cells is a bare DIRECTION keyword — the column that makes the table an
+# interface enumeration rather than a register map / prose table. The port NAME
+# is the first cell (optionally backtick-quoted, optionally bus-suffixed). The
+# direction column may sit anywhere and the header may be in ANY language (the
+# sha256 L3 ships `| 訊號 | 寬度 | 方向 | 描述 |`), so the row is keyed on the
+# direction VALUES, which are Verilog keywords. chip-AGNOSTIC: markdown table
+# grammar + the closed Verilog direction set; no chip/vendor/SKU literal.
+_MD_DIRECTIONS = frozenset({"input", "output", "inout"})
+_MD_TABLE_ROW_RE = re.compile(r"^[ \t]*\|(.+)\|[ \t]*$", re.MULTILINE)
+_MD_NAME_CELL_RE = re.compile(r"^[`*_\s]*([A-Za-z_]\w*)")
+
+
+def _all_port_names_from_port_table(text: str) -> Optional[set]:
+    """The COMPLETE lowercased set of top port names from a MARKDOWN PORT TABLE
+    — or None when the text carries no such table. A table row counts only when
+    some cell is a bare Verilog direction keyword (input/output/inout); the name
+    is taken from the FIRST cell with backticks/emphasis and any bus suffix
+    (`address[7:0]`) stripped. At least two qualifying rows are required so a
+    one-off prose mention can never masquerade as an interface enumeration.
+    chip-AGNOSTIC: pure markdown/Verilog grammar, no chip literal."""
+    found: set = set()
+    for m in _MD_TABLE_ROW_RE.finditer(text):
+        cells = [c.strip() for c in m.group(1).split("|")]
+        if len(cells) < 2:
+            continue
+        if not any(c.strip(" `*_").lower() in _MD_DIRECTIONS for c in cells[1:]):
+            continue
+        nm = _MD_NAME_CELL_RE.match(cells[0])
+        if not nm:
+            continue
+        bare = nm.group(1).strip().lower()
+        # A header row ("| Signal | Dir |") has no direction VALUE cell, so it is
+        # already excluded above; guard the direction keyword itself defensively
+        # in case a table puts the direction first.
+        if bare and bare not in _MD_DIRECTIONS:
+            found.add(bare)
+    return found if len(found) >= 2 else None
+
 
 def authoritative_contract_ports(project: Path) -> Optional[set]:
     """ORGANIC #186 — the COMPLETE lowercased set of top port names when the
@@ -420,6 +478,26 @@ def authoritative_contract_ports(project: Path) -> Optional[set]:
             if got_names:
                 names |= got_names
                 got = True
+    # ORGANIC #186 r2 — fall back to the AUTHORED L3/L9 document's own port
+    # table. Consulted only when no structured JSON enumeration was found, so a
+    # project that ships both keeps round-1 behavior byte-for-byte (§4.05
+    # no-leak); the markdown table is the authoritative source exactly when the
+    # JSON extraction is absent or empty.
+    if not got:
+        for pat in _AUTHORITATIVE_DOC_GLOBS:
+            for f in sorted(project.glob(pat)):
+                rp = f.resolve()
+                if rp in seen or not f.is_file():
+                    continue
+                seen.add(rp)
+                try:
+                    raw = f.read_text(errors="replace")
+                except OSError:
+                    continue
+                got_names = _all_port_names_from_port_table(raw)
+                if got_names:
+                    names |= got_names
+                    got = True
     return names if got else None
 
 
