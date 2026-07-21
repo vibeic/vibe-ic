@@ -183,6 +183,26 @@ def test_absent_env_exit_code_is_not_success(tmp_path):
     assert rc != 0
 
 
+def test_absent_env_gate_fails_but_names_the_gap(tmp_path):
+    """The Step-5 evidence gate must stay a hard FAIL when the engine was
+    unreachable — an environment gap is NOT a self-skip and must never go
+    vacuous — while carrying the actionable detail instead of the bare
+    "nothing claims a proof"."""
+    _run_formal(tmp_path, _ABSENT_CONTAINER)
+    gate = _PROGRAMS / "formal_proof_evidence_check.py"
+    r = subprocess.run([sys.executable, str(gate), str(tmp_path)],
+                       capture_output=True, text=True, timeout=300)
+    report = json.loads(r.stdout)
+
+    assert report["verdict"] == "FAIL"
+    assert r.returncode == 1, "an unreachable environment must not be vacuous"
+
+    finding = " ".join(report["findings"])
+    assert "ENV_UNAVAILABLE" in finding
+    assert _ABSENT_CONTAINER in finding      # where the flow looked
+    assert "not running" in finding          # what to do about it
+
+
 # ── the environment IS available ──────────────────────────────────────────
 
 @pytest.mark.skipif(
