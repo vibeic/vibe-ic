@@ -208,6 +208,34 @@ def is_frontend_parse_abort(text: str) -> bool:
     return bool(_FRONTEND_PARSE_ABORT_RE.search(text or ""))
 
 
+# HARD-MACRO STAGING GAP (#192) — yosys `hierarchy -check` aborts when the
+# netlist instantiates a module whose definition was not read on that side:
+#   ERROR: Module `\fakeram45_2048x39' referenced in module `\top' in cell
+#          `\u_sram' is not part of the design.
+# This is netgen-STABLE yosys wording (the `hierarchy` pass emits it verbatim
+# for any unresolved instance). It aborts BEFORE `equiv_make`, so 0 points are
+# ever compared — distinct from a genuine mismatch, whose miter DID run. The
+# captured group is the unresolved (macro) module name, with any leading Verilog
+# escape backslash stripped. chip/PDK-AGNOSTIC: keys on the yosys message shape,
+# never on a design/macro literal.
+_UNDEF_MODULE_RE = re.compile(
+    r"Module\s+[`'\"]?\\?([A-Za-z_$][\w$]*)['`\"]?\s+referenced\s+in\s+module\b"
+    r"[^\n]*?\bis\s+not\s+part\s+of\s+the\s+design",
+    re.IGNORECASE)
+
+
+def undefined_macro_modules(text: str) -> List[str]:
+    """Sorted, de-duplicated module names the equiv run referenced but could
+    not resolve — a hard macro (or any submodule) instantiated in the netlist
+    whose definition was not staged, so `hierarchy -check` aborted before any
+    miter was built. PURE.
+
+    Consulted ONLY when parse_error is True (0 miter), so it can re-classify a
+    zero-miter run to INCONCLUSIVE but can NEVER touch a run whose miter
+    actually compared points — a real mismatch still FAILs."""
+    return sorted({m.group(1) for m in _UNDEF_MODULE_RE.finditer(text or "")})
+
+
 # ---------------------------------------------------------------------------
 # STAGE-PROGRESS OBSERVABLE (v1.4.x) — how far did the yosys run actually get?
 #
@@ -493,7 +521,42 @@ def parse_equiv_output(text: str) -> Dict:
     )
 
     _fe_aborted, _fe_evidence = frontend_aborted_before_elaboration(text)
-    if parse_error and _fe_aborted:
+    _undef_macros = undefined_macro_modules(text)
+    if parse_error and _undef_macros:
+        # HARD-MACRO STAGING GAP (#192). The netlist instantiates a module whose
+        # definition was not staged on this side, so `hierarchy -check` aborted
+        # BEFORE equiv_make and 0 points were compared. A killed-before-it-ran
+        # comparison is NOT a proven non-equivalence — yet booking it as FAIL
+        # (which is what the generic parse_error branch below does) reports a
+        # comparison that never started as if equivalence had been tested and
+        # failed. That is the exact harm in #192. Classify INCONCLUSIVE: a
+        # disclosed staging gap, non-blocking, never a vacuous PASS.
+        #
+        # We deliberately do NOT auto-stage the macro into the miter and
+        # re-compare. In-container negative controls proved that naive symmetric
+        # staging (the full behavioural model on both sides) AND a `-lib`
+        # blackbox BOTH produce a FALSE PASS on a memory macro — even for a
+        # genuine logic bug in the netlist that FEEDS the macro — because yosys
+        # equiv's name-based net matching mis-handles the hierarchical macro I/O
+        # (the blackbox loses its port directions; the full model name-aliases
+        # the macro output net to a top port). A false LEC PASS ships a broken
+        # netlist as verified, which is strictly worse than the false FAIL this
+        # fix removes. Sound hard-macro equivalence needs a blackbox
+        # assume-guarantee this recipe cannot guarantee → close with sign-off
+        # LEC (Conformal/VC LEC), which does.
+        equivalent = False
+        verdict = "INCONCLUSIVE"
+        verdict_explanation = (
+            "LEC built NO equivalence miter — the netlist instantiates hard "
+            f"macro/submodule(s) {_undef_macros} whose definition was not "
+            "staged, so `hierarchy -check` aborted before equiv_make and 0 "
+            "points were compared. NOT a proven non-equivalence (no miter ran) "
+            "→ INCONCLUSIVE, never a hard FAIL that cascade-marks downstream "
+            "steps MISSING and never a vacuous PASS. Close with sign-off LEC "
+            "(Conformal/VC LEC), which handles hard macros with a sound "
+            "blackbox assume-guarantee. See reports/lec.rpt for the hierarchy "
+            "error.")
+    elif parse_error and _fe_aborted:
         # OBSERVABLE (v1.4.x): the run REACHED the read and never got past it,
         # so no elaborated design was ever produced and NO miter was built → 0
         # compared points. Not classifiable as PASS or FAIL → INCONCLUSIVE.
@@ -641,6 +704,10 @@ def parse_equiv_output(text: str) -> Dict:
         "equivalent": equivalent,
         "verdict": verdict,
         "verdict_explanation": verdict_explanation,
+        # #192: hard macro(s) the run could not resolve (empty unless a
+        # `hierarchy -check` abort on an unstaged module drove the INCONCLUSIVE
+        # classification above).
+        "undefined_macro_modules": _undef_macros,
     }
 
 
@@ -665,6 +732,10 @@ def build_report(parsed: Dict, top: str, gate_netlist: str,
         # points); the downstream gate treats this as a non-blocking
         # SKIPPED-CONDITION, never a hard FAIL nor a vacuous PASS.
         "inconclusive": parsed["verdict"] == "INCONCLUSIVE",
+        # #192: names the unstaged hard macro(s) when a `hierarchy -check` abort
+        # drove INCONCLUSIVE; empty on every other outcome. Auditable so a
+        # reviewer sees WHY no miter was built.
+        "undefined_macro_modules": parsed.get("undefined_macro_modules", []),
         "sat_model_unsupported_cells": parsed["sat_model_unsupported_cells"],
         "unproven_cells": parsed["unproven_cells"],
         "verdict_explanation": parsed["verdict_explanation"],

@@ -8592,6 +8592,45 @@ def lec_producer_yosys_timeout_s() -> int:
         return 1800
 
 
+def lec_step_status_from_report(lec_json: Path) -> Tuple[str, str]:
+    """Map the LEC PRODUCER's OWN verdict (reports/lec.json) to a StepResult
+    status — never the mere PRESENCE of the report file (#192).
+
+    A step that reports PASS because a report was written, over a report whose
+    `verdict` is FAIL, is the worst kind of false-clean: the flow's step list
+    then says PASS about a netlist the producer itself found non-equivalent.
+    lec_run writes `verdict` ∈ {PASS, FAIL, SKIPPED-CONDITION, INCONCLUSIVE}
+    and the authoritative gate `lec_equivalence_check` agrees with those. This
+    reads that field and maps:
+
+        PASS                         -> ("PASS", …)   — proven equivalent
+        FAIL                         -> ("FAIL", …)   — a real non-equivalence
+        SKIPPED-CONDITION            -> ("SKIP", …)   — disclosed tool/budget gap
+        INCONCLUSIVE                 -> ("SKIP", …)   — 0 points compared
+                                                       (e.g. an unstaged hard
+                                                       macro, a frontend abort,
+                                                       or a wall-budget kill)
+        unreadable / missing verdict -> ("SKIP", …)   — never a false PASS
+
+    PASS is granted ONLY on an explicit PASS verdict; absence of a clean verdict
+    is a disclosed SKIP, never a vacuous PASS (mirrors the gate's fail-safe).
+    Returns (status, verdict_string). PURE / filesystem-only."""
+    try:
+        doc = json.loads(lec_json.read_text(errors="replace"))
+        if not isinstance(doc, dict):
+            return "SKIP", ""
+    except (OSError, ValueError):
+        return "SKIP", ""
+    verdict = str(doc.get("verdict", "")).strip().upper()
+    if verdict == "PASS":
+        return "PASS", verdict
+    if verdict == "FAIL":
+        return "FAIL", verdict
+    if verdict in ("SKIPPED-CONDITION", "INCONCLUSIVE"):
+        return "SKIP", verdict
+    return "SKIP", verdict
+
+
 def step_dft_lec_chain(project: Path, top_name: str, container: str,
                        ic_class: str, full_chip: bool = True
                        ) -> List[StepResult]:
@@ -8880,10 +8919,21 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
         try:
             r = subprocess.run(cmd, capture_output=True, text=True,
                                timeout=_LEC_PRODUCER_TIMEOUT_S)
-            if (reports_dir / "lec.json").is_file():
-                results.append(StepResult("lec_equivalence", "PASS",
+            lec_json = reports_dir / "lec.json"
+            if lec_json.is_file():
+                # #192: the STEP status must come from the producer's OWN verdict
+                # in reports/lec.json, NEVER from the mere presence of the file.
+                # A step that says PASS over a report that says FAIL reports a
+                # non-equivalent netlist as equivalent — the exact drift #192
+                # flagged (and the same rc==0-vs-json.verdict bug seen earlier on
+                # subservient). PASS only on an explicit PASS verdict; FAIL on a
+                # real non-equivalence; a disclosed SKIPPED-CONDITION /
+                # INCONCLUSIVE (0 compared points — e.g. an unstaged hard macro)
+                # is an honest SKIP, never PASS nor a cascading FAIL.
+                _status, _verdict = lec_step_status_from_report(lec_json)
+                results.append(StepResult("lec_equivalence", _status,
                                time.time() - t0,
-                               f"yosys equiv produced reports/lec.json "
+                               f"yosys equiv: verdict={_verdict or 'UNKNOWN'} "
                                f"(RTL vs {Path(gate_netlist).name}, rc={r.returncode})",
                                output_files=["reports/lec.json", "reports/lec.rpt"]))
             else:
