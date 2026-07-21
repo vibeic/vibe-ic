@@ -362,6 +362,8 @@ _REPORT_CATEGORY: dict = {
     "ir_drop.rpt": "phase3",
     "lvs.json": "phase3",
     "lvs.rpt": "phase3",
+    # #203 — netgen `-json` short/open/pin localization for LVS-FAIL triage
+    "lvs_localize.json": "phase3",
     "power.json": "phase3",
     "power.rpt": "phase3",
     "si_crosstalk.json": "phase3",

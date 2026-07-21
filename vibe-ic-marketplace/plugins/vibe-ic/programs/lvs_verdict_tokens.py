@@ -496,6 +496,167 @@ def pin_mismatch_evidence(blob: str, max_lines: int = 8) -> List[str]:
     return nomatch_rows[-max_lines:]
 
 
+# ── #203 — short / open / pin LOCALIZATION from netgen's `-json` output ────────
+# netgen records WHERE two netlists diverge — which nets short, which pins fail
+# to match, which devices are unmatched — ONLY when `netgen -batch lvs ... -json`
+# is passed. The plain text report records only WHETHER they match. So every
+# `lvs.rpt` we ship today can say "not a match" but never name the offending net;
+# triage then re-runs netgen by hand to get it. Passing `-json` writes a SIDECAR
+# array (the text report is byte-identical — verified: same md5 with/without the
+# flag), and this parser turns that array into a flat localization so an LVS FAIL
+# names the offending net the FIRST time.
+#
+# PURELY ADDITIVE — LOAD-BEARING: the result NEVER feeds `classify()` /
+# `mismatch_class()`. The LVS verdict is unchanged; the #189 classifier and the
+# Step-31 gate both read only the (byte-identical) text report. netgen's `-json`
+# is a top-level ARRAY, never the E1 verdict dict `_looks_like_e1` accepts, so it
+# can never be mistaken for an authoritative verdict source. FAIL-SAFE: an absent
+# / unreadable / non-array json yields ``available=False`` and never raises — a
+# missing localization can only cost triage detail, never move a verdict.
+# chip-AGNOSTIC: pure structural parse, no design/cell literal.
+_NET_PLACEHOLDER_RE = re.compile(
+    r"^\(no matching net\)$|^\(no pin\b|^\(none\)$", re.I)
+
+
+def _load_netgen_json_array(source: JsonSource) -> Optional[List[Any]]:
+    """Resolve netgen's `-json` output (a top-level ARRAY of per-cell records)
+    from a list, a file, or a directory holding one. Returns None for anything
+    that is not a netgen `-json` array — including an E1 verdict DICT, which is a
+    different, authoritative artifact this parser must never touch."""
+    if source is None or isinstance(source, dict):
+        return None
+    if isinstance(source, list):
+        return source
+    p = Path(source)
+    try:
+        if p.is_dir():
+            for cand in sorted(p.glob("*.json")):
+                arr = _load_netgen_json_array(cand)
+                if arr is not None:
+                    return arr
+            return None
+        if not p.is_file():
+            return None
+        obj = json.loads(p.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return None
+    return obj if isinstance(obj, list) else None
+
+
+def _dedupe(items: List[str]) -> List[str]:
+    """Order-preserving de-duplication."""
+    seen: Dict[str, None] = {}
+    for it in items:
+        if it not in seen:
+            seen[it] = None
+    return list(seen.keys())
+
+
+def _harvest_net_names(node: Any, out: List[str]) -> None:
+    """Recursively collect real net/device-name strings from a netgen
+    ``badnets`` / ``badelements`` subtree, skipping the ``(no matching net)`` /
+    ``(no pin …)`` placeholders and the ``[subcell, pin, count]`` fanout triples
+    (whose leading strings are subcell/pin names, NOT nets)."""
+    if isinstance(node, str):
+        s = node.strip()
+        if s and not _NET_PLACEHOLDER_RE.match(s):
+            out.append(s)
+    elif isinstance(node, list):
+        # a [subcell, pin, count] fanout triple: its first two strings name a
+        # SUBCELL and a PIN, never a net — do not harvest them.
+        if (len(node) == 3 and isinstance(node[2], int)
+                and all(isinstance(x, str) for x in node[:2])):
+            return
+        for item in node:
+            _harvest_net_names(item, out)
+
+
+def _cell_name(n: Any) -> str:
+    """netgen names a cell ``[layout, source]``; render the common name, or
+    ``layout vs source`` when they differ."""
+    if isinstance(n, list) and n:
+        parts = [str(x) for x in n if isinstance(x, str) and x]
+        if not parts:
+            return ""
+        return parts[0] if len(set(parts)) == 1 else " vs ".join(parts)
+    return str(n) if n else ""
+
+
+def _pin_mismatches(pins: Any) -> List[Dict[str, str]]:
+    """From netgen's per-cell ``pins`` = ``[[layout pins…], [source pins…]]``
+    (position-aligned after netgen reorders them to match), the positions where
+    the two sides disagree — each names the offending pin on whichever side is
+    not a ``(no matching pin)`` placeholder."""
+    out: List[Dict[str, str]] = []
+    if not (isinstance(pins, list) and len(pins) == 2
+            and all(isinstance(s, list) for s in pins)):
+        return out
+    lay, src = pins[0], pins[1]
+    for i in range(max(len(lay), len(src))):
+        lp = str(lay[i]).strip() if i < len(lay) else ""
+        sp = str(src[i]).strip() if i < len(src) else ""
+        if lp != sp:
+            out.append({"layout": lp, "source": sp})
+    return out
+
+
+def localize(json_source: JsonSource) -> Dict[str, Any]:
+    """Parse netgen's ``-batch lvs … -json`` structured output into a flat
+    short / open / pin LOCALIZATION for triage — the offending nets (netgen's
+    ``badnets``), the per-cell net-count delta, the offending devices
+    (``badelements``), and the pin-correspondence mismatches (``pins``).
+
+    Returns::
+
+        {"available": bool,                 # False = no netgen -json to read
+         "cells": [{"cell","nets","net_delta","offending_nets",
+                    "offending_devices","pin_mismatches"}, ...],  # dirty cells
+         "offending_nets": [str, ...],       # flat, de-duplicated
+         "offending_devices": [str, ...],
+         "pin_mismatches": [{"layout","source"}, ...]}
+
+    Read-only, FAIL-SAFE, PURELY ADDITIVE (see the module note above): it never
+    participates in the verdict. chip-AGNOSTIC."""
+    empty = {"available": False, "cells": [], "offending_nets": [],
+             "offending_devices": [], "pin_mismatches": []}
+    arr = _load_netgen_json_array(json_source)
+    if arr is None:
+        return empty
+    cells: List[Dict[str, Any]] = []
+    all_nets: List[str] = []
+    all_devs: List[str] = []
+    all_pins: List[Dict[str, str]] = []
+    for cell in arr:
+        if not isinstance(cell, dict):
+            continue
+        nets = cell.get("nets")
+        net_delta = (abs(nets[0] - nets[1])
+                     if isinstance(nets, list) and len(nets) == 2
+                     and all(isinstance(n, int) for n in nets) else None)
+        bad_nets: List[str] = []
+        _harvest_net_names(cell.get("badnets"), bad_nets)
+        bad_devs: List[str] = []
+        _harvest_net_names(cell.get("badelements"), bad_devs)
+        pin_mm = _pin_mismatches(cell.get("pins"))
+        if not (bad_nets or bad_devs or pin_mm or net_delta):
+            continue                      # clean cell — nothing to localize
+        cells.append({
+            "cell": _cell_name(cell.get("name")),
+            "nets": nets if isinstance(nets, list) else None,
+            "net_delta": net_delta,
+            "offending_nets": _dedupe(bad_nets),
+            "offending_devices": _dedupe(bad_devs),
+            "pin_mismatches": pin_mm,
+        })
+        all_nets += bad_nets
+        all_devs += bad_devs
+        all_pins += pin_mm
+    return {"available": True, "cells": cells,
+            "offending_nets": _dedupe(all_nets),
+            "offending_devices": _dedupe(all_devs),
+            "pin_mismatches": all_pins}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="Classify a netgen LVS report's terminal verdict (#524).")
@@ -505,6 +666,11 @@ def main(argv=None) -> int:
                     help="netgen -json structured E1 report (file or dir). "
                          "AUTHORITATIVE when present; defaults to one embedded "
                          "in the transcript, else the fail-safe text path.")
+    ap.add_argument("--localize-json", default=None,
+                    help="netgen `-batch lvs … -json` output (the per-cell "
+                         "ARRAY — file or dir). Adds short/open/pin "
+                         "LOCALIZATION (#203); defaults to the report's sibling "
+                         "`<stem>.json`. Triage-only — never moves the verdict.")
     args = ap.parse_args(argv)
     p = Path(args.report)
     if not p.is_file():
@@ -513,12 +679,16 @@ def main(argv=None) -> int:
     blob = p.read_text(errors="replace")
     obj = _resolve_report(blob, args.json_report)
     verdict = classify(blob, json_report=obj)
+    # #203 — the netgen `-json` sidecar sits next to the report as `<stem>.json`
+    # (e.g. lvs.rpt → lvs.json); use the explicit override when given.
+    _loc_src = args.localize_json if args.localize_json else p.with_suffix(".json")
     out = {
         "report": str(p),
         "verdict": verdict,
         "verdict_source": "netgen-json" if obj is not None else "text-fallback",
         "mismatch_class": mismatch_class(blob, json_report=obj),
         "pin_mismatch_evidence": pin_mismatch_evidence(blob),
+        "localization": localize(_loc_src),
     }
     text = json.dumps(out, indent=2, ensure_ascii=False)
     if args.json:

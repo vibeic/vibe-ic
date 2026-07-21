@@ -1,0 +1,58 @@
+
+Subcircuit summary:
+Circuit 1: inv                             |Circuit 2: inv                             
+-------------------------------------------|-------------------------------------------
+nch (1)                                    |nch (1)                                    
+pch (1)                                    |pch (1)                                    
+Number of devices: 2                       |Number of devices: 2                       
+Number of nets: 4                          |Number of nets: 4                          
+---------------------------------------------------------------------------------------
+Netlists match uniquely.
+
+Subcircuit pins:
+Circuit 1: inv                             |Circuit 2: inv                             
+-------------------------------------------|-------------------------------------------
+Y                                          |Y                                          
+A                                          |A                                          
+VSS                                        |VSS                                        
+VDD                                        |VDD                                        
+---------------------------------------------------------------------------------------
+Cell pin lists are equivalent.
+Device classes inv and inv are equivalent.
+
+Cell top (0) disconnected node: Y2
+Subcircuit summary:
+Circuit 1: top                             |Circuit 2: top                             
+-------------------------------------------|-------------------------------------------
+inv (2)                                    |inv (2)                                    
+Number of devices: 2                       |Number of devices: 2                       
+Number of nets: 5 **Mismatch**             |Number of nets: 6 **Mismatch**             
+---------------------------------------------------------------------------------------
+NET mismatches: Class fragments follow (with fanout counts):
+Circuit 1: top                             |Circuit 2: top                             
+
+---------------------------------------------------------------------------------------
+Net: Y1                                    |Net: Y1                                    
+  inv/Y = 2                                |  inv/Y = 1                                
+                                           |                                           
+(no matching net)                          |Net: Y2                                    
+                                           |  inv/Y = 1                                
+---------------------------------------------------------------------------------------
+Netlists do not match.
+Port matching may fail to disambiguate symmetries.
+
+Subcircuit pins:
+Circuit 1: top                             |Circuit 2: top                             
+-------------------------------------------|-------------------------------------------
+Y1                                         |Y1                                         
+VSS                                        |VSS                                        
+VDD                                        |VDD                                        
+B                                          |B                                          
+A                                          |A                                          
+(no pin, node is Y1)                       |Y2                                         
+Y2                                         |(no matching pin)                          
+---------------------------------------------------------------------------------------
+Cell pin lists for top and top altered to match.
+Device classes top and top are equivalent.
+
+Final result: Top level cell failed pin matching.

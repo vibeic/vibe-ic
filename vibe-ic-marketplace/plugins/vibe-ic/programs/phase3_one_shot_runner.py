@@ -12565,6 +12565,60 @@ def _write_lvs_verdict(project: Path, status: str, finding: str,
         return str(path)
 
 
+def _emit_lvs_localization(project: Path, lvs_rpt: Path
+                           ) -> Tuple[Dict[str, Any], Optional[str]]:
+    """#203 — turn netgen's `-json` sidecar into a short/open/pin LOCALIZATION
+    artifact for LVS-FAIL triage.
+
+    netgen's `-batch lvs … -json` writes a structured per-cell compare array
+    beside the text report (``lvs.rpt`` → ``lvs.json``); this reads THAT array
+    via the shared `lvs_verdict_tokens.localize` (single source of truth with the
+    #189 classifier), and persists a readable
+    ``reports/phase3/lvs_localize.json`` naming the offending nets / devices /
+    pins so a fail names the WHERE the first time, not just the WHETHER.
+
+    Returns ``(localization_dict, sidecar_rel_path | None)``. Best-effort and
+    FAIL-SAFE: an absent / unreadable netgen json yields ``available=False`` and
+    no sidecar; a write failure never fails the LVS step. PURELY ADDITIVE — the
+    localization is triage metadata and never touches the verdict (the text
+    report both consumers read is byte-identical). chip-AGNOSTIC."""
+    loc = _lvt.localize(lvs_rpt.with_suffix(".json"))
+    if not loc.get("available"):
+        return loc, None
+    try:
+        out = _pl.reports_phase3_dir(project) / "lvs_localize.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(loc, indent=2, sort_keys=True) + "\n")
+        try:
+            return loc, str(out.relative_to(project))
+        except ValueError:
+            return loc, str(out)
+    except OSError:
+        return loc, None
+
+
+def _localization_note(loc: Dict[str, Any]) -> str:
+    """A one-line human summary of an LVS localization (`_emit_lvs_localization`)
+    — the offending nets + the first pin mismatches — for the FAIL detail. Empty
+    when nothing was localized (so a clean/absent case adds no noise)."""
+    if not loc.get("available"):
+        return ""
+    bits: List[str] = []
+    nets = loc.get("offending_nets") or []
+    if nets:
+        bits.append("offending nets: " + ", ".join(nets[:5])
+                    + (" …" if len(nets) > 5 else ""))
+    pins = loc.get("pin_mismatches") or []
+    if pins:
+        bits.append("pin mismatches: " + "; ".join(
+            f"{p.get('layout', '')}|{p.get('source', '')}" for p in pins[:3])
+            + (" …" if len(pins) > 3 else ""))
+    devs = loc.get("offending_devices") or []
+    if devs:
+        bits.append("offending devices: " + ", ".join(devs[:5]))
+    return "; ".join(bits)
+
+
 def _render_klayout_lvs_report(cmp: Dict[str, Any], gds_name: str,
                                netlist_name: str) -> str:
     """v1.3.94 — render the KLayout NetlistComparer's REAL compare JSON into
@@ -13777,8 +13831,16 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
         # a (future) full transistor-level GDS re-extract path, never here.
         f"export PATH={TOOLS_IN_CONTAINER}/netgen/bin:"
         f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
+        # #203 — `-json` makes netgen ALSO emit its structured per-cell compare
+        # array (badnets / badelements / pins) beside the text report, so an LVS
+        # FAIL can NAME the offending net the first time instead of forcing a
+        # hand re-run. netgen derives the sidecar name from the logfile stem
+        # (lvs.rpt -> lvs.json, same dir) and writes the TEXT report BYTE-
+        # IDENTICALLY (verified: same md5 with/without the flag), so the #189
+        # classifier and the Step-31 gate — which read only the text report —
+        # are untouched. The sidecar is triage-only; it never feeds the verdict.
         f"netgen -batch lvs \"{sp_c} {lay_top}\" \"{nl_c} {top}\" "
-        f"{shlex.quote(netgen_setup)} {rpt_c}")
+        f"{shlex.quote(netgen_setup)} {rpt_c} -json")
     # v1.3.47 — progress-stall watchdog (not a fixed 14400s kill; see #443
     # note): a still-progressing netgen compare is never killed, only a hang.
     # marker = the layout netlist path (in netgen's argv).
@@ -13911,14 +13973,26 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     pin_ev = _lvt.pin_mismatch_evidence(blob)
     ev_note = (f"; pin mismatches: {'; '.join(pin_ev[:3])}"
                + (" …" if len(pin_ev) > 3 else "")) if pin_ev else ""
+    # #203 — netgen's `-json` sidecar (lvs.json) carries the STRUCTURED
+    # localization the text report cannot: which nets short/open, which pins
+    # fail. Persist it as reports/phase3/lvs_localize.json and name the offending
+    # nets in the FAIL detail so triage need not re-run netgen by hand. Triage-
+    # only; the verdict above is from the (byte-identical) text report.
+    _loc, _loc_path = _emit_lvs_localization(project, lvs_rpt)
+    _loc_note = _localization_note(_loc)
+    if _loc_note:
+        ev_note += f"; {_loc_note}"
     verdict = _write_lvs_verdict(
         project, "FAIL", "LVS_MISMATCH",
         f"netgen LVS did not match (rc={rc}) — a real compare ran and "
         f"reported a mismatch; design/extraction defect, not an env "
-        f"gap (#443).",
+        f"gap (#443)."
+        + (f" Localization: {_loc_note}." if _loc_note else ""),
         extras={"lvs_report": "reports/phase3/lvs.rpt",
                 "ext2spice_warning": ext_warning,
                 "pin_mismatch_evidence": pin_ev,
+                "lvs_localization": _loc,
+                "lvs_localize_report": _loc_path,
                 "transcript_tail": transcript[-600:]})
     return StepResult(
         "lvs", "FAIL", time.time() - t0,
@@ -13929,6 +14003,8 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
                 "lvs_report": "reports/phase3/lvs.rpt",
                 "lvs_verdict": verdict,
                 "pin_mismatch_evidence": pin_ev,
+                "lvs_localization": _loc,
+                "lvs_localize_report": _loc_path,
                 "ext2spice_warning": ext_warning,
                 "transcript_tail": transcript[-600:]})
 
