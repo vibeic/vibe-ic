@@ -113,11 +113,18 @@ def test_blackbox_discovery_prefers_plain(monkeypatch):
 def test_corner_sta_recipe_splits_setup_max_hold_min():
     src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
     i = src.index("def _emit_corner_spef_sta")
-    window = src[i:i + 4000]
+    window = src[i:i + 8000]
     assert 'setup_corner = ("max"' in window   # setup at slow/max-RC
     assert 'hold_corner = ("min"' in window    # hold at fast/min-RC
     assert 'report_worst_slack' in window
     assert '"SETUP"' in window and '"HOLD"' in window
+    # the report must state which LIBERTY each corner was analysed with, and
+    # must ask OpenSTA for DRV — N corner sections over one silently-shared
+    # library used to be indistinguishable from genuine multi-corner sign-off,
+    # and max_slew violations could not appear in this report at all.
+    assert "# corner_liberty:" in window
+    assert "distinct_corner_libraries" in window
+    assert "_report_check_types_tcl(rpt_c)" in window
 
 
 def test_multicorner_extract_recipe_loops_corners():
@@ -135,7 +142,10 @@ def test_multicorner_disclosure_is_honest():
     # single-corner disclosure branch.
     src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
     i = src.index("multi_corner_spef_stance.json")
-    window = src[i:i + 2600]
+    window = src[i:i + 4000]
     assert "SINGLE-CORNER (nom) only" in window   # honest fallback text
     assert '"multi_corner"' in window
     assert '"setup_corner"' in window and '"hold_corner"' in window
+    # ...and the corner->liberty resolution, so the corner COUNT can never be
+    # read as a library count.
+    assert '"corner_library_resolution"' in window

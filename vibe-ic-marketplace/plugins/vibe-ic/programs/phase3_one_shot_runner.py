@@ -15009,6 +15009,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             _emit_spef_coupling_augment(primary_def, pdk.tech_lef, p, notes)
             written.append(str(p))
         mc_sta_ok = False
+        mc_lib_resolution: Optional[Dict[str, object]] = None
         # A corner STA is only meaningful with a SETUP/HOLD split -> need >=2
         # distinct corners (min & max), else it degrades to the nom report we
         # already produced.
@@ -15016,9 +15017,13 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                                        or "max" in corner_spefs):
             mc_sta_rpt = sta_out / "sta_spef_multicorner.rpt"
             if not mc_sta_rpt.is_file():
-                mc_sta_ok = _emit_corner_spef_sta(
+                _mc_res = _emit_corner_spef_sta(
                     project, top, pdk, container, corner_spefs,
-                    mc_sta_rpt, notes)
+                    mc_sta_rpt, notes,
+                    corner_libs=_resolve_signoff_corner_libs(
+                        project, pdk, container))
+                mc_sta_ok = bool(_mc_res.get("ok"))
+                mc_lib_resolution = _mc_res.get("resolution")  # type: ignore[assignment]
                 if mc_sta_ok:
                     written.append(str(mc_sta_rpt))
                     mc_mirror = rpt_phase3 / "sta_spef_multicorner.rpt"
@@ -15039,6 +15044,11 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             "multicorner_sta_report": (
                 "phase3/stage3/sta/sta_spef_multicorner.rpt" if mc_sta_ok
                 else None),
+            # Which liberty each reported corner was actually analysed with.
+            # Without this, N corner sections over one library are byte-
+            # indistinguishable from N corner sections over N libraries — the
+            # silence that let a degraded run read as multi-corner sign-off.
+            "corner_library_resolution": mc_lib_resolution,
             "disclosure": (
                 "Multi-corner SPEF signed off: setup at the slow/max-RC corner, "
                 "hold at the fast/min-RC corner."
@@ -15110,6 +15120,12 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             "setup_worst_slack_ns": setup_wns,
             "hold_worst_slack_ns": hold_wns,
             "violated_corners": _viol,
+            # Which liberty each PROCESS corner resolved to. Two labels can name
+            # the SAME file (a PDK whose corner classification collapses), which
+            # is a single-library run wearing a multi-corner label — recorded
+            # here so it is judgeable instead of merely assumed from the label.
+            "corner_library_resolution": _process_lib_resolution(
+                corner_libs, setup_lbl, hold_lbl),
             "timing_closed_multi_corner": (mc_ocv_ok and not _viol),
             "disclosure": (
                 # NOTE: the literal ±5%% is an ESCAPED percent — this string is
@@ -17141,28 +17157,60 @@ def _emit_spef_corners(project: Path, top: str, pdk: PdkConfig, container: str,
 
 def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
                           container: str, corner_spefs: Dict[str, Path],
-                          rpt_out: Path, notes: List[str]) -> bool:
+                          rpt_out: Path, notes: List[str],
+                          corner_libs: Optional[Dict[str, str]] = None
+                          ) -> Dict[str, object]:
     """Corner-aware SPEF STA: SETUP at the SLOW/max-RC corner, HOLD at the
     FAST/min-RC corner. Writes one report with clearly-labelled SETUP(max-RC)
-    and HOLD(min-RC) sections. Best-effort; returns False if it can't run.
+    and HOLD(min-RC) sections. Best-effort; `ok` is False if it can't run.
 
     §4.05: only the corners that ACTUALLY produced a SPEF are used; if max is
     absent, setup uses nom (disclosed); if min is absent, hold uses nom
-    (disclosed) — it never claims a corner it did not extract."""
+    (disclosed) — it never claims a corner it did not extract.
+
+    CORNER-LIBRARY DISCLOSURE (the measured defect): this report varies the SPEF
+    across its corners while reading ONE liberty, because the RC axis varies
+    PARASITICS — that is correct by design, but it was never STATED. A reader
+    saw "Multi-corner SPEF STA" over three corner sections and had no way to
+    tell how many LIBRARIES were analysed, so a run whose process-corner libs
+    were unavailable produced output byte-indistinguishable from one whose libs
+    resolved. Every stanza now names the liberty it read, the header carries a
+    `# corner_liberty:` line per corner plus the distinct-library count, and the
+    returned dict feeds the same facts into the stance JSON. Nothing about WHICH
+    library is read changes — only whether the record admits it.
+
+    DRV: `report_check_types` (max_slew / max_capacitance) is now emitted per
+    stanza. It was absent entirely, so max_slew violations at a corner could not
+    appear in this report no matter how many there were — an unqueried limit is
+    indistinguishable from a met one. chip/PDK-AGNOSTIC: the liberty paths come
+    from the active PDK, never a literal."""
     pnr_out = _pl.pnr_dir(project)
     netlist = pnr_out / f"{top}_pnr.v"
     if not netlist.is_file():
         netlist = _pl.synth_dir(project) / f"{top}_synth.v"
     sdc = pnr_out / "constraint.sdc"
+    _empty: Dict[str, object] = {"ok": False, "resolution": None}
     if not (netlist.is_file() and sdc.is_file()) or not corner_spefs:
-        return False
+        return _empty
     setup_corner = ("max" if "max" in corner_spefs
                     else "nom" if "nom" in corner_spefs else None)
     hold_corner = ("min" if "min" in corner_spefs
                    else "nom" if "nom" in corner_spefs else None)
     if setup_corner is None and hold_corner is None:
-        return False
+        return _empty
     lib_c = _to_container_path(str(pdk.liberty), container)
+    # Which liberty each RC corner is analysed with. One library across the RC
+    # corners is the DESIGNED behaviour (parasitics vary, process does not) —
+    # this records it instead of leaving it to be inferred from a corner name.
+    _lib_by_corner: Dict[str, str] = {}
+    for _c in (setup_corner, hold_corner):
+        if _c is not None:
+            _lib_by_corner[_c] = lib_c
+    # Process corners the PDK could NOT supply. Named so the record says WHY the
+    # library count is what it is, rather than leaving the gap unexplained.
+    _resolved_proc = sorted(corner_libs or {})
+    _unresolved_proc = [lbl for lbl in ("SS", "TT", "FF")
+                        if lbl not in (corner_libs or {})]
     macro_libs_tcl = "\n".join(
         f"read_liberty {_to_container_path(str(f), container)}"
         for f in (pdk.macro_libs or []))
@@ -17181,20 +17229,36 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
             f"read_sdc {sdc_c}\n"
             f"read_spef {spef_c}\n"
             f"set _f [open {rpt_c} a]\n"
-            f"puts $_f \"=== {kind} ({corner}-RC corner, SPEF={corner}) ===\"\n"
+            # The banner names the LIBERTY as well as the SPEF: the corner name
+            # alone never proved which library was read, which is exactly how a
+            # degraded run passed for a multi-corner one.
+            f"puts $_f \"=== {kind} ({corner}-RC corner, SPEF={corner}, "
+            f"liberty={lib_c}) ===\"\n"
             f"close $_f\n"
             f"report_worst_slack {flag} >> {rpt_c}\n"
             f"report_tns >> {rpt_c}\n"
             f"report_checks {flag} -group_count 3 >> {rpt_c}\n"
+            # DRV (max_slew / max_capacitance): previously never asked for in
+            # this report, so slew violations at a corner were unreportable.
+            f"{_report_check_types_tcl(rpt_c)}"
         )
 
     # Header, then setup stanza, then a fresh sta process for hold (separate
     # design read so the two corners don't cross-contaminate parasitics).
+    _n_distinct = len(set(_lib_by_corner.values()))
+    _lib_lines = "".join(
+        f"puts $_f \"# corner_liberty: {c}={lib}\"\n"
+        for c, lib in sorted(_lib_by_corner.items()))
     header = (
         f"set _f [open {rpt_c} w]\n"
         f"puts $_f \"# Multi-corner SPEF STA (TAPEOUT-SIGNOFF P1)\"\n"
         f"puts $_f \"# SETUP corner: {setup_corner}-RC   HOLD corner: {hold_corner}-RC\"\n"
         f"puts $_f \"# corners_available: {','.join(sorted(corner_spefs))}\"\n"
+        + _lib_lines +
+        f"puts $_f \"# distinct_corner_libraries: {_n_distinct} across "
+        f"{len(_lib_by_corner)} reported corner(s)\"\n"
+        f"puts $_f \"# axis: RC/parasitic — corners vary the SPEF, NOT the "
+        f"process library; process-corner sign-off is a separate axis\"\n"
         f"close $_f\n"
     )
     ok_any = False
@@ -17218,11 +17282,35 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
                f"{TOOLS_IN_CONTAINER}/bin:$PATH && sta -no_init -exit {tcl_c} 2>&1")
         _docker_exec(container, cmd, marker=tcl_c)
         ok_any = ok_any or (rpt_out.is_file() and rpt_out.stat().st_size > 0)
+    _collapsed = _n_distinct < len(_lib_by_corner)
+    resolution: Dict[str, object] = {
+        "axis": "rc_parasitic",
+        "liberty_by_corner": dict(sorted(_lib_by_corner.items())),
+        "distinct_library_count": _n_distinct,
+        "reported_corner_count": len(_lib_by_corner),
+        "collapsed": _collapsed,
+        "process_corner_libraries_resolved": _resolved_proc,
+        "unresolved_corners": _unresolved_proc,
+        "unresolved_reason": (
+            "the RC axis analyses parasitic corners with ONE process liberty by "
+            "design; process-corner sign-off is the separate multi_corner_ocv "
+            "axis, which reads the SS/FF libraries when the active PDK ships "
+            "them" + ("" if not _unresolved_proc else
+                      f" (this PDK exposed no distinct "
+                      f"{'/'.join(_unresolved_proc)} process liberty)")),
+        "degradation_disclosure": (
+            f"This report varies the SPEF across {len(_lib_by_corner)} corner(s) "
+            f"while reading {_n_distinct} liberty. It is an RC/parasitic "
+            f"characterisation, NOT multi-process sign-off — a violation that "
+            f"appears only at an unanalysed PROCESS corner cannot be seen here."
+            if _collapsed else None),
+    }
     if ok_any:
         notes.append(
             f"multi-corner SPEF STA: setup@{setup_corner}-RC, hold@{hold_corner}"
-            f"-RC ({len(corner_spefs)} corner SPEFs).")
-    return ok_any
+            f"-RC ({len(corner_spefs)} corner SPEFs, {_n_distinct} distinct "
+            f"corner liberty/libraries + DRV check-types).")
+    return {"ok": ok_any, "resolution": resolution}
 
 
 def _resolve_signoff_corner_libs(project: Path, pdk: PdkConfig,
@@ -17247,6 +17335,45 @@ def _resolve_signoff_corner_libs(project: Path, pdk: PdkConfig,
         for c in _select_signoff_corners(clibs):
             out[c["label"]] = c["liberty"]
     return out
+
+
+def _process_lib_resolution(corner_libs: Dict[str, str],
+                            setup_lbl: Optional[str],
+                            hold_lbl: Optional[str]) -> Dict[str, object]:
+    """Record which liberty each PROCESS sign-off corner actually resolved to.
+
+    The multi-corner degradation path is DESIGNED — when the active PDK ships no
+    distinct slow/fast process libs the flow falls back to a single library —
+    but until now the fallback left no trace, so a degraded run and a genuine
+    multi-corner run emitted the same artifacts. This states the resolution
+    outright: the corner labels, the file each one resolved to, how many
+    DISTINCT files that is, and which canonical corners the PDK did not supply.
+    chip/PDK-AGNOSTIC — labels and paths come from the active PDK."""
+    by_corner: Dict[str, str] = {}
+    for lbl in (setup_lbl, hold_lbl):
+        if lbl and corner_libs.get(lbl):
+            by_corner[lbl] = corner_libs[lbl]
+    n_distinct = len(set(by_corner.values()))
+    unresolved = [lbl for lbl in ("SS", "TT", "FF") if lbl not in corner_libs]
+    collapsed = bool(by_corner) and n_distinct < len(by_corner)
+    return {
+        "axis": "process",
+        "liberty_by_corner": dict(sorted(by_corner.items())),
+        "distinct_library_count": n_distinct,
+        "reported_corner_count": len(by_corner),
+        "collapsed": collapsed,
+        "unresolved_corners": unresolved,
+        "unresolved_reason": (
+            None if not unresolved else
+            f"the active PDK exposed no distinct {'/'.join(unresolved)} process "
+            f"liberty (staged input/pdk/liberty and the container's built-in "
+            f"corner libs were both searched)"),
+        "degradation_disclosure": (
+            f"{len(by_corner)} process corner(s) reported, {n_distinct} distinct "
+            f"liberty analysed — the corner labels differ but resolve to the "
+            f"same library, so this is NOT multi-process sign-off."
+            if collapsed else None),
+    }
 
 
 def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
@@ -17332,7 +17459,11 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
             # TWO commands — this OpenSTA build rejects a combined -early -late.
             f"{_flat_ocv_derate_tcl()}"
             f"set _f [open {rpt_c} {open_mode}]\n"
-            f'puts $_f "=== {kind} corner: process={label} liberty, '
+            # The banner names the actual liberty PATH, not just the corner
+            # label: a section headed `process=SS` proved nothing about which
+            # file was read, so a degraded run that resolved SS to the typ lib
+            # looked identical to one that resolved it to a real slow lib.
+            f'puts $_f "=== {kind} corner: process={label} liberty={lib_c}, '
             f'SPEF={spef_disc} ==="\n'
             f'puts $_f "OCV_DERATE_APPLIED early={_FLAT_OCV_DERATE_EARLY} '
             f'late={_FLAT_OCV_DERATE_LATE} flat-OCV"\n'
