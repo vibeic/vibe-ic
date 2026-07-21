@@ -30,14 +30,18 @@ jobs:
           python -m pip install pytest pyyaml
 
       # The plugin suite exercises real EDA paths: the shape-C / port-rule
-      # gates compile fixtures with iverilog (gates_atomic.py), and the
-      # pnr.tcl emitter tests parse/eval the generated Tcl in tclsh.
-      # Without these the suite has NEVER been green on CI (the failures
-      # are FileNotFoundError: 'iverilog', not plugin regressions).
-      - name: Install EDA tools (iverilog + tclsh)
+      # gates compile fixtures with iverilog (gates_atomic.py), the pnr.tcl
+      # emitter tests parse/eval the generated Tcl in tclsh, and the #531/#604
+      # synthesizability smoke REFUSES to silently no-op when yosys is absent
+      # (a yosys-less host is an honest ERROR, not a pass) — so yosys+verilator
+      # are required for the suite to reach its green-or-honestly-skipped state.
+      # This matches the toolchain the suite baseline was triaged against;
+      # tools NOT installed here (openroad/klayout/magic/netgen/ngspice) are
+      # handled by the tests' own shutil.which() skip-guards.
+      - name: Install EDA tools (iverilog + tclsh + yosys + verilator)
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends iverilog tcl
+          sudo apt-get install -y --no-install-recommends iverilog tcl yosys verilator
 
       - name: chip-AGNOSTIC source guard
         run: |
@@ -111,7 +115,11 @@ jobs:
           import json, pathlib, sys
           bad = []
           for p in pathlib.Path(".").rglob("*.json"):
-              if "node_modules" in p.parts or ".git" in p.parts:
+              # Lint OUR source only. Exclude: node_modules/.git; benchmark-data/
+              # (generated result artifacts — huge, some intentionally truncated,
+              # not source); and */vendor/ (third-party vendored code, e.g. JSONC
+              # with comments that is legitimately not strict JSON).
+              if any(x in p.parts for x in ("node_modules", ".git", "benchmark-data", "vendor")):
                   continue
               try:
                   json.load(open(p))
@@ -132,7 +140,11 @@ jobs:
           import yaml, pathlib, sys
           bad = []
           for p in list(pathlib.Path(".").rglob("*.yml")) + list(pathlib.Path(".").rglob("*.yaml")):
-              if "node_modules" in p.parts or ".git" in p.parts:
+              # Lint OUR source only. Exclude: node_modules/.git; benchmark-data/
+              # (generated result artifacts — huge, some intentionally truncated,
+              # not source); and */vendor/ (third-party vendored code, e.g. JSONC
+              # with comments that is legitimately not strict JSON).
+              if any(x in p.parts for x in ("node_modules", ".git", "benchmark-data", "vendor")):
                   continue
               try:
                   yaml.safe_load(open(p))

@@ -143,6 +143,31 @@ _PIN_NOMATCH_RE = re.compile(r"^.*\(no matching pin\).*$", re.M)
 # able to carry the top-level verdict.
 _FINAL_RESULT_LINE_RE = re.compile(r"Final result\s*:(.*)$", re.M | re.I)
 
+# netgen prints the verdict on ONE line in the report file but across TWO on
+# stdout:
+#     report : "Final result: Circuits match uniquely."
+#     stdout : "Final result: \nCircuits match uniquely."
+# Callers classify `transcript + report`, so the blob carries BOTH forms and the
+# bare `Final result: ` from stdout is an unreadable terminal line. Under the
+# unanimity rule below that blocks MATCH — while a MISMATCH still classifies
+# correctly, because its token is matched anywhere in the blob. The result is a
+# ONE-SIDED failure: a genuinely clean LVS can never be reported as MATCH.
+# Measured on spm @ v1.4.74 (fresh run, instrumented):
+#     classify(report)              -> MATCH
+#     classify(transcript + report) -> INCOMPLETE
+#         finals = ['Final result: ', 'Final result: Circuits match uniquely.']
+# Joining the continuation before extraction makes the two forms identical.
+# Fail-safe is untouched: if the joined text is still unrecognized wording it
+# stays INCOMPLETE/MISMATCH — this only removes an artefact of line-wrapping,
+# it never invents positive evidence.
+_FINAL_RESULT_CONTINUATION_RE = re.compile(
+    r"(Final result\s*:)[ \t]*\r?\n[ \t]*(?=\S)", re.I)
+
+
+def _join_wrapped_final_result(blob: str) -> str:
+    """Fold netgen's two-line stdout `Final result:` back onto one line."""
+    return _FINAL_RESULT_CONTINUATION_RE.sub(r"\1 ", blob or "")
+
 # The verdict phrase ANCHORED to where netgen actually writes it: immediately
 # after `Final result:`. Slicing after the marker is NOT sufficient on its own —
 # the sliced region still carries tool- and DESIGN-supplied DATA (paths, cell and
@@ -296,7 +321,7 @@ def _classify_text(blob: str) -> str:
     INCOMPLETE (unreadable), never to MATCH."""
     if MISMATCHED_RE.search(blob) or _NEGATIVE_HINT_RE.search(blob):
         return "MISMATCH"
-    finals = _FINAL_RESULT_LINE_RE.findall(blob)
+    finals = _FINAL_RESULT_LINE_RE.findall(_join_wrapped_final_result(blob))
     if not finals:
         # No terminal line at all: a truncated hierarchical run whose
         # per-subcell `match uniquely` lines printed before the top-level

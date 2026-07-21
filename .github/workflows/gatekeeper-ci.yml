@@ -212,10 +212,10 @@ jobs:
 
       # Same EDA tool setup as ci.yml: the shape-C / port-rule gates compile
       # fixtures with iverilog, and the pnr.tcl emitter tests eval Tcl in tclsh.
-      - name: Install EDA tools (iverilog + tclsh)
+      - name: Install EDA tools (iverilog + tclsh + yosys + verilator)
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends iverilog tcl
+          sudo apt-get install -y --no-install-recommends iverilog tcl yosys verilator
 
       - name: plugin_full_audit (D1 program-test + D2 step-checker)
         run: |
@@ -260,10 +260,10 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pytest pyyaml
 
-      - name: Install EDA tools (iverilog + tclsh)
+      - name: Install EDA tools (iverilog + tclsh + yosys + verilator)
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends iverilog tcl
+          sudo apt-get install -y --no-install-recommends iverilog tcl yosys verilator
 
       - name: pytest (plugin tree)
         run: |
@@ -294,14 +294,18 @@ jobs:
           import json, yaml, pathlib, sys
           bad = []
           for p in pathlib.Path(".").rglob("*.json"):
-              if "node_modules" in p.parts or ".git" in p.parts:
+              # Source only — exclude generated benchmark-data/ result artifacts
+              # and third-party */vendor/ (JSONC etc.), same as ci.yml.
+              if any(x in p.parts for x in ("node_modules", ".git", "benchmark-data", "vendor")):
                   continue
               try:
                   json.load(open(p))
               except Exception as e:
                   bad.append(f"{p}: {e}")
           for p in list(pathlib.Path(".").rglob("*.yml")) + list(pathlib.Path(".").rglob("*.yaml")):
-              if "node_modules" in p.parts or ".git" in p.parts:
+              # Source only — exclude generated benchmark-data/ result artifacts
+              # and third-party */vendor/ (JSONC etc.), same as ci.yml.
+              if any(x in p.parts for x in ("node_modules", ".git", "benchmark-data", "vendor")):
                   continue
               try:
                   yaml.safe_load(open(p))
