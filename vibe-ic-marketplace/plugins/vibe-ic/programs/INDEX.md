@@ -469,6 +469,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `lec_equivalence_check` | any | — | Step 13 deterministic LEC substance gate. |
 | `lec_post_layout_check` | any | — | POST-LAYOUT logic-equivalence gate. |
 | `lec_run` | any | — | Step 13 LEC PRODUCER (RTL ≡ synthesized gate netlist). |
+| `lesson_consumption_check` | any | — | verify a genre-matched captured lesson was CONSUMED, not merely staged. |
 | `lessons_corpus_consistency_check` | any | — | ORGANIC #741 |
 | `level_shifter_required_check` | any | — | M2 gate (substance-verifying). |
 | `lfsr_synth` | any | — | deterministic SOLVER for the LINEAR-FEEDBACK-SHIFT-REGISTER |
@@ -1403,6 +1404,7 @@ _(no programs in this group)_
 - `lec_equivalence_check` — Step 13 deterministic LEC substance gate.
 - `lec_post_layout_check` — POST-LAYOUT logic-equivalence gate.
 - `lec_run` — Step 13 LEC PRODUCER (RTL ≡ synthesized gate netlist).
+- `lesson_consumption_check` — verify a genre-matched captured lesson was CONSUMED, not merely staged.
 - `lessons_corpus_consistency_check` — ORGANIC #741
 - `level_shifter_required_check` — M2 gate (substance-verifying).
 - `lfsr_synth` — deterministic SOLVER for the LINEAR-FEEDBACK-SHIFT-REGISTER

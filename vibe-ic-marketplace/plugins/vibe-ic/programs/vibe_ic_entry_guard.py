@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -50,6 +51,33 @@ _EVIDENCE_FILES = [
     "reports/phase1_one_shot.json",
     "phase1/generated_docs/L1_DATASHEET.json",
 ]
+
+# Shape-C per-problem evidence (open-benchmark-methodology § 7.5 rule 3).
+#
+# An atomic-micro-problem (Shape-C) run does NOT have a single run-root phase1
+# tree: the harness drives `phase1_engine` ONCE PER PROBLEM, so the fact-graph
+# lands under `<run>/work/<problem>/…/generated_docs/L*.json`.  § 7.5 rule 3 is
+# explicit that this path still counts as Phase-1 entry ("the Phase-1
+# fact-graph is still produced; the gate simply wraps the emit") — the run-root
+# file list above simply had no branch for that layout, so a fully-compliant
+# Shape-C run was rejected as if it were direct-agent authoring.
+#
+# Both layouts `gates_atomic.py` itself accepts are honoured (see its
+# `out/generated_docs` / `phase1_proj/phase1/generated_docs` lookup).
+#
+# NO-LEAK (§ 4.05): this is a guard-RELAXING branch, so it is deliberately
+# narrow — it requires an actual rendered phase1 LAYER DOC (`L<digits>_*.json`)
+# inside a `generated_docs/` directory under a per-problem work dir.  A bare
+# `work/` tree, an empty `generated_docs/`, or hand-dropped non-layer JSON does
+# NOT satisfy it, so direct-agent authoring is still caught.
+_EVIDENCE_GLOBS = [
+    "work/*/out/generated_docs/L*.json",
+    "work/*/phase1_proj/phase1/generated_docs/L*.json",
+]
+
+# A layer doc is L<digits>_<NAME>.json — pinned so a stray `Lfoo.json` or a
+# `L1_DATASHEET.json.bak` cannot stand in for real phase1 output.
+_LAYER_DOC_RE = re.compile(r"^L\d+_[A-Za-z0-9_]+\.json$")
 
 
 @dataclass
@@ -69,8 +97,15 @@ def _has_evidence(project: Path) -> Tuple[bool, List[EntryGuardFinding]]:
             found.append(str(p))
     if found:
         return True, findings
+    # Shape-C per-problem phase1 evidence (§ 7.5 rule 3).  Narrow by design:
+    # the matched path must be a real rendered layer doc, not merely a file
+    # sitting at the right depth.
+    for pattern in _EVIDENCE_GLOBS:
+        for p in project.glob(pattern):
+            if p.is_file() and _LAYER_DOC_RE.match(p.name):
+                return True, findings
     # None found — build a human finding.
-    checked = ", ".join(_EVIDENCE_FILES)
+    checked = ", ".join(_EVIDENCE_FILES + _EVIDENCE_GLOBS)
     findings.append(EntryGuardFinding(
         rule="MISSING_VIBE_IC_ENTRY_EVIDENCE",
         path=str(project),
