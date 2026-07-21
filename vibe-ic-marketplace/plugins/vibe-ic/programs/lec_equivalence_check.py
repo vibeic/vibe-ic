@@ -332,6 +332,34 @@ def audit(project: Path) -> AuditResult:
             file=LEC_JSON_REL))
         return res
 
+    # --- (d2) #208 — NON-CONVERGENCE INCONCLUSIVE: a COMPLETED miter left
+    # points unproven, but equiv_induct did NOT converge (a flat wall) and NO
+    # counterexample was recorded (0 non-equivalent points). Non-convergence is
+    # NOT non-equivalence — a real difference produces a counterexample
+    # (non_equivalent_points > 0). lec_run is the authority that inspected the
+    # raw yosys log for a counterexample and only then marked the run
+    # INCONCLUSIVE; trust that verdict here ONLY while non_equiv == 0. A single
+    # non-equivalent point forces the substance FAIL below (§4.05 NO-LEAK — this
+    # can never launder a real mismatch into a pass). Non-blocking, but a visible
+    # non-PASS: it must be closed with sign-off LEC.
+    if is_inconclusive and (non_equiv in (None, 0)):
+        res.inconclusive = True
+        res.passed = False
+        res.findings.append(Finding(
+            rule="LEC_INCONCLUSIVE_NONCONVERGENCE", severity="WARNING",
+            message=("LEC verdict is INCONCLUSIVE — a completed equivalence "
+                     f"miter left {unproven} point(s) unproven, but equiv_induct "
+                     "did NOT converge (a flat induction wall) and NO "
+                     "counterexample was recorded (0 non-equivalent points). "
+                     "Non-convergence is not non-equivalence: a real difference "
+                     "produces a counterexample. This is INCONCLUSIVE, NOT "
+                     "NOT_EQUIVALENT — a disclosed sequential-depth capability "
+                     "gap. Close with sign-off LEC (Conformal/VC LEC), which "
+                     "handles deep sequential induction. Visible non-PASS (never "
+                     "a vacuous PASS)."),
+            file=LEC_JSON_REL))
+        return res
+
     # --- substance verdict ------------------------------------------------
     # (a) the boolean itself must be true.
     if equivalent is not True:

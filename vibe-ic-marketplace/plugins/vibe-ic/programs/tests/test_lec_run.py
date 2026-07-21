@@ -495,18 +495,39 @@ def test_inconclusive_report_is_non_blocking_in_gate(tmp_path):
     assert gate.main([str(tmp_path)]) == 0       # non-blocking → rc 0
 
 
-def test_inconclusive_label_with_real_mismatch_still_fails(tmp_path):
-    # a report LABELED inconclusive but carrying unproven>0 (a real miter
-    # mismatch) must NOT get the free pass — the zero-miter guard forces FAIL.
+def test_inconclusive_label_with_real_counterexample_still_fails(tmp_path):
+    # §4.05 NO-LEAK (post-#208): the discriminator for a PROVEN mismatch is a
+    # COUNTEREXAMPLE (non_equivalent_points > 0), not merely unproven points.
+    # A report LABELED inconclusive but carrying a real counterexample must NOT
+    # get the free pass — it still FAILs.
     doc = {"verdict": "INCONCLUSIVE", "inconclusive": True,
            "equivalent": False, "compared_points": 33,
-           "unproven_points": 7, "non_equivalent_points": 0}
+           "unproven_points": 7, "non_equivalent_points": 2}
     (tmp_path / "reports").mkdir()
     (tmp_path / "reports" / "lec.json").write_text(json.dumps(doc))
     res = gate.audit(tmp_path)
     assert res.inconclusive is False
     assert res.passed is False
-    assert gate.main([str(tmp_path)]) == 1       # real unproven → hard FAIL
+    assert gate.main([str(tmp_path)]) == 1       # real counterexample → hard FAIL
+
+
+def test_inconclusive_label_unproven_without_counterexample_is_inconclusive(tmp_path):
+    # #208 — a COMPLETED miter that left points unproven but recorded NO
+    # counterexample (non_equivalent_points == 0) is equiv_induct NON-CONVERGENCE,
+    # not non-equivalence. It is INCONCLUSIVE (non-blocking), NOT NOT_EQUIVALENT.
+    doc = {"verdict": "INCONCLUSIVE", "inconclusive": True,
+           "equivalent": False, "compared_points": 6350,
+           "unproven_points": 909, "non_equivalent_points": 0,
+           "non_convergence": True}
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "lec.json").write_text(json.dumps(doc))
+    res = gate.audit(tmp_path)
+    assert res.inconclusive is True
+    assert res.passed is False                   # visible non-PASS, not vacuous
+    rules = {f.rule for f in res.findings}
+    assert "LEC_INCONCLUSIVE_NONCONVERGENCE" in rules
+    assert "LEC_NOT_EQUIVALENT" not in rules
+    assert gate.main([str(tmp_path)]) == 0       # non-blocking → rc 0
 
 
 # ---------------------------------------------------------------------------

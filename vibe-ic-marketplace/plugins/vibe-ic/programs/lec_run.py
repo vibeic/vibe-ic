@@ -150,6 +150,38 @@ _MISMATCH_EVIDENCE_RE = re.compile(
 # Canonical Yosys success line (corroboration for the gate's .rpt parse).
 _SUCCESS_RE = re.compile(r"Equivalence\s+successfully\s+proven", re.IGNORECASE)
 
+# #208 — induction NON-CONVERGENCE signatures. A COMPLETED equiv_make miter can
+# leave points `unproven` for two very different reasons:
+#   (a) a genuine difference — which yosys backs with a COUNTEREXAMPLE
+#       (_MISMATCH_EVIDENCE_RE), OR
+#   (b) equiv_induct's SAT induction simply did NOT CONVERGE on a large
+#       sequential design — a flat wall that proved NOTHING and recorded NO
+#       counterexample. (b) is INCONCLUSIVE, not NOT_EQUIVALENT: non-convergence
+#       is not non-equivalence. These match the two flat-wall shapes seen in the
+#       wild (chip-AGNOSTIC — pure yosys phrases):
+#   * the SAT base case cannot even be established (`Circuit inherently
+#     diverges!` — equiv_induct aborts at base-case step k), and
+#   * an equiv_induct pass that `Proved 0 previously unproven $equiv cells` — the
+#     escalating `-seq 4/16/64` sweep made zero progress.
+_INDUCT_DIVERGE_RE = re.compile(r"[Cc]ircuit\s+inherently\s+diverges", re.IGNORECASE)
+_PROVED_ZERO_RE = re.compile(
+    r"Proved\s+0\s+previously\s+unproven\s+\$equiv\s+cells")
+
+
+def induction_did_not_converge(text: str):
+    """(bool, evidence) — True when equiv_induct made NO progress (a flat wall)
+    rather than finding a difference. PRECISION-first: the caller MUST also
+    confirm NO counterexample (_MISMATCH_EVIDENCE_RE) before re-classing to
+    INCONCLUSIVE, because a real non-equivalence also leaves points unproven but
+    is witnessed by a counterexample. chip-AGNOSTIC: pure yosys log phrases."""
+    if _INDUCT_DIVERGE_RE.search(text):
+        return True, ("equiv_induct SAT base case could not be established "
+                      "(`Circuit inherently diverges!`)")
+    if _PROVED_ZERO_RE.search(text):
+        return True, ("equiv_induct proved 0 previously-unproven cells across "
+                      "the escalating -seq sweep (a flat induction wall)")
+    return False, ""
+
 # Frontend-ABORT signatures — a read_verilog / read_slang failure that prevented
 # ANY equivalence miter from being built (0 compared points). DISTINCT from a
 # genuine mismatch (a miter DID run and left points unproven). A zero-miter abort
@@ -685,13 +717,43 @@ def parse_equiv_output(text: str) -> Dict:
             "capability-gap, NOT a proven mismatch — sign-off LEC "
             "(Conformal/VC LEC) required to close the remainder.")
     else:
-        equivalent = False
-        verdict = "FAIL"
-        verdict_explanation = (
-            f"{proven if proven is not None else 0}/"
-            f"{total if total is not None else '?'} proven, "
-            f"{unproven if unproven is not None else '?'} unproven — the RTL "
-            "and gate netlist may genuinely differ at these points.")
+        # A COMPLETED miter left points unproven. #208 — distinguish a genuine
+        # difference (witnessed by a COUNTEREXAMPLE) from equiv_induct simply
+        # NOT CONVERGING (a flat wall that proved nothing and recorded no
+        # counterexample). The latter is INCONCLUSIVE, not NOT_EQUIVALENT: a
+        # non-convergent induction is not evidence of non-equivalence.
+        # §4.05 PRECISION-first / NO-LEAK: the re-class fires ONLY when there is
+        # (i) positive non-convergence evidence AND (ii) NO counterexample. A
+        # real mismatch prints a counterexample → _MISMATCH_EVIDENCE_RE matches
+        # → stays the blocking FAIL below; a miter that leaves points unproven
+        # WITHOUT the flat-wall signature also stays FAIL. Never a PASS.
+        _noconv, _noconv_ev = induction_did_not_converge(text)
+        _has_ctrex = bool(_MISMATCH_EVIDENCE_RE.search(text))
+        if _noconv and not _has_ctrex and (unproven or 0) > 0:
+            equivalent = False
+            verdict = "INCONCLUSIVE"
+            verdict_explanation = (
+                f"{proven if proven is not None else 0}/"
+                f"{total if total is not None else '?'} proven, "
+                f"{unproven} unproven — but equiv_induct did NOT converge "
+                f"({_noconv_ev}) and NO counterexample was recorded "
+                "(non_equivalent_points=0). Non-convergence is NOT "
+                "non-equivalence: a real difference produces a counterexample. "
+                "→ INCONCLUSIVE (a disclosed sequential-depth capability gap), "
+                "never a false NOT_EQUIVALENT. Close the remainder with sign-off "
+                "LEC (Conformal/VC LEC), which handles deep sequential "
+                "induction. Visible non-PASS (equivalent:false) — never a "
+                "vacuous PASS a regression could hide behind.")
+        else:
+            equivalent = False
+            verdict = "FAIL"
+            verdict_explanation = (
+                f"{proven if proven is not None else 0}/"
+                f"{total if total is not None else '?'} proven, "
+                f"{unproven if unproven is not None else '?'} unproven — the RTL "
+                "and gate netlist may genuinely differ at these points."
+                + (" A counterexample was recorded in the tool log."
+                   if _has_ctrex else ""))
 
     return {
         "proven": proven,
@@ -732,6 +794,13 @@ def build_report(parsed: Dict, top: str, gate_netlist: str,
         # points); the downstream gate treats this as a non-blocking
         # SKIPPED-CONDITION, never a hard FAIL nor a vacuous PASS.
         "inconclusive": parsed["verdict"] == "INCONCLUSIVE",
+        # #208: True when the INCONCLUSIVE was reached by a COMPLETED miter that
+        # left points unproven because equiv_induct did not converge (a flat
+        # wall, no counterexample) — as opposed to the #192 zero-miter aborts.
+        # Auditable so a reviewer sees this is a sequential-depth gap, not a
+        # proven non-equivalence.
+        "non_convergence": (parsed["verdict"] == "INCONCLUSIVE"
+                            and (unproven or 0) > 0),
         # #192: names the unstaged hard macro(s) when a `hierarchy -check` abort
         # drove INCONCLUSIVE; empty on every other outcome. Auditable so a
         # reviewer sees WHY no miter was built.
