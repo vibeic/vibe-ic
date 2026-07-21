@@ -4220,6 +4220,184 @@ def _resolve_adder_map_file(project: Path, declared: str) -> Optional[Path]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Phase-3 REFERENCE-FLOW QoR-KNOB INGEST — FLOORPLAN / PLACE / CTS / TIMING side
+# ---------------------------------------------------------------------------
+# The synth knobs above (`_reference_flow_qor_knobs`) cover the yosys front-end.
+# A design's staged ORFS reference flow ALSO declares the NUMERIC back-end knobs
+# its sign-off used to close timing — the floorplan core-util, the global-
+# placement density, the CTS sink-clustering, and the repair_timing TNS budget.
+# Phase-3 previously read reference_flow only for the clock period + the synth
+# knobs and IGNORED these, so a design that closed cleanly in ORFS at
+# CORE_UTILIZATION=50 / TNS_END_PERCENT=100 was re-run with the generic
+# defaults. `_reference_flow_pnr_knobs` ingests ONLY the knobs the design's OWN
+# reference flow explicitly declares (keyed on the ORFS knob NAMES — chip-
+# AGNOSTIC), `_reference_flow_pnr_mapping` maps each to the concrete OpenROAD
+# parameter step_pnr applies, and step_pnr reports every adopted knob.
+#
+# §4.05 NO-LEAK contract (LOAD-BEARING):
+#   * No reference_flow staged → {} → every OpenROAD directive is BYTE-IDENTICAL
+#     to the legacy flow (each clause is "" so its interpolation is a no-op) and
+#     the placement `util` is unchanged.
+#   * A knob is applied ONLY when the design literally declares a VALID numeric
+#     value; an out-of-range / non-numeric / unexpanded-variable declaration is
+#     dropped + disclosed, never fabricated.
+_ORFS_NUM_PNR_KNOBS = (
+    "CORE_UTILIZATION", "FP_CORE_UTIL", "PLACE_DENSITY",
+    "PLACE_DENSITY_LB_ADDON", "TNS_END_PERCENT",
+    "CTS_CLUSTER_SIZE", "CTS_CLUSTER_DIAMETER",
+)
+
+
+def _reference_flow_pnr_knobs(project: Path) -> Dict[str, str]:
+    """Parse the design's OWN staged ``input/reference_flow/*.mk`` / ``*.tcl``
+    for the documented ORFS floorplan/place/CTS/timing QoR knobs it declares
+    (the NUMERIC back-end companions to the synth knobs read by
+    `_reference_flow_qor_knobs`). Returns only the knobs actually declared with
+    a valid numeric value — a subset of ``_ORFS_NUM_PNR_KNOBS`` → value string;
+    ``{}`` when no ``input/reference_flow`` config is staged.
+
+    Last-VALID-assignment wins (Make/Tcl override semantics); a non-numeric /
+    empty / unexpanded value is SKIPPED and never clears an earlier valid one
+    (§4.05 — never fabricate). chip-AGNOSTIC — keys on the ORFS knob NAMES only,
+    so an unknown design staging the same ORFS flow is served identically."""
+    rdir = project / "input" / "reference_flow"
+    if not rdir.is_dir():
+        return {}
+    knobs: Dict[str, str] = {}
+    files = sorted(rdir.rglob("*.mk")) + sorted(rdir.rglob("*.tcl"))
+    for f in files:
+        try:
+            text = f.read_text(errors="ignore")
+        except Exception:
+            continue
+        is_tcl = f.suffix == ".tcl"
+        for line in text.splitlines():
+            name = val = None
+            if is_tcl:
+                for rx in (_RF_TCL_ENV_SET_RE, _RF_TCL_SETENV_RE,
+                           _RF_TCL_SET_RE):
+                    m = rx.match(line)
+                    if m:
+                        name, val = m.group(1), m.group(2)
+                        break
+            else:
+                m = _RF_MK_ASSIGN_RE.match(line)
+                if m:
+                    name, val = m.group(1), m.group(2)
+            if not name or name not in _ORFS_NUM_PNR_KNOBS:
+                continue
+            v = _rf_strip_knob_value(val)
+            try:
+                float(v)
+            except (TypeError, ValueError):
+                continue  # non-numeric / unexpanded → keep last valid, no fab
+            knobs[name] = v
+    return knobs
+
+
+def _reference_flow_pnr_mapping(knobs: Dict[str, str]) -> Dict[str, object]:
+    """Map the ingested ORFS numeric PnR knobs (`_reference_flow_pnr_knobs`) to
+    the concrete OpenROAD floorplan/place/CTS/timing parameters step_pnr applies.
+    Pure / deterministic. Returns::
+
+        {"place_density":        float | None,  # global_placement -density
+         "die_target_util":      float | None,  # --die-um auto core-util target
+         "repair_tns_percent":   int   | None,  # repair_timing -repair_tns
+         "cts_cluster_size":     int   | None,  # clock_tree_synthesis
+         "cts_cluster_diameter": float | None,  #   sink-clustering knobs
+         "notes":                [str, ...]}    # audit trail
+
+    ORFS semantics honored faithfully:
+      * CORE_UTILIZATION / FP_CORE_UTIL (percent) → the floorplan core-util the
+        auto-die sizer targets (die_target_util = pct / 100).
+      * PLACE_DENSITY (fraction) → global_placement -density verbatim; else, when
+        only CORE_UTILIZATION is declared, ORFS DERIVES the place density as
+        CORE_UTILIZATION/100 + PLACE_DENSITY_LB_ADDON (LB_ADDON defaults 0).
+      * TNS_END_PERCENT → repair_timing -repair_tns (the percent of endpoints the
+        setup repair chases — 100 = full TNS, not just the single worst path).
+      * CTS_CLUSTER_SIZE / CTS_CLUSTER_DIAMETER → TritonCTS sink-clustering.
+
+    Every value is range-validated; an out-of-range declaration is dropped +
+    disclosed (never fabricated / never applied — §4.05). chip-AGNOSTIC: the ORFS
+    knob NAMES + their documented derivation, no design/vendor/SKU literal."""
+    notes: List[str] = []
+    out: Dict[str, object] = {
+        "place_density": None, "die_target_util": None,
+        "repair_tns_percent": None, "cts_cluster_size": None,
+        "cts_cluster_diameter": None, "notes": notes,
+    }
+
+    def _f(name: str) -> Optional[float]:
+        try:
+            return float(knobs[name]) if name in knobs else None
+        except (TypeError, ValueError):
+            return None
+
+    core_util = _f("CORE_UTILIZATION")
+    if core_util is None:
+        core_util = _f("FP_CORE_UTIL")
+    lb_addon = _f("PLACE_DENSITY_LB_ADDON")
+    place_density = _f("PLACE_DENSITY")
+    tns = _f("TNS_END_PERCENT")
+    cluster_size = _f("CTS_CLUSTER_SIZE")
+    cluster_diam = _f("CTS_CLUSTER_DIAMETER")
+
+    # CORE_UTILIZATION / FP_CORE_UTIL (percent) → auto-die core-util target.
+    if core_util is not None and 0.0 < core_util <= 100.0:
+        out["die_target_util"] = core_util / 100.0
+        notes.append(
+            f"CORE_UTILIZATION={core_util:g}% -> --die-um auto core-util target "
+            f"{core_util / 100.0:g}")
+
+    # global_placement -density: explicit PLACE_DENSITY wins; else ORFS derives
+    # it from CORE_UTILIZATION + PLACE_DENSITY_LB_ADDON.
+    if place_density is not None and 0.0 < place_density <= 1.0:
+        out["place_density"] = place_density
+        notes.append(
+            f"PLACE_DENSITY={place_density:g} -> global_placement -density "
+            f"{place_density:g}")
+    elif core_util is not None and 0.0 < core_util <= 100.0:
+        derived = core_util / 100.0 + (lb_addon if lb_addon is not None else 0.0)
+        if 0.0 < derived <= 1.0:
+            out["place_density"] = derived
+            _addon_s = (f" + PLACE_DENSITY_LB_ADDON={lb_addon:g}"
+                        if lb_addon is not None else "")
+            notes.append(
+                f"CORE_UTILIZATION={core_util:g}%{_addon_s} -> derived "
+                f"global_placement -density {derived:g} (ORFS PLACE_DENSITY "
+                f"derivation; no explicit PLACE_DENSITY declared)")
+
+    if tns is not None and 0.0 <= tns <= 100.0:
+        out["repair_tns_percent"] = int(round(tns))
+        notes.append(
+            f"TNS_END_PERCENT={tns:g} -> repair_timing -repair_tns "
+            f"{int(round(tns))}")
+
+    if cluster_size is not None and cluster_size > 0:
+        out["cts_cluster_size"] = int(round(cluster_size))
+        notes.append(
+            f"CTS_CLUSTER_SIZE={cluster_size:g} -> clock_tree_synthesis "
+            f"-sink_clustering_size {int(round(cluster_size))}")
+    if cluster_diam is not None and cluster_diam > 0:
+        out["cts_cluster_diameter"] = cluster_diam
+        notes.append(
+            f"CTS_CLUSTER_DIAMETER={cluster_diam:g} -> clock_tree_synthesis "
+            f"-sink_clustering_max_diameter {cluster_diam:g}")
+    return out
+
+
+def _reference_flow_declared_die_util(project: Path) -> Optional[float]:
+    """The design's reference_flow-declared floorplan core-util target as a
+    fraction (0..1), or None. Single-sourced through
+    `_reference_flow_pnr_mapping`. Consulted by the auto-die sizer AFTER the L9
+    doc (both are design-provided; the L9 generated constraint is the design's
+    own authored floorplan target, so it wins). chip-AGNOSTIC."""
+    v = _reference_flow_pnr_mapping(_reference_flow_pnr_knobs(project)).get(
+        "die_target_util")
+    return v if isinstance(v, float) else None
+
+
 _SIGNED_NET_DECL_RE = re.compile(
     r"^(\s*(?:wire|reg|input|output|inout)\b[^;\n]*?)\s+signed\b",
     re.MULTILINE)
@@ -5331,12 +5509,20 @@ def _resolve_auto_die_um(die_um: str, netlist: Path, util: float,
         site_area = None
     avg_cell = ((site_area * _AUTO_DIE_AVG_SITES_PER_CELL) if site_area
                 else _AUTO_DIE_FALLBACK_CELL_UM2)
-    # die-util FIDELITY: honor the design's own L9-declared core density; else the
+    # die-util FIDELITY: honor the design's own declared core density; else the
     # routing-headroom default. `util` (placement) is deliberately unused here.
+    # Precedence: L9 generated constraint (design's own authored target) > the
+    # design's staged reference_flow CORE_UTILIZATION > routing-headroom default.
     _declared = _l9_declared_die_util(project) if project is not None else None
+    _util_src = "L9-declared"
+    if _declared is None and project is not None:
+        _rf_declared = _reference_flow_declared_die_util(project)
+        if _rf_declared is not None:
+            _declared = _rf_declared
+            _util_src = "reference_flow-declared"
     util_frac = _declared if _declared is not None else _AUTO_DIE_TARGET_UTIL
-    _util_src = ("L9-declared" if _declared is not None
-                 else "routing-headroom-default")
+    if _declared is None:
+        _util_src = "routing-headroom-default"
     # #158 — pin-perimeter floor. Count the top module's effective IO bits and
     # the pin-layer pitch from THIS PDK's tech LEF, then size the perimeter to
     # seat them. Best-effort: any parse failure yields a pin count of 0 / the
@@ -7622,7 +7808,10 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         routability_driven: bool = True,
                         placement_padding_sites: int = 0,
                         spef_repair_estimate_block: str = "",
-                        openroad_threads: int = 0) -> str:
+                        openroad_threads: int = 0,
+                        repair_tns_percent: Optional[int] = None,
+                        cts_cluster_size: Optional[int] = None,
+                        cts_cluster_diameter: Optional[float] = None) -> str:
     """ORGANIC #581 — the COMPLETE pnr.tcl template as a PURE builder
     (v0.1.49 doctrine: extract Tcl-block builders into pure helpers so
     regression tests pin them). The #557 SPEF-repair block shipped with
@@ -7685,6 +7874,27 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
     _thread_block = (
         f"set_thread_count {int(openroad_threads)}\n"
         if int(openroad_threads) > 0 else "")
+    # Phase-3 reference-flow QoR-knob emission (chip-AGNOSTIC). Each clause is ""
+    # unless the design's OWN staged reference_flow declared the ORFS knob, so a
+    # design without one produces a BYTE-IDENTICAL tcl (§4.05 no-leak).
+    #  * TNS_END_PERCENT → `repair_timing -setup -repair_tns N` — the setup repair
+    #    chases N% of endpoints' total negative slack (ORFS default 100 = full
+    #    TNS, vs OpenROAD's WNS-only default). Applied to BOTH setup-repair passes
+    #    (pre-CTS + post-global-route) that shape the shipped routed netlist.
+    #  * CTS_CLUSTER_SIZE / CTS_CLUSTER_DIAMETER → TritonCTS sink-clustering
+    #    (`-sink_clustering_enable -sink_clustering_size N
+    #    -sink_clustering_max_diameter D`). Flag names verified vs the container's
+    #    OpenROAD (`help clock_tree_synthesis`).
+    _repair_tns = (f" -repair_tns {int(repair_tns_percent)}"
+                   if repair_tns_percent is not None else "")
+    _cts_cluster = ""
+    if cts_cluster_size is not None or cts_cluster_diameter is not None:
+        _cts_cluster = " -sink_clustering_enable"
+        if cts_cluster_size is not None:
+            _cts_cluster += f" -sink_clustering_size {int(cts_cluster_size)}"
+        if cts_cluster_diameter is not None:
+            _cts_cluster += (
+                f" -sink_clustering_max_diameter {cts_cluster_diameter:g}")
     return f"""
 {_thread_block}read_lef {tech_lef_c}
 read_lef {cell_lef_c}
@@ -7778,13 +7988,13 @@ if {{[catch {{estimate_parasitics -placement}} _pe_pl]}} {{
 if {{[catch {{repair_design}} _rd_err]}} {{
   puts "REPAIR_DESIGN_NONFATAL: $_rd_err"
 }}
-if {{[catch {{repair_timing -setup}} _rts_err]}} {{
+if {{[catch {{repair_timing -setup{_repair_tns}}} _rts_err]}} {{
   puts "REPAIR_TIMING_SETUP_NONFATAL: $_rts_err"
 }}
 if {{[catch {{detailed_placement}} _rt_dp_err]}} {{
   puts "REPAIR_LEGALIZE_NONFATAL: $_rt_dp_err"
 }}
-if {{[catch {{clock_tree_synthesis -buf_list {{{clk_buf}}} -root_buf {clk_buf_root}}} cts_err]}} {{
+if {{[catch {{clock_tree_synthesis -buf_list {{{clk_buf}}} -root_buf {clk_buf_root}{_cts_cluster}}} cts_err]}} {{
   puts "CTS_NONFATAL: $cts_err -- continuing without explicit CTS"
 }}
 write_def {out_dir_c}/post_cts.def
@@ -7841,7 +8051,7 @@ if {{[catch {{estimate_parasitics -global_routing}} _pe_gr]}} {{
 if {{[catch {{repair_design}} _rd2_err]}} {{
   puts "REPAIR_DESIGN_GR_NONFATAL: $_rd2_err"
 }}
-if {{[catch {{repair_timing -setup}} _rts2_err]}} {{
+if {{[catch {{repair_timing -setup{_repair_tns}}} _rts2_err]}} {{
   puts "REPAIR_TIMING_SETUP_GR_NONFATAL: $_rts2_err"
 }}
 if {{[catch {{repair_timing -hold}} _rth2_err]}} {{
@@ -8231,6 +8441,27 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             "  puts \"MACRO_PLACE_NONFATAL: $_mpl_err\"\n"
             "}\n"
             f"write_def {out_dir_c}/macro_placed.def\n")
+    # Phase-3 reference-flow QoR-knob ingest (floorplan/place/CTS/timing side) —
+    # chip-AGNOSTIC. Apply ONLY the numeric back-end knobs the design's OWN
+    # input/reference_flow explicitly declares. No reference_flow → {} → the
+    # placement `util` is unchanged and every template clause is empty, so the
+    # generated pnr.tcl is BYTE-IDENTICAL to the legacy flow (§4.05 no-leak). The
+    # CORE_UTILIZATION→die-util mapping was already consumed by the auto-die
+    # sizer above (via `_reference_flow_declared_die_util`); here we consume the
+    # placement-density override + the repair_tns / CTS-cluster directives.
+    _rf_map = _reference_flow_pnr_mapping(_reference_flow_pnr_knobs(project))
+    _rf_pnr_notes = list(_rf_map.get("notes") or [])  # type: ignore[arg-type]
+    _rf_place_density = _rf_map.get("place_density")
+    if isinstance(_rf_place_density, float):
+        _rf_pnr_notes.append(
+            f"global_placement -density override: {util:g} -> "
+            f"{_rf_place_density:g} (design's staged reference_flow)")
+        util = _rf_place_density
+    if _rf_pnr_notes:
+        print("[phase3] REFERENCE-FLOW PnR QoR-KNOB INGEST "
+              "(input/reference_flow):", file=sys.stderr)
+        for _n in _rf_pnr_notes:
+            print(f"[phase3]   {_n}", file=sys.stderr)
     pnr_tcl.write_text(_build_pnr_tcl_text(
         tech_lef_c=tech_lef_c, cell_lef_c=cell_lef_c,
         macro_lefs_tcl=macro_lefs_tcl, liberty_c=liberty_c,
@@ -8251,7 +8482,10 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         place_pins_block=place_pins_block,
         macro_place_block=macro_place_block,
         spef_repair_estimate_block=spef_repair_estimate_block,
-        openroad_threads=_openroad_thread_count()))
+        openroad_threads=_openroad_thread_count(),
+        repair_tns_percent=_rf_map.get("repair_tns_percent"),
+        cts_cluster_size=_rf_map.get("cts_cluster_size"),
+        cts_cluster_diameter=_rf_map.get("cts_cluster_diameter")))
     cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"
            f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
            f"openroad -no_init -exit {pnr_tcl_c} 2>&1 | "
@@ -8572,7 +8806,11 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         "spare_density_target": round(spare_dens, 6),
         "spare_count": spare_plan.get("count", 0),
         "spare_types": spare_plan.get("types", {}),
+        "reference_flow_pnr_knobs": _rf_pnr_notes,
     }
+    if _rf_pnr_notes:
+        detail += (f" | reference_flow_pnr_knobs: "
+                   f"{len(_rf_pnr_notes)} adopted")
     if resize_history:
         return StepResult("pnr", "PASS", time.time() - t0,
                           detail,
