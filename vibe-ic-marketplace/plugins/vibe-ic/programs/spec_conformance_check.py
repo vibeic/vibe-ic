@@ -1703,6 +1703,28 @@ def main(argv: Optional[List[str]] = None) -> int:
         print('spec_conformance_check: FAIL — no RTL files found', file=sys.stderr)
         return 2
 
+    # ORGANIC #186 — the reset/clock variant-alias step
+    # (design_one_shot_runner.step_reset_clock_variant_aliases) may rename the
+    # AUTHORED top to `<top>__rcvar_inner` and wrap it in a same-named wrapper
+    # that can widen the port list (e.g. an additive dual-spelling reset synonym
+    # → a 9th top port). The AUTHORED interface is the one the design docs pin, so
+    # conformance must be judged against the inner authored module, NOT the
+    # runner-introduced wrapper — otherwise the flow FAILs an IC for a port the
+    # flow itself grafted on. When a `<top>__rcvar_inner` module is present in the
+    # collected RTL, redirect the top to it. chip-AGNOSTIC: keys only on the
+    # runner's own fixed `__rcvar_inner` suffix, no chip literal.
+    import re as _re
+    if top:
+        _inner = f"{top}__rcvar_inner"
+        _inner_decl = _re.compile(rf"\bmodule\s+{_re.escape(_inner)}\b")
+        for f in files:
+            try:
+                if _inner_decl.search(strip_comments(f.read_text(errors='replace'))):
+                    top = _inner
+                    break
+            except Exception:  # noqa: BLE001 — a bad file just isn't the inner
+                continue
+
     rtl_name, rtl_ports, rtl_body, chosen = '', [], '', str(files[0])
     for f in files:
         try:

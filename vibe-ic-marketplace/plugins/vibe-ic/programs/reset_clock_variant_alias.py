@@ -331,6 +331,98 @@ def design_contract_ports(project: Path) -> set:
     return pinned
 
 
+# ORGANIC #186 — recognised structured port-list keys in an L3 external-interface
+# JSON / L9 integration spec. A LIST under one of these is an AUTHORITATIVE,
+# COMPLETE enumeration of the top interface (the documented port contract), as
+# opposed to loose prose that merely mentions a reset spelling.
+_L3_PORTLIST_KEYS = frozenset({
+    "top_ports", "ports", "port_list", "portlist", "external_interface",
+    "interface", "interfaces", "pins", "pin_list", "signals", "io", "ios"})
+
+
+def _all_port_names_from_l3_json(data) -> Optional[set]:
+    """The COMPLETE lowercased set of top port names from a STRUCTURED L3 port
+    table — or None when the JSON carries no recognisable port-list array. Only
+    a LIST of port entries (bare-name strings, or dicts carrying a
+    name/port/signal key) under a recognised port-list key counts as an
+    authoritative enumeration; a bus suffix (`addr[7:0]`) is stripped to the
+    bare name. chip-AGNOSTIC: pure structural walk, no chip literal."""
+    found: set = set()
+    got = False
+
+    def _add(nm) -> None:
+        nonlocal got
+        if isinstance(nm, str):
+            bare = re.sub(r"\[.*", "", nm).strip().lower()
+            if bare:
+                found.add(bare)
+                got = True
+
+    def _walk(obj) -> None:
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if (isinstance(k, str) and k.lower() in _L3_PORTLIST_KEYS
+                        and isinstance(v, list)):
+                    for e in v:
+                        if isinstance(e, str):
+                            _add(e)
+                        elif isinstance(e, dict):
+                            _add(e.get("name") or e.get("port")
+                                 or e.get("signal"))
+                _walk(v)
+        elif isinstance(obj, list):
+            for e in obj:
+                _walk(e)
+
+    _walk(data)
+    return found if got else None
+
+
+# The structured, generated-doc sources whose port list is AUTHORITATIVE — a
+# parsed L3 external-interface JSON port table (best), or the L9 integration
+# spec's top_ports. Free-text prompts (RTLLM / VerilogEval Path-B) stage NEITHER,
+# so `authoritative_contract_ports` returns None there and the #792 additive
+# dual-spelling behavior is kept unchanged (no-leak).
+_AUTHORITATIVE_L3_GLOBS = ("phase1/generated_docs/L3*.json",)
+_AUTHORITATIVE_L9_GLOBS = (
+    "phase1/**/L9_INTEGRATION_SPEC.json",
+    "phase1/generated_docs/L9*.json")
+
+
+def authoritative_contract_ports(project: Path) -> Optional[set]:
+    """ORGANIC #186 — the COMPLETE lowercased set of top port names when the
+    design contract provides a STRUCTURED, AUTHORITATIVE enumeration of the top
+    interface (an L3 external-interface JSON port table, or the L9 integration
+    spec top_ports). None when only loose prose / free-text prompts are staged.
+
+    Used to decide whether the #792 additive dual-spelling reset synonym may be
+    exposed: when the documented interface is authoritative and enumerates the
+    design's own reset spelling but NOT the canonical synonym, adding the synonym
+    would introduce a top port the documents do not sanction (the #186 9th-port
+    contract break) — so the caller pure-suppresses the additive there. A
+    conforming hidden TB binds the DOCUMENTED spelling, so no #518/#792 case
+    regresses. chip-AGNOSTIC: reads whatever structured port-list key the doc
+    carries; no chip/vendor/SKU literal."""
+    names: set = set()
+    got = False
+    seen: set = set()
+    for pat in _AUTHORITATIVE_L3_GLOBS + _AUTHORITATIVE_L9_GLOBS:
+        for f in sorted(project.glob(pat)):
+            rp = f.resolve()
+            if rp in seen or not f.is_file():
+                continue
+            seen.add(rp)
+            try:
+                data = json.loads(f.read_text(errors="replace"))
+            except (OSError, ValueError, TypeError):
+                continue
+            got_names = _all_port_names_from_l3_json(data)
+            if got_names:
+                names |= got_names
+                got = True
+    return names if got else None
+
+
 # Word-boundary anchored: matches both spaced and COMPACT Verilog (#517 r3).
 # ORGANIC #710 — also consume an OPTIONAL SystemVerilog package-qualified type
 # (`pkg::type_t name`) between the net-type block and the port-name capture. A

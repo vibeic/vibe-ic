@@ -1650,6 +1650,28 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
         p: full_plan[p] for p in full_plan
         if p not in plan and p.lower() in _contract
         and _rcv.classify_reset(p) is not None}
+    # ORGANIC #186 — an AUTHORITATIVE, COMPLETE top port enumeration (a generated
+    # L3 port table / L9 top_ports) IS the documented interface. The #792
+    # additive dual-spelling reset would ADD a canonical synonym NOT in that
+    # enumeration → a phantom extra top port (the reported 9th port) that breaks
+    # the documented N-port contract and that `spec_conformance_check` then FAILs
+    # (a deviation the flow itself introduced). When the contract is
+    # authoritative, PURE-SUPPRESS any additive reset whose contract spelling is
+    # enumerated but whose canonical synonym is NOT — delivering only the
+    # documented spelling (the un-additive #689 behavior). A conforming hidden TB
+    # binds the DOCUMENTED spelling, so no #518/#792 case regresses. No-op for
+    # free-text prompts (RTLLM/VerilogEval ship no structured L3/L9 →
+    # authoritative_contract_ports returns None) → #792 additive kept there.
+    if additive_reset_map:
+        try:
+            _auth_ports = _rcv.authoritative_contract_ports(project)
+        except Exception:  # pragma: no cover — defensive
+            _auth_ports = None
+        if _auth_ports is not None:
+            for _p in list(additive_reset_map):
+                _canon = str(additive_reset_map[_p]).lower()
+                if _p.lower() in _auth_ports and _canon not in _auth_ports:
+                    del additive_reset_map[_p]
     if not plan and not additive_reset_map:
         _why = ("the design's own contract already declares the standard "
                 "spelling(s) — refusing to rename the TB-facing contract (#689)"
