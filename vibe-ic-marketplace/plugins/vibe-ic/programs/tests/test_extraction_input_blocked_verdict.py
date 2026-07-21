@@ -539,6 +539,106 @@ end
     assert "extract" in secs and secs["extract"].is_empty is False
 
 
+# ==========================================================================
+# 6 — MULTI-FILE technologies (`include`) — the false-BLOCKED guard
+# ==========================================================================
+# Measured against real open-source PDK tech files during review: a technology
+# whose `extract` section lives in an INCLUDED sibling file was declared
+# incapable by the first version of this check. That is a working PDK reported
+# as blocked — the exact failure this module is supposed to prevent. Magic
+# composes a technology from several files; the check must too.
+SPLIT_MAIN_TECH = """\
+tech
+    format 32
+    generic_split
+end
+
+planes
+    metalplane,mp
+end
+
+types
+    metalplane routing_a,ra
+end
+
+styles
+    styletype generic
+    routing_a 1
+end
+
+connect
+    routing_a routing_a
+end
+
+include generic-extract
+"""
+
+SPLIT_EXTRACT_TECH = """\
+extract
+    style generic
+    lambda 1.0
+    resist routing_a 100
+end
+"""
+
+
+def test_technology_split_across_include_files_is_usable():
+    """`extract` in an included sibling must count as present."""
+    def resolver(name):
+        return SPLIT_EXTRACT_TECH if name == "generic-extract" else None
+
+    rep = eicap.check_magic_tech(SPLIT_MAIN_TECH,
+                                 eicap.DEFAULT_EXT2SPICE_COMMANDS,
+                                 resolver=resolver)
+    assert rep.usable is True, rep.reason
+    assert rep.inconclusive is False
+    assert "extract" in rep.sections_found
+
+
+def test_split_technology_without_resolver_is_inconclusive_not_blocked():
+    """An include we cannot read must SUPPRESS a would-be BLOCKED.
+
+    The capability that looks missing may be sitting in the file we could not
+    open. Blocking on that would condemn a complete technology.
+    """
+    rep = eicap.check_magic_tech(SPLIT_MAIN_TECH,
+                                 eicap.DEFAULT_EXT2SPICE_COMMANDS)
+    assert rep.usable is True
+    assert rep.inconclusive is True
+    assert "could not be read" in rep.note
+
+
+def test_include_resolution_is_depth_limited_and_cycle_safe():
+    """A self-including tech must terminate, not recurse forever."""
+    rep = eicap.check_magic_tech(
+        SPLIT_MAIN_TECH + "include loop\n",
+        eicap.DEFAULT_EXT2SPICE_COMMANDS,
+        resolver=lambda n: ("include loop\n" if n == "loop"
+                            else SPLIT_EXTRACT_TECH))
+    assert rep.usable is True
+
+
+def test_stub_with_unreadable_include_is_not_blocked_by_the_runner(
+        tmp_path, monkeypatch):
+    """End-to-end: a stub whose includes cannot be read must NOT be BLOCKED."""
+    p = _proj(tmp_path)
+
+    def fake(container, cmd, timeout=0, **_):
+        if cmd.startswith("cat ") and ".magicrc" in cmd:
+            return (0, MAGICRC, "")
+        if cmd.startswith("cat ") and cmd.rstrip().endswith("generic.tech"):
+            return (0, STUB_TECH + "include generic-extract\n", "")
+        if cmd.startswith("cat "):
+            return (1, "", "no such file")   # the include is unreadable
+        return _fake_docker(STUB_TECH, MATCH_TRANSCRIPT)(container, cmd,
+                                                         timeout)
+
+    monkeypatch.setattr(runner, "_docker_exec", fake)
+    monkeypatch.setattr(runner, "_to_container_path", lambda s, c: s)
+    r = runner.step_lvs(p, "chip_top", _pdk(), "x")
+    assert r.status != "BLOCKED", (r.status, r.detail)
+
+
 def test_magicrc_tech_path_resolution():
     assert eicap.tech_path_from_magicrc_text(
         "tech load generic.tech\n") == "generic.tech"
