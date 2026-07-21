@@ -146,6 +146,20 @@ import _header_lexicon as _hlex
 # (not faked) when its source L doc is absent — at minimum every report
 # carries the project name, so even a pre-L-doc project differs per design.
 # chip-AGNOSTIC: reads only the project's own L docs + its own dir name.
+
+
+# ─── Incidental-mention guard for protocol/identity term matching ──────
+# The protocol sub-detectors below decide a design's IDENTITY (ic_name)
+# from bare ``in`` substring tests over the L1+L2 content blob, which
+# have no left word boundary and so fire on a term buried inside an
+# unrelated word (ADDRESS -> "DDR", CYCLE -> "CLE"). See
+# _incidental_mention for the full rationale and the two rules.
+from _incidental_mention import (  # noqa: E402
+    AnchoredBlob as _AnchoredBlob,
+    subject_term as _subject_term,
+)
+
+
 def _design_identity_fields(project: Path) -> dict:
     gd = _pl.generated_docs_dir(project)
     ic_name = None
@@ -55909,6 +55923,13 @@ def main() -> int:
                 _q = _gd_r55 / _n
                 if _q.is_file():
                     _spi_blob += _q.read_text()
+            # Anchor every downstream protocol-term membership test to a
+            # LEFT word boundary, so an incidental mention buried inside
+            # an unrelated word (ADDRESS -> "DDR", CYCLE -> "CLE") can no
+            # longer decide this design's identity. Wrapped once here,
+            # after accumulation, because ``+=`` on a str subclass
+            # returns a plain str. See _AnchoredBlob.
+            _spi_blob = _AnchoredBlob(_spi_blob)
             _is_spi = (
                 ("MOSI" in _spi_blob and "MISO" in _spi_blob
                     and "SCK" in _spi_blob)
@@ -56307,8 +56328,19 @@ def main() -> int:
                 or ("DDR3" in _spi_blob and "SDRAM" in _spi_blob
                     and ("mode register" in _spi_blob.lower()
                          or "MR0" in _spi_blob))
-                or ("DDR" in _spi_blob and "JEDEC" in _spi_blob
-                    and ("JESD79" in _spi_blob or "DDR3" in _spi_blob)))
+                # Weakest identity clause: a generic DDR mention plus a
+                # standards-body citation. "JEDEC" appears in the ESD /
+                # packaging / moisture-sensitivity section of virtually
+                # every datasheet and PDK guide regardless of what the
+                # part does, so this clause carries almost no evidence
+                # on its own. Require the GENERATION token to be the
+                # document's subject (>= _IDENTITY_CORROBORATION_MIN
+                # anchored mentions) rather than a single comparative
+                # sentence or reference-list row.
+                or (_subject_term(_spi_blob, "DDR")
+                    and "JEDEC" in _spi_blob
+                    and (_subject_term(_spi_blob, "JESD79")
+                         or _subject_term(_spi_blob, "DDR3"))))
             if _is_ddr:
                 _ddr_ic_name = "DDR3 SDRAM (JEDEC JESD79-3C)"
                 try:
