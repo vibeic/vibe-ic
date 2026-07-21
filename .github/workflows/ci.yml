@@ -75,14 +75,32 @@ jobs:
           echo "Scanning commit messages in: $RANGE" >&2
           python3 "$CHECK" --repo "$GITHUB_WORKSPACE" --rev-range "$RANGE"
 
-      # --timeout bounds any single test: the suite has helper tests that spawn a
-      # flow_dashboard --web server / subprocesses which can hang a runner
-      # indefinitely (no per-test cap => the whole job blocks to the 6h ceiling).
-      # thread method so a stuck C call / socket accept is still interrupted.
-      - name: pytest (plugin)
+      # Informational fast signal on every push/PR: run the TARGETED subset for
+      # the changed modules (+ doctrine smoke), not the full 17k-test suite which
+      # is ~90min on a 2-core runner and would pile up on every direct-push. The
+      # full both-tree suite runs at x.y.0 milestones (gatekeeper-ci full-suite).
+      # --timeout bounds any single test (helper tests can spawn a hanging
+      # flow_dashboard --web / subprocess); thread method interrupts stuck C calls.
+      - name: pytest (targeted subset)
         run: |
+          set -uo pipefail
           cd vibe-ic-marketplace/plugins/vibe-ic
-          pytest -q --maxfail=10 --timeout=300 --timeout-method=thread
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+          fi
+          # An empty / all-zero / unresolvable base (first push, force-push,
+          # workflow_dispatch) has no honest range: fall back to the tip's parent.
+          if [ -z "${BASE:-}" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            BASE="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)"
+          fi
+          echo "Targeted base: $BASE"
+          python3 programs/ci_targeted_test_select.py --base "$BASE" > /tmp/sel.txt
+          echo "Selected test files:"; cat /tmp/sel.txt
+          # the selector guarantees a non-empty list (doctrine smoke set minimum)
+          xargs -a /tmp/sel.txt pytest -q --maxfail=10 --timeout=180 --timeout-method=thread
 
   server-tests:
     name: mcp tests
