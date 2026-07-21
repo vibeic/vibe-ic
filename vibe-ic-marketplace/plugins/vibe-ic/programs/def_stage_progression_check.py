@@ -256,19 +256,52 @@ def inspect(project: Path) -> tuple[List[StageInfo], List[Finding]]:
             ))
 
     # --- Check 2: size monotonicity (non-decreasing) ---
+    # Same legitimate no-op that Check 1 already exempts (ORGANIC #624), one
+    # step further along: when the design is hold-CLEAN after CTS the hold-fix
+    # pass inserts ZERO buffers and merely REWRITES the DEF. Usually that is
+    # byte-identical (Check 1's case); it can also come back a handful of bytes
+    # SMALLER — net//component re-ordering, a dropped redundant entry — which
+    # is still a correct no-op, not a skipped or truncated stage. A strict
+    # byte-monotone rule false-FAILs it. First measured on spm x gf180mcuD:
+    # post_hold.def 138,422 B vs post_cts.def 138,429 B — a 7-byte (0.005%)
+    # shrink from a zero-buffer hold pass at +0.98 ns hold slack.
+    #
+    # The exemption is deliberately NARROW, and narrower than a blanket
+    # percentage tolerance would be. It applies ONLY to:
+    #   (a) the post_cts -> post_hold transition — the one stage pair that can
+    #       legitimately be a no-op — and no other transition, so a truncated
+    #       placed.def or routed.def is still caught outright; AND
+    #   (b) with POSITIVE proof from the hold report that the design was
+    #       hold-clean (`_hold_clean_noop_ok`, FAIL-CLOSED: no report, an
+    #       unparseable report, or negative slack all → no exemption); AND
+    #   (c) for a shrink within _NOOP_SHRINK_TOL, since a genuinely truncated
+    #       DEF loses far more than a re-ordering does.
+    # A gross regression on this pair therefore still FAILs even when hold is
+    # clean. Stub/copy fraud remains caught by Check 1 (sha256 distinctness)
+    # and a skipped/empty stage by Check 3 (instance-count growth), so this
+    # relaxes no fraud gate. chip-AGNOSTIC — no chip literal, and the evidence
+    # is OpenROAD's own hold-slack number.
+    _NOOP_SHRINK_TOL = 0.01  # 1% — a re-ordering, not a truncation
+    _noop_pair_ok = _hold_clean_noop_ok(project)
     prev_size = 0
     prev_name = None
     for i in infos:
         if i.size < prev_size:
-            findings.append(Finding(
-                severity="error",
-                rule="size-non-monotone",
-                message=(
-                    f"{i.name}.def ({i.size} B) is SMALLER than "
-                    f"{prev_name}.def ({prev_size} B). Stage progression "
-                    f"should grow monotonically."
-                ),
-            ))
+            benign_noop = (
+                prev_name == "post_cts" and i.name == "post_hold"
+                and _noop_pair_ok
+                and i.size >= prev_size * (1.0 - _NOOP_SHRINK_TOL)
+            )
+            if not benign_noop:
+                findings.append(Finding(
+                    severity="error",
+                    rule="size-non-monotone",
+                    message=(
+                        f"{i.name}.def ({i.size} B) is SMALLER than "
+                        f"{prev_name}.def ({prev_size} B). Stage progression "
+                        f"should grow monotonically."
+                    ),
+                ))
         prev_size = i.size
         prev_name = i.name
 
