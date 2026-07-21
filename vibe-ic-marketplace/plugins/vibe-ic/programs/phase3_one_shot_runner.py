@@ -11893,7 +11893,9 @@ def _ext2spice_error_count_unmeasured(log_text: str) -> bool:
 def _read_lvs_report_flushed(rpt_path: Path,
                              attempts: int = 12,
                              base_delay: float = 0.2,
-                             max_wait: float = 6.0) -> str:
+                             max_wait: float = 6.0,
+                             netgen_rc: Optional[int] = None,
+                             clean_exit_wait: float = 90.0) -> str:
     """ORGANIC v1462 — read a netgen LVS report with a BOUNDED FLUSH RETRY.
 
     netgen writes its terminal `Final result:` verdict LAST, to the REPORT FILE
@@ -11917,20 +11919,61 @@ def _read_lvs_report_flushed(rpt_path: Path,
     wait, so a real INCOMPLETE still classifies INCOMPLETE. The report is the
     AUTHORITATIVE verdict source; a caller falls back to the transcript only on
     TOTAL report absence. chip-AGNOSTIC: no design/PDK literal, pure file I/O +
-    the shared completion marker."""
-    deadline = time.time() + max_wait
+    the shared completion marker.
+
+    v1467 — the v1462 retry closed the right layer but left TWO measured holes,
+    so the false-INCOMPLETE survived into v1.4.67 (reproduced on spm 3/3 and
+    independently on subservient):
+
+    (a) NO POST-DEADLINE READ. The loop reads, checks the marker, THEN checks
+        the deadline and breaks — returning the content it read BEFORE the
+        budget expired. A report that lands in the window between that read and
+        the break is returned as its pre-flush (empty) self. Measured on spm
+        @ v1.4.67: `lvs.rpt` carrying `Final result: Circuits match uniquely.`
+        has mtime 11:04:37.811; `lvs_verdict.json` stamped INCOMPLETE at
+        11:04:37.869 — the report was complete 58 ms BEFORE the verdict was
+        written. Replaying the runner's own inputs through the shared
+        classifier gives `classify(transcript + report) == MATCH`, so the
+        classification was never wrong — only the read was.
+        Fix: one FINAL read after the loop, before giving up.
+
+    (b) BUDGET TOO TIGHT ON A CLEAN EXIT. 6 s does not cover an overlayfs flush
+        of a multi-MB report. When netgen exited 0 the verdict WILL arrive, so
+        waiting longer is free correctness: a killed run exits non-zero or never
+        writes the marker at all, and after `clean_exit_wait` we still return
+        whatever is on disk.
+        Fix: extend the budget to `clean_exit_wait` when `netgen_rc == 0`.
+
+    Fail-safe is UNCHANGED and load-bearing: absence of the marker after the
+    (now longer) wait returns the partial content, which classifies INCOMPLETE.
+    Nothing here can upgrade an incomplete run to MATCH."""
+    budget = max(max_wait, clean_exit_wait) if netgen_rc == 0 else max_wait
+    deadline = time.time() + budget
     txt = ""
-    for i in range(max(1, attempts)):
+    i = 0
+    while True:
         try:
             txt = rpt_path.read_text(errors="replace") if rpt_path.is_file() else ""
         except OSError:
             txt = ""
         if _lvt.has_terminal_verdict(txt):
             return txt                      # completion marker flushed → done
+        i += 1
+        if i >= max(1, attempts) and time.time() >= deadline:
+            break
         if time.time() >= deadline:
             break
         time.sleep(min(base_delay * (2 ** i), 1.0))
-    return txt
+    # (a) — the marker may have landed between the last read and the break.
+    # One more read costs a single syscall and is the difference between a
+    # clean MATCH and a false LVS_NO_TERMINAL_VERDICT.
+    try:
+        final = rpt_path.read_text(errors="replace") if rpt_path.is_file() else ""
+    except OSError:
+        final = ""
+    if _lvt.has_terminal_verdict(final):
+        return final
+    return final or txt
 
 
 def _write_lvs_verdict(project: Path, status: str, finding: str,
@@ -12498,7 +12541,7 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
         # ORGANIC v1462 — bounded flush retry so a lagging power-aware report
         # cannot make a genuine MATCH read empty (strictly monotonic: a missed
         # match only defers to the plain path, never regresses).
-        txt = _read_lvs_report_flushed(pa_rpt)
+        txt = _read_lvs_report_flushed(pa_rpt, netgen_rc=_rc)
         blob = (out or "") + "\n" + (err or "") + "\n" + txt
         if _lvt.classify(blob) != "MATCH":
             return None
@@ -12689,7 +12732,7 @@ def _run_klayout_lvs(project: Path, top: str, pdk: PdkConfig,
     # ORGANIC v1462 — bounded flush retry (see _read_lvs_report_flushed): the
     # netgen report can lag the process exit on a docker-overlay FS, so wait for
     # the terminal `Final result:` line before classifying the report.
-    rpt_txt = _read_lvs_report_flushed(lvs_rpt)
+    rpt_txt = _read_lvs_report_flushed(lvs_rpt, netgen_rc=rc_n)
     blob = transcript + "\n" + rpt_txt
     cls = _lvt.classify(blob)
     # v1.3.93 — SECOND, STRONGER compare: KLayout `NetlistComparer` (pin-matched).
@@ -13182,7 +13225,7 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     # report can lag the process exit, so a naive read stamps a clean MATCH as
     # INCOMPLETE. The report is authoritative; the transcript is a fallback only
     # on TOTAL report absence.
-    rpt_txt = _read_lvs_report_flushed(lvs_rpt)
+    rpt_txt = _read_lvs_report_flushed(lvs_rpt, netgen_rc=rc)
     blob = transcript + "\n" + rpt_txt
     # #524 — the verdict comes from the SHARED classifier so the runner can
     # never again drift from the Step-31 gate (#507 put 'failed pin matching'
