@@ -79,10 +79,27 @@ def test_step35_dfm_screen():
 
 
 def test_step44_htol_conditional():
+    """Step 44 is conditional on SILICON, never on its own HTOL result.
+
+    This test previously asserted the opposite — that step 44's condition named
+    `htol_results.json` — which pinned the #220 self-disabling defect in place
+    as though it were the specification. Gating the reliability-qualification
+    step on the reliability result meant the step could only run once it had
+    already succeeded, so silicon that was never HTOL-qualified produced no
+    artefact, no gate and no row. The condition now names the upstream artefact
+    its sibling steps 41-43 already use, so the step stays correctly N/A for a
+    design that was never fabricated, and reports BLOCKED for silicon that was.
+    """
     s = _STEPS[44]
     assert "HTOL" in s["name"]
     assert s["blocks_on"] == [43]
-    assert "htol_results.json" in json.dumps(s.get("condition", {}))
+    cond = json.dumps(s.get("condition", {}))
+    assert "silicon_received.json" in cond
+    assert "htol_results.json" not in cond, (
+        "step 44 must not gate on its own required_output — that is the "
+        "self-disabling shape #220 removed")
+    # The HTOL result stays the step's DELIVERABLE; only the trigger moved.
+    assert any("htol_results.json" in p for p in s.get("required_outputs", []))
 
 
 def test_file_order_is_numeric():

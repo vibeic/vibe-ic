@@ -380,6 +380,14 @@ steps:
         - optional_program_exit_zero:
             command: "cpu_functional_oracle_waiver_check . --json reports/phase2/gates/cpu_functional_oracle_waiver.json"
             condition_files_exist: ["phase2/stage1/sim/results.xml"]
+            condition_rationale: >-
+              LEGITIMATE SCOPING: this gate VALIDATES A CLAIM rather than
+              measuring the design. results.xml is where the connectivity-bridge
+              waiver is asserted, so its absence means no such waiver was
+              claimed and there is nothing to judge — not that a defect is
+              hiding. A validator with no claim in front of it is the one case
+              where "skip when the input is missing" is the correct reading.
+              The step's own PASS still requires the hard any_of sibling above.
         # VACUOUS-TB gate. Unconditional: the program self-reports
         # NOT_APPLICABLE (exit 0) when there is no sim tree or no testbench in
         # it, so it can never raise a false FAIL — and, being unconditional, it
@@ -401,9 +409,16 @@ steps:
             condition_files_exist: ["phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json"]
         # Verilator coverage: gate only fires when the project has run
         # `verilator_coverage_measure measure …` and produced coverage_actual.json.
-        - optional_program_exit_zero:
-            command: "verilator_coverage_measure check --coverage-json reports/phase2/coverage/coverage_actual.json"
-            condition_files_exist: ["reports/phase2/coverage/coverage_actual.json"]
+        # #220 R1 — coverage_actual.json is this step's own declared
+        # required_output, and the coverage CHECK was conditioned on it. A run
+        # that never measured coverage produced no file, so the coverage
+        # threshold was never applied and Step 4 passed with its coverage axis
+        # unevaluated — while `benchmark-verify` pillar 3 reads that same step
+        # as evidence of >=90% line coverage. `verilator_coverage_measure check`
+        # already exits non-zero and prints the missing path, so it is now
+        # unconditional: an unmeasured coverage axis reports BLOCKED instead of
+        # being counted as met.
+        - program_exit_zero: "verilator_coverage_measure check --coverage-json reports/phase2/coverage/coverage_actual.json"
         # NEW TB PATH gate — the professional cocotb TB (professional_tb_gen)
         # must never silently pass a real functional mismatch. Fires only when
         # the step wrote its report; PASS/WAIVED/SKIP -> exit 0, a recorded
@@ -671,7 +686,21 @@ steps:
     name: "ISO-26262 FMEDA diagnostic-coverage (fault-injection; safety designs only)"
     stage: stage2
     condition:
+      # NOT self-disabling: RTL is an UPSTREAM artefact, and its absence
+      # already fails loudly at Step 1 — nothing hides here.
+      #
+      # It is, however, MIS-SCOPED in the opposite direction, recorded by the
+      # #220 sweep rather than repaired in it. The step is named "safety
+      # designs only" and its gate hard-codes `--asil D`, yet the trigger is
+      # merely "this project has RTL" — true of every digital design in the
+      # corpus. So FS1 runs ASIL-D FMEDA against designs that never claimed a
+      # safety goal. The correct trigger is a PHASE-1 safety declaration (an
+      # L-doc ASIL level), which does not exist yet; inventing one here would
+      # be a scope jump beyond this sweep. Fixing it makes the flow QUIETER,
+      # which is why it is deliberately left for a change that can be argued
+      # on its own terms.
       files_exist: ["phase2/stage1/rtl"]
+    condition_kind: design_dependent
     programs:
       - fmeda_fault_injection_coverage
       - fmeda_coverage_check
@@ -700,7 +729,15 @@ steps:
     name: "Transition-delay-fault (at-speed LOC) ATPG"
     stage: stage2
     condition:
+      # CONFIRMED self-disabling (#220 sweep): gated on `cut_netlist.v`, whose
+      # absence IS the symptom this step exists to catch. The gate never ran,
+      # so transition_coverage_check — which ALREADY fails on an absent
+      # artefact — was never reached. Repair is in flight in #219 (accept a
+      # not-run record as an alternative trigger, so the step reaches the gate
+      # and reports BLOCKED). Not repaired here to avoid colliding with it.
       files_exist: ["phase2/stage2/dft/cut_netlist.v"]
+    condition_kind: design_dependent
+    condition_defect_tracked: "#219"
     programs:
       - transition_fault_atpg_run
       - transition_coverage_check
@@ -725,10 +762,18 @@ steps:
     stage: stage2
     condition:
       # Needs the DT1 scan cut PLUS the post-route timing model (routed
-      # netlist + SPEF) — self-skips (NOT_APPLICABLE) before Phase 3 runs.
+      # netlist + SPEF). The spef/pnr half is correct SCOPING — DT2 genuinely
+      # cannot grade paths before Phase 3 exists. The `cut_netlist.v` half is
+      # the SAME self-disabling defect as DT1 (#220 sweep): an absent scan cut
+      # is the symptom, and gating on it means the one run that needed judging
+      # is the one that vanishes. Converting it needs the not-run-record
+      # trigger shape #219 introduces; convert together with DT1 once #219
+      # lands, so the two DFT steps keep one consistent trigger contract.
       files_exist: ["phase2/stage2/dft/cut_netlist.v",
                     "phase3/stage3/extracted/*.spef",
                     "phase3/stage3/pnr/*_pnr.v"]
+    condition_kind: design_dependent
+    condition_defect_tracked: "#219 (same shape as DT1; convert together)"
     programs:
       - path_delay_fault_atpg_run
       - path_delay_coverage_check
@@ -755,10 +800,18 @@ steps:
     name: "Small-delay-defect (SDD) at-speed grade"
     stage: stage2
     condition:
-      # Fuses DT1 transition faults + DT2 per-path slack — self-skips
-      # (NOT_APPLICABLE) whenever DT2 has not produced its coverage.
+      # CONFIRMED self-disabling, and the CASCADE case (#220 sweep). DT3 is
+      # gated on DT1's and DT2's coverage outputs — both of which are
+      # themselves produced by self-disabling steps. So a missing scan cut
+      # silently removes DT1, which silently removes DT3: one absent input
+      # takes out three at-speed steps and the run reports nothing wrong.
+      # The comment this replaces described that as "self-skips
+      # (NOT_APPLICABLE)", which is the defect stated as if it were a feature.
+      # Repair rides with DT1/DT2 on #219's not-run-record trigger shape.
       files_exist: ["reports/phase2/dft/path_delay_coverage.json",
                     "reports/phase2/dft/transition_coverage.json"]
+    condition_kind: design_dependent
+    condition_defect_tracked: "#219 (cascade of DT1/DT2; convert together)"
     programs:
       - sdd_atpg_run
       - sdd_coverage_check
@@ -825,6 +878,12 @@ steps:
     skills: [analog-spec-extract]
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
+      # Correct SCOPING, not a self-disabling gate: the trigger is a
+      # PHASE-1 declaration of what the design contains, produced upstream
+      # and independent of anything this step does. A purely digital IC has
+      # no analog blocks to judge, so there is no defect to hide. (The
+      # engine also auto-derives it from L9 analog_modules / L5 analog_blocks.)
+    condition_kind: design_dependent
     required_outputs:
       - "phase1/analog/*/spec.json"
     gate:
@@ -839,6 +898,12 @@ steps:
     skills: [analog-topology-select]
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
+      # Correct SCOPING, not a self-disabling gate: the trigger is a
+      # PHASE-1 declaration of what the design contains, produced upstream
+      # and independent of anything this step does. A purely digital IC has
+      # no analog blocks to judge, so there is no defect to hide. (The
+      # engine also auto-derives it from L9 analog_modules / L5 analog_blocks.)
+    condition_kind: design_dependent
     required_outputs:
       - "phase2/analog/*/topology.md"
     gate:
@@ -854,6 +919,12 @@ steps:
     mcp_tools: [eda_xschem_netlist]
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
+      # Correct SCOPING, not a self-disabling gate: the trigger is a
+      # PHASE-1 declaration of what the design contains, produced upstream
+      # and independent of anything this step does. A purely digital IC has
+      # no analog blocks to judge, so there is no defect to hide. (The
+      # engine also auto-derives it from L9 analog_modules / L5 analog_blocks.)
+    condition_kind: design_dependent
     required_outputs:
       - "phase2/analog/*/*.sp"
     gate:
@@ -869,6 +940,12 @@ steps:
     mcp_tools: [eda_spice_corner]
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
+      # Correct SCOPING, not a self-disabling gate: the trigger is a
+      # PHASE-1 declaration of what the design contains, produced upstream
+      # and independent of anything this step does. A purely digital IC has
+      # no analog blocks to judge, so there is no defect to hide. (The
+      # engine also auto-derives it from L9 analog_modules / L5 analog_blocks.)
+    condition_kind: design_dependent
     required_outputs:
       - "phase2/analog/*/corner_results.json"
     gate:
@@ -891,6 +968,12 @@ steps:
     mcp_tools: [eda_analog_layout]
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
+      # Correct SCOPING, not a self-disabling gate: the trigger is a
+      # PHASE-1 declaration of what the design contains, produced upstream
+      # and independent of anything this step does. A purely digital IC has
+      # no analog blocks to judge, so there is no defect to hide. (The
+      # engine also auto-derives it from L9 analog_modules / L5 analog_blocks.)
+    condition_kind: design_dependent
     required_outputs:
       - "phase3/analog/*/layout.mag OR phase3/analog/*/*.gds"
     gate:
@@ -910,6 +993,12 @@ steps:
     mcp_tools: [eda_spice_corner]
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
+      # Correct SCOPING, not a self-disabling gate: the trigger is a
+      # PHASE-1 declaration of what the design contains, produced upstream
+      # and independent of anything this step does. A purely digital IC has
+      # no analog blocks to judge, so there is no defect to hide. (The
+      # engine also auto-derives it from L9 analog_modules / L5 analog_blocks.)
+    condition_kind: design_dependent
     required_outputs:
       - "phase3/analog/*/pre_vs_post.json"
     gate:
@@ -924,6 +1013,12 @@ steps:
     skills: [analog-hardmacro-gen]
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
+      # Correct SCOPING, not a self-disabling gate: the trigger is a
+      # PHASE-1 declaration of what the design contains, produced upstream
+      # and independent of anything this step does. A purely digital IC has
+      # no analog blocks to judge, so there is no defect to hide. (The
+      # engine also auto-derives it from L9 analog_modules / L5 analog_blocks.)
+    condition_kind: design_dependent
     required_outputs:
       - "phase3/analog/hardmacro/*/*.lef"
       - "phase3/analog/hardmacro/*/*.lib"
@@ -943,6 +1038,12 @@ steps:
     mcp_tools: [eda_spice, eda_simulate]
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
+      # Correct SCOPING, not a self-disabling gate: the trigger is a
+      # PHASE-1 declaration of what the design contains, produced upstream
+      # and independent of anything this step does. A purely digital IC has
+      # no analog blocks to judge, so there is no defect to hide. (The
+      # engine also auto-derives it from L9 analog_modules / L5 analog_blocks.)
+    condition_kind: design_dependent
     required_outputs:
       - "phase3/mixed_signal/cosim/*_cosim_results.json OR analog/*/hw_measurements.json"
     gate:
@@ -980,6 +1081,15 @@ steps:
       - "phase2/stage2/synth/netlist.v"
     gate:
       all_of:
+        # #220 R3 — this gate used to consist ONLY of the two conditional
+        # sub-gates below, both triggered by `phase2/stage2/synth`. When that
+        # directory did not exist the synthesis handoff gate passed having run
+        # zero programs and checked zero files, and the resulting PASS was
+        # byte-identical to a run that met every check. A handoff gate with
+        # nothing to hand off is a failure, not a pass, so the netlist this
+        # step already declares as its required_output is now demanded
+        # unconditionally — and it is what the two audits below read anyway.
+        - files_exist: ["phase2/stage2/synth/netlist.v"]
         - optional_program_exit_zero:
             command: "yosys_hilomap_required_check . --json reports/phase2/gates/yosys_hilomap.json"
             condition_files_exist: ["phase2/stage2/synth"]
@@ -1349,9 +1459,13 @@ steps:
       all_of:
         - files_exist: ["reports/phase3/si_crosstalk.rpt", "reports/phase3/si_crosstalk.json"]
           any_of: true
-        - optional_program_exit_zero:
-            command: "si_crosstalk_check . --json reports/phase2/gates/si_crosstalk.json"
-            condition_files_exist: ["reports/phase3/si_crosstalk.rpt"]
+        # #220 R1 — si_crosstalk_check was conditioned on the very report it
+        # judges, while the hard sibling above is an `any_of` satisfiable by
+        # the .json alone. A run emitting si_crosstalk.json but no .rpt
+        # therefore CLEARED the hard gate and SILENTLY SKIPPED the crosstalk
+        # verdict. The program already exits non-zero on an absent report — it
+        # was simply never reached — so it is now unconditional.
+        - program_exit_zero: "si_crosstalk_check . --json reports/phase2/gates/si_crosstalk.json"
         # MCF crosstalk-DELAY axis (complements the noise/glitch axis above):
         # the runner re-runs OpenSTA on an MCF-bounded SPEF (Cc*MCF folded per
         # the aggressor/victim timing-window overlap; setup MCF=2 / hold MCF=0)
@@ -1476,9 +1590,17 @@ steps:
         # are a real electrical-rule failure -> FAIL. Missing/empty/provenance-
         # less/metric-less artefact => honest FAIL (never a vacuous pass).
         # Fires when either the density report or the ERC report exists.
-        - optional_program_exit_zero:
-            command: "erc_density_check . --json reports/phase2/gates/erc_density.json"
-            condition_files_exist: ["reports/density.rpt", "reports/density.json", "reports/phase3/erc.rpt", "reports/phase3/density.rpt"]
+        # #220 R1 — the sharpest instance in Phase 3. Step 31 is "DRC + LVS +
+        # ERC + Density", but only DRC and LVS had unconditional gates; ERC and
+        # density were judged solely by this optional sub-gate, conditioned on
+        # the very reports it reads. A run that never performed ERC or density
+        # analysis produced none of those four paths, so the check was skipped
+        # and the step reported a clean physical-verification PASS with two of
+        # its four named axes never evaluated. `reports/phase3/erc.rpt` is
+        # already a declared required_output of this step, and erc_density_check
+        # already exits non-zero when it is absent, so the check is now
+        # unconditional and the ERC axis can no longer vanish from a PV signoff.
+        - program_exit_zero: "erc_density_check . --json reports/phase2/gates/erc_density.json"
     blocks_on: [23, 24, 25, 26, 27, 29, 30]
 
   # ── Step 32: ECO ─────────────────────────────────────────────
@@ -1503,6 +1625,15 @@ steps:
         - optional_program_exit_zero:
             command: "eco_loop_audit . --json reports/phase2/gates/eco_audit.json"
             condition_files_exist: ["phase3/stage3/eco/eco_log.json"]
+            condition_rationale: >-
+              LEGITIMATE SCOPING, and in fact the not-run-record shape done
+              right. The hard `any_of` sibling above demands eco_log.json OR
+              no_eco_needed.flag, so the run must ASSERT one of the two: an ECO
+              that silently never happened cannot clear this step. When the
+              flag is the assertion there is genuinely no ECO log to audit, so
+              skipping the audit judges nothing away. Contrast the #220 defect
+              shape, where nothing at all had to be asserted and absence itself
+              bought the pass.
     blocks_on: [23, 24, 25, 26, 27, 29, 30, 31]
 
   - id: 33
@@ -1690,6 +1821,12 @@ steps:
     stage: stage_analog
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
+      # Correct SCOPING, not a self-disabling gate: the trigger is a
+      # PHASE-1 declaration of what the design contains, produced upstream
+      # and independent of anything this step does. A purely digital IC has
+      # no analog blocks to judge, so there is no defect to hide. (The
+      # engine also auto-derives it from L9 analog_modules / L5 analog_blocks.)
+    condition_kind: design_dependent
     skills: [drc-fix, lvs-triage]
     programs:
       - analog_a6_block_pv_check
@@ -1709,6 +1846,12 @@ steps:
     stage: stage_mixed_signal
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
+      # Correct SCOPING, not a self-disabling gate: the trigger is a
+      # PHASE-1 declaration of what the design contains, produced upstream
+      # and independent of anything this step does. A purely digital IC has
+      # no analog blocks to judge, so there is no defect to hide. (The
+      # engine also auto-derives it from L9 analog_modules / L5 analog_blocks.)
+    condition_kind: design_dependent
     skills: [analog-flow-orchestrate, flow-orchestrate]
     programs:
       - mixed_signal_merge_check
@@ -1729,6 +1872,12 @@ steps:
     stage: stage_mixed_signal
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
+      # Correct SCOPING, not a self-disabling gate: the trigger is a
+      # PHASE-1 declaration of what the design contains, produced upstream
+      # and independent of anything this step does. A purely digital IC has
+      # no analog blocks to judge, so there is no defect to hide. (The
+      # engine also auto-derives it from L9 analog_modules / L5 analog_blocks.)
+    condition_kind: design_dependent
     skills: [ir-drop-triage]
     programs:
       - power_domain_crossing_check
@@ -1762,6 +1911,12 @@ steps:
     stage: stage_mixed_signal
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
+      # Correct SCOPING, not a self-disabling gate: the trigger is a
+      # PHASE-1 declaration of what the design contains, produced upstream
+      # and independent of anything this step does. A purely digital IC has
+      # no analog blocks to judge, so there is no defect to hide. (The
+      # engine also auto-derives it from L9 analog_modules / L5 analog_blocks.)
+    condition_kind: design_dependent
     skills: [mixed-signal-cosim, ams-sim]
     programs:
       - mixed_signal_cosim_check
@@ -1780,6 +1935,12 @@ steps:
     stage: stage_mixed_signal
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
+      # Correct SCOPING, not a self-disabling gate: the trigger is a
+      # PHASE-1 declaration of what the design contains, produced upstream
+      # and independent of anything this step does. A purely digital IC has
+      # no analog blocks to judge, so there is no defect to hide. (The
+      # engine also auto-derives it from L9 analog_modules / L5 analog_blocks.)
+    condition_kind: design_dependent
     skills: [tapeout-checklist]
     programs:
       - mixed_signal_signoff_check
@@ -1795,6 +1956,11 @@ steps:
     stage: stage5_manufacturing
     condition:
       files_exist: ["phase3/stage5_manufacturing/silicon_received.json"]
+      # Correct SCOPING: gates on an UPSTREAM artefact (silicon exists at all),
+      # never on this step's own deliverable. A design that has not been
+      # fabricated has no wafer to probe, package or test — there is no
+      # defect being hidden. Contrast step 44, which gated on its OWN result.
+    condition_kind: design_dependent
     programs:
       - manufacturing_fab_intake_check
     required_outputs:
@@ -1813,6 +1979,11 @@ steps:
     stage: stage5_manufacturing
     condition:
       files_exist: ["phase3/stage5_manufacturing/silicon_received.json"]
+      # Correct SCOPING: gates on an UPSTREAM artefact (silicon exists at all),
+      # never on this step's own deliverable. A design that has not been
+      # fabricated has no wafer to probe, package or test — there is no
+      # defect being hidden. Contrast step 44, which gated on its OWN result.
+    condition_kind: design_dependent
     programs:
       - wafer_sort_yield_check
     required_outputs:
@@ -1827,6 +1998,11 @@ steps:
     stage: stage5_manufacturing
     condition:
       files_exist: ["phase3/stage5_manufacturing/silicon_received.json"]
+      # Correct SCOPING: gates on an UPSTREAM artefact (silicon exists at all),
+      # never on this step's own deliverable. A design that has not been
+      # fabricated has no wafer to probe, package or test — there is no
+      # defect being hidden. Contrast step 44, which gated on its OWN result.
+    condition_kind: design_dependent
     programs:
       - packaging_intake_check
     required_outputs:
@@ -1840,6 +2016,11 @@ steps:
     stage: stage5_manufacturing
     condition:
       files_exist: ["phase3/stage5_manufacturing/silicon_received.json"]
+      # Correct SCOPING: gates on an UPSTREAM artefact (silicon exists at all),
+      # never on this step's own deliverable. A design that has not been
+      # fabricated has no wafer to probe, package or test — there is no
+      # defect being hidden. Contrast step 44, which gated on its OWN result.
+    condition_kind: design_dependent
     programs:
       - final_test_attestation_check
     required_outputs:
@@ -1867,7 +2048,19 @@ steps:
     name: "Reliability qualification (HTOL / FIT attestation)"
     stage: stage5_manufacturing
     condition:
-      files_exist: ["phase3/stage5_manufacturing/htol_results.json"]
+      # SELF-DISABLING, now repaired (#220). This step used to gate on
+      # `htol_results.json` — the very file it declares in required_outputs.
+      # It could therefore only run once it had already succeeded, so the one
+      # run that needed judging (HTOL never performed) was the exact run that
+      # went unjudged: no artefact, no gate, no row, and SKIPPED-CONDITION is
+      # subtracted from total_required, so it left the denominator too.
+      # It now gates on the UPSTREAM artefact its three sibling steps (41-43)
+      # already use: silicon exists at all. A design that was never fabricated
+      # still skips correctly; silicon that WAS fabricated but never
+      # reliability-qualified now reaches the gate and reports BLOCKED naming
+      # the missing HTOL result.
+      files_exist: ["phase3/stage5_manufacturing/silicon_received.json"]
+    condition_kind: design_dependent
     programs:
       - htol_attestation_check
     required_outputs:

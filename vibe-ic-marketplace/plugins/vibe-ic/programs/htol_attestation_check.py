@@ -34,8 +34,18 @@ from pathlib import Path
 def audit(project: Path) -> dict:
     src = project / "phase3" / "stage5_manufacturing" / "htol_results.json"
     if not src.is_file():
-        return {"verdict": "SKIP", "rc": 2,
-                "reason": "htol_results.json absent — HTOL not run/recorded"}
+        # #220 — name the missing input and call it BLOCKED, never SKIP.
+        # Silicon reached this step, so reliability qualification was owed.
+        # "SKIP" reads as "nothing to do here"; an unperformed HTOL is not
+        # nothing to do, it is an unanswered question. rc stays non-zero.
+        return {"verdict": "BLOCKED", "rc": 2,
+                "missing_input": str(src),
+                "reason": ("phase3/stage5_manufacturing/htol_results.json "
+                           "absent — HTOL was never run or never recorded, so "
+                           "no FIT/reliability claim can be substantiated. "
+                           "Produce the HTOL result, or record an explicit "
+                           "waiver stating why this silicon ships without "
+                           "reliability qualification.")}
     try:
         d = json.loads(src.read_text(errors="replace"))
     except (OSError, ValueError):
