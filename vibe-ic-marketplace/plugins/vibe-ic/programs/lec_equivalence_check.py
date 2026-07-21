@@ -451,11 +451,55 @@ def main(argv: Optional[List[str]] = None) -> int:
         out.write_text(report_json)
 
     print(report_json)
-    # PASS → 0. An INCONCLUSIVE parse-abort is a non-blocking SKIPPED-CONDITION
-    # (never a hard FAIL that cascade-marks downstream steps MISSING, never a
-    # vacuous PASS: result.passed stays False) → 0. A real not-equivalent /
-    # unproven / vacuous / missing result → 1.
-    return 0 if (result.passed or result.inconclusive) else 1
+
+    # A real not-equivalent / unproven / vacuous / missing result → 1 (hard FAIL).
+    if not (result.passed or result.inconclusive):
+        return 1
+
+    # A genuine PASS → 0.
+    if result.passed:
+        return 0
+
+    # INCONCLUSIVE → the WAIVED-DEFERRED tier (rc=3 + the `PASS_WITH_WAIVERS`
+    # stdout sentinel), NOT a bare rc=0.
+    #
+    # WHY (the bug this replaces): this branch used to `return 0`, reasoning
+    # that INCONCLUSIVE must not be a hard FAIL that cascade-marks downstream
+    # steps MISSING — which is correct — and that `result.passed` staying False
+    # in the JSON kept it "a visible non-PASS". It did not. Step 13's gate in
+    # flow/phase1_phase2_phase3.yaml is
+    #     program_exit_zero: "lec_equivalence_check . --json …"
+    # and `_check_program_exit_zero` maps rc==0 → passed=True with NO downgrade
+    # tier attached. So an INCONCLUSIVE LEC was recorded in the authoritative
+    # flow_compliance matrix as a BARE PASS — i.e. the compliance table asserted
+    # "RTL ≡ post-DFT netlist: PASS" about a netlist nothing had proven
+    # equivalent. That is strictly worse than a visible FAIL, and it is exactly
+    # the false-clean this module's own docstring exists to prevent.
+    #
+    # rc=3 + sentinel is the ESTABLISHED idiom for precisely this shape (a
+    # disclosed capability gap that must not read as a bare PASS) — see
+    # cpu_functional_oracle_waiver_check, which emits `{"verdict":
+    # "PASS_WITH_WAIVERS", "exit_code": 3}`. flow_compliance promotes it to
+    # WAIVED-DEFERRED, which is visible, is excluded from a strict PASS
+    # headline, and still does not cascade downstream steps to MISSING —
+    # keeping every property the rc=0 choice was reaching for, without the
+    # false PASS.
+    #
+    # The sentinel MUST be the LAST line AND must stay SHORT. flow_compliance
+    # inspects only the trailing 300 chars of stdout and requires the token at
+    # line-START (`line.lstrip().startswith(...)`). A long single line would be
+    # sliced mid-string by the [-300:] window, the `PASS_WITH_WAIVERS` prefix
+    # would fall outside it, `startswith` would fail, and the gate would quietly
+    # fall back to a bare rc-3 FAIL. So: the (long) reason goes on its own line
+    # FIRST, and the short sentinel line goes LAST.
+    reason = (result.findings[0].rule if result.findings
+              else "LEC_INCONCLUSIVE")
+    detail = (result.findings[0].message if result.findings
+              else "LEC verdict is INCONCLUSIVE — no equivalence decided.")
+    print(detail)
+    print(f"PASS_WITH_WAIVERS: step 13 LEC INCONCLUSIVE ({reason}) — "
+          f"WAIVED-DEFERRED to sign-off LEC, never a bare PASS.")
+    return 3
 
 
 if __name__ == "__main__":
