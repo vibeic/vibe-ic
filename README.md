@@ -35,10 +35,9 @@ checkers (no fabrication, no hallucinated PASS).
 │       ├── ip-catalog/           open-source IP catalog (manifests)
 │       └── benchmark/            benchmark harness + registry
 ├── IP/                         open-core git submodules (serv · ibex · sha256 · opentitan)
-├── benchmark-data/             the benchmark corpus (6.8 GB) — see "The benchmark corpus" below
-│   ├── ic/                      7 canonical benchmark ICs driven doc → RTL → GDS
-│   ├── evaluation/              8 open-benchmark / parity evaluation sets
-│   └── datasets/                vendored upstream benchmark datasets
+├── benchmark-data/             the benchmark corpus (~385 MB tracked) — see "The benchmark corpus" below
+│   ├── ic/                      9 canonical benchmark ICs driven doc → RTL → GDS
+│   └── evaluation/              7 open-benchmark / parity evaluation sets
 ├── benchmark_external/         external-benchmark harness notes (CVDP legal-input definition)
 ├── tools/                      repo dev / CI utilities (second pytest tree)
 ├── docs/                       repo-level guides — INSTALL.md · governance runbook
@@ -64,22 +63,25 @@ gatekeeper-verified FAIL→PASS fixes; scoreboard in `tools/vibeic-eda/FIX_STATU
 ```bash
 export VIBEIC_DESIGNS="/path/to/your/designs"  # ← your project / designs folder (must already exist)
 [ -d "$VIBEIC_DESIGNS" ] || { echo "VIBEIC_DESIGNS must point at an existing directory"; exit 1; }
-docker pull ghcr.io/vibeic/vibeic-eda:0.2.24   # or build: docker build -t vibeic-eda:0.2.24 tools/vibeic-eda
+docker pull ghcr.io/vibeic/vibeic-eda:0.2.26   # or build: docker build -t vibeic-eda:0.2.26 tools/vibeic-eda
 docker rm -f vibeic-eda 2>/dev/null || true    # "name already in use"? drop the old container first
 docker run -d --name vibeic-eda \
   -v "$VIBEIC_DESIGNS:$VIBEIC_DESIGNS:rw" \
   -v "$VIBEIC_DESIGNS:/foss/designs:rw" \
-  ghcr.io/vibeic/vibeic-eda:0.2.24 --skip sleep infinity
+  ghcr.io/vibeic/vibeic-eda:0.2.26 --skip sleep infinity
 docker exec vibeic-eda yosys --version         # sanity check — should print a version
 ```
 
 Stock fallback: `docker pull hpretl/iic-osic-tools:latest` (run it named `vibeic-eda`).
-Already running an older tag? Swap without retyping mounts: `tools/vibeic-eda/restart-eda.sh 0.2.24`.
+Already running an older tag? Swap without retyping mounts: `tools/vibeic-eda/restart-eda.sh 0.2.26`.
 See **[docs/INSTALL.md](docs/INSTALL.md)** for the required bind-mounts (Phase 3 needs the identity mount).
 
-The image tag is pinned by the one-line `tools/vibeic-eda/VERSION`;
-`tools/vibeic-eda/sync_image_version.py --check` fails the build if any install
-doc drifts from it, so the tag above is never stale by hand.
+`0.2.26` is the newest tag published to `ghcr.io/vibeic/vibeic-eda` and is the
+image the current VerilogEval runs below were measured on. The one-line
+`tools/vibeic-eda/VERSION` is the *build* pin and currently reads `0.2.23`;
+`tools/vibeic-eda/sync_image_version.py --check` reports every install-doc
+pointer that differs from it, so expect it to flag this section until the build
+pin is moved forward. Pull the tag above — not `VERSION` — for the current image.
 
 **PDKs.** The flow resolves PDKs through
 `plugins/vibe-ic/programs/pdk_registry.json`:
@@ -195,17 +197,28 @@ number we publish measures **what the deterministic runner chain can do**
 discloses any open↔commercial tool substitution and follows the
 [open-benchmark methodology](vibe-ic-marketplace/plugins/vibe-ic/skills/open-benchmark-methodology/SKILL.md).
 
-Latest clean-room runs (2026-07-12): **Claude Fable 5** driving plugin
-**v1.3.88** on the forked vibeic-eda toolchain (each run's RESULT.md names the
-exact image it used). The CVDP figure is from an earlier campaign with Claude
-Opus 4.8 (v1.2.63); each score names its model.
+**Each row names the plugin version of the run that produced it — not today's
+plugin version.** The two VerilogEval suites were last re-run clean-room on
+2026-07-22 against plugin **v1.4.81** on vibeic-eda **0.2.26**; RTLLM's current
+figure is the 2026-07-12 campaign on **v1.3.88** (Claude Fable 5, vibeic-eda
+0.2.12); CVDP's is an earlier campaign on **v1.2.63**. Each run's `RESULT.md`
+names the exact image it used. The v1.4.81 VerilogEval runs do **not** record an
+authoring model in their `RESULT.md`, so no model is attributed to those two
+rows.
 
 | Benchmark | Result | Notes |
 |---|---|---|
-| **NVIDIA CVDP** (nonagentic code-generation, no-commercial) | **243/302 = 80.46%** official-compliant blind pass@1 *(Opus 4.8, v1.2.63)* | **prompt+context-only** — the deterministic solver reads ONLY `input.prompt` + `input.context`; the hidden test harness (`.env`, cocotb testbench) and the golden solution are OFF-LIMITS oracle, enforced by a regression guard that proves the emit is byte-identical with vs without them. Scored on the official `run_benchmark.py` in the pinned `cvdp-sim` image. |
-| **RTLLM v2.0** | **49/50 = 98%** blind pass@1 (**49/49 = 100%** excluding the 1 proven upstream dataset defect) *(Fable 5, v1.3.88)* | spec-to-RTL, runner-driven (Shape B), §4.05-blind, iverilog-scored; single-shot 47/50 = 94%, converged after ONE blind close-loop round. The sole residual (`ring_counter`) is a golden that fails its own testbench — a per-design RESULT entry, not a silent drop. |
-| **VerilogEval-v2** | **153/156 = 98.08%** blind pass@1, **single-shot** *(Fable 5, v1.3.88)* | spec-to-RTL, §4.05-blind, iverilog-scored; 130/156 problems emitted by deterministic solvers. All 3 residuals are documented dataset defects / spec ambiguities — the score sits at the defect floor with no close-loop round. |
-| **VerilogEval-Human** | **153/156 = 98.08%** blind pass@1, **single-shot** *(Fable 5, v1.3.88)* | code-complete (iccad2023), §4.05-blind, iverilog-scored; 129/156 deterministic emits. |
+| **NVIDIA CVDP** (nonagentic code-generation, no-commercial) | **243/302 = 80.46%** official-compliant blind pass@1 *(plugin v1.2.63)* | **prompt+context-only** — the deterministic solver reads ONLY `input.prompt` + `input.context`; the hidden test harness (`.env`, cocotb testbench) and the golden solution are OFF-LIMITS oracle, enforced by a regression guard that proves the emit is byte-identical with vs without them. Scored on the official `run_benchmark.py` in the pinned `cvdp-sim` image. |
+| **RTLLM v2.0** | **49/50 = 98.0%** blind pass@1 (**49/49 = 100%** excluding the 1 proven upstream dataset defect) *(Fable 5, plugin v1.3.88)* | spec-to-RTL, runner-driven (Shape B), §4.05-blind, iverilog-scored; single-shot 47/50 = 94%, converged after ONE blind close-loop round. The sole residual (`ring_counter`) is a golden that fails its own testbench — a per-design RESULT entry, not a silent drop. |
+| **VerilogEval-v2** | **153/156 = 98.08%** blind pass@1, **single-shot** *(plugin v1.4.81)* | spec-to-RTL, Shape C, §4.05-blind, iverilog-scored. All 3 residuals are proven dataset defects — the score sits at the defect floor with no close-loop round. Excluding the confirmed defect: 153/155 = 98.71%. |
+| **VerilogEval-Human** | **154/156 = 98.72%** blind pass@1, **single-shot** *(plugin v1.4.81)* | code-complete (iccad2023), Shape C, §4.05-blind, iverilog-scored. Both residuals are proven dataset defects; identical score and identical fail set across three consecutive clean-room rounds (v1.4.68 → v1.4.74 → v1.4.81). |
+
+*Superseded figures:* this table previously published VerilogEval-Human at
+**153/156 = 98.08%** — that was the correct measurement on plugin **v1.3.88**
+(`verilogeval_human/run_cleanroom_v1388/`), superseded by the v1.4.81 re-run
+above. The v1.3.88 rows also reported a deterministic-vs-AI emit split
+(130/156 for v2, 129/156 for Human); the v1.4.81 runs do not record that split,
+so it is not carried forward.
 
 > **Honesty over score.** Compliance is a structural invariant of the plugin,
 > not a runtime convenience — no benchmark run reads the hidden harness or the
@@ -217,14 +230,20 @@ Opus 4.8 (v1.2.63); each score names its model.
 
 ## The benchmark corpus — `benchmark-data/`
 
-Every number above is backed by files in this repo. `benchmark-data/` is 6.8 GB
-split three ways by **what the data is for**:
+Every number above is backed by files in this repo. `benchmark-data/` is ~385 MB
+of tracked content (sizes below are tracked blob totals — what a clone brings
+down), split two ways by **what the data is for**:
 
-| Sub-tree | Size | What it holds |
+| Sub-tree | Tracked size | What it holds |
 |---|---|---|
-| [`ic/`](benchmark-data/ic) | 5.0 GB | the 7 canonical benchmark ICs, driven end-to-end (documents → RTL → GDS) |
-| [`evaluation/`](benchmark-data/evaluation) | 994 MB | 8 evaluation sets — open-benchmark runs + the Phase-1 parity sweep |
-| [`datasets/`](benchmark-data/datasets) | 838 MB | vendored upstream benchmark datasets (inputs, not our output) |
+| [`ic/`](benchmark-data/ic) | 234 MB | the 9 canonical benchmark ICs, driven end-to-end (documents → RTL → GDS) |
+| [`evaluation/`](benchmark-data/evaluation) | 151 MB | 7 evaluation sets — open-benchmark runs + the Phase-1 parity sweep |
+
+A local working tree grows far larger than this (re-run outputs, `clean_run_*/`
+and other generated directories are gitignored, not committed). The upstream
+CVDP problem sets are **not** vendored here — `benchmark-data/datasets/` is
+gitignored as "not ours to redistribute"; fetch them from NVIDIA's
+`cvdp-benchmark-dataset` at the version each `RESULT.md` pins.
 
 Two audiences, two entry points. If you are **checking a published claim**, read
 the `RESULT.md` / `BENCHMARK_VERIFICATION_REPORT.md` at the top of the relevant
@@ -232,7 +251,7 @@ directory — each row names the artifact that evidences it, so a claim can be
 traced to a file rather than taken on trust. If you are **re-running**, take only
 the `input/` sub-tree; everything else is output and is regenerated.
 
-### `ic/` — the 7 canonical benchmark ICs
+### `ic/` — the 9 canonical benchmark ICs
 
 The ICs we push through the *whole* flow under the corrected protocol in
 [`ic/METHODOLOGY.md`](benchmark-data/ic/METHODOLOGY.md), whose hard rule is that
@@ -248,6 +267,8 @@ so a run cannot quietly copy the answer it is being scored against.
 | `opentitan_aes` | AES block from the OpenTitan family |
 | `caravel_user_project` | user-project harness for the Caravel SoC frame |
 | `u_hawaii_adc` | **the analog / mixed-signal one** — runs the Analog A1-A9 track (spec → topology → sizing → corner sweep → layout → post-layout resim → hardmacro) rather than the digital Phase-3 track |
+| `edge_llm_accel` | 64×64 weight-stationary INT4 systolic GEMM core, driven doc → GDS on the `nangate45` enablement |
+| `edge_llm_matmul_accel` | one INT4 matmul tile — the plain-language-dialogue → IC sample (front door, blind), on `sky130` |
 
 A typical IC directory:
 
@@ -276,34 +297,36 @@ readiness) has been driven to completion, the IC also carries a
 `BENCHMARK_VERIFICATION_REPORT.md` — present today for `spm`, `sha256`,
 `subservient`, and `u_hawaii_adc`.
 
-### `evaluation/` — the 8 evaluation sets
+### `evaluation/` — the 7 evaluation sets
 
 Results from public benchmarks and from our own parity sweeps. Each set keeps
-its per-run directories plus a `RESULT.md` naming the model, the plugin version,
-and the exact toolchain image that produced the number.
+its per-run directories plus a `RESULT.md` naming the plugin version and the
+exact toolchain image that produced the number (older runs also name the
+authoring model; the v1.4.81 VerilogEval runs do not).
 
-| Set | Size | What it is |
+| Set | Tracked size | What it is |
 |---|---|---|
-| `cvdp` | 280 MB | NVIDIA CVDP campaign — the compliance-hardened re-runs behind the 243/302 figure |
-| `cvdp-open-v1252` | 13 MB | per-problem CVDP working dirs from the open (agentic) split |
-| `verilogeval_v2` | 164 MB | VerilogEval-v2 spec-to-RTL runs |
-| `verilogeval_human` | 114 MB | VerilogEval-Human code-completion runs |
-| `verilogeval_machine` | 34 MB | VerilogEval-Machine runs (earlier campaigns) |
-| `rtllm` | 55 MB | RTLLM v2.0 spec-to-RTL runs |
-| `phase1_parity` | 334 MB | the **87-protocol Phase-1 parity sweep** — does the deterministic Phase-1 engine extract the same protocol facts as the AI reference? One directory per protocol, each holding the engine's `phase1/generated_docs/L*.json` and the extraction-coverage / parity reports under `reports/` |
-| `interconnect` | 48 KB | chip-to-chip interconnect benchmark **anchors** — manifests with pinned upstream commits + licenses; the upstream RTL is fetched on demand, not vendored (see its [`README.md`](benchmark-data/evaluation/interconnect/README.md)) |
+| `phase1_parity` | 139 MB | the **87-protocol Phase-1 parity sweep** — does the deterministic Phase-1 engine extract the same protocol facts as the AI reference? One directory per protocol, each holding the engine's `phase1/generated_docs/L*.json` and the extraction-coverage / parity reports under `reports/` |
+| `cvdp` | 7.6 MB | NVIDIA CVDP campaign — the compliance-hardened re-runs behind the 243/302 figure |
+| `verilogeval_v2` | 2.5 MB | VerilogEval-v2 spec-to-RTL runs |
+| `verilogeval_human` | 1.3 MB | VerilogEval-Human code-completion runs |
+| `rtllm` | 286 KB | RTLLM v2.0 spec-to-RTL runs |
+| `verilogeval_machine` | 275 KB | VerilogEval-Machine runs (earlier campaigns) |
+| `interconnect` | 12 KB | chip-to-chip interconnect benchmark **anchors** — manifests with pinned upstream commits + licenses; the upstream RTL is fetched on demand, not vendored (see its [`README.md`](benchmark-data/evaluation/interconnect/README.md)) |
 
 Sitting alongside them are the cross-cutting ledgers — `FAIL_CASE_LEDGER.md`,
 `RESIDUAL_DEFECTS.md`, and the per-campaign `RESULT_*.md` — which record the
 failures and the known dataset defects rather than only the wins.
 
-### `datasets/` — vendored upstream inputs
+### Upstream datasets — fetched, not vendored
 
-`cvdp-benchmark-dataset` (838 MB): the upstream CVDP problem sets as shipped,
-one `.jsonl` per dataset version and split (`v1.0.2` … `v1.1.0`; agentic /
-nonagentic × code-generation / code-comprehension × commercial / no-commercial).
-This is **input we did not author** — kept in-tree and version-pinned so a
-published score can be reproduced against exactly the split it was measured on.
+The CVDP problem sets (`cvdp-benchmark-dataset`: one `.jsonl` per dataset version
+and split — agentic / nonagentic × code-generation / code-comprehension ×
+commercial / no-commercial) are **input we did not author** and are **not** kept
+in this repo: `benchmark-data/datasets/` is gitignored as large and not ours to
+redistribute. Each `RESULT.md` pins the dataset version and split it was measured
+on, so a published score can be reproduced by fetching exactly that split from
+upstream.
 
 ---
 
@@ -395,25 +418,31 @@ version contracts (this plugin pins the `vibeic-eda` image tag; `vibeic-eda`
 pins each fork's SHA). This repo — the **plugin** — is the one you install.
 
 ```
-11 forked EDA tools ──▶ vibeic-eda ──▶ vibe-ic ──▶ you
+12 forked EDA tools ──▶ vibeic-eda ──▶ vibe-ic ──▶ you
 (OpenROAD·yosys·        (Docker image)  (this repo:   (Claude Code)
  ngspice·magic·netgen·                   the plugin)
  iverilog·klayout·                          │
- cocotb·cocotb-coverage·                    ▼
- pyuvm·sby — each a real                vibe-ic-studio
- fork, upstream-tracked)               (web control surface)
+ verilator·cocotb·                          ▼
+ cocotb-coverage·pyuvm·                 vibe-ic-studio
+ sby — each a real fork,               (web control surface)
+ upstream-tracked)
 ```
 
 - **[vibeic-eda](https://github.com/vibeic/vibeic-eda)** — the forked +
   bug-fixed open-source EDA toolchain, shipped as a Docker image. Rebuilds when
   a fork changes, not when this plugin changes.
-- **The EDA forks** — the 11 the image builds from source, each pinned to a
+- **The EDA forks** — the **12** the image builds from source, each pinned to a
   commit SHA in `tools/vibeic-eda/Dockerfile`: OpenROAD, Yosys, ngspice, Magic,
-  Netgen, Icarus Verilog, KLayout, cocotb, cocotb-coverage, pyuvm, and
-  SymbiYosys. Verilator is tracked as a fork too, with no custom patch warranted
-  on the shipped version. Each stays its **own** repo so upstream fixes can be
-  pulled and our fixes contributed back; they are never vendored into this
-  plugin. Per-fork scoreboard: [`tools/vibeic-eda/FIX_STATUS.md`](tools/vibeic-eda/FIX_STATUS.md).
+  Netgen, Icarus Verilog, KLayout, Verilator, cocotb, cocotb-coverage, pyuvm, and
+  SymbiYosys. Verilator's pinned commit is also present upstream, so the shipped
+  build carries no fork-only delta. A 13th fork, **OpenSTA**, reaches the image
+  as OpenROAD's `src/sta` rather than as its own build stage. The
+  [`vibeic` org](https://github.com/vibeic) carries **15** forks in total — the
+  13 above plus `ALIGN-public` and `ALIGN-pdk-sky130`, the analog auto-layout
+  line tracked as Bucket-T and not built into the EDA image. Each stays its
+  **own** repo so upstream fixes can be pulled and our fixes contributed back;
+  they are never vendored into this plugin. Per-fork scoreboard:
+  [`tools/vibeic-eda/FIX_STATUS.md`](tools/vibeic-eda/FIX_STATUS.md).
 - **[vibe-ic-studio](https://github.com/vibeic/vibe-ic-studio)** — the web
   control surface (Platform + Project layers), deployed independently.
 - **[Awesome Open IC](https://github.com/vibeic/awesome-open-ic)** — a curated,
