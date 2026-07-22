@@ -540,6 +540,80 @@ def _tool_in_container(container: str, tool: str) -> bool:
 
 
 # -------------------------------------------------------------------------
+# ORGANIC (reference-TB sim gate host/container mismatch) — container-aware
+# iverilog availability + dispatch for the three reference-TB sites
+# (_run_oracle_tb / _reference_tb_generic_full_stack / step_reference_tb).
+#
+# The canonical containerised config runs the RUNNER on the host and
+# dispatches the EDA tools into `--container`; iverilog then lives ONLY in
+# the container (/foss/tools/bin/iverilog — our Icarus fork), NEVER on the
+# host. The reference-TB sim gates historically probed the HOST
+# (shutil.which("iverilog")) and, finding nothing, either hard-FAILed
+# "by construction" or emitted `iverilog_available: false` WITHOUT ever
+# running the sim — a "check that lies" (reports a sim verdict it never
+# produced). Worse, even past the probe the compile+run were executed on
+# the HOST (`_run`) with a bare `iverilog`/`vvp` argv, so a container-only
+# iverilog would still never run.
+#
+# These helpers make availability AND execution container-aware: prefer the
+# container; fall back to the host only when the host actually has iverilog
+# (true host mode / mixed installs). Honesty preserved: when iverilog is
+# absent in BOTH the (supplied) container AND the host, availability is
+# False and the deterministic no-sim fallback still fires. chip-AGNOSTIC:
+# pure host/container tool-locality plumbing, no chip/PDK literal.
+# -------------------------------------------------------------------------
+def _iverilog_available(container: str) -> bool:
+    """Container-aware iverilog availability for the reference-TB sim gates.
+
+    True iff iverilog is reachable in the supplied `container` OR on the host.
+    Prefers the container (the canonical containerised config), so a host that
+    lacks iverilog no longer blocks a sim that would really run. Returns False
+    iff BOTH are missing — the honest no-sim path then WAIVEs as before."""
+    import shutil as _shutil
+    if container and _tool_in_container(container, "iverilog"):
+        return True
+    return bool(_shutil.which("iverilog"))
+
+
+def _iverilog_exec_container(container: str) -> bool:
+    """True iff the iverilog/vvp compile+run must be DISPATCHED INTO
+    `container` (the host has no iverilog but the container does). When the
+    host has iverilog we keep the historical host execution (no docker
+    round-trip); the caller only reaches execution when `_iverilog_available`
+    already said yes, so 'not host' here implies 'container'."""
+    import shutil as _shutil
+    if _shutil.which("iverilog"):
+        return False
+    return bool(container) and _tool_in_container(container, "iverilog")
+
+
+def _run_iverilog_stage(argv: List[str], run_dir: Path, container: str,
+                        timeout: int = 120) -> Tuple[int, str, str]:
+    """Run one iverilog/vvp stage (a full argv) on the host, OR — when the
+    host lacks iverilog but `container` has it — dispatched INTO the container
+    against the bind-mounted (path-translated) project tree.
+
+    The project is bind-mounted, so every path token in `argv` (the .vvp
+    output, the TB, the RTL sources) is translated host→container via
+    `_to_container_path`; non-path tokens (flags, `-D` defines, `iverilog`,
+    `vvp`) carry no mount prefix and pass through untouched. The container
+    cwd is the translated `run_dir` so `$readmem*` relative loads resolve, and
+    `/foss/tools/bin` is put on PATH so the fork's iverilog/vvp are found.
+    chip-AGNOSTIC."""
+    if not _iverilog_exec_container(container):
+        # host execution (unchanged); a plain argv passes through _run's
+        # docker-exec-deadline rewriter untouched.
+        return _run(argv, cwd=run_dir, timeout=timeout)
+    import shlex as _shlex
+    c_dir = _to_container_path(str(run_dir), container)
+    c_argv = " ".join(_shlex.quote(_to_container_path(tok, container))
+                      for tok in argv)
+    cmd = (f"cd {_shlex.quote(c_dir)} && "
+           f"export PATH={TOOLS_IN_CONTAINER}/bin:$PATH && {c_argv}")
+    return _docker_exec(container, cmd, timeout=timeout)
+
+
+# -------------------------------------------------------------------------
 # v1.6.18 — Quartus locator (host-side) for step_fpga_compile.
 # Scans, in order:
 #   1. $QUARTUS_ROOTDIR/bin/quartus_sh   (canonical Intel-recommended env)
@@ -3991,8 +4065,13 @@ def _iverilog_compile_with_sv_fallback(
     Returns (rc, out, err, frontend). `frontend` is one of
     'iverilog_g2012' (default, including the unchanged failure case) or
     'iverilog_sv2v'. Honesty preserved: a genuine RTL defect that the SV
-    frontend also rejects keeps rc != 0 and 'iverilog_g2012'."""
-    rc, out, err = _run(base_cmd, cwd=run_dir, timeout=120)
+    frontend also rejects keeps rc != 0 and 'iverilog_g2012'.
+
+    The DEFAULT attempt runs where iverilog actually is: on the host when the
+    host has it, else dispatched INTO `container` (the canonical containerised
+    config keeps iverilog only in /foss/tools/bin) — so a container-only
+    iverilog no longer mislabels an un-run sim as a compile defect."""
+    rc, out, err = _run_iverilog_stage(base_cmd, run_dir, container, timeout=120)
     if rc == 0:
         return rc, out, err, "iverilog_g2012"
 
@@ -4153,7 +4232,8 @@ def _iverilog_compile_with_sv_fallback(
             continue
         new_cmd.append(tok)
     new_cmd.append(str(converted_host))
-    rc2, out2, err2 = _run(new_cmd, cwd=run_dir, timeout=120)
+    rc2, out2, err2 = _run_iverilog_stage(new_cmd, run_dir, container,
+                                          timeout=120)
     if rc2 == 0:
         return rc2, (out2 + f"\n[sv2v fallback frontend: {fe_reason}]"
                      f"\n[sv2v TB pre-pass: {define_reason}]"), \
@@ -4166,6 +4246,7 @@ def _iverilog_compile_with_sv_fallback(
 def _sim_run_or_reuse(tb_frontend: str, vvp_path: "Path",
                       compile_rc: int, compile_out: str, compile_err: str,
                       run_dir: "Path", timeout: int = 300,
+                      container: str = "",
                       ) -> Tuple[int, str, str]:
     """ORGANIC #703 — shared sim-run gate for the three reference-TB sites.
 
@@ -4196,7 +4277,11 @@ def _sim_run_or_reuse(tb_frontend: str, vvp_path: "Path",
         # The verilator native binary already ran during the escape — reuse the
         # captured result; the completion-marker check happens in the caller.
         return compile_rc, compile_out, compile_err
-    return _run(["vvp", str(vvp_path)], cwd=run_dir, timeout=timeout)
+    # Run vvp where the .vvp was built: on the host, else INTO `container`
+    # (host-only vvp cannot run a container-compiled image). Same host/
+    # container decision as the compile, so the two stay in lock-step.
+    return _run_iverilog_stage(["vvp", str(vvp_path)], run_dir, container,
+                               timeout=timeout)
 
 
 # -------------------------------------------------------------------------
@@ -4801,8 +4886,10 @@ def _run_oracle_tb(project: Path, top_name: str, tb_path: Path,
     golden compares (`ORACLE_TB_DONE pass=<n>/<m>`). Returns None when
     no simulator is available (caller falls through to the skeleton
     path, which can at best WAIVE). chip-AGNOSTIC."""
-    import shutil as _shutil
-    if not _shutil.which("iverilog"):
+    # container-aware: iverilog may live only inside `container`
+    # (/foss/tools/bin) with none on the host — a host-only probe would
+    # wrongly return None and skip a sim that would really run.
+    if not _iverilog_available(container):
         return None
     rtl_dir = _pl.rtl_dir(project)
     if not rtl_dir.is_dir():
@@ -4866,7 +4953,7 @@ def _run_oracle_tb(project: Path, top_name: str, tb_path: Path,
     # (no oracle.vvp on disk); reuse its captured stdout instead of running vvp
     # on a file it never produced. The iverilog/sv2v path still runs vvp.
     rc, out, err = _sim_run_or_reuse(tb_frontend, vvp, rc, out, err,
-                                     run_dir, timeout=300)
+                                     run_dir, timeout=300, container=container)
     transcript = run_dir / "oracle.log"
     _mem_note = (("// #476 staged $readmem data into oracle_run: "
                   + ", ".join(_staged_mem) + "\n") if _staged_mem else "")
@@ -5012,10 +5099,14 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
         n = p.name
         return n.startswith("tb_") or n.endswith("_tb.v") or n.endswith("_tb.sv")
 
-    # Try a real compile+run of the generic TB if iverilog is present.
-    import shutil as _shutil
-    iverilog = _shutil.which("iverilog")
-    if iverilog and rtl_dir.is_dir():
+    # Try a real compile+run of the generic TB if iverilog is reachable.
+    # container-aware: the canonical containerised config runs the runner on
+    # the host and dispatches iverilog into `container` (/foss/tools/bin), so a
+    # HOST-only shutil.which probe returns False and hard-blocks a sim that
+    # WOULD run — a "check that lies". Prefer the container; the host is the
+    # true host-mode fallback. Both-absent still falls through to the
+    # deterministic no-sim WAIVE below (honesty preserved).
+    if _iverilog_available(container) and rtl_dir.is_dir():
         # ORGANIC-20260531: exclude FPGA / board-integration wrappers
         # (sibling-include or vendor-primitive) from the ASIC source list.
         rtl_files = _select_asic_rtl_sources(rtl_dir)
@@ -5048,7 +5139,8 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
         # of running vvp on a file it never produced. The iverilog/sv2v path
         # still runs vvp, so a real vvp runtime failure there still FAILs.
         rc, out, err = _sim_run_or_reuse(tb_frontend, vvp, rc, out, err,
-                                         run_dir, timeout=120)
+                                         run_dir, timeout=120,
+                                         container=container)
         transcript = run_dir / "full_stack.log"
         transcript.write_text(out + "\n" + err)
         if rc == 0 and "FULL_STACK_TB_DONE" in out:
@@ -5877,7 +5969,7 @@ def step_reference_tb(project: Path, top_name: str = "chip_top",
     # PASS, so a verilator escape that did NOT reach PROTOCOL_REFERENCE_TB_PASS
     # still FAILs. The iverilog/sv2v path still runs vvp.
     rc, out, err = _sim_run_or_reuse(tb_frontend, vvp, rc, out, err,
-                                     sim_dir, timeout=120)
+                                     sim_dir, timeout=120, container=container)
     transcript = (sim_dir / "ref_tb.log")
     transcript.write_text(out + "\n" + err)
     if "PROTOCOL_REFERENCE_TB_PASS" in out:
