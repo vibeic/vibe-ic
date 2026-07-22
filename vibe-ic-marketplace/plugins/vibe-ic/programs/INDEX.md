@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 909
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 909)
+- **Total programs (excluding helpers / shims):** 911
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 911)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 900 |
+| `any` | 902 |
 
 ## Alphabetical listing
 
@@ -307,6 +307,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `floorplan_contract` | any | — | shared design-PROVIDED fixed-floorplan-contract helpers. |
 | `floorplan_pdn_check` | any | — | Step 15 (Floorplan + PDN) SUBSTANCE gate. |
 | `flow_compliance_check` | any | Wave 91 | Strict Vibe-IC phase 2+3 gate (40 main-track |
+| `flow_condition_reachability_check` | any | — | the self-disabling-condition guard. |
 | `flow_dashboard` | any | — | unified entry for the Vibe-IC flow execution dashboard. |
 | `flow_dashboard_cli` | any | — | LIVE terminal dashboard for the Vibe-IC flow. |
 | `flow_dashboard_data` | any | — | DATA PROVIDER for the live Vibe-IC flow dashboard. |
@@ -362,7 +363,6 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gate_netlist_rtl_gen` | any | v0.1.8 | deterministic gate-netlist → RTL generator. |
 | `gate_reliability_register` | any | — | gate_reliability_register.py -- Self-calibrating per-gate reliability ledger. |
 | `gate_self_assertion_check` | any | v0.2.24 | anti-fabrication gate-hole detector. |
-| `flow_condition_reachability_check` | any | #220 | self-disabling-condition guard: FAILs when a flow condition is unreachable in the scenario its step exists to detect. |
 | `gate_utils` | any | v0.117 | Shared helpers for v0.117+ structural-RTL gates. |
 | `gate_verilog_to_spice` | any | — | convert a structural (gate-level) Verilog netlist to SPICE for |
 | `gatekeeper_assign_version` | any | — | v1.1.7 (owner directive 2026-06-17). |
@@ -691,6 +691,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `regression_issue_intake_check` | any | — | v1.6.63 |
 | `regression_report_aggregate` | any | — | Pattern-B extraction from |
 | `regression_severity_classify` | any | — | Pattern-B extraction from |
+| `reported_figure_artifact_backing_check` | any | — | the ARTIFACT-BACKING gate. |
 | `reports_subfolder_taxonomy_check` | any | — | enforce that `<project>/reports/` |
 | `reset_clock_variant_alias` | any | v0.3.18 | v0.3.18 (ORGANIC #518). |
 | `reset_dependency_check` | any | — | deterministic compliance check derived from <chip-class> v040 debug. |
@@ -982,7 +983,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (900 programs)
+### `any` (902 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1261,6 +1262,7 @@ _(no programs in this group)_
 - `floorplan_contract` — shared design-PROVIDED fixed-floorplan-contract helpers.
 - `floorplan_pdn_check` — Step 15 (Floorplan + PDN) SUBSTANCE gate.
 - `flow_compliance_check` — Strict Vibe-IC phase 2+3 gate (40 main-track  _[Wave 91]_
+- `flow_condition_reachability_check` — the self-disabling-condition guard.
 - `flow_dashboard` — unified entry for the Vibe-IC flow execution dashboard.
 - `flow_dashboard_cli` — LIVE terminal dashboard for the Vibe-IC flow.
 - `flow_dashboard_data` — DATA PROVIDER for the live Vibe-IC flow dashboard.
@@ -1316,7 +1318,6 @@ _(no programs in this group)_
 - `gate_netlist_rtl_gen` — deterministic gate-netlist → RTL generator.  _[v0.1.8]_
 - `gate_reliability_register` — gate_reliability_register.py -- Self-calibrating per-gate reliability ledger.
 - `gate_self_assertion_check` — anti-fabrication gate-hole detector.  _[v0.2.24]_
-- `flow_condition_reachability_check` — self-disabling-condition guard: FAILs when a flow condition is unreachable in the scenario its step exists to detect.  _[#220]_
 - `gate_utils` — Shared helpers for v0.117+ structural-RTL gates.  _[v0.117]_
 - `gate_verilog_to_spice` — convert a structural (gate-level) Verilog netlist to SPICE for
 - `gatekeeper_assign_version` — v1.1.7 (owner directive 2026-06-17).
@@ -1644,6 +1645,7 @@ _(no programs in this group)_
 - `regression_issue_intake_check` — v1.6.63
 - `regression_report_aggregate` — Pattern-B extraction from
 - `regression_severity_classify` — Pattern-B extraction from
+- `reported_figure_artifact_backing_check` — the ARTIFACT-BACKING gate.
 - `reports_subfolder_taxonomy_check` — enforce that `<project>/reports/`
 - `reset_clock_variant_alias` — v0.3.18 (ORGANIC #518).  _[v0.3.18]_
 - `reset_dependency_check` — deterministic compliance check derived from <chip-class> v040 debug.

@@ -65,6 +65,25 @@ exactly one state, each with the evidence it judged on:
                                     ``--agent-output`` file) is missing/empty:
                                     the deliverable claims an output the run did
                                     not produce. FAIL (rc 1).
+  NO_OUTPUTS_ONLY_INPUTS          — the deliverable READS as complete, but every
+                                    file in the run dir OTHER THAN the
+                                    deliverable itself is confined to the input
+                                    subtree: the run produced ZERO outputs, so
+                                    the verdict the deliverable reports is
+                                    backed by nothing. FAIL (rc 1).
+
+                                    Added 2026-07-21 from a MEASURED escape: a
+                                    run dir holding 27 files, 100 % under
+                                    ``input/``, carried a RESULT.md claiming
+                                    PASS and this gate returned COMPLETE / rc 0.
+                                    ``require_artifacts`` defaults to empty, so
+                                    ``artifacts_ok`` was VACUOUSLY true and the
+                                    verdict reduced to "RESULT.md is ≥400 B" —
+                                    prose alone cleared it. The gate that exists
+                                    to catch empty outputs greenlit a report
+                                    over an empty run. This state closes that.
+                                    Companion check (figure-level backing):
+                                    ``reported_figure_artifact_backing_check.py``.
 
 On any FAIL the program prints a LOUD HIGHLIGHT block and emits a machine-
 readable ``capture_candidate`` (ingestible by the enhancement-capture flow —
@@ -172,7 +191,13 @@ _EXIT = {
     "DELIVERABLE_STUB": 1,
     "RUN_DIED_EARLY": 1,
     "DECLARED_ARTIFACT_MISSING": 1,
+    "NO_OUTPUTS_ONLY_INPUTS": 1,
 }
+
+# The run-dir subtree that holds a run's INPUTS. A run whose every file lives
+# here produced nothing. Overridable per-call; the name is a layout convention,
+# not a benchmark/IC literal.
+_INPUT_DIR_NAME = "input"
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +342,50 @@ def _orchestrator_verdict(run_dir: Path) -> Dict[str, object]:
     return {"report": str(best) if best else None, "verdict": verdict}
 
 
+def _output_census(run_dir: Path, deliverable: Path,
+                   input_dir_name: str = _INPUT_DIR_NAME) -> Dict[str, object]:
+    """Did this run produce any OUTPUT at all?
+
+    Counts every file under run_dir EXCEPT the deliverable itself, and asks how
+    many live outside the input subtree. The deliverable is excluded because it
+    is the CLAIM being judged — a RESULT.md must never count as the output that
+    vouches for its own run.
+
+    ``input_only`` is True only when there is at least one file and NONE of them
+    is an output. An empty dir is NOT input_only (RUN_DIED_EARLY already owns
+    that case), and a run dir with no input subtree at all is never input_only.
+    """
+    inp = (run_dir / input_dir_name)
+    try:
+        inp_r = inp.resolve()
+    except OSError:
+        inp_r = inp
+    try:
+        deliv_r = deliverable.resolve()
+    except OSError:
+        deliv_r = deliverable
+    total = 0
+    outside = 0
+    for dirpath, dirnames, filenames in os.walk(run_dir):
+        dirnames[:] = [d for d in dirnames if d not in {".git", "__pycache__"}]
+        for fn in filenames:
+            p = Path(dirpath) / fn
+            try:
+                pr = p.resolve()
+            except OSError:
+                pr = p
+            if pr == deliv_r:
+                continue
+            total += 1
+            try:
+                pr.relative_to(inp_r)
+            except ValueError:
+                outside += 1
+    return {"files_total": total, "files_outside_input": outside,
+            "input_dir": str(inp), "input_dir_exists": inp.is_dir(),
+            "input_only": bool(total > 0 and outside == 0 and inp.is_dir())}
+
+
 def _norm_artifact_globs(req: List[str]) -> List[str]:
     """Turn 'gds,spef' or globs into concrete glob patterns. A bare token like
     'gds' becomes a recursive '**/*.gds'; a token already containing a glob
@@ -386,6 +455,7 @@ def check(run_dir: Path, *,
     else:
         ao_ok = True
     live = _liveness(run_dir, pid)
+    census = _output_census(run_dir, deliverable)
 
     compute_done = bool(fs is not None or orch["verdict"] or arts["any_present"])
 
@@ -406,13 +476,26 @@ def check(run_dir: Path, *,
         "agent_output_ok": ao_ok,
         "compute_done": compute_done,
         "liveness": live,
+        "output_census": census,
     }
 
     artifacts_ok = not arts["missing"]
     deliverable_complete = bool(dl["complete"] and artifacts_ok and ao_ok)
 
     # ── classify ────────────────────────────────────────────────────────────
-    if deliverable_complete:
+    # The zero-output escape is judged FIRST, because it is the case where every
+    # other signal reads green: the deliverable is complete, no artifact was
+    # DECLARED so none can be missing, and the verdict would be PASS. Scoped to
+    # `deliverable_complete and not live` so the STUB / RUN_DIED_EARLY /
+    # IN_PROGRESS classifications below keep their exact prior semantics.
+    if deliverable_complete and census["input_only"] and not live["live"]:
+        state, verdict, reason = "NO_OUTPUTS_ONLY_INPUTS", "FAIL", (
+            f"{deliverable.name} reads as complete ({dl['bytes']} B) but the run "
+            f"produced ZERO outputs: all {census['files_total']} other file(s) in "
+            f"the run dir are confined to '{Path(census['input_dir']).name}/'. The "
+            f"reported verdict is backed by nothing on disk — a run that produced "
+            f"no output may never be reported as a result.")
+    elif deliverable_complete:
         state, verdict, reason = "COMPLETE", "PASS", (
             f"deliverable {deliverable.name} present ({dl['bytes']} B, "
             f"{dl['content_lines']} content lines)"
