@@ -458,8 +458,35 @@ def finalize_after_slang_retry(parsed: Dict, slang_retry_failed: bool) -> Dict:
     unavailable). Once slang — the most capable frontend — has ALSO failed to
     elaborate the gold, the design is not excused as a built-in-reader tool gap;
     a genuine elaboration error must NOT get a free non-blocking pass. PURE; a
-    no-op when slang was not attempted or slang succeeded."""
+    no-op when slang was not attempted or slang succeeded.
+
+    EXCEPTION — the #192 hard-macro staging gap is NOT a gold-frontend failure.
+    That INCONCLUSIVE is raised when the GATE side's `hierarchy -check` aborts
+    because the netlist instantiates a hard macro whose definition was never
+    staged into the miter. The gold RTL elaborated fine; no frontend, however
+    capable, can supply a module that is not there, so "slang also failed" is
+    not evidence about this design at all. Downgrading it re-introduces exactly
+    the harm #192 removed — a comparison that never started, booked as a proven
+    non-equivalence — and worse, the downgrade's own text tells the operator to
+    "fix the elaboration error", pointing at RTL that is provably fine.
+
+    Measured 2026-07-22 on a design carrying a `pdk_local` SRAM macro: `lec.json`
+    came out `verdict=FAIL`, `compared_points=0`, explanation "Neither
+    read_verilog -sv nor the read_slang SV-2017 frontend could elaborate the
+    gold", while that same JSON carried
+    `undefined_macro_modules: ["<the macro>"]` and `lec.rpt` ended on the
+    gate-side line `ERROR: Module '\\<macro>' referenced in module '\\<top>' in
+    cell '\\<inst>' is not part of the design.` — after the gold had already run
+    58 passes. The classification was right and the finalizer overwrote it.
+
+    Keyed on the recorded `undefined_macro_modules`, so it is chip-, macro- and
+    PDK-AGNOSTIC, and it cannot excuse a real gold elaboration failure (which
+    records no undefined macro)."""
     if not slang_retry_failed or parsed.get("verdict") != "INCONCLUSIVE":
+        return parsed
+    if parsed.get("undefined_macro_modules"):
+        # Gate-side hard-macro staging gap — nothing to do with the gold
+        # frontend. Keep the #192 INCONCLUSIVE and its remediation.
         return parsed
     out = dict(parsed)
     out["verdict"] = "FAIL"
@@ -817,6 +844,24 @@ def build_report(parsed: Dict, top: str, gate_netlist: str,
 # Container plumbing (patterned on analog_real_corner_sweep._docker).
 # ---------------------------------------------------------------------------
 def _docker(container: str, cmd: str, timeout: int = 120):
+    """Run `cmd` in the container under a bounded budget.
+
+    The command carries its OWN container-side deadline a few seconds before
+    the host's. Without it, `subprocess.run`'s timeout kills the `docker exec`
+    CLIENT only — Docker does not propagate that inward, so the tool (here a
+    yosys equivalence run on a whole gate netlist, which can be tens of GB of
+    RAM) is ORPHANED and keeps burning a core and its memory unsupervised.
+    This function's own `except TimeoutExpired` handler shows the timeout is an
+    expected outcome, which makes the leak an expected outcome too.
+
+    Same defect shape as the one measured leaking in the Phase-2 synth
+    dispatch; fixed here by pattern from that measurement, using the shared
+    helper. chip/tool-AGNOSTIC."""
+    try:
+        import _docker_watchdog as _dw
+        cmd = _dw.wrap_with_container_timeout(cmd, timeout)
+    except Exception:  # nosec — never let hardening break the call
+        pass
     return subprocess.run(
         ["docker", "exec", container, "bash", "-lc", cmd],
         capture_output=True, text=True, timeout=timeout)

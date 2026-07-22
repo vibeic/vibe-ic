@@ -317,10 +317,49 @@ def _rtl_dir_sha256(project: Path) -> Optional[str]:
     return h.hexdigest()
 
 
+def _docker_exec_argv_with_deadline(cmd: List[str],
+                                    timeout: int) -> List[str]:
+    """Give a `docker exec ... bash -lc <script>` argv its OWN container-side
+    deadline, `margin` seconds before the host's.
+
+    `_run` is the generic subprocess helper, but several call sites hand it a
+    FULL docker-exec argv (`docker exec -w <dir> <container> bash -lc "<tool>"`)
+    rather than going through `_docker_exec`. Those bypass every container-side
+    bound, and a host `subprocess.run` timeout kills only the `docker exec`
+    CLIENT — the tool inside the container is ORPHANED and runs on unsupervised.
+
+    Measured 2026-07-22: the Phase-2 generic synth is dispatched exactly this
+    way. Its 300 s cap fired, the step was recorded as timed out and the runner
+    moved on, and its yosys+abc were still running EIGHTEEN MINUTES later,
+    holding 6.0 GB and a full core inside a `--cpus=12 --memory=48g` container
+    that the replacement step was sharing. Both invocations wrote the same
+    output netlist path, so the orphan could also overwrite the good artifact
+    produced by the step that replaced it.
+
+    Rewrites only the true `docker exec … bash -lc <script>` shape; any other
+    argv (notably `docker cp`) is returned untouched. chip/tool-AGNOSTIC.
+    """
+    if len(cmd) < 5 or cmd[0] != "docker" or cmd[1] != "exec":
+        return cmd
+    if cmd[-2] != "-lc" or cmd[-3] not in ("bash", "sh"):
+        return cmd
+    try:
+        import _docker_watchdog as _dw
+        wrapped = _dw.wrap_with_container_timeout(cmd[-1], timeout)
+    except Exception:  # nosec — never let hardening break the call
+        return cmd
+    return list(cmd[:-1]) + [wrapped]
+
+
 def _run(cmd: List[str], cwd: Optional[Path] = None,
          timeout: int = 600,
          env: Optional[Dict[str, str]] = None) -> Tuple[int, str, str]:
-    """Run a subprocess; capture stdout+stderr; return (rc, out, err)."""
+    """Run a subprocess; capture stdout+stderr; return (rc, out, err).
+
+    A `docker exec … bash -lc <script>` argv is given its own container-side
+    deadline first (`_docker_exec_argv_with_deadline`) — without it a host
+    timeout orphans the in-container tool."""
+    cmd = _docker_exec_argv_with_deadline(cmd, timeout)
     try:
         cp = subprocess.run(
             cmd,
@@ -447,8 +486,18 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 600
     """Run a shell command inside a Docker container under a SIMPLE bounded
     wall-clock `timeout` — correct for short probes. Long tool runs use
     `_docker_exec(..., marker=...)` which routes through the progress-stall
-    watchdog instead."""
-    full = ["docker", "exec", container, "bash", "-lc", cmd]
+    watchdog instead.
+
+    The command carries its OWN container-side deadline 5 s before the host's
+    (`_docker_watchdog.wrap_with_container_timeout`). Without it a host
+    `subprocess.run` timeout kills only the `docker exec` CLIENT and ORPHANS
+    the tool inside the container — measured here: a 300 s sanity-synth
+    timeout left yosys+abc running 18 minutes later, holding 6 GB and a full
+    core inside a cpu/memory-capped container the live synth was sharing, and
+    still able to overwrite that step's output netlist. Chip-AGNOSTIC."""
+    import _docker_watchdog as _dw
+    _wrapped = _dw.wrap_with_container_timeout(cmd, timeout)
+    full = ["docker", "exec", container, "bash", "-lc", _wrapped]
     try:
         cp = subprocess.run(full, capture_output=True, text=True,
                             timeout=timeout)
