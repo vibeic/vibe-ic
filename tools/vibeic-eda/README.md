@@ -21,6 +21,12 @@ docker pull ghcr.io/vibeic/vibeic-eda:0.2.26
 > which does not host this image and returns "repository does not exist / access denied".
 > The newest released tag is `ghcr.io/vibeic/vibeic-eda:latest`.
 
+> **Single source of truth.** The `Dockerfile` and full build recipe live **only** in the
+> canonical [`github.com/vibeic/vibeic-eda`](https://github.com/vibeic/vibeic-eda) repo — this
+> `vibe-ic` directory no longer carries a mirror copy (it drifted, so it was retired). To run
+> the toolchain, `docker pull ghcr.io/vibeic/vibeic-eda:latest`; to build from source, clone
+> the canonical repo (below). This page is documentation only.
+
 ---
 
 ## Why forked, not just wrapped
@@ -97,7 +103,7 @@ The no-argument default is deliberately the pinned `VERSION`, never a floating
 
 ## What's inside
 
-**Forked + patched (8 tools)** — each pinned to a commit SHA in the [Dockerfile](./Dockerfile):
+**Forked + patched (8 tools)** — each pinned to a commit SHA in the [Dockerfile](https://github.com/vibeic/vibeic-eda/blob/main/Dockerfile):
 
 | Tool | Fork branch | Focus |
 |---|---|---|
@@ -148,7 +154,7 @@ SVRF/Calibre DRC-deck execution** — the klayout fork's `svrfdrc` C++ buddy par
 foundry Calibre/SVRF `.rule` deck directly on KLayout's DRC engine, no scripting interpreter
 and no commercial license — atop the 0.2.5 fix set (yosys `lift_adder` / prefix-adder,
 OpenROAD incremental reroute DRT-0073/0155/0218, ngspice native MC-LHS, magic/netgen
-LVS-fidelity). Every fork in the [Dockerfile](./Dockerfile) is pinned to a commit SHA, so
+LVS-fidelity). Every fork in the [Dockerfile](https://github.com/vibeic/vibeic-eda/blob/main/Dockerfile) is pinned to a commit SHA, so
 `docker build .` reproduces this tag.
 
 ---

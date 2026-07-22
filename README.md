@@ -63,7 +63,7 @@ gatekeeper-verified FAIL→PASS fixes; scoreboard in `tools/vibeic-eda/FIX_STATU
 ```bash
 export VIBEIC_DESIGNS="/path/to/your/designs"  # ← your project / designs folder (must already exist)
 [ -d "$VIBEIC_DESIGNS" ] || { echo "VIBEIC_DESIGNS must point at an existing directory"; exit 1; }
-docker pull ghcr.io/vibeic/vibeic-eda:0.2.26   # or build: docker build -t vibeic-eda:0.2.26 tools/vibeic-eda
+docker pull ghcr.io/vibeic/vibeic-eda:0.2.26   # canonical image; to build from source: git clone https://github.com/vibeic/vibeic-eda
 docker rm -f vibeic-eda 2>/dev/null || true    # "name already in use"? drop the old container first
 docker run -d --name vibeic-eda \
   -v "$VIBEIC_DESIGNS:$VIBEIC_DESIGNS:rw" \
@@ -432,7 +432,7 @@ pins each fork's SHA). This repo — the **plugin** — is the one you install.
   bug-fixed open-source EDA toolchain, shipped as a Docker image. Rebuilds when
   a fork changes, not when this plugin changes.
 - **The EDA forks** — the **12** the image builds from source, each pinned to a
-  commit SHA in `tools/vibeic-eda/Dockerfile`: OpenROAD, Yosys, ngspice, Magic,
+  commit SHA in the canonical `vibeic/vibeic-eda` repo's `Dockerfile`: OpenROAD, Yosys, ngspice, Magic,
   Netgen, Icarus Verilog, KLayout, Verilator, cocotb, cocotb-coverage, pyuvm, and
   SymbiYosys. Verilator's pinned commit is also present upstream, so the shipped
   build carries no fork-only delta. A 13th fork, **OpenSTA**, reaches the image
