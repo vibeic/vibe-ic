@@ -6376,6 +6376,52 @@ def _chip_top_power_pin_gated_names(port_block: str) -> set:
     return gated
 
 
+def _chip_top_port_names(port_block: str) -> set:
+    """ORGANIC-20260722 #783 — return the set of port NAMES declared in a
+    comment-masked ANSI `port_block`. Same per-chunk "last identifier wins"
+    rule the wrapper emitter already uses to build its named-port connections,
+    factored out module-level so the L9 port-set tiebreak and the emitter can
+    never disagree about what a module's port face IS. chip-AGNOSTIC."""
+    inner = port_block.strip()
+    if inner.startswith('(') and inner.endswith(')'):
+        inner = inner[1:-1]
+    kw = {"input", "output", "inout", "wire", "reg", "logic",
+          "signed", "unsigned", "var"}
+    names = set()
+    for chunk in inner.split(','):
+        ids = [i for i in re.findall(r'[A-Za-z_]\w*', chunk) if i not in kw]
+        if ids:
+            names.add(ids[-1])
+    return names
+
+
+def _chip_top_l9_top_port_names(project: Path) -> set:
+    """ORGANIC-20260722 #783 — return the set of top-level pin NAMES L9
+    declares for the design, or an empty set when L9 is absent / declares
+    none. Reads the same `top_ports` / `top_module_pins` / `ports` cascade
+    `l9_rtl_pin_consistency_check` compares against, so the wrapper emitter
+    optimises for exactly the contract that gate enforces. Returns an empty
+    set on ANY read/parse error so the caller's tiebreak self-disables and
+    historical selection stands. chip-AGNOSTIC."""
+    try:
+        p = project / "phase1" / "generated_docs" / "L9_INTEGRATION_SPEC.json"
+        if not p.is_file():
+            return set()
+        d = json.loads(p.read_text(errors="replace"))
+        if not isinstance(d, dict):
+            return set()
+        for key in ("top_ports", "top_module_pins", "ports"):
+            v = d.get(key)
+            if isinstance(v, list) and v:
+                names = {e.get("name") for e in v
+                         if isinstance(e, dict) and e.get("name")}
+                if names:
+                    return names
+    except Exception:
+        pass
+    return set()
+
+
 # ORGANIC #660 — SystemVerilog-only construct detector for the auto-emitted
 # chip_top wrapper. `_autoemit_chip_top_if_needed` copies the wrapped DUT's
 # `#(parameter …)` block VERBATIM into the wrapper header so widths resolve.
@@ -7000,11 +7046,23 @@ def _autoemit_chip_top_wrapper(project: Path, rtl_dir: Path,
     # decls per file and prefer the one whose name matches file basename
     # or synth_top.
     candidates = []
+    # ORGANIC-20260722 #783 — a `*_wrapper` file is NOT automatically a helper.
+    # For a harness-integration design the `_wrapper` module IS the deliverable
+    # top (the whole point of an integration wrapper is to BE the chip face).
+    # Blanket-`continue` on the suffix therefore hid the only module that
+    # implements L9's declared pin contract, and the wrapper was auto-emitted
+    # around an inner block instead — silently dropping every pin the harness
+    # face adds. Suffix-named files are now DEFERRED (parsed into a secondary
+    # pool) rather than dropped, and are considered only by the L9 port-set
+    # tiebreak below. With no L9 port evidence the deferred pool is ignored, so
+    # the historical pick is byte-identical. chip-AGNOSTIC: pure suffix +
+    # port-set-agreement arithmetic; no chip/vendor literal.
+    deferred = []
     for f in sorted(rtl_dir.glob("*.v")) + sorted(rtl_dir.glob("*.sv")):
         name = f.stem
-        if any(name.endswith(s) for s in ("_asic", "_wrapper", "_tb",
-                                          "_test", "_synth")):
-            continue
+        _is_deferred = any(name.endswith(s) for s in ("_asic", "_wrapper",
+                                                      "_tb", "_test",
+                                                      "_synth"))
         try:
             text = f.read_text(errors="ignore")
         except Exception:
@@ -7026,7 +7084,35 @@ def _autoemit_chip_top_wrapper(project: Path, rtl_dir: Path,
         # v0.1.38 (multi-module fix): prefer the module whose name matches
         # the file basename; else fall back to the first module in file.
         chosen = next((t for t in file_mods if t[0] == f.stem), file_mods[0])
-        candidates.append(chosen)
+        (deferred if _is_deferred else candidates).append(chosen)
+    # #783 — L9 port-set tiebreak. Runs ONLY when L9 declares top-level pins
+    # AND the pool holds more than one distinct module; otherwise it is a
+    # no-op and the historical selection stands verbatim. Scores each module
+    # by agreement with L9's functional pin contract (its own
+    # `ifdef USE_POWER_PINS face is excluded from BOTH sides — supply pins are
+    # owned by the power-intent/PDN layer, not by the functional pin list),
+    # and adopts the unique strict winner. This makes the auto-emitted top
+    # satisfy `l9_rtl_pin_consistency_check` BY CONSTRUCTION instead of
+    # emitting a top that structurally cannot.
+    _pool = candidates + deferred
+    if len(_pool) > 1:
+        _l9_names = _chip_top_l9_top_port_names(project)
+        if _l9_names:
+            _scored = []
+            for _t in _pool:
+                _names = _chip_top_port_names(_t[2])
+                # intersect: the gated-name helper also yields the arm's
+                # declaration KEYWORDS, which must not enter a set we subtract
+                # from the L9 contract.
+                _pw = _chip_top_power_pin_gated_names(_t[2]) & _names
+                _rtl_f = _names - _pw
+                _l9_f = _l9_names - _pw
+                _scored.append((len(_l9_f & _rtl_f)
+                                - len(_l9_f - _rtl_f)
+                                - len(_rtl_f - _l9_f), _t))
+            _scored.sort(key=lambda s: s[0], reverse=True)
+            if len(_scored) == 1 or _scored[0][0] > _scored[1][0]:
+                candidates = [_scored[0][1]]
     if not candidates:
         return None  # nothing usable
     # v0.1.38 (multi-file fix): if any candidate name matches the file
