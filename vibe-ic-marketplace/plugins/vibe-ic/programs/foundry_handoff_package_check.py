@@ -114,7 +114,37 @@ def _read_l9_top_module(project):
     return None
 
 
-def _chip_basename_variants(ic_name, top_module=None):
+def _read_implemented_top(project):
+    """ORGANIC-20260722 #788 — the top the flow ACTUALLY implemented.
+
+    L1.ic_name and L9.top_module are both DECLARED names. When #683/#782's
+    phantom-top fallback fires, neither is the module that was synthesised, so
+    the PnR/GDS deliverable is named after a THIRD string this gate never knew
+    about — and a perfectly valid chip GDS reads as missing.
+
+    Reads the same first-class `extras.synth_top` channel #787 established
+    (falling back to the `synth_top=` token in the step detail for reports
+    written before that field), so the deliverable-name seeds and the top phase
+    3 actually built can never disagree. Returns None on ANY read/parse error,
+    leaving the historical L1/L9 seeds untouched. chip-AGNOSTIC."""
+    rep = project / "reports" / "orchestrator" / "phase2_one_shot.json"
+    try:
+        data = json.loads(rep.read_text(encoding="utf-8", errors="replace"))
+        for step in data.get("steps") or []:
+            if step.get("name") != "yosys_synth":
+                continue
+            val = (step.get("extras") or {}).get("synth_top")
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+            m = re.search(r"\bsynth_top=(\w+)", str(step.get("detail") or ""))
+            if m:
+                return m.group(1)
+    except Exception:
+        pass
+    return None
+
+
+def _chip_basename_variants(ic_name, top_module=None, implemented_top=None):
     """v1.6.174 (#72 P0-3) — full chip-named GDS basename set.
     Covers: `<id>`, `<id>_top`, `<id>_asic`, `<id>_chip`,
     `chip_<id>` for both `ic_name` AND `top_module`, PLUS
@@ -132,7 +162,7 @@ def _chip_basename_variants(ic_name, top_module=None):
     chip-AGNOSTIC: built from L1.ic_name + L9.top_module values
     read from generated_docs, never chip-class string literals."""
     seeds = set()
-    for s in (ic_name, top_module):
+    for s in (ic_name, top_module, implemented_top):
         if s and isinstance(s, str) and s.strip():
             seeds.add(s.strip())
     # v1.6.189 (#76 P1) — always include the canonical runner
@@ -167,6 +197,8 @@ def _find_chip_gds(project, ic_name):
     if not ic_name:
         return None, False
     top_module = _read_l9_top_module(project)
+    # #788 — third seed: the top actually synthesised/implemented.
+    implemented_top = _read_implemented_top(project)
     roots = [
         project / "phase3/stage4/foundry_handoff/gds",
         project / "phase3/stage4/gds",
@@ -178,8 +210,9 @@ def _find_chip_gds(project, ic_name):
             all_gds.extend(sorted(root.glob("*.gds")))
     if not all_gds:
         return None, False
-    chip_basenames = _chip_basename_variants(ic_name, top_module)
-    seed_prefixes = [s.lower() for s in (ic_name, top_module)
+    chip_basenames = _chip_basename_variants(ic_name, top_module,
+                                             implemented_top)
+    seed_prefixes = [s.lower() for s in (ic_name, top_module, implemented_top)
                      if s and isinstance(s, str)]
     chip_gds = None
     real_files = []

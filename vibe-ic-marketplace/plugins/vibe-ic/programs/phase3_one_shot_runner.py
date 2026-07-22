@@ -1668,9 +1668,19 @@ def _build_tapcell_tcl(pdk: "PdkConfig") -> str:
         "  set _tocc 0.0\n"
         "  set _bminx 1000000000000; set _bminy 1000000000000\n"
         "  set _bmaxx -1000000000000; set _bmaxy -1000000000000\n"
+        "  set _tap_nplaced 0\n"
         "  foreach _ti [$_tblk getInsts] {\n"
         "    set _tm [$_ti getMaster]\n"
         "    if {[string match \"CORE*\" [$_tm getType]]} {\n"
+        # ORGANIC-20260722 #789 — count instances that are ACTUALLY
+        # PLACED. The occupied-region bbox below is only meaningful if
+        # a placement exists; see the guard on the prune.
+        "      set _tps NONE\n"
+        "      catch {set _tps [$_ti getPlacementStatus]}\n"
+        "      if {[string match -nocase \"*PLACED*\" $_tps] "
+        "|| [string match -nocase \"*FIRM*\" $_tps] "
+        "|| [string match -nocase \"*LOCKED*\" $_tps]} "
+        "{ incr _tap_nplaced }\n"
         "      set _tocc [expr {$_tocc + double([$_tm getWidth]) * "
         "double([$_tm getHeight])}]\n"
         "      incr _tap_ncore\n"
@@ -1693,9 +1703,30 @@ def _build_tapcell_tcl(pdk: "PdkConfig") -> str:
         "  # the taps to the occupied region so empty silicon is not flooded\n"
         "  # (#684 intent). Insert taps, then prune the ones that landed over\n"
         "  # empty silicon (keep occupied bbox + 2x-distance latch-up margin).\n"
-        "  if {$_tap_ncore > 0 && $_tap_maxx >= $_tap_minx} {\n"
-        "    set _tblk [ord::get_db_block]\n"
+        # ORGANIC-20260722 #789 — the prune is SOUND ONLY against a real
+        # placement. `tapcell` runs BEFORE global_placement/
+        # detailed_placement, so at this point the standard cells are
+        # UNPLACED and the "occupied region" bbox below is a fiction:
+        # on caravel_user_project x sky130A it measured core_util
+        # 0.022%%, pruned 134170 of 134178 taps and kept 8 — then
+        # placement scattered the real cells across the 2920x3520 um
+        # die with no tap anywhere near them. The PERC gate correctly
+        # called it: "a placed std cell at (2881.90,1808.80) um is
+        # infinitely (no tap in neighbourhood) from the nearest tap ...
+        # a CONCLUSIVE latch-up spacing exposure."
+        #
+        # Requiring `_tap_nplaced > 0` makes the prune self-disabling
+        # wherever it cannot be evaluated: with no placement we keep the
+        # FULL-DIE well-tie taps (the known-correct OpenROAD/OpenLane
+        # default, which is why placing cells anywhere is safe), and if
+        # tap insertion is ever moved after placement the #684
+        # bloat-reduction resumes working — soundly. Correctness over
+        # instance count: an untapped well is a latch-up defect, extra
+        # taps are only area.
+        "  set _tblk [ord::get_db_block]\n"
         f"{_tap_run}"
+        "  if {$_tap_ncore > 0 && $_tap_nplaced > 0 "
+        "&& $_tap_maxx >= $_tap_minx} {\n"
         "    # prune the empty-silicon taps; FAIL-SAFE: if the odb prune\n"
         "    # errors (API drift), RETAIN the full-die well-tie taps (wells\n"
         "    # stay tied — the correct direction — only the bloat-reduction\n"
@@ -1734,9 +1765,17 @@ def _build_tapcell_tcl(pdk: "PdkConfig") -> str:
         "prune skipped).\"\n"
         "    }\n"
         "  } else {\n"
-        "    puts \"SPARSE_DIE_TAPCELL_SKIPPED: core_util=$_tap_util% < "
+        "    set _tap_kept 0\n"
+        "    foreach _ti [$_tblk getInsts] { if {[[$_ti getMaster] "
+        "getName] eq \"" + tm + "\"} { incr _tap_kept } }\n"
+        "    puts \"SPARSE_DIE_TAPCELL_FULL_DIE: core_util=$_tap_util% < "
         + f"{thr}"
-        + "% — no placed core cells on a sparse die; no wells to tie.\"\n"
+        + "% but the #684 occupied-region prune is NOT EVALUABLE here "
+        "(placed core cells=$_tap_nplaced) — tapcell runs BEFORE "
+        "placement, so pruning to a not-yet-existing occupied region "
+        "would leave later-placed cells untapped (ORGANIC #789 "
+        "latch-up exposure). Retaining FULL-DIE well-tie taps "
+        "(kept=$_tap_kept).\"\n"
         "  }\n"
         "} else {\n"
         f"{_tap_run}"
