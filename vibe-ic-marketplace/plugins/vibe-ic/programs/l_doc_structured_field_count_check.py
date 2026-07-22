@@ -479,6 +479,114 @@ def _has_honest_no_regmap(data: dict) -> bool:
     return False
 
 
+_L4_OTP_REAL_SUBFIELDS = ("fields", "read_map", "write_map", "lockbits",
+                          "otp_ip_specs", "trim_registers", "mask_sources")
+
+
+def _l4_otp_layout_has_no_real_content(otp_layout) -> bool:
+    """True when the L4 otp_layout carries NO real OTP content — every
+    meaningful OTP sub-field (image fields / read_map / write_map / lockbits /
+    otp_ip_specs / trim_registers / mask_sources) is empty/None. Bookkeeping
+    defaults such as depth_bytes / width_bits do NOT count as content. Used to
+    confirm the OTP alternative source is genuinely absent before crediting a
+    complete minimal regmap (below the ≥5 floor)."""
+    if not isinstance(otp_layout, dict):
+        return True
+    for k in _L4_OTP_REAL_SUBFIELDS:
+        v = otp_layout.get(k)
+        if v not in (None, "", [], {}):
+            return False
+    return True
+
+
+_REGDOC_ADDR_COLS = ("offset", "address", "addr", "reg_addr", "base")
+_REGDOC_NAME_COLS = ("name", "register", "reg", "field")
+
+
+def _count_input_declared_registers(project) -> "int | None":
+    """Count the registers DECLARED in the design's input docs by tallying the
+    data rows of every GFM pipe-table that is clearly a register map (a header
+    carrying BOTH an address-like column — offset/address/addr/… — AND a
+    name/register column). Reads only staged INPUT docs (phase1/input_doc/ +
+    input/docs/), never generated_docs / golden (§4.05).
+
+    Returns the total declared-register count, or None when no register-map
+    table is found (the caller then keeps the strict floor — fail-closed, so a
+    doc whose register source cannot be located never rides the credit).
+
+    chip-AGNOSTIC: identifies a register-map table by its column semantics, not
+    by any chip/register name; a pin/port/signal table (no address column) is
+    NOT counted."""
+    if project is None:
+        return None
+    try:
+        import re as _re
+        from pathlib import Path as _P
+        roots = [
+            _P(project) / "phase1" / "input_doc",
+            _P(project) / "input" / "docs",
+            _P(project) / "input",
+        ]
+        files = []
+        seen = set()
+        seen_stems = set()
+        for root in roots:
+            if root.is_dir():
+                for ext in ("*.txt", "*.md"):
+                    for f in sorted(root.rglob(ext)):
+                        if f in seen:
+                            continue
+                        seen.add(f)
+                        # De-dupe STAGED COPIES of the same doc (e.g.
+                        # phase1/input_doc/L5_register_map.txt vs
+                        # input/docs/L5_register_map.md) by filename stem so a
+                        # register table is not counted twice.
+                        st = f.stem.lower()
+                        if st in seen_stems:
+                            continue
+                        seen_stems.add(st)
+                        files.append(f)
+        if not files:
+            return None
+        total = None
+        for f in files:
+            try:
+                lines = f.read_text(errors="replace").splitlines()
+            except OSError:
+                continue
+            i = 0
+            while i < len(lines):
+                line = lines[i]
+                if line.count("|") >= 2 and i + 1 < len(lines) \
+                        and _re.match(r"^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$",
+                                      lines[i + 1]):
+                    header = [c.strip().lower()
+                              for c in line.strip().strip("|").split("|")]
+                    has_addr = any(any(a in h for a in _REGDOC_ADDR_COLS)
+                                   for h in header)
+                    has_name = any(any(nm == h or nm in h.split()
+                                       for nm in _REGDOC_NAME_COLS)
+                                   for h in header)
+                    if has_addr and has_name:
+                        # Count contiguous data rows after the separator.
+                        j = i + 2
+                        rows = 0
+                        while j < len(lines) and lines[j].count("|") >= 2 \
+                                and lines[j].strip().startswith("|"):
+                            cells = [c.strip() for c in
+                                     lines[j].strip().strip("|").split("|")]
+                            if any(cells):
+                                rows += 1
+                            j += 1
+                        total = (total or 0) + rows
+                        i = j
+                        continue
+                i += 1
+        return total
+    except Exception:
+        return None
+
+
 def _detect_l_layer(name: str) -> int | None:
     """Return the L layer integer (1..13) inferred from filename, or
     None if the file does not name an L doc."""
@@ -1074,6 +1182,37 @@ def _check_l_doc(layer: int, data: dict,
         if (max(n_regs, n_otp_subfields) == 0 and _honest_empty_regs
                 and _class_no_cmd_protocol(ic_class)):
             return True, ""
+        # field (caravel L4 minimal regmap) — COMPLETE minimal-regmap credit,
+        # DOUBLE-KEYED per the #428/#419/#677 doctrine (class flag AND a
+        # per-doc completeness PROOF, fail-closed). The #677 honest-absence
+        # escape (above) covers a peripheral with ZERO regmap; a genuinely
+        # minimal peripheral with a COMPLETE-but-small regmap (e.g. a
+        # Wishbone-mapped counter = 1 register) is neither zero nor ≥5, and the
+        # "1-4 entries = extraction defect" doctrine would wrongly FAIL it.
+        # Distinguish a COMPLETE minimal regmap from a dropped-registers
+        # extraction defect by PROVING completeness against the INPUT register
+        # doc: credit ONLY when (1) the class is a registry-flagged minimal
+        # peripheral, (2) the typed regmap is non-empty AND captured EVERY
+        # register declared in the input (n_regs ≥ declared ≥ 1), AND (3) the
+        # doc carries no real OTP content (the ≥5-otp alternative source is
+        # genuinely absent). A partial extraction (n_regs < declared), an empty
+        # regmap, a class without the flag, or a doc with real OTP content all
+        # keep the ≥5 floor — guard (d) (partial-content-still-FAILs) preserved.
+        # chip-AGNOSTIC: registry semantic flag + input-completeness proof, no
+        # chip/register-name literal; reads only staged input docs (§4.05).
+        if (max(n_regs, n_otp_subfields) < 5
+                and n_regs >= 1
+                and _class_minimal_honest_absence(ic_class)
+                and _l4_otp_layout_has_no_real_content(otp_layout)):
+            _declared = _count_input_declared_registers(project)
+            if (_declared is not None and _declared >= 1
+                    and n_regs >= _declared):
+                return True, (
+                    f"SKIP — L4 complete minimal regmap: captured "
+                    f"n_regs={n_regs} == {_declared} register(s) declared in "
+                    f"the input register doc (minimal_honest_absence class, no "
+                    f"OTP content); a complete minimal regmap is not an "
+                    f"extraction defect.")
         if max(n_regs, n_otp_subfields) < 5:
             return False, (
                 f"L4 regmap+otp_layout must carry ≥5 typed register "
@@ -1325,6 +1464,23 @@ def _check_l_doc(layer: int, data: dict,
         # L6 note above); NOT `_class_no_cmd_protocol` (protocol classes keep
         # the strict ≥10 floor). bare_fpga / unknown stay fail-closed.
         l8_min = 3 if _class_sparse_control_timing(ic_class) else 10
+        # field (caravel L8 minimal timing) — a genuinely MINIMAL register-
+        # mapped peripheral documents only a handful of timing facts (a single
+        # clock + bus-ack latency), so the sparse ≥3 floor fits, not the
+        # protocol-genre ≥10. Key this on an INSTANCE-level minimality PROOF —
+        # a minimal_honest_absence_ok class whose INPUT declares a small,
+        # COMPLETE register map (1-4 registers) — NOT on the class-wide
+        # `sparse_control_timing` predicate (which stays False for bus_peripheral
+        # per #748r2). This deliberately does NOT relax a wire-level
+        # bus_interconnect_protocol (no register map → declared is None → stays
+        # ≥10, so test_protocol_stays_strict holds) nor a rich (≥5-register)
+        # peripheral (stays ≥10). Non-vacuous: ≥3 is a REAL floor (empty / <3
+        # typed timing still FAILs). chip-AGNOSTIC: registry semantic flag +
+        # input-completeness proof, no chip literal.
+        if l8_min > 3 and _class_minimal_honest_absence(ic_class):
+            _decl_regs = _count_input_declared_registers(project)
+            if _decl_regs is not None and 1 <= _decl_regs < 5:
+                l8_min = 3
         if n < l8_min:
             return False, (
                 f"L8 timing_waveform must carry ≥{l8_min} typed timing "

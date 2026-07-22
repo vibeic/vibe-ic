@@ -34917,6 +34917,46 @@ def gen_l7_test_debug(project: Path,
         if len(test_scenarios) >= 24:
             break
 
+    # field (caravel L7 named-scenario list) — a verification plan that
+    # enumerates its DV scenarios as a numbered / bulleted list of BOLD-named
+    # items ("1. **io_ports** - ...", "- **la_test1** - ...") rather than a
+    # table. The two table harvesters above read only tables, so a plan that
+    # clearly NAMES >=3 DV scenarios in a bolded list scored 0 typed
+    # test_scenarios and FAILed the L7 >=3 floor on genuine, harvestable
+    # content. Capture each bold-named list item as a typed scenario. Gated on
+    # an L7-keyworded input filename (SAME gate as the harvesters above) plus
+    # the bold-name + dash/colon + description shape, so ordinary prose bullets
+    # and non-verification docs are not swept in. Deduped by name against the
+    # table-harvested scenarios. chip-AGNOSTIC: a list-item shape, no chip
+    # literal.
+    _named_scen_re = re.compile(
+        r"(?m)^\s*(?:\d+[.)]|[-*])\s+\*\*\s*"
+        r"([A-Za-z0-9][\w .+\-/]{1,60}?)\s*\*\*"
+        r"\s*[\u2014\u2013:\-]\s*([^\n]{3,200})")
+    for _fname, _text in extracted.items():
+        if not isinstance(_text, str) or not _text:
+            continue
+        if not _L7_FILE_KEYWORDS.search(_fname):
+            continue
+        for _m in _named_scen_re.finditer(_text):
+            _nm = _m.group(1).strip()
+            _desc = _m.group(2).strip()
+            if not _nm or _nm in _ts_seen:
+                continue
+            _ts_seen.add(_nm)
+            test_scenarios.append({
+                "name": _nm,
+                "kind": "named_scenario",
+                "stimulus": _desc,
+                "expected": "documented DV scenario reproduced",
+                "evidence": _fname,
+                "extraction_strategy": "named_scenario_list",
+            })
+            if len(test_scenarios) >= 24:
+                break
+        if len(test_scenarios) >= 24:
+            break
+
     content = {
         "schema_version": 2,
         "doc_class": "test_debug",
