@@ -121,3 +121,45 @@ def test_edge_top_name_forwarded(tmp_path):
     # but the program at least accepted it without argparse error.
     plan = json.loads(cp.stdout.strip())
     assert isinstance(plan, list)
+
+
+# ── DFT clock-derivation regression (opentitan_aes × sky130A) ──────────────
+# Root cause: the DFT clock scan matched a prose COMMENT
+# ("... the input of the multiplier is blanked in the next clock cycle ..."
+# in aes_ghash.sv) and injected a phantom clock "clock", while the real
+# comportable `clk_i` was structurally unreachable by the old regex. Result:
+# Fault ATPG ran `--clock clock` on a design with no such port → 0 scan flops
+# → DT1 (transition-fault ATPG) hard-FAIL.
+import importlib.util as _ilu
+
+
+def _load_derive_clock():
+    spec = _ilu.spec_from_file_location("_d1s_clk", str(PROG))
+    mod = _ilu.module_from_spec(spec)
+    sys.modules["_d1s_clk"] = mod
+    spec.loader.exec_module(mod)
+    return mod._derive_dft_clock_name
+
+
+def test_dft_clock_prefers_clk_i_over_comment_phantom():
+    derive = _load_derive_clock()
+    rtl = (
+        "// during the last clock cycle of the multiplication ...\n"
+        "//   input of the multiplier is blanked in the next clock cycle ...\n"
+        "module chip_top(\n"
+        "  input  logic clk_i,\n"
+        "  input  logic rst_ni,\n"
+        "  input  logic clk_edn_i\n"
+        ");\nendmodule\n"
+    )
+    # NEGATIVE CONTROL: the prose 'clock' must NOT win; the real port does.
+    assert derive(rtl) == "clk_i"
+
+
+def test_dft_clock_derivation_variants():
+    derive = _load_derive_clock()
+    assert derive("input logic clk_i,") == "clk_i"          # suffix-style
+    assert derive("input clk,") == "clk"                    # bare
+    assert derive("input logic clk_edn_i,\ninput logic clk_i,") == "clk_i"
+    assert derive("/* input clock */ input logic clk_i;") == "clk_i"  # block cmt
+    assert derive("input logic rst_ni;") == ""              # no clock
