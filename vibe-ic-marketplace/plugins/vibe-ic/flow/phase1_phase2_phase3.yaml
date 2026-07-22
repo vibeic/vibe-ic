@@ -419,12 +419,23 @@ steps:
         # DISCLOSED one, and a below-threshold measurement still exits 1.
         - program_exit_zero: "verilator_coverage_measure check --coverage-json reports/phase2/coverage/coverage_actual.json"
         # NEW TB PATH gate — the professional cocotb TB (professional_tb_gen)
-        # must never silently pass a real functional mismatch. Fires only when
-        # the step wrote its report; PASS/WAIVED/SKIP -> exit 0, a recorded
-        # functional_mismatch -> exit 1 (real RTL bug, close-loop).
-        - optional_program_exit_zero:
-            command: "professional_tb_check . --json reports/phase2/gates/professional_tb_check.json"
-            condition_files_exist: ["reports/phase2/gates/professional_tb.json"]
+        # must never silently pass a real functional mismatch. UNCONDITIONAL
+        # (vibe-ic#236, resolving the #220 known-open ownership question): the
+        # producer is design_one_shot_runner.step_professional_tb_gen, which
+        # ALWAYS writes reports/phase2/gates/professional_tb.json whenever it
+        # runs — INCLUDING the failure case (functional_mismatch=true). So the
+        # failure this gate exists to catch always materialises the trigger; the
+        # old condition_files_exist could never disarm the gate on its actual
+        # failure mode — an absent report means only that the step did not run
+        # (correct scoping), never a lost mismatch. professional_tb_check
+        # self-reports NOT_APPLICABLE (exit 0) on an absent report, so running
+        # it UNCONDITIONALLY can never raise a false FAIL and — being
+        # unconditional — can never be silently skipped either (same shape as
+        # vacuous_testbench_check / verilator_coverage_measure above, which are
+        # unconditional for exactly this reason: an invisible skip was never a
+        # pass). exit 1 = a recorded functional_mismatch (real RTL bug ->
+        # close-loop).
+        - program_exit_zero: "professional_tb_check . --json reports/phase2/gates/professional_tb_check.json"
     blocks_on: [2]
 
   - id: 5
