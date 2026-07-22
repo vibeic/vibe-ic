@@ -1750,13 +1750,27 @@ def rule_vector_self_shift_fold(src: str, path: str) -> List[Finding]:
     SEVERITY IS SPLIT BY THE COMPOSING OPERATOR
     (ORGANIC-20260605-boundary-fold-or-form-escalation — two consecutive
     clean-room campaigns produced the OR-form bug while the corpus sweep's
-    false positives were exclusively AND-form):
-      * `|` / `^` composition → ERROR. The unshifted operand DOMINATES the
-        padded zero (x|0 = x, x^0 = x), so the boundary bit LEAKS through and
-        the padded edge bit is NOT the intended 0 (e.g. `in | {in[98:0],1'b0}`
-        gives out[0]=in[0] instead of 0). Virtually always the bug. The correct
-        form shifts BOTH operands inside the concat:
-        `{(in[98:0] OP in[99:1]), 1'b0}`.
+    false positives were exclusively AND-form; ORGANIC-20260723-boundary-fold-
+    xor-is-edge-idiom demotes the XOR form after it false-blocked a REUSED-IP
+    OpenTitan AES flow on three silicon-proven idioms):
+      * `|` composition → ERROR. The unshifted operand DOMINATES the padded
+        zero (x|0 = x), so the boundary bit LEAKS through and the padded edge
+        bit is NOT the intended 0 (e.g. `in | {in[98:0],1'b0}` gives
+        out[0]=in[0] instead of 0). This is the ONLY form with cited real-bug
+        recurrences (VerilogEval-v2 Prob092 + two clean-room campaigns). The
+        correct form shifts BOTH operands inside the concat:
+        `{(in[98:0] | in[99:1]), 1'b0}`.
+      * `^` composition → WARN (informational). `x ^ (x<<1)` / `x ^ (x>>1)` is
+        the standard EDGE / TRANSITION / first-difference operator; the boundary
+        bit passing through the original edge (x^0 = x) is CORRECT-BY-
+        CONSTRUCTION, not a leak — leading-one detect
+        (`ppc ^ {ppc[N-2:0],1'b0}`), contiguous-ones assertion
+        (`$countones(mask ^ {mask[W-2:0],1'b0}) <= 2`) and delta encoding all
+        rely on it. There is NO canonical "XOR boundary must be 0" idiom, so the
+        XOR form is not a reliable bug signal and must NOT block; the earlier
+        `^`→ERROR was an unvalidated over-generalization from the OR form (no
+        real XOR-form bug was ever cited). Verify the edge bit against the
+        spec's stated boundary value (informational).
       * `&` composition → WARN (informational). The padded zero DOMINATES
         (x&0 = 0), so the boundary bit is correctly MASKED — `in & {1'b0,
         in[W-1:1]}` is the legitimate, correct-by-construction neighbour-AND
@@ -1802,6 +1816,17 @@ def rule_vector_self_shift_fold(src: str, path: str) -> List[Finding]:
                     f"edge bit (x&0=0), so this is the legitimate neighbour-AND "
                     f"idiom; verify the edge bit against the spec's stated "
                     f"boundary value (informational)."))
+            elif op == '^':
+                findings.append(Finding(
+                    path, lineno, 'WARN', 'vector-self-shift-fold', lhs,
+                    f"`{lhs} ^ {{… {lhs}[..], 1'b0}}` — XOR-composition with a "
+                    f"zero-padded shifted self-copy is the standard EDGE / "
+                    f"TRANSITION / first-difference idiom (x^(x<<1)): the boundary "
+                    f"bit passing through '{lhs}'s edge is CORRECT-BY-CONSTRUCTION "
+                    f"(leading-one detect, contiguous-ones $countones(..)<=2, delta "
+                    f"encode), not a leak. No canonical 'XOR boundary must be 0' "
+                    f"form exists, so this is informational, not a bug; verify the "
+                    f"edge bit against the spec's stated boundary value."))
             else:
                 findings.append(Finding(
                     path, lineno, 'ERROR', 'vector-self-shift-fold', lhs,
@@ -4755,6 +4780,24 @@ def rule_use_before_declaration(src: str, path: str) -> List[Finding]:
                 if prev == '.' or nxt == '.':     # hierarchical `a.b`
                     continue
                 if nxt == '(':                     # function/task/macro call
+                    continue
+                # Assignment-pattern / struct member KEY (`'{ … name: value … }`)
+                # — `name:` here is a FIELD LABEL of the LHS struct type, NOT a
+                # read of a same-named net. Match only `{`/`,`-preceded
+                # `ident :` (single colon, not `::` scope); that slot is never a
+                # ternary middle-operand (preceded by `?`), so this is zero-FP.
+                # Fixes a false use-before-declaration on OpenTitan reg structs
+                # (e.g. `'{ … data_intg: held_intg.a_user_data_intg }`).
+                j = e
+                while j < len(text) and text[j] in ' \t':
+                    j += 1
+                nxt_ns = text[j] if j < len(text) else ''
+                after_colon = text[j + 1] if j + 1 < len(text) else ''
+                k = s - 1
+                while k >= 0 and text[k] in ' \t\n':
+                    k -= 1
+                prev_ns = text[k] if k >= 0 else ''
+                if nxt_ns == ':' and after_colon != ':' and prev_ns in '{,':
                     continue
                 ln = _line_of(base_off + s)
                 if nm not in use_line or ln < use_line[nm]:
