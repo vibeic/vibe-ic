@@ -19403,7 +19403,16 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
             f"close $_f\n"
             f"report_worst_slack {flag} >> {rpt_c}\n"
             f"report_tns >> {rpt_c}\n"
-            f"report_checks {flag} -group_count 3 >> {rpt_c}\n"
+            # `-group_count` was REMOVED from OpenSTA's report_checks (now
+            # `-group_path_count`); UNGUARDED, the stale flag raised a Tcl error
+            # that aborted this script BEFORE the DRV query below ever ran — so
+            # sta_spef_multicorner.rpt carried sign-off timing but NO
+            # report_check_types output and no SIGNOFF_CHECK_TYPES marker, and an
+            # unqueried DRV limit is indistinguishable from a met one. Mirror the
+            # OCV stanza (_pass): `catch`-guard it and use `-group_path_count`,
+            # so a report_checks hiccup can never suppress the DRV sign-off query.
+            f"catch {{report_checks {flag} -group_path_count 3 "
+            f"-fields {{slew capacitance}} >> {rpt_c}}}\n"
             # DRV (max_slew / max_capacitance): previously never asked for in
             # this report, so slew violations at a corner were unreportable.
             f"{_report_check_types_tcl(rpt_c)}"
