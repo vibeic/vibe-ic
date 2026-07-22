@@ -704,6 +704,111 @@ _V1_6_595_RTL_PORT_DECL_RE = re.compile(
     r"(?:\[[^\]]+\]\s+)?([A-Za-z_]\w*)",
 )
 
+# ── ORGANIC — structural ASIC-top resolution (parity with phase-2) ───────────
+# Phase-2 (design_one_shot_runner._v661_resolve_dut_module) resolves the
+# synth/PnR top STRUCTURALLY against rtl/: honour --top-name when it names a
+# real module, else L9.top_module when real, else the instantiation-graph root
+# (the one module no sibling instantiates). Phase-3's main() historically only
+# probed `<top>_asic` / `<top>_pad_wrapper` .sv variants, so when the
+# orchestrator's --top-name is the PROJECT / SKU name (e.g.
+# `caravel_user_project`) and the real synthesizable top is a differently-named
+# module (`user_project_wrapper`), yosys `synth -top <project>` fails its
+# HIERARCHY pass with "Module `<project>' not found!" and the whole phase-3
+# backend collapses (no netlist → no PnR → no pnr/constraint.sdc → the step-7
+# `phase2/stage2/constraints/*.sdc` required-output gate FAILs → every
+# downstream stage-3/4 gate cascades to blocked-by-upstream). The two runners
+# then DIVERGE on the same rtl/ — phase-2 synth PASSES on `user_project_wrapper`
+# while phase-3 synth FAILS on `caravel_user_project`. This mirrors phase-2's
+# resolver so they never diverge. chip-AGNOSTIC: pure Verilog grammar; no chip /
+# SKU / vendor literal. The header regex accepts `import pkg::*;` and `#(...)`
+# parameter lists (the caravel wrapper is `module user_project_wrapper #(...)`),
+# which the narrow _V1_6_595 header regex above deliberately does not.
+_ASIC_TOP_MODULE_HEADER_RE = re.compile(
+    r"\bmodule\s+([A-Za-z_]\w*)\s*"
+    r"(?:import\s+[^;]+;\s*)*"
+    r"(?:#\s*\(.*?\))?\s*\(.*?\)\s*;", re.S)
+_ASIC_TOP_MODULE_BODY_RE = re.compile(
+    r"\bmodule\s+([A-Za-z_]\w*)\b(.*?)\bendmodule\b", re.S)
+
+
+def _asic_top_strip_v_comments(text: str) -> str:
+    """Remove // and /* */ comments so a module name mentioned only in a
+    comment is never mistaken for a declaration or an instantiation."""
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
+    text = re.sub(r"//[^\n]*", " ", text)
+    return text
+
+
+def _resolve_asic_top_structural(project: Path, top_name: str,
+                                 l9_top_module: Optional[str] = None
+                                 ) -> Optional[str]:
+    """Resolve the synthesizable ASIC top against rtl/, mirroring phase-2's
+    _v661_resolve_dut_module precedence:
+      (a) --top-name when it names a real module DEFINED in rtl/;
+      (b) L9.top_module when it names a real module DEFINED in rtl/;
+      (c) the single instantiation-graph root among rtl/ modules (the module
+          no other module instantiates — the actual synthesizable top).
+    Returns None when unresolvable (no rtl/, 0 or >1 graph roots) so the caller
+    keeps its legacy fallback. Never returns a name absent from rtl/. Reads only
+    the (already-staged) rtl/ tree — no golden leak (§4.05)."""
+    rtl_dir = _pl.rtl_dir(project)
+    if not rtl_dir.is_dir():
+        return None
+    bodies: Dict[str, str] = {}
+    defined: List[str] = []
+    seen: set = set()
+    for ext in (".v", ".sv"):
+        for f in sorted(rtl_dir.rglob(f"*{ext}")):
+            try:
+                raw = _asic_top_strip_v_comments(f.read_text(errors="replace"))
+            except OSError:
+                continue
+            for m in _ASIC_TOP_MODULE_HEADER_RE.finditer(raw):
+                nm = m.group(1)
+                if nm and nm not in seen:
+                    seen.add(nm)
+                    defined.append(nm)
+            for m in _ASIC_TOP_MODULE_BODY_RE.finditer(raw):
+                bodies.setdefault(m.group(1), m.group(2))
+    if not defined:
+        return None
+    defined_set = set(defined)
+    # (a) orchestrator --top-name when it is a real module.
+    if top_name and top_name in defined_set:
+        return top_name
+    # (b) L9.top_module only when it is a real module (NOT the ic_name fallback).
+    if l9_top_module and l9_top_module in defined_set:
+        return l9_top_module
+
+    # (c) instantiation-graph root: the module no OTHER module instantiates.
+    def _instantiated(child: str) -> bool:
+        pat = re.compile(
+            rf"\b{re.escape(child)}\s+(?:#\s*\([^;]*?\)\s*)?"
+            rf"[A-Za-z_]\w*\s*\(")
+        return any(pat.search(b) for mod, b in bodies.items() if mod != child)
+
+    roots = [m for m in defined if not _instantiated(m)]
+    if len(roots) == 1:
+        return roots[0]
+    return None
+
+
+def _l9_top_module_hint(project: Path) -> Optional[str]:
+    """Best-effort read of L9.top_module from the generated integration spec.
+    Returns None on any absence / parse error (the resolver treats a phantom
+    name that is not a real rtl/ module as unresolved anyway)."""
+    try:
+        l9 = _pl.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json"
+        if l9.is_file():
+            d = json.loads(l9.read_text(errors="replace"))
+            if isinstance(d, dict):
+                v = d.get("top_module")
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+    except Exception:
+        pass
+    return None
+
 
 def _v1_6_595_extract_clock_port_from_rtl(project: Path, top: str = ""):
     """v1.6.595 — for #403. Scan canonical RTL locations for the top
@@ -22975,6 +23080,27 @@ def main() -> int:
         if (_pl.rtl_dir(project) / f"{cand}.sv").is_file():
             effective_top = cand
             break
+    # ORGANIC — when the `_asic` / `_pad_wrapper` probe above did NOT fire (so
+    # effective_top is still the raw --top-name), fall back to the SAME
+    # structural resolver phase-2 uses. The orchestrator's --top-name is
+    # frequently the PROJECT / SKU name (e.g. `caravel_user_project`), whose
+    # synthesizable top module is actually a differently-named wrapper
+    # (`user_project_wrapper`). Without this, yosys `synth -top <project>` fails
+    # its HIERARCHY pass with "Module `<project>' not found!" and the whole
+    # phase-3 backend collapses (no netlist → no PnR → no pnr/constraint.sdc →
+    # the step-7 constraints/*.sdc gate FAILs → every downstream stage cascades),
+    # while phase-2 synth PASSES on the same rtl/ — a same-project divergence.
+    # The resolver returns --top-name unchanged when it IS a real module, so
+    # already-correct designs are untouched; it only overrides a phantom top.
+    if effective_top == args.top_name:
+        _structural_top = _resolve_asic_top_structural(
+            project, args.top_name, _l9_top_module_hint(project))
+        if _structural_top and _structural_top != effective_top:
+            print(f"[phase3] ASIC top {args.top_name!r} is not a module in "
+                  f"rtl/ — resolved synthesizable top to {_structural_top!r} "
+                  f"(instantiation-graph root; parity with phase-2 synth)",
+                  file=sys.stderr)
+            effective_top = _structural_top
 
     print(f"=== phase3_one_shot_runner — pdk={pdk.name} top={effective_top}"
           f"{' (override of '+args.top_name+')' if effective_top != args.top_name else ''} ===")
