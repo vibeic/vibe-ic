@@ -114,7 +114,82 @@ def _read_l9_top_module(project):
     return None
 
 
-def _chip_basename_variants(ic_name, top_module=None):
+_DEF_DESIGN_RE = re.compile(r"^\s*DESIGN\s+([A-Za-z_]\w*)\s*;")
+# Anchored to statement position (line start, after optional whitespace) so a
+# `link_design` mentioned in TCL *comment prose* ("... link_design followed by
+# a read_def ...") is never mistaken for the actual command.
+_LINK_DESIGN_RE = re.compile(r"^\s*link_design\s+([A-Za-z_]\w*)", re.M)
+
+
+def _read_pnr_physical_top(project):
+    """Resolve the ACTUAL physical top module the backend placed, routed and
+    streamed the chip GDS from — independent of L1.ic_name / L9.top_module.
+
+    Why this is needed (field: caravel step-35 GDS naming): L1.ic_name and L9.top_module both record
+    the DESIGN-INTENT / project name, which can legitimately differ from the
+    synthesizable RTL top. The runner resolves the real top structurally (the
+    RTL instantiation-graph root — `_resolve_asic_top_structural`) and names
+    every backend artefact (netlist / DEF / GDS) after it. Standard caravel is
+    the canonical case: ic_name=`caravel_user_project` but the hardened top is
+    `user_project_wrapper`, so the deliverable is `user_project_wrapper.gds`.
+    Deriving the expected GDS basename from L-doc values alone therefore FAILs
+    a correctly-named chip GDS with FOUNDRY_HANDOFF_CHIP_GDS_MISSING.
+
+    chip-AGNOSTIC: reads only physical backend outputs, no chip literals —
+      (a) the `DESIGN <name> ;` record of a DEF (the top cell of the physical
+          database the GDS is streamed from; a universal, tool-agnostic DEF
+          keyword). Only the DEF header is scanned (DESIGN is emitted early),
+          never the multi-MB body;
+      (b) `link_design <name>` in the PnR script (corroboration / fallback for
+          flows that leave a script but no DEF).
+
+    Returns an ordered, de-duplicated list of candidate physical-top names
+    (possibly empty). A non-empty, non-scribe GDS whose basename matches one
+    of these is a real chip deliverable — an EXACT identity match against the
+    routed database's top cell, so this widens recognition WITHOUT weakening
+    the gate: a genuinely missing chip GDS still matches nothing and FAILs."""
+    names: list = []
+
+    def _add(n):
+        if isinstance(n, str):
+            n = n.strip()
+            if n and n not in names:
+                names.append(n)
+
+    # (a) DEF DESIGN line — prefer the final routed / signoff / pnr / eco DEF
+    # (the physical database the chip GDS is streamed from). Scan only the DEF
+    # header (first lines): DESIGN is emitted right after VERSION/UNITS.
+    def _def_rank(p):
+        s = str(p).lower()
+        return 0 if any(k in s for k in ("routed", "signoff", "/pnr/",
+                                         "/eco/")) else 1
+    defs = sorted(project.glob("phase3/**/*.def"), key=_def_rank)
+    for dpath in defs[:64]:
+        try:
+            with dpath.open(errors="replace") as fh:
+                for _i, line in enumerate(fh):
+                    if _i > 200:
+                        break
+                    m = _DEF_DESIGN_RE.match(line)
+                    if m:
+                        _add(m.group(1))
+                        break
+        except OSError:
+            continue
+
+    # (b) link_design <top> in the PnR TCL (fallback / corroboration).
+    for tcl in sorted(project.glob("phase3/**/*.tcl"))[:64]:
+        try:
+            txt = tcl.read_text(errors="replace")[:200000]
+        except OSError:
+            continue
+        for m in _LINK_DESIGN_RE.finditer(txt):
+            _add(m.group(1))
+
+    return names
+
+
+def _chip_basename_variants(ic_name, top_module=None, extra_tops=None):
     """v1.6.174 (#72 P0-3) — full chip-named GDS basename set.
     Covers: `<id>`, `<id>_top`, `<id>_asic`, `<id>_chip`,
     `chip_<id>` for both `ic_name` AND `top_module`, PLUS
@@ -132,7 +207,7 @@ def _chip_basename_variants(ic_name, top_module=None):
     chip-AGNOSTIC: built from L1.ic_name + L9.top_module values
     read from generated_docs, never chip-class string literals."""
     seeds = set()
-    for s in (ic_name, top_module):
+    for s in (ic_name, top_module, *(extra_tops or [])):
         if s and isinstance(s, str) and s.strip():
             seeds.add(s.strip())
     # v1.6.189 (#76 P1) — always include the canonical runner
@@ -165,8 +240,11 @@ def _find_chip_gds(project, ic_name):
     literals.
     """
     if not ic_name:
-        return None, False
+        return None, False, []
     top_module = _read_l9_top_module(project)
+    # field (caravel step-35 GDS naming) — the ACTUAL physical top the backend hardened (may differ from
+    # both L1.ic_name and L9.top_module; e.g. caravel → `user_project_wrapper`).
+    physical_tops = _read_pnr_physical_top(project)
     roots = [
         project / "phase3/stage4/foundry_handoff/gds",
         project / "phase3/stage4/gds",
@@ -177,9 +255,9 @@ def _find_chip_gds(project, ic_name):
         if root.is_dir():
             all_gds.extend(sorted(root.glob("*.gds")))
     if not all_gds:
-        return None, False
-    chip_basenames = _chip_basename_variants(ic_name, top_module)
-    seed_prefixes = [s.lower() for s in (ic_name, top_module)
+        return None, False, physical_tops
+    chip_basenames = _chip_basename_variants(ic_name, top_module, physical_tops)
+    seed_prefixes = [s.lower() for s in ([ic_name, top_module] + physical_tops)
                      if s and isinstance(s, str)]
     chip_gds = None
     real_files = []
@@ -190,16 +268,25 @@ def _find_chip_gds(project, ic_name):
             scribe_files.append(f)
             continue
         real_files.append(f)
+        # field (caravel step-35 GDS naming) — a real chip GDS must be NON-EMPTY. A 0-byte GDS is a
+        # broken/placeholder deliverable and must never be accepted as the
+        # chip GDS (the gate then FAILs as CHIP_GDS_MISSING, honestly). This
+        # keeps the widened top-name matching from ever passing vacuously.
+        try:
+            if f.stat().st_size <= 0:
+                continue
+        except OSError:
+            continue
         if stem in chip_basenames:
             chip_gds = chip_gds or f
             continue
-        # Fallback: prefix-match on either ic_name or top_module.
+        # Fallback: prefix-match on ic_name / top_module / physical top.
         for seed in seed_prefixes:
             if stem.startswith(seed):
                 chip_gds = chip_gds or f
                 break
     scribe_only = bool(scribe_files) and not real_files
-    return chip_gds, scribe_only
+    return chip_gds, scribe_only, physical_tops
 
 
 def main(argv=None):
@@ -219,7 +306,7 @@ def main(argv=None):
 
     # v1.6.162 (#60 P2-7) — chip-GDS gate.
     ic_name = _read_l1_ic_name(project)
-    chip_gds, scribe_only = _find_chip_gds(project, ic_name)
+    chip_gds, scribe_only, physical_tops = _find_chip_gds(project, ic_name)
     chip_gds_finding = None
     if ic_name and chip_gds is None:
         if scribe_only:
@@ -239,7 +326,9 @@ def main(argv=None):
                 "severity": "ERROR",
                 "rule": "FOUNDRY_HANDOFF_CHIP_GDS_MISSING",
                 "message": (
-                    f"no chip GDS matching L1.ic_name={ic_name!r} "
+                    f"no non-empty chip GDS matching L1.ic_name={ic_name!r}, "
+                    f"L9.top_module, or the physical PnR top "
+                    f"{physical_tops or '(none resolved)'} "
                     f"under phase3/stage4/foundry_handoff/gds/ or "
                     f"phase3/stage4/gds/ or gds/. Step 35 PASS "
                     f"requires the chip-named GDS deliverable."
@@ -395,6 +484,7 @@ def main(argv=None):
         "found": found,
         "missing": missing,
         "ic_name": ic_name,
+        "physical_top_candidates": physical_tops,  # actual PnR top(s)
         "chip_gds": str(chip_gds) if chip_gds else None,
         "scribe_only": scribe_only,
         "waiver": waiver,
