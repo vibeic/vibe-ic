@@ -361,23 +361,56 @@ def _resolve_top_name(project: Path, ic_name: str, top_name: str,
     module". When --top-name was NOT given, derive it from the (now-existing)
     source RTL: keep chip_top if a chip_top module actually exists (real
     full-chip wrapper); else prefer the --ic-name module; else the sole root
-    module (declared, never instantiated). Returns (top, note)."""
-    if explicit:
-        return top_name, ""
+    module (declared, never instantiated).
+
+    An EXPLICIT --top-name wins -- but only when that module actually EXISTS in
+    the staged RTL. A caller that passes the PROJECT/repo name rather than a
+    module name (e.g. `--top-name caravel_user_project`, whose real top module
+    is `user_project_wrapper`) otherwise had the bogus name forwarded verbatim
+    into yosys, which is precisely the "'X' is not a valid top-level module"
+    hard synth failure this function exists to prevent. When the explicit name
+    is provably absent from the declared modules, fall through to the same
+    deterministic derivation and record the override in the note so the
+    substitution is auditable rather than silent. Absence must be PROVEN: if no
+    RTL could be scanned we cannot know the name is wrong, so the explicit name
+    is kept. (This resolution runs AFTER phase 1 has staged/produced the RTL and
+    BEFORE phase 2, so the declared-module set is complete and authoritative --
+    nothing creates a new top module in between.) Returns (top, note)."""
     rtl_dir = project / "phase2" / "stage1" / "rtl"
     decls, insts = _scan_rtl_modules(rtl_dir)
+    override_note = ""
+    if explicit:
+        if not decls or top_name in decls:
+            # Either we cannot prove the name wrong, or it is genuinely there.
+            return top_name, ""
+        # Explicit name is provably NOT a module in this design -> derive, but
+        # say so loudly; forwarding it can only produce a hard synth failure.
+        override_note = (
+            f"explicit --top-name='{top_name}' is not a module in the staged "
+            f"RTL (declared: {', '.join(sorted(decls))}) -- deriving the top "
+            f"instead")
     if not decls:
         return top_name, ""  # nothing to derive from; keep the default
+
+    def _note(msg: str) -> str:
+        return f"{override_note}; {msg}" if override_note else msg
+
     if _TOP_NAME_DEFAULT in decls:
-        return _TOP_NAME_DEFAULT, ""  # a genuine wrapper exists → honor it
+        # a genuine wrapper exists → honor it
+        return _TOP_NAME_DEFAULT, (_note(f"top='{_TOP_NAME_DEFAULT}'")
+                                   if override_note else "")
     roots = sorted(m for m in decls if m not in insts)
     ic = _sanitize_module(ic_name)
     if ic and ic in decls:
-        return ic, f"auto-derived top='{ic}' from --ic-name (no chip_top module)"
+        return ic, _note(
+            f"auto-derived top='{ic}' from --ic-name (no chip_top module)")
     if len(roots) == 1:
-        return roots[0], (f"auto-derived top='{roots[0]}' (sole RTL root; no "
-                          f"chip_top module)")
-    return top_name, ""  # ambiguous multi-root → preserve current behavior
+        return roots[0], _note(f"auto-derived top='{roots[0]}' (sole RTL root; "
+                               f"no chip_top module)")
+    # Ambiguous multi-root → preserve current behaviour. If we got here from an
+    # explicit-but-absent name we CANNOT pick for the caller; return it
+    # unchanged so synth fails loudly and honestly rather than on a guess.
+    return top_name, override_note
 
 
 def main() -> int:
