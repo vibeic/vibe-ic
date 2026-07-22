@@ -821,8 +821,10 @@ def main(argv: list[str] | None = None) -> int:
         args.spef = _first_rel("phase3/stage3/extracted/*.spef",
                                "phase3/stage3/extracted/design.spef")
     if args.netlist is None:
-        args.netlist = _first_rel("phase2/stage2/synth/*_synth.v",
-                                  "phase2/stage2/synth/synth.v")
+        # Prefer a genuinely TECH-MAPPED netlist (real stdcell flops `fault cut`
+        # can detect), skipping a generic `$_DFF_*` netlist — shared with DT1 so
+        # the three at-speed steps never disagree on the ATPG input.
+        args.netlist = _tdf.discover_mapped_netlist(project)
     if args.liberty is None:
         # Chip/PDK-AGNOSTIC shared resolver (project PDK glob → the flow's
         # recorded corner Liberty → shared OSS default); never a dead relative

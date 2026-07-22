@@ -17885,9 +17885,28 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # transition_coverage.json. Best-effort + NONFATAL; the flow's DT1 gate only
     # VALIDATES the produced report (independent detected/redundant/aborted
     # recount). Placed BEFORE DT2 so DT3 (needs BOTH coverage files) can fire.
+    # A DFT at-speed report from a PRIOR phase — the phase2 DT1 producer, or an
+    # earlier phase3 pass that ran before the tech-mapped `<top>_synth.v` / a
+    # valid scan cut existed — may be a NON-GRADED placeholder (BLOCKED /
+    # ENGINE_LIMITED / ERROR) produced on the GENERIC pre-map netlist, whose
+    # `$_DFF_*` primitives `fault cut` cannot detect (0 pseudo-PI/PO pairs).
+    # Phase3 now HAS the tech-mapped netlist (real stdcell flops), so such a
+    # placeholder must be RE-GRADED here, not preserved — otherwise DT1/DT2/DT3
+    # hard-FAIL forever on a stale can't-grade record. A genuine PASS /
+    # NOT_APPLICABLE is kept as-is (idempotent; a real measurement is never
+    # re-run). chip/PDK-AGNOSTIC.
+    def _dt_needs_regrade(_p: Path) -> bool:
+        if not _p.is_file():
+            return True
+        try:
+            _v = json.loads(_p.read_text(errors="replace")).get("verdict")
+        except Exception:
+            return True
+        return _v in ("BLOCKED", "ENGINE_LIMITED", "ERROR", None)
+
     _dt1_json = project / "reports/phase2/dft/transition_coverage.json"
     _dt1_cut = project / "phase2/stage2/dft/cut_netlist.v"
-    if not _dt1_json.is_file() and _dt1_cut.is_file():
+    if _dt1_cut.is_file() and _dt_needs_regrade(_dt1_json):
         _dt1_clk = None
         _dt1_sdc = project / "phase3/stage3/pnr/constraint.sdc"
         if _dt1_sdc.is_file():
@@ -17924,7 +17943,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # recount — false/held/aborted can never count as sensitised).
     _dt2_json = project / "reports/phase2/dft/path_delay_coverage.json"
     _dt2_cut = project / "phase2/stage2/dft/cut_netlist.v"
-    if not _dt2_json.is_file() and _dt2_cut.is_file():
+    if _dt2_cut.is_file() and _dt_needs_regrade(_dt2_json):
         _dt2_clk = None
         _dt2_sdc = project / "phase3/stage3/pnr/constraint.sdc"
         if _dt2_sdc.is_file():
@@ -17959,7 +17978,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # gate RE-DERIVES margin + strong/weak buckets — a doctored margin or a
     # strong-with-high-slack fabrication FAILs). DESCRIPTIVE, no floor.
     _dt3_json = project / "reports/phase2/dft/sdd_coverage.json"
-    if (not _dt3_json.is_file() and _dt2_json.is_file()
+    if (_dt_needs_regrade(_dt3_json) and _dt2_json.is_file()
             and (project / "reports/phase2/dft/transition_coverage.json").is_file()):
         # independent clock discovery (DT2's _dt2_clk is only bound when DT2
         # actually produced this run — re-derive to avoid a NameError).

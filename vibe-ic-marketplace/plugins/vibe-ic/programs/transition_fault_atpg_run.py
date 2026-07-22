@@ -436,17 +436,46 @@ def _ensure_cut(project: Path, netlist_rel: str, cut_rel: str, clock: str,
     guess about the library's spelling conventions."""
     cut_abs = project / cut_rel
     if cut_abs.exists() and cut_abs.stat().st_size > 0:
-        # Only reuse a REAL full-scan cut — one with NO residual flop cells (a
-        # cut turns every flop into a pseudo-PI/PO pair). A stale/bogus file that
-        # still instantiates flops (e.g. a prior run cut with the wrong --dff
-        # seed, so `fault cut` cut nothing) is NOT a cut; regenerate it, else
-        # parse_cut_ports finds 0 pairs → a FALSE NOT_APPLICABLE on a sequential
-        # design (which the coverage gate would silently pass — gaming).
-        if not _far.detect_dff_cells(cut_abs.read_text(errors="replace"),
-                                     liberty_sequential):
-            return True, f"reused existing cut netlist: {cut_rel}"
-        print(f"{_PROGRAM}: existing {cut_rel} still has flop cells → not a real "
-              f"cut, regenerating", file=sys.stderr)
+        # Only reuse a REAL full-scan cut. TWO ways an existing file fails to be
+        # one, and BOTH must force a regenerate — else a SEQUENTIAL design
+        # silently scores 0 pseudo-PI/PO pairs, which the producer can only read
+        # as a NOT_APPLICABLE / ENGINE_LIMITED self-skip the coverage gate cannot
+        # distinguish from a real one (gaming):
+        #   (a) it still instantiates flop cells — a prior run cut with the wrong
+        #       --dff seed, so `fault cut` cut NOTHING (residual flops present);
+        #   (b) it instantiates NO flops AND exposes 0 pseudo-PI/PO pairs while
+        #       the SOURCE netlist DOES have flops — a DEGENERATE/empty cut (e.g.
+        #       taken from the GENERIC pre-map netlist whose `$_DFF_*` primitives
+        #       `fault cut` cannot detect, leaving the flops neither cut NOR
+        #       present, or a cut written before the tech-mapped netlist existed).
+        #       A real full-scan cut of a sequential design ALWAYS carries one
+        #       `.d/.q` pair per flop.
+        # A genuinely combinational source legitimately yields 0 pairs — reused.
+        # chip/PDK-AGNOSTIC: the flop set comes from the design's own Liberty.
+        _cut_text = cut_abs.read_text(errors="replace")
+        _cut_has_flops = bool(_far.detect_dff_cells(_cut_text, liberty_sequential))
+        try:
+            _, _, _, _cut_pairs = parse_cut_ports(_cut_text)
+        except Exception:
+            _cut_pairs = []
+        _src_seq = False
+        if not _cut_has_flops and not _cut_pairs:
+            try:
+                _src_seq = bool(_far.detect_dff_cells(
+                    (project / netlist_rel).read_text(errors="replace"),
+                    liberty_sequential))
+            except OSError:
+                _src_seq = False
+        if not _cut_has_flops and (_cut_pairs or not _src_seq):
+            return True, (f"reused existing cut netlist: {cut_rel} "
+                          f"({len(_cut_pairs)} scan pair(s))")
+        if _cut_has_flops:
+            print(f"{_PROGRAM}: existing {cut_rel} still has flop cells → not a "
+                  f"real cut, regenerating", file=sys.stderr)
+        else:
+            print(f"{_PROGRAM}: existing {cut_rel} exposes 0 scan pairs on a "
+                  f"sequential design → degenerate cut, regenerating from "
+                  f"{netlist_rel}", file=sys.stderr)
     # Auto-detect the flop cells from the mapped netlist (union with any seed).
     try:
         ntext = (project / netlist_rel).read_text(errors="replace")
@@ -1099,22 +1128,51 @@ def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
 # that is right there (measured on opentitan_aes × sky130A). Ordered so the
 # DFT-chain `<top>_synth.v` still wins when present. chip/tool-AGNOSTIC.
 _MAPPED_NETLIST_GLOBS = (
-    "phase2/stage2/synth/*_synth.v",
-    "phase2/stage2/synth/netlist.v",
+    "phase2/stage2/synth/*_synth.v",        # phase2/phase3 tech-mapped synth
+    "phase3/stage3/pnr/*_pnr_repaired.v",   # post-route, real stdcells
+    "phase3/stage3/pnr/*_pnr.v",            # post-place, real stdcells
+    "phase2/stage2/synth/netlist.v",        # MAY be generic — last-resort only
     "phase2/stage2/synth/netlist_yosys.v",
 )
 _MAPPED_NETLIST_FALLBACK = "phase2/stage2/synth/synth.v"
 
+# A yosys GENERIC (un-tech-mapped) netlist keeps its flops as `$_DFF_*`
+# primitives, which the OSS `fault` engine (pyverilog) cannot detect — `fault
+# cut` then cuts NOTHING → 0 pseudo-PI/PO pairs, and the at-speed engine cannot
+# grade. Such a netlist is NOT a valid ATPG input; a tech-mapped netlist (real
+# stdcell DFFs) is. chip/PDK-AGNOSTIC — keyed on yosys's own generic cell
+# vocabulary, never a library name.
+_GENERIC_SEQ_PRIM_RE = re.compile(r"\$_(?:S?DFFE?|DFFSR|DLATCH|SDFFCE)_")
+
+
+def _is_generic_seq_netlist(text: str) -> bool:
+    """True iff `text` is a generic yosys netlist whose flops are `$_DFF_*`
+    primitives (un-tech-mapped) — not gradable by the OSS at-speed engine. A
+    design with no flops at all is NOT generic (nothing to map). PURE."""
+    return bool(_GENERIC_SEQ_PRIM_RE.search(text or ""))
+
 
 def discover_mapped_netlist(project: Path) -> str:
-    """Project-relative path to the mapped netlist, trying each canonical emit
-    name in order. Returns the fallback (which may not exist — the caller then
-    reports 'cannot derive --top') only when NO known emit is present. PURE."""
+    """Project-relative path to a genuinely TECH-MAPPED netlist (real stdcell
+    flops that `fault cut` can detect), trying each canonical emit in order and
+    SKIPPING any candidate that is still a generic `$_DFF_*` netlist. The phase2
+    DFT step and the phase3 re-run share this: in phase2 only the generic
+    `netlist.v` may exist (→ returned as a last resort, and the producer records
+    an honest engine-limited note); by phase3 the tech-mapped `<top>_synth.v` /
+    routed netlist exists and IS selected here. Returns the first generic
+    candidate only when NO mapped one is present. PURE."""
+    first_any = None
     for pat in _MAPPED_NETLIST_GLOBS:
-        hits = sorted(project.glob(pat))
-        if hits:
-            return str(hits[0].relative_to(project))
-    return _MAPPED_NETLIST_FALLBACK
+        for hit in sorted(project.glob(pat)):
+            rel = str(hit.relative_to(project))
+            if first_any is None:
+                first_any = rel
+            try:
+                if not _is_generic_seq_netlist(hit.read_text(errors="replace")):
+                    return rel   # genuinely tech-mapped → usable by `fault cut`
+            except OSError:
+                continue
+    return first_any or _MAPPED_NETLIST_FALLBACK
 
 
 def main(argv: list[str] | None = None) -> int:

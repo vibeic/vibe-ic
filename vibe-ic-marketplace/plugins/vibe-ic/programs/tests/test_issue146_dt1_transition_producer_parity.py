@@ -25,12 +25,18 @@ def test_dt1_producer_invokes_transition_atpg():
     assert "transition_fault_atpg_run.py" in _SRC
 
 
-def test_dt1_producer_guarded_on_cut_and_absent_report():
-    # produce only when the cut exists AND the report is not already present
+def test_dt1_producer_guarded_on_cut_and_regrade():
+    # Produce/RE-GRADE when the cut exists AND the report needs (re-)grading:
+    # absent, or a NON-GRADED placeholder (BLOCKED / ENGINE_LIMITED / ERROR)
+    # left by the phase2 pass on the GENERIC pre-map netlist. A real
+    # PASS/NOT_APPLICABLE is preserved (the re-grade guard is idempotent).
     assert '_dt1_cut = project / "phase2/stage2/dft/cut_netlist.v"' in _SRC
     assert '_dt1_json = project / "reports/phase2/dft/transition_coverage.json"' \
         in _SRC
-    assert "if not _dt1_json.is_file() and _dt1_cut.is_file():" in _SRC
+    assert "if _dt1_cut.is_file() and _dt_needs_regrade(_dt1_json):" in _SRC
+    # the shared re-grade predicate must re-run only NON-graded placeholders
+    assert "def _dt_needs_regrade(" in _SRC
+    assert '"BLOCKED", "ENGINE_LIMITED", "ERROR"' in _SRC
 
 
 def test_dt1_producer_runs_before_dt2():
