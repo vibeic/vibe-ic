@@ -55,6 +55,11 @@ _ENCODED_NDA: Dict[str, str] = {
     "foundry_brand1": "a2V5Zm91bmRyeQ==",
     "foundry_brand2": "a2V5IGZvdW5kcnk=",
     "foundry_brand3": "bWFnbmFjaGlw",
+    # IP-vendor family (a commercial OTP/hard-macro provider whose name +
+    # a specific macro part number leaked in a landed test fixture, #247).
+    # A vendor brand + part number is as much a disclosure as the foundry SKU.
+    "ip_vendor": "ZU1lbW9yeQ==",
+    "ip_part": "RU8wMTI4WDhLQTE4MEJBMTE=",
 }
 
 
@@ -97,6 +102,45 @@ def nda_cell_prefixes() -> Tuple[str, ...]:
     netlist (used by the attestation scanner). Detector data — always present,
     reconstructed from the encoded token family, not from the private config."""
     return (_dec("sku_prefix"),)
+
+
+def nda_content_regex() -> "re.Pattern[str]":
+    """Broad, case-insensitive regex over EVERY NDA token — the foundry
+    SKU/process family AND the foundry BRANDS AND the IP vendor/part — for
+    scanning arbitrary CONTENT (a commit message, a diff's added lines, a
+    filename). WIDER than `nda_source_regex()` (which is only the process/SKU
+    codename family): prose and diffs leak just as badly by naming the foundry
+    or IP BRAND, so the whole token store is in scope here.
+
+    A multi-word brand is matched separator-insensitively (`[\\s_\\-]+`), so its
+    spaced / unspaced / hyphenated / underscored spellings all hit. The
+    `(?<![0-9a-zA-Z]) … (?![0-9a-zA-Z])` boundaries reject a hit that is merely
+    a substring of a longer alphanumeric word (so a vendor name embedded inside
+    a longer word in a spec-doc conference URL never trips the token) while
+    still catching a token glued to punctuation the way a real mid-sentence
+    leak is.
+
+    Shared by `commit_msg_nda_check` and `nda_diff_scan_check` so the message
+    guard and the diff guard can never drift. Reconstructed at runtime — no
+    literal token lives in this or any calling source."""
+    toks = sorted({_dec(k) for k in _ENCODED_NDA}, key=len, reverse=True)
+    alts = [r"[\s_\-]+".join(re.escape(p) for p in t.split()) for t in toks]
+    return re.compile(r"(?<![0-9a-zA-Z])(" + "|".join(alts) + r")(?![0-9a-zA-Z])",
+                      re.IGNORECASE)
+
+
+def nda_role_of(matched: str) -> str:
+    """Reverse-map a matched substring to its NDA token ROLE, for MASKED
+    reporting (`<NDA-TOKEN:role>`) so a guard never echoes the literal token.
+    Case- and separator-insensitive so any spelling of a brand resolves."""
+    def _norm(s: str) -> str:
+        return re.sub(r"[\s_\-]+", " ", s).strip().lower()
+
+    n = _norm(matched)
+    for role in _ENCODED_NDA:
+        if _norm(_dec(role)) == n:
+            return role
+    return "unknown"
 
 
 # ---------------------------------------------------------------------------
