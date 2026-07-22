@@ -389,6 +389,100 @@ def _is_structurally_bound(root: str, bound_ports: set) -> bool:
     return any(b.startswith(pre) for b in bound_ports)
 
 
+# ── ORGANIC #781 — reused-IP CONFIG-VARIANT surface reconciliation ──────────
+# A catalog-glue / reused-IP wrapper faithfully instantiates a SPECIFIC
+# configured vendor module (e.g. `ibex_core` for the 'small' Ibex config,
+# `aes_wrap` for the flat-scalar AES integration) and passes that module's
+# REAL ports through to chip_top 1:1. The L9 integration spec, however, is
+# extracted from the input datasheet/docs and frequently describes a DIFFERENT
+# (fuller / more-secure / struct-typed) variant of the same IP — `ibex_top`
+# (SecureIbex lockstep + shadow buses + memory-integrity + crash-dump), or the
+# full comportable `aes` (TL-UL + EDN + keymgr + lifecycle struct interfaces).
+#
+# The resulting diff is NOT a wrapper defect and NOT a dropped pin:
+#   (a) L9 pins absent from chip_top because the chosen configuration
+#       parameterises them away (they are not ports of the instantiated module
+#       at all) — config-gated / doc-over-declaration, advisory.
+#   (b) chip_top ports absent from L9 because they ARE real ports of the
+#       instantiated module that the L9 doc named differently (or did not
+#       enumerate) — legitimate IP passthrough, advisory.
+#
+# The GROUND TRUTH is the actual synthesizable IP surface: the DECLARED port
+# list of the reused-IP module(s) the wrapper instantiates. Reconciliation is
+# chip-AGNOSTIC and NO-LEAK — it keys ONLY on the manifest ip_list + the
+# instantiation grammar + the instantiated module's own declared ports:
+#   - an L9-only pin that IS a declared port of the instantiated IP but is
+#     missing from chip_top → the wrapper genuinely DROPPED a real IP port →
+#     STILL a residual FAIL.
+#   - a chip_top RTL-only port that is NOT a declared port of any instantiated
+#     IP → the wrapper INVENTED a port not sourced from the IP → STILL FAIL.
+# A non-reused-IP design (no manifest) never reaches this path.
+_RE_IP_INSTANTIATION_TMPL = (
+    r"\b{name}\s+(?:#\s*\([^;]*?\)\s*)?[A-Za-z_]\w*\s*\("
+)
+
+
+def _reused_ip_instantiated_surface(project: Path, rtl_top: Path,
+                                    manifest: dict,
+                                    defines: Optional[set] = None) -> set:
+    """ORGANIC #781 — the union of DECLARED port names of every reused-IP
+    module (manifest ip_list) that the wrapper's glue files instantiate.
+
+    A "glue file" is any staged rtl file whose stem is NOT itself an ip_list
+    module (chip_top.sv and any local wrapper) — scanning ONLY glue files for
+    ip_list instantiations yields the TOP-of-IP module(s) the wrapper wraps,
+    never the internal IP hierarchy (which would over-broaden the surface and
+    leak). Returns the empty set when the manifest carries no ip_list or no
+    instantiated IP module resolves — in which case the caller applies NO
+    relaxation (no-leak). chip-AGNOSTIC: manifest structure + SV instantiation
+    grammar + the instantiated module's own declared ports; no chip/vendor
+    literal."""
+    ip_list = manifest.get("ip_list") if isinstance(manifest, dict) else None
+    if not isinstance(ip_list, list):
+        return set()
+    ip_set = {m.strip() for m in ip_list
+              if isinstance(m, str) and m.strip()}
+    if not ip_set:
+        return set()
+    rtl = _pl.rtl_dir(project)
+    if not rtl.is_dir():
+        return set()
+    # Glue files: staged rtl sources whose stem is not an ip_list module.
+    glue_files = [p for p in (sorted(rtl.glob("*.sv")) + sorted(rtl.glob("*.v")))
+                  if p.stem not in ip_set]
+    # Always include the resolved rtl_top even if (unusually) named after an IP.
+    if rtl_top not in glue_files and rtl_top.is_file():
+        glue_files.append(rtl_top)
+    instantiated: set = set()
+    compiled = {m: re.compile(_RE_IP_INSTANTIATION_TMPL.format(name=re.escape(m)))
+                for m in ip_set}
+    for gf in glue_files:
+        try:
+            text = _strip_comments(gf.read_text(errors="ignore"))
+        except OSError:
+            continue
+        for m, rx in compiled.items():
+            if m in instantiated:
+                continue
+            if rx.search(text):
+                instantiated.add(m)
+    surface: set = set()
+    for m in instantiated:
+        mfile = None
+        for ext in (".sv", ".v"):
+            cand = rtl / f"{m}{ext}"
+            if cand.is_file():
+                mfile = cand
+                break
+        if mfile is None:
+            continue
+        for p in parse_rtl_top_ports(mfile, m, defines):
+            nm = p.get("name")
+            if nm:
+                surface.add(nm)
+    return surface
+
+
 # ── ORGANIC #711 round-2 — AUTO-DERIVE the renamed-interface pairing ────────
 # Round-1 added a `renamed_interfaces` reconcile path but NOTHING populated it,
 # so on a real catalog-glue SoC the gate still FAILed (or needed a per-run hand-
@@ -1100,6 +1194,8 @@ def main(argv: list[str]) -> int:
     # prefix shape only.
     reused_tied_off: list = []
     reused_prefix_matched: list = []
+    reused_config_gated: list = []
+    reused_ip_passthrough: list = []
     manifest = load_source_manifest(project)
     if manifest is not None:
         # ORGANIC #711 round-2 — AUTO-DERIVE the renamed-interface pairing from
@@ -1123,6 +1219,36 @@ def main(argv: list[str]) -> int:
          reused_tied_off, reused_prefix_matched) = reconcile_reused_ip(
             only_l9_all, only_rtl_all, manifest,
             bound_ports=reused_bound_ports)
+
+        # ORGANIC #781 — reused-IP CONFIG-VARIANT surface reconciliation.
+        # After the struct-flatten / tie-off / rename passes, any residual
+        # diff is measured against the ACTUAL declared port surface of the
+        # reused-IP module(s) the wrapper instantiates (the ground truth of
+        # the synthesizable interface). An L9-only pin the instantiated IP
+        # does not expose is config-gated (the chosen variant parameterises
+        # it away); a chip_top port that IS a real IP port is a legitimate
+        # passthrough the L9 doc named differently. Both are advisory. A
+        # residual L9-only pin the IP DOES expose (dropped by the wrapper) or
+        # a chip_top port sourced from NO IP (invented) still FAILs — no-leak.
+        ip_surface = _reused_ip_instantiated_surface(
+            project, rtl_top, manifest, rtl_defines)
+        if ip_surface:
+            _kept_l9: list = []
+            for p in only_l9_all:
+                if p in ip_surface:
+                    _kept_l9.append(p)   # real IP port dropped by wrapper → FAIL
+                else:
+                    reused_config_gated.append(p)  # not instantiated → advisory
+            only_l9_all = _kept_l9
+            _kept_rtl: list = []
+            for p in only_rtl_all:
+                if p in ip_surface:
+                    reused_ip_passthrough.append(p)  # legit IP passthrough → adv
+                else:
+                    _kept_rtl.append(p)   # invented, not from IP → FAIL
+            only_rtl_all = _kept_rtl
+            reused_config_gated = sorted(reused_config_gated)
+            reused_ip_passthrough = sorted(reused_ip_passthrough)
 
     # v0.3.4 — ORGANIC #491 R4. Split L9-only pins into doc-declared
     # OPTIONAL vs required. A doc says "(optional) pin" → the RTL top
@@ -1224,6 +1350,24 @@ def main(argv: list[str]) -> int:
                 f"  WARN (advisory) — reused-IP SOURCE_MANIFEST tie-off(s) "
                 f"omitted from RTL top (intentional, internally driven): "
                 f"{reused_tied_off}"
+            )
+        if reused_config_gated:
+            # ORGANIC #781 advisory (non-gating): L9 pins the chosen reused-IP
+            # configuration parameterises away (not ports of the instantiated
+            # IP module). Doc described a fuller variant than was instantiated.
+            print(
+                f"  WARN (advisory) — reused-IP CONFIG-GATED L9 pin(s) not "
+                f"exposed by the instantiated IP variant (doc-over-declaration"
+                f", not a dropped pin): {reused_config_gated}"
+            )
+        if reused_ip_passthrough:
+            # ORGANIC #781 advisory (non-gating): chip_top ports that ARE real
+            # declared ports of the instantiated reused-IP module (faithful
+            # passthrough) which the L9 doc named differently / did not list.
+            print(
+                f"  WARN (advisory) — reused-IP passthrough port(s) present "
+                f"in chip_top and in the instantiated IP but not enumerated "
+                f"in L9 (legitimate IP surface): {reused_ip_passthrough}"
             )
         return 0
 

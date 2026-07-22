@@ -335,6 +335,54 @@ def _is_binary_context(text: str, span_start: int, span_end: int) -> bool:
     return (bad / len(window)) >= _BINARY_CTX_THRESHOLD
 
 
+# ── ORGANIC #781 — verification-harness address context filter ──────────────
+# A hex address whose surrounding prose describes it as a TESTBENCH signature /
+# handshake / tohost / fromhost address is a VERIFICATION-HARNESS constant, not
+# a chip-design fact. Canonical example (RISCV-DV / riscv-tests convention):
+#     "the signature address that this testbench uses for the handshaking is
+#      ``0x8ffffffc``."
+# The value is where the *software test program* writes to signal the external
+# testbench — it is never latched or decoded inside the DUT RTL, so it has no
+# L1-L27 design-layer home and can never be "captured" without fabricating a
+# layer. It is therefore excluded from the 100%-capture design-token denominator
+# exactly as URL slugs / build-tool flags / binary-blob garble already are.
+#
+# NO-LEAK: the filter fires ONLY on (a) a HEX-address-shaped token (`0x…` /
+# `@0x…`) — never an ISA / architecture / numeric+unit design token — AND
+# (b) an UNAMBIGUOUS verification-harness marker in the ±window: the exact
+# phrase "signature address", the riscv-tests `tohost` / `fromhost` memory-
+# mapped test-IO names, or the co-occurrence of "testbench" and "handshak…".
+# A real design register address (decoded by the RTL) is described by none of
+# these, so it still counts. Chip-AGNOSTIC: pure verification vocabulary, no
+# chip/vendor literal.
+_VERIF_HARNESS_CTX_WINDOW = 90
+_VERIF_HARNESS_ADDR_RE = re.compile(r"^@?0x[0-9A-Fa-f]+$")
+_VERIF_HARNESS_STRONG_RE = re.compile(
+    r"signature\s+address|\btohost\b|\bfromhost\b", re.IGNORECASE)
+_VERIF_HARNESS_TB_RE = re.compile(r"test[\s_]*bench", re.IGNORECASE)
+_VERIF_HARNESS_HS_RE = re.compile(r"handshak", re.IGNORECASE)
+
+
+def _is_verification_harness_context(tok: str, text: str,
+                                     span_start: int, span_end: int) -> bool:
+    """ORGANIC #781 — True when `tok` is a hex-address-shaped token whose
+    ±_VERIF_HARNESS_CTX_WINDOW context marks it as a testbench signature /
+    handshake / tohost / fromhost address (verification-harness, not design).
+    Restricted to hex-address tokens so no ISA / numeric+unit design token is
+    ever excluded. Chip-AGNOSTIC."""
+    if not _VERIF_HARNESS_ADDR_RE.match(tok):
+        return False
+    a = max(0, span_start - _VERIF_HARNESS_CTX_WINDOW)
+    b = min(len(text), span_end + _VERIF_HARNESS_CTX_WINDOW)
+    window = text[a:b]
+    if _VERIF_HARNESS_STRONG_RE.search(window):
+        return True
+    if (_VERIF_HARNESS_TB_RE.search(window)
+            and _VERIF_HARNESS_HS_RE.search(window)):
+        return True
+    return False
+
+
 def _harvest_tokens(text: str):
     """Returns (design_tokens, garble_tokens).
 
@@ -364,6 +412,13 @@ def _harvest_tokens(text: str):
                 seen_dirty.add(normalised)
                 continue
             if _is_binary_context(text, m.start(), m.end()):
+                seen_dirty.add(normalised)
+                continue
+            # ORGANIC #781 — verification-harness signature/handshake address
+            # is a testbench constant with no design-layer home; exclude from
+            # the 100%-capture denominator (like URL / binary garble).
+            if _is_verification_harness_context(
+                    normalised, text, m.start(), m.end()):
                 seen_dirty.add(normalised)
                 continue
             seen_clean.add(normalised)
