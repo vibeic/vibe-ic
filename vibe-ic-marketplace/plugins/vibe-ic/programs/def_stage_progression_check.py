@@ -154,6 +154,28 @@ def _has_routing(path: Path) -> bool:
     return False
 
 
+def _count_route_segments(path: Path) -> int:
+    """Count routed-wire statements in a DEF: each `+ ROUTED` / `+ SHAPE` wire
+    start plus every `NEW <layer> …` continuation segment. This is a monotone
+    proxy for routing WORK: detailed routing can only ADD segments over the
+    global/estimated routing carried by the prior stage, and a truncated or
+    stubbed DEF cannot inflate it. Used to prove a post_hold -> routed byte
+    SHRINK is a compact re-encoding (more segments, fewer bytes), not a
+    truncation. Pure aside from the read; PDK-agnostic (DEF syntax, not a
+    chip literal)."""
+    n = 0
+    try:
+        with path.open(errors="replace") as f:
+            for line in f:
+                if "+ ROUTED" in line or "+ SHAPE" in line:
+                    n += 1
+                elif line.lstrip().startswith("NEW "):
+                    n += 1
+    except OSError:
+        return 0
+    return n
+
+
 # v1.6.179 (#72 P1-5) — global-route-only marker. The phase3 PnR
 # Tcl wraps `detailed_route` in a `catch` block and emits
 # `DETAILED_ROUTE_NONFATAL:` to `openroad.log` when the custom PDK
@@ -281,10 +303,25 @@ def inspect(project: Path) -> tuple[List[StageInfo], List[Finding]]:
     # and a skipped/empty stage by Check 3 (instance-count growth), so this
     # relaxes no fraud gate. chip-AGNOSTIC — no chip literal, and the evidence
     # is OpenROAD's own hold-slack number.
+    # A SECOND legitimate byte-shrink lives at the post_hold -> routed pair.
+    # Detailed routing REPLACES the prior stage's global/estimated routing with
+    # the final per-net geometry, and that re-encoding can come back a few
+    # percent SMALLER while carrying strictly MORE routing — the routed DEF is a
+    # compact superset, not a truncation. Measured on caravel_user_project x
+    # sky130A: routed.def 38,573,330 B vs post_hold.def 38,998,185 B (-1.09%)
+    # while COMPONENTS grew 9,991 -> 10,078 and routed-wire segments grew
+    # 479,307 -> 484,980. A byte-monotone rule false-FAILs that, cascading Steps
+    # 22/24/25/26/27/28/32-37. The exemption is gated on POSITIVE proof that
+    # routing WORK did not shrink — instances non-decreasing AND routing present
+    # AND route-segment count non-decreasing — so a genuinely truncated routed
+    # DEF (which loses segments) still FAILs, and Check 3 (instance count) /
+    # Check 4 (routing presence) remain the truncation guards. chip-AGNOSTIC:
+    # the evidence is the DEF's own COMPONENTS / routed-segment counts.
     _NOOP_SHRINK_TOL = 0.01  # 1% — a re-ordering, not a truncation
     _noop_pair_ok = _hold_clean_noop_ok(project)
     prev_size = 0
     prev_name = None
+    prev_info = None
     for i in infos:
         if i.size < prev_size:
             benign_noop = (
@@ -292,7 +329,15 @@ def inspect(project: Path) -> tuple[List[StageInfo], List[Finding]]:
                 and _noop_pair_ok
                 and i.size >= prev_size * (1.0 - _NOOP_SHRINK_TOL)
             )
-            if not benign_noop:
+            benign_route = (
+                prev_name == "post_hold" and i.name == "routed"
+                and prev_info is not None
+                and i.num_components >= prev_info.num_components
+                and i.has_routing
+                and _count_route_segments(project / i.path)
+                    >= _count_route_segments(project / prev_info.path)
+            )
+            if not (benign_noop or benign_route):
                 findings.append(Finding(
                     severity="error",
                     rule="size-non-monotone",
@@ -304,6 +349,7 @@ def inspect(project: Path) -> tuple[List[StageInfo], List[Finding]]:
                 ))
         prev_size = i.size
         prev_name = i.name
+        prev_info = i
 
     # --- Check 3: instance-count growth (routed ≥ floorplan) ---
     fp = next(i for i in infos if i.name == "floorplan")
