@@ -171,12 +171,23 @@ jobs:
           python3 "$PROGRAMS/marketplace_version_sync_check.py" \
             --marketplace-dir "$MARKETPLACE_DIR"
 
-      - name: version bump is strictly monotonic
+      - name: version bump is monotonic (version-less PR allowed)
         run: |
+          # --version-by-gatekeeper: an authoring PR is VERSION-LESS by
+          # DOCTRINE (skills/gatekeeper-loop) — the gatekeeper assigns the
+          # monotonic version at merge, because two in-flight PRs that each
+          # self-bumped would collide. So "no version change" is the happy
+          # path here and MUST pass; without this flag the gate failed on
+          # every single conforming PR and carried no information.
+          # This does NOT weaken the gate: a version that goes BACKWARDS
+          # still fails, here and everywhere. The bump itself is enforced
+          # with the flag OFF at Step 3.5 of the merge queue, after
+          # gatekeeper_assign_version.py writes the version.
           python3 "$PROGRAMS/version_bump_monotonic_check.py" \
             --plugin-json "$PLUGIN_ROOT/.claude-plugin/plugin.json" \
             --marketplace-json "$MARKETPLACE_DIR/marketplace.json" \
-            --base "${{ steps.base.outputs.sha }}"
+            --base "${{ steps.base.outputs.sha }}" \
+            --version-by-gatekeeper
 
       - name: check-in scope guard (PR diff stays in an allowed zone)
         run: |
