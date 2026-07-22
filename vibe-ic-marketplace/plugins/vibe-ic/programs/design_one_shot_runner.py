@@ -6219,6 +6219,71 @@ def _chip_top_strip_output_storage(port_block: str) -> str:
     return new_body
 
 
+# ORGANIC-20260722 — power-pin CONNECTION guard for the auto-emitted chip_top
+# wrapper. The wrapper's port DECLARATION is copied verbatim from the DUT (via
+# `_chip_top_strip_output_storage`), so a power/ground pin declared behind
+# `ifdef USE_POWER_PINS in the DUT keeps that guard on the wrapper's OWN port
+# face. But the u_dut instance previously connected EVERY parsed port name
+# UNCONDITIONALLY (`.vccd1(vccd1)`), so under the synth define-set
+# (-DSYNTHESIS, no -DUSE_POWER_PINS) the guarded declaration is gone while the
+# connection remains — binding to a DUT port that does not exist. All three
+# frontends correctly reject it (slang/sv2v "port 'vccd1' does not exist",
+# yosys "does not have a port named 'vssd1'") → 0-byte netlist → synth FAIL,
+# cascade-blocking every downstream backend step. The fix makes the CONNECTION
+# conditional on the SAME `ifdef that guards the DECLARATION.
+#
+# chip-AGNOSTIC: keyed purely on the generic `USE_POWER_PINS macro region in
+# the parsed DUT port list — no chip / vendor / SKU / power-rail-name literal.
+# A DUT that declares its supply pins UNCONDITIONALLY (no `ifdef) leaves the
+# gated set empty → the connection stays unconditional → decl and connect
+# remain consistent. A DUT with NO power pins at all yields an empty gated set
+# and byte-identical output to the pre-fix behaviour.
+def _chip_top_power_pin_gated_names(port_block: str) -> set:
+    """Return the set of port NAMES in `port_block` whose declaration is gated
+    behind an ```ifdef USE_POWER_PINS ... `endif`` region — i.e. the
+    ports that only EXIST when ``USE_POWER_PINS`` is defined. Those are exactly
+    the ports whose ``u_dut`` connection must ALSO be emitted under the same
+    guard so the auto-emitted wrapper stays self-consistent in every
+    define-set: under ``-DSYNTHESIS`` (no ``USE_POWER_PINS``) neither the
+    wrapper port nor the connection exists; under ``-DUSE_POWER_PINS`` both do.
+    Mirrors the reference-tb power convention (``_v645_power_pin_names`` +
+    the ```ifdef USE_POWER_PINS`` instance block).
+
+    `port_block` MUST be comment-masked (the caller passes the masked text).
+    Nesting, ```else``, ```elsif`` and unrelated ```ifdef`` are
+    tracked so only the genuine ``USE_POWER_PINS`` true-branch gates a port.
+    chip-AGNOSTIC: no chip/vendor/rail literal — only the ``USE_POWER_PINS``
+    macro name."""
+    gated: set = set()
+    # Frame kinds on the preprocessor stack:
+    #   'UPP'   -> inside a `defined(USE_POWER_PINS)` true-branch
+    #   'NUPP'  -> inside its `else / `ifndef USE_POWER_PINS branch
+    #   'OTHER' -> inside an unrelated `ifdef/`ifndef
+    stack: List[str] = []
+    tok_re = re.compile(
+        r"`(ifdef|ifndef|elsif|else|endif)\b[ \t]*([A-Za-z_]\w*)?"
+        r"|([A-Za-z_]\w*)")
+    for m in tok_re.finditer(port_block):
+        directive, macro, ident = m.group(1), m.group(2), m.group(3)
+        if directive == "ifdef":
+            stack.append("UPP" if macro == "USE_POWER_PINS" else "OTHER")
+        elif directive == "ifndef":
+            stack.append("NUPP" if macro == "USE_POWER_PINS" else "OTHER")
+        elif directive == "elsif":
+            if stack:
+                stack[-1] = ("UPP" if macro == "USE_POWER_PINS" else "OTHER")
+        elif directive == "else":
+            if stack:
+                stack[-1] = {"UPP": "NUPP",
+                             "NUPP": "UPP"}.get(stack[-1], "OTHER")
+        elif directive == "endif":
+            if stack:
+                stack.pop()
+        elif ident is not None and "UPP" in stack:
+            gated.add(ident)
+    return gated
+
+
 # ORGANIC #660 — SystemVerilog-only construct detector for the auto-emitted
 # chip_top wrapper. `_autoemit_chip_top_if_needed` copies the wrapped DUT's
 # `#(parameter …)` block VERBATIM into the wrapper header so widths resolve.
@@ -6917,7 +6982,29 @@ def _autoemit_chip_top_wrapper(project: Path, rtl_dir: Path,
         ids = [i for i in ids if i not in kw]
         if ids:
             port_names.append(ids[-1])
-    connects = ",\n    ".join(f".{n}({n})" for n in port_names)
+    # ORGANIC-20260722 — a power/ground pin declared behind `ifdef
+    # USE_POWER_PINS in the DUT keeps that guard on the wrapper's OWN port
+    # face (wrapper_port_block is copied verbatim), so its u_dut CONNECTION
+    # must be guarded by the SAME `ifdef. Otherwise, under the synth
+    # define-set (-DSYNTHESIS, no -DUSE_POWER_PINS) the declaration is gone
+    # but `.vccd1(vccd1)` remains -> binds to a non-existent DUT port ->
+    # slang/sv2v/yosys all reject it -> 0-byte netlist -> synth FAIL. Emit
+    # regular ports UNCONDITIONALLY and the USE_POWER_PINS-gated ports inside
+    # a matching `ifdef block (leading-comma style so it composes whether or
+    # not regular connections precede — mirrors the reference-tb _v645
+    # convention). chip-AGNOSTIC: keyed on the generic USE_POWER_PINS macro.
+    _pw_gated = _chip_top_power_pin_gated_names(port_block)
+    _regular_names = [n for n in port_names if n not in _pw_gated]
+    _power_names = [n for n in port_names if n in _pw_gated]
+    connects = ",\n    ".join(f".{n}({n})" for n in _regular_names)
+    if _power_names:
+        _pw_lines = ["`ifdef USE_POWER_PINS"]
+        for _i, _nm in enumerate(_power_names):
+            _sep = "," if (_regular_names or _i > 0) else " "
+            _pw_lines.append(f"    {_sep} .{_nm}({_nm})")
+        _pw_lines.append("`endif")
+        connects = (connects + "\n" + "\n".join(_pw_lines)
+                    if connects else "\n".join(_pw_lines))
     # v0.1.62 — if the DUT is parameterized, declare the SAME params on the
     # wrapper (so widths like `[size-1:0]` resolve in the wrapper port list)
     # AND propagate them by name to the instance.
