@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""l10_tb_conformance_check.py — v0.53 plugin gate
+"""l10_tb_conformance_check.py — v0.54 plugin gate
 
 Verifies that EVERY deterministic test vector enumerated in
 `generated_docs/L10_TEST_CASES.json` has actually been exercised by the
@@ -44,6 +44,12 @@ Exit code:
         Step 4 to WAIVED-DEFERRED (Overall PASS_WITH_WAIVERS) instead of a
         hard Step-4 FAIL that cascades to blocked Phase-3 steps.
 
+        OR: all un-evidenced cases are `functional_vector` cases whose oracle
+        requires a CPU instruction-set oracle (`cap:cpu_functional_oracle`)
+        that was explicitly deferred by the sibling
+        `cpu_functional_oracle_waiver_check`. Auto-detected from
+        `sim/results.xml <capability_gap>cap:cpu_functional_oracle</…>`.
+
 ORGANIC #773 — class/kind-aware A/M-track waiver:
     Before this fix the gate demanded a digital-TB id-substring trace for
     EVERY L10 case regardless of `kind` and emitted only rc 0/1/2. A
@@ -61,6 +67,21 @@ ORGANIC #773 — class/kind-aware A/M-track waiver:
     capability-gap anchor (sim/results.xml) is present; an unanchored blanket
     waiver is NOT honoured (would re-FAIL), so the relaxation can never mask a
     missing digital testbench.
+
+ORGANIC #851 — CPU functional-oracle waiver (mirrors #773 for processor_cpu):
+    When `sim/results.xml` carries `<capability_gap>cap:cpu_functional_oracle
+    </capability_gap>`, the gate AUTO-DETECTS the processor_cpu class and
+    waives `functional_vector` cases that lack TB evidence — they require a
+    CPU instruction-set oracle that is a documented capability gap (deferred
+    to the per-IC oracle TB skill). The sibling cpu_functional_oracle_waiver_
+    check already returns PASS_WITH_WAIVERS (rc=3); this gate now coordinates
+    with it instead of independently hard-FAILing.
+
+    §4.05 NO-LEAK: the waiver is scoped to `functional_vector` cases ONLY,
+    and ONLY when `cap:cpu_functional_oracle` is present in a reviewable
+    results.xml anchor. A non-functional-vector case (e.g. cmd_response with
+    opcode) with no evidence still FAILs. An unanchored waiver (no results.xml)
+    also still FAILs.
 """
 from __future__ import annotations
 import argparse
@@ -211,6 +232,26 @@ def summary_has_pass(case_id: str, summary: str) -> bool:
 # NOT a chip/vendor/SKU literal — mirrors #651's `cap:cpu_functional_oracle`.
 CAP_ANALOG_VERIFICATION_INTENT = "cap:analog_verification_intent_oracle"
 
+# ----- ORGANIC #851 — CPU functional-oracle waiver (processor_cpu class) ----
+
+# The capability-gap token for the CPU functional-oracle waiver. Matches the
+# token emitted by cpu_functional_oracle_waiver_check (#651) and carried in
+# sim/results.xml by the runner's generic_full_stack connectivity TB.
+CAP_CPU_FUNCTIONAL_ORACLE = "cap:cpu_functional_oracle"
+
+# Kind/category/type tokens (case-insensitive) that denote a functional test
+# vector whose oracle requires a CPU instruction-set verification oracle —
+# the cases that CANNOT be covered by a generic connectivity TB and are
+# deferred to a per-IC oracle TB (skill testbench-author). Kept as a small
+# synonym set (a KIND vocabulary), never a per-chip literal.
+_FUNCTIONAL_VECTOR_KINDS = frozenset({
+    "functional_vector",
+    "functional",
+    "functional_test",
+    "instruction_test",
+    "cpu_functional",
+})
+
 # Kind/category/type tokens (case-insensitive) that denote a case whose oracle
 # lives on the analog / mixed-signal (A/M) verification track — the cases a
 # digital testbench can NEVER carry an id-substring trace for, and which the
@@ -235,6 +276,13 @@ def is_verification_intent(case: Dict[str, Any]) -> bool:
     """True iff this case's KIND denotes an A/M-track verification-intent case
     (chip-AGNOSTIC — a kind vocabulary, never a chip/vendor/SKU literal)."""
     return case_kind(case) in _VERIFICATION_INTENT_KINDS
+
+
+def is_functional_vector(case: Dict[str, Any]) -> bool:
+    """ORGANIC #851 — True iff this case's KIND denotes a CPU functional
+    test vector whose oracle requires a CPU instruction-set oracle
+    (chip-AGNOSTIC — a kind vocabulary, never a chip/vendor/SKU literal)."""
+    return case_kind(case) in _FUNCTIONAL_VECTOR_KINDS
 
 
 # ORGANIC #773 r2 — a DIGITAL class vocabulary (the cmd_response family). A case
@@ -374,6 +422,44 @@ def analog_skip_anchor(project_root: Optional[str], anchor_path: Optional[str]) 
     return None
 
 
+def cpu_oracle_anchor(project_root: Optional[str]) -> Optional[str]:
+    """ORGANIC #851 — auto-detect the CPU functional-oracle capability gap
+    from `sim/results.xml`. Returns a short, reviewable description string
+    when the anchor is found AND carries ``cap:cpu_functional_oracle``,
+    else None.
+
+    This mirrors `analog_skip_anchor()` but is SPECIFIC to the CPU oracle
+    gap: it fires ONLY when the results.xml explicitly declares
+    ``<capability_gap>cap:cpu_functional_oracle</capability_gap>``. No
+    CLI flag is needed — the gate auto-detects from the runner's own
+    artefact, coordinating with the sibling `cpu_functional_oracle_waiver_
+    check` which already grants PASS_WITH_WAIVERS for this gap.
+
+    §4.05 NO-LEAK: without the explicit `cap:cpu_functional_oracle` token
+    in results.xml this returns None and the gate runs at full strictness.
+    A generic ``CONNECTIVITY-PASS`` alone does NOT activate the CPU waiver
+    (it only activates the analog waiver); the CPU waiver is token-gated."""
+    if not project_root:
+        return None
+    pr = Path(project_root)
+    cands = [
+        pr / "phase2/stage1/sim/results.xml",
+        pr / "sim/results.xml",
+        pr / "reports/sim/results.xml",
+    ]
+    for p in cands:
+        if not p.is_file():
+            continue
+        try:
+            xml = p.read_text(errors="replace")
+        except OSError:
+            continue
+        cap = _read_xml_field(xml, "capability_gap")
+        if cap == CAP_CPU_FUNCTIONAL_ORACLE:
+            return f"{p} (capability_gap={cap})"
+    return None
+
+
 # ----- CLI ----------------------------------------------------------
 
 
@@ -383,6 +469,8 @@ def evaluate(
     summary: str,
     skip_analog: bool = False,
     analog_anchor: Optional[str] = None,
+    cpu_oracle_waiver: bool = False,
+    cpu_oracle_anchor_desc: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], int, int]:
     """Return (results, ok_count, fail_count).
 
@@ -408,12 +496,20 @@ def evaluate(
     (anything NOT `verification_intent`) with no tb evidence STILL FAILs even
     under --skip-analog, and an UNANCHORED verification_intent case (no
     reviewable bridge) also still FAILs — the relaxation is kind-scoped and
-    anchor-gated so it can never mask a missing digital testbench."""
+    anchor-gated so it can never mask a missing digital testbench.
+
+    ORGANIC #851 — when ``cpu_oracle_waiver`` is set AND
+    ``cpu_oracle_anchor_desc`` resolves to a reviewable results.xml carrying
+    ``cap:cpu_functional_oracle``, a `functional_vector` case that lacks TB
+    evidence is credited as WAIVED-DEFERRED. §4.05 NO-LEAK: a non-functional-
+    vector case (e.g. cmd_response with opcode) with no evidence STILL FAILs.
+    An unanchored waiver (no results.xml) also still FAILs."""
     results: List[Dict[str, Any]] = []
     ok_count = 0
     fail_count = 0
     checklist_gap_count = 0
     waiver_active = bool(skip_analog) and bool(analog_anchor)
+    cpu_waiver_active = bool(cpu_oracle_waiver) and bool(cpu_oracle_anchor_desc)
     for c in cases:
         case_id = str(c.get("id", c.get("name", "")))
         category = c.get("category", c.get("type", c.get("kind", "")))
@@ -506,11 +602,32 @@ def evaluate(
                 and not _has_digital_signal(c, is_cmd_rsp)):
             waived = True
             status = "waived"
+            cap_gap = CAP_ANALOG_VERIFICATION_INTENT
             evidence = [
                 "WAIVED-DEFERRED: verification_intent A/M-track oracle "
                 f"({CAP_ANALOG_VERIFICATION_INTENT}); analog track deferred "
                 f"via --skip-analog; reviewable anchor: {analog_anchor}"
             ]
+        # ORGANIC #851 — CPU functional-oracle waiver. A `functional_vector`
+        # case with no TB evidence, under an anchored CPU oracle gap, is
+        # credited as WAIVED-DEFERRED. §4.05 NO-LEAK: a non-functional-vector
+        # case (e.g. cmd_response with opcode) with no evidence STILL FAILs.
+        # An unanchored waiver (no results.xml with cap:cpu_functional_oracle)
+        # also still FAILs. The analog waiver takes priority (checked first);
+        # the CPU waiver fires only for cases NOT already waived by analog.
+        elif (not ok and not waived and cpu_waiver_active
+                and is_functional_vector(c)):
+            waived = True
+            status = "waived"
+            cap_gap = CAP_CPU_FUNCTIONAL_ORACLE
+            evidence = [
+                "WAIVED-DEFERRED: functional_vector CPU instruction-set "
+                f"oracle ({CAP_CPU_FUNCTIONAL_ORACLE}); CPU oracle deferred "
+                f"(capability gap); reviewable anchor: "
+                f"{cpu_oracle_anchor_desc}"
+            ]
+        else:
+            cap_gap = None
         results.append(
             {
                 "id": case_id,
@@ -520,7 +637,7 @@ def evaluate(
                 "status": status,
                 "waived": waived,
                 "review_required": waived,
-                "capability_gap": (CAP_ANALOG_VERIFICATION_INTENT if waived else None),
+                "capability_gap": cap_gap,
             }
         )
         if ok:
@@ -680,21 +797,35 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.skip_analog else None
     )
 
+    # ORGANIC #851 — auto-detect CPU functional-oracle capability gap from
+    # results.xml. No CLI flag needed: the gate reads the runner's own
+    # artefact and coordinates with cpu_functional_oracle_waiver_check.
+    cpu_anchor = cpu_oracle_anchor(project_root)
+
     results, ok_count, fail_count = evaluate(
         cases, tb_blob, summary,
         skip_analog=args.skip_analog, analog_anchor=analog_anchor,
+        cpu_oracle_waiver=bool(cpu_anchor),
+        cpu_oracle_anchor_desc=cpu_anchor,
     )
     waive_count = count_waived(results)
     checklist_gap_count = count_checklist_gaps(results)
 
+    # ORGANIC #851 — collect all distinct capability gaps from waived cases.
+    waiver_caps = sorted({
+        r["capability_gap"] for r in results
+        if r.get("status") == "waived" and r.get("capability_gap")
+    })
     out = {
         "total": len(cases),
         "ok": ok_count,
         "fail": fail_count,
         "waived": waive_count,
         "checklist_gaps": checklist_gap_count,
-        "capability_gap": (CAP_ANALOG_VERIFICATION_INTENT if waive_count else None),
+        "capability_gap": waiver_caps[0] if len(waiver_caps) == 1 else (waiver_caps or None),
+        "capability_gaps": waiver_caps or None,
         "analog_anchor": analog_anchor,
+        "cpu_oracle_anchor": cpu_anchor,
         # #206 — the substance verdict the gate judged on: whether the sim tree
         # actually drives the DUT, and (when it does not) the offending vacuous
         # testbench files. Emitted so this verdict can be cross-checked from the
@@ -732,21 +863,31 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if waive_count or checklist_gap_count:
         # ORGANIC #773 — class/kind-aware A/M-track waiver, AND/OR
-        # ORGANIC #808 — verification_checklist (DV-milestone) checklist gaps.
-        # In both cases every genuine digital / functional case that REQUIRES a
-        # TB trace had its evidence (fail_count == 0 here). The only un-credited
-        # rows are verification_intent (A/M-track) cases under an anchored
-        # --skip-analog and/or verification_checklist (DV-milestone) rows whose
-        # carried status is blank/None/FAIL. Mirror #651/#773: rc=3 +
+        # ORGANIC #808 — verification_checklist (DV-milestone) checklist gaps,
+        # AND/OR ORGANIC #851 — CPU functional-oracle waiver.
+        # In all cases every genuine case that REQUIRES a TB trace had its
+        # evidence (fail_count == 0 here). Mirror #651/#773: rc=3 +
         # line-start PASS_WITH_WAIVERS sentinel so flow_compliance_check
         # promotes Step 4 to WAIVED-DEFERRED (Overall PASS_WITH_WAIVERS),
         # not a hard FAIL.
         bits = [f"{ok_count}/{len(cases)} cases satisfied"]
-        if waive_count:
+        # Count per-gap waiver details for the message.
+        analog_waived = sum(1 for r in results
+                           if r.get("status") == "waived"
+                           and r.get("capability_gap") == CAP_ANALOG_VERIFICATION_INTENT)
+        cpu_waived = sum(1 for r in results
+                        if r.get("status") == "waived"
+                        and r.get("capability_gap") == CAP_CPU_FUNCTIONAL_ORACLE)
+        if analog_waived:
             bits.append(
-                f"{waive_count}/{len(cases)} verification_intent A/M-track "
+                f"{analog_waived}/{len(cases)} verification_intent A/M-track "
                 f"case(s) WAIVED-DEFERRED ({CAP_ANALOG_VERIFICATION_INTENT}, "
                 f"review_required; anchor: {analog_anchor})")
+        if cpu_waived:
+            bits.append(
+                f"{cpu_waived}/{len(cases)} functional_vector CPU-oracle "
+                f"case(s) WAIVED-DEFERRED ({CAP_CPU_FUNCTIONAL_ORACLE}, "
+                f"review_required; anchor: {cpu_anchor})")
         if checklist_gap_count:
             bits.append(
                 f"{checklist_gap_count}/{len(cases)} verification_checklist "
