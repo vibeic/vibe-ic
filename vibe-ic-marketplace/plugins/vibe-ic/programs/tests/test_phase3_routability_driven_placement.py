@@ -114,7 +114,7 @@ def test_default_emits_routability_driven_global_placement():
     assert "-routability_driven" in gp[0]
     # -density must still be present with the util value.
     assert "-density 0.45" in gp[0]
-    assert gp[0].strip() == "global_placement -routability_driven -density 0.45"
+    assert gp[0].strip() == "global_placement -routability_driven -timing_driven -density 0.45"
 
 
 def test_density_flag_tracks_util_value():
@@ -136,7 +136,8 @@ def test_routability_off_emits_plain_density_placement():
     gp = _gp_cmd_lines(tcl)
     assert len(gp) == 1
     assert "-routability_driven" not in gp[0]
-    assert gp[0].strip() == "global_placement -density 0.45"
+    # timing_driven remains DEFAULT-ON independently of routability.
+    assert gp[0].strip() == "global_placement -timing_driven -density 0.45"
 
 
 # ── optional padding knob: OFF by default, correct syntax when enabled ─────
@@ -250,8 +251,8 @@ def test_default_only_adds_routability_flag_vs_plain():
     plain = _build(routability_driven=False)
     routab = _build()
     assert plain.replace(
-        "global_placement -density 0.45",
-        "global_placement -routability_driven -density 0.45") == routab
+        "global_placement -timing_driven -density 0.45",
+        "global_placement -routability_driven -timing_driven -density 0.45") == routab
 
 
 # ── container OpenROAD flag verification (runs where openroad is on PATH) ───
@@ -267,4 +268,37 @@ def test_openroad_accepts_routability_driven_flag():
         capture_output=True, text=True, timeout=120)
     out = res.stdout + res.stderr
     assert "-routability_driven" in out
+    assert "-timing_driven" in out
     assert re.search(r"-density\s+target_density", out)
+
+
+# -- timing-driven placement: DEFAULT-ON slack-weighted global placement ----
+# ORGANIC (sha256 x sky130A): routability_driven placement left the SS
+# post-route setup WNS deeply negative because global placement was BLIND to
+# the 25.907 ns clock. `-timing_driven` net-weights placement by setup slack so
+# critical-path cells cluster. Negative control: git-checkout the pre-fix runner
+# -> these assertions fail (no global_placement line carries -timing_driven).
+
+
+def test_timing_driven_on_by_default():
+    gp = _gp_cmd_lines(_build())
+    assert len(gp) == 1
+    assert "-timing_driven" in gp[0]
+
+
+def test_timing_driven_default_line_is_exact():
+    assert _gp_cmd_lines(_build())[0].strip() == (
+        "global_placement -routability_driven -timing_driven -density 0.45")
+
+
+def test_timing_driven_off_when_disabled():
+    gp = _gp_cmd_lines(_build(timing_driven=False))
+    assert len(gp) == 1
+    assert "-timing_driven" not in gp[0]
+    assert gp[0].strip() == "global_placement -routability_driven -density 0.45"
+
+
+def test_timing_and_routability_both_off_is_plain_density():
+    gp = _gp_cmd_lines(_build(routability_driven=False, timing_driven=False))
+    assert len(gp) == 1
+    assert gp[0].strip() == "global_placement -density 0.45"
