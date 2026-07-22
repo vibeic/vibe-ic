@@ -87,7 +87,15 @@ def _load_deny_tokens(path: Path) -> Tuple[str, ...]:
     return tuple(tokens)
 
 
-_FORBIDDEN_TOKENS: Tuple[str, ...] = _load_deny_tokens(_DENY_PATH)
+_FORBIDDEN_TOKENS: Tuple[str, ...] = (
+    _load_deny_tokens(_DENY_PATH)
+    # A genuinely sensitive internal project codename is NOT stored in the deny
+    # list as a literal (that would be the leak). Its real value(s) come from
+    # the PRIVATE config at runtime and EXTEND the forbidden set here, so a
+    # re-added codename in plugin source is still caught on a configured host —
+    # public/default is empty (inert), same shape as the NDA + PDK-id config.
+    + tuple(_cpdk.project_codenames())
+)
 
 
 # ---------------------------------------------------------------------------

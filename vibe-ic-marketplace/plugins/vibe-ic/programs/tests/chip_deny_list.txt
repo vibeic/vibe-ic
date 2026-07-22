@@ -17,7 +17,14 @@
 
 # Private IC codenames
 as3616
-sn2025
+# NOTE: a genuinely SENSITIVE internal project codename is NOT listed here as a
+# literal (that would itself be the leak). The real value(s) come from the
+# PRIVATE config at runtime — `_commercial_pdk.project_codenames()`
+# (VIBEIC_PROJECT_CODENAMES env or the 'project_codenames' key in the private
+# config JSON) — and are injected into the deny-token set / codename rules by
+# source_chip_agnostic_check, practical_notes_specificity_check and
+# backlog_sanitize_check, so the sanitizer still catches them without shipping
+# the literal. Public/default: empty (inert), same shape as COMMERCIAL_PDK_ID.
 
 # Private vendor / brand
 noirs

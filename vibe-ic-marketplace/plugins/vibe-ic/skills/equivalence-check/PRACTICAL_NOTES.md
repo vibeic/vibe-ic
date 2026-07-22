@@ -62,6 +62,6 @@ After extensive iteration, Yosys equiv achieved **4/5 primary outputs PROVEN**:
 
 Solution used: `design -stash/-import` + `read_liberty -ignore_miss_func` to expand PDK cells into Yosys native logic for same-level comparison.
 
-Script: `SN2025_project/scripts/lec_check.ys`
+Script: `EXAMPLE_project/scripts/lec_check.ys`
 
 Combined with Netgen LVS ("Circuits match uniquely"), equivalence is fully verified.

@@ -1,7 +1,7 @@
 """#216 — the formal (Step 5) environment gap must be ACTIONABLE, and a
 waived formal step must defer only its GENUINE dependents.
 
-Measured defect (SN2025): Step 5 (formal) reported an `ENV_UNAVAILABLE`
+Measured defect (EXAMPLE): Step 5 (formal) reported an `ENV_UNAVAILABLE`
 waiver that was a dead end. Three separate faults produced it:
 
   1. `formal_property_run` could not tell "the proof engine was never
@@ -218,7 +218,7 @@ def test_available_env_runs_a_real_proof_and_needs_no_waiver(tmp_path):
 
     NOTE ON INTENT: this is a CHARACTERIZATION test, not a defect detector.
     It passes on pre-fix code too — and that is precisely the finding. The
-    formal environment was never actually absent on the SN2025 run host, so
+    formal environment was never actually absent on the EXAMPLE run host, so
     an `ENV_UNAVAILABLE` verdict for Step 5 was never supported by the
     environment. This test pins that fact down so a future regression that
     starts declaring the environment unavailable while sby is right there
@@ -255,7 +255,7 @@ def test_available_env_runs_a_real_proof_and_needs_no_waiver(tmp_path):
 _COMPLETE_WAIVER = {
     "step": "formal",
     "verdict_tier": "ENV_UNAVAILABLE",
-    "ticket": "SN2025-FORMAL-1",
+    "ticket": "EXAMPLE-FORMAL-1",
     "review_required": True,
     "evidence": ["phase2/stage1/formal/formal_env_unavailable.json"],
     "rationale": (

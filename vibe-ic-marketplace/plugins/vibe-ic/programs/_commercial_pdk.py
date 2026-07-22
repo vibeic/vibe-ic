@@ -182,6 +182,34 @@ def is_configured() -> bool:
     return bool(COMMERCIAL_PDK_ID)
 
 
+def project_codenames() -> Tuple[str, ...]:
+    """Internal project codename(s) to SANITIZE — the REAL sensitive value(s),
+    read from the PRIVATE config only:
+        - env var  VIBEIC_PROJECT_CODENAMES   (comma-separated)
+        - key      'project_codenames'        (a JSON list) in the private
+          config dict (~/.config/vibeic/commercial_pdk.json or VIBEIC_PRIVATE_CONFIG)
+
+    Empty in the public / default case, so the literal codename NEVER lives in
+    tracked source (the public deny-list / checks carry only a FICTIONAL
+    placeholder). On a configured host these values EXTEND the deny-token set
+    and the codename rules, so the sanitizers still catch the true codename in a
+    submission / in plugin source — they just no longer SHIP the literal. Same
+    public-inert / private-active shape as COMMERCIAL_PDK_ID. chip-AGNOSTIC."""
+    vals: List[str] = []
+    env = os.environ.get("VIBEIC_PROJECT_CODENAMES", "")
+    vals.extend(t.strip() for t in env.split(",") if t.strip())
+    cfg = _PRIVATE.get("project_codenames") if isinstance(_PRIVATE, dict) else None
+    if isinstance(cfg, list):
+        vals.extend(str(t).strip() for t in cfg if str(t).strip())
+    seen: set = set()
+    out: List[str] = []
+    for v in vals:
+        if v.lower() not in seen:
+            seen.add(v.lower())
+            out.append(v)
+    return tuple(out)
+
+
 def cell_model_container_path() -> str:
     """Container-absolute Verilog cell-model path for the commercial PDK, or ""
     when unconfigured. Explicit config `cell_model` wins; otherwise a default is

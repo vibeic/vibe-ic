@@ -4,7 +4,7 @@ description: Run Phase 3 (synth → PnR → GDS → DRC → LVS) via phase3_one_
 argument-hint: <project-dir> [--top-name chip_top] [--die-um 1500x1500] [--util 0.4] [--pdk auto|sky130A|<custom>]
 ---
 > **Missing arg?** When `$ARGUMENTS` is empty, prompt the user first:
-> `/vibe-ic-phase3 <project-dir>` (e.g. `/vibe-ic-phase3 1st_benchmark_sn2025/phase2_v0119.48-vendor`).
+> `/vibe-ic-phase3 <project-dir>` (e.g. `/vibe-ic-phase3 1st_benchmark_example/phase2_v0119.48-vendor`).
 > The AI must NOT guess the path; a concrete project path is required before continuing.
 
 

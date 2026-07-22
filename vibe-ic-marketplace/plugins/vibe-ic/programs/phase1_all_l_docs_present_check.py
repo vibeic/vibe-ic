@@ -7,7 +7,7 @@ threshold. To resolve, add patterns to <project>/extraction_patterns.json
 — do NOT add waivers.
 
 This gate catches the 28th fresh-agent attempt's root cause:
-`1st_benchmark_sn2025/phase2_v0119.54-vendor/` produced ONLY four L
+`1st_benchmark_example/phase2_v0119.54-vendor/` produced ONLY four L
 docs (L2_FRS / L8_TIMING_WAVEFORM / L9_INTEGRATION_SPEC /
 L11_OTP_CONTENT) and skipped 9 of 13 Phase 1 (doc-extraction) generator skills
 entirely. The pre-existing LL-38/LL-39/LL-40 gates measure coverage

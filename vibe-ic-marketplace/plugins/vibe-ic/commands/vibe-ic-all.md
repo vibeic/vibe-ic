@@ -4,7 +4,7 @@ description: Run the complete Vibe-IC flow (Phase 1 → Phase 2 → Analog → P
 argument-hint: <project-dir> [--top-name chip_top] [--skip-hardware] [--skip-analog] [--skip-phase3] [--ic-name <name>] [--die-um WxH] [--util 0.4] [--pdk auto|sky130A|<custom>]
 ---
 > **Missing arg?** When `$ARGUMENTS` is empty, prompt the user first:
-> `/vibe-ic-all <project-dir>` (e.g. `/vibe-ic-all 1st_benchmark_sn2025/phase2_v0119.48-vendor`).
+> `/vibe-ic-all <project-dir>` (e.g. `/vibe-ic-all 1st_benchmark_example/phase2_v0119.48-vendor`).
 > The AI must NOT guess the path; a concrete project path is required before continuing.
 
 

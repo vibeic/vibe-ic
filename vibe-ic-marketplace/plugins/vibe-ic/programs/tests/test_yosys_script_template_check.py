@@ -125,7 +125,7 @@ def test_token_inside_comment_is_ignored(tmp_path):
 
 # NOTE: the former `test_v068_synth_ys_passes_with_allow_no_sv` integration
 # test was removed — it pointed at a hard-coded external path
-# (~/AI_IC_design/1st_benchmark_sn2025/.../synth.ys) absent from the repo (so
+# (~/AI_IC_design/1st_benchmark_example/.../synth.ys) absent from the repo (so
 # it permanently skipped), and the --allow-no-sv / hilomap contract it checked
 # is already covered by the inline-fixture tests above
 # (test_allow_no_sv_*, test_good_template_passes, test_missing_*).

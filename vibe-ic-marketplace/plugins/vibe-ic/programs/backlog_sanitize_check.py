@@ -55,8 +55,13 @@ class Finding:
 
 
 HARD_RULES: List[Tuple[str, str, str]] = [
+    # A genuinely sensitive internal project codename is NOT hard-coded in this
+    # alternation as a literal (that would be the leak); its real value(s) come
+    # from the PRIVATE config and are appended as codename rules at load time
+    # (see the `HARD_RULES +=` extension below). The names kept here are public
+    # commercial chip/IC part numbers used to teach chip-AGNOSTIC description.
     ("chip_name",
-     r"\bAS3616\b|\bSN2025\b|\bSC16IS750\b|\bLM75\b|\bDS1307\b"
+     r"\bAS3616\b|\bSC16IS750\b|\bLM75\b|\bDS1307\b"
      r"|\bPCA9685\b|\bTCA9534\b|\bMCP4725\b|\b24LC256\b|\bBME280\b",
      "Chip/IC product name — describe the IC class instead"),
     ("vendor_name",
@@ -102,6 +107,19 @@ HARD_RULES: List[Tuple[str, str, str]] = [
      r"/home/\w+/|/Users/\w+/|C:\\Users\\",
      "Local file path leaks user/project structure"),
 ]
+
+
+# PRIVATE-config project codenames: the REAL sensitive codename(s) are not
+# stored as a literal above (that would be the leak) — they come from
+# `_commercial_pdk.project_codenames()` (empty in public / default) and are
+# appended as HARD rules at load time, so a submission naming the true codename
+# is still sanitized on a configured host without shipping the literal.
+for _cn in _cpdk.project_codenames():
+    HARD_RULES.append((
+        "chip_name",
+        rf"\b{re.escape(_cn)}\b",
+        "Project codename — describe the IC class / benchmark instead",
+    ))
 
 SOFT_RULES: List[Tuple[str, str, str]] = [
     ("provenance_chip",
