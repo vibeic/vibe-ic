@@ -1048,6 +1048,35 @@ def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
     return (0 if ge_floor else 1), base
 
 
+# The mapped-netlist emit name is NOT uniform across the flow: the DFT/synth
+# chain writes `<top>_synth.v` in some paths, but the canonical Phase-2 synth
+# step (design_one_shot_runner) emits `phase2/stage2/synth/netlist.v` (+
+# `netlist_yosys.v`) — the SAME file the LEC gold read and the SHA-attestation
+# reference. Discovering ONLY `*_synth.v`/`synth.v` MISSES that canonical
+# netlist, so on a run whose synth produced `netlist.v` the producer cannot
+# find an existing mapped netlist, writes a not-run sentinel ("cannot derive
+# --top"), and the DT1 gate books it BLOCKED → FAIL — a false FAIL on a netlist
+# that is right there (measured on opentitan_aes × sky130A). Ordered so the
+# DFT-chain `<top>_synth.v` still wins when present. chip/tool-AGNOSTIC.
+_MAPPED_NETLIST_GLOBS = (
+    "phase2/stage2/synth/*_synth.v",
+    "phase2/stage2/synth/netlist.v",
+    "phase2/stage2/synth/netlist_yosys.v",
+)
+_MAPPED_NETLIST_FALLBACK = "phase2/stage2/synth/synth.v"
+
+
+def discover_mapped_netlist(project: Path) -> str:
+    """Project-relative path to the mapped netlist, trying each canonical emit
+    name in order. Returns the fallback (which may not exist — the caller then
+    reports 'cannot derive --top') only when NO known emit is present. PURE."""
+    for pat in _MAPPED_NETLIST_GLOBS:
+        hits = sorted(project.glob(pat))
+        if hits:
+            return str(hits[0].relative_to(project))
+    return _MAPPED_NETLIST_FALLBACK
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[1] if __doc__ else "")
     p.add_argument("project_dir")
@@ -1103,8 +1132,7 @@ def main(argv: list[str] | None = None) -> int:
         return str(hits[0].relative_to(project)) if hits else fallback
 
     if args.netlist is None:
-        args.netlist = _first_rel("phase2/stage2/synth/*_synth.v",
-                                  "phase2/stage2/synth/synth.v")
+        args.netlist = discover_mapped_netlist(project)
     if args.liberty is None:
         # Chip/PDK-AGNOSTIC: project PDK glob → the flow's recorded corner
         # Liberty (pvt_matrix.json) → shared OSS default. NEVER a dead relative
