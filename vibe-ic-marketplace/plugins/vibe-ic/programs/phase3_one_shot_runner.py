@@ -9796,6 +9796,40 @@ def _openroad_thread_count() -> int:
     return os.cpu_count() or 4
 
 
+def _v1_5_37a_multicorner_pnr_block(project: "Path", pdk: "PdkConfig",
+                                    container: str,
+                                    liberty_c: str) -> Optional[str]:
+    """approach (a) — MULTI-CORNER liberty stanza for the PnR OpenROAD session so
+    the PRE-detailed-route resizer (repair_design / repair_timing -setup)
+    optimizes the SLOW sign-off corner (ss) for SETUP and the FAST corner (ff)
+    for HOLD, instead of the single typical (tt) corner the session loaded
+    before. Root cause it removes (sha256 x sky130A, verified on-disk): the PnR
+    session read only tt_025C_1v80, so repair_timing -setup met TT while the
+    ss_100C_1v60 sign-off saw catastrophic size-1 slew (-33.6 ns). Repairing at
+    ss BEFORE detailed_route makes the upsized cells first-class PLACED cells
+    that route in the normal detailed-route pass (no post-route ECO, no
+    DRT-0073).
+
+    Returns a `define_corners ...` + per-corner `read_liberty -corner ...` block,
+    or None when the PDK exposes <2 distinct process libs (caller then keeps the
+    byte-identical single `read_liberty {liberty_c}`). chip/PDK-AGNOSTIC — the
+    corner libs come from _resolve_signoff_corner_libs (the active PDK's OWN
+    librelane STA_CORNERS / staged input/pdk/liberty), never a chip/vendor
+    literal. Best-effort: any failure -> None -> unchanged single-corner PnR."""
+    try:
+        corner_libs = _resolve_signoff_corner_libs(project, pdk, container)
+    except Exception:
+        return None
+    _oc = {"SS": "ss", "TT": "tt", "FF": "ff"}
+    labels = [l for l in ("SS", "TT", "FF") if corner_libs.get(l)]
+    if len(labels) < 2 or len({corner_libs[l] for l in labels}) < 2:
+        return None
+    lines = ["define_corners " + " ".join(_oc[l] for l in labels)]
+    for l in labels:
+        lines.append(f"read_liberty -corner {_oc[l]} {corner_libs[l]}")
+    return "\n".join(lines)
+
+
 def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         macro_lefs_tcl: str, liberty_c: str,
                         macro_libs_tcl: str, netlist_c: str, top: str,
@@ -9817,6 +9851,7 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         macro_place_block: str = "",
                         routability_driven: bool = True,
                         timing_driven: bool = True,
+                        corner_liberty_block: Optional[str] = None,
                         placement_padding_sites: int = 0,
                         spef_repair_estimate_block: str = "",
                         openroad_threads: int = 0,
@@ -9918,11 +9953,15 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
         if cts_cluster_diameter is not None:
             _cts_cluster += (
                 f" -sink_clustering_max_diameter {cts_cluster_diameter:g}")
+    # approach (a) — multi-corner liberty (ss setup / ff hold) or the
+    # byte-identical single tt read_liberty when the caller passed none.
+    _corner_lib_stanza = (corner_liberty_block if corner_liberty_block
+                          else f"read_liberty {liberty_c}")
     return f"""
 {_thread_block}read_lef {tech_lef_c}
 read_lef {cell_lef_c}
 {macro_lefs_tcl}
-read_liberty {liberty_c}
+{_corner_lib_stanza}
 {macro_libs_tcl}
 read_verilog {netlist_c}
 link_design {top}
@@ -10570,9 +10609,18 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
               "unchanged)", file=sys.stderr)
     for _p in _rf_report_paths:
         print(f"[phase3]   audit report: {_p}", file=sys.stderr)
+    # approach (a) — repair the SLOW (ss) setup corner BEFORE detailed
+    # route: build a multi-corner liberty stanza (best-effort; None ->
+    # unchanged single-corner PnR).
+    corner_liberty_block = _v1_5_37a_multicorner_pnr_block(
+        project, pdk, container, liberty_c)
+    if corner_liberty_block:
+        print('[phase3] approach(a) multi-corner PnR — repair targets '
+              'ss setup / ff hold BEFORE detailed_route', file=sys.stderr)
     pnr_tcl.write_text(_build_pnr_tcl_text(
         tech_lef_c=tech_lef_c, cell_lef_c=cell_lef_c,
         macro_lefs_tcl=macro_lefs_tcl, liberty_c=liberty_c,
+        corner_liberty_block=corner_liberty_block,
         macro_libs_tcl=macro_libs_tcl, netlist_c=netlist_c, top=top,
         sdc_c=sdc_c, dont_use_block=dont_use_block,
         metal_prefix=pdk.metal_prefix, die_w=die_w, die_h=die_h,
