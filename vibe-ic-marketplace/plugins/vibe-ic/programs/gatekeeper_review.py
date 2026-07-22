@@ -20,6 +20,11 @@ never re-implemented):
                                          line the PR ADDS or any added/renamed
                                          PATH, anywhere in the repo (not just the
                                          plugin source tree)
+  * gatekeeper_stale_branch_check.py   — the LANDING-METHOD guard: a PR forked
+                                         from an older base that also touches a
+                                         file landed since would phantom-revert
+                                         it under a blind checkout — land via
+                                         cherry-pick of the PR's own delta
   * loop_watchdog_compliance_check.py  — every long sub-process is watchdog-
                                          supervised + every risky loop is
                                          bounded (no fixed-timeout kill of a
@@ -379,6 +384,36 @@ def nda_diff_scan_gate(repo: Path, base: str, head: str) -> GateResult:
 
 
 # --------------------------------------------------------------------------
+# gatekeeper_stale_branch_check — the LANDING-METHOD guard.
+#
+# A PR branch cut from an OLDER base than the current origin/main tip makes a
+# naive `origin/main..HEAD` diff show a PHANTOM REVERT of every commit landed
+# since the fork; a blind `git checkout HEAD -- <files>` land would silently
+# revert that work. This flags the risk so the land is a CHERRY-PICK of the
+# PR's own delta. rc 0 FRESH / stale-no-overlap; rc 1 stale WITH file overlap
+# (the real phantom-revert surface); rc 2 unresolvable ref. Unlike the other
+# gates this does not judge the CHANGE — only the safe way to LAND it.
+# --------------------------------------------------------------------------
+def stale_branch_gate(repo: Path, base: str, head: str) -> GateResult:
+    prog = _PROGRAMS_DIR / "gatekeeper_stale_branch_check.py"
+    if not prog.is_file():
+        return GateResult("gatekeeper_stale_branch_check", 2,
+                          f"checker missing at {prog}")
+    rc, out, err = _run_program(prog, ["--repo", str(repo),
+                                       "--base", base, "--head", head])
+    # rc 2 == a ref could not be resolved (synthetic refs in a unit test, a
+    # shallow CI clone). NOT a phantom-revert finding, so it must not block —
+    # reported as a skip so a silently-unresolved range is visible.
+    if rc == 2:
+        return GateResult("gatekeeper_stale_branch_check", -1,
+                          f"skipped — {base}/{head} not resolvable")
+    body = err.strip() or out.strip()
+    summary = (body.splitlines() or [""])[0][:240]
+    return GateResult("gatekeeper_stale_branch_check", rc,
+                      summary or "(no output)")
+
+
+# --------------------------------------------------------------------------
 # loop_watchdog_compliance_check — subprocess against the plugin root. FAILs
 # when any programs/*.py launches a long EDA tool without the watchdog or has
 # an unbounded risky loop. rc 0 clean / 1 offender(s) / 2 usage error.
@@ -612,6 +647,7 @@ def review(base: str, head: str, *,
     gates.append(path_portability_gate(plugin_root))
     gates.append(commit_msg_nda_gate(repo, base, head))
     gates.append(nda_diff_scan_gate(repo, base, head))
+    gates.append(stale_branch_gate(repo, base, head))
     gates.append(loop_watchdog_gate(plugin_root))
     gates.append(plugin_audit_gate(plugin_root))
     gates.append(git_prohibition_gate(commit_cmds or []))

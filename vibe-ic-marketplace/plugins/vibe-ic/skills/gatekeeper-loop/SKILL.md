@@ -222,6 +222,19 @@ try:
     #      clean yet the rebased code semantically conflict (e.g. a function
     #      this PR calls was renamed by a PR that merged five minutes ago);
     #      only a re-run on the rebased tree catches it.
+    #   3.05 STALE-BRANCH / phantom-revert (gatekeeper_stale_branch_check — now
+    #      a gatekeeper_review required gate): a PR forked from an OLDER base
+    #      than the current origin/main tip that ALSO touches a file which
+    #      LANDED since the fork (verdict STALE_OVERLAP, rc 1) has a phantom-
+    #      revert trap — a naive `origin/main..HEAD` diff shows a REVERT of that
+    #      landed work, so NEVER land it by a blind `git checkout HEAD -- <f>`
+    #      (or "just take the PR's file versions"). The rebase in step 2 is
+    #      safe because it REPLAYS the PR's commits; when you instead apply a
+    #      delta by hand, cherry-pick the PR's OWN delta
+    #      (`git diff <merge-base>..HEAD`), then grep the intervening fix's
+    #      symbols to prove no false revert. STALE_ADVISORY (rc 0, no shared
+    #      file — the #247 orthogonal shape) cannot phantom-revert; cherry-pick
+    #      of the true delta is still the drift-free default. (Learned #246/#247.)
     #   3.5 GREEN -> ASSIGN THE VERSION (this is the gatekeeper's sole right):
     #      gatekeeper_assign_version.py --write reads the CURRENT origin/main
     #      version and writes the next strictly-monotonic version (patch 0..99;
