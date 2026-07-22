@@ -879,6 +879,46 @@ def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
     base["sequential_evidence"] = evidence
 
     if not pairs:
+        # ENGINE-LIMITED (generic/unmapped netlist) — distinguished from a real
+        # scan-insertion ERROR. The OSS `fault` engine parses the netlist with
+        # pyverilog, which cannot recognise a GENERIC yosys netlist's flops
+        # (`$_DFF_*` primitives have no module body) — `fault cut` then emits
+        # "Failed to detect any flip-flop cells" and cuts nothing → 0 pairs, even
+        # with the correct --dff/--clock. This is the SAME OSS capability gap the
+        # sibling stuck-at ATPG already discloses (design_one_shot_runner Step 11:
+        # "a library-MAPPED netlist with real stdcell DFFs is required ... Fault
+        # is not turnkey on the sky130 generic/UDP DFF forms" → cap:atpg_signoff_
+        # coverage). At-speed TDF has the identical limit. On a MAPPED netlist
+        # (real sky130/gf180/commercial stdcell DFFs) 0 pairs stays a hard ERROR.
+        # Detection is structural + chip-AGNOSTIC: generic yosys seq cell present
+        # AND no library sequential cell present.
+        _nl = src_text or ""
+        _has_generic_seq = ("$_DFF_" in _nl or "$_SDFF_" in _nl
+                            or "$_DFFE_" in _nl or "$_DLATCH_" in _nl)
+        _has_lib_seq = bool(re.search(
+            r"sky130_fd_sc_\w+__[se]?d[fr]|gf180mcu_\w+__dff|\b[A-Z]{1,6}S?DFF[A-Z0-9]*\b",
+            _nl))
+        if _has_generic_seq and not _has_lib_seq:
+            base.update({
+                "verdict": "ENGINE_LIMITED", "status": "ENGINE_LIMITED",
+                "scan_flops": 0,
+                "engine_limited": True,
+                "capability_flag": "cap:at_speed_timing_graded_atpg",
+                "pdk_detected": "generic_unmapped",
+                "reasons": ["at-speed TDF ATPG is ENGINE-LIMITED on this netlist: "
+                            "it is a GENERIC (unmapped) yosys netlist whose flops "
+                            "are `$_DFF_*` primitives, which the OSS `fault` engine "
+                            "cannot detect (fault cut: 'Failed to detect any "
+                            "flip-flop cells') → 0 pseudo-PI/PO pairs. A library-"
+                            "MAPPED netlist (real stdcell DFFs) is required; the "
+                            "SAME disclosed OSS capability gap the stuck-at ATPG "
+                            "records (cap:atpg_signoff_coverage). The design HAS "
+                            "sequential cells ("
+                            + "; ".join(evidence["reasons"])
+                            + ") — coverage is UNMEASURED (never claimed); a "
+                            "mapped-netlist or commercial ATPG path closes it"],
+            })
+            return 0, base
         if evidence["verdict"] == _far.SEQ_PRESENT:
             base.update({
                 "verdict": "ERROR", "status": "ERROR", "scan_flops": 0,
