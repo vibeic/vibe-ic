@@ -126,16 +126,35 @@ _UNPROVEN_LIST_RE = re.compile(r"Unproven\s+\$equiv\s+cells:\s*([^\n]+)")
 
 # BUDGET-EXHAUSTED marker (#155 POSITIVE timeout discriminator). run_yosys_equiv
 # (below) writes this EXACT string into the raw log ITSELF when the yosys
-# subprocess is KILLED by the wall budget (`subprocess.TimeoutExpired`) — it is
-# NOT tool output a design could emit, so it can never be spoofed by a
-# genuine-garbage log. Post-memory_map a memory-bearing design is genuinely
-# satgen-modelable, so equiv_induct ATTEMPTS the full sequential proof; on a
-# large design (e.g. sha256's memory-inclusive miter) that induction can exceed
-# the LEC wall clock, leaving no final equiv_status → parse_error. A killed run
-# produced NO comparison, so the cause must be NAMED (raise --timeout) instead of
-# read as a mismatch that was never found.
+# subprocess is KILLED by the wall budget — it is NOT tool output a design could
+# emit, so it can never be spoofed by a genuine-garbage log. Post-memory_map a
+# memory-bearing design is genuinely satgen-modelable, so equiv_induct ATTEMPTS
+# the full sequential proof; on a large design (e.g. sha256's memory-inclusive
+# miter, or a whole AES cipher whose S-box/GF cones are SAT-intractable) that
+# proof can exceed the LEC wall clock, leaving no final equiv_status → the run
+# is killed. A killed run produced NO completed comparison, so the cause must be
+# NAMED (raise --timeout) instead of read as a mismatch that was never found.
 _TIMEOUT_MARKER = "[lec_run] ERROR: yosys equiv exceeded its time budget"
 _TIMEOUT_RE = re.compile(re.escape(_TIMEOUT_MARKER))
+
+# A wall-budget kill reaches run_yosys_equiv by TWO paths that must be treated
+# identically:
+#   (1) the HOST `subprocess.run(timeout=…)` raises subprocess.TimeoutExpired; or
+#   (2) the CONTAINER-side `timeout` that _docker wraps every call in
+#       (wrap_with_container_timeout, added to stop the orphaned-tool leak) fires
+#       `margin_s` seconds BEFORE the host deadline, so yosys is already dead and
+#       `docker exec` returns NORMALLY with GNU-`timeout`'s exit code — the host
+#       run never times out and path (1) is structurally UNREACHABLE for the
+#       container flow. GNU `timeout` reports 124 when its SIGTERM expiry killed
+#       the command, and 137 (128+9) when `--kill-after` had to escalate to
+#       SIGKILL (the usual outcome for yosys mid-SAT, which ignores SIGTERM). A
+#       container OOM-kill also surfaces as 137 — likewise a resource-exhaustion
+#       no-verdict run, not a proven mismatch — so folding it in here is correct.
+# Without recognising path (2), a killed-mid-proof run (0 completed comparisons,
+# no counterexample) is misread as a hard FAIL (measured on opentitan_aes ×
+# sky130A: 27904 $equiv cells, killed at 7200s, booked verdict=FAIL "may
+# genuinely differ" — a false non-equivalence that halted the whole flow).
+_CONTAINER_TIMEOUT_RCS = (124, 137)
 
 # EVIDENCE-BASED timeout split (merge of local FAIL vs origin #155
 # SKIPPED-CONDITION). A wall-budget kill (parse_error + _TIMEOUT_RE) is a pure
@@ -1119,6 +1138,18 @@ def run_yosys_equiv(container: str, ys_path_in_container: str,
     # a docker-daemon / no-such-container failure yields no Yosys banner.
     launched = ("Yosys" in out or "$equiv" in out
                 or "No SAT model" in out or "ERROR:" in out)
+    # CONTAINER-side budget kill (path (2), see _CONTAINER_TIMEOUT_RCS): the
+    # `timeout` _docker wraps the call in fires before the host deadline, so we
+    # arrive here NORMALLY with GNU-`timeout`'s exit code instead of via
+    # subprocess.TimeoutExpired above. Re-attach the SAME marker the host path
+    # writes, so the parser's budget-exhaustion branch (INCONCLUSIVE /
+    # SKIPPED-CONDITION) fires instead of misreading a killed-mid-proof run as a
+    # hard FAIL. This is a no-verdict signal ONLY: a COMPLETED miter (proven /
+    # unproven parsed) or a recorded counterexample never reaches that branch —
+    # both keep their real FAIL — so this can neither fabricate a PASS nor hide a
+    # real mismatch (proven on opentitan_aes × sky130A and covered by the tests).
+    if launched and getattr(r, "returncode", 0) in _CONTAINER_TIMEOUT_RCS:
+        out = out.rstrip("\n") + f"\n{_TIMEOUT_MARKER} after {timeout}s"
     return launched, out
 
 
