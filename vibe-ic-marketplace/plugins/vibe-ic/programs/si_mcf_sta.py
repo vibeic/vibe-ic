@@ -647,6 +647,42 @@ def _to_container_path(host_path: str, container: str) -> str:
     return p
 
 
+# OpenSTA / OpenROAD read_liberty syntax:
+#   read_liberty [-corner <name>] [-min] [-max] [-infer_latches] <filename>
+# The liberty FILE is the sole positional argument (always last); the leading
+# tokens may be option flags, and -corner carries a value. A naive
+# `read_liberty\s+(\S+)` capture returns "-corner" for the multi-corner PnR
+# form (`read_liberty -corner ss /.../ss.lib`), which then makes si_mcf emit a
+# malformed `read_liberty -corner` that OpenSTA rejects with "read_liberty
+# -corner missing value" -> a self-inflicted ERROR verdict on a design that
+# actually meets SI timing. Extract the real liberty path instead.
+# chip / PDK / flow-AGNOSTIC: only OpenSTA's own option grammar, no PDK literal.
+_READ_LIBERTY_VALUE_OPTS = {"-corner", "-min_corner", "-max_corner"}
+
+
+def _liberty_path_from_read_liberty(line: str) -> Optional[str]:
+    """Return the liberty FILE named on a `read_liberty ...` line, skipping any
+    leading option flags (and the value of a value-taking option like -corner).
+    Returns None when the line is not a read_liberty or names no file."""
+    m = re.match(r"read_liberty\b(.*)$", line)
+    if not m:
+        return None
+    toks = [t.strip('{}"') for t in m.group(1).split()]
+    toks = [t for t in toks if t]
+    i = 0
+    while i < len(toks):
+        t = toks[i]
+        if t.startswith("-"):
+            i += 2 if t in _READ_LIBERTY_VALUE_OPTS else 1
+            continue
+        # first non-option positional token = the liberty filename; accept it
+        # only if it looks like a file/path (guards against a stray corner name)
+        if ("/" in t) or t.lower().endswith((".lib", ".lib.gz", ".db")):
+            return t
+        return None
+    return None
+
+
 def _resolve_flow_liberty(project: Path) -> Optional[str]:
     """Recover the primary std-cell liberty the phase-3 flow ALREADY resolved,
     by reading the first `read_liberty <path>` out of the PnR / STA TCLs the
@@ -677,9 +713,9 @@ def _resolve_flow_liberty(project: Path) -> Optional[str]:
             s = line.strip()
             if s.startswith("#"):
                 continue
-            m = re.match(r"read_liberty\s+(\S+)", s)
-            if m:
-                return m.group(1).strip('{}"')
+            lib = _liberty_path_from_read_liberty(s)
+            if lib:
+                return lib
     return None
 
 
