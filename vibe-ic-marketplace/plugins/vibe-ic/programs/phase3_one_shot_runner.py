@@ -2792,6 +2792,307 @@ def _parse_pg_connect_audit(text: str) -> Optional[Tuple[int, int, str]]:
     return (int(last.group(1)), int(last.group(2)), last.group(3) or "")
 
 
+# ── Hard-macro supply-pin auto global-connect (before detailed routing) ──────
+#
+# A hard macro types its supply pins USE POWER / USE GROUND in its OWN LEF. When
+# the RTL constant-ties such a pin, synthesis does not leave it floating — it
+# drives it with a TIEHI/TIELO cell, i.e. a *signal* net lands on a POWER/GROUND
+# terminal. OpenROAD's detailed router then refuses to route a signal net that
+# owns a POWER/GROUND terminal, and it does not skip just that net — TritonRoute
+# aborts, so the WHOLE design gets NO signal routing and LVS/STA become
+# unreachable. The PDN's own `global_connect` only registers rules for the
+# STD-CELL rail pin names discovered from the cell LEF; a hard macro's supply
+# pins are never guaranteed to be in that set, so the constant-tie survives to
+# routing.
+#
+# The repair is to read each hard macro's OWN LEF, find every pin it types
+# POWER/GROUND, and — for each such pin whose name matches a supply rail the
+# design actually declares — emit an explicit per-instance
+# `add_global_connection -inst_pattern <inst> -pin_pattern <pin> -net <rail>`
+# BEFORE routing, then `global_connect`. That binds the pin to the real rail and
+# the constant-tie can never survive as a signal-net-on-a-power-pin.
+#
+# HONESTY BOUNDARY: a POWER/GROUND pin whose name matches NO declared supply rail
+# (e.g. a dedicated programming/HV supply this design carries no rail for) is NOT
+# invented a rail. It is left unconnected and surfaced as an
+# `HARDMACRO_SUPPLY_UNCONNECTED` finding — a genuine integration gap, reported,
+# never faked. Matching is NAME-EQUALITY against the declared nets of the SAME
+# use, which is exactly the discriminator that keeps a real rail (matches) apart
+# from a genuinely-absent one (does not).
+#
+# chip-AGNOSTIC: masters, pins and rails all come from the design's own macro
+# LEFs and its declared supply nets — no PDK/design literal. A design with no
+# hard-macro POWER/GROUND pins emits NOTHING here (byte-identical flow).
+def _parse_macro_supply_pins(
+        lef_text: str) -> Dict[str, List[Tuple[str, str]]]:
+    """Parse a (macro) LEF and return ``{MACRO_NAME: [(pin_name, USE), ...]}``
+    for every pin the LEF types ``USE POWER`` or ``USE GROUND``. USE is
+    upper-cased and normalised to ``POWER``/``GROUND``. Pure-LEF grammar (same
+    MACRO/PIN/USE walk as `_discover_pg_from_lef`); no PDK literal, so any
+    vendor's hard macro parses. Masters with no PG pin are omitted."""
+    result: Dict[str, List[Tuple[str, str]]] = {}
+    cur_macro: Optional[str] = None
+    cur_pin: Optional[str] = None
+    cur_use: Optional[str] = None
+    for raw in (lef_text or "").splitlines():
+        s = raw.strip()
+        m = re.match(r"MACRO\s+(\S+)", s)
+        if m:
+            cur_macro = m.group(1)
+            result.setdefault(cur_macro, [])
+            cur_pin = cur_use = None
+            continue
+        if (cur_macro and s.startswith("END ")
+                and s.split()[1:2] == [cur_macro]):
+            cur_macro = cur_pin = cur_use = None
+            continue
+        if cur_macro is None:
+            continue
+        m = re.match(r"PIN\s+(\S+)", s)
+        if m:
+            cur_pin = m.group(1)
+            cur_use = None
+            continue
+        if (cur_pin and s.startswith("END ")
+                and s.split()[1:2] == [cur_pin]):
+            if cur_use in ("POWER", "GROUND"):
+                result[cur_macro].append((cur_pin, cur_use))
+            cur_pin = cur_use = None
+            continue
+        if cur_pin is None:
+            continue
+        m = re.match(r"USE\s+(\S+)", s)
+        if m:
+            cur_use = m.group(1).rstrip(";").upper()
+    return {k: v for k, v in result.items() if v}
+
+
+def _macro_supply_gc_plan(
+        macro_lef_texts: Sequence[str],
+        power_nets: Sequence[str],
+        ground_nets: Sequence[str]
+) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    """Decide, for every hard-macro POWER/GROUND pin, whether it binds to a
+    matching supply rail.
+
+    Returns ``(connect, unconnected)``:
+
+      * ``connect``     — ``[{master, pin, use, rail}, ...]`` for each pin whose
+                          name matches a design-declared net of the SAME use.
+                          ``rail == pin`` by construction (name-equality match).
+      * ``unconnected`` — ``[{master, pin, use}, ...]`` for each POWER/GROUND pin
+                          that matches NO declared rail of its use. These are
+                          reported honestly and never fabricated a rail.
+
+    chip-AGNOSTIC: keyed on the macro's own LEF USE records and the design's own
+    declared supply nets; deduplicated by ``(master, pin)`` across LEFs."""
+    pset = {n for n in (power_nets or [])}
+    gset = {n for n in (ground_nets or [])}
+    connect: List[Dict[str, str]] = []
+    unconnected: List[Dict[str, str]] = []
+    seen: set = set()
+    for txt in (macro_lef_texts or []):
+        pins_by_master = _parse_macro_supply_pins(txt or "")
+        for master in sorted(pins_by_master):
+            for pin, use in pins_by_master[master]:
+                key = (master, pin)
+                if key in seen:
+                    continue
+                seen.add(key)
+                rails = pset if use == "POWER" else gset
+                if pin in rails:
+                    connect.append({"master": master, "pin": pin,
+                                    "use": use, "rail": pin})
+                else:
+                    unconnected.append({"master": master, "pin": pin,
+                                        "use": use})
+    return connect, unconnected
+
+
+def _detect_macro_supply_signal_ties(
+        netlist_text: str,
+        macro_lef_texts: Sequence[str],
+        power_nets: Sequence[str],
+        ground_nets: Sequence[str]) -> List[Dict[str, str]]:
+    """BEFORE-state detector — the guard that proves the defect exists.
+
+    Walk the gate-level netlist for instances of any master that declares
+    POWER/GROUND pins, and flag every such pin whose netlist connection is NOT
+    the matching supply rail — i.e. a constant tie (``1'b1``/``1'b0``) or any
+    other signal net has landed on a POWER/GROUND terminal (the
+    signal-net-on-a-power-pin defect that makes detailed routing refuse the
+    design). Returns ``[{inst, pin, use, conn}, ...]``. Pure text; chip-AGNOSTIC.
+    """
+    pins_by_master: Dict[str, Dict[str, str]] = {}
+    for txt in (macro_lef_texts or []):
+        for mst, pins in _parse_macro_supply_pins(txt or "").items():
+            d = pins_by_master.setdefault(mst, {})
+            for pin, use in pins:
+                d[pin] = use
+    pset = {n for n in (power_nets or [])}
+    gset = {n for n in (ground_nets or [])}
+    text = netlist_text or ""
+    findings: List[Dict[str, str]] = []
+    for master, pinuse in pins_by_master.items():
+        for im in re.finditer(
+                r"\b" + re.escape(master) + r"\s+(\\?\S+)\s*\(", text):
+            inst = im.group(1)
+            start = im.end()
+            end = text.find(");", start)
+            body = text[start:end] if end != -1 else text[start:start + 4000]
+            conns = dict(re.findall(
+                r"\.(\w+)\s*\(\s*([^)]*?)\s*\)", body))
+            for pin, use in pinuse.items():
+                if pin not in conns:
+                    continue
+                conn = conns[pin].strip()
+                rails = pset if use == "POWER" else gset
+                if conn not in rails:
+                    findings.append({"inst": inst, "pin": pin,
+                                     "use": use, "conn": conn})
+    return findings
+
+
+def _design_supply_nets(pdk: "PdkConfig") -> Tuple[set, set]:
+    """Return ``(power_net_names, ground_net_names)`` — the supply rails the
+    design's PDN actually declares, mirroring `_build_pdn_tcl`'s rail
+    derivation so the macro-connect matches against the SAME nets the PDN
+    registered:
+
+      * sky130-style PDK (tapcell master names sky130) → ``({VPWR}, {VGND})``.
+      * otherwise → the ``(power_pin, ground_pin)`` discovered from the cell LEF
+        (a commercial 180nm PDK's VDD/VSS, gf180mcu's VDD/VSS, …).
+      * cell LEF unreadable / no PG pins → ``(∅, ∅)`` (macro-connect then finds
+        no rail to bind to and reports honestly).
+
+    Duck-typed on ``pdk`` (getattr) so a partially-populated stub still works."""
+    tap = getattr(pdk, "tapcell_master", None) or ""
+    if "sky130" in tap:
+        return ({"VPWR"}, {"VGND"})
+    mp = getattr(pdk, "metal_prefix", "met")
+    pg = _discover_pg_from_lef(getattr(pdk, "cell_lef", None), mp)
+    if pg:
+        return ({pg[0]}, {pg[1]})
+    return (set(), set())
+
+
+def _build_hardmacro_supply_gc_tcl(
+        connect: Sequence[Dict[str, str]],
+        unconnected: Sequence[Dict[str, str]]) -> str:
+    """Emit the before-detailed-route hard-macro supply auto global-connect Tcl
+    from a plan produced by `_macro_supply_gc_plan`.
+
+    * ``connect`` → an explicit per-instance ``add_global_connection`` for each
+      matched POWER/GROUND pin (instance names resolved + regex-escaped at
+      runtime from the DB), followed by a single ``global_connect``.
+    * ``unconnected`` → a per-instance ``HARDMACRO_SUPPLY_UNCONNECTED`` line so
+      a POWER/GROUND pin with no matching rail is surfaced, never faked.
+
+    Returns ``""`` when the plan is empty (no hard-macro PG pins) so a design
+    without hard macros produces a BYTE-IDENTICAL pnr.tcl. Both passes are
+    NONFATAL-guarded; the existing ``PG_CONNECT_AUDIT`` remains the gate."""
+    conn_by_master: Dict[str, List[Dict[str, str]]] = {}
+    for c in (connect or []):
+        conn_by_master.setdefault(c["master"], []).append(c)
+    unconn_by_master: Dict[str, List[Dict[str, str]]] = {}
+    for u in (unconnected or []):
+        unconn_by_master.setdefault(u["master"], []).append(u)
+    if not conn_by_master and not unconn_by_master:
+        return ""
+    out: List[str] = []
+    out.append(
+        "# === hard-macro supply-pin auto global-connect "
+        "(before detailed routing) ===\n"
+        "# Each hard macro's POWER/GROUND pins (from its own LEF USE records)\n"
+        "# are bound to the design's matching supply rails, so an RTL constant-\n"
+        "# tie can never survive as a signal-net-on-a-power-pin that TritonRoute\n"
+        "# would refuse. A POWER/GROUND pin with NO matching rail is reported,\n"
+        "# not fabricated. chip-AGNOSTIC (masters/pins/rails from this design).\n")
+    if conn_by_master:
+        # Regex-escape a runtime instance name so -inst_pattern matches it
+        # EXACTLY (bus/hierarchy chars like [ ] . are regex metacharacters).
+        out.append(
+            "proc _hm_reesc {s} { return "
+            "[regsub -all {[][{}().*+?^$\\\\|]} $s {\\\\&}] }\n")
+        out.append("if {[catch {\n")
+        out.append("  set _hm_blk [ord::get_db_block]\n")
+        out.append("  set _hm_n 0\n")
+        out.append("  foreach _hm_i [$_hm_blk getInsts] {\n")
+        out.append("    set _hm_mn [[$_hm_i getMaster] getName]\n")
+        out.append("    set _hm_re \"^[_hm_reesc [$_hm_i getName]]\\$\"\n")
+        out.append("    switch -exact -- $_hm_mn {\n")
+        for master in sorted(conn_by_master):
+            out.append(f"      \"{master}\" {{\n")
+            for c in conn_by_master[master]:
+                flag = "-power" if c["use"] == "POWER" else "-ground"
+                out.append(
+                    f"        add_global_connection -net {c['rail']} "
+                    f"-inst_pattern $_hm_re -pin_pattern \"^{c['pin']}\\$\" "
+                    f"{flag}\n")
+                out.append("        incr _hm_n\n")
+            out.append("      }\n")
+        out.append("      default {}\n")
+        out.append("    }\n")
+        out.append("  }\n")
+        out.append("  global_connect\n")
+        out.append("  puts \"HARDMACRO_SUPPLY_GC: bound=$_hm_n\"\n")
+        out.append("} _hm_err]} {\n")
+        out.append("  puts \"HARDMACRO_SUPPLY_GC_NONFATAL: $_hm_err\"\n")
+        out.append("}\n")
+    if unconn_by_master:
+        out.append(
+            "# Honest unconnected-supply report: POWER/GROUND macro pins with\n"
+            "# NO matching design rail. NOT fabricated a rail -- a real\n"
+            "# integration gap, surfaced here for the sign-off reader.\n")
+        out.append("if {[catch {\n")
+        out.append("  set _hm_ublk [ord::get_db_block]\n")
+        out.append("  set _hm_uc 0\n")
+        out.append("  foreach _hm_i [$_hm_ublk getInsts] {\n")
+        out.append("    set _hm_mn [[$_hm_i getMaster] getName]\n")
+        out.append("    set _hm_in [$_hm_i getName]\n")
+        out.append("    switch -exact -- $_hm_mn {\n")
+        for master in sorted(unconn_by_master):
+            out.append(f"      \"{master}\" {{\n")
+            for u in unconn_by_master[master]:
+                out.append(
+                    "        puts \"HARDMACRO_SUPPLY_UNCONNECTED: "
+                    f"$_hm_in/{u['pin']} (USE {u['use']}, no matching "
+                    "supply rail in design)\"\n")
+                out.append("        incr _hm_uc\n")
+            out.append("      }\n")
+        out.append("      default {}\n")
+        out.append("    }\n")
+        out.append("  }\n")
+        out.append(
+            "  puts \"HARDMACRO_SUPPLY_UNCONNECTED_TOTAL: $_hm_uc\"\n")
+        out.append("} _hm_uerr]} {\n")
+        out.append(
+            "  puts \"HARDMACRO_SUPPLY_UNCONNECTED_NONFATAL: $_hm_uerr\"\n")
+        out.append("}\n")
+    return "".join(out)
+
+
+# The audit lines the Tcl above emits, read back by Python consumers/tests.
+_HARDMACRO_SUPPLY_GC_RE = re.compile(r"HARDMACRO_SUPPLY_GC:\s*bound=(\d+)")
+_HARDMACRO_SUPPLY_UNCONN_RE = re.compile(
+    r"HARDMACRO_SUPPLY_UNCONNECTED_TOTAL:\s*(\d+)")
+
+
+def _parse_hardmacro_supply_gc(text: str) -> Optional[Tuple[int, int]]:
+    """Return ``(bound_pins, unconnected_supply_pins)`` from the LAST hard-macro
+    supply-connect audit lines in an OpenROAD log, or None when the block never
+    ran (design had no hard-macro PG pins). A missing count defaults to 0 only
+    when the paired line is present; all-absent → None (not measured)."""
+    b = u = None
+    for m in _HARDMACRO_SUPPLY_GC_RE.finditer(text or ""):
+        b = int(m.group(1))
+    for m in _HARDMACRO_SUPPLY_UNCONN_RE.finditer(text or ""):
+        u = int(m.group(1))
+    if b is None and u is None:
+        return None
+    return (b or 0, u or 0)
+
+
 @dataclass
 class PdkConfig:
     name: str
@@ -9286,6 +9587,7 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         antenna_repair_block: str,
                         filler_block: str,
                         pg_reconnect_block: str = "",
+                        hardmacro_supply_gc_block: str = "",
                         place_pins_block: Optional[str] = None,
                         macro_place_block: str = "",
                         routability_driven: bool = True,
@@ -9422,7 +9724,7 @@ write_def {out_dir_c}/floorplan.def
 # `sky130_fd_sc_hd__tapvpwrvgnd_1` at 14 µm spacing (SKY130 standard);
 # WNS improved +11.61 → +11.89 ns MET on spm pilot, DRC still 0.
 # NONFATAL-guarded — falls back if PDK has no tapcell master configured.
-{tapcell_block}{pdn_block}# === Phase-3 CONGESTION-DRIVEN (routability-driven) global placement ===
+{tapcell_block}{pdn_block}{hardmacro_supply_gc_block}# === Phase-3 CONGESTION-DRIVEN (routability-driven) global placement ===
 # `global_placement -routability_driven` enables OpenROAD / RePlAce routability
 # mode: it estimates routing congestion during placement and spreads / inflates
 # cells in congested regions so a high-fanout datapath (wide-XOR trees, key-
@@ -9842,6 +10144,38 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # programs/tests/test_phase3_backend_fixes.py).
     tapcell_block = _build_tapcell_tcl(pdk)
     pdn_block = _build_pdn_tcl(pdk)
+    # === hard-macro supply-pin auto global-connect (before detailed routing) ===
+    # A hard macro types its supply pins USE POWER/GROUND in its own LEF; when the
+    # RTL constant-ties them, synthesis drives them with TIEHI/TIELO SIGNAL nets
+    # and TritonRoute then refuses the whole design (signal-net-on-a-power-pin),
+    # so it gets NO signal routing. Bind each such pin whose name matches a
+    # design-declared supply rail to that rail BEFORE routing; a POWER/GROUND pin
+    # with no matching rail is reported honestly, never fabricated. Reuses the
+    # already-read netlist text (nl_text_for_count) for the before-state guard.
+    # See _macro_supply_gc_plan / _build_hardmacro_supply_gc_tcl. chip-AGNOSTIC.
+    _hm_pwr_nets, _hm_gnd_nets = _design_supply_nets(pdk)
+    _hm_lef_texts = [t for t in
+                     (_read_pdk_text(m, container)
+                      for m in (pdk.macro_lefs or [])) if t]
+    _hm_connect, _hm_unconn = _macro_supply_gc_plan(
+        _hm_lef_texts, _hm_pwr_nets, _hm_gnd_nets)
+    hardmacro_supply_gc_block = _build_hardmacro_supply_gc_tcl(
+        _hm_connect, _hm_unconn)
+    if _hm_connect or _hm_unconn:
+        _hm_ties = _detect_macro_supply_signal_ties(
+            nl_text_for_count, _hm_lef_texts, _hm_pwr_nets, _hm_gnd_nets)
+        print("[phase3] HARD-MACRO SUPPLY AUTO GLOBAL-CONNECT: "
+              f"{len(_hm_connect)} POWER/GROUND macro pin(s) bound to matching "
+              "supply rails before detailed routing"
+              + (f" ({len(_hm_ties)} arrived constant-tied / signal-on-power "
+                 "in the netlist and are re-bound)" if _hm_ties else "")
+              + f"; {len(_hm_unconn)} POWER/GROUND pin(s) have NO matching "
+              "supply rail — reported, NOT fabricated.", file=sys.stderr)
+        for _u in _hm_unconn:
+            print("[phase3]   UNCONNECTED SUPPLY (integration gap): "
+                  f"{_u['master']}/{_u['pin']} (USE {_u['use']}) — this design "
+                  "declares no matching rail; left unconnected, never faked.",
+                  file=sys.stderr)
     _filler_masters = _filler_masters_for_pdk(pdk)
     # #684 — sparse-die-aware fill: the full-die `filler_placement` is now
     # gated on post-place CORE utilization so a small design in a large
@@ -9997,6 +10331,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         antenna_repair_block=antenna_repair_block,
         filler_block=filler_block,
         pg_reconnect_block=pg_reconnect_block,
+        hardmacro_supply_gc_block=hardmacro_supply_gc_block,
         place_pins_block=place_pins_block,
         macro_place_block=macro_place_block,
         spef_repair_estimate_block=spef_repair_estimate_block,
