@@ -174,6 +174,84 @@ def test_parse_unproven_with_timeout_is_still_fail():
 
 
 # ---------------------------------------------------------------------------
+# CONTAINER-side budget kill (run_yosys_equiv): the `timeout` that _docker wraps
+# every call in fires BEFORE the host subprocess.run deadline, so a genuine
+# wall-budget kill returns NORMALLY with GNU-`timeout`'s exit code (124 / 137)
+# and NEVER raises subprocess.TimeoutExpired. run_yosys_equiv must re-attach the
+# budget marker so the parser classifies it as a disclosed budget gap, not a
+# hard FAIL. Regression from opentitan_aes × sky130A (27904 $equiv cells killed
+# at 7200s, misbooked verdict=FAIL "may genuinely differ").
+# ---------------------------------------------------------------------------
+class _FakeProc:
+    def __init__(self, returncode, stdout):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = ""
+
+
+# The exact shape the opentitan_aes run produced: only the INITIAL $equiv total
+# banner leaked (equiv_simple was still churning when SIGKILL landed) — no
+# `N proven / M unproven` completion line, no counterexample.
+_KILLED_MID_PROOF = (
+    "Yosys 0.67+\n"
+    "Found 27904 unproven $equiv cells (27904 groups) in equiv:\n"
+    "  Trying to prove $equiv for \\u_aes.ctr_i[82]: ezsat\nezsat\n failed.\n"
+    "  Trying "
+)
+
+
+@pytest.mark.parametrize("rc", [137, 124])
+def test_container_timeout_rc_reattaches_budget_marker(monkeypatch, rc):
+    # yosys killed by the container-side `timeout` (137=SIGKILL after
+    # --kill-after, 124=SIGTERM expiry) arrives via the NORMAL return path.
+    monkeypatch.setattr(lec_run, "_docker",
+                        lambda *a, **k: _FakeProc(rc, _KILLED_MID_PROOF))
+    launched, out = lec_run.run_yosys_equiv("c", "/x.ys", timeout=7200)
+    assert launched is True
+    assert lec_run._TIMEOUT_MARKER in out          # marker re-attached
+    # …and the parser now correctly classifies it, NOT a false FAIL:
+    p = lec_run.parse_equiv_output(out)
+    assert p["verdict"] == "INCONCLUSIVE"
+    assert p["equivalent"] is False                # never a fake pass
+
+
+def test_container_clean_rc_does_not_fabricate_marker(monkeypatch):
+    # NEGATIVE CONTROL: a normal completed run (rc=0) with a REAL mismatch must
+    # NOT get a budget marker — the genuine FAIL has to survive.
+    done_fail = ("Yosys 0.67+\n"
+                 "Found 8 $equiv cells in equiv:\n"
+                 "  Of those cells 0 are proven and 8 are unproven.\n")
+    monkeypatch.setattr(lec_run, "_docker",
+                        lambda *a, **k: _FakeProc(0, done_fail))
+    _, out = lec_run.run_yosys_equiv("c", "/x.ys", timeout=10)
+    assert lec_run._TIMEOUT_MARKER not in out
+    assert lec_run.parse_equiv_output(out)["verdict"] == "FAIL"
+
+
+def test_container_tool_error_rc1_does_not_fabricate_marker(monkeypatch):
+    # NEGATIVE CONTROL: an ordinary yosys error exit (rc=1) is not a budget
+    # kill — no marker, so a genuine no-verdict crash stays a FAIL.
+    monkeypatch.setattr(lec_run, "_docker",
+                        lambda *a, **k: _FakeProc(1, "Yosys 0.67+\nERROR: boom\n"))
+    _, out = lec_run.run_yosys_equiv("c", "/x.ys", timeout=10)
+    assert lec_run._TIMEOUT_MARKER not in out
+
+
+def test_container_timeout_rc_with_recorded_mismatch_still_fails(monkeypatch):
+    # A timeout that ALSO recorded a completed mismatch (proven+unproven parsed)
+    # keeps its real FAIL even though rc=137 re-attaches the marker — the marker
+    # only redirects a NO-VERDICT run, it can never hide a proven difference.
+    done_then_killed = ("Yosys 0.67+\n"
+                        "Found 8 $equiv cells in equiv:\n"
+                        "  Of those cells 0 are proven and 8 are unproven.\n")
+    monkeypatch.setattr(lec_run, "_docker",
+                        lambda *a, **k: _FakeProc(137, done_then_killed))
+    _, out = lec_run.run_yosys_equiv("c", "/x.ys", timeout=10)
+    assert lec_run._TIMEOUT_MARKER in out          # marker re-attached…
+    assert lec_run.parse_equiv_output(out)["verdict"] == "FAIL"  # …but FAIL stands
+
+
+# ---------------------------------------------------------------------------
 # build_report — JSON schema keys the downstream gate reads
 # ---------------------------------------------------------------------------
 def test_build_report_schema_keys():
