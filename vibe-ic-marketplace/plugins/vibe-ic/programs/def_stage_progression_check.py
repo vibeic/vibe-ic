@@ -285,6 +285,7 @@ def inspect(project: Path) -> tuple[List[StageInfo], List[Finding]]:
     _noop_pair_ok = _hold_clean_noop_ok(project)
     prev_size = 0
     prev_name = None
+    prev_components = 0
     for i in infos:
         if i.size < prev_size:
             benign_noop = (
@@ -292,7 +293,34 @@ def inspect(project: Path) -> tuple[List[StageInfo], List[Finding]]:
                 and _noop_pair_ok
                 and i.size >= prev_size * (1.0 - _NOOP_SHRINK_TOL)
             )
-            if not benign_noop:
+            # ORGANIC-20260722 #790 — a byte shrink is NOT truncation when the
+            # stage GAINED instances. This rule's whole purpose is to catch a
+            # truncated / fabricated stage, and a truncated DEF necessarily
+            # LOSES components. Byte size is only a proxy; the instance count
+            # is the substance, and when the two disagree the substance wins.
+            #
+            # Measured on caravel_user_project x sky130A once #789 restored
+            # full-die well-tie taps (134,178 of them):
+            #   floorplan    247,682 B  components=   325
+            #   placed    51,885,969 B  components=134503
+            #   post_cts  61,597,082 B  components=134613
+            #   post_hold 61,597,082 B  components=134613
+            #   routed    52,174,653 B  components=134748  routing=yes
+            # routed.def is 15% smaller than post_hold.def yet carries 135 MORE
+            # instances: detailed routing replaces the bulky per-net global
+            # route GUIDE records with actual wire segments. The gate called
+            # that "one or more stages fabricated or missing" — while the GDS
+            # streamed from that very DEF was DRC-clean (0 violations) and LVS
+            # "circuits match uniquely" against the gate netlist, which a
+            # truncated DEF cannot do.
+            #
+            # Narrow and evidence-positive, like the #624 exemption above: it
+            # requires a STRICT instance increase across the same transition.
+            # A stage that shrinks in bytes AND loses (or holds) instances
+            # still FAILs, so no fraud path is relaxed — Check 1 (sha256
+            # distinctness) and Check 3 (instance-count growth) are untouched.
+            grew_instances = (i.num_components > prev_components > 0)
+            if not benign_noop and not grew_instances:
                 findings.append(Finding(
                     severity="error",
                     rule="size-non-monotone",
@@ -304,6 +332,7 @@ def inspect(project: Path) -> tuple[List[StageInfo], List[Finding]]:
                 ))
         prev_size = i.size
         prev_name = i.name
+        prev_components = i.num_components
 
     # --- Check 3: instance-count growth (routed ≥ floorplan) ---
     fp = next(i for i in infos if i.name == "floorplan")
