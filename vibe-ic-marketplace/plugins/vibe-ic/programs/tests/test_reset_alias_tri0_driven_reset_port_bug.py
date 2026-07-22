@@ -193,9 +193,9 @@ def test_synth_bound_frontends_define_yosys():
             # which case forcing it would synthesise a behavioural array in
             # place of the macro). -DYOSYS — what this pin is about — is
             # unconditional at every synth-bound call site, as before.
-            (p3, ["read_slang {slang_files} --top {top} {_simdef}-DYOSYS",
+            (p3, ["read_slang --single-unit {slang_files} --top {top} {_simdef}-DYOSYS",
                   "sv2v {_simdef}-DYOSYS {sv2v_in}",
-                  "read_slang {_syn_files} --top {top} -DSYNTHESIS -DYOSYS"]),
+                  "read_slang --single-unit {_syn_files} --top {top} -DSYNTHESIS -DYOSYS"]),
             (p2, ["-DSYNTHESIS -DYOSYS {inc_flag}; ",
                   "sv2v -DSYNTHESIS -DYOSYS {inc_flag} {reads_join}"])):
         for s in snippets:

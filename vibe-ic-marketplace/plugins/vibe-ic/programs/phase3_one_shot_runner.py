@@ -49,6 +49,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 import _path_layout as _pl
 from _rtl_include_hub import drop_include_hubs as _drop_include_hubs  # shared aggregator filter
+from _rtl_include_hub import macro_headers_first as _macro_headers_first  # #785 — shared macro-header ordering
 import _watchdog as _wd  # v1.3.47 — plugin-wide progress-stall supervision
 import _docker_watchdog as _dwd  # shared in-container CPU probe (tree-aware)
 import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
@@ -5780,7 +5781,16 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     # Package files MUST come first so `import pkg::*` resolves.
     pkg_files = [f for f in silicon if "pkg" in f.name.lower()]
     other = [f for f in silicon if "pkg" not in f.name.lower()]
-    rtl_files = pkg_files + other
+    # ORGANIC-20260722 #785 — and pure MACRO HEADERS must come first for the
+    # very same reason: under the single-compilation-unit read below the files
+    # are concatenated IN ORDER, so a `` `MACRO `` used by a file placed before
+    # its defining header is still "unknown macro or compiler directive". The
+    # order was alphabetical, i.e. whether the header landed first was luck of
+    # its filename — `defines.v` precedes `user_project_wrapper.v` but NOT the
+    # auto-emitted `caravel_user_project.v`, which copies the wrapped DUT's
+    # macro-bearing port block verbatim. Same shared helper the LEC gold read
+    # already uses, so the three source-set builders cannot drift apart.
+    rtl_files = _macro_headers_first(pkg_files + other)
 
     # ASIC top resolution moved to main() so all steps share the same
     # `top`. step_synth now receives the already-resolved name.
@@ -6040,7 +6050,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
             f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
             f"yosys -p '{macro_lib_reads + ('; ' if macro_lib_reads else '')}"
             f"{_slang_prefix}"
-            f"read_slang {slang_files} --top {top} {_simdef}-DYOSYS; "
+            f"read_slang --single-unit {slang_files} --top {top} {_simdef}-DYOSYS; "
             f"hierarchy -top {top}; proc; flatten; tribuf -logic; "
             f"{_arith_pre_clause}"
             f"synth -top {top} -flatten; "
@@ -6126,7 +6136,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
                 f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
                 f"yosys -p '{macro_lib_reads + ('; ' if macro_lib_reads else '')}"
                 f"{_slang_prefix}"
-                f"read_slang {_syn_files} --top {top} -DSYNTHESIS -DYOSYS; "
+                f"read_slang --single-unit {_syn_files} --top {top} -DSYNTHESIS -DYOSYS; "
                 f"hierarchy -top {top}; proc; flatten; tribuf -logic; "
                 f"{_arith_pre_clause}"
                 f"synth -top {top} -flatten; "
