@@ -29744,7 +29744,7 @@ def gen_l4_regmap(project: Path,
                 ev.append({"literal": field_name,
                            "label": "OTP bracket field (row-scan)"})
 
-    # OTP IP macro reference (eMemory / fuse / antifuse vendor).
+    # OTP IP macro reference (fuse / antifuse OTP vendor).
     otp_ip = {}
     pdk_local = project / "input" / "pdk_local"
     if pdk_local.is_dir():
@@ -29859,7 +29859,6 @@ def gen_l4_regmap(project: Path,
         r"\bone[-\s]?time[-\s]?programmable\b|"
         r"\bfuse(?:s|map|bit)?\b|"
         r"\beFuse\b|"
-        r"\beMemory\b|"
         r"\bantifuse\b",
         re.IGNORECASE,
     )
