@@ -7423,7 +7423,13 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
     _prune_advisory = None  # ORGANIC #778 — PASS-path over-broad-tail advisory
     try:
         import catalog_glue_closure_resolver as _cg
-        _cg_report = _cg.resolve(synth_top, rtl_dir)
+        # ORGANIC #781 — scope the duplicate-module crash-gate to the set we
+        # ACTUALLY compile. `_select_asic_rtl_sources` is a TOP-LEVEL glob; the
+        # resolver's closure walk is an rglob (nested headers must chain in via
+        # `include). Gating on the rglob set FAILs runs over nested copies that
+        # are never handed to the frontend and so can never abort it.
+        _cg_report = _cg.resolve(synth_top, rtl_dir,
+                                 synth_files=_select_asic_rtl_sources(rtl_dir))
         # ORGANIC #774 — gate on STAGED_DUPLICATE too, not just the #639
         # reachable-only DUPLICATE. `_select_asic_rtl_sources` feeds the
         # FULL flat glob to yosys_synth (prune is advisory — "never
