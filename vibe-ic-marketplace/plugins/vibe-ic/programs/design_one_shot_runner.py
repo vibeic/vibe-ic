@@ -9032,6 +9032,48 @@ def lec_step_status_from_report(lec_json: Path) -> Tuple[str, str]:
     return "SKIP", verdict
 
 
+def _derive_dft_clock_name(blob: str) -> str:
+    """Derive the primary functional clock port name from an RTL source blob
+    for Fault ATPG's ``--clock`` argument. Chip-AGNOSTIC: pure string scan.
+
+    Two historical defects this guards against (both surfaced on a real
+    comportable design whose clock is ``clk_i``):
+
+      1. COMMENTS were scanned. A prose line such as
+         ``// ... the input of the multiplier is blanked in the next clock
+         cycle ...`` (aes_ghash.sv) matched ``\\binput\\b...\\bclock\\b`` and
+         injected a phantom clock named ``clock``. That became
+         ``--clock clock`` on a design with no such port, so the scan cut
+         exposed 0 pseudo-PI/PO and DT1 (transition-fault ATPG) hard-FAILed.
+
+      2. ``clk_i`` was UNREACHABLE. The old capture required a leading char
+         before the clk token (``[A-Za-z_]\\w*(?:clk|...)``) and the fallback
+         required a standalone word (``\\b(clk|clock)\\b``), so both missed the
+         ubiquitous ``clk_i`` even though it is listed in the preferred-name
+         allow-list.
+
+    Returns the derived clock name, or ``""`` when none is found.
+    """
+    # Strip comments FIRST so prose never masquerades as a port.
+    blob = re.sub(r"/\*.*?\*/", " ", blob, flags=re.S)   # block comments
+    blob = re.sub(r"//[^\n]*", " ", blob)                # line comments
+    # input [decls] <name> where <name> looks like a clock. The clk/clock
+    # token may be a PREFIX (clk_i, clk_edn_i), a SUFFIX (sys_clk, gated_clk)
+    # or the whole name (clk, clock).
+    clk_ports = set(re.findall(
+        r"\binput\b[^;,\)\n]*?\b((?:[A-Za-z_]\w*?)?(?:clk|clock|Clk|Clock|CLK|CLOCK)\w*)\b",
+        blob))
+    clk = next((c for c in sorted(clk_ports) if c.lower() in
+                ("clk", "clock", "clk_i", "i_clk", "sys_clk", "hclk",
+                 "clk_in", "clkin")), "")
+    if not clk and clk_ports:
+        # Prefer a genuinely clock-like name over an incidental match, shortest.
+        _clocky = [c for c in clk_ports
+                   if c.lower().startswith("clk") or "clock" in c.lower()]
+        clk = sorted(_clocky or clk_ports, key=len)[0]
+    return clk
+
+
 def step_dft_lec_chain(project: Path, top_name: str, container: str,
                        ic_class: str, full_chip: bool = True
                        ) -> List[StepResult]:
@@ -9078,17 +9120,7 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
     try:
         rtl_files = sorted([*rtl_dir.glob("*.v"), *rtl_dir.glob("*.sv")])
         blob = "\n".join(f.read_text(errors="ignore") for f in rtl_files)
-        # input [decls] <name> where <name> contains clk/clock
-        clk_ports = set(re.findall(
-            r"\binput\b[^;,\)\n]*?\b([A-Za-z_]\w*(?:clk|clock|Clk|Clock|CLK)\w*)",
-            blob))
-        clk_ports |= set(re.findall(
-            r"\binput\b[^;,\)\n]*?\b(clk|clock|CLK|CLOCK)\b", blob))
-        clk = next((c for c in sorted(clk_ports) if c.lower() in
-                    ("clk", "clock", "clk_i", "i_clk", "sys_clk", "hclk",
-                     "clk_in", "clkin")), "")
-        if not clk and clk_ports:
-            clk = sorted(clk_ports, key=len)[0]
+        clk = _derive_dft_clock_name(blob)
     except Exception:
         clk = ""
 
