@@ -1885,6 +1885,260 @@ def _discover_well_bias_pins_from_lef(
     return pwr_pins, gnd_pins
 
 
+# --- Auto-derived PDN straps (chip-AGNOSTIC) ------------------------------
+# A follow-pin-ONLY PDN is not a power grid. `add_pdn_stripe -followpins` emits
+# one rail per std-cell ROW on the follow-pin layer and nothing else: the rails
+# are mutually ISOLATED islands, with zero upper-metal straps and zero vias to
+# tie them together. Ground often *looks* whole only because the substrate ties
+# it physically; supply is genuinely fragmented. Downstream this shows up as
+# OpenROAD PSM `PSM-0039 Unconnected instance` / `PSM-0069 Check connectivity
+# failed` (so static IR and EM cannot be computed at all), and as an LVS
+# power-net that will not match the schematic.
+#
+# Until now straps came ONLY from `pdk.pdn_straps` in the registry, so EVERY
+# PDK without that key silently got the hollow grid. These ratios derive a
+# connectivity-first default from the tech LEF's OWN declared geometry so no
+# PDK depends on someone having hand-written a config block for it. A PDK that
+# wants tuned IR-drop geometry still overrides via `pdn_straps` (config wins).
+#
+# Expressed as MULTIPLES of the layer's own declared minimum WIDTH and PITCH,
+# so they scale with the process instead of hard-coding any absolute dimension:
+#   width  = _PDN_STRAP_WIDTH_X_MINWIDTH x that layer's min WIDTH
+#   pitch  = max(_PDN_STRAP_PITCH_X_LAYERPITCH x layer PITCH,
+#                _PDN_STRAP_MIN_PITCH_X_WIDTH x the width above)
+#            (the second term keeps pitch >> width: straps can never abut, and
+#             the layer keeps ample room for signal routing)
+#   offset = pitch / _PDN_STRAP_OFFSET_DIV  (first strap comfortably in-core)
+# These are DEFAULTS chosen for CONNECTIVITY, not an IR-drop target. What
+# proves the grid actually connected is not these numbers but
+# `_def_pdn_evidence` reading the emitted DEF — see `_pnr_pdn_status`.
+_PDN_STRAP_WIDTH_X_MINWIDTH = 4.0
+_PDN_STRAP_PITCH_X_LAYERPITCH = 40.0
+_PDN_STRAP_MIN_PITCH_X_WIDTH = 8.0
+_PDN_STRAP_OFFSET_DIV = 4.0
+
+
+def _techlef_routing_layers(
+        tech_lef_text: str) -> List[Tuple[str, str, float, float]]:
+    """``(name, DIRECTION, PITCH_um, min WIDTH_um)`` for every ``TYPE ROUTING``
+    layer in the tech LEF, in DECLARATION order — which is bottom-to-top metal
+    order in every LEF this flow has seen.
+
+    Pure LEF grammar, chip-AGNOSTIC: no layer-name convention is assumed, so a
+    stack named ``met1..met5``, ``Metal1..TopMetal2`` or ``M1..M9`` all parse
+    identically. ``DIRECTION`` is upper-cased, or ``""`` when the layer
+    declares none. Returns ``[]`` on parse failure or empty input, which the
+    callers treat as "cannot derive" rather than "nothing to do"."""
+    if not isinstance(tech_lef_text, str) or not tech_lef_text:
+        return []
+    out: List[Tuple[str, str, float, float]] = []
+    name: Optional[str] = None
+    is_routing = False
+    direction = ""
+    pitch: Optional[float] = None
+    width: Optional[float] = None
+
+    def _flush() -> None:
+        if name and is_routing and pitch and pitch > 0 and width and width > 0:
+            out.append((name, direction, pitch, width))
+
+    for raw in tech_lef_text.splitlines():
+        s = raw.strip()
+        m = re.match(r"^LAYER\s+(\w+)", s)
+        if m:
+            _flush()
+            name = m.group(1)
+            is_routing = False
+            direction = ""
+            pitch = None
+            width = None
+            continue
+        if name is None:
+            continue
+        if re.match(r"^TYPE\s+ROUTING\b", s):
+            is_routing = True
+            continue
+        m = re.match(r"^DIRECTION\s+(\w+)", s)
+        if m and not direction:
+            direction = m.group(1).upper()
+            continue
+        m = re.match(r"^PITCH\s+([\d.]+)", s)
+        if m and pitch is None:
+            try:
+                pitch = float(m.group(1))
+            except ValueError:
+                pitch = None
+            continue
+        m = re.match(r"^WIDTH\s+([\d.]+)", s)
+        if m and width is None:
+            try:
+                width = float(m.group(1))
+            except ValueError:
+                width = None
+            continue
+    _flush()
+    return out
+
+
+def _auto_pdn_straps_from_techlef(
+        tech_lef_text: str,
+        followpin_layer: str) -> Optional[Dict[str, Any]]:
+    """Derive an upper-metal strap plan (same schema as registry
+    ``pdn_straps``) from the tech LEF, so a PDK with no hand-written strap
+    config still gets a CONNECTED power grid instead of isolated row rails.
+
+    STRAPS MUST CROSS THE RAILS THEY TIE TOGETHER
+    ---------------------------------------------
+    The single rule that makes this work: two stripes only bond where they
+    CROSS, so every ``add_pdn_connect`` pair must name layers of OPPOSITE
+    ``DIRECTION``. Follow-pin rails run along the rows (the follow-pin layer's
+    own direction), so the strap layer that connects DOWN to them must be
+    PERPENDICULAR to that direction — a parallel strap layer never crosses a
+    rail and bonds nothing.
+
+    Measured: deriving the top two layers as ``(horizontal, vertical)`` and
+    connecting ``rails(H) -> lower(H)`` put two PARALLEL layers in the same
+    connect pair. ``pdngen`` reported ``PDN-0178 Remaining channel ... on
+    <rail layer> for nets: VDD, VSS`` across the whole core, then ``[ERROR
+    PDN-0179] Unable to repair all channels`` — it could not bond the rails
+    because nothing crossed them.
+
+    So the plan is an ALTERNATING chain from the rails upward, taking the
+    HIGHEST pair that alternates:
+
+    * upper strap ``U``, scanning from the top down;
+    * lower strap ``L`` below ``U``, with ``dir(L) != dir(followpin)`` (so it
+      crosses the rails) and ``dir(U) != dir(L)`` (so the two straps cross
+      each other) — giving ``rails -> L -> U``, the same shape as both the
+      hard-coded branch in this file and the one hand-written registry config;
+    * failing that, a SINGLE strap layer perpendicular to the rails, which is
+      enough to bond them even without a second layer;
+    * failing that (no direction declared anywhere), the top two layers, which
+      is the previous best-effort behaviour.
+
+    ``pdngen`` builds the intervening via stack itself, so naming non-adjacent
+    layers is correct.
+
+    Returns ``None`` when NO routing layer sits above the follow-pin layer (a
+    single-metal stack cannot be strapped) or when the LEF cannot be parsed.
+    ``None`` means "no grid is possible here" and MUST NOT be rendered as a
+    successful PDN — see `_build_pdn_tcl`, which emits the ``PDN_NO_STRAPS``
+    marker in that case rather than a success marker.
+
+    chip-AGNOSTIC: no PDK name, no layer-name convention, no absolute
+    dimension — every number comes from the LEF or from the documented ratios
+    above."""
+    layers = _techlef_routing_layers(tech_lef_text)
+    if not layers or not followpin_layer:
+        return None
+    names_lc = [n.lower() for n, _d, _p, _w in layers]
+    try:
+        fp_idx = names_lc.index(followpin_layer.lower())
+    except ValueError:
+        return None
+    above = layers[fp_idx + 1:]
+    if not above:
+        return None
+    fp_dir = layers[fp_idx][1]
+    chosen: List[Tuple[str, str, float, float]] = []
+    # Highest alternating pair: rails -> L (crosses the rails) -> U (crosses L).
+    if fp_dir:
+        for ui in range(len(above) - 1, 0, -1):
+            u = above[ui]
+            if not u[1]:
+                continue
+            for li in range(ui - 1, -1, -1):
+                lo = above[li]
+                if lo[1] and lo[1] != fp_dir and u[1] != lo[1]:
+                    chosen = [lo, u]
+                    break
+            if chosen:
+                break
+        if not chosen:
+            # One layer perpendicular to the rails still bonds every rail.
+            for cand in reversed(above):
+                if cand[1] and cand[1] != fp_dir:
+                    chosen = [cand]
+                    break
+    if not chosen:
+        # No usable DIRECTION anywhere — previous best-effort behaviour.
+        chosen = above[-2:]
+
+    stripes: List[Dict[str, Any]] = []
+    for lname, _dirn, lpitch, lwidth in chosen:
+        w = round(_PDN_STRAP_WIDTH_X_MINWIDTH * lwidth, 3)
+        p = round(max(_PDN_STRAP_PITCH_X_LAYERPITCH * lpitch,
+                      _PDN_STRAP_MIN_PITCH_X_WIDTH * w), 3)
+        stripes.append({"layer": lname, "width": w, "pitch": p,
+                        "offset": round(p / _PDN_STRAP_OFFSET_DIV, 3)})
+    # Connect the rails to the LOWEST chosen strap that actually CROSSES them.
+    # Naming a parallel layer here is what produced PDN-0178/0179.
+    _down = next((c[0] for c in chosen if c[1] and c[1] != fp_dir),
+                 chosen[0][0])
+    connects: List[List[str]] = [[followpin_layer, _down]]
+    for lower, upper in zip(stripes, stripes[1:]):
+        connects.append([lower["layer"], upper["layer"]])
+    return {"stripes": stripes, "connects": connects, "source": "auto:tech_lef"}
+
+
+# DEF keywords that may legally follow a `( x y )` coordinate inside
+# SPECIALNETS. Anything else in that position is a VIA MASTER NAME, which is
+# how a via placement is spelled in the DEF special-wiring grammar.
+_DEF_SPECIALNET_KEYWORDS = frozenset({
+    "NEW", "ROUTED", "FIXED", "COVER", "SHIELD", "SHAPE", "FOLLOWPIN",
+    "STRIPE", "RING", "IOWIRE", "COREWIRE", "BLOCKWIRE", "FILLWIRE",
+    "FILLWIREOPC", "DRCFILL", "PADRING", "BLOCKAGEWIRE", "MASK", "RECT",
+    "VIRTUAL", "STEP", "DO", "BY", "USE", "SOURCE", "PATTERN", "ESTCAP",
+    "WEIGHT", "PROPERTY", "NONDEFAULTRULE", "STYLE",
+})
+
+
+def _def_pdn_evidence(def_text: str) -> Dict[str, Any]:
+    """Read what a DEF's ``SPECIALNETS`` section ACTUALLY contains — the
+    measured power grid, not what any tool logged about it.
+
+    Returns ``{"parsed", "nets", "followpin", "stripe", "ring", "vias",
+    "layers"}``. ``parsed`` is False when the DEF carries no SPECIALNETS
+    section at all (e.g. a pre-PDN floorplan DEF), which is distinct from a
+    section that exists and is empty.
+
+    This is the ANTIDOTE to marker-based PDN checking. ``pdngen`` returns
+    success for a follow-pin-only grid, so the tool's own log says
+    ``PDN_INSERTED*`` whether or not anything tied the rails together. Only the
+    geometry can answer that: ``stripe``/``ring`` count the upper-metal straps
+    and ``vias`` counts the via placements that bond the layers.
+
+    SCOPE (what this deliberately cannot see): it counts DEF *statements*, not
+    net-by-net electrical connectivity — it will not detect straps that exist
+    but land in the wrong place, nor a via array whose enclosure is illegal.
+    It answers exactly one question, the one that shipped undetected: *are
+    there any straps and vias at all?* DRC and LVS remain the checks for
+    whether they are correct. Pure text, chip-AGNOSTIC."""
+    empty: Dict[str, Any] = {"parsed": False, "nets": 0, "followpin": 0,
+                             "stripe": 0, "ring": 0, "vias": 0, "layers": []}
+    if not isinstance(def_text, str) or not def_text:
+        return empty
+    m = re.search(r"^\s*SPECIALNETS\b", def_text, re.M)
+    if not m:
+        return empty
+    end = re.search(r"^\s*END\s+SPECIALNETS\b", def_text[m.start():], re.M)
+    sec = def_text[m.start():m.start() + end.start()] if end \
+        else def_text[m.start():]
+    vias = [t for t in re.findall(r"\)\s*([A-Za-z_][\w]*)", sec)
+            if t.upper() not in _DEF_SPECIALNET_KEYWORDS]
+    layers = sorted({lyr for lyr in re.findall(
+        r"(?:\+\s*(?:ROUTED|FIXED|COVER|SHIELD)|\bNEW)\s+(\w+)\s+[\d.]+", sec)})
+    return {
+        "parsed": True,
+        "nets": len(re.findall(r"^\s*-\s+\S+", sec, re.M)),
+        "followpin": len(re.findall(r"SHAPE\s+FOLLOWPIN\b", sec)),
+        "stripe": len(re.findall(r"SHAPE\s+STRIPE\b", sec)),
+        "ring": len(re.findall(r"SHAPE\s+RING\b", sec)),
+        "vias": len(vias),
+        "layers": layers,
+    }
+
+
 def _build_pdn_tcl(pdk: "PdkConfig") -> str:
     """v0.1.47 — emit OpenROAD PDN (`add_global_connection`/`define_pdn_grid`/
     `pdngen`) Tcl, NONFATAL-guarded.
@@ -1958,6 +2212,37 @@ def _build_pdn_tcl(pdk: "PdkConfig") -> str:
         strap_tcl = ""
         strap_note = ""
         straps = (pdk.pdn_straps or {})
+        # The registry config WINS when present (a PDK that ships tuned
+        # IR-drop geometry keeps it, byte-identical). When it is ABSENT the
+        # straps are now DERIVED from the tech LEF instead of silently
+        # emitting a follow-pin-only grid — see `_auto_pdn_straps_from_techlef`.
+        # Only ONE PDK in the registry ever carried `pdn_straps`, so before
+        # this every other PDK — named or project-staged — shipped isolated
+        # per-row rails with zero straps and zero vias, and said PDN_INSERTED.
+        _auto_note = ""
+        _no_strap_why = ""
+        if not straps.get("stripes"):
+            # `_read_pdk_text` reads the host copy first, then the container,
+            # so a PDK whose tech LEF exists only inside the EDA image still
+            # resolves here.
+            _tlef_txt = _read_pdk_text(getattr(pdk, "tech_lef", None))
+            _auto = _auto_pdn_straps_from_techlef(_tlef_txt or "", fpl)
+            if _auto:
+                straps = _auto
+                _auto_note = "auto:"
+            elif _tlef_txt is None:
+                # `_read_pdk_text` returns None ONLY when neither the host nor
+                # the container could read it. An empty-but-readable file is a
+                # different problem and falls through to the next branch.
+                _no_strap_why = (
+                    "tech LEF unreadable from host and container "
+                    f"({getattr(pdk, 'tech_lef', None)!r}), so no strap plan "
+                    "could be derived")
+            elif not _techlef_routing_layers(_tlef_txt):
+                _no_strap_why = ("tech LEF declares no parseable TYPE ROUTING "
+                                 "layers, so no strap plan could be derived")
+            else:
+                _no_strap_why = (f"no routing layer above {fpl} to strap with")
         _stripes = straps.get("stripes") or []
         _connects = straps.get("connects") or []
         if _stripes:
@@ -1979,9 +2264,25 @@ def _build_pdn_tcl(pdk: "PdkConfig") -> str:
                         f"{{{pair[0]} {pair[1]}}}\n")
             if _sl:
                 strap_tcl = "".join(_sl)
-                strap_note = (" + straps("
+                strap_note = (" + straps(" + _auto_note
                               + ",".join(str(s.get("layer")) for s in _stripes
                                          if s.get("layer")) + ")")
+        # NEVER report success for a grid with no straps. `pdngen` returns 0
+        # for a follow-pin-only grid, so the old code printed
+        # PDN_INSERTED_ADAPTIVE and every downstream consumer read that as a
+        # working power grid — while the DEF held isolated per-row rails, zero
+        # straps and zero vias. That silence is the defect. When nothing could
+        # be strapped (single-metal stack, or an unreadable/unparseable tech
+        # LEF) the run emits a marker that `_pnr_pdn_status` treats as NOT-OK,
+        # so the PnR step reports BLOCKED instead of passing hollow.
+        _ok_marker = (
+            f"  puts \"PDN_INSERTED_ADAPTIVE: {fpl} follow-pins "
+            f"net={pwr}/{gnd} width={w}{strap_note}{well_note}\"\n"
+            if strap_tcl else
+            f"  puts \"PDN_NO_STRAPS: {fpl} follow-pins net={pwr}/{gnd} "
+            f"width={w}{well_note} — {_no_strap_why}, so the per-row rails "
+            f"are ISOLATED (no straps, no vias). This is NOT a usable power "
+            f"grid. Declare `pdn_straps` for this PDK to override.\"\n")
         return (
             "# === PDK-adaptive PDN: discovered PG pins + met1 follow-pins"
             + (" + upper-metal straps ===\n" if strap_tcl else " ===\n")
@@ -1998,9 +2299,8 @@ def _build_pdn_tcl(pdk: "PdkConfig") -> str:
             "} _pdn_err]} {\n"
             "  puts \"PDN_NONFATAL: $_pdn_err\"\n"
             "} else {\n"
-            f"  puts \"PDN_INSERTED_ADAPTIVE: {fpl} follow-pins "
-            f"net={pwr}/{gnd} width={w}{strap_note}{well_note}\"\n"
-            "}\n")
+            + _ok_marker
+            + "}\n")
     return ("puts \"PDN_SKIPPED: no PDK config for this design; "
             "silicon DOA without external PDN insertion\"\n")
 
@@ -9623,16 +9923,44 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     if _rf_pnr_notes:
         detail += (f" | reference_flow_pnr_knobs: "
                    f"{len(_rf_pnr_notes)} adopted")
+    # --- POWER-GRID CONNECTIVITY GATE ---------------------------------
+    # A PnR that routed clean but left the power rails unstrapped has not
+    # produced a manufacturable design: the supply is fragmented into
+    # per-row islands, static IR/EM cannot be computed, and LVS cannot match
+    # the power nets. This used to pass silently — `pdngen` exits 0 for a
+    # follow-pin-only grid and the transcript said PDN_INSERTED. Gate on the
+    # MEASURED geometry in the emitted DEF (`_pnr_pdn_status` now confirms
+    # the marker against `_def_pdn_evidence`) so the hollow grid is reported
+    # BLOCKED rather than green.
+    #
+    # BLOCKED, not FAIL: PnR itself ran and every step it owns succeeded —
+    # what is missing is a strappable input (a `pdn_straps` declaration, or a
+    # tech LEF with a routing layer above the rails). Per the verdict-tier
+    # vocabulary that is exactly BLOCKED: the tool ran, the input cannot
+    # support the operation. BLOCKED is never green (`_aggregate_verdict`).
+    # Only POSITIVE evidence of a broken grid blocks. A transcript with no PDN
+    # marker at all is UNKNOWN, not BAD — blocking on absent evidence would
+    # manufacture a failure, which is the same error class as passing on
+    # absent evidence.
+    _pdn_verdict, _pdn_mk = _pnr_pdn_grid_verdict(project)
+    if _pdn_verdict == "BAD":
+        return StepResult(
+            "pnr", "BLOCKED", time.time() - t0,
+            f"power grid not connected — {_pdn_mk}. {detail}",
+            pnr_outputs,
+            extras={"pdn_status": _pdn_mk, **spare_extras})
+    detail += f" | pdn: {_pdn_mk}"
     if resize_history:
         return StepResult("pnr", "PASS", time.time() - t0,
                           detail,
                           pnr_outputs,
                           extras={"resize_history": resize_history,
+                                  "pdn_status": _pdn_mk,
                                   **spare_extras})
     return StepResult("pnr", "PASS", time.time() - t0,
                       detail,
                       pnr_outputs,
-                      extras=spare_extras)
+                      extras={"pdn_status": _pdn_mk, **spare_extras})
 
 
 def _decap_route_short_guard(project: Path, top: str,
@@ -10496,13 +10824,88 @@ def _pnr_pdn_status(project: Path) -> Tuple[bool, str]:
         return False, "openroad.log unreadable"
     if "PDN_NONFATAL" in txt:
         return False, "PDN_NONFATAL"          # pdngen threw — rails may be bare
+    if "PDN_NO_STRAPS" in txt:
+        # The emitter itself declared it could not strap the rails.
+        return False, "PDN_NO_STRAPS"
+    marker = ""
     if "PDN_INSERTED_ADAPTIVE" in txt:
-        return True, "PDN_INSERTED_ADAPTIVE"
-    if "PDN_INSERTED" in txt:
-        return True, "PDN_INSERTED"
-    if "PDN_SKIPPED" in txt:
+        marker = "PDN_INSERTED_ADAPTIVE"
+    elif "PDN_INSERTED" in txt:
+        marker = "PDN_INSERTED"
+    elif "PDN_SKIPPED" in txt:
         return False, "PDN_SKIPPED"           # no grid inserted at all
-    return False, "no PDN insertion marker"
+    if not marker:
+        return False, "no PDN insertion marker"
+    # ------------------------------------------------------------------
+    # The marker is what the TOOL CLAIMED. Confirm it against what the tool
+    # actually EMITTED, because `pdngen` exits 0 for a follow-pin-only grid:
+    # a marker alone cannot distinguish a real mesh from isolated per-row
+    # rails. Measured on a shipped run: the log said PDN_INSERTED_ADAPTIVE
+    # while the DEF held 130 follow-pin rails on ONE metal layer, 0 straps
+    # and 0 vias — supply fragmented into ~65 isolated islands, with ground
+    # whole only because the substrate ties it. Every consumer of this
+    # function read that as a working power grid.
+    #
+    # FAIL-SAFE toward NOT-BLOCKED (§B3): the geometry can only OVERTURN a
+    # success marker when the DEF was read AND parsed AND positively shows
+    # rails-without-straps. An unreadable DEF, or one with no SPECIALNETS
+    # section, leaves the marker verdict standing rather than inventing a
+    # failure from absent evidence.
+    # ------------------------------------------------------------------
+    ev = None
+    for _cand in ("routed.def", "chip_top_asic.def"):
+        _p = _pl.pnr_dir(project) / _cand
+        if _p.is_file():
+            try:
+                ev = _def_pdn_evidence(_p.read_text(errors="replace"))
+            except OSError:
+                ev = None
+            if ev and ev.get("parsed"):
+                break
+    if ev and ev.get("parsed"):
+        straps = int(ev.get("stripe", 0)) + int(ev.get("ring", 0))
+        vias = int(ev.get("vias", 0))
+        if straps == 0 and vias == 0:
+            return False, (
+                f"{marker} but the DEF DISAGREES: SPECIALNETS holds "
+                f"{ev.get('followpin', 0)} follow-pin rails on "
+                f"{ev.get('layers') or '?'} with 0 straps and 0 vias — the "
+                "per-row rails are ISOLATED, not a connected power grid. "
+                "Declare `pdn_straps` for this PDK, or use a tech LEF with a "
+                "routing layer above the rails so straps can be derived.")
+    return True, marker
+
+
+def _pnr_pdn_grid_verdict(project: Path) -> Tuple[str, str]:
+    """Three-valued power-grid verdict for the PnR GATE: ``("OK"|"BAD"|
+    "UNKNOWN", detail)``.
+
+    `_pnr_pdn_status` answers "is the grid CONFIRMED good?", and its callers
+    (the same-net heal) correctly refuse to proceed on anything less than a
+    confirmation. A GATE needs the other question — "is the grid KNOWN BAD?" —
+    because the two differ exactly on absent evidence, and a gate that blocks
+    on absent evidence manufactures failures out of nothing.
+
+    ``BAD`` requires POSITIVE evidence of a broken grid: the emitter said it
+    could not strap the rails (``PDN_NO_STRAPS``), or ``pdngen`` threw
+    (``PDN_NONFATAL``), or no grid was inserted (``PDN_SKIPPED``), or the DEF
+    itself shows follow-pin rails with zero straps and zero vias.
+
+    ``UNKNOWN`` is a transcript carrying no PDN marker at all — nothing is
+    known, so the gate must NOT block. This is the §B3 fail-safe applied to
+    the gate itself: absence of evidence is not evidence of absence."""
+    log = _pl.pnr_dir(project) / "openroad.log"
+    try:
+        txt = log.read_text(errors="replace")
+    except OSError:
+        return "UNKNOWN", "openroad.log unreadable"
+    ok, marker = _pnr_pdn_status(project)
+    if ok:
+        return "OK", marker
+    if not any(k in txt for k in ("PDN_INSERTED", "PDN_NO_STRAPS",
+                                  "PDN_NONFATAL", "PDN_SKIPPED")):
+        return "UNKNOWN", marker
+    return "BAD", marker
 
 
 def _def_net_orphan_instances(project: Path) -> Tuple[int, str]:
@@ -15830,8 +16233,24 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         # PDN done flag
         pdn_flag = pnr_out / "pdn.done"
         if not pdn_flag.is_file():
+            # Record the MEASURED grid, not the assertion that one exists.
+            # The previous text claimed "PDN inserted" unconditionally, so a
+            # run whose DEF held isolated per-row rails still dropped a
+            # success flag on disk — a third hollow success marker alongside
+            # the log marker and the green PnR verdict.
+            _pdn_ok, _pdn_mk = _pnr_pdn_status(project)
+            _ev = {}
+            try:
+                _ev = _def_pdn_evidence(primary_def.read_text(errors="replace"))
+            except OSError:
+                _ev = {}
             pdn_flag.write_text(
-                "# PDN inserted by OpenROAD make_tracks + global_route\n"
+                f"# PDN status: {'CONNECTED' if _pdn_ok else 'NOT CONNECTED'}\n"
+                f"# marker: {_pdn_mk}\n"
+                f"# measured in {primary_def.name} SPECIALNETS: "
+                f"follow-pin rails={_ev.get('followpin', '?')} "
+                f"straps={_ev.get('stripe', '?')} ring={_ev.get('ring', '?')} "
+                f"vias={_ev.get('vias', '?')} layers={_ev.get('layers', '?')}\n"
                 f"# source: {(pnr_out / 'openroad.log').relative_to(project)}\n"
                 f"# tool: openroad (see {(pnr_out / 'pnr.tcl').relative_to(project)})\n"
             )

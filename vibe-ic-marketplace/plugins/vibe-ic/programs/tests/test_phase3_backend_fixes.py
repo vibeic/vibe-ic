@@ -11,6 +11,7 @@ violation must still be classified user-routing (→ FAIL), and a vacuous
 Magic 0-count must never be reported as a clean pass.
 """
 import importlib
+import pathlib
 
 import pytest
 
@@ -412,12 +413,27 @@ class TestSiliconCriticalPnrBlocks:
         "        RECT 0.2 1.0 0.4 1.4 ;\n    END\n  END A\n"
         "END INVD1\n")
 
+    # A minimal multi-metal stack so the adaptive PDN can derive its straps.
+    # Names/values are generic — this fixture stands for ANY PDK reaching the
+    # adaptive path, not a particular one.
+    _STACK_TLEF = "".join(
+        f"LAYER MET{i}\n  TYPE ROUTING ;\n  DIRECTION {d} ;\n"
+        f"  PITCH 0.5 ;\n  WIDTH 0.2 ;\nEND MET{i}\n"
+        for i, d in enumerate(
+            ["HORIZONTAL", "VERTICAL", "HORIZONTAL", "VERTICAL"], 1))
+
     def _commercial_pdk(self, lef_path):
         # A non-sky130 PDK (VDD/VSS rails, no tapcell_master) — the commercial PDK
-        # shape. tapcell_master None → adaptive PDN path.
+        # shape. tapcell_master None → adaptive PDN path. A real tech LEF is
+        # written next to the cell LEF because the adaptive PDN now DERIVES its
+        # upper-metal straps from the routing stack; a PDK that cannot be
+        # strapped is reported PDN_NO_STRAPS rather than passing hollow, which
+        # is covered separately below.
+        tlef = pathlib.Path(lef_path).parent / "tech.lef"
+        tlef.write_text(self._STACK_TLEF)
         return mod.PdkConfig(
             name="custom:commercial_pdk", liberty="/p/l.lib",
-            tech_lef="/p/tech.lef", cell_lef=str(lef_path), cell_gds=None,
+            tech_lef=str(tlef), cell_lef=str(lef_path), cell_gds=None,
             site="unit", drc_deck=None, metal_prefix="met",
             tapcell_master=None)
 
