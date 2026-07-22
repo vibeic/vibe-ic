@@ -357,5 +357,43 @@ def test_tdf_pre_flatten_script_legalizes_memory_before_flatten():
     assert "write_verilog -noattr /work/flat/flat_core.v" in s
 
 
+
+# ---------------------------------------------------------------------------
+# discover_mapped_netlist — DT1 must find the flow's CANONICAL synth emit
+# (`netlist.v`), not only the DFT-chain `<top>_synth.v`. Regression from
+# opentitan_aes × sky130A: synth wrote netlist.v, discovery globbed only
+# *_synth.v/synth.v → producer "cannot derive --top" → not-run → gate BLOCKED
+# → false FAIL.
+# ---------------------------------------------------------------------------
+def _mk(project, rel):
+    f = project / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("module chip_top(); endmodule\n")
+    return f
+
+
+def test_discover_finds_canonical_netlist_v(tmp_path):
+    _mk(tmp_path, "phase2/stage2/synth/netlist.v")
+    assert tdf.discover_mapped_netlist(tmp_path) == "phase2/stage2/synth/netlist.v"
+
+
+def test_discover_finds_netlist_yosys_when_only_that_exists(tmp_path):
+    _mk(tmp_path, "phase2/stage2/synth/netlist_yosys.v")
+    assert tdf.discover_mapped_netlist(tmp_path) == "phase2/stage2/synth/netlist_yosys.v"
+
+
+def test_discover_prefers_dft_chain_synth_v_when_present(tmp_path):
+    # ORDER: the DFT-chain <top>_synth.v still wins over netlist.v when both exist.
+    _mk(tmp_path, "phase2/stage2/synth/chip_top_synth.v")
+    _mk(tmp_path, "phase2/stage2/synth/netlist.v")
+    assert tdf.discover_mapped_netlist(tmp_path) == "phase2/stage2/synth/chip_top_synth.v"
+
+
+def test_discover_falls_back_when_nothing_present(tmp_path):
+    # NEGATIVE CONTROL: no known emit → the (non-existent) fallback, so the
+    # caller still honestly reports "cannot derive --top" rather than inventing one.
+    assert tdf.discover_mapped_netlist(tmp_path) == "phase2/stage2/synth/synth.v"
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
