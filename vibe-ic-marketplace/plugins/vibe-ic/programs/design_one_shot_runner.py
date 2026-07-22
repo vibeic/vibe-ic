@@ -90,6 +90,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import _path_layout as _pl
+import _rtl_include_hub as _hub  # shared include-hub aggregator predicate
 import _commercial_pdk as _cpdk  # config-driven commercial-PDK id (NDA: no SKU in source)
 import _lesson_digest  # surface the captured-lesson digest to spec-to-rtl authors
 import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
@@ -5147,9 +5148,8 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
 # RTL never re-includes a sibling because every file is passed to the
 # simulator explicitly; only board/integration wrappers do.
 _INCLUDE_RE = re.compile(r'^\s*`?\s*include\s+"([^"]+\.s?v)"', re.IGNORECASE)
-# Allow-marker on the preceding line overrides signal 1 (sibling-include)
-# for the rare legitimate include-based ASIC composition.
-_ASIC_SIM_INCLUDE_MARKER = re.compile(r'//\s*asic-sim-include\s*:', re.IGNORECASE)
+# NOTE: the sibling-include signal and its `// asic-sim-include:` allow-marker
+# now live in `_rtl_include_hub`, shared with the LEC gold read and phase-3 synth.
 # FPGA-vendor hard primitives an open-source simulator cannot elaborate.
 # chip-AGNOSTIC: vendor IP/primitive token set, NOT a chip-class name.
 _FPGA_VENDOR_PRIMS = (
@@ -5180,13 +5180,11 @@ def _sibling_declares_module(sib_path: Path) -> bool:
     a board-integration signal. Fail-open: an unreadable / module-less
     sibling => False, so a real RTL leaf that merely includes a macro header
     is NEVER dropped from the synth source list (dropping a real module is
-    fatal; a redundant include is harmless)."""
-    try:
-        txt = sib_path.read_text(errors="replace")
-    except Exception:
-        return False
-    body = _strip_v_comments(txt)
-    return bool(re.search(r'(?<![\w$])module\s+[A-Za-z_]\w*', body))
+    fatal; a redundant include is harmless).
+
+    Delegates to `_rtl_include_hub`, the single source of truth now shared with
+    the LEC gold read and phase-3 synth."""
+    return _hub.sibling_declares_module(sib_path)
 
 
 def _is_fpga_board_wrapper(p: Path, sibling_basenames: Optional[set] = None) -> bool:
@@ -5206,25 +5204,13 @@ def _is_fpga_board_wrapper(p: Path, sibling_basenames: Optional[set] = None) -> 
         raw = p.read_text(errors="replace")
     except Exception:
         return False
-    lines = raw.splitlines()
-    have_allow_marker = any(_ASIC_SIM_INCLUDE_MARKER.search(ln) for ln in lines)
-    # Signal 1: sibling include (only consider uncommented include lines).
-    if sibling_basenames and not have_allow_marker:
-        for ln in lines:
-            # ignore a line that itself is fully commented out
-            stripped = ln.split("//", 1)[0]
-            m = _INCLUDE_RE.match(stripped)
-            if m:
-                inc_base = os.path.basename(m.group(1))
-                if inc_base in sibling_basenames and inc_base != p.name:
-                    # #614: only a sibling that DECLARES a module is a real
-                    # board-wrapper signal. Including a pure macro/header
-                    # sibling (no `module` decl, e.g. a guarded `define-only
-                    # assertion header) is normal SV composition — do NOT
-                    # exclude the includer from synth (that dropped real RTL
-                    # leaves and caused "unknown module" fatals).
-                    if _sibling_declares_module(p.parent / inc_base):
-                        return True
+    # Signal 1: sibling include (include-hub aggregator). Delegated to
+    # `_rtl_include_hub` — the SAME predicate the LEC gold read and phase-3
+    # synth now apply, so the three selectors cannot drift apart. It owns the
+    # #614 module-declaring-sibling refinement, the comment stripping and the
+    # `// asic-sim-include:` allow-marker.
+    if _hub.is_include_hub(p, sibling_basenames):
+        return True
     # Signal 2: FPGA-vendor primitive instantiation (uncommented body).
     body = _strip_v_comments(raw)
     for prim in _FPGA_VENDOR_PRIMS:

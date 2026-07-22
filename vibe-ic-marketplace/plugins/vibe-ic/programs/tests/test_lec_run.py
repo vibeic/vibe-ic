@@ -405,7 +405,7 @@ def test_gold_frontend_slang_emits_read_slang_with_top_and_defines():
     s = lec_run.build_equiv_script(
         ["/p/rtl/a.sv", "/p/rtl/b.sv"], "/p/synth/n.v", "top", None,
         gold_frontend="slang")
-    assert ("read_slang /p/rtl/a.sv /p/rtl/b.sv --top top "
+    assert ("read_slang --single-unit /p/rtl/a.sv /p/rtl/b.sv --top top "
             "-DSIMULATION -DYOSYS") in s
     assert "read_verilog -sv /p/rtl/a.sv" not in s     # gold is slang now
     # gate side unchanged (plain read_verilog for a mapped netlist)
@@ -708,7 +708,9 @@ def test_slang_gold_read_define_set_is_parameterised_not_hardcoded():
     # flows through, dropping -DSIMULATION so the dead sim-only arm is excluded.
     d = lec_run.build_equiv_script(["/g.sv"], "/n.v", "top", None,
                                    gold_frontend="slang")
-    assert "read_slang /g.sv --top top -DSIMULATION -DYOSYS" in d
+    # --single-unit: all gold files share ONE compilation unit so a cross-file
+    # `define resolves (mirrors successive read_verilog's shared macro scope).
+    assert "read_slang --single-unit /g.sv --top top -DSIMULATION -DYOSYS" in d
     s = lec_run.build_equiv_script(["/g.sv"], "/n.v", "top", None,
                                    gold_frontend="slang",
                                    gold_defines="-DSYNTHESIS -DYOSYS")
