@@ -1666,47 +1666,46 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
 # is caught by pytest, not by another full silicon-handoff run.
 # ---------------------------------------------------------------------------
 def _build_tapcell_tcl(pdk: "PdkConfig") -> str:
-    """v0.1.46 — emit OpenROAD `tapcell` Tcl, NONFATAL-guarded.
+    """v0.1.46 — emit OpenROAD full-die `tapcell` insertion Tcl, NONFATAL-guarded.
 
     Returns the inserted block when `pdk.tapcell_master` is set, or a
     SKIPPED line otherwise (latch-up risk noted out-of-band).
 
-    #684 — sparse-die guard: `tapcell -distance` tiles well-tie cells
-    across EVERY row of the die, so a large FIXED wrapper holding a tiny
-    design gets ~134K tap cells over empty silicon (measured live: a
-    500x500 um fixed die -> 3167 taps = 13.3k taps/mm^2 -> a 2920x3520 um
-    caravel die = ~136K taps over empty silicon). Tiling empty silicon that
-    carries no active wells adds no design value while inflating GDS /
-    extraction / LVS runtime+memory.
+    `tapcell -distance` inserts well/substrate-tie cells into EVERY std-cell
+    row across the whole die at <= distance spacing. This block is emitted
+    BEFORE global placement (the canonical ORFS position), so the placer
+    flows the logic AROUND the FIXED taps and every placed cell ends up with
+    a well-tie within the PDK latch-up max-tap-distance rule. Insertion is
+    therefore UNCONDITIONAL and full-die — coverage is guaranteed for both
+    dense and sparse dies.
 
-    R6 (v1.3.52) — the ORIGINAL #684 guard SKIPPED the full-die tapcell
-    entirely on a sparse die. That was too aggressive: it also dropped the
-    well-tie for the std cells that ARE placed, leaving their VPB (nwell tie)
-    / VNB (psub tie) body pins physically disconnected. The power-aware LVS
-    (Step-31) then reports "disconnected node: VPB/VNB" on every placed cell
-    (`sky130_fd_sc_hd__conb_1`, `nor2_1`, `dfxtp_1`, ...) -> LVS_NETLISTS_DO_
-    NOT_MATCH, even though MAIN LVS matches uniquely and DRC=0. Those cells'
-    wells ARE tieable by the OSS flow (ordinary std cells, not a structural
-    macro-power floor), so the honest fix is to TIE them, not waive them.
+    #684 ANTI-FLOOD (bounding the full-die tiling on a sparse fixed wrapper so
+    ~136K taps do not flood empty silicon and inflate GDS/extraction/LVS) is
+    handled SEPARATELY and POST-placement by `_build_tapcell_prune_tcl`.
 
-    The fix keeps #684's anti-flood intent but no longer sacrifices the
-    well-tie: on a sparse die we still run `tapcell` (which ties the placed
-    cells) and then PRUNE the taps that landed over empty silicon, keeping
-    only those within the occupied-instance bounding box (+ a 2x-distance
-    latch-up margin). Placed-cell VPB/VNB get tied (power-LVS matches) AND
-    the empty die is not flooded (live-validated: 3167 taps -> 9 kept). A
-    dense / normal-util design (§4.05 negative) inserts taps full-die exactly
-    as before. The 0-placed-cell edge case still emits SPARSE_DIE_TAPCELL_
-    SKIPPED (no wells to tie). chip-AGNOSTIC: no chip / SKU / IC literals,
-    only odb geometry + the PDK's own tapcell master.
+    Why the prune MUST be post-placement (this was the bug): the earlier
+    in-place variant measured the occupied-instance bounding box HERE — right
+    after `initialize_floorplan`, BEFORE `global_placement`. At that point
+    every std cell is still UNPLACED, stacked at the (0,0) origin, so the
+    "occupied bbox" collapsed to a ~one-cell region at the origin. The prune
+    then kept only the handful of taps in the origin corner and destroyed
+    EVERY tap over what `global_placement` later spread the real logic across
+    (on caravel_user_project: 8 taps survived at x=24..38um / y=11..27um while
+    551/636 cells landed at x>1460um). Those spread-out cells were left with
+    NO tap in their neighbourhood -> a conclusive PERC latch-up tap-spacing
+    GAP ("a placed std cell at (2881.90,1808.80) um is infinitely (no tap in
+    neighbourhood) from the nearest tap"). Splitting insertion (here) from the
+    locality-based prune (post-placement) fixes it chip-AGNOSTICally.
     """
     if not pdk.tapcell_master:
         return ("puts \"TAPCELL_SKIPPED: no tapcell_master configured "
                 "for this PDK; latch-up risk if not handled "
                 "out-of-band\"\n")
-    thr = _sparse_die_fill_threshold_pct()
-    tm = pdk.tapcell_master
-    _tap_run = (
+    return (
+        "# === v0.1.46 — full-die tapcell insertion (latch-up well-tie) ===\n"
+        "# Emitted BEFORE global placement so the placer flows logic around the\n"
+        "# FIXED taps; the #684 sparse-die anti-flood prune runs POST-placement\n"
+        "# (see _build_tapcell_prune_tcl) once the occupied geometry is real.\n"
         f"if {{[catch {{tapcell -distance {pdk.tapcell_distance_um} "
         f"-tapcell_master {pdk.tapcell_master}}} _tap_err]}} {{\n"
         f"  puts \"TAPCELL_NONFATAL: $_tap_err\"\n"
@@ -1714,11 +1713,74 @@ def _build_tapcell_tcl(pdk: "PdkConfig") -> str:
         f"  puts \"TAPCELL_INSERTED: master={pdk.tapcell_master} "
         f"distance={pdk.tapcell_distance_um}um\"\n"
         f"}}\n")
+
+
+def _build_tapcell_prune_tcl(pdk: "PdkConfig",
+                             spare_pts_um: Optional[
+                                 Sequence[Tuple[int, int]]] = None) -> str:
+    """#684 R6 (post-place) — emit the sparse-die anti-flood tap prune Tcl.
+
+    Runs AFTER global+detailed placement (so the logic geometry is REAL — see
+    `_build_tapcell_tcl` for why the earlier pre-placement variant was wrong)
+    but BEFORE `write_def placed.def`, so placed.def already carries the FINAL
+    (pruned) tap set and every later stage only GROWS — the DEF-stage byte /
+    instance monotonicity gate (`def_stage_progression_check`) stays satisfied.
+
+    On a sparse die (post-place CORE util < the sparse threshold) it keeps only
+    the full-die taps that have a PLACED non-tap core cell within the latch-up
+    neighbourhood (2x the tapcell distance) and prunes the taps over genuinely
+    empty silicon. Coverage is GUARANTEED chip-AGNOSTICally: every placed
+    cell's own nearest grid tap (<= the tapcell distance away, i.e. <= one bin)
+    is always kept, because that cell marks the bin the tap sits in — so every
+    placed cell retains a well-tie within the PDK max-tap-distance rule (PERC
+    latch-up tap-spacing PASS), while empty silicon is not flooded (#684). A
+    dense / normal-util design keeps ALL taps (no prune), exactly as before.
+
+    Locality (not bounding-box): the anchor set is the placed non-tap CORE
+    cells, so this is correct even when the logic is SCATTERED into several
+    islands — a bounding-box prune would keep the whole (near-die-sized) box
+    or strip an outlying island; the per-tap locality test keeps exactly the
+    taps each cell needs. `spare_pts_um` pre-marks the (deterministic) grid
+    positions of the ECO spare cells, which are inserted AFTER placed.def and
+    are DELIBERATELY spread across the whole core — so the taps they will need
+    are kept even though the spares are not yet in odb at prune time. FAIL-SAFE:
+    any odb error RETAINS the full-die taps (coverage kept — every cell stays
+    tied — only the bloat-reduction is lost) rather than aborting PnR. Uses
+    only odb geometry + the PDK's own tapcell master (no chip/SKU/IC literals).
+    """
+    if not pdk.tapcell_master:
+        return ""
+    thr = _sparse_die_fill_threshold_pct()
+    tm = pdk.tapcell_master
+    # Flat "x y x y ..." micron list of the ECO spare grid positions so the
+    # prune keeps a tap next to each spare (spares are inserted after this
+    # block; anchoring on their planned position is within one bin of where
+    # detailed_placement snaps them).
+    _spare_flat = " ".join(
+        f"{int(x)} {int(y)}" for x, y in (spare_pts_um or []))
+    # Coarse safety-lattice pitch (um). The locality prune covers cells that
+    # exist at prune time (logic + spares); but repair_timing / CTS / antenna
+    # insert buffers & diodes AFTER placed.def, and on a sparse die those can
+    # land in an EMPTY region far from every anchor (measured: caravel output
+    # buffers ~900um from their driver, 0 taps within 80um). tapcell cannot be
+    # re-run post-placement (it overlaps placed cells — DPL-0005), so the taps
+    # such a stray cell needs must be KEPT at prune time. A coarse lattice over
+    # the OCCUPIED region (where nets — hence inserted buffers — live) keeps one
+    # tap per lattice node so EVERY point there is within ~the latch-up
+    # neighbourhood of a tap, guaranteeing coverage for any later insertion.
+    # Pitch: <= 2x the tapcell distance (the same neighbourhood the locality
+    # test uses), capped so the worst-case node-diagonal + grid offset stays
+    # within the ~30um PERC tap-spacing screen for any PDK. chip-AGNOSTIC.
+    _lat_um = min(2.0 * pdk.tapcell_distance_um,
+                  1.4142135623730951 * (28.0 - pdk.tapcell_distance_um / 2.0))
+    _lat_um = max(_lat_um, pdk.tapcell_distance_um)
     return (
-        "# === #684 sparse-die guard for tapcell + R6 bounded well-tie ===\n"
+        "# === #684 sparse-die anti-flood tap prune (POST-placement, "
+        "locality) ===\n"
+        "# Keep only the full-die taps with a placed non-tap cell within the\n"
+        "# latch-up neighbourhood (2x tapcell distance); prune empty silicon.\n"
+        "# Every placed cell keeps a tap within the PDK max-tap-distance rule.\n"
         "set _tap_util NA\n"
-        "set _tap_minx 0; set _tap_miny 0; set _tap_maxx 0; set _tap_maxy 0\n"
-        "set _tap_ncore 0\n"
         "if {[catch {\n"
         "  set _tblk [ord::get_db_block]\n"
         "  set _tcb [$_tblk getCoreArea]\n"
@@ -1726,80 +1788,136 @@ def _build_tapcell_tcl(pdk: "PdkConfig") -> str:
         "  if {[catch {set _tch [$_tcb dy]}]} { set _tch [$_tcb getDY] }\n"
         "  set _tcoreA [expr {double($_tcw) * double($_tch)}]\n"
         "  set _tocc 0.0\n"
-        "  set _bminx 1000000000000; set _bminy 1000000000000\n"
-        "  set _bmaxx -1000000000000; set _bmaxy -1000000000000\n"
         "  foreach _ti [$_tblk getInsts] {\n"
         "    set _tm [$_ti getMaster]\n"
         "    if {[string match \"CORE*\" [$_tm getType]]} {\n"
         "      set _tocc [expr {$_tocc + double([$_tm getWidth]) * "
         "double([$_tm getHeight])}]\n"
-        "      incr _tap_ncore\n"
-        "      set _tbb [$_ti getBBox]\n"
-        "      if {[$_tbb xMin] < $_bminx} { set _bminx [$_tbb xMin] }\n"
-        "      if {[$_tbb yMin] < $_bminy} { set _bminy [$_tbb yMin] }\n"
-        "      if {[$_tbb xMax] > $_bmaxx} { set _bmaxx [$_tbb xMax] }\n"
-        "      if {[$_tbb yMax] > $_bmaxy} { set _bmaxy [$_tbb yMax] }\n"
         "    }\n"
         "  }\n"
         "  if {$_tcoreA > 0} { set _tap_util [expr {100.0 * $_tocc / "
         "$_tcoreA}] }\n"
-        "  if {$_tap_ncore > 0} { set _tap_minx $_bminx; set _tap_miny "
-        "$_bminy; set _tap_maxx $_bmaxx; set _tap_maxy $_bmaxy }\n"
         "} _tap_m_err]} {\n"
-        "  puts \"TAPCELL_MEASURE_NONFATAL: $_tap_m_err\"\n"
+        "  puts \"TAPCELL_PRUNE_MEASURE_NONFATAL: $_tap_m_err\"\n"
         "}\n"
         f"if {{$_tap_util ne \"NA\" && $_tap_util < {thr}}} {{\n"
-        "  # R6 — sparse die: still tie the PLACED cells' wells, but bound\n"
-        "  # the taps to the occupied region so empty silicon is not flooded\n"
-        "  # (#684 intent). Insert taps, then prune the ones that landed over\n"
-        "  # empty silicon (keep occupied bbox + 2x-distance latch-up margin).\n"
-        "  if {$_tap_ncore > 0 && $_tap_maxx >= $_tap_minx} {\n"
+        "  if {[catch {\n"
         "    set _tblk [ord::get_db_block]\n"
-        f"{_tap_run}"
-        "    # prune the empty-silicon taps; FAIL-SAFE: if the odb prune\n"
-        "    # errors (API drift), RETAIN the full-die well-tie taps (wells\n"
-        "    # stay tied — the correct direction — only the bloat-reduction\n"
-        "    # is lost) rather than aborting the PnR.\n"
-        "    if {[catch {\n"
-        "      set _tap_margin [expr {int(2.0 * "
+        "    set _bin [expr {int(2.0 * "
         + f"{pdk.tapcell_distance_um}"
         + " * [[ord::get_db_tech] getDbUnitsPerMicron])}]\n"
-        "      set _tap_kill {}\n"
-        "      foreach _ti [$_tblk getInsts] {\n"
-        "        if {[[$_ti getMaster] getName] ne \"" + tm
-        + "\"} { continue }\n"
-        "        set _tbb [$_ti getBBox]\n"
-        "        set _tcx [expr {([$_tbb xMin] + [$_tbb xMax]) / 2}]\n"
-        "        set _tcy [expr {([$_tbb yMin] + [$_tbb yMax]) / 2}]\n"
-        "        if {$_tcx < ($_tap_minx - $_tap_margin) || $_tcx > "
-        "($_tap_maxx + $_tap_margin) || $_tcy < ($_tap_miny - $_tap_margin) "
-        "|| $_tcy > ($_tap_maxy + $_tap_margin)} {\n"
-        "          lappend _tap_kill $_ti\n"
-        "        }\n"
-        "      }\n"
-        "      set _tap_pruned 0\n"
-        "      foreach _ti $_tap_kill { odb::dbInst_destroy $_ti; incr "
-        "_tap_pruned }\n"
-        "      set _tap_kept 0\n"
-        "      foreach _ti [$_tblk getInsts] { if {[[$_ti getMaster] getName] "
-        "eq \"" + tm + "\"} { incr _tap_kept } }\n"
-        "      puts \"SPARSE_DIE_TAPCELL_BOUNDED: core_util=$_tap_util% < "
-        + f"{thr}"
-        + "% — well-tie taps kept in occupied region (kept=$_tap_kept) and "
-        "pruned over empty silicon (pruned=$_tap_pruned); placed-cell "
-        "VPB/VNB tied (R6).\"\n"
-        "    } _tap_prune_err]} {\n"
-        "      puts \"TAPCELL_PRUNE_NONFATAL: $_tap_prune_err — full-die "
-        "well-tie taps retained (placed-cell VPB/VNB tied; empty-silicon "
-        "prune skipped).\"\n"
+        "    if {$_bin < 1} { set _bin 1 }\n"
+        "    # Pass 1 — mark the bins holding a PLACED non-tap core cell (the\n"
+        "    # cells needing a well-tie) and track their occupied bbox. Exclude\n"
+        "    # the tapcell master so taps never anchor themselves.\n"
+        "    array unset _cbin\n"
+        "    set _dbu [[ord::get_db_tech] getDbUnitsPerMicron]\n"
+        "    set _lat [expr {int(" + f"{_lat_um}" + " * $_dbu)}]\n"
+        "    if {$_lat < 1} { set _lat 1 }\n"
+        "    set _omnx 999999999999; set _omny 999999999999\n"
+        "    set _omxx -999999999999; set _omxy -999999999999\n"
+        "    foreach _ti [$_tblk getInsts] {\n"
+        "      set _tm [$_ti getMaster]\n"
+        "      if {![string match \"CORE*\" [$_tm getType]]} { continue }\n"
+        "      if {[$_tm getName] eq \"" + tm + "\"} { continue }\n"
+        "      set _tbb [$_ti getBBox]\n"
+        "      set _cx [expr {([$_tbb xMin] + [$_tbb xMax]) / 2}]\n"
+        "      set _cy [expr {([$_tbb yMin] + [$_tbb yMax]) / 2}]\n"
+        "      set _cbin([expr {$_cx / $_bin}],[expr {$_cy / $_bin}]) 1\n"
+        "      if {$_cx < $_omnx} { set _omnx $_cx }\n"
+        "      if {$_cy < $_omny} { set _omny $_cy }\n"
+        "      if {$_cx > $_omxx} { set _omxx $_cx }\n"
+        "      if {$_cy > $_omxy} { set _omxy $_cy }\n"
         "    }\n"
-        "  } else {\n"
-        "    puts \"SPARSE_DIE_TAPCELL_SKIPPED: core_util=$_tap_util% < "
+        "    # Pre-mark the ECO spare-cell grid positions (inserted AFTER this\n"
+        "    # block, spread across the whole core) so each spare keeps a tap;\n"
+        "    # they also extend the occupied bbox the safety lattice covers.\n"
+        "    foreach {_sxu _syu} {" + _spare_flat + "} {\n"
+        "      set _sx [expr {int($_sxu * $_dbu)}]; set _sy [expr {int($_syu "
+        "* $_dbu)}]\n"
+        "      set _cbin([expr {$_sx / $_bin}],[expr {$_sy / $_bin}]) 1\n"
+        "      if {$_sx < $_omnx} { set _omnx $_sx }\n"
+        "      if {$_sy < $_omny} { set _omny $_sy }\n"
+        "      if {$_sx > $_omxx} { set _omxx $_sx }\n"
+        "      if {$_sy > $_omxy} { set _omxy $_sy }\n"
+        "    }\n"
+        "    # Safety lattice — within the occupied bbox (+ one lattice pitch of\n"
+        "    # margin) keep the ONE tap nearest each lattice node, so EVERY\n"
+        "    # point where a later repair/CTS/antenna buffer or diode can land\n"
+        "    # is within the latch-up neighbourhood of a kept tap. Locality\n"
+        "    # alone misses a stray cell dropped into an empty region far from\n"
+        "    # any anchor; the winner-per-node keeps the lattice sparse.\n"
+        "    array unset _latwin; array unset _latd\n"
+        "    if {$_omxx >= $_omnx} {\n"
+        "      set _lminx [expr {$_omnx - $_lat}]; set _lmaxx [expr {$_omxx "
+        "+ $_lat}]\n"
+        "      set _lminy [expr {$_omny - $_lat}]; set _lmaxy [expr {$_omxy "
+        "+ $_lat}]\n"
+        "      foreach _ti [$_tblk getInsts] {\n"
+        "        if {[[$_ti getMaster] getName] ne \"" + tm + "\"} { continue }\n"
+        "        set _tbb [$_ti getBBox]\n"
+        "        set _tx [expr {([$_tbb xMin] + [$_tbb xMax]) / 2}]\n"
+        "        set _ty [expr {([$_tbb yMin] + [$_tbb yMax]) / 2}]\n"
+        "        if {$_tx < $_lminx || $_tx > $_lmaxx || $_ty < $_lminy || "
+        "$_ty > $_lmaxy} { continue }\n"
+        "        set _ni [expr {($_tx + $_lat/2) / $_lat}]; set _nj [expr "
+        "{($_ty + $_lat/2) / $_lat}]\n"
+        "        set _nx [expr {$_ni * $_lat}]; set _ny [expr {$_nj * $_lat}]\n"
+        "        set _d2 [expr {($_tx-$_nx)*($_tx-$_nx) + ($_ty-$_ny)*"
+        "($_ty-$_ny)}]\n"
+        "        if {![info exists _latd($_ni,$_nj)] || $_d2 < "
+        "$_latd($_ni,$_nj)} { set _latd($_ni,$_nj) $_d2; set "
+        "_latwin($_ni,$_nj) $_ti }\n"
+        "      }\n"
+        "    }\n"
+        "    # Pass 2 — a tap survives iff (locality) a non-tap cell sits in its\n"
+        "    # 3x3 bin neighbourhood, OR (lattice) it is the winner for its node.\n"
+        "    set _tap_kill {}\n"
+        "    foreach _ti [$_tblk getInsts] {\n"
+        "      if {[[$_ti getMaster] getName] ne \"" + tm
+        + "\"} { continue }\n"
+        "      set _tbb [$_ti getBBox]\n"
+        "      set _tcx [expr {([$_tbb xMin] + [$_tbb xMax]) / 2}]\n"
+        "      set _tcy [expr {([$_tbb yMin] + [$_tbb yMax]) / 2}]\n"
+        "      set _bi [expr {$_tcx / $_bin}]; set _bj [expr {$_tcy / $_bin}]\n"
+        "      set _hit 0\n"
+        "      foreach _di {-1 0 1} {\n"
+        "        foreach _dj {-1 0 1} {\n"
+        "          if {[info exists _cbin([expr {$_bi + $_di}],"
+        "[expr {$_bj + $_dj}])]} { set _hit 1; break }\n"
+        "        }\n"
+        "        if {$_hit} { break }\n"
+        "      }\n"
+        "      if {!$_hit} {\n"
+        "        set _ni [expr {($_tcx + $_lat/2) / $_lat}]; set _nj [expr "
+        "{($_tcy + $_lat/2) / $_lat}]\n"
+        "        if {[info exists _latwin($_ni,$_nj)] && $_latwin($_ni,$_nj) "
+        "eq $_ti} { set _hit 1 }\n"
+        "      }\n"
+        "      if {!$_hit} { lappend _tap_kill $_ti }\n"
+        "    }\n"
+        "    set _tap_pruned 0\n"
+        "    foreach _ti $_tap_kill { odb::dbInst_destroy $_ti; incr "
+        "_tap_pruned }\n"
+        "    set _tap_kept 0\n"
+        "    foreach _ti [$_tblk getInsts] { if {[[$_ti getMaster] getName] "
+        "eq \"" + tm + "\"} { incr _tap_kept } }\n"
+        "    puts \"SPARSE_DIE_TAPCELL_BOUNDED: core_util=$_tap_util% < "
         + f"{thr}"
-        + "% — no placed core cells on a sparse die; no wells to tie.\"\n"
+        + "% — well-tie taps kept near placed cells + a safety lattice over "
+        "the occupied region (kept=$_tap_kept) and pruned over empty silicon "
+        "(pruned=$_tap_pruned); every placed cell AND any later-inserted "
+        "buffer/diode retains a tap within the latch-up neighbourhood "
+        "(R6/locality+lattice).\"\n"
+        "  } _tap_prune_err]} {\n"
+        "    puts \"TAPCELL_PRUNE_NONFATAL: $_tap_prune_err — full-die "
+        "well-tie taps retained (every placed cell tied; empty-silicon "
+        "prune skipped).\"\n"
         "  }\n"
         "} else {\n"
-        f"{_tap_run}"
+        "  puts \"TAPCELL_PRUNE_DENSE_OR_UNKNOWN: core_util=$_tap_util% — "
+        "full-die taps retained (dense die or util unavailable; no anti-flood "
+        "prune).\"\n"
         "}\n")
 
 
@@ -9692,6 +9810,7 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         pg_cleanup_block: str, spef_repair_block: str,
                         antenna_repair_block: str,
                         filler_block: str,
+                        tapcell_prune_block: str = "",
                         pg_reconnect_block: str = "",
                         hardmacro_supply_gc_block: str = "",
                         place_pins_block: Optional[str] = None,
@@ -9858,7 +9977,13 @@ write_def {out_dir_c}/floorplan.def
 # verified vs OpenROAD 26Q1 (`help global_placement`). chip-AGNOSTIC.
 {_placement_padding_block}global_placement{_routability_flag}{_timing_driven_flag} -density {util}
 detailed_placement
-write_def {out_dir_c}/placed.def
+# === #684 sparse-die anti-flood tap prune (POST-placement, locality) ===
+# Runs here — after placement resolved the REAL logic geometry, BEFORE
+# placed.def is written — so placed.def carries the FINAL pruned tap set and
+# every later stage only grows (DEF-stage monotonicity holds). The full-die
+# taps inserted pre-placement guaranteed coverage; this keeps only the taps
+# a placed cell (or an about-to-be-inserted spare) actually needs.
+{tapcell_prune_block}write_def {out_dir_c}/placed.def
 # === Design-for-ECO Step 18: spare-cell insertion + PROTECTION ===
 # ORGANIC #562: spares inserted as PLACED; detailed_placement below snaps
 # them to the legal site/row grid (eliminates DPL-0006 DRC violations).
@@ -10265,6 +10390,16 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # helpers; see TestSiliconCriticalPnrBlocks in
     # programs/tests/test_phase3_backend_fixes.py).
     tapcell_block = _build_tapcell_tcl(pdk)
+    # #684 R6 (post-place) — sparse-die anti-flood tap prune, emitted after
+    # placement (real geometry) and BEFORE placed.def (keeps DEF-stage
+    # monotonicity). Pre-mark the spare grid positions (inserted after
+    # placed.def and deliberately spread across the core) so each spare keeps
+    # a nearby tap. Spare llx/lly are micron ints from _spare_grid_positions.
+    _spare_pts_um = [
+        (int(_si.get("llx", 0)), int(_si.get("lly", 0)))
+        for _si in spare_plan.get("instances", [])
+        if _si.get("cell")]
+    tapcell_prune_block = _build_tapcell_prune_tcl(pdk, _spare_pts_um)
     pdn_block = _build_pdn_tcl(pdk)
     # === hard-macro supply-pin auto global-connect (before detailed routing) ===
     # A hard macro types its supply pins USE POWER/GROUND in its own LEF; when the
@@ -10452,6 +10587,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         spef_repair_block=spef_repair_block,
         antenna_repair_block=antenna_repair_block,
         filler_block=filler_block,
+        tapcell_prune_block=tapcell_prune_block,
         pg_reconnect_block=pg_reconnect_block,
         hardmacro_supply_gc_block=hardmacro_supply_gc_block,
         place_pins_block=place_pins_block,
