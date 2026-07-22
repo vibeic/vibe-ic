@@ -352,6 +352,118 @@ def load_source_manifest(project: Path) -> Optional[dict]:
     return data
 
 
+# ─── ORGANIC — reused-IP DOC-SCOPE divergence guard ────────────────────────
+# A reused-IP / catalog-glue design pulls a PINNED vendor IP revision, but the
+# vendor DOCS shipped alongside it routinely describe a DIFFERENT (usually
+# newer / superset) integration entity than the one the project actually
+# builds: an outer wrapper that adds redundancy / integrity / scrambling
+# interfaces, gated behind build parameters, living in a source file the
+# staged set does not contain. Phase-1 harvests that doc's signal tables and
+# instantiation template into `L9.top_ports` wholesale, so the wrapper is
+# measured against a pin contract for a module the design does not — and
+# structurally CANNOT — build. Every such port reads as "L9 declares a pin
+# missing from RTL top", and the only ways to clear it are (a) fabricating
+# tie-off pads for interfaces that do not exist (a false PASS the gate exists
+# to prevent) or (b) a blanket waiver. Neither is honest.
+#
+# The guard demotes EXACTLY that class to an advisory, on a doubly-structural
+# predicate that a real dropped pin can never satisfy:
+#
+#   (1) `SOURCE_MANIFEST.json` declares `reused_ip: true` — a non-reused-IP
+#       design gets NO relaxation whatsoever.
+#   (2) the L9-DECLARED top module is declared by NO file in the project RTL
+#       tree — positive proof that L9's contract is for a different entity
+#       than the one this project builds. When L9's top IS in the tree (the
+#       normal case: the wrapper itself) the guard never fires.
+#   (3) the specific pin is a port of NO module in the project RTL tree —
+#       positive proof no staged IP provides that signal, so no wrapper could
+#       expose it without inventing logic.
+#
+# §4.05 NO-LEAK: a pin that ANY staged module does provide but the wrapper
+# failed to expose is a genuine dropped pin and stays a hard FAIL — which is
+# the entire failure class this gate was built to catch. Chip-AGNOSTIC: the
+# predicate reads the manifest flag, `module <name>` declarations and ANSI
+# port lists only; no chip / vendor / bus literal participates.
+_RE_MODULE_DECL = re.compile(r"\bmodule\s+([A-Za-z_]\w*)")
+_RTL_SOURCE_SUFFIXES = (".v", ".sv", ".svh", ".vh", ".verilog")
+
+
+def rtl_tree_modules_and_ports(project: Path,
+                               defines: Optional[set] = None
+                               ) -> tuple[set, set]:
+    """Return (module_names, port_names) declared ANYWHERE in the project RTL
+    tree. `port_names` is the union of every module's ANSI port list, parsed
+    with the SAME shared preprocessor-aware parser the top-port read uses (so
+    a NOT-TAKEN `ifdef arm is blanked identically on both sides).
+
+    Returns (set(), set()) on any read/parse failure — an empty module set
+    disables the doc-scope guard entirely (fail-closed: no relaxation)."""
+    try:
+        import reset_clock_variant_alias as _rcv
+    except Exception:  # pragma: no cover — defensive import guard
+        return set(), set()
+    try:
+        rtl = _pl.rtl_dir(project)
+    except Exception:
+        return set(), set()
+    if not rtl or not Path(rtl).is_dir():
+        return set(), set()
+    modules: set = set()
+    ports: set = set()
+    for f in sorted(Path(rtl).rglob("*")):
+        if not f.is_file() or f.suffix.lower() not in _RTL_SOURCE_SUFFIXES:
+            continue
+        try:
+            text = f.read_text(errors="ignore")
+        except Exception:
+            continue
+        try:
+            stripped = _rcv._strip_comments(text)
+        except Exception:
+            stripped = text
+        for name in _RE_MODULE_DECL.findall(stripped):
+            modules.add(name)
+            try:
+                for _d, _w, pname in _rcv.parse_module_ports(
+                        text, name, defines):
+                    if pname:
+                        ports.add(pname)
+            except Exception:
+                continue
+    return modules, ports
+
+
+def split_doc_scope_divergence(only_l9: list, project: Path,
+                               l9_top: Optional[str],
+                               defines: Optional[set] = None
+                               ) -> tuple[list, list]:
+    """Split an L9-only pin list into (still_residual, out_of_scope).
+
+    `out_of_scope` = pins demoted to advisory by the reused-IP doc-scope
+    guard above. The caller must ONLY invoke this when the SOURCE_MANIFEST
+    declares reused_ip=true (predicate 1); predicates (2) and (3) are
+    enforced here. When predicate (2) does not hold the split is a no-op and
+    every pin stays residual."""
+    if not only_l9 or not l9_top:
+        return list(only_l9), []
+    tree_modules, tree_ports = rtl_tree_modules_and_ports(project, defines)
+    # Fail-closed: no parseable RTL tree → no relaxation.
+    if not tree_modules:
+        return list(only_l9), []
+    # (2) L9's declared top must be ABSENT from the tree the project builds.
+    if l9_top in tree_modules:
+        return list(only_l9), []
+    residual: list = []
+    out_of_scope: list = []
+    for name in only_l9:
+        # (3) a staged module DOES provide this port → genuine dropped pin.
+        if name in tree_ports:
+            residual.append(name)
+        else:
+            out_of_scope.append(name)
+    return residual, out_of_scope
+
+
 # ORGANIC #659 round-2 — structural tie-off detection. The manifest tie_offs
 # dict is NOT guaranteed exhaustive: a catalog-glue wrapper may wire an L9
 # interface to a constant / another port / an unused net INTERNALLY (e.g.
@@ -989,6 +1101,24 @@ def parse_rtl_top_ports(rtl_path: Path,
     return out
 
 
+def _print_doc_scope_advisory(out_of_scope: list,
+                              l9_top: Optional[str]) -> None:
+    """Emit the (non-gating) disclosure line for pins demoted by the reused-IP
+    doc-scope guard. Named so BOTH verdict paths print an identical line — a
+    relaxation that fires only on the PASS path is invisible exactly when a
+    reviewer most needs to see it."""
+    if not out_of_scope:
+        return
+    print(
+        f"  WARN (advisory) — reused-IP DOC-SCOPE divergence: "
+        f"{len(out_of_scope)} L9 pin(s) belong to the doc-declared top "
+        f"'{l9_top}', which NO file in the project RTL tree declares, and are "
+        f"a port of NO staged IP module — the staged IP revision cannot "
+        f"provide them, so they are disclosed, not implemented: "
+        f"{out_of_scope}"
+    )
+
+
 # ─── waiver ────────────────────────────────────────────────────────
 def waived(project: Path) -> tuple[bool, str]:
     waivers = project / "waivers.json"
@@ -1124,6 +1254,18 @@ def main(argv: list[str]) -> int:
             only_l9_all, only_rtl_all, manifest,
             bound_ports=reused_bound_ports)
 
+    # ORGANIC — reused-IP DOC-SCOPE divergence guard. AFTER the #659/#711/#712
+    # reconciliations (so a pin that a manifest declaration can honestly pair
+    # is paired FIRST, and only the genuinely-unpairable remainder reaches
+    # here), demote the L9-only pins that the vendor docs carry for a
+    # DIFFERENT integration entity than the one this project builds. See the
+    # guard's block comment for the three structural predicates and the
+    # no-leak argument. Non-reused-IP designs never enter this branch.
+    reused_out_of_scope: list = []
+    if manifest is not None and only_l9_all:
+        only_l9_all, reused_out_of_scope = split_doc_scope_divergence(
+            only_l9_all, project, l9_top_module_name(l9), rtl_defines)
+
     # v0.3.4 — ORGANIC #491 R4. Split L9-only pins into doc-declared
     # OPTIONAL vs required. A doc says "(optional) pin" → the RTL top
     # legitimately may omit it; absence is advisory, not FAIL (mirror
@@ -1225,6 +1367,7 @@ def main(argv: list[str]) -> int:
                 f"omitted from RTL top (intentional, internally driven): "
                 f"{reused_tied_off}"
             )
+        _print_doc_scope_advisory(reused_out_of_scope, l9_top_module_name(l9))
         return 0
 
     is_waived, rationale = waived(project)
@@ -1243,6 +1386,9 @@ def main(argv: list[str]) -> int:
     )
     for f in findings:
         print(f"  · {f}")
+    # Disclose the demoted doc-scope set on the FAIL path too — a relaxation
+    # that fires silently is indistinguishable from one that never fired.
+    _print_doc_scope_advisory(reused_out_of_scope, l9_top_module_name(l9))
     return 1
 
 

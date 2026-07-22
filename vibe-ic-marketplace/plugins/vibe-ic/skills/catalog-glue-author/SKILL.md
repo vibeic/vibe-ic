@@ -174,6 +174,31 @@ and #712 (wrapper-exposed output) are **dead code without this file**.
 > names you declare reconcile — a genuinely missing/extra functional port still
 > hard-FAILs.
 
+### Do NOT declare a port you cannot drive (HARD)
+
+`tie_offs` means "the chip-top wires this L9 interface to a constant or an
+internal net **instead of** a pad". It does **not** mean "this port does not
+exist". Vendor docs frequently describe a **newer / superset integration
+wrapper** than the revision staged in `input/vendor_rtl/` — an outer top that
+adds redundancy, integrity or scrambling interfaces the staged sources simply
+do not contain. Listing those under `tie_offs` asserts the delivered IC has a
+safety surface it does not have, and buys a PASS by lying. Never do it.
+
+You do not have to: `l9_rtl_pin_consistency_check` has a **doc-scope
+divergence guard** that demotes exactly that class to a disclosed advisory,
+automatically and with no manifest entry, when all three hold —
+
+1. `SOURCE_MANIFEST.json` declares `reused_ip: true`;
+2. `L9.top_module` names a module **no file in the project RTL tree declares**
+   (proof L9's contract is for a different entity than the one you build);
+3. the pin is a port of **no module in the project RTL tree** (proof no staged
+   IP provides it).
+
+A pin that any staged module *does* provide but your wrapper dropped fails
+predicate (3) and still hard-FAILs — fix the wrapper. Reserve
+`renamed_interfaces` for a signal the staged IP genuinely drives under a
+different name, and say **why** in a `rationale` field next to the pairing.
+
 ### MERGE-preserving rule (HARD)
 
 The auto-emit is **merge-preserving**: it only (re)asserts `reused_ip` / `ip_list`
