@@ -9697,6 +9697,7 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         place_pins_block: Optional[str] = None,
                         macro_place_block: str = "",
                         routability_driven: bool = True,
+                        timing_driven: bool = True,
                         placement_padding_sites: int = 0,
                         spef_repair_estimate_block: str = "",
                         openroad_threads: int = 0,
@@ -9728,7 +9729,12 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
     placement-QUALITY knob: it changes NOTHING about connectivity or logic,
     and OpenROAD reverts the routability loop if it diverges — so it is safe
     to run by DEFAULT on every design, including ones that already route
-    clean (they see minimal change). `placement_padding_sites` (DEFAULT 0 =
+    clean (they see minimal change). `timing_driven` (DEFAULT True)
+    additionally emits `-timing_driven`, weighting global placement by SETUP
+    slack so critical-path cells cluster -- the ORFS/OpenLane default stance
+    (`PL_TIMING_DRIVEN=1`) and the fix for a design whose post-route setup WNS
+    is negative only because placement was blind to the clock.
+    `placement_padding_sites` (DEFAULT 0 =
     off) is an OPTIONAL extra congestion knob: when > 0 it emits
     `set_placement_padding -global -left N -right N` (N = sites) BEFORE
     global_placement, reserving whitespace around every cell. It is left OFF
@@ -9748,6 +9754,13 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
     # Phase-3 congestion-driven placement flag + optional padding block.
     # `-routability_driven` is DEFAULT-ON (safe: placement-quality only).
     _routability_flag = " -routability_driven" if routability_driven else ""
+    # `-timing_driven` net-weights global placement by SETUP slack, using the
+    # SDC + set_wire_rc + liberty already read above, so timing-critical cells
+    # are pulled together -> shorter critical nets -> lower wire RC/slew/delay.
+    # It is a placement-QUALITY knob (no logic/connectivity change); OpenROAD
+    # ignores it gracefully on an unconstrained design. DEFAULT-ON, the same
+    # stance OpenLane/ORFS take (PL_TIMING_DRIVEN=1). chip-AGNOSTIC.
+    _timing_driven_flag = " -timing_driven" if timing_driven else ""
     if placement_padding_sites and int(placement_padding_sites) > 0:
         _pad_n = int(placement_padding_sites)
         _placement_padding_block = (
@@ -9837,10 +9850,13 @@ write_def {out_dir_c}/floorplan.def
 # schedule / crypto fanout) routes at a denser die instead of only a very sparse
 # one. It changes NOTHING about connectivity or logic (placement quality only)
 # and OpenROAD reverts the loop if it diverges, so it is DEFAULT-ON and safe on
-# designs that already route clean. `set_placement_padding -global` (below, when
+# designs that already route clean. `-timing_driven` (also DEFAULT-ON) adds
+# SETUP-slack net weighting so critical-path cells cluster (shorter nets ->
+# less wire RC/slew -> lower delay); it is the ORFS/OpenLane default stance.
+# `set_placement_padding -global` (below, when
 # enabled) is an optional, version-correct extra congestion knob. Flag names
 # verified vs OpenROAD 26Q1 (`help global_placement`). chip-AGNOSTIC.
-{_placement_padding_block}global_placement{_routability_flag} -density {util}
+{_placement_padding_block}global_placement{_routability_flag}{_timing_driven_flag} -density {util}
 detailed_placement
 write_def {out_dir_c}/placed.def
 # === Design-for-ECO Step 18: spare-cell insertion + PROTECTION ===
