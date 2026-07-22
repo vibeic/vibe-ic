@@ -5512,7 +5512,22 @@ def _select_asic_rtl_sources(rtl_dir: Path):
     other_sv = sorted(p for p in rtl_dir.glob("*.sv")
                       if "pkg" not in p.name and _keep(p))
     other_v = sorted(p for p in rtl_dir.glob("*.v") if _keep(p))
-    return pkg_files + other_sv + other_v
+    # ORGANIC-20260722 #785 — hoist MACRO-HEADER files to the front, for the
+    # same reason #682 hoists packages: a preprocessor definition, like a
+    # package import, must be seen BEFORE the file that consumes it. The order
+    # here was alphabetical, so a design whose macro header sorts late (or
+    # whose consumer sorts early — e.g. the auto-emitted `<top>.v`, which
+    # copies the wrapped DUT's macro-bearing port block verbatim) handed the
+    # frontend a file referencing a `` `MACRO `` no earlier file had defined:
+    #     error: unknown macro or compiler directive '`MPRJ_IO_PADS'
+    # even though the defining header was RIGHT THERE in the same compile set.
+    #
+    # `_rtl_include_hub.macro_headers_first` is the EXISTING single source of
+    # truth for this ordering — its docstring already names this exact failure
+    # — but only `lec_run`'s gold read consumed it. The synth selectors are now
+    # wired to the same helper instead of ordering alphabetically, so the three
+    # source-set builders cannot drift apart.
+    return _hub.macro_headers_first(pkg_files + other_sv + other_v)
 
 
 # ---------------------------------------------------------------------------
@@ -6818,7 +6833,17 @@ def _phase2_sv_synth_fallback(project: Path, container: str,
         slang_cmd = (
             f"cd {workdir} && {yosys_path} && "
             f"yosys -p '{_slang_prefix}"
-            f"read_slang {reads_join} --top {synth_top} "
+            # ORGANIC-20260722 #785 — `--single-unit`: read ALL files as ONE
+            # compilation unit so a `` `define `` in one file is visible in the
+            # next. SystemVerilog's DEFAULT is file-per-compilation-unit, under
+            # which preprocessor state never crosses a file boundary — so a
+            # design whose macro header is a SEPARATE file (the near-universal
+            # `defines.v` convention) failed with "unknown macro or compiler
+            # directive" no matter how the files were ordered. Same flag and
+            # same rationale as the already-established `lec_run` gold read.
+            # Ordering alone is necessary but NOT sufficient here, and
+            # single-unit alone is not either — #785 needs both.
+            f"read_slang --single-unit {reads_join} --top {synth_top} "
             f"-DSYNTHESIS -DYOSYS {inc_flag}; "
             f"hierarchy -top {synth_top}; proc; flatten; {synth_tail}'")
         rc, out, err = _docker_exec(container, slang_cmd, marker=netlist_c)
