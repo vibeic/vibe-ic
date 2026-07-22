@@ -544,6 +544,102 @@ def resolve_cell_model(cell_model_override: str | None,
     return None
 
 
+# ── Tech-mapped netlist resolution ─────────────────────────────────────
+# ATPG must run on a TECH-MAPPED (std-cell) netlist: iverilog cannot
+# elaborate the generic Yosys gate vocabulary ($_NAND_/$_NOR_/$_DFF_…),
+# so a generic-unmapped netlist yields `Unknown module type: $_NAND_` and
+# ZERO fault sites. The flow writes BOTH a generic `netlist.v` (kept for
+# LEC/equivalence, where the abstract gate view is wanted) AND a mapped
+# `<top>_synth.v` (what PnR/streamout consume). The DFT step historically
+# handed ATPG the generic one. Detect that and switch to the mapped
+# sibling, mirroring phase3_one_shot_runner's netlist-resolver order
+# (`<top>_synth.v` first, then any `*_synth.v`). chip-AGNOSTIC: keyed only
+# on the generic-primitive vocabulary and the design's own top-module
+# name — no chip/PDK literal.
+_GENERIC_PRIM_RE = re.compile(r"\$_[A-Z][A-Z0-9]*_")
+_MODULE_DECL_RE = re.compile(r"(?m)^\s*module\s+([A-Za-z_]\w*)")
+
+
+def is_generic_unmapped(netlist_text: str) -> bool:
+    """True iff the netlist contains Yosys generic gate primitives
+    ($_NAND_, $_DFF_P_, $_NOR_, $_MUX_, …) — these appear ONLY pre-techmap
+    and cannot be simulated (no cell model declares them)."""
+    return bool(_GENERIC_PRIM_RE.search(netlist_text or ""))
+
+
+def _first_module_name(netlist_text: str) -> str | None:
+    m = _MODULE_DECL_RE.search(netlist_text or "")
+    return m.group(1) if m else None
+
+
+def resolve_mapped_netlist(project: Path, netlist_rel: str) -> tuple[str, str | None]:
+    """If `netlist_rel` is generic-unmapped, resolve to a tech-mapped sibling
+    in the same synth dir. Returns (resolved_rel, switch_note|None). When the
+    given netlist is already mapped (or unreadable, or no mapped sibling
+    exists) the original is returned unchanged so a genuine gap fails honestly
+    downstream rather than being papered over."""
+    nl = project / netlist_rel
+    try:
+        text = nl.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return netlist_rel, None
+    if not is_generic_unmapped(text):
+        return netlist_rel, None
+    top = _first_module_name(text)
+    synth_dir = nl.parent
+    candidates: list[Path] = []
+    if top:
+        candidates.append(synth_dir / f"{top}_synth.v")
+    candidates.extend(sorted(synth_dir.glob("*_synth.v")))
+    seen: set = set()
+    for cand in candidates:
+        rp = cand.resolve()
+        if cand == nl or rp in seen or not cand.is_file():
+            continue
+        seen.add(rp)
+        try:
+            ctext = cand.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if is_generic_unmapped(ctext):
+            continue  # also pre-techmap — skip
+        resolved_rel = str(cand.relative_to(project))
+        return resolved_rel, (
+            f"requested netlist '{netlist_rel}' is generic-unmapped "
+            f"(Yosys $_…_ primitives — not simulatable by iverilog); "
+            f"switched to tech-mapped '{resolved_rel}' for ATPG")
+    return netlist_rel, None
+
+
+# ── Std-cell model + UDP primitives ────────────────────────────────────
+# The sky130 std-cell Verilog model (sky130_fd_sc_hd.v) instantiates
+# Verilog UDP primitives (e.g. sky130_fd_sc_hd__udp_mux_4to2) that are
+# defined in a SIBLING primitives.v which the model does NOT `include`.
+# Handed the model alone, iverilog dies with
+# `Unknown module type: sky130_fd_sc_hd__udp_mux_4to2`. When a primitives.v
+# sits next to the cell model, build a COMBINED model (primitives + cells)
+# for `fault atpg`'s iverilog elaboration. chip-AGNOSTIC: keyed only on a
+# co-located primitives.v; PDKs whose model is self-contained just get a
+# verbatim copy (harmless).
+_COMBINED_CELL_MODEL = "phase2/stage2/dft/cell_model_combined.v"
+
+
+def _cell_model_prep(cell_model: str) -> tuple[str, str]:
+    """Return (effective_cell_model_container_path, prep_shell_snippet).
+
+    `cell_model` is a CONTAINER path, so the combine happens inside the
+    container. prep concatenates a co-located primitives.v (if present)
+    ahead of the model; otherwise copies the model verbatim."""
+    prim = os.path.dirname(cell_model.rstrip("/")) + "/primitives.v"
+    combined = f"/work/{_COMBINED_CELL_MODEL}"
+    prep = (
+        f'mkdir -p "$(dirname {combined})" && '
+        f'if [ -f "{prim}" ]; then cat "{prim}" "{cell_model}" > "{combined}"; '
+        f'else cp "{cell_model}" "{combined}"; fi'
+    )
+    return combined, prep
+
+
 # Iverilog lives in iic-osic-tools but isn't in default PATH; set the env var
 # Fault expects, and also prepend to PATH and LD_LIBRARY_PATH so sub-tools
 # find the iverilog `vvp` simulator and its shared library (libvvp.so).
@@ -784,6 +880,10 @@ def run_fault(
         return 2, {"error": "no Verilog cell model resolved: pass "
                             "--cell-model-path or use a PDK with a configured "
                             "cell_model"}
+    # ATPG needs the TECH-MAPPED netlist — self-heal a generic-unmapped one
+    # to the mapped `<top>_synth.v` sibling (fixes the DFT step handing over
+    # phase2/stage2/synth/netlist.v, which is the generic LEC netlist).
+    netlist_rel, netlist_switch_note = resolve_mapped_netlist(project, netlist_rel)
     # Flop-cell resolution: explicit override wins; else auto-detect from the
     # netlist and union with the PDK-config seed so cut never misses the real
     # flop cell (fixes seed/netlist mismatch, e.g. DFFHQD1 vs seed DFFRQD1).
@@ -835,10 +935,13 @@ def run_fault(
             "log_tail": cut_log,
         }
 
-    # Step B: fault atpg
+    # Step B: fault atpg. iverilog (which Fault drives to simulate the
+    # cell model) cannot resolve the model's UDP primitives on its own, so
+    # build a combined model (primitives + cells) first and point atpg at it.
+    eff_cell_model, cell_prep = _cell_model_prep(cell_model)
     atpg_cmd = [
         "fault", "atpg",
-        "--cell-model", cell_model,
+        "--cell-model", eff_cell_model,
         "--clock", clock,
         "-o", f"/work/{tv_out}",
         "--output-coverage-metadata", f"/work/{cov_out}",
@@ -846,7 +949,8 @@ def run_fault(
         "-v", str(tv_count),
         cut_abs,
     ]
-    ec, out, err = _run_docker(project, atpg_cmd, timeout=1800, pdk_dir=pdk_dir)
+    atpg_shell = cell_prep + " && " + " ".join(atpg_cmd)
+    ec, out, err = _run_docker(project, [atpg_shell], timeout=1800, pdk_dir=pdk_dir)
     atpg_log = (out + "\n" + err)[-2000:]
 
     # Parse coverage. Fault 0.9 emits `ratio: <fractional>` in the YAML
@@ -937,6 +1041,7 @@ def run_fault(
         "clock": clock,
         "pdk": pdk,
         "netlist": netlist_rel,
+        "netlist_switch_note": netlist_switch_note,
         "coverage_pct": coverage_ratio,
         "faults_covered": faults_covered,
         "faults_total": faults_total,
