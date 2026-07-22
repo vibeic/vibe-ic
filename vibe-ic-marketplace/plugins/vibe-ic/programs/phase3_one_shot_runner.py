@@ -3632,6 +3632,13 @@ _LEF_LAYER_DECL_RE = re.compile(
     r"^\s*LAYER\s+([A-Za-z_][A-Za-z0-9_]*)\s*$", re.MULTILINE)
 _LEF_LAYER_REF_RE = re.compile(
     r"^\s*LAYER\s+([A-Za-z_][A-Za-z0-9_]*)\s*;", re.MULTILINE)
+# A macro's `PIN <name> ... END <name>` block (its PORT geometry). The PIN's
+# own END carries the pin name; the inner PORT END is bare, so `END <name>`
+# is an unambiguous, non-greedy block terminator. PORT layers are the ONLY
+# ones whose disappearance is fatal (an unroutable pin); OBS-section layers
+# are outside every PIN block.
+_LEF_PIN_BLOCK_RE = re.compile(
+    r"^\s*PIN\s+\S+.*?^\s*END\s+\S+\s*$", re.MULTILINE | re.DOTALL)
 
 
 def _lef_declared_layers(text: Optional[str]) -> set:
@@ -3643,6 +3650,30 @@ def _lef_referenced_layers(text: Optional[str]) -> set:
     """Every layer REFERENCED by a LEF body: `LAYER <name> ;` inside
     PORT / OBS / VIA geometry."""
     return set(_LEF_LAYER_REF_RE.findall(text or ""))
+
+
+def _lef_pin_referenced_layers(text: Optional[str]) -> set:
+    """Layers referenced inside a macro's `PIN ... PORT` geometry ONLY —
+    i.e. EXCLUDING the OBS obstruction section.
+
+    Why the distinction matters: an undeclared layer that a PIN's PORT lands
+    on is FATAL — OpenROAD drops that shape and the pin becomes physically
+    unroutable while the cell still "loads" (the silent-void case this guard
+    exists to catch). An undeclared layer that appears ONLY in the OBS
+    obstruction section is NOT fatal: dropping an obstruction rectangle leaves
+    every pin intact, and a `CLASS BLOCK` macro already blocks its own
+    footprint. Splitting the two lets the guard refuse the genuine void case
+    without false-refusing a benign OBS-only marker (e.g. the LEF-reserved
+    ``OVERLAP`` layer that many vendor abstracts stamp over the whole cell).
+
+    chip-AGNOSTIC — pure LEF structure; no chip/vendor/PDK literal.
+    """
+    if not text:
+        return set()
+    layers: set = set()
+    for block in _LEF_PIN_BLOCK_RE.findall(text):
+        layers |= set(_LEF_LAYER_REF_RE.findall(block))
+    return layers
 
 
 def macro_lef_layer_compat_guard(
@@ -3700,12 +3731,39 @@ def macro_lef_layer_compat_guard(
         return None
     declared |= _lef_declared_layers(_read_pdk_text(cell_lef, container))
 
-    offenders: List[Tuple[str, List[str]]] = []
+    offenders: List[Tuple[str, List[str]]] = []      # PIN-fatal → refuse
+    obs_only: List[Tuple[str, List[str]]] = []        # OBS-only → warn only
     for mlef in macro_lefs:
-        referenced = _lef_referenced_layers(_read_pdk_text(mlef, container))
-        unknown = sorted(referenced - declared)
-        if unknown:
-            offenders.append((mlef, unknown))
+        _mtext = _read_pdk_text(mlef, container)
+        referenced = _lef_referenced_layers(_mtext)
+        unknown = referenced - declared
+        if not unknown:
+            continue
+        pin_referenced = _lef_pin_referenced_layers(_mtext)
+        pin_unknown = sorted(unknown & pin_referenced)
+        obs_unknown = sorted(unknown - set(pin_unknown))
+        if pin_unknown:
+            # A PIN's PORT lands on an undeclared layer → genuine void-result
+            # risk (the shape is dropped and that pin is unroutable).
+            offenders.append((mlef, pin_unknown))
+        elif obs_unknown:
+            # Undeclared layers appear ONLY in the OBS obstruction section →
+            # NOT fatal: no pin geometry is dropped, and a CLASS BLOCK macro
+            # already blocks its own footprint. Warn, do not refuse.
+            obs_only.append((mlef, obs_unknown))
+    if obs_only and not offenders:
+        for mlef, layers in obs_only:
+            print(
+                "[WARN] phase3 hard-macro OBS-only undeclared layer(s) "
+                + ", ".join(layers)
+                + f" in {mlef} — NOT refused. These appear only in the "
+                "macro's OBS obstruction section, never in a PIN PORT, so no "
+                "pin geometry is dropped. OpenROAD will drop the obstruction "
+                "rectangle(s) on the undeclared layer; a CLASS BLOCK macro "
+                "already blocks its own footprint, so the physical result is "
+                "unchanged. (Supply an abstract cut for this stack, or add the "
+                "layer to the tech LEF, to silence this.)",
+                file=sys.stderr)
     if not offenders:
         return None
 
