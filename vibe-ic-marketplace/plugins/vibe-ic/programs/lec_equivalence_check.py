@@ -315,6 +315,40 @@ def audit(project: Path) -> AuditResult:
                   and (non_equiv in (None, 0))
                   and (unproven in (None, 0))
                   and not rpt_info.get("rpt_success_line"))
+
+    # --- (c0) SKIPPED-CONDITION: lec_run's DISCLOSED-skip verdict ----------
+    # SKIPPED-CONDITION is the producer's explicit "I did NOT decide this"
+    # signal: the gold top could not be resolved to a real RTL module, an
+    # unstaged hard-macro module was referenced, or the netlist carries
+    # SAT-unmodelable cells. In EVERY such case lec_run built no deciding miter
+    # and recorded NO counterexample — exactly like INCONCLUSIVE, it is a
+    # visible non-PASS with zero equivalence evidence in either direction, NOT
+    # a proof of non-equivalence. Treating it as LEC_NOT_EQUIVALENT (the old
+    # behaviour) turned a disclosed capability/staging gap into a hard FAIL that
+    # cascade-marked every downstream step MISSING — the identical mis-handling
+    # #208 fixed for INCONCLUSIVE. §4.05 NO-LEAK: this reclassifies ONLY when
+    # there is no counterexample (non_equiv in {None,0}); a genuine mismatch
+    # lands non_equiv>0 and still FAILs at the substance verdict (b) below, so a
+    # real non-equivalence can never be laundered into a non-blocking skip.
+    is_skipped = verdict_field == "SKIPPED-CONDITION"
+    if is_skipped and (non_equiv in (None, 0)):
+        res.inconclusive = True
+        res.passed = False
+        res.findings.append(Finding(
+            rule="LEC_SKIPPED_CONDITION", severity="WARNING",
+            message=("LEC verdict is SKIPPED-CONDITION — lec_run made a "
+                     "DISCLOSED skip (gold top not resolvable to an RTL module, "
+                     "an unstaged hard-macro module, or SAT-unmodelable cells) "
+                     "and built no deciding miter, recording NO counterexample. "
+                     "RTL≡netlist was not decided in EITHER direction — this is "
+                     "the same evidence class as INCONCLUSIVE, a non-blocking "
+                     "disclosed skip (never a hard FAIL that cascades downstream "
+                     "MISSING, never a vacuous PASS). Resolve the top / stage "
+                     "the macro / supply Liberty, or close with sign-off LEC, "
+                     "to get a real verdict."),
+            file=LEC_JSON_REL))
+        return res
+
     if is_inconclusive and zero_miter:
         res.inconclusive = True
         res.passed = False
@@ -497,7 +531,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     detail = (result.findings[0].message if result.findings
               else "LEC verdict is INCONCLUSIVE — no equivalence decided.")
     print(detail)
-    print(f"PASS_WITH_WAIVERS: step 13 LEC INCONCLUSIVE ({reason}) — "
+    print(f"PASS_WITH_WAIVERS: step 13 LEC not decided ({reason}) — "
           f"WAIVED-DEFERRED to sign-off LEC, never a bare PASS.")
     return 3
 

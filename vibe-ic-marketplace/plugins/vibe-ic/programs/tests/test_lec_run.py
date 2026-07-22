@@ -296,18 +296,28 @@ def test_pass_report_is_accepted_by_the_real_gate(tmp_path):
     assert res.passed is True, [f.rule for f in res.findings]
 
 
-def test_skip_report_is_honest_gate_fail_not_vacuous_pass(tmp_path):
+def test_skip_report_is_honest_waived_deferred_not_vacuous_pass(tmp_path):
     p = lec_run.parse_equiv_output(SAT_LIMITED_OUTPUT)
     r = lec_run.build_report(p, "chip_top", "chip_top_synth.v", None)
     (tmp_path / "reports").mkdir()
     (tmp_path / "reports" / "lec.json").write_text(json.dumps(r))
     (tmp_path / "reports" / "lec.rpt").write_text(SAT_LIMITED_OUTPUT)
     res = gate.audit(tmp_path)
-    # SKIPPED-CONDITION is equivalent:false -> the gate must NOT pass it, and
-    # must not pass it vacuously either.
+    # A SAT-model-unsupported SKIPPED-CONDITION is a DISCLOSED capability gap:
+    # lec_run built no deciding miter and recorded NO counterexample
+    # (non_equivalent_points == 0). The gate must NOT pass it, and must NOT pass
+    # it vacuously either — `passed` stays False. But it is NOT a hard
+    # LEC_NOT_EQUIVALENT that cascade-marks every downstream physical step MISSING
+    # off a netlist nothing proved non-equivalent; it is the non-blocking
+    # WAIVED-DEFERRED tier (inconclusive=True, its own honest LEC_SKIPPED_CONDITION
+    # finding), the SAME evidence class the #208 INCONCLUSIVE sibling is booked as.
+    # NO-LEAK: a genuine mismatch lands non_equivalent_points>0 (or verdict FAIL)
+    # and still hard-FAILs at the substance verdict — covered by
+    # test_skipped_condition_with_counterexample_still_hard_fails.
     assert res.passed is False
+    assert res.inconclusive is True
     rules = {f.rule for f in res.findings}
-    assert "LEC_NOT_EQUIVALENT" in rules
+    assert rules == {"LEC_SKIPPED_CONDITION"}, rules
 
 
 # ---------------------------------------------------------------------------
