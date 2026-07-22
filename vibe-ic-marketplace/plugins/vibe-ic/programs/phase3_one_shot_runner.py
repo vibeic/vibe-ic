@@ -19438,7 +19438,15 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
             f"close $_f\n"
             f"report_worst_slack {flag} >> {rpt_c}\n"
             f"report_tns >> {rpt_c}\n"
-            f"report_checks {flag} -group_count 3 >> {rpt_c}\n"
+            # `-group_count` is a DEPRECATED OpenSTA flag: on 3.1.0 it raises
+            # Error 514 and ABORTS the -no_init -exit script, so the
+            # report_check_types DRV query below never ran and this sign-off
+            # report silently carried NO max_slew/max_capacitance check at
+            # all. Use the current `-group_path_count`, wrapped in `catch`
+            # (identical to the process-axis stanza), so a report_checks
+            # hiccup can never again swallow the DRV query.
+            f"catch {{report_checks {flag} -group_path_count 3 "
+            f"-fields {{slew capacitance}} >> {rpt_c}}}\n"
             # DRV (max_slew / max_capacitance): previously never asked for in
             # this report, so slew violations at a corner were unreportable.
             f"{_report_check_types_tcl(rpt_c)}"
