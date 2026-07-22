@@ -106,7 +106,40 @@ _DEFAULT_PADDING = "0x02"
 _MIN_REGMAP_REGISTERS = 2
 
 
-def register_map_protocol_evidence(generated_docs: Path) -> dict | None:
+def _resolve_ic_class(proj: Path) -> str:
+    """Return the authoritative ic_class string for the project, or "".
+
+    Reads the phase2-persisted `reports/ic_class.json` first (the canonical
+    owner, written by detect_ic_class); falls back to any `ic_class` stamp on
+    a generated L*.json doc. Chip-AGNOSTIC: reads the plugin's own IC-class
+    taxonomy, no chip/vendor literal.
+    """
+    try:
+        icj = _pl.reports_dir(proj) / "ic_class.json"
+        if icj.is_file():
+            d = json.loads(icj.read_text())
+            if isinstance(d, dict) and isinstance(d.get("ic_class"), str) \
+                    and d["ic_class"].strip():
+                return d["ic_class"].strip()
+    except Exception:
+        pass
+    try:
+        gd = _pl.generated_docs_dir(proj)
+        for p in sorted(gd.glob("L*.json")):
+            try:
+                d = json.loads(p.read_text())
+            except Exception:
+                continue
+            if isinstance(d, dict) and isinstance(d.get("ic_class"), str) \
+                    and d["ic_class"].strip():
+                return d["ic_class"].strip()
+    except Exception:
+        pass
+    return ""
+
+
+def register_map_protocol_evidence(generated_docs: Path,
+                                   ic_class: str | None = None) -> dict | None:
     """Return register-map protocol evidence from L4/L5, or None.
 
     Chip-AGNOSTIC discriminator between the TWO reasons `L3.opcodes == []`:
@@ -123,7 +156,29 @@ def register_map_protocol_evidence(generated_docs: Path) -> dict | None:
 
     Only (a) may be waived. Conflating (b) with (a) is how a 0%-functional-
     coverage run reports a green `vacuous_pass`.
+
+    THIRD cause (ORGANIC — processor_cpu CSR file, added below): when
+    `ic_class == "processor_cpu"` the L4 register map is the core's INTERNAL
+    architectural register file (RISC-V CSRs / GPRs, e.g. mstatus@0x300,
+    misa@0x301, access=WARL). Those addresses live in the CSR address space
+    and are reachable ONLY by a `csr*` instruction the core EXECUTES after a
+    fetch over its instruction-bus MASTER port — they are NOT exposed as an
+    externally addressable register-SLAVE on the top-level pins (a CPU top
+    interface is instr/data bus masters + irq + debug, never an addr/data/we
+    slave). The "write regs -> control-write -> status-poll -> read result"
+    transaction is therefore UNEXPRESSIBLE from the top pins, so this is NOT a
+    register-slave protocol case (b) — it is class (a), honestly N/A. This
+    mirrors the plugin's own `reports/ic_class.json` (has_command_protocol=
+    false, protocol_class=none) and the `cpu_functional_oracle_waiver`
+    doctrine (processor_cpu functional verification is a DEFERRED per-IC oracle
+    TB, connectivity-PASS — not a register-transaction FAIL). chip-AGNOSTIC:
+    keyed on the plugin's ic_class taxonomy, no chip/vendor literal. NON-LEAKY:
+    a genuine register-slave peripheral (serial_peripheral_protocol /
+    bus_interconnect_protocol / any non-CPU class) still returns evidence and
+    still FAILs.
     """
+    if (ic_class or "").strip() == "processor_cpu":
+        return None
     l4 = generated_docs / "L4_REGMAP.json"
     if not l4.is_file():
         return None
@@ -508,8 +563,14 @@ def main():
                 # satisfy the functional-verification pillar. It must instead
                 # surface an EXPLICIT functional-coverage GAP.
                 # chip-AGNOSTIC: keyed on L3/L4 structure, no chip literal.
+                # A processor_cpu's L4 is architectural CSRs (internal, not a
+                # top-level register slave) → evidence resolver returns None →
+                # this falls through to the N/A VACUOUS_PASS below, mirroring
+                # reports/ic_class.json (has_command_protocol=false) and the
+                # cpu_functional_oracle_waiver deferral doctrine.
                 _regmap = register_map_protocol_evidence(
-                    _pl.generated_docs_dir(proj))
+                    _pl.generated_docs_dir(proj),
+                    ic_class=_resolve_ic_class(proj))
                 _sim = (Path(args.sim_dir) if args.sim_dir
                         else _pl.sim_full_stack_dir(proj))
                 # None == no full-stack result at all == no functional
