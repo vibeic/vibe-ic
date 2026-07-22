@@ -310,9 +310,15 @@ def _loosen_records(res):
             if r.get("direction") == "loosen"]
 
 
+# Every simulated OpenROAD run carries the PG_CONNECT_AUDIT line a real one
+# emits at the end of pnr.tcl. These fixtures exercise the ROUTE-convergence
+# feedback loop, so they must not also trip the PG-connect gate — a routed
+# design whose supply connectivity was never measured is BLOCKED, by design.
+_PG_OK = "PG_CONNECT_AUDIT: total=600 unconnected=0 masters=\n"
+
 _R_NONCONV = (0, "[INFO DRT-0199] Number of violations = 40.\n"
-                 "[INFO DRT-0199] Number of violations = 45.\n", "")
-_R_CONV = (0, "[INFO DRT-0199] Number of violations = 0.\n", "")
+                 "[INFO DRT-0199] Number of violations = 45.\n" + _PG_OK, "")
+_R_CONV = (0, "[INFO DRT-0199] Number of violations = 0.\n" + _PG_OK, "")
 _R_OVERUTIL = (1, "[ERROR GPL-0301] Utilization 150.0 % exceeds 100%.\n", "")
 
 
