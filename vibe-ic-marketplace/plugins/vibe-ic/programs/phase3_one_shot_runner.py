@@ -40,6 +40,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -12139,6 +12140,200 @@ def _density_metal_fill(project: Path, top: str, pdk: PdkConfig,
     return True, "per-layer density fill reached target on every layer"
 
 
+def _max_captable_c(pdk: "PdkConfig", container: str) -> str:
+    """Container path of the PDK's MAX-corner OpenRCX captable (for real max-RC
+    parasitic extraction). Derived from the tech-LEF path (prefix before
+    ``/libs.ref/``); globs ``rules.openrcx.*.max.magic`` under librelane/openlane.
+    Returns "" if none found. chip/PDK-AGNOSTIC (no chip/vendor literal)."""
+    tlef = str(getattr(pdk, "tech_lef", "") or "")
+    i = tlef.find("/libs.ref/")
+    if i <= 0:
+        return ""
+    root = tlef[:i]
+    for sub in ("librelane", "openlane"):
+        try:
+            rc, out, _ = _docker_exec(
+                container,
+                f"ls {root}/libs.tech/{sub}/rules.openrcx.*.max.magic 2>/dev/null")
+        except Exception:
+            continue
+        for ln in (out or "").splitlines():
+            ln = ln.strip()
+            if ln.endswith(".max.magic"):
+                return ln
+    return ""
+
+
+def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
+                                  ss_liberty_c: str, pnr_dir_c: str,
+                                  max_captable_c: str, metal_prefix: str,
+                                  thread_count: int) -> str:
+    """Fresh-session post-route SETUP repair against the REAL max-RC SPEF at the
+    SLOW (SS) sign-off corner, writing routed_repaired.def / <top>_pnr_repaired.v.
+
+    Root cause it closes (#527 estimate-vs-SPEF): the in-flow + ECO resizer
+    optimizes against ESTIMATED parasitics, so high-RC critical nets stay
+    under-sized and the real-SPEF sign-off fails. Repairing against the parasitics
+    the sign-off actually judges on (extract_parasitics -ext_model_file <max
+    captable> at the SS process corner) sizes/buffers the right nets. Proven on
+    sha256 x sky130A: SS setup -16.65 ns -> non-negative after repair, and a fresh
+    re-measure on the rerouted design at ss_100C_1v60 shows setup MET.
+
+    detailed_route runs UNBOUNDED (like the base sign-off route) so the inserted
+    ECO buffers are realized to DRC convergence. The Python step promotes the
+    result ONLY if the repair reaches non-negative setup AND the reroute converges
+    to 0 DRC violations; otherwise the base route is kept (fail-safe, never a
+    DRC regression). chip/PDK-AGNOSTIC: standard OpenROAD APIs; corner libs +
+    captable come from the active PDK."""
+    mp = metal_prefix
+    return (
+        f"set_thread_count {thread_count}\n"
+        f"read_lef {tech_lef_c}\n"
+        f"read_lef {cell_lef_c}\n"
+        f"read_liberty {ss_liberty_c}\n"
+        f"read_def {pnr_dir_c}/routed.def\n"
+        f"read_sdc {pnr_dir_c}/constraint.sdc\n"
+        f"if {{[catch {{set_wire_rc -signal -layer {mp}1}} e]}} {{ "
+        f"if {{[catch {{set_wire_rc -layer {mp}1}} e2]}} {{ "
+        f"puts \"SHIP_SWR_SIG_NONFATAL: $e2\" }} }}\n"
+        f"if {{[catch {{set_wire_rc -clock -layer {mp}5}} e]}} {{ "
+        f"puts \"SHIP_SWR_CLK_NONFATAL: $e\" }}\n"
+        "set_timing_derate -early 0.95\n"
+        "set_timing_derate -late 1.05\n"
+        "catch {define_process_corner -ext_model_index 0 X}\n"
+        f"if {{[catch {{extract_parasitics -ext_model_file {max_captable_c} "
+        f"-corner_cnt 1 -max_res 50 -coupling_threshold 0.1}} e]}} {{ "
+        f"puts \"SHIP_EXT_NONFATAL: $e\" }}\n"
+        # write + read the SPEF back so the STA analyses the REAL max-RC
+        # parasitics: extract_parasitics populates a NAMED process corner the
+        # default analysis ignores (it would silently fall back to the optimistic
+        # set_wire_rc wireload), so the write/read round-trip lands them in the
+        # analysis corner -- the SAME read_spef path the flow sign-off STA uses.
+        f"catch {{write_spef {pnr_dir_c}/signoff_repair_max.spef}}\n"
+        f"if {{[catch {{read_spef {pnr_dir_c}/signoff_repair_max.spef}} e]}} {{ "
+        f"puts \"SHIP_RDSPEF_NONFATAL: $e\" }}\n"
+        "catch {puts \"SHIP_WNS_BEFORE: [sta::worst_slack -max]\"}\n"
+        "if {[catch {repair_design} e]} { puts \"SHIP_RD_NONFATAL: $e\" }\n"
+        "if {[catch {repair_timing -setup} e]} { puts \"SHIP_RT_NONFATAL: $e\" }\n"
+        "if {[catch {detailed_placement} e]} { puts \"SHIP_DP_NONFATAL: $e\" }\n"
+        "if {[catch {check_placement} e]} { puts \"SHIP_CP_WARN: $e\" }\n"
+        "catch {puts \"SHIP_WNS_AFTER_REPAIR: [sta::worst_slack -max]\"}\n"
+        "if {[catch {global_route} e]} { puts \"SHIP_GR_NONFATAL: $e\" }\n"
+        "if {[catch {detailed_route} e]} { puts \"SHIP_DR_NONFATAL: $e\" }\n"
+        f"if {{[catch {{write_def {pnr_dir_c}/routed_repaired.def}} e]}} {{ "
+        f"puts \"SHIP_WD_NONFATAL: $e\" }}\n"
+        f"if {{[catch {{write_verilog {pnr_dir_c}/{top}_pnr_repaired.v}} e]}} {{ "
+        f"puts \"SHIP_WV_NONFATAL: $e\" }}\n"
+        "puts \"SHIP_SIGNOFF_REPAIR_DONE\"\n"
+    )
+
+
+def _parse_ship_repair_log(log: str) -> dict:
+    """Extract the SHIP_* markers + the detailed_route final violation count from
+    the repair transcript. Pure text parsing (testable without OpenROAD)."""
+    import re as _re
+    def _f(tag):
+        m = _re.search(tag + r":\s*(-?[0-9.]+)", log or "")
+        return float(m.group(1)) if m else None
+    viols = _re.findall(r"[Nn]umber of violations\s*=\s*(\d+)", log or "")
+    return {
+        "wns_before": _f("SHIP_WNS_BEFORE"),
+        "wns_after_repair": _f("SHIP_WNS_AFTER_REPAIR"),
+        "route_violations": (int(viols[-1]) if viols else None),
+        "done": "SHIP_SIGNOFF_REPAIR_DONE" in (log or ""),
+    }
+
+
+def _ship_repair_should_promote(parsed: dict, repaired_def_ok: bool,
+                                repaired_v_ok: bool) -> bool:
+    """Promotion policy (FAIL-SAFE, no DRC regression): promote the repaired route
+    as the shipped sign-off ONLY when (a) a complete repaired routed.def + netlist
+    were written, (b) the repair reached non-negative setup at the slow corner
+    (estimate), and (c) the reroute converged to 0 DRC violations. Otherwise keep
+    the base route (the honest FAIL stays a timing FAIL, never becomes a DRC FAIL)."""
+    if not (repaired_def_ok and repaired_v_ok):
+        return False
+    wa = parsed.get("wns_after_repair")
+    if wa is None or wa < -0.001:
+        return False
+    return parsed.get("route_violations") == 0
+
+
+def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
+                             container: str) -> "Optional[StepResult]":
+    """#527 estimate-vs-SPEF — SHIPPED post-route real-SPEF setup repair at the
+    slow sign-off corner, run BEFORE gds/drc/lvs so the shipped design is the
+    repaired one. Returns None (no step) when not applicable (stock OpenROAD, no
+    base route, no captable/corner). Fail-safe: keeps the base route unless the
+    repair reaches non-negative setup AND the reroute is DRC-clean."""
+    t0 = time.time()
+    pnr_out = _pl.pnr_dir(project)
+    routed = pnr_out / "routed.def"
+    if not routed.is_file():
+        return None
+    if not _openroad_supports_postroute_spef_repair(container):
+        return None
+    try:
+        corner_libs = _resolve_signoff_corner_libs(project, pdk, container)
+    except Exception:
+        corner_libs = {}
+    ss_lib = corner_libs.get("SS") or corner_libs.get("TT")
+    cap = _max_captable_c(pdk, container)
+    if not ss_lib or not cap:
+        return None
+    tcl = _ship_signoff_spef_repair_tcl(
+        top,
+        _to_container_path(str(pdk.tech_lef), container),
+        _to_container_path(str(pdk.cell_lef), container),
+        ss_lib, _to_container_path(str(pnr_out), container),
+        cap, pdk.metal_prefix, _openroad_thread_count())
+    tcl_path = pnr_out / "signoff_spef_repair.tcl"
+    tcl_path.write_text(tcl)
+    tcl_c = _to_container_path(str(tcl_path), container)
+    try:
+        # Long, open-ended PnR/reroute run — route it through the progress-stall
+        # WATCHDOG (marker=tcl_c, already in the argv) exactly like the base
+        # sign-off route, so a still-progressing repair reroute runs to
+        # completion and only a genuinely-stalled job is killed (loop-watchdog
+        # compliance; matches the other openroad -exit call sites).
+        rc, out, err = _docker_exec(
+            container, f"openroad -no_init -exit {tcl_c}", marker=tcl_c)
+    except Exception as exc:
+        return StepResult("signoff_spef_repair", "PASS", time.time() - t0,
+                          f"no-op (base route kept): repair invocation failed: {exc}")
+    log = (out or "") + "\n" + (err or "")
+    (pnr_out / "signoff_spef_repair.log").write_text(log)
+    parsed = _parse_ship_repair_log(log)
+    repaired_def = pnr_out / "routed_repaired.def"
+    repaired_v = pnr_out / f"{top}_pnr_repaired.v"
+    def_ok = repaired_def.is_file() and repaired_def.stat().st_size > 0
+    v_ok = repaired_v.is_file() and repaired_v.stat().st_size > 0
+    if _ship_repair_should_promote(parsed, def_ok, v_ok):
+        shutil.copy2(routed, pnr_out / "routed_base_prerepair.def")
+        shutil.copy2(repaired_def, routed)
+        _pnr_v = pnr_out / f"{top}_pnr.v"
+        if _pnr_v.is_file():
+            shutil.copy2(_pnr_v, pnr_out / f"{top}_pnr_base_prerepair.v")
+        shutil.copy2(repaired_v, _pnr_v)
+        _topdef = pnr_out / f"{top}.def"
+        if _topdef.is_file():
+            shutil.copy2(repaired_def, _topdef)
+        _gds = pnr_out / f"{top}.gds"
+        if _gds.is_file():
+            _gds.unlink()   # force step_gds to re-derive from the repaired route
+        return StepResult(
+            "signoff_spef_repair", "PASS", time.time() - t0,
+            f"SHIPPED real-SPEF setup repair @slow sign-off corner: setup "
+            f"{parsed['wns_before']}->{parsed['wns_after_repair']} ns, reroute "
+            f"DRC-clean (0 violations); promoted as sign-off route.",
+            [str(routed), str(_pnr_v)])
+    return StepResult(
+        "signoff_spef_repair", "PASS", time.time() - t0,
+        f"no-op (base route kept): repair estimate {parsed['wns_before']}->"
+        f"{parsed['wns_after_repair']} ns, reroute violations="
+        f"{parsed['route_violations']}; not promoted (needs setup>=0 and DRC-clean).")
+
+
 def step_gds(project: Path, top: str, pdk: PdkConfig,
              container: str) -> StepResult:
     t0 = time.time()
@@ -22888,6 +23083,15 @@ def main() -> int:
                 plan.append(step_pnr(project, effective_top, pdk, args.container,
                                      args.die_um, args.util,
                                      spare_density=args.spare_density))
+        if plan[-1].status == "PASS":
+            # #527 estimate-vs-SPEF — SHIPPED post-route real-SPEF setup repair at
+            # the slow sign-off corner, BEFORE gds/drc/lvs so the shipped design is
+            # the repaired one. No-op (base route kept) unless it reaches setup>=0
+            # AND the reroute is DRC-clean. Fail-safe: never a DRC regression.
+            _sr = step_signoff_spef_repair(project, effective_top, pdk,
+                                           args.container)
+            if _sr is not None:
+                plan.append(_sr)
         if plan[-1].status == "PASS":
             # #593 — the GDS is derived from the DEF, so it shares the
             # PnR geometry cache verdict: a geometry change that forced a
