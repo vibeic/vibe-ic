@@ -5897,11 +5897,21 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     except Exception:
         pass
     _period_ps = _sdc_period_ps(project)
-    _abc_timing = (
-        f" -D {_period_ps}"
-        if _period_ps and _proj_ic_class in _TIMING_CRITICAL_CLASSES
-        else ""
-    )
+    # v1.5.x — SYNTHESIS don't-use + timing-driven ABC (chip/PDK-AGNOSTIC).
+    # (1) Feed the PDK's OWN synth_excluded.cells (librelane) to abc + dfflibmap
+    #     so DATA logic is never mapped onto clock / delay / low-power-isolation
+    #     / probe / tap-fill-decap / scan cells -- the synthesis sibling of
+    #     _dont_use_tcl's PnR set_dont_use and the exact OpenLane recipe. []
+    #     when the PDK ships no synth_excluded.cells (NONFATAL, unchanged flow).
+    # (2) Engage the delay-aware ABC mapper (-D <period_ps>) whenever a clock
+    #     period is known -- not only for processor_cpu. The fork's abc binds -D
+    #     on the non -constr path; area-mode-by-default left timing on the table
+    #     for EVERY clocked class (crypto_accelerator, dsp_datapath, ...). The
+    #     _proj_ic_class / _TIMING_CRITICAL_CLASSES read is retained for report
+    #     provenance only; it no longer gates the delay target.
+    _synth_du = _synth_dont_use_cells(pdk, container)
+    _du_flags = "".join(f" -dont_use {c}" for c in _synth_du)
+    _abc_timing = (f" -D {_period_ps}" if _period_ps else "") + _du_flags
     # Phase-3 reference-flow QoR-knob ingest (chip-AGNOSTIC). Apply ONLY the
     # knobs the design's OWN input/reference_flow explicitly declares. No
     # reference_flow → {} → every yosys command below is BYTE-IDENTICAL to the
@@ -5975,7 +5985,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
         f"{pre_synth}"
         f"{_arith_pre_clause}"
         f"synth -top {top} -flatten; "
-        f"dfflibmap -liberty {liberty_c}; "
+        f"dfflibmap{_du_flags} -liberty {liberty_c}; "
         f"{dlatch_clause}"
         f"abc -liberty {liberty_c}{_abc_timing}; "
         f"{_remove_abc_buf_clause}"
@@ -6044,7 +6054,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
             f"hierarchy -top {top}; proc; flatten; tribuf -logic; "
             f"{_arith_pre_clause}"
             f"synth -top {top} -flatten; "
-            f"dfflibmap -liberty {liberty_c}; "
+            f"dfflibmap{_du_flags} -liberty {liberty_c}; "
             f"{dlatch_clause}"
             f"abc -liberty {liberty_c}{_abc_timing}; "
             f"{_remove_abc_buf_clause}"
@@ -6076,7 +6086,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
                 f"hierarchy -check -top {top}; proc; flatten; tribuf -logic; "
                 f"{_arith_pre_clause}"
                 f"synth -top {top} -flatten; "
-                f"dfflibmap -liberty {liberty_c}; "
+                f"dfflibmap{_du_flags} -liberty {liberty_c}; "
                 f"{dlatch_clause}"
                 f"abc -liberty {liberty_c}{_abc_timing}; "
                 f"{_remove_abc_buf_clause}"
@@ -6130,7 +6140,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
                 f"hierarchy -top {top}; proc; flatten; tribuf -logic; "
                 f"{_arith_pre_clause}"
                 f"synth -top {top} -flatten; "
-                f"dfflibmap -liberty {liberty_c}; "
+                f"dfflibmap{_du_flags} -liberty {liberty_c}; "
                 f"{dlatch_clause}"
                 f"abc -liberty {liberty_c}{_abc_timing}; "
                 f"{_remove_abc_buf_clause}"
@@ -8181,11 +8191,11 @@ def _dont_use_family_fallback_tcl() -> str:
     return (
         "# === v1.2.86 — GENERAL characterization/lpflow do-not-use fallback ===\n"
         "# Works even when the PDK ships no drc_exclude.cells (iic-osic-tools):\n"
-        "# excludes __probe/__probec/__lpflow_ cell families (unroutable → DRT-0085)\n"
+        "# excludes __probe/__probec/__lpflow_ (unroutable → DRT-0085) + __clkdlybuf\n"        "# (clock-DELAY masters the resizer must never use as a SIGNAL buffer)\n"
         "# via OpenROAD's own get_lib_cells over the loaded liberty. PDK-family-\n"
         "# GENERAL (matches the <lib>__<fn> naming, no design literal).\n"
         "set _duf 0\n"
-        "foreach _du_pat {*__probe_* *__probec_* *__lpflow_*} {\n"
+        "foreach _du_pat {*__probe_* *__probec_* *__lpflow_* *__clkdlybuf*} {\n"
         "  set _du_cells [get_lib_cells -quiet $_du_pat]\n"
         "  if {[llength $_du_cells] > 0} {\n"
         "    if {[catch {set_dont_use $_du_cells} _duf_e]} {\n"
@@ -8230,6 +8240,63 @@ def _resolve_pnr_exclude_cell_file(pdk_root) -> Optional[str]:
             if hits:
                 return str(hits[0])
     return None
+
+
+def _synth_dont_use_cells(pdk: "PdkConfig", container: str) -> List[str]:
+    """v1.5.x — the PDK's OWN ``synth_excluded.cells`` (librelane) expanded
+    against the ACTIVE liberty, so ABC + dfflibmap never map DATA logic onto
+    clock / delay / low-power-isolation / probe / tap-fill-decap / scan cells.
+
+    This is the SYNTHESIS sibling of ``_dont_use_tcl``'s PnR ``set_dont_use``
+    and mirrors the canonical OpenLane / siliconcompiler recipe (SYNTH_DONT_USE
+    -> ``abc -dont_use`` / ``dfflibmap -dont_use``). Reading the PDK's own file
+    keeps this chip/PDK-AGNOSTIC (any PDK shipping a librelane
+    ``synth_excluded.cells`` works, no hand-curated list to drift) and
+    AUTHORITATIVE (byte-identical cell set to the reference flow).
+
+    Root cause it removes (sha256 x sky130A, verified): area-mode ABC with the
+    FULL liberty mapped the address-decode data path onto
+    ``sky130_fd_sc_hd__lpflow_isobufsrc`` (159 low-power isolation cells total)
+    + ``clkdlybuf4s50`` + ``clkinv`` (a single 13.3 ns cell at the ss corner) --
+    the sole driver of the post-route setup violation on a design whose
+    reference OpenLane flow closes timing.
+
+    Returns [] (backward-compatible no-op) when the PDK ships no
+    ``synth_excluded.cells`` or the container reads fail (NONFATAL)."""
+    import fnmatch
+    lib = pdk.liberty or ""
+    parts = lib.split("/")
+    if "libs.ref" not in parts:
+        return []
+    i = parts.index("libs.ref")
+    if i + 1 >= len(parts):
+        return []
+    pdk_root = "/".join(parts[:i])
+    stdcell = parts[i + 1]                       # e.g. sky130_fd_sc_hd
+    synthex = f"{pdk_root}/libs.tech/librelane/{stdcell}/synth_excluded.cells"
+    try:
+        rc, pout, _ = _docker_exec(container, f"cat {synthex} 2>/dev/null")
+    except Exception:
+        return []
+    if rc != 0 or not pout.strip():
+        return []
+    pats = [ln.strip() for ln in pout.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")]
+    if not pats:
+        return []
+    # Cell names in the active liberty (generic liberty grammar: ``cell (NAME)``).
+    try:
+        rc2, cout, _ = _docker_exec(
+            container,
+            "grep -oE 'cell [(]\"?[A-Za-z0-9_]+' " + lib +
+            " | sed -E 's/cell [(]\"?//'")
+    except Exception:
+        return []
+    if rc2 != 0 or not cout.strip():
+        return []
+    cells = sorted(set(cout.split()))
+    du = sorted({c for c in cells for p in pats if fnmatch.fnmatch(c, p)})
+    return du
 
 
 def _dont_use_tcl(pdk: "PdkConfig") -> str:
