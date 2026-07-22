@@ -713,3 +713,44 @@ class TestContainerCornerDiscovery:
             raise RuntimeError("docker down")
         monkeypatch.setattr(mod, "_docker_exec", _boom)
         assert mod._discover_container_corner_libs("iic", "/x/lib") == []
+
+
+class TestShipSignoffSpefRepairPromotion:
+    """#527 estimate-vs-SPEF — the SHIPPED post-route real-SPEF repair promotes the
+    repaired route as sign-off ONLY when it reaches non-negative setup AND the
+    reroute is DRC-clean; otherwise the base route is kept (no DRC regression)."""
+
+    _CLEAN = ("SHIP_WNS_BEFORE: -16.65\nSHIP_WNS_AFTER_REPAIR: 0.027\n"
+              "[INFO DRT-0199] Number of violations = 0.\nSHIP_SIGNOFF_REPAIR_DONE\n")
+
+    def test_parse_extracts_markers_and_violations(self):
+        p = mod._parse_ship_repair_log(self._CLEAN)
+        assert p["wns_before"] == -16.65
+        assert p["wns_after_repair"] == 0.027
+        assert p["route_violations"] == 0
+        assert p["done"] is True
+
+    def test_promote_when_met_and_drc_clean(self):
+        p = mod._parse_ship_repair_log(self._CLEAN)
+        assert mod._ship_repair_should_promote(p, True, True) is True
+
+    def test_no_promote_when_reroute_dirty(self):
+        log = ("SHIP_WNS_AFTER_REPAIR: 0.5\nNumber of violations = 7000\n")
+        assert mod._ship_repair_should_promote(
+            mod._parse_ship_repair_log(log), True, True) is False
+
+    def test_no_promote_when_setup_still_negative(self):
+        log = ("SHIP_WNS_AFTER_REPAIR: -3.0\nNumber of violations = 0\n")
+        assert mod._ship_repair_should_promote(
+            mod._parse_ship_repair_log(log), True, True) is False
+
+    def test_no_promote_when_no_violation_count_reported(self):
+        # a reroute that never reported a violation count is NOT trusted clean
+        log = ("SHIP_WNS_AFTER_REPAIR: 0.5\n")
+        assert mod._ship_repair_should_promote(
+            mod._parse_ship_repair_log(log), True, True) is False
+
+    def test_no_promote_when_artifacts_missing(self):
+        p = mod._parse_ship_repair_log(self._CLEAN)
+        assert mod._ship_repair_should_promote(p, False, True) is False
+        assert mod._ship_repair_should_promote(p, True, False) is False
