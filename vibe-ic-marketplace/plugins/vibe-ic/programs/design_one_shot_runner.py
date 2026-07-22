@@ -7828,7 +7828,16 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                  f"-flatten`. Detail: {tail}"),
                 [str(out_v), str(log)],
                 extras={"synth_frontend": synth_frontend})
-        _pass_extras = {"synth_frontend": synth_frontend}
+        # ORGANIC-20260722 #787 — record the top phase 2 ACTUALLY synthesised as
+        # a FIRST-CLASS field. When #683/#782's phantom-top fallback adopts a
+        # structural graph root, `synth_top` no longer equals the caller's
+        # --top-name, and phase 3 must synthesise the SAME module or it asks
+        # yosys for a name that does not exist. It was previously recoverable
+        # only by string-scraping this step's `detail` (or an advisory sub-dict
+        # that is absent whenever the staged set is already pruned), which is
+        # why the phase-2 → phase-3 hand-off silently dropped it.
+        _pass_extras = {"synth_frontend": synth_frontend,
+                        "synth_top": synth_top}
         if _prune_advisory:  # ORGANIC #778 — surface the over-broad-tail advisory
             _pass_extras["catalog_glue_prune_advisory"] = _prune_advisory
         return StepResult("yosys_synth", "PASS",
