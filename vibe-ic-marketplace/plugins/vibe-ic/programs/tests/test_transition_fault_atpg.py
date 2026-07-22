@@ -397,3 +397,42 @@ def test_discover_falls_back_when_nothing_present(tmp_path):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+# ── ENGINE_LIMITED on generic/unmapped netlist (opentitan_aes × sky130A) ─────
+# The OSS `fault` engine cannot detect flops in a GENERIC yosys netlist
+# (`$_DFF_*` primitives) — "Failed to detect any flip-flop cells" → 0 pairs even
+# with the correct --dff/--clock. That is the SAME disclosed OSS capability gap
+# the sibling stuck-at ATPG records; DT1 must treat it as a DOCUMENTED
+# engine-limited SKIPPED-CONDITION, never a hard ERROR — but ONLY behind the
+# attestation guard (a MAPPED netlist with 0 pairs stays a real ERROR/FAIL).
+def _engine_limited_blob():
+    return {
+        "verdict": "ENGINE_LIMITED", "status": "ENGINE_LIMITED",
+        "engine_limited": True, "pdk_detected": "generic_unmapped",
+        "capability_flag": "cap:at_speed_timing_graded_atpg", "scan_flops": 0,
+        "sequential_evidence": {"verdict": "HAS_SEQUENTIAL",
+                                "reasons": ["1 seq cell type"]},
+        "reasons": ["generic netlist — fault cannot detect $_DFF_ flops"],
+    }
+
+
+def test_gate_engine_limited_generic_is_skipped_condition():
+    r = gate.evaluate(_engine_limited_blob(), floor=90.0)
+    assert r["verdict"] == "SKIPPED-CONDITION"
+
+
+def test_gate_engine_limited_requires_generic_unmapped_attestation():
+    bad = _engine_limited_blob(); bad["pdk_detected"] = "sky130"
+    assert gate.evaluate(bad, floor=90.0)["verdict"] == "BLOCKED"
+
+
+def test_gate_engine_limited_requires_sequential_evidence():
+    bad = _engine_limited_blob()
+    bad["sequential_evidence"] = {"verdict": "SEQ_ABSENT"}
+    assert gate.evaluate(bad, floor=90.0)["verdict"] == "BLOCKED"
+
+
+def test_gate_engine_limited_requires_capability_flag():
+    bad = _engine_limited_blob(); bad["capability_flag"] = ""
+    assert gate.evaluate(bad, floor=90.0)["verdict"] == "BLOCKED"
