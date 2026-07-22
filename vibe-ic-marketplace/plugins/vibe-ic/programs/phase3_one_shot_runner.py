@@ -15771,19 +15771,86 @@ def _discover_container_corner_libs(container: str,
     return libs
 
 
-# Canonical sky130 sign-off corner name fragments (worst-setup slow-hot SS,
-# nominal TT, worst-hold fast-cold FF); a robust preference, not a hard requirement.
+# Canonical sky130 sign-off corner name fragments used as a LAST-RESORT
+# preference (slow SS, nominal TT, fast-hold FF). The AUTHORITATIVE source is the
+# PDK's OWN librelane STA_CORNERS (_pdk_reference_signoff_corner_stems); this
+# hardcoded map applies only when that reference config cannot be read. The SS
+# fragment is the sky130 reference slow corner ss_100C_1v60 (nominal 1.8 V,
+# -10 %), NOT ss_100C_1v40 (-22 %): the 1v40 corner is absent from the PDK's
+# librelane STA_CORNERS AND from the design spec's 9-corner sign-off, so signing
+# off there fabricates a phantom setup violation the reference OpenLane flow
+# never sees (root cause, sha256 x sky130A: SS setup -36.31 ns @1v40 vs
+# -16.65 ns @1v60 on the identical routed design).
 _SIGNOFF_CORNER_PREFERENCE = {"TT": "tt_025c_1v80",
-                              "SS": "ss_100c_1v40",
+                              "SS": "ss_100c_1v60",
                               "FF": "ff_n40c_1v95"}
 
 
-def _select_signoff_corners(libs: List[Tuple[str, str]]) -> List[Dict[str, str]]:
-    """From (stem, path) corner libs, pick ONE representative per SS/TT/FF label,
-    preferring the canonical sky130 sign-off corner name, else any lib of that
-    label. Returns an ordered [SS, TT, FF] subset of {name,label,liberty} (only
-    the labels actually present). ≥2 labels ⇒ a real multi-corner matrix.
-    chip-AGNOSTIC — label heuristics + canonical-name preference, no design literal."""
+# Cache the PDK reference corner stems per (container, lib_dir) so the one cheap
+# `cat` of the librelane config runs at most once per process.
+_REF_SIGNOFF_CORNER_STEMS_CACHE: dict = {}
+
+
+def _pdk_reference_signoff_corner_stems(container: str, lib_dir_c: str) -> set:
+    """The PROCESS-corner name stems the ACTIVE PDK's librelane reference config
+    declares in ``STA_CORNERS`` — lowercased, RC-prefix (``nom_/min_/max_``)
+    stripped, e.g. ``{"tt_025c_1v80", "ss_100c_1v60", "ff_n40c_1v95"}`` for
+    sky130A. These are the corners the REFERENCE flow signs off at, so preferring
+    them makes our multi-corner sign-off byte-align to the reference instead of
+    guessing a (possibly over-pessimistic) corner.
+
+    Root cause it removes (sha256 x sky130A, proven): the hardcoded preference
+    picked ``ss_100C_1v40`` (1.40 V, -22 % undervoltage) as the SS setup corner,
+    a corner the PDK's librelane ``STA_CORNERS`` never lists (it uses
+    ``ss_100C_1v60``) and the design spec's 9-corner sign-off never declares. On
+    the identical routed sha256 design that fabricated ~20 ns of phantom setup
+    violation (SS setup -36.31 ns @1v40 -> -16.65 ns @1v60).
+
+    Derivation (chip/PDK-AGNOSTIC): the PDK root is the path prefix before
+    ``/libs.ref/`` in the container liberty dir; the librelane config lives at
+    ``<pdk_root>/libs.tech/librelane/config.tcl``. Mirrors the #249 pattern (read
+    the PDK's own ``synth_excluded.cells``).
+
+    Fail-safe: empty set on any docker/parse failure or no librelane config, so
+    the caller falls back to ``_SIGNOFF_CORNER_PREFERENCE`` (byte-identical to the
+    pre-fix behaviour). Cached per (container, lib_dir_c)."""
+    key = (container or "", lib_dir_c or "")
+    if key in _REF_SIGNOFF_CORNER_STEMS_CACHE:
+        return _REF_SIGNOFF_CORNER_STEMS_CACHE[key]
+    stems: set = set()
+    try:
+        idx = (lib_dir_c or "").find("/libs.ref/")
+        if container and idx > 0:
+            pdk_root = lib_dir_c[:idx]
+            cfg = f"{pdk_root}/libs.tech/librelane/config.tcl"
+            rc, out, _ = _docker_exec(
+                container, f"cat {shlex.quote(cfg)} 2>/dev/null")
+            if rc == 0 and out:
+                # STA_CORNERS tokens look like nom_ss_100C_1v60 / max_tt_025C_1v80.
+                for m in re.findall(
+                        r"(?:nom|min|max)_((?:tt|ss|ff)_[a-z0-9]+_\d+v\d+)",
+                        out, re.IGNORECASE):
+                    stems.add(m.lower())
+    except Exception:
+        stems = set()
+    _REF_SIGNOFF_CORNER_STEMS_CACHE[key] = stems
+    return stems
+
+
+def _select_signoff_corners(libs: List[Tuple[str, str]],
+                            container: str = "",
+                            lib_dir_c: str = "") -> List[Dict[str, str]]:
+    """From (stem, path) corner libs, pick ONE representative per SS/TT/FF label.
+    Preference order, per label: (1) a lib the PDK's OWN librelane STA_CORNERS
+    declares (AUTHORITATIVE — byte-aligns to the reference sign-off flow, read
+    via _pdk_reference_signoff_corner_stems), (2) the hardcoded canonical
+    _SIGNOFF_CORNER_PREFERENCE fragment, (3) any lib of that label. Returns an
+    ordered [SS, TT, FF] subset of {name,label,liberty} (only the labels present).
+    ≥2 labels ⇒ a real multi-corner matrix. chip/PDK-AGNOSTIC — the
+    reference corner set comes from the active PDK, never a chip/vendor literal.
+    Back-compat: with no container (ref stems empty) the pick falls through to the
+    hardcoded-preference behaviour."""
+    ref_stems = _pdk_reference_signoff_corner_stems(container, lib_dir_c)
     by_label: Dict[str, List[Tuple[str, str]]] = {"SS": [], "TT": [], "FF": []}
     for name, path in libs:
         lbl = _classify_corner_from_name(name)
@@ -15794,8 +15861,13 @@ def _select_signoff_corners(libs: List[Tuple[str, str]]) -> List[Dict[str, str]]
         cands = by_label[lbl]
         if not cands:
             continue
-        pref = _SIGNOFF_CORNER_PREFERENCE[lbl]
-        pick = next((c for c in cands if pref in c[0].lower()), cands[0])
+        pick = None
+        if ref_stems:
+            pick = next((c for c in cands
+                         if any(s in c[0].lower() for s in ref_stems)), None)
+        if pick is None:
+            pref = _SIGNOFF_CORNER_PREFERENCE[lbl]
+            pick = next((c for c in cands if pref in c[0].lower()), cands[0])
         corners.append({"name": pick[0], "label": lbl, "liberty": pick[1]})
     return corners
 
@@ -15973,7 +16045,8 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             if not corners and pdk_lib_dir:
                 _clibs = _discover_container_corner_libs(
                     container, str(pdk_lib_dir))
-                corners = _select_signoff_corners(_clibs)
+                corners = _select_signoff_corners(
+                    _clibs, container, str(pdk_lib_dir))
         pvt = dict(_PVT_MATRIX_TEMPLATE)
         pvt["corners"] = corners
         pvt["primary_corner"] = "TT"
@@ -18590,7 +18663,7 @@ def _resolve_signoff_corner_libs(project: Path, pdk: PdkConfig,
     pdk_lib_dir = pdk_lib.parent
     if container and str(pdk_lib_dir):
         clibs = _discover_container_corner_libs(container, str(pdk_lib_dir))
-        for c in _select_signoff_corners(clibs):
+        for c in _select_signoff_corners(clibs, container, str(pdk_lib_dir)):
             out[c["label"]] = c["liberty"]
     return out
 

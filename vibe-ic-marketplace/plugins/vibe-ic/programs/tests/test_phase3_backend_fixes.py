@@ -607,6 +607,8 @@ class TestContainerCornerDiscovery:
     _SKY130_LIBS = [
         ("sky130_fd_sc_hd__ss_100C_1v40",
          "/foss/pdks/sky130A/.../lib/sky130_fd_sc_hd__ss_100C_1v40.lib"),
+        ("sky130_fd_sc_hd__ss_100C_1v60",
+         "/foss/pdks/sky130A/.../lib/sky130_fd_sc_hd__ss_100C_1v60.lib"),
         ("sky130_fd_sc_hd__ss_n40C_1v28",
          "/foss/pdks/sky130A/.../lib/sky130_fd_sc_hd__ss_n40C_1v28.lib"),
         ("sky130_fd_sc_hd__tt_025C_1v80",
@@ -627,7 +629,7 @@ class TestContainerCornerDiscovery:
         corners = {c["label"]: c["name"]
                    for c in mod._select_signoff_corners(self._SKY130_LIBS)}
         assert corners["TT"] == "sky130_fd_sc_hd__tt_025C_1v80"
-        assert corners["SS"] == "sky130_fd_sc_hd__ss_100C_1v40"   # slow-hot
+        assert corners["SS"] == "sky130_fd_sc_hd__ss_100C_1v60"   # sky130 ref slow (-10%)
         assert corners["FF"] == "sky130_fd_sc_hd__ff_n40C_1v95"   # fast-cold
 
     def test_select_falls_back_to_any_lib_of_label(self):
@@ -639,6 +641,54 @@ class TestContainerCornerDiscovery:
 
     def test_select_empty_on_no_libs(self):
         assert mod._select_signoff_corners([]) == []
+
+    def test_select_follows_pdk_reference_sta_corners(self, monkeypatch):
+        """AUTHORITATIVE: the SS representative FOLLOWS the PDK's own librelane
+        STA_CORNERS, not a hardcode. Differential control: a config declaring
+        ss_100C_1v60 picks 1v60; a config declaring ss_100C_1v40 picks 1v40 —
+        from the SAME lib list — proving the pick tracks the reference config."""
+        libs = [
+            ("sky130_fd_sc_hd__ss_100C_1v40", "/p/sky130_fd_sc_hd__ss_100C_1v40.lib"),
+            ("sky130_fd_sc_hd__ss_100C_1v60", "/p/sky130_fd_sc_hd__ss_100C_1v60.lib"),
+            ("sky130_fd_sc_hd__tt_025C_1v80", "/p/sky130_fd_sc_hd__tt_025C_1v80.lib"),
+            ("sky130_fd_sc_hd__ff_n40C_1v95", "/p/sky130_fd_sc_hd__ff_n40C_1v95.lib"),
+        ]
+        mod._REF_SIGNOFF_CORNER_STEMS_CACHE.clear()
+
+        def _cfg(text):
+            return lambda c, cmd, timeout=60, **_: (0, text, "")
+
+        libdir = "/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib"
+
+        # reference declares ss_100C_1v60 -> pick 1v60
+        monkeypatch.setattr(mod, "_docker_exec", _cfg(
+            "set ::env(STA_CORNERS) nom_tt_025C_1v80 nom_ss_100C_1v60 "
+            "nom_ff_n40C_1v95 max_ss_100C_1v60 max_tt_025C_1v80"))
+        got = {c["label"]: c["name"]
+               for c in mod._select_signoff_corners(libs, "ct60", libdir)}
+        assert got["SS"] == "sky130_fd_sc_hd__ss_100C_1v60"
+
+        # NEGATIVE CONTROL: reference declares ss_100C_1v40 -> pick 1v40
+        # (the pick TRACKS the config, it is not hardcoded)
+        mod._REF_SIGNOFF_CORNER_STEMS_CACHE.clear()
+        monkeypatch.setattr(mod, "_docker_exec", _cfg(
+            "set ::env(STA_CORNERS) nom_tt_025C_1v80 nom_ss_100C_1v40 "
+            "nom_ff_n40C_1v95"))
+        got2 = {c["label"]: c["name"]
+                for c in mod._select_signoff_corners(libs, "ct40", libdir)}
+        assert got2["SS"] == "sky130_fd_sc_hd__ss_100C_1v40"
+
+    def test_reference_corner_stems_failsafe_empty(self, monkeypatch):
+        """No container / docker failure -> empty stem set -> selection degrades
+        to the hardcoded preference (byte-identical to pre-fix)."""
+        mod._REF_SIGNOFF_CORNER_STEMS_CACHE.clear()
+        assert mod._pdk_reference_signoff_corner_stems("", "/x/libs.ref/y/lib") == set()
+        def _boom(c, cmd, timeout=60, **_):
+            raise RuntimeError("docker down")
+        monkeypatch.setattr(mod, "_docker_exec", _boom)
+        mod._REF_SIGNOFF_CORNER_STEMS_CACHE.clear()
+        assert mod._pdk_reference_signoff_corner_stems(
+            "ct", "/foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib") == set()
 
     def test_discover_parses_container_ls(self, monkeypatch):
         out = ("/foss/pdks/sky130A/.../lib/sky130_fd_sc_hd__ss_100C_1v40.lib\n"
