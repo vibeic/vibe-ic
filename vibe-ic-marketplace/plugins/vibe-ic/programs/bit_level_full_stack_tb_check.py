@@ -92,6 +92,7 @@ import subprocess
 import sys
 from pathlib import Path
 import _path_layout as _pl
+import _sim_results_bridge as _srb
 
 
 _DEFAULT_MIN_DISTINCT = 10
@@ -136,6 +137,114 @@ def _resolve_ic_class(proj: Path) -> str:
     except Exception:
         pass
     return ""
+
+
+_CAP_CPU_FUNCTIONAL_ORACLE = "cap:cpu_functional_oracle"
+
+
+def _ic_class_bool(proj: Path, key: str) -> "bool | None":
+    """Return a boolean flag from reports/ic_class.json, or None if absent.
+
+    chip-AGNOSTIC: reads the plugin's own authoritative IC-class taxonomy
+    (written by detect_ic_class), no chip/vendor literal.
+    """
+    try:
+        icj = _pl.reports_dir(proj) / "ic_class.json"
+        if icj.is_file():
+            d = json.loads(icj.read_text())
+            if isinstance(d, dict) and isinstance(d.get(key), bool):
+                return bool(d[key])
+    except Exception:
+        pass
+    return None
+
+
+def _reference_tb_capability_gap(proj: Path) -> str:
+    """Return the capability_gap the step-4 reference_tb recorded in
+    phase2/stage1/sim/results.xml, or "". chip-AGNOSTIC (reads the run's own
+    reference-TB artefact, not any chip literal)."""
+    try:
+        xml = _pl.sim_dir(proj) / "results.xml"
+        if xml.is_file():
+            m = re.search(r"<capability_gap>([^<]*)</capability_gap>",
+                          xml.read_text())
+            if m:
+                return m.group(1).strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _professional_oracle_hook_unfilled(proj: Path) -> bool:
+    """True iff professional_tb_gen emitted reference_model_tier==hook_unfilled
+    into phase2/stage1/sim_professional/<top>/verification_plan.json — i.e. the
+    plugin's professional-TB generator itself HONESTLY declared that it could
+    not derive the functional reference model for this IC (the oracle is a
+    per-IC deferral, not an auto-synthesizable one). chip-AGNOSTIC."""
+    try:
+        # sim_dir == phase2/stage1/sim → sibling phase2/stage1/sim_professional
+        base = _pl.sim_dir(proj).parent / "sim_professional"
+        for vp in sorted(Path(base).glob("*/verification_plan.json")):
+            try:
+                d = json.loads(vp.read_text())
+            except Exception:
+                continue
+            if isinstance(d, dict) and \
+                    str(d.get("reference_model_tier", "")).strip() \
+                    == "hook_unfilled":
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def functional_oracle_deferred(proj: Path, ic_class: str) -> "tuple[bool, str]":
+    """Chip-AGNOSTIC discriminator: is the register-map FUNCTIONAL oracle
+    legitimately DEFERRED for this IC (a per-IC oracle-TB capability gap), as
+    opposed to a synthesizable-now stimulus tooling gap?
+
+    Returns (True, reason) ONLY when the plugin's OWN Phase-2 TB generators
+    have ALREADY declared the functional oracle deferred for THIS run:
+
+      (1) reports/ic_class.json declares has_command_protocol == False — the
+          register file is a COMPUTE/ACCELERATOR data interface (crypto/DSP:
+          write data-block -> start -> poll-done -> read result-block) whose
+          RESPONSE VALUE is defined by a chip-specific ALGORITHM, NOT an
+          externally-driven command-slave protocol whose response bytes are
+          spec-derivable. This is the SAME taxonomy the processor_cpu carve-out
+          already uses (register_map_protocol_evidence returns None for it);
+          crypto_accelerator shares has_command_protocol=False but DOES expose
+          an addr/data/we slave, so it is not N/A — it is applicable-but-
+          deferred.  AND
+      (2) at least one of the plugin's own TB generators recorded the deferral
+          for this run:
+            * step-4 reference_tb wrote capability_gap==cap:cpu_functional_oracle
+              into phase2/stage1/sim/results.xml, OR
+            * professional_tb_gen emitted reference_model_tier==hook_unfilled
+              into sim_professional/<top>/verification_plan.json.
+
+    A genuine register-SLAVE peripheral (has_command_protocol==True — SPI/I2C/
+    bus-interconnect/etc.) NEVER matches (1) and still hard-FAILs on a missing
+    synthesizable oracle. A run where NEITHER generator declared the deferral
+    also does not match — the FAIL stands. This ties the bit-level full-stack
+    gate to the plugin's OWN cpu_functional_oracle deferral doctrine
+    (reference_tb + #228 PASS_WITH_WAIVERS idiom) instead of unilaterally
+    asserting the oracle is trivially synthesizable.
+    """
+    if _ic_class_bool(proj, "has_command_protocol") is not False:
+        return (False, "")
+    gap = _reference_tb_capability_gap(proj)
+    hook = _professional_oracle_hook_unfilled(proj)
+    if gap == _CAP_CPU_FUNCTIONAL_ORACLE or hook:
+        sig = []
+        if gap == _CAP_CPU_FUNCTIONAL_ORACLE:
+            sig.append("reference_tb capability_gap=cap:cpu_functional_oracle")
+        if hook:
+            sig.append("professional_tb reference_model_tier=hook_unfilled")
+        return (True,
+                f"ic_class={ic_class or '?'} has_command_protocol=false; "
+                + " + ".join(sig))
+    return (False, "")
 
 
 def register_map_protocol_evidence(generated_docs: Path,
@@ -577,6 +686,101 @@ def main():
                 # coverage; treat it exactly like an explicit 0.
                 _scored = functional_coverage_scored(_sim)
                 if _regmap and (_scored or 0) == 0:
+                    _ic_class = _resolve_ic_class(proj)
+                    # (A) A REAL professional-cocotb functional PASS SUPERSEDES
+                    # the register-map gap: functional verification was ACHIEVED
+                    # (failures=0), so this is a genuine PASS, not a gap. Mirrors
+                    # cpu_functional_oracle_waiver_check (2026-07-13). chip-
+                    # AGNOSTIC: keyed on the JUnit result structure.
+                    _pro = _srb.find_professional_tb_pass(proj)
+                    if _pro:
+                        _msg = (
+                            "PASS: register-map functional verification "
+                            "ACHIEVED by the professional cocotb testbench "
+                            f"({_pro['rel_path']}: tests={_pro['tests']} "
+                            f"passed={_pro['passed']} "
+                            f"failures={_pro['failures']} "
+                            f"errors={_pro['errors']}). The register-map "
+                            "full-stack functional pillar is satisfied by this "
+                            "real functional PASS.")
+                        _res = {
+                            "pass": True,
+                            "vacuous_pass": False,
+                            "functional_verified": True,
+                            "rule": "register_map_functional_pass_professional",
+                            "verdict": "PASS",
+                            "scored_with_golden": int(_scored or 0),
+                            "register_map_evidence": _regmap,
+                            "professional_tb": _pro,
+                            "rationale": _msg,
+                        }
+                        if args.json:
+                            Path(args.json).parent.mkdir(parents=True,
+                                                         exist_ok=True)
+                            Path(args.json).write_text(
+                                json.dumps(_res, indent=2))
+                        print(json.dumps(_res, indent=2))
+                        return 0
+                    # (B) The functional ORACLE is legitimately DEFERRED for
+                    # this IC (crypto/compute accelerator: has_command_protocol=
+                    # false AND the plugin's own reference_tb / professional_tb
+                    # generators already declared the cap:cpu_functional_oracle
+                    # deferral for this run). Synthesising the register-map
+                    # STIMULUS is possible, but the RESPONSE ORACLE (e.g. the
+                    # SHA-256 digest) is defined by a chip-specific algorithm the
+                    # deterministic generator cannot fabricate — exactly what the
+                    # professional_tb reference_model hook is DEFERRED for. Emit
+                    # WAIVED-DEFERRED (rc=3 + PASS_WITH_WAIVERS sentinel), the
+                    # same #228 / cpu_functional_oracle_waiver idiom step 4 uses:
+                    # VISIBLE, review_required, excluded from a strict PASS
+                    # headline, NON-blocking — NOT a green vacuous_pass (the
+                    # canary's real concern) and NOT a hard-FAIL that unilaterally
+                    # asserts the oracle is trivially synthesizable while every
+                    # other Phase-2 TB path on this same run deferred it.
+                    _deferred, _why = functional_oracle_deferred(
+                        proj, _ic_class)
+                    if _deferred:
+                        _msg = (
+                            "PASS_WITH_WAIVERS: register-map FUNCTIONAL oracle "
+                            "DEFERRED (cap:cpu_functional_oracle) — the register-"
+                            "map STIMULUS is synthesizable but the RESPONSE "
+                            "ORACLE is algorithm-defined and per-IC. L4/L5 "
+                            f"declare a register file ({_regmap['registers']} "
+                            f"register(s), {_regmap['distinct_addresses']} "
+                            "distinct address(es)), but the plugin's own "
+                            f"Phase-2 TB generators already deferred it [{_why}]. "
+                            "Functional verification is DEFERRED to a per-IC "
+                            "oracle TB (skill testbench-author); connectivity/"
+                            "structural full-stack binding to real rtl/ stands. "
+                            "WAIVED-DEFERRED (visible, review_required, non-"
+                            "blocking) — consistent with the step-4 reference_tb "
+                            "deferral and the #228 waiver doctrine; NOT a green "
+                            "vacuous_pass and NOT a synthesizable-now tooling "
+                            "gap.")
+                        _res = {
+                            "pass": True,
+                            "vacuous_pass": False,
+                            "functional_verified": False,
+                            "waived_deferred": True,
+                            "capability_gap": _CAP_CPU_FUNCTIONAL_ORACLE,
+                            "rule": "register_map_functional_oracle_deferred",
+                            "verdict": "PASS_WITH_WAIVERS",
+                            "scored_with_golden": int(_scored or 0),
+                            "register_map_evidence": _regmap,
+                            "deferral_evidence": _why,
+                            "rationale": _msg,
+                        }
+                        if args.json:
+                            Path(args.json).parent.mkdir(parents=True,
+                                                         exist_ok=True)
+                            Path(args.json).write_text(
+                                json.dumps(_res, indent=2))
+                        # JSON first, then the sentinel line LAST at line-start
+                        # (flow_compliance requires rc==3 AND a line starting
+                        # with PASS_WITH_WAIVERS in stdout).
+                        print(json.dumps(_res, indent=2))
+                        print(_msg)
+                        return 3
                     _msg = (
                         "FUNCTIONAL_COVERAGE_GAP: register-map protocol not "
                         "yet synthesizable by the TB generator — 0 "
