@@ -161,6 +161,41 @@ def _is_pure_analog_no_rtl_track(project: Path) -> Tuple[bool, str]:
                 f"rtl_gen=null, fallback_skill=null) and rtl/ empty — digital "
                 f"backend (synth/PnR/GDS) deferred to the analog A5..A6 "
                 f"layout track")
+    # ORGANIC — an analog-applicable class whose registry contract carries a
+    # digital-RTL fallback (e.g. data_converter → fallback_skill='spec-to-rtl',
+    # which authors a digital decimation / serial-readout datapath) can STILL
+    # present an ALL-ANALOG top interface on a given design: no digital
+    # clock/reset/data INPUT port, so there is genuinely no digital RTL to
+    # author. In that case phase-2 step_rtl_gen already WAIVED (deferred_to
+    # 'analog_track', fallback_skill=null) on the SAME structural signal —
+    # `analog_interface_classify.digital_datapath_absent`. Phase-3 must be
+    # consistent with that authoritative phase-2 decision: if the top interface
+    # is all-analog and rtl/ is empty, the digital backend is N/A by
+    # construction here too, NOT a hard `no synthesisable RTL` FAIL. Consulting
+    # the SAME classifier keeps phase-2 and phase-3 in lock-step and is
+    # chip-AGNOSTIC (keyed on L9 port structure, never a chip name). Fail-SAFE:
+    # a missing/empty L9 → digital_datapath_absent False → keep the digital
+    # backend (never waive a real digital design on absence of evidence).
+    if analog_ok:
+        try:
+            import sys as _sys
+            if str(PROGRAMS_DIR) not in _sys.path:
+                _sys.path.insert(0, str(PROGRAMS_DIR))
+            from analog_interface_classify import (
+                digital_datapath_absent as _dda)
+            absent, dda_reason, _ev = _dda(project)
+            if absent:
+                return (True,
+                        f"class {ic_class!r} is analog-applicable and its top "
+                        f"interface is all-analog ({dda_reason}); rtl/ empty — "
+                        f"digital backend (synth/PnR/GDS) deferred to the "
+                        f"analog A5..A6 layout track (consistent with phase-2 "
+                        f"rtl_gen WAIVE)")
+        except Exception as e:
+            # Fail-SAFE: cannot assert all-analog → keep the digital backend.
+            return (False,
+                    f"class {ic_class!r} has a digital RTL track "
+                    f"(all-analog interface probe unavailable: {e})")
     return (False, f"class {ic_class!r} has a digital RTL track")
 
 
