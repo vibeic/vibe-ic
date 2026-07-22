@@ -50,6 +50,51 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import _path_layout as _pl
 from _rtl_include_hub import drop_include_hubs as _drop_include_hubs  # shared aggregator filter
 from _rtl_include_hub import macro_headers_first as _macro_headers_first  # #785 — shared macro-header ordering
+from _rtl_include_hub import strip_v_comments as _strip_v_comments  # #787 — shared comment strip
+
+_V787_MODULE_DECL_RE = re.compile(r"(?<![\w$])module\s+([A-Za-z_]\w*)")
+
+
+def _staged_module_names(rtl_dir: Path) -> set:
+    """ORGANIC-20260722 #787 — names of every module DECLARED in staged rtl/.
+
+    Returns an empty set when rtl/ is unreadable or declares nothing, which
+    makes every caller's guard fail closed (no adoption). chip-AGNOSTIC."""
+    names: set = set()
+    if not rtl_dir.is_dir():
+        return names
+    for f in sorted(rtl_dir.glob("*.v")) + sorted(rtl_dir.glob("*.sv")):
+        try:
+            names.update(_V787_MODULE_DECL_RE.findall(
+                _strip_v_comments(f.read_text(errors="ignore"))))
+        except OSError:
+            continue
+    return names
+
+
+def _phase2_recorded_synth_top(project: Path) -> Optional[str]:
+    """ORGANIC-20260722 #787 — the top phase 2's yosys_synth step ACTUALLY
+    synthesised, or None.
+
+    Reads the first-class `extras.synth_top` field, falling back to the
+    `synth_top=<name>` token in the step `detail` so a report written before
+    that field existed is still understood. Returns None on ANY read/parse
+    error, so the caller keeps the requested top. chip-AGNOSTIC."""
+    rep = project / "reports" / "orchestrator" / "phase2_one_shot.json"
+    try:
+        data = json.loads(rep.read_text(errors="replace"))
+        for step in data.get("steps") or []:
+            if step.get("name") != "yosys_synth":
+                continue
+            val = (step.get("extras") or {}).get("synth_top")
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+            m = re.search(r"\bsynth_top=(\w+)", str(step.get("detail") or ""))
+            if m:
+                return m.group(1)
+    except Exception:
+        pass
+    return None
 import _watchdog as _wd  # v1.3.47 — plugin-wide progress-stall supervision
 import _docker_watchdog as _dwd  # shared in-container CPU probe (tree-aware)
 import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
@@ -22382,6 +22427,41 @@ def main() -> int:
         if (_pl.rtl_dir(project) / f"{cand}.sv").is_file():
             effective_top = cand
             break
+
+    # ORGANIC-20260722 #787 — adopt the top PHASE 2 ACTUALLY SYNTHESISED when
+    # the requested one is PHANTOM (declared by no staged module).
+    #
+    # #683/#782 gave phase 2 a structural fallback: when the resolved top is not
+    # a real staged module, it consults the instantiation-graph resolver and
+    # synthesises the graph ROOT instead. That repair was never handed to phase
+    # 3, which resolves its top from `--top-name` alone — so phase 2 succeeded
+    # on the graph root while phase 3 asked yosys for the phantom name:
+    #
+    #     [phase2] PASS yosys_synth ... synth_top=user_project_wrapper
+    #     [phase3] FAIL synth  error: 'caravel_user_project' is not a valid
+    #                                 top-level module
+    #                         warning: no top-level modules found [-Wmissing-top]
+    #     → no netlist → no GDS → DRC SKIP, LVS WAIVED (observed on
+    #       caravel_user_project x sky130A).
+    #
+    # Guarded exactly like #782, so it can only convert a CERTAIN FAIL into the
+    # top phase 2 already proved synthesisable, never redirect a working top:
+    #   (a) the requested top must be PHANTOM — no staged module declares it, so
+    #       yosys is GUARANTEED to reject it;
+    #   (b) an `_asic` / `_pad_wrapper` override above wins and is never
+    #       overridden (that is an explicit authored intent);
+    #   (c) phase 2's recorded top must itself be a REAL staged module.
+    # We CONSUME phase 2's recorded value rather than re-deriving it, so the two
+    # phases cannot resolve the same design differently. chip-AGNOSTIC.
+    if effective_top == args.top_name:
+        _staged = _staged_module_names(_pl.rtl_dir(project))
+        if _staged and effective_top not in _staged:
+            _p2_top = _phase2_recorded_synth_top(project)
+            if _p2_top and _p2_top in _staged:
+                print(f"[phase3] requested top '{args.top_name}' is declared by "
+                      f"no staged module; adopting the top phase 2 synthesised "
+                      f"('{_p2_top}') — ORGANIC #787")
+                effective_top = _p2_top
 
     print(f"=== phase3_one_shot_runner — pdk={pdk.name} top={effective_top}"
           f"{' (override of '+args.top_name+')' if effective_top != args.top_name else ''} ===")
