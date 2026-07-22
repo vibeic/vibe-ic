@@ -49,13 +49,32 @@ VERDICTS
                     the staged set, and the reachable set is non-empty
                     (top found + walked).
   DUPLICATE       — reachable closure contains a duplicate-module defect.
-  STAGED_DUPLICATE— a duplicate-module defect exists among the FULL staged
-                    set (the runner feeds the full flat glob to synth, so a
-                    duplicate in the PRUNABLE tail still crashes yosys-slang)
-                    but it is NOT in the reachable closure of `top`.
-                    Distinct from DUPLICATE so #639 (reachable-only) is not
-                    masked; both are hard-gated crash-prevention verdicts.
-                    (ORGANIC #774.)
+  STAGED_DUPLICATE— a duplicate-module defect exists among the staged set
+                    that synth actually COMPILES, but it is NOT in the
+                    reachable closure of `top`.  Distinct from DUPLICATE so
+                    #639 (reachable-only) is not masked; both are hard-gated
+                    crash-prevention verdicts.  (ORGANIC #774.)
+
+SCOPE OF THE DUPLICATE GATE (ORGANIC #781)
+------------------------------------------
+The duplicate-module verdicts exist for exactly one reason: to pre-empt a raw
+yosys-slang "duplicate definition" abort.  A file that synth never READS can
+never cause that abort, so it must never raise the gate.
+
+`_gather()` deliberately walks `rglob` — nested headers must participate in
+closure resolution so an include-only macro/package can chain a module in.
+But the runner's compile set (`_select_asic_rtl_sources`) is a TOP-LEVEL
+`glob`, not `rglob`.  Scanning the rglob set for duplicates therefore gates on
+files that are never handed to the frontend: a vendor bundle whose sources also
+live in a nested sub-path (`syn/rtl/foo.v` alongside a staged `foo.v`) is
+flagged as a "bundle defect" although synth compiles exactly one `foo.v` and
+elaborates cleanly.
+
+`resolve()` therefore accepts `synth_files` — the exact set the caller will
+feed to the frontend.  Duplicate REPORTING is restricted to that set; closure
+resolution still uses the full rglob walk.  When `synth_files` is None the
+resolver falls back to the top-level-glob semantics the runner uses, so the
+standalone CLI agrees with the in-flow gate.
   TOP_NOT_FOUND   — the named top module is not defined in any file.
   EMPTY           — no .sv/.v files found at all (vacuous; FAIL-safe).
 
@@ -306,15 +325,42 @@ def _canonical_pick(module: str, candidates: List[Path]) -> Tuple[Path,
     return canon, variants
 
 
-def _scan_staged_duplicates(idx: Dict, reachable_set: set) -> List[Dict]:
-    """ORGANIC #774 — scan the FULL staged module-definition index for cross-file
+def _disp(p: Path, peers: List[Path]) -> str:
+    """Shortest UNAMBIGUOUS display name for `p` among `peers`.
+
+    ORGANIC #781 — the remediation used bare `p.name`, so a duplicate whose
+    copies share a basename (the common case: the same vendor file staged both
+    flat and under its original sub-path) rendered as the self-contradictory
+    "Canonical: foo.v ... drop variant/shim file(s): foo.v". Fall back to the
+    path suffix that actually distinguishes the peers."""
+    others = [q for q in peers if q != p]
+    if all(q.name != p.name for q in others):
+        return p.name
+    parts = p.parts
+    for depth in range(2, len(parts) + 1):
+        cand = str(Path(*parts[-depth:]))
+        if all(str(Path(*q.parts[-depth:])) != cand for q in others):
+            return cand
+    return str(p)
+
+
+def _scan_staged_duplicates(idx: Dict, reachable_set: set,
+                            synth_set: Optional[set] = None) -> List[Dict]:
+    """ORGANIC #774 — scan the staged module-definition index for cross-file
     duplicate-module definitions, classifying each by scope ('reachable' when
     every defining file is in `reachable_set` — the #639 facet; 'staged' when any
     defining file is outside it — the #774 prunable-tail facet). `reachable_set`
-    empty ⇒ every duplicate is scope='staged'. chip-AGNOSTIC."""
+    empty ⇒ every duplicate is scope='staged'. chip-AGNOSTIC.
+
+    ORGANIC #781 — `synth_set` (when given) is the exact file set the caller
+    feeds to the frontend. Only files in it can trigger a yosys-slang
+    "duplicate definition" abort, so only they are eligible to raise this gate.
+    A nested copy that synth never compiles is NOT a bundle defect."""
     dup_findings: List[Dict] = []
     for mod, deffiles in sorted(idx["mod_def"].items()):
         staged = [f for f in deffiles if f.suffix in _SYNTH_EXTS]
+        if synth_set is not None:
+            staged = [f for f in staged if f in synth_set]
         uniq = sorted(set(staged), key=str)
         if len(uniq) > 1:
             canon, variants = _canonical_pick(mod, uniq)
@@ -332,28 +378,48 @@ def _scan_staged_duplicates(idx: Dict, reachable_set: set) -> List[Dict]:
                 "message": (
                     f"module {mod!r} is declared in {len(uniq)} staged "
                     f"files{tail_note} — vendor bundle duplicate-module "
-                    f"defect. Canonical: {canon.name} (filename matches "
-                    f"module name); drop variant/shim file(s): "
-                    f"{', '.join(v.name for v in variants)}."),
+                    f"defect. Canonical: {_disp(canon, uniq)} (filename "
+                    f"matches module name); drop variant/shim file(s): "
+                    f"{', '.join(_disp(v, uniq) for v in variants)}."),
             })
     return dup_findings
 
 
-def resolve(top: str, rtl_dir: Path) -> Dict:
+def _default_synth_set(rtl_dir: Path, files: Dict[Path, str]) -> set:
+    """ORGANIC #781 — the file set the runner ACTUALLY compiles, when the caller
+    did not pass one explicitly.
+
+    Mirrors `design_one_shot_runner._select_asic_rtl_sources`: a TOP-LEVEL
+    ``glob`` of ``*.sv`` / ``*.v`` (NOT ``rglob``). Nested sources are reachable
+    for closure/`include purposes but are never handed to the frontend, so they
+    cannot raise a duplicate-definition abort."""
+    top_level = set()
+    for f in files:
+        if f.suffix in _SYNTH_EXTS and f.parent == rtl_dir:
+            top_level.add(f)
+    return top_level
+
+
+def resolve(top: str, rtl_dir: Path,
+            synth_files: Optional[List[Path]] = None) -> Dict:
     files = _gather(rtl_dir)
     if not files:
         return {"verdict": "EMPTY",
                 "error": "no .sv/.v files found",
                 "reachable": [], "prunable": [], "duplicates": []}
+    # ORGANIC #781 — duplicate REPORTING is scoped to what synth compiles.
+    if synth_files is not None:
+        synth_set = {Path(p) for p in synth_files}
+    else:
+        synth_set = _default_synth_set(rtl_dir, files)
     idx = build_index(files)
     if top not in idx["mod_def"]:
         # ORGANIC #774 round-2 (Step-2.7) — the duplicate-module crash-gate must
-        # run UNCONDITIONALLY over the full staged set, even when `top` does not
-        # resolve. The runner still feeds the entire flat glob to synth, so a
-        # staged duplicate-module pair still crashes yosys-slang raw regardless of
-        # whether the named top is found. With no reachable closure, every dup is
-        # scope='staged'.
-        dup_findings = _scan_staged_duplicates(idx, set())
+        # run even when `top` does not resolve: a duplicate-module pair inside
+        # the COMPILED set still crashes yosys-slang raw regardless of whether
+        # the named top is found. With no reachable closure, every dup is
+        # scope='staged'. (#781: scoped to the compiled set, not the rglob walk.)
+        dup_findings = _scan_staged_duplicates(idx, set(), synth_set)
         if dup_findings:
             return {"verdict": "STAGED_DUPLICATE",
                     "top": top, "files_total": len(files),
@@ -385,7 +451,7 @@ def resolve(top: str, rtl_dir: Path) -> Dict:
     # Only synthesizable source files (.sv/.v) count as a duplicate-module
     # defect; an include-only header redeclaring under a guard is not a
     # vendor bundle defect.
-    dup_findings = _scan_staged_duplicates(idx, set(reachable))
+    dup_findings = _scan_staged_duplicates(idx, set(reachable), synth_set)
 
     if not dup_findings:
         verdict = "PASS"
