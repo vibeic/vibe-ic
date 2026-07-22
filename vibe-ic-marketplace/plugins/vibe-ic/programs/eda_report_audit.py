@@ -421,6 +421,25 @@ def _check_lvs(project_dir: Path) -> AuditResult:
     result = AuditResult(program="eda_report_audit:lvs", passed=False)
     files = _discover(project_dir, ["*lvs*.rpt", "*lvs*.log", "*LVS*.rpt",
                                      "*LVS*.log", "*comp*.out"])
+    # ADVISORY power-aware reports are NOT the sign-off artifact. The phase3
+    # runner runs power-aware LVS as a strictly-monotonic best-effort PRE-attempt
+    # (`_try_power_aware_lvs`): on any non-MATCH it returns None and falls through
+    # to the plain netgen sign-off, whose result ALONE becomes step_lvs and
+    # reports/phase3/lvs_verdict.json — the `*power_aware*.rpt` is left on disk as
+    # advisory evidence only, never referenced by the runner's verdict. Its
+    # reference netlist is emitted WITHOUT rails-as-ports, so on a pad-ring top
+    # (e.g. a Caravel wrapper) it is EXPECTED to mis-match the layout's top-level
+    # VPWR/VGND ports even when the authoritative plain LVS matches uniquely.
+    # `_check_lvs` concatenates every discovered report into ONE verdict blob, so
+    # a "Netlists do not match." token from the advisory report OVERRODE a
+    # "Circuits match uniquely." sign-off — a false Step-31 LVS FAIL (measured on
+    # caravel_user_project x sky130A). Drop the advisory reports so the gate
+    # judges the SAME artifact the runner signs off — but ONLY when a non-advisory
+    # LVS report exists, so a run that produced solely a power-aware report is not
+    # silently turned into "no report" (which must not pass either).
+    _non_advisory = [f for f in files if "power_aware" not in f.name.lower()]
+    if _non_advisory:
+        files = _non_advisory
     if not files:
         # A BLOCKED run produces NO netgen report by construction — extraction
         # never ran, because an input could not support it. "No LVS report
