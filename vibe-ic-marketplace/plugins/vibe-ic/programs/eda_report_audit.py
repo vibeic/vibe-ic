@@ -417,10 +417,55 @@ def _lvs_blocked_verdict(project_dir: Path) -> Optional[dict]:
     return data if status == "BLOCKED" else None
 
 
+# ORGANIC-20260722 #786 — LVS reports that are ATTEMPT SCRATCH, not verdicts.
+# An "attempt" report is written by a strictly-monotonic upgrade probe that
+# falls back to the canonical path when it does not reach a clean match, so its
+# content must never decide Step-31 sign-off. Matched on the report STEM
+# (`lvs` + a qualifier) so the canonical `lvs.rpt` / `lvs.log` never matches.
+_LVS_ATTEMPT_STEMS = ("_power_aware", "_pwraware", "_attempt", "_try",
+                      "_probe", "_prelim")
+
+
+def _is_lvs_attempt_artifact(path: Path) -> bool:
+    """True iff `path` is a non-authoritative LVS ATTEMPT report rather than the
+    canonical Step-31 LVS result. chip-AGNOSTIC: filename-shape only."""
+    stem = path.stem.lower()
+    return any(q in stem for q in _LVS_ATTEMPT_STEMS)
+
+
+def _drop_nonauthoritative_lvs_attempts(files: List[Path]) -> List[Path]:
+    """Remove attempt-scratch LVS reports, but FAIL OPEN: if dropping them would
+    leave nothing to audit, keep the original list so a project whose ONLY
+    report is such a file is still judged (never silently unaudited)."""
+    kept = [f for f in files if not _is_lvs_attempt_artifact(f)]
+    return kept if kept else files
+
+
 def _check_lvs(project_dir: Path) -> AuditResult:
     result = AuditResult(program="eda_report_audit:lvs", passed=False)
     files = _discover(project_dir, ["*lvs*.rpt", "*lvs*.log", "*LVS*.rpt",
                                      "*LVS*.log", "*comp*.out"])
+    # ORGANIC-20260722 #786 — drop NON-AUTHORITATIVE attempt artifacts before
+    # the verdict blob is built. The runner's power-aware LVS upgrade
+    # (`phase3_one_shot_runner._try_power_aware_lvs`) writes a scratch report
+    # for each model it TRIES and is documented as "strictly monotonic — it can
+    # only UPGRADE a power-blind outcome to a power-verified match, never
+    # regress it": on a non-match it returns None and the canonical `lvs.rpt`
+    # keeps the plain-path result. But `_discover` globs `*lvs*.rpt`, so that
+    # deliberately-discarded attempt was swept into `blob`, its mismatch token
+    # hard-FAILed Step 31 under #507 — the exact regression the producer
+    # promises cannot happen — and the finding was attributed to `best_file`
+    # (the FIRST file scanned), naming a report that does not contain the token.
+    #
+    # Observed on caravel_user_project x sky130A: canonical
+    # `reports/phase3/lvs.rpt` = "Circuits match uniquely", runner verdict
+    # `lvs_verdict.json` = PASS/LVS_MATCH, yet Step 31 FAILed citing
+    # `steps/31_.../lvs.rpt` — a file whose terminal verdict is a MATCH.
+    #
+    # #507 is FULLY preserved: a mismatch in the CANONICAL report still fails,
+    # and sub-cell mismatch lines inside it are still authoritative. Only the
+    # separate, discarded attempt file stops voting. chip-AGNOSTIC.
+    files = _drop_nonauthoritative_lvs_attempts(files)
     if not files:
         # A BLOCKED run produces NO netgen report by construction — extraction
         # never ran, because an input could not support it. "No LVS report
