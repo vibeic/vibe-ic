@@ -7361,9 +7361,26 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
     # an explicit waiver / L9.synth_top / <top>_asic.sv (those set asic_top_name
     # so synth_top != top_name) and NEVER fires when a real chip_top module is
     # staged. Pure instantiation-graph structural detection; chip-AGNOSTIC.
-    if synth_top == top_name == "chip_top":
+    # ORGANIC #782 — generalise the #683 guard from the LITERAL auto-wrapper
+    # name to the condition it was always a proxy for: "the resolved synth top
+    # is not a module that actually exists in staged rtl/". #683 keyed on
+    # `== "chip_top"`, so a caller-supplied `--top-name <ic_name>` that is
+    # likewise PHANTOM (e.g. `--top-name ibex` for a bundle whose real staged
+    # root is the authored `chip_top` wrapper; L9.top_module='ibex_top' is
+    # phantom too and L9.synth_top is null) fell straight through to
+    # `read_slang --top ibex` → "error: 'ibex' is not a valid top-level module"
+    # → Phase-2 FAIL, even though the SAME structural resolver returns the real
+    # graph root unambiguously.
+    #
+    # `synth_top == top_name` still means the precedence chain fell through, so
+    # an explicit waiver / L9.synth_top / <top>_asic.sv (each of which sets
+    # asic_top_name, making synth_top != top_name) is NEVER overridden. And the
+    # `not in _staged_mods` test means we only ever act on a top that yosys is
+    # GUARANTEED to reject — this can convert a certain FAIL into a resolved
+    # top, never a working top into a different one.
+    if synth_top == top_name:
         _staged_mods = set(_v661_rtl_module_names(project))
-        if "chip_top" not in _staged_mods:
+        if synth_top not in _staged_mods:
             _l9_top_module = None
             try:
                 _l9p683 = (project / "phase1" / "generated_docs"
