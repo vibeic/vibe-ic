@@ -76,10 +76,13 @@ A forked + enhanced toolchain (OpenROAD / yosys / ngspice / magic / netgen / ive
 klayout) carrying **gatekeeper-verified FAIL→PASS fixes** over the stock base — e.g. yosys
 uplifted to 0.66 + slang SV frontend, ngspice `-b` batch-honesty nonzero-rc, netgen
 property-error LVS verdict (kills silent false-pass), klayout MANUFACTURINGGRID streamout
-snap. Full scoreboard: `tools/vibeic-eda/FIX_STATUS.md`. Build the reproducible image once:
+snap. Full scoreboard: `tools/vibeic-eda/FIX_STATUS.md`. Get the enhanced image — pull the
+published one, or build from the canonical source:
 
 ```bash
-docker build -t vibeic-eda:0.2.26 /path/to/repo/tools/vibeic-eda
+docker pull ghcr.io/vibeic/vibeic-eda:latest                 # published image (all fork fixes baked in)
+# — or build from source (advanced): the Dockerfile lives in the canonical repo, not this tree
+git clone https://github.com/vibeic/vibeic-eda && docker build -t vibeic-eda:latest vibeic-eda/
 ```
 
 ### Option B: the stock IIC-OSIC-Tools base
