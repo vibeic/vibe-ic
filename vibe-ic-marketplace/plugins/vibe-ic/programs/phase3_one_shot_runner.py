@@ -25847,6 +25847,41 @@ def main() -> int:
                       f"('{_p2_top}') — ORGANIC #787")
                 effective_top = _p2_top
 
+    # ORGANIC-20260722 #787 — adopt the top PHASE 2 ACTUALLY SYNTHESISED when
+    # the requested one is PHANTOM (declared by no staged module).
+    #
+    # #683/#782 gave phase 2 a structural fallback: when the resolved top is not
+    # a real staged module, it consults the instantiation-graph resolver and
+    # synthesises the graph ROOT instead. That repair was never handed to phase
+    # 3, which resolves its top from `--top-name` alone — so phase 2 succeeded
+    # on the graph root while phase 3 asked yosys for the phantom name:
+    #
+    #     [phase2] PASS yosys_synth ... synth_top=user_project_wrapper
+    #     [phase3] FAIL synth  error: 'caravel_user_project' is not a valid
+    #                                 top-level module
+    #                         warning: no top-level modules found [-Wmissing-top]
+    #     → no netlist → no GDS → DRC SKIP, LVS WAIVED (observed on
+    #       caravel_user_project x sky130A).
+    #
+    # Guarded exactly like #782, so it can only convert a CERTAIN FAIL into the
+    # top phase 2 already proved synthesisable, never redirect a working top:
+    #   (a) the requested top must be PHANTOM — no staged module declares it, so
+    #       yosys is GUARANTEED to reject it;
+    #   (b) an `_asic` / `_pad_wrapper` override above wins and is never
+    #       overridden (that is an explicit authored intent);
+    #   (c) phase 2's recorded top must itself be a REAL staged module.
+    # We CONSUME phase 2's recorded value rather than re-deriving it, so the two
+    # phases cannot resolve the same design differently. chip-AGNOSTIC.
+    if effective_top == args.top_name:
+        _staged = _staged_module_names(_pl.rtl_dir(project))
+        if _staged and effective_top not in _staged:
+            _p2_top = _phase2_recorded_synth_top(project)
+            if _p2_top and _p2_top in _staged:
+                print(f"[phase3] requested top '{args.top_name}' is declared by "
+                      f"no staged module; adopting the top phase 2 synthesised "
+                      f"('{_p2_top}') — ORGANIC #787")
+                effective_top = _p2_top
+
     print(f"=== phase3_one_shot_runner — pdk={pdk.name} top={effective_top}"
           f"{' (override of '+args.top_name+')' if effective_top != args.top_name else ''} ===")
     plan: List[StepResult] = []
