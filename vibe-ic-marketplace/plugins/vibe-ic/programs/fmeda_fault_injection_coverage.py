@@ -312,11 +312,14 @@ def detect_safety_mechanism(rtl_dir: Path,
     Returns None (→ NOT_APPLICABLE) when no mechanism is unambiguously pinned —
     §4.05 PARSE-OR-SKIP: a non-safety design must skip, never fake a pass.
 
-    Recognises a decoder as a module with a protected (widest) input port AND an
-    output port whose NAME declares error detection (syndrome/parity_err/...),
-    OR a module that both consumes a codeword and produces a narrower corrected
-    data output (correction-only). An encoder is a module producing a WIDER
-    output than its input. chip-AGNOSTIC.
+    Recognises a decoder as a module with a protected (widest) input port AND a
+    narrower corrected-DATA output that is PAIRED WITH an error-detection port
+    whose NAME declares detection (syndrome/parity_err/...). A narrower data
+    output on its OWN (an instruction/address decoder or mux) is NOT ECC; a bare
+    detect flag on its own is NOT ECC either — the positive structure is BOTH, OR
+    an explicit safety declaration (ISO-26262 / ASIL / ECC / parity / lockstep)
+    in prose/L23, under which even a SEC-only correction-only decoder fires. An
+    encoder is a module producing a WIDER output than its input. chip-AGNOSTIC.
     """
     if not rtl_dir.is_dir():
         return None
@@ -377,15 +380,27 @@ def detect_safety_mechanism(rtl_dir: Path,
     if dec is None:
         return None
 
-    # §4.05 declared-mechanism gate (TIGHTENED, #145): a decoder-SHAPED module
-    # counts as a SAFETY mechanism ONLY with POSITIVE ECC structure — a real
-    # corrected-DATA output narrower than the codeword input (`dec["out"]`, i.e.
-    # syndrome-correction evidence) — OR an explicit safety declaration in
-    # prose/L23. A bare 1-bit detect/`error` STATUS flag is NOT sufficient on its
-    # own: a generic register-mapped IP with an `error` status output + a data
-    # bus would otherwise be read as an encoder/decoder pair and forced into an
-    # ASIL-D FMEDA it can never satisfy (#145 — sha256 crypto accelerator).
-    if not (dec["out"] is not None or _SAFETY_DECL_RE.search(combined)):
+    # §4.05 declared-mechanism gate (TIGHTENED, #145 → follow-up): a decoder-
+    # SHAPED module counts as a SAFETY mechanism ONLY with POSITIVE ECC
+    # structure — a real corrected-DATA output narrower than the codeword input
+    # PAIRED WITH a syndrome/detect PORT (`dec["out"]` AND `dec["detect"]`: a
+    # decoder that both recovers the data AND raises an error flag) — OR an
+    # explicit safety declaration in prose/L23.
+    #
+    # A corrected-DATA output ALONE is NOT sufficient: a plain instruction /
+    # address decoder or mux (wide input → narrower output, NO syndrome/detect
+    # port) is structurally identical to an ECC correction decoder and would
+    # otherwise be auto-paired into a phantom encoder/decoder and forced into an
+    # ASIL-D FMEDA it can never satisfy — on a design that never declared any
+    # functional-safety intent. (subservient: `serv_immdec`, the SERV 32-bit
+    # immediate decoder → 5-bit `o_rd_addr`, auto-paired with `chip_top` as a
+    # phantom ECC and FAILed at the default ASIL-D 99% floor, despite the design
+    # declaring no ASIL/ECC/parity/lockstep anywhere.) A bare 1-bit detect /
+    # `error` STATUS flag likewise remains insufficient on its own (#145 —
+    # sha256 crypto accelerator). A genuine SEC-only ECC with no detect flag
+    # still fires whenever the design DECLARES safety (the _SAFETY_DECL_RE arm).
+    if not ((dec["out"] is not None and dec["detect"] is not None)
+            or _SAFETY_DECL_RE.search(combined)):
         return None
 
     # Find an encoder: input == decoder data_width, output == code_width.
