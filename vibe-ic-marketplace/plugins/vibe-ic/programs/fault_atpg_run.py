@@ -250,7 +250,18 @@ _DFF_INST_RE = re.compile(
     r'S?DFF[A-Za-z0-9_]*'                        # commercial prefix DFF*/SDFF*
     r'|[A-Za-z][A-Za-z0-9_]*_{1,2}s?e?df[a-z0-9_]*'  # OSS-PDK infix *_[_][s][e]df…
     r'|\\\$_[A-Z]*DFF[A-Z0-9_]*'                  # generic Yosys \$_…DFF…_ primitive
-    r')\s+\\?[^\s()]+\s*\(', re.MULTILINE | re.IGNORECASE)
+    r')\s+\\?[^\s()]+\s*'
+    # A yosys `write_verilog` netlist prints the cell's auto-name as an INLINE
+    # block comment BETWEEN the instance name and its `(` — e.g.
+    #   \$_DFF_P_  \mprj.counter.count_reg[0]  /* _1154_ */ (
+    # A bare `\s*\(` tail then never reaches the paren, so a generic pre-techmap
+    # netlist ($_DFF_P_) — and equally a mapped netlist whose flop line carries
+    # such a comment — detects ZERO flops, `--dff` falls back to a hard-coded
+    # seed that matches nothing, `fault cut` cuts nothing, and a sequential
+    # design self-skips as NOT_APPLICABLE. Tolerate zero-or-more inline block
+    # comments (line-bounded — `[^\n]` never swallows the next line's `(`).
+    r'(?:/\*[^\n]*?\*/\s*)*'
+    r'\(', re.MULTILINE | re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------

@@ -147,6 +147,27 @@ def test_detect_dff_cells_gf180_infix():
     assert "gf180mcu_fd_sc_mcu7t5v0__sdffq_1" in got
 
 
+def test_detect_dff_cells_yosys_inline_autoname_comment():
+    # REGRESSION (caravel_user_project x sky130A) — a yosys `write_verilog`
+    # netlist prints the cell's auto-name as an INLINE block comment BETWEEN the
+    # instance name and its `(`. The detector's tail required `(` to immediately
+    # follow the instance name, so EVERY flop line carrying such a comment
+    # detected as zero flops → `--dff` fell back to a hard-coded seed matching
+    # nothing → `fault cut` cut nothing → a sequential design self-skipped
+    # (DT1 false NOT_APPLICABLE) or ERRORed (DT2/DT3), failing Steps DT2/DT3.
+    # Generic pre-techmap ($_DFF_P_):
+    nl_generic = (
+        "  \\$_DFF_P_  \\mprj.counter.count_reg[0]  /* _1154_ */ (\n"
+        "    .C(clk), .D(d0), .Q(q0)\n  );\n"
+        "  \\$_DFF_P_  \\mprj.counter.ready_reg  /* _1153_ */ (\n"
+        "    .C(clk), .D(d1), .Q(q1)\n  );\n")
+    assert far.detect_dff_cells(nl_generic) == "\\$_DFF_P_"
+    # Mapped sky130 flop whose line also carries the auto-name comment:
+    nl_mapped = ("  sky130_fd_sc_hd__dfxtp_1 \\creg_reg[0]  /* _0007_ */ "
+                 "(.CLK(clk), .D(d0), .Q(q0));\n")
+    assert far.detect_dff_cells(nl_mapped) == "sky130_fd_sc_hd__dfxtp_1"
+
+
 def test_detect_dff_cells_infix_no_false_positive_on_non_flops():
     # non-flop std cells that merely contain letters — buf/dly/mux/inv — must NOT
     # be mistaken for flops (only the `__[s][e]df…` D-flop family matches).
