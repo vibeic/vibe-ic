@@ -8747,15 +8747,33 @@ def _dont_use_family_fallback_tcl() -> str:
     convention — sky130*, gf180mcu*, …), matches only cells that ACTUALLY exist
     (empty-match patterns are skipped), and carries NO design/benchmark literal.
     It deliberately does NOT touch plain `clkbuf_*` (CTS needs them) nor tap/decap/
-    fill/diode masters (dedicated steps place those). NONFATAL-guarded."""
+    fill/diode masters (dedicated steps place those). NONFATAL-guarded.
+
+    v1.5.x — ALSO exclude the SIGNAL DELAY macros `__dly*` / `__delay*` (gf180mcu
+    `dlya/dlyb/dlyc/dlyd`, sky130 `dlygate/dlymetal/dlybuf`, …). These carry
+    `is_buffer=true` in liberty, so `buffer_ports -inputs` / the resizer are free to
+    pick a DELAY cell as a plain buffer. Root cause (spm × gf180mcuD SLOW-corner
+    setup FAIL): `buffer_ports -inputs` inserted 33 `__dlyd_1` delay cells (one per
+    input bit), each adding ~2.4 ns (typ) / ~4.9 ns (SS 125C/4v50) to the input→FF
+    datapath — the TYP corner still MET (+3.85 ns) but the SS sign-off setup corner
+    went VIOLATED (−0.56 ns): the single-corner-closure confounder. Excluding the
+    delay family makes `buffer_ports` insert the normal `buf_1`, so the SS setup
+    path closes IN THE BASE ROUTE (0-DRC, no ECO) — measured −0.56 → +2.25 ns MET.
+    Delay macros are ONLY legitimate for deliberate hold padding, never as
+    signal/port slew buffers, in ANY PDK — hence GENERAL, not a chip literal."""
     return (
         "# === v1.2.86 — GENERAL characterization/lpflow do-not-use fallback ===\n"
         "# Works even when the PDK ships no drc_exclude.cells (iic-osic-tools):\n"
-        "# excludes __probe/__probec/__lpflow_ (unroutable → DRT-0085) + __clkdlybuf\n"        "# (clock-DELAY masters the resizer must never use as a SIGNAL buffer)\n"
+        "# excludes __probe/__probec/__lpflow_ (unroutable → DRT-0085) + __clkdlybuf\n"
+        "# (clock-DELAY masters the resizer must never use as a SIGNAL buffer) +\n"
+        "# __dly*/__delay* (SIGNAL DELAY macros — dlya/b/c/d, dlygate, dlymetal…:\n"
+        "# high-intrinsic-delay cells the resizer/buffer_ports must never insert as\n"
+        "# a signal/port buffer, or they dominate the SLOW-corner setup path).\n"
         "# via OpenROAD's own get_lib_cells over the loaded liberty. PDK-family-\n"
         "# GENERAL (matches the <lib>__<fn> naming, no design literal).\n"
         "set _duf 0\n"
-        "foreach _du_pat {*__probe_* *__probec_* *__lpflow_* *__clkdlybuf*} {\n"
+        "foreach _du_pat {*__probe_* *__probec_* *__lpflow_* *__clkdlybuf*"
+        " *__dly* *__delay*} {\n"
         "  set _du_cells [get_lib_cells -quiet $_du_pat]\n"
         "  if {[llength $_du_cells] > 0} {\n"
         "    if {[catch {set_dont_use $_du_cells} _duf_e]} {\n"
