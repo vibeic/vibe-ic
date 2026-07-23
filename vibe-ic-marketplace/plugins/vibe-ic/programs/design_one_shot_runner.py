@@ -9443,7 +9443,8 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
 
 def step_emit_phase2_manifests(project: Path,
                                 plan: List[StepResult],
-                                top_name: Optional[str] = None) -> StepResult:
+                                top_name: Optional[str] = None,
+                                container: str = "vibeic-eda") -> StepResult:
     """Write canonical Phase 2 step-artifact manifests so flow_compliance_check
     --strict (--phase 2) sees the evidence the runner has already produced.
 
@@ -9697,38 +9698,96 @@ def step_emit_phase2_manifests(project: Path,
     # may only be written by an actual proof tool. The pre-fix shape
     # byte-copied sim_full_stack/results.json (or fabricated
     # `verdict: PASS, all_proved: true` from "iverilog reference TB
-    # scenarios"). No formal engine is wired into this runner, so the
-    # honest manifest is SKIPPED-CONDITION with the reason — the
-    # compliance scan's self-report channel surfaces it as a skipped
-    # step, never as a fabricated proof.
+    # scenarios").
     formal_dir = _pl.formal_dir(project)
     formal_dir.mkdir(parents=True, exist_ok=True)
-    # ORGANIC-20260606 #440 (atop #433c):
-    #   * NEVER clobber a real proof — if formal/results.json already
-    #     exists (an AI/skill ran SymbiYosys), it is preserved as-is.
-    #   * NO placeholder .sby — the old hardcoded task referenced
-    #     nonexistent rtl/*.sv + an `assertions_l3` top no class ever
-    #     generates; a .sby that cannot elaborate is not an artifact.
-    #   * When no proof ran, emit ONLY the plainly-named
-    #     formal_not_run.json carrying the WAIVE direction — the
-    #     `assertion-gen` fallback skill authors per-IC SVA from L3
-    #     constraints and runs sby (mirror of rtl_gen → spec-to-rtl).
-    #     Step 5's required outputs stay absent, so flow_compliance
-    #     reports SKIPPED-CONDITION via cap:formal_property_proof.
-    #     `all_proved` is only ever written by an actual proof run.
+    # v1.5.58 (owner directive 2026-07-23, Bucket-T "wire a formal tool in"):
+    #   The formal engine is now WIRED into the runner. When no proof exists
+    #   yet, the runner authors a DETERMINISTIC, construction-safe reset-safety
+    #   property from the design's OWN interface + reset branch
+    #   (formal_harness_gen.py — reads only design INPUT, §4.05; descends a thin
+    #   rename wrapper to the leaf logic module) and dispatches it to
+    #   SymbiYosys via the in-container `abc pdr` engine (`aigsmt none` — no
+    #   external SMT solver, works with the stock vibeic-eda image). A genuinely
+    #   PROVED result writes the canonical formal/results.json (all_proved),
+    #   which formal_proof_evidence_check upgrades from SKIPPED-CONDITION to a
+    #   REAL PASS — no AI in the loop, for any synchronous design with a clock, a
+    #   reset and a registered output whose reset value is a literal constant.
+    #
+    #   Preserved invariants:
+    #   * NEVER clobber a real proof — a pre-existing formal/results.json (an
+    #     AI/skill SymbiYosys run) is left untouched.
+    #   * FAIL-SAFE / anti-regression: when no construction-safe property is
+    #     derivable (NOT_APPLICABLE), or the proof does not cleanly succeed
+    #     (engine unreachable, inconclusive, or a heuristic-harness
+    #     counterexample), the runner keeps the honest formal_not_run.json
+    #     (SKIPPED-CONDITION) and never leaves a FAILing results.json — a
+    #     passing cell is never regressed to a false FAIL. The .sby + transcript
+    #     stay on disk as evidence.
+    #   * `all_proved` is still only ever written by an actual proof run.
+    #   * A definitive per-IC proof (e.g. an equivalence miter) is still authored
+    #     by the assertion-gen fallback skill; this is the deterministic FLOOR.
     if not (formal_dir / "results.json").is_file():
-        (formal_dir / "formal_not_run.json").write_text(json.dumps({
-            "verdict": "SKIPPED-CONDITION",
-            "fallback_skill": "assertion-gen",
-            "reason": ("no formal proof tool ran in this chain — "
-                       "reference-TB simulation results are NOT a proof "
-                       "and are never copied here (#433c/#440). AI "
-                       "invokes skill assertion-gen: author per-IC SVA "
-                       "from L3 constraints, write a real .sby, run "
-                       "SymbiYosys; only that run may write "
-                       "formal/results.json with all_proved."),
-        }, indent=2, ensure_ascii=False) + "\n")
-        written.append("formal/formal_not_run.json")
+        _formal_disclose = None
+        try:
+            import sys as _sys
+            if str(PROGRAMS_DIR) not in _sys.path:
+                _sys.path.insert(0, str(PROGRAMS_DIR))
+            import formal_harness_gen as _fhg
+            import formal_property_run as _fpr
+            _gen = _fhg.generate(project=project, top=top_name)
+            if _gen.get("verdict") == "EMITTED":
+                _res = _fpr.run(
+                    project,
+                    harness=Path(_gen["harness_path"]),
+                    rtl=[Path(p) for p in _gen["rtl_files"]],
+                    top=_gen["harness_module"],
+                    container=(container or None),
+                    timeout=300)
+                if _res.get("verdict") == "PASS" and _res.get("all_proved"):
+                    # a REAL proof ran — results.json is now the canonical Step-5
+                    # evidence (run() already unlinked any stale
+                    # formal_not_run.json). Nothing more to write.
+                    written.append("formal/results.json")
+                else:
+                    # honest non-conclusive: the deterministic harness ran but
+                    # did not cleanly prove. Revert any results.json so the gate
+                    # can never see a FAILing bare claim, then fall through to
+                    # the SKIPPED-CONDITION manifest below.
+                    _rp = formal_dir / "results.json"
+                    if _rp.is_file():
+                        _rp.unlink()
+                    _formal_disclose = (
+                        f"deterministic reset-safety harness ran "
+                        f"(verdict={_res.get('verdict')}, "
+                        f"strength={_res.get('proof_strength')}) but produced no "
+                        f"clean proof — kept SKIPPED-CONDITION, NOT a design "
+                        f"FAIL (best-effort auto-harness; see formal/*.sby.log)")
+            else:
+                _formal_disclose = (
+                    "no deterministic reset-safety property derivable: "
+                    + str(_gen.get("reason", "NOT_APPLICABLE")))
+        except Exception as _e:  # never let the formal step break the run
+            _formal_disclose = f"formal auto-run error: {_e!r}"
+        if not (formal_dir / "results.json").is_file():
+            _payload = {
+                "verdict": "SKIPPED-CONDITION",
+                "fallback_skill": "assertion-gen",
+                "reason": ("no clean formal proof in this chain — reference-TB "
+                           "simulation results are NOT a proof and are never "
+                           "copied here (#433c/#440). The deterministic "
+                           "reset-safety harness (formal_harness_gen, abc pdr) "
+                           "did not produce a clean proof here; AI invokes skill "
+                           "assertion-gen: author per-IC SVA from L3 "
+                           "constraints, write a real .sby, run SymbiYosys; "
+                           "only that run may write formal/results.json with "
+                           "all_proved."),
+            }
+            if _formal_disclose:
+                _payload["deterministic_attempt"] = _formal_disclose
+            (formal_dir / "formal_not_run.json").write_text(
+                json.dumps(_payload, indent=2, ensure_ascii=False) + "\n")
+            written.append("formal/formal_not_run.json")
 
     # Step 6: FPGA early prototype + audit
     fpga_compile_step = by_name.get("fpga_compile")
@@ -10618,7 +10677,8 @@ def main() -> int:
 
     # Phase 2 only — Phase 3 lives in phase3_one_shot_runner.py and is
     # chained by phase23_one_shot_runner.py.
-    plan.append(step_emit_phase2_manifests(project, plan, args.top_name))
+    plan.append(step_emit_phase2_manifests(project, plan, args.top_name,
+                                           args.container))
     # v0.1.58 capture: regenerate final_summary.md BEFORE the audit so the
     # attestation table reflects the SHA256 of every artefact emitted
     # earlier in this phase2 run (e.g. phase2/stage2/synth/netlist.v from

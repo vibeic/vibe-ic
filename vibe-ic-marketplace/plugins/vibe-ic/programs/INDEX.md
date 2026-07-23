@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 911
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 911)
+- **Total programs (excluding helpers / shims):** 914
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 914)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 902 |
+| `any` | 905 |
 
 ## Alphabetical listing
 
@@ -318,6 +318,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `fmeda_coverage_check` | any | — | independent anti-fabrication gate over the FMEDA |
 | `fmeda_fault_injection_coverage` | any | — | REAL ISO-26262 FMEDA diagnostic-coverage |
 | `formal_complexity_classify` | any | — | deterministic k-induction feasibility |
+| `formal_harness_gen` | any | — | Step 5 DETERMINISTIC formal-property authoring. |
 | `formal_proof_evidence_check` | any | — | Step 5 formal proof EVIDENCE-CHAIN |
 | `formal_property_run` | any | — | Step 5 (cap:formal_property_proof) RUNNER. |
 | `foundry_handoff_pack_gen` | any | — | emit Step 35 foundry handoff package skeleton. |
@@ -367,6 +368,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gate_verilog_to_spice` | any | — | convert a structural (gate-level) Verilog netlist to SPICE for |
 | `gatekeeper_assign_version` | any | — | v1.1.7 (owner directive 2026-06-17). |
 | `gatekeeper_review` | any | — | the DETERMINISTIC half of the single PR gatekeeper. |
+| `gatekeeper_stale_branch_check` | any | — | the STALE-BRANCH / phantom-revert guard. |
 | `gddr6_protocol_synth` | any | — | GDDR6 SGRAM (JEDEC JESD250) protocol synth helper (graphics DDR memory). |
 | `gds_antenna_deck_check` | any | — | independent GDS-geometry process-antenna sign-off. |
 | `gds_ip_attribution` | any | — | Embed IP attribution metadata into the foundry |
@@ -540,6 +542,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `mux_synth` | any | — | deterministic SOLVER for the MULTIPLEXER family (spec -> RTL). |
 | `nba_addr_read_race_check` | any | — | FSM consuming addressed data without pipelining. |
 | `nba_shift_register_same_cycle_read_check` | any | Wave 12 | v0.119.44 (Wave 12) plugin gate. |
+| `nda_diff_scan_check` | any | — | NDA guard for a PR's DIFF CONTENT (added lines + |
 | `netlist_src_coord_canonicalize` | any | — | make a synthesised netlist reproducible |
 | `nextstate_misc_synth` | any | — | deterministic SOLVER for the remaining mechanically- |
 | `nfc_protocol_synth` | any | v0.1.84 | NFC / ISO 14443 contactless-protocol synth helper. |
@@ -983,7 +986,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (902 programs)
+### `any` (905 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1273,6 +1276,7 @@ _(no programs in this group)_
 - `fmeda_coverage_check` — independent anti-fabrication gate over the FMEDA
 - `fmeda_fault_injection_coverage` — REAL ISO-26262 FMEDA diagnostic-coverage
 - `formal_complexity_classify` — deterministic k-induction feasibility
+- `formal_harness_gen` — Step 5 DETERMINISTIC formal-property authoring.
 - `formal_proof_evidence_check` — Step 5 formal proof EVIDENCE-CHAIN
 - `formal_property_run` — Step 5 (cap:formal_property_proof) RUNNER.
 - `foundry_handoff_pack_gen` — emit Step 35 foundry handoff package skeleton.
@@ -1322,6 +1326,7 @@ _(no programs in this group)_
 - `gate_verilog_to_spice` — convert a structural (gate-level) Verilog netlist to SPICE for
 - `gatekeeper_assign_version` — v1.1.7 (owner directive 2026-06-17).
 - `gatekeeper_review` — the DETERMINISTIC half of the single PR gatekeeper.
+- `gatekeeper_stale_branch_check` — the STALE-BRANCH / phantom-revert guard.
 - `gddr6_protocol_synth` — GDDR6 SGRAM (JEDEC JESD250) protocol synth helper (graphics DDR memory).
 - `gds_antenna_deck_check` — independent GDS-geometry process-antenna sign-off.
 - `gds_ip_attribution` — Embed IP attribution metadata into the foundry
@@ -1494,6 +1499,7 @@ _(no programs in this group)_
 - `mux_synth` — deterministic SOLVER for the MULTIPLEXER family (spec -> RTL).
 - `nba_addr_read_race_check` — FSM consuming addressed data without pipelining.
 - `nba_shift_register_same_cycle_read_check` — v0.119.44 (Wave 12) plugin gate.  _[Wave 12]_
+- `nda_diff_scan_check` — NDA guard for a PR's DIFF CONTENT (added lines +
 - `netlist_src_coord_canonicalize` — make a synthesised netlist reproducible
 - `nextstate_misc_synth` — deterministic SOLVER for the remaining mechanically-
 - `nfc_protocol_synth` — NFC / ISO 14443 contactless-protocol synth helper.  _[v0.1.84]_

@@ -46,7 +46,12 @@ def test_no_placeholder_sby():
 
 
 def test_formal_not_run_manifest_carries_fallback_direction():
-    i = _SRC.index("formal_not_run.json")
+    # v1.5.58 — the Step-5 formal engine is now WIRED (formal_harness_gen +
+    # abc pdr), so the runner mentions formal_not_run.json first in the block
+    # comment and only WRITES it in the FAIL-SAFE tail. Locate the WRITE site
+    # (rindex = the `.write_text` call), not the first textual mention, then
+    # assert the SKIP manifest STILL carries the same fallback direction.
+    i = _SRC.rindex("formal_not_run.json")
     window = _SRC[i - 1800:i + 1400]
     assert '"fallback_skill": "assertion-gen"' in window
     assert "SKIPPED-CONDITION" in window
