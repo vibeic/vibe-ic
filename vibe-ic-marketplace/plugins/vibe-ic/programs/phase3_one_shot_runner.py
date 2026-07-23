@@ -12664,33 +12664,67 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
 
 def _parse_ship_repair_log(log: str) -> dict:
     """Extract the SHIP_* markers + the detailed_route final violation count from
-    the repair transcript. Pure text parsing (testable without OpenROAD)."""
+    the repair transcript. Pure text parsing (testable without OpenROAD).
+
+    DRV NON-REGRESSION (measured on caravel_user_project x sky130A): the
+    resizer's own `repair_design` transcript prints `Found N slew
+    violations.`/`Found N capacitance violations.` at the ENTRY of every call
+    it makes in this session — the FIRST occurrence is the true pre-repair DRV
+    population, the LAST is whatever remains when the session's repair effort
+    is exhausted. Until now `_ship_repair_should_promote` never looked at
+    these numbers at all (only setup WNS + DRC), so a session that plateaus or
+    even REGRESSES on slew/capacitance (measured: one experiment went from 63
+    slew/39 cap to 71 slew/13 cap — better on cap, worse on slew) would still
+    be silently promoted as the sign-off route whenever setup stayed positive
+    and the reroute stayed DRC-clean. Capturing both endpoints lets the
+    promotion gate refuse a DRV regression instead of shipping one."""
     import re as _re
     def _f(tag):
         m = _re.search(tag + r":\s*(-?[0-9.]+)", log or "")
         return float(m.group(1)) if m else None
     viols = _re.findall(r"[Nn]umber of violations\s*=\s*(\d+)", log or "")
+    slew_found = [int(m) for m in
+                  _re.findall(r"Found (\d+) slew violations\.", log or "")]
+    cap_found = [int(m) for m in
+                 _re.findall(r"Found (\d+) capacitance violations\.",
+                             log or "")]
     return {
         "wns_before": _f("SHIP_WNS_BEFORE"),
         "wns_after_repair": _f("SHIP_WNS_AFTER_REPAIR"),
         "route_violations": (int(viols[-1]) if viols else None),
+        "drv_slew_before": (slew_found[0] if slew_found else None),
+        "drv_slew_after": (slew_found[-1] if slew_found else None),
+        "drv_cap_before": (cap_found[0] if cap_found else None),
+        "drv_cap_after": (cap_found[-1] if cap_found else None),
         "done": "SHIP_SIGNOFF_REPAIR_DONE" in (log or ""),
     }
 
 
 def _ship_repair_should_promote(parsed: dict, repaired_def_ok: bool,
                                 repaired_v_ok: bool) -> bool:
-    """Promotion policy (FAIL-SAFE, no DRC regression): promote the repaired route
-    as the shipped sign-off ONLY when (a) a complete repaired routed.def + netlist
-    were written, (b) the repair reached non-negative setup at the slow corner
-    (estimate), and (c) the reroute converged to 0 DRC violations. Otherwise keep
-    the base route (the honest FAIL stays a timing FAIL, never becomes a DRC FAIL)."""
+    """Promotion policy (FAIL-SAFE, no DRC regression, no DRV regression):
+    promote the repaired route as the shipped sign-off ONLY when (a) a
+    complete repaired routed.def + netlist were written, (b) the repair
+    reached non-negative setup at the slow corner (estimate), (c) the reroute
+    converged to 0 DRC violations, AND (d) the slew/capacitance DRV population
+    did not get WORSE across the session (first-seen vs last-seen `Found N ...
+    violations.` counts from repair_design's own transcript). Otherwise keep
+    the base route (the honest FAIL stays a timing FAIL, never becomes a DRC
+    FAIL, and never becomes a WORSE DRV FAIL than what was already shipped)."""
     if not (repaired_def_ok and repaired_v_ok):
         return False
     wa = parsed.get("wns_after_repair")
     if wa is None or wa < -0.001:
         return False
-    return parsed.get("route_violations") == 0
+    if parsed.get("route_violations") != 0:
+        return False
+    sb, sa = parsed.get("drv_slew_before"), parsed.get("drv_slew_after")
+    if sb is not None and sa is not None and sa > sb:
+        return False
+    cb, ca = parsed.get("drv_cap_before"), parsed.get("drv_cap_after")
+    if cb is not None and ca is not None and ca > cb:
+        return False
+    return True
 
 
 def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
@@ -12767,6 +12801,301 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
         f"no-op (base route kept): repair estimate {parsed['wns_before']}->"
         f"{parsed['wns_after_repair']} ns, reroute violations="
         f"{parsed['route_violations']}; not promoted (needs setup>=0 and DRC-clean).")
+
+
+# --- DRV wire-length escalation (a SEPARATE, independently-gated attempt) --
+#
+# ROOT CAUSE (measured on caravel_user_project x sky130A, run
+# converge_1.5.61_sky130A): `step_signoff_spef_repair`'s bounded
+# repair_design/repair_timing/detailed_placement loop plateaus at 36 slew +
+# 30 capacitance VIOLATED pins with `Buffers: 0` on every call after the
+# first — a genuine tool-invocation limitation, NOT a topology dead end.
+# Tracing the two named offenders in the issue (place65/A, wire152/X,
+# _167_/A1) to their driving instances/nets showed:
+#   * wire152 (sky130_fd_sc_hd__clkbuf_16 — the LARGEST clkbuf/buf cell the
+#     library offers) drives net138, whose ONLY load is _167_/A1 — fanout 1,
+#     not a fanout explosion. Yet wire152/X measured 3.39 fF actual vs a
+#     1.02 fF limit (3.3x over) and the two instances sit ~2mm apart on a
+#     harness-fixed 2920x3520 um die the design occupies at 0.2% utilization
+#     (`FP_SIZING = absolute`, Caravel-mandated — the die cannot be shrunk).
+#     The excess capacitance is WIRE, not fanout.
+#   * place65's driver is `sky130_fd_sc_hd__edfxtp_1`, the ONLY drive
+#     strength the library ships for that scan-DFF footprint — SizeUpMove is
+#     categorically exhausted for it.
+# `repair_design` with NO `-max_wire_length` argument (the production
+# invocation) never attempts repeater insertion for this population — every
+# call in the 5-iteration loop logs `Buffers: 0`. `repair_design
+# -max_wire_length <L>` is the standard, documented OpenROAD mechanism for
+# exactly this case (mid-wire repeater insertion, splitting a long net's
+# capacitance/delay in two) and MEASURED to insert real buffers (70 in one
+# pass) and, after a genuine reroute + fresh real-SPEF re-extraction, reduce
+# the total VIOLATED-pin count from 271 to 59 in the best observed run
+# (wire152 and _167_ fully cleared; place65 improved from -9.70 ns to
+# -5.76 ns slack) — a real, tool-standard capability the main loop simply
+# never invokes.
+#
+# WHY THIS IS A SEPARATE, GATED STEP rather than folded into the bounded
+# loop: the same investigation also measured that this mechanism is NOT
+# uniformly safe — inserting many repeaters in one shot, or interleaving it
+# with `repair_timing -setup` calls on stale (pre-reroute) parasitics, can
+# make the REAL post-reroute violator count much WORSE (one variant measured
+# 967 violators, up from 271) even though the in-session ESTIMATE looked
+# fine. Because "looks fine in the session estimate" is exactly the failure
+# mode this whole repair mechanism exists to close (#527), this step never
+# trusts its own estimate: it measures the TRUE violator population (a fresh
+# `report_check_types -violators` pass on the CURRENT real-SPEF state) both
+# BEFORE it starts and AFTER its bounded rounds complete, and promotes ONLY
+# if the after-count is strictly lower, DRC stays clean, and setup stays
+# non-negative — otherwise it discards its own output and leaves whatever
+# `step_signoff_spef_repair` already shipped untouched (never a regression).
+_DRV_ESCALATION_ROUNDS = 3
+
+
+def _ship_wire_length_escalation_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
+                                     ss_liberty_c: str, pnr_dir_c: str,
+                                     max_captable_c: str, metal_prefix: str,
+                                     thread_count: int,
+                                     filler_masters: Optional[List[str]] = None
+                                     ) -> str:
+    """Emit the bounded (`_DRV_ESCALATION_ROUNDS`) repeater-insertion escalation:
+    read the CURRENT routed.def (whatever step_signoff_spef_repair already
+    shipped), measure the real violator population, run N rounds of
+    `repair_design -max_wire_length <L>` each followed by a REAL reroute +
+    fresh extract_parasitics (never trusting the in-session estimate across
+    rounds — see module-level rationale above), then measure again. <L> is
+    derived from the design's OWN die geometry (one third of the shorter die
+    dimension, clamped to [200, 2000] um) so this is chip/PDK-AGNOSTIC: no
+    per-chip literal, and a compact/dense die simply rarely crosses the
+    clamp's floor while a harness-fixed, mostly-empty die gets an
+    aggressive-enough threshold to matter."""
+    mp = metal_prefix
+    refill_block = _build_sparse_die_aware_filler_tcl(filler_masters or [])
+    extract_tcl = (
+        "catch {remove_fillers}\n"
+        f"if {{[catch {{extract_parasitics -ext_model_file {max_captable_c} "
+        f"-corner_cnt 1 -max_res 50 -coupling_threshold 0.1}} e]}} {{ "
+        f"puts \"SHIP_ESC_EXT_NONFATAL: $e\" }}\n"
+        f"catch {{write_spef {pnr_dir_c}/escalation_repair.spef}}\n"
+        f"if {{[catch {{read_spef {pnr_dir_c}/escalation_repair.spef}} e]}} "
+        f"{{ puts \"SHIP_ESC_RDSPEF_NONFATAL: $e\" }}\n"
+        "if {[catch {estimate_parasitics -detailed_routing} e]} { "
+        "puts \"SHIP_ESC_EST_DR_NONFATAL: $e\" }\n"
+    )
+    reroute_tcl = (
+        "if {[catch {\n"
+        "  set _errc 0\n"
+        "  foreach _net [[ord::get_db_block] getNets] {\n"
+        "    set _st [$_net getSigType]\n"
+        "    if {$_st eq \"POWER\" || $_st eq \"GROUND\"} { continue }\n"
+        "    set _w [$_net getWire]\n"
+        "    if {$_w ne \"NULL\"} { odb::dbWire_destroy $_w; incr _errc }\n"
+        "  }\n"
+        "  puts \"SHIP_ESC_ROUTING_CLEARED: $_errc\"\n"
+        "} e]} { puts \"SHIP_ESC_RRC_NONFATAL: $e\" }\n"
+        "if {[catch {global_route} e]} { puts \"SHIP_ESC_GR_NONFATAL: $e\" }\n"
+        "if {[catch {detailed_route} e]} { puts \"SHIP_ESC_DR_NONFATAL: $e\" }\n"
+        + extract_tcl
+    )
+    count_proc = (
+        "proc _esc_count_violators {rpt} {\n"
+        "  set _n 0\n"
+        "  if {[catch {open $rpt r} _fh] == 0} {\n"
+        "    while {[gets $_fh _ln] >= 0} {\n"
+        "      if {[string match \"*VIOLATED*\" $_ln]} { incr _n }\n"
+        "    }\n"
+        "    close $_fh\n"
+        "  }\n"
+        "  return $_n\n"
+        "}\n"
+    )
+    measure_tcl = (
+        lambda tag: (
+            f"set _esc_rpt_{tag} {pnr_dir_c}/escalation_{tag}.rpt\n"
+            f"catch {{file delete -force $_esc_rpt_{tag}}}\n"
+            f"catch {{report_check_types -max_slew -max_capacitance -violators "
+            f"-max_count 2000 >> $_esc_rpt_{tag}}}\n"
+            f"puts \"SHIP_ESC_{tag.upper()}_COUNT: "
+            f"[_esc_count_violators $_esc_rpt_{tag}]\"\n"
+        )
+    )
+    rounds_tcl = ""
+    for _r in range(_DRV_ESCALATION_ROUNDS):
+        rounds_tcl += (
+            f"if {{[catch {{repair_design -max_wire_length $_esc_mwl}} e]}} "
+            f"{{ puts \"SHIP_ESC_RD_NONFATAL_{_r}: $e\" }}\n"
+            + reroute_tcl
+        )
+    return (
+        f"set_thread_count {thread_count}\n"
+        f"read_lef {tech_lef_c}\n"
+        f"read_lef {cell_lef_c}\n"
+        f"read_liberty {ss_liberty_c}\n"
+        f"read_def {pnr_dir_c}/routed.def\n"
+        f"read_sdc {pnr_dir_c}/constraint.sdc\n"
+        f"if {{[catch {{set_wire_rc -signal -layer {mp}1}} e]}} {{ "
+        f"if {{[catch {{set_wire_rc -layer {mp}1}} e2]}} {{ "
+        f"puts \"SHIP_ESC_SWR_SIG_NONFATAL: $e2\" }} }}\n"
+        f"if {{[catch {{set_wire_rc -clock -layer {mp}5}} e]}} {{ "
+        f"puts \"SHIP_ESC_SWR_CLK_NONFATAL: $e\" }}\n"
+        "set_timing_derate -early 0.95\n"
+        "set_timing_derate -late 1.05\n"
+        "catch {define_process_corner -ext_model_index 0 X}\n"
+        + extract_tcl
+        + count_proc +
+        # chip/PDK-agnostic repeater threshold, derived from die geometry.
+        "set _esc_dbu [[ord::get_db_tech] getDbUnitsPerMicron]\n"
+        "set _esc_die [[ord::get_db_block] getDieArea]\n"
+        "set _esc_dw [expr {([$_esc_die xMax] - [$_esc_die xMin]) "
+        "/ double($_esc_dbu)}]\n"
+        "set _esc_dh [expr {([$_esc_die yMax] - [$_esc_die yMin]) "
+        "/ double($_esc_dbu)}]\n"
+        "set _esc_mwl [expr {($_esc_dw < $_esc_dh) ? $_esc_dw : $_esc_dh}]\n"
+        "set _esc_mwl [expr {$_esc_mwl / 3.0}]\n"
+        "if {$_esc_mwl < 200} { set _esc_mwl 200 }\n"
+        "if {$_esc_mwl > 2000} { set _esc_mwl 2000 }\n"
+        "puts \"SHIP_ESC_MAX_WIRE_LENGTH: $_esc_mwl\"\n"
+        + measure_tcl("before")
+        + "catch {puts \"SHIP_ESC_WNS_BEFORE: [sta::worst_slack -max]\"}\n"
+        + rounds_tcl
+        + refill_block
+        + measure_tcl("after")
+        + "catch {puts \"SHIP_ESC_WNS_AFTER: [sta::worst_slack -max]\"}\n"
+        f"if {{[catch {{write_def {pnr_dir_c}/routed_escalated.def}} e]}} {{ "
+        f"puts \"SHIP_ESC_WD_NONFATAL: $e\" }}\n"
+        f"if {{[catch {{write_verilog {pnr_dir_c}/{top}_pnr_escalated.v}} e]}} "
+        f"{{ puts \"SHIP_ESC_WV_NONFATAL: $e\" }}\n"
+        "puts \"SHIP_ESC_DONE\"\n"
+    )
+
+
+def _parse_ship_escalation_log(log: str) -> dict:
+    """Pure text parsing of the escalation transcript (testable without
+    OpenROAD) — the BEFORE/AFTER real violator counts, setup WNS, the final
+    detailed_route violation count (last `Number of violations = N` — the
+    LAST reroute round's result), and the completion marker."""
+    import re as _re
+    def _f(tag):
+        m = _re.search(tag + r":\s*(-?[0-9.]+)", log or "")
+        return float(m.group(1)) if m else None
+    def _i(tag):
+        v = _f(tag)
+        return int(v) if v is not None else None
+    viols = _re.findall(r"[Nn]umber of violations\s*=\s*(\d+)", log or "")
+    return {
+        "before_count": _i("SHIP_ESC_BEFORE_COUNT"),
+        "after_count": _i("SHIP_ESC_AFTER_COUNT"),
+        "wns_before": _f("SHIP_ESC_WNS_BEFORE"),
+        "wns_after": _f("SHIP_ESC_WNS_AFTER"),
+        "route_violations": (int(viols[-1]) if viols else None),
+        "max_wire_length": _f("SHIP_ESC_MAX_WIRE_LENGTH"),
+        "done": "SHIP_ESC_DONE" in (log or ""),
+    }
+
+
+def _ship_escalation_should_promote(parsed: dict, def_ok: bool,
+                                    v_ok: bool) -> bool:
+    """FAIL-SAFE, never-regress gate: promote the escalated route ONLY when
+    (a) a complete escalated routed.def + netlist were written, (b) the final
+    reroute converged to 0 DRC violations, (c) setup stayed non-negative, AND
+    (d) the TRUE violator population (fresh `-violators` count, not the
+    in-session estimate) is STRICTLY LOWER after than before. Any missing
+    measurement (before/after count not parseable) refuses promotion rather
+    than guessing — this step only ever improves on what's already shipped,
+    never gambles with it."""
+    if not (def_ok and v_ok):
+        return False
+    if parsed.get("route_violations") != 0:
+        return False
+    wa = parsed.get("wns_after")
+    if wa is None or wa < -0.001:
+        return False
+    bc, ac = parsed.get("before_count"), parsed.get("after_count")
+    if bc is None or ac is None:
+        return False
+    return ac < bc
+
+
+def step_signoff_drv_wire_length_repair(
+        project: Path, top: str, pdk: "PdkConfig",
+        container: str) -> "Optional[StepResult]":
+    """DRV wire-length escalation (see module-level rationale above
+    `_DRV_ESCALATION_ROUNDS`). Runs AFTER `step_signoff_spef_repair`,
+    operating on whatever `routed.def` that step already shipped (repaired or
+    base). Returns None (no step) when not applicable — same preconditions as
+    the main repair step, PLUS a quick real-violator check that skips the
+    entire escalation (and its reroute cost) when there is nothing left to
+    fix. Fail-safe: never promotes a result that isn't a proven, freshly
+    measured improvement over the CURRENT state."""
+    t0 = time.time()
+    pnr_out = _pl.pnr_dir(project)
+    routed = pnr_out / "routed.def"
+    if not routed.is_file():
+        return None
+    if not _openroad_supports_postroute_spef_repair(container):
+        return None
+    try:
+        corner_libs = _resolve_signoff_corner_libs(project, pdk, container)
+    except Exception:
+        corner_libs = {}
+    ss_lib = corner_libs.get("SS") or corner_libs.get("TT")
+    cap = _max_captable_c(pdk, container)
+    if not ss_lib or not cap:
+        return None
+    tcl = _ship_wire_length_escalation_tcl(
+        top,
+        _to_container_path(str(pdk.tech_lef), container),
+        _to_container_path(str(pdk.cell_lef), container),
+        ss_lib, _to_container_path(str(pnr_out), container),
+        cap, pdk.metal_prefix, _openroad_thread_count(),
+        filler_masters=_filler_masters_for_pdk(pdk))
+    tcl_path = pnr_out / "signoff_drv_escalation.tcl"
+    tcl_path.write_text(tcl)
+    tcl_c = _to_container_path(str(tcl_path), container)
+    try:
+        rc, out, err = _docker_exec(
+            container, f"openroad -no_init -exit {tcl_c}", marker=tcl_c)
+    except Exception as exc:
+        return StepResult("signoff_drv_wire_length_repair", "PASS",
+                          time.time() - t0,
+                          f"no-op (current route kept): escalation invocation "
+                          f"failed: {exc}")
+    log = (out or "") + "\n" + (err or "")
+    (pnr_out / "signoff_drv_escalation.log").write_text(log)
+    parsed = _parse_ship_escalation_log(log)
+    if parsed.get("before_count") == 0:
+        return StepResult(
+            "signoff_drv_wire_length_repair", "PASS", time.time() - t0,
+            "no-op (already 0 DRV violators — escalation skipped).")
+    escalated_def = pnr_out / "routed_escalated.def"
+    escalated_v = pnr_out / f"{top}_pnr_escalated.v"
+    def_ok = escalated_def.is_file() and escalated_def.stat().st_size > 0
+    v_ok = escalated_v.is_file() and escalated_v.stat().st_size > 0
+    if _ship_escalation_should_promote(parsed, def_ok, v_ok):
+        shutil.copy2(routed, pnr_out / "routed_pre_escalation.def")
+        shutil.copy2(escalated_def, routed)
+        _pnr_v = pnr_out / f"{top}_pnr.v"
+        if _pnr_v.is_file():
+            shutil.copy2(_pnr_v, pnr_out / f"{top}_pnr_pre_escalation.v")
+        shutil.copy2(escalated_v, _pnr_v)
+        _topdef = pnr_out / f"{top}.def"
+        if _topdef.is_file():
+            shutil.copy2(escalated_def, _topdef)
+        _gds = pnr_out / f"{top}.gds"
+        if _gds.is_file():
+            _gds.unlink()
+        return StepResult(
+            "signoff_drv_wire_length_repair", "PASS", time.time() - t0,
+            f"SHIPPED wire-length repeater escalation (max_wire_length="
+            f"{parsed.get('max_wire_length')} um): real violator count "
+            f"{parsed['before_count']}->{parsed['after_count']}, reroute "
+            f"DRC-clean (0 violations); promoted over the pre-escalation "
+            f"route.", [str(routed), str(_pnr_v)])
+    return StepResult(
+        "signoff_drv_wire_length_repair", "PASS", time.time() - t0,
+        f"no-op (current route kept): escalation real violator count "
+        f"{parsed.get('before_count')}->{parsed.get('after_count')}, reroute "
+        f"violations={parsed.get('route_violations')}; not promoted (needs "
+        f"a strictly lower violator count, setup>=0 and DRC-clean).")
 
 
 def step_gds(project: Path, top: str, pdk: PdkConfig,
@@ -18706,15 +19035,38 @@ def _flat_ocv_derate_tcl(indent: str = "") -> str:
 _SIGNOFF_CHECK_TYPES_MARKER = ("SIGNOFF_CHECK_TYPES_REPORTED recovery removal "
                                "max_slew min_pulse_width max_capacitance")
 
+# `-max_count` bound on `-violators`: high enough to never truncate a real
+# design's true DRV population (measured: caravel_user_project x sky130A
+# carries >250 violating pins on ONE severe net family), low enough that a
+# pathological design can't blow the report file up unboundedly.
+_CHECK_TYPES_VIOLATORS_MAX_COUNT = 2000
+
 
 def _report_check_types_tcl(rpt_c: str) -> str:
     """Emit `report_check_types -recovery -removal -max_slew -min_pulse_width
-    -max_capacitance` guarded by a catch; on SUCCESS append the authoritative
-    marker (so the rigor gate can detect the checks tool-version-independently),
-    on failure record the reason (no marker → the gate still FAILs, correctly)."""
+    -max_capacitance -violators` guarded by a catch; on SUCCESS append the
+    authoritative marker (so the rigor gate can detect the checks
+    tool-version-independently), on failure record the reason (no marker →
+    the gate still FAILs, correctly).
+
+    HONESTY FIX (measured on caravel_user_project x sky130A): without
+    `-violators`, OpenSTA's `report_check_types` prints only the SINGLE WORST
+    offending pin per check type — a design with 271 violating pins produced a
+    sign-off report showing exactly 4 "VIOLATED" lines (one per check type per
+    corner), which reads as "a couple of marginal misses" when the real
+    population is two orders of magnitude larger. The pass/fail verdict was
+    never wrong (the gate keys on the mere presence of the word VIOLATED), but
+    a report that structurally cannot show more than one violator per category
+    is a checks-that-lie-by-omission defect: it hides the true scope from
+    every human/agent triaging the failure. `-violators` (bounded by
+    `-max_count` so a pathological design can't blow the report file up)
+    prints the complete list. chip/PDK-AGNOSTIC: a stock OpenSTA flag, no
+    literal."""
     return (
         f"if {{[catch {{report_check_types -recovery -removal -max_slew "
-        f"-min_pulse_width -max_capacitance >> {rpt_c}}} _cterr]}} {{\n"
+        f"-min_pulse_width -max_capacitance -violators "
+        f"-max_count {_CHECK_TYPES_VIOLATORS_MAX_COUNT} "
+        f">> {rpt_c}}} _cterr]}} {{\n"
         f"  set _cf [open {rpt_c} a]\n"
         f'  puts $_cf "SIGNOFF_CHECK_TYPES_FAILED reason=$_cterr"\n'
         f"  close $_cf\n"
@@ -23575,6 +23927,21 @@ def main() -> int:
                                            args.container)
             if _sr is not None:
                 plan.append(_sr)
+        if plan[-1].status == "PASS":
+            # Caravel-class DRV closure — a SEPARATE, independently-gated
+            # escalation for max_slew/max_capacitance violators that survive
+            # the bounded loop above (measured: caravel_user_project x
+            # sky130A plateaus at 36 slew/30 cap with the main loop alone,
+            # because the surviving population is wire-length-dominated, not
+            # fanout-dominated, and plain repair_design never inserts a
+            # repeater for it). Never trusts its own in-session estimate:
+            # promotes only on a freshly re-measured, strictly lower real
+            # violator count (never a regression vs what step_signoff_
+            # spef_repair already shipped).
+            _esc = step_signoff_drv_wire_length_repair(
+                project, effective_top, pdk, args.container)
+            if _esc is not None:
+                plan.append(_esc)
         if plan[-1].status == "PASS":
             # #593 — the GDS is derived from the DEF, so it shares the
             # PnR geometry cache verdict: a geometry change that forced a
