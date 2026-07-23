@@ -13025,7 +13025,25 @@ def step_signoff_drv_wire_length_repair(
     the main repair step, PLUS a quick real-violator check that skips the
     entire escalation (and its reroute cost) when there is nothing left to
     fix. Fail-safe: never promotes a result that isn't a proven, freshly
-    measured improvement over the CURRENT state."""
+    measured improvement over the CURRENT state.
+
+    TEMPORARILY DISABLED (v1.5.65): measured on caravel_user_project x
+    sky130A that this step's own promotion gate (`_ship_escalation_should_
+    promote`) compares a BEFORE/AFTER violator count taken from a quick
+    in-TCL-session SPEF re-extraction, which is NOT the same measurement as
+    the full multi-corner OCV sign-off report (`sta_mcorner_ocv.rpt`) that
+    `sta_corner_record_completeness_check` reads. The escalation's own count
+    improved (330->178) and its own gate promoted, but the REAL sign-off
+    violator count got far WORSE (4->219), and a genuine LVS netlist/layout
+    mismatch appeared (spare-tie nets merged with unrelated signal nets) --
+    the escalation's clear-routing+reroute did not preserve the base flow's
+    spare-cell-tap net isolation. This is a confirmed regression, not a
+    hypothetical one. Disabled at the top of this function (no-op / None)
+    until the promotion gate is rebuilt to measure against the ACTUAL
+    downstream multi-corner sign-off extraction (not a session-local
+    estimate) and the spare-net isolation is preserved across the reroute.
+    See campaign notes for the full incident writeup."""
+    return None
     t0 = time.time()
     pnr_out = _pl.pnr_dir(project)
     routed = pnr_out / "routed.def"
