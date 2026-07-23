@@ -405,6 +405,43 @@ def _emit_case_golden_oracle(project: Path, ic_class: "str | None",
     return f
 
 
+def _emit_case_boot_latency_oracle(project: Path, case: dict,
+                                   dut_module: str,
+                                   ports: "List[Tuple[str, str, str]]",
+                                   out_dir: Path,
+                                   report: "dict | None") -> "Path | None":
+    """ORGANIC #778 companion — emit a REAL reset-to-first-bus-activity
+    LATENCY oracle TB (no ORACLE_NONE) for an L10 `functional_vector` case
+    whose own stimulus+expected text describes a "within N cycles of reset
+    release" boot-latency bound (chip-AGNOSTIC shape, any clocked core —
+    see `cpu_boot_latency_oracle_tb_gen`). Returns None (defer to the
+    substance-floor scaffold) when this case/DUT-surface pair is not a
+    groundable boot-latency oracle — fail-closed, never fabricates."""
+    name = case.get("name", "")
+    if not _LEGAL_ID_RE.match(str(name)):
+        return None
+    try:
+        import cpu_boot_latency_oracle_tb_gen as _clg  # type: ignore
+    except Exception:
+        return None
+    inputs, outputs, inouts = _classify(ports)
+    try:
+        text = _clg.emit_case_oracle_from_ports(
+            case, dut_module, inputs, outputs, inouts)
+    except Exception as e:  # pragma: no cover — never let it break the loop
+        if report is not None:
+            report.setdefault("oracle_errors", []).append(
+                {"case": name, "error": str(e)})
+        return None
+    if not text:
+        return None
+    f = out_dir / f"{name}.v"
+    f.write_text(text)
+    if report is not None:
+        report.setdefault("boot_latency_oracle_cases", []).append(str(name))
+    return f
+
+
 def emit_unit_tbs(project: Path, top: str = "chip_top",
                   kind: "str | None" = None,
                   report: "dict | None" = None) -> int:
@@ -464,6 +501,14 @@ def emit_unit_tbs(project: Path, top: str = "chip_top",
         if str(c.get("kind", "")) == "functional_vector":
             wrote = _emit_case_golden_oracle(project, ic_class, c, out_dir,
                                              report)
+            if wrote is None:
+                # ORGANIC #778 companion — the datapath (arith) convention
+                # didn't ground this case; try the CPU-core / clocked-core
+                # BOOT-LATENCY convention before falling back to the
+                # substance floor. chip-AGNOSTIC, fail-closed (see
+                # cpu_boot_latency_oracle_tb_gen.emit_case_oracle_from_ports).
+                wrote = _emit_case_boot_latency_oracle(
+                    project, c, dut_module, ports, out_dir, report)
         if wrote is None:
             wrote = emit_unit_tb(c, out_dir, top, ports=ports,
                                  dut_module=dut_module, report=report)

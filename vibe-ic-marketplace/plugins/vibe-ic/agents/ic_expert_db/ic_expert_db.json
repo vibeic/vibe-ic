@@ -4,7 +4,7 @@
  "_source": "distilled from proven-correct (officially-scored PASS) reference designs, plus owner-reviewed general-convention distills from fail-mode triage prose (see capture_log.md); benchmark identifiers scrubbed at build time (blindness); §4.05 ORACLE-SOURCE ban enforced by ic_expert_db_consistency_check.py.",
  "_consistency": "lessons are DESIGN-CRAFT ADVICE for the AI author; they add knowledge, they do NOT assert hard rules that a gate/program checks. No lesson may contradict a deterministic gate.",
  "classes": 99,
- "total_lessons": 158,
+ "total_lessons": 160,
  "entries": [
   {
    "ic_class": "accumulator-datapath",
@@ -704,6 +704,9 @@
     "For a priority arbiter checked against a golden scoreboard, the winner-selection RULE (effective-priority formula, saturation, AND the tie-break direction) must be bit-identical to the reference model, not merely \"reasonable\": scanning indices 0..N-1 with `if (pending[i] && eff >= sel_pri)` deterministically makes ties resolve to the HIGHEST index, whereas `>` would pick the lowest — a silent mismatch the checker catches. Compute effective priority combinationally over the full pending set (kept separate from the registered FSM so the winner is stable), and use a comparison width wide enough to hold the boosted/saturated value before truncating to the id field. Equally load-bearing is honoring the exact multi-cycle handshake latency the testbench samples (trigger→valid latency and the ack→drop→re-assert cadence): a registered-output controller must land each output on the precise cycle the scoreboard windows it.",
     "A priority interrupt controller must arbitrate over the *effective* pending set (pending AND mask) with a fully-initialized best-priority accumulator (best_pri=all-ones, lowest value wins, ties to lowest index) so masking and priority both bind; and it must clear on ack the interrupt that was actually *presented* to the CPU (a registered serviced index), not the currently-arbitrated one, so a higher-priority request arriving on the ack edge cannot cause the wrong bit to be cleared. Synchronize async requests through a flop before OR-ing into the pending register, and derive cpu_interrupt from a registered \"effective-pending exists\" flag gated off during ack (and one cycle after) to produce clean idle→pending edges and a gap between back-to-back services.",
     "In a request/ack interrupt (or arbiter) controller, the bit cleared on ack must be the selection the CPU actually SAMPLED, not the current combinational winner. Because the CPU reads interrupt_idx just after a clock edge (the pre-edge value), you must register the selected index/eligibility (idx_clear_q/elig_clear_q) one cycle and clear THAT indexed pending bit — clearing the live sel_idx races the arbiter and can drop the wrong source. Sequence the pending update as: clear-acked-bit FIRST, THEN OR-in the freshly synchronized new requests, so a same-cycle re-request is never lost; combine this with a registered request synchronizer plus a one-cycle rise delay and post-ack recovery cycle to give the deterministic >=2-cycle request-to-interrupt latency such handshakes need."
+   ],
+   "related": [
+    "processor-cpu-core"
    ]
   },
   {
@@ -711,6 +714,9 @@
    "lesson_count": 1,
    "lessons": [
     "In a radix-4 (modified) Booth signed multiplier, each 3-bit overlapping group must be recoded to a SIGNED multiple of the multiplicand (0, ±X, ±2X) computed on a value already sign-extended to the FULL product width, and only THEN arithmetically left-shifted by 2*group_index — with signed operands and arithmetic shift (<<<) so negative partial products keep their sign through the shift and the summation tree. The classic bug is generating the ±2X/−X term or the alignment shift at the narrow operand width (or unsigned), which truncates the sign/overflow bits and yields wrong products; recode-then-sign-extend-then-shift-then-accumulate in the correct order is what makes the class correct."
+   ],
+   "related": [
+    "serial-parallel-multiplier"
    ]
   },
   {
@@ -751,7 +757,8 @@
    "related": [
     "accumulator-datapath",
     "iterative-datapath-accumulator",
-    "mac-accumulator"
+    "mac-accumulator",
+    "serial-parallel-multiplier"
    ]
   },
   {
@@ -784,7 +791,8 @@
    ],
    "related": [
     "radix4-booth-multiplier",
-    "sequential-multiplier"
+    "sequential-multiplier",
+    "processor-cpu-core"
    ]
   },
   {
@@ -896,6 +904,18 @@
    "lesson_count": 1,
    "lessons": [
     "When a spec does not state signedness, operands are UNSIGNED by default; switch to signed (two's-complement) interpretation only when the prose says signed/negative/two's complement or a worked example uses a negative value. When signed, cast BOTH operands explicitly ($signed on each side of a compare/multiply/shift): in Verilog a single unsigned operand silently makes the whole expression unsigned, which flips comparisons and right-shifts. Overflow behavior defaults to natural modulo-2^N wrap-around unless the spec says saturate/clamp; a stated saturation applies on BOTH the positive and negative side of a signed range."
+   ]
+  },
+  {
+   "ic_class": "processor-cpu-core",
+   "lesson_count": 2,
+   "lessons": [
+    "For a processor/CPU-core class design, an L10 case is sometimes a BOOT-LATENCY property rather than an instruction-execution oracle: \"N cycles after reset release, the design has performed its first bus access / instruction fetch\". Recognise this SHAPE by grammar in the case's own stimulus/expected text (a reset-release reference + a first-activity reference + an explicit \"N cycle\" bound), never by the case's name. It is derivable WITHOUT an instruction-set model: extract the design's own declared N-cycle bound from that same text (treat an informally-qualified \"typical\" number as an inclusive upper bound, not a hard ceiling, and say so), then pick the DUT's own structurally-detected bus-activity OUTPUT (the Wishbone-family cyc/stb/req/valid vocabulary — standard bus terminology, never a chip literal) as the observable \"first activity\" signal. Drive reset, release it, count clock edges, and FAIL if the activity signal never asserts within a small margin over the bound, or asserts later than the bound. DEFER (leave the honest substance-floor testbench) when the case-text shape, the clock, the bus-activity output, or the explicit numeric bound is missing — never invent one. Verified worked example: a RISC-V bit-serial CPU-core reused-IP integration's `reset_n_cycle_instruction` case — first bus-activity observed at clock cycle 3 against a declared max of 10, confirmed by compiling and simulating the generated oracle TB against the real RTL (genuinely PASSes at the true latency, genuinely FAILs when the declared bound is tightened below it).",
+    "An L10 case conditioned on an OPTIONAL Plugin-selectable feature — text carrying an explicit parenthetical marker such as \"(若 Plugin 選 <token>)\" / \"(if the plugin selects <token>)\" — applies ONLY when THIS build actually selected that feature axis. Before demanding a functional-TB golden for such a case, check the design's OWN `declaration.json` (or equivalent structured Phase-2 config) for an affirmative record of the referenced token (a WORD-BOUNDARY match — a short token like 'M' or 'C' must never be matched as a bare substring, which would trivially hit almost any JSON blob). If declared, the case is a real requirement and needs a genuine golden the normal way. If `declaration.json` is silent or absent, the gate cannot confirm applicability: never hard-FAIL a possibly-unselected optional feature, and never fabricate a golden for hardware that may not exist — WAIVE the case as a distinct, reviewable \"conditional feature selection undeclared\" gap (not the same capability-gap class as a generic missing-oracle deferral, since the root cause here is a missing DECLARATION). Verified worked example: a RISC-V core's plugin_m_mul_div / plugin_zicsr_csr_access_timer_irq / plugin_c_16_bit_compressed cases — direct RTL inspection proved the instantiated core implements none of M/Zicsr/C, and no declaration.json was ever produced to record that decision, so fabricating goldens for them would have tested hardware that does not exist."
+   ],
+   "related": [
+    "serial-parallel-multiplier",
+    "priority-interrupt-controller"
    ]
   }
  ]
