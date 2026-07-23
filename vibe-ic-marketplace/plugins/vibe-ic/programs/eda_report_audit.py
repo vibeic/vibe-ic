@@ -453,6 +453,42 @@ def _check_lvs(project_dir: Path) -> AuditResult:
         result.summary = {"files_found": 0, "categories_found": []}
         return result
 
+    # ORGANIC (post-#557 interaction) — CANONICAL-REPORT SCOPING. The runner
+    # can leave a STALE, ABANDONED-ATTEMPT LVS-adjacent report on disk: the
+    # GAP-E2E-9 power-aware upgrade path (`_try_power_aware_lvs`) tries a
+    # stricter power-aware compare and writes ITS OWN transcript to
+    # `reports/phase3/lvs_power_aware.rpt`, but is STRICTLY MONOTONIC — when
+    # that attempt does not reach a clean match it returns None and the
+    # runner falls through to the plain-netlist path, which writes the real
+    # CANONICAL sign-off report to `reports/phase3/lvs.rpt`. The abandoned
+    # attempt's file is never deleted, and it still matches the broad
+    # `*lvs*.rpt` discovery glob above. Concatenating every discovered file
+    # into one `blob` (the pre-fix behaviour) then lets that abandoned
+    # attempt's own terminal MISMATCH token silently override a genuinely
+    # clean canonical verdict — a real PASS reported as a false FAIL.
+    # MEASURED: caravel_user_project x sky130A — `reports/phase3/lvs.rpt`
+    # (canonical) ends "Final result: Circuits match uniquely.", while the
+    # stale `reports/phase3/lvs_power_aware.rpt` (an abandoned 4-rail
+    # power-aware retry) ends "Final result: Top level cell failed pin
+    # matching.". The runner's OWN verdict artifact
+    # (`reports/phase3/lvs_verdict.json`) independently confirms PASS/
+    # LVS_MATCH against `reports/phase3/lvs.rpt` — this gate re-derives its
+    # verdict from that SAME canonical report's own text (never trusting the
+    # runner's self-report), it just stops letting an unrelated file name-
+    # collide with it.
+    #
+    # `reports/phase3/lvs.rpt` is a FIXED, flow-defined project-structure
+    # path — declared by flow/phase1_phase2_phase3.yaml's Step 31 and written
+    # by every LVS code path in phase3_one_shot_runner.py under that same
+    # name for every IC and every PDK — never a chip/design literal, so
+    # preferring it is chip-AGNOSTIC. When it exists, classify SOLELY on its
+    # own text; an auxiliary file that merely shares the `*lvs*` substring
+    # must never inject or override the canonical verdict. Any project shape
+    # without that canonical path falls back to the prior aggregate-blob
+    # behaviour, unchanged.
+    canonical = project_dir / "reports" / "phase3" / "lvs.rpt"
+    scoped_files = [canonical] if canonical.is_file() else files
+
     categories_re = {
         "instance": re.compile(r"instance", re.I),
         "net": re.compile(r"\bnet\b", re.I),
@@ -463,7 +499,7 @@ def _check_lvs(project_dir: Path) -> AuditResult:
     best_file = ""
     blob = ""
 
-    for fp in files:
+    for fp in scoped_files:
         try:
             text = fp.read_text(errors="replace")
         except OSError:
@@ -481,7 +517,7 @@ def _check_lvs(project_dir: Path) -> AuditResult:
             message="No LVS mismatch categories found in report",
             file=best_file))
 
-    authentic = _check_tool_authenticity(files, "lvs", result)
+    authentic = _check_tool_authenticity(scoped_files, "lvs", result)
 
     # ORGANIC-20260608 #507 (CRITICAL) — terminal-verdict gate. Pre-#507
     # `passed` was decided SOLELY by (category-keyword present + tool
@@ -533,7 +569,8 @@ def _check_lvs(project_dir: Path) -> AuditResult:
                      and len(cats_found) > 0 and authentic)
     result.summary = {"files_found": len(files), "categories_found": cats_found,
                       "tool_authentic": authentic,
-                      "terminal_verdict": verdict}
+                      "terminal_verdict": verdict,
+                      "canonical_report_used": scoped_files is not files}
     return result
 
 

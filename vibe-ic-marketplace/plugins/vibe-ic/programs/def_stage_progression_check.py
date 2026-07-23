@@ -66,6 +66,7 @@ class StageInfo:
     sha256: str = ""
     num_components: int = 0   # COMPONENTS section count
     has_routing: bool = False  # routed-wire indicator
+    routing_segments: int = 0  # total wire/via geometry line count (Check 2)
 
 
 @dataclass
@@ -115,6 +116,38 @@ def _hold_clean_noop_ok(project: Path) -> bool:
     if worst is None:
         return False  # no parseable hold-slack evidence → cannot prove clean
     return worst >= 0.0
+
+
+def _count_routing_segments(path: Path) -> int:
+    """Count DEF wire/via GEOMETRY lines: `NEW <layer> ...` continuation
+    segments and `+ ROUTED`/`+ SHAPE` first-segment statements, in NETS and
+    SPECIALNETS alike.
+
+    This is the TOTAL routing/PDN geometry volume a DEF actually carries — as
+    opposed to raw byte size, which also reflects how VERBOSELY a net's
+    pin-connectivity list is written. `global_connect` (re-applied after
+    routing to attach late-created instances' PG pins — ORGANIC #571's
+    `_build_pg_reconnect_tcl`) legitimately REWRITES a SPECIALNETS pin list
+    from thousands of explicit `( inst pin )` entries down to the standard DEF
+    wildcard `( * pin )` token, which can shrink a DEF by hundreds of KB with
+    ZERO geometry lost (measured: caravel_user_project sky130A, post_hold.def
+    -> routed.def dropped ~425,000 B in pin-list notation while its routing
+    segment count only GREW, 479,307 -> 485,009, and COMPONENTS only grew,
+    10,030 -> 10,139). A genuine fabricated/truncated stage cannot show this
+    signature (it loses or freezes geometry, never gains it), so this metric
+    lets Check 2 tell the two apart. Chip/PDK-AGNOSTIC: pure DEF syntax token
+    counting, no design literal."""
+    count = 0
+    try:
+        with path.open(errors="replace") as f:
+            for line in f:
+                s = line.strip()
+                if (s.startswith("NEW ") or s.startswith("+ ROUTED")
+                        or s.startswith("+ SHAPE")):
+                    count += 1
+    except OSError:
+        return 0
+    return count
 
 
 def _count_components(path: Path) -> int:
@@ -224,6 +257,7 @@ def inspect(project: Path) -> tuple[List[StageInfo], List[Finding]]:
         info.sha256 = _sha(path)
         info.num_components = _count_components(path)
         info.has_routing = _has_routing(path)
+        info.routing_segments = _count_routing_segments(path)
         infos.append(info)
 
     if any(not i.exists for i in infos):
@@ -281,10 +315,33 @@ def inspect(project: Path) -> tuple[List[StageInfo], List[Finding]]:
     # and a skipped/empty stage by Check 3 (instance-count growth), so this
     # relaxes no fraud gate. chip-AGNOSTIC — no chip literal, and the evidence
     # is OpenROAD's own hold-slack number.
+    # ORGANIC (post-#571 interaction) — a SECOND legitimate shrink, orthogonal
+    # to the hold no-op above: a PG-net CONNECTIVITY-NOTATION collapse. After
+    # routing, `_build_pg_reconnect_tcl` (#571) re-applies `global_connect` so
+    # physical-only cells created after the PDN's one-shot connect (repair/CTS
+    # buffers, antenna diodes, decap/fill) get their PG pins attached. On a
+    # design where many such cells exist, `global_connect` rewrites a
+    # SPECIALNETS pin list from thousands of explicit `( inst pin )` entries
+    # down to the standard DEF wildcard `( * pin )` token — correct and, if
+    # anything, MORE complete (it also covers instances added later), but it
+    # can shave hundreds of KB off a DEF that never lost a single wire.
+    # MEASURED: caravel_user_project x sky130A, post_hold.def (39,005,262 B)
+    # -> routed.def (38,580,931 B) — a 424,331 B / 1.1% shrink — while
+    # `_count_routing_segments` (NEW/+ROUTED/+SHAPE geometry lines) went
+    # 479,307 -> 485,009 (grew) and COMPONENTS went 10,030 -> 10,139 (grew).
+    # A truncated/fabricated stage cannot show growth on BOTH axes at once, so
+    # requiring both — AND requiring the later stage's geometry count be
+    # POSITIVE (never waived on a 0-vs-0 vacuity, which proves nothing) — is
+    # the narrow, positive-evidence gate: any real geometry or instance LOSS,
+    # or a shrink with no routing evidence at all, still FAILs outright.
+    # chip/PDK-AGNOSTIC — keyed on the DEF's own geometry/instance counts, no
+    # design or PDK literal.
     _NOOP_SHRINK_TOL = 0.01  # 1% — a re-ordering, not a truncation
     _noop_pair_ok = _hold_clean_noop_ok(project)
     prev_size = 0
     prev_name = None
+    prev_components = 0
+    prev_routing_segments = 0
     for i in infos:
         if i.size < prev_size:
             benign_noop = (
@@ -292,7 +349,19 @@ def inspect(project: Path) -> tuple[List[StageInfo], List[Finding]]:
                 and _noop_pair_ok
                 and i.size >= prev_size * (1.0 - _NOOP_SHRINK_TOL)
             )
-            if not benign_noop:
+            benign_geom_preserved = (
+                # POSITIVE evidence required: the LATER stage must show REAL
+                # routing/PDN geometry (not a 0-vs-0 "preserved" by
+                # vacuity — a fixture/design with no routing markers at
+                # either stage proves nothing about geometry and must not
+                # be waved through on component count alone; Check 3 already
+                # owns component-count regression, this exemption is about
+                # GEOMETRY specifically).
+                i.routing_segments > 0
+                and i.routing_segments >= prev_routing_segments
+                and i.num_components >= prev_components
+            )
+            if not (benign_noop or benign_geom_preserved):
                 findings.append(Finding(
                     severity="error",
                     rule="size-non-monotone",
@@ -304,6 +373,8 @@ def inspect(project: Path) -> tuple[List[StageInfo], List[Finding]]:
                 ))
         prev_size = i.size
         prev_name = i.name
+        prev_components = i.num_components
+        prev_routing_segments = i.routing_segments
 
     # --- Check 3: instance-count growth (routed ≥ floorplan) ---
     fp = next(i for i in infos if i.name == "floorplan")

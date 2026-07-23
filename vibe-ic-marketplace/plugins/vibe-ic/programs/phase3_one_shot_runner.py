@@ -12599,9 +12599,34 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "if {[catch {estimate_parasitics -detailed_routing} e]} { "
         "puts \"SHIP_EST_DR_NONFATAL: $e\" }\n"
         "catch {puts \"SHIP_WNS_BEFORE: [sta::worst_slack -max]\"}\n"
-        "if {[catch {repair_design} e]} { puts \"SHIP_RD_NONFATAL: $e\" }\n"
-        "if {[catch {repair_timing -setup} e]} { puts \"SHIP_RT_NONFATAL: $e\" }\n"
-        "if {[catch {detailed_placement} e]} { puts \"SHIP_DP_NONFATAL: $e\" }\n"
+        # DRV-CLOSURE-LOOP — `repair_design` is a GREEDY SINGLE-PASS resizer:
+        # its own log line ("Found N slew violations." / "Found N
+        # capacitance violations.") reports what it found AT ENTRY, not what
+        # remains when it returns, and one call is not guaranteed to reach 0
+        # on a large/congested design. MEASURED: caravel_user_project x
+        # sky130A — one `repair_design` call found 111 slew + 30 capacitance
+        # violations and resized only 89 instances; the promoted route's
+        # Step-23 sign-off STA (the real max-RC SPEF corner, not this
+        # in-session estimate) still showed 2 max_slew + 2 max_capacitance
+        # VIOLATED entries. Unlike `repair_antennas` (one-shot PER CALL —
+        # GRT-0121 unless a reroute intervenes), `repair_design` /
+        # `repair_timing` are safe to call repeatedly: each call re-measures
+        # the CURRENT design and fixes whatever is still violating, so a
+        # bounded repeat converges the residual instead of shipping it.
+        # Bounded (not open-ended, and not gated on an in-session violation
+        # count `repair_design` does not return to Tcl) so a residual that is
+        # a genuine legalization/topology limit still terminates in finite
+        # time; each call is cheap (~seconds on a 10k-instance design) so the
+        # fixed repeat costs little even once already converged.
+        # chip-AGNOSTIC: plain repeated calls to standard OpenROAD APIs.
+        "for {set _drv_i 0} {$_drv_i < 5} {incr _drv_i} {\n"
+        "  if {[catch {repair_design} _drv_rd]} { "
+        "puts \"SHIP_RD_NONFATAL: $_drv_rd\"; break }\n"
+        "  if {[catch {repair_timing -setup} _drv_rt]} { "
+        "puts \"SHIP_RT_NONFATAL: $_drv_rt\" }\n"
+        "  if {[catch {detailed_placement} _drv_dp]} { "
+        "puts \"SHIP_DP_NONFATAL: $_drv_dp\"; break }\n"
+        "}\n"
         "if {[catch {check_placement} e]} { puts \"SHIP_CP_WARN: $e\" }\n"
         "catch {puts \"SHIP_WNS_AFTER_REPAIR: [sta::worst_slack -max]\"}\n"
         # GRT-guide-regen — the base route was read from routed.def, so every
