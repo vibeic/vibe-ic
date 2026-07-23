@@ -12507,7 +12507,8 @@ def _max_captable_c(pdk: "PdkConfig", container: str) -> str:
 def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
                                   ss_liberty_c: str, pnr_dir_c: str,
                                   max_captable_c: str, metal_prefix: str,
-                                  thread_count: int) -> str:
+                                  thread_count: int,
+                                  filler_masters: Optional[List[str]] = None) -> str:
     """Fresh-session post-route SETUP repair against the REAL max-RC SPEF at the
     SLOW (SS) sign-off corner, writing routed_repaired.def / <top>_pnr_repaired.v.
 
@@ -12526,6 +12527,12 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
     DRC regression). chip/PDK-AGNOSTIC: standard OpenROAD APIs; corner libs +
     captable come from the active PDK."""
     mp = metal_prefix
+    # DPL-0038 re-fill: after the ECO reroute, restore the decap/fill tiling that
+    # `remove_fillers` cleared so the shipped repaired route stays fill-complete
+    # (density-rule + tap/well continuity preserved, identical to the base route).
+    # Uses the SAME sparse-die-aware fill the base PnR uses; empty when the PDK
+    # exposes no fill masters (then the base route already had none).
+    refill_block = _build_sparse_die_aware_filler_tcl(filler_masters or [])
     return (
         f"set_thread_count {thread_count}\n"
         f"read_lef {tech_lef_c}\n"
@@ -12538,6 +12545,18 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         f"puts \"SHIP_SWR_SIG_NONFATAL: $e2\" }} }}\n"
         f"if {{[catch {{set_wire_rc -clock -layer {mp}5}} e]}} {{ "
         f"puts \"SHIP_SWR_CLK_NONFATAL: $e\" }}\n"
+        # DPL-0038 — clear the decap/fill tiling BEFORE anything annotates
+        # parasitics or resizes. Two reasons it must be FIRST: (1) repair_design /
+        # repair_timing enlarge cells and insert buffers, and a core fully tiled
+        # with fillers has no legal site, so detailed_placement legalize aborts on
+        # overlaps and the whole ECO is silently dropped; (2) removing instances
+        # AFTER extract_parasitics/read_spef marks the parasitics network invalid,
+        # so repair_design's IncrementalParasiticsGuard aborts with
+        # `EST-0104 inconsistent parasitics state` before it repairs anything.
+        # Doing it here (pre-extraction) keeps the parasitics consistent with the
+        # design repair_design sees. Fillers are restored after the reroute
+        # (refill_block). NONFATAL among tools without remove_fillers.
+        "if {[catch {remove_fillers} e]} { puts \"SHIP_RMFILL_NONFATAL: $e\" }\n"
         "set_timing_derate -early 0.95\n"
         "set_timing_derate -late 1.05\n"
         "catch {define_process_corner -ext_model_index 0 X}\n"
@@ -12552,14 +12571,46 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         f"catch {{write_spef {pnr_dir_c}/signoff_repair_max.spef}}\n"
         f"if {{[catch {{read_spef {pnr_dir_c}/signoff_repair_max.spef}} e]}} {{ "
         f"puts \"SHIP_RDSPEF_NONFATAL: $e\" }}\n"
+        # EST-0027 — pin the resizer to the REAL detailed-route parasitics we just
+        # annotated (extract_parasitics -> write/read_spef). Without this the DRV
+        # (max_cap/max_slew) evaluation inside repair_design can still fall back to
+        # the optimistic set_wire_rc wire-load model, so it sizes/buffers the wrong
+        # nets and the max-RC SPEF DRVs the sign-off judges on survive. The command
+        # only sets parasitics_src=detailed_routing (no re-estimate); read_spef
+        # FIRST. NONFATAL: stock OpenROAD without the flag keeps the old behaviour.
+        "if {[catch {estimate_parasitics -detailed_routing} e]} { "
+        "puts \"SHIP_EST_DR_NONFATAL: $e\" }\n"
         "catch {puts \"SHIP_WNS_BEFORE: [sta::worst_slack -max]\"}\n"
         "if {[catch {repair_design} e]} { puts \"SHIP_RD_NONFATAL: $e\" }\n"
         "if {[catch {repair_timing -setup} e]} { puts \"SHIP_RT_NONFATAL: $e\" }\n"
         "if {[catch {detailed_placement} e]} { puts \"SHIP_DP_NONFATAL: $e\" }\n"
         "if {[catch {check_placement} e]} { puts \"SHIP_CP_WARN: $e\" }\n"
         "catch {puts \"SHIP_WNS_AFTER_REPAIR: [sta::worst_slack -max]\"}\n"
+        # GRT-guide-regen — the base route was read from routed.def, so every
+        # signal net still carries committed detailed routing. OpenROAD's
+        # global_route NO-OPS on already-routed nets (regenerates 0 guides), so
+        # the follow-on detailed_route aborts `DRT-0626 Guide loading failed` and
+        # the whole ECO reroute is dropped (the max-RC DRVs then never get the
+        # repaired route). Clear the signal routing first so global_route
+        # regenerates a COMPLETE guide set and the REPAIRED design is routed fresh
+        # to DRC convergence. Power/ground + special nets are left intact. Proven:
+        # 0-guide -> 2575-guide, detailed_route 437->0 violations, on stock 0.2.28.
+        # chip/PDK-AGNOSTIC (keyed on odb net routing state; no chip/vendor literal).
+        "if {[catch {\n"
+        "  set _rrc 0\n"
+        "  foreach _net [[ord::get_db_block] getNets] {\n"
+        "    set _st [$_net getSigType]\n"
+        "    if {$_st eq \"POWER\" || $_st eq \"GROUND\"} { continue }\n"
+        "    set _w [$_net getWire]\n"
+        "    if {$_w ne \"NULL\"} { odb::dbWire_destroy $_w; incr _rrc }\n"
+        "  }\n"
+        "  puts \"SHIP_ROUTING_CLEARED: $_rrc\"\n"
+        "} e]} { puts \"SHIP_RRC_NONFATAL: $e\" }\n"
         "if {[catch {global_route} e]} { puts \"SHIP_GR_NONFATAL: $e\" }\n"
         "if {[catch {detailed_route} e]} { puts \"SHIP_DR_NONFATAL: $e\" }\n"
+        # DPL-0038 re-fill (restore decap/fill tiling cleared above), AFTER the
+        # reroute exactly like the base flow places fill after detailed_route.
+        f"{refill_block}"
         f"if {{[catch {{write_def {pnr_dir_c}/routed_repaired.def}} e]}} {{ "
         f"puts \"SHIP_WD_NONFATAL: $e\" }}\n"
         f"if {{[catch {{write_verilog {pnr_dir_c}/{top}_pnr_repaired.v}} e]}} {{ "
@@ -12626,7 +12677,8 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
         _to_container_path(str(pdk.tech_lef), container),
         _to_container_path(str(pdk.cell_lef), container),
         ss_lib, _to_container_path(str(pnr_out), container),
-        cap, pdk.metal_prefix, _openroad_thread_count())
+        cap, pdk.metal_prefix, _openroad_thread_count(),
+        filler_masters=_filler_masters_for_pdk(pdk))
     tcl_path = pnr_out / "signoff_spef_repair.tcl"
     tcl_path.write_text(tcl)
     tcl_c = _to_container_path(str(tcl_path), container)
