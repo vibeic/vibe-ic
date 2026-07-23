@@ -346,6 +346,65 @@ def emit_unit_tb(case: dict, out_dir: Path, top: str,
     return f
 
 
+def _detect_ic_class(project: Path) -> "str | None":
+    """Best-effort ic_class detection so the per-case golden-oracle path can
+    fire for the arithmetic-primitive family (chip-AGNOSTIC)."""
+    try:
+        import ic_class_profile as _icp  # type: ignore
+        prof = _icp.detect_ic_class(project.resolve())
+        if isinstance(prof, dict):
+            return prof.get("ic_class")
+    except Exception:
+        pass
+    return None
+
+
+def _case_profile(case: dict) -> str:
+    """Map an L10 case to a deterministic operand PROFILE for its golden oracle
+    (chip-AGNOSTIC — keyed on the case's own semantic name tokens, not a SKU):
+    a corner-operand case drives the enumerated corners; a random-equivalence /
+    toggle-coverage case drives the pseudo-random tail; else a mix."""
+    n = str(case.get("name", "")).lower()
+    if "corner" in n or "edge" in n or "boundary" in n:
+        return "corners"
+    if ("random" in n or "toggle" in n or "branch" in n or "coverage" in n
+            or "equivalence" in n):
+        return "random"
+    return "mixed"
+
+
+def _emit_case_golden_oracle(project: Path, ic_class: "str | None",
+                             case: dict, out_dir: Path,
+                             report: "dict | None") -> "Path | None":
+    """Emit a REAL per-case golden oracle TB (no ORACLE_NONE) for an L10
+    `functional_vector` case, using the declared-function convention in
+    arith_oracle_tb_gen. Returns the written path, or None when no closed-form
+    oracle is derivable for this design (→ caller falls back to the substance
+    floor; fail-closed)."""
+    name = case.get("name", "")
+    if not _LEGAL_ID_RE.match(str(name)):
+        return None
+    try:
+        import arith_oracle_tb_gen as _aog  # type: ignore
+    except Exception:
+        return None
+    try:
+        text = _aog.emit_case_oracle(
+            project, ic_class, str(name), _case_profile(case))
+    except Exception as e:  # pragma: no cover — never let it break the loop
+        if report is not None:
+            report.setdefault("oracle_errors", []).append(
+                {"case": name, "error": str(e)})
+        return None
+    if not text:
+        return None
+    f = out_dir / f"{name}.v"
+    f.write_text(text)
+    if report is not None:
+        report.setdefault("golden_oracle_cases", []).append(str(name))
+    return f
+
+
 def emit_unit_tbs(project: Path, top: str = "chip_top",
                   kind: "str | None" = None,
                   report: "dict | None" = None) -> int:
@@ -390,10 +449,25 @@ def emit_unit_tbs(project: Path, top: str = "chip_top",
 
     out_dir = _pl.sim_dir(project) / "tb"
     out_dir.mkdir(parents=True, exist_ok=True)
+    # For the arithmetic-primitive family the L10 functional_vector cases have a
+    # closed-form golden (the declared function p = a OP b mod 2^N). Author a
+    # REAL per-case golden oracle (drive the declared operands, compare the DUT
+    # result === the independently-computed golden) so the case carries genuine
+    # evidence l10_tb_conformance credits — the IC-expert convention, keyed on
+    # interface shape, chip-AGNOSTIC. Fail-closed: any case whose golden is NOT
+    # closed-form-derivable keeps the substance-floor scaffold (ORACLE_NONE), so
+    # a case nobody can verify still fails the Step-4 gate honestly.
+    ic_class = _detect_ic_class(project)
     emitted = 0
     for c in cases:
-        if emit_unit_tb(c, out_dir, top, ports=ports,
-                        dut_module=dut_module, report=report) is not None:
+        wrote = None
+        if str(c.get("kind", "")) == "functional_vector":
+            wrote = _emit_case_golden_oracle(project, ic_class, c, out_dir,
+                                             report)
+        if wrote is None:
+            wrote = emit_unit_tb(c, out_dir, top, ports=ports,
+                                 dut_module=dut_module, report=report)
+        if wrote is not None:
             emitted += 1
     if emitted == 0 and report.get("skipped"):
         report["reason"] = (

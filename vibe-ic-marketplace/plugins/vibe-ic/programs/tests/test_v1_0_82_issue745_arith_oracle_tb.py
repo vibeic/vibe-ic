@@ -182,9 +182,14 @@ def test_b_unrecognised_operator_defers(tmp_path):
     assert _oracle_tbs(project) == []
 
 
-def test_b_serial_streaming_datapath_defers(tmp_path):
-    # spm-style: parallel x (N-bit), serial y/p (1-bit) on an N-bit datapath.
-    # Output latency + bit-order are Plugin-chosen → not closed-form-derivable.
+def test_b_serial_streaming_datapath_emits_self_calibrating_oracle(tmp_path):
+    # CAPABILITY UPGRADE (repo-gatekeeper, direct-push): spm-style parallel x
+    # (N-bit) + serial y/p (1-bit) on an N-bit datapath. The output latency +
+    # bit-order are Plugin-chosen; instead of DEFERring, the oracle now emits a
+    # REAL, SELF-CALIBRATING N-bit oracle — golden computed independently from
+    # the declared function, serial framing DISCOVERED from the DUT stream (a
+    # wrong-product DUT matches no consistent framing → still fails). §4.05: the
+    # golden is never read from the DUT; only the (free-choice) framing is.
     ports = [
         {"name": "clk", "direction": "input", "width": 1},
         {"name": "rst", "direction": "input", "width": 1},
@@ -198,9 +203,15 @@ def test_b_serial_streaming_datapath_defers(tmp_path):
                           decl={"size_param": 32,
                                 "integer_encoding": "unsigned"})
     rep, rc = aotg.generate(project, "digital_arithmetic_primitive")
-    assert rc == 2 and rep["verdict"] == "DEFER"
-    assert "serial" in rep["reason"].lower()
-    assert _oracle_tbs(project) == []
+    assert rc == 0 and rep["verdict"] == "TB_EMITTED"
+    assert rep.get("topology") == "serial_parallel"
+    tbs = _oracle_tbs(project)
+    assert len(tbs) == 1
+    tb = tbs[0].read_text()
+    # NON-VACUOUS: resolved to the real datapath width (32), never a 1-bit
+    # collapse, with the self-calibration search + completion marker.
+    assert "localparam integer N      = 32;" in tb
+    assert "ORACLE_TB_DONE pass=" in tb and "_drive_capture" in tb
 
 
 def test_cli_help_and_defer_exit_code(tmp_path):
