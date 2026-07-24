@@ -1,6 +1,6 @@
 # Benchmark IC campaign — open-PDK IC×PDK matrix status
 
-_Last updated: 2026-07-24, plugin v1.5.65. Unit = one (IC × PDK) cell — the
+_Last updated: 2026-07-24 (2 of 12 cells converged), plugin v1.5.65. Unit = one (IC × PDK) cell — the
 same IC on a different PDK is a distinct result. Status is independently
 re-derived from raw run artifacts (GDS, DRC/LVS/STA reports), never from a
 run's own RESULT.md/AGENT_REPORT.md alone. This tracks the OPEN-PDK matrix
@@ -11,7 +11,7 @@ and is not part of this table._
 | IC × PDK | Status | Residual |
 |---|---|---|
 | spm × IHP-SG13G2 | **PASS_WITH_WAIVERS** | None (foundry/board-stage waivers only) — see `ic/spm/ihp-sg13g2/RESULT.md` |
-| spm × sky130A | FAIL | Equivalence check (RTL vs post-DFT netlist) genuinely non-equivalent; a marginal (sub-ns) post-route STA DRV after a reroute fix |
+| spm × sky130A | **PASS_WITH_WAIVERS** | None — see `ic/spm/sky130A_20260724/RESULT.md`. (An earlier v1.5.60 run of this same IC×PDK showed an equivalence-check + marginal-DRV residual; a fresh v1.5.65 run converged cleanly — see that RESULT.md for the full before/after.) |
 | spm × GF180MCU | FAIL | DFT at-speed ATPG residual on this PDK's synthesis path; Tapeout-checklist DRC follow-up |
 | sha256 × sky130A | FAIL | Post-route STA sign-off setup gap at the slow corner |
 | caravel_user_project × sky130A | FAIL | Multiple stage1-3 residuals under active investigation (a recent PnR repair-escalation fix was found to regress this cell and has been reverted; re-converging) |
