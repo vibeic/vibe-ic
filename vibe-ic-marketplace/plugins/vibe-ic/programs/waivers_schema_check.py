@@ -69,6 +69,15 @@ SELF_APPROVERS = {
     "claude-code", "auto"
 }
 
+# Unfilled name-slot fillers a scaffold leaves behind. Kept separate from
+# PLACEHOLDER_REASONS (which _is_placeholder_approver also consults) because
+# these read as approver slots specifically, not as prose rationales.
+PLACEHOLDER_APPROVERS = {
+    "name", "your name", "human", "human name", "approver",
+    "approver name", "reviewer", "owner", "someone",
+    "xxx", "xxxx", "???", "unknown", "unfilled", "placeholder",
+}
+
 MIN_REASON_LEN = 20
 
 
@@ -93,6 +102,33 @@ def _is_placeholder(s: str) -> bool:
 
 def _is_self_approver(s: str) -> bool:
     return s.strip().lower() in SELF_APPROVERS
+
+
+def _is_placeholder_approver(s: str) -> bool:
+    """True when `approver` is still an UNFILLED scaffold value.
+
+    ``waiver_template_gen.py`` emits ``waivers.json.template`` with placeholder
+    fields and documents that the schema is "GUARANTEED to reject" them, so an
+    unfilled template cannot be renamed to ``waivers.json`` and ship as a green
+    sign-off. That guarantee was not actually implemented here: the only approver
+    rule was the SELF_APPROVERS set, which a sentinel like ``__TODO_HUMAN_NAME__``
+    does not match. A template whose `reason` had been filled in (>= MIN_REASON_LEN,
+    not a PLACEHOLDER_REASON) therefore validated clean while nobody had approved
+    anything. This closes that hole.
+
+    General by construction — matches the SHAPE of an unfilled slot, not our own
+    template's literal string:
+      * a ``__SENTINEL__`` dunder-wrapped token (the scaffold convention), and
+      * bare placeholder words, incl. the PLACEHOLDER_REASONS vocabulary reused
+        for approvers plus name-slot fillers ("name", "your name", "xxx", ...).
+    """
+    norm = s.strip().lower()
+    if re.fullmatch(r"__.*__", norm):          # __TODO_HUMAN_NAME__, __APPROVER__, ...
+        return True
+    norm = norm.strip("<>[]{}").strip()        # <TODO>, [name], {approver}
+    if norm in PLACEHOLDER_REASONS:            # todo / tbd / fixme / ? / ...
+        return True
+    return norm in PLACEHOLDER_APPROVERS
 
 
 def validate(project: Path, max_step: int = 40,
@@ -304,6 +340,14 @@ def validate(project: Path, max_step: int = 40,
                 severity="error", entry_index=i, step_id=sid,
                 rule="approver-self",
                 message=f"self-approval rejected: {approver!r}",
+            ))
+        elif _is_placeholder_approver(approver):
+            findings.append(WaiverFinding(
+                severity="error", entry_index=i, step_id=sid,
+                rule="approver-placeholder",
+                message=(f"approver is an unfilled scaffold placeholder: {approver!r} "
+                         f"— a waivers.json.template must have a real human approver "
+                         f"filled in before it can ship as waivers.json"),
             ))
 
         # review_required — v1.6.12: silent default true is too lenient.
