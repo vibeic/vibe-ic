@@ -1,6 +1,6 @@
 # Benchmark IC campaign — open-PDK IC×PDK matrix status
 
-_Last updated: 2026-07-24 (2 of 12 cells converged), plugin v1.5.66. Unit = one (IC × PDK) cell — the
+_Last updated: 2026-07-24 (3 of 12 cells converged), plugin v1.5.66. Unit = one (IC × PDK) cell — the
 same IC on a different PDK is a distinct result. Status is independently
 re-derived from raw run artifacts (GDS, DRC/LVS/STA reports), never from a
 run's own RESULT.md/AGENT_REPORT.md alone. This tracks the OPEN-PDK matrix
@@ -12,7 +12,7 @@ and is not part of this table._
 |---|---|---|
 | spm × IHP-SG13G2 | **PASS_WITH_WAIVERS** | None (foundry/board-stage waivers only) — see `ic/spm/ihp-sg13g2/RESULT.md` |
 | spm × sky130A | **PASS_WITH_WAIVERS** | None — see `ic/spm/sky130A_20260724/RESULT.md` |
-| spm × GF180MCU | FAIL | A metal-fill/density DRC gap was found and fixed (v1.5.66, `8ee4e441`): 0 sign-off DRC violations, LVS/STA unaffected. A separate, pre-existing residual remains — IR-Drop (Step 24) and EM check (Step 25) reports are missing for this cell. A fresh full re-verification on v1.5.66 is in progress. |
+| spm × GF180MCU | **PASS_WITH_WAIVERS** | None — see `ic/spm/gf180mcuD_20260724/RESULT.md`. Metal-fill density DRC (v1.5.66) + SS slow-corner setup (v1.5.59) both closed; GDS present, 763/763 DRC rule categories clean, LVS match, STA MET (+1.73/+0.57 ns). |
 | sha256 × sky130A | FAIL | Post-route STA sign-off setup gap at the slow corner only (Step 23) — re-confirmed on a fresh v1.5.65 run |
 | caravel_user_project × sky130A | FAIL | A PnR repair-escalation fix (v1.5.64) was found to regress this cell and was reverted (v1.5.65). LVS is now clean again, but a fresh v1.5.65 re-run shows the underlying STA DRV count is currently WORSE than the original baseline (376–423 real violations vs. 4 originally) — root cause not yet found; this cell needs dedicated re-convergence work, not a quick fix. |
 | edge_llm_accel × NanGate45 | FAIL | Re-run in progress on v1.5.65 (long-running: >8h at last check, actively progressing, not stalled) |
