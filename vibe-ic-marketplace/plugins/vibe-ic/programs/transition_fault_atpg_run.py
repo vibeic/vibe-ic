@@ -165,6 +165,24 @@ _CALIBRATION_FAULTS = 3               # tiny strided probe to measure per-fault 
 _BUDGET_SAFETY = 0.85                 # leave head-room for parse / SIGKILL slack
 _SETUP_MARKER = "VIBEICTDF_SETUP_DONE"
 
+# ── external CDCL SAT solver for the ATPG prove (fork enhancement) ───────────
+# The built-in ezMiniSAT (MiniSAT-2.2, 2008-era) that yosys `sat` uses by
+# default TIMES OUT on the large 2-frame launch-off-capture miter CNFs this
+# producer builds (measured on a real bit-serial core: ~5.5e5 vars / ~1.4e6
+# clauses per fault; MiniSAT ~25 s/fault and ABORTs the hard cones at the
+# per-fault timeout). A modern CDCL solver decides the SAME CNF in seconds — and
+# reaches the UNSAT proofs MiniSAT never finishes, correctly classifying some
+# "aborts" as REDUNDANT instead of leaving them undetected. The vibeic/yosys
+# fork registers `kissat` and `cadical` as selectable `sat` backends (see
+# kernel/register.cc ExtCdclSat); this producer selects one via
+# `sat -select-solver <name>` WHEN the image provides it, and otherwise falls
+# back to the built-in engine with no behaviour change. Preference order + a
+# hard override are exposed via VIBEIC_ATPG_SAT_SOLVER
+# (auto|kissat|cadical|minisat|none). chip/PDK/vendor-AGNOSTIC — pure CNF
+# solving, no design knowledge.
+_ATPG_SAT_SOLVER_PREFERENCE = ("kissat", "cadical")
+_SAT_SOLVER_PROBE_CACHE: dict = {}
+
 # ── size-scaled at-speed ATPG wall budget ───────────────────────────────────
 # The per-fault SAT solve on the 2-frame LOC miter dominates, and BOTH its
 # per-fault cost AND the one-time miter flatten grow with the design's flop
@@ -727,9 +745,61 @@ def _resolve_design_liberty(project: Path, explicit: "str | None") -> str:
     return lec_run.DEFAULT_LIBERTY
 
 
+def _detect_sat_solver(project: Path, pdk_dir: Path | None,
+                       timeout: int = 90) -> str:
+    """Probe the EDA image ONCE for a modern external CDCL `sat` backend
+    (kissat/cadical) and return the name to pass to `sat -select-solver`, or ""
+    to use the built-in ezMiniSAT.
+
+    SELF-VALIDATING: for each candidate it runs a trivial KNOWN-SAT prove through
+    the WHOLE chain — `assign y = a; sat -prove y 0 -select-solver <name> -set a
+    1` must find a model (y=1≠0). It selects a solver ONLY when that prove
+    returns `model found: FAIL!`, which is true iff (a) the fork registers the
+    solver, (b) its binary is on PATH, and (c) the backend returns the correct
+    verdict end-to-end. A stale image (solver unknown → `Unknown SAT solver`), a
+    missing binary, or a backend regression therefore ALL fall back to the
+    built-in engine with NO change in grading — so wiring the external solver can
+    never itself turn a real detection into an abort. Result is cached per image.
+    chip/PDK/vendor-AGNOSTIC — no design/library knowledge. Env override
+    VIBEIC_ATPG_SAT_SOLVER: auto (default) | kissat | cadical | minisat | none."""
+    pref = (os.environ.get("VIBEIC_ATPG_SAT_SOLVER") or "auto").strip().lower()
+    if pref in ("none", "minisat", "builtin", "off"):
+        return ""
+    if pref in ("auto", ""):
+        candidates = list(_ATPG_SAT_SOLVER_PREFERENCE)
+    else:
+        candidates = [pref]
+    key = (_far.DOCKER_IMAGE, tuple(candidates))
+    if key in _SAT_SOLVER_PROBE_CACHE:
+        return _SAT_SOLVER_PROBE_CACHE[key]
+    chosen = ""
+    for name in candidates:
+        probe = (
+            "printf 'module p(input a, output y); assign y = a; endmodule\\n' "
+            "> /tmp/_vibeic_satprobe.v 2>/dev/null; "
+            "yosys -p 'read_verilog /tmp/_vibeic_satprobe.v; prep -top p; "
+            f"sat -prove y 0 -select-solver {name} -set a 1' 2>&1"
+        )
+        try:
+            _ec, out, err = _run_in_docker(project, probe,
+                                           timeout=min(int(timeout), 120),
+                                           pdk_dir=pdk_dir)
+        except Exception:
+            continue
+        blob = (out or "") + "\n" + (err or "")
+        if "Unknown SAT solver" in blob:
+            continue                       # stale image: backend not registered
+        if "model found: FAIL" in blob:    # known-SAT prove detected end-to-end
+            chosen = name
+            break
+    _SAT_SOLVER_PROBE_CACHE[key] = chosen
+    return chosen
+
+
 def _build_batch_script(flat_rel: str, miter_rel: str, top: str,
                         faults: list, prim_in_names: list[str],
-                        sat_timeout: int = DEFAULT_PER_FAULT_SAT_TIMEOUT) -> str:
+                        sat_timeout: int = DEFAULT_PER_FAULT_SAT_TIMEOUT,
+                        select_solver: str = "") -> str:
     """One Yosys script that solves every fault in the sample in a single
     process. #154 FLATTEN-ONCE: the faulty core copy is created and the 3×-core
     2-frame miter is resolved + flattened EXACTLY ONCE, then snapshotted with
@@ -757,6 +827,14 @@ def _build_batch_script(flat_rel: str, miter_rel: str, top: str,
     let the parser tell a fault that was NEVER REACHED (batch killed by the wall
     budget before its block) from one that was attempted-but-undecided."""
     show = " ".join(f"-show {n}" for n in prim_in_names)
+    # #ATPG-SAT: route the per-fault prove at a modern external CDCL solver
+    # (kissat/cadical) wired into the fork's `sat` command when the image
+    # supports it. The built-in ezMiniSAT (MiniSAT-2.2) times out (ABORT) on the
+    # ~5.5e5-var 2-frame LOC miter that kissat decides in seconds; those aborts
+    # were counted UNDETECTED and collapsed coverage. `-select-solver` is EMPTY
+    # → built-in engine (unchanged behaviour) when the probe found no external
+    # backend, so this is a no-op fallback on an image without the backend.
+    sel = f"-select-solver {select_solver} " if select_solver else ""
     L = [
         f"read_verilog /work/{flat_rel} /work/{miter_rel}",
         # Build + flatten the faulty miter ONCE, then snapshot.
@@ -776,7 +854,7 @@ def _build_batch_script(flat_rel: str, miter_rel: str, top: str,
             f"connect -nomap -set fb.{net} {stuck}",
             f"log VIBEICTDF {raw} {kind}",
             f"sat -prove trig 0 -timeout {int(sat_timeout)} "
-            f"-set f1.{net} {init} {show}".rstrip(),
+            f"{sel}-set f1.{net} {init} {show}".rstrip(),
         ]
     return "\n".join(L) + "\n"
 
@@ -1085,9 +1163,17 @@ def run_tdf_atpg(project: Path, netlist_rel: str, cut_rel: str, liberty: str,
     miter_text = build_loc_miter(_top, prim_in, prim_out, pairs)
     (project / miter_rel).write_text(miter_text)
 
+    # Select a modern external CDCL `sat` backend (kissat/cadical) if the fork
+    # image provides one — this is the fix for the MiniSAT-timeout aborts that
+    # collapsed at-speed coverage. Self-validating + fail-safe to the built-in
+    # engine (see _detect_sat_solver). Probed ONCE, reused by both batches.
+    select_solver = _detect_sat_solver(project, pdk_dir, timeout=min(timeout, 120))
+    base["sat_solver"] = select_solver or "minisat (built-in ezSAT)"
+
     def _run_batch(sample, wall, tag):
         batch = _build_batch_script(flat_rel, miter_rel, _top, sample,
-                                    prim_in_names, sat_timeout=sat_timeout)
+                                    prim_in_names, sat_timeout=sat_timeout,
+                                    select_solver=select_solver)
         batch_rel = f"phase2/stage2/dft/tdf/_tdf_{tag}.ys"
         (project / batch_rel).write_text(batch)
         t0 = time.time()
