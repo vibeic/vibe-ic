@@ -267,12 +267,37 @@ def role_scope_gate(role: Optional[str],
 # --------------------------------------------------------------------------
 # Version bump + marketplace equality, via version_bump_monotonic_check.evaluate.
 # --------------------------------------------------------------------------
+# Paths whose contents are SHIPPED to users by `/plugin update` (or that declare
+# the shipped version). A change confined outside these ships nothing, so demanding
+# a version bump for it is meaningless.
+_SHIPPED_PREFIXES = ("vibe-ic-marketplace/plugins/", "mcp/")
+_MANIFEST_SUFFIX = ".claude-plugin/marketplace.json"
+
+
+def ships_to_users(files: List[str]) -> bool:
+    """True when the change-set touches anything `/plugin update` delivers."""
+    return any(f.startswith(_SHIPPED_PREFIXES) or f.endswith(_MANIFEST_SUFFIX)
+               for f in files)
+
+
 def version_bump_gate(cur: Optional[str], prev: Optional[str],
                       market: Optional[str],
-                      version_by_gatekeeper: bool = False) -> GateResult:
+                      version_by_gatekeeper: bool = False,
+                      files: Optional[List[str]] = None) -> GateResult:
     if cur is None and prev is None:
         return GateResult("version_bump_monotonic_check", -1,
                           "skipped — no version change in diff")
+    # DATA-ONLY change-set (benchmark-data/, docs/, tools/, CI): ships nothing via
+    # `/plugin update`, so a bump would only push a spurious cache invalidation to
+    # every user for a change that cannot affect them — and main's own convention
+    # lands these as unversioned `docs(benchmark-data): …` commits. Without this,
+    # a benchmark-data-only PR could NEVER pass this gate, which pressures the
+    # maintainer into either bypassing the gate or inflating the version. Both are
+    # worse than scoping the rule to what it is actually about.
+    if files is not None and not ships_to_users(files):
+        return GateResult("version_bump_monotonic_check", -1,
+                          "skipped — change-set ships nothing to users "
+                          "(no plugin/ or mcp/ or manifest path); version bump N/A")
     # AUTHORING PR under the gatekeeper-assigns-versions doctrine (2026-06-17):
     # field/core PRs carry NO version bump (cur==prev) — two PRs in flight that
     # each self-bumped would COLLIDE; only the serialized gatekeeper, landing
@@ -639,7 +664,7 @@ def review(base: str, head: str, *,
     scope_gate, is_reject = role_scope_gate(role, files)
     gates.append(scope_gate)
 
-    vb = version_bump_gate(cur, prev, market, version_by_gatekeeper)
+    vb = version_bump_gate(cur, prev, market, version_by_gatekeeper, files)
     gates.append(vb)
 
     gates.append(marketplace_sync_gate(plugin_root))
