@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 915
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 915)
+- **Total programs (excluding helpers / shims):** 916
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 916)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 906 |
+| `any` | 907 |
 
 ## Alphabetical listing
 
@@ -516,6 +516,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `memory_read_pipeline_check` | any | — | Registered-read memory modules must |
 | `memory_synth` | any | — | a DETERMINISTIC solver for the CVDP parameterized MEMORY |
 | `metadata_content_substance_check` | any | — | guard against empty / near-empty |
+| `metal_fill_config_gen` | any | — | derive a per-layer density metal-fill config from a PDK's |
 | `metal_fill_density_check` | any | — | Verify metal fill was inserted and density is within bounds. |
 | `metal_fill_emit` | any | — | per-layer density metal fill on the streamed GDS. |
 | `metal_layer_density_check` | any | — | PER-LAYER metal-density sign-off gate for tapeout. |
@@ -987,7 +988,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (906 programs)
+### `any` (907 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1474,6 +1475,7 @@ _(no programs in this group)_
 - `memory_read_pipeline_check` — Registered-read memory modules must
 - `memory_synth` — a DETERMINISTIC solver for the CVDP parameterized MEMORY
 - `metadata_content_substance_check` — guard against empty / near-empty
+- `metal_fill_config_gen` — derive a per-layer density metal-fill config from a PDK's
 - `metal_fill_density_check` — Verify metal fill was inserted and density is within bounds.
 - `metal_fill_emit` — per-layer density metal fill on the streamed GDS.
 - `metal_layer_density_check` — PER-LAYER metal-density sign-off gate for tapeout.

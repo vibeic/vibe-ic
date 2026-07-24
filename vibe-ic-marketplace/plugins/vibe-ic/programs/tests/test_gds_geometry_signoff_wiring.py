@@ -119,7 +119,7 @@ def test_runner_invokes_the_density_fill_at_streamout():
     assert "def _density_metal_fill(" in src
     assert "metal_fill_emit.py" in src
     # Called on BOTH streamout paths (Magic returns early; KLayout falls through)
-    assert src.count("_density_metal_fill(project, top, pdk, gds_out)") == 2, \
+    assert src.count("_density_metal_fill(project, top, pdk, gds_out, container)") == 2, \
         "density fill must run on both the Magic and the KLayout streamout path"
 
 

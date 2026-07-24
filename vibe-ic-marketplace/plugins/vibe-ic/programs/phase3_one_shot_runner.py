@@ -12451,8 +12451,52 @@ def _klayout_restore_port_labels(project: Path, top: str, pdk: PdkConfig,
     return False, f"port-label restore NONFATAL: rc={rc} {(out + err)[-300:]}"
 
 
+def _derive_metal_fill_density(pdk: "PdkConfig",
+                               container: str) -> Optional[Dict[str, Any]]:
+    """Chip-AGNOSTIC per-layer density metal-fill config, synthesized from the PDK's OWN
+    declared files (streamout layermap + tech LEF + sign-off DRC deck) when no bridge
+    declares one — so metal fill runs for EVERY PDK, not only a hand-configured one.
+    Every layer number / spacing / density floor is READ from the PDK; nothing here is a
+    vendor/chip literal. Best-effort: any missing input -> None (DISCLOSED skip, never a
+    regression)."""
+    try:
+        from . import metal_fill_config_gen as _mfcg  # type: ignore
+    except Exception:
+        try:
+            import metal_fill_config_gen as _mfcg  # type: ignore
+        except Exception:
+            return None
+    lm = getattr(pdk, "lefdef_layermap", None)
+    tl = getattr(pdk, "tech_lef", None)
+    deck = getattr(pdk, "drc_deck", None)
+    if not (lm and tl and deck):
+        return None
+
+    def _cat(paths):
+        try:
+            rc, out, err = _docker_exec(container,
+                                        "cat " + " ".join(paths) + " 2>/dev/null")
+        except Exception:
+            return ""
+        return out or ""
+
+    deck_dir = str(deck).rsplit("/", 1)[0]
+    layermap_text = _cat([str(lm)])
+    techlef_text = _cat([str(tl)])
+    deck_text = _cat([str(deck), deck_dir + "/*.rb",
+                      deck_dir + "/rule_decks/*.rb", deck_dir + "/generic_layers.rb"])
+    if not (layermap_text.strip() and techlef_text.strip() and deck_text.strip()):
+        return None
+    try:
+        return _mfcg.build_metal_fill_config(
+            layermap_text, techlef_text, deck_text,
+            metal_prefix=(getattr(pdk, "metal_prefix", None) or "metal"))
+    except Exception:
+        return None
+
+
 def _density_metal_fill(project: Path, top: str, pdk: PdkConfig,
-                        gds_path: Path) -> Tuple[bool, str]:
+                        gds_path: Path, container: Optional[str] = None) -> Tuple[bool, str]:
     """Per-layer DENSITY-TARGETED metal fill on the streamed GDS.
 
     Delegates to the `metal_fill_emit` plugin program, which drives the KLayout
@@ -12469,24 +12513,45 @@ def _density_metal_fill(project: Path, top: str, pdk: PdkConfig,
     siblings: any failure leaves the GDS untouched and is DISCLOSED in the step
     note. Config-gated — no `metal_fill_density` config, no fill and no claim.
     """
-    if not pdk.metal_fill_density:
+    mfd = pdk.metal_fill_density
+    derived = False
+    if not mfd and container:
+        # No bridge-declared config: synthesize one chip-AGNOSTICALLY from the PDK's own
+        # declared files so per-layer density metal fill runs for EVERY PDK (e.g. the
+        # open gf180mcuD / sky130A / ihp-sg13g2, none of which ship a bridge config).
+        mfd = _derive_metal_fill_density(pdk, container)
+        derived = mfd is not None
+    if not mfd:
         return False, "no metal_fill_density config"
     if not gds_path.is_file():
         return False, "no GDS to fill"
-    if not (pdk.metal_fill_density or {}).get("layers"):
+    if not (mfd or {}).get("layers"):
         return False, "metal_fill_density config has no layers"
     prog = Path(__file__).resolve().parent / "metal_fill_emit.py"
     if not prog.is_file():
         return False, "metal_fill_emit program not found"
     pnr_dir = _pl.pnr_dir(project)
     cfg = pnr_dir / "metal_fill_density_cfg.json"
-    cfg.write_text(json.dumps(pdk.metal_fill_density, indent=2))
+    cfg.write_text(json.dumps(mfd, indent=2))
+    # metal_fill_emit.py runs as a bare HOST python process (not inside the
+    # EDA container) and resolves its own KLayout runner via `_klayout_launch`,
+    # which looks for a *container named* $VIBEIC_EDA_CONTAINER (default
+    # "vibeic-eda") when no KLayout is on the host PATH. A per-run container
+    # (e.g. this runner's own `--container` arg) has a DIFFERENT generated
+    # name, so without this the emitter silently falls back to the wrong
+    # (usually absent) default container and DISCLOSED_SKIPs with "no KLayout
+    # runner available" even though KLayout is right there in THIS run's own
+    # container. Passing it through here is what makes the emitter reach the
+    # SAME container the rest of the flow (DRC/LVS/STA) already uses.
+    run_env = dict(os.environ)
+    if container:
+        run_env["VIBEIC_EDA_CONTAINER"] = container
     try:
         cp = subprocess.run(
             [sys.executable, str(prog), str(project),
              "--gds", str(gds_path), "--config", str(cfg),
              "--cell", top, "--in-place"],
-            capture_output=True, text=True, timeout=3600)
+            capture_output=True, text=True, timeout=3600, env=run_env)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, f"density fill NONFATAL: {exc}"
     if cp.returncode != 0:
@@ -12495,7 +12560,8 @@ def _density_metal_fill(project: Path, top: str, pdk: PdkConfig,
         tail = ((cp.stdout or "") + (cp.stderr or "")).strip().splitlines()
         return False, ("density fill did NOT complete: "
                        + (tail[0][:200] if tail else f"rc={cp.returncode}"))
-    return True, "per-layer density fill reached target on every layer"
+    return True, ("per-layer density fill reached target on every layer"
+                  + (" (config derived chip-AGNOSTIC from PDK files)" if derived else ""))
 
 
 def _max_captable_c(pdk: "PdkConfig", container: str) -> str:
@@ -13157,7 +13223,7 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
                                             gds_out)
         # Per-layer density fill BEFORE the density checks / sign-off DRC read
         # this GDS. Config-gated + NONFATAL; the note always discloses.
-        dfill_ok, dfill_note = _density_metal_fill(project, top, pdk, gds_out)
+        dfill_ok, dfill_note = _density_metal_fill(project, top, pdk, gds_out, container)
         return StepResult(
             "gds", "PASS", time.time() - t0,
             f"gds={gds_out.name} size={gds_out.stat().st_size} "
@@ -13272,7 +13338,7 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     # window and tops it up to the foundry target, after the fixed dummy-fill
     # PATTERN above and before the density checks / sign-off DRC consume this
     # GDS. Config-gated + NONFATAL; the note always discloses the outcome.
-    dfill_ok, dfill_note = _density_metal_fill(project, top, pdk, gds_out)
+    dfill_ok, dfill_note = _density_metal_fill(project, top, pdk, gds_out, container)
     # v1.3.91 — restore top PORT text labels + VDD/VSS rail markers LAST (after
     # merge/heal/fill so the labels/markers land on the final geometry): makes
     # the KLayout-streamed GDS LVS-able by the geometric extractor. Config-gated
