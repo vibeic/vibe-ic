@@ -9883,6 +9883,39 @@ def _v1_5_37a_multicorner_pnr_block(project: "Path", pdk: "PdkConfig",
     return "\n".join(lines)
 
 
+def _corner_qualify_extra_libs(macro_libs_tcl: str,
+                               corner_liberty_block: Optional[str]) -> str:
+    """STA-0103 GUARD (chip/PDK-AGNOSTIC) — under multi-scene (multi-corner)
+    analysis OpenSTA/OpenROAD reject a BARE ``read_liberty <lib>`` with
+    ``[ERROR STA-0103] -scene keyword required with multi-scene analysis``.
+    When pnr.tcl emitted a multi-corner ``define_corners ...`` stanza, every
+    EXTRA / hard-macro liberty (which typically ships a SINGLE timing view)
+    must be read into EACH defined corner so the macro is timed in all scenes,
+    else the bare read aborts pnr.tcl before floorplan. With no corner stanza
+    (single-corner PnR) or <2 corners the input is returned UNCHANGED
+    (byte-identical to the pre-fix emission). Corner names come from the
+    generated ``define_corners`` line; lib paths come from the caller's own
+    ``read_liberty`` lines; lines already carrying an explicit
+    ``-corner``/``-scene`` are left untouched. No design/vendor literal."""
+    if (not macro_libs_tcl or not macro_libs_tcl.strip()
+            or not corner_liberty_block):
+        return macro_libs_tcl
+    _dc = next((ln for ln in corner_liberty_block.splitlines()
+                if ln.strip().startswith("define_corners")), "")
+    corners = _dc.split()[1:]
+    if len(corners) < 2:
+        return macro_libs_tcl
+    out: List[str] = []
+    for ln in macro_libs_tcl.splitlines():
+        m = re.match(r"^\s*read_liberty\s+(\S+)\s*$", ln)
+        if m:
+            path = m.group(1)
+            out.extend(f"read_liberty -corner {cn} {path}" for cn in corners)
+        else:
+            out.append(ln)
+    return "\n".join(out)
+
+
 def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         macro_lefs_tcl: str, liberty_c: str,
                         macro_libs_tcl: str, netlist_c: str, top: str,
@@ -10010,6 +10043,12 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
     # byte-identical single tt read_liberty when the caller passed none.
     _corner_lib_stanza = (corner_liberty_block if corner_liberty_block
                           else f"read_liberty {liberty_c}")
+    # STA-0103 GUARD — corner-qualify extra/macro libs so a bare
+    # read_liberty is never emitted under a multi-scene (multi-corner)
+    # define_corners stanza (else OpenSTA aborts pnr.tcl before
+    # floorplan). No-op for single-corner PnR (byte-identical).
+    macro_libs_tcl = _corner_qualify_extra_libs(macro_libs_tcl,
+                                                corner_liberty_block)
     return f"""
 {_thread_block}read_lef {tech_lef_c}
 read_lef {cell_lef_c}
