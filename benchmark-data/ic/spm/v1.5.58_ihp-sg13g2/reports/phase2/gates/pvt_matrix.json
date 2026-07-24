@@ -1,0 +1,11 @@
+{
+  "program": "pvt_matrix_check",
+  "version": "1.0.0",
+  "verdict": "MULTI_CORNER",
+  "corner_count": 3,
+  "labels": [
+    "FF",
+    "SS",
+    "TT"
+  ]
+}

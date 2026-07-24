@@ -1,9 +1,0 @@
-{
-  "status": "PASS",
-  "result": "PASS",
-  "finding": "LVS_MATCH",
-  "message": "netgen LVS: circuits match uniquely (layout chip_top extracted via Magic ext2spice vs gate netlist chip_top_pnr.v).",
-  "generated_by": "phase3_one_shot_runner:_run_extraction_lvs (#477)",
-  "lvs_report": "reports/phase3/lvs.rpt",
-  "ext2spice_warning": null
-}
