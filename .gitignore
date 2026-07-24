@@ -102,3 +102,10 @@ benchmark-data/ic/*/clean_run_*/
 !benchmark-data/ic/*/clean_run_*/reports/
 # Vendored upstream benchmark datasets — large, and not ours to redistribute.
 benchmark-data/datasets/
+
+# --- benchmark-data 收斂證據的 physical 產物（2026-07-25）---
+# 小 cell 的 GDS/DEF/SPEF 只有 KB-MB（spm GDS 最大 1.2MB），該進 git 讓交付包可從
+# netlist 重建到 GDS。大 die 的大檔（>50MB）由 benchmark_evidence_structure_check 的
+# size-guard 擋、改走 git-lfs / GitHub Release（sha256 存 MANIFEST）。
+!benchmark-data/ic/**/*.gds
+!benchmark-data/ic/**/*.def
