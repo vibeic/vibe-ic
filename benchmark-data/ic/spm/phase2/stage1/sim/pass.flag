@@ -1,5 +1,0 @@
-PASS: spm functional equivalence vs golden x*y mod 2^size
-tb=tb_spm_golden.v engine=iverilog
-vectors: 9 corners + 12000 random, size=32 (also verified size=8/16)
-result: GOLDEN_PASS at latency=1, LSB-first; 0 mismatches
-evidence: phase2/stage1/sim/sim_spm_golden.log

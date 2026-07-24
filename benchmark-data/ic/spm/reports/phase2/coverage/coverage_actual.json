@@ -1,9 +1,0 @@
-{
-  "verdict": "SKIPPED-CONDITION",
-  "reason": "no reference-TB transcript for THIS project — a coverage verdict cannot cite scenarios that never ran (#436)",
-  "design_identity": {
-    "design": "spm",
-    "ic_name": "spm",
-    "top": "spm"
-  }
-}
