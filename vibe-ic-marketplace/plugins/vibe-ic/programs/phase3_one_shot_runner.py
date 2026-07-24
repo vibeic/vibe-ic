@@ -1415,15 +1415,30 @@ def _liberty_drv_limits(liberty_path: str, container: str = "") -> Dict[str, obj
 
 def _drv_constraints_sdc_block(slew_ns: Optional[float],
                                cap_pf: Optional[float],
-                               note: str = "") -> str:
-    """Render the DRV (`set_max_transition` / `set_max_capacitance`) SDC block.
+                               note: str = "",
+                               max_fanout: Optional[int] = None,
+                               fanout_note: str = "") -> str:
+    """Render the DRV (`set_max_transition` / `set_max_capacitance` /
+    `set_max_fanout`) SDC block.
 
     Emits a constraint line ONLY for a value that was actually derived from the
     liberty (§4.05: never a fabricated limit). When neither is available (or the
     caller passes only a ``note``) an honest disclosure comment is emitted and no
     fabricated constraint. Returns "" when there is nothing to say (keeps the
-    pre-DRV SDC byte-identical for callers that pass no DRV args)."""
-    if slew_ns is None and cap_pf is None and not note:
+    pre-DRV SDC byte-identical for callers that pass no DRV args).
+
+    ``max_fanout`` (ORGANIC sha256×sky130A / #SS-SETUP) — when the DESIGN's OWN
+    L9 floorplan/synthesis spec DECLARES a `SYNTH_MAX_FANOUT` cap, emit
+    `set_max_fanout` so `repair_design` SPLITS high-fanout nets into buffer
+    trees. A high-fanout net driven by a min-drive cell is benign at the typ
+    corner but its slew EXPLODES at the ss sign-off corner (weaker drive over
+    the same load) — the exact single-corner-closure confounder above. Unlike a
+    slew/cap limit, a fanout cap is a HARD structural count (immune to the
+    placement-stage parasitic under-estimate), so repair splits the net whether
+    or not the estimate saw the slew. Emitted ONLY when the design declares the
+    value (chip-AGNOSTIC; no fabricated cap for a design that declares none)."""
+    if (slew_ns is None and cap_pf is None and not note
+            and max_fanout is None):
         return ""
     lines = [
         "",
@@ -1438,7 +1453,11 @@ def _drv_constraints_sdc_block(slew_ns: Optional[float],
         lines.append(f"set_max_transition {slew_ns} [current_design]")
     if cap_pf is not None:
         lines.append(f"set_max_capacitance {cap_pf} [current_design]")
-    if slew_ns is None and cap_pf is None:
+    if max_fanout is not None:
+        if fanout_note:
+            lines.append(f"# {fanout_note}")
+        lines.append(f"set_max_fanout {max_fanout} [current_design]")
+    if slew_ns is None and cap_pf is None and max_fanout is None:
         lines.append("# (no PDK liberty DRV limit resolved; per-pin liberty "
                      "max_capacitance still governs the resizer — no fabricated "
                      "design-wide limit)")
@@ -1684,7 +1703,25 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
     # TAPEOUT-SIGNOFF (DRV) — design-rule constraints derived from the PDK
     # liberty (never a chip/PDK literal). Emitted only when the caller resolved
     # them; byte-identical to the pre-DRV SDC when no DRV args are supplied.
-    sdc_text += _drv_constraints_sdc_block(drv_slew_ns, drv_cap_pf, drv_note)
+    #
+    # ORGANIC sha256×sky130A — additionally honor a `SYNTH_MAX_FANOUT` cap the
+    # DESIGN's OWN L9 synthesis-constraints spec declares. Emitting
+    # `set_max_fanout` makes repair_design split high-fanout nets, killing the
+    # ss-corner slew blow-up an uncapped fanout net causes. Resolved here (the
+    # builder already reads project docs) so no call site changes; None when the
+    # design declares no cap → SDC byte-identical to before (§4.05 no-fabricate).
+    _l9_fanout = _l9_declared_max_fanout(project)
+    _fanout_note = ""
+    if _l9_fanout is not None:
+        _fanout_note = (
+            f"SYNTH_MAX_FANOUT={_l9_fanout} — L9-declared reference fanout cap; "
+            "set_max_fanout makes repair_design split high-fanout nets so the "
+            "ss-corner setup slew does not explode (a fanout cap is a hard "
+            "structural count, immune to the placement-stage parasitic "
+            "under-estimate).")
+    sdc_text += _drv_constraints_sdc_block(
+        drv_slew_ns, drv_cap_pf, drv_note,
+        max_fanout=_l9_fanout, fanout_note=_fanout_note)
     return sdc_text
 
 
@@ -7249,6 +7286,15 @@ _L9_PL_DENSITY_RE = re.compile(
 _L9_FP_CORE_UTIL_RE = re.compile(
     r"FP_CORE_UTIL`?\s*\|\s*\*{0,2}\s*(\d+(?:\.\d+)?)\s*%?\s*\*{0,2}\s*\|",
     re.IGNORECASE)
+# ORGANIC sha256×sky130A — L9's synthesis-constraints table declares the
+# reference `SYNTH_MAX_FANOUT` fanout cap in the SAME `| `KEY` | **VALUE** |`
+# key-value-row form (e.g. `| `SYNTH_MAX_FANOUT` | **8** | reference … |`). Only
+# a positive integer immediately after the key counts (a "工具預設 / plugin
+# decides" cell has no adjacent number → no match → None → caller keeps the
+# default, no fabricated cap).
+_L9_SYNTH_MAX_FANOUT_RE = re.compile(
+    r"SYNTH_MAX_FANOUT`?\s*\|\s*\*{0,2}\s*(\d+)\s*\*{0,2}\s*\|",
+    re.IGNORECASE)
 
 
 def _l9_declared_die_util(project: Path) -> Optional[float]:
@@ -7285,6 +7331,42 @@ def _l9_declared_die_util(project: Path) -> Optional[float]:
                     continue
                 if 0.0 < pct <= 100.0:
                     return pct / 100.0
+    return None
+
+
+def _l9_declared_max_fanout(project: Path) -> Optional[int]:
+    """Return the design's L9-declared `SYNTH_MAX_FANOUT` cap as a positive int,
+    or None when L9 declares none. Reads ONLY the L9 constraints/floorplan doc
+    (input docs or the generated L9) — a blind-legal design input, same source +
+    §4.05 no-fabricate discipline as `_l9_declared_die_util`.
+
+    Consumed by the auto-silicon SDC builder to emit `set_max_fanout`, which
+    makes `repair_design` split high-fanout nets into buffer trees. That directly
+    kills the ss-corner setup blow-up an uncapped fanout net causes: a net driven
+    by a min-drive cell to a large fanout has a benign slew at the typ corner but
+    an EXPLODING slew at the ss sign-off corner, and the slew degradation
+    cascades multiplicatively down the path. A fanout cap is a HARD structural
+    count — unlike a slew/cap limit it does NOT depend on the (placement-stage,
+    optimistic) parasitic estimate, so the net is split regardless. Only a
+    positive integer counts; 0 / absent → None → caller keeps the default (no
+    fabricated cap). chip-AGNOSTIC: pure L9-token parse, no chip literal."""
+    roots = [project / "input" / "docs", _pl.generated_docs_dir(project)]
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for p in (sorted(root.glob("L9*")) + sorted(root.glob("*constraint*"))
+                  + sorted(root.glob("*floorplan*"))):
+            try:
+                txt = p.read_text(errors="ignore")
+            except OSError:
+                continue
+            for m in _L9_SYNTH_MAX_FANOUT_RE.finditer(txt):
+                try:
+                    fo = int(m.group(1))
+                except ValueError:
+                    continue
+                if fo > 0:
+                    return fo
     return None
 
 
