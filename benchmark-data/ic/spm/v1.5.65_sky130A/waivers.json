@@ -1,45 +1,47 @@
 {
   "_schema_version": "1",
-  "_comment": "Waiver register for spm x sky130A (plugin v1.5.65, run 2026-07-24). Every deferred step carries evidence + ticket id + review_required:true — a waiver is deferred work, not a free PASS. Authored 2026-07-25 from the run's orchestrator/audit records (addresses review finding F2).",
-  "waivers": [
+  "_comment": "Auto-materialized by waivers_materialize.py from the flow's MACHINERY-SANCTIONED ENV_UNAVAILABLE auto-waivers (pdk-substitution / fpga-board cap-gap). Each entry carries a sanctioned tier approver + review_required:true; NONE is self-approved and NONE is a human-judgment waiver (those stay in waivers.json.template). review_required is OPEN WORK — a human closes it at foundry sign-off; this is not a green PASS.",
+  "_generator": "waivers_materialize.py",
+  "waived_steps": [
     {
-      "step": "rtl_gen",
-      "phase": "2",
-      "verdict_tier": "WAIVED",
-      "rationale": "IC class 'digital_arithmetic_primitive' registers rtl_gen=null — the deterministic runner has no RTL generator for this class and hands authoring to the AI (skill spec-to-rtl) inside the runner pipeline. The authored RTL (carry-save LSB-first bit-serial) passed every downstream gate (lint, sim, synth, LEC).",
-      "evidence": [
-        "phase2/stage1/rtl/spm.v",
-        "reports/orchestrator/phase2_one_shot.json#steps[name=rtl_gen]",
-        "reports/lec.json"
-      ],
-      "ticket": "TAPEOUT-SPM-SKY130A-RTLGEN",
+      "id": 39,
+      "reason": "ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner HONESTLY self-reports a deliberate FPGA skip (reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, sof_present=false) — no DE10-class board-pin contract for this IC class and/or no Quartus on host. The on-board .sof (early-prototype AND final sign-off) is DEFERRED to board bring-up (NOT executed-PASS) [ticket=fpga-board-prototype-capgap-v1.0.18, review_required=True, cap:fpga_board_prototype]",
+      "approver": "field-agent-attest (fpga-board cap-gap tier)",
+      "ticket": "fpga-board-prototype-capgap-v1.0.18",
+      "verdict_tier": "ENV_UNAVAILABLE",
       "review_required": true,
-      "reviewer_action": "IC-expert review of the AI-authored spm.v against L1-L9 docs before tapeout release."
+      "evidence": [
+        "reports/phase2/fpga/quartus_map_audit.json"
+      ],
+      "_env_unavailable": true,
+      "_fpga_skip": true,
+      "auto_synthesized": true,
+      "_waiver_condition": {
+        "kind": "step_did_not_execute",
+        "step": "",
+        "run_id": "reports/orchestrator/phase3_one_shot.json:mtime=1784934733502525385",
+        "note": "This waiver is valid ONLY while the step could not run. If a later run EXECUTES the step, the waiver is REFUSED and the step's real verdict stands."
+      }
     },
     {
-      "step": "final_audit",
-      "phase": "2",
-      "verdict_tier": "WAIVED",
-      "rationale": "Analog track (A1-A9) not run: spm is a pure-digital IC and the run was dispatched with --skip-analog. Recorded as WAIVED rather than N/A so the deferral is explicit.",
-      "evidence": [
-        "reports/orchestrator/phase2_one_shot.json#steps[name=final_audit]"
-      ],
-      "ticket": "TAPEOUT-SPM-SKY130A-ANALOG",
+      "id": 6,
+      "reason": "ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner HONESTLY self-reports a deliberate FPGA skip (reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, sof_present=false) — no DE10-class board-pin contract for this IC class and/or no Quartus on host. The on-board .sof (early-prototype AND final sign-off) is DEFERRED to board bring-up (NOT executed-PASS) [ticket=fpga-board-prototype-capgap-v1.0.18, review_required=True, cap:fpga_board_prototype]",
+      "approver": "field-agent-attest (fpga-board cap-gap tier)",
+      "ticket": "fpga-board-prototype-capgap-v1.0.18",
+      "verdict_tier": "ENV_UNAVAILABLE",
       "review_required": true,
-      "reviewer_action": "Confirm pure-digital classification (ic_class.json) — no analog blocks exist to verify."
-    },
-    {
-      "step": "fpga_on_board_verify",
-      "phase": "2",
-      "verdict_tier": "WAIVED",
-      "rationale": "No DE10-class board-pin contract for this class: verification_track='generic_full_stack', half_duplex_bus=False — the AID half-duplex reference TB cannot bind this interface family, so on-board verification is deferred to board bring-up rather than executed.",
       "evidence": [
-        "reports/phase2/fpga/on_board_pass.json",
-        "reports/phase2/fpga/on_board_attestation.json"
+        "reports/phase2/fpga/quartus_map_audit.json"
       ],
-      "ticket": "TAPEOUT-SPM-SKY130A-FPGA",
-      "review_required": true,
-      "reviewer_action": "If silicon shuttle is planned, run a board-level bring-up on the synthesized netlist before release."
+      "_env_unavailable": true,
+      "_fpga_skip": true,
+      "auto_synthesized": true,
+      "_waiver_condition": {
+        "kind": "step_did_not_execute",
+        "step": "",
+        "run_id": "reports/orchestrator/phase3_one_shot.json:mtime=1784934733502525385",
+        "note": "This waiver is valid ONLY while the step could not run. If a later run EXECUTES the step, the waiver is REFUSED and the step's real verdict stands."
+      }
     }
   ]
 }
