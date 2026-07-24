@@ -1,6 +1,6 @@
 # Benchmark IC campaign — open-PDK IC×PDK matrix status
 
-_Last updated: 2026-07-24 (2 of 12 cells converged), plugin v1.5.65. Unit = one (IC × PDK) cell — the
+_Last updated: 2026-07-24 (2 of 12 cells converged), plugin v1.5.66. Unit = one (IC × PDK) cell — the
 same IC on a different PDK is a distinct result. Status is independently
 re-derived from raw run artifacts (GDS, DRC/LVS/STA reports), never from a
 run's own RESULT.md/AGENT_REPORT.md alone. This tracks the OPEN-PDK matrix
@@ -11,17 +11,17 @@ and is not part of this table._
 | IC × PDK | Status | Residual |
 |---|---|---|
 | spm × IHP-SG13G2 | **PASS_WITH_WAIVERS** | None (foundry/board-stage waivers only) — see `ic/spm/ihp-sg13g2/RESULT.md` |
-| spm × sky130A | **PASS_WITH_WAIVERS** | None — see `ic/spm/sky130A_20260724/RESULT.md`. (An earlier v1.5.60 run of this same IC×PDK showed an equivalence-check + marginal-DRV residual; a fresh v1.5.65 run converged cleanly — see that RESULT.md for the full before/after.) |
-| spm × GF180MCU | FAIL | DFT at-speed ATPG residual on this PDK's synthesis path; Tapeout-checklist DRC follow-up |
-| sha256 × sky130A | FAIL | Post-route STA sign-off setup gap at the slow corner |
-| caravel_user_project × sky130A | FAIL | Multiple stage1-3 residuals under active investigation (a recent PnR repair-escalation fix was found to regress this cell and has been reverted; re-converging) |
-| edge_llm_accel × NanGate45 | FAIL | Re-verification in progress |
-| edge_llm_matmul_accel × NanGate45 | FAIL | Multiple residuals across synthesis/PnR/sign-off; needs re-run on the latest plugin |
-| ibex × sky130A | FAIL | DFT ATPG + physical-verification + tapeout-checklist residuals; needs re-run on the latest plugin (P0 gate fix already landed separately) |
-| opentitan_aes × sky130A | FAIL | Post-route STA setup gap at the sign-off corner; antenna + PERC reliability sign-off pending |
-| subservient × sky130A | FAIL | Needs re-run on the latest plugin (Step P0 + Step 4 fixes landed since this cell's last run) |
-| subservient × GF180MCU | FAIL | Needs re-run on the latest plugin (same fixes as above) |
-| u_hawaii_adc × sky130A | FAIL | Analog corner-sweep (PVT) residual |
+| spm × sky130A | **PASS_WITH_WAIVERS** | None — see `ic/spm/sky130A_20260724/RESULT.md` |
+| spm × GF180MCU | FAIL | A metal-fill/density DRC gap was found and fixed (v1.5.66, `8ee4e441`): 0 sign-off DRC violations, LVS/STA unaffected. A separate, pre-existing residual remains — IR-Drop (Step 24) and EM check (Step 25) reports are missing for this cell. A fresh full re-verification on v1.5.66 is in progress. |
+| sha256 × sky130A | FAIL | Post-route STA sign-off setup gap at the slow corner only (Step 23) — re-confirmed on a fresh v1.5.65 run |
+| caravel_user_project × sky130A | FAIL | A PnR repair-escalation fix (v1.5.64) was found to regress this cell and was reverted (v1.5.65). LVS is now clean again, but a fresh v1.5.65 re-run shows the underlying STA DRV count is currently WORSE than the original baseline (376–423 real violations vs. 4 originally) — root cause not yet found; this cell needs dedicated re-convergence work, not a quick fix. |
+| edge_llm_accel × NanGate45 | FAIL | Re-run in progress on v1.5.65 (long-running: >8h at last check, actively progressing, not stalled) |
+| edge_llm_matmul_accel × NanGate45 | FAIL | Fresh v1.5.65 run confirms multiple residuals spanning P0, synthesis handoff, DFT ATPG, CTS, sign-off STA, physical verification, and tapeout checklist — far from convergence |
+| ibex × sky130A | FAIL | Fresh v1.5.65 run: DFT ATPG (DT1), physical verification (Step 31), and tapeout-checklist residuals (Steps 36/38). Phase 1 SKIPPED for this run (reused-IP design — chip_top authoring needs the AI-in-the-loop path, not a bare deterministic runner) |
+| opentitan_aes × sky130A | FAIL | Re-run in progress on v1.5.65 (long-running: >5h at last check, actively progressing, not stalled) |
+| subservient × sky130A | FAIL | Re-run in progress on v1.5.65 |
+| subservient × GF180MCU | FAIL | Fresh v1.5.65 run: DFT ATPG (DT1), physical verification (Step 31), and tapeout-checklist residuals (Steps 36/38) |
+| u_hawaii_adc × sky130A | FAIL | Analog per-block physical verification (Step A6, DRC+LVS before merge) — required outputs not yet produced; real layout still pending |
 
 ## What "PASS" requires here
 
@@ -34,4 +34,6 @@ a gate that measures something adjacent to the real question and reports it
 as an answer is exactly the failure mode this campaign exists to eliminate —
 including in its own tooling (one PnR repair-escalation fix this session
 passed its own internal check but regressed the real downstream sign-off
-report; it was caught on re-verification and reverted, not shipped).
+report; it was caught on re-verification and reverted, not shipped — see the
+caravel_user_project row above for its honest current state after that
+revert).
