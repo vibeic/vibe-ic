@@ -46,6 +46,27 @@ This protocol fixes that.
    the reference (upstream RTL + L7 golden truth-table), and confirm the produced GDS is
    genuinely producible + production-ready (sign-off targets from L9). Report the cross-check.
 
+## Publishing the converged evidence (program-first)
+
+Once a cell reaches an independently re-derived Overall `PASS` / `PASS_WITH_WAIVERS`,
+its spec→GDSII evidence is published into `benchmark-data/ic/<IC>/v<plugin-version>_<PDK>/`
+by a deterministic, chip-AGNOSTIC program — never hand-assembled:
+
+- `programs/benchmark_evidence_publish.py` STAGES the canonical structure
+  (excludes the gitignored raw geometry `*.gds/*.def/*.spef/*.oas`, emits
+  `phase3/stage4/gds/GDS_MANIFEST.txt` = `<name> <bytes>B sha256:<hash>`, stages the
+  shared `ic/<IC>/input/` once, and **REFUSES to stage a non-converged run**). It
+  stages only — a human commits.
+- `programs/benchmark_evidence_structure_check.py` VALIDATES any published folder
+  (naming `v<ver>_<PDK>` not `clean_run_*`/`pass_*`, required subdirs, a valid
+  `GDS_MANIFEST`, no committed raw geometry, a converged `RESULT.md`). CI runs it
+  diff-scoped (`--changed-since origin/main`) so every future push conforms while
+  pre-existing folders are grandfathered.
+
+The full convention (folder layout, exclusions, the publish/validate commands) is in
+[`benchmark-data/PUBLISHING.md`](../PUBLISHING.md). The `spm` cells
+(`v1.5.58_ihp-sg13g2`, `v1.5.65_sky130A`, `v1.5.66_gf180mcuD`) are the reference shape.
+
 ## IC scope
 - **Primary = small, fully-specifiable, genuinely-generatable IPs** (arithmetic / protocol /
   control blocks: spm, sha256, …) — these measure real generation capability.

@@ -252,6 +252,16 @@ jobs:
         run: |
           python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN_ROOT"
 
+      # benchmark-data evidence structure — enforce the canonical
+      # benchmark-data/ic/<IC>/v<ver>_<PDK>/ layout on ANY evidence folder this
+      # PR adds/modifies, so every FUTURE publish is correct by construction.
+      # Diff-scoped (--changed-since BASE): pre-existing folders are grandfathered
+      # and a plugin-only PR no-ops; fail-open if the base is undeterminable.
+      - name: benchmark-data evidence structure (diff-scoped)
+        run: |
+          python3 "$PROGRAMS/benchmark_evidence_structure_check.py" \
+            --tree benchmark-data --changed-since "${{ steps.base.outputs.sha }}"
+
       # PATCH cadence gate: the FULL both-tree suite is milestone-only (90+ min
       # on a 2-core hosted runner — unusable per-PR). Here we run only the FAST
       # targeted subset that covers this PR's changed files, plus a fixed

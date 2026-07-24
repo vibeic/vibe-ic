@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 916
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 916)
+- **Total programs (excluding helpers / shims):** 918
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 918)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 907 |
+| `any` | 909 |
 
 ## Alphabetical listing
 
@@ -116,6 +116,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `benchmark_clean_room_check` | any | — | clean-room run-dir guard (ORGANIC-20260604). |
 | `benchmark_completeness` | any | — | THIN per-benchmark adapters over the GENERAL |
 | `benchmark_dispatch` | any | — | entry point for /vibe-ic-benchmark. |
+| `benchmark_evidence_publish` | any | — | stage a CONVERGED (IC × PDK) run's evidence |
+| `benchmark_evidence_structure_check` | any | — | CI gate for published benchmark |
 | `benchmark_golden_capture` | any | — | record a HOST-VERIFIED, vibe-ic-AUTHORED solution as |
 | `benchmark_result_md_lint` | any | — | presence-check linter for the |
 | `benchmark_score_cwd_guard` | any | — | assert the host scorer is invoked |
@@ -988,7 +990,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (907 programs)
+### `any` (909 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1080,6 +1082,8 @@ _(no programs in this group)_
 - `benchmark_clean_room_check` — clean-room run-dir guard (ORGANIC-20260604).
 - `benchmark_completeness` — THIN per-benchmark adapters over the GENERAL
 - `benchmark_dispatch` — entry point for /vibe-ic-benchmark.
+- `benchmark_evidence_publish` — stage a CONVERGED (IC × PDK) run's evidence
+- `benchmark_evidence_structure_check` — CI gate for published benchmark
 - `benchmark_golden_capture` — record a HOST-VERIFIED, vibe-ic-AUTHORED solution as
 - `benchmark_result_md_lint` — presence-check linter for the
 - `benchmark_score_cwd_guard` — assert the host scorer is invoked
