@@ -13480,7 +13480,8 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
                 Path(pdk.lefdef_layermap) if pdk.lefdef_layermap else None,
                 Path(pdk.cell_gds) if pdk.cell_gds else None,
                 (Path(pdk.signoff_config_path)
-                 if pdk.signoff_config_path else None))
+                 if pdk.signoff_config_path else None),
+                macro_gds=[Path(_m) for _m in (pdk.macro_gds or [])])
             _errs = [x for x in _f if x.severity == "ERROR"]
             if _errs:
                 return StepResult(
