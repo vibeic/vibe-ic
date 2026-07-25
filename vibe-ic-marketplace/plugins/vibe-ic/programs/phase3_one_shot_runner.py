@@ -13133,6 +13133,106 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
 # `step_signoff_spef_repair` already shipped untouched (never a regression).
 _DRV_ESCALATION_ROUNDS = 3
 
+# Promotion of the wire-length escalation is DISABLED — on evidence, and now
+# for the RIGHT reason (the v1.5.65 reason was a non-comparison; see
+# `step_signoff_drv_wire_length_repair.__doc__`). The escalated route is a real
+# DRV win (downstream sign-off population 483 -> 219, setup WNS +3.71 ns) but
+# it REGRESSES two sign-off gates that this step's promotion criteria cannot
+# see, both measured end-to-end through the runner's own steps:
+#     sign-off DRC (KLayout PDK deck) :   1 item  ->  123 items (122 li.3, 1 li.5)
+#     LVS (magic ext2spice + netgen)  :   MATCH   ->  LVS_MISMATCH
+# The step's DRC criterion is `detailed_route`'s OWN violation count, which
+# read 0 — the router grading its own work. Re-enabling requires a promotion
+# gate that re-derives BOTH from the sign-off chain (build the candidate GDS,
+# run the PDK DRC deck and netgen LVS on it, and refuse on any regression),
+# exactly as `_measure_signoff_drv_population` now does for the STA axis.
+_DRV_ESCALATION_PROMOTION_ENABLED = False
+
+
+def _build_dont_touch_restore_tcl() -> str:
+    """Re-assert, from the ODB alone, the `set_dont_touch` protection that a
+    PREVIOUS OpenROAD session established and the DEF cannot carry.
+
+    THE DEFECT THIS CLOSES (measured, chip-AGNOSTIC): `set_dont_touch` is
+    OpenROAD *session* state. It is NOT a DEF attribute and NOT a Liberty
+    attribute, so it does not survive `write_def` → `read_def`. The main PnR
+    session marks spare cells / tie drivers dont_touch (see
+    `_build_spare_protection_tcl`), but every LATER step that opens a FRESH
+    `openroad -no_init` session on the written DEF — the post-route SPEF
+    repair, this wire-length escalation, any ECO pass — starts with ALL of
+    that protection silently dropped, leaving `repair_design` /
+    `repair_timing` / `remove_buffers` / `buffer_ports` free to resize,
+    rebuffer, merge or delete structure the flow had deliberately frozen.
+    Nothing warns; the DEF looks identical.
+
+    Placement status is a WEAK substitute and cannot be relied on: measured on
+    a real run, the 7 design-for-ECO spares were `+ FIXED` in the DEF but the
+    tie DRIVER that feeds their inputs (`spare_tielo_drv`, a `conb`-class
+    constant cell) was only `+ PLACED` — so a status-only rule would have left
+    the tie driver, and therefore the whole spare tie-off net, unprotected.
+
+    The protected set is therefore derived from the DB with TWO
+    chip/PDK-AGNOSTIC predicates (no design, vendor, cell or net literal):
+      (a) instances the flow LOCKED — placement status FIRM / LOCKED / COVER;
+      (b) CONSTANT/TIE drivers — any master with ZERO signal INPUT terminals
+          and at least one signal OUTPUT terminal. That is the structural
+          definition of a tie-hi/tie-low/constant cell in ANY library
+          (sky130 `conb_*`, gf180 `tie*`, asap7 `TIEHIx*`/`TIELOx*`, …), and
+          it is derived from the master's own MTerm directions, never a name.
+    Every non-power net incident on a protected instance is protected too, so
+    a tie / spare-tap net can never be merged into, or rebuffered together
+    with, an unrelated signal net.
+
+    Cells with no signal terminals at all (fill / tap / decap / antenna-only
+    physical cells) are skipped: the resizer never touches them, and skipping
+    keeps this loop cheap on a die with tens of thousands of physical-only
+    instances.
+
+    HONEST SCOPE (§4.05): on the design this was first measured against, the
+    restored set was 139 instances + 132 nets that had been unprotected, and
+    the resulting route was byte-identical to the unrestored one — i.e. here
+    it is a CORRECTNESS HARDENING whose effect was provably neutral, NOT a
+    proven fix for any observed symptom. It removes a real, silent loss of
+    protection; it is not claimed to change any particular measurement."""
+    return (
+        "# === restore dont_touch (SESSION state; not carried by the DEF) ===\n"
+        "set _dt_i 0\n"
+        "set _dt_n 0\n"
+        "if {[catch {\n"
+        "  set _dt_blk [ord::get_db_block]\n"
+        "  foreach _dt_inst [$_dt_blk getInsts] {\n"
+        "    set _dt_m [$_dt_inst getMaster]\n"
+        "    set _dt_in 0\n"
+        "    set _dt_out 0\n"
+        "    foreach _dt_mt [$_dt_m getMTerms] {\n"
+        "      set _dt_sg [$_dt_mt getSigType]\n"
+        "      if {$_dt_sg eq \"POWER\" || $_dt_sg eq \"GROUND\"} { continue }\n"
+        "      if {[$_dt_mt getIoType] eq \"INPUT\"} { incr _dt_in } "
+        "else { incr _dt_out }\n"
+        "    }\n"
+        "    if {$_dt_in == 0 && $_dt_out == 0} { continue }\n"
+        "    set _dt_p 0\n"
+        "    if {[catch {set _dt_st [$_dt_inst getPlacementStatus]}] == 0} {\n"
+        "      if {$_dt_st eq \"FIRM\" || $_dt_st eq \"LOCKED\" "
+        "|| $_dt_st eq \"COVER\"} { set _dt_p 1 }\n"
+        "    }\n"
+        "    if {$_dt_in == 0 && $_dt_out > 0} { set _dt_p 1 }\n"
+        "    if {!$_dt_p} { continue }\n"
+        "    if {[catch {set_dont_touch [$_dt_inst getName]}] == 0} "
+        "{ incr _dt_i }\n"
+        "    foreach _dt_it [$_dt_inst getITerms] {\n"
+        "      set _dt_net [$_dt_it getNet]\n"
+        "      if {$_dt_net eq \"NULL\" || $_dt_net eq \"\"} { continue }\n"
+        "      set _dt_sg [$_dt_net getSigType]\n"
+        "      if {$_dt_sg eq \"POWER\" || $_dt_sg eq \"GROUND\"} { continue }\n"
+        "      if {[catch {set_dont_touch "
+        "[get_nets [$_dt_net getName]]}] == 0} { incr _dt_n }\n"
+        "    }\n"
+        "  }\n"
+        "} _dt_err]} { puts \"SHIP_ESC_DONT_TOUCH_NONFATAL: $_dt_err\" }\n"
+        "puts \"SHIP_ESC_DONT_TOUCH_RESTORED: insts=$_dt_i nets=$_dt_n\"\n"
+    )
+
 
 def _ship_wire_length_escalation_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
                                      ss_liberty_c: str, pnr_dir_c: str,
@@ -13223,6 +13323,10 @@ def _ship_wire_length_escalation_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "set_timing_derate -early 0.95\n"
         "set_timing_derate -late 1.05\n"
         "catch {define_process_corner -ext_model_index 0 X}\n"
+        # This is a FRESH session on a written DEF, so every `set_dont_touch`
+        # the PnR session applied is gone. Re-assert it BEFORE the first
+        # `repair_design` — see `_build_dont_touch_restore_tcl`.
+        + _build_dont_touch_restore_tcl()
         + extract_tcl
         + count_proc +
         # chip/PDK-agnostic repeater threshold, derived from die geometry.
@@ -13249,6 +13353,55 @@ def _ship_wire_length_escalation_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         f"{{ puts \"SHIP_ESC_WV_NONFATAL: $e\" }}\n"
         "puts \"SHIP_ESC_DONE\"\n"
     )
+
+
+def _measure_signoff_drv_population(project: Path, top: str, pdk: "PdkConfig",
+                                    container: str, tag: str,
+                                    notes: List[str]) -> Optional[int]:
+    """Count the DRV violator population EXACTLY as the DOWNSTREAM acceptance
+    gate counts it, by RUNNING that same chain — never a step-local estimate.
+
+    THE DEFECT THIS CLOSES (measured, chip-AGNOSTIC): the escalation used to
+    gate itself on a count taken inside its own OpenROAD session, which reads
+    ONE liberty (the slow/ss corner) and ONE captable (max-RC). The downstream
+    gate reads `sta_mcorner_ocv.rpt`, which is SETUP at ss+max-RC **and** HOLD
+    at ff+min-RC. The step-local count is therefore not merely "an estimate" —
+    it is STRUCTURALLY BLIND to an entire sign-off corner, so a change that
+    improves setup while wrecking hold satisfies `after < before` and gets
+    promoted.
+
+    The blindness was measured exactly, on a real run: the step-local count was
+    330 while the downstream population was 483 — and 330 is precisely the
+    SETUP subset (283 max_slew + 47 max_capacitance); the missing 153 is
+    precisely the HOLD subset (138 max_slew + 15 max_capacitance). 32% of the
+    population the gate is supposed to protect was invisible to it.
+
+    This helper instead extracts the per-corner SPEF set from whatever
+    `<top>.def` is currently staged and runs `_emit_mcorner_ocv_sta` — the
+    SAME emitter that writes the sign-off report the gate reads — then counts
+    its VIOLATED lines. Returns None when the measurement could not be made
+    (missing corner libs / SPEF / report), so the caller REFUSES to promote
+    rather than guessing. chip/PDK-AGNOSTIC: every path is derived."""
+    pnr_out = _pl.pnr_dir(project)
+    out_dir = pnr_out / f"drv_measure_{tag}"
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        corner_spefs = _emit_spef_corners(project, top, pdk, container,
+                                          out_dir, notes)
+        corner_libs = _resolve_signoff_corner_libs(project, pdk, container)
+        if not corner_libs:
+            return None
+        rpt = out_dir / "sta_mcorner_ocv.rpt"
+        ok = _emit_mcorner_ocv_sta(project, top, pdk, container, corner_libs,
+                                   corner_spefs, corner_spefs.get("nom"),
+                                   rpt, notes)
+        if not ok or not rpt.is_file():
+            return None
+        return sum(1 for _l in rpt.read_text(errors="replace").splitlines()
+                   if "VIOLATED" in _l)
+    except Exception as exc:            # measurement failure => refuse to promote
+        notes.append(f"signoff DRV measurement ({tag}) failed: {exc}")
+        return None
 
 
 def _parse_ship_escalation_log(log: str) -> dict:
@@ -13310,24 +13463,94 @@ def step_signoff_drv_wire_length_repair(
     fix. Fail-safe: never promotes a result that isn't a proven, freshly
     measured improvement over the CURRENT state.
 
-    TEMPORARILY DISABLED (v1.5.65): measured on caravel_user_project x
-    sky130A that this step's own promotion gate (`_ship_escalation_should_
-    promote`) compares a BEFORE/AFTER violator count taken from a quick
-    in-TCL-session SPEF re-extraction, which is NOT the same measurement as
-    the full multi-corner OCV sign-off report (`sta_mcorner_ocv.rpt`) that
-    `sta_corner_record_completeness_check` reads. The escalation's own count
-    improved (330->178) and its own gate promoted, but the REAL sign-off
-    violator count got far WORSE (4->219), and a genuine LVS netlist/layout
-    mismatch appeared (spare-tie nets merged with unrelated signal nets) --
-    the escalation's clear-routing+reroute did not preserve the base flow's
-    spare-cell-tap net isolation. This is a confirmed regression, not a
-    hypothetical one. Disabled at the top of this function (no-op / None)
-    until the promotion gate is rebuilt to measure against the ACTUAL
-    downstream multi-corner sign-off extraction (not a session-local
-    estimate) and the spare-net isolation is preserved across the reroute.
-    See campaign notes for the full incident writeup."""
-    return None
+    STATUS: promotion stays OFF (`_DRV_ESCALATION_PROMOTION_ENABLED`), but the
+    RECORDED REASON is replaced, because the v1.5.65 reason was not a
+    measurement anyone could act on. Two real measurement defects are fixed
+    here, and the true blocker is now named with end-to-end evidence.
+
+    (1) THE "4 -> 219 REGRESSION" WAS A NON-COMPARISON, NOT A REGRESSION.
+        The "4" was produced by a sign-off report emitted WITHOUT `-violators`.
+        Without that flag OpenSTA's `report_check_types` prints only the SINGLE
+        WORST pin per check type, so ANY design -- with 4 or with 4000 real
+        violators -- yields about four VIOLATED lines. `-violators
+        -max_count 2000` was added in the very SAME commit that added this
+        escalation, so the "before" (4) came from the truncated report shape
+        and the "after" (219) from the full-enumeration shape. They were never
+        the same measurement. Re-measured on the identical design with ONE
+        consistent full-enumeration chain, the honest numbers are
+        483 -> 219 total DRV (max_slew 421 -> 177): a ~55% REDUCTION, i.e. the
+        mechanism was doing roughly what it claimed, and was switched off
+        against a number that could not be compared.
+
+    (2) THE GATE WAS CORNER-BLIND (real defect, fixed). Its before/after count
+        came from its own OpenROAD session, which reads ONE liberty (ss) and
+        ONE captable (max-RC). The downstream acceptance report is SETUP at
+        ss+max-RC *and* HOLD at ff+min-RC. Measured: step-local 330 vs
+        downstream 483, where 330 is exactly the SETUP subset and the missing
+        153 is exactly the HOLD subset -- 32% of the population invisible to
+        the gate that exists to protect it. The gate now calls
+        `_measure_signoff_drv_population`, which runs the SAME emitter
+        (`_emit_mcorner_ocv_sta`) over the SAME per-corner SPEF set that the
+        downstream gate reads, on the incumbent AND on the candidate, and
+        promotes only on that number. A step never again grades its own
+        homework with a narrower exam.
+
+    (3) DONT_TOUCH WAS SILENTLY LOST (real defect, fixed). `set_dont_touch` is
+        OpenROAD session state and cannot survive `write_def`/`read_def`, so
+        this fresh session began with every spare / tie protection dropped.
+        `_build_dont_touch_restore_tcl` re-derives it from the ODB before the
+        first `repair_design`. HONEST SCOPE: on the design measured this was
+        neutral (byte-identical route), so it is a correctness hardening, NOT
+        a demonstrated fix for the LVS symptom quoted in the v1.5.65 note.
+
+    STILL FAIL-SAFE. Promotion additionally requires that the reroute reach 0
+    detailed-route violations and that setup WNS stay non-negative, and any
+    unmeasurable quantity refuses promotion. If nothing improves on the
+    DOWNSTREAM number, the incumbent route is restored byte-for-byte.
+
+    WHY THE DIE-DERIVED THRESHOLD IS KEPT. A 3-point sweep, every number from
+    the DOWNSTREAM chain on the same base route (max_wire_length / total DRV /
+    setup WNS):
+
+        base (no escalation)      --      483      +6.07 ns
+        min(die)/3      973 um           219      +3.71 ns   <- kept
+                        400 um           260      -7.48 ns
+                        250 um           263      -4.69 ns
+
+    Shrinking the threshold does NOT keep helping: below the geometric bound
+    the added repeater chain costs more capacitance than the shorter segments
+    save (setup max_capacitance violators grew 30 -> 58 -> 72) and setup WNS
+    goes NEGATIVE. The die-derived value is therefore retained -- now backed
+    by a measured sweep rather than by assertion.
+
+    (4) WHY PROMOTION IS STILL OFF -- THE REAL BLOCKER, NAMED. Running the
+        FULL pipeline with this step live and letting the runner's OWN
+        downstream steps judge the promoted route:
+
+            downstream DRV population   483 -> 219   (improved)
+            setup WNS                  +6.07 -> +3.71 ns (held)
+            detailed_route violations        0       (the step's own criterion)
+            sign-off DRC (PDK deck)      1 -> 123 items (122 li.3, 1 li.5)  REGRESSED
+            LVS (magic + netgen)      MATCH -> LVS_MISMATCH                 REGRESSED
+
+        So v1.5.65 was RIGHT to switch this off and WRONG about why. The
+        mechanism buys a genuine 55% DRV reduction and pays for it with a
+        sign-off DRC blow-up and an LVS mismatch — neither visible to a gate
+        whose DRC evidence is the ROUTER's own violation count. Note the
+        dont_touch restore in (3) does NOT cure the LVS mismatch: with and
+        without it the escalated route is byte-identical, so the mismatch has
+        another cause (the clear-all-wires + full reroute changes extracted
+        geometry) that remains open.
+
+        TO RE-ENABLE: extend the promotion gate to re-derive DRC and LVS from
+        the SIGN-OFF chain on the candidate (build its GDS, run the PDK DRC
+        deck and netgen LVS) and refuse on any regression — the same
+        "never grade your own homework" rule `_measure_signoff_drv_population`
+        now enforces on the STA axis. Until that exists, promotion stays off:
+        an unpromoted route is the incumbent, which is never a regression."""
     t0 = time.time()
+    if not _DRV_ESCALATION_PROMOTION_ENABLED:
+        return None
     pnr_out = _pl.pnr_dir(project)
     routed = pnr_out / "routed.def"
     if not routed.is_file():
@@ -13371,32 +13594,77 @@ def step_signoff_drv_wire_length_repair(
     escalated_v = pnr_out / f"{top}_pnr_escalated.v"
     def_ok = escalated_def.is_file() and escalated_def.stat().st_size > 0
     v_ok = escalated_v.is_file() and escalated_v.stat().st_size > 0
-    if _ship_escalation_should_promote(parsed, def_ok, v_ok):
-        shutil.copy2(routed, pnr_out / "routed_pre_escalation.def")
-        shutil.copy2(escalated_def, routed)
-        _pnr_v = pnr_out / f"{top}_pnr.v"
+    _pnr_v = pnr_out / f"{top}_pnr.v"
+    _topdef = pnr_out / f"{top}.def"
+    notes: List[str] = []
+
+    # === THE PROMOTION MEASUREMENT ===========================================
+    # Both numbers come from `_measure_signoff_drv_population`, i.e. from the
+    # SAME emitter + SAME per-corner SPEF set the DOWNSTREAM acceptance gate
+    # reads. The step's own in-session counts (`parsed[...]`) are retained in
+    # the message for traceability ONLY -- they are corner-blind (ss/max-RC
+    # only) and MUST NOT decide promotion. See the docstring, defect (2).
+    sg_before = _measure_signoff_drv_population(
+        project, top, pdk, container, "incumbent", notes)
+    sg_after: Optional[int] = None
+    _incumbent_def = pnr_out / "routed_pre_escalation.def"
+    _incumbent_v = pnr_out / f"{top}_pnr_pre_escalation.v"
+    _incumbent_topdef = pnr_out / f"{top}_pre_escalation.def"
+    if def_ok and v_ok and sg_before is not None:
+        # Stage the candidate so the measurement chain sees it, keeping a
+        # byte-exact copy of the incumbent for an unconditional restore.
+        shutil.copy2(routed, _incumbent_def)
         if _pnr_v.is_file():
-            shutil.copy2(_pnr_v, pnr_out / f"{top}_pnr_pre_escalation.v")
-        shutil.copy2(escalated_v, _pnr_v)
-        _topdef = pnr_out / f"{top}.def"
+            shutil.copy2(_pnr_v, _incumbent_v)
         if _topdef.is_file():
-            shutil.copy2(escalated_def, _topdef)
+            shutil.copy2(_topdef, _incumbent_topdef)
+        shutil.copy2(escalated_def, routed)
+        shutil.copy2(escalated_v, _pnr_v)
+        shutil.copy2(escalated_def, _topdef)
+        sg_after = _measure_signoff_drv_population(
+            project, top, pdk, container, "candidate", notes)
+
+    # Same fail-safe predicate as before, but the before/after counts it is
+    # handed are now the DOWNSTREAM sign-off population, not the ss-only one.
+    promote = _ship_escalation_should_promote(
+        {"route_violations": parsed.get("route_violations"),
+         "wns_after": parsed.get("wns_after"),
+         "before_count": sg_before,
+         "after_count": sg_after},
+        def_ok, v_ok)
+
+    if promote:
         _gds = pnr_out / f"{top}.gds"
         if _gds.is_file():
-            _gds.unlink()
+            _gds.unlink()   # force step_gds to re-derive from the new route
         return StepResult(
             "signoff_drv_wire_length_repair", "PASS", time.time() - t0,
             f"SHIPPED wire-length repeater escalation (max_wire_length="
-            f"{parsed.get('max_wire_length')} um): real violator count "
-            f"{parsed['before_count']}->{parsed['after_count']}, reroute "
-            f"DRC-clean (0 violations); promoted over the pre-escalation "
-            f"route.", [str(routed), str(_pnr_v)])
+            f"{parsed.get('max_wire_length')} um): DOWNSTREAM multi-corner "
+            f"sign-off DRV population {sg_before}->{sg_after} "
+            f"(step-local ss-only count {parsed.get('before_count')}->"
+            f"{parsed.get('after_count')}, traceability only), setup WNS "
+            f"{parsed.get('wns_after')} ns, reroute DRC-clean (0 violations); "
+            f"promoted over the pre-escalation route.",
+            [str(routed), str(_pnr_v)])
+
+    # NOT promoted — restore the incumbent byte-for-byte.
+    if _incumbent_def.is_file():
+        shutil.copy2(_incumbent_def, routed)
+        _incumbent_def.unlink()
+    if _incumbent_v.is_file():
+        shutil.copy2(_incumbent_v, _pnr_v)
+        _incumbent_v.unlink()
+    if _incumbent_topdef.is_file():
+        shutil.copy2(_incumbent_topdef, _topdef)
+        _incumbent_topdef.unlink()
     return StepResult(
         "signoff_drv_wire_length_repair", "PASS", time.time() - t0,
-        f"no-op (current route kept): escalation real violator count "
-        f"{parsed.get('before_count')}->{parsed.get('after_count')}, reroute "
-        f"violations={parsed.get('route_violations')}; not promoted (needs "
-        f"a strictly lower violator count, setup>=0 and DRC-clean).")
+        f"no-op (incumbent route restored): DOWNSTREAM multi-corner sign-off "
+        f"DRV population {sg_before}->{sg_after}, reroute violations="
+        f"{parsed.get('route_violations')}, setup WNS "
+        f"{parsed.get('wns_after')}; not promoted (needs a strictly lower "
+        f"DOWNSTREAM count, setup>=0 and DRC-clean).")
 
 
 def step_gds(project: Path, top: str, pdk: PdkConfig,
@@ -24236,10 +24504,15 @@ def main() -> int:
             # sky130A plateaus at 36 slew/30 cap with the main loop alone,
             # because the surviving population is wire-length-dominated, not
             # fanout-dominated, and plain repair_design never inserts a
-            # repeater for it). Never trusts its own in-session estimate:
-            # promotes only on a freshly re-measured, strictly lower real
-            # violator count (never a regression vs what step_signoff_
-            # spef_repair already shipped).
+            # repeater for it). It NEVER grades its own homework: promotion
+            # is decided by re-running the DOWNSTREAM multi-corner OCV
+            # sign-off emitter (`_measure_signoff_drv_population`) on the
+            # incumbent AND the candidate — the step's own in-session count
+            # reads one liberty + one captable and is structurally blind to
+            # the hold corner (measured: 330 step-local vs 483 downstream).
+            # Runs BEFORE gds/drc/lvs, so the shipped GDS and the LVS/DRC
+            # sign-off see whatever this promotes; if nothing improves on the
+            # downstream number the incumbent route is restored byte-for-byte.
             _esc = step_signoff_drv_wire_length_repair(
                 project, effective_top, pdk, args.container)
             if _esc is not None:
