@@ -9411,7 +9411,14 @@ def _macro_supply_preroute_decision(project: "Path", pdk: "PdkConfig",
         lefs = _hmsi.load_macro_lefs(project)
     if not lefs:
         return None
-    rep = _hmsi.assess(lefs, _hmsi.load_l21(project))
+    # #348 — Phase 3 also counts the rails the PDN ACTUALLY BUILT (DEF
+    # SPECIALNETS). The declared escape hatch alone had no producer: across the
+    # real IC designs here only 3 of 30 L21 files populate the structured field
+    # `declared_rails` reads, so a correctly-integrated design had no way to
+    # clear this gate. A built rail is a physical fact and cannot be fabricated,
+    # so it is stronger evidence than the declaration it substitutes for.
+    rep = _hmsi.assess(lefs, _hmsi.load_l21(project),
+                       extra_rails=_hmsi.measured_rails(project))
     if not rep["pins"]:
         return None
     if not rep["gaps"]:

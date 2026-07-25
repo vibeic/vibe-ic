@@ -277,6 +277,12 @@ LAYER_FILE_NAMES = {
     # so every consumer that resolved L11 through this map opened a file that
     # was never written and silently no-opped. Same failure shape as scoring a
     # requirement in a layer the backend does not read.
+    #
+    # RE-FIXED at the MASTER (tools/phase1_engine) after v1.6.0's bundle-drift
+    # rsync overwrote #323's bundled-side fix with this stale master value —
+    # the drift test and the declarations-agree test both fired, correctly.
+    # The master is the only side that survives a sync; fixing the bundle
+    # alone is how this regressed once already.
     "L11": "L11_OTP_CONTENT.json",
     "L12": "L12_BEHAVIORAL_SEQUENCES.json",
     # v0.59 H2: aligned with hardware_pass_attestation_check.py and the
