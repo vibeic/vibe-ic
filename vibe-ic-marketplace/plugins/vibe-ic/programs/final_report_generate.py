@@ -931,12 +931,7 @@ def _gather_gds(project: Path) -> Optional[Dict[str, Any]]:
     f = gds_files[0]
     pv = {}
     for kind in ("drc_signoff", "lvs", "erc"):
-        cand = _find_report(project, f"{kind}.json")
-        j = _safe_json(cand) if cand else None
-        if isinstance(j, dict):
-            pv[kind] = j.get("verdict") or j.get("status") or "?"
-        else:
-            pv[kind] = "(report missing)"
+        pv[kind] = _pv_verdict(project, kind)
     # Auxiliary signoff reports (IR / EM / antenna / SI / power / STA)
     aux: List[str] = []
     for stem in ("ir_drop", "em", "antenna", "si_crosstalk", "power",
@@ -961,6 +956,52 @@ def _gather_gds(project: Path) -> Optional[Dict[str, Any]]:
             "pv": pv,
             "aux_reports": aux,
             "fpga_signoff": str(fpga_signoff.relative_to(project)) if fpga_signoff else None}
+
+
+# ORGANIC subservient/sky130A — the headline deliverable UNDER-REPORTED a
+# genuinely clean sign-off, in two distinct ways, both re-derived from raw
+# artefacts of converge_1.5.69_sky130A:
+#
+#   * LVS -> "?"  : `reports/phase3/lvs.json` records the audit verdict as
+#     `"passed": true` (+ `summary.terminal_verdict: "MATCH"`) and carries NO
+#     top-level `verdict`/`status` key, so `j.get("verdict") or j.get("status")`
+#     fell through to "?" even though netgen had reported "Circuits match
+#     uniquely" and `lvs_verdict.json` recorded `"status": "PASS"`.
+#   * DRC -> "(report missing)" : the sign-off DRC artefact is
+#     `reports/phase3/drc_signoff.rpt` (a KLayout report-database XML, emitted
+#     by the PDK's own runset); NO `drc_signoff.json` is ever written. The old
+#     text was FACTUALLY FALSE — the report is present, only unsummarised.
+#
+# The fix widens the verdict SOURCES (adding `{kind}_verdict.json` and the
+# boolean `passed` field) and distinguishes "no artefact at all" from "artefact
+# present, no machine-readable verdict". It can never MANUFACTURE a pass: every
+# value still comes from a verdict a program actually wrote, and an unsummarised
+# report is reported as unsummarised, never as PASS.
+def _pv_verdict(project: Path, kind: str) -> str:
+    """Resolve a physical-verification verdict for `kind` from any artefact a
+    program actually wrote. Honest-by-construction: never infers PASS from
+    silence, and names the artefact when it cannot summarise it."""
+    for stem in (f"{kind}.json", f"{kind}_verdict.json"):
+        cand = _find_report(project, stem)
+        j = _safe_json(cand) if cand else None
+        if not isinstance(j, dict):
+            continue
+        verdict = j.get("verdict") or j.get("status") or j.get("result")
+        if verdict:
+            return str(verdict)
+        # An audit-shaped record states its outcome as a BOOLEAN, not a string.
+        passed = j.get("passed")
+        if isinstance(passed, bool):
+            return "PASS" if passed else "FAIL"
+    # No machine-readable verdict. Distinguish a MISSING artefact from a
+    # PRESENT-but-unsummarised one (saying "missing" about a file that exists is
+    # itself a false statement about the run).
+    for ext in (".rpt", ".log", ".xml"):
+        cand = _find_report(project, f"{kind}{ext}")
+        if cand is not None:
+            return (f"(no machine-readable verdict; see "
+                    f"{cand.relative_to(project)})")
+    return "(report missing)"
 
 
 def _gather_test_evidence(project: Path) -> Dict[str, Any]:

@@ -19335,7 +19335,20 @@ def _flat_ocv_derate_tcl(indent: str = "") -> str:
 # Tool-version-independent + §4.05-honest — a factual record of the checks the
 # sign-off STA performed, not a fabricated pass.
 _SIGNOFF_CHECK_TYPES_MARKER = ("SIGNOFF_CHECK_TYPES_REPORTED recovery removal "
-                               "max_slew min_pulse_width max_capacitance")
+                               "max_slew min_pulse_width max_capacitance "
+                               "max_fanout")
+
+# ORGANIC subservient/sky130A — an ABSENT max-fanout violation table is NOT the
+# same fact as "zero max-fanout violations". `report_check_types` prints a table
+# only for a limit that EXISTS: with no `set_max_fanout` in the sign-off SDC the
+# table is empty BY CONSTRUCTION, so a reader (or an acceptance plan that demands
+# "max_fanout violations = 0") would score an UNMEASURED check as a clean PASS.
+# Emitted beside the marker so the distinction is on the record. chip-AGNOSTIC.
+_SIGNOFF_MAX_FANOUT_NOTE = (
+    "SIGNOFF_MAX_FANOUT_SEMANTICS an empty max-fanout table means no net "
+    "exceeded a set_max_fanout limit; when the sign-off SDC declares NO "
+    "set_max_fanout the table is empty BY CONSTRUCTION and MUST NOT be read "
+    "as 0 fanout violations (UNMEASURED is not ZERO)")
 
 # `-max_count` bound on `-violators`: high enough to never truncate a real
 # design's true DRV population (measured: caravel_user_project x sky130A
@@ -19346,7 +19359,8 @@ _CHECK_TYPES_VIOLATORS_MAX_COUNT = 2000
 
 def _report_check_types_tcl(rpt_c: str) -> str:
     """Emit `report_check_types -recovery -removal -max_slew -min_pulse_width
-    -max_capacitance -violators` guarded by a catch; on SUCCESS append the
+    -max_capacitance -max_fanout -violators` guarded by a catch; on SUCCESS
+    append the
     authoritative marker (so the rigor gate can detect the checks
     tool-version-independently), on failure record the reason (no marker →
     the gate still FAILs, correctly).
@@ -19366,7 +19380,7 @@ def _report_check_types_tcl(rpt_c: str) -> str:
     literal."""
     return (
         f"if {{[catch {{report_check_types -recovery -removal -max_slew "
-        f"-min_pulse_width -max_capacitance -violators "
+        f"-min_pulse_width -max_capacitance -max_fanout -violators "
         f"-max_count {_CHECK_TYPES_VIOLATORS_MAX_COUNT} "
         f">> {rpt_c}}} _cterr]}} {{\n"
         f"  set _cf [open {rpt_c} a]\n"
@@ -19375,6 +19389,7 @@ def _report_check_types_tcl(rpt_c: str) -> str:
         f"}} else {{\n"
         f"  set _cf [open {rpt_c} a]\n"
         f'  puts $_cf "{_SIGNOFF_CHECK_TYPES_MARKER}"\n'
+        f'  puts $_cf "{_SIGNOFF_MAX_FANOUT_NOTE}"\n'
         f"  close $_cf\n"
         f"}}\n"
     )
