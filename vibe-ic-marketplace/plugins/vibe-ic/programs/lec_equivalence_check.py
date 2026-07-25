@@ -66,6 +66,25 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+# Import port-abort classifier — raises a truthful INCONCLUSIVE-STRUCTURAL
+# verdict when equiv_make aborts due to an ATPG-cut-artifact gate netlist
+# (compared_points == 0 + port-match abort in log), rather than the false
+# LEC_NOT_EQUIVALENT the old code emitted.
+try:
+    from lec_gate_netlist_select import (
+        classify_port_abort as _classify_port_abort,
+        CANONICAL_STATUS as _GNS_STATUS,
+        CANONICAL_VERDICT as _GNS_VERDICT,
+    )
+    _HAS_GNS = True
+except ImportError:  # graceful degradation if the module is absent
+    _HAS_GNS = False
+    _GNS_STATUS = "LEC_GATE_NETLIST_UNUSABLE"
+    _GNS_VERDICT = "INCONCLUSIVE-STRUCTURAL"
+
+    def _classify_port_abort(log_text: str, compared_points: int):  # type: ignore[misc]
+        return None
+
 
 GATE = "lec_equivalence_check"
 
@@ -393,6 +412,40 @@ def audit(project: Path) -> AuditResult:
                      "a vacuous PASS)."),
             file=LEC_JSON_REL))
         return res
+
+    # --- (d3) STRUCTURAL PORT-ABORT: ATPG-cut gate netlist -------------------
+    # When the gate netlist is an ATPG-cut artifact (every FF deleted, replaced
+    # by <inst>.d pseudo-ports absent from the RTL), yosys equiv_make aborts:
+    #   ERROR: Can't match gate port `_NNN_.d_gate' to a gold port.
+    # No miter is built → compared_points == 0.  This is a structural tool
+    # abort, NOT a semantic non-equivalence.  Classifying it as
+    # LEC_NOT_EQUIVALENT sends the next agent to fix a design that is fine.
+    # FAIL-CLOSED: we only reclassify when BOTH conditions hold simultaneously
+    # (compared == 0  AND  the abort signature is in the .rpt).  A run that
+    # had compared_points > 0 or a different log is left alone.
+    if zero_miter:
+        _rpt_text = (rpt_path.read_text(encoding="utf-8", errors="replace")
+                     if rpt_path.is_file() else "")
+        _cmp_val = compared if compared is not None else 0
+        _pa_verdict = _classify_port_abort(_rpt_text, _cmp_val)
+        if _pa_verdict is not None:
+            res.inconclusive = True
+            res.passed = False
+            res.findings.append(Finding(
+                rule=_GNS_STATUS, severity="WARNING",
+                message=(
+                    f"LEC verdict is {_GNS_VERDICT}: yosys equiv_make aborted "
+                    "with a port-match error — the gate netlist is an ATPG-cut "
+                    "artifact (flip-flops replaced by <inst>.d pseudo-ports that "
+                    "are absent from the RTL port set).  No miter was built "
+                    f"(compared_points={_cmp_val}).  This is a structural tool "
+                    "abort, NOT a semantic non-equivalence.  Re-run LEC against "
+                    "the liberty-backed synthesis netlist (e.g. <top>_synth.v or "
+                    "netlist.v) — do NOT fall back to synth/DFT, the design is "
+                    "likely correct.  lec_gate_netlist_select.py will choose the "
+                    "correct netlist automatically on the next run."),
+                file=LEC_RPT_REL))
+            return res
 
     # --- substance verdict ------------------------------------------------
     # (a) the boolean itself must be true.
