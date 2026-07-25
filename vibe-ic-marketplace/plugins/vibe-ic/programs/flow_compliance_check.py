@@ -1384,6 +1384,17 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     #        derivational — no keyword scan, no threshold — so it cannot fire
     #        on a legitimately-N/A design. BLOCKS.
     "l26_mechanical_applicability_derived_check",
+    # harvest(#319 via #349) — L19 SEMANTIC completeness gate: the fixed die
+    # phase3 honors verbatim (L19-1), and the PDK target the foundry pack
+    # states / the analog substitution discloses must be TRACEABLE to the
+    # design's own inputs (L19-2) and non-null when the design stages a PDK
+    # enablement (L19-3). Untraceable target = fabricated foundry statement.
+    # SKIPs (rc=2) without an L19 doc, so incomplete projects never fail on
+    # a missing prerequisite (the v1.6.4-retraction lesson, honored here).
+    # Corpus-verified: sha256/subservient PASS (sky130 traceable), spm SKIP,
+    # both injected negatives FAIL. Honors waiver
+    # `l19_pdk_floorplan_contract_disclosed` (>=40 chars).
+    "l19_pdk_floorplan_contract_check",
     # v1.6.4 RETRACTED (introduced regression on incomplete projects;
     # gates lack chip-AGNOSTIC silent-skip on missing prerequisites):
     # "coverage_metric_check"            — needs sim coverage report
