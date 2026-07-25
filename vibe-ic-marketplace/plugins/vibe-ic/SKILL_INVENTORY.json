@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "_comment": "AUTHORITATIVE AI-skill inventory \u2014 generated from the skills/ folders by programs/gen_skill_inventory.py. Do NOT hand-edit; the website skill count must read `total` from here.",
-  "total": 60,
+  "total": 61,
   "by_tier": {
     "debug": 13,
     "judgment": 6,
-    "nl_primary": 32,
+    "nl_primary": 33,
     "unclassified": 1,
     "verification": 8
   },
@@ -37,6 +37,7 @@
     "eco-plan",
     "equivalence-check",
     "field-agent-loop",
+    "flow-change-acceptance",
     "formal-verify",
     "fpga-hps-bridge",
     "fpga-led-probe-allocation",
@@ -205,6 +206,11 @@
     {
       "name": "field-agent-loop",
       "frontmatter_name": "field-agent-loop",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "flow-change-acceptance",
+      "frontmatter_name": "flow-change-acceptance",
       "tier": "nl_primary"
     },
     {
