@@ -296,6 +296,7 @@ def test_348_phase3_passes_measured_rails_through(tmp_path):
     """Wiring pin: the Phase-3 decision must actually consult the DEF, or the
     fix exists in the library and not in the flow."""
     src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
-    i = src.index("_macro_supply_preroute_decision")
-    window = src[i:i + 3000]
+    i = src.index("def _macro_supply_preroute_decision")
+    j = src.find("\ndef ", i + 1)          # the function's real extent —
+    window = src[i:j if j > 0 else None]   # a char-count window rots (#329)
     assert "measured_rails" in window and "extra_rails" in window
