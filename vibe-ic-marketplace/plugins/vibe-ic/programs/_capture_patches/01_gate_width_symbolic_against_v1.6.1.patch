@@ -1,0 +1,30 @@
+--- a/programs/l1_pin_bus_width_actionable_check.py
++++ b/programs/l1_pin_bus_width_actionable_check.py
+@@ -253,7 +253,26 @@
+ 
+ 
+ def _self_declares_bus(pin: Dict[str, Any]) -> bool:
+-    """L1's own width/msb/lsb value is prose carrying a bit range."""
++    """L1's own width/msb/lsb value is prose carrying a bit range, OR the
++    pin carries the typed parametric-range field `width_symbolic`.
++
++    `width_symbolic` is matched WITHOUT requiring brackets because it
++    stores the range BODY only (`size-1:0`, not `[size-1:0]`).
++
++    It must be consulted, because it is the one bus marker that SURVIVES
++    width resolution. The prose `width` string is not: the moment a
++    resolver (`l1_param_bus_width_resolve`) binds the parameter and
++    rewrites width/msb/lsb to integers, every key this function used to
++    look at stops being a string, the pin stops being bus-confirmed, and
++    the gate silently drops to VACUOUS_PASS — losing its grip on exactly
++    the pins that were just repaired, and with it the ability to assert
++    the resolved width meets the bound the inputs prove. Measured: a
++    fixture whose only bus evidence was L1's own prose width went
++    FAIL -> VACUOUS_PASS across a resolver run, never reaching PASS.
++    """
++    ws = pin.get("width_symbolic")
++    if isinstance(ws, str) and ":" in ws:
++        return True
+     for key in ("width", "msb", "lsb"):
+         v = pin.get(key)
+         if isinstance(v, str) and _RANGE_ANY.search(v):
