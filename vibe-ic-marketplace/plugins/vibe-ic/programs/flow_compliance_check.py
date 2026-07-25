@@ -977,6 +977,26 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     #       Closes datasheet-vs-RTL-vs-board name disambiguation
     #       (audit line 35: FPGA pinmap missing typed shape).
     "l1_pin_table_aliases_typed_check",
+    # batch layergate-1 — SEMANTIC layer gates. Where the B-wave gates
+    # above assert that a KEY EXISTS, these assert that the VALUE is
+    # something the consumer can act on, and derive the requirement from
+    # the design's OWN machine-readable inputs / sibling L-docs. All
+    # three also run inside phase1_doc_one_shot_runner (blocking), so
+    # the phase1 convergence loop sees them — unlike the B-wave gates,
+    # which are reachable only from here.
+    #   L1: a pin the design's own inputs declare as a multi-bit bus
+    #       must resolve to an integer width, or phase2 emits a 1-bit
+    #       port and l9_rtl_pin_consistency_check diffs five steps later.
+    "l1_pin_bus_width_actionable_check",
+    #   L2: a constant a sibling L-doc dereferences BY NAME must resolve
+    #       to a concrete number in L2. Both known dereference paths
+    #       (l8_frame_end_gap_derivation, l9_response_delay_schema) fail
+    #       SILENTLY when it is absent.
+    "l2_named_constant_resolvable_check",
+    #   L3: the dispatcher keys on `hex`, not on `name`. An unparseable
+    #       or colliding hex is silently dropped/overwritten by
+    #       design_one_shot_runner's `l3_by_hex[h] = op`.
+    "l3_opcode_dispatch_key_actionable_check",
     #   B3: L4 multi-bit register fields with enum-style names
     #       (DLY/MODE/SEL/CFG/...) must declare enumerated_values[].
     #       Closes 4-state debounce / filter mode gap (audit line

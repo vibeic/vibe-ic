@@ -57660,6 +57660,55 @@ def main() -> int:
           "fact in input docs lands in generated_docs/L*.json. "
           "Deterministic gate: phase1_doc_input_completeness_check.py.")
 
+    # ------------------------------------------------------------------
+    # SEMANTIC LAYER GATES (batch layergate-1)
+    #
+    # These assert that each layer carries what its CONSUMER needs in an
+    # ACTIONABLE form — not that a token appears somewhere. They run HERE,
+    # after [15/15], because two of them derive their requirement from
+    # SIBLING L-docs (the L2 gate resolves the constants L8/L9 dereference
+    # by name), which do not exist yet at the L3 emit step where the
+    # older l3_opcode_name_coverage gate is invoked.
+    #
+    # They BLOCK: a FAIL returns exit 1 from the runner, exactly like
+    # cov_gate_failed. The documented anti-pattern this avoids is a layer
+    # gate whose verdict is FAIL while the flow continues anyway — the
+    # older typed-depth L1/L3 gates are reachable only from
+    # flow_compliance_check and the phase1 convergence loop never sees
+    # them. Each gate VACUOUS_PASSes when its layer is structurally
+    # inapplicable, so a non-protocol / scalar-pin design is unaffected.
+    # ------------------------------------------------------------------
+    _SEMANTIC_LAYER_GATES = (
+        ("l1_pin_bus_width_actionable_check",
+         "phase1/l1_pin_bus_width_actionable.json"),
+        ("l2_named_constant_resolvable_check",
+         "phase1/l2_named_constant_resolvable.json"),
+        ("l3_opcode_dispatch_key_actionable_check",
+         "phase1/l3_opcode_dispatch_key_actionable.json"),
+    )
+    layer_gate_failures: List[str] = []
+    for _gate_name, _rel_report in _SEMANTIC_LAYER_GATES:
+        _gate_path = Path(__file__).resolve().parent / f"{_gate_name}.py"
+        if not _gate_path.is_file():
+            continue
+        try:
+            _rp = _pl.report_path(project, _rel_report)
+            _rp.parent.mkdir(parents=True, exist_ok=True)
+            _cp = subprocess.run(
+                [sys.executable, str(_gate_path), str(project),
+                 "--json", str(_rp)],
+                capture_output=True, text=True, timeout=300,
+            )
+        except Exception as _exc:      # never let a gate crash the runner
+            print(f"      {_gate_name}: SKIPPED ({_exc})")
+            continue
+        _out = (_cp.stdout or _cp.stderr or "").strip().splitlines()
+        print(f"      {_gate_name}: {_out[0] if _out else '(no output)'}")
+        if _cp.returncode == 1:
+            layer_gate_failures.append(_gate_name)
+            for _line in _out[1:6]:
+                print(f"        {_line}", file=sys.stderr)
+
     # v1.6.134 (#51 Fix 9c) — coverage gate FAIL hard-blocks the
     # runner exit, regardless of `--strict`. Pre-v1.6.134 the gate
     # was only consulted in `--strict` mode, but phase2 / phase23
@@ -57689,6 +57738,14 @@ def main() -> int:
     if cov_gate_failed:
         print("FAIL: l3_opcode_name_coverage gate FAILed — see "
               "reports/audit/phase1/l3_opcode_name_coverage.json")
+        return 1
+    if layer_gate_failures:
+        # BLOCKING, by design. Each of these means a layer is missing a
+        # requirement IN THE LAYER THAT CONSUMES IT, so the downstream
+        # consumer would silently emit a wrong port list / a hole where a
+        # timing constant belongs / a dispatcher missing a command.
+        print(f"FAIL: semantic layer gate(s) FAILed: "
+              f"{', '.join(layer_gate_failures)} — see reports/phase1/")
         return 1
     if args.strict and (pct < 80.0 or total_todo > 0):
         reasons = []
