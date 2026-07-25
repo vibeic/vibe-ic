@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 941
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 941)
+- **Total programs (excluding helpers / shims):** 944
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 944)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 932 |
+| `any` | 935 |
 
 ## Alphabetical listing
 
@@ -463,6 +463,9 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l13_bringup_contract_check` | any | — | SEMANTIC gate for L13_LAB_CALIBRATION.json. |
 | `l14_protocol_versioning_contract_check` | any | — | SEMANTIC gate for |
 | `l15_encoding_tables_contract_check` | any | — | SEMANTIC gate for |
+| `l16_compliance_properties_actionable_check` | any | — | SEMANTIC gate for L16. |
+| `l17_channel_catalog_consumer_contract_check` | any | — | SEMANTIC gate for L17. |
+| `l18_interconnect_topology_factuality_check` | any | — | SEMANTIC gate for L18. |
 | `l1_electrical_specs_typed_depth_check` | any | Wave 38 | Wave 38 / B1 |
 | `l1_pin_bus_width_actionable_check` | any | — | L1 consumer-contract gate. |
 | `l1_pin_table_aliases_typed_check` | any | Wave 38 | Wave 38 / B2 |
@@ -1013,7 +1016,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (932 programs)
+### `any` (935 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1448,6 +1451,9 @@ _(no programs in this group)_
 - `l13_bringup_contract_check` — SEMANTIC gate for L13_LAB_CALIBRATION.json.
 - `l14_protocol_versioning_contract_check` — SEMANTIC gate for
 - `l15_encoding_tables_contract_check` — SEMANTIC gate for
+- `l16_compliance_properties_actionable_check` — SEMANTIC gate for L16.
+- `l17_channel_catalog_consumer_contract_check` — SEMANTIC gate for L17.
+- `l18_interconnect_topology_factuality_check` — SEMANTIC gate for L18.
 - `l1_electrical_specs_typed_depth_check` — Wave 38 / B1  _[Wave 38]_
 - `l1_pin_bus_width_actionable_check` — L1 consumer-contract gate.
 - `l1_pin_table_aliases_typed_check` — Wave 38 / B2  _[Wave 38]_

@@ -664,13 +664,30 @@ def emit_compliance_vectors(l10: dict, l16: dict, l22: dict) -> str:
             txt = str(item.get("name") if isinstance(item, dict) else item)
             if txt:
                 lines.append(f"L10: {txt[:120]}")
-    # L16 must-have compliance
-    for src in (l16.get("must_have_properties"),
+    # L16 must-have compliance.
+    #
+    # SILENT DEAD READ (fixed): this used to read only `must_have_properties` /
+    # `must_have_compliance` / `compliance_properties` — the shapes the
+    # hand-written protocol synthesisers emit. The Phase-1 EXTRACTOR
+    # (phase1_protocol_spec_extract.extract_l16_compliance) emits
+    # `properties[]` with the requirement text under `english_form`, so on
+    # every extractor-driven run BOTH the container key AND the text key
+    # missed and L16 contributed ZERO lines to compliance_vectors.txt while
+    # the layer reported EXTRACTED. Reading `properties` and `english_form`
+    # closes that. Guarded by l16_compliance_properties_actionable_check.py.
+    for src in (l16.get("properties"),
+                l16.get("must_have_properties"),
                 l16.get("must_have_compliance"),
                 l16.get("compliance_properties")):
         for item in _list_or_empty(src):
-            txt = str(item if isinstance(item, str) else item.get("text") or
-                      item.get("description") or item)
+            if isinstance(item, str):
+                txt = item
+            elif isinstance(item, dict):
+                txt = str(item.get("english_form") or item.get("text")
+                          or item.get("description") or item.get("statement")
+                          or item)
+            else:
+                txt = str(item)
             if txt and len(txt) > 1:
                 lines.append(f"L16: {txt[:120]}")
     # L22 verification plan
