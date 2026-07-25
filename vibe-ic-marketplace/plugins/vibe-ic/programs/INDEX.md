@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 919
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 919)
+- **Total programs (excluding helpers / shims):** 925
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 925)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 910 |
+| `any` | 916 |
 
 ## Alphabetical listing
 
@@ -263,6 +263,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `drc_report_check` | any | — | wrapper for eda_report_audit --mode drc. |
 | `drc_rule_layer_classify` | any | v0.3.16 | ORGANIC #513. Classify DRC violations by RULE-LAYER into |
 | `drc_vacuous_pass_check` | any | — | drc_vacuous_pass_check.py -- Reject a "0 DRC violations" verdict when the |
+| `drv_promotion_corroboration_check` | any | — | a route promoted on its OWN |
 | `ds_quality_check` | any | — | Datasheet (L1) quality scorer, 0-100. |
 | `dual_track_select` | any | — | deterministic DUAL-TRACK convergence selector. |
 | `dynamic_ir_drop_check` | any | — | transient (dynamic) IR-drop budget gate for tapeout. |
@@ -464,9 +465,12 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l3_opcode_response_template_check` | any | Wave 37 | Wave 37 / A2 |
 | `l4_regmap_enumerated_values_typed_check` | any | Wave 38 | Wave 38 / B3 |
 | `l6_reject_rules_from_rx_event_check` | any | Wave 37 | Wave 37 (v0.119.69). |
+| `l7_debug_access_grounding_check` | any | — | L7 SEMANTIC gate (ADVISORY). |
 | `l8_clock_domains_typed_check` | any | Wave 38 | Wave 38 / B4 |
+| `l8_clock_period_actionability_check` | any | — | L8 SEMANTIC consumer-contract gate. |
 | `l8_frame_end_gap_derivation_check` | any | — | LL-3. |
 | `l9_completeness_check` | any | — | Deterministic L9 Integration Spec completeness checker. |
+| `l9_floorplan_contract_check` | any | — | L9 SEMANTIC consumer-contract gate. |
 | `l9_response_delay_schema_check` | any | — | R5 L9 spec mandate |
 | `l9_rtl_pin_consistency_check` | any | Wave 79 | Wave 79 cross-layer integrity gate. |
 | `l9_submodule_conformance_check` | any | Wave 79 | cross-check the SUBMODULE half of the |
@@ -715,6 +719,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `rig_topology_disclosure_check` | any | — | verify hardware rig topology is declared. |
 | `rig_topology_image_extracted_check` | any | v0.119.32 | gate (LL-35). |
 | `rom_init_lint` | any | — | Detect Quartus-unsafe ROM initialization patterns. |
+| `route_congestion_trade_disclosure` | any | — | when global routing buys routability by |
 | `rs485_protocol_synth` | any | v0.1.84 | RS-485-class protocol synth helper. |
 | `rsp_example_otp_consistency_check` | any | — | L3 response examples must match L11 OTP content. |
 | `rtl_bug_report_schema_check` | any | v0.54 | v0.54 plugin gate |
@@ -992,7 +997,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (910 programs)
+### `any` (916 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1227,6 +1232,7 @@ _(no programs in this group)_
 - `drc_report_check` — wrapper for eda_report_audit --mode drc.
 - `drc_rule_layer_classify` — ORGANIC #513. Classify DRC violations by RULE-LAYER into  _[v0.3.16]_
 - `drc_vacuous_pass_check` — drc_vacuous_pass_check.py -- Reject a "0 DRC violations" verdict when the
+- `drv_promotion_corroboration_check` — a route promoted on its OWN
 - `ds_quality_check` — Datasheet (L1) quality scorer, 0-100.
 - `dual_track_select` — deterministic DUAL-TRACK convergence selector.
 - `dynamic_ir_drop_check` — transient (dynamic) IR-drop budget gate for tapeout.
@@ -1427,9 +1433,12 @@ _(no programs in this group)_
 - `l3_opcode_response_template_check` — Wave 37 / A2  _[Wave 37]_
 - `l4_regmap_enumerated_values_typed_check` — Wave 38 / B3  _[Wave 38]_
 - `l6_reject_rules_from_rx_event_check` — Wave 37 (v0.119.69).  _[Wave 37]_
+- `l7_debug_access_grounding_check` — L7 SEMANTIC gate (ADVISORY).
 - `l8_clock_domains_typed_check` — Wave 38 / B4  _[Wave 38]_
+- `l8_clock_period_actionability_check` — L8 SEMANTIC consumer-contract gate.
 - `l8_frame_end_gap_derivation_check` — LL-3.
 - `l9_completeness_check` — Deterministic L9 Integration Spec completeness checker.
+- `l9_floorplan_contract_check` — L9 SEMANTIC consumer-contract gate.
 - `l9_response_delay_schema_check` — R5 L9 spec mandate
 - `l9_rtl_pin_consistency_check` — Wave 79 cross-layer integrity gate.  _[Wave 79]_
 - `l9_submodule_conformance_check` — cross-check the SUBMODULE half of the  _[Wave 79]_
@@ -1677,6 +1686,7 @@ _(no programs in this group)_
 - `rig_topology_disclosure_check` — verify hardware rig topology is declared.
 - `rig_topology_image_extracted_check` — gate (LL-35).  _[v0.119.32]_
 - `rom_init_lint` — Detect Quartus-unsafe ROM initialization patterns.
+- `route_congestion_trade_disclosure` — when global routing buys routability by
 - `rs485_protocol_synth` — RS-485-class protocol synth helper.  _[v0.1.84]_
 - `rsp_example_otp_consistency_check` — L3 response examples must match L11 OTP content.
 - `rtl_bug_report_schema_check` — v0.54 plugin gate  _[v0.54]_
