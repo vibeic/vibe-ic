@@ -37,6 +37,24 @@ improvement from the earlier bounded repair-design loop (v1.5.61).
 
 ## Honest scope
 
+**Where the register lives (post-#278):** `waivers.json` holds the 2 MACHINERY-SANCTIONED ENV_UNAVAILABLE waivers (steps 6 + 39, the FPGA early-prototype and final sign-off), materialized by `waivers_materialize.py` with a sanctioned non-self approver. The HUMAN-JUDGMENT deferrals below sit in `waivers.json.template` and are NOT yet approved — their `approver` is a placeholder that `waivers_schema_check.py` rejects, so they cannot ship as a green sign-off until a person fills it in.
+
+**Deferred steps (2):** `rtl_gen` (AI-authored RTL handoff,
+class `rtl_gen=null`), `final_audit` (NOT a deferred step — the compliance-audit ROLL-UP verdict,
+`Overall: PASS_WITH_WAIVERS`; deliberately absent from the register),
+and FPGA on-board verify (no DE10 board contract for this class;
+`on_board_pass.json` verdict `SKIP`).
+
+**DFT disclosure:** at-speed gates (DT1/DT2/DT3) PASS, `scan_flops = 65`,
+test_coverage 100% — but **fault_coverage 53.25%**
+(`transition_coverage.json`); stuck-at ATPG gate is `SKIPPED-CONDITION`. The
+100% is test coverage only.
+
+**Provenance note:** the RTL under test is shared with the IHP-SG13G2 and
+GF180MCU cells of this campaign — sha256-identical (`e7feff2c…`), authored
+once and re-verified per cell. Phase 1 L-docs are campaign-shared
+(PDK-independent).
+
 One cell (IC × PDK) of the open-PDK matrix. See
 `benchmark-data/BENCHMARK_IC_CAMPAIGN_STATUS.md` for the full matrix's
 current per-cell status. Nothing here is claimed for any cell other than

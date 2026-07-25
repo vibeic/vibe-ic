@@ -48,6 +48,28 @@ Container: `vibeic-eda:0.2.28`._
 
 ## Honest scope
 
+**Where the register lives (post-#278):** `waivers.json` holds the 2 MACHINERY-SANCTIONED ENV_UNAVAILABLE waivers (steps 6 + 39, the FPGA early-prototype and final sign-off), materialized by `waivers_materialize.py` with a sanctioned non-self approver. The HUMAN-JUDGMENT deferrals below sit in `waivers.json.template` and are NOT yet approved — their `approver` is a placeholder that `waivers_schema_check.py` rejects, so they cannot ship as a green sign-off until a person fills it in.
+
+**Deferred steps (3):** `rtl_gen` (AI-authored RTL handoff,
+class `rtl_gen=null`), `final_audit` (NOT a deferred step — the compliance-audit ROLL-UP verdict,
+`Overall: PASS_WITH_WAIVERS`; deliberately absent from the register),
+FPGA on-board verify (no DE10 board contract; `on_board_pass.json` verdict
+`SKIP`), and `stuck_at_atpg` (OSS Fault `SKIPPED-CONDITION` — needs a
+library-mapped netlist; see DFT disclosure).
+
+**DFT disclosure:** at-speed gates (DT1/DT2/DT3) PASS, `scan_flops = 65`,
+test_coverage 100% — but **fault_coverage 48.75%**
+(`transition_coverage.json`); stuck-at ATPG gate is `SKIPPED-CONDITION`. The
+100% is test coverage only, not a DFT sign-off number.
+
+**Provenance note:** the RTL under test is shared with the IHP-SG13G2 and
+sky130A cells of this campaign — sha256-identical (`e7feff2c…`), authored
+once and re-verified per cell, not re-authored per plugin version. Phase 1 was
+**SKIPPED** in this run (`vibe_ic_one_shot.json`): the L-docs are the
+campaign-shared extraction (PDK-independent), not a fresh pull from the input
+docs. Also disclosed: EM / IR-drop sign-off reports are not shipped in this
+folder (see `waivers.json` / campaign backlog).
+
 One cell (IC × PDK) of the open-PDK matrix. This is the 3rd cell in the
 matrix to reach an independently re-derived PASS (after spm × IHP-SG13G2 and
 spm × sky130A). See `benchmark-data/BENCHMARK_IC_CAMPAIGN_STATUS.md` for the
