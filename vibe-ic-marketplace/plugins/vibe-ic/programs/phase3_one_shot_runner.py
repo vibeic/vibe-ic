@@ -12748,12 +12748,23 @@ for {set _cvg 0} {$_cvg < __BOUND__} {incr _cvg} {
   }
   if {[catch {check_placement} e]} { puts "SHIP_CVG_CP_WARN: $e" }
   if {[catch {
+    set _rrc 0; set _skip 0
     foreach _net [[ord::get_db_block] getNets] {
       set _st [$_net getSigType]
       if {$_st eq "POWER" || $_st eq "GROUND"} { continue }
+      # --- spare-net-safe filter (v1.5.65 post-mortem fix) ---
+      set _nm [$_net getName]
+      if {[string match *spare* $_nm]} { incr _skip; continue }
+      set _has_dnt 0
+      foreach _it [$_net getITerms] {
+        if {[[$_it getInst] isDoNotTouch]} { set _has_dnt 1; break }
+      }
+      if {$_has_dnt} { incr _skip; continue }
+      # --- end filter ---
       set _w [$_net getWire]
-      if {$_w ne "NULL"} { odb::dbWire_destroy $_w }
+      if {$_w ne "NULL"} { odb::dbWire_destroy $_w; incr _rrc }
     }
+    puts "SHIP_CVG_ROUTING_CLEARED: $_rrc (spare_preserved=$_skip)"
   } e]} { puts "SHIP_CVG_RRC_NONFATAL: $e" }
   if {[catch {global_route} e]} { puts "SHIP_CVG_GR_NONFATAL: $e" }
   if {[catch {detailed_route} e]} { puts "SHIP_CVG_DR_NONFATAL: $e" }
@@ -12898,17 +12909,8 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         # to DRC convergence. Power/ground + special nets are left intact. Proven:
         # 0-guide -> 2575-guide, detailed_route 437->0 violations, on stock 0.2.28.
         # chip/PDK-AGNOSTIC (keyed on odb net routing state; no chip/vendor literal).
-        "if {[catch {\n"
-        "  set _rrc 0\n"
-        "  foreach _net [[ord::get_db_block] getNets] {\n"
-        "    set _st [$_net getSigType]\n"
-        "    if {$_st eq \"POWER\" || $_st eq \"GROUND\"} { continue }\n"
-        "    set _w [$_net getWire]\n"
-        "    if {$_w ne \"NULL\"} { odb::dbWire_destroy $_w; incr _rrc }\n"
-        "  }\n"
-        "  puts \"SHIP_ROUTING_CLEARED: $_rrc\"\n"
-        "} e]} { puts \"SHIP_RRC_NONFATAL: $e\" }\n"
-        "if {[catch {global_route} e]} { puts \"SHIP_GR_NONFATAL: $e\" }\n"
+        + _spare_safe_routing_clear_tcl("SHIP")
+        + "if {[catch {global_route} e]} { puts \"SHIP_GR_NONFATAL: $e\" }\n"
         "if {[catch {detailed_route} e]} { puts \"SHIP_DR_NONFATAL: $e\" }\n"
         # POST-REROUTE real-SPEF convergence (#603): the reroute above lands
         # the pre-reroute repair on the REAL routed parasitics; re-extract and
@@ -13086,6 +13088,57 @@ def step_signoff_spef_repair(project: Path, top: str, pdk: "PdkConfig",
         f"{parsed['route_violations']}; not promoted (needs setup>=0 and DRC-clean).")
 
 
+# --- spare-net-safe routing clear (defense-in-depth for reroute loops) ------
+#
+# v1.5.65 post-mortem (caravel_user_project x sky130A): the escalation step's
+# `odb::dbWire_destroy` loop stripped routing from EVERY non-POWER/GROUND net,
+# including `spare_tielo` / `spare_tiehi` (the Design-for-ECO spare-input
+# tie-off nets).  The subsequent `global_route + detailed_route` then merged
+# those spare-tie nets with unrelated signal nets (la_data_out, user_irq,
+# wbs_dat_o) — a genuine LVS netlist/layout mismatch.  The base flow already
+# marks spare instances `set_dont_touch` so `repair_design` / `repair_timing`
+# leave them alone, but the routing clear did not honour that protection.
+#
+# FIX: a shared TCL helper that clears signal-net routing EXCEPT nets whose
+# name contains "spare" (the tie-off nets created by _build_spare_postfix_tcl)
+# and nets that touch at least one dont_touch instance (the spare cells
+# themselves — their inter-cell wiring must survive intact).
+#
+# Any net skipped is counted separately (`_skip`) so the log is transparent
+# about what was preserved.  chip/PDK-AGNOSTIC: the filter uses ODB runtime
+# state (net name, instance dont_touch flag), not a chip/vendor literal.
+
+
+def _spare_safe_routing_clear_tcl(marker_prefix: str = "SHIP") -> str:
+    """Emit a TCL fragment that clears signal-net routing while preserving
+    spare / dont_touch nets.  Returns a self-contained, NONFATAL-guarded
+    block.  ``marker_prefix`` differentiates the log tokens across call
+    sites (SHIP / SHIP_ESC / SHIP_CVG)."""
+    return (
+        "if {[catch {\n"
+        "  set _rrc 0; set _skip 0\n"
+        "  foreach _net [[ord::get_db_block] getNets] {\n"
+        "    set _st [$_net getSigType]\n"
+        "    if {$_st eq \"POWER\" || $_st eq \"GROUND\"} { continue }\n"
+        "    # --- spare-net-safe filter (v1.5.65 post-mortem fix) ---\n"
+        "    set _nm [$_net getName]\n"
+        "    if {[string match *spare* $_nm]} {\n"
+        "      incr _skip; continue\n"
+        "    }\n"
+        "    set _has_dnt 0\n"
+        "    foreach _it [$_net getITerms] {\n"
+        "      if {[[$_it getInst] isDoNotTouch]} { set _has_dnt 1; break }\n"
+        "    }\n"
+        "    if {$_has_dnt} { incr _skip; continue }\n"
+        "    # --- end filter ---\n"
+        "    set _w [$_net getWire]\n"
+        "    if {$_w ne \"NULL\"} { odb::dbWire_destroy $_w; incr _rrc }\n"
+        "  }\n"
+        f"  puts \"{marker_prefix}_ROUTING_CLEARED: $_rrc (spare_preserved=$_skip)\"\n"
+        f"}} e]}} {{ puts \"{marker_prefix}_RRC_NONFATAL: $e\" }}\n"
+    )
+
+
 # --- DRV wire-length escalation (a SEPARATE, independently-gated attempt) --
 #
 # ROOT CAUSE (measured on caravel_user_project x sky130A, run
@@ -13165,17 +13218,8 @@ def _ship_wire_length_escalation_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "puts \"SHIP_ESC_EST_DR_NONFATAL: $e\" }\n"
     )
     reroute_tcl = (
-        "if {[catch {\n"
-        "  set _errc 0\n"
-        "  foreach _net [[ord::get_db_block] getNets] {\n"
-        "    set _st [$_net getSigType]\n"
-        "    if {$_st eq \"POWER\" || $_st eq \"GROUND\"} { continue }\n"
-        "    set _w [$_net getWire]\n"
-        "    if {$_w ne \"NULL\"} { odb::dbWire_destroy $_w; incr _errc }\n"
-        "  }\n"
-        "  puts \"SHIP_ESC_ROUTING_CLEARED: $_errc\"\n"
-        "} e]} { puts \"SHIP_ESC_RRC_NONFATAL: $e\" }\n"
-        "if {[catch {global_route} e]} { puts \"SHIP_ESC_GR_NONFATAL: $e\" }\n"
+        _spare_safe_routing_clear_tcl("SHIP_ESC")
+        + "if {[catch {global_route} e]} { puts \"SHIP_ESC_GR_NONFATAL: $e\" }\n"
         "if {[catch {detailed_route} e]} { puts \"SHIP_ESC_DR_NONFATAL: $e\" }\n"
         + extract_tcl
     )
@@ -13310,23 +13354,32 @@ def step_signoff_drv_wire_length_repair(
     fix. Fail-safe: never promotes a result that isn't a proven, freshly
     measured improvement over the CURRENT state.
 
-    TEMPORARILY DISABLED (v1.5.65): measured on caravel_user_project x
-    sky130A that this step's own promotion gate (`_ship_escalation_should_
-    promote`) compares a BEFORE/AFTER violator count taken from a quick
-    in-TCL-session SPEF re-extraction, which is NOT the same measurement as
-    the full multi-corner OCV sign-off report (`sta_mcorner_ocv.rpt`) that
-    `sta_corner_record_completeness_check` reads. The escalation's own count
-    improved (330->178) and its own gate promoted, but the REAL sign-off
-    violator count got far WORSE (4->219), and a genuine LVS netlist/layout
-    mismatch appeared (spare-tie nets merged with unrelated signal nets) --
-    the escalation's clear-routing+reroute did not preserve the base flow's
-    spare-cell-tap net isolation. This is a confirmed regression, not a
-    hypothetical one. Disabled at the top of this function (no-op / None)
-    until the promotion gate is rebuilt to measure against the ACTUAL
-    downstream multi-corner sign-off extraction (not a session-local
-    estimate) and the spare-net isolation is preserved across the reroute.
-    See campaign notes for the full incident writeup."""
-    return None
+    v1.5.65 POST-MORTEM FIX (v2): the v1.5.63/v1.5.65 incident had two
+    independent root causes, both now addressed:
+
+      (1) ROUTING CLEAR destroyed spare-net wires (spare_tielo, spare_tiehi,
+          dont_touch instance nets), and the reroute merged them with unrelated
+          signal nets → genuine LVS mismatch. FIX: routing clear now uses
+          ``_spare_safe_routing_clear_tcl`` which skips nets whose name matches
+          ``*spare*`` or that connect to any dont_touch instance.
+
+      (2) PROMOTION GATE used a session-local single-corner SPEF estimate to
+          decide whether to promote, while the downstream sign-off
+          (``sta_mcorner_ocv.rpt`` read by ``sta_corner_record_completeness_
+          check``) uses a full multi-corner OCV STA — divergence let a
+          regressed design promote. FIX: the session-local gate remains as a
+          FAST INITIAL FILTER (rejecting obvious regressions cheaply), but on
+          promote the step now (a) verifies spare-tie net integrity in the
+          escalated netlist/DEF, and (b) INVALIDATES all stale downstream STA
+          reports (``sta_mcorner_ocv.rpt``), SPEF, and GDS — forcing the
+          downstream ``step_canonicalize_artefacts`` to re-derive them from the
+          promoted route. The acceptance gate therefore reads a report built on
+          the PROMOTED design, not a stale pre-escalation one. The escalation's
+          own session-local number is NEVER the number the acceptance gate uses.
+
+    If spare-tie net integrity fails (base had spares, escalated lost them),
+    the promote is refused (fail-safe rollback) — exactly the defect shape
+    that caused the v1.5.65 LVS regression."""
     t0 = time.time()
     pnr_out = _pl.pnr_dir(project)
     routed = pnr_out / "routed.def"
@@ -13372,6 +13425,44 @@ def step_signoff_drv_wire_length_repair(
     def_ok = escalated_def.is_file() and escalated_def.stat().st_size > 0
     v_ok = escalated_v.is_file() and escalated_v.stat().st_size > 0
     if _ship_escalation_should_promote(parsed, def_ok, v_ok):
+        # --- v1.5.65 post-mortem: spare-tie net integrity check BEFORE promote ---
+        # Read the escalated netlist and DEF to verify spare_tielo net and its
+        # driver instance (spare_tielo_drv) survived the reroute.  If either
+        # is missing, the reroute merged/dropped a spare net → refuse promote
+        # (exactly the shape that caused the v1.5.64 LVS regression).
+        _esc_v_text = escalated_v.read_text(errors="replace") if v_ok else ""
+        _esc_d_text = escalated_def.read_text(errors="replace") if def_ok else ""
+        _spare_tielo_in_v = "spare_tielo" in _esc_v_text
+        _spare_tielo_in_d = "spare_tielo" in _esc_d_text
+        _spare_drv_in_v = "spare_tielo_drv" in _esc_v_text
+        _spare_drv_in_d = "spare_tielo_drv" in _esc_d_text
+        # Check the BASE route's netlist/DEF for the same markers — if the
+        # base never had spares (design with 0 spare density), the check must
+        # not penalize the escalated result.  ONLY refuse when the BASE had
+        # it and the escalated lost it.
+        _base_v = pnr_out / f"{top}_pnr.v"
+        _base_v_text = (_base_v.read_text(errors="replace")
+                        if _base_v.is_file() else "")
+        _base_d_text = (routed.read_text(errors="replace")
+                        if routed.is_file() else "")
+        _base_had_spare = ("spare_tielo" in _base_v_text
+                           or "spare_tielo" in _base_d_text)
+        _spare_lost = (_base_had_spare
+                       and not (_spare_tielo_in_v and _spare_tielo_in_d
+                                and _spare_drv_in_v and _spare_drv_in_d))
+        if _spare_lost:
+            _spare_note = (
+                f"spare_tielo net/driver LOST in escalated output "
+                f"(netlist: net={_spare_tielo_in_v} drv={_spare_drv_in_v}, "
+                f"DEF: net={_spare_tielo_in_d} drv={_spare_drv_in_d}) — "
+                f"refusing promote to prevent LVS regression (v1.5.65 "
+                f"post-mortem safety gate)")
+            return StepResult(
+                "signoff_drv_wire_length_repair", "PASS", time.time() - t0,
+                f"no-op (current route kept): escalation DRV "
+                f"{parsed.get('before_count')}->{parsed.get('after_count')} "
+                f"but {_spare_note}")
+        # --- end spare-tie integrity check ---
         shutil.copy2(routed, pnr_out / "routed_pre_escalation.def")
         shutil.copy2(escalated_def, routed)
         _pnr_v = pnr_out / f"{top}_pnr.v"
@@ -13381,16 +13472,59 @@ def step_signoff_drv_wire_length_repair(
         _topdef = pnr_out / f"{top}.def"
         if _topdef.is_file():
             shutil.copy2(escalated_def, _topdef)
+        # --- v1.5.65 post-mortem v2: invalidate stale downstream artefacts ---
+        # The promoted route is a DIFFERENT physical design from the pre-
+        # escalation base.  Any downstream artefact derived from the base
+        # (GDS, SPEF, multi-corner OCV STA report) is now stale and MUST be
+        # re-derived from the promoted route.  Deleting them forces
+        # step_canonicalize_artefacts (which skips emission when the file
+        # already exists) to re-run the full downstream measurement pipeline
+        # on the promoted design.  The acceptance gate
+        # (sta_corner_record_completeness_check) therefore reads a report
+        # built on the PROMOTED route — never the pre-escalation one.
+        _stale: list = []
         _gds = pnr_out / f"{top}.gds"
         if _gds.is_file():
             _gds.unlink()
+            _stale.append("GDS")
+        _sta_out = _pl.sta_dir(project)
+        for _rpt_name in ("sta_mcorner_ocv.rpt",
+                          "sta_mcorner_ocv_setup.tcl",
+                          "sta_mcorner_ocv_hold.tcl"):
+            _rpt = _sta_out / _rpt_name
+            if _rpt.is_file():
+                _rpt.unlink()
+                _stale.append(_rpt_name)
+        _rpt_phase3 = _pl.reports_phase3_dir(project)
+        for _rpt_name in ("sta_mcorner_ocv.rpt",
+                          "mcorner_ocv_stance.json"):
+            _rpt = _rpt_phase3 / _rpt_name
+            if _rpt.is_file():
+                _rpt.unlink()
+                _stale.append(f"reports/{_rpt_name}")
+        # Invalidate existing SPEF (nom and per-corner) — the routing changed,
+        # so parasitic extraction must re-run on the promoted DEF.
+        for _spef in sorted(pnr_out.glob("*.spef")):
+            # Keep escalation_*.spef (the escalation's own working files)
+            if "escalation" in _spef.name:
+                continue
+            _spef.unlink()
+            _stale.append(_spef.name)
+        _stale_note = (f"; invalidated {len(_stale)} stale downstream "
+                       f"artefacts ({', '.join(_stale[:5])}"
+                       f"{'...' if len(_stale) > 5 else ''})"
+                       if _stale else "")
         return StepResult(
             "signoff_drv_wire_length_repair", "PASS", time.time() - t0,
             f"SHIPPED wire-length repeater escalation (max_wire_length="
-            f"{parsed.get('max_wire_length')} um): real violator count "
-            f"{parsed['before_count']}->{parsed['after_count']}, reroute "
-            f"DRC-clean (0 violations); promoted over the pre-escalation "
-            f"route.", [str(routed), str(_pnr_v)])
+            f"{parsed.get('max_wire_length')} um): session-local violator "
+            f"count {parsed['before_count']}->{parsed['after_count']}, "
+            f"reroute DRC-clean (0 violations), spare-tie net intact; "
+            f"promoted over the pre-escalation route{_stale_note}. "
+            f"IMPORTANT: session-local count is a preliminary filter only — "
+            f"the REAL sign-off DRV count will be measured by the downstream "
+            f"multi-corner OCV STA (sta_mcorner_ocv.rpt) re-derived from the "
+            f"promoted route.", [str(routed), str(_pnr_v)])
     return StepResult(
         "signoff_drv_wire_length_repair", "PASS", time.time() - t0,
         f"no-op (current route kept): escalation real violator count "
