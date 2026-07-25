@@ -6355,9 +6355,37 @@ def _strip_signed_net_decls(nl_text: str) -> Tuple[str, int]:
     return _SIGNED_NET_DECL_RE.subn(r"\1", nl_text)
 
 
-def step_synth(project: Path, top: str, pdk: PdkConfig,
-               container: str) -> StepResult:
-    t0 = time.time()
+# ORGANIC (edge-LLM GEMM convergence campaign, 2026-07-25) — RTL-KEY the
+# phase-3 synth cache.
+#
+# The v1.6.36 "preserve provenance" skip reuses an existing `<top>_synth.v`
+# instead of re-running synth. PR-A3 later made that skip PDK-keyed
+# (`_netlist_matches_liberty`) so a netlist mapped to a DIFFERENT PDK can no
+# longer be laundered. But NOTHING keys it to the RTL: edit the RTL, re-run
+# phase 3 on the SAME PDK, and the stale netlist is reused — the edit is a
+# SILENT NO-OP. Observed consequence: two different RTL sources produced a
+# byte-identical netlist and post-route numbers agreeing to 16 significant
+# figures, i.e. the "improvement" measured nothing.
+#
+# The PnR cache already solves the same class of problem the right way
+# (`_pnr_cache_valid_for` keys the DEF on the requested die/util via
+# pnr_args.json). This mirrors that pattern for synth.
+#
+# Backwards compatibility: a netlist left by an older run has no sidecar and
+# its RTL fingerprint cannot be recovered. Rather than force a re-synth for
+# every existing project (which would invalidate recorded provenance hashes —
+# the very thing v1.6.36 protects), an absent sidecar falls back to an mtime
+# staleness test and DISCLOSES that the fingerprint was unverifiable.
+# chip-AGNOSTIC: file hashing + the existing selector.
+_SYNTH_INPUTS_SIDECAR = "synth_inputs.json"
+
+
+def _synth_rtl_files(project: Path) -> List[Path]:
+    """The EXACT RTL file list phase-3 synth reads, in read order.
+
+    Extracted verbatim from step_synth so the synth cache key and the synth
+    command can never diverge (cf. the reference-TB step, which reuses its
+    producer's logic for the same reason)."""
     all_rtl = sorted((_pl.rtl_dir(project)).glob("*.sv")) + \
               sorted((_pl.rtl_dir(project)).glob("*.v"))
     # Phase 3 synth = silicon top only. Skip FPGA wrappers + test fixtures
@@ -6377,7 +6405,79 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     # Package files MUST come first so `import pkg::*` resolves.
     pkg_files = [f for f in silicon if "pkg" in f.name.lower()]
     other = [f for f in silicon if "pkg" not in f.name.lower()]
-    rtl_files = pkg_files + other
+    return pkg_files + other
+
+
+def _synth_inputs_fingerprint(project: Path, liberty: str) -> Dict[str, Any]:
+    """Content fingerprint of everything that determines the netlist."""
+    import hashlib as _hl
+    rtl: Dict[str, str] = {}
+    for f in _synth_rtl_files(project):
+        try:
+            rtl[f.name] = _hl.sha256(f.read_bytes()).hexdigest()
+        except OSError as e:                       # unreadable → not fingerprintable
+            rtl[f.name] = f"<unreadable: {e}>"
+    return {"liberty": str(liberty), "rtl_sha256": rtl}
+
+
+def _write_synth_inputs_sidecar(project: Path, liberty: str) -> None:
+    """Record the fingerprint beside the netlist. Best-effort: a sidecar that
+    cannot be written must never fail an otherwise-good synth."""
+    try:
+        out = _pl.synth_dir(project) / _SYNTH_INPUTS_SIDECAR
+        out.write_text(json.dumps(
+            _synth_inputs_fingerprint(project, liberty),
+            indent=2, sort_keys=True))
+    except OSError:                                # nosec — sidecar is advisory
+        pass
+
+
+def _synth_cache_valid_for(project: Path, netlist: Path,
+                           liberty: str) -> Tuple[bool, str]:
+    """May the cached `netlist` be reused for THIS RTL + liberty?
+
+    Returns (ok, message). Mirrors `_pnr_cache_valid_for`. Never raises."""
+    if not netlist.is_file():
+        return False, "no cached netlist"
+    side = _pl.synth_dir(project) / _SYNTH_INPUTS_SIDECAR
+    current = _synth_inputs_fingerprint(project, liberty)
+    if side.is_file():
+        try:
+            cached = json.loads(side.read_text())
+        except (OSError, ValueError) as e:
+            return False, f"synth input sidecar unreadable ({e}); re-running synth"
+        if cached.get("liberty") != current["liberty"]:
+            return False, (f"liberty changed "
+                           f"({cached.get('liberty')} -> {current['liberty']})")
+        old_rtl = cached.get("rtl_sha256") or {}
+        new_rtl = current["rtl_sha256"]
+        if old_rtl != new_rtl:
+            changed = sorted(
+                set(old_rtl) ^ set(new_rtl)
+                | {k for k in set(old_rtl) & set(new_rtl)
+                   if old_rtl[k] != new_rtl[k]})
+            return False, ("RTL changed since the cached netlist was built: "
+                           + ", ".join(changed[:8])
+                           + (" ..." if len(changed) > 8 else ""))
+        return True, f"RTL fingerprint matches ({len(new_rtl)} file(s))"
+    # No sidecar (netlist predates this check) — fall back to mtime staleness.
+    try:
+        nl_mtime = netlist.stat().st_mtime
+        newer = [f.name for f in _synth_rtl_files(project)
+                 if f.stat().st_mtime > nl_mtime]
+    except OSError as e:
+        return False, f"cannot stat RTL/netlist ({e}); re-running synth"
+    if newer:
+        return False, ("RTL newer than the cached netlist: "
+                       + ", ".join(sorted(newer)[:8]))
+    return True, ("no synth-input sidecar (netlist predates RTL-keying); "
+                  "reuse allowed on mtime only — RTL fingerprint UNVERIFIED")
+
+
+def step_synth(project: Path, top: str, pdk: PdkConfig,
+               container: str) -> StepResult:
+    t0 = time.time()
+    rtl_files = _synth_rtl_files(project)
 
     # ASIC top resolution moved to main() so all steps share the same
     # `top`. step_synth now receives the already-resolved name.
@@ -7774,6 +7874,129 @@ def _rewrite_pnr_floorplan_die(tcl_text: str, die_w: int, die_h: int,
          f'{core_w} {core_h}"'),
         tcl_text,
     )
+
+
+# ORGANIC (edge-LLM GEMM convergence campaign, 2026-07-25) — DISCLOSE why a
+# non-converged route got no automated remedy.
+#
+# `_route_feedback_loosen` returns None for SIX different reasons and the call
+# site cannot tell them apart. Four are deliberate exemptions. TWO are silent
+# dead ends that leave a congestion-limited design with NO automated remedy at
+# all, while the ROUTE_NOT_CONVERGED FAIL still advises the operator to
+# "increase --die-um ... or raise the router's end iteration" as though the
+# automation had nothing to say:
+#
+#   (a) DIE_CAP        — a genuine plateau signal is present, but the loosened
+#                        die would breach `die_max_um` (a hardcoded module
+#                        constant with no CLI/env override). Every design whose
+#                        die is already at/near the cap therefore gets ZERO
+#                        congestion recovery, silently.
+#   (b) ROUTER_BUDGET  — the trajectory tail is still strictly DECREASING, so
+#                        `_drt_is_non_converging` correctly declines to resize
+#                        (the die is not the problem — the router simply ran out
+#                        of budget). Its own docstring names the correct knob as
+#                        "router end-iteration" — but the main `detailed_route`
+#                        call emits no `-droute_end_iter` and no flag exposes it,
+#                        so the named remedy does not exist.
+#
+# This classifier CHANGES NOTHING about geometry or flow control: it is a pure
+# function that explains the situation so the FAIL can state it honestly. It is
+# deliberately not a "waiver" and never converts a FAIL into a PASS.
+# chip-AGNOSTIC: OpenROAD log grammar + arithmetic only.
+_ROUTE_RECOVERY_AVAILABLE = "loosen_die_available"
+_ROUTE_RECOVERY_EXPLICIT_DIE = "none_explicit_die"
+_ROUTE_RECOVERY_INCOMPLETE = "none_route_incomplete"
+_ROUTE_RECOVERY_LADDER_DONE = "none_ladder_exhausted"
+_ROUTE_RECOVERY_DIE_CAP = "none_declined_at_die_cap"
+_ROUTE_RECOVERY_ROUTER_BUDGET = "none_router_budget_knob_absent"
+_ROUTE_RECOVERY_CONVERGED = "none_route_converged"
+
+
+def _route_recovery_disclosure(
+        die_w: int, die_h: int, log_text: str, loosen_idx: int,
+        auto_die_requested: bool, route_completed: bool,
+        ladder: Tuple[float, ...] = _ROUTE_LOOSEN_UTIL_LADDER,
+        die_max_um: int = _DEFAULT_DIE_MAX_UM) -> Dict[str, Any]:
+    """Classify what automated congestion remedy was (un)available for ONE
+    detailed-route outcome, and say so in words. Pure: mutates nothing,
+    reads no file, and never influences the PASS/FAIL verdict.
+
+    Returns a record with:
+      ``remedy``     one of the ``_ROUTE_RECOVERY_*`` constants
+      ``disclosure`` a human-readable sentence naming the reason
+      plus the measured trajectory / geometry that drove the decision.
+    """
+    trajectory = _drt_violation_trajectory(log_text)
+    rec: Dict[str, Any] = {
+        "die_um": f"{die_w}x{die_h}",
+        "die_max_um": die_max_um,
+        "loosen_rung": loosen_idx,
+        "violation_trajectory": list(trajectory),
+        "final_violations": trajectory[-1] if trajectory else None,
+    }
+
+    if trajectory and trajectory[-1] <= 0:
+        rec["remedy"] = _ROUTE_RECOVERY_CONVERGED
+        rec["disclosure"] = "detailed route converged; no remedy needed."
+        return rec
+    if not route_completed:
+        rec["remedy"] = _ROUTE_RECOVERY_INCOMPLETE
+        rec["disclosure"] = (
+            "detailed route did not complete (stall / non-zero rc); the "
+            "geometry ladder is not applicable to an incomplete route.")
+        return rec
+    if not auto_die_requested:
+        rec["remedy"] = _ROUTE_RECOVERY_EXPLICIT_DIE
+        rec["disclosure"] = (
+            "an explicit --die-um was given, so the operator owns the "
+            "geometry and auto-loosen is exempt by design. Re-run with a "
+            "larger --die-um or 'auto' to enable automated relief.")
+        return rec
+    if loosen_idx + 1 >= len(ladder):
+        rec["remedy"] = _ROUTE_RECOVERY_LADDER_DONE
+        rec["disclosure"] = (
+            f"the loosen ladder is exhausted (rung {loosen_idx} of "
+            f"{len(ladder)}); every automated die-relief step has been "
+            f"applied and the route still did not converge.")
+        return rec
+
+    if not _drt_is_non_converging(trajectory):
+        # Tail still strictly decreasing -> the die is NOT the problem.
+        rec["remedy"] = _ROUTE_RECOVERY_ROUTER_BUDGET
+        tail = trajectory[-2:] if len(trajectory) >= 2 else trajectory
+        rec["disclosure"] = (
+            f"the violation count was still FALLING when the router stopped "
+            f"({' -> '.join(str(v) for v in tail)}), so this is a router "
+            f"BUDGET limit, not a congestion/geometry limit — resizing the "
+            f"die would be the wrong knob and was correctly not attempted. "
+            f"The correct knob is the detailed-route end-iteration budget "
+            f"(`detailed_route -droute_end_iter`), which this runner does "
+            f"NOT currently expose for the main route. NO automated remedy "
+            f"was available.")
+        return rec
+
+    cur_util = ladder[loosen_idx]
+    next_util = ladder[loosen_idx + 1]
+    if _compute_loosened_die(die_w, die_h, cur_util, next_util,
+                             die_max_um) is not None:
+        rec["remedy"] = _ROUTE_RECOVERY_AVAILABLE
+        rec["disclosure"] = (
+            f"a die-loosen step is available (util {cur_util:g} -> "
+            f"{next_util:g}) and will be applied on retry.")
+        return rec
+
+    factor = (cur_util / next_util) ** 0.5
+    need_w = int(die_w * factor + 0.999)
+    need_h = int(die_h * factor + 0.999)
+    rec["remedy"] = _ROUTE_RECOVERY_DIE_CAP
+    rec["would_need_die_um"] = f"{need_w}x{need_h}"
+    rec["disclosure"] = (
+        f"a genuine congestion plateau was detected, but the only automated "
+        f"remedy was REFUSED: relieving util {cur_util:g} -> {next_util:g} "
+        f"needs a {need_w}x{need_h}um die, which exceeds the {die_max_um}um "
+        f"cap. NO automated remedy ran. Any design whose die is already at "
+        f"or near the cap gets no congestion recovery at all.")
+    return rec
 
 
 def _route_feedback_loosen(die_w: int, die_h: int, log_text: str,
@@ -10883,6 +11106,17 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             _lf = _route_feedback_loosen(
                 die_w, die_h, _pnr_log, _loosen_idx,
                 _auto_die_requested, _route_completed)
+            # DISCLOSURE (pure, no flow effect): explain why a non-converged
+            # route got no automated remedy. Recorded on resize_history so it
+            # survives the retry loop into the step extras and the FAIL text.
+            _rdisc = _route_recovery_disclosure(
+                die_w, die_h, _pnr_log, _loosen_idx,
+                _auto_die_requested, _route_completed)
+            if _rdisc.get("remedy") not in (_ROUTE_RECOVERY_CONVERGED,
+                                            _ROUTE_RECOVERY_AVAILABLE):
+                _rdisc["iteration"] = _retry_i
+                _rdisc["direction"] = "no_remedy"
+                resize_history.append(_rdisc)
             if _lf is not None:
                 _lw, _lh, _lrec = _lf
                 _lrec["iteration"] = _retry_i
@@ -11017,6 +11251,15 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             _drt_viol = _drt_final_violations(
                 _log_p.read_text(errors="ignore"))
     if _drt_viol is not None and _drt_viol > 0:
+        # Name the automated remedy that did (or did NOT) run. Advising the
+        # operator to "increase --die-um" while the automation silently
+        # declined for a reason they cannot see is the exact shape of a
+        # check that lies about its own effort.
+        _no_remedy = [r for r in resize_history
+                      if r.get("direction") == "no_remedy"]
+        _remedy_note = (
+            "  AUTOMATED-REMEDY DISCLOSURE: " + _no_remedy[-1]["disclosure"]
+            if _no_remedy else "")
         return StepResult(
             "pnr", "FAIL", time.time() - t0,
             (f"ROUTE_NOT_CONVERGED: detailed route completed with "
@@ -11024,7 +11267,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
              f"design is congestion-limited at die {die_w}x{die_h}µm / "
              f"util {util:g}: increase --die-um, lower --util, or raise "
              f"the router's end iteration. Emitted DEF/GDS are kept for "
-             f"debugging but are NOT sign-off artifacts."),
+             f"debugging but are NOT sign-off artifacts." + _remedy_note),
             [str(out_dir / "openroad.log"), str(def_file)],
             extras={"finding": "ROUTE_NOT_CONVERGED",
                     "drt_violations": _drt_viol,
@@ -24191,13 +24434,26 @@ def main() -> int:
                   "the active PDK liberty — it was mapped to a DIFFERENT "
                   "PDK; re-running synth (preserve-provenance is now "
                   "PDK-keyed, PR-A3).", file=sys.stderr)
-        if _nl_pdk_ok:
+        # RTL-KEY the same skip. PDK-keying alone let an RTL edit be a SILENT
+        # NO-OP: same PDK -> stale netlist reused -> the "improvement" measured
+        # nothing. Mirrors the geometry-keyed PnR cache (#593).
+        _nl_rtl_ok, _nl_rtl_msg = _synth_cache_valid_for(
+            project, netlist_existing, str(pdk.liberty))
+        if _nl_pdk_ok and not _nl_rtl_ok:
+            print(f"[synth] cached netlist is STALE — {_nl_rtl_msg}; "
+                  f"re-running synth (preserve-provenance is RTL-keyed).",
+                  file=sys.stderr)
+        if _nl_pdk_ok and _nl_rtl_ok:
             plan.append(StepResult(
                 "synth", "PASS", 0.0,
-                f"netlist already present: {netlist_existing.name} (skipped re-run to preserve provenance)",
+                f"netlist already present: {netlist_existing.name} (skipped re-run to preserve provenance; {_nl_rtl_msg})",
                 [str(netlist_existing)]))
         else:
             plan.append(step_synth(project, effective_top, pdk, args.container))
+            if plan[-1].status == "PASS":
+                # Record the fingerprint so the NEXT run can tell whether the
+                # RTL moved under it.
+                _write_synth_inputs_sidecar(project, str(pdk.liberty))
         if plan[-1].status == "PASS":
             # ORGANIC #593 — geometry-aware cache: a DEF that exists may
             # only be reused when the requested --die-um/--util match the
