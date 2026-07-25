@@ -53,7 +53,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # `PIN <name>` ... `USE POWER|GROUND` ... `END <name>` — LEF is whitespace and
 # newline tolerant, so scan the pin block rather than assuming a line layout.
@@ -174,6 +174,23 @@ def measured_rails(project: Path) -> List[str]:
     return []
 
 
+def rail_name_tokens(rails: List[str]) -> List[str]:
+    """Expand prose rail declarations into their identifier tokens, using the
+    SAME prose-separator split as `_rail_token_match` (whitespace, slash,
+    comma, brackets — NEVER the underscore). `"VDD / core supply (1.8 V)"`
+    yields `VDD`, `core`, `supply`, `1.8`, `V` — needed wherever a rail must
+    be compared against a NETLIST NET NAME (a bare token), e.g. the tie
+    whitelist in the pre-route gate (#329)."""
+    toks: List[str] = []
+    seen: set = set()
+    for r in rails or []:
+        for tok in re.split(r"[\s/,;()\[\]]+", str(r)):
+            if tok and tok not in seen:
+                seen.add(tok)
+                toks.append(tok)
+    return toks
+
+
 def _rail_token_match(pin: str, rails: List[str]) -> Optional[str]:
     """Does the pin NAME correspond to a declared rail? Compared on normalised
     tokens so `VDD` matches a rail written `VDD / supply (5 V)` — but only as a
@@ -236,6 +253,38 @@ def classify_pin(master: str, pin: str, l21: Dict[str, Any],
                 "rail": hit, "detail": f"pin name corresponds to declared rail {hit!r}"}
     return {"master": master, "pin": pin, "status": "undeclared",
             "detail": "no rail, no mapping, no declared gap accounts for this pin"}
+
+
+def declared_binding_map(l21: Dict[str, Any],
+                         rails: "Optional[List[str]]" = None,
+                         ) -> Dict[Tuple[str, str], str]:
+    """``(master, pin) -> rail`` for every EXPLICIT L21 mapping whose rail is
+    independently established (declared in L21, measured from the DEF, or a
+    design supply net the caller passes in `rails`).
+
+    #329 delta 1 (harvested via #349): the pre-route GATE accepted a declared
+    mapping as accounted-for, but the PHYSICAL binding emitter only bound
+    name-equality pins — so a pin whose name differs from its rail passed the
+    gate and still arrived at routing constant-tied (the exact DRT-0307 the
+    gate exists to prevent). This map feeds the emitter so what the gate
+    accepts is exactly what gets bound.
+
+    ANTI-CHEAT preserved: a mapping pointing at a rail nobody established
+    (`rail_undeclared` in classify_pin) is EXCLUDED — honoring it would let a
+    document fabricate a rail. Acknowledged gaps carry no rail and are skipped.
+    """
+    f = (l21 or {}).get("fields") or {}
+    rs = {str(r) for r in (rails or [])}
+    out: Dict[Tuple[str, str], str] = {}
+    for m in (f.get("hard_macro_supplies") or []):
+        if not isinstance(m, dict) or m.get("integration_gap") is True:
+            continue
+        master = str(m.get("master", "")).strip()
+        pin = str(m.get("pin", "")).strip()
+        rail = str(m.get("rail", "")).strip()
+        if master and pin and rail and rail in rs:
+            out[(master, pin)] = rail
+    return out
 
 
 def assess(lef_texts: List[str], l21: Dict[str, Any],

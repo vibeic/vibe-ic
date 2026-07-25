@@ -3304,16 +3304,22 @@ def _parse_macro_supply_pins(
             continue
         if cur_pin is None:
             continue
-        m = re.match(r"USE\s+(\S+)", s)
-        if m:
-            cur_use = m.group(1).rstrip(";").upper()
+        # LEF statements are `;`-separated and may share a line
+        # (`DIRECTION INOUT ; USE POWER ;` is the common vendor form). The
+        # line-anchored match missed those — found via #329's fixtures; the
+        # shared hardmacro_supply_intent.lef_pg_pins already handles them.
+        for stmt in s.split(";"):
+            m = re.match(r"\s*USE\s+(\S+)", stmt)
+            if m:
+                cur_use = m.group(1).upper()
     return {k: v for k, v in result.items() if v}
 
 
 def _macro_supply_gc_plan(
         macro_lef_texts: Sequence[str],
         power_nets: Sequence[str],
-        ground_nets: Sequence[str]
+        ground_nets: Sequence[str],
+        declared_map: Optional[Dict[Tuple[str, str], str]] = None,
 ) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
     """Decide, for every hard-macro POWER/GROUND pin, whether it binds to a
     matching supply rail.
@@ -3327,10 +3333,17 @@ def _macro_supply_gc_plan(
                           that matches NO declared rail of its use. These are
                           reported honestly and never fabricated a rail.
 
+    ``declared_map`` (#329 delta 1, via #349) is the design's EXPLICIT
+    ``(master, pin) -> rail`` binding from L21 — already anti-cheat-filtered
+    by `hardmacro_supply_intent.declared_binding_map` so every rail in it is
+    independently established. It binds pins whose names differ from their
+    rail; name-equality keeps precedence so prior plans are unchanged.
+
     chip-AGNOSTIC: keyed on the macro's own LEF USE records and the design's own
     declared supply nets; deduplicated by ``(master, pin)`` across LEFs."""
     pset = {n for n in (power_nets or [])}
     gset = {n for n in (ground_nets or [])}
+    dmap = declared_map or {}
     connect: List[Dict[str, str]] = []
     unconnected: List[Dict[str, str]] = []
     seen: set = set()
@@ -3346,6 +3359,9 @@ def _macro_supply_gc_plan(
                 if pin in rails:
                     connect.append({"master": master, "pin": pin,
                                     "use": use, "rail": pin})
+                elif key in dmap:
+                    connect.append({"master": master, "pin": pin,
+                                    "use": use, "rail": dmap[key]})
                 else:
                     unconnected.append({"master": master, "pin": pin,
                                         "use": use})
@@ -3391,8 +3407,8 @@ def _detect_macro_supply_signal_ties(
                 conn = conns[pin].strip()
                 rails = pset if use == "POWER" else gset
                 if conn not in rails:
-                    findings.append({"inst": inst, "pin": pin,
-                                     "use": use, "conn": conn})
+                    findings.append({"inst": inst, "master": master,
+                                     "pin": pin, "use": use, "conn": conn})
     return findings
 
 
@@ -9486,6 +9502,7 @@ def _build_escalating_legalize_tcl(marker: str, var_tag: str = "") -> str:
 
 
 def _macro_supply_preroute_decision(project: "Path", pdk: "PdkConfig",
+                                    netlist_text: Optional[str] = None,
                                     ) -> Optional[Dict[str, Any]]:
     """BLOCK before routing when a hard-macro supply pin has no rail to bind.
 
@@ -9504,6 +9521,23 @@ def _macro_supply_preroute_decision(project: "Path", pdk: "PdkConfig",
 
     Binds every pin it CAN bind and blocks only on the ones with no rail — it
     must not buy a green run by wiring a pin to a rail nobody declared.
+
+    #329 deltas (harvested via #349):
+      * ENV-SAFETY (`env_blind`): when NO rail is established at all —
+        nothing declared in L21 AND nothing measured from the DEF — "no rail
+        for this pin" is indistinguishable from "could not read the rails in
+        this environment", and an environment blindness must not fire a
+        BLOCKING gate (classifier three-tier doctrine: the uncertain bucket
+        never auto-triggers the expensive/irreversible arm). Reported loudly,
+        never silently green.
+      * TIE-AWARE block condition: DRT-0307 needs a SIGNAL NET actually
+        landing on the POWER/GROUND terminal. A gap pin the netlist really
+        drives (constant-tie / signal) is the proven-fatal case and BLOCKS; a
+        gap pin nothing drives is a genuine integration gap that routing
+        survives — surfaced as a named finding (`gaps_reported`), not a
+        block. Without `netlist_text` the tie cannot be proven either way, so
+        the pre-#329 behaviour (block every gap) is kept — the conservative
+        fallback, never a silent relaxation.
     """
     try:
         import hardmacro_supply_intent as _hmsi
@@ -9525,12 +9559,65 @@ def _macro_supply_preroute_decision(project: "Path", pdk: "PdkConfig",
     # `declared_rails` reads, so a correctly-integrated design had no way to
     # clear this gate. A built rail is a physical fact and cannot be fabricated,
     # so it is stronger evidence than the declaration it substitutes for.
-    rep = _hmsi.assess(lefs, _hmsi.load_l21(project),
-                       extra_rails=_hmsi.measured_rails(project))
+    _l21 = _hmsi.load_l21(project)
+    _measured = _hmsi.measured_rails(project)
+    rep = _hmsi.assess(lefs, _l21, extra_rails=_measured)
     if not rep["pins"]:
         return None
     if not rep["gaps"]:
         return {"blocking": False, "bound": rep["accounted"], "gaps": []}
+    all_rails = set(rep["declared_rails"]) | set(rep["measured_rails"])
+    # ENV-BLIND witness: the PDK's own supply nets, NOT the L21/DEF rails —
+    # #348 measured 27 of 30 real designs with the structured L21 fields
+    # empty, and a FIRST run has no DEF yet, so "L21+DEF empty" is the
+    # NORMAL first-run state of the very design #309 blocks (a witness that
+    # common would silently disarm the gate). _design_supply_nets returns
+    # (∅, ∅) exactly when the cell LEF is unreadable — the real environment
+    # blindness.
+    try:
+        _pset, _gset = _design_supply_nets(pdk)
+    except Exception:  # noqa: BLE001 — a stub pdk must not crash the gate
+        _pset, _gset = set(), set()
+    if not (all_rails | _pset | _gset):
+        return {"blocking": False, "bound": rep["accounted"], "gaps": [],
+                "gaps_reported": rep["gaps"], "env_blind": True,
+                "message": (
+                    "ENV-BLIND: no supply rail is visible from ANY source "
+                    "(L21 declaration, DEF SPECIALNETS, or the PDK cell "
+                    "LEF) — cannot tell 'no rail for this pin' from 'rails "
+                    "unreadable here', so the BLOCKING gate does not fire; "
+                    "every macro PG pin is surfaced as a finding instead")}
+    if netlist_text is not None:
+        # The tie whitelist compares against NETLIST NET NAMES (bare tokens),
+        # while a declared rail may be prose ("VDD / core supply (1.8 V)") —
+        # expand to tokens with the same split _rail_token_match uses. The
+        # PDK supply nets count as legal (a pin already wired to VPWR/VGND
+        # is not a tie).
+        _rail_toks = (set(_hmsi.rail_name_tokens(sorted(all_rails)))
+                      | _pset | _gset)
+        ties = _detect_macro_supply_signal_ties(
+            netlist_text, lefs, _rail_toks, _rail_toks)
+        tied = {(t["master"], t["pin"]) for t in ties}
+        fatal = [g for g in rep["gaps"] if (g["master"], g["pin"]) in tied]
+        benign = [g for g in rep["gaps"] if (g["master"], g["pin"]) not in tied]
+        if not fatal:
+            return {"blocking": False, "bound": rep["accounted"], "gaps": [],
+                    "gaps_reported": benign,
+                    "message": (
+                        "hard-macro supply pin(s) with no bindable rail, but "
+                        "the netlist drives NONE of them — routing survives "
+                        "an undriven supply pin; reported as integration "
+                        "gaps, not blocked")}
+        return {"blocking": True, "bound": rep["accounted"], "gaps": fatal,
+                "gaps_reported": benign,
+                "message": (
+                    "hard-macro supply pin(s) with no bindable rail AND a "
+                    "netlist-proven signal/constant tie — detailed routing "
+                    "WILL abort on a signal net landing on a POWER terminal "
+                    "(DRT-0307): "
+                    + "; ".join(f"{g['master']}/{g['pin']} "
+                                f"({g.get('use','POWER')}, {g['status']})"
+                                for g in fatal[:6]))}
     return {"blocking": True, "bound": rep["accounted"], "gaps": rep["gaps"],
             "message": (
                 "hard-macro supply pin(s) with no bindable rail — detailed "
@@ -10894,10 +10981,22 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # instead of surfacing as DRT-0307 five steps later. Shares its judgement
     # with the Phase-1 warning via hardmacro_supply_intent, so what Phase 1
     # validates is exactly what this enforces.
-    _ms = _macro_supply_preroute_decision(project, pdk)
+    try:
+        _ms_nl: Optional[str] = netlist.read_text(encoding="utf-8",
+                                                  errors="ignore")
+    except OSError:
+        _ms_nl = None    # tie unprovable -> decision keeps the strict path
+    _ms = _macro_supply_preroute_decision(project, pdk, netlist_text=_ms_nl)
     if _ms and _ms.get("bound"):
         print(f"[phase3] HARD-MACRO SUPPLY: {len(_ms['bound'])} POWER/GROUND "
               f"macro pin(s) accounted for by the design's power intent")
+    if _ms and _ms.get("env_blind"):
+        # #329 delta: environment blindness must be LOUD, never silent green.
+        print(f"[phase3] HARD-MACRO SUPPLY ENV-BLIND: {_ms['message']}")
+    for _g in (_ms or {}).get("gaps_reported") or []:
+        print(f"[phase3]   SUPPLY INTEGRATION GAP (named, non-blocking): "
+              f"{_g['master']}/{_g['pin']} ({_g.get('use','POWER')}) — "
+              f"{_g['detail']}")
     if _ms and _ms.get("blocking"):
         for _g in _ms["gaps"]:
             print(f"[phase3]   BLOCKING SUPPLY-ON-POWER (integration gap): "
@@ -11174,8 +11273,25 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     _hm_lef_texts = [t for t in
                      (_read_pdk_text(m, container)
                       for m in (pdk.macro_lefs or [])) if t]
+    # #329 delta 1 (via #349): the gate accepted an EXPLICIT L21 mapping
+    # ((master,pin)->rail, names differing) as accounted-for, but only
+    # name-equality pins were physically bound here — the accepted pin then
+    # arrived at routing still constant-tied: the exact DRT-0307 the gate
+    # exists to prevent. Feed the same anti-cheat-filtered map into the plan
+    # so what the gate accepts is exactly what gets bound. Rails a document
+    # names but nothing establishes stay excluded (rail_undeclared).
+    try:
+        import hardmacro_supply_intent as _hmsi_gc
+        _hm_l21 = _hmsi_gc.load_l21(project)
+        _hm_rails_est = (set(_hmsi_gc.declared_rails(_hm_l21))
+                         | set(_hmsi_gc.measured_rails(project))
+                         | set(_hm_pwr_nets) | set(_hm_gnd_nets))
+        _hm_dmap = _hmsi_gc.declared_binding_map(_hm_l21,
+                                                 sorted(_hm_rails_est))
+    except Exception:  # noqa: BLE001 — mapping is an enhancement, not a dep
+        _hm_dmap = {}
     _hm_connect, _hm_unconn = _macro_supply_gc_plan(
-        _hm_lef_texts, _hm_pwr_nets, _hm_gnd_nets)
+        _hm_lef_texts, _hm_pwr_nets, _hm_gnd_nets, declared_map=_hm_dmap)
     hardmacro_supply_gc_block = _build_hardmacro_supply_gc_tcl(
         _hm_connect, _hm_unconn)
     if _hm_connect or _hm_unconn:
