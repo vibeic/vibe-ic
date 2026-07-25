@@ -1222,6 +1222,57 @@ def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepRe
                 "program_first": True})
 
 
+def _try_serial_parallel_mul_rtl(project: Path, ic_class: str,
+                                 t0: float) -> Optional[StepResult]:
+    """Capture (spm x sky130A): deterministic RTL for the SERIAL-PARALLEL
+    integer-multiplier subset of ``digital_arithmetic_primitive`` (+ synonyms).
+
+    The family ships ``rtl_gen=null`` and defers the WHOLE family to
+    ``spec-to-rtl`` — but this shape (one PARALLEL N-bit operand, one 1-bit
+    SERIAL operand, one 1-bit SERIAL result, computing ``p=(x*y) mod 2^N``) is
+    CLOSED-FORM and its functional golden is ALREADY self-calibrated by
+    ``arith_oracle_tb_gen``. A function the flow can already CHECK is Bucket A:
+    emit it with NO LLM. Returns a PASS StepResult when the solver emits; None
+    (fall through to the class/AI path) when it DEFERs, when the class is not
+    arithmetic, or when RTL already exists (author guard) — so every
+    non-matching design keeps today's behaviour byte-for-byte.
+    """
+    arith = {"digital_arithmetic_primitive", "digital_datapath",
+             "arithmetic_primitive", "pure_datapath"}
+    if ic_class not in arith:
+        return None
+    solver = PROGRAMS_DIR / "serial_parallel_mul_synth.py"
+    if not solver.is_file():
+        return None
+    rtl_dir = _pl.rtl_dir(project)
+    if rtl_dir.is_dir() and (any(rtl_dir.rglob("*.v")) or
+                             any(rtl_dir.rglob("*.sv"))):
+        return None  # author/generator guard — never overwrite existing RTL
+    try:
+        r = subprocess.run([sys.executable, str(solver), str(project), "--emit"],
+                           capture_output=True, text=True, timeout=60)
+    except Exception as e:
+        return StepResult("rtl_gen", "FAIL", time.time() - t0,
+                          f"serial_parallel_mul_synth crashed: {e}")
+    if r.returncode != 0:
+        return None  # DEFER (exit 2) or error → fall through to spec-to-rtl
+    try:
+        out = json.loads(r.stdout.strip().splitlines()[-1])
+    except Exception:
+        return None
+    written = out.get("written")
+    if not written:
+        return None
+    return StepResult(
+        "rtl_gen", "PASS", time.time() - t0,
+        f"deterministic serial-parallel multiplier RTL (program-first; no LLM) "
+        f"-> {Path(written).relative_to(project)}",
+        output_files=[written],
+        extras={"deterministic_generator": "serial_parallel_mul_synth",
+                "program_first": True, "topology": "serial_parallel",
+                "spec": out.get("spec")})
+
+
 def _enforce_power_up_determinism(rtl_dir: Path) -> int:
     """Run ``rtl_hygiene_lint --fix`` on every emitted RTL file so a reset-less
     registered output gets a deterministic ``initial <reg>=0;`` power-up (not X
@@ -2375,6 +2426,14 @@ def step_rtl_gen(project: Path, ic_class: str,
     _det = _try_deterministic_rtl_dispatch(project, t0)
     if _det is not None:
         return _det
+    # Capture (spm x sky130A): the SERIAL-PARALLEL MULTIPLIER subset of the
+    # arithmetic family is closed-form (Bucket A) and its oracle already self-
+    # calibrates, so emit it deterministically from the L docs BEFORE WAIVE-ing
+    # to spec-to-rtl. DEFERs (returns None) on every other shape/class, so all
+    # non-matching designs keep the existing class-registry / AI-fallback path.
+    _sp = _try_serial_parallel_mul_rtl(project, ic_class, t0)
+    if _sp is not None:
+        return _sp
     # Registry lookup → deterministic generator OR fallback skill.
     config = _lookup_class(ic_class)
     if config is None:
