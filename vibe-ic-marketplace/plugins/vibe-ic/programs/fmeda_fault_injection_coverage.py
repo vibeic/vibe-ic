@@ -539,9 +539,9 @@ def _resolve_docker_image() -> str:
     if env:
         return env
     candidates = (
-        "ghcr.io/vibeic/vibeic-eda:0.2.29",
-        "vibeic-eda:0.2.29",
-        "vibeic/vibeic-eda:0.2.29",
+        "ghcr.io/vibeic/vibeic-eda:0.2.30",
+        "vibeic-eda:0.2.30",
+        "vibeic/vibeic-eda:0.2.30",
         "hpretl/iic-osic-tools:latest",
     )
     for img in candidates:
@@ -552,7 +552,7 @@ def _resolve_docker_image() -> str:
                 return img
         except Exception:
             pass
-    return "ghcr.io/vibeic/vibeic-eda:0.2.29"
+    return "ghcr.io/vibeic/vibeic-eda:0.2.30"
 
 
 _IVERILOG_ROOT = "/foss/tools/iverilog"

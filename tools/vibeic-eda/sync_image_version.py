@@ -159,12 +159,13 @@ def _query_ghcr_tags(repo: str, timeout: float = 6.0):
         return json.load(r).get("tags", []) or []
 
 
-def newest_published_tag(repo: str = GHCR_REPO):
-    """(tag, source) for the newest PUBLISHED semver image tag — the reality the
-    VERSION anchor must not lag — or (None, reason) if it can't be determined.
+def published_tags(repo: str = GHCR_REPO):
+    """(tags, source) — the set of PUBLISHED semver image tags, or (None,
+    reason) if it can't be determined.
 
-    Order: explicit override (env — tests / offline / CI pin) beats a live query.
-    Never raises: any registry failure returns (None, reason) so --check can fall
+    Order: explicit override (env — tests / offline / CI pin) beats a live
+    query; the override names ONE tag and the set becomes {that tag}. Never
+    raises: any registry failure returns (None, reason) so --check can fall
     back to internal-consistency-only rather than crash or false-fail."""
     ov = os.environ.get(PUBLISHED_TAG_ENV)
     if ov is not None:
@@ -173,25 +174,47 @@ def newest_published_tag(repo: str = GHCR_REPO):
             return None, f"{PUBLISHED_TAG_ENV} set but empty"
         if not SEMVER_RE.match(ov):
             return None, f"{PUBLISHED_TAG_ENV}='{ov}' is not X.Y.Z"
-        return ov, f"override:{PUBLISHED_TAG_ENV}"
+        return {ov}, f"override:{PUBLISHED_TAG_ENV}"
     try:
         tags = _query_ghcr_tags(repo)
     except Exception as e:  # network down, 404, auth, JSON — all degrade the same
         return None, f"registry unreachable ({e.__class__.__name__})"
-    sem = [t for t in tags if SEMVER_RE.match(t)]
+    sem = {t for t in tags if SEMVER_RE.match(t)}
     if not sem:
         return None, "registry returned no X.Y.Z tags"
-    return max(sem, key=_semver_key), "ghcr"
+    return sem, "ghcr"
 
 
-def check_anchor_vs_reality(version: str) -> int:
-    """Verify the VERSION anchor is not STALE relative to the actually-published
-    image. Prints one status line; returns 0 = ok/unverified, 1 = stale anchor."""
-    pub, src = newest_published_tag()
-    if pub is None:
+def newest_published_tag(repo: str = GHCR_REPO):
+    """(tag, source) for the newest PUBLISHED semver image tag; see
+    published_tags for the override / degrade contract."""
+    tags, src = published_tags(repo)
+    if tags is None:
+        return None, src
+    return max(tags, key=_semver_key), src
+
+
+def check_anchor_vs_reality(version: str, require_remote: bool = False) -> int:
+    """Verify the VERSION anchor names a tag that EXISTS on the registry and
+    is not STALE relative to the newest published one. Prints one status
+    line; returns 0 = ok (or unverified without --require-remote), 1 = fail.
+
+    vibe-ic#354: the old check treated VERSION *ahead* of the newest
+    published tag as 'OK (unreleased)'. That is exactly how 0.2.29 — a tag
+    that never existed on ghcr — stayed pinned in 13 places for six
+    versions while every clean-room install failed. A pin the registry
+    cannot resolve is a FAIL, not a future."""
+    tags, src = published_tags()
+    if tags is None:
+        if require_remote:
+            print(f"[FAIL] anchor-vs-reality: registry unverifiable ({src}) and "
+                  f"--require-remote is set. Set {PUBLISHED_TAG_ENV}=X.Y.Z to "
+                  f"pin, or fix network/registry access.")
+            return 1
         print(f"  anchor-vs-reality        : UNVERIFIED ({src}) — internal "
               f"consistency only; set {PUBLISHED_TAG_ENV}=X.Y.Z or enable network")
         return 0
+    pub = max(tags, key=_semver_key)
     if _semver_key(version) < _semver_key(pub):
         print(f"[FAIL] STALE ANCHOR: VERSION={version} is OLDER than the newest "
               f"published image tag {pub} (source={src}).")
@@ -199,10 +222,14 @@ def check_anchor_vs_reality(version: str) -> int:
               f"equal to VERSION is *consistently wrong*.")
         print(f"       Fix: python3 {Path(__file__).name} --set {pub}")
         return 1
-    if _semver_key(version) > _semver_key(pub):
-        print(f"  anchor-vs-reality        : OK (VERSION={version} ahead of newest "
-              f"published {pub} — unreleased; source={src})")
-        return 0
+    if version not in tags:
+        print(f"[FAIL] UNRESOLVABLE PIN: VERSION={version} does not exist on the "
+              f"registry (newest published: {pub}; source={src}).")
+        print(f"       Every pointer equal to VERSION directs a clean-room "
+              f"install at a tag `docker pull` cannot resolve (vibe-ic#354).")
+        print(f"       Fix: publish ghcr.io/{GHCR_REPO}:{version}, or --set to "
+              f"a published tag.")
+        return 1
     print(f"  anchor-vs-reality        : OK (VERSION={version} == published {pub}; "
           f"source={src})")
     return 0
@@ -259,7 +286,8 @@ def ghcr_hits(root: Path, ignore):
     return out
 
 
-def do_check(root: Path, version: str, ignore) -> int:
+def do_check(root: Path, version: str, ignore,
+             require_remote: bool = False) -> int:
     strict = install_doc_refs(root)
     net = ghcr_hits(root, ignore)
     install_set = set(INSTALL_DOC_CANDIDATES)
@@ -274,7 +302,7 @@ def do_check(root: Path, version: str, ignore) -> int:
     # Anchor-vs-reality (issue #215): the VERSION anchor must not itself be stale
     # relative to the newest published image tag, or the whole tree is consistently
     # wrong. This is a SEPARATE failure axis from pointer drift; either fails --check.
-    anchor_rc = check_anchor_vs_reality(version)
+    anchor_rc = check_anchor_vs_reality(version, require_remote)
     if not drift_strict and not drift_net:
         if anchor_rc == 0:
             print(f"[PASS] all live pointers == {version} and anchor tracks reality")
@@ -327,6 +355,8 @@ def main(argv=None) -> int:
     g.add_argument("--bump", choices=["patch", "minor", "major"], help="increment VERSION, then --set it")
     g.add_argument("--print", action="store_true", dest="print_", help="print the current VERSION")
     ap.add_argument("--dry-run", action="store_true", help="with --set/--bump: show changes, write nothing")
+    ap.add_argument("--require-remote", action="store_true",
+                    help="with --check: an unverifiable registry is a FAIL, not UNVERIFIED (CI mode, vibe-ic#354)")
     args = ap.parse_args(argv)
 
     script_dir = Path(__file__).resolve().parent
@@ -346,7 +376,7 @@ def main(argv=None) -> int:
         return do_set(root, vf, args.set, ignore, args.dry_run)
     if args.bump:
         return do_set(root, vf, next_version(version, args.bump), ignore, args.dry_run)
-    return do_check(root, version, ignore)
+    return do_check(root, version, ignore, args.require_remote)
 
 
 if __name__ == "__main__":
