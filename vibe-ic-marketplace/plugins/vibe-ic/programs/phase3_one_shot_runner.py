@@ -10405,6 +10405,18 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
     # floorplan). No-op for single-corner PnR (byte-identical).
     macro_libs_tcl = _corner_qualify_extra_libs(macro_libs_tcl,
                                                 corner_liberty_block)
+    # #296: the post-hold detailed_placement was BARE — no catch, no
+    # escalation. 87 clustered clkbuf_16 (50 sites each) fail the default
+    # window and DPL-0036 then kills the whole OpenROAD process. Same
+    # failure mode as #295, so reuse the SAME escalation ladder. This
+    # deliberately does NOT touch the CTS buffer list or root buffer:
+    # narrowing the root moves clock skew / insertion delay and would
+    # need multi-corner clock sign-off evidence first.
+    _post_hold_legalize = _build_escalating_legalize_tcl(
+        "POST_HOLD", "_ph")
+    # Third bare call, found while wiring #296: the post-global-placement
+    # legalization. Same shape, same DPL-0036 kill. Same ladder.
+    _initial_legalize = _build_escalating_legalize_tcl("INITIAL_DPL", "_ip")
     return f"""
 {_thread_block}read_lef {tech_lef_c}
 read_lef {cell_lef_c}
@@ -10463,8 +10475,7 @@ write_def {out_dir_c}/floorplan.def
 # enabled) is an optional, version-correct extra congestion knob. Flag names
 # verified vs OpenROAD 26Q1 (`help global_placement`). chip-AGNOSTIC.
 {_placement_padding_block}global_placement{_routability_flag}{_timing_driven_flag} -density {util}
-detailed_placement
-# === #684 sparse-die anti-flood tap prune (POST-placement, locality) ===
+{_initial_legalize}# === #684 sparse-die anti-flood tap prune (POST-placement, locality) ===
 # Runs here — after placement resolved the REAL logic geometry, BEFORE
 # placed.def is written — so placed.def carries the FINAL pruned tap set and
 # every later stage only grows (DEF-stage monotonicity holds). The full-die
@@ -10525,8 +10536,7 @@ write_def {out_dir_c}/post_cts.def
 if {{[catch {{repair_timing -hold}} hold_err]}} {{
   puts "HOLD_NONFATAL: $hold_err"
 }}
-detailed_placement
-write_def {out_dir_c}/post_hold.def
+{_post_hold_legalize}write_def {out_dir_c}/post_hold.def
 # Emit a hold (min-path) slack report so hold_closure_check has PRIMARY
 # evidence that hold is closed even when zero hold buffers were inserted
 # (a small design at a relaxed period legitimately has NO hold violations,
