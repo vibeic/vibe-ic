@@ -9397,10 +9397,15 @@ def _pg_net_cleanup_tcl() -> str:
         "} _pgc]} { puts \"PG_CLEANUP_NONFATAL: $_pgc\" }\n")
 
 
-# Escalating legalization ladder (#295). Displacement is in SITES; the rungs
-# are multiplicative so a design needing a big window reaches it in few tries,
+# Escalating legalization ladder (#295). Displacement is in MICRONS — the
+# OpenROAD README documents `-max_displacement` as microns and Opendp.tcl
+# converts microns→sites internally (the original #295 comment said SITES;
+# that was wrong, the behaviour was always microns). The rungs are
+# multiplicative so a design needing a big window reaches it in few tries,
 # and the ladder is bounded so a genuinely unlegalizable placement terminates
-# instead of grinding. Structural constant, not per-design.
+# instead of grinding. Structural constant, not per-design; a final FULL-DIE
+# rung measured from the live floorplan (#337) covers the case where even
+# 100 um is small relative to the die.
 _DPL_ESCALATION_SITES = (5, 20, 100)
 
 
@@ -9428,6 +9433,19 @@ def _build_escalating_legalize_tcl(marker: str, var_tag: str = "") -> str:
       <marker>_LEGALIZE_FAILED        every rung exhausted — the honest failure,
                                       NOT swallowed into a silent pass
 
+    Final rung (#337, harvested via #349): the fixed rungs top out at 100 um,
+    which on a large die can still be far smaller than the nearest legal site
+    for a wide buffer (measured on subservient x gf180mcuD: drive-20 buffers
+    at 42 % utilization have NO contiguous free run within the default
+    window). So after the fixed rungs, retry once with the window widened to
+    the FULL DIE, measured LIVE from the floorplan via `ord::get_die_area`
+    (microns; rewrite-safe — a die-upsize retry that rewrote
+    `initialize_floorplan` is still measured correctly). #337 measured this
+    rung recovering the drive-16 buffers (13 -> 4 failures) on that design.
+    If `ord::get_die_area` is unavailable (no block linked, stub OpenROAD)
+    the rung is skipped and the ladder degrades to exactly the prior
+    behaviour.
+
     Chip-AGNOSTIC: standard OpenROAD commands, no design or PDK literals.
     """
     v = var_tag
@@ -9447,6 +9465,20 @@ def _build_escalating_legalize_tcl(marker: str, var_tag: str = "") -> str:
         f"_dpl{v}]}} {{ continue }}\n"
         f"    if {{![catch {{check_placement}} _cpk{v}]}} {{ set _dplok{v} 1 ; "
         f"puts \"{marker}_LEGALIZE_OK disp=$_d{v}\" }}\n"
+        f"  }}\n"
+        f"}}\n"
+        # full-die rung (#337): window = the LIVE die extent in microns.
+        f"if {{$_dplok{v} == 0 && ![catch {{ord::get_die_area}} _da{v}]}} {{\n"
+        f"  set _fdw{v} [expr {{int(ceil([lindex $_da{v} 2] - "
+        f"[lindex $_da{v} 0]))}}]\n"
+        f"  set _fdh{v} [expr {{int(ceil([lindex $_da{v} 3] - "
+        f"[lindex $_da{v} 1]))}}]\n"
+        f"  if {{$_fdw{v} > 0 && $_fdh{v} > 0 && ![catch "
+        f"{{detailed_placement -max_displacement "
+        f"[list $_fdw{v} $_fdh{v}]}} _dpl{v}]}} {{\n"
+        f"    if {{![catch {{check_placement}} _cpk{v}]}} {{ set _dplok{v} 1 ; "
+        f"puts \"{marker}_LEGALIZE_OK disp=full-die "
+        f"${{_fdw{v}}}x${{_fdh{v}}}\" }}\n"
         f"  }}\n"
         f"}}\n"
         f"if {{$_dplok{v} == 0}} {{ puts \"{marker}_LEGALIZE_FAILED\" }}\n"

@@ -184,6 +184,89 @@ def test_296_cts_buffer_selection_is_untouched():
     assert "-root_buf" in tcl and "clock_tree_synthesis" in tcl
 
 
+# ── #337 (harvested via #349): the FULL-DIE final rung ───────────────────────
+# The fixed rungs top out at 100 um; on a large die that can still be far
+# smaller than the nearest legal site for a wide buffer (#337 measured drive-20
+# buffers with NO free run reachable at 42 % utilization). The final rung
+# widens the window to the LIVE die extent via `ord::get_die_area` — measured
+# at RUN time, so a die-upsize retry that rewrote initialize_floorplan is
+# still covered (the builder receives no geometry).
+
+_GDA_STUB = ("namespace eval ord { proc get_die_area {} "
+             "{ return {0 0 %s %s} } }\n")
+
+
+def _run_fulldie(dpl_fail_cond: str, gda: str, tmp_path) -> str:
+    tcl = (_STUB % (dpl_fail_cond, "return") + gda
+           + p3._build_escalating_legalize_tcl("TEST", "_t")
+           + '\nputs "CALLS: $::calls"\n')
+    f = tmp_path / "fd.tcl"
+    f.write_text(tcl)
+    r = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True,
+                       timeout=60)
+    assert r.returncode == 0, r.stderr
+    return r.stdout
+
+
+@_needs_tcl
+def test_337_full_die_rung_recovers_when_fixed_rungs_are_too_small(tmp_path):
+    """THE #337 case: every fixed rung fails, the full-die window succeeds.
+    The window must be the MEASURED die extent (ceil of get_die_area), not a
+    constant."""
+    out = _run_fulldie('[llength $disp] < 2', _GDA_STUB % ("383.4", "291.7"),
+                       tmp_path)
+    assert "TEST_LEGALIZE_OK disp=full-die 384x292" in out, out
+    assert "{384 292}" in out or "384 292" in out   # the window really used
+
+
+@_needs_tcl
+def test_337_window_tracks_the_live_floorplan_not_a_builder_constant(tmp_path):
+    """Rewrite-safety: a different live die extent must yield a different
+    window, with the builder unchanged — proving the geometry is measured at
+    run time, not baked in at emit time."""
+    out = _run_fulldie('[llength $disp] < 2', _GDA_STUB % ("1200", "800"),
+                       tmp_path)
+    assert "TEST_LEGALIZE_OK disp=full-die 1200x800" in out, out
+
+
+@_needs_tcl
+def test_337_degrades_to_prior_behaviour_without_get_die_area(tmp_path):
+    """No `ord::get_die_area` (stub OpenROAD, no linked block): the rung is
+    skipped and the ladder reports the same honest FAILED as before #337."""
+    out = _run_fulldie("1", "", tmp_path)
+    assert "TEST_LEGALIZE_FAILED" in out
+    assert "full-die" not in out
+    # and no call was made with a 2-element window
+    assert "{" not in out.split("CALLS:")[1]
+
+
+@_needs_tcl
+def test_337_full_die_failure_is_still_an_honest_failure(tmp_path):
+    """If even the full-die window cannot legalize, the ladder must FAIL
+    loudly — not mask a genuine geometry/capacity problem (#337 step 4)."""
+    out = _run_fulldie("1", _GDA_STUB % ("383.4", "291.7"), tmp_path)
+    assert "TEST_LEGALIZE_FAILED" in out
+    assert "TEST_LEGALIZE_OK" not in out
+
+
+@_needs_tcl
+def test_337_common_path_never_reaches_the_full_die_rung(tmp_path):
+    """Zero regression on the common path: default-window success must cost
+    exactly one detailed_placement call and never touch get_die_area."""
+    tcl = (_STUB % ("0", "return")
+           + 'namespace eval ord { proc get_die_area {} '
+             '{ error "MUST NOT BE CALLED" } }\n'
+           + p3._build_escalating_legalize_tcl("TEST", "_t")
+           + '\nputs "CALLS: $::calls"\n')
+    f = tmp_path / "cp.tcl"
+    f.write_text(tcl)
+    r = subprocess.run([_TCLSH, str(f)], capture_output=True, text=True,
+                       timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert "TEST_LEGALIZE_OK disp=default" in r.stdout
+    assert r.stdout.rstrip().endswith("CALLS: default")
+
+
 @_needs_tcl
 def test_296_emitted_post_hold_ladder_executes_and_recovers(tmp_path):
     """Extract the ladder FROM THE EMITTED pnr.tcl (not from the builder) and
