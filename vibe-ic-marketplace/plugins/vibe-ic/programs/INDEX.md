@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 925
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 925)
+- **Total programs (excluding helpers / shims):** 929
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 929)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 916 |
+| `any` | 920 |
 
 ## Alphabetical listing
 
@@ -316,6 +316,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_dashboard_cli` | any | — | LIVE terminal dashboard for the Vibe-IC flow. |
 | `flow_dashboard_data` | any | — | DATA PROVIDER for the live Vibe-IC flow dashboard. |
 | `flow_dashboard_web` | any | — | a localhost WEB dashboard for the Vibe-IC flow. |
+| `flow_gate_enforcement_audit` | any | — | which flow gates can actually STOP a run, and |
 | `flow_stage_check` | any | — | wrapper for signoff_audit --mode flow. |
 | `flow_step_execution_coverage_check` | any | — | enforce "every applicable step ran, in order". |
 | `flow_step_executor_coverage_check` | any | — | "every step has an executor that runs it". |
@@ -394,6 +395,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `handoff_bundle_check` | any | — | the COMPLETENESS-CONTRACT gate (Q3). |
 | `handshake_check` | any | — | deterministic compliance check derived from <chip-class> v040 debug. |
 | `handshake_livelock_result_stability_check` | any | v0.3.22 | v0.3.22 (ORGANIC #523). |
+| `hardmacro_supply_intent` | any | — | is a hard macro's LEF-typed POWER/GROUND pin |
 | `hardware_pass_attestation_check` | any | v0.50 | v0.50 plugin gate (third layer) |
 | `harness_exact_selfverify` | any | — | blind-RTL self-verify with the HARNESS-EXACT |
 | `hbm3_protocol_synth` | any | v0.1.89 | HBM3-class protocol synth helper. |
@@ -614,6 +616,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `phase1_doc_one_shot_runner` | any | Wave 49 | chip-AGNOSTIC Phase 1 (doc-extraction) orchestrator. |
 | `phase1_doc_presence_check` | any | Wave 8 | Fail if fewer than 10 Phase-1 layer docs exist. |
 | `phase1_evidence_grounding_check` | any | — | Phase-1 ANTI-FABRICATION grounding gate. |
+| `phase1_expert_track_evidence_check` | any | — | did the Phase-1 EXPERT track actually |
 | `phase1_gate_contract_check` | any | v0.74 | Meta-checker for Phase 1 deterministic gates. |
 | `phase1_input_vs_generated_completeness_check` | any | v0.60 | Phase 1 coverage gate |
 | `phase1_json_converge` | any | — | deterministic comparator for the Phase-1 |
@@ -794,6 +797,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `signoff_ladder_run` | any | — | REAL-gate wired. |
 | `signoff_waiver_emit` | any | v0.1.49 | Chipignite/foundry signoff-waiver scaffold emitter. |
 | `signoff_waiver_md_emit` | any | v0.1.49 | Submitter-facing waiver Markdown emitter. |
+| `silent_decline_audit` | any | — | find remedy decisions whose REFUSAL is silent (#313 §6). |
 | `single_bus_driver_check` | any | Wave 10 | structural-RTL gate that catches the |
 | `single_testpath_guard` | any | v0.2.24 | pytest.ini must declare ONE test tree. |
 | `sizing_adjust_policy` | any | — | the fixed failure-mode → parameter-delta |
@@ -997,7 +1001,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (916 programs)
+### `any` (920 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_evidence_in_fix_comment_check` — v0.2.97  _[v0.2.97]_
@@ -1285,6 +1289,7 @@ _(no programs in this group)_
 - `flow_dashboard_cli` — LIVE terminal dashboard for the Vibe-IC flow.
 - `flow_dashboard_data` — DATA PROVIDER for the live Vibe-IC flow dashboard.
 - `flow_dashboard_web` — a localhost WEB dashboard for the Vibe-IC flow.
+- `flow_gate_enforcement_audit` — which flow gates can actually STOP a run, and
 - `flow_stage_check` — wrapper for signoff_audit --mode flow.
 - `flow_step_execution_coverage_check` — enforce "every applicable step ran, in order".
 - `flow_step_executor_coverage_check` — "every step has an executor that runs it".
@@ -1363,6 +1368,7 @@ _(no programs in this group)_
 - `handoff_bundle_check` — the COMPLETENESS-CONTRACT gate (Q3).
 - `handshake_check` — deterministic compliance check derived from <chip-class> v040 debug.
 - `handshake_livelock_result_stability_check` — v0.3.22 (ORGANIC #523).  _[v0.3.22]_
+- `hardmacro_supply_intent` — is a hard macro's LEF-typed POWER/GROUND pin
 - `hardware_pass_attestation_check` — v0.50 plugin gate (third layer)  _[v0.50]_
 - `harness_exact_selfverify` — blind-RTL self-verify with the HARNESS-EXACT
 - `hbm3_protocol_synth` — HBM3-class protocol synth helper.  _[v0.1.89]_
@@ -1582,6 +1588,7 @@ _(no programs in this group)_
 - `phase1_doc_one_shot_runner` — chip-AGNOSTIC Phase 1 (doc-extraction) orchestrator.  _[Wave 49]_
 - `phase1_doc_presence_check` — Fail if fewer than 10 Phase-1 layer docs exist.  _[Wave 8]_
 - `phase1_evidence_grounding_check` — Phase-1 ANTI-FABRICATION grounding gate.
+- `phase1_expert_track_evidence_check` — did the Phase-1 EXPERT track actually
 - `phase1_gate_contract_check` — Meta-checker for Phase 1 deterministic gates.  _[v0.74]_
 - `phase1_input_vs_generated_completeness_check` — Phase 1 coverage gate  _[v0.60]_
 - `phase1_json_converge` — deterministic comparator for the Phase-1
@@ -1760,6 +1767,7 @@ _(no programs in this group)_
 - `signoff_ladder_run` — REAL-gate wired.
 - `signoff_waiver_emit` — Chipignite/foundry signoff-waiver scaffold emitter.  _[v0.1.49]_
 - `signoff_waiver_md_emit` — Submitter-facing waiver Markdown emitter.  _[v0.1.49]_
+- `silent_decline_audit` — find remedy decisions whose REFUSAL is silent (#313 §6).
 - `single_bus_driver_check` — structural-RTL gate that catches the  _[Wave 10]_
 - `single_testpath_guard` — pytest.ini must declare ONE test tree.  _[v0.2.24]_
 - `sizing_adjust_policy` — the fixed failure-mode → parameter-delta
