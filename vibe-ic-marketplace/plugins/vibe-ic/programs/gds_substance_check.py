@@ -298,14 +298,32 @@ def read_def_component_count(def_path: Path) -> Optional[int]:
     return None
 
 
+# Mask-stack floor (#298). The element-count floor below counts ELEMENTS, so it
+# is defeated by degenerate geometry: 2,600 10x10 nm squares on ONE layer clears
+# a 1,826-instance floor, is structurally valid, has structures/elements/LAYER,
+# and is 166 KB — it passed every other check. A real full-chip stream-out draws
+# device AND contact AND interconnect AND via layers; padding draws one.
+#
+# The threshold is MEASURED, not guessed: parsing all 62 real chip GDS on this
+# host (6 designs x 4 PDKs, 8,762-1,555,181 elements, incl. foundry_handoff/ and
+# .magic_merged.gds) gives distinct-layer counts of min 17 / max 19 with 0 parse
+# errors. A floor of 4 leaves >4x headroom under the smallest real layout while
+# the padded fake sits at 1. Structural constant, not per-design or per-PDK.
+MIN_DISTINCT_LAYERS = 4
+
+
 def audit_gds(data: bytes, instance_count: Optional[int],
-              elements_per_instance: float) -> Tuple[List[Finding], GdsStats, dict]:
+              elements_per_instance: float,
+              min_distinct_layers: int = MIN_DISTINCT_LAYERS,
+              ) -> Tuple[List[Finding], GdsStats, dict]:
     findings, st = parse_gds(data)
     floor = {
         "instance_count": instance_count,
         "elements_per_instance": elements_per_instance,
         "required_elements": None,
         "actual_elements": st.elements,
+        "min_distinct_layers": min_distinct_layers,
+        "actual_distinct_layers": len(set(st.layers)),
         "applied": False,
     }
 
@@ -330,6 +348,17 @@ def audit_gds(data: bytes, instance_count: Optional[int],
             "ERROR", "NO_LAYERS",
             "GDS contains elements but no LAYER record; no mask layer was "
             "drawn"))
+    elif st.elements and min_distinct_layers > 0 \
+            and len(set(st.layers)) < min_distinct_layers:
+        findings.append(Finding(
+            "ERROR", "MASK_STACK_TOO_THIN",
+            f"GDS draws on only {len(set(st.layers))} distinct mask layer(s); "
+            f"a real full-chip stream-out draws device + contact + "
+            f"interconnect + via layers (>= {min_distinct_layers}). An "
+            f"element count alone is satisfiable with degenerate geometry on a "
+            f"single layer, so this is the check that catches padding",
+            f"distinct_layers={len(set(st.layers))} "
+            f"required={min_distinct_layers} elements={st.elements}"))
 
     if instance_count and instance_count > 0:
         required = int(instance_count * elements_per_instance)
@@ -385,6 +414,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--elements-per-instance", type=float, default=1.0,
                     help="layout elements required per placed instance "
                          "(default: 1.0)")
+    ap.add_argument("--min-distinct-layers", type=int,
+                    default=MIN_DISTINCT_LAYERS,
+                    help="mask-stack floor: minimum distinct GDS layers a real "
+                         "full-chip stream-out must draw (#298). 0 disables the "
+                         "check, which reproduces the pre-fix code path and is "
+                         "used by the two-sided negative control.")
     ap.add_argument("--json", help="write JSON report to this path")
     args = ap.parse_args(argv)
 
@@ -434,7 +469,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 2
         inst = read_def_component_count(def_path) if def_path else None
         findings, st, floor = audit_gds(data, inst,
-                                        args.elements_per_instance)
+                                        args.elements_per_instance,
+                                        args.min_distinct_layers)
         ok = not findings
         any_fail = any_fail or not ok
         file_reports.append({
@@ -455,6 +491,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "verdict": "FAIL" if any_fail else "PASS",
         "project": str(project) if project else None,
         "elements_per_instance": args.elements_per_instance,
+        "min_distinct_layers": args.min_distinct_layers,
         "files_checked": len(file_reports),
         "files": file_reports,
     }

@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 
 from programs.gds_substance_check import (
+    MIN_DISTINCT_LAYERS,
     audit_gds,
     parse_gds,
     read_def_component_count,
@@ -233,3 +234,69 @@ def test_no_def_skips_floor_but_keeps_structure_checks() -> None:
     findings, _, floor = audit_gds(_stub_86(), None, 1.0)
     assert floor["applied"] is False
     assert "NO_GEOMETRY" in _categories(findings)
+
+
+# ── #298: mask-stack floor — degenerate geometry on ONE layer is not a layout ──
+# Adversarial verification of the #291 gate found 1 survivor out of 6 fakes:
+# 2,600 10x10 nm boxes, ALL on one layer, 166 KB. It cleared every check by
+# construction — valid structure, has structures/elements/LAYER, and 2,600
+# elements beats a 1,826-instance element floor. Counting ELEMENTS is defeated
+# by padding; counting distinct MASK LAYERS is not.
+
+def _one_layer_pad(n_elements: int = 2600, layer: int = 1) -> bytes:
+    """n_elements degenerate boxes, all on a SINGLE layer. No trailing bytes —
+    the padding must not be what trips the gate, or the control is worthless."""
+    out = _lib_prologue() + _rec(0x0502, _TS) + _rec(0x0606, b"TOP\x00")
+    for _ in range(n_elements):
+        out += (_rec(0x0800)
+                + _rec(0x0D02, struct.pack(">h", layer))
+                + _rec(0x0E02, struct.pack(">h", 0))
+                + _rec(0x1003, struct.pack(">8i", 0, 0, 10, 0, 10, 10, 0, 10))
+                + _rec(0x1100))
+    return out + _rec(0x0700) + _rec(0x0400)
+
+
+def test_298_two_sided_control_pad_passes_pre_fix_path():
+    """SIDE 1 — without the floor the fake passes with ZERO findings, and it
+    beats the element floor too. Asserting only that the new check catches it
+    would be tautological; this pins that there was a real hole."""
+    data = _one_layer_pad()
+    findings, st, _ = audit_gds(data, instance_count=1826,
+                                elements_per_instance=1.0,
+                                min_distinct_layers=0)
+    assert findings == [], f"pre-fix path should be clean, got {findings}"
+    assert st.elements == 2600 > 1826          # clears the element floor
+    assert len(set(st.layers)) == 1            # on a single layer
+
+
+def test_298_mask_stack_floor_catches_the_pad():
+    """SIDE 2 — the same bytes, with the floor, are rejected."""
+    findings, _, _ = audit_gds(_one_layer_pad(), instance_count=1826,
+                               elements_per_instance=1.0)
+    cats = [f.category for f in findings]
+    assert "MASK_STACK_TOO_THIN" in cats, cats
+    assert all(f.severity == "ERROR" for f in findings
+               if f.category == "MASK_STACK_TOO_THIN")
+
+
+def test_298_real_layout_clears_the_floor():
+    """No false FAIL: the honest builder draws 5 layers, above the floor of 4.
+    Measured on 25 real chip GDS in this repo: min 17 distinct layers."""
+    findings, st, _ = audit_gds(_real_gds(), instance_count=None,
+                                elements_per_instance=1.0)
+    assert len(set(st.layers)) >= MIN_DISTINCT_LAYERS
+    assert "MASK_STACK_TOO_THIN" not in [f.category for f in findings]
+
+
+def test_298_floor_is_a_structural_constant_not_per_design():
+    """The threshold must not be a per-design/per-PDK tunable smuggled in as a
+    default: 4 is a mask-stack fact (device + contact + interconnect + via)."""
+    assert MIN_DISTINCT_LAYERS == 4
+
+
+def test_298_floor_does_not_fire_on_an_empty_gds():
+    """An element-less library is already NO_GEOMETRY; the layer floor must not
+    pile a second, misleading finding onto it."""
+    findings, _, _ = audit_gds(_stub_86(), instance_count=None,
+                               elements_per_instance=1.0)
+    assert "MASK_STACK_TOO_THIN" not in [f.category for f in findings]
