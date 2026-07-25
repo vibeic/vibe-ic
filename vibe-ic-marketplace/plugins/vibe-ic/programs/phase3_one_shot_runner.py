@@ -17726,6 +17726,28 @@ def _v1_6_620_append_pv_signoff_provenance(project: Path, top: str) -> List[str]
     return declared
 
 
+def _canonical_gds_is_stale(primary_gds: Path, canon_gds: Path) -> bool:
+    """Is the staged phase3/stage4 GDS older than this run's stream-out?
+
+    The canonical deliverable used to be written only when ABSENT, so a
+    resumed / warm-started tree shipped whatever stage4 GDS was already
+    there while the layout DRC and LVS actually verified went only to
+    phase3/stage3/pnr/. Staleness is decided on mtime: an unreadable
+    stat is treated as stale, because refreshing is always safe (this
+    runner is the only writer of that path) and keeping an artefact we
+    cannot even stat is not.
+
+    Returns False when the canonical copy does not exist yet — that is
+    the plain first-write case, not a staleness decision.
+    """
+    try:
+        if not canon_gds.is_file():
+            return False
+        return primary_gds.stat().st_mtime > canon_gds.stat().st_mtime
+    except OSError:
+        return True
+
+
 def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                                 container: str) -> StepResult:
     """v1.6.36 — stage runner outputs at the canonical paths the flow YAML expects.
@@ -19368,7 +19390,28 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # --- Step 37: GDS canonical alias (REAL FILE, NOT SYMLINK — rule #1)
     if primary_gds.is_file():
         canon_gds = gds_out / f"{top}.gds"
-        if not canon_gds.is_file():
+        # The guard used to be `if not canon_gds.is_file()` — existence
+        # ONLY. On any resume / re-run / warm-started tree that already
+        # carried a stage4 GDS, the copy was skipped and the SHIPPED
+        # deliverable stayed whatever was there before, while the layout
+        # that DRC and LVS had just signed off went only to
+        # phase3/stage3/pnr/. The deliverable then had no relationship to
+        # the verified artefact.
+        #
+        # Measured on the fleet: one archived run kept a 3,067,904-byte
+        # stage4 GDS (page-aligned truncation, ZERO ENDLIB record, 13 of
+        # 18 layers, ~8% of the elements) from an earlier attempt while
+        # the same run's fresh stream-out was 21,511,808 bytes. Every
+        # size-based gate passed the truncated file.
+        #
+        # Refresh whenever the stream-out this run produced is newer than
+        # the staged copy. This program is the ONLY writer of
+        # phase3/stage4/gds/<top>.gds (every other reference is a
+        # reader), so refreshing cannot clobber another producer's
+        # intentional artefact — it can only move the deliverable onto
+        # the layout this run actually verified.
+        _stale = _canonical_gds_is_stale(primary_gds, canon_gds)
+        if not canon_gds.is_file() or _stale:
             # Use binary copy so KLayout sees a real GDS, not a symlink.
             with primary_gds.open("rb") as src, canon_gds.open("wb") as dst:
                 while True:
@@ -19377,6 +19420,12 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                         break
                     dst.write(chunk)
             written.append(str(canon_gds))
+            if _stale:
+                notes.append(
+                    "canonical GDS refreshed: the staged "
+                    "phase3/stage4/gds copy predated this run's "
+                    "stream-out and would have shipped an artefact that "
+                    "DRC/LVS never saw")
 
     # --- Step 39: FPGA on_board_pass.json schema alignment --------------
     # The fpga_on_board_attestation_check requires:
