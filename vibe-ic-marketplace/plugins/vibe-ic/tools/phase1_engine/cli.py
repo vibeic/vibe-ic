@@ -344,7 +344,7 @@ def _stub_l_docs_from_prose(docs_dir: Path, out_dir: Path,
         "L8_RTL_CONSTANTS.json": {},
         "L9_INTEGRATION_SPEC.json": l9,
         "L10_TEST_CASES.json": {},
-        "L11_CALIBRATION.json": {},
+        "L11_OTP_CONTENT.json": {},
         "L12_BEHAVIORAL_SEQUENCES.json": {},
         "L13_HARDWARE_OBSERVED.json": {"contract": {}, "evidence": {}},
     }
