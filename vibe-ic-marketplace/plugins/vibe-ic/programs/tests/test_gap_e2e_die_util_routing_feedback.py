@@ -63,9 +63,23 @@ class TestLoosenLadderConstants:
 
     def test_retry_iters_covers_every_bounded_path(self):
         # initial + upsize budget + one downsize + (ladder-1) loosen steps.
-        expected = (1 + mod._PNR_UPSIZE_RETRIES + 1
-                    + (len(mod._ROUTE_LOOSEN_UTIL_LADDER) - 1))
-        assert mod._PNR_RETRY_ITERS == expected
+        #
+        # UPDATED 2026-07-25 (ladder ANCHORING): the ladder handed to
+        # `_route_feedback_loosen` is now `_route_loosen_ladder(<the util the
+        # die was ACTUALLY sized to>)`, which PREPENDS that util when it is
+        # denser than the base head (ibex: 0.5 from an adopted ORFS
+        # CORE_UTILIZATION=50 → (0.5, 0.25, 0.18, 0.12)). So the LONGEST
+        # ladder is one rung longer than the base, and the budget must cover
+        # the anchored maximum. The invariant under test is unchanged — the
+        # hard cap still covers every bounded path — so it is asserted here as
+        # the inequality it always meant, not as one literal arithmetic form.
+        longest_ladder = max(
+            len(mod._ROUTE_LOOSEN_UTIL_LADDER),
+            len(mod._route_loosen_ladder(0.99)))
+        needed = (1 + mod._PNR_UPSIZE_RETRIES + 1 + (longest_ladder - 1))
+        assert mod._PNR_RETRY_ITERS >= needed
+        # …and is not padded beyond what the paths can actually consume.
+        assert mod._PNR_RETRY_ITERS == needed
 
 
 # ---------------------------------------------------------------------------
