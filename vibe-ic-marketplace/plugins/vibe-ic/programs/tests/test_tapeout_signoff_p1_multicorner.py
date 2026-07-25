@@ -16,6 +16,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from conftest import func_src
+
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
@@ -112,8 +114,7 @@ def test_blackbox_discovery_prefers_plain(monkeypatch):
 # ---- structure of the corner-aware STA + multi-corner extraction recipe ----
 def test_corner_sta_recipe_splits_setup_max_hold_min():
     src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
-    i = src.index("def _emit_corner_spef_sta")
-    window = src[i:i + 8000]
+    window = func_src(src, "_emit_corner_spef_sta")
     assert 'setup_corner = ("max"' in window   # setup at slow/max-RC
     assert 'hold_corner = ("min"' in window    # hold at fast/min-RC
     assert 'report_worst_slack' in window
@@ -129,8 +130,7 @@ def test_corner_sta_recipe_splits_setup_max_hold_min():
 
 def test_multicorner_extract_recipe_loops_corners():
     src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
-    i = src.index("def _emit_spef_corners")
-    window = src[i:i + 4000]
+    window = func_src(src, "_emit_spef_corners")
     # one OpenROAD run reads the DEF once then extract+write per corner
     assert "extract_parasitics -ext_model_file" in window
     assert "write_spef" in window

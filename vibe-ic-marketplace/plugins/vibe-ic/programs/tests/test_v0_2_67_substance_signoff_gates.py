@@ -25,6 +25,8 @@ import json
 import sys
 from pathlib import Path
 
+from conftest import func_src
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import eda_report_audit as ERA       # noqa: E402
 import flow_compliance_check as F    # noqa: E402
@@ -163,8 +165,7 @@ def test_runner_emits_skip_selfreport_not_pass_flag():
 
 
 def test_runner_no_single_corner_standin_in_multicorner_sta():
-    i = _P3_SRC.index("def _emit_multi_corner_sta")
-    window = _P3_SRC[i:i + 4200]
+    window = func_src(_P3_SRC, "_emit_multi_corner_sta")
     # the old fallback copied the single-corner TT report verbatim
     assert "rpt.write_text(single_rpt.read_text())" not in window
     assert "unsubstantiated multi-corner claim" in window
