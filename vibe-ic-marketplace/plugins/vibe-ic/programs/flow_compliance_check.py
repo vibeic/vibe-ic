@@ -143,6 +143,34 @@ INFORMATIONAL_GATES: frozenset[str] = frozenset({
     # bit_level_full_stack_tb_check) it is reported per-step but EXCLUDED from
     # the strict-structural FAIL count. Keyed on gate name; chip-AGNOSTIC.
     "periodic_timer_vs_rx_activity_check",
+    # layergate-7 — l22_verification_plan_measurable_check FAILs (rc=1)
+    # by its own contract: a measurable verification target stated in the
+    # design's own inputs and carried by L22 zero times is the L21 defect
+    # one layer over, and the gate blocks on it.
+    #
+    # It is listed here — reported per-step, excluded from the strict-
+    # structural FAIL count — because of a MEASURED deployment fact, not
+    # because the finding is soft. Fleet sweep 2026-07-25 over 136 real
+    # Phase-1 runs on 5 machines: 50 runs FAIL, and every one is a TRUE
+    # positive tracing to just TWO distinct evidence sites (the same two
+    # designs repeated across plugin versions and PDKs):
+    #   * <design-A>/phase1/input_doc/<name>_verification_plan.txt:45 — an
+    #     acceptance table with "100% PASS" rows and a ">= 95%"
+    #     toggle/branch row, while L22.coverage_goals == []  (34 runs)
+    #   * <design-B>/phase1/input_doc/<core>_verification.txt:86 — "The
+    #     goal of this bench is to fully verify the ... core with 100%
+    #     coverage", while L22.coverage_goals == []            (16 runs)
+    # Zero false positives; nothing to narrow. The gap is in Phase-1
+    # extraction, not in the gate.
+    #
+    # Counting it as a blocker today would stop ~37% of in-flight
+    # campaign runs on a pre-existing extraction gap that no downstream
+    # step currently consumes (L22's only reader is
+    # phase2_scaffold_gen.py, which greps it for a truncated 120-char
+    # prose line). PROMOTION CRITERION: delete this entry once Phase-1
+    # emits coverage_goals[] with numeric targets for those two designs
+    # — the gate already returns rc=1 and needs no change.
+    "l22_verification_plan_measurable_check",
 })
 
 
@@ -1017,6 +1045,50 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     #   D3: every L3 constraint must have a matching SystemVerilog
     #       assertion (assert/assume/cover property) in rtl/.
     "assertion_covers_l3_constraints_check",
+    # layergate-7 — SEMANTIC completeness gates for the consumer-less
+    # backend-flow layers L20 / L22 / L23. These generalise the L21
+    # post-mortem: the old `phase1_doc_input_completeness_check` models
+    # completeness as "does this token appear in ANY layer", so a hard
+    # macro's supply pin read as CAPTURED (L1 7x, L2 8x) while
+    # L21_POWER_INTENT — the layer the BACKEND consumes — held it 0
+    # times. The PDN got no rail, synthesis tied the pin off, a SIGNAL
+    # net landed on a POWER terminal and TritonRoute aborted the whole
+    # detailed route (3278 nets, 0 routed) five steps downstream.
+    #
+    # Each gate asserts the requirement is present IN THE LAYER THAT
+    # CONSUMES IT, in actionable form, and derives its trigger from the
+    # design's OWN inputs (its input docs, its sibling L-docs, its own
+    # emitted backend artifacts) — never a design/PDK/vendor token.
+    #
+    #   L20: BLOCKS on an asserted-but-unbacked scan topology and on a
+    #        DFT requirement stated in the design's own inputs but
+    #        missing from L20. ADVISES when scan insertion demonstrably
+    #        ran while L20 declares none — advisory only because NOTHING
+    #        reads L20 today (dft_signoff_check / dft_atpg_coverage_check
+    #        / dft_signoff_common / eda_dft all read coverage.json +
+    #        bsdl_plan.json). Promote that finding to blocking the moment
+    #        DFT insertion is wired to L20. Swept 136 real runs across 5
+    #        machines: 0 blocking, 97 advisory, 39 skip.
+    "l20_dft_scan_topology_actionable_check",
+    #   L22: BLOCKS on a coverage goal with no comparable numeric target
+    #        and on a measurable target stated in the design's own inputs
+    #        but absent from L22. ADVISES on the `verification_plan_
+    #        present: "implicit"` + prose-category shape that reads as
+    #        populated to any non-empty heuristic while carrying zero
+    #        enforceable target. See INFORMATIONAL_GATES for why its
+    #        blocking verdict is not yet counted as a deployment blocker.
+    "l22_verification_plan_measurable_check",
+    #   L23: BLOCKS only on SELF-contradiction (asserting secure boot /
+    #        key handling while carrying zero typed records with
+    #        evidence) — that needs no consumer to be wrong. The
+    #        cross-layer half ADVISES, because L23 has NO consumer
+    #        anywhere in the plugin and there is no downstream contract
+    #        to protect by stopping. Swept 136 runs: 0 blocking, 13
+    #        advisory (all on one crypto-accelerator design whose own
+    #        docs specify side-channel + fault-injection countermeasures
+    #        while L23 says security_requirements_present=false), 123
+    #        skip.
+    "l23_security_requirements_typed_check",
     # v0.120.1 / Wave 47 — prevent silent SKIP of analog content +
     # generic "every spec section must be cited" gate. Closes the
     # v0.120 fresh-agent failure where <chip-class> datasheet documented
