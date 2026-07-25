@@ -48,6 +48,15 @@ jobs:
           python3 vibe-ic-marketplace/plugins/vibe-ic/programs/source_chip_agnostic_check.py \
             vibe-ic-marketplace/plugins/vibe-ic
 
+      # vibe-ic#354 — the image-version gate is BLOCKING. It failed loudly on
+      # main for six versions (0.2.29 pinned in 13 places, never published)
+      # while nothing enforced it. --require-remote: the pinned tag must
+      # actually RESOLVE on ghcr; an unreachable registry is a FAIL here, not
+      # an UNVERIFIED shrug (this runner always has network).
+      - name: image-version sync gate (pins must resolve on ghcr)
+        run: |
+          python3 tools/vibeic-eda/sync_image_version.py --check --require-remote
+
       # The guard above scans FILES only — a commit MESSAGE naming the
       # commercial foundry / SKU / process is an equally permanent public leak
       # and used to pass every gate. Scan the messages this event introduces.
