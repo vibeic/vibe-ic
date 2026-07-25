@@ -9432,6 +9432,51 @@ def _macro_supply_preroute_decision(project: "Path", pdk: "PdkConfig",
                             f"{g['status']})" for g in rep["gaps"][:6]))}
 
 
+def _spare_safe_routing_clear_tcl(marker_prefix: str = "SHIP") -> str:
+    """Emit a TCL fragment that clears signal-net routing while preserving
+    spare / dont_touch nets. Self-contained, NONFATAL-guarded;
+    ``marker_prefix`` differentiates the log tokens across call sites.
+
+    Salvaged from the #332/#333/#334 family (tracked in #349) — the half
+    SEPARABLE from the escalation #343 superseded. The v1.5.65 post-mortem: a
+    reroute loop cleared ALL signal wires, and the rerouter merged the
+    now-unrouted spare-tie nets (spare_tielo/spare_tiehi, the Design-for-ECO
+    spare-input bindings) into unrelated signal nets (la_data_out, user_irq)
+    — a real LVS mismatch. The escalation that exposed it was disabled; the
+    CLEAR that enabled it stayed unfiltered. Measured on main before this
+    fix: all three routing-clear sites filter only POWER/GROUND, so ANY
+    reroute loop could repeat the failure even with the escalation off.
+
+    Three filters, each visible in the marker line: POWER/GROUND sigtype (as
+    before); net name matching *spare* (the v1.5.65 offenders); any net
+    touching a dont_touch instance. `spare_preserved=<n>` makes the
+    protection VISIBLE per run — a filter that fires silently cannot be told
+    apart from one that never fires (#313 §6). chip-AGNOSTIC: odb API only."""
+    return (
+        "if {[catch {\n"
+        "  set _rrc 0; set _skip 0\n"
+        "  foreach _net [[ord::get_db_block] getNets] {\n"
+        "    set _st [$_net getSigType]\n"
+        "    if {$_st eq \"POWER\" || $_st eq \"GROUND\"} { continue }\n"
+        "    # --- spare-net-safe filter (v1.5.65 post-mortem fix) ---\n"
+        "    set _nm [$_net getName]\n"
+        "    if {[string match *spare* $_nm]} {\n"
+        "      incr _skip; continue\n"
+        "    }\n"
+        "    set _has_dnt 0\n"
+        "    foreach _it [$_net getITerms] {\n"
+        "      if {[[$_it getInst] isDoNotTouch]} { set _has_dnt 1; break }\n"
+        "    }\n"
+        "    if {$_has_dnt} { incr _skip; continue }\n"
+        "    # --- end filter ---\n"
+        "    set _w [$_net getWire]\n"
+        "    if {$_w ne \"NULL\"} { odb::dbWire_destroy $_w; incr _rrc }\n"
+        "  }\n"
+        f"  puts \"{marker_prefix}_ROUTING_CLEARED: $_rrc (spare_preserved=$_skip)\"\n"
+        f"}} e]}} {{ puts \"{marker_prefix}_RRC_NONFATAL: $e\" }}\n"
+    )
+
+
 def _post_buffered_repair_tcl(marker_prefix: str, marker_suffix: str = "",
                               var_tag: str = "") -> str:
     """ORGANIC #561 (b) / #581 round-2 — the ONE post-buffered repair
@@ -13174,14 +13219,7 @@ for {set _cvg 0} {$_cvg < __BOUND__} {incr _cvg} {
     if {[catch {detailed_placement} e]} { puts "SHIP_CVG_DP_NONFATAL: $e"; break }
   }
   if {[catch {check_placement} e]} { puts "SHIP_CVG_CP_WARN: $e" }
-  if {[catch {
-    foreach _net [[ord::get_db_block] getNets] {
-      set _st [$_net getSigType]
-      if {$_st eq "POWER" || $_st eq "GROUND"} { continue }
-      set _w [$_net getWire]
-      if {$_w ne "NULL"} { odb::dbWire_destroy $_w }
-    }
-  } e]} { puts "SHIP_CVG_RRC_NONFATAL: $e" }
+__SPARE_SAFE_CLEAR__
   if {[catch {global_route} e]} { puts "SHIP_CVG_GR_NONFATAL: $e" }
   if {[catch {detailed_route} e]} { puts "SHIP_CVG_DR_NONFATAL: $e" }
 }
@@ -13201,7 +13239,11 @@ def _ship_postroute_convergence_tcl(max_captable_c: str, pnr_dir_c: str,
     """POST-REROUTE real-SPEF setup-closure loop appended to the shipped signoff
     repair (see _SHIP_POSTROUTE_CVG_TCL). Sentinel-token replacement (not
     f-string/format) so the TCL's own braces need no escaping. chip/PDK-AGNOSTIC."""
+    # __SPARE_SAFE_CLEAR__ -> the shared spare-net-safe clear (#349 salvage;
+    # a third inline copy of the filter is how a drift starts).
     return (_SHIP_POSTROUTE_CVG_TCL
+            .replace("__SPARE_SAFE_CLEAR__",
+                     _spare_safe_routing_clear_tcl("SHIP_CVG").rstrip())
             .replace("__BOUND__", str(int(bound)))
             .replace("__CAP__", max_captable_c)
             .replace("__PNR__", pnr_dir_c))
@@ -13325,17 +13367,8 @@ def _ship_signoff_spef_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         # to DRC convergence. Power/ground + special nets are left intact. Proven:
         # 0-guide -> 2575-guide, detailed_route 437->0 violations, on stock 0.2.28.
         # chip/PDK-AGNOSTIC (keyed on odb net routing state; no chip/vendor literal).
-        "if {[catch {\n"
-        "  set _rrc 0\n"
-        "  foreach _net [[ord::get_db_block] getNets] {\n"
-        "    set _st [$_net getSigType]\n"
-        "    if {$_st eq \"POWER\" || $_st eq \"GROUND\"} { continue }\n"
-        "    set _w [$_net getWire]\n"
-        "    if {$_w ne \"NULL\"} { odb::dbWire_destroy $_w; incr _rrc }\n"
-        "  }\n"
-        "  puts \"SHIP_ROUTING_CLEARED: $_rrc\"\n"
-        "} e]} { puts \"SHIP_RRC_NONFATAL: $e\" }\n"
-        "if {[catch {global_route} e]} { puts \"SHIP_GR_NONFATAL: $e\" }\n"
+        + _spare_safe_routing_clear_tcl("SHIP")
+        + "if {[catch {global_route} e]} { puts \"SHIP_GR_NONFATAL: $e\" }\n"
         "if {[catch {detailed_route} e]} { puts \"SHIP_DR_NONFATAL: $e\" }\n"
         # POST-REROUTE real-SPEF convergence (#603): the reroute above lands
         # the pre-reroute repair on the REAL routed parasitics; re-extract and
@@ -13692,17 +13725,8 @@ def _ship_wire_length_escalation_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "puts \"SHIP_ESC_EST_DR_NONFATAL: $e\" }\n"
     )
     reroute_tcl = (
-        "if {[catch {\n"
-        "  set _errc 0\n"
-        "  foreach _net [[ord::get_db_block] getNets] {\n"
-        "    set _st [$_net getSigType]\n"
-        "    if {$_st eq \"POWER\" || $_st eq \"GROUND\"} { continue }\n"
-        "    set _w [$_net getWire]\n"
-        "    if {$_w ne \"NULL\"} { odb::dbWire_destroy $_w; incr _errc }\n"
-        "  }\n"
-        "  puts \"SHIP_ESC_ROUTING_CLEARED: $_errc\"\n"
-        "} e]} { puts \"SHIP_ESC_RRC_NONFATAL: $e\" }\n"
-        "if {[catch {global_route} e]} { puts \"SHIP_ESC_GR_NONFATAL: $e\" }\n"
+        _spare_safe_routing_clear_tcl("SHIP_ESC")
+        + "if {[catch {global_route} e]} { puts \"SHIP_ESC_GR_NONFATAL: $e\" }\n"
         "if {[catch {detailed_route} e]} { puts \"SHIP_ESC_DR_NONFATAL: $e\" }\n"
         + extract_tcl
     )
