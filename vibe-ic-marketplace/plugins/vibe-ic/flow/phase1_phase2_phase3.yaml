@@ -162,7 +162,7 @@ steps:
       - "phase1/generated_docs/L8_TIMING_WAVEFORM.json"
       - "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
       - "phase1/generated_docs/L10_TEST_CASES.json"
-      - "phase1/generated_docs/L11_CALIBRATION.json"
+      - "phase1/generated_docs/L11_OTP_CONTENT.json"
       - "phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json"
       - "phase1/generated_docs/L13_OTP.json"
     gate:
