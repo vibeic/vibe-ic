@@ -10747,13 +10747,88 @@ def _v466_line_is_block_header(line: str) -> bool:
 # heading verbatim — and the fabrication then drove a whole A1-A9 analog track
 # that wrote ngspice sizing/corner decks for hardware that does not exist.
 # chip-AGNOSTIC: keyed on the plugin's own layer-code heading grammar.
-_RE_PLUGIN_LAYER_TITLE = re.compile(r'^\s{0,3}#{1,6}\s*L\d+[A-Za-z]?\s*[—–-]')
+#
+# NARROWING (second pass). Recognising the boilerplate by SHAPE alone —
+# "any `## L<n> —` heading" — traded a false positive for a false NEGATIVE.
+# The sole caller (`gen_l5_adi_spec`) runs this over the USER'S INPUT DOCS,
+# and the L-numbered heading style is exactly what this plugin's own layer
+# scheme teaches users to write, so a genuine mixed-signal spec whose ADC
+# evidence sits under `## L5 - ADC subsystem: 12-bit SAR ADC, 1 MSPS` was
+# silently dropped. The boilerplate is therefore identified by its ACTUAL
+# RENDERED TEXT: `phase1_dialogue_render._render_layer` emits
+# ``f"## {code} — {LAYER_TITLES[code]}"``, so a heading counts as the
+# plugin's own only when the text after the layer code EQUALS that layer's
+# canonical title (whitespace/dash/case-normalised). Any other L-numbered
+# heading is the user's own words and is design evidence.
+# chip-AGNOSTIC: the titles come from the plugin's own schema, never from a
+# chip name or value literal.
+_RE_LAYER_CODE_HEADING = re.compile(
+    r'^\s{0,3}#{1,6}\s*(L\d+[A-Za-z]?)\s*[—–‒―-]\s*(\S.*?)\s*$')
+_RE_LAYER_TITLE_DASHES = re.compile(r'[—–‒―-]+')
+_V466_LAYER_TITLES_NORM: Optional[Dict[str, str]] = None
+
+
+def _v466_norm_layer_title(s: str) -> str:
+    """Normalise a heading title for comparison: unify every dash variant,
+    collapse whitespace, casefold. Doc extraction routinely rewrites an
+    em dash to a hyphen, which must not defeat the comparison."""
+    return re.sub(
+        r'\s+', ' ', _RE_LAYER_TITLE_DASHES.sub('-', s or '')).strip().lower()
+
+
+def _v466_load_layer_titles() -> Dict[str, str]:
+    """Load this plugin's own layer titles from `tools/phase1_engine/schema.py`
+    (the single source the renderer itself reads). Returns {} when the schema
+    is not reachable, in which case the self-contamination guard is inert
+    rather than guessing — a guard that guesses would drop real evidence."""
+    import importlib.util as _ilu
+    here = Path(__file__).resolve()
+    for base in here.parents:
+        cand = base / "tools" / "phase1_engine" / "schema.py"
+        if not cand.is_file():
+            continue
+        try:
+            spec = _ilu.spec_from_file_location(
+                "_v466_phase1_engine_schema", cand)
+            mod = _ilu.module_from_spec(spec)
+            sys.modules.setdefault("_v466_phase1_engine_schema", mod)
+            spec.loader.exec_module(mod)
+            titles = getattr(mod, "LAYER_TITLES", None)
+            if isinstance(titles, dict) and titles:
+                return {str(k).upper(): str(v) for k, v in titles.items()}
+        except Exception:  # noqa: BLE001 - never hard-fail on schema import
+            pass
+    try:  # installed-cache layout: the package may already be importable
+        from phase1_engine.schema import LAYER_TITLES as _lt  # type: ignore
+        if isinstance(_lt, dict) and _lt:
+            return {str(k).upper(): str(v) for k, v in _lt.items()}
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
+def _v466_plugin_layer_titles() -> Dict[str, str]:
+    """{LAYER_CODE: normalised canonical title}, loaded once."""
+    global _V466_LAYER_TITLES_NORM
+    if _V466_LAYER_TITLES_NORM is None:
+        _V466_LAYER_TITLES_NORM = {
+            code: _v466_norm_layer_title(title)
+            for code, title in _v466_load_layer_titles().items()}
+    return _V466_LAYER_TITLES_NORM
 
 
 def _v466_line_is_plugin_layer_title(line: str) -> bool:
-    """True when `line` is a layer heading emitted by this plugin's own
-    renderer. Such a line must never count as evidence about the design."""
-    return bool(_RE_PLUGIN_LAYER_TITLE.match(line or ""))
+    """True ONLY when `line` is a layer heading this plugin's own renderer
+    wrote — i.e. `## L<n> — <that layer's canonical title>`. A user's own
+    L-numbered heading carrying their own words is NOT boilerplate and must
+    keep counting as design evidence."""
+    m = _RE_LAYER_CODE_HEADING.match(line or "")
+    if not m:
+        return False
+    canon = _v466_plugin_layer_titles().get(m.group(1).upper())
+    if not canon:
+        return False
+    return _v466_norm_layer_title(m.group(2)) == canon
 
 
 def _v466_best_class_match(text: str, pat: str):
@@ -10764,7 +10839,9 @@ def _v466_best_class_match(text: str, pat: str):
     behaviour). Returns a re.Match or None.
 
     ORGANIC — matches sitting on the plugin's OWN rendered layer-title
-    heading are skipped entirely (see _RE_PLUGIN_LAYER_TITLE). If every
+    heading are skipped entirely (see _v466_line_is_plugin_layer_title —
+    matched against the layer's CANONICAL title, so a user's own
+    L-numbered heading is NOT treated as boilerplate). If every
     match is on such a line the class has NO design evidence and None is
     returned, rather than falling back to the boilerplate.
 
@@ -44439,9 +44516,15 @@ _TABLE_LABEL_RE = re.compile(r'^\s*[-*]\s*([A-Za-z0-9_.]+)\s*:\s*$')
 def _preceding_table_label(lines: List[str], hdr_idx: int) -> str:
     """Return the `- <field>:` label owning the table whose header row is at
     ``lines[hdr_idx]`` (blank lines between label and table are allowed), or
-    '' when the table has no such label. Bounded look-back: the renderer
-    emits exactly one blank line, so anything further away is a different
-    block and must not be claimed as this table's label."""
+    '' when the table has no such label.
+
+    BOUNDED look-back. The renderer emits the table immediately under its
+    label, so a hand-written doc's stray blank lines are tolerated but a
+    label more than 3 lines above the header row belongs to a DIFFERENT
+    block and must not be claimed. The bound is a distance test and nothing
+    else: with the same lines and no prose in between, a label 3 lines up IS
+    claimed and one 4 lines up is NOT (see
+    `test_lookback_bound_is_the_deciding_branch`)."""
     j = hdr_idx - 1
     while j >= 0 and not lines[j].strip():
         if hdr_idx - j > 3:
@@ -44484,11 +44567,31 @@ def _harvest_test_cases_from_input_tables(
                 # `_table()` builds the header from the record's own keys
                 # and the field name never reaches the header row.
                 hjoin = ' '.join(hdr)
-                hsem = hjoin + ' ' + _preceding_table_label(lines, i)
-                if (len(hdr) >= 2 and is_sep
-                        and _L10_TC_TEST_COL.search(hsem)
-                        and (_L10_TC_EXP_COL.search(hsem)
-                             or _L10_TC_IN_COL.search(hsem))):
+                label = _preceding_table_label(lines, i)
+                hsem = hjoin + ' ' + label
+                # LEGACY path, byte-identical to the pre-label predicate:
+                # the HEADER ROW alone already carries the vocabulary.
+                by_header = bool(
+                    _L10_TC_TEST_COL.search(hjoin)
+                    and (_L10_TC_EXP_COL.search(hjoin)
+                         or _L10_TC_IN_COL.search(hjoin)))
+                # WIDENED path — the label may supply the test-ness, but it
+                # may NOT supply the whole predicate on its own. Accepting
+                # the label alone admitted a bench-instrument list
+                # (`- <x>_equipment:` over instrument|model|input), an
+                # ownership matrix (name|input|owner) and a build-artifact
+                # list (name|source|size) as L10 functional cases, because a
+                # single label token could satisfy BOTH halves at once. The
+                # HEADER ROW must corroborate, and specifically with an
+                # ORACLE column: a harvested case whose golden value has no
+                # column to come from is an oracle with no answer, which is
+                # the same rubber stamp as no case at all. An input-only
+                # column is NOT corroboration — every table has inputs.
+                by_label = bool(
+                    label
+                    and _L10_TC_TEST_COL.search(hsem)
+                    and _L10_TC_EXP_COL.search(hjoin))
+                if len(hdr) >= 2 and is_sep and (by_header or by_label):
                     j = i + 2
                     while j < n and '|' in lines[j]:
                         cells = [c.strip()
