@@ -23014,7 +23014,14 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
             netlist_file=netlist_for_clamp,
             rated_tap_masters=([pdk.tapcell_master]
                                if getattr(pdk, "tapcell_master", None)
-                               else None))
+                               else None),
+            # Tell the geometry layer WHY there is no rated tap master, so a
+            # tapless-cell PDK cannot be mistaken for a skipped tapcell step.
+            # The GDS tap-diffusion measurement below is the POSITIVE
+            # confirmation; this flag only stops the DEF-component count from
+            # emitting a CONCLUSIVE false FAIL when that measurement is
+            # unavailable (e.g. tap_geom_layers not yet declared for the PDK).
+            tapless_pdk=(getattr(pdk, "tapcell_master", None) is None))
         geometry_residual = geo.get("foundry_data_residual")
 
         # v1.3.93 — TAPLESS-CELL PDK: the DEF-component tap-SPACING screen reports
