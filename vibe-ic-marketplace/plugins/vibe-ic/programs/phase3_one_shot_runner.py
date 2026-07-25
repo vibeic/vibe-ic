@@ -19824,17 +19824,80 @@ def _measure_posteco_mcorner_ocv(project: Path, top: str, pdk: PdkConfig,
     return out
 
 
+def _multi_corner_sta_inputs(project: Path, top: str) -> Tuple[Optional[Path],
+                                                               Optional[Path],
+                                                               str, str]:
+    """Resolve the netlist + parasitics the per-corner STA must time.
+
+    The defect this closes: `_emit_multi_corner_sta`'s docstring claimed the
+    reports were run "against the routed netlist", but the code read
+    ``<synth>/<top>_synth.v`` — the PRE-PnR synthesis netlist — and read NO
+    SPEF. The emitted `phase3/stage3/sta/per_corner/sta_<CORNER>.rpt` files are
+    consumed as the EVIDENCE that a multi-corner sign-off STA was performed
+    (`eda_report_audit` treats a populated per_corner/ as the multi-corner
+    claim; `sta_corner_record_completeness_check` reads the same tree), so a
+    pre-layout, zero-parasitic number was standing in for post-route sign-off.
+
+    That mislabel is dangerous in BOTH directions. On a design PnR improves it
+    reads pessimistic; on a design PnR degrades — the normal case once real
+    interconnect RC lands — it reads OPTIMISTIC, i.e. it can present a corner
+    as MET that the routed design violates.
+
+    Precedence (chip/PDK-AGNOSTIC, purely file-existence driven):
+      1. routed netlist ``<pnr>/<top>_pnr.v`` + extracted ``<top>.spef``
+         → true post-route multi-corner timing;
+      2. routed netlist with no SPEF → post-route topology, no parasitics;
+      3. synth netlist → PRE-LAYOUT ESTIMATE, and the report SAYS SO.
+
+    Returns ``(netlist, spef, basis_id, disclosure)``. The basis is stamped
+    into every emitted report so no downstream summary can quote a pre-layout
+    number as post-route sign-off (§4.05 — the artifact carries its own
+    limitation).
+    """
+    routed = _pl.pnr_dir(project) / f"{top}_pnr.v"
+    synth = _pl.synth_dir(project) / f"{top}_synth.v"
+    spef: Optional[Path] = None
+    for cand in (project / f"phase3/stage3/extracted/{top}.spef",
+                 _pl.pnr_dir(project) / "post_route_repair.spef"):
+        if cand.is_file():
+            spef = cand
+            break
+    if routed.is_file():
+        if spef is not None:
+            return (routed, spef, "POST_ROUTE_SPEF",
+                    f"routed netlist {routed.name} + extracted parasitics "
+                    f"{spef.name} — true post-route multi-corner timing")
+        return (routed, None, "POST_ROUTE_NO_SPEF",
+                f"routed netlist {routed.name}; NO extracted SPEF found — "
+                "post-route topology WITHOUT interconnect parasitics; "
+                "interconnect delay is UNDER-counted at every corner")
+    if synth.is_file():
+        return (synth, None, "PRE_LAYOUT_ESTIMATE",
+                f"no routed netlist yet — timed the PRE-PnR synthesis netlist "
+                f"{synth.name} with NO parasitics. This is a PRE-LAYOUT "
+                "ESTIMATE, NOT post-route sign-off: it excludes placement, "
+                "CTS, resizing and all interconnect RC, so a corner shown as "
+                "MET here may VIOLATE on the routed design")
+    return (None, None, "MISSING", "no routed or synth netlist found")
+
+
 def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
                            container: str, libs: List[Path],
                            out_dir: Path, notes: List[str]) -> bool:
-    """For each Liberty corner, run OpenSTA against the routed netlist and
-    emit `sta_<CORNER>.rpt` plus a per-corner JSON summary. Best-effort:
-    failures log WARN but do not block the canonicalize step."""
-    netlist = _pl.synth_dir(project) / f"{top}_synth.v"
+    """For each Liberty corner run OpenSTA and emit `sta_<CORNER>.rpt`.
+
+    Times the ROUTED netlist + extracted SPEF when they exist, falling back to
+    the pre-PnR synth netlist ONLY when no routed netlist has been written yet
+    — in which case every emitted report is stamped `STA_BASIS:
+    PRE_LAYOUT_ESTIMATE` so it can never be read as post-route sign-off
+    (see :func:`_multi_corner_sta_inputs`). Best-effort: failures log WARN but
+    do not block the canonicalize step."""
+    netlist, spef, basis, basis_note = _multi_corner_sta_inputs(project, top)
     sdc_path = _pl.pnr_dir(project) / "constraint.sdc"
-    if not (netlist.is_file() and sdc_path.is_file()):
-        notes.append("multi-corner STA skipped: synth netlist or SDC missing")
+    if netlist is None or not sdc_path.is_file():
+        notes.append("multi-corner STA skipped: netlist or SDC missing")
         return False
+    notes.append(f"multi-corner STA basis={basis}: {basis_note}")
     any_emitted = False
     for lib in libs:
         corner = _classify_corner_from_name(lib.name)
@@ -19852,15 +19915,30 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
             f"read_liberty {_to_container_path(str(f), container)}"
             for f in pdk.macro_libs
         )
+        # Annotate the extracted parasitics when we have them — a corner
+        # report with no SPEF under-counts interconnect delay at EVERY corner.
+        read_spef_tcl = ""
+        if spef is not None:
+            read_spef_tcl = (
+                f"read_spef {_to_container_path(str(spef), container)}\n")
+        # Stamp the basis INTO the report itself: `eda_report_audit` and
+        # `sta_corner_record_completeness_check` consume this tree as the
+        # multi-corner sign-off claim, so the artifact must carry its own
+        # limitation rather than rely on a caller to remember it.
         tcl = (
             f"read_liberty {lib_c}\n"
             f"{macro_libs_tcl}\n"
             f"read_verilog {netlist_c}\n"
             f"link_design {top}\n"
             f"read_sdc {sdc_c}\n"
+            f"{read_spef_tcl}"
             f"report_checks > {rpt_c}\n"
             f"report_tns >> {rpt_c}\n"
             f"report_wns >> {rpt_c}\n"
+            f"set _bf [open {rpt_c} a]\n"
+            f"puts $_bf \"STA_BASIS: {basis}\"\n"
+            f"puts $_bf \"STA_BASIS_NOTE: {basis_note}\"\n"
+            f"close $_bf\n"
             f"exit\n"
         )
         tcl_path = out_dir / f"sta_{corner}.tcl"
