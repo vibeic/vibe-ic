@@ -9,7 +9,7 @@ skill: flow-change-acceptance
 requirements:
   - id: R_negative_control_bidirectional
     description: "States the negative-control result in BOTH directions (fails pre-fix, passes post-fix)"
-    pattern: '(?i)(pre-?fix|parent).{0,80}(fail|error).{0,200}(post-?fix|HEAD).{0,80}pass|negative control.{0,120}both'
+    pattern: '(?is)negative control[^.]{0,200}both directions'
     skill_section: 'The six criteria / 1'
 
   - id: R_corpus_sweep
@@ -29,7 +29,7 @@ requirements:
 
   - id: R_no_literals
     description: "Asserts chip-agnosticism (no design/PDK/vendor literals; fixtures synthesized)"
-    pattern: '(?i)(chip-?agnostic|no (design|PDK|vendor) literal|synthes(is|ized|ised) fixture|fixtures? .{0,40}synthes)'
+    pattern: '(?i)(chip-?agnostic|no (design|PDK|vendor)[- ]?(literal|name)s?\s+(appear|occur|exist|present|used))'
     skill_section: 'The six criteria / 4'
 
   - id: R_failure_name_sets
