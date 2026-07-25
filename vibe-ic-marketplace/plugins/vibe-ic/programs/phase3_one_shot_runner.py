@@ -22421,6 +22421,32 @@ def _discover_via_resistances(tech_lef: Optional[str]) -> Dict[str, float]:
     return out
 
 
+def _discover_nominal_voltage(liberty_path: str,
+                              container: str = "") -> Optional[float]:
+    """PR-F7 — read ``nom_voltage : <v>`` from the PDK liberty so PSM gets an
+    explicit supply voltage. Without it ``analyze_power_grid`` aborts with
+    PSM-0079 "Cannot determine the supply voltage for <net>" and the whole
+    IR/EM sign-off silently emits nothing. Reads host-side when the path
+    exists, else via ``docker exec grep`` (named PDKs live in-container).
+    chip-AGNOSTIC."""
+    try:
+        p = Path(liberty_path)
+        if liberty_path and p.is_file():
+            head = p.read_text(errors="ignore")[:200000]
+        elif container:
+            cp = subprocess.run(
+                ["docker", "exec", container, "grep", "-m1", "-h",
+                 "nom_voltage", liberty_path],
+                capture_output=True, text=True, timeout=30)
+            head = cp.stdout if cp.returncode == 0 else ""
+        else:
+            head = ""
+        m = re.search(r"nom_voltage\s*:\s*([\d.]+)", head)
+        return float(m.group(1)) if m else None
+    except Exception:
+        return None
+
+
 def _emit_ir_em_reports(project: Path, top: str, pdk: PdkConfig,
                         container: str, ir_rpt: Path, em_rpt: Path,
                         notes: List[str]) -> Tuple[bool, bool]:
@@ -22469,10 +22495,20 @@ def _emit_ir_em_reports(project: Path, top: str, pdk: PdkConfig,
     if via_res:
         notes.append("IR/EM: set_layer_rc via-resistance from tech LEF for "
                      + ", ".join(f"{k}={v}" for k, v in sorted(via_res.items())))
+    vdd_v = _discover_nominal_voltage(str(pdk.liberty), container)
+    if vdd_v:
+        notes.append(
+            f"IR/EM: set_pdnsim_net_voltage {vdd_v} V per net "
+            "(from liberty nom_voltage; without it PSM aborts PSM-0079 "
+            "'Cannot determine the supply voltage')")
     psm_blocks = []
     for net in power_nets:
+        _volt_tcl = (
+            f"catch {{set_pdnsim_net_voltage -net {net} -voltage {vdd_v}}}\n"
+            if vdd_v else "")
         psm_blocks.append(
             f'puts "=== PSM_NET {net} ==="\n'
+            + _volt_tcl +
             f'if {{[catch {{analyze_power_grid -net {net} -enable_em '
             f'-em_outfile {em_csv_c}}} _psm_err]}} {{\n'
             f'  puts "PSM_NONFATAL {net}: $_psm_err"\n'
