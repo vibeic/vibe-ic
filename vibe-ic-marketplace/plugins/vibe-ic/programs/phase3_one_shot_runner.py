@@ -36,6 +36,7 @@ Exit codes: 0 PASS / PASS_WITH_WAIVERS, 1 FAIL, 2 IO/arg error.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -6502,6 +6503,78 @@ def _strip_signed_net_decls(nl_text: str) -> Tuple[str, int]:
     return _SIGNED_NET_DECL_RE.subn(r"\1", nl_text)
 
 
+# Sidecar recording the sha256 of every RTL input the netlist was synthesised
+# from. Salvaged from closed #336 (tracked in #349): it closes the residual I
+# disclosed when landing #289 in v1.5.79 — the mtime test trusts a cache when
+# RTL CONTENT changed but its mtime is equal or OLDER (cp -p, a
+# timestamp-preserving restore, checking out an older revision). Both cases
+# were reproduced then; a content digest is the fix, not a better clock.
+_SYNTH_INPUTS_SIDECAR = "synth_inputs.json"
+
+
+def _synth_rtl_sources(rtl_dir: Path) -> List[Path]:
+    """THE one RTL selector, shared by the fingerprint writer and both
+    staleness checks — the same glob _stale_rtl_vs_netlist has always used.
+    Two selectors is how a file gets fingerprinted but not checked (or the
+    reverse), and that split is this campaign's recurring producer/consumer
+    defect (#309, #312, #348)."""
+    return sorted(rtl_dir.glob("*.sv")) + sorted(rtl_dir.glob("*.v"))
+
+
+def _write_synth_inputs_sidecar(netlist: Path, rtl_dir: Path) -> None:
+    """Record the RTL content fingerprint next to the netlist it produced.
+    Best-effort: a sidecar failure must never fail the synth that succeeded —
+    the reader treats an absent sidecar as 'fingerprint unverifiable' and
+    falls back to the mtime test, which is exactly the pre-sidecar state."""
+    try:
+        rtl = {}
+        for f in _synth_rtl_sources(rtl_dir):
+            rtl[f.name] = hashlib.sha256(f.read_bytes()).hexdigest()
+        (netlist.parent / _SYNTH_INPUTS_SIDECAR).write_text(json.dumps(
+            {"netlist": netlist.name, "rtl_sha256": rtl}, indent=2))
+    except OSError:
+        pass
+
+
+def _stale_rtl_by_fingerprint(netlist: Path, rtl_dir: Path) -> Optional[List[str]]:
+    """Content-digest staleness: which RTL files differ from what the cached
+    netlist was ACTUALLY synthesised from?
+
+    Returns None when no sidecar exists (an older run) — the caller then falls
+    back to the mtime test and DISCLOSES that the fingerprint was
+    unverifiable, rather than treating absence as freshness. A MALFORMED
+    sidecar returns a sentinel list (fail closed): unreadable evidence is not
+    evidence, and a corrupt fingerprint must force a re-synth, not a reuse.
+
+    Catches what mtime structurally cannot: content changed with an equal or
+    OLDER mtime, and an added/removed RTL file (the file-set is part of the
+    fingerprint, in both directions).
+    """
+    sc = netlist.parent / _SYNTH_INPUTS_SIDECAR
+    if not sc.is_file():
+        return None
+    try:
+        recorded = json.loads(sc.read_text()).get("rtl_sha256")
+        if not isinstance(recorded, dict):
+            return ["<sidecar malformed>"]
+    except (OSError, ValueError):
+        return ["<sidecar unreadable>"]
+    stale: List[str] = []
+    current: Dict[str, str] = {}
+    for f in _synth_rtl_sources(rtl_dir):
+        try:
+            current[f.name] = hashlib.sha256(f.read_bytes()).hexdigest()
+        except OSError:
+            stale.append(f"<{f.name} unreadable>")
+    for name, digest in current.items():
+        if recorded.get(name) != digest:
+            stale.append(name)
+    for name in recorded:
+        if name not in current:
+            stale.append(f"<{name} removed>")
+    return stale
+
+
 def _stale_rtl_vs_netlist(netlist: Path, rtl_dir: Path) -> List[str]:
     """RTL files NEWER than a cached synth netlist (i.e. the cache is stale).
 
@@ -7067,6 +7140,9 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
                           [str(netlist), str(log)],
                           extras={"synth_frontend": synth_frontend,
                                   "macro_define_decision": _macro_def})
+    # Record what this netlist was ACTUALLY synthesised from, so the next
+    # run's cache-reuse decision compares CONTENT, not clocks (#349/#336).
+    _write_synth_inputs_sidecar(netlist, _pl.rtl_dir(project))
     return StepResult("synth", "PASS", time.time() - t0,
                       f"netlist={netlist.name} cells={cell_count} "
                       f"frontend={synth_frontend}",
@@ -25063,9 +25139,25 @@ def main() -> int:
         # stale result into what looked like a real measurement.
         # Chip-AGNOSTIC: pure mtime comparison against the same RTL selector
         # step_synth itself reads.
-        _stale_rtl = (_stale_rtl_vs_netlist(netlist_existing,
+        # Content fingerprint FIRST (#349 salvage of #336): the sidecar
+        # digest catches what mtime cannot — content changed under an equal
+        # or OLDER mtime, and an added/removed RTL file. No sidecar (a run
+        # predating v1.6.2) -> fall back to mtime and DISCLOSE that the
+        # fingerprint was unverifiable, which is the pre-sidecar behaviour,
+        # not a new trust.
+        _stale_rtl: List[str] = []
+        if _nl_pdk_ok:
+            _fp = _stale_rtl_by_fingerprint(netlist_existing,
                                             _pl.rtl_dir(project))
-                      if _nl_pdk_ok else [])
+            if _fp is None:
+                print("[synth] no synth_inputs.json sidecar for the cached "
+                      "netlist — RTL fingerprint UNVERIFIABLE, falling back "
+                      "to the mtime test (blind to content changes under an "
+                      "equal-or-older mtime)", file=sys.stderr)
+                _stale_rtl = _stale_rtl_vs_netlist(netlist_existing,
+                                                   _pl.rtl_dir(project))
+            else:
+                _stale_rtl = _fp
         if _stale_rtl:
             _nl_pdk_ok = False
             print(f"[synth] cached netlist is OLDER than its RTL "
