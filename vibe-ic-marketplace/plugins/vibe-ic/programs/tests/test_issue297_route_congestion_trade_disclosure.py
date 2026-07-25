@@ -25,8 +25,16 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 import route_congestion_trade_disclosure as R  # noqa: E402
 
-_TRADE = ("[WARNING GRT-0273] Net {net} has a non-default rule that was "
-          "removed to allow routing.\n")
+# THE REAL OpenROAD message. The first version of this file used a fixture I
+# invented ("Net <n> has a non-default rule that was removed"), which made the
+# suite green while the parser returned the net name "Disabled" on every real
+# run. Fixtures must be the tool's ACTUAL output.
+_TRADE = ("[WARNING GRT-0273] Disabled NDR (to reduce congestion) "
+          "for net: {net}\n")
+# The alternative spelling is still accepted, so an upstream reword degrades to
+# the generic form rather than silently yielding a junk token.
+_TRADE_ALT = ("[WARNING GRT-0273] Net {net} has a non-default rule that was "
+              "removed to allow routing.\n")
 
 
 def _project(tmp_path, log: str, sdc: str = "") -> Path:
@@ -111,3 +119,29 @@ def test_297_anchored_on_the_message_id(tmp_path):
     change cannot silently disable the disclosure."""
     log = "[WARNING GRT-0273] Net foo_net wording changed upstream entirely\n"
     assert R.audit(_project(tmp_path, log))["trades"] == ["foo_net"]
+
+
+def test_297_real_openroad_wording_is_what_ships(tmp_path):
+    """REGRESSION for a defect of my own, shipped in v1.5.83.
+
+    The parser was written against a fixture I invented. OpenROAD's real
+    message is `Disabled NDR (to reduce congestion) for net: <n>`, against
+    which the old pattern returned the net name "Disabled" — reporting a trade
+    on a net that does not exist while MISSING the real one, on every real run.
+    Green tests, because they fed the invented wording back to themselves.
+    """
+    log = _TRADE.format(net="clknet_0_clk_regs") + _TRADE.format(net="clk_regs")
+    rep = R.audit(_project(tmp_path, log))
+    assert rep["trades"] == ["clknet_0_clk_regs", "clk_regs"], rep["trades"]
+    assert "Disabled" not in rep["trades"], (
+        "the message VERB must never be reported as the net it names")
+
+
+def test_297_alternative_wording_still_parses(tmp_path):
+    rep = R.audit(_project(tmp_path, _TRADE_ALT.format(net="clk_i")))
+    assert rep["trades"] == ["clk_i"]
+
+
+def test_297_both_spellings_in_one_log(tmp_path):
+    log = _TRADE.format(net="clknet_0") + _TRADE_ALT.format(net="clk_i")
+    assert set(R.audit(_project(tmp_path, log))["trades"]) == {"clknet_0", "clk_i"}

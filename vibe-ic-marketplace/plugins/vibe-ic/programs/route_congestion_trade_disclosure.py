@@ -50,10 +50,31 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-# `[WARNING GRT-0273] Net <name> has a non-default rule ...` — anchored on the
-# message ID so wording changes upstream cannot silently disable the gate.
-_GRT0273_RE = re.compile(
-    r"GRT-0273\]?\s*(?:Net\s+)?(?P<net>[^\s,]+)", re.IGNORECASE)
+# GRT-0273. Anchored on the message ID, but the NET must be located by the
+# ACTUAL message shape — the id alone is not enough.
+#
+# THE BUG THIS FIXES (mine, shipped in v1.5.83): the first version matched
+# `GRT-0273]?\s*(?:Net\s+)?(?P<net>[^\s,]+)` against a fixture I WROTE MYSELF
+# ("Net <n> has a non-default rule that was removed"). OpenROAD does not say
+# that. The real message is:
+#
+#     [WARNING GRT-0273] Disabled NDR (to reduce congestion) for net: clknet_0_clk_regs
+#
+# against which that pattern returns the net name "Disabled". So the gate
+# reported a trade on a net that does not exist and MISSED the real one — on
+# every real run. The tests were green because they only ever fed the invented
+# wording back to themselves. Inventing the tool output you claim to parse is
+# the same class of defect this campaign keeps finding, committed by the gate
+# that was written to disclose it.
+#
+# Both spellings are matched now: the real one first, the older/possible
+# alternative second, so an upstream rewording degrades to the generic form
+# instead of silently yielding a junk token.
+_GRT0273_REAL_RE = re.compile(
+    r"GRT-0273\]\s*Disabled NDR[^\n]*?for net:\s*(?P<net>[^\s,]+)",
+    re.IGNORECASE)
+_GRT0273_ALT_RE = re.compile(
+    r"GRT-0273\]\s*Net\s+(?P<net>[^\s,]+)", re.IGNORECASE)
 
 # GRT-0116: congestion aborted global routing BEFORE any DEF was produced.
 _GRT0116_RE = re.compile(r"GRT-0116", re.IGNORECASE)
@@ -107,10 +128,14 @@ def parse_trades(log_text: str) -> List[str]:
     """Nets whose non-default rule global routing removed. Order-preserving,
     de-duplicated."""
     seen: List[str] = []
-    for m in _GRT0273_RE.finditer(log_text or ""):
-        net = m.group("net").strip().strip('"').rstrip(".:,")
-        if net and net.lower() not in ("net", "the") and net not in seen:
-            seen.append(net)
+    for rx in (_GRT0273_REAL_RE, _GRT0273_ALT_RE):
+        for m in rx.finditer(log_text or ""):
+            net = m.group("net").strip().strip('"').rstrip(".:,")
+            # `disabled` guards the exact failure above: never accept the verb
+            # of the message as if it were the net it names.
+            if net and net.lower() not in ("net", "the", "disabled") \
+                    and net not in seen:
+                seen.append(net)
     return seen
 
 
