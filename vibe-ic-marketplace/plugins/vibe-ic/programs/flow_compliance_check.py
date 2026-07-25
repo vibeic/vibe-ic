@@ -171,6 +171,21 @@ INFORMATIONAL_GATES: frozenset[str] = frozenset({
     # emits coverage_goals[] with numeric targets for those two designs
     # — the gate already returns rc=1 and needs no change.
     "l22_verification_plan_measurable_check",
+    # batch-8 / layergate-8 — L25_RELIABILITY_MISSION_PROFILE has NO consumer
+    # anywhere in the plugin: nothing derates STA or IR-drop by an aging
+    # margin, nothing widens a corner set from a mission profile. Nothing
+    # downstream is wrong today as a consequence of a bad L25, so blocking a
+    # tapeout flow on it would be a gate asserting authority it does not have.
+    # Its actionability rules also necessarily interpret free text, unlike the
+    # purely-derivational L24/L26 gates in the same batch, and an interpretive
+    # rule with no consumer should advise.
+    #
+    # PROMOTION TRIGGER (stated so it is not forgotten): the moment ANY
+    # program reads L25 to derate STA/IR-drop or to widen a corner set, delete
+    # this entry. From that point an unusable L25 silently produces optimistic
+    # timing, and "advisory" becomes the same "FAIL and the flow continued
+    # anyway" mistake that compounded the 2026-07 route-abort defect.
+    "l25_reliability_envelope_actionable_check",
 })
 
 
@@ -1344,6 +1359,31 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     "skill_compliance_triangle_check",
     "testbench_exists_check",
     "tester_oracle_health_check",
+    # batch-8 / layergate-8 — SEMANTIC gates for the three consumer-less
+    # completeness layers (L24 / L25 / L26). None of the three has a consumer
+    # today, so none demands CONTENT. Each instead forbids the one shape that
+    # would be a lie if a consumer were ever wired in: a verdict asserted
+    # without evidence. Motivated by the 2026-07 route abort, where a
+    # completeness verdict computed from the wrong premise ("the token appears
+    # in SOME layer") left L21 — the layer the backend consumes — empty, and
+    # TritonRoute aborted 3278 nets five steps downstream.
+    #   L24: every asserted sign-off status must trace to a report path INSIDE
+    #        the project plus the value read back from it. SKIPs on the inert
+    #        layer all real runs emit today (144/144 swept, 0 false positives).
+    #        BLOCKS — Phase 1 runs before DRC/LVS/STA exist, so it has no
+    #        legitimate reason to certify their outcome.
+    "l24_signoff_evidence_backed_check",
+    #   L25: a reliability margin must be a number BOUND TO A UNIT, traceable
+    #        to this design's own source, and its envelope must cover the
+    #        operating temperatures the design's own L-docs declare. ADVISES
+    #        (see INFORMATIONAL_GATES) — nothing derates STA or IR-drop from
+    #        L25 yet, so it must not block a tapeout flow.
+    "l25_reliability_envelope_actionable_check",
+    #   L26: applicability must be DERIVED from the run's own ic_class via
+    #        l_doc_taxonomy, never asserted, and an N/A must say why. Purely
+    #        derivational — no keyword scan, no threshold — so it cannot fire
+    #        on a legitimately-N/A design. BLOCKS.
+    "l26_mechanical_applicability_derived_check",
     # v1.6.4 RETRACTED (introduced regression on incomplete projects;
     # gates lack chip-AGNOSTIC silent-skip on missing prerequisites):
     # "coverage_metric_check"            — needs sim coverage report
