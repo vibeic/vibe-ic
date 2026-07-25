@@ -1119,6 +1119,20 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     #     deleted by hand from v10619.
     "analog_artefact_substance_check",
     "chip_gds_canonical_real_file_check",
+    # Chip-level counterpart of analog_artefact_substance_check above.
+    #   That gate catches 64-byte HEADER+ENDLIB stubs for ANALOG blocks;
+    #   the top-level chip GDS had no equivalent. Its only content check
+    #   was gds_size_check (flow step 37), which compares against a
+    #   flow-wide 100 KB constant and demotes an invalid GDSII header to
+    #   a WARNING — so 150 KB of random bytes behind a 4-byte HEADER, a
+    #   zero-padded library with zero structures, and even-length junk
+    #   that never reaches ENDLIB all reported `pass: true, errors: 0`
+    #   and took Step 37 to PASS. This gate walks the full record stream
+    #   and requires layout elements >= the design's own placed-instance
+    #   count from routed.def (derived floor, no per-design constants).
+    #   VACUOUS_PASS before GDS stream-out, so it is silent on
+    #   phase-incomplete projects.
+    "gds_substance_check",
     # v1.6.51 wire-in — generalised symlink ban under all canonical
     #   deliverable trees (phase3/stage4, phase3/mixed_signal,
     #   phase2/stage1/fpga, phase2/stage2/synth, analog/hardmacro).

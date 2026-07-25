@@ -377,6 +377,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gds_ip_attribution` | any | — | Embed IP attribution metadata into the foundry |
 | `gds_size_check` | any | — | Deterministic GDS file existence and size checker. |
 | `gds_streamout_layermap_check` | any | — | Deterministic sign-off streamout layer |
+| `gds_substance_check` | any | — | the shipped chip GDS must be a structurally valid |
 | `gds_topcell_name_check` | any | — | Deterministic GDSII top-cell-name verifier. |
 | `gen_skill_inventory` | any | — | single source of truth for the AI-skill count. |
 | `general_synth` | any | — | GENERAL (§4.05-audited) deterministic STRUCTURAL solvers |
@@ -1340,6 +1341,7 @@ _(no programs in this group)_
 - `gds_ip_attribution` — Embed IP attribution metadata into the foundry
 - `gds_size_check` — Deterministic GDS file existence and size checker.
 - `gds_streamout_layermap_check` — Deterministic sign-off streamout layer
+- `gds_substance_check` — the shipped chip GDS must be a structurally valid
 - `gds_topcell_name_check` — Deterministic GDSII top-cell-name verifier.
 - `gen_skill_inventory` — single source of truth for the AI-skill count.
 - `general_synth` — GENERAL (§4.05-audited) deterministic STRUCTURAL solvers
