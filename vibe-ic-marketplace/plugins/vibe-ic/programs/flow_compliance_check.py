@@ -982,6 +982,29 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     #       Closes 4-state debounce / filter mode gap (audit line
     #       28, 67, 77).
     "l4_regmap_enumerated_values_typed_check",
+    # layergate-2 — SEMANTIC layer gates for L4/L5/L6. Each asserts the
+    # layer carries what its CONSUMER needs in an ACTIONABLE form, by
+    # importing the consuming program and inspecting its real output —
+    # never by matching a token. All three BLOCK (see their docstrings)
+    # because every failure mode they cover degrades SILENTLY in the
+    # PASS direction several steps downstream.
+    #   L4: diff L4 against the register block phase2_scaffold_gen
+    #       actually emits — duplicate Verilog identifiers (uncompilable
+    #       <top>_regs.v), an address present under a key
+    #       derive_registers() never reads, ambiguous decode.
+    "l4_regmap_phase2_emitter_contract_check",
+    #   L5: every analog_blocks[] entry must yield a numerically-bounded
+    #       spec through analog_real_corner_sweep.l5_block_specs() — the
+    #       consumer's own parser. A prose spec string leaves the A-track
+    #       grading against a generic default and stamping
+    #       PASS_INFORMATIONAL. SKIPs on a pure-digital design.
+    "l5_analog_block_spec_actionable_check",
+    #   L6: derive_fsm_states() must yield a scaffoldable FSM (>=2 states,
+    #       >=1 transition, no dangling targets), and every reject_rule
+    #       must be machine-matchable by the L11/L12 coverage gate's own
+    #       extractor — otherwise that gate takes its "accept any silent
+    #       sequence" branch and goes vacuous.
+    "l6_fsm_scaffold_actionable_check",
     #   B4: when multi-clock topology detected, L8/L9 must declare
     #       a typed clock_domains[] with master + derived. Closes
     #       master/divided/external clock gap (audit line 24, 32).

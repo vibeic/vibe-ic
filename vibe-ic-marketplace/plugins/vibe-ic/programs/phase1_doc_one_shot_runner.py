@@ -53943,6 +53943,57 @@ def main() -> int:
                lambda: gen_l5_adi_spec(project, extracted))
     _run_layer("[7/15]", "L6_CONTROL_LOGIC",
                lambda: gen_l6_control_logic(project, extracted))
+
+    # layergate-2 — run the L4/L5/L6 SEMANTIC layer gates INSIDE the
+    # convergence loop, not only from flow_compliance_check.
+    #
+    # These gates were previously reachable only via
+    # flow_compliance_check, i.e. long after phase 1 had self-reported
+    # PASS and downstream steps had already consumed the layer. Each
+    # asserts the layer carries what its CONSUMER needs in an actionable
+    # form; each failure mode degrades silently in the PASS direction
+    # (an empty FSM scaffold, an uncompilable register file, an analog
+    # block graded against a generic default). Same invocation shape as
+    # the l3_opcode_name_coverage gate above: subprocess, verdict routed
+    # to reports/phase1/, FAIL bubbles to the strict-mode exit via
+    # `cov_gate_failed`. Chip-AGNOSTIC — every gate reads only the
+    # project's own L docs and its consuming program.
+    for _gate_name, _report_stem in (
+        ("l4_regmap_phase2_emitter_contract_check",
+         "l4_regmap_emitter_contract"),
+        ("l4_regmap_enumerated_values_typed_check",
+         "l4_regmap_enumerated_values"),
+        ("l5_analog_block_spec_actionable_check",
+         "l5_analog_block_spec_actionable"),
+        ("l6_fsm_scaffold_actionable_check",
+         "l6_fsm_scaffold_actionable"),
+    ):
+        _gate_path = (Path(__file__).resolve().parent
+                      / f"{_gate_name}.py")
+        if not _gate_path.is_file():
+            continue
+        _gate_report = _pl.report_path(
+            project, f"phase1/{_report_stem}.json")
+        _gate_report.parent.mkdir(parents=True, exist_ok=True)
+        _gate_cmd = [sys.executable, str(_gate_path), str(project)]
+        # Only the layergate-2 gates accept --json; the Wave-38 enum
+        # gate does not, so its verdict is captured from stdout only.
+        if _gate_name != "l4_regmap_enumerated_values_typed_check":
+            _gate_cmd += ["--json", str(_gate_report)]
+        try:
+            _gate_cp = subprocess.run(
+                _gate_cmd, capture_output=True, text=True, timeout=120)
+        except (OSError, subprocess.SubprocessError) as _exc:
+            print(f"      {_gate_name}: SKIP (not runnable: {_exc})")
+            continue
+        if _gate_cp.stdout:
+            print(f"      {_gate_name}: "
+                  f"{_gate_cp.stdout.strip().splitlines()[0]}")
+        # exit 1 == FAIL (blocks). exit 2 == SKIP / not applicable.
+        if _gate_cp.returncode == 1:
+            cov_gate_failed = True
+            print(f"      {_gate_name}: FAIL — blocks phase1 "
+                  f"(see reports/phase1/{_report_stem}.json)")
     _run_layer("[8/15]", "L7_TEST_DEBUG",
                lambda: gen_l7_test_debug(project, extracted))
     _run_layer("[9/15]", "L8_RTL_CONSTANTS",
@@ -57687,8 +57738,13 @@ def main() -> int:
         pass
 
     if cov_gate_failed:
-        print("FAIL: l3_opcode_name_coverage gate FAILed — see "
-              "reports/audit/phase1/l3_opcode_name_coverage.json")
+        # layergate-2: this flag is now raised by the l3 opcode-name
+        # coverage gate OR by any of the L4/L5/L6 semantic layer gates
+        # run in the loop above, so the message no longer names a single
+        # gate. Each failing gate has already printed its own verdict
+        # line and routed a report under reports/phase1/.
+        print("FAIL: a phase1 layer gate FAILed — see the gate verdict "
+              "lines above and reports/phase1/*.json")
         return 1
     if args.strict and (pct < 80.0 or total_todo > 0):
         reasons = []

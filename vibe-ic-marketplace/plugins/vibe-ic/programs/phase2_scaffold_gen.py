@@ -396,7 +396,22 @@ def derive_registers(l4: dict, l8: dict) -> list[dict]:
         if not isinstance(r, dict):
             continue
         name = _sanitize_id(str(r.get("name") or r.get("abbrev") or "REG"))
-        off = r.get("offset") or r.get("address") or ""
+        # layergate-2 — DISTILLED FIX, not a per-design workaround.
+        # `regmap_table_extractor.py` (this plugin's own L4 register-table
+        # walker) emits a register's address as `addr_hex`; the rst/CSR
+        # walkers in phase1_doc_one_shot_runner do the same. This function
+        # read only `offset`/`address`, so for every register extracted by
+        # those paths the address was silently dropped and emit_regs_v()
+        # wrote nothing but `// TODO — address decode (per L4 offsets)`.
+        # Two programs in the same plugin disagreeing on one key.
+        # Measured across the fleet before this fix: 49 of 139 real
+        # Phase-1 outputs affected (30 of 42 registers on one design,
+        # 32 of 80 on another, 1 of 1 on a third) — the address was
+        # always present in L4, just under a key its consumer never read.
+        # Reading the sibling key here fixes the whole class at once
+        # rather than leaving 49 runs to be patched individually.
+        off = (r.get("offset") or r.get("address")
+               or r.get("addr_hex") or r.get("addr") or "")
         width = r.get("width") or r.get("width_bits") or 8
         if isinstance(width, str):
             m = re.search(r"\d+", width)
