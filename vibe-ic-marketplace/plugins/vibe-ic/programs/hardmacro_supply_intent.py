@@ -115,6 +115,65 @@ def declared_rails(l21: Dict[str, Any]) -> List[str]:
     return names
 
 
+# The DEF's SPECIALNETS section: the rails the PDN ACTUALLY built.
+_SPECIALNETS_RE = re.compile(r"^\s*SPECIALNETS\b", re.M)
+_END_SPECIALNETS_RE = re.compile(r"^\s*END\s+SPECIALNETS\b", re.M)
+_SPECIALNET_NAME_RE = re.compile(r"^\s*-\s+(\S+)", re.M)
+
+_DEF_CANDIDATES = (
+    "phase3/stage3/pnr/routed.def",
+    "phase3/stage3/pnr/post_cts.def",
+    "phase3/stage3/pnr/floorplan.def",
+)
+
+
+def measured_rails(project: Path) -> List[str]:
+    """Rails the PDN ACTUALLY BUILT, read from the DEF's SPECIALNETS section.
+
+    #348: the declared escape hatch had no producer. `declared_rails` reads
+    `L21.fields.power_rails` / `power_domains[]`, and across the real IC designs
+    in this repo those structured fields are empty — measured 3 of 30 usable. So
+    every macro PG pin fell to `undeclared` and a design had NO legitimate way
+    to clear the gate: the escape hatch existed and the door was locked. The
+    rail names DO exist in L21, but in prose fields (`power_domains_summary`,
+    `power_up_sequence`) rather than the structured ones the consumer reads —
+    the exact producer/consumer split that let the macro supply requirement
+    slip through in the first place (#309), reproduced inside its own fix.
+
+    Reading the DEF instead is strictly BETTER than trusting either field:
+      * it is a PHYSICAL FACT, not a claim — a rail is here because the PDN
+        built it, and a design cannot manufacture coverage by naming a rail
+        that does not exist (the `rail_undeclared` anti-cheat is preserved by
+        construction rather than by a name check);
+      * it is exactly what the issue asks the producer to eventually write —
+        "rails the design ACTUALLY has (the PDN really built, whose macro pins
+        are really global-connected)".
+
+    Phase 1 has no DEF yet, so it keeps warning on the declared fields alone;
+    Phase 3 — the phase that BLOCKS — gets the measured evidence. That split
+    matches what each phase can actually know.
+
+    Empty list when no DEF exists or none has a SPECIALNETS section.
+    """
+    for rel in _DEF_CANDIDATES:
+        p = project / rel
+        if not p.is_file():
+            continue
+        try:
+            txt = p.read_text(errors="replace")
+        except OSError:
+            continue
+        m = _SPECIALNETS_RE.search(txt)
+        if not m:
+            continue
+        end = _END_SPECIALNETS_RE.search(txt[m.start():])
+        sec = txt[m.start():m.start() + end.start()] if end else txt[m.start():]
+        names = [n for n in _SPECIALNET_NAME_RE.findall(sec) if n]
+        if names:
+            return sorted(set(names))
+    return []
+
+
 def _rail_token_match(pin: str, rails: List[str]) -> Optional[str]:
     """Does the pin NAME correspond to a declared rail? Compared on normalised
     tokens so `VDD` matches a rail written `VDD / supply (5 V)` — but only as a
@@ -138,10 +197,17 @@ def _rail_token_match(pin: str, rails: List[str]) -> Optional[str]:
     return None
 
 
-def classify_pin(master: str, pin: str, l21: Dict[str, Any]) -> Dict[str, Any]:
-    """Classify ONE macro PG pin against the design's power-intent layer."""
+def classify_pin(master: str, pin: str, l21: Dict[str, Any],
+                 extra_rails: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Classify ONE macro PG pin against the design's power-intent layer.
+
+    `extra_rails` are rails established by EVIDENCE rather than declaration —
+    in practice the PDN the DEF actually built (#348). They count as declared,
+    because a rail the PDN really built is a stronger statement than a rail a
+    document claims, and it cannot be fabricated.
+    """
     f = (l21 or {}).get("fields") or {}
-    rails = declared_rails(l21)
+    rails = declared_rails(l21) + list(extra_rails or [])
     for m in (f.get("hard_macro_supplies") or []):
         if not isinstance(m, dict):
             continue
@@ -172,18 +238,20 @@ def classify_pin(master: str, pin: str, l21: Dict[str, Any]) -> Dict[str, Any]:
             "detail": "no rail, no mapping, no declared gap accounts for this pin"}
 
 
-def assess(lef_texts: List[str], l21: Dict[str, Any]) -> Dict[str, Any]:
+def assess(lef_texts: List[str], l21: Dict[str, Any],
+           extra_rails: Optional[List[str]] = None) -> Dict[str, Any]:
     """Classify every LEF-typed PG pin across the given macro LEFs."""
     pins: List[Dict[str, Any]] = []
     for txt in lef_texts or []:
         for p in lef_pg_pins(txt):
-            pins.append({**classify_pin(p["master"], p["pin"], l21),
+            pins.append({**classify_pin(p["master"], p["pin"], l21, extra_rails),
                          "use": p["use"]})
     return {
         "pins": pins,
         "accounted": [p for p in pins if p["status"] in ACCOUNTED],
         "gaps": [p for p in pins if p["status"] not in ACCOUNTED],
         "declared_rails": declared_rails(l21),
+        "measured_rails": sorted(set(extra_rails or [])),
     }
 
 

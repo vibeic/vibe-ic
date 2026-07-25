@@ -189,3 +189,113 @@ def test_309_phase1_warns_without_blocking(tmp_path):
                if f["rule"] == "IP_MACRO_SUPPLY_UNDECLARED")
     assert sev == "WARNING"
     assert rep["verdict"] != "FAIL"
+
+
+# ── #348: the escape hatch had no producer ───────────────────────────────────
+# #309 shipped a correct escape hatch — a design may declare a rail and clear
+# the gate — but `declared_rails` reads `L21.fields.power_rails` /
+# `power_domains[]`, and across the real IC designs in this repo those
+# structured fields are empty (measured: 3 of 30 usable). So every macro PG pin
+# fell to `undeclared` and a correctly-integrated design had NO legitimate way
+# through: the hatch existed and the door was locked.
+#
+# The rail names DO exist in L21 — in prose fields, not the structured ones the
+# consumer reads. That is the producer/consumer split #309 itself was written
+# to fix, reproduced inside its own fix.
+
+_DEF_WITH_PDN = """VERSION 5.8 ;
+DESIGN x ;
+SPECIALNETS 2 ;
+    - VGND ( _1_ VNB ) ( _2_ VNB )
+      + ROUTED met1 800 + SHAPE FOLLOWPIN ( 0 0 ) ( 100 0 ) ;
+    - VPWR ( _1_ VPB ) ( _2_ VPB )
+      + ROUTED met1 800 + SHAPE FOLLOWPIN ( 0 10 ) ( 100 10 ) ;
+END SPECIALNETS
+END DESIGN
+"""
+
+_LEF_PDN = """
+MACRO SRAM_1K
+  PIN VPWR
+    DIRECTION INOUT ; USE POWER ;
+  END VPWR
+  PIN VGND
+    DIRECTION INOUT ; USE GROUND ;
+  END VGND
+  PIN VPP_PROG
+    DIRECTION INOUT ; USE POWER ;
+  END VPP_PROG
+END SRAM_1K
+"""
+
+# The shape 27 of 30 real designs actually have: structured fields EMPTY.
+_L21_REAL_SHAPE = {"fields": {"power_domains": [], "isolation_cells": [],
+                              "power_domains_summary": "VPWR/VGND core rails"}}
+
+
+def _pdn_project(tmp_path, def_text=_DEF_WITH_PDN):
+    d = tmp_path / "phase3" / "stage3" / "pnr"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "routed.def").write_text(def_text)
+    return tmp_path
+
+
+def test_348_measured_rails_reads_what_the_pdn_actually_built(tmp_path):
+    assert H.measured_rails(_pdn_project(tmp_path)) == ["VGND", "VPWR"]
+
+
+def test_348_no_def_yields_no_measured_rails(tmp_path):
+    """Phase 1 has no DEF — it must degrade to the declared fields, not crash
+    and not invent rails."""
+    assert H.measured_rails(tmp_path) == []
+
+
+def test_348_the_locked_door_reproduced_then_opened(tmp_path):
+    """BOTH directions on one fixture, which is the whole point: with the real
+    (empty) L21 shape every pin is blocked; with the measured rails the two
+    built rails clear and only the genuinely unbuilt one still blocks."""
+    proj = _pdn_project(tmp_path)
+    locked = H.assess([_LEF_PDN], _L21_REAL_SHAPE)
+    assert {g["pin"] for g in locked["gaps"]} == {"VPWR", "VGND", "VPP_PROG"}, (
+        "the locked-door state must reproduce, or the fix proves nothing")
+    opened = H.assess([_LEF_PDN], _L21_REAL_SHAPE,
+                      extra_rails=H.measured_rails(proj))
+    assert {g["pin"] for g in opened["gaps"]} == {"VPP_PROG"}
+
+
+def test_348_anticheat_survives_measured_rails(tmp_path):
+    """A mapping to a rail the PDN did NOT build, and L21 does not declare,
+    must still be rail_undeclared. Widening the evidence must not widen the
+    cheat surface."""
+    proj = _pdn_project(tmp_path)
+    l21 = {"fields": {"power_domains": [], "hard_macro_supplies": [
+        {"master": "SRAM_1K", "pin": "VPP_PROG", "rail": "VPP_GHOST"}]}}
+    rep = H.assess([_LEF_PDN], l21, extra_rails=H.measured_rails(proj))
+    vpp = next(p for p in rep["pins"] if p["pin"] == "VPP_PROG")
+    assert vpp["status"] == "rail_undeclared"
+    assert vpp in rep["gaps"]
+
+
+def test_348_mapping_to_a_really_built_rail_is_accepted(tmp_path):
+    proj = _pdn_project(tmp_path)
+    l21 = {"fields": {"power_domains": [], "hard_macro_supplies": [
+        {"master": "SRAM_1K", "pin": "VPP_PROG", "rail": "VPWR"}]}}
+    rep = H.assess([_LEF_PDN], l21, extra_rails=H.measured_rails(proj))
+    assert rep["gaps"] == []
+    assert next(p for p in rep["pins"]
+                if p["pin"] == "VPP_PROG")["status"] == "declared_rail"
+
+
+def test_348_a_def_without_specialnets_yields_nothing(tmp_path):
+    """A pre-PDN floorplan DEF must not be read as evidence of rails."""
+    proj = _pdn_project(tmp_path, "VERSION 5.8 ;\nDESIGN x ;\nEND DESIGN\n")
+    assert H.measured_rails(proj) == []
+
+
+def test_348_phase3_passes_measured_rails_through(tmp_path):
+    """Wiring pin: the Phase-3 decision must actually consult the DEF, or the
+    fix exists in the library and not in the flow."""
+    src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
+    i = src.index("_macro_supply_preroute_decision")
+    window = src[i:i + 3000]
+    assert "measured_rails" in window and "extra_rails" in window
