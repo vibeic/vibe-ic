@@ -7996,12 +7996,12 @@ def _rewrite_pnr_floorplan_die(tcl_text: str, die_w: int, die_h: int,
     )
 
 
-def _route_feedback_loosen(die_w: int, die_h: int, log_text: str,
-                           loosen_idx: int, auto_die_requested: bool,
-                           route_completed: bool,
-                           ladder: Tuple[float, ...] = _ROUTE_LOOSEN_UTIL_LADDER,
-                           die_max_um: int = _DEFAULT_DIE_MAX_UM
-                           ) -> Optional[Tuple[int, int, Dict[str, Any]]]:
+def _route_feedback_loosen_ex(die_w: int, die_h: int, log_text: str,
+                              loosen_idx: int, auto_die_requested: bool,
+                              route_completed: bool,
+                              ladder: Tuple[float, ...] = _ROUTE_LOOSEN_UTIL_LADDER,
+                              die_max_um: int = _DEFAULT_DIE_MAX_UM
+                              ) -> Tuple[Optional[Tuple[int, int, Dict[str, Any]]], str]:
     """ROUTING-FEEDBACK decision for ONE detailed-route outcome. Returns
     (new_w, new_h, record) to loosen-the-die-and-retry, or None to leave the
     die unchanged. The record is a `resize_history` entry (caller fills its
@@ -8019,20 +8019,30 @@ def _route_feedback_loosen(die_w: int, die_h: int, log_text: str,
     assert that the looser die WILL converge a given design — only a live PnR
     run can confirm that; the loop simply re-tries at a strictly looser util
     and DISCLOSES each step. chip-AGNOSTIC."""
+    # #307 — every decline below also names its REASON. The UPSIZE path in this
+    # same file returns a named FAIL when it refuses (the die-cap branch); this
+    # path had no `else` at all, so a refused self-rescue was structurally
+    # silent: across two live auto-die runs, cap/loosen/refusal strings appear
+    # 0 times in runner stdout and `resize_history` is absent from every JSON.
+    # The reason is produced HERE, next to the condition, so it cannot drift
+    # from the decision the way a separate reason-computing helper would.
     if not auto_die_requested:
-        return None
+        return None, "explicit_die_requested"
     if not route_completed:
-        return None
+        # NOTE this is also the #297 interaction: GRT-0116 aborts BEFORE any
+        # DEF, so the loudest congestion signal reaches this path as
+        # `route_completed=False` and buys exactly zero loosening.
+        return None, "route_did_not_complete"
     if loosen_idx + 1 >= len(ladder):
-        return None
+        return None, "loosen_ladder_exhausted"
     trajectory = _drt_violation_trajectory(log_text)
     if not _drt_is_non_converging(trajectory):
-        return None
+        return None, "route_still_converging"
     cur_util = ladder[loosen_idx]
     next_util = ladder[loosen_idx + 1]
     dims = _compute_loosened_die(die_w, die_h, cur_util, next_util, die_max_um)
     if dims is None:
-        return None
+        return None, "die_cap_reached"
     new_w, new_h = dims
     record: Dict[str, Any] = {
         "iteration": None,   # caller fills the loop index
@@ -8045,7 +8055,17 @@ def _route_feedback_loosen(die_w: int, die_h: int, log_text: str,
         "final_violations": trajectory[-1],
         "violation_trajectory": list(trajectory),
     }
-    return new_w, new_h, record
+    return (new_w, new_h, record), "loosened"
+
+
+def _route_feedback_loosen(*args, **kwargs
+                           ) -> Optional[Tuple[int, int, Dict[str, Any]]]:
+    """Backward-compatible view of `_route_feedback_loosen_ex` that drops the
+    reason. Kept so existing callers/tests are untouched; NEW code should use
+    the `_ex` form, because discarding the reason is how the decline path went
+    silent in the first place (#307)."""
+    decision, _reason = _route_feedback_loosen_ex(*args, **kwargs)
+    return decision
 
 
 _V1_6_599_WRAPPER_MODULE_PATTERNS = (
@@ -11127,6 +11147,12 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # the floorplan line in pnr.tcl with a larger die and retry.
     # Limit to 3 retries; cap die at 2000×2000µm.
     resize_history: List[Dict[str, Any]] = []
+    # #307 — declines are NOT resizes: a refused proposal changed no
+    # dimension, so recording it in resize_history would corrupt the
+    # answer to "how many times was the die resized?" (existing tests
+    # correctly assert resize_history == [] on runs that never resized).
+    # Kept in its own register, disclosed alongside.
+    loosen_declines: List[Dict[str, Any]] = []
     target_util_pct = util * 100.0 if util <= 1.0 else util
     _downsized_once = False   # GAP-E2E-4 FOLLOW-UP — single conservative downsize
     _loosen_idx = 0           # ROUTING-FEEDBACK — current loosen-ladder rung
@@ -11179,9 +11205,32 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             # by the ladder length + the die cap. §4.05: explicit-die exempt,
             # converged-route exempt, floor/cap-guarded, every step disclosed.
             # (See _route_feedback_loosen for the full guard set + honesty note.)
-            _lf = _route_feedback_loosen(
+            _lf, _lf_reason = _route_feedback_loosen_ex(
                 die_w, die_h, _pnr_log, _loosen_idx,
                 _auto_die_requested, _route_completed)
+            if _lf is None:
+                # #307 — the decline path used to have no `else` at all, so the
+                # flow could refuse its OWN rescue with nobody told. The UPSIZE
+                # path in this same loop returns a named FAIL when it refuses;
+                # this now leaves the symmetric named record. Disclosure only:
+                # the verdict is unchanged, the refusal is merely no longer
+                # invisible.
+                _decline = {
+                    "iteration": _retry_i,
+                    "direction": "loosen",
+                    "action": "declined",
+                    "reason": _lf_reason,
+                    "die_w_um": die_w, "die_h_um": die_h,
+                    "loosen_idx": _loosen_idx,
+                    "proposed_util": (_ROUTE_LOOSEN_UTIL_LADDER[_loosen_idx + 1]
+                                      if _loosen_idx + 1 < len(_ROUTE_LOOSEN_UTIL_LADDER)
+                                      else None),
+                    "die_max_um": _DEFAULT_DIE_MAX_UM,
+                }
+                loosen_declines.append(_decline)
+                print(f"ROUTE_LOOSEN_DECLINED reason={_lf_reason} "
+                      f"die={die_w}x{die_h}um rung={_loosen_idx} "
+                      f"proposed_util={_decline['proposed_util']}")
             if _lf is not None:
                 _lw, _lh, _lrec = _lf
                 _lrec["iteration"] = _retry_i
@@ -11254,6 +11303,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                  f"--die-um manually or shrink the netlist."),
                 [str(out_dir / "openroad.log")],
                 extras={"resize_history": resize_history,
+                                 "loosen_declines": loosen_declines,
                         "final_util_pct": actual_util,
                         "die_um": f"{die_w}x{die_h}"})
         new_w, new_h = new_dims
@@ -11299,7 +11349,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         return StepResult("pnr", "FAIL", time.time() - t0,
                           f"rc={rc} log_tail={(out+err)[-2000:]}",
                           [str(out_dir / "openroad.log")],
-                          extras={"resize_history": resize_history})
+                          extras={"resize_history": resize_history,
+                                 "loosen_declines": loosen_declines})
     # ORGANIC #585 — route-convergence gate. TritonRoute can run out of
     # iterations and COMPLETE with violations remaining (rc=0,
     # `Completing 100% with N violations`). A nonzero final DRT-0199
@@ -11330,7 +11381,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                     "die_um": f"{die_w}x{die_h}",
                     "util": util,
                     "non_signoff_outputs": [str(def_file)],
-                    "resize_history": resize_history})
+                    "resize_history": resize_history,
+                    "loosen_declines": loosen_declines})
     # ── PG-CONNECT gate — a supply network that half the design is not part of
     # must never leave PnR silently. `global_connect` is a one-shot over the
     # instances alive when it runs; the PDN step runs it before placement, so
@@ -11548,6 +11600,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                           detail,
                           pnr_outputs,
                           extras={"resize_history": resize_history,
+                                 "loosen_declines": loosen_declines,
                                   "pdn_status": _pdn_mk,
                                   **spare_extras})
     return StepResult("pnr", "PASS", time.time() - t0,
