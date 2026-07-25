@@ -126,9 +126,26 @@ pre-layout number can never be quoted as sign-off. 10 tests in
   **no `yosys` and no `verilator`**, which CI installs.
 - **The "FINAL HEAD" suite line in my earlier batch tested `bebd0422b`**, which
   **predates the corner-pairing improvement**. Current HEAD is `9c0b57d37`.
-- **The matching complete run on `9c0b57d37` did NOT finish before I stopped**
-  (it was at 95%). Log: `/home/reyerchu/campaign_v1578/full_sdcdrv.log`. The
-  remaining step is pure CPU, no AI:
+- **RESOLVED — the complete run on `9c0b57d37` finished after all, and the diff
+  is CLEAN.** (An earlier revision of this file said it was unfinished at 95%;
+  it completed and two independently-launched waiters produced identical
+  results.)
+
+| complete suite (no `--maxfail`) | failed | passed | skipped | xfailed | time |
+|---|---|---|---|---|---|
+| baseline `origin/main` `0d2c63d34` | **55** | 18310 | 498 | 2 | 26:18 |
+| fix HEAD `9c0b57d37` | **55** | **18333** | 498 | 2 | 26:54 |
+
+```
+=== ONLY IN FIX (would be regressions) ===     <- EMPTY
+=== ONLY IN BASELINE ===                       <- EMPTY
+```
+
+**Zero regressions: the two failure sets are identical, all 55 pre-existing.**
+The delta is `18333 - 18310 = +23 passing`, which is exactly the 23 tests these
+commits add (13 `test_staged_sdc_drv_parity` + 10 `test_multi_corner_sta_basis`).
+
+Re-derive at any time (pure CPU, no AI):
 
 ```bash
 grep '^FAILED' /home/reyerchu/campaign_v1578/full_sdcbase.log | sed 's/ - .*//' | sort -u > /tmp/FB.txt
@@ -136,6 +153,10 @@ grep '^FAILED' /home/reyerchu/campaign_v1578/full_sdcdrv.log  | sed 's/ - .*//' 
 comm -13 /tmp/FB.txt /tmp/FF.txt   # ONLY IN FIX  -> candidate regressions
 comm -23 /tmp/FB.txt /tmp/FF.txt   # ONLY IN BASELINE
 ```
+
+This supersedes the two flake investigations below: neither
+`test_orchestrator_hands_pnr_result_to_lvs` nor
+`test_v0_3_41_issue588_runner_lock_all` appears in either complete failure set.
 
 Targeted evidence that *is* complete: every test file matching
 `sdc|sta|phase3|corner|pnr|lvs|timing|signoff` on baseline → **1 failed, 2512
@@ -209,7 +230,7 @@ design's own ORFS recipe and are genuinely new information, not a repeat.
 | worktree / branch | `/home/reyerchu/vibe-ic-wt-a857c45b-sdcdrv` · `fix/staged-sdc-drv-injection` |
 | baseline worktree | `/home/reyerchu/vibe-ic-wt-a857c45b-sdcbase` (detached at `0d2c63d34`) |
 | baseline suite log (complete) | `/home/reyerchu/campaign_v1578/full_sdcbase.log` |
-| fix suite log (95%, unfinished) | `/home/reyerchu/campaign_v1578/full_sdcdrv.log` |
+| fix suite log (complete) | `/home/reyerchu/campaign_v1578/full_sdcdrv.log` |
 | arm A — stock v1.5.78 (control) | `/home/reyerchu/campaign_v1578/ibex/converge_1.5.78_sky130A_armA_stock` |
 | arm B — v1.5.78 + DRV fix | `/home/reyerchu/campaign_v1578/ibex/converge_1.5.78_sky130A_armB_sdcdrv` |
 | harvest the arms | `bash /home/reyerchu/campaign_v1578/harvest.sh` |
