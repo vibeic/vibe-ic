@@ -47,7 +47,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path, PurePosixPath
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 import _path_layout as _pl
 from _rtl_include_hub import drop_include_hubs as _drop_include_hubs  # shared aggregator filter
 import _watchdog as _wd  # v1.3.47 — plugin-wide progress-stall supervision
@@ -381,7 +381,9 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800, *,
                  log_path: Optional[Path] = None,
                  stall_grace_s: Optional[float] = None,
                  hard_ceiling_s: Optional[float] = None,
-                 poll_s: Optional[float] = None) -> Tuple[int, str, str]:
+                 poll_s: Optional[float] = None,
+                 abort_probe: Optional[Callable[[], Optional[str]]] = None
+                 ) -> Tuple[int, str, str]:
     """Run shell cmd inside a Docker container.
 
     DISPATCH (v1.3.47):
@@ -397,6 +399,13 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800, *,
         script/deck path): used BOTH to sum the tool's in-container CPU AND to
         `pkill` the job tree. rc=_wd.RC_STALLED on a stall kill, 124 on the
         24h+ pathological ceiling. chip/tool-AGNOSTIC.
+
+    `abort_probe` (marker mode only, optional) is the caller's CONVERGENCE
+    read, polled on the watchdog cadence: returning a reason string stops the
+    tool with rc=_RC_ABORTED. The stall watchdog cannot see this case — a tool
+    that keeps burning CPU and printing at a flat convergence metric is alive
+    by every generic signal — so the domain predicate is the only honest way to
+    stop it. None ⇒ behaviour byte-identical to before.
     """
     if marker is None:
         return _docker_exec_raw(container, cmd, timeout)
@@ -443,7 +452,8 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800, *,
 
     res = _wd.run_supervised(
         full, log_path=log_path, cpu_probe=_cpu_probe, kill=_kill,
-        stall_grace_s=grace, poll_s=poll, hard_ceiling_s=ceiling)
+        stall_grace_s=grace, poll_s=poll, hard_ceiling_s=ceiling,
+        abort_probe=abort_probe)
     return res.rc, res.out, res.err
 
 
@@ -489,6 +499,10 @@ _WATCHDOG_TERM_GRACE_S = 10        # SIGTERM → SIGKILL escalation window
 # _docker_timeout_isolate can tell a "hung, no forward progress" kill apart from
 # a real tool failure or the ceiling backstop (which keeps rc=124).
 _RC_STALLED = _wd.RC_STALLED
+# ROUTE-PLATEAU abort — a DELIBERATE stop by the caller's convergence read, not
+# a hang and not the ceiling. Kept distinct so the PnR gate can report the honest
+# "went nowhere" finding instead of the "hung" one.
+_RC_ABORTED = _wd.RC_ABORTED
 # Multiplier turning the (retired) size-estimate into a HIGH ceiling FLOOR for
 # very large designs — the ceiling only ever rises above the 24h floor, never
 # below it, so it can never wall-clock-kill a live job.
@@ -7683,6 +7697,28 @@ def _effective_die_um(die_um_flag: str,
     return die_um_flag, None
 
 
+def _resolve_die_target_util(project: Optional[Path]
+                             ) -> Tuple[float, str]:
+    """The core utilization `--die-um auto` sizes the die to, plus WHERE it
+    came from. Precedence (unchanged): the design's own L9-generated core
+    density > a staged reference-flow `CORE_UTILIZATION` > the
+    `_AUTO_DIE_TARGET_UTIL` routing-headroom default.
+
+    Extracted so the auto-die SIZER and the routing-feedback LOOSEN LADDER read
+    ONE source. They used to disagree — the sizer honoured a declared 0.5 while
+    the ladder assumed the 0.25 default — and the disagreement was invisible
+    because neither ever printed the other's number. chip-AGNOSTIC."""
+    if project is None:
+        return _AUTO_DIE_TARGET_UTIL, "routing-headroom-default"
+    declared = _l9_declared_die_util(project)
+    if declared is not None:
+        return declared, "L9-declared"
+    declared = _reference_flow_declared_die_util(project)
+    if declared is not None:
+        return declared, "reference_flow-declared"
+    return _AUTO_DIE_TARGET_UTIL, "routing-headroom-default"
+
+
 def _resolve_auto_die_um(die_um: str, netlist: Path, util: float,
                          pdk: "PdkConfig",
                          project: Optional[Path] = None,
@@ -7727,16 +7763,7 @@ def _resolve_auto_die_um(die_um: str, netlist: Path, util: float,
     # routing-headroom default. `util` (placement) is deliberately unused here.
     # Precedence: L9 generated constraint (design's own authored target) > the
     # design's staged reference_flow CORE_UTILIZATION > routing-headroom default.
-    _declared = _l9_declared_die_util(project) if project is not None else None
-    _util_src = "L9-declared"
-    if _declared is None and project is not None:
-        _rf_declared = _reference_flow_declared_die_util(project)
-        if _rf_declared is not None:
-            _declared = _rf_declared
-            _util_src = "reference_flow-declared"
-    util_frac = _declared if _declared is not None else _AUTO_DIE_TARGET_UTIL
-    if _declared is None:
-        _util_src = "routing-headroom-default"
+    util_frac, _util_src = _resolve_die_target_util(project)
     # #158 — pin-perimeter floor. Count the top module's effective IO bits and
     # the pin-layer pitch from THIS PDK's tech LEF, then size the perimeter to
     # seat them. Best-effort: any parse failure yields a pin count of 0 / the
@@ -7842,6 +7869,43 @@ _ROUTE_LOOSEN_UTIL_FLOOR = 0.12      # never target a util below this floor
 # strictly looser (lower util → larger die), ending at the floor rung.
 _ROUTE_LOOSEN_UTIL_LADDER: Tuple[float, ...] = (
     _AUTO_DIE_TARGET_UTIL, 0.18, _ROUTE_LOOSEN_UTIL_FLOOR)
+
+
+def _route_loosen_ladder(die_target_util: Optional[float],
+                         base: Tuple[float, ...] = _ROUTE_LOOSEN_UTIL_LADDER
+                         ) -> Tuple[float, ...]:
+    """The loosen ladder ANCHORED at the util the die was ACTUALLY sized to.
+
+    ORGANIC (ibex/sky130A 2026-07-25) — the base ladder's head rung is
+    `_AUTO_DIE_TARGET_UTIL` (0.25), which silently ASSUMES the auto-die used
+    that target. It often does not: `_resolve_auto_die_um` prefers the design's
+    own L9 core density, then a staged reference-flow `CORE_UTILIZATION`, and
+    only then the 0.25 routing-headroom default. ibex adopts ORFS
+    `CORE_UTILIZATION=50` → the die is built at util 0.5, i.e. TWICE as dense
+    as the routing-headroom target this module's own comments call
+    plateau-inducing even at 0.40. The ladder then computed its first loosen as
+    0.25 → 0.18 (a 1.18x grow) for a die actually sitting at 0.5, where
+    reaching 0.18 needs 1.67x — the relief step was wrong by construction and
+    nobody could see it, because `_compute_loosened_die` is handed the LADDER's
+    idea of the current util, never the die's.
+
+    Anchoring: prepend the real target when it is TIGHTER than the base head,
+    and drop base rungs that are not strictly looser than it. So
+      * a die at the 0.25 default  → (0.25, 0.18, 0.12)  — byte-identical to
+        the pre-anchor ladder, which is why no existing behaviour moves;
+      * a die at 0.5 (ibex)        → (0.5, 0.25, 0.18, 0.12) — the first rung
+        is now a real 1.41x relief from where the die actually is;
+      * a die already looser than the floor → a single rung, i.e. NO loosen
+        (there is nothing left to give, and the floor is never breached).
+    Pure + chip-AGNOSTIC: the rungs are utilizations, not geometry."""
+    if not base:
+        return base
+    if die_target_util is None or not (0.0 < die_target_util <= 1.0):
+        return base                      # unresolvable ⇒ keep today's ladder
+    return (die_target_util,) + tuple(
+        u for u in base if u < die_target_util)
+
+
 # Preserve the historical over-util upsize budget (initial run + up to 3 grows)
 # EXACTLY, independent of the loop's total iteration count.
 _PNR_UPSIZE_RETRIES = 3
@@ -7849,8 +7913,11 @@ _PNR_UPSIZE_RETRIES = 3
 # + up-to (ladder-1) loosen steps. Each mutation path is independently bounded
 # (upsize by the die cap + `_PNR_UPSIZE_RETRIES`; downsize by a one-shot flag;
 # loosen by the ladder length), so the loop always terminates well within this.
+# The ANCHORED ladder can carry ONE extra rung (the die's own target prepended
+# ahead of the base head), so the budget counts the anchored maximum — still a
+# fixed, statically-known bound.
 _PNR_RETRY_ITERS = (1 + _PNR_UPSIZE_RETRIES + 1
-                    + (len(_ROUTE_LOOSEN_UTIL_LADDER) - 1))
+                    + len(_ROUTE_LOOSEN_UTIL_LADDER))
 
 
 def _drt_violation_trajectory(log_text: str) -> List[int]:
@@ -7899,6 +7966,261 @@ def _drt_is_non_converging(trajectory: List[int]) -> bool:
     if len(trajectory) == 1:
         return True                        # violations, no downward evidence
     return trajectory[-1] >= trajectory[-2]  # plateau or climb at the tail
+
+
+# ── ROUTE-PLATEAU LIVE ABORT (ORGANIC, edge_llm_matmul_accel 2026-07-25) ─────
+# `_drt_is_non_converging` above judges a route AFTER TritonRoute returns, so it
+# can only spend the CPU and then say the run was worthless. Observed cost of
+# that ordering on a congestion-walled accelerator: the violation count fell
+# 409,554 → ~116,677, then sat at ~13K per optimization iteration while the
+# router kept re-iterating — ~23.5 h of OpenROAD CPU, no routed DEF, no GDS.
+# NEITHER existing kill can stop it, and both are RIGHT not to: the stall
+# watchdog sees output + CPU advancing every poll (the job is alive), and the
+# 24h ceiling is a pathological-loop backstop, not a convergence judgement.
+# What is missing is the DOMAIN read: "violations are no longer falling".
+#
+# This is the SAME predicate as `_drt_is_non_converging`, evaluated LIVE on the
+# tee'd log instead of post-mortem — but with two extra guards, because killing
+# a running router is a stronger act than resizing a die afterwards:
+#   * a WINDOW, not a single pair: one flat iteration is normal mid-route
+#     (TritonRoute alternates ripup/reroute passes), so the abort needs
+#     `_DRT_PLATEAU_WINDOW` consecutive iterations delivering less than
+#     `_DRT_PLATEAU_MIN_REL_GAIN` TOTAL relative improvement;
+#   * a FLOOR: a tail plateau at a handful of violations is the antenna /
+#     SPEF-repair reroute converging on its own residue, which other machinery
+#     owns. Only a plateau at `_DRT_PLATEAU_MIN_VIOLATIONS`+ is a routing wall.
+# Calibrated against every converging OpenROAD route in the local corpus (see
+# tests/test_route_plateau_and_ndr_disclosure.py::test_real_corpus_*): the
+# tightest real converging window still improves ~28%, i.e. ~6x the threshold.
+#
+# §4.05 HONESTY: aborting proves the router was going nowhere at the moment it
+# was stopped — it does NOT prove the design is unroutable. The finding says
+# exactly that, the partial DEF is isolated (never shipped), and the CPU-hours
+# saved are reported as saved, not as a convergence improvement.
+_DRT_PLATEAU_WINDOW = 4          # consecutive DRT-0199 iterations examined
+_DRT_PLATEAU_MIN_REL_GAIN = 0.05  # <5% total gain over the window ⇒ plateau
+_DRT_PLATEAU_MIN_VIOLATIONS = 100  # below this it is residue, not a wall
+
+
+def _drt_plateau_verdict(trajectory: List[int],
+                         window: int = _DRT_PLATEAU_WINDOW,
+                         min_rel_gain: float = _DRT_PLATEAU_MIN_REL_GAIN,
+                         min_violations: int = _DRT_PLATEAU_MIN_VIOLATIONS
+                         ) -> Optional[Dict[str, Any]]:
+    """Return a PLATEAU record for a detailed-route violation trajectory that
+    has stopped making meaningful progress, or None to keep routing.
+
+    Plateau ⇔ ALL of:
+      * at least `window` + 1 samples exist (a window needs a `from` and a
+        `to`; fewer samples is not yet evidence of anything);
+      * the current count is > 0 (a converged route is never a plateau) and
+        >= `min_violations` (small residue is another mechanism's business);
+      * over the last `window` iterations the count improved by less than
+        `min_rel_gain` of where the window started — which also catches a
+        FLAT tail (gain 0) and a CLIMBING one (gain < 0).
+    Pure + chip-AGNOSTIC: integer trajectory in, record out; no I/O, no PDK,
+    no design literal. The caller decides what to do with the record."""
+    if not trajectory or window < 1:
+        return None
+    if len(trajectory) < window + 1:
+        return None
+    head = trajectory[-(window + 1)]
+    tail = trajectory[-1]
+    if tail <= 0 or tail < min_violations:
+        return None
+    if head <= 0:
+        return None
+    rel_gain = (head - tail) / float(head)
+    if rel_gain >= min_rel_gain:
+        return None
+    return {
+        "finding": "ROUTE_PLATEAU",
+        "window": window,
+        "window_from": head,
+        "window_to": tail,
+        "window_rel_gain": round(rel_gain, 6),
+        "min_rel_gain": min_rel_gain,
+        "iterations_seen": len(trajectory),
+        "violation_trajectory": list(trajectory),
+    }
+
+
+def _drt_plateau_reason(rec: Dict[str, Any]) -> str:
+    """One-line human reason for a `_drt_plateau_verdict` record. Separated so
+    the live abort probe and the PnR gate word the finding IDENTICALLY."""
+    return (
+        f"ROUTE_PLATEAU: detailed route has run {rec['iterations_seen']} "
+        f"optimization iterations and the last {rec['window']} improved the "
+        f"violation count only {rec['window_from']} -> {rec['window_to']} "
+        f"({rec['window_rel_gain'] * 100.0:.2f}% < "
+        f"{rec['min_rel_gain'] * 100.0:.0f}% required). The router is still "
+        f"burning CPU but is no longer converging; continuing cannot reach a "
+        f"clean route. Stopped deliberately — this is a congestion/geometry "
+        f"result, not a router-iteration shortfall.")
+
+
+class _DrtPlateauProbe:
+    """Live convergence read over the tee'd OpenROAD log, shaped for
+    `_watchdog.run_supervised(abort_probe=...)`: ``__call__`` returns None to
+    keep routing, or the abort reason once the detailed-route violation
+    trajectory has plateaued (`_drt_plateau_verdict`).
+
+    Deliberately cheap and forgiving — it is polled on the watchdog cadence
+    while a multi-hour tool runs:
+      * a missing / unreadable / still-empty log is "no opinion" (None), so a
+        route is never aborted because the tee has not flushed yet;
+      * it judges ONLY the transcript in front of it, and the caller
+        guarantees that is the CURRENT attempt's: the retry loop removes the
+        previous attempt's log before each launch (a leftover plateaued log
+        would otherwise abort the fresh, looser retry on its first poll). That
+        ordering is a caller obligation, not a timestamp heuristic — mtime
+        granularity is too coarse to distinguish "written 30 ms ago by the new
+        run" from "written 30 ms ago by the old one";
+      * the record of the FIRING decision is kept on `.record` so the caller
+        reports the same numbers the probe acted on, not a re-read;
+      * once it has fired it stays fired (`.record` is not recomputed), so the
+        reported evidence is exactly the state that stopped the run.
+    chip-AGNOSTIC: OpenROAD log grammar only."""
+
+    def __init__(self, log_path: Path, *,
+                 window: int = _DRT_PLATEAU_WINDOW,
+                 min_rel_gain: float = _DRT_PLATEAU_MIN_REL_GAIN,
+                 min_violations: int = _DRT_PLATEAU_MIN_VIOLATIONS) -> None:
+        self.log_path = Path(log_path)
+        self.window = window
+        self.min_rel_gain = min_rel_gain
+        self.min_violations = min_violations
+        self.record: Optional[Dict[str, Any]] = None
+
+    def __call__(self) -> Optional[str]:
+        if self.record is not None:
+            return _drt_plateau_reason(self.record)
+        try:
+            text = self.log_path.read_text(errors="ignore")
+        except Exception:  # nosec — log not there yet ⇒ no opinion
+            return None
+        rec = _drt_plateau_verdict(
+            _drt_violation_trajectory(text),
+            window=self.window, min_rel_gain=self.min_rel_gain,
+            min_violations=self.min_violations)
+        if rec is None:
+            return None
+        self.record = rec
+        return _drt_plateau_reason(rec)
+
+
+# ── CLOCK-NDR DISCLOSURE (ORGANIC, ibex+opentitan_aes sky130A 2026-07-25) ────
+# When global routing runs out of track budget, OpenROAD's own congestion
+# recovery DROPS the non-default rule off the nets that carry it — in practice
+# the CTS clock nets, whose NDR is exactly the wider/shielded routing that keeps
+# clock resistance, skew and crosstalk in hand:
+#     [WARNING GRT-0273] Disabled NDR (to reduce congestion) for net: clknet_0_clk_regs
+# That is a REAL trade: clock quality spent to buy routability. The flow used to
+# say nothing about it in either direction, and the silent-PASS half is the
+# dangerous one — in the local corpus opentitan_aes/sky130A shipped a route with
+# 2-5 clock nets stripped of their NDR and NO GRT-0116, so the run was simply
+# green and the degraded clock tree left PnR unremarked. (ibex/sky130A is the
+# loud half: the same trade was made, congestion STILL lost, and the step failed
+# with an opaque 2000-char log tail that named neither the trade nor GRT-0116.)
+# These parsers make the trade a first-class, machine-readable disclosure on
+# EVERY pnr outcome. §4.05: disclosure ONLY — the PnR verdict TIER is unchanged
+# (a dropped clock NDR is a fact to report, not a pass/fail claim we can make
+# from the log alone). chip-AGNOSTIC: OpenROAD log grammar only.
+_RE_GRT_NDR_DISABLED = re.compile(
+    r"\[WARNING GRT-0273\]\s*Disabled NDR \(to reduce congestion\) "
+    r"for net:\s*(\S+?)\.?\s*$", re.MULTILINE)
+_RE_GRT_CONGESTION_FAIL = re.compile(
+    r"\[ERROR GRT-0116\]\s*Global routing finished with congestion")
+
+
+def _grt_ndr_disabled_nets(log_text: str) -> List[str]:
+    """Net names whose non-default routing rule global routing DISABLED to
+    relieve congestion (GRT-0273), de-duplicated in first-seen order. A net
+    re-reported by a later reroute pass is ONE degraded net, not several —
+    counting warnings instead of nets would inflate the disclosure. Returns []
+    when the trade was never made. chip-AGNOSTIC."""
+    if not log_text:
+        return []
+    seen: List[str] = []
+    for name in _RE_GRT_NDR_DISABLED.findall(log_text):
+        if name and name not in seen:
+            seen.append(name)
+    return seen
+
+
+def _grt_congestion_failed(log_text: str) -> bool:
+    """True iff global routing ENDED in congestion (GRT-0116) — the hard error
+    that aborts the OpenROAD script before any detailed route exists.
+    chip-AGNOSTIC."""
+    return bool(log_text) and bool(_RE_GRT_CONGESTION_FAIL.search(log_text))
+
+
+def _clock_ndr_disclosure(log_text: str) -> Optional[Dict[str, Any]]:
+    """The `clock_ndr_disabled` disclosure record for a PnR log, or None when
+    no NDR was dropped. Reported on EVERY pnr outcome — a green route that
+    silently spent its clock NDR is the case this exists for.
+
+    `nets` is every net that lost its rule; `clock_nets` is the subset matching
+    the CTS-built clock-net naming that OpenROAD's own TritonCTS emits
+    (`clknet_*`) plus any net GRT names in the same warning that the CTS report
+    already called a clock net. We do NOT try to classify beyond that: the
+    honest statement is "these nets lost their NDR", with the clock subset
+    flagged because that is where the quality cost lands. chip-AGNOSTIC."""
+    nets = _grt_ndr_disabled_nets(log_text)
+    if not nets:
+        return None
+    clock_nets = [n for n in nets if n.startswith("clknet_")]
+    return {
+        "finding": "CLOCK_NDR_DISABLED_FOR_CONGESTION",
+        "nets": nets,
+        "net_count": len(nets),
+        "clock_tree_nets": clock_nets,
+        "clock_tree_net_count": len(clock_nets),
+        "congestion_error": _grt_congestion_failed(log_text),
+    }
+
+
+def _route_congestion_trades_payload(disc: Optional[Dict[str, Any]],
+                                     log_text: str) -> Dict[str, Any]:
+    """The `reports/route_congestion_trades.json` body: what routability was
+    bought with, and whether it worked. Written on EVERY pnr outcome so the
+    file's ABSENCE never has to be interpreted — `clock_ndr_disabled: false` is
+    a positive statement that the trade was not made. Pure. chip-AGNOSTIC."""
+    return {
+        "schema": "route_congestion_trades/1",
+        "clock_ndr_disabled": bool(disc),
+        "global_route_congestion_error": _grt_congestion_failed(log_text),
+        "detail": disc or {},
+    }
+
+
+def _write_route_congestion_trades(project: Path,
+                                   disc: Optional[Dict[str, Any]],
+                                   log_text: str) -> Path:
+    """Persist the congestion-trade disclosure next to the other phase-3
+    reports so a downstream gate / audit can read it without re-parsing the
+    OpenROAD transcript. Returns the path written."""
+    rpt_dir = project / "phase3" / "reports"
+    rpt_dir.mkdir(parents=True, exist_ok=True)
+    out = rpt_dir / "route_congestion_trades.json"
+    out.write_text(json.dumps(
+        _route_congestion_trades_payload(disc, log_text), indent=2))
+    return out
+
+
+def _clock_ndr_detail(disc: Optional[Dict[str, Any]]) -> str:
+    """The one-line verdict text for a clock-NDR disclosure (empty when there
+    is nothing to disclose), appended to the pnr step detail so the trade is
+    visible in the RUN VERDICT itself and not only in a JSON side-file."""
+    if not disc:
+        return ""
+    nets = disc["nets"]
+    shown = ", ".join(nets[:4]) + (" …" if len(nets) > 4 else "")
+    return (f" | clock-NDR TRADED: global routing disabled the non-default "
+            f"rule on {disc['net_count']} net(s) ({shown}) to relieve "
+            f"congestion — {disc['clock_tree_net_count']} of them CTS clock "
+            f"net(s), now routed at default width/spacing; clock "
+            f"resistance/skew/crosstalk margin was spent for routability")
 
 
 def _compute_loosened_die(die_w: int, die_h: int,
@@ -7953,7 +8275,8 @@ def _route_feedback_loosen(die_w: int, die_h: int, log_text: str,
                            loosen_idx: int, auto_die_requested: bool,
                            route_completed: bool,
                            ladder: Tuple[float, ...] = _ROUTE_LOOSEN_UTIL_LADDER,
-                           die_max_um: int = _DEFAULT_DIE_MAX_UM
+                           die_max_um: int = _DEFAULT_DIE_MAX_UM,
+                           plateau_aborted: bool = False
                            ) -> Optional[Tuple[int, int, Dict[str, Any]]]:
     """ROUTING-FEEDBACK decision for ONE detailed-route outcome. Returns
     (new_w, new_h, record) to loosen-the-die-and-retry, or None to leave the
@@ -7961,12 +8284,17 @@ def _route_feedback_loosen(die_w: int, die_h: int, log_text: str,
     ``iteration``). All §4.05 guards live here so the call site is a thin hook:
 
       1. only an AUTO-owned die is ever loosened (`auto_die_requested`);
-      2. only a COMPLETED route is judged (`route_completed` = rc==0 + DEF);
-      3. bounded — stop once the ladder floor rung is reached
+      2. bounded — stop once the ladder floor rung is reached
          (`loosen_idx + 1 >= len(ladder)`);
-      4. loosen ONLY on a genuine non-convergence signal
-         (`_drt_is_non_converging` over the parsed trajectory);
-      5. never grow past the die cap (delegated to `_compute_loosened_die`).
+      3. loosen ONLY on a genuine congestion signal — global route gave up
+         (GRT-0116), the live plateau abort fired (`plateau_aborted`), or a
+         COMPLETED route (`route_completed` = rc==0 + DEF) whose trajectory is
+         non-converging (`_drt_is_non_converging`). Anything else, including a
+         still-improving route that merely ran out of router iterations, is
+         NOT a die problem and is left alone;
+      4. never grow past the die cap (delegated to `_compute_loosened_die`).
+    `ladder` should be the ANCHORED ladder (`_route_loosen_ladder`) so rung 0
+    is the util the die was actually built at, not an assumed default.
 
     HONESTY: this is a deterministic congestion-relief mechanism. It does NOT
     assert that the looser die WILL converge a given design — only a live PnR
@@ -7974,12 +8302,31 @@ def _route_feedback_loosen(die_w: int, die_h: int, log_text: str,
     and DISCLOSES each step. chip-AGNOSTIC."""
     if not auto_die_requested:
         return None
-    if not route_completed:
-        return None
     if loosen_idx + 1 >= len(ladder):
         return None
     trajectory = _drt_violation_trajectory(log_text)
-    if not _drt_is_non_converging(trajectory):
+    # THREE congestion signals now reach the ladder, not one. All three say the
+    # same thing — this geometry cannot be routed — and all three are answered
+    # by the same bounded, disclosed loosen:
+    #   * GLOBAL route gave up (GRT-0116). ORGANIC (ibex/sky130A 2026-07-25):
+    #     the script ABORTS there, so rc != 0 and no routed DEF exists, so the
+    #     old `route_completed` guard skipped the ladder ENTIRELY — the loudest
+    #     congestion signal OpenROAD emits was the one signal that bought no
+    #     relief at all.
+    #   * DETAILED route was stopped LIVE for going nowhere (ROUTE_PLATEAU).
+    #     Without this, the new live abort would REGRESS the ladder: a run that
+    #     used to complete, be judged non-converging and get a looser retry
+    #     would now be killed mid-route and get nothing. The CPU saving must
+    #     come from truncating each attempt, never from dropping the recovery.
+    #   * DETAILED route COMPLETED but did not converge — the original trigger,
+    #     unchanged.
+    if _grt_congestion_failed(log_text):
+        trigger = "global_route_congestion"
+    elif plateau_aborted:
+        trigger = "route_plateau_aborted"
+    elif route_completed and _drt_is_non_converging(trajectory):
+        trigger = "route_not_converged"
+    else:
         return None
     cur_util = ladder[loosen_idx]
     next_util = ladder[loosen_idx + 1]
@@ -7990,12 +8337,14 @@ def _route_feedback_loosen(die_w: int, die_h: int, log_text: str,
     record: Dict[str, Any] = {
         "iteration": None,   # caller fills the loop index
         "direction": "loosen",
-        "trigger": "route_not_converged",
+        "trigger": trigger,
         "from_die_um": f"{die_w}x{die_h}",
         "to_die_um": f"{new_w}x{new_h}",
         "from_target_util": cur_util,
         "to_target_util": next_util,
-        "final_violations": trajectory[-1],
+        # A GRT-0116 run never reached detailed route, so there is no
+        # trajectory to report — say None rather than invent a number.
+        "final_violations": trajectory[-1] if trajectory else None,
         "violation_trajectory": list(trajectory),
     }
     return new_w, new_h, record
@@ -11020,6 +11369,16 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     _downsized_once = False   # GAP-E2E-4 FOLLOW-UP — single conservative downsize
     _loosen_idx = 0           # ROUTING-FEEDBACK — current loosen-ladder rung
     _upsize_tries = 0         # over-util upsizes applied (bounded budget)
+    # The loosen ladder ANCHORED at the util this die was actually sized to
+    # (L9-declared / reference_flow / routing-headroom default), so rung 0 is
+    # where the die IS, not where the default assumed it would be.
+    _die_target_util, _die_util_src = _resolve_die_target_util(project)
+    _loosen_ladder = _route_loosen_ladder(_die_target_util)
+    if _auto_die_requested and _die_target_util > _AUTO_DIE_TARGET_UTIL:
+        print(f"[phase3][pnr] die sized at core-util {_die_target_util:g} "
+              f"({_die_util_src}) — denser than the {_AUTO_DIE_TARGET_UTIL:g} "
+              f"routing-headroom target; loosen ladder anchored to "
+              f"{_loosen_ladder}", file=sys.stderr)
     # v1.3.47 — the PnR route runs under the PROGRESS-STALL WATCHDOG, not a
     # size ESTIMATE. A still-progressing OpenROAD (continuous CPU + periodic
     # DRT/antenna iteration logs) is NEVER killed → it runs to completion,
@@ -11040,10 +11399,57 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # former range(), so the internal resize/loosen convergence logic below is
     # byte-for-byte unchanged; loop_guard just makes the bound explicit + named.
     _pnr_loop = _wd.loop_guard("pnr_route_feedback", max_iter=_PNR_RETRY_ITERS)
+    # ROUTE-PLATEAU live abort. The stall watchdog keeps a PROGRESSING router
+    # alive forever (correctly — it is progressing); this probe is the domain
+    # read that a progressing router is nevertheless getting NOWHERE, and stops
+    # it. One probe per retry iteration so each attempt is judged on its OWN
+    # trajectory (a fresh probe cannot inherit the previous attempt's plateau).
+    _plateau_probe: Optional[_DrtPlateauProbe] = None
     for _retry_i in _pnr_loop:
+        # Remove the previous attempt's transcript BEFORE launching, so the
+        # live plateau probe can only ever read the attempt it supervises. A
+        # leftover plateaued log would abort a fresh, LOOSER retry on its first
+        # poll — the retry the loosen ladder just paid for. (`tee` truncates on
+        # open anyway; this closes the window before it does.)
+        try:
+            _pnr_logp.unlink()
+        except OSError:  # nosec — absent is the state we want
+            pass
+        _plateau_probe = _DrtPlateauProbe(_pnr_logp)
         rc, out, err = _docker_exec(
             container, cmd, marker=pnr_tcl_c, log_path=_pnr_logp,
-            hard_ceiling_s=_pnr_ceiling)
+            hard_ceiling_s=_pnr_ceiling, abort_probe=_plateau_probe)
+        if rc == _RC_ABORTED:
+            # Deliberate no-progress stop. The DEF the router had written so
+            # far is mid-iteration garbage — isolate it exactly like the hang
+            # path so nothing downstream can read it (#570).
+            _docker_timeout_isolate([out_dir / f"{top}.def"])
+            # A plateau IS a congestion signal, so it feeds the SAME bounded
+            # loosen ladder a completed-but-unconverged route feeds. Retrying
+            # the identical geometry would replay the identical plateau; a
+            # strictly LOOSER die is a different question and is exactly the
+            # relief this loop exists to apply. The CPU saving comes from
+            # truncating each attempt at the plateau, not from refusing to try.
+            _lf = _route_feedback_loosen(
+                die_w, die_h, (out or "") + "\n" + (err or ""),
+                _loosen_idx, _auto_die_requested, False,
+                ladder=_loosen_ladder, plateau_aborted=True)
+            if _lf is not None:
+                _lw, _lh, _lrec = _lf
+                _lrec["iteration"] = _retry_i
+                _lrec["route_plateau"] = (_plateau_probe.record
+                                          if _plateau_probe is not None
+                                          else None)
+                resize_history.append(_lrec)
+                die_w, die_h = _lw, _lh
+                core_w = die_w - 2 * core_pad
+                core_h = die_h - 2 * core_pad
+                pnr_tcl.write_text(_rewrite_pnr_floorplan_die(
+                    pnr_tcl.read_text(), die_w, die_h,
+                    core_pad, core_w, core_h))
+                _loosen_idx += 1
+                continue
+            break
         if rc in (_RC_STALLED, 124):
             # Genuinely hung route (stall) or the 24h+ pathological ceiling —
             # isolate the half-written final DEF so a downstream step never
@@ -11070,7 +11476,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             # (See _route_feedback_loosen for the full guard set + honesty note.)
             _lf = _route_feedback_loosen(
                 die_w, die_h, _pnr_log, _loosen_idx,
-                _auto_die_requested, _route_completed)
+                _auto_die_requested, _route_completed,
+                ladder=_loosen_ladder)
             if _lf is not None:
                 _lw, _lh, _lrec = _lf
                 _lrec["iteration"] = _retry_i
@@ -11175,8 +11582,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # OpenROAD log so the latch-up-tap + metal-fill sign-off gates can read
     # the runner's DELIBERATE sparse-die bound and VACUOUS-PASS it instead of
     # FAILing ZERO_TAPS / FILL_NO_SUBSTANCE on a sub-threshold fixed wrapper.
+    _log_txt = ""
     try:
-        _log_txt = ""
         try:
             _log_txt = (out_dir / "openroad.log").read_text(errors="ignore")
         except Exception:
@@ -11184,11 +11591,78 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         _write_sparse_die_skip_attestation(project, [_log_txt, out, err])
     except Exception:  # nosec — attestation is best-effort, never fatal
         pass
+    # The full OpenROAD transcript, preferred over the captured out+err (a
+    # killed run's captured buffers can be truncated while the tee'd log holds
+    # the whole trajectory). Every routing-outcome disclosure below reads THIS.
+    _pnr_log_all = _log_txt if _log_txt else ((out or "") + "\n" + (err or ""))
+    # CLOCK-NDR disclosure — computed ONCE here and attached to EVERY outcome
+    # below (FAIL and PASS alike). The silent-green case is the whole point:
+    # a route that quietly spent its clock non-default rule must say so.
+    _ndr_disc = _clock_ndr_disclosure(_pnr_log_all)
+    _ndr_detail = _clock_ndr_detail(_ndr_disc)
+    _ndr_extras: Dict[str, Any] = (
+        {"clock_ndr_disabled": _ndr_disc} if _ndr_disc else {})
+    try:
+        _write_route_congestion_trades(project, _ndr_disc, _pnr_log_all)
+    except Exception:  # nosec — disclosure side-file is best-effort
+        pass
+    if rc == _RC_ABORTED:
+        # ROUTE-PLATEAU — stopped on purpose because violations stopped
+        # falling. Report the trajectory the probe ACTED on, so the number in
+        # the verdict is the number that made the decision.
+        _pl_rec = (_plateau_probe.record
+                   if (_plateau_probe is not None
+                       and _plateau_probe.record is not None)
+                   else _drt_plateau_verdict(
+                       _drt_violation_trajectory(_pnr_log_all)))
+        _pl_txt = (_drt_plateau_reason(_pl_rec) if _pl_rec else
+                   "ROUTE_PLATEAU: detailed route stopped for lack of "
+                   "convergence progress.")
+        return StepResult(
+            "pnr", "FAIL", time.time() - t0,
+            (f"{_pl_txt} Die {die_w}x{die_h}µm / util {util:g}. The partial "
+             f"routed DEF is isolated and is NOT a sign-off artifact. This "
+             f"says the router was going nowhere WHEN STOPPED; it does not "
+             f"prove the design is unroutable — increase --die-um, lower "
+             f"--util, or relieve congestion at the source, then re-run."
+             + _ndr_detail),
+            [str(out_dir / "openroad.log")],
+            extras={"finding": "ROUTE_PLATEAU",
+                    "route_plateau": _pl_rec,
+                    "die_um": f"{die_w}x{die_h}",
+                    "util": util,
+                    "resize_history": resize_history,
+                    **_ndr_extras})
+    if _grt_congestion_failed(_pnr_log_all) and not def_file.is_file():
+        # GRT-0116 — global routing itself gave up, so detailed route never
+        # ran and there is no DEF to judge. Previously this surfaced as a bare
+        # `rc=1 log_tail=…` blob: the ONE actionable fact (global route is
+        # congestion-bound) and the trade already made to try to avoid it (the
+        # dropped clock NDR) were both buried in 2000 characters of transcript.
+        return StepResult(
+            "pnr", "FAIL", time.time() - t0,
+            (f"GLOBAL_ROUTE_CONGESTION: global routing finished with "
+             f"congestion (GRT-0116) at die {die_w}x{die_h}µm / util "
+             f"{util:g}, so detailed route never ran and no routed DEF "
+             f"exists. Congestion is the ROOT cause here — increase --die-um, "
+             f"lower --util, or reduce routing demand; raising router "
+             f"iterations cannot help a route that never started."
+             + (_ndr_detail +
+                " — and it was NOT enough: the rule was given up and the "
+                "route still failed, so the clock quality was spent for "
+                "nothing." if _ndr_detail else "")),
+            [str(out_dir / "openroad.log")],
+            extras={"finding": "GLOBAL_ROUTE_CONGESTION",
+                    "die_um": f"{die_w}x{die_h}",
+                    "util": util,
+                    "resize_history": resize_history,
+                    **_ndr_extras})
     if rc != 0 or not def_file.is_file():
         return StepResult("pnr", "FAIL", time.time() - t0,
-                          f"rc={rc} log_tail={(out+err)[-2000:]}",
+                          f"rc={rc} log_tail={(out+err)[-2000:]}" + _ndr_detail,
                           [str(out_dir / "openroad.log")],
-                          extras={"resize_history": resize_history})
+                          extras={"resize_history": resize_history,
+                                  **_ndr_extras})
     # ORGANIC #585 — route-convergence gate. TritonRoute can run out of
     # iterations and COMPLETE with violations remaining (rc=0,
     # `Completing 100% with N violations`). A nonzero final DRT-0199
@@ -11212,14 +11686,15 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
              f"design is congestion-limited at die {die_w}x{die_h}µm / "
              f"util {util:g}: increase --die-um, lower --util, or raise "
              f"the router's end iteration. Emitted DEF/GDS are kept for "
-             f"debugging but are NOT sign-off artifacts."),
+             f"debugging but are NOT sign-off artifacts." + _ndr_detail),
             [str(out_dir / "openroad.log"), str(def_file)],
             extras={"finding": "ROUTE_NOT_CONVERGED",
                     "drt_violations": _drt_viol,
                     "die_um": f"{die_w}x{die_h}",
                     "util": util,
                     "non_signoff_outputs": [str(def_file)],
-                    "resize_history": resize_history})
+                    "resize_history": resize_history,
+                    **_ndr_extras})
     # ── PG-CONNECT gate — a supply network that half the design is not part of
     # must never leave PnR silently. `global_connect` is a one-shot over the
     # instances alive when it runs; the PDN step runs it before placement, so
@@ -11428,21 +11903,28 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     if _pdn_verdict == "BAD":
         return StepResult(
             "pnr", "BLOCKED", time.time() - t0,
-            f"power grid not connected — {_pdn_mk}. {detail}",
+            f"power grid not connected — {_pdn_mk}. {detail}" + _ndr_detail,
             pnr_outputs,
-            extras={"pdn_status": _pdn_mk, **spare_extras})
+            extras={"pdn_status": _pdn_mk, **spare_extras, **_ndr_extras})
     detail += f" | pdn: {_pdn_mk}"
+    # The GREEN path carries the clock-NDR disclosure too — this is the case
+    # the disclosure exists for. A converged route that got there by giving up
+    # the clock tree's non-default rule is still a PASS (the geometry is legal
+    # and the tier is unchanged), but it is NOT the same result as a route that
+    # never had to make the trade, and the verdict now says which one it is.
+    detail += _ndr_detail
     if resize_history:
         return StepResult("pnr", "PASS", time.time() - t0,
                           detail,
                           pnr_outputs,
                           extras={"resize_history": resize_history,
                                   "pdn_status": _pdn_mk,
-                                  **spare_extras})
+                                  **spare_extras, **_ndr_extras})
     return StepResult("pnr", "PASS", time.time() - t0,
                       detail,
                       pnr_outputs,
-                      extras={"pdn_status": _pdn_mk, **spare_extras})
+                      extras={"pdn_status": _pdn_mk, **spare_extras,
+                              **_ndr_extras})
 
 
 def _decap_route_short_guard(project: Path, top: str,
