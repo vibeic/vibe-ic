@@ -14,7 +14,9 @@ edge-LLM GEMM convergence campaign):
     Both a still-improving route AND a genuine plateau produced the SAME
     `None`, i.e. "no remedy", for two completely different reasons.
 
-  * `_DEFAULT_DIE_MAX_UM` is a hardcoded 2000 with no CLI/env override, and
+  * `_DEFAULT_DIE_MAX_UM` is 2000. It IS a function-parameter default, so it
+    is configurable by a caller -- but no CLI flag and no env var expose it,
+    and the sole call site passes only 6 args, so an operator cannot raise it.
     `_compute_loosened_die` refuses any growth past it. Measured on the
     shipped function, a clear plateau signal yields:
 
@@ -218,6 +220,28 @@ def test_no_trajectory_at_all_is_not_a_converged_claim():
     rec = p3._route_recovery_disclosure(2000, 2000, "", 0, True, True)
     assert rec["remedy"] != p3._ROUTE_RECOVERY_CONVERGED
     assert rec["final_violations"] is None
+
+
+@pytest.mark.parametrize("log_text", ["", "no violation lines here\n",
+                                      "[INFO DRT-0195] Start routing iter\n"])
+def test_no_route_signal_is_its_own_class_and_claims_nothing(log_text):
+    """ADVERSARIAL-REVIEW REGRESSION. The first cut of this classifier had no
+    empty-trajectory arm, so a log with NO violation count fell through to the
+    router-budget branch and printed:
+
+        "the violation count was still FALLING when the router stopped ()"
+
+    — an empty tail and an assertion the log does not support. A tool built to
+    stop unearned claims must not make one itself. An absent signal is its own
+    class and must assert nothing about convergence or congestion."""
+    rec = p3._route_recovery_disclosure(2000, 2000, log_text, 0, True, True)
+    assert rec["remedy"] == p3._ROUTE_RECOVERY_NO_SIGNAL
+    assert rec["final_violations"] is None
+    d = rec["disclosure"]
+    assert "FALLING" not in d
+    assert "()" not in d, "empty measurement interpolated into the text"
+    for claim in ("converged", "plateau", "REFUSED", "budget"):
+        assert claim not in d, f"unsupported claim {claim!r} in: {d}"
 
 
 # ---------------------------------------------------------------------------
